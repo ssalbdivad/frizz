@@ -2726,7 +2726,8 @@ export const ThreadView = z.object({
   // "command" = a TERMINAL COMMAND thread: a shell command started from the prompt box's Terminal tab,
   // running in a server-owned pty the browser attaches to over /term (see `command` below). Every
   // session guard (`kind !== "session"`) already excludes it, which is the point: it has no agent, no
-  // transcript, no queue card and no lifecycle verb, and must never be mistaken for one that does.
+  // transcript and no agent verb. It DOES share the lifecycle: a FINISHED run queues (`needsYou`) with a
+  // card of its own and is marked done like any thread (`state`); a running one sits with Running.
   kind: z.enum(["session", "legacy", "command"]).optional(),
   command: CommandThreadState.optional(),
   // No registry row (a maintainer terminal discovered from the JSONL dir): read-only transcript,
@@ -2875,7 +2876,9 @@ export type ThreadView = z.infer<typeof ThreadView>
  * disagreed with the rail it sits beside would be worse than no badge.
  */
 export function queuedThread(t: Pick<ThreadView, "kind" | "foreign" | "needsYou" | "state">): boolean {
-  return t.kind === "session" && t.foreign !== true && t.needsYou === true && t.state !== "archived"
+  // A terminal COMMAND thread queues too, once its run has finished (command-threads.ts derives that
+  // `needsYou`): the human reads the result and marks it done, exactly as with a rested agent.
+  return (t.kind === "session" || t.kind === "command") && t.foreign !== true && t.needsYou === true && t.state !== "archived"
 }
 
 // ── THE SIDEBAR'S BANDS ────────────────────────────────────────────────────────────────────────────
@@ -3051,6 +3054,9 @@ export function sectionOf(t: ThreadView): SectionKey | null {
   // Rested bands together; the rule between them is drawn downstream (partitionActive), and the
   // needs-you/awaiting distinction renders as the row INDICATOR and the queue cards, not as sections.
   // Legacy (.frizz-file) rows are HIDDEN entirely (null; not even a shelf). Foreign never rows.
+  // A terminal COMMAND thread shares the lifecycle: running → Active, finished → Rested (the server
+  // sets `needsYou`), marked done → Done. It has no snooze, so the Snoozed band never claims one.
+  if (t.kind === "command") return t.state === "archived" ? "inactive" : "active"
   if (t.kind !== "session") return null
   // Archived → Done, UNLESS it's actively running: a live, in-flight session must never sit under Done
   // (maintainer, hit 3×). It shows in the Active band with its spinner while it works, and drops back
