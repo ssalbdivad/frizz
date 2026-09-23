@@ -210,6 +210,9 @@ export function App() {
   // drawer, and a composer's Esc simply blurs it. No virtual focus, no zombie states.)
   useEffect(() => {
     function onKey(e: KeyboardEvent) {
+      // The terminal is a native TUI surface. Its Escape/arrows/control keys and slash-menu input
+      // belong to xterm, never to Frizz's drawer/global shortcut layer.
+      if (e.target instanceof Element && e.target.closest(".xterm")) return
       if (!(e.metaKey || e.ctrlKey)) return
       const key = e.key.toLowerCase()
       if (key === "k") {

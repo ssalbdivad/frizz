@@ -29,6 +29,7 @@ import { createCodexBackend, codexSandbox } from "./backend/codex.ts"
 import { createAcpBackend } from "./backend/acp-transcript.ts"
 import { createAcpBridge, type AcpBridge } from "./backend/acp-bridge.ts"
 import { readClaudePreflightAuth, readCodexAuthState, readCodexBinaryState } from "./backend/auth-status.ts"
+import { createCommandRunner, type CommandRunner } from "./command-threads.ts"
 import type { AgentBackend } from "./backend/types.ts"
 import { needsFreshProcessForLimit } from "./backend/usage-limit.ts"
 import { onClaudeModelsResolved, peekClaudeModels, readClaudeModels } from "./backend/claude-models.ts"
@@ -230,6 +231,9 @@ export interface AppContext {
   // Same seam for Codex: the resolved app-server/backend executable, so codex logout targets
   // the binary frizz actually runs rather than whatever "codex" is first on PATH.
   codexBin?: string
+  // Terminal command threads: shell commands the human started from the prompt box's Terminal tab,
+  // each a server-owned pty on the board (command-threads.ts), watched over the /term transport.
+  commandRunner: CommandRunner
 }
 
 export interface ContextOptions {
@@ -464,6 +468,7 @@ export function deliverClaudeBrokerWake(deps: {
  */
 export function projectContextCleanups(get: () => AppContext | undefined): {
   tailer: () => void
+  commandRunner: () => void
   subscriptions: () => void
   scheduler: () => Promise<void>
   board: () => Promise<void>
@@ -472,6 +477,8 @@ export function projectContextCleanups(get: () => AppContext | undefined): {
 } {
   return {
     tailer: () => get()?.tailer.stop(),
+    // Hang up every terminal command's process group; a dev server must not outlive its project.
+    commandRunner: () => get()?.commandRunner?.shutdown(),
     subscriptions: () => get()?.stopSubscriptions(),
     scheduler: async () => { await get()?.scheduler.stop() },
     board: async () => { await get()?.board.stop() },
@@ -885,7 +892,22 @@ function createContextUnchecked(opts: ContextOptions, resources: PartialContextR
   // The bridge is the authority on whether a codex app-server TURN is actually running — a rollout
   // frozen by a dead app-server reads "in-flight" forever on its own. Without this the board spins
   // such a thread on `running` and never queues it (live stall 2026-07-22).
+  // Terminal command threads (the prompt box's Terminal tab). Created before the board because the
+  // board lists its rows; every run state change is an overlay refresh. A refresh after the board has
+  // stopped (a run exiting during shutdown) is a no-op, not an error.
+  const commandRunner = createCommandRunner({
+    cwd: project.dir,
+    storage,
+    onChange: () => {
+      try {
+        board?.refresh()
+      } catch {
+        // ProducerStoppedError — the board is gone, and so is anyone to show the change to.
+      }
+    },
+  })
   board = createBoard(project, storage, bus, tailer, bootId, {
+    commandThreads: () => commandRunner.threads(),
     codexTurnLiveness: (slug, sessionId) => codexAppServer?.turnLiveness(slug, sessionId),
     // Headless-stall signal for a broker row: the ownerless daemon's record. Absent bridge ⇒ default
     // "alive" so a bridge-less server never falsely crash-cards a broker row (there are none anyway).
@@ -1085,5 +1107,6 @@ function createContextUnchecked(opts: ContextOptions, resources: PartialContextR
     launchProjectId: opts.launchProjectId,
     claudeBin: opts.claudeBin,
     codexBin: opts.codexBin,
+    commandRunner,
   }
 }

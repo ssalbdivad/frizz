@@ -97,7 +97,7 @@ function fixture(t: TestContext, controls: FixtureControls = {}) {
   }
   const contexts: ContextState[] = []
   const httpServers: FakeHttpServer[] = []
-  const closeCounts = { appSocket: 0, vite: 0, database: 0 }
+  const closeCounts = { terminal: 0, appSocket: 0, vite: 0, database: 0 }
   let databasesOpened = 0
 
   const runtime: Partial<StartServerRuntime> = {
@@ -181,6 +181,19 @@ function fixture(t: TestContext, controls: FixtureControls = {}) {
     },
     initGithub: async () => {},
     createApp: (() => ({ fetch: async () => new Response() })) as unknown as StartServerRuntime["createApp"],
+    createTerminal: (() => {
+      let closed: Promise<void> | undefined
+      return {
+        handleUpgrade: () => false,
+        close() {
+          if (!closed) {
+            closeCounts.terminal++
+            closed = Promise.resolve()
+          }
+          return closed
+        },
+      }
+    }) as StartServerRuntime["createTerminal"],
     createAppSocket: (() => {
       let closed: Promise<void> | undefined
       return {
@@ -253,6 +266,7 @@ const allPhases: ServerStartupPhase[] = [
   "context",
   "GitHub initialization",
   "application",
+  "terminal transport",
   "application socket",
   "board producer",
   "tailer producer",

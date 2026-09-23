@@ -55,6 +55,9 @@ import {
   AuthSnapshot,
   AccountLogoutInput,
   AccountLogoutResult,
+  StartCommandInput,
+  CommandThreadInput,
+  CommandThreadResult,
   RenameThreadInput,
   AiRenameThreadInput,
   AiRenameThreadResult,
@@ -3514,6 +3517,43 @@ export function createRouter(ctx: AppContext) {
           codexBin: ctx.codexBin,
           liveThreads: liveThreadsForBackend(snapshot.threads, input.backend),
         })
+      },
+    }),
+
+    // TERMINAL COMMAND THREADS — the prompt box's Terminal tab (command-threads.ts). `commandStart`
+    // runs a shell command in a pty in the project directory and puts it on the board; the browser
+    // attaches to it over /term/<slug>.
+    commandStart: mutation({
+      input: StartCommandInput,
+      output: CommandThreadResult,
+      handler: async ({ input }) => ctx.commandRunner.start(input.command),
+    }),
+
+    commandStop: mutation({
+      input: CommandThreadInput,
+      output: z.object({}),
+      handler: async ({ input }) => {
+        if (!ctx.commandRunner.has(input.slug)) throw new Error(`no terminal command ${input.slug}`)
+        await ctx.commandRunner.stop(input.slug)
+        return {}
+      },
+    }),
+
+    commandRestart: mutation({
+      input: CommandThreadInput,
+      output: z.object({}),
+      handler: async ({ input }) => {
+        await ctx.commandRunner.restart(input.slug)
+        return {}
+      },
+    }),
+
+    commandRemove: mutation({
+      input: CommandThreadInput,
+      output: z.object({}),
+      handler: async ({ input }) => {
+        await ctx.commandRunner.remove(input.slug)
+        return {}
       },
     }),
 

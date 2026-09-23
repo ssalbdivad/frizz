@@ -1,5 +1,6 @@
 import { createRoot } from "react-dom/client"
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query"
+import "@xterm/xterm/css/xterm.css"
 import "./styles.css"
 import { RootErrorBoundary } from "./components/ErrorBoundary.tsx"
 import { RouterProvider } from "react-router"

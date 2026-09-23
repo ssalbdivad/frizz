@@ -14,6 +14,9 @@
 // nothing but the `PROCEDURES` data table as a value. Transport concerns (fetch, RpcCallOpts, the
 // Proxy) live in rpc.ts, which is browser-only and never enters the server program.
 import type {
+  StartCommandInput,
+  CommandThreadInput,
+  CommandThreadResult,
   UpsertOwnLinkInput,
   UpsertOwnLinkResult,
   DropOwnLinkInput,
@@ -297,6 +300,10 @@ export interface Api {
   // overloaded "unavailable" — reports only whether a credential exists. Never rejects.
   authStatus(input?: undefined, opts?: RpcCallOpts): Promise<AuthSnapshot>
   accountLogout(input: AccountLogoutInput): Promise<AccountLogoutResult>
+  commandStart(input: StartCommandInput): Promise<CommandThreadResult>
+  commandStop(input: CommandThreadInput): Promise<Record<never, never>>
+  commandRestart(input: CommandThreadInput): Promise<Record<never, never>>
+  commandRemove(input: CommandThreadInput): Promise<Record<never, never>>
   // Machine-scoped: the registry is one file, so the grid reads the same from every project.
   // Which project owns a thread slug. Every URL from the per-project era is unprefixed, so a
   // bookmark that named its project by PORT now resolves against whichever project launched the
@@ -441,6 +448,10 @@ export const PROCEDURES = {
   quota: "query",
   authStatus: "query",
   accountLogout: "mutation",
+  commandStart: "mutation",
+  commandStop: "mutation",
+  commandRestart: "mutation",
+  commandRemove: "mutation",
   threadLocate: "query",
   projectsList: "query",
   projectPick: "mutation",

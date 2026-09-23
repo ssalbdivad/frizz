@@ -10,6 +10,7 @@ import { SubAgentSheet } from "./SubAgentSheet.tsx"
 import { BackgroundShellSheet } from "./BackgroundShellSheet.tsx"
 import { MarkdownDrawer } from "./MarkdownDrawer.tsx"
 import { ThreadDrawer } from "./ThreadDrawer.tsx"
+import { CommandSheet } from "./CommandSheet.tsx"
 import { ErrorBoundary, DrawerErrorSheet } from "./ErrorBoundary.tsx"
 
 // The side-drawer STACK, and the Escape chain that unwinds it. Lives in its own component because
@@ -37,6 +38,8 @@ export function DrawerStack() {
   useEffect(() => {
     function onKey(e: KeyboardEvent) {
       if (e.key !== "Escape") return
+      // The terminal is a native TUI surface. Its Escape belongs to xterm, never to this layer.
+      if (e.target instanceof Element && e.target.closest(".xterm")) return
       // Portaled selectors are not descendants of their owning dialog/drawer. Give the topmost
       // model/effort matrix or Select this physical Escape before unwinding the app overlay stack.
       if (dismissOpenSelect()) {
@@ -97,6 +100,8 @@ export function DrawerStack() {
             depth={i}
             widthDepth={widthDepth}
           />
+        ) : d.kind === "terminal" ? (
+          <CommandSheet key={d.id} id={d.id} slug={d.slug} depth={i} widthDepth={widthDepth} />
         ) : d.kind === "markdown" ? (
           <MarkdownDrawer key={d.id} id={d.id} path={d.path ?? d.slug} title={d.label ?? d.slug} depth={i} widthDepth={widthDepth} />
         ) : (
