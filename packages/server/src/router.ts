@@ -163,6 +163,7 @@ import { readCodexModels } from "./backend/codex-models.ts"
 import { peekClaudeModels, readClaudeModels } from "./backend/claude-models.ts"
 import { claudeModelStanding, claudeModelUpgradeBlock, claudeModelUpgradeDue, claudeModelUpgradeRefusal, claudeUpgradeCandidate, SERVER_STARTED_AT_MS } from "./backend/claude-model-upgrade.ts"
 import { log as frizzLog } from "./logging.ts"
+import { readProjectInstructions, writeProjectInstructions } from "./project-instructions.ts"
 import { codexSandbox } from "./backend/codex.ts"
 import type { CodexSandboxMode } from "./backend/codex-app-server.ts"
 import { readQuota } from "./quota.ts"
@@ -4006,6 +4007,25 @@ export function createRouter(ctx: AppContext) {
       input: Settings,
       output: Settings,
       handler: async ({ input }) => ctx.setSettings(input),
+    }),
+
+    // The project's FRIZZ.md, read and written by the agent settings panel's "Project instructions"
+    // editor. The file IS the setting (see project-instructions.ts): a write names the revision it was
+    // based on and is refused, with the file's current content, if a worker changed it meanwhile.
+    projectInstructionsGet: query({
+      output: z.object({ content: z.string(), revision: z.string(), editable: z.boolean() }),
+      handler: async () => readProjectInstructions(ctx.project.dir),
+    }),
+
+    projectInstructionsSet: mutation({
+      input: z.object({ content: z.string(), baseRevision: z.string() }).strict(),
+      output: z.object({
+        ok: z.boolean(),
+        reason: z.enum(["conflict", "tooLarge", "notAFile"]).optional(),
+        content: z.string(),
+        revision: z.string(),
+      }),
+      handler: async ({ input }) => writeProjectInstructions(ctx.project.dir, input.content, input.baseRevision),
     }),
 
     // Clear the stored settings blob so defaults (incl. the shipped default preamble) apply again.
