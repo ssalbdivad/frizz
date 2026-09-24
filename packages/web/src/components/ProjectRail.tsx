@@ -10,7 +10,8 @@ import { rpc } from "../api/rpc.ts"
 import { queued } from "../groups.ts"
 import { asThreads } from "../hooks.ts"
 import { showToast, store } from "../store.ts"
-import { PROJECTS_PATH, isCrossProjectPath, modeProjectHref, projectSlug } from "../lib/base-path.ts"
+import { PROJECTS_PATH, crossProjectHref, isCrossProjectPath, modeProjectHref, projectSlug } from "../lib/base-path.ts"
+import { CROSS_PROJECT_PICK_STATE } from "../lib/crossProject.ts"
 import { dropIndex, edgeScrollVelocity, moveItem, shiftFor } from "../lib/railReorder.ts"
 import { Tooltip } from "./Tooltip.tsx"
 
@@ -288,6 +289,8 @@ function RailLink({
         // In the mode the page is in: on the cross-project page a square FOCUSES its project there (the
         // prompt box turns to it), on a board it opens that project's board.
         to={modeProjectHref(project.slug)}
+        // A CHOICE of project there (lib/crossProject.ts), which the page keeps to once drawers close.
+        state={isCrossProjectPath() ? CROSS_PROJECT_PICK_STATE : undefined}
         aria-current={current ? "page" : undefined}
         // The rail is a reorderable list, and a link is not one. `listitem` + `aria-grabbed` is the
         // most a native anchor can say about it; the keyboard path below is what makes it true.
@@ -525,7 +528,8 @@ function useRailCounts(currentSlug: string | undefined, projects: readonly Proje
   })
   // valtio tracks the property read, so this re-renders on board changes and nothing else.
   const board = useSnapshot(store).board
-  const threads = currentSlug !== undefined && board ? asThreads(board.threads) : undefined
+  // Only a board that IS the current project's: during a switch the store still holds the one being left.
+  const threads = currentSlug !== undefined && board && board.projectSlug === currentSlug ? asThreads(board.threads) : undefined
   const live = threads && { queued: threads.filter(queued).length, running: threads.filter(activeBandThread).length }
   const currentId = currentSlug === undefined ? undefined : projects.find((project) => project.slug === currentSlug)?.id
   return (project) => (project.id === currentId && live ? live : polled.data?.[project.id])
@@ -713,7 +717,9 @@ export function ProjectRail() {
           own — each square below already wears its project's, and a sum over them would be a second
           yellow number saying the same thing. */}
       <Tooltip side="right" label="Everything">
-        <Link to="/" aria-label="Everything" aria-current={onQueues ? "page" : undefined} className={`${RAIL_DOOR_CLASS} ${onQueues ? "bg-elevated text-fg" : ""}`}>
+        {/* From a board, the cross-project page focused on that board's project — the prompt box there
+            aimed where the operator already was. */}
+        <Link to={current && !onQueues ? crossProjectHref(current) : "/"} aria-label="Everything" aria-current={onQueues ? "page" : undefined} className={`${RAIL_DOOR_CLASS} ${onQueues ? "bg-elevated text-fg" : ""}`}>
           <InfinityIcon size={17} />
         </Link>
       </Tooltip>
