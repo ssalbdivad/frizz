@@ -56,6 +56,7 @@ import {
   AccountLogoutInput,
   AccountLogoutResult,
   StartCommandInput,
+  RunCommandInput,
   CommandThreadInput,
   CommandThreadResult,
   RenameThreadInput,
@@ -3627,6 +3628,16 @@ export function createRouter(ctx: AppContext) {
       output: z.object({}),
       handler: async ({ input }) => {
         await ctx.commandRunner.restart(input.slug)
+        return {}
+      },
+    }),
+
+    // The drawer's follow-up line: the thread's next command, run where its last one finished.
+    commandRun: mutation({
+      input: RunCommandInput,
+      output: z.object({}),
+      handler: async ({ input }) => {
+        await ctx.commandRunner.run(input.slug, input.command)
         return {}
       },
     }),
