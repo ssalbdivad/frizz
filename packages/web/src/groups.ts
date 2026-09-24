@@ -584,8 +584,10 @@ export type SessionIndicatorKind = "archived" | "needs-input" | "working" | "bac
 // The footer's RecurringPromptControl carries the state instead, where it is legible and editable.
 
 export function sessionIndicatorKind(t: ThreadView): SessionIndicatorKind {
+  // DONE IS THE HUMAN'S TO UNDO, and nothing a worker does afterwards reads as undoing it — see
+  // `sectionOf`. A worker still finishing a turn after Mark as done keeps the check, not a spinner.
+  if (t.state === "archived") return "archived"
   const activelyRunning = isActivelyRunning(t)
-  if (t.state === "archived" && !activelyRunning) return "archived"
 
   // A PARK THE OPERATOR SET OUTRANKS EVERY ASK MARK BELOW IT — the order the SERVER already derives the
   // queue in (deriveNeedsYou checks futureSnooze before pendingAsk, pendingQuestion and the registered
