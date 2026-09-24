@@ -2975,8 +2975,8 @@ export function hasLiveOps(t: ThreadView): boolean {
 // the server's own verdict and only ever keeps a thread OUT of Snoozed, so a stale shell costs a dimming,
 // never a disappearance — the same argument restingOnLiveBackgroundWork makes below.
 //
-// A FENCED GITHUB PARK JOINS IT (2026-09-24). The server now excuses an honoured ```awaiting park on a
-// registered PR or issue from the queue (board.hasHonouredGithubPark) — a watcher wake the worker answers
+// A FENCED GITHUB PARK JOINS IT (2026-09-24). The server now excuses every honoured ```awaiting park from
+// the queue, a registered PR or issue included (board.hasHonouredPark) — a watcher wake the worker answers
 // with "still waiting" was re-queuing a thread with nothing for the human to do. So `!needsYou` plus an
 // awaiting fence plus an armed GitHub watch is that verdict, and the row parks like a timer. Two
 // exceptions keep their old band: CI still RUNNING stays in Active under the spinning octocat
