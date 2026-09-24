@@ -10,7 +10,8 @@ import { rpc } from "../api/rpc.ts"
 import { queued } from "../groups.ts"
 import { asThreads } from "../hooks.ts"
 import { showToast, store } from "../store.ts"
-import { projectHref, projectSlug } from "../lib/base-path.ts"
+import { PROJECTS_PATH, crossProjectHref, isCrossProjectPath, modeProjectHref, projectSlug } from "../lib/base-path.ts"
+import { CROSS_PROJECT_PICK_STATE } from "../lib/crossProject.ts"
 import { dropIndex, edgeScrollVelocity, moveItem, shiftFor } from "../lib/railReorder.ts"
 import { Tooltip } from "./Tooltip.tsx"
 
@@ -285,7 +286,11 @@ function RailLink({
       }
     >
       <Link
-        to={projectHref(project.slug)}
+        // In the mode the page is in: on the cross-project page a square FOCUSES its project there (the
+        // prompt box turns to it), on a board it opens that project's board.
+        to={modeProjectHref(project.slug)}
+        // A CHOICE of project there (lib/crossProject.ts), which the page keeps to once drawers close.
+        state={isCrossProjectPath() ? CROSS_PROJECT_PICK_STATE : undefined}
         aria-current={current ? "page" : undefined}
         // The rail is a reorderable list, and a link is not one. `listitem` + `aria-grabbed` is the
         // most a native anchor can say about it; the keyboard path below is what makes it true.
@@ -523,7 +528,8 @@ function useRailCounts(currentSlug: string | undefined, projects: readonly Proje
   })
   // valtio tracks the property read, so this re-renders on board changes and nothing else.
   const board = useSnapshot(store).board
-  const threads = currentSlug !== undefined && board ? asThreads(board.threads) : undefined
+  // Only a board that IS the current project's: during a switch the store still holds the one being left.
+  const threads = currentSlug !== undefined && board && board.projectSlug === currentSlug ? asThreads(board.threads) : undefined
   const live = threads && { queued: threads.filter(queued).length, running: threads.filter(activeBandThread).length }
   const currentId = currentSlug === undefined ? undefined : projects.find((project) => project.slug === currentSlug)?.id
   return (project) => (project.id === currentId && live ? live : polled.data?.[project.id])
@@ -536,7 +542,9 @@ export function ProjectRail() {
   const queryClient = useQueryClient()
   const { data } = useQuery({ queryKey: ["projectsList"], queryFn: () => rpc.projectsList() })
   const current = projectSlug()
-  const onQueues = useLocation().pathname === "/queues"
+  const { pathname } = useLocation()
+  const onQueues = isCrossProjectPath(pathname)
+  const onGrid = pathname === PROJECTS_PATH
   const [adding, setAdding] = useState(false)
   const navigate = useNavigate()
   const [drag, setDrag] = useState<DragState | null>(null)
@@ -546,10 +554,12 @@ export function ProjectRail() {
   const pick = useMutation({
     mutationFn: () => rpc.projectPick({}),
     onSuccess: (result) => {
-      if (result.kind === "picked") navigate(projectHref(result.project.slug))
+      // Adding a project is choosing it: on the cross-project page it becomes the pick, or the page would
+      // hand the focus straight back to the previous one (AllQueues.tsx useReturnToPick).
+      if (result.kind === "picked") navigate(modeProjectHref(result.project.slug), { state: isCrossProjectPath() ? CROSS_PROJECT_PICK_STATE : undefined })
       // No picker on this machine, or it failed: the grid owns the typed-path fallback dialog, and
       // sending someone there is better than growing a second copy of it in a 57px column.
-      else if (result.kind === "unavailable") navigate("/")
+      else if (result.kind === "unavailable") navigate(PROJECTS_PATH)
     },
     onSettled: () => setAdding(false),
   })
@@ -697,19 +707,21 @@ export function ProjectRail() {
           DOWN onto the first project square. A stroke glyph paints only its own strokes. */}
       <Tooltip side="right" label="All projects">
         <Link
-          to="/"
+          to={PROJECTS_PATH}
           aria-label="All projects"
-          aria-current={current || onQueues ? undefined : "page"}
+          aria-current={onGrid ? "page" : undefined}
           className={RAIL_DOOR_CLASS}
         >
           <House size={17} />
         </Link>
       </Tooltip>
-      {/* The level between the two: every project's queue on one page (AllQueues.tsx). No count of its
+      {/* The cross-project page: every project's queue on one page (AllQueues.tsx). No count of its
           own — each square below already wears its project's, and a sum over them would be a second
           yellow number saying the same thing. */}
       <Tooltip side="right" label="Everything">
-        <Link to="/queues" aria-label="Everything" aria-current={onQueues ? "page" : undefined} className={`${RAIL_DOOR_CLASS} ${onQueues ? "bg-elevated text-fg" : ""}`}>
+        {/* From a board, the cross-project page focused on that board's project — the prompt box there
+            aimed where the operator already was. */}
+        <Link to={current && !onQueues ? crossProjectHref(current) : "/"} aria-label="Everything" aria-current={onQueues ? "page" : undefined} className={`${RAIL_DOOR_CLASS} ${onQueues ? "bg-elevated text-fg" : ""}`}>
           <InfinityIcon size={17} />
         </Link>
       </Tooltip>

@@ -539,8 +539,9 @@ export function waitNamesPr(t: Pick<ThreadView, "watches" | "lastFence">): boole
 /** AWAITING A TIMER — parked on the clock, and since 2026-09-07 the hourglass wherever the row lands,
  *  the way the octocat above is GitHub's mark wherever a PR wait lands.
  *
- *  A timer park QUEUES (board.deriveNeedsYou: "a visible handoff, never an auto-park"), so most timer
- *  waits sit in the Rested band rather than in Snoozed — and there the row wore the shell's blue dot,
+ *  A timer park QUEUED until 2026-09-24 (board.deriveNeedsYou: "a visible handoff, never an auto-park"),
+ *  and one that is not honoured — no `for:`, or run out — still does, sitting in the Rested band rather
+ *  than in Snoozed. There the row wore the shell's blue dot,
  *  because restingOnLiveBackgroundWork counted an armed timer as motion. The dot is the rail's word for
  *  "a process it launched is still running", and nothing is running behind a timer; the maintainer read
  *  it as exactly that claim (2026-09-07: "an item in the queue that's awaiting a timer should show up
