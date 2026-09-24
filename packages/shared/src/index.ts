@@ -2952,10 +2952,10 @@ export function hasLiveSubAgents(t: ThreadView): boolean {
 // that made that safe — deriveAwaitingBackground drops any fenced thread — stopped being true in three
 // steps: a parked PR watch (2026-08-13), a declared background park, and an ARMED TIMER (2026-08-24,
 // f50f9e60). The flag now means "at rest behind a declared wait the resting card should state", which
-// includes a park with NOTHING running behind it at all. See parkedOnArmedTimerAlone.
+// includes a park with NOTHING running behind it at all. See parkedOnRegistrationAlone.
 export function hasLiveOps(t: ThreadView): boolean {
   if (hasLiveSubAgents(t)) return true
-  return t.awaitingBackground === true && !parkedOnArmedTimerAlone(t)
+  return t.awaitingBackground === true && !parkedOnRegistrationAlone(t)
 }
 
 // AN ARMED TIMER IS A PARK, NOT LIVE WORK — it is the archetypal Snoozed row, and it was the one park that
@@ -2974,13 +2974,49 @@ export function hasLiveOps(t: ThreadView): boolean {
 // raw `bgShells` is safe in that direction where it would not be in hasLiveOps: this is already gated on
 // the server's own verdict and only ever keeps a thread OUT of Snoozed, so a stale shell costs a dimming,
 // never a disappearance — the same argument restingOnLiveBackgroundWork makes below.
-export function parkedOnArmedTimerAlone(t: ThreadView): boolean {
+//
+// A FENCED GITHUB PARK JOINS IT (2026-09-24). The server now excuses an honoured ```awaiting park on a
+// registered PR or issue from the queue (board.hasHonouredGithubPark) — a watcher wake the worker answers
+// with "still waiting" was re-queuing a thread with nothing for the human to do. So `!needsYou` plus an
+// awaiting fence plus an armed GitHub watch is that verdict, and the row parks like a timer. Two
+// exceptions keep their old band: CI still RUNNING stays in Active under the spinning octocat
+// (prChecksRunning, maintainer 2026-09-20), and a registered watch with NO fence still queues server-side,
+// so `needsYou` keeps it out of here anyway.
+export function parkedOnRegistrationAlone(t: ThreadView): boolean {
   if (t.awaitingBackground !== true) return false
   const watches = t.watches ?? []
-  if (!watches.some((w) => w.kind === "timer" && w.state === "armed")) return false
   if (hasLiveSubAgents(t) || (t.bgShells ?? []).some((s) => s.state === "running")) return false
-  return !watches.some((w) => w.kind === "github" && w.state === "armed")
+  const github = watches.some((w) => w.kind === "github" && w.state === "armed")
+  if (github) return !t.needsYou && fenceNamesGithub(t) && !prChecksRunning(t)
+  return watches.some((w) => w.kind === "timer" && w.state === "armed")
 }
+
+// The FENCE, not the registry: the server parks only on a `prs:`/`issues:` line it could honour, so a
+// timer-only fence beside a registered watch is not the GitHub park.
+function fenceNamesGithub(t: ThreadView): boolean {
+  return t.lastFence?.kind === "awaiting" && t.lastFence.hints.some((h) => (h.kind === "pr" || h.kind === "issue") && h.value.trim() !== "")
+}
+
+/** IS CI RUNNING ON A PULL REQUEST THIS THREAD WATCHES? The one reading of a PR wait that is MOTION —
+ *  something is happening somewhere, and its finish is a wake frizz delivers — as opposed to the settled
+ *  readings (green, red, no checks, merged, closed, never polled), which are a handoff sitting on a
+ *  human. It picks the rail's mark for the `pr` kind: the octocat inside the spinner while checks run,
+ *  the static octocat once they settle (maintainer 2026-09-20: a PR wait "should just stay in the running
+ *  rail if it's actively waiting on checks"). Lives here beside the band predicates, which read it (parkedOnRegistrationAlone); web/groups.ts
+ *  re-exports it for the Sidebar arm and its tests.
+ *
+ *  GATED CI IS NOT RUNNING. Workflows held at GitHub's "Approve and run" gate read `checks: "running"`
+ *  (nothing has settled), but nothing is moving either: a maintainer has to press a button. The PR row's
+ *  own checks glyph already refuses to spin for that shape (AwaitingBackgroundCard ChecksGlyph), and the
+ *  rail follows it — a spinner over a gate would promise motion for as long as nobody notices. */
+export function prChecksRunning(t: Pick<ThreadView, "watches">): boolean {
+  return (t.watches ?? []).some(
+    (w) =>
+      w.kind === "github" && w.state === "armed" && w.github?.checks === "running" && w.github.state === "open" &&
+      !(w.github.running === 0 && (w.github.gated ?? 0) > 0),
+  )
+}
+
 
 export function futureSnoozedUntil(
   t: Pick<ThreadView, "snoozedUntil">,

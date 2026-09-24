@@ -7,6 +7,7 @@ import {
   isActivelyRunning,
   isDeclaredAwaiting,
   isSnoozed,
+  prChecksRunning,
   queuedThread,
   sectionOf,
   type AwaitingHint,
@@ -16,7 +17,7 @@ import {
 
 // The band predicates live in @frizz/shared so the server counts the rail's running badge with the
 // same rule the sidebar bands on. Re-exported here, where every web caller already imports them.
-export { futureSnoozedUntil, isActivelyRunning, isSnoozed, sectionOf, type SectionKey }
+export { futureSnoozedUntil, isActivelyRunning, isSnoozed, prChecksRunning, sectionOf, type SectionKey }
 import { canRetry } from "./lib/status.ts"
 
 // Shared listing logic: the queue definition (needsAction), the sidebar's status-keyed sections
@@ -476,25 +477,6 @@ function restingOnLiveBackgroundWork(t: ThreadView): boolean {
   // a shell that is still running, or CI that is. A settled watcher — passing, failing, no checks at all,
   // closed, or never polled — is not motion, and falls through to the at-rest ellipsis.
   return prChecksRunning(t)
-}
-
-/** IS CI RUNNING ON A PULL REQUEST THIS THREAD WATCHES? The one reading of a PR wait that is MOTION —
- *  something is happening somewhere, and its finish is a wake frizz delivers — as opposed to the settled
- *  readings (green, red, no checks, merged, closed, never polled), which are a handoff sitting on a
- *  human. It picks the rail's mark for the `pr` kind: the octocat inside the spinner while checks run,
- *  the static octocat once they settle (maintainer 2026-09-20: a PR wait "should just stay in the running
- *  rail if it's actively waiting on checks"). Exported for the Sidebar arm and pinned by its tests.
- *
- *  GATED CI IS NOT RUNNING. Workflows held at GitHub's "Approve and run" gate read `checks: "running"`
- *  (nothing has settled), but nothing is moving either: a maintainer has to press a button. The PR row's
- *  own checks glyph already refuses to spin for that shape (AwaitingBackgroundCard ChecksGlyph), and the
- *  rail follows it — a spinner over a gate would promise motion for as long as nobody notices. */
-export function prChecksRunning(t: Pick<ThreadView, "watches">): boolean {
-  return (t.watches ?? []).some(
-    (w) =>
-      w.kind === "github" && w.state === "armed" && w.github?.checks === "running" && w.github.state === "open" &&
-      !(w.github.running === 0 && (w.github.gated ?? 0) > 0),
-  )
 }
 
 /** A PARENT THAT HAS RESTED WHILE ITS SUB-AGENTS ARE STILL OUT — its own turn is over (turn-idle) and a
