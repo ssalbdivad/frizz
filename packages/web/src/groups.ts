@@ -7,6 +7,7 @@ import {
   isActivelyRunning,
   isDeclaredAwaiting,
   isSnoozed,
+  prChecksRunning,
   queuedThread,
   sectionOf,
   type AwaitingHint,
@@ -16,7 +17,7 @@ import {
 
 // The band predicates live in @frizz/shared so the server counts the rail's running badge with the
 // same rule the sidebar bands on. Re-exported here, where every web caller already imports them.
-export { futureSnoozedUntil, isActivelyRunning, isSnoozed, sectionOf, type SectionKey }
+export { futureSnoozedUntil, isActivelyRunning, isSnoozed, prChecksRunning, sectionOf, type SectionKey }
 import { canRetry } from "./lib/status.ts"
 
 // Shared listing logic: the queue definition (needsAction), the sidebar's status-keyed sections
@@ -478,25 +479,6 @@ function restingOnLiveBackgroundWork(t: ThreadView): boolean {
   return prChecksRunning(t)
 }
 
-/** IS CI RUNNING ON A PULL REQUEST THIS THREAD WATCHES? The one reading of a PR wait that is MOTION —
- *  something is happening somewhere, and its finish is a wake frizz delivers — as opposed to the settled
- *  readings (green, red, no checks, merged, closed, never polled), which are a handoff sitting on a
- *  human. It picks the rail's mark for the `pr` kind: the octocat inside the spinner while checks run,
- *  the static octocat once they settle (maintainer 2026-09-20: a PR wait "should just stay in the running
- *  rail if it's actively waiting on checks"). Exported for the Sidebar arm and pinned by its tests.
- *
- *  GATED CI IS NOT RUNNING. Workflows held at GitHub's "Approve and run" gate read `checks: "running"`
- *  (nothing has settled), but nothing is moving either: a maintainer has to press a button. The PR row's
- *  own checks glyph already refuses to spin for that shape (AwaitingBackgroundCard ChecksGlyph), and the
- *  rail follows it — a spinner over a gate would promise motion for as long as nobody notices. */
-export function prChecksRunning(t: Pick<ThreadView, "watches">): boolean {
-  return (t.watches ?? []).some(
-    (w) =>
-      w.kind === "github" && w.state === "armed" && w.github?.checks === "running" && w.github.state === "open" &&
-      !(w.github.running === 0 && (w.github.gated ?? 0) > 0),
-  )
-}
-
 /** A PARENT THAT HAS RESTED WHILE ITS SUB-AGENTS ARE STILL OUT — its own turn is over (turn-idle) and a
  *  direct child is running. The thread still resolves to `working` (the child's return re-invokes it, so
  *  the motion is real and the row keeps its place in the Running band), but since 2026-09-20 the mark
@@ -759,6 +741,25 @@ export function partitionActive(active: readonly ThreadView[]): { running: Threa
     running: active.filter(inActiveBand),
     rested: active.filter((t) => !inActiveBand(t)),
   }
+}
+
+// THE BAND A THREAD'S STATE PUTS IT IN, by the names the rail's headers print rather than the section
+// keys above: READY is the cue (it has a queue card), WORKING the band below the rule, then SNOOZED,
+// DONE, and EXTERNAL for a terminal session Frizz does not own. The same derivation the rail's bands
+// run, so a surface that names the band — the drawer header's stamp — can never disagree with the band
+// the row actually sits in.
+//
+// It IGNORES THE PIN on purpose. A pin moves the row, never the state (see isPinned): a pinned thread
+// that is spinning is still Working, and the stamp says what the thread is doing, not where the human
+// shelved it. Legacy `.frizz` rows have no band (null), as they have no row.
+export type Band = "ready" | "working" | "snoozed" | "done" | "external"
+export function bandOf(t: ThreadView): Band | null {
+  if (t.kind === "session" && t.foreign === true) return "external"
+  const section = sectionOf(t)
+  if (section === "inactive") return "done"
+  if (section === "snoozed") return "snoozed"
+  if (section === "active") return inActiveBand(t) ? "working" : "ready"
+  return null
 }
 
 // Partition threads into the thread-derived sidebar sections. `active` is the Active+Rested section and
