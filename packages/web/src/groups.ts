@@ -539,8 +539,9 @@ export function waitNamesPr(t: Pick<ThreadView, "watches" | "lastFence">): boole
 /** AWAITING A TIMER — parked on the clock, and since 2026-09-07 the hourglass wherever the row lands,
  *  the way the octocat above is GitHub's mark wherever a PR wait lands.
  *
- *  A timer park QUEUES (board.deriveNeedsYou: "a visible handoff, never an auto-park"), so most timer
- *  waits sit in the Rested band rather than in Snoozed — and there the row wore the shell's blue dot,
+ *  A timer park QUEUED until 2026-09-24 (board.deriveNeedsYou: "a visible handoff, never an auto-park"),
+ *  and one that is not honoured — no `for:`, or run out — still does, sitting in the Rested band rather
+ *  than in Snoozed. There the row wore the shell's blue dot,
  *  because restingOnLiveBackgroundWork counted an armed timer as motion. The dot is the rail's word for
  *  "a process it launched is still running", and nothing is running behind a timer; the maintainer read
  *  it as exactly that claim (2026-09-07: "an item in the queue that's awaiting a timer should show up
@@ -584,8 +585,10 @@ export type SessionIndicatorKind = "archived" | "needs-input" | "working" | "bac
 // The footer's RecurringPromptControl carries the state instead, where it is legible and editable.
 
 export function sessionIndicatorKind(t: ThreadView): SessionIndicatorKind {
+  // DONE IS THE HUMAN'S TO UNDO, and nothing a worker does afterwards reads as undoing it — see
+  // `sectionOf`. A worker still finishing a turn after Mark as done keeps the check, not a spinner.
+  if (t.state === "archived") return "archived"
   const activelyRunning = isActivelyRunning(t)
-  if (t.state === "archived" && !activelyRunning) return "archived"
 
   // A PARK THE OPERATOR SET OUTRANKS EVERY ASK MARK BELOW IT — the order the SERVER already derives the
   // queue in (deriveNeedsYou checks futureSnooze before pendingAsk, pendingQuestion and the registered
