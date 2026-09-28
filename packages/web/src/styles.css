@@ -1469,8 +1469,8 @@ a[href] {
 
 /* Queue card EXIT — the CardSlot exit (TodosView). The card FADES to transparent while it recedes
    (uniform scale from its centre, so it "sinks backwards") and blurs, AT FULL HEIGHT. Then TodosView
-   UNMOUNTS it and, in the same layout frame, pins a currently-visible neighbour card so nothing on
-   screen shifts (the one-shot pin in TodosView.tsx).
+   UNMOUNTS it; lib/viewportLock.ts keeps whatever the reader is looking at where it was, and a dismissal
+   of the reader's own lands the next card at the top.
    There is deliberately NO height-collapse phase (removed 2026-07-15). A gradual grid 1fr→0fr collapse
    unavoidably DRIFTS the neighbouring card by the collapsed height — native scroll anchoring does not
    compensate a grid collapse, and any programmatic scroll run alongside it fights the collapse and
@@ -1488,7 +1488,12 @@ a[href] {
 /* Promote to a compositing layer ONLY while dissolving — a permanent will-change on every mounted card
    would pin a GPU layer per queue row for its whole lifetime. */
 .frizz-card-slot[data-queue-leaving="true"] > .frizz-card-clip > .frizz-card-body { will-change: transform, filter; }
+/* A GHOST (lib/stableQueue.ts): the card's thread left the queue on its own while the card was on screen,
+   so the card holds its place — quiet, at full height, still usable — until it scrolls off or the thread
+   rests again. Quiet by tone only: its size and position must not change, or it moves what is under it. */
+.frizz-card-slot[data-queue-ghost] > .frizz-card-clip { opacity: 0.5; }
 @media (prefers-reduced-motion: no-preference) {
+  .frizz-card-slot > .frizz-card-clip { transition: opacity 200ms cubic-bezier(0.4, 0, 0.2, 1); }
   .frizz-card-slot[data-queue-leaving="true"],
   .frizz-card-slot[data-queue-leaving="true"] + hr {
     transition: opacity 200ms cubic-bezier(0.4, 0, 0.2, 1);

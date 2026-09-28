@@ -148,10 +148,16 @@ export const AllQueuesCard = memo(function AllQueuesCard({
   onLeave,
   onReturn,
   chip,
+  ghost = false,
 }: {
   project: QueuesProject
   thread: ThreadView
   leaving: boolean
+  /**
+   * Its thread left the queue on its own while the card was on screen (lib/stableQueue.ts): the card
+   * holds its place, quiet, until it scrolls off or the thread rests again.
+   */
+  ghost?: boolean
   /** The card has been acted on — answered, replied to, snoozed or finished — so it fades out now. */
   onLeave: () => void
   /** The action failed after the card had already faded: put it back. */
@@ -196,7 +202,7 @@ export const AllQueuesCard = memo(function AllQueuesCard({
   }
 
   return (
-    <div data-xq-card={key} data-queue-leaving={leaving} className="frizz-card-slot min-w-0">
+    <div data-xq-card={key} data-queue-leaving={leaving} data-queue-ghost={ghost || undefined} className="frizz-card-slot min-w-0">
       <div className="frizz-card-clip min-h-0 min-w-0">
         <article
           data-xq-card-root
@@ -212,13 +218,22 @@ export const AllQueuesCard = memo(function AllQueuesCard({
               </h3>
               <div className="mt-0.5 flex min-w-0 items-baseline gap-1.5 text-[11px] leading-tight text-muted-75">
                 {chip}
-                <LastActive
-                  at={queueLabelAt(thread)}
-                  label={queueLabelWord(thread)}
-                  fallbackAt={thread.spawnedAt}
-                  lead={chip ? <span aria-hidden>·</span> : undefined}
-                  className="min-w-0 truncate"
-                />
+                {/* A ghost says why it is quiet, on the line that said since when it was ready: the same
+                    one line, so the card keeps its height and nothing under it moves. */}
+                {ghost ? (
+                  <>
+                    {chip && <span aria-hidden>·</span>}
+                    <span className="min-w-0 truncate">Back at work</span>
+                  </>
+                ) : (
+                  <LastActive
+                    at={queueLabelAt(thread)}
+                    label={queueLabelWord(thread)}
+                    fallbackAt={thread.spawnedAt}
+                    lead={chip ? <span aria-hidden>·</span> : undefined}
+                    className="min-w-0 truncate"
+                  />
+                )}
               </div>
             </div>
             <div className="flex shrink-0 items-center gap-0.5">

@@ -224,7 +224,8 @@ export function Sidebar() {
   const readingRef = useRef(activeId)
   readingRef.current = activeId
   useEffect(() => registerQueueCursor({
-    keys: () => [...document.querySelectorAll<HTMLElement>('[data-queue-card][data-queue-leaving="false"]')]
+    // Not a ghost (lib/stableQueue.ts): its thread is back at work, so it is no card a key should land on.
+    keys: () => [...document.querySelectorAll<HTMLElement>('[data-queue-card][data-queue-leaving="false"]:not([data-queue-ghost])')]
       .map((element) => element.dataset.queueCard ?? "")
       .filter(Boolean),
     current: () => readingRef.current,

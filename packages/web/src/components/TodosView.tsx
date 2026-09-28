@@ -6,6 +6,8 @@ import { questionFencesLive } from "@frizz/shared"
 import { useMutation, useQueryClient } from "@tanstack/react-query"
 import { queueCardTargetY, showToast, slugsInThreadDrawers, store } from "../store.ts"
 import { pageScrollY } from "../lib/pageScrollLock.ts"
+import { resumeNativeAnchoring, resumeViewportLock, suspendNativeAnchoring, suspendViewportLock, useViewportLock } from "../lib/viewportLock.ts"
+import { stableQueue, type QueueSlot } from "../lib/stableQueue.ts"
 import { rpc } from "../api/rpc.ts"
 import { useBoard, asThreads, useTranscript } from "../hooks.ts"
 import { orderQueue, queued, queueLabelAt, queueLabelWord } from "../groups.ts"
@@ -64,9 +66,10 @@ import type { TranscriptData } from "../hooks.ts"
 // persistent footer row so completion hydration never moves or duplicates them.
 //
 // The exit budget (styles.css .frizz-card-slot). A resolved card FADES + recedes (scale/blur) at full
-// height, then TodosView UNMOUNTS it and adjusts the viewport (user dismissal → auto-scroll the next
-// card to the top; board departure → pin a visible neighbour so nothing on screen shifts). There is
-// no height-collapse phase (it drifted the neighbour — see styles.css). Keep in sync with the CSS fade.
+// height, then TodosView UNMOUNTS it and, for a dismissal of the human's own, lands the next card at the
+// top. A card whose thread left on its own is not faded at all while it is on screen: it stays, a ghost,
+// in its place (lib/stableQueue.ts). There is no height-collapse phase (it drifted the neighbour — see
+// styles.css). Keep in sync with the CSS fade.
 const QUEUE_DISSOLVE_MS = 200
 // How long a resolved card is KEPT MOUNTED after the board has dropped it, so the fade can finish before
 // the unmount + neighbour pin. completeThread / setThreadStatus call ctx.board.refresh() SYNCHRONOUSLY
@@ -74,28 +77,6 @@ const QUEUE_DISSOLVE_MS = 200
 // retention the card unmounts the instant the delta lands and no fade ever plays. 120ms of slack past the
 // fade leaves margin in both exit paths (board-drop, or the next-frame arm when the board hasn't dropped).
 const QUEUE_EXIT_MS = QUEUE_DISSOLVE_MS + 120
-
-// Pick the on-screen neighbour whose position we hold fixed across a card's unmount — the PURE BOARD
-// DEPARTURE path only (a card the agent/another client resolved, not a local action): a reader mid-card
-// elsewhere must not have their viewport moved. Prefer the card IMMEDIATELY BEFORE the departing one
-// (keeps the top of the reader's view stable while the cards below rise to fill), else the card
-// IMMEDIATELY AFTER (the top-card case: nothing precedes it, so hold the successor). Only a
-// currently-visible, non-leaving card qualifies; null when neither neighbour is on screen (e.g. the
-// departing card fills the viewport) — then there is nothing to keep from shifting.
-function captureNeighborPin(removingSlug: string): { slug: string; top: number } | null {
-  const cards = [...document.querySelectorAll<HTMLElement>("[data-queue-card]")]
-  const i = cards.findIndex((el) => el.dataset.queueCard === removingSlug)
-  if (i < 0) return null
-  const vh = window.innerHeight
-  const stableVisible = (el: HTMLElement | undefined): el is HTMLElement => {
-    if (!el || el.dataset.queueLeaving === "true" || !el.dataset.queueCard) return false
-    const r = el.getBoundingClientRect()
-    return r.bottom > 0 && r.top < vh
-  }
-  const anchor = stableVisible(cards[i - 1]) ? cards[i - 1] : stableVisible(cards[i + 1]) ? cards[i + 1] : null
-  if (!anchor) return null
-  return { slug: anchor.dataset.queueCard!, top: anchor.getBoundingClientRect().top }
-}
 
 // Pick the card the USER-INITIATED dismissal auto-scroll lands at the viewport top (maintainer
 // 2026-07-21: "some card should be at the top of the screen after any action that dismisses a card").
@@ -108,31 +89,13 @@ function captureScrollTarget(removingSlug: string): string | null {
   const cards = [...document.querySelectorAll<HTMLElement>("[data-queue-card]")]
   const i = cards.findIndex((el) => el.dataset.queueCard === removingSlug)
   if (i < 0) return null
-  const eligible = (el: HTMLElement): boolean => el.dataset.queueLeaving !== "true" && !!el.dataset.queueCard
+  const eligible = (el: HTMLElement): boolean => el.dataset.queueLeaving !== "true" && !el.hasAttribute("data-queue-ghost") && !!el.dataset.queueCard
   for (let j = i + 1; j < cards.length; j++) if (eligible(cards[j])) return cards[j].dataset.queueCard!
   for (let j = i - 1; j >= 0; j--) if (eligible(cards[j])) return cards[j].dataset.queueCard!
   return null
 }
 
-// THE one owner of the document's overflow-anchor suspension. TWO machineries in this file suspend
-// Chrome's native scroll anchoring around a deliberate viewport correction (the dismissal landing in
-// TodosView, the load-earlier anchor dance in QueueCard); if each captured the prior style value with
-// its own ref, one could catch the other's "none" as the value to restore and leave anchoring off
-// document-wide for the rest of the session. Reference-counted instead: the FIRST suspend captures the
-// real prior policy, the LAST release restores it. Every suspend must be paired with exactly one release.
-let anchorSuspendCount = 0
-let anchorPrevPolicy = ""
-function suspendNativeAnchoring(): void {
-  if (anchorSuspendCount++ === 0) {
-    anchorPrevPolicy = document.documentElement.style.overflowAnchor
-    document.documentElement.style.overflowAnchor = "none"
-  }
-}
-function resumeNativeAnchoring(): void {
-  if (anchorSuspendCount > 0 && --anchorSuspendCount === 0) {
-    document.documentElement.style.overflowAnchor = anchorPrevPolicy
-  }
-}
+const queueCardKey = (slot: HTMLElement): string | undefined => slot.dataset.queueCard
 
 // The QUEUE's awaiting-background banner: the shared resting card (AwaitingBackgroundCard, which the
 // drawer and the full-screen page render too) — and NOTHING else since 2026-08-31, when the card took
@@ -164,16 +127,19 @@ export function TodosView() {
   // never card anymore. One strictly time-ordered list (no priority band): every card orders by when it
   // entered the queue alone, FIFO (a new arrival joins the bottom) by default or LIFO per the queueOrder
   // preference.
-  const items = orderQueue(asThreads(board?.threads ?? []).filter(queued), useSnapshot(prefs).queueOrder)
+  const threads = asThreads(board?.threads ?? [])
+  const direction = useSnapshot(prefs).queueOrder
+  const items = orderQueue(threads.filter(queued), direction)
   const itemKey = items.map((i) => i.id).join(",")
 
-  // The queue does NO passive/observer-driven scrolling — no on-mount focus, no re-anchor machine
-  // (maintainer 2026-07-15: "go back to the drawing board, use the classic approach"). The ONLY viewport
-  // adjustments are one-shot and deterministic: (1) at a card's unmount (the useLayoutEffect below) — a
-  // USER-INITIATED dismissal auto-scrolls the next card to the viewport top (maintainer 2026-07-21),
-  // while a pure board departure only holds a visible neighbour in place — and (2) the sidebar's
-  // scroll-to-card (scrollToQueueCard in store.ts), a direct response to a click. Neither is a background
-  // auto-scroll or a running observer; the browser's native scroll anchoring handles ordinary reflow.
+  // WHAT MOVES THE VIEWPORT. Two things move it on purpose, both answers to the human: (1) when they
+  // dismiss a card, the next one lands at the viewport top at its unmount (the layout effect below;
+  // maintainer 2026-07-21), and (2) the sidebar's scroll-to-card on a click or a key (scrollToQueueCard in
+  // store.ts). Everything else — a card arriving, a card leaving on its own, a card growing — is held
+  // still on screen by the viewport lock (lib/viewportLock.ts), over an order that never changes around
+  // the cards on screen (lib/stableQueue.ts). Maintainer 2026-09-28: "it needs to be guaranteed that cards
+  // that I'm currently viewing on the screen don't move in their position." Nothing auto-scrolls TO
+  // anything (maintainer 2026-07-15: "go back to the drawing board, use the classic approach").
 
   // OPTIMISTIC EXIT: a dismissed card leaves the list the instant the human acts, without waiting for the
   // board push (which lags seconds behind on some paths — a sent message clears the queue only once the
@@ -207,30 +173,43 @@ export function TodosView() {
   // Idempotent under a StrictMode double-invoke. The one caveat is concurrent Suspense/transitions, which
   // this queue path does not use.)
   const prevItemsRef = useRef<ThreadView[]>([])
-  const prevRenderRef = useRef<string[]>([]) // ids of the PREVIOUS render's order (board + still-held cards)
-  const departedRef = useRef<Map<string, { view: ThreadView; index: number }>>(new Map())
+  const prevSlotsRef = useRef<QueueSlot<ThreadView>[]>([]) // the PREVIOUS render's slots (ghosts and fading cards included)
+  const departedRef = useRef<Map<string, ThreadView>>(new Map())
   const armedRef = useRef<Set<string>>(new Set()) // departed slugs whose fade is armed (leaving=true)
   const goneRef = useRef<Set<string>>(new Set()) // slugs whose fade elapsed → excluded from render (unmounted)
   const finalizeTimersRef = useRef<Map<string, ReturnType<typeof setTimeout>>>(new Map())
   const reappearTimersRef = useRef<Map<string, ReturnType<typeof setTimeout>>>(new Map()) // resolve()'s per-slug 8s guard
-  // A dismissed card is unmounted INSTANTLY (no height collapse). We pick an anchor card the instant
-  // BEFORE the unmount (in the finalize callback) and adjust the viewport the instant AFTER (the layout
-  // effect below). Two modes: "top" (user-initiated dismissal) lands the successor at the viewport-top
-  // landing; "hold" (pure board departure) re-pins a visible neighbour exactly where it was, using its
-  // pre-unmount `top`. One-shot, at the unmount frame — never a running observer.
-  const pinRef = useRef<{ kind: "hold"; slug: string; top: number } | { kind: "top"; slug: string } | null>(null)
+  // A dismissed card is unmounted INSTANTLY (no height collapse). For a dismissal of the human's own we
+  // pick its successor the instant BEFORE the unmount (in the finalize callback) and land it at the
+  // viewport top the instant AFTER (the layout effect below), with the viewport lock stood aside for the
+  // move. Any other unmount is the lock's to absorb.
+  const pinRef = useRef<{ slug: string } | null>(null)
   const [exitTick, forceExitRender] = useState(0)
+  // THE VIEWPORT LOCK (lib/viewportLock.ts), and the one thing it asks back: a ghost that has scrolled
+  // off screen can go now that nobody sees it go.
+  const lock = useViewportLock("[data-queue-card]", queueCardKey, useCallback(() => forceExitRender((n) => n + 1), []))
+  // Whether a card that just left the queue while on screen stays as a GHOST (lib/stableQueue.ts): yes
+  // when its thread left on its own — it woke on a finished shell, a child's return, a timer, or someone
+  // acted on it in another window — and no when the human put it away from here: dismissed on the card
+  // itself, sent a message from any box in this tab (the steer stamp outlives the departure), or done,
+  // snoozed, parked. Those leave the ordinary way, and what follows them closing up is the human's doing.
+  const steeredAt = useSteeredAt()
+  const mayGhost = (slug: string): boolean => {
+    if (leaving.has(slug) || steeredAt[slug] !== undefined) return false
+    const now = threads.find((t) => t.id === slug)
+    return now !== undefined && !now.archived && now.snoozedUntil === undefined && now.bgSnoozed !== true
+  }
   {
     prevItemsRef.current.forEach((it) => {
       // A board departure snapshots the card so its fade still plays even though the board dropped it.
       // Skip a slug that already finished its exit (goneRef) — it must not be resurrected as a held card.
       if (!presentIds.has(it.id) && !goneRef.current.has(it.id)) {
-        // Capture the slot from the PREVIOUS RENDER order (which still holds any earlier-departed cards),
-        // NOT from the shrinking board — else two cards departing in separate renders both resolve to the
-        // same board index and swap while fading.
-        const at = prevRenderRef.current.indexOf(it.id)
+        // Off screen a departed card simply goes — nobody sees it, and the viewport lock absorbs it. On
+        // screen, one whose thread left on its own is a GHOST (stableQueue, below) and never fades; only
+        // one the human put away fades out, in the place the previous render drew it.
+        if (!lock.onScreen.current.has(it.id) || mayGhost(it.id)) return
         departedRef.current.delete(it.id) // re-insert at the tail so eviction is by most-recent departure
-        departedRef.current.set(it.id, { view: it, index: at >= 0 ? at : prevRenderRef.current.length })
+        departedRef.current.set(it.id, it)
         if (leaving.has(it.id)) armedRef.current.add(it.id) // already fading → keep it fading
       }
     })
@@ -283,37 +262,36 @@ export function TodosView() {
   // Self-limiting by construction: isOptimisticallySteering yields the moment server truth reports any
   // activity newer than the stamp, markSteered's own 12s timer repaints at the cap, and a send that fails
   // calls clearSteered. So a card that does NOT end up leaving is frozen for the delivery, not forever.
-  const steeredAt = useSteeredAt()
   const isFrozen = (thread: ThreadView) => isLeaving(thread.id) || isOptimisticallySteering(thread, steeredAt[thread.id])
 
-  // Render list = the board's queue, PLUS any held (departed, mid-fade) card re-inserted at its
-  // last-known position so it stays mounted and fades in place instead of vanishing. Cards that finished
-  // their exit (goneRef) are excluded whether or not the board has caught up — that instant removal is
-  // what the neighbour pin compensates. Spliced low-index-first so each stored index still addresses the
-  // right slot as the list grows.
-  // Recomputed with `items` itself (NOT the membership-only itemKey it once keyed on): keying on itemKey
-  // froze every card's ThreadView at the last membership change, so field-level board deltas on a mounted
-  // card (lastActivityAt, lastAssistant, statusText) never reached it — the card rendered a stale snapshot
-  // (and its activity-edge transcript refetch below never fired). Recomputing per render is O(queue size)
-  // splice work on a tiny list; the memoized CardSlot/QueueCard boundary (JSON-compare on thread) is what
-  // actually prevents re-render churn, and it only passes threads that genuinely changed.
-  const renderItems = useMemo(() => {
-    const list = items.filter((it) => !goneRef.current.has(it.id))
-    const held = [...departedRef.current.entries()]
-      .filter(([s]) => !presentIds.has(s) && !goneRef.current.has(s))
-      .map(([, v]) => v)
-      .sort((a, b) => a.index - b.index)
-    for (const { view, index } of held) list.splice(Math.min(index, list.length), 0, view)
-    return list
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [items, leaving, exitTick])
-  // Remember this render's exact order (board + held) so the NEXT departure captures a stable slot.
-  prevRenderRef.current = renderItems.map((i) => i.id)
+  // Render list = the board's queue in lib/stableQueue.ts's STABLE order: the queue's own order off
+  // screen; on screen exactly as last drawn, a card whose thread left on its own held there as a ghost,
+  // and a card the human put away held while it fades. Cards that finished their exit (goneRef) are
+  // excluded whether or not the board has caught up. A change of the order preference is the human
+  // re-sorting their own queue, so it starts over from the queue's order.
+  // Recomputed with `items` itself on every render (NOT a membership-only key: keying on membership once
+  // froze every card's ThreadView, so field-level board deltas on a mounted card never reached it). The
+  // memoized CardSlot/QueueCard boundary (JSON-compare on thread) is what prevents re-render churn.
+  const directionRef = useRef(direction)
+  if (directionRef.current !== direction) {
+    directionRef.current = direction
+    prevSlotsRef.current = []
+  }
+  const renderSlots = stableQueue({
+    prev: prevSlotsRef.current,
+    target: items.filter((it) => !goneRef.current.has(it.id)),
+    keyOf: (it) => it.id,
+    onScreen: lock.onScreen.current,
+    mayGhost,
+    keep: new Set([...departedRef.current.keys()].filter((s) => !presentIds.has(s) && !goneRef.current.has(s))),
+  })
+  prevSlotsRef.current = renderSlots
+  const renderItems = renderSlots.map((slot) => slot.item)
   // A card whose thread is open in a drawer is skipped at PAINT time only (see slugsInThreadDrawers).
   // Filtering `items` instead would route it through the exit machinery above — a fade, a neighbour
   // pin, and a finalize timer that could hide it again after the drawer had already closed.
   const inDrawer = slugsInThreadDrawers(useSnapshot(store).drawers)
-  const visibleItems = renderItems.filter((it) => !inDrawer.has(it.id))
+  const visibleSlots = renderSlots.filter((slot) => !inDrawer.has(slot.key))
 
   // Drive EVERY exiting card through the SAME board-independent exit, so all dismissal paths (Mark done,
   // Snooze, or steering the agent by sending a message) behave identically:
@@ -341,16 +319,17 @@ export function TodosView() {
       if (finalizeTimersRef.current.has(slug)) continue
       const timer = setTimeout(() => {
         finalizeTimersRef.current.delete(slug)
-        // Snapshot the anchor BEFORE the unmount renders — consumed in the layout effect below. A
+        // Snapshot the landing BEFORE the unmount renders — consumed in the layout effect below. A
         // user-initiated dismissal (`leaving` is fed ONLY by resolve(), i.e. a local action on the
-        // card) auto-scrolls the next card to the viewport top; a pure board departure keeps the
-        // hold-in-place neighbour pin so a reader mid-card elsewhere is never yanked.
+        // card) auto-scrolls the next card to the viewport top, and the viewport lock stands aside
+        // from now until that landing has settled (one suspension per pending landing). Any other exit
+        // is the lock's: whatever the human is looking at stays where it is.
         if (leavingRef.current.has(slug)) {
           const target = captureScrollTarget(slug)
-          pinRef.current = target ? { kind: "top", slug: target } : null
-        } else {
-          const pin = captureNeighborPin(slug)
-          pinRef.current = pin ? { kind: "hold", ...pin } : null
+          if (target) {
+            if (!pinRef.current) suspendViewportLock()
+            pinRef.current = { slug: target }
+          }
         }
         goneRef.current.add(slug) // exclude from render → unmount, regardless of whether the board dropped it
         armedRef.current.delete(slug)
@@ -389,28 +368,22 @@ export function TodosView() {
     for (const t of reappearTimersRef.current.values()) clearTimeout(t)
   }, [])
 
-  // The UNMOUNT-FRAME viewport adjustment: runs after every exit render (keyed on exitTick), but only
-  // acts when the finalize callback just armed a pin. Both modes are one instant correction
-  // (`behavior:"auto"` — the queue's idiom is deterministic one-shot moves, never an animation):
-  //   • "hold" (pure board departure): restore the visible neighbour to its pre-unmount viewport top.
-  //     Anchoring-COMPATIBLE — the browser's anchor node ends up exactly where it was, so Chrome's
-  //     native scroll anchoring (which settles AFTER layout effects) computes a no-op.
-  //   • "top" (user-initiated dismissal): land the successor at the standard viewport-top landing —
-  //     the deliberate auto-scroll (maintainer 2026-07-21: "some card should be at the top of the
-  //     screen after any action that dismisses a card"). Anchoring-HOSTILE — we MOVE the content the
-  //     browser's anchor was tracking, and native anchoring would silently scroll it right back (the
-  //     observed bug: the viewport "landed mid-card" at its old offset). So suspend overflow-anchor
-  //     and re-assert the landing across the two settle frames, exactly like the load-earlier anchor
-  //     dance in QueueCard below.
+  // The UNMOUNT-FRAME landing: runs after every exit render (keyed on exitTick), but only acts when the
+  // finalize callback just armed one for a dismissal of the human's own — land the successor at the
+  // standard viewport-top landing, the deliberate auto-scroll (maintainer 2026-07-21: "some card should
+  // be at the top of the screen after any action that dismisses a card"). One instant correction
+  // (`behavior:"auto"` — the queue's idiom is deterministic one-shot moves, never an animation). It MOVES
+  // the content, so both keepers of the viewport stand aside: the viewport lock (suspended since the
+  // finalize) and the browser's native anchoring, which would otherwise scroll it right back (the
+  // observed bug: the viewport "landed mid-card" at its old offset). The landing is re-asserted across
+  // the two settle frames, exactly like the load-earlier anchor dance in QueueCard below.
   useLayoutEffect(() => {
     const pin = pinRef.current
     if (!pin) return
     pinRef.current = null
     const el = document.querySelector<HTMLElement>(`[data-queue-card="${CSS.escape(pin.slug)}"]`)
-    if (!el) return
-    if (pin.kind === "hold") {
-      const delta = el.getBoundingClientRect().top - pin.top
-      if (Math.abs(delta) > 0.5) window.scrollBy({ top: delta, left: 0, behavior: "auto" })
+    if (!el) {
+      resumeViewportLock()
       return
     }
     suspendNativeAnchoring()
@@ -427,6 +400,7 @@ export function TodosView() {
       requestAnimationFrame(() => {
         land()
         resumeNativeAnchoring()
+        resumeViewportLock()
       })
     })
   }, [exitTick])
@@ -512,7 +486,7 @@ export function TodosView() {
           error hidden in an unrendered field). */}
       <BoardErrorsBanner board={board} />
 
-      {visibleItems.length > 0 && (
+      {visibleSlots.length > 0 && (
         <div className="flex flex-col">
           {/* THE INBOX, NAMED — READY with the inbox, the name, glyph and count of the rail band whose
               rows ARE these cards (maintainer 2026-09-24: make it obvious the middle of the screen is
@@ -526,13 +500,13 @@ export function TodosView() {
           <h2 data-inbox-header className="mb-3 flex pl-[21px]">
             <BandLabel band="ready" count={items.filter((it) => !leaving.has(it.id)).length} />
           </h2>
-          {visibleItems.map((item, i) => (
+          {visibleSlots.map(({ item, ghost }, i) => (
             <Fragment key={item.id}>
-              <CardSlot slug={item.id} leaving={isLeaving(item.id)}>
+              <CardSlot slug={item.id} leaving={isLeaving(item.id)} ghost={ghost}>
                 {item.kind === "command" ? (
                   <CommandQueueCard thread={item} leaving={isLeaving(item.id)} onResolve={resolve} onUnresolve={unresolve} />
                 ) : (
-                  <QueueCard thread={item} leaving={isLeaving(item.id)} frozen={isFrozen(item)} onResolve={resolve} onUnresolve={unresolve} />
+                  <QueueCard thread={item} leaving={isLeaving(item.id)} frozen={ghost || isFrozen(item)} ghost={ghost} onResolve={resolve} onUnresolve={unresolve} />
                 )}
               </CardSlot>
               {/* The inter-card hairline rule, a SIBLING of the slots rather than a child of the card
@@ -542,7 +516,7 @@ export function TodosView() {
                   Each rule follows its card — none after the last — so it unmounts with that card, and
                   the `+ hr` rule in styles.css fades it alongside. The 40px on each side is also the
                   scroll landing's QUEUE_CARD_VIEWPORT_TOP: keep the two in step. */}
-              {i < visibleItems.length - 1 && <hr className="my-10 border-0 border-t border-border/60" />}
+              {i < visibleSlots.length - 1 && <hr className="my-10 border-0 border-t border-border/60" />}
             </Fragment>
           ))}
         </div>
@@ -645,13 +619,16 @@ function RepairButton({ file }: { file: string }) {
 // instead of opening a drawer (scrollToQueueCard in store.ts), and the unmount anchors use it too;
 // `data-queue-leaving` drives the fade CSS. The slot is the CARD alone — the hairline rule between two
 // cards is the list's own child, between the slots.
-function CardSlot({ leaving, slug, children }: { leaving: boolean; slug: string; children: ReactNode }) {
+function CardSlot({ leaving, ghost = false, slug, children }: { leaving: boolean; ghost?: boolean; slug: string; children: ReactNode }) {
   return (
     // min-w-0 at EVERY level: grid items and flex children default to min-width:auto, so one wide
     // diff line inside a card would otherwise widen the whole queue column and make it pan sideways
     // (~346px of horizontal overflow before this) instead of letting the diff body's own
     // overflow-x:auto engage.
-    <div data-queue-card={slug} data-queue-leaving={leaving} className="frizz-card-slot min-w-0">
+    // data-queue-ghost: its thread left the queue on its own while the card was on screen, so the card
+    // holds its place, quiet, until it scrolls off (lib/stableQueue.ts). ABSENT otherwise — the viewport
+    // lock and the keyboard read its presence.
+    <div data-queue-card={slug} data-queue-leaving={leaving} data-queue-ghost={ghost || undefined} className="frizz-card-slot min-w-0">
       {/* .frizz-card-clip: a plain min-h-0/min-w-0 wrapper (no overflow:hidden — an overflow ancestor at
           rest would establish a scroll container that neuters the sticky header). */}
       <div className="frizz-card-clip min-h-0 min-w-0">
@@ -730,7 +707,7 @@ function IntermediateSummary({ toolCount, onExpand }: { toolCount: number; onExp
 // changed, instead of every mounted card — and each card's transcript is further guarded by the
 // memoized Message. `onResolve` takes the slug (stable useCallback in TodosView) so this card's props
 // never churn identity render-to-render.
-const QueueCard = memo(function QueueCard({ thread, leaving, frozen, onResolve, onUnresolve }: { thread: ThreadView; leaving: boolean; frozen: boolean; onResolve: (slug: string) => void; onUnresolve: (slug: string) => void }) {
+const QueueCard = memo(function QueueCard({ thread, leaving, frozen, ghost = false, onResolve, onUnresolve }: { thread: ThreadView; leaving: boolean; frozen: boolean; ghost?: boolean; onResolve: (slug: string) => void; onUnresolve: (slug: string) => void }) {
   // ANSWERED registered questions keep drawing, greyed, where their open card stood — the thread view's
   // rule (lib/settledQuestions). The open cards skip any id the settled list holds (openQuestionsOf).
   const settledQuestions = useSettledQuestions(thread)
@@ -1302,7 +1279,13 @@ const QueueCard = memo(function QueueCard({ thread, leaving, frozen, onResolve, 
               hover it for the Claude refresh mark. It was a plain div with only the refresh mark until
               2026-09-13 ("I should be able to click on it to retitle it"). */}
           <ThreadTitle thread={thread} className="leading-snug" />
-          <LastActive at={queueLabelAt(thread)} label={queueLabelWord(thread)} fallbackAt={thread.spawnedAt} className="mt-0.5 block truncate text-[11px] leading-tight text-muted-75" />
+          {/* A ghost says why it is quiet, on the line that said since when it was ready — the same one
+              line, so the card keeps its height and nothing under it moves. */}
+          {ghost ? (
+            <span className="mt-0.5 block truncate text-[11px] leading-tight text-muted-75">Back at work</span>
+          ) : (
+            <LastActive at={queueLabelAt(thread)} label={queueLabelWord(thread)} fallbackAt={thread.spawnedAt} className="mt-0.5 block truncate text-[11px] leading-tight text-muted-75" />
+          )}
           {/* status_text is worker-authored frontmatter prose — only decision-relevant when the
               thread is actually waiting on the human, so it renders ONLY for needs-human threads (the
               declared awaiting-you state; blocked is now a pure machine-wait and never cards). */}
@@ -1809,8 +1792,8 @@ const QueueCard = memo(function QueueCard({ thread, leaving, frozen, onResolve, 
 // mounted (and its draft/collapse/transcript state intact) unless its actual server payload changed.
 // Deltas retain identity for untouched rows, so the JSON path is only the reconnect/keyframe fallback.
 function queueCardPropsEqual(
-  previous: Readonly<{ thread: ThreadView; leaving: boolean; frozen: boolean; onResolve: (slug: string) => void; onUnresolve: (slug: string) => void }>,
-  next: Readonly<{ thread: ThreadView; leaving: boolean; frozen: boolean; onResolve: (slug: string) => void; onUnresolve: (slug: string) => void }>,
+  previous: Readonly<{ thread: ThreadView; leaving: boolean; frozen: boolean; ghost?: boolean; onResolve: (slug: string) => void; onUnresolve: (slug: string) => void }>,
+  next: Readonly<{ thread: ThreadView; leaving: boolean; frozen: boolean; ghost?: boolean; onResolve: (slug: string) => void; onUnresolve: (slug: string) => void }>,
 ): boolean {
-  return previous.leaving === next.leaving && previous.frozen === next.frozen && previous.onResolve === next.onResolve && previous.onUnresolve === next.onUnresolve && (previous.thread === next.thread || JSON.stringify(previous.thread) === JSON.stringify(next.thread))
+  return previous.leaving === next.leaving && previous.frozen === next.frozen && previous.ghost === next.ghost && previous.onResolve === next.onResolve && previous.onUnresolve === next.onUnresolve && (previous.thread === next.thread || JSON.stringify(previous.thread) === JSON.stringify(next.thread))
 }

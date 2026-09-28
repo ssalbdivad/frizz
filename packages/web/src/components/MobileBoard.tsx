@@ -21,7 +21,9 @@ import { visibleChildOps } from "../lib/childOps.ts"
 import { childOpDismisser } from "../lib/dismissChildOp.ts"
 import { ChildOpRow } from "./ChildOpRow.tsx"
 import { ProviderMark } from "./ProviderMark.tsx"
-import { useOptimisticallySteered } from "../lib/steering.ts"
+import { useOptimisticallySteered, useSteeredAt } from "../lib/steering.ts"
+import { stableQueue, type QueueSlot } from "../lib/stableQueue.ts"
+import { useViewportLock } from "../lib/viewportLock.ts"
 import { clearArchived, markArchived, useOptimisticallyArchived } from "../lib/optimisticArchive.ts"
 import { rpc } from "../api/rpc.ts"
 import { showToast } from "../store.ts"
@@ -524,6 +526,8 @@ function MoreSheet({ connection, onClose }: { connection: ConnectionState; onClo
   )
 }
 
+const mobileSlotKey = (slot: HTMLElement): string | undefined => slot.dataset.mobileSlot
+
 // The restart overlay, the drawer stack and the modals stay the App's: they are identical on both
 // shells and mounting them twice would stack two of everything.
 export function MobileBoard() {
@@ -556,7 +560,36 @@ export function MobileBoard() {
   }, [sections.pinned, sections.active])
   const askCount = queue.filter(needsAction).length
 
-  const rows = tab === "queue" ? queue : tab === "snoozed" ? sections.snoozed : sections.inactive
+  const listed = tab === "queue" ? queue : tab === "snoozed" ? sections.snoozed : sections.inactive
+  // THE LIST NEVER MOVES A ROW THE HUMAN IS LOOKING AT (maintainer 2026-09-28: "it needs to be guaranteed
+  // that cards that I'm currently viewing on the screen don't move in their position") — the desktop
+  // queue's two halves, on the phone's one list: lib/stableQueue.ts keeps the rows on screen in the order
+  // they were drawn (an ask arriving, a thread coming to rest or going back to work re-sorts only what
+  // is off screen), and lib/viewportLock.ts scrolls by whatever changed above them. A row whose thread
+  // left the list on its own while on screen stays, quiet, until it scrolls away. Changing tab or order
+  // is the human re-sorting, so it starts from the list's own order.
+  const [, repaint] = useState(0)
+  const lock = useViewportLock("[data-mobile-slot]", mobileSlotKey, useCallback(() => repaint((n) => n + 1), []))
+  const steeredAt = useSteeredAt()
+  const prevRows = useRef<QueueSlot<ThreadView>[]>([])
+  const orderedAs = useRef({ tab, queueOrder })
+  if (orderedAs.current.tab !== tab || orderedAs.current.queueOrder !== queueOrder) {
+    orderedAs.current = { tab, queueOrder }
+    prevRows.current = []
+  }
+  const rows = stableQueue({
+    prev: prevRows.current,
+    target: listed,
+    keyOf: (t) => t.id,
+    onScreen: lock.onScreen.current,
+    // Not when the human put it away — done, snoozed, a message sent from here (the overlays in `all`).
+    mayGhost: (id) => {
+      if (steeredAt[id] !== undefined) return false
+      const now = all.find((t) => t.id === id)
+      return now !== undefined && !now.archived && now.snoozedUntil === undefined && now.bgSnoozed !== true
+    },
+  })
+  prevRows.current = rows
   const statusView = snap.view.startsWith("status:") ? snap.view.slice(7) : null
   const identity = projectIdentity(board)
 
@@ -623,19 +656,20 @@ export function MobileBoard() {
           <div className="border-b border-border/70 bg-panel/60">
             {/* Terminal command threads share the lists (groups.ts sectionOf): running and finished in
                 the To do tab, marked done in Done. They have no swipe verbs, so they get their own row. */}
-            {rows.map((t, i) =>
-              t.kind === "command" ? (
-                <MobileCommandRow key={t.id} t={t} last={i === rows.length - 1} />
-              ) : (
-                <MobileThreadRow
-                  key={t.id}
-                  t={t}
-                  last={i === rows.length - 1}
-                  openSwipe={openSwipe === t.id}
-                  onOpenSwipe={(open) => setOpenSwipe(open ? t.id : null)}
-                />
-              ),
-            )}
+            {rows.map(({ item: t, ghost }, i) => (
+              <div key={t.id} data-mobile-slot={t.id} data-queue-ghost={ghost || undefined} className={ghost ? "opacity-50" : undefined}>
+                {t.kind === "command" ? (
+                  <MobileCommandRow t={t} last={i === rows.length - 1} />
+                ) : (
+                  <MobileThreadRow
+                    t={t}
+                    last={i === rows.length - 1}
+                    openSwipe={openSwipe === t.id}
+                    onOpenSwipe={(open) => setOpenSwipe(open ? t.id : null)}
+                  />
+                )}
+              </div>
+            ))}
           </div>
         )}
       </div>
