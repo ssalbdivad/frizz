@@ -26,12 +26,30 @@ import { FRIZZ_ROUTE_PREFIX } from "@frizz/shared"
 // names its thread's project, because that is the thread's address, not the box's target.
 
 /**
- * The SPA's own top-level route names — the in-app links an agent writes unprefixed. This is the single definition of that set —
- * `isFrizzRoute` in markdownTargets.ts used to keep its own copy, and under a project prefix a stale
- * copy is not a small bug: every in-app link starts looking like a FILESYSTEM path to the markdown
- * sanitizer, and renders as a disabled local-file chip.
+ * The SPA's own top-level route names — the in-app links an agent writes unprefixed, and the ones a page
+ * re-points under its project (prefixedAppRoute). This is the single definition of that set —
+ * `isFrizzRoute` in markdownTargets.ts used to keep its own copy, and a stale copy is not a small bug:
+ * every in-app link starts looking like a FILESYSTEM path to the markdown sanitizer, and renders as a
+ * disabled local-file chip. Only `thread` since 2026-09-28: `status` went with its list views, and is a
+ * retired address now (isRetiredAppPath).
  */
-export const APP_ROUTE_SEGMENTS = new Set(["thread", "status"])
+export const APP_ROUTE_SEGMENTS = new Set(["thread"])
+
+/**
+ * The in-app addresses Frizz minted before one page replaced the project view (2026-09-28): a project's
+ * page `/project/<slug>`, its drawer `/project/<slug>/thread/<t>` and fullscreen `…/full`, and the
+ * `/status/<s>` lists, bare or under a project. Nothing mints them now, and the route tree sends each one
+ * home untranslated (routes.tsx).
+ *
+ * They are still IN-APP, and that is the only thing this answers. Old handoffs and toasts are full of
+ * them, and read as a filesystem path the markdown sanitizer turned each into a local-file chip whose
+ * click asked the server to open `/project/nub/thread/x` — an error toast, where the link as written
+ * lands on the page. EXACTLY these shapes, the way MACHINE_ROUTE_SEGMENTS matches its names: `/project`
+ * is a real directory on plenty of machines, and `/project/acme/src/main.rs` is somebody's file.
+ */
+export function isRetiredAppPath(path: string): boolean {
+  return /^\/project\/[^/]+(?:\/thread\/[^/]+(?:\/full)?|\/status\/[^/]+)?\/?$/u.test(path) || /^\/status\/[^/]+\/?$/u.test(path)
+}
 
 /**
  * Machine-level pages: they are in-app, but they name no project and are never re-pointed under one.

@@ -1,5 +1,4 @@
-import { FRIZZ_ROUTE_PREFIX } from "@frizz/shared"
-import { apiBase, innerPath, projectSlug, APP_ROUTE_SEGMENTS, MACHINE_ROUTE_SEGMENTS } from "./base-path.ts"
+import { apiBase, isRetiredAppPath, projectSlug, APP_ROUTE_SEGMENTS, MACHINE_ROUTE_SEGMENTS } from "./base-path.ts"
 import { dirnameLike, isRooted, joinLike } from "./paths.ts"
 // Markdown is often written by tools that report local artifacts as links. A browser interprets a
 // POSIX absolute path as a same-origin URL path, which both navigates away from Frizz and produces a
@@ -41,20 +40,24 @@ function decodePath(value: string): string {
 // The SPA's intentionally supported root-relative routes. All other single-slash absolute targets
 // are treated as filesystem paths; ordinary relative links (`docs/foo`), fragments, mailto, and
 // http(s) never reach this classifier.
+//
+// The answer does not depend on the page: `/`, a drawer's `/all/<slug>/thread/<t>` and a fullscreen
+// `/thread/<t>/full` all classify a link the same way, because every shape below is matched on the
+// link alone. (It stripped the page's own `/project/<slug>` prefix first until 2026-09-28, when the
+// project page went.)
 function isFrizzRoute(href: string): boolean {
   if (href === "/" || href.startsWith("/?") || href.startsWith("/#")) return true
-  // Strip this page's project prefix first. Under `/project/nub/thread/x` the in-app link IS
-  // `/project/nub/thread/x`, and without this it reads as a filesystem path and renders as a
-  // disabled local-file chip.
   const bare = href.replace(/[?#].*$/u, "")
-  // A link straight to another project's board — `/project/nub` — is in-app even though it has no
-  // route segment of its own once the prefix is stripped.
+  // A link that names its project — a drawer, `/all/nub/thread/x`, or its `/full` — is in-app whichever
+  // page it is read on.
   if (projectSlug(bare)) return true
-  const inner = innerPath(bare)
-  const first = inner.split("/")[1] ?? ""
+  // So is an address Frizz itself minted before 2026-09-28 (`/project/nub/thread/x`): it lands on the
+  // page, where a local-file chip would ask the server to open a file that is not there.
+  if (isRetiredAppPath(bare)) return true
+  const first = bare.split("/")[1] ?? ""
   // `/projects` and the cross-project page's other machine routes name no project of their own. EXACTLY
   // those paths: `/projects/acme/README.md` is somebody's directory, not a page.
-  return APP_ROUTE_SEGMENTS.has(first) || (MACHINE_ROUTE_SEGMENTS.has(first) && inner.replace(/\/$/u, "") === `/${first}`)
+  return APP_ROUTE_SEGMENTS.has(first) || (MACHINE_ROUTE_SEGMENTS.has(first) && bare.replace(/\/$/u, "") === `/${first}`)
 }
 
 /**
@@ -138,8 +141,9 @@ export function isLocalMarkdownFile(path: string): boolean {
 // to each other relatively on purpose (`./ARCHITECTURE.md`, `../scripts/shot.mjs`) and so does chat
 // prose — a worker writing up its own scratch file names it `.frizz/threads/<id>/HANDOFF.md`, exactly
 // as it typed it into the shell. With no base, none of those is a local path OR a working URL: the
-// anchor stayed relative and the browser resolved it against the PAGE, so clicking a handoff link
-// navigated to `/project/nub/thread/<slug>/.frizz/threads/<id>/HANDOFF.md` and out of Frizz entirely.
+// anchor stayed relative and the browser resolved it against the PAGE, so clicking a handoff link in a
+// drawer navigated to a path under the drawer's own address (`/all/nub/thread/.frizz/threads/<id>/…`)
+// and out of Frizz entirely.
 //
 // The base is the rendering document's own directory for the file reader, and the PROJECT DIRECTORY
 // for every other surface — the same root the server resolves a bare inline-code path against

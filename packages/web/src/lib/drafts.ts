@@ -113,8 +113,9 @@ export function useThreadSessionId(slug: string): string | undefined {
 }
 // SUBSCRIBE TO THE VALUE, NEVER TO THE SNAPSHOT OBJECT. `commit` replaces `this.snapshot` wholesale on
 // every keystroke, so a hook whose `getSnapshot` returns that object re-renders on EVERY edit to ANY
-// draft anywhere in the app — and `useLiveAnswering` calls `useDraftValues` from TodosView, near the top
-// of the board tree, so one keystroke in the composer re-rendered the entire board: every queue card,
+// draft anywhere in the app — and `useLiveAnswering` called `useDraftValues` from TodosView (the project
+// board, until 2026-09-28), near the top of the board tree, so one keystroke in the composer re-rendered
+// the entire board: every queue card,
 // every Radix tooltip/popover/menu under it. Measured before this change: 1096 React renders and 47ms of
 // render work for ONE character typed into the composer.
 //

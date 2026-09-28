@@ -8,10 +8,11 @@
 //      is silently clamped to a no-op. Every measurement has to come off the lock's own offset.
 //   2. The unlock RESTORES the captured offset, so even a scroll that did land would be undone.
 //
-// So a scroll requested under the lock doesn't scroll — it parks its landing here, and the unlock
-// lands there instead of where the page was. That is what lets a queued sidebar row dismiss the open
-// drawer and still auto-scroll to its card (maintainer 2026-08-11): the dismissal holds the lock for
-// the whole ~210ms slide-out, which is exactly the window the click happens in.
+// So every measurement goes through pageScrollY below, and a correction made under the lock moves the
+// body's pinned top rather than the window (lib/viewportLock.ts), which App's unlock then restores.
+// (Until 2026-09-28 a scroll could also PARK its landing here for the unlock to honour, so the project
+// board's queued row could dismiss the open drawer and still auto-scroll to its card; nothing parks one
+// on Everything, and requestScrollAfterUnlock / takeScrollAfterUnlock went with that board.)
 
 // The document scroll offset, whether or not the page is locked. Under the lock the body is shifted
 // up by the captured offset, so `-body.style.top` is the real scrollY and every getBoundingClientRect
@@ -24,19 +25,4 @@ export function pageScrollY(): number {
 
 export function isPageScrollLocked(): boolean {
   return typeof document !== "undefined" && document.body?.style.position === "fixed"
-}
-
-let pendingUnlockScrollY: number | null = null
-
-// Park a landing for the unlock. Overwrites any earlier request: the newest navigation wins.
-export function requestScrollAfterUnlock(y: number): void {
-  pendingUnlockScrollY = y
-}
-
-// Consume the parked landing (the unlock), or clear a stale one (a fresh lock). Returns null when
-// nothing is parked, which is the signal to restore the captured offset as usual.
-export function takeScrollAfterUnlock(): number | null {
-  const y = pendingUnlockScrollY
-  pendingUnlockScrollY = null
-  return y
 }

@@ -43,8 +43,8 @@ function writeMirror(shown: boolean) {
  * THE CACHE ENTRY IS PER PROJECT, AND THIS HOOK OUTLIVES A PROJECT. `["settingsGet"]` hashes under
  * the project the URL names at RENDER time (lib/queryKeyScope.ts), and the layout that calls this
  * hook is mounted once and never re-rendered by a navigation — so without the `useLocation()` below
- * it stayed bound to whichever project's entry it was cold-loaded on. The settings drawer, which
- * only ever mounts inside a board, writes its save under the CURRENT project's entry. Cold-load `/`,
+ * it stayed bound to whichever project's entry it was cold-loaded on. The settings drawer writes its
+ * save under the CURRENT project's entry (it only mounted inside a project's board then). Cold-load `/`,
  * click into a project, flip "Project sidebar" to "Always shown": the select flipped and the rail
  * did not, until a reload happened to land on a board (maintainer 2026-08-24: "it literally only
  * shows up when I'm in the home page"). Reading the location re-renders this on every navigation,

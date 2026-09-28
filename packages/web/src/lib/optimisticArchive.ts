@@ -1,4 +1,3 @@
-import { useMemo } from "react"
 import { proxy, useSnapshot } from "valtio"
 import type { ThreadView } from "@frizz/shared"
 import { isActivelyRunning } from "../groups.ts"
@@ -7,14 +6,15 @@ import { isActivelyRunning } from "../groups.ts"
 // clicks rather than when the server can prove it. The exact twin of lib/steering.ts, for the other
 // direction, and it exists for the same reason: a lifecycle verb whose two surfaces disagreed.
 //
-// The QUEUE card has dismissed optimistically since the optimistic-done work (see
-// queueOptimisticDone.e2e.test.ts) — click Mark as done and the card fades immediately, ahead of the
-// completeThread round-trip. The SIDEBAR had no such path: its bands are derived purely from
-// board.threads, so the row sat in Rested until the server's board delta arrived. Every millisecond
-// the server took to answer was a millisecond where the card was gone and the row was still there
-// (maintainer 2026-08-11: "often extreme delay in updating sidebar after clicking Mark as done").
-// Server latency is worth fixing on its own terms — and is, separately — but a rail that waits on a
-// round-trip to show a decision the operator already made is the wrong shape at ANY latency.
+// The QUEUE card has dismissed optimistically since the optimistic-done work — click Mark as done and
+// the card fades immediately, ahead of the completeThread round-trip. The project board's SIDEBAR had no
+// such path: its bands are derived purely from board.threads, so the row sat in Rested until the
+// server's board delta arrived. Every millisecond the server took to answer was a millisecond where the
+// card was gone and the row was still there (maintainer 2026-08-11: "often extreme delay in updating
+// sidebar after clicking Mark as done"). Server latency is worth fixing on its own terms — and is,
+// separately — but a rail that waits on a round-trip to show a decision the operator already made is
+// the wrong shape at ANY latency. That sidebar read the overlay across its bands until 2026-09-28, when
+// it went with the project board; today its reader is the drawer header's band stamp (BandLabel.tsx).
 //
 // Not a second source of truth: the hint only fires while server truth has said nothing, and yields the
 // moment it does.
@@ -74,10 +74,4 @@ export function optimisticallyArchived(t: ThreadView, at: number | undefined, no
     pendingQuestion: false,
     actionableInteraction: false,
   }
-}
-
-// Apply the overlay across a board's threads. A thread with no pending archive is returned BY IDENTITY.
-export function useOptimisticallyArchived(threads: readonly ThreadView[]): ThreadView[] {
-  const at = useArchivingAt()
-  return useMemo(() => threads.map((t) => optimisticallyArchived(t, at[t.id])), [threads, at])
 }

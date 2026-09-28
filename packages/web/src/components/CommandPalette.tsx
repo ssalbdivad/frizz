@@ -62,11 +62,11 @@ export function CommandPalette() {
 
           <Command.Group heading="Actions" className="cmdk-group">
             {/* "Home" died with the Home view (the dispatch box is always visible on the queue);
-                "New thread" opens the anywhere-modal. Queue remains as the way back from a status list. */}
+                "New thread" opens the anywhere-modal. Queue closes every drawer, back to the page. */}
             <Item value="new thread create home" onSelect={() => run(() => openNewThread())}>
               New thread
             </Item>
-            <Item value="queue todos inbox pending" onSelect={() => run(() => { closeDrawersById(store.drawers.map((d) => d.id)); store.view = "todos" })}>
+            <Item value="queue todos inbox pending" onSelect={() => run(() => closeDrawersById(store.drawers.map((d) => d.id)))}>
               Queue
             </Item>
             <Item value="open settings preferences" onSelect={() => run(() => (store.showSettings = true))}>

@@ -1,10 +1,13 @@
 import { createRoot } from "react-dom/client"
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query"
 import type { BoardSnapshot, ThreadView } from "@frizz/shared"
-import { SectionHeader, ThreadRow } from "./components/Sidebar.tsx"
+import { SectionHeader, ThreadRow, type RowScope } from "./components/Sidebar.tsx"
 import { TooltipProvider } from "./components/Tooltip.tsx"
 import { store } from "./store.ts"
 import "./styles.css"
+
+// Where a row's click leads. This page only draws rows; every real row has a scope (ProjectList.tsx).
+const ROW_SCOPE: RowScope = { open: () => {}, page: true }
 
 // Reproduces the HELD band from the maintainer's screenshot: a user-snoozed thread and an
 // `awaiting timer:` thread. Before the fix these rendered on TWO lines in two divergent styles
@@ -123,8 +126,8 @@ function ActiveBand() {
   return (
     <section aria-label="Active">
       <SectionHeader band="working" count={2} />
-      <ThreadRow t={runningSnoozed} />
-      <ThreadRow t={bumpingSnoozed} />
+      <ThreadRow scope={ROW_SCOPE} t={runningSnoozed} />
+      <ThreadRow scope={ROW_SCOPE} t={bumpingSnoozed} />
     </section>
   )
 }
@@ -137,9 +140,9 @@ function HeldBand() {
     <section aria-label="Snoozed">
       <hr className="my-3 border-border/50" />
       <SectionHeader band="snoozed" count={3} />
-      <ThreadRow t={timerThread} />
-      <ThreadRow t={snoozeThread} />
-      <ThreadRow t={watchThread} />
+      <ThreadRow scope={ROW_SCOPE} t={timerThread} />
+      <ThreadRow scope={ROW_SCOPE} t={snoozeThread} />
+      <ThreadRow scope={ROW_SCOPE} t={watchThread} />
     </section>
   )
 }
@@ -152,7 +155,7 @@ function RestedBand() {
   return (
     <section aria-label="Rested">
       <SectionHeader band="ready" count={1} />
-      <ThreadRow t={limitThread} restedAge />
+      <ThreadRow scope={ROW_SCOPE} t={limitThread} restedAge />
       <hr className="my-3 border-border/50" />
     </section>
   )

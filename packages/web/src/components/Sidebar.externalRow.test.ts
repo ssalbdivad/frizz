@@ -4,8 +4,11 @@ import { createElement } from "react"
 import { renderToStaticMarkup } from "react-dom/server"
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query"
 import type { ThreadView } from "@frizz/shared"
-import { ThreadRow } from "./Sidebar.tsx"
+import { ThreadRow, type RowScope } from "./Sidebar.tsx"
 import { TooltipProvider } from "./Tooltip.tsx"
+
+// Where a click would lead. Nothing here clicks; the prop is required because every real row has one.
+const ROW_SCOPE: RowScope = { open: () => {}, page: true }
 
 // An EXTERNAL row (the human's own `claude`/`codex` session) once wore a `terminal` pill. Since the
 // prompt box's Terminal tab, "terminal" names a command thread — a different kind of row with a live
@@ -18,7 +21,7 @@ function row(extra: Partial<ThreadView>) {
     createElement(
       QueryClientProvider,
       { client: new QueryClient({ defaultOptions: { queries: { retry: false } } }) },
-      createElement(TooltipProvider, null, createElement(ThreadRow, { t })),
+      createElement(TooltipProvider, null, createElement(ThreadRow, { t, scope: ROW_SCOPE })),
     ),
   )
 }

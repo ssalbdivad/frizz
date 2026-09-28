@@ -35,7 +35,7 @@ export function ThreadActionBar({ slug, ops }: { slug: string; onTerminal?: () =
       // [data-thread-chat-footer] wrapper in ChatView that hosts this bar; carrying them here too
       // stacked a second hairline directly under the first, so the line above the prompt box read
       // as a 2px rule instead of the queue card's single hairline. Same shape as the queue card's
-      // own call site (TodosView: `shrink-0 px-5 pb-3 pt-0`) and as drawer-composer-footer-fixture.
+      // own reply box (AllQueuesCard: `shrink-0 px-5 pb-3 pt-0`) and as drawer-composer-footer-fixture.
       className="shrink-0 px-3 py-3"
       ops={ops}
     />

@@ -1,10 +1,12 @@
-import { createElement } from "react"
 import { createRoot } from "react-dom/client"
 import type { ThreadView } from "@frizz/shared"
 import "./styles.css"
 import { Message } from "./components/ChatView.tsx"
-import { ThreadRow } from "./components/Sidebar.tsx"
+import { ThreadRow, type RowScope } from "./components/Sidebar.tsx"
 import { TooltipProvider } from "./components/Tooltip.tsx"
+
+// Where a row's click leads. This page only draws rows; every real row has a scope (ProjectList.tsx).
+const ROW_SCOPE: RowScope = { open: () => {}, page: true }
 
 const tomorrowAtNine = new Date()
 tomorrowAtNine.setDate(tomorrowAtNine.getDate() + 1)
@@ -43,7 +45,7 @@ createRoot(document.getElementById("root")!).render(
       </div>
       <section className="max-w-md rounded-xl border border-border bg-panel p-4 shadow-sm">
         <h2 className="mb-3 text-[11px] font-medium uppercase tracking-wide text-muted">Sidebar</h2>
-        <ThreadRow t={thread} />
+        <ThreadRow scope={ROW_SCOPE} t={thread} />
       </section>
     </main>
   </TooltipProvider>,

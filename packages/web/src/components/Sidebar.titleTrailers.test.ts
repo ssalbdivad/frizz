@@ -4,8 +4,11 @@ import { createElement } from "react"
 import { renderToStaticMarkup } from "react-dom/server"
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query"
 import type { ThreadView } from "@frizz/shared"
-import { ThreadRow } from "./Sidebar.tsx"
+import { ThreadRow, type RowScope } from "./Sidebar.tsx"
 import { TooltipProvider } from "./Tooltip.tsx"
+
+// Where a click would lead. Nothing here clicks; the prop is required because every real row has one.
+const ROW_SCOPE: RowScope = { open: () => {}, page: true }
 
 // The provider mark is an atomic inline box, so the line breaker may break right before it — which
 // stranded it alone on a second line under a wrapping title. It must ride with the title's last word.
@@ -25,7 +28,7 @@ function row(title: string) {
     createElement(
       QueryClientProvider,
       { client: new QueryClient({ defaultOptions: { queries: { retry: false } } }) },
-      createElement(TooltipProvider, null, createElement(ThreadRow, { t: thread })),
+      createElement(TooltipProvider, null, createElement(ThreadRow, { t: thread, scope: ROW_SCOPE })),
     ),
   )
 }

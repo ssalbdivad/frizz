@@ -11,7 +11,8 @@ import { parseStandaloneThreadPath } from "./standaloneThreadRoute.ts"
 // History contract (standard SPA): opening a thread layer PUSHES an entry so the browser Back
 // button unwinds it; other transitions REPLACE so transient state never buries the back stack.
 //
-// (The focus machine this used to route through was deleted — the router writes store.view directly.)
+// (The focus machine this used to route through was deleted, and so, on 2026-09-28, was the `view` it
+// then wrote: `/status/<s>` lists went with the project board, so every non-thread path is the page.)
 
 function currentPath(): string {
   const top = topRoutedSlug()
@@ -40,10 +41,8 @@ export function applyPath(path: string): void {
     if (slug === null) {
       store.routeThreadSlug = null
       closeDrawersById(store.drawers.map((d) => d.id))
-      store.view = "todos"
       return
     }
-    store.view = "todos"
     // Back/forward landed on a thread path: if that thread is somewhere in the stack, unwind ABOVE
     // it and we're done — the surface it asks for is already up.
     const idx = store.drawers.findIndex((d) => (d.kind === "thread" || d.kind === "terminal") && d.slug === slug && !d.closing)
@@ -65,7 +64,6 @@ export function applyPath(path: string): void {
   // Everything else is the page; Back past the last thread layer unwinds the stack (animated).
   store.routeThreadSlug = null
   closeDrawersById(store.drawers.map((d) => d.id))
-  store.view = "todos"
 }
 
 // Cold-load adoption is initial application state, so establish it BEFORE React's first render.
@@ -85,9 +83,10 @@ export function primeRoute(path = location.pathname): void {
 // effects run, and the store only learns the new URL in those effects (routes.tsx useRouteToStore). In
 // between, the store still describes the PREVIOUS URL — and any notification in that window (a socket
 // status, a toast timer) ran the store → URL writer, which "corrected" the address bar back to the old
-// state. On a board that window is empty, because a board opens its drawers store-first; the
-// cross-project page opens another project's thread URL-first, so there it put the previous project's
-// parked thread under the new project's prefix, or wrote the new project's bare page over the thread
+// state. For a thread of the focused project that window is empty, because `openThread` opens its
+// drawer store-first; a thread of another project opens URL-first (AllQueuesCard
+// useOpenThreadInPlace), so there it put the previous project's parked thread under the new project's
+// prefix, or wrote the new project's bare page over the thread
 // just clicked. So the writer only writes a URL the store has absorbed, and runs once more when it has.
 let absorbed: string | null = null
 let skippedWrite = false

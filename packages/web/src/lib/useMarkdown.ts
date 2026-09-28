@@ -20,9 +20,9 @@ import { localPathBase, subscribeLocalPathBase, type LocalPathBase } from "./loc
  * WHOSE PROSE THIS IS, for a subtree rendering a project other than the page's own.
  *
  * Every hook below reads the page's project out of module state (the repo a `#123` links into, the root
- * a relative path resolves against) — right on a board, which shows one project, and wrong on the All
- * queues page, which shows every project on a page that names none. That page wraps each project's
- * cards in one of these, and every markdown surface inside — its own prose AND the shared question
+ * a relative path resolves against) — right in a drawer or on /full, which show one thread of the page
+ * project, and wrong on the cross-project page's queue, which shows every project's cards while the page
+ * is focused on one. That page wraps each card in one of these, and every markdown surface inside — its own prose AND the shared question
  * cards it reuses — renders against that project without knowing the page is different.
  */
 export const MarkdownScopeContext = createContext<MarkdownScope | null>(null)

@@ -89,7 +89,9 @@ test("every awaiting-fence body renders through the block markdown sheet", () =>
 // reports it visible spends an adjacency spacer on an empty slot and saves a rest divider with nothing
 // under it, which is the exact bug the refused-fence strip was added for.
 test("the empty-message predicates take the settled case", () => {
-  for (const fn of ["messageRendersNothing", "messageHasRenderableText"]) {
+  // (messageHasRenderableText, the project board's queue-card twin of this predicate, went with that
+  // card on 2026-09-28.)
+  for (const fn of ["messageRendersNothing"]) {
     const re = new RegExp(`export function ${fn}\\(m: ChatMessage, staleAwaiting\\?: boolean\\)`)
     assert.match(source, re, `${fn} must accept the message's staleness`)
   }

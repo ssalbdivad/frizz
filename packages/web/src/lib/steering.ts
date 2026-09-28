@@ -1,4 +1,3 @@
-import { useMemo } from "react"
 import { proxy, useSnapshot } from "valtio"
 import type { ThreadView } from "@frizz/shared"
 
@@ -88,12 +87,4 @@ export function optimisticallySteered(t: ThreadView, at: number | undefined, now
     // lastActivityAt is deliberately untouched: it is the evidence isOptimisticallySteering watches
     // for to hand the row back to server truth, so writing it here would make the hint self-sealing.
   }
-}
-
-// Apply the overlay across a board's threads. A thread with no live steer is returned BY IDENTITY, so
-// the memoized rows still skip re-rendering; the memo re-runs when the board changes or when a stamp
-// is set/expired (markSteered's expiry timer is what guarantees the cap actually repaints).
-export function useOptimisticallySteered(threads: readonly ThreadView[]): ThreadView[] {
-  const at = useSteeredAt()
-  return useMemo(() => threads.map((t) => optimisticallySteered(t, at[t.id])), [threads, at])
 }

@@ -20,7 +20,7 @@ import { basename } from "../lib/paths.ts"
 // (climbs out — the next Esc, at rest, unwinds a drawer via
 // App's window handler). Keyboard handling is entirely LOCAL: the focus machine that used to
 // arbitrate boundary keys was deleted with the mouse-only sidebar. `surface` remains only as a
-// data- tag for per-card input targeting (TodosView queries [data-surface="queueComposer"]).
+// data- tag for per-card input targeting (lib/keyboardRuntime.ts REPLY_BOXES queries it for `r`).
 // Upload a dropped/pasted/picked file and return its server-side absolute path. The path goes INTO the
 // message text: workers open it with their Read/file tool; the chat renders images via /local-image and
 // non-image files as an openable chip. The shared extension allowlist (images, docs/text/code, office,
@@ -95,8 +95,8 @@ export function Composer({
   value: string
   onChange: (v: string) => void
   onSubmit: () => void
-  // Pure data- tag on the textarea (e.g. TodosView targets [data-surface="queueComposer"] to focus a
-  // card's input). No focus registry behind it anymore.
+  // Pure data- tag on the textarea (e.g. lib/keyboardRuntime.ts REPLY_BOXES targets
+  // [data-surface="queueComposer"] when `r` focuses a card's input). No focus registry behind it anymore.
   surface: string
   placeholder?: string
   id?: string
@@ -138,8 +138,9 @@ export function Composer({
   // because it is a real send path with muscle memory behind it — only the picture was wrong.
   onInterruptSubmit?: () => void
   // WHICH PROJECT AN ATTACHMENT IS UPLOADED TO, when it is not the page's. Omitted, `apiBase()` — the
-  // project the address bar names, which on a board is the thread's own. The All queues page shows
-  // every project's threads on a page that names none, so it passes the thread's project explicitly.
+  // page project, which in a drawer or on /full is the thread's own. The cross-project page's queue
+  // card shows a thread of ANY project while the page is focused on one, so it passes the thread's
+  // project explicitly (AllQueuesCard ReplyBox).
   attachBase?: string
 }) {
   const taRef = useRef<HTMLTextAreaElement>(null)

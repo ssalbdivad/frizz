@@ -173,17 +173,3 @@ function joinList(parts: readonly string[]): string {
   if (parts.length <= 1) return parts.join("")
   return `${parts.slice(0, -1).join(", ")} and ${parts[parts.length - 1]}`
 }
-
-/** THE MOBILE BOARD'S one-line gloss, and the LAST inline caption frizz draws under a thread title.
- *
- *  The desktop rail dropped its subtitle entirely (maintainer 2026-08-19) and moved every fence detail
- *  into the row's hover popover. A phone has no hover, so the mobile row keeps the one fragment worth a
- *  line without one: a PR ref names a THING rather than describing a wait, and it exists nowhere else on
- *  that row. Everything else the fence carries — the ids, the duration, the worker's own prose — stays
- *  off it, exactly as it does on the rail. */
-export function hintGloss(hints: readonly AwaitingHint[]): string | null {
-  const pr = hints.find((h) => h.kind === "pr")
-  if (pr) return `PR ${pr.value}`
-  const issue = hints.find((h) => h.kind === "issue")
-  return issue ? `Issue ${issue.value}` : null
-}

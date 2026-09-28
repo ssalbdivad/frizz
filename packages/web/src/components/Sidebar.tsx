@@ -1,10 +1,9 @@
 import { memo, useCallback, useState } from "react"
 import { useQueryClient } from "@tanstack/react-query"
-import { AlarmClock, Check, ChevronRight, CircleDashed, Ellipsis, Github, Hourglass, Loader2, Pin, PinOff, RotateCcw, TerminalSquare, Timer } from "lucide-react"
+import { AlarmClock, Check, ChevronRight, Ellipsis, Github, Hourglass, Loader2, Pin, PinOff, RotateCcw, TerminalSquare } from "lucide-react"
 import { questionsOwed, type ThreadView } from "@frizz/shared"
-import { openThread, scrollToQueueCard, pushSubAgentDrawer, showToast } from "../store.ts"
-import { rpc } from "../api/rpc.ts"
-import { needsAction, displayTitle, titleIsProvisional, isPinned, isSnoozed, parkedAwaitingHint, sessionIndicatorKind, offersRetry, futureSnoozedUntil, queueLabelAt, waitNamesPr, prChecksRunning, restingOnSubAgents } from "../groups.ts"
+import { pushSubAgentDrawer, showToast } from "../store.ts"
+import { displayTitle, titleIsProvisional, isPinned, isSnoozed, sessionIndicatorKind, offersRetry, futureSnoozedUntil, queueLabelAt, waitNamesPr, prChecksRunning, restingOnSubAgents } from "../groups.ts"
 import { ageSpan, relativeAge, limitResumeClock } from "../lib/activityTime.ts"
 import { useNowMs } from "../lib/liveClock.ts"
 import { commandFailed, commandLive, commandStateLabel } from "../lib/commandThreads.ts"
@@ -13,17 +12,14 @@ import { BoxSpinner, STATUS_BOX } from "./BoxSpinner.tsx"
 import { ChildOpRow } from "./ChildOpRow.tsx"
 import { visibleChildOps } from "../lib/childOps.ts"
 import { childOpDismisser } from "../lib/dismissChildOp.ts"
-import { MarkAsButton } from "./MarkAsButton.tsx"
 import { Tooltip } from "./Tooltip.tsx"
 import { ProviderMark } from "./ProviderMark.tsx"
-import { STATUS_CHIP } from "../lib/status.ts"
 import { STALLED_RETRY_MESSAGE, retrySession } from "../lib/retrySession.ts"
 import { deliverProjectFollowUp } from "../lib/projectFollowUp.ts"
 import { useThreadApi, useThreadIsForeignToPage, useThreadProjectDir, useThreadProjectId } from "../api/threadApi.tsx"
 import { formatAutoSnoozedUntil, formatUserSnooze } from "../lib/snooze.ts"
 import { formatCompactElapsed } from "../lib/durationLabels.ts"
 import { awaitingProse, awaitingWaitClause } from "../lib/awaitingPresentation.ts"
-import { useOptimisticallySteered } from "../lib/steering.ts"
 import { clearArchived } from "../lib/optimisticArchive.ts"
 import type { ReactElement, ReactNode } from "react"
 
@@ -61,10 +57,9 @@ export const ROW_ACTION_CLASS = "flex h-[19px] w-[19px] items-center justify-cen
 // column, which the scroll marker already tracks. Stronger than hover so pointing at a neighbour
 // cannot be mistaken for opening it.
 /**
- * After a row's verb lands, re-read what the row was drawn from — but only for a row OFF its own page.
- * On a board the live feed carries the change back within a frame; Everything polls every project, so a
- * scoped row asks for that poll now, and for its project's full board (Done, External), rather than
- * showing the old state for up to a poll.
+ * After a row's verb lands, re-read what the row was drawn from. Everything polls every project, so a
+ * row asks for that poll now, and for its project's full board (Done, External), rather than showing the
+ * old state for up to a poll. A row under no ThreadProjectScope (a fixture's) has nothing to re-read.
  */
 function useAfterScopedWrite(): () => void {
   const queryClient = useQueryClient()
@@ -87,10 +82,11 @@ export const SIDEBAR_COLUMN_CLASS =
   "sticky top-0 self-start h-screen w-[clamp(272px,34vw,680px)] shrink-0 flex flex-col justify-center max-[800px]:static max-[800px]:h-auto max-[800px]:w-full max-[800px]:justify-start max-[800px]:pt-16"
 
 /**
- * A row drawn OUTSIDE its own project's page — in Everything's project list (ProjectList.tsx), where the
+ * Where a row's "open" leads. Every row is drawn in Everything's project list (ProjectList.tsx), where the
  * page project is the prompt box's pick and the row is usually another project's. Its verbs must not ask
  * the page: the row sits under a ThreadProjectScope, so pin, reopen and Retry go through its project's
- * own client (api/threadApi.tsx), and these say where "open" leads.
+ * own client (api/threadApi.tsx), and this says where "open" leads. Required: until 2026-09-28 a row
+ * without one was a project board's, whose click scrolled to the row's card or opened a drawer by slug.
  */
 export interface RowScope {
   /** "Show me this thread" — its card if the queue is showing one, else its drawer, in place. */
@@ -101,11 +97,11 @@ export interface RowScope {
 
 // One row of a band, whichever kind of thread it is. Terminal command threads share the bands with
 // agent threads (groups.ts sectionOf) but not the agent row's verbs, so they get their own row.
-export function RailRow({ t, active, open = false, onQueueNavigate, restedAge = false, scope, cardKey }: { t: ThreadView; active: boolean; open?: boolean; onQueueNavigate?: (id: string) => void; restedAge?: boolean; scope?: RowScope; cardKey?: string }) {
-  if (t.kind === "command") return <CommandRow t={t} active={active} open={open} onQueueNavigate={onQueueNavigate} scope={scope} cardKey={cardKey} />
+export function RailRow({ t, active, open = false, restedAge = false, scope, cardKey }: { t: ThreadView; active: boolean; open?: boolean; restedAge?: boolean; scope: RowScope; cardKey?: string }) {
+  if (t.kind === "command") return <CommandRow t={t} active={active} open={open} scope={scope} cardKey={cardKey} />
   return (
     <>
-      <ThreadRow t={t} active={active} open={open} onQueueNavigate={onQueueNavigate} restedAge={restedAge} scope={scope} cardKey={cardKey} />
+      <ThreadRow t={t} active={active} open={open} restedAge={restedAge} scope={scope} cardKey={cardKey} />
       <SubAgentRows t={t} scope={scope} />
     </>
   )
@@ -113,10 +109,10 @@ export function RailRow({ t, active, open = false, onQueueNavigate, restedAge = 
 
 // A TERMINAL COMMAND row. The same geometry as ThreadRow — marker rail, indicator column, 13px title,
 // right-justified state column in the rest time's place — and the same lifecycle: running it sits
-// with Running, finished it queues with a card (a click scrolls to it), and marked done it moves to
-// Done, where its check unchecks to reopen. None of an agent row's verbs: the drawer holds Stop /
+// with Working, finished it queues with a card (a click opens it through the row's scope), and marked
+// done it moves to Done, where its check unchecks to reopen. None of an agent row's verbs: the drawer holds Stop /
 // Restart / Remove.
-const CommandRow = memo(function CommandRow({ t, active, open = false, onQueueNavigate, scope, cardKey }: { t: ThreadView; active: boolean; open?: boolean; onQueueNavigate?: (id: string) => void; scope?: RowScope; cardKey?: string }) {
+const CommandRow = memo(function CommandRow({ t, active, open = false, scope, cardKey }: { t: ThreadView; active: boolean; open?: boolean; scope: RowScope; cardKey?: string }) {
   const command = t.command
   if (!command) return null
   const running = commandLive(command)
@@ -135,15 +131,7 @@ const CommandRow = memo(function CommandRow({ t, active, open = false, onQueueNa
         {active && <span className="absolute inset-y-0 left-1 w-[2px] rounded-full bg-accent" />}
       </span>
       <button
-        onClick={() => {
-          if (scope) return scope.open(t)
-          // Queued ⇒ its card is in the main column; scroll there rather than open a drawer over it.
-          if (t.needsYou && scrollToQueueCard(t.id)) {
-            onQueueNavigate?.(t.id)
-            return
-          }
-          openThread(t.id)
-        }}
+        onClick={() => scope.open(t)}
         aria-current={active ? "location" : undefined}
         className="min-w-0 flex-1 flex items-start gap-2 pb-1 pl-5 pr-1.5 pt-1 text-left"
       >
@@ -201,7 +189,7 @@ export function SectionHeader({ band, count, collapsed, onToggle }: { band: Band
   )
 }
 
-// The title's trailing adornments — the provider mark, the `terminal` tag, the legacy status chip —
+// The title's trailing adornments — today the provider mark alone —
 // are ATOMIC inline boxes, and the line breaker is free to break right BEFORE one even though no
 // whitespace separates it from the title. On a wrapping title that regularly stranded the provider
 // mark ALONE on a second line, with the whole title above it (maintainer 2026-07-31: "often the only
@@ -228,67 +216,62 @@ export function TitleWithTrailers({ title, children }: { title: string; children
   )
 }
 
-// One THREAD row. Session rows (the default): the derived session indicator, the title, an awaiting
-// hint gloss, and the activity + live-sub-agent suffix. NO Mark-as verb —
-// session threads use Archive in the persistent thread footer. A LEGACY row
-// keeps the vestigial rendering: a status chip + the hover-revealed Mark-as split button (the ONLY
-// place it survives). A click opens the thread's drawer (openThread routes chat/doc).
+// One THREAD row: the derived session indicator, the title and the provider mark. NO Mark-as verb —
+// session threads use Archive in the persistent thread footer. A click opens the thread through the
+// row's scope (RowScope). A LEGACY `.frizz` row, with a status chip and the hover-revealed Mark-as split
+// button, was drawn only by the project board's Legacy shelf, and went with it on 2026-09-28.
 //
 // MEMOIZED: board deltas REPLACE a changed thread's whole object, so `t` keeps snapshot identity iff
 // unchanged — memo skips exactly the untouched rows.
 export const ThreadRow = memo(function ThreadRow({
   t,
-  legacy,
   active = false,
   open = false,
-  onQueueNavigate,
   restedAge = false,
   scope,
   cardKey,
 }: {
   t: ThreadView
-  legacy?: boolean
   active?: boolean
   /** This thread is up in the side drawer right now — see rowWashClass. */
   open?: boolean
-  onQueueNavigate?: (id: string) => void
   /** Show the right-justified rest-time column. The CUE's rows only — see RestedAge. */
   restedAge?: boolean
-  /** Drawn off its own project's page (Everything's project list) — see RowScope. */
-  scope?: RowScope
+  /** Where a click leads — see RowScope. */
+  scope: RowScope
   /** A Ready row's card on Everything (`threadKey`) — what the thread across the gutter ties it to
    *  (ThreadConnector). */
   cardKey?: string
 }) {
-  const foreign = !legacy && t.foreign === true
+  const foreign = t.foreign === true
   // Snoozed rows are uniformly grayed as a whole; provisional titles retain their local dim treatment.
   // A thread awaiting its OWN live sub-agent/Monitor is not Snoozed and stays fully active.
-  const snoozed = !legacy && isSnoozed(t)
+  const snoozed = isSnoozed(t)
   // A DONE THREAD IS GRAYED WHEREVER IT ROWS — the Done band, and the pinned band just the same
   // (maintainer 2026-09-11: "a thread that's marked as done should always be grayed out, even if it's
   // pinned"). The pin freezes a row's PLACE, never its state, so the dim has to ride the ROW rather than
   // the band it happens to sit in; the two dims share one treatment so the rail has exactly one way of
   // saying "nothing here is moving". Read off the indicator's own predicate, so the dim and the check
   // can never disagree — an archived row is Done even while its worker drains a last turn.
-  const done = !legacy && sessionIndicatorKind(t) === "archived"
+  const done = sessionIndicatorKind(t) === "archived"
   const dim = snoozed || done
   // The done CHECK is a real checkbox on a row frizz owns: unchecking it reopens the thread. A foreign
   // row is read-only (the server has no session to write), so its check stays a plain mark.
   const uncheckable = done && !foreign
-  const dimLabel = !legacy && titleIsProvisional(t)
+  const dimLabel = titleIsProvisional(t)
   // The rows with an obvious single next action carry that verb INLINE, instead of making you open the
   // thread to find it. offersRetry (groups.ts) picks them: a STALLED row (the [!] mark — process
   // exited) AND a row KILLED by a usage limit frizz will auto-resume (the yellow hourglass — a faster
   // door to the in-drawer "Continue now" than waiting for the window). The queue card and drawer header
   // read the SAME helper, so no surface can disagree with the rail about which threads offer Retry.
-  const canRestart = !legacy && offersRetry(t)
+  const canRestart = offersRetry(t)
   // Whether the row has any hover verb at all: the pin on every row frizz owns, Retry on a stalled one.
   // A terminal thread frizz only reads offers neither, so it keeps its rest time under the pointer rather
   // than trading it for an empty strip.
-  const hoverActions = !legacy && (!foreign || canRestart)
+  const hoverActions = !foreign || canRestart
   // A pinned row wears the mark in its right-edge column AND places the unpin verb rightmost in the
   // hover strip; both read this one predicate so the two can never disagree.
-  const pinned = !legacy && isPinned(t)
+  const pinned = isPinned(t)
   // A ROW IS ITS TITLE, AND NOTHING ELSE (maintainer 2026-08-19: "there should never ever be any fucking
   // thing in the sidebar except for the fucking title"). There is no subtitle line on any row, in any
   // state: not the fence's PR ref, not a snooze, not the legacy `.frizz` activity gloss, not a sub-agent
@@ -314,7 +297,7 @@ export const ThreadRow = memo(function ThreadRow({
       // Strung on its project's cord at its indicator, card or none (ThreadConnector).
       data-xq-thread-row
       data-xq-rail-row={cardKey}
-      className={`group relative flex min-w-0 items-start rounded-md transition-[color,opacity] ${rowWashClass(open)} ${legacy ? "opacity-80" : dim ? "sidebar-row-dim" : ""}`}
+      className={`group relative flex min-w-0 items-start rounded-md transition-[color,opacity] ${rowWashClass(open)} ${dim ? "sidebar-row-dim" : ""}`}
     >
       {/* The reading position owns a real, in-row rail rather than borrowing the status-icon column.
           The marker spans the row's complete visual height, including wrapped titles and subtitles,
@@ -323,20 +306,9 @@ export const ThreadRow = memo(function ThreadRow({
         {active && <span data-sidebar-scroll-marker className="absolute inset-y-0 left-1 w-[2px] rounded-full bg-accent" />}
       </span>
       <button
-        onClick={() => {
-          // Off its own page the row cannot measure its card or open a drawer by slug — both would be
-          // the page project's — so its scope says where it goes, by the same rule as below.
-          if (scope) return scope.open(t)
-          // A queued (needsYou) thread already has its full card in the main column. A sidebar click
-          // just SCROLLS to that card — it does NOT open a redundant drawer over it (maintainer
-          // 2026-07-15: "it should not open the thread drawer, just auto-scroll to the item in the
-          // queue"). Only fall through to the drawer when no card is mounted (not queued/not rendered).
-          if (t.needsYou && scrollToQueueCard(t.id)) {
-            onQueueNavigate?.(t.id)
-            return
-          }
-          openThread(t.id)
-        }}
+        // The row cannot measure its card or open a drawer by slug — both would be the page project's,
+        // and the row is usually another project's — so its scope says where it goes.
+        onClick={() => scope.open(t)}
         aria-current={active ? "location" : undefined}
         className="min-w-0 flex-1 flex items-start gap-2 pb-1 pl-5 pr-1.5 pt-1 text-left"
       >
@@ -344,7 +316,7 @@ export const ThreadRow = memo(function ThreadRow({
         <span data-xq-indicator className="w-4 h-[19px] shrink-0 flex items-center justify-center">
           {/* An uncheckable row draws its check in the overlay button below instead — a button cannot
               nest inside this one — so the column is held empty here to keep the title where it is. */}
-          {!uncheckable && <ThreadIndicator t={t} legacy={legacy} />}
+          {!uncheckable && <ThreadIndicator t={t} />}
         </span>
         <span className="min-w-0 flex-1 flex flex-col">
           {/* items-BASELINE, not items-center: the rest time is a smaller type size sitting beside the
@@ -358,8 +330,7 @@ export const ThreadRow = memo(function ThreadRow({
           <span className="flex min-w-0 items-baseline gap-3">
             <span className={`min-w-0 flex-1 break-words text-[13px] leading-[19px] ${dimLabel ? "text-provisional" : dim ? "text-fg/75" : "text-fg/90"}`}>
               <TitleWithTrailers title={displayTitle(t)}>
-                {!legacy && <ProviderMark backend={t.backend} model={t.model} className="ml-1" />}
-                {legacy && <StatusChip status={t.archived ? "archived" : t.status} />}
+                <ProviderMark backend={t.backend} model={t.model} className="ml-1" />
               </TitleWithTrailers>
             </span>
             {/* The Retry verb is an OVERLAY pinned to this same right edge, so on the rows that offer
@@ -375,13 +346,6 @@ export const ThreadRow = memo(function ThreadRow({
         </span>
       </button>
       {uncheckable && <RowUncheckDone t={t} />}
-      {/* The Mark-as verb survives ONLY on legacy rows (a .frizz verb). Session lifecycle controls
-          live in the thread footer. */}
-      {legacy && (
-        <div className="absolute right-1 top-1 hidden group-hover:flex items-stretch rounded-md bg-panel shadow-sm shadow-shadow-ink/30">
-          <MarkAsButton slug={t.id} size="sm" />
-        </div>
-      )}
       {/* ONE-CLICK RECOVERY on a stalled OR limit-killed row (offersRetry). Hover-revealed and
           pinned to the row's right edge, over the title's first line (it OVERLAYS rather than taking
           layout, so pointing at a row never reflows its wrapped title). `group-focus-within` keeps it
@@ -421,7 +385,7 @@ export const ThreadRow = memo(function ThreadRow({
         </div>
       )}
       {/* Live children render as SIBLING rows under this one, not inside it — see SubAgentRows, which
-          the rail's three sections mount directly after each ThreadRow (maintainer 2026-07-09: render
+          RailRow mounts directly after each ThreadRow (maintainer 2026-07-09: render
           running sub-agents in the sidebar). They replaced an old one-line summary suffix that used to
           live in this row's subtitle. */}
     </div>
@@ -566,7 +530,7 @@ function PinnedMark() {
 function RowPinButton({ t, className = "" }: { t: ThreadView; className?: string }) {
   const pinned = isPinned(t)
   const [busy, setBusy] = useState(false)
-  // The row's own project's client: the page's `rpc` on a board, the row's project under a scope.
+  // The row's own project's client: its ThreadProjectScope's, else the page's `rpc` (a fixture's row).
   const api = useThreadApi()
   const afterWrite = useAfterScopedWrite()
   return (
@@ -651,7 +615,7 @@ function RowUncheckDone({ t }: { t: ThreadView }) {
 // clear the parent row's indicator column). The liveness policy is the rail's own and is deliberately
 // unchanged: running OR stale, and only children carrying an id (the drill-in drawer's RPC handle —
 // see lib/childOps.ts, which lists all three surfaces' divergent policies in one place).
-function SubAgentRows({ t, scope }: { t: ThreadView; scope?: RowScope }) {
+function SubAgentRows({ t, scope }: { t: ThreadView; scope: RowScope }) {
   const api = useThreadApi()
   const subs = visibleChildOps(t.subAgents ?? [], "rail")
   if (subs.length === 0) return null
@@ -659,7 +623,7 @@ function SubAgentRows({ t, scope }: { t: ThreadView; scope?: RowScope }) {
   // drawer instead (its ops strip lists the same children, one click from their own). Its × goes
   // through the row's own project's client, so it stops THIS thread's child and not a child of the page
   // project's same-named thread.
-  const foreignToPage = scope !== undefined && !scope.page
+  const foreignToPage = !scope.page
   return (
     <div className="flex flex-col">
       {subs.map((s) => (
@@ -673,7 +637,7 @@ function SubAgentRows({ t, scope }: { t: ThreadView; scope?: RowScope }) {
           depth={s.depth}
           startedAt={s.startedAt}
           parentSlug={t.id}
-          onOpen={() => (foreignToPage && scope ? scope.open(t) : pushSubAgentDrawer(t.id, s.id, { label: s.label, subagentType: s.subagentType, startedAt: s.startedAt }))}
+          onOpen={() => (foreignToPage ? scope.open(t) : pushSubAgentDrawer(t.id, s.id, { label: s.label, subagentType: s.subagentType, startedAt: s.startedAt }))}
           // The same dismiss × the queue card and the ops strip carry (maintainer 2026-07-30): the rail
           // is where a phantom child is most often SEEN, so it is where retiring one has to be possible.
           onDismiss={childOpDismisser(t.id, s, "AGENT", api)}
@@ -684,18 +648,6 @@ function SubAgentRows({ t, scope }: { t: ThreadView; scope?: RowScope }) {
     </div>
   )
 }
-
-// Small-caps bordered status label on legacy rows. Inline so it flows after a wrapped title's last
-// word. Colors come from the shared status palette so chips + picker dots speak one language.
-function StatusChip({ status }: { status: string }) {
-  const label = status === "archived" ? "Done" : status
-  return (
-    <span className={`petite-caps ml-1.5 inline-block rounded border px-1 align-[2px] leading-[14px] text-[9.5px] ${STATUS_CHIP[status] ?? "text-muted border-border"}`}>
-      {label}
-    </span>
-  )
-}
-
 
 /** THE ROW'S POPOVER — ONE SENTENCE about the wait, then the worker's own sentence under it.
  *
@@ -736,25 +688,20 @@ export function awaitingReason(t: Pick<ThreadView, "lastFence">): string | null 
 
 // ── the indicator (one per row) ──────────────────────────────────────────────────────────────────
 
-// One indicator, one diameter: the spinner ring and the machine-wait glyphs occupy the same optical
-// size so rows read evenly. ATTENTION marks (needs-you / question) run a touch LARGER and full-accent
-// on purpose — "what needs you" must be the most salient pixel on the rail, never the least.
-const INDICATOR = 7
-const ATTENTION = 9
-
-// Each indicator carries a terse hover tooltip naming the state it signals. The faint "at rest" dot
-// gets none. A plain wrapper <span> is the tooltip trigger (a real DOM node Radix can ref).
-export function ThreadIndicator({ t, legacy }: { t: ThreadView; legacy?: boolean }) {
-  // No steer special-case here anymore: Sidebar overlays a just-sent steer onto the thread itself
-  // (useOptimisticallySteered), so `t` already reads as running and the ordinary derivation returns
-  // the spinner — the same one decision that put the row in the running band. When this hook consulted
-  // the hint on its own, the glyph and the placement were two rules and drifted apart on every steer.
-  const { node, tip } = legacy ? legacyIndicatorFor(t) : sessionIndicatorFor(t)
+// Each indicator carries a terse hover tooltip naming the state it signals. A plain wrapper <span> is
+// the tooltip trigger (a real DOM node Radix can ref).
+export function ThreadIndicator({ t }: { t: ThreadView }) {
+  // No steer special-case here: the glyph is derived from `t` alone, by the same decision that bands the
+  // row. When this hook consulted the steer hint on its own, the glyph and the placement were two rules
+  // and drifted apart on every steer. (The project board's sidebar overlaid a just-sent steer onto its
+  // threads before they reached here, lib/steering.ts, until it went on 2026-09-28; Everything's list
+  // draws the row the poll reports.)
+  const { node, tip } = sessionIndicatorFor(t)
   // The resolved kind, on the shipped markup. Cheap, and it is what lets the rail's own glyphs be
   // measured where they actually render (scripts/verify-rail-status-glyphs.mjs holds the family to one
   // weight band) instead of against a reconstruction that can drift from the real thing.
-  const mark = legacy ? undefined : sessionIndicatorKind(t)
-  if (!tip) return mark ? <span data-rail-glyph={mark} className="flex items-center justify-center">{node}</span> : node
+  const mark = sessionIndicatorKind(t)
+  if (!tip) return <span data-rail-glyph={mark} className="flex items-center justify-center">{node}</span>
   return (
     // A live row that is ALSO snoozed stacks its park under its state ("Working" / "Snoozed until …"),
     // so the tooltip has to keep that newline rather than reflowing the two into one sentence.
@@ -1155,52 +1102,4 @@ function Glyph({ ch, muted }: { ch: string; muted?: boolean }) {
       {ch}
     </span>
   )
-}
-// The LEGACY (.frizz status) row indicator — the vestigial status-keyed logic, kept only for the
-// read-only Legacy shelf.
-function legacyIndicatorFor(t: ThreadView): { node: ReactElement; tip: string | null } {
-  if (t.runtime === "running" || t.runtime === "spawning" || t.runtime === "perm-prompt") return { node: <Spinner />, tip: "Working" }
-  const liveSub = (t.subAgents ?? []).some((s) => s.state === "running")
-  if (t.runtime === "turn-idle" && liveSub && !t.humanBlocked) return { node: <Spinner />, tip: "Working" }
-  if (needsAction(t)) return { node: <BlueDot />, tip: "Needs your input" }
-  if (t.status === "needs-human") return { node: <YellowDot />, tip: "Awaiting you — open to read & reply" }
-  if (t.status === "blocked" && t.mechanism === "timer") return { node: <Timer size={INDICATOR + 1} className="text-muted-70" />, tip: "Waiting on a timer" }
-  if (t.status === "blocked" && t.mechanism === "threads") return { node: <CircleDashed size={INDICATOR + 1} className="text-muted-70" />, tip: "Waiting on other work" }
-  return { node: <FaintDot />, tip: null }
-}
-
-function Spinner() {
-  return (
-    <span
-      // Matches the sub-agent child-row spinner EXACTLY (8px, 1px border) — the maintainer converged
-      // the two after the top-level spinner (was 7px/1.5px) read visibly smaller than the sub-agent's.
-      className="block rounded-full border border-muted/70 border-t-transparent animate-spin"
-      style={{ width: 8, height: 8 }}
-    />
-  )
-}
-
-// THE attention mark — needs-you at rest. The signature accent (#e8b923) at full strength with a
-// soft halo: the app spends its yellow in exactly one place, and this is it. Larger than the machine
-// glyphs so it wins the row at a glance.
-function AccentDot() {
-  return (
-    <span
-      className="block rounded-full bg-accent shadow-[0_0_5px_color-mix(in_srgb,var(--color-accent)_45%,transparent)]"
-      style={{ width: ATTENTION, height: ATTENTION }}
-    />
-  )
-}
-
-function BlueDot() {
-  return <span className="block rounded-full bg-planning" style={{ width: INDICATOR, height: INDICATOR }} />
-}
-
-// Awaiting-you without a queue card (legacy session-less needs-human): the status palette's yellow.
-function YellowDot() {
-  return <span className="block rounded-full bg-needs-human" style={{ width: INDICATOR, height: INDICATOR }} />
-}
-
-function FaintDot() {
-  return <span className="block rounded-full bg-muted/30" style={{ width: INDICATOR, height: INDICATOR }} />
 }

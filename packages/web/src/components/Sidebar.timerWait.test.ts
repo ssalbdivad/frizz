@@ -4,8 +4,11 @@ import { createElement } from "react"
 import { renderToStaticMarkup } from "react-dom/server"
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query"
 import type { ThreadView } from "@frizz/shared"
-import { ThreadRow, sessionIndicatorFor } from "./Sidebar.tsx"
+import { ThreadRow, sessionIndicatorFor, type RowScope } from "./Sidebar.tsx"
 import { TooltipProvider } from "./Tooltip.tsx"
+
+// Where a click would lead. Nothing here clicks; the prop is required because every real row has one.
+const ROW_SCOPE: RowScope = { open: () => {}, page: true }
 
 // A QUEUED WAIT ON A TIMER WEARS THE HOURGLASS, NOT THE SHELL'S DOT (2026-09-07). A timer park queues
 // (board.deriveNeedsYou keeps it a visible handoff), so its row sits in the Rested band — and there,
@@ -48,7 +51,7 @@ function html(extra: Partial<ThreadView>) {
     createElement(
       QueryClientProvider,
       { client: new QueryClient({ defaultOptions: { queries: { retry: false } } }) },
-      createElement(TooltipProvider, null, createElement(ThreadRow, { t })),
+      createElement(TooltipProvider, null, createElement(ThreadRow, { t, scope: ROW_SCOPE })),
     ),
   )
 }

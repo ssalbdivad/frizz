@@ -1,6 +1,6 @@
 import assert from "node:assert/strict"
 import test from "node:test"
-import { isPageScrollLocked, pageScrollY, requestScrollAfterUnlock, takeScrollAfterUnlock } from "./pageScrollLock.ts"
+import { isPageScrollLocked, pageScrollY } from "./pageScrollLock.ts"
 
 function withDom<T>(body: { style: { position?: string; top?: string } }, scrollY: number, fn: () => T): T {
   const globals = globalThis as typeof globalThis & { window?: Window; document?: Document }
@@ -35,18 +35,4 @@ test("pageScrollY reads the lock's own offset while the page is pinned", () => {
 // A lock applied at the very top writes `top: -0px`; -(-0) is 0, not NaN, and must not fall back.
 test("pageScrollY handles a lock taken at the top of the page", () => {
   withDom({ style: { position: "fixed", top: "-0px" } }, 0, () => assert.equal(pageScrollY(), 0))
-})
-
-test("a parked landing is delivered exactly once", () => {
-  assert.equal(takeScrollAfterUnlock(), null, "nothing parked to begin with")
-  requestScrollAfterUnlock(2140)
-  assert.equal(takeScrollAfterUnlock(), 2140)
-  assert.equal(takeScrollAfterUnlock(), null, "consumed — a second unlock must not re-scroll")
-})
-
-test("a second request replaces the first: the newest navigation wins", () => {
-  requestScrollAfterUnlock(100)
-  requestScrollAfterUnlock(880)
-  assert.equal(takeScrollAfterUnlock(), 880)
-  assert.equal(takeScrollAfterUnlock(), null)
 })

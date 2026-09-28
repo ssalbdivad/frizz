@@ -28,7 +28,7 @@ test("the CSS breakpoint and the file-click gate are the SAME width", () => {
 })
 
 test("below the split, the fullscreen column is the DRAWER's width", () => {
-  // This is what makes the expand a pure translate rather than a rescale: the board's drawer and the
+  // This is what makes the expand a pure translate rather than a rescale: the drawer and the
   // fullscreen column are the same size, so the shared-element morph has no size to animate. It is
   // also what the maintainer asked after on 2026-09-02 ("the chat column widths are always the same
   // in both views?"). Above the split the 50/50 rule takes the column down to half the page — 600 at

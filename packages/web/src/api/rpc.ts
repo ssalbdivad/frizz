@@ -105,11 +105,14 @@ const projectClients = new Map<string, Api>()
 /**
  * A client pinned to ONE project, whatever page it is called from.
  *
- * `rpc` above answers "which project" from the address bar at call time, which is right on a board and
- * silently wrong anywhere that shows several projects at once: on a page that names no project it means
- * the LAUNCHING one, so a thread action taken there for another project's `fix-auth` lands on the
- * launcher's `fix-auth` instead (slugs are unique only within a project). The All queues page makes
- * every per-thread call through one of these.
+ * `rpc` above answers "which project" from the address at call time — the PAGE project (base-path.ts
+ * projectSlug: the focus at `/`, the drawer's project under `/all/<slug>`, the launching one on an
+ * unprefixed `/thread/<t>/full`). That is right for a drawer or /full, which show one thread of that
+ * project, and silently wrong on the cross-project page's queue, which shows every project's cards at
+ * once: a thread action taken there for another project's `fix-auth` lands on the focused project's
+ * `fix-auth` instead (slugs are unique only within a project). That page makes every per-thread call
+ * through one of these. (Until 2026-09-28 the default was also right on a project's own board, which
+ * showed one project.)
  *
  * ADDRESSED BY ID, NOT SLUG. The server resolves either, but a slug changes when a project is renamed,
  * and a stale one falls through to the launching project's app — which answers every procedure with a

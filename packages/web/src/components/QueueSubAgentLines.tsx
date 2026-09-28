@@ -21,8 +21,9 @@ import { ChildOpRow } from "./ChildOpRow.tsx"
 // profile — still stays off the card.
 // Whether this card will actually draw any ⤷ child lines. The card renders these lines and the
 // background-ops strip as two SIBLING lists in one visual column, so the strip has to know whether it
-// is opening that column or continuing it (see TodosView) — and it must get the same answer this
-// component does. Exported from here, and used by the component itself, so the two cannot drift.
+// is opening that column or continuing it (the project board's card, TodosView, asked this until
+// 2026-09-28; subagent-completion-fixture and operation-indicators-fixture still do) — and it must get
+// the same answer this component does. Exported from here, and used by the component itself, so the two cannot drift.
 export function hasQueueSubAgentLines(subAgents: readonly SubAgentView[]): boolean {
   return visibleChildOps(subAgents, "card").length > 0
 }

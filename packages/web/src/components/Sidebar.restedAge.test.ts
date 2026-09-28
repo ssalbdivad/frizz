@@ -4,8 +4,11 @@ import { createElement } from "react"
 import { renderToStaticMarkup } from "react-dom/server"
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query"
 import type { ThreadView } from "@frizz/shared"
-import { ThreadRow } from "./Sidebar.tsx"
+import { ThreadRow, type RowScope } from "./Sidebar.tsx"
 import { TooltipProvider } from "./Tooltip.tsx"
+
+// Where a click would lead. Nothing here clicks; the prop is required because every real row has one.
+const ROW_SCOPE: RowScope = { open: () => {}, page: true }
 
 // THE CUE'S REST-TIME COLUMN (maintainer 2026-08-08: "a right-justified label on each item in the cue
 // indicating when the thread came to rest"). Three things are pinned here, and the middle one is the
@@ -42,7 +45,7 @@ function row(extra: Partial<ThreadView>, restedAge = true) {
     createElement(
       QueryClientProvider,
       { client: new QueryClient({ defaultOptions: { queries: { retry: false } } }) },
-      createElement(TooltipProvider, null, createElement(ThreadRow, { t, restedAge })),
+      createElement(TooltipProvider, null, createElement(ThreadRow, { t, restedAge, scope: ROW_SCOPE })),
     ),
   )
 }

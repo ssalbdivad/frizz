@@ -4,8 +4,11 @@ import { createElement } from "react"
 import { renderToStaticMarkup } from "react-dom/server"
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query"
 import type { ThreadView } from "@frizz/shared"
-import { ThreadRow } from "./Sidebar.tsx"
+import { ThreadRow, type RowScope } from "./Sidebar.tsx"
 import { TooltipProvider } from "./Tooltip.tsx"
+
+// Where a click would lead. Nothing here clicks; the prop is required because every real row has one.
+const ROW_SCOPE: RowScope = { open: () => {}, page: true }
 
 const thread = {
   id: "reading-position",
@@ -25,7 +28,7 @@ function row(active: boolean, open = false) {
     createElement(
       QueryClientProvider,
       { client: new QueryClient({ defaultOptions: { queries: { retry: false } } }) },
-      createElement(TooltipProvider, null, createElement(ThreadRow, { t: thread, active, open })),
+      createElement(TooltipProvider, null, createElement(ThreadRow, { t: thread, active, open, scope: ROW_SCOPE })),
     ),
   )
 }
@@ -64,4 +67,3 @@ test("a row whose thread is open in the drawer holds a stronger wash and no scro
   assert.doesNotMatch(closed, /data-sidebar-open/)
   assert.match(closed, /after:bg-hover after:opacity-0 hover:after:opacity-100/)
 })
-

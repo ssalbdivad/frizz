@@ -559,31 +559,6 @@ a[href] {
   cursor: pointer;
 }
 
-/* Reserve the owner/repo measure before the first board keyframe. This is deliberately static: a
-   loading shimmer adds motion to persistent corner chrome, and should not be required to convey
-   state (the parent has an accessible loading label). */
-.identity-slot {
-  display: block;
-  min-width: 0;
-}
-.identity-slot--resolved {
-  flex: 1 1 auto;
-}
-.identity-slot--placeholder {
-  /* A modest, static cold reservation prevents a false name and avoids a large first-keyframe jump.
-     It applies only before an identity exists; resolved owner/repo is content-sized. */
-  width: 9rem;
-  max-width: calc(100vw - 9rem);
-  flex: 0 1 auto;
-}
-.identity-placeholder {
-  display: block;
-  width: 100%;
-  height: 0.75rem;
-  border-radius: 9999px;
-  background: color-mix(in srgb, var(--color-muted) 18%, transparent);
-}
-
 /* The inner-surface scrollbar width, as a CSS var so the ONE place that must match it — the sticky
    user bubble's reserved gutter (UserBubble in ChatView.tsx: `calc(0.875rem + var(--sbw))`) — can't
    silently drift out of sync and resurrect the reflow it was added to prevent. */
@@ -623,10 +598,8 @@ a[href] {
   outline: 2px solid var(--color-accent);
   outline-offset: 2px;
 }
-.mobile-tab-inactive { opacity: var(--inactive-mark-opacity); }
 .sidebar-row-dim { opacity: var(--sidebar-dim-opacity); }
 .sidebar-row-dim:hover, .sidebar-row-dim:focus-within { opacity: var(--row-dim-hover-opacity); }
-.mobile-row-dim { opacity: var(--mobile-dim-opacity); }
 .scrollbar-none::-webkit-scrollbar {
   display: none; /* WebKit/Blink */
 }
@@ -1484,21 +1457,23 @@ a[href] {
   border-color: color-mix(in srgb, var(--color-accent, #e8b923) 60%, var(--color-border-strong));
 }
 
-/* Queue card EXIT — the CardSlot exit (TodosView). The card FADES to transparent while it recedes
-   (uniform scale from its centre, so it "sinks backwards") and blurs, AT FULL HEIGHT. Then TodosView
-   UNMOUNTS it; lib/viewportLock.ts keeps whatever the reader is looking at where it was, and a dismissal
-   of the reader's own lands the next card at the top.
+/* Queue card EXIT — Everything's card slot (AllQueuesCard.tsx, and AllQueues.tsx for a command card).
+   The card FADES to transparent while it recedes (uniform scale from its centre, so it "sinks
+   backwards") and blurs, AT FULL HEIGHT; then AllQueues.tsx useLeavingCards UNMOUNTS it.
+   lib/viewportLock.ts keeps whatever the reader is looking at where it was, and a dismissal of the
+   reader's own lands the next card at the top.
    There is deliberately NO height-collapse phase (removed 2026-07-15). A gradual grid 1fr→0fr collapse
    unavoidably DRIFTS the neighbouring card by the collapsed height — native scroll anchoring does not
    compensate a grid collapse, and any programmatic scroll run alongside it fights the collapse and
-   bounces the card the reader is watching. Instant removal + the explicit neighbour pin is the classic,
-   deterministic answer. Duration MUST stay in sync with QUEUE_EXIT_MS in TodosView.tsx (it keeps the
-   card mounted through the fade before unmounting). */
+   bounces the card the reader is watching. Instant removal is the deterministic answer. (The project
+   board also pinned a visible neighbour card in the unmount frame, until 2026-09-28.) Duration MUST
+   stay in sync with EXIT_MS in AllQueues.tsx (it keeps the card mounted through the fade before
+   unmounting). */
 .frizz-card-slot { opacity: 1; }
 .frizz-card-slot[data-queue-leaving="true"] { opacity: 0; }
-/* The hairline rule under a card is the slot's next SIBLING (TodosView renders one between each pair of
-   cards, never inside a slot), and it unmounts with the card it follows — so it fades with it too, or
-   the rule would stand at full strength beside a card that has already dissolved. */
+/* The hairline rule under a card is the slot's next SIBLING (a lane, AllQueues.tsx Lane, renders one
+   between each pair of cards, never inside a slot), and it unmounts with the card it follows — so it
+   fades with it too, or the rule would stand at full strength beside a card that has already dissolved. */
 .frizz-card-slot[data-queue-leaving="true"] + hr { opacity: 0; }
 .frizz-card-slot > .frizz-card-clip > .frizz-card-body { transform-origin: center center; }
 .frizz-card-slot[data-queue-leaving="true"] > .frizz-card-clip > .frizz-card-body { transform: scale(0.94); filter: blur(6px); }
@@ -1549,17 +1524,17 @@ a[href] {
   display: none;
 }
 
-/* THE FULLSCREEN DOOR'S VIEW TRANSITION, both directions. Both halves of the door — the ⤢ that opens
-   /full and the ⤡ that leaves it, which stand in one slot in one strip — navigate with react-router's
-   `viewTransition`, which wraps the route swap in
-   `document.startViewTransition` — and react-router re-arms the same transition for the browser-Back
-   POP of a pair that transitioned. These rules style the three snapshot groups the swap produces.
-   `thread-chat` is the SHARED element: forward, the drawer panel or queue card the door was clicked
-   in (tagged at click time, ExpandThreadLink.tsx) morphs into the /full thread column, which wears
-   the name statically; backward, the column morphs into whichever board surface the primed return
-   target names (store.primeFullscreenReturn). `thread-rail` exists only on /full, so it always
-   ENTERS or EXITS through its own right edge, the direction it lives in. Everything unnamed — the
-   board, its sidebar, the drawer scrim — is the root group, which cross-fades.
+/* THE FULLSCREEN DOOR'S VIEW TRANSITION, both directions. Both halves of the door — the drawer menu's
+   "Open fullscreen" (ThreadMenu.tsx, or `f`) that opens /full and the ⤡ that leaves it
+   (CollapseThreadLink.tsx) — navigate with react-router's `viewTransition`, which wraps the route swap
+   in `document.startViewTransition` — and react-router re-arms the same transition for the
+   browser-Back POP of a pair that transitioned. These rules style the three snapshot groups the swap
+   produces. `thread-chat` is the SHARED element: forward, the drawer panel the door was opened from
+   (tagged at click time, ThreadMenu.tsx openFullscreen) morphs into the /full thread column, which
+   wears the name statically; backward, the column morphs into the drawer the primed return target
+   names (store.primeFullscreenReturn). `thread-rail` exists only on /full, so it always ENTERS or
+   EXITS through its own right edge, the direction it lives in. Everything unnamed — the page, its
+   project list, the drawer scrim — is the root group, which cross-fades.
    Timings match the sheet family: 200ms, Tailwind's ease-out curve (cubic-bezier(0,0,0.2,1)). */
 ::view-transition-group(thread-chat),
 ::view-transition-group(thread-rail),
@@ -1568,17 +1543,18 @@ a[href] {
   animation-duration: 200ms;
   animation-timing-function: cubic-bezier(0, 0, 0.2, 1);
 }
-/* THE FORWARD MORPH STARTS FROM THE VISIBLE PART OF THE CARD, not its whole box. The browser's own
-   group keyframes run from the old element's full border box, and a tall queue card scrolled to its
+/* THE FORWARD MORPH STARTS FROM THE VISIBLE PART OF THE SURFACE, not its whole box. The browser's own
+   group keyframes run from the old element's full border box, and a tall surface scrolled to its
    middle has a box that starts a thousand pixels above the viewport — so the whole screen rushed
-   downward for 200ms while the column faded in over it. The door measures the part of the surface
+   downward for 200ms while the column faded in over it. (It was measured on the project board's queue
+   card, which the door also stood on until 2026-09-28.) The door measures the part of the surface
    that is on screen (lib/fullscreenMorph.ts) and hands it here as `--frizz-vt-from-*`; the `to` side
    stays the group's own computed geometry, so only the start moves. `data-vt-door` is set by the
    door and cleared render-phase on the way back, so the reverse leg — whose old element is the
    /full column, always fully on screen — keeps the browser's keyframes. The old snapshot is still
-   the whole card: the negative top margin slides the reader's part up to the group's top edge, and
-   it is a percentage of the group's width because the snapshot is sized by that width and scales
-   with it as the card's width morphs into the column's. */
+   the whole surface: the negative top margin slides the reader's part up to the group's top edge,
+   and it is a percentage of the group's width because the snapshot is sized by that width and scales
+   with it as the surface's width morphs into the column's. */
 html[data-vt-door="expand"]::view-transition-group(thread-chat) {
   animation-name: frizz-vt-chat-from-visible;
 }
@@ -1609,7 +1585,7 @@ html[data-vt-door="expand"]::view-transition-old(thread-chat) {
     translate: 48px 0;
   }
 }
-/* The reverse leg (leaving /full for the board): the rail is old-only and exits the way it came in. */
+/* The reverse leg (leaving /full for the page): the rail is old-only and exits the way it came in. */
 ::view-transition-old(thread-rail):only-child {
   animation: frizz-vt-rail-out 200ms cubic-bezier(0, 0, 0.2, 1) both;
 }

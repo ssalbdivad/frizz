@@ -43,9 +43,9 @@ function terminalTheme() {
 // `focusOnMount: false` leaves focus where it is: a finished run has nothing to type into (a command
 // thread's drawer focuses its follow-up line instead), and a queue card is one of many on the page.
 //
-// `base` names the project whose pty this is. It defaults to the page's (`apiBase()`), which is right on
-// a board; the All queues page draws other projects' command cards and passes theirs, since a bare
-// `/term/<slug>` there reaches the LAUNCHING project's terminal server.
+// `base` names the project whose pty this is. It defaults to the page's (`apiBase()`), which is right in
+// a command thread's own drawer; the cross-project page's queue draws other projects' command cards and
+// passes theirs, since the page's base there names the FOCUSED project's terminal server.
 export function TerminalPane({ slug, exitedStatus, base, focusOnMount = true }: { slug: string; exitedStatus?: (exitCode: number | null) => ReactNode; base?: string; focusOnMount?: boolean }) {
   const hostRef = useRef<HTMLDivElement>(null)
   const termRef = useRef<Terminal | null>(null)
@@ -262,8 +262,9 @@ export function TerminalPane({ slug, exitedStatus, base, focusOnMount = true }: 
       //
       // DEFERRED ONE TASK. `term.open()` queues a `setTimeout(() => viewport.syncScrollArea())` (xterm
       // 5.5 Viewport's constructor), and a pane torn down before it fires — a queue card mounted and
-      // dropped in the same beat, which a switch into a board holding a command card does — disposed
-      // the renderer underneath it: an uncaught "reading 'dimensions'" on every such switch. Timers of
+      // dropped in the same beat (a switch into a project board holding a command card did it, until
+      // that board went on 2026-09-28) — disposed the renderer underneath it: an uncaught "reading
+      // 'dimensions'" on every such switch. Timers of
       // one delay run in the order they were set, so this one lands after xterm's, against a live term.
       setTimeout(() => {
         try {

@@ -116,8 +116,9 @@ export function defaultCrossProjectFocus(
 // threads are displayed on the right side and have the ui reflect that"). The project list on the left
 // keeps every project whatever it is set to, and the prompt box keeps its own pick above — so the
 // control that sets it sits over the queue it filters (the READY header), not in the column beside it.
-// There is no other way to look at one project: the project view it replaced is gone, and every one of
-// its addresses lands here with this set (routes.tsx LegacyProjectRedirect).
+// There is no other way to look at one project: the project view went on 2026-09-28, and every one of
+// its old addresses now lands on `/` (routes.tsx HomeRedirect) with the filter left as it was — a
+// retired address names a project, but not how this tab has chosen to read the queue.
 //
 // Per TAB (sessionStorage): a filter is how this window is being read right now. It survives a reload —
 // which a dev server hands out constantly — but a new tab, or a fresh launch, opens on everything.

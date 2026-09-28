@@ -24,9 +24,9 @@ const TerminalPane = lazy(() => import("./TerminalPane.tsx").then((m) => ({ defa
 // and its verb is Stop rather than Restart; the follow-up box is withheld, since running a next command
 // would kill the one that is asking.
 //
-// PROJECT-SCOPED through api/threadApi.tsx: on a board it acts on the page's project, and under the All
-// queues page's `ThreadProjectScope` its Restart, its pty and its Mark as done all go to the card's own
-// project. `onOpen` replaces the drawer there, which is the page's and would open the wrong thread.
+// PROJECT-SCOPED through api/threadApi.tsx: outside a scope it acts on the page's project, and under the
+// cross-project page's `ThreadProjectScope` its Restart, its pty and its Mark as done all go to the card's
+// own project. `onOpen` replaces the drawer there, which is the page's and would open the wrong thread.
 export function CommandQueueCard({ thread, leaving, onResolve, onUnresolve, onOpen, lead }: {
   thread: ThreadView
   leaving: boolean

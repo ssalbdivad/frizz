@@ -11,9 +11,10 @@ import { actionDef, bindingLookup, detectPlatform, effectiveBindings, formatChor
 //   · A PAGE-OWNED action (the palette, settings, the new-thread door, thread details) is registered
 //     by the page that renders it — useShortcut() — so a key does nothing on a page without the
 //     thing, rather than reaching for a store flag no component is listening to.
-//   · CARD NAVIGATION (j / k) goes through the QueueCursor the page's rail registers: the board's
-//     sidebar and the Everything page each already know which card is being read, and how to land on
-//     one; the keys reuse exactly that, so the rail's marker and the key never disagree.
+//   · CARD NAVIGATION (j / k) goes through the QueueCursor the page registers: the Everything page
+//     (AllQueues) already knows which card is being read, and how to land on one; the keys reuse
+//     exactly that, so the rail's marker and the key never disagree. (The project board's sidebar
+//     registered one too, until 2026-09-28 — hence a stack of cursors rather than a single slot.)
 //   · A THREAD COMMAND (done, snooze, reply, fullscreen) PRESSES THE REAL CONTROL on the surface you
 //     are looking at — the top drawer, the /full page, or the card being read. Each control opts in
 //     with `data-command`, and the key clicks it, so every gate that control already obeys (the

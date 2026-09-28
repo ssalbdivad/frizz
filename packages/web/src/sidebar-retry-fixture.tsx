@@ -1,11 +1,14 @@
 import { createRoot } from "react-dom/client"
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query"
 import type { BoardSnapshot, ThreadView } from "@frizz/shared"
-import { ThreadRow } from "./components/Sidebar.tsx"
+import { ThreadRow, type RowScope } from "./components/Sidebar.tsx"
 import { Toaster } from "./components/Toaster.tsx"
 import { TooltipProvider } from "./components/Tooltip.tsx"
 import { store } from "./store.ts"
 import "./styles.css"
+
+// Where a row's click leads. This page only draws rows; every real row has a scope (ProjectList.tsx).
+const ROW_SCOPE: RowScope = { open: () => {}, page: true }
 
 // The sidebar's one-click recovery verb: a STOPPED row (an exited session) — and a row KILLED by a
 // usage limit frizz will auto-resume — expose a hover-revealed Retry on the right edge. This fixture
@@ -120,11 +123,11 @@ createRoot(document.getElementById("root")!).render(
     <TooltipProvider>
       <main className="min-h-screen bg-bg px-10 py-10 text-fg">
         <div data-sidebar-rail className="w-[clamp(320px,34vw,680px)]">
-          <ThreadRow t={stalledThread} />
-          <ThreadRow t={exitedAtRestThread} />
-          <ThreadRow t={limitKilledThread} />
-          <ThreadRow t={workingThread} />
-          <ThreadRow t={restingThread} />
+          <ThreadRow scope={ROW_SCOPE} t={stalledThread} />
+          <ThreadRow scope={ROW_SCOPE} t={exitedAtRestThread} />
+          <ThreadRow scope={ROW_SCOPE} t={limitKilledThread} />
+          <ThreadRow scope={ROW_SCOPE} t={workingThread} />
+          <ThreadRow scope={ROW_SCOPE} t={restingThread} />
         </div>
         <Toaster />
       </main>

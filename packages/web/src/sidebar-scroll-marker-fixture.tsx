@@ -1,8 +1,11 @@
 import { createRoot } from "react-dom/client"
 import type { ThreadView } from "@frizz/shared"
-import { ThreadRow } from "./components/Sidebar.tsx"
+import { ThreadRow, type RowScope } from "./components/Sidebar.tsx"
 import { TooltipProvider } from "./components/Tooltip.tsx"
 import "./styles.css"
+
+// Where a row's click leads. This page only draws rows; every real row has a scope (ProjectList.tsx).
+const ROW_SCOPE: RowScope = { open: () => {}, page: true }
 
 const thread = {
   id: "selected-queue-thread",
@@ -25,7 +28,7 @@ function Fixture() {
           {Array.from({ length: 4 }, (_, index) => (
             <div key={index} className="px-1.5 py-1 text-[13px] leading-[19px] text-muted">Other sidebar thread {index + 1}</div>
           ))}
-          <ThreadRow t={thread} active />
+          <ThreadRow scope={ROW_SCOPE} t={thread} active />
           {Array.from({ length: 8 }, (_, index) => (
             <div key={index + 4} className="px-1.5 py-1 text-[13px] leading-[19px] text-muted">Other sidebar thread {index + 5}</div>
           ))}

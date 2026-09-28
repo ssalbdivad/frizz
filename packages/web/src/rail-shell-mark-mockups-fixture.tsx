@@ -4,9 +4,12 @@ import { Check, CircleDashed, Hourglass, SquareTerminal, Terminal } from "lucide
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query"
 import type { ThreadView } from "@frizz/shared"
 import { BoxSpinner } from "./components/BoxSpinner.tsx"
-import { ThreadRow } from "./components/Sidebar.tsx"
+import { ThreadRow, type RowScope } from "./components/Sidebar.tsx"
 import { TooltipProvider } from "./components/Tooltip.tsx"
 import "./styles.css"
+
+// Where a row's click leads. This page only draws rows; every real row has a scope (ProjectList.tsx).
+const ROW_SCOPE: RowScope = { open: () => {}, page: true }
 
 // MOCKUP SHEET — the rail mark for a thread PARKED ON ITS OWN BACKGROUND WORK.
 //
@@ -298,7 +301,7 @@ createRoot(document.getElementById("root")!).render(
         {SHIPPED_ROWS.map((r) => (
           <div key={r.id} data-shipped-row={r.id}>
             <div className="mb-1 mt-2 px-2 text-[10px] uppercase tracking-wide text-muted-70">{r.band}</div>
-            <ThreadRow t={r.t} />
+            <ThreadRow scope={ROW_SCOPE} t={r.t} />
           </div>
         ))}
       </div>

@@ -6,7 +6,7 @@ import { closeGithubPicker, store, seedBoard, openNewThread, pushDrawer, resolve
 import { useBoard } from "./hooks.ts"
 import { closeDrawerAnimated } from "./lib/overlays.ts"
 import { useShortcut } from "./lib/keyboardRuntime.ts"
-import { pageScrollY, takeScrollAfterUnlock } from "./lib/pageScrollLock.ts"
+import { pageScrollY } from "./lib/pageScrollLock.ts"
 import { startRouter } from "./lib/router.ts"
 import { projectSlug } from "./lib/base-path.ts"
 import { AllQueuesPage } from "./components/AllQueues.tsx"
@@ -185,9 +185,6 @@ export function App() {
     if (!overlayOpen) return
     const y = window.scrollY
     const body = document.body
-    // Drop any landing a previous lock left unconsumed, so a stale one can never fire against a page
-    // the reader has since moved on from.
-    takeScrollAfterUnlock()
     body.style.position = "fixed"
     body.style.top = `-${y}px`
     body.style.left = "0"
@@ -203,10 +200,11 @@ export function App() {
       body.style.left = ""
       body.style.right = ""
       body.style.width = ""
-      // A scroll requested WHILE the page was locked couldn't be applied (the body was pinned) and this
-      // restore would have undone it anyway — so it parked its landing. Honour it over the held offset:
-      // that is what lets a queued sidebar row dismiss its drawer and auto-scroll in one move.
-      window.scrollTo(0, takeScrollAfterUnlock() ?? current)
+      // Until 2026-09-28 a scroll requested under the lock could also park a landing for this restore to
+      // honour (lib/pageScrollLock.ts requestScrollAfterUnlock), so a board's queued row could dismiss its
+      // drawer and auto-scroll in one move. Nothing asks for one any more (Everything's scroll-to-card,
+      // AllQueues.tsx, never did), so the restore is the held offset, always.
+      window.scrollTo(0, current)
     }
   }, [overlayOpen])
 
