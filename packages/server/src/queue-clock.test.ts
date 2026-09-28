@@ -89,17 +89,32 @@ test("leaving the queue because a person acted forgets the stamp, so the next en
 test("a boot keeps every place in line while the tailer is still priming rows", () => {
   // `waiting` entered at 12:30 off a wait (its rest was 09:00). After a restart the board runs before
   // the tailer has primed it, and an unprimed headless row reads as RUNNING — out of the queue. That
-  // reading is unknown, so it clears nothing; the first real reading finds the stamp where it was.
+  // reading is unknown, so it clears nothing, and the thread keeps showing queued at its stamp; the first
+  // real reading finds the stamp where it was.
   const { run, saves, unknown } = harness({ waiting: at("12:30"), left: at("11:00") })
   unknown.add("waiting").add("left")
   for (const now of ["13:00", "13:00", "13:01"]) {
-    assert.deepEqual(run(now, thread("waiting", false, "09:00"), thread("left", false, "11:00")), { waiting: undefined, left: undefined })
+    const waiting = thread("waiting", false, "09:00")
+    const left = thread("left", false, "11:00")
+    assert.deepEqual(run(now, waiting, left), { waiting: at("12:30"), left: at("11:00") })
+    assert.equal(waiting.needsYou, true)
+    assert.equal(left.needsYou, true)
   }
   assert.deepEqual(saves, [])
   unknown.clear()
   // `left` left the queue while the server was down: its first KNOWN reading out of the queue clears it.
-  assert.deepEqual(run("13:02", thread("waiting", true, "09:00"), thread("left", false, "11:00")), { waiting: at("12:30"), left: undefined })
+  const left = thread("left", false, "11:00")
+  assert.deepEqual(run("13:02", thread("waiting", true, "09:00"), left), { waiting: at("12:30"), left: undefined })
+  assert.equal(left.needsYou, false)
   assert.deepEqual(saves, [["left", null]])
+})
+
+test("an unknown reading out of the queue with no stamp stays out: only a place in line is carried across a boot", () => {
+  const { run, unknown } = harness()
+  unknown.add("fresh")
+  const fresh = thread("fresh", false, "12:00")
+  assert.deepEqual(run("13:00", fresh), { fresh: undefined })
+  assert.equal(fresh.needsYou, false)
 })
 
 test("an unknown reading that happens to be queued shows the stamp it has and decides nothing", () => {

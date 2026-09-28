@@ -41,7 +41,8 @@ import type { ThreadView } from "@frizz/shared"
 // face value would clear every stored stamp and send the whole queue to the back in prime-batch order on
 // every restart. So the board says which readings it can vouch for (`known`), and only a KNOWN reading
 // outside the queue clears a stamp or counts as having seen the thread out. An unknown one changes
-// nothing: the stamp waits for the thread's first real reading.
+// nothing: the stamp waits for the thread's first real reading, and the thread keeps SHOWING queued at it
+// meanwhile — a queue that blinked empty for the seconds of a prime moved every card on the reader's screen.
 //
 // A STORED STAMP IS CHECKED ONCE, the first time its thread reads as queued after a boot: if the agent
 // has spoken since it (a rest newer than the stamp), the thread left and re-entered while this server was
@@ -225,7 +226,17 @@ export function createQueueClock(store: QueueClockStore): QueueClock {
         const durable = store.persists(t)
         if (durable && !vouched) allVouched = false
         if (t.needsYou !== true) {
-          if (!vouched) continue
+          // Out of the queue on a reading nobody can vouch for, with a place in line from before the boot:
+          // it is still queued as far as anyone knows, so it SHOWS queued until a real reading decides. A
+          // card that dropped out for the seconds the tailer takes to prime and came back would move every
+          // card below it on the reader's screen, on every restart.
+          if (!vouched) {
+            if (held !== undefined) {
+              t.needsYou = true
+              t.queuedAt = new Date(held).toISOString()
+            }
+            continue
+          }
           lastSeenOut.set(t.id, { at: nowMs, rest: restMs(t), parked: reading.parked(t), snoozedUntil: Date.parse(t.snoozedUntil ?? "") })
           settling.delete(t.id)
           unchecked.delete(t.id)

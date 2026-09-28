@@ -86,8 +86,11 @@ test("a snoozed thread let back into the queue joins the BACK, and keeps that pl
     // queued before and is queued now, so its place in line must not move with it.
     command = { ...command, runtime: "exited", lastActivityAt: at("12:38") } as ThreadView
     primed = false
+    // Unprimed rows read as running, but the ones with a place in line keep SHOWING it until the tailer
+    // vouches for a reading — a queue that blinked empty for the prime would move every card on screen.
     for (const hhmm of ["12:38", "12:39"]) {
-      assert.deepEqual(readAt(hhmm), { plain: undefined, held: undefined, overnight: undefined, "term-abc": at("09:55") }, "unprimed rows read as running")
+      assert.deepEqual(readAt(hhmm), { plain: at("09:50"), held: at("12:31"), overnight: undefined, "term-abc": at("09:55") }, "unprimed rows hold their place")
+      assert.ok(board.refresh().threads.filter((t) => t.id === "plain" || t.id === "held").every((t) => t.needsYou === true), "and stay queued")
     }
     assert.equal(storage.getSession("held")?.queued_at, at("12:31"), "an unprimed reading is not a departure")
     primed = true
