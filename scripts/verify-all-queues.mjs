@@ -109,7 +109,10 @@ try {
   // what it SAYS waits for it to say it rather than reading once.
   const pickerSays = (name, timeout = 8000) =>
     page.waitForFunction((n) => document.querySelector("[data-xq-picker-name]")?.textContent?.trim() === n, { timeout }, name).then(() => true, () => false)
-  const lanes = () => page.$$eval("[data-xq-lane]", (els) => els.map((el) => el.getAttribute("data-xq-lane")))
+  // Which projects' cards the queue shows, in the order they first appear. The page's queue is ONE queue
+  // (lib/allQueues.ts mergedQueue): the per-project lanes these steps read until 2026-09-28 are gone, and
+  // a card's key, `<project id>/<slug>`, is what says whose it is.
+  const cardProjects = () => page.$$eval("[data-xq-card]", (els) => [...new Set(els.map((el) => el.getAttribute("data-xq-card")?.split("/")[0]))])
   // Click only once the target is where the eye would find it: inside the viewport and holding still for
   // two frames. A Radix menu mounts its items BEFORE it has positioned them (off-screen, until measured),
   // and a drawer slides in over ~300ms, so a click issued the moment the node exists lands nowhere
@@ -137,14 +140,16 @@ try {
     check("/ lands on the page focused on the named project, with its prompt box", path === "/" && (await pickerSays("acme-api")), `${path}, picker "${await picker()}"`)
   })
 
-  await step("lanes follow the rail order, one per project with a queue", async () => {
+  // Until 2026-09-28 this checked a lane per project in the rail's order; the queue is one queue now, in
+  // the order the threads became ready (verify-everything-queue.mjs holds that order), so what is left to
+  // check here is WHOSE cards it holds.
+  await step("the queue holds the cards of every project with work queued, and only those", async () => {
     // The seed queues work in these three; docs-portal (only archived threads) and any other project on
-    // the stack (nothing seeded) have nothing queued, so no lane. Named rather than excluded, so a fifth
-    // quiet project — whatever it is called — does not read as a missing lane.
-    const queued = new Set(["acme-api", "marketing-site", "billing-worker"])
-    const order = (await api("acme-api").query("projectsList")).map((p) => p.slug).filter((slug) => queued.has(slug))
-    const lanes = await page.$$eval("[data-xq-lane]", (els) => els.map((el) => el.getAttribute("data-xq-lane")))
-    check("lanes follow the rail order, one per project with a queue", JSON.stringify(lanes) === JSON.stringify(order.map((slug) => ids[slug])), `${lanes.length} lanes`)
+    // the stack (nothing seeded) have nothing queued, so no card. Named rather than excluded, so a fifth
+    // quiet project — whatever it is called — does not read as a missing one.
+    const queued = ["acme-api", "marketing-site", "billing-worker"].map((slug) => ids[slug]).sort()
+    const shown = (await cardProjects()).sort()
+    check("the queue holds the cards of every project with work queued, and only those", JSON.stringify(shown) === JSON.stringify(queued), `${shown.length} projects' cards`)
     const cards = await page.$$eval("[data-xq-card]", (els) => els.length)
     // Eight agent threads, plus a finished terminal command in billing-worker and in the launcher.
     check("every queued thread has a card", cards === 10, `${cards} cards`)
@@ -203,7 +208,7 @@ try {
     const scope = card("billing-worker", "dunning-retry-schedule")
     await (await buttonIn(scope, "Mark as done")).click()
     const done = await waitFor("the tenant thread to archive", async () => { const t = await threadOf("billing-worker", "dunning-retry-schedule"); return t && (t.archived || t.state === "archived") ? t : null })
-    check("Mark as done on a tenant's card finishes ITS thread", Boolean(done) && wrote("billing-worker", "completeThread") && !wrote("acme-api", "completeThread"))
+    check("Mark as done on a tenant's card finishes ITS thread", Boolean(done) && wrote("billing-worker", "completeThread") && !wrote("acme-api", "completeThread"), `completeThread went to ${writes.filter((w) => w.endsWith("/completeThread")).join(", ") || "nobody"}`)
   })
 
   await step("Mark as done on the launcher's same-slug card leaves the tenant's alone", async () => {
@@ -217,7 +222,7 @@ try {
   // The seed ran a real command in billing-worker and in the launcher; each finished run queues.
   const commandOf = async (project) => (await api(project).query("board")).threads.find((t) => t.kind === "command")
 
-  await step("a tenant's finished command shows its own run, in its lane and its rail", async () => {
+  await step("a tenant's finished command shows its own run, in its card and its rail", async () => {
     const command = await commandOf("billing-worker")
     const scope = card("billing-worker", command.id)
     await page.$eval(scope, (el) => el.scrollIntoView({ block: "center" }))
@@ -226,7 +231,7 @@ try {
     const screen = await waitFor("the command's screen", () => page.$eval(scope, (el) => el.querySelector(".xterm-rows")?.textContent?.includes("billing-worker ran") ?? false), 8_000).catch(() => false)
     const text = await page.$eval(scope, (el) => el.textContent ?? "")
     const rail = await page.$eval(`[data-xq-rail-project="${ids["billing-worker"]}"]`, (el) => el.textContent ?? "")
-    check("a tenant's finished command shows its own run, in its lane and its rail", screen && text.includes("exit 3") && rail.includes("exit 3") && rail.includes("billing-worker ran"), `screen ${screen ? "replayed" : "blank"}, card ${text.includes("exit 3") ? "says exit 3" : "no state"}`)
+    check("a tenant's finished command shows its own run, in its card and its rail", screen && text.includes("exit 3") && rail.includes("exit 3") && rail.includes("billing-worker ran"), `screen ${screen ? "replayed" : "blank"}, card ${text.includes("exit 3") ? "says exit 3" : "no state"}`)
     await page.screenshot({ path: join(shots, "aq-verify-command.png") })
   })
 
@@ -293,7 +298,7 @@ try {
     const scope = card("acme-api", "upgrade-postgres-driver")
     // A marketing-site thread, by its card's title if one is still queued, else by its rail row: the seed's
     // in-flight rows rest on their own, so which of the two is on the page depends on how long this took.
-    const title = await page.$(`[data-xq-lane="${ids["marketing-site"]}"] article h3 a`)
+    const title = await page.$(`[data-xq-card^="${ids["marketing-site"]}/"] h3 a`)
     if (title) await title.click()
     else await (await buttonIn(`[data-xq-rail-project="${ids["marketing-site"]}"]`, "Generate OG images at build time")).click()
     await page.waitForFunction(() => location.pathname.startsWith("/all/marketing-site/thread/"), { timeout: 8000 })
@@ -302,10 +307,10 @@ try {
     const slug = await page.evaluate(() => location.pathname.split("/").pop())
     const expected = (await threadOf("marketing-site", slug))?.title ?? "?"
     const drawer = await page.$eval("[role=dialog]", (el) => el.textContent ?? "")
-    const lanes = await page.$$eval("[data-xq-lane]", (els) => els.length)
+    const behind = (await cardProjects()).length
     const stillHere = (await page.$(scope)) !== null
     await page.screenshot({ path: join(shots, "xp-verify-drawer.png") })
-    check("a tenant's thread opens in place, in its drawer", drawer.includes(expected) && lanes > 0 && stillHere && (await pickerSays("marketing-site")), `${slug}: ${lanes} lanes behind it, picker "${await picker()}"`)
+    check("a tenant's thread opens in place, in its drawer", drawer.includes(expected) && behind > 0 && stillHere && (await pickerSays("marketing-site")), `${slug}: ${behind} projects' cards behind it, picker "${await picker()}"`)
   })
 
   await step("closing it hands the prompt box back to the project that was chosen", async () => {
@@ -528,19 +533,22 @@ try {
   // There is no project view to open (maintainer 2026-09-28: "urls like this should not exist anymore"):
   // showing one project is a FILTER on the queue column, held per tab, and the address stays `/`. Until
   // then a rail square, a project's row, its lane header and the filter menu each navigated to
-  // `/project/<slug>`; now the square, the lane header and the READY header's menu filter in place, and
+  // `/project/<slug>`; now the square, a card's project chip and the READY header's menu filter in place, and
   // a project's row opens its other bands under it instead (verify-one-view.mjs checks that, and the
-  // row's ⋯ → Filter). What each check reads is the lanes: filtered, exactly the one project's.
+  // row's ⋯ → Filter). What each check reads is whose cards the queue shows: filtered, exactly the one
+  // project's. (A lane's header was the second door until the lanes went, the same day; the card's own
+  // project chip is that door now.)
   const filteredTo = async (slug) => {
     await page.waitForSelector("[data-xq-view-filter-pill]", { timeout: 8000 })
-    await page.waitForFunction((id) => { const shown = [...document.querySelectorAll("[data-xq-lane]")]; return shown.length === 1 && shown[0].getAttribute("data-xq-lane") === id }, { timeout: 8000 }, ids[slug]).catch(() => {})
-    return { lanes: await lanes(), path: await page.evaluate(() => location.pathname) }
+    await page.waitForFunction((id) => { const shown = new Set([...document.querySelectorAll("[data-xq-card]")].map((el) => el.getAttribute("data-xq-card")?.split("/")[0])); return shown.size === 1 && shown.has(id) }, { timeout: 8000 }, ids[slug]).catch(() => {})
+    return { projects: await cardProjects(), path: await page.evaluate(() => location.pathname) }
   }
-  const only = (seen, slug) => JSON.stringify(seen.lanes) === JSON.stringify([ids[slug]]) && seen.path === "/"
+  const only = (seen, slug) => JSON.stringify(seen.projects) === JSON.stringify([ids[slug]]) && seen.path === "/"
+  const same = (a, b) => JSON.stringify([...a].sort()) === JSON.stringify([...b].sort())
   const clearFilter = async () => {
     await page.waitForFunction(() => { const clear = document.querySelector("[data-xq-view-filter-clear]"); clear?.click(); return clear !== null }, { timeout: 8000 })
     await page.waitForFunction(() => !document.querySelector("[data-xq-view-filter-pill]"), { timeout: 8000 })
-    await page.waitForSelector("[data-xq-lane]", { timeout: 8000 })
+    await page.waitForSelector("[data-xq-card]", { timeout: 8000 })
     await sleep(400)
   }
 
@@ -549,9 +557,9 @@ try {
     await api("acme-api").mutate("settingsSet", { ...settings, projectRail: true })
     try {
       await page.goto(`${origin}/?focus=acme-api`, { waitUntil: "networkidle2" })
-      await page.waitForSelector("[data-xq-lane]")
+      await page.waitForSelector("[data-xq-card]")
       await sleep(800)
-      const everything = await lanes()
+      const everything = await cardProjects()
       // The rail's scrolling band draws the registry's order, one square per project, each a plain link to
       // `/`; the Home workspace's square is pinned below the band, outside that order (ProjectRail.tsx).
       const index = (await api("acme-api").query("projectsList")).filter((p) => !p.home).map((p) => p.slug).indexOf("marketing-site")
@@ -565,37 +573,37 @@ try {
       await squares[index].click()
       await page.waitForFunction(() => !document.querySelector("[data-xq-view-filter-pill]"), { timeout: 8000 }).catch(() => {})
       await sleep(400)
-      const lifted = await lanes()
+      const lifted = await cardProjects()
       const says = await pickerSays("acme-api")
       check(
         "a rail square filters the queue to its project, and pressing it again lifts the filter",
-        only(filtered, "marketing-site") && current === "page" && JSON.stringify(lifted) === JSON.stringify(everything) && says,
-        `square → ${filtered.lanes.length} lane(s) at ${filtered.path}, marked ${current}; again → ${lifted.length}/${everything.length} lanes; picker "${await picker()}"`,
+        only(filtered, "marketing-site") && current === "page" && same(lifted, everything) && says,
+        `square → ${filtered.projects.length} project(s) at ${filtered.path}, marked ${current}; again → ${lifted.length}/${everything.length} projects; picker "${await picker()}"`,
       )
     } finally {
       await api("acme-api").mutate("settingsSet", settings)
     }
   })
 
-  await step("a project's lane header and the filter menu each filter the queue to it; ✕ comes back", async () => {
+  await step("a card's project chip and the filter menu each filter the queue to it; ✕ comes back", async () => {
     await page.goto(`${origin}/?focus=billing-worker`, { waitUntil: "networkidle2" })
-    await page.waitForSelector("[data-xq-lane]")
+    await page.waitForSelector("[data-xq-card]")
     await sleep(800)
-    const everything = await lanes()
-    await page.click(`[data-xq-lane="${ids["acme-api"]}"] header a`)
-    const byHeader = await filteredTo("acme-api")
+    const everything = await cardProjects()
+    await page.click(`[data-xq-card^="${ids["acme-api"]}/"] button[data-xq-chip]`)
+    const byChip = await filteredTo("acme-api")
     await page.screenshot({ path: join(shots, "xp-verify-filtered.png") })
     await clearFilter()
-    const widened = await lanes()
+    const widened = await cardProjects()
     await page.click("[data-inbox-header] [data-xq-view-filter]")
     await clickSettled('[role="menuitem"][data-value="marketing-site"]')
     const byMenu = await filteredTo("marketing-site")
     await clearFilter()
-    const cleared = await lanes()
+    const cleared = await cardProjects()
     check(
-      "a project's lane header and the filter menu each filter the queue to it; ✕ comes back",
-      only(byHeader, "acme-api") && JSON.stringify(widened) === JSON.stringify(everything) && only(byMenu, "marketing-site") && JSON.stringify(cleared) === JSON.stringify(everything),
-      `header → ${byHeader.lanes.length} lane(s) at ${byHeader.path}, ✕ → ${widened.length}/${everything.length} lanes, menu → ${byMenu.lanes.length} lane(s) at ${byMenu.path}, ✕ → ${cleared.length} lanes`,
+      "a card's project chip and the filter menu each filter the queue to it; ✕ comes back",
+      only(byChip, "acme-api") && same(widened, everything) && only(byMenu, "marketing-site") && same(cleared, everything),
+      `chip → ${byChip.projects.length} project(s) at ${byChip.path}, ✕ → ${widened.length}/${everything.length} projects, menu → ${byMenu.projects.length} project(s) at ${byMenu.path}, ✕ → ${cleared.length} projects`,
     )
   })
 
