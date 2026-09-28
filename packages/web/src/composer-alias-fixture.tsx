@@ -42,14 +42,18 @@ const SLUG = "alias-thread"
 const params = new URLSearchParams(location.search)
 const SURFACE = params.get("surface") ?? "drawer"
 const ANSWERABLE = params.get("answerable") === "1"
+// `?runtime=exited` rests the thread on an exited session with nothing asked, so the card offers Retry in
+// its header (groups.ts offersRetry: a stalled session, which an open ask would outrank).
+const RUNTIME = params.get("runtime") ?? "turn-idle"
+const STALLED = RUNTIME === "exited"
 
 const thread = {
   id: SLUG,
   title: "Rotate the signing key without downtime",
-  status: "needs-human",
-  statusText: "Waiting on your call",
+  status: STALLED ? "active" : "needs-human",
+  statusText: STALLED ? "" : "Waiting on your call",
   mechanism: null,
-  humanBlocked: true,
+  humanBlocked: !STALLED,
   needsYou: true,
   ready: false,
   dependsOn: [],
@@ -57,7 +61,7 @@ const thread = {
   agents: [],
   errors: [],
   warnings: [],
-  runtime: "turn-idle",
+  runtime: RUNTIME,
   unread: false,
   archived: false,
   hasPlan: false,

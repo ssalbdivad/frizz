@@ -329,12 +329,12 @@ function RetryButton({ project, thread, onSent, onFailed }: { project: QueuesPro
         disabled={retry.isPending || !thread.sessionId}
         aria-label="Retry exited session"
         onMouseDown={(event) => event.preventDefault()}
-        // `mr-[9px]` was measured against a neighbour that is gone: the ↗ and ⤢ doors stood to Retry's
-        // right until 2026-09-28, and the ↗ carried ~9.4px of dead box on its left, so this margin put
-        // Retry at the cluster's rhythm — MEASURED 2026-09-23 (ink-gaps.mjs, dsf 4, sans): ↗ → ⤢ 20.50px
-        // of ink; Retry → ↗ 15.43px at `mr-1`, 20.43px here. Retry is now the header's LAST mark, so the
-        // margin only insets it from the card's padding, and nobody has measured what that inset should be.
-        className="mr-[9px] flex items-center gap-1.5 rounded-md border border-accent/45 bg-accent/10 px-2.5 py-1 text-[12px] font-medium text-accent outline-none transition-colors hover:border-accent/70 hover:bg-accent/15 disabled:opacity-50"
+        // No margin: Retry is the header's last mark, so the header's own padding insets it — 21px from the
+        // card's border box, the title's inset on the left. It carried `mr-[9px]` until 2026-09-28 to sit at
+        // the rhythm of the ↗ and ⤢ doors beside it (MEASURED 2026-09-23, ink-gaps.mjs, dsf 4, sans: Retry →
+        // ↗ 20.43px); with the doors gone that margin left it 30px in against the title's 21 (measured
+        // 2026-09-28, composer-alias-fixture ?surface=card&runtime=exited, dsf 4, sans).
+        className="flex items-center gap-1.5 rounded-md border border-accent/45 bg-accent/10 px-2.5 py-1 text-[12px] font-medium text-accent outline-none transition-colors hover:border-accent/70 hover:bg-accent/15 disabled:opacity-50"
       >
         <RotateCcw size={12} />
         Retry
