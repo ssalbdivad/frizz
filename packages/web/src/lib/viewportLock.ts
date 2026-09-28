@@ -24,12 +24,12 @@
 // scroll, pointer move and focus change, and after every correction, so it always describes the page as
 // the human last saw it; a change is measured against it and undone.
 //
-// WHICH CARDS ARE ON SCREEN (what lib/stableQueue.ts freezes) is measured with a margin of a quarter of
-// the viewport either side: a render can land between a scroll and the re-measure it schedules, and a
-// card that had just scrolled into view must already count. And when that set changes, the host is asked
-// to render again once the scrolling settles, so cards that waited below the run for the ones on screen
-// take their real places while nobody is looking at them — never mid-scroll, where the correction would
-// be an instant scroll cancelling the human's own.
+// WHICH CARDS ARE ON SCREEN (where lib/stableQueue.ts lets a card that left the queue hold its place) is
+// measured with a margin of a quarter of the viewport either side: a render can land between a scroll and
+// the re-measure it schedules, and a card that had just scrolled into view must already count. And when
+// that set changes, the host is asked to render again once the scrolling settles, so a ghost or a fading
+// card the reader has scrolled away from goes while nobody is looking at it — never mid-scroll, where the
+// correction would be an instant scroll cancelling the human's own.
 //
 // A RELOAD is the one move this cannot absorb as it happens — the dev server's full reload, a new build's,
 // a restart's — and it used to land the reader at the top of a queue re-laid from nothing. A REMOUNT is
@@ -276,20 +276,24 @@ export function useViewportLock(slots: string, keyOf: (slot: HTMLElement) => str
     const { slots, keyOf } = latest.current
     const restore = restoring.current
     if (restore) {
-      if (performance.now() > restore.until) restoring.current = null
-      else {
-        const slot = [...document.querySelectorAll<HTMLElement>(slots)].find((candidate) => keyOf(candidate) === restore.key)
-        if (slot) {
-          const delta = slot.getBoundingClientRect().top - restore.top
-          const now = performance.now()
-          let until = restore.found ? restore.until : now + RELOAD_HOLD_MS
-          if (Math.abs(delta) > 0.5) {
-            scrollPage(delta)
-            until = Math.min(restore.giveUp, Math.max(until, now + RELOAD_QUIET_MS))
-          }
-          restoring.current = { ...restore, y: pageScrollY(), found: true, until }
+      // The card goes back FIRST, and only then is the restore asked whether it is over. The other way
+      // round, the render that ended it handed the lock a page it had not put back: under load the cards
+      // above lay out at their real height seconds late, the restore timed out on exactly that render,
+      // and the lock held whatever the moved page put at the reading line — a node low in the first
+      // card, whose body then clamped and carried the page up 576px (measured 2026-09-28).
+      const slot = [...document.querySelectorAll<HTMLElement>(slots)].find((candidate) => keyOf(candidate) === restore.key)
+      const now = performance.now()
+      let next = restore
+      if (slot) {
+        const delta = slot.getBoundingClientRect().top - restore.top
+        let until = restore.found ? restore.until : now + RELOAD_HOLD_MS
+        if (Math.abs(delta) > 0.5) {
+          scrollPage(delta)
+          until = Math.min(restore.giveUp, Math.max(until, now + RELOAD_QUIET_MS))
         }
+        next = { ...restore, y: pageScrollY(), found: true, until }
       }
+      restoring.current = now > next.until ? null : next
     }
     const viewport = window.innerHeight
     const margin = viewport * ON_SCREEN_MARGIN
