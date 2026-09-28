@@ -13,10 +13,13 @@
 //   3. control: send again and actually record it → the bubble must LAND (solid) and survive any
 //      further advance, proving the floor never eats a delivered message.
 //
+// Seed it with scripts/seed-ghost-floor.mjs (a broker row whose "daemon" is a stand-in `sleep`, the
+// broker-era form of the dummy pane above), which prints the slug and jsonl this takes. Re-seed per run.
 // Usage: node scripts/verify-ghost-floor.mjs --url=http://127.0.0.1:4933 --slug=… --jsonl=/abs/path.jsonl
 import { appendFileSync, readFileSync } from "node:fs"
 import puppeteer from "puppeteer"
 import { createRpcClient } from "./lib/rpc-client.mjs"
+import { HARNESS_404 } from "./lib/page-errors.mjs"
 
 const flags = Object.fromEntries(
   process.argv.slice(2).filter((a) => a.startsWith("--")).map((a) => a.replace(/^--/, "").split("=")),
@@ -63,9 +66,12 @@ const BUBBLES = `[...document.querySelectorAll('[class*="bg-user-bubble"]')].map
   text: el.innerText.trim().slice(0, 60),
   opacity: Number(getComputedStyle(el).opacity),
   // Which surface rendered it — the same slug can be mounted in the drawer AND a queue card at once,
-  // so a naive document-wide count would read two surfaces as one duplicated bubble.
-  surface: el.closest("[data-queue-card]") ? "queue-card"
-    : el.closest("[data-thread-drawer]") ? "drawer"
+  // so a naive document-wide count would read two surfaces as one duplicated bubble. Since 2026-09-28
+  // the thread opens as a drawer over the one page ([data-drawer-layer]) and the page's queue cards are
+  // [data-xq-card]; the old [data-thread-drawer] no longer exists, so every bubble — the cards' "asked"
+  // bubbles included — had fallen through to "chat".
+  surface: el.closest("[data-queue-card], [data-xq-card]") ? "queue-card"
+    : el.closest("[data-drawer-layer]") ? "drawer"
     : el.closest("[data-standalone-thread]") ? "standalone" : "chat",
 }))`
 
@@ -76,26 +82,30 @@ try {
   const errors = []
   const notes = [] // warnings carry the floor's own retirement breadcrumb + the watchdog's
   page.on("console", (m) => {
-    if (m.type() === "error") errors.push(m.text())
+    if (m.type() === "error" && !m.text().startsWith("Failed to load resource")) errors.push(m.text())
     else if (m.type() === "warning" || m.type() === "warn") notes.push(m.text())
   })
   page.on("pageerror", (e) => errors.push(String(e)))
+  // A failed response is recorded once, WITH its URL, minus the disposable stack's supervisor 404.
+  page.on("response", (r) => { if (r.status() >= 400 && !HARNESS_404.test(r.url())) errors.push(`${r.status()} ${r.url()}`) })
   // The thread's drawer on the one page (rpc-client threadUrl); the bare `/thread/<slug>` it opened until
   // 2026-09-28 now lands on `/`.
   await page.goto(await createRpcClient(url).threadUrl(slug), { waitUntil: "networkidle2", timeout: 30000 })
-  await page.waitForSelector('textarea[placeholder*="Follow up"]', { timeout: 15000 })
+  // The DRAWER's composer, not a queue card's reply box behind it.
+  const COMPOSER = '[data-drawer-layer] textarea[placeholder*="Follow up"]'
+  await page.waitForSelector(COMPOSER, { timeout: 15000 })
 
   const send = async (text) => {
-    await page.focus('textarea[placeholder*="Follow up"]')
-    await page.type('textarea[placeholder*="Follow up"]', text, { delay: 8 })
+    await page.focus(COMPOSER)
+    await page.type(COMPOSER, text, { delay: 8 })
     await page.keyboard.press("Enter")
   }
   const settle = (ms) => new Promise((r) => setTimeout(r, ms))
-  // Scope every assertion to ONE surface: the same slug can be mounted in the thread chat AND a queue
+  // Scope every assertion to ONE surface: the same slug can be mounted in the thread drawer AND a queue
   // card at once (they share the query cache), so a delivered message would otherwise read as a
-  // duplicate. Collapse by text within the chat surface alone.
+  // duplicate. Collapse by text within the drawer alone.
   const bubbles = async () => {
-    const all = (await page.evaluate(BUBBLES)).filter((b) => b.surface === "chat")
+    const all = (await page.evaluate(BUBBLES)).filter((b) => b.surface === "drawer")
     const byText = new Map()
     for (const b of all) {
       const entry = byText.get(b.text) ?? { text: b.text, opacity: 1, copies: 0 }
@@ -138,7 +148,7 @@ try {
   const advanceRendered = await (async () => {
     const deadline = Date.now() + 45_000
     for (;;) {
-      if (await page.evaluate(`document.body.innerText.includes(${JSON.stringify(marker)})`)) return true
+      if (await page.evaluate(`(document.querySelector("[data-drawer-layer]")?.innerText ?? "").includes(${JSON.stringify(marker)})`)) return true
       if (Date.now() > deadline) return false
       await settle(1000)
     }
