@@ -594,3 +594,28 @@ test("a question the human replied past blocks nothing and reads back marked —
     assert.equal(h.storage.getThreadQuestion(passed.id)?.state, "open", "done leaves the replied-past card open and answerable")
   } finally { h.close() }
 })
+
+// A PIVOT STICKS (maintainer 2026-09-28: "when a question is not answered and we pivot, the question
+// should not be asked again"). A worker `unask`ed both replied-past cards and re-registered them under
+// the human's unrelated next request; `ask` now refuses that, however it is cased or punctuated.
+test("a question the human replied past is REFUSED if asked again — even withdrawn first", async () => {
+  const h = harness()
+  try {
+    h.storage.upsertSession(row("t"))
+    const [passed] = (await h.router.ask.handler({ input: { slug: "t", questions: [simple()] } })).registered
+    // Negative control: before the human replies past it, the same question is simply a second question.
+    const before = await h.router.ask.handler({ input: { slug: "t", questions: [simple()] } })
+    await h.router.unask.handler({ input: { slug: "t", id: before.registered[0].id } })
+
+    h.humanSpokeAt(new Date(Date.parse(passed.askedAt) + 1).toISOString())
+    await new Promise((resolve) => setTimeout(resolve, 5))
+    await assert.rejects(h.router.ask.handler({ input: { slug: "t", questions: [simple()] } }), new RegExp(`repeats ${passed.id}.*\\n\\nA reply past a question is a pivot`))
+    // The dodge in the screenshot: withdraw the old card, then ask it again.
+    await h.router.unask.handler({ input: { slug: "t", id: passed.id } })
+    await assert.rejects(h.router.ask.handler({ input: { slug: "t", questions: [simple("sqlite, or a json file")] } }), /repeats/)
+    // A different question is fine, even with the same options: "Yes"/"No" is not a question.
+    const fresh = await h.router.ask.handler({ input: { slug: "t", questions: [simple("Which dist-tag should 4.5.0 publish under?")] } })
+    assert.equal(fresh.registered.length, 1)
+    assert.equal(h.storage.listThreadQuestions("t").filter((q) => q.state === "open").length, 1, "nothing refused was stored")
+  } finally { h.close() }
+})

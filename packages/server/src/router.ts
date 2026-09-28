@@ -174,7 +174,7 @@ import { liveThreadsForBackend, runProviderLogout } from "./backend/account-acti
 import { threadProfileOptions, validateThreadProfile } from "./backend/thread-profiles.ts"
 import { adoptionRuntimeBinding, type AdoptionPaneLookup, type ExpectedAdoptionPane } from "./adoption-recovery.ts"
 import { parseIssueRef, parsePrRef, readGithubIssueStatusBook, readGithubStatusBook, GITHUB_ISSUE_STATUS_SETTING, GITHUB_STATUS_SETTING } from "./awaiting.ts"
-import { isBrokerClaudeRow, type SessionRow, type Storage, type SubAgentSteerRow } from "./storage.ts"
+import { isBrokerClaudeRow, type SessionRow, type Storage, type SubAgentSteerRow, type ThreadQuestionRow } from "./storage.ts"
 import type { SessionTelemetry } from "./tailer.ts"
 import { providerResumeCommand } from "./external-terminal.ts"
 import { backgroundShellLineCount, readBackgroundShellOutput } from "./background-shell-output.ts"
@@ -1065,6 +1065,26 @@ export function createRouter(ctx: AppContext) {
       out.push({ id: q.id, spec, askedAt: new Date(q.asked_at).toISOString(), ...(questionRepliedPast(q.asked_at, lastHumanAt) ? { repliedPast: true as const } : {}) })
     }
     return out
+  }
+
+  /** The question on this thread that `q` would re-ask after the human replied past it, if any: one that
+   *  was still unanswered when the human's newest turn landed (open, dismissed, or withdrawn only after
+   *  that turn — a withdrawal before it was the worker's own call, never a pivot) and whose question text
+   *  matches with case, punctuation and spacing folded away. Text only, not option labels: two different
+   *  questions routinely share "Yes"/"No" or "Push it"/"Keep it local", and refusing those is worse than
+   *  missing a reworded re-ask, which the contract and this refusal's own message already rule out. */
+  function repliedPastTwin(slug: string, q: AskedQuestion): ThreadQuestionRow | undefined {
+    const lastHumanAt = ctx.tailer.get(slug)?.lastHumanAt
+    if (!lastHumanAt) return undefined
+    const humanMs = Date.parse(lastHumanAt)
+    const fold = (s: string) => s.toLowerCase().replace(/[^\p{L}\p{N}]+/gu, " ").trim()
+    const text = fold(q.question)
+    return ctx.storage.listThreadQuestions(slug).find((row) => {
+      if (row.state === "answered" || !questionRepliedPast(row.asked_at, lastHumanAt)) return false
+      if (row.state === "withdrawn" && (row.settled_at ?? 0) <= humanMs) return false
+      const spec = parseQuestionSpec(row.spec)
+      return spec !== undefined && fold(spec.question) === text
+    })
   }
 
   /** Arming a Goal is the human (or the worker) saying "decide the rest yourself", so anything still
@@ -3154,6 +3174,23 @@ export function createRouter(ctx: AppContext) {
         // free-text box, silently).
         const faults = input.questions.flatMap((q) => askedQuestionFaults(q))
         if (faults.length > 0) throw new Error(faults.join("\n"))
+        // A PIVOT STICKS: a question the human replied past is never asked again (maintainer 2026-09-28,
+        // after a worker `unask`ed both of its replied-past cards and re-registered them word for word
+        // under the human's unrelated next request). The contract used to allow exactly that "when the
+        // new work cannot proceed without the answer", and workers read every pivot as that case. The
+        // old card is still up and answerable where it was asked, so a re-ask only ever duplicates it.
+        const reasked = input.questions.flatMap((q) => {
+          const prior = repliedPastTwin(input.slug, q)
+          return prior ? [`"${q.question.slice(0, 120)}" repeats ${prior.id}, which the human replied past without answering.`] : []
+        })
+        if (reasked.length > 0) {
+          throw new Error(
+            `${reasked.join("\n")}\n\nA reply past a question is a pivot: the human has moved on, so the ` +
+            "question is not asked again, in these words or any others. Its card stays where it was asked, still " +
+            "answerable, and an answer reaches you as its own wake. Do what the human's newest message " +
+            "asks, decide anything it needs yourself, and say which way you went in your write-up.",
+          )
+        }
         // NO CAP ON THE OPEN SET. Twelve was refused here until 2026-09-03 ("a worker holding more than
         // this is refusing to decide"); the maintainer had it removed with the tool's other count caps.
         const now = Date.now()

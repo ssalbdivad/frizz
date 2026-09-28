@@ -62,9 +62,10 @@ test("the contract teaches that a registered question draws itself at the bottom
     // The card is last, so the explanation is first — said where the worker asks AND where it stops.
     assert.match(c, /THE CARD IS THE LAST THING THE HUMAN READS — PUT EVERY WORD OF EXPLANATION BEFORE IT/)
     assert.match(c, /frizz draws every open question at the BOTTOM of your handoff, below its last line/)
-    // Frizz's wakes carry it down; the human replying past it leaves it up — and re-asking brings it down.
+    // Frizz's wakes carry it down; the human replying past it leaves it up — and it is never asked again.
     assert.match(c, /A QUESTION STAYS WITH THE EXCHANGE THAT ASKED IT/)
-    assert.match(c, /`unask` the old id and `ask` again/)
+    assert.match(c, /NEVER ASK IT AGAIN/)
+    assert.doesNotMatch(c, /`unask` the old id and `ask` again/)
     // Leaving one out is not how a worker drops it — that is what `unask` is for.
     assert.match(prompt, /it is one you\s+`unask`/)
     // The 2026-08-28 grammar ("place them all, or unask") must stay gone, and so must the couching.
