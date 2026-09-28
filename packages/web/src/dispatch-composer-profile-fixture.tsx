@@ -3,6 +3,7 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query"
 import type { BoardSnapshot, CodexModel, DispatchInput, DispatchPreferences, SetDispatchPreferenceInput } from "@frizz/shared"
 import { DispatchForm } from "./components/NewThreadModal.tsx"
 import { TooltipProvider } from "./components/Tooltip.tsx"
+import { draftKey, draftStore } from "./lib/drafts.ts"
 import { store } from "./store.ts"
 import "./styles.css"
 
@@ -91,6 +92,11 @@ function json(result: unknown): Response {
 }
 
 store.board = { projectDir: "/fixture/dispatch-composer" } as BoardSnapshot
+// `?pick=<effort>` opens the box on a pick over the default (GPT-5.6 Sol at that effort), the state
+// that shows "Make default" — so a screenshot or an ink measurement can start there without driving
+// the menu first.
+const pick = new URL(window.location.href).searchParams.get("pick")
+if (pick) draftStore.set(draftKey.dispatchProfile(store.board.projectDir), JSON.stringify({ backend: "codex", model: "gpt-5.6-sol", effort: pick }))
 
 const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false, refetchOnWindowFocus: false } } })
 

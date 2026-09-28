@@ -298,7 +298,8 @@ export function GithubPickerModal({ onClose }: { onClose: () => void }) {
             (side="top") — the footer sits on the modal's bottom edge. */}
         <div className="mt-4 flex items-end justify-between gap-3">
           <div className="min-w-0">
-            <div className="flex min-w-0 flex-wrap items-center gap-x-1.5 gap-y-0.5">
+            {/* 6px both ways, like the prompt box's strip: a narrow modal wraps "Make default" under the pill. */}
+            <div className="flex min-w-0 flex-wrap items-center gap-1.5">
             <ProfileGridSelector
               groups={profileGroups}
               agentSettings

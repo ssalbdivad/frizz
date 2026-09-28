@@ -387,7 +387,7 @@ function PromptForm({
   const footer = useMemo(() => {
     if (!resolved) {
       return (
-        <div className="flex min-w-0 flex-1 flex-wrap items-center gap-x-1.5 gap-y-0.5">
+        <div className="flex min-w-0 flex-1 flex-wrap items-center gap-1.5">
           {target}
           <ProfileGridSelector
             groups={[]}
@@ -405,7 +405,9 @@ function PromptForm({
     return (
       // gap-x-1.5 between the two pills, the same measured gap the thread composer's strip uses
       // (useThreadComposerControls): two bordered pills on `gap-x-1` read as one segmented control.
-      <div className="flex min-w-0 flex-1 flex-wrap items-center gap-x-1.5 gap-y-0.5">
+      // The same 6px between ROWS: on a phone the pill and "Make default" wrap, and the old 2px row
+      // gap stacked two bordered pills nearly touching (5.77px of ink across, 2px down).
+      <div className="flex min-w-0 flex-1 flex-wrap items-center gap-1.5">
         {target}
         <ProfileGridSelector
           groups={profileGroups}
