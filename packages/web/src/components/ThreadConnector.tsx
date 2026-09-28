@@ -1,53 +1,55 @@
-// THE THREADS, TWISTED INTO ONE CORD — the gutter between the rail and the cards on the cross-project
-// page. A faint two-strand cord runs down it beside the rail's thread rows, twisted once at every row, so
-// its strands cross level with each row (lib/threadConnector.ts `twist`). It says what a row IS — one
-// thread of the machine's work, twisted in with every other — before anything says what state it is in,
-// and it stays faint enough to read as texture rather than as a rule. A plain weave was tried first, a
-// stub out of every row across strands running down the gutter: it read as a ruler and its ticks.
+// THE THREADS, STRUNG ON THEIR PROJECTS — the cross-project page's rail, and one thread out of it.
 //
-// ONE thread leaves the cord: the row the rail marks (the card being read, AllQueues.tsx useScrollspy).
-// The cord glints in the accent the rail's scroll marker wears for a twist either side of that row's
-// crossing, and the thread runs out of the crossing, across the gutter to its card, where it ends in a
-// knot on the card's left border and lights a short stretch of that border either side — the seam it is
-// sewn into. While the pointer rests on another thread row that has a card, the glint slides along the
-// cord to that row and the thread follows it out to ITS card — off the top or bottom of the window when
-// the card is scrolled away, which says where it went.
+// A faint two-strand cord hangs from each project's square down the rail's icon column, through the
+// indicator of every thread row under it, twisted once in each gap between two icons (lib/threadConnector.ts
+// `twist`): a project reads as its threads twisted together, before any row says what state it is in. It
+// passes BEHIND every icon — a mask cuts each icon's box out of it, so it never touches what an indicator
+// says — and both its ends hide behind one: the project's square at the top, its last thread's indicator
+// at the bottom. A project with no threads has no cord.
+//
+// Tried and dropped (2026-09-28), each on a seeded stack beside this one: a plain weave in the gutter
+// between the rail and the cards, a stub out of every row across strands running down it, which read as a
+// ruler and its ticks; one cord down that gutter, twisted at every row, which read as decoration beside the
+// list rather than as the list; and one cord through every icon of every project, which drew its loudest
+// crossings at the breaks between projects, where the rail should be quietest.
+//
+// ONE thread leaves the rail: the row the rail marks (the card being read, AllQueues.tsx useScrollspy) runs
+// on out of its right end, just past its rest time, across the gutter to its card, in the accent the rail's
+// scroll marker already wears. It ends in a knot on the card's left border and lights a short stretch of
+// that border either side — the seam it is sewn into. While the pointer rests on another row that has a
+// card, it slides over to THAT card — off the top or bottom of the window when the card is scrolled away,
+// which says where it went.
 //
 // Where it lands is `landing`: level with the row whenever the card reaches that height, so the usual
-// reading is one flat stroke. The rail is sticky and the cards scroll, so the knot slides down the
-// card's edge as the card passes the row, and the stroke bends only once the card has gone by.
+// reading is one flat stroke. The rail is sticky and the cards scroll, so the knot slides down the card's
+// edge as the card passes the row, and the stroke bends only once the card has gone by.
 //
-// One fixed SVG under the lane headers (z-10), which cover the card too, and under the drawers' scrim.
-// It is moved imperatively, not rendered: it has to stay glued to the card on every scroll frame, and a
-// React render per frame for a hairline would be the most expensive pixel on the page.
+// One fixed SVG under the lane headers (z-10), which cover the card too, and under the drawers' scrim. It
+// is moved imperatively, not rendered: it has to stay glued to the card on every scroll frame, and a React
+// render per frame for a hairline would be the most expensive pixel on the page.
 import { useEffect, useRef } from "react"
 import { OFFSCREEN, landing, snapToPixels, threadPath, twist, type ThreadGeometry } from "../lib/threadConnector.ts"
 
+/** How far each strand bows out either side of the icon column: narrow, so a crossing reads as a twist of thread rather than as an x. */
+const CORD_REACH = 2.5
+/** Past an icon's box, a strand passing behind it stays hidden for this much more, so it never touches the icon. */
+const ICON_CLEAR = 1.5
 /** Past the row's box, whose own 6px right padding already clears the rest time. */
 const START_GAP = 1
-/** The cord's centre, past where a row's box ends, and how far each strand bows out either side of it. */
-const CORD_OFFSET = 6
-const CORD_REACH = 3.5
-/** How far the cord runs past the first and last rows, fading out over that stretch. */
-const CORD_TAIL = 18
-/** The longest twist between two crossings: about one row, which is what most of them are. */
-const CORD_LINK = 30
 /** Half the length of the lit stretch of the card's border, which fades out to either end. */
 const SEAM = 56
-/** Half the length of the lit stretch of the cord where the thread leaves it: a twist either side. */
-const GLINT = 26
 /** The card's corner (BLOCK_RADIUS): the seam stops where the border starts to curve. */
 const CORNER = 12
-/** Sliding from one row to another, and the stroke drawing itself out of the cord. */
+/** Sliding from one row to another, and the stroke drawing itself out of the row. */
 const SLIDE_MS = 240
 const DRAW_MS = 320
 
-// A ROW'S LINE, IN ITS INK. The cord crosses just past the row's rest time, so the crossing — and the
-// thread leaving it — sits on the middle of those digits — not on the middle of the 19px line box, 0.5px lower (sans: Chrome floors the
-// half-leading). A row with no rest time takes its title's lowercase instead, which sits at the same
-// height in sans. Read once per row off a baseline probe on the FIRST line (a wrapped title's last line
-// would be a line too low) and kept as an offset from the row's top: the row moves when the rail
-// scrolls, its text does not move within it.
+// THE ROW'S LINE, IN ITS INK. The thread leaves the row just past its rest time, so it sits on the middle of
+// those digits — not on the middle of the 19px line box, 0.5px lower (sans: Chrome floors the
+// half-leading). A row with no rest time takes its title's lowercase instead, which sits at the same height
+// in sans. Read once per row off a baseline probe on the FIRST line (a wrapped title's last line would be a
+// line too low) and kept as an offset from the row's top: the row moves when the rail scrolls, its text
+// does not move within it.
 let inkOffsets = new WeakMap<Element, number>()
 let context: CanvasRenderingContext2D | null = null
 function rowInk(row: HTMLElement): number {
@@ -77,41 +79,68 @@ function inkMiddle(row: HTMLElement): number {
 }
 
 interface Rail {
-  /** Every thread row, in order, and whether it shows inside the rail's own scrolling list. */
-  rows: { y: number; key: string | undefined; visible: boolean }[]
-  /** The cord's centre line, where its strands cross at every row. */
-  x: number
-  /** The rail's own scrolling list, which the cord is cut to. */
+  /** The rail's own scrolling list, which the cords and the thread's end in it are cut to. */
   box: DOMRect
+  /** The icon column's centre line, which every cord hangs down. */
+  x: number
+  /** One cord per project with threads: where its strands cross, and the icon centres it runs between. */
+  cords: { crossings: number[]; span: [number, number] }[]
+  /** Every icon the cords pass behind. */
+  icons: DOMRect[]
 }
 
 /**
- * The rail's thread rows and the cord laid off their right edge. Rows scrolled out of the list count
- * too: the cord runs on past the list's edge and is cut there, as the rows are, rather than fading out
- * as though the list ended where it was scrolled to.
+ * The rail's icon column: a project's square, then the indicator of each thread row listed under it
+ * (`data-xq-indicator`, ProjectList.tsx and Sidebar.tsx). Only rows that TOUCH are strung together, so
+ * whatever sits between two of them — a thread's sub-agents — cuts the cord there, and an open project's
+ * bands, in a drill of their own below its rows, are never on it. Rows scrolled out of the list count too:
+ * a cord runs on past the list's edge and is cut there, as the rows are.
  */
 function readRail(dpr: number): Rail | null {
   const list = document.querySelector<HTMLElement>("[data-xq-rail]")
   if (!list) return null
-  const box = list.getBoundingClientRect()
-  const rows: Rail["rows"] = []
-  let right = -Infinity
-  for (const row of list.querySelectorAll<HTMLElement>("[data-xq-thread-row]")) {
-    const y = snapToPixels(rowInk(row), dpr)
-    right = Math.max(right, row.getBoundingClientRect().right)
-    rows.push({ y, key: row.dataset.xqRailRow, visible: y >= box.top && y <= box.bottom })
+  const cords: Rail["cords"] = []
+  const icons: DOMRect[] = []
+  let x = NaN
+  let centres: number[] = []
+  // Once in each gap, halfway between the two icons' centres, and on to the middle of the icon at either
+  // end, where the strands meet and stop, hidden.
+  const tie = () => {
+    if (centres.length > 1) cords.push({ crossings: centres.slice(1).map((c, i) => (centres[i]! + c) / 2), span: [centres[0]!, centres.at(-1)!] })
+    centres = []
   }
-  if (rows.length === 0) return null
-  return { rows, x: snapToPixels(right + START_GAP + CORD_OFFSET, dpr), box }
+  for (const project of list.querySelectorAll<HTMLElement>("[data-xq-rail-project]")) {
+    let bottom = NaN
+    for (const row of project.querySelectorAll<HTMLElement>(":scope > [data-xq-project-row], :scope > [data-xq-thread-row]")) {
+      const slot = row.querySelector<HTMLElement>("[data-xq-indicator]")
+      const r = row.getBoundingClientRect()
+      if (!slot || Math.abs(r.top - bottom) > 1) tie()
+      bottom = r.bottom
+      if (!slot) continue
+      if (Number.isNaN(x)) {
+        const s = slot.getBoundingClientRect()
+        x = snapToPixels(s.left + s.width / 2, dpr)
+      }
+      // The icon itself where the slot holds one; an empty slot (a Done row draws its check in an overlay
+      // above it) stands for the icon painted over it.
+      const icon = (slot.firstElementChild ?? slot).getBoundingClientRect()
+      icons.push(icon)
+      centres.push(icon.top + icon.height / 2)
+    }
+    tie()
+  }
+  return { box: list.getBoundingClientRect(), x, cords, icons }
 }
 
 function measure(key: string, rail: Rail, dpr: number): ThreadGeometry | null {
-  const row = rail.rows.find((r) => r.key === key && r.visible)
+  const row = document.querySelector<HTMLElement>(`[data-xq-rail] [data-xq-rail-row="${CSS.escape(key)}"]`)
   const slot = document.querySelector<HTMLElement>(`[data-xq-card="${CSS.escape(key)}"]`)
   const card = slot?.querySelector<HTMLElement>(".frizz-card-body")
   if (!row || !slot || !card || slot.dataset.queueLeaving === "true") return null
-  const x1 = rail.x
-  const y1 = row.y
+  const y1 = snapToPixels(rowInk(row), dpr)
+  // A row scrolled out of the rail's own list has nowhere to leave from.
+  if (y1 < rail.box.top || y1 > rail.box.bottom) return null
+  const x1 = row.getBoundingClientRect().right + START_GAP
   const c = card.getBoundingClientRect()
   // Centred on the card's 1px border.
   const x2 = c.left + 0.5
@@ -126,7 +155,7 @@ function measure(key: string, rail: Rail, dpr: number): ThreadGeometry | null {
 
 const mix = (a: number, b: number, t: number) => a + (b - a) * t
 
-/** Write an attribute only when it changed: most frames move the thread and leave the cord alone. */
+/** Write an attribute only when it changed: most frames move the thread and leave the cords alone. */
 function set(el: Element, name: string, value: string) {
   if (el.getAttribute(name) !== value) el.setAttribute(name, value)
 }
@@ -134,10 +163,8 @@ function set(el: Element, name: string, value: string) {
 export function ThreadConnector({ activeKey }: { activeKey: string | null }) {
   const svgRef = useRef<SVGSVGElement>(null)
   const strandRefs = [useRef<SVGPathElement>(null), useRef<SVGPathElement>(null)] as const
-  const cordFadeRef = useRef<SVGLinearGradientElement>(null)
-  const cordMaskRef = useRef<SVGRectElement>(null)
-  const glintRefs = [useRef<SVGPathElement>(null), useRef<SVGPathElement>(null)] as const
-  const glintFadeRef = useRef<SVGLinearGradientElement>(null)
+  const listRef = useRef<SVGRectElement>(null)
+  const iconsRef = useRef<SVGPathElement>(null)
   const pathRef = useRef<SVGPathElement>(null)
   const knotRef = useRef<SVGCircleElement>(null)
   const seamRef = useRef<SVGRectElement>(null)
@@ -147,12 +174,9 @@ export function ThreadConnector({ activeKey }: { activeKey: string | null }) {
   const scheduleRef = useRef<() => void>(() => {})
 
   useEffect(() => {
-    const svg = svgRef.current
-    const [strandA, strandB, cordFade, cordMask] = [strandRefs[0].current, strandRefs[1].current, cordFadeRef.current, cordMaskRef.current]
-    const [glintA, glintB, glintFade] = [glintRefs[0].current, glintRefs[1].current, glintFadeRef.current]
+    const [svg, strandA, strandB, list, icons] = [svgRef.current, strandRefs[0].current, strandRefs[1].current, listRef.current, iconsRef.current]
     const [path, knot, seam, seamGradient] = [pathRef.current, knotRef.current, seamRef.current, seamGradientRef.current]
-    if (!svg || !strandA || !strandB || !cordFade || !cordMask || !glintA || !glintB || !glintFade) return
-    if (!path || !knot || !seam || !seamGradient) return
+    if (!svg || !strandA || !strandB || !list || !icons || !path || !knot || !seam || !seamGradient) return
     const reduced = window.matchMedia?.("(prefers-reduced-motion: reduce)")
     let frame = 0
     let hovered: string | null = null
@@ -168,26 +192,16 @@ export function ThreadConnector({ activeKey }: { activeKey: string | null }) {
       const key = hovered ?? active.current
       const target = rail && key ? measure(key, rail, dpr) : null
 
-      // The cord: always there while the rail has thread rows, whether or not a thread leaves it. One mask
-      // cuts it and its glint to the rail's list and fades both out over the tails.
+      // The cords: there whenever a project has threads, whether or not a thread leaves the rail. The mask
+      // is the rail's list with every icon's box cut out of it.
+      const cords = rail?.cords.map((cord) => twist(cord.crossings, cord.span, rail.x, CORD_REACH)) ?? []
+      set(strandA, "d", cords.map((cord) => cord[0]).join(""))
+      set(strandB, "d", cords.map((cord) => cord[1]).join(""))
       if (rail) {
-        const ys = rail.rows.map((r) => r.y)
-        const [a, b] = twist(ys, rail.x, CORD_REACH, CORD_TAIL, CORD_LINK)
-        set(strandA, "d", a)
-        set(strandB, "d", b)
-        set(glintA, "d", a)
-        set(glintB, "d", b)
-        const top = ys[0]! - CORD_TAIL
-        const length = ys[ys.length - 1]! + CORD_TAIL - top
-        set(cordFade, "y1", String(top))
-        set(cordFade, "y2", String(top + length))
-        const stops = cordFade.querySelectorAll("stop")
-        set(stops[1]!, "offset", String(Math.min(0.5, CORD_TAIL / length)))
-        set(stops[2]!, "offset", String(1 - Math.min(0.5, CORD_TAIL / length)))
-        set(cordMask, "y", String(rail.box.top))
-        set(cordMask, "height", String(rail.box.height))
-      } else {
-        for (const strand of [strandA, strandB, glintA, glintB]) set(strand, "d", "")
+        set(list, "y", String(rail.box.top))
+        set(list, "height", String(rail.box.height))
+        const d = ICON_CLEAR
+        set(icons, "d", rail.icons.map((r) => `M${r.left - d} ${r.top - d}h${r.width + 2 * d}v${r.height + 2 * d}h${-(r.width + 2 * d)}Z`).join(""))
       }
 
       if (!target) {
@@ -198,8 +212,8 @@ export function ThreadConnector({ activeKey }: { activeKey: string | null }) {
         return
       }
       if (key !== drawnKey) {
-        // From another thread it SLIDES; from nothing it DRAWS itself out of the cord, and the knot and
-        // the seam arrive with its tip.
+        // From another thread it SLIDES; from nothing it DRAWS itself out of the row, and the knot and the
+        // seam arrive with its tip.
         if (!reduced?.matches) {
           if (drawn) slide = { from: drawn, start: now }
           else {
@@ -220,8 +234,6 @@ export function ThreadConnector({ activeKey }: { activeKey: string | null }) {
         if (t >= 1) slide = null
       }
       drawn = g
-      set(glintFade, "y1", String(g.y1 - GLINT))
-      set(glintFade, "y2", String(g.y1 + GLINT))
       set(path, "d", threadPath(g))
       set(knot, "cx", String(g.x2))
       set(knot, "cy", String(g.y2))
@@ -262,7 +274,7 @@ export function ThreadConnector({ activeKey }: { activeKey: string | null }) {
       inkOffsets = new WeakMap()
       schedule()
     }
-    // Capture, so the rail's own scrolling list moves the cord too, not only the page.
+    // Capture, so the rail's own scrolling list moves the cords too, not only the page.
     window.addEventListener("scroll", schedule, { capture: true, passive: true })
     window.addEventListener("resize", onResize)
     document.addEventListener("pointerover", onOver)
@@ -298,35 +310,19 @@ export function ThreadConnector({ activeKey }: { activeKey: string | null }) {
       className="group/thread pointer-events-none fixed inset-0 z-[5] h-full w-full overflow-visible max-[800px]:hidden"
     >
       <defs>
-        <linearGradient ref={cordFadeRef} id="frizz-thread-cord-fade" gradientUnits="userSpaceOnUse" x1="0" x2="0">
-          <stop offset="0" stopColor="white" stopOpacity={0} />
-          <stop offset="0.05" stopColor="white" />
-          <stop offset="0.95" stopColor="white" />
-          <stop offset="1" stopColor="white" stopOpacity={0} />
-        </linearGradient>
-        <mask id="frizz-thread-cord" maskUnits="userSpaceOnUse" x={-1e4} y={-1e4} width={2e4} height={2e4}>
-          <rect ref={cordMaskRef} x={-1e4} width={2e4} fill="url(#frizz-thread-cord-fade)" />
+        <mask id="frizz-thread-cords" maskUnits="userSpaceOnUse" x={-1e4} y={-1e4} width={2e4} height={2e4}>
+          <rect ref={listRef} x={-1e4} width={2e4} fill="white" />
+          <path ref={iconsRef} fill="black" />
         </mask>
-        <linearGradient ref={glintFadeRef} id="frizz-thread-glint" gradientUnits="userSpaceOnUse" x1="0" x2="0">
-          <stop offset="0" className="[stop-color:var(--color-accent)] [stop-opacity:0]" />
-          <stop offset="0.5" className="[stop-color:var(--color-accent)] [stop-opacity:0.6]" />
-          <stop offset="1" className="[stop-color:var(--color-accent)] [stop-opacity:0]" />
-        </linearGradient>
         <linearGradient ref={seamGradientRef} id="frizz-thread-seam" gradientUnits="userSpaceOnUse" x1="0" x2="0">
           <stop offset="0" className="[stop-color:var(--color-accent)] [stop-opacity:0]" />
           <stop offset="0.5" className="[stop-color:var(--color-accent)] [stop-opacity:0.7]" />
           <stop offset="1" className="[stop-color:var(--color-accent)] [stop-opacity:0]" />
         </linearGradient>
       </defs>
-      <g data-thread-cord fill="none" strokeWidth={1} mask="url(#frizz-thread-cord)">
-        <g className="stroke-fg opacity-20">
-          <path ref={strandRefs[0]} />
-          <path ref={strandRefs[1]} />
-        </g>
-        <g stroke="url(#frizz-thread-glint)" className="opacity-0 transition-opacity duration-150 group-data-[shown=true]/thread:opacity-100">
-          <path ref={glintRefs[0]} />
-          <path ref={glintRefs[1]} />
-        </g>
+      <g data-thread-cords fill="none" strokeWidth={1} mask="url(#frizz-thread-cords)" className="stroke-fg opacity-18">
+        <path ref={strandRefs[0]} />
+        <path ref={strandRefs[1]} />
       </g>
       <g className="opacity-0 transition-opacity duration-150 group-data-[shown=true]/thread:opacity-100">
         <rect ref={seamRef} width={1} fill="url(#frizz-thread-seam)" />
