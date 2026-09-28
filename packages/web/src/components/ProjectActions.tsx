@@ -190,7 +190,9 @@ function folderName(path: string): string {
  * ONE FIELD, AND IT RENAMES TWO THINGS: the name on the card and the slug in the URL, because a project
  * whose card says one thing and whose address says another is what this dialog exists to fix (a
  * checkout renamed in the terminal keeps its old slug — `deriveSlug` never re-derives, by design — so
- * `porg` was still answering on `/project/hypergres`). The URL it will get is shown before saving.
+ * `porg` was still answering on `/project/hypergres`, its page's address until project pages went,
+ * 2026-09-28). The slug now names the project in its threads' addresses (`/all/<slug>/thread/<t>`), and
+ * the one they will get is shown before saving.
  *
  * THE FOLDER IS NOT TOUCHED BY DEFAULT. The checkbox appears only when the folder is already named
  * after the project, so the offer reads "keep these in step" and never "move your directory": a folder
@@ -286,9 +288,9 @@ function RenameProjectDialog({
           }`}
         />
         <p>
-          Its address becomes{" "}
-          <span className="font-mono text-[11.5px] text-fg/80">/project/{slug}</span>
-          {slug !== project.slug ? <> — links to <span className="font-mono text-[11.5px]">/project/{project.slug}</span> stop working.</> : "."}
+          Its threads&rsquo; addresses become{" "}
+          <span className="font-mono text-[11.5px] text-fg/80">/all/{slug}/…</span>
+          {slug !== project.slug ? <> — links to <span className="font-mono text-[11.5px]">/all/{project.slug}/…</span> stop working.</> : "."}
         </p>
         {offerFolder ? (
           <label className="flex cursor-pointer items-start gap-2 rounded-md border border-border bg-bg/30 px-2.5 py-2 text-fg/85">
