@@ -2,21 +2,20 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query"
 import { createRoot } from "react-dom/client"
 import type { BoardSnapshot, RegisteredQuestionView, ThreadView as ThreadViewModel, TranscriptMessage } from "@frizz/shared"
 import { ThreadView } from "./components/ChatView.tsx"
-import { TodosView } from "./components/TodosView.tsx"
 import { TooltipProvider } from "./components/Tooltip.tsx"
 import { store } from "./store.ts"
 import "./styles.css"
 
 // Browser QA for the FOLD of a ```question fence into the registered question it restates
-// (lib/questionShadow): the queue card, with the transcript shape of the 2026-08-28 report — the worker
+// (lib/questionShadow): the thread page, with the transcript shape of the 2026-08-28 report — the worker
 // fenced a release go/no-go, a watcher's wake buried it, it registered the question with `ask`, then
 // re-fenced it at sign-off. One card must render at the tail: the registered one, with its ×.
 //
 //   (default)      — the final fence RESTATES the registration ⇒ one card, and one Send answers.
 //   ?different=1   — the final fence asks ANOTHER question ⇒ two cards, each answerable: the fold
 //                    never hides a question the human has not seen elsewhere.
-//   ?view=thread   — the thread page instead of the queue card (the surface of the report); add
-//                    ?virtualized=1 for its virtualized transcript path. Same expectations.
+//   ?virtualized=1 — the thread page's virtualized transcript path. Same expectations. (A `?view=`
+//                    switch chose the board's queue card until that card was deleted, 2026-09-28.)
 //   ?font=sans     — the other of the two fonts this app renders in.
 const params = new URLSearchParams(location.search)
 document.documentElement.dataset.font = params.get("font") === "sans" ? "sans" : "mono"
@@ -129,15 +128,9 @@ window.fetch = async (input, init) => {
 createRoot(document.getElementById("root")!).render(
   <QueryClientProvider client={new QueryClient()}>
     <TooltipProvider>
-      {params.get("view") === "thread" ? (
-        <div className="mx-auto h-screen w-[min(760px,100%)]">
-          <ThreadView slug={thread.id} virtualized={params.get("virtualized") === "1"} />
-        </div>
-      ) : (
-        <div className="mx-auto w-[min(680px,calc(100%-32px))] py-8">
-          <TodosView />
-        </div>
-      )}
+      <div className="mx-auto h-screen w-[min(760px,100%)]">
+        <ThreadView slug={thread.id} virtualized={params.get("virtualized") === "1"} />
+      </div>
     </TooltipProvider>
   </QueryClientProvider>,
 )

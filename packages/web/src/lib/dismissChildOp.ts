@@ -1,5 +1,5 @@
 import { isDirectSubAgent } from "@frizz/shared"
-import { rpc } from "../api/rpc.ts"
+import { rpc, type Api } from "../api/rpc.ts"
 import { showToast } from "../store.ts"
 
 // THE × ON A CHILD-OPERATION ROW — one action, for all three surfaces that list children.
@@ -15,9 +15,14 @@ import { showToast } from "../store.ts"
 // it deliberately does not retire the row; the error toast is the only client-side bookkeeping.
 // (This lives beside `lib/childOps.ts` rather than inside it because that module is the row's pure
 // vocabulary, importable by an SSR test with no store or transport behind it.)
-export function dismissChildOp(slug: string, id: string, kind: "AGENT" | "SHELL" = "AGENT"): void {
+//
+// `api` is the thread's OWN project's client. It defaults to `rpc`, the project the address bar names,
+// which is right for the drawer and the /full page; a row in Everything's project list names a thread of
+// any project on a page that names at most one, so it passes its scope's client (api/threadApi.tsx) —
+// else the × on another project's `fix-auth` child would stop the focused project's.
+export function dismissChildOp(slug: string, id: string, kind: "AGENT" | "SHELL" = "AGENT", api: Api = rpc): void {
   const noun = kind === "SHELL" ? "Background shell" : "Sub-agent"
-  rpc.stopBackgroundOp({ slug, id })
+  api.stopBackgroundOp({ slug, id })
     .then(({ stopped, note, descendantsStopped }) => {
       // Only the KILL is worth announcing. A clear needs no toast — the row leaving IS the feedback.
       if (!stopped) return
@@ -67,9 +72,10 @@ export function childOpDismisser(
   slug: string,
   op: { id?: string; depth?: number; state?: string; stoppable?: boolean },
   kind: "AGENT" | "SHELL" = "AGENT",
+  api: Api = rpc,
 ): (() => void) | undefined {
   if (!op.id || !isDirectSubAgent(op)) return undefined
   if (op.state === "running" && !op.stoppable) return undefined
   const id = op.id
-  return () => dismissChildOp(slug, id, kind)
+  return () => dismissChildOp(slug, id, kind, api)
 }

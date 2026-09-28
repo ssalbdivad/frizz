@@ -1,5 +1,5 @@
 import { openThread } from "../store.ts"
-import { innerPath, modeProjectHref, projectSlug } from "./base-path.ts"
+import { crossProjectHref, innerPath, projectSlug } from "./base-path.ts"
 import { spaNavigate } from "./router.ts"
 
 // A worker can emit a markdown link to another frizz thread — `[label](/thread/<slug>)` — e.g. after
@@ -14,9 +14,9 @@ import { spaNavigate } from "./router.ts"
 // Matched against the INNER path, because markdown.ts now stamps this page's project prefix onto an
 // unprefixed in-app link (see prefixedAppRoute — the raw href had to become navigable in its own
 // right, for the modified clicks this handler deliberately does not take). Opening in the drawer is
-// only right for a thread of the project already on screen; a link naming a DIFFERENT project goes to
-// that thread through the router, in this page's MODE — on the cross-project page that opens it in place
-// (the focus moves), where leaving it to the browser loaded that project's board from scratch.
+// only right for a thread of the project already in focus; a link naming a DIFFERENT project goes to
+// that thread's drawer address through the router, which opens it in place (the focus moves), where
+// leaving it to the browser reloaded the whole page.
 const THREAD_HREF = /^\/thread\/([a-z0-9][a-z0-9-]*)\/?$/
 
 export function installThreadLinkInterceptor(): () => void {
@@ -33,7 +33,7 @@ export function installThreadLinkInterceptor(): () => void {
     event.preventDefault()
     event.stopPropagation()
     if (linked && linked !== projectSlug()) {
-      spaNavigate(`${modeProjectHref(linked)}${inner}`)
+      spaNavigate(`${crossProjectHref(linked)}${inner}`)
       return
     }
     openThread(match[1])

@@ -373,10 +373,11 @@ try {
   const pickerOrder = async () => {
     await page.click("[data-xq-project-picker]")
     await page.waitForSelector("[role=menuitem]", { timeout: 5000 })
-    const names = await page.$$eval("[role=menuitem]", (items) => items.map((item) => item.querySelector("span")?.textContent?.trim() ?? ""))
+    // By slug, which is also each project's name on this stack — what the picker shows.
+    const slugs = await page.$$eval("[role=menuitem]", (items) => items.map((item) => item.getAttribute("data-value") ?? ""))
     await page.keyboard.press("Escape")
     await page.waitForFunction(() => !document.querySelector("[role=menu]"), { timeout: 5000 })
-    return names
+    return slugs
   }
   const box = (surface) => page.evaluate((surface) => {
     const el = document.querySelector(`[data-surface="${surface}"]`)
@@ -443,7 +444,7 @@ try {
     // A choice from the menu hands the keyboard to the re-aimed box as well, the caret after the draft.
     await page.click("[data-xq-project-picker]")
     await page.waitForSelector("[role=menuitem]", { timeout: 5000 })
-    await page.evaluate((name) => [...document.querySelectorAll("[role=menuitem]")].find((item) => item.querySelector("span")?.textContent?.trim() === name)?.click(), after(1))
+    await page.click(`[role=menuitem][data-value="${after(1)}"]`)
     await pickerSays(after(1))
     await sleep(400)
     const picked = await box("newComposer")
@@ -481,10 +482,12 @@ try {
       target !== "acme-api" && kept?.focused === true && kept.value === "echo cycled-with-shift-tab" && started.slug === target,
       `moved to "${target}", ran in ${started.slug}/${started.id}`,
     )
+    // Its toast outlives this step otherwise, and the next one clicks the first "Open thread" it sees.
+    await page.waitForFunction(() => !document.querySelector("[data-toast]"), { timeout: 8000 }).catch(() => {})
     await page.click("[data-dispatch-tab=prompt]")
     await page.click("[data-xq-project-picker]")
     await page.waitForSelector("[role=menuitem]", { timeout: 5000 })
-    await page.evaluate(() => [...document.querySelectorAll("[role=menuitem]")].find((item) => item.querySelector("span")?.textContent?.trim() === "acme-api")?.click())
+    await page.click('[role=menuitem][data-value="acme-api"]')
     await pickerSays("acme-api")
   })
 

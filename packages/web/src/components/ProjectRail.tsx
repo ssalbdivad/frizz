@@ -1,7 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import { useCallback, useEffect, useRef, useState, type CSSProperties, type DragEvent as DragEvent_, type KeyboardEvent as KeyboardEvent_, type MouseEvent as MouseEvent_, type PointerEvent as PointerEvent_ } from "react"
-import { Infinity as InfinityIcon, Plus } from "lucide-react"
-import { Link, useLocation } from "react-router"
+import { Plus } from "lucide-react"
+import { Link } from "react-router"
 import { useSnapshot } from "valtio"
 import type { ProjectCard, ProjectRailCounts } from "@frizz/shared"
 import { activeBandThread, PROJECT_ICON_EXTENSIONS } from "@frizz/shared"
@@ -9,7 +9,8 @@ import { rpc } from "../api/rpc.ts"
 import { queued } from "../groups.ts"
 import { asThreads } from "../hooks.ts"
 import { store } from "../store.ts"
-import { everythingHref, isCrossProjectPath, projectHref, projectSlug } from "../lib/base-path.ts"
+import { projectSlug } from "../lib/base-path.ts"
+import { setQueueFilter, useQueueFilter } from "../lib/crossProject.ts"
 import { isPlainLeftClick } from "../lib/standaloneThreadRoute.ts"
 import { dropIndex, edgeScrollVelocity, moveItem, shiftFor } from "../lib/railReorder.ts"
 import { Tooltip } from "./Tooltip.tsx"
@@ -21,6 +22,10 @@ import { useAddProject } from "./ProjectActions.tsx"
 // workspaces, "which one am I in" and "take me to another" are constant questions, and a home page
 // answers neither without a round trip. Frizz reached the same point when one server started serving
 // every project — the project grid that was `/` then was a fine front door and a poor switcher.
+//
+// A SQUARE TAKES YOU NOWHERE since 2026-09-28: there is one page, and a square filters its queue to that
+// project (RailLink); pressing it again lifts the filter. The rail is opt-in and hidden on a phone, so the
+// same filter is also the READY header's own control (AllQueues.tsx).
 //
 // It is FIXED to the viewport's left edge, outside App's centered sidebar+workpane pair, so it holds
 // still while the page scrolls and never enters the measure of anything else. App reserves its width
@@ -237,10 +242,15 @@ function RunningRing() {
 }
 
 /**
- * The current project's square grows a pill on the rail's left edge.
+ * The square of the project the queue is FILTERED to grows a pill on the rail's left edge.
  *
  * Discord's indicator, because the alternative — marking the square itself — competes with the icon
  * it is drawn on top of. The pill lives in the gutter, where nothing else does.
+ *
+ * A square FILTERS the page's queue to its project (lib/crossProject.ts), and pressing the filtered one
+ * again lifts it — there is no project page to go to (2026-09-28). Still an anchor, on `/`, so the rail
+ * keeps one element type for its drag and keyboard reorder; a plain click is the filter, and anything
+ * else (a new tab) opens the page.
  */
 function RailLink({
   project,
@@ -286,8 +296,7 @@ function RailLink({
       }
     >
       <Link
-        // Its PROJECT VIEW, from anywhere — as a project's name on Everything does.
-        to={projectHref(project.slug)}
+        to="/"
         aria-current={current ? "page" : undefined}
         // The rail is a reorderable list, and a link is not one. `listitem` + `aria-grabbed` is the
         // most a native anchor can say about it; the keyboard path below is what makes it true.
@@ -299,6 +308,10 @@ function RailLink({
           // reorder also navigated to whatever square you dropped on — and under a real router that
           // navigation is instant, so the wrong board would already be mounting.
           if (drag || justDragged()) { event.preventDefault(); return }
+          if (!isPlainLeftClick(event)) return
+          event.preventDefault()
+          setQueueFilter(current ? null : project.id)
+          window.scrollTo({ top: 0, behavior: window.matchMedia?.("(prefers-reduced-motion: reduce)").matches ? "auto" : "smooth" })
         }}
         // Native image-drag would fight the pointer drag.
         onDragStart={(event: DragEvent_<HTMLAnchorElement>) => event.preventDefault()}
@@ -438,17 +451,13 @@ function useRailCounts(currentSlug: string | undefined, projects: readonly Proje
   return (project) => (project.id === currentId && live ? live : polled.data?.[project.id])
 }
 
-const RAIL_DOOR_CLASS =
-  "flex h-9 w-9 shrink-0 items-center justify-center rounded-lg text-muted-70 outline-none transition-colors hover:bg-elevated hover:text-fg focus-visible:ring-1 focus-visible:ring-focus-ink-60"
 
 export function ProjectRail() {
   const queryClient = useQueryClient()
   const { data } = useQuery({ queryKey: ["projectsList"], queryFn: () => rpc.projectsList() })
-  const { pathname } = useLocation()
-  const onQueues = isCrossProjectPath(pathname)
-  // The square that wears the current-page pill is the project the page SHOWS: a project view's own
-  // project — none on Everything. (Everything's focus only aims its prompt box, which says so itself.)
-  const current = onQueues ? undefined : projectSlug()
+  // The square that wears the pill is the project the queue is FILTERED to — none when it shows every
+  // project. (The page's focus only aims its prompt box, which says so itself.)
+  const filter = useQueueFilter()
   const add = useAddProject()
   const [drag, setDrag] = useState<DragState | null>(null)
   /** The order the operator is looking at, which leads the server for the whole round trip. */
@@ -593,32 +602,9 @@ export function ProjectRail() {
       aria-label="Projects"
       className={`fixed inset-y-0 left-0 z-[60] flex flex-col items-center border-r border-border bg-panel/60 py-3 max-[800px]:hidden ${RAIL_WIDTH_CLASS}`}
     >
-      {/* THE DOOR TO EVERYTHING — the cross-project page (AllQueues.tsx), every project's queue on one
-          page. ONE door since 2026-09-24: a house for the project grid stood above it until the grid folded
-          into Everything, and two doors "up" asked the reader to choose between pages that were never meant
-          to be different places. A stroke glyph rather than the Frizz mark, because `favicon.svg` carries
-          an feDropShadow that at this size cast a soft shadow DOWN onto the first project square. No count
-          of its own — each square below already wears its project's, and a sum over them would be a second
-          yellow number saying the same thing.
-          From a project view it opens the page focused on that project, the prompt box aimed where the
-          operator already was. */}
-      <Tooltip side="right" label="Everything">
-        <Link
-          to={onQueues ? "/" : everythingHref(current)}
-          aria-label="Everything"
-          aria-current={onQueues ? "page" : undefined}
-          className={`${RAIL_DOOR_CLASS} ${onQueues ? "bg-elevated text-fg" : ""}`}
-          onClick={(event) => {
-            if (!onQueues || !isPlainLeftClick(event)) return
-            event.preventDefault()
-            window.scrollTo({ top: 0, behavior: window.matchMedia?.("(prefers-reduced-motion: reduce)").matches ? "auto" : "smooth" })
-          }}
-        >
-          <InfinityIcon size={17} />
-        </Link>
-      </Tooltip>
-      <hr className="my-2.5 w-6 shrink-0 border-0 border-t border-border" />
-
+      {/* NO DOOR AT THE TOP. The ∞ to Everything stood here, above a rule, until 2026-09-28 (maintainer:
+          "there should no longer be an everything or an infinity button"): there is one page, so a square
+          filters its queue and pressing the filtered square again lifts the filter. */}
       {/* The scrolling band. `min-h-0` is what lets it actually scroll inside a flex column, and the
           hidden scrollbar keeps a 57px column from spending 8px of itself on a track (the bottom fade
           in styles.css says "there is more" in its place). 8px between squares mirrors what Discord
@@ -638,7 +624,7 @@ export function ProjectRail() {
             key={project.id}
             project={project}
             index={index}
-            current={project.slug === current}
+            current={project.id === filter}
             counts={countsFor(project)}
             drag={drag}
             onPointerDown={startDrag}

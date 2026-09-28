@@ -1,7 +1,7 @@
 // Seed a disposable adhoc stack with ONE resting thread that owns BOTH kinds of child op at once —
-// a live background sub-agent AND two auto-backgrounded shells — so the queue card's ⤷ column can be
-// judged in the REAL app instead of in queue-ops-spacing-fixture (which hands the store a hand-written
-// board and, having no app font loaded, renders the rows in a fallback monospace).
+// a live background sub-agent AND two auto-backgrounded shells — so the ⤷ column can be judged in the
+// REAL app. (It was the real-app twin of queue-ops-spacing-fixture, deleted with the board's queue card
+// on 2026-09-28; the thread drawer draws the same column.)
 //
 // That column is TWO components stacked: QueueSubAgentLines (the agent rows) then BackgroundOpsStrip
 // (the shell rows). This is the only state where their shared rhythm is visible, and it is the state

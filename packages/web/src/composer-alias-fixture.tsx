@@ -3,35 +3,30 @@ import { createRoot } from "react-dom/client"
 import type { BoardSnapshot, ThreadView as ThreadViewModel, TranscriptMessage } from "@frizz/shared"
 import { BackgroundOpsStrip } from "./components/ChatView.tsx"
 import { ThreadActionBar } from "./components/ThreadActionBar.tsx"
-import { TodosView } from "./components/TodosView.tsx"
 import { TooltipProvider } from "./components/Tooltip.tsx"
 import { store } from "./store.ts"
 import "./styles.css"
 
-// Browser QA for THE STANDARD PROMPT BOX (components/ThreadComposerBox.tsx) — the block both the queue
-// cue card and the thread drawer render. Two things are proven here, both of which used to differ
-// between the surfaces:
+// Browser QA for THE STANDARD PROMPT BOX (components/ThreadComposerBox.tsx) in the thread drawer. The
+// board's queue cue card rendered it too and was mounted here beside the drawer until that card was
+// deleted with the single-project board (2026-09-28). Two things are proven here, both of which once
+// differed between the surfaces:
 //
 //   D7 — `/login` and `/logout` are FRIZZ-OWNED aliases. They must open the sign-in / sign-out modal and
 //        must NEVER be delivered to the worker's stdin. Before the box was shared this only worked in
 //        the drawer; the queue card injected the literal "/login" string into the running agent.
-//   D8 — an ordinary follow-up still reaches the worker from BOTH surfaces (and, on the queue card,
-//        still dissolves the card optimistically).
+//   D8 — an ordinary follow-up still reaches the worker.
 //
-// The REAL TodosView / QueueCard / ThreadActionBar / ThreadComposerBox render; only the network is
+// The REAL ThreadActionBar / ThreadComposerBox render; only the network is
 // stubbed. Every followUp the app attempts is recorded on window.__worker.sent — that array IS the
 // worker's stdin as far as this fixture is concerned, so "the alias never reached the worker" is a
 // direct assertion, not an inference.
 //
-//   ?surface=queue  (default)  — just the cue card
-//   ?surface=drawer            — just the drawer footer (ThreadActionBar)
-//   ?surface=both              — both, side by side (the comparison screenshot)
-//   ?answerable=1              — the agent's last message carries a ```question block, so the card also
-//                                shows its "Send answers" action above the box (layout check)
+//   ?answerable=1 — the agent's last message carries a ```question block (layout check). A `?surface=`
+//                   switch chose the queue card, the drawer, or both until the queue card went.
 
 const SLUG = "alias-thread"
 const params = new URLSearchParams(location.search)
-const SURFACE = params.get("surface") ?? "queue"
 const ANSWERABLE = params.get("answerable") === "1"
 
 const thread = {
@@ -115,14 +110,6 @@ window.fetch = async (input, init) => {
   return new Response(JSON.stringify({ result: {} }), { headers: { "content-type": "application/json" } })
 }
 
-function QueueSurface() {
-  return (
-    <main data-fixture-queue className="w-[720px] max-w-full min-w-0 flex flex-col py-5">
-      <TodosView />
-    </main>
-  )
-}
-
 // The drawer's real footer arrangement (ChatView renders exactly this pair): the chat footer frame,
 // with ThreadActionBar inside it and the background-ops strip passed as its `ops`.
 function DrawerSurface() {
@@ -147,8 +134,7 @@ function Fixture() {
   return (
     <div className="relative min-h-screen bg-bg text-fg text-sm">
       <div className="flex min-h-screen justify-center gap-6 px-4">
-        {SURFACE !== "drawer" && <QueueSurface />}
-        {SURFACE !== "queue" && <DrawerSurface />}
+        <DrawerSurface />
       </div>
     </div>
   )

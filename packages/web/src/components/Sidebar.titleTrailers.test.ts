@@ -2,6 +2,7 @@ import assert from "node:assert/strict"
 import test from "node:test"
 import { createElement } from "react"
 import { renderToStaticMarkup } from "react-dom/server"
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query"
 import type { ThreadView } from "@frizz/shared"
 import { ThreadRow } from "./Sidebar.tsx"
 import { TooltipProvider } from "./Tooltip.tsx"
@@ -19,8 +20,13 @@ function row(title: string) {
     status: "running",
     subAgents: [],
   } as unknown as ThreadView
+  // A row's thread writes refresh the project's queries, so it wants the app's query client.
   return renderToStaticMarkup(
-    createElement(TooltipProvider, null, createElement(ThreadRow, { t: thread })),
+    createElement(
+      QueryClientProvider,
+      { client: new QueryClient({ defaultOptions: { queries: { retry: false } } }) },
+      createElement(TooltipProvider, null, createElement(ThreadRow, { t: thread })),
+    ),
   )
 }
 

@@ -87,7 +87,7 @@ test("nothing from the project the page has left reaches the UI", async () => {
     globals.set(key, Object.getOwnPropertyDescriptor(globalThis, key))
     Object.defineProperty(globalThis, key, { configurable: true, writable: true, value })
   }
-  const here = { origin: "http://127.0.0.1:54917", pathname: "/project/alpha", reload: () => {} }
+  const here = { origin: "http://127.0.0.1:54917", pathname: "/all/alpha/thread/other", reload: () => {} }
   install("WebSocket", FakeWebSocket)
   install("EventSource", FakeEventSource)
   install("location", here)
@@ -115,12 +115,12 @@ test("nothing from the project the page has left reaches the UI", async () => {
     // 1. THE FEED ANSWERS FOR ITSELF. The router asks "are you already on this project?" and the answer
     //    comes from the module holding the connection — not from a note some component kept, which is
     //    what a remount reset to a lie. Moving the address bar does NOT move the feed, and the feed says so.
-    here.pathname = "/project/alpha"
+    here.pathname = "/all/alpha/thread/other"
     const feed = await fresh("bound")
     feed.connectSync(queryClient as never)
     assert.equal(FakeWebSocket.instances[0]?.url, "ws://127.0.0.1:54917/_frizz/alpha/ws")
     assert.equal(feed.feedIsBoundTo("alpha"), true)
-    here.pathname = "/project/beta"
+    here.pathname = "/all/beta/thread/other"
     assert.equal(feed.feedIsBoundTo("beta"), false, "the page moved; the socket did not")
     feed.rebindProject()
     assert.equal(FakeWebSocket.instances[1]?.url, "ws://127.0.0.1:54917/_frizz/beta/ws")
@@ -132,14 +132,14 @@ test("nothing from the project the page has left reaches the UI", async () => {
     //    downstream by the store's ownership door (assertion 3), but a transcript names only a thread
     //    slug, and slugs are unique WITHIN a project — nothing downstream can tell alpha's `fix-auth`
     //    from beta's. Only the socket knows, because it knows what it was opened for.
-    here.pathname = "/project/alpha"
+    here.pathname = "/all/alpha/thread/other"
     const late = await fresh("late")
     late.connectSync(queryClient as never)
     const alphaSocket = FakeWebSocket.instances[0]!
     alphaSocket.open()
     store.board = null
     writes.length = 0
-    here.pathname = "/project/beta"
+    here.pathname = "/all/beta/thread/other"
     alphaSocket.message({ t: "transcript", slug: "fix-auth", messages: [] })
     assert.deepEqual(writes, [], "alpha's transcript must not be written into beta's cache")
     alphaSocket.message(frame("alpha"))
@@ -149,18 +149,18 @@ test("nothing from the project the page has left reaches the UI", async () => {
     //     project (All queues and the grid, when this was written) keeps the feed so that coming straight back is free — but a
     //     frame that arrives meanwhile is dropped, and the board in the store is then stale. All queues
     //     acts on the project's threads while its deltas are being dropped, so the return must rebind.
-    here.pathname = "/project/alpha"
+    here.pathname = "/all/alpha/thread/other"
     const away = await fresh("away")
     away.connectSync(queryClient as never)
     const awaySocket = FakeWebSocket.instances[0]!
     awaySocket.open()
-    here.pathname = "/queues"
+    here.pathname = "/"
     assert.equal(away.feedIsBoundTo("alpha"), true, "leaving alone is not news: straight back stays free")
     awaySocket.message(frame("alpha"))
-    here.pathname = "/project/alpha"
+    here.pathname = "/all/alpha/thread/other"
     assert.equal(away.feedIsBoundTo("alpha"), false, "a frame dropped while away leaves alpha's board stale")
     store.board = null
-    here.pathname = "/project/beta" // where assertion 3 below stands
+    here.pathname = "/all/beta/thread/other" // where assertion 3 below stands
 
     // 3. …AND THE SAME PAYLOAD IS REFUSED AT THE STORE ITSELF, on its own evidence rather than on the
     //    transport's bookkeeping. This is the backstop for every path not yet imagined: an rpc.board()
@@ -178,12 +178,12 @@ test("nothing from the project the page has left reaches the UI", async () => {
     //    exported, and had NO caller anywhere in the repo — so on a server with no `/ws` route the board
     //    stayed fed by the project you left, with nothing to recover it but a document load. Same defect
     //    as the one that shipped, in the transport nobody was looking at.
-    here.pathname = "/project/alpha"
+    here.pathname = "/all/alpha/thread/other"
     const fallback = await fresh("fallback")
     fallback.connectSync(queryClient as never)
     FakeWebSocket.instances[0]!.serverClose() // never opened → the server has no /ws → commit to SSE
     assert.equal(FakeEventSource.instances[0]?.url, "/_frizz/alpha/events")
-    here.pathname = "/project/beta"
+    here.pathname = "/all/beta/thread/other"
     fallback.rebindProject()
     assert.equal(FakeEventSource.instances[1]?.url, "/_frizz/beta/events", "the fallback must follow the switch")
   } finally {

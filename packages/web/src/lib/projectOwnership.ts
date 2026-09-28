@@ -22,11 +22,9 @@ import { projectSlug } from "./base-path.ts"
  * Deliberately permissive in exactly two cases, because refusing on a guess is worse than the stale
  * frame this exists to catch:
  *
- *   · THE PAGE NAMES NO PROJECT. `/thread/<x>` with no `/project/<slug>` in front of it is the
- *     launching project — a supported legacy inbound shape (see base-path.ts) whose slug the client
- *     cannot know without a board, which is the very thing being checked. Unverifiable, so accepted.
- *     In practice the app stops minting those URLs the moment a board lands (`queueDestination`), so
- *     this state does not persist.
+ *   · THE PAGE NAMES NO PROJECT. `/thread/<x>/full` with no `/all/<slug>` in front of it is the
+ *     launching project — a supported inbound shape (see base-path.ts) whose slug the client cannot
+ *     know without a board, which is the very thing being checked. Unverifiable, so accepted.
  *   · THE PAYLOAD NAMES NO PROJECT. A pre-restart server omits `projectSlug`; so does every hand-built
  *     board in a test or fixture. Silence is not evidence of a mismatch.
  */
