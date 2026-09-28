@@ -8,8 +8,8 @@
 // the project they act on in full, because the row that opened them may be a truncated name.
 import * as RadixDialog from "@radix-ui/react-dialog"
 import * as RadixDropdown from "@radix-ui/react-dropdown-menu"
-import { useMutation, useQueryClient } from "@tanstack/react-query"
-import { useRef, useState, type ReactNode } from "react"
+import { keepPreviousData, useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
+import { useDeferredValue, useEffect, useRef, useState, type ReactNode } from "react"
 import { Ellipsis, Loader2 } from "lucide-react"
 import { Link, useNavigate } from "react-router"
 import { useSnapshot } from "valtio"
@@ -401,6 +401,7 @@ function AddProjectDialog({
   onClose: () => void
 }) {
   const [path, setPath] = useState(proposed ?? "")
+  const [listOpen, setListOpen] = useState(false)
   const openAdded = useOpenAddedProject()
   const add = useMutation({
     mutationFn: (input: string) => rpc.projectAdd({ path: input }),
@@ -418,6 +419,8 @@ function AddProjectDialog({
         <RadixDialog.Content
           aria-modal="true"
           aria-describedby={undefined}
+          // Escape closes the suggestions first; only a second one closes the dialog.
+          onEscapeKeyDown={(event) => { if (listOpen) event.preventDefault() }}
           className="fixed left-1/2 top-1/2 z-[210] w-[460px] max-w-[90vw] -translate-x-1/2 -translate-y-1/2 rounded-xl border border-border bg-panel p-5 shadow-2xl shadow-shadow-ink/50 outline-none"
         >
           <RadixDialog.Title className="mb-1 text-[14px] font-medium">
@@ -436,17 +439,7 @@ function AddProjectDialog({
               if (!add.isPending) add.mutate(path)
             }}
           >
-            <input
-              autoFocus
-              value={path}
-              onChange={(event) => setPath(event.target.value)}
-              placeholder="~/code/my-project"
-              spellCheck={false}
-              className={`w-full rounded-md border bg-bg px-2.5 py-2 font-mono text-[12px] text-fg outline-none placeholder:text-muted-50 focus-visible:ring-1 focus-visible:ring-focus-ink-60 ${
-                error ? "border-danger-fill/60" : "border-border-strong"
-              }`}
-            />
-            {error ? <p className="mt-1.5 text-[11.5px] text-danger">{error}</p> : null}
+            <PathField value={path} error={error} onChange={(next) => { setPath(next); if (add.error) add.reset() }} onListOpenChange={setListOpen} />
             <div className="mt-4 flex justify-end gap-2">
               <button
                 type="button"
@@ -468,6 +461,138 @@ function AddProjectDialog({
         </RadixDialog.Content>
       </RadixDialog.Portal>
     </RadixDialog.Root>
+  )
+}
+
+/**
+ * The typed path, with the folders that continue it and a one-line reading of what is there.
+ *
+ * The server does the looking (`pathComplete`, path-complete.ts) — a page cannot see the filesystem.
+ * The list OVERLAYS the dialog rather than pushing its buttons down on every keystroke, and the status
+ * line always keeps its height for the same reason. Tab or Enter takes a suggestion (the first, unless
+ * the arrows chose another); a suggestion ends in `/`, so taking one opens the next level straight away.
+ * Enter with nothing chosen still submits, so typing a full path and pressing Enter never changes meaning.
+ */
+function PathField({
+  value,
+  error,
+  onChange,
+  onListOpenChange,
+}: {
+  value: string
+  error: string | null
+  onChange: (next: string) => void
+  onListOpenChange: (open: boolean) => void
+}) {
+  const deferred = useDeferredValue(value)
+  const completion = useQuery({
+    queryKey: ["pathComplete", deferred],
+    queryFn: () => rpc.pathComplete({ path: deferred }),
+    placeholderData: keepPreviousData,
+    staleTime: 2_000,
+  })
+  const [focused, setFocused] = useState(true)
+  const [dismissed, setDismissed] = useState(false)
+  const [highlight, setHighlight] = useState(-1)
+  const status = value.trim() ? completion.data?.status : "empty"
+  // The previous answer stays up while the next is in flight; drop the rows it no longer continues.
+  const typed = value.toLowerCase()
+  const suggestions = value.trim() ? (completion.data?.suggestions ?? []).filter((s) => s.toLowerCase().startsWith(typed)) : []
+  const open = focused && !dismissed && suggestions.length > 0
+  useEffect(() => onListOpenChange(open), [open, onListOpenChange])
+
+  const change = (next: string) => {
+    onChange(next)
+    setDismissed(false)
+    setHighlight(-1)
+  }
+  const accept = (index: number) => {
+    const chosen = suggestions[index]
+    if (chosen !== undefined) change(chosen)
+  }
+
+  return (
+    <div>
+      <div className="relative">
+      <input
+        autoFocus
+        role="combobox"
+        aria-label="Folder path"
+        aria-autocomplete="list"
+        aria-expanded={open}
+        aria-controls="add-project-suggestions"
+        aria-activedescendant={open && highlight >= 0 ? `add-project-suggestion-${highlight}` : undefined}
+        value={value}
+        onChange={(event) => change(event.target.value)}
+        onFocus={() => setFocused(true)}
+        onBlur={() => setFocused(false)}
+        onKeyDown={(event) => {
+          if (!open) return
+          if (event.key === "ArrowDown" || event.key === "ArrowUp") {
+            event.preventDefault()
+            // -1 is "none chosen" (Enter submits), one stop in the cycle like a native combobox.
+            const next = highlight + (event.key === "ArrowDown" ? 1 : -1)
+            setHighlight(next >= suggestions.length ? -1 : next < -1 ? suggestions.length - 1 : next)
+          } else if (event.key === "Tab" && !event.shiftKey) {
+            event.preventDefault()
+            accept(Math.max(highlight, 0))
+          } else if (event.key === "Enter" && highlight >= 0) {
+            event.preventDefault()
+            accept(highlight)
+          } else if (event.key === "Escape") {
+            setDismissed(true)
+          }
+        }}
+        placeholder="~/code/my-project"
+        spellCheck={false}
+        autoComplete="off"
+        className={`w-full rounded-md border bg-bg px-2.5 py-2 font-mono text-[12px] text-fg outline-none placeholder:text-muted-50 focus-visible:ring-1 focus-visible:ring-focus-ink-60 ${
+          error ? "border-danger-fill/60" : "border-border-strong"
+        }`}
+      />
+      {open ? (
+        <ul
+          id="add-project-suggestions"
+          role="listbox"
+          // Pressing a row must not blur the input first, or the list unmounts under the click.
+          onMouseDown={(event) => event.preventDefault()}
+          className="absolute inset-x-0 top-full z-10 mt-1 max-h-[164px] overflow-y-auto rounded-md border border-border bg-elevated p-1 shadow-lg shadow-shadow-ink/30"
+        >
+          {suggestions.map((suggestion, index) => {
+            // Just the folder: the parent is already in the field, and repeating it on every row buries
+            // the one part that differs.
+            const name = suggestion.slice(suggestion.lastIndexOf("/", suggestion.length - 2) + 1, -1)
+            return (
+              <li
+                key={suggestion}
+                id={`add-project-suggestion-${index}`}
+                role="option"
+                aria-selected={index === highlight}
+                onMouseEnter={() => setHighlight(index)}
+                onClick={() => accept(index)}
+                className={`cursor-default truncate rounded px-2 py-1 font-mono text-[12px] ${index === highlight ? "bg-panel-2 text-fg" : "text-fg/80"}`}
+              >
+                {name}
+                <span className="text-muted-55">/</span>
+              </li>
+            )
+          })}
+        </ul>
+      ) : null}
+      </div>
+      {/* Green for a folder that is there, a muted red for one that is not — but not while a suggestion
+          still continues the text: half a folder name is not a mistake yet. */}
+      <p className={`mt-1.5 min-h-[1.4em] text-[11.5px] ${error ? "text-danger" : status === "directory" ? "text-success/85" : "text-danger/70"}`}>
+        {error ??
+          (status === "directory"
+            ? "Folder found"
+            : status === "file"
+              ? "That is a file, not a folder"
+              : status === "missing" && suggestions.length === 0
+                ? "No folder at this path"
+                : "")}
+      </p>
+    </div>
   )
 }
 

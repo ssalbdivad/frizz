@@ -323,6 +323,7 @@ export interface Api {
   // withholds absolute paths on purpose, and a project is a path — so the picker cannot live here.
   projectPick(input: Record<never, never>): Promise<DirectoryPickResult>
   projectAdd(input: { path: string }): Promise<ProjectCard>
+  pathComplete(input: { path: string }): Promise<{ status: "directory" | "file" | "missing" | "empty"; suggestions: string[] }>
   // The rail's squares. `projectIconSet` takes base64 from a browser file input (the bytes land in the
   // project's state dir, never in its working tree); clearing hands the square back to the automatic
   // scan, which is also what draws it in the first place — see server/project-icon.ts.
@@ -479,6 +480,7 @@ export const PROCEDURES = {
   projectsList: "query",
   projectPick: "mutation",
   projectAdd: "mutation",
+  pathComplete: "query",
   projectsReorder: "mutation",
   projectRemove: "mutation",
   projectsRailCounts: "query",

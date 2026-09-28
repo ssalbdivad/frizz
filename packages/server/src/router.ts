@@ -187,6 +187,7 @@ import { chosenProjectRoot, ensureProjectIdFile, existingProjectId, isHomeDirect
 import { resolveProjectLabel } from "./project-identity.ts"
 import { registerProject } from "./project-registry.ts"
 import { pickDirectory, pickImageFile } from "./directory-picker.ts"
+import { completePath } from "./path-complete.ts"
 import Database from "./sqlite.ts"
 import { projectStateDir } from "./frizz-paths.ts"
 
@@ -3990,6 +3991,16 @@ export function createRouter(ctx: AppContext) {
       input: z.object({ path: z.string().min(1) }),
       output: ProjectCard,
       handler: async ({ input }) => addProjectAtPath(input.path),
+    }),
+
+    /**
+     * What is at a half-typed path, and which folders continue it — the add-project dialog's
+     * autocomplete and its "this folder exists" hint (path-complete.ts). Folder names only.
+     */
+    pathComplete: query({
+      input: z.object({ path: z.string().max(4096) }),
+      output: z.object({ status: z.enum(["directory", "file", "missing", "empty"]), suggestions: z.array(z.string()) }),
+      handler: async ({ input }) => completePath(input.path),
     }),
 
     /**
