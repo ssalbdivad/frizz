@@ -1476,21 +1476,12 @@ a[href] {
   }
 }
 
-/* The card a `d` or `s` would act on (useQueueKeys in AllQueues.tsx) keeps the arrival ring for as long
-   as it is that card. Arriving on it, the ring settles INTO place rather than fading out — fading to
-   transparent and snapping back once the animation ended read as a second, unrelated flash. The
-   re-ring at either end of `j`/`k` still replays, since the flash attribute is re-armed each landing. */
+/* The card a `d` or `s` would act on (useQueueKeys in AllQueues.tsx) keeps a highlight for as long as it
+   is that card. It is the card's OWN border, tinted — not the flash's outline held steady: an outline
+   2px outside the border drew two concentric frames, the grey border and the ring around it. The
+   arrival flash still rings OUTSIDE and fades as before, leaving this border behind. */
 [data-queue-current] {
-  outline: 2px solid var(--color-accent, #e8b923);
-  outline-offset: 2px;
-}
-[data-queue-current][data-queue-flash] { animation: queue-flash-settle 0.35s ease-out; }
-@keyframes queue-flash-settle {
-  0% { outline-offset: 6px; }
-  100% { outline-offset: 2px; }
-}
-@media (prefers-reduced-motion: reduce) {
-  [data-queue-current][data-queue-flash] { animation: none; }
+  border-color: color-mix(in srgb, var(--color-accent, #e8b923) 60%, var(--color-border-strong));
 }
 
 /* Queue card EXIT — the CardSlot exit (TodosView). The card FADES to transparent while it recedes

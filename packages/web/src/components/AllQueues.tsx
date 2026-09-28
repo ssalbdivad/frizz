@@ -199,8 +199,7 @@ export function AllQueuesPage() {
   // is not waiting on anyone, and a card whose drawer is open is being read there.
   const ready = queue.filter((slot) => !slot.ghost && !leaving.isLeaving(slot.key) && !inDrawer.has(slot.key)).length
   const scrollToCard = useScrollToCard()
-  const activeKey = useScrollspy(queue)
-  useQueueKeys(activeKey, scrollToCard)
+  const activeKey = useQueueKeys(useScrollspy(queue), scrollToCard)
   const loading = (cards.isPending || queues.isPending) && !queues.data
   // Below the page's stacking point the columns are one above the other, so the list follows the queue
   // rather than sitting between the prompt box and the queue it indexes.
@@ -808,11 +807,16 @@ function useScrollToCard(): (key: string) => number | null {
  * held as the card being read; otherwise a quick `j j` would step twice from the card the glide was
  * leaving and land on the same card again.
  *
- * That card also wears the arrival ring STEADILY (`data-queue-current`), for as long as it is the one a
- * `d` or `s` would act on — the flash alone faded after a second and left no sign of which card the next
- * key would finish. An open drawer takes the keys (currentThreadSurface), so the ring steps off while one is.
+ * That card also wears an accent border (`data-queue-current`), for as long as it is the one a `d` or `s`
+ * would act on — the flash alone faded after a second and left no sign of which card the next key would
+ * finish. An open drawer takes the keys (currentThreadSurface), so the border steps off while one is.
+ *
+ * A CLICK in a card makes it the card being read, held like a key's landing for as long as the page stays
+ * put: the scrollspy's line is a third of the way down, so the last card or two — which the page cannot
+ * scroll that far — could otherwise never be picked at all. Returns the card being read, which the rail
+ * and its connector mark, so they agree with the ring.
  */
-function useQueueKeys(activeKey: string | null, scrollToCard: (key: string) => number | null): void {
+function useQueueKeys(activeKey: string | null, scrollToCard: (key: string) => number | null): string | null {
   const reading = useRef(activeKey)
   reading.current = activeKey
   const landing = useRef<{ key: string; y: number; until: number } | null>(null)
@@ -863,6 +867,21 @@ function useQueueKeys(activeKey: string | null, scrollToCard: (key: string) => n
     }
   }, [current])
 
+  useEffect(() => {
+    const pick = (event: PointerEvent) => {
+      if (event.button !== 0 || !(event.target instanceof Element)) return
+      const slot = event.target.closest<HTMLElement>(
+        '[data-xq-card][data-queue-leaving="false"]:not([data-queue-ghost]):not([data-queue-concealed])',
+      )
+      const key = slot?.dataset.xqCard
+      if (!key) return
+      landing.current = { key, y: window.scrollY, until: 0 }
+      setRinged(key)
+    }
+    document.addEventListener("pointerdown", pick)
+    return () => document.removeEventListener("pointerdown", pick)
+  }, [])
+
   // An ATTRIBUTE set imperatively, like the flash: the roots are two different card components, and React
   // never touches an attribute absent from its props.
   const drawerOpen = useSnapshot(store).drawers.some((drawer) => !drawer.closing)
@@ -872,6 +891,7 @@ function useQueueKeys(activeKey: string | null, scrollToCard: (key: string) => n
     el?.setAttribute("data-queue-current", "")
     return () => el?.removeAttribute("data-queue-current")
   }, [target, root])
+  return ringed
 }
 
 /**
