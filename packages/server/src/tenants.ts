@@ -1,6 +1,6 @@
 import type { AppContext, ContextOptions } from "./context.ts"
 import { projectContextCleanups } from "./context.ts"
-import type { Project } from "./project.ts"
+import { workDirOf, type Project } from "./project.ts"
 import { log as frizzLog } from "./logging.ts"
 
 // ONE PROCESS, N PROJECTS.
@@ -95,14 +95,18 @@ export function createTenantMap<App = unknown>(options: TenantMapOptions<App>): 
     // `porg`, registry updated by the reopen, tenant still holding the old path, first dispatch dead
     // on `lstat '/…/hypergres'`). Close it and open it again where the registry now says it is. The
     // workers are detached daemons and survive exactly as they do a restart.
-    if (already && already.project.dir === project.dir) return already.ctx
+    //
+    // Where its AGENTS run counts too. For every registered project that is the same directory; for the
+    // Home workspace it is Settings → Home folder, which moves while its board (`dir`) stays put — and a
+    // context built on the old folder would keep spawning every new thread there.
+    if (already && already.project.dir === project.dir && workDirOf(already.project) === workDirOf(project)) return already.ctx
     const inFlight = opening.get(project.id)
     if (inFlight) return inFlight
 
     const attempt = (async () => {
       try {
         if (already) {
-          frizzLog.info("tenants", `project ${project.name} (${project.id}) moved from ${already.project.dir} to ${project.dir}; reopening it there`)
+          frizzLog.info("tenants", `project ${project.name} (${project.id}) moved from ${workDirOf(already.project)} to ${workDirOf(project)}; reopening it there`)
           // Synchronously drops the entry from `open` before its first await, and `opening` is set the
           // moment this function yields — so a concurrent activate joins this attempt rather than
           // racing a second context onto the same database.

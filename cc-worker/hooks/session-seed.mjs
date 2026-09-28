@@ -25,6 +25,7 @@
 // implementation) so a stale install is guaranteed inert. Cheap belt-and-suspenders. See DECISIONS.md.
 import { readFileSync } from 'node:fs';
 import { execFileSync } from 'node:child_process';
+import { join } from 'node:path';
 import { setSessionOverride, currentSessionId } from '../scripts/frizz/config.mjs';
 
 /** @type {{ agent_id?: unknown, agentId?: unknown, source?: string, session_id?: string }} */
@@ -41,7 +42,9 @@ if (input.agent_id ?? input.agentId) process.exit(0);
 const thread = (process.env.FRIZZ_THREAD ?? '').trim();
 if (!thread) process.exit(0);
 
-const dir = process.env.CLAUDE_PROJECT_DIR ?? '.';
+// The board's directory, which is the worker's own cwd except in the Home workspace — see scratchpad.mjs.
+const boardRoot = (process.env.FRIZZ_BOARD_ROOT ?? '').trim();
+const dir = boardRoot || (process.env.CLAUDE_PROJECT_DIR ?? '.');
 
 // Neutralize the orchestrator cc plugin for THIS session (defensive; see header + DECISIONS.md).
 // The session id also names the worker's scratch directory (`.frizz/threads/<session_id>/`).
@@ -52,9 +55,8 @@ try {
 } catch {
   /* best-effort — a failed sentinel write just leaves cc at its dormant default */
 }
-const scratch = sid
-  ? '.frizz/threads/' + sid + '/'
-  : '.frizz/threads/<session-id>/';
+const scratchBase = boardRoot ? join(boardRoot, '.frizz', 'threads') + '/' : '.frizz/threads/';
+const scratch = scratchBase + (sid ? sid + '/' : '<session-id>/');
 
 // A RUNTIME pointer, NOT a copy of the contract. The full worker contract (signal fences,
 // scratch-directory rules, sub-agent rules, the question handback, the stop criterion) lives ONCE in
