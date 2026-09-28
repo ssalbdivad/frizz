@@ -269,7 +269,12 @@ export function ThreadSheet({ id, slug, depth, widthDepth, initiallyOpen }: { id
           // The keyboard runtime's handle on this layer (see ui/Sheet.tsx) — `d` / `s` / `r` / `f`
           // press the controls inside the top one.
           data-drawer-layer={id}
-          className={`fixed right-0 top-0 overflow-hidden outline-none ${SHEET_PANEL_CLASS} ${shown ? "translate-x-0" : "translate-x-full"}`}
+          // `text-sm text-fg`: the app root's type, which a portal to <body> escapes. Without it every line
+          // here that sets no leading of its own inherited body's 13px at 1.5 — a one-line user bubble 1px
+          // taller than the same bubble on /full (StandaloneThreadPage's root is text-sm) and in every
+          // non-portaled sheet. It went unseen while a Ready thread opened as an inline card inside the
+          // app root; since 2026-09-28 every thread opens here.
+          className={`fixed right-0 top-0 overflow-hidden text-sm text-fg outline-none ${SHEET_PANEL_CLASS} ${shown ? "translate-x-0" : "translate-x-full"}`}
           style={{ zIndex: 51 + depth * 2, width: sheetWidth(widthDepth), viewTransitionName: drawerSnap.vtReturnTarget === slug ? "thread-chat" : undefined }}
         >
           <RadixDialog.Title className="sr-only">
