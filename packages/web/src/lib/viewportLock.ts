@@ -46,11 +46,11 @@ import { isPageScrollLocked, pageScrollY } from "./pageScrollLock.ts"
 
 // ---- native anchoring: one owner ------------------------------------------------------------------
 
-// Reference-counted, because more than one machinery suspends native anchoring around a deliberate
-// correction (this lock for as long as a queue is mounted, the dismissal landing and the load-earlier
-// dance in TodosView around theirs): if each captured the prior value on its own, one could catch
-// another's "none" as the value to restore and leave anchoring off for the rest of the session. The
-// FIRST suspend captures the real prior policy, the LAST release restores it.
+// Reference-counted, because more than one owner can suspend native anchoring at once (this lock for as
+// long as a queue is mounted — one per mounted queue — and whatever brackets a deliberate correction of
+// its own): if each captured the prior value on its own, one could catch another's "none" as the value
+// to restore and leave anchoring off for the rest of the session. The FIRST suspend captures the real
+// prior policy, the LAST release restores it.
 let anchorSuspendCount = 0
 let anchorPrevPolicy = ""
 export function suspendNativeAnchoring(): void {
@@ -67,9 +67,9 @@ export function resumeNativeAnchoring(): void {
 
 // ---- deliberate moves: the lock stands aside ------------------------------------------------------
 
-// A move the HUMAN asked for — the dismissal landing that brings the next card to the top after they
-// finish one — must not be undone as if it were drift. It brackets itself with these; on the last
-// release every mounted lock re-takes its anchor from wherever the move left the page.
+// A move the HUMAN asked for — a glide to a card they chose (glideTo, below) — must not be undone as if
+// it were drift. It brackets itself with these; on the last release every mounted lock re-takes its
+// anchor from wherever the move left the page.
 let lockSuspendCount = 0
 const resumeListeners = new Set<() => void>()
 export function suspendViewportLock(): void {
