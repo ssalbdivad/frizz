@@ -1,5 +1,6 @@
 import assert from "node:assert/strict"
 import test from "node:test"
+import { questionStacks } from "./questionShadow.ts"
 import { settledQuestionPositions } from "./settledQuestions.ts"
 
 // A transcript as the position reader sees it: roles, kinds, instants, and the text a marker lives in.
@@ -101,4 +102,20 @@ test("the card stays above the rest divider that closes its rest, not below it",
   ]
   const anchored = settledQuestionPositions(messages, [settled("qst_a", "2026-09-25T10:01:30Z", "2026-09-25T10:05:00Z")])
   assert.deepEqual([...anchored.keys()], [1])
+})
+
+test("a question the human replied past fills ONE slot open and answered, so answering it does not move it", () => {
+  // Until 2026-09-28 the open card hung below the asking rest's divider and its greyed twin above it.
+  const messages = [
+    msg("user", "2026-09-25T10:00:00Z"),
+    msg("assistant", "2026-09-25T10:02:00Z"), // asked here
+    msg("assistant", "2026-09-25T10:02:00Z", "Agent rested", "event"),
+    msg("user", "2026-09-25T10:03:00Z"), // replied past it
+    msg("assistant", "2026-09-25T10:04:00Z"),
+    msg("assistant", "2026-09-25T10:04:00Z", "Agent rested", "event"),
+  ]
+  const open = questionStacks(messages, [{ id: "qst_a", askedAt: "2026-09-25T10:01:30Z" }])
+  const answered = settledQuestionPositions([...messages, msg("user", "2026-09-25T10:09:00Z")], [settled("qst_a", "2026-09-25T10:01:30Z", "2026-09-25T10:08:00Z")])
+  assert.deepEqual([...open.keys()], [1])
+  assert.deepEqual([...answered.keys()], [1])
 })

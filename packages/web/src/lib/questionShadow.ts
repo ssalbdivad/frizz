@@ -165,12 +165,27 @@ export function markerIdsIn(text: string): string[] {
   return splitQuestionBlocks(text).flatMap((seg) => seg.kind === "question" && seg.registeredId && seg.text.trim() === "" ? [seg.registeredId] : [])
 }
 
+/** The index moved up past the frizz event rows that close a rest ("Agent rested" above all). A card
+ *  anchored ON that divider falls below it, outside the rest it was asked at, reading as the start of
+ *  whatever the human said next; anchored here it sits under the handoff and above the divider. */
+export function aboveTrailingEvents(messages: readonly AnchorMessage[], anchor: number): number {
+  let at = anchor
+  while (at > 0 && messages[at].kind === "event") at--
+  return at
+}
+
 /** WHERE EACH QUESTION'S CARD RENDERS: every question grouped by the index of the message its stack
  *  renders AFTER — the last message of the rest it belongs to. That is the rest that asked it
  *  (questionsByAnchor), or a later one whose worker message names it with a legacy marker (see MARKERS
  *  above), and in either case the card sits at the bottom of that rest, never inside one of its
  *  messages. -1 is a rest older than the loaded window. Questions asked in one `ask` call share a key,
- *  so a batch still renders as one stack. */
+ *  so a batch still renders as one stack.
+ *
+ *  A rest the human has spoken after ends at its "Agent rested" divider, and the card goes ABOVE that
+ *  divider, exactly where its greyed twin lands once answered (lib/settledQuestions), so answering it
+ *  does not make it jump. Until 2026-09-28 the open card hung below the divider and the settled one above
+ *  it. The TAIL keeps its anchor (`messages.length - 1`): the divider there draws nothing, and the
+ *  surfaces read that index as the interactions row. */
 export function questionStacks<Q extends Pick<RegisteredQuestionView, "id"> & { askedAt: string }>(
   messages: readonly (AnchorMessage & { text?: string })[],
   questions: readonly Q[],
@@ -195,6 +210,7 @@ export function questionStacks<Q extends Pick<RegisteredQuestionView, "id"> & { 
       for (let i = restStart(messages, anchor); i < messages.length; i++) {
         if (i > at && markersOf(i).includes(id)) at = restEnd(messages, i)
       }
+      if (at >= 0 && at < messages.length - 1) at = aboveTrailingEvents(messages, at)
       const stack = stacks.get(at)
       if (stack) stack.push(q)
       else stacks.set(at, [q])

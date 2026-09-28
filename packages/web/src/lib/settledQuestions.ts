@@ -16,7 +16,7 @@
 // renders at the top of the window in that case, because it is still owed an answer and must not be out
 // of reach; a settled one owes nothing, and it renders in its real slot once the earlier page is loaded.
 import type { AnchorMessage } from "./questionAnchor.ts"
-import { questionStacks } from "./questionShadow.ts"
+import { aboveTrailingEvents, questionStacks } from "./questionShadow.ts"
 
 export interface SettledPositionable {
   id: string
@@ -36,16 +36,6 @@ function prefixLength(messages: readonly AnchorMessage[], settledAtMs: number): 
     if (Number.isFinite(at) && at > settledAtMs) return i
   }
   return messages.length
-}
-
-/** The anchor moved up past the frizz event rows that close its rest ("Agent rested" above all). While
- *  the card was open that row was the transcript's tail and drew nothing, so the card sat directly under
- *  the handoff; once the human's answer lands after it the divider draws, and a card anchored ON it
- *  would fall below the divider — outside the rest it was asked at. */
-function aboveTrailingEvents(messages: readonly AnchorMessage[], anchor: number): number {
-  let at = anchor
-  while (at > 0 && messages[at].kind === "event") at--
-  return at
 }
 
 /** Every answered question grouped by the index of the message its greyed card renders AFTER. */
@@ -71,6 +61,9 @@ export function settledQuestionPositions<S extends SettledPositionable>(
     const prefix = messages.slice(0, cut)
     for (const [anchor, group] of questionStacks(prefix, batch)) {
       if (anchor < 0) continue
+      // questionStacks leaves the PREFIX'S TAIL on its "Agent rested" row, which drew nothing while the
+      // card was open. The human's answer lands after it, so the divider draws now, and the card goes
+      // above it like every other rest's card does.
       const at = aboveTrailingEvents(prefix, anchor)
       const existing = anchored.get(at)
       if (existing) existing.push(...group)

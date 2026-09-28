@@ -168,9 +168,9 @@ test("a legacy marker in a LATER rest carries the question to the bottom of that
     { role: "assistant", at: at(17), text: "More of the same handoff." }, // 7 — still that rest
     { role: "assistant", at: at(17), text: "Agent rested", kind: "event" }, // 8 — its closing divider
   ]
-  assert.deepEqual([...questionStacks(later, [QUESTION]).keys()], [8])
+  assert.deepEqual([...questionStacks(later, [QUESTION]).keys()], [8], "at the tail the divider draws nothing, and the tail index is the interactions row")
   const answered = [...later, { role: "user", at: at(30), text: "Answers to earlier questions:\n1. …", wake: true }, { role: "assistant", at: at(31), text: "On it." }]
-  assert.deepEqual([...questionStacks(answered, [QUESTION]).keys()], [8], "the next human turn ends the marker's rest")
+  assert.deepEqual([...questionStacks(answered, [QUESTION]).keys()], [7], "the next human turn ends the marker's rest, and the card sits above its divider")
 })
 
 test("a registration whose rest is above the loaded window is carried by a marker inside the window", () => {
@@ -201,6 +201,11 @@ const STALE = [
 
 test("a question the human replied past stays at the bottom of the rest that asked it", () => {
   assert.deepEqual([...questionStacks(STALE, [QUESTION]).keys()], [1])
+})
+
+test("…ABOVE that rest's closing divider, which draws once the human has spoken after it", () => {
+  const divided = [STALE[0], STALE[1], { role: "assistant", at: at(5), text: "Agent rested", kind: "event" }, STALE[2], STALE[3]]
+  assert.deepEqual([...questionStacks(divided, [QUESTION]).keys()], [1])
 })
 
 test("a marker the worker re-wrote into the NEW handoff carries the card to the bottom of it", () => {
