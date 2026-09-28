@@ -80,9 +80,31 @@ try {
   page.on("console", (message) => { if (message.type() === "error" && !message.text().startsWith("Failed to load resource")) errors.push(`console: ${message.text()}`) })
   page.on("response", (response) => { if (response.status() >= 400) errors.push(`${response.status()} ${response.url()}`) })
   // Every WRITE the page makes, by path — `/_frizz/<project id>/rpc/<procedure>` names who it went to.
+  //
+  // RECORDED TWICE, because neither record is complete alone. CDP's `request` event leaves the renderer
+  // only once the task that made the fetch has finished, and a card's Mark as done runs the queue's whole
+  // re-render in that task, after the fetch. Measured 2026-09-28 at a 6x CPU throttle
+  // (scripts/verify-all-queues.mjs's own step, clicked on eight cards): the event trailed the fetch by
+  // 600–1000ms, and on 3 of the 8 it arrived after the server had already archived the thread. So a check
+  // that read CDP's record the moment the server showed the effect found no write at all. That was the
+  // "completeThread went to nobody" failure, 1 run in 4 unthrottled on a loaded machine. The in-page log is
+  // written by the fetch call itself, before the request can reach the server, but it lives only as long
+  // as its document; CDP's covers every document before this one.
   const writes = []
   page.on("request", (request) => { if (request.method() === "POST" && request.url().includes("/rpc/")) writes.push(new URL(request.url()).pathname) })
-  const wrote = (project, procedure) => writes.includes(`/_frizz/${ids[project]}/rpc/${procedure}`)
+  await page.evaluateOnNewDocument(() => {
+    const send = window.fetch
+    window.__frizzWrites = []
+    window.fetch = function (input, init) {
+      const request = input instanceof Request ? input : null
+      const path = new URL(request ? request.url : String(input), location.href).pathname
+      if ((init?.method ?? request?.method ?? "GET").toUpperCase() === "POST" && path.includes("/rpc/")) window.__frizzWrites.push(path)
+      return send.apply(this, arguments)
+    }
+  })
+  const pageWrites = () => page.evaluate(() => window.__frizzWrites ?? [])
+  const writesSoFar = async () => [...new Set([...writes, ...(await pageWrites())])]
+  const wrote = async (project, procedure) => (await writesSoFar()).includes(`/_frizz/${ids[project]}/rpc/${procedure}`)
   const buttonIn = async (scope, text) => {
     const handle = await page.evaluateHandle((scope, text) => [...document.querySelectorAll(`${scope} button`)].find((b) => b.textContent?.trim().includes(text)) ?? null, scope, text)
     const element = handle.asElement()
@@ -199,7 +221,7 @@ try {
     await snooze.click()
     const tenant = await waitFor("the tenant thread to snooze", async () => { const t = await threadOf("marketing-site", "fix-flaky-login-test"); return t?.snoozedUntil ? t : null })
     const namesake = await threadOf("acme-api", "fix-flaky-login-test")
-    check("Snooze on a tenant's card snoozes ITS thread, not the launcher's namesake", Boolean(tenant.snoozedUntil) && !namesake?.snoozedUntil && wrote("marketing-site", "setThreadSnooze"), `tenant until ${tenant.snoozedUntil}, namesake ${namesake?.snoozedUntil ?? "untouched"}`)
+    check("Snooze on a tenant's card snoozes ITS thread, not the launcher's namesake", Boolean(tenant.snoozedUntil) && !namesake?.snoozedUntil && (await wrote("marketing-site", "setThreadSnooze")), `tenant until ${tenant.snoozedUntil}, namesake ${namesake?.snoozedUntil ?? "untouched"}`)
     await sleep(600)
     check("the snoozed card leaves the page", (await page.$(scope)) === null)
   })
@@ -209,12 +231,11 @@ try {
     // What the thread was, and what the page wrote, from the click on: a thread already archived before it
     // (or archived by some other write) passes the wait below without this button having done anything.
     const before = await threadOf("billing-worker", "dunning-retry-schedule")
-    const from = writes.length
+    const from = (await pageWrites()).length
     await (await buttonIn(scope, "Mark as done")).click()
     const done = await waitFor("the tenant thread to archive", async () => { const t = await threadOf("billing-worker", "dunning-retry-schedule"); return t && (t.archived || t.state === "archived") ? t : null })
-    const ok = Boolean(done) && wrote("billing-worker", "completeThread") && !wrote("acme-api", "completeThread")
-    check("Mark as done on a tenant's card finishes ITS thread", ok, `completeThread went to ${writes.filter((w) => w.endsWith("/completeThread")).join(", ") || "nobody"}; before the click it was ${before ? `${before.state}${before.archived ? ", archived" : ""}` : "not on the board"}; the page wrote ${writes.slice(from).map((w) => w.split("/rpc/")[1]).join(", ") || "nothing"} after it`)
-    if (!ok) console.log(`  every write so far: ${writes.join(", ")}`)
+    const after = (await pageWrites()).slice(from)
+    check("Mark as done on a tenant's card finishes ITS thread", Boolean(done) && (await wrote("billing-worker", "completeThread")) && !(await wrote("acme-api", "completeThread")), `completeThread went to ${(await writesSoFar()).filter((w) => w.endsWith("/completeThread")).join(", ") || "nobody"}; before the click it was ${before ? `${before.state}${before.archived ? ", archived" : ""}` : "not on the board"}; the page wrote ${after.map((w) => w.split("/rpc/")[1]).join(", ") || "nothing"} after it`)
   })
 
   await step("Mark as done on the launcher's same-slug card leaves the tenant's alone", async () => {
@@ -246,7 +267,7 @@ try {
     await (await buttonIn(card("billing-worker", command.id), "Mark as done")).click()
     const done = await waitFor("the tenant command to archive", async () => { const t = await threadOf("billing-worker", command.id); return t?.state === "archived" ? t : null }).catch(() => null)
     const launcher = await commandOf("acme-api")
-    check("Mark as done on a tenant's command finishes ITS command", Boolean(done) && wrote("billing-worker", "setThreadState") && !wrote("acme-api", "setThreadState") && launcher?.state !== "archived", `tenant ${done ? "archived" : "still open"}, launcher's ${launcher?.state}`)
+    check("Mark as done on a tenant's command finishes ITS command", Boolean(done) && (await wrote("billing-worker", "setThreadState")) && !(await wrote("acme-api", "setThreadState")) && launcher?.state !== "archived", `tenant ${done ? "archived" : "still open"}, launcher's ${launcher?.state}`)
   })
 
   await step("answering a tenant's registered question answers it there", async () => {
@@ -259,7 +280,7 @@ try {
     await waitFor("the tenant question to settle", async () => { const t = await threadOf("marketing-site", "hero-copy-variants"); return t && (t.questions ?? []).length === 0 ? t : null })
     const other = await threadOf("acme-api", "rate-limit-headers")
     // A thread's `questions` lists only its OPEN rows, so the launcher's must still carry one.
-    check("answering a tenant's registered question answers it there", wrote("marketing-site", "answerQuestions") && (other?.questions ?? []).length > 0, `launcher's own question ${(other?.questions ?? []).length > 0 ? "still open" : "gone"}`)
+    check("answering a tenant's registered question answers it there", (await wrote("marketing-site", "answerQuestions")) && (other?.questions ?? []).length > 0, `launcher's own question ${(other?.questions ?? []).length > 0 ? "still open" : "gone"}`)
   })
 
   await step("a reply on a tenant's card goes to ITS thread", async () => {
@@ -271,7 +292,7 @@ try {
     const alert = await page.$eval(scope, (el) => el.querySelector("[role=alert]")?.textContent ?? null).catch(() => null)
     const present = (await page.$(scope)) !== null
     const draft = present ? await page.$eval(`${scope} textarea`, (el) => el.value) : ""
-    check("a reply on a tenant's card goes to ITS thread", wrote("marketing-site", "followUp") && !wrote("acme-api", "followUp"), present ? `card back with ${alert ? `error "${alert.slice(0, 80)}"` : "no error"}, draft ${draft ? "restored" : "empty"}` : "card left the queue")
+    check("a reply on a tenant's card goes to ITS thread", (await wrote("marketing-site", "followUp")) && !(await wrote("acme-api", "followUp")), present ? `card back with ${alert ? `error "${alert.slice(0, 80)}"` : "no error"}, draft ${draft ? "restored" : "empty"}` : "card left the queue")
   })
 
   // A card has no door off the page any more — no ↗ to its project's board and no ⤢ to /full (both went
