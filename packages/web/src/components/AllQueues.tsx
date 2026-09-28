@@ -659,7 +659,8 @@ function RailRow({
   onClick: () => void
 }) {
   return (
-    <div data-xq-rail-row={cardKey} className={ROW_CLASS}>
+    // Every thread row is a crossing in the gutter's cord, card or none (ThreadConnector).
+    <div data-xq-thread-row data-xq-rail-row={cardKey} className={ROW_CLASS}>
       {/* The board's scroll marker: the card this row faces is the one being read. */}
       {active && <span aria-hidden className="absolute inset-y-0 left-1 w-[2px] rounded-full bg-accent" />}
       <button type="button" onClick={onClick} className={ROW_BUTTON_CLASS} aria-current={active || undefined}>
