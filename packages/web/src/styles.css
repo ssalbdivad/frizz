@@ -1479,9 +1479,11 @@ a[href] {
 /* The card a `d` or `s` would act on (useQueueKeys in AllQueues.tsx) keeps the arrival ring for as long
    as it is that card. Arriving on it, the ring settles INTO place rather than fading out — fading to
    transparent and snapping back once the animation ended read as a second, unrelated flash. The
-   re-ring at either end of `j`/`k` still replays, since the flash attribute is re-armed each landing. */
+   re-ring at either end of `j`/`k` still replays, since the flash attribute is re-armed each landing.
+   A hairline at partial strength, not the flash's full 2px: it stands on a card for as long as that card
+   is being read, and a loud frame held that long outshouted the card's own contents. */
 [data-queue-current] {
-  outline: 2px solid var(--color-accent, #e8b923);
+  outline: 1px solid color-mix(in srgb, var(--color-accent, #e8b923) 45%, transparent);
   outline-offset: 2px;
 }
 [data-queue-current][data-queue-flash] { animation: queue-flash-settle 0.35s ease-out; }
