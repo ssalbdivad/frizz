@@ -13,13 +13,15 @@
 //
 // Usage — boot a disposable stack first (see .agents/skills/frizz-stack), then:
 //   node scripts/verify-tail-follow.mjs --home=/abs/temp-home --url=http://127.0.0.1:PORT/
-import { execFileSync } from "node:child_process"
+import { execFileSync, spawn } from "node:child_process"
 import { mkdirSync, writeFileSync, appendFileSync } from "node:fs"
 import { join } from "node:path"
 import { tmpdir } from "node:os"
+import { createHash, randomUUID } from "node:crypto"
 import puppeteer from "puppeteer"
 import { createRpcClient } from "./lib/rpc-client.mjs"
 import { resolveSandboxDb, sessionProjectColumns } from "./lib/sandbox-db.mjs"
+import { recordPageErrors } from "./lib/page-errors.mjs"
 
 const flags = Object.fromEntries(process.argv.slice(2).filter((a) => a.startsWith("--")).map((a) => a.replace(/^--/, "").split("=")))
 const { home, url } = flags
@@ -36,7 +38,10 @@ const { db } = sandbox
 // such column. `sessionProjectColumns` yields the right prefix pair for whichever this sandbox is.
 const { cols: sessionCols, vals: sessionVals } = sessionProjectColumns(sandbox)
 const SLUG = "verify-tail-follow"
-const SESSION = "tailfoll-0000-4000-8000-000000000000"
+// A FRESH session id per run: the server caches the transcript projection PER SESSION, and the tailer
+// keeps its offset into the file, so a fixed id made a re-run on the same stack read the previous run's
+// tail — which had already settled — instead of this run's in-flight turn.
+const SESSION = randomUUID()
 const jsonlDir = join(home, ".claude", "projects", cwd.replace(/[/.]/g, "-"))
 mkdirSync(jsonlDir, { recursive: true })
 const jsonl = join(jsonlDir, `${SESSION}.jsonl`)
@@ -61,8 +66,23 @@ for (let i = 0; i < 8; i++) {
 }
 seed.push(user("TASK:\nAsk 9: this turn is still in flight while we watch the tail."))
 writeFileSync(jsonl, seed.map((r) => JSON.stringify(r)).join("\n") + "\n")
-execFileSync("sqlite3", [db, `INSERT OR REPLACE INTO session (${sessionCols}slug, session_id, thread_name, spawned_at, title, backend, model, effort, permission_mode)
-  VALUES (${sessionVals}'${SLUG}', '${SESSION}', 'frizz-${SLUG}', '${now()}', 'Tail follow', 'claude', 'opus', 'high', 'default')`])
+// A LIVE worker, which takes two things since the broker cutover (board.ts deriveRuntime), and without
+// either the in-flight turn below never showed its Thinking… row and the control check at the top failed:
+//   • `claude_runtime='broker'`. A Claude row without it is read as a pre-cutover terminal row whose
+//     process cannot be alive, and reports `exited` whatever the transcript says.
+//   • a broker record naming a LIVE pid. Mid-turn, a broker row whose daemon is gone is a stall
+//     (`headlessStalled` → exited + in-flight → the crash net), so the seed stands in a real `sleep` and
+//     records it where claude-broker-host.ts claudeBrokerRecordPath looks — the same stand-in
+//     seed-resting-thread.mjs uses. Killed by this exact pid in the `finally` below.
+const standIn = spawn("sleep", ["3600"], { detached: true, stdio: "ignore" })
+standIn.unref()
+const brokerDir = join(sandbox.stateDir, "claude-broker")
+mkdirSync(brokerDir, { recursive: true })
+writeFileSync(join(brokerDir, `${createHash("sha256").update(SESSION).digest("hex").slice(0, 16)}.json`),
+  JSON.stringify({ sessionId: SESSION, daemonPid: standIn.pid, socketPath: join(brokerDir, `${SLUG}.sock`) }))
+execFileSync("sqlite3", [db, `DELETE FROM session WHERE slug = '${SLUG}';`])
+execFileSync("sqlite3", [db, `INSERT OR REPLACE INTO session (${sessionCols}slug, session_id, thread_name, spawned_at, title, backend, claude_runtime, model, effort, permission_mode)
+  VALUES (${sessionVals}'${SLUG}', '${SESSION}', 'frizz-${SLUG}', '${now()}', 'Tail follow', 'claude', 'broker', 'opus', 'high', 'default')`])
 const append = (record) => appendFileSync(jsonl, JSON.stringify(record) + "\n")
 
 let failures = 0
@@ -76,8 +96,7 @@ const errors = []
 try {
   const page = await browser.newPage()
   await page.setViewport({ width: 1280, height: 900, deviceScaleFactor: 2 })
-  page.on("console", (m) => { if (m.type() === "error") errors.push(m.text()) })
-  page.on("pageerror", (e) => errors.push(String(e)))
+  recordPageErrors(page, errors)
   // The thread's drawer on the one page (rpc-client threadUrl); the bare `/thread/<slug>` it opened until
   // 2026-09-28 now lands on `/`.
   await page.goto(await createRpcClient(url).threadUrl(SLUG), { waitUntil: "networkidle2", timeout: 30000 })
@@ -94,8 +113,11 @@ try {
     return {
       distance: Math.round(el.scrollHeight - el.scrollTop - el.clientHeight),
       scrollTop: Math.round(el.scrollTop),
-      jumpVisible: Boolean(document.querySelector("[data-jump-to-latest]")),
-      working: Array.from(document.querySelectorAll(".shimmer-text")).some((s) => s.textContent.includes("Working")),
+      jumpVisible: Boolean(document.querySelector("[data-drawer-layer] [data-jump-to-latest]")),
+      // The live-turn row, by its own hook (ChatView WorkingIndicator), inside the drawer. It has read
+      // "Thinking…" rather than "Working…" since a0445927 (2026-08-01), so matching the shimmer's TEXT
+      // for "Working" stopped finding it — the row was there and the control check said it was not.
+      working: Boolean(document.querySelector("[data-drawer-layer] [data-working-indicator]")),
     }
   })
   const pin = async () => { await page.evaluate(() => { const el = document.querySelector("[data-drawer-transcript-scroll]"); el.scrollTop = el.scrollHeight }); await settle(300) }
@@ -148,7 +170,7 @@ try {
   await page.screenshot({ path: join(shotDir, "tail-follow-3-up-thread.png") })
 
   // Jump to latest re-attaches.
-  await page.click("[data-jump-to-latest]")
+  await page.click("[data-drawer-layer] [data-jump-to-latest]")
   await settle(800)
   m = await metrics()
   check("Jump to latest returns the reader to the tail", m.distance === 0 && !m.jumpVisible, `distance=${m.distance}`)
@@ -171,5 +193,6 @@ try {
   console.log(`\nscreenshots → ${shotDir}/tail-follow-*.png`)
 } finally {
   await browser.close()
+  try { process.kill(standIn.pid) } catch {}
 }
 process.exit(failures ? 1 : 0)
