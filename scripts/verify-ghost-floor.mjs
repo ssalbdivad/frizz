@@ -7,14 +7,28 @@
 // This drives the REAL app in a REAL browser against a REAL disposable stack, in ONE page session
 // (the optimistic bubble lives only in that page's react-query cache, so the whole scenario has to
 // happen without a reload):
-//   1. send a follow-up through the real composer into a thread whose pane is a dummy `sleep` — the
-//      RPC succeeds, the provider never records it → a genuine ghost;
+//   1. send a follow-up through the real composer and HOLD its followUp POST in the browser — the
+//      bubble stays client-only (`queued`, no `sourceId`), the only state the floor retires → a ghost;
 //   2. advance the session JSONL past the grace window → the ghost must RETIRE;
 //   3. control: send again and actually record it → the bubble must LAND (solid) and survive any
 //      further advance, proving the floor never eats a delivered message.
 //
-// Seed it with scripts/seed-ghost-floor.mjs (a broker row whose "daemon" is a stand-in `sleep`, the
-// broker-era form of the dummy pane above), which prints the slug and jsonl this takes. Re-seed per run.
+// WHY THE POST IS HELD (2026-09-28). This used to send into a thread whose tmux pane was a dummy
+// `sleep`: the RPC succeeded and nothing recorded it. That no longer strands a CLIENT bubble. Since the
+// delivery ledger, a send the server accepts is server truth — threadTranscript projects it as
+// {sourceId:"delivery:<id>", queued:false, deliveryState:"delivered"} — so the floor, which only ever
+// retires `queued && !sourceId` bubbles (lib/transcript-sync.ts newestServerAt/retainOptimistic), never
+// sees it. Against a live daemon that serves its socket the send records; against a dead one board.ts
+// catches the delivery as process-gone. So the remaining path to a client-only bubble is one the SERVER
+// never answered, and holding the POST is that path: nothing about retainOptimistic knows whether the
+// request is in flight, only whether the transcript has advanced GHOST_GRACE_MS past the bubble's anchor.
+// The held request is ABORTED once step 2 is judged, because an unanswered followUp wedges the per-slug
+// send FIFO (eagerComposerSubmission.ts DELIVERY_SEND_TIMEOUT_MS) and step 3's control send would queue
+// behind it for two minutes.
+//
+// Seed it with scripts/seed-ghost-floor.mjs (a broker row whose "daemon" is a stand-in `sleep`, so the
+// control send in step 3 is adopted rather than cold-resuming a real `claude`), which prints the slug and
+// jsonl this takes. Re-seed per run.
 // Usage: node scripts/verify-ghost-floor.mjs --url=http://127.0.0.1:4933 --slug=… --jsonl=/abs/path.jsonl
 import { appendFileSync, readFileSync } from "node:fs"
 import puppeteer from "puppeteer"
@@ -86,6 +100,14 @@ try {
     else if (m.type() === "warning" || m.type() === "warn") notes.push(m.text())
   })
   page.on("pageerror", (e) => errors.push(String(e)))
+  // Step 1's followUp is held here, unanswered, until step 2 has been judged. Every other request passes.
+  let holdNextFollowUp = false
+  let held = null
+  await page.setRequestInterception(true)
+  page.on("request", (request) => {
+    if (holdNextFollowUp && !held && request.method() === "POST" && /\/rpc\/followUp(\?|$)/.test(request.url())) { held = request; return }
+    void request.continue()
+  })
   // A failed response is recorded once, WITH its URL, minus the disposable stack's supervisor 404.
   page.on("response", (r) => { if (r.status() >= 400 && !HARNESS_404.test(r.url())) errors.push(`${r.status()} ${r.url()}`) })
   // The thread's drawer on the one page (rpc-client threadUrl); the bare `/thread/<slug>` it opened until
@@ -134,6 +156,7 @@ try {
   // ── 1. a send the provider never records → a ghost ──────────────────────────────────────────────
   const ghostText = "ghost-floor: never recorded"
   const anchor = tailAt()
+  holdNextFollowUp = true
   await send(ghostText)
   let r = await waitFor("queued", (s) => find(s, ghostText)?.opacity < 0.9, 15_000)
   check("a just-sent follow-up renders as a queued (dimmed) bubble", r.ok, JSON.stringify(r.seen))
@@ -157,6 +180,18 @@ try {
   r = await waitFor("retired", (s) => !find(s, ghostText))
   check("the stranded optimistic send is RETIRED once the transcript advances past it", r.ok, JSON.stringify(r.seen))
   await shot("ghost-2-retired.png")
+  // The instrument's own control: had the POST gone through, the ledger would have made it server truth
+  // and the retirement above would be about something else.
+  check("the ghost's followUp really was held (never reached the server)", Boolean(held))
+  holdNextFollowUp = false
+  if (held) await held.abort("failed").catch(() => {})
+  // A failed send hands its text BACK to the composer (the draft rollback in eagerComposerSubmission.ts),
+  // which is the product doing its job — but step 3 types into that box, and would send the two texts
+  // glued together. Wait for the rollback to land, then empty the box the way a human would.
+  await page.waitForFunction((sel) => document.querySelector(sel)?.value.includes("never recorded"), { timeout: 10_000 }, COMPOSER).catch(() => {})
+  await page.click(COMPOSER)
+  await page.keyboard.down("Control"); await page.keyboard.press("KeyA"); await page.keyboard.up("Control")
+  await page.keyboard.press("Backspace")
 
   // ── 3. control: a send the provider DOES record must land solid and never be retired ────────────
   const landedText = "ghost-floor: actually delivered"
