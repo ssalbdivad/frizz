@@ -4202,7 +4202,14 @@ export function splitWakeDeliveries(text: string): string[] {
 // thread render an unanswered ```question card and the working shimmer AT THE SAME TIME, in the Active
 // rail rather than the queue (maintainer 2026-08-24: "this needs to be structurally impossible").
 // Anything that decides what the HUMAN owes must ask this question the same way the chat does.
-const NOISE_PREFIXES = ["<task-notification>", "[SYSTEM NOTIFICATION", "<system-reminder>", "<frizz-", "[frizz]"]
+//
+// `[Cross-session ` is Claude Code's own notice about a PEER session (2.1.280+): `[Cross-session idle
+// notice] "<name>" … is idle now`, answering a `SendMessage` subscription, and `[Cross-session delivery
+// notice]`, reporting that a peer held or refused this session's message. Both say of themselves that
+// they are "not a message from a person", and both reach the queue exactly like a typed follow-up — so
+// until this prefix they rendered as the operator's own gray bubble. A peer's actual MESSAGE is not
+// plumbing and is not matched here; see parseCrossSessionMessage.
+const NOISE_PREFIXES = ["<task-notification>", "[SYSTEM NOTIFICATION", "<system-reminder>", "<frizz-", "[frizz]", "[Cross-session "]
 export function isInjectedNoise(text: string): boolean {
   const t = text.trimStart()
   return NOISE_PREFIXES.some((p) => t.startsWith(p))
@@ -4242,6 +4249,42 @@ export function parseAgentMessage(text: string): { from: string; body: string } 
   // the label is the whole point of the card, so inventing one would be worse than not drawing it.
   if (!body.trim() || !from) return undefined
   return { from, body }
+}
+
+// ---- A message from ANOTHER top-level Claude session (Claude Code 2.1.280+) ---------------------------
+// `SendMessage` now crosses SESSIONS: any worker can `ListAgents` and message another local session by
+// the name Claude Code gave it, and the receiver's queue gets the text wrapped as
+//
+//   <cross-session-message from="uds:/run/user/1000/cc-socks/209858.sock" from-name="standard-schema-7c" from-mode="bypass">
+//   Are you still editing packages/spec/tool.md? …
+//   </cross-session-message>
+//
+// It is enqueued and delivered exactly like a human follow-up (mid-turn as a `queued_command` attachment
+// with `origin.kind:"peer"`, at rest as an isMeta record under the "Another Claude session sent a
+// message:" preamble), so a transcript that does not recognize the wrapper renders another agent's words
+// in the operator's own bubble with the XML showing (reported 2026-09-28: "as a user I shouldn't see
+// this, especially as one of my messages"). The SUB-AGENT wrapper above is a different channel with a
+// different reader, so this is its own parser rather than a second arm of that one.
+//
+// `from` is the reply ADDRESS (a socket path on this machine); `from-name` is the name the sender is
+// listed under and the one peers address it by, so it is what a reader is shown. Attributes are read
+// by name, in any order, so an added one does not stop the parse. Anchored and required to close, for
+// the reason the sub-agent wrapper is: prose that QUOTES one is left alone.
+const CROSS_SESSION_MESSAGE_WRAPPER = /^<cross-session-message((?:\s+[\w-]+="[^"]*")*)\s*>\n?([\s\S]*?)\n?<\/cross-session-message>\s*$/
+const WRAPPER_ATTRIBUTE = /([\w-]+)="([^"]*)"/g
+
+export function parseCrossSessionMessage(text: string): { from: string; name?: string; body: string } | undefined {
+  const m = CROSS_SESSION_MESSAGE_WRAPPER.exec(text.trim())
+  if (!m) return undefined
+  const attrs = new Map<string, string>()
+  for (const [, key, value] of m[1].matchAll(WRAPPER_ATTRIBUTE)) attrs.set(key, value.trim())
+  const from = attrs.get("from") ?? ""
+  const name = attrs.get("from-name") || undefined
+  const body = m[2]
+  // Same rule as the sub-agent wrapper: no body or no sender is nothing to attribute, and a line naming
+  // nobody would be worse than the ordinary path.
+  if (!body.trim() || !(from || name)) return undefined
+  return { from, ...(name ? { name } : {}), body }
 }
 
 // ---- THE PR-WATCHER WAKE STEER (scheduler ↔ chat card) -------------------------------------------
@@ -5054,6 +5097,15 @@ export const TranscriptMessage = z.object({
   // pairing, and `projectTranscriptPeerNames` uses this id to ask it. Never a drawer key on its own —
   // that is `peerDispatchId`, which the same pass can also supply once this resolves.
   peerSenderTaskId: z.string().optional(),
+  // …and the tell that the peer is ANOTHER TOP-LEVEL SESSION rather than a child of this one: a
+  // `<cross-session-message>` (see parseCrossSessionMessage). `peerFrom` is then the sender's session
+  // name, which IS a name — `peerUnnamed` rides along only when the wrapper named no sender and left just
+  // its reply address, a socket path — and there is no drawer to drill into.
+  // It rides on `peerFrom` rather than beside it so every check that already keeps a peer's words out of
+  // the human's turns (the ask, the queue card's start, the retitle input) covers it with no change.
+  // Additive + optional: an older tab ignores it and draws its sub-agent line, which is still not the
+  // human's bubble.
+  peerSession: z.literal(true).optional(),
   // FRIZZ REFUSED the ```awaiting fence this message ends in — it named something that is not running,
   // or named nothing at all, or used a retired line kind (see `isParkCorrection`). The fence is not a
   // park, so the chat draws nothing for it: an hourglass card with a park button asserts a wait that

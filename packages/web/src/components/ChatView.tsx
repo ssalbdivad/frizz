@@ -34,7 +34,7 @@ import { RecurringPromptLine } from "./RecurringPromptLine.tsx"
 import { LinkifiedText } from "./LinkifiedText.tsx"
 import { parseSentContext, splitProseByTokens, tokenLabel, type SentContextItem } from "../lib/composerContext.ts"
 import { AnswersCard } from "./AnswersCard.tsx"
-import { WakeDivider } from "./WakeDivider.tsx"
+import { WAKE_DIVIDER_IDENT, WakeDivider } from "./WakeDivider.tsx"
 import { useLiveAnswering, type LiveAnswering } from "../lib/answering.ts"
 import { useIsMobile } from "../lib/mobile.ts"
 import { MobileAnswerSheet } from "./MobileAnswerSheet.tsx"
@@ -3300,6 +3300,9 @@ export const Message = memo(function Message({ m, answering, dense, paired, text
     // server's own tell (it parsed the <agent-message> wrapper and put the body in displayText, which
     // `text` above already carries), never a text guess made here. It renders as a wake divider rather
     // than any kind of bubble — see SubAgentReportLine.
+    // …and a message from ANOTHER SESSION rides the same `peerFrom` tell, told apart by `peerSession`.
+    // It is settled first because it is not a child: no report verb, no drawer, and a body to keep.
+    if (m.peerSession && m.peerFrom) return <PeerSessionMessageLine from={m.peerFrom} unnamed={m.peerUnnamed} text={text} sourceId={m.sourceId} at={m.at} />
     if (m.peerFrom) return <SubAgentReportLine from={m.peerFrom} unnamed={m.peerUnnamed} dispatchId={m.peerDispatchId} sourceId={m.sourceId} at={m.at} />
     // `rawText` rides alongside the presentation text because the two differ: the bubble shows the
     // stripped/normalized copy, while the optimistic cache entry an unqueue has to evict is keyed on
@@ -4345,6 +4348,61 @@ function SubAgentReportLine({ from, unnamed, dispatchId, sourceId, at }: { from:
       </span>
       <span className="shrink-0">reported</span>
     </WakeDivider>
+  )
+}
+
+// A MESSAGE FROM ANOTHER SESSION — Claude Code's cross-session `SendMessage` (2.1.280+), which lets a
+// worker message any other local session by the name that session is listed under. It reaches this
+// worker's queue exactly like the operator's own follow-up, and until the server learned its wrapper it
+// rendered as the operator's bubble with the XML showing (2026-09-28: "as a user I shouldn't see this,
+// especially as one of my messages"). The server's tell is `peerSession` (see parseCrossSessionMessage).
+//
+// It is two agents coordinating, so it takes the family's quietest shape, one hairline, and stays
+// collapsed. It keeps its BODY one click away where the report line above carries none, for the reason
+// the fired timer does: a child's report is readable in the child's drawer, but this one has no drawer,
+// so a bare hairline would be the only place the app ever showed what the other session said — and the
+// worker's next move is often a reply to it.
+//
+// The session name keeps ordinary case: it is an address the workers themselves write ("message me
+// (standard-schema-7c)"), matched against their prose by eye, not a title.
+function PeerSessionMessageLine({ from, unnamed, text, sourceId, at }: { from: string; unnamed?: boolean; text: string; sourceId?: string; at?: string }) {
+  const [open, setOpen] = useState(false)
+  const bodyId = useId()
+  return (
+    <div data-frizz-msg={sourceId} className="flex flex-col">
+      <WakeDivider
+        icon={Bot}
+        marker="peer-session"
+        at={at}
+        onClick={() => setOpen((v) => !v)}
+        ariaExpanded={open}
+        ariaControls={bodyId}
+        ariaLabel={`${open ? "Collapse" : "Expand"} the message from ${unnamed ? "another Claude session" : `the Claude session ${from}`}`}
+      >
+        <span className="shrink-0">Message from</span>
+        {/* No name, only the sender's reply address (a socket path): say what it is, keep the address
+            on hover, and never quote a path as if it were a title. */}
+        {unnamed ? (
+          <span className="shrink-0" title={from}>another session</span>
+        ) : (
+          <span className="flex min-w-0 items-center">
+            <span className="shrink-0">«</span>
+            <span className={`min-w-0 truncate ${WAKE_DIVIDER_IDENT}`}>{from}</span>
+            <span className="shrink-0">»</span>
+          </span>
+        )}
+        <span aria-hidden="true" className="shrink-0 opacity-50">·</span>
+        <span className="shrink-0">{open ? "Click to collapse" : "Click to expand"}</span>
+      </WakeDivider>
+      {open && (
+        // The fired timer's ruled aside, flush left under a centred label for the same reason, but
+        // MARKDOWN: this is another agent's prose, and it writes lists and `code`. `card-md` puts it on
+        // the 13px aside scale in the inherited muted tone, a step below the transcript's own prose.
+        <div id={bodyId} className="card-md mt-1.5 border-l border-border/70 pl-3 text-muted">
+          <ProseHtml md={text} wrap />
+        </div>
+      )}
+    </div>
   )
 }
 
