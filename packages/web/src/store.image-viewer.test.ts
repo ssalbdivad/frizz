@@ -24,6 +24,14 @@ test("a picture that is not among the rendered ones opens on its own", () => {
   assert.deepEqual(store.imageViewer, { paths: ["/alone.png"], index: 0 })
 })
 
+test("pictures from another project's card carry that project, and only they do", () => {
+  openImageViewer("/opt/b/shot.png", ["/opt/b/shot.png"], "project-b")
+  assert.deepEqual(store.imageViewer, { paths: ["/opt/b/shot.png"], index: 0, project: "project-b" })
+  openImageViewer("/a.png", ["/a.png"])
+  assert.deepEqual(store.imageViewer, { paths: ["/a.png"], index: 0 })
+  closeImageViewer()
+})
+
 test("switching projects closes the picture viewer with everything else", () => {
   openImageViewer("/a.png", ["/a.png"])
   resetProjectState()

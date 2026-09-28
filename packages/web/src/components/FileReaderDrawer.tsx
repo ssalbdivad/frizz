@@ -1,14 +1,15 @@
-import { useMemo, useRef, type Ref } from "react"
+import { useContext, useMemo, useRef, type MouseEvent as ReactMouseEvent, type Ref } from "react"
 import { useQuery } from "@tanstack/react-query"
 import { ExternalLink } from "lucide-react"
 import { showToast } from "../store.ts"
-import { rpc } from "../api/rpc.ts"
+import { projectRpc, rpc } from "../api/rpc.ts"
 import { useLiveLocalFile } from "../hooks.ts"
 import { copyTextToClipboard } from "../lib/clipboard.ts"
 import { useInnerHtml } from "../lib/innerHtml.ts"
+import { openLocalPath } from "../lib/local-file-links.ts"
 import { LOCAL_FILE_POLL_MS, highlightedSource, localFileQuery } from "../lib/localFileQuery.ts"
 import { useLocalFileCodeLinks } from "../lib/localFileCode.ts"
-import { useMarkdownHtml } from "../lib/useMarkdown.ts"
+import { MarkdownScopeContext, useMarkdownHtml, type MarkdownScope } from "../lib/useMarkdown.ts"
 import { splitFrontmatter } from "../lib/frontmatter.ts"
 import { isLocalMarkdownFile, localFileDir } from "../lib/markdownTargets.ts"
 import { CodeBody } from "./CodeBody.tsx"
@@ -38,10 +39,11 @@ export const FOOTER_STYLE = { paddingBottom: "max(0.75rem, env(safe-area-inset-b
 // screenshot. Exported because the /full page's split FileViewerPanel and the picture viewer are the
 // same escape in different frames and must not fork this. `onOpen` runs first — the picture viewer
 // closes itself there, since the answer can be a toast and a toast sits below every modal layer.
-export function OpenAction({ path, image, onOpen, className = "" }: { path: string; image?: boolean; onOpen?: () => void; className?: string }) {
+// `project` opens through that project rather than the page's, for a file cited on its card.
+export function OpenAction({ path, image, project, onOpen, className = "" }: { path: string; image?: boolean; project?: string; onOpen?: () => void; className?: string }) {
   const open = () => {
     onOpen?.()
-    rpc
+    ;(project ? projectRpc(project) : rpc)
       .openLocalFile({ path, ...(image ? { image: true } : {}) })
       .then(async (result) => {
         if (result.action !== "copy") return
@@ -103,12 +105,29 @@ export function TruncatedNote() {
   )
 }
 
-export function FileReaderDrawer({ id, path, title, depth, widthDepth }: { id: number; path: string; title: string; depth: number; widthDepth: number }) {
+type ReaderProps = { id: number; path: string; title: string; depth: number; widthDepth: number }
+
+// `scope` is set when the file was cited on ANOTHER project's card on the everything page
+// (pushFileReader): the reader then renders and reads as that project's, exactly as the card did — its
+// repo for `#123`, its gate for the read, which admits its own checkout wherever that lives.
+export function FileReaderDrawer({ scope, ...props }: ReaderProps & { scope?: MarkdownScope }) {
+  const outer = useContext(MarkdownScopeContext)
+  return (
+    <MarkdownScopeContext.Provider value={scope ?? outer}>
+      <FileReader {...props} />
+    </MarkdownScopeContext.Provider>
+  )
+}
+
+function FileReader({ id, path, title, depth, widthDepth }: ReaderProps) {
+  const scope = useContext(MarkdownScopeContext)
+  const project = scope?.projectId
   // The same read (and key) as the /full split viewer, and LIVE the same way: the server watches the
   // file while this drawer is open and the socket invalidates the query on each save; the poll covers
-  // a socket that is not up (useLiveLocalFile).
+  // a socket that is not up (useLiveLocalFile) — and another project's file, which the page's socket
+  // may not be allowed to watch.
   const live = useLiveLocalFile(path)
-  const body = useQuery({ ...localFileQuery(path), refetchInterval: live ? false : LOCAL_FILE_POLL_MS })
+  const body = useQuery({ ...localFileQuery(path, project), refetchInterval: live && !project ? false : LOCAL_FILE_POLL_MS })
   const markdown = isLocalMarkdownFile(path)
   // Base the relative links on the CANONICAL path the server resolved, not the one that was clicked:
   // a link through a symlinked directory would otherwise rebase its neighbours onto a directory the
@@ -124,6 +143,19 @@ export function FileReaderDrawer({ id, path, title, depth, widthDepth }: { id: n
   const inner = useInnerHtml(html)
   const ref = useRef<HTMLDivElement>(null)
   useLocalFileCodeLinks(ref, html)
+  // A link inside another project's document is that project's too: follow it with the same scope,
+  // before the page-wide interceptor (lib/local-file-links.ts) reads it as the page's.
+  const followScoped = scope
+    ? (event: ReactMouseEvent<HTMLDivElement>) => {
+        if (event.button !== 0) return
+        const link = event.target instanceof Element ? event.target.closest<HTMLElement>("[data-local-path]") : null
+        const target = link?.dataset.localPath
+        if (!link || !target) return
+        event.preventDefault()
+        event.stopPropagation()
+        openLocalPath(target, link, scope)
+      }
+    : undefined
 
   return (
     <Sheet id={id} depth={depth} widthDepth={widthDepth}>
@@ -134,7 +166,7 @@ export function FileReaderDrawer({ id, path, title, depth, widthDepth }: { id: n
               7.00px below the title's cap band and read as floating between the lines. The basename is the
               title and the path is the subtitle; neither needs a glyph to say "file". */}
           <SheetHeader title={title} subtitle={resolved} onClose={close} />
-          <div className="flex-1 min-h-0 overflow-y-auto px-5 py-4">
+          <div className="flex-1 min-h-0 overflow-y-auto px-5 py-4" onClickCapture={followScoped}>
             {body.isLoading ? (
               <div className="text-[13px] text-muted">Loading…</div>
             ) : body.error ? (
@@ -160,7 +192,7 @@ export function FileReaderDrawer({ id, path, title, depth, widthDepth }: { id: n
             className="shrink-0 flex items-center justify-end gap-1.5 border-t border-border/60 bg-panel px-5 pt-3"
             style={FOOTER_STYLE}
           >
-            <OpenAction path={resolved} />
+            <OpenAction path={resolved} project={project} />
           </div>
         </>
       )}

@@ -44,7 +44,7 @@ export function ImageViewer() {
     <RadixDialog.Root open onOpenChange={(open) => { if (!open) closeImageViewer() }}>
       <RadixDialog.Portal>
         <RadixDialog.Overlay className="overlay-in fixed inset-0 z-[200] bg-bg" />
-        <ViewerContent key={path} path={path} index={viewer.index} count={viewer.paths.length} />
+        <ViewerContent key={path} path={path} index={viewer.index} count={viewer.paths.length} project={viewer.project} />
       </RadixDialog.Portal>
     </RadixDialog.Root>
   )
@@ -94,11 +94,12 @@ function svgDataUrl(text: string): string {
   return `data:image/svg+xml;charset=utf-8,${encodeURIComponent(text)}`
 }
 
-function ViewerContent({ path, index, count }: { path: string; index: number; count: number }) {
+function ViewerContent({ path, index, count, project }: { path: string; index: number; count: number; project?: string }) {
   const raster = isRasterImagePath(path)
   // A vector reads through the reader's text gate (the /local-image route refuses SVG) and becomes a
   // `data:` image. A read cut at the reader's 1 MiB ceiling is a broken drawing, so it counts as failed.
-  const svg = useQuery({ ...localFileQuery(path), enabled: !raster })
+  // Through the card's project when the picture was on another project's card, as the reader does.
+  const svg = useQuery({ ...localFileQuery(path, project), enabled: !raster })
   const svgText = !raster && svg.data && !svg.data.truncated ? svg.data.markdown : null
   const declared = useMemo(() => (svgText === null ? null : svgDeclaredSize(svgText)), [svgText])
   const src = raster ? localImageUrl(path) : svgText !== null ? svgDataUrl(svgText) : null
@@ -212,7 +213,7 @@ function ViewerContent({ path, index, count }: { path: string; index: number; co
             {/* -mr-2: the close glyph's hover square carries 9px of dead space, so on the header's even
                 gap "Open" sat 19.06px of ink from the ✕ but 11.21px from the counter. Pulled in, the
                 three read as one evenly spaced cluster (ink gaps 11.21 / 11.06px). */}
-            <OpenAction path={path} image={raster} onOpen={closeImageViewer} className="-mr-2" />
+            <OpenAction path={path} image={raster} project={project} onOpen={closeImageViewer} className="-mr-2" />
           </>
         }
         onClose={closeImageViewer}

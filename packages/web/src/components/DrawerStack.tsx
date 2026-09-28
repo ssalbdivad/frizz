@@ -105,7 +105,7 @@ export function DrawerStack() {
         ) : d.kind === "terminal" ? (
           <CommandSheet key={d.id} id={d.id} slug={d.slug} depth={i} widthDepth={widthDepth} />
         ) : d.kind === "file" ? (
-          <FileReaderDrawer key={d.id} id={d.id} path={d.path ?? d.slug} title={d.label ?? d.slug} depth={i} widthDepth={widthDepth} />
+          <FileReaderDrawer key={d.id} id={d.id} path={d.path ?? d.slug} title={d.label ?? d.slug} scope={d.scope} depth={i} widthDepth={widthDepth} />
         ) : (
           <ThreadDrawer
             key={d.id}

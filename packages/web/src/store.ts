@@ -2,6 +2,7 @@ import { proxy } from "valtio"
 import type { BoardSnapshot, ThreadView, BoardDelta } from "@frizz/shared"
 import { applyBoardDelta } from "@frizz/shared"
 import type { ComposerContextItem } from "./lib/composerContext.ts"
+import type { MarkdownScope } from "./lib/useMarkdown.ts"
 import { disarmFullscreenMorph } from "./lib/fullscreenMorph.ts"
 import { closeDrawerAnimated, focusDrawer } from "./lib/overlays.ts"
 import { isPageScrollLocked, pageScrollY, requestScrollAfterUnlock } from "./lib/pageScrollLock.ts"
@@ -150,6 +151,8 @@ export const store = proxy({
     subId?: string // subagent/shell: the launch tool_use id (the RPC handle + dedupe key)
     label?: string // subagent: the dispatch description (header title) / file: the basename
     path?: string // file: the absolute file path
+    scope?: MarkdownScope // file: opened from ANOTHER project's card on the everything page — whose gate
+    // reads it and whose repo its prose links into (pushFileReader); absent = the page's own project
     subagentType?: string // subagent: the model+effort cell tag
     startedAt?: string // subagent: ISO8601 dispatch time (drives the header's running elapsed)
     openedAt?: number // bumped when an existing logical layer is focused/reopened
@@ -202,8 +205,9 @@ export const store = proxy({
   // ←/→ step through: the pictures rendered in the same card, drawer or page as the one clicked, in
   // reading order (imageGalleryFor in lib/local-file-links.ts), so a worker's before/after shots are
   // one keypress apart. null while closed. Not a drawer-stack layer — it is modal, it covers the
-  // stack, and closing it must leave every layer beneath exactly as it was.
-  imageViewer: null as { paths: string[]; index: number } | null,
+  // stack, and closing it must leave every layer beneath exactly as it was. `project` is set when the
+  // pictures belong to another project's card, as a file reader's `scope` is.
+  imageViewer: null as { paths: string[]; index: number; project?: string } | null,
 })
 
 export function openNewThread(): void {
@@ -493,24 +497,27 @@ function flashQueueCard(slug: string, root: HTMLElement): void {
 // rather than handing the path to the desktop opener. Every link to one routes here
 // (lib/local-file-links.ts): agent prose citing a repo doc, an inline-code path that resolved to a
 // file, an attached log. `path` is the absolute path the server will re-gate; the basename is the
-// header title. Queue drawers are deduped on path.
-export function pushFileReader(path: string): void {
+// header title. Queue drawers are deduped on path. `scope` is the card's project when the link was
+// clicked on another project's card (AllQueuesCard ProjectLinkScope): the drawer then reads through that
+// project's gate and renders against its repo, as the card itself does.
+export function pushFileReader(path: string, scope?: MarkdownScope | null): void {
   // On /full the reader is a SPLIT PANEL beside the thread, not a sheet over it — route every
   // file open there while that page is mounted, stacking links from the transcript AND reader.
   if (store.splitFileViewer) {
     openFilePanel(path)
     return
   }
-  openOrRaiseDrawer({ kind: "file", slug: path, path, label: basename(path) })
+  openOrRaiseDrawer({ kind: "file", slug: path, path, label: basename(path), ...(scope ? { scope } : {}) })
 }
 
 // ── the picture viewer ───────────────────────────────────────────────────────────────────────────
 
 // Show `path` in the picture viewer. `gallery` is the set ←/→ step through; a path that is not in it
-// (a Markdown link TO a picture, which is text rather than a rendered one) opens on its own.
-export function openImageViewer(path: string, gallery: readonly string[] = []): void {
+// (a Markdown link TO a picture, which is text rather than a rendered one) opens on its own. `project`
+// as for pushFileReader: the pictures are another project's card's.
+export function openImageViewer(path: string, gallery: readonly string[] = [], project?: string): void {
   const paths = gallery.includes(path) ? [...gallery] : [path]
-  store.imageViewer = { paths, index: paths.indexOf(path) }
+  store.imageViewer = { paths, index: paths.indexOf(path), ...(project ? { project } : {}) }
 }
 
 export function closeImageViewer(): void {

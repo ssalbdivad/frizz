@@ -34,8 +34,8 @@ import { Link, useLocation, useNavigate } from "react-router"
 import { useSnapshot } from "valtio"
 import type { BoardSnapshot, ProjectQueue } from "@frizz/shared"
 import { rpc } from "../api/rpc.ts"
-import { isBusy, liveQueue, overlayQueues, queuesProjects, threadKey, type QueuesProject } from "../lib/allQueues.ts"
-import { crossProjectHref, innerPath, projectSlug } from "../lib/base-path.ts"
+import { isBusy, liveQueue, overlayQueues, projectMarkdownScope, queuesProjects, threadKey, type QueuesProject } from "../lib/allQueues.ts"
+import { innerPath, projectSlug } from "../lib/base-path.ts"
 import { nextPick, rememberCrossProjectFocus, setQueueFilter, useQueueFilter } from "../lib/crossProject.ts"
 import { draftKey, draftStore } from "../lib/drafts.ts"
 import { QUEUE_CARD_VIEWPORT_TOP, slugsInThreadDrawers, store } from "../store.ts"
@@ -527,13 +527,7 @@ function Lane({
 }) {
   const openInPlace = useOpenThreadInPlace()
   const scope = useMemo(
-    () => ({
-      projectId: project.id,
-      repo: project.githubRepo ?? null,
-      appPath: crossProjectHref(encodeURIComponent(project.slug)),
-      baseDir: project.projectDir,
-      homeDir: project.homeDir,
-    }),
+    () => projectMarkdownScope(project),
     [project.id, project.githubRepo, project.slug, project.projectDir, project.homeDir],
   )
   const cards = project.queued.filter((t) => !hidden(threadKey(project.id, t.id)))

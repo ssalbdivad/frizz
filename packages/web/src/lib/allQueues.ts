@@ -1,8 +1,10 @@
 import type { BoardSnapshot, ProjectCard, ProjectQueue, RegisteredQuestionView, ThreadView } from "@frizz/shared"
 import { orderByInteraction, orderQueue, queued, sectionOf, type QueueDirection } from "../groups.ts"
+import { crossProjectHref } from "./base-path.ts"
 import { splitFenceBlocks } from "./fenceBlocks.ts"
 import { splitQuestionBlocks, type QuestionKind } from "./questionBlocks.ts"
 import { fenceStandsFor } from "./questionShadow.ts"
+import type { MarkdownScope } from "./useMarkdown.ts"
 
 // THE ALL QUEUES PAGE'S MODEL — every project on the machine, each with its threads already banded.
 //
@@ -32,6 +34,22 @@ export interface QueuesProject {
   running: ThreadView[]
   snoozed: ThreadView[]
   doneCount: number
+}
+
+/**
+ * Whose prose a project's cards are (MarkdownScopeContext): the repo a `#123` links into, the root a
+ * relative path resolves against, the page a thread link opens on, and whose gate reads a cited file.
+ * One construction for the lane that renders the cards and for the link scope that carries a file from
+ * a card into a reader or the picture viewer, so the two cannot name different projects.
+ */
+export function projectMarkdownScope(project: Pick<QueuesProject, "id" | "slug" | "githubRepo" | "projectDir" | "homeDir">): MarkdownScope {
+  return {
+    projectId: project.id,
+    repo: project.githubRepo ?? null,
+    appPath: crossProjectHref(encodeURIComponent(project.slug)),
+    baseDir: project.projectDir,
+    homeDir: project.homeDir,
+  }
 }
 
 export function queuesProjects(

@@ -87,7 +87,18 @@ test("rapid open during exit cancels removal of the same layer", () => {
   assert.equal(store.drawers[0]?.closing, undefined)
 })
 
-test("reopening an already open markdown reader or sub-agent reuses its entry", () => {
+test("a file cited on another project's card opens a reader scoped to that project", () => {
+  resetStore()
+  const scope = { projectId: "project-b", repo: "acme/b", appPath: "/all/b", baseDir: "/opt/b", homeDir: "/home/me" }
+  pushFileReader("/opt/b/run.log", scope)
+  assert.deepEqual(store.drawers.map((d) => ({ kind: d.kind, path: d.path, scope: d.scope })), [{ kind: "file", path: "/opt/b/run.log", scope }])
+
+  resetStore()
+  pushFileReader("/docs/a.md")
+  assert.equal("scope" in store.drawers[0]!, false, "a reader opened on the page's own project names none")
+})
+
+test("reopening an already open file reader or sub-agent reuses its entry", () => {
   resetStore()
   pushFileReader("/docs/a.md")
   pushFileReader("/docs/a.md")

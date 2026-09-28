@@ -1,7 +1,8 @@
-import { rpc } from "../api/rpc.ts"
+import { projectRpc, rpc } from "../api/rpc.ts"
 import { openImageViewer, pushFileReader, showToast } from "../store.ts"
 import { copyTextToClipboard } from "./clipboard.ts"
 import { localViewerFor } from "./localViewer.ts"
+import type { MarkdownScope } from "./useMarkdown.ts"
 
 // One delegated listener covers every sanitized markdown surface (chat, the doc drawer, and
 // drawers). It never follows file:// or an accidental same-origin pathname: only explicit data
@@ -72,23 +73,25 @@ function imageFailureHandler(): (event: Event) => void {
 // Components that own their own click (PathLink, whose row swallows the event before it can reach the
 // delegated listener below) call this directly; everything that only tags itself `data-local-path`
 // arrives through the interceptor, which passes the clicked element as `from` so a picture knows which
-// pictures it was shown among.
-export function openLocalPath(path: string, from?: Element | null): void {
+// pictures it was shown among. `scope` names the project the link belongs to when that is not the
+// page's — a card on the everything page, or a reader opened from one — and every read and open then
+// goes through that project's gate, whose roots include its own checkout wherever it lives.
+export function openLocalPath(path: string, from?: Element | null, scope?: MarkdownScope | null): void {
   const viewer = localViewerFor(path)
   if (viewer === "image") {
-    openImageViewer(path, from ? imageGalleryFor(from) : [])
+    openImageViewer(path, from ? imageGalleryFor(from) : [], scope?.projectId)
     return
   }
   if (viewer) {
-    pushFileReader(path)
+    pushFileReader(path, scope)
     return
   }
-  void openExternally(path)
+  void openExternally(path, scope?.projectId)
 }
 
-// The surfaces a picture's gallery stays inside: a queue card (the board's or the All queues page's),
-// a drawer, the /full page's reader slot, the /full transcript. ←/→ stepping from one thread's
-// screenshot into the next card's would show a picture from a conversation the reader is not in.
+// The surfaces a picture's gallery stays inside: a queue card, a drawer, the /full page's reader slot,
+// the /full transcript. ←/→ stepping from one thread's screenshot into the next card's would show a
+// picture from a conversation the reader is not in.
 const GALLERY_SCOPE = "[data-queue-card], [data-xq-card], [data-drawer-layer], [data-file-viewer-slot], main[data-standalone-thread]"
 
 // The pictures rendered in the same surface as `from`, in reading (document) order, each path once.
@@ -107,9 +110,9 @@ export function imageGalleryFor(from: Element): string[] {
   return paths
 }
 
-async function openExternally(path: string) {
+async function openExternally(path: string, project?: string) {
   try {
-    const result = await rpc.openLocalFile({ path })
+    const result = await (project ? projectRpc(project) : rpc).openLocalFile({ path })
     if (result.action === "copy") {
       await copyTextToClipboard(result.path)
       showToast("Copied local path")
