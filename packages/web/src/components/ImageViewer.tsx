@@ -15,8 +15,8 @@ import { SheetHeader } from "./ui/SheetHeader.tsx"
 // THE PICTURE VIEWER: a click on any picture Frizz renders — a tool's screenshot, a delivered image, a
 // path a worker wrote on its own line, a Markdown `![](…)`, an attachment — opens it HERE, over
 // whatever page or drawer it was clicked in, instead of handing the file to the desktop opener (which on
-// a WSL box meant a browser tab; see lib/localViewer.ts). Esc, the close button or a click on the
-// empty stage puts it away and leaves everything beneath exactly as it was.
+// a WSL box meant a browser tab; see lib/localViewer.ts). Esc, the close button or a click anywhere off
+// the picture puts it away and leaves everything beneath exactly as it was.
 //
 //   · FIT FIRST. The picture opens as large as the stage allows without being enlarged past its own
 //     size; a click then shows it at ACTUAL SIZE (one image pixel per CSS pixel, the way the browser's
@@ -28,8 +28,11 @@ import { SheetHeader } from "./ui/SheetHeader.tsx"
 //     first: its answer can be a toast (a copied path, an opener that failed), and toasts sit below
 //     every modal layer.
 //
-// An OPAQUE page, not a scrim: at 95% the transcript behind still ghosted through as blurred shapes
-// around the picture, which on a phone read as rendering noise rather than as context.
+// OVER the page, not instead of it: the page stays in view under the app's own scrim, the one its
+// dialogs and drawers dim with (here at full strength, since the picture is the only thing in focus),
+// because a page you can still see is what says a click off the picture goes back to it (maintainer
+// 2026-09-28). It was opaque for a day, after a 95% veil ghosted the transcript into blurred shapes
+// that read as rendering noise; the scrim keeps the page legible as a page.
 //
 // A Radix MODAL dialog, which is what keeps it the top of every stack without extra bookkeeping: its
 // focus trap, its scroll lock, and its Escape — observed on document capture and stopped there by
@@ -43,7 +46,7 @@ export function ImageViewer() {
   return (
     <RadixDialog.Root open onOpenChange={(open) => { if (!open) closeImageViewer() }}>
       <RadixDialog.Portal>
-        <RadixDialog.Overlay className="overlay-in fixed inset-0 z-[200] bg-bg" />
+        <RadixDialog.Overlay data-image-viewer-scrim className="overlay-in fixed inset-0 z-[200] bg-scrim backdrop-blur-[1px]" />
         <ViewerContent key={path} path={path} index={viewer.index} count={viewer.paths.length} project={viewer.project} />
       </RadixDialog.Portal>
     </RadixDialog.Root>
@@ -249,7 +252,7 @@ function ViewerContent({ path, index, count, project }: { path: string; index: n
                 }
                 // The transparency grid is behind EVERY picture, not only SVG: it shows nowhere a picture
                 // paints, so a screenshot is untouched, while an icon's black strokes on nothing stay
-                // visible on the dark page.
+                // visible over the dimmed page.
                 className={`frizz-transparency-grid block select-none rounded-sm shadow-2xl shadow-shadow-ink/40 ring-1 ring-border ${
                   natural ? "" : "opacity-0"
                 } ${actual ? "cursor-zoom-out" : zoomable ? "cursor-zoom-in" : ""}`}

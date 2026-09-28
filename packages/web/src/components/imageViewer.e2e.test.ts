@@ -102,6 +102,21 @@ test("a picture opens in Frizz's viewer: fit, actual size, its card's gallery, a
     assert.deepEqual([Math.round(smallShown.width), Math.round(smallShown.height)], [480, 300])
     assert.notEqual(smallShown.cursor, "zoom-in")
     assert.deepEqual(await opened(page), [], "a picture click never reaches the desktop opener")
+    // OVER the page, not instead of it: everything but the header lets the page through a scrim, which
+    // is what says a click off the picture goes back to it. Dimmed, not hidden, and not left bare.
+    const layers = await page.evaluate(() => {
+      const alpha = (el: Element) => {
+        const parts = getComputedStyle(el).backgroundColor.match(/\(([^)]*)\)/)?.[1]?.split(/[\s,/]+/).filter(Boolean) ?? []
+        return parts.length === 4 ? Number(parts[3]) : parts.length === 3 ? 1 : 0
+      }
+      return {
+        scrim: alpha(document.querySelector("[data-image-viewer-scrim]")!),
+        content: alpha(document.querySelector("[data-image-viewer]")!),
+        stage: alpha(document.querySelector("[data-image-viewer] [data-viewer-backdrop]")!),
+      }
+    })
+    assert.ok(layers.scrim > 0.3 && layers.scrim < 0.9, `the scrim's alpha is ${layers.scrim}`)
+    assert.deepEqual([layers.content, layers.stage], [0, 0], "nothing opaque sits between the scrim and the picture")
 
     // ── ←/→ step through the card's pictures, and stop at its ends ──
     await page.keyboard.press("ArrowRight")
