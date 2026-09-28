@@ -54,9 +54,9 @@ const pieces = (d: string) =>
     [m[1], m[2], m[3], m[4]].map((n) => Math.round(Number(n) * 100) / 100),
   )
 
-test("the cord crosses at every row, and which strand is on top alternates crossing to crossing", () => {
-  const [a, b] = twist([100, 130, 160], 50, 3.5, 20, 30)
-  // Four twists (tail, two between rows, tail) per strand, cut once at each crossing it passes UNDER.
+test("the strands cross at every crossing, and which one is on top alternates crossing to crossing", () => {
+  const [a, b] = twist([100, 130, 160], [80, 180], 50, 3.5)
+  // Four twists (in, two between crossings, out) per strand, cut once at each crossing it passes UNDER.
   const [pa, pb] = [pieces(a), pieces(b)]
   assert.equal(pa.length, 4)
   assert.equal(pb.length, 4)
@@ -69,22 +69,19 @@ test("the cord crosses at every row, and which strand is on top alternates cross
   assert.ok(130 - cut[3] > 0.5 && 130 - cut[3] < CROSSING + 0.01, `stops ${130 - cut[3]} short of the crossing`)
 })
 
-test("the strands bow to opposite sides and cross on the centre line", () => {
-  const [a, b] = twist([100, 130], 50, 3.5, 20, 30)
+test("the strands bow to opposite sides, and meet on the centre line at the span's ends, uncut", () => {
+  const [a, b] = twist([100], [86, 114], 50, 3.5)
   const side = (d: string) => Math.sign(Number(d.match(/C([\d.-]+)/)![1]) - 50)
   assert.equal(side(a), -side(b))
+  for (const d of [a, b]) {
+    const p = pieces(d)
+    assert.deepEqual([p[0]![0], p[0]![1]], [50, 86], "starts on the line at the span's top")
+    assert.deepEqual([p[p.length - 1]![2], p[p.length - 1]![3]], [50, 114], "ends on the line at the span's bottom")
+  }
 })
 
-test("a long stretch between rows takes extra crossings, so every twist stays about a link long", () => {
-  // 67px between two rows (a project's header sits in it) at a 30px link: split in two.
-  const [a] = twist([100, 167], 50, 3.5, 20, 30)
-  assert.equal(pieces(a).length, 4, "tail, two half-stretches, tail")
-  // Rows closer than a link are never split.
-  assert.equal(pieces(twist([100, 120], 50, 3.5, 20, 30)[0]).length, 3)
-})
-
-test("no rows, no cord", () => {
-  assert.deepEqual(twist([], 50, 3.5, 20, 30), ["", ""])
+test("no crossings, no cord", () => {
+  assert.deepEqual(twist([], [0, 100], 50, 3.5), ["", ""])
 })
 
 test("a piece of a cubic starts and ends on the curve", () => {
