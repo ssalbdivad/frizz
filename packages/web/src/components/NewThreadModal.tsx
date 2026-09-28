@@ -143,6 +143,7 @@ function CommandForm({ autoFocus, onDispatched, onPrompt }: { autoFocus?: boolea
         <span aria-hidden className="font-mono-keep select-none pl-3.5 pt-2.5 text-[13px] leading-relaxed text-muted-60">$</span>
         <textarea
           data-surface="commandComposer"
+          data-1p-ignore
           data-claims-escape
           value={command}
           autoFocus={autoFocus}

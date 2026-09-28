@@ -2987,8 +2987,8 @@ export function hasLiveOps(t: ThreadView): boolean {
 // the server's own verdict and only ever keeps a thread OUT of Snoozed, so a stale shell costs a dimming,
 // never a disappearance — the same argument restingOnLiveBackgroundWork makes below.
 //
-// A FENCED GITHUB PARK JOINS IT (2026-09-24). The server now excuses an honoured ```awaiting park on a
-// registered PR or issue from the queue (board.hasHonouredGithubPark) — a watcher wake the worker answers
+// A FENCED GITHUB PARK JOINS IT (2026-09-24). The server now excuses every honoured ```awaiting park from
+// the queue, a registered PR or issue included (board.hasHonouredPark) — a watcher wake the worker answers
 // with "still waiting" was re-queuing a thread with nothing for the human to do. So `!needsYou` plus an
 // awaiting fence plus an armed GitHub watch is that verdict, and the row parks like a timer. Two
 // exceptions keep their old band: CI still RUNNING stays in Active under the spinning octocat
@@ -3076,6 +3076,11 @@ export function isSnoozed(t: ThreadView, nowMs = Date.now()): boolean {
   // Without an explicit user snooze, higher-priority attention states render ?, !, or a native
   // prompt—not a wait glyph—so a stale awaiting fence cannot demote them out of Queue.
   if (t.needsYou || t.pendingAsk || t.runtime === "perm-prompt") return false
+  // A WITHHELD ENTRY IS NOT A PARK. The server holds a thread out of the queue for a few seconds after a
+  // hold lets go, while its wake lands (queue-clock.ts), and it reads `!needsYou` meanwhile — but the hold
+  // has ENDED, so the inference below (an awaiting fence plus `!needsYou` means the park stood) would be
+  // false, and the row would drop into Snoozed for those seconds on the way to Ready or back to Active.
+  if (t.queueSettling) return false
   if (!atRest(t)) return false
   // (A limit pause used to return true here — "parked on the clock with a wake already armed" — until
   // 2026-08-31. It is now the hard NON-snooze gate above, and the queue's problem: see deriveNeedsYou.)
@@ -3116,11 +3121,15 @@ export function sectionOf(t: ThreadView): SectionKey | null {
   // sets `needsYou`), marked done → Done. It has no snooze, so the Snoozed band never claims one.
   if (t.kind === "command") return t.state === "archived" ? "inactive" : "active"
   if (t.kind !== "session") return null
-  // Archived → Done, UNLESS it's actively running: a live, in-flight session must never sit under Done
-  // (maintainer, hit 3×). It shows in the Active band with its spinner while it works, and drops back
-  // to Done only once it comes to rest still-archived. (A user BUMP un-archives it for good via
-  // resume; this is the display safety net for a running-yet-archived session.)
-  if (t.state === "archived" && !isActivelyRunning(t)) return "inactive"
+  // Archived → Done, WHATEVER the worker is doing. Marking a thread done is reversible only by the
+  // human (maintainer 2026-09-24: "if something is marked as done ensure that the agent doesn't unmark
+  // it as done that should only be reversible by human"). Until then a running-yet-archived session
+  // was lifted back into Active as a safety net (maintainer 2026-07-10, hit 3×) — but that net was for a
+  // human BUMP, which now un-archives the row for real (server resume.ts
+  // `reopenArchivedThreadForFollowUp`). Everything that still reached it was the WORKER moving on its
+  // own after the human filed it: a sub-agent returning, a background shell finishing, a turn still
+  // draining. None of those is the human reopening it, so none of them moves the row.
+  if (t.state === "archived") return "inactive"
   // Only truthful human/future-timer waiters split into the labeled, dimmed Snoozed band. Everything else
   // open — running, needs-you, bare rest, done-fenced, awaiting-its-own-subs, or an awaiting
   // `session`/hintless wait — belongs to the Active/Rested section, which band decided downstream.

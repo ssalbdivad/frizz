@@ -247,12 +247,12 @@ export function StateButton({
     // completing it is the plain lifecycle write. Always immediate, so always optimistic.
     if (thread.kind === "command") {
       onArchived?.()
-      markArchived(thread.id)
-      rpc
+      if (overlayRail) markArchived(thread.id)
+      api
         .setThreadState({ slug: thread.id, state: "archived" })
         .then(() => showToast("Done"))
         .catch((error) => {
-          clearArchived(thread.id)
+          if (overlayRail) clearArchived(thread.id)
           onDismissCancel?.()
           showToast(`Couldn’t finish: ${(error as Error).message.slice(0, 80)}`)
           setPending(false)

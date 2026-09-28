@@ -313,7 +313,7 @@ function DeleteProjectDialog({
     mutationFn: () => rpc.projectRemove({ id: project.id, deleteData }),
     onSuccess: (result) => {
       // Every machine-wide read that still names it, so its row, its lane and its rail badge go at once.
-      for (const queryKey of [["projectsList"], ["projectsQueues"], ["projectsQueueCounts"]]) void queryClient.invalidateQueries({ queryKey })
+      for (const queryKey of [["projectsList"], ["projectsQueues"], ["projectsRailCounts"]]) void queryClient.invalidateQueries({ queryKey })
       // The worker count is the part the operator could not have known they were asking for, so it is
       // reported rather than folded into a generic success.
       showToast(

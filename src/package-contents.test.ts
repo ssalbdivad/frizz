@@ -82,9 +82,11 @@ test("the shell bootstraps the versioned public server contract", () => {
 
 test("native server dependencies do not leak back into the stable shell", () => {
   assert.equal(manifest.dependencies?.["node-pty"], undefined);
-  // Sign-in runs over pipes: no pty, so no native addon that needs a build on any platform.
+  // Sign-in runs over pipes: no pty, so the PUBLISHED server carries no native addon that needs a build.
   assert.equal(serverManifest.dependencies?.["node-pty"], undefined);
-  assert.equal(sourceServerManifest.dependencies?.["node-pty"], undefined);
+  // The source server's one pty is terminal command threads (command-threads.ts), pinned to the beta that
+  // ships glibc Linux prebuilds so a source install never needs a C++ toolchain.
+  assert.equal(sourceServerManifest.dependencies?.["node-pty"], "1.2.0-beta.15");
   assert.equal(serverManifest.dependencies?.["@parcel/watcher"], "^2.5");
 });
 

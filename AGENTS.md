@@ -145,7 +145,9 @@ Nothing the server ships opens a pseudo-terminal. A Claude thread runs in the se
 
 **So: never propose a pty, node-pty, or "just run it in a terminal" for anything the server does, and never describe sign-in or an agent as running in one.** If a CLI seems to need a TTY, prove it over pipes first — both provider logins were assumed to need one and neither did. `src/package-contents.test.ts` fails if node-pty comes back as a server dependency, and `scripts/verify-linux-package.mjs` (run it in Docker; its header has the command) boots a packed Frizz on a Linux box with no C++ toolchain.
 
-Two things look like exceptions and are not. node-pty is a ROOT `devDependency` for `scripts/verify-product-e2e.mjs` alone, which drives the launcher's interactive readout and never ships. "PTY" in the Codex code (`codex-app-server.ts`, `transcript.ts`) is Codex's own logical terminal handle inside its app-server, not a Frizz process.
+**One exception is real: terminal command threads.** The prompt box's Terminal tab runs a shell command the human typed (`npm run dev`) as a thread whose drawer IS the live terminal, so `server/src/command-threads.ts` owns one node-pty process per command, and `/term/<slug>` (`terminal.ts`) streams it to xterm.js in the drawer. That is the only pty, the only `/term` traffic, and the reason the SOURCE server depends on `node-pty@1.2.0-beta.15` (the beta ships glibc Linux prebuilds). Sign-in and agents stay off it.
+
+Two more things look like exceptions and are not. node-pty is a ROOT `devDependency` for `scripts/verify-product-e2e.mjs` alone, which drives the launcher's interactive readout and never ships. "PTY" in the Codex code (`codex-app-server.ts`, `transcript.ts`) is Codex's own logical terminal handle inside its app-server, not a Frizz process.
 
 # Board nomenclature: "active" means SPINNING, and nothing else
 

@@ -87,6 +87,7 @@ export function ProjectInstructionsField() {
       ) : (
         <>
           <textarea
+            data-1p-ignore
             value={text}
             onChange={(e) => edit(e.target.value)}
             rows={8}

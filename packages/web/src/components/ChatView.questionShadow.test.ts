@@ -50,8 +50,8 @@ test("every Message site hands the message its placed questions, and every quest
 })
 
 test("a placed question leaves its anchor group on both surfaces, and each surface mounts ONE answering provider", () => {
-  assert.match(chat, /questionStacks\(messages, thread\?\.questions \?\? \[\], placement\)/)
-  assert.match(queue, /questionStacks\(messages, thread\?\.questions \?\? \[\], placement\)/)
+  assert.match(chat, /questionStacks\(messages, openQuestions, placement\)/)
+  assert.match(queue, /questionStacks\(messages, openQuestions, placement\)/)
   assert.equal((chat.match(/<RegisteredAnsweringProvider thread=\{thread\}>/g) ?? []).length, 1)
   assert.equal((queue.match(/<RegisteredAnsweringProvider thread=\{thread\}>/g) ?? []).length, 1)
 })
