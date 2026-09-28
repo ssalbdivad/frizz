@@ -1,8 +1,11 @@
-import { Infinity as InfinityIcon, Settings as SettingsIcon } from "lucide-react"
+import { ArrowUpRight, Infinity as InfinityIcon, Settings as SettingsIcon } from "lucide-react"
 import type { ReactNode } from "react"
-import { Link } from "react-router"
+import { Link, useNavigate } from "react-router"
+import { useQuery } from "@tanstack/react-query"
+import { rpc } from "../api/rpc.ts"
+import { isBusy, queuesProjects } from "../lib/allQueues.ts"
 import { store } from "../store.ts"
-import { crossProjectHref } from "../lib/base-path.ts"
+import { crossProjectHref, projectHref } from "../lib/base-path.ts"
 import { narrowCrossProject } from "../lib/crossProject.ts"
 import { isPlainLeftClick } from "../lib/standaloneThreadRoute.ts"
 import { useBoard } from "../hooks.ts"
@@ -11,6 +14,8 @@ import { projectIdentity } from "./Sidebar.tsx"
 import { QuotaChips, useQuotaChipsVisible } from "./QuotaBar.tsx"
 import { RestartFrizzButton } from "./RestartFrizzButton.tsx"
 import { KeyboardShortcutsButton } from "./KeyboardShortcuts.tsx"
+import { ProjectFilter } from "./ProjectFilter.tsx"
+import { MenuItem } from "./ui/Menu.tsx"
 import { useShortcutLabel, withShortcut } from "../lib/keyboardRuntime.ts"
 
 // THE STATUS ROW — one loose line along the TOP OF THE PROMPT BOX, controls at the left edge and the
@@ -199,6 +204,7 @@ export function StatusRow({ crossProject = false, narrowedTo, view }: { crossPro
       ) : crossProject ? (
         <span data-status-row-page className="ml-auto min-w-0 truncate font-semibold text-fg/90">{narrowedTo ?? "Everything"}</span>
       ) : (
+        <BoardFilter slug={board?.projectSlug} label={name} githubRepo={githubRepo}>
         <span
           className="ml-auto flex min-w-0 items-center"
           data-project-identity-state={identity.state}
@@ -231,7 +237,58 @@ export function StatusRow({ crossProject = false, narrowedTo, view }: { crossPro
             <span className="identity-placeholder w-24" aria-hidden="true" />
           )}
         </span>
+        </BoardFilter>
       )}
     </div>
+  )
+}
+
+/**
+ * A board's side of the filter (ProjectFilter.tsx): the board IS the filter to one project, so its
+ * identity becomes the held pill — ✕ back up to Everything (focused here, as ∞ does), the menu to any
+ * other project's board. The repo link the name used to be moves into the menu as "Open on GitHub".
+ *
+ * Until the machine's project list has arrived (or on a board that list does not know) the plain
+ * identity renders instead, so the row never goes blank.
+ */
+function BoardFilter({ slug, label, githubRepo, children }: { slug: string | undefined; label: string | null; githubRepo: string | null; children: ReactNode }) {
+  const navigate = useNavigate()
+  const cards = useQuery({ queryKey: ["projectsList"], queryFn: () => rpc.projectsList() })
+  // The counts are read when the menu opens, not polled: the board has its own live feed, and this is
+  // a glance at the rest of the machine.
+  const queues = useQuery({ queryKey: ["projectsQueues"], queryFn: () => rpc.projectsQueues() })
+  const projects = queuesProjects(cards.data, queues.data).filter((project) => !project.stale || project.slug === slug)
+  const items = [...projects.filter(isBusy), ...projects.filter((project) => !isBusy(project))]
+    .filter((project) => project.card)
+    .map((project) => ({ id: project.id, slug: project.slug, name: project.name, card: project.card!, ready: project.queued.length }))
+  const current = slug ? items.find((item) => item.slug === slug) : undefined
+  if (!slug || !current) return <>{children}</>
+  const toEverything = () => {
+    narrowCrossProject(null)
+    navigate(crossProjectHref(slug))
+  }
+  return (
+    <span className="ml-auto flex min-w-0 items-center" data-project-identity-state="filter">
+      <ProjectFilter
+        projects={items}
+        current={current}
+        label={label ? <StartTruncated text={label} /> : undefined}
+        onEverything={toEverything}
+        onClear={toEverything}
+        onProject={(project) => {
+          if (project.slug !== slug) navigate(projectHref(encodeURIComponent(project.slug)))
+        }}
+        onOpenChange={(open) => {
+          if (open) void queues.refetch()
+        }}
+        footer={
+          githubRepo && (
+            <MenuItem onSelect={() => window.open(`https://github.com/${githubRepo}`, "_blank", "noopener")} icon={<ArrowUpRight size={14} aria-hidden />} value="github">
+              <span className="min-w-0 flex-1 truncate">Open on GitHub</span>
+            </MenuItem>
+          )
+        }
+      />
+    </span>
   )
 }

@@ -462,21 +462,26 @@ try {
       `${widened.length} → ${byHeader.length} → ${byDoor.length} lanes of ${everything.length}`,
     )
 
-    // The status row's filter says all of that out loud: a menu of Everything and every project, and,
-    // narrowed, a held pill whose ✕ lifts it.
+    // The status row's filter says all of that out loud: a menu of Everything and every project, where a
+    // project OPENS ITS BOARD — which wears the filter as a held pill, whose ✕ comes back up to Everything.
     await page.click("[data-xq-view-filter]")
     await page.waitForSelector('[role="menuitem"][data-value="marketing-site"]', { timeout: 5000 })
     await page.click('[role="menuitem"][data-value="marketing-site"]')
-    await page.waitForSelector("[data-xq-view-filter-clear]", { timeout: 5000 })
-    const byMenu = await lanes()
-    const pill = (await page.$("[data-xq-view-filter-pill]")) !== null
-    await page.click("[data-xq-view-filter-clear]")
+    await page.waitForFunction(() => location.pathname === "/project/marketing-site", { timeout: 8000 })
+    await page.waitForSelector("[data-xq-view-filter-clear]", { timeout: 15_000 })
+    // The board's first paint can be the empty-board layout before its keyframe swaps in the sidebar,
+    // which remounts the row — so settle, then read and press in one in-page step.
+    await sleep(1500)
+    const onBoard = await pageTitle()
+    await page.waitForFunction(() => { const clear = document.querySelector("[data-xq-view-filter-clear]"); clear?.click(); return clear !== null }, { timeout: 8000 })
+    await page.waitForFunction(() => location.pathname === "/all/marketing-site", { timeout: 8000 })
     await page.waitForFunction(() => document.querySelector("[data-xq-view-filter]")?.getAttribute("data-xq-view-filter") === "everything", { timeout: 5000 }).catch(() => {})
+    await page.waitForSelector("[data-xq-lane]", { timeout: 8000 })
     const cleared = await lanes()
     check(
-      "the status row's filter narrows from its menu, and its ✕ clears it",
-      JSON.stringify(byMenu) === JSON.stringify([ids["marketing-site"]]) && pill && JSON.stringify(cleared) === JSON.stringify(everything),
-      `${byMenu.length} lane by the menu (pill ${pill}), ${cleared.length} after ✕`,
+      "the status row's filter opens a project's board, and the board's ✕ comes back to Everything",
+      onBoard === "marketing-site" && JSON.stringify(cleared) === JSON.stringify(everything),
+      `board pill "${onBoard}", ${cleared.length} lanes after ✕`,
     )
   })
 
