@@ -1,4 +1,5 @@
 import { useEffect, useRef, type RefObject } from "react"
+import { flushSync } from "react-dom"
 import { useSnapshot } from "valtio"
 import { store } from "../store.ts"
 import { prefs } from "./prefs.ts"
@@ -83,7 +84,7 @@ function stepCard(step: 1 | -1): boolean {
   // At either end the key lands the card it is already on — the same re-ring a second click on its
   // rail row plays — so the press is visibly received rather than silently eaten.
   cursor.go(target)
-  openCard(cursor.root(target))
+  openCard(target, cursor.root(target))
   return true
 }
 
@@ -93,8 +94,43 @@ function stepCard(step: 1 | -1): boolean {
  * every triage key then cost an Escape first. Triage is the common case, so it keeps the single keys,
  * and `r` is the one extra key to answer (maintainer 2026-09-28).
  */
-function openCard(root: HTMLElement | null): void {
-  root?.querySelector<HTMLButtonElement>('[data-xq-show-more][aria-expanded="false"]')?.click()
+function openCard(key: string, root: HTMLElement | null): void {
+  const button = root?.querySelector<HTMLButtonElement>('[data-xq-show-more][aria-expanded="false"]')
+  if (!button) return
+  button.click()
+  autoOpened = { key, button }
+}
+
+/**
+ * The card a key opened, until the reader leaves it. Opening it was the KEY's doing, so leaving it undoes
+ * it: stepping on with `j` / `k`, a rail row, or a click in another card closes it again (maintainer
+ * 2026-09-28). A card the reader opened or closed with their OWN press is theirs and is left as it is —
+ * that press is a trusted click, and a key's press never is.
+ */
+let autoOpened: { key: string; button: HTMLButtonElement } | null = null
+
+if (typeof document !== "undefined") {
+  document.addEventListener(
+    "click",
+    (event) => {
+      if (event.isTrusted && autoOpened && event.target instanceof Node && autoOpened.button.contains(event.target)) autoOpened = null
+    },
+    true,
+  )
+}
+
+/**
+ * Close the card a key opened, unless `key` is that card. Scrolling alone does not call this: shrinking a
+ * card the reader is scrolling past would yank the page under them. The page stays put across the collapse
+ * on its own — the viewport lock (lib/viewportLock.ts) holds what is on screen when a card above it shrinks.
+ */
+export function releaseAutoOpened(key: string | null): void {
+  const held = autoOpened
+  if (!held || held.key === key) return
+  autoOpened = null
+  if (!held.button.isConnected || held.button.getAttribute("aria-expanded") !== "true") return
+  // Synchronously, so whoever measures next (the glide to the next card) measures the page without it.
+  flushSync(() => held.button.click())
 }
 
 function focusReplyBox(surface: HTMLElement): boolean {
