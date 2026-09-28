@@ -1440,9 +1440,28 @@ a[href] {
   }
 }
 
+/* The card a `d` or `s` would act on (useQueueKeys in AllQueues.tsx) keeps the arrival ring for as long
+   as it is that card. Arriving on it, the ring settles INTO place rather than fading out — fading to
+   transparent and snapping back once the animation ended read as a second, unrelated flash. The
+   re-ring at either end of `j`/`k` still replays, since the flash attribute is re-armed each landing. */
+[data-queue-current] {
+  outline: 2px solid var(--color-accent, #e8b923);
+  outline-offset: 2px;
+}
+[data-queue-current][data-queue-flash] { animation: queue-flash-settle 0.35s ease-out; }
+@keyframes queue-flash-settle {
+  0% { outline-offset: 6px; }
+  100% { outline-offset: 2px; }
+}
+@media (prefers-reduced-motion: reduce) {
+  [data-queue-current][data-queue-flash] { animation: none; }
+}
+
 /* Queue card EXIT — Everything's card slot (AllQueuesCard.tsx, and AllQueues.tsx for a command card).
    The card FADES to transparent while it recedes (uniform scale from its centre, so it "sinks
    backwards") and blurs, AT FULL HEIGHT; then AllQueues.tsx useLeavingCards UNMOUNTS it.
+   lib/viewportLock.ts keeps whatever the reader is looking at where it was, and a dismissal of the
+   reader's own lands the next card at the top.
    There is deliberately NO height-collapse phase (removed 2026-07-15). A gradual grid 1fr→0fr collapse
    unavoidably DRIFTS the neighbouring card by the collapsed height — native scroll anchoring does not
    compensate a grid collapse, and any programmatic scroll run alongside it fights the collapse and
@@ -1453,15 +1472,24 @@ a[href] {
 .frizz-card-slot { opacity: 1; }
 .frizz-card-slot[data-queue-leaving="true"] { opacity: 0; }
 /* The hairline rule under a card is the slot's next SIBLING (a lane, AllQueues.tsx Lane, renders one
-   between each pair of cards, never inside a slot), and it unmounts with the card it follows — so it fades with it too, or
-   the rule would stand at full strength beside a card that has already dissolved. */
+   between each pair of cards, never inside a slot), and it unmounts with the card it follows — so it
+   fades with it too, or the rule would stand at full strength beside a card that has already dissolved. */
 .frizz-card-slot[data-queue-leaving="true"] + hr { opacity: 0; }
 .frizz-card-slot > .frizz-card-clip > .frizz-card-body { transform-origin: center center; }
 .frizz-card-slot[data-queue-leaving="true"] > .frizz-card-clip > .frizz-card-body { transform: scale(0.94); filter: blur(6px); }
 /* Promote to a compositing layer ONLY while dissolving — a permanent will-change on every mounted card
    would pin a GPU layer per queue row for its whole lifetime. */
 .frizz-card-slot[data-queue-leaving="true"] > .frizz-card-clip > .frizz-card-body { will-change: transform, filter; }
+/* A GHOST (lib/stableQueue.ts): the card's thread left the queue on its own while the card was on screen,
+   so the card holds its place — quiet, at full height, still usable — until it scrolls off or the thread
+   rests again. Quiet by tone only: its size and position must not change, or it moves what is under it. */
+.frizz-card-slot[data-queue-ghost] > .frizz-card-clip { opacity: 0.5; }
+/* CONCEALED: its drawer is open, where it is read. Hidden but still laid out, so the cards around it —
+   under the sheet, and after it closes — stay exactly where they were; `inert` takes it out of the tab
+   order and out of reach of a click. */
+.frizz-card-slot[data-queue-concealed] { visibility: hidden; }
 @media (prefers-reduced-motion: no-preference) {
+  .frizz-card-slot > .frizz-card-clip { transition: opacity 200ms cubic-bezier(0.4, 0, 0.2, 1); }
   .frizz-card-slot[data-queue-leaving="true"],
   .frizz-card-slot[data-queue-leaving="true"] + hr {
     transition: opacity 200ms cubic-bezier(0.4, 0, 0.2, 1);

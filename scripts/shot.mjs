@@ -5,18 +5,22 @@
 //
 // Usage:
 //   nub scripts/shot.mjs <url> [out.png] [evalExprOr@file] [--before=exprOr@file] [--hover=<css selector>]
-//     [--w=1440] [--h=900] [--wait=1500] [--clip=<css selector>] [--pad=8] [--dsf=2]
+//     [--mouse] [--w=1440] [--h=900] [--wait=1500] [--clip=<css selector>] [--pad=8] [--dsf=2]
 //   evalExpr: a JS expression string evaluated in page context (completion value → printed as JSON).
 //   @file:    read the expression from a file (e.g. an occlusion routine).
 //   --hover:  park the pointer on that element (after --before, before the shot), so a surface that
 //             reveals on CSS :hover — a rail row's action strip — is photographed as the eye sees it.
-//             No in-page expression can enter that state; only a real pointer can.
+//             No in-page expression can enter that state; only a real pointer can. Implies --mouse.
+//   --mouse:  render as a desktop with a mouse — `(hover: hover)`, fine pointer — instead of headless
+//             Chrome's touch screen (lib/mouse-pointer.mjs). Without it every Tailwind hover: style is
+//             dead and the app's `(hover: none)` touch rules apply.
 //   --clip:   shoot only that element's box (+ --pad px of margin) instead of the viewport, and --dsf
 //             raises the device pixel ratio — together they make a 27px row judgeable without zooming
 //             the page (a `zoom`/`transform` hack reflows this app's centered layout and moves the very
 //             thing you were trying to photograph off-screen).
 import { readFileSync } from "node:fs"
 import puppeteer from "puppeteer"
+import { MOUSE_POINTER_ARG } from "./lib/mouse-pointer.mjs"
 
 const args = process.argv.slice(2)
 const pos = args.filter((a) => !a.startsWith("--"))
@@ -40,7 +44,7 @@ if (!url) {
 // three minutes). The failure arrives as a bare ProtocolError that reads like a bug in the page.
 const browser = await puppeteer.launch({
   headless: "new",
-  args: ["--no-sandbox", "--force-color-profile=srgb"],
+  args: ["--no-sandbox", "--force-color-profile=srgb", ...(flags.hover || flags.mouse ? [MOUSE_POINTER_ARG] : [])],
   protocolTimeout: 600_000,
 })
 try {

@@ -6,6 +6,7 @@ import { closeGithubPicker, store, seedBoard, openNewThread, pushDrawer, resolve
 import { useBoard } from "./hooks.ts"
 import { closeDrawerAnimated } from "./lib/overlays.ts"
 import { useShortcut } from "./lib/keyboardRuntime.ts"
+import { pageScrollY } from "./lib/pageScrollLock.ts"
 import { startRouter } from "./lib/router.ts"
 import { projectSlug } from "./lib/base-path.ts"
 import { AllQueuesPage } from "./components/AllQueues.tsx"
@@ -190,16 +191,20 @@ export function App() {
     body.style.right = "0"
     body.style.width = "100%"
     return () => {
+      // The offset to come back to is the body's pinned top NOW, not the one captured at the lock: the
+      // queue's viewport lock (lib/viewportLock.ts) moves that top when a card arrives or leaves above the
+      // one behind the drawer, and restoring the old offset displaced the reader by exactly that card.
+      const current = pageScrollY()
       body.style.position = ""
       body.style.top = ""
       body.style.left = ""
       body.style.right = ""
       body.style.width = ""
-      // Until 2026-09-28 a scroll requested under the lock parked its landing for this restore to honour
-      // (lib/pageScrollLock.ts), so a board's queued row could dismiss its drawer and auto-scroll in one
-      // move. Nothing asks for one any more (Everything's scroll-to-card, AllQueues.tsx, never did), so
-      // the restore is the captured offset, always.
-      window.scrollTo(0, y)
+      // Until 2026-09-28 a scroll requested under the lock could also park a landing for this restore to
+      // honour (lib/pageScrollLock.ts requestScrollAfterUnlock), so a board's queued row could dismiss its
+      // drawer and auto-scroll in one move. Nothing asks for one any more (Everything's scroll-to-card,
+      // AllQueues.tsx, never did), so the restore is the held offset, always.
+      window.scrollTo(0, current)
     }
   }, [overlayOpen])
 

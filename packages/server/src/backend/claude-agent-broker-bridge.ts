@@ -73,6 +73,10 @@ export interface ClaudeBrokerBridgeDeps {
     mcpServers?: WorkerMcpServers
     allowedTools?: string[]
     permDir?: string
+    /** The directory whose `.frizz/` is this project's board, set only where that is NOT the worker's
+     *  cwd — the Home workspace (home-workspace.ts). Reaches the hooks as FRIZZ_BOARD_ROOT, so the
+     *  scratch directory and session state land on the board instead of in `<cwd>/.frizz`. */
+    boardRoot?: string
   }
   /** The live Settings, read at every fork so the auto-compact window (Settings.autoCompactWindow →
    *  CLAUDE_CODE_AUTO_COMPACT_WINDOW) follows the drawer without a restart. Only the fork reads it: a
@@ -506,6 +510,7 @@ export function createClaudeAgentBrokerBridge(deps: ClaudeBrokerBridgeDeps): Cla
       ...claudeCompactionEnv(deps.getSettings?.()),
       ...claudePromptCacheEnv(deps.getSettings?.()),
       ...(we?.permDir ? { FRIZZ_PERM_DIR: we.permDir } : {}),
+      ...(we?.boardRoot ? { FRIZZ_BOARD_ROOT: we.boardRoot } : {}),
       // The cc-worker plugin's PreToolUse hook DENIES AskUserQuestion, because without frizz in the
       // loop a blocking question freezes a headless worker where nobody can answer it. On the broker path
       // frizz CAN answer it — the call becomes a dashboard question card — so the hook is told to stand

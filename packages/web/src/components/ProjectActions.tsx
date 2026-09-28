@@ -13,16 +13,18 @@ import { useDeferredValue, useEffect, useRef, useState, type ReactNode } from "r
 import { Ellipsis, Loader2 } from "lucide-react"
 import { useNavigate } from "react-router"
 import { useSnapshot } from "valtio"
-import { PROJECT_ICON_EXTENSIONS, slugify, type ProjectCard } from "@frizz/shared"
+import { PROJECT_ICON_EXTENSIONS, slugify, type ProjectAddResult, type ProjectCard, type ProjectEnclosed } from "@frizz/shared"
 import { rpc } from "../api/rpc.ts"
 import { everythingHref, innerPath, projectSlug } from "../lib/base-path.ts"
 import { showToast, store } from "../store.ts"
+import { rememberCrossProjectFocus } from "../lib/crossProject.ts"
 import { Dialog } from "./ui/Dialog.tsx"
 import { ProjectSquare } from "./ProjectRail.tsx"
 import { ROW_ACTION_CLASS } from "./Sidebar.tsx"
 
 /** `/Users/me/code/nub` → `~/code/nub`. The home prefix is noise on every row. */
 export function shortPath(path: string, home: string | undefined): string {
+  if (home && path === home) return "~"
   return home && path.startsWith(`${home}/`) ? `~${path.slice(home.length)}` : path
 }
 
@@ -151,6 +153,15 @@ export function ProjectMenu({
                 <RadixDropdown.Separator className="mx-1 my-1 h-px bg-border" />
               </>
             )}
+            {project.home ? (
+              // The Home workspace is Frizz's, not a folder the operator registered: it has no icon to
+              // choose, its name is fixed, and it cannot be deleted. What CAN change is the folder its
+              // agents run in, which is a setting — so the menu opens Settings there.
+              <RadixDropdown.Item className={MENU_ITEM} onSelect={() => { store.showSettings = true }}>
+                Change folder…
+              </RadixDropdown.Item>
+            ) : (
+            <>
             {!project.stale && (
               <>
                 <RadixDropdown.Item className={MENU_ITEM} onSelect={() => pick.mutate()}>
@@ -170,6 +181,8 @@ export function ProjectMenu({
             >
               Delete project…
             </RadixDropdown.Item>
+            </>
+            )}
           </RadixDropdown.Content>
         </RadixDropdown.Portal>
       </RadixDropdown.Root>
@@ -430,9 +443,14 @@ function AddProjectDialog({
   const openAdded = useOpenAddedProject()
   const add = useMutation({
     mutationFn: (input: string) => rpc.projectAdd({ path: input }),
-    onSuccess: (project) => {
+    onSuccess: (result) => {
+      // Inside another project root: the same host asks which one was meant (EnclosedProjectDialog).
+      if (result.kind === "enclosed") {
+        store.addProject = { enclosed: result }
+        return
+      }
       onClose()
-      openAdded(project)
+      openAdded(result.project)
     },
   })
   const error = add.error instanceof Error ? add.error.message : add.error ? String(add.error) : null
@@ -487,6 +505,86 @@ function AddProjectDialog({
       </RadixDialog.Portal>
     </RadixDialog.Root>
   )
+}
+
+/**
+ * The chosen folder sits inside another project root — `~/app/yes` inside the `~/app` checkout — so
+ * adding it as-is would open that root instead. Until 2026-09-28 that happened without a word: the add
+ * reopened `~/app`, navigated to a board the operator already had open, and read as a silent failure.
+ * Both answers are real ones: a package folder usually means its repository, but someone who pointed
+ * at a folder may mean exactly that folder, and `exact` adopts it with its own `.frizz/.id`.
+ */
+function EnclosedProjectDialog({ enclosed, onClose }: { enclosed: ProjectEnclosed; onClose: () => void }) {
+  const openAdded = useOpenAddedProject()
+  const add = useMutation({
+    mutationFn: (input: { path: string; exact?: boolean }) => rpc.projectAdd(input),
+    onSuccess: (result: ProjectAddResult) => {
+      // Cannot happen for either button — the root resolves to itself, and `exact` never asks — but a
+      // stale answer must not strand the dialog on a spinner.
+      if (result.kind === "enclosed") {
+        store.addProject = { enclosed: result }
+        return
+      }
+      onClose()
+      openAdded(result.project)
+    },
+  })
+  const error = add.error instanceof Error ? add.error.message : add.error ? String(add.error) : null
+  const folder = baseName(enclosed.path)
+  const root = baseName(enclosed.root)
+
+  return (
+    <RadixDialog.Root open onOpenChange={(open) => { if (!open && !add.isPending) onClose() }}>
+      <RadixDialog.Portal>
+        <RadixDialog.Overlay className="fixed inset-0 z-[210] bg-scrim-30 backdrop-blur-md backdrop-saturate-150" />
+        <RadixDialog.Content
+          aria-modal="true"
+          aria-describedby={undefined}
+          className="fixed left-1/2 top-1/2 z-[210] w-[460px] max-w-[90vw] -translate-x-1/2 -translate-y-1/2 rounded-xl border border-border bg-panel p-5 shadow-2xl shadow-shadow-ink/50 outline-none"
+        >
+          <RadixDialog.Title className="mb-1 text-[14px] font-medium">That folder is inside {root}</RadixDialog.Title>
+          <p className="mb-3.5 text-[12.5px] leading-relaxed text-muted">
+            <span className="font-mono text-fg/80">{enclosed.path}</span> sits inside{" "}
+            <span className="font-mono text-fg/80">{enclosed.root}</span>
+            {enclosed.rootRegistered ? ", which is already a project" : ", a repository root"}, so adding it would{" "}
+            {enclosed.rootRegistered ? "just open" : "add"} that instead. Add <span className="font-mono text-fg/80">{folder}</span> on its own to give it a separate board.
+          </p>
+          {error ? <p className="mb-2 text-[11.5px] text-danger">{error}</p> : null}
+          <div className="flex justify-end gap-2">
+            <button
+              type="button"
+              onClick={onClose}
+              disabled={add.isPending}
+              className="rounded-md border border-border-strong bg-elevated px-3 py-1.5 text-[12.5px] text-fg outline-none hover:bg-panel-2 focus-visible:ring-1 focus-visible:ring-focus-ink-60 disabled:opacity-50"
+            >
+              Cancel
+            </button>
+            <button
+              type="button"
+              onClick={() => add.mutate({ path: enclosed.root })}
+              disabled={add.isPending}
+              className="rounded-md border border-border-strong bg-elevated px-3 py-1.5 text-[12.5px] text-fg outline-none hover:bg-panel-2 focus-visible:ring-1 focus-visible:ring-focus-ink-60 disabled:opacity-50"
+            >
+              {enclosed.rootRegistered ? `Open ${root}` : `Add ${root}`}
+            </button>
+            <button
+              type="button"
+              autoFocus
+              onClick={() => add.mutate({ path: enclosed.path, exact: true })}
+              disabled={add.isPending}
+              className="rounded-md border border-accent bg-accent-fill px-3 py-1.5 text-[12.5px] font-medium text-on-accent outline-none hover:brightness-110 focus-visible:ring-1 focus-visible:ring-focus-ink-60 disabled:opacity-50"
+            >
+              {add.isPending ? "Adding…" : `Add ${folder} on its own`}
+            </button>
+          </div>
+        </RadixDialog.Content>
+      </RadixDialog.Portal>
+    </RadixDialog.Root>
+  )
+}
+
+function baseName(path: string): string {
+  return path.replace(/[\\/]+$/u, "").split(/[\\/]/u).pop() || path
 }
 
 /**
@@ -637,6 +735,10 @@ export function useAddProject(): { start: () => void; pending: boolean } {
         store.addProject = { reason: result.reason }
         return
       }
+      if (result.kind === "enclosed") {
+        store.addProject = { enclosed: result }
+        return
+      }
       openAdded(result.project)
     },
     // A picker that throws is still a machine without a working picker.
@@ -664,12 +766,15 @@ function useOpenAddedProject(): (project: { id: string; slug: string }) => void 
 export function AddProjectHost() {
   const request = useSnapshot(store).addProject
   if (!request) return null
+  // Keyed on the folder so a second enclosed answer mounts fresh rather than inheriting a spent mutation.
+  if (request.enclosed) return <EnclosedProjectDialog key={request.enclosed.path} enclosed={request.enclosed} onClose={() => (store.addProject = null)} />
   return <AddProjectDialog reason={request.reason} proposed={request.proposed} onClose={() => (store.addProject = null)} />
 }
 
 /** The home directory, from the registry's own paths — only ever used to shorten a path for display. */
 export function homeOf(projects: readonly { path: string }[] | undefined): string | undefined {
-  return projects?.[0]?.path.match(/^(\/(?:Users|home)\/[^/]+)\//u)?.[1]
+  // Up to a `/` OR the end: the Home workspace's folder is, by default, the home folder itself.
+  return projects?.[0]?.path.match(/^(\/(?:Users|home)\/[^/]+)(?:\/|$)/u)?.[1]
 }
 
 /**
@@ -690,9 +795,13 @@ const MARK_PX = 76
  * directory is gone. Those are listed under the button with their menus, since deleting them (or finding
  * the folder again) is the way out, and a page that pretended they did not exist would strand them.
  */
-export function Welcome({ projects }: { projects: readonly ProjectCard[] }) {
+export function Welcome({ projects: cards }: { projects: readonly ProjectCard[] }) {
   const add = useAddProject()
-  const home = homeOf(projects)
+  const home = homeOf(cards)
+  // The Home workspace is always registered, so it is not what this page counts: a machine with only
+  // Home still has no project. It is offered below instead, as the other way to start.
+  const projects = cards.filter((card) => !card.home)
+  const homeCard = cards.find((card) => card.home && !card.stale)
   return (
     // m-auto rather than justify-center: a centred flex column clips its overflow at the top once the
     // content is taller than the viewport, and auto margins centre while still scrolling from the top.
@@ -739,6 +848,22 @@ export function Welcome({ projects }: { projects: readonly ProjectCard[] }) {
           <code className="rounded border border-border bg-panel px-1.5 py-0.5 font-mono text-muted">frizz</code>{" "}
           in any folder.
         </p>
+        {/* Choosing Home makes it the pick, and `/` then lands on Everything aimed at it (routes.tsx
+            useHomeFocus) — the way to clone a first repository without adding a project to hold it. */}
+        {homeCard && (
+          <p className="text-[11.5px] text-muted-70">
+            Or{" "}
+            <button
+              type="button"
+              data-welcome-home
+              onClick={() => rememberCrossProjectFocus(homeCard.id)}
+              className="rounded-sm text-fg/85 underline decoration-muted/40 underline-offset-2 outline-none transition-colors hover:text-fg hover:decoration-fg focus-visible:ring-1 focus-visible:ring-focus-ink-60"
+            >
+              start a thread in {shortPath(homeCard.path, home)}
+            </button>{" "}
+            without a project.
+          </p>
+        )}
       </div>
     </div>
   )

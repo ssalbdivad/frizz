@@ -15,6 +15,11 @@ import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path"
 //   1. `~/.frizz` exists  -> use it for everything, unchanged, forever. Nobody migrates.
 //   2. otherwise         -> the platform's idiomatic locations, XDG variables honored individually.
 //
+// A `~/.frizz` that is plainly a project BOARD — `threads/` and no data-root file — is not an install
+// and does not count (isStrayBoard, below). Nor does one that never held a registry while the platform
+// root already does (supersededByInstall, below): rule 1 exists to keep an install from moving, and
+// honoring that directory is what would move one.
+//
 // The three roots exist because the content genuinely differs in kind, which is the whole point of
 // the XDG split: `cache` is regenerable and safe to delete (artifacts, browser profiles, quota
 // snapshots — the gigabytes), `data` is the threads and cannot be recovered, `state` is logs, locks
@@ -75,6 +80,52 @@ export const LEGACY_DIR_NAME = ".frizz"
 
 export function legacyFrizzRoot(home = homedir()): string {
   return join(home, LEGACY_DIR_NAME)
+}
+
+/**
+ * What only a Frizz DATA ROOT holds. Any one of them makes `~/.frizz` the legacy root, whatever else is
+ * in it: every launch writes the registry and a project state directory, so a real install has several.
+ */
+const DATA_ROOT_ENTRIES = ["projects", "registry.json", "config.json", "ui.db", "server.lock", "settings.json", "logs"]
+/** What a PROJECT'S BOARD directory holds (`<project>/.frizz/`) — the same name, one level down. */
+const BOARD_ENTRIES = ["threads", ".session-state", ".id", ".gitignore", ".agent-bindings.jsonl"]
+
+/**
+ * Is `~/.frizz` a project's BOARD rather than a data root — something wrote `threads/…` into it?
+ *
+ * The name is shared: a project's board is `<project>/.frizz/`, so the home folder's board would be
+ * `~/.frizz` — and the bare existence of that directory is what selects the legacy layout below. A Frizz
+ * worker runs with its cwd in the home folder when it belongs to the Home workspace (home-workspace.ts),
+ * and while Frizz points that worker's scratch directory elsewhere, a worker or tool that still writes
+ * the conventional `.frizz/threads/<id>/` relative to its cwd would otherwise switch an XDG install onto
+ * an empty data root at the next boot: every project gone from the page, their data intact but unread.
+ *
+ * Conservative in the one direction that matters. A real legacy root always holds a data-root entry and
+ * stays legacy. An EMPTY `~/.frizz` stays legacy too — the sandbox harnesses create one on purpose to pin
+ * that layout. Only a directory holding board entries and NOTHING of a data root is passed over.
+ */
+function isStrayBoard(root: string, exists: (path: string) => boolean): boolean {
+  if (DATA_ROOT_ENTRIES.some((name) => exists(join(root, name)))) return false
+  return BOARD_ENTRIES.some((name) => exists(join(root, name)))
+}
+
+/**
+ * Has the platform data root ALREADY become this machine's install, while `~/.frizz` never held a
+ * registry?
+ *
+ * Every launch writes `registry.json`, so a real legacy install always has one — and so does an
+ * established XDG / Application Support / LocalAppData install. When only the platform root has one,
+ * `~/.frizz` is debris from something that wrote into it by name, and honoring it would move the
+ * install onto an empty root. That happened on 2026-09-28: `scripts/verify-codex-errors.mjs` pointed
+ * `FRIZZ_RUNTIMES_DIR` at `~/.frizz/runtimes`, a 200 MB provision created the directory, and the next
+ * `npm run dev` came up on it — every project gone from the page and every thread listed as an
+ * external terminal session, the real data untouched and unread under `~/.local/share/frizz`.
+ *
+ * Deliberately one-directional: it never overrides a `~/.frizz` that has a registry of its own, and
+ * never matters on a fresh machine, where there is no platform registry to prefer.
+ */
+function supersededByInstall(root: string, platformData: string, exists: (path: string) => boolean): boolean {
+  return !exists(join(root, "registry.json")) && exists(join(platformData, "registry.json"))
 }
 
 /** An XDG variable counts only when it is SET and ABSOLUTE; the spec says to ignore relative values. */
@@ -155,11 +206,6 @@ export function frizzPaths(options: FrizzPathOptions = {}): FrizzPaths {
   const home = options.home ?? homedir()
   const exists = options.exists ?? existsSync
 
-  const legacyRoot = legacyFrizzRoot(home)
-  if (exists(legacyRoot)) {
-    return { data: legacyRoot, state: legacyRoot, cache: legacyRoot, legacy: true }
-  }
-
   const explicit = {
     data: xdg(env, "XDG_DATA_HOME"),
     state: xdg(env, "XDG_STATE_HOME"),
@@ -171,12 +217,18 @@ export function frizzPaths(options: FrizzPathOptions = {}): FrizzPaths {
       ? darwinRoots(home)
       : xdgRoots(env, home)
 
-  return {
+  const resolved = {
     data: explicit.data ? join(explicit.data, "frizz") : platformRoots.data,
     state: explicit.state ? join(explicit.state, "frizz") : platformRoots.state,
     cache: explicit.cache ? join(explicit.cache, "frizz") : platformRoots.cache,
     legacy: false,
   }
+
+  const legacyRoot = legacyFrizzRoot(home)
+  if (exists(legacyRoot) && !isStrayBoard(legacyRoot, exists) && !supersededByInstall(legacyRoot, resolved.data, exists)) {
+    return { data: legacyRoot, state: legacyRoot, cache: legacyRoot, legacy: true }
+  }
+  return resolved
 }
 
 /**

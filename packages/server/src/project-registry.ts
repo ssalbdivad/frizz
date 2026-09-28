@@ -99,6 +99,9 @@ const RESERVED = new Set([
   // such route. Only newly minted slugs consult this, so adding it strands nothing already registered.
   "control",
   "project-icon", "assets", "favicon", "manifest", "index", "api", "health",
+  // The Home workspace's address (home-workspace.ts). A project already registered under it keeps it,
+  // and Home answers on its id instead.
+  "home",
 ])
 
 export function registryPath(home = homedir()): string {

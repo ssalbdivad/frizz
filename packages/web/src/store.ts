@@ -1,5 +1,5 @@
 import { proxy } from "valtio"
-import type { BoardSnapshot, ThreadView, BoardDelta } from "@frizz/shared"
+import type { BoardSnapshot, ThreadView, BoardDelta, ProjectEnclosed } from "@frizz/shared"
 import { applyBoardDelta } from "@frizz/shared"
 import type { ComposerContextItem } from "./lib/composerContext.ts"
 import { disarmFullscreenMorph } from "./lib/fullscreenMorph.ts"
@@ -55,7 +55,9 @@ export const store = proxy({
   // AddProjectHost, mounted by the root layout): the folder picker's fallback when a machine has none,
   // and the launcher's `/?add=<dir>` proposal. Not reset on a project switch — adding a project is a
   // machine action, and the dialog must survive the navigation that the proposal itself triggers.
-  addProject: null as { reason?: string; proposed?: string } | null,
+  // `enclosed` is the other question it asks: the chosen folder sits inside another project root, so
+  // open that root, or add the folder as its own project.
+  addProject: null as { reason?: string; proposed?: string; enclosed?: ProjectEnclosed } | null,
   showPalette: false,
   // The keyboard-shortcuts sheet (`?`, or the keyboard icon in the status row). Rendered by
   // <KeyboardLayer/>, which every page shell mounts — so it opens on the board, Everything and /full

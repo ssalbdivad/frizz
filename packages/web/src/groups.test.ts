@@ -75,6 +75,15 @@ test("needsAction: a REGISTERED question at rest cards; mid-turn it does not (th
   assert.equal(needsAction(thread({ questions: regQuestion, runtime: "running" })), false)
 })
 
+// A reply past a question is a pivot (shared questionRepliedPast): the card stays up where it was asked,
+// but the thread is not asking any more, so neither the queue rule nor the rail mark may say it is.
+test("needsAction / sessionIndicatorKind: a question the human replied past asks nothing", () => {
+  const passed = regQuestion.map((q) => ({ ...q, repliedPast: true as const }))
+  assert.equal(needsAction(thread({ questions: passed, runtime: "turn-idle" })), false)
+  assert.notEqual(sessionIndicatorKind(thread({ questions: passed, runtime: "turn-idle" })), "needs-input")
+  assert.equal(needsAction(thread({ questions: [...passed, ...regQuestion.map((q) => ({ ...q, id: `${q.id}-new` }))], runtime: "turn-idle" })), true, "one asked since still does")
+})
+
 test("needsAction: `unread` no longer drives carding (unread is dead)", () => {
   // A completed turn on a still-live thread badged unread — pure progress, never a card.
   assert.equal(needsAction(thread({ unread: true, runtime: "turn-idle" })), false)

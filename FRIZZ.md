@@ -159,8 +159,16 @@ touches GitHub as a PR.
   no branch and no worktree — edit, verify, commit on `main`, done.
 - **Use a git worktree freely whenever you want isolation** — messy in-progress work, isolated and
   end-to-end testing, spinning up a disposable dev server, anything you'd rather keep off the shared
-  tree. Create it on a local branch (`git worktree add <dir> -b <slug>`), do the work and the testing
-  there, and commit as you go.
+  tree. Create it on a local branch UNDER `.frizz/worktrees/`, install into it, then do the work and
+  the testing there and commit as you go:
+  `git worktree add .frizz/worktrees/<slug> -b <slug> && (cd .frizz/worktrees/<slug> && nub install)`.
+  - **Never beside the checkout (`../frizz-<slug>`).** On a machine that keeps its repos directly in
+    `~`, every sibling is a new folder in the home directory — eight at once on 2026-09-28. `.frizz/`
+    is git-ignored in every Frizz project, so a worktree there never shows up in `git status`.
+  - **Install before you run anything in it.** Nested inside the checkout, a worktree with no
+    `node_modules` of its own does not fail: Node walks up into the main checkout's and imports MAIN's
+    `@frizz/*` packages (measured: `@frizz/shared` resolved to the main checkout's `packages/shared`),
+    so your tests silently run code that is not your branch.
 - **A worktree branch is scratch space, not a destination — YOU own landing it.** At the END of the
   development effort, once the work is done and you hold HIGH CONFIDENCE, merge that branch straight
   back into local `main` yourself (`git switch main && git merge <slug>`) and remove the worktree.

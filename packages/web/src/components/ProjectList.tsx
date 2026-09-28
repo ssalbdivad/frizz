@@ -43,6 +43,7 @@ import { ProjectMenu, useAddProject } from "./ProjectActions.tsx"
 import { QueueBadge } from "./ProjectFilter.tsx"
 import { ProjectSquare } from "./ProjectRail.tsx"
 import { ROW_ACTION_CLASS, RailRow, SectionHeader, type RowScope } from "./Sidebar.tsx"
+import { glideTo } from "../lib/viewportLock.ts"
 
 // The board sidebar's row geometry, verbatim (Sidebar.tsx ThreadRow), so a project's row and its threads'
 // rows are one list: the hover wash, the 20px indicator gutter, the title's 13/19 type.
@@ -333,7 +334,9 @@ function ProjectRow({
         >
           <ChevronRight size={11} />
         </span>
-        <span className={`${INDICATOR_SLOT} ${project.stale ? "grayscale" : ""}`}>
+        {/* The top of the project's cord, which hangs from this square behind every thread row's indicator
+            under it (ThreadConnector). */}
+        <span data-xq-indicator className={`${INDICATOR_SLOT} ${project.stale ? "grayscale" : ""}`}>
           <ProjectSquare project={project.card ?? squareCard(project)} size={16} />
         </span>
         <span className={`flex min-w-0 flex-1 items-center gap-1.5 text-[12.5px] leading-[19px] ${busy ? "font-medium text-fg/90" : "text-fg/75"}`}>
@@ -369,7 +372,7 @@ function ProjectRow({
             filtered={filtered}
             onFilter={() => {
               setQueueFilter(filtered ? null : project.id)
-              window.scrollTo({ top: 0, behavior: window.matchMedia?.("(prefers-reduced-motion: reduce)").matches ? "auto" : "smooth" })
+              glideTo(() => 0)
             }}
             onOpenChange={setMenuOpen}
           >

@@ -16,7 +16,7 @@ import {
   type ProviderAuth,
 } from "@frizz/shared"
 import { log as frizzLog } from "./logging.ts"
-import { PERM_DIR_ENV, permRequestDir, type Project } from "./project.ts"
+import { PERM_DIR_ENV, permRequestDir, workDirOf, type Project } from "./project.ts"
 import type { SessionRow, Storage } from "./storage.ts"
 import type { BoardManager } from "./board.ts"
 import type { AgentBackend, BackendKind, BuiltCommand, FrizzMcp } from "./backend/types.ts"
@@ -233,6 +233,18 @@ export function scratchDirRelPath(sessionId: string): string {
   return `.frizz/threads/${sessionId}`
 }
 
+/**
+ * The scratch directory as the WORKER must be told it: relative to its cwd wherever the board sits in
+ * that cwd (every registered project — byte-identical to what workers have always been told), and
+ * ABSOLUTE for the Home workspace, whose board is in its state directory while its agents run in the
+ * home folder (home-workspace.ts). There, the relative form names `~/.frizz/threads/…` — and a worker
+ * that created that would make Frizz read `~/.frizz` as its legacy data root on the next boot.
+ */
+export function workerScratchPath(project: Pick<Project, "dir" | "workDir">, sessionId: string): string {
+  const rel = scratchDirRelPath(sessionId)
+  return workDirOf(project) === project.dir ? rel : join(project.dir, rel)
+}
+
 // Provision the thread's scratch directory. Creates the folder and NOTHING inside it, returning the
 // project-relative path. sessionId is a fresh UUID at both dispatch and adopt, so this never collides.
 export function writeScratchDir(projectDir: string, sessionId: string): string {
@@ -282,16 +294,20 @@ export function monitorScriptsDir(): string | undefined {
 // channel — restoring the pad on SessionStart(compact) — is available on both.
 export function codexScratchpadHookConfig(
   hookScript: string | undefined,
-  sessionId: string
+  sessionId: string,
+  boardRoot?: string,
 ): Record<string, unknown> {
   if (!hookScript || !sessionId) return {}
   // `--session` is mandatory: codex reports its OWN rollout session id to the hook, so without frizz's
-  // thread id the hook would resolve a scratchpad path that does not exist.
+  // thread id the hook would resolve a scratchpad path that does not exist. `--board-root` is the same
+  // problem for the directory: the hook would take its cwd, and a Home thread's cwd is not where its
+  // board is (workerScratchPath). The shared app-server cannot carry a per-thread env, so it is argv.
+  const board = boardRoot ? ` --board-root=${JSON.stringify(boardRoot)}` : ""
   const cmd = (mode: string) => ({
     hooks: [
       {
         type: "command",
-        command: `node ${JSON.stringify(hookScript)} --session=${JSON.stringify(sessionId)} ${mode}`,
+        command: `node ${JSON.stringify(hookScript)} --session=${JSON.stringify(sessionId)}${board} ${mode}`,
       },
     ],
   })
@@ -331,7 +347,7 @@ export function scratchpadHookScript(): string | undefined {
 // this orientation (a new dispatch owns no .frizz file). The fixed worker prompt (workerPrompt.ts) and
 // the same scratch line at SYSTEM level travel via --append-system-prompt (see buildClaudeCommand) so
 // they survive compaction and re-apply on resume; this composes the visible-message half.
-export function composePrompt(sessionId: string, prompt: string, kind: BackendKind = "claude"): string {
+export function composePrompt(sessionId: string, prompt: string, kind: BackendKind = "claude", scratchPath = scratchDirRelPath(sessionId)): string {
   // The sub-agent clause is the ONE thing that differs between backends here: Claude's children are
   // dispatched with a prompt this worker writes, so it must be told to name the directory in it; codex's
   // native children inherit the conversation and already have it.
@@ -340,7 +356,7 @@ export function composePrompt(sessionId: string, prompt: string, kind: BackendKi
       ? "Native sub-agents share it — have each write its OWN file rather than all editing one."
       : "Name it in a sub-agent's prompt when you want its notes to land somewhere you can read; give each child its OWN file rather than having them all edit one."
   const scratch =
-    `Your scratch directory is \`.frizz/threads/${sessionId}/\` — yours to use however you like, for as many files as you like. It is EMPTY and nothing is expected in it: a single direct task usually needs nothing, and writing notes is never a substitute for doing the work. ${children} Nothing here is read automatically; if you ever want a note to come back after a compaction, \`mcp__frizz__goal\` with \`post_compaction: true\` re-sends a prompt of your choosing — one that can link a file here — into the emptied window.`
+    `Your scratch directory is \`${scratchPath}/\` — yours to use however you like, for as many files as you like. It is EMPTY and nothing is expected in it: a single direct task usually needs nothing, and writing notes is never a substitute for doing the work. ${children} Nothing here is read automatically; if you ever want a note to come back after a compaction, \`mcp__frizz__goal\` with \`post_compaction: true\` re-sends a prompt of your choosing — one that can link a file here — into the emptied window.`
   // The banner makes the system→human handoff unmistakable to the worker, and NOTHING of frizz's is
   // allowed below it: the framing note goes here, ABOVE, so everything past the banner is the
   // operator's prompt byte for byte. That is also what the transcript projectors cut on
@@ -356,12 +372,12 @@ export function composePrompt(sessionId: string, prompt: string, kind: BackendKi
 // It names the POST-COMPACTION trigger as an available capability, never a prescription (maintainer
 // 2026-08-28: say the directory is there if the worker wants it and that the goal hooks exist — do
 // not push arming as the thing to do).
-export function scratchpadOrientation(sessionId: string, kind: BackendKind = "claude"): string {
+export function scratchpadOrientation(sessionId: string, kind: BackendKind = "claude", scratchPath = scratchDirRelPath(sessionId)): string {
   const children =
     kind === "codex"
       ? "native sub-agents share it, so give each its own file"
       : "name it in a sub-agent's prompt when you want its notes back, and give each child its own file"
-  return `SCRATCH DIRECTORY: .frizz/threads/${sessionId}/ — yours, free-form, as many files as you like, and nothing is expected in it. A single direct task usually needs none; writing notes is never a substitute for doing the work (${children}). Nothing in this directory is read automatically; if you want a note back after a compaction, mcp__frizz__goal with post_compaction: true re-sends a prompt of your choosing.`
+  return `SCRATCH DIRECTORY: ${scratchPath}/ — yours, free-form, as many files as you like, and nothing is expected in it. A single direct task usually needs none; writing notes is never a substitute for doing the work (${children}). Nothing in this directory is read automatically; if you want a note back after a compaction, mcp__frizz__goal with post_compaction: true re-sends a prompt of your choosing.`
 }
 
 // A project can ship a repo-committed `FRIZZ.md` at its root to steer frizz workers with its OWN
@@ -816,6 +832,12 @@ export interface DispatchDeps {
 export function createDispatcher(deps: DispatchDeps): Dispatcher {
   const readBoardSource = deps.readBoard ?? readBoard
   const frizzDir = join(deps.project.dir, ".frizz")
+  // Where the agents run, as against where the board is (`deps.project.dir`). The same directory for
+  // every registered project; the Home workspace's folder for Home. See project.ts workDirOf.
+  const workDir = workDirOf(deps.project)
+  // The board root a worker's hooks must write under when it is NOT their cwd — undefined otherwise, so
+  // a registered project's worker is launched exactly as before.
+  const boardRoot = workDir === deps.project.dir ? undefined : deps.project.dir
   const adoptionRuntime: AdoptionRecoveryRuntime = deps.adoptionRuntime ?? productionAdoptionRuntime
 
   function savedProfile(kind: BackendKind, settings: Settings): { model?: string; effort?: Settings["effort"] } {
@@ -903,8 +925,9 @@ export function createDispatcher(deps: DispatchDeps): Dispatcher {
       // session_id for BOTH backends (codex's discovered rollout id is pinned separately on
       // agent_session_id).
       const scratchRel = writeScratchDir(deps.project.dir, sessionId)
+      const scratchPath = workerScratchPath(deps.project, sessionId)
 
-      const prompt = composePrompt(sessionId, input.prompt, kind)
+      const prompt = composePrompt(sessionId, input.prompt, kind, scratchPath)
 
       // Codex app-server transport: a PERSISTED JSON-RPC session + the prompt as its first turn. No
       // terminal and no rollout discovery — the bridge returns the codex session id, which the tailer
@@ -918,20 +941,20 @@ export function createDispatcher(deps: DispatchDeps): Dispatcher {
           cleanupDispatchFiles(scratchRel, { argv: [], env: {}, prewrite: [] }, sessionId)
           throw new Error("Codex app-server is unavailable; cannot start this thread. Check that `codex` is installed and its app-server protocol matches the pinned revision (re-pin if you upgraded codex).")
         }
-        const extraSystemPrompt = [scratchpadOrientation(sessionId, kind), frizzConfigBlock(deps.project.dir)]
+        const extraSystemPrompt = [scratchpadOrientation(sessionId, kind, scratchPath), frizzConfigBlock(deps.project.dir)]
           .filter(Boolean).join("\n\n")
         try {
           const spawned = await bridge.spawnDispatch({
             threadSlug: slug,
             sessionId,
-            cwd: deps.project.dir,
+            cwd: workDir,
             prompt,
             model,
             effort,
             sandbox: codexSandbox(permissionMode) as "read-only" | "workspace-write" | "danger-full-access",
             baseInstructions: [loadWorkerPrompt("codex"), extraSystemPrompt].filter(Boolean).join("\n\n"),
             developerInstructions: CODEX_FIRST_OUTPUT_TITLE_DEVELOPER_INSTRUCTIONS,
-            config: { model_reasoning_summary: "detailed", ...codexScratchpadHookConfig(scratchpadHookScript(), sessionId) },
+            config: { model_reasoning_summary: "detailed", ...codexScratchpadHookConfig(scratchpadHookScript(), sessionId, boardRoot) },
           })
           deps.storage.upsertSession({
             slug,
@@ -989,10 +1012,10 @@ export function createDispatcher(deps: DispatchDeps): Dispatcher {
           cleanupDispatchFiles(scratchRel, { argv: [], env: {}, prewrite: [] }, sessionId)
           throw new Error(!bridge ? "The ACP bridge is unavailable; cannot start this thread." : `An ACP dispatch needs an agent: pick one in the composer (model \`acp:<agent>\`), got ${JSON.stringify(model ?? null)}.`)
         }
-        const firstPrompt = [loadWorkerPrompt("acp"), scratchpadOrientation(sessionId, kind), frizzConfigBlock(deps.project.dir), prompt]
+        const firstPrompt = [loadWorkerPrompt("acp"), scratchpadOrientation(sessionId, kind, scratchPath), frizzConfigBlock(deps.project.dir), prompt]
           .filter(Boolean).join("\n\n")
         try {
-          const spawned = await bridge.spawnDispatch({ threadSlug: slug, sessionId, cwd: deps.project.dir, agentId, modelId: acpModelIdFromModel(model), prompt: firstPrompt, userText: input.prompt })
+          const spawned = await bridge.spawnDispatch({ threadSlug: slug, sessionId, cwd: workDir, agentId, modelId: acpModelIdFromModel(model), prompt: firstPrompt, userText: input.prompt })
           deps.storage.upsertSession({
             slug,
             session_id: sessionId,
@@ -1044,14 +1067,14 @@ export function createDispatcher(deps: DispatchDeps): Dispatcher {
         }
         const appendSystemPrompt = [
           loadWorkerPrompt("claude"),
-          scratchpadOrientation(sessionId, kind),
+          scratchpadOrientation(sessionId, kind, scratchPath),
           frizzConfigBlock(deps.project.dir),
         ].filter(Boolean).join("\n\n")
         try {
           await bridge.spawnDispatch({
             threadSlug: slug,
             sessionId,
-            cwd: deps.project.dir,
+            cwd: workDir,
             prompt,
             permissionMode,
             appendSystemPrompt,
@@ -1280,9 +1303,9 @@ export function createDispatcher(deps: DispatchDeps): Dispatcher {
       // — the worker works session-first from here (scratchpad + end-of-turn fences), leaving the file's
       // frontmatter untouched.
       const adoption =
-        "ADOPTION: this thread predates you and has prior context recorded in `.frizz/" +
-        slug +
-        ".md` (a previous agent or session worked it — you have no access to that conversation, and you don't need it). READ THAT FILE FIRST for context: `## Goal` is the mission, `## Status`/`## Decisions`/`## Next step` are where things stand. It is CONTEXT, not a contract — do NOT edit its frontmatter. You work session-first from here: keep your working state in your scratchpad and signal end-of-turn with the done/awaiting fences. The human's message below is your steer on top of that context."
+        "ADOPTION: this thread predates you and has prior context recorded in `" +
+        (boardRoot ? join(boardRoot, ".frizz", `${slug}.md`) : `.frizz/${slug}.md`) +
+        "` (a previous agent or session worked it — you have no access to that conversation, and you don't need it). READ THAT FILE FIRST for context: `## Goal` is the mission, `## Status`/`## Decisions`/`## Next step` are where things stand. It is CONTEXT, not a contract — do NOT edit its frontmatter. You work session-first from here: keep your working state in your scratchpad and signal end-of-turn with the done/awaiting fences. The human's message below is your steer on top of that context."
       const task = message?.trim() || "Pick up this thread and continue from where the file says things stand."
       // Provision a scratch directory too (the adopted worker's own space); the legacy file stays read-only.
       try {
@@ -1291,7 +1314,7 @@ export function createDispatcher(deps: DispatchDeps): Dispatcher {
         rollback()
         throw unavailable()
       }
-      const prompt = composePrompt(sessionId, task)
+      const prompt = composePrompt(sessionId, task, "claude", workerScratchPath(deps.project, sessionId))
       const permissionMode = workerDispatchPermission("claude", settings)
 
       // Adoption spawns through the broker, exactly like a fresh dispatch. It used to claim a terminal
@@ -1315,12 +1338,12 @@ export function createDispatcher(deps: DispatchDeps): Dispatcher {
         await bridge.spawnDispatch({
           threadSlug: slug,
           sessionId,
-          cwd: deps.project.dir,
+          cwd: workDir,
           prompt,
           permissionMode,
           appendSystemPrompt: [
             loadWorkerPrompt("claude"),
-            scratchpadOrientation(sessionId),
+            scratchpadOrientation(sessionId, "claude", workerScratchPath(deps.project, sessionId)),
             frizzConfigBlock(deps.project.dir),
             adoption,
           ].filter(Boolean).join("\n\n"),

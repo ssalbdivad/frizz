@@ -120,6 +120,35 @@ export function overlayQueues(
   return out
 }
 
+/** One card of the page's queue, with the project it belongs to. */
+export interface QueueEntry {
+  project: QueuesProject
+  thread: ThreadView
+}
+
+/**
+ * THE PAGE'S ONE QUEUE — every project's ready threads merged into a single line, in the order the board's
+ * own queue uses (`orderQueue`: when each ENTERED the queue, oldest first unless the operator chose LIFO).
+ * That is the order a FRESH draw takes; once drawn, lib/stableQueue.ts keeps every card where it is and
+ * appends whatever arrives at the bottom.
+ *
+ * It was one lane per project in rail order, and that is what made the page a stack (maintainer
+ * 2026-09-28, choosing it: "One queue across all projects"): a project listed above the one being read
+ * that got its first ready thread inserted a whole lane ABOVE the card being read. Merged, an arrival from
+ * any project joins the bottom like any other. The stamps compare across projects because one server
+ * stamps them all on one clock (the server's queue-clock.ts).
+ */
+export function mergedQueue(projects: readonly QueuesProject[], direction: QueueDirection = "fifo"): QueueEntry[] {
+  const owner = new Map<ThreadView, QueuesProject>()
+  for (const project of projects) for (const thread of project.queued) owner.set(thread, project)
+  return orderQueue([...owner.keys()], direction).map((thread) => ({ project: owner.get(thread)!, thread }))
+}
+
+/** A card-shaped stand-in for a project the registry list has not caught up with, for its square. */
+export function squareCard(project: QueuesProject): ProjectCard {
+  return project.card ?? { id: project.id, slug: project.slug, name: project.name, path: project.projectDir ?? "", lastOpenedAt: "", stale: false, iconStatus: "unknown" }
+}
+
 /**
  * Anything to show beyond a name: a queue, or live work. Parked work does not count — a project whose only
  * threads are snoozed is waiting on nobody, and its board is where they are kept.

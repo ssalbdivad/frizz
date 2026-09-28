@@ -1,7 +1,7 @@
 import { test } from "node:test"
 import assert from "node:assert/strict"
 import type { ProjectCard, ProjectQueue, ThreadView } from "@frizz/shared"
-import { handoffParts, isBusy, queuesProjects, threadKey, liveQueue, overlayQueues } from "./allQueues.ts"
+import { handoffParts, isBusy, mergedQueue, queuesProjects, threadKey, liveQueue, overlayQueues } from "./allQueues.ts"
 
 function thread(id: string, over: Partial<ThreadView> = {}): ThreadView {
   return {
@@ -170,4 +170,26 @@ test("the focused project is drawn from its live board, never another project's"
   assert.equal(liveQueue(polled, null, "alpha"), undefined)
   // Foreign rows never reach the page, as the server's poll never sends them.
   assert.equal(liveQueue(polled, { projectSlug: "alpha", threads: [thread("ext", { foreign: true })] }, "alpha")!.threads.length, 0)
+})
+
+// THE PAGE'S ONE QUEUE (maintainer 2026-09-28: "One queue across all projects").
+test("every project's ready threads merge into one queue, in the order each entered it", () => {
+  const ready = (id: string, queuedAt: string) => thread(id, { needsYou: true, queuedAt: `2026-09-23T${queuedAt}:00.000Z`, lastAssistantAt: "2026-09-23T08:00:00.000Z" })
+  // `app` is listed ABOVE `frizz` in the rail. Its first ready thread arrives at 10:30, after both of
+  // frizz's: it joins the bottom, where lanes in rail order drew its whole lane above the card being read.
+  const projects = queuesProjects([card("app"), card("frizz")], [
+    queue("app", [ready("pr-1402", "10:30")]),
+    queue("frizz", [ready("fix-auth", "10:00"), ready("2fa", "10:10")]),
+  ])
+  const line = (direction: "fifo" | "lifo") => mergedQueue(projects, direction).map(({ project, thread }) => threadKey(project.id, thread.id))
+  assert.deepEqual(line("fifo"), ["frizz/fix-auth", "frizz/2fa", "app/pr-1402"])
+  assert.deepEqual(line("lifo"), ["app/pr-1402", "frizz/2fa", "frizz/fix-auth"])
+})
+
+test("two projects' threads with the same slug stay two cards, each with its own project", () => {
+  const projects = queuesProjects([card("a"), card("b")], [
+    queue("a", [thread("fix-auth", { needsYou: true, queuedAt: "2026-09-23T10:00:00.000Z" })]),
+    queue("b", [thread("fix-auth", { needsYou: true, queuedAt: "2026-09-23T09:00:00.000Z" })]),
+  ])
+  assert.deepEqual(mergedQueue(projects).map(({ project, thread }) => `${project.id}/${thread.id}`), ["b/fix-auth", "a/fix-auth"])
 })

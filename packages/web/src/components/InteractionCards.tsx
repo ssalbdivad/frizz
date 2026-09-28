@@ -1,5 +1,6 @@
 import {
   useCallback,
+  useContext,
   useEffect,
   useId,
   useMemo,
@@ -16,7 +17,7 @@ import type {
   InteractionValues,
   ThreadView,
 } from "@frizz/shared"
-import { rpc } from "../api/rpc.ts"
+import { useThreadApi, useThreadIsForeignToPage, useThreadProjectDir } from "../api/threadApi.tsx"
 import { shouldSubmitStagedEnter } from "../lib/composerKeyboard.ts"
 import {
   failClosedAmbiguousInteraction,
@@ -41,8 +42,9 @@ import {
   type InteractionDraftValue,
 } from "../lib/typedInteractions.ts"
 import { safeHttpUrl } from "../lib/external-links.ts"
-import { draftKey, draftStore, useDraftValues, useProjectDir } from "../lib/drafts.ts"
+import { draftKey, draftStore, useDraftValues } from "../lib/drafts.ts"
 import { clearSteered, markSteered } from "../lib/steering.ts"
+import { QueueDismissContext } from "./ChatView.tsx"
 // THE question card. A native AskUserQuestion is a question, not an authorization request, so it
 // renders through the very component a ```question fence renders through — same card, same option
 // chips, same free-text box, same Send answers verb (maintainer 2026-07-27: "Ideally, they could
@@ -142,9 +144,11 @@ function InteractionQuestionCard({
   autoFocus: boolean
 }) {
   const qc = useQueryClient()
+  const api = useThreadApi()
+  const steer = useSteerOnDecision(record.owner.threadSlug)
   const cardRef = useRef<HTMLElement>(null)
   const responseIds = useRef(new Map<string, string>())
-  const projectDir = useProjectDir()
+  const projectDir = useThreadProjectDir()
   const delivery = interactionDeliveryPresentation(record.delivery?.effect)
   const answerDecision = useMemo(
     () => canonicalInteractionDecisions(record).find((decision) => decision.semantic === "answer"),
@@ -178,7 +182,7 @@ function InteractionQuestionCard({
   }, [autoFocus, record.id])
 
   const mutation = useMutation({
-    mutationFn: async (input: { decisionId: string; values: InteractionValues; responseId: string }) => rpc.interactionResolve({
+    mutationFn: async (input: { decisionId: string; values: InteractionValues; responseId: string }) => api.interactionResolve({
       slug: record.owner.threadSlug,
       sessionId: record.owner.sessionId,
       interactionId: record.id,
@@ -199,7 +203,7 @@ function InteractionQuestionCard({
       // Fail CLOSED on an ambiguous write, exactly as the typed card does: a response frizz cannot
       // prove landed must not look re-sendable.
       failClosedAmbiguousInteraction(qc, record)
-      clearSteered(record.owner.threadSlug)
+      steer.undo()
       setError(errorText(cause))
     },
   })
@@ -212,7 +216,7 @@ function InteractionQuestionCard({
     responseIds.current.set(signature, responseId)
     // The answer releases the blocked turn, so the rail row moves to the running band now rather than
     // when the tailer next sees the turn advance — see steerOnDecision.
-    markSteered(record.owner.threadSlug)
+    steer.commit()
     mutation.mutate({ decisionId: answerDecision.id, values, responseId })
   }
   const setText = (entry: (typeof questions)[number], text: string) => {
@@ -313,6 +317,26 @@ function steerOnDecision(decision: CanonicalInteractionDecision): boolean {
   return decision.semantic !== "cancel"
 }
 
+// How a steer SHOWS, which depends on where the card is drawn. On the thread's own project the rail row
+// takes the optimistic overlay. On an Everything queue card the overlay is not ours to write — it is keyed
+// by bare slug and read by the page's rail, which may be another project's (threadApi.tsx
+// useThreadIsForeignToPage) — and the card itself leaves the queue instead, the way a reply sent from its
+// box does; a failed send brings it back.
+function useSteerOnDecision(slug: string): { commit: () => void; undo: () => void } {
+  const foreign = useThreadIsForeignToPage()
+  const queue = useContext(QueueDismissContext)
+  return {
+    commit: () => {
+      if (!foreign) markSteered(slug)
+      queue?.dismiss()
+    },
+    undo: () => {
+      if (!foreign) clearSteered(slug)
+      queue?.cancel()
+    },
+  }
+}
+
 function InteractionApprovalCard({
   record,
   autoFocus = false,
@@ -321,6 +345,8 @@ function InteractionApprovalCard({
   autoFocus?: boolean
 }) {
   const qc = useQueryClient()
+  const api = useThreadApi()
+  const steer = useSteerOnDecision(record.owner.threadSlug)
   const headingId = useId()
   const cardRef = useRef<HTMLElement>(null)
   const responseIds = useRef(new Map<string, string>())
@@ -328,7 +354,7 @@ function InteractionApprovalCard({
     ? record.payload.fields
     : []
   const hasSecretFields = fields.some((field) => field.secret)
-  const projectDir = useProjectDir()
+  const projectDir = useThreadProjectDir()
   const textKeys = fields.filter((field) => !field.secret && (field.input === "text" || field.input === "multiline")).map((field) =>
     draftKey.interaction(projectDir, record.owner.projectId, record.owner.threadSlug, record.owner.sessionId, record.owner.sessionEpoch, record.id, field.id),
   )
@@ -384,7 +410,7 @@ function InteractionApprovalCard({
       // journal cancellation. Provider-backed cancel choices travel through resolve so the provider
       // receives the exact advertised decision.
       if (decision.semantic === "cancel" && record.provider.kind === "frizz") {
-        const result = await rpc.interactionCancel({
+        const result = await api.interactionCancel({
           slug: record.owner.threadSlug,
           sessionId: record.owner.sessionId,
           interactionId: record.id,
@@ -394,7 +420,7 @@ function InteractionApprovalCard({
         })
         return { effect: result.effect, interaction: result.interaction, waitingForProvider: false }
       }
-      const result = await rpc.interactionResolve({
+      const result = await api.interactionResolve({
         slug: record.owner.threadSlug,
         sessionId: record.owner.sessionId,
         interactionId: record.id,
@@ -440,9 +466,9 @@ function InteractionApprovalCard({
         }, 1_000)
       }
     },
-    onError: (cause) => {
+    onError: (cause, action) => {
       setStatus(undefined)
-      clearSteered(record.owner.threadSlug)
+      if (steerOnDecision(action.decision)) steer.undo()
       setError(errorText(cause))
       // The write may have committed even though its HTTP response was lost. Fail the shared list
       // cache closed before attempting reconciliation so a remount (or a second copy of this card in
@@ -452,7 +478,7 @@ function InteractionApprovalCard({
       // Re-read the exact record after a stale/concurrent/network-ambiguous failure. A terminal result
       // removes the card; an unreachable server stays fail-closed. A proven awaiting-user result keeps
       // the idempotent response id and safely re-enables the same action.
-      void rpc.interactionGet({
+      void api.interactionGet({
         slug: record.owner.threadSlug,
         sessionId: record.owner.sessionId,
         interactionId: record.id,
@@ -513,7 +539,7 @@ function InteractionApprovalCard({
     const signature = interactionDecisionSignature(decision.id, values)
     const responseId = responseIds.current.get(signature) ?? newResponseId()
     responseIds.current.set(signature, responseId)
-    if (steerOnDecision(decision)) markSteered(record.owner.threadSlug)
+    if (steerOnDecision(decision)) steer.commit()
     mutation.mutate({ decision, values, responseId })
   }
 

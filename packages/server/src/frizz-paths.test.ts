@@ -1,5 +1,5 @@
 import assert from "node:assert/strict"
-import { mkdirSync, mkdtempSync, rmSync } from "node:fs"
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { dirname, join } from "node:path"
 import { test } from "node:test"
@@ -25,6 +25,65 @@ test("an existing ~/.frizz keeps every root, on every platform, whatever XDG say
       assert.equal(paths.cache, join(base, ".frizz"), platform)
     }
     assert.equal(projectStateDir("p1", base), join(base, ".frizz", "projects", "p1"))
+  } finally {
+    rmSync(base, { recursive: true, force: true })
+  }
+})
+
+// `~/.frizz` is also the name the home folder's own BOARD would have. A Home-workspace worker writing
+// the conventional relative `.frizz/threads/<id>/` from its cwd must not flip an XDG install onto an
+// empty legacy root at the next boot — every project gone from the page.
+test("a ~/.frizz holding only a project board is passed over, not taken as the data root", () => {
+  const linux = { home: "/home/x", platform: "linux" as const, env: {} }
+  const root = legacyFrizzRoot("/home/x")
+  const only = (...names: string[]) => {
+    const present = new Set([root, ...names.map((name) => join(root, name))])
+    return (path: string) => present.has(path)
+  }
+  for (const board of ["threads", ".id", ".session-state", ".gitignore", ".agent-bindings.jsonl"]) {
+    const paths = frizzPaths({ ...linux, exists: only(board) })
+    assert.equal(paths.legacy, false, board)
+    assert.equal(paths.data, join("/home/x", ".local", "share", "frizz"), board)
+  }
+  // Any data-root entry makes it a real install, whatever board-shaped debris sits beside it.
+  for (const data of ["projects", "registry.json", "config.json", "ui.db", "server.lock", "settings.json", "logs"]) {
+    assert.equal(frizzPaths({ ...linux, exists: only(data) }).legacy, true, data)
+    assert.equal(frizzPaths({ ...linux, exists: only("threads", data) }).legacy, true, `threads + ${data}`)
+  }
+  // Something unrecognised is not a board, so it stays legacy — the rule only ever passes over a board.
+  assert.equal(frizzPaths({ ...linux, exists: only("whatever") }).legacy, true)
+})
+
+test("the stray-board rule holds on a real directory, and a real install beside it wins", () => {
+  const base = mkdtempSync(join(tmpdir(), "frizz-paths-stray-"))
+  try {
+    mkdirSync(join(legacyFrizzRoot(base), "threads", "sid-1"), { recursive: true })
+    assert.equal(frizzPaths({ home: base, platform: "linux", env: {} }).legacy, false)
+    writeFileSync(join(legacyFrizzRoot(base), "registry.json"), "{}")
+    assert.equal(frizzPaths({ home: base, platform: "linux", env: {} }).legacy, true)
+  } finally {
+    rmSync(base, { recursive: true, force: true })
+  }
+})
+
+// 2026-09-28: a script provisioned runtimes into `~/.frizz/runtimes` by name, the next boot took that
+// directory for a legacy install, and every project vanished from an established XDG machine.
+test("a ~/.frizz with no registry never takes over an install whose platform root has one", () => {
+  const base = mkdtempSync(join(tmpdir(), "frizz-paths-superseded-"))
+  try {
+    const linux = { home: base, platform: "linux" as const, env: {} }
+    const platformData = join(base, ".local", "share", "frizz")
+    mkdirSync(platformData, { recursive: true })
+    writeFileSync(join(platformData, "registry.json"), "{}")
+    // What the stray writer left, and what the flipped boot then added before anyone noticed.
+    mkdirSync(join(legacyFrizzRoot(base), "runtimes", "claude"), { recursive: true })
+    mkdirSync(join(legacyFrizzRoot(base), "projects", "p1"), { recursive: true })
+    const paths = frizzPaths(linux)
+    assert.equal(paths.legacy, false)
+    assert.equal(paths.data, platformData)
+    // A ~/.frizz with a registry of its own is a real install, and it keeps winning.
+    writeFileSync(join(legacyFrizzRoot(base), "registry.json"), "{}")
+    assert.equal(frizzPaths(linux).legacy, true)
   } finally {
     rmSync(base, { recursive: true, force: true })
   }

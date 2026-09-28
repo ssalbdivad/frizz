@@ -16,7 +16,8 @@ try {
   if (!(process.env.FRIZZ_THREAD ?? '').trim()) process.exit(0);
 
   const input = JSON.parse(readFileSync(0, 'utf8'));
-  const dir = process.env.CLAUDE_PROJECT_DIR ?? '.';
+  // The board's directory: the worker's cwd, except in the Home workspace (FRIZZ_BOARD_ROOT, see scratchpad.mjs).
+  const dir = (process.env.FRIZZ_BOARD_ROOT ?? '').trim() || (process.env.CLAUDE_PROJECT_DIR ?? '.');
 
   const ti = input.tool_input ?? {};
   const tr = input.tool_response ?? {};

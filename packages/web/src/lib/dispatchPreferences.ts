@@ -2,12 +2,12 @@ import {
   acpAgentIdFromModel,
   acpModelIdFromModel,
   acpModelSlug,
+  SetDispatchPreferenceInput,
   type AcpAgent,
   type Backend,
   type ClaudeModel,
   type CodexModel,
   type DispatchPreferences,
-  type SetDispatchPreferenceInput,
 } from "@frizz/shared"
 import type { SelectGroup, SelectOption } from "../components/ui/Select.tsx"
 import type { ProfileGridGroup } from "./profileGrid.ts"
@@ -36,6 +36,53 @@ export interface ResolvedDispatchPreferences {
   modelAvailable: boolean
   effortAvailable: boolean
   effortOptions: SelectOption[]
+}
+
+// A choice made in a dispatch surface's picker — the prompt box, the GitHub batch picker — for the
+// thread (or batch) that surface starts NEXT. It rides over the durable default without writing it:
+// before 2026-09-28 every pick WAS the default, so escalating one hard task to max left every later
+// thread on max until someone noticed (maintainer: "i find myself often wanting to default to medium
+// but at some point i change to max and it stays there"). Only "Make default" writes the record now.
+export type DispatchPick = Omit<Extract<SetDispatchPreferenceInput, { field: "profile" }>, "field">
+
+/** The record a surface dispatches from: the default with its pick, if any, laid over it. */
+export function withDispatchPick(preferences: DispatchPreferences, pick: DispatchPick | undefined): DispatchPreferences {
+  return pick ? applyDispatchPreferenceUpdate(preferences, { field: "profile", ...pick }) : preferences
+}
+
+/** A pick read back from session storage (drafts.ts). Anything malformed reads as no pick — the
+ *  surface falls back to the default rather than throwing or dispatching a half-parsed profile. */
+export function parseDispatchPick(raw: string): DispatchPick | undefined {
+  if (!raw) return undefined
+  try {
+    const parsed = SetDispatchPreferenceInput.safeParse({ ...JSON.parse(raw), field: "profile" })
+    if (!parsed.success || parsed.data.field !== "profile") return undefined
+    const { backend, model, effort } = parsed.data
+    return { backend, model, ...(effort ? { effort } : {}) }
+  } catch {
+    return undefined
+  }
+}
+
+type ProfileIdentity = Pick<ResolvedDispatchPreferences, "backend" | "model" | "effort">
+
+/** Whether two profiles start the same thread. `effort` is "" on both sides for an ACP agent. */
+export function sameDispatchProfile(a: ProfileIdentity, b: ProfileIdentity): boolean {
+  return a.backend === b.backend && a.model === b.model && a.effort === b.effort
+}
+
+/**
+ * A picker selection as the surface's new pick — or undefined when it lands back ON the default, so
+ * choosing the default's own cell drops the pick instead of storing a copy of the default that would
+ * outlive a later change to it.
+ */
+export function pickFromSelection(
+  selection: { backend: Backend; model: string; effort?: string },
+  defaultProfile: ProfileIdentity | undefined,
+): DispatchPick | undefined {
+  const effort = (selection.effort || undefined) as DispatchPick["effort"]
+  if (defaultProfile && sameDispatchProfile({ backend: selection.backend, model: selection.model, effort: effort ?? "" }, defaultProfile)) return undefined
+  return { backend: selection.backend, model: selection.model, ...(effort ? { effort } : {}) }
 }
 
 export function applyDispatchPreferenceUpdate(

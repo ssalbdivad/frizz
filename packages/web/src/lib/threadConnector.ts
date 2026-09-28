@@ -57,29 +57,15 @@ type Point = readonly [number, number]
 type Cubic = readonly [Point, Point, Point, Point]
 
 /**
- * A TWO-STRAND CORD down the gutter, twisted once at every thread row: the two strands cross at each
- * row's height and bow apart between rows, `amplitude` either side of `x`. It is drawn the way a knot
- * diagram draws a crossing — the strand passing UNDER is cut either side of the one on top — and which
- * strand is on top alternates from one crossing to the next, which is what makes two wavy lines read as
- * a twist rather than as a chain of eyes. Past the first and last rows the cord runs on for `tail` and
- * closes, so a fade can take its ends. `link` is the longest a twist may run before another crossing.
+ * A TWO-STRAND CORD down `x` from `span[0]` to `span[1]`, its strands crossing at each of `crossings` and
+ * bowing apart between them, `amplitude` either side of `x`. It is drawn the way a knot diagram draws a
+ * crossing — the strand passing UNDER is cut either side of the one on top — and which strand is on top
+ * alternates from one crossing to the next, which is what makes two wavy lines read as a twist rather
+ * than as a chain of eyes. At the span's ends the strands meet on `x` and stop, uncut.
  */
-export function twist(rows: readonly number[], x: number, amplitude: number, tail: number, link: number): [string, string] {
-  const ys = [...rows].sort((a, b) => a - b)
-  if (ys.length === 0) return ["", ""]
-  // Every row is a crossing; a stretch between rows longer than a link (a project's header row sits in
-  // it) takes extra crossings, evenly spaced, so the cord keeps one even twist down its whole length
-  // rather than stretching into a long eye wherever the rows part.
-  const knots = [ys[0]! - tail]
-  for (const [i, y] of ys.entries()) {
-    const prev = i === 0 ? null : ys[i - 1]!
-    if (prev !== null) {
-      const parts = Math.max(1, Math.round((y - prev) / link))
-      for (let p = 1; p < parts; p++) knots.push(prev + ((y - prev) * p) / parts)
-    }
-    knots.push(y)
-  }
-  knots.push(ys[ys.length - 1]! + tail)
+export function twist(crossings: readonly number[], span: readonly [number, number], x: number, amplitude: number): [string, string] {
+  if (crossings.length === 0) return ["", ""]
+  const knots = [span[0], ...[...crossings].sort((a, b) => a - b), span[1]]
   // A cubic's bulge peaks at three quarters of its control points' offset.
   const reach = amplitude / 0.75
   const strands: [string, string] = ["", ""]
