@@ -22,7 +22,7 @@ import { carriesDoneRegistration, collapseMiddleRuns, opensQueueSegment, queueCo
 import { pairAllAnswers, unrenderedAnswers } from "../lib/answersMessage.ts"
 import { lastHumanTurnIndex } from "../lib/messagePresentation.ts"
 import { isOptimisticallySteering, useSteeredAt } from "../lib/steering.ts"
-import { allFencesShadowed, placeQuestions, registeredStandingAt, questionStacks } from "../lib/questionShadow.ts"
+import { allFencesShadowed, registeredStandingAt, questionStacks } from "../lib/questionShadow.ts"
 import { settledQuestionPositions } from "../lib/settledQuestions.ts"
 import { FenceCard, LimitPauseCard, Message, PermPolicyDenialCard, PermPromptBanner, PendingAskCard, VSpace, STEP, messageTailIsMeta, messageHeadIsMeta, messageRendersNothing, messageHasRenderableText, lastAssistantIndex } from "./ChatView.tsx"
 import { BLOCK_RADIUS, BLOCK_RADIUS_TOP } from "./TranscriptCard.tsx"
@@ -997,30 +997,21 @@ const QueueCard = memo(function QueueCard({ thread, leaving, frozen, ghost, onRe
     () => coalesceToolActivityMessages(visible).map((entry) => ({ ...entry, messageIndex: entry.messageIndex + visibleStart })),
     [visible, visibleStart],
   )
-  // WHERE EACH OPEN QUESTION SITS: at the rest it was asked at, however far the thread has moved on
-  // (lib/questionAnchor) — keyed by index into the FULL message list (the loop below carries that index
-  // as `globalIdx`). `tail` is the ordinary case — the worker asked and rested — above the composer.
-  // Where the worker PLACED its registered questions — the message whose empty ```question qst_… marker
-  // names each one (lib/questionShadow) — the card renders inside that message and leaves its anchor
-  // group, and that rest's stack carries the one "Send answers" for it (questionStacks).
-  // A marker ABOVE this card's window places nothing here: its message is not drawn, so the card would
-  // vanish and its rest's stack would draw a bare Send. Unplaced, it renders at its anchor like any other.
-  const placement = useMemo(() => {
-    const full = placeQuestions(messages, openQuestions)
-    const placed = new Map([...full.placed].filter(([at]) => at >= visibleStart))
-    return { placed, placedIds: new Set([...placed.values()].flat().map((q) => q.id)) }
-  }, [messages, openQuestions, visibleStart])
+  // WHERE EACH OPEN QUESTION SITS: at the bottom of the rest it belongs to, never inside a message
+  // (lib/questionShadow questionStacks) — keyed by index into the FULL message list (the loop below
+  // carries that index as `globalIdx`). `tail` is the ordinary case — the worker asked and rested, and
+  // nobody but frizz has spoken since — under the whole handoff, above the composer.
   const questionAnchors = useMemo(() => {
-    let tail: { questions: RegisteredQuestionView[]; showSend: boolean } = { questions: [], showSend: false }
-    const byAnchor = new Map<number, { questions: RegisteredQuestionView[]; showSend: boolean }>()
+    let tail: RegisteredQuestionView[] = []
+    const byAnchor = new Map<number, RegisteredQuestionView[]>()
     const tailAnchor = messages.length - 1
-    for (const [anchor, stack] of questionStacks(messages, openQuestions, placement)) {
-      if (anchor >= tailAnchor) tail = stack
-      else byAnchor.set(anchor, stack)
+    for (const [anchor, group] of questionStacks(messages, openQuestions)) {
+      if (anchor >= tailAnchor) tail = group
+      else byAnchor.set(anchor, group)
     }
     return { byAnchor, tail }
-  }, [messages, placement, openQuestions])
-  const settledPlacement = useMemo(() => settledQuestionPositions(messages, settledQuestions), [messages, settledQuestions])
+  }, [messages, openQuestions])
+  const settledByAnchor = useMemo(() => settledQuestionPositions(messages, settledQuestions), [messages, settledQuestions])
   // A thread dispatched after the free-form fence was retired never gets a fence controller: a
   // ```question with a body is prose there, drawn read-only, and the registered card is the only
   // answerable thing (shared QUESTION_FENCE_RETIRED_AT). A legacy thread keeps the whole fence path.
@@ -1379,15 +1370,16 @@ const QueueCard = memo(function QueueCard({ thread, leaving, frozen, ghost, onRe
               const base = visibleStart
               const out: ReactNode[] = []
               let prevTailIsMeta: boolean | null = null
-              // A REGISTERED question renders at the rest it was ASKED at, not at the card's tail — the
-              // same rule the thread view follows (lib/questionAnchor). Pending groups are flushed after
-              // the first rendered row at or past their anchor, so a group whose anchor was a message this
-              // card does not draw (or one above the window) still lands above what came after it.
+              // A REGISTERED question the human replied past renders at the bottom of its own rest, not
+              // at the card's tail — the same rule the thread view follows (lib/questionAnchor). Pending
+              // groups are flushed after the first rendered row at or past their anchor, so a group whose
+              // anchor was a message this card does not draw (or one above the window) still lands above
+              // what came after it.
               const pending = [...questionAnchors.byAnchor.entries()].sort((a, b) => a[0] - b[0])
               // ANSWERED questions flush the same way, ahead of any open group at the same anchor — but
               // only inside the window: a settled card owes nothing, so one whose rest is above the cut
               // is not hoisted to the top the way an open one is.
-              const pendingSettled = [...settledPlacement.anchored.entries()].filter(([anchor]) => anchor >= base).sort((a, b) => a[0] - b[0])
+              const pendingSettled = [...settledByAnchor.entries()].filter(([anchor]) => anchor >= base).sort((a, b) => a[0] - b[0])
               const flushSettled = (globalIdx: number) => {
                 while (pendingSettled.length > 0 && pendingSettled[0][0] <= globalIdx) {
                   const [anchor, group] = pendingSettled.shift()!
@@ -1399,11 +1391,9 @@ const QueueCard = memo(function QueueCard({ thread, leaving, frozen, ghost, onRe
               const flushQuestions = (globalIdx: number) => {
                 flushSettled(globalIdx)
                 while (pending.length > 0 && pending[0][0] <= globalIdx) {
-                  const [anchor, stack] = pending.shift()!
+                  const [anchor, group] = pending.shift()!
                   if (prevTailIsMeta !== null) out.push(<VSpace key={`qa-space-${anchor}`} h={STEP} />)
-                  out.push(
-                    <RegisteredQuestionStack key={`qa-${anchor}`} thread={thread} questions={stack.questions} showSend={stack.showSend} />,
-                  )
+                  out.push(<RegisteredQuestionStack key={`qa-${anchor}`} thread={thread} questions={group} />)
                   prevTailIsMeta = false
                 }
               }
@@ -1546,7 +1536,7 @@ const QueueCard = memo(function QueueCard({ thread, leaving, frozen, ghost, onRe
                   const textKey = m.sourceId ?? `legacy-${globalIdx}`
                   out.push(
                     <div key={textKey} data-transcript-source-id={textKey} className="flex flex-col">
-                      <Message m={m} dense textOnly answering={fencesLive ? answeringForMessage(m) : undefined} paired={paired[globalIdx]} staleAwaiting={isStaleAwaiting(globalIdx)} restingCardShown={globalIdx === lastAgentIdx && restingShown} shadowedBy={shadowedByMessage.get(globalIdx)} placed={placement.placed.get(globalIdx)} settledPlaced={settledPlacement.placed.get(globalIdx)} thread={thread} />
+                      <Message m={m} dense textOnly answering={fencesLive ? answeringForMessage(m) : undefined} paired={paired[globalIdx]} staleAwaiting={isStaleAwaiting(globalIdx)} restingCardShown={globalIdx === lastAgentIdx && restingShown} shadowedBy={shadowedByMessage.get(globalIdx)} thread={thread} />
                     </div>,
                   )
                   // Text-only → the row ends in prose (tool band dropped), so the next gap is a full STEP.
@@ -1566,8 +1556,6 @@ const QueueCard = memo(function QueueCard({ thread, leaving, frozen, ghost, onRe
                     answering={fencesLive ? answeringForMessage(m) : undefined}
                     paired={paired[globalIdx]}
                     shadowedBy={shadowedByMessage.get(globalIdx)}
-                    placed={placement.placed.get(globalIdx)}
-                    settledPlaced={settledPlacement.placed.get(globalIdx)}
                     thread={thread}
                   />
                   </div>,
@@ -1710,7 +1698,7 @@ const QueueCard = memo(function QueueCard({ thread, leaving, frozen, ghost, onRe
           is a gate on a turn already in flight. The tail IS the context for the question, so the card
           reads top to bottom: what happened, then what the worker needs decided, then the prompt box.
           It carries its own Send answers verb, so it sits above the fence path's identical button. */}
-      <RegisteredQuestionStack thread={thread} questions={questionAnchors.tail.questions} inFlight={inFlightAnswers} showSend={questionAnchors.tail.showSend} className="shrink-0 px-5 pb-4 pt-0" />
+      <RegisteredQuestionStack thread={thread} questions={questionAnchors.tail} inFlight={inFlightAnswers} className="shrink-0 px-5 pb-4 pt-0" />
       {/* Bottom of the card. Answerable question blocks add a "Send answers" action that composes the
           per-block answers into one reply — but the free-form composer stays PRESENT underneath it
           (maintainer 2026-07-22): answering the question is the primary path, not the only one, and

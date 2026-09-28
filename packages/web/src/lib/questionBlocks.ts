@@ -42,8 +42,8 @@ export type MessageAnswering = {
 export type MessageSegment =
   | { kind: "prose"; text: string }
   // `registeredId` is set only when the info-string named one (```question qst_ab12cd34): the fence is
-  // then a PLACEMENT for that registered row — see lib/questionShadow — rather than a question of its
-  // own. Absent, not undefined, so a segment still deep-equals the plain shape it had before.
+  // then a MARKER for that registered row — see lib/questionShadow — rather than a question of its own.
+  // Absent, not undefined, so a segment still deep-equals the plain shape it had before.
   | { kind: "question"; text: string; questionKind: QuestionKind; danger: boolean; registeredId?: string }
 
 // Opening fence begins a line: ```question, an OPTIONAL info-string of one or more space-separated
@@ -53,9 +53,10 @@ export type MessageSegment =
 // parseInfoString below tokenizes it. The `m` flag anchors ^/$ to line boundaries; an unterminated
 // opener simply never matches, so a half-written block degrades to ordinary prose (markdown renders it
 // as a plain code block).
-// THE BODY IS OPTIONAL ONLY FOR A PLACEMENT MARKER. A worker placing a question it already registered
-// has nothing to put in the body — the card is drawn from the ROW, and anything written here is thrown
-// away — so the empty two-line form is what it should be able to write:
+// THE BODY IS OPTIONAL ONLY FOR A MARKER. A worker naming a question it already registered has nothing
+// to put in the body — the card is drawn from the ROW, at the bottom of its rest, and the marker itself
+// draws nothing — and a worker dispatched between 2026-09-11 and 2026-09-28 was taught to write exactly
+// this empty two-line form, so it still has to parse:
 //
 //     ```question qst_ab12cd34
 //     ```
@@ -76,8 +77,8 @@ const QUESTION_BLOCK = /^```question(?:[ \t]+([A-Za-z][^\r\n]*?))?[ \t]*\r?\n(?:
 // or RETIRED token can never turn a block into a parse failure. The retired `approval` rides exactly
 // that rule: a legacy ```question approval danger still parses as a danger-styled two-option question.
 // A REGISTERED question's id, as `ask` mints and returns it. A worker puts one in the info string to say
-// "this fence is where that registration renders", which is placement by NAME rather than by matching
-// the prose — the fuzzy path stays for every worker that writes no id (lib/questionShadow).
+// which registration a fence stands for, by NAME rather than by matching the prose — the fuzzy path
+// stays for every worker that writes no id (lib/questionShadow).
 const REGISTERED_ID = /^qst_[a-z0-9]+$/
 
 function parseInfoString(info: string | undefined): { kind: QuestionKind; danger: boolean; registeredId?: string } {
@@ -132,9 +133,9 @@ function healOrphanedOptions(segments: MessageSegment[]): MessageSegment[] {
     const q = segments[i]
     const p = segments[i + 1]
     if (q.kind !== "question" || p.kind !== "prose") continue
-    // A PLACEMENT MARKER has no body for options to be orphaned FROM — its card is drawn from the
-    // registered row and its body is discarded — so a lettered list after one is the message's own
-    // prose. Adopting it would delete that list from the transcript, silently.
+    // A MARKER has no body for options to be orphaned FROM — it draws nothing, and its card is drawn
+    // from the registered row — so a lettered list after one is the message's own prose. Adopting it
+    // would delete that list from the transcript, silently.
     if (q.registeredId && q.text.trim() === "") continue
     const parsed = parseQuestionBlock(q.text, q.questionKind, q.danger)
     // Which list the prose may legally continue: none absorbed unless the block is option-less (the

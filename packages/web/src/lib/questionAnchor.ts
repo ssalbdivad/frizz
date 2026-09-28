@@ -1,5 +1,6 @@
-// WHERE A REGISTERED QUESTION SITS IN THE TRANSCRIPT: at the rest it was asked at — the last message
-// before the next human turn — however far the thread has moved on since.
+// WHERE A REGISTERED QUESTION SITS IN THE TRANSCRIPT: at the BOTTOM of the exchange that asked it — after
+// every word the worker wrote there, never inside a message — and that exchange runs until the HUMAN
+// next speaks, however many times frizz woke the worker in between.
 //
 // A ```question fence needs none of this — it IS a message, so it renders where it was written. A
 // REGISTERED question is a row in `thread_question` with no message to live in, so its position is a
@@ -26,29 +27,48 @@
 // did something that made it moot, and the newest handoff is about something else. The card then sat
 // under that handoff claiming to be its ask — a placeholder-package question from the first round of
 // names, drawn beneath the write-up of the second round (maintainer 2026-09-24: "it should move up in
-// the chat appropriately"). A question belongs to the rest that asked it, always; the worker contract
-// already says to pause on an open question, so a later rest past one is the exception, not the norm.
+// the chat appropriately").
 //
-// A worker whose newer handoff genuinely still owes the ask brings it forward itself: an empty
-// ```question qst_… marker in that handoff places the card there (lib/questionShadow placeQuestions),
-// and that choice is the worker's to make — frizz cannot tell a still-live ask from an obviated one.
+// 2026-09-28 closed the two ways a card still landed mid-thread with the worker's explanation BELOW it
+// (maintainer: "questions should always appear at the bottom of the thread not in the middle any
+// explanation should occur beforehand"). One was the placement marker, which drew the card inside a
+// handoff with paragraphs under it — retired, see lib/questionShadow. The other was frizz's OWN
+// deliveries ending the exchange: a PR watcher expired, frizz woke the worker, it re-armed and wrote "the
+// merge question from my last message is still the open decision" — under a card the wake had frozen
+// above it. A wake is frizz moving the thread, not the human replying; nobody has said anything, so the
+// ask is exactly as current after it as before. So only the HUMAN'S turn ends the exchange a question
+// belongs to — a typed message, or the answers to other questions — and the 2026-09-24 case stands: the
+// human replied past it, so the card stays up with the handoff that asked it. A worker whose newer
+// handoff still owes that ask asks it again, which lands the new card at the bottom of that handoff.
+
+import { BURIED_ANSWERS_HEADER } from "@frizz/shared"
 
 export interface AnchorMessage {
   role: string
   kind?: string
   at?: string
+  /** Frizz wrote this user record (a scheduler wake), not the human. */
+  wake?: boolean
+  /** A sub-agent's upward report, recorded as a user turn it did not type either. */
+  peerFrom?: string
+  text?: string
 }
 
-/** A real human turn — a typed reply or one of frizz's own deliveries, which land as user records and
- *  count deliberately (the thread moved on, whoever moved it). Punctuation with a nominal role (an event
- *  line, a reasoning summary) is not a turn. */
-function isTurn(m: AnchorMessage): boolean {
-  return m.role === "user" && m.kind !== "event" && m.kind !== "reasoning"
+/** Did the HUMAN take this turn? A typed reply, or the answers to registered questions — which frizz
+ *  delivers as a wake, in the buried-answers form, because the human may answer while the worker is down:
+ *  frizz carried it, the human said it. Every other wake (a watcher, a timer, a sign-off nudge, a Goal)
+ *  and a sub-agent's report are frizz and the worker's own children moving the thread, and the ask is as
+ *  current after them as before. Punctuation with a nominal role (an event line, a reasoning summary) is
+ *  not a turn at all. */
+export function isHumanTurn(m: AnchorMessage): boolean {
+  if (m.role !== "user" || m.kind === "event" || m.kind === "reasoning" || m.peerFrom) return false
+  return !m.wake || (m.text ?? "").trimStart().startsWith(BURIED_ANSWERS_HEADER)
 }
 
-/** The index of the message this question renders AFTER. `messages.length - 1` when nothing has happened
- *  since (the common case — the worker asked and rested, and the card is still the tail), and `-1` when
- *  the rest it belongs to is older than the loaded window, which puts it at the top of what is loaded
+/** The index of the message this question renders AFTER — the last message before the human's next
+ *  turn. `messages.length - 1` when the human has not spoken since (the common case — the worker asked
+ *  and rested, and the card is the tail however many wakes it has worked through since), and `-1` when
+ *  the exchange it belongs to is older than the loaded window, which puts it at the top of what is loaded
  *  rather than back at the bottom where it would lie about being current. */
 export function questionAnchorIndex(messages: readonly AnchorMessage[], askedAt: string): number {
   const asked = Date.parse(askedAt)
@@ -56,7 +76,7 @@ export function questionAnchorIndex(messages: readonly AnchorMessage[], askedAt:
   if (!Number.isFinite(asked)) return tail
   for (let i = 0; i < messages.length; i++) {
     const m = messages[i]
-    if (!isTurn(m)) continue
+    if (!isHumanTurn(m)) continue
     const at = m.at ? Date.parse(m.at) : Number.NaN
     if (!Number.isFinite(at) || at <= asked) continue
     return i - 1

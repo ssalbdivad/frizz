@@ -1390,7 +1390,7 @@ test("a call landing in a restart window waits for the server instead of failing
 // THE QUESTIONS ARE READ OUT TOO, in their own section (maintainer 2026-08-28: "Is there a way for the
 // agent to read out the current set of watchers and questions?"). They must NOT reach the fence block:
 // a question waits on a person, and there is no `questions:` key in the awaiting grammar to hold one.
-test("`activity` reads the open questions back, with the ids a ```question fence places them by", async () => {
+test("`activity` reads the open questions back, with the ids `unask` takes", async () => {
   const http = createServer((_req, res) => {
     res.writeHead(200, { "content-type": "application/json" })
     res.end(JSON.stringify({ result: {

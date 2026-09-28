@@ -175,9 +175,9 @@ export interface HandoffParts {
  * A handoff, split the way the board's card draws it: the prose, the ```question fences, and each
  * ```done / ```awaiting fence as its own card.
  *
- * A ```question fence goes one of three ways. An EMPTY `qst_…` marker only PLACES a registered card, and
- * this card draws every open question at its tail, so the marker is dropped (left in, it renders as an
- * empty code block mid-prose). A fence that STANDS FOR a registered question — names its id, or restates
+ * A ```question fence goes one of three ways. An EMPTY `qst_…` marker draws nothing (it placed a
+ * registered card mid-handoff until 2026-09-28; every surface now draws open questions at the bottom, and
+ * this card at its tail), so the marker is dropped (left in, it renders as an empty code block mid-prose). A fence that STANDS FOR a registered question — names its id, or restates
  * it — is dropped for the same reason: its registered card is the one that can be answered. Anything else
  * is a question the worker wrote as a fence, which on a legacy thread is its live ask, so it is KEPT, and
  * drawn read-only — answering it is one level down, on the thread's own board.

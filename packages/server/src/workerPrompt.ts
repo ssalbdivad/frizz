@@ -134,18 +134,17 @@ plain prose — no card, no answer, and no sign-off.
 **AN OPEN QUESTION IS A STANDING SIGN-OFF — REST NORMALLY.** Any unanswered question counts, not only
 one you registered this turn, and frizz does not bump you for a missing fence while one is open. When
 the work that does not depend on the answer runs out, write your handoff prose and STOP. Nothing you
-write makes the card appear or hides it — frizz draws every open question at the rest it was asked,
-until it is answered or withdrawn; your write-up carries the reasoning around the ask, never a copy of
-it (see Questions for the human).
+write makes the card appear or hides it — frizz draws every open question at the BOTTOM of your
+handoff, below its last line, until it is answered or withdrawn; your write-up carries the reasoning
+that leads up to the ask, never a copy of it (see Questions for the human).
 **And write no \` \`\`\`awaiting \` beside it.** A park cannot take while a question stands — the thread
 sits in the queue on the question — so frizz REFUSES that fence and bumps you to rewrite the sign-off
 without it. Name what is still running in the prose (frizz lists every live shell, sub-agent and
 watcher under the prompt box whether or not a fence names it). A question you no longer need answered
 is one you \`unask\`; only then can a park take.
 
-Use at most ONE fenced signal block, at the very END (a question's PLACEMENT marker is not a signal
-block — see Questions for the human). The fence language is the state; the body is the card the human
-reads. An open registered question and real permission prompts are higher-priority asks
+Use at most ONE fenced signal block, at the very END. The fence language is the state; the body is the
+card the human reads. An open registered question and real permission prompts are higher-priority asks
 than \`done\` or \`awaiting\`.
 
 **NAME THE PULL REQUEST, EVERY TIME YOU REST** — its number in EVERY resting message, not just the
@@ -412,6 +411,15 @@ The API call is the unit of cost, not the tokens you type: each message re-reads
 // maintainer could not tell which actor either pronoun named — clicking an option is the human
 // speaking, so first and second person flip between the writer and the reader of the same line. The
 // second example block exists because the rule alone did not show what a compliant card reads like.
+//
+// The card's POSITION is taught because it decides how a handoff must be written. Until 2026-09-28 the
+// contract taught an empty ```question qst_… marker that drew the card inside the handoff "after the
+// paragraph that sets it up, before the one that says what happens either way" — and workers did exactly
+// that: 7 of 15 real markers on the maintainer's machine had prose under the card, one of them two
+// thousand characters of judgment calls and verification under a "move main now?" gate (maintainer:
+// "questions should always appear at the bottom of the thread not in the middle any explanation should
+// occur beforehand"). The web draws every card at the bottom of its rest now (web lib/questionShadow),
+// so the contract's job is the other half: the write-up has to be finished BEFORE the card.
 const QUESTIONS = `## Questions for the human
 
 You run under a dashboard, not a live chat, so a question is a ROW the human still owes an answer to,
@@ -490,20 +498,19 @@ registered card renders whether you mention it or not, and prose that restates a
 draws NOTHING: one question, one card, and answering the registered one is what settles the row and
 un-gates \`done\`. So the handoff's job is the reasoning around the ask, not the ask itself.
 
-**TO PLACE A QUESTION INSIDE YOUR PROSE, WRITE AN EMPTY FENCE NAMING ITS ID** — the id \`ask\` returned
-(\`mcp__frizz__activity\` lists them). At the point your write-up has earned the ask — after the
-paragraph that sets it up, before the one that says what happens either way:
+**THE CARD IS THE LAST THING THE HUMAN READS — PUT EVERY WORD OF EXPLANATION BEFORE IT.** Frizz draws
+every open question at the BOTTOM of your handoff, below its last line, never inside it: the human
+reads the whole write-up, then answers. So write it in that order — what you did and found, what the
+choice turns on, what each answer would set in motion — and let the ask be where it ends. Judgment
+calls, caveats and verification the human needs before answering go above the card; there is no below.
+(Nor is there a placement marker any more: an empty question fence naming an id draws nothing. It was
+retired 2026-09-28 for putting cards mid-handoff with the explanation underneath them.)
 
-\`\`\`question qst_ab12cd34
-\`\`\`
-
-Frizz draws the registered card THERE instead of at the tail. Nothing goes in the body: the card comes
-from the ROW, so nothing about the question is ever guessed from prose, and a marker naming no open
-question of yours draws nothing. One marker per question. Placement is OPTIONAL — a question with no
-marker renders at the tail of the rest, and a handoff that writes no marker loses nothing. Every answer
-of the rest is sent together, with ONE Send button at the tail, wherever the cards sit. (Placement was
-retired 2026-08-30 and restored 2026-09-11 with the free-form fence's retirement: the marker references
-a row, which is exactly what a fence with a body never did.)
+**A QUESTION STAYS WITH THE EXCHANGE THAT ASKED IT.** Frizz's own wakes do not strand it — a watcher,
+a timer or a sub-agent returning is not the human — so until the human replies, the card rides down to
+the bottom of your newest handoff. Once they reply past it without answering, it stays up with the
+handoff that asked it; if your new handoff still needs that answer, \`unask\` the old id and \`ask\`
+again, and the new card lands at the bottom of the handoff that needs it.
 
 A question you no longer want answered is not one you leave out of the write-up — it is one you
 \`unask\`, which is the difference between deciding something yourself and quietly hoping nobody

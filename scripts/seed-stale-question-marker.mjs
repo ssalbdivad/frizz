@@ -1,3 +1,13 @@
+// NOTE 2026-09-28: a marker no longer PLACES anything — a card renders at the BOTTOM of the rest it
+// belongs to and never inside a message (maintainer: "questions should always appear at the bottom of the
+// thread not in the middle any explanation should occur beforehand"), and only the HUMAN'S turn ends that
+// rest, not a frizz wake. So, per variant:
+//   (default)       the marker's own slot draws NOTHING; the card sits under the WHOLE asking handoff
+//                   ("Both PRs have watchers armed…" above it), still above the human's reply.
+//   --fresh-marker  the marker in the final handoff carries the card to the BOTTOM of that handoff —
+//                   under "The Mini autocomplete question is still open…", not in the marker's slot.
+//   --woken         no marker at all, and the human's reply is replaced by a frizz WAKE (a PR watcher
+//                   expiring): nobody but frizz has spoken, so the card rides down under the final handoff.
 // NOTE 2026-09-24: the expectation below is REVERSED. An open question now stays at the rest that asked
 // it (lib/questionAnchor), so the card belongs ABOVE the human's reply, not at the tail; a marker in the
 // older handoff keeps placing there, with its Send right after that rest.
@@ -17,7 +27,7 @@
 // card at the tail either way proves nothing.
 //
 // Follows the frizz-stack recipe: a session row + a JSONL the REAL tailer reads. No process.
-// Usage: nub scripts/seed-stale-question-marker.mjs --home=/abs/temp-home --port=NNNN [--fresh-marker]
+// Usage: nub scripts/seed-stale-question-marker.mjs --home=/abs/temp-home --port=NNNN [--fresh-marker | --woken]
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs"
 import { execFileSync } from "node:child_process"
 import { join } from "node:path"
@@ -28,8 +38,9 @@ const flags = Object.fromEntries(
 )
 const { home, port, cwd = process.cwd() } = flags
 const freshMarker = "fresh-marker" in flags
-if (!home || !port) {
-  console.error("usage: nub scripts/seed-stale-question-marker.mjs --home=/abs/temp-home --port=NNNN [--fresh-marker]")
+const woken = "woken" in flags
+if (!home || !port || (freshMarker && woken)) {
+  console.error("usage: nub scripts/seed-stale-question-marker.mjs --home=/abs/temp-home --port=NNNN [--fresh-marker | --woken]")
   process.exit(1)
 }
 
@@ -48,9 +59,9 @@ const uuid = () => `00000000-0000-4000-9000-${String(++n).padStart(12, "0")}`
 // A distinct slug and session per variant: the tailer reads a JSONL once and will NOT re-read one
 // rewritten under it, so reusing the slug silently renders the PREVIOUS variant — a control that agrees
 // with the test for the wrong reason.
-const slug = freshMarker ? "fresh-question-marker" : "stale-question-marker"
-const sessionId = freshMarker ? "51a1e000-0000-4000-9000-0000000000bb" : "51a1e000-0000-4000-9000-0000000000aa"
-const questionId = freshMarker ? "qst_33c7ca222ec1" : "qst_22b6b9111db0"
+const slug = freshMarker ? "fresh-question-marker" : woken ? "woken-question" : "stale-question-marker"
+const sessionId = freshMarker ? "51a1e000-0000-4000-9000-0000000000bb" : woken ? "51a1e000-0000-4000-9000-0000000000cc" : "51a1e000-0000-4000-9000-0000000000aa"
+const questionId = freshMarker ? "qst_33c7ca222ec1" : woken ? "qst_44d8db333fd2" : "qst_22b6b9111db0"
 
 const user = (min, content) => ({
   parentUuid: null, isSidechain: false, type: "user", uuid: uuid(), timestamp: at(min), session_id: sessionId, cwd,
@@ -73,7 +84,7 @@ const ASKING_HANDOFF = [
   "",
   "Worth knowing before you decide: **Mini already has the type safety.** What Mini lacks is only *autocomplete*, and that's the part with a price tag.",
   "",
-  freshMarker ? "" : MARKER,
+  freshMarker || woken ? "" : MARKER,
   "",
   "Both PRs have watchers armed, so CI results and reviews on either will wake me.",
 ].join("\n")
@@ -89,11 +100,16 @@ const FINAL_HANDOFF = [
   "The Mini autocomplete question is still open and unaffected by any of this.",
 ].join("\n")
 
+// What moved the thread on after the ask: the human replying past it, or — --woken — frizz, whose
+// delivery token at the END of the record is what makes the tailer mark it a wake (shared isWakeDelivery).
+const MOVED_ON = woken
+  ? "⏰ Your watcher on colinhacks/zod#5500 has expired and is no longer armed — nothing on that PR will wake you now.\n\n<!-- frizz-wake:seed-woken-question -->"
+  : "I guess let's just unrevert it. We'll announce it in the 4.7 blog post, though."
 const records = [
   user(0, "we need to add a properties example for Zod Mini"),
   assistant(4, "Reading the docs page and the classic `.properties()` implementation."),
   assistant(12, ASKING_HANDOFF),
-  user(30, "I guess let's just unrevert it. We'll announce it in the 4.7 blog post, though."),
+  user(30, MOVED_ON),
   assistant(34, "Un-reverting now, then re-applying the bump on top."),
   assistant(41, "Both matrix legs pass. Pushing to main."),
   assistant(48, FINAL_HANDOFF),
@@ -134,4 +150,4 @@ for (let i = 0; i < 40; i++) {
 }
 const board = await api.query("board")
 const t = board.threads.find((x) => x.id === slug)
-console.log(JSON.stringify({ slug, marker: freshMarker ? "final handoff" : "asking rest (stale)", runtime: t?.runtime, questions: t?.questions?.map((q) => ({ id: q.id, askedAt: q.askedAt })) }, null, 1))
+console.log(JSON.stringify({ slug, marker: freshMarker ? "final handoff" : woken ? "none — a frizz wake moved the thread on" : "asking rest (stale)", runtime: t?.runtime, questions: t?.questions?.map((q) => ({ id: q.id, askedAt: q.askedAt })) }, null, 1))

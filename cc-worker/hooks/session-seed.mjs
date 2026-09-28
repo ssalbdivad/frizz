@@ -68,7 +68,7 @@ const scratch = sid
 // prompt. Trimmed 2026-08-26 (maintainer: "Definitely trim the session seed hook if it's fully
 // repetitive") as part of cutting the per-session token overhead Frizz adds over a plain TUI session.
 const core =
-  '⟦frizz worker contract⟧ You are a frizz WORKER driving EXACTLY ONE effort. Your FULL operating contract — the end-of-turn signal fences (```done / ```awaiting — a question is a registered row, `mcp__frizz__ask`, and the only ```question fence is the EMPTY placement marker naming its id), the scratch-directory rules, the sub-agent rules, the question handback and the stop criterion — lives in your SYSTEM PROMPT; follow it there. ALWAYS SIGN OFF — a fence OR a registration (`ask`, `watch`, `done`); an open question is one, so rest normally and write no question fence for it.\n' +
+  '⟦frizz worker contract⟧ You are a frizz WORKER driving EXACTLY ONE effort. Your FULL operating contract — the end-of-turn signal fences (```done / ```awaiting — a question is a registered row, `mcp__frizz__ask`, whose card renders at the BOTTOM of your handoff, so every word of explanation goes above it; there is no ```question fence), the scratch-directory rules, the sub-agent rules, the question handback and the stop criterion — lives in your SYSTEM PROMPT; follow it there. ALWAYS SIGN OFF — a fence OR a registration (`ask`, `watch`, `done`); an open question is one, so rest normally and write no question fence for it.\n' +
   'SCRATCH DIRECTORY (OPTIONAL): `' + scratch + '` — a folder kept FOR YOU, nothing in it read automatically, never a substitute for doing the work. Give each sub-agent its OWN file rather than a shared one.';
 
 const grounding =
