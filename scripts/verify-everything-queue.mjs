@@ -8,8 +8,8 @@
 //   2. A SELF-WOKEN THREAD KEEPS ITS PLACE. The card being read is woken by Frizz (a wake delivery, as a
 //      finished shell's would be) and rests again with nobody acting on it: it leaves the queue while it
 //      runs and comes back to the SAME place, not the bottom.
-//   3. THE BOARD IS TOP-ALIGNED. An arrival at the bottom of a project's queue moves neither the card
-//      above it nor the sidebar's prompt box.
+//   3. THE PAGE IS TOP-ALIGNED. An arrival at the bottom of the queue moves neither the card above it
+//      nor the prompt box. (It was asked of the project's board until 2026-09-28, when the board went.)
 //
 // Usage: node scripts/verify-everything-queue.mjs --stack=/abs/stack.log --seed='<SEED json>' [--shots=/abs/dir]
 // Exits non-zero when any check fails.
@@ -110,33 +110,40 @@ try {
   const wokenOrder = await cardOrder()
   check("…still first in the one queue, not last", wokenOrder[0] === key(seed.second, "login-test"), wokenOrder.join(" → "))
 
-  // ---- 3. THE BOARD IS TOP-ALIGNED --------------------------------------------------------------------
-  await page.goto(`${origin}/project/${encodeURIComponent(seed.secondSlug)}`, { waitUntil: "domcontentloaded", timeout: 90_000 })
-  await page.waitForSelector("[data-queue-card]", { timeout: 20_000 })
+  // ---- 3. THE PAGE IS TOP-ALIGNED ---------------------------------------------------------------------
+  // Asked of the project's BOARD, `/project/<slug>`, until 2026-09-28; the board went with the project
+  // view, and the same promise is now the one page's: an arrival at the bottom of the queue moves neither
+  // the card above it, the READY header, nor the prompt box and status row across the gutter.
+  await page.goto(`${origin}/`, { waitUntil: "domcontentloaded", timeout: 90_000 })
+  await waitFor("the page's cards", async () => (await cardOrder()).length > 0, 20_000)
   await sleep(800)
-  const boardCards = () => page.$$eval("[data-queue-card]", (els) => els.map((el) => el.getAttribute("data-queue-card")))
-  const firstCard = `[data-queue-card="${(await boardCards())[0]}"]`
+  const firstCard = `[data-xq-card="${(await cardOrder())[0]}"]`
   const geometry = async () => ({
     card: await top(firstCard),
     header: await top("[data-inbox-header]"),
     prompt: await top("[data-dispatch-form] textarea"),
     status: await top("[data-status-row]"),
   })
-  const beforeBoard = await geometry()
-  console.log(`…waiting for an arrival on the board (its snooze ends)  ${JSON.stringify(beforeBoard)}`)
-  await waitFor("the board's arrival", async () => (await boardCards()).includes("release-pin"), 120_000, 200)
+  const beforePage = await geometry()
+  console.log(`…waiting for an arrival at the bottom of the queue (its snooze ends)  ${JSON.stringify(beforePage)}`)
+  await waitFor("the page's arrival", async () => (await cardOrder()).includes(key(seed.second, "release-pin")), 120_000, 200)
   await sleep(600)
-  const afterBoard = await geometry()
-  const order = await boardCards()
-  check("the board's arrival joins the bottom", order.at(-1) === "release-pin", order.join(" → "))
+  const afterPage = await geometry()
+  const order = await cardOrder()
+  check("the arrival joins the bottom", order.at(-1) === key(seed.second, "release-pin"), order.join(" → "))
   for (const part of ["card", "header", "prompt", "status"]) {
-    const moved = afterBoard[part] - beforeBoard[part]
-    check(`…and the ${part === "card" ? "card above it" : part === "header" ? "READY header" : part === "prompt" ? "sidebar's prompt box" : "sidebar's status row"} did not move`, Math.abs(moved) < 0.5, `moved ${moved.toFixed(2)}px`)
+    const moved = afterPage[part] - beforePage[part]
+    check(`…and the ${part === "card" ? "card above it" : part === "header" ? "READY header" : part === "prompt" ? "prompt box" : "status row"} did not move`, Math.abs(moved) < 0.5, `moved ${moved.toFixed(2)}px`)
   }
+  // Level at the page's TOP, where the two start out. The one page holds the card being read in place
+  // across a load and across arrivals above it (lib/viewportLock.ts), so it is not at the top here, and
+  // the READY header scrolls with the queue while the status row stays with the prompt box.
+  await page.evaluate(() => window.scrollTo({ top: 0, behavior: "instant" }))
+  await sleep(300)
   const middle = (selector) => page.$eval(selector, (el) => { const r = el.getBoundingClientRect(); return (r.top + r.bottom) / 2 })
   const [statusMid, headerMid] = [await middle("[data-status-row]"), await middle("[data-inbox-header]")]
   check("the status row's middle sits level with the READY header's across the gutter", Math.abs(statusMid - headerMid) < 6, `status ${statusMid.toFixed(2)} vs header ${headerMid.toFixed(2)}`)
-  await page.screenshot({ path: join(shots, "board-top-aligned.png"), clip: { x: 0, y: 0, width: 1400, height: 900 } })
+  await page.screenshot({ path: join(shots, "page-top-aligned.png"), clip: { x: 0, y: 0, width: 1400, height: 900 } })
   check("no page errors", errors.length === 0, errors.join("; "))
 } finally {
   await browser.close()
