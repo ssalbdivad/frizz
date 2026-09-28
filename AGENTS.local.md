@@ -12,9 +12,13 @@ exception. This binds EVERY agent that touches this checkout: the top-level work
 dispatches. If you find yourself about to open a PR, STOP — in this repo that is always the wrong move.
 
 Land finished work on this machine's local `main` instead: work directly on `main`, or do
-isolated/messy work in a git worktree on a local branch (`git worktree add <dir> -b <slug>`) and, when
-it's done and you're confident, merge it back yourself (`git switch main && git merge <slug>`) and
-remove the worktree. Getting the change onto local `main` is your job — never push a branch to stage a
+isolated/messy work in a git worktree on a local branch under `.frizz/worktrees/`
+(`git worktree add .frizz/worktrees/<slug> -b <slug>`, then `nub install` inside it before you run
+anything — a nested worktree with no `node_modules` of its own silently imports the main checkout's
+`@frizz/*` packages instead of failing) and, when it's done and you're confident, merge it back
+yourself (`git switch main && git merge <slug>`) and remove the worktree. Never create one beside the
+checkout (`../frizz-<slug>`): where repos live directly in `~`, that is a new folder in the home
+directory. Getting the change onto local `main` is your job — never push a branch to stage a
 review and never hand back an unmerged branch. Reading GitHub (issues, PRs, CI) is fine; creating or
 pushing a PR is not. (`FRIZZ.md` states this in full for Frizz
 workers, whose contract is frozen at session start. This file is the copy for everything else running
