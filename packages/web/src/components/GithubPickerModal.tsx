@@ -1,16 +1,17 @@
 import { useEffect, useMemo, useRef, useState, type ComponentType } from "react"
 import { keepPreviousData, useIsMutating, useMutation, useQuery } from "@tanstack/react-query"
 import { ArrowUpRight, Check, ChevronLeft, ChevronRight, CircleCheck, CircleDot, GitMerge, GitPullRequest, GitPullRequestClosed, GitPullRequestDraft, Github, Inbox, Loader2, MessageSquare } from "lucide-react"
-import { acpModelSlug, type DispatchInput, type DispatchProfileSnapshot, type GithubBatchInput, type GithubItem } from "@frizz/shared"
+import { type DispatchProfileSnapshot, type GithubBatchInput, type GithubItem } from "@frizz/shared"
 import { rpc } from "../api/rpc.ts"
 import { showToast } from "../store.ts"
 import { Overlay } from "./NewThreadModal.tsx"
 import { ProfileGridSelector } from "./ProfileGridSelector.tsx"
 import { AcpModelSelect } from "./AcpModelSelect.tsx"
+import { MakeDefaultButton } from "./MakeDefaultButton.tsx"
 import { GithubPromptPopover } from "./GithubPromptPopover.tsx"
 import { SETTINGS_WRITE_KEY } from "../hooks/useSettingsAutosave.tsx"
 import { useDispatchProfile } from "../hooks/useDispatchProfile.ts"
-import { dispatchProfileGroups } from "../lib/dispatchPreferences.ts"
+import { dispatchProfileGroups, type DispatchPick } from "../lib/dispatchPreferences.ts"
 import { OPAQUE_PORTAL_SURFACE_ABOVE_DIALOG_Z } from "../lib/overlaySurface.ts"
 import { buildGithubBatchInput, dispatchProfileError } from "../lib/githubDispatch.ts"
 import { useGithubStatus } from "./GithubTrigger.tsx"
@@ -36,11 +37,12 @@ const PAGE_SIZE = 30
 // the RPCs are guaranteed serviceable when it's mounted.
 export function GithubPickerModal({ onClose }: { onClose: () => void }) {
   const status = useGithubStatus()
-  // The batch dispatches with the SAME durable new-thread profile the prompt box uses — the selector
-  // below writes it, so choosing here also becomes the composer's next default (one profile, not a
-  // picker-local copy that silently diverges). A Codex cache refresh can invalidate the saved pair
-  // while the picker is open; the final revalidation below then fails closed rather than downgrading.
-  const { resolved, codexList, claudeList, acpList, loadError, saveProfile } = useDispatchProfile()
+  // The batch starts from the SAME new-thread default the prompt box does. A pick in the selector
+  // below is this batch's alone — it goes when the picker closes — and "Make default" beside it is the
+  // one way to change the default from here. A Codex cache refresh can invalidate the pair while the
+  // picker is open; the final revalidation below then fails closed rather than downgrading.
+  const pickState = useState<DispatchPick | undefined>(undefined)
+  const { resolved, defaultResolved, picked, codexList, claudeList, acpList, loadError, choose, chooseAcpModel, makeDefault } = useDispatchProfile(pickState)
   // A settings write still in flight — the triage prompt just edited in the header popover, a
   // compaction window picked in the selector — must land before a batch that would read it.
   const savingSettings = useIsMutating({ mutationKey: [...SETTINGS_WRITE_KEY] }) > 0
@@ -291,9 +293,9 @@ export function GithubPickerModal({ onClose }: { onClose: () => void }) {
         )}
 
         {/* Footer: the ordinary model/effort selector (bottom-left) + the batch-dispatch button. The
-            selector is the SAME control the prompt box carries and writes the same durable
-            preference, so the profile every dispatched thread gets is editable right here. Opens
-            UPWARD (side="top") — the footer sits on the modal's bottom edge. */}
+            selector is the SAME control the prompt box carries, over the same new-thread default, so
+            the profile every dispatched thread gets is editable right here. Opens UPWARD
+            (side="top") — the footer sits on the modal's bottom edge. */}
         <div className="mt-4 flex items-end justify-between gap-3">
           <div className="min-w-0">
             <div className="flex min-w-0 flex-wrap items-center gap-x-1.5 gap-y-0.5">
@@ -301,12 +303,7 @@ export function GithubPickerModal({ onClose }: { onClose: () => void }) {
               groups={profileGroups}
               agentSettings
               value={resolved ? { provider: resolved.backend, model: resolved.pickerModel, effort: resolved.effort } : undefined}
-              onValueChange={(selection) => saveProfile({
-                field: "profile",
-                backend: selection.provider as DispatchProfileSnapshot["backend"],
-                model: selection.model,
-                effort: selection.effort as DispatchInput["effort"] & string,
-              })}
+              onValueChange={choose}
               placeholder={loadError ? "Profile unavailable" : "Profile loading…"}
               ariaLabel="Model and effort"
               title={dispatchBlocked ?? "Model and reasoning effort for every thread this batch starts"}
@@ -322,11 +319,14 @@ export function GithubPickerModal({ onClose }: { onClose: () => void }) {
                 agentId={acpAgent.id}
                 agentLabel={acpAgent.label}
                 modelId={resolved?.acpModelId}
-                onValueChange={(modelId) => saveProfile({ field: "model", backend: "acp", value: acpModelSlug(acpAgent.id, modelId) })}
+                onValueChange={(modelId) => chooseAcpModel(acpAgent.id, modelId)}
                 side="top"
                 menuZClass={OPAQUE_PORTAL_SURFACE_ABOVE_DIALOG_Z}
                 className="max-w-[min(14rem,30vw)] px-2 py-1"
               />
+            )}
+            {picked && resolved && defaultResolved && (
+              <MakeDefaultButton groups={profileGroups} pick={resolved} defaultProfile={defaultResolved} onClick={makeDefault} />
             )}
             </div>
             {profileError && <p className="mt-1 max-w-[430px] text-[10.5px] text-danger">{profileError}</p>}

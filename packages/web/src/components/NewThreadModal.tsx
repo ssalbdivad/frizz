@@ -1,7 +1,7 @@
 import * as RadixDialog from "@radix-ui/react-dialog"
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react"
 import { useIsMutating, useMutation, useQuery } from "@tanstack/react-query"
-import { acpModelSlug, type AccountBackend, type DispatchInput } from "@frizz/shared"
+import { type AccountBackend, type DispatchInput } from "@frizz/shared"
 import { rpc } from "../api/rpc.ts"
 import { showToast, store } from "../store.ts"
 import { useSnapshot } from "valtio"
@@ -13,9 +13,10 @@ import { GithubTrigger, useGithubTriggerVisible } from "./GithubTrigger.tsx"
 import { ProfileGridSelector } from "./ProfileGridSelector.tsx"
 import { SETTINGS_WRITE_KEY } from "../hooks/useSettingsAutosave.tsx"
 import { AcpModelSelect } from "./AcpModelSelect.tsx"
+import { MakeDefaultButton } from "./MakeDefaultButton.tsx"
 import { LogoutConfirmModal, SignInModal } from "./SignInModal.tsx"
 import { dispatchProfileGroups } from "../lib/dispatchPreferences.ts"
-import { useDispatchProfile } from "../hooks/useDispatchProfile.ts"
+import { useDispatchProfile, useDraftDispatchPick } from "../hooks/useDispatchProfile.ts"
 import { handleDialogEscape } from "../lib/selectOverlay.ts"
 import { draftKey, draftStore, useDraft, useProjectDir } from "../lib/drafts.ts"
 import { projectSlug } from "../lib/base-path.ts"
@@ -242,8 +243,6 @@ function PromptForm({
   target?: ReactNode
   dirs?: DispatchDirs
 }) {
-  // The one durable new-thread profile, shared with the GitHub picker's own selector.
-  const { resolved, codexList, claudeList, acpList, loadError: profileLoadError, saveProfile } = useDispatchProfile()
   // A settings write still in flight — a compaction window picked in the model picker a moment ago —
   // must land before a dispatch that would read it.
   const savingSettings = useIsMutating({ mutationKey: [...SETTINGS_WRITE_KEY] }) > 0
@@ -257,6 +256,14 @@ function PromptForm({
   const promptKey = draftKey.dispatch(projectDir)
   const submittedDraftRef = useRef("")
   const [pendingDispatch, setPendingDispatch] = useState<string | null>(null)
+  // The new-thread default (shared with the GitHub picker) with this prompt's own pick over it. The
+  // pick is part of the draft: it lasts until this prompt is dispatched, then the box is back on the
+  // default — escalating one task to max no longer leaves every later thread on max.
+  const pickKey = draftKey.dispatchProfile(projectDir)
+  const pickState = useDraftDispatchPick(pickKey)
+  const [pick, setPick] = pickState
+  const submittedPickRef = useRef(pick)
+  const { resolved, defaultResolved, picked, codexList, claudeList, acpList, loadError: profileLoadError, choose, chooseAcpModel, makeDefault } = useDispatchProfile(pickState)
 
   // Per-provider LOCAL credential presence, polled so the submit gate has a fresh value without a
   // round-trip on every keystroke. The gate blocks ONLY on a positive "signed-out" (fails open on
@@ -288,6 +295,9 @@ function PromptForm({
       // A submit clears before the RPC starts. Restore only into a still-empty field so retry is
       // effortless without overwriting text typed during the failed request.
       if (!draftStore.get(promptKey)) setPrompt(submittedDraftRef.current || input.prompt)
+      // The pick comes back with its prompt, on the same terms: a retry must not quietly run on the
+      // default, and a pick made during the failed request is not overwritten.
+      if (!draftStore.get(pickKey)) setPick(submittedPickRef.current)
       setPendingDispatch(null)
       // Server-side auth preflight rejection (the client gate can miss on a stale snapshot): open the
       // same sign-in modal with the dispatch stashed, instead of a dead-end failure toast. The server
@@ -308,7 +318,9 @@ function PromptForm({
   // thread is actually being started — a gated submit leaves the draft intact.
   function runDispatch(input: DispatchInput) {
     submittedDraftRef.current = prompt
+    submittedPickRef.current = pick
     clearPrompt()
+    setPick(undefined)
     setPendingDispatch(input.prompt)
     dispatch.mutate(input)
   }
@@ -371,7 +383,7 @@ function PromptForm({
   // render, so each prompt KEYSTROKE re-rendered every picker tree — ~222 component renders per
   // keystroke. A keystroke only changes `prompt`; keeping the footer element's identity stable lets
   // React bail out of the whole control subtree, and the
-  // element is rebuilt exactly when durable preference data or the model catalogue changes.
+  // element is rebuilt exactly when the default, this box's pick or the model catalogue changes.
   const footer = useMemo(() => {
     if (!resolved) {
       return (
@@ -401,13 +413,7 @@ function PromptForm({
           // `pickerModel`, not `model`: an ACP row is keyed on the bare agent slug; the model inside
           // the agent is the dropdown's, below.
           value={{ provider: resolved.backend, model: resolved.pickerModel, effort: resolved.effort }}
-          onValueChange={(selection) => saveProfile({
-            field: "profile",
-            backend: selection.provider as typeof resolved.backend,
-            model: selection.model,
-            // An ACP row has no effort cell, so its selection carries "" — stored as absent.
-            effort: (selection.effort || undefined) as DispatchInput["effort"],
-          })}
+          onValueChange={choose}
           ariaLabel="Model and effort"
           title={resolved.modelAvailable && resolved.effortAvailable
             ? "Model and reasoning effort"
@@ -419,15 +425,16 @@ function PromptForm({
             agentId={acpAgent.id}
             agentLabel={acpAgent.label}
             modelId={resolved.acpModelId}
-            // The pick becomes the profile's model slug (`acp:<agent>@<model>`); "" (the agent's own
-            // default) drops the tail.
-            onValueChange={(modelId) => saveProfile({ field: "model", backend: "acp", value: acpModelSlug(acpAgent.id, modelId) })}
+            onValueChange={(modelId) => chooseAcpModel(acpAgent.id, modelId)}
             className="max-w-[min(14rem,40vw)] px-2 py-1"
           />
         )}
+        {picked && defaultResolved && (
+          <MakeDefaultButton groups={profileGroups} pick={resolved} defaultProfile={defaultResolved} onClick={makeDefault} />
+        )}
       </div>
     )
-  }, [resolved, codexList, claudeList, acpList, profileLoadError, saveProfile, target])
+  }, [resolved, defaultResolved, picked, codexList, claudeList, acpList, profileLoadError, choose, chooseAcpModel, makeDefault, target])
 
   return (
     <div className="w-full flex flex-col gap-3">
