@@ -108,14 +108,21 @@ try {
   const page = await browser.newPage()
   const errors = []
   let controlStatusMisses = 0
+  let projectIconMisses = 0
+  // The one page draws this project's square (the project list, the lane header), and a square asks for
+  // the project's icon, which 404s for a project that has none — an answer, not a fault (ProjectSquare;
+  // verify-all-queues.mjs and verify-server-package.mjs expect it too). The board this drawer sat on
+  // until 2026-09-28 drew no square, so it never asked.
+  const projectIcon = `${api.origin}/_frizz/project-icon?id=${project.id}`
   page.on("pageerror", (error) => errors.push(String(error)))
   page.on("console", (entry) => {
     // This artifact child deliberately has no launcher control plane. Its status 404 is expected;
     // every application error and every other missing resource still fails this test.
-    if (entry.type() === "error" && entry.location().url !== `${api.origin}/_frizz/control/status`) errors.push(`${entry.text()} ${entry.location().url ?? ""}`)
+    if (entry.type() === "error" && entry.location().url !== `${api.origin}/_frizz/control/status` && entry.location().url !== projectIcon) errors.push(`${entry.text()} ${entry.location().url ?? ""}`)
   })
   page.on("response", (response) => {
     if (response.status() === 404 && response.url() === `${api.origin}/_frizz/control/status`) controlStatusMisses++
+    else if (response.status() === 404 && response.url() === projectIcon) projectIconMisses++
     else if (response.status() >= 400) errors.push(`${response.status()} ${response.url()}`)
   })
   const screenshotCard = async (name) => {
@@ -127,7 +134,9 @@ try {
     console.log(`Capturing ${name}: ${JSON.stringify(clip)}`)
     await page.screenshot({ path: join(shots, name), clip, captureBeyondViewport: false })
   }
-  const url = `${api.origin}/project/${projectSlug}/thread/policy-failure`
+  // The thread's drawer over the one page (`/all/<slug>/thread/<t>`); until 2026-09-28 this was the same
+  // drawer over the project's board, `/project/<slug>/thread/<t>`, an address that now lands on `/`.
+  const url = `${api.origin}/all/${projectSlug}/thread/policy-failure`
   for (const font of ["sans", "mono"]) {
     await api.mutate("settingsSet", { ...await api.query("settingsGet"), font })
     await page.evaluateOnNewDocument((font) => { localStorage.setItem("frizz-font", font) }, font)
@@ -175,7 +184,7 @@ try {
     console.log(`Measured title/icon alignment ${font}: ${JSON.stringify(alignment)}`)
   }
   assert.deepEqual(errors, [])
-  console.log(`PASS error card replaces the sign-off card at desktop and narrow widths in both fonts; no application errors (${controlStatusMisses} expected status 404s from the absent launcher control plane)`)
+  console.log(`PASS error card replaces the sign-off card at desktop and narrow widths in both fonts; no application errors (${controlStatusMisses} expected status 404s from the absent launcher control plane, ${projectIconMisses} from the project's absent icon)`)
   await browser.close()
   browser = undefined
 
