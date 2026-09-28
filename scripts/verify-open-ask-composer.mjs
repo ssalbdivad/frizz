@@ -17,6 +17,7 @@
 // The run CONSUMES its seed — step 4's steer is a newer user message, which is exactly what retires the
 // ```question fence — so re-seed a fresh slug for every run rather than re-pointing it at a spent one.
 import puppeteer from "puppeteer"
+import { createRpcClient } from "./lib/rpc-client.mjs"
 
 const flags = Object.fromEntries(
   process.argv.slice(2).filter((a) => a.startsWith("--")).map((a) => a.replace(/^--/, "").split("=")),
@@ -145,7 +146,9 @@ try {
   await page.screenshot({ path: `${shots}/card-after-freetext-send.png` })
   // The steer must land in the THREAD as the user's own message, with the ask never answered. The card
   // is gone from the board by now, so read the thread's own page rather than the (empty) queue.
-  await page.goto(`${url}/thread/${slug}`, { waitUntil: "networkidle2", timeout: 30000 })
+  // The thread's drawer on the one page (rpc-client threadUrl); the bare `/thread/<slug>` it opened until
+  // 2026-09-28 now lands on `/`.
+  await page.goto(await createRpcClient(url).threadUrl(slug), { waitUntil: "networkidle2", timeout: 30000 })
   await settle(2500)
   const thread = await page.evaluate(`({
     text: document.body.innerText,

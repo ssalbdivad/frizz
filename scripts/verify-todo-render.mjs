@@ -143,7 +143,9 @@ try {
   page.on("pageerror", (e) => pageErrors.push(String(e)))
   page.on("console", (m) => { if (m.type() === "error") pageErrors.push(m.text()) })
   await page.setViewport({ width: 1400, height: 1100, deviceScaleFactor: 2 })
-  await page.goto(`http://127.0.0.1:${port}/thread/${SLUG}`, { waitUntil: "networkidle0" })
+  // The thread's drawer on the one page (rpc-client threadUrl); the bare `/thread/<slug>` it opened until
+  // 2026-09-28 now lands on `/`.
+  await page.goto(await api.threadUrl(SLUG), { waitUntil: "networkidle0" })
   await page.waitForSelector("[data-todo-card]", { timeout: 20_000 })
   // Tool bands past 4 calls collapse behind an "N tool calls" toggle; open every one so all the cards mount.
   for (const toggle of await page.$$('button[aria-label*="tool calls"]')) {
@@ -379,7 +381,7 @@ try {
 
   // ---- CODEX: a different to-do protocol, the SAME card ----
   const codex = page
-  await codex.goto(`http://127.0.0.1:${port}/thread/${CODEX_SLUG}`, { waitUntil: "networkidle0" })
+  await codex.goto(await api.threadUrl(CODEX_SLUG), { waitUntil: "networkidle0" })
   await codex.waitForSelector("[data-todo-card]", { timeout: 20_000 })
   for (const toggle of await codex.$$('button[aria-label*="tool calls"]')) {
     if ((await toggle.evaluate((el) => el.getAttribute("aria-expanded"))) === "false") await toggle.click()

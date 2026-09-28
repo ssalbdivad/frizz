@@ -11,18 +11,25 @@
 // fence form must still be REJECTED at the boundary, with a message a human can read) so the fix is
 // proven to be normalization at the seam, not a loosened storage contract.
 //
-// Usage: node scripts/verify-awaiting-park.mjs --url=http://127.0.0.1:4931 --slug=… --db=/abs/ui.db
+// Usage: node scripts/verify-awaiting-park.mjs --url=http://127.0.0.1:4931 --slug=… --home=/abs/temp-home
+//   `--home` is the adhoc stack's sandbox HOME, and the thread is the LAUNCHING project's. It took the
+//   database path itself (`--db=`) until 2026-09-28, from when every project had its own; one database
+//   holds every project now (lib/sandbox-db.mjs), so the row is found by its project as well as its slug.
 import { execFileSync } from "node:child_process"
 import puppeteer from "puppeteer"
+import { createRpcClient } from "./lib/rpc-client.mjs"
+import { resolveSandboxDb } from "./lib/sandbox-db.mjs"
 
 const flags = Object.fromEntries(
   process.argv.slice(2).filter((a) => a.startsWith("--")).map((a) => a.replace(/^--/, "").split("=")),
 )
-const { url, slug, db, shots = "/tmp" } = flags
-if (!url || !slug || !db) {
-  console.error("usage: node verify-awaiting-park.mjs --url= --slug= --db= [--shots=/tmp]")
+const { url, slug, home, shots = "/tmp" } = flags
+if (!url || !slug || !home) {
+  console.error("usage: node verify-awaiting-park.mjs --url= --slug= --home= [--shots=/tmp]")
   process.exit(1)
 }
+const sandbox = resolveSandboxDb(home)
+const origin = new URL(url).origin
 
 let failures = 0
 const check = (label, ok, detail) => {
@@ -30,13 +37,14 @@ const check = (label, ok, detail) => {
   if (!ok) failures++
 }
 const snoozedUntil = () =>
-  execFileSync("sqlite3", [db, `SELECT COALESCE(snoozed_until,'') FROM session WHERE slug='${slug}'`]).toString().trim()
+  execFileSync("sqlite3", ["-cmd", ".timeout 10000", sandbox.db, `SELECT COALESCE(snoozed_until,'') FROM session WHERE slug='${slug}'${sandbox.hasProjectId ? ` AND project_id='${sandbox.projectId}'` : ""}`]).toString().trim()
 
 // Negative control: the durable grammar must STILL reject the raw fence shape — the fix normalizes
 // upstream, it does not widen what storage accepts — and must say so in a string the UI can render.
-const raw = await fetch(`${url}/rpc/setThreadSnooze`, {
+// Hand-rolled rather than through rpc-client, because the raw status and body ARE what is under test.
+const raw = await fetch(`${origin}/_frizz/rpc/setThreadSnooze`, {
   method: "POST",
-  headers: { "content-type": "application/json", origin: url },
+  headers: { "content-type": "application/json", origin },
   body: JSON.stringify({ slug, until: "2026-07-24T17:00:00Z" }),
 })
 const rawBody = await raw.json()
@@ -52,7 +60,9 @@ try {
   const errors = []
   page.on("console", (m) => { if (m.type() === "error") errors.push(m.text()) })
   page.on("pageerror", (e) => errors.push(String(e)))
-  await page.goto(`${url}/thread/${slug}`, { waitUntil: "networkidle2", timeout: 30000 })
+  // The thread's drawer on the one page (rpc-client threadUrl); the bare `/thread/<slug>` it opened until
+  // 2026-09-28 now lands on `/`.
+  await page.goto(await createRpcClient(url).threadUrl(slug), { waitUntil: "networkidle2", timeout: 30000 })
 
   const button = await page.waitForSelector('[aria-label="Confirm snooze"]', { timeout: 15000 })
   check("the awaiting card offers the park button for a future timer hint", Boolean(button))

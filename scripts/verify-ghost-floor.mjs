@@ -16,6 +16,7 @@
 // Usage: node scripts/verify-ghost-floor.mjs --url=http://127.0.0.1:4933 --slug=… --jsonl=/abs/path.jsonl
 import { appendFileSync, readFileSync } from "node:fs"
 import puppeteer from "puppeteer"
+import { createRpcClient } from "./lib/rpc-client.mjs"
 
 const flags = Object.fromEntries(
   process.argv.slice(2).filter((a) => a.startsWith("--")).map((a) => a.replace(/^--/, "").split("=")),
@@ -79,7 +80,9 @@ try {
     else if (m.type() === "warning" || m.type() === "warn") notes.push(m.text())
   })
   page.on("pageerror", (e) => errors.push(String(e)))
-  await page.goto(`${url}/thread/${slug}`, { waitUntil: "networkidle2", timeout: 30000 })
+  // The thread's drawer on the one page (rpc-client threadUrl); the bare `/thread/<slug>` it opened until
+  // 2026-09-28 now lands on `/`.
+  await page.goto(await createRpcClient(url).threadUrl(slug), { waitUntil: "networkidle2", timeout: 30000 })
   await page.waitForSelector('textarea[placeholder*="Follow up"]', { timeout: 15000 })
 
   const send = async (text) => {

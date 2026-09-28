@@ -104,6 +104,6 @@ for (let i = 0; i < 40; i++) {
 }
 console.log(JSON.stringify({
   slug: SLUG,
-  url: `http://127.0.0.1:${port}/thread/${SLUG}`,
+  url: await api.threadUrl(SLUG),
   users: users.map((m) => ({ peerFrom: m.peerFrom, peerSession: m.peerSession, peerUnnamed: m.peerUnnamed, queued: m.queued, shown: (m.displayText ?? m.text).slice(0, 60) })),
 }, null, 1))

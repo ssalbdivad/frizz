@@ -54,13 +54,26 @@ export function createRpcClient(baseUrl, project) {
     return envelope?.result
   }
 
+  const query = (method, input) => {
+    const url = new URL(`${prefix}/rpc/${method}`, baseUrl)
+    if (input !== undefined) url.searchParams.set("input", JSON.stringify(input))
+    return send(method, {}, url)
+  }
+
   return {
     origin,
     /** GET /_frizz/rpc/<method>?input=… — for router `query` procedures. */
-    query(method, input) {
-      const url = new URL(`${prefix}/rpc/${method}`, baseUrl)
-      if (input !== undefined) url.searchParams.set("input", JSON.stringify(input))
-      return send(method, {}, url)
+    query,
+    /**
+     * The address of a thread's DRAWER on the one page — `/all/<project slug>/thread/<slug>` — for the
+     * project this client addresses. Until 2026-09-28 a script opened the launching project's drawer at
+     * the bare `/thread/<slug>`, which now lands on `/`; the project's slug is read off its own board
+     * (`projectSlug`), because a script that knows only a port has no other way to name it.
+     */
+    async threadUrl(slug) {
+      const board = await query("board")
+      if (!board?.projectSlug) throw new RpcError("board", 200, "the board names no projectSlug, so no drawer address can be built")
+      return `${origin}/all/${encodeURIComponent(board.projectSlug)}/thread/${encodeURIComponent(slug)}`
     },
     /** POST /_frizz/rpc/<method> — for router `mutation` procedures. */
     mutate(method, input) {
