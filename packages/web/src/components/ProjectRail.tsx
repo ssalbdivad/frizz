@@ -1,6 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import { useCallback, useEffect, useRef, useState, type CSSProperties, type DragEvent as DragEvent_, type KeyboardEvent as KeyboardEvent_, type MouseEvent as MouseEvent_, type PointerEvent as PointerEvent_ } from "react"
-import { Infinity as InfinityIcon, Plus } from "lucide-react"
+import { House, Infinity as InfinityIcon, Plus } from "lucide-react"
 import { Link, useLocation } from "react-router"
 import { useSnapshot } from "valtio"
 import type { ProjectCard, ProjectRailCounts } from "@frizz/shared"
@@ -77,14 +77,39 @@ export function projectIconSrc(project: ProjectCard): string {
   return `/_frizz/project-icon?id=${encodeURIComponent(project.id)}${version}`
 }
 
+/** The square for any card: the Home workspace's house, or a project's icon or monogram. */
+export function ProjectSquare({ project, size }: { project: ProjectCard; size: number }) {
+  return project.home ? <HomeSquare size={size} /> : <IconSquare project={project} size={size} />
+}
+
 /**
- * The square itself: the project's icon, or its monogram until we know there isn't one.
+ * The Home workspace's square — a house, on the monogram's own tile with the hue taken out.
+ *
+ * Home has no folder of its own to find an icon in and no name worth two letters, and it is the one
+ * square that is Frizz's rather than the operator's, so it is the one without a colour. The glyph is
+ * 60% of the tile where a monogram's letters are 40%: a house's ink is a thin outline in a square box,
+ * and at 40% it read as a speck beside the letters. Its stroke is set in PIXELS (`absoluteStrokeWidth`)
+ * so the outline holds its weight from the rail's 40px square down to the picker's 12px one.
+ */
+function HomeSquare({ size }: { size: number }) {
+  return (
+    <span
+      className="relative flex items-center justify-center overflow-hidden rounded-[30%]"
+      style={{ width: size, height: size, background: "hsl(0 0% 24%)", color: "hsl(0 0% 80%)" }}
+    >
+      <House aria-hidden size={Math.round(size * 0.6)} strokeWidth={size >= 24 ? 1.75 : 1.25} absoluteStrokeWidth />
+    </span>
+  )
+}
+
+/**
+ * A registered project's square: its icon, or its monogram until we know there isn't one.
  *
  * The monogram is what renders while the icon loads AND if it never does, with the `<img>` laid over
  * it and revealed only on load. That ordering is deliberate — a rail of forty squares fetches forty
  * icons, and the alternative (blank until loaded) is a rail that assembles itself in front of you.
  */
-export function ProjectSquare({ project, size }: { project: ProjectCard; size: number }) {
+function IconSquare({ project, size }: { project: ProjectCard; size: number }) {
   const [loaded, setLoaded] = useState(false)
   // A near-square mark fills the tile; a genuinely letterboxed one is contained and padded. Measured:
   // a 372x368 screenshot is 1.1% off square and looked WRONG contained — object-contain letterboxed
@@ -466,10 +491,15 @@ export function ProjectRail() {
     onError: () => setOptimistic(null), // the server order is the truth if we could not write ours
   })
 
-  const projects = optimistic ?? data ?? []
+  // HOME IS NOT IN THE ORDER. It has no registry entry to hold a position (the server always lists it
+  // last), so it cannot be dragged, and nothing can be dropped below it: it is drawn under the band as
+  // furniture, the last square above the + and always on screen however long the list grows.
+  const listed = optimistic ?? data ?? []
+  const projects = listed.filter((project) => !project.home)
+  const homeCard = (data ?? []).find((project) => project.home)
   // The LIVE count belongs to the project whose board the store holds — the page project, which on the
   // cross-project page is its focus, not the project it shows.
-  const countsFor = useRailCounts(projectSlug(), projects)
+  const countsFor = useRailCounts(projectSlug(), listed)
 
   /**
    * Fade the band's bottom edge ONLY while something is actually below it.
@@ -646,6 +676,20 @@ export function ProjectRail() {
           />
         ))}
       </div>
+
+      {homeCard && (
+        <div className="w-full shrink-0 pt-2">
+          <RailLink
+            project={homeCard}
+            index={-1}
+            current={homeCard.slug === current}
+            counts={countsFor(homeCard)}
+            drag={null}
+            onPointerDown={() => {}}
+            onKeyDown={() => {}}
+          />
+        </div>
+      )}
 
       <Tooltip side="right" label="Add a project">
         <button

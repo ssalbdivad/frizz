@@ -48,7 +48,7 @@ import { describeRuntime, resolveRuntimes, type ResolvedRuntimes, type ResolveRu
 import { createTenantMap } from "./tenants.ts"
 import { openFrizzDatabase, type FrizzDatabase, type OpenFrizzDatabaseOptions } from "./frizz-db.ts"
 import { startTenantPrime, type TenantPrimeRun } from "./tenant-prime.ts"
-import { findWorkspaceBySegment, listWorkspaces, projectForEntry } from "./home-workspace.ts"
+import { HOME_WORKSPACE_ID, findWorkspaceBySegment, homeWorkspaceProject, listWorkspaces, projectForEntry } from "./home-workspace.ts"
 import { backfillRegistry } from "./project-registry.ts"
 import { servedByAnotherProcess } from "./project-launch.ts"
 import { deleteProjectState, stopProjectWorkers } from "./project-teardown.ts"
@@ -641,6 +641,15 @@ export async function startServer(opts: StartOptions = {}): Promise<StartedServe
     }
     return { closed, stoppedWorkers }
   }
+  /**
+   * Settings → Home folder moved: reopen the Home workspace where it now points (tenants.activate closes
+   * and reopens a tenant whose folder changed). Only if it is open — whatever opens it later reads the
+   * setting as it is then.
+   */
+  const reopenHomeWorkspace: NonNullable<AppContext["reopenHomeWorkspace"]> = async () => {
+    if (!tenants.get(HOME_WORKSPACE_ID)) return
+    await tenants.activate(homeWorkspaceProject())
+  }
   const tenants = createTenantMap<TenantSurfaces>({
     createContext: (contextOptions) => {
       if (contextOptions.project) assertNotServedElsewhere(contextOptions.project)
@@ -648,7 +657,7 @@ export async function startServer(opts: StartOptions = {}): Promise<StartedServe
     },
     // serverLockPath is the LAUNCHING project's: it is the only `server.lock` this process publishes
     // (see "status publication"), so it is the only file a tenant's worker can read the port out of.
-    contextOptions: { get claudeBin() { return runtimes?.claude.bin ?? opts.claudeBin }, get codexBin() { return runtimes?.codex.bin ?? opts.codexBin }, serverLockPath: serverLockPathFor(project), activeTenants, teardownProject, launchProjectId: project.id, get database() { return frizzDb?.db } },
+    contextOptions: { get claudeBin() { return runtimes?.claude.bin ?? opts.claudeBin }, get codexBin() { return runtimes?.codex.bin ?? opts.codexBin }, serverLockPath: serverLockPathFor(project), activeTenants, teardownProject, reopenHomeWorkspace, launchProjectId: project.id, get database() { return frizzDb?.db } },
     // Each project's app carries ITS OWN owner proof, so /health stays honest per project rather than
     // answering for whichever one happened to launch the server. The socket is per project for a
     // blunter reason: it is a live feed of ONE board, so sharing the launcher's would push its

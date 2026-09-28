@@ -179,6 +179,7 @@ import { backgroundShellLineCount, readBackgroundShellOutput } from "./backgroun
 import { projectRetiredBackgroundOps, retiredOpsFor } from "./transcript.ts"
 import { clearProjectIcon, customIconPath, findById, forgetProject, ICON_SCAN_VERSION, listProjects, moveProjectDirectory, renameProject, reorderProjects, setProjectIcon, type RegistryEntry } from "./project-registry.ts"
 import { HOME_WORKSPACE_NAME, isHomeWorkspace, listWorkspaces } from "./home-workspace.ts"
+import { expandHomeFolder, homeFolderProblem } from "./home-folder.ts"
 import { basename, dirname } from "node:path"
 import { existsSync, mkdirSync, rmSync, writeFileSync } from "node:fs"
 import { activeBandThread, ProjectCard, ProjectQueue, ProjectRailCounts, PROJECT_ICON_EXTENSIONS, PROJECT_ICON_MAX_BASE64_CHARS, queuedThread, ThreadHandoff, BURIED_ANSWERS_HEADER } from "@frizz/shared"
@@ -654,7 +655,10 @@ function projectCard(entry: RegistryEntry, stale: boolean): ProjectCard {
     // when a request arrives — so a widened scan would never be asked about the very projects it was
     // widened for. Measured on the real registry (2026-08-08): nub's `site/public/icon.svg` resolves
     // correctly on demand, but the grid never demanded it because a pre-versioning miss read as `none`.
-    iconStatus: entry.icon
+    // Home has no folder of its own to scan — it draws a house, and asking for its icon is a 404.
+    iconStatus: isHomeWorkspace(entry.id)
+      ? "none"
+      : entry.icon
       ? "icon"
       : entry.iconScannedAt && (entry.iconScanVersion ?? 0) === ICON_SCAN_VERSION
         ? "none"
@@ -4013,6 +4017,21 @@ export function createRouter(ctx: AppContext) {
       input: z.object({ path: z.string().max(4096) }),
       output: z.object({ status: z.enum(["directory", "file", "missing", "empty"]), suggestions: z.array(z.string()) }),
       handler: async ({ input }) => completePath(input.path),
+    }),
+
+    /**
+     * Where a Settings → Home folder value would put Home's agents, and why it cannot, before it is
+     * saved. The field asks as the operator types and saves only a value this passes: every settings
+     * write carries the WHOLE object, so a draft holding a folder the save refuses (settings.ts) would
+     * fail every later write along with it.
+     */
+    homeFolderCheck: query({
+      input: z.object({ folder: z.string().max(4096) }),
+      output: z.object({ folder: z.string(), problem: z.string().nullable() }),
+      handler: async ({ input }) => ({
+        folder: expandHomeFolder(input.folder),
+        problem: homeFolderProblem(input.folder) ?? null,
+      }),
     }),
 
     /**

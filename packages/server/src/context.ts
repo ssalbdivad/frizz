@@ -11,7 +11,7 @@ import {
 } from "@frizz/shared"
 import { Bus, Emitter } from "./bus.ts"
 import { resolveProject, permRequestDir, workDirOf, type Project } from "./project.ts"
-import { isHomeWorkspace } from "./home-workspace.ts"
+import { homeWorkspaceFolder, isHomeWorkspace } from "./home-workspace.ts"
 import { createStorage, isBrokerClaudeRow, isHeadlessRow, type Storage } from "./storage.ts"
 import type Database from "./sqlite.ts"
 import { getSettings, setSettings, resetSettings } from "./settings.ts"
@@ -215,6 +215,13 @@ export interface AppContext {
     options?: { stopWorkers?: boolean; deleteState?: boolean },
   ) => Promise<{ closed: boolean; stoppedWorkers: number }>
   /**
+   * Reopen the Home workspace where Settings → Home folder now points, if it is open — called when a
+   * settings write moves that folder. Without it Home kept its old folder until a request happened to
+   * name it (index.ts routeToTenant), so a timer or a watcher firing first resumed its thread in the
+   * folder the operator had just moved away from. Supplied by the server, which owns the tenant map.
+   */
+  reopenHomeWorkspace?: () => Promise<void>
+  /**
    * The project this server was LAUNCHED from, which is the one project it cannot let go of.
    *
    * Its `<stateDir>/server.lock` is the only status file this process publishes, and every worker on
@@ -270,6 +277,8 @@ export interface ContextOptions {
   teardownProject?: AppContext["teardownProject"]
   /** See AppContext.launchProjectId — supplied by the server, which knows which project launched it. */
   launchProjectId?: string
+  /** See AppContext.reopenHomeWorkspace — supplied by the server, which owns the tenant map. */
+  reopenHomeWorkspace?: AppContext["reopenHomeWorkspace"]
   /** Internal deterministic construction/rollback seam. */
   startup?: {
     afterPhase?: (phase: ContextStartupPhase) => void
@@ -1108,6 +1117,15 @@ function createContextUnchecked(opts: ContextOptions, resources: PartialContextR
   }
   opts.startup?.afterPhase?.("thread hibernation")
 
+  // A settings write that moves Settings → Home folder reopens the Home workspace there. Deferred a tick
+  // because the write may be a request Home's own context is serving, and reopening closes that context.
+  const movingHomeFolder = <T>(write: () => T): T => {
+    const before = homeWorkspaceFolder(home)
+    const result = write()
+    if (homeWorkspaceFolder(home) !== before) setTimeout(() => void opts.reopenHomeWorkspace?.(), 0)
+    return result
+  }
+
   return {
     bootId,
     project,
@@ -1127,13 +1145,14 @@ function createContextUnchecked(opts: ContextOptions, resources: PartialContextR
     stopSubscriptions,
     backendFor,
     getSettings: () => getSettings(storage, home),
-    setSettings: (s) => setSettings(storage, s, home),
-    resetSettings: () => resetSettings(storage, home),
+    setSettings: (s) => movingHomeFolder(() => setSettings(storage, s, home)),
+    resetSettings: () => movingHomeFolder(() => resetSettings(storage, home)),
     getDispatchPreferences: (codexModels) => getDispatchPreferences(storage, getSettings(storage, home), home, codexModels),
     setDispatchPreference: (update, codexModels) =>
       setDispatchPreference(storage, getSettings(storage, home), home, update, codexModels),
     activeTenants: opts.activeTenants,
     teardownProject: opts.teardownProject,
+    reopenHomeWorkspace: opts.reopenHomeWorkspace,
     launchProjectId: opts.launchProjectId,
     claudeBin: opts.claudeBin,
     codexBin: opts.codexBin,

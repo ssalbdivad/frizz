@@ -1,7 +1,9 @@
-import { useEffect, useMemo, useState, useSyncExternalStore } from "react"
+import { useDeferredValue, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react"
+import { keepPreviousData, useQuery, useQueryClient } from "@tanstack/react-query"
 import { useSnapshot } from "valtio"
 import { Check, Copy } from "lucide-react"
 import { type Settings } from "@frizz/shared"
+import { rpc } from "../api/rpc.ts"
 import { store } from "../store.ts"
 import { copyTextToClipboard } from "../lib/clipboard.ts"
 import { prefs } from "../lib/prefs.ts"
@@ -30,6 +32,16 @@ function currentPerm(): NotifPerm {
 export function SettingsDrawer() {
   const { draft, update, saveState, flush } = useSettingsDraft()
   const [perm, setPerm] = useState<NotifPerm>(currentPerm())
+  // The Home workspace's square, its picker row and its project view all show its folder, and they
+  // read it from the project list — so the list is re-read once a moved folder has actually saved.
+  const queryClient = useQueryClient()
+  const [folderSaved, setFolderSaved] = useState(true)
+  useEffect(() => {
+    if (folderSaved || saveState !== "saved") return
+    setFolderSaved(true)
+    void queryClient.invalidateQueries({ queryKey: ["projectsList"] })
+    void queryClient.invalidateQueries({ queryKey: ["projectsQueues"] })
+  }, [folderSaved, saveState, queryClient])
 
   // Enter/exit animation. `shown` drives the slide (mount → next frame flips it true → slides in;
   // close flips it false → slides out). App renders <SettingsDrawer> only while showSettings is true,
@@ -110,6 +122,16 @@ export function SettingsDrawer() {
               {draft.notifications && <PermHint perm={perm} />}
             </SettingsField>
 
+            <SettingsField label="Home folder" help={SETTINGS_HELP.homeFolder}>
+              <HomeFolderField
+                value={draft.homeFolder ?? ""}
+                onCommit={(homeFolder) => {
+                  setFolderSaved(false)
+                  update({ ...draft, homeFolder })
+                }}
+              />
+            </SettingsField>
+
             {/* LAST, on purpose: which editor a vetted local path opens in is the one power-user
                 knob in the drawer, so it sits below everything an ordinary operator adjusts. */}
             <SettingsField label="Local file links" help={SETTINGS_HELP.localFileOpener}>
@@ -132,6 +154,66 @@ export function SettingsDrawer() {
           )}
         </div>
       </div>
+    </div>
+  )
+}
+
+/**
+ * Settings → Home folder: where the Home workspace's agents run.
+ *
+ * WRITTEN ON ENTER OR ON LEAVING THE FIELD, never per keystroke — half a path is not a folder — and
+ * only once the server has passed it. Every settings write carries the WHOLE object, so a draft holding
+ * a folder the save refuses would fail every later write in this drawer along with it. The line under
+ * the field is the server's own reading of what is typed (`~` expanded on the machine that runs the
+ * agents, a registered project's folder refused), so what it says is exactly what saving would do.
+ */
+function HomeFolderField({ value, onCommit }: { value: string; onCommit: (folder: string) => void }) {
+  const [text, setText] = useState(value)
+  const typed = useDeferredValue(text.trim())
+  const queryClient = useQueryClient()
+  const check = useQuery({
+    queryKey: ["homeFolderCheck", typed],
+    queryFn: () => rpc.homeFolderCheck({ folder: typed }),
+    placeholderData: keepPreviousData,
+    staleTime: 2_000,
+  })
+  const commit = async () => {
+    const folder = text.trim()
+    if (folder === value.trim()) return
+    const verdict = await queryClient.fetchQuery({
+      queryKey: ["homeFolderCheck", folder],
+      queryFn: () => rpc.homeFolderCheck({ folder }),
+      staleTime: 0,
+    })
+    if (!verdict.problem) onCommit(folder)
+  }
+  // Esc closes the drawer without blurring the field, and an unmount fires no blur — so what was typed
+  // is committed on the way out too, as a pending debounce is flushed (useSettingsAutosave).
+  const commitRef = useRef(commit)
+  commitRef.current = commit
+  useEffect(() => () => void commitRef.current(), [])
+  const reading = check.data
+  return (
+    <div>
+      <input
+        aria-label="Home folder"
+        value={text}
+        onChange={(event) => setText(event.target.value)}
+        onBlur={() => void commit()}
+        onKeyDown={(event) => {
+          if (event.key === "Enter") void commit()
+        }}
+        placeholder="~"
+        spellCheck={false}
+        autoComplete="off"
+        className={`w-full rounded-md border bg-bg px-2.5 py-2 font-mono text-[12px] text-fg outline-none placeholder:text-muted-50 focus-visible:ring-1 focus-visible:ring-focus-ink-60 ${
+          reading?.problem ? "border-danger-fill/60" : "border-border-strong"
+        }`}
+      />
+      {/* Always a line tall, so the drawer does not jump as the reading comes and goes. */}
+      <p className={`mt-1.5 min-h-[1.4em] truncate text-[11.5px] ${reading?.problem ? "text-danger" : "text-muted-70"}`}>
+        {reading ? reading.problem ?? `Threads started in Home run in ${reading.folder}` : ""}
+      </p>
     </div>
   )
 }
