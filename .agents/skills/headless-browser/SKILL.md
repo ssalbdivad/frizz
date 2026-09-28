@@ -46,6 +46,15 @@ Always: capture **desktop + narrow** widths, read the screenshots back, and chec
 — a clean render with console errors is not a pass. Exercise the relevant active/idle/error/restart
 states, not just first paint.
 
+**Headless Chrome is a touch screen unless you say otherwise.** It has no pointing device, so it answers
+`(hover: none)` and `(pointer: none)`: every Tailwind v4 `hover:` / `group-hover:` style is dead, and the
+app's `(hover: none)` touch rules apply — ProjectList's row actions and the code-block copy button show at
+rest. `--hover` implies `--mouse`, which launches Chrome as a desktop with a mouse
+(`scripts/lib/mouse-pointer.mjs`; `ink-gaps.mjs` takes both flags too). Pass `--mouse` alone for a
+desktop RESTING shot of anything hover-gated, and leave it off at phone widths, where touch is the truth.
+Before it existed (2026-09-28), `--hover` on a pill came back with the pill's resting border and colour,
+and a desktop shot showed controls the desktop hides.
+
 ---
 
 ## 2. Chrome DevTools MCP — richer, but only because this repo forces it headless
