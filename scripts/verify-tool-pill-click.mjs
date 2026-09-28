@@ -22,6 +22,7 @@ import { join } from "node:path"
 import { randomUUID } from "node:crypto"
 import { createRpcClient } from "./lib/rpc-client.mjs"
 import { resolveSandboxDb, sessionProjectColumns } from "./lib/sandbox-db.mjs"
+import { HARNESS_404 } from "./lib/page-errors.mjs"
 
 const args = process.argv.slice(2)
 const opt = (k, d) => { const hit = args.find((a) => a.startsWith(`--${k}=`)); return hit ? hit.slice(k.length + 3) : d }
@@ -102,11 +103,15 @@ const check = (ok, label, detail) => { console.log(`${ok ? "PASS" : "FAIL"}  ${l
 // of its header, of the link inside it, and of the dead space between the two halves. Every subsequent
 // click is aimed with these numbers rather than at a selector, so the assertion is about PIXELS the
 // human can actually hit.
-// Scoped to the THREAD's own transcript column, never `document`: drilling into a sub-agent mounts a
-// drawer OVER the thread with a second column of its own cards, so an unscoped lookup silently starts
-// measuring the drawer's Read card instead of the one under test.
+// Scoped to the THREAD's own drawer layer, never `document`: drilling into a sub-agent or opening a file
+// mounts another layer OVER the thread with cards of its own, and the one page keeps its queue cards
+// rendered BEHIND the drawer, so an unscoped lookup silently measures some other card than the one under
+// test. The thread is the BOTTOM layer — the first one opened, so the lowest `data-drawer-layer` id.
+// (This was `[data-transcript-column]`, which no longer exists; the `?? document` fallback had quietly
+// made every probe page-wide.)
 const CARD_GEOMETRY = (label) => {
-  const column = document.querySelectorAll("[data-transcript-column]")[0] ?? document
+  const column = [...document.querySelectorAll("[data-drawer-layer]")].sort((a, b) => Number(a.dataset.drawerLayer) - Number(b.dataset.drawerLayer))[0]
+  if (!column) return null
   const cards = [...column.querySelectorAll(".frizz-bash, .frizz-diff")]
   const card = cards.find((c) => c.querySelector(".frizz-bash-label")?.textContent?.trim() === label)
   if (!card) return null
@@ -114,7 +119,11 @@ const CARD_GEOMETRY = (label) => {
   const left = header.children[0]
   const right = header.children[1]
   const disclosure = header.querySelector("[data-tool-disclosure]") ?? header
-  const link = header.querySelector('a[href^="cursor://"], button[aria-label^="Open sub-agent transcript"]')
+  // The header's own action: the sub-agent drill-in, or the file path. The path was
+  // `<a href="cursor://…">` until 489b231f (2026-08-19) made it PathLink's <button title={path}>, which
+  // opens the file IN Frizz (a reader layer) through openLocalPath. A button in the LEFT group that is
+  // not the disclosure chevron is exactly that.
+  const link = header.querySelector('button[aria-label^="Open sub-agent transcript"]') ?? left.querySelector("button[title]:not([data-tool-disclosure])")
   const box = (el) => { const r = el.getBoundingClientRect(); return { x: r.x, y: r.y, w: r.width, h: r.height, right: r.right, cx: r.x + r.width / 2, cy: r.y + r.height / 2 } }
   return {
     header: box(header),
@@ -122,7 +131,7 @@ const CARD_GEOMETRY = (label) => {
     left: box(left),
     right: right ? box(right) : null,
     disclosure: box(disclosure),
-    link: link ? { ...box(link), tag: link.tagName, text: link.textContent.trim() } : null,
+    link: link ? { ...box(link), tag: link.tagName, text: link.textContent.trim(), title: link.getAttribute("title") } : null,
     // The disclosure state as the DOM reports it. Family 1 puts aria-expanded on the header <button>;
     // family 2 puts it on the chevron and mirrors it onto the row as data-expanded.
     expanded: (header.getAttribute("data-expanded") ?? header.getAttribute("aria-expanded") ?? disclosure.getAttribute("aria-expanded")) === "true",
@@ -146,27 +155,28 @@ try {
       const stale = page
       page = await browser.newPage()
       page.on("pageerror", (e) => pageErrors.push(String(e)))
-      // A cursor:// navigation has no handler in headless Chrome — expected, not a page defect.
-      page.on("console", (m) => { if (m.type() === "error" && !/cursor:\/\/|ERR_UNKNOWN_URL_SCHEME|Not allowed to launch/i.test(m.text())) pageErrors.push(m.text()) })
+      // A cursor:// navigation has no handler in headless Chrome — expected, not a page defect. The
+      // console's "Failed to load resource" echo is dropped because the response listener below records
+      // the same failure WITH its URL, minus the disposable stack's supervisor 404 (lib/page-errors.mjs).
+      page.on("console", (m) => { if (m.type() === "error" && !m.text().startsWith("Failed to load resource") && !/cursor:\/\/|ERR_UNKNOWN_URL_SCHEME|Not allowed to launch/i.test(m.text())) pageErrors.push(m.text()) })
+      page.on("response", (r) => { if (r.status() >= 400 && !HARNESS_404.test(r.url())) pageErrors.push(`${r.status()} ${r.url()}`) })
       await page.setViewport({ width: 1400, height: 1100, deviceScaleFactor: 2 })
       if (stale) await stale.close()
     }
     // The thread's drawer on the one page (rpc-client threadUrl); the bare `/thread/<slug>` it opened until
     // 2026-09-28 now lands on `/`.
     await page.goto(await api.threadUrl(SLUG), { waitUntil: "networkidle0" })
-    await page.waitForSelector(".frizz-bash", { timeout: 20_000 })
+    await page.waitForSelector("[data-drawer-layer] .frizz-bash, [data-drawer-layer] [data-tool-activity]", { timeout: 20_000 })
     // Ordinary calls fold behind an "N tool calls" band; open every one so all four cards mount.
-    for (const toggle of await page.$$('button[aria-label*="tool call"]')) {
-      if ((await toggle.evaluate((el) => el.getAttribute("aria-expanded"))) === "false") await toggle.click()
-    }
-    await page.waitForFunction(() => [...document.querySelectorAll(".frizz-bash-label")].some((l) => l.textContent.trim() === "Agent"), { timeout: 10_000 })
+    for (const toggle of await page.$$('[data-drawer-layer] [data-tool-activity] > button[aria-expanded="false"]')) await toggle.click()
+    await page.waitForFunction(() => [...document.querySelectorAll("[data-drawer-layer] .frizz-bash-label")].some((l) => l.textContent.trim() === "Agent"), { timeout: 10_000 })
   }
   await openThread()
 
   const geom = async (label) => page.evaluate(CARD_GEOMETRY, label)
   const clickAt = async (x, y) => { await page.mouse.click(x, y); await new Promise((r) => setTimeout(r, 160)) }
 
-  const seen = await page.evaluate(() => [...document.querySelectorAll(".frizz-bash-label")].map((l) => l.textContent.trim()))
+  const seen = await page.evaluate(() => [...document.querySelectorAll("[data-drawer-layer] .frizz-bash-label")].map((l) => l.textContent.trim()))
   check(["Read", "Edit", "Bash", "Agent"].every((l) => seen.includes(l)), "the four card families render", JSON.stringify(seen))
 
   // ── 1. the row reads as clickable ────────────────────────────────────────────────────────────────
@@ -217,7 +227,7 @@ try {
   // to select and scroll — the click target is the HEADER, deliberately, and never the whole card.
   for (const label of ["Read", "Edit", "Agent"]) {
     const body = await page.evaluate((l) => {
-      const column = document.querySelectorAll("[data-transcript-column]")[0] ?? document
+      const column = [...document.querySelectorAll("[data-drawer-layer]")].sort((a, b) => Number(a.dataset.drawerLayer) - Number(b.dataset.drawerLayer))[0]
       const card = [...column.querySelectorAll(".frizz-bash, .frizz-diff")].find((c) => c.querySelector(".frizz-bash-label")?.textContent?.trim() === l)
       const el = card?.querySelector(".frizz-bash-body, .frizz-diff-line")
       if (!el) return null
@@ -234,7 +244,7 @@ try {
   // Its title button is `flex-1`, so if it stretches past its own text there is nothing left to click
   // for "anywhere else" on an Agent card — the one card where the exception could swallow the rule.
   const agentSpan = await page.evaluate(() => {
-    const card = [...document.querySelectorAll(".frizz-bash")].find((c) => c.querySelector(".frizz-bash-label")?.textContent?.trim() === "Agent")
+    const card = [...document.querySelectorAll("[data-drawer-layer] .frizz-bash")].find((c) => c.querySelector(".frizz-bash-label")?.textContent?.trim() === "Agent")
     const header = card.querySelector(".frizz-bash-header")
     const btn = header.querySelector('button[aria-label^="Open sub-agent transcript"]')
     const range = document.createRange()
@@ -256,7 +266,7 @@ try {
     // A 26px pill inside a 1400px frame cannot be judged, so crop to the card stack at 2x and let the
     // row's own proportions be readable.
     const strip = await page.evaluate(() => {
-      const cards = [...document.querySelectorAll(".frizz-bash, .frizz-diff")]
+      const cards = [...document.querySelectorAll("[data-drawer-layer] .frizz-bash, [data-drawer-layer] .frizz-diff")]
       const boxes = cards.map((c) => c.getBoundingClientRect())
       const x = Math.min(...boxes.map((b) => b.x)), right = Math.max(...boxes.map((b) => b.right))
       const y = Math.min(...boxes.map((b) => b.y)), bottom = Math.max(...boxes.map((b) => b.bottom))
@@ -272,18 +282,27 @@ try {
   }
 
   // ── 7. clicking a FILE PATH does NOT toggle ──────────────────────────────────────────────────────
-  // Half the point of the exception: Read and Edit each carry an <a href="cursor://…"> in the header.
-  // Quarantined down here, one card per page load, because of the external-protocol trap documented at
-  // the top of this block — the click itself is real, so it poisons the page's input for good.
+  // Half the point of the exception: Read and Edit each carry the file's path in the header. It was an
+  // <a href="cursor://…"> when this was written; since 489b231f (2026-08-19) it is PathLink's <button>,
+  // which opens the file in Frizz's own reader. That makes the click OBSERVABLE, so, like the sub-agent
+  // name below, it gets a differential: a guard that swallowed the click would pass "does not toggle" by
+  // doing nothing, and the reader layer mounting is what tells the two apart. Still one card per fresh
+  // tab — a reader layer over the thread is state the next card's probe should not start from.
+  const layers = () => page.evaluate(() => document.querySelectorAll("[data-drawer-layer]").length)
   for (const label of ["Read", "Edit"]) {
     await openThread({ fresh: true })
     const before = await geom(label)
-    check(before.link?.tag === "A", `${label}: its header carries a file-path link`, JSON.stringify(before.link))
+    check(before.link?.tag === "BUTTON" && before.link?.title === TARGET, `${label}: its header carries a file-path link`, JSON.stringify(before.link))
     check(before.expanded === false, `${label}: starts collapsed for the file-path check`, String(before.expanded))
+    if (!before.link) continue
+    const layersBefore = await layers()
     await clickAt(before.link.cx, before.link.cy)
     const after = await geom(label)
     check(after.expanded === before.expanded, `${label}: clicking the file path does NOT toggle the card`,
       `expanded ${before.expanded} → ${after.expanded}`)
+    await page.waitForFunction((n) => document.querySelectorAll("[data-drawer-layer]").length > n, { timeout: 10_000 }, layersBefore).catch(() => {})
+    const layersAfter = await layers()
+    check(layersAfter > layersBefore, `${label}: and the file path still opens the file`, `drawer layers ${layersBefore} → ${layersAfter}`)
   }
 
   // ── 8. the SUB-AGENT NAME: the other half of the exception, and it goes LAST ─────────────────────
@@ -299,11 +318,11 @@ try {
     const after = await geom("Agent")
     check(after.expanded === before.expanded, "Agent: clicking the sub-agent name does NOT toggle the card",
       `expanded ${before.expanded} → ${after.expanded}`)
-    const drawer = await page.evaluate(() => ({
-      dialog: !!document.querySelector('[role="dialog"]'),
-      columns: document.querySelectorAll("[data-transcript-column]").length,
-    }))
-    check(drawer.dialog || drawer.columns > 1, "Agent: and the sub-agent name still opens its drawer", JSON.stringify(drawer))
+    // The differential is a SECOND drawer layer. `[role="dialog"]` used to be enough, when the thread
+    // was a board page; it is itself a Radix dialog now, so that test would pass with nothing opened.
+    await page.waitForFunction(() => document.querySelectorAll("[data-drawer-layer]").length > 1, { timeout: 10_000 }).catch(() => {})
+    const drawer = await page.evaluate(() => ({ layers: document.querySelectorAll("[data-drawer-layer]").length }))
+    check(drawer.layers > 1, "Agent: and the sub-agent name still opens its drawer", JSON.stringify(drawer))
     if (shots) await page.screenshot({ path: join(shots, "tool-pill-click-drilled.png") })
   }
 

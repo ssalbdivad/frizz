@@ -19,6 +19,7 @@ import { join } from "node:path"
 import { randomUUID } from "node:crypto"
 import { createRpcClient } from "./lib/rpc-client.mjs"
 import { resolveSandboxDb, sessionProjectColumns } from "./lib/sandbox-db.mjs"
+import { recordPageErrors } from "./lib/page-errors.mjs"
 
 const args = process.argv.slice(2)
 const opt = (k, d) => { const hit = args.find((a) => a.startsWith(`--${k}=`)); return hit ? hit.slice(k.length + 3) : d }
@@ -138,23 +139,39 @@ const failures = []
 const pageErrors = []
 const check = (ok, label, detail) => { console.log(`${ok ? "PASS" : "FAIL"}  ${label}`); if (!ok) failures.push(`${label}${detail ? ` — ${detail}` : ""}`) }
 
+// Every query below is scoped to the thread's DRAWER. The one page keeps its queue cards rendered behind
+// an open drawer, so an unscoped query can read a card's element as the transcript's.
+const DRAWER = "[data-drawer-layer]"
+// A settled run of tool calls folds behind a "Ran N tool calls" digest (MinimalToolActivity in
+// ChatView.tsx) — a run of ONE included, whose toggle reads "Expand 1 tool call", singular — and the
+// checklist card lives INSIDE one, so it does not mount until its band is open. This waited for
+// [data-todo-card] BEFORE expanding, and matched toggles on `aria-label*="tool calls"`, which skips the
+// singular one the lone TaskList folds into. It could only pass on the old board, whose inline queue card
+// is where a Ready thread's transcript used to render. So: wait for the transcript's first tool band (or
+// an already-mounted card), open every band by its own [data-tool-activity] toggle, then wait for the
+// card. Opening one band can mount another collapsed one, hence the loop; it is bounded because a
+// clicked toggle reads aria-expanded="true" and drops out of the query.
+async function openEveryBand(page) {
+  await page.waitForSelector(`${DRAWER} [data-tool-activity], ${DRAWER} [data-todo-card]`, { timeout: 20_000 })
+  for (let pass = 0; pass < 5; pass++) {
+    const closed = await page.$$(`${DRAWER} [data-tool-activity] > button[aria-expanded="false"]`)
+    if (!closed.length) break
+    for (const toggle of closed) await toggle.click()
+  }
+  await page.waitForSelector(`${DRAWER} [data-todo-card]`, { timeout: 10_000 })
+}
+
 try {
   const page = await browser.newPage()
-  page.on("pageerror", (e) => pageErrors.push(String(e)))
-  page.on("console", (m) => { if (m.type() === "error") pageErrors.push(m.text()) })
+  recordPageErrors(page, pageErrors)
   await page.setViewport({ width: 1400, height: 1100, deviceScaleFactor: 2 })
   // The thread's drawer on the one page (rpc-client threadUrl); the bare `/thread/<slug>` it opened until
   // 2026-09-28 now lands on `/`.
   await page.goto(await api.threadUrl(SLUG), { waitUntil: "networkidle0" })
-  await page.waitForSelector("[data-todo-card]", { timeout: 20_000 })
-  // Tool bands past 4 calls collapse behind an "N tool calls" toggle; open every one so all the cards mount.
-  for (const toggle of await page.$$('button[aria-label*="tool calls"]')) {
-    if ((await toggle.evaluate((el) => el.getAttribute("aria-expanded"))) === "false") await toggle.click()
-  }
-  await page.waitForFunction(() => document.querySelectorAll("[data-todo-card]").length >= 1, { timeout: 10_000 })
+  await openEveryBand(page)
 
   const cardsSeen = await page.evaluate(() =>
-    [...document.querySelectorAll("[data-todo-card]")].map((card) => {
+    [...document.querySelectorAll("[data-drawer-layer] [data-todo-card]")].map((card) => {
       const header = card.querySelector(".frizz-bash-header")
       return { text: header.textContent.replace(/\s+/g, " ").trim(), marks: header.querySelectorAll("svg.frizz-todo-mark").length }
     }))
@@ -168,7 +185,7 @@ try {
 
   // The deltas: ordinary cards, titled by the CHANGE — and never by the 600-char description.
   const deltas = await page.evaluate(() =>
-    [...document.querySelectorAll(".frizz-bash")].map((c) => {
+    [...document.querySelectorAll("[data-drawer-layer] .frizz-bash")].map((c) => {
       const h = c.querySelector(".frizz-bash-header")
       return { label: h?.querySelector(".frizz-bash-label")?.textContent, text: h?.textContent.replace(/\s+/g, " ").trim() }
     }).filter((c) => c.label && /^Task(Create|Update|Get)$/.test(c.label)))
@@ -183,11 +200,11 @@ try {
   check(!cardsSeen.some((c) => c.marks > 1), "the checklist header carries at most one status glyph", JSON.stringify(cardsSeen.map((c) => c.marks)))
 
   // ---- the checklist body ----
-  const listCard = (await page.$$("[data-todo-card]"))[0]
+  const listCard = (await page.$$("[data-drawer-layer] [data-todo-card]"))[0]
   await listCard.$eval(".frizz-bash-header", (el) => el.click())
-  await page.waitForSelector("[data-todo-card] .frizz-todo-list", { timeout: 10_000 })
+  await page.waitForSelector("[data-drawer-layer] [data-todo-card] .frizz-todo-list", { timeout: 10_000 })
   const body = await page.evaluate(() =>
-    [...document.querySelectorAll("[data-todo-card] .frizz-todo-list .frizz-todo-row")].map((row) => ({
+    [...document.querySelectorAll("[data-drawer-layer] [data-todo-card] .frizz-todo-list .frizz-todo-row")].map((row) => ({
       text: row.textContent.replace(/\s+\u2014\s+(to do|in progress|done)$/, "").trim(),
       current: row.dataset.current === "true",
       status: row.textContent.match(/\u2014\s+(to do|in progress|done)$/)?.[1],
@@ -201,16 +218,16 @@ try {
 
   // The description is still REACHABLE — as the delta card's expandable body, just not as its title.
   const noteCard = await page.evaluateHandle(() =>
-    [...document.querySelectorAll(".frizz-bash")].find((c) => c.querySelector(".frizz-bash-label")?.textContent === "TaskCreate"))
+    [...document.querySelectorAll("[data-drawer-layer] .frizz-bash")].find((c) => c.querySelector(".frizz-bash-label")?.textContent === "TaskCreate"))
   await noteCard.asElement().$eval(".frizz-bash-header", (el) => el.click())
-  await page.waitForFunction(() => [...document.querySelectorAll(".frizz-bash-output-body")].some((p) => p.textContent.includes("MAINTAINER RULING")), { timeout: 10_000 })
+  await page.waitForFunction(() => [...document.querySelectorAll("[data-drawer-layer] .frizz-bash-output-body")].some((p) => p.textContent.includes("MAINTAINER RULING")), { timeout: 10_000 })
   check(true, "the description IS reachable, in the delta card's expandable body")
 
   // A row longer than the card WRAPS, and wraps under its own text — the checkbox keeps its column and the
   // continuation lines stay indented past it. `.frizz-bash` is overflow:hidden, so the failure mode is a
   // silently amputated task, with no ellipsis to admit it.
   const wrap = await page.evaluate(() => {
-    const rows = [...document.querySelectorAll("[data-todo-card] .frizz-todo-list .frizz-todo-row")]
+    const rows = [...document.querySelectorAll("[data-drawer-layer] [data-todo-card] .frizz-todo-list .frizz-todo-row")]
     const long = rows.find((r) => r.textContent.includes("sandbox/integration"))
     const list = long.closest(".frizz-todo-list").getBoundingClientRect()
     const text = [...long.children].find((c) => c.tagName === "SPAN" && !c.classList.contains("sr-only"))
@@ -287,7 +304,7 @@ try {
         vsStringInk: +(mid(stringInk) - mid(glyphInk)).toFixed(2),
       }
     }
-    const card = document.querySelector("[data-todo-card]")
+    const card = document.querySelector("[data-drawer-layer] [data-todo-card]")
     const rows = [...card.querySelectorAll(".frizz-todo-list .frizz-todo-row")]
     const byStatus = (word) => rows.find((r) => r.textContent.trim().endsWith(word))
     // The header glyph aligns to the HEADLINE beside it, not to the petite-caps label (which carries its
@@ -321,16 +338,20 @@ try {
     `worst: ${worst.glyph} off by ${worst.nudgeDownPx}px`)
   if (shots) {
     mkdirSync(shots, { recursive: true })
-    await (await page.$("[data-todo-card]")).screenshot({ path: join(shots, "todo-list.png") })
+    await (await page.$("[data-drawer-layer] [data-todo-card]")).screenshot({ path: join(shots, "todo-list.png") })
     const deltaShot = await page.evaluateHandle(() =>
-      [...document.querySelectorAll(".frizz-bash")].find((c) => c.querySelector(".frizz-bash-label")?.textContent === "TaskCreate"))
+      [...document.querySelectorAll("[data-drawer-layer] .frizz-bash")].find((c) => c.querySelector(".frizz-bash-label")?.textContent === "TaskCreate"))
     await deltaShot.asElement().screenshot({ path: join(shots, "todo-delta.png") })
     await page.screenshot({ path: join(shots, "todo-thread.png") })
     // The band at a narrow width: nothing may escape the card or collide with the counter.
     await page.setViewport({ width: 420, height: 900, deviceScaleFactor: 2 })
     await new Promise((r) => setTimeout(r, 400))
+    // Crossing 800px turns the drawer MODAL (ui/Sheet.tsx useNarrowDrawer → ThreadSheet's Radix dialog),
+    // and that remounts the whole layer — every band opened above is collapsed again in the new one, so
+    // the checklist card is gone until its band is reopened.
+    await openEveryBand(page)
     const narrow = await page.evaluate(() => {
-      const card = document.querySelector("[data-todo-card]")
+      const card = document.querySelector("[data-drawer-layer] [data-todo-card]")
       const b = card.getBoundingClientRect()
       const head = card.querySelector(".frizz-bash-header").getBoundingClientRect()
       const right = card.querySelector(".frizz-bash-header > span:last-child").getBoundingClientRect()
@@ -338,7 +359,7 @@ try {
       return { escapes: Math.round(head.right - b.right), collides: left.right > right.left + 1 }
     })
     check(narrow.escapes <= 1 && !narrow.collides, "the header holds at 420px — no escape, no collision", JSON.stringify(narrow))
-    await (await page.$("[data-todo-card]")).screenshot({ path: join(shots, "todo-narrow.png") })
+    await (await page.$("[data-drawer-layer] [data-todo-card]")).screenshot({ path: join(shots, "todo-narrow.png") })
     await page.setViewport({ width: 1400, height: 1100, deviceScaleFactor: 2 })
     console.log(`      shots → ${shots}`)
   }
@@ -354,13 +375,9 @@ try {
   // first, which read as a 42px error on the first run.
   await page.reload({ waitUntil: "networkidle0" })
   await page.addStyleTag({ content: "[data-todo-card]{font-size:25px !important}.frizz-todo-row{font-size:24px !important;white-space:nowrap}.frizz-bash-header .frizz-bash-label,.frizz-bash-header [data-todo-headline]{font-size:23px !important}" })
-  await page.waitForSelector("[data-todo-card]", { timeout: 20_000 })
-  for (const toggle of await page.$$('button[aria-label*="tool calls"]')) {
-    if ((await toggle.evaluate((el) => el.getAttribute("aria-expanded"))) === "false") await toggle.click()
-  }
-  await page.waitForFunction(() => document.querySelectorAll("[data-todo-card]").length >= 1, { timeout: 10_000 })
-  await (await page.$("[data-todo-card]")).$eval(".frizz-bash-header", (el) => el.click())
-  await page.waitForSelector("[data-todo-card] .frizz-todo-list", { timeout: 10_000 })
+  await openEveryBand(page)
+  await (await page.$("[data-drawer-layer] [data-todo-card]")).$eval(".frizz-bash-header", (el) => el.click())
+  await page.waitForSelector("[data-drawer-layer] [data-todo-card] .frizz-todo-list", { timeout: 10_000 })
   const scaled = await page.evaluate(measureInk)
   for (const a of scaled) console.log(`      ink@2x  ${a.glyph.padEnd(20)} text ${a.fontSize}px  nudge ${a.nudgeDownPx > 0 ? "+" : ""}${a.nudgeDownPx}px`)
   // The ROWS are exactly scale-invariant, so they are held to the same tolerance as at 1x.
@@ -382,16 +399,13 @@ try {
   // ---- CODEX: a different to-do protocol, the SAME card ----
   const codex = page
   await codex.goto(await api.threadUrl(CODEX_SLUG), { waitUntil: "networkidle0" })
-  await codex.waitForSelector("[data-todo-card]", { timeout: 20_000 })
-  for (const toggle of await codex.$$('button[aria-label*="tool calls"]')) {
-    if ((await toggle.evaluate((el) => el.getAttribute("aria-expanded"))) === "false") await toggle.click()
-  }
-  const codexCards = await codex.$$("[data-todo-card]")
+  await openEveryBand(codex)
+  const codexCards = await codex.$$("[data-drawer-layer] [data-todo-card]")
   check(codexCards.length === 2, "both codex update_plan shapes render a to-do card", `saw ${codexCards.length}`)
   for (const card of codexCards) await card.$eval(".frizz-bash-header", (el) => el.click())
-  await codex.waitForFunction(() => document.querySelectorAll("[data-todo-card] .frizz-todo-list").length === 2, { timeout: 10_000 })
+  await codex.waitForFunction(() => document.querySelectorAll("[data-drawer-layer] [data-todo-card] .frizz-todo-list").length === 2, { timeout: 10_000 })
   const codexSeen = await codex.evaluate(() =>
-    [...document.querySelectorAll("[data-todo-card]")].map((card) => ({
+    [...document.querySelectorAll("[data-drawer-layer] [data-todo-card]")].map((card) => ({
       header: card.querySelector(".frizz-bash-header").textContent.replace(/\s+/g, " ").trim(),
       rows: [...card.querySelectorAll(".frizz-todo-row")].map((r) => r.textContent.replace(/\s+/g, " ").trim()),
       note: card.querySelector(".frizz-bash-output-body")?.textContent,
@@ -407,7 +421,7 @@ try {
     "the JS-WRAPPER form is scanned out of the object literal, mixed quoting and all", wrapper.header)
   check(wrapper.rows.filter((r) => r.endsWith("done")).length === 2, "the wrapper form's statuses survive the scan", JSON.stringify(wrapper.rows))
   if (shots) {
-    const shot = await codex.$$("[data-todo-card]")
+    const shot = await codex.$$("[data-drawer-layer] [data-todo-card]")
     await shot[0].screenshot({ path: join(shots, "todo-codex.png") })
   }
   check(pageErrors.length === 0, "no console or page errors (codex thread included)", pageErrors.join(" | "))

@@ -12,12 +12,24 @@
 //      unanswered, and the card exits through the same dissolve an answer send uses
 //   4. desktop + narrow widths, no console/page errors
 //
-// Seed a stack + an open-ask thread first (see .agents/skills/frizz-stack), then:
+// Seed a stack + an open-ask thread first (see .agents/skills/frizz-stack; scripts/seed-open-ask.mjs
+// seeds the thread and prints its slug), then:
 //   node scripts/verify-open-ask-composer.mjs --url=http://127.0.0.1:5399 --slug=… [--shots=/tmp/…]
+// The card is the one page's queue card (AllQueuesCard, `[data-xq-card="<project id>/<slug>"]`) since
+// 2026-09-28, when the project board and its `[data-queue-card-root]` card went away.
+//
+// KNOWN FAILING, 2026-09-28, and deliberately left so. AllQueuesCard draws a handoff's ```question
+// fences through QuestionBlockCard WITHOUT `interactive`, so on the one page they are READ-ONLY: no
+// clickable chips, no answer textareas, no Send answers, and the reply box's "Or skip the questions and
+// reply…" placeholder keys on REGISTERED questions (questionsOwed) alone. The board's queue card this was
+// written against made fences answerable. Steps 1–3 therefore fail on the card as it stands; step 4 (the
+// free-text steer sends, the card exits, the steer lands in the thread) passes. Whether fence questions
+// should be answerable on the card again is a product call, not this script's.
 // The run CONSUMES its seed — step 4's steer is a newer user message, which is exactly what retires the
 // ```question fence — so re-seed a fresh slug for every run rather than re-pointing it at a spent one.
 import puppeteer from "puppeteer"
 import { createRpcClient } from "./lib/rpc-client.mjs"
+import { recordPageErrors } from "./lib/page-errors.mjs"
 
 const flags = Object.fromEntries(
   process.argv.slice(2).filter((a) => a.startsWith("--")).map((a) => a.replace(/^--/, "").split("=")),
@@ -34,7 +46,9 @@ const check = (label, ok, detail) => {
 }
 const settle = (ms) => new Promise((r) => setTimeout(r, ms))
 
-const SEL = `[data-queue-card-root="${slug}"]`
+// The card's key is `<project id>/<slug>` (lib/allQueues.ts threadKey), so a suffix match names this
+// slug's card in whichever project it lives.
+const SEL = `[data-xq-card$="/${slug}"]`
 const BOX = `${SEL} textarea[data-surface="queueComposer"]`
 // Scoped to THIS slug's card: the board legitimately holds other queue cards, and a bare
 // [data-queue-card-root] silently asserts against whichever one happens to sort first.
@@ -46,7 +60,7 @@ const CARD = `(() => {
   const boxRect = box?.getBoundingClientRect()
   const answersRect = answers?.getBoundingClientRect()
   return {
-    slug: card.dataset.queueCardRoot,
+    key: card.dataset.xqCard,
     hasBox: Boolean(box),
     placeholder: box?.placeholder ?? null,
     boxValue: box?.value ?? null,
@@ -80,8 +94,7 @@ try {
   await page.setViewport({ width: 1440, height: 1000, deviceScaleFactor: 2 })
   const errors = []
   const rpcs = []
-  page.on("console", (m) => { if (m.type() === "error") errors.push(m.text()) })
-  page.on("pageerror", (e) => errors.push(String(e)))
+  recordPageErrors(page, errors)
   page.on("response", (r) => { if (r.url().includes("/rpc/")) rpcs.push({ status: r.status(), route: r.url().split("/rpc/")[1] }) })
 
   await page.goto(`${url}/`, { waitUntil: "networkidle2", timeout: 30000 })
@@ -150,9 +163,11 @@ try {
   // 2026-09-28 now lands on `/`.
   await page.goto(await createRpcClient(url).threadUrl(slug), { waitUntil: "networkidle2", timeout: 30000 })
   await settle(2500)
+  // Read from the DRAWER: the page behind it still renders every other project's cards.
+  await page.waitForSelector("[data-drawer-layer]", { timeout: 20000 })
   const thread = await page.evaluate(`({
-    text: document.body.innerText,
-    followUpBox: Boolean(document.querySelector('textarea[placeholder*="Follow up"]')),
+    text: document.querySelector("[data-drawer-layer]").innerText,
+    followUpBox: Boolean(document.querySelector('[data-drawer-layer] textarea[placeholder*="Follow up"]')),
   })`)
   check("the free-text steer landed in the thread", thread.text.includes("ignore both options"), thread.text.slice(0, 160))
   check("no answer wire was composed — the questions were genuinely skipped", !thread.text.includes("Answers:"))

@@ -15,6 +15,7 @@ import { join } from "node:path"
 import { randomUUID } from "node:crypto"
 import { createRpcClient } from "./lib/rpc-client.mjs"
 import { resolveSandboxDb, sessionProjectColumns } from "./lib/sandbox-db.mjs"
+import { recordPageErrors } from "./lib/page-errors.mjs"
 
 const args = process.argv.slice(2)
 const opt = (k, d) => { const hit = args.find((a) => a.startsWith(`--${k}=`)); return hit ? hit.slice(k.length + 3) : d }
@@ -69,28 +70,32 @@ const { default: puppeteer } = await import("puppeteer")
 const browser = await puppeteer.launch({ headless: "new", args: ["--no-sandbox", "--force-color-profile=srgb"] })
 const failures = []
 const pageErrors = []
+// The DRAWER's bubbles, and only those. The one page keeps its queue cards rendered BEHIND an open drawer,
+// and a Ready thread's card draws the human's last message as its own "asked" bubble — `bg-user-bubble
+// px-3.5 py-2.5` in AllQueuesCard.tsx, 10px vertical, a different component with its own rhythm. A
+// page-wide `.bg-user-bubble` counted it as a fifth transcript bubble and failed the 12px check on it.
+const BUBBLE = "[data-drawer-layer] .bg-user-bubble"
 const check = (ok, label, detail) => { console.log(`${ok ? "PASS" : "FAIL"}  ${label}`); if (!ok) failures.push(`${label}${detail ? ` — ${detail}` : ""}`) }
 try {
   const page = await browser.newPage()
-  page.on("pageerror", (e) => pageErrors.push(String(e)))
-  page.on("console", (m) => { if (m.type() === "error") pageErrors.push(m.text()) })
+  recordPageErrors(page, pageErrors)
   await page.setViewport({ width: 1400, height: 1000, deviceScaleFactor: 2 })
   // The thread's drawer on the one page (rpc-client threadUrl); the bare `/thread/<slug>` it opened until
   // 2026-09-28 now lands on `/`.
   await page.goto(await api.threadUrl(SLUG), { waitUntil: "networkidle0" })
-  await page.waitForSelector(".bg-user-bubble", { timeout: 20_000 })
+  await page.waitForSelector(BUBBLE, { timeout: 20_000 })
   // The transcript loads TAIL-FIRST, so the earlier bubbles live behind "Load earlier messages".
   for (let i = 0; i < 5; i++) {
-    const more = await page.evaluateHandle(() => [...document.querySelectorAll("button")].find((b) => b.textContent.trim() === "Load earlier messages") ?? null)
+    const more = await page.evaluateHandle(() => [...document.querySelectorAll("[data-drawer-layer] button")].find((b) => b.textContent.trim() === "Load earlier messages") ?? null)
     const el = more.asElement()
     if (!el) break
     await el.click()
     await new Promise((r) => setTimeout(r, 700))
   }
 
-  const measured = await page.evaluate(() => {
+  const measured = await page.evaluate((BUBBLE) => {
     const px = (v) => Math.round(parseFloat(v) * 100) / 100
-    return [...document.querySelectorAll(".bg-user-bubble")].map((b) => {
+    return [...document.querySelectorAll(BUBBLE)].map((b) => {
       const cs = getComputedStyle(b)
       const r = b.getBoundingClientRect()
       // The INK-to-edge distance, not just the declared box: a Range over the bubble's own text nodes
@@ -111,7 +116,7 @@ try {
         inkBottom: lines.length ? px(r.bottom - lines[lines.length - 1].bottom) : null,
       }
     })
-  })
+  }, BUBBLE)
   console.log(JSON.stringify(measured, null, 2))
 
   check(measured.length === 4, "all four user bubbles rendered", `saw ${measured.length}`)
@@ -124,12 +129,12 @@ try {
   check(single && single.height === 44, "a one-line bubble is 44px tall (12 + 20px line + 12)", JSON.stringify(single))
   check(pageErrors.length === 0, "no console or page errors", pageErrors.join(" | "))
 
-  const first = await page.$(".bg-user-bubble")
+  const first = await page.$(BUBBLE)
   await first.screenshot({ path: join(shots, "user-bubble-closeup.png") })
   await page.screenshot({ path: join(shots, "user-bubble-desktop.png") })
   await page.setViewport({ width: 420, height: 880, deviceScaleFactor: 2 })
   await page.reload({ waitUntil: "networkidle0" })
-  await page.waitForSelector(".bg-user-bubble", { timeout: 20_000 })
+  await page.waitForSelector(BUBBLE, { timeout: 20_000 })
   await page.screenshot({ path: join(shots, "user-bubble-narrow.png") })
 } finally {
   await browser.close()
