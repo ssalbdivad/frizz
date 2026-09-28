@@ -30,7 +30,7 @@ import {
 } from "./router.ts"
 import { projectTranscriptPageAgentLifecycles } from "./transcript.ts"
 import { readProjectIdFile, writeProjectIdFile } from "./project-root.ts"
-import { registerProject } from "./project-registry.ts"
+import { findByPath, registerProject } from "./project-registry.ts"
 import { createStorage, type AdoptionClaimRow, type SessionRow } from "./storage.ts"
 import type { AdoptionPaneLookup, PaneIdentity, PaneIdentity as PaneSnapshot } from "./adoption-recovery.ts"
 import type { AppContext } from "./context.ts"
@@ -1809,12 +1809,54 @@ test("projectAdd: a picked folder under an adopted plain directory becomes its o
     mkdirSync(picked, { recursive: true })
     writeProjectIdFile(umbrella, "88abce4f-16e9-42b3-899d-2576382b2ff3")
     registerProject({ dir: umbrella, id: "88abce4f-16e9-42b3-899d-2576382b2ff3" }, home)
-    const card = addProjectAtPath(picked, home)
+    const result = addProjectAtPath(picked, home)
+    assert.equal(result.kind, "added")
+    const card = result.kind === "added" ? result.project : assert.fail("not added")
     assert.equal(card.path, realpathSync(picked))
     assert.equal(card.slug, "kirby")
     // The pick minted the folder's OWN id — it did not reopen or touch the umbrella's.
     assert.ok(readProjectIdFile(picked))
     assert.notEqual(readProjectIdFile(picked), readProjectIdFile(umbrella))
+  } finally {
+    rmSync(home, { recursive: true, force: true })
+  }
+})
+
+// The silent-reopen bug (2026-09-28): adding ~/app/yes — a folder with no marker of its own inside the
+// ~/app checkout — reopened ~/app and navigated to its board, which read as the add doing nothing.
+test("projectAdd: a folder inside a checkout answers enclosed, and exact adopts the folder itself", () => {
+  const home = mkdtempSync(join(tmpdir(), "frizz-add-enclosed-"))
+  try {
+    const repo = join(home, "app")
+    const picked = join(repo, "yes")
+    mkdirSync(picked, { recursive: true })
+    execFileSync("git", ["init", "-q", repo])
+    // The repository's id lives only in git config, as an established pre-gitless board's does. It must
+    // never leak into the subfolder: `git config` run there answers for the enclosing repository.
+    const repoId = "5d0b8a0e-3c55-4a7e-9d8e-0f4f6b7c2a11"
+    execFileSync("git", ["-C", repo, "config", "frizz.id", repoId])
+    registerProject({ dir: repo, id: repoId }, home)
+
+    const asked = addProjectAtPath(picked, home)
+    assert.deepEqual(asked, { kind: "enclosed", path: realpathSync(picked), root: realpathSync(repo), rootRegistered: true })
+    assert.equal(existsSync(join(picked, ".frizz")), false, "asking writes nothing")
+
+    const added = addProjectAtPath(picked, home, { exact: true })
+    const card = added.kind === "added" ? added.project : assert.fail("not added")
+    assert.equal(card.path, realpathSync(picked))
+    const ownId = readProjectIdFile(picked)
+    assert.ok(ownId)
+    assert.notEqual(ownId, repoId)
+    assert.equal(card.id, ownId)
+    // The checkout's own entry is untouched — same id, same path.
+    assert.equal(findByPath(realpathSync(repo), home)?.id, repoId)
+
+    // Once adopted, the folder is a root in its own right: a plain re-add finds it, no question asked.
+    const again = addProjectAtPath(picked, home)
+    assert.equal(again.kind === "added" ? again.project.id : undefined, ownId)
+    // And the checkout itself still adds as the checkout.
+    const root = addProjectAtPath(repo, home)
+    assert.equal(root.kind === "added" ? root.project.id : undefined, repoId)
   } finally {
     rmSync(home, { recursive: true, force: true })
   }
