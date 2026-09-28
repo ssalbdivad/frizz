@@ -27,7 +27,7 @@
 // The prompt box and the drawers are the page project's, which is exactly what they should be.
 import { Fragment, useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore, type CSSProperties, type ReactNode } from "react"
 import { useQuery, useQueryClient } from "@tanstack/react-query"
-import { Check, ChevronDown, Ellipsis, Inbox, Plus, TerminalSquare } from "lucide-react"
+import { ArrowUpRight, Check, ChevronDown, Ellipsis, Inbox, Infinity as InfinityIcon, ListFilter, Plus, TerminalSquare, X } from "lucide-react"
 import { Link, useLocation, useNavigate, useNavigationType } from "react-router"
 import { useSnapshot } from "valtio"
 import type { ProjectQueue, ThreadView } from "@frizz/shared"
@@ -53,7 +53,7 @@ import { BandLabel } from "./BandLabel.tsx"
 import { ProjectMenu, homeOf, useAddProject } from "./ProjectActions.tsx"
 import { StatusRow } from "./StatusRow.tsx"
 import { DispatchForm } from "./NewThreadModal.tsx"
-import { Menu, MenuContent, MenuItem, MenuTrigger } from "./ui/Menu.tsx"
+import { Menu, MenuContent, MenuItem, MenuSeparator, MenuTrigger } from "./ui/Menu.tsx"
 import { ThreadProjectScope } from "../api/threadApi.tsx"
 
 /** How often the page re-reads every project. The rail's badges poll at 5s; this is the page the
@@ -142,7 +142,11 @@ export function AllQueuesPage() {
               and the prompt box under it: a new thread in any project without leaving, the project chosen
               in the box's own tab row. */}
           <div className="mb-5 shrink-0 px-0.5">
-            <StatusRow crossProject narrowedTo={narrowed?.name} />
+            <StatusRow
+              crossProject
+              narrowedTo={narrowed?.name}
+              view={<ViewFilter projects={projects} narrowed={narrowed} hidden={hidden} onChoose={choose} />}
+            />
             <FocusedComposer
               focus={focus}
               project={projects.find((project) => project.slug === focus)}
@@ -207,6 +211,123 @@ export function AllQueuesPage() {
         )}
       </main>
     </div>
+  )
+}
+
+/**
+ * WHAT THE PAGE SHOWS, as a control — the status row's right end, where "Everything" or the narrowed
+ * project's name used to sit as plain text (maintainer 2026-09-28: the filtering was unclear — "there
+ * should be some kind of filtering symbol … where you can click a project name or you can click
+ * everything", with "some clear filter indicator").
+ *
+ * The narrowing already existed (a project's row in the list, a lane's header, a rail square), but
+ * nothing on the page SAID it was a filter or how to lift it: the name just changed. So the name now
+ * wears a filter glyph and opens a menu of every choice — Everything, then each project with its Ready
+ * count — and, narrowed, it becomes a held pill with its own ✕, the one-click way back. The ∞ door and
+ * re-choosing the project still widen it too; this is the place that explains them.
+ *
+ * It is NOT the prompt box's project picker directly below it, and the two must not read alike: that one
+ * says where a new thread GOES and moves with every drawer; this one says what you are LOOKING AT. Hence
+ * the filter glyph leading this one and a project square leading that one.
+ *
+ * Narrowed, the menu's last item is the explicit door to the project's own board — the one thing a
+ * narrowed page does not give you (Terminal, Snoozed, Done), and otherwise only reachable through the
+ * row's "…".
+ */
+function ViewFilter({
+  projects,
+  narrowed,
+  hidden,
+  onChoose,
+}: {
+  projects: QueuesProject[]
+  narrowed: QueuesProject | undefined
+  hidden: (key: string) => boolean
+  onChoose: (project: QueuesProject) => void
+}) {
+  const navigate = useNavigate()
+  const readyOf = (project: QueuesProject) => project.queued.filter((t) => !hidden(threadKey(project.id, t.id))).length
+  const total = projects.reduce((sum, project) => sum + readyOf(project), 0)
+  const label = narrowed ? narrowed.name : "Everything"
+  const trigger = (
+    <MenuTrigger asChild>
+      <button
+        type="button"
+        data-xq-view-filter={narrowed ? "narrowed" : "everything"}
+        title={narrowed ? `Showing only ${narrowed.name}. Choose what to show` : "Showing every project. Choose what to show"}
+        aria-label={`Showing ${narrowed ? `only ${narrowed.name}` : "every project"}. Choose what to show`}
+        className={`flex min-w-0 items-baseline gap-1.5 rounded-md py-0.5 font-semibold text-fg/90 outline-none transition-colors hover:text-fg focus-visible:ring-1 focus-visible:ring-focus-ink-60 data-[state=open]:text-fg ${
+          narrowed ? "rounded-full pl-2 pr-1" : "-mr-1.5 px-1.5 hover:bg-hover data-[state=open]:bg-hover"
+        }`}
+      >
+        {/* Ink gaps (sans, scripts/ink-gaps.mjs): glyph→name 8.00px on the flex gap alone against 5.18px
+            name→chevron, so the glyph gives back 1px of its dead box (→7.00px); narrowed, glyph→square
+            6.75px and square→name 7.00px already read as one run, and the ✕ sits 10.37px off the name
+            because it is a separate control. */}
+        <ListFilter size={12} aria-hidden data-xq-view-filter-glyph className={`${narrowed ? "" : "-mr-px "}shrink-0 self-baseline translate-y-[calc(0.5em_-_0.5cap)] text-muted`} />
+        {narrowed && (
+          <span className="flex shrink-0 self-baseline translate-y-[calc(7px_-_0.5cap)]">
+            <ProjectSquare project={narrowed.card ?? fallbackCard(narrowed)} size={14} />
+          </span>
+        )}
+        <span data-status-row-page className="min-w-0 truncate">{label}</span>
+        {!narrowed && <ChevronDown size={12} aria-hidden data-xq-view-filter-chevron className="-ml-[3.5px] shrink-0 self-baseline translate-y-[calc(0.5em_-_0.5cap)] text-muted" />}
+      </button>
+    </MenuTrigger>
+  )
+  return (
+    <Menu>
+      {narrowed ? (
+        // HELD, like a chip on a filtered list: a pill that stays drawn while the filter is on, so a
+        // narrowed page never passes for the whole page, and its ✕ lifts it.
+        <span data-xq-view-filter-pill className="flex min-w-0 items-center rounded-full border border-border bg-elevated">
+          {trigger}
+          <button
+            type="button"
+            data-xq-view-filter-clear
+            title="Show everything"
+            aria-label="Clear the filter and show everything"
+            className="mr-0.5 flex h-5 w-5 shrink-0 items-center justify-center rounded-full text-muted outline-none transition-colors hover:bg-hover hover:text-fg focus-visible:ring-1 focus-visible:ring-focus-ink-60"
+            onClick={() => narrowCrossProject(null)}
+          >
+            <X size={12} aria-hidden />
+          </button>
+        </span>
+      ) : (
+        trigger
+      )}
+      <MenuContent align="end">
+        <div className="px-2.5 pb-1 pt-1.5 text-[10.5px] font-medium text-muted-55">Show</div>
+        <MenuItem onSelect={() => narrowCrossProject(null)} icon={<InfinityIcon size={14} aria-hidden />} value="everything">
+          <span className={`min-w-0 flex-1 truncate ${narrowed ? "" : "text-fg"}`}>Everything</span>
+          {total > 0 && <QueueBadge count={total} />}
+          <span className="flex w-3 shrink-0 justify-center">{!narrowed && <Check size={12} aria-label="Current" className="text-fg" />}</span>
+        </MenuItem>
+        <MenuSeparator />
+        <div className="max-h-[min(50vh,360px)] overflow-y-auto">
+          {/* The list's own order (ProjectList): busy projects first, then the quiet ones. */}
+          {[...projects.filter(isBusy), ...projects.filter((project) => !isBusy(project))].map((project) => {
+            const selected = narrowed?.id === project.id
+            const ready = readyOf(project)
+            return (
+              <MenuItem key={project.id} value={project.slug} onSelect={() => (selected ? undefined : onChoose(project))} icon={<ProjectSquare project={project.card ?? fallbackCard(project)} size={14} />}>
+                <span className={`min-w-0 flex-1 truncate ${selected ? "text-fg" : ""}`}>{project.name}</span>
+                {ready > 0 && <QueueBadge count={ready} />}
+                <span className="flex w-3 shrink-0 justify-center">{selected && <Check size={12} aria-label="Current" className="text-fg" />}</span>
+              </MenuItem>
+            )
+          })}
+        </div>
+        {narrowed && (
+          <>
+            <MenuSeparator />
+            <MenuItem onSelect={() => navigate(projectHref(encodeURIComponent(narrowed.slug)))} icon={<ArrowUpRight size={14} aria-hidden />} value="board">
+              <span className="min-w-0 flex-1 truncate">Open {narrowed.name}'s board</span>
+            </MenuItem>
+          </>
+        )}
+      </MenuContent>
+    </Menu>
   )
 }
 

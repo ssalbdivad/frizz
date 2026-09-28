@@ -461,6 +461,23 @@ try {
       JSON.stringify(widened) === JSON.stringify(everything) && JSON.stringify(byHeader) === JSON.stringify([ids["acme-api"]]) && JSON.stringify(byDoor) === JSON.stringify(everything) && (await page.evaluate(() => location.pathname)) === "/all/acme-api",
       `${widened.length} → ${byHeader.length} → ${byDoor.length} lanes of ${everything.length}`,
     )
+
+    // The status row's filter says all of that out loud: a menu of Everything and every project, and,
+    // narrowed, a held pill whose ✕ lifts it.
+    await page.click("[data-xq-view-filter]")
+    await page.waitForSelector('[role="menuitem"][data-value="marketing-site"]', { timeout: 5000 })
+    await page.click('[role="menuitem"][data-value="marketing-site"]')
+    await page.waitForSelector("[data-xq-view-filter-clear]", { timeout: 5000 })
+    const byMenu = await lanes()
+    const pill = (await page.$("[data-xq-view-filter-pill]")) !== null
+    await page.click("[data-xq-view-filter-clear]")
+    await page.waitForFunction(() => document.querySelector("[data-xq-view-filter]")?.getAttribute("data-xq-view-filter") === "everything", { timeout: 5000 }).catch(() => {})
+    const cleared = await lanes()
+    check(
+      "the status row's filter narrows from its menu, and its ✕ clears it",
+      JSON.stringify(byMenu) === JSON.stringify([ids["marketing-site"]]) && pill && JSON.stringify(cleared) === JSON.stringify(everything),
+      `${byMenu.length} lane by the menu (pill ${pill}), ${cleared.length} after ✕`,
+    )
   })
 
   await step("the page raised no errors", async () => {

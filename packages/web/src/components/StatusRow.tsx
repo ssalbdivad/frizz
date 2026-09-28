@@ -1,4 +1,5 @@
 import { Infinity as InfinityIcon, Settings as SettingsIcon } from "lucide-react"
+import type { ReactNode } from "react"
 import { Link } from "react-router"
 import { store } from "../store.ts"
 import { crossProjectHref } from "../lib/base-path.ts"
@@ -103,8 +104,10 @@ function StartTruncated({ text, title, className }: { text: string; title?: stri
  * "Everything", or the one project it is narrowed to (`narrowedTo`) — rather than the project a new
  * thread goes to, which is chosen in the prompt box's own tab row, directly over the box (AllQueues.tsx
  * ProjectPicker). Its ∞ door is the page you are on, and the way back to everything from a narrowed view.
+ * `view`, when given, replaces that plain name with the page's own control for it (AllQueues.tsx
+ * ViewFilter) — the name stays, it just becomes something you can press.
  */
-export function StatusRow({ crossProject = false, narrowedTo }: { crossProject?: boolean; narrowedTo?: string } = {}) {
+export function StatusRow({ crossProject = false, narrowedTo, view }: { crossProject?: boolean; narrowedTo?: string; view?: ReactNode } = {}) {
   const board = useBoard()
   // A missing board is not evidence that this project is named "frizz". Keep the row neutral until a
   // board keyframe supplies an actual name; reconnects retain their adopted board.
@@ -191,7 +194,9 @@ export function StatusRow({ crossProject = false, narrowedTo }: { crossProject?:
       {/* THE PROJECT, pinned to the right edge — or, on the cross-project page, the choice of one. min-w-0
           so a long name gives way before anything to its left does; every mark before it is shrink-0 and
           therefore always reachable. */}
-      {crossProject ? (
+      {crossProject && view ? (
+        <span className="ml-auto flex min-w-0 items-center">{view}</span>
+      ) : crossProject ? (
         <span data-status-row-page className="ml-auto min-w-0 truncate font-semibold text-fg/90">{narrowedTo ?? "Everything"}</span>
       ) : (
         <span
