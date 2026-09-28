@@ -13,7 +13,7 @@ import { join, resolve } from "node:path"
 import { permMarkerPath, permRequestDir, PERM_DIR_ENV } from "../packages/server/src/project.ts"
 import { markerDecision } from "../packages/server/src/tailer.ts"
 
-const HOOK = resolve(import.meta.dirname, "../../cc-worker/hooks/perm-policy.mjs")
+const HOOK = resolve(import.meta.dirname, "../cc-worker/hooks/perm-policy.mjs")
 const results = []
 const check = (name, ok, detail) => { results.push(ok); console.log(`${ok ? "PASS" : "FAIL"}  ${name}${detail ? `  — ${detail}` : ""}`) }
 
@@ -71,6 +71,19 @@ try {
   const m3 = marker()
   check("defer: marker records the defer + rule", m3.decision === "defer" && m3.rule === "restrictive-mode", `${m3.decision}/${m3.rule}`)
   check("defer: the tailer reads this AS a human block", markerDecision(m3) === "defer")
+  for (const mode of ["acceptEdits", "plan", "some-future-mode"]) {
+    runHook(bash("touch y", { permission_mode: mode }))
+    check(`defer: \`${mode}\` counts as restrictive`, marker().rule === "restrictive-mode", marker().rule)
+  }
+
+  // 4b. BYPASS only asks about what Claude Code keeps asking about there (its bypass-immune safety
+  // checks), so the request goes to a human — under its own rule, never as a "restrictive" mode — and
+  // the deny rules still come first.
+  const bypass = runHook(bash("rm -rf $BASE/$d/$o", { permission_mode: "bypassPermissions" }))
+  check("defer: a bypassPermissions request emits NOTHING (prompt is raised)", bypass === "", JSON.stringify(bypass))
+  check("defer: bypass is recorded as its own rule, not restrictive-mode", marker().decision === "defer" && marker().rule === "bypass-safety-check", `${marker().decision}/${marker().rule}`)
+  const bypassRm = JSON.parse(runHook(bash("rm -rf ~", { permission_mode: "bypassPermissions" })) || "{}")
+  check("deny: bypassPermissions still refuses a catastrophic delete", bypassRm.hookSpecificOutput?.decision?.behavior === "deny" && marker().rule === "catastrophic-delete")
 
   // 5. DEFER — the review-policy escape hatch, without changing how workers launch.
   const review = runHook(bash("touch z"), { FRIZZ_PERM_POLICY: "review" })

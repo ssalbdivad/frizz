@@ -747,6 +747,7 @@ export function projectScopedEnvironment(
     // may have started the server.
     "FRIZZ_STATE_DIR",
     "FRIZZ_PERM_DIR",
+    "FRIZZ_BOARD_ROOT",
     "FRIZZ_LOG_FILE",
     "FRIZZ_THREAD",
   ])

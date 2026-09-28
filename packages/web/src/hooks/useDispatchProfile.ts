@@ -1,11 +1,18 @@
-import { useMemo, useEffect } from "react"
+import { useCallback, useMemo, useEffect } from "react"
 import { useMutation, useQuery, useQueryClient, type QueryClient } from "@tanstack/react-query"
-import type { AcpAgent, ClaudeModel, CodexModel, SetDispatchPreferenceInput } from "@frizz/shared"
+import { acpModelSlug, type AcpAgent, type Backend, type ClaudeModel, type CodexModel, type SetDispatchPreferenceInput } from "@frizz/shared"
 import { rpc } from "../api/rpc.ts"
 import { showToast } from "../store.ts"
+import { useDraft } from "../lib/drafts.ts"
+import type { ProfileGridSelection } from "../lib/profileGrid.ts"
 import {
   applyDispatchPreferenceUpdate,
+  parseDispatchPick,
+  pickFromSelection,
   resolveDispatchPreferences,
+  sameDispatchProfile,
+  withDispatchPick,
+  type DispatchPick,
   type ResolvedDispatchPreferences,
 } from "../lib/dispatchPreferences.ts"
 
@@ -21,20 +28,43 @@ const channel = typeof BroadcastChannel === "undefined" ? undefined : new Broadc
 // Browsers have no `unref`; a page's channel lives as long as the page, which is what it is for.
 ;(channel as { unref?: () => void } | undefined)?.unref?.()
 
-/** The durable new-thread profile changed server-side: re-read it here and in every other tab. */
+/** The durable new-thread default changed server-side: re-read it here and in every other tab. */
 export function dispatchPreferencesChanged(queryClient: QueryClient): void {
   void queryClient.invalidateQueries({ queryKey: PREFERENCES_KEY })
   channel?.postMessage("changed")
 }
 
-// THE durable new-thread profile (backend + model + effort), shared by every surface that starts a
-// thread from the prompt box: the dispatch composer and the GitHub batch picker. Both read the same
-// preference row and write it through the same scoped mutation, so a selection made in either is the
-// profile the other dispatches with — there is no second, surface-local copy to drift.
-export function useDispatchProfile(): {
-  // Undefined until BOTH durable intent and the Codex catalogue have landed. Rendering a profile
-  // before then can classify a saved Codex model as Claude merely because the catalogue is cold.
+/** A surface's pick and its setter — kept beside the draft in the prompt box, component state in a modal. */
+export type DispatchPickState = readonly [DispatchPick | undefined, (next: DispatchPick | undefined) => void]
+const NO_PICK: DispatchPickState = [undefined, () => {}]
+
+/**
+ * The prompt box's pick, kept in the draft store beside its prompt (drafts.ts). A pick belongs to the
+ * thread being written, so it survives what that draft survives — a remount, the anywhere-modal
+ * closing, a same-tab reload — and the dispatch that clears the prompt clears it too.
+ */
+export function useDraftDispatchPick(key: string): DispatchPickState {
+  const [raw, setRaw, clearRaw] = useDraft(key)
+  const pick = useMemo(() => parseDispatchPick(raw), [raw])
+  const setPick = useCallback((next: DispatchPick | undefined) => (next ? setRaw(JSON.stringify(next)) : clearRaw()), [setRaw, clearRaw])
+  return [pick, setPick] as const
+}
+
+// THE durable new-thread DEFAULT (backend + model + effort), shared by every surface that starts a
+// thread: the prompt box and the GitHub batch picker. Each surface lays its own PICK over it — the
+// profile for the thread or batch it starts next — and goes back to the default once that dispatch is
+// out. Only `makeDefault` writes the record, so escalating one task to max stays with that task
+// instead of becoming every later thread's profile (see DispatchPick).
+export function useDispatchProfile(pickState: DispatchPickState = NO_PICK): {
+  // What the surface dispatches with: its pick over the default. Undefined until BOTH durable intent
+  // and the Codex catalogue have landed. Rendering a profile before then can classify a saved Codex
+  // model as Claude merely because the catalogue is cold.
   resolved: ResolvedDispatchPreferences | undefined
+  // The default alone — what every new thread starts from, and what a surface returns to after it
+  // dispatches. Same readiness as `resolved`.
+  defaultResolved: ResolvedDispatchPreferences | undefined
+  // The pick names a different profile from the default, so "Make default" has something to do.
+  picked: boolean
   codexList: readonly CodexModel[]
   // The Claude aliases with the edition the pinned runtime resolves each to ("Opus 5.5") — labels
   // only. Empty while the runtime answers or on a server too old to ask, which is why readiness never
@@ -44,12 +74,17 @@ export function useDispatchProfile(): {
   // to answer, which is why neither readiness nor `loadError` waits on this query.
   acpList: readonly AcpAgent[]
   loadError: boolean
-  saveProfile: (update: SetDispatchPreferenceInput) => void
+  // A cell chosen in the profile grid, and a model chosen inside an ACP agent: both set the pick.
+  choose: (selection: ProfileGridSelection) => void
+  chooseAcpModel: (agentId: string, modelId: string | undefined) => void
+  // The pick becomes the default for every new thread, in every project.
+  makeDefault: () => void
 } {
+  const [pick, setPick] = pickState
   const queryClient = useQueryClient()
-  // The MOST RECENT pick wins, wherever it was made: another tab, another device, another project. A
-  // thread's own profile control is NOT one of those places — its pick stays on that thread, and a new
-  // thread starts from this record (maintainer 2026-09-24). So this read re-runs whenever
+  // The MOST RECENT default wins, wherever it was set: another tab, another device, another project. A
+  // thread's own profile control never sets it — its pick stays on that thread (maintainer
+  // 2026-09-24) — and neither does a pick in a dispatch surface. So this read re-runs whenever
   // the page comes back into view — the app-wide default is not to — and on another tab's broadcast.
   const preferences = useQuery({
     queryKey: PREFERENCES_KEY,
@@ -86,7 +121,7 @@ export function useDispatchProfile(): {
       if (current) queryClient.setQueryData(PREFERENCES_KEY, applyDispatchPreferenceUpdate(current, update))
     },
     onError: (error) => {
-      showToast(`Could not save new-thread preference: ${(error as Error).message.slice(0, 80)}`)
+      showToast(`Could not save the new-thread default: ${(error as Error).message.slice(0, 80)}`)
     },
     onSettled: () => {
       // Only the LAST of a burst re-reads: an earlier one's answer would overwrite the optimistic value
@@ -97,19 +132,63 @@ export function useDispatchProfile(): {
 
   // The ACP catalogue counts once it has SETTLED either way: a saved ACP profile must not read as
   // unavailable merely because the list is cold, and an older server that lacks the RPC must not block
-  // the composer forever.
-  const controlsReady = !!preferences.data && !!codexModels.data && (acpAgents.isSuccess || acpAgents.isError)
-  const resolved = useMemo(
+  // the composer forever. Only an ACP profile waits for it — it is all the list resolves — and the list
+  // is per project (it merges the project's settings), so a Claude or Codex profile sat on "Profile
+  // loading…", its Enter ignored, each time the box moved to a project it had not asked yet: 316ms and
+  // 2.3s stepping through four projects with ⌥↓ (2026-09-28). A pick is a profile here too: an ACP
+  // pick over a Claude default resolves against the same list.
+  const acpSettled = acpAgents.isSuccess || acpAgents.isError
+  const needsAcp = preferences.data?.backend === "acp" || pick?.backend === "acp"
+  const controlsReady = !!preferences.data && !!codexModels.data && (!needsAcp || acpSettled)
+  const defaultResolved = useMemo(
     () => controlsReady ? resolveDispatchPreferences(preferences.data!, codexList, acpList) : undefined,
     [controlsReady, preferences.data, codexList, acpList],
   )
+  const resolved = useMemo(
+    () => controlsReady && pick ? resolveDispatchPreferences(withDispatchPick(preferences.data!, pick), codexList, acpList) : defaultResolved,
+    [controlsReady, preferences.data, codexList, acpList, pick, defaultResolved],
+  )
+
+  const choose = useCallback((selection: ProfileGridSelection) => {
+    if (!resolved || !defaultResolved) return
+    const backend = selection.provider as Backend
+    // The grid names an ACP AGENT, never the model inside it (that is the dropdown beside the pill).
+    // Re-picking the agent already in effect keeps its model; landing on the default's agent lands on
+    // the default's model too, rather than on a pick that differs from it only by a dropped tail.
+    if (backend === "acp" && resolved.backend === "acp" && selection.model === resolved.pickerModel) return
+    const model = backend === "acp" && defaultResolved.backend === "acp" && selection.model === defaultResolved.pickerModel
+      ? defaultResolved.model
+      : selection.model
+    setPick(pickFromSelection({ backend, model, effort: selection.effort }, defaultResolved))
+  }, [resolved, defaultResolved, setPick])
+
+  // The chosen model becomes the pick's slug (`acp:<agent>@<model>`); none (the agent's own default)
+  // drops the tail.
+  const chooseAcpModel = useCallback((agentId: string, modelId: string | undefined) => {
+    setPick(pickFromSelection({ backend: "acp", model: acpModelSlug(agentId, modelId) }, defaultResolved))
+  }, [defaultResolved, setPick])
+
+  const saveDefault = preference.mutate
+  const makeDefault = useCallback(() => {
+    if (!resolved) return
+    saveDefault(
+      { field: "profile", backend: resolved.backend, model: resolved.model, effort: (resolved.effort || undefined) as DispatchPick["effort"] },
+      // Dropped only once the record holds it. The optimistic write already hides the control; a
+      // failed one rolls the record back, and the kept pick brings the control back with it.
+      { onSuccess: () => setPick(undefined) },
+    )
+  }, [resolved, saveDefault, setPick])
 
   return {
     resolved,
+    defaultResolved,
+    picked: !!resolved && !!defaultResolved && !sameDispatchProfile(resolved, defaultResolved),
     codexList,
     claudeList,
     acpList,
     loadError: preferences.isError || codexModels.isError,
-    saveProfile: preference.mutate,
+    choose,
+    chooseAcpModel,
+    makeDefault,
   }
 }

@@ -13,6 +13,7 @@ import { compress, negotiateEncoding, shouldCompress } from "./compression.ts"
 import { resolveLocalImage } from "./local-image.ts"
 import { resolveProjectIconResponse } from "./project-icon.ts"
 import { resolveLocalVisualization } from "./local-visualization.ts"
+import { workDirOf } from "./project.ts"
 
 export { resolveLocalImage } from "./local-image.ts"
 export { resolveLocalVisualization } from "./local-visualization.ts"
@@ -109,7 +110,9 @@ export function createApp(ctx: AppContext, options: AppOptions = {}) {
   app.get(frizzRoute("/health"), (c) => c.json({
     ok: true as const,
     projectId: ctx.project.id,
-    projectDir: ctx.project.dir,
+    // The folder the project IS — for the Home workspace, its agents' folder rather than the state
+    // directory holding its board, matching what registeredTenantHealth answers before it is open.
+    projectDir: workDirOf(ctx.project),
     bootId: ctx.bootId,
     ...(options.ownerProof ? { ownerProof: options.ownerProof } : {}),
   }))

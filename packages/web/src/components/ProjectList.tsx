@@ -379,7 +379,9 @@ function ProjectRow({
         >
           <ChevronRight size={11} />
         </span>
-        <span className={`${INDICATOR_SLOT} ${project.stale ? "grayscale" : ""}`}>
+        {/* The top of the project's cord, which hangs from this square behind every thread row's indicator
+            under it (ThreadConnector). */}
+        <span data-xq-indicator className={`${INDICATOR_SLOT} ${project.stale ? "grayscale" : ""}`}>
           <ProjectSquare project={project.card ?? squareCard(project)} size={16} />
         </span>
         {/* Baseline-aligned so the filter mark can sit on the NAME's cap band rather than centre its box:

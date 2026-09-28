@@ -6,7 +6,7 @@ import { homedir, tmpdir } from "node:os"
 import type { AskQuestion, AwaitingHint } from "@frizz/shared"
 import { insideFence, isAllInjectedNoise, isInterruptMarker, parseAskUserQuestionInput, PermissionMode, questionFencesLive, saysAllDone, splitAwaitingFrontmatter } from "@frizz/shared"
 import type { Bus } from "./bus.ts"
-import { permMarkerPath, type Project } from "./project.ts"
+import { permMarkerPath, workDirOf, type Project } from "./project.ts"
 import { isBrokerClaudeRow, isHeadlessRow } from "./storage.ts"
 import type { Storage, SessionRow } from "./storage.ts"
 import { discoverTranscriptDir, discoverTranscriptId, mtimeOfNonEmpty, DISCOVERY_GRACE_MS } from "./discover.ts"
@@ -3694,10 +3694,11 @@ export function createTailer(deps: TailerDeps): Tailer {
   // Both cwd spellings are offered because a rollout records the cwd the codex PROCESS had, which on
   // macOS resolves symlinks — a project frizz knows as `/tmp/x` writes `/private/tmp/x`.
   function scanForeignCodex(nowMs: number): { id: string; path: string; title?: string }[] {
-    if (!deps.project.dir) return []
-    const cwds = new Set<string>([deps.project.dir])
+    const workDir = workDirOf(deps.project)
+    if (!workDir) return []
+    const cwds = new Set<string>([workDir])
     try {
-      cwds.add(realpathSync(deps.project.dir))
+      cwds.add(realpathSync(workDir))
     } catch {
       // an unreadable project dir simply contributes no alias
     }

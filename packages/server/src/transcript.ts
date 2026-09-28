@@ -29,7 +29,7 @@ import {
   type TranscriptTodo,
   type TranscriptToolCall,
 } from "@frizz/shared"
-import type { Project } from "./project.ts"
+import { workDirOf, type Project } from "./project.ts"
 import type { Storage } from "./storage.ts"
 import type { AgentBackend, NormalizedEvent } from "./backend/types.ts"
 import { parseDeliveryLedger, projectDeliveryLedger, suppressCancelledDeliveries, attachmentPromptText } from "./delivery-ledger.ts"
@@ -4454,7 +4454,7 @@ export function readLatestThreadTranscriptPage(
     // (repo-files.ts).
     ...(opts.editedFiles === false
       ? {}
-      : { editedFiles: repoCarriedEditedFiles(project.dir, editedFilesOf(projected, project.dir)) }),
+      : { editedFiles: repoCarriedEditedFiles(workDirOf(project), editedFilesOf(projected, workDirOf(project))) }),
   }
 }
 

@@ -75,12 +75,16 @@ export const GROUP_LABELS: Record<ActionGroup, string> = {
 }
 
 /**
- * The next project for the thread about to start, from inside Everything's new-thread box
- * (AllQueues.tsx). Claude Code's own key for cycling a setting of the prompt being written — its
- * permission mode — which the operators of this app already have in their fingers. Not rebindable: a
- * binding with no ⌘/Ctrl never fires in a text box (see above), and Tab is not bindable at all.
+ * The project the thread about to start goes to, stepped from inside the page's new-thread box, whose
+ * project is a choice (AllQueues.tsx): Option/Alt with ↓ for the next one in its picker, ↑ for the one
+ * before. Slack's and Discord's key for switching the conversation you are typing into, and bound by no
+ * browser on any platform — Alt-←/→ are Back and Forward, Ctrl-Tab and ⌘⇧[/] switch tabs, and ⇧Tab
+ * (the first choice, 2026-09-28) steps focus back through the page (maintainer: "conflicts with the
+ * common shortcut for cycling tabs on browser"). What it displaces is macOS's own ⌥↑/⌥↓ inside that one
+ * box, which moves the caret a paragraph. Not rebindable: a binding with no ⌘/Ctrl never fires in a
+ * text box (see above).
  */
-export const NEXT_PROJECT_CHORD = "shift+tab"
+export const PROJECT_STEP_CHORDS = { next: "alt+arrowdown", previous: "alt+arrowup" } as const
 
 // The keys the prompt boxes own. Listed on the sheet so it is the whole keyboard in one place, but not
 // rebindable: composerKeyboard.ts is the contract for the first group, every box in the app shares it,
@@ -100,7 +104,8 @@ export const FIXED_SHORTCUTS: readonly { heading: string; keys: readonly { label
     keys: [
       { label: "Switch to Terminal, typed first", chord: "!" },
       { label: "Back to Prompt, in an empty box", chord: "backspace" },
-      { label: "Start in the next project, on Everything", chord: NEXT_PROJECT_CHORD },
+      { label: "Start in the next project", chord: PROJECT_STEP_CHORDS.next },
+      { label: "Start in the previous project", chord: PROJECT_STEP_CHORDS.previous },
     ],
   },
 ]

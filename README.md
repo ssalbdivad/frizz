@@ -77,6 +77,8 @@ Every directory you run `npx frizz` in becomes a project with its own board, all
 
 The project rail keeps every project one click away, with each queue's count on its icon. It is off by default; switch it on under **Settings → Project sidebar**.
 
+Work that belongs to no project yet — cloning a repository, a question about your machine — starts in **Home**, the last choice in the prompt box's project picker. Its agents run in your home folder, or in the folder you set under **Settings → Home folder**, and its threads are listed under Home on Everything like any project's.
+
 ### The queue
 
 A sidebar of sessions makes every agent something you have to remember to go check. Frizz gives you one queue instead.
