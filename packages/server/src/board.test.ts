@@ -946,7 +946,10 @@ test("board: native Codex failures settle a lagging rollout, converge without du
   let current = tele({ turn: "in-flight", lastActivityAt: T0 })
   let live: { bridgeTurn: boolean; ownedSince: string; providerError: import("@frizz/shared").ProviderError } = { bridgeTurn: false, ownedSince: T0, providerError: error }
   const tailer = { get: () => current, foreignIds: () => [], subAgent: () => undefined, forget: () => {}, start: () => {}, stop: () => {}, tick: () => {} } satisfies Tailer
-  const board = createBoard(project, storage, new Bus(), tailer, "errors", { codexTurnLiveness: () => live })
+  // The clock sits beside the fixture's own dates. Unpinned, the final in-flight reading (last activity
+  // at LATER, months before any real run) was a turn gone quiet for months, which queues (QUIET_TURN_MS)
+  // — so the `needsYou === false` it ends on failed on the wall clock, not on the retry it pins.
+  const board = createBoard(project, storage, new Bus(), tailer, "errors", { codexTurnLiveness: () => live, now: () => Date.parse(LATER) + 1_000 })
   try {
     let thread = (await board.snapshot()).threads[0]!
     assert.equal(thread.runtime, "turn-idle")
