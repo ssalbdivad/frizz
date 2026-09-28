@@ -208,7 +208,7 @@ export function StateButton({
   // keeps its own 12px scale and needs none; the in-card copy runs at the shared 11px card-action
   // scale and passes ICON_LABEL_NUDGE. Neither surface should guess on the other's behalf.
   iconClassName?: string
-  // THE copy the `e` shortcut presses (lib/keyboardRuntime.ts). Only a footer's copy sets it: the
+  // THE copy the `d` shortcut presses (lib/keyboardRuntime.ts). Only a footer's copy sets it: the
   // in-chat ```done card renders a second one, and the key must find exactly one per surface.
   command?: boolean
 }) {

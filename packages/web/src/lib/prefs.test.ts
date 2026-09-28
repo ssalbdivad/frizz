@@ -34,8 +34,8 @@ test("keyboard-shortcut overrides persist, and a bad entry falls back to its def
   assert.deepEqual(parseStoredPrefs(null).keybindings, {})
   assert.deepEqual(parseStoredPrefs("not-json").keybindings, {})
   assert.deepEqual(
-    parseStoredPrefs(JSON.stringify({ keybindings: { "thread.snooze": "s", "thread.done": "mod+w", "nope": "x" }, diffsRedefaulted: true })).keybindings,
-    { "thread.snooze": "s" },
+    parseStoredPrefs(JSON.stringify({ keybindings: { "thread.snooze": "x", "thread.done": "mod+w", "nope": "x" }, diffsRedefaulted: true })).keybindings,
+    { "thread.snooze": "x" },
   )
   assert.deepEqual(parseStoredPrefs(JSON.stringify({ keybindings: "garbage", diffsRedefaulted: true })).keybindings, {})
 })
