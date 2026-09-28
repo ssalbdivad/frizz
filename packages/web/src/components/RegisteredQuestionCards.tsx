@@ -467,7 +467,13 @@ export function RegisteredQuestionStack({
       {a.sending && (
         <div role="status" aria-live="polite" className="text-[11px] leading-snug text-muted">Sending…</div>
       )}
-      <div className="flex justify-start">
+      {/* HUNG OFF THE QUESTIONS IT SENDS, not spaced like one more of them: 8px under the last card
+          against the stack's 12px rhythm. On the queue card the reply box sits 17px below, and the
+          stack's plain 12px there read as a button floating between the two, half an appendage of
+          the box (the rule scripts/verify-open-ask-composer.mjs holds, from the maintainer's
+          2026-07-22 "the spacing is insane": ≤10px up, at least 1.5x that down). Both marks here are
+          filled or bordered boxes, so the box gap IS the ink gap. */}
+      <div className="-mt-1 flex justify-start">
         <button
           type="button"
           data-send-answers
