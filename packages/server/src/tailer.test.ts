@@ -2004,10 +2004,10 @@ const BEFORE_RETIREMENT = new Date(Date.parse(QUESTION_FENCE_RETIRED_AT) - 60_00
 const AFTER_RETIREMENT = new Date(Date.parse(QUESTION_FENCE_RETIRED_AT) + 60_000).toISOString()
 
 test("hasQuestionBlock: the empty placement marker (```question qst_…) has no body and never counts", () => {
-  // The two-line form the contract keeps: an opener naming a registered id, then the closer. There is
-  // no body line between them, so the fence regex — which needs the closer on a line AFTER the body —
-  // does not match. This is the shape the shadow places a registered card at, so it must never read as
-  // a free-form ask for a legacy thread either.
+  // The two-line form the contract taught until 2026-09-28: an opener naming a registered id, then the
+  // closer. There is no body line between them, so the fence regex — which needs the closer on a line
+  // AFTER the body — does not match. Old handoffs still carry it (it draws nothing now; the card renders
+  // at the bottom of the rest), so it must never read as a free-form ask for a legacy thread either.
   assert.equal(hasQuestionBlock("```question qst_ab12cd34\n```"), false)
   assert.equal(hasQuestionBlock("Here is where it goes:\n\n```question qst_ab12cd34\n```\n\nand on either side."), false)
   assert.equal(hasQuestionBlock("```question\n```"), false, "an empty fence with no id is prose too")

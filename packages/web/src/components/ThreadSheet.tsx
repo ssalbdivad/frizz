@@ -13,6 +13,7 @@ import { handleDialogEscape } from "../lib/selectOverlay.ts"
 import { DrawerInitialScrollCoordinator } from "../lib/drawerInitialScroll.ts"
 import { PANE_HEADER_HEIGHT_CLASS } from "../lib/paneHeaderHeight.ts"
 import { ThreadView } from "./ChatView.tsx"
+import { isToastPointer } from "./Toaster.tsx"
 
 // One THREAD layer of the side-drawer stack: a right sheet (same slide/backdrop family as settings)
 // showing a thread's FULL view as an OVERLAY — the queue (and any layers below) keep their scroll and
@@ -214,17 +215,22 @@ export function ThreadSheet({ id, slug, depth, widthDepth, initiallyOpen }: { id
             }
             handleDialogEscape(event)
           }}
-          // A non-modal Radix layer also dismisses on any pointer-down OUTSIDE its content. Two
-          // cases must not self-dismiss: (1) this sheet is BURIED under another drawer layer (a
-          // sub-agent/doc sheet stacked over it, or a lateral swap in flight) — only the TOPMOST
-          // live layer owns outside-pointer dismissal, otherwise a click inside the child sheet
-          // silently closes the parent underneath it; (2) the pointer landed on one of THIS
-          // thread's own sub-agent rows (sidebar child rows / queue card lines carry
-          // data-subagent-parent) — that click is a drill-IN, and the drawer policy in
-          // openOrRaiseDrawer stacks the child over this sheet instead of dismissing it. Every
-          // other outside pointer (backdrop, blank sidebar, sibling rows) dismisses as before —
-          // sibling opens also route through the store policy, which closes this layer anyway.
+          // A non-modal Radix layer also dismisses on any pointer-down OUTSIDE its content. Three cases
+          // must not self-dismiss: (0) the pointer landed on the TOAST, whose buttons are its own
+          // (isToastPointer — a snooze's Undo closed this drawer); (1) this sheet is BURIED under another
+          // drawer layer (a sub-agent/doc sheet stacked over it, or a lateral swap in flight) — only the
+          // TOPMOST live layer owns outside-pointer dismissal, otherwise a click inside the child sheet
+          // silently closes the parent underneath it; (2) the pointer landed on one of THIS thread's own
+          // sub-agent rows (sidebar child rows / queue card lines carry data-subagent-parent) — that click
+          // is a drill-IN, and the drawer policy in openOrRaiseDrawer stacks the child over this sheet
+          // instead of dismissing it. Every other outside pointer (backdrop, blank sidebar, sibling rows)
+          // dismisses as before — sibling opens also route through the store policy, which closes this
+          // layer anyway.
           onPointerDownOutside={(event) => {
+            if (isToastPointer(event.target)) {
+              event.preventDefault()
+              return
+            }
             // CLOSING layers still count as "above": Radix dispatches this event AFTER the
             // backdrop's own onMouseDown has already marked the top sheet closing (verified in the
             // real event order), so a live-only check would see this buried sheet as topmost during

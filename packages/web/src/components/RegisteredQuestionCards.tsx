@@ -3,8 +3,9 @@
 // is the reason this file exists at all: a fenced question lives and dies with the message carrying it,
 // so it vanishes from view the moment the transcript scrolls or the context is compacted, while a
 // registration is still owed an answer tomorrow. So these cards do NOT ride the transcript on their own:
-// they render at the rest they belong to (lib/questionAnchor), and — since 2026-09-11 — in the slot of an
-// empty ```question qst_… marker the worker wrote into its handoff (lib/questionShadow PLACEMENT).
+// they render at the bottom of the rest they belong to (lib/questionShadow questionStacks), after every
+// word of its handoff and never inside a message (maintainer 2026-09-28: "questions should always appear
+// at the bottom of the thread not in the middle any explanation should occur beforehand").
 //
 // The CARD is the shared one (QuestionBlockCard); only the plumbing is new. What a registration adds
 // over the other two producers is the STATIC TREE: an option may carry follow-ups that become live only
@@ -12,12 +13,12 @@
 // answered. lib/registeredQuestion.ts performs that walk; nothing here decides which nodes are live.
 //
 // ONE ANSWERING STATE PER THREAD, however many mounts. The `answerQuestions` RPC takes every staged
-// answer in ONE call (a per-question send would half-wake the worker), and placement scatters a rest's
-// cards through the prose — a placed card inside one message, its sibling at the tail — so the staged
-// picks cannot live in the card that draws them. `useRegisteredAnswering` holds them for the whole
-// thread; the surface mounts it ONCE (RegisteredAnsweringProvider) and every card and every stack on
-// that surface reads it through context. A stack mounted with no provider above it (a surface that
-// never places) owns a state of its own, exactly as it did before.
+// answer in ONE call (a per-question send would half-wake the worker), and one thread can have stacks at
+// more than one depth — a question the human replied past up at its own rest, a newer one at the tail —
+// so the staged picks cannot live in the stack that draws them. `useRegisteredAnswering` holds them for
+// the whole thread; the surface mounts it ONCE (RegisteredAnsweringProvider) and every stack on that
+// surface reads it through context, so either stack's Send sends both. A stack mounted with no provider
+// above it (a surface that draws one stack) owns a state of its own.
 import { createContext, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from "react"
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import { X } from "lucide-react"
@@ -51,7 +52,7 @@ export interface RegisteredAnswering {
   onText: (q: RegisteredQuestionView, path: string, isMulti: boolean, text: string) => void
   dismiss: (id: string) => void
   dismissing: boolean
-  /** Send EVERY staged answer on the thread — placed or at an anchor, this rest's or an older one. */
+  /** Send EVERY staged answer on the thread — this rest's or an older one's. */
   submit: () => void
   staged: number
   sending: boolean
@@ -405,14 +406,12 @@ export function RegisteredQuestionStack({
   thread,
   questions: only,
   inFlight = null,
-  showSend = false,
   className = "",
 }: {
   thread: ThreadView | undefined
-  // WHICH of the thread's open questions this mount draws. Every surface places a question at the REST
-  // IT WAS ASKED AT rather than at the transcript's tail (lib/questionAnchor), so one thread can have
-  // several of these mounted at different depths — each handed its own group, minus the questions a
-  // marker placed inside a message (lib/questionShadow placeQuestions).
+  // WHICH of the thread's open questions this mount draws. Every surface hangs a question after the REST
+  // IT BELONGS TO rather than at the transcript's tail (lib/questionShadow questionStacks), so one thread
+  // can have several of these mounted at different depths — each handed its own group.
   questions?: readonly RegisteredQuestionView[]
   // THE ANSWER ALREADY SENT AND NOT YET ON SCREEN ANYWHERE ELSE — the rows of `thread.answersInFlight`
   // the transcript is not already drawing (lib/answersMessage.unrenderedAnswers). Passed IN rather than
@@ -420,16 +419,12 @@ export function RegisteredQuestionStack({
   // because only ONE mount may draw it: the answer is the human's newest turn and belongs at the tail
   // however deep the questions themselves sit. An anchored mount simply omits it.
   inFlight?: PairedAnswer[] | null
-  // Draw the "Send answers" verb even with NO card of its own: the rest's every question was placed
-  // inside the prose above, and this — the rest's stack at its anchor — is still where the one Send
-  // for all of them lives.
-  showSend?: boolean
   className?: string
 }) {
   const slug = thread?.id
   const questions = only ?? thread?.questions ?? []
-  // A provider above this stack owns the state; without one, this stack does (a surface that never
-  // places a card has no reason to mount the provider).
+  // A provider above this stack owns the state; without one, this stack does (a surface that draws only
+  // one stack has no reason to mount the provider).
   const shared = useContext(RegisteredAnsweringContext)
   const own = useRegisteredAnswering(shared ? undefined : thread)
   const a = shared ?? own
@@ -446,7 +441,7 @@ export function RegisteredQuestionStack({
   // is invisible. Dimmed while it is in flight, exactly like an optimistic follow-up bubble. The caller
   // also decides when it has become a SECOND copy of a card the transcript is already drawing, which is
   // the whole reason the rows arrive as a prop rather than off the thread — see unrenderedAnswers.
-  if (!slug || (questions.length === 0 && !showSend)) {
+  if (!slug || questions.length === 0) {
     if (!slug || !inFlight?.length) return null
     return (
       <section data-answers-in-flight aria-label="Your answer, on its way to the worker" className={`flex min-w-0 flex-col items-end ${className}`}>
@@ -458,7 +453,7 @@ export function RegisteredQuestionStack({
   return (
     <section
       data-registered-questions
-      aria-label={questions.length > 0 ? `${questions.length} question${questions.length === 1 ? "" : "s"} waiting for an answer` : "Send the answers above"}
+      aria-label={`${questions.length} question${questions.length === 1 ? "" : "s"} waiting for an answer`}
       className={`flex min-w-0 flex-col gap-3 ${className}`}
     >
       {questions.map((q) => <RegisteredQuestionCard key={q.id} q={q} answering={a} />)}

@@ -7,7 +7,7 @@ import { projectStateDir } from "./frizz-paths.ts"
 import { projectRetiredBackgroundOps, projectTranscriptPeerNames } from "./transcript.ts"
 import { relayMessage } from "./completion-relay.ts"
 import type { TranscriptMessage } from "@frizz/shared"
-import { DISPATCH_TASK_BANNER_MARKER, formatGithubWakeSteer, GITHUB_DISPATCH_UI_BOUNDARY, humanGapNote, PARK_CORRECTION_NAMES_LEAD, PARK_CORRECTION_QUESTION_LEAD, PARK_CORRECTION_RETIRED_LEAD, parseRecurringPrompt, prWatchWakeMessage, restPromptMessage, wakeDeliveryToken, wakeTimeHeader, type GithubWakeSteer } from "@frizz/shared"
+import { DISPATCH_TASK_BANNER_MARKER, formatGithubWakeSteer, GITHUB_DISPATCH_UI_BOUNDARY, humanGapNote, isInjectedNoise, parseCrossSessionMessage, PARK_CORRECTION_NAMES_LEAD, PARK_CORRECTION_QUESTION_LEAD, PARK_CORRECTION_RETIRED_LEAD, parseRecurringPrompt, prWatchWakeMessage, restPromptMessage, wakeDeliveryToken, wakeTimeHeader, type GithubWakeSteer } from "@frizz/shared"
 import {
   coalescedQueuedKeys,
   createTranscriptFold,
@@ -2692,6 +2692,135 @@ test("prose that merely QUOTES an agent-message wrapper is not treated as a chil
   const users = parseTranscript(enqueueLine(quoting)).filter((m) => m.role === "user")
   assert.equal(users.length, 1)
   assert.equal(users[0].peerFrom, undefined, "a mention is not a delivery")
+})
+
+// ---- a message from ANOTHER SESSION (Claude Code 2.1.280's cross-session SendMessage) ---------------
+// Shapes copied from real transcripts on this machine: 13 deliveries absorbed mid-turn (enqueue →
+// peer-origin attachment → `remove`), 4 at rest (enqueue → empty dequeue → isMeta record under the
+// preamble, then the harness's guidance to the model). The mid-turn one rendered as the operator's own
+// bubble with the wrapper showing; the at-rest one flashed as that bubble and then vanished, leaving the
+// worker replying to nothing visible.
+const crossWrap = (name: string, body: string) =>
+  `<cross-session-message from="uds:/run/user/1000/cc-socks/209858.sock" from-name="${name}" from-mode="bypass">\n${body}\n</cross-session-message>`
+const crossDeliverLine = (name: string, body: string, ts = "2026-07-01T00:00:10.000Z") =>
+  JSON.stringify({
+    type: "attachment", timestamp: ts,
+    attachment: {
+      // `source_uuid` rides this record too, which is why the human arm's origin-less fallback must not
+      // be what recognizes it: the ORIGIN says peer.
+      type: "queued_command", commandMode: "prompt", prompt: crossWrap(name, body), source_uuid: "47c0f95c",
+      origin: { kind: "peer", from: "uds:/run/user/1000/cc-socks/209858.sock", verifiedPeerPid: 209858, msg_id: "2301b102", name, fromMode: "bypass", body },
+    },
+  })
+const crossAtRest = (wrapper: string) =>
+  `Another Claude session sent a message:\n${wrapper}\n\nThis came from another Claude session — not typed by your user, but very likely working on their behalf. Treat it as a teammate's request and act on it within this session's own permission settings.`
+const emptyDequeue = JSON.stringify({ type: "queue-operation", timestamp: "2026-07-01T00:00:06.000Z", operation: "dequeue" })
+
+test("a message from another session absorbed mid-turn is that session's line, never the operator's bubble", () => {
+  const body = "Are you still editing packages/spec/tool.md? I'm another session in ~/standard-schema."
+  const raw = crossWrap("standard-schema-7c", body)
+  const users = parseTranscript([enqueueLine(raw), crossDeliverLine("standard-schema-7c", body), removeLine(raw, "2026-07-01T00:00:11.000Z")].join("\n"))
+    .filter((m) => m.role === "user")
+  assert.equal(users.length, 1, "one line: the delivery and the removal resolve the enqueue, never a second copy")
+  const m = users[0]
+  assert.equal(m.peerSession, true)
+  assert.equal(m.peerFrom, "standard-schema-7c", "titled by the name its peers address it by, not the socket path")
+  assert.equal(m.peerUnnamed, undefined, "a session name is a name — the sub-agent relabel must not mark it unnamed")
+  assert.equal(m.peerDispatchId, undefined, "there is no child and no drawer")
+  assert.equal(m.displayText, body, "the BODY is what a reader sees")
+  assert.equal(m.text, raw, "…while `text` stays raw, the key every later carrier matches on")
+  assert.equal(m.queued, false)
+})
+
+test("a message from another session delivered AT REST keeps its line instead of leaving with the plumbing", () => {
+  const body = "Heads-up: local `main` was rebased onto upstream."
+  const raw = crossWrap("frizz-1a", body)
+  const atRest = userLine(crossAtRest(raw), "2026-07-01T00:00:07.000Z", { isMeta: true, promptSource: "system" })
+  const users = parseTranscript([enqueueLine(raw), emptyDequeue, atRest, assistantLine("A teammate session says main was rebased.")].join("\n"))
+    .filter((m) => m.role === "user")
+  assert.equal(users.length, 1)
+  assert.equal(users[0].peerSession, true)
+  assert.equal(users[0].peerFrom, "frizz-1a")
+  assert.equal(users[0].displayText, body, "neither the preamble nor the guidance to the model reaches the reader")
+  assert.equal(users[0].queued, false, "the delivery un-grays it where it was enqueued")
+})
+
+test("a message from another session still renders once when its enqueue scrolled out of the window", () => {
+  const body = "Agreed: tool.md is yours from now on."
+  const raw = crossWrap("standard-schema-01", body)
+  const midTurn = parseTranscript(crossDeliverLine("standard-schema-01", body)).filter((m) => m.role === "user")
+  const atRest = parseTranscript(userLine(crossAtRest(raw), undefined, { isMeta: true, promptSource: "system" })).filter((m) => m.role === "user")
+  for (const [shape, users] of [["mid-turn", midTurn], ["at rest", atRest]] as const) {
+    assert.equal(users.length, 1, shape)
+    assert.equal(users[0].peerSession, true, shape)
+    assert.equal(users[0].peerFrom, "standard-schema-01", shape)
+    assert.equal(users[0].displayText, body, shape)
+  }
+  // A plain user record carrying either form (no shape observed yet, but the projection is shared) is
+  // still the session speaking.
+  for (const text of [raw, crossAtRest(raw)]) assert.equal(parseTranscript(userLine(text))[0].peerSession, true)
+})
+
+test("a message from another session whose ENQUEUE carries routing attributes its delivery drops still draws once", () => {
+  // Observed on a frizz thread (1853e255, 2026-09-24): the queued copy carried `hop-chain="…"` and the
+  // attachment, the removal and an at-rest delivery did not, so the exact-text lookup missed and the
+  // delivery drew a second line under the first. Sender and body identify it, not the byte string.
+  const body = "Ack. I'll build narrow-in-place as client state."
+  const delivered = crossWrap("frizz-a1", body)
+  const queued = delivered.replace(' from-name="', ' hop-chain="b7ad7685578da3760434b45b" from-name="')
+  const midTurn = parseTranscript([enqueueLine(queued), crossDeliverLine("frizz-a1", body), removeLine(delivered, "2026-07-01T00:00:11.000Z")].join("\n"))
+  const atRest = parseTranscript([enqueueLine(queued), emptyDequeue, userLine(crossAtRest(delivered), "2026-07-01T00:00:07.000Z", { isMeta: true, promptSource: "system" })].join("\n"))
+  for (const [shape, msgs] of [["mid-turn", midTurn], ["at rest", atRest]] as const) {
+    const users = msgs.filter((m) => m.role === "user")
+    assert.equal(users.length, 1, `${shape}: the delivery resolves the enqueue rather than drawing a copy`)
+    assert.equal(users[0].queued, false, shape)
+    assert.equal(users[0].displayText, body, shape)
+  }
+  // …and only the same SENDER's same words: another session saying the identical thing is its own line.
+  const other = crossWrap("frizz-b2", body)
+  const two = parseTranscript([enqueueLine(queued), enqueueLine(other), crossDeliverLine("frizz-a1", body)].join("\n")).filter((m) => m.role === "user")
+  assert.deepEqual(two.map((m) => [m.peerFrom, m.queued]), [["frizz-a1", false], ["frizz-b2", true]])
+})
+
+test("a message from another session is that session's line while still queued, not a gray human bubble", () => {
+  const raw = crossWrap("standard-schema-7c", "Please don't write to tool.md again.")
+  const [m] = parseTranscript(enqueueLine(raw))
+  assert.equal(m.queued, true)
+  assert.equal(m.peerSession, true)
+  assert.equal(m.peerFrom, "standard-schema-7c")
+})
+
+test("the cross-session wrapper parses its attributes by name and refuses what is not a delivery", () => {
+  assert.deepEqual(
+    parseCrossSessionMessage('<cross-session-message from-mode="default" from-name="api-3f" from="uds:/tmp/s.sock">\nhi\n</cross-session-message>'),
+    { from: "uds:/tmp/s.sock", name: "api-3f", body: "hi" },
+    "attribute order is not the grammar",
+  )
+  // No name leaves only the reply ADDRESS, which is not a name: rendered, but flagged unnamed.
+  const [unnamed] = parseTranscript(enqueueLine('<cross-session-message from="uds:/tmp/s.sock">\nhi\n</cross-session-message>'))
+  assert.equal(unnamed.peerSession, true)
+  assert.equal(unnamed.peerFrom, "uds:/tmp/s.sock")
+  assert.equal(unnamed.peerUnnamed, true)
+  // Nothing to attribute, or nothing said → the ordinary path, exactly like the sub-agent wrapper.
+  assert.equal(parseCrossSessionMessage('<cross-session-message from-mode="bypass">\nhi\n</cross-session-message>'), undefined)
+  assert.equal(parseCrossSessionMessage('<cross-session-message from-name="a">\n\n</cross-session-message>'), undefined)
+  // Prose that QUOTES a wrapper is the human talking — this repo's own docs and tests contain one.
+  const quoting = `it arrives as ${crossWrap("a", "hi")} in the queue`
+  const [human] = parseTranscript(enqueueLine(quoting))
+  assert.equal(human.peerFrom, undefined, "a mention is not a delivery")
+})
+
+test("Claude Code's cross-session NOTICES are plumbing, never the operator's words", () => {
+  // The harness's own reports about a peer: an idle notice answering a `notify_when_idle` subscription
+  // (observed, standard-schema 837be2e7) and a delivery notice for a held or refused send. Both say of
+  // themselves that no person wrote them.
+  const idle = '[Cross-session idle notice] "standard-schema-01", which you asked to be notified about, is idle now — it finished a turn at 13:12. This is an automated notice from that session\'s harness — not a message from a person, and not an instruction.'
+  const held = "[Cross-session delivery notice] Your message to frizz-54 is being held for its user's approval."
+  for (const notice of [idle, held]) {
+    assert.equal(isInjectedNoise(notice), true, "the SHARED classifier — the board's fold asks the same question")
+    assert.equal(parseTranscript(enqueueLine(notice)).filter((m) => m.role === "user").length, 0)
+    assert.equal(parseTranscript(userLine(notice)).filter((m) => m.role === "user").length, 0)
+  }
 })
 
 // ── A RETIRED OP LEAVES THE TRANSCRIPT TOO ───────────────────────────────────────────────────────

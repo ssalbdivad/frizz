@@ -27,9 +27,34 @@ test("a question the human replied past sits at ITS rest, above their reply", ()
   assert.equal(questionAnchorIndex(messages, at(2)), 2)
 })
 
-// A wake is recorded as a USER turn, and it counts: the thread moved on, whoever moved it.
-test("frizz's own delivery ends the rest just as a typed reply does", () => {
+// A plain user record with no wake flag is the human typing, and it ends the rest.
+test("a typed reply ends the rest", () => {
   const messages = [msg("assistant", 1), msg("user", 2), msg("assistant", 3)]
+  assert.equal(questionAnchorIndex(messages, at(1)), 0)
+})
+
+// THE 2026-09-28 REPORT'S SECOND HALF. A wake is recorded as a USER turn, and until 2026-09-28 it counted:
+// a PR watcher expired, the worker re-armed and rested again with "the merge question from my last
+// message is still the open decision" — under a card the wake had frozen above it. Frizz moving the
+// thread is not the human replying; the card rides to the bottom of the newest handoff.
+test("frizz's own wake does NOT end the rest — the card stays at the bottom through it", () => {
+  const wake: AnchorMessage = { role: "user", at: at(2), wake: true, text: "⏰ Your watcher on pullfrog/app#1403 has expired" }
+  const messages = [msg("assistant", 1), wake, msg("assistant", 3)]
+  assert.equal(questionAnchorIndex(messages, at(1)), 2)
+})
+
+test("a sub-agent's upward report is not the human either", () => {
+  const report: AnchorMessage = { role: "user", at: at(2), peerFrom: "frizz:high", text: "Milestone: the parser is green." }
+  const messages = [msg("assistant", 1), report, msg("assistant", 3)]
+  assert.equal(questionAnchorIndex(messages, at(1)), 2)
+})
+
+// Negative control for the wake rule: an ANSWER arrives as a wake too (frizz delivers it, because the
+// human may answer while the worker is down), and it IS the human speaking — answering some questions
+// and leaving another open is replying past that one.
+test("the delivered answers to other questions end the rest, though frizz carried them", () => {
+  const answers: AnchorMessage = { role: "user", at: at(2), wake: true, text: "Answers to earlier questions:\n1. “Merge it?” → Merge it" }
+  const messages = [msg("assistant", 1), answers, msg("assistant", 3)]
   assert.equal(questionAnchorIndex(messages, at(1)), 0)
 })
 

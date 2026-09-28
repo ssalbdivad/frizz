@@ -132,6 +132,20 @@ export function formatSnoozedUntil(until: string, nowMs = Date.now()): string | 
   return wake ? `Snoozed until ${wake}` : null
 }
 
+/** The toast a snooze raises. It has a second job besides naming the wake: saying WHERE the thread
+ *  went. A snoozed thread leaves the queue it was read from, and a toast naming only the deadline left
+ *  the operator hunting for it (2026-09-28: "I accidentally snoozed a thread, I don't know where it
+ *  went"). It waits under its project in the list, so the toast's second line says so whenever the
+ *  project is known. */
+export function formatSnoozeConfirmation(until: string, prompt: string | null, projectName: string | undefined, nowMs = Date.now()): { text: string; detail: string | undefined } {
+  const wake = wakePhrase(until, nowMs)
+  const what = prompt ? "Bump scheduled" : "Snoozed"
+  return {
+    text: wake ? `${what} ${prompt ? "for" : "until"} ${wake}` : what,
+    detail: projectName ? `Under ${projectName} in the list` : undefined,
+  }
+}
+
 /** How long a scheduled follow-up may run in a one-line tooltip before it stops being a hint. */
 const PROMPT_PREVIEW_MAX = 120
 

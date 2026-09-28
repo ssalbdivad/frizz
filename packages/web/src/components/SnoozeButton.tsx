@@ -4,8 +4,10 @@ import { AlarmClock, ChevronDown, Loader2 } from "lucide-react"
 import { SNOOZE_PROMPT_MAX, type ThreadView } from "@frizz/shared"
 import { useThreadApi } from "../api/threadApi.tsx"
 import { futureSnoozedUntil } from "../groups.ts"
+import { useBoard } from "../hooks.ts"
 import {
   SNOOZE_PRESETS,
+  formatSnoozeConfirmation,
   formatSnoozeWake,
   localDateTimeInputValue,
   parseLocalSnooze,
@@ -21,8 +23,23 @@ import { useCommandHandler, useShortcutLabel, withShortcut } from "../lib/keyboa
 import { Dialog } from "./ui/Dialog.tsx"
 import { Menu, MenuContent, MenuItem, MenuSeparator, MenuTrigger } from "./ui/Menu.tsx"
 
-export function SnoozeButton({ thread, onSnoozed }: { thread: ThreadView; onSnoozed?: () => void }) {
+export function SnoozeButton({
+  thread,
+  projectName,
+  onSnoozed,
+  onUndone,
+}: {
+  thread: ThreadView
+  /** The project the thread waits under once snoozed, named in the toast. Defaults to the page's — the
+   *  drawer's own project; a card of another project's queue names its own. */
+  projectName?: string
+  onSnoozed?: () => void
+  /** The toast's Undo put the snooze back as it was: give back whatever `onSnoozed` took away. */
+  onUndone?: () => void
+}) {
   const api = useThreadApi()
+  const board = useBoard()
+  const where = projectName ?? board?.projectName
   const [busy, setBusy] = useState(false)
   const [customOpen, setCustomOpen] = useState(false)
   const [customValue, setCustomValue] = useState("")
@@ -64,11 +81,30 @@ export function SnoozeButton({ thread, onSnoozed }: { thread: ThreadView; onSnoo
   // `prompt` is what upgrades a park into a scheduled BUMP: the server arms a durable wake that resumes
   // this thread with exactly that text at `until`. null keeps the historical reminder behavior.
   async function apply(until: string | null, prompt: string | null = null): Promise<void> {
+    // What this click replaces, for the toast's Undo: a thread that was already snoozed goes back to its
+    // old deadline and follow-up, not to awake.
+    const previous = { until: snoozedUntil ?? null, prompt: snoozedUntil ? thread.snoozePrompt ?? null : null }
+    const sessionId = thread.sessionId ?? ""
     setBusy(true)
     try {
-      await api.setThreadSnooze({ slug: thread.id, sessionId: thread.sessionId ?? "", until, prompt: until ? prompt : null })
+      await api.setThreadSnooze({ slug: thread.id, sessionId, until, prompt: until ? prompt : null })
       if (until) {
-        showToast(`${prompt ? "Bump scheduled" : "Snoozed"} · ${formatSnoozeWake(until)}`)
+        // UNDO, because a snooze is one click (or `h` then Enter) and takes the card off the page: the
+        // accident is cheap to make and was expensive to find. It runs after this button may be gone —
+        // the card fades out on `onSnoozed` — so it touches no state of the button's own.
+        const undo = async () => {
+          try {
+            // A deadline that passed while the toast was up has nothing left to restore.
+            const restore = previous.until !== null && Date.parse(previous.until) > Date.now() ? previous : { until: null, prompt: null }
+            await api.setThreadSnooze({ slug: thread.id, sessionId, ...restore })
+            showToast(restore.until ? "Snooze restored" : "Snooze undone")
+            onUndone?.()
+          } catch (error) {
+            showToast((error instanceof Error ? error.message : "Undo failed").slice(0, 100))
+          }
+        }
+        const { text, detail } = formatSnoozeConfirmation(until, prompt, where)
+        showToast(text, { detail, action: { label: "Undo", run: () => void undo() } })
         onSnoozed?.()
       } else {
         showToast("Snooze cleared")

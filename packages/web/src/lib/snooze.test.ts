@@ -5,6 +5,7 @@ import {
   formatSnoozedUntil,
   formatSnoozeWake,
   formatAutoSnoozedUntil,
+  formatSnoozeConfirmation,
   formatUserSnooze,
   snoozePromptPreview,
   isSnoozePreset,
@@ -126,6 +127,32 @@ test("a snooze carrying a prompt reads as the AUTO variant and names the follow-
       "Auto-snoozed until Wednesday at 9:00 PM — then: Check CI",
     )
     assert.equal(formatUserSnooze("not-a-date", "Check CI", now.getTime()), null)
+  } finally {
+    if (previousTz === undefined) delete process.env.TZ
+    else process.env.TZ = previousTz
+  }
+})
+
+// The toast is the one moment the operator is looking when a thread leaves the queue, so it names where
+// the thread went — the report was "I accidentally snoozed a thread, I don't know where it went".
+test("the snooze toast names the wake and the project the thread now waits under", () => {
+  const previousTz = process.env.TZ
+  process.env.TZ = "America/Los_Angeles"
+  try {
+    const now = new Date(2026, 6, 13, 8, 0, 0, 0)
+    const tomorrow = new Date(2026, 6, 14, 9, 0, 0, 0).toISOString()
+    assert.deepEqual(formatSnoozeConfirmation(tomorrow, null, "frizz", now.getTime()), {
+      text: "Snoozed until tomorrow at 9:00 AM",
+      detail: "Under frizz in the list",
+    })
+    // A snooze carrying a prompt is a scheduled bump: it is FOR a time, and it waits in the same place.
+    assert.deepEqual(formatSnoozeConfirmation(tomorrow, "Check CI", "frizz", now.getTime()), {
+      text: "Bump scheduled for tomorrow at 9:00 AM",
+      detail: "Under frizz in the list",
+    })
+    // No board yet names no place rather than a wrong one; an unreadable instant names no time.
+    assert.deepEqual(formatSnoozeConfirmation(tomorrow, null, undefined, now.getTime()), { text: "Snoozed until tomorrow at 9:00 AM", detail: undefined })
+    assert.deepEqual(formatSnoozeConfirmation("not-a-date", null, "frizz", now.getTime()), { text: "Snoozed", detail: "Under frizz in the list" })
   } finally {
     if (previousTz === undefined) delete process.env.TZ
     else process.env.TZ = previousTz

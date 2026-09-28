@@ -101,11 +101,11 @@ export interface RowScope {
 
 // One row of a band, whichever kind of thread it is. Terminal command threads share the bands with
 // agent threads (groups.ts sectionOf) but not the agent row's verbs, so they get their own row.
-export function RailRow({ t, active, open = false, onQueueNavigate, restedAge = false, scope }: { t: ThreadView; active: boolean; open?: boolean; onQueueNavigate?: (id: string) => void; restedAge?: boolean; scope?: RowScope }) {
-  if (t.kind === "command") return <CommandRow t={t} active={active} open={open} onQueueNavigate={onQueueNavigate} scope={scope} />
+export function RailRow({ t, active, open = false, onQueueNavigate, restedAge = false, scope, cardKey }: { t: ThreadView; active: boolean; open?: boolean; onQueueNavigate?: (id: string) => void; restedAge?: boolean; scope?: RowScope; cardKey?: string }) {
+  if (t.kind === "command") return <CommandRow t={t} active={active} open={open} onQueueNavigate={onQueueNavigate} scope={scope} cardKey={cardKey} />
   return (
     <>
-      <ThreadRow t={t} active={active} open={open} onQueueNavigate={onQueueNavigate} restedAge={restedAge} scope={scope} />
+      <ThreadRow t={t} active={active} open={open} onQueueNavigate={onQueueNavigate} restedAge={restedAge} scope={scope} cardKey={cardKey} />
       <SubAgentRows t={t} scope={scope} />
     </>
   )
@@ -116,7 +116,7 @@ export function RailRow({ t, active, open = false, onQueueNavigate, restedAge = 
 // with Running, finished it queues with a card (a click scrolls to it), and marked done it moves to
 // Done, where its check unchecks to reopen. None of an agent row's verbs: the drawer holds Stop /
 // Restart / Remove.
-const CommandRow = memo(function CommandRow({ t, active, open = false, onQueueNavigate, scope }: { t: ThreadView; active: boolean; open?: boolean; onQueueNavigate?: (id: string) => void; scope?: RowScope }) {
+const CommandRow = memo(function CommandRow({ t, active, open = false, onQueueNavigate, scope, cardKey }: { t: ThreadView; active: boolean; open?: boolean; onQueueNavigate?: (id: string) => void; scope?: RowScope; cardKey?: string }) {
   const command = t.command
   if (!command) return null
   const running = commandLive(command)
@@ -127,6 +127,7 @@ const CommandRow = memo(function CommandRow({ t, active, open = false, onQueueNa
       data-sidebar-item={t.id}
       data-command-row={command.state}
       data-sidebar-open={open || undefined}
+      data-xq-rail-row={cardKey}
       className={`group relative flex min-w-0 items-start rounded-md transition-[color,opacity] ${rowWashClass(open)} ${done ? "sidebar-row-dim" : ""}`}
     >
       <span aria-hidden="true" className="pointer-events-none absolute inset-y-0 left-0 w-5">
@@ -242,6 +243,7 @@ export const ThreadRow = memo(function ThreadRow({
   onQueueNavigate,
   restedAge = false,
   scope,
+  cardKey,
 }: {
   t: ThreadView
   legacy?: boolean
@@ -253,6 +255,9 @@ export const ThreadRow = memo(function ThreadRow({
   restedAge?: boolean
   /** Drawn off its own project's page (Everything's project list) — see RowScope. */
   scope?: RowScope
+  /** A Ready row's card on Everything (`threadKey`) — what the thread across the gutter ties it to
+   *  (ThreadConnector). */
+  cardKey?: string
 }) {
   const foreign = !legacy && t.foreign === true
   // Snoozed rows are uniformly grayed as a whole; provisional titles retain their local dim treatment.
@@ -305,6 +310,7 @@ export const ThreadRow = memo(function ThreadRow({
     <div
       data-sidebar-item={t.id}
       data-sidebar-open={open || undefined}
+      data-xq-rail-row={cardKey}
       className={`group relative flex min-w-0 items-start rounded-md transition-[color,opacity] ${rowWashClass(open)} ${legacy ? "opacity-80" : dim ? "sidebar-row-dim" : ""}`}
     >
       {/* The reading position owns a real, in-row rail rather than borrowing the status-icon column.

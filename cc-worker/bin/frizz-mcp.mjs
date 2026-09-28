@@ -597,12 +597,11 @@ const ASK = {
     "on your recommended option anyway, the call was yours: take it, say which way you went, and do not " +
     "ask at all.\n\n" +
     "AND WHEN YOU DO STOP, THE OPEN QUESTION IS YOUR SIGN-OFF — rest normally. Frizz draws every open " +
-    "question at the rest you stopped at whether you mention it or not, so nothing you write can hide " +
-    "one. The card draws itself at the tail of the rest the question was asked — never write the " +
-    "question into your handoff (one question, one card). TO PLACE IT INSIDE YOUR PROSE instead, write " +
-    "an EMPTY fence naming the id this tool returned — ```question qst_ab12cd34 on one line, ``` on " +
-    "the next — and the card renders there. One marker per question; nothing in the body; placement is " +
-    "optional, and every answer of the rest still sends together.\n\n" +
+    "question at the BOTTOM of your handoff, below its last line, whether you mention it or not — so " +
+    "nothing you write can hide one, and nothing you write comes after it. PUT EVERY WORD OF " +
+    "EXPLANATION BEFORE IT: what you found, what the choice turns on, what each answer would set in " +
+    "motion. Never write the question itself into your handoff (one question, one card). There is no " +
+    "placement marker: an empty ```question qst_… fence draws nothing.\n\n" +
     "SEVERAL AT ONCE IS ONE CALL. The card sends every answer as a unit, so a second `ask` for a second " +
     "question just makes the human send twice. Register them together.\n\n" +
     "The answer comes back to you as its own wake, restating what was asked. Withdraw one you no longer " +
@@ -738,9 +737,7 @@ const ACTIVITY = {
     "one of them, every QUESTION still owed an answer, and saved links/files with their lnk_ ids.\n\n" +
     "WHY YOU NEED IT: an ```awaiting fence names what you are waiting on BY ID, and frizz checks every " +
     "one against what is actually live. A name that matches nothing is not a park — you are bumped and " +
-    "your thread queues. The same goes for the ids `unwatch` and `unask` take, and for the id you put in " +
-    "an EMPTY ```question fence to PLACE a registered question in your handoff (a marker naming no open " +
-    "question of yours draws nothing). So if you have lost one (a " +
+    "your thread queues. The same goes for the ids `unwatch` and `unask` take. So if you have lost one (a " +
     "compaction, a long turn, a wake you did not expect), call this rather than guessing. Guessing is " +
     "the failure this tool exists to remove — and it is the only way to read your open questions " +
     "WITHOUT registering or withdrawing one.\n\n" +
@@ -851,10 +848,9 @@ async function activity() {
   const askedBlock = questions.length === 0 ? "" : (
     `\n\n${questions.length} question${questions.length === 1 ? "" : "s"} still owed an answer:\n\n` +
     questions.map((q) => `  question: ${q.id}\n    ${String(q?.spec?.question ?? "").replace(/\s+/g, " ").slice(0, 160)}`).join("\n") +
-    "\n\nEach one blocks `done` until it is answered or withdrawn, and draws its own card at the rest " +
-    "it was asked — never write it into a handoff; an EMPTY ```question fence naming its id places it " +
-    "inside your prose. `unask` the ones since decided. A question is never named in an ```awaiting " +
-    "fence."
+    "\n\nEach one blocks `done` until it is answered or withdrawn, and draws its own card at the BOTTOM " +
+    "of your handoff, below every word of it — never write it into a handoff, and put the explanation " +
+    "above it. `unask` the ones since decided. A question is never named in an ```awaiting fence."
   )
   if (!items.length) {
     if (questions.length > 0) {
@@ -1521,7 +1517,8 @@ async function ask(args) {
     `${head}\n${lines.join("\n")}\n\n` +
     "NOW REST. The human is not prompted until you do: while your turn runs the thread spins in the " +
     "Active band, not the queue, and the card waits unseen. Wrap up only what is quick and does not " +
-    "depend on the answer, then stop — the open question is your sign-off. If you are about to keep " +
+    "depend on the answer, then stop — the open question is your sign-off, and its card renders under " +
+    "your final message, so that message is where the explanation goes. If you are about to keep " +
     "going for long on your own best guess, `unask` it and decide instead. The answer arrives as its " +
     "own wake, restating what was asked.\n\n" +
     "WITHDRAW ONE THE MOMENT IT STOPS MATTERING (`unask`), above all if you work the answer out " +

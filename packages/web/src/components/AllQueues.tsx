@@ -51,6 +51,7 @@ import { SIDEBAR_COLUMN_CLASS } from "./Sidebar.tsx"
 import { BandLabel } from "./BandLabel.tsx"
 import { homeOf } from "./ProjectActions.tsx"
 import { StatusRow } from "./StatusRow.tsx"
+import { ThreadConnector } from "./ThreadConnector.tsx"
 import { DispatchForm } from "./NewThreadModal.tsx"
 import { Menu, MenuContent, MenuItem, MenuTrigger } from "./ui/Menu.tsx"
 import { ProjectFilter } from "./ProjectFilter.tsx"
@@ -222,6 +223,7 @@ export function AllQueuesPage() {
           </div>
         )}
       </main>
+      {!stacked && <ThreadConnector activeKey={activeKey} />}
     </div>
   )
 }

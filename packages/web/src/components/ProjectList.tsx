@@ -194,6 +194,9 @@ function ProjectGroup({
   const openSlug = onPage ? drawerThreadSlug(snap.drawers) : null
   const scope = useRowScope(project, onPage, onQueuedRow)
   const queryClient = useQueryClient()
+  // The threads with a card in the queue — a Ready row, or a pinned one that is Ready — which the thread
+  // across the gutter ties to that card (ThreadConnector).
+  const carded = new Set(project.queued.map((t) => t.id))
   const row = (restedAge: boolean) => (t: ThreadView) => (
     <RailRow
       key={t.id}
@@ -202,6 +205,7 @@ function ProjectGroup({
       open={openSlug === t.id}
       restedAge={restedAge}
       scope={scope}
+      cardKey={carded.has(t.id) ? threadKey(project.id, t.id) : undefined}
     />
   )
   return (
