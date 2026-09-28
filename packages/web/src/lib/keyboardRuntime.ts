@@ -195,7 +195,7 @@ function isTypingTarget(target: EventTarget | null): boolean {
 // A plain key is for the page, so anything layered over the page takes it away: the app's own
 // overlays by their store flags, and any open Radix dialog, menu or listbox by its DOM (a modal Radix
 // layer also pins `pointer-events: none` on the body, which is the catch-all). Thread drawers are
-// NOT in this list: they are the page you are reading, and `e` in one finishes its thread.
+// NOT in this list: they are the page you are reading, and `d` in one finishes its thread.
 function overlayOpen(): boolean {
   if (store.showPalette || store.showNewThread || store.showGithubPicker || store.showSettings || store.showShortcuts) return true
   if (typeof document === "undefined") return false
@@ -256,7 +256,7 @@ export function useShortcutListener(): void {
 
 const platform = detectPlatform()
 
-/** An action's current keys as one string ("⌘K", "Ctrl+K", "E"), or null when it has none. Follows a
+/** An action's current keys as one string ("⌘K", "Ctrl+K", "D"), or null when it has none. Follows a
  *  rebind live, so a tooltip never teaches a key that no longer does the thing. */
 export function useShortcutLabel(id: ActionId): string | null {
   const overrides = useSnapshot(prefs).keybindings
@@ -264,7 +264,7 @@ export function useShortcutLabel(id: ActionId): string | null {
   return chord ? formatChord(chord, platform) : null
 }
 
-/** "Mark as done (E)" — the control's own words, then its key. */
+/** "Mark as done (D)" — the control's own words, then its key. */
 export function withShortcut(label: string, keys: string | null): string {
   return keys ? `${label} (${keys})` : label
 }

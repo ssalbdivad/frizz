@@ -86,6 +86,9 @@ export function projectDraftScope(projectDir: string | undefined): string {
 }
 export const draftKey = {
   dispatch: (projectDir: string | undefined) => `dispatch:${projectDraftScope(projectDir)}:new`,
+  // The profile picked for that same prompt (useDraftDispatchPick): `{backend, model, effort}` as JSON,
+  // one small non-secret record, kept and cleared with the prompt it belongs to.
+  dispatchProfile: (projectDir: string | undefined) => `dispatch-profile:${projectDraftScope(projectDir)}:new`,
   // The prompt box's Terminal tab: the shell command about to be run, kept apart from the prompt draft.
   command: (projectDir: string | undefined) => `command:${projectDraftScope(projectDir)}:new`,
   // A finished command thread's next line (CommandFollowUp) — one per thread, shared by its drawer and queue card.

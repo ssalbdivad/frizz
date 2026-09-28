@@ -39,15 +39,35 @@ export function projectRepoIdentity(dir: string, name: string): { label: string;
 }
 
 export interface Project {
-  dir: string // repo root (git toplevel of the server's cwd)
+  dir: string // repo root (git toplevel of the server's cwd) — and always where the board's `.frizz/` lives
   id: string // stable checkout UUID; common config for main, private Git metadata for linked worktrees
   name: string // basename of dir, for display
   label: string // "owner/repo" from the git origin remote, else name (repos with no remote)
   githubRepo?: string // "owner/repo" ONLY when that origin remote is github.com — see projectRepoIdentity
   stateDir: string // ~/.frizz/projects/<id>/ — SQLite + server.lock live here
-  cwdSlug: string // ~/.claude/projects/<slug>/ session-log dir name
+  cwdSlug: string // ~/.claude/projects/<slug>/ session-log dir name — of workDirOf(project), not dir
   // Present for linked worktrees; ordinary/main worktrees use the repository-scoped identity.
   identityScope?: Extract<GitProjectIdentityScope, "worktree">
+  /**
+   * Where this project's AGENTS run, when that is not `dir`. Absent for every registered project,
+   * whose agents run in the checkout that also holds its board. Set only for the Home workspace
+   * (home-workspace.ts): its agents run in the operator's home folder, but its board cannot live in
+   * `~/.frizz` — that path is Frizz's own legacy data root — so `dir` is its state directory instead.
+   * Read it through workDirOf; a site that means "the board" keeps reading `dir`.
+   */
+  workDir?: string
+}
+
+/**
+ * Where this project's agents RUN: the cwd a worker is spawned and resumed in, the directory its
+ * transcripts are sharded by, and the base its relative paths resolve against. `dir` for every
+ * registered project; the Home workspace's folder for Home.
+ *
+ * The split exists so a site that is really asking "where is the board" (`.frizz/`, FRIZZ.md, the
+ * scratch directories) and one asking "where is the agent" can no longer be the same read of `dir`.
+ */
+export function workDirOf(project: Pick<Project, "dir" | "workDir">): string {
+  return project.workDir ?? project.dir
 }
 
 // The trusted read roots for serving/opening local files (the /local-image route + the openLocalFile
@@ -59,8 +79,10 @@ export interface Project {
 // frizz's disposable-stack scratch under /tmp/frizz-* — so `/tmp` (realpath-normalized by the caller's
 // isUnder check, e.g. → /private/tmp on macOS) covers every worker + subagent scratchpad without coupling
 // to Claude Code's internal path convention. Intentionally permissive within the temp/screenshot space.
-export function trustedLocalFileRoots(project: Pick<Project, "dir" | "stateDir">): string[] {
-  return [project.dir, tmpdir(), "/tmp", resolve(homedir(), "Screenshots"), join(project.stateDir, "attachments")]
+export function trustedLocalFileRoots(project: Pick<Project, "dir" | "stateDir" | "workDir">): string[] {
+  // The agents' own directory is trusted exactly as a checkout is: it is where they take screenshots.
+  const workDir = project.workDir && project.workDir !== project.dir ? [project.workDir] : []
+  return [project.dir, ...workDir, tmpdir(), "/tmp", resolve(homedir(), "Screenshots"), join(project.stateDir, "attachments")]
 }
 
 // The roots for the file-OPEN action (openLocalFile + the resolveLocalPaths classifier behind clickable
@@ -69,7 +91,7 @@ export function trustedLocalFileRoots(project: Pick<Project, "dir" | "stateDir">
 // opener (no bytes enter the page) and is still realpath-confined by the caller's isUnder check — never
 // the whole filesystem. homedir() subsumes ~/Screenshots and an in-home project/attachments dir; the temp
 // trees and an out-of-home checkout are kept explicit via the trusted set.
-export function openableFileRoots(project: Pick<Project, "dir" | "stateDir">): string[] {
+export function openableFileRoots(project: Pick<Project, "dir" | "stateDir" | "workDir">): string[] {
   return [homedir(), ...trustedLocalFileRoots(project)]
 }
 

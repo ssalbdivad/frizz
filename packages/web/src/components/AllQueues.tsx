@@ -36,7 +36,7 @@ import type { BoardSnapshot, ProjectQueue } from "@frizz/shared"
 import { rpc } from "../api/rpc.ts"
 import { isBusy, liveQueue, overlayQueues, projectMarkdownScope, queuesProjects, threadKey, type QueuesProject } from "../lib/allQueues.ts"
 import { innerPath, projectSlug } from "../lib/base-path.ts"
-import { nextPick, rememberCrossProjectFocus, setQueueFilter, useQueueFilter } from "../lib/crossProject.ts"
+import { rememberCrossProjectFocus, setQueueFilter, stepPick, useQueueFilter } from "../lib/crossProject.ts"
 import { draftKey, draftStore } from "../lib/drafts.ts"
 import { QUEUE_CARD_VIEWPORT_TOP, slugsInThreadDrawers, store } from "../store.ts"
 import { useBoard } from "../hooks.ts"
@@ -44,17 +44,17 @@ import { prefs } from "../lib/prefs.ts"
 import { PROMPT_CONTROL_TYPOGRAPHY_CLASS } from "../lib/promptControlTypography.ts"
 import { MarkdownScopeContext } from "../lib/useMarkdown.ts"
 import { registerQueueCursor } from "../lib/keyboardRuntime.ts"
-import { NEXT_PROJECT_CHORD, detectPlatform, formatChord, parseChord } from "../lib/keybindings.ts"
+import { PROJECT_STEP_CHORDS, detectPlatform, formatChord, parseChord } from "../lib/keybindings.ts"
 import { AllQueuesCard, useOpenThreadInPlace } from "./AllQueuesCard.tsx"
 import { CommandQueueCard } from "./CommandQueueCard.tsx"
 import { ProjectSquare } from "./ProjectRail.tsx"
 import { SIDEBAR_COLUMN_CLASS } from "./Sidebar.tsx"
 import { BandLabel } from "./BandLabel.tsx"
-import { homeOf } from "./ProjectActions.tsx"
+import { homeOf, shortPath } from "./ProjectActions.tsx"
 import { StatusRow } from "./StatusRow.tsx"
 import { ThreadConnector } from "./ThreadConnector.tsx"
 import { DispatchForm, type DispatchDirs } from "./NewThreadModal.tsx"
-import { Menu, MenuContent, MenuItem, MenuTrigger } from "./ui/Menu.tsx"
+import { Menu, MenuContent, MenuItem, MenuSeparator, MenuTrigger } from "./ui/Menu.tsx"
 import { ProjectFilter } from "./ProjectFilter.tsx"
 import { AddProjectRow, ProjectList } from "./ProjectList.tsx"
 import { ThreadProjectScope } from "../api/threadApi.tsx"
@@ -94,20 +94,22 @@ export function AllQueuesPage() {
   const projects = useMemo(() => overlayQueues(base, [live, departed], direction), [base, live, departed, direction])
   const focusProject = projects.find((project) => project.slug === focus)
   // The directories the prompt box is keyed by — and so the ones a choice of project carries its draft
-  // OUT of, which the store's board cannot say while a quick run of ⇧Tab is ahead of the feed.
+  // OUT of, which the store's board cannot say while a quick run of ⌥↓ is ahead of the feed.
   const dirs = composerDirs(focus, board, focusProject)
   const pickProject = usePickProject()
-  // Set by a choice of project — in the picker, or ⇧Tab in the box — so the prompt box it just re-aimed
+  // Set by a choice of project — in the picker, or ⌥↑/⌥↓ in the box — so the prompt box it just re-aimed
   // takes the keyboard when it lands, with the caret where it was in the box it replaced.
   const [focusComposerFor, setFocusComposerFor] = useState<{ slug: string; caret?: Caret } | null>(null)
   const clearFocusComposerFor = useCallback(() => setFocusComposerFor(null), [])
-  // ⇧TAB IN THE BOX — the next project (lib/crossProject.ts nextPick), without leaving the box: the draft
-  // goes with it as it does with a pick, and the caret stays put. Heard on the column head, below which
-  // both of the box's tabs sit; anywhere else, and with nowhere else to go, the key is the browser's.
+  // ⌥↓ / ⌥↑ IN THE BOX — the next or previous project (lib/crossProject.ts stepPick), without leaving the
+  // box: the draft goes with it as it does with a pick, and the caret stays put. Heard on the column head,
+  // below which both of the box's tabs sit; anywhere else, and with nowhere else to go, the key is the
+  // browser's.
   const onColumnKeyDown = (event: KeyboardEvent<HTMLDivElement>) => {
     const box = event.target
-    if (!isNextProjectKey(event) || !(box instanceof HTMLTextAreaElement) || !box.matches(NEW_THREAD_BOXES)) return
-    const next = nextPick(projects, focus)
+    const step = projectStep(event)
+    if (!step || !(box instanceof HTMLTextAreaElement) || !box.matches(NEW_THREAD_BOXES)) return
+    const next = stepPick(pickOrder(projects), focus, step)
     if (!next) return
     event.preventDefault()
     setFocusComposerFor({
@@ -289,22 +291,35 @@ function QueueFilter({ projects, hidden, current }: { projects: QueuesProject[];
  * WHICH PROJECT A NEW THREAD GOES TO — the first pill in the prompt box's bottom strip, beside the model
  * (NewThreadModal.tsx DispatchForm `target`), drawn as that pill is: a setting of the thread about to
  * start, not a view. Choosing one makes it the PICK (lib/crossProject.ts), which `/` is focused on and
- * the box dispatches into — remembered, never in the address. ⇧Tab in the box steps it to the next one
- * in this menu's order (AllQueuesPage), which its tooltip says wherever there is a next one.
+ * the box dispatches into — remembered, never in the address. ⌥↓ and ⌥↑ in the box step it down and up
+ * this menu (AllQueuesPage), which its tooltip says wherever there is another to step to.
  */
 function ProjectPicker({ projects, focus, onPick }: { projects: QueuesProject[]; focus: string | undefined; onPick: (project: QueuesProject) => void }) {
   const current = projects.find((project) => project.slug === focus)
   const name = current?.name ?? focus ?? "a project"
   // A project whose directory is gone cannot take a thread; it stays on the rail, saying why.
-  const choices = projects.filter((project) => !project.stale)
-  const cycles = nextPick(projects, focus) !== undefined
+  const choices = projects.filter((project) => !project.stale && !project.card?.home)
+  const steps = stepPick(pickOrder(projects), focus, 1) !== undefined
+  // The Home workspace, for the work that belongs to no project yet: last, under a rule, with the folder
+  // it runs in, because "Home" alone does not say that its agents start outside every project. Last is
+  // also where stepping from the box reaches it (pickOrder).
+  const homeChoice = projects.find((project) => !project.stale && project.card?.home)
+  const choice = (project: QueuesProject, hint?: string) => (
+    <MenuItem key={project.id} value={project.slug} onSelect={() => onPick(project)} icon={<ProjectSquare project={project.card ?? fallbackCard(project)} size={14} />}>
+      <span className={`min-w-0 flex-1 truncate ${project.slug === focus ? "text-fg" : ""}`}>{project.name}</span>
+      {hint && <span className="min-w-0 shrink truncate font-mono text-[10.5px] text-muted-55">{hint}</span>}
+      {/* Choosable — opening its board may be exactly what brings it up — but not a surprise. */}
+      {!project.open && <span className="shrink-0 text-[10.5px] text-muted-55">Not open</span>}
+      {project.slug === focus && <Check size={12} aria-label="Current" className="shrink-0 text-fg" />}
+    </MenuItem>
+  )
   return (
     <Menu>
       <MenuTrigger asChild>
         <button
           type="button"
           data-xq-project-picker
-          title={cycles ? `New threads start in ${name} (${NEXT_PROJECT_KEYS} for the next project)` : `New threads start in ${name}`}
+          title={steps ? `New threads start in ${name} (${PROJECT_STEP_KEYS})` : `New threads start in ${name}`}
           aria-label={`New threads start in ${name}. Choose a project`}
           // The model pill's own chrome and type (ProfileGridSelector's trigger), so the strip reads as one
           // row of settings for the next thread.
@@ -320,22 +335,26 @@ function ProjectPicker({ projects, focus, onPick }: { projects: QueuesProject[];
       <MenuContent align="start">
         <div className="px-2.5 pb-1 pt-1.5 text-[10.5px] font-medium text-muted-55">Start in</div>
         <div className="max-h-[min(60vh,420px)] overflow-y-auto">
-          {choices.map((project) => (
-            <MenuItem key={project.id} value={project.slug} onSelect={() => onPick(project)} icon={<ProjectSquare project={project.card ?? fallbackCard(project)} size={14} />}>
-              <span className={`min-w-0 flex-1 truncate ${project.slug === focus ? "text-fg" : ""}`}>{project.name}</span>
-              {/* Choosable — opening its board may be exactly what brings it up — but not a surprise. */}
-              {!project.open && <span className="shrink-0 text-[10.5px] text-muted-55">Not open</span>}
-              {project.slug === focus && <Check size={12} aria-label="Current" className="shrink-0 text-fg" />}
-            </MenuItem>
-          ))}
+          {choices.map((project) => choice(project))}
         </div>
+        {homeChoice && (
+          <>
+            {choices.length > 0 && <MenuSeparator />}
+            {/* Outside the scrolling list, so it never scrolls away — and inset by the scrollbar gutter that
+                list reserves (styles.css `scrollbar-gutter: stable`), or its hint ended 7px right of the
+                check marks above it. */}
+            <div className="pr-[var(--sbw)]">
+              {choice(homeChoice, homeChoice.card && shortPath(homeChoice.card.path, homeChoice.homeDir))}
+            </div>
+          </>
+        )}
       </MenuContent>
     </Menu>
   )
 }
 
 /**
- * CHOOSE the project a new thread goes to, in the prompt box's picker or with ⇧Tab in the box.
+ * CHOOSE the project a new thread goes to, in the prompt box's picker or with ⌥↑/⌥↓ in the box.
  * Remembered as the pick (lib/crossProject.ts), which `/` is focused on.
  *
  * What was typed in the prompt box goes WITH the choice. The box is one box whose target just changed,
@@ -400,7 +419,7 @@ function useDepartedQueue(live: ProjectQueue | undefined, polledAt: number): Pro
  * to another box when the board landed. The focus's own board says, once it lands; before that, the poll
  * says for any project this server has open — the same snapshot's directory (router.ts projectsQueues) —
  * so a box re-aimed at an open project is that project's box AT ONCE. It waited for the feed until
- * 2026-09-28, which blanked the box on every choice of project: harmless once from the menu, but ⇧Tab
+ * 2026-09-28, which blanked the box on every choice of project: harmless once from the menu, but ⌥↓
  * steps through projects, and a box that blinked out on each press dropped whatever was typed in the gap.
  * The stand-in holds the box's place for the rest — a project the poll has not seen open — so the column
  * does not jump, and says so if the board never comes, which is what a project this server cannot open
@@ -462,6 +481,14 @@ function FocusedComposer({
 }
 
 /**
+ * The picker's own order, which ⌥↓ and ⌥↑ in the box step through: every project in the list's order,
+ * then Home, which the menu draws last under its own rule.
+ */
+function pickOrder(projects: QueuesProject[]): QueuesProject[] {
+  return [...projects.filter((project) => !project.card?.home), ...projects.filter((project) => project.card?.home)]
+}
+
+/**
  * The directories the prompt box's drafts are keyed by: the focus's own board once it has landed, and
  * before that the poll's reading of the same snapshot (router.ts projectsQueues) for a project this
  * server has open. Undefined while neither knows, and the box waits (FocusedComposer).
@@ -475,10 +502,12 @@ function composerDirs(focus: string | undefined, board: BoardSnapshot | null, pr
 /** The new-thread box's two textareas — its Prompt tab and its Terminal tab. */
 const NEW_THREAD_BOXES = '[data-surface="newComposer"], [data-surface="commandComposer"]'
 
-const NEXT_PROJECT_KEYS = formatChord(parseChord(NEXT_PROJECT_CHORD)!, detectPlatform())
+const PROJECT_STEP_KEYS = [PROJECT_STEP_CHORDS.previous, PROJECT_STEP_CHORDS.next].map((chord) => formatChord(parseChord(chord)!, detectPlatform())).join("/")
 
-function isNextProjectKey(event: KeyboardEvent): boolean {
-  return event.key === "Tab" && event.shiftKey && !event.altKey && !event.ctrlKey && !event.metaKey && !event.nativeEvent.isComposing && !event.defaultPrevented
+/** ⌥↓ is a step down the picker, ⌥↑ one up (lib/keybindings.ts PROJECT_STEP_CHORDS); 0 for any other key. */
+function projectStep(event: KeyboardEvent): 1 | -1 | 0 {
+  if (!event.altKey || event.ctrlKey || event.metaKey || event.shiftKey || event.nativeEvent.isComposing || event.defaultPrevented) return 0
+  return event.key === "ArrowDown" ? 1 : event.key === "ArrowUp" ? -1 : 0
 }
 
 /** Where the caret sat in the box a choice of project replaced, and over which text. */

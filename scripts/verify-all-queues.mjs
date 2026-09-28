@@ -358,23 +358,27 @@ try {
     await page.waitForFunction(() => location.pathname === "/", { timeout: 8000 })
   })
 
-  // ⇧Tab in the prompt box steps it to the next project in the picker's order (lib/crossProject.ts
-  // nextPick): the draft goes with it, the caret stays put, and the box never blanks to its stand-in —
-  // it takes an open project's box at once (AllQueues.tsx FocusedComposer), so a key typed straight
-  // after the switch lands in the new box.
-  const shiftTab = async () => {
-    await page.keyboard.down("Shift")
-    await page.keyboard.press("Tab")
-    await page.keyboard.up("Shift")
+  // ⌥↓ / ⌥↑ in the prompt box step it down and up the picker's order (lib/crossProject.ts stepPick): the
+  // draft goes with it, the caret stays put, and the box never blanks to its stand-in — it takes an open
+  // project's box at once (AllQueues.tsx FocusedComposer), so a key typed straight after the switch lands
+  // in the new box.
+  const altKey = async (key) => {
+    await page.keyboard.down("Alt")
+    await page.keyboard.press(key)
+    await page.keyboard.up("Alt")
   }
+  const nextProject = () => altKey("ArrowDown")
+  const previousProject = () => altKey("ArrowUp")
   const composerReady = () =>
     page.waitForFunction(() => !document.querySelector("[data-xq-composer-pending]") && document.querySelector("[data-dispatch-form]"), { timeout: 10_000 })
-  // The picker's own menu, read once: its order is the order the key walks.
+  // The picker's own menu, read once: its order is the order the keys walk, minus what it marks "Not open"
+  // — the keys pass over a project with no box to show (lib/crossProject.ts stepPick). On this stack that
+  // includes Home: nothing primes it (adhoc-stack), where a real server opens it at boot.
   const pickerOrder = async () => {
     await page.click("[data-xq-project-picker]")
     await page.waitForSelector("[role=menuitem]", { timeout: 5000 })
     // By slug, which is also each project's name on this stack — what the picker shows.
-    const slugs = await page.$$eval("[role=menuitem]", (items) => items.map((item) => item.getAttribute("data-value") ?? ""))
+    const slugs = await page.$$eval("[role=menuitem]", (items) => items.filter((item) => !item.textContent?.includes("Not open")).map((item) => item.getAttribute("data-value") ?? ""))
     await page.keyboard.press("Escape")
     await page.waitForFunction(() => !document.querySelector("[role=menu]"), { timeout: 5000 })
     return slugs
@@ -384,7 +388,7 @@ try {
     return el ? { value: el.value, start: el.selectionStart, end: el.selectionEnd, focused: document.activeElement === el } : null
   }, surface)
 
-  await step("⇧Tab in the prompt box moves it to the next project, with the draft and the caret", async () => {
+  await step("⌥↓ / ⌥↑ in the prompt box move it between projects, with the draft and the caret", async () => {
     await pickerSays("acme-api")
     await composerReady()
     const order = await pickerOrder()
@@ -402,44 +406,53 @@ try {
       }).observe(document.body, { childList: true, subtree: true })
     })
 
-    await shiftTab()
+    await nextProject()
     const moved = await pickerSays(after(1))
     const first = await box("newComposer")
     check(
-      "⇧Tab moves the box to the next project in the picker's order, keeping the draft, the caret and the keyboard",
+      "⌥↓ moves the box to the next project in the picker's order, keeping the draft, the caret and the keyboard",
       moved && first?.value === draft && first.start === 5 && first.end === 5 && first.focused,
       `picker "${await picker()}" (expected "${after(1)}" of ${order.join(" → ")}), ${JSON.stringify(first)}`,
     )
 
     // A key typed straight after the press lands in the new box, at the caret.
-    await shiftTab()
+    await nextProject()
     await page.keyboard.type("X")
     await pickerSays(after(2))
     const typed = await box("newComposer")
     check(
-      "a key typed straight after ⇧Tab lands in the new project's box, at the caret",
+      "a key typed straight after ⌥↓ lands in the new project's box, at the caret",
       typed?.value === "DraftX that follows the key" && typed.start === 6 && typed.focused,
       `picker "${await picker()}", ${JSON.stringify(typed)}`,
     )
 
+    await previousProject()
+    const back = await pickerSays(after(1))
+    const above = await box("newComposer")
+    check(
+      "⌥↑ moves it back up to the previous project, the draft and the caret with it",
+      back && above?.value === "DraftX that follows the key" && above.start === 6 && above.focused,
+      `picker "${await picker()}" (expected "${after(1)}"), ${JSON.stringify(above)}`,
+    )
+
     // All the way round, as fast as the keys come, and back where it started.
-    for (let n = 2; n < order.length; n++) await shiftTab()
+    for (let n = 1; n < order.length; n++) await nextProject()
     const home = await pickerSays("acme-api")
     const round = await box("newComposer")
     const pending = await page.evaluate(() => window.__xqPending)
     // The draft is one draft, filed under the project the box ended on and nowhere else.
     const filed = await page.evaluate(() => Object.entries(JSON.parse(sessionStorage.getItem("frizz-drafts:v1") ?? "{}").entries ?? {}).filter(([, entry]) => entry.value.includes("that follows the key")).map(([key]) => decodeURIComponent(key)))
     check(
-      "⇧Tab wraps round to the first project, never blanking the box, with the draft filed only there",
+      "⌥↓ wraps round to the first project, never blanking the box, with the draft filed only there",
       home && round?.value === "DraftX that follows the key" && round.focused && pending === 0 && filed.length === 1 && filed[0].includes(`${stack.launcher.dir}:new`),
       `picker "${await picker()}", stand-in mounted ${pending}x, draft filed under ${filed.join(", ") || "nothing"}`,
     )
 
-    // Anywhere but the box the key is the browser's: on the picker pill it moves focus back, not the project.
-    await page.focus("[data-xq-project-picker]")
-    await shiftTab()
+    // Anywhere but the box the keys are the browser's.
+    await page.evaluate(() => (document.activeElement instanceof HTMLElement ? document.activeElement.blur() : undefined))
+    await nextProject()
     await sleep(600)
-    check("⇧Tab outside the box leaves the project alone", (await picker()) === "acme-api" && !(await page.evaluate(() => document.activeElement?.matches("[data-xq-project-picker]"))), `picker "${await picker()}"`)
+    check("⌥↓ outside the box leaves the project alone", (await picker()) === "acme-api", `picker "${await picker()}"`)
 
     // A choice from the menu hands the keyboard to the re-aimed box as well, the caret after the draft.
     await page.click("[data-xq-project-picker]")
@@ -456,38 +469,37 @@ try {
     await page.keyboard.press("a")
     await page.keyboard.up("Control")
     await page.keyboard.press("Backspace")
-    for (let n = 1; n < order.length; n++) await shiftTab()
+    await previousProject()
     await pickerSays("acme-api")
   })
 
-  await step("⇧Tab in the Terminal box starts the command in the project it moved to", async () => {
+  await step("⌥↓ in the Terminal box starts the command in the project it moved to", async () => {
     await composerReady()
     await page.click("[data-dispatch-tab=terminal]")
     await page.waitForSelector('[data-surface="commandComposer"]')
     await page.click('[data-surface="commandComposer"]')
-    await page.keyboard.type("echo cycled-with-shift-tab")
-    await shiftTab()
+    await page.keyboard.type("echo stepped-with-alt-down")
+    await nextProject()
     const target = await picker()
     const kept = await box("commandComposer")
     await page.keyboard.press("Enter")
     const started = await waitFor("the command thread", async () => {
       for (const slug of Object.keys(ids)) {
-        const found = (await api(slug).query("board")).threads.find((t) => t.command?.command === "echo cycled-with-shift-tab")
+        const found = (await api(slug).query("board")).threads.find((t) => t.command?.command === "echo stepped-with-alt-down")
         if (found) return { slug, id: found.id }
       }
       return null
     })
     check(
-      "⇧Tab in the Terminal box starts the command in the project it moved to",
-      target !== "acme-api" && kept?.focused === true && kept.value === "echo cycled-with-shift-tab" && started.slug === target,
+      "⌥↓ in the Terminal box starts the command in the project it moved to",
+      target !== "acme-api" && kept?.focused === true && kept.value === "echo stepped-with-alt-down" && started.slug === target,
       `moved to "${target}", ran in ${started.slug}/${started.id}`,
     )
-    // Its toast outlives this step otherwise, and the next one clicks the first "Open thread" it sees.
-    await page.waitForFunction(() => !document.querySelector("[data-toast]"), { timeout: 8000 }).catch(() => {})
-    await page.click("[data-dispatch-tab=prompt]")
-    await page.click("[data-xq-project-picker]")
-    await page.waitForSelector("[role=menuitem]", { timeout: 5000 })
-    await page.click('[role=menuitem][data-value="acme-api"]')
+    // Its toast stays mounted once it fades, "Open thread" and all (Toaster.tsx), and the next step clicks
+    // the first one it finds: that step starts on a fresh page instead, the box back on the launcher.
+    await page.goto(`${origin}/?focus=acme-api`, { waitUntil: "networkidle2" })
+    await page.evaluate(() => { document.documentElement.dataset.theme = "dark" })
+    await page.waitForSelector('[data-surface="newComposer"]', { timeout: 10_000 })
     await pickerSays("acme-api")
   })
 

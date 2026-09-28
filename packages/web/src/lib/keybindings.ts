@@ -3,28 +3,42 @@
 // runtime that acts on a match lives in keyboardRuntime.ts, the sheet that rebinds them in
 // components/KeyboardShortcuts.tsx, and the operator's overrides in prefs.ts.
 //
-// THE DEFAULTS BORROW FROM THE INBOXES FRIZZ'S QUEUE ALREADY IS. A queue of rested threads is triaged
-// exactly the way a keyboard-first inbox is — read the top card, answer it, finish it or put it off,
-// go to the next — so the letters are the ones those tools have already taught:
+// A LETTER IS ITS ACTION'S INITIAL: `r` reply, `d` mark as done, `s` snooze, `f` fullscreen, `t` new
+// terminal thread. One rule is worth more than any single well-chosen key, because it predicts the
+// keys nobody has looked up yet, including ones added later (maintainer 2026-09-28: "establish the
+// convention in general that each action is associated with its first letter"). Until then Done and
+// Snooze were `e` and `h`, borrowed from keyboard-first inboxes: `e` is Gmail's archive and
+// Superhuman's and GitHub notifications' Done, `h` is Superhuman's and Linear's snooze. Those help only
+// the few who arrive with those tools in their fingers (Gmail ships its shortcuts switched off, and
+// its own snooze is `b`), and neither letter says what it does.
 //
-//   j / k   next / previous        Gmail, Superhuman, Linear, GitHub lists, vim
-//   e       mark as done           Superhuman's Done, Gmail's archive, GitHub notifications' Done
-//   h       snooze                 Superhuman's "remind me", Linear inbox's snooze — the same two tools
-//                                  that pair it with E, which is exactly frizz's Done + Snooze footer
-//   r       reply                  Gmail, Superhuman — here it puts the caret in the card's prompt box
-//   c       new thread             Gmail's compose, Linear's create, Jira's create
-//   t       new terminal thread    the prompt box's other tab, by its own initial
-//   f       fullscreen             every video player on the web
-//   ?       this sheet             Gmail, GitHub, Linear, X, YouTube
-//   ⌘K      command palette        Linear, Slack, GitHub, Vercel, Raycast (it was already here)
+// Three keys break the rule, each for a reason the rule cannot beat:
+//
+//   j / k   next / previous        MOVEMENT is placed by position, not by name, like arrows, WASD and
+//                                  vi's hjkl: it is pressed fast and by feel, so the pair sits side by
+//                                  side under one hand, where the initials n and p are a row apart. It
+//                                  is also the most shared single-key pair on the web (Gmail, Linear,
+//                                  Superhuman, vim), and ↑/↓ are taken: they scroll the card.
+//   c       new thread             Gmail's compose, and create in GitHub, Linear and Jira: kept over
+//                                  `n` by the maintainer's call
+//   ?       this sheet             a symbol, not a letter: Gmail, GitHub, Linear, X, YouTube
+//
+// ⌘/Ctrl CHORDS CANNOT FOLLOW IT. The browser owns ⌘ plus most initials (⌘D bookmarks, ⌘S saves, ⌘J
+// opens downloads: BROWSER_CHORDS below), so a chord keeps its platform's convention instead:
+//
+//   ⌘K      jump to a thread       Linear, Slack, GitHub, Vercel, Raycast (it was already here)
 //   ⌘,      settings               every native macOS app, VS Code, Slack
-//   ⌘I      thread details         already here; kept so it is listed and rebindable
+//   ⌘I      thread details         Finder's Get Info; already here, kept so it is listed and rebindable
 //
-// NOT ⌘N for new thread: it is the browser's new-window chord (App.tsx has the long version), and
-// snooze is not S because the two tools this row is copied from both spend H on it.
+// NOT ⌘N for new thread: it is the browser's new-window chord (App.tsx has the long version).
+//
+// A NEW ACTION TAKES ITS INITIAL. When two want one letter, the rarer of the two, or the one that undoes
+// the other (the way Superhuman's ⇧E marks not done), takes Shift and that letter, so the letter still
+// guesses right. keybindings.test.ts fails any single-letter default that is not an initial of its
+// label unless it is listed there as one of the exceptions above.
 //
 // SINGLE KEYS NEVER FIRE WHILE YOU TYPE. A binding with no ⌘/Ctrl is a "plain" key: it is ignored in
-// any text field and while a dialog or menu is up, so `e` in a prompt box is the letter e. A ⌘/Ctrl
+// any text field and while a dialog or menu is up, so `d` in a prompt box is the letter d. A ⌘/Ctrl
 // chord fires from anywhere, the way ⌘K always has.
 
 export type ActionId =
@@ -49,7 +63,7 @@ export interface ActionDef {
   group: ActionGroup
   /** Serialized chord (see serializeChord) — the out-of-the-box binding. */
   defaultChord: string
-  /** Holding the key down repeats it. Only navigation: a held `e` must not finish five threads. */
+  /** Holding the key down repeats it. Only navigation: a held `d` must not finish five threads. */
   repeat?: boolean
 }
 
@@ -58,8 +72,8 @@ export const ACTIONS: readonly ActionDef[] = [
   { id: "queue.next", label: "Next card", group: "queue", defaultChord: "j", repeat: true },
   { id: "queue.prev", label: "Previous card", group: "queue", defaultChord: "k", repeat: true },
   { id: "thread.reply", label: "Reply", group: "queue", defaultChord: "r" },
-  { id: "thread.done", label: "Mark as done", group: "queue", defaultChord: "e" },
-  { id: "thread.snooze", label: "Snooze", group: "queue", defaultChord: "h" },
+  { id: "thread.done", label: "Mark as done", group: "queue", defaultChord: "d" },
+  { id: "thread.snooze", label: "Snooze", group: "queue", defaultChord: "s" },
   { id: "thread.fullscreen", label: "Fullscreen", group: "queue", defaultChord: "f" },
   { id: "app.newThread", label: "New thread", group: "anywhere", defaultChord: "c" },
   { id: "app.newTerminal", label: "New terminal thread", group: "anywhere", defaultChord: "t" },
@@ -75,12 +89,16 @@ export const GROUP_LABELS: Record<ActionGroup, string> = {
 }
 
 /**
- * The next project for the thread about to start, from inside Everything's new-thread box
- * (AllQueues.tsx). Claude Code's own key for cycling a setting of the prompt being written — its
- * permission mode — which the operators of this app already have in their fingers. Not rebindable: a
- * binding with no ⌘/Ctrl never fires in a text box (see above), and Tab is not bindable at all.
+ * The project the thread about to start goes to, stepped from inside the page's new-thread box, whose
+ * project is a choice (AllQueues.tsx): Option/Alt with ↓ for the next one in its picker, ↑ for the one
+ * before. Slack's and Discord's key for switching the conversation you are typing into, and bound by no
+ * browser on any platform — Alt-←/→ are Back and Forward, Ctrl-Tab and ⌘⇧[/] switch tabs, and ⇧Tab
+ * (the first choice, 2026-09-28) steps focus back through the page (maintainer: "conflicts with the
+ * common shortcut for cycling tabs on browser"). What it displaces is macOS's own ⌥↑/⌥↓ inside that one
+ * box, which moves the caret a paragraph. Not rebindable: a binding with no ⌘/Ctrl never fires in a
+ * text box (see above).
  */
-export const NEXT_PROJECT_CHORD = "shift+tab"
+export const PROJECT_STEP_CHORDS = { next: "alt+arrowdown", previous: "alt+arrowup" } as const
 
 // The keys the prompt boxes own. Listed on the sheet so it is the whole keyboard in one place, but not
 // rebindable: composerKeyboard.ts is the contract for the first group, every box in the app shares it,
@@ -100,7 +118,8 @@ export const FIXED_SHORTCUTS: readonly { heading: string; keys: readonly { label
     keys: [
       { label: "Switch to Terminal, typed first", chord: "!" },
       { label: "Back to Prompt, in an empty box", chord: "backspace" },
-      { label: "Start in the next project, on Everything", chord: NEXT_PROJECT_CHORD },
+      { label: "Start in the next project", chord: PROJECT_STEP_CHORDS.next },
+      { label: "Start in the previous project", chord: PROJECT_STEP_CHORDS.previous },
     ],
   },
 ]

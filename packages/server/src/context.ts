@@ -10,7 +10,8 @@ import {
   acpModelIdFromModel,
 } from "@frizz/shared"
 import { Bus, Emitter } from "./bus.ts"
-import { resolveProject, permRequestDir, type Project } from "./project.ts"
+import { resolveProject, permRequestDir, workDirOf, type Project } from "./project.ts"
+import { homeWorkspaceFolder, isHomeWorkspace } from "./home-workspace.ts"
 import { createStorage, isBrokerClaudeRow, isHeadlessRow, type Storage } from "./storage.ts"
 import type Database from "./sqlite.ts"
 import { getSettings, setSettings, resetSettings } from "./settings.ts"
@@ -22,7 +23,7 @@ import { createBoard, type BoardManager } from "./board.ts"
 import { createPeriodicRetitler } from "./periodic-retitle.ts"
 import { readTranscript } from "./transcript.ts"
 import { createTailer, defaultLogDir, type Tailer } from "./tailer.ts"
-import { createDispatcher, loadWorkerPrompt, scratchpadOrientation, frizzConfigBlock, claudeMcpConfig, resolveFrizzMcp, workerPluginDir, coldResumePermission, type Dispatcher, type FrizzMcpTarget } from "./dispatch.ts"
+import { createDispatcher, loadWorkerPrompt, scratchpadOrientation, frizzConfigBlock, claudeMcpConfig, resolveFrizzMcp, workerPluginDir, coldResumePermission, workerScratchPath, type Dispatcher, type FrizzMcpTarget } from "./dispatch.ts"
 import { createScheduler, type Scheduler, probeIssueReadable, probePrReadable, type PrRef, type PrProbe } from "./scheduler.ts"
 import {
 resumeThread,
@@ -214,6 +215,13 @@ export interface AppContext {
     options?: { stopWorkers?: boolean; deleteState?: boolean },
   ) => Promise<{ closed: boolean; stoppedWorkers: number }>
   /**
+   * Reopen the Home workspace where Settings → Home folder now points, if it is open — called when a
+   * settings write moves that folder. Without it Home kept its old folder until a request happened to
+   * name it (index.ts routeToTenant), so a timer or a watcher firing first resumed its thread in the
+   * folder the operator had just moved away from. Supplied by the server, which owns the tenant map.
+   */
+  reopenHomeWorkspace?: () => Promise<void>
+  /**
    * The project this server was LAUNCHED from, which is the one project it cannot let go of.
    *
    * Its `<stateDir>/server.lock` is the only status file this process publishes, and every worker on
@@ -269,6 +277,8 @@ export interface ContextOptions {
   teardownProject?: AppContext["teardownProject"]
   /** See AppContext.launchProjectId — supplied by the server, which knows which project launched it. */
   launchProjectId?: string
+  /** See AppContext.reopenHomeWorkspace — supplied by the server, which owns the tenant map. */
+  reopenHomeWorkspace?: AppContext["reopenHomeWorkspace"]
   /** Internal deterministic construction/rollback seam. */
   startup?: {
     afterPhase?: (phase: ContextStartupPhase) => void
@@ -311,6 +321,9 @@ export function reconcileSessions(storage: Storage) {
 // absent gh just leaves the feature off. Called from startServer without blocking the listen — the
 // githubStatus handler live-detects during the brief pre-cache window.
 export async function initGithub(ctx: AppContext): Promise<void> {
+  // The Home workspace has no repository, not even when the home folder is a checkout (router.ts
+  // resolveRepo says why). Leaving ctx.github unset is what every surface already reads as "not a repo".
+  if (isHomeWorkspace(ctx.project.id)) return
   ctx.github = await detectGithub(ctx.project.dir)
 }
 
@@ -426,6 +439,11 @@ export function deliverClaudeBrokerWake(deps: {
   bridge: Pick<ClaudeAgentBrokerBridge, "followUp">
   slug: string
   cwd: string
+  /**
+   * Where the board lives when it is not `cwd` — the Home workspace (home-workspace.ts), whose FRIZZ.md
+   * and scratch directories are in its state directory while its agents run in the home folder.
+   */
+  boardDir?: string
   row: { session_id: string; model?: string | null; effort?: string | null; permission_mode?: string | null }
   /** The operator's Settings, for the floor a row with NO persisted mode cold-resumes at (coldResumePermission). */
   settings: Pick<Settings, "permissionMode">
@@ -434,10 +452,11 @@ export function deliverClaudeBrokerWake(deps: {
   freshProcess?: boolean
 }): Promise<void> {
   const { bridge, slug, cwd, row, settings, deliveryMessage, freshProcess } = deps
+  const board = { dir: deps.boardDir ?? cwd, workDir: cwd }
   const appendSystemPrompt = [
     loadWorkerPrompt("claude"),
-    scratchpadOrientation(row.session_id, "claude"),
-    frizzConfigBlock(cwd),
+    scratchpadOrientation(row.session_id, "claude", workerScratchPath(board, row.session_id)),
+    frizzConfigBlock(board.dir),
   ].filter(Boolean).join("\n\n")
   return bridge.followUp({
     threadSlug: slug,
@@ -667,7 +686,8 @@ function createContextUnchecked(opts: ContextOptions, resources: PartialContextR
   const codexAppServer = codexAppServerBridgeEnabled()
     ? createCodexAppServerBridge({
         projectId: project.id,
-        projectDir: project.dir,
+        // The cwd of every codex thread and of the daemon: where this project's agents run.
+        projectDir: workDirOf(project),
         // The detached app-server daemon's socket + record live under the project state dir, so a
         // later frizz generation can find the app-server this one left running.
         stateDir: project.stateDir,
@@ -745,7 +765,7 @@ function createContextUnchecked(opts: ContextOptions, resources: PartialContextR
   void acpBridge.warmUp(
     storage.allSessions()
       .filter((row) => row.backend === "acp" && row.state !== "archived" && row.archived !== 1)
-      .map((row) => ({ threadSlug: row.slug, sessionId: row.session_id, cwd: project.dir, agentId: row.acp_agent ?? "", modelId: acpModelIdFromModel(row.model), acpSessionId: row.agent_session_id })),
+      .map((row) => ({ threadSlug: row.slug, sessionId: row.session_id, cwd: workDirOf(project), agentId: row.acp_agent ?? "", modelId: acpModelIdFromModel(row.model), acpSessionId: row.agent_session_id })),
   )
 
   // The consumer for the broker's structured event stream. Until this existed the bridge forwarded
@@ -793,6 +813,9 @@ function createContextUnchecked(opts: ContextOptions, resources: PartialContextR
           pluginDir: workerPluginDir(),
           ...claudeMcpConfig(resolveFrizzMcp(frizzMcpTarget)),
           permDir: permRequestDir(project),
+          // Only where the board is NOT the worker's cwd (the Home workspace): the cc-worker hooks write
+          // the scratch directory and session state under it instead of under their cwd.
+          ...(workDirOf(project) !== project.dir ? { boardRoot: project.dir } : {}),
         },
         // Read at every fork, not captured once: the compaction window is a Settings value the drawer
         // can change while the server runs, and the next dispatch or cold resume should carry it.
@@ -804,7 +827,7 @@ function createContextUnchecked(opts: ContextOptions, resources: PartialContextR
         ownedSessions: () =>
           storage.allSessions()
             .filter((row) => isBrokerClaudeRow(row) && row.state !== "archived" && row.archived !== 1)
-            .map((row) => ({ threadSlug: row.slug, sessionId: row.session_id, cwd: project.dir })),
+            .map((row) => ({ threadSlug: row.slug, sessionId: row.session_id, cwd: workDirOf(project) })),
         // The server log is the right surface for the two diagnostics worth a line — a daemon that died
         // (invisible to the live relay, so the bridge synthesizes it from the dead daemon's own exit
         // record) and an input the daemon threw away. It is what an operator, and the next agent
@@ -908,7 +931,7 @@ function createContextUnchecked(opts: ContextOptions, resources: PartialContextR
   // board lists its rows; every run state change is an overlay refresh. A refresh after the board has
   // stopped (a run exiting during shutdown) is a no-op, not an error.
   const commandRunner = createCommandRunner({
-    cwd: project.dir,
+    cwd: workDirOf(project),
     storage,
     onChange: () => {
       try {
@@ -933,7 +956,7 @@ function createContextUnchecked(opts: ContextOptions, resources: PartialContextR
   // disposable test stack never spawns the runtime on its own.
   contextUnsubscribers.push(onClaudeModelsResolved(() => board.refresh()))
   if (process.env.FRIZZ_WAKERS_OFF !== "1") {
-    void readClaudeModels({ claudeBin: opts.claudeBin, cwd: project.dir, log: (message) => frizzLog.warn("server", message) })
+    void readClaudeModels({ claudeBin: opts.claudeBin, cwd: workDirOf(project), log: (message) => frizzLog.warn("server", message) })
   }
   opts.startup?.afterPhase?.("board watcher")
   const dispatcher = createDispatcher({
@@ -956,7 +979,7 @@ function createContextUnchecked(opts: ContextOptions, resources: PartialContextR
     preflightAuth: (kind) =>
       kind === "codex"
         ? Promise.resolve(readCodexAuthState())
-        : readClaudePreflightAuth({ claudeBin: opts.claudeBin, cwd: project.dir }),
+        : readClaudePreflightAuth({ claudeBin: opts.claudeBin, cwd: workDirOf(project) }),
     preflightCodexBinary: () => readCodexBinaryState(opts.codexBin ?? "codex"),
   })
 
@@ -992,14 +1015,14 @@ function createContextUnchecked(opts: ContextOptions, resources: PartialContextR
           process.stderr.write(`[frizz] codex wake for ${slug} dropped: the app-server bridge is unavailable\n`)
           return
         }
-        return deliverCodexWake({ bridge, storage, cwd: project.dir, row, slug, deliveryMessage, deliveryId })
+        return deliverCodexWake({ bridge, storage, cwd: workDirOf(project), row, slug, deliveryMessage, deliveryId })
       }
       // ACP wake: the same call the followUp RPC makes — the bridge re-opens the session if the child
       // is gone and queues behind a running turn. A fresh session id (the agent could not load the old
       // one) is re-pinned so the next resume asks for the right one.
       if (row?.backend === "acp") {
         return acpBridge.followUp({
-          threadSlug: slug, sessionId: row.session_id, cwd: project.dir,
+          threadSlug: slug, sessionId: row.session_id, cwd: workDirOf(project),
           agentId: row.acp_agent ?? "", modelId: acpModelIdFromModel(row.model), acpSessionId: row.agent_session_id, text: deliveryMessage, deliveryId,
         }).then((r) => {
           if (r.acpSessionId !== row.agent_session_id) storage.setAgentSession(slug, r.acpSessionId)
@@ -1024,7 +1047,8 @@ function createContextUnchecked(opts: ContextOptions, resources: PartialContextR
         return deliverClaudeBrokerWake({
           bridge: claudeBroker,
           slug,
-          cwd: project.dir,
+          cwd: workDirOf(project),
+          boardDir: project.dir,
           row,
           settings: getSettings(storage, home),
           deliveryMessage,
@@ -1093,6 +1117,15 @@ function createContextUnchecked(opts: ContextOptions, resources: PartialContextR
   }
   opts.startup?.afterPhase?.("thread hibernation")
 
+  // A settings write that moves Settings → Home folder reopens the Home workspace there. Deferred a tick
+  // because the write may be a request Home's own context is serving, and reopening closes that context.
+  const movingHomeFolder = <T>(write: () => T): T => {
+    const before = homeWorkspaceFolder(home)
+    const result = write()
+    if (homeWorkspaceFolder(home) !== before) setTimeout(() => void opts.reopenHomeWorkspace?.(), 0)
+    return result
+  }
+
   return {
     bootId,
     project,
@@ -1112,13 +1145,14 @@ function createContextUnchecked(opts: ContextOptions, resources: PartialContextR
     stopSubscriptions,
     backendFor,
     getSettings: () => getSettings(storage, home),
-    setSettings: (s) => setSettings(storage, s, home),
-    resetSettings: () => resetSettings(storage, home),
+    setSettings: (s) => movingHomeFolder(() => setSettings(storage, s, home)),
+    resetSettings: () => movingHomeFolder(() => resetSettings(storage, home)),
     getDispatchPreferences: (codexModels) => getDispatchPreferences(storage, getSettings(storage, home), home, codexModels),
     setDispatchPreference: (update, codexModels) =>
       setDispatchPreference(storage, getSettings(storage, home), home, update, codexModels),
     activeTenants: opts.activeTenants,
     teardownProject: opts.teardownProject,
+    reopenHomeWorkspace: opts.reopenHomeWorkspace,
     launchProjectId: opts.launchProjectId,
     claudeBin: opts.claudeBin,
     codexBin: opts.codexBin,
