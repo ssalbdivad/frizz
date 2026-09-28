@@ -1,7 +1,7 @@
-import { test } from "node:test"
+import { after, test } from "node:test"
 import assert from "node:assert/strict"
-import { execFileSync } from "node:child_process"
-import { mkdirSync, mkdtempSync, writeFileSync, readFileSync, utimesSync } from "node:fs"
+import { execFileSync, execSync } from "node:child_process"
+import { existsSync, mkdirSync, mkdtempSync, writeFileSync, readFileSync, rmSync, utimesSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join, dirname } from "node:path"
 import { fileURLToPath } from "node:url"
@@ -452,4 +452,126 @@ test("the codex hook config is built unconditionally, and carries what codex req
     }
   }
   assert.match(cfg.hooks?.SubagentStart?.[0]?.hooks[0]?.command ?? "", /--mode=subagent-start/)
+})
+
+// ---- a board that is NOT the worker's cwd: the Home workspace (server/home-workspace.ts) ----
+// A Home worker runs in the operator's home folder, but its board lives in Frizz's state directory:
+// `~/.frizz` is Frizz's legacy data root, and creating it switches an install onto it at the next boot.
+// Frizz names the board root with FRIZZ_BOARD_ROOT (Claude) or `--board-root` (codex's shared
+// app-server, which carries no per-thread env). The cwd below gets its OWN `.frizz/` so that a hook
+// ignoring the board root would succeed there — and fail these tests — rather than error out.
+
+const HOME_SID = "11111111-2222-4333-8444-555555555555"
+
+const homeTemps: string[] = []
+after(() => {
+  for (const dir of homeTemps) rmSync(dir, { recursive: true, force: true })
+})
+
+function temp(prefix: string): string {
+  const dir = mkdtempSync(join(tmpdir(), prefix))
+  homeTemps.push(dir)
+  return dir
+}
+
+function homeBoard(): { cwd: string; board: string } {
+  const cwd = temp("scratchpad-home-cwd-")
+  mkdirSync(join(cwd, ".frizz"))
+  return { cwd, board: temp("scratchpad-home-board-") }
+}
+
+function runHookIn(
+  script: string,
+  cwd: string,
+  args: string[],
+  event: Record<string, unknown>,
+  env: Record<string, string>,
+): string {
+  return execFileSync(process.execPath, [join(here, "../../../cc-worker/hooks", script), ...args], {
+    cwd,
+    input: JSON.stringify(event),
+    encoding: "utf8",
+    // No `gh` on PATH, so session-seed's auth probe fails fast instead of shelling out.
+    env: { ...process.env, PATH: dirname(process.execPath), CLAUDE_PROJECT_DIR: cwd, FRIZZ_THREAD: "", FRIZZ_SCRATCHPAD_HOOK: "", ...env },
+  })
+}
+
+for (const [how, args, env] of [
+  ["FRIZZ_BOARD_ROOT", [] as string[], (board: string) => ({ FRIZZ_BOARD_ROOT: board })],
+  ["--board-root", ["--board-root=BOARD"], () => ({})],
+] as const) {
+  test(`scratchpad.mjs: ${how} puts the directory under the board, and names it by its ABSOLUTE path`, () => {
+    const { cwd, board } = homeBoard()
+    const argv = [...args.map((arg) => arg.replace("BOARD", board)), "--mode=session-start"]
+    const ctx = additionalContext(runHookIn("scratchpad.mjs", cwd, argv, { session_id: HOME_SID, source: "startup" }, env(board)))
+    const threadDir = join(board, ".frizz", "threads", HOME_SID)
+    assert.ok(existsSync(threadDir), "created under the board root")
+    assert.equal(existsSync(join(cwd, ".frizz", "threads")), false, "never under the worker's cwd")
+    // Relative, it would resolve against the cwd — the home folder — which is exactly the wrong place.
+    assert.ok(ctx.includes("`" + threadDir + "/`"), ctx)
+    assert.doesNotMatch(ctx, /`\.frizz\/threads\//)
+  })
+}
+
+test("scratchpad.mjs: the codex child epilogue names the absolute directory too", () => {
+  const { cwd, board } = homeBoard()
+  const out = runHookIn("scratchpad.mjs", cwd, [`--session=${HOME_SID}`, `--board-root=${board}`, "--mode=subagent-start"], { session_id: "codex-own", agent_id: "child-1" }, {})
+  assert.ok(out.includes(join(board, ".frizz", "threads", HOME_SID) + "/"), out)
+  assert.equal(existsSync(join(cwd, ".frizz", "threads")), false)
+})
+
+// The command string is run by a SHELL, so this runs it through one: the JSON-quoted flag has to
+// arrive as one argv entry even with a space in the path.
+test("the codex hook command carries --board-root, and the hook honors it through a shell", () => {
+  const plain = codexScratchpadHookConfig("/p/scratchpad.mjs", "sid-1") as { hooks: Record<string, { hooks: { command: string }[] }[]> }
+  for (const entries of Object.values(plain.hooks)) assert.doesNotMatch(entries[0].hooks[0].command, /--board-root/)
+
+  const { cwd } = homeBoard()
+  const board = temp("scratchpad home board ")
+  const cfg = codexScratchpadHookConfig(HOOK, HOME_SID, board) as { hooks: Record<string, { hooks: { command: string }[] }[]> }
+  for (const [event, entries] of Object.entries(cfg.hooks)) {
+    const cmd = entries[0].hooks[0].command
+    if (event === "PreToolUse") assert.doesNotMatch(cmd, /--board-root/, "the bash guard has no board")
+    else assert.ok(cmd.includes(` --board-root=${JSON.stringify(board)} `), cmd)
+  }
+  const start = cfg.hooks.SessionStart[0].hooks[0].command
+  const ctx = additionalContext(
+    execSync(start, {
+      cwd,
+      input: JSON.stringify({ session_id: "019fb427-93aa-7ab0-91af-436173f99bc4", source: "startup" }),
+      encoding: "utf8",
+      env: { ...process.env, PATH: `${dirname(process.execPath)}:${process.env.PATH ?? ""}`, CLAUDE_PROJECT_DIR: "", FRIZZ_THREAD: "", FRIZZ_SCRATCHPAD_HOOK: "", FRIZZ_BOARD_ROOT: "" },
+    }),
+  )
+  const threadDir = join(board, ".frizz", "threads", HOME_SID)
+  assert.ok(existsSync(threadDir))
+  assert.ok(ctx.includes(threadDir + "/"), ctx)
+  assert.equal(existsSync(join(cwd, ".frizz", "threads")), false)
+})
+
+test("session-seed.mjs: FRIZZ_BOARD_ROOT keeps the sentinel on the board and names the absolute path", () => {
+  const { cwd, board } = homeBoard()
+  const out = runHookIn("session-seed.mjs", cwd, [], { session_id: HOME_SID, source: "startup" }, { FRIZZ_THREAD: "t", FRIZZ_BOARD_ROOT: board })
+  const ctx = additionalContext(out)
+  assert.ok(existsSync(join(board, ".frizz", ".session-state", HOME_SID)), "the per-session sentinel lands on the board")
+  assert.equal(existsSync(join(cwd, ".frizz", ".session-state")), false)
+  assert.ok(ctx.includes("`" + join(board, ".frizz", "threads", HOME_SID) + "/`"), ctx)
+  // …and without it, a registered project's worker is told the relative path exactly as before.
+  const plain = additionalContext(runHookIn("session-seed.mjs", cwd, [], { session_id: HOME_SID, source: "startup" }, { FRIZZ_THREAD: "t" }))
+  assert.ok(plain.includes("`.frizz/threads/" + HOME_SID + "/`"), plain)
+})
+
+test("agent-bind.mjs: FRIZZ_BOARD_ROOT records the helper binding on the board, not in the cwd", () => {
+  const { cwd, board } = homeBoard()
+  mkdirSync(join(board, ".frizz"))
+  const event = {
+    session_id: HOME_SID,
+    tool_input: { prompt: "THREAD: clone-repo\nDo the thing.", description: "helper" },
+    tool_response: { agentId: "agent-1" },
+  }
+  runHookIn("agent-bind.mjs", cwd, [], event, { FRIZZ_THREAD: "t", FRIZZ_BOARD_ROOT: board })
+  const record = JSON.parse(readFileSync(join(board, ".frizz", ".agent-bindings.jsonl"), "utf8").trim())
+  assert.equal(record.agent_id, "agent-1")
+  assert.equal(record.thread, "clone-repo")
+  assert.equal(existsSync(join(cwd, ".frizz", ".agent-bindings.jsonl")), false)
 })

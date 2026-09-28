@@ -59,20 +59,21 @@ export function useCrossProjectPick(): string | null {
 }
 
 /**
- * Where ⇧Tab in the prompt box sends the next thread: the project after the focus in the picker's own
- * list (AllQueues.tsx ProjectPicker — every project whose directory still exists, in the rail's order),
- * wrapping at the end. Claude Code cycles a setting of the prompt about to be sent on the same key, and
- * the project is exactly that here.
+ * Where ⌥↓ (`step` 1) or ⌥↑ (-1) in the prompt box sends the next thread: the project below or above the
+ * focus in the picker's own list (AllQueues.tsx ProjectPicker — every project whose directory still
+ * exists, in the rail's order), wrapping round at either end.
  *
  * Only a project this server has OPEN: the key carries the draft into the box it lands on, and a project
  * that is not open never shows one (the landing's own rule, below). Undefined when no other project
  * qualifies, so the key keeps its ordinary meaning.
  */
-export function nextPick<P extends { slug: string; open: boolean; stale: boolean }>(projects: readonly P[], focus: string | undefined): P | undefined {
+export function stepPick<P extends { slug: string; open: boolean; stale: boolean }>(projects: readonly P[], focus: string | undefined, step: 1 | -1): P | undefined {
   const choices = projects.filter((project) => !project.stale)
   const at = choices.findIndex((project) => project.slug === focus)
-  for (let step = 1; step <= choices.length; step++) {
-    const candidate = choices[(at + step) % choices.length]
+  // A focus the list does not hold sits just outside it, so either direction starts at an end.
+  const from = at !== -1 ? at : step === 1 ? -1 : choices.length
+  for (let distance = 1; distance <= choices.length; distance++) {
+    const candidate = choices[(((from + step * distance) % choices.length) + choices.length) % choices.length]
     if (candidate.open && candidate.slug !== focus) return candidate
   }
   return undefined
@@ -89,7 +90,7 @@ export function nextPick<P extends { slug: string; open: boolean; stale: boolean
  * the page lands as it would without the list.
  */
 export function defaultCrossProjectFocus(
-  cards: readonly Pick<ProjectCard, "id" | "slug" | "stale" | "lastOpenedAt">[],
+  cards: readonly Pick<ProjectCard, "id" | "slug" | "stale" | "lastOpenedAt" | "home">[],
   rememberedId: string | null,
   openIds?: ReadonlySet<string>,
 ): string | undefined {
@@ -98,8 +99,12 @@ export function defaultCrossProjectFocus(
   const usable = open.length > 0 ? open : present
   const remembered = rememberedId ? usable.find((card) => card.id === rememberedId) : undefined
   if (remembered) return remembered.slug
+  // The Home workspace is focused only when CHOSEN. It exists on every machine, so falling back to it
+  // would mean an empty machine never shows the welcome page that adds its first project — and nobody
+  // "last opened" it in a terminal, which is what the fallback is reading.
   let latest: (typeof usable)[number] | undefined
   for (const card of usable) {
+    if (card.home) continue
     if (!latest || Date.parse(card.lastOpenedAt || "") > Date.parse(latest.lastOpenedAt || "")) latest = card
   }
   return latest?.slug

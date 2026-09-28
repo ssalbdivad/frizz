@@ -3346,6 +3346,13 @@ export const Settings = z.object({
    * Machine-level: which chrome you want is a property of the person, not the repo.
    */
   projectRail: z.boolean(),
+  /**
+   * Where a prompt that belongs to NO project runs — the prompt box's "Home" target, for work like
+   * cloning a repository that has no project yet. A folder path as the operator typed it (`~` and
+   * `~/code` are expanded at use); unset or blank means their home folder. Machine-level: there is one
+   * Home per machine, not one per project. See server/home-workspace.ts.
+   */
+  homeFolder: z.string().max(4_096).optional(),
   // There is no `font` key any more. The interface rendered in one of two type families as a machine
   // setting until 2026-09-19 (maintainer: "let's drop monospace as an option"); every surface is sans
   // now, and index.html pins `data-font="sans"` on <html> directly. Settings is a non-strict object,
@@ -5274,6 +5281,13 @@ export const ProjectCard = z.object({
   iconStatus: z.enum(["icon", "none", "unknown"]),
   /** An operator's uploaded icon, rather than one the scan found. Drives what the menu offers. */
   iconIsCustom: z.boolean().optional(),
+  /**
+   * The built-in HOME workspace rather than a registered project: the prompt box's target for work
+   * that belongs to no project, run in the operator's home folder (Settings → Home folder). `path` is
+   * that folder. It cannot be renamed, given an icon or removed — it is not a folder Frizz adopted, so
+   * there is nothing to forget — and it draws a house instead of a monogram.
+   */
+  home: z.literal(true).optional(),
 })
 export type ProjectCard = z.infer<typeof ProjectCard>
 
