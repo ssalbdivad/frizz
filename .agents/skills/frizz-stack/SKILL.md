@@ -35,6 +35,11 @@ nub scripts/adhoc-stack.mjs --port=4930 > /tmp/stack.log 2>&1     # Bash run_in_
 # → {"url","gridUrl","slug","port","home","project","launcher":{id,slug,serverLock},"tenants":[…]}
 ```
 
+`url` is the launcher's drawer prefix, `/all/<slug>`: append `/thread/<t>` for that thread's drawer over
+the one page, or `/thread/<t>/full` for its fullscreen page. A bare `url` lands on `/`, Everything, which
+`gridUrl` names directly. It was `/project/<slug>` until 2026-09-28; every `/project/…` address now
+redirects to `/`, so a caller still appending to that shape silently gets the home page.
+
 **Never pipe it through `head`/`sed`/`grep` to read that line.** The stack keeps logging (every Vite HMR
 update, and the shared tree is edited constantly), so the reader exits, the pipe closes, and the next
 write kills the server with SIGPIPE — minutes later, mid-verification, looking like an unrelated crash.
