@@ -85,7 +85,7 @@ test("references inside a question card are live, and clicking one does not pick
     // The file path in A opens the reader and does NOT select A.
     await mouseClick(page, `${A} code.local-file-code`)
     await page.waitForFunction(() => (window as Window & { __drawers?: () => unknown[] }).__drawers!().length > 0)
-    assert.deepEqual(await drawers(page), [{ kind: "markdown", path: "/fixture/cloudflare-ask.md" }])
+    assert.deepEqual(await drawers(page), [{ kind: "file", path: "/fixture/cloudflare-ask.md" }])
     assert.deepEqual(await chips(page), [])
     await page.evaluate(() => { for (const el of document.querySelectorAll("[data-drawer-close], [aria-label='Close']")) (el as HTMLElement).click() })
     await page.keyboard.press("Escape")

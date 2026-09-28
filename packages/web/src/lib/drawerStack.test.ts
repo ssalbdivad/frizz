@@ -3,7 +3,7 @@ import assert from "node:assert/strict"
 import {
   markDrawerClosing,
   pushDrawer,
-  pushMarkdownDrawer,
+  pushFileReader,
   pushSubAgentDrawer,
   removeDrawerAfterExit,
   drawerThreadSlug,
@@ -87,10 +87,21 @@ test("rapid open during exit cancels removal of the same layer", () => {
   assert.equal(store.drawers[0]?.closing, undefined)
 })
 
-test("reopening an already open markdown reader or sub-agent reuses its entry", () => {
+test("a file cited on another project's card opens a reader scoped to that project", () => {
   resetStore()
-  pushMarkdownDrawer("/docs/a.md")
-  pushMarkdownDrawer("/docs/a.md")
+  const scope = { projectId: "project-b", repo: "acme/b", appPath: "/all/b", baseDir: "/opt/b", homeDir: "/home/me" }
+  pushFileReader("/opt/b/run.log", scope)
+  assert.deepEqual(store.drawers.map((d) => ({ kind: d.kind, path: d.path, scope: d.scope })), [{ kind: "file", path: "/opt/b/run.log", scope }])
+
+  resetStore()
+  pushFileReader("/docs/a.md")
+  assert.equal("scope" in store.drawers[0]!, false, "a reader opened on the page's own project names none")
+})
+
+test("reopening an already open file reader or sub-agent reuses its entry", () => {
+  resetStore()
+  pushFileReader("/docs/a.md")
+  pushFileReader("/docs/a.md")
   assert.equal(store.drawers.length, 1)
   assert.equal(store.drawers[0]?.label, "a.md")
 
@@ -127,8 +138,8 @@ test("drawerThreadSlug names the thread the topmost live layer belongs to, passi
   assert.equal(drawerThreadSlug([]), null)
   assert.equal(drawerThreadSlug([{ kind: "thread", slug: "chat" }]), "chat")
   // A sub-agent drill-in belongs to its parent thread; a file opened from it names no thread at all.
-  assert.equal(drawerThreadSlug([{ kind: "thread", slug: "parent" }, { kind: "subagent", slug: "parent" }, { kind: "markdown", slug: "/repo/README.md" }]), "parent")
-  assert.equal(drawerThreadSlug([{ kind: "markdown", slug: "/repo/README.md" }]), null)
+  assert.equal(drawerThreadSlug([{ kind: "thread", slug: "parent" }, { kind: "subagent", slug: "parent" }, { kind: "file", slug: "/repo/README.md" }]), "parent")
+  assert.equal(drawerThreadSlug([{ kind: "file", slug: "/repo/README.md" }]), null)
   // A layer sliding out lets go at once, so its row does not stay lit under the next one.
   assert.equal(drawerThreadSlug([{ kind: "thread", slug: "below" }, { kind: "terminal", slug: "leaving", closing: true }]), "below")
   assert.equal(drawerThreadSlug([{ kind: "doc", slug: "plan-only" }]), "plan-only")

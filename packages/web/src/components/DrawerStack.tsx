@@ -8,7 +8,8 @@ import { dismissOpenSelect } from "../lib/selectOverlay.ts"
 import { ThreadSheet } from "./ThreadSheet.tsx"
 import { SubAgentSheet } from "./SubAgentSheet.tsx"
 import { BackgroundShellSheet } from "./BackgroundShellSheet.tsx"
-import { MarkdownDrawer } from "./MarkdownDrawer.tsx"
+import { FileReaderDrawer } from "./FileReaderDrawer.tsx"
+import { ImageViewer } from "./ImageViewer.tsx"
 import { ThreadDrawer } from "./ThreadDrawer.tsx"
 import { CommandSheet } from "./CommandSheet.tsx"
 import { ErrorBoundary, DrawerErrorSheet } from "./ErrorBoundary.tsx"
@@ -17,7 +18,8 @@ import { ErrorBoundary, DrawerErrorSheet } from "./ErrorBoundary.tsx"
 // BOTH page shells need it: the queue (App) and the standalone `/thread/<slug>/full` page. It used to
 // be inlined in App, which made every drawer affordance a DEAD CLICK on /full — the sub-agent rows,
 // the background-shell rows and the frizz-doc button all pushed a layer onto `store.drawers` that
-// nothing was mounted to render.
+// nothing was mounted to render. The picture viewer is mounted here for the same reason — a picture can
+// be clicked on either page — though it is no layer of the stack: it is modal, and owns its own Escape.
 //
 // Two DIFFERENT depths: `depth` = the layer's true stack position (array index) drives z-index — it must
 // stay strictly monotonic so a layer always paints above everything below it, including the ~210ms window
@@ -102,8 +104,8 @@ export function DrawerStack() {
           />
         ) : d.kind === "terminal" ? (
           <CommandSheet key={d.id} id={d.id} slug={d.slug} depth={i} widthDepth={widthDepth} />
-        ) : d.kind === "markdown" ? (
-          <MarkdownDrawer key={d.id} id={d.id} path={d.path ?? d.slug} title={d.label ?? d.slug} depth={i} widthDepth={widthDepth} />
+        ) : d.kind === "file" ? (
+          <FileReaderDrawer key={d.id} id={d.id} path={d.path ?? d.slug} title={d.label ?? d.slug} scope={d.scope} depth={i} widthDepth={widthDepth} />
         ) : (
           <ThreadDrawer
             key={d.id}
@@ -131,6 +133,7 @@ export function DrawerStack() {
           </ErrorBoundary>
         )
       })}
+      <ImageViewer />
     </>
   )
 }

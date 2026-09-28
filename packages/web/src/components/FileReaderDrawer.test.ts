@@ -2,7 +2,7 @@ import assert from "node:assert/strict"
 import { test } from "node:test"
 import { createElement } from "react"
 import { renderToStaticMarkup } from "react-dom/server"
-import { Frontmatter } from "./MarkdownDrawer.tsx"
+import { Frontmatter } from "./FileReaderDrawer.tsx"
 
 const textOf = (html: string) =>
   html

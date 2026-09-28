@@ -24,10 +24,10 @@ import { questionsOwed, type AccountBackend, type ThreadView } from "@frizz/shar
 import { projectApiBase, projectRpc } from "../api/rpc.ts"
 import { ThreadProjectScope } from "../api/threadApi.tsx"
 import { displayTitle, offersRetry, queueLabelAt, queueLabelWord } from "../groups.ts"
-import { handoffParts, squareCard, threadKey, type QueuesProject } from "../lib/allQueues.ts"
-import { copyTextToClipboard } from "../lib/clipboard.ts"
+import { handoffParts, projectMarkdownScope, squareCard, threadKey, type QueuesProject } from "../lib/allQueues.ts"
 import { draftKey, draftStore, useDraftValues } from "../lib/drafts.ts"
 import { rememberFullscreenOrigin } from "../lib/fullscreenHandoff.ts"
+import { openLocalPath } from "../lib/local-file-links.ts"
 import { pageUnloading } from "../lib/pendingSends.ts"
 import { deliverProjectFollowUp } from "../lib/projectFollowUp.ts"
 import { STALLED_RETRY_MESSAGE } from "../lib/retrySession.ts"
@@ -340,8 +340,8 @@ function RetryButton({ project, thread, onSent, onFailed }: { project: QueuesPro
  * Two delegated listeners on the document act on every rendered link (lib/local-file-links.ts,
  * lib/thread-links.ts), and both act on the PAGE's project: a file link opens through the page's `rpc`,
  * a `/thread/<slug>` link opens a drawer this page does not have. This intercepts both first, in the
- * capture phase, and sends them to the thread's own project — a file through that project's opener, a
- * thread link to that thread's drawer, opened in place.
+ * capture phase, and sends them to the thread's own project — a file to the same viewers every link
+ * uses, read or opened through that project, a thread link to that thread's drawer, opened in place.
  */
 function ProjectLinkScope({ project, children }: { project: QueuesProject; children: ReactNode }) {
   const navigate = useNavigate()
@@ -354,16 +354,10 @@ function ProjectLinkScope({ project, children }: { project: QueuesProject; child
     if (file && path) {
       event.preventDefault()
       event.stopPropagation()
-      // The same two outcomes lib/local-file-links.ts handles: opened by the project's opener, or no
-      // opener configured and the path goes on the clipboard instead.
-      projectRpc(project.id)
-        .openLocalFile({ path, ...(file.dataset.localImage === "true" ? { image: true } : {}) })
-        .then(async (result) => {
-          if (result.action !== "copy") return
-          await copyTextToClipboard(result.path)
-          showToast("Copied local path")
-        })
-        .catch((error: unknown) => showToast(`Could not open local file: ${error instanceof Error ? error.message.slice(0, 100) : "unknown error"}`))
+      // The one router every file click takes (lib/local-file-links.ts) — the picture viewer, the reader,
+      // or the desktop opener — scoped to THIS card's project: its gate reads the file and its opener
+      // opens it, since a checkout outside home is inside that project's roots and no other's.
+      openLocalPath(path, file, projectMarkdownScope(project))
       return
     }
     const anchor = target?.closest<HTMLAnchorElement>("a[href^='/']")

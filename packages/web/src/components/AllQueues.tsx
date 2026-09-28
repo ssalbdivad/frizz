@@ -36,8 +36,8 @@ import { Link, useLocation, useNavigate } from "react-router"
 import { useSnapshot } from "valtio"
 import type { BoardSnapshot, ProjectCard, ProjectQueue } from "@frizz/shared"
 import { rpc } from "../api/rpc.ts"
-import { isBusy, liveQueue, mergedQueue, overlayQueues, queuesProjects, squareCard, threadKey, type QueueEntry, type QueuesProject } from "../lib/allQueues.ts"
-import { crossProjectHref, innerPath, projectSlug } from "../lib/base-path.ts"
+import { isBusy, liveQueue, mergedQueue, overlayQueues, projectMarkdownScope, queuesProjects, squareCard, threadKey, type QueueEntry, type QueuesProject } from "../lib/allQueues.ts"
+import { innerPath, projectSlug } from "../lib/base-path.ts"
 import { rememberCrossProjectFocus, setQueueFilter, stepPick, useQueueFilter } from "../lib/crossProject.ts"
 import { draftKey, draftStore } from "../lib/drafts.ts"
 import { QUEUE_CARD_VIEWPORT_TOP, slugsInThreadDrawers, store } from "../store.ts"
@@ -634,13 +634,7 @@ function QueueCardOf({ entry, ghost, concealed, leaving, chip }: { entry: QueueE
   }, [])
   const openInPlace = useOpenThreadInPlace()
   const scope = useMemo(
-    () => ({
-      projectId: project.id,
-      repo: project.githubRepo ?? null,
-      appPath: crossProjectHref(encodeURIComponent(project.slug)),
-      baseDir: project.projectDir,
-      homeDir: project.homeDir,
-    }),
+    () => projectMarkdownScope(project),
     [project.id, project.githubRepo, project.slug, project.projectDir, project.homeDir],
   )
   const key = threadKey(project.id, thread.id)
