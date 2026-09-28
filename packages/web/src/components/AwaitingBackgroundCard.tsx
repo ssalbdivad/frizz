@@ -940,22 +940,17 @@ export const BG_SNOOZE_EXPLAINER = "Hides card until new activity is detected"
  *  (found 2026-07-29, "reads as if the agent died"): `showsRestingCard` goes false, and the awaiting
  *  FENCE card — suppressed only while this card shows — takes the slot and states the same wait compactly.
  *
- *  `onSnooze`/`onSnoozeFailed` are the QUEUE's optimistic card exit and stay queue-only; off the queue
- *  there is no card to fade and the click just re-renders the slot. */
-function AwaitingSnooze({ thread, onSnooze, onSnoozeFailed }: {
-  thread: Pick<ThreadView, "id" | "sessionId">
-  onSnooze?: () => void
-  onSnoozeFailed?: () => void
-}) {
+ *  There is no card to fade: it took `onSnooze`/`onSnoozeFailed` for the project board's queue card,
+ *  which drew this one inline until 2026-09-28. Everything's card draws its own Snooze in its footer
+ *  and fades on that, so here the click only re-renders the slot. */
+function AwaitingSnooze({ thread }: { thread: Pick<ThreadView, "id" | "sessionId"> }) {
   const [pending, setPending] = useState(false)
   const snooze = () => {
     setPending(true)
-    onSnooze?.() // fade the queue card immediately, like every other queue dismissal
     rpc
       .snoozeAwaitingBackground({ slug: thread.id, sessionId: thread.sessionId ?? "" })
       .then(() => showToast("Snoozed until the background work returns"))
       .catch((error) => {
-        onSnoozeFailed?.() // roll the card back into the queue
         showToast(`Couldn’t snooze: ${(error as Error).message.slice(0, 80)}`)
         setPending(false)
       })
@@ -987,7 +982,7 @@ function AwaitingSnooze({ thread, onSnooze, onSnoozeFailed }: {
   )
 }
 
-export function AwaitingBackgroundCard({ thread, fence, onSnooze, onSnoozeFailed }: {
+export function AwaitingBackgroundCard({ thread, fence }: {
   // `id` joins the Pick because the rows OPEN things now: a shell's output drawer and a sub-agent's
   // transcript are both addressed by the parent thread's slug. `lastFence` joined on 2026-08-24: the
   // fence's prose is this card's opening stratum, so the card reads it directly off the thread.
@@ -1012,10 +1007,6 @@ export function AwaitingBackgroundCard({ thread, fence, onSnooze, onSnoozeFailed
    *  any more — the tailer clears `lastFence` on the very user record that bumps it — so the caller that
    *  parsed it out of the message hands it in here instead of a second renderer growing around it. */
   fence?: { body: string; hints: readonly AwaitingHint[] }
-  // The QUEUE's optimistic card exit, and queue-only: the drawer and the full-screen page have no card
-  // to fade. Their absence no longer decides whether the Snooze RENDERS — see AwaitingSnooze.
-  onSnooze?: () => void
-  onSnoozeFailed?: () => void
 }) {
   // The thread's live work, as the rows and the heading read it. A card with no owning thread has none
   // of it — no rows, no shell-only heading — rather than a branch at every use below.
@@ -1148,7 +1139,7 @@ export function AwaitingBackgroundCard({ thread, fence, onSnooze, onSnoozeFailed
           2026-08-31; a thread with no snooze verb draws the card with the shell's normal padding. */}
       {snoozable ? (
         <div data-awaiting-snooze className={`-mx-4 mt-3 flex flex-wrap items-center gap-x-2.5 gap-y-2 border-t border-border bg-fg/[0.03] px-4 py-2.5 ${BLOCK_RADIUS_INNER_BOTTOM}`}>
-          <AwaitingSnooze thread={thread} onSnooze={onSnooze} onSnoozeFailed={onSnoozeFailed} />
+          <AwaitingSnooze thread={thread} />
         </div>
       ) : null}
     </TranscriptCard>

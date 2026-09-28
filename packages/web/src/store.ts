@@ -346,16 +346,18 @@ export function primeFullscreenReturn(routedSlug: string | undefined): void {
       if (store.vtReturnTarget === slug) store.vtReturnTarget = null
     }, 600)
   }
-  // The drawer itself, only when the return URL names this thread and the board can already say it
-  // is NOT queued. (That exception is the project board's, where a queued thread's surface was its
-  // card; on Everything a queued thread returns to its drawer too, one effect later through
-  // resolveRoutedThread.) The same painted-open push resolveRoutedThread would make — just in the
-  // commit the snapshot actually reads; applyPath then finds the layer already present and leaves it be.
+  // The drawer itself, when the return URL names this thread: the same painted-open push
+  // resolveRoutedThread would make — a command's terminal, anything else its chat — just in the commit
+  // the snapshot actually reads; applyPath then finds the layer already present and leaves it be. A
+  // QUEUED thread returns to its drawer too. It was skipped until 2026-09-28, for the project board,
+  // where a queued thread's surface was its card; on the one page the card is a summary and the drawer
+  // the thread, so the skip only sent the return one effect late, after the morph had nothing to land on.
   if (routedSlug !== slug || !store.board) return
   const route = resolveThreadRoute(store.board, slug)
-  if (route.kind !== "found" || route.thread.needsYou) return
-  if (store.drawers.some((d) => d.kind === "thread" && d.slug === slug && !d.closing)) return
-  pushDrawer("thread", slug, { routed: true })
+  if (route.kind !== "found") return
+  const kind = route.thread.kind === "command" ? "terminal" : "thread"
+  if (store.drawers.some((d) => d.kind === kind && d.slug === slug && !d.closing)) return
+  pushDrawer(kind, slug, { routed: true })
 }
 
 // Open a file that lives on disk in Frizz's OWN reader — a `.md` rendered, anything else as source —
