@@ -23,6 +23,10 @@ function writeLegacySettings(home: string, value: unknown): void {
   writeFileSync(path, JSON.stringify(value))
 }
 
+// The sandbox is an XDG-layout home, so an XDG variable inherited from the developer's shell would move
+// the machine store — and the registry the Home folder check reads — out of it into their real data root.
+for (const name of ["XDG_DATA_HOME", "XDG_STATE_HOME", "XDG_CACHE_HOME"]) delete process.env[name]
+
 function sandbox(): { home: string; open: (name: string) => ReturnType<typeof createStorage>; done: () => void } {
   const home = mkdtempSync(join(tmpdir(), "frizz-settings-"))
   const opened: ReturnType<typeof createStorage>[] = []
@@ -190,6 +194,76 @@ test("retired font preferences are stripped from every settings source without r
     setSettings(alpha, Settings.parse({ ...getSettings(alpha, box.home), font: "mono" }), box.home)
     assert.equal("font" in (alpha.getSetting("settings") as object), false)
     assert.equal("font" in readMachineConfig(box.home, "settings", z.record(z.string(), z.unknown()))!, false)
+  } finally {
+    box.done()
+  }
+})
+
+// ---- homeFolder: where the Home workspace's agents run (home-workspace.ts) ----
+
+test("a Home folder that does not exist is refused on save", () => {
+  const box = sandbox()
+  try {
+    const alpha = box.open("alpha")
+    assert.throws(() => setSettings(alpha, { ...defaultSettings(), homeFolder: "~/nope" }, box.home), /No folder at/)
+    assert.equal(readMachineSettings(box.home).homeFolder, undefined, "nothing was written")
+  } finally {
+    box.done()
+  }
+})
+
+test("the Home folder is stored trimmed, as typed, and every project sees it", () => {
+  const box = sandbox()
+  try {
+    mkdirSync(join(box.home, "code"))
+    const alpha = box.open("alpha")
+    const saved = setSettings(alpha, { ...defaultSettings(), homeFolder: "  ~/code  " }, box.home)
+    assert.equal(saved.homeFolder, "~/code", "kept as typed — not expanded — so a moved home still resolves")
+    assert.equal(readMachineSettings(box.home).homeFolder, "~/code")
+    assert.equal(getSettings(box.open("beta"), box.home).homeFolder, "~/code", "one Home per machine")
+  } finally {
+    box.done()
+  }
+})
+
+// Every save sends the WHOLE settings object, so a folder deleted after it was saved rides along on
+// every unrelated change. Validating it each time would make the drawer unsavable.
+test("a saved Home folder that has since vanished does not block saving anything else", () => {
+  const box = sandbox()
+  try {
+    mkdirSync(join(box.home, "code"))
+    const alpha = box.open("alpha")
+    setSettings(alpha, { ...defaultSettings(), homeFolder: "~/code" }, box.home)
+    rmSync(join(box.home, "code"), { recursive: true })
+
+    const saved = setSettings(alpha, { ...getSettings(alpha, box.home), notifications: false }, box.home)
+    assert.equal(saved.notifications, false)
+    assert.equal(readMachineSettings(box.home).homeFolder, "~/code")
+    // Unchanged modulo the trim is still unchanged.
+    assert.doesNotThrow(() => setSettings(alpha, { ...getSettings(alpha, box.home), homeFolder: " ~/code " }, box.home))
+    // …but CHANGING it to another missing folder is still checked.
+    assert.throws(() => setSettings(alpha, { ...getSettings(alpha, box.home), homeFolder: "~/also-gone" }, box.home), /No folder at/)
+  } finally {
+    box.done()
+  }
+})
+
+// getSettings falls back to a project's own blob for an ABSENT machine key, and every project open while
+// a folder was set carries it there. A cleared field that dropped the key would bring that folder back.
+test("clearing the Home folder stores an empty value that no project's old blob can resurrect", () => {
+  const box = sandbox()
+  try {
+    mkdirSync(join(box.home, "code"))
+    mkdirSync(join(box.home, "old"))
+    const alpha = box.open("alpha")
+    const beta = box.open("beta")
+    beta.setSetting("settings", { ...defaultSettings(), homeFolder: "~/old" })
+    setSettings(alpha, { ...defaultSettings(), homeFolder: "~/code" }, box.home)
+
+    setSettings(alpha, { ...getSettings(alpha, box.home), homeFolder: "" }, box.home)
+    assert.equal(readMachineSettings(box.home).homeFolder, "")
+    assert.equal(getSettings(alpha, box.home).homeFolder, "")
+    assert.equal(getSettings(beta, box.home).homeFolder, "", "beta's stale blob must not win back")
   } finally {
     box.done()
   }

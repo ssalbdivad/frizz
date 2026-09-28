@@ -33,6 +33,18 @@ test("a project this server has not opened is not landed on while an open one ex
   assert.equal(defaultCrossProjectFocus(cards, null, new Set()), "a-slug")
 })
 
+// The Home workspace is on every machine and was never "opened" in a terminal. Falling back to it would
+// mean an empty machine never shows the welcome page that adds its first project.
+test("the Home workspace is focused only when chosen", () => {
+  const home = { id: "home-id", slug: "home", stale: false, lastOpenedAt: "1970-01-01T00:00:00.000Z", home: true as const }
+  assert.equal(defaultCrossProjectFocus([home], null), undefined, "an empty machine still welcomes")
+  assert.equal(defaultCrossProjectFocus([home], "home-id"), "home", "chosen, it is the focus")
+  // Even one opened more recently than every project — the timestamp is not what excludes it.
+  const recent = { ...home, lastOpenedAt: "2026-09-28T10:00:00Z" }
+  assert.equal(defaultCrossProjectFocus([card("a", "2026-09-20T10:00:00Z"), recent], null), "a-slug")
+  assert.equal(defaultCrossProjectFocus([card("a", "2026-09-20T10:00:00Z"), recent], "home-id", new Set(["home-id"])), "home")
+})
+
 const project = (slug: string, open = true, stale = false) => ({ slug, open, stale })
 
 test("⌥↓ / ⌥↑ step the box through the picker's order, wrapping round at either end", () => {

@@ -50,11 +50,11 @@ import { CommandQueueCard } from "./CommandQueueCard.tsx"
 import { ProjectSquare } from "./ProjectRail.tsx"
 import { SIDEBAR_COLUMN_CLASS } from "./Sidebar.tsx"
 import { BandLabel } from "./BandLabel.tsx"
-import { homeOf } from "./ProjectActions.tsx"
+import { homeOf, shortPath } from "./ProjectActions.tsx"
 import { StatusRow } from "./StatusRow.tsx"
 import { ThreadConnector } from "./ThreadConnector.tsx"
 import { DispatchForm, type DispatchDirs } from "./NewThreadModal.tsx"
-import { Menu, MenuContent, MenuItem, MenuTrigger } from "./ui/Menu.tsx"
+import { Menu, MenuContent, MenuItem, MenuSeparator, MenuTrigger } from "./ui/Menu.tsx"
 import { ProjectFilter } from "./ProjectFilter.tsx"
 import { AddProjectRow, ProjectList } from "./ProjectList.tsx"
 import { ThreadProjectScope } from "../api/threadApi.tsx"
@@ -298,8 +298,21 @@ function ProjectPicker({ projects, focus, onPick }: { projects: QueuesProject[];
   const current = projects.find((project) => project.slug === focus)
   const name = current?.name ?? focus ?? "a project"
   // A project whose directory is gone cannot take a thread; it stays on the rail, saying why.
-  const choices = projects.filter((project) => !project.stale)
+  const choices = projects.filter((project) => !project.stale && !project.card?.home)
   const steps = stepPick(projects, focus, 1) !== undefined
+  // The Home workspace, for the work that belongs to no project yet: last, under a rule, with the folder
+  // it runs in, because "Home" alone does not say that its agents start outside every project. Last is
+  // also where stepping from the box reaches it (stepPick walks the server's order, which lists Home last).
+  const homeChoice = projects.find((project) => !project.stale && project.card?.home)
+  const choice = (project: QueuesProject, hint?: string) => (
+    <MenuItem key={project.id} value={project.slug} onSelect={() => onPick(project)} icon={<ProjectSquare project={project.card ?? fallbackCard(project)} size={14} />}>
+      <span className={`min-w-0 flex-1 truncate ${project.slug === focus ? "text-fg" : ""}`}>{project.name}</span>
+      {hint && <span className="min-w-0 shrink truncate font-mono text-[10.5px] text-muted-55">{hint}</span>}
+      {/* Choosable — opening its board may be exactly what brings it up — but not a surprise. */}
+      {!project.open && <span className="shrink-0 text-[10.5px] text-muted-55">Not open</span>}
+      {project.slug === focus && <Check size={12} aria-label="Current" className="shrink-0 text-fg" />}
+    </MenuItem>
+  )
   return (
     <Menu>
       <MenuTrigger asChild>
@@ -322,15 +335,19 @@ function ProjectPicker({ projects, focus, onPick }: { projects: QueuesProject[];
       <MenuContent align="start">
         <div className="px-2.5 pb-1 pt-1.5 text-[10.5px] font-medium text-muted-55">Start in</div>
         <div className="max-h-[min(60vh,420px)] overflow-y-auto">
-          {choices.map((project) => (
-            <MenuItem key={project.id} value={project.slug} onSelect={() => onPick(project)} icon={<ProjectSquare project={project.card ?? fallbackCard(project)} size={14} />}>
-              <span className={`min-w-0 flex-1 truncate ${project.slug === focus ? "text-fg" : ""}`}>{project.name}</span>
-              {/* Choosable — opening its board may be exactly what brings it up — but not a surprise. */}
-              {!project.open && <span className="shrink-0 text-[10.5px] text-muted-55">Not open</span>}
-              {project.slug === focus && <Check size={12} aria-label="Current" className="shrink-0 text-fg" />}
-            </MenuItem>
-          ))}
+          {choices.map((project) => choice(project))}
         </div>
+        {homeChoice && (
+          <>
+            {choices.length > 0 && <MenuSeparator />}
+            {/* Outside the scrolling list, so it never scrolls away — and inset by the scrollbar gutter that
+                list reserves (styles.css `scrollbar-gutter: stable`), or its hint ended 7px right of the
+                check marks above it. */}
+            <div className="pr-[var(--sbw)]">
+              {choice(homeChoice, homeChoice.card && shortPath(homeChoice.card.path, homeChoice.homeDir))}
+            </div>
+          </>
+        )}
       </MenuContent>
     </Menu>
   )

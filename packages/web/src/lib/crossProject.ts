@@ -90,7 +90,7 @@ export function stepPick<P extends { slug: string; open: boolean; stale: boolean
  * the page lands as it would without the list.
  */
 export function defaultCrossProjectFocus(
-  cards: readonly Pick<ProjectCard, "id" | "slug" | "stale" | "lastOpenedAt">[],
+  cards: readonly Pick<ProjectCard, "id" | "slug" | "stale" | "lastOpenedAt" | "home">[],
   rememberedId: string | null,
   openIds?: ReadonlySet<string>,
 ): string | undefined {
@@ -99,8 +99,12 @@ export function defaultCrossProjectFocus(
   const usable = open.length > 0 ? open : present
   const remembered = rememberedId ? usable.find((card) => card.id === rememberedId) : undefined
   if (remembered) return remembered.slug
+  // The Home workspace is focused only when CHOSEN. It exists on every machine, so falling back to it
+  // would mean an empty machine never shows the welcome page that adds its first project — and nobody
+  // "last opened" it in a terminal, which is what the fallback is reading.
   let latest: (typeof usable)[number] | undefined
   for (const card of usable) {
+    if (card.home) continue
     if (!latest || Date.parse(card.lastOpenedAt || "") > Date.parse(latest.lastOpenedAt || "")) latest = card
   }
   return latest?.slug
