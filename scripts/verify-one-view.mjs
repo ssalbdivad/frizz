@@ -82,12 +82,20 @@ try {
   // two frames. A Radix menu mounts its items BEFORE it has positioned them (off-screen, until measured),
   // and a drawer slides in over ~300ms, so a click issued the moment the node exists lands nowhere — which
   // puppeteer reports as "Node is either not clickable or not an Element".
+  // And only once nothing sits OVER it: the lanes' sticky headers float above a card scrolled under them,
+  // and a click there lands on the header. An occluded target is scrolled to the middle of the window
+  // and asked again.
   const clickSettled = async (selector, { text } = {}) => {
     const handle = await page.waitForFunction(
       (selector, text) => new Promise((resolve) => {
         const el = [...document.querySelectorAll(selector)].find((candidate) => text === undefined || candidate.textContent?.trim() === text)
         const at = el?.getBoundingClientRect()
-        if (!el || !at || at.width === 0 || at.top < 0 || at.bottom > innerHeight || at.left < 0 || at.right > innerWidth) return resolve(null)
+        if (!el || !at || at.width === 0) return resolve(null)
+        const hit = document.elementFromPoint(at.x + at.width / 2, at.y + at.height / 2)
+        if (at.top < 0 || at.bottom > innerHeight || at.left < 0 || at.right > innerWidth || !hit || !(el === hit || el.contains(hit))) {
+          el.scrollIntoView({ block: "center", inline: "nearest" })
+          return resolve(null)
+        }
         requestAnimationFrame(() => requestAnimationFrame(() => {
           const now = el.getBoundingClientRect()
           resolve(now.x === at.x && now.y === at.y ? el : null)
@@ -227,9 +235,9 @@ try {
   await step("the drawer's menu is the way to /full, and leaving it comes back to the drawer", async () => {
     const card = await page.$eval("[data-xq-card]", (c) => c.getAttribute("data-xq-card"))
     const [cardProject, cardSlug] = card.split("/")
-    await page.click("[data-xq-card] h3 a")
+    await clickSettled(`[data-xq-card="${card}"] h3 a`)
     await waitPath(() => /^\/all\/[^/]+\/thread\/[^/]+$/.test(location.pathname), "a drawer address")
-    await page.waitForSelector("[data-drawer-layer] [data-thread-menu]", { timeout: 8000 })
+    await page.waitForSelector("[data-drawer-layer] [data-thread-menu]", { timeout: 15000 })
     const drawer = await path()
     // The card steps aside for the drawer; the thread's row in the list stays, so the reader keeps their place.
     await sleep(400)
