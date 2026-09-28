@@ -17,12 +17,12 @@
 import { memo, useCallback, useLayoutEffect, useMemo, useRef, useState, type MouseEvent as ReactMouseEvent, type ReactNode } from "react"
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import { ArrowUpRight, Check, ChevronRight, Hourglass, Maximize2, RotateCcw } from "lucide-react"
-import { useLocation, useNavigate } from "react-router"
+import { Link, useLocation, useNavigate } from "react-router"
 import type { ThreadView } from "@frizz/shared"
 import { projectApiBase, projectRpc } from "../api/rpc.ts"
 import { ThreadProjectScope } from "../api/threadApi.tsx"
 import { displayTitle, offersRetry, queueLabelAt, queueLabelWord } from "../groups.ts"
-import { handoffParts, threadKey, type QueuesProject } from "../lib/allQueues.ts"
+import { handoffParts, squareCard, threadKey, type QueuesProject } from "../lib/allQueues.ts"
 import { copyTextToClipboard } from "../lib/clipboard.ts"
 import { draftKey, draftStore, useDraftValues } from "../lib/drafts.ts"
 import { rememberFullscreenOrigin } from "../lib/fullscreenHandoff.ts"
@@ -39,6 +39,7 @@ import { QueueDismissContext } from "./ChatView.tsx"
 import { Composer } from "./Composer.tsx"
 import { useThreadComposerControls } from "../hooks/useThreadComposerControls.tsx"
 import { LastActive } from "./LastActive.tsx"
+import { ProjectSquare } from "./ProjectRail.tsx"
 import { LinkedHtml } from "./LinkedHtml.tsx"
 import { QuestionBlockCard } from "./QuestionBlockCard.tsx"
 import { RegisteredAnsweringProvider, RegisteredQuestionStack } from "./RegisteredQuestionCards.tsx"
@@ -48,6 +49,43 @@ import { SnoozeButton } from "./SnoozeButton.tsx"
 import { StateButton } from "./ThreadLifecycleFooter.tsx"
 import { Tooltip } from "./Tooltip.tsx"
 import { BLOCK_RADIUS, BLOCK_RADIUS_INNER_BOTTOM, QUEUE_WRAP, TranscriptCard } from "./TranscriptCard.tsx"
+
+/**
+ * WHOSE CARD THIS IS, on its meta line — the page's one queue holds every project's threads, and the lanes
+ * that used to say whose they were are gone (lib/allQueues.ts mergedQueue). Given `onChoose` it is a link
+ * that narrows the page to the project, as the old lane header's name did; without it, plain text, for a
+ * line that already sits inside a control (the command card's open button).
+ */
+export function ProjectChip({ project, onChoose }: { project: QueuesProject; onChoose?: (project: QueuesProject) => void }) {
+  const body = (
+    <>
+      {/* ON THE NAME'S CAP BAND: a filled square has no baseline of its own, so it sits ON the name's and is
+          lowered by half its height less half a cap — computed by the browser, right in any font at any
+          size (the lane header and the prompt box's project picker placed theirs the same way). */}
+      <span className="flex shrink-0 self-baseline translate-y-[calc(6px_-_0.5cap)]">
+        <ProjectSquare project={squareCard(project)} size={12} />
+      </span>
+      <span className="min-w-0 truncate">{project.name}</span>
+    </>
+  )
+  const className = "flex min-w-0 shrink items-baseline gap-1.5 text-fg/80"
+  if (!onChoose) return <span data-xq-chip={project.id} className={className}>{body}</span>
+  return (
+    <Link
+      to={crossProjectHref(encodeURIComponent(project.slug))}
+      title={`Show only ${project.name}`}
+      data-xq-chip={project.id}
+      onClick={(event) => {
+        if (!isPlainLeftClick(event)) return
+        event.preventDefault()
+        onChoose(project)
+      }}
+      className={`${className} rounded-sm underline-offset-2 outline-none transition-colors hover:text-fg hover:underline focus-visible:ring-1 focus-visible:ring-border-strong`}
+    >
+      {body}
+    </Link>
+  )
+}
 
 /** Where a thread lives on its own board — single-project mode, through an explicit door only. */
 export function threadBoardHref(project: Pick<QueuesProject, "slug">, slug: string): string {
@@ -109,6 +147,7 @@ export const AllQueuesCard = memo(function AllQueuesCard({
   leaving,
   onLeave,
   onReturn,
+  chip,
 }: {
   project: QueuesProject
   thread: ThreadView
@@ -117,6 +156,8 @@ export const AllQueuesCard = memo(function AllQueuesCard({
   onLeave: () => void
   /** The action failed after the card had already faded: put it back. */
   onReturn: () => void
+  /** Leads the meta line under the title: the card's project, on a queue that holds several (ProjectChip). */
+  chip?: ReactNode
 }) {
   const api = projectRpc(project.id)
   const key = threadKey(project.id, thread.id)
@@ -169,7 +210,16 @@ export const AllQueuesCard = memo(function AllQueuesCard({
                   {displayTitle(thread)}
                 </a>
               </h3>
-              <LastActive at={queueLabelAt(thread)} label={queueLabelWord(thread)} fallbackAt={thread.spawnedAt} className="mt-0.5 block truncate text-[11px] leading-tight text-muted-75" />
+              <div className="mt-0.5 flex min-w-0 items-baseline gap-1.5 text-[11px] leading-tight text-muted-75">
+                {chip}
+                <LastActive
+                  at={queueLabelAt(thread)}
+                  label={queueLabelWord(thread)}
+                  fallbackAt={thread.spawnedAt}
+                  lead={chip ? <span aria-hidden>·</span> : undefined}
+                  className="min-w-0 truncate"
+                />
+              </div>
             </div>
             <div className="flex shrink-0 items-center gap-0.5">
               {offersRetry(thread) && <RetryButton project={project} thread={thread} onSent={onLeave} onFailed={onReturn} />}

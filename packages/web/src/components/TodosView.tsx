@@ -500,12 +500,13 @@ export function TodosView() {
   const nothingAtAll = (board?.threads.length ?? 0) === 0
 
   return (
-    // The queue column, top to bottom: queue cards (or the empty-inbox state) → rule → dispatch box.
-    // NO scroll container here — the PAGE scrolls. my-auto (NOT justify-center, whose top overflow
-    // would be unreachable): the column vertically CENTERS in the viewport while its content is
-    // shorter (App's <main> is a min-h-screen flex column), and degrades safely to normal
-    // top-anchored flow the moment it grows past — margins collapse to 0, nothing clips.
-    <div className="my-auto w-full min-w-0 flex flex-col py-8">
+    // The queue column: the READY header over its cards, or the empty-inbox state. NO scroll container
+    // here — the PAGE scrolls. TOP-ANCHORED while it holds cards (maintainer 2026-09-28, choosing it:
+    // "Top-align both"): a centred column moves by half of every change in its height, so a card
+    // arriving at the BOTTOM still shifted the one being read — by 219px, measured. Only the empty
+    // states centre (my-auto, NOT justify-center, whose top overflow would be unreachable; App's <main>
+    // is a min-h-screen flex column), since nothing on them is being read.
+    <div className={`${renderItems.length > 0 ? "" : "my-auto "}w-full min-w-0 flex flex-col py-8`}>
       {/* Source-of-truth failures are LOUD: a board that can't be read renders as this banner, never
           as a silently empty listing (a truncated shell-out once blanked a 700-thread board with the
           error hidden in an unrendered field). */}
@@ -1077,10 +1078,9 @@ const QueueCard = memo(function QueueCard({ thread, leaving, frozen, onResolve, 
       alreadyReserved: pending.reserved === true,
     })
     if (decision === "reserve") {
-      // A short queue is vertically centered by `my-auto`; once prepended history makes it taller than
-      // the viewport those auto margins collapse. At the document's new maximum scroll position there
-      // may therefore be no physical space left to keep the old message at its original screen Y. Keep
-      // an equivalent external reserve below this card, then the next layout pass can restore exactly.
+      // Prepended history grows the card, and at the document's new maximum scroll position there may be
+      // no physical space left to keep the old message at its original screen Y. Keep an equivalent
+      // external reserve below this card, then the next layout pass can restore exactly.
       pending.reserved = true
       setBottomScrollReserve((current) => current + Math.ceil(remaining))
       return
