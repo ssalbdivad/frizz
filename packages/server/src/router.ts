@@ -1,4 +1,4 @@
-import { readFileSync, statSync, type Stats } from "node:fs"
+import { readFileSync, realpathSync, statSync, type Stats } from "node:fs"
 
 import { join, resolve } from "node:path"
 import { randomUUID } from "node:crypto"
@@ -89,6 +89,8 @@ import {
   ThreadSlug,
   isDirectSubAgent,
   DirectoryPickResult,
+  ProjectAddResult,
+  ProjectPickResult,
   ThreadLocation,
   parseAwaitingDurationRaw,
   AWAITING_FOR_MAX_MS,
@@ -182,12 +184,12 @@ import { HOME_WORKSPACE_NAME, isHomeWorkspace, listWorkspaces } from "./home-wor
 import { expandHomeFolder, homeFolderProblem } from "./home-folder.ts"
 import { basename, dirname } from "node:path"
 import { existsSync, mkdirSync, rmSync, writeFileSync } from "node:fs"
-import { activeBandThread, ProjectCard, ProjectQueue, ProjectRailCounts, PROJECT_ICON_EXTENSIONS, PROJECT_ICON_MAX_BASE64_CHARS, queuedThread, ThreadHandoff, BURIED_ANSWERS_HEADER } from "@frizz/shared"
+import { activeBandThread, questionRepliedPast, ProjectCard, ProjectQueue, ProjectRailCounts, PROJECT_ICON_EXTENSIONS, PROJECT_ICON_MAX_BASE64_CHARS, queuedThread, ThreadHandoff, BURIED_ANSWERS_HEADER } from "@frizz/shared"
 import { imageDimensions } from "./image-header.ts"
 import { homedir } from "node:os"
 import { chosenProjectRoot, ensureProjectIdFile, existingProjectId, isHomeDirectory, writeProjectIdFile } from "./project-root.ts"
 import { resolveProjectLabel } from "./project-identity.ts"
-import { registerProject } from "./project-registry.ts"
+import { findByPath, registerProject } from "./project-registry.ts"
 import { pickDirectory, pickImageFile } from "./directory-picker.ts"
 import { completePath } from "./path-complete.ts"
 import Database from "./sqlite.ts"
@@ -668,7 +670,11 @@ function projectCard(entry: RegistryEntry, stale: boolean): ProjectCard {
   }
 }
 
-export function addProjectAtPath(input: string, home = homedir()): ProjectCard {
+export function addProjectAtPath(
+  input: string,
+  home = homedir(),
+  options: { exact?: boolean } = {},
+): ProjectAddResult {
   const typed = input.trim()
   if (!typed) throw new Error("Enter a folder path.")
   // `~` is what a person types; it is not a path any filesystem call understands.
@@ -683,14 +689,28 @@ export function addProjectAtPath(input: string, home = homedir()): ProjectCard {
   if (!stats.isDirectory()) throw new Error(`That is a file, not a folder: ${absolute}`)
   // A folder INSIDE a checkout still adds the checkout, but an explicitly chosen folder is otherwise
   // the project itself — an adopted plain-directory ancestor does not capture it (chosenProjectRoot).
-  const root = chosenProjectRoot(absolute, home)
+  const enclosing = chosenProjectRoot(absolute, home)
+  // Never swap in the enclosing root WITHOUT SAYING SO: that reopened ~/app for a pick of ~/app/yes and
+  // navigated to a board the operator already had, which read as the add silently failing (2026-09-28).
+  // The page asks instead, and `exact` is its "add this folder on its own" answer.
+  if (enclosing !== absolute && !options.exact) {
+    return {
+      kind: "enclosed",
+      path: canonicalDir(absolute),
+      root: canonicalDir(enclosing),
+      rootRegistered: findByPath(canonicalDir(enclosing), home) !== undefined,
+    }
+  }
+  const root = options.exact ? absolute : enclosing
   // Minting an id in $HOME writes a project into ~/.frizz — Frizz's own state root — and every
   // unmarked directory under home then resolves to it. The launcher refuses this; so does the add-project dialog.
   if (isHomeDirectory(root, home)) throw new Error("The home folder cannot be a project — choose a folder inside it.")
   // SEEDED, exactly as the launcher seeds it: an established repository whose id lives only in
   // `git config frizz.id` keeps that id, so adding it from the page finds its existing board instead
-  // of minting a fresh one and orphaning every thread on it.
-  const id = ensureProjectIdFile(root, home, existingProjectId(root))
+  // of minting a fresh one and orphaning every thread on it. NOT for a folder adopted inside another
+  // root: `git config` there answers for the ENCLOSING repository, and seeding from it would hand the
+  // subfolder the checkout's id — and with it, the checkout's board.
+  const id = ensureProjectIdFile(root, home, root === enclosing ? existingProjectId(root) : undefined)
   const remoteOwner = resolveProjectLabel(root)?.split("/")[0]
   let registered = registerProject({ dir: root, id, remoteOwner }, home)
   if (registered.action === "duplicate") {
@@ -699,7 +719,15 @@ export function addProjectAtPath(input: string, home = homedir()): ProjectCard {
     registered = registerProject({ dir: root, id: writeProjectIdFile(root, randomUUID()), remoteOwner }, home)
   }
   if (!registered.entry) throw new Error("Could not register that folder.")
-  return projectCard(registered.entry, false)
+  return { kind: "added", project: projectCard(registered.entry, false) }
+}
+
+function canonicalDir(dir: string): string {
+  try {
+    return realpathSync(dir)
+  } catch {
+    return dir
+  }
 }
 
 /**
@@ -1006,12 +1034,15 @@ export function createRouter(ctx: AppContext) {
   }
 
   // This thread's OPEN questions, in the shape the worker's read-back, the board and the card all use.
+  // Each carries `repliedPast` exactly as the board's does, so the worker reading its own questions back
+  // learns which ones the human moved on from — the ones nothing waits on any more.
   function openQuestionViews(slug: string): RegisteredQuestionView[] {
     const out: RegisteredQuestionView[] = []
+    const lastHumanAt = ctx.tailer.get(slug)?.lastHumanAt
     for (const q of ctx.storage.listThreadQuestions(slug, { openOnly: true })) {
       const spec = parseQuestionSpec(q.spec)
       if (!spec) continue
-      out.push({ id: q.id, spec, askedAt: new Date(q.asked_at).toISOString() })
+      out.push({ id: q.id, spec, askedAt: new Date(q.asked_at).toISOString(), ...(questionRepliedPast(q.asked_at, lastHumanAt) ? { repliedPast: true as const } : {}) })
     }
     return out
   }
@@ -3200,7 +3231,13 @@ export function createRouter(ctx: AppContext) {
         // registered does not block this: frizz cannot tell a build from a dev server, only the worker
         // can, and the registration IS that judgement. Gating on raw liveness would make `done`
         // unreachable for any thread that left a log tail running.
+        //
+        // A QUESTION THE HUMAN REPLIED PAST DOES NOT BLOCK. They moved on without answering it, which is a
+        // pivot (questionRepliedPast): its card stays up where it was asked, still answerable, and `done`
+        // must not force the worker to withdraw it just to finish the work the human pivoted to.
+        const lastHumanAt = ctx.tailer.get(input.slug)?.lastHumanAt
         const blockingQuestions = ctx.storage.listThreadQuestions(input.slug, { openOnly: true }).flatMap((q) => {
+          if (questionRepliedPast(q.asked_at, lastHumanAt)) return []
           const spec = parseQuestionSpec(q.spec)
           return spec ? [{ id: q.id, question: spec.question }] : []
         })
@@ -3988,11 +4025,12 @@ export function createRouter(ctx: AppContext) {
      */
     projectPick: mutation({
       input: z.object({}),
-      output: DirectoryPickResult,
+      output: ProjectPickResult,
       handler: async () => {
         const picked = await pickDirectory()
         if (picked.kind !== "picked") return picked
-        return { kind: "picked" as const, project: addProjectAtPath(picked.path) }
+        const added = addProjectAtPath(picked.path)
+        return added.kind === "added" ? { kind: "picked" as const, project: added.project } : added
       },
     }),
 
@@ -4001,12 +4039,14 @@ export function createRouter(ctx: AppContext) {
      *
      * The same authority as running `frizz` in that directory, and strictly less: this registers and
      * resolves an id, it dispatches nothing. The root comes from chosenProjectRoot — a folder inside
-     * a checkout adds the checkout, but an adopted plain-directory ancestor never captures the pick.
+     * a checkout resolves to the checkout, but an adopted plain-directory ancestor never captures the
+     * pick. When that resolution would swap in an enclosing root, the answer is `enclosed` and nothing
+     * is written; `exact` then adds the folder itself as a project of its own.
      */
     projectAdd: mutation({
-      input: z.object({ path: z.string().min(1) }),
-      output: ProjectCard,
-      handler: async ({ input }) => addProjectAtPath(input.path),
+      input: z.object({ path: z.string().min(1), exact: z.boolean().optional() }),
+      output: ProjectAddResult,
+      handler: async ({ input }) => addProjectAtPath(input.path, undefined, { exact: input.exact }),
     }),
 
     /**

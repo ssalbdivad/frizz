@@ -8,7 +8,7 @@ import { homedir } from "node:os"
 import { dirname, join } from "node:path"
 import watcher from "@parcel/watcher"
 import type { BoardSnapshot, ClaudeModel, ThreadView, RuntimeState, ThreadRecurringPrompt, ProviderError } from "@frizz/shared"
-import { AskedQuestionSchema, BoardDiffer, PermissionMode, SnoozeUntil, ThreadSlug, isDirectSubAgent, questionAnswerMessage, questionsCancelledWakeMessage, type AskedQuestion, type PermissionMode as PermissionModeValue, type QuestionAnswer, type QuestionDismissal } from "@frizz/shared"
+import { AskedQuestionSchema, BoardDiffer, PermissionMode, SnoozeUntil, ThreadSlug, isDirectSubAgent, questionAnswerMessage, questionRepliedPast, questionsCancelledWakeMessage, type AskedQuestion, type PermissionMode as PermissionModeValue, type QuestionAnswer, type QuestionDismissal } from "@frizz/shared"
 import type { Bus } from "./bus.ts"
 import { workDirOf, type Project } from "./project.ts"
 import { isHeadlessRow, isBrokerClaudeRow, sessionTitleLocked, type ThreadQuestionRow } from "./storage.ts"
@@ -1555,8 +1555,12 @@ function sessionThreadView(
   for (const q of questionRows) {
     if (q.state !== "open") continue
     const spec = safeQuestionSpec(q.spec)
-    if (spec) questions.push({ id: q.id, spec, askedAt: new Date(q.asked_at).toISOString() })
+    if (spec) questions.push({ id: q.id, spec, askedAt: new Date(q.asked_at).toISOString(), ...(questionRepliedPast(q.asked_at, rawTele?.lastHumanAt) ? { repliedPast: true as const } : {}) })
   }
+  // The ones still HOLDING the thread. A question the human replied past is a pivot, not a pending ask:
+  // it stays on the card list (answerable where it was asked) but queues nothing, supersedes no done,
+  // and is not the rest's sign-off — see questionRepliedPast.
+  const currentQuestionCount = questions.filter((q) => !q.repliedPast).length
   // The dismissal-only case counts as in flight EXACTLY when a cancellation wake is coming — an armed
   // rest Goal with text, the same gate the scheduler's evalQuestionAnswers wakes on. Anything looser
   // would also cover the human's own ×, which deliberately wakes nobody and has no arrival to bridge to.
@@ -1573,7 +1577,7 @@ function sessionThreadView(
   // addOwnPrWatch, setOwnThreadTimer) and `done` refuses while any is live, so this is the belt to
   // those braces: whatever path leaves a done row beside an open question or an armed wait, the board
   // presents the wait, never a finished thread that is also asking or waiting.
-  const supersededDone = questions.length > 0 || armedWatches.length > 0 || armedPrWatches.length > 0 || armedTimers.length > 0
+  const supersededDone = currentQuestionCount > 0 || armedWatches.length > 0 || armedPrWatches.length > 0 || armedTimers.length > 0
   const codexLive = row.codex_runtime === "app-server" ? codexTurnLiveness(row.slug, row.session_id) : undefined
   const nativeError = codexLive?.providerError
   // A witnessed failed turn can arrive before the tailer's next read. Do not keep spinning on the
@@ -1643,8 +1647,8 @@ function sessionThreadView(
   const quietSince = archived ? undefined : quietTurnSince(runtime, tele, nowMs)
   // A silent turn queues past every rest gate in deriveNeedsYou (it is not at rest), except the human's
   // own wall-clock snooze, which is how a deliberate long wait is parked.
-  const needsYou = archived ? false : deriveNeedsYou(row, tele, runtime, interactionPresence.needsUser, nowMs, limitPause, true, deliveryProcessGone, github, registeredPrWatches, armedTimerIds, armedWatches, questions.length, answerAwaitingDelivery(questionRows, rawTele?.lastUserAt, nowMs)) || (quietSince !== undefined && !futureSnooze(row, nowMs))
-  const awaitingBackground = archived ? false : deriveAwaitingBackground(row, tele, runtime, interactionPresence.needsUser, nowMs, limitPause, deliveryProcessGone, github, registeredPrWatches, armedTimerIds, armedWatches, questions.length)
+  const needsYou = archived ? false : deriveNeedsYou(row, tele, runtime, interactionPresence.needsUser, nowMs, limitPause, true, deliveryProcessGone, github, registeredPrWatches, armedTimerIds, armedWatches, currentQuestionCount, answerAwaitingDelivery(questionRows, rawTele?.lastUserAt, nowMs)) || (quietSince !== undefined && !futureSnooze(row, nowMs))
+  const awaitingBackground = archived ? false : deriveAwaitingBackground(row, tele, runtime, interactionPresence.needsUser, nowMs, limitPause, deliveryProcessGone, github, registeredPrWatches, armedTimerIds, armedWatches, currentQuestionCount)
   // A worker that exited with work still outstanding — a turn in flight, OR a sub-agent still reading
   // "running" (its parent is gone, so it cannot actually be live) — is a crash/stall, not a clean
   // handoff, so it cards as "stalled" not a bare "rest". Mirrors deriveNeedsYou's surfacing above.
@@ -2151,7 +2155,7 @@ export function createBoard(
       // deriveNeedsYou's hard gates: a request the human must answer, a question, a crash, a limit pause.
       urgent: (t) =>
         t.actionableInteraction === true || t.runtime === "perm-prompt" || t.pendingAsk !== undefined ||
-        t.pendingQuestion === true || (t.questions?.length ?? 0) > 0 || t.crashed === true ||
+        t.pendingQuestion === true || (t.questions?.some((q) => !q.repliedPast) ?? false) || t.crashed === true ||
         t.limitPause !== undefined || (t.providerError !== undefined && t.providerError.retrying !== true),
     })
     armSnoozeWake(sessionThreads, assembledAtMs, queueClock.nextEntryAt(assembledAtMs))
