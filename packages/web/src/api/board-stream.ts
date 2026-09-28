@@ -2,7 +2,7 @@ import type { ServerEvent } from "@frizz/shared"
 import { deltaAction } from "@frizz/shared"
 import { store, setBoard, applyDelta, openThread } from "../store.ts"
 import { noteServerBootId } from "./boot.ts"
-import { modeProjectHref, projectHref, projectSlug } from "../lib/base-path.ts"
+import { crossProjectHref, projectSlug } from "../lib/base-path.ts"
 import { spaNavigate } from "../lib/router.ts"
 
 // The transport-agnostic board/notify handler — the stage-1 delta/seq/boot state machine, extracted so
@@ -86,21 +86,21 @@ export function notify(event: Extract<ServerEvent, { type: "notify" }>): void {
   const project = projectSlug() ?? store.board?.projectSlug
   // The tag is the browser's REPLACE key, so a bare slug collapses two projects' identically-named
   // threads into one notification — and the click would open whichever tab happened to fire it. Spelled
-  // by the project's BOARD whatever page raised it, so a board tab and a cross-project tab on the same
-  // project raise one notification between them, not two.
-  const n = new Notification(event.title, { body: event.body, tag: `${project ? projectHref(project) : ""}/${event.slug}` })
+  // by the thread's own address, so two tabs focused on the same project raise one notification
+  // between them, not two.
+  const n = new Notification(event.title, { body: event.body, tag: `${project ? crossProjectHref(project) : ""}/${event.slug}` })
   n.onclick = () => {
     window.focus()
     // The desktop app (packages/desktop): `window.focus()` does not raise an Electron window the way it
     // raises a browser tab, so its preload offers the one call that does.
     const desktop = (window as { frizzDesktop?: { focusWindow(): void } }).frizzDesktop
     desktop?.focusWindow()
-    // Same project (the overwhelmingly common case): the in-app drawer. Otherwise that project's page in
-    // this page's MODE, through the router — the cross-project page opens it in place.
+    // Same project (the overwhelmingly common case): the in-app drawer. Otherwise that project's drawer
+    // address, through the router — the page opens it in place.
     if (project === undefined || projectSlug() === project) {
       openThread(event.slug) // side drawer: chat, or the frizz doc for a never-spawned thread
     } else {
-      spaNavigate(`${modeProjectHref(project)}/thread/${encodeURIComponent(event.slug)}`)
+      spaNavigate(`${crossProjectHref(project)}/thread/${encodeURIComponent(event.slug)}`)
     }
     n.close()
   }

@@ -27,7 +27,7 @@ import { copyTextToClipboard } from "../lib/clipboard.ts"
 import { draftKey, draftStore, useDraftValues } from "../lib/drafts.ts"
 import { rememberFullscreenOrigin } from "../lib/fullscreenHandoff.ts"
 import { pageUnloading } from "../lib/pendingSends.ts"
-import { DELIVERY_SEND_TIMEOUT_MS, trackPendingSend, withDeliveryRetry } from "../lib/eagerComposerSubmission.ts"
+import { deliverProjectFollowUp } from "../lib/projectFollowUp.ts"
 import { STALLED_RETRY_MESSAGE } from "../lib/retrySession.ts"
 import { TRANSCRIPT_META_LABEL_CLASS, transcriptMetaChevronClass } from "../lib/transcriptMetaLabels.ts"
 import { HEADER_ICON_CLASS } from "../lib/headerIcon.ts"
@@ -79,25 +79,9 @@ export function useOpenThreadInPlace(): (project: Pick<QueuesProject, "slug">, s
   )
 }
 
-/**
- * A follow-up into another project's thread, delivered the way the board's composer delivers one: a
- * refusal the server PROVED took no effect (runtime contention, a permission or model change mid-flight,
- * a control-plane restart) is waited out and retried under the same delivery id, which the server's
- * ledger dedupes; each attempt is bounded, so a hung request cannot hold the card.
- */
+/** A follow-up into another project's thread (lib/projectFollowUp.ts, which the project list's Retry shares). */
 function deliverFollowUp(project: QueuesProject, thread: ThreadView, message: string): Promise<void> {
-  const deliveryId = crypto.randomUUID()
-  const sessionId = thread.sessionId ?? ""
-  const pending = { deliveryId, apiBase: projectApiBase(project.id), projectDir: project.projectDir, slug: thread.id, sessionId, message, at: Date.now() }
-  return trackPendingSend(pending, () => withDeliveryRetry(async () => {
-    const abort = new AbortController()
-    const timer = setTimeout(() => abort.abort(), DELIVERY_SEND_TIMEOUT_MS)
-    try {
-      await projectRpc(project.id).followUp({ slug: thread.id, sessionId, message, deliveryId }, { signal: abort.signal })
-    } finally {
-      clearTimeout(timer)
-    }
-  }, () => {}))
+  return deliverProjectFollowUp({ projectId: project.id, projectDir: project.projectDir, slug: thread.id, sessionId: thread.sessionId }, message)
 }
 
 /** The collapsed body's height: enough for a verdict line and the paragraph under it, never a wall. */

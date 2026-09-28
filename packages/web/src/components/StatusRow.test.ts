@@ -9,18 +9,16 @@ import { StatusRow } from "./StatusRow.tsx"
 import { store, type ConnectionState } from "../store.ts"
 
 // The row's SHAPE is a spec, not an accident: home → settings → reload → quota, left to right and all
-// of it left-justified, with the project — owner/repo, a link to the repo — pinned to the right edge.
-// It has been three separate pieces of chrome in three places (identity top-left, settings/reload
-// top-right, quota floating over the sidebar composer), then one fixed corner chip, then the same row
-// running the other way — so a regression here is a silent return to one of those rather than a
-// visible break.
+// of it left-justified, with the page's name pinned to the right edge. It has been three separate pieces
+// of chrome in three places (identity top-left, settings/reload top-right, quota floating over the
+// sidebar composer), then one fixed corner chip, then the same row running the other way — so a
+// regression here is a silent return to one of those rather than a visible break.
 //
-// `githubRepo` defaults to the label whenever the label is an owner/repo, which is what a github.com
-// origin produces; pass `null` for the other forge (a GitLab owner/repo, which the board carries WITHOUT
-// githubRepo — see BoardSnapshot).
+// The store's board is seeded because the row must NOT read it: it names the page, never a project, so a
+// board carrying an owner/repo is exactly what would leak into it if it did.
 function render(
   label: string | null = "colinhacks/frizz",
-  options: { connection?: ConnectionState; quota?: boolean; githubRepo?: string | null } = {},
+  options: { connection?: ConnectionState; quota?: boolean } = {},
 ): string {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } })
   // The quota chips and the gate in front of them read these two cache entries; seeding them is how a
@@ -32,11 +30,9 @@ function render(
     })
     client.setQueryData(["authStatus"], { claude: "authed", codex: "authed", emails: {} })
   }
-  const githubRepo =
-    options.githubRepo === undefined ? (label?.includes("/") ? label : undefined) : (options.githubRepo ?? undefined)
   store.board = (label === null
     ? null
-    : { projectLabel: label, ...(githubRepo ? { githubRepo } : {}), threads: [] }) as unknown as BoardSnapshot
+    : { projectLabel: label, githubRepo: label, threads: [] }) as unknown as BoardSnapshot
   store.connection = options.connection ?? "open"
   store.socketBoardFallback = null
   // The home crumb is a router Link (it hard-loaded the document until 2026-09-04), and a Link outside a
@@ -51,30 +47,32 @@ function render(
   )
 }
 
-/** The row with props — the cross-project page's own — under the same fixtures as `render()`. */
-function renderWith(props: { crossProject?: boolean }): string {
-  render()
-  const client = new QueryClient({ defaultOptions: { queries: { retry: false } } })
-  client.setQueryData(["authStatus"], { claude: "authed", codex: "authed", emails: {} })
-  return renderToStaticMarkup(
-    createElement(QueryClientProvider, { client }, createElement(MemoryRouter, null, createElement(StatusRow, props))),
-  )
-}
-
-test("controls run along the left; the project anchors the right", () => {
+test("controls run along the left; the page's name anchors the right", () => {
   const html = render()
 
   const home = html.indexOf('aria-label="Everything"')
   const settings = html.indexOf('aria-label="Settings"')
   const quota = html.indexOf("data-quota-bar")
-  const project = html.indexOf("data-project-identity-state")
+  const page = html.indexOf("data-status-row-page")
 
-  assert.ok(home >= 0 && settings >= 0 && quota >= 0 && project >= 0, "every segment renders")
-  assert.ok(home < settings, "the way out of the project leads")
+  assert.ok(home >= 0 && settings >= 0 && quota >= 0 && page >= 0, "every segment renders")
+  assert.ok(home < settings, "the page's own door leads")
   assert.ok(settings < quota, "the buttons precede the readouts")
-  assert.ok(quota < project, "the project is last, at the far edge")
-  // `ml-auto` on the identity IS the split. Without it the name packs left with everything else.
-  assert.match(html, /class="ml-auto flex min-w-0 items-center"/)
+  assert.ok(quota < page, "the name is last, at the far edge")
+  // `ml-auto` on the name IS the split. Without it the name packs left with everything else.
+  assert.match(html, /data-status-row-page="true" class="ml-auto min-w-0 truncate font-semibold text-fg\/90">Everything</)
+  // …and ∞ is the page itself (unfiltered, as every static render is: the filter is per tab).
+  assert.match(html, /aria-label="Everything" aria-current="page"/)
+})
+
+// THERE IS NO PROJECT VIEW (2026-09-28), so the row names no project: not the one a new thread goes to
+// (the prompt box's own pill), not the one the queue is filtered to (the READY header's), and not the
+// board the store happens to hold.
+test("the row names the page, never a project", () => {
+  const html = render("colinhacks/frizz")
+  assert.doesNotMatch(html, /colinhacks/)
+  assert.doesNotMatch(html, /github\.com/)
+  assert.doesNotMatch(html, /data-project-identity-state/)
 })
 
 test("ONE door out: the project grid folded into Everything, and its house went with it", () => {
@@ -91,12 +89,6 @@ test("TWO dividers: home is the door OUT, settings and reload act on the app you
   assert.equal(html.split('class="h-3 w-px shrink-0 bg-border"').length - 1, 2)
 })
 
-test("on the cross-project page the row names what the page SHOWS, and ∞ is the page", () => {
-  const everything = renderWith({ crossProject: true })
-  assert.match(everything, /data-status-row-page[^>]*>Everything</)
-  assert.match(everything, /aria-label="Everything" aria-current="page"/)
-})
-
 test("the row is LOOSE on the page — no fill, no border, no shadow, nothing fixed", () => {
   const html = render()
 
@@ -110,28 +102,9 @@ test("the row is LOOSE on the page — no fill, no border, no shadow, nothing fi
   }
 })
 
-test("the project is a LINK to its GitHub repo — and the connection dot is gone", () => {
-  // Maintainer 2026-08-28: "There should be a way to open up the GitHub repo for a given project if
-  // one is detected … Perhaps it should actually be showing owner/repo if a repo is detected … then
-  // maybe we should just drop the status indicator." The dot had been the connection's last remnant
-  // since 2026-08-19.
-  const html = render("colinhacks/frizz")
-
-  // The whole owner/repo, not the bare repo the row used to show.
-  assert.match(html, />colinhacks\/frizz</)
-  // A real anchor to the repo — new tab, and a label that says where it goes. No scripted window.open.
-  assert.match(html, /<a href="https:\/\/github\.com\/colinhacks\/frizz" target="_blank" rel="noopener"/)
-  assert.match(html, /aria-label="Open colinhacks\/frizz on GitHub"/)
-  // NO GITHUB MARK. The first cut wore one in the dot's old slot; the maintainer pulled it the same
-  // day because the prompt box's GitHub picker icon sits a few px below and means something else
-  // ("it kind of conflicts with the GitHub icon that shows up in the prompt box"). The link shows
-  // itself the way the app's other text links do — full fg and an underline on hover — and keeps the
-  // name's resting weight and tone, so a linked and an unlinked project read alike at rest.
-  const identity = html.slice(html.indexOf("data-project-identity-state"))
-  assert.doesNotMatch(identity, /<svg/)
-  assert.match(html, /<a [^>]*class="block min-w-0 rounded-sm font-semibold text-fg\/90 underline-offset-2 [^"]*hover:text-fg hover:underline/)
-
-  // The connection dot, in every state, is gone — nothing in the row says "connected" any more.
+test("the connection dot is gone, in every state", () => {
+  // It had been the connection's last remnant since 2026-08-19, and went with the maintainer's
+  // 2026-08-28 "then maybe we should just drop the status indicator".
   for (const connection of ["open", "connecting", "closed"] as const) {
     const state = render("colinhacks/frizz", { connection })
     assert.doesNotMatch(state, /role="img" aria-label="connected"/)
@@ -140,50 +113,8 @@ test("the project is a LINK to its GitHub repo — and the connection dot is gon
   }
 })
 
-test("an owner/repo from ANOTHER forge is plain text: no link", () => {
-  // The board carries `githubRepo` only for a github.com origin. A GitLab origin still yields an
-  // owner/repo display label, and pointing that at github.com would be a wrong destination rather
-  // than a missing one — so the name renders as prose and nothing in it is a control.
-  const html = render("colinhacks/frizz", { githubRepo: null })
-
-  assert.match(html, /data-project-identity-state="verified"/)
-  assert.match(html, />colinhacks\/frizz</)
-  assert.doesNotMatch(html, /<a href="https:\/\/github\.com/)
-  assert.doesNotMatch(html, /on GitHub/)
-})
-
-test("the name clips from the START, so the repo half survives a narrow column", () => {
-  // "colinhacks/frizz" does not fit beside two quota chips at the sidebar's 272px floor. A plain
-  // `truncate` would keep the owner and drop the repo — the one half worth keeping — so the clipping
-  // box runs rtl (overflow and ellipsis at the LEFT edge) with the text re-isolated ltr inside it.
-  const html = render("colinhacks/frizz")
-  assert.match(
-    html,
-    /<span dir="rtl" class="block min-w-0 overflow-hidden text-ellipsis whitespace-nowrap [^"]*"><span dir="ltr" class="\[unicode-bidi:isolate\]">colinhacks\/frizz<\/span><\/span>/,
-  )
-})
-
-test("a repo with no git remote shows its directory name, not the loading skeleton", () => {
-  // The bug this fixes: `projectLabel` falls back to the directory basename with no origin remote, the
-  // client folded that into "unavailable", and unavailable draws the cold placeholder — forever,
-  // because nothing was ever going to resolve (maintainer 2026-08-19: "it just shows a skeleton
-  // forever").
-  const html = render("scratch-pad")
-
-  assert.match(html, /data-project-identity-state="local"/)
-  assert.match(html, />scratch-pad</)
-  assert.doesNotMatch(html, /identity-placeholder/)
-  assert.doesNotMatch(html, /aria-busy/)
-  assert.match(html, /aria-label="Project: scratch-pad; local repository with no git remote"/)
-})
-
-test("a cold board still reserves the name's measure, and says it is loading", () => {
+test("the controls do not wait on a board — they are reachable from the first paint", () => {
   const html = render(null)
-
-  assert.match(html, /data-project-identity-state="loading"/)
-  assert.match(html, /aria-busy="true"/)
-  assert.match(html, /identity-placeholder/)
-  // The controls do not wait on a board — they are reachable from the first paint.
   assert.match(html, /aria-label="Settings"/)
   assert.match(html, /aria-label="Everything"/)
 })
@@ -239,7 +170,7 @@ test("the home crumb is a ROUTER link, not a raw anchor that reloads the documen
     /basename|Router/,
     "a raw <a href=\"/\"> would render happily here; a router Link cannot",
   )
-  // …and inside a router it renders, pointing at Everything (`/` here: this board names no slug).
+  // …and inside a router it renders, pointing at Everything.
   assert.match(render(), /href="\/"[^>]*aria-label="Everything"|aria-label="Everything"[^>]*href="\/"/)
 })
 

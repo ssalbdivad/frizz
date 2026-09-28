@@ -1,6 +1,7 @@
 import type { MouseEvent } from "react"
 import { Minimize2 } from "lucide-react"
-import { queueDestination, spaNavigate } from "../lib/router.ts"
+import { spaNavigate } from "../lib/router.ts"
+import { basePath, outerPath } from "../lib/base-path.ts"
 import { fullscreenOriginFor } from "../lib/fullscreenHandoff.ts"
 import { prefersReducedMotion } from "../lib/sheet.ts"
 import { isPlainLeftClick } from "../lib/standaloneThreadRoute.ts"
@@ -25,20 +26,20 @@ import { useShortcutLabel, withShortcut } from "../lib/keyboardRuntime.ts"
 export function CollapseThreadLink({ slug, label = "Exit fullscreen" }: { slug: string; label?: string }) {
   const keys = useShortcutLabel("thread.fullscreen")
   // BACK TO THE SURFACE THE DOOR WAS PRESSED IN, when the door noted one (lib/fullscreenHandoff).
-  // A thread read through a DRAWER has no surface on the board root, so landing there both stranded
+  // A thread read through a DRAWER has no surface on the page root, so landing there both stranded
   // the reader and left the reverse morph with nothing named to shrink into — it cross-faded at every
-  // width. `/thread/<slug>` is that drawer's own address, and BoardRoute re-mounts and names it.
+  // width. `/all/<project>/thread/<slug>` is that drawer's own address, and CrossProjectPage re-mounts
+  // and names it.
   //
-  // The fallback is the queue, and it is THIS project's queue, not the launching one's — and a BOARD,
-  // not the project picker. A bare "/" sent a reader who opened `/project/nub/thread/x/full` to
-  // whichever board the server was started from, and on the launching project it sent them to the grid.
-  // It is what a COLD arrival at /full gets: a deep link, a bookmark, a reload — no door was pressed,
-  // so there is nowhere to go back to and the queue is the honest destination.
-  const href = fullscreenOriginFor(slug) ?? queueDestination("/")
+  // A COLD arrival at /full — a deep link, a bookmark, a reload — noted no door, and gets the same
+  // drawer: fullscreen is a way of showing ONE thread, so leaving it shows that thread the ordinary
+  // way, on the page, rather than dropping the reader on a page it was never opened from. The
+  // launching project's unprefixed /full names no project to open a drawer in, so it goes home.
+  const href = fullscreenOriginFor(slug) ?? (basePath() ? outerPath(`/thread/${encodeURIComponent(slug)}`) : "/")
   function onClick(event: MouseEvent<HTMLAnchorElement>) {
     if (!isPlainLeftClick(event)) return
     event.preventDefault()
-    // The fullscreen door's transition, played backwards: BoardRoute primes the reverse morph's target
+    // The fullscreen door's transition, played backwards: CrossProjectPage primes the reverse morph's target
     // (store.primeFullscreenReturn), so this opts the navigation in the same way the door does. The
     // browser Back button gets the same treatment for free — react-router re-arms the transition for
     // the POP of a pair that transitioned.

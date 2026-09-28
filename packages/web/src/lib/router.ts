@@ -1,12 +1,12 @@
 import { subscribe } from "valtio"
 import { store, topRoutedSlug, closeDrawersById } from "../store.ts"
 import { ownedByThisPage } from "./projectOwnership.ts"
-import { innerPath, isCrossProjectPath, outerPath, projectHref } from "./base-path.ts"
+import { innerPath, outerPath } from "./base-path.ts"
 import { parseStandaloneThreadPath } from "./standaloneThreadRoute.ts"
 
-// URL ⇄ state sync, SPA-style. Paths: `/` (the unified queue — the only page), `/thread/<slug>`
-// (the queue with that thread open in the drawer STACK's topmost thread layer — there is no
-// standalone thread page), `/status/<status>` (URL-only lists).
+// URL ⇄ state sync, SPA-style. Inner paths: `/` (the page), and `/thread/<slug>` (the page with that
+// thread open in the drawer STACK's topmost thread layer — `/all/<project>/thread/<slug>` in the
+// address bar, see base-path.ts). The fullscreen page, `/thread/<slug>/full`, is its own route.
 //
 // History contract (standard SPA): opening a thread layer PUSHES an entry so the browser Back
 // button unwinds it; other transitions REPLACE so transient state never buries the back stack.
@@ -20,7 +20,6 @@ function currentPath(): string {
   // frame or two before the board settles the destination, and settling it into a drawer would then
   // push a redundant history entry for a URL the user never left.
   if (store.routeThreadSlug) return `/thread/${encodeURIComponent(store.routeThreadSlug)}`
-  if (store.view.startsWith("status:")) return `/status/${encodeURIComponent(store.view.slice(7))}`
   return "/"
 }
 
@@ -32,24 +31,6 @@ function decodeSegment(segment: string): string | null {
     // app before React mounts. Treat malformed routes like any other unknown path: return to Queue.
     return null
   }
-}
-
-/**
- * An inner path put back in address-bar terms — with ONE correction `outerPath` cannot make.
- *
- * On an unprefixed page `outerPath("/")` is `"/"`, and since the singleton landed `/` is the
- * ALL-PROJECTS GRID, not a board. So closing the last thread drawer on the launching project — the
- * commonest navigation there is — navigated the maintainer straight to the project picker (verified
- * live, 2026-08-07). Every other project was unaffected: theirs is `/project/<slug>`, which is a board.
- *
- * The launching project has a `/project/<slug>` URL too; it simply had no way to say its own slug
- * until the board snapshot started carrying one. Use it for the queue and the ejection stops. With no
- * slug yet (a pre-restart server, or before the first board lands) this is exactly the old behaviour.
- */
-export function queueDestination(inner: string, slug = store.board?.projectSlug): string {
-  const outer = outerPath(inner)
-  // On the cross-project page `/` IS the page (its focus is not in the address), not a board's queue.
-  return outer === "/" && slug && !isCrossProjectPath() ? projectHref(slug) : outer
 }
 
 export function applyPath(path: string): void {
@@ -81,15 +62,7 @@ export function applyPath(path: string): void {
     store.routeThreadSlug = slug
     return
   }
-  const status = path.match(/^\/status\/([^/]+)$/)
-  if (status) {
-    store.routeThreadSlug = null
-    closeDrawersById(store.drawers.map((d) => d.id))
-    const statusName = decodeSegment(status[1])
-    store.view = statusName === null ? "todos" : `status:${statusName}`
-    return
-  }
-  // Everything else is the queue; Back past the last thread layer unwinds the stack (animated).
+  // Everything else is the page; Back past the last thread layer unwinds the stack (animated).
   store.routeThreadSlug = null
   closeDrawersById(store.drawers.map((d) => d.id))
   store.view = "todos"
@@ -188,10 +161,10 @@ export function startRouter(navigate: (path: string, options: { replace: boolean
       skippedWrite = true
       return
     }
-    const path = queueDestination(currentPath())
+    const path = outerPath(currentPath())
     if (path === location.pathname) return
     // A NEW topmost thread pushes history; unwinding or non-thread transitions replace. `startsWith`
-    // is checked against the INNER path: under a project prefix every path starts with `/project/`.
+    // is checked against the INNER path: under a project prefix every path starts with `/all/`.
     const openingThread = currentPath().startsWith("/thread/")
     navigate(path, { replace: !openingThread })
   }

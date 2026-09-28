@@ -7,7 +7,7 @@ import "./styles.css"
 // stack can produce: an adhoc stack has no restart-capable supervisor (so the reload button renders
 // null) and no provider credentials under its temp HOME (so both quota chips sit on the loading
 // placeholder forever). Stubbing the reads the row depends on is the only way to actually LOOK at the
-// finished thing: identity + settings + reload + two live quota percentages on one line.
+// finished thing: the page's door + settings + reload + two live quota percentages + its name on one line.
 //
 // It renders over a stand-in prompt box, because the row's two ends are supposed to land on that box's
 // border and a row measured in a void cannot show that.
@@ -19,13 +19,8 @@ import "./styles.css"
 //                       headline used to hijack it and show the weekly figure instead.
 //   ?state=signedout  — Codex signed out, which now renders NO Codex chip at all
 //   ?state=longemail  — an account address past the popover's width, to check the truncation
-//   ?identity=loading|unavailable|gitlab|local
-//                                  — gitlab: an owner/repo label with NO githubRepo (a non-GitHub
-//                                    origin), which must render as plain text with no link.
-//                                    local: a remote-less directory, same plain treatment.
-//   ?width=272                     — the column's width. 489 is the sidebar at a 1440px viewport; 272 is
-//                                    its floor in the tablet band, where "owner/repo" no longer fits
-//                                    beside two quota chips and has to truncate from the START.
+//   ?width=272                     — the column's width. 489 is the column at a 1440px viewport; 272 is
+//                                    its floor in the tablet band.
 //   ?font=mono                     — this app renders in TWO type families (html[data-font], applied
 //                                    before first paint); a fixture that leaves it unset silently
 //                                    renders mono and hides half the answer.
@@ -88,20 +83,6 @@ window.fetch = async (input, init) => {
 document.documentElement.dataset.font = params.get("font") === "mono" ? "mono" : "sans"
 
 const { StatusRow } = await import("./components/StatusRow.tsx")
-const { store } = await import("./store.ts")
-const identityMode = params.get("identity")
-
-// StatusRow reads identity off the store itself, so the fixture seeds the store rather
-// than passing props — which is also the only way to exercise the real read path.
-store.board = (identityMode === "loading"
-  ? null
-  : identityMode === "unavailable"
-    ? { projectLabel: "", threads: [] }
-    : identityMode === "local"
-      ? { projectLabel: "scratch-pad", threads: [] }
-      : identityMode === "gitlab"
-        ? { projectLabel: "colinhacks/frizz", threads: [] }
-        : { projectLabel: "colinhacks/frizz", githubRepo: "colinhacks/frizz", threads: [] }) as never
 const width = Number(params.get("width") ?? 489)
 
 const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } })

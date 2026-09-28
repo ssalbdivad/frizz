@@ -25,7 +25,9 @@ import { StatusRow } from "./StatusRow.tsx"
 import { Tooltip } from "./Tooltip.tsx"
 import { ProviderMark } from "./ProviderMark.tsx"
 import { STATUS_CHIP } from "../lib/status.ts"
-import { retrySession } from "../lib/retrySession.ts"
+import { STALLED_RETRY_MESSAGE, retrySession } from "../lib/retrySession.ts"
+import { deliverProjectFollowUp } from "../lib/projectFollowUp.ts"
+import { useThreadApi, useThreadIsForeignToPage, useThreadProjectDir, useThreadProjectId } from "../api/threadApi.tsx"
 import { formatSnoozedUntil, formatAutoSnoozedUntil, formatUserSnooze } from "../lib/snooze.ts"
 import { formatCompactElapsed } from "../lib/durationLabels.ts"
 import { awaitingProse, awaitingWaitClause } from "../lib/awaitingPresentation.ts"
@@ -85,6 +87,22 @@ export const ROW_ACTION_CLASS = "flex h-[19px] w-[19px] items-center justify-cen
 // (BandLabel.tsx), while a Ready row lights nothing here because its thread is a card in the middle
 // column, which the scroll marker already tracks. Stronger than hover so pointing at a neighbour
 // cannot be mistaken for opening it.
+/**
+ * After a row's verb lands, re-read what the row was drawn from — but only for a row OFF its own page.
+ * On a board the live feed carries the change back within a frame; Everything polls every project, so a
+ * scoped row asks for that poll now, and for its project's full board (Done, External), rather than
+ * showing the old state for up to a poll.
+ */
+function useAfterScopedWrite(): () => void {
+  const queryClient = useQueryClient()
+  const projectId = useThreadProjectId()
+  return useCallback(() => {
+    if (!projectId) return
+    void queryClient.invalidateQueries({ queryKey: ["projectsQueues"] })
+    void queryClient.invalidateQueries({ queryKey: ["ofProject", projectId, "board"] })
+  }, [queryClient, projectId])
+}
+
 function rowWashClass(open: boolean): string {
   return `after:pointer-events-none after:absolute after:inset-0 after:rounded-md after:transition-opacity ${
     open ? "after:bg-hover-strong after:opacity-100" : "after:bg-hover after:opacity-0 hover:after:opacity-100"
@@ -424,14 +442,29 @@ export function Sidebar() {
   )
 }
 
+/**
+ * A row drawn OUTSIDE its own project's page — in Everything's project list (ProjectList.tsx), where the
+ * page project is the prompt box's pick and the row is usually another project's. Its verbs must not ask
+ * the page: the row sits under a ThreadProjectScope, so pin, reopen and Retry go through its project's
+ * own client (api/threadApi.tsx), and these say where "open" and the fullscreen door lead.
+ */
+export interface RowScope {
+  /** "Show me this thread" — its card if the queue is showing one, else its drawer, in place. */
+  open: (t: ThreadView) => void
+  /** A thread's /full, in its own project: `/all/<slug>/thread/<t>/full`. */
+  fullHref: (slug: string) => string
+  /** The row's project IS the page project, so a child row can open its own drawer here directly. */
+  page: boolean
+}
+
 // One row of a band, whichever kind of thread it is. Terminal command threads share the bands with
 // agent threads (groups.ts sectionOf) but not the agent row's verbs, so they get their own row.
-function RailRow({ t, active, open = false, onQueueNavigate, restedAge = false }: { t: ThreadView; active: boolean; open?: boolean; onQueueNavigate?: (id: string) => void; restedAge?: boolean }) {
-  if (t.kind === "command") return <CommandRow t={t} active={active} open={open} onQueueNavigate={onQueueNavigate} />
+export function RailRow({ t, active, open = false, onQueueNavigate, restedAge = false, scope }: { t: ThreadView; active: boolean; open?: boolean; onQueueNavigate?: (id: string) => void; restedAge?: boolean; scope?: RowScope }) {
+  if (t.kind === "command") return <CommandRow t={t} active={active} open={open} onQueueNavigate={onQueueNavigate} scope={scope} />
   return (
     <>
-      <ThreadRow t={t} active={active} open={open} onQueueNavigate={onQueueNavigate} restedAge={restedAge} />
-      <SubAgentRows t={t} />
+      <ThreadRow t={t} active={active} open={open} onQueueNavigate={onQueueNavigate} restedAge={restedAge} scope={scope} />
+      <SubAgentRows t={t} scope={scope} />
     </>
   )
 }
@@ -441,7 +474,7 @@ function RailRow({ t, active, open = false, onQueueNavigate, restedAge = false }
 // with Running, finished it queues with a card (a click scrolls to it), and marked done it moves to
 // Done, where its check unchecks to reopen. None of an agent row's verbs: the drawer holds Stop /
 // Restart / Remove.
-const CommandRow = memo(function CommandRow({ t, active, open = false, onQueueNavigate }: { t: ThreadView; active: boolean; open?: boolean; onQueueNavigate?: (id: string) => void }) {
+const CommandRow = memo(function CommandRow({ t, active, open = false, onQueueNavigate, scope }: { t: ThreadView; active: boolean; open?: boolean; onQueueNavigate?: (id: string) => void; scope?: RowScope }) {
   const command = t.command
   if (!command) return null
   const running = commandLive(command)
@@ -459,6 +492,7 @@ const CommandRow = memo(function CommandRow({ t, active, open = false, onQueueNa
       </span>
       <button
         onClick={() => {
+          if (scope) return scope.open(t)
           // Queued ⇒ its card is in the main column; scroll there rather than open a drawer over it.
           if (t.needsYou && scrollToQueueCard(t.id)) {
             onQueueNavigate?.(t.id)
@@ -678,6 +712,7 @@ export const ThreadRow = memo(function ThreadRow({
   open = false,
   onQueueNavigate,
   restedAge = false,
+  scope,
 }: {
   t: ThreadView
   legacy?: boolean
@@ -687,6 +722,8 @@ export const ThreadRow = memo(function ThreadRow({
   onQueueNavigate?: (id: string) => void
   /** Show the right-justified rest-time column. The CUE's rows only — see RestedAge. */
   restedAge?: boolean
+  /** Drawn off its own project's page (Everything's project list) — see RowScope. */
+  scope?: RowScope
 }) {
   const foreign = !legacy && t.foreign === true
   // Snoozed rows are uniformly grayed as a whole; provisional titles retain their local dim treatment.
@@ -745,6 +782,9 @@ export const ThreadRow = memo(function ThreadRow({
       </span>
       <button
         onClick={() => {
+          // Off its own page the row cannot measure its card or open a drawer by slug — both would be
+          // the page project's — so its scope says where it goes, by the same rule as below.
+          if (scope) return scope.open(t)
           // A queued (needsYou) thread already has its full card in the main column. A sidebar click
           // just SCROLLS to that card — it does NOT open a redundant drawer over it (maintainer
           // 2026-07-15: "it should not open the thread drawer, just auto-scroll to the item in the
@@ -854,8 +894,8 @@ export const ThreadRow = memo(function ThreadRow({
               is the strip's last mark and its 11px ink already sits 10.5px from Retry. RE-MEASURE rather
               than re-guess if a glyph, its size or the gap changes. */}
           {!foreign && !pinned && <RowPinButton t={t} className="-mr-0.5" />}
-          <ExpandThreadLink slug={t.id} size={12} className={ROW_ACTION_CLASS} keyHint={false} />
-          {canRestart && <RowRetryButton slug={t.id} />}
+          <ExpandThreadLink slug={t.id} size={12} className={ROW_ACTION_CLASS} keyHint={false} href={scope?.fullHref(t.id)} />
+          {canRestart && <RowRetryButton t={t} />}
           {!foreign && pinned && <RowPinButton t={t} />}
         </div>
       )}
@@ -911,9 +951,21 @@ export function RestedAge({ t, yieldsToRetry }: { t: ThreadView; yieldsToRetry?:
 // thread header's Retry (lib/retrySession) — the row is just a faster door to it. Named "Retry", not
 // "Restart", because "restart" already means the frizz control plane restarting itself
 // (RestartFrizzButton) and the two must not blur.
-function RowRetryButton({ slug }: { slug: string }) {
+function RowRetryButton({ t }: { t: ThreadView }) {
+  const slug = t.id
   const queryClient = useQueryClient()
   const [busy, setBusy] = useState(false)
+  // Off its own page (Everything's project list) the page's eager follow-up would address the wrong
+  // server, so a scoped row sends through its project's own client — the queue card's own Retry.
+  const scopedProject = useThreadProjectId()
+  const scopedDir = useThreadProjectDir()
+  const afterWrite = useAfterScopedWrite()
+  const retry = (): Promise<void> => {
+    if (!scopedProject) return retrySession(queryClient, slug)
+    return deliverProjectFollowUp({ projectId: scopedProject, projectDir: scopedDir, slug, sessionId: t.sessionId }, STALLED_RETRY_MESSAGE)
+      .then(() => { showToast("Retrying…"); afterWrite() })
+      .catch((error: unknown) => showToast(`Retry failed: ${(error instanceof Error ? error.message : "unknown error").slice(0, 80)}`))
+  }
   return (
     <Tooltip label="Retry — resume this session where it left off">
       <button
@@ -926,7 +978,7 @@ function RowRetryButton({ slug }: { slug: string }) {
         onClick={(e) => {
           e.stopPropagation()
           setBusy(true)
-          retrySession(queryClient, slug).finally(() => setBusy(false))
+          retry().finally(() => setBusy(false))
         }}
         // One of the row's hover actions (see the group in ThreadRow): sized to the title's first line,
         // quiet grey, no border/accent — the muted-icon idiom of the header actions.
@@ -993,6 +1045,9 @@ function PinnedMark() {
 function RowPinButton({ t, className = "" }: { t: ThreadView; className?: string }) {
   const pinned = isPinned(t)
   const [busy, setBusy] = useState(false)
+  // The row's own project's client: the page's `rpc` on a board, the row's project under a scope.
+  const api = useThreadApi()
+  const afterWrite = useAfterScopedWrite()
   return (
     <Tooltip label={pinned ? "Unpin — return this thread to the rail's bands" : "Pin — keep this thread at the very top"}>
       <button
@@ -1005,8 +1060,9 @@ function RowPinButton({ t, className = "" }: { t: ThreadView; className?: string
         onClick={(e) => {
           e.stopPropagation()
           setBusy(true)
-          rpc
+          api
             .setThreadPinned({ slug: t.id, sessionId: t.sessionId ?? "", pinned: !pinned })
+            .then(afterWrite)
             .catch((error: unknown) => showToast(`${pinned ? "Unpin" : "Pin"} failed: ${String(error instanceof Error ? error.message : error).slice(0, 80)}`))
             .finally(() => setBusy(false))
         }}
@@ -1032,6 +1088,11 @@ function RowPinButton({ t, className = "" }: { t: ThreadView; className?: string
 // invalid markup and swallows the row's own click.
 function RowUncheckDone({ t }: { t: ThreadView }) {
   const [busy, setBusy] = useState(false)
+  const api = useThreadApi()
+  const afterWrite = useAfterScopedWrite()
+  // The page's optimistic overlays are keyed by bare slug for the PAGE project's rail; a row of another
+  // project must not touch them (api/threadApi.tsx useThreadIsForeignToPage).
+  const scoped = useThreadIsForeignToPage()
   return (
     <Tooltip label="Done — uncheck to reopen" side="left">
       <button
@@ -1047,9 +1108,10 @@ function RowUncheckDone({ t }: { t: ThreadView }) {
           setBusy(true)
           // A Mark-as-done from the last few seconds may still have its optimistic hint up, and that hint
           // would hold the row under Done over the server's reopen until it expired.
-          clearArchived(t.id)
-          rpc
+          if (!scoped) clearArchived(t.id)
+          api
             .setThreadState({ slug: t.id, state: "open" })
+            .then(afterWrite)
             .catch((error: unknown) => showToast(`Reopen failed: ${String(error instanceof Error ? error.message : error).slice(0, 80)}`))
             .finally(() => setBusy(false))
         }}
@@ -1068,9 +1130,13 @@ function RowUncheckDone({ t }: { t: ThreadView }) {
 // clear the parent row's indicator column). The liveness policy is the rail's own and is deliberately
 // unchanged: running OR stale, and only children carrying an id (the drill-in drawer's RPC handle —
 // see lib/childOps.ts, which lists all three surfaces' divergent policies in one place).
-function SubAgentRows({ t }: { t: ThreadView }) {
+function SubAgentRows({ t, scope }: { t: ThreadView; scope?: RowScope }) {
   const subs = visibleChildOps(t.subAgents ?? [], "rail")
   if (subs.length === 0) return null
+  // A child's drawer is pushed on the PAGE project, so a row of another project opens its parent's
+  // drawer instead (its ops strip lists the same children, one click from their own), and offers no
+  // dismiss, which would retire a child of the page project's same-named thread.
+  const foreignToPage = scope !== undefined && !scope.page
   return (
     <div className="flex flex-col">
       {subs.map((s) => (
@@ -1084,10 +1150,10 @@ function SubAgentRows({ t }: { t: ThreadView }) {
           depth={s.depth}
           startedAt={s.startedAt}
           parentSlug={t.id}
-          onOpen={() => pushSubAgentDrawer(t.id, s.id, { label: s.label, subagentType: s.subagentType, startedAt: s.startedAt })}
+          onOpen={() => (foreignToPage && scope ? scope.open(t) : pushSubAgentDrawer(t.id, s.id, { label: s.label, subagentType: s.subagentType, startedAt: s.startedAt }))}
           // The same dismiss × the queue card and the ops strip carry (maintainer 2026-07-30): the rail
           // is where a phantom child is most often SEEN, so it is where retiring one has to be possible.
-          onDismiss={childOpDismisser(t.id, s)}
+          onDismiss={foreignToPage ? undefined : childOpDismisser(t.id, s)}
           // The rail has no room for the worker-profile tag the ops strip can show, so it rides the tooltip.
           title={s.subagentType ? `[${s.subagentType}] ${s.label}` : s.label}
         />

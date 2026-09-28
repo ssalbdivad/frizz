@@ -23,7 +23,7 @@ import { useShortcutLabel, withShortcut } from "../lib/keyboardRuntime.ts"
 // clear that used to sit here (the fullscreen page mounts the same DrawerStack and would paint the
 // thread's own sheet over itself) moved to StandaloneRoute: the old page is snapshotted two renders
 // AFTER this click, so a click-time clear removed the very sheet the transition slides.
-export function ExpandThreadLink({ slug, size = 14, className, label = "Open fullscreen", keyHint = true }: {
+export function ExpandThreadLink({ slug, size = 14, className, label = "Open fullscreen", keyHint = true, href: givenHref }: {
   slug: string
   size?: number
   className?: string
@@ -31,8 +31,11 @@ export function ExpandThreadLink({ slug, size = 14, className, label = "Open ful
   /** Name the `f` key in the tooltip. Off on the rail's row door: the key opens the card being READ,
    *  and a rail row's thread is not necessarily that one. */
   keyHint?: boolean
+  /** Where the door goes, when the thread is not the PAGE project's — a row in Everything's project list
+   *  names its own project's /full (`/all/<slug>/thread/<t>/full`). Defaults to this page's. */
+  href?: string
 }) {
-  const href = standaloneThreadHref(slug)
+  const href = givenHref ?? standaloneThreadHref(slug)
   const keys = useShortcutLabel("thread.fullscreen")
   function onClick(event: MouseEvent<HTMLAnchorElement>) {
     // Never let the click reach the row/card underneath: the sidebar row would ALSO open its drawer.

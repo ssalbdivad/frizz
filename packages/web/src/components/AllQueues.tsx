@@ -36,8 +36,8 @@ import type { ProjectQueue, ThreadView } from "@frizz/shared"
 import { rpc } from "../api/rpc.ts"
 import { displayTitle } from "../groups.ts"
 import { isBusy, liveQueue, overlayQueues, queuesProjects, threadKey, type QueuesProject } from "../lib/allQueues.ts"
-import { crossProjectHref, innerPath, projectHref, projectSlug } from "../lib/base-path.ts"
-import { rememberCrossProjectFocus } from "../lib/crossProject.ts"
+import { crossProjectHref, innerPath, projectSlug } from "../lib/base-path.ts"
+import { rememberCrossProjectFocus, setQueueFilter, useQueueFilter } from "../lib/crossProject.ts"
 import { draftKey, draftStore } from "../lib/drafts.ts"
 import { QUEUE_CARD_VIEWPORT_TOP, slugsInThreadDrawers, store } from "../store.ts"
 import { useBoard } from "../hooks.ts"
@@ -56,8 +56,10 @@ import { ProjectMenu, homeOf, useAddProject } from "./ProjectActions.tsx"
 import { StatusRow } from "./StatusRow.tsx"
 import { DispatchForm } from "./NewThreadModal.tsx"
 import { Menu, MenuContent, MenuItem, MenuTrigger } from "./ui/Menu.tsx"
-import { ProjectFilter, QueueBadge } from "./ProjectFilter.tsx"
+import { ProjectFilter } from "./ProjectFilter.tsx"
+import { AddProjectRow, ProjectList } from "./ProjectList.tsx"
 import { ThreadProjectScope } from "../api/threadApi.tsx"
+import { isPlainLeftClick } from "../lib/standaloneThreadRoute.ts"
 
 /** How often the page re-reads every project. The rail's badges poll at 5s; this is the page the
  *  operator is looking AT, so it runs a little faster — the read is the servers' cached snapshots. */
@@ -106,7 +108,17 @@ export function AllQueuesPage() {
   // Registered projects this server has not opened (still being opened after a boot, served by another
   // Frizz, or failed to open): their queues are unknown, so "nothing in any queue" would be a claim.
   const unopened = projects.filter((project) => !project.open && !project.stale).length
-  const lanes = projects.filter((project) => project.queued.some((t) => !hidden(threadKey(project.id, t.id))))
+  // THE QUEUE FILTER scopes the right side and nothing else (maintainer 2026-09-28: "have project filters
+  // only affect which threads are displayed on the right side and have the ui reflect that"): the list on
+  // the left keeps every project. Its control is the READY header's, over the cards it filters. A filter
+  // naming a project this machine no longer lists shows everything rather than an empty page.
+  const filterId = useQueueFilter()
+  const filtered = filterId === null ? undefined : projects.find((project) => project.id === filterId)
+  useEffect(() => {
+    if (filterId !== null && cards.data && !filtered) setQueueFilter(null)
+  }, [filterId, cards.data, filtered])
+  const shown = filtered ? [filtered] : projects
+  const lanes = shown.filter((project) => project.queued.some((t) => !hidden(threadKey(project.id, t.id))))
   // Counted from what the page SHOWS: a card the operator just finished is gone from its lane at once, and
   // a header still counting it read "1 in the queue" over an empty page until the next poll.
   const ready = lanes.reduce((sum, project) => sum + project.queued.filter((t) => !hidden(threadKey(project.id, t.id))).length, 0)
@@ -137,7 +149,7 @@ export function AllQueuesPage() {
               and the prompt box under it: a new thread in any project without leaving, the project chosen
               in the box's own bottom strip, beside the model. */}
           <div className="mb-5 shrink-0 px-0.5">
-            <StatusRow crossProject view={<ViewFilter projects={projects} hidden={hidden} />} />
+            <StatusRow />
             <FocusedComposer
               focus={focus}
               project={projects.find((project) => project.slug === focus)}
@@ -174,18 +186,30 @@ export function AllQueuesPage() {
         ) : queues.error && !queues.data ? (
           <p className="my-auto text-center text-[13px] text-muted">Could not read the queues: {String(queues.error)}</p>
         ) : (
-          <div className={`${lanes.length > 0 ? "" : "my-auto "}flex w-full min-w-0 flex-col py-8 max-[800px]:pt-2`}>
-            {lanes.length > 0 ? (
+          <div className={`${lanes.length > 0 || filtered ? "" : "my-auto "}flex w-full min-w-0 flex-col py-8 max-[800px]:pt-2`}>
+            {lanes.length > 0 || filtered ? (
               <>
-                {/* THE INBOX, NAMED — the board's own header over its cards (TodosView), one level up: every
-                    card below is a Ready thread, whichever project it is from. `pl-[21px]` stands the glyph
-                    over the card titles, as the lane headers' squares do. */}
-                <h2 data-inbox-header className="mb-3 flex pl-[21px]">
-                  <BandLabel band="ready" count={ready} />
-                </h2>
-                {lanes.map((project, index) => (
-                  <Lane key={project.id} project={project} first={index === 0} leaving={leaving} hidden={hidden} />
-                ))}
+                {/* THE INBOX, NAMED — every card below is a Ready thread, whichever project it is from — and
+                    at its right end the one control that scopes it: which projects' cards these are.
+                    `pl-[21px]` stands the glyph over the card titles, as the lane headers' squares do, and
+                    `pr-[21px]` stands the filter over the cards' own right-hand controls. */}
+                <div data-inbox-header className="mb-3 flex min-w-0 items-center gap-3 pl-[21px] pr-[21px]">
+                  <h2 className="flex shrink-0">
+                    <BandLabel band="ready" count={ready} />
+                  </h2>
+                  <div className="ml-auto flex min-w-0 text-[12px]">
+                    <QueueFilter projects={projects} hidden={hidden} current={filtered} />
+                  </div>
+                </div>
+                {lanes.length > 0 ? (
+                  lanes.map((project, index) => (
+                    <Lane key={project.id} project={project} first={index === 0} headed={!filtered} leaving={leaving} hidden={hidden} />
+                  ))
+                ) : (
+                  <p data-xq-filtered-empty className="mt-16 text-center text-[13px] text-muted">
+                    Nothing from {filtered!.name} is waiting on you.
+                  </p>
+                )}
               </>
             ) : (
               <EmptyQueues unopened={unopened} />
@@ -203,11 +227,11 @@ export function AllQueuesPage() {
 }
 
 /**
- * The page's side of the status row's filter (ProjectFilter.tsx): Everything is this page, and choosing a
- * project opens its PROJECT VIEW — the same layout, showing only that project and more of it.
+ * The READY header's filter (ProjectFilter.tsx): which projects' cards the queue shows — every project's,
+ * or one's. Per tab (lib/crossProject.ts), and it scopes this column only: the list on the left keeps
+ * every project, since that is where the rest of each one is.
  */
-function ViewFilter({ projects, hidden }: { projects: QueuesProject[]; hidden: (key: string) => boolean }) {
-  const navigate = useNavigate()
+function QueueFilter({ projects, hidden, current }: { projects: QueuesProject[]; hidden: (key: string) => boolean; current: QueuesProject | undefined }) {
   // The list's own order (ProjectList): busy projects first, then the quiet ones.
   const ordered = [...projects.filter(isBusy), ...projects.filter((project) => !isBusy(project))]
   const items = ordered.map((project) => ({
@@ -217,13 +241,18 @@ function ViewFilter({ projects, hidden }: { projects: QueuesProject[]; hidden: (
     card: project.card ?? fallbackCard(project),
     ready: project.queued.filter((t) => !hidden(threadKey(project.id, t.id))).length,
   }))
+  // A different set of cards is a different page to read, so it is read from its top.
+  const choose = (id: string | null) => {
+    setQueueFilter(id)
+    window.scrollTo({ top: 0, behavior: prefersSmooth() })
+  }
   return (
     <ProjectFilter
       projects={items}
-      current={undefined}
-      onEverything={() => window.scrollTo({ top: 0, behavior: prefersSmooth() })}
-      onProject={(project) => navigate(projectHref(encodeURIComponent(project.slug)))}
-      onClear={() => {}}
+      current={current && items.find((item) => item.id === current.id)}
+      onEverything={() => choose(null)}
+      onProject={(project) => choose(project.id)}
+      onClear={() => choose(null)}
     />
   )
 }
@@ -378,10 +407,7 @@ function FocusedComposer({
           <div className="absolute bottom-1.5 left-1.5 flex min-w-0 max-w-[calc(100%-12px)]">{target}</div>
           {slow && (
             <span>
-              {project && !project.open ? `${project.name} is not open on this server. ` : `${project?.name ?? focus ?? "This project"} has not answered yet. `}
-              <Link to={projectHref(encodeURIComponent(focus ?? ""))} className="text-fg/90 underline decoration-muted/40 underline-offset-2 hover:decoration-fg">
-                Open its project view
-              </Link>
+              {project && !project.open ? `${project.name} is not open on this server.` : `${project?.name ?? focus ?? "This project"} has not answered yet.`}
             </span>
           )}
         </div>
@@ -390,265 +416,6 @@ function FocusedComposer({
   }
   return <DispatchForm key={focus} autoFocus={autoFocus} target={target} />
 }
-
-// ---- The machine rail (left column) -----------------------------------------------------------------
-
-// The board sidebar's row geometry, verbatim (Sidebar.tsx ThreadRow), so a row here and a row there are
-// the same row: the hover wash, the 20px indicator gutter, the title's 13/19 type.
-const ROW_CLASS =
-  "group relative flex min-w-0 items-start rounded-md transition-[color,opacity] after:pointer-events-none after:absolute after:inset-0 after:rounded-md after:bg-hover after:opacity-0 after:transition-opacity hover:after:opacity-100"
-const ROW_BUTTON_CLASS = "flex min-w-0 flex-1 items-start gap-2 pb-1 pl-5 pr-1.5 pt-1 text-left outline-none focus-visible:ring-1 focus-visible:ring-focus-ink-60 rounded-md"
-const INDICATOR_SLOT = "flex h-[19px] w-4 shrink-0 items-center justify-center"
-
-/**
- * Every project on the machine — the page's navigator, and the only place a project is managed from.
- *
- * Projects with something the operator can see — a Ready card, or live work — come first, in the rail's
- * order, each followed by its threads; every other project is one line under them. They are separated
- * by space, not rules: the project's own square already starts each group, and a rule would say it twice.
- */
-function ProjectList({
-  projects,
-  home,
-  activeKey,
-  hidden,
-  onQueuedRow,
-}: {
-  projects: QueuesProject[]
-  home: string | undefined
-  activeKey: string | null
-  hidden: (key: string) => boolean
-  onQueuedRow: (key: string) => void
-}) {
-  const busy = projects.filter(isBusy)
-  const quiet = projects.filter((project) => !isBusy(project))
-  return (
-    <>
-      {busy.map((project, index) => (
-        <ProjectGroup
-          key={project.id}
-          project={project}
-          spaced={index > 0}
-          home={home}
-          activeKey={activeKey}
-          hidden={hidden}
-          onQueuedRow={onQueuedRow}
-        />
-      ))}
-      {/* Always listed, one line each, under the busy ones. They sat behind a collapsed "Quiet" fold until
-          2026-09-24, which cost a click to reach a project whose row is already about as quiet as a row
-          can be (maintainer: "if I want to navigate to them I shouldn't have to expand"). */}
-      {quiet.length > 0 && (
-        <section aria-label="Quiet projects" className={busy.length > 0 ? "mt-3" : ""}>
-          {quiet.map((project) => (
-            <ProjectRow key={project.id} project={project} busy={false} home={home} />
-          ))}
-        </section>
-      )}
-    </>
-  )
-}
-
-/**
- * One busy project: its row, then its Ready rows, each opposite its card the way a project view's cue row
- * faces its queue card, then its Working rows. Parked work (Snoozed) is not listed here: it is waiting on
- * nobody, and the project view keeps it.
- */
-function ProjectGroup({
-  project,
-  spaced,
-  home,
-  activeKey,
-  hidden,
-  onQueuedRow,
-}: {
-  project: QueuesProject
-  spaced: boolean
-  home: string | undefined
-  activeKey: string | null
-  hidden: (key: string) => boolean
-  onQueuedRow: (key: string) => void
-}) {
-  const openInPlace = useOpenThreadInPlace()
-  const queued = project.queued.filter((t) => !hidden(threadKey(project.id, t.id)))
-  return (
-    <section aria-label={project.name} data-xq-rail-project={project.id} className={spaced ? "mt-3" : ""}>
-      <ProjectRow project={project} busy count={queued.length} home={home} />
-      {queued.map((t) => {
-        const key = threadKey(project.id, t.id)
-        return <RailRow key={key} t={t} active={activeKey === key} restedAge onClick={() => onQueuedRow(key)} />
-      })}
-      {project.running.map((t) => (
-        <RailRow key={t.id} t={t} onClick={() => openInPlace(project, t.id)} />
-      ))}
-    </section>
-  )
-}
-
-/** A row whose "…" menu is open wears the rail's hover wash, held. */
-const SELECTED_ROW = "after:!opacity-100"
-
-/**
- * A project's own row — the same for a busy project heading its threads and a quiet one alone.
- *
- * Its click opens the project's PROJECT VIEW — the same layout, that project alone and more of it (its
- * Snoozed, its Done, its terminal) — and the status row's filter pill there is the one click back. Its right edge is its count — the accent badge, when anything is
- * Ready — or a note, only when something is wrong: its directory is gone, or this server has not opened
- * it. Nothing else: "3 done" and "no threads" were words about nothing to do. On hover the count gives
- * way to the "…" (ProjectActions.tsx ProjectMenu): its icon, rename and delete.
- */
-function ProjectRow({
-  project,
-  busy,
-  count = 0,
-  home,
-}: {
-  project: QueuesProject
-  busy: boolean
-  count?: number
-  home: string | undefined
-}) {
-  const [menuOpen, setMenuOpen] = useState(false)
-  const note = project.stale ? "Directory is missing" : !project.open ? "Not open" : null
-  return (
-    <div
-      data-xq-project-row={project.id}
-      className={`${ROW_CLASS} ${project.stale ? "opacity-60" : ""} ${menuOpen ? SELECTED_ROW : ""}`}
-    >
-      <Link
-        to={projectHref(encodeURIComponent(project.slug))}
-        title={`Show only ${project.name}`}
-        // On a touch screen the "…" never hides, so the count steps left of it rather than under it.
-        className={`${ROW_BUTTON_CLASS} items-center [@media(hover:none)]:pr-7`}
-      >
-        <span className={`${INDICATOR_SLOT} ${project.stale ? "grayscale" : ""}`}>
-          <ProjectSquare project={project.card ?? fallbackCard(project)} size={16} />
-        </span>
-        <span className={`min-w-0 flex-1 truncate text-[12.5px] leading-[19px] ${busy ? "font-medium text-fg/90" : "text-fg/75"}`}>
-          {project.name}
-        </span>
-        {/* The rest-time column's spot, and the rest time's manners: it gives way to the menu on hover. */}
-        {(count > 0 || note) && (
-          <span className={`flex shrink-0 transition-opacity group-hover:opacity-0 group-has-[:focus-visible]:opacity-0 ${menuOpen ? "opacity-0" : ""} [@media(hover:none)]:opacity-100`}>
-            {count > 0 ? <QueueBadge count={count} /> : <span className="text-[10.5px] leading-[19px] text-muted-55">{note}</span>}
-          </span>
-        )}
-      </Link>
-      {project.card && (
-        <div
-          className={`absolute right-1.5 top-1 items-center bg-bg group-hover:flex group-has-[:focus-visible]:flex [@media(hover:none)]:flex before:pointer-events-none before:absolute before:inset-y-0 before:right-full before:w-3 before:bg-linear-to-r before:from-transparent before:to-bg ${menuOpen ? "flex" : "hidden"}`}
-        >
-          <ProjectMenu project={project.card} home={home} onOpenChange={setMenuOpen}>
-            <button type="button" aria-label={`More actions for ${project.name}`} className={`${ROW_ACTION_CLASS} data-[state=open]:bg-panel-2 data-[state=open]:text-fg data-[state=open]:opacity-100`}>
-              <Ellipsis size={13} />
-            </button>
-          </ProjectMenu>
-        </div>
-      )}
-    </div>
-  )
-}
-
-/**
- * The last row of the list: a project the machine does not have yet. The rail's own add slot — a dotted
- * squircle, "nothing here yet" — at the row's scale, so it reads as an empty place in the same list
- * rather than a button bolted under it. Muted, and never accent: accent means only "this many want you".
- */
-function AddProjectRow() {
-  const add = useAddProject()
-  return (
-    <div className={`${ROW_CLASS} mt-3`}>
-      <button type="button" onClick={add.start} disabled={add.pending} className={`${ROW_BUTTON_CLASS} group/add items-center disabled:opacity-60`}>
-        <span className={INDICATOR_SLOT}>
-          <span className="flex h-4 w-4 items-center justify-center rounded-[30%] border border-dotted border-border-strong text-muted-70 transition-colors group-hover/add:border-fg/40 group-hover/add:text-fg">
-            <Plus size={10} strokeWidth={2.25} />
-          </span>
-        </span>
-        <span className="min-w-0 flex-1 truncate text-[12.5px] leading-[19px] text-muted-70 transition-colors group-hover/add:text-fg">
-          {add.pending ? "Choosing a folder…" : "Add a project"}
-        </span>
-      </button>
-    </div>
-  )
-}
-
-/**
- * A thread row — the board sidebar's ThreadRow anatomy, with this page's own click. A Ready row's click
- * brings its card into view and rings it (the card's own title opens the thread); a Working row has no
- * card, so its click opens the thread itself, in place.
- */
-function RailRow({
-  t,
-  active = false,
-  restedAge = false,
-  onClick,
-}: {
-  t: ThreadView
-  active?: boolean
-  restedAge?: boolean
-  onClick: () => void
-}) {
-  return (
-    <div className={ROW_CLASS}>
-      {/* The board's scroll marker: the card this row faces is the one being read. */}
-      {active && <span aria-hidden className="absolute inset-y-0 left-1 w-[2px] rounded-full bg-accent" />}
-      <button type="button" onClick={onClick} className={ROW_BUTTON_CLASS} aria-current={active || undefined}>
-        {t.kind === "command" && t.command ? (
-          <CommandRowBody command={t.command} />
-        ) : (
-          <>
-            <span className={INDICATOR_SLOT}>
-              <ThreadIndicator t={t} />
-            </span>
-            <span className="flex min-w-0 flex-1 items-baseline gap-3">
-              <span className="min-w-0 flex-1 break-words text-[13px] leading-[19px] text-fg/90">
-                <TitleWithTrailers title={displayTitle(t)}>
-                  <ProviderMark backend={t.backend} model={t.model} className="ml-1" />
-                </TitleWithTrailers>
-              </span>
-              {restedAge && <RestedAge t={t} yieldsToRetry />}
-            </span>
-          </>
-        )}
-      </button>
-    </div>
-  )
-}
-
-/**
- * A terminal command's row, as the board's rail draws it (Sidebar.tsx CommandRow): the terminal mark or
- * the live dot, the command in mono, and how the run stands where an agent row keeps its rest time.
- */
-function CommandRowBody({ command }: { command: NonNullable<ThreadView["command"]> }) {
-  const running = commandLive(command)
-  const failed = commandFailed(command)
-  return (
-    <>
-      <span className={INDICATOR_SLOT}>
-        {running ? (
-          <span aria-label="Running" className="frizz-live-dot frizz-live-dot--shell" />
-        ) : (
-          <TerminalSquare aria-label={commandStateLabel(command)} size={13} className={failed ? "text-danger-soft" : "text-muted-60"} />
-        )}
-      </span>
-      <span className="flex min-w-0 flex-1 items-baseline gap-3">
-        <span className="font-mono-keep min-w-0 flex-1 truncate text-[12px] leading-[19px] text-fg/90" title={command.command}>
-          {command.command}
-        </span>
-        {!running && (
-          <span className={`shrink-0 tabular-nums text-[10.5px] leading-[19px] ${failed ? "text-danger-soft" : "text-muted-55"}`}>
-            {commandStateLabel(command)}
-          </span>
-        )}
-      </span>
-    </>
-  )
-}
-
-/**
- * The rail badge's count (ProjectRail.tsx), laid inline. Accent, and only accent, because the accent
- * means exactly one thing in this product: this many want you.
- */
 
 // ---- The lanes (the workpane) -----------------------------------------------------------------------
 
@@ -666,11 +433,14 @@ function CommandRowBody({ command }: { command: NonNullable<ThreadView["command"
 function Lane({
   project,
   first,
+  headed,
   leaving,
   hidden,
 }: {
   project: QueuesProject
   first: boolean
+  /** Filtered to this one project, the header goes: the READY header's filter already names it. */
+  headed: boolean
   leaving: LeavingCards
   hidden: (key: string) => boolean
 }) {
@@ -690,11 +460,18 @@ function Lane({
     <section data-xq-lane={project.id} aria-label={`${project.name} queue`} className="flex min-w-0 scroll-mt-4 flex-col">
       {!first && <hr className="my-10 border-0 border-t border-border/60" />}
       {/* `pl-[21px]` — the card's 1px border plus its header's px-5 — stands the square over the card
-          titles, where the Ready glyph above stands too. */}
+          titles, where the Ready glyph above stands too. The name FILTERS the queue to its project. */}
+      {headed && (
       <header className="sticky top-0 z-10 mb-3 flex min-w-0 bg-bg/90 py-2 pl-[21px] backdrop-blur-sm">
         <Link
-          to={projectHref(encodeURIComponent(project.slug))}
+          to="/"
           title={`Show only ${project.name}`}
+          onClick={(event) => {
+            if (!isPlainLeftClick(event)) return
+            event.preventDefault()
+            setQueueFilter(project.id)
+            window.scrollTo({ top: 0, behavior: prefersSmooth() })
+          }}
           className="flex min-w-0 items-baseline gap-2 rounded-sm text-[13px] font-medium text-fg/90 underline-offset-2 outline-none transition-colors hover:text-fg hover:underline focus-visible:ring-1 focus-visible:ring-border-strong"
         >
           {/* ON THE NAME'S CAP BAND: a filled square has no baseline of its own, so it sits ON the name's
@@ -706,6 +483,7 @@ function Lane({
           <h2 className="min-w-0 truncate">{project.name}</h2>
         </Link>
       </header>
+      )}
       <MarkdownScopeContext.Provider value={scope}>
         {cards.map((t, index) => {
           const key = threadKey(project.id, t.id)

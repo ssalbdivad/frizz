@@ -84,3 +84,109 @@ export function defaultCrossProjectFocus(
   }
   return latest?.slug
 }
+
+// THE QUEUE FILTER — which project's cards the page's RIGHT side shows, by id; `null` is every project.
+//
+// It filters the queue and NOTHING ELSE (maintainer 2026-09-28: "have project filters only affect which
+// threads are displayed on the right side and have the ui reflect that"). The project list on the left
+// keeps every project whatever it is set to, and the prompt box keeps its own pick above — so the
+// control that sets it sits over the queue it filters (the READY header), not in the column beside it.
+// There is no other way to look at one project: the project view it replaced is gone, and every one of
+// its addresses lands here with this set (routes.tsx LegacyProjectRedirect).
+//
+// Per TAB (sessionStorage): a filter is how this window is being read right now. It survives a reload —
+// which a dev server hands out constantly — but a new tab, or a fresh launch, opens on everything.
+// Remembered by id, like the pick, so a rename does not quietly clear it.
+
+const FILTER_KEY = "frizz.queueFilter"
+let filter: string | null = null
+let filterLoaded = false
+const filterListeners = new Set<() => void>()
+
+/** The project the queue is filtered to, by id, or `null` for every project. */
+export function queueFilter(): string | null {
+  if (!filterLoaded) {
+    filterLoaded = true
+    try {
+      filter = sessionStorage.getItem(FILTER_KEY)
+    } catch {
+      filter = null
+    }
+  }
+  return filter
+}
+
+/** Filter the queue to one project, by id — or `null` to show every project's cards again. */
+export function setQueueFilter(projectId: string | null): void {
+  if (queueFilter() === projectId) return
+  filter = projectId
+  try {
+    if (projectId) sessionStorage.setItem(FILTER_KEY, projectId)
+    else sessionStorage.removeItem(FILTER_KEY)
+  } catch {
+    // Storage disabled: the filter still holds for this page, it just does not survive a reload.
+  }
+  for (const listener of filterListeners) listener()
+}
+
+function subscribeQueueFilter(listener: () => void): () => void {
+  filterListeners.add(listener)
+  return () => filterListeners.delete(listener)
+}
+
+/** The queue filter, live: the project id the right side shows, or `null` for every project. */
+export function useQueueFilter(): string | null {
+  return useSyncExternalStore(subscribeQueueFilter, queueFilter, () => null)
+}
+
+// WHICH PROJECTS ARE OPEN IN THE LIST — the left side's own "show more", independent of the filter.
+//
+// Every project's current work (its Pinned, Ready and Working rows) is always listed; opening a project
+// adds the rest of it under its name — Snoozed, Done, External — which is everything its project view's
+// rail used to hold. Per BROWSER (localStorage), like the rail's own band folds: which projects you keep
+// open is how you arrange your desk, not how you are reading one window.
+
+const EXPANDED_KEY = "frizz.expandedProjects"
+let expanded: ReadonlySet<string> | null = null
+const expandedListeners = new Set<() => void>()
+
+function expandedProjects(): ReadonlySet<string> {
+  if (!expanded) {
+    let ids: unknown = []
+    try {
+      ids = JSON.parse(localStorage.getItem(EXPANDED_KEY) ?? "[]")
+    } catch {
+      ids = []
+    }
+    expanded = new Set(Array.isArray(ids) ? ids.filter((id): id is string => typeof id === "string") : [])
+  }
+  return expanded
+}
+
+/** Open or close one project in the list; `open` omitted toggles it. */
+export function setProjectExpanded(projectId: string, open = !expandedProjects().has(projectId)): void {
+  const current = expandedProjects()
+  if (current.has(projectId) === open) return
+  const next = new Set(current)
+  if (open) next.add(projectId)
+  else next.delete(projectId)
+  expanded = next
+  try {
+    localStorage.setItem(EXPANDED_KEY, JSON.stringify([...next]))
+  } catch {
+    // Storage disabled or full: the list still opens, it just forgets on reload.
+  }
+  for (const listener of expandedListeners) listener()
+}
+
+function subscribeExpanded(listener: () => void): () => void {
+  expandedListeners.add(listener)
+  return () => expandedListeners.delete(listener)
+}
+
+const NONE: ReadonlySet<string> = new Set()
+
+/** The projects open in the list, by id — live, and a stable Set between changes. */
+export function useExpandedProjects(): ReadonlySet<string> {
+  return useSyncExternalStore(subscribeExpanded, expandedProjects, () => NONE)
+}
