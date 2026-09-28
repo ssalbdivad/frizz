@@ -508,9 +508,12 @@ try {
 
     // Its toast opens its TERMINAL, in place — a routed terminal layer that stays open.
     // Clicked in the page, in the same task that finds it: the toast re-renders as it rises, and a
-    // handle held across that is detached.
+    // handle held across that is detached. Only a SHOWN toast's button counts — the one a person could
+    // press. A faded toast stays mounted at opacity 0 until the next one replaces it (Toaster.tsx), so
+    // the previous step's "Thread started" is still in the DOM when this command is sent, and clicking
+    // the first "Open thread" found opened THAT command's terminal in another project.
     await waitFor("the toast's link", () => page.evaluate(() => {
-      const button = [...document.querySelectorAll("[data-toast] button")].find((b) => b.textContent?.trim() === "Open thread")
+      const button = [...document.querySelectorAll("[data-toast] button")].find((b) => b.textContent?.trim() === "Open thread" && getComputedStyle(b).pointerEvents !== "none")
       button?.click()
       return Boolean(button)
     }), 8000)
@@ -551,10 +554,12 @@ try {
       await page.waitForSelector("[data-xq-lane]")
       await sleep(800)
       const everything = await lanes()
-      // The rail draws the registry's order, one square per project; each is a plain link to `/`.
-      const index = (await api("acme-api").query("projectsList")).map((p) => p.slug).indexOf("marketing-site")
-      await page.waitForSelector('nav[aria-label="Projects"] a[href="/"]', { timeout: 10_000 })
-      const squares = await page.$$('nav[aria-label="Projects"] a[href="/"]')
+      // The rail's scrolling band draws the registry's order, one square per project, each a plain link to
+      // `/`; the Home workspace's square is pinned below the band, outside that order (ProjectRail.tsx).
+      const index = (await api("acme-api").query("projectsList")).filter((p) => !p.home).map((p) => p.slug).indexOf("marketing-site")
+      const band = 'nav[aria-label="Projects"] .frizz-rail-scroll a[href="/"]'
+      await page.waitForSelector(band, { timeout: 10_000 })
+      const squares = await page.$$(band)
       if (squares.length !== Object.keys(ids).length) throw new Error(`${squares.length} rail squares for ${Object.keys(ids).length} projects`)
       await squares[index].click()
       const filtered = await filteredTo("marketing-site")
