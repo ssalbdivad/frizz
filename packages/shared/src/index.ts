@@ -5347,6 +5347,36 @@ export const DirectoryPickResult = z.discriminatedUnion("kind", [
 export type DirectoryPickResult = z.infer<typeof DirectoryPickResult>
 
 /**
+ * The chosen folder sits INSIDE another project root — a Git checkout or a manifest root — and so
+ * would have added that root instead. Nothing was registered or written.
+ *
+ * Until 2026-09-28 the add path took the enclosing root silently: picking `~/app/yes` reopened `~/app`
+ * and navigated to its board, which read as "nothing happened". The page now asks — open the enclosing
+ * root, or add the folder as a project of its own (`projectAdd` with `exact`).
+ */
+export const ProjectEnclosed = z.object({
+  kind: z.literal("enclosed"),
+  /** The folder that was chosen, resolved. */
+  path: z.string(),
+  /** The root it would have resolved to. */
+  root: z.string(),
+  /** Whether that root is already a registered project (open it) or not yet (add it). */
+  rootRegistered: z.boolean(),
+})
+export type ProjectEnclosed = z.infer<typeof ProjectEnclosed>
+
+/** `projectAdd`'s answer: the project it registered, or the enclosing root it declined to take silently. */
+export const ProjectAddResult = z.discriminatedUnion("kind", [
+  z.object({ kind: z.literal("added"), project: ProjectCard }),
+  ProjectEnclosed,
+])
+export type ProjectAddResult = z.infer<typeof ProjectAddResult>
+
+/** `projectPick`'s answer — the picker's own outcomes, plus the same enclosed case `projectAdd` has. */
+export const ProjectPickResult = z.discriminatedUnion("kind", [...DirectoryPickResult.options, ProjectEnclosed])
+export type ProjectPickResult = z.infer<typeof ProjectPickResult>
+
+/**
  * One project's slice of the machine-wide queues read (`projectsQueues`) — the All queues page's data.
  *
  * THE PROJECT TRAVELS WITH ITS THREADS. A `ThreadView` carries no project, and slugs are unique only
