@@ -252,7 +252,14 @@ export function ProfileGridSelector({
           }}
           className={`profile-grid-menu ${menuZClass} ${OPAQUE_SURFACE_BASE} max-h-[min(360px,var(--radix-dropdown-menu-content-available-height))] max-w-[calc(100vw-1rem)] overflow-auto rounded-lg p-1.5 ${typography}`}
         >
-          {groups.map((group) => (
+          {/* THE GRID IS BUILT ONLY WHILE THE MENU IS OPEN. Closed, Radix mounts none of it, but the
+              elements were still CREATED on every render of every picker — one per model × effort cell,
+              with its ghosts. The one page draws a closed picker in every queue card's reply box, and
+              opening another project's thread re-renders all of them; in the dev build (jsxDEV and a
+              console task per element) that was 121–189ms of a 1.3–2.6s open, the largest single cost in
+              the profile (2026-09-28). The menu has no exit animation, so Radix unmounts the content the
+              moment `open` goes false and nothing can see the gate. */}
+          {open && groups.map((group) => (
             <RadixMenu.Group key={group.id}>
               {group.label && (
                 <div className="profile-grid-header sticky left-0 flex items-baseline justify-between gap-4 px-1.5 pb-1 pt-1 first:pt-0.5">
