@@ -30,11 +30,21 @@ function harness(stored: Record<string, string> = {}, alive?: string) {
   // Out of the queue behind a hold a wake follows (`parked`), and a reading that must surface at once.
   const parked = new Set<string>()
   const urgent = new Set<string>()
+  // Out of the queue because a person acted (a snooze, done, a follow-up), and queued on a gate only a
+  // person's reply clears (a permission prompt).
+  const humanOut = new Set<string>()
+  const humanGate = new Set<string>()
   const run = (nowHHMM: string, ...threads: ThreadView[]) => {
-    clock.stamp(threads, ms(nowHHMM), { known: (t) => !unknown.has(t.id), parked: (t) => parked.has(t.id), urgent: (t) => urgent.has(t.id) })
+    clock.stamp(threads, ms(nowHHMM), {
+      known: (t) => !unknown.has(t.id),
+      parked: (t) => parked.has(t.id),
+      urgent: (t) => urgent.has(t.id),
+      humanOut: (t) => humanOut.has(t.id),
+      humanGate: (t) => humanGate.has(t.id),
+    })
     return Object.fromEntries(threads.map((t) => [t.id, t.queuedAt]))
   }
-  return { run, saves, unknown, alives, parked, urgent, clock }
+  return { run, saves, unknown, alives, parked, urgent, humanOut, humanGate, clock }
 }
 
 test("a plain rest enters the queue at its rest time, so ordinary arrivals keep the order they always had", () => {
@@ -63,13 +73,15 @@ test("a queued thread keeps its place however long it waits, and saves only on t
   assert.equal(saves.length, 1)
 })
 
-test("leaving the queue forgets the stamp, so the next entry joins the back of the line", () => {
-  const { run, saves } = harness()
+test("leaving the queue because a person acted forgets the stamp, so the next entry joins the back of the line", () => {
+  const { run, saves, humanOut } = harness()
   run("10:00", thread("a", false, "09:00"))
   run("10:06", thread("a", true, "10:05"))
   // The human snoozes it (no new output — the rest time never moves), then the snooze ends.
+  humanOut.add("a")
   assert.deepEqual(run("10:10", thread("a", false, "10:05")), { a: undefined })
   run("11:59", thread("a", false, "10:05"))
+  humanOut.delete("a")
   assert.deepEqual(run("12:00", thread("a", true, "10:05")), { a: at("12:00") })
   assert.deepEqual(saves, [["a", at("10:05")], ["a", null], ["a", at("12:00")]])
 })
@@ -252,4 +264,83 @@ test("a withheld entry whose reading turns unknown stays withheld, and its passe
   // `a`'s 10:00:13 passes while it reads unknown; `b`'s 10:00:17 must still be the next thing to wake for.
   run("10:00:14", thread("a", true, "09:00"), thread("b", true, "09:00"))
   assert.equal(clock.nextEntryAt(ms("10:00:14")), ms("10:00:17"))
+})
+
+// ---- A THREAD ONLY LOSES ITS PLACE WHEN A PERSON ACTS ON IT (maintainer 2026-09-28: "Keep its place") ----
+
+const asking = (id: string, queued: boolean, rested: string, ...questionIds: string[]) =>
+  ({ ...thread(id, queued, rested), questions: questionIds.map((qid) => ({ id: qid })) }) as unknown as ThreadView
+
+test("a thread woken by its own work, resting again untouched, takes back its place in line", () => {
+  // `reading` entered at 10:00 and is the card being read; `later` entered behind it at 10:05. A shell of
+  // `reading`'s finishes at 10:10 and wakes it; it rests again at 10:12 — nobody did anything.
+  const { run, saves } = harness()
+  run("09:59", thread("reading", false, "09:00"), thread("later", false, "09:00"))
+  run("10:00", thread("reading", true, "10:00"), thread("later", false, "09:00"))
+  run("10:05", thread("reading", true, "10:00"), thread("later", true, "10:05"))
+  assert.deepEqual(run("10:10", thread("reading", false, "10:00"), thread("later", true, "10:05")), { reading: undefined, later: at("10:05") })
+  assert.deepEqual(run("10:12", thread("reading", true, "10:12"), thread("later", true, "10:05")), { reading: at("10:00"), later: at("10:05") })
+  assert.deepEqual(saves.at(-1), ["reading", at("10:00")], "the place it took back is the one persisted")
+})
+
+test("a person acting on it while it was out — a follow-up, a snooze, done — costs the place", () => {
+  const { run, humanOut } = harness()
+  run("09:59", thread("a", false, "09:00"))
+  run("10:00", thread("a", true, "10:00"))
+  // Woken by its own work first; the human then sends it a follow-up while it runs.
+  run("10:10", thread("a", false, "10:00"))
+  humanOut.add("a")
+  run("10:11", thread("a", false, "10:00"))
+  humanOut.delete("a")
+  assert.deepEqual(run("10:15", thread("a", true, "10:15")), { a: at("10:15") })
+})
+
+test("a gate the person answered while it waited — a permission prompt — costs the place", () => {
+  const { run, humanGate } = harness()
+  run("09:59", thread("a", false, "09:00"))
+  humanGate.add("a")
+  run("10:00", thread("a", true, "09:59"))
+  humanGate.delete("a")
+  // Approved: the turn goes on, and ends in an ordinary rest.
+  run("10:01", thread("a", false, "09:59"))
+  assert.deepEqual(run("10:05", thread("a", true, "10:05")), { a: at("10:05") })
+})
+
+test("a question answered costs the place, whether it was answered in the queue or out of it; a new question does not", () => {
+  const { run } = harness()
+  run("09:59", asking("inq", false, "09:00"), asking("outq", false, "09:00"), asking("newq", false, "09:00"))
+  run("10:00", asking("inq", true, "10:00", "q1"), asking("outq", true, "10:00", "q2"), asking("newq", true, "10:00"))
+  // `inq`'s question is answered while it is still queued; the answer's delivery then wakes it.
+  run("10:01", asking("inq", true, "10:00"), asking("outq", true, "10:00", "q2"), asking("newq", true, "10:00"))
+  // All three are woken. `outq`'s question is answered while it runs; `newq` asks a new one of its own.
+  run("10:02", asking("inq", false, "10:00"), asking("outq", false, "10:00", "q2"), asking("newq", false, "10:00"))
+  run("10:03", asking("inq", false, "10:00"), asking("outq", false, "10:00"), asking("newq", false, "10:00"))
+  assert.deepEqual(
+    run("10:04", asking("inq", true, "10:04"), asking("outq", true, "10:04"), asking("newq", true, "10:04", "q3")),
+    { inq: at("10:04"), outq: at("10:04"), newq: at("10:00") },
+  )
+})
+
+test("a claim survives a release it waits out, and returns with the place once the window closes", () => {
+  // Queued at 10:00; woken by its own work; rests behind a sub-agent (parked); the child returns and no
+  // wake follows — the withheld entry goes in at the place it left, not at the back.
+  const { run, parked } = harness()
+  run("09:59", thread("a", false, "09:00"))
+  run("10:00", thread("a", true, "10:00"))
+  run("10:01", thread("a", false, "10:00"))
+  parked.add("a")
+  run("10:02", thread("a", false, "10:02"))
+  const released = thread("a", true, "10:02")
+  run("10:03", released)
+  assert.equal(released.needsYou, false, "withheld while its wake gets its seconds")
+  assert.deepEqual(run("10:03:12", thread("a", true, "10:02")), { a: at("10:00") })
+})
+
+test("a terminal command has no work of its own to wake it: leaving its prompt and coming back is a new arrival", () => {
+  const { run } = harness()
+  const command = (queued: boolean, active: string) => ({ id: "term", kind: "command", needsYou: queued, lastActivityAt: at(active) }) as unknown as ThreadView
+  run("09:59", command(false, "09:00"))
+  run("10:00", command(true, "10:00"))
+  run("10:01", command(false, "10:01"))
+  assert.deepEqual(run("10:05", command(true, "10:05")), { term: at("10:05") })
 })
