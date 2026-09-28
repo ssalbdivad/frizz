@@ -1,6 +1,6 @@
 import { readFileSync, rmSync } from "node:fs"
 import { join } from "node:path"
-import { Settings } from "@frizz/shared"
+import { MACHINE_SETTING_KEYS, Settings } from "@frizz/shared"
 import { frizzPaths } from "./frizz-paths.ts"
 import { homeFolderProblem } from "./home-folder.ts"
 import { deleteMachineConfig, readMachineConfig, writeMachineConfig } from "./machine-config.ts"
@@ -30,7 +30,7 @@ const SETTINGS_KEY = "settings"
  * hypothetical: the first run of this change wrote `notifications: false` into the maintainer's own
  * settings, which would have quietly turned their desktop notifications off.
  */
-const MACHINE_KEYS = ["notifications", "localFileOpener", "projectRail", "homeFolder"] as const
+const MACHINE_KEYS = MACHINE_SETTING_KEYS
 type MachineSettings = Pick<Settings, (typeof MACHINE_KEYS)[number]>
 const MachineSettingsRecord = Settings.partial()
 

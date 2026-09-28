@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react"
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
-import { type Settings } from "@frizz/shared"
+import { type QueryClient, useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
+import { MACHINE_SETTING_KEYS, type Settings } from "@frizz/shared"
 import { isRetryableRpcError, rpc } from "../api/rpc.ts"
 
 // Every settings control WRITES AS YOU TOUCH IT — there is no Save button and no Cancel. A picker or a
@@ -21,6 +21,35 @@ export type SaveState = "idle" | "saving" | "saved" | "error"
 // so a save still in flight — a compaction window picked a moment ago, a prompt edit flushed by closing
 // its popover — lands before the dispatch that would read it.
 export const SETTINGS_WRITE_KEY = ["settingsSet"] as const
+
+/**
+ * A save's MACHINE settings, published to every project's cached `settingsGet` — not only the entry of
+ * the project the save was made under.
+ *
+ * The cache keeps one `settingsGet` entry per project (lib/queryKeyScope.ts folds the page's project
+ * into every hash but the machine-wide keys'), and that is right for the query as a whole: most of
+ * `Settings` is a project's own, so it cannot join MACHINE_WIDE. But `projectRail`, `notifications`,
+ * `localFileOpener` and `homeFolder` are one value for the machine (MACHINE_SETTING_KEYS), and a reader
+ * that is still bound to another project's entry has to see the new one too. That reader exists: the
+ * project rail's hook lives in the layout, which a project switch on the one page does not re-render,
+ * so it stays on the entry it was cold-loaded under (lib/projectRail.ts). Switch the page to another
+ * project with the prompt box's picker, flip Project sidebar to On, and the save landed in the new
+ * project's entry while the rail read the old one — it did not appear until a reload (2026-09-28, the
+ * 2026-08-24 bug again: the old cure re-rendered the hook on every NAVIGATION, and on the one page a
+ * project switch is not one). lib/projectRail.e2e.test.ts drives exactly that switch.
+ *
+ * Only the machine keys are written across, and nothing is refetched: a refetch runs under the CURRENT
+ * page's project, so it would pour this project's own settings into every other project's entry.
+ */
+export function publishMachineSettings(queryClient: QueryClient, saved: Settings): void {
+  const machine = Object.fromEntries(MACHINE_SETTING_KEYS.map((key) => [key, saved[key]])) as Partial<Settings>
+  // On each Query itself, not through `setQueriesData`: that re-derives every match's HASH from its key,
+  // and the hash is the CURRENT page's scope — so it wrote the one entry already written, N times.
+  for (const query of queryClient.getQueryCache().findAll({ queryKey: ["settingsGet"] })) {
+    const cached = query.state.data as Settings | undefined
+    if (cached) query.setData({ ...cached, ...machine }, { manual: true })
+  }
+}
 
 // The write side of every settings surface — the drawer and the in-context popovers alike. Three
 // invariants, all silent when broken:
@@ -65,6 +94,7 @@ export function useSettingsAutosave() {
       .then((saved) => {
         // Publish the server's validated copy rather than racing queued writes with a refetch.
         queryClient.setQueryData(["settingsGet"], saved)
+        publishMachineSettings(queryClient, saved)
         inflight.current -= 1
         retries.current = 0
         if (inflight.current > 0 || pending.current) return
