@@ -109,7 +109,7 @@ export function AllQueuesPage() {
     const box = event.target
     const step = projectStep(event)
     if (!step || !(box instanceof HTMLTextAreaElement) || !box.matches(NEW_THREAD_BOXES)) return
-    const next = stepPick(projects, focus, step)
+    const next = stepPick(pickOrder(projects), focus, step)
     if (!next) return
     event.preventDefault()
     setFocusComposerFor({
@@ -299,10 +299,10 @@ function ProjectPicker({ projects, focus, onPick }: { projects: QueuesProject[];
   const name = current?.name ?? focus ?? "a project"
   // A project whose directory is gone cannot take a thread; it stays on the rail, saying why.
   const choices = projects.filter((project) => !project.stale && !project.card?.home)
-  const steps = stepPick(projects, focus, 1) !== undefined
+  const steps = stepPick(pickOrder(projects), focus, 1) !== undefined
   // The Home workspace, for the work that belongs to no project yet: last, under a rule, with the folder
   // it runs in, because "Home" alone does not say that its agents start outside every project. Last is
-  // also where stepping from the box reaches it (stepPick walks the server's order, which lists Home last).
+  // also where stepping from the box reaches it (pickOrder).
   const homeChoice = projects.find((project) => !project.stale && project.card?.home)
   const choice = (project: QueuesProject, hint?: string) => (
     <MenuItem key={project.id} value={project.slug} onSelect={() => onPick(project)} icon={<ProjectSquare project={project.card ?? fallbackCard(project)} size={14} />}>
@@ -478,6 +478,14 @@ function FocusedComposer({
     )
   }
   return <DispatchForm key={focus} autoFocus={autoFocus} target={target} dirs={dirs} />
+}
+
+/**
+ * The picker's own order, which ⌥↓ and ⌥↑ in the box step through: every project in the list's order,
+ * then Home, which the menu draws last under its own rule.
+ */
+function pickOrder(projects: QueuesProject[]): QueuesProject[] {
+  return [...projects.filter((project) => !project.card?.home), ...projects.filter((project) => project.card?.home)]
 }
 
 /**
