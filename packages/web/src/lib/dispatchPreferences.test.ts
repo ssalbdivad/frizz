@@ -1,7 +1,15 @@
 import { test } from "node:test"
 import assert from "node:assert/strict"
 import { acpAgentIdFromModel, acpModelIdFromModel, acpModelSlug, type CodexModel, type DispatchPreferences } from "@frizz/shared"
-import { applyDispatchPreferenceUpdate, dispatchModelGroups, dispatchProfileGroups, resolveDispatchPreferences } from "./dispatchPreferences.ts"
+import {
+  applyDispatchPreferenceUpdate,
+  dispatchModelGroups,
+  dispatchProfileGroups,
+  parseDispatchPick,
+  pickFromSelection,
+  resolveDispatchPreferences,
+  withDispatchPick,
+} from "./dispatchPreferences.ts"
 
 const models: CodexModel[] = [
   { slug: "gpt-5.6-sol", displayName: "GPT-5.6 Sol", defaultEffort: "medium", efforts: ["low", "medium", "high", "ultra"] },
@@ -172,4 +180,41 @@ test("the Claude rows take their edition labels from the runtime-resolved catalo
   assert.equal(groups[0]!.label, "Claude Code")
   assert.equal(groups[0]!.options.find((option) => option.value === "opus")?.label, "Opus 5.5")
   assert.equal(resolveDispatchPreferences({ ...preferences, claude: { model: "opus", effort: "high", permissionMode: "acceptEdits" } }, models).modelAvailable, true)
+})
+
+// A pick is a dispatch surface's choice for the thread it starts NEXT, laid over the durable default
+// without writing it (useDispatchProfile). Choosing the default's own cell drops the pick, so a stale
+// copy of the default can never outlive a later change to it.
+test("a pick rides over the default without touching it, and landing back on the default drops it", () => {
+  const defaults: DispatchPreferences = { ...preferences, claude: { model: "opus", effort: "medium", permissionMode: "auto" } }
+  const defaultResolved = resolveDispatchPreferences(defaults, models)
+  const pick = pickFromSelection({ backend: "claude", model: "opus", effort: "max" }, defaultResolved)
+  assert.deepEqual(pick, { backend: "claude", model: "opus", effort: "max" })
+  assert.equal(resolveDispatchPreferences(withDispatchPick(defaults, pick), models).effort, "max")
+  assert.equal(defaults.claude.effort, "medium", "laying a pick over the default never mutates it")
+  assert.deepEqual(withDispatchPick(defaults, undefined), defaults)
+  // The other runtime's profile survives a pick on this one, exactly as a default write leaves it.
+  assert.deepEqual(withDispatchPick(defaults, { backend: "codex", model: "gpt-5.6-sol", effort: "ultra" }).claude, defaults.claude)
+
+  assert.equal(pickFromSelection({ backend: "claude", model: "opus", effort: "medium" }, defaultResolved), undefined)
+  // An ACP agent has no effort axis: the grid hands over "", which is no effort, not an empty one.
+  assert.deepEqual(pickFromSelection({ backend: "acp", model: "acp:opencode", effort: "" }, defaultResolved), { backend: "acp", model: "acp:opencode" })
+})
+
+// The prompt box keeps its pick beside its draft in sessionStorage, so what comes back is untrusted
+// text: anything that is not a whole, valid profile reads as no pick, never as a partial one.
+test("a stored pick parses back whole or not at all", () => {
+  assert.deepEqual(parseDispatchPick(JSON.stringify({ backend: "codex", model: "gpt-5.5", effort: "xhigh" })), { backend: "codex", model: "gpt-5.5", effort: "xhigh" })
+  assert.deepEqual(parseDispatchPick(JSON.stringify({ backend: "acp", model: "acp:opencode@gpt-5.5" })), { backend: "acp", model: "acp:opencode@gpt-5.5" })
+  for (const raw of [
+    "",
+    "{",
+    "null",
+    "5",
+    JSON.stringify({ backend: "claude", model: "opus" }),
+    JSON.stringify({ backend: "claude", model: "opus", effort: "turbo" }),
+    JSON.stringify({ backend: "gemini", model: "x", effort: "low" }),
+  ]) {
+    assert.equal(parseDispatchPick(raw), undefined, raw)
+  }
 })

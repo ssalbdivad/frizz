@@ -371,12 +371,14 @@ try {
   const previousProject = () => altKey("ArrowUp")
   const composerReady = () =>
     page.waitForFunction(() => !document.querySelector("[data-xq-composer-pending]") && document.querySelector("[data-dispatch-form]"), { timeout: 10_000 })
-  // The picker's own menu, read once: its order is the order the keys walk.
+  // The picker's own menu, read once: its order is the order the keys walk, minus what it marks "Not open"
+  // — the keys pass over a project with no box to show (lib/crossProject.ts stepPick). On this stack that
+  // includes Home: nothing primes it (adhoc-stack), where a real server opens it at boot.
   const pickerOrder = async () => {
     await page.click("[data-xq-project-picker]")
     await page.waitForSelector("[role=menuitem]", { timeout: 5000 })
     // By slug, which is also each project's name on this stack — what the picker shows.
-    const slugs = await page.$$eval("[role=menuitem]", (items) => items.map((item) => item.getAttribute("data-value") ?? ""))
+    const slugs = await page.$$eval("[role=menuitem]", (items) => items.filter((item) => !item.textContent?.includes("Not open")).map((item) => item.getAttribute("data-value") ?? ""))
     await page.keyboard.press("Escape")
     await page.waitForFunction(() => !document.querySelector("[role=menu]"), { timeout: 5000 })
     return slugs
@@ -493,12 +495,11 @@ try {
       target !== "acme-api" && kept?.focused === true && kept.value === "echo stepped-with-alt-down" && started.slug === target,
       `moved to "${target}", ran in ${started.slug}/${started.id}`,
     )
-    // Its toast outlives this step otherwise, and the next one clicks the first "Open thread" it sees.
-    await page.waitForFunction(() => !document.querySelector("[data-toast]"), { timeout: 8000 }).catch(() => {})
-    await page.click("[data-dispatch-tab=prompt]")
-    await page.click("[data-xq-project-picker]")
-    await page.waitForSelector("[role=menuitem]", { timeout: 5000 })
-    await page.click('[role=menuitem][data-value="acme-api"]')
+    // Its toast stays mounted once it fades, "Open thread" and all (Toaster.tsx), and the next step clicks
+    // the first one it finds: that step starts on a fresh page instead, the box back on the launcher.
+    await page.goto(`${origin}/?focus=acme-api`, { waitUntil: "networkidle2" })
+    await page.evaluate(() => { document.documentElement.dataset.theme = "dark" })
+    await page.waitForSelector('[data-surface="newComposer"]', { timeout: 10_000 })
     await pickerSays("acme-api")
   })
 

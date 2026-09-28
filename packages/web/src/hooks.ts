@@ -4,6 +4,7 @@ import { useQuery, useQueryClient, type QueryClient } from "@tanstack/react-quer
 import type { BoardSnapshot, InteractionRecord, ThreadView, TranscriptMessage } from "@frizz/shared"
 import { store, threadBySlug } from "./store.ts"
 import { rpc } from "./api/rpc.ts"
+import { useThreadApi } from "./api/threadApi.tsx"
 import { retryTranscriptSocket, subscribeFile, subscribeTranscript, unsubscribeFile, unsubscribeTranscript } from "./api/socket.ts"
 import { mergeOptimistic, preserveMessageIdentity, isTranscriptStale, newestRenderedAt } from "./lib/transcript-sync.ts"
 import { pendingInteractionsKey } from "./api/interaction-cache.ts"
@@ -95,11 +96,15 @@ export function nextInteractionExpiryDelay(interactions: readonly InteractionRec
   return Math.max(250, earliest - now + 50)
 }
 
+// Read through the thread's OWN project (useThreadApi): an Everything card lists every project's
+// threads, and `rpc` addresses whichever one the page is focused on. The key needs no project — a
+// session id names one session on the machine.
 export function usePendingInteractions(thread: ThreadView | undefined) {
   const scope = pendingInteractionScope(thread)
+  const api = useThreadApi()
   return useQuery({
     queryKey: scope ? pendingInteractionsKey(scope.slug, scope.sessionId) : ["interactions", "pending", "unowned"],
-    queryFn: () => rpc.pendingInteractions(scope!),
+    queryFn: () => api.pendingInteractions(scope!),
     enabled: scope !== undefined,
     refetchInterval: (query) => nextInteractionExpiryDelay(query.state.data?.interactions ?? []),
     refetchOnReconnect: true,

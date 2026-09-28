@@ -1467,6 +1467,23 @@ a[href] {
   }
 }
 
+/* The card a `d` or `s` would act on (useQueueKeys in AllQueues.tsx) keeps the arrival ring for as long
+   as it is that card. Arriving on it, the ring settles INTO place rather than fading out — fading to
+   transparent and snapping back once the animation ended read as a second, unrelated flash. The
+   re-ring at either end of `j`/`k` still replays, since the flash attribute is re-armed each landing. */
+[data-queue-current] {
+  outline: 2px solid var(--color-accent, #e8b923);
+  outline-offset: 2px;
+}
+[data-queue-current][data-queue-flash] { animation: queue-flash-settle 0.35s ease-out; }
+@keyframes queue-flash-settle {
+  0% { outline-offset: 6px; }
+  100% { outline-offset: 2px; }
+}
+@media (prefers-reduced-motion: reduce) {
+  [data-queue-current][data-queue-flash] { animation: none; }
+}
+
 /* Queue card EXIT — the CardSlot exit (TodosView). The card FADES to transparent while it recedes
    (uniform scale from its centre, so it "sinks backwards") and blurs, AT FULL HEIGHT. Then TodosView
    UNMOUNTS it; lib/viewportLock.ts keeps whatever the reader is looking at where it was, and a dismissal

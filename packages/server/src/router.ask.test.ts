@@ -34,8 +34,10 @@ function harness() {
     start: async () => {},
     stop: async () => {},
   }
+  // The human's own clock, settable per test — the one reading `questionRepliedPast` keys on.
+  let lastHumanAt: string | undefined
   const tailer: Tailer = {
-    get: () => undefined, foreignIds: () => [], subAgent: () => undefined,
+    get: () => (lastHumanAt ? ({ lastHumanAt } as ReturnType<Tailer["get"]>) : undefined), foreignIds: () => [], subAgent: () => undefined,
     forget: () => {}, start: () => {}, stop: () => {}, tick: () => {},
   }
   // The scheduler stub COUNTS kicks rather than ignoring them: answering must run the delivery sweep
@@ -52,6 +54,7 @@ function harness() {
     router: createRouter(ctx),
     refreshes: () => refreshes,
     kicks: () => kicks,
+    humanSpokeAt: (at: string) => { lastHumanAt = at },
     close: () => { storage.close(); rmSync(dir, { recursive: true, force: true }) },
   }
 }
@@ -558,5 +561,36 @@ test("questions asked in ONE call keep their order — the tiebreak is insertion
     const out = await h.router.listOwnThreadActivity.handler({ input: { slug: "t" } })
     assert.deepEqual(out.questions.map((q) => q.spec.question), asked, "the readout must not shuffle a batch")
     assert.deepEqual(out.questions.map((q) => q.id), registered.map((q) => q.id))
+  } finally { h.close() }
+})
+
+// A REPLY PAST A QUESTION IS A PIVOT (maintainer 2026-09-28: "if a user doesn't answer questions and
+// instead responds … we should assume they want to move on/pivot"). The card stays open and answerable
+// where it was asked, but it no longer holds the thread — so `done` must not force the worker to withdraw
+// it, and the read-back must tell the worker which questions the human moved on from.
+test("a question the human replied past blocks nothing and reads back marked — one asked since still blocks", async () => {
+  const h = harness()
+  try {
+    h.storage.upsertSession(row("t"))
+    const [passed] = (await h.router.ask.handler({ input: { slug: "t", questions: [simple()] } })).registered
+    // Negative control first: the human's last turn PREDATES the ask, so the question is current.
+    h.humanSpokeAt(new Date(Date.parse(passed.askedAt) - 60_000).toISOString())
+    const early = await h.router.markOwnDone.handler({ input: { slug: "t", body: "done" } })
+    assert.equal(early.done, false)
+    assert.deepEqual(early.blockingQuestions.map((q) => q.id), [passed.id])
+    assert.equal((await h.router.listOwnThreadActivity.handler({ input: { slug: "t" } })).questions[0].repliedPast, undefined)
+
+    h.humanSpokeAt(new Date(Date.parse(passed.askedAt) + 1).toISOString())
+    await new Promise((resolve) => setTimeout(resolve, 5)) // the next ask lands strictly after the reply
+    const read = await h.router.listOwnThreadActivity.handler({ input: { slug: "t" } })
+    assert.deepEqual(read.questions.map((q) => [q.id, q.repliedPast]), [[passed.id, true]], "still open, marked replied past")
+
+    const [current] = (await h.router.ask.handler({ input: { slug: "t", questions: [simple("Which dist-tag should 4.5.0 publish under?")] } })).registered
+    const blocked = await h.router.markOwnDone.handler({ input: { slug: "t", body: "done" } })
+    assert.deepEqual(blocked.blockingQuestions.map((q) => q.id), [current.id], "only the question asked since the reply blocks")
+
+    await h.router.unask.handler({ input: { slug: "t", id: current.id } })
+    assert.equal((await h.router.markOwnDone.handler({ input: { slug: "t", body: "done" } })).done, true)
+    assert.equal(h.storage.getThreadQuestion(passed.id)?.state, "open", "done leaves the replied-past card open and answerable")
   } finally { h.close() }
 })

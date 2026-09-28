@@ -20,15 +20,18 @@
 //
 // Usage:
 //   node scripts/ink-gaps.mjs <url> "<sel-a>,<sel-b>,…" [--dsf=4] [--w=1100] [--h=700] [--wait=2200]
-//     [--pad=2] [--threshold=8] [--before=@/tmp/routine.js] [--hover=<css selector>]
+//     [--pad=2] [--threshold=8] [--before=@/tmp/routine.js] [--hover=<css selector>] [--mouse]
 //     [--software] [--viewport-only] (for a stalled GPU compositor; keep the whole row in the viewport)
 //
 // Selectors are measured in the order given (NOT document order), so the printed gaps follow the
 // strip left to right exactly as you name it. `--hover` parks the pointer on an element first (after
 // `--before`), for a strip that only exists on CSS :hover — a rail row's actions — which no in-page
-// expression can reveal.
+// expression can reveal. It implies `--mouse`, which renders the page as a desktop with a mouse rather
+// than headless Chrome's touch screen, where every Tailwind hover: style is dead (lib/mouse-pointer.mjs).
+// A browser you --browser into keeps its own pointer type.
 import { readFileSync } from "node:fs"
 import puppeteer from "puppeteer"
+import { MOUSE_POINTER_ARG } from "./lib/mouse-pointer.mjs"
 
 const args = process.argv.slice(2)
 const pos = args.filter((a) => !a.startsWith("--"))
@@ -55,7 +58,7 @@ const selectors = selectorList.split(",").map((s) => s.trim()).filter(Boolean)
 // three minutes). The failure arrives as a bare ProtocolError that reads like a bug in the page.
 const browser = flags.browser ? await puppeteer.connect({ browserWSEndpoint: flags.browser }) : await puppeteer.launch({
   headless: "new",
-  args: ["--no-sandbox", "--force-color-profile=srgb", ...(flags.software ? ["--disable-gpu"] : [])],
+  args: ["--no-sandbox", "--force-color-profile=srgb", ...(flags.software ? ["--disable-gpu"] : []), ...(flags.hover || flags.mouse ? [MOUSE_POINTER_ARG] : [])],
   protocolTimeout: 600_000,
 })
 let page

@@ -1,8 +1,9 @@
 import { createRoot } from "react-dom/client"
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query"
-import type { BoardSnapshot, CodexModel, DispatchPreferences, SetDispatchPreferenceInput } from "@frizz/shared"
+import type { BoardSnapshot, CodexModel, DispatchInput, DispatchPreferences, SetDispatchPreferenceInput } from "@frizz/shared"
 import { DispatchForm } from "./components/NewThreadModal.tsx"
 import { TooltipProvider } from "./components/Tooltip.tsx"
+import { draftKey, draftStore } from "./lib/drafts.ts"
 import { store } from "./store.ts"
 import "./styles.css"
 
@@ -17,6 +18,8 @@ let preferences: DispatchPreferences = {
   codex: { model: "gpt-5.6-sol", effort: "medium", permissionMode: "default" },
 }
 const writes: SetDispatchPreferenceInput[] = []
+// Every dispatch the box sends, in order — the profile a thread would actually have started on.
+const dispatches: DispatchInput[] = []
 // The project settings the model picker's gear edits (AgentSettingsPopover). Every settingsSet the
 // panel makes is recorded, in order, so a test can prove a pick writes once and writes the whole
 // object — and `?settingsDelay=N` holds each write for N ms, which is how the dispatch gate is driven.
@@ -30,10 +33,10 @@ const settingsDelay = Number(new URL(window.location.href).searchParams.get("set
 const outcome = new URL(window.location.href).searchParams.get("outcome") === "failure" ? "failure" : "success"
 
 declare global {
-  interface Window { dispatchComposerProfileFixture?: { preferences: DispatchPreferences; writes: SetDispatchPreferenceInput[]; settingsWrites: Record<string, unknown>[]; instructions?: typeof instructions } }
+  interface Window { dispatchComposerProfileFixture?: { preferences: DispatchPreferences; writes: SetDispatchPreferenceInput[]; dispatches: DispatchInput[]; settingsWrites: Record<string, unknown>[]; instructions?: typeof instructions } }
 }
 
-window.dispatchComposerProfileFixture = { preferences, writes, settingsWrites, instructions }
+window.dispatchComposerProfileFixture = { preferences, writes, dispatches, settingsWrites, instructions }
 
 const nativeFetch = window.fetch.bind(window)
 window.fetch = async (input, init) => {
@@ -52,7 +55,7 @@ window.fetch = async (input, init) => {
         [update.backend]: { ...preferences[update.backend], model: update.model, effort: update.effort },
       }
     }
-    window.dispatchComposerProfileFixture = { preferences, writes, settingsWrites, instructions }
+    window.dispatchComposerProfileFixture = { preferences, writes, dispatches, settingsWrites, instructions }
     return json(preferences)
   }
   if (url.pathname === "/_frizz/rpc/settingsGet") return json(settings)
@@ -76,6 +79,7 @@ window.fetch = async (input, init) => {
     // A deliberately isolated RPC seam for visual QA: no local server state, worker, terminal, or
     // live thread can be touched from this fixture. The short delay leaves the optimistic task card
     // visible long enough to inspect before either acknowledgement or rollback.
+    dispatches.push(JSON.parse(String(init?.body ?? "{}")) as DispatchInput)
     await new Promise((resolve) => window.setTimeout(resolve, 900))
     if (outcome === "failure") return new Response(JSON.stringify({ error: "Fixture dispatch rejected" }), { status: 500, headers: { "content-type": "application/json" } })
     return json({ slug: "fixture-started-thread", sessionId: "fixture-session" })
@@ -88,6 +92,11 @@ function json(result: unknown): Response {
 }
 
 store.board = { projectDir: "/fixture/dispatch-composer" } as BoardSnapshot
+// `?pick=<effort>` opens the box on a pick over the default (GPT-5.6 Sol at that effort), the state
+// that shows "Make default" — so a screenshot or an ink measurement can start there without driving
+// the menu first.
+const pick = new URL(window.location.href).searchParams.get("pick")
+if (pick) draftStore.set(draftKey.dispatchProfile(store.board.projectDir), JSON.stringify({ backend: "codex", model: "gpt-5.6-sol", effort: pick }))
 
 const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false, refetchOnWindowFocus: false } } })
 

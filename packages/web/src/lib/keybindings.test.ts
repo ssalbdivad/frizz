@@ -22,12 +22,12 @@ function key(init: Partial<KeyLike> & { key: string }): KeyLike {
 
 const defaults = bindingLookup(effectiveBindings({}))
 
-test("the default triage keys match the inbox conventions they borrow", () => {
+test("the default keys are the ones the sheet promises", () => {
   const cases: [KeyLike, string][] = [
     [key({ key: "j", code: "KeyJ" }), "queue.next"],
     [key({ key: "k", code: "KeyK" }), "queue.prev"],
-    [key({ key: "e", code: "KeyE" }), "thread.done"],
-    [key({ key: "h", code: "KeyH" }), "thread.snooze"],
+    [key({ key: "d", code: "KeyD" }), "thread.done"],
+    [key({ key: "s", code: "KeyS" }), "thread.snooze"],
     [key({ key: "r", code: "KeyR" }), "thread.reply"],
     [key({ key: "c", code: "KeyC" }), "app.newThread"],
     [key({ key: "t", code: "KeyT" }), "app.newTerminal"],
@@ -41,12 +41,27 @@ test("the default triage keys match the inbox conventions they borrow", () => {
   for (const [event, action] of cases) assert.equal(matchAction(event, defaults)?.action, action, JSON.stringify(event))
 })
 
+// THE RULE (keybindings.ts header): a single-letter default is the initial of a word in its action's
+// label. These three break it on purpose — movement is placed by position, and C is the web's compose —
+// and nothing else may, so a new action cannot quietly bring back a letter that has to be memorized.
+const NOT_AN_INITIAL = new Set(["queue.next", "queue.prev", "app.newThread"])
+
+test("every single-letter default is its action's initial, bar the listed exceptions", () => {
+  for (const action of ACTIONS) {
+    if (!/^[a-z]$/.test(action.defaultChord)) continue
+    // Short words ("as", "a", "to") are not what anyone reads a label for.
+    const initials = action.label.toLowerCase().split(/\s+/).filter((word) => word.length > 2).map((word) => word[0])
+    // An exception that has become an initial is a stale entry, so this runs both ways.
+    assert.equal(initials.includes(action.defaultChord), !NOT_AN_INITIAL.has(action.id), `${action.id} → ${action.defaultChord}`)
+  }
+})
+
 test("Shift distinguishes letters but is part of how a symbol is typed", () => {
-  // ⇧E is its own binding, so a plain `e` binding must not fire on it (and vice versa).
-  assert.equal(matchAction(key({ key: "E", code: "KeyE", shiftKey: true }), defaults), null)
-  assert.deepEqual(chordFromEvent(key({ key: "E", code: "KeyE", shiftKey: true })), { key: "e", mod: false, alt: false, shift: true })
-  // Caps Lock types "E" with no Shift held: still the plain letter.
-  assert.equal(matchAction(key({ key: "E", code: "KeyE" }), defaults)?.action, "thread.done")
+  // ⇧D is its own binding, so a plain `d` binding must not fire on it (and vice versa).
+  assert.equal(matchAction(key({ key: "D", code: "KeyD", shiftKey: true }), defaults), null)
+  assert.deepEqual(chordFromEvent(key({ key: "D", code: "KeyD", shiftKey: true })), { key: "d", mod: false, alt: false, shift: true })
+  // Caps Lock types "D" with no Shift held: still the plain letter.
+  assert.equal(matchAction(key({ key: "D", code: "KeyD" }), defaults)?.action, "thread.done")
   // `?` is whatever key types it on this layout; the binding is the character.
   assert.deepEqual(chordFromEvent(key({ key: "?", code: "Minus", shiftKey: true })), { key: "?", mod: false, alt: false, shift: false })
 })
@@ -54,15 +69,15 @@ test("Shift distinguishes letters but is part of how a symbol is typed", () => {
 test("a lone modifier is not a chord, and a modified key is not its bare letter", () => {
   assert.equal(chordFromEvent(key({ key: "Meta", metaKey: true })), null)
   assert.equal(chordFromEvent(key({ key: "Shift", shiftKey: true })), null)
-  assert.equal(matchAction(key({ key: "e", code: "KeyE", metaKey: true }), defaults), null)
+  assert.equal(matchAction(key({ key: "d", code: "KeyD", metaKey: true }), defaults), null)
   assert.equal(matchAction(key({ key: "j", code: "KeyJ", altKey: true }), defaults), null)
 })
 
 test("Option-composed glyphs and non-Latin layouts bind the physical key", () => {
   // ⌥E on a Mac types a dead-key accent; ⌥J types ∆.
   assert.deepEqual(chordFromEvent(key({ key: "∆", code: "KeyJ", altKey: true })), { key: "j", mod: false, alt: true, shift: false })
-  // A Cyrillic layout's KeyE types "у"; the default `e` still finishes the card.
-  assert.equal(matchAction(key({ key: "у", code: "KeyE" }), defaults)?.action, "thread.done")
+  // A Cyrillic layout's KeyD types "в"; the default `d` still finishes the card.
+  assert.equal(matchAction(key({ key: "в", code: "KeyD" }), defaults)?.action, "thread.done")
 })
 
 test("chords round-trip through their stored form", () => {
@@ -108,23 +123,23 @@ test("the browser's, the editor's and the prompt box's chords cannot be taken", 
 test("binding a key another action holds swaps the two rather than stranding one", () => {
   const { overrides, swappedWith } = assignChord({}, "thread.done", parseChord("j"))
   assert.equal(swappedWith, "queue.next")
-  assert.deepEqual(overrides, { "thread.done": "j", "queue.next": "e" })
+  assert.deepEqual(overrides, { "thread.done": "j", "queue.next": "d" })
   const lookup = bindingLookup(effectiveBindings(overrides))
   assert.equal(lookup.get("j"), "thread.done")
-  assert.equal(lookup.get("e"), "queue.next")
+  assert.equal(lookup.get("d"), "queue.next")
   // Swapping back lands both on their defaults, which leaves no overrides at all.
-  assert.deepEqual(assignChord(overrides, "thread.done", parseChord("e")).overrides, {})
+  assert.deepEqual(assignChord(overrides, "thread.done", parseChord("d")).overrides, {})
 })
 
 test("a free key simply moves, and unbinding records an explicit null", () => {
-  const moved = assignChord({}, "thread.snooze", parseChord("s"))
+  const moved = assignChord({}, "thread.snooze", parseChord("x"))
   assert.equal(moved.swappedWith, null)
-  assert.deepEqual(moved.overrides, { "thread.snooze": "s" })
+  assert.deepEqual(moved.overrides, { "thread.snooze": "x" })
   const cleared = assignChord(moved.overrides, "thread.snooze", null)
   assert.deepEqual(cleared.overrides, { "thread.snooze": null })
   assert.equal(effectiveBindings(cleared.overrides)["thread.snooze"], null)
   // Taking an unbound action's old key from someone gives them its (empty) slot: nothing is invented.
-  const took = assignChord(cleared.overrides, "thread.snooze", parseChord("e"))
+  const took = assignChord(cleared.overrides, "thread.snooze", parseChord("d"))
   assert.equal(took.swappedWith, "thread.done")
   assert.equal(effectiveBindings(took.overrides)["thread.done"], null)
 })
@@ -134,8 +149,8 @@ test("stored overrides are validated one entry at a time", () => {
   assert.deepEqual(sanitizeOverrides("mod+k"), {})
   assert.deepEqual(sanitizeOverrides([]), {})
   assert.deepEqual(
-    sanitizeOverrides({ "thread.snooze": "s", "thread.gone": "x", "thread.done": "mod+w", "queue.next": 7, "thread.reply": null }),
-    { "thread.snooze": "s", "thread.reply": null },
+    sanitizeOverrides({ "thread.snooze": "x", "thread.gone": "x", "thread.done": "mod+w", "queue.next": 7, "thread.reply": null }),
+    { "thread.snooze": "x", "thread.reply": null },
   )
   // A hand-edited duplicate settles to the first claimant instead of leaving one dead.
   const duped = sanitizeOverrides({ "thread.fullscreen": "j" })

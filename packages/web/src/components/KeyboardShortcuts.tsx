@@ -221,6 +221,10 @@ function KeyboardShortcutsDialog({ open, onOpenChange }: { open: boolean; onOpen
       }
     >
       <div data-shortcut-list tabIndex={-1} className="flex flex-col px-4 pb-2 pt-0.5 outline-none">
+        {/* The rule the defaults follow (lib/keybindings.ts), said once so a reader can guess the keys
+            they have not looked up. Written against the defaults: a rebind changes a key, not the rule.
+            `text-balance`: at phone width it wraps, and unbalanced it left "compose." alone on line two. */}
+        <p className="mt-2.5 text-balance text-[11.5px] text-muted-65">Letter keys are initials, except J/K to move and C to compose.</p>
         {groups.map((group) => (
           <section key={group.heading} aria-label={group.heading} className="mt-3">
             <h3 className="text-[11px] font-medium uppercase tracking-wide text-fg/60">{group.heading}</h3>

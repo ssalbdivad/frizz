@@ -1,7 +1,7 @@
 import { execFile } from "node:child_process"
 import { promisify } from "node:util"
 import { createHash, randomUUID } from "node:crypto"
-import { PARK_CORRECTION_NAMES_LEAD, PARK_CORRECTION_QUESTION_LEAD, PARK_CORRECTION_RETIRED_LEAD, interruptEndedSubAgentsMessage, type InterruptEndedSubAgent, parkExpiredWakeMessage, parkFinishedWakeMessage, prWatchExpiredWakeMessage, ownWatchExpiredWakeMessage, questionAnswerMessage, questionsCancelledWakeMessage, type QuestionAnswer, type QuestionDismissal, RETIRED_AWAITING_REPLACEMENT, retiredAwaitingKindsIn, compactionPromptMessage, limitResumeSteer, limitModelSwitchSteer, formatGithubWakeSteer, GithubWakeItem, type GithubWatchStatus, type GithubIssueStatus, prWatchWakeMessage, issueWatchWakeMessage, shellDoneMessage, restPromptMessage, schedulePromptMessage, timerPromptMessage, signoffNudgeMessage, liveOpsLines, wakeDeliveryToken, wakeTimeHeader, stripWakeTimeHeader, type QuotaSnapshot } from "@frizz/shared"
+import { PARK_CORRECTION_NAMES_LEAD, questionRepliedPast, PARK_CORRECTION_QUESTION_LEAD, PARK_CORRECTION_RETIRED_LEAD, interruptEndedSubAgentsMessage, type InterruptEndedSubAgent, parkExpiredWakeMessage, parkFinishedWakeMessage, prWatchExpiredWakeMessage, ownWatchExpiredWakeMessage, questionAnswerMessage, questionsCancelledWakeMessage, type QuestionAnswer, type QuestionDismissal, RETIRED_AWAITING_REPLACEMENT, retiredAwaitingKindsIn, compactionPromptMessage, limitResumeSteer, limitModelSwitchSteer, formatGithubWakeSteer, GithubWakeItem, type GithubWatchStatus, type GithubIssueStatus, prWatchWakeMessage, issueWatchWakeMessage, shellDoneMessage, restPromptMessage, schedulePromptMessage, timerPromptMessage, signoffNudgeMessage, liveOpsLines, wakeDeliveryToken, wakeTimeHeader, stripWakeTimeHeader, type QuotaSnapshot } from "@frizz/shared"
 import { GITHUB_ISSUE_STATUS_SETTING, GITHUB_STATUS_SETTING, parkExpiresAt, parkIsHonoured, readAwaitingPark, unaccountedItems, type LiveActivity } from "./awaiting.ts"
 import type { PrWatchRow, SessionRow, Storage, ThreadQuestionRow } from "./storage.ts"
 import type { Tailer } from "./tailer.ts"
@@ -1996,7 +1996,8 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
         tele.lastFence ||
         tele.pendingQuestion ||
         registeredDoneFence(deps.storage.getThreadDone(row.slug), tele.lastUserAt, tele.lastToolCallAt) !== undefined ||
-        questionRows.some((q) => q.state === "open") ||
+        // …a CURRENT one: a question the human replied past is a pivot, not this rest's sign-off.
+        questionRows.some((q) => q.state === "open" && !questionRepliedPast(q.asked_at, tele.lastHumanAt)) ||
         answersInFlight(questionRows, tele.lastUserAt, row.recurring_on_rest === 1 && Boolean(row.recurring_prompt?.trim())) !== undefined ||
         deps.storage.listThreadWatches(row.slug, { armedOnly: true }).length > 0
       ) {
@@ -2121,7 +2122,8 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
       // corrections, because a worker whose contract froze before this rule cannot learn it, and keyed
       // on the rest so one fence draws one bump. Checked BEFORE the honoured-park reset below on
       // purpose: live names do not make this park honoured.
-      const openQuestions = deps.storage.listThreadQuestions(row.slug).filter((q) => q.state === "open")
+      // Current questions only: one the human replied past holds nothing, so it refuses no park either.
+      const openQuestions = deps.storage.listThreadQuestions(row.slug).filter((q) => q.state === "open" && !questionRepliedPast(q.asked_at, tele.lastHumanAt))
       if (openQuestions.length > 0) {
         if ((row.park_bumps ?? 0) >= PARK_BUMP_MAX) continue
         const fenceId = parkFenceId("question", spokeAt)

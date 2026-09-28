@@ -127,7 +127,7 @@ export function AllQueuesPage() {
     const box = event.target
     const step = projectStep(event)
     if (!step || !(box instanceof HTMLTextAreaElement) || !box.matches(NEW_THREAD_BOXES)) return
-    const next = stepPick(projects, focus, step)
+    const next = stepPick(pickOrder(projects), focus, step)
     if (!next) return
     event.preventDefault()
     setFocusComposerFor({
@@ -358,10 +358,10 @@ function ProjectPicker({ projects, focus, onPick }: { projects: QueuesProject[];
   const name = current?.name ?? focus ?? "a project"
   // A project whose directory is gone cannot take a thread; it stays on the rail, saying why.
   const choices = projects.filter((project) => !project.stale && !project.card?.home)
-  const steps = stepPick(projects, focus, 1) !== undefined
+  const steps = stepPick(pickOrder(projects), focus, 1) !== undefined
   // The Home workspace, for the work that belongs to no project yet: last, under a rule, with the folder
   // it runs in, because "Home" alone does not say that its agents start outside every project. Last is
-  // also where stepping from the box reaches it (stepPick walks the server's order, which lists Home last).
+  // also where stepping from the box reaches it (pickOrder).
   const homeChoice = projects.find((project) => !project.stale && project.card?.home)
   const choice = (project: QueuesProject, hint?: string) => (
     <MenuItem key={project.id} value={project.slug} onSelect={() => onPick(project)} icon={<ProjectSquare project={project.card ?? fallbackCard(project)} size={14} />}>
@@ -566,6 +566,14 @@ function FocusedComposer({
     )
   }
   return <DispatchForm key={focus} autoFocus={autoFocus} target={target} dirs={dirs} />
+}
+
+/**
+ * The picker's own order, which ⌥↓ and ⌥↑ in the box step through: every project in the list's order,
+ * then Home, which the menu draws last under its own rule.
+ */
+function pickOrder(projects: QueuesProject[]): QueuesProject[] {
+  return [...projects.filter((project) => !project.card?.home), ...projects.filter((project) => project.card?.home)]
 }
 
 /**
@@ -805,35 +813,71 @@ function useScrollToCard(): (key: string) => number | null {
  * for the length of the glide — and for as long as the page then stays where it put it — the target is
  * held as the card being read; otherwise a quick `j j` would step twice from the card the glide was
  * leaving and land on the same card again.
+ *
+ * That card also wears the arrival ring STEADILY (`data-queue-current`), for as long as it is the one a
+ * `d` or `s` would act on — the flash alone faded after a second and left no sign of which card the next
+ * key would finish. An open drawer takes the keys (currentThreadSurface), so the ring steps off while one is.
  */
 function useQueueKeys(activeKey: string | null, scrollToCard: (key: string) => number | null): void {
   const reading = useRef(activeKey)
   reading.current = activeKey
   const landing = useRef<{ key: string; y: number; until: number } | null>(null)
+  const current = useCallback(() => {
+    const held = landing.current
+    // A held card that has since been finished or snoozed is not being read any more.
+    if (held && document.querySelector(`[data-xq-card="${CSS.escape(held.key)}"][data-queue-leaving="false"]`)) {
+      const reachable = Math.min(held.y, Math.max(0, document.documentElement.scrollHeight - window.innerHeight))
+      if (performance.now() < held.until || Math.abs(window.scrollY - reachable) <= 2) return held.key
+    }
+    landing.current = null
+    return reading.current
+  }, [])
+  const root = useCallback((key: string) => {
+    const slot = document.querySelector<HTMLElement>(`[data-xq-card="${CSS.escape(key)}"]`)
+    return slot?.querySelector<HTMLElement>("[data-xq-card-root], [data-queue-card-root]") ?? slot
+  }, [])
+  const [ringed, setRinged] = useState<string | null>(null)
   useEffect(() => registerQueueCursor({
     // Not a ghost (lib/stableQueue.ts), whose thread is no longer waiting, nor a card whose drawer is open.
     keys: () => [...document.querySelectorAll<HTMLElement>('[data-xq-card][data-queue-leaving="false"]:not([data-queue-ghost]):not([data-queue-concealed])')]
       .map((slot) => slot.dataset.xqCard ?? "")
       .filter(Boolean),
-    current: () => {
-      const held = landing.current
-      // A held card that has since been finished or snoozed is not being read any more.
-      if (held && document.querySelector(`[data-xq-card="${CSS.escape(held.key)}"][data-queue-leaving="false"]`)) {
-        const reachable = Math.min(held.y, Math.max(0, document.documentElement.scrollHeight - window.innerHeight))
-        if (performance.now() < held.until || Math.abs(window.scrollY - reachable) <= 2) return held.key
-      }
-      landing.current = null
-      return reading.current
-    },
-    root: (key) => {
-      const slot = document.querySelector<HTMLElement>(`[data-xq-card="${CSS.escape(key)}"]`)
-      return slot?.querySelector<HTMLElement>("[data-xq-card-root], [data-queue-card-root]") ?? slot
-    },
+    current,
+    root,
     go: (key) => {
       const y = scrollToCard(key)
-      if (y !== null) landing.current = { key, y, until: performance.now() + 700 }
+      if (y !== null) {
+        landing.current = { key, y, until: performance.now() + 700 }
+        setRinged(key)
+      }
     },
-  }), [scrollToCard])
+  }), [scrollToCard, current, root])
+
+  // Re-read on every render (a card leaving re-renders the page) and on scroll (which can end a hold);
+  // an unchanged key is a bail-out, not a render.
+  useEffect(() => setRinged(current()))
+  useEffect(() => {
+    let frame = 0
+    const sync = () => {
+      cancelAnimationFrame(frame)
+      frame = requestAnimationFrame(() => setRinged(current()))
+    }
+    window.addEventListener("scroll", sync, { passive: true })
+    return () => {
+      cancelAnimationFrame(frame)
+      window.removeEventListener("scroll", sync)
+    }
+  }, [current])
+
+  // An ATTRIBUTE set imperatively, like the flash: the roots are two different card components, and React
+  // never touches an attribute absent from its props.
+  const drawerOpen = useSnapshot(store).drawers.some((drawer) => !drawer.closing)
+  const target = drawerOpen ? null : ringed
+  useEffect(() => {
+    const el = target ? root(target) : null
+    el?.setAttribute("data-queue-current", "")
+    return () => el?.removeAttribute("data-queue-current")
+  }, [target, root])
 }
 
 /**

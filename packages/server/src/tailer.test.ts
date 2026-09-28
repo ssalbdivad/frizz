@@ -6,7 +6,7 @@ import { dirname, join } from "node:path"
 import { createStorage, type Storage, type SessionRow } from "./storage.ts"
 import { Bus } from "./bus.ts"
 import type { ServerEvent } from "@frizz/shared"
-import { AwaitingHint, QUESTION_FENCE_RETIRED_AT } from "@frizz/shared"
+import { AwaitingHint, BURIED_ANSWERS_HEADER, QUESTION_FENCE_RETIRED_AT, wakeDeliveryToken } from "@frizz/shared"
 import { permMarkerPath, type Project } from "./project.ts"
 import { degradeIfAwaitingAnswer, deriveNeedsYou } from "./board.ts"
 import { parseLine, applyRecord, applyEvent, computeTurn, newTailState, createTailer, defaultBrokerDaemonAlive, hasQuestionBlock, isClaudeAuthErrorText, isRealUserMessage, parseSignalFence, markerDecision, unwrapShellCommand, FOREIGN_FRESH_MS, parseWindowsShellHolderReport, probeShellsAlive, windowsShellHolderCommand } from "./tailer.ts"
@@ -78,6 +78,28 @@ test("applyRecord: a system-origin user record (peer / task-notification) RE-INV
   applyRecord(s, { type: "user", timestamp: "2026-07-01T00:00:09.000Z", message: { content: "B" } })
   assert.equal(s.lastAssistantHasQuestion, false)
   assert.equal(s.lastUserAt, "2026-07-01T00:00:09.000Z")
+})
+
+// `lastHumanAt` is the clock a question is "replied past" against (shared questionRepliedPast), so it has
+// to agree with the chat's own `isHumanTurn` (web lib/questionAnchor): a typed reply and the answers wake
+// move it, frizz's other wakes — a watcher, a timer, a nudge — never do, though they bump lastUserAt.
+test("applyRecord: lastHumanAt moves on the human's turns only — a frizz wake bumps the row key but not it", () => {
+  const s = newTailState("t", "sid", "/x")
+  applyRecord(s, { type: "user", timestamp: "2026-07-01T00:00:00.000Z", message: { content: "fix the parser" } })
+  assert.equal(s.lastHumanAt, "2026-07-01T00:00:00.000Z")
+  applyRecord(s, {
+    type: "user",
+    timestamp: "2026-07-01T00:01:00.000Z",
+    message: { content: `Your PR watch expired; re-check the run.\n\n${wakeDeliveryToken("dlv_watch")}` },
+  })
+  assert.equal(s.lastUserAt, "2026-07-01T00:01:00.000Z", "a wake is still a delivery the row key counts")
+  assert.equal(s.lastHumanAt, "2026-07-01T00:00:00.000Z", "…but nobody typed it")
+  applyRecord(s, {
+    type: "user",
+    timestamp: "2026-07-01T00:02:00.000Z",
+    message: { content: `${BURIED_ANSWERS_HEADER}\n1. “Which store?” → SQLite\n\n${wakeDeliveryToken("dlv_answers")}` },
+  })
+  assert.equal(s.lastHumanAt, "2026-07-01T00:02:00.000Z", "answers are the human speaking through frizz")
 })
 
 test("applyRecord: claude's post-compaction carry-over summary re-invokes but never reorders the row", () => {

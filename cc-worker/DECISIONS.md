@@ -272,7 +272,17 @@ THE TABLE ships UNIVERSAL rules only; this plugin loads for every project frizz 
 is right for one repo is wrong for the next. `catastrophic-delete` and `raw-disk-write` deny outright
 (strictly safer than bypass, which would have allowed both). `restrictive-mode` DEFERS whenever
 `permission_mode !== "auto"`, which is what makes a genuine lower-permission mode usable: move a thread
-to `default` with the live permission control and its prompts come back. `FRIZZ_PERM_POLICY=review`
+to `default` with the live permission control and its prompts come back.
+
+`bypass-safety-check` (2026-09-28) sits in front of it and also DEFERS. Bypass became the Settings
+default in 0.7.2 and is not prompt-free: Claude Code keeps asking there about its bypass-immune safety
+checks (2.1.282: `dangerousRemoval`, an `rm` whose target is built from variables that could expand
+empty, plus read/sandbox restrictions from the operator's own settings) and explicit `ask` rules. The
+hook cannot see which one fired, and approving any of them blind undoes a check bypass was built to
+keep, so a human answers. These were recorded as `restrictive-mode` until then — an honest outcome
+under a false name, since bypass is the MOST permissive mode. The first one on record (an arktype
+worker's `rm -rf $BASE/$d/$o` loop) reached the operator on a queue card that did not draw its
+approval buttons; that was the card's bug, fixed the same day in `AllQueuesCard`. `FRIZZ_PERM_POLICY=review`
 defers everything. Fail-safe INVERTS the old observer's fail-open — for a hook that can APPROVE, any
 error must fall back to asking, never to allowing.
 

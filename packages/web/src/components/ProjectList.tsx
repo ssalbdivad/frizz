@@ -334,7 +334,9 @@ function ProjectRow({
         >
           <ChevronRight size={11} />
         </span>
-        <span className={`${INDICATOR_SLOT} ${project.stale ? "grayscale" : ""}`}>
+        {/* The top of the project's cord, which hangs from this square behind every thread row's indicator
+            under it (ThreadConnector). */}
+        <span data-xq-indicator className={`${INDICATOR_SLOT} ${project.stale ? "grayscale" : ""}`}>
           <ProjectSquare project={project.card ?? squareCard(project)} size={16} />
         </span>
         <span className={`flex min-w-0 flex-1 items-center gap-1.5 text-[12.5px] leading-[19px] ${busy ? "font-medium text-fg/90" : "text-fg/75"}`}>

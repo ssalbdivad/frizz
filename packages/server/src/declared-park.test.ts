@@ -220,7 +220,7 @@ test("own background work does both — it cards AND it leaves the queue", () =>
 // blocking call that starved its own notification, a timer written in the past. Each one left a thread
 // looking parked forever, and frizz said nothing.
 
-function parkHarness(hints: FenceView["hints"], opts: { shells?: any[]; agents?: any[]; restedAt?: string; body?: string; retired?: any[]; prWatch?: { owner: string; repo: string; number: number } } = {}) {
+function parkHarness(hints: FenceView["hints"], opts: { shells?: any[]; agents?: any[]; restedAt?: string; body?: string; retired?: any[]; prWatch?: { owner: string; repo: string; number: number }; lastHumanAt?: string } = {}) {
   const dir = mkdtempSync(join(tmpdir(), "frizz-park-"))
   const storage = createStorage(join(dir, "ui.db"), "p")
   storage.setSetting("signoffNudge", "off") // isolate SOURCE 12 from the nudge
@@ -262,6 +262,7 @@ function parkHarness(hints: FenceView["hints"], opts: { shells?: any[]; agents?:
         pendingQuestion: false,
         permPrompt: false,
         lastFence: { kind: "awaiting", body: opts.body ?? "", hints },
+        lastHumanAt: opts.lastHumanAt,
       }),
     } as never,
     resume: async (_slug, message) => { sent.push(message) },
@@ -782,6 +783,17 @@ test("an ANSWERED question no longer refuses the park", async () => {
     h.storage.answerThreadQuestion(q.id, JSON.stringify({ questionId: q.id, question: "Which store — SQLite or a JSON file?", answer: "SQLite" }), Date.now())
     await h.s.tick()
     assert.equal(h.queued().length, 0, "a settled row is not a standing question")
+  } finally { h.close() }
+})
+
+// …but one the human REPLIED PAST is a pivot, not a standing ask (shared questionRepliedPast): its card
+// stays up where it was asked, and the park the worker wrote for its new work takes.
+test("a question the human replied past does not refuse the park", async () => {
+  const h = parkHarness([{ kind: "shell", value: "bzvtnt3ig" }, { kind: "for", value: "1h" }], { shells: [LIVE_SHELL], lastHumanAt: new Date(Date.now() - 30 * 60_000).toISOString() })
+  try {
+    h.storage.askThreadQuestion({ id: "qst_repliedpast1", slug: "parked", askedAtMs: Date.now() - 90 * 60_000, spec: JSON.stringify({ question: "Which store — SQLite or a JSON file?", kind: "question" }) })
+    await h.s.tick()
+    assert.equal(h.queued().length, 0, "nothing refused: the human moved on from that question")
   } finally { h.close() }
 })
 
