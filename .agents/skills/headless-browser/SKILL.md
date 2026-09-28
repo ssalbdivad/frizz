@@ -31,12 +31,14 @@ responsive checks, and optical review.
 
 ```bash
 # screenshot + assert page state (the eval's completion value prints as json)
-node scripts/shot.mjs "http://127.0.0.1:4930/" .adhoc-shots/board-desktop.png \
-  "({title: document.title, threads: document.querySelectorAll('[data-thread-slug]').length})" \
+# `/` is the one page: every project's rows on the left ([data-xq-thread-row]), every Ready card on the
+# right ([data-xq-card]). A thread's drawer is /all/<slug>/thread/<t>; there is no /project/<slug> page.
+node scripts/shot.mjs "http://127.0.0.1:4930/" .adhoc-shots/page-desktop.png \
+  "({title: document.title, rows: document.querySelectorAll('[data-xq-thread-row]').length, cards: document.querySelectorAll('[data-xq-card]').length})" \
   --w=1440 --h=900 --wait=2500
 
-# narrow viewport for responsive/overflow checks
-node scripts/shot.mjs "http://127.0.0.1:4930/" .adhoc-shots/board-narrow.png "" --w=420 --h=880
+# narrow viewport for responsive/overflow checks (below 800px the columns stack)
+node scripts/shot.mjs "http://127.0.0.1:4930/" .adhoc-shots/page-narrow.png "" --w=420 --h=880
 
 # a complex in-page routine (occlusion/alignment/optical-center) from a file
 node scripts/shot.mjs "$URL" out.png @/tmp/routine.js

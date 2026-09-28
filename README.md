@@ -35,19 +35,19 @@ $ npx frizz
 
   FRIZZ v0.4.0  ready in 4.0s
 
-  ➜  Local:    http://127.0.0.1:9393/project/acme/
+  ➜  Local:    http://127.0.0.1:9393/?focus=acme
   ➜  Project:  acme — path/to/acme
   ➜  Logs:     ~/Library/Application Support/Frizz/projects/979dae3c-fe15-4038-817e-11d0e7491959/logs/frizz-2026-08-01T13-44-43-16931.log
 
   press ctrl-c to stop · run with --debug for the full event feed
 ```
 
-A browser tab opens at `http://127.0.0.1:9393/project/acme/`. Frizz always listens on port 9393 (19393 if something else holds it), and one server serves every project on the machine. Each directory you run it in becomes a **project** with its own board at `/project/<name>`, so running `npx frizz` in a second repo registers that project and opens its board in the server already running rather than starting another. Runs on macOS, Linux, and Windows.
+A browser tab opens at `http://127.0.0.1:9393/`, with its prompt box aimed at `acme`. Frizz always listens on port 9393 (19393 if something else holds it), and one server serves every project on the machine on one page. Each directory you run it in becomes a **project** on that page, so running `npx frizz` in a second repo registers that project and adds it to the server already running rather than starting another. Runs on macOS, Linux, and Windows.
 
 Prefer a window of its own to a browser tab? The desktop app is on [GitHub releases](https://github.com/colinhacks/frizz/releases?q=desktop) for all three — unsigned builds, so the first launch asks once. It needs the same Node, and starts or joins the same server.
 
 <p align="center">
-  <img src="assets/board.png" alt="The Frizz board: the project rail down the left, the composer and the queue of threads beside it, and on the right a card where an agent is asking an answerable question with lettered options, above Snooze and Mark as done." width="100%">
+  <img src="assets/board.png" alt="Frizz: the project rail down the left, the composer and the queue of threads beside it, and on the right a card where an agent is asking an answerable question with lettered options, above Snooze and Mark as done." width="100%">
 </p>
 
 <br/>
@@ -57,7 +57,7 @@ Prefer a window of its own to a browser tab? The desktop app is on [GitHub relea
 Frizz is a browser tab, a queue, and the agent CLIs you already pay for. It brings no model of its own, automates none of your workflow, and keeps every opinion it does have in a text file you can edit.
 
 - 🗂️ **A task queue, not a sidebar.** Every agent that comes to rest needing you becomes a card. Work the queue top to bottom instead of polling ten terminals.
-- 📁 **Projects.** Every directory you run it in gets its own board, all on one server. The home page lists them, and the project rail switches between them with each queue's count on its icon.
+- 📁 **Projects.** Every directory you run it in becomes a project, all on one server and one page: every project down the left with its threads, and every card waiting on you beside them.
 - 🔌 **Headless.** Every thread's agent runs in its own detached background process. Close the tab, quit the browser, ctrl-c the server, reboot — your threads are all still there when you come back, and Frizz reconnects to the ones still running rather than replaying them from disk.
 - 🤖 **Claude Code *and* Codex.** Pick the backend per thread and run both against the same repo at once. Frizz supports Claude Code and Codex subscriptions — your sign-in, your settings, your skills, driven by a copy of each CLI that Frizz pins and provisions itself.
 - 😴 **Snooze.** Not everything needs an answer now. Park a card for an hour, until tomorrow morning, or until a date you pick — optionally with a follow-up prompt attached, so the thread wakes up already working on what you told it to do next.
@@ -65,19 +65,19 @@ Frizz is a browser tab, a queue, and the agent CLIs you already pay for. It brin
 - 🐙 **GitHub integration.** Browse your repo's issues and pull requests without leaving the composer, and turn a selection of them into threads. Workers can read issues, diffs, and CI on their own.
 - 👀 **Built-in CI and PR watchers.** A worker waiting on a build or a review doesn't hand the thread back to you to be told "keep going." It watches, and picks the work back up when the run goes green or a review lands.
 - 📝 **No magic.** A thread behaves like a Claude Code session you started yourself. Frizz adds no worktrees, no branches, no dev server, no build integration, no workflow engine to fight with.
-- 🔒 **Local only.** No cloud, no account, no telemetry. The server binds `127.0.0.1` by default and its state lives in your user directory, never in your checkout. To reach a board from a phone, press R in its terminal — see [Remote access](docs/remote-access.md).
+- 🔒 **Local only.** No cloud, no account, no telemetry. The server binds `127.0.0.1` by default and its state lives in your user directory, never in your checkout. To reach it from a phone, press R in its terminal — see [Remote access](docs/remote-access.md).
 
 ### Projects
 
-Every directory you run `npx frizz` in becomes a project with its own board, all served by the one Frizz on your machine. The home page at `http://127.0.0.1:9393/`, **Everything**, puts every project's queue on one page: your projects down the left with their threads, and every card waiting on you beside them. Choose a project to see only that one; ∞ goes back to everything, and a project's … menu opens its board.
+Every directory you run `npx frizz` in becomes a project, all served by the one Frizz on your machine. Frizz is one page, at `http://127.0.0.1:9393/`: your projects down the left with the threads in flight under each, and every card waiting on you beside them. There is no separate page per project. A project's snoozed and done threads show as small counts on its row; click the row to list them in place. To work through one project's cards, filter the queue with the **All projects** pill above it, or with **Filter the queue to this project** in the project's ⋯ menu. The filter changes only which cards the queue shows, and the ✕ on the pill clears it. A thread opens in a drawer beside the page, and its ⋯ menu can take it fullscreen.
 
 <p align="center">
-  <img src="assets/projects.png" alt="Frizz's home page, Everything: a prompt box above a list of projects — marketing-site, acme-api, billing-worker — each with its threads beneath it, and beside the list every project's ready cards in one column, the first asking a question with lettered options." width="100%">
+  <img src="assets/projects.png" alt="Frizz's one page: a prompt box above a list of projects — marketing-site, acme-api, billing-worker — each with its threads beneath it, and beside the list every project's ready cards in one column, the first asking a question with lettered options." width="100%">
 </p>
 
-The project rail keeps every project one click away, with each queue's count on its icon. It is off by default; switch it on under **Settings → Project sidebar**.
+The project rail shows every project's icon down the edge of the window, with each queue's count on it; click an icon to filter the queue to that project, and again to clear the filter. It is off by default; switch it on under **Settings → Project sidebar**.
 
-Work that belongs to no project yet — cloning a repository, a question about your machine — starts in **Home**, the last choice in the prompt box's project picker. Its agents run in your home folder, or in the folder you set under **Settings → Home folder**, and its threads are listed under Home on Everything like any project's.
+Work that belongs to no project yet — cloning a repository, a question about your machine — starts in **Home**, the last choice in the prompt box's project picker. Its agents run in your home folder, or in the folder you set under **Settings → Home folder**, and its threads are listed under Home in the project list like any project's.
 
 ### The queue
 
@@ -139,7 +139,7 @@ Frizz production launcher
 Usage: npx frizz [options]
 
 Run it in the directory you want to work in. One server serves EVERY project on this machine,
-each at its own /project/<name> URL, so a second run joins the one already going. Runs the
+all on one page, so a second run joins the one already going. Runs the
 npm-resolved immutable Frizz package, then opens it in your default browser. Use frizz-dev only
 for a source checkout.
 
@@ -203,18 +203,18 @@ shows a single-use sign-in link as a QR; press L for a fresh one, or run --link 
 <details>
 <summary><b>Can I run it on several repos at once?</b></summary>
 
-> Yes. One Frizz server serves every project on your machine — you don't start one per repo. Run `npx frizz` in any of them and switch projects from the board; each project's threads, settings and state stay separate.
+> Yes. One Frizz server serves every project on your machine — you don't start one per repo. Run `npx frizz` in any of them and they all appear on the one page, each with its own threads under its name; each project's threads, settings and state stay separate.
 
 </details>
 
 <details>
 <summary><b>Can I reach it from another machine?</b></summary>
 
-> Yes. Press **R** in the terminal running Frizz. A short walkthrough sets up one of four ways to reach the board — a name on frizz.sh, a Cloudflare Tunnel you own, Tailscale, or any proxy you run — checks what each needs, prints the commands, and remembers your choice. From then on a plain `npx frizz` serves it; pick **Off** in the same place to go back to loopback only.
+> Yes. Press **R** in the terminal running Frizz. A short walkthrough sets up one of four ways to reach Frizz — a name on frizz.sh, a Cloudflare Tunnel you own, Tailscale, or any proxy you run — checks what each needs, prints the commands, and remembers your choice. From then on a plain `npx frizz` serves it; pick **Off** in the same place to go back to loopback only.
 >
-> To try any of this without touching the board you run, launch a second one with `npx frizz --sandbox` — a throwaway home and project on its own port, deleted on ctrl-c.
+> To try any of this without touching the Frizz you run, launch a second one with `npx frizz --sandbox` — a throwaway home and project on its own port, deleted on ctrl-c.
 >
-> The board stays bound to `127.0.0.1` in every case. Something in front of it — the frizz.sh relay, the tunnel, Tailscale, your proxy — carries the traffic, and Frizz gates the first visit with a single-use sign-in link shown as a QR. Press **L** for a fresh link any time, or `npx frizz --link` from another shell (over SSH, for a headless box). See [Remote access](docs/remote-access.md) for what each option needs.
+> Frizz stays bound to `127.0.0.1` in every case. Something in front of it — the frizz.sh relay, the tunnel, Tailscale, your proxy — carries the traffic, and Frizz gates the first visit with a single-use sign-in link shown as a QR. Press **L** for a fresh link any time, or `npx frizz --link` from another shell (over SSH, for a headless box). See [Remote access](docs/remote-access.md) for what each option needs.
 
 </details>
 
@@ -249,7 +249,7 @@ Frizz has its own small vocabulary. Most of it names a feature, so this doubles 
 
 | Term | What it means |
 | --- | --- |
-| **Project** | A directory you ran Frizz in. Each has its own board at `/project/<name>`; one server holds all of them. |
+| **Project** | A directory you ran Frizz in. One server holds all of them, and one page shows them all; a thread's address names its project, `/all/<name>/thread/<thread>`. |
 | **Thread** | One effort, start to finish. Not a chat tab and not a branch. The session *is* the thread — there's no sidecar document to keep in sync, and dispatching doesn't write a file into your repo. |
 | **Worker** | The agent driving a thread: a real Claude Code or Codex process, running as *you*, with your credentials and your CLI config. |
 | **Sub-agent** | A helper a worker dispatches for an independent prong of its own task. Frizz binds each one back to its parent, so the fan-out is visible under the parent's card. |
