@@ -66,6 +66,29 @@ test("the stray-board rule holds on a real directory, and a real install beside 
   }
 })
 
+// 2026-09-28: a script provisioned runtimes into `~/.frizz/runtimes` by name, the next boot took that
+// directory for a legacy install, and every project vanished from an established XDG machine.
+test("a ~/.frizz with no registry never takes over an install whose platform root has one", () => {
+  const base = mkdtempSync(join(tmpdir(), "frizz-paths-superseded-"))
+  try {
+    const linux = { home: base, platform: "linux" as const, env: {} }
+    const platformData = join(base, ".local", "share", "frizz")
+    mkdirSync(platformData, { recursive: true })
+    writeFileSync(join(platformData, "registry.json"), "{}")
+    // What the stray writer left, and what the flipped boot then added before anyone noticed.
+    mkdirSync(join(legacyFrizzRoot(base), "runtimes", "claude"), { recursive: true })
+    mkdirSync(join(legacyFrizzRoot(base), "projects", "p1"), { recursive: true })
+    const paths = frizzPaths(linux)
+    assert.equal(paths.legacy, false)
+    assert.equal(paths.data, platformData)
+    // A ~/.frizz with a registry of its own is a real install, and it keeps winning.
+    writeFileSync(join(legacyFrizzRoot(base), "registry.json"), "{}")
+    assert.equal(frizzPaths(linux).legacy, true)
+  } finally {
+    rmSync(base, { recursive: true, force: true })
+  }
+})
+
 // Every expectation below is SPELLED WITH join(), never with a literal "/a/b/c". These cases pin the
 // platform BRANCH, which is injected, while the separator is the HOST's — so a POSIX literal is a
 // second, accidental assertion that the suite is running on POSIX, and on Windows the same correct
