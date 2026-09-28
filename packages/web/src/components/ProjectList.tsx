@@ -43,6 +43,7 @@ import { ProjectMenu, useAddProject } from "./ProjectActions.tsx"
 import { QueueBadge } from "./ProjectFilter.tsx"
 import { ProjectSquare } from "./ProjectRail.tsx"
 import { ROW_ACTION_CLASS, RailRow, SectionHeader, type RowScope } from "./Sidebar.tsx"
+import { glideTo } from "../lib/viewportLock.ts"
 
 // The board sidebar's row geometry, verbatim (Sidebar.tsx ThreadRow), so a project's row and its threads'
 // rows are one list: the hover wash, the 20px indicator gutter, the title's 13/19 type.
@@ -369,7 +370,7 @@ function ProjectRow({
             filtered={filtered}
             onFilter={() => {
               setQueueFilter(filtered ? null : project.id)
-              window.scrollTo({ top: 0, behavior: window.matchMedia?.("(prefers-reduced-motion: reduce)").matches ? "auto" : "smooth" })
+              glideTo(() => 0)
             }}
             onOpenChange={setMenuOpen}
           >
