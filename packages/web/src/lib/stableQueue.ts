@@ -77,20 +77,30 @@ export function stableQueue<T>({ prev, target, keyOf, onScreen, mayGhost, keep }
   }
   const inRun = new Set(run.map((slot) => slot.key))
 
-  // Above or below the run. A card not drawn before goes below. One already drawn is placed against the
-  // run's LIVE cards when it has any: a card that sorts before all of them goes above, anything else below
-  // — so a card whose place is BETWEEN two cards on screen waits under them rather than pushing one of
-  // them down. With no live card on screen (only ghosts) it stays on the side it was already on.
-  let pivot = Number.POSITIVE_INFINITY
+  // Above or below the run. A card not drawn before goes below. One already drawn crosses the run only
+  // when the queue puts it clear of every LIVE card in it — before all of them (above) or after all of
+  // them (below) — and otherwise stays on the side it was drawn on. The run can be out of the queue's
+  // order (an arrival that waited under the cards on screen while sorting ahead of them, a card that
+  // re-rested in place), and a card placed against just one end of it — the first, or the one that sorts
+  // first — was sent across: every card above the screen went below an arrival sitting under it. With no
+  // live card on screen (only ghosts) a card stays on its side.
+  let low = Number.POSITIVE_INFINITY
+  let high = Number.NEGATIVE_INFINITY
   for (const slot of run) {
+    if (slot.ghost) continue
     const index = live.get(slot.key)?.index
-    if (index !== undefined && index < pivot) pivot = index
+    if (index === undefined) continue
+    low = Math.min(low, index)
+    high = Math.max(high, index)
   }
   const prevIndex = new Map(prev.map((slot, index) => [slot.key, index]))
   const above = (key: string, index: number): boolean => {
     const was = prevIndex.get(key)
     if (lo < 0 || was === undefined) return false
-    if (pivot !== Number.POSITIVE_INFINITY) return index < pivot
+    if (low !== Number.POSITIVE_INFINITY) {
+      if (index < low) return true
+      if (index > high) return false
+    }
     return was < lo
   }
 

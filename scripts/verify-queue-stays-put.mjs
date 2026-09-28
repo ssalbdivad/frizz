@@ -4,9 +4,12 @@
 // the screen don't move in their position."
 //
 // Every scenario measures every card on screen (and the sidebar's prompt box) before and after one thing
-// that is NOT the human's doing — a thread arriving (FIFO, and newest-first above the screen), a thread
-// on screen or above it waking itself and resting again, an arrival while the human types in a card, an
-// arrival behind an open drawer — and fails if any of them moved by a pixel or more. (Not zero: a scroll
+// that is NOT the human's doing — a thread arriving (FIFO, and newest-first, where it waits BELOW the
+// cards on screen until they are scrolled away), a thread on screen or above it waking itself and resting
+// again, a card marked done from another window, an arrival while the human types in a card, an arrival
+// behind an open drawer — and fails if any of them moved by a pixel or more. Then the human's own moves
+// that must not move anything either: opening a card's drawer and closing it, "Show more" (the card grows
+// DOWN), and a reload (the page comes back on the card that was being read). (Not zero: a scroll
 // offset snaps to whole device pixels, so a correction by a fractional height leaves up to half a device
 // pixel, which no display can draw. Every move is printed exactly.) The page is also sampled after every
 // painted frame in between, so a jump corrected a frame later is reported too. A card whose OWN thread
@@ -15,10 +18,12 @@
 // Runs on the board (lib/stableQueue.ts + lib/viewportLock.ts in TodosView) and on Everything.
 //
 // Usage: node scripts/verify-queue-stays-put.mjs --stack=/abs/stack.log --seed='<SEED json>' [--shots=/abs/dir] [--only=board|everything]
+// Run each surface on its own freshly seeded stack (--only): together they outlast the seed (see below).
 // Exits non-zero when any check fails.
 import { appendFileSync, mkdirSync, readFileSync } from "node:fs"
 import { join } from "node:path"
 import puppeteer from "puppeteer"
+import { createRpcClient } from "./lib/rpc-client.mjs"
 
 const flags = Object.fromEntries(
   process.argv.slice(2).filter((a) => a.startsWith("--")).map((a) => { const s = a.slice(2); const i = s.indexOf("="); return i < 0 ? [s, true] : [s.slice(0, i), s.slice(i + 1)] }),
@@ -47,6 +52,10 @@ function record(key, fields) {
   serial++
   appendFileSync(s.jsonl, `${JSON.stringify({ parentUuid: null, isSidechain: false, session_id: s.sessionId, cwd: s.cwd, uuid: `00000000-0000-4000-9000-9${String(serial).padStart(11, "0")}`, timestamp: new Date().toISOString(), ...fields })}\n`)
 }
+// A turn silent for 15 minutes surfaces in the queue on its own (board.ts QUIET_TURN_MS), so a seeded
+// running thread stays running only for that long: run one surface per fresh stack (--only), each well
+// inside it, or the threads the scenarios rely on arrive whenever the clock says rather than when a
+// scenario does.
 // The agent comes to rest, saying exactly what it said last time: same card, same height.
 const rest = (key) => record(key, {
   type: "assistant",
@@ -54,6 +63,8 @@ const rest = (key) => record(key, {
 })
 // What Frizz writes when a finished shell wakes the worker: nobody touched the thread.
 const wake = (key) => record(key, { type: "user", message: { role: "user", content: `⏰ Your background shell finished: \`bsh${serial}\` — tests.\n\n<!-- frizz-wake:selfwake${serial} -->` } })
+// Marked done from ANOTHER window: the RPC, straight from here, not through the page.
+const doneElsewhere = (key) => createRpcClient(`${origin}/`, seed.sessions[key].project).mutate("setThreadState", { slug: seed.sessions[key].slug, state: "archived" })
 
 // ---- the page ---------------------------------------------------------------------------------------
 const BOARD = { name: "board", url: `${origin}/project/${encodeURIComponent(seed.aSlug)}`, cards: "[data-queue-card]", key: "queueCard" }
@@ -77,6 +88,9 @@ try {
       const stored = JSON.parse(localStorage.getItem("frizz.prefs.v1") ?? "{}")
       localStorage.setItem("frizz.prefs.v1", JSON.stringify({ ...stored, queueOrder: order }))
     }, order)
+    // This reload is the harness starting over, not the reader's: drop the note the viewport lock writes
+    // on the way out, so the page does not come back on the card last read (its own scenario checks that).
+    await page.evaluate(() => window.addEventListener("pagehide", () => sessionStorage.removeItem("frizz.queueReading.v1")))
     await page.reload({ waitUntil: "domcontentloaded", timeout: 90_000 })
     await page.waitForSelector(target.cards, { timeout: 30_000 })
     await sleep(2500)
@@ -87,7 +101,8 @@ try {
     const vh = window.innerHeight
     const list = [...document.querySelectorAll(cards)].map((el) => {
       const r = el.getBoundingClientRect()
-      return { key: el.dataset[key], top: r.top, bottom: r.bottom, visible: r.bottom > 0 && r.top < vh, ghost: el.hasAttribute("data-queue-ghost") }
+      const ghost = el.hasAttribute("data-queue-ghost")
+      return { key: el.dataset[key], top: r.top, bottom: r.bottom, visible: r.bottom > 0 && r.top < vh, ghost, text: ghost ? el.innerText.slice(0, 300) : "" }
     })
     const box = [...document.querySelectorAll(prompt)].find((el) => !el.closest('[role="dialog"]'))
     const focused = document.activeElement
@@ -244,6 +259,7 @@ try {
   await stays("a card on screen that wakes itself stays where it is, as a ghost", {
     act: () => wake("a/q1"),
     until: (s) => find(s, "q1")?.ghost,
+    expect: (_, after) => check("board: …saying it is back at work", find(after, "q1").text.includes("Back at work"), find(after, "q1").text.slice(0, 120)),
   })
   await page.screenshot({ path: join(shots, "board-ghost.png") })
   await stays("…and when it rests again it is the card again, in the same place: the card under the pointer holds", {
@@ -263,10 +279,32 @@ try {
     act: () => wake("a/q1"),
     until: (s) => !find(s, "q1"),
   })
-  await stays("…and it comes back to its old place above, and nothing on screen moves", {
+  await stays("…and it comes back, waiting below the cards on screen, and nothing on screen moves", {
     act: () => rest("a/q1"),
     until: (s) => find(s, "q1"),
-    expect: (_, after) => check("board: …first in line again", slugOf(after.list[0].key) === "q1", order(after)),
+    expect: (_, after) => {
+      const onScreen = after.list.filter((c) => c.visible).map((c) => c.key)
+      const q1 = after.list.findIndex((c) => slugOf(c.key) === "q1")
+      const lastOnScreen = Math.max(...onScreen.map((key) => after.list.findIndex((c) => c.key === key)))
+      check("board: …below the cards on screen, not above them", q1 > lastOnScreen, order(after))
+    },
+  })
+  // Once those cards are scrolled away it takes its real place, first in line — while nobody looks.
+  await scrollToY(0)
+  await sleep(1500)
+  await settle()
+  {
+    const after = await snap()
+    check("board: …and once the reader scrolls away, it is first in line again, off screen above", slugOf(after.list[0].key) === "q1" && !find(after, "q1").visible, `${order(after)}; scrollY ${after.scrollY}`)
+  }
+
+  // Marked done from another window while on screen: it is a ghost that says so, not a hole.
+  await straddle("q2", "q3")
+  await pointerOn("q3")
+  await stays("a card on screen marked done from another window stays where it is, as a ghost", {
+    act: () => doneElsewhere("a/q2"),
+    until: (s) => find(s, "q2")?.ghost,
+    expect: (_, after) => check("board: …saying it is done", find(after, "q2").text.includes("Done"), find(after, "q2").text.slice(0, 120)),
   })
 
   // ==== THE BOARD, newest first: every arrival is above the screen ==================================
@@ -274,12 +312,14 @@ try {
   console.log(`board order (newest first): ${order(await snap())}`)
   await scrollToY(0)
   await pointerAway()
-  await stays("newest first: an arrival at the top of the page lands above the screen", {
+  await stays("newest first: an arrival at the top of the page waits below the cards on screen", {
     act: () => rest("a/r2"),
     until: (s) => find(s, "r2"),
-    expect: (_, after) => {
-      const r2 = find(after, "r2")
-      check("board: …first in line, and off screen above", slugOf(after.list[0].key) === "r2" && r2.bottom <= 0, `r2 at ${r2.top.toFixed(1)}…${r2.bottom.toFixed(1)}`)
+    expect: (before, after) => {
+      const lastOnScreen = before.list.filter((c) => c.visible).at(-1)
+      const r2 = after.list.findIndex((c) => slugOf(c.key) === "r2")
+      // Below every card on screen (and the few within a margin of it, which count as on screen too).
+      check("board: …below the cards the reader was on", r2 > after.list.findIndex((c) => c.key === lastOnScreen.key), order(after))
     },
   })
 
@@ -301,25 +341,50 @@ try {
   })
   await page.evaluate(() => document.activeElement?.blur())
 
+  // A reload — the dev server's, a new build's — comes back on the card being read, where it was.
+  {
+    const s = await snap()
+    await scrollToY(find(s, "q4").top + s.scrollY - 180)
+    await pointerAway()
+    await settle()
+    const before = find(await snap(), "q4")
+    await page.reload({ waitUntil: "domcontentloaded", timeout: 90_000 })
+    await page.waitForSelector(BOARD.cards, { timeout: 30_000 })
+    await sleep(4000)
+    const after = await snap()
+    const q4 = find(after, "q4")
+    check("board: a reload comes back on the card that was being read, at the same offset",
+      q4 !== undefined && Math.abs(q4.top - before.top) < 2, `q4 ${before.top.toFixed(1)} → ${q4?.top.toFixed(1)}; scrollY ${after.scrollY}; order ${order(after)}`)
+  }
+
   // A drawer over the queue: an arrival lands behind it, and closing it returns the page as it was.
   {
     const s = await snap()
-    await scrollToY(find(s, "q2").top + s.scrollY - 120)
+    await scrollToY(find(s, "q4").top + s.scrollY - 120)
     await pointerAway()
   }
   await settle()
   const beforeDrawer = await snap()
   // A working thread's row opens its drawer (a Ready row scrolls to its card instead).
-  await page.click('[data-sidebar-item="r5"] button')
+  // A DOM click: puppeteer's own scrolls the row into view first, moving the page before the drawer opens.
+  await page.evaluate(() => document.querySelector('[data-sidebar-item="r6"] button').click())
   await page.waitForFunction(() => document.body.style.position === "fixed", { timeout: 10_000 })
   await sleep(800)
+  const drawerAt = await page.evaluate(() => `${document.body.style.top} ${location.pathname}`)
+  const boardApi = createRpcClient(`${origin}/`, seed.a)
+  const stamps = async () => { const b = await boardApi.query("board"); return b.threads.filter((t) => t.needsYou).map((t) => `${t.id}@${(t.queuedAt ?? "").slice(11, 19)}`).join(" ") }
+  console.log(`  drawer open: ${order(await snap())} | top ${await page.evaluate(() => document.body.style.top)} | server ${await stamps()}`)
   rest("a/r4")
-  await sleep(4000)
+  for (let i = 0; i < 4; i++) {
+    await sleep(1000)
+    console.log(`  +${i + 1}s: ${order(await snap())} | top ${await page.evaluate(() => document.body.style.top)} | server ${await stamps()}`)
+  }
   await page.keyboard.press("Escape")
   await page.waitForFunction(() => document.body.style.position !== "fixed", { timeout: 10_000 })
   await sleep(1500)
   {
     const after = await snap()
+    console.log(`  drawer: scrollY ${beforeDrawer.scrollY} → body top ${drawerAt} → ${after.scrollY}; before ${order(beforeDrawer)}`)
     let worst = { key: null, by: 0 }
     for (const card of beforeDrawer.list.filter((c) => c.visible)) {
       const now = after.list.find((c) => c.key === card.key)
@@ -342,6 +407,26 @@ try {
     until: (s) => find(s, "p2"),
     expect: (_, after) => check("Everything: …and it is last", slugOf(after.list.at(-1).key) === "p2", order(after)),
   })
+  // The arrivals first, while the seeded running threads still are: a stand-in daemon is not a broker, and
+  // after a few minutes the server calls their turns stalled and queues them all on its own.
+  await open(EVERYTHING, "lifo")
+  await scrollToY(0)
+  await pointerAway()
+  await stays("newest first: an arrival at the top of the page waits below the cards on screen", {
+    act: () => rest("a/r5"),
+    until: (s) => find(s, "r5"),
+    expect: (before, after) => {
+      const lastOnScreen = before.list.filter((c) => c.visible).at(-1)
+      const r5 = after.list.findIndex((c) => slugOf(c.key) === "r5")
+      // Below every card on screen (and the few within a margin of it, which count as on screen too).
+      check("Everything: …below the cards the reader was on", r5 > after.list.findIndex((c) => c.key === lastOnScreen.key), order(after))
+    },
+  })
+  await stays("newest first: the other project's arrival waits below the cards on screen too", {
+    act: () => rest("b/p3"),
+    until: (s) => find(s, "p3"),
+  })
+  await open(EVERYTHING, "fifo")
   {
     const s = await snap()
     const [first, second] = s.list.map((c) => slugOf(c.key))
@@ -351,6 +436,7 @@ try {
     await stays("a card on screen that wakes itself stays where it is, as a ghost", {
       act: () => wake(key),
       until: (snapshot) => find(snapshot, first)?.ghost,
+      expect: (_, after) => check("Everything: …saying it is back at work", find(after, first).text.includes("Back at work"), find(after, first).text.slice(0, 120)),
     })
     await page.screenshot({ path: join(shots, "everything-ghost.png") })
     await stays("…and when it rests again it is the card again, in the same place: the card under the pointer holds", {
@@ -360,21 +446,89 @@ try {
       expect: (_, after) => check("Everything: …still first in line", slugOf(after.list[0].key) === first, order(after)),
     })
   }
-  await open(EVERYTHING, "lifo")
-  await scrollToY(0)
-  await pointerAway()
-  await stays("newest first: an arrival at the top of the page lands above the screen", {
-    act: () => rest("a/r5"),
-    until: (s) => find(s, "r5"),
-    expect: (_, after) => {
-      const r5 = find(after, "r5")
-      check("Everything: …first in line, and off screen above", slugOf(after.list[0].key) === "r5" && r5.bottom <= 0, `r5 at ${r5.top.toFixed(1)}…${r5.bottom.toFixed(1)}`)
-    },
-  })
-  await stays("newest first: the other project's arrival lands above the screen too", {
-    act: () => rest("b/p3"),
-    until: (s) => find(s, "p3"),
-  })
+  // The human's own moves that must not move anything: a card's drawer opened over it and closed again.
+  // Opened from a title already on screen: a click the browser has to scroll to first is not this test.
+  {
+    const s0 = await snap()
+    // Not the first card: a drawer over a page at offset 0 proves nothing about keeping the offset.
+    const pick = s0.list.find((c, index) => index > 0 && !c.ghost && c.key.startsWith(`${seed.a}/`))
+    await scrollToY(Math.max(0, pick.top + s0.scrollY - 150))
+    await sleep(400)
+    const titles = await page.evaluate((a) => [...document.querySelectorAll("[data-xq-card]")]
+      .filter((el) => el.dataset.xqCard.startsWith(`${a}/`) && !el.hasAttribute("data-queue-ghost"))
+      .filter((el) => { const r = el.querySelector("h3 a")?.getBoundingClientRect(); return r && r.top >= 0 && r.bottom <= window.innerHeight })
+      .map((el) => el.dataset.xqCard), seed.a)
+    const s = await snap()
+    const target = s.list.find((c) => c.key === titles[0])
+    await pointerAway()
+    await settle()
+    const before = await snap()
+    await page.click(`[data-xq-card="${target.key}"] h3 a`)
+    await page.waitForFunction(() => document.body.style.position === "fixed", { timeout: 10_000 })
+    await sleep(1200)
+    const during = await snap()
+    const duringTop = await page.evaluate(() => `${document.body.style.top}, concealed ${document.querySelectorAll("[data-queue-concealed]").length}, ${location.pathname}`)
+    await page.keyboard.press("Escape")
+    await page.waitForFunction(() => document.body.style.position !== "fixed", { timeout: 10_000 })
+    await sleep(1500)
+    const after = await snap()
+    const worstOf = (then) => {
+      let worst = { key: null, by: 0 }
+      for (const card of before.list.filter((c) => c.visible)) {
+        const now = then.list.find((c) => c.key === card.key)
+        const by = now ? Math.abs(now.top - card.top) : Infinity
+        if (by > worst.by) worst = { key: slugOf(card.key), by }
+      }
+      return `${worst.by.toFixed(2)}px${worst.key ? ` (${worst.key})` : ""}`
+    }
+    const held = (then) => before.list.filter((c) => c.visible).every((card) => { const now = then.list.find((c) => c.key === card.key); return now && Math.abs(now.top - card.top) < 1 })
+    const concealed = await page.evaluate((key) => document.querySelector(`[data-xq-card="${key}"]`)?.hasAttribute("data-queue-concealed"), target.key)
+    check("Everything: opening a card's drawer and closing it again moves no card on screen",
+      held(during) && held(after) && concealed === false, `drawer on ${slugOf(target.key)}: open ${worstOf(during)}, closed ${worstOf(after)}; scrollY ${before.scrollY} → ${during.scrollY} (body top ${duringTop}) → ${after.scrollY}; order ${order(after)}`)
+  }
+
+  // "Show more" grows the card DOWN: its top, and everything above it, stays put.
+  {
+    const s = await snap()
+    const target = await page.evaluate(() => {
+      const button = [...document.querySelectorAll('[data-xq-show-more][aria-expanded="false"]')].find((b) => { const r = b.getBoundingClientRect(); return r.top > 60 && r.bottom < window.innerHeight - 20 })
+      if (!button) return null
+      const r = button.getBoundingClientRect()
+      return { key: button.closest("[data-xq-card]").dataset.xqCard, x: r.left + r.width / 2, y: r.top + r.height / 2 }
+    })
+    if (!target) check("Everything: Show more grows the card down", false, `no Show more on screen; order ${order(s)}`)
+    else {
+      await page.mouse.move(target.x, target.y)
+      await sleep(300)
+      await settle()
+      const before = await snap()
+      const index = before.list.findIndex((c) => c.key === target.key)
+      await page.mouse.click(target.x, target.y)
+      await sleep(1200)
+      const after = await snap()
+      const moved = before.list.slice(0, index + 1).filter((c) => c.visible).map((card) => ({ key: slugOf(card.key), by: Math.abs(after.list.find((c) => c.key === card.key).top - card.top) }))
+      const worst = moved.reduce((a, b) => (b.by > a.by ? b : a), { key: null, by: 0 })
+      const grew = after.list[index].bottom - after.list[index].top > before.list[index].bottom - before.list[index].top + 20
+      check("Everything: Show more grows the card down — its top and every card above it stay put", grew && worst.by < 1, `${slugOf(target.key)} grew ${grew}; largest move above ${worst.by.toFixed(2)}px${worst.key ? ` (${worst.key})` : ""}`)
+    }
+  }
+
+  // Marked done from THIS tab: the human's own act, so it leaves the ordinary way — no ghost.
+  {
+    const s = await snap()
+    const target = s.list.find((c) => c.visible && !c.ghost)
+    await page.click(`[data-xq-card="${target.key}"] button[aria-label="Mark as done"]`)
+    let gone = false
+    let ghosted = false
+    for (let i = 0; i < 20 && !gone; i++) {
+      await sleep(200)
+      const now = find(await snap(), slugOf(target.key))
+      if (now?.ghost) ghosted = true
+      gone = now === undefined
+    }
+    check("Everything: a card marked done from this tab leaves, and is never a ghost", gone && !ghosted, `${slugOf(target.key)} gone ${gone}, ghosted ${ghosted}`)
+  }
+
   }
 
   check("no page errors", errors.length === 0, errors.join("; "))

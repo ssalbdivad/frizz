@@ -247,7 +247,9 @@ export function useViewportLock(slots: string, keyOf: (slot: HTMLElement) => str
   const asked = useRef({ keys: "", ghostGone: false })
   const settle = useRef({ timer: 0, pending: false })
   // The card to hold after a reload (Reading), until `until` — pushed out to RELOAD_HOLD_MS once it is found.
-  const restoring = useRef<{ key: string; top: number; until: number; found: boolean } | null>(null)
+  // `y`: the page offset the restore last left, so any other scroll — the human's, or the app's own landing
+  // on a card the address names — is seen as taking the page over.
+  const restoring = useRef<{ key: string; top: number; until: number; found: boolean; y: number } | null>(null)
   const requestRepaint = useRef(() => {})
   requestRepaint.current = () => {
     settle.current.pending = true
@@ -268,9 +270,9 @@ export function useViewportLock(slots: string, keyOf: (slot: HTMLElement) => str
       else {
         const slot = [...document.querySelectorAll<HTMLElement>(slots)].find((candidate) => keyOf(candidate) === restore.key)
         if (slot) {
-          if (!restore.found) restoring.current = { ...restore, found: true, until: performance.now() + RELOAD_HOLD_MS }
           const delta = slot.getBoundingClientRect().top - restore.top
           if (Math.abs(delta) > 0.5) scrollPage(delta)
+          restoring.current = { ...restore, y: pageScrollY(), ...(restore.found ? {} : { found: true, until: performance.now() + RELOAD_HOLD_MS }) }
         }
       }
     }
@@ -289,7 +291,21 @@ export function useViewportLock(slots: string, keyOf: (slot: HTMLElement) => str
       else if (slot.hasAttribute("data-queue-ghost") && !keys.has(keyOf(slot) ?? "")) ghostGone = true
     }
     onScreenRef.current = keys
-    anchor.current = pick(visible, viewport)
+    const next = pick(visible, viewport)
+    const was = anchor.current
+    // The same node still held, within a pixel of where it is SUPPOSED to be: keep the supposed place. A
+    // change under half a pixel is left alone (a scroll cannot draw it), and re-reading the position after
+    // each one would bank it — two renders of 0.49px each and the caret had moved a whole pixel. Only that
+    // residue is carried: anything larger is on screen already (a reload's restore, a move nothing
+    // corrected), and "correcting" it at the next render would be a second jump, not a hold.
+    if (next && was && next.node === was.node) {
+      const scrolled = next.scrollY - was.scrollY
+      if (Math.abs(next.top - (was.top - scrolled)) <= 1) {
+        next.top = was.top - scrolled
+        if (next.slot === was.slot) next.slotTop = was.slotTop - scrolled
+      }
+    }
+    anchor.current = next
     const signature = [...keys].join("\n")
     if (signature !== asked.current.keys || (ghostGone && !asked.current.ghostGone)) requestRepaint.current()
     asked.current = { keys: signature, ghostGone }
@@ -327,7 +343,12 @@ export function useViewportLock(slots: string, keyOf: (slot: HTMLElement) => str
     else if (held.slot.isConnected) delta = held.slot.getBoundingClientRect().top - (held.slotTop - scrolled)
     // The card itself is gone — the human put it away, and the dismissal landing owns what comes next.
     else return
-    if (Math.abs(delta) > 0.5) scrollPage(delta)
+    if (Math.abs(delta) <= 0.5) return
+    const from = pageScrollY()
+    scrollPage(delta)
+    // The correction is not the human's scroll: the anchor is where it was supposed to be again, at the
+    // new offset (take reads the gap between the two as their scroll).
+    held.scrollY += pageScrollY() - from
   }
 
   // After every render of the queue: the DOM has changed, the frame has not painted.
@@ -343,7 +364,7 @@ export function useViewportLock(slots: string, keyOf: (slot: HTMLElement) => str
     const restorationWas = history.scrollRestoration
     history.scrollRestoration = "manual"
     const reading = readReading(latest.current.slots)
-    if (reading) restoring.current = { key: reading.key, top: reading.top, until: performance.now() + RELOAD_GIVE_UP_MS, found: false }
+    if (reading) restoring.current = { key: reading.key, top: reading.top, until: performance.now() + RELOAD_GIVE_UP_MS, found: false, y: pageScrollY() }
     const stopRestoring = (event: Event) => {
       if (event.isTrusted) restoring.current = null
     }
@@ -365,8 +386,11 @@ export function useViewportLock(slots: string, keyOf: (slot: HTMLElement) => str
       cancelAnimationFrame(frame)
       frame = requestAnimationFrame(() => take.current())
     }
-    // Still scrolling: the repaint waits for the page to sit still.
+    // Still scrolling: the repaint waits for the page to sit still. And a scroll the restore did not make
+    // ends it.
     const onScroll = () => {
+      const restore = restoring.current
+      if (restore && Math.abs(pageScrollY() - restore.y) > 1) restoring.current = null
       if (settle.current.pending) requestRepaint.current()
       retake()
     }

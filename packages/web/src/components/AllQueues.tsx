@@ -34,7 +34,7 @@ import { useQuery, useQueryClient } from "@tanstack/react-query"
 import { ArrowUpRight, Check, ChevronDown, Ellipsis, Inbox, Plus, TerminalSquare } from "lucide-react"
 import { Link, useLocation, useNavigate } from "react-router"
 import { useSnapshot } from "valtio"
-import type { ProjectQueue, ThreadView } from "@frizz/shared"
+import type { ProjectCard, ProjectQueue, ThreadView } from "@frizz/shared"
 import { rpc } from "../api/rpc.ts"
 import { displayTitle } from "../groups.ts"
 import { isBusy, liveQueue, mergedQueue, overlayQueues, queuesProjects, squareCard, threadKey, type QueueEntry, type QueuesProject } from "../lib/allQueues.ts"
@@ -104,9 +104,10 @@ export function AllQueuesPage() {
   const focus = projectSlug(useLocation().pathname)
   const board = useBoard()
   const snap = useSnapshot(store)
-  const live = useMemo(() => liveQueue(queues.data, board, focus), [queues.data, board, focus])
+  const polled = useLastKnownQueues(queues.data, cards.data)
+  const live = useMemo(() => liveQueue(polled, board, focus), [polled, board, focus])
   const departed = useDepartedQueue(live, queues.dataUpdatedAt)
-  const base = useMemo(() => queuesProjects(cards.data, queues.data, direction), [cards.data, queues.data, direction])
+  const base = useMemo(() => queuesProjects(cards.data, polled, direction), [cards.data, polled, direction])
   const projects = useMemo(() => overlayQueues(base, [live, departed], direction), [base, live, departed, direction])
   const pickProject = usePickProject()
   // Set by a choice in the picker, so the prompt box it just re-aimed takes the keyboard when it lands.
@@ -376,6 +377,35 @@ function carryDraft(key: (projectDir: string | undefined) => string, from: strin
  * something in another project. Held only until a read that STARTED after the departure lands, and
  * that read is asked for at once rather than left to the next tick.
  */
+/** How long a project the server has stopped serving keeps its last queue on the page (useLastKnownQueues). */
+const UNOPENED_HOLD_MS = 60_000
+
+/**
+ * The poll's queues, with a project that DROPPED OUT of it held as it last was, for up to a minute.
+ *
+ * The poll carries only the projects the server has open, and a restarted server opens them again one
+ * by one: for those seconds every other project's cards vanished and came back, moving each card below
+ * them on the reader's screen. Held here instead, they wait where they were. Only a project still
+ * registered and not stale: one removed or whose directory is gone has really left. Past the minute a
+ * project that has still not come back (another Frizz serves it, it failed to open) is shown as it is.
+ */
+function useLastKnownQueues(queues: readonly ProjectQueue[] | undefined, cards: readonly ProjectCard[] | undefined): readonly ProjectQueue[] | undefined {
+  const seen = useRef(new Map<string, { queue: ProjectQueue; at: number }>())
+  return useMemo(() => {
+    if (!queues) return queues
+    const now = Date.now()
+    for (const queue of queues) seen.current.set(queue.projectId, { queue, at: now })
+    const present = new Set(queues.map((queue) => queue.projectId))
+    const held: ProjectQueue[] = []
+    for (const card of cards ?? []) {
+      if (present.has(card.id) || card.stale) continue
+      const last = seen.current.get(card.id)
+      if (last && now - last.at < UNOPENED_HOLD_MS) held.push(last.queue)
+    }
+    return held.length > 0 ? [...queues, ...held] : queues
+  }, [queues, cards])
+}
+
 function useDepartedQueue(live: ProjectQueue | undefined, polledAt: number): ProjectQueue | undefined {
   const queryClient = useQueryClient()
   const last = useRef<ProjectQueue | undefined>(undefined)

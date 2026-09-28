@@ -79,3 +79,11 @@ test("with only ghosts on screen, cards keep their side and a new one goes below
   const prev: QueueSlot<string>[] = [...slots("p"), { key: "g", item: "g", ghost: true }, ...slots("z")]
   assert.equal(drawn(next(prev, ["p", "n", "z"], ["g"])), "p (g) n z")
 })
+
+test("an arrival waiting under the card on screen, sorting ahead of everything, does not send the cards above the screen below it", () => {
+  // Newest first: n arrived while c was read at the bottom of the page, and waits under it. Both are on
+  // screen now. Nothing above them moves to below them: they stay above, where they are drawn.
+  const arrived = next(slots("a", "b", "c"), ["n", "a", "b", "c"], ["c"])
+  assert.equal(drawn(arrived), "a b c n")
+  assert.equal(drawn(next(arrived, ["n", "a", "b", "c"], ["c", "n"])), "a b c n")
+})

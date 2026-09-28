@@ -3,7 +3,7 @@
 // currently viewing on the screen don't move in their position."
 //
 // The launcher project gets FIVE queued threads (q1…q5, rested 50m…10m ago, oldest first) with long
-// handoffs, so each card is tall and the queue scrolls; and FIVE running ones (r1…r5), whose last
+// handoffs, so each card is tall and the queue scrolls; and SIX running ones (r1…r6), whose last
 // record is the human's turn — the verifier makes one rest on demand (an ARRIVAL) by appending the
 // agent's end_turn, and makes a queued one leave on its own (a SELF-WAKE) by appending a Frizz wake. The
 // other project gets one queued thread (p1) and two running (p2, p3), for the Everything page.
@@ -93,6 +93,8 @@ seed(launcher, { slug: "r2", title: "Rewrite the importer", restedMinutesAgo: 70
 seed(launcher, { slug: "r3", title: "Profile the cold start", restedMinutesAgo: 70, running: true })
 seed(launcher, { slug: "r4", title: "Split the router module", restedMinutesAgo: 70, running: true })
 seed(launcher, { slug: "r5", title: "Trim the bundle", restedMinutesAgo: 70, running: true })
+// Only ever opened in a drawer (the verifier's drawer scenario): what that does to a thread is its own.
+seed(launcher, { slug: "r6", title: "Tune the cache", restedMinutesAgo: 70, running: true })
 seed(tenant, { slug: "p1", title: "Triage the crash report", restedMinutesAgo: 45 })
 seed(tenant, { slug: "p2", title: "Draft the migration guide", restedMinutesAgo: 70, running: true })
 seed(tenant, { slug: "p3", title: "Check the backup job", restedMinutesAgo: 70, running: true })
