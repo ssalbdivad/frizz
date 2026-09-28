@@ -6,7 +6,6 @@ import { rpc } from "../api/rpc.ts"
 import { isBusy, queuesProjects } from "../lib/allQueues.ts"
 import { store } from "../store.ts"
 import { crossProjectHref, projectHref } from "../lib/base-path.ts"
-import { narrowCrossProject } from "../lib/crossProject.ts"
 import { isPlainLeftClick } from "../lib/standaloneThreadRoute.ts"
 import { useBoard } from "../hooks.ts"
 import { STATUS_ROW_ACTION, STATUS_ROW_ICON } from "../lib/statusRow.ts"
@@ -106,13 +105,12 @@ function StartTruncated({ text, title, className }: { text: string; title?: stri
  */
 /**
  * `crossProject`: the row atop the cross-project page. Its right edge names what that page is SHOWING —
- * "Everything", or the one project it is narrowed to (`narrowedTo`) — rather than the project a new
- * thread goes to, which is chosen in the prompt box's own tab row, directly over the box (AllQueues.tsx
- * ProjectPicker). Its ∞ door is the page you are on, and the way back to everything from a narrowed view.
- * `view`, when given, replaces that plain name with the page's own control for it (AllQueues.tsx
- * ViewFilter) — the name stays, it just becomes something you can press.
+ * "Everything" — rather than the project a new thread goes to, which is chosen inside the prompt box, in
+ * its bottom strip beside the model (AllQueues.tsx ProjectPicker). Its ∞ door is the page you are on. `view`,
+ * when given, replaces that plain name with the page's own control for it (AllQueues.tsx ViewFilter) —
+ * the name stays, it just becomes something you can press.
  */
-export function StatusRow({ crossProject = false, narrowedTo, view }: { crossProject?: boolean; narrowedTo?: string; view?: ReactNode } = {}) {
+export function StatusRow({ crossProject = false, view }: { crossProject?: boolean; view?: ReactNode } = {}) {
   const board = useBoard()
   // A missing board is not evidence that this project is named "frizz". Keep the row neutral until a
   // board keyframe supplies an actual name; reconnects retain their adopted board.
@@ -147,13 +145,11 @@ export function StatusRow({ crossProject = false, narrowedTo, view }: { crossPro
     >
       {/* THE DOOR OUT — Everything, every project's queue on one page. ONE door since 2026-09-24: a house
           (the project grid) stood beside it until the grid folded into Everything, and two ways "up" from
-          one board asked the reader to choose between pages that were never meant to be different
+          one project view asked the reader to choose between pages that were never meant to be different
           places. The infinity is the maintainer's glyph for Everything.
-          From a board it opens FOCUSED on this board's project, so the prompt box there still dispatches
-          where you were working — but showing everything, never narrowed. On the page itself it is the
-          way back from a narrowed view to everything, and so it navigates nowhere: a click widens the page
-          and returns to its top (a trip through `/` would remount the page under the operator). It is
-          current exactly when the page shows everything.
+          From a project view it opens Everything FOCUSED on that project, so the prompt box there still
+          dispatches where you were working. On Everything itself it navigates nowhere: a click returns
+          to the page's top (a trip through `/` would remount the page under the operator).
           A 24px target like its neighbours, and a ROUTER Link: it was a raw `<a href="/">` from 2026-08-19
           until 2026-09-04, which hard-loaded the document — measured at 116-411ms with a 0.15 CLS, and it
           threw away the app socket and the whole query cache on the way out. The rail is hidden under
@@ -164,10 +160,9 @@ export function StatusRow({ crossProject = false, narrowedTo, view }: { crossPro
         to={crossProject ? "/" : board?.projectSlug ? crossProjectHref(board.projectSlug) : "/"}
         title="Everything"
         aria-label="Everything"
-        aria-current={crossProject && !narrowedTo ? "page" : undefined}
-        className={`${STATUS_ROW_ACTION} ${crossProject && !narrowedTo ? "bg-elevated text-fg" : ""}`}
+        aria-current={crossProject ? "page" : undefined}
+        className={`${STATUS_ROW_ACTION} ${crossProject ? "bg-elevated text-fg" : ""}`}
         onClick={(event) => {
-          narrowCrossProject(null)
           if (!crossProject || !isPlainLeftClick(event)) return
           event.preventDefault()
           window.scrollTo({ top: 0, behavior: window.matchMedia?.("(prefers-reduced-motion: reduce)").matches ? "auto" : "smooth" })
@@ -202,9 +197,9 @@ export function StatusRow({ crossProject = false, narrowedTo, view }: { crossPro
       {crossProject && view ? (
         <span className="ml-auto flex min-w-0 items-center">{view}</span>
       ) : crossProject ? (
-        <span data-status-row-page className="ml-auto min-w-0 truncate font-semibold text-fg/90">{narrowedTo ?? "Everything"}</span>
+        <span data-status-row-page className="ml-auto min-w-0 truncate font-semibold text-fg/90">Everything</span>
       ) : (
-        <BoardFilter slug={board?.projectSlug} label={name} githubRepo={githubRepo}>
+        <ProjectViewFilter slug={board?.projectSlug} label={name} githubRepo={githubRepo}>
         <span
           className="ml-auto flex min-w-0 items-center"
           data-project-identity-state={identity.state}
@@ -237,24 +232,24 @@ export function StatusRow({ crossProject = false, narrowedTo, view }: { crossPro
             <span className="identity-placeholder w-24" aria-hidden="true" />
           )}
         </span>
-        </BoardFilter>
+        </ProjectViewFilter>
       )}
     </div>
   )
 }
 
 /**
- * A board's side of the filter (ProjectFilter.tsx): the board IS the filter to one project, so its
- * identity becomes the held pill — ✕ back up to Everything (focused here, as ∞ does), the menu to any
- * other project's board. The repo link the name used to be moves into the menu as "Open on GitHub".
+ * A project view's side of the filter (ProjectFilter.tsx): the view IS the filter to one project, so
+ * its identity becomes the held pill — ✕ back up to Everything (focused here, as ∞ does), the menu to
+ * any other project's view. The repo link the name used to be moves into the menu as "Open on GitHub".
  *
- * Until the machine's project list has arrived (or on a board that list does not know) the plain
+ * Until the machine's project list has arrived (or on a project that list does not know) the plain
  * identity renders instead, so the row never goes blank.
  */
-function BoardFilter({ slug, label, githubRepo, children }: { slug: string | undefined; label: string | null; githubRepo: string | null; children: ReactNode }) {
+function ProjectViewFilter({ slug, label, githubRepo, children }: { slug: string | undefined; label: string | null; githubRepo: string | null; children: ReactNode }) {
   const navigate = useNavigate()
   const cards = useQuery({ queryKey: ["projectsList"], queryFn: () => rpc.projectsList() })
-  // The counts are read when the menu opens, not polled: the board has its own live feed, and this is
+  // The counts are read when the menu opens, not polled: the view has its own live feed, and this is
   // a glance at the rest of the machine.
   const queues = useQuery({ queryKey: ["projectsQueues"], queryFn: () => rpc.projectsQueues() })
   const projects = queuesProjects(cards.data, queues.data).filter((project) => !project.stale || project.slug === slug)
@@ -263,10 +258,7 @@ function BoardFilter({ slug, label, githubRepo, children }: { slug: string | und
     .map((project) => ({ id: project.id, slug: project.slug, name: project.name, card: project.card!, ready: project.queued.length }))
   const current = slug ? items.find((item) => item.slug === slug) : undefined
   if (!slug || !current) return <>{children}</>
-  const toEverything = () => {
-    narrowCrossProject(null)
-    navigate(crossProjectHref(slug))
-  }
+  const toEverything = () => navigate(crossProjectHref(slug))
   return (
     <span className="ml-auto flex min-w-0 items-center" data-project-identity-state="filter">
       <ProjectFilter

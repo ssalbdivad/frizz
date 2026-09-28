@@ -11,16 +11,17 @@ import { Menu, MenuContent, MenuItem, MenuSeparator, MenuTrigger } from "./ui/Me
 //   Everything:        ⧩ Everything ▾                — the menu: Everything, then every project
 //   one project:      (⧩ ▣ name ✕)                  — a HELD pill; ✕ lifts the filter
 //
-// Choosing a project in the menu OPENS ITS BOARD (maintainer, same day: "if we're filtering to one
-// project it makes sense to automatically open the board … having access to other project specific ui
-// like done threads is useful"). So the pill is what a board wears, and its ✕ is the way back up to
-// Everything — the same door as ∞, said as a filter. On Everything the pill also shows while the page is
-// NARROWED in place by a project's row, a lane header or a rail square (lib/crossProject.ts): that light
-// preview stays, and its menu offers the board.
+// Choosing a project OPENS ITS PROJECT VIEW (maintainer, same day: "there shouldn't even be a concept of
+// a project board- the core UI should adapt and show more info when it is filtered to a single project
+// which should be easy to access and go back to the main board from with a single click, don't call it a
+// board call it 'project view'"). So the pill is what a project view wears, and its ✕ is the one click
+// back up to Everything — the same door as ∞, said as a filter. There is no other filtered state: the
+// in-place narrowing Everything had (which showed LESS than a project view) is gone.
 //
-// It must not read like the prompt box's project picker directly below it (AllQueues.tsx ProjectPicker):
-// that one says where a new thread GOES; this one says what you are LOOKING AT. Hence the filter glyph
-// leading this one and a project square leading that one.
+// It must not read like the prompt box's project picker (AllQueues.tsx ProjectPicker): that one says
+// where a new thread GOES; this one says what you are LOOKING AT. Hence the filter glyph leading this one,
+// and that one living INSIDE the box's bottom strip beside the model, drawn as a setting of the next
+// thread — it sat directly under this one until 2026-09-28, and the two names stacked read as one.
 //
 // Ink gaps (sans, scripts/ink-gaps.mjs): glyph→name 8.00px on the flex gap alone against 5.18px
 // name→chevron, so the glyph gives back 1px of its dead box (→7.00px); in the pill glyph→square 6.75px
@@ -63,12 +64,12 @@ export function ProjectFilter({
   projects: FilterProject[]
   /** The one project shown, or undefined for Everything. */
   current: FilterProject | undefined
-  /** What the pill says for `current` — its name by default (a board shows owner/repo). */
+  /** What the pill says for `current` — its name by default (a project view shows owner/repo). */
   label?: ReactNode
   onEverything: () => void
   onProject: (project: FilterProject) => void
   onClear: () => void
-  /** Extra menu items under the list — the board door, a repo link. */
+  /** Extra menu items under the list — a repo link. */
   footer?: ReactNode
   onOpenChange?: (open: boolean) => void
 }) {

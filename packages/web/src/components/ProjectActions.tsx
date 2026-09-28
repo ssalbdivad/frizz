@@ -16,7 +16,7 @@ import { useSnapshot } from "valtio"
 import { PROJECT_ICON_EXTENSIONS, slugify, type ProjectCard } from "@frizz/shared"
 import { rpc } from "../api/rpc.ts"
 import { crossProjectHref, isCrossProjectPath, projectHref, projectSlug } from "../lib/base-path.ts"
-import { CROSS_PROJECT_PICK_STATE, crossProjectNarrow, narrowCrossProject } from "../lib/crossProject.ts"
+import { CROSS_PROJECT_PICK_STATE } from "../lib/crossProject.ts"
 import { showToast, store } from "../store.ts"
 import { Dialog } from "./ui/Dialog.tsx"
 import { ProjectSquare } from "./ProjectRail.tsx"
@@ -123,7 +123,7 @@ export function ProjectMenu({
               {shortPath(project.path, home)}
             </RadixDropdown.Label>
             <RadixDropdown.Item asChild className={MENU_ITEM}>
-              <Link to={projectHref(encodeURIComponent(project.slug))}>Open board</Link>
+              <Link to={projectHref(encodeURIComponent(project.slug))}>Open project view</Link>
             </RadixDropdown.Item>
             <RadixDropdown.Separator className="mx-1 my-1 h-px bg-border" />
             {!project.stale && (
@@ -322,7 +322,6 @@ function DeleteProjectDialog({
           : `Deleted ${project.name}`,
       )
       onClose()
-      if (crossProjectNarrow() === project.id) narrowCrossProject(null)
       // Deleting the project the page is focused on leaves it addressed to nothing; `/` picks another.
       if (projectSlug() === project.slug) navigate("/", { replace: true })
     },
@@ -380,7 +379,7 @@ function DeleteProjectDialog({
             <span className="text-[11.5px] text-muted-80">
               {deleteData
                 ? "Everything Frizz has stored for this project, and any workers still running are stopped. This cannot be undone."
-                : "Left off, its threads are kept — adding the folder again brings the board back."}
+                : "Left off, its threads are kept — adding the folder again brings them back."}
             </span>
           </span>
         </label>
@@ -428,10 +427,10 @@ function AddProjectDialog({
           </RadixDialog.Title>
           <p className="mb-3.5 text-[12.5px] leading-relaxed text-muted">
             {proposed
-              ? "You ran Frizz here and it is not a project yet. Nothing has been written — adding it is what creates its board."
+              ? "You ran Frizz here and it is not a project yet. Nothing has been written — adding it is what makes it one."
               : reason
                 ? `${reason}. Paste the folder instead — Frizz walks up to the repository root, the same way it does when you run it in a terminal.`
-                : "Paste the folder you want a board for. Frizz walks up to the repository root, the same way it does when you run it in a terminal."}
+                : "Paste the folder you want to add. Frizz walks up to the repository root, the same way it does when you run it in a terminal."}
           </p>
           <form
             onSubmit={(event) => {
@@ -624,8 +623,7 @@ export function useAddProject(): { start: () => void; pending: boolean } {
  * Adding a project is only ever a step towards working in it, so it lands there — in the mode the operator
  * is in. On a board, that project's board. Anywhere else (Everything, or the welcome page of a machine
  * with nothing on it), Everything aimed at it: a PICK, or the page hands the focus straight back to the
- * previous one (AllQueues.tsx useReturnToPick) — and a narrowed page, which is about one project, follows
- * it there. `navigate`, not location.assign: the rail must not be torn down on the way.
+ * previous one (AllQueues.tsx useReturnToPick). `navigate`, not location.assign: the rail must not be torn down on the way.
  */
 function useOpenAddedProject(): (project: { id: string; slug: string }) => void {
   const navigate = useNavigate()
@@ -634,7 +632,6 @@ function useOpenAddedProject(): (project: { id: string; slug: string }) => void 
     void queryClient.invalidateQueries({ queryKey: ["projectsList"] })
     const slug = encodeURIComponent(project.slug)
     if (projectSlug() && !isCrossProjectPath()) return void navigate(projectHref(slug))
-    if (crossProjectNarrow()) narrowCrossProject(project.id)
     navigate(crossProjectHref(slug), { state: CROSS_PROJECT_PICK_STATE })
   }
 }
@@ -683,7 +680,7 @@ export function Welcome({ projects }: { projects: readonly ProjectCard[] }) {
         </h1>
         <p className="text-[13px] leading-relaxed text-muted">
           {projects.length === 0
-            ? "A project is a folder on this machine. Frizz keeps one board of threads per project."
+            ? "A project is a folder on this machine. Frizz keeps each project's threads together."
             : "Every registered project's folder is missing. Add a folder, or delete the projects that are gone."}
         </p>
         <button

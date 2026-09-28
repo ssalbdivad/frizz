@@ -250,15 +250,19 @@ export function Sidebar() {
     // 34vw is smallest and the workpane is squeezed hardest — 320px claimed ~39% of an 820px viewport
     // for nav and left the queue with the remainder. 272px still holds the dispatch composer's profile
     // chip and its icon buttons on one line, and hands the difference back to the queue.
-    <aside className={SIDEBAR_COLUMN_CLASS}>
-      {/* The content column FILLS the aside track (no narrow inner cap). Its cap reserves 16px top AND
-          bottom (symmetric, so the column stays centred), and below it the column grows and then
-          scrolls INTERNALLY. The reserve used to be 44px a side, holding open the band the FIXED
+    // TOP-ANCHORED, exactly as Everything's column is (AllQueues.tsx): a project view is Everything
+    // filtered to one project (maintainer 2026-09-28: "the core UI should adapt … when it is filtered to a
+    // single project"), so the status row and its filter must not move when the filter does. Centred, as
+    // it was until then, the filter jumped ~280px down the page on every switch and the view read as a
+    // different app.
+    <aside className={`${SIDEBAR_COLUMN_CLASS} !justify-start pt-[48px] max-[800px]:!pt-5`}>
+      {/* The content column FILLS the aside track (no narrow inner cap). Its cap reserves the 48px above
+          it and 20px below, and below it the column grows and then scrolls INTERNALLY. The reserve used to be 44px a side, holding open the band the FIXED
           status bar occupied in the page's top-left corner so a long thread list could not push the
           composer up underneath it. That bar is gone — its contents are the StatusRow at the top of
           this very column now — so the lane it needed goes with it and the rail gets the 56px back.
           Short boards are unaffected: they never reach the cap. */}
-      <div className="flex max-h-[calc(100vh-32px)] min-h-0 min-w-0 w-full flex-col max-[800px]:max-h-none">
+      <div className="flex max-h-[calc(100vh-68px)] min-h-0 min-w-0 w-full flex-col max-[800px]:max-h-none">
         {/* THE PROMPT BOX lives at the sidebar top (it replaced the New-thread pill — maintainer
             2026-07-09): always present, type + Enter dispatches a new thread. A brand-new repo shows
             this same box CENTERED as the whole screen (App hides the sidebar); the first dispatch

@@ -45,9 +45,12 @@ export function DispatchForm({
   autoFocus?: boolean
   onDispatched?: () => void
   /**
-   * WHERE the thread goes, when that is a choice — the cross-project page's project picker. It rides the
-   * tab row's right end, the composer's own "To:" field, directly over the box it addresses. A board has
-   * no choice to make and passes nothing.
+   * WHERE the thread goes, when that is a choice — the cross-project page's project picker. It is the
+   * FIRST pill in the box's bottom strip, beside the model, because it is a setting of the thread about
+   * to start, like the model. It sat at the tab row's right end until 2026-09-28, directly under the
+   * status row's project filter, and two project names stacked one over the other read as one control
+   * (maintainer: "lack of clarity on the distinction between the filter view … and the prompt selection
+   * box"). A board has no choice to make and passes nothing.
    */
   target?: ReactNode
 }) {
@@ -67,16 +70,11 @@ export function DispatchForm({
   }
   return (
     <div data-dispatch-form className="w-full flex flex-col gap-1.5">
-      {/* BASELINE, not centre: the tabs are bordered chips and the picker a bare label, so centring their
-          boxes left the two texts 0.64px apart; the eye reads the words, and the words share a line. */}
-      <div className="flex min-w-0 items-baseline gap-2">
-        <DispatchTabs mode={mode} onChange={(next) => { setSwitchedByKey(false); setMode(next) }} />
-        {target && <div className="ml-auto flex min-w-0 items-baseline">{target}</div>}
-      </div>
+      <DispatchTabs mode={mode} onChange={(next) => { setSwitchedByKey(false); setMode(next) }} />
       {mode === "prompt" ? (
-        <PromptForm autoFocus={autoFocus || switchedByKey} onDispatched={onDispatched} onTerminal={() => switchByKey("terminal")} />
+        <PromptForm autoFocus={autoFocus || switchedByKey} onDispatched={onDispatched} onTerminal={() => switchByKey("terminal")} target={target} />
       ) : (
-        <CommandForm autoFocus={autoFocus || switchedByKey} onDispatched={onDispatched} onPrompt={() => switchByKey("prompt")} />
+        <CommandForm autoFocus={autoFocus || switchedByKey} onDispatched={onDispatched} onPrompt={() => switchByKey("prompt")} target={target} />
       )}
     </div>
   )
@@ -110,7 +108,17 @@ function DispatchTabs({ mode, onChange }: { mode: DispatchMode; onChange: (mode:
 // The TERMINAL tab: one shell command, run by the server in a pty in the project directory. A command
 // thread is a thread like any other, so starting one behaves exactly like dispatching a prompt: you
 // stay where you are, the row appears in Running, and the toast's link opens its terminal drawer.
-function CommandForm({ autoFocus, onDispatched, onPrompt }: { autoFocus?: boolean; onDispatched?: () => void; onPrompt?: () => void }) {
+function CommandForm({
+  autoFocus,
+  onDispatched,
+  onPrompt,
+  target,
+}: {
+  autoFocus?: boolean
+  onDispatched?: () => void
+  onPrompt?: () => void
+  target?: ReactNode
+}) {
   const projectDir = useProjectDir()
   const homeDir = useSnapshot(store).board?.homeDir
   const [command, setCommand, clearCommand] = useDraft(draftKey.command(projectDir))
@@ -177,7 +185,8 @@ function CommandForm({ autoFocus, onDispatched, onPrompt }: { autoFocus?: boolea
           className="font-mono-keep block w-full min-w-0 flex-1 resize-none bg-transparent py-2.5 pl-2 pr-3.5 text-[13px] leading-relaxed text-fg outline-none placeholder:text-muted scrollbar-none disabled:opacity-60"
         />
       </div>
-      <div className="flex min-w-0 items-center pb-1.5 pl-3.5 pr-20">
+      <div className={`flex min-w-0 items-center gap-1.5 pb-1.5 pr-20 ${target ? "pl-1.5" : "pl-3.5"}`}>
+        {target}
         <span className="min-w-0 truncate py-1 text-[11px] text-muted-60" title={projectDir}>
           Runs in <span className="font-mono-keep">{projectDir ? abbreviateHome(projectDir, homeDir) : "the project directory"}</span>
         </span>
@@ -205,11 +214,13 @@ function PromptForm({
   autoFocus,
   onDispatched,
   onTerminal,
+  target,
 }: {
   autoFocus?: boolean
   onDispatched?: () => void
   /** `!` typed into the EMPTY box: switch to Terminal instead of writing it (see DispatchForm). */
   onTerminal?: () => void
+  target?: ReactNode
 }) {
   // The one durable new-thread profile, shared with the GitHub picker's own selector.
   const { resolved, codexList, claudeList, acpList, loadError: profileLoadError, saveProfile } = useDispatchProfile()
@@ -343,14 +354,17 @@ function PromptForm({
   const footer = useMemo(() => {
     if (!resolved) {
       return (
-        <ProfileGridSelector
-          groups={[]}
-          value={undefined}
-          onValueChange={() => {}}
-          placeholder={profileLoadError ? "Profile unavailable" : "Profile loading…"}
-          ariaLabel="Model and effort loading"
-          disabled
-        />
+        <div className="flex min-w-0 flex-1 flex-wrap items-center gap-x-1.5 gap-y-0.5">
+          {target}
+          <ProfileGridSelector
+            groups={[]}
+            value={undefined}
+            onValueChange={() => {}}
+            placeholder={profileLoadError ? "Profile unavailable" : "Profile loading…"}
+            ariaLabel="Model and effort loading"
+            disabled
+          />
+        </div>
       )
     }
     const profileGroups = dispatchProfileGroups(codexList, acpList, claudeList)
@@ -359,6 +373,7 @@ function PromptForm({
       // gap-x-1.5 between the two pills, the same measured gap the thread composer's strip uses
       // (useThreadComposerControls): two bordered pills on `gap-x-1` read as one segmented control.
       <div className="flex min-w-0 flex-1 flex-wrap items-center gap-x-1.5 gap-y-0.5">
+        {target}
         <ProfileGridSelector
           groups={profileGroups}
           agentSettings
@@ -391,7 +406,7 @@ function PromptForm({
         )}
       </div>
     )
-  }, [resolved, codexList, claudeList, acpList, profileLoadError, saveProfile])
+  }, [resolved, codexList, claudeList, acpList, profileLoadError, saveProfile, target])
 
   return (
     <div className="w-full flex flex-col gap-3">

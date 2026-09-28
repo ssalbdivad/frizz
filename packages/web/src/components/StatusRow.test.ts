@@ -52,7 +52,7 @@ function render(
 }
 
 /** The row with props — the cross-project page's own — under the same fixtures as `render()`. */
-function renderWith(props: { crossProject?: boolean; narrowedTo?: string }): string {
+function renderWith(props: { crossProject?: boolean }): string {
   render()
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } })
   client.setQueryData(["authStatus"], { claude: "authed", codex: "authed", emails: {} })
@@ -91,14 +91,10 @@ test("TWO dividers: home is the door OUT, settings and reload act on the app you
   assert.equal(html.split('class="h-3 w-px shrink-0 bg-border"').length - 1, 2)
 })
 
-test("on the cross-project page the row names what the page SHOWS, and ∞ is current only showing everything", () => {
+test("on the cross-project page the row names what the page SHOWS, and ∞ is the page", () => {
   const everything = renderWith({ crossProject: true })
   assert.match(everything, /data-status-row-page[^>]*>Everything</)
   assert.match(everything, /aria-label="Everything" aria-current="page"/)
-  // Narrowed to one project: the page is about that project, and ∞ is the way back to everything.
-  const narrowed = renderWith({ crossProject: true, narrowedTo: "marketing-site" })
-  assert.match(narrowed, /data-status-row-page[^>]*>marketing-site</)
-  assert.doesNotMatch(narrowed, /aria-current="page"/)
 })
 
 test("the row is LOOSE on the page — no fill, no border, no shadow, nothing fixed", () => {

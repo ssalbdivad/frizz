@@ -109,7 +109,7 @@ try {
   // what it SAYS waits for it to say it rather than reading once.
   const pickerSays = (name, timeout = 8000) =>
     page.waitForFunction((n) => document.querySelector("[data-xq-picker-name]")?.textContent?.trim() === n, { timeout }, name).then(() => true, () => false)
-  // What the page SHOWS: the status row's right end names the narrowed project, or "Everything".
+  // What the page SHOWS: the status row's right end names the project view's project, or "Everything".
   const pageTitle = () => page.$eval("[data-status-row-page]", (el) => el.textContent?.trim() ?? "").catch(() => "")
   const lanes = () => page.$$eval("[data-xq-lane]", (els) => els.map((el) => el.getAttribute("data-xq-lane")))
   const statusTop = () => page.$eval("[data-status-row]", (el) => Math.round(el.getBoundingClientRect().top))
@@ -257,7 +257,7 @@ try {
 
   await step("↗ opens the thread on its own board, and Back returns here", async () => {
     const scope = card("acme-api", "upgrade-postgres-driver")
-    await page.click(`${scope} a[aria-label="Open on acme-api's board"]`)
+    await page.click(`${scope} a[aria-label="Open in acme-api's project view"]`)
     await page.waitForFunction(() => location.pathname === "/project/acme-api/thread/upgrade-postgres-driver", { timeout: 5000 })
     await sleep(1500)
     const shows = await page.evaluate(() => document.body.innerText.includes("Upgrade the Postgres driver to v9"))
@@ -399,89 +399,71 @@ try {
     await page.waitForFunction(() => location.pathname === "/all/billing-worker", { timeout: 8000 })
   })
 
-  await step("Back to a project the operator was focused on stays there", async () => {
-    // Through the rail's squares, which PUSH an entry per project (the prompt box's picker replaces
-    // one). Going Back to an entry is choosing it again; the page used to bounce off it to the pick.
+  await step("a rail square opens its project view, and Back returns to Everything", async () => {
     const settings = await api("acme-api").query("settingsGet")
     await api("acme-api").mutate("settingsSet", { ...settings, projectRail: true })
     try {
       await page.goto(`${origin}/all/acme-api`, { waitUntil: "networkidle2" })
-      const square = 'nav[aria-label="Projects"] a[href="/all/marketing-site"]'
+      const square = 'nav[aria-label="Projects"] a[href="/project/marketing-site"]'
       await page.waitForSelector(square, { timeout: 10_000 })
       await page.click(square)
-      await page.waitForFunction(() => location.pathname === "/all/marketing-site", { timeout: 8000 })
+      await page.waitForFunction(() => location.pathname === "/project/marketing-site", { timeout: 8000 })
       await sleep(1000)
       await page.goBack()
-      await sleep(2000)
+      await page.waitForFunction(() => location.pathname === "/all/acme-api", { timeout: 8000 })
       const says = await pickerSays("acme-api")
-      const path = await page.evaluate(() => location.pathname)
-      check("Back to a project the operator was focused on stays there", path === "/all/acme-api" && says, `${path}, picker "${await picker()}"`)
-      // The square NARROWED to marketing-site as well; Back to another project's entry leaves that too,
-      // or the lanes would show marketing-site under a prompt box aimed at acme-api.
       const shows = await pageTitle()
-      check("…and leaves the narrowing the square made", shows === "Everything", `the page shows "${shows}"`)
+      check("a rail square opens its project view, and Back returns to Everything", says && shows === "Everything", `picker "${await picker()}", the page shows "${shows}"`)
     } finally {
       await api("acme-api").mutate("settingsSet", settings)
     }
   })
 
-  await step("choosing a project narrows the page to it, in place", async () => {
-    // From a document load (nothing narrowed) focused elsewhere, so the choice moves the pick too.
+  // There is no in-place narrowing: showing one project IS its project view (maintainer 2026-09-28: "the
+  // core UI should adapt and show more info when it is filtered to a single project … easy to access and
+  // go back to the main board from with a single click"). Every way in lands there, and the status row's
+  // filter pill is the one click back.
+  const projectViewShows = async (slug) => {
+    await page.waitForFunction((s) => location.pathname === `/project/${s}`, { timeout: 8000 }, slug)
+    // The first paint can be the empty-project layout before the keyframe swaps in the sidebar, which
+    // remounts the row — so wait for the pill and read it in one step.
+    const read = () => page.waitForFunction(() => document.querySelector("[data-xq-view-filter-pill] [data-status-row-page]")?.textContent, { timeout: 15_000 }).then((h) => h.jsonValue())
+    await read()
+    await sleep(800)
+    return read()
+  }
+  const clearFilter = async () => {
+    await page.waitForFunction(() => { const clear = document.querySelector("[data-xq-view-filter-clear]"); clear?.click(); return clear !== null }, { timeout: 8000 })
+    await page.waitForFunction(() => location.pathname.startsWith("/all/"), { timeout: 8000 })
+    await page.waitForSelector("[data-xq-lane]", { timeout: 8000 })
+  }
+
+  await step("a project's row, its lane header and the filter menu each open its project view; ✕ comes back", async () => {
     await page.goto(`${origin}/all/billing-worker`, { waitUntil: "networkidle2" })
     await page.waitForSelector("[data-xq-project-row]")
     await sleep(800)
     const everything = await lanes()
-    const top = await statusTop()
     await page.click(`[data-xq-project-row="${ids["acme-api"]}"] a`)
-    await page.waitForFunction(() => location.pathname === "/all/acme-api", { timeout: 8000 })
-    const says = await pickerSays("acme-api")
-    const narrowed = await lanes()
-    const others = await page.$$eval("[data-xq-rail-project]", (groups, id) => groups
-      .filter((group) => group.getAttribute("data-xq-rail-project") !== id)
-      .reduce((sum, group) => sum + group.querySelectorAll('button:not([aria-label^="More actions"])').length, 0), ids["acme-api"])
-    await page.screenshot({ path: join(shots, "xp-verify-narrowed.png") })
-    check(
-      "choosing a project narrows the page to it, in place",
-      says && JSON.stringify(narrowed) === JSON.stringify([ids["acme-api"]]) && (await pageTitle()) === "acme-api" && others === 0 && (await statusTop()) === top,
-      `lanes ${narrowed.length}/${everything.length}, title "${await pageTitle()}", ${others} rows of other projects, status row ${top} → ${await statusTop()}px`,
-    )
-
-    // Its name again is the way back, and so is the ∞ door; a lane's header narrows like its row.
-    await page.click(`[data-xq-project-row="${ids["acme-api"]}"] a`)
-    await page.waitForFunction(() => document.querySelector("[data-status-row-page]")?.textContent === "Everything", { timeout: 5000 }).catch(() => {})
+    const byRow = await projectViewShows("acme-api")
+    await page.screenshot({ path: join(shots, "xp-verify-project-view.png") })
+    await clearFilter()
+    const back = await page.evaluate(() => location.pathname)
     const widened = await lanes()
     await page.click(`[data-xq-lane="${ids["acme-api"]}"] header a`)
-    await page.waitForFunction(() => document.querySelector("[data-status-row-page]")?.textContent === "acme-api", { timeout: 5000 }).catch(() => {})
-    const byHeader = await lanes()
+    const byHeader = await projectViewShows("acme-api")
     await page.click('[data-status-row] a[aria-label="Everything"]')
-    await page.waitForFunction(() => document.querySelector("[data-status-row-page]")?.textContent === "Everything", { timeout: 5000 }).catch(() => {})
-    const byDoor = await lanes()
-    check(
-      "the name again, and the ∞ door, widen it back; a lane's header narrows too",
-      JSON.stringify(widened) === JSON.stringify(everything) && JSON.stringify(byHeader) === JSON.stringify([ids["acme-api"]]) && JSON.stringify(byDoor) === JSON.stringify(everything) && (await page.evaluate(() => location.pathname)) === "/all/acme-api",
-      `${widened.length} → ${byHeader.length} → ${byDoor.length} lanes of ${everything.length}`,
-    )
-
-    // The status row's filter says all of that out loud: a menu of Everything and every project, where a
-    // project OPENS ITS BOARD — which wears the filter as a held pill, whose ✕ comes back up to Everything.
+    await page.waitForFunction(() => location.pathname === "/all/acme-api", { timeout: 8000 })
+    await page.waitForSelector("[data-xq-view-filter]")
     await page.click("[data-xq-view-filter]")
     await page.waitForSelector('[role="menuitem"][data-value="marketing-site"]', { timeout: 5000 })
     await page.click('[role="menuitem"][data-value="marketing-site"]')
-    await page.waitForFunction(() => location.pathname === "/project/marketing-site", { timeout: 8000 })
-    await page.waitForSelector("[data-xq-view-filter-clear]", { timeout: 15_000 })
-    // The board's first paint can be the empty-board layout before its keyframe swaps in the sidebar,
-    // which remounts the row — so settle, then read and press in one in-page step.
-    await sleep(1500)
-    const onBoard = await pageTitle()
-    await page.waitForFunction(() => { const clear = document.querySelector("[data-xq-view-filter-clear]"); clear?.click(); return clear !== null }, { timeout: 8000 })
-    await page.waitForFunction(() => location.pathname === "/all/marketing-site", { timeout: 8000 })
-    await page.waitForFunction(() => document.querySelector("[data-xq-view-filter]")?.getAttribute("data-xq-view-filter") === "everything", { timeout: 5000 }).catch(() => {})
-    await page.waitForSelector("[data-xq-lane]", { timeout: 8000 })
+    const byMenu = await projectViewShows("marketing-site")
+    await clearFilter()
     const cleared = await lanes()
     check(
-      "the status row's filter opens a project's board, and the board's ✕ comes back to Everything",
-      onBoard === "marketing-site" && JSON.stringify(cleared) === JSON.stringify(everything),
-      `board pill "${onBoard}", ${cleared.length} lanes after ✕`,
+      "a project's row, its lane header and the filter menu each open its project view; ✕ comes back",
+      byRow === "acme-api" && back === "/all/acme-api" && JSON.stringify(widened) === JSON.stringify(everything) && byHeader === "acme-api" && byMenu === "marketing-site" && JSON.stringify(cleared) === JSON.stringify(everything),
+      `row → "${byRow}", ✕ → ${back} (${widened.length}/${everything.length} lanes), header → "${byHeader}", menu → "${byMenu}", ✕ → ${cleared.length} lanes`,
     )
   })
 

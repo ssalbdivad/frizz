@@ -589,7 +589,7 @@ export function MobileBoard() {
             </span>
           </div>
           <button
-            aria-label="Board actions"
+            aria-label="Project actions"
             data-mobile-more
             onClick={() => setMoreOpen(true)}
             className="icon-hover-outline ml-auto flex size-[44px] items-center justify-center rounded-full text-fg/85 active:bg-hover-strong"

@@ -173,10 +173,10 @@ export const AllQueuesCard = memo(function AllQueuesCard({
             </div>
             <div className="flex shrink-0 items-center gap-0.5">
               {offersRetry(thread) && <RetryButton project={project} thread={thread} onSent={onLeave} onFailed={onReturn} />}
-              {/* The one door on the card into SINGLE-project mode, and it says so. The title opens the
+              {/* The one door on the card into its PROJECT VIEW, and it says so. The title opens the
                   thread here, in place. */}
-              <Tooltip label={`Open on ${project.name}'s board`}>
-                <a href={boardHref} aria-label={`Open on ${project.name}'s board`} onClick={(event) => openBoard(event, boardHref, false)} className={HEADER_ICON_CLASS}>
+              <Tooltip label={`Open in ${project.name}'s project view`}>
+                <a href={boardHref} aria-label={`Open in ${project.name}'s project view`} onClick={(event) => openBoard(event, boardHref, false)} className={HEADER_ICON_CLASS}>
                   <ArrowUpRight size={15} />
                 </a>
               </Tooltip>

@@ -9,8 +9,7 @@ import { rpc } from "../api/rpc.ts"
 import { queued } from "../groups.ts"
 import { asThreads } from "../hooks.ts"
 import { store } from "../store.ts"
-import { crossProjectHref, isCrossProjectPath, modeProjectHref, projectSlug } from "../lib/base-path.ts"
-import { CROSS_PROJECT_PICK_STATE, narrowCrossProject, useCrossProjectNarrow } from "../lib/crossProject.ts"
+import { crossProjectHref, isCrossProjectPath, projectHref, projectSlug } from "../lib/base-path.ts"
 import { isPlainLeftClick } from "../lib/standaloneThreadRoute.ts"
 import { dropIndex, edgeScrollVelocity, moveItem, shiftFor } from "../lib/railReorder.ts"
 import { Tooltip } from "./Tooltip.tsx"
@@ -287,12 +286,8 @@ function RailLink({
       }
     >
       <Link
-        // In the mode the page is in: on the cross-project page a square NARROWS the page to its project
-        // and aims the prompt box there (lib/crossProject.ts) — a project's name on the page does the
-        // same — and on a board it opens that project's board.
-        to={modeProjectHref(project.slug)}
-        // A CHOICE of project there (lib/crossProject.ts), which the page keeps to once drawers close.
-        state={isCrossProjectPath() ? CROSS_PROJECT_PICK_STATE : undefined}
+        // Its PROJECT VIEW, from anywhere — as a project's name on Everything does.
+        to={projectHref(project.slug)}
         aria-current={current ? "page" : undefined}
         // The rail is a reorderable list, and a link is not one. `listitem` + `aria-grabbed` is the
         // most a native anchor can say about it; the keyboard path below is what makes it true.
@@ -304,7 +299,6 @@ function RailLink({
           // reorder also navigated to whatever square you dropped on — and under a real router that
           // navigation is instant, so the wrong board would already be mounting.
           if (drag || justDragged()) { event.preventDefault(); return }
-          if (isCrossProjectPath()) narrowCrossProject(project.id)
         }}
         // Native image-drag would fight the pointer drag.
         onDragStart={(event: DragEvent_<HTMLAnchorElement>) => event.preventDefault()}
@@ -452,11 +446,9 @@ export function ProjectRail() {
   const { data } = useQuery({ queryKey: ["projectsList"], queryFn: () => rpc.projectsList() })
   const { pathname } = useLocation()
   const onQueues = isCrossProjectPath(pathname)
-  // The square that wears the current-page pill is the project the page SHOWS: a board's own project,
-  // or on the cross-project page the one it is narrowed to — none while it shows everything. (The page's
-  // focus only aims its prompt box, which says so itself.)
-  const narrowed = useCrossProjectNarrow()
-  const current = onQueues ? data?.find((project) => project.id === narrowed)?.slug : projectSlug()
+  // The square that wears the current-page pill is the project the page SHOWS: a project view's own
+  // project — none on Everything. (Everything's focus only aims its prompt box, which says so itself.)
+  const current = onQueues ? undefined : projectSlug()
   const add = useAddProject()
   const [drag, setDrag] = useState<DragState | null>(null)
   /** The order the operator is looking at, which leads the server for the whole round trip. */
@@ -608,16 +600,15 @@ export function ProjectRail() {
           an feDropShadow that at this size cast a soft shadow DOWN onto the first project square. No count
           of its own — each square below already wears its project's, and a sum over them would be a second
           yellow number saying the same thing.
-          From a board it opens the page focused on that board's project, the prompt box aimed where the
-          operator already was; on the page it widens a narrowed view back to everything, in place. */}
+          From a project view it opens the page focused on that project, the prompt box aimed where the
+          operator already was. */}
       <Tooltip side="right" label="Everything">
         <Link
           to={current && !onQueues ? crossProjectHref(current) : "/"}
           aria-label="Everything"
-          aria-current={onQueues && !narrowed ? "page" : undefined}
-          className={`${RAIL_DOOR_CLASS} ${onQueues && !narrowed ? "bg-elevated text-fg" : ""}`}
+          aria-current={onQueues ? "page" : undefined}
+          className={`${RAIL_DOOR_CLASS} ${onQueues ? "bg-elevated text-fg" : ""}`}
           onClick={(event) => {
-            narrowCrossProject(null)
             if (!onQueues || !isPlainLeftClick(event)) return
             event.preventDefault()
             window.scrollTo({ top: 0, behavior: window.matchMedia?.("(prefers-reduced-motion: reduce)").matches ? "auto" : "smooth" })
