@@ -148,16 +148,23 @@ export const AllQueuesCard = memo(function AllQueuesCard({
   onLeave,
   onReturn,
   chip,
-  ghost = false,
+  ghost,
+  concealed = false,
 }: {
   project: QueuesProject
   thread: ThreadView
   leaving: boolean
   /**
-   * Its thread left the queue on its own while the card was on screen (lib/stableQueue.ts): the card
-   * holds its place, quiet, until it scrolls off or the thread rests again.
+   * Its thread left the queue while the card was on screen, and not by the human's hand in this tab
+   * (lib/stableQueue.ts): the card holds its place, quiet, saying where the thread went (GHOST_LABEL),
+   * until it scrolls off or the thread rests again.
    */
-  ghost?: boolean
+  ghost?: string
+  /**
+   * Its drawer is open, where it is read: the card keeps its place and its space, hidden and out of the
+   * tab order, so opening the drawer and closing it again moves nothing (AllQueues.tsx).
+   */
+  concealed?: boolean
   /** The card has been acted on — answered, replied to, snoozed or finished — so it fades out now. */
   onLeave: () => void
   /** The action failed after the card had already faded: put it back. */
@@ -202,7 +209,7 @@ export const AllQueuesCard = memo(function AllQueuesCard({
   }
 
   return (
-    <div data-xq-card={key} data-queue-leaving={leaving} data-queue-ghost={ghost || undefined} className="frizz-card-slot min-w-0">
+    <div data-xq-card={key} data-queue-leaving={leaving} data-queue-ghost={ghost === undefined ? undefined : true} data-queue-concealed={concealed || undefined} inert={concealed} className="frizz-card-slot min-w-0">
       <div className="frizz-card-clip min-h-0 min-w-0">
         <article
           data-xq-card-root
@@ -220,10 +227,10 @@ export const AllQueuesCard = memo(function AllQueuesCard({
                 {chip}
                 {/* A ghost says why it is quiet, on the line that said since when it was ready: the same
                     one line, so the card keeps its height and nothing under it moves. */}
-                {ghost ? (
+                {ghost !== undefined ? (
                   <>
                     {chip && <span aria-hidden>·</span>}
-                    <span className="min-w-0 truncate">Back at work</span>
+                    <span className="min-w-0 truncate">{ghost}</span>
                   </>
                 ) : (
                   <LastActive

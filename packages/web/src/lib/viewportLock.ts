@@ -13,13 +13,28 @@
 // working position was the one where anchoring never ran. So native anchoring is switched off on the
 // document while a queue is on screen, and this does its job in every position.
 //
-// THE ANCHOR is the card the human is engaged with, in order: the one holding the keyboard focus (they
-// are typing in it — the focused element itself is held, so the caret does not move), the one under
-// the pointer (they are about to click something in it — the element under the pointer is held), else
-// the one at the reading line a third of the way down the viewport (they are reading it — its first
-// node visible from the top of the viewport is held, as the browser's own anchoring picks one). It is
-// re-taken on every scroll, pointer move and focus change, and after every correction, so it always
-// describes the page as the human last saw it; a change is measured against it and undone.
+// THE ANCHOR is the card the human is engaged with, in order: the one they are TYPING in (the text box
+// itself is held, so the caret does not move), the one under the pointer (they are about to click
+// something in it), else the one at the reading line a third of the way down the viewport (they are
+// reading it). For the last two the card's first node visible from the top of the viewport is held, as
+// the browser's own anchoring picks one — never the element under the pointer: a card that grows under
+// it ("Show more", its own new content) must grow DOWNWARD, and holding a button at the bottom of a
+// growing body would hold the bottom and push the card's top up off the screen. It is re-taken on every
+// scroll, pointer move and focus change, and after every correction, so it always describes the page as
+// the human last saw it; a change is measured against it and undone.
+//
+// WHICH CARDS ARE ON SCREEN (what lib/stableQueue.ts freezes) is measured with a margin of a quarter of
+// the viewport either side: a render can land between a scroll and the re-measure it schedules, and a
+// card that had just scrolled into view must already count. And when that set changes, the host is asked
+// to render again once the scrolling settles, so cards that waited below the run for the ones on screen
+// take their real places while nobody is looking at them — never mid-scroll, where the correction would
+// be an instant scroll cancelling the human's own.
+//
+// A RELOAD is the one move this cannot absorb as it happens — the dev server's full reload, a new build's,
+// a restart's — and it used to land the reader at the top of a queue re-laid from nothing. So the card
+// being read and its offset are written down as the page goes, and after the reload the page is held on
+// that card, at that offset, while the queue loads around it: until the human scrolls, or a few seconds
+// after the card first appears.
 //
 // It runs after every render of the queue (a layout effect: after the DOM changed, before paint) and
 // whenever the document's size changes (a ResizeObserver: a card that fetched its transcript, an image
@@ -62,6 +77,53 @@ export function resumeViewportLock(): void {
   if (lockSuspendCount > 0 && --lockSuspendCount === 0) for (const listener of resumeListeners) listener()
 }
 
+// A deliberate SMOOTH scroll — a rail row, a `j`/`k`, back to the top. The lock stands aside for the
+// glide: its corrections are instant scrolls, and an instant scroll cancels a smooth one wherever it has
+// got to, stranding the reader halfway. Content that moved under the glide moved its target too, so when
+// the glide ends it re-lands on where the target is NOW — unless the human took the scroll over (a wheel,
+// a touch, a click, a key), in which case where they are is theirs. A new glide ends the one before it.
+let endGlide: ((reland: boolean) => void) | null = null
+const GLIDE_TIMEOUT_MS = 1_200
+
+/** Smooth-scroll the page to `target()` (a page offset, read again when the glide ends). Returns the offset it set out for. */
+export function glideTo(target: () => number): number {
+  endGlide?.(false)
+  const top = Math.max(0, target())
+  const reduced = window.matchMedia?.("(prefers-reduced-motion: reduce)").matches ?? false
+  if (reduced || isPageScrollLocked()) {
+    if (!isPageScrollLocked()) window.scrollTo({ top, left: 0, behavior: "instant" })
+    return top
+  }
+  const started = performance.now()
+  suspendViewportLock()
+  const takeover = (event: Event) => {
+    // The event that STARTED this glide (a `j`, a click on a row) is still propagating past these listeners.
+    if (event.timeStamp < started) return
+    end(false)
+  }
+  const end = (reland: boolean) => {
+    if (endGlide !== end) return
+    endGlide = null
+    window.clearTimeout(timer)
+    window.removeEventListener("scrollend", onEnd)
+    for (const type of TAKEOVER) window.removeEventListener(type, takeover, true)
+    if (reland) {
+      const now = Math.max(0, target())
+      if (Math.abs(now - pageScrollY()) > 0.5) window.scrollTo({ top: now, left: 0, behavior: "instant" })
+    }
+    resumeViewportLock()
+  }
+  const onEnd = () => end(true)
+  endGlide = end
+  window.addEventListener("scrollend", onEnd)
+  for (const type of TAKEOVER) window.addEventListener(type, takeover, { capture: true, passive: true })
+  // A glide that goes nowhere fires no `scrollend`.
+  const timer = window.setTimeout(onEnd, GLIDE_TIMEOUT_MS)
+  window.scrollTo({ top, left: 0, behavior: "smooth" })
+  return top
+}
+const TAKEOVER = ["wheel", "touchstart", "pointerdown", "keydown"] as const
+
 // ---- geometry ---------------------------------------------------------------------------------------
 
 interface Anchor {
@@ -87,9 +149,10 @@ function pinned(element: Element): boolean {
   const position = getComputedStyle(element).position
   return position === "sticky" || position === "fixed" || position === "absolute"
 }
-function insidePinned(element: Element, slot: Element): boolean {
-  for (let node: Element | null = element; node && node !== slot; node = node.parentElement) if (pinned(node)) return true
-  return false
+// A box that takes text, where a moved caret is a moved line under the human's eyes.
+function typingIn(element: HTMLElement): boolean {
+  if (element.isContentEditable || element instanceof HTMLTextAreaElement) return true
+  return element instanceof HTMLInputElement && !["button", "checkbox", "radio", "submit", "reset", "range", "color", "file", "image"].includes(element.type)
 }
 
 // The browser's own pick, done where it would not: descend to the first element whose top is visible,
@@ -126,41 +189,110 @@ function scrollPage(delta: number): void {
 }
 
 export interface ViewportLock {
-  /** Keys of the cards on screen at the last measurement — lib/stableQueue.ts's `onScreen`. */
+  /** Keys of the cards on (or within a margin of) the screen at the last measurement — lib/stableQueue.ts's `onScreen`. */
   onScreen: RefObject<ReadonlySet<string>>
+}
+
+/** How far past each edge of the viewport a card still counts as on screen, as a share of the viewport. */
+const ON_SCREEN_MARGIN = 0.25
+/** How long the page must sit still after a scroll before the host is asked to render again. */
+const SETTLE_MS = 250
+
+// ---- across a reload ----------------------------------------------------------------------------------
+
+const RELOAD_KEY = "frizz.queueReading.v1"
+/** A note older than this is from an earlier visit, not the reload that is loading now. */
+const RELOAD_FRESH_MS = 60_000
+/** How long the page is held on the card after it first appears, while the cards around it load. */
+const RELOAD_HOLD_MS = 3_000
+/** How long to wait for the card at all. */
+const RELOAD_GIVE_UP_MS = 20_000
+
+interface Reading {
+  path: string
+  slots: string
+  key: string
+  /** The card's top, from the top of the viewport. */
+  top: number
+  at: number
+}
+
+function readReading(slots: string): Reading | null {
+  try {
+    const raw = sessionStorage.getItem(RELOAD_KEY)
+    if (!raw) return null
+    sessionStorage.removeItem(RELOAD_KEY)
+    const reading = JSON.parse(raw) as Reading
+    if (reading.slots !== slots || reading.path !== location.pathname || Date.now() - reading.at > RELOAD_FRESH_MS) return null
+    return reading
+  } catch {
+    return null
+  }
 }
 
 /**
  * Hold the queue's cards still on screen. `slots` selects every card slot of this queue; `keyOf` reads a
- * slot's key (the one lib/stableQueue.ts orders by). `onGhostGone` is called when a ghost slot
- * (`data-queue-ghost`) has left the screen, so the owner can drop it now that nobody sees it go.
+ * slot's key (the one lib/stableQueue.ts orders by). `repaint` asks the owner to render again, once the
+ * page is still: when a ghost slot (`data-queue-ghost`) has left the screen, so it can be dropped now
+ * that nobody sees it go, and when the cards on screen have changed, so the ones held back for the old
+ * set can take their places.
  */
-export function useViewportLock(slots: string, keyOf: (slot: HTMLElement) => string | undefined, onGhostGone: () => void): ViewportLock {
+export function useViewportLock(slots: string, keyOf: (slot: HTMLElement) => string | undefined, repaint: () => void): ViewportLock {
   const onScreenRef = useRef<ReadonlySet<string>>(new Set())
   const anchor = useRef<Anchor | null>(null)
   const pointer = useRef<{ x: number; y: number } | null>(null)
-  const latest = useRef({ slots, keyOf, onGhostGone })
-  latest.current = { slots, keyOf, onGhostGone }
+  const latest = useRef({ slots, keyOf, repaint })
+  latest.current = { slots, keyOf, repaint }
+  // What the last repaint request was for, so a page that has not changed asks for nothing.
+  const asked = useRef({ keys: "", ghostGone: false })
+  const settle = useRef({ timer: 0, pending: false })
+  // The card to hold after a reload (Reading), until `until` — pushed out to RELOAD_HOLD_MS once it is found.
+  const restoring = useRef<{ key: string; top: number; until: number; found: boolean } | null>(null)
+  const requestRepaint = useRef(() => {})
+  requestRepaint.current = () => {
+    settle.current.pending = true
+    window.clearTimeout(settle.current.timer)
+    settle.current.timer = window.setTimeout(() => {
+      settle.current.pending = false
+      latest.current.repaint()
+    }, SETTLE_MS)
+  }
 
   // Measure the page as the human sees it now: which cards are on screen, and what to hold still.
   const take = useRef(() => {})
   take.current = () => {
     const { slots, keyOf } = latest.current
+    const restore = restoring.current
+    if (restore) {
+      if (performance.now() > restore.until) restoring.current = null
+      else {
+        const slot = [...document.querySelectorAll<HTMLElement>(slots)].find((candidate) => keyOf(candidate) === restore.key)
+        if (slot) {
+          if (!restore.found) restoring.current = { ...restore, found: true, until: performance.now() + RELOAD_HOLD_MS }
+          const delta = slot.getBoundingClientRect().top - restore.top
+          if (Math.abs(delta) > 0.5) scrollPage(delta)
+        }
+      }
+    }
     const viewport = window.innerHeight
+    const margin = viewport * ON_SCREEN_MARGIN
     const visible: HTMLElement[] = []
     const keys = new Set<string>()
     let ghostGone = false
     for (const slot of document.querySelectorAll<HTMLElement>(slots)) {
       const rect = slot.getBoundingClientRect()
-      if (onScreen(rect, viewport)) {
-        visible.push(slot)
+      if (rect.bottom > -margin && rect.top < viewport + margin) {
         const key = keyOf(slot)
         if (key) keys.add(key)
-      } else if (slot.hasAttribute("data-queue-ghost")) ghostGone = true
+      }
+      if (onScreen(rect, viewport)) visible.push(slot)
+      else if (slot.hasAttribute("data-queue-ghost") && !keys.has(keyOf(slot) ?? "")) ghostGone = true
     }
     onScreenRef.current = keys
     anchor.current = pick(visible, viewport)
-    if (ghostGone) latest.current.onGhostGone()
+    const signature = [...keys].join("\n")
+    if (signature !== asked.current.keys || (ghostGone && !asked.current.ghostGone)) requestRepaint.current()
+    asked.current = { keys: signature, ghostGone }
   }
 
   const pick = (visible: HTMLElement[], viewport: number): Anchor | null => {
@@ -168,7 +300,7 @@ export function useViewportLock(slots: string, keyOf: (slot: HTMLElement) => str
     const scrollY = pageScrollY()
     const hold = (slot: HTMLElement, node: Element): Anchor => ({ node, top: node.getBoundingClientRect().top, slot, slotTop: slot.getBoundingClientRect().top, scrollY })
     const focused = document.activeElement
-    if (focused && focused !== document.body) {
+    if (focused instanceof HTMLElement && typingIn(focused)) {
       const slot = visible.find((candidate) => candidate.contains(focused))
       if (slot) return hold(slot, focused)
     }
@@ -176,7 +308,7 @@ export function useViewportLock(slots: string, keyOf: (slot: HTMLElement) => str
     if (at) {
       const under = document.elementFromPoint(at.x, at.y)
       const slot = under && visible.find((candidate) => candidate.contains(under))
-      if (slot && under) return hold(slot, insidePinned(under, slot) ? slot : under)
+      if (slot) return hold(slot, firstVisibleNode(slot))
     }
     const line = viewport / 3
     const reading = visible.find((slot) => { const rect = slot.getBoundingClientRect(); return rect.top <= line && rect.bottom >= line }) ?? visible[0]!
@@ -187,7 +319,8 @@ export function useViewportLock(slots: string, keyOf: (slot: HTMLElement) => str
   const hold = useRef(() => {})
   hold.current = () => {
     const held = anchor.current
-    if (!held || lockSuspendCount > 0) return
+    // Restoring a reload holds the page on its own card (take), which this would fight.
+    if (!held || lockSuspendCount > 0 || restoring.current) return
     const scrolled = pageScrollY() - held.scrollY
     let delta = 0
     if (held.node.isConnected) delta = held.node.getBoundingClientRect().top - (held.top - scrolled)
@@ -205,10 +338,37 @@ export function useViewportLock(slots: string, keyOf: (slot: HTMLElement) => str
 
   useEffect(() => {
     suspendNativeAnchoring()
+    // The browser's own restore would put back a pixel offset into a page that has not loaded yet; the
+    // note below puts back the CARD.
+    const restorationWas = history.scrollRestoration
+    history.scrollRestoration = "manual"
+    const reading = readReading(latest.current.slots)
+    if (reading) restoring.current = { key: reading.key, top: reading.top, until: performance.now() + RELOAD_GIVE_UP_MS, found: false }
+    const stopRestoring = (event: Event) => {
+      if (event.isTrusted) restoring.current = null
+    }
+    const onHide = () => {
+      restoring.current = null
+      take.current()
+      const held = anchor.current
+      const key = held && latest.current.keyOf(held.slot)
+      if (!held || !key) return
+      const note: Reading = { path: location.pathname, slots: latest.current.slots, key, top: held.slot.getBoundingClientRect().top, at: Date.now() }
+      try {
+        sessionStorage.setItem(RELOAD_KEY, JSON.stringify(note))
+      } catch {
+        // Storage full or blocked: the reload lands where the browser puts it.
+      }
+    }
     let frame = 0
     const retake = () => {
       cancelAnimationFrame(frame)
       frame = requestAnimationFrame(() => take.current())
+    }
+    // Still scrolling: the repaint waits for the page to sit still.
+    const onScroll = () => {
+      if (settle.current.pending) requestRepaint.current()
+      retake()
     }
     const onPointer = (event: PointerEvent) => {
       pointer.current = { x: event.clientX, y: event.clientY }
@@ -227,7 +387,9 @@ export function useViewportLock(slots: string, keyOf: (slot: HTMLElement) => str
     observer.observe(document.body)
     const onResume = () => take.current()
     resumeListeners.add(onResume)
-    window.addEventListener("scroll", retake, { passive: true })
+    window.addEventListener("pagehide", onHide)
+    for (const type of TAKEOVER) window.addEventListener(type, stopRestoring, { capture: true, passive: true })
+    window.addEventListener("scroll", onScroll, { passive: true })
     window.addEventListener("resize", retake)
     document.addEventListener("pointermove", onPointer, { passive: true })
     document.documentElement.addEventListener("pointerleave", onLeave)
@@ -237,15 +399,19 @@ export function useViewportLock(slots: string, keyOf: (slot: HTMLElement) => str
     take.current()
     return () => {
       cancelAnimationFrame(frame)
+      window.clearTimeout(settle.current.timer)
       observer.disconnect()
       resumeListeners.delete(onResume)
-      window.removeEventListener("scroll", retake)
+      window.removeEventListener("scroll", onScroll)
       window.removeEventListener("resize", retake)
       document.removeEventListener("pointermove", onPointer)
       document.documentElement.removeEventListener("pointerleave", onLeave)
       window.removeEventListener("blur", onLeave)
       document.removeEventListener("focusin", retake)
       document.removeEventListener("focusout", retake)
+      window.removeEventListener("pagehide", onHide)
+      for (const type of TAKEOVER) window.removeEventListener(type, stopRestoring, true)
+      history.scrollRestoration = restorationWas
       resumeNativeAnchoring()
     }
   }, [])

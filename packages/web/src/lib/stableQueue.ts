@@ -102,3 +102,16 @@ export function stableQueue<T>({ prev, target, keyOf, onScreen, mayGhost, keep }
   }
   return [...before, ...run, ...after]
 }
+
+/**
+ * What a ghost says in place of since-when-it-was-ready: where its thread went, so a card that stopped
+ * waiting while the human read it says so rather than just going quiet. `gone` is a thread the view can
+ * no longer see — done from somewhere without a list of done threads, forgotten, or its project closed.
+ */
+export type GhostReason = "working" | "snoozed" | "done" | "gone"
+export const GHOST_LABEL: Record<GhostReason, string> = {
+  working: "Back at work",
+  snoozed: "Snoozed",
+  done: "Done",
+  gone: "No longer waiting",
+}

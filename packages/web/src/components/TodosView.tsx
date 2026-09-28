@@ -7,7 +7,8 @@ import { useMutation, useQueryClient } from "@tanstack/react-query"
 import { queueCardTargetY, showToast, slugsInThreadDrawers, store } from "../store.ts"
 import { pageScrollY } from "../lib/pageScrollLock.ts"
 import { resumeNativeAnchoring, resumeViewportLock, suspendNativeAnchoring, suspendViewportLock, useViewportLock } from "../lib/viewportLock.ts"
-import { stableQueue, type QueueSlot } from "../lib/stableQueue.ts"
+import { GHOST_LABEL, stableQueue, type QueueSlot } from "../lib/stableQueue.ts"
+import { actedOnHere } from "../lib/humanActs.ts"
 import { rpc } from "../api/rpc.ts"
 import { useBoard, asThreads, useTranscript } from "../hooks.ts"
 import { orderQueue, queued, queueLabelAt, queueLabelWord } from "../groups.ts"
@@ -89,7 +90,7 @@ function captureScrollTarget(removingSlug: string): string | null {
   const cards = [...document.querySelectorAll<HTMLElement>("[data-queue-card]")]
   const i = cards.findIndex((el) => el.dataset.queueCard === removingSlug)
   if (i < 0) return null
-  const eligible = (el: HTMLElement): boolean => el.dataset.queueLeaving !== "true" && !el.hasAttribute("data-queue-ghost") && !!el.dataset.queueCard
+  const eligible = (el: HTMLElement): boolean => el.dataset.queueLeaving !== "true" && !el.hasAttribute("data-queue-ghost") && !el.hasAttribute("data-queue-concealed") && !!el.dataset.queueCard
   for (let j = i + 1; j < cards.length; j++) if (eligible(cards[j])) return cards[j].dataset.queueCard!
   for (let j = i - 1; j >= 0; j--) if (eligible(cards[j])) return cards[j].dataset.queueCard!
   return null
@@ -185,19 +186,25 @@ export function TodosView() {
   // move. Any other unmount is the lock's to absorb.
   const pinRef = useRef<{ slug: string } | null>(null)
   const [exitTick, forceExitRender] = useState(0)
-  // THE VIEWPORT LOCK (lib/viewportLock.ts), and the one thing it asks back: a ghost that has scrolled
-  // off screen can go now that nobody sees it go.
+  // THE VIEWPORT LOCK (lib/viewportLock.ts), and the one thing it asks back: a render once the page is
+  // still, when a ghost has scrolled off screen (it can go now that nobody sees it go) or the cards on
+  // screen have changed (the ones held back for them can take their places).
   const lock = useViewportLock("[data-queue-card]", queueCardKey, useCallback(() => forceExitRender((n) => n + 1), []))
   // Whether a card that just left the queue while on screen stays as a GHOST (lib/stableQueue.ts): yes
-  // when its thread left on its own — it woke on a finished shell, a child's return, a timer, or someone
-  // acted on it in another window — and no when the human put it away from here: dismissed on the card
-  // itself, sent a message from any box in this tab (the steer stamp outlives the departure), or done,
-  // snoozed, parked. Those leave the ordinary way, and what follows them closing up is the human's doing.
+  // unless the human put it away from THIS tab — dismissed on the card itself, sent a message from any
+  // box here (the steer stamp outlives the departure), or anything else they did to the thread here
+  // (lib/humanActs.ts: done, snoozed, answered, stopped). Those leave the ordinary way, and what follows
+  // them closing up is the human's doing. Everything else — it woke on a finished shell, a child's return,
+  // a timer, or it was acted on from the phone or another window — happened to a card they were reading.
   const steeredAt = useSteeredAt()
-  const mayGhost = (slug: string): boolean => {
-    if (leaving.has(slug) || steeredAt[slug] !== undefined) return false
+  const mayGhost = (slug: string): boolean => !leaving.has(slug) && steeredAt[slug] === undefined && !actedOnHere(slug)
+  // Where a ghost's thread went (GHOST_LABEL).
+  const ghostLabel = (slug: string): string => {
     const now = threads.find((t) => t.id === slug)
-    return now !== undefined && !now.archived && now.snoozedUntil === undefined && now.bgSnoozed !== true
+    if (!now) return GHOST_LABEL.gone
+    if (now.archived) return GHOST_LABEL.done
+    if (now.snoozedUntil !== undefined || now.bgSnoozed === true) return GHOST_LABEL.snoozed
+    return GHOST_LABEL.working
   }
   {
     prevItemsRef.current.forEach((it) => {
@@ -287,11 +294,12 @@ export function TodosView() {
   })
   prevSlotsRef.current = renderSlots
   const renderItems = renderSlots.map((slot) => slot.item)
-  // A card whose thread is open in a drawer is skipped at PAINT time only (see slugsInThreadDrawers).
-  // Filtering `items` instead would route it through the exit machinery above — a fade, a neighbour
-  // pin, and a finalize timer that could hide it again after the drawer had already closed.
+  // A card whose thread is open in a drawer is CONCEALED at paint time (see slugsInThreadDrawers): hidden
+  // and inert, but still laid out, so opening the drawer and closing it again moves nothing under the
+  // sheet or after it. Filtering `items` instead would route it through the exit machinery above — a
+  // fade, a neighbour pin, and a finalize timer that could hide it again after the drawer had closed.
   const inDrawer = slugsInThreadDrawers(useSnapshot(store).drawers)
-  const visibleSlots = renderSlots.filter((slot) => !inDrawer.has(slot.key))
+  const visibleSlots = renderSlots
 
   // Drive EVERY exiting card through the SAME board-independent exit, so all dismissal paths (Mark done,
   // Snooze, or steering the agent by sending a message) behave identically:
@@ -502,11 +510,11 @@ export function TodosView() {
           </h2>
           {visibleSlots.map(({ item, ghost }, i) => (
             <Fragment key={item.id}>
-              <CardSlot slug={item.id} leaving={isLeaving(item.id)} ghost={ghost}>
+              <CardSlot slug={item.id} leaving={isLeaving(item.id)} ghost={ghost} concealed={inDrawer.has(item.id)}>
                 {item.kind === "command" ? (
                   <CommandQueueCard thread={item} leaving={isLeaving(item.id)} onResolve={resolve} onUnresolve={unresolve} />
                 ) : (
-                  <QueueCard thread={item} leaving={isLeaving(item.id)} frozen={ghost || isFrozen(item)} ghost={ghost} onResolve={resolve} onUnresolve={unresolve} />
+                  <QueueCard thread={item} leaving={isLeaving(item.id)} frozen={ghost || isFrozen(item)} ghost={ghost ? ghostLabel(item.id) : undefined} onResolve={resolve} onUnresolve={unresolve} />
                 )}
               </CardSlot>
               {/* The inter-card hairline rule, a SIBLING of the slots rather than a child of the card
@@ -619,7 +627,7 @@ function RepairButton({ file }: { file: string }) {
 // instead of opening a drawer (scrollToQueueCard in store.ts), and the unmount anchors use it too;
 // `data-queue-leaving` drives the fade CSS. The slot is the CARD alone — the hairline rule between two
 // cards is the list's own child, between the slots.
-function CardSlot({ leaving, ghost = false, slug, children }: { leaving: boolean; ghost?: boolean; slug: string; children: ReactNode }) {
+function CardSlot({ leaving, ghost = false, concealed = false, slug, children }: { leaving: boolean; ghost?: boolean; concealed?: boolean; slug: string; children: ReactNode }) {
   return (
     // min-w-0 at EVERY level: grid items and flex children default to min-width:auto, so one wide
     // diff line inside a card would otherwise widen the whole queue column and make it pan sideways
@@ -627,8 +635,8 @@ function CardSlot({ leaving, ghost = false, slug, children }: { leaving: boolean
     // overflow-x:auto engage.
     // data-queue-ghost: its thread left the queue on its own while the card was on screen, so the card
     // holds its place, quiet, until it scrolls off (lib/stableQueue.ts). ABSENT otherwise — the viewport
-    // lock and the keyboard read its presence.
-    <div data-queue-card={slug} data-queue-leaving={leaving} data-queue-ghost={ghost || undefined} className="frizz-card-slot min-w-0">
+    // lock and the keyboard read its presence. data-queue-concealed: its drawer is open (styles.css).
+    <div data-queue-card={slug} data-queue-leaving={leaving} data-queue-ghost={ghost || undefined} data-queue-concealed={concealed || undefined} inert={concealed} className="frizz-card-slot min-w-0">
       {/* .frizz-card-clip: a plain min-h-0/min-w-0 wrapper (no overflow:hidden — an overflow ancestor at
           rest would establish a scroll container that neuters the sticky header). */}
       <div className="frizz-card-clip min-h-0 min-w-0">
@@ -707,7 +715,7 @@ function IntermediateSummary({ toolCount, onExpand }: { toolCount: number; onExp
 // changed, instead of every mounted card — and each card's transcript is further guarded by the
 // memoized Message. `onResolve` takes the slug (stable useCallback in TodosView) so this card's props
 // never churn identity render-to-render.
-const QueueCard = memo(function QueueCard({ thread, leaving, frozen, ghost = false, onResolve, onUnresolve }: { thread: ThreadView; leaving: boolean; frozen: boolean; ghost?: boolean; onResolve: (slug: string) => void; onUnresolve: (slug: string) => void }) {
+const QueueCard = memo(function QueueCard({ thread, leaving, frozen, ghost, onResolve, onUnresolve }: { thread: ThreadView; leaving: boolean; frozen: boolean; ghost?: string; onResolve: (slug: string) => void; onUnresolve: (slug: string) => void }) {
   // ANSWERED registered questions keep drawing, greyed, where their open card stood — the thread view's
   // rule (lib/settledQuestions). The open cards skip any id the settled list holds (openQuestionsOf).
   const settledQuestions = useSettledQuestions(thread)
@@ -1281,8 +1289,8 @@ const QueueCard = memo(function QueueCard({ thread, leaving, frozen, ghost = fal
           <ThreadTitle thread={thread} className="leading-snug" />
           {/* A ghost says why it is quiet, on the line that said since when it was ready — the same one
               line, so the card keeps its height and nothing under it moves. */}
-          {ghost ? (
-            <span className="mt-0.5 block truncate text-[11px] leading-tight text-muted-75">Back at work</span>
+          {ghost !== undefined ? (
+            <span className="mt-0.5 block truncate text-[11px] leading-tight text-muted-75">{ghost}</span>
           ) : (
             <LastActive at={queueLabelAt(thread)} label={queueLabelWord(thread)} fallbackAt={thread.spawnedAt} className="mt-0.5 block truncate text-[11px] leading-tight text-muted-75" />
           )}
@@ -1792,8 +1800,8 @@ const QueueCard = memo(function QueueCard({ thread, leaving, frozen, ghost = fal
 // mounted (and its draft/collapse/transcript state intact) unless its actual server payload changed.
 // Deltas retain identity for untouched rows, so the JSON path is only the reconnect/keyframe fallback.
 function queueCardPropsEqual(
-  previous: Readonly<{ thread: ThreadView; leaving: boolean; frozen: boolean; ghost?: boolean; onResolve: (slug: string) => void; onUnresolve: (slug: string) => void }>,
-  next: Readonly<{ thread: ThreadView; leaving: boolean; frozen: boolean; ghost?: boolean; onResolve: (slug: string) => void; onUnresolve: (slug: string) => void }>,
+  previous: Readonly<{ thread: ThreadView; leaving: boolean; frozen: boolean; ghost?: string; onResolve: (slug: string) => void; onUnresolve: (slug: string) => void }>,
+  next: Readonly<{ thread: ThreadView; leaving: boolean; frozen: boolean; ghost?: string; onResolve: (slug: string) => void; onUnresolve: (slug: string) => void }>,
 ): boolean {
   return previous.leaving === next.leaving && previous.frozen === next.frozen && previous.ghost === next.ghost && previous.onResolve === next.onResolve && previous.onUnresolve === next.onUnresolve && (previous.thread === next.thread || JSON.stringify(previous.thread) === JSON.stringify(next.thread))
 }

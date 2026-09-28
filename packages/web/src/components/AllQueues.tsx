@@ -47,9 +47,10 @@ import { commandFailed, commandLive, commandStateLabel } from "../lib/commandThr
 import { prefs } from "../lib/prefs.ts"
 import { PROMPT_CONTROL_TYPOGRAPHY_CLASS } from "../lib/promptControlTypography.ts"
 import { MarkdownScopeContext } from "../lib/useMarkdown.ts"
-import { stableQueue, type QueueSlot } from "../lib/stableQueue.ts"
+import { GHOST_LABEL, stableQueue, type QueueSlot } from "../lib/stableQueue.ts"
+import { actedOnHere } from "../lib/humanActs.ts"
 import { useSteeredAt } from "../lib/steering.ts"
-import { useViewportLock } from "../lib/viewportLock.ts"
+import { glideTo, useViewportLock } from "../lib/viewportLock.ts"
 import { registerQueueCursor } from "../lib/keyboardRuntime.ts"
 import { AllQueuesCard, ProjectChip, useOpenThreadInPlace } from "./AllQueuesCard.tsx"
 import { CommandQueueCard } from "./CommandQueueCard.tsx"
@@ -81,6 +82,14 @@ const COMPOSER_WAIT_MS = 6_000
 const entryKey = ({ project, thread }: QueueEntry): string => threadKey(project.id, thread.id)
 const xqCardKey = (slot: HTMLElement): string | undefined => slot.dataset.xqCard
 
+// Where a ghost's thread went, as far as the page can see (lib/stableQueue.ts GHOST_LABEL).
+function ghostLabel(projects: readonly QueuesProject[], { project, thread }: QueueEntry): string {
+  const now = projects.find((candidate) => candidate.id === project.id)
+  if (now?.running.some((t) => t.id === thread.id)) return GHOST_LABEL.working
+  if (now?.snoozed.some((t) => t.id === thread.id)) return GHOST_LABEL.snoozed
+  return GHOST_LABEL.gone
+}
+
 export function AllQueuesPage() {
   const cards = useQuery({ queryKey: ["projectsList"], queryFn: () => rpc.projectsList() })
   const queues = useQuery({
@@ -107,13 +116,16 @@ export function AllQueuesPage() {
   const leaving = useLeavingCards(projects)
   // A thread whose drawer is open is read THERE: its card would be a second copy of the same questions
   // and reply box under the sheet (the board's rule, store.ts slugsInThreadDrawers). Drawers belong to
-  // the page project, so only the focus's cards can be hidden this way.
+  // the page project, so only the focus's cards can be hidden this way. HIDDEN, NOT REMOVED: the card
+  // keeps its space (QueueCardOf `concealed`), so opening its drawer and closing it again moves nothing
+  // under the sheet or after it.
   const focusId = projects.find((project) => project.slug === focus)?.id
   const inDrawer = new Set(focusId === undefined ? [] : [...slugsInThreadDrawers(snap.drawers)].map((slug) => threadKey(focusId, slug)))
   const hidden = (key: string) => leaving.hidden(key) || inDrawer.has(key)
   const [, repaint] = useState(0)
-  // THE VIEWPORT LOCK (lib/viewportLock.ts), and the one thing it asks back: a ghost that has scrolled
-  // off screen can go now that nobody sees it go.
+  // THE VIEWPORT LOCK (lib/viewportLock.ts), and the one thing it asks back: a render once the page is
+  // still, when a ghost has scrolled off screen (it can go now that nobody sees it go) or the cards on
+  // screen have changed (the ones held back for them can take their places).
   const lock = useViewportLock("[data-xq-card]", xqCardKey, useCallback(() => repaint((n) => n + 1), []))
   const steeredAt = useSteeredAt()
   // Registered projects this server has not opened (still being opened after a boot, served by another
@@ -121,12 +133,11 @@ export function AllQueuesPage() {
   const unopened = projects.filter((project) => !project.open && !project.stale).length
   // The ONE queue in lib/stableQueue.ts's STABLE order: the queue's own order off screen; on screen
   // exactly as last drawn (maintainer 2026-09-28: "it needs to be guaranteed that cards that I'm
-  // currently viewing on the screen don't move in their position"). A card whose thread went back to
-  // work on its own is held there as a ghost; one the human put away — finished, replied to from here,
-  // snoozed — leaves the ordinary way, held only while it fades. Re-sorting is the human choosing a
-  // different order, so it starts over from the queue's own. A card whose drawer is open is left out at
-  // PAINT time only, as on the board, so it comes back to its own place when the drawer closes rather
-  // than arriving anew.
+  // currently viewing on the screen don't move in their position"). A card whose thread left the queue
+  // by any hand but the human's in THIS tab (lib/humanActs.ts) — its agent woke itself, it was answered
+  // from the phone, its project closed — is held there as a ghost; one the human put away from here —
+  // finished, replied to, snoozed — leaves the ordinary way, held only while it fades. Re-sorting is the
+  // human choosing a different order, so it starts over from the queue's own.
   const ordered = mergedQueue(projects, direction).filter(({ project, thread }) => !leaving.hidden(threadKey(project.id, thread.id)))
   const prevSlots = useRef<QueueSlot<QueueEntry>[]>([])
   const orderedAs = useRef(direction)
@@ -137,8 +148,7 @@ export function AllQueuesPage() {
   const mayGhost = (key: string): boolean => {
     if (leaving.isLeaving(key)) return false
     const was = prevSlots.current.find((slot) => slot.key === key)?.item
-    if (!was || steeredAt[was.thread.id] !== undefined) return false
-    return projects.find((project) => project.id === was.project.id)?.running.some((t) => t.id === was.thread.id) === true
+    return was !== undefined && steeredAt[was.thread.id] === undefined && !actedOnHere(was.thread.id)
   }
   const slots = stableQueue({
     prev: prevSlots.current,
@@ -149,11 +159,11 @@ export function AllQueuesPage() {
     keep: new Set(prevSlots.current.map((slot) => slot.key).filter((key) => leaving.isLeaving(key) && !leaving.hidden(key))),
   })
   prevSlots.current = slots
-  const queue = slots.filter((slot) => !inDrawer.has(slot.key))
+  const queue = slots
   // Counted from what the page SHOWS: a card the operator just finished is gone from the count at once,
   // and a header still counting it read "1 in the queue" over an empty page until the next poll. A ghost
-  // is not waiting on anyone.
-  const ready = queue.filter((slot) => !slot.ghost && !leaving.isLeaving(slot.key)).length
+  // is not waiting on anyone, and a card whose drawer is open is being read there.
+  const ready = queue.filter((slot) => !slot.ghost && !leaving.isLeaving(slot.key) && !inDrawer.has(slot.key)).length
   const scrollToCard = useScrollToCard()
   const activeKey = useScrollspy(queue)
   useQueueKeys(activeKey, scrollToCard)
@@ -229,7 +239,7 @@ export function AllQueuesPage() {
                 </h2>
                 {queue.map((slot, index) => (
                   <Fragment key={slot.key}>
-                    <QueueCardOf entry={slot.item} ghost={slot.ghost} leaving={leaving} />
+                    <QueueCardOf entry={slot.item} ghost={slot.ghost ? ghostLabel(projects, slot.item) : undefined} concealed={inDrawer.has(slot.key)} leaving={leaving} />
                     {/* The rule between two cards, as on the board (TodosView): a sibling that FOLLOWS its
                         card, so styles.css fades it with the card when that one leaves. */}
                     {index < queue.length - 1 && <hr className="my-10 border-0 border-t border-border/60" />}
@@ -270,7 +280,7 @@ function ViewFilter({ projects, hidden }: { projects: QueuesProject[]; hidden: (
     <ProjectFilter
       projects={items}
       current={undefined}
-      onEverything={() => window.scrollTo({ top: 0, behavior: prefersSmooth() })}
+      onEverything={() => glideTo(() => 0)}
       onProject={(project) => navigate(projectHref(encodeURIComponent(project.slug)))}
       onClear={() => {}}
     />
@@ -708,7 +718,7 @@ function CommandRowBody({ command }: { command: NonNullable<ThreadView["command"
  * relative path at its directory and a `/thread/<slug>` link at that thread on THIS page (opened in
  * place) — never at the page's focus, which is usually another project.
  */
-function QueueCardOf({ entry, ghost, leaving }: { entry: QueueEntry; ghost: boolean; leaving: LeavingCards }) {
+function QueueCardOf({ entry, ghost, concealed, leaving }: { entry: QueueEntry; ghost: string | undefined; concealed: boolean; leaving: LeavingCards }) {
   const { project, thread } = entry
   const openInPlace = useOpenThreadInPlace()
   const scope = useMemo(
@@ -727,7 +737,7 @@ function QueueCardOf({ entry, ghost, leaving }: { entry: QueueEntry; ghost: bool
       {thread.kind === "command" ? (
         // A finished terminal command takes the board's own command card, scoped to its project: its
         // pty, its Restart and its Mark as done all belong to the card's project, not the page's.
-        <div data-xq-card={key} data-queue-leaving={leaving.isLeaving(key)} data-queue-ghost={ghost || undefined} className="frizz-card-slot min-w-0">
+        <div data-xq-card={key} data-queue-leaving={leaving.isLeaving(key)} data-queue-ghost={ghost === undefined ? undefined : true} data-queue-concealed={concealed || undefined} inert={concealed} className="frizz-card-slot min-w-0">
           <div className="frizz-card-clip min-h-0 min-w-0">
             <div className="frizz-card-body min-w-0">
               <ThreadProjectScope projectId={project.id} projectDir={project.projectDir}>
@@ -752,6 +762,7 @@ function QueueCardOf({ entry, ghost, leaving }: { entry: QueueEntry; ghost: bool
           onReturn={leaving.restore(key)}
           chip={<ProjectChip project={project} />}
           ghost={ghost}
+          concealed={concealed}
         />
       )}
     </MarkdownScopeContext.Provider>
@@ -861,10 +872,6 @@ function useStacked(): boolean {
   )
 }
 
-function prefersSmooth(): ScrollBehavior {
-  return window.matchMedia?.("(prefers-reduced-motion: reduce)").matches ? "auto" : "smooth"
-}
-
 /**
  * A queue row's click: bring its card to the top of the window and ring it — the board's own
  * scroll-to-card (store.ts scrollToQueueCard), for a page whose cards are keyed by project. Returns
@@ -874,8 +881,8 @@ function useScrollToCard(): (key: string) => number | null {
   return useCallback((key: string) => {
     const slot = document.querySelector<HTMLElement>(`[data-xq-card="${CSS.escape(key)}"]`)
     if (!slot) return null
-    const top = Math.max(0, slot.getBoundingClientRect().top + window.scrollY - QUEUE_CARD_VIEWPORT_TOP)
-    window.scrollTo({ top, behavior: prefersSmooth() })
+    // Read again when the glide ends: a card that arrived or left above it meanwhile moved it.
+    const top = glideTo(() => slot.getBoundingClientRect().top + window.scrollY - QUEUE_CARD_VIEWPORT_TOP)
     const root = slot.querySelector<HTMLElement>("[data-xq-card-root]")
     if (!root) return top
     root.removeAttribute("data-queue-flash")
@@ -901,7 +908,7 @@ function useQueueKeys(activeKey: string | null, scrollToCard: (key: string) => n
   const landing = useRef<{ key: string; y: number; until: number } | null>(null)
   useEffect(() => registerQueueCursor({
     // Not a ghost (lib/stableQueue.ts): its thread is back at work, so it is no card a key should land on.
-    keys: () => [...document.querySelectorAll<HTMLElement>('[data-xq-card][data-queue-leaving="false"]:not([data-queue-ghost])')]
+    keys: () => [...document.querySelectorAll<HTMLElement>('[data-xq-card][data-queue-leaving="false"]:not([data-queue-ghost]):not([data-queue-concealed])')]
       .map((slot) => slot.dataset.xqCard ?? "")
       .filter(Boolean),
     current: () => {

@@ -24,6 +24,7 @@ import { ProviderMark } from "./ProviderMark.tsx"
 import { useOptimisticallySteered, useSteeredAt } from "../lib/steering.ts"
 import { stableQueue, type QueueSlot } from "../lib/stableQueue.ts"
 import { useViewportLock } from "../lib/viewportLock.ts"
+import { actedOnHere } from "../lib/humanActs.ts"
 import { clearArchived, markArchived, useOptimisticallyArchived } from "../lib/optimisticArchive.ts"
 import { rpc } from "../api/rpc.ts"
 import { showToast } from "../store.ts"
@@ -582,12 +583,8 @@ export function MobileBoard() {
     target: listed,
     keyOf: (t) => t.id,
     onScreen: lock.onScreen.current,
-    // Not when the human put it away — done, snoozed, a message sent from here (the overlays in `all`).
-    mayGhost: (id) => {
-      if (steeredAt[id] !== undefined) return false
-      const now = all.find((t) => t.id === id)
-      return now !== undefined && !now.archived && now.snoozedUntil === undefined && now.bgSnoozed !== true
-    },
+    // Not when the human put it away from here — done, snoozed, a message sent (lib/humanActs.ts).
+    mayGhost: (id) => steeredAt[id] === undefined && !actedOnHere(id),
   })
   prevRows.current = rows
   const statusView = snap.view.startsWith("status:") ? snap.view.slice(7) : null
