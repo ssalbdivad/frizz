@@ -24,7 +24,7 @@ import { questionsOwed, type AccountBackend, type ThreadView } from "@frizz/shar
 import { projectApiBase, projectRpc } from "../api/rpc.ts"
 import { ThreadProjectScope } from "../api/threadApi.tsx"
 import { displayTitle, offersRetry, queueLabelAt, queueLabelWord } from "../groups.ts"
-import { handoffParts, projectMarkdownScope, squareCard, threadKey, type QueuesProject } from "../lib/allQueues.ts"
+import { handoffParts, projectMarkdownScope, sameProjectAddress, squareCard, threadKey, type QueuesProject } from "../lib/allQueues.ts"
 import { draftKey, draftStore, useDraftValues } from "../lib/drafts.ts"
 import { rememberFullscreenOrigin } from "../lib/fullscreenHandoff.ts"
 import { openLocalPath } from "../lib/local-file-links.ts"
@@ -127,16 +127,7 @@ function deliverFollowUp(project: QueuesProject, thread: ThreadView, message: st
 /** The collapsed body's height: enough for a verdict line and the paragraph under it, never a wall. */
 const CLAMP_PX = 188
 
-export const AllQueuesCard = memo(function AllQueuesCard({
-  project,
-  thread,
-  leaving,
-  onLeave,
-  onReturn,
-  chip,
-  ghost,
-  concealed = false,
-}: {
+interface AllQueuesCardProps {
   project: QueuesProject
   thread: ThreadView
   leaving: boolean
@@ -155,11 +146,28 @@ export const AllQueuesCard = memo(function AllQueuesCard({
   onLeave: () => void
   /** The action failed after the card had already faded: put it back. */
   onReturn: () => void
-  /** Leads the meta line under the title: the card's project, on a queue that holds several (ProjectChip). */
-  chip?: ReactNode
-}) {
+  /** Lead the meta line under the title with the card's project, on a queue that holds several
+   *  (ProjectChip) — a flag and a stable chooser rather than the element, which would be a new object on
+   *  every render of the queue and so re-render the card every time (sameCard). */
+  chip?: boolean
+  /** What choosing the chip does: filter the queue to the card's project. */
+  onChoose?: (project: QueuesProject) => void
+}
+
+export const AllQueuesCard = memo(function AllQueuesCard({
+  project,
+  thread,
+  leaving,
+  onLeave,
+  onReturn,
+  chip = false,
+  onChoose,
+  ghost,
+  concealed = false,
+}: AllQueuesCardProps) {
   const api = projectRpc(project.id)
   const key = threadKey(project.id, thread.id)
+  const chipNode = chip ? <ProjectChip project={project} onChoose={onChoose} /> : undefined
   const openInPlace = useOpenThreadInPlace()
   // KEYED ON THE REST, so a thread that rests again fetches its new handoff, and one that has not moved
   // is read exactly once however often the page polls. The previous handoff stays on screen while the
@@ -211,7 +219,7 @@ export const AllQueuesCard = memo(function AllQueuesCard({
                 </a>
               </h3>
               <div className="mt-0.5 flex min-w-0 items-baseline gap-1.5 text-[11px] leading-tight text-muted-75">
-                {chip}
+                {chipNode}
                 {/* A ghost says why it is quiet, on the line that said since when it was ready: the same
                     one line, so the card keeps its height and nothing under it moves. */}
                 {ghost !== undefined ? (
@@ -301,7 +309,27 @@ export const AllQueuesCard = memo(function AllQueuesCard({
       </div>
     </div>
   )
-})
+}, sameCard)
+
+/**
+ * The card's memo: its thread by identity (the poll and the board keep an unchanged thread's object), its
+ * project by address (lib/allQueues.ts sameProjectAddress — the lists it is rebuilt around are not the
+ * card's), everything else as React would. A card must read nothing from its project beyond what that
+ * compares; widen it before reading more.
+ */
+function sameCard(a: AllQueuesCardProps, b: AllQueuesCardProps): boolean {
+  return (
+    a.thread === b.thread &&
+    a.leaving === b.leaving &&
+    a.onLeave === b.onLeave &&
+    a.onReturn === b.onReturn &&
+    a.chip === b.chip &&
+    a.onChoose === b.onChoose &&
+    a.ghost === b.ghost &&
+    a.concealed === b.concealed &&
+    sameProjectAddress(a.project, b.project)
+  )
+}
 
 /**
  * The thread header's stall recovery (HeaderActions.tsx RetryButton): the same message through the same

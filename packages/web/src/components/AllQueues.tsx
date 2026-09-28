@@ -32,11 +32,11 @@
 import { Fragment, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore, type KeyboardEvent, type ReactNode } from "react"
 import { useQuery, useQueryClient } from "@tanstack/react-query"
 import { Check, ChevronDown, Inbox } from "lucide-react"
-import { Link, useLocation, useNavigate } from "react-router"
+import { useLocation, useNavigate } from "react-router"
 import { useSnapshot } from "valtio"
 import type { BoardSnapshot, ProjectCard, ProjectQueue } from "@frizz/shared"
 import { rpc } from "../api/rpc.ts"
-import { isBusy, liveQueue, mergedQueue, overlayQueues, projectMarkdownScope, queuesProjects, squareCard, threadKey, type QueueEntry, type QueuesProject } from "../lib/allQueues.ts"
+import { isBusy, liveQueue, mergedQueue, overlayQueues, projectMarkdownScope, queuesProjects, threadKey, type QueueEntry, type QueuesProject } from "../lib/allQueues.ts"
 import { innerPath, projectSlug } from "../lib/base-path.ts"
 import { rememberCrossProjectFocus, setQueueFilter, stepPick, useQueueFilter } from "../lib/crossProject.ts"
 import { draftKey, draftStore } from "../lib/drafts.ts"
@@ -64,7 +64,6 @@ import { Menu, MenuContent, MenuItem, MenuSeparator, MenuTrigger } from "./ui/Me
 import { ProjectFilter } from "./ProjectFilter.tsx"
 import { AddProjectRow, ProjectList } from "./ProjectList.tsx"
 import { ThreadProjectScope } from "../api/threadApi.tsx"
-import { isPlainLeftClick } from "../lib/standaloneThreadRoute.ts"
 
 /** How often the page re-reads every project. The rail's badges poll at 5s; this is the page the
  *  operator is looking AT, so it runs a little faster — the read is the servers' cached snapshots. */
@@ -665,7 +664,8 @@ function QueueCardOf({ entry, ghost, concealed, leaving, chip }: { entry: QueueE
           leaving={leaving.isLeaving(key)}
           onLeave={leaving.leave(key)}
           onReturn={leaving.restore(key)}
-          chip={chip ? <ProjectChip project={project} onChoose={choose} /> : undefined}
+          chip={chip}
+          onChoose={choose}
           ghost={ghost}
           concealed={concealed}
         />

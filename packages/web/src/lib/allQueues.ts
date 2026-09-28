@@ -37,6 +37,29 @@ export interface QueuesProject {
 }
 
 /**
+ * Whether two readings of a project name the same project the same way — everything about it EXCEPT its
+ * thread lists and counts. The poll rebuilds every project on every tick, and the focus's live board
+ * rebuilds its project on every delta, so the object is new while nothing a card reads from it moved.
+ * A card compares its project with this rather than by identity (AllQueuesCard.tsx sameCard): by
+ * identity, every card of a project re-rendered whenever any of its threads changed — eight renders per
+ * card for one drawer opening, measured 2026-09-28.
+ */
+export function sameProjectAddress(a: QueuesProject, b: QueuesProject): boolean {
+  return (
+    a === b ||
+    (a.id === b.id &&
+      a.slug === b.slug &&
+      a.name === b.name &&
+      a.card === b.card &&
+      a.open === b.open &&
+      a.stale === b.stale &&
+      a.projectDir === b.projectDir &&
+      a.homeDir === b.homeDir &&
+      a.githubRepo === b.githubRepo)
+  )
+}
+
+/**
  * Whose prose a project's cards are (MarkdownScopeContext): the repo a `#123` links into, the root a
  * relative path resolves against, the page a thread link opens on, and whose gate reads a cited file.
  * One construction for the lane that renders the cards and for the link scope that carries a file from
