@@ -44,6 +44,11 @@ export function useThreadApi(): Api {
   return useContext(ThreadScopeContext)?.api ?? rpc
 }
 
+/** The scoped project's id, or undefined on the page's own project — for keying per-project caches. */
+export function useThreadProjectId(): string | undefined {
+  return useContext(ThreadScopeContext)?.projectId
+}
+
 /** The same choice for a control that opens its own connection — a terminal's `/term/<slug>` socket. */
 export function useThreadApiBase(): string {
   const scope = useContext(ThreadScopeContext)

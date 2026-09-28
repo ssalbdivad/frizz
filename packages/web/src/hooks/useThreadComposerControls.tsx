@@ -1,8 +1,9 @@
-import { useMutation, useQuery } from "@tanstack/react-query"
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import type { ReactNode } from "react"
 import { useSnapshot } from "valtio"
-import { acpAgentIdFromModel, acpModelIdFromModel, acpModelSlug, type PermissionMode } from "@frizz/shared"
+import { acpAgentIdFromModel, acpModelIdFromModel, acpModelSlug, type PermissionMode, type ThreadView } from "@frizz/shared"
 import { rpc } from "../api/rpc.ts"
+import { useThreadApi, useThreadProjectId } from "../api/threadApi.tsx"
 import { threadFollowUpBlocked, threadComposerStatus, threadPermissionBlockedReason, threadPermissionEffectMessage } from "../lib/threadPermissions.ts"
 import { showToast, store } from "../store.ts"
 import { ProfileGridSelector } from "../components/ProfileGridSelector.tsx"
@@ -28,21 +29,33 @@ import { threadProfileControlState } from "../lib/threadProfile.ts"
 //
 // CODEX IS DELIBERATELY LEFT OUT. Its axis is a sandbox rather than a permission mode, its restrictive
 // end is the one that caused the 2026-07-23 removal, and the ask was Claude-specific.
-export function useThreadComposerControls(slug: string): { busy: boolean; footer: ReactNode; status: ReactNode } {
+//
+// ANY PROJECT, NOT ONLY THE PAGE'S. A board surface passes just the slug and the thread comes from the
+// store's board. The cross-project page's card (AllQueuesCard) passes its own `scopedThread` — read from
+// the machine-wide poll, since the store holds only the FOCUSED project's board — and sits inside a
+// ThreadProjectScope, so every write goes to the card's own project through `useThreadApi`. The option
+// cache is keyed by project too: two projects can each own a `fix-auth`. (The strip was left off that
+// card until 2026-09-28; maintainer: "being able to change model in the middle of a thread should be
+// possible anywhere".)
+export function useThreadComposerControls(slug: string, scopedThread?: ThreadView): { busy: boolean; footer: ReactNode; status: ReactNode } {
   const snap = useSnapshot(store)
-  const thread = snap.board?.threads.find((candidate) => candidate.id === slug)
+  const boardThread = snap.board?.threads.find((candidate) => candidate.id === slug)
+  const thread = scopedThread ?? boardThread
+  const api = useThreadApi()
+  const projectId = useThreadProjectId()
+  const queryClient = useQueryClient()
   const profiles = useQuery({
-    queryKey: ["threadProfileOptions", slug],
-    queryFn: () => rpc.threadProfileOptions({ slug }),
+    queryKey: projectId ? ["ofProject", projectId, "threadProfileOptions", slug] : ["threadProfileOptions", slug],
+    queryFn: () => api.threadProfileOptions({ slug }),
     enabled: Boolean(thread && !thread.foreign && thread.kind === "session"),
     staleTime: 5_000,
   })
   const profile = useMutation({
     // An ACP thread sends effort "" (it has no effort axis); the RPC takes that as ABSENT, not "".
-    mutationFn: (target: { model: string; effort: string }) => rpc.setThreadProfile({ slug, model: target.model, ...(target.effort ? { effort: target.effort } : {}) }),
+    mutationFn: (target: { model: string; effort: string }) => api.setThreadProfile({ slug, model: target.model, ...(target.effort ? { effort: target.effort } : {}) }),
   })
   const permission = useMutation({
-    mutationFn: (permissionMode: PermissionMode) => rpc.setThreadPermission({ slug, permissionMode }),
+    mutationFn: (permissionMode: PermissionMode) => api.setThreadPermission({ slug, permissionMode }),
   })
   // The one-click move onto the edition the thread's family resolves to now (ThreadView.modelUpgrade).
   const upgrade = useMutation({
@@ -108,10 +121,19 @@ export function useThreadComposerControls(slug: string): { busy: boolean; footer
   const shownPermission = permission.isPending ? (permission.variables as PermissionMode) : permissionValue
   const permissionBlocked = threadPermissionBlockedReason(thread)
 
+  // A scoped card's thread comes from the cross-project poll rather than the live board, so re-read it
+  // at once instead of showing the old profile until the next tick.
+  const refreshScoped = () => {
+    if (projectId) void queryClient.invalidateQueries({ queryKey: ["projectsQueues"] })
+  }
+
   function changePermission(next: PermissionMode) {
     if (next === permissionValue) return
     permission.mutate(next, {
-      onSuccess: (result) => showToast(threadPermissionEffectMessage(result.effect, "claude")),
+      onSuccess: (result) => {
+        refreshScoped()
+        showToast(threadPermissionEffectMessage(result.effect, "claude"))
+      },
       onError: (e) => showToast(`Permission change failed: ${(e as Error).message.slice(0, 120)}`),
     })
   }
@@ -129,11 +151,14 @@ export function useThreadComposerControls(slug: string): { busy: boolean; footer
 
   function changeProfile(target: { model: string; effort: string }) {
     profile.mutate(target, {
-      onSuccess: (result) => showToast(backend === "acp"
-        ? result.effect === "next-resume" ? "Model saved for the next resume" : "Model applied"
-        : result.effect === "next-resume"
-          ? "Model and effort saved for the next resume"
-          : "Model and effort applied"),
+      onSuccess: (result) => {
+        refreshScoped()
+        showToast(backend === "acp"
+          ? result.effect === "next-resume" ? "Model saved for the next resume" : "Model applied"
+          : result.effect === "next-resume"
+            ? "Model and effort saved for the next resume"
+            : "Model and effort applied")
+      },
       onError: (e) => showToast(`Profile change failed: ${(e as Error).message.slice(0, 120)}`),
     })
   }

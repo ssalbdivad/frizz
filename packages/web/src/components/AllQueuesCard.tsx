@@ -37,6 +37,7 @@ import { IN_PLACE_OPEN_STATE, openThread, showToast, store } from "../store.ts"
 import { crossProjectHref, innerPath, projectSlug } from "../lib/base-path.ts"
 import { QueueDismissContext } from "./ChatView.tsx"
 import { Composer } from "./Composer.tsx"
+import { useThreadComposerControls } from "../hooks/useThreadComposerControls.tsx"
 import { LastActive } from "./LastActive.tsx"
 import { LinkedHtml } from "./LinkedHtml.tsx"
 import { QuestionBlockCard } from "./QuestionBlockCard.tsx"
@@ -224,7 +225,9 @@ export const AllQueuesCard = memo(function AllQueuesCard({
             )}
           </ProjectLinkScope>
 
-          <ReplyBox project={project} thread={thread} onSent={onLeave} onFailed={onReturn} />
+          <ThreadProjectScope projectId={project.id} projectDir={project.projectDir}>
+            <ReplyBox project={project} thread={thread} onSent={onLeave} onFailed={onReturn} />
+          </ThreadProjectScope>
 
           <ThreadProjectScope projectId={project.id} projectDir={project.projectDir}>
             <footer className={`${BLOCK_RADIUS_INNER_BOTTOM} flex min-h-10 flex-wrap items-center justify-end gap-3 border-t border-border/70 bg-panel/95 px-3 py-2 text-[12px]`}>
@@ -424,8 +427,9 @@ function ClampedBody({ resetKey, children }: { resetKey: string; children: React
 
 /**
  * Reply to the agent, from here — the board's own prompt box (`Composer`: the same Enter keys, paste
- * and drop of attachments, auto-growth), without the model and permission readouts, which are one level
- * down on the thread's own board.
+ * and drop of attachments, auto-growth) with the board's model/effort and permission strip under it
+ * (useThreadComposerControls, handed this card's thread and scoped to its project by the caller's
+ * ThreadProjectScope), so a thread can be re-pointed mid-flight from here without opening its board.
  *
  * THE DRAFT IS THE BOARD'S DRAFT. It is keyed exactly as that thread's composer keys it — its project's
  * directory, its slug, its session — so a reply half-typed here is waiting in the composer on its own
@@ -437,6 +441,7 @@ function ReplyBox({ project, thread, onSent, onFailed }: { project: QueuesProjec
   const key = draftKey.followUp(project.projectDir, thread.id, thread.sessionId)
   const text = useDraftValues([key]).get(key) ?? ""
   const [error, setError] = useState<string>()
+  const controls = useThreadComposerControls(thread.id, thread)
   const send = useMutation({
     mutationFn: (message: string) => deliverFollowUp(project, thread, message),
     onSuccess: () => void queryClient.invalidateQueries({ queryKey: ["projectsQueues"] }),
@@ -472,7 +477,10 @@ function ReplyBox({ project, thread, onSent, onFailed }: { project: QueuesProjec
         onSubmit={submit}
         placeholder={(thread.questions?.length ?? 0) > 0 ? "Or skip the questions and reply…" : "Reply to the agent…"}
         attachBase={projectApiBase(project.id)}
+        busy={controls.busy}
+        footer={controls.footer}
       />
+      {controls.status}
       {error && <div role="alert" className="mt-1.5 break-words text-[11px] leading-snug text-danger-soft">{error}</div>}
     </div>
   )
