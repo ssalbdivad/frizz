@@ -39,6 +39,7 @@ import { IN_PLACE_OPEN_STATE, openThread, showToast, store } from "../store.ts"
 import { crossProjectHref, innerPath, projectSlug } from "../lib/base-path.ts"
 import { QueueDismissContext } from "./ChatView.tsx"
 import { Composer } from "./Composer.tsx"
+import { InteractionStack } from "./InteractionCards.tsx"
 import { useThreadComposerControls } from "../hooks/useThreadComposerControls.tsx"
 import { LastActive } from "./LastActive.tsx"
 import { LinkedHtml } from "./LinkedHtml.tsx"
@@ -175,16 +176,31 @@ export const AllQueuesCard = memo(function AllQueuesCard({
                 <QuestionBlockCard key={index} raw={question.raw} questionKind={question.questionKind} danger={question.danger} />
               ))}
               {parts?.fences.map((fence, index) => <FenceBody key={index} kind={fence.kind} body={fence.body} />)}
+              {/* THE GATE: a turn parked on a request — "Run a command?", a native question, an MCP form —
+                  with its real buttons, under the prose that led to it. It is the whole reason such a card
+                  is in the queue, and this card drew none of it until 2026-09-28: a thread held on a
+                  permission prompt showed its last progress line and a reply box, and read as a
+                  notification for nothing. Held until the handoff lands, for the board's old reason: these
+                  carry buttons, and the full handoff replacing the preview above would move them out from
+                  under a cursor already on its way. Scoped to the card's project like every other control
+                  here; the queue context lets a decision take the card out the way a reply does. */}
+              {(handoff.data || handoff.isError) && (
+                <ThreadProjectScope projectId={project.id} projectDir={project.projectDir}>
+                  <QueueDismissContext.Provider value={dismiss}>
+                    <InteractionStack thread={thread} />
+                  </QueueDismissContext.Provider>
+                </ThreadProjectScope>
+              )}
               {/* Not gated on the handoff: a STALL's last record is often a tool call with no prose at
                   all, and its notice is about the process, not the message (showsRestedCard). */}
               {showsRestedCard(thread, text) && <RestedCard thread={thread} />}
               {showsQuietTurnCard(thread) && <QuietTurnCard thread={thread} />}
             </div>
 
-            {thread.questions && thread.questions.length > 0 && (
+            {owedQuestions.length > 0 && (
               <QueueDismissContext.Provider value={dismiss}>
                 <RegisteredAnsweringProvider thread={thread} scope={answeringScope}>
-                  <RegisteredQuestionStack thread={thread} className="shrink-0 px-5 pb-4 pt-0" />
+                  <RegisteredQuestionStack thread={thread} questions={owedQuestions} className="shrink-0 px-5 pb-4 pt-0" />
                 </RegisteredAnsweringProvider>
               </QueueDismissContext.Provider>
             )}
@@ -306,11 +322,11 @@ function AskedBubble({ text }: { text: string }) {
         type="button"
         onClick={() => setOpen((value) => !value)}
         title={open ? "Show less" : "Show the whole message"}
-        className={`${BLOCK_RADIUS} rounded-br-sm bg-user-bubble px-3.5 py-2.5 text-left text-[13px] leading-5 whitespace-pre-wrap [overflow-wrap:anywhere] text-user-bubble-fg outline-none focus-visible:ring-2 focus-visible:ring-accent focus-visible:ring-offset-2 focus-visible:ring-offset-bg ${
-          open ? "" : "line-clamp-3"
-        }`}
+        className={`${BLOCK_RADIUS} rounded-br-sm bg-user-bubble px-3.5 py-2.5 text-left text-[13px] leading-5 whitespace-pre-wrap [overflow-wrap:anywhere] text-user-bubble-fg outline-none focus-visible:ring-2 focus-visible:ring-accent focus-visible:ring-offset-2 focus-visible:ring-offset-bg`}
       >
-        {text}
+        {/* The clamp sits INSIDE the padding. On the button itself, its overflow clip ran to the padding
+            edge, so the fourth line showed half its height in the bubble's bottom padding. */}
+        <span className={open ? "" : "line-clamp-3"}>{text}</span>
       </button>
     </div>
   )

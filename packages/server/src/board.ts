@@ -1956,6 +1956,26 @@ export function createBoard(
     saveAlive: (at) => storage.setSetting(QUEUE_CLOCK_ALIVE_SETTING, at),
   })
 
+  // What a needs-decision notification SAYS. A thread held on a request says what the request asks —
+  // "Run a command? Creating the lane worktrees" — rather than the progress line its turn printed
+  // before the tool call parked it, which reads as a notification for nothing (2026-09-28: "Baseline
+  // build is green; typecheck and tests are still running. Next I'm creating isolated worktrees…",
+  // raised by a pending approval the notification never mentioned). Read here, not carried on the
+  // view: this runs once per queue ENTRY, never per rebuild.
+  function needsYouBody(t: ThreadView): string | undefined {
+    if (t.actionableInteraction && t.sessionId) {
+      try {
+        const [first] = storage.interactions
+          .listPending({ projectId: project.id, threadSlug: t.id, sessionId: t.sessionId })
+          .sort((a, b) => a.createdAt.localeCompare(b.createdAt))
+        if (first) return capLine(first.payload.message ? `${first.payload.title} ${first.payload.message}` : first.payload.title)
+      } catch {
+        // An unreadable journal falls back to the last line, which is what every notification said before.
+      }
+    }
+    return capLine(t.lastAssistant)
+  }
+
   // Fire a needs-decision notify for every registered session that newly enters the queue.
   // Edge-triggered + deduped; primed on the first build.
   function notifyNeedsYou(sessionThreads: ThreadView[]): void {
@@ -1965,7 +1985,7 @@ export function createBoard(
       const now = t.needsYou ?? false
       const was = needsYouPrev.get(t.id) ?? false
       if (notifyPrimed && now && !was) {
-        bus.publish({ type: "notify", slug: t.id, kind: "needs-decision", title: t.aiTitle || t.title || t.id, body: capLine(t.lastAssistant) })
+        bus.publish({ type: "notify", slug: t.id, kind: "needs-decision", title: t.aiTitle || t.title || t.id, body: needsYouBody(t) })
       }
       needsYouPrev.set(t.id, now)
     }
