@@ -209,21 +209,6 @@ export interface MsgLike {
 // assistant record never carries a projection, and that is the text the human answered.
 const answersText = (m: MsgLike): string => m.displayText ?? m.text
 
-// Does this turn render as the human's own ANSWERS card? Exactly the condition Message branches on,
-// exported so a caller that has to know WHO WROTE a turn asks the one question instead of re-deriving
-// it — the two must never disagree about a message the chat is already drawing as the human's.
-//
-// It matters because the REGISTERED path's answer (`mcp__frizz__ask`) is DELIVERED by frizz: it arrives
-// as a scheduler wake, since the human may have answered while the worker's process was down. So
-// `wake` on its own does not mean "frizz wrote this" — here only the transport is frizz's.
-//
-// `kind` punctuation is excluded because Message routes an event/reasoning line before the role branch
-// ever runs, so such a message can never reach the answers card however its text reads.
-export function isAnswersMessage(m: MsgLike): boolean {
-  if (m.role !== "user" || m.kind === "event" || m.kind === "reasoning") return false
-  return parseAnswersCard(answersText(m)) !== null
-}
-
 // One answered question, as a key: what makes two renders of it THE SAME ANSWER. The question text plus
 // the answer, because that pair is what the card draws and it is stable across both of the wire's forms.
 const answerKey = (a: PairedAnswer): string => `${a.question ?? ""} ${a.answer}`

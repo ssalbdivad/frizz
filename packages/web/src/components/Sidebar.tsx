@@ -406,7 +406,7 @@ export const ThreadRow = memo(function ThreadRow({
         </div>
       )}
       {/* Live children render as SIBLING rows under this one, not inside it — see SubAgentRows, which
-          the rail's three sections mount directly after each ThreadRow (maintainer 2026-07-09: render
+          RailRow mounts directly after each ThreadRow (maintainer 2026-07-09: render
           running sub-agents in the sidebar). They replaced an old one-line summary suffix that used to
           live in this row's subtitle. */}
     </div>
@@ -551,7 +551,7 @@ function PinnedMark() {
 function RowPinButton({ t, className = "" }: { t: ThreadView; className?: string }) {
   const pinned = isPinned(t)
   const [busy, setBusy] = useState(false)
-  // The row's own project's client: the page's `rpc` on a board, the row's project under a scope.
+  // The row's own project's client: its ThreadProjectScope's, else the page's `rpc` (a fixture's row).
   const api = useThreadApi()
   const afterWrite = useAfterScopedWrite()
   return (
@@ -709,13 +709,14 @@ export function awaitingReason(t: Pick<ThreadView, "lastFence">): string | null 
 
 // ── the indicator (one per row) ──────────────────────────────────────────────────────────────────
 
-// Each indicator carries a terse hover tooltip naming the state it signals. The faint "at rest" dot
-// gets none. A plain wrapper <span> is the tooltip trigger (a real DOM node Radix can ref).
+// Each indicator carries a terse hover tooltip naming the state it signals. A plain wrapper <span> is
+// the tooltip trigger (a real DOM node Radix can ref).
 export function ThreadIndicator({ t }: { t: ThreadView }) {
-  // No steer special-case here anymore: Sidebar overlays a just-sent steer onto the thread itself
-  // (useOptimisticallySteered), so `t` already reads as running and the ordinary derivation returns
-  // the spinner — the same one decision that put the row in the running band. When this hook consulted
-  // the hint on its own, the glyph and the placement were two rules and drifted apart on every steer.
+  // No steer special-case here: the glyph is derived from `t` alone, by the same decision that bands the
+  // row. When this hook consulted the steer hint on its own, the glyph and the placement were two rules
+  // and drifted apart on every steer. (The project board's sidebar overlaid a just-sent steer onto its
+  // threads before they reached here, lib/steering.ts, until it went on 2026-09-28; Everything's list
+  // draws the row the poll reports.)
   const { node, tip } = sessionIndicatorFor(t)
   // The resolved kind, on the shipped markup. Cheap, and it is what lets the rail's own glyphs be
   // measured where they actually render (scripts/verify-rail-status-glyphs.mjs holds the family to one

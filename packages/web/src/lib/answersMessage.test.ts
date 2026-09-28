@@ -1,7 +1,7 @@
 import { test } from "node:test"
 import assert from "node:assert/strict"
 import { ANSWER_FOLLOW_UP_MARKER, BURIED_ANSWERS_HEADER, DISMISSED_ANSWER, questionAnswerMessage } from "@frizz/shared"
-import { answersForDisplay, parseAnswersMessage, parseBuriedAnswersMessage, parseAnswersCard, pairAnswersMessage, pairAllAnswers, unrenderedAnswers, isAnswersMessage, type MsgLike } from "./answersMessage.ts"
+import { answersForDisplay, parseAnswersMessage, parseBuriedAnswersMessage, parseAnswersCard, pairAnswersMessage, pairAllAnswers, unrenderedAnswers, type MsgLike } from "./answersMessage.ts"
 import { composeAnswerWire } from "./answering.ts"
 
 test("parses the multi-block composed-answer format into numbered rows", () => {
@@ -130,7 +130,6 @@ test("a question that spans lines still closes at its quote-arrow — the regist
     { n: 1, answer: "Yes, added", question },
     { n: 2, answer: "No — later", question: "And restart?" },
   ])
-  assert.equal(isAnswersMessage({ role: "user", kind: "wake", text: wire }), true, "it is the human's turn, not frizz's card")
 })
 
 test("a multi-line question followed by a multi-line answer keeps each on its own side of the arrow", () => {
