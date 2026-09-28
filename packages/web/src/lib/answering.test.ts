@@ -205,10 +205,8 @@ test("sendMessage composes the caller's own onRollback ahead of the failure tail
   )
 })
 
-test("the queue card wires the reversal; the thread page does not", () => {
-  const todos = readFileSync(new URL("../components/TodosView.tsx", import.meta.url), "utf8")
+test("the thread page wires no card reversal", () => {
   const chat = readFileSync(new URL("../components/ChatView.tsx", import.meta.url), "utf8")
-  assert.match(todos, /onSendFailed: \(\) => onUnresolve\(thread\.id\)/, "the card reinstates itself")
   // The thread page has no card to reinstate, so it passes no tail at all.
   assert.ok(!/onSendFailed/.test(chat), "the thread page must not wire a card reversal it has no card for")
 })

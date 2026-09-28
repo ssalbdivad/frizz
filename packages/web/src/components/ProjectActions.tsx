@@ -11,11 +11,11 @@ import * as RadixDropdown from "@radix-ui/react-dropdown-menu"
 import { keepPreviousData, useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import { useDeferredValue, useEffect, useRef, useState, type ReactNode } from "react"
 import { Ellipsis, Loader2 } from "lucide-react"
-import { Link, useNavigate } from "react-router"
+import { useNavigate } from "react-router"
 import { useSnapshot } from "valtio"
 import { PROJECT_ICON_EXTENSIONS, slugify, type ProjectCard } from "@frizz/shared"
 import { rpc } from "../api/rpc.ts"
-import { everythingHref, isCrossProjectPath, projectHref, projectSlug } from "../lib/base-path.ts"
+import { everythingHref, innerPath, projectSlug } from "../lib/base-path.ts"
 import { showToast, store } from "../store.ts"
 import { Dialog } from "./ui/Dialog.tsx"
 import { ProjectSquare } from "./ProjectRail.tsx"
@@ -29,14 +29,15 @@ export function shortPath(path: string, home: string | undefined): string {
 const MENU_ITEM = "block cursor-default rounded px-2 py-1.5 text-[12.5px] text-fg outline-none data-[highlighted]:bg-panel-2"
 
 /**
- * Everything you can do to a project besides work in it: open its board, change its picture, rename it,
+ * Everything you can do to a project besides work in it: open its repo, change its picture, rename it,
  * delete it.
  *
  * ONE MENU, on the project's row on the cross-project page. The grid split these between an image
  * overlay on the square ("change the picture") and an ellipsis ("rename, delete"), because a 34px square
  * had room for a control of its own; a 16px one does not, and two menus on one row is the clutter the
- * merge was for. Clicking the row itself NARROWS the page to the project, so the board — single-project
- * mode — is the menu's first item: a door that says where it goes, rather than every click. Delete is
+ * merge was for. Clicking the row itself opens the project in place (ProjectList.tsx). Its repo on GitHub
+ * leads the menu when it has one — the link a project view's status row carried, which went with it on
+ * 2026-09-28 when the project view folded into Everything. Delete is
  * last and red, the one irreversible act here, kept apart from those that only change what Frizz calls
  * a project.
  *
@@ -52,11 +53,19 @@ const MENU_ITEM = "block cursor-default rounded px-2 py-1.5 text-[12.5px] text-f
 export function ProjectMenu({
   project,
   home,
+  githubRepo,
+  filtered = false,
+  onFilter,
   onOpenChange,
   children,
 }: {
   project: ProjectCard
   home: string | undefined
+  /** `owner/repo` when the project's origin is github.com — its board's `githubRepo`, host-strict. */
+  githubRepo?: string
+  /** The queue is filtered to this project (lib/crossProject.ts); with `onFilter`, the menu toggles it. */
+  filtered?: boolean
+  onFilter?: () => void
   onOpenChange?: (open: boolean) => void
   children: ReactNode
 }) {
@@ -121,10 +130,27 @@ export function ProjectMenu({
             <RadixDropdown.Label title={project.path} className="truncate px-2 pb-1.5 pt-1 font-mono text-[11px] text-muted-70">
               {shortPath(project.path, home)}
             </RadixDropdown.Label>
-            <RadixDropdown.Item asChild className={MENU_ITEM}>
-              <Link to={projectHref(encodeURIComponent(project.slug))}>Open project view</Link>
-            </RadixDropdown.Item>
-            <RadixDropdown.Separator className="mx-1 my-1 h-px bg-border" />
+            {onFilter && (
+              <>
+                {/* The queue's filter, from the project it names — the READY header's own control, said
+                    here too, since this row is where a reader looking at one project already is. */}
+                <RadixDropdown.Item className={MENU_ITEM} onSelect={onFilter}>
+                  {filtered ? "Clear the queue filter" : "Filter the queue to this project"}
+                </RadixDropdown.Item>
+                <RadixDropdown.Separator className="mx-1 my-1 h-px bg-border" />
+              </>
+            )}
+            {githubRepo && (
+              <>
+                {/* A real anchor, so ⌘-click, middle-click and copy-link behave as a link does. */}
+                <RadixDropdown.Item asChild className={MENU_ITEM}>
+                  <a href={`https://github.com/${githubRepo}`} target="_blank" rel="noopener">
+                    Open on GitHub
+                  </a>
+                </RadixDropdown.Item>
+                <RadixDropdown.Separator className="mx-1 my-1 h-px bg-border" />
+              </>
+            )}
             {!project.stale && (
               <>
                 <RadixDropdown.Item className={MENU_ITEM} onSelect={() => pick.mutate()}>
@@ -191,9 +217,10 @@ function RenameProjectDialog({
       void queryClient.invalidateQueries({ queryKey: ["projectsQueues"] })
       showToast(`Renamed ${project.name} to ${updated.name}`)
       onClose()
-      // The page it was renamed from is addressed by the OLD slug, which no longer names anything.
-      if (projectSlug() === project.slug && updated.slug !== project.slug) {
-        navigate(isCrossProjectPath() ? everythingHref(encodeURIComponent(updated.slug)) : projectHref(encodeURIComponent(updated.slug)), { replace: true })
+      // A drawer's address names its project by the OLD slug, which no longer names anything: home, still
+      // aimed at the renamed project. At `/` itself nothing names it — the pick is kept by id.
+      if (projectSlug() === project.slug && updated.slug !== project.slug && innerPath() !== "/") {
+        navigate(everythingHref(encodeURIComponent(updated.slug)), { replace: true })
       }
     },
   })
@@ -619,18 +646,17 @@ export function useAddProject(): { start: () => void; pending: boolean } {
 }
 
 /**
- * Adding a project is only ever a step towards working in it, so it lands there — in the mode the operator
- * is in. On a board, that project's board. Anywhere else (Everything, or the welcome page of a machine
- * with nothing on it), Everything with its prompt box aimed at it (`?focus=`, a PICK — routes.tsx useHomeFocus). `navigate`, not location.assign: the rail must not be torn down on the way.
+ * Adding a project is only ever a step towards working in it, so it lands there: Everything with its
+ * prompt box aimed at it (`?focus=`, a PICK — routes.tsx useHomeFocus), from the page or from the welcome
+ * page of a machine with nothing on it. `navigate`, not location.assign: the rail must not be torn down on
+ * the way.
  */
 function useOpenAddedProject(): (project: { id: string; slug: string }) => void {
   const navigate = useNavigate()
   const queryClient = useQueryClient()
   return (project) => {
     void queryClient.invalidateQueries({ queryKey: ["projectsList"] })
-    const slug = encodeURIComponent(project.slug)
-    if (projectSlug() && !isCrossProjectPath()) return void navigate(projectHref(slug))
-    navigate(everythingHref(slug))
+    navigate(everythingHref(encodeURIComponent(project.slug)))
   }
 }
 

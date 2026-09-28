@@ -307,9 +307,8 @@ try {
   page ??= await browser.newPage()
   page.on("pageerror", (error) => failures.push({ page: String(error) }))
   page.on("console", (message) => { if (message.type() === "error") consoleErrors.push(message.text()) })
-  const project = JSON.parse(readFileSync(join(home, "data/frizz/registry.json"), "utf8")).projects[0]
   await page.setViewport({ width: 1280, height: 850, deviceScaleFactor: 2 })
-  await page.goto(`${base}/project/${project.slug}/`, { waitUntil: "networkidle2" })
+  await page.goto(`${base}/`, { waitUntil: "networkidle2" })
   await page.screenshot({ path: join(out, "before-desktop.png") })
   // Slow transfer proves preparation does not stop the healthy child or its existing browser.
   let releaseDownload

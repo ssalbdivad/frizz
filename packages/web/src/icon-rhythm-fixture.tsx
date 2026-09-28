@@ -124,7 +124,6 @@ function Fixture() {
                     collapsed={false}
                     onCollapse={() => {}}
                     onDoc={() => {}}
-                    expand
                     onDone={() => {}}
                   />
                 </div>
