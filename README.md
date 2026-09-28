@@ -44,6 +44,8 @@ $ npx frizz
 
 A browser tab opens at `http://127.0.0.1:9393/project/acme/`. Frizz always listens on port 9393 (19393 if something else holds it), and one server serves every project on the machine. Each directory you run it in becomes a **project** with its own board at `/project/<name>`, so running `npx frizz` in a second repo registers that project and opens its board in the server already running rather than starting another. Runs on macOS, Linux, and Windows.
 
+Prefer a window of its own to a browser tab? The desktop app is on [GitHub releases](https://github.com/colinhacks/frizz/releases?q=desktop) for all three — unsigned builds, so the first launch asks once. It needs the same Node, and starts or joins the same server.
+
 <p align="center">
   <img src="assets/board.png" alt="The Frizz board: the project rail down the left, the composer and the queue of threads beside it, and on the right a card where an agent is asking an answerable question with lettered options, above Snooze and Mark as done." width="100%">
 </p>

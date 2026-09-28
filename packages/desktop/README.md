@@ -44,9 +44,19 @@ nub run desktop:dist   # package for this OS into packages/desktop/out/
 ```
 
 `desktop:dist` fetches electron-builder on demand rather than installing it with the workspace. It builds
-for the OS it runs on: a `.deb` and AppImage on Linux, a `.dmg` and zip on macOS (ad-hoc signed — not
-notarized, so a downloaded build needs **Open Anyway** once), and an NSIS installer on Windows. macOS
-builds need a Mac.
+for the OS it runs on: a `.deb` and AppImage on Linux, a `.dmg` on macOS (ad-hoc signed — not notarized,
+so a downloaded build needs **Open Anyway** once), and an NSIS installer on Windows. macOS builds need a
+Mac.
+
+## Releases
+
+[`desktop.yml`](../../.github/workflows/desktop.yml) publishes the installers as the GitHub release
+`desktop-v<version>` when `release` moves and that release does not exist yet — so bumping this
+package's `version` is what ships a new build. It builds on four runners (Linux x64, Apple silicon,
+Intel Mac, Windows x64), and each one installs its own installer and launches it
+(`scripts/smoke.mjs --install`) before anything is published. The builds are unsigned by decision:
+ad-hoc on macOS, none on Windows. A run that died is retried with
+`gh workflow run desktop.yml --ref release`; it refuses any other ref.
 
 ## Verifying it
 
@@ -58,4 +68,6 @@ nub packages/desktop/scripts/verify-start.ts --keep
 nub packages/desktop/scripts/verify-window.ts --home=<sandbox from the line above> [--app=<packaged binary>]
 # the start path end to end, where this machine's own board cannot answer:
 unshare -rn sh -c 'ip link set lo up && exec nub packages/desktop/scripts/verify-window.ts --fake-start'
+# a packaged build (after desktop:dist) launches and reaches a server — the release gate:
+node packages/desktop/scripts/smoke.mjs
 ```

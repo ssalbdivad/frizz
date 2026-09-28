@@ -1,0 +1,178 @@
+name: desktop
+
+# Builds the desktop app (packages/desktop) for macOS, Windows and Linux and publishes the installers as
+# a GitHub release named desktop-v<version>. Never to npm, and never as the repository's Latest
+# release — Latest stays the `frizz` shell's v<version>, which release.yml creates.
+#
+# IT RIDES `release` EXACTLY AS release.yml DOES: a push there means "verified and chosen to ship", and
+# the run is idempotent by the same construction — the release for this version exists or it does not.
+# So bumping packages/desktop/package.json is what ships a new build, and a release push that leaves it
+# alone is a no-op in seconds. (No path filter, for release.yml's reason: `release` fast-forwards over
+# several commits at once, and the bump is rarely in the pushed range's own diff.)
+#
+# UNSIGNED, by the maintainer's decision (2026-09-28): the macOS builds are ad-hoc signed — an arm64 app
+# with no signature at all does not open — and not notarized; the Windows installer carries no
+# Authenticode signature. The release notes tell each OS's user what the first launch asks of them.
+#
+# NOTHING IS PUBLISHED THAT DID NOT RUN. Every leg installs its own installer the way a user would — the
+# .deb through apt, the .dmg mounted, the NSIS installer silently — and launches it on a runner of its
+# own architecture (scripts/smoke.mjs): its window must reach a server and carry the preload bridge.
+# The release appears only once all four legs pass, and as a draft until every file is attached, so a
+# half-uploaded release is never public.
+
+on:
+  push:
+    branches: [release]
+  # For a run that died after building — `gh workflow run desktop.yml --ref release` rebuilds and
+  # replaces a draft, and no-ops on a release. Any other ref is refused (decide, below).
+  workflow_dispatch:
+
+concurrency:
+  group: release-desktop
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  decide:
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.decide.outputs.version }}
+      publish: ${{ steps.decide.outputs.publish }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Is this version released yet?
+        id: decide
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          # A dispatch defaults to main, which would build unverified commits and tag them as this version
+          # — and the verified build would then find the version taken. Loudly, not a quiet skip.
+          if [ "$GITHUB_REF" != refs/heads/release ]; then
+            echo "desktop releases publish from the release branch only; dispatch with --ref release" >&2
+            exit 1
+          fi
+          VERSION=$(node -p "require('./packages/desktop/package.json').version")
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          # A draft is a publish that died before it finished: build again, and replace it.
+          if [ "$(gh release view "desktop-v$VERSION" --json isDraft --jq .isDraft 2>/dev/null)" = "false" ]; then
+            echo "desktop-v$VERSION is already released"
+            echo "publish=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "desktop-v$VERSION is not released; building it"
+            echo "publish=true" >> "$GITHUB_OUTPUT"
+          fi
+
+  build:
+    needs: decide
+    if: needs.decide.outputs.publish == 'true'
+    strategy:
+      # One red leg already blocks the release; the others finishing says whether it is alone.
+      fail-fast: false
+      matrix:
+        include:
+          - name: linux-x64
+            runner: ubuntu-latest
+            target: --linux --x64
+          - name: mac-arm64
+            runner: macos-latest
+            target: --mac --arm64
+          - name: mac-x64
+            runner: macos-26-intel
+            target: --mac --x64
+          - name: win-x64
+            runner: windows-latest
+            target: --win --x64
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "26.x"
+          cache: pnpm
+
+      - name: Install workspace
+        run: pnpm install --frozen-lockfile
+
+      - name: Bundle the app
+        run: node packages/desktop/scripts/build.mjs
+
+      # electron-builder is fetched for this step rather than installed with the workspace, as
+      # `nub run desktop:dist` does locally: ~94 MB of tooling nothing else needs.
+      - name: Package
+        working-directory: packages/desktop
+        run: pnpm dlx electron-builder@26.15.3 ${{ matrix.target }} --publish never
+
+      - name: Install and launch what was packaged
+        run: node packages/desktop/scripts/smoke.mjs --install
+
+      # The runner comes with most desktop libraries preinstalled, which hides a dependency the .deb forgets
+      # to declare: it did hide libasound2 and libgbm1. On a clean system apt installs only what the package
+      # declares, and the app must then find every library it links.
+      - name: The .deb declares every library it links
+        if: runner.os == 'Linux'
+        run: |
+          for image in ubuntu:22.04 ubuntu:24.04 debian:12; do
+            docker run --rm -v "$PWD/packages/desktop/out:/out:ro" "$image" sh -c '
+              export DEBIAN_FRONTEND=noninteractive
+              apt-get update -qq && apt-get install -y -qq /out/*.deb > /dev/null
+              missing=$(ldd /opt/Frizz/frizz-desktop | grep "not found")
+              [ -z "$missing" ] || { echo "$missing"; exit 1; }
+            ' || { echo "::error::the .deb leaves a library unresolved on $image"; exit 1; }
+            echo "$image: every library resolves"
+          done
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: desktop-${{ matrix.name }}
+          if-no-files-found: error
+          path: |
+            packages/desktop/out/*.dmg
+            packages/desktop/out/*.exe
+            packages/desktop/out/*.deb
+            packages/desktop/out/*.AppImage
+
+  publish:
+    needs: [decide, build]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write # create the release and its tag
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: assets
+          merge-multiple: true
+
+      - name: Publish desktop-v${{ needs.decide.outputs.version }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          VERSION: ${{ needs.decide.outputs.version }}
+        run: |
+          TAG="desktop-v$VERSION"
+          ls -l assets
+          # decide only lets a missing release or a draft through; a draft is replaced whole.
+          if [ "$(gh release view "$TAG" --json isDraft --jq .isDraft 2>/dev/null)" = "true" ]; then
+            gh release delete "$TAG" --yes
+          fi
+          cat > notes.md <<EOF
+          Frizz as a desktop app: a window onto the Frizz server on this machine. It needs what \`npx frizz\` needs — Node.js 22.13 or newer on your PATH — and starts the server the way a terminal would. Quitting the app leaves the server running.
+
+          These builds are not signed, so each OS asks once:
+
+          - **macOS** — \`mac-arm64\` is Apple silicon, \`mac-x64\` is Intel. The first launch is blocked; allow it under System Settings → Privacy & Security → Open Anyway.
+          - **Windows** — SmartScreen warns about an unrecognized app: More info → Run anyway.
+          - **Linux** — the \`.deb\` for Debian and Ubuntu. The AppImage is for other distributions; it needs libfuse2.
+
+          Built from $GITHUB_SHA.
+          EOF
+          # Latest belongs to the frizz shell's releases, never to these.
+          gh release create "$TAG" assets/* --draft --latest=false \
+            --target "$GITHUB_SHA" --title "Frizz desktop $VERSION" --notes-file notes.md
+          gh release edit "$TAG" --draft=false --latest=false
