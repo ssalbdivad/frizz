@@ -1,7 +1,8 @@
-import { rpc } from "../api/rpc.ts"
-import { openFilePanel, pushMarkdownDrawer, showToast, store } from "../store.ts"
+import { projectRpc, rpc } from "../api/rpc.ts"
+import { openImageViewer, pushFileReader, showToast } from "../store.ts"
 import { copyTextToClipboard } from "./clipboard.ts"
-import { isLocalMarkdownFile } from "./markdownTargets.ts"
+import { localViewerFor } from "./localViewer.ts"
+import type { MarkdownScope } from "./useMarkdown.ts"
 
 // One delegated listener covers every sanitized markdown surface (chat, the doc drawer, and
 // drawers). It never follows file:// or an accidental same-origin pathname: only explicit data
@@ -14,7 +15,7 @@ export function installLocalFileLinkInterceptor(): () => void {
     if (!source || !path) return
     event.preventDefault()
     event.stopPropagation()
-    openLocalPath(path, source.dataset.localImage === "true")
+    openLocalPath(path, source)
   }
   document.addEventListener("click", handler)
   const failed = imageFailureHandler()
@@ -59,34 +60,59 @@ function imageFailureHandler(): (event: Event) => void {
   }
 }
 
-// Act on a vetted local path: a `.md` file is prose Frizz can render itself, so it opens in the built-in
-// reader instead of launching an editor; everything else goes to the server, which realpath-gates it and
-// hands it to the opener the `localFileOpener` setting names. The decision lives HERE, in the one place
-// every local-path activation passes through, rather than in each producer — markdown links, resolved
-// inline-code paths, attachment chips, the Codex file rows and the tool-header path links all get the
-// same routing from this single branch. An image is excluded: those have a viewer of their own.
+// Act on a vetted local path, in Frizz whenever Frizz can show it (lib/localViewer.ts): a picture opens
+// in the picture viewer, stepping through the pictures rendered beside the one clicked; a `.md` file in
+// the reader, rendered; any other text file in the reader as source (the split panel beside the thread
+// on /full, a drawer everywhere else). Only a format the page cannot draw — a PDF, a spreadsheet, an
+// archive — goes to the server, which realpath-gates it and hands it to the opener the
+// `localFileOpener` setting names; every in-app viewer carries that same opener as its "Open". The
+// decision lives HERE, in the one place every local-path activation passes through, rather than in
+// each producer — markdown links, resolved inline-code paths, attachment chips, the Codex file rows,
+// the tool-header path links and the saved links all get the same routing from this single branch.
 //
 // Components that own their own click (PathLink, whose row swallows the event before it can reach the
 // delegated listener below) call this directly; everything that only tags itself `data-local-path`
-// arrives through the interceptor.
-export function openLocalPath(path: string, image = false): void {
-  if (!image && isLocalMarkdownFile(path)) {
-    pushMarkdownDrawer(path)
+// arrives through the interceptor, which passes the clicked element as `from` so a picture knows which
+// pictures it was shown among. `scope` names the project the link belongs to when that is not the
+// page's — a card on the everything page, or a reader opened from one — and every read and open then
+// goes through that project's gate, whose roots include its own checkout wherever it lives.
+export function openLocalPath(path: string, from?: Element | null, scope?: MarkdownScope | null): void {
+  const viewer = localViewerFor(path)
+  if (viewer === "image") {
+    openImageViewer(path, from ? imageGalleryFor(from) : [], scope?.projectId)
     return
   }
-  // On the fullscreen page every non-image file opens in the split viewer too (source view; the
-  // server admits project files only), because a reader beside the transcript beats being thrown out
-  // to an editor for a look. Outside it — the board — the desktop opener remains the answer for code.
-  if (!image && store.splitFileViewer) {
-    openFilePanel(path)
+  if (viewer) {
+    pushFileReader(path, scope)
     return
   }
-  void open(path, image)
+  void openExternally(path, scope?.projectId)
 }
 
-async function open(path: string, image: boolean) {
+// The surfaces a picture's gallery stays inside: a queue card, a drawer, the /full page's reader slot,
+// the /full transcript. ←/→ stepping from one thread's screenshot into the next card's would show a
+// picture from a conversation the reader is not in.
+const GALLERY_SCOPE = "[data-queue-card], [data-xq-card], [data-drawer-layer], [data-file-viewer-slot], main[data-standalone-thread]"
+
+// The pictures rendered in the same surface as `from`, in reading (document) order, each path once.
+// Only what is on the page: a virtualized transcript keeps just the rows near the viewport mounted, and
+// a picture inside a collapsed disclosure is not one the reader has seen. The clicked picture is always
+// in it, even when collapsed (openImageViewer opens a path missing from its gallery on its own).
+export function imageGalleryFor(from: Element): string[] {
+  const scope = from.closest(GALLERY_SCOPE) ?? from.ownerDocument.body
+  const paths: string[] = []
+  for (const img of scope.querySelectorAll<HTMLImageElement>('img[data-local-image="true"][data-local-path]')) {
+    const path = img.dataset.localPath
+    if (!path || paths.includes(path)) continue
+    if (img !== from && img.getClientRects().length === 0) continue
+    paths.push(path)
+  }
+  return paths
+}
+
+async function openExternally(path: string, project?: string) {
   try {
-    const result = await rpc.openLocalFile({ path, ...(image ? { image: true } : {}) })
+    const result = await (project ? projectRpc(project) : rpc).openLocalFile({ path })
     if (result.action === "copy") {
       await copyTextToClipboard(result.path)
       showToast("Copied local path")

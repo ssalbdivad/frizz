@@ -38,8 +38,8 @@
 // above it. A wake is frizz moving the thread, not the human replying; nobody has said anything, so the
 // ask is exactly as current after it as before. So only the HUMAN'S turn ends the exchange a question
 // belongs to — a typed message, or the answers to other questions — and the 2026-09-24 case stands: the
-// human replied past it, so the card stays up with the handoff that asked it. A worker whose newer
-// handoff still owes that ask asks it again, which lands the new card at the bottom of that handoff.
+// human replied past it, so the card stays up with the handoff that asked it — and it is never asked
+// again: the server's `ask` refuses a question the human replied past (maintainer 2026-09-28).
 
 import { BURIED_ANSWERS_HEADER } from "@frizz/shared"
 

@@ -1,21 +1,21 @@
-import { useEffect, useMemo, useRef, useState } from "react"
+import { useEffect, useRef, useState } from "react"
 import { useQuery } from "@tanstack/react-query"
 import { closeFilePanel, addContextItem, store } from "../store.ts"
 import { draftKey, draftStore, useProjectDir, useThreadSessionId } from "../lib/drafts.ts"
 import { joinComposerValue, splitComposerValue } from "../lib/imagePaths.ts"
 import { useLiveLocalFile } from "../hooks.ts"
 import { useInnerHtml } from "../lib/innerHtml.ts"
-import { LOCAL_FILE_POLL_MS, highlightedSource, localFileQuery } from "../lib/localFileQuery.ts"
+import { LOCAL_FILE_POLL_MS, localFileQuery } from "../lib/localFileQuery.ts"
 import { useLocalFileCodeLinks } from "../lib/localFileCode.ts"
 import { useMarkdownHtml } from "../lib/useMarkdown.ts"
 import { splitFrontmatter } from "../lib/frontmatter.ts"
 import { isLocalMarkdownFile, localFileDir } from "../lib/markdownTargets.ts"
 import { basename } from "../lib/paths.ts"
 import { contextChipLabel, insertTokenIntoProse, locateInSource, uniqueToken } from "../lib/composerContext.ts"
-import { Frontmatter, FOOTER_STYLE, OpenAction } from "./MarkdownDrawer.tsx"
+import { Frontmatter, FOOTER_STYLE, OpenAction, SourceView, TruncatedNote } from "./FileReaderDrawer.tsx"
 import { SheetHeader } from "./ui/SheetHeader.tsx"
 
-// The /full page's SPLIT file viewer: the same built-in markdown reader as MarkdownDrawer, framed as
+// The /full page's SPLIT file viewer: the same built-in reader as FileReaderDrawer, framed as
 // a PANEL BESIDE the thread instead of a sheet over it — on /full the transcript is the whole point,
 // and covering it to read a file defeated the page. Two additions over the drawer reader:
 //
@@ -69,17 +69,13 @@ export function FileViewerPanel({ slug, path, active }: { slug: string; path: st
   const live = useLiveLocalFile(path)
   const body = useQuery({ ...localFileQuery(path), refetchInterval: live ? false : LOCAL_FILE_POLL_MS })
   // Canonical path from the server (symlinks resolved) — the base for relative links, the label, and
-  // the path stamped on context items, exactly as in MarkdownDrawer.
+  // the path stamped on context items, exactly as in FileReaderDrawer.
   const resolved = body.data?.path ?? path
   const raw = body.data?.markdown ?? ""
   const { front, body: source } = splitFrontmatter(markdown ? raw : "")
   const [view, setView] = useState<"rendered" | "source">(markdown ? "rendered" : "source")
   const html = useMarkdownHtml(source, { baseDir: localFileDir(resolved), asDocument: true })
   const inner = useInnerHtml(html)
-  // Highlighted ONLY when the source view is actually showing, and memoised across mounts by
-  // localFileQuery: a markdown file opens rendered, and hljs over its raw text was a blocking task
-  // nothing displayed. A hover on the rail's file row has usually already paid for this.
-  const sourceHtml = useInnerHtml(useMemo(() => (view === "source" ? highlightedSource(resolved, raw) : ""), [raw, resolved, view]))
   const renderedRef = useRef<HTMLDivElement>(null)
   const sourceRef = useRef<HTMLPreElement>(null)
   const rootRef = useRef<HTMLDivElement>(null)
@@ -201,16 +197,10 @@ export function FileViewerPanel({ slug, path, active }: { slug: string; path: st
           <div className="text-[13px] text-danger-90">Couldn’t read this file: {(body.error as Error).message}</div>
         ) : view === "source" ? (
           raw ? (
-            // Highlighted through the same hljs pipeline as every transcript code body (lib/codeBody);
-            // the grammar comes from the filename. The invariant codeBody.test pins — highlighted
-            // markup carries the SAME TEXT — is what keeps the ⌘I char-offset walk exact over the
-            // added spans. `hljs` on the element is what the palette hangs off (styles.css).
-            <pre
-              ref={sourceRef}
-              className="hljs whitespace-pre-wrap break-words bg-transparent font-mono-keep text-[12px] leading-5 text-fg/90"
-              style={{ tabSize: 2 }}
-              dangerouslySetInnerHTML={sourceHtml}
-            />
+            // Highlighted ONLY while the source view is actually showing, since it mounts only here: a
+            // markdown file opens rendered, and hljs over its raw text was a blocking task nothing
+            // displayed. A hover on the rail's file row has usually already paid for it (memoised).
+            <SourceView ref={sourceRef} path={resolved} raw={raw} />
           ) : (
             <div className="text-[13px] text-muted">This file is empty.</div>
           )
@@ -222,11 +212,7 @@ export function FileViewerPanel({ slug, path, active }: { slug: string; path: st
         ) : (
           <div className="text-[13px] text-muted">This file is empty.</div>
         )}
-        {!body.isLoading && !body.error && body.data?.truncated && (
-          <p className="mt-4 border-t border-border/60 pt-3 text-[12px] text-muted">
-            This file is too long to render in full — everything above the cut is shown. Open it to read the rest.
-          </p>
-        )}
+        {!body.isLoading && !body.error && body.data?.truncated && <TruncatedNote />}
       </div>
       <div
         className="shrink-0 flex items-center justify-between gap-3 border-t border-border/60 bg-panel px-5 pt-3"

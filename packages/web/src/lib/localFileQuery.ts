@@ -1,5 +1,5 @@
 import type { QueryClient } from "@tanstack/react-query"
-import { rpc } from "../api/rpc.ts"
+import { projectRpc, rpc } from "../api/rpc.ts"
 import { renderCodeBody } from "./codeBody.ts"
 import { isLocalMarkdownFile } from "./markdownTargets.ts"
 import { resolveFileLanguage } from "./syntaxHighlight.ts"
@@ -16,17 +16,24 @@ import { resolveFileLanguage } from "./syntaxHighlight.ts"
 // and stamps on context items.
 // The key alone — what the socket's `file-changed` frame invalidates (api/socket.ts), keyed by the
 // path the reader subscribed with, which is the path it queried with.
-export function localFileQueryKey(path: string): readonly [string, string] {
-  return [isLocalMarkdownFile(path) ? "localMarkdown" : "localFile", path]
+//
+// `project` names whose gate reads the file when that is not the page's own: a card on the everything
+// page opens a file of ITS project (AllQueuesCard ProjectLinkScope), and a checkout outside home is
+// readable only through that project's roots. It is the key's LAST element, so the socket's
+// two-element key still invalidates it (TanStack matches a key by prefix).
+export function localFileQueryKey(path: string, project?: string): readonly string[] {
+  const kind = isLocalMarkdownFile(path) ? "localMarkdown" : "localFile"
+  return project ? [kind, path, project] : [kind, path]
 }
 
-export function localFileQuery(path: string) {
+export function localFileQuery(path: string, project?: string) {
   const markdown = isLocalMarkdownFile(path)
+  const api = project ? projectRpc(project) : rpc
   return {
-    queryKey: localFileQueryKey(path),
+    queryKey: localFileQueryKey(path, project),
     queryFn: async () => {
-      if (markdown) return rpc.localMarkdown({ path })
-      const read = await rpc.localFile({ path })
+      if (markdown) return api.localMarkdown({ path })
+      const read = await api.localFile({ path })
       return { path: read.path, markdown: read.text, truncated: read.truncated }
     },
     // Long enough that a hover followed by a click is ONE read. Freshness while the file is OPEN is

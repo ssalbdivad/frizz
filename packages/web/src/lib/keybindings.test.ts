@@ -31,6 +31,7 @@ test("the default keys are the ones the sheet promises", () => {
     [key({ key: "r", code: "KeyR" }), "thread.reply"],
     [key({ key: "c", code: "KeyC" }), "app.newThread"],
     [key({ key: "t", code: "KeyT" }), "app.newTerminal"],
+    [key({ key: "p", code: "KeyP" }), "app.newProject"],
     [key({ key: "f", code: "KeyF" }), "thread.fullscreen"],
     [key({ key: "?", code: "Slash", shiftKey: true }), "app.shortcuts"],
     [key({ key: "k", code: "KeyK", metaKey: true }), "app.palette"],

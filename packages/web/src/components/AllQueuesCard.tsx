@@ -24,10 +24,10 @@ import { questionsOwed, type AccountBackend, type ThreadView } from "@frizz/shar
 import { projectApiBase, projectRpc } from "../api/rpc.ts"
 import { ThreadProjectScope } from "../api/threadApi.tsx"
 import { displayTitle, offersRetry, queueLabelAt, queueLabelWord } from "../groups.ts"
-import { handoffParts, threadKey, type QueuesProject } from "../lib/allQueues.ts"
-import { copyTextToClipboard } from "../lib/clipboard.ts"
+import { handoffParts, projectMarkdownScope, squareCard, threadKey, type QueuesProject } from "../lib/allQueues.ts"
 import { draftKey, draftStore, useDraftValues } from "../lib/drafts.ts"
 import { rememberFullscreenOrigin } from "../lib/fullscreenHandoff.ts"
+import { openLocalPath } from "../lib/local-file-links.ts"
 import { pageUnloading } from "../lib/pendingSends.ts"
 import { deliverProjectFollowUp } from "../lib/projectFollowUp.ts"
 import { STALLED_RETRY_MESSAGE } from "../lib/retrySession.ts"
@@ -42,6 +42,7 @@ import { Composer } from "./Composer.tsx"
 import { InteractionStack } from "./InteractionCards.tsx"
 import { useThreadComposerControls } from "../hooks/useThreadComposerControls.tsx"
 import { LastActive } from "./LastActive.tsx"
+import { ProjectSquare } from "./ProjectRail.tsx"
 import { LinkedHtml } from "./LinkedHtml.tsx"
 import { QuestionBlockCard } from "./QuestionBlockCard.tsx"
 import { RegisteredAnsweringProvider, RegisteredQuestionStack } from "./RegisteredQuestionCards.tsx"
@@ -52,6 +53,39 @@ import { SnoozeButton } from "./SnoozeButton.tsx"
 import { StateButton } from "./ThreadLifecycleFooter.tsx"
 import { Tooltip } from "./Tooltip.tsx"
 import { BLOCK_RADIUS, BLOCK_RADIUS_INNER_BOTTOM, QUEUE_WRAP, TranscriptCard } from "./TranscriptCard.tsx"
+
+/**
+ * WHOSE CARD THIS IS, on its meta line — the page's one queue holds every project's threads, and the lanes
+ * that used to say whose they were are gone (lib/allQueues.ts mergedQueue). Given `onChoose` it is a button
+ * that filters the queue to the project (the READY header's filter, lib/crossProject.ts setQueueFilter);
+ * without it, plain text, for a line that already sits inside a control (the command card's open button).
+ */
+export function ProjectChip({ project, onChoose }: { project: QueuesProject; onChoose?: (project: QueuesProject) => void }) {
+  const body = (
+    <>
+      {/* ON THE NAME'S CAP BAND: a filled square has no baseline of its own, so it sits ON the name's and is
+          lowered by half its height less half a cap — computed by the browser, right in any font at any
+          size (the prompt box's project picker places its square the same way). */}
+      <span className="flex shrink-0 self-baseline translate-y-[calc(6px_-_0.5cap)]">
+        <ProjectSquare project={squareCard(project)} size={12} />
+      </span>
+      <span className="min-w-0 truncate">{project.name}</span>
+    </>
+  )
+  const className = "flex min-w-0 shrink items-baseline gap-1.5 text-fg/80"
+  if (!onChoose) return <span data-xq-chip={project.id} className={className}>{body}</span>
+  return (
+    <button
+      type="button"
+      title={`Show only ${project.name}`}
+      data-xq-chip={project.id}
+      onClick={() => onChoose(project)}
+      className={`${className} cursor-pointer rounded-sm border-0 bg-transparent p-0 text-left underline-offset-2 outline-none transition-colors hover:text-fg hover:underline focus-visible:ring-1 focus-visible:ring-border-strong`}
+    >
+      {body}
+    </button>
+  )
+}
 
 /** A thread opened IN PLACE on the cross-project page: the page focused on its project, its drawer open. */
 export function crossProjectThreadHref(project: Pick<QueuesProject, "slug">, slug: string): string {
@@ -99,14 +133,30 @@ export const AllQueuesCard = memo(function AllQueuesCard({
   leaving,
   onLeave,
   onReturn,
+  chip,
+  ghost,
+  concealed = false,
 }: {
   project: QueuesProject
   thread: ThreadView
   leaving: boolean
+  /**
+   * Its thread left the queue while the card was on screen, and not by the human's hand in this tab
+   * (lib/stableQueue.ts): the card holds its place, quiet, saying where the thread went (GHOST_LABEL),
+   * until it scrolls off or the thread rests again.
+   */
+  ghost?: string
+  /**
+   * Its drawer is open, where it is read: the card keeps its place and its space, hidden and out of the
+   * tab order, so opening the drawer and closing it again moves nothing (AllQueues.tsx).
+   */
+  concealed?: boolean
   /** The card has been acted on — answered, replied to, snoozed or finished — so it fades out now. */
   onLeave: () => void
   /** The action failed after the card had already faded: put it back. */
   onReturn: () => void
+  /** Leads the meta line under the title: the card's project, on a queue that holds several (ProjectChip). */
+  chip?: ReactNode
 }) {
   const api = projectRpc(project.id)
   const key = threadKey(project.id, thread.id)
@@ -146,7 +196,7 @@ export const AllQueuesCard = memo(function AllQueuesCard({
   }
 
   return (
-    <div data-xq-card={key} data-queue-leaving={leaving} className="frizz-card-slot min-w-0">
+    <div data-xq-card={key} data-queue-leaving={leaving} data-queue-ghost={ghost === undefined ? undefined : true} data-queue-concealed={concealed || undefined} inert={concealed} className="frizz-card-slot min-w-0">
       <div className="frizz-card-clip min-h-0 min-w-0">
         <article
           data-xq-card-root
@@ -160,7 +210,25 @@ export const AllQueuesCard = memo(function AllQueuesCard({
                   {displayTitle(thread)}
                 </a>
               </h3>
-              <LastActive at={queueLabelAt(thread)} label={queueLabelWord(thread)} fallbackAt={thread.spawnedAt} className="mt-0.5 block truncate text-[11px] leading-tight text-muted-75" />
+              <div className="mt-0.5 flex min-w-0 items-baseline gap-1.5 text-[11px] leading-tight text-muted-75">
+                {chip}
+                {/* A ghost says why it is quiet, on the line that said since when it was ready: the same
+                    one line, so the card keeps its height and nothing under it moves. */}
+                {ghost !== undefined ? (
+                  <>
+                    {chip && <span aria-hidden>·</span>}
+                    <span className="min-w-0 truncate">{ghost}</span>
+                  </>
+                ) : (
+                  <LastActive
+                    at={queueLabelAt(thread)}
+                    label={queueLabelWord(thread)}
+                    fallbackAt={thread.spawnedAt}
+                    lead={chip ? <span aria-hidden>·</span> : undefined}
+                    className="min-w-0 truncate"
+                  />
+                )}
+              </div>
             </div>
             <div className="flex shrink-0 items-center gap-0.5">
               {offersRetry(thread) && <RetryButton project={project} thread={thread} onSent={onLeave} onFailed={onReturn} />}
@@ -279,8 +347,8 @@ function RetryButton({ project, thread, onSent, onFailed }: { project: QueuesPro
  * Two delegated listeners on the document act on every rendered link (lib/local-file-links.ts,
  * lib/thread-links.ts), and both act on the PAGE's project: a file link opens through the page's `rpc`,
  * a `/thread/<slug>` link opens a drawer this page does not have. This intercepts both first, in the
- * capture phase, and sends them to the thread's own project — a file through that project's opener, a
- * thread link to that thread's drawer, opened in place.
+ * capture phase, and sends them to the thread's own project — a file to the same viewers every link
+ * uses, read or opened through that project, a thread link to that thread's drawer, opened in place.
  */
 function ProjectLinkScope({ project, children }: { project: QueuesProject; children: ReactNode }) {
   const navigate = useNavigate()
@@ -293,16 +361,10 @@ function ProjectLinkScope({ project, children }: { project: QueuesProject; child
     if (file && path) {
       event.preventDefault()
       event.stopPropagation()
-      // The same two outcomes lib/local-file-links.ts handles: opened by the project's opener, or no
-      // opener configured and the path goes on the clipboard instead.
-      projectRpc(project.id)
-        .openLocalFile({ path, ...(file.dataset.localImage === "true" ? { image: true } : {}) })
-        .then(async (result) => {
-          if (result.action !== "copy") return
-          await copyTextToClipboard(result.path)
-          showToast("Copied local path")
-        })
-        .catch((error: unknown) => showToast(`Could not open local file: ${error instanceof Error ? error.message.slice(0, 100) : "unknown error"}`))
+      // The one router every file click takes (lib/local-file-links.ts) — the picture viewer, the reader,
+      // or the desktop opener — scoped to THIS card's project: its gate reads the file and its opener
+      // opens it, since a checkout outside home is inside that project's roots and no other's.
+      openLocalPath(path, file, projectMarkdownScope(project))
       return
     }
     const anchor = target?.closest<HTMLAnchorElement>("a[href^='/']")

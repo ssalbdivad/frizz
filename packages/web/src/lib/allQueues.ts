@@ -1,8 +1,10 @@
 import type { BoardSnapshot, ProjectCard, ProjectQueue, RegisteredQuestionView, ThreadView } from "@frizz/shared"
 import { orderByInteraction, orderQueue, queued, sectionOf, type QueueDirection } from "../groups.ts"
+import { crossProjectHref } from "./base-path.ts"
 import { splitFenceBlocks } from "./fenceBlocks.ts"
 import { splitQuestionBlocks, type QuestionKind } from "./questionBlocks.ts"
 import { fenceStandsFor } from "./questionShadow.ts"
+import type { MarkdownScope } from "./useMarkdown.ts"
 
 // THE ALL QUEUES PAGE'S MODEL — every project on the machine, each with its threads already banded.
 //
@@ -32,6 +34,22 @@ export interface QueuesProject {
   running: ThreadView[]
   snoozed: ThreadView[]
   doneCount: number
+}
+
+/**
+ * Whose prose a project's cards are (MarkdownScopeContext): the repo a `#123` links into, the root a
+ * relative path resolves against, the page a thread link opens on, and whose gate reads a cited file.
+ * One construction for the lane that renders the cards and for the link scope that carries a file from
+ * a card into a reader or the picture viewer, so the two cannot name different projects.
+ */
+export function projectMarkdownScope(project: Pick<QueuesProject, "id" | "slug" | "githubRepo" | "projectDir" | "homeDir">): MarkdownScope {
+  return {
+    projectId: project.id,
+    repo: project.githubRepo ?? null,
+    appPath: crossProjectHref(encodeURIComponent(project.slug)),
+    baseDir: project.projectDir,
+    homeDir: project.homeDir,
+  }
 }
 
 export function queuesProjects(
@@ -118,6 +136,35 @@ export function overlayQueues(
     out[index] = rebuilt!
   }
   return out
+}
+
+/** One card of the page's queue, with the project it belongs to. */
+export interface QueueEntry {
+  project: QueuesProject
+  thread: ThreadView
+}
+
+/**
+ * THE PAGE'S ONE QUEUE — every project's ready threads merged into a single line, in the order the board's
+ * own queue uses (`orderQueue`: when each ENTERED the queue, oldest first unless the operator chose LIFO).
+ * That is the order a FRESH draw takes; once drawn, lib/stableQueue.ts keeps every card where it is and
+ * appends whatever arrives at the bottom.
+ *
+ * It was one lane per project in rail order, and that is what made the page a stack (maintainer
+ * 2026-09-28, choosing it: "One queue across all projects"): a project listed above the one being read
+ * that got its first ready thread inserted a whole lane ABOVE the card being read. Merged, an arrival from
+ * any project joins the bottom like any other. The stamps compare across projects because one server
+ * stamps them all on one clock (the server's queue-clock.ts).
+ */
+export function mergedQueue(projects: readonly QueuesProject[], direction: QueueDirection = "fifo"): QueueEntry[] {
+  const owner = new Map<ThreadView, QueuesProject>()
+  for (const project of projects) for (const thread of project.queued) owner.set(thread, project)
+  return orderQueue([...owner.keys()], direction).map((thread) => ({ project: owner.get(thread)!, thread }))
+}
+
+/** A card-shaped stand-in for a project the registry list has not caught up with, for its square. */
+export function squareCard(project: QueuesProject): ProjectCard {
+  return project.card ?? { id: project.id, slug: project.slug, name: project.name, path: project.projectDir ?? "", lastOpenedAt: "", stale: false, iconStatus: "unknown" }
 }
 
 /**

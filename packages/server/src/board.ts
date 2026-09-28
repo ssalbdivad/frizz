@@ -2007,8 +2007,9 @@ export function createBoard(
   // boundary: historical rows remain valid after migration/restart, and both Claude and Codex use the
   // same durable shape. Raw tailer discoveries never confer ownership.
   // Rows the human's own follow-up holds out of the queue (hasFreshDelivery, before any process check),
-  // as of the last build — for the queue clock, which must not take that hold for a park: no wake follows
-  // a send that failed, only the send itself, and the thread it lost has to come straight back.
+  // as of the last build — for the queue clock, which must not take that hold for a park (no wake follows
+  // a send that failed, only the send itself, and the thread it lost has to come straight back), and which
+  // reads it as the human acting on the thread, so it loses its place in line.
   let heldByDelivery = new Set<string>()
   function buildSessionThreads(nowMs: number): ThreadView[] {
     // Old/corrupt databases predate the canonical storage guard. Keep such rows inert instead of
@@ -2157,6 +2158,11 @@ export function createBoard(
         t.actionableInteraction === true || t.runtime === "perm-prompt" || t.pendingAsk !== undefined ||
         t.pendingQuestion === true || (t.questions?.some((q) => !q.repliedPast) ?? false) || t.crashed === true ||
         t.limitPause !== undefined || (t.providerError !== undefined && t.providerError.retrying !== true),
+      // What a person did, for a queued thread's place in line (queue-clock.ts: a thread only loses it
+      // when someone acts on it). Every follow-up reaches the delivery ledger, and each router path that
+      // writes one re-assembles the board before it returns, so one reading always sees it.
+      humanOut: (t) => t.archived || t.snoozedUntil !== undefined || t.bgSnoozed === true || heldByDelivery.has(t.id),
+      humanGate: (t) => t.actionableInteraction === true || t.runtime === "perm-prompt" || t.pendingAsk !== undefined,
     })
     armSnoozeWake(sessionThreads, assembledAtMs, queueClock.nextEntryAt(assembledAtMs))
     notifyNeedsYou(sessionThreads)

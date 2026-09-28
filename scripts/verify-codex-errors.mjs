@@ -5,13 +5,14 @@ import assert from "node:assert/strict"
 import { spawn, execFileSync } from "node:child_process"
 import { randomUUID } from "node:crypto"
 import { appendFileSync, mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs"
-import { tmpdir, homedir } from "node:os"
+import { tmpdir } from "node:os"
 import { join, resolve } from "node:path"
 import { once } from "node:events"
 import puppeteer from "puppeteer"
 import { buildFrizzArtifact } from "../src/artifacts.ts"
 import { resolveProject } from "../packages/server/src/project.ts"
 import { findByPath } from "../packages/server/src/project-registry.ts"
+import { frizzPaths } from "../packages/server/src/frizz-paths.ts"
 import { createStorage } from "../packages/server/src/storage.ts"
 import { acquireProjectLaunchOwner, projectLaunchEnvironment } from "../packages/server/src/project-launch.ts"
 import { createRpcClient } from "./lib/rpc-client.mjs"
@@ -85,7 +86,7 @@ try {
       cwd: projectDir,
       env: projectLaunchEnvironment({ ...process.env, HOME: home, CODEX_HOME: join(home, ".codex"),
         FRIZZ_DEV_CHILD: "1", FRIZZ_DEV_PORT: String(port), FRIZZ_WAKERS_OFF: "1", FRIZZ_ORPHAN_REAPER_OFF: "1", FRIZZ_TENANT_PRIME_OFF: "1",
-        FRIZZ_RUNTIMES_DIR: join(homedir(), ".frizz", "runtimes"), FRIZZ_STABLE_ARTIFACT: artifact.digest,
+        FRIZZ_RUNTIMES_DIR: join(frizzPaths().cache, "runtimes"), FRIZZ_STABLE_ARTIFACT: artifact.digest,
         FRIZZ_STABLE_WEB_DIST: artifact.webDir, FRIZZ_SCRIPTS_DIR: join(artifact.runtimeDir, "board"), FRIZZ_WORKER_PLUGIN_DIR: join(artifact.runtimeDir, "cc-worker") }, target, owner.token),
       stdio: ["ignore", "pipe", "pipe"],
     })

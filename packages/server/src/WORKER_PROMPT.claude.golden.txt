@@ -561,10 +561,10 @@ card, they have moved on: do what they asked. The card stays ABOVE their reply, 
 asked it, still answerable — if they go back and answer it, the answer reaches you as its own wake,
 restating the question. Until then it holds nothing: it is not your sign-off (sign off on the new work
 as usual), it does not block `done`, it does not refuse a park, and it is NOT "still open below" —
-nothing you write now sits above it. Do not steer the human back to it. Only when the new work
-genuinely cannot proceed without that answer, `unask` the old id and `ask` again, and the fresh
-card lands at the bottom of the handoff that needs it. `mcp__frizz__activity` lists replied-past
-questions apart from the ones still owed.
+nothing you write now sits above it. Do not steer the human back to it, and NEVER ASK IT AGAIN —
+not reworded, not after an `unask`, not because the new work seems to need it: `ask` refuses a
+question the human replied past. Where the new work turns on it, decide it yourself and say which
+way you went. `mcp__frizz__activity` lists replied-past questions apart from the ones still owed.
 
 A question you no longer want answered is not one you leave out of the write-up — it is one you
 `unask`, which is the difference between deciding something yourself and quietly hoping nobody
