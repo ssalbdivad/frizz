@@ -54,6 +54,7 @@ import { ROW_ACTION_CLASS, RestedAge, SIDEBAR_COLUMN_CLASS, ThreadIndicator, Tit
 import { BandLabel } from "./BandLabel.tsx"
 import { ProjectMenu, homeOf, useAddProject } from "./ProjectActions.tsx"
 import { StatusRow } from "./StatusRow.tsx"
+import { ThreadConnector } from "./ThreadConnector.tsx"
 import { DispatchForm } from "./NewThreadModal.tsx"
 import { Menu, MenuContent, MenuItem, MenuTrigger } from "./ui/Menu.tsx"
 import { ProjectFilter, QueueBadge } from "./ProjectFilter.tsx"
@@ -198,6 +199,7 @@ export function AllQueuesPage() {
           </div>
         )}
       </main>
+      {!stacked && <ThreadConnector activeKey={activeKey} />}
     </div>
   )
 }
@@ -476,7 +478,7 @@ function ProjectGroup({
       <ProjectRow project={project} busy count={queued.length} home={home} />
       {queued.map((t) => {
         const key = threadKey(project.id, t.id)
-        return <RailRow key={key} t={t} active={activeKey === key} restedAge onClick={() => onQueuedRow(key)} />
+        return <RailRow key={key} t={t} cardKey={key} active={activeKey === key} restedAge onClick={() => onQueuedRow(key)} />
       })}
       {project.running.map((t) => (
         <RailRow key={t.id} t={t} onClick={() => openInPlace(project, t.id)} />
@@ -579,17 +581,20 @@ function AddProjectRow() {
  */
 function RailRow({
   t,
+  cardKey,
   active = false,
   restedAge = false,
   onClick,
 }: {
   t: ThreadView
+  /** A Ready row's card (`threadKey`) — what the thread across the gutter ties it to (ThreadConnector). */
+  cardKey?: string
   active?: boolean
   restedAge?: boolean
   onClick: () => void
 }) {
   return (
-    <div className={ROW_CLASS}>
+    <div data-xq-rail-row={cardKey} className={ROW_CLASS}>
       {/* The board's scroll marker: the card this row faces is the one being read. */}
       {active && <span aria-hidden className="absolute inset-y-0 left-1 w-[2px] rounded-full bg-accent" />}
       <button type="button" onClick={onClick} className={ROW_BUTTON_CLASS} aria-current={active || undefined}>
