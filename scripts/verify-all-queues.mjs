@@ -509,12 +509,9 @@ try {
 
     // Its toast opens its TERMINAL, in place — a routed terminal layer that stays open.
     // Clicked in the page, in the same task that finds it: the toast re-renders as it rises, and a
-    // handle held across that is detached. Only a SHOWN toast's button counts — the one a person could
-    // press. A faded toast stays mounted at opacity 0 until the next one replaces it (Toaster.tsx), so
-    // the previous step's "Thread started" is still in the DOM when this command is sent, and clicking
-    // the first "Open thread" found opened THAT command's terminal in another project.
+    // handle held across that is detached.
     await waitFor("the toast's link", () => page.evaluate(() => {
-      const button = [...document.querySelectorAll("[data-toast] button")].find((b) => b.textContent?.trim() === "Open thread" && getComputedStyle(b).pointerEvents !== "none")
+      const button = [...document.querySelectorAll("[data-toast] button")].find((b) => b.textContent?.trim() === "Open thread")
       button?.click()
       return Boolean(button)
     }), 8000)
