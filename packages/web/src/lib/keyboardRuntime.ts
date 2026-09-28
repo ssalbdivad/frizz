@@ -87,23 +87,19 @@ function stepCard(step: 1 | -1): boolean {
 }
 
 /**
- * A card a key lands on is a card you mean to READ AND ANSWER (maintainer 2026-09-28: "it should
- * automatically activate the reply to agent textbox and expand that card"). So the landing presses the
- * card's own "Show more" — the real control, per the rule above — and puts the caret in its reply box.
- * The focus is scroll-free: the landing already put the card where it belongs, and letting the browser
- * scroll the box into view would drag a tall card's top off screen. The next plain key is then TYPED
- * into the reply rather than read as a shortcut; Escape blurs the box and hands `j` / `k` back.
+ * A card a key lands on is a card you mean to READ, so the landing presses the card's own "Show more" —
+ * the real control, per the rule above. It does NOT focus the reply box: that was tried (e11f7f6d) and
+ * every triage key then cost an Escape first. Triage is the common case, so it keeps the single keys,
+ * and `r` is the one extra key to answer (maintainer 2026-09-28).
  */
 function openCard(root: HTMLElement | null): void {
-  if (!root) return
-  root.querySelector<HTMLButtonElement>('[data-xq-show-more][aria-expanded="false"]')?.click()
-  focusReplyBox(root, { preventScroll: true })
+  root?.querySelector<HTMLButtonElement>('[data-xq-show-more][aria-expanded="false"]')?.click()
 }
 
-function focusReplyBox(surface: HTMLElement, options?: FocusOptions): boolean {
+function focusReplyBox(surface: HTMLElement): boolean {
   const box = surface.querySelector<HTMLTextAreaElement | HTMLInputElement>(REPLY_BOXES)
   if (!box) return false
-  box.focus(options)
+  box.focus()
   // Land after whatever is already drafted, not in front of it.
   const end = box.value.length
   box.setSelectionRange?.(end, end)
