@@ -4,8 +4,8 @@
 // the screen don't move in their position."
 //
 // Every scenario measures every card on screen (and the sidebar's prompt box) before and after one thing
-// that is NOT the human's doing — a thread arriving (FIFO, and newest-first, where it waits BELOW the
-// cards on screen until they are scrolled away), a thread on screen or above it waking itself and resting
+// that is NOT the human's doing — a thread arriving (at the bottom of the page, oldest-first or
+// newest-first alike), a thread on screen or above it waking itself and resting
 // again, a card marked done from another window, an arrival while the human types in a card, an arrival
 // behind an open drawer — and fails if any of them moved by a pixel or more. Then the human's own moves
 // that must not move anything either: opening a card's drawer and closing it, "Show more" (the card grows
@@ -139,15 +139,20 @@ try {
     const probe = document.createElement("div")
     probe.style.cssText = "position:fixed;left:0;top:0;width:1px;height:1px;opacity:0;pointer-events:none"
     document.body.appendChild(probe)
+    // The frame the worst move was painted in, and the one before it: every card's top/height and the
+    // offset, so a failure says what moved rather than only how far.
+    let last = ""
     const observer = new ResizeObserver(() => {
       if (sampler.stop) return
       sampler.frames++
+      const frame = `y=${window.scrollY} ${[...document.querySelectorAll(cards)].map((el) => { const r = el.getBoundingClientRect(); return `${el.dataset[key].split("/").at(-1)}:${r.top.toFixed(1)}/${r.height.toFixed(0)}` }).join(" ")}`
       for (const el of document.querySelectorAll(cards)) {
         const was = tracked[el.dataset[key]]
         if (was === undefined) continue
         const off = Math.abs(el.getBoundingClientRect().top - was)
-        if (off > sampler.max) { sampler.max = off; sampler.worst = el.dataset[key] }
+        if (off > sampler.max) { sampler.max = off; sampler.worst = el.dataset[key]; sampler.at = `frame ${sampler.frames - 1}: ${last} → frame ${sampler.frames}: ${frame}` }
       }
+      last = frame
     })
     observer.observe(probe)
     let wide = false
@@ -229,13 +234,18 @@ try {
       const by = Math.abs(now.top - card.top)
       if (by > worst.by) worst = { key: slugOf(card.key), by }
     }
+    // Nothing new may slide into view ABOVE the cards the reader was on either — a card's tail over the
+    // first of them, where the top of the page was, is the "something popped in at the top" this guards.
+    const firstTop = Math.min(...before.list.filter((c) => c.visible).map((c) => c.top))
+    const appeared = after.list.filter((c) => c.visible && c.top < firstTop && !before.list.find((b) => b.key === c.key)?.visible).map((c) => slugOf(c.key))
     const promptMoved = before.prompt !== null && after.prompt !== null ? Math.abs(after.prompt - before.prompt) : 0
-    const ok = worst.by < 1 && missing.length === 0 && promptMoved < 1 && (sampled.max < 1 || spoke.includes(slugOf(sampled.worst ?? "")))
+    const ok = worst.by < 1 && missing.length === 0 && appeared.length === 0 && promptMoved < 1 && (sampled.max < 1 || spoke.includes(slugOf(sampled.worst ?? "")))
     check(`${surface.name}: ${name}`, ok,
       `on screen before: ${before.list.filter((c) => c.visible).map((c) => slugOf(c.key)).join(" ")}; ` +
       `largest move ${worst.by.toFixed(2)}px${worst.key ? ` (${worst.key})` : ""}, in any frame ${sampled.max.toFixed(2)}px over ${sampled.frames} frames; ` +
-      `prompt box ${promptMoved.toFixed(2)}px${missing.length ? `; GONE from screen: ${missing.join(" ")}` : ""}; ` +
-      `order ${order(after)}; scrollY ${before.scrollY} → ${after.scrollY}`)
+      `prompt box ${promptMoved.toFixed(2)}px${missing.length ? `; GONE from screen: ${missing.join(" ")}` : ""}${appeared.length ? `; APPEARED above: ${appeared.join(" ")}` : ""}; ` +
+      `order ${order(after)}; scrollY ${before.scrollY} → ${after.scrollY}` +
+      (ok || !sampled.at ? "" : `\n      worst ${sampled.at}`))
     if (expect) expect(before, after, landed)
     return { before, after }
   }
@@ -255,19 +265,18 @@ try {
   await open(EVERYTHING, "lifo")
   await scrollToY(0)
   await pointerAway()
-  await stays("newest first: an arrival at the top of the page waits below the cards on screen", {
+  await stays("newest first: an arrival sorting to the top of the page joins the bottom instead", {
     act: () => rest("a/r5"),
     until: (s) => find(s, "r5"),
-    expect: (before, _, landed) => {
-      const lastOnScreen = before.list.filter((c) => c.visible).at(-1)
-      const r5 = landed.list.findIndex((c) => slugOf(c.key) === "r5")
-      // Below every card on screen (and the few within a margin of it, which count as on screen too).
-      check("Everything: …landing below the cards the reader was on", r5 > landed.list.findIndex((c) => c.key === lastOnScreen.key), order(landed))
+    expect: (_, after, landed) => {
+      check("Everything: …landing last", slugOf(landed.list.at(-1).key) === "r5", order(landed))
+      check("Everything: …and staying there", slugOf(after.list.at(-1).key) === "r5", order(after))
     },
   })
-  await stays("newest first: the other project's arrival waits below the cards on screen too", {
+  await stays("newest first: the other project's arrival joins the bottom too", {
     act: () => rest("b/p3"),
     until: (s) => find(s, "p3"),
+    expect: (_, after) => check("Everything: …after the one before it", order(after).endsWith("r5 p3"), order(after)),
   })
 
   // Typing: the reply box of a card on screen holds the caret; an arrival must not move it.
@@ -302,7 +311,9 @@ try {
     await page.waitForFunction(() => document.body.style.position === "fixed", { timeout: 10_000 })
     await sleep(800)
     rest("a/r4")
-    await sleep(4000)
+    // Landed behind the drawer, however long the server's read of the transcript takes.
+    await waitFor("r4 behind the drawer", (s) => find(s, "r4") !== undefined).catch(() => {})
+    await sleep(1500)
     await page.keyboard.press("Escape")
     await page.waitForFunction(() => document.body.style.position !== "fixed", { timeout: 10_000 })
     await sleep(1500)
@@ -429,12 +440,48 @@ try {
     await settle()
     const before = find(await snap(), slugOf(target.key))
     await page.reload({ waitUntil: "domcontentloaded", timeout: 90_000 })
-    await page.waitForSelector(EVERYTHING.cards, { timeout: 30_000 })
-    await sleep(4000)
+    // Every tenth of a second from the first frame of the new page: where the card was, the offset, the
+    // page's height — printed if the check fails, so a failure says how the page got where it did.
+    const timeline = []
+    const t0 = Date.now()
+    // Ten seconds: under load the cards above lay out at their real height well after the card is back.
+    while (Date.now() - t0 < 10000) {
+      timeline.push(await page.evaluate((key, cards) => {
+        const el = [...document.querySelectorAll(cards)].find((e) => e.dataset.xqCard === key)
+        return `+${String(Math.round(performance.now())).padStart(5)} y=${window.scrollY} h=${document.documentElement.scrollHeight} cards=${document.querySelectorAll(cards).length} card=${el ? el.getBoundingClientRect().top.toFixed(1) : "-"}`
+      }, target.key, EVERYTHING.cards).catch((error) => `(${error.message.slice(0, 60)})`))
+      await sleep(100)
+    }
     const after = await snap()
     const now = find(after, slugOf(target.key))
+    const ok = now !== undefined && Math.abs(now.top - before.top) < 2
+    const trace = timeline.join("\n        ")
     check("Everything: a reload comes back on the card that was being read, at the same offset",
-      now !== undefined && Math.abs(now.top - before.top) < 2, `${slugOf(target.key)} ${before.top.toFixed(1)} → ${now?.top.toFixed(1)}; scrollY ${after.scrollY}; order ${order(after)}`)
+      ok, `${slugOf(target.key)} ${before.top.toFixed(1)} → ${now?.top.toFixed(1)}; scrollY ${after.scrollY}; order ${order(after)}${ok ? "" : `\n      timeline:\n        ${trace}`}`)
+  }
+
+  // A project's chip narrows the queue to it and glides to the top — a move the human asked for, which the
+  // viewport lock must stand aside for rather than hold the page where it was mid-glide.
+  {
+    const s = await snap()
+    await scrollToY(Math.max(0, s.list[3].top + s.scrollY - 100))
+    await pointerAway()
+    await settle()
+    const from = (await snap()).scrollY
+    const chosen = await page.evaluate(() => {
+      const chip = [...document.querySelectorAll("[data-xq-card] [data-xq-chip]")].find((el) => { const r = el.getBoundingClientRect(); return r.top > 0 && r.bottom < window.innerHeight })
+      if (!chip) return null
+      const project = chip.closest("[data-xq-card]").dataset.xqCard.split("/")[0]
+      chip.click()
+      return project
+    })
+    let after = await snap()
+    for (let i = 0; i < 30 && !(after.scrollY === 0 && after.list.every((c) => c.key.startsWith(`${chosen}/`))); i++) {
+      await sleep(200)
+      after = await snap()
+    }
+    check("Everything: a project's chip narrows the queue to it and glides to the top",
+      chosen !== null && after.scrollY === 0 && after.list.length > 0 && after.list.every((c) => c.key.startsWith(`${chosen}/`)), `chip ${chosen}; scrollY ${from} → ${after.scrollY}; order ${order(after)}`)
   }
 
   check("no page errors", errors.length === 0, errors.join("; "))
