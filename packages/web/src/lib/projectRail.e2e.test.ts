@@ -1,33 +1,45 @@
 import assert from "node:assert/strict"
 import test from "node:test"
 
-// Opt-in like the other *.e2e.test.ts here. Needs a REAL Frizz serving at least two projects — the
-// settings drawer only mounts inside a board, and the bug is in the seam between a client-side
-// project switch and the per-project query cache — which `scripts/adhoc-stack.mjs` builds in one command:
+// Opt-in like the other *.e2e.test.ts here. Needs a REAL Frizz serving at least two projects — the bug
+// is in the seam between a client-side project switch and the per-project query cache — which
+// `scripts/adhoc-stack.mjs` builds in one command:
 //   nub scripts/adhoc-stack.mjs --port=45782 --project=/abs/a --also-project=/abs/b > /tmp/stack.log 2>&1 &
 //   FRIZZ_PROJECT_RAIL_E2E_URL=http://127.0.0.1:45782 nub --test --test-force-exit \
 //     packages/web/src/lib/projectRail.e2e.test.ts
 const baseUrl = process.env.FRIZZ_PROJECT_RAIL_E2E_URL
 
 // THE RAIL FOLLOWS THE SETTING WITHOUT A RELOAD, after a client-side project switch. `["settingsGet"]`
-// hashes under the project the URL names at render time (lib/queryKeyScope.ts), and the layout that
-// hosts the rail is mounted once and never re-rendered by a navigation — so the rail's query stayed
-// bound to the project it was cold-loaded on (the project grid's "" scope, when this broke; Everything's
-// focus project now), while the drawer wrote its save under the board's scope. The select flipped to "Always shown" and the rail did not appear until a
-// reload happened to land on a board (maintainer 2026-08-24: "it literally only shows up when I'm in
-// the home page"). Every piece is fine in isolation; only a real navigation followed by a real save
-// reaches the seam, so this drives exactly that sequence.
-test("flipping 'Project sidebar' on a board reached from Everything shows the rail without a reload", {
+// hashes under the page's project at render time (lib/queryKeyScope.ts), and the layout that hosts the
+// rail is mounted once and never re-rendered by a switch — so the rail's query stayed bound to the
+// project it was cold-loaded on (the project grid's "" scope, when this broke), while the drawer wrote
+// its save under the new project's scope. The select flipped to "Always shown" and the rail did not
+// appear until a reload (maintainer 2026-08-24: "it literally only shows up when I'm in the home page").
+// Every piece is fine in isolation; only a real switch followed by a real save reaches the seam, so
+// this drives exactly that sequence.
+//
+// The switch is the prompt box's project picker, which re-focuses `/` on another project without a
+// navigation: the page binds that project, and page-relative scopes follow it (routes.tsx
+// CrossProjectPage). Until 2026-09-28 it was a client-side navigation from Everything to the other
+// project's board, `/project/<slug>`, through its row's ⋯ menu; the board is gone, and a focus change is
+// the switch the one page has.
+test("flipping 'Project sidebar' after switching the page to another project shows the rail without a reload", {
   skip: !baseUrl,
   timeout: 90_000,
 }, async () => {
   // Start from HIDDEN, whatever the sandbox was left at. `projectRail` is a machine setting, so the
-  // unprefixed (launching-project) write is the one every board reads.
+  // unprefixed (launching-project) write is the one every project reads.
   const rpc = `${baseUrl}/_frizz/rpc`
   const headers = { origin: baseUrl!, "content-type": "application/json" }
   const current = (await (await fetch(`${rpc}/settingsGet`, { headers })).json()) as { result: Record<string, unknown> }
   const reset = await fetch(`${rpc}/settingsSet`, { method: "POST", headers, body: JSON.stringify({ ...current.result, projectRail: false }) })
   assert.equal(reset.status, 200, `settingsSet must succeed: ${await reset.text()}`)
+  // Every registered project, opened: the server activates a tenant on its first request, and the picker
+  // only binds a project the server has open.
+  const listed = (await (await fetch(`${rpc}/projectsList`, { headers })).json()) as { result: Array<{ slug: string; home?: boolean; stale?: boolean }> }
+  const slugs = listed.result.filter((p) => !p.home && !p.stale).map((p) => p.slug)
+  assert.ok(slugs.length >= 2, `needs a stack serving ≥2 projects, saw: ${slugs.join(", ") || "none"}`)
+  for (const slug of slugs) await fetch(`${baseUrl}/_frizz/${slug}/rpc/board`, { headers })
 
   const { default: puppeteer } = await import("puppeteer")
   const browser = await puppeteer.launch({ headless: "new", args: ["--no-sandbox"] })
@@ -37,27 +49,26 @@ test("flipping 'Project sidebar' on a board reached from Everything shows the ra
     page.on("pageerror", (error) => errors.push(String(error)))
     await page.setViewport({ width: 1440, height: 900, deviceScaleFactor: 1 })
     const rail = () => page.evaluate(() => document.querySelector('nav[aria-label="Projects"]') !== null)
+    const picked = () => page.$eval("[data-xq-picker-name]", (el) => el.textContent?.trim() ?? "")
 
-    await page.goto(`${baseUrl}/`, { waitUntil: "networkidle2" })
-    await page.waitForSelector("[data-xq-project-row]", { timeout: 15_000 })
-    assert.equal(await rail(), false, "the rail starts hidden on Everything")
+    await page.goto(`${baseUrl}/?focus=${slugs[0]}`, { waitUntil: "networkidle2" })
+    await page.waitForFunction((s) => document.querySelector("[data-xq-picker-name]")?.textContent?.trim() === s, { timeout: 15_000 }, slugs[0])
+    assert.equal(await rail(), false, "the rail starts hidden")
 
-    // Into a board CLIENT-SIDE, through a project's own "…" menu — a document load would rebind the
-    // cache. A project OTHER than the page's focus, so the board's scope differs from the cold load's.
-    const target = await page.evaluate(() => {
-      const focus = location.pathname.split("/")[2]
-      return [...document.querySelectorAll<HTMLElement>("[data-xq-project-row]")]
-        .map((row) => ({ id: row.dataset.xqProjectRow!, slug: row.querySelector("a")!.getAttribute("href")!.split("/")[2]! }))
-        .find((row) => row.slug !== focus)
-    })
-    assert.ok(target, "Everything lists a project besides its focus")
-    const slug = target.slug
-    await page.hover(`[data-xq-project-row="${target.id}"] a`)
-    await page.click(`[data-xq-project-row="${target.id}"] button[aria-label^="More actions"]`)
-    await page.waitForSelector(`[role="menu"] a[href="/project/${slug}"]`, { timeout: 10_000 })
-    await page.click(`[role="menu"] a[href="/project/${slug}"]`)
-    await page.waitForFunction((s) => location.pathname === `/project/${s}`, {}, slug)
-    await page.waitForSelector('[aria-label="Settings"]', { timeout: 15_000 })
+    // CLIENT-SIDE, through the prompt box's picker — a document load would rebind the cache. A project
+    // OTHER than the cold load's focus, so the page's scope differs from the one the rail was read under.
+    const slug = slugs[1]!
+    await page.click("[data-xq-project-picker]")
+    await page.waitForSelector(`[role="menuitem"][data-value="${slug}"]`, { timeout: 10_000 })
+    // A Radix menu mounts its items before it positions them; click once the item holds still on screen.
+    await page.waitForFunction((s) => new Promise((resolve) => {
+      const at = document.querySelector(`[role="menuitem"][data-value="${s}"]`)?.getBoundingClientRect()
+      if (!at || at.top < 0 || at.bottom > innerHeight) return resolve(false)
+      requestAnimationFrame(() => requestAnimationFrame(() => resolve(document.querySelector(`[role="menuitem"][data-value="${s}"]`)?.getBoundingClientRect().y === at.y)))
+    }), { timeout: 10_000 }, slug)
+    await page.click(`[role="menuitem"][data-value="${slug}"]`)
+    await page.waitForFunction((s) => document.querySelector("[data-xq-picker-name]")?.textContent?.trim() === s, { timeout: 15_000 }, slug)
+      .catch(async () => assert.fail(`the picker never moved to ${slug}; it names "${await picked()}"`))
     assert.equal(await rail(), false, "still hidden after the switch")
 
     await page.click('[aria-label="Settings"]')
@@ -76,7 +87,8 @@ test("flipping 'Project sidebar' on a board reached from Everything shows the ra
     // The save is one round trip; the rail must follow it on THIS page, not on the next load.
     await page.waitForFunction(() => document.querySelector('nav[aria-label="Projects"]') !== null, { timeout: 10_000 })
       .catch(() => assert.fail("the rail never appeared after the setting flipped — the drawer's save landed in a cache entry the rail was not reading"))
-    assert.equal(page.url(), `${baseUrl}/project/${slug}`, "no navigation happened along the way")
+    assert.equal(new URL(page.url()).pathname, "/", "no navigation happened along the way")
+    assert.equal(await picked(), slug, "the page is still on the project it was switched to")
     assert.deepEqual(errors, [], "no page errors")
   } finally {
     await browser.close()

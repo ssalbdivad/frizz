@@ -1,29 +1,32 @@
 import assert from "node:assert/strict"
 import test from "node:test"
 
-// Opt-in like the other *.e2e.test.ts here. Needs a REAL Frizz whose launching project has at least
-// one thread — the column under test only exists on a populated board — which two commands build:
-//   nub scripts/adhoc-stack.mjs --port=45783 > /tmp/stack.log 2>&1 &
-//   nub scripts/seed-done-thread.mjs --home=<home from the stack's json line> --port=45783
+// Opt-in like the other *.e2e.test.ts here. Needs a REAL Frizz with a project, so `/` is the page rather
+// than the welcome, which one command builds:
+//   nub scripts/adhoc-stack.mjs --port=45783 --project=/abs/repo > /tmp/stack.log 2>&1 &
 //   FRIZZ_FIRST_PAINT_E2E_URL=http://127.0.0.1:45783 nub --test --test-force-exit \
 //     packages/web/src/App.firstPaint.e2e.test.ts
 const baseUrl = process.env.FRIZZ_FIRST_PAINT_E2E_URL
 
-// THE FIRST FRAME IS THE FINAL LAYOUT, on a reload in a browser that has seen this project before.
-// Three things the page is built from arrive AFTER React's first render — the font and the project
-// rail in `settingsGet`, and whether this project has a sidebar at all in the first board push — and
-// each used to be guessed at first and corrected a round trip later, moving everything on screen:
-// the type family flipped mono → sans (a document-wide reflow), the rail appeared and pushed the page
-// 57px right, and the sidebar mounted and pushed the workpane 269px right (maintainer 2026-08-25:
-// "This is layout shift"). The rail and the sidebar keep their last answer in localStorage and use it
-// for the first frame; the font stopped being a setting on 2026-09-19 and is pinned sans on <html>. A requestAnimationFrame sampler installed before any script runs records every change to
-// the three, so the assertion is over the whole load rather than a screenshot of one moment.
+// THE FIRST FRAME IS THE FINAL LAYOUT, on a reload in a browser that has seen this machine before.
+// Two things the page is built from arrive AFTER React's first render — the font and the project rail,
+// both in `settingsGet` — and each used to be guessed at first and corrected a round trip later, moving
+// everything on screen: the type family flipped mono → sans (a document-wide reflow), and the rail
+// appeared and pushed the page 57px right (maintainer 2026-08-25: "This is layout shift"). The rail keeps
+// its last answer in localStorage and uses it for the first frame; the font stopped being a setting on
+// 2026-09-19 and is pinned sans on <html>. A requestAnimationFrame sampler installed before any script
+// runs records every change to the two and to where the queue column (`#workpane`) sits, so the
+// assertion is over the whole load rather than a screenshot of one moment.
+//
+// Until 2026-09-28 there was a third: whether the project's BOARD had a sidebar, from its first push,
+// mirrored the same way — it pushed the workpane 269px right when it mounted late. The board went with
+// the project view, and the one page's list column is always there, so there is nothing left to mirror.
 //
 // The CONTROL clears the mirrors: the same sampler must then SEE the rail arrive late and the
 // workpane move, or the assertions above were passing on a sampler that could not observe a shift.
 type Sample = { t: number; font: string | undefined; rail: boolean; workpaneLeft: number | null }
 
-test("a reload paints the font, the project rail and the sidebar column in their final state on the first frame", {
+test("a reload paints the font and the project rail in their final state on the first frame", {
   skip: !baseUrl,
   timeout: 90_000,
 }, async () => {
@@ -63,15 +66,16 @@ test("a reload paints the font, the project rail and the sidebar column in their
     })
     const samples = () => page.evaluate(() => (window as unknown as { __samples: Sample[] }).__samples)
     const load = async () => {
-      await page.goto(`${baseUrl}/project/frizz`, { waitUntil: "networkidle2" })
-      await page.waitForSelector("aside:not([data-sidebar-reserved]) [data-status-row]", { timeout: 20_000 })
+      await page.goto(`${baseUrl}/`, { waitUntil: "networkidle2" })
+      await page.waitForSelector("#workpane", { timeout: 20_000 })
+      await page.waitForSelector("[data-xq-project-row]", { timeout: 20_000 })
       await new Promise((r) => setTimeout(r, 500))
       return samples()
     }
 
     // The first load in a fresh profile is allowed to shift: it is what writes the mirrors.
     const first = await load()
-    assert.ok(first.some((s) => s.workpaneLeft !== null), "the board rendered a workpane")
+    assert.ok(first.some((s) => s.workpaneLeft !== null), "the page rendered a workpane")
     const settledLeft = first.at(-1)!.workpaneLeft
 
     // The reload is the case: every sample is the final answer.
@@ -85,7 +89,7 @@ test("a reload paints the font, the project rail and the sidebar column in their
     assert.deepEqual(new Set(painted.map((s) => s.workpaneLeft)), new Set([settledLeft]), `the workpane never moved: ${JSON.stringify(warm)}`)
     assert.equal(painted[0]!.rail, true, `the rail is on the first painted frame: ${JSON.stringify(warm)}`)
 
-    // Old Mono settings and cache must not change the font. Clearing the rail/board mirrors
+    // Old Mono settings and cache must not change the font. Clearing the rail's mirror
     // remains the negative control: the sampler must see the rail arrive and the workpane move.
     await set({ font: "mono", projectRail: true })
     await page.evaluate(() => { localStorage.clear(); localStorage.setItem("frizz-font", "mono") })
