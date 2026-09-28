@@ -83,6 +83,14 @@ Then address a tenant by **id or slug** — both work, and the id is what a work
 curl -s -H 'sec-fetch-site: same-origin' "http://127.0.0.1:45571/_frizz/<tenant-id>/rpc/board"
 ```
 
+**In a browser, every project is on ONE page, `/`** (since 2026-09-28 — there is no project page). A
+tenant's thread is `http://127.0.0.1:45571/all/<tenant-slug>/thread/<t>`: the page with that thread's
+drawer open, focused on the tenant. `…/thread/<t>/full` is its fullscreen page. To look at one project's
+cards, set the queue filter: the pill in the READY header, or the project row's ⋯ menu. `/project/<slug>`
+lands on `/` like any other unknown address, so a harness that navigates there and waits for a project
+page times out rather than failing loudly. `scripts/verify-one-view.mjs` is a worked example of driving
+the page across four projects.
+
 The traps, each of which costs a full boot cycle to rediscover:
 
 - **RPC verbs are HTTP verbs.** A `query` is a GET and a `mutation` is a POST; POSTing a query answers

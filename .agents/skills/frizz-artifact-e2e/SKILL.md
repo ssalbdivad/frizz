@@ -41,7 +41,7 @@ cd "$REPO" && exec env \
   FRIZZ_CLAUDE_BROKER_BRIDGE=1 frizz-dev
 ```
 
-**REAL HOME MEANS REAL SHARED STATE, and the project registry is the part that bites.** `~/.frizz/registry.json` is global to HOME, not per-server — so the throwaway repo you launch against is written straight into the maintainer's real project list, and it shows up on their board. This is not hypothetical: it happened on 2026-08-19, during the run that added this warning. There is no flag that prevents it, because the isolation this recipe gives you is a throwaway PROJECT, never a throwaway HOME.
+**REAL HOME MEANS REAL SHARED STATE, and the project registry is the part that bites.** `~/.frizz/registry.json` is global to HOME, not per-server — so the throwaway repo you launch against is written straight into the maintainer's real project list, and it shows up in the project list on their page. This is not hypothetical: it happened on 2026-08-19, during the run that added this warning. There is no flag that prevents it, because the isolation this recipe gives you is a throwaway PROJECT, never a throwaway HOME.
 
 So treat the registry as something you borrowed and must put back:
 
@@ -112,7 +112,7 @@ a worker env). It is YOUR tool, from this repo's `.mcp.json` — not something F
 dispatched. `new_page` the proxy url → `wait_for` the thread text → `take_screenshot`. **Write the shot
 under a chrome workspace root** (e.g. the frizz repo dir), NOT `/tmp` (access denied); then move it to a
 trusted embed root (`~/Screenshots`, the project dir, or `os.tmpdir()`) for the handoff and clean the repo.
-The board only renders threads when the project has a `.frizz/` dir — `mkdir -p $REPO/.frizz/threads` if it's
+Frizz only lists a project's threads when the project has a `.frizz/` dir — `mkdir -p $REPO/.frizz/threads` if it's
 otherwise empty.
 
 ### 4. Clean up
