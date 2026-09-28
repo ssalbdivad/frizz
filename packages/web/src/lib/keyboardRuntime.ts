@@ -82,6 +82,31 @@ function stepCard(step: 1 | -1): boolean {
   // At either end the key lands the card it is already on — the same re-ring a second click on its
   // rail row plays — so the press is visibly received rather than silently eaten.
   cursor.go(target)
+  openCard(cursor.root(target))
+  return true
+}
+
+/**
+ * A card a key lands on is a card you mean to READ AND ANSWER (maintainer 2026-09-28: "it should
+ * automatically activate the reply to agent textbox and expand that card"). So the landing presses the
+ * card's own "Show more" — the real control, per the rule above — and puts the caret in its reply box.
+ * The focus is scroll-free: the landing already put the card where it belongs, and letting the browser
+ * scroll the box into view would drag a tall card's top off screen. The next plain key is then TYPED
+ * into the reply rather than read as a shortcut; Escape blurs the box and hands `j` / `k` back.
+ */
+function openCard(root: HTMLElement | null): void {
+  if (!root) return
+  root.querySelector<HTMLButtonElement>('[data-xq-show-more][aria-expanded="false"]')?.click()
+  focusReplyBox(root, { preventScroll: true })
+}
+
+function focusReplyBox(surface: HTMLElement, options?: FocusOptions): boolean {
+  const box = surface.querySelector<HTMLTextAreaElement | HTMLInputElement>(REPLY_BOXES)
+  if (!box) return false
+  box.focus(options)
+  // Land after whatever is already drafted, not in front of it.
+  const end = box.value.length
+  box.setSelectionRange?.(end, end)
   return true
 }
 
@@ -121,15 +146,7 @@ const REPLY_BOXES = ["queueComposer", "chatComposer", "adoptComposer", "subAgent
 function runThreadCommand(command: ThreadCommand): boolean {
   const surface = currentThreadSurface()
   if (!surface) return false
-  if (command === "reply") {
-    const box = surface.querySelector<HTMLTextAreaElement | HTMLInputElement>(REPLY_BOXES)
-    if (!box) return false
-    box.focus()
-    // Land after whatever is already drafted, not in front of it.
-    const end = box.value.length
-    box.setSelectionRange?.(end, end)
-    return true
-  }
+  if (command === "reply") return focusReplyBox(surface)
   const control = surface.querySelector<HTMLElement>(`[data-command="${command}"]`)
   if (!control) return false
   if (!control.dispatchEvent(new CustomEvent(COMMAND_EVENT, { cancelable: true, detail: command }))) return true
