@@ -7,7 +7,9 @@
 // Snooze and Mark as done. What it deliberately does NOT carry is the transcript — the tool calls, the
 // earlier rounds, the sub-agent rows. That is the next level down, one click away IN PLACE — the title
 // opens the thread's own drawer on this page (useOpenThreadInPlace) — and it is what makes a page of
-// every project's queue readable at all. The header's ↗ is the one door into single-project mode.
+// every project's queue readable at all. There is no door off the page: the ↗ into a project's view and
+// the ⤢ into /full went on 2026-09-28 (maintainer: "too many places in the ui where it is easy to navigate
+// to a ui which is not the primary home ui"); fullscreen is a choice in the drawer's own menu now.
 //
 // THE CARD NEVER ASKS THE PAGE WHICH PROJECT IT IS. Everything that could — the RPC client, the query
 // cache, the markdown's repo and paths, the lifecycle buttons, the question drafts — is handed the
@@ -16,9 +18,9 @@
 // page's socket, and on this page all three name the FOCUSED project, which is usually not the card's.
 import { memo, useCallback, useLayoutEffect, useMemo, useRef, useState, type MouseEvent as ReactMouseEvent, type ReactNode } from "react"
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
-import { ArrowUpRight, Check, ChevronRight, Hourglass, Maximize2, RotateCcw } from "lucide-react"
+import { Check, ChevronRight, Hourglass, RotateCcw } from "lucide-react"
 import { useLocation, useNavigate } from "react-router"
-import type { ThreadView } from "@frizz/shared"
+import type { AccountBackend, ThreadView } from "@frizz/shared"
 import { projectApiBase, projectRpc } from "../api/rpc.ts"
 import { ThreadProjectScope } from "../api/threadApi.tsx"
 import { displayTitle, offersRetry, queueLabelAt, queueLabelWord } from "../groups.ts"
@@ -29,8 +31,8 @@ import { rememberFullscreenOrigin } from "../lib/fullscreenHandoff.ts"
 import { pageUnloading } from "../lib/pendingSends.ts"
 import { deliverProjectFollowUp } from "../lib/projectFollowUp.ts"
 import { STALLED_RETRY_MESSAGE } from "../lib/retrySession.ts"
+import { parseAccountAlias } from "../lib/signIn.ts"
 import { TRANSCRIPT_META_LABEL_CLASS, transcriptMetaChevronClass } from "../lib/transcriptMetaLabels.ts"
-import { HEADER_ICON_CLASS } from "../lib/headerIcon.ts"
 import { isPlainLeftClick } from "../lib/standaloneThreadRoute.ts"
 import { useMarkdownHtml } from "../lib/useMarkdown.ts"
 import { IN_PLACE_OPEN_STATE, openThread, showToast, store } from "../store.ts"
@@ -43,16 +45,12 @@ import { LinkedHtml } from "./LinkedHtml.tsx"
 import { QuestionBlockCard } from "./QuestionBlockCard.tsx"
 import { RegisteredAnsweringProvider, RegisteredQuestionStack } from "./RegisteredQuestionCards.tsx"
 import { RestedCard, showsRestedCard } from "./RestedCard.tsx"
+import { LogoutConfirmModal, SignInModal } from "./SignInModal.tsx"
 import { QuietTurnCard, showsQuietTurnCard } from "./QuietTurnCard.tsx"
 import { SnoozeButton } from "./SnoozeButton.tsx"
 import { StateButton } from "./ThreadLifecycleFooter.tsx"
 import { Tooltip } from "./Tooltip.tsx"
 import { BLOCK_RADIUS, BLOCK_RADIUS_INNER_BOTTOM, QUEUE_WRAP, TranscriptCard } from "./TranscriptCard.tsx"
-
-/** Where a thread lives on its own board — single-project mode, through an explicit door only. */
-export function threadBoardHref(project: Pick<QueuesProject, "slug">, slug: string): string {
-  return `/project/${encodeURIComponent(project.slug)}/thread/${encodeURIComponent(slug)}`
-}
 
 /** A thread opened IN PLACE on the cross-project page: the page focused on its project, its drawer open. */
 export function crossProjectThreadHref(project: Pick<QueuesProject, "slug">, slug: string): string {
@@ -104,8 +102,6 @@ export const AllQueuesCard = memo(function AllQueuesCard({
 }) {
   const api = projectRpc(project.id)
   const key = threadKey(project.id, thread.id)
-  const navigate = useNavigate()
-  const { pathname } = useLocation()
   const openInPlace = useOpenThreadInPlace()
   // KEYED ON THE REST, so a thread that rests again fetches its new handoff, and one that has not moved
   // is read exactly once however often the page polls. The previous handoff stays on screen while the
@@ -118,20 +114,10 @@ export const AllQueuesCard = memo(function AllQueuesCard({
   })
   const text = handoff.data?.text
   const parts = useMemo(() => (text ? handoffParts(text, thread.questions) : null), [text, thread.questions])
-  const boardHref = threadBoardHref(project, thread.id)
   const placeHref = crossProjectThreadHref(project, thread.id)
-  const fullHref = `${placeHref}/full`
   const dismiss = useMemo(() => ({ dismiss: onLeave, cancel: onReturn }), [onLeave, onReturn])
   const answeringScope = useMemo(() => ({ api, projectDir: project.projectDir }), [api, project.projectDir])
 
-  const openBoard = (event: ReactMouseEvent<HTMLAnchorElement>, href: string, full: boolean) => {
-    if (!isPlainLeftClick(event)) return
-    event.preventDefault()
-    // The way OUT of /full leads back to this page, as it stood, rather than to the thread's board
-    // (fullscreenHandoff.ts).
-    if (full) rememberFullscreenOrigin(thread.id, pathname)
-    navigate(href)
-  }
   const openHere = (event: ReactMouseEvent<HTMLAnchorElement>) => {
     if (!isPlainLeftClick(event)) return
     event.preventDefault()
@@ -157,18 +143,6 @@ export const AllQueuesCard = memo(function AllQueuesCard({
             </div>
             <div className="flex shrink-0 items-center gap-0.5">
               {offersRetry(thread) && <RetryButton project={project} thread={thread} onSent={onLeave} onFailed={onReturn} />}
-              {/* The one door on the card into its PROJECT VIEW, and it says so. The title opens the
-                  thread here, in place. */}
-              <Tooltip label={`Open in ${project.name}'s project view`}>
-                <a href={boardHref} aria-label={`Open in ${project.name}'s project view`} onClick={(event) => openBoard(event, boardHref, false)} className={HEADER_ICON_CLASS}>
-                  <ArrowUpRight size={15} />
-                </a>
-              </Tooltip>
-              <Tooltip label="Open fullscreen">
-                <a href={fullHref} aria-label="Open fullscreen" data-command="fullscreen" onClick={(event) => openBoard(event, fullHref, true)} className={HEADER_ICON_CLASS}>
-                  <Maximize2 size={14} />
-                </a>
-              </Tooltip>
             </div>
           </header>
 
@@ -426,6 +400,8 @@ function ReplyBox({ project, thread, onSent, onFailed }: { project: QueuesProjec
   const text = useDraftValues([key]).get(key) ?? ""
   const [error, setError] = useState<string>()
   const controls = useThreadComposerControls(thread.id, thread)
+  const [signInFor, setSignInFor] = useState<AccountBackend | null>(null)
+  const [logoutFor, setLogoutFor] = useState<AccountBackend | null>(null)
   const send = useMutation({
     mutationFn: (message: string) => deliverFollowUp(project, thread, message),
     onSuccess: () => void queryClient.invalidateQueries({ queryKey: ["projectsQueues"] }),
@@ -445,7 +421,24 @@ function ReplyBox({ project, thread, onSent, onFailed }: { project: QueuesProjec
   })
   const submit = () => {
     const message = text.trim()
-    if (!message || !thread.sessionId || send.isPending) return
+    if (!message) return
+    // `/login` / `/logout` are frizz-owned account actions for this thread's backend, invoked here and
+    // never delivered to the worker as a prompt — as the drawer's box does (ThreadComposerBox.tsx). The
+    // board's queue card intercepted them too; this card did not, so with the board gone a `/login`
+    // typed into a card went into the worker's stdin.
+    const alias = parseAccountAlias(message)
+    if (alias) {
+      draftStore.set(key, "")
+      if (thread.backend === "acp") {
+        showToast("An ACP agent signs in through its own CLI — Frizz holds no account for it")
+        return
+      }
+      const backend: AccountBackend = thread.backend === "codex" ? "codex" : "claude"
+      if (alias === "login") setSignInFor(backend)
+      else setLogoutFor(backend)
+      return
+    }
+    if (!thread.sessionId || send.isPending) return
     setError(undefined)
     // Local truth first, then the network — the order every send on the board's card obeys.
     draftStore.set(key, "")
@@ -466,6 +459,8 @@ function ReplyBox({ project, thread, onSent, onFailed }: { project: QueuesProjec
       />
       {controls.status}
       {error && <div role="alert" className="mt-1.5 break-words text-[11px] leading-snug text-danger-soft">{error}</div>}
+      {signInFor && <SignInModal backend={signInFor} onClose={() => setSignInFor(null)} onAuthed={() => setSignInFor(null)} />}
+      {logoutFor && <LogoutConfirmModal backend={logoutFor} onClose={() => setLogoutFor(null)} />}
     </div>
   )
 }

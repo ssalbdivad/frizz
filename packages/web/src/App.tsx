@@ -269,13 +269,10 @@ export function App() {
   // parked slug AND a board.)
   useEffect(() => { resolveRoutedThread() }, [board, snap.routeThreadSlug])
 
-  // The window title names the page. In the INSTALLED APP window (display-mode: standalone) Chrome
-  // prefixes the title bar with the app name itself ("Frizz - <title>"), so the page title must NOT
-  // repeat the wordmark. In an ordinary browser tab there's no prefix, so the title carries it as a
-  // trailing mark ("Everything — Frizz"). StandaloneThreadPage uses the same trailing mark.
+  // The window title is the app's: there is one page, so there is no page name to put before it.
+  // StandaloneThreadPage names its thread instead, with "— Frizz" as the trailing mark.
   useEffect(() => {
-    const standalone = window.matchMedia?.("(display-mode: standalone)").matches
-    document.title = standalone ? "Everything" : "Everything — Frizz"
+    document.title = "Frizz"
   }, [])
 
   return (

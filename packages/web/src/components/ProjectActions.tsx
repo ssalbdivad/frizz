@@ -54,6 +54,8 @@ export function ProjectMenu({
   project,
   home,
   githubRepo,
+  filtered = false,
+  onFilter,
   onOpenChange,
   children,
 }: {
@@ -61,6 +63,9 @@ export function ProjectMenu({
   home: string | undefined
   /** `owner/repo` when the project's origin is github.com — its board's `githubRepo`, host-strict. */
   githubRepo?: string
+  /** The queue is filtered to this project (lib/crossProject.ts); with `onFilter`, the menu toggles it. */
+  filtered?: boolean
+  onFilter?: () => void
   onOpenChange?: (open: boolean) => void
   children: ReactNode
 }) {
@@ -125,6 +130,16 @@ export function ProjectMenu({
             <RadixDropdown.Label title={project.path} className="truncate px-2 pb-1.5 pt-1 font-mono text-[11px] text-muted-70">
               {shortPath(project.path, home)}
             </RadixDropdown.Label>
+            {onFilter && (
+              <>
+                {/* The queue's filter, from the project it names — the READY header's own control, said
+                    here too, since this row is where a reader looking at one project already is. */}
+                <RadixDropdown.Item className={MENU_ITEM} onSelect={onFilter}>
+                  {filtered ? "Clear the queue filter" : "Filter the queue to this project"}
+                </RadixDropdown.Item>
+                <RadixDropdown.Separator className="mx-1 my-1 h-px bg-border" />
+              </>
+            )}
             {githubRepo && (
               <>
                 {/* A real anchor, so ⌘-click, middle-click and copy-link behave as a link does. */}

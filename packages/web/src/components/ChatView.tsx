@@ -99,7 +99,7 @@ import { ThreadBandStamp } from "./BandLabel.tsx"
 import { CopyTerminalCommandButton, useCopyTerminalCommand } from "./ExternalTerminalCommand.tsx"
 import { SignInModal } from "./SignInModal.tsx"
 import { PROVIDER_LABEL } from "../lib/signIn.ts"
-import { ExpandThreadLink } from "./ExpandThreadLink.tsx"
+import { ThreadMenu } from "./ThreadMenu.tsx"
 import { takeFullscreenEnterAnchor } from "../lib/fullscreenHandoff.ts"
 import { prependEarlierPage } from "../lib/transcriptPagination.ts"
 import { buildVirtualTranscriptMessageRows, earlierLoadGate, nextTailFollow, TAIL_FOLLOW_PX, type VirtualTranscriptMessageRow } from "../lib/virtualTranscript.ts"
@@ -1607,9 +1607,9 @@ export function ThreadHeader({ slug, onStatusApplied, onClose, showReturnToQueue
             doneBusy={markComplete.isPending}
             onStatusApplied={onStatusApplied}
           />
-          {/* The fullscreen door, drawer header edition — same component as the queue card's, so the two
-              cannot drift. Only where there is a drawer to leave: the /full page is already there. */}
-          {onClose && <ExpandThreadLink slug={slug} />}
+          {/* The drawer's own menu, and in it the one way to /full (ThreadMenu.tsx). Only where there is
+              a drawer to leave: the /full page is already there, and leaves by HeaderActions `collapse`. */}
+          {onClose && <ThreadMenu slug={slug} />}
         </div>
         {/* Close-X for the DRAWER context (onClose passed by ThreadSheet) — parity with the Settings,
             sub-agent, and Doc drawers, all of which carry a corner "Close". Wired to the SAME animated

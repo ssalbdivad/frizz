@@ -101,12 +101,13 @@ test("every child-operation surface offers the dismiss ×, through the one share
   // so the rail and the queue card named a phantom child and offered no way to retire it. This is the
   // guard against a surface silently dropping the control again, and against one of them growing its
   // own dismiss call: `childOpDismisser` is where the direct-child / has-an-id rule lives, and a local
-  // `rpc.stopBackgroundOp` would route around it.
+  // `stopBackgroundOp` call on any client — the page's `rpc` or a project-scoped one — would route
+  // around it.
   for (const file of ["components/QueueSubAgentLines.tsx", "components/Sidebar.tsx", "components/ChatView.tsx"]) {
     const source = readFileSync(join(SRC, file), "utf8")
     assert.match(source, /onDismiss=\{childOpDismisser\(/, `${file} must pass the shared dismisser to its ChildOpRow`)
   }
-  const callers = sourceFiles(SRC).filter((path) => /\brpc\.stopBackgroundOp\(/.test(readFileSync(path, "utf8")))
+  const callers = sourceFiles(SRC).filter((path) => /\.stopBackgroundOp\(/.test(readFileSync(path, "utf8")))
   assert.deepEqual(
     callers.map(relative),
     ["lib/dismissChildOp.ts"],

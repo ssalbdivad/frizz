@@ -9,11 +9,11 @@ import { HEADER_ICON_CLASS } from "../lib/headerIcon.ts"
 import { Tooltip } from "./Tooltip.tsx"
 import { useShortcutLabel, withShortcut } from "../lib/keyboardRuntime.ts"
 
-// THE FULLSCREEN DOOR, CLOSING — ExpandThreadLink's exact counterpart, and it stands in the exact
-// place: HeaderActions' `expand` slot, so the icon that took the reader to /full and the icon that
-// brings them back occupy one position in one strip (maintainer 2026-09-02: "instead of a back arrow
-// in the upper left, I think we should just have a collapse icon in the same place where the expand
-// icon is in the cue card").
+// THE FULLSCREEN DOOR, CLOSING — the counterpart of the drawer menu's "Open fullscreen" (ThreadMenu.tsx),
+// in the /full page's own action strip (HeaderActions `collapse`). It stood in the queue card's expand
+// slot while cards had one (maintainer 2026-09-02: "instead of a back arrow in the upper left, I think we
+// should just have a collapse icon in the same place where the expand icon is in the cue card"); cards
+// lost theirs on 2026-09-28, when /full became an option in the drawer rather than a door on every card.
 //
 // It replaced an ArrowLeft that sat before the TITLE, at the header's far left — a second, unrelated
 // place to look for a whole-thread verb, and a glyph that says "previous page" about a control whose

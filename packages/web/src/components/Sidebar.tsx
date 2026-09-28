@@ -1,72 +1,45 @@
-import { memo, useCallback, useEffect, useLayoutEffect, useRef, useState } from "react"
+import { memo, useCallback, useState } from "react"
 import { useQueryClient } from "@tanstack/react-query"
-import { useVirtualizer } from "@tanstack/react-virtual"
-import { useSnapshot } from "valtio"
 import { AlarmClock, Check, ChevronRight, CircleDashed, Ellipsis, Github, Hourglass, Loader2, Pin, PinOff, RotateCcw, TerminalSquare, Timer } from "lucide-react"
-import type { BoardSnapshot, ThreadView } from "@frizz/shared"
-import { store, openThread, scrollToQueueCard, queueCardRoot, queueCardTargetY, pushSubAgentDrawer, showToast, drawerThreadSlug, QUEUE_CARD_VIEWPORT_TOP } from "../store.ts"
-import { registerQueueCursor } from "../lib/keyboardRuntime.ts"
+import type { ThreadView } from "@frizz/shared"
+import { openThread, scrollToQueueCard, pushSubAgentDrawer, showToast } from "../store.ts"
 import { rpc } from "../api/rpc.ts"
-import { useBoard, asThreads } from "../hooks.ts"
-import { prefs } from "../lib/prefs.ts"
-import { sectionThreads, externalThreads, orderByInteraction, partitionActive, needsAction, displayTitle, titleIsProvisional, isPinned, isSnoozed, parkedAwaitingHint, sessionIndicatorKind, offersRetry, futureSnoozedUntil, queueLabelAt, waitNamesPr, prChecksRunning, restingOnSubAgents } from "../groups.ts"
+import { needsAction, displayTitle, titleIsProvisional, isPinned, isSnoozed, parkedAwaitingHint, sessionIndicatorKind, offersRetry, futureSnoozedUntil, queueLabelAt, waitNamesPr, prChecksRunning, restingOnSubAgents } from "../groups.ts"
 import { ageSpan, relativeAge, limitResumeClock } from "../lib/activityTime.ts"
 import { useNowMs } from "../lib/liveClock.ts"
 import { commandFailed, commandLive, commandStateLabel } from "../lib/commandThreads.ts"
 import { BANDS, BAND_LABEL_TYPE, BandCount, BandGlyph, type BandKey } from "./BandLabel.tsx"
 import { BoxSpinner, STATUS_BOX } from "./BoxSpinner.tsx"
 import { ChildOpRow } from "./ChildOpRow.tsx"
-import { ExpandThreadLink } from "./ExpandThreadLink.tsx"
 import { visibleChildOps } from "../lib/childOps.ts"
 import { childOpDismisser } from "../lib/dismissChildOp.ts"
 import { MarkAsButton } from "./MarkAsButton.tsx"
-import { DispatchForm } from "./NewThreadModal.tsx"
-import { StatusRow } from "./StatusRow.tsx"
 import { Tooltip } from "./Tooltip.tsx"
 import { ProviderMark } from "./ProviderMark.tsx"
 import { STATUS_CHIP } from "../lib/status.ts"
 import { STALLED_RETRY_MESSAGE, retrySession } from "../lib/retrySession.ts"
 import { deliverProjectFollowUp } from "../lib/projectFollowUp.ts"
 import { useThreadApi, useThreadIsForeignToPage, useThreadProjectDir, useThreadProjectId } from "../api/threadApi.tsx"
-import { formatSnoozedUntil, formatAutoSnoozedUntil, formatUserSnooze } from "../lib/snooze.ts"
+import { formatAutoSnoozedUntil, formatUserSnooze } from "../lib/snooze.ts"
 import { formatCompactElapsed } from "../lib/durationLabels.ts"
 import { awaitingProse, awaitingWaitClause } from "../lib/awaitingPresentation.ts"
 import { useOptimisticallySteered } from "../lib/steering.ts"
-import { clearArchived, useOptimisticallyArchived } from "../lib/optimisticArchive.ts"
-import { activeSidebarSection, queueNavigationSettled, railRevealDelta, type SidebarSectionGeometry } from "../lib/sidebarScrollspy.ts"
-import type { ReactElement, ReactNode, RefObject } from "react"
+import { clearArchived } from "../lib/optimisticArchive.ts"
+import type { ReactElement, ReactNode } from "react"
 
-// THE LEFT SIDEBAR — the thread list as a FLOATING column (no border, no fill: it floats in the
-// page's whitespace the way the old ToC nav did). App centers the sidebar + workpane as a PAIR with
-// a scaling gutter between them; this column is VERTICALLY CENTERED in the viewport and holds still
-// while the workpane scrolls. Width SCALES with the viewport — clamp(272px, 34vw, 680px) — so titles
-// get real room on large screens (titles WRAP, never truncate; captions stay one line; NEVER a
-// horizontal scrollbar — overflow-x is clipped and unbreakable tokens break).
+// THE THREAD ROW — one thread as a line of a list, with its indicator, its title and trailers, and the
+// verbs it offers on hover (pin, Retry, reopen). Everything's project list draws
+// every project's threads with these (ProjectList.tsx), each group under its project's ThreadProjectScope.
 //
-// ENTIRELY MOUSE-DRIVEN: no arrow-walk, no selection chevron. A session row CLICK opens the thread's
-// drawer (chat / doc via store.openThread); a legacy row opens its frizz doc.
+// The file is named for the column it was written for: a project's own board had a floating sidebar of
+// these rows in four bands (Rested, Active, Snoozed, Done) until 2026-09-28, when the board went with the
+// project view. The bands are Everything's now — a project's current work in the list, and the rest of
+// it (Snoozed, Done, External) under its row when it is opened — and ARCHITECTURE.md § Board
+// nomenclature still fixes their names.
 //
-// Sections: FOUR bands top→bottom, in the names ARCHITECTURE.md § Board nomenclature fixes — RESTED
-// (everything at rest = the queue's own rows, a.k.a. the cue), ACTIVE (the rows currently spinning),
-// then a labeled DIMMED HELD band (every declared clock/hourglass/timed wait), then DONE — each split
-// by a bare <hr>, and Snoozed and Done both collapsible. Rested and Active are ONE uncollapsible <section>
-// (you can't hide your queue or your live work); the <hr> between them is the whole distinction, so
-// never describe a rested row as active. A thread merely awaiting its OWN sub-agents is INTERNAL work
-// and stays spinning in Active undimmed; only external waiters drop into the dimmed band (groups.ts
-// isSnoozed).
-// Needs-you renders as the row INDICATOR + the queue; awaiting as the hint gloss.
-// Done = explicitly completed. Legacy .frizz rows do not render at all.
-//
-// Below those four, and outside the vocabulary entirely, sits EXTERNAL — the project's own
-// `claude`/`codex` terminals. They are not a fifth band of frizz's model, they are a separate listing
-// of work frizz can read but does not drive, so nothing about the four names above applies to them.
+// ENTIRELY MOUSE-DRIVEN: no arrow-walk, no selection chevron. A row CLICK opens the thread — in the list,
+// through its RowScope: its card when the queue is showing it, else its drawer, in place.
 
-
-/**
- * The column's track, in ONE place: App reserves an empty aside with these exact classes while the
- * board is still loading for a project this browser has seen populated (lib/sidebarPresence.ts), so
- * the workpane sits where it will end up instead of jumping when the real sidebar mounts.
- */
 // A row's hover-revealed icon action: sized to the title's FIRST line (h-[19px]; the group's top-1
 // matches the row's pt-1) so it never exceeds the row height. Bare glyphs — the group draws no box
 // around them (its backing is the rail's own base colour under the row's hover wash; see the strip in
@@ -76,7 +49,7 @@ import type { ReactElement, ReactNode, RefObject } from "react"
 // colour the ring lands at ~0.8 alpha where it overlaps the 0.7 fill, so the pin read as a darker
 // outline around a lighter middle (maintainer 2026-09-11: "slightly dimmer in the middle. It looks
 // insane"). Group opacity composites the finished glyph once, so fill and stroke read as one solid
-// body. Identical for the stroke-only door and Retry; `disabled:opacity-50` still wins, as a variant
+// body. Identical for the stroke-only pin and Retry; `disabled:opacity-50` still wins, as a variant
 // utility over a bare one.
 export const ROW_ACTION_CLASS = "flex h-[19px] w-[19px] items-center justify-center rounded text-muted opacity-70 outline-none transition-[color,opacity] hover:bg-panel-2 hover:text-fg hover:opacity-100"
 
@@ -109,350 +82,19 @@ function rowWashClass(open: boolean): string {
   }`
 }
 
+/** The page's left column's track — Everything's (AllQueues.tsx), which was the board's sidebar's. */
 export const SIDEBAR_COLUMN_CLASS =
   "sticky top-0 self-start h-screen w-[clamp(272px,34vw,680px)] shrink-0 flex flex-col justify-center max-[800px]:static max-[800px]:h-auto max-[800px]:w-full max-[800px]:justify-start max-[800px]:pt-16"
-
-export function Sidebar() {
-  const snap = useSnapshot(store)
-  const board = useBoard()
-  // A just-sent steer is folded into the board BEFORE anything is derived from it, so the row's
-  // spinner and its POSITION land together. Consulting the hint further down (in the indicator alone,
-  // as this once did) left the two disagreeing for the whole injection + tailer round-trip: the row
-  // spun while still sitting in the queue-ordered rested band, below the rule, and hopped up to the
-  // running band seconds later — measured at 2.0s here with an instantaneous fixture worker, longer in
-  // production. See lib/steering.ts.
-  // Both optimistic overlays, composed: a just-sent steer pulls a row into Active, a just-clicked
-  // Mark-as-done drops it into Done — each folded in BEFORE any band is derived, so the row's
-  // appearance and its POSITION always land together instead of one waiting on a round-trip the other
-  // already skipped (lib/steering.ts, lib/optimisticArchive.ts).
-  const all = useOptimisticallyArchived(useOptimisticallySteered(asThreads(board?.threads ?? [])))
-  const sections = sectionThreads(all, useSnapshot(prefs).queueOrder)
-  // Its own partition, deliberately NOT a SectionKey: sectionThreads drops external rows entirely, and
-  // that stays true — an external session must never be able to land in Active, Snoozed or Done by
-  // accident. This band is the only place they render, and they leave it by being STEERED, not by
-  // being re-sorted.
-  // Ordered by the SAME key the rest of the rail uses, so the rest-time column reads monotonically down
-  // the band. It cannot be left to discovery order: the tailer returns these ids by file MTIME, while
-  // the label prints the agent's own last output — two clocks that disagree whenever a transcript is
-  // touched without the agent speaking (a resume that writes a header, a copy, a restore).
-  const externalSessions = orderByInteraction(externalThreads(all))
-  const collapsed = snap.sidebarCollapsed
-  const activeThreads = sections.active
-  const heldThreads = sections.snoozed
-  const inactiveThreads = sections.inactive
-  const railRef = useRef<HTMLDivElement>(null)
-  const [activeId, setActiveId] = useState<string | null>(null)
-  // A click-to-card navigation in flight: the row that was clicked, plus where its scroll landed. Both
-  // halves matter — see the release conditions in syncActiveSection.
-  const pendingNavigation = useRef<{ id: string; landedY: number } | null>(null)
-
-  const syncActiveSection = useCallback(() => {
-    const items = [...document.querySelectorAll<HTMLElement>("[data-queue-card][data-queue-leaving=\"false\"]")]
-      .map((element) => {
-        const id = element.dataset.queueCard
-        if (!id) return null
-        // The BORDERED ROOT, not the slot: the slot is the fade wrapper and also spans the root's
-        // bottom scroll-reserve margin, and the reading rule below is decided by how much of a CARD is
-        // on screen.
-        const card = element.querySelector<HTMLElement>("[data-queue-card-root]") ?? element
-        const { top, bottom } = card.getBoundingClientRect()
-        return { id, top, bottom } satisfies SidebarSectionGeometry
-      })
-      .filter((item): item is SidebarSectionGeometry => item !== null)
-    const pending = pendingNavigation.current
-    if (pending) {
-      const target = items.find((item) => item.id === pending.id)
-      if (queueNavigationSettled(target, window.scrollY, pending.landedY, QUEUE_CARD_VIEWPORT_TOP)) pendingNavigation.current = null
-      else {
-        setActiveId(pending.id)
-        return
-      }
-    }
-    const maxScrollY = Math.max(0, document.documentElement.scrollHeight - window.innerHeight)
-    const atDocumentBottom = maxScrollY > 0 && window.scrollY >= maxScrollY - 1
-    const nextActiveId = activeSidebarSection(items, window.innerHeight, atDocumentBottom)
-    // Scroll/resize observations can fire several times per frame. Preserve the same primitive
-    // state value to avoid a needless row-tree update when the selected card has not changed.
-    setActiveId((current) => current === nextActiveId ? current : nextActiveId)
-  }, [])
-
-  useEffect(() => {
-    let frame = 0
-    const schedule = () => {
-      cancelAnimationFrame(frame)
-      frame = requestAnimationFrame(syncActiveSection)
-    }
-    schedule()
-    // Capture scroll so this also follows an app-level scrolling element if the page's scroll root
-    // changes. The rail's own scroll is harmless here (card geometry has not changed), while a
-    // programmatic/smooth queue-card scroll is always observed.
-    document.addEventListener("scroll", schedule, { capture: true, passive: true })
-    window.addEventListener("resize", schedule)
-    const workpane = document.getElementById("workpane")
-    const observer = workpane ? new ResizeObserver(schedule) : null
-    // Transcript expansion, card exits, and keyframe reorders can change which card crosses the
-    // reading line without a window scroll. Observe those DOM changes as well as the workpane box.
-    const mutations = workpane ? new MutationObserver(schedule) : null
-    if (workpane) observer?.observe(workpane)
-    if (workpane) mutations?.observe(workpane, { childList: true, subtree: true, attributes: true, attributeFilter: ["data-queue-card", "data-queue-leaving", "style", "class"] })
-    return () => {
-      cancelAnimationFrame(frame)
-      document.removeEventListener("scroll", schedule, true)
-      window.removeEventListener("resize", schedule)
-      observer?.disconnect()
-      mutations?.disconnect()
-    }
-  }, [syncActiveSection, snap.view, snap.drawers.length])
-
-  // The thread up in the side drawer, if any: its row holds its wash lit (rowWashClass), so the row and
-  // the drawer beside it read as one thing. The scroll marker stays the QUEUE's reading position.
-  const openId = drawerThreadSlug(snap.drawers)
-
-  // Reveal a newly active — or newly opened — row inside the rail itself. Direct scrollTop adjustment
-  // is intentionally local: Element.scrollIntoView could scroll the main document and steal the
-  // reader's position. A drawer opened from anywhere but its own row (the palette, a link, a toast)
-  // otherwise lit a row the rail had scrolled out of sight.
-  const revealRow = useCallback((id: string | null) => {
-    const rail = railRef.current
-    if (!rail || !id || window.matchMedia?.("(max-width: 800px)").matches) return
-    const item = rail.querySelector<HTMLElement>(`[data-sidebar-item="${CSS.escape(id)}"]`)
-    if (!item) return
-    const railBox = rail.getBoundingClientRect()
-    const itemBox = item.getBoundingClientRect()
-    const delta = railRevealDelta(railBox.top, railBox.bottom, itemBox.top, itemBox.bottom)
-    if (Math.abs(delta) > 0.5) rail.scrollTop += delta
-  }, [])
-  useLayoutEffect(() => revealRow(activeId), [activeId, revealRow])
-  useLayoutEffect(() => revealRow(openId), [openId, revealRow])
-
-  // Called AFTER scrollToQueueCard, which has either scrolled or (with a drawer dismissing over the
-  // still-locked page) parked the landing for the unlock ~210ms out. So the landing is read off the
-  // CARD, not off window.scrollY: the two agree once the page has settled, and only the card knows the
-  // answer while the lock is still holding scrollY at 0.
-  const navigateToQueueCard = useCallback((id: string) => {
-    pendingNavigation.current = { id, landedY: queueCardTargetY(id) ?? window.scrollY }
-    setActiveId(id)
-  }, [])
-
-  // THE KEYBOARD READS THIS SAME MARKER. `j` / `k` step from the card this rail says is being read and
-  // land exactly as a row click does (scroll, ring, pin), and `e` / `h` / `r` / `f` act on that card —
-  // so the highlighted row is always the card a key will touch. The ref is written synchronously on a
-  // key's own landing because the state above only settles a frame later, and a quick `j j` must step
-  // from where the first press went, not from where the page was.
-  const readingRef = useRef(activeId)
-  readingRef.current = activeId
-  useEffect(() => registerQueueCursor({
-    keys: () => [...document.querySelectorAll<HTMLElement>('[data-queue-card][data-queue-leaving="false"]')]
-      .map((element) => element.dataset.queueCard ?? "")
-      .filter(Boolean),
-    current: () => readingRef.current,
-    root: (id) => queueCardRoot(id),
-    go: (id) => {
-      if (!scrollToQueueCard(id)) return
-      readingRef.current = id
-      navigateToQueueCard(id)
-    },
-  }), [navigateToQueueCard])
-
-  return (
-    // HEIGHT MODEL: a sticky, exactly viewport-height wrapper that CENTERS the inner column, which
-    // grows fit-content to a near-flush cap and scrolls internally only past it. overflow-x is CLIPPED
-    // (titles wrap; min-w-0 at every level). No bg/clip on the column itself.
-    // NO z-index. The rail and the workpane are side-by-side flex columns that never overlap, so the
-    // old desktop `z-[100]` bought nothing — but it outranked every ordinary overlay (the ⌘K palette
-    // at z-[60], the new-thread modal and settings drawer at z-50, toasts at z-[70]), so each of them
-    // painted BEHIND the prompt box and had to escalate past 100 to be seen. That escalation is the
-    // recurring "hidden underneath the prompt box" bug. Default stacking is the fix: overlays win by
-    // simply being overlays. Do not re-add a z here — raise the specific overlay instead.
-    // The 272px FLOOR (was 320px) only binds in the TABLET BAND just above the 800px stack point, where
-    // 34vw is smallest and the workpane is squeezed hardest — 320px claimed ~39% of an 820px viewport
-    // for nav and left the queue with the remainder. 272px still holds the dispatch composer's profile
-    // chip and its icon buttons on one line, and hands the difference back to the queue.
-    // TOP-ANCHORED, exactly as Everything's column is (AllQueues.tsx): a project view is Everything
-    // filtered to one project (maintainer 2026-09-28: "the core UI should adapt … when it is filtered to a
-    // single project"), so the status row and its filter must not move when the filter does. Centred, as
-    // it was until then, the filter jumped ~280px down the page on every switch and the view read as a
-    // different app.
-    <aside className={`${SIDEBAR_COLUMN_CLASS} !justify-start pt-[48px] max-[800px]:!pt-5`}>
-      {/* The content column FILLS the aside track (no narrow inner cap). Its cap reserves the 48px above
-          it and 20px below, and below it the column grows and then scrolls INTERNALLY. The reserve used to be 44px a side, holding open the band the FIXED
-          status bar occupied in the page's top-left corner so a long thread list could not push the
-          composer up underneath it. That bar is gone — its contents are the StatusRow at the top of
-          this very column now — so the lane it needed goes with it and the rail gets the 56px back.
-          Short boards are unaffected: they never reach the cap. */}
-      <div className="flex max-h-[calc(100vh-68px)] min-h-0 min-w-0 w-full flex-col max-[800px]:max-h-none">
-        {/* THE PROMPT BOX lives at the sidebar top (it replaced the New-thread pill — maintainer
-            2026-07-09): always present, type + Enter dispatches a new thread. A brand-new repo shows
-            this same box CENTERED as the whole screen (App hides the sidebar); the first dispatch
-            shunts it here to the left. */}
-        <div className="mb-5 shrink-0 px-0.5">
-          {/* THE STATUS ROW rides the top of the prompt box: home, the settings/reload pair and both
-              quota chips at the left edge, the project — its GitHub mark and owner/repo, one link to
-              the repo — at the right. The quota chips did once float
-              here on their own, then moved out to a fixed corner bar because quota is ACCOUNT-global
-              rather than a property of this composer — which is still true, and is why they come back
-              as part of a GLOBAL status row instead of as a composer decoration. */}
-          {/* The GitHub picker's door now lives INSIDE the dispatch composer (a small icon left of the
-              send button — see DispatchForm/Composer leftAction); no separate pill here. */}
-          <StatusRow />
-          <DispatchForm />
-        </div>
-        <div ref={railRef} data-sidebar-rail className="min-h-0 min-w-0 overflow-y-auto overflow-x-hidden max-[800px]:overflow-y-visible">
-          {/* PINNED — the human's shelf, at the very top, above the cue (maintainer 2026-09-02, variant
-              A of the pin mockups: each row wearing the small solid pin where the cue's rest time would
-              sit). These rows are OUT of the band system entirely — sectionThreads diverts them before
-              any band claims them, so a pinned thread stays here spinning, resting, snoozed or Done
-              alike — and the band is ordered by the pin instants, oldest first, never by activity: it
-              is an arrangement the human made, and nothing the threads do may shuffle it.
-              LABELED since 2026-09-19, like every band below it, and NOT collapsible (maintainer: the
-              Pinned, Queue and Running labels "should not be collapsible") — the header is the static
-              form of SectionHeader, so it lines up with the collapsible Snoozed/Done headers. */}
-          {sections.pinned.length > 0 && (
-            <section aria-label="Pinned">
-              <SectionHeader band="pinned" count={sections.pinned.length} />
-              {sections.pinned.map((t) => (
-                <div key={t.id}>
-                  <ThreadRow t={t} active={activeId === t.id} open={openId === t.id} onQueueNavigate={navigateToQueueCard} />
-                  <SubAgentRows t={t} />
-                </div>
-              ))}
-              {/* The separating rule is drawn only when the Rested/Active section actually follows:
-                  Snoozed, Done and External each draw their OWN rule above themselves, so drawing one
-                  here too would double it whenever that section is empty. */}
-              {activeThreads.length > 0 && <hr className="my-3 border-border/50" />}
-            </section>
-          )}
-          {/* RESTED + ACTIVE — always shown, NEVER collapsible (you can't hide your queue or your live
-              work). Two rule-separated bands (see groups.ts orderActive/partitionActive), each under a
-              static label since 2026-09-19 (maintainer: "sidebar labels for pinned, queue, and running
-              … should not be collapsible"). The labels use the maintainer's own words for the bands —
-              READY for the cue and WORKING for the spinning rows (QUEUE and RUNNING until 2026-09-23),
-              rather than the code's Rested/Active keys, because the label is copy the human reads. Each
-              wears an icon naming WHOSE move it is — an inbox (yours) and a bot (the agent's) — since
-              "Working" alone does not say who is working (see SectionHeader).
-              RESTED — the cue — sits FIRST, right under the prompt box (maintainer 2026-08-08), in the
-              EXACT queue order, so the rail's top row is opposite the queue's top card and scrolling
-              the queue walks the scroll marker straight down this rail. ACTIVE — live work that isn't
-              waiting on you — runs BELOW the rule (an Active row has no queue card — the maintainer's
-              ask: they don't render in the queue), so it stays glanceable without pushing the cue down.
-              Only the cue's rows carry the rest-time column: it dates a HANDOFF, and a row that is
-              still spinning has not made one. An empty band draws no label, the same as Snoozed and
-              Done: a "Ready 0" header over nothing is a count nobody needs. */}
-          {activeThreads.length > 0 ? (
-            (() => {
-              const { running, rested } = partitionActive(activeThreads)
-              const renderRow = (restedAge: boolean) => (t: ThreadView) => (
-                <div key={t.id}>
-                  <RailRow t={t} active={activeId === t.id} open={openId === t.id} onQueueNavigate={navigateToQueueCard} restedAge={restedAge} />
-                </div>
-              )
-              return (
-                <>
-                  {rested.length > 0 && <SectionHeader band="ready" count={rested.length} />}
-                  {rested.map(renderRow(true))}
-                  {running.length > 0 && rested.length > 0 && <hr className="my-3 border-border/50" />}
-                  {running.length > 0 && <SectionHeader band="working" count={running.length} />}
-                  {running.map(renderRow(false))}
-                </>
-              )
-            })()
-          ) : sections.pinned.length === 0 ? (
-            // pl-5 matches ThreadRow's own content inset (its status-indicator column), so the
-            // placeholder starts exactly where the rows it stands in for would — and lands within a
-            // pixel of the Snoozed/Done labels, which clear the same width for their chevron. A
-            // bare px-1.5 left it hanging 14px out at the rail's raw edge, alone against everything.
-            // "open", not "active": this stands in for the Active AND Rested bands together, and it
-            // renders only when BOTH are empty. Saying "no active threads" over a hidden queue would be
-            // the same conflation the vocabulary above exists to stop. Suppressed under a pinned band —
-            // the pinned rows ARE open threads, so the claim would be visibly false one band up.
-            <div className="py-1 pl-5 pr-1.5 text-[11.5px] text-muted-50">No open threads</div>
-          ) : null}
-          {/* HELD — every deliberate clock/hourglass/timed wait, visibly de-emphasized and labeled so
-              it cannot read as active work. COLLAPSIBLE, and collapsed by default (maintainer
-              2026-08-04): nothing here is waiting on the rail's reader right now, so it opens as a
-              labeled count and expands on demand — the count is the glance. */}
-          {heldThreads.length > 0 && (
-            <section aria-label="Snoozed">
-              <hr className="my-3 border-border/50" />
-              {/* Same header component as Done so the bands can never visually drift. */}
-              <SectionHeader
-                band="snoozed"
-                count={heldThreads.length}
-                collapsed={collapsed.snoozed}
-                onToggle={() => (store.sidebarCollapsed.snoozed = !store.sidebarCollapsed.snoozed)}
-              />
-              {!collapsed.snoozed &&
-                heldThreads.map((t) => (
-                  <div key={t.id}>
-                    <ThreadRow t={t} active={activeId === t.id} open={openId === t.id} onQueueNavigate={navigateToQueueCard} />
-                    <SubAgentRows t={t} />
-                  </div>
-                ))}
-            </section>
-          )}
-          {/* DONE — collapsible, OMITTED entirely (with its rule) when empty, and the ONLY band whose
-              rows are virtualized once open (see DoneBand: it is the only band that grows without
-              bound). Collapsed, it has always mounted nothing at all — the gate below is the original
-              one — so virtualization is about the EXPANDED band alone. */}
-          {inactiveThreads.length > 0 && (
-            <div>
-              <hr className="my-3 border-border/50" />
-              <SectionHeader
-                band="done"
-                count={inactiveThreads.length}
-                collapsed={collapsed.inactive}
-                onToggle={() => (store.sidebarCollapsed.inactive = !store.sidebarCollapsed.inactive)}
-              />
-              {!collapsed.inactive && (
-                <DoneBand threads={inactiveThreads} railRef={railRef} activeId={activeId} openId={openId} onQueueNavigate={navigateToQueueCard} />
-              )}
-            </div>
-          )}
-          {/* EXTERNAL — the project's own `claude`/`codex` terminals, which frizz reads but
-              does not drive. LAST in the rail and collapsed by default: it is the only band that is not
-              frizz's work at all, so it must never compete with the queue for the reader's eye. Only
-              RESTED sessions are in it — the server drops a spinning one, because a session that is
-              working is one the human already has open in its own window (maintainer 2026-08-19).
-              There is no queue card, no verb and no Snoozed/Done to fall into. The composer is the
-              ordinary one, and sending from it TAKES THE SESSION OVER: the router's
-              promoteExternalSession registers it, and the row leaves this band as an ordinary thread. */}
-          {externalSessions.length > 0 && (
-            <section aria-label="External">
-              <hr className="my-3 border-border/50" />
-              <SectionHeader
-                band="external"
-                count={externalSessions.length}
-                collapsed={collapsed.external}
-                onToggle={() => (store.sidebarCollapsed.external = !store.sidebarCollapsed.external)}
-              />
-              {/* The rest-time column is ON here, unlike Snoozed and Done. Every row in this band is by
-                  definition at rest, so "how long ago" is the only thing that distinguishes them — it is
-                  what tells you which terminal you wandered away from an hour ago and which one is from
-                  last Tuesday. Snoozed rows carry their own hint gloss and Done rows are over; neither has
-                  that problem. */}
-              {!collapsed.external &&
-                externalSessions.map((t) => (
-                  <ThreadRow key={t.id} t={t} active={activeId === t.id} open={openId === t.id} onQueueNavigate={navigateToQueueCard} restedAge />
-                ))}
-            </section>
-          )}
-        </div>
-      </div>
-    </aside>
-  )
-}
 
 /**
  * A row drawn OUTSIDE its own project's page — in Everything's project list (ProjectList.tsx), where the
  * page project is the prompt box's pick and the row is usually another project's. Its verbs must not ask
  * the page: the row sits under a ThreadProjectScope, so pin, reopen and Retry go through its project's
- * own client (api/threadApi.tsx), and these say where "open" and the fullscreen door lead.
+ * own client (api/threadApi.tsx), and these say where "open" leads.
  */
 export interface RowScope {
   /** "Show me this thread" — its card if the queue is showing one, else its drawer, in place. */
   open: (t: ThreadView) => void
-  /** A thread's /full, in its own project: `/all/<slug>/thread/<t>/full`. */
-  fullHref: (slug: string) => string
   /** The row's project IS the page project, so a child row can open its own drawer here directly. */
   page: boolean
 }
@@ -557,119 +199,6 @@ export function SectionHeader({ band, count, collapsed, onToggle }: { band: Band
   )
 }
 
-// THE DONE BAND, VIRTUALIZED — the only band that is, because it is the only one that grows without
-// bound. Done holds every thread the human has ever finished, and it mounted all of them: 553 rows on a
-// copy of the maintainer's own board, measured 2026-09-04 with scripts/verify-done-band-virtualization.mjs.
-//
-//   rail DOM nodes                     154 collapsed → 15,085 expanded
-//   ONE full style recalculation      3.10ms         →  21.50ms   (6.9×)
-//   ONE overlay open: main thread blocked   0ms      → 101-108ms, and 53ms → 119ms to paint
-//
-// Virtualized, expanded: 884 nodes, a 4.00ms recalculation, and no long task at all.
-//
-// The recalculation is the MECHANISM, not a side reading. App's body scroll lock (App.tsx) forces
-// exactly one every time a drawer, the palette or the settings pane opens, so an expanded Done band
-// taxes every later navigation whether or not the reader is looking at it — and the rows it taxes you
-// for are the ones you finished with. The rows are ALREADY memoized; this was never a render problem.
-//
-// It shares the RAIL's scroller rather than growing a nested one — a second scrollbar inside the rail
-// would be a UI change, and this is a performance fix. That is what `scrollMargin` is for: the band's
-// own offset inside the rail's scrolled content, so the virtualizer can read the rail's scrollTop in the
-// band's coordinates. The offset MOVES whenever anything above changes — a row arrives, Snoozed
-// expands, a title rewraps — so it is re-measured after every commit (every band above is rendered from
-// the board, so a commit is the only way any of them can change) and on any resize of the rail itself
-// (a width change rewraps titles above without a commit).
-//
-// WHAT THIS COSTS, so nobody rediscovers it as a bug: the browser's own find (⌘F) and Tab order reach
-// only the rows currently mounted. That is inherent to virtualizing, and the rail is a column of names
-// you SCAN — ⌘K searches every thread, mounted or not.
-// The rail has no arrow-walk and no programmatic row focus (it is mouse-driven — see the header note),
-// so there is nothing here that has to scroll an unmounted row into view before focusing it. If one is
-// ever added, it must call virtualizer.scrollToIndex first; a row that is not mounted cannot be focused.
-//
-// 27px is STRUCTURAL, not a fitted constant: a row is pt-1 + leading-[19px] + pb-1, and that line box
-// is fixed, so it holds in BOTH app fonts (`html[data-font]`) with nothing to re-measure when the
-// setting flips. Verified: the band's ink pitch reads exactly 27.00px in mono AND in sans, and all 553
-// rows measured 27px each, so the whole band is 14,931px estimated and 14,931px real — the rail's
-// scrollHeight is 15,120px with the band virtualized and 15,120px without it, and the scrollbar cannot
-// tell. Only a WRAPPED title (46px) breaks the estimate, and measureElement corrects it as it mounts.
-const DONE_ROW_ESTIMATE = 27
-// ~25 rows fill the 684px rail at 1440×900, so eight either side is a screenful of slack for a fast
-// wheel without taking the node count back up.
-const DONE_OVERSCAN = 8
-
-function DoneBand({
-  threads,
-  railRef,
-  activeId,
-  openId,
-  onQueueNavigate,
-}: {
-  threads: ThreadView[]
-  railRef: RefObject<HTMLDivElement | null>
-  activeId: string | null
-  openId: string | null
-  onQueueNavigate: (id: string) => void
-}) {
-  const listRef = useRef<HTMLDivElement>(null)
-  const [scrollMargin, setScrollMargin] = useState(0)
-  const virtualizer = useVirtualizer({
-    count: threads.length,
-    getScrollElement: () => railRef.current,
-    // Keyed by THREAD, not index: a Done row is archived by the human at any position in the band, and
-    // an index key would hand the next row the vanished one's measured height.
-    getItemKey: (index) => threads[index]?.id ?? index,
-    estimateSize: () => DONE_ROW_ESTIMATE,
-    overscan: DONE_OVERSCAN,
-    scrollMargin,
-  })
-
-  // NO DEPENDENCY ARRAY, deliberately: this has to run after every commit, because a commit is exactly
-  // when the bands above may have changed height. It reads two rects and settles immediately — a state
-  // write only happens when the offset actually moved.
-  useLayoutEffect(() => {
-    const rail = railRef.current
-    const list = listRef.current
-    if (!rail || !list) return
-    const measure = () => {
-      // CONTENT coordinates, not offsetTop. Neither the rail nor the aside above it is positioned, so
-      // offsetTop would answer against the document and carry the whole page layout into the number.
-      const next = list.getBoundingClientRect().top - rail.getBoundingClientRect().top + rail.scrollTop
-      setScrollMargin((current) => (Math.abs(current - next) < 0.5 ? current : next))
-    }
-    measure()
-    // The rail's own box: a width change rewraps the titles ABOVE this band, which moves it without any
-    // commit of its own.
-    const observer = new ResizeObserver(measure)
-    observer.observe(rail)
-    return () => observer.disconnect()
-  })
-
-  return (
-    // The band's full height, so the rail's scrollbar is the length the whole archive deserves — the
-    // reader must not be able to tell which rows are mounted.
-    <div ref={listRef} data-done-band className="relative w-full" style={{ height: virtualizer.getTotalSize() }}>
-      {virtualizer.getVirtualItems().map((item) => {
-        const t = threads[item.index]
-        if (!t) return null
-        return (
-          <div
-            key={t.id}
-            ref={virtualizer.measureElement}
-            data-index={item.index}
-            className="absolute left-0 top-0 w-full"
-            // `start` is in the RAIL's coordinates (it includes scrollMargin); this box is positioned
-            // inside the band, so the offset comes back off.
-            style={{ transform: `translateY(${item.start - scrollMargin}px)` }}
-          >
-            <RailRow t={t} active={activeId === t.id} open={openId === t.id} onQueueNavigate={onQueueNavigate} />
-          </div>
-        )
-      })}
-    </div>
-  )
-}
-
 // The title's trailing adornments — the provider mark, the `terminal` tag, the legacy status chip —
 // are ATOMIC inline boxes, and the line breaker is free to break right BEFORE one even though no
 // whitespace separates it from the title. On a wrapping title that regularly stranded the provider
@@ -747,6 +276,10 @@ export const ThreadRow = memo(function ThreadRow({
   // door to the in-drawer "Continue now" than waiting for the window). The queue card and drawer header
   // read the SAME helper, so no surface can disagree with the rail about which threads offer Retry.
   const canRestart = !legacy && offersRetry(t)
+  // Whether the row has any hover verb at all: the pin on every row frizz owns, Retry on a stalled one.
+  // A terminal thread frizz only reads offers neither, so it keeps its rest time under the pointer rather
+  // than trading it for an empty strip.
+  const hoverActions = !legacy && (!foreign || canRestart)
   // A pinned row wears the mark in its right-edge column AND places the unpin verb rightmost in the
   // hover strip; both read this one predicate so the two can never disagree.
   const pinned = !legacy && isPinned(t)
@@ -844,7 +377,7 @@ export const ThreadRow = memo(function ThreadRow({
                 it the two would collide — a 19px opaque button landing halfway across "20 seconds",
                 which reads as a rendering fault rather than an affordance. The label gives way to it
                 on hover instead: the button is why you pointed at the row. */}
-            {restedAge && <RestedAge t={t} yieldsToRetry />}
+            {restedAge && <RestedAge t={t} yieldsToRetry={hoverActions} />}
             {/* A pinned row wears the small solid pin in this same right-edge column (the cue's
                 rest-time spot — the approved mockup's variant A), and yields to the hover actions the
                 same way the rest time does. Never both: the pinned band passes no restedAge. */}
@@ -866,9 +399,10 @@ export const ThreadRow = memo(function ThreadRow({
           reachable from the keyboard: focus the row button and the next Tab lands here. */}
       {/* THE ROW'S HOVER ACTIONS, pinned to the right edge over the title's first line — exactly where
           the cue's rest time sits, which yields to them on hover (maintainer 2026-08-28: the expand icon
-          "should replace where the current time rest duration currently is"). Every row gets the
-          fullscreen door; a stalled/held row gets Retry after it, because recovery is the verb the row
-          is pointing at.
+          "should replace where the current time rest duration currently is"). A row frizz owns gets the
+          pin; a stalled/held row gets Retry after it, because recovery is the verb the row is pointing
+          at. The fullscreen door stood between them until 2026-09-28, when /full became an option in
+          the drawer's own menu (ThreadMenu.tsx) rather than a door on every row.
 
           NO BOX around the strip (maintainer 2026-09-03: "drop the background color around the icon
           buttons"). It still needs an OPAQUE backing — it overlays the title's first line, and a long
@@ -878,23 +412,21 @@ export const ThreadRow = memo(function ThreadRow({
           `after:` pseudo on the row), so the strip is exactly the row's colour whether hovered,
           keyboard-focused or snoozed. The old opaque `bg-panel` pill sat UNDER the wash and read as a
           darker box on the lit row. */}
-      {!legacy && (
+      {hoverActions && (
         <div className="absolute right-1.5 top-1 hidden items-center gap-0.5 bg-bg group-hover:flex group-focus-within:flex before:pointer-events-none before:absolute before:inset-y-0 before:right-full before:w-3 before:bg-linear-to-r before:from-transparent before:to-bg">
-          {/* The pin sits LEFT of the fullscreen door on a row that can be pinned (the approved mockup's
-              order). On a PINNED row the same button is the unpin and goes RIGHTMOST — after Retry too —
+          {/* The pin sits LEFT on a row that can be pinned (the approved mockup's order). On a PINNED row
+              the same button is the unpin and goes RIGHTMOST — after Retry too —
               because it is the hover form of the mark in the row's right-edge column: the mark fades and
               the unpin appears where it was (maintainer 2026-09-03: "unpin button should be far right for
               pinned threads on hover"). Not on a foreign row: the server refuses to pin what it does not
               own, so no button rather than a throwing one. */}
-          {/* MEASURED 2026-09-03 (scripts/ink-gaps.mjs on sidebar-pin-fixture, dsf 4): on the strip's
-              uniform 2px gap the OUTLINE pin's ink sat 12px from the door where door→Retry read 10px and
-              Retry→unpin 10.5px, because the pin is a narrow glyph (8×11 of ink in a 19px box, dead
-              6/5) and the door's ink is inset too (dead 5/4). The pin's box is trimmed 2px on its door
-              side so the strip reads ONE gap — pin→door 10px after the trim. The unpin needs no trim: it
-              is the strip's last mark and its 11px ink already sits 10.5px from Retry. RE-MEASURE rather
-              than re-guess if a glyph, its size or the gap changes. */}
+          {/* MEASURED 2026-09-03 (scripts/ink-gaps.mjs on sidebar-pin-fixture, dsf 4), with the fullscreen
+              door then standing between the pin and Retry: on the strip's uniform 2px gap the OUTLINE
+              pin's ink sat 12px from the door where door→Retry read 10px and Retry→unpin 10.5px, because
+              the pin is a narrow glyph (8×11 of ink in a 19px box, dead 6/5). The pin's box is trimmed 2px
+              on its right so the strip reads ONE gap. RE-MEASURE rather than re-guess if a glyph, its size
+              or the gap changes. */}
           {!foreign && !pinned && <RowPinButton t={t} className="-mr-0.5" />}
-          <ExpandThreadLink slug={t.id} size={12} className={ROW_ACTION_CLASS} keyHint={false} href={scope?.fullHref(t.id)} />
           {canRestart && <RowRetryButton t={t} />}
           {!foreign && pinned && <RowPinButton t={t} />}
         </div>
@@ -1011,11 +543,11 @@ function RowRetryButton({ t }: { t: ThreadView }) {
 // CAP band (0.01px residual in both fonts) — a better vertical in isolation, but its ink centre landed
 // 4.00px RIGHT of the unpin's and 0.09px (sans) / 0.66px (mono) above it, so the glyph jumped every
 // time the pointer arrived. This slot centres on the title's first LINE BOX instead, which is where the
-// door and Retry have always sat; an absolutely positioned strip cannot reach the in-flow baseline the
+// hover verbs have always sat; an absolutely positioned strip cannot reach the in-flow baseline the
 // `cap` correction needs, so the whole slot agreeing beats one mark in it being sub-pixel more correct
 // at rest. What that costs, measured: the resting pin's ink now ends 4.5px inside the rest time's,
 // where the 11px mark ended 0.8px inside it — the hover square's own dead space, and the same inset the
-// door already had.
+// fullscreen door that stood in the strip then had.
 //
 // `-ml-1` is a layout trim, not spacing: this slot is 8px wider than the 11px mark it replaced, and
 // without the trim the title's own box pays all of it. Giving 4px back leaves the ink gap from a filled
@@ -1035,8 +567,8 @@ function PinnedMark() {
   )
 }
 
-// The pin/unpin verb — one of the row's hover actions (ThreadRow places it: left of the fullscreen door
-// to pin, rightmost to unpin), on every row the server can pin: sessions frizz owns, in any state,
+// The pin/unpin verb — one of the row's hover actions (ThreadRow places it: leftmost to pin, rightmost to
+// unpin), on every row the server can pin: sessions frizz owns, in any state,
 // because the pin deliberately outranks Done and Snoozed alike. THE FILL IS THE STATE: an outline pin
 // offers to pin, and the solid body with the slash — the same solid pin the pinned row's mark wears —
 // offers to unpin, so a filled pin anywhere on the rail means "pinned" and nothing else (maintainer
@@ -1131,11 +663,13 @@ function RowUncheckDone({ t }: { t: ThreadView }) {
 // unchanged: running OR stale, and only children carrying an id (the drill-in drawer's RPC handle —
 // see lib/childOps.ts, which lists all three surfaces' divergent policies in one place).
 function SubAgentRows({ t, scope }: { t: ThreadView; scope?: RowScope }) {
+  const api = useThreadApi()
   const subs = visibleChildOps(t.subAgents ?? [], "rail")
   if (subs.length === 0) return null
   // A child's drawer is pushed on the PAGE project, so a row of another project opens its parent's
-  // drawer instead (its ops strip lists the same children, one click from their own), and offers no
-  // dismiss, which would retire a child of the page project's same-named thread.
+  // drawer instead (its ops strip lists the same children, one click from their own). Its × goes
+  // through the row's own project's client, so it stops THIS thread's child and not a child of the page
+  // project's same-named thread.
   const foreignToPage = scope !== undefined && !scope.page
   return (
     <div className="flex flex-col">
@@ -1153,7 +687,7 @@ function SubAgentRows({ t, scope }: { t: ThreadView; scope?: RowScope }) {
           onOpen={() => (foreignToPage && scope ? scope.open(t) : pushSubAgentDrawer(t.id, s.id, { label: s.label, subagentType: s.subagentType, startedAt: s.startedAt }))}
           // The same dismiss × the queue card and the ops strip carry (maintainer 2026-07-30): the rail
           // is where a phantom child is most often SEEN, so it is where retiring one has to be possible.
-          onDismiss={foreignToPage ? undefined : childOpDismisser(t.id, s)}
+          onDismiss={childOpDismisser(t.id, s, "AGENT", api)}
           // The rail has no room for the worker-profile tag the ops strip can show, so it rides the tooltip.
           title={s.subagentType ? `[${s.subagentType}] ${s.label}` : s.label}
         />
@@ -1680,54 +1214,4 @@ function YellowDot() {
 
 function FaintDot() {
   return <span className="block rounded-full bg-muted/30" style={{ width: INDICATOR, height: INDICATOR }} />
-}
-
-// THE PROJECT IDENTITY, derived only from the currently adopted board keyframe. There is no
-// session/local-storage cache: keeping a stale owner/repo while another project or boot is becoming
-// authoritative is worse than showing the small neutral reservation. A transport reset leaves the
-// adopted board in the store, so a normal reconnect keeps its known identity in place.
-//
-// It LIVES here rather than in StatusRow because the rail derives from the same board and this file
-// already owns that derivation; StatusRow (which draws it, at the right edge of the row above the
-// prompt box) is the only consumer. The IdentityMark COMPONENT that used to sit beside this — the
-// home crumb, the name and the connection word as one cluster — is gone with the corner bar it was
-// laid out for: the row now places those three at two different ends, so there was nothing left for
-// one component to hold together.
-export type ProjectIdentity =
-  | { state: "loading" }
-  | { state: "unavailable" }
-  /**
-   * A repo with NO ORIGIN REMOTE (or one whose URL yields no owner/repo). There is no owner half to
-   * show and there never will be, so this is a settled answer, not a pending one — `local` exists to
-   * keep it from wearing the loading skeleton forever. The name is the directory basename, which is
-   * what the server already falls back to for `projectLabel`.
-   */
-  | { state: "local"; name: string }
-  | { state: "verified"; label: string; owner: string; repo: string }
-
-export function projectIdentity(
-  board: (Pick<BoardSnapshot, "projectLabel"> & Partial<Pick<BoardSnapshot, "projectName">>) | null | undefined,
-): ProjectIdentity {
-  if (!board) return { state: "loading" }
-  // A board WITHOUT a projectLabel is not a crash. The field is required on the wire, so this only
-  // guards a board keyframe that arrived partial — but the identity renders inside the SIDEBAR COLUMN
-  // rather than as detached corner chrome, so a throw here takes the whole rail (and the prompt box
-  // with it) rather than one line of chrome. Caught the moment StatusRow moved: every fixture that
-  // seeds a board without a label crashed on `.trim()` of undefined.
-  const label = board.projectLabel?.trim() ?? ""
-  const cut = label.lastIndexOf("/")
-  const owner = cut === -1 ? "" : label.slice(0, cut).trim()
-  const repo = cut === -1 ? "" : label.slice(cut + 1).trim()
-  if (owner && repo) return { state: "verified", label, owner, repo }
-  // NO OWNER/REPO — a local-only git repo with no origin remote, which is an ANSWER and must read as
-  // one. `projectLabel` deliberately falls back to the directory basename in that case, and this used
-  // to fold that fallback into "unavailable": the row then rendered the cold loading skeleton, and
-  // kept rendering it, because no keyframe was ever going to resolve into an owner/repo (maintainer
-  // 2026-08-19: "it just shows a skeleton forever"). It still must not GUESS an owner — there is
-  // simply nothing to guess, and the directory name is a fact the server already computed.
-  const name = label || board.projectName?.trim() || ""
-  if (name) return { state: "local", name }
-  // Nothing nameable at all. Only reachable from a keyframe carrying neither field, which is a broken
-  // server rather than a project shape — the placeholder is honest there because something IS missing.
-  return { state: "unavailable" }
 }

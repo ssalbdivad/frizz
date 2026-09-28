@@ -155,9 +155,9 @@ export function StandaloneThreadPage({ slug }: { slug: string }) {
             <main
               data-standalone-thread
               // `thread-chat` is the fullscreen door's shared view-transition element: the drawer
-              // panel / queue card the door was clicked in wears the same name (tagged at click time,
-              // ExpandThreadLink), and the browser morphs that surface into this column. Inert
-              // outside a transition — no navigation but the door's opts in.
+              // panel the door was chosen in wears the same name (tagged at click time, ThreadMenu.tsx
+              // openFullscreen), and the browser morphs that surface into this column. Inert outside a
+              // transition — no navigation but the door's opts in.
               className="flex h-full w-[var(--full-thread-narrow)] min-w-0 shrink-0 flex-col overflow-hidden border-border bg-panel sm:border-x split:w-[var(--full-thread)] [view-transition-name:thread-chat]"
             >
               {route.kind === "loading" ? (
@@ -301,7 +301,7 @@ function MissingThread({ slug }: { slug: string }) {
         </div>
       ) : (
         <a href="/" className="rounded-md border border-border px-3 py-1.5 text-[12px] text-fg/90 hover:bg-panel-2">
-          Everything
+          Back to the queue
         </a>
       )}
     </div>

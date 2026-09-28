@@ -255,7 +255,7 @@ export function ThreadSheet({ id, slug, depth, widthDepth, initiallyOpen }: { id
             initial?.focus({ preventScroll: true })
           }}
           // data-vt-chat: the fullscreen door tags this panel as the view transition's shared element
-          // on the way to /full (see ExpandThreadLink) — the panel is what visibly becomes the page's
+          // on the way to /full (see ThreadMenu.tsx openFullscreen) — the panel is what visibly becomes the page's
           // thread column. On the way BACK the tag is declarative: while this slug is the primed
           // return target (store.primeFullscreenReturn), the panel wears the name in its first
           // commit, so the /full column has somewhere to morph back into.

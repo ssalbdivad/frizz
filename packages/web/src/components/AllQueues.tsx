@@ -27,21 +27,19 @@
 // (`projectsList`, `projectsQueues`) or carries its project explicitly, and every action goes through
 // that project's own client (`projectRpc`). See AllQueuesCard.tsx for the card's half of the same rule.
 // The prompt box and the drawers are the page project's, which is exactly what they should be.
-import { Fragment, useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore, type CSSProperties, type ReactNode } from "react"
+import { Fragment, useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore, type ReactNode } from "react"
 import { useQuery, useQueryClient } from "@tanstack/react-query"
-import { ArrowUpRight, Check, ChevronDown, Ellipsis, Inbox, Plus, TerminalSquare } from "lucide-react"
+import { Check, ChevronDown, Inbox } from "lucide-react"
 import { Link, useLocation, useNavigate } from "react-router"
 import { useSnapshot } from "valtio"
-import type { ProjectQueue, ThreadView } from "@frizz/shared"
+import type { ProjectQueue } from "@frizz/shared"
 import { rpc } from "../api/rpc.ts"
-import { displayTitle } from "../groups.ts"
 import { isBusy, liveQueue, overlayQueues, queuesProjects, threadKey, type QueuesProject } from "../lib/allQueues.ts"
 import { crossProjectHref, innerPath, projectSlug } from "../lib/base-path.ts"
 import { rememberCrossProjectFocus, setQueueFilter, useQueueFilter } from "../lib/crossProject.ts"
 import { draftKey, draftStore } from "../lib/drafts.ts"
 import { QUEUE_CARD_VIEWPORT_TOP, slugsInThreadDrawers, store } from "../store.ts"
 import { useBoard } from "../hooks.ts"
-import { commandFailed, commandLive, commandStateLabel } from "../lib/commandThreads.ts"
 import { prefs } from "../lib/prefs.ts"
 import { PROMPT_CONTROL_TYPOGRAPHY_CLASS } from "../lib/promptControlTypography.ts"
 import { MarkdownScopeContext } from "../lib/useMarkdown.ts"
@@ -49,10 +47,9 @@ import { registerQueueCursor } from "../lib/keyboardRuntime.ts"
 import { AllQueuesCard, useOpenThreadInPlace } from "./AllQueuesCard.tsx"
 import { CommandQueueCard } from "./CommandQueueCard.tsx"
 import { ProjectSquare } from "./ProjectRail.tsx"
-import { ProviderMark } from "./ProviderMark.tsx"
-import { ROW_ACTION_CLASS, RestedAge, SIDEBAR_COLUMN_CLASS, ThreadIndicator, TitleWithTrailers } from "./Sidebar.tsx"
+import { SIDEBAR_COLUMN_CLASS } from "./Sidebar.tsx"
 import { BandLabel } from "./BandLabel.tsx"
-import { ProjectMenu, homeOf, useAddProject } from "./ProjectActions.tsx"
+import { homeOf } from "./ProjectActions.tsx"
 import { StatusRow } from "./StatusRow.tsx"
 import { DispatchForm } from "./NewThreadModal.tsx"
 import { Menu, MenuContent, MenuItem, MenuTrigger } from "./ui/Menu.tsx"
@@ -130,9 +127,12 @@ export function AllQueuesPage() {
   // rather than sitting between the prompt box and the queue it indexes.
   const stacked = useStacked()
   const home = homeOf(cards.data)
+  // The list drops a row only with a card being FINISHED. A thread open in a drawer keeps its row, marked
+  // open: the card steps aside because the drawer is the same thread, but the list is where the reader
+  // finds their place, and a row that vanished when clicked left them nothing to find.
   const list = (
     <>
-      <ProjectList projects={projects} home={home} activeKey={activeKey} hidden={hidden} onQueuedRow={scrollToCard} />
+      <ProjectList projects={projects} home={home} activeKey={activeKey} hidden={leaving.hidden} onQueuedRow={scrollToCard} />
       <AddProjectRow />
     </>
   )
@@ -176,7 +176,7 @@ export function AllQueuesPage() {
       </aside>
       <main
         id="workpane"
-        aria-label="Everything"
+        aria-label="Queue"
         className="flex min-h-screen w-[720px] max-w-[62vw] min-w-0 flex-col py-5 max-[800px]:min-h-0 max-[800px]:w-full max-[800px]:max-w-none"
       >
         {loading ? (

@@ -145,7 +145,7 @@ export function startRouter(navigate: (path: string, options: { replace: boolean
     // The fullscreen page is NOT the board's URL to write. Its route lives outside RootLayout, but
     // valtio delivers this notification a microtask late: StandaloneRoute clears the drawer stack on
     // its first render (it moved there from the fullscreen door's click handler for the view
-    // transition — see ExpandThreadLink), so by the time this runs the address bar already says
+    // transition — see ThreadMenu.tsx openFullscreen), so by the time this runs the address bar already says
     // `/thread/<slug>/full` and the board shell is on its way out — and without this guard the
     // "unwind" below navigated straight back to the board (caught live, 2026-08-28: a plain click
     // on the door left the URL exactly where it was).

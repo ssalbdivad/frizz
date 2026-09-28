@@ -25,7 +25,7 @@
 // project view drew, measured once, not a second copy of them.
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react"
 import { useQueryClient } from "@tanstack/react-query"
-import { ChevronRight, Ellipsis, Plus } from "lucide-react"
+import { ChevronRight, Ellipsis, ListFilter, Plus } from "lucide-react"
 import { useLocation } from "react-router"
 import { useSnapshot } from "valtio"
 import type { BoardSnapshot, ThreadView } from "@frizz/shared"
@@ -34,10 +34,10 @@ import { externalThreads, isPinned, queued, sectionThreads } from "../groups.ts"
 import { useBoard } from "../hooks.ts"
 import { threadKey, type QueuesProject } from "../lib/allQueues.ts"
 import { projectSlug } from "../lib/base-path.ts"
-import { setProjectExpanded, useExpandedProjects } from "../lib/crossProject.ts"
+import { setProjectExpanded, setQueueFilter, useExpandedProjects, useQueueFilter } from "../lib/crossProject.ts"
 import { prefetchProjectBoard, projectBoardKey, useProjectBoard } from "../lib/projectBoards.ts"
 import { drawerThreadSlug, store } from "../store.ts"
-import { crossProjectThreadHref, useOpenThreadInPlace } from "./AllQueuesCard.tsx"
+import { useOpenThreadInPlace } from "./AllQueuesCard.tsx"
 import { BANDS, type BandKey } from "./BandLabel.tsx"
 import { ProjectMenu, useAddProject } from "./ProjectActions.tsx"
 import { QueueBadge } from "./ProjectFilter.tsx"
@@ -122,7 +122,7 @@ interface LoudBands {
 /**
  * A project's work in flight, as its rail banded it: Pinned first (the pin diverts a thread out of every
  * other band, groups.ts sectionThreads), then Ready in queue order, then Working. A Ready card being
- * finished, or open in a drawer, leaves its row with it (`hidden`, the page's own rule).
+ * finished leaves its row with it (`hidden`); one open in a drawer keeps its row, marked open.
  */
 function loudBands(project: QueuesProject, hidden: (key: string) => boolean): LoudBands {
   const pinned = [...project.queued, ...project.running, ...project.snoozed].filter(isPinned)
@@ -269,7 +269,7 @@ function useRowScope(project: QueuesProject, page: boolean, onQueuedRow: (key: s
     },
     [id, slug, onQueuedRow, openInPlace],
   )
-  return useMemo(() => ({ open, fullHref: (thread: string) => `${crossProjectThreadHref({ slug }, thread)}/full`, page }), [open, slug, page])
+  return useMemo(() => ({ open, page }), [open, page])
 }
 
 /**
@@ -299,6 +299,9 @@ function ProjectRow({
   home: string | undefined
 }) {
   const [menuOpen, setMenuOpen] = useState(false)
+  // The list is never filtered, but it SAYS so when the queue is: the filtered project wears the filter's
+  // own glyph beside its name — the READY header's pill, echoed on the row it names.
+  const filtered = useQueueFilter() === project.id
   const note = project.stale ? "Directory is missing" : !project.open ? "Not open" : null
   return (
     <div
@@ -329,8 +332,13 @@ function ProjectRow({
         <span className={`${INDICATOR_SLOT} ${project.stale ? "grayscale" : ""}`}>
           <ProjectSquare project={project.card ?? squareCard(project)} size={16} />
         </span>
-        <span className={`min-w-0 flex-1 truncate text-[12.5px] leading-[19px] ${busy ? "font-medium text-fg/90" : "text-fg/75"}`}>
-          {project.name}
+        <span className={`flex min-w-0 flex-1 items-center gap-1.5 text-[12.5px] leading-[19px] ${busy ? "font-medium text-fg/90" : "text-fg/75"}`}>
+          <span className="min-w-0 truncate">{project.name}</span>
+          {filtered && (
+            <span data-xq-project-filtered title="The queue shows only this project" className="flex shrink-0 text-muted-60">
+              <ListFilter size={11} aria-label="The queue shows only this project" />
+            </span>
+          )}
         </span>
         {note ? (
           <span className="shrink-0 text-[10.5px] leading-[19px] text-muted-55">{note}</span>
@@ -350,7 +358,17 @@ function ProjectRow({
       </button>
       {project.card && (
         <div className={`absolute right-1.5 top-1 items-center group-hover:flex group-has-[:focus-visible]:flex [@media(hover:none)]:flex ${menuOpen ? "flex" : "hidden"}`}>
-          <ProjectMenu project={project.card} home={home} githubRepo={project.githubRepo} onOpenChange={setMenuOpen}>
+          <ProjectMenu
+            project={project.card}
+            home={home}
+            githubRepo={project.githubRepo}
+            filtered={filtered}
+            onFilter={() => {
+              setQueueFilter(filtered ? null : project.id)
+              window.scrollTo({ top: 0, behavior: window.matchMedia?.("(prefers-reduced-motion: reduce)").matches ? "auto" : "smooth" })
+            }}
+            onOpenChange={setMenuOpen}
+          >
             <button type="button" aria-label={`More actions for ${project.name}`} className={`${ROW_ACTION_CLASS} data-[state=open]:bg-panel-2 data-[state=open]:text-fg data-[state=open]:opacity-100`}>
               <Ellipsis size={13} />
             </button>
