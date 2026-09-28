@@ -86,8 +86,11 @@ test("a snoozed thread let back into the queue joins the BACK, and keeps that pl
     // queued before and is queued now, so its place in line must not move with it.
     command = { ...command, runtime: "exited", lastActivityAt: at("12:38") } as ThreadView
     primed = false
+    // Unprimed rows read as running, but the ones with a place in line keep SHOWING it until the tailer
+    // vouches for a reading — a queue that blinked empty for the prime would move every card on screen.
     for (const hhmm of ["12:38", "12:39"]) {
-      assert.deepEqual(readAt(hhmm), { plain: undefined, held: undefined, overnight: undefined, "term-abc": at("09:55") }, "unprimed rows read as running")
+      assert.deepEqual(readAt(hhmm), { plain: at("09:50"), held: at("12:31"), overnight: undefined, "term-abc": at("09:55") }, "unprimed rows hold their place")
+      assert.ok(board.refresh().threads.filter((t) => t.id === "plain" || t.id === "held").every((t) => t.needsYou === true), "and stay queued")
     }
     assert.equal(storage.getSession("held")?.queued_at, at("12:31"), "an unprimed reading is not a departure")
     primed = true
@@ -170,6 +173,67 @@ test("a parent let go by its sub-agent is withheld while its wake lands, and nei
     // No wake came: it goes in when the window closes, at the back, and only now notifies.
     assert.deepEqual(read("10:00:14").parent, { needsYou: true, queuedAt: "2026-09-24T10:00:14.000Z", settling: undefined })
     assert.deepEqual(notified.slice(3), ["parent"])
+  } finally {
+    await board.stop()
+    storage.close()
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+test("a thread woken by its own work keeps its place in line; one the human sent a follow-up to goes to the back", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "frizz-queue-keep-"))
+  const project: Project = { dir, id: "project-keep", name: "fixture", label: "fixture", stateDir: dir, cwdSlug: "fixture" }
+  const iso = (time: string) => `2026-09-24T${time}.000Z`
+  const tele = (turn: "idle" | "in-flight", rested: string): SessionTelemetry =>
+    ({ turn, permPrompt: false, subAgents: [], bgShells: [], pendingQuestion: false, lastAssistantAt: iso(rested) })
+  // Queued oldest first: `reading` (the card being read), `steered`, `later`, and `asked`, frozen on a
+  // native question the human answers below.
+  const ask = { id: "toolu_ask", questions: [{ question: "Which registry?", header: "Registry", options: [{ label: "npm" }, { label: "jsr" }], multiSelect: false }] }
+  const telemetry = new Map<string, SessionTelemetry>([
+    ["reading", tele("idle", "09:30:00")],
+    ["steered", tele("idle", "09:40:00")],
+    ["later", tele("idle", "09:45:00")],
+    ["asked", { ...tele("idle", "09:50:00"), pendingAsk: ask } as SessionTelemetry],
+  ])
+  const tailer = {
+    get: (slug: string) => telemetry.get(slug),
+    foreignIds: () => [],
+    subAgent: () => undefined,
+    forget: () => {},
+    start: () => {},
+    stop: () => {},
+    tick: () => {},
+  } satisfies Tailer
+  let nowMs = Date.parse(iso("10:00:00"))
+  const storage = createStorage(join(dir, "ui.db"), "p")
+  for (const slug of telemetry.keys()) {
+    storage.upsertSession(row(slug))
+    storage.setClaudeRuntime(slug, "broker")
+  }
+  const board = createBoard(project, storage, new Bus(), tailer, "queue-keep", { now: () => nowMs })
+  const read = (time: string) => {
+    nowMs = Date.parse(iso(time))
+    return Object.fromEntries(board.refresh().threads.map((t) => [t.id, t.queuedAt]))
+  }
+
+  try {
+    assert.deepEqual(read("10:00:00"), { reading: iso("09:30:00"), steered: iso("09:40:00"), later: iso("09:45:00"), asked: iso("09:50:00") })
+    // A shell of `reading`'s finishes and wakes it; the human sends `steered` a follow-up, which the router
+    // records in the delivery ledger before its worker picks it up.
+    telemetry.set("reading", tele("in-flight", "09:30:00"))
+    storage.setDeliveryLedger("steered", JSON.stringify([{ id: "d1", text: "Rebase it", state: "delivered", at: iso("10:00:30"), updatedAt: iso("10:00:30") }]))
+    // …and answers `asked`'s question, which lets its turn go on.
+    telemetry.set("asked", tele("in-flight", "09:50:00"))
+    assert.deepEqual(read("10:00:31"), { reading: undefined, steered: undefined, later: iso("09:45:00"), asked: undefined })
+    // The send lands and both turns run, then both rest again.
+    storage.setDeliveryLedger("steered", null)
+    telemetry.set("steered", tele("in-flight", "09:40:00"))
+    read("10:00:40")
+    telemetry.set("reading", tele("idle", "10:01:00"))
+    telemetry.set("steered", tele("idle", "10:01:10"))
+    telemetry.set("asked", tele("idle", "10:01:15"))
+    assert.deepEqual(read("10:01:20"), { reading: iso("09:30:00"), steered: iso("10:01:10"), later: iso("09:45:00"), asked: iso("10:01:15") })
+    assert.equal(storage.getSession("reading")?.queued_at, iso("09:30:00"), "and the place it took back is persisted")
   } finally {
     await board.stop()
     storage.close()

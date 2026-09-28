@@ -13,7 +13,7 @@ import { useDeferredValue, useEffect, useRef, useState, type ReactNode } from "r
 import { Ellipsis, Loader2 } from "lucide-react"
 import { useNavigate } from "react-router"
 import { useSnapshot } from "valtio"
-import { PROJECT_ICON_EXTENSIONS, slugify, type ProjectCard } from "@frizz/shared"
+import { PROJECT_ICON_EXTENSIONS, slugify, type ProjectAddResult, type ProjectCard, type ProjectEnclosed } from "@frizz/shared"
 import { rpc } from "../api/rpc.ts"
 import { everythingHref, innerPath, projectSlug } from "../lib/base-path.ts"
 import { showToast, store } from "../store.ts"
@@ -443,9 +443,14 @@ function AddProjectDialog({
   const openAdded = useOpenAddedProject()
   const add = useMutation({
     mutationFn: (input: string) => rpc.projectAdd({ path: input }),
-    onSuccess: (project) => {
+    onSuccess: (result) => {
+      // Inside another project root: the same host asks which one was meant (EnclosedProjectDialog).
+      if (result.kind === "enclosed") {
+        store.addProject = { enclosed: result }
+        return
+      }
       onClose()
-      openAdded(project)
+      openAdded(result.project)
     },
   })
   const error = add.error instanceof Error ? add.error.message : add.error ? String(add.error) : null
@@ -500,6 +505,86 @@ function AddProjectDialog({
       </RadixDialog.Portal>
     </RadixDialog.Root>
   )
+}
+
+/**
+ * The chosen folder sits inside another project root — `~/app/yes` inside the `~/app` checkout — so
+ * adding it as-is would open that root instead. Until 2026-09-28 that happened without a word: the add
+ * reopened `~/app`, navigated to a board the operator already had open, and read as a silent failure.
+ * Both answers are real ones: a package folder usually means its repository, but someone who pointed
+ * at a folder may mean exactly that folder, and `exact` adopts it with its own `.frizz/.id`.
+ */
+function EnclosedProjectDialog({ enclosed, onClose }: { enclosed: ProjectEnclosed; onClose: () => void }) {
+  const openAdded = useOpenAddedProject()
+  const add = useMutation({
+    mutationFn: (input: { path: string; exact?: boolean }) => rpc.projectAdd(input),
+    onSuccess: (result: ProjectAddResult) => {
+      // Cannot happen for either button — the root resolves to itself, and `exact` never asks — but a
+      // stale answer must not strand the dialog on a spinner.
+      if (result.kind === "enclosed") {
+        store.addProject = { enclosed: result }
+        return
+      }
+      onClose()
+      openAdded(result.project)
+    },
+  })
+  const error = add.error instanceof Error ? add.error.message : add.error ? String(add.error) : null
+  const folder = baseName(enclosed.path)
+  const root = baseName(enclosed.root)
+
+  return (
+    <RadixDialog.Root open onOpenChange={(open) => { if (!open && !add.isPending) onClose() }}>
+      <RadixDialog.Portal>
+        <RadixDialog.Overlay className="fixed inset-0 z-[210] bg-scrim-30 backdrop-blur-md backdrop-saturate-150" />
+        <RadixDialog.Content
+          aria-modal="true"
+          aria-describedby={undefined}
+          className="fixed left-1/2 top-1/2 z-[210] w-[460px] max-w-[90vw] -translate-x-1/2 -translate-y-1/2 rounded-xl border border-border bg-panel p-5 shadow-2xl shadow-shadow-ink/50 outline-none"
+        >
+          <RadixDialog.Title className="mb-1 text-[14px] font-medium">That folder is inside {root}</RadixDialog.Title>
+          <p className="mb-3.5 text-[12.5px] leading-relaxed text-muted">
+            <span className="font-mono text-fg/80">{enclosed.path}</span> sits inside{" "}
+            <span className="font-mono text-fg/80">{enclosed.root}</span>
+            {enclosed.rootRegistered ? ", which is already a project" : ", a repository root"}, so adding it would{" "}
+            {enclosed.rootRegistered ? "just open" : "add"} that instead. Add <span className="font-mono text-fg/80">{folder}</span> on its own to give it a separate board.
+          </p>
+          {error ? <p className="mb-2 text-[11.5px] text-danger">{error}</p> : null}
+          <div className="flex justify-end gap-2">
+            <button
+              type="button"
+              onClick={onClose}
+              disabled={add.isPending}
+              className="rounded-md border border-border-strong bg-elevated px-3 py-1.5 text-[12.5px] text-fg outline-none hover:bg-panel-2 focus-visible:ring-1 focus-visible:ring-focus-ink-60 disabled:opacity-50"
+            >
+              Cancel
+            </button>
+            <button
+              type="button"
+              onClick={() => add.mutate({ path: enclosed.root })}
+              disabled={add.isPending}
+              className="rounded-md border border-border-strong bg-elevated px-3 py-1.5 text-[12.5px] text-fg outline-none hover:bg-panel-2 focus-visible:ring-1 focus-visible:ring-focus-ink-60 disabled:opacity-50"
+            >
+              {enclosed.rootRegistered ? `Open ${root}` : `Add ${root}`}
+            </button>
+            <button
+              type="button"
+              autoFocus
+              onClick={() => add.mutate({ path: enclosed.path, exact: true })}
+              disabled={add.isPending}
+              className="rounded-md border border-accent bg-accent-fill px-3 py-1.5 text-[12.5px] font-medium text-on-accent outline-none hover:brightness-110 focus-visible:ring-1 focus-visible:ring-focus-ink-60 disabled:opacity-50"
+            >
+              {add.isPending ? "Adding…" : `Add ${folder} on its own`}
+            </button>
+          </div>
+        </RadixDialog.Content>
+      </RadixDialog.Portal>
+    </RadixDialog.Root>
+  )
+}
+
+function baseName(path: string): string {
+  return path.replace(/[\\/]+$/u, "").split(/[\\/]/u).pop() || path
 }
 
 /**
@@ -650,6 +735,10 @@ export function useAddProject(): { start: () => void; pending: boolean } {
         store.addProject = { reason: result.reason }
         return
       }
+      if (result.kind === "enclosed") {
+        store.addProject = { enclosed: result }
+        return
+      }
       openAdded(result.project)
     },
     // A picker that throws is still a machine without a working picker.
@@ -677,6 +766,8 @@ function useOpenAddedProject(): (project: { id: string; slug: string }) => void 
 export function AddProjectHost() {
   const request = useSnapshot(store).addProject
   if (!request) return null
+  // Keyed on the folder so a second enclosed answer mounts fresh rather than inheriting a spent mutation.
+  if (request.enclosed) return <EnclosedProjectDialog key={request.enclosed.path} enclosed={request.enclosed} onClose={() => (store.addProject = null)} />
   return <AddProjectDialog reason={request.reason} proposed={request.proposed} onClose={() => (store.addProject = null)} />
 }
 

@@ -7,6 +7,7 @@ import {
   isActivelyRunning,
   isDeclaredAwaiting,
   isSnoozed,
+  questionsOwed,
   prChecksRunning,
   queuedThread,
   sectionOf,
@@ -164,8 +165,9 @@ export function needsAction(t: ThreadView): boolean {
   // A REGISTERED question (open thread_question rows on the view) is the same ask through the durable
   // channel — the server queues it once at rest (deriveNeedsYou's openQuestions), and this predicate
   // must agree so the mobile asks-first ordering and the attention sort count it. Same rest-gate as the
-  // fence net above: the worker keeps working after registering, and the card lands at its rest.
-  if ((t.questions?.length ?? 0) > 0 && t.runtime !== "running" && t.runtime !== "spawning") return true
+  // fence net above: the worker keeps working after registering, and the card lands at its rest. Owed
+  // ones only: a question the human replied past is a pivot and asks nothing (questionRepliedPast).
+  if (questionsOwed(t.questions).length > 0 && t.runtime !== "running" && t.runtime !== "spawning") return true
   // CRASH / STALL net (replaces the old `unread`-gated clause — `unread` no longer drives anything).
   // A thread whose status still claims WORK IN FLIGHT (active or planning) but whose backing agent
   // PROCESS is gone — `exited` (session row present, worker process dead) or `none` (registry lost the row)
@@ -658,7 +660,7 @@ export function sessionIndicatorKind(t: ThreadView): SessionIndicatorKind {
   // rather than the bare-rest ellipsis it wore before this branch existed (maintainer 2026-08-31: a
   // queue card showing a question beside a row marked […]). Above "snoozed" and "stalled" on purpose:
   // an ask outranks a park, and a real human ask stays a question after the worker exits.
-  if ((t.questions?.length ?? 0) > 0) return "needs-input"
+  if (questionsOwed(t.questions).length > 0) return "needs-input"
 
   if (isSnoozed(t)) return "snoozed"
   // KILLED BY A USAGE LIMIT. Its own attention mark — the yellow hourglass — because it is BOTH things

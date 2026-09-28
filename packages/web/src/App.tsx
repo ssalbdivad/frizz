@@ -6,7 +6,7 @@ import { closeGithubPicker, store, seedBoard, openNewThread, pushDrawer, resolve
 import { useBoard } from "./hooks.ts"
 import { closeDrawerAnimated } from "./lib/overlays.ts"
 import { useShortcut } from "./lib/keyboardRuntime.ts"
-import { takeScrollAfterUnlock } from "./lib/pageScrollLock.ts"
+import { pageScrollY, takeScrollAfterUnlock } from "./lib/pageScrollLock.ts"
 import { startRouter } from "./lib/router.ts"
 import { projectSlug } from "./lib/base-path.ts"
 import { AllQueuesPage } from "./components/AllQueues.tsx"
@@ -194,15 +194,19 @@ export function App() {
     body.style.right = "0"
     body.style.width = "100%"
     return () => {
+      // The offset to come back to is the body's pinned top NOW, not the one captured at the lock: the
+      // queue's viewport lock (lib/viewportLock.ts) moves that top when a card arrives or leaves above the
+      // one behind the drawer, and restoring the old offset displaced the reader by exactly that card.
+      const current = pageScrollY()
       body.style.position = ""
       body.style.top = ""
       body.style.left = ""
       body.style.right = ""
       body.style.width = ""
       // A scroll requested WHILE the page was locked couldn't be applied (the body was pinned) and this
-      // restore would have undone it anyway — so it parked its landing. Honour it over the captured
-      // offset: that is what lets a queued sidebar row dismiss its drawer and auto-scroll in one move.
-      window.scrollTo(0, takeScrollAfterUnlock() ?? y)
+      // restore would have undone it anyway — so it parked its landing. Honour it over the held offset:
+      // that is what lets a queued sidebar row dismiss its drawer and auto-scroll in one move.
+      window.scrollTo(0, takeScrollAfterUnlock() ?? current)
     }
   }, [overlayOpen])
 

@@ -41,7 +41,8 @@ import type { ThreadView } from "@frizz/shared"
 // face value would clear every stored stamp and send the whole queue to the back in prime-batch order on
 // every restart. So the board says which readings it can vouch for (`known`), and only a KNOWN reading
 // outside the queue clears a stamp or counts as having seen the thread out. An unknown one changes
-// nothing: the stamp waits for the thread's first real reading.
+// nothing: the stamp waits for the thread's first real reading, and the thread keeps SHOWING queued at it
+// meanwhile — a queue that blinked empty for the seconds of a prime moved every card on the reader's screen.
 //
 // A STORED STAMP IS CHECKED ONCE, the first time its thread reads as queued after a boot: if the agent
 // has spoken since it (a rest newer than the stamp), the thread left and re-entered while this server was
@@ -70,13 +71,34 @@ import type { ThreadView } from "@frizz/shared"
 // back when the window closes, stamped at that instant. The board reads `needsYou` as false meanwhile,
 // so it neither notifies nor draws the card, and `queueSettling` tells the client no park stands. A wake
 // the scheduler DEFERS (its quiet window after a recent handoff holds one for minutes) is not waited for:
-// the thread goes in when the window closes, exactly as it did before there was a window. Only an entry off a PARK counts — the last known sighting out
-// of the queue found the thread at rest, with the same rest it has now, behind a hold something wakes it
-// from (the board's `parked`) — so an ordinary rest, whose last sighting out was its own running turn, is
-// never delayed. Nor is a snooze lifted BEFORE its deadline: that was a person (Wake now), and nothing is
-// coming to wake the thread — the bump a snooze may carry fires at the deadline, not when it is lifted.
-// And an URGENT reading enters at once whatever held it: a permission prompt, a question, a crash, a
-// limit pause.
+// the thread goes in when the window closes, exactly as it did before there was a window. Only an entry
+// off a PARK counts — the last known sighting out of the queue found the thread at rest, with the same
+// rest it has now, behind a hold something wakes it from (the board's `parked`) — so an ordinary rest,
+// whose last sighting out was its own running turn, is never delayed. Nor is a snooze lifted BEFORE its
+// deadline: that was a person (Wake now), and nothing is coming to wake the thread — the bump a snooze may
+// carry fires at the deadline, not when it is lifted. And an URGENT reading enters at once whatever held
+// it: a permission prompt, a question, a crash, a limit pause.
+//
+// A THREAD ONLY LOSES ITS PLACE WHEN A PERSON ACTS ON IT (maintainer 2026-09-28, choosing it: "Keep its
+// place"). A thread already waiting in line is often re-woken by its own work — a shell finishing, a PR
+// watcher, a child's report — and rests again with nobody having touched it. By the rules above that was a
+// departure and a fresh arrival, so the card being read (a 2FA question, on 2026-09-24) vanished and came
+// back at the bottom. So a departure the human did not cause leaves a claim on the old place, and an entry
+// that finds its claim unbroken takes the place back. Everything a person does to a queued thread breaks
+// it, through one of three channels the board can see:
+//   • a HOLD the human made, seen on any reading out of the queue (`humanOut`): a snooze, done, the resting
+//     card's event-snooze, or a follow-up still in the delivery ledger. Every follow-up passes through the
+//     ledger and the router re-assembles the board the moment it writes one, so no message the human sends
+//     can slip past unseen — which is why this reads the ledger rather than the transcript, where a wake
+//     frizz delivers is a user turn exactly like one the human typed;
+//   • a GATE only the human's own reply clears, on any reading while the thread waited IN the queue
+//     (`humanGate`): a permission prompt, a native ask, a request in the interaction journal — the gate
+//     ending is the human answering it;
+//   • a REGISTERED QUESTION that stops being open, at any reading from its entry to its return: answered
+//     (or withdrawn — the two look alike from here, and erring toward the back is the safe side). A NEW
+//     question is not a person acting, so a thread that wakes itself and asks one keeps its place.
+// A claim is memory only. It lasts from one departure to the next entry — seconds to minutes — and a
+// restart between the two costs the place, which is where the thread would have gone without it.
 
 // How long an entry off a park is withheld (see the header): one scheduler tick (10s) for a wake to be
 // sent, plus delivery.
@@ -108,6 +130,10 @@ export interface QueueReading {
   parked(thread: ThreadView): boolean
   /** A reason the human must see at once, never withheld. */
   urgent(thread: ThreadView): boolean
+  /** Out of the queue because of something the human did — a snooze, done, a follow-up on its way. */
+  humanOut(thread: ThreadView): boolean
+  /** Queued on something only the human's own reply clears: a permission prompt, a native ask. */
+  humanGate(thread: ThreadView): boolean
 }
 
 export interface QueueClock {
@@ -119,14 +145,24 @@ export interface QueueClock {
   nextEntryAt(afterMs: number): number | undefined
 }
 
-// The latest instant the thread itself can vouch for having stopped: the agent's own last output, or —
-// for a thread with no agent output (a terminal command, a worker that died before speaking) — its last
-// activity, then its spawn.
 function withhold(t: ThreadView): void {
   t.needsYou = false
   t.queueSettling = true
 }
 
+// The registered questions a thread has open.
+function openQuestions(t: ThreadView): Set<string> {
+  return new Set((t.questions ?? []).map((q) => q.id))
+}
+
+function allStillOpen(ids: ReadonlySet<string>, open: ReadonlySet<string>): boolean {
+  for (const id of ids) if (!open.has(id)) return false
+  return true
+}
+
+// The latest instant the thread itself can vouch for having stopped: the agent's own last output, or —
+// for a thread with no agent output (a terminal command, a worker that died before speaking) — its last
+// activity, then its spawn.
 function restMs(t: ThreadView): number {
   for (const at of [t.lastAssistantAt, t.lastActivityAt, t.spawnedAt]) {
     const ms = Date.parse(at ?? "")
@@ -148,6 +184,17 @@ export function createQueueClock(store: QueueClockStore): QueueClock {
   const lastSeenOut = new Map<string, { at: number; rest: number; parked: boolean; snoozedUntil: number }>()
   // Entries withheld off a park, and when each is due to go in.
   const settling = new Map<string, number>()
+  // Each queued thread's stint in the queue so far: whether a person has acted on it (a gate answered, a
+  // question resolved), and the questions open at its latest reading — what its departure is judged by.
+  const stints = new Map<string, { touched: boolean; open: Set<string> }>()
+  // Places held by threads that left the queue with no person acting on them, and the questions each
+  // left with (see the header).
+  const claims = new Map<string, { at: number; open: Set<string> }>()
+  const noteQueued = (t: ThreadView, humanGate: boolean) => {
+    const open = openQuestions(t)
+    const was = stints.get(t.id)
+    stints.set(t.id, { touched: humanGate || (was !== undefined && (was.touched || !allStillOpen(was.open, open))), open })
+  }
 
   return {
     nextEntryAt(afterMs) {
@@ -179,10 +226,25 @@ export function createQueueClock(store: QueueClockStore): QueueClock {
         const durable = store.persists(t)
         if (durable && !vouched) allVouched = false
         if (t.needsYou !== true) {
-          if (!vouched) continue
+          // Out of the queue on a reading nobody can vouch for, with a place in line from before the boot:
+          // it is still queued as far as anyone knows, so it SHOWS queued until a real reading decides. A
+          // card that dropped out for the seconds the tailer takes to prime and came back would move every
+          // card below it on the reader's screen, on every restart.
+          if (!vouched) {
+            if (held !== undefined) {
+              t.needsYou = true
+              t.queuedAt = new Date(held).toISOString()
+            }
+            continue
+          }
           lastSeenOut.set(t.id, { at: nowMs, rest: restMs(t), parked: reading.parked(t), snoozedUntil: Date.parse(t.snoozedUntil ?? "") })
           settling.delete(t.id)
           unchecked.delete(t.id)
+          const left = stints.get(t.id)
+          stints.delete(t.id)
+          if (reading.humanOut(t)) claims.delete(t.id)
+          // Only an agent can wake itself: a terminal command leaves its prompt because someone typed at it.
+          else if (held !== undefined && t.kind === "session" && left && !left.touched) claims.set(t.id, { at: held, open: left.open })
           if (held !== undefined) {
             stamps.delete(t.id)
             if (durable) store.save(t, null)
@@ -203,6 +265,7 @@ export function createQueueClock(store: QueueClockStore): QueueClock {
         const stale = unchecked.delete(t.id) && held !== undefined && spoke > held
         if (held !== undefined && !stale) {
           t.queuedAt = new Date(held).toISOString()
+          noteQueued(t, reading.humanGate(t))
           continue
         }
         const sighting = lastSeenOut.get(t.id)
@@ -217,12 +280,18 @@ export function createQueueClock(store: QueueClockStore): QueueClock {
           }
         }
         settling.delete(t.id)
+        const claim = claims.get(t.id)
+        claims.delete(t.id)
         // The bridge speaks only for a durable thread with NO stamp: one whose stamp was refused as stale
         // was queued as of the old server, not outside it, so its own rest is the best it has.
         const out = sighting?.at ?? (durable && held === undefined ? aliveBefore : undefined)
         let at = out === undefined || rest > out ? rest : nowMs
         if (!Number.isFinite(at) || at > nowMs) at = nowMs
+        // Back from a wake nobody asked for, every question it left with still open: the place it left.
+        if (claim && allStillOpen(claim.open, openQuestions(t))) at = claim.at
         stamps.set(t.id, at)
+        stints.delete(t.id)
+        noteQueued(t, reading.humanGate(t))
         t.queuedAt = new Date(at).toISOString()
         if (durable) store.save(t, t.queuedAt)
       }
@@ -232,6 +301,8 @@ export function createQueueClock(store: QueueClockStore): QueueClock {
       for (const id of [...lastSeenOut.keys()]) if (!seen.has(id)) lastSeenOut.delete(id)
       for (const id of [...unchecked]) if (!seen.has(id)) unchecked.delete(id)
       for (const id of [...settling.keys()]) if (!seen.has(id)) settling.delete(id)
+      for (const id of [...stints.keys()]) if (!seen.has(id)) stints.delete(id)
+      for (const id of [...claims.keys()]) if (!seen.has(id)) claims.delete(id)
       if (allVouched && nowMs - aliveSavedAt >= ALIVE_EVERY_MS) {
         aliveSavedAt = nowMs
         store.saveAlive(new Date(nowMs).toISOString())

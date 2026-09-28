@@ -3,6 +3,7 @@ import { store } from "../store.ts"
 import { PROCEDURES, type Api, type ProcType, type RpcCallOpts } from "./contract.ts"
 import { FRIZZ_ROUTE_PREFIX } from "@frizz/shared"
 import { apiBase } from "../lib/base-path.ts"
+import { noteRpcMutation } from "../lib/humanActs.ts"
 
 export type { Api, ProcType, RpcCallOpts } from "./contract.ts"
 export { PROCEDURES } from "./contract.ts"
@@ -72,6 +73,9 @@ async function call(base: string, name: string, type: ProcType, input?: unknown,
     noteServerBootId(res.headers.get("x-frizz-boot")) // notice a server restart on any RPC roundtrip
     return parseRpcResponse(res, name)
   }
+  // Before the send, so a board push that lands while the request is in flight already knows the human
+  // moved this thread (lib/humanActs.ts).
+  noteRpcMutation(name, input)
   const res = await fetch(`${base}/rpc/${name}`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },

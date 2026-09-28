@@ -15,6 +15,7 @@ import { isPlainLeftClick } from "../lib/standaloneThreadRoute.ts"
 import { dropIndex, edgeScrollVelocity, moveItem, shiftFor } from "../lib/railReorder.ts"
 import { Tooltip } from "./Tooltip.tsx"
 import { useAddProject } from "./ProjectActions.tsx"
+import { glideTo } from "../lib/viewportLock.ts"
 
 // THE PROJECT RAIL — every project on this machine as one icon square, always on screen.
 //
@@ -336,7 +337,7 @@ function RailLink({
           if (!isPlainLeftClick(event)) return
           event.preventDefault()
           setQueueFilter(current ? null : project.id)
-          window.scrollTo({ top: 0, behavior: window.matchMedia?.("(prefers-reduced-motion: reduce)").matches ? "auto" : "smooth" })
+          glideTo(() => 0)
         }}
         // Native image-drag would fight the pointer drag.
         onDragStart={(event: DragEvent_<HTMLAnchorElement>) => event.preventDefault()}

@@ -4,9 +4,11 @@
 // It is the board, one level up, and it is laid out as one. The board is a floating sidebar beside a
 // 720px queue; so is this. The board's sidebar lists a project's threads in bands (Queue, Running,
 // Snoozed); this one lists every PROJECT, each with its own queue rows and running rows beneath it, in
-// the operator's own rail order. The board's queue is a column of cards; this one is a column of LANES,
-// one per project with anything in its queue, each headed by the project and holding that project's
-// cards in the order its own board would show them.
+// the operator's own rail order. The board's queue is a column of cards; so is this one — ONE queue
+// across every project, in the order each card entered it (maintainer 2026-09-28: "One queue across all
+// projects"), each card wearing its project's chip (AllQueuesCard.tsx ProjectChip). It was one LANE per
+// project, in rail order, until then, and a project listed above the one being read put its whole lane
+// on top of the card the operator was reading the moment its first thread came to rest.
 //
 // NOTHING HERE THROWS THE OPERATOR INTO A PROJECT'S BOARD (single-project mode) except a door that says
 // so. The page has a FOCUS — one project — and the focus is the page project: the prompt box at the top
@@ -22,7 +24,7 @@
 //   3. the card's title (or a rail row) — the thread's drawer, with its whole transcript and composer.
 // A card's ↗ and a project's "…" → Open board are the explicit doors to a board.
 //
-// WHAT THE RAIL AND THE LANES MUST NEVER DO is ask the page which project anything belongs to. The page
+// WHAT THE RAIL AND THE CARDS MUST NEVER DO is ask the page which project anything belongs to. The page
 // project is the FOCUS, and they show every project. Every read they make is either machine-wide
 // (`projectsList`, `projectsQueues`) or carries its project explicitly, and every action goes through
 // that project's own client (`projectRpc`). See AllQueuesCard.tsx for the card's half of the same rule.
@@ -32,9 +34,9 @@ import { useQuery, useQueryClient } from "@tanstack/react-query"
 import { Check, ChevronDown, Inbox } from "lucide-react"
 import { Link, useLocation, useNavigate } from "react-router"
 import { useSnapshot } from "valtio"
-import type { BoardSnapshot, ProjectQueue } from "@frizz/shared"
+import type { BoardSnapshot, ProjectCard, ProjectQueue } from "@frizz/shared"
 import { rpc } from "../api/rpc.ts"
-import { isBusy, liveQueue, overlayQueues, projectMarkdownScope, queuesProjects, threadKey, type QueuesProject } from "../lib/allQueues.ts"
+import { isBusy, liveQueue, mergedQueue, overlayQueues, projectMarkdownScope, queuesProjects, squareCard, threadKey, type QueueEntry, type QueuesProject } from "../lib/allQueues.ts"
 import { innerPath, projectSlug } from "../lib/base-path.ts"
 import { rememberCrossProjectFocus, setQueueFilter, stepPick, useQueueFilter } from "../lib/crossProject.ts"
 import { draftKey, draftStore } from "../lib/drafts.ts"
@@ -43,9 +45,13 @@ import { useBoard } from "../hooks.ts"
 import { prefs } from "../lib/prefs.ts"
 import { PROMPT_CONTROL_TYPOGRAPHY_CLASS } from "../lib/promptControlTypography.ts"
 import { MarkdownScopeContext } from "../lib/useMarkdown.ts"
+import { GHOST_LABEL, stableQueue, type QueueSlot } from "../lib/stableQueue.ts"
+import { actedOnHere } from "../lib/humanActs.ts"
+import { useSteeredAt } from "../lib/steering.ts"
+import { glideTo, useViewportLock } from "../lib/viewportLock.ts"
 import { registerQueueCursor } from "../lib/keyboardRuntime.ts"
 import { PROJECT_STEP_CHORDS, detectPlatform, formatChord, parseChord } from "../lib/keybindings.ts"
-import { AllQueuesCard, useOpenThreadInPlace } from "./AllQueuesCard.tsx"
+import { AllQueuesCard, ProjectChip, useOpenThreadInPlace } from "./AllQueuesCard.tsx"
 import { CommandQueueCard } from "./CommandQueueCard.tsx"
 import { ProjectSquare } from "./ProjectRail.tsx"
 import { SIDEBAR_COLUMN_CLASS } from "./Sidebar.tsx"
@@ -74,6 +80,17 @@ const REAPPEAR_MS = 8_000
 /** How long the prompt box's stand-in waits for the focused project's board before saying so. */
 const COMPOSER_WAIT_MS = 6_000
 
+const entryKey = ({ project, thread }: QueueEntry): string => threadKey(project.id, thread.id)
+const xqCardKey = (slot: HTMLElement): string | undefined => slot.dataset.xqCard
+
+// Where a ghost's thread went, as far as the page can see (lib/stableQueue.ts GHOST_LABEL).
+function ghostLabel(projects: readonly QueuesProject[], { project, thread }: QueueEntry): string {
+  const now = projects.find((candidate) => candidate.id === project.id)
+  if (now?.running.some((t) => t.id === thread.id)) return GHOST_LABEL.working
+  if (now?.snoozed.some((t) => t.id === thread.id)) return GHOST_LABEL.snoozed
+  return GHOST_LABEL.gone
+}
+
 export function AllQueuesPage() {
   const cards = useQuery({ queryKey: ["projectsList"], queryFn: () => rpc.projectsList() })
   const queues = useQuery({
@@ -88,9 +105,10 @@ export function AllQueuesPage() {
   const focus = projectSlug(useLocation().pathname)
   const board = useBoard()
   const snap = useSnapshot(store)
-  const live = useMemo(() => liveQueue(queues.data, board, focus), [queues.data, board, focus])
+  const polled = useLastKnownQueues(queues.data, cards.data)
+  const live = useMemo(() => liveQueue(polled, board, focus), [polled, board, focus])
   const departed = useDepartedQueue(live, queues.dataUpdatedAt)
-  const base = useMemo(() => queuesProjects(cards.data, queues.data, direction), [cards.data, queues.data, direction])
+  const base = useMemo(() => queuesProjects(cards.data, polled, direction), [cards.data, polled, direction])
   const projects = useMemo(() => overlayQueues(base, [live, departed], direction), [base, live, departed, direction])
   const focusProject = projects.find((project) => project.slug === focus)
   // The directories the prompt box is keyed by — and so the ones a choice of project carries its draft
@@ -123,7 +141,9 @@ export function AllQueuesPage() {
   const leaving = useLeavingCards(projects)
   // A thread whose drawer is open is read THERE: its card would be a second copy of the same questions
   // and reply box under the sheet (the board's rule, store.ts slugsInThreadDrawers). Drawers belong to
-  // the page project, so only the focus's cards can be hidden this way.
+  // the page project, so only the focus's cards can be hidden this way. HIDDEN, NOT REMOVED: the card
+  // keeps its space (QueueCardOf `concealed`), so opening its drawer and closing it again moves nothing
+  // under the sheet or after it.
   const focusId = focusProject?.id
   const inDrawer = new Set(focusId === undefined ? [] : [...slugsInThreadDrawers(snap.drawers)].map((slug) => threadKey(focusId, slug)))
   const hidden = (key: string) => leaving.hidden(key) || inDrawer.has(key)
@@ -140,15 +160,49 @@ export function AllQueuesPage() {
     if (filterId !== null && cards.data && !filtered) setQueueFilter(null)
   }, [filterId, cards.data, filtered])
   const shown = filtered ? [filtered] : projects
-  const lanes = shown.filter((project) => project.queued.some((t) => !hidden(threadKey(project.id, t.id))))
-  // Counted from what the page SHOWS: a card the operator just finished is gone from its lane at once, and
-  // a header still counting it read "1 in the queue" over an empty page until the next poll.
-  const ready = lanes.reduce((sum, project) => sum + project.queued.filter((t) => !hidden(threadKey(project.id, t.id))).length, 0)
+  const [, repaint] = useState(0)
+  // THE VIEWPORT LOCK (lib/viewportLock.ts), and the one thing it asks back: a render once the page is
+  // still, when a ghost has scrolled off screen (it can go now that nobody sees it go) or the cards on
+  // screen have changed (the ones held back for them can take their places).
+  const lock = useViewportLock("[data-xq-card]", xqCardKey, useCallback(() => repaint((n) => n + 1), []))
+  const steeredAt = useSteeredAt()
+  // The ONE queue in lib/stableQueue.ts's STABLE order: the queue's own order off screen; on screen
+  // exactly as last drawn (maintainer 2026-09-28: "it needs to be guaranteed that cards that I'm
+  // currently viewing on the screen don't move in their position"). A card whose thread left the queue
+  // by any hand but the human's in THIS tab (lib/humanActs.ts) — its agent woke itself, it was answered
+  // from the phone, its project closed — is held there as a ghost; one the human put away from here —
+  // finished, replied to, snoozed — leaves the ordinary way, held only while it fades. Re-sorting or
+  // re-filtering is the human choosing a different queue, so it starts over from the queue's own order.
+  const ordered = mergedQueue(shown, direction).filter(({ project, thread }) => !leaving.hidden(threadKey(project.id, thread.id)))
+  const prevSlots = useRef<QueueSlot<QueueEntry>[]>([])
+  const orderedAs = useRef(`${direction}|${filterId ?? ""}`)
+  if (orderedAs.current !== `${direction}|${filterId ?? ""}`) {
+    orderedAs.current = `${direction}|${filterId ?? ""}`
+    prevSlots.current = []
+  }
+  const mayGhost = (key: string): boolean => {
+    if (leaving.isLeaving(key)) return false
+    const was = prevSlots.current.find((slot) => slot.key === key)?.item
+    return was !== undefined && steeredAt[was.thread.id] === undefined && !actedOnHere(was.thread.id)
+  }
+  const queue = stableQueue({
+    prev: prevSlots.current,
+    target: ordered,
+    keyOf: entryKey,
+    onScreen: lock.onScreen.current,
+    mayGhost,
+    keep: new Set(prevSlots.current.map((slot) => slot.key).filter((key) => leaving.isLeaving(key) && !leaving.hidden(key))),
+  })
+  prevSlots.current = queue
+  // Counted from what the page SHOWS: a card the operator just finished is gone from the count at once,
+  // and a header still counting it read "1 in the queue" over an empty page until the next poll. A ghost
+  // is not waiting on anyone, and a card whose drawer is open is being read there.
+  const ready = queue.filter((slot) => !slot.ghost && !leaving.isLeaving(slot.key) && !inDrawer.has(slot.key)).length
   const scrollToCard = useScrollToCard()
-  const activeKey = useScrollspy(lanes, hidden)
+  const activeKey = useScrollspy(queue)
   useQueueKeys(activeKey, scrollToCard)
   const loading = (cards.isPending || queues.isPending) && !queues.data
-  // Below the page's stacking point the columns are one above the other, so the list follows the lanes
+  // Below the page's stacking point the columns are one above the other, so the list follows the queue
   // rather than sitting between the prompt box and the queue it indexes.
   const stacked = useStacked()
   const home = homeOf(cards.data)
@@ -213,12 +267,12 @@ export function AllQueuesPage() {
         ) : queues.error && !queues.data ? (
           <p className="my-auto text-center text-[13px] text-muted">Could not read the queues: {String(queues.error)}</p>
         ) : (
-          <div className={`${lanes.length > 0 || filtered ? "" : "my-auto "}flex w-full min-w-0 flex-col py-8 max-[800px]:pt-2`}>
-            {lanes.length > 0 || filtered ? (
+          <div className={`${queue.length > 0 || filtered ? "" : "my-auto "}flex w-full min-w-0 flex-col py-8 max-[800px]:pt-2`}>
+            {queue.length > 0 || filtered ? (
               <>
                 {/* THE INBOX, NAMED — every card below is a Ready thread, whichever project it is from — and
                     at its right end the one control that scopes it: which projects' cards these are.
-                    `pl-[21px]` stands the glyph over the card titles, as the lane headers' squares do, and
+                    `pl-[21px]` stands the glyph over the card titles, and
                     `pr-[21px]` stands the filter over the cards' own right-hand controls. */}
                 <div data-inbox-header className="mb-3 flex min-w-0 items-center gap-3 pl-[21px] pr-[21px]">
                   <h2 className="flex shrink-0">
@@ -228,9 +282,14 @@ export function AllQueuesPage() {
                     <QueueFilter projects={projects} hidden={hidden} current={filtered} />
                   </div>
                 </div>
-                {lanes.length > 0 ? (
-                  lanes.map((project, index) => (
-                    <Lane key={project.id} project={project} first={index === 0} headed={!filtered} leaving={leaving} hidden={hidden} />
+                {queue.length > 0 ? (
+                  queue.map((slot, index) => (
+                    <Fragment key={slot.key}>
+                      <QueueCardOf entry={slot.item} ghost={slot.ghost ? ghostLabel(projects, slot.item) : undefined} concealed={inDrawer.has(slot.key)} leaving={leaving} chip={!filtered} />
+                      {/* The rule between two cards, as on the board: a sibling that FOLLOWS its card, so
+                          styles.css fades it with the card when that one leaves. */}
+                      {index < queue.length - 1 && <hr className="my-10 border-0 border-t border-border/60" />}
+                    </Fragment>
                   ))
                 ) : (
                   <p data-xq-filtered-empty className="mt-16 text-center text-[13px] text-muted">
@@ -272,7 +331,7 @@ function QueueFilter({ projects, hidden, current }: { projects: QueuesProject[];
   // A different set of cards is a different page to read, so it is read from its top.
   const choose = (id: string | null) => {
     setQueueFilter(id)
-    window.scrollTo({ top: 0, behavior: prefersSmooth() })
+    glideTo(() => 0)
   }
   return (
     <ProjectFilter
@@ -395,6 +454,35 @@ function carryDraft(key: (projectDir: string | undefined) => string, from: strin
  * something in another project. Held only until a read that STARTED after the departure lands, and
  * that read is asked for at once rather than left to the next tick.
  */
+/** How long a project the server has stopped serving keeps its last queue on the page (useLastKnownQueues). */
+const UNOPENED_HOLD_MS = 60_000
+
+/**
+ * The poll's queues, with a project that DROPPED OUT of it held as it last was, for up to a minute.
+ *
+ * The poll carries only the projects the server has open, and a restarted server opens them again one
+ * by one: for those seconds every other project's cards vanished and came back, moving each card below
+ * them on the reader's screen. Held here instead, they wait where they were. Only a project still
+ * registered and not stale: one removed or whose directory is gone has really left. Past the minute a
+ * project that has still not come back (another Frizz serves it, it failed to open) is shown as it is.
+ */
+function useLastKnownQueues(queues: readonly ProjectQueue[] | undefined, cards: readonly ProjectCard[] | undefined): readonly ProjectQueue[] | undefined {
+  const seen = useRef(new Map<string, { queue: ProjectQueue; at: number }>())
+  return useMemo(() => {
+    if (!queues) return queues
+    const now = Date.now()
+    for (const queue of queues) seen.current.set(queue.projectId, { queue, at: now })
+    const present = new Set(queues.map((queue) => queue.projectId))
+    const held: ProjectQueue[] = []
+    for (const card of cards ?? []) {
+      if (present.has(card.id) || card.stale) continue
+      const last = seen.current.get(card.id)
+      if (last && now - last.at < UNOPENED_HOLD_MS) held.push(last.queue)
+    }
+    return held.length > 0 ? [...queues, ...held] : queues
+  }, [queues, cards])
+}
+
 function useDepartedQueue(live: ProjectQueue | undefined, polledAt: number): ProjectQueue | undefined {
   const queryClient = useQueryClient()
   const last = useRef<ProjectQueue | undefined>(undefined)
@@ -527,110 +615,63 @@ function placeCaret(box: HTMLTextAreaElement, caret: Caret | undefined): void {
   else box.setSelectionRange(box.value.length, box.value.length)
 }
 
-// ---- The lanes (the workpane) -----------------------------------------------------------------------
+// ---- The queue (the workpane) -----------------------------------------------------------------------
 
 /**
- * One project's cards, in its board's queue order, under a sticky header — so a long lane never loses
- * whose cards these are — that is just the project: its square and its name, and the name opens its
- * project view. Every card after the page's first follows the board's own rule, within a lane and across
- * lanes alike, so the column has the board's one rhythm and a new project announces itself with its
- * header rather than a heavier line.
+ * One card of the one queue, whichever project it is from, wearing that project's chip on its meta line
+ * — a filter to that project, as the lane headers were — unless the queue is already filtered to it.
  *
- * EVERYTHING INSIDE RENDERS AS THIS PROJECT. The markdown scope points a `#123` at this project's repo, a
- * relative path at its directory and a `/thread/<slug>` link at that thread on THIS page (`/all/<slug>`,
- * opened in place) — never at the page's focus, which is usually another project.
+ * EVERYTHING INSIDE RENDERS AS ITS PROJECT. The markdown scope points a `#123` at the card's repo, a
+ * relative path at its directory and a `/thread/<slug>` link at that thread on THIS page (opened in
+ * place) — never at the page's focus, which is usually another project.
  */
-function Lane({
-  project,
-  first,
-  headed,
-  leaving,
-  hidden,
-}: {
-  project: QueuesProject
-  first: boolean
-  /** Filtered to this one project, the header goes: the READY header's filter already names it. */
-  headed: boolean
-  leaving: LeavingCards
-  hidden: (key: string) => boolean
-}) {
+function QueueCardOf({ entry, ghost, concealed, leaving, chip }: { entry: QueueEntry; ghost: string | undefined; concealed: boolean; leaving: LeavingCards; chip: boolean }) {
+  const { project, thread } = entry
+  // The READY header's filter, chosen from the card: a different set of cards is read from its top.
+  const choose = useCallback((to: QueuesProject) => {
+    setQueueFilter(to.id)
+    glideTo(() => 0)
+  }, [])
   const openInPlace = useOpenThreadInPlace()
   const scope = useMemo(
     () => projectMarkdownScope(project),
     [project.id, project.githubRepo, project.slug, project.projectDir, project.homeDir],
   )
-  const cards = project.queued.filter((t) => !hidden(threadKey(project.id, t.id)))
+  const key = threadKey(project.id, thread.id)
   return (
-    <section data-xq-lane={project.id} aria-label={`${project.name} queue`} className="flex min-w-0 scroll-mt-4 flex-col">
-      {!first && <hr className="my-10 border-0 border-t border-border/60" />}
-      {/* `pl-[21px]` — the card's 1px border plus its header's px-5 — stands the square over the card
-          titles, where the Ready glyph above stands too. The name FILTERS the queue to its project. */}
-      {headed && (
-      <header className="sticky top-0 z-10 mb-3 flex min-w-0 bg-bg/90 py-2 pl-[21px] backdrop-blur-sm">
-        <Link
-          to="/"
-          title={`Show only ${project.name}`}
-          onClick={(event) => {
-            if (!isPlainLeftClick(event)) return
-            event.preventDefault()
-            setQueueFilter(project.id)
-            window.scrollTo({ top: 0, behavior: prefersSmooth() })
-          }}
-          className="flex min-w-0 items-baseline gap-2 rounded-sm text-[13px] font-medium text-fg/90 underline-offset-2 outline-none transition-colors hover:text-fg hover:underline focus-visible:ring-1 focus-visible:ring-border-strong"
-        >
-          {/* ON THE NAME'S CAP BAND: a filled square has no baseline of its own, so it sits ON the name's
-              and is lowered by half its height less half a cap — computed by the browser, right in any
-              font at any size (the prompt box's project picker does the same). */}
-          <span className="flex shrink-0 self-baseline translate-y-[calc(8px_-_0.5cap)]">
-            <ProjectSquare project={project.card ?? fallbackCard(project)} size={16} />
-          </span>
-          <h2 className="min-w-0 truncate">{project.name}</h2>
-        </Link>
-      </header>
+    <MarkdownScopeContext.Provider value={scope}>
+      {thread.kind === "command" ? (
+        // A finished terminal command takes the board's own command card, scoped to its project: its
+        // pty, its Restart and its Mark as done all belong to the card's project, not the page's.
+        <div data-xq-card={key} data-queue-leaving={leaving.isLeaving(key)} data-queue-ghost={ghost === undefined ? undefined : true} data-queue-concealed={concealed || undefined} inert={concealed} className="frizz-card-slot min-w-0">
+          <div className="frizz-card-clip min-h-0 min-w-0">
+            <div className="frizz-card-body min-w-0">
+              <ThreadProjectScope projectId={project.id} projectDir={project.projectDir}>
+                <CommandQueueCard
+                  thread={thread}
+                  leaving={leaving.isLeaving(key)}
+                  onResolve={leaving.leave(key)}
+                  onUnresolve={leaving.restore(key)}
+                  onOpen={() => openInPlace(project, thread.id)}
+                  lead={chip ? <ProjectChip project={project} /> : undefined}
+                />
+              </ThreadProjectScope>
+            </div>
+          </div>
+        </div>
+      ) : (
+        <AllQueuesCard
+          project={project}
+          thread={thread}
+          leaving={leaving.isLeaving(key)}
+          onLeave={leaving.leave(key)}
+          onReturn={leaving.restore(key)}
+          chip={chip ? <ProjectChip project={project} onChoose={choose} /> : undefined}
+          ghost={ghost}
+          concealed={concealed}
+        />
       )}
-      <MarkdownScopeContext.Provider value={scope}>
-        {cards.map((t, index) => {
-          const key = threadKey(project.id, t.id)
-          const rule = index > 0 && <hr className="my-10 border-0 border-t border-border/60" />
-          // A finished terminal command takes the board's own command card, scoped to its project: its
-          // pty, its Restart and its Mark as done all belong to this lane's project, not the page's.
-          if (t.kind === "command") {
-            return (
-              <Fragment key={key}>
-                {rule}
-                <div data-xq-card={key} data-queue-leaving={leaving.isLeaving(key)} className="frizz-card-slot min-w-0">
-                  <div className="frizz-card-clip min-h-0 min-w-0">
-                    <div className="frizz-card-body min-w-0">
-                      <ThreadProjectScope projectId={project.id} projectDir={project.projectDir}>
-                        <CommandQueueCard
-                          thread={t}
-                          leaving={leaving.isLeaving(key)}
-                          onResolve={leaving.leave(key)}
-                          onUnresolve={leaving.restore(key)}
-                          onOpen={() => openInPlace(project, t.id)}
-                        />
-                      </ThreadProjectScope>
-                    </div>
-                  </div>
-                </div>
-              </Fragment>
-            )
-          }
-          return (
-            <Fragment key={key}>
-              {rule}
-              <AllQueuesCard
-                project={project}
-                thread={t}
-                leaving={leaving.isLeaving(key)}
-                onLeave={leaving.leave(key)}
-                onReturn={leaving.restore(key)}
-              />
-            </Fragment>
-          )
-        })}
-      </MarkdownScopeContext.Provider>
-    </section>
+    </MarkdownScopeContext.Provider>
   )
 }
 
@@ -737,12 +778,8 @@ function useStacked(): boolean {
   )
 }
 
-function prefersSmooth(): ScrollBehavior {
-  return window.matchMedia?.("(prefers-reduced-motion: reduce)").matches ? "auto" : "smooth"
-}
-
 /**
- * A queue row's click: bring its card to the top of the lane and ring it — the board's own
+ * A queue row's click: bring its card to the top of the window and ring it — the board's own
  * scroll-to-card (store.ts scrollToQueueCard), for a page whose cards are keyed by project. Returns
  * the scroll offset it landed on (null when the card is gone), which the keyboard's cursor holds on to.
  */
@@ -750,12 +787,8 @@ function useScrollToCard(): (key: string) => number | null {
   return useCallback((key: string) => {
     const slot = document.querySelector<HTMLElement>(`[data-xq-card="${CSS.escape(key)}"]`)
     if (!slot) return null
-    // Just below the lane's sticky header, which will be stuck there when the card lands — measured, not
-    // assumed, since its height is the font's.
-    const header = slot.closest("[data-xq-lane]")?.querySelector<HTMLElement>(":scope > header")
-    const clearance = header ? header.getBoundingClientRect().height + 12 : QUEUE_CARD_VIEWPORT_TOP
-    const top = Math.max(0, slot.getBoundingClientRect().top + window.scrollY - clearance)
-    window.scrollTo({ top, behavior: prefersSmooth() })
+    // Read again when the glide ends: a card that arrived or left above it meanwhile moved it.
+    const top = glideTo(() => slot.getBoundingClientRect().top + window.scrollY - QUEUE_CARD_VIEWPORT_TOP)
     const root = slot.querySelector<HTMLElement>("[data-xq-card-root]")
     if (!root) return top
     root.removeAttribute("data-queue-flash")
@@ -774,43 +807,80 @@ function useScrollToCard(): (key: string) => number | null {
  * for the length of the glide — and for as long as the page then stays where it put it — the target is
  * held as the card being read; otherwise a quick `j j` would step twice from the card the glide was
  * leaving and land on the same card again.
+ *
+ * That card also wears the arrival ring STEADILY (`data-queue-current`), for as long as it is the one a
+ * `d` or `s` would act on — the flash alone faded after a second and left no sign of which card the next
+ * key would finish. An open drawer takes the keys (currentThreadSurface), so the ring steps off while one is.
  */
 function useQueueKeys(activeKey: string | null, scrollToCard: (key: string) => number | null): void {
   const reading = useRef(activeKey)
   reading.current = activeKey
   const landing = useRef<{ key: string; y: number; until: number } | null>(null)
+  const current = useCallback(() => {
+    const held = landing.current
+    // A held card that has since been finished or snoozed is not being read any more.
+    if (held && document.querySelector(`[data-xq-card="${CSS.escape(held.key)}"][data-queue-leaving="false"]`)) {
+      const reachable = Math.min(held.y, Math.max(0, document.documentElement.scrollHeight - window.innerHeight))
+      if (performance.now() < held.until || Math.abs(window.scrollY - reachable) <= 2) return held.key
+    }
+    landing.current = null
+    return reading.current
+  }, [])
+  const root = useCallback((key: string) => {
+    const slot = document.querySelector<HTMLElement>(`[data-xq-card="${CSS.escape(key)}"]`)
+    return slot?.querySelector<HTMLElement>("[data-xq-card-root], [data-queue-card-root]") ?? slot
+  }, [])
+  const [ringed, setRinged] = useState<string | null>(null)
   useEffect(() => registerQueueCursor({
-    keys: () => [...document.querySelectorAll<HTMLElement>('[data-xq-card][data-queue-leaving="false"]')]
+    // Not a ghost (lib/stableQueue.ts), whose thread is no longer waiting, nor a card whose drawer is open.
+    keys: () => [...document.querySelectorAll<HTMLElement>('[data-xq-card][data-queue-leaving="false"]:not([data-queue-ghost]):not([data-queue-concealed])')]
       .map((slot) => slot.dataset.xqCard ?? "")
       .filter(Boolean),
-    current: () => {
-      const held = landing.current
-      // A held card that has since been finished or snoozed is not being read any more.
-      if (held && document.querySelector(`[data-xq-card="${CSS.escape(held.key)}"][data-queue-leaving="false"]`)) {
-        const reachable = Math.min(held.y, Math.max(0, document.documentElement.scrollHeight - window.innerHeight))
-        if (performance.now() < held.until || Math.abs(window.scrollY - reachable) <= 2) return held.key
-      }
-      landing.current = null
-      return reading.current
-    },
-    root: (key) => {
-      const slot = document.querySelector<HTMLElement>(`[data-xq-card="${CSS.escape(key)}"]`)
-      return slot?.querySelector<HTMLElement>("[data-xq-card-root], [data-queue-card-root]") ?? slot
-    },
+    current,
+    root,
     go: (key) => {
       const y = scrollToCard(key)
-      if (y !== null) landing.current = { key, y, until: performance.now() + 700 }
+      if (y !== null) {
+        landing.current = { key, y, until: performance.now() + 700 }
+        setRinged(key)
+      }
     },
-  }), [scrollToCard])
+  }), [scrollToCard, current, root])
+
+  // Re-read on every render (a card leaving re-renders the page) and on scroll (which can end a hold);
+  // an unchanged key is a bail-out, not a render.
+  useEffect(() => setRinged(current()))
+  useEffect(() => {
+    let frame = 0
+    const sync = () => {
+      cancelAnimationFrame(frame)
+      frame = requestAnimationFrame(() => setRinged(current()))
+    }
+    window.addEventListener("scroll", sync, { passive: true })
+    return () => {
+      cancelAnimationFrame(frame)
+      window.removeEventListener("scroll", sync)
+    }
+  }, [current])
+
+  // An ATTRIBUTE set imperatively, like the flash: the roots are two different card components, and React
+  // never touches an attribute absent from its props.
+  const drawerOpen = useSnapshot(store).drawers.some((drawer) => !drawer.closing)
+  const target = drawerOpen ? null : ringed
+  useEffect(() => {
+    const el = target ? root(target) : null
+    el?.setAttribute("data-queue-current", "")
+    return () => el?.removeAttribute("data-queue-current")
+  }, [target, root])
 }
 
 /**
  * Which card is being read — the one crossing the reading line a third of the way down the window — so
  * its row in the rail wears the board's scroll marker.
  */
-function useScrollspy(projects: QueuesProject[], hidden: (key: string) => boolean): string | null {
+function useScrollspy(cards: readonly { key: string }[]): string | null {
   const [active, setActive] = useState<string | null>(null)
-  const signature = projects.map((p) => p.queued.map((t) => threadKey(p.id, t.id)).filter((k) => !hidden(k)).join(",")).join("|")
+  const signature = cards.map((card) => card.key).join(",")
   useEffect(() => {
     let frame = 0
     const sync = () => {

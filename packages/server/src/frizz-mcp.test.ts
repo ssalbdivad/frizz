@@ -1398,6 +1398,7 @@ test("`activity` reads the open questions back, with the ids `unask` takes", asy
       questions: [
         { id: "qst_ab12cd34ef56", spec: { question: "Should the settings store use SQLite or a JSON file?", kind: "question" }, askedAt: "2026-08-28T09:05:00.000Z" },
         { id: "qst_0011223344ff", spec: { question: "Which dist-tag should 4.5.0 publish under?", kind: "question" }, askedAt: "2026-08-28T09:05:00.000Z" },
+        { id: "qst_99887766aabb", spec: { question: "Rename the package first?", kind: "question" }, askedAt: "2026-08-28T08:00:00.000Z", repliedPast: true },
       ],
     } }))
   })
@@ -1413,6 +1414,11 @@ test("`activity` reads the open questions back, with the ids `unask` takes", asy
     const text = (await rpc.next(2)).result.content[0].text
     assert.match(text, /2 questions still owed an answer/)
     for (const id of ["qst_ab12cd34ef56", "qst_0011223344ff"]) assert.match(text, new RegExp(id))
+    // …and a question the human replied past is listed APART, as set aside, never as owed or "below".
+    const passed = text.slice(text.indexOf("1 question the human replied past"))
+    assert.match(passed, /^1 question the human replied past without answering:\n\n  question: qst_99887766aabb/)
+    assert.match(passed, /Treat these as set aside/)
+    assert.doesNotMatch(text.slice(0, text.indexOf("1 question the human replied past")), /qst_99887766aabb/, "not in the owed list")
     assert.match(text, /Should the settings store use SQLite or a JSON file\?/)
     // The fence block names the SHELL and nothing else — no question id may appear inside it.
     const fence = text.slice(text.indexOf("```awaiting"), text.indexOf("```\n\nDrop the lines"))
