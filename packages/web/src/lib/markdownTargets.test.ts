@@ -1,5 +1,6 @@
 import { test } from "node:test"
 import assert from "node:assert/strict"
+import { setHomeFocus } from "./base-path.ts"
 import { isLocalMarkdownFile, localFileDir, localImageUrl, localImageUrlForTarget, localMarkdownTarget, resolveRelativeLocalPath } from "./markdownTargets.ts"
 
 test("absolute POSIX and file URLs become local targets with decoded proxy paths", () => {
@@ -116,6 +117,46 @@ test("normal web, relative app, anchor, and mail links remain links", () => {
     "/all/nub",
     "/all/nub/thread/fix-auth",
   ]) assert.equal(localMarkdownTarget(href), null, href)
+})
+
+// ONE PAGE (2026-09-28). A worker's handoff is read on `/`, in a drawer at `/all/<slug>/thread/<t>`, and
+// on a fullscreen `/thread/<t>/full`, and a link in it must classify the same on all three: the shapes
+// are matched on the link alone. The page is stubbed per reading, `/` with a focus as the route sets it.
+test("an in-app link classifies the same on /, in a drawer and on /full", () => {
+  const globals = globalThis as { location?: unknown }
+  const previous = globals.location
+  const links = ["/", "/thread/a", "/thread/a/full", "/all/nub/thread/a", "/all/zod/thread/a/full", "/all/zod"]
+  try {
+    for (const [page, focus] of [["/", "nub"], ["/all/nub/thread/fix-auth", undefined], ["/thread/fix-auth/full", undefined]] as const) {
+      globals.location = { pathname: page }
+      setHomeFocus(focus)
+      for (const href of links) assert.equal(localMarkdownTarget(href), null, `${href} on ${page}`)
+      assert.equal(localMarkdownTarget("/Users/me/notes.md")?.filePath, "/Users/me/notes.md", `a file on ${page}`)
+    }
+  } finally {
+    globals.location = previous
+    setHomeFocus(undefined)
+  }
+})
+
+// The addresses Frizz minted before one page replaced the project view. Nothing mints them now and the
+// route tree sends each one home, but old handoffs hold them — and read as a file, each became a chip
+// whose click asked the server to open `/project/nub/thread/x`.
+test("a retired Frizz address is still in-app, not a file the server is asked to open", () => {
+  for (const href of [
+    "/project/nub",
+    "/project/nub/",
+    "/project/nub/thread/fix-auth",
+    "/project/nub/thread/fix-auth/full",
+    "/project/nub/thread/fix-auth?x=1#y",
+    "/project/nub/status/active",
+    "/status/blocked",
+  ]) assert.equal(localMarkdownTarget(href), null, href)
+})
+
+test("…but EXACTLY those shapes: a `/project` directory is somebody's files", () => {
+  for (const path of ["/project/acme/src/main.rs", "/project/acme/README.md", "/project/acme/thread/x/notes.md", "/project", "/status/a/b.log"])
+    assert.equal(localMarkdownTarget(path)?.filePath, path, path)
 })
 
 test("a machine page's NAME at the root of a filesystem path is still a file", () => {

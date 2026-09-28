@@ -280,9 +280,11 @@ function ProjectLinkScope({ project, children }: { project: QueuesProject; child
     const href = anchor?.getAttribute("href")
     if (!anchor || !href || href.startsWith("//") || !isPlainLeftClick(event)) return
     // The markdown scope already pointed every in-app link at this project on this page (`/all/<slug>/…`),
-    // and a worker may have spelled one out itself (`/project/<slug>/thread/…`). Either way it is a
-    // same-app navigation — done by the router rather than a document load — and a thread link opens
-    // the thread in place, on this page, whichever prefix it was written with.
+    // and a worker may have spelled one out itself for another project. Either way it is a same-app
+    // navigation — done by the router rather than a document load — and a thread link opens the thread
+    // in place, on this page. An address from before 2026-09-28 (`/project/<slug>/thread/…`) names no
+    // project any more (base-path.ts isRetiredAppPath), so it is left to the browser, which lands it on
+    // the page untranslated, like any other retired address.
     const linked = projectSlug(href)
     if (!linked) return
     event.preventDefault()

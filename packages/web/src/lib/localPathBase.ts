@@ -3,12 +3,14 @@
 // server has always resolved those against the project directory for a path in INLINE CODE
 // (local-file.ts `resolveOpenableFile`, behind rpc.resolveLocalPaths). A path written as a Markdown
 // LINK had no such base in chat, so it stayed a relative href and the browser resolved it against the
-// PAGE: clicking one navigated to `/project/<slug>/thread/<slug>/<the path>` and out of the app.
+// PAGE: clicking one navigated to a path under the page's own address and out of the app.
 //
 // Module-level rather than an argument threaded through every `mdToHtml` call, for exactly the reason
-// githubAutolink.ts holds its repo that way: a page shows ONE project at a time, there are a dozen
-// render sites each memoizing on its own markdown string, and a project switch tears every one of them
-// down (resetProjectState). Set from the board — the one payload that carries both values.
+// githubAutolink.ts holds its repo that way: a page is FOCUSED on one project at a time, there are a
+// dozen render sites each memoizing on its own markdown string, and a focus change tears every one of
+// them down (resetProjectState). Set from the board — the one payload that carries both values. This is
+// the focus's base, which is right for its drawers; Everything's lanes render other projects' prose on
+// the same page, and name each one's own base through MarkdownScopeContext (lib/useMarkdown.ts).
 //
 // It NOTIFIES, and that is load-bearing, not defensive: a thread's transcript is its own query and it
 // resolves BEFORE the board keyframe, so HTML memoized on the markdown string alone would be built

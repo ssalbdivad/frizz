@@ -21,7 +21,7 @@ import { projectScopedQueryKeyHash } from "./lib/queryKeyScope.ts"
 import { parseStandaloneThreadPath } from "./lib/standaloneThreadRoute.ts"
 
 const settingsFixture = typeof window !== "undefined" && window.location.pathname.endsWith("/settings-formatting-fixture.html")
-// innerPath, not location.pathname: under a project prefix the deep link is `/project/nub/thread/x/full`.
+// innerPath, not location.pathname: under a project prefix the deep link is `/all/nub/thread/x/full`.
 const standaloneThreadSlug = typeof window !== "undefined" ? parseStandaloneThreadPath(innerPath()) : null
 
 if (!settingsFixture && !standaloneThreadSlug) {

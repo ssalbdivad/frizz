@@ -1,6 +1,6 @@
 import assert from "node:assert/strict"
 import { test } from "node:test"
-import { apiBase, basePath, crossProjectHref, everythingHref, innerPath, isCrossProjectPath, outerPath, prefixedAppRoute, projectSlug, setHomeFocus } from "./base-path.ts"
+import { apiBase, basePath, crossProjectHref, everythingHref, innerPath, isCrossProjectPath, isRetiredAppPath, outerPath, prefixedAppRoute, projectSlug, setHomeFocus } from "./base-path.ts"
 
 // The launching project's fullscreen page is still served unprefixed, so an empty base is a supported state.
 test("an unprefixed page has no base and addresses the unprefixed API", () => {
@@ -29,6 +29,18 @@ test("/project/<slug> names nothing", () => {
     assert.equal(apiBase(path), "/_frizz", path)
     assert.equal(isCrossProjectPath(path), false, path)
   }
+})
+
+// …but it is still an address Frizz minted, so a link to one is in-app (markdownTargets.ts isFrizzRoute)
+// and is left exactly as written: re-pointed under a drawer's prefix it would name a route that never
+// existed there, and it lands on the page either way.
+test("a retired address is recognised, and never re-pointed", () => {
+  for (const path of ["/project/nub", "/project/nub/thread/fix-auth", "/project/nub/thread/x/full", "/project/nub/status/active", "/status/active", "/status/active/"]) {
+    assert.equal(isRetiredAppPath(path), true, path)
+    assert.equal(prefixedAppRoute(path, "/all/zod/thread/x"), null, path)
+  }
+  for (const path of ["/project", "/project/acme/src/main.rs", "/project/acme/thread/x/notes.md", "/status", "/status/a/b", "/thread/x", "/all/nub"])
+    assert.equal(isRetiredAppPath(path), false, path)
 })
 
 // The router reasons about the inner path, so a prefixed and an unprefixed page look identical to it.

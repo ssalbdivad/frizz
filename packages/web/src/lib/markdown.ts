@@ -360,9 +360,10 @@ const DROP_WITH_CONTENT = new Set([
 // built-in reader, and the PROJECT ROOT everywhere else, which is the base the server already uses for
 // a bare path in inline code. `homeDir` — the expansion of a leading `~`. Both come from the caller;
 // see lib/localPathBase.ts for where the non-reader surfaces get them.
-// `appPath` — the page an in-app `/thread/<slug>` link is re-pointed at. Absent means THIS page, which is
-// right everywhere a page shows one project; the All queues page renders several projects' prose on a
-// page that names none, and passes each one's own `/project/<slug>` so the link opens THAT thread.
+// `appPath` — the page an in-app `/thread/<slug>` link is re-pointed at. Absent means THIS page — its
+// focus, `/all/<focus>` — which is right for a drawer, whose prose is the focus's; Everything's lanes
+// render several projects' prose on one page, and pass each one's own `/all/<slug>` (AllQueues.tsx Lane)
+// so the link opens THAT thread.
 type WalkContext = { block: boolean; baseDir?: string; homeDir?: string; appPath?: string }
 
 function sanitize(dirty: string, { block = false, baseDir, homeDir, appPath }: Partial<WalkContext> = {}): string {
