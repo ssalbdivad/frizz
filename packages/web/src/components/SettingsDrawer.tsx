@@ -32,7 +32,7 @@ function currentPerm(): NotifPerm {
 export function SettingsDrawer() {
   const { draft, update, saveState, flush } = useSettingsDraft()
   const [perm, setPerm] = useState<NotifPerm>(currentPerm())
-  // The Home workspace's square, its picker row and its project view all show its folder, and they
+  // The Home workspace's square, its picker row and its project list entry all show its folder, and they
   // read it from the project list — so the list is re-read once a moved folder has actually saved.
   const queryClient = useQueryClient()
   const [folderSaved, setFolderSaved] = useState(true)

@@ -83,24 +83,23 @@ test("registeredTenantHealth answers the join probe for a registered project wit
 test("unknownProjectPage names the slug of a project page that does not exist", () => {
   const known = (s: string) => ["nub", "frizz", "pullfrog-app"].includes(s)
 
-  assert.equal(unknownProjectPage("/project/deleted-last-week", known), "deleted-last-week")
-  assert.equal(unknownProjectPage("/project/deleted-last-week/thread/fix-auth", known), "deleted-last-week")
-  assert.equal(unknownProjectPage("/project/deleted-last-week/thread/x/full", known), "deleted-last-week")
-  // A slug can be percent-encoded in the address bar and must be compared decoded, or every project
-  // with a character worth encoding looks missing.
-  assert.equal(unknownProjectPage("/project/pullfrog%2Dapp", known), undefined)
-
-  // Everything that is NOT a missing project page is left alone.
-  assert.equal(unknownProjectPage("/project/nub", known), undefined)
-  assert.equal(unknownProjectPage("/project/nub/status/active", known), undefined)
-  // The cross-project page focused on a project names it the same way.
   assert.equal(unknownProjectPage("/all/deleted-last-week", known), "deleted-last-week")
   assert.equal(unknownProjectPage("/all/deleted-last-week/thread/fix-auth", known), "deleted-last-week")
+  assert.equal(unknownProjectPage("/all/deleted-last-week/thread/x/full", known), "deleted-last-week")
+  // A slug can be percent-encoded in the address bar and must be compared decoded, or every project
+  // with a character worth encoding looks missing.
+  assert.equal(unknownProjectPage("/all/pullfrog%2Dapp/thread/x", known), undefined)
+
+  // Everything that is NOT a missing project page is left alone.
   assert.equal(unknownProjectPage("/all/nub/thread/fix-auth", known), undefined)
+  // A project's own page is gone (2026-09-28), so its old address names nothing: the page's catch-all
+  // takes it home rather than the server calling a live project missing.
+  assert.equal(unknownProjectPage("/project/deleted-last-week", known), undefined)
+  assert.equal(unknownProjectPage("/project/nub/thread/fix-auth", known), undefined)
   assert.equal(unknownProjectPage("/", known), undefined, "the cross-project page")
   assert.equal(unknownProjectPage("/projects", known), undefined, "the project grid's old address, now a redirect home")
   assert.equal(unknownProjectPage("/thread/fix-auth", known), undefined, "the launching project, unprefixed")
-  assert.equal(unknownProjectPage("/project", known), undefined, "no slug to be missing")
-  assert.equal(unknownProjectPage("/project/", known), undefined)
+  assert.equal(unknownProjectPage("/all", known), undefined, "no slug to be missing")
+  assert.equal(unknownProjectPage("/all/", known), undefined)
   assert.equal(unknownProjectPage("/assets/index-D2Pc7U9B.js", known), undefined, "a bundle, not a page")
 })

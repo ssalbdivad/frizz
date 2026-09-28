@@ -1,0 +1,48 @@
+import { useQuery, type QueryClient } from "@tanstack/react-query"
+import type { BoardSnapshot } from "@frizz/shared"
+import { projectRpc } from "../api/rpc.ts"
+
+// ONE PROJECT'S WHOLE BOARD, read from a page that names another — Everything's project list, for the bands
+// its 3-second poll does not carry.
+//
+// `projectsQueues` carries every project's OPEN threads, which is all the queue and the list's current work
+// need, and a COUNT of its Done ones: that band grows without bound, and a poll of every project every few
+// seconds is the wrong place to ship it. So Done's rows — and External, the project's own terminals, which
+// the poll drops — come from the project's own board snapshot, the same payload its live feed seeds from.
+// Measured on the maintainer's machine (2026-09-28): 93KB for a project with 45 done threads, 5-7KB for the
+// rest, each answered from the server's cached snapshot in under 5ms.
+//
+// READ AHEAD so opening a project is instant: the list prefetches every open project's board once the page
+// is idle, and again under the pointer, so the rows are already in the cache when the click lands. While a
+// project is open its query is live, and the poll's Done count moving invalidates it (ProjectList.tsx).
+// Keyed `ofProject`, which the cache's project scoping leaves alone (lib/queryKeyScope.ts): the key already
+// says whose board it is.
+
+export function projectBoardKey(projectId: string): readonly ["ofProject", string, "board"] {
+  return ["ofProject", projectId, "board"]
+}
+
+/** Fresh enough to open on without a round trip; the poll's counts invalidate it sooner when they move. */
+const BOARD_STALE_MS = 20_000
+
+function projectBoardQuery(projectId: string) {
+  return {
+    queryKey: projectBoardKey(projectId),
+    queryFn: (): Promise<BoardSnapshot> => projectRpc(projectId).board(),
+    staleTime: BOARD_STALE_MS,
+  }
+}
+
+/**
+ * A project's board: fetched and kept fresh while `live`, and otherwise whatever a prefetch left in the
+ * cache — a disabled query still answers from it, which is what lets a closed project's row show its
+ * External count without a request of its own.
+ */
+export function useProjectBoard(projectId: string, live: boolean): BoardSnapshot | undefined {
+  return useQuery({ ...projectBoardQuery(projectId), enabled: live }).data
+}
+
+/** Read a project's board ahead of a click — a no-op while the cached one is still fresh. */
+export function prefetchProjectBoard(queryClient: QueryClient, projectId: string): void {
+  void queryClient.prefetchQuery(projectBoardQuery(projectId))
+}

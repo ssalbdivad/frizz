@@ -27,6 +27,12 @@ import { PROMPT_CONTROL_TYPOGRAPHY_CLASS } from "../lib/promptControlTypography.
 let lastDispatchMode: DispatchMode = "prompt"
 export type DispatchMode = "prompt" | "terminal"
 
+/** The directories of the project a prompt box dispatches into, named by its caller (DispatchForm `dirs`). */
+export interface DispatchDirs {
+  projectDir: string | undefined
+  homeDir: string | undefined
+}
+
 /** The tab the NEXT prompt box mounts on — how the `t` key opens the anywhere-modal straight onto
  *  Terminal (a mounted box is switched by pressing its tab instead; see App's new-thread keys). */
 export function preferDispatchMode(mode: DispatchMode): void {
@@ -41,6 +47,7 @@ export function DispatchForm({
   autoFocus,
   onDispatched,
   target,
+  dirs,
 }: {
   autoFocus?: boolean
   onDispatched?: () => void
@@ -53,6 +60,13 @@ export function DispatchForm({
    * box"). A board has no choice to make and passes nothing.
    */
   target?: ReactNode
+  /**
+   * The directories of the project the box dispatches into, when the caller knows them before the
+   * store's board for it has landed — the cross-project page re-aiming its box (AllQueues.tsx
+   * FocusedComposer). They key the drafts, so the box can take the new project at once rather than
+   * waiting on its feed. Everywhere else the store's board is the page project's, and says the same.
+   */
+  dirs?: DispatchDirs
 }) {
   const [mode, setModeState] = useState<DispatchMode>(lastDispatchMode)
   const setMode = (next: DispatchMode) => {
@@ -72,9 +86,9 @@ export function DispatchForm({
     <div data-dispatch-form className="w-full flex flex-col gap-1.5">
       <DispatchTabs mode={mode} onChange={(next) => { setSwitchedByKey(false); setMode(next) }} />
       {mode === "prompt" ? (
-        <PromptForm autoFocus={autoFocus || switchedByKey} onDispatched={onDispatched} onTerminal={() => switchByKey("terminal")} target={target} />
+        <PromptForm autoFocus={autoFocus || switchedByKey} onDispatched={onDispatched} onTerminal={() => switchByKey("terminal")} target={target} dirs={dirs} />
       ) : (
-        <CommandForm autoFocus={autoFocus || switchedByKey} onDispatched={onDispatched} onPrompt={() => switchByKey("prompt")} target={target} />
+        <CommandForm autoFocus={autoFocus || switchedByKey} onDispatched={onDispatched} onPrompt={() => switchByKey("prompt")} target={target} dirs={dirs} />
       )}
     </div>
   )
@@ -113,14 +127,18 @@ function CommandForm({
   onDispatched,
   onPrompt,
   target,
+  dirs,
 }: {
   autoFocus?: boolean
   onDispatched?: () => void
   onPrompt?: () => void
   target?: ReactNode
+  dirs?: DispatchDirs
 }) {
-  const projectDir = useProjectDir()
-  const homeDir = useSnapshot(store).board?.homeDir
+  const boardDir = useProjectDir()
+  const boardHome = useSnapshot(store).board?.homeDir
+  const projectDir = dirs ? dirs.projectDir : boardDir
+  const homeDir = dirs ? dirs.homeDir : boardHome
   const [command, setCommand, clearCommand] = useDraft(draftKey.command(projectDir))
   const start = useMutation({
     // The project is read when the request goes out — the one it was sent to (see ToastLink).
@@ -215,12 +233,14 @@ function PromptForm({
   onDispatched,
   onTerminal,
   target,
+  dirs,
 }: {
   autoFocus?: boolean
   onDispatched?: () => void
   /** `!` typed into the EMPTY box: switch to Terminal instead of writing it (see DispatchForm). */
   onTerminal?: () => void
   target?: ReactNode
+  dirs?: DispatchDirs
 }) {
   // The one durable new-thread profile, shared with the GitHub picker's own selector.
   const { resolved, codexList, claudeList, acpList, loadError: profileLoadError, saveProfile } = useDispatchProfile()
@@ -230,7 +250,8 @@ function PromptForm({
   // Gate the leftAction slot itself, not just the icon: Composer reserves rail space whenever the
   // prop is set, so a hidden GithubTrigger must mean NO prop — not a null-rendering element.
   const githubTriggerVisible = useGithubTriggerVisible()
-  const projectDir = useProjectDir()
+  const boardDir = useProjectDir()
+  const projectDir = dirs ? dirs.projectDir : boardDir
   // Queue and modal are the same semantic new-thread composer.
   const [prompt, setPrompt, clearPrompt] = useDraft(draftKey.dispatch(projectDir))
   const promptKey = draftKey.dispatch(projectDir)

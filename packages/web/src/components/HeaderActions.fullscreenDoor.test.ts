@@ -7,22 +7,19 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query"
 import type { ThreadView } from "@frizz/shared"
 import { HeaderActions } from "./HeaderActions.tsx"
 import { TooltipProvider } from "./Tooltip.tsx"
-import { store } from "../store.ts"
 import { clearFullscreenOrigin, rememberFullscreenOrigin } from "../lib/fullscreenHandoff.ts"
 
-// THE FULLSCREEN DOOR IS ONE SLOT, BOTH DIRECTIONS.
+// THE WAY OUT OF FULLSCREEN, AND NO WAY IN ON THE STRIP.
 //
-// The queue card's action strip carries the door OPENING (ExpandThreadLink, ⤢) and the /full page's
-// header carries it CLOSING (CollapseThreadLink, ⤡) — and the whole point is that they stand in the
-// SAME position in the same strip, so the icon that took the reader out of the queue is the icon that
-// brings them back (maintainer 2026-09-02: "instead of a back arrow in the upper left, I think we
-// should just have a collapse icon in the same place where the expand icon is in the cue card").
+// The /full page's header carries the door CLOSING (CollapseThreadLink, ⤡) in the thread's action strip.
+// The door OPENING was a ⤢ on every queue card and list row, and in the drawer header, until 2026-09-28
+// (maintainer: "the single thread view is only marginally useful at best and should probably be a
+// dropdown option"): it is the drawer menu's "Open fullscreen" now (ThreadMenu.tsx), so no strip offers
+// a way in.
 //
-// Before that, /full's way out was an ArrowLeft sitting BEFORE THE TITLE, at the header's far left:
-// a second, unrelated place to look for a whole-thread verb, and a "previous page" glyph on a control
-// whose job is to change how this thread is SHOWN. So what is pinned here is the POSITION, not merely
-// the presence of an icon — a future edit that keeps both halves but drifts one of them out of the
-// slot loses the entire behaviour the request asked for.
+// Before 2026-09-02, /full's way out was an ArrowLeft sitting BEFORE THE TITLE, at the header's far
+// left: a second, unrelated place to look for a whole-thread verb, and a "previous page" glyph on a
+// control whose job is to change how this thread is SHOWN.
 
 // STALLED, so the strip's far-right verb (Retry) is on the other side of the door. Most of the strip
 // gates itself away in a bare render — Reload plugins and Restart worker want a dev build and a live
@@ -50,64 +47,56 @@ function controls(html: string): string[] {
   return [...html.matchAll(/aria-label="([^"]+)"/g)].map((m) => m[1])
 }
 
-test("the door's two halves occupy the SAME slot in the strip", () => {
-  const opening = controls(strip({ expand: true }))
+test("the /full strip carries the way out, and no strip carries a way in", () => {
   const closing = controls(strip({ collapse: true }))
-
-  assert.ok(opening.includes("Open fullscreen"), `the card's strip carries the door opening: ${opening.join(" · ")}`)
   assert.ok(closing.includes("Exit fullscreen"), `the /full strip carries the door closing: ${closing.join(" · ")}`)
+  // Retry stays the strip's last verb: the way out stands among the thread's own verbs, not after them.
+  assert.ok(closing.indexOf("Exit fullscreen") < closing.findIndex((l) => l.startsWith("Retry")), `the door precedes Retry: ${closing.join(" · ")}`)
 
-  // The ONE assertion the maintainer's request lives in: with each half rewritten to the neutral name
-  // of the affordance they share, the two strips are the same strip.
-  const slot = (labels: string[]) => labels.map((l) => (l === "Open fullscreen" || l === "Exit fullscreen" ? "«the door»" : l))
-  assert.deepEqual(slot(closing), slot(opening), "the collapse icon must stand exactly where the expand icon stands")
+  const plain = controls(strip({}))
+  assert.ok(!plain.some((l) => l === "Open fullscreen" || l === "Exit fullscreen"), `no strip opens /full: ${plain.join(" · ")}`)
 })
 
-test("a surface offers ONE direction — never both, never neither by accident", () => {
-  const both = controls(strip({ expand: true, collapse: true }))
-  // Nothing stops a caller passing both, and if one ever does the strip would offer a reader on /full
-  // a door back into /full. No surface does: the prop pair is documented as exclusive, and this pins
-  // that the queue card and the /full page each pass exactly one.
-  assert.equal(both.filter((l) => l === "Open fullscreen" || l === "Exit fullscreen").length, 2, "both props render both halves — so the surfaces, not the component, own the exclusivity")
-
-  const neither = controls(strip({}))
-  assert.ok(!neither.some((l) => l === "Open fullscreen" || l === "Exit fullscreen"), "the drawer header passes neither and mounts its own")
-})
-
-test("a COLD arrival at /full leads back to THIS project's board", () => {
-  const previous = store.board
-  clearFullscreenOrigin()
+/** Render with the address bar at `pathname` — the collapse link reads the page's own address. */
+function stripAt(pathname: string, props: { collapse?: boolean }): string {
+  const had = Object.getOwnPropertyDescriptor(globalThis, "location")
+  Object.defineProperty(globalThis, "location", { value: { pathname }, configurable: true, writable: true })
   try {
-    store.board = { projectSlug: "acme" } as typeof store.board
-    assert.match(strip({ collapse: true }), /href="\/project\/acme"/, "a deep link, a bookmark or a reload has no surface to return to, so the queue is the destination")
+    return strip(props)
   } finally {
-    store.board = previous
-    clearFullscreenOrigin()
+    if (had) Object.defineProperty(globalThis, "location", had)
+    else delete (globalThis as { location?: unknown }).location
   }
+}
+
+test("a COLD arrival at /full leaves to that thread's drawer", () => {
+  clearFullscreenOrigin()
+  // A deep link, a bookmark or a reload noted no door, so there is no surface to return to: leaving
+  // fullscreen shows the same thread the ordinary way, in its drawer on the page.
+  assert.match(stripAt("/all/acme/thread/t/full", { collapse: true }), /href="\/all\/acme\/thread\/t"/)
+  // The launching project's unprefixed /full names no project to open a drawer in, so it goes home.
+  assert.match(stripAt("/thread/t/full", { collapse: true }), /href="\/"/)
 })
 
 test("the collapse icon leads back to the surface the door was pressed in", () => {
-  const previous = store.board
   try {
-    store.board = { projectSlug: "acme" } as typeof store.board
-    // A thread read through a DRAWER: the door was pressed at the drawer's own address, and that is
-    // where leaving /full has to land. The board ROOT mounts no drawer, so going there both strands the
-    // reader and leaves the reverse view transition with nothing named `thread-chat` to shrink into —
-    // measured as a hard cross-fade at every width from 767 to 2560 before this existed.
-    rememberFullscreenOrigin("t", "/project/acme/thread/t")
-    assert.match(strip({ collapse: true }), /href="\/project\/acme\/thread\/t"/, "leaving /full returns to the drawer it was opened from")
+    // The door was pressed at the drawer's own address, and that is where leaving /full has to land.
+    // The page ROOT mounts no drawer, so going there both strands the reader and leaves the reverse view
+    // transition with nothing named `thread-chat` to shrink into — measured as a hard cross-fade at every
+    // width from 767 to 2560 before this existed.
+    rememberFullscreenOrigin("t", "/all/acme/thread/t")
+    assert.match(stripAt("/all/acme/thread/t/full", { collapse: true }), /href="\/all\/acme\/thread\/t"/, "leaving /full returns to the drawer it was opened from")
 
     // Keyed by slug, so a record left by another thread's door can never redirect this one.
     clearFullscreenOrigin()
-    rememberFullscreenOrigin("someone-else", "/project/acme/thread/someone-else")
-    assert.match(strip({ collapse: true }), /href="\/project\/acme"/, "another thread's origin is not this thread's way out")
+    rememberFullscreenOrigin("someone-else", "/all/acme/thread/someone-else")
+    assert.match(stripAt("/all/acme/thread/t/full", { collapse: true }), /href="\/all\/acme\/thread\/t"/, "another thread's origin is not this thread's way out")
 
     // A /full address is never remembered: the way out must not be a loop.
     clearFullscreenOrigin()
-    rememberFullscreenOrigin("t", "/project/acme/thread/t/full")
-    assert.match(strip({ collapse: true }), /href="\/project\/acme"/, "a /full origin is refused, so the fallback stands")
+    rememberFullscreenOrigin("t", "/all/acme/thread/t/full")
+    assert.doesNotMatch(stripAt("/all/acme/thread/t/full", { collapse: true }), /href="[^"]*\/full"/, "a /full origin is refused, so the fallback stands")
   } finally {
-    store.board = previous
     clearFullscreenOrigin()
   }
 })

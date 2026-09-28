@@ -3,6 +3,7 @@ import { RemoveScroll } from "react-remove-scroll"
 import { useSnapshot } from "valtio"
 import { store, markDrawerClosing, removeDrawerAfterExit } from "../../store.ts"
 import { registerDrawerClose } from "../../lib/overlays.ts"
+import { isToastPointer } from "../Toaster.tsx"
 import {
   SHEET_CLOSE_MS,
   SHEET_PANEL_CLASS,
@@ -125,11 +126,11 @@ function overlayOwnsPointer(target: Element): boolean {
   return document.body.style.pointerEvents === "none" || target.closest(PORTALED_OVERLAY) !== null
 }
 
-// Outside-pointer dismissal for a plain sheet, holding to the SAME three rules ThreadSheet gets from
+// Outside-pointer dismissal for a plain sheet, holding to the SAME rules ThreadSheet gets from
 // Radix's `onPointerDownOutside` (the long note there is the canonical statement of why each exists):
-// only the TOPMOST layer dismisses, a CLOSING layer still counts as "above" it, and a pointer that
-// landed on one of this thread's own sub-agent rows is a drill-IN the store stacks rather than a
-// dismissal. Capture-phase on window, so it settles before the clicked control's own handler runs —
+// a pointer on the toast is the toast's own, only the TOPMOST layer dismisses, a CLOSING layer still
+// counts as "above" it, and a pointer that landed on one of this thread's own sub-agent rows is a
+// drill-IN the store stacks rather than a dismissal. Capture-phase on window, so it settles before the clicked control's own handler runs —
 // which is what lets a queued sidebar row find the drawer already closing and park its scroll landing
 // for the unlock rather than fighting it.
 function useOutsidePointerDismiss(id: number, panelRef: RefObject<HTMLElement | null>, close: () => void, subagentParent?: string): void {
@@ -137,7 +138,7 @@ function useOutsidePointerDismiss(id: number, panelRef: RefObject<HTMLElement | 
     function onPointerDown(event: PointerEvent) {
       const target = event.target
       if (!(target instanceof Element)) return
-      if (panelRef.current?.contains(target) || overlayOwnsPointer(target)) return
+      if (panelRef.current?.contains(target) || overlayOwnsPointer(target) || isToastPointer(target)) return
       const idx = store.drawers.findIndex((drawer) => drawer.id === id)
       if (idx === -1 || idx < store.drawers.length - 1) return
       if (subagentParent && target.closest("[data-subagent-parent]")?.getAttribute("data-subagent-parent") === subagentParent) return

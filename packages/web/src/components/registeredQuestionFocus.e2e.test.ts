@@ -34,8 +34,10 @@ async function mouseClick(page: Page, selector: string, i = 0) {
 }
 
 // Which option rows of the card wear the selection border, by index.
+// `border-selection-border` since 457ad8eb (2026-09-19, the neutral palette); this read `border-accent`
+// until 2026-09-28 and so failed on every surface — QuestionBlockCard paints the selected row.
 const selectedRows = (page: Page, card: string) =>
-  page.$$eval(`${card} [data-question-option]`, (ns) => ns.flatMap((n, i) => (n.classList.contains("border-accent") ? [i] : [])))
+  page.$$eval(`${card} [data-question-option]`, (ns) => ns.flatMap((n, i) => (n.classList.contains("border-selection-border") ? [i] : [])))
 const boxFocused = (page: Page, card: string) =>
   page.$eval(`${card} textarea[data-surface='questionAnswer']`, (ta) => document.activeElement === ta)
 

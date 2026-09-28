@@ -303,8 +303,8 @@ export function registeredTenantHealth(
 /**
  * The `<slug>` a PAGE url names, when that project does not exist.
  *
- * `/project/<slug>` is the SPA's own route, so the server has always just handed back the app and let
- * the client sort it out. For a slug nobody has, the client cannot: every call it makes is answered by
+ * `/all/<slug>/thread/<t>` — a thread drawer — is the SPA's own route, so the server just hands back the
+ * app and lets the client sort it out. For a slug nobody has, the client cannot: every call it makes is answered by
  * the launching project's app with a 404 it has no way to interpret, the board never arrives, and the
  * page sits on its boot spinner saying "connecting…" while the event stream retries forever. Measured
  * on a real stack (2026-08-11) — the operator's only way out is the home crumb, if they spot it.
@@ -316,8 +316,9 @@ export function unknownProjectPage(
   pathname: string,
   isKnownSlug: (slug: string) => boolean,
 ): string | undefined {
-  // `/all/<slug>` too: the cross-project page FOCUSED on a project names it exactly as a board does.
-  const match = /^\/(?:project|all)\/([^/?#]+)/u.exec(pathname)
+  // Only `/all/` names a project. `/project/<slug>` was a project's own page until 2026-09-28; nothing
+  // mints it now, so it is an unknown address like any other and the page's catch-all takes it home.
+  const match = /^\/all\/([^/?#]+)/u.exec(pathname)
   if (!match) return undefined
   const slug = decodeURIComponent(match[1] ?? "")
   return slug && !isKnownSlug(slug) ? slug : undefined
