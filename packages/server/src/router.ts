@@ -154,11 +154,11 @@ import {
 } from "./transcript.ts"
 import { openExternalUrl } from "./open-external.ts"
 import { openLocalFile, readLocalMarkdown, resolveOpenableFile, readLocalTextFile } from "./local-file.ts"
-import { openableFileRoots } from "./project.ts"
+import { openableFileRoots, workDirOf } from "./project.ts"
 import { resolveThreadLink, threadLinkView } from "./thread-links.ts"
 import { ghInstalled, ghAuthed, ghRepo, gitGithubRemote, listItems, hydrateIssue, hydratePr, renderGithubPrompt, effectiveTemplate, DEFAULT_GITHUB_PROMPT } from "./github.ts"
 import { createGithubHovercardService } from "./github-hovercard.ts"
-import { slugify, resolveSlug, resolveLegacyThreadFile, loadWorkerPrompt, scratchpadOrientation, frizzConfigBlock, coldResumePermission } from "./dispatch.ts"
+import { slugify, resolveSlug, resolveLegacyThreadFile, loadWorkerPrompt, scratchpadOrientation, frizzConfigBlock, coldResumePermission, workerScratchPath } from "./dispatch.ts"
 import { readCodexModels } from "./backend/codex-models.ts"
 import { peekClaudeModels, readClaudeModels } from "./backend/claude-models.ts"
 import { claudeModelStanding, claudeModelUpgradeBlock, claudeModelUpgradeDue, claudeModelUpgradeRefusal, claudeUpgradeCandidate, SERVER_STARTED_AT_MS } from "./backend/claude-model-upgrade.ts"
@@ -178,6 +178,7 @@ import { providerResumeCommand } from "./external-terminal.ts"
 import { backgroundShellLineCount, readBackgroundShellOutput } from "./background-shell-output.ts"
 import { projectRetiredBackgroundOps, retiredOpsFor } from "./transcript.ts"
 import { clearProjectIcon, customIconPath, findById, forgetProject, ICON_SCAN_VERSION, listProjects, moveProjectDirectory, renameProject, reorderProjects, setProjectIcon, type RegistryEntry } from "./project-registry.ts"
+import { HOME_WORKSPACE_NAME, isHomeWorkspace, listWorkspaces } from "./home-workspace.ts"
 import { basename, dirname } from "node:path"
 import { existsSync, mkdirSync, rmSync, writeFileSync } from "node:fs"
 import { activeBandThread, ProjectCard, ProjectQueue, ProjectRailCounts, PROJECT_ICON_EXTENSIONS, PROJECT_ICON_MAX_BASE64_CHARS, queuedThread, ThreadHandoff, BURIED_ANSWERS_HEADER } from "@frizz/shared"
@@ -659,6 +660,7 @@ function projectCard(entry: RegistryEntry, stale: boolean): ProjectCard {
         ? "none"
         : "unknown",
     iconIsCustom: entry.iconSource === "custom" ? true : undefined,
+    ...(isHomeWorkspace(entry.id) ? { home: true as const } : {}),
   }
 }
 
@@ -859,6 +861,10 @@ export function createRouter(ctx: AppContext) {
   }
 
   const frizzDir = join(ctx.project.dir, ".frizz")
+  // Where this project's agents RUN — the checkout for every registered project, the configured folder
+  // for the Home workspace (project.ts workDirOf). Every cwd below, and every path a worker wrote
+  // relative to its cwd, goes through this; `ctx.project.dir` is kept for what lives on the board.
+  const workDir = workDirOf(ctx.project)
   // Roots for the file-OPEN action + the inline-code path classifier (see openableFileRoots): shared so
   // a path the resolver blesses is exactly a path the open action will accept.
   const openRoots = openableFileRoots(ctx.project)
@@ -1296,7 +1302,7 @@ export function createRouter(ctx: AppContext) {
       await bridge.followUp({
         threadSlug: slug,
         sessionId: row.session_id,
-        cwd: ctx.project.dir,
+        cwd: workDir,
         text: `${shellStopNotice(label)} Whatever it wrote before the kill is still readable in its output file.`,
         // `isDaemonAlive` above is a check, not a hold: the daemon can exit before this frame lands,
         // and followUp then COLD-RESUMES rather than failing. Take the same floor every other fork
@@ -1424,6 +1430,9 @@ export function createRouter(ctx: AppContext) {
   }
 
   async function resolveRepo(): Promise<string | null> {
+    // Home has no repository, even when the home folder is one (a dotfiles checkout is common): a Home
+    // thread's `#12` is not an issue in it, and its GitHub picker has nothing to list.
+    if (isHomeWorkspace(ctx.project.id)) return null
     const cached = ctx.github?.nameWithOwner
     if (cached) return cached
     const live = await ghRepo(ctx.project.dir)
@@ -1935,7 +1944,7 @@ export function createRouter(ctx: AppContext) {
           const bridge = ctx.acpBridge
           if (!bridge) throw new Error("The ACP bridge is unavailable; cannot deliver this follow-up")
           const result = await bridge.followUp({
-            threadSlug: input.slug, sessionId: row.session_id, cwd: ctx.project.dir,
+            threadSlug: input.slug, sessionId: row.session_id, cwd: workDir,
             agentId: row.acp_agent ?? "", modelId: acpModelIdFromModel(row.model), acpSessionId: row.agent_session_id,
             text: messageForWorker, ...(input.deliveryId ? { deliveryId: input.deliveryId } : {}),
           })
@@ -1953,7 +1962,7 @@ export function createRouter(ctx: AppContext) {
           if (!bridge) throw new Error("Codex app-server is unavailable; cannot deliver this follow-up")
           if (row.codex_runtime !== "app-server") {
             if (!row.agent_session_id) throw new Error("This legacy Codex thread has no resumable rollout id yet")
-            await bridge.adoptExternalRollout({ threadSlug: input.slug, sessionId: row.session_id, codexThreadId: row.agent_session_id, cwd: ctx.project.dir })
+            await bridge.adoptExternalRollout({ threadSlug: input.slug, sessionId: row.session_id, codexThreadId: row.agent_session_id, cwd: workDir })
             ctx.storage.setCodexRuntime(input.slug, "app-server")
           }
           const binding = bridge.binding(input.slug, row.session_id)
@@ -2032,7 +2041,7 @@ export function createRouter(ctx: AppContext) {
           if (input.deliveryId && hasDelivery(ctx.storage, input.slug, input.deliveryId)) return
           const appendSystemPrompt = [
             loadWorkerPrompt("claude"),
-            scratchpadOrientation(row.session_id, "claude"),
+            scratchpadOrientation(row.session_id, "claude", workerScratchPath(ctx.project, row.session_id)),
             frizzConfigBlock(ctx.project.dir),
           ].filter(Boolean).join("\n\n")
           // Is this thread MID-TURN right now? Sampled BEFORE the bridge call on purpose: a cold resume
@@ -2054,7 +2063,7 @@ export function createRouter(ctx: AppContext) {
           await bridge.followUp({
             threadSlug: input.slug,
             sessionId: row.session_id,
-            cwd: ctx.project.dir,
+            cwd: workDir,
             text: messageForWorker,
             // Rides through to the SDK as this input's uuid, which the SDK echoes back on the record
             // that delivers it — the ledger then correlates by identity rather than by text.
@@ -2384,7 +2393,7 @@ export function createRouter(ctx: AppContext) {
       handler: async ({ input }) => {
         const row = ctx.storage.getSession(input.slug)
         if (!row) throw new Error(`thread ${input.slug} is not editable`)
-        return threadProfileOptions(row.backend, row.backend === "claude" ? await readClaudeModels({ claudeBin: ctx.claudeBin, cwd: ctx.project.dir }) : undefined)
+        return threadProfileOptions(row.backend, row.backend === "claude" ? await readClaudeModels({ claudeBin: ctx.claudeBin, cwd: workDir }) : undefined)
       },
     }),
 
@@ -2867,7 +2876,7 @@ export function createRouter(ctx: AppContext) {
         const row = ctx.storage.getSession(input.slug)
         if (!row) throw new Error(`thread ${input.slug} is not registered`)
         if (row.state === "archived" || row.archived === 1) throw new Error("Reopen this thread before registering a link")
-        const destination = resolveThreadLink(input.target, ctx.project.dir, openRoots)
+        const destination = resolveThreadLink(input.target, workDir, openRoots)
         const link = ctx.storage.upsertThreadLink({
           id: `lnk_${randomUUID().replace(/-/g, "").slice(0, 12)}`,
           slug: input.slug, label: input.label, ...destination, createdAtMs: Date.now(),
@@ -3324,7 +3333,7 @@ export function createRouter(ctx: AppContext) {
           const nativeId = backend === "codex" ? row.agent_session_id : (row.agent_session_id ?? row.session_id)
           if (nativeId) {
             return {
-              command: providerResumeCommand(backend, ctx.project.dir, nativeId),
+              command: providerResumeCommand(backend, workDir, nativeId),
               mode: "resume" as const,
               reason: null,
             }
@@ -3403,7 +3412,7 @@ export function createRouter(ctx: AppContext) {
       handler: async ({ input }) => {
         const memo = new Map<string, string | null>()
         const resolved = input.paths.map((raw) => {
-          if (!memo.has(raw)) memo.set(raw, resolveOpenableFile(raw, ctx.project.dir, openRoots))
+          if (!memo.has(raw)) memo.set(raw, resolveOpenableFile(raw, workDir, openRoots))
           return { input: raw, path: memo.get(raw) ?? null }
         })
         return { resolved }
@@ -3573,7 +3582,7 @@ export function createRouter(ctx: AppContext) {
     // runtime itself once per server life; the bare family words while it answers (claude-models.ts).
     claudeModels: query({
       output: z.array(ClaudeModel),
-      handler: async () => readClaudeModels({ claudeBin: ctx.claudeBin, cwd: ctx.project.dir, log: (message) => frizzLog.warn("server", message) }),
+      handler: async () => readClaudeModels({ claudeBin: ctx.claudeBin, cwd: workDir, log: (message) => frizzLog.warn("server", message) }),
     }),
 
     // The ACP agents Frizz knows how to launch, with `available` for the ones on this machine's PATH.
@@ -3589,7 +3598,7 @@ export function createRouter(ctx: AppContext) {
       input: AcpAgentModelsInput,
       output: AcpAgentModels,
       handler: async ({ input }) => ctx.acpBridge
-        ? ctx.acpBridge.agentModels(input.agentId, ctx.project.dir, { refresh: input.refresh === true })
+        ? ctx.acpBridge.agentModels(input.agentId, workDir, { refresh: input.refresh === true })
         : { agentId: input.agentId, models: [], error: "The ACP bridge is unavailable", probedAt: new Date().toISOString() },
     }),
 
@@ -3685,7 +3694,7 @@ export function createRouter(ctx: AppContext) {
     projectsList: query({
       output: z.array(ProjectCard),
       handler: async () =>
-        listProjects().map((entry) => projectCard(entry, entry.stale)),
+        listWorkspaces().map((entry) => projectCard(entry, entry.stale)),
     }),
 
     /**
@@ -3771,7 +3780,7 @@ export function createRouter(ctx: AppContext) {
               projectId: project.id,
               projectSlug: snapshot.projectSlug ?? project.id,
               projectName: snapshot.projectName || project.name,
-              projectDir: snapshot.projectDir || project.dir,
+              projectDir: snapshot.projectDir || workDirOf(project),
               homeDir: snapshot.homeDir,
               githubRepo: snapshot.githubRepo,
               threads,
@@ -3797,8 +3806,9 @@ export function createRouter(ctx: AppContext) {
       input: z.object({ ids: z.array(z.string().min(1)).max(500) }),
       output: z.array(ProjectCard),
       handler: async ({ input }) => {
+        // Home has no registry entry to hold a position: reorderProjects skips its id, and it stays last.
         reorderProjects(input.ids)
-        return listProjects().map((entry) => projectCard(entry, entry.stale))
+        return listWorkspaces().map((entry) => projectCard(entry, entry.stale))
       },
     }),
 
@@ -3835,6 +3845,7 @@ export function createRouter(ctx: AppContext) {
         stoppedWorkers: z.number().int().nonnegative(),
       }),
       handler: async ({ input }) => {
+        if (isHomeWorkspace(input.id)) throw new Error(`${HOME_WORKSPACE_NAME} is built into Frizz, so it cannot be deleted.`)
         const entry = findById(input.id)
         if (!entry) return { removed: false, deletedData: false, stoppedWorkers: 0 }
         // The message deliberately does NOT name the project: the confirmation's title already does,
@@ -3944,6 +3955,7 @@ export function createRouter(ctx: AppContext) {
       }).strict(),
       output: ProjectCard,
       handler: async ({ input }) => {
+        if (isHomeWorkspace(input.id)) throw new Error(`${HOME_WORKSPACE_NAME} is built into Frizz, so it cannot be renamed.`)
         const entry = findById(input.id)
         if (!entry) throw new Error("No such project.")
         const name = input.name.trim()
@@ -4025,7 +4037,7 @@ export function createRouter(ctx: AppContext) {
           ).all(input.slug).map((row) => row.project_id),
         )
         const found: ThreadLocation[] = []
-        for (const entry of listProjects()) {
+        for (const entry of listWorkspaces()) {
           if (entry.stale || !owners.has(entry.id)) continue
           found.push({ projectSlug: entry.slug, projectName: entry.name ?? entry.slug })
         }

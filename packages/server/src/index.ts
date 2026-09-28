@@ -26,7 +26,7 @@ import {
   type ShutdownBarrierOptions,
   type ShutdownDiagnostic,
 } from "./shutdown.ts"
-import { openableFileRoots, projectLaunchTarget, resolveProject, type Project, projectFromRegistryEntry } from "./project.ts"
+import { openableFileRoots, projectLaunchTarget, resolveProject, type Project, workDirOf } from "./project.ts"
 import { resolveWatchableLocalFile } from "./local-file.ts"
 import { watchLocalFile } from "./local-file-watch.ts"
 import {
@@ -48,7 +48,7 @@ import { describeRuntime, resolveRuntimes, type ResolvedRuntimes, type ResolveRu
 import { createTenantMap } from "./tenants.ts"
 import { openFrizzDatabase, type FrizzDatabase, type OpenFrizzDatabaseOptions } from "./frizz-db.ts"
 import { startTenantPrime, type TenantPrimeRun } from "./tenant-prime.ts"
-import { findProjectBySegment, listProjects } from "./project-registry.ts"
+import { findWorkspaceBySegment, listWorkspaces, projectForEntry } from "./home-workspace.ts"
 import { backfillRegistry } from "./project-registry.ts"
 import { servedByAnotherProcess } from "./project-launch.ts"
 import { deleteProjectState, stopProjectWorkers } from "./project-teardown.ts"
@@ -1063,20 +1063,23 @@ export async function startServer(opts: StartOptions = {}): Promise<StartedServe
     const routeToTenant = async (
       url: string,
     ): Promise<{ surfaces: TenantSurfaces; url: string } | undefined> => {
-      const split = splitTenantRequest(url, (segment) => findProjectBySegment(segment) !== undefined)
+      const split = splitTenantRequest(url, (segment) => findWorkspaceBySegment(segment) !== undefined)
       if (!split) return undefined
-      const entry = findProjectBySegment(split.slug)
+      const entry = findWorkspaceBySegment(split.slug)
       if (!entry) return undefined
       const existing = tenants.appFor(entry.id)
       // The open app is only the answer while it was built at the path the registry NOW records: a
       // renamed checkout is re-registered at its new path by the next `frizz` run or add from the page, and the
       // tenant that opened at the old one has to be reopened there (tenants.activate does that). The
       // launching project is exempt — its context is owned by the boot phases, not the map, and it is
-      // the one directory this process is standing in.
-      if (existing && (entry.id === project.id || tenants.get(entry.id)?.project.dir === entry.path)) {
+      // the one directory this process is standing in. An entry's path is where its agents run, which
+      // for the Home workspace is Settings → Home folder rather than the directory holding its board —
+      // so a changed Home folder reopens Home there, exactly as a moved checkout is reopened.
+      const open = tenants.get(entry.id)?.project
+      if (existing && (entry.id === project.id || (open && workDirOf(open) === entry.path))) {
         return { surfaces: existing, url: split.rest }
       }
-      if (!(await tenants.activate(projectFromRegistryEntry(entry)))) return undefined
+      if (!(await tenants.activate(projectForEntry(entry)))) return undefined
       const built = tenants.appFor(entry.id)
       return built ? { surfaces: built, url: split.rest } : undefined
     }
@@ -1096,7 +1099,7 @@ export async function startServer(opts: StartOptions = {}): Promise<StartedServe
           req.method ?? "GET",
           url,
           ctx!.bootId,
-          (segment) => findProjectBySegment(segment),
+          (segment) => findWorkspaceBySegment(segment),
           (projectId) => tenants.get(projectId) !== undefined,
         )
         if (registered) {
@@ -1128,7 +1131,7 @@ export async function startServer(opts: StartOptions = {}): Promise<StartedServe
       // A page for a project that does not exist goes home — Everything, which lists every project
       // there is and is where one is added. The slug rides along so the page can say what happened
       // rather than appearing to have swallowed the URL (web routes.tsx HomeRoute).
-      const missing = unknownProjectPage(url.split("?")[0] ?? "", (slug) => findProjectBySegment(slug) !== undefined)
+      const missing = unknownProjectPage(url.split("?")[0] ?? "", (slug) => findWorkspaceBySegment(slug) !== undefined)
       if (missing !== undefined) {
         res.writeHead(302, { location: `/?unknown=${encodeURIComponent(missing)}` })
         res.end()
@@ -1268,9 +1271,11 @@ export async function startServer(opts: StartOptions = {}): Promise<StartedServe
     // for why opening them all is affordable, and for the serialization.
     if (process.env.FRIZZ_TENANT_PRIME_OFF !== "1") {
       tenantPrime = startTenantPrime({
-        list: () => listProjects(),
+        // Home included: its queue badges and its scheduler should exist before anyone clicks into it,
+        // exactly like a project's.
+        list: () => listWorkspaces(),
         isOpen: (projectId) => tenants.get(projectId) !== undefined,
-        toProject: (entry) => projectFromRegistryEntry(entry),
+        toProject: (entry) => projectForEntry(entry),
         activate: (candidate) => tenants.activate(candidate),
         servedElsewhere: (candidate) => servedByAnotherProcess(candidate.stateDir, candidate.id),
       })

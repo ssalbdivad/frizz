@@ -112,7 +112,14 @@ const childId = input.agent_id ?? input.agentId;
 // exception: it constrains the undifferentiated scratchpad instruction the child otherwise inherits.
 if (childId && mode !== 'subagent-start') process.exit(0);
 
-const projectDir = process.env.CLAUDE_PROJECT_DIR || process.cwd();
+// WHERE THE BOARD IS. Its cwd, for a worker in a registered project — the checkout holds `.frizz/`. Not
+// for one in the Home workspace (server/home-workspace.ts): it runs in the operator's home folder, and its
+// board is in Frizz's state directory, because `~/.frizz` is Frizz's own legacy data root and creating it
+// on a newer install switches every project's data back to it on the next boot. Frizz says so with
+// FRIZZ_BOARD_ROOT (Claude) or `--board-root` (codex's shared app-server carries no per-thread env), and
+// then the worker is told the directory by its absolute path, since the relative one names the wrong place.
+const boardRoot = flagValue('--board-root') || process.env.FRIZZ_BOARD_ROOT || '';
+const projectDir = boardRoot || process.env.CLAUDE_PROJECT_DIR || process.cwd();
 
 // WHICH session keys the pad. On Claude the hook's `session_id` IS frizz's thread session id, so the
 // derived path is correct. On CODEX it is NOT: codex reports its own rollout session id (measured —
@@ -132,7 +139,7 @@ try {
 if (!sid) process.exit(0);
 
 const threadDir = join(projectDir, '.frizz', 'threads', sid);
-const relPath = '.frizz/threads/' + sid + '/';
+const relPath = boardRoot ? threadDir + '/' : '.frizz/threads/' + sid + '/';
 
 // ── mode: subagent-start (Codex child-only merge epilogue) ───────────────────────────────────────
 if (mode === 'subagent-start') {
