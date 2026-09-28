@@ -13,31 +13,30 @@ function next(prev: QueueSlot<string>[], target: string[], onScreen: string[], o
   return stableQueue({ prev, target, keyOf, onScreen: new Set(onScreen), mayGhost: opts.mayGhost ?? always, keep: new Set(opts.keep ?? []) })
 }
 
-test("a first draw, or nothing on screen, is exactly the queue's own order", () => {
+test("a first draw is exactly the queue's own order", () => {
   assert.equal(drawn(next([], ["a", "b", "c"], [])), "a b c")
-  assert.equal(drawn(next(slots("a", "b", "c"), ["c", "a", "b"], [])), "c a b")
+  assert.equal(drawn(next([], ["c", "a", "b"], [])), "c a b")
 })
 
-test("an arrival joins the bottom under FIFO, and the cards on screen stay as drawn", () => {
+test("an arrival joins the bottom, and the cards drawn stay as drawn", () => {
   assert.equal(drawn(next(slots("a", "b"), ["a", "b", "c"], ["a", "b"])), "a b c")
 })
 
-test("an arrival at the top (newest first) waits BELOW the cards on screen, and takes the top once they are off it", () => {
+test("newest first, an arrival still joins the bottom — and stays there once the reader moves on", () => {
   const arrived = next(slots("a", "b", "c"), ["n", "a", "b", "c"], ["a", "b"])
-  assert.equal(drawn(arrived), "a b n c")
-  // The reader moved on to c: n is off screen now, and crosses above — which the viewport lock absorbs.
-  assert.equal(drawn(next(arrived, ["n", "a", "b", "c"], ["c"])), "n a b c")
+  assert.equal(drawn(arrived), "a b c n")
+  assert.equal(drawn(next(arrived, ["n", "a", "b", "c"], ["c"])), "a b c n")
+  assert.equal(drawn(next(arrived, ["n", "a", "b", "c"], [])), "a b c n")
 })
 
-test("an arrival stamped before the cards on screen still joins below them (a late poll, a restart, a card coming back)", () => {
+test("an arrival stamped before the cards drawn still joins the bottom (a late poll, a restart, a card coming back)", () => {
   assert.equal(drawn(next(slots("b", "c"), ["a", "b", "c"], ["b", "c"])), "b c a")
+  // A self-woken thread the server returns to its old place in line: the page puts it last.
+  assert.equal(drawn(next(slots("a", "b", "c"), ["a", "x", "b", "c"], ["a", "b"])), "a b c x")
 })
 
-test("a card whose place is BETWEEN two cards on screen waits below them instead of pushing one down", () => {
-  // The server's queue clock returns a self-woken thread to its old place in line: here, between a and b.
-  assert.equal(drawn(next(slots("a", "b", "c"), ["a", "x", "b", "c"], ["a", "b"])), "a b x c")
-  // Once its slot is off screen it takes its real place.
-  assert.equal(drawn(next(slots("a", "b", "x", "c"), ["a", "x", "b", "c"], ["c"])), "a x b c")
+test("several arrivals at once join the bottom in the queue's own order among themselves", () => {
+  assert.equal(drawn(next(slots("a", "b"), ["y", "a", "x", "b"], ["a"])), "a b y x")
 })
 
 test("a card on screen that leaves on its own stays as a ghost, and is the card again when it comes back", () => {
@@ -51,8 +50,10 @@ test("a card on screen that leaves on its own stays as a ghost, and is the card 
   assert.equal(drawn(next(ghosted, ["b", "c"], ["c"])), "b c")
 })
 
-test("a card off screen that leaves simply goes", () => {
-  assert.equal(drawn(next(slots("a", "b", "c"), ["b", "c"], ["c"])), "b c")
+test("a card off screen that leaves simply goes, and comes back as an arrival", () => {
+  const gone = next(slots("a", "b", "c"), ["b", "c"], ["c"])
+  assert.equal(drawn(gone), "b c")
+  assert.equal(drawn(next(gone, ["a", "b", "c"], ["c"])), "b c a")
 })
 
 test("a card the human put away leaves the ordinary way, never as a ghost", () => {
@@ -64,26 +65,13 @@ test("a dismissed card keeps its place while it fades on screen, and goes once i
   assert.equal(drawn(next(slots("a", "b"), ["b"], ["b"], { mayGhost: never, keep: ["a"] })), "b")
 })
 
-test("cards on screen never swap, even when the queue's order between them changes", () => {
+test("cards drawn never change places, on screen or off, whatever the queue's order does", () => {
   assert.equal(drawn(next(slots("a", "b", "c"), ["b", "a", "c"], ["a", "b"])), "a b c")
+  assert.equal(drawn(next(slots("a", "b", "x"), ["x", "a", "b"], ["a", "b"])), "a b x")
+  assert.equal(drawn(next(slots("p", "q", "a", "b", "y", "z"), ["q", "p", "a", "b", "z", "y"], ["a", "b"])), "p q a b y z")
 })
 
-test("off screen the order converges on the queue's own: a drawn card crossing from below to above is allowed", () => {
-  // x was drawn below the run but now sorts first: it moves above, which the viewport lock absorbs.
-  assert.equal(drawn(next(slots("a", "b", "x"), ["x", "a", "b"], ["a", "b"])), "x a b")
-  // …and the cards above and below are each in the queue's order.
-  assert.equal(drawn(next(slots("p", "q", "a", "b", "y", "z"), ["q", "p", "a", "b", "z", "y"], ["a", "b"])), "q p a b z y")
-})
-
-test("with only ghosts on screen, cards keep their side and a new one goes below", () => {
+test("with only ghosts on screen, a new card still goes to the bottom", () => {
   const prev: QueueSlot<string>[] = [...slots("p"), { key: "g", item: "g", ghost: true }, ...slots("z")]
-  assert.equal(drawn(next(prev, ["p", "n", "z"], ["g"])), "p (g) n z")
-})
-
-test("an arrival waiting under the card on screen, sorting ahead of everything, does not send the cards above the screen below it", () => {
-  // Newest first: n arrived while c was read at the bottom of the page, and waits under it. Both are on
-  // screen now. Nothing above them moves to below them: they stay above, where they are drawn.
-  const arrived = next(slots("a", "b", "c"), ["n", "a", "b", "c"], ["c"])
-  assert.equal(drawn(arrived), "a b c n")
-  assert.equal(drawn(next(arrived, ["n", "a", "b", "c"], ["c", "n"])), "a b c n")
+  assert.equal(drawn(next(prev, ["p", "n", "z"], ["g"])), "p (g) z n")
 })

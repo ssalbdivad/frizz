@@ -129,6 +129,8 @@ export interface QueueEntry {
 /**
  * THE PAGE'S ONE QUEUE — every project's ready threads merged into a single line, in the order the board's
  * own queue uses (`orderQueue`: when each ENTERED the queue, oldest first unless the operator chose LIFO).
+ * That is the order a FRESH draw takes; once drawn, lib/stableQueue.ts keeps every card where it is and
+ * appends whatever arrives at the bottom.
  *
  * It was one lane per project in rail order, and that is what made the page a stack (maintainer
  * 2026-09-28, choosing it: "One queue across all projects"): a project listed above the one being read

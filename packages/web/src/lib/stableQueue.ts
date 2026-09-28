@@ -2,27 +2,29 @@
 // that cards that I'm currently viewing on the screen don't move in their position"). This is the ORDER
 // half of that guarantee; lib/viewportLock.ts is the SCROLL half, and neither is enough alone.
 //
-// The queue's own order (groups.ts orderQueue: when each thread entered the queue) is the truth, and
-// everything OFF screen follows it exactly. The cards ON screen — the RUN, one contiguous stretch of the
-// list — are frozen as they were drawn: nothing is inserted between them, none of them swaps, and none of
-// them disappears on its own. A card ALREADY DRAWN sorts above the run or below it, by where it falls
-// against the run's live cards; a card NOT drawn before — an arrival, a card coming back — always goes
-// BELOW the run while the run is on screen, whatever its stamp says. A card crossing from below the run
-// to above it moves the run in the document by exactly its height, and there is always room to scroll by
-// that much (it was below the screen, so the page extends at least that far), so the viewport lock
-// absorbs it; a change below the run moves nothing at all. An arrival above the run would need room the
-// page may not have — a short queue cannot scroll far enough to hide it — and its stamp can be earlier
-// than cards already drawn for reasons nobody acted on (another project's poll landing a few seconds
-// late, a server restart re-listing its queue, a dismissal the server did not take coming back), so it
-// never gets the chance. It joins the bottom as a queue's should (FIFO); newest-first (LIFO), it waits
-// under the run and takes its place at the top once the run has moved on.
+// ONCE A CARD IS DRAWN, IT KEEPS ITS PLACE, AND EVERYTHING THAT ENTERS THE QUEUE JOINS THE BOTTOM
+// (maintainer, the same day: "they should always be added to the bottom"). The queue's own order
+// (groups.ts orderQueue: when each thread entered the queue, oldest or newest first) decides a FRESH
+// draw — the page loading, a filter or the order setting changing — and nothing after it. An arrival is
+// appended below every card on the page whatever its stamp says, in either order: newest-first puts the
+// newest on top when the page is drawn, never by sliding a card in above the one being read.
+//
+// This used to be subtler, and every subtlety was a way to move something. Arrivals waited below the cards
+// on screen and then crossed above them once off screen, the viewport lock absorbing the move — which
+// still slid a stranger's tail into view where the top of the page had been, and still moved the page
+// under the reader by exactly the card's height whenever the lock's accounting was a pixel off. An
+// arrival's stamp can also sort it anywhere for reasons nobody acted on: another project's poll landing
+// a few seconds late, a server restart re-listing its queue, a thread that woke itself on a finished
+// shell coming back to its old place in line. None of those may reach the screen, so none of them
+// reorders anything: appending moves nothing on screen, ever, and nothing else changes the order.
 //
 // A card whose thread leaves the queue while its card is on screen, without the human putting it away
 // (it woke itself on a finished shell, a child's return, a timer; or someone acted on it from another
 // tab), becomes a GHOST: it keeps its place, drawn quiet, until it scrolls off screen — or until the
 // thread rests again, when it is simply the card again, in the same place. A card the human put away
 // (done, snooze, a reply sent from its own box) is not a ghost; it leaves the ordinary way, and anything
-// that follows it moving is the human's own doing.
+// that follows it moving is the human's own doing. A card that leaves while OFF screen simply goes (the
+// viewport lock holds the page if it was above), and should its thread come back, it is an arrival.
 
 export interface QueueSlot<T> {
   key: string
@@ -53,64 +55,29 @@ export interface StableQueueInput<T> {
 }
 
 export function stableQueue<T>({ prev, target, keyOf, onScreen, mayGhost, keep }: StableQueueInput<T>): QueueSlot<T>[] {
-  const live = new Map<string, { item: T; index: number }>()
-  target.forEach((item, index) => live.set(keyOf(item), { item, index }))
+  const live = new Map<string, T>()
+  for (const item of target) live.set(keyOf(item), item)
 
-  // The RUN: from the first slot on screen to the last, exactly as drawn. On screen is measured on the
-  // previous commit, so it names slots of `prev`; a key no longer in `prev` is not on screen.
-  let lo = -1
-  let hi = -1
-  prev.forEach((slot, index) => {
-    if (!onScreen.has(slot.key)) return
-    if (lo < 0) lo = index
-    hi = index
-  })
-  const run: QueueSlot<T>[] = []
-  if (lo >= 0) {
-    for (const slot of prev.slice(lo, hi + 1)) {
-      const now = live.get(slot.key)
-      if (now) run.push({ key: slot.key, item: now.item, ghost: false })
-      else if (keep?.has(slot.key)) run.push({ key: slot.key, item: slot.item, ghost: false })
-      else if (mayGhost(slot.key)) run.push({ key: slot.key, item: slot.item, ghost: true })
-      // Otherwise it leaves: the human put it away, so what follows it closing up is theirs.
-    }
+  // Every card already drawn, where it was drawn.
+  const drawn = new Set<string>()
+  const out: QueueSlot<T>[] = []
+  for (const slot of prev) {
+    drawn.add(slot.key)
+    const now = live.get(slot.key)
+    if (now !== undefined) out.push({ key: slot.key, item: now, ghost: false })
+    // Gone from the queue. On screen, a card the human is fading out holds its place, and one that left
+    // on its own stays as a ghost; off screen — or put away by the human — it simply goes.
+    else if (!onScreen.has(slot.key)) continue
+    else if (keep?.has(slot.key)) out.push({ key: slot.key, item: slot.item, ghost: false })
+    else if (mayGhost(slot.key)) out.push({ key: slot.key, item: slot.item, ghost: true })
   }
-  const inRun = new Set(run.map((slot) => slot.key))
-
-  // Above or below the run. A card not drawn before goes below. One already drawn crosses the run only
-  // when the queue puts it clear of every LIVE card in it — before all of them (above) or after all of
-  // them (below) — and otherwise stays on the side it was drawn on. The run can be out of the queue's
-  // order (an arrival that waited under the cards on screen while sorting ahead of them, a card that
-  // re-rested in place), and a card placed against just one end of it — the first, or the one that sorts
-  // first — was sent across: every card above the screen went below an arrival sitting under it. With no
-  // live card on screen (only ghosts) a card stays on its side.
-  let low = Number.POSITIVE_INFINITY
-  let high = Number.NEGATIVE_INFINITY
-  for (const slot of run) {
-    if (slot.ghost) continue
-    const index = live.get(slot.key)?.index
-    if (index === undefined) continue
-    low = Math.min(low, index)
-    high = Math.max(high, index)
+  // Then everything not drawn before, at the bottom, in the queue's own order among themselves — which,
+  // on a first draw, is the whole queue.
+  for (const item of target) {
+    const key = keyOf(item)
+    if (!drawn.has(key)) out.push({ key, item, ghost: false })
   }
-  const prevIndex = new Map(prev.map((slot, index) => [slot.key, index]))
-  const above = (key: string, index: number): boolean => {
-    const was = prevIndex.get(key)
-    if (lo < 0 || was === undefined) return false
-    if (low !== Number.POSITIVE_INFINITY) {
-      if (index < low) return true
-      if (index > high) return false
-    }
-    return was < lo
-  }
-
-  const before: QueueSlot<T>[] = []
-  const after: QueueSlot<T>[] = []
-  for (const [key, { item, index }] of live) {
-    if (inRun.has(key)) continue
-    ;(above(key, index) ? before : after).push({ key, item, ghost: false })
-  }
-  return [...before, ...run, ...after]
+  return out
 }
 
 /**
