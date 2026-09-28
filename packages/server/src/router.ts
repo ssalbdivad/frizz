@@ -182,7 +182,7 @@ import { HOME_WORKSPACE_NAME, isHomeWorkspace, listWorkspaces } from "./home-wor
 import { expandHomeFolder, homeFolderProblem } from "./home-folder.ts"
 import { basename, dirname } from "node:path"
 import { existsSync, mkdirSync, rmSync, writeFileSync } from "node:fs"
-import { activeBandThread, ProjectCard, ProjectQueue, ProjectRailCounts, PROJECT_ICON_EXTENSIONS, PROJECT_ICON_MAX_BASE64_CHARS, queuedThread, ThreadHandoff, BURIED_ANSWERS_HEADER } from "@frizz/shared"
+import { activeBandThread, questionRepliedPast, ProjectCard, ProjectQueue, ProjectRailCounts, PROJECT_ICON_EXTENSIONS, PROJECT_ICON_MAX_BASE64_CHARS, queuedThread, ThreadHandoff, BURIED_ANSWERS_HEADER } from "@frizz/shared"
 import { imageDimensions } from "./image-header.ts"
 import { homedir } from "node:os"
 import { chosenProjectRoot, ensureProjectIdFile, existingProjectId, isHomeDirectory, writeProjectIdFile } from "./project-root.ts"
@@ -1006,12 +1006,15 @@ export function createRouter(ctx: AppContext) {
   }
 
   // This thread's OPEN questions, in the shape the worker's read-back, the board and the card all use.
+  // Each carries `repliedPast` exactly as the board's does, so the worker reading its own questions back
+  // learns which ones the human moved on from — the ones nothing waits on any more.
   function openQuestionViews(slug: string): RegisteredQuestionView[] {
     const out: RegisteredQuestionView[] = []
+    const lastHumanAt = ctx.tailer.get(slug)?.lastHumanAt
     for (const q of ctx.storage.listThreadQuestions(slug, { openOnly: true })) {
       const spec = parseQuestionSpec(q.spec)
       if (!spec) continue
-      out.push({ id: q.id, spec, askedAt: new Date(q.asked_at).toISOString() })
+      out.push({ id: q.id, spec, askedAt: new Date(q.asked_at).toISOString(), ...(questionRepliedPast(q.asked_at, lastHumanAt) ? { repliedPast: true as const } : {}) })
     }
     return out
   }
@@ -3200,7 +3203,13 @@ export function createRouter(ctx: AppContext) {
         // registered does not block this: frizz cannot tell a build from a dev server, only the worker
         // can, and the registration IS that judgement. Gating on raw liveness would make `done`
         // unreachable for any thread that left a log tail running.
+        //
+        // A QUESTION THE HUMAN REPLIED PAST DOES NOT BLOCK. They moved on without answering it, which is a
+        // pivot (questionRepliedPast): its card stays up where it was asked, still answerable, and `done`
+        // must not force the worker to withdraw it just to finish the work the human pivoted to.
+        const lastHumanAt = ctx.tailer.get(input.slug)?.lastHumanAt
         const blockingQuestions = ctx.storage.listThreadQuestions(input.slug, { openOnly: true }).flatMap((q) => {
+          if (questionRepliedPast(q.asked_at, lastHumanAt)) return []
           const spec = parseQuestionSpec(q.spec)
           return spec ? [{ id: q.id, question: spec.question }] : []
         })

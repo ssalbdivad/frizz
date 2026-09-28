@@ -20,7 +20,7 @@ import { memo, useCallback, useLayoutEffect, useMemo, useRef, useState, type Mou
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import { Check, ChevronRight, Hourglass, RotateCcw } from "lucide-react"
 import { useLocation, useNavigate } from "react-router"
-import type { AccountBackend, ThreadView } from "@frizz/shared"
+import { questionsOwed, type AccountBackend, type ThreadView } from "@frizz/shared"
 import { projectApiBase, projectRpc } from "../api/rpc.ts"
 import { ThreadProjectScope } from "../api/threadApi.tsx"
 import { displayTitle, offersRetry, queueLabelAt, queueLabelWord } from "../groups.ts"
@@ -115,6 +115,12 @@ export const AllQueuesCard = memo(function AllQueuesCard({
   })
   const text = handoff.data?.text
   const parts = useMemo(() => (text ? handoffParts(text, thread.questions) : null), [text, thread.questions])
+  // THIS CARD IS THE NEWEST HANDOFF, so it draws only the questions that handoff is still asking. One the
+  // human replied past belongs to an older rest and stays up there on the thread page, answerable; drawn
+  // here it sat under a handoff about something else, claiming to be its ask — and the worker, told the
+  // same thing, wrote "the question is still open below" (maintainer 2026-09-28: "we should assume they
+  // want to move on/pivot").
+  const owedQuestions = useMemo(() => questionsOwed(thread.questions), [thread.questions])
   const placeHref = crossProjectThreadHref(project, thread.id)
   const dismiss = useMemo(() => ({ dismiss: onLeave, cancel: onReturn }), [onLeave, onReturn])
   const queryClient = useQueryClient()
@@ -475,7 +481,7 @@ function ReplyBox({ project, thread, onSent, onFailed }: { project: QueuesProjec
         value={text}
         onChange={(value) => draftStore.set(key, value)}
         onSubmit={submit}
-        placeholder={(thread.questions?.length ?? 0) > 0 ? "Or skip the questions and reply…" : "Reply to the agent…"}
+        placeholder={questionsOwed(thread.questions).length > 0 ? "Or skip the questions and reply…" : "Reply to the agent…"}
         attachBase={projectApiBase(project.id)}
         busy={controls.busy}
         footer={controls.footer}

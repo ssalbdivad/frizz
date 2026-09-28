@@ -12,7 +12,7 @@
 // card says that instead, beside the header's Retry. Both are last in ChatView's chain: every rung above
 // is a harder reading of the same slot and wins it.
 import { CircleDashed, TriangleAlert } from "lucide-react"
-import type { ThreadView } from "@frizz/shared"
+import { questionsOwed, type ThreadView } from "@frizz/shared"
 import { splitFenceBlocks } from "../lib/fenceBlocks.ts"
 import { hasQuestionBlock } from "../lib/questionBlocks.ts"
 import { CARD_BODY, TranscriptCard } from "./TranscriptCard.tsx"
@@ -40,7 +40,7 @@ export function showsRestedCard(thread: RestedCardThread | undefined, lastAssist
   // A stall is the exception to every text check below: the final record is often a tool call with no
   // prose at all, and the card is about the process, not the message.
   if (thread.crashed === true) return true
-  if (thread.lastFence || thread.pendingQuestion || (thread.questions?.length ?? 0) > 0) return false
+  if (thread.lastFence || thread.pendingQuestion || questionsOwed(thread.questions).length > 0) return false
   // AN ANSWER IN FLIGHT IS NOT A BARE REST. The human answered a registered question and the worker has
   // not been handed it yet; the registered-question slot draws their answer for those seconds, and this
   // card claiming nobody signed anything off is both wrong and the louder of the two. The same field
