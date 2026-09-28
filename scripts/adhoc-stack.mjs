@@ -123,10 +123,16 @@ try {
     } catch {}
     await new Promise((r) => setTimeout(r, 100))
   }
-  // `/` is the all-projects GRID, not a board. Announcing it sent every agent doing browser QA to the
-  // project picker, where a `threads: N` assertion reads 0 forever and a screenshot shows the wrong
-  // page entirely. Announce the BOARD — `/project/<slug>` — and keep the grid at `gridUrl` for the
-  // rare check that actually wants it.
+  // `url` is the launcher's DRAWER PREFIX on the one page — `/all/<slug>` — so `${url}/thread/<t>` is
+  // that thread's drawer over Everything and `${url}/thread/<t>/full` its fullscreen page, which is how
+  // every caller uses it. A bare `url` is not a page of its own: it redirects to `/`, Everything, which
+  // is the right landing for a caller that only wants "the app".
+  //
+  // Until 2026-09-28 this announced the project's BOARD, `/project/<slug>`, because `/` was then the
+  // all-projects grid and a `threads: N` assertion aimed there read 0 forever. The board and the grid
+  // are both gone — Everything at `/` is the only page — and every `/project/…` address lands on `/`,
+  // so a caller appending `/thread/<t>` to the old shape silently got the home page instead of a
+  // thread. `gridUrl` is kept, now naming that same `/`, so older callers keep a real address.
   const { findByPath, registerProject } = await import("../packages/server/src/project-registry.ts")
   const { resolveProject } = await import("../packages/server/src/project.ts")
   // Extra projects are registered AFTER boot, the way opening one in the grid does it — the server
@@ -147,7 +153,7 @@ try {
   const launcher = findByPath(projectDir, home)
   const slug = launcher?.slug
   console.log(JSON.stringify({
-    url: slug ? `http://127.0.0.1:${port}/project/${slug}` : `http://127.0.0.1:${port}/`,
+    url: slug ? `http://127.0.0.1:${port}/all/${slug}` : `http://127.0.0.1:${port}/`,
     gridUrl: `http://127.0.0.1:${port}/`,
     slug, port, home, project: projectDir,
     // The launcher is the project whose `server.lock` this process publishes — the one file every
