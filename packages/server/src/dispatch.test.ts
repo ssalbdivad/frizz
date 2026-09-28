@@ -5,7 +5,7 @@ import { tmpdir } from "node:os"
 import { join, dirname } from "node:path"
 import { fileURLToPath, pathToFileURL } from "node:url"
 import { DISPATCH_TASK_BANNER_MARKER } from "@frizz/shared"
-import { buildClaudeCommand, loadWorkerPrompt, composePrompt, monitorScriptsDir, resolveWorkerPluginDir, scratchpadOrientation, workerPluginDir, frizzConfigBlock, workerDispatchPermission, WORKER_DISPATCH_PERMISSION } from "./dispatch.ts"
+import { buildClaudeCommand, loadWorkerPrompt, composePrompt, monitorScriptsDir, resolveWorkerPluginDir, scratchDirRelPath, scratchpadOrientation, workerPluginDir, workerScratchPath, frizzConfigBlock, workerDispatchPermission, WORKER_DISPATCH_PERMISSION } from "./dispatch.ts"
 import { parseTranscript } from "./transcript.ts"
 import { FRIZZ_MCP } from "./backend/types.ts"
 
@@ -763,6 +763,30 @@ test("scratchpadOrientation names the directory, the arming, and one file per su
     assert.match(text, /Nothing in this directory is read automatically/, `${kind} must not imply an injection`)
     assert.doesNotMatch(text, /merge/i, `${kind} must not reintroduce the merge contract`)
     assert.doesNotMatch(text, /scratch\.md/, `${kind} must not reserve a filename`)
+  }
+})
+
+// ---- workerScratchPath: relative wherever the board is the worker's cwd, absolute for Home ----
+
+test("workerScratchPath is relative for a registered project and absolute when the board is elsewhere", () => {
+  const rel = scratchDirRelPath("sid")
+  assert.equal(workerScratchPath({ dir: "/repo" }, "sid"), rel)
+  assert.equal(workerScratchPath({ dir: "/repo", workDir: "/repo" }, "sid"), rel)
+  // The Home workspace: agents in the home folder, board in the state dir. Relative would name
+  // `<home>/.frizz/threads/…` — the legacy data root.
+  assert.equal(workerScratchPath({ dir: "/state/home", workDir: "/home/x" }, "sid"), join("/state/home", rel))
+})
+
+test("the scratch path threads into both prompt surfaces, and the default is byte-identical", () => {
+  const rel = scratchDirRelPath("sid")
+  for (const kind of ["claude", "codex"] as const) {
+    // Every registered project's worker is told exactly what it was told before the path became a parameter.
+    assert.equal(composePrompt("sid", "task", kind, rel), composePrompt("sid", "task", kind))
+    assert.equal(scratchpadOrientation("sid", kind, rel), scratchpadOrientation("sid", kind))
+
+    const abs = join("/state/home", rel)
+    assert.ok(composePrompt("sid", "task", kind, abs).includes(`Your scratch directory is \`${abs}/\``), kind)
+    assert.ok(scratchpadOrientation("sid", kind, abs).includes(`SCRATCH DIRECTORY: ${abs}/ `), kind)
   }
 })
 
