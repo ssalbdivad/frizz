@@ -1,32 +1,46 @@
+import { useState } from "react"
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query"
 import { createRoot } from "react-dom/client"
-import type { BoardSnapshot, ThreadView as ThreadViewModel, TranscriptMessage } from "@frizz/shared"
+import { MemoryRouter } from "react-router"
+import type { BoardSnapshot, ThreadHandoff, ThreadView as ThreadViewModel, TranscriptMessage } from "@frizz/shared"
+import { AllQueuesCard } from "./components/AllQueuesCard.tsx"
 import { BackgroundOpsStrip } from "./components/ChatView.tsx"
 import { ThreadActionBar } from "./components/ThreadActionBar.tsx"
 import { TooltipProvider } from "./components/Tooltip.tsx"
+import type { QueuesProject } from "./lib/allQueues.ts"
 import { store } from "./store.ts"
 import "./styles.css"
 
-// Browser QA for THE STANDARD PROMPT BOX (components/ThreadComposerBox.tsx) in the thread drawer. The
-// board's queue cue card rendered it too and was mounted here beside the drawer until that card was
-// deleted with the single-project board (2026-09-28). Two things are proven here, both of which once
-// differed between the surfaces:
+// Browser QA for the two boxes a reply to a thread is typed into: THE STANDARD PROMPT BOX in the thread
+// drawer (components/ThreadComposerBox.tsx, under ThreadActionBar) and the reply box of the page's QUEUE
+// CARD (components/AllQueuesCard.tsx ReplyBox). Two things are proven here, both of which have differed
+// between the surfaces:
 //
 //   D7 — `/login` and `/logout` are FRIZZ-OWNED aliases. They must open the sign-in / sign-out modal and
 //        must NEVER be delivered to the worker's stdin. Before the box was shared this only worked in
-//        the drawer; the queue card injected the literal "/login" string into the running agent.
+//        the drawer; the board's queue card injected the literal "/login" string into the running agent.
+//        It happened AGAIN with the board's deletion (2026-09-28): the page's card had its own send path
+//        with no alias check, and ReplyBox now intercepts through `parseAccountAlias` itself.
 //   D8 — an ordinary follow-up still reaches the worker.
 //
-// The REAL ThreadActionBar / ThreadComposerBox render; only the network is
-// stubbed. Every followUp the app attempts is recorded on window.__worker.sent — that array IS the
+// The REAL ThreadActionBar / ThreadComposerBox and AllQueuesCard render; only the network is stubbed.
+// Every followUp the app attempts — unprefixed from the drawer, `/_frizz/<project id>/rpc/followUp` from
+// the card, which addresses its own project — is recorded on window.__worker.sent. That array IS the
 // worker's stdin as far as this fixture is concerned, so "the alias never reached the worker" is a
 // direct assertion, not an inference.
 //
-//   ?answerable=1 — the agent's last message carries a ```question block (layout check). A `?surface=`
-//                   switch chose the queue card, the drawer, or both until the queue card went.
+//   ?surface=drawer (default) — the drawer footer (ThreadActionBar)
+//   ?surface=card             — the page's queue card for the same thread
+//   ?surface=both             — both, side by side (the comparison screenshot). They share the thread
+//                               and so its draft, so a test drives one surface at a time.
+//   ?answerable=1             — the agent's last message carries a ```question block (layout check)
+//
+// The card mounted here until 2026-09-28 was the board's (TodosView); the one mounted now is the page's,
+// under a MemoryRouter with a QueuesProject, the way registered-question-fixture.tsx mounts it.
 
 const SLUG = "alias-thread"
 const params = new URLSearchParams(location.search)
+const SURFACE = params.get("surface") ?? "drawer"
 const ANSWERABLE = params.get("answerable") === "1"
 
 const thread = {
@@ -87,18 +101,44 @@ interface WorkerTelemetry { sent: string[]; rpc: string[] }
 const worker: WorkerTelemetry = { sent: [], rpc: [] }
 ;(window as unknown as { __worker: WorkerTelemetry }).__worker = worker
 
+// The card as the page would build it: this thread, Ready in its project's queue.
+const project: QueuesProject = {
+  id: "fixture",
+  slug: "frizz",
+  name: "frizz",
+  card: undefined,
+  open: true,
+  stale: false,
+  projectDir: "/fixture/frizz",
+  homeDir: "/fixture",
+  githubRepo: undefined,
+  queued: [thread],
+  running: [],
+  snoozed: [],
+  doneCount: 0,
+}
+// The card reads the thread's handoff — the human's last ask and the worker's answer to it — never the
+// transcript (AllQueuesCard's header comment).
+const handoff: ThreadHandoff = { asked: messages[0]!.text, askedAt: new Date(Date.now() - 120_000).toISOString(), text: body, at: new Date().toISOString() }
+
 const originalFetch = window.fetch
 window.fetch = async (input, init) => {
   const url = new URL(typeof input === "string" ? input : (input as Request).url ?? input.toString(), location.origin)
-  if (!url.pathname.startsWith("/_frizz/rpc/")) return originalFetch(input, init)
-  worker.rpc.push(url.pathname.slice("/_frizz/rpc/".length))
-  if (url.pathname === "/_frizz/rpc/threadTranscript" || url.pathname === "/_frizz/rpc/threadTranscriptEarlier") {
+  // `/_frizz/rpc/<name>` from the drawer (the page's project), `/_frizz/<project id>/rpc/<name>` from the
+  // card: routed on the procedure's name alone.
+  const rpc = /^\/_frizz\/(?:[^/]+\/)?rpc\/([^/]+)$/.exec(url.pathname)?.[1]
+  if (!rpc) return originalFetch(input, init)
+  worker.rpc.push(rpc)
+  if (rpc === "threadHandoff") {
+    return new Response(JSON.stringify({ result: handoff }), { headers: { "content-type": "application/json" } })
+  }
+  if (rpc === "threadTranscript" || rpc === "threadTranscriptEarlier") {
     return new Response(
       JSON.stringify({ result: { messages, transcriptKey: `${SLUG}-key`, hasEarlier: false, historyLoaded: false } }),
       { headers: { "content-type": "application/json" } },
     )
   }
-  if (url.pathname === "/_frizz/rpc/followUp") {
+  if (rpc === "followUp") {
     try {
       const parsed = typeof init?.body === "string" ? (JSON.parse(init.body) as { message?: string }) : null
       worker.sent.push(parsed?.message ?? "")
@@ -130,11 +170,22 @@ function DrawerSurface() {
   )
 }
 
+// The page's queue card, alone in its column. A sent reply fades it (`onLeave`), as on the page.
+function CardSurface() {
+  const [leaving, setLeaving] = useState(false)
+  return (
+    <div data-fixture-card className="my-5 w-[640px] max-w-full min-w-0">
+      <AllQueuesCard project={project} thread={thread} leaving={leaving} onLeave={() => setLeaving(true)} onReturn={() => setLeaving(false)} />
+    </div>
+  )
+}
+
 function Fixture() {
   return (
     <div className="relative min-h-screen bg-bg text-fg text-sm">
       <div className="flex min-h-screen justify-center gap-6 px-4">
-        <DrawerSurface />
+        {SURFACE !== "card" && <DrawerSurface />}
+        {SURFACE !== "drawer" && <CardSurface />}
       </div>
     </div>
   )
@@ -142,8 +193,10 @@ function Fixture() {
 
 createRoot(document.getElementById("root")!).render(
   <QueryClientProvider client={new QueryClient()}>
-    <TooltipProvider>
-      <Fixture />
-    </TooltipProvider>
+    <MemoryRouter>
+      <TooltipProvider>
+        <Fixture />
+      </TooltipProvider>
+    </MemoryRouter>
   </QueryClientProvider>,
 )
