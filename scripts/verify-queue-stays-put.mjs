@@ -19,7 +19,14 @@
 //
 // Usage: node scripts/verify-queue-stays-put.mjs --stack=/abs/stack.log --seed='<SEED json>' [--shots=/abs/dir]
 // On a freshly seeded stack: the seeded running threads last only a few minutes (see below).
-// Exits non-zero when any check fails.
+// Exits non-zero when any check fails. End to end, from nothing:
+//   mkdir -p /tmp/qsp/alpha /tmp/qsp/beta
+//   nub scripts/adhoc-stack.mjs --port=47771 --project=/tmp/qsp/alpha --also-project=/tmp/qsp/beta --prime \
+//     > /tmp/qsp-stack.log 2>&1 &              # in the background; SIGTERM its pid when done
+//   node scripts/shot.mjs http://127.0.0.1:47771/ /tmp/qsp-warm.png "" --wait=6000   # first load builds the page
+//   node scripts/seed-queue-stays-put.mjs --stack=/tmp/qsp-stack.log              # prints SEED {…} and a daemon pid
+//   node scripts/verify-queue-stays-put.mjs --stack=/tmp/qsp-stack.log --seed='<the SEED json>'
+// Kill the seed's daemon pid with the stack. It held under three of these at once on one machine (2026-09-28).
 import { appendFileSync, mkdirSync, readFileSync } from "node:fs"
 import { join } from "node:path"
 import puppeteer from "puppeteer"
