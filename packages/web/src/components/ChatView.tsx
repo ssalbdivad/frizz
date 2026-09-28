@@ -34,7 +34,7 @@ import { RecurringPromptLine } from "./RecurringPromptLine.tsx"
 import { LinkifiedText } from "./LinkifiedText.tsx"
 import { parseSentContext, splitProseByTokens, tokenLabel, type SentContextItem } from "../lib/composerContext.ts"
 import { AnswersCard } from "./AnswersCard.tsx"
-import { WAKE_DIVIDER_IDENT, WakeDivider } from "./WakeDivider.tsx"
+import { WakeDivider } from "./WakeDivider.tsx"
 import { useLiveAnswering, type LiveAnswering } from "../lib/answering.ts"
 import { useIsMobile } from "../lib/mobile.ts"
 import { MobileAnswerSheet } from "./MobileAnswerSheet.tsx"
@@ -4363,8 +4363,10 @@ function SubAgentReportLine({ from, unnamed, dispatchId, sourceId, at }: { from:
 // so a bare hairline would be the only place the app ever showed what the other session said — and the
 // worker's next move is often a reply to it.
 //
-// The session name keeps ordinary case: it is an address the workers themselves write ("message me
-// (standard-schema-7c)"), matched against their prose by eye, not a title.
+// The session name takes the label's petite caps, NOT WAKE_DIVIDER_IDENT's ordinary case. It was ordinary
+// case first, on the reading that it is an address the workers write in their prose; on the real page it
+// was the loudest mark on the line, and the worker's own reply to the same session, the `SendMessage`
+// line one row down, already spells it «STANDARD-SCHEMA-7C». One name, one spelling, in one family.
 function PeerSessionMessageLine({ from, unnamed, text, sourceId, at }: { from: string; unnamed?: boolean; text: string; sourceId?: string; at?: string }) {
   const [open, setOpen] = useState(false)
   const bodyId = useId()
@@ -4387,7 +4389,7 @@ function PeerSessionMessageLine({ from, unnamed, text, sourceId, at }: { from: s
         ) : (
           <span className="flex min-w-0 items-center">
             <span className="shrink-0">«</span>
-            <span className={`min-w-0 truncate ${WAKE_DIVIDER_IDENT}`}>{from}</span>
+            <span className="min-w-0 truncate">{from}</span>
             <span className="shrink-0">»</span>
           </span>
         )}
