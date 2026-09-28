@@ -5,12 +5,17 @@
 // The queue's own order (groups.ts orderQueue: when each thread entered the queue) is the truth, and
 // everything OFF screen follows it exactly. The cards ON screen — the RUN, one contiguous stretch of the
 // list — are frozen as they were drawn: nothing is inserted between them, none of them swaps, and none of
-// them disappears on its own. Every other card sorts ABOVE the run or BELOW it, by where it falls against
-// the run's live cards. A change above the run moves the run in the document, and the viewport lock
-// scrolls by exactly that much, so on screen it moves nothing; a change below the run moves nothing at
-// all. So an arrival joins the bottom as a queue's should (FIFO), lands above the viewport under the
-// newest-first preference (LIFO), and a thread returning to an old place in line (the server's
-// queue-clock keeps a self-woken thread's place) waits BELOW the run until its slot is off screen.
+// them disappears on its own. A card ALREADY DRAWN sorts above the run or below it, by where it falls
+// against the run's live cards; a card NOT drawn before — an arrival, a card coming back — always goes
+// BELOW the run while the run is on screen, whatever its stamp says. A card crossing from below the run
+// to above it moves the run in the document by exactly its height, and there is always room to scroll by
+// that much (it was below the screen, so the page extends at least that far), so the viewport lock
+// absorbs it; a change below the run moves nothing at all. An arrival above the run would need room the
+// page may not have — a short queue cannot scroll far enough to hide it — and its stamp can be earlier
+// than cards already drawn for reasons nobody acted on (another project's poll landing a few seconds
+// late, a server restart re-listing its queue, a dismissal the server did not take coming back), so it
+// never gets the chance. It joins the bottom as a queue's should (FIFO); newest-first (LIFO), it waits
+// under the run and takes its place at the top once the run has moved on.
 //
 // A card whose thread leaves the queue while its card is on screen, without the human putting it away
 // (it woke itself on a finished shell, a child's return, a timer; or someone acted on it from another
@@ -72,10 +77,10 @@ export function stableQueue<T>({ prev, target, keyOf, onScreen, mayGhost, keep }
   }
   const inRun = new Set(run.map((slot) => slot.key))
 
-  // Above or below the run. Against the run's LIVE cards when it has any: a card that sorts before all of
-  // them goes above, anything else below — so a card whose place is BETWEEN two cards on screen waits
-  // under them rather than pushing one of them down. With no live card on screen (nothing drawn there, or
-  // only ghosts) a card stays on the side it was already on, and a new one goes below what is on screen.
+  // Above or below the run. A card not drawn before goes below. One already drawn is placed against the
+  // run's LIVE cards when it has any: a card that sorts before all of them goes above, anything else below
+  // — so a card whose place is BETWEEN two cards on screen waits under them rather than pushing one of
+  // them down. With no live card on screen (only ghosts) it stays on the side it was already on.
   let pivot = Number.POSITIVE_INFINITY
   for (const slot of run) {
     const index = live.get(slot.key)?.index
@@ -83,9 +88,10 @@ export function stableQueue<T>({ prev, target, keyOf, onScreen, mayGhost, keep }
   }
   const prevIndex = new Map(prev.map((slot, index) => [slot.key, index]))
   const above = (key: string, index: number): boolean => {
-    if (pivot !== Number.POSITIVE_INFINITY) return index < pivot
     const was = prevIndex.get(key)
-    return lo >= 0 && was !== undefined && was < lo
+    if (lo < 0 || was === undefined) return false
+    if (pivot !== Number.POSITIVE_INFINITY) return index < pivot
+    return was < lo
   }
 
   const before: QueueSlot<T>[] = []

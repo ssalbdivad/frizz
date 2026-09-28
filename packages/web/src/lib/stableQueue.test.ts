@@ -22,8 +22,15 @@ test("an arrival joins the bottom under FIFO, and the cards on screen stay as dr
   assert.equal(drawn(next(slots("a", "b"), ["a", "b", "c"], ["a", "b"])), "a b c")
 })
 
-test("an arrival at the top (newest first) goes ABOVE the cards on screen, where the viewport lock hides it", () => {
-  assert.equal(drawn(next(slots("a", "b"), ["n", "a", "b"], ["a", "b"])), "n a b")
+test("an arrival at the top (newest first) waits BELOW the cards on screen, and takes the top once they are off it", () => {
+  const arrived = next(slots("a", "b", "c"), ["n", "a", "b", "c"], ["a", "b"])
+  assert.equal(drawn(arrived), "a b n c")
+  // The reader moved on to c: n is off screen now, and crosses above — which the viewport lock absorbs.
+  assert.equal(drawn(next(arrived, ["n", "a", "b", "c"], ["c"])), "n a b c")
+})
+
+test("an arrival stamped before the cards on screen still joins below them (a late poll, a restart, a card coming back)", () => {
+  assert.equal(drawn(next(slots("b", "c"), ["a", "b", "c"], ["b", "c"])), "b c a")
 })
 
 test("a card whose place is BETWEEN two cards on screen waits below them instead of pushing one down", () => {
@@ -61,7 +68,7 @@ test("cards on screen never swap, even when the queue's order between them chang
   assert.equal(drawn(next(slots("a", "b", "c"), ["b", "a", "c"], ["a", "b"])), "a b c")
 })
 
-test("off screen the order converges on the queue's own: a card crossing from below to above is allowed", () => {
+test("off screen the order converges on the queue's own: a drawn card crossing from below to above is allowed", () => {
   // x was drawn below the run but now sorts first: it moves above, which the viewport lock absorbs.
   assert.equal(drawn(next(slots("a", "b", "x"), ["x", "a", "b"], ["a", "b"])), "x a b")
   // …and the cards above and below are each in the queue's order.
