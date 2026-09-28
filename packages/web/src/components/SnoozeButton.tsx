@@ -53,10 +53,12 @@ export function SnoozeButton({
   const selectedLabel = snoozePresetLabel(selectedPreset)
   const selectedAction = snoozePresetAction(selectedPreset)
   const minCustom = useMemo(() => localDateTimeInputValue(new Date(Date.now() + 60_000)), [customOpen])
-  // THE `h` SHORTCUT OPENS THE PRESET MENU, not the one-click snooze beside it: how long to put a
-  // thread off is a choice, and Superhuman's H and Linear's H — the keys this one is copied from — both
-  // open a picker too. The menu opens on the REMEMBERED preset, so `h` then Enter is the same act as
-  // clicking the quick button, and ↑/↓ (or typing its first character) picks another.
+  // THE `s` SHORTCUT OPENS THE PRESET MENU, not the one-click snooze beside it: how long to put a
+  // thread off is a choice, and Superhuman's H and Linear's H, the snooze keys this one replaced, both
+  // open a picker too. The menu opens on the REMEMBERED preset, so `s` then Enter is the same act as
+  // clicking the quick button, and ↑/↓ (or typing its first character) picks another. A second `s`
+  // matches no item there (they read 1h, tomorrow, 1d, 3d, 1w, Custom…, Wake now), so a double tap is
+  // harmless.
   const [menuOpen, setMenuOpen] = useState(false)
   const openedByKey = useRef(false)
   const triggerRef = useRef<HTMLButtonElement>(null)
@@ -89,7 +91,7 @@ export function SnoozeButton({
     try {
       await api.setThreadSnooze({ slug: thread.id, sessionId, until, prompt: until ? prompt : null })
       if (until) {
-        // UNDO, because a snooze is one click (or `h` then Enter) and takes the card off the page: the
+        // UNDO, because a snooze is one click (or `s` then Enter) and takes the card off the page: the
         // accident is cheap to make and was expensive to find. It runs after this button may be gone —
         // the card fades out on `onSnoozed` — so it touches no state of the button's own.
         const undo = async () => {
