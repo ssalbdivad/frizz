@@ -2104,8 +2104,9 @@ export const OWN_WATCH_MAX_ARMED = 24
 // which historical fences are done (2026-09-11: "I don't like the idea of guessing at which question
 // fences should be considered marked as complete or not"). So the fence stops being a question at all.
 // A thread dispatched at or after this instant reads under the new contract: `ask` is the ONLY way to
-// ask, and the one fence left is the empty PLACEMENT marker (```question qst_ab12cd34) that says where
-// a registered card renders — see questionFencesLive and web/lib/questionShadow.
+// ask — see questionFencesLive. (The one fence it kept, the empty PLACEMENT marker ```question qst_…,
+// was retired in turn on 2026-09-28: a registered card renders at the bottom of its rest, never inside
+// a handoff, and a marker draws nothing — web/lib/questionShadow.)
 //
 // THE CUTOVER IS BY DISPATCH INSTANT, not by a version stamp, because the worker prompt is injected at
 // dispatch and a running thread keeps the contract it started with: a thread that was spawned under the

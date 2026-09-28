@@ -37,21 +37,27 @@ test("a folded fence leaves no Send button behind it", () => {
   assert.match(queue, /allFencesShadowed\(messages\[idx\]\.text, shadowedByMessage\.get\(idx\) \?\? \[\]\)/)
 })
 
-// ---- PER-QUESTION PLACEMENT (2026-09-11) ----
+// ---- NO CARD INSIDE A MESSAGE (2026-09-28) ----
+// Placement is retired: a registered card renders at the bottom of the rest it belongs to, never in a
+// marker's slot (maintainer: "questions should always appear at the bottom of the thread not in the
+// middle any explanation should occur beforehand"). These pin that no surface can hand a message a card
+// to draw inside itself any more, and that every stack is positioned by the one reader.
 
-test("every Message site hands the message its placed questions, and every question stack takes its Send from questionStacks", () => {
-  assert.equal((chat.match(/placed=\{placement\.placed\.get\(messageIndex\)\}/g) ?? []).length, 1, "plain transcript path")
-  assert.equal((chat.match(/placed=\{placement\.placed\.get\(row\.messageIndex\)\}/g) ?? []).length, 1, "virtualized transcript path")
-  assert.equal((queue.match(/placed=\{placement\.placed\.get\(globalIdx\)\}/g) ?? []).length, 2, "both queue-card message sites")
-  // The Send rides the rest the placing marker sits in (lib/questionShadow questionStacks), so both the
-  // tail mount and the anchored mount take it from the stack rather than from "anything placed anywhere".
-  assert.equal((chat.match(/showSend=\{(questionGroups\.tail|row)\.showSend\}/g) ?? []).length, 2, "the thread page's tail and anchored stacks")
-  assert.equal((queue.match(/showSend=\{(questionAnchors\.tail|stack)\.showSend\}/g) ?? []).length, 2, "the queue card's tail and anchored stacks")
+test("no Message site hands a message registered cards to draw inside itself", () => {
+  for (const [name, source] of [["ChatView", chat], ["TodosView", queue]] as const) {
+    assert.doesNotMatch(source, /\bplaced=\{/, `${name}: no placed prop`)
+    assert.doesNotMatch(source, /\bsettledPlaced=\{/, `${name}: no settledPlaced prop`)
+    assert.doesNotMatch(source, /placeQuestions\(/, `${name}: the in-slot placement reader is gone`)
+  }
+  // …and Message itself draws nothing for an empty marker, whatever it names.
+  assert.match(chat, /if \(seg\.registeredId && seg\.text\.trim\(\) === ""\) continue/)
+  assert.doesNotMatch(chat, /<RegisteredQuestionCard key=/, "Message never mounts a registered card")
+  assert.doesNotMatch(chat, /<SettledQuestionCard key=/, "Message never mounts a settled card")
 })
 
-test("a placed question leaves its anchor group on both surfaces, and each surface mounts ONE answering provider", () => {
-  assert.match(chat, /questionStacks\(messages, openQuestions, placement\)/)
-  assert.match(queue, /questionStacks\(messages, openQuestions, placement\)/)
+test("both surfaces position every stack through questionStacks, and each mounts ONE answering provider", () => {
+  assert.match(chat, /questionStacks\(messages, openQuestions\)/)
+  assert.match(queue, /questionStacks\(messages, openQuestions\)/)
   assert.equal((chat.match(/<RegisteredAnsweringProvider thread=\{thread\}>/g) ?? []).length, 1)
   assert.equal((queue.match(/<RegisteredAnsweringProvider thread=\{thread\}>/g) ?? []).length, 1)
 })

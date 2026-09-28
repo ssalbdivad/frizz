@@ -19,18 +19,21 @@ import "./styles.css"
 //   ?busy=1     — a question AND live background work, which is the case the memo calls out: the
 //                 question expands and the waits must not compete with it for the one glance.
 //   ?past=1     — the question was asked at an OLDER rest, the human replied past it without answering,
-//                 and the worker's newest handoff still carries a LEGACY empty ```question qst_… marker
-//                 (mid-prose placement is retired 2026-08-30). The card's window opens at the newest rest
-//                 (hasEarlier), so the asking rest is above the window. The marker must draw NOTHING, the
-//                 card must render ONCE at the head of the window, and the card-level "Send answers" must
-//                 stand down (the registered card carries its own).
+//                 and the worker's newest handoff carries a LEGACY empty ```question qst_… marker naming
+//                 it — how a worker dispatched before 2026-09-28 says a newer handoff still owes the ask.
+//                 The card's window opens at the newest rest (hasEarlier), so the asking rest is above the
+//                 window. The marker must draw NOTHING, the card must render ONCE, at the BOTTOM under the
+//                 whole handoff, and the card-level "Send answers" must stand down (the registered card
+//                 carries its own).
 //   ?table=1    — an option whose body carries a TABLE, a blockquote and a code fence: the blocks whose
 //                 opaque panel fills clashed with a selected chip's accent tint (screenshot 2026-09-02).
 //   ?wide=1     — a `multi` over THIRTY options: no count cap (2026-09-03), and lettering past `Z.`.
-//   ?placed=1   — PER-QUESTION PLACEMENT (2026-09-11): two questions open at one rest; the handoff carries
-//                 an empty ```question qst_… marker for ONE of them, mid-prose. That card must render in
-//                 the marker's slot, its sibling at the tail, and ONE "Send answers" at the tail must send
-//                 both — the marker's card carries no Send of its own.
+//   ?placed=1   — RETIRED PLACEMENT (2026-09-28): two questions open at one rest, and the handoff carries
+//                 a legacy marker for ONE of them mid-prose, with a paragraph under it. The marker must
+//                 draw NOTHING: both cards render together UNDER the whole handoff, one stack, one Send.
+//   ?woken=1    — the worker asked and rested, then frizz WOKE it (a PR watcher expired) and it wrote a
+//                 newer handoff with the question still open. Only frizz has spoken since, so the card
+//                 must render at the BOTTOM, under the newer handoff — not frozen above the wake.
 //   ?font=sans  — the other of the two fonts this app renders in; mono is the default and the wider.
 const params = new URLSearchParams(location.search)
 document.documentElement.dataset.font = params.get("font") === "sans" ? "sans" : "mono"
@@ -162,9 +165,26 @@ const TABLE: RegisteredQuestionView = {
   },
 }
 
+// The ask a frizz wake used to strand above the worker's newer handoff (2026-09-28, a real thread's
+// shape: asked on one day, the PR watcher expired four days later, the worker re-armed and rested again).
+const MERGE: RegisteredQuestionView = {
+  id: "qst_0007abab",
+  askedAt: ago(30),
+  spec: {
+    question: "PR #1403 is merge-ready (CI green, e2e approved on the preview repo, last review clean). Merge it to main?",
+    kind: "question",
+    options: [
+      { label: "Merge it", description: "squash-merge now; the preview repo already approved it end to end", recommended: true },
+      { label: "Hold it", description: "leave it open for another look" },
+    ],
+  },
+}
+
 const placed = params.get("placed") === "1"
+const woken = params.get("woken") === "1"
 const questions = params.get("danger") === "1" ? [GATE]
   : placed ? [SETTINGS, GATES]
+  : woken ? [MERGE]
   : params.get("wide") === "1" ? [WIDE]
   : params.get("tree") === "1" ? [TREE]
   : params.get("many") === "1" ? [SETTINGS, TREE, GATES]
@@ -175,10 +195,22 @@ const tail = "Both stores work. The choice is yours because it is the one thing 
 const past = params.get("past") === "1"
 const marker = `**Fixed** — nothing further to do on the store: \`c6c292e8\` is on local \`main\`.\n\nThe one card still on the board is yours to decide, and it is the reason this thread does not file itself away as done:\n\n\`\`\`question ${SETTINGS.id}\n\`\`\`\n\nAnswer it either way and this thread is finished.`
 const placedHandoff = `**Fixed** — the store is in and \`c6c292e8\` is on local \`main\`.\n\nOne call is yours, because it is the one thing here that is hard to reverse once there is data in it:\n\n\`\`\`question ${SETTINGS.id}\n\`\`\`\n\nEither store passes every gate today. The gates themselves are the other open card, below.`
+const askedHandoff = "[#1403](https://github.com/pullfrog/app/pull/1403) is merge-ready and needs a go-ahead to merge. CI is green (7 checks passed, 6 skipped), and the latest review found no new issues and no open threads."
+const wake = "⏰ Your watcher on pullfrog/app#1403 has expired and is no longer armed — nothing on that PR will wake you now."
+const wokenHandoff = "[#1403](https://github.com/pullfrog/app/pull/1403) is still open and merge-ready. Nothing has happened on it since the clean review: CI is green on `df703a8` and it is still mergeable.\n\nThe PR watch is re-armed for 30 days, so a conflict or a new review wakes this thread."
 const messages: TranscriptMessage[] = placed
   ? [
       { role: "user", at: ago(12), text: "Add a settings store.", tools: [], parts: [{ kind: "text", text: "Add a settings store." }] },
       { role: "assistant", at: ago(1), text: placedHandoff, tools: [], parts: [{ kind: "text", text: placedHandoff }] },
+    ]
+  : woken
+  ? [
+      { role: "user", at: ago(40), text: "Get #1403 merge-ready.", tools: [], parts: [{ kind: "text", text: "Get #1403 merge-ready." }] },
+      { role: "assistant", at: ago(30), text: askedHandoff, tools: [], parts: [{ kind: "text", text: askedHandoff }] },
+      { role: "assistant", kind: "event", boundary: "rest", at: ago(30), text: "Agent rested", tools: [], parts: [] },
+      { role: "user", at: ago(5), text: wake, wake: true, tools: [], parts: [] },
+      { role: "assistant", at: ago(4), text: wokenHandoff, tools: [], parts: [{ kind: "text", text: wokenHandoff }] },
+      { role: "assistant", kind: "event", boundary: "rest", at: ago(4), text: "Agent rested", tools: [], parts: [] },
     ]
   : past
   ? [
@@ -193,7 +225,7 @@ const messages: TranscriptMessage[] = placed
 
 const thread = {
   id: "registered-question-demo",
-  title: "Add a settings store",
+  title: woken ? "Get #1403 merge-ready" : "Add a settings store",
   status: "active",
   mechanism: null,
   humanBlocked: false,

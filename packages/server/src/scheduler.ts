@@ -2116,11 +2116,11 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
       // an awaiting block and open questions"; a first fix drew the fence as plain prose and was
       // rejected the same day — "it should not be allowed, basically"). So it is refused like any
       // other bad park: the correction folds out of the transcript, un-draws the fence (fenceRefused),
-      // and the worker rewrites its sign-off without it — prose plus the placed question, which is what
-      // the contract asks for. Counted against PARK_BUMP_MAX like the other corrections, because a
-      // worker whose contract froze before this rule cannot learn it, and keyed on the rest so one
-      // fence draws one bump. Checked BEFORE the honoured-park reset below on purpose: live names do
-      // not make this park honoured.
+      // and the worker rewrites its sign-off without it — prose, with the question's card drawn under
+      // it, which is what the contract asks for. Counted against PARK_BUMP_MAX like the other
+      // corrections, because a worker whose contract froze before this rule cannot learn it, and keyed
+      // on the rest so one fence draws one bump. Checked BEFORE the honoured-park reset below on
+      // purpose: live names do not make this park honoured.
       const openQuestions = deps.storage.listThreadQuestions(row.slug).filter((q) => q.state === "open")
       if (openQuestions.length > 0) {
         if ((row.park_bumps ?? 0) >= PARK_BUMP_MAX) continue
@@ -2134,8 +2134,8 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
           ...openQuestions.map((q) => `- \`${q.id}\` — ${questionLine(q.spec)}`),
           "",
           "Never fence ```awaiting while a question stands. Rewrite your sign-off WITHOUT the fence: your",
-          "handoff prose — each open question draws its own card at that rest, so write the reasoning",
-          "around the ask, never the ask again. Your running work is watched and listed either way: a shell, a",
+          "handoff prose — each open question draws its own card BELOW it, so write the reasoning that",
+          "leads up to the ask, never the ask again. Your running work is watched and listed either way: a shell, a",
           "sub-agent, a timer or a registered PR wakes you fence or no fence. A question you no longer need",
           "answered is one you withdraw with `mcp__frizz__unask` — only then can a park take.",
         ].join("\n")
