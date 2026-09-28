@@ -6,8 +6,9 @@
 // steering with a plain prompt has to stay one keystroke away. This drives the REAL app against a REAL
 // disposable stack and proves the whole flow, not the pieces:
 //   1. both affordances render on the same card, answer action ABOVE the box (the box owns the bottom edge)
-//   2. clicking a question chip does NOT evict the caret from the card's prompt box — the chip-click blur
-//      is scoped to that block's own answer textarea, which is a DIFFERENT surface
+//   2. clicking a question chip picks it and leaves what was typed in the card's prompt box alone, and
+//      the keyboard lands on THAT question's options, so ⌘/Ctrl-Enter sends the staged answers next
+//      (e7a9f533, 2026-08-26 — which replaced this step's original "the caret stays in the prompt box")
 //   3. a free-text prompt typed into that box actually SENDS (followUp RPC 200) with the question left
 //      unanswered, and the card exits through the same dissolve an answer send uses
 //   4. desktop + narrow widths, no console/page errors
@@ -18,15 +19,14 @@
 // The card is the one page's queue card (AllQueuesCard, `[data-xq-card="<project id>/<slug>"]`) since
 // 2026-09-28, when the project board and its `[data-queue-card-root]` card went away.
 //
-// KNOWN FAILING, 2026-09-28, and deliberately left so. AllQueuesCard draws a handoff's ```question
-// fences through QuestionBlockCard WITHOUT `interactive`, so on the one page they are READ-ONLY: no
-// clickable chips, no answer textareas, no Send answers, and the reply box's "Or skip the questions and
-// reply…" placeholder keys on REGISTERED questions (questionsOwed) alone. The board's queue card this was
-// written against made fences answerable. Steps 1–3 therefore fail on the card as it stands; step 4 (the
-// free-text steer sends, the card exits, the steer lands in the thread) passes. Whether fence questions
-// should be answerable on the card again is a product call, not this script's.
-// The run CONSUMES its seed — step 4's steer is a newer user message, which is exactly what retires the
-// ```question fence — so re-seed a fresh slug for every run rather than re-pointing it at a spent one.
+// The ask is REGISTERED questions (`mcp__frizz__ask` rows), not ```question fences, since 2026-09-28. The
+// fence was retired as a way to ask on 2026-09-11, and the one page's card draws a fence read-only (only
+// the drawer still answers one), so a fence here tested an ask no worker makes on a card that no longer
+// answers it. Everything this gate is about holds for the registered stack the same way: its chips, its
+// per-question "Something else…" answer boxes, Send answers, and the reply box's "Or skip the questions and
+// reply…" (which keys on the questions still owed).
+// The run CONSUMES its seed — step 4's steer is a newer human turn, after which the questions are no longer
+// owed — so re-seed a fresh slug for every run rather than re-pointing it at a spent one.
 import puppeteer from "puppeteer"
 import { createRpcClient } from "./lib/rpc-client.mjs"
 import { recordPageErrors } from "./lib/page-errors.mjs"
@@ -65,6 +65,7 @@ const CARD = `(() => {
     placeholder: box?.placeholder ?? null,
     boxValue: box?.value ?? null,
     boxFocused: document.activeElement === box,
+    focusInQuestion: Boolean(document.activeElement && card.contains(document.activeElement) && document.activeElement.closest('[data-question-id]')),
     hasAnswers: Boolean(answers),
     answersDisabled: answers?.disabled ?? null,
     // The answer action must sit ABOVE the prompt box: it stays adjacent to the question it answers,
@@ -74,16 +75,18 @@ const CARD = `(() => {
     // prompt box below. Symmetric gaps make it read as an appendage of the box, hovering above-right of
     // it rather than hanging off the questions (maintainer 2026-07-22: "the spacing is insane").
     questionToAnswers: (() => {
-      const blocks = [...card.querySelectorAll('div')].filter((d) => d.querySelector(':scope > .mt-2 textarea[data-surface="questionAnswer"]'))
+      // A registered question is its own bordered card, so the stack's last edge is that card's border.
+      const blocks = [...card.querySelectorAll('[data-question-id]')]
       const last = blocks[blocks.length - 1]
       return last && answersRect ? Math.round(answersRect.top - last.getBoundingClientRect().bottom) : null
     })(),
     answersToBox: answersRect && boxRect ? Math.round(boxRect.top - answersRect.bottom) : null,
     boxWidth: boxRect ? Math.round(boxRect.width) : null,
-    // A recommended chip's badge precedes its label in source order (the float-right trick), so its
+    // An option is a ROW whose stretched button carries no text of its own (QuestionBlockCard), marked
+    // bg-selection once picked. A recommended row's badge precedes its label in source order, so its
     // textContent reads "RecommendedA. …" — match by substring, never by prefix.
-    chips: [...card.querySelectorAll('button')].map((b) => b.textContent.trim()).filter((t) => /[AB]\\. /.test(t)).length,
-    chipSelected: [...card.querySelectorAll('button')].filter((b) => b.className.includes('border-accent')).map((b) => b.textContent.trim().slice(0, 46)),
+    chips: card.querySelectorAll('[data-question-option]').length,
+    chipSelected: [...card.querySelectorAll('[data-question-option]')].filter((o) => o.className.includes('bg-selection')).map((o) => o.textContent.trim().slice(0, 46)),
     answerBoxes: card.querySelectorAll('textarea[data-surface="questionAnswer"]').length,
   }
 })()`
@@ -121,7 +124,7 @@ try {
   check("typing into the card prompt box works while an ask is open", s?.boxValue?.includes("ignore both options") === true, s?.boxValue)
   check("the prompt box holds focus", s?.boxFocused === true)
   const clicked = await page.evaluate(`(() => {
-    const btn = [...document.querySelectorAll('${SEL} button')].find((b) => b.textContent.includes('A. Key the cache'))
+    const btn = [...document.querySelectorAll('${SEL} [data-question-option]')].find((o) => o.textContent.includes('A. Key the cache'))?.querySelector('button')
     if (!btn) return false
     btn.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true }))
     btn.click()
@@ -131,7 +134,10 @@ try {
   await settle(500)
   s = await page.evaluate(CARD)
   check("the chip actually selected", s?.chipSelected?.some((t) => t.includes("Key the cache")) === true, JSON.stringify(s?.chipSelected))
-  check("clicking a chip does NOT blur the card's prompt box", s?.boxFocused === true, `focused=${s?.boxFocused}`)
+  // The chip parks focus on its own options grid (QuestionBlockCard), which is what lets ⌘/Ctrl-Enter send
+  // the pick at once — so the caret LEAVES the prompt box by design, and the gate is that it lands there,
+  // inside this question, rather than anywhere else on the page.
+  check("clicking a chip hands the keyboard to that question's options", s?.focusInQuestion === true && s?.boxFocused === false, `in the question: ${s?.focusInQuestion}, prompt box focused: ${s?.boxFocused}`)
   check("the typed free text survives the chip click", s?.boxValue?.includes("ignore both options") === true, s?.boxValue)
   check("Send answers enables once a chip is picked", s?.answersDisabled === false)
 
