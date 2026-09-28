@@ -225,7 +225,11 @@ function QuotaChip({
           >
             {/* The mark carries an ICON's size and weight; only the number is small. */}
             <ProviderMark backend={backend} className={PROVIDER_MARK_AS_ICON[backend]} />
-            <span className={`tabular-nums ${toneText(remaining)}`}>{remaining}%</span>
+            {/* "left" says which way the number runs: a bare "72%" beside a model mark read as usage
+                (or even as a context-window fill), when it is the quota REMAINING. Same word as the
+                popover's rows, so the chip and its breakdown speak one vocabulary. The word takes the
+                number's tone so an amber/red chip warns as one unit. */}
+            <span className={`tabular-nums ${toneText(remaining)}`}>{remaining}% left</span>
           </button>
         </PopoverTrigger>
         {/* Drops DOWN from the row, which sits at the top of the sidebar column. */}
