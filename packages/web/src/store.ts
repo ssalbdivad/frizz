@@ -133,8 +133,9 @@ export const store = proxy({
   // the glance.
   sidebarCollapsed: { active: false, snoozed: true, inactive: true, external: true } as Record<"active" | "snoozed" | "inactive" | "external", boolean>,
   // The SIDE-DRAWER STACK — arbitrary depth. `thread` layers are full thread views (the Open-thread
-  // sheet); `doc` layers are the frizz-document markdown; `markdown` layers are the built-in reader for
-  // a `.md` FILE on disk, opened from any link to one; `subagent` and `shell` layers are read-only
+  // sheet); `doc` layers are the frizz-document markdown; `file` layers are the built-in reader for a
+  // FILE on disk — a `.md` rendered, anything else as source — opened from any link to one (see
+  // lib/localViewer.ts for which files it takes); `subagent` and `shell` layers are read-only
   // operation drill-ins that overlay a thread. A drill-in within one thread's family
   // (its doc, its sub-agents) stacks OVER the previous layer (higher z, slight inset); any lateral open
   // REPLACES the layers it doesn't stack over (one drawer at a time — see openOrRaiseDrawer). Esc /
@@ -143,12 +144,12 @@ export const store = proxy({
   // same entry so App can render its sheet without a board lookup after the operation finishes.
   drawers: [] as {
     id: number
-    kind: "thread" | "doc" | "subagent" | "shell" | "markdown" | "terminal"
+    kind: "thread" | "doc" | "subagent" | "shell" | "file" | "terminal"
     slug: string
     routed?: boolean // URL/deep-link-created thread: visible on first paint, never an invisible animated backdrop
     subId?: string // subagent/shell: the launch tool_use id (the RPC handle + dedupe key)
-    label?: string // subagent: the dispatch description (header title) / markdown: the basename
-    path?: string // markdown: the absolute file path
+    label?: string // subagent: the dispatch description (header title) / file: the basename
+    path?: string // file: the absolute file path
     subagentType?: string // subagent: the model+effort cell tag
     startedAt?: string // subagent: ISO8601 dispatch time (drives the header's running elapsed)
     openedAt?: number // bumped when an existing logical layer is focused/reopened
@@ -185,7 +186,7 @@ export const store = proxy({
   // repeat toasts re-trigger the fade. Rendered by <Toaster>; null when nothing is showing.
   toast: null as { id: number; text: string; detail?: string; spinner?: boolean; sticky?: boolean; duration?: number; link?: ToastLink; action?: ToastAction } | null,
   // The /full page's SPLIT file viewer. True only while StandaloneThreadPage is mounted; while it is,
-  // a `.md` click renders BESIDE the thread (the thread column slides left) instead of as an overlay
+  // a file click renders BESIDE the thread (the thread column slides left) instead of as an overlay
   // drawer — the whole point of /full is seeing the transcript, and a sheet over it defeated that.
   // The queue page keeps the drawer: its main column is the queue, not the thread being read.
   splitFileViewer: false,
@@ -197,6 +198,12 @@ export const store = proxy({
   // them — and serialized into the outgoing text on send. Session-scoped on purpose: unlike the typed
   // draft these are quotes of files on disk, re-creatable in two keystrokes.
   composerContext: {} as Record<string, ComposerContextItem[]>,
+  // The in-app PICTURE VIEWER (components/ImageViewer), over every page and drawer. `paths` is what
+  // ←/→ step through: the pictures rendered in the same card, drawer or page as the one clicked, in
+  // reading order (imageGalleryFor in lib/local-file-links.ts), so a worker's before/after shots are
+  // one keypress apart. null while closed. Not a drawer-stack layer — it is modal, it covers the
+  // stack, and closing it must leave every layer beneath exactly as it was.
+  imageViewer: null as { paths: string[]; index: number } | null,
 })
 
 export function openNewThread(): void {
@@ -235,7 +242,7 @@ type Drawer = (typeof store.drawers)[number]
 // second request for that same chat (or document) must reuse the existing layer.
 function sameDrawer(a: Drawer, b: Pick<Drawer, "kind" | "slug" | "path" | "subId">): boolean {
   if (a.kind !== b.kind) return false
-  if (a.kind === "markdown") return a.path === b.path
+  if (a.kind === "file") return a.path === b.path
   if (a.kind === "subagent" || a.kind === "shell") return a.subId === b.subId
   return a.slug === b.slug
 }
@@ -244,11 +251,11 @@ function sameDrawer(a: Drawer, b: Pick<Drawer, "kind" | "slug" | "path" | "subId
 // transcript over its parent thread/doc, and a thread⇄doc pair sharing a slug. Everything else —
 // sibling threads, sibling sub-agents — is a lateral move, not a drill-in.
 function stacksOver(below: Drawer, next: Pick<Drawer, "kind" | "slug">): boolean {
-  // A `.md` reader is always a DRILL-IN: it is opened by clicking a link inside whatever is already
+  // A file reader is always a DRILL-IN: it is opened by clicking a link inside whatever is already
   // showing (a chat message, another document), so replacing that layer would close the very
   // prose the link was read from. It stacks over anything, its own kind included — following a doc's
   // link to a sibling doc and pressing Esc to come back is the whole point of a reader.
-  if (next.kind === "markdown") return true
+  if (next.kind === "file") return true
   if (next.kind === "subagent" || next.kind === "shell") return (below.kind === "thread" || below.kind === "doc") && below.slug === next.slug
   if (next.kind === "doc") return below.kind === "thread" && below.slug === next.slug
   if (next.kind === "thread") return below.kind === "doc" && below.slug === next.slug
@@ -291,14 +298,14 @@ export function slugsInThreadDrawers(drawers: readonly Pick<Drawer, "kind" | "sl
 }
 
 // The THREAD the drawer stack is showing: the topmost live layer that belongs to one — its chat, its
-// doc, its terminal, or a sub-agent / shell drill-in (whose slug is the parent thread's). A markdown
+// doc, its terminal, or a sub-agent / shell drill-in (whose slug is the parent thread's). A reader
 // layer names a FILE, so the walk passes under it to the thread it was opened from. A closing layer
 // does not count: its row lets go the moment the slide-out starts, as the URL does. The rail lights
 // this thread's row (Sidebar rowWashClass).
 export function drawerThreadSlug(drawers: readonly Pick<Drawer, "kind" | "slug" | "closing">[]): string | null {
   for (let i = drawers.length - 1; i >= 0; i--) {
     const d = drawers[i]
-    if (d.closing || d.kind === "markdown") continue
+    if (d.closing || d.kind === "file") continue
     return d.slug
   }
   return null
@@ -482,18 +489,40 @@ function flashQueueCard(slug: string, root: HTMLElement): void {
   }, 1100))
 }
 
-// Open a `.md` file that lives on disk in Frizz's OWN reader, rather than handing the path to the
-// desktop opener. Every link to one routes here (lib/local-file-links.ts): agent prose citing a repo
-// doc, an inline-code path that resolved to one, an attached `.md`. `path` is the absolute POSIX path
-// the server will re-gate; the basename is the header title. Queue drawers are deduped on path.
-export function pushMarkdownDrawer(path: string): void {
+// Open a file that lives on disk in Frizz's OWN reader — a `.md` rendered, anything else as source —
+// rather than handing the path to the desktop opener. Every link to one routes here
+// (lib/local-file-links.ts): agent prose citing a repo doc, an inline-code path that resolved to a
+// file, an attached log. `path` is the absolute path the server will re-gate; the basename is the
+// header title. Queue drawers are deduped on path.
+export function pushFileReader(path: string): void {
   // On /full the reader is a SPLIT PANEL beside the thread, not a sheet over it — route every
-  // markdown open there while that page is mounted, stacking links from the transcript AND reader.
+  // file open there while that page is mounted, stacking links from the transcript AND reader.
   if (store.splitFileViewer) {
     openFilePanel(path)
     return
   }
-  openOrRaiseDrawer({ kind: "markdown", slug: path, path, label: basename(path) })
+  openOrRaiseDrawer({ kind: "file", slug: path, path, label: basename(path) })
+}
+
+// ── the picture viewer ───────────────────────────────────────────────────────────────────────────
+
+// Show `path` in the picture viewer. `gallery` is the set ←/→ step through; a path that is not in it
+// (a Markdown link TO a picture, which is text rather than a rendered one) opens on its own.
+export function openImageViewer(path: string, gallery: readonly string[] = []): void {
+  const paths = gallery.includes(path) ? [...gallery] : [path]
+  store.imageViewer = { paths, index: paths.indexOf(path) }
+}
+
+export function closeImageViewer(): void {
+  store.imageViewer = null
+}
+
+// Clamped, not wrapped: the ends are where the rendered pictures end, and a viewer that silently
+// jumps from the last shot back to the first reads as having shown a new one.
+export function stepImageViewer(step: 1 | -1): void {
+  const viewer = store.imageViewer
+  if (!viewer) return
+  viewer.index = Math.min(viewer.paths.length - 1, Math.max(0, viewer.index + step))
 }
 
 // ── the /full split file viewer ──────────────────────────────────────────────────────────────────
@@ -641,6 +670,7 @@ export function resetProjectState() {
   store.connection = "connecting"
   store.drawers = []
   store.filePanels = []
+  store.imageViewer = null
   store.composerContext = {}
   store.routeThreadSlug = null
   store.socketBoardFallback = null

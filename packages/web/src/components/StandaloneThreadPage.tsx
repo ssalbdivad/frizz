@@ -72,8 +72,8 @@ export function StandaloneThreadPage({ slug }: { slug: string }) {
 
   // SPLIT MODE for the file reader: while this page is mounted (and the window is wide enough for two
   // real columns), a click on a local file renders beside the thread instead of as a sheet over it —
-  // Markdown through pushMarkdownDrawer, any other text file through openLocalPath (a project file in
-  // the rail's Edited files list, say). Tracked live so shrinking the window falls back to the drawer for later
+  // Markdown and every other text file alike, through pushFileReader (a project file in the rail's
+  // Edited files list, say); a picture still opens in the picture viewer. Tracked live so shrinking the window falls back to the drawer for later
   // clicks; a panel already open stays (its layout degrades gracefully, and yanking it on resize
   // would lose the reader's place).
   useEffect(() => {

@@ -5,11 +5,13 @@ import { mdToHtml } from "./lib/markdown.ts"
 import { installLocalFileLinkInterceptor } from "./lib/local-file-links.ts"
 import { store } from "./store.ts"
 
-// Both destinations a local-file link can have, on one page. A `.md` file is rendered by Frizz's own
-// reader (the interceptor pushes a `markdown` drawer and never calls the RPC); anything else is handed
-// to the desktop opener through `openLocalFile`. The two readouts below are what the e2e test asserts,
-// so a regression in EITHER direction — a Markdown link that launches an editor, a PDF that silently
-// opens a reader that cannot render it — fails loudly rather than looking fine in the markup.
+// Every destination a local-file link can have, on one page. A file Frizz can show opens in Frizz: a
+// `.md` or any other text file in its reader (the interceptor pushes a `file` drawer and never calls
+// the RPC), a picture in the picture viewer. A format the page cannot draw — the PDF here — is handed
+// to the desktop opener through `openLocalFile`. The readouts below are what the e2e test asserts, so
+// a regression in ANY direction — a Markdown or JSON link that launches an editor, a screenshot that
+// opens a browser tab, a PDF that opens a reader that cannot render it — fails loudly rather than
+// looking fine in the markup.
 //
 // The page also carries the two destinations a worker WRITES rather than spells out: a project-relative
 // path and a home-anchored one. Both used to stay relative hrefs, which the browser resolved against
@@ -20,6 +22,7 @@ const HOME_DIR = "/fixture/home"
 type FixtureWindow = Window & {
   __localFileFixtureOpened?: string[]
   __localFileFixtureDrawers?: () => { kind: string; path?: string }[]
+  __localFileFixtureViewer?: () => { paths: string[]; index: number } | null
 }
 
 const nativeFetch = window.fetch.bind(window)
@@ -38,6 +41,8 @@ window.fetch = async (input, init) => {
 
 ;(window as FixtureWindow).__localFileFixtureDrawers = () =>
   store.drawers.map((d) => ({ kind: d.kind, path: d.path }))
+;(window as FixtureWindow).__localFileFixtureViewer = () =>
+  store.imageViewer ? { paths: [...store.imageViewer.paths], index: store.imageViewer.index } : null
 
 installLocalFileLinkInterceptor()
 createRoot(document.getElementById("root")!).render(
@@ -86,8 +91,8 @@ createRoot(document.getElementById("root")!).render(
     {/* The OTHER producer of a local-file link: a tool card's header path (PathLink), here in its diff
         form. It used to be an `<a href="cursor://file/…">` the OS resolved, so it ignored the opener
         setting entirely and always landed in Cursor. It now takes the same route as everything above —
-        including the `.md` split — so both destinations are asserted for it too. The header is also a
-        disclosure control, so the click must open the file WITHOUT toggling the block. */}
+        a source file and a `.md` both into Frizz's reader — so both are asserted for it too. The header
+        is also a disclosure control, so the click must open the file WITHOUT toggling the block. */}
     <div className="mt-6">
       <DiffBlock edits={[{ file: "/fixture/src/app.ts", old: "a\n", new: "b\n" }]} />
     </div>

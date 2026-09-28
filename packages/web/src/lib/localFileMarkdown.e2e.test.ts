@@ -89,21 +89,22 @@ test("Markdown local image syntax uses the gated image proxy and local files rem
       winProse: "It also lives at D:\\fixture\\.frizz\\threads\\8e51437e\\build-gap.md in prose.",
     })
 
-    // The ROUTING split, which the markup above deliberately cannot show: both links are the same
-    // `data-local-path` button, and only the click decides where each one goes. A `.md` file is prose
-    // Frizz renders ITSELF — it must push the reader drawer and never reach the desktop opener — while
-    // any other local file must still be handed to the opener and open no drawer.
+    // The ROUTING split, which the markup above deliberately cannot show: every link is the same
+    // `data-local-path` button, and only the click decides where each one goes. A file Frizz can show —
+    // the `.md` prose and the `.json` capture alike — must push the reader drawer and never reach the
+    // desktop opener, while a format the page cannot draw (the PDF) must still be handed to the opener
+    // and open no drawer.
     await page.click('button[data-local-path="/fixture/report.md"]')
     await page.click('button[data-local-path="/fixture/contract.pdf"]')
     // And the rebased one routes by the SAME rule — the click handler never learns which syntax the
-    // author used, only that the path it holds ends in `.md`.
+    // author used, only the path it holds.
     await page.click('button[data-local-path="/fixture/.frizz/threads/6d56ea2f/HANDOFF.md"]')
     // And the editor-scheme pair routes by the same rule: the click handler never learns the author
     // wrote a `cursor://`/`vscode://` destination, only the path it named.
     await page.click('button[data-local-path="/fixture/plan.md"]')
     await page.click('button[data-local-path="/fixture/trace.json"]')
-    // And the Windows set routes by the same rule, in both separators: `.md` to Frizz's own reader,
-    // anything else to the opener. The click handler reads an extension, never a platform.
+    // And the Windows set routes by the same rule, in both separators. The click handler reads an
+    // extension, never a platform.
     await page.click('button[data-local-path="D:/fixture/win-report.md"]')
     await page.click('button[data-local-path="D:\\\\fixture\\\\win-trace.json"]')
     await page.click('button[data-local-path="/D:/fixture/win-plan.md"]')
@@ -114,24 +115,35 @@ test("Markdown local image syntax uses the gated image proxy and local files rem
       drawers: (window as unknown as { __localFileFixtureDrawers: () => unknown[] }).__localFileFixtureDrawers(),
     }))
     assert.deepEqual(routed, {
-      opened: ["/fixture/contract.pdf", "/fixture/trace.json", "D:\\fixture\\win-trace.json"],
+      opened: ["/fixture/contract.pdf"],
       drawers: [
-        { kind: "markdown", path: "/fixture/report.md" },
-        { kind: "markdown", path: "/fixture/.frizz/threads/6d56ea2f/HANDOFF.md" },
-        { kind: "markdown", path: "/fixture/plan.md" },
-        { kind: "markdown", path: "D:/fixture/win-report.md" },
-        { kind: "markdown", path: "/D:/fixture/win-plan.md" },
-        { kind: "markdown", path: "D:\\fixture\\.frizz\\threads\\8e51437e\\build-gap.md" },
+        { kind: "file", path: "/fixture/report.md" },
+        { kind: "file", path: "/fixture/.frizz/threads/6d56ea2f/HANDOFF.md" },
+        { kind: "file", path: "/fixture/plan.md" },
+        { kind: "file", path: "/fixture/trace.json" },
+        { kind: "file", path: "D:/fixture/win-report.md" },
+        { kind: "file", path: "D:\\fixture\\win-trace.json" },
+        { kind: "file", path: "/D:/fixture/win-plan.md" },
+        { kind: "file", path: "D:\\fixture\\.frizz\\threads\\8e51437e\\build-gap.md" },
       ],
     })
+
+    // A rendered picture opens in Frizz's picture viewer — never the desktop opener, which on a WSL box
+    // meant a browser tab — among the pictures rendered beside it, in reading order.
+    await page.click('img[data-local-path="D:/fixture/win-shot.png"]')
+    assert.deepEqual(await page.evaluate(() => (window as unknown as { __localFileFixtureViewer: () => unknown }).__localFileFixtureViewer()), {
+      paths: ["/fixture/shot.png", "D:/fixture/win-shot.png"],
+      index: 1,
+    })
+    assert.deepEqual(await page.evaluate(() => (window as unknown as { __localFileFixtureOpened?: string[] }).__localFileFixtureOpened), ["/fixture/contract.pdf"])
 
     // A tool card's header path (PathLink) is the OTHER producer of a local-file link, and it used to
     // be an `<a href="cursor://file/…">` handed straight to the OS — which meant it opened Cursor no
     // matter what "Local file links" said. Nothing on this page may carry an editor-scheme href.
     assert.deepEqual(await page.$$eval('a[href]', (nodes) => nodes.map((n) => n.getAttribute("href"))), [])
 
-    // It routes by the same two rules as the markdown links, and — because the header it sits in is
-    // also the disclosure control — the click must open the file and leave the block's state alone.
+    // It routes by the same rules as the markdown links, and — because the header it sits in is also
+    // the disclosure control — the click must open the file and leave the block's state alone.
     const expandedBefore = await page.$eval(".frizz-diff-header", (n) => n.getAttribute("data-expanded"))
     await page.click('.frizz-diff-header button[title="/fixture/src/app.ts"]')
     await page.click('.frizz-diff-header button[title="/fixture/notes.md"]')
@@ -140,20 +152,18 @@ test("Markdown local image syntax uses the gated image proxy and local files rem
       drawers: (window as unknown as { __localFileFixtureDrawers: () => unknown[] }).__localFileFixtureDrawers(),
       expanded: document.querySelector(".frizz-diff-header")?.getAttribute("data-expanded"),
     }))
-    assert.deepEqual(fromHeaders.opened, [
-      "/fixture/contract.pdf",
-      "/fixture/trace.json",
-      "D:\\fixture\\win-trace.json",
-      "/fixture/src/app.ts",
-    ])
+    assert.deepEqual(fromHeaders.opened, ["/fixture/contract.pdf"])
     assert.deepEqual(fromHeaders.drawers, [
-      { kind: "markdown", path: "/fixture/report.md" },
-      { kind: "markdown", path: "/fixture/.frizz/threads/6d56ea2f/HANDOFF.md" },
-      { kind: "markdown", path: "/fixture/plan.md" },
-      { kind: "markdown", path: "D:/fixture/win-report.md" },
-      { kind: "markdown", path: "/D:/fixture/win-plan.md" },
-      { kind: "markdown", path: "D:\\fixture\\.frizz\\threads\\8e51437e\\build-gap.md" },
-      { kind: "markdown", path: "/fixture/notes.md" },
+      { kind: "file", path: "/fixture/report.md" },
+      { kind: "file", path: "/fixture/.frizz/threads/6d56ea2f/HANDOFF.md" },
+      { kind: "file", path: "/fixture/plan.md" },
+      { kind: "file", path: "/fixture/trace.json" },
+      { kind: "file", path: "D:/fixture/win-report.md" },
+      { kind: "file", path: "D:\\fixture\\win-trace.json" },
+      { kind: "file", path: "/D:/fixture/win-plan.md" },
+      { kind: "file", path: "D:\\fixture\\.frizz\\threads\\8e51437e\\build-gap.md" },
+      { kind: "file", path: "/fixture/src/app.ts" },
+      { kind: "file", path: "/fixture/notes.md" },
     ])
     assert.equal(fromHeaders.expanded, expandedBefore)
 

@@ -1,6 +1,6 @@
 import assert from "node:assert/strict"
 import test from "node:test"
-import { closeFilePanel, openFilePanel, pushMarkdownDrawer, resetProjectState, store } from "./store.ts"
+import { closeFilePanel, openFilePanel, pushFileReader, resetProjectState, store } from "./store.ts"
 import { SHEET_CLOSE_MS } from "./lib/sheet.ts"
 
 test("split readers stack visits and only remove the closing instance", () => {
@@ -13,9 +13,9 @@ test("split readers stack visits and only remove the closing instance", () => {
   try {
     store.splitFileViewer = true
     store.filePanels = []
-    pushMarkdownDrawer("/a.md")
-    pushMarkdownDrawer("/b.md")
-    pushMarkdownDrawer("/a.md")
+    pushFileReader("/a.md")
+    pushFileReader("/b.md")
+    pushFileReader("/a.md")
     assert.deepEqual(store.filePanels.map((p) => p.path), ["/a.md", "/b.md", "/a.md"])
     const ids = store.filePanels.map((p) => p.id)
     assert.equal(new Set(ids).size, 3, "revisiting a path creates an independent reader")
@@ -40,12 +40,12 @@ test("split readers stack visits and only remove the closing instance", () => {
   }
 })
 
-test("the queue still opens Markdown in the drawer stack", () => {
+test("the queue still opens a file in the drawer stack", () => {
   store.splitFileViewer = false
   store.drawers = []
   try {
-    pushMarkdownDrawer("/queue.md")
-    assert.equal(store.drawers.at(-1)?.kind, "markdown")
+    pushFileReader("/queue.md")
+    assert.equal(store.drawers.at(-1)?.kind, "file")
     assert.equal(store.filePanels.length, 0)
   } finally {
     store.drawers = []

@@ -3531,7 +3531,8 @@ function ProseHtml({ md, wrap }: { md: string; wrap?: boolean }) {
 // nothing is silently swallowed. `hideCaption` drops the basename line (SendUserFile images are
 // hash-named cache copies whose basename is meaningless, and the SentFilesCard carries its own caption);
 // `altText` overrides the a11y alt (else the basename); `header` is the frame's label bar (ToolImageCard
-// passes the tool name + target + status through it, so the card IS the frame — see ImageFrame).
+// passes the tool name + target + status through it, so the card IS the frame — see ImageFrame). A
+// click opens the picture viewer (lib/local-file-links.ts reads `data-local-path`), hence the zoom cursor.
 export function BlockImage({ path, hideCaption, altText, header }: { path: string; hideCaption?: boolean; altText?: string; header?: ReactNode }) {
   const [broken, setBroken] = useState(false)
   if (broken) return <div className="font-mono-keep text-[12px] text-muted-70 break-all">{path}</div>
@@ -3547,7 +3548,7 @@ export function BlockImage({ path, hideCaption, altText, header }: { path: strin
         data-local-path={path}
         data-local-image="true"
         onError={() => setBroken(true)}
-        className={`cursor-pointer ${FRAMED_IMAGE}`}
+        className={`cursor-zoom-in ${FRAMED_IMAGE}`}
       />
     </ImageFrame>
   )

@@ -991,12 +991,21 @@ a[href] {
 /* The image itself, on BOTH paths — inside a frame, and bare on the inline path, which deliberately
    does not frame (a block frame would burst a one-line answer chip or caption). Every declaration here
    either matches what FRAMED_IMAGE already sets or, like the cursor, is wanted in both places, so the
-   framed picture is unaffected by it. */
+   framed picture is unaffected by it. The zoom cursor says what a click does: it opens the picture
+   viewer (components/ImageViewer), exactly as a click on BlockImage's picture does. */
 .md-body img[data-local-path] {
   display: block;
   max-width: 100%;
   margin-inline: auto;
-  cursor: pointer;
+  cursor: zoom-in;
+}
+/* What the picture viewer draws an SVG on. A drawing is usually dark strokes on NOTHING, which on the
+   dark page is nothing at all; the checkerboard is the conventional "no paint here", so its greys are
+   fixed in both themes — it stands for transparency, not for a surface of the app. */
+.frizz-transparency-grid {
+  background-color: #ffffff;
+  background-image: conic-gradient(#e8e8e8 25%, transparent 0 50%, #e8e8e8 0 75%, transparent 0);
+  background-size: 16px 16px;
 }
 /* The stand-in the delegated error handler (lib/local-file-links.ts) swaps in for a screenshot whose
    file is gone. Same muted mono register as BlockImage's own fallback, and BLOCK so it occupies one

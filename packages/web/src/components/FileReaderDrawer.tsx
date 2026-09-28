@@ -1,4 +1,4 @@
-import { useRef } from "react"
+import { useMemo, useRef, type Ref } from "react"
 import { useQuery } from "@tanstack/react-query"
 import { ExternalLink } from "lucide-react"
 import { showToast } from "../store.ts"
@@ -6,36 +6,43 @@ import { rpc } from "../api/rpc.ts"
 import { useLiveLocalFile } from "../hooks.ts"
 import { copyTextToClipboard } from "../lib/clipboard.ts"
 import { useInnerHtml } from "../lib/innerHtml.ts"
-import { LOCAL_FILE_POLL_MS, localFileQuery } from "../lib/localFileQuery.ts"
+import { LOCAL_FILE_POLL_MS, highlightedSource, localFileQuery } from "../lib/localFileQuery.ts"
 import { useLocalFileCodeLinks } from "../lib/localFileCode.ts"
 import { useMarkdownHtml } from "../lib/useMarkdown.ts"
 import { splitFrontmatter } from "../lib/frontmatter.ts"
-import { localFileDir } from "../lib/markdownTargets.ts"
+import { isLocalMarkdownFile, localFileDir } from "../lib/markdownTargets.ts"
 import { CodeBody } from "./CodeBody.tsx"
 import { Sheet } from "./ui/Sheet.tsx"
 import { SheetHeader } from "./ui/SheetHeader.tsx"
 
-// The BUILT-IN MARKDOWN READER: a right side sheet (the same slide/backdrop family as the plan and
-// frizz-document drawers) rendering a `.md` file that lives on disk. Every link to one lands here
-// instead of launching the desktop opener — a worker citing `AGENTS.md`, a backticked path that
-// resolved to a doc, an attached `.md` — because throwing the user out of Frizz into an editor to read
-// two paragraphs is the wrong answer to "what does that file say?".
+// The BUILT-IN FILE READER: a right side sheet (the same slide/backdrop family as the plan and
+// frizz-document drawers) showing a file that lives on disk — a `.md` rendered, anything else as
+// highlighted source. Every link to one lands here instead of launching the desktop opener — a worker
+// citing `AGENTS.md`, a backticked path that resolved to a file, an attached log — because throwing
+// the user out of Frizz into an editor to read two paragraphs is the wrong answer to "what does that
+// file say?". It was Markdown-only until 2026-09-28, when every file the page can show at all came
+// in-app (lib/localViewer.ts decides which).
 //
-// The file's own directory is passed as the render base, so its RELATIVE links (`./ARCHITECTURE.md`,
-// `docs/x.md`, an image beside it) resolve to real paths — a doc that cross-references its neighbours
-// is browsable, each link stacking another reader over this one. Content is a file on disk written by
-// whoever wrote it, so it goes through the same allowlist sanitizer as every other prose surface.
+// A Markdown file's own directory is passed as the render base, so its RELATIVE links
+// (`./ARCHITECTURE.md`, `docs/x.md`, an image beside it) resolve to real paths — a doc that
+// cross-references its neighbours is browsable, each link stacking another reader over this one.
+// Content is a file on disk written by whoever wrote it, so it goes through the same allowlist
+// sanitizer as every other prose surface.
 
 export const FOOTER_STYLE = { paddingBottom: "max(0.75rem, env(safe-area-inset-bottom))" }
 
 // The desktop-opener escape hatch. Reading is the default now, but a file you want to EDIT still
 // belongs in the editor, and this is the only affordance left that gets it there. It honours the
-// `localFileOpener` setting, exactly as a click on the link used to. Exported because the /full
-// page's split FileViewerPanel is the same reader in a different frame and must not fork this.
-export function OpenAction({ path }: { path: string }) {
+// `localFileOpener` setting, exactly as a click on the link used to — except for a picture (`image`),
+// which goes to the OS's own viewer, as an image click always did: an editor is no place to look at a
+// screenshot. Exported because the /full page's split FileViewerPanel and the picture viewer are the
+// same escape in different frames and must not fork this. `onOpen` runs first — the picture viewer
+// closes itself there, since the answer can be a toast and a toast sits below every modal layer.
+export function OpenAction({ path, image, onOpen, className = "" }: { path: string; image?: boolean; onOpen?: () => void; className?: string }) {
   const open = () => {
+    onOpen?.()
     rpc
-      .openLocalFile({ path })
+      .openLocalFile({ path, ...(image ? { image: true } : {}) })
       .then(async (result) => {
         if (result.action !== "copy") return
         await copyTextToClipboard(result.path)
@@ -48,7 +55,7 @@ export function OpenAction({ path }: { path: string }) {
       type="button"
       onClick={open}
       onMouseDown={(e) => e.preventDefault()}
-      className="flex items-center gap-1.5 rounded-md border border-border-strong bg-panel-2/60 px-2.5 py-1 text-[12px] font-medium text-fg/80 outline-none transition-colors hover:bg-panel-2 hover:text-fg focus-visible:ring-1 focus-visible:ring-focus-ink-60"
+      className={`flex items-center gap-1.5 rounded-md border border-border-strong bg-panel-2/60 px-2.5 py-1 text-[12px] font-medium text-fg/80 outline-none transition-colors hover:bg-panel-2 hover:text-fg focus-visible:ring-1 focus-visible:ring-focus-ink-60 ${className}`}
       title={`Open ${path} outside Frizz`}
       aria-label="Open"
     >
@@ -70,19 +77,49 @@ export function Frontmatter({ source }: { source: string }) {
   )
 }
 
-export function MarkdownDrawer({ id, path, title, depth, widthDepth }: { id: number; path: string; title: string; depth: number; widthDepth: number }) {
+// A file's text, verbatim and highlighted — the reader's view of anything that is not Markdown, and the
+// /full viewer's Source view of everything. Highlighted through the same hljs pipeline as every
+// transcript code body (lib/codeBody), the grammar picked from the filename and memoised across mounts
+// (highlightedSource). The invariant codeBody.test pins — highlighted markup carries the SAME TEXT — is
+// what keeps the /full viewer's ⌘I char-offset walk exact over the added spans, which is why `ref`
+// reaches the <pre>. `hljs` on the element is what the palette hangs off (styles.css).
+export function SourceView({ path, raw, ref }: { path: string; raw: string; ref?: Ref<HTMLPreElement> }) {
+  const html = useInnerHtml(useMemo(() => highlightedSource(path, raw), [path, raw]))
+  return (
+    <pre
+      ref={ref}
+      className="hljs whitespace-pre-wrap break-words bg-transparent font-mono-keep text-[12px] leading-5 text-fg/90"
+      style={{ tabSize: 2 }}
+      dangerouslySetInnerHTML={html}
+    />
+  )
+}
+
+export function TruncatedNote() {
+  return (
+    <p className="mt-4 border-t border-border/60 pt-3 text-[12px] text-muted">
+      This file is too long to render in full — everything above the cut is shown. Open it to read the rest.
+    </p>
+  )
+}
+
+export function FileReaderDrawer({ id, path, title, depth, widthDepth }: { id: number; path: string; title: string; depth: number; widthDepth: number }) {
   // The same read (and key) as the /full split viewer, and LIVE the same way: the server watches the
   // file while this drawer is open and the socket invalidates the query on each save; the poll covers
   // a socket that is not up (useLiveLocalFile).
   const live = useLiveLocalFile(path)
   const body = useQuery({ ...localFileQuery(path), refetchInterval: live ? false : LOCAL_FILE_POLL_MS })
+  const markdown = isLocalMarkdownFile(path)
   // Base the relative links on the CANONICAL path the server resolved, not the one that was clicked:
   // a link through a symlinked directory would otherwise rebase its neighbours onto a directory the
   // gate never admitted, and every one of them would 404.
   const resolved = body.data?.path ?? path
+  const raw = body.data?.markdown ?? ""
   // Frontmatter is shown as metadata, not rendered as prose — see lib/frontmatter.ts for the heading
   // it became otherwise. It opens every MDX blog post and every skill file, so this is the common case.
-  const { front, body: source } = splitFrontmatter(body.data?.markdown ?? "")
+  // Only a Markdown file is parsed at all: running a `.ts` file through the Markdown pipeline to throw
+  // the result away would be the drawer's single most expensive step.
+  const { front, body: source } = splitFrontmatter(markdown ? raw : "")
   const html = useMarkdownHtml(source, { baseDir: localFileDir(resolved), asDocument: true })
   const inner = useInnerHtml(html)
   const ref = useRef<HTMLDivElement>(null)
@@ -101,18 +138,19 @@ export function MarkdownDrawer({ id, path, title, depth, widthDepth }: { id: num
             {body.isLoading ? (
               <div className="text-[13px] text-muted">Loading…</div>
             ) : body.error ? (
-              // The gate's own words — "outside Frizz's trusted roots", "was not found" — say more than
-              // a generic failure would, and the footer still offers the desktop opener.
+              // The gate's own words — "outside Frizz's trusted roots", "is not a text file" — say more
+              // than a generic failure would, and the footer still offers the desktop opener.
               <div className="text-[13px] text-danger-90">Couldn’t read this file: {(body.error as Error).message}</div>
-            ) : html ? (
+            ) : markdown && html ? (
               <>
                 {front && <Frontmatter source={front} />}
                 <div ref={ref} className="md-body" dangerouslySetInnerHTML={inner} />
-                {body.data?.truncated && (
-                  <p className="mt-4 border-t border-border/60 pt-3 text-[12px] text-muted">
-                    This file is too long to render in full — everything above the cut is shown. Open it to read the rest.
-                  </p>
-                )}
+                {body.data?.truncated && <TruncatedNote />}
+              </>
+            ) : !markdown && raw ? (
+              <>
+                <SourceView path={resolved} raw={raw} />
+                {body.data?.truncated && <TruncatedNote />}
               </>
             ) : (
               <div className="text-[13px] text-muted">This file is empty.</div>
