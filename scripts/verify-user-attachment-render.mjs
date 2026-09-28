@@ -18,6 +18,7 @@ import { tmpdir } from "node:os"
 import { randomUUID } from "node:crypto"
 import { createRpcClient } from "./lib/rpc-client.mjs"
 import { resolveSandboxDb, sessionProjectColumns } from "./lib/sandbox-db.mjs"
+import { recordPageErrors } from "./lib/page-errors.mjs"
 
 const args = process.argv.slice(2)
 const opt = (k, d) => { const hit = args.find((a) => a.startsWith(`--${k}=`)); return hit ? hit.slice(k.length + 3) : d }
@@ -38,10 +39,13 @@ mkdirSync(assets, { recursive: true })
 const SHOT = join(assets, "shot.png")
 const PDF = join(assets, "spec.pdf")
 const SVG = join(assets, "logo.svg")
-if (!existsSync(SHOT)) {
+// Copied EVERY run when the real icon is there: guarding the copy on `!existsSync(SHOT)` let a 1x1
+// fallback written by one run from a directory without the icon stand in for every later run's
+// "screenshot", so the frame shrink-wrapped a single pixel.
+{
   const icon = join(cwd, "packages", "web", "public", "icon-512.png")
   if (existsSync(icon)) copyFileSync(icon, SHOT)
-  else writeFileSync(SHOT, Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==", "base64"))
+  else if (!existsSync(SHOT)) writeFileSync(SHOT, Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==", "base64"))
 }
 writeFileSync(PDF, "%PDF-1.4 stub")
 writeFileSync(SVG, '<svg xmlns="http://www.w3.org/2000/svg"/>')
@@ -91,24 +95,32 @@ const pageErrors = []
 const check = (ok, label, detail) => { console.log(`${ok ? "PASS" : "FAIL"}  ${label}`); if (!ok) failures.push(`${label}${detail ? ` — ${detail}` : ""}`) }
 try {
   const page = await browser.newPage()
-  page.on("pageerror", (e) => pageErrors.push(String(e)))
-  page.on("console", (m) => { if (m.type() === "error") pageErrors.push(m.text()) })
+  recordPageErrors(page, pageErrors)
   await page.setViewport({ width: 1400, height: 1000, deviceScaleFactor: 1 })
   // The thread's drawer on the one page (rpc-client threadUrl); the bare `/thread/<slug>` it opened until
   // 2026-09-28 now lands on `/`.
   await page.goto(await api.threadUrl(SLUG), { waitUntil: "networkidle0" })
-  await page.waitForSelector("img[data-local-image]", { timeout: 20_000 })
+  // Everything below is measured INSIDE the drawer. The one page keeps its queue cards rendered behind
+  // an open drawer, and this thread's own Ready card draws the human's last message as an "asked" bubble
+  // (AllQueuesCard.tsx) — page-wide, it counted as extra transcript bubbles and, sitting first in the
+  // DOM, its right edge became the "bubble edge" every attachment was measured against.
+  const DRAWER = "[data-drawer-layer]"
+  await page.waitForSelector(`${DRAWER} img[data-local-image]`, { timeout: 20_000 })
 
-  const seen = await page.evaluate(() => {
+  const seen = await page.evaluate((DRAWER) => {
     const rect = (el) => el.getBoundingClientRect()
+    const all = (sel) => [...document.querySelectorAll(`${DRAWER} ${sel}`)]
     return {
-      bubbles: [...document.querySelectorAll(".bg-user-bubble")].map((b) => b.textContent),
-      images: [...document.querySelectorAll("img[data-local-image]")].map((i) => ({ path: i.dataset.localPath, w: i.naturalWidth })),
-      chips: [...document.querySelectorAll(".local-file-action")].map((b) => ({ path: b.dataset.localPath, top: Math.round(rect(b).top), right: Math.round(rect(b).right) })),
-      bubbleRights: [...document.querySelectorAll(".bg-user-bubble")].map((b) => Math.round(rect(b).right)),
-      imageRights: [...document.querySelectorAll("img[data-local-image]")].map((i) => Math.round(rect(i).right)),
+      bubbles: all(".bg-user-bubble").map((b) => b.textContent),
+      images: all("img[data-local-image]").map((i) => ({ path: i.dataset.localPath, w: i.naturalWidth })),
+      chips: all(".local-file-action").map((b) => ({ path: b.dataset.localPath, top: Math.round(rect(b).top), right: Math.round(rect(b).right) })),
+      bubbleRights: all(".bg-user-bubble").map((b) => Math.round(rect(b).right)),
+      // The FRAME's edge, not the <img>'s. Every rendered image sits in ImageFrame (2026-08-02, 8c3eeb03):
+      // a 1px `frizz-bash` border around a p-1.5 mat, the picture centered inside it. The frame is the
+      // visible object that lines up with the bubble; the <img> sits 7px inside it by design.
+      imageRights: all("img[data-local-image]").map((i) => Math.round(rect(i.closest("figure") ?? i).right)),
     }
-  })
+  }, DRAWER)
 
   // Three of the five user messages carry the screenshot, and each one served REAL bytes.
   check(seen.images.length === 3, "three attached images render inline", `saw ${seen.images.length}`)
