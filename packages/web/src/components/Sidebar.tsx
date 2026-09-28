@@ -127,6 +127,7 @@ const CommandRow = memo(function CommandRow({ t, active, open = false, onQueueNa
       data-sidebar-item={t.id}
       data-command-row={command.state}
       data-sidebar-open={open || undefined}
+      data-xq-thread-row
       data-xq-rail-row={cardKey}
       className={`group relative flex min-w-0 items-start rounded-md transition-[color,opacity] ${rowWashClass(open)} ${done ? "sidebar-row-dim" : ""}`}
     >
@@ -310,6 +311,8 @@ export const ThreadRow = memo(function ThreadRow({
     <div
       data-sidebar-item={t.id}
       data-sidebar-open={open || undefined}
+      // Every thread row is a crossing in the gutter's cord, card or none (ThreadConnector).
+      data-xq-thread-row
       data-xq-rail-row={cardKey}
       className={`group relative flex min-w-0 items-start rounded-md transition-[color,opacity] ${rowWashClass(open)} ${legacy ? "opacity-80" : dim ? "sidebar-row-dim" : ""}`}
     >
