@@ -49,7 +49,7 @@ import { GHOST_LABEL, stableQueue, type QueueSlot } from "../lib/stableQueue.ts"
 import { actedOnHere } from "../lib/humanActs.ts"
 import { useSteeredAt } from "../lib/steering.ts"
 import { glideTo, useViewportLock } from "../lib/viewportLock.ts"
-import { registerQueueCursor } from "../lib/keyboardRuntime.ts"
+import { registerQueueCursor, releaseAutoOpened } from "../lib/keyboardRuntime.ts"
 import { PROJECT_STEP_CHORDS, detectPlatform, formatChord, parseChord } from "../lib/keybindings.ts"
 import { AllQueuesCard, ProjectChip, useOpenThreadInPlace } from "./AllQueuesCard.tsx"
 import { CommandQueueCard } from "./CommandQueueCard.tsx"
@@ -784,6 +784,9 @@ function useStacked(): boolean {
  */
 function useScrollToCard(): (key: string) => number | null {
   return useCallback((key: string) => {
+    // Before measuring: a card a key opened, and this row leaves, closes first, and the glide lands on
+    // where the card is once it has.
+    releaseAutoOpened(key)
     const slot = document.querySelector<HTMLElement>(`[data-xq-card="${CSS.escape(key)}"]`)
     if (!slot) return null
     // Read again when the glide ends: a card that arrived or left above it meanwhile moved it.
@@ -875,6 +878,7 @@ function useQueueKeys(activeKey: string | null, scrollToCard: (key: string) => n
       )
       const key = slot?.dataset.xqCard
       if (!key) return
+      releaseAutoOpened(key)
       landing.current = { key, y: window.scrollY, until: 0 }
       setRinged(key)
     }
