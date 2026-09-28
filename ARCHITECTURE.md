@@ -179,13 +179,13 @@ Frizz used to run ONE SERVER PER PROJECT, each on its own port, so every URL was
 
 | URL | renders |
 | --- | --- |
-| `/` | picks a project and redirects to `/all/<slug>`: `?focus=<slug>` (the launcher's landing URL), else the operator's last pick in this browser, else the most recently opened open project (`lib/crossProject.ts`); a welcome page (add a project) when there is none |
-| `/all/<slug>` | the cross-project page, FOCUSED on `<slug>` |
-| `/all/<slug>/thread/<t>` | the same page with `<t>`'s drawer open IN PLACE |
+| `/` | the cross-project page, FOCUSED on a project the address does not name: `?focus=<slug>` (the launcher's landing URL, remembered as the pick and dropped from the address), else the operator's last pick in this browser, else the most recently opened open project (`lib/crossProject.ts`); a welcome page (add a project) when there is none |
+| `/all/<slug>` | an old address of the page: redirects to `/?focus=<slug>` |
+| `/all/<slug>/thread/<t>` | the same page with `<t>`'s drawer open IN PLACE, focused on `<slug>` while it is open |
 | `/project/<slug>/…` | that project's board |
 | `/projects`, `/queues`, `/all` | legacy / bare — redirect to `/` (`/projects` keeps its query: `?add`, `?unknown`) |
 
-**The cross-project page's FOCUS is the page project.** `base-path.ts` answers `/all/<slug>` exactly as it answers `/project/<slug>` — same API base, same live feed, same cache scope — so the board's whole drawer stack, prompt box, router sync and notifications work there unchanged for the focused project, and only `basePath` keeps the mode (a URL built on one page stays in that page's mode). Opening ANOTHER project's thread moves the focus: it navigates to `/all/<other>/thread/<t>`, the route resets the store and rebinds the feed, and `<App/>` is keyed by a constant so the page itself survives. The prompt box follows the focus, so the page tells the operator's PICK (a project they chose: the prompt box's picker, a project in the rail) from a focus a drawer caused, and returns to the pick when the last drawer closes (`useReturnToPick`). Choosing a project to LOOK AT — its name in the list, a lane's header, a rail square, the status row's filter — opens its project view; reading one of its threads opens in place.
+**The cross-project page's FOCUS is the page project, and at `/` it is not in the address** — where a new thread goes is the prompt box's setting (its project pill, beside the model), not a route (maintainer 2026-09-28). The route (`routes.tsx CrossProjectPage`) resolves the pick and hands it to `base-path.ts` with `setHomeFocus`, which then answers `/` as it answers `/all/<focus>`, and `/all/<slug>/…` exactly as it answers `/project/<slug>` — same API base, same live feed, same cache scope — so the board's whole drawer stack, prompt box, router sync and notifications work there unchanged for the focused project, and only `basePath` keeps the mode (a URL built on one page stays in that page's mode). Opening ANOTHER project's thread moves the focus: it navigates to `/all/<other>/thread/<t>`, the route resets the store and rebinds the feed, and `<App/>` is keyed by a constant so the page itself survives. The prompt box follows the focus, so the page tells the operator's PICK (the project chosen in the prompt box's picker) from a focus a drawer caused: closing the last drawer goes to `/`, which is focused on the pick. Choosing a project to LOOK AT — its name in the list, a lane's header, a rail square, the status row's filter — opens its project view; reading one of its threads opens in place.
 
 **Showing one project IS its project view — there is no in-place narrowing** (maintainer 2026-09-28: "the core UI should adapt and show more info when it is filtered to a single project which should be easy to access and go back to the main board from with a single click"). Until then a project's name narrowed Everything in place (`narrowCrossProject`), which showed LESS than a project view — no Snoozed, no Done, no terminal — under a second concept nobody could find the edges of. Now the status row's right end is the filter in both modes (`components/ProjectFilter.tsx`): on Everything, "⧩ Everything ▾" opens a menu of Everything and every project with its Ready count, and a project opens its view; in a project view it is a held pill — filter glyph, square, owner/repo, ✕ — whose ✕ (like ∞) returns to Everything focused on that project, whose menu switches to any other project, and which carries "Open on GitHub". A project's icon, rename and delete are its "…" menu (`components/ProjectActions.tsx`). This page absorbed the project grid (`/projects`) on 2026-09-24: adding a project is the list's last row (and the rail's +), both through the one dialog `store.addProject` opens, and a machine with no usable project gets the welcome page at `/`.
 
@@ -194,7 +194,7 @@ Frizz used to run ONE SERVER PER PROJECT, each on its own port, so every URL was
 | helper | answers |
 | --- | --- |
 | `projectSlug(path)` | the slug this page is showing, or `undefined` for the launching project |
-| `basePath(path)` | `/project/<slug>` or `/all/<slug>` (the MODE is kept), or `""` when unprefixed |
+| `basePath(path)` | `/project/<slug>` or `/all/<slug>` (the MODE is kept; `/` answers `/all/<focus>`), or `""` when unprefixed |
 | `innerPath(path)` | the path with the prefix removed — what the ROUTER reasons about |
 | `outerPath(inner)` | an inner path put back in ADDRESS-BAR terms |
 | `apiBase(path)` | `/_frizz/<slug>`, or `/_frizz` unprefixed |
@@ -311,7 +311,9 @@ What it adds over a tab is only what a browser gives a tab free — external lin
 Edit menu, back/forward, a context menu, window state — plus one preload bridge (`frizzDesktop`), whose
 only web-side caller is the notification click in `board-stream.ts`, since `window.focus()` cannot
 raise an Electron window. `electron` is its one dependency; electron-builder is fetched per
-`desktop:dist` run, never installed.
+`desktop:dist` run, never installed. [`desktop.yml`](.github/workflows/desktop.yml) publishes unsigned
+installers to the GitHub release `desktop-v<version>` from `release`, each installed and launched on its
+own OS first.
 
 ### Running against a repo outside this monorepo
 

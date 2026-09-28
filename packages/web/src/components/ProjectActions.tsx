@@ -15,8 +15,7 @@ import { Link, useNavigate } from "react-router"
 import { useSnapshot } from "valtio"
 import { PROJECT_ICON_EXTENSIONS, slugify, type ProjectCard } from "@frizz/shared"
 import { rpc } from "../api/rpc.ts"
-import { crossProjectHref, isCrossProjectPath, projectHref, projectSlug } from "../lib/base-path.ts"
-import { CROSS_PROJECT_PICK_STATE } from "../lib/crossProject.ts"
+import { everythingHref, isCrossProjectPath, projectHref, projectSlug } from "../lib/base-path.ts"
 import { showToast, store } from "../store.ts"
 import { Dialog } from "./ui/Dialog.tsx"
 import { ProjectSquare } from "./ProjectRail.tsx"
@@ -194,7 +193,7 @@ function RenameProjectDialog({
       onClose()
       // The page it was renamed from is addressed by the OLD slug, which no longer names anything.
       if (projectSlug() === project.slug && updated.slug !== project.slug) {
-        navigate(crossProjectHref(encodeURIComponent(updated.slug)), { replace: true, state: CROSS_PROJECT_PICK_STATE })
+        navigate(isCrossProjectPath() ? everythingHref(encodeURIComponent(updated.slug)) : projectHref(encodeURIComponent(updated.slug)), { replace: true })
       }
     },
   })
@@ -622,8 +621,7 @@ export function useAddProject(): { start: () => void; pending: boolean } {
 /**
  * Adding a project is only ever a step towards working in it, so it lands there — in the mode the operator
  * is in. On a board, that project's board. Anywhere else (Everything, or the welcome page of a machine
- * with nothing on it), Everything aimed at it: a PICK, or the page hands the focus straight back to the
- * previous one (AllQueues.tsx useReturnToPick). `navigate`, not location.assign: the rail must not be torn down on the way.
+ * with nothing on it), Everything with its prompt box aimed at it (`?focus=`, a PICK — routes.tsx useHomeFocus). `navigate`, not location.assign: the rail must not be torn down on the way.
  */
 function useOpenAddedProject(): (project: { id: string; slug: string }) => void {
   const navigate = useNavigate()
@@ -632,7 +630,7 @@ function useOpenAddedProject(): (project: { id: string; slug: string }) => void 
     void queryClient.invalidateQueries({ queryKey: ["projectsList"] })
     const slug = encodeURIComponent(project.slug)
     if (projectSlug() && !isCrossProjectPath()) return void navigate(projectHref(slug))
-    navigate(crossProjectHref(slug), { state: CROSS_PROJECT_PICK_STATE })
+    navigate(everythingHref(slug))
   }
 }
 

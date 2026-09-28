@@ -30,7 +30,7 @@ import { hintGloss } from "../lib/awaitingPresentation.ts"
 import { projectIdentity } from "./Sidebar.tsx"
 import { QuotaChips } from "./QuotaBar.tsx"
 import { StatusListView } from "./StatusListView.tsx"
-import { crossProjectHref } from "../lib/base-path.ts"
+import { everythingHref } from "../lib/base-path.ts"
 
 // THE PHONE'S BOARD — a nav bar, ONE list, a tab bar and a floating +.
 //
@@ -575,7 +575,7 @@ export function MobileBoard() {
               label that fits: the title is centred inside an 86px inset, and "‹ Everything" ran 125px —
               a verified title like `colinhacks/frizz` (~144px of mono) rode over it at 320-390px. */}
           <a
-            href={board?.projectSlug ? crossProjectHref(board.projectSlug) : "/"}
+            href={everythingHref(board?.projectSlug)}
             aria-label="Everything"
             title="Everything"
             className="-ml-1 flex h-[44px] items-center gap-0.5 pl-1 pr-2 text-fg/85"

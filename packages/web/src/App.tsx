@@ -77,7 +77,7 @@ function openDispatch(mode: DispatchMode): void {
  * WHICH PAGE THIS SHELL IS HOSTING. A project's BOARD (single-project mode) and the CROSS-PROJECT page
  * share everything here except the standing surfaces: the drawer stack, the modals, the palette, the
  * restart overlay, the keyboard, the router sync and the board seed are the page project's either way —
- * on the cross-project page the page project is its FOCUS (routes.tsx CrossProjectRoute), which is what
+ * on the cross-project page the page project is its FOCUS (routes.tsx CrossProjectPage), which is what
  * lets a thread of any project open in place there with the board's own drawers.
  */
 export type AppMode = "board" | "cross-project"

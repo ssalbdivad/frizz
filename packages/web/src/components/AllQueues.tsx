@@ -1,5 +1,5 @@
 // THE CROSS-PROJECT PAGE ("Everything") — every project's queue on one page, and the default mode: `/`
-// lands here, focused on a project (`/all/<slug>`; see routes.tsx CrossProjectRoute).
+// lands here, focused on a project the address does not name (see routes.tsx CrossProjectPage).
 //
 // It is the board, one level up, and it is laid out as one. The board is a floating sidebar beside a
 // 720px queue; so is this. The board's sidebar lists a project's threads in bands (Queue, Running,
@@ -9,10 +9,12 @@
 // cards in the order its own board would show them.
 //
 // NOTHING HERE THROWS THE OPERATOR INTO A PROJECT'S BOARD (single-project mode) except a door that says
-// so. The page has a FOCUS — one project, named by the URL — and the focus is the page project: the
-// prompt box at the top of the column dispatches into it, and a thread of it opens in the board's own
-// drawer, in place. Opening a thread of ANOTHER project moves the focus there (useOpenThreadInPlace), so
-// every thread on the page is one click from its full transcript without leaving the page.
+// so. The page has a FOCUS — one project — and the focus is the page project: the prompt box at the top
+// of the column dispatches into it, and a thread of it opens in the board's own drawer, in place. At `/`
+// the focus is the box's own choice (the PICK, chosen in its bottom strip); opening a thread of ANOTHER
+// project moves it to that project for as long as the drawer is open (`/all/<slug>/thread/<t>`,
+// useOpenThreadInPlace), so every thread on the page is one click from its full transcript without
+// leaving the page, and closing the drawer returns home to the pick.
 //
 // THE DRILL-DOWN, three steps, each one click, none of them leaving:
 //   1. the card — the handoff's opening lines, the questions, a reply box, Snooze and Mark as done;
@@ -28,14 +30,14 @@
 import { Fragment, useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore, type CSSProperties, type ReactNode } from "react"
 import { useQuery, useQueryClient } from "@tanstack/react-query"
 import { ArrowUpRight, Check, ChevronDown, Ellipsis, Inbox, Plus, TerminalSquare } from "lucide-react"
-import { Link, useLocation, useNavigate, useNavigationType } from "react-router"
+import { Link, useLocation, useNavigate } from "react-router"
 import { useSnapshot } from "valtio"
 import type { ProjectQueue, ThreadView } from "@frizz/shared"
 import { rpc } from "../api/rpc.ts"
 import { displayTitle } from "../groups.ts"
 import { isBusy, liveQueue, overlayQueues, queuesProjects, threadKey, type QueuesProject } from "../lib/allQueues.ts"
 import { crossProjectHref, innerPath, projectHref, projectSlug } from "../lib/base-path.ts"
-import { CROSS_PROJECT_PICK_STATE, rememberedCrossProjectFocus, useCrossProjectPick } from "../lib/crossProject.ts"
+import { rememberCrossProjectFocus } from "../lib/crossProject.ts"
 import { draftKey, draftStore } from "../lib/drafts.ts"
 import { QUEUE_CARD_VIEWPORT_TOP, slugsInThreadDrawers, store } from "../store.ts"
 import { useBoard } from "../hooks.ts"
@@ -79,7 +81,7 @@ export function AllQueuesPage() {
     refetchInterval: POLL_MS,
   })
   const direction = useSnapshot(prefs).queueOrder
-  // The FOCUS — the page project (routes.tsx CrossProjectRoute). Its board is live in the store, so it
+  // The FOCUS — the page project (routes.tsx CrossProjectPage). Its board is live in the store, so it
   // is drawn from that rather than from the poll, and so is the project the focus just LEFT, until the
   // poll has caught up with what was done there (useDepartedQueue).
   const focus = projectSlug(useLocation().pathname)
@@ -89,7 +91,6 @@ export function AllQueuesPage() {
   const departed = useDepartedQueue(live, queues.dataUpdatedAt)
   const base = useMemo(() => queuesProjects(cards.data, queues.data, direction), [cards.data, queues.data, direction])
   const projects = useMemo(() => overlayQueues(base, [live, departed], direction), [base, live, departed, direction])
-  useReturnToPick(projects, focus)
   const pickProject = usePickProject()
   // Set by a choice in the picker, so the prompt box it just re-aimed takes the keyboard when it lands.
   const [focusComposerFor, setFocusComposerFor] = useState<string | null>(null)
@@ -232,8 +233,8 @@ function ViewFilter({ projects, hidden }: { projects: QueuesProject[]; hidden: (
 /**
  * WHICH PROJECT A NEW THREAD GOES TO — the first pill in the prompt box's bottom strip, beside the model
  * (NewThreadModal.tsx DispatchForm `target`), drawn as that pill is: a setting of the thread about to
- * start, not a view. Choosing one moves the page's focus there (`/all/<slug>`), which is what the box
- * dispatches into.
+ * start, not a view. Choosing one makes it the PICK (lib/crossProject.ts), which `/` is focused on and
+ * the box dispatches into — remembered, never in the address.
  */
 function ProjectPicker({ projects, focus, onPick }: { projects: QueuesProject[]; focus: string | undefined; onPick: (project: QueuesProject) => void }) {
   const current = projects.find((project) => project.slug === focus)
@@ -252,9 +253,11 @@ function ProjectPicker({ projects, focus, onPick }: { projects: QueuesProject[];
           // row of settings for the next thread.
           className={`group inline-flex min-w-0 max-w-[min(14rem,45%)] cursor-pointer items-center gap-[5px] rounded-md border border-border/50 bg-transparent px-2 py-1 text-left text-muted outline-none transition-colors hover:border-border hover:bg-panel-2 hover:text-fg focus-visible:ring-1 focus-visible:ring-focus-ink-60 data-[state=open]:border-border data-[state=open]:bg-panel-2 ${PROMPT_CONTROL_TYPOGRAPHY_CLASS}`}
         >
+          {/* Ink gaps (sans, scripts/ink-gaps.mjs): square→name 5.00px; name→chevron 6.00px against the model
+              pill's own 6.12px, which `-ml-[3px]` buys back from the chevron's dead box. */}
           {current && <ProjectSquare project={current.card ?? fallbackCard(current)} size={12} />}
           <span data-xq-picker-name className="min-w-0 flex-1 truncate">{name}</span>
-          <ChevronDown size={13} aria-hidden className="-ml-[2px] shrink-0 text-fg/65 transition-transform group-data-[state=open]:rotate-180" />
+          <ChevronDown size={13} aria-hidden className="-ml-[3px] shrink-0 text-fg/65 transition-transform group-data-[state=open]:rotate-180" />
         </button>
       </MenuTrigger>
       <MenuContent align="start">
@@ -275,8 +278,8 @@ function ProjectPicker({ projects, focus, onPick }: { projects: QueuesProject[];
 }
 
 /**
- * CHOOSE a project to work in: the picker, a project's name in the rail, a quiet row. Remembered as the
- * pick (lib/crossProject.ts) by the route, which the navigation's state tells it was a choice.
+ * CHOOSE the project a new thread goes to, in the prompt box's picker. Remembered as the pick
+ * (lib/crossProject.ts), which `/` is focused on.
  *
  * What was typed in the prompt box goes WITH the choice. The box is one box whose target just changed,
  * and the commonest reason to change it is noticing, mid-prompt, that it pointed at the wrong project —
@@ -289,7 +292,10 @@ function usePickProject(): (project: QueuesProject) => void {
     (project: QueuesProject) => {
       carryDraft(draftKey.dispatch, store.board?.projectDir, project.projectDir)
       carryDraft(draftKey.command, store.board?.projectDir, project.projectDir)
-      navigate(crossProjectHref(encodeURIComponent(project.slug)), { replace: true, state: CROSS_PROJECT_PICK_STATE })
+      rememberCrossProjectFocus(project.id)
+      // A drawer open on the page has it focused on the drawer's project, and the box follows the focus,
+      // so aiming the box closes the drawers: home, where the focus is the pick.
+      if (innerPath() !== "/") navigate("/", { replace: true })
     },
     [navigate],
   )
@@ -301,32 +307,6 @@ function carryDraft(key: (projectDir: string | undefined) => string, from: strin
   if (!text || draftStore.get(key(to))) return
   draftStore.set(key(to), text)
   draftStore.clear(key(from))
-}
-
-/**
- * Back to the PICK once nothing of another project is open.
- *
- * Opening another project's thread moves the focus to it — its drawer needs that project bound — and the
- * prompt box follows the focus. Left there, closing the drawer left the box aimed at a project the
- * operator only READ, and the next prompt went there. So when the last drawer is gone (all the way
- * gone: a sheet still sliding out is still open) the focus returns to the project they chose.
- *
- * The pick is read FRESH, not from this render: the route records a pick in a layout effect
- * (routes.tsx useRememberPick), which runs after this render and before this effect.
- */
-function useReturnToPick(projects: QueuesProject[], focus: string | undefined) {
-  const pickId = useCrossProjectPick()
-  const snap = useSnapshot(store)
-  const navigate = useNavigate()
-  const { pathname } = useLocation()
-  const settled = snap.drawers.length === 0 && snap.routeThreadSlug === null && innerPath(pathname) === "/"
-  useEffect(() => {
-    if (!settled) return
-    const id = rememberedCrossProjectFocus()
-    const pick = projects.find((project) => project.id === id && !project.stale)
-    if (!pick || pick.slug === focus) return
-    navigate(crossProjectHref(encodeURIComponent(pick.slug)), { replace: true })
-  }, [settled, pickId, projects, focus, navigate])
 }
 
 /**

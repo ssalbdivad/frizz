@@ -16,12 +16,18 @@ import { FRIZZ_ROUTE_PREFIX } from "@frizz/shared"
 // `queueDestination` (lib/router.ts) instead.
 //
 // TWO PREFIXES NAME A PROJECT, and they differ only in MODE. `/project/<slug>` is that project's BOARD
-// (single-project mode). `/all/<slug>` is the CROSS-PROJECT page — every project's queue on one page —
-// FOCUSED on `<slug>`: the project its prompt box dispatches into and whose thread drawer is open. The
-// focused project IS the page project, so every helper below answers the same for both prefixes (the
-// same API base, the same live feed, the same cache scope), which is what lets the board's whole drawer
-// stack and composer work on the cross-project page unchanged. Only `basePath` keeps the mode, so a URL
-// built on one page stays in that page's mode.
+// (single-project mode). `/all/<slug>/thread/<t>` is a thread drawer open on the CROSS-PROJECT page —
+// every project's queue on one page, which itself lives at bare `/`. The page is always FOCUSED on one
+// project — the one its prompt box dispatches into — and the focus IS the page project, so every helper
+// below answers the same for both modes (the same API base, the same live feed, the same cache scope),
+// which is what lets the board's whole drawer stack and composer work on the cross-project page
+// unchanged. Only `basePath` keeps the mode, so a URL built on one page stays in that page's mode.
+//
+// AT `/` THE FOCUS IS NOT IN THE URL. Where a new thread goes is a setting of the prompt box, like its
+// model, not an address (maintainer 2026-09-28: "should not be reflected as a top-level url route like
+// this: /all/frizz"). The route resolves it — the operator's remembered pick (lib/crossProject.ts) —
+// and hands it here with `setHomeFocus`, so `/` answers as `/all/<focus>` did. A drawer's URL still
+// names its thread's project, because that is the thread's address, not the box's target.
 
 /**
  * The SPA's own top-level route names.
@@ -67,26 +73,55 @@ export const PROJECT_PREFIX = `/${PROJECT_SEGMENT}`
 const CROSS_PROJECT_SEGMENT = "all"
 export const CROSS_PROJECT_PREFIX = `/${CROSS_PROJECT_SEGMENT}`
 
+let homeFocus: string | undefined
+
+/**
+ * The project the cross-project page at `/` is focused on — set by its route (routes.tsx
+ * CrossProjectPage) during render, before anything below it asks, and cleared when `/` has none to show.
+ */
+export function setHomeFocus(slug: string | undefined): void {
+  homeFocus = slug
+}
+
+function isHome(path: string): boolean {
+  return path === "/" || path === ""
+}
+
 /** The slug this page is showing, or `undefined` for the unprefixed launching project. */
 export function projectSlug(pathname?: string): string | undefined {
-  const [, first, second] = here(pathname).split("/")
+  const path = here(pathname)
+  if (isHome(path)) return homeFocus
+  const [, first, second] = path.split("/")
   return (first === PROJECT_SEGMENT || first === CROSS_PROJECT_SEGMENT) && second ? second : undefined
 }
 
-/** Is this the cross-project page (`/all/<slug>…`) rather than a project's board? */
+/** Is this the cross-project page (`/`, or `/all/<slug>…` under a drawer) rather than a project's board? */
 export function isCrossProjectPath(pathname?: string): boolean {
-  const [, first, second] = here(pathname).split("/")
+  const path = here(pathname)
+  if (isHome(path)) return homeFocus !== undefined
+  const [, first, second] = path.split("/")
   return first === CROSS_PROJECT_SEGMENT && Boolean(second)
 }
 
-/** A project's BOARD — the one place that knows the shape. */
+/** A project's PROJECT VIEW (`/project/<slug>`) — the one place that knows the shape. */
 export function projectHref(slug: string): string {
   return `${PROJECT_PREFIX}/${slug}`
 }
 
-/** The cross-project page focused on a project. */
+/**
+ * The cross-project page's prefix for a project — only ever with a path after it, a thread's
+ * (`/all/<slug>/thread/<t>`). The page itself is `/`: see `everythingHref`.
+ */
 export function crossProjectHref(slug: string): string {
   return `${CROSS_PROJECT_PREFIX}/${slug}`
+}
+
+/**
+ * The cross-project page, `/` — optionally aiming its prompt box at a project on the way in. `?focus=`
+ * is read once by the route, remembered as the pick, and dropped from the address (routes.tsx).
+ */
+export function everythingHref(focusSlug?: string): string {
+  return focusSlug ? `/?focus=${focusSlug}` : "/"
 }
 
 /**
@@ -114,9 +149,15 @@ export function innerPath(pathname?: string): string {
   return path.slice(base.length) || "/"
 }
 
-/** An inner path put back in terms the address bar uses. */
+/**
+ * An inner path put back in terms the address bar uses. The cross-project page's own root is `/`
+ * whichever project a drawer had it focused on: closing the last drawer goes home, where the focus is
+ * the pick again.
+ */
 export function outerPath(inner: string, pathname?: string): string {
-  const base = basePath(here(pathname))
+  const path = here(pathname)
+  if (inner === "/" && isCrossProjectPath(path)) return "/"
+  const base = basePath(path)
   return base ? `${base}${inner === "/" ? "" : inner}` || "/" : inner
 }
 

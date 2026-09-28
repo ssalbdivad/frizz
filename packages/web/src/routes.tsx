@@ -1,5 +1,5 @@
-import { useEffect, useLayoutEffect, useRef, useState } from "react"
-import { Navigate, Outlet, createBrowserRouter, useLocation, useNavigate, useNavigationType, useParams } from "react-router"
+import { useEffect, useLayoutEffect, useState } from "react"
+import { Navigate, Outlet, createBrowserRouter, useLocation, useNavigate, useParams } from "react-router"
 import { useQuery } from "@tanstack/react-query"
 import { App } from "./App.tsx"
 import { ProjectRail, RAIL_INSET_CLASS } from "./components/ProjectRail.tsx"
@@ -10,8 +10,9 @@ import { GithubHovercards } from "./components/GithubHovercards.tsx"
 import { Toaster } from "./components/Toaster.tsx"
 import { KeyboardLayer } from "./components/KeyboardShortcuts.tsx"
 import { applyLocation, registerNavigate } from "./lib/router.ts"
-import { crossProjectHref } from "./lib/base-path.ts"
-import { CROSS_PROJECT_PICK_STATE, defaultCrossProjectFocus, isCrossProjectPick, rememberCrossProjectFocus, rememberedCrossProjectFocus } from "./lib/crossProject.ts"
+import { everythingHref, setHomeFocus } from "./lib/base-path.ts"
+import { defaultCrossProjectFocus, rememberCrossProjectFocus, useCrossProjectPick } from "./lib/crossProject.ts"
+import type { ProjectCard } from "@frizz/shared"
 import { rpc } from "./api/rpc.ts"
 import { feedIsBoundTo, rebindProject } from "./api/socket.ts"
 import { noteStandaloneThreadRender, primeFullscreenReturn, resetProjectState, showToast, store } from "./store.ts"
@@ -44,7 +45,7 @@ import { useProjectRailVisible } from "./lib/projectRail.ts"
 
 /** The one place that knows the URL shapes, so a route and a link cannot disagree. */
 export const PROJECT_PATH = "/project/:slug"
-/** The cross-project page, focused on one project (base-path.ts `crossProjectHref`). */
+/** A thread drawer's prefix on the cross-project page (base-path.ts `crossProjectHref`); the page is `/`. */
 export const CROSS_PROJECT_PATH = "/all/:slug"
 
 function RootLayout() {
@@ -129,63 +130,67 @@ function BoardRoute() {
 }
 
 /**
- * THE CROSS-PROJECT PAGE — every project's queue on one page, and the default mode — FOCUSED on the
- * project the URL names (`/all/<slug>`).
+ * THE CROSS-PROJECT PAGE — every project's queue on one page, and the default mode. At `/` it is focused
+ * on the project the operator last chose for a new thread (the PICK, lib/crossProject.ts), which the
+ * address does not name: where a new thread goes is the prompt box's setting, not a place. With a
+ * thread drawer open it is `/all/<slug>/thread/<t>` — the thread's own address, focused on its project.
  *
  * The focus IS the page project: it binds the live feed, the store and every page-relative helper
- * exactly as a board does (base-path.ts answers `/all/<slug>` like `/project/<slug>`), so the prompt box
- * dispatches into it and a thread drawer of it opens in place with the board's whole drawer stack. The
- * page's rail and lanes are the other projects' — they read machine-wide data and name their project on
- * every call, as they always have (AllQueues.tsx).
+ * exactly as a board does (base-path.ts answers `/` through `setHomeFocus`, and `/all/<slug>/…` like
+ * `/project/<slug>`), so the prompt box dispatches into it and a thread drawer of it opens in place with
+ * the board's whole drawer stack. The page's rail and lanes are the other projects' — they read
+ * machine-wide data and name their project on every call, as they always have (AllQueues.tsx).
  *
- * `<App/>` is keyed by a CONSTANT here, not by slug as a board is: moving the focus — opening another
- * project's thread, choosing another project for a new one — must not remount the page under the
- * operator. What is per-project (the store's board and drawer stack) is reset by the binding instead.
+ * ONE component for both addresses, at the same depth, so react-router keeps the one instance mounted
+ * across a drawer opening or closing — the page must not remount under the operator. `<App/>` is keyed
+ * by a CONSTANT for the same reason, where a board is keyed by slug: what is per-project (the store's
+ * board and drawer stack) is reset by the binding instead.
+ *
+ * With no project to focus — an empty machine, or one whose every directory is gone — there is no page,
+ * so `/` renders the welcome instead (ProjectActions.tsx), the one place a project is added from.
  */
-function CrossProjectRoute() {
-  const { slug, thread } = useParams()
-  const location = useLocation()
+function CrossProjectPage() {
+  const { slug: drawerSlug, thread } = useParams()
+  const home = useHomeFocus(drawerSlug === undefined)
+  const slug = drawerSlug ?? (home.kind === "focus" ? home.slug : undefined)
+  // Render-phase, before anything below asks base-path which project `/` is.
+  if (drawerSlug === undefined) setHomeFocus(slug)
   useProjectBinding(slug)
   useRouteToStore()
   useState(() => primeFullscreenReturn(thread))
-  useRememberPick(slug, thread, location.state, location.key)
+  if (drawerSlug === undefined && home.kind === "error") {
+    return (
+      <div className="flex min-h-screen items-center justify-center bg-bg px-6 text-center text-[13px] text-muted">
+        Could not read the project registry: {home.error}
+      </div>
+    )
+  }
+  if (drawerSlug === undefined && home.kind === "loading") {
+    return (
+      <div className="flex min-h-screen items-center justify-center bg-bg">
+        <span className="block h-5 w-5 animate-spin rounded-full border-2 border-muted/50 border-t-transparent" />
+      </div>
+    )
+  }
+  if (drawerSlug === undefined && home.kind === "welcome") return <Welcome projects={home.projects} />
   return <App mode="cross-project" key="cross-project" />
 }
 
-/**
- * Remember the focus as the operator's PICK (lib/crossProject.ts) — only when they chose it: arriving on
- * the page focused there with no thread open, a navigation that says it was a choice, or Back/Forward to
- * an entry with no thread open (whatever put that entry there, going back to it IS the choice — and not
- * remembering it had the page bounce straight off it to the previous pick). Opening another project's
- * thread moves the focus too, and must not be remembered as one.
- *
- * A LAYOUT effect so it lands before the page's own effects in the same commit: the page returns the
- * focus to the pick when nothing is open (AllQueues.tsx useReturnToPick), and on a landing that asked
- * for a project, reading the previous pick would bounce straight off it.
- */
-function useRememberPick(slug: string | undefined, thread: string | undefined, state: unknown, key: string) {
-  const cards = useQuery({ queryKey: ["projectsList"], queryFn: () => rpc.projectsList() })
-  const focusId = cards.data?.find((card) => card.slug === slug)?.id
-  const landing = useRef(thread ? null : slug)
-  const travelled = useNavigationType() === "POP" && !thread
-  useLayoutEffect(() => {
-    if (!focusId) return
-    if (landing.current !== slug && !isCrossProjectPick(state) && !travelled) return
-    landing.current = null
-    rememberCrossProjectFocus(focusId)
-    // `key`, not `state`: a second pick of the same project is a new navigation with an equal state.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [focusId, key])
-}
+type HomeFocus =
+  | { kind: "focus"; slug: string }
+  | { kind: "loading" }
+  | { kind: "error"; error: string }
+  | { kind: "welcome"; projects: ProjectCard[] }
 
 /**
- * `/` — the home page, which is the cross-project page ("Everything"). That page is always focused on
- * SOME project, so this only picks one and goes there (lib/crossProject.ts). It lands on EVERYTHING, not
- * narrowed to the focus: the focus only aims the prompt box.
+ * Which project `/` is focused on: the operator's PICK if it is still usable, else the project opened
+ * most recently (lib/crossProject.ts defaultCrossProjectFocus). Only asked at `/` — under a drawer the
+ * address names the project.
  *
- * `?focus=<slug>` is how the launcher names the project it was run in. It is a query on `/` rather than
- * `/all/<slug>` so a new launcher that joins an OLDER server — one whose page has no `/all` route —
- * still lands somewhere real (that page's `/`) instead of on the launching project's board.
+ * `?focus=<slug>` is how the launcher names the project it was run in, and how a board's door to
+ * Everything aims the box at the project it came from. It is a CHOICE, so it is remembered as the pick,
+ * and then dropped from the address. It is a query on `/` rather than a path so a new launcher that joins
+ * an OLDER server — one whose page has no such route — still lands somewhere real.
  *
  * Two more arrive from outside and are answered HERE, on the way through, since the page they meant —
  * the project grid, folded into this one on 2026-09-24 — is gone:
@@ -194,44 +199,38 @@ function useRememberPick(slug: string | undefined, thread: string | undefined, s
  *  - `?unknown=<slug>` is the SERVER saying it sent a page here rather than let it hang: a `/project/<x>`
  *    nobody has would render the app, 404 every call and sit on its boot spinner forever (index.ts
  *    `unknownProjectPage`). A URL that silently became the home page reads as Frizz having swallowed it.
- * Both are read once, at the first render, and never carried on: the redirect drops the query.
- *
- * With no project to focus — an empty machine, or one whose every directory is gone — there is no page to
- * go to, so this renders the welcome instead (ProjectActions.tsx), the one place a project is added from.
  */
-function HomeRoute() {
+function useHomeFocus(atHome: boolean): HomeFocus {
   const { search } = useLocation()
+  const navigate = useNavigate()
   const cards = useQuery({ queryKey: ["projectsList"], queryFn: () => rpc.projectsList() })
   // Which projects this server has open, so the landing prefers one that can take a thread. Shared with
   // the page itself (same key), so the page it lands on paints from this read.
   const queues = useQuery({ queryKey: ["projectsQueues"], queryFn: () => rpc.projectsQueues() })
-  const params = new URLSearchParams(search)
+  const pickId = useCrossProjectPick()
+  const asked = atHome ? new URLSearchParams(search) : null
   useState(() => {
-    const proposed = params.get("add")
+    const proposed = asked?.get("add")
     if (proposed) store.addProject = { proposed }
-    const unknown = params.get("unknown")
+    const unknown = asked?.get("unknown")
     if (unknown) showToast(`No project named ${unknown}`, { duration: 7000 })
   })
-  if (cards.error) {
-    return (
-      <div className="flex min-h-screen items-center justify-center bg-bg px-6 text-center text-[13px] text-muted">
-        Could not read the project registry: {String(cards.error)}
-      </div>
-    )
-  }
-  if (!cards.data || queues.isPending) {
-    return (
-      <div className="flex min-h-screen items-center justify-center bg-bg">
-        <span className="block h-5 w-5 animate-spin rounded-full border-2 border-muted/50 border-t-transparent" />
-      </div>
-    )
-  }
-  const asked = cards.data.find((card) => card.slug === params.get("focus") && !card.stale)
-  if (asked) return <Navigate to={crossProjectHref(encodeURIComponent(asked.slug))} state={CROSS_PROJECT_PICK_STATE} replace />
+  const focusParam = asked?.get("focus") ?? null
+  const askedCard = focusParam === null ? undefined : cards.data?.find((card) => card.slug === focusParam && !card.stale)
+  // A LAYOUT effect, so the address is clean before anything paints under it.
+  useLayoutEffect(() => {
+    if (!asked || !asked.toString() || !cards.data) return
+    if (askedCard) rememberCrossProjectFocus(askedCard.id)
+    navigate("/", { replace: true })
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [search, cards.data])
+  if (!atHome) return { kind: "loading" }
+  if (cards.error) return { kind: "error", error: String(cards.error) }
+  if (!cards.data || queues.isPending) return { kind: "loading" }
+  if (askedCard) return { kind: "focus", slug: askedCard.slug }
   const openIds = queues.data ? new Set(queues.data.map((queue) => queue.projectId)) : undefined
-  const focus = defaultCrossProjectFocus(cards.data, rememberedCrossProjectFocus(), openIds)
-  if (!focus) return <Welcome projects={cards.data} />
-  return <Navigate to={crossProjectHref(encodeURIComponent(focus))} replace />
+  const focus = defaultCrossProjectFocus(cards.data, pickId, openIds)
+  return focus ? { kind: "focus", slug: focus } : { kind: "welcome", projects: cards.data }
 }
 
 /** An old address of the home page: `/`, keeping the query (`?add=`, `?unknown=`) it may carry. */
@@ -240,10 +239,14 @@ function HomeRedirect() {
   return <Navigate to={`/${search}`} replace />
 }
 
-/** A path under a focus that names nothing the page has (`/all/<slug>/status/x`, a typo): the page itself. */
+/**
+ * `/all/<slug>` with no thread under it — the cross-project page's address until 2026-09-28, when the
+ * focus left the URL — and any path under it that names nothing the page has (`/all/<slug>/status/x`, a
+ * typo): the page itself, aimed at that project, as the address asked.
+ */
 function CrossProjectFallback() {
   const { slug } = useParams()
-  return <Navigate to={crossProjectHref(encodeURIComponent(slug!))} replace />
+  return <Navigate to={everythingHref(encodeURIComponent(slug!))} replace />
 }
 
 /**
@@ -309,13 +312,6 @@ const boardChildren = [
   { path: "status/:status", element: <BoardRoute /> },
 ]
 
-// The SAME element at the same depth for every cross-project URL, so react-router keeps the one
-// instance mounted across a focus change or a drawer opening — the page must not remount under you.
-const crossProjectChildren = [
-  { index: true, element: <CrossProjectRoute /> },
-  { path: "thread/:thread", element: <CrossProjectRoute /> },
-  { path: "*", element: <CrossProjectFallback /> },
-]
 
 export const router = createBrowserRouter([
   // The focused single-thread pages sit OUTSIDE the layout — they have no rail, and should not. They
@@ -327,10 +323,14 @@ export const router = createBrowserRouter([
   {
     element: <RootLayout />,
     children: [
-      { path: "/", element: <HomeRoute /> },
+      // The SAME element at the same depth for `/` and a drawer on it, so react-router keeps the one
+      // instance mounted across a drawer opening or closing — the page must not remount under you.
+      { path: "/", element: <CrossProjectPage /> },
+      { path: `${CROSS_PROJECT_PATH}/thread/:thread`, element: <CrossProjectPage /> },
+      { path: CROSS_PROJECT_PATH, element: <CrossProjectFallback /> },
+      { path: `${CROSS_PROJECT_PATH}/*`, element: <CrossProjectFallback /> },
       // The project grid's address for its last few hours (2026-09-24), before it folded into `/`.
       { path: "/projects", element: <HomeRedirect /> },
-      { path: CROSS_PROJECT_PATH, children: crossProjectChildren },
       // Declared, not left to the catch-all below — which would draw the launching project's board.
       // `/queues` was the cross-project page's address before it became the default at `/`.
       { path: "/queues", element: <Navigate to="/" replace /> },

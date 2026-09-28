@@ -11,6 +11,7 @@ import { AcpModelSelect } from "../components/AcpModelSelect.tsx"
 import { Select } from "../components/ui/Select.tsx"
 import { CLAUDE_DISPATCH_PERMISSION_OPTIONS, claudePermValue } from "../lib/options.ts"
 import { threadProfileControlState } from "../lib/threadProfile.ts"
+import { ownedByThisPage } from "../lib/projectOwnership.ts"
 
 // One control strip for every place a registered thread can be steered: the model/effort selector, and
 // — for a Claude thread — the Auto/Bypass permission picker beside it. This lives outside the component
@@ -47,7 +48,10 @@ export function useThreadComposerControls(slug: string, scopedThread?: ThreadVie
   const profiles = useQuery({
     queryKey: projectId ? ["ofProject", projectId, "threadProfileOptions", slug] : ["threadProfileOptions", slug],
     queryFn: () => api.threadProfileOptions({ slug }),
-    enabled: Boolean(thread && !thread.foreign && thread.kind === "session"),
+    // An unscoped control asks the PAGE's project, so only while the store's board is the page's: the
+    // cross-project page's focus moves the moment a drawer closes, and the sheet still sliding out asked
+    // the project it just left for a thread it does not have (a 500 per close).
+    enabled: Boolean(thread && !thread.foreign && thread.kind === "session" && (scopedThread || ownedByThisPage(snap.board?.projectSlug))),
     staleTime: 5_000,
   })
   const profile = useMutation({

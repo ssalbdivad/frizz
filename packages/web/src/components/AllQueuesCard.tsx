@@ -65,7 +65,7 @@ export function crossProjectThreadHref(project: Pick<QueuesProject, "slug">, slu
  * A thread of the focused project whose board is already in the store opens the way a board's rail row
  * opens one (`openThread`: the drawer animates in and the store writes the URL). Any other thread moves
  * the focus there by URL, which rebinds the page project and opens the drawer once its board lands
- * (routes.tsx CrossProjectRoute → store.resolveRoutedThread).
+ * (routes.tsx CrossProjectPage → store.resolveRoutedThread).
  */
 export function useOpenThreadInPlace(): (project: Pick<QueuesProject, "slug">, slug: string) => void {
   const navigate = useNavigate()

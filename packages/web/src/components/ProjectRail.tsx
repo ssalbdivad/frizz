@@ -9,7 +9,7 @@ import { rpc } from "../api/rpc.ts"
 import { queued } from "../groups.ts"
 import { asThreads } from "../hooks.ts"
 import { store } from "../store.ts"
-import { crossProjectHref, isCrossProjectPath, projectHref, projectSlug } from "../lib/base-path.ts"
+import { everythingHref, isCrossProjectPath, projectHref, projectSlug } from "../lib/base-path.ts"
 import { isPlainLeftClick } from "../lib/standaloneThreadRoute.ts"
 import { dropIndex, edgeScrollVelocity, moveItem, shiftFor } from "../lib/railReorder.ts"
 import { Tooltip } from "./Tooltip.tsx"
@@ -604,7 +604,7 @@ export function ProjectRail() {
           operator already was. */}
       <Tooltip side="right" label="Everything">
         <Link
-          to={current && !onQueues ? crossProjectHref(current) : "/"}
+          to={onQueues ? "/" : everythingHref(current)}
           aria-label="Everything"
           aria-current={onQueues ? "page" : undefined}
           className={`${RAIL_DOOR_CLASS} ${onQueues ? "bg-elevated text-fg" : ""}`}

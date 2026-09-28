@@ -86,7 +86,7 @@ test("opening a board from Everything re-points the live feed at the project the
           ?.getAttribute("data-project-identity-state") !== "loading", { timeout: 15_000 })
         .catch(() => assert.fail(`the board for ${slug} never resolved an identity`))
       await page.goBack({ waitUntil: "networkidle2" })
-      await page.waitForFunction(() => location.pathname.startsWith("/all/"))
+      await page.waitForFunction(() => location.pathname === "/")
       await page.waitForSelector("[data-xq-project-row]", { timeout: 15_000 })
     }
   } finally {

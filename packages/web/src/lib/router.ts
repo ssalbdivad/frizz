@@ -1,7 +1,7 @@
 import { subscribe } from "valtio"
 import { store, topRoutedSlug, closeDrawersById } from "../store.ts"
 import { ownedByThisPage } from "./projectOwnership.ts"
-import { innerPath, outerPath, projectHref } from "./base-path.ts"
+import { innerPath, isCrossProjectPath, outerPath, projectHref } from "./base-path.ts"
 import { parseStandaloneThreadPath } from "./standaloneThreadRoute.ts"
 
 // URL ⇄ state sync, SPA-style. Paths: `/` (the unified queue — the only page), `/thread/<slug>`
@@ -48,7 +48,8 @@ function decodeSegment(segment: string): string | null {
  */
 export function queueDestination(inner: string, slug = store.board?.projectSlug): string {
   const outer = outerPath(inner)
-  return outer === "/" && slug ? projectHref(slug) : outer
+  // On the cross-project page `/` IS the page (its focus is not in the address), not a board's queue.
+  return outer === "/" && slug && !isCrossProjectPath() ? projectHref(slug) : outer
 }
 
 export function applyPath(path: string): void {

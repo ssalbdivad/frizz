@@ -5,7 +5,7 @@ import { useQuery } from "@tanstack/react-query"
 import { rpc } from "../api/rpc.ts"
 import { isBusy, queuesProjects } from "../lib/allQueues.ts"
 import { store } from "../store.ts"
-import { crossProjectHref, projectHref } from "../lib/base-path.ts"
+import { everythingHref, projectHref } from "../lib/base-path.ts"
 import { isPlainLeftClick } from "../lib/standaloneThreadRoute.ts"
 import { useBoard } from "../hooks.ts"
 import { STATUS_ROW_ACTION, STATUS_ROW_ICON } from "../lib/statusRow.ts"
@@ -157,7 +157,7 @@ export function StatusRow({ crossProject = false, view }: { crossProject?: boole
           own, unlike the house it replaced: the infinity's stroke reaches one unit further out in lucide's
           24-unit box (x=1 against the house's x=2), which is that pixel already. */}
       <Link
-        to={crossProject ? "/" : board?.projectSlug ? crossProjectHref(board.projectSlug) : "/"}
+        to={crossProject ? "/" : everythingHref(board?.projectSlug)}
         title="Everything"
         aria-label="Everything"
         aria-current={crossProject ? "page" : undefined}
@@ -258,7 +258,7 @@ function ProjectViewFilter({ slug, label, githubRepo, children }: { slug: string
     .map((project) => ({ id: project.id, slug: project.slug, name: project.name, card: project.card!, ready: project.queued.length }))
   const current = slug ? items.find((item) => item.slug === slug) : undefined
   if (!slug || !current) return <>{children}</>
-  const toEverything = () => navigate(crossProjectHref(slug))
+  const toEverything = () => navigate(everythingHref(slug))
   return (
     <span className="ml-auto flex min-w-0 items-center" data-project-identity-state="filter">
       <ProjectFilter
