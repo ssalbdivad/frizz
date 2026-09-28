@@ -39,27 +39,20 @@ test("a fence the resting card states never reaches the card either", () => {
   // Every surface that owns a thread passes the flag for the LAST agent message only — the one whose
   // fence the resting card is about — so the memo boundary holds for every other row.
   const chat = source
-  const todos = readFileSync(new URL("./TodosView.tsx", import.meta.url), "utf8")
   assert.equal(chat.match(/restingCardShown=\{(?:row\.)?messageIndex === lastAgentIdx && restingShown\}/g)?.length, 2, "both thread-view columns pass it")
-  assert.equal(todos.match(/restingCardShown=\{globalIdx === lastAgentIdx && restingShown\}/g)?.length, 2, "both queue-card message paths pass it")
   // …and the emptiness walk agrees, or a fence-only last message keeps its spacer and its rest divider.
   const helper = source.match(/export function rendersNothingIn[\s\S]*?\n}/)?.[0]
   assert.ok(helper, "rendersNothingIn must exist")
   assert.match(helper, /restingCardShown = false/, "it takes the resting-card reason")
   assert.match(helper, /entry\.messageIndex === awaitingCut\) stale\.add\(entry\.message\)/, "…and folds the last message in")
   assert.equal(chat.match(/rendersNothingIn\([a-zA-Z]+, awaitingCut, restingShown\)/g)?.length, 3, "every rendersNothingIn call passes it")
-  assert.match(todos, /const hidesAwaiting = \(idx: number\) => isStaleAwaiting\(idx\) \|\| \(idx === lastAgentIdx && restingShown\)/)
-  assert.doesNotMatch(todos, /message(?:RendersNothing|HasRenderableText)\([a-z]+, isStaleAwaiting\(/, "the queue card's predicates take the union")
 })
 
-// THE TAIL MOUNTS WITH THE TRANSCRIPT, NOT BEFORE IT. The board lands first, so the queue card used to
-// paint its resting/done/rested card under the "Loading…" line and then shove it down ~1s later when the
-// messages mounted above it — the layout shift the maintainer refreshed into (2026-08-28).
-test("the queue card holds its tail cards until the transcript window has loaded", () => {
-  const todos = readFileSync(new URL("./TodosView.tsx", import.meta.url), "utf8")
-  assert.match(todos, /\{!q\.isLoading && showsRestingCard\(thread\) && \(/)
-  assert.match(todos, /\{!q\.isLoading && showsRegisteredDoneCard\(thread, /)
-  assert.match(todos, /\{!q\.isLoading && showsRestedCard\(thread, /)
+// THE TAIL MOUNTS WITH THE TRANSCRIPT, NOT BEFORE IT. The board lands first, so the board's queue card
+// used to paint its resting/done/rested card under the "Loading…" line and then shove it down ~1s later
+// when the messages mounted above it — the layout shift the maintainer refreshed into (2026-08-28). That
+// card went with the single-project board (2026-09-28); the thread view's half of the rule stays.
+test("the thread view holds its tail cards until the transcript window has loaded", () => {
   // The thread view's eager branch is what renders while ITS window loads (count === 0 on both production
   // callers), and it drew the same ladder alone at the top of an empty pane. Same hold, both halves of it —
   // the spacer gate and the ladder — or the slot opens before the rung.

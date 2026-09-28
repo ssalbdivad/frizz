@@ -57,10 +57,8 @@ test("the candidate list is bounded", () => {
 // The two surfaces find each other by ONE identifier, and neither side can be renamed alone.
 test("both surfaces stamp the source id the hand-off looks messages up by", () => {
   const chat = readFileSync(new URL("../components/ChatView.tsx", import.meta.url), "utf8")
-  const queue = readFileSync(new URL("../components/TodosView.tsx", import.meta.url), "utf8")
   const door = readFileSync(new URL("../components/ExpandThreadLink.tsx", import.meta.url), "utf8")
   assert.match(chat, /data-transcript-source-id=\{row\.kind === "message" \? row\.message\.sourceId : undefined\}/)
-  assert.ok((queue.match(/data-transcript-source-id=/g) ?? []).length >= 3, "every queue-card message site")
   // The door reads the surface and captures unconditionally — a reader on reduced motion needs the
   // place kept MORE than one watching an animation, so the capture must not sit behind the animate gate.
   assert.match(door, /captureFullscreenEnterAnchor\(surface, slug\)/)

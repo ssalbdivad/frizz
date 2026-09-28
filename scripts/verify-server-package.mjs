@@ -213,8 +213,7 @@ try {
     }, 100)
     restartRequested = true
     await page.setViewport({ width: 1280, height: 850, deviceScaleFactor: 2 })
-    const tenant = JSON.parse(readFileSync(join(home, "data/frizz/registry.json"), "utf8")).projects[0]
-    await page.goto(`${base}/project/${tenant.slug}/`, { waitUntil: "networkidle2" })
+    await page.goto(`${base}/`, { waitUntil: "networkidle2" })
     await page.waitForSelector('button[aria-label="Update Frizz"]:not(:disabled)', { visible: true })
     await page.screenshot({ path: join(out, "before-update.png") })
     const accepted = page.waitForResponse((response) => response.url().endsWith("/update-restart") && response.request().method() === "POST")
