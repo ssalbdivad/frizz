@@ -183,7 +183,7 @@ export const store = proxy({
   vtReturnTarget: null as string | null,
   // Transient bottom-center toast (e.g. "Steer failed …" when an eager reply is rejected). `id` bumps per call so
   // repeat toasts re-trigger the fade. Rendered by <Toaster>; null when nothing is showing.
-  toast: null as { id: number; text: string; spinner?: boolean; sticky?: boolean; duration?: number; link?: ToastLink } | null,
+  toast: null as { id: number; text: string; detail?: string; spinner?: boolean; sticky?: boolean; duration?: number; link?: ToastLink; action?: ToastAction } | null,
   // The /full page's SPLIT file viewer. True only while StandaloneThreadPage is mounted; while it is,
   // a `.md` click renders BESIDE the thread (the thread column slides left) instead of as an overlay
   // drawer — the whole point of /full is seeing the transcript, and a sheet over it defeated that.
@@ -219,7 +219,10 @@ let toastSeq = 0
 // the page may be another project's — on the cross-project page, one dispatch and one click on another
 // project's card apart.
 export type ToastLink = { label: string; slug: string; drawer?: "thread" | "terminal"; project?: string }
-export function showToast(text: string, opts?: { spinner?: boolean; sticky?: boolean; duration?: number; link?: ToastLink }) {
+// A toast's own verb — the snooze confirmation's "Undo". A callback where `link` is data, because the
+// act belongs to whoever raised the toast: its thread's project client, and the card it faded out.
+export type ToastAction = { label: string; run: () => void }
+export function showToast(text: string, opts?: { detail?: string; spinner?: boolean; sticky?: boolean; duration?: number; link?: ToastLink; action?: ToastAction }) {
   store.toast = { id: ++toastSeq, text, ...opts }
 }
 

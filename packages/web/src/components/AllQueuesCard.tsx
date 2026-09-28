@@ -138,6 +138,13 @@ export const AllQueuesCard = memo(function AllQueuesCard({
   const placeHref = crossProjectThreadHref(project, thread.id)
   const fullHref = `${placeHref}/full`
   const dismiss = useMemo(() => ({ dismiss: onLeave, cancel: onReturn }), [onLeave, onReturn])
+  const queryClient = useQueryClient()
+  // The snooze toast's Undo: the card comes back, and the page re-reads the queues now rather than at
+  // the next poll, which left the card missing for up to 3s after the click.
+  const onUnsnoozed = () => {
+    onReturn()
+    void queryClient.invalidateQueries({ queryKey: ["projectsQueues"] })
+  }
   const answeringScope = useMemo(() => ({ api, projectDir: project.projectDir }), [api, project.projectDir])
 
   const openBoard = (event: ReactMouseEvent<HTMLAnchorElement>, href: string, full: boolean) => {
@@ -231,7 +238,7 @@ export const AllQueuesCard = memo(function AllQueuesCard({
 
           <ThreadProjectScope projectId={project.id} projectDir={project.projectDir}>
             <footer className={`${BLOCK_RADIUS_INNER_BOTTOM} flex min-h-10 flex-wrap items-center justify-end gap-3 border-t border-border/70 bg-panel/95 px-3 py-2 text-[12px]`}>
-              <SnoozeButton thread={thread} onSnoozed={onLeave} />
+              <SnoozeButton thread={thread} projectName={project.name} onSnoozed={onLeave} onUndone={onUnsnoozed} />
               <StateButton thread={thread} onArchived={onLeave} onDismissCancel={onReturn} command />
             </footer>
           </ThreadProjectScope>
