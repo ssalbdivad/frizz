@@ -5,8 +5,7 @@ import { useBoard } from "../hooks.ts"
 import { rpc } from "../api/rpc.ts"
 import { displayTitle, queued } from "../groups.ts"
 import { resolveThreadRoute } from "../lib/threadRouteState.ts"
-import { modeProjectHref } from "../lib/base-path.ts"
-import { standaloneThreadHref } from "../lib/standaloneThreadRoute.ts"
+import { crossProjectHref } from "../lib/base-path.ts"
 import { setFaviconBadge } from "../lib/faviconBadge.ts"
 import { SHEET_BASE_WIDTH, SPLIT_MIN_PX } from "../lib/sheet.ts"
 import type { ThreadView } from "@frizz/shared"
@@ -45,17 +44,13 @@ const LAYOUT_VARS = {
 
 /**
  * The `/full` page for a thread in ANOTHER project — the two places that must name a project other
- * than this page's. Composed from the two helpers that own the shapes rather than spelled by hand:
- * these were the only call sites bypassing `projectHref`, and a hand-spelled prefix is exactly how the
- * ↗ button came to mint an unprefixed URL in the first place.
+ * than this page's. Spelled from `crossProjectHref`, the helper that owns the prefix, and NOT through
+ * `standaloneThreadHref(slug, "/")`: that stamps the prefix of whatever project `/` was last focused
+ * on (base-path.ts `setHomeFocus`), which a client-side trip to /full leaves set, so the other project's
+ * prefix landed in front of a second one.
  */
 function standaloneHrefIn(projectSlug: string, slug: string): string {
-  // `"/"` forces the UNPREFIXED inner form: this page may itself be prefixed (a `/project/a/…/full`
-  // link to a thread that turns out to live in project b), and `standaloneThreadHref` would otherwise
-  // stamp THIS page's prefix on before we prepend the other project's.
-  // In this page's MODE: a thread relocated from the cross-project page collapses back onto that page,
-  // not onto the other project's board.
-  return `${modeProjectHref(projectSlug)}${standaloneThreadHref(slug, "/")}`
+  return `${crossProjectHref(encodeURIComponent(projectSlug))}/thread/${encodeURIComponent(slug)}/full`
 }
 
 export function StandaloneThreadPage({ slug }: { slug: string }) {
@@ -160,9 +155,9 @@ export function StandaloneThreadPage({ slug }: { slug: string }) {
             <main
               data-standalone-thread
               // `thread-chat` is the fullscreen door's shared view-transition element: the drawer
-              // panel / queue card the door was clicked in wears the same name (tagged at click time,
-              // ExpandThreadLink), and the browser morphs that surface into this column. Inert
-              // outside a transition — no navigation but the door's opts in.
+              // panel the door was chosen in wears the same name (tagged at click time, ThreadMenu.tsx
+              // openFullscreen), and the browser morphs that surface into this column. Inert outside a
+              // transition — no navigation but the door's opts in.
               className="flex h-full w-[var(--full-thread-narrow)] min-w-0 shrink-0 flex-col overflow-hidden border-border bg-panel sm:border-x split:w-[var(--full-thread)] [view-transition-name:thread-chat]"
             >
               {route.kind === "loading" ? (
@@ -306,7 +301,7 @@ function MissingThread({ slug }: { slug: string }) {
         </div>
       ) : (
         <a href="/" className="rounded-md border border-border px-3 py-1.5 text-[12px] text-fg/90 hover:bg-panel-2">
-          Everything
+          Back to the queue
         </a>
       )}
     </div>

@@ -1,30 +1,17 @@
-import { ArrowUpRight, Infinity as InfinityIcon, Settings as SettingsIcon } from "lucide-react"
-import type { ReactNode } from "react"
-import { Link, useNavigate } from "react-router"
-import { useQuery } from "@tanstack/react-query"
-import { rpc } from "../api/rpc.ts"
-import { isBusy, queuesProjects } from "../lib/allQueues.ts"
+import { Settings as SettingsIcon } from "lucide-react"
 import { store } from "../store.ts"
-import { everythingHref, projectHref } from "../lib/base-path.ts"
-import { isPlainLeftClick } from "../lib/standaloneThreadRoute.ts"
-import { useBoard } from "../hooks.ts"
 import { STATUS_ROW_ACTION, STATUS_ROW_ICON } from "../lib/statusRow.ts"
-import { projectIdentity } from "./Sidebar.tsx"
 import { QuotaChips, useQuotaChipsVisible } from "./QuotaBar.tsx"
 import { RestartFrizzButton } from "./RestartFrizzButton.tsx"
 import { KeyboardShortcutsButton } from "./KeyboardShortcuts.tsx"
-import { ProjectFilter } from "./ProjectFilter.tsx"
-import { MenuItem } from "./ui/Menu.tsx"
 import { useShortcutLabel, withShortcut } from "../lib/keyboardRuntime.ts"
 
-// THE STATUS ROW — one loose line along the TOP OF THE PROMPT BOX, controls at the left edge and the
-// project at the right:
+// THE STATUS ROW — one loose line along the TOP OF THE PROMPT BOX, the app's controls and then its
+// readouts:
 //
-//   ∞ │ settings · reload │ Claude 83% · Codex 59%                            owner/repo
+//   settings · shortcuts · reload │ Claude 83% · Codex 59%
 //
-// It rides the dispatch composer wherever that composer is: the sidebar's own top on a normal board,
-// and the centered first-task box on a brand-new project (TodosView's `nothingAtAll` branch), which
-// hides the sidebar entirely. Anywhere you can start a thread, this is above it.
+// It rides the page's prompt box, at the top of its left column (AllQueues.tsx).
 //
 // IT IS LOOSE, NOT A CHIP. Until 2026-08-19 this was a FIXED bar pinned to the page's upper-left
 // corner with its own fill, hairline and shadow — a screen's width away from the column it described,
@@ -34,41 +21,15 @@ import { useShortcutLabel, withShortcut } from "../lib/keyboardRuntime.ts"
 // border, no shadow, no z-index. Its two ends land on the composer's own border, which is what makes a
 // borderless strip read as belonging to the box below it.
 //
-// CONTROLS LEFT, IDENTITY RIGHT (maintainer 2026-08-19). The row briefly ran the other way — identity
-// leading, controls and quota trailing — which reads as a heading with its buttons pushed away. This
-// way the left edge is one uninterrupted run of things you can press, and the project name anchors the
-// right edge as the row's one piece of prose.
+// NO DOOR AND NO NAME (maintainer 2026-09-28: "there should no longer be an everything or an infinity
+// button on the threads view on the left"). The row led with ∞, the door to Everything, and ended on the
+// page's name — and before that, atop a project's board, on the project's owner/repo linking to its repo.
+// With one page there is nowhere for a door to go and nothing for a name to tell apart. A project's repo
+// is its "Open on GitHub", in the project list's ⋯ menu (ProjectActions.tsx ProjectMenu); the queue's
+// filter sits in the READY header over the cards it filters. The connection indicator went on
+// 2026-08-28: its one informative state, disconnected, is one the page also shows by going stale.
 //
-// TWO DIVIDERS, NOT ONE, and the first one is the point: ∞ LEAVES this project, while settings and
-// reload act on the app you are already in. One divider would group all three as "buttons"; two say
-// the first one is a door out. The second divider separates the buttons from the readouts.
-//
-// THE PROJECT IS A LINK TO ITS REPO, AND THE CONNECTION INDICATOR IS GONE (maintainer 2026-08-28:
-// "There should be a way to open up the GitHub repo for a given project if one is detected … Perhaps
-// it should actually be showing owner/repo if a repo is detected … then maybe we should just drop the
-// status indicator"). The connection had already been reduced from a green dot plus the word
-// "connected" to the dot alone on 2026-08-19 ("drop the connected indicator, certainly. It's pretty
-// useless"); the dot then said "green" every second of every session, and its one informative state —
-// disconnected — is something the page ALSO tells you by going stale. The name is a real
-// `<a target=_blank>` rather than a scripted window.open, so ⌘-click, middle-click and copy-link all
-// work — and it links only when the board carries `githubRepo` (origin is github.com), so a GitLab
-// origin or a remote-less directory shows its name as plain text.
-//
-// NO GITHUB MARK BESIDE IT. The first cut put GitHub's mark in the dot's old slot as the link's
-// affordance; the maintainer pulled it the same day ("it kind of conflicts with the GitHub icon that
-// shows up in the prompt box" — the picker's door, a few px below this row, is the one GitHub glyph
-// on the surface and it means "browse issues and PRs", not "this repo"). The link shows itself the
-// way every other text link in the app does: full-fg + underline on hover, and a title that says
-// where it goes.
-//
-// THE 272px SIDEBAR IS THE BINDING WIDTH, not the viewport. The old bar was capped to the VIEWPORT, so
-// it never ran out of room; this row lives in a column that floors at 272px in the tablet band. With
-// the connection word still in it the repo name truncated to "f…" at an 820px viewport — the one
-// reading that must survive was the first one dropped. Showing owner/repo makes that binding again:
-// "colinhacks/frizz" does not fit beside two quota chips at 272px, so the name truncates from the
-// START (`direction: rtl` on the clipping span, the text isolated LTR inside it) and it is the OWNER
-// that gives way — "…hacks/frizz", never "colinhacks/f…". Any NEW mark added here has to be re-checked
-// at 820px.
+// ONE DIVIDER, between the buttons and the readouts.
 //
 // THE GAP IS 12px OF INK, not 12px of box — the same law lib/iconRhythm.ts states for the thread
 // footer, solved for a strip that mixes 24px icon squares, hairlines, quota pills and a name. Each of
@@ -82,58 +43,13 @@ function Divider() {
   return <span aria-hidden="true" className="h-3 w-px shrink-0 bg-border" />
 }
 
-// The name, clipped from the START. A plain `truncate` keeps the head of the string and drops the
-// tail, which for "owner/repo" throws away the repo — the one half worth keeping. `direction: rtl` on
-// the clipping box moves the overflow (and the ellipsis) to the left edge; the text itself is
-// re-isolated LTR (`unicode-bidi: isolate` + `direction: ltr`) so its letters and the slash keep their
-// order. NOTE the string must end in a strong LTR character for this to hold — a trailing neutral
-// (punctuation) would jump to the other end under rtl, and a repo name cannot end in one.
-function StartTruncated({ text, title, className }: { text: string; title?: string; className?: string }) {
-  return (
-    <span dir="rtl" className={`block min-w-0 overflow-hidden text-ellipsis whitespace-nowrap ${className ?? ""}`} title={title}>
-      <span dir="ltr" className="[unicode-bidi:isolate]">{text}</span>
-    </span>
-  )
-}
-
-/**
- * Takes no props, and reads its live values itself. Both call sites are leaves of very different trees
- * — the sidebar column and the fresh-project centered box — and the second one (TodosView) subscribes
- * to no store state of its own. Threading identity down from there would have newly subscribed the
- * whole queue column to the store to feed a 24px strip. valtio's useSnapshot tracks the properties
- * actually READ, so this re-renders on a board change and on nothing else.
- */
-/**
- * `crossProject`: the row atop the cross-project page. Its right edge names what that page is SHOWING —
- * "Everything" — rather than the project a new thread goes to, which is chosen inside the prompt box, in
- * its bottom strip beside the model (AllQueues.tsx ProjectPicker). Its ∞ door is the page you are on. `view`,
- * when given, replaces that plain name with the page's own control for it (AllQueues.tsx ViewFilter) —
- * the name stays, it just becomes something you can press.
- */
-export function StatusRow({ crossProject = false, view }: { crossProject?: boolean; view?: ReactNode } = {}) {
-  const board = useBoard()
-  // A missing board is not evidence that this project is named "frizz". Keep the row neutral until a
-  // board keyframe supplies an actual name; reconnects retain their adopted board.
-  const identity = projectIdentity(board)
+/** Takes no props, and reads its live values itself. */
+export function StatusRow() {
   // Whether there is a quota group behind the second divider at all. Every chip hides itself when it
-  // has no reading, so without this a board with neither provider reporting draws a trailing hairline
+  // has no reading, so without this a row with neither provider reporting draws a trailing hairline
   // with nothing after it.
   const quotaVisible = useQuotaChipsVisible()
-  // Host-STRICT: the board carries `githubRepo` only when the origin remote is github.com (see
-  // BoardSnapshot), which is exactly the case where a link to github.com is a right destination. The
-  // display label alone cannot decide this — a GitLab origin yields an owner/repo there too.
-  const githubRepo = board?.githubRepo ?? null
   const settingsKeys = useShortcutLabel("app.settings")
-
-  const name = identity.state === "verified" ? identity.label : identity.state === "local" ? identity.name : null
-  const accessibleName =
-    identity.state === "verified"
-      ? `Project: ${identity.label}`
-      : identity.state === "local"
-        ? `Project: ${identity.name}; local repository with no git remote`
-        : identity.state === "loading"
-          ? "Project identity loading"
-          : "Project identity unavailable"
 
   return (
     <div
@@ -143,34 +59,6 @@ export function StatusRow({ crossProject = false, view }: { crossProject?: boole
       // block rather than a strip parked above a box.
       className="mb-2.5 flex min-w-0 items-center gap-3 text-[12px]"
     >
-      {/* THE DOOR OUT — Everything, every project's queue on one page. ONE door since 2026-09-24: a house
-          (the project grid) stood beside it until the grid folded into Everything, and two ways "up" from
-          one project view asked the reader to choose between pages that were never meant to be different
-          places. The infinity is the maintainer's glyph for Everything.
-          From a project view it opens Everything FOCUSED on that project, so the prompt box there still
-          dispatches where you were working. On Everything itself it navigates nowhere: a click returns
-          to the page's top (a trip through `/` would remount the page under the operator).
-          A 24px target like its neighbours, and a ROUTER Link: it was a raw `<a href="/">` from 2026-08-19
-          until 2026-09-04, which hard-loaded the document — measured at 116-411ms with a 0.15 CLS, and it
-          threw away the app socket and the whole query cache on the way out. The rail is hidden under
-          800px and off by default, so THIS is the door most operators use. No `-ml-px` ink trim of its
-          own, unlike the house it replaced: the infinity's stroke reaches one unit further out in lucide's
-          24-unit box (x=1 against the house's x=2), which is that pixel already. */}
-      <Link
-        to={crossProject ? "/" : everythingHref(board?.projectSlug)}
-        title="Everything"
-        aria-label="Everything"
-        aria-current={crossProject ? "page" : undefined}
-        className={`${STATUS_ROW_ACTION} ${crossProject ? "bg-elevated text-fg" : ""}`}
-        onClick={(event) => {
-          if (!crossProject || !isPlainLeftClick(event)) return
-          event.preventDefault()
-          window.scrollTo({ top: 0, behavior: window.matchMedia?.("(prefers-reduced-motion: reduce)").matches ? "auto" : "smooth" })
-        }}
-      >
-        <InfinityIcon size={STATUS_ROW_ICON} aria-hidden="true" />
-      </Link>
-      <Divider />
       <button
         type="button"
         aria-label="Settings"
@@ -191,96 +79,6 @@ export function StatusRow({ crossProject = false, view }: { crossProject?: boole
           <QuotaChips />
         </>
       )}
-      {/* THE PROJECT, pinned to the right edge — or, on the cross-project page, the choice of one. min-w-0
-          so a long name gives way before anything to its left does; every mark before it is shrink-0 and
-          therefore always reachable. */}
-      {crossProject && view ? (
-        <span className="ml-auto flex min-w-0 items-center">{view}</span>
-      ) : crossProject ? (
-        <span data-status-row-page className="ml-auto min-w-0 truncate font-semibold text-fg/90">Everything</span>
-      ) : (
-        <ProjectViewFilter slug={board?.projectSlug} label={name} githubRepo={githubRepo}>
-        <span
-          className="ml-auto flex min-w-0 items-center"
-          data-project-identity-state={identity.state}
-          aria-label={accessibleName}
-          aria-busy={identity.state === "loading" || undefined}
-        >
-          {name && githubRepo ? (
-            // The name IS the anchor: the same hover every other text link in the app wears
-            // (GithubPickerModal's rows, ChildOpRow's labels) — full fg plus an underline — is what tells
-            // a reader this one is a control, and the title says where it goes. `text-fg/90` at rest is
-            // the weight and tone the name always had, so a linked and an unlinked project read alike
-            // until you reach for one.
-            <a
-              href={`https://github.com/${githubRepo}`}
-              target="_blank"
-              rel="noopener"
-              title={`Open ${name} on GitHub`}
-              aria-label={`Open ${name} on GitHub`}
-              className="block min-w-0 rounded-sm font-semibold text-fg/90 underline-offset-2 outline-none transition-colors hover:text-fg hover:underline focus-visible:ring-1 focus-visible:ring-border-strong"
-            >
-              <StartTruncated text={name} />
-            </a>
-          ) : name ? (
-            // A verified NON-GitHub origin (owner/repo from GitLab, say) or a remote-less directory: the
-            // name is prose, not a control, so nothing to hover.
-            <StartTruncated text={name} title={name} className="font-semibold text-fg/90" />
-          ) : (
-            // Only before the first board keyframe, or on a keyframe with nothing nameable in it. A repo
-            // with no git remote is NOT this case — it has a name (its directory) and shows it.
-            <span className="identity-placeholder w-24" aria-hidden="true" />
-          )}
-        </span>
-        </ProjectViewFilter>
-      )}
     </div>
-  )
-}
-
-/**
- * A project view's side of the filter (ProjectFilter.tsx): the view IS the filter to one project, so
- * its identity becomes the held pill — ✕ back up to Everything (focused here, as ∞ does), the menu to
- * any other project's view. The repo link the name used to be moves into the menu as "Open on GitHub".
- *
- * Until the machine's project list has arrived (or on a project that list does not know) the plain
- * identity renders instead, so the row never goes blank.
- */
-function ProjectViewFilter({ slug, label, githubRepo, children }: { slug: string | undefined; label: string | null; githubRepo: string | null; children: ReactNode }) {
-  const navigate = useNavigate()
-  const cards = useQuery({ queryKey: ["projectsList"], queryFn: () => rpc.projectsList() })
-  // The counts are read when the menu opens, not polled: the view has its own live feed, and this is
-  // a glance at the rest of the machine.
-  const queues = useQuery({ queryKey: ["projectsQueues"], queryFn: () => rpc.projectsQueues() })
-  const projects = queuesProjects(cards.data, queues.data).filter((project) => !project.stale || project.slug === slug)
-  const items = [...projects.filter(isBusy), ...projects.filter((project) => !isBusy(project))]
-    .filter((project) => project.card)
-    .map((project) => ({ id: project.id, slug: project.slug, name: project.name, card: project.card!, ready: project.queued.length }))
-  const current = slug ? items.find((item) => item.slug === slug) : undefined
-  if (!slug || !current) return <>{children}</>
-  const toEverything = () => navigate(everythingHref(slug))
-  return (
-    <span className="ml-auto flex min-w-0 items-center" data-project-identity-state="filter">
-      <ProjectFilter
-        projects={items}
-        current={current}
-        label={label ? <StartTruncated text={label} /> : undefined}
-        onEverything={toEverything}
-        onClear={toEverything}
-        onProject={(project) => {
-          if (project.slug !== slug) navigate(projectHref(encodeURIComponent(project.slug)))
-        }}
-        onOpenChange={(open) => {
-          if (open) void queues.refetch()
-        }}
-        footer={
-          githubRepo && (
-            <MenuItem onSelect={() => window.open(`https://github.com/${githubRepo}`, "_blank", "noopener")} icon={<ArrowUpRight size={14} aria-hidden />} value="github">
-              <span className="min-w-0 flex-1 truncate">Open on GitHub</span>
-            </MenuItem>
-          )
-        }
-      />
-    </span>
   )
 }

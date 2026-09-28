@@ -3,11 +3,10 @@ import { readFileSync } from "node:fs"
 import test from "node:test"
 
 const chat = readFileSync(new URL("./ChatView.tsx", import.meta.url), "utf8")
-const queue = readFileSync(new URL("./TodosView.tsx", import.meta.url), "utf8")
 
 // A completion registered with `mcp__frizz__done` is in no message, so the transcript's fence parser
 // never draws it — and until 2026-08-27 nothing else did either: the thread rested on a prose handoff
-// with no card at its end, on the thread page, on /full and on the queue card alike. These pin the
+// with no card at its end, on the thread page and on /full alike. These pin the
 // wiring: the card is the LAST rung of the runtime-status ladder, above the residual rung.
 //
 // They used to pin it TWICE — once per transcript path — and pin each path's own gate beside it, because
@@ -42,10 +41,4 @@ test("every gate is the ladder's own answer, so the slot opens exactly when a ru
   assert.match(chat, /runtimeStatusRung\(state\) === "working" \? workingIndicatorGap\(messages\) : STEP/)
   // Nothing may re-derive the ladder by hand beside it. Three calls decide it, and no fourth spelling.
   assert.equal(chat.match(/showsSnoozeCard\(thread\)/g)?.length, 1, "the ladder is the only place a rung is tested")
-})
-
-test("the queue card draws the same card off the same predicate", () => {
-  assert.match(queue, /showsRegisteredDoneCard\(thread, lastAgentIdx >= 0 \? messages\[lastAgentIdx\]\?\.text : undefined\) && \(/)
-  assert.match(queue, /<FenceCard fenceKind="done" body=\{thread\.lastFence!\.body\} hints=\{\[\]\} wrap \/>/)
-  assert.match(queue, /showsRestedCard\(thread, lastAgentIdx >= 0 \? messages\[lastAgentIdx\]\?\.text : undefined\) && \(/)
 })

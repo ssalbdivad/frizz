@@ -95,16 +95,17 @@ test("questions from one call group together; questions from two rests do not", 
   assert.deepEqual(grouped.get(2)?.map((q) => q.id), ["c"])
 })
 
-// THE ONE THING THE PURE FUNCTION CANNOT PIN: that both surfaces split the stack the same way. The
+// THE ONE THING THE PURE FUNCTION CANNOT PIN: that the thread page splits the stack this way. The
 // in-flight ANSWER belongs to the TAIL wherever the questions sit — it is the human's newest turn, and
 // the delivered copy of it lands at the tail a second later — so a mount placed at an older rest must
-// not draw it. Two drawing it would render the answer twice, in two places, seconds apart.
+// not draw it. Two drawing it would render the answer twice, in two places, seconds apart. (The board's
+// queue card was read here too until it was deleted with the single-project board, 2026-09-28.)
 //
 // The prop is OPT-IN (`inFlight`, the rows the transcript is not already drawing — see
 // unrenderedAnswers) rather than the opt-out `showInFlight` it was until 2026-09-01, so an anchored
 // mount draws nothing by simply not passing it, and this reads the same guarantee off the new spelling.
 test("a mount placed at an older rest never draws the in-flight answer", () => {
-  for (const file of ["ChatView.tsx", "TodosView.tsx"]) {
+  for (const file of ["ChatView.tsx"]) {
     const source = readFileSync(new URL(`../components/${file}`, import.meta.url), "utf8")
     const mounts = [...source.matchAll(/<RegisteredQuestionStack[^>]*>/g)].map((m) => m[0])
     const tail = mounts.filter((m) => /questions=\{[^}]*[Tt]ail(\.questions)?\}/.test(m))

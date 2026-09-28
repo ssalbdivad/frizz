@@ -49,3 +49,67 @@ export function threadPath({ x1, y1, x2, y2 }: Pick<ThreadGeometry, "x1" | "y1" 
 export function snapToPixels(y: number, dpr: number): number {
   return (dpr % 2 === 1 ? Math.floor(y * dpr) + 0.5 : Math.round(y * dpr)) / dpr
 }
+
+/** Half the gap cut into a strand where the other passes OVER it: 1px clear either side of a 1px stroke. */
+export const CROSSING = 1.5
+
+type Point = readonly [number, number]
+type Cubic = readonly [Point, Point, Point, Point]
+
+/**
+ * A TWO-STRAND CORD down the gutter, twisted once at every thread row: the two strands cross at each
+ * row's height and bow apart between rows, `amplitude` either side of `x`. It is drawn the way a knot
+ * diagram draws a crossing — the strand passing UNDER is cut either side of the one on top — and which
+ * strand is on top alternates from one crossing to the next, which is what makes two wavy lines read as
+ * a twist rather than as a chain of eyes. Past the first and last rows the cord runs on for `tail` and
+ * closes, so a fade can take its ends. `link` is the longest a twist may run before another crossing.
+ */
+export function twist(rows: readonly number[], x: number, amplitude: number, tail: number, link: number): [string, string] {
+  const ys = [...rows].sort((a, b) => a - b)
+  if (ys.length === 0) return ["", ""]
+  // Every row is a crossing; a stretch between rows longer than a link (a project's header row sits in
+  // it) takes extra crossings, evenly spaced, so the cord keeps one even twist down its whole length
+  // rather than stretching into a long eye wherever the rows part.
+  const knots = [ys[0]! - tail]
+  for (const [i, y] of ys.entries()) {
+    const prev = i === 0 ? null : ys[i - 1]!
+    if (prev !== null) {
+      const parts = Math.max(1, Math.round((y - prev) / link))
+      for (let p = 1; p < parts; p++) knots.push(prev + ((y - prev) * p) / parts)
+    }
+    knots.push(y)
+  }
+  knots.push(ys[ys.length - 1]! + tail)
+  // A cubic's bulge peaks at three quarters of its control points' offset.
+  const reach = amplitude / 0.75
+  const strands: [string, string] = ["", ""]
+  for (const strand of [0, 1] as const) {
+    for (let k = 1; k < knots.length; k++) {
+      const [top, bottom] = [knots[k - 1]!, knots[k]!]
+      const side = (k + strand) % 2 === 0 ? 1 : -1
+      const third = (bottom - top) / 3
+      let seg: Cubic = [[x, top], [x + side * reach, top + third], [x + side * reach, bottom - third], [x, bottom]]
+      // Crossing i is the (i + 1)th knot; strand 0 is on top at even crossings, strand 1 at odd ones.
+      const under = (knot: number) => knot > 0 && knot < knots.length - 1 && (knot - 1) % 2 !== strand
+      const speed = 3 * Math.hypot(reach, third)
+      const t0 = under(k - 1) ? CROSSING / speed : 0
+      const t1 = under(k) ? 1 - CROSSING / speed : 1
+      seg = subCubic(seg, t0, t1)
+      strands[strand] += `M${seg[0][0]} ${seg[0][1]}C${seg[1][0]} ${seg[1][1]} ${seg[2][0]} ${seg[2][1]} ${seg[3][0]} ${seg[3][1]}`
+    }
+  }
+  return strands
+}
+
+/** The piece of a cubic between parameters t0 and t1 (de Casteljau, twice). */
+export function subCubic(c: Cubic, t0: number, t1: number): Cubic {
+  const right = split(c, t0)[1]
+  return t1 >= 1 ? right : split(right, (t1 - t0) / (1 - t0))[0]
+}
+function split([a, b, c, d]: Cubic, t: number): [Cubic, Cubic] {
+  const at = (p: Point, q: Point): Point => [p[0] + (q[0] - p[0]) * t, p[1] + (q[1] - p[1]) * t]
+  const ab = at(a, b), bc = at(b, c), cd = at(c, d)
+  const abc = at(ab, bc), bcd = at(bc, cd)
+  const mid = at(abc, bcd)
+  return [[a, ab, abc, mid], [mid, bcd, cd, d]]
+}

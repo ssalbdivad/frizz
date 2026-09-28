@@ -10,7 +10,7 @@ import { GithubHovercards } from "./components/GithubHovercards.tsx"
 import { Toaster } from "./components/Toaster.tsx"
 import { KeyboardLayer } from "./components/KeyboardShortcuts.tsx"
 import { applyLocation, registerNavigate } from "./lib/router.ts"
-import { everythingHref, setHomeFocus } from "./lib/base-path.ts"
+import { setHomeFocus } from "./lib/base-path.ts"
 import { defaultCrossProjectFocus, rememberCrossProjectFocus, useCrossProjectPick } from "./lib/crossProject.ts"
 import type { ProjectCard } from "@frizz/shared"
 import { rpc } from "./api/rpc.ts"
@@ -25,7 +25,7 @@ import { useProjectRailVisible } from "./lib/projectRail.ts"
 // <App/> and once inside <ProjectGrid/> — because `main.tsx` chose ONE of three root shells from
 // `location.pathname` at module load, which made every project switch a full document load. A layout
 // route is the direct expression of "this part does not change": <RootLayout/> holds the rail and the
-// tooltip provider, and the <Outlet/> below it swaps between the cross-project page and a board.
+// tooltip provider, and the <Outlet/> below it holds the one page — Everything — or a redirect into it.
 //
 // WHAT A PROJECT SWITCH ACTUALLY COSTS, and why the router alone was never the whole job. Four things
 // are bound to one project, and only the first two are this hook's business:
@@ -39,12 +39,11 @@ import { useProjectRailVisible } from "./lib/projectRail.ts"
 //   · the API base, which needs nothing: base-path.ts derives it from the page's path on every call,
 //     and the router keeps `location` synchronous with navigation.
 //
-// The board is KEYED by slug so it genuinely remounts per project — its state is per-project and
-// reusing the instance across a switch would carry the previous board's mounted surfaces into the new
-// one. The rail above it is not keyed, so it persists. That contrast is the whole design.
+// A project switch on the page never remounts it: the page is keyed by a constant (CrossProjectPage), and
+// what is per-project — the store's board and drawer stack — is reset by the binding instead. The rail
+// above it is not keyed either, so it persists.
 
 /** The one place that knows the URL shapes, so a route and a link cannot disagree. */
-export const PROJECT_PATH = "/project/:slug"
 /** A thread drawer's prefix on the cross-project page (base-path.ts `crossProjectHref`); the page is `/`. */
 export const CROSS_PROJECT_PATH = "/all/:slug"
 
@@ -76,11 +75,11 @@ function RootLayout() {
           read on `/` and then survives the redirect to the page it lands on. */}
       <AddProjectHost />
       {/* ALSO hosted by the layout, and for the same reason: prose carrying `#123` renders on the
-          board, in a drawer and on the standalone `/thread/<slug>/full` page alike, and one delegated
+          page, in a drawer and on the standalone `/thread/<slug>/full` page alike, and one delegated
           listener at the root covers all three. Inert until a pointer rests on a reference. */}
       <GithubHovercards />
-      {/* The keyboard shortcuts and their sheet (`?`), for every page under the layout — the home page as
-          much as a board. /full mounts its own copy, since it sits outside this layout. */}
+      {/* The keyboard shortcuts and their sheet (`?`), for every page under the layout — the page and the
+          welcome alike. /full mounts its own copy, since it sits outside this layout. */}
       <KeyboardLayer />
     </TooltipProvider>
   )
@@ -109,42 +108,30 @@ function useProjectBinding(slug: string | undefined) {
   }, [slug])
 }
 
-/**
- * A board, for the project the URL names.
- *
- * `slug` is undefined on the unprefixed routes, which remain a supported state: the launching project
- * is still served at `/thread/<slug>` and `/status/<name>` with no `/project/<slug>` in front of it,
- * and `apiBase()` answers `/_frizz` for exactly that case.
- */
-function BoardRoute() {
-  const { slug, thread } = useParams()
-  useProjectBinding(slug)
-  useRouteToStore()
-  // Returning from /full plays the fullscreen door's view transition in REVERSE (react-router re-arms
-  // it for the POP; the collapse icon opts in). The reverse morph needs the thread's board surface
-  // mounted and named in THIS first commit — the one the transition's new-state snapshot reads — so
-  // the priming is render-phase, the mirror of StandaloneRoute's render-phase drawer clear. A no-op
-  // unless the previous render really was a /full page (see primeFullscreenReturn).
-  useState(() => primeFullscreenReturn(thread))
-  return <App key={slug ?? "__launching__"} />
-}
+// THERE IS NO PROJECT VIEW. Everything at `/` is the one page (maintainer 2026-09-28: "urls like this
+// should not exist anymore: http://127.0.0.1:9393/project/frizz"). A project's page — its board, then its
+// "project view" — showed one project's queue beside its rail's bands; the queue filter now shows one
+// project's cards (lib/crossProject.ts), and its bands open in place in the project list (ProjectList.tsx).
+// Its old addresses are not translated ("backward compat not important at this point"): `/project/…`,
+// the unprefixed `/thread/<t>` of the one-server-per-repo era, `/status/…` and anything else unknown
+// land on `/`, keeping the query a launcher may have sent (`?add=`, `?focus=`).
 
 /**
- * THE CROSS-PROJECT PAGE — every project's queue on one page, and the default mode. At `/` it is focused
+ * THE CROSS-PROJECT PAGE — every project's queue on one page, and the only page there is. At `/` it is focused
  * on the project the operator last chose for a new thread (the PICK, lib/crossProject.ts), which the
  * address does not name: where a new thread goes is the prompt box's setting, not a place. With a
  * thread drawer open it is `/all/<slug>/thread/<t>` — the thread's own address, focused on its project.
  *
  * The focus IS the page project: it binds the live feed, the store and every page-relative helper
- * exactly as a board does (base-path.ts answers `/` through `setHomeFocus`, and `/all/<slug>/…` like
- * `/project/<slug>`), so the prompt box dispatches into it and a thread drawer of it opens in place with
- * the board's whole drawer stack. The page's rail and lanes are the other projects' — they read
- * machine-wide data and name their project on every call, as they always have (AllQueues.tsx).
+ * (base-path.ts answers `/` through `setHomeFocus`, and `/all/<slug>/…` from the address), so the
+ * prompt box dispatches into it and a thread drawer of it opens in place with the whole drawer stack.
+ * The page's list and queue are every project's — they read machine-wide data and name their project on
+ * every call (AllQueues.tsx, ProjectList.tsx).
  *
  * ONE component for both addresses, at the same depth, so react-router keeps the one instance mounted
  * across a drawer opening or closing — the page must not remount under the operator. `<App/>` is keyed
- * by a CONSTANT for the same reason, where a board is keyed by slug: what is per-project (the store's
- * board and drawer stack) is reset by the binding instead.
+ * by a CONSTANT for the same reason: what is per-project (the store's board and drawer stack) is reset
+ * by the binding instead.
  *
  * With no project to focus — an empty machine, or one whose every directory is gone — there is no page,
  * so `/` renders the welcome instead (ProjectActions.tsx), the one place a project is added from.
@@ -173,7 +160,7 @@ function CrossProjectPage() {
     )
   }
   if (drawerSlug === undefined && home.kind === "welcome") return <Welcome projects={home.projects} />
-  return <App mode="cross-project" key="cross-project" />
+  return <App key="cross-project" />
 }
 
 type HomeFocus =
@@ -187,8 +174,8 @@ type HomeFocus =
  * most recently (lib/crossProject.ts defaultCrossProjectFocus). Only asked at `/` — under a drawer the
  * address names the project.
  *
- * `?focus=<slug>` is how the launcher names the project it was run in, and how a board's door to
- * Everything aims the box at the project it came from. It is a CHOICE, so it is remembered as the pick,
+ * `?focus=<slug>` is how the launcher names the project it was run in, and how a door that means "start
+ * a thread there" aims the box at a project. It is a CHOICE, so it is remembered as the pick,
  * and then dropped from the address. It is a query on `/` rather than a path so a new launcher that joins
  * an OLDER server — one whose page has no such route — still lands somewhere real.
  *
@@ -196,8 +183,9 @@ type HomeFocus =
  * the project grid, folded into this one on 2026-09-24 — is gone:
  *  - `?add=<dir>` is the LAUNCHER asking: running `frizz` in an unknown folder does not adopt it, it
  *    sends the operator here to say yes. It opens the one add-project dialog, pre-filled.
- *  - `?unknown=<slug>` is the SERVER saying it sent a page here rather than let it hang: a `/project/<x>`
- *    nobody has would render the app, 404 every call and sit on its boot spinner forever (index.ts
+ *  - `?unknown=<slug>` is the SERVER saying it sent a page here rather than let it hang: a drawer's
+ *    `/all/<x>/thread/…` for a project nobody has (renamed, removed) would render the app, 404 every
+ *    call and sit on its boot spinner forever (index.ts
  *    `unknownProjectPage`). A URL that silently became the home page reads as Frizz having swallowed it.
  */
 function useHomeFocus(atHome: boolean): HomeFocus {
@@ -233,24 +221,14 @@ function useHomeFocus(atHome: boolean): HomeFocus {
   return focus ? { kind: "focus", slug: focus } : { kind: "welcome", projects: cards.data }
 }
 
-/** An old address of the home page: `/`, keeping the query (`?add=`, `?unknown=`) it may carry. */
+/** Any address the page does not have: `/`, keeping the query (`?add=`, `?focus=`, `?unknown=`) it carries. */
 function HomeRedirect() {
   const { search } = useLocation()
   return <Navigate to={`/${search}`} replace />
 }
 
 /**
- * `/all/<slug>` with no thread under it — the cross-project page's address until 2026-09-28, when the
- * focus left the URL — and any path under it that names nothing the page has (`/all/<slug>/status/x`, a
- * typo): the page itself, aimed at that project, as the address asked.
- */
-function CrossProjectFallback() {
-  const { slug } = useParams()
-  return <Navigate to={everythingHref(encodeURIComponent(slug!))} replace />
-}
-
-/**
- * URL → store, for the routes INSIDE a board.
+ * URL → store, for the routes INSIDE the page.
  *
  * The drawer stack is valtio state, not route state, because a drawer is a stack with its own
  * animated unwind and several ways to open — so the URL is one input to it rather than its owner.
@@ -290,8 +268,9 @@ function StandaloneRoute() {
   // A render-phase write (the useState initializer runs exactly once, before the children render)
   // means DrawerStack below already sees the empty stack in the same pass.
   useState(() => { if (store.drawers.length > 0) store.drawers = [] })
-  // Recorded every render, consumed by BoardRoute's mount: this is how the board knows its first
-  // render is the return leg of the fullscreen door and should prime the reverse morph's target.
+  // Recorded every render, consumed by CrossProjectPage's mount (primeFullscreenReturn): this is how the
+  // page knows its first render is the return leg of the fullscreen door and should prime the reverse
+  // morph's target.
   noteStandaloneThreadRender(thread!)
   return (
     <>
@@ -306,19 +285,9 @@ function StandaloneRoute() {
   )
 }
 
-const boardChildren = [
-  { index: true, element: <BoardRoute /> },
-  { path: "thread/:thread", element: <BoardRoute /> },
-  { path: "status/:status", element: <BoardRoute /> },
-]
-
-
 export const router = createBrowserRouter([
-  // The focused single-thread pages sit OUTSIDE the layout — they have no rail, and should not. They
-  // are listed first for readability only; react-router ranks by specificity, so `/thread/x/full`
-  // beats `/thread/:thread` regardless of order.
+  // The focused single-thread pages sit OUTSIDE the layout — they have no rail, and should not.
   { path: "/thread/:thread/full", element: <StandaloneRoute /> },
-  { path: `${PROJECT_PATH}/thread/:thread/full`, element: <StandaloneRoute /> },
   { path: `${CROSS_PROJECT_PATH}/thread/:thread/full`, element: <StandaloneRoute /> },
   {
     element: <RootLayout />,
@@ -327,22 +296,8 @@ export const router = createBrowserRouter([
       // instance mounted across a drawer opening or closing — the page must not remount under you.
       { path: "/", element: <CrossProjectPage /> },
       { path: `${CROSS_PROJECT_PATH}/thread/:thread`, element: <CrossProjectPage /> },
-      { path: CROSS_PROJECT_PATH, element: <CrossProjectFallback /> },
-      { path: `${CROSS_PROJECT_PATH}/*`, element: <CrossProjectFallback /> },
-      // The project grid's address for its last few hours (2026-09-24), before it folded into `/`.
-      { path: "/projects", element: <HomeRedirect /> },
-      // Declared, not left to the catch-all below — which would draw the launching project's board.
-      // `/queues` was the cross-project page's address before it became the default at `/`.
-      { path: "/queues", element: <Navigate to="/" replace /> },
-      { path: "/all", element: <Navigate to="/" replace /> },
-      // The launching project, unprefixed. `/` itself belongs to the cross-project page, so this project reaches its
-      // board through a thread or status path — see base-path.ts on why an empty base is supported.
-      { path: "/thread/:thread", element: <BoardRoute /> },
-      { path: "/status/:status", element: <BoardRoute /> },
-      { path: PROJECT_PATH, children: boardChildren },
-      // Anything else is a board for the launching project, which is what the old shell did with an
-      // unknown path: applyPath falls through to the queue.
-      { path: "*", element: <BoardRoute /> },
+      // Anything else is the page — never a blank route (see "THERE IS NO PROJECT VIEW" above).
+      { path: "*", element: <HomeRedirect /> },
     ],
   },
 ])

@@ -10,10 +10,10 @@ test("standalone thread links encode slugs and round-trip through the parser", (
 })
 
 test("a standalone thread link carries the project prefix of the page it is minted on", () => {
-  // The ↗ button on a thread in a non-launching project. Without the prefix this addresses whichever
-  // project launched the server — a different thread, or none.
-  const href = standaloneThreadHref("fix-auth", "/project/nub/thread/fix-auth")
-  assert.equal(href, "/project/nub/thread/fix-auth/full")
+  // The drawer's "Open fullscreen" on a thread in a non-launching project. Without the prefix this
+  // addresses whichever project launched the server — a different thread, or none.
+  const href = standaloneThreadHref("fix-auth", "/all/nub/thread/fix-auth")
+  assert.equal(href, "/all/nub/thread/fix-auth/full")
   // …and the router still reasons about the INNER path, so the round-trip holds under a prefix too.
   assert.equal(parseStandaloneThreadPath(innerPath(href)), "fix-auth")
   // The launching project is served at the root; an unprefixed page still mints an unprefixed link.

@@ -9,7 +9,6 @@ import { retrySession } from "../lib/retrySession.ts"
 import { HEADER_ICON_CLASS } from "../lib/headerIcon.ts"
 import { ReloadPluginsButton } from "./ReloadPluginsButton.tsx"
 import { RestartWorkerButton } from "./RestartWorkerButton.tsx"
-import { ExpandThreadLink } from "./ExpandThreadLink.tsx"
 import { CollapseThreadLink } from "./CollapseThreadLink.tsx"
 
 // The retry message + follow-up now live in lib/retrySession so the sidebar's hover-revealed Retry
@@ -35,7 +34,6 @@ export { STALLED_RETRY_MESSAGE } from "../lib/retrySession.ts"
 //   • LEGACY (kind !== "session"): the vestigial Mark-as split button, exactly as before.
 export function HeaderActions({
   thread,
-  expand,
   collapse,
   onDoc,
   onDone,
@@ -47,8 +45,7 @@ export function HeaderActions({
   onStatusFailed,
 }: {
   thread: ThreadView
-  expand?: boolean // queue cards only → the fullscreen door (ExpandThreadLink); the drawer header mounts its own
-  collapse?: boolean // the /full page → the same door, closing (CollapseThreadLink). Never both.
+  collapse?: boolean // the /full page → the way out of fullscreen (CollapseThreadLink)
   onDoc?: () => void // present only on the thread header → shows the frizz-document icon
   onDone: () => void // legacy Mark-as "done" path (parent-owned mutation)
   onCollapse?: () => void // queue cards → collapse/expand the card body to just its header
@@ -77,13 +74,11 @@ export function HeaderActions({
       <ReloadPluginsButton thread={thread} />
       <RestartWorkerButton thread={thread} />
       {onDoc && <IconBtn label="Frizz document" icon={FileText} size={14} onClick={onDoc} />}
-      {/* THE FULLSCREEN DOOR, one slot, both directions — a real anchor that navigates IN PLACE on a
-          plain click and leaves ⌘/middle/right-click to the browser. It replaced the ↗ "Open in new
-          tab" arrow on 2026-08-28; the drawer header (ChatView) mounts the expand half itself.
-          A surface can only ever offer ONE of these: the queue card can be expanded, the /full page can
-          be collapsed, and putting the closing half here is what makes the two share a position instead
-          of the reader hunting an ArrowLeft at the far end of the header (maintainer 2026-09-02). */}
-      {expand && <ExpandThreadLink slug={thread.id} />}
+      {/* THE WAY OUT OF FULLSCREEN — a real anchor that navigates IN PLACE on a plain click and leaves
+          ⌘/middle/right-click to the browser. The way IN is the drawer's own menu (ThreadMenu.tsx), at the
+          end of the drawer's strip; this stands in the strip itself, where the queue card's ⤢ stood when
+          cards had one (maintainer 2026-09-02: a collapse icon "in the same place where the expand icon
+          is"). */}
       {collapse && <CollapseThreadLink slug={thread.id} />}
       {isSession ? (
         // A STALLED session (process gone, work unfinished) or one KILLED by an auto-resume usage limit

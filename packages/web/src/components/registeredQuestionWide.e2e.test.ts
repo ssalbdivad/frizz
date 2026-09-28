@@ -48,8 +48,10 @@ test("a registered multi over thirty options letters past Z, toggles every chip,
     })
 
     // Toggle every chip. A chip is a row whose stretched, empty button takes the click.
+    // The selected row wears `border-selection-border` since 457ad8eb (2026-09-19); this read `border-accent`,
+    // which no row has worn since, until 2026-09-28.
     await page.$$eval(OPTION, (ns) => { for (const n of ns) (n.querySelector("button") as HTMLButtonElement).click() })
-    const selected = await page.$$eval(OPTION, (ns) => ns.flatMap((n, i) => (n.classList.contains("border-accent") ? [i] : [])))
+    const selected = await page.$$eval(OPTION, (ns) => ns.flatMap((n, i) => (n.classList.contains("border-selection-border") ? [i] : [])))
     assert.deepEqual(selected, Array.from({ length: 30 }, (_, i) => i), "every one of the thirty rows wears the selection border")
 
     await page.click("[data-send-answers]")

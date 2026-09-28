@@ -2,7 +2,6 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query"
 import { createRoot } from "react-dom/client"
 import type { BoardSnapshot, ThreadView as ThreadViewModel, TranscriptMessage } from "@frizz/shared"
 import { ThreadView } from "./components/ChatView.tsx"
-import { TodosView } from "./components/TodosView.tsx"
 import { TooltipProvider } from "./components/Tooltip.tsx"
 import { store } from "./store.ts"
 import "./styles.css"
@@ -20,8 +19,10 @@ import "./styles.css"
 //    row for a month and never saw its reading land ON the bubble's bottom edge (2026-08-31). The row
 //    is built by ChatView's own QUEUED branch, so what is photographed here is the shipped call site,
 //    not a rebuilt copy of it.
-// Both surfaces that render the queued tail are mounted — the drawer (ThreadView/ChatView) and the
-// queue card (TodosView) — because the pinned queued group is built separately in each.
+// The drawer (ThreadView/ChatView) is the one surface that renders the queued tail. The board's queue
+// card built its own copy of the pinned queued group and was mounted here too, as the default, until it
+// was deleted with the single-project board (2026-09-28); `?surface=drawer` is still accepted, and is now
+// what every load renders.
 
 const SLUG = "queued-spacing"
 const PARAMS = new URLSearchParams(location.search)
@@ -122,31 +123,16 @@ window.fetch = async (input, init) => {
   return originalFetch(input, init)
 }
 
-// ?surface=drawer renders the thread drawer; default renders the queue card. Both are the REAL
-// components, so whichever surface drops the gap shows it here.
-const surface = PARAMS.get("surface") ?? "card"
-
 function Fixture() {
-  if (surface === "drawer") {
-    return (
-      <div className="relative h-screen bg-bg text-fg text-sm">
-        <div className="mx-auto flex h-screen w-[760px] max-w-full flex-col border-x border-border">
-          {/* `virtualized`, as BOTH production callers mount it (StandaloneThreadPage, the drawer).
-              Without it this fixture rendered ChatView's eager fallback — a branch whose own comment
-              says no production surface reaches it, and which wraps no message in `MessageRow` at all.
-              So the queued rows here carried no hover reading to photograph, and the offset that was
-              wrong on the shipped path could not be seen from this fixture (2026-08-31). */}
-          <ThreadView slug={SLUG} virtualized />
-        </div>
-      </div>
-    )
-  }
   return (
-    <div className="relative min-h-screen bg-bg text-fg text-sm">
-      <div className="flex min-h-screen justify-center">
-        <main className="w-[720px] max-w-[62vw] min-w-0 flex flex-col py-5 min-h-screen max-[800px]:w-full max-[800px]:max-w-none">
-          <TodosView />
-        </main>
+    <div className="relative h-screen bg-bg text-fg text-sm">
+      <div className="mx-auto flex h-screen w-[760px] max-w-full flex-col border-x border-border">
+        {/* `virtualized`, as BOTH production callers mount it (StandaloneThreadPage, the drawer).
+            Without it this fixture rendered ChatView's eager fallback — a branch whose own comment
+            says no production surface reaches it, and which wraps no message in `MessageRow` at all.
+            So the queued rows here carried no hover reading to photograph, and the offset that was
+            wrong on the shipped path could not be seen from this fixture (2026-08-31). */}
+        <ThreadView slug={SLUG} virtualized />
       </div>
     </div>
   )
