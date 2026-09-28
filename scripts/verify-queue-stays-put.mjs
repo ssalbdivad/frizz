@@ -207,8 +207,10 @@ try {
     await act()
     let after
     let sampled
+    // The first frame in which the change is on the page: where it LANDED, before anything converged.
+    let landed
     try {
-      await waitFor(name, until)
+      landed = await waitFor(name, until)
       await sleep(1500)
       after = await snap()
     } catch (error) {
@@ -236,7 +238,7 @@ try {
       `largest move ${worst.by.toFixed(2)}px${worst.key ? ` (${worst.key})` : ""}, in any frame ${sampled.max.toFixed(2)}px over ${sampled.frames} frames; ` +
       `prompt box ${promptMoved.toFixed(2)}px${missing.length ? `; GONE from screen: ${missing.join(" ")}` : ""}; ` +
       `order ${order(after)}; scrollY ${before.scrollY} → ${after.scrollY}`)
-    if (expect) expect(before, after)
+    if (expect) expect(before, after, landed)
     return { before, after }
   }
 
@@ -279,23 +281,25 @@ try {
     act: () => wake("a/q1"),
     until: (s) => !find(s, "q1"),
   })
-  await stays("…and it comes back, waiting below the cards on screen, and nothing on screen moves", {
+  await stays("…and it comes back, and nothing on screen moves", {
     act: () => rest("a/q1"),
     until: (s) => find(s, "q1"),
-    expect: (_, after) => {
-      const onScreen = after.list.filter((c) => c.visible).map((c) => c.key)
-      const q1 = after.list.findIndex((c) => slugOf(c.key) === "q1")
-      const lastOnScreen = Math.max(...onScreen.map((key) => after.list.findIndex((c) => c.key === key)))
-      check("board: …below the cards on screen, not above them", q1 > lastOnScreen, order(after))
+    expect: (_, after, landed) => {
+      // It LANDS below the cards on screen, never above them…
+      const onScreen = landed.list.filter((c) => c.visible).map((c) => c.key)
+      const q1 = landed.list.findIndex((c) => slugOf(c.key) === "q1")
+      const lastOnScreen = Math.max(...onScreen.map((key) => landed.list.findIndex((c) => c.key === key)))
+      check("board: …landing below the cards on screen, not above them", q1 > lastOnScreen, order(landed))
     },
   })
-  // Once those cards are scrolled away it takes its real place, first in line — while nobody looks.
+  // …and takes its real place, first in line, no later than the page next changes which cards are on
+  // screen (sooner if its landing did): the reader scrolling away is the latest that can be.
   await scrollToY(0)
   await sleep(1500)
   await settle()
   {
     const after = await snap()
-    check("board: …and once the reader scrolls away, it is first in line again, off screen above", slugOf(after.list[0].key) === "q1" && !find(after, "q1").visible, `${order(after)}; scrollY ${after.scrollY}`)
+    check("board: …then first in line again", slugOf(after.list[0].key) === "q1", `${order(after)}; scrollY ${after.scrollY}`)
   }
 
   // Marked done from another window while on screen: it is a ghost that says so, not a hole.
@@ -315,11 +319,13 @@ try {
   await stays("newest first: an arrival at the top of the page waits below the cards on screen", {
     act: () => rest("a/r2"),
     until: (s) => find(s, "r2"),
-    expect: (before, after) => {
+    // Where it LANDED: once the page is still, a repaint moves it to its real place above the cards on
+    // screen, which the viewport lock absorbs (the move check above covers that).
+    expect: (before, _, landed) => {
       const lastOnScreen = before.list.filter((c) => c.visible).at(-1)
-      const r2 = after.list.findIndex((c) => slugOf(c.key) === "r2")
+      const r2 = landed.list.findIndex((c) => slugOf(c.key) === "r2")
       // Below every card on screen (and the few within a margin of it, which count as on screen too).
-      check("board: …below the cards the reader was on", r2 > after.list.findIndex((c) => c.key === lastOnScreen.key), order(after))
+      check("board: …landing below the cards the reader was on", r2 > landed.list.findIndex((c) => c.key === lastOnScreen.key), order(landed))
     },
   })
 
@@ -415,11 +421,11 @@ try {
   await stays("newest first: an arrival at the top of the page waits below the cards on screen", {
     act: () => rest("a/r5"),
     until: (s) => find(s, "r5"),
-    expect: (before, after) => {
+    expect: (before, _, landed) => {
       const lastOnScreen = before.list.filter((c) => c.visible).at(-1)
-      const r5 = after.list.findIndex((c) => slugOf(c.key) === "r5")
+      const r5 = landed.list.findIndex((c) => slugOf(c.key) === "r5")
       // Below every card on screen (and the few within a margin of it, which count as on screen too).
-      check("Everything: …below the cards the reader was on", r5 > after.list.findIndex((c) => c.key === lastOnScreen.key), order(after))
+      check("Everything: …landing below the cards the reader was on", r5 > landed.list.findIndex((c) => c.key === lastOnScreen.key), order(landed))
     },
   })
   await stays("newest first: the other project's arrival waits below the cards on screen too", {

@@ -14,9 +14,10 @@
 // document while a queue is on screen, and this does its job in every position.
 //
 // THE ANCHOR is the card the human is engaged with, in order: the one they are TYPING in (the text box
-// itself is held, so the caret does not move), the one under the pointer (they are about to click
-// something in it), else the one at the reading line a third of the way down the viewport (they are
-// reading it). For the last two the card's first node visible from the top of the viewport is held, as
+// itself is held, so the caret does not move — while the box is on screen; one scrolled away from is
+// not being typed in), the one under the pointer (they are about to click something in it — until they
+// use the keyboard, after which a mouse parked over one card says nothing about the card they are
+// reading), else the one at the reading line a third of the way down the viewport (they are reading it). For the last two the card's first node visible from the top of the viewport is held, as
 // the browser's own anchoring picks one — never the element under the pointer: a card that grows under
 // it ("Show more", its own new content) must grow DOWNWARD, and holding a button at the bottom of a
 // growing body would hold the bottom and push the card's top up off the screen. It is re-taken on every
@@ -31,10 +32,11 @@
 // be an instant scroll cancelling the human's own.
 //
 // A RELOAD is the one move this cannot absorb as it happens — the dev server's full reload, a new build's,
-// a restart's — and it used to land the reader at the top of a queue re-laid from nothing. So the card
-// being read and its offset are written down as the page goes, and after the reload the page is held on
-// that card, at that offset, while the queue loads around it: until the human scrolls, or a few seconds
-// after the card first appears.
+// a restart's — and it used to land the reader at the top of a queue re-laid from nothing. A REMOUNT is
+// the same move without the reload: an edit hot-swapping the page's module, the queue's error boundary
+// recovering from a torn build. So the card being read and its offset are written down as the page goes
+// or the queue unmounts, and when it comes back the page is held on that card, at that offset, while the
+// queue loads around it: until the human scrolls, or a few seconds after the card first appears.
 //
 // It runs after every render of the queue (a layout effect: after the DOM changed, before paint) and
 // whenever the document's size changes (a ResizeObserver: a card that fetched its transcript, an image
@@ -247,6 +249,9 @@ export function useViewportLock(slots: string, keyOf: (slot: HTMLElement) => str
   const asked = useRef({ keys: "", ghostGone: false })
   const settle = useRef({ timer: 0, pending: false })
   // The card to hold after a reload (Reading), until `until` — pushed out to RELOAD_HOLD_MS once it is found.
+  // The note a reload or remount leaves (Reading), kept current on every measurement: by the time the queue
+  // unmounts its cards are already gone from the page and cannot be measured.
+  const note = useRef<Reading | null>(null)
   // `y`: the page offset the restore last left, so any other scroll — the human's, or the app's own landing
   // on a card the address names — is seen as taking the page over.
   const restoring = useRef<{ key: string; top: number; until: number; found: boolean; y: number } | null>(null)
@@ -306,6 +311,8 @@ export function useViewportLock(slots: string, keyOf: (slot: HTMLElement) => str
       }
     }
     anchor.current = next
+    const noteKey = next && keyOf(next.slot)
+    note.current = next && noteKey ? { path: location.pathname, slots, key: noteKey, top: next.slot.getBoundingClientRect().top, at: 0 } : null
     const signature = [...keys].join("\n")
     if (signature !== asked.current.keys || (ghostGone && !asked.current.ghostGone)) requestRepaint.current()
     asked.current = { keys: signature, ghostGone }
@@ -316,7 +323,7 @@ export function useViewportLock(slots: string, keyOf: (slot: HTMLElement) => str
     const scrollY = pageScrollY()
     const hold = (slot: HTMLElement, node: Element): Anchor => ({ node, top: node.getBoundingClientRect().top, slot, slotTop: slot.getBoundingClientRect().top, scrollY })
     const focused = document.activeElement
-    if (focused instanceof HTMLElement && typingIn(focused)) {
+    if (focused instanceof HTMLElement && typingIn(focused) && onScreen(focused.getBoundingClientRect(), viewport)) {
       const slot = visible.find((candidate) => candidate.contains(focused))
       if (slot) return hold(slot, focused)
     }
@@ -368,18 +375,22 @@ export function useViewportLock(slots: string, keyOf: (slot: HTMLElement) => str
     const stopRestoring = (event: Event) => {
       if (event.isTrusted) restoring.current = null
     }
+    const leaveNote = () => {
+      if (!note.current) return
+      try {
+        sessionStorage.setItem(RELOAD_KEY, JSON.stringify({ ...note.current, at: Date.now() }))
+      } catch {
+        // Storage full or blocked: the page comes back where the browser puts it.
+      }
+    }
     const onHide = () => {
       restoring.current = null
       take.current()
-      const held = anchor.current
-      const key = held && latest.current.keyOf(held.slot)
-      if (!held || !key) return
-      const note: Reading = { path: location.pathname, slots: latest.current.slots, key, top: held.slot.getBoundingClientRect().top, at: Date.now() }
-      try {
-        sessionStorage.setItem(RELOAD_KEY, JSON.stringify(note))
-      } catch {
-        // Storage full or blocked: the reload lands where the browser puts it.
-      }
+      leaveNote()
+    }
+    // A key is the keyboard reading: the pointer stops counting until it moves again.
+    const onKey = () => {
+      pointer.current = null
     }
     let frame = 0
     const retake = () => {
@@ -412,6 +423,7 @@ export function useViewportLock(slots: string, keyOf: (slot: HTMLElement) => str
     const onResume = () => take.current()
     resumeListeners.add(onResume)
     window.addEventListener("pagehide", onHide)
+    window.addEventListener("keydown", onKey, true)
     for (const type of TAKEOVER) window.addEventListener(type, stopRestoring, { capture: true, passive: true })
     window.addEventListener("scroll", onScroll, { passive: true })
     window.addEventListener("resize", retake)
@@ -434,6 +446,11 @@ export function useViewportLock(slots: string, keyOf: (slot: HTMLElement) => str
       document.removeEventListener("focusin", retake)
       document.removeEventListener("focusout", retake)
       window.removeEventListener("pagehide", onHide)
+      window.removeEventListener("keydown", onKey, true)
+      // Unmounted with the page still here: a hot swap or a recovering error boundary, and the queue that
+      // mounts next finds the note. (A navigation to another page leaves one too; it is only read back on
+      // this same address, within the minute.)
+      if (!restoring.current) leaveNote()
       for (const type of TAKEOVER) window.removeEventListener(type, stopRestoring, true)
       history.scrollRestoration = restorationWas
       resumeNativeAnchoring()
