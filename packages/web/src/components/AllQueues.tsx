@@ -807,9 +807,9 @@ function useScrollToCard(): (key: string) => number | null {
  * held as the card being read; otherwise a quick `j j` would step twice from the card the glide was
  * leaving and land on the same card again.
  *
- * That card also wears the arrival ring STEADILY (`data-queue-current`), for as long as it is the one a
- * `d` or `s` would act on — the flash alone faded after a second and left no sign of which card the next
- * key would finish. An open drawer takes the keys (currentThreadSurface), so the ring steps off while one is.
+ * That card also wears an accent border (`data-queue-current`), for as long as it is the one a `d` or `s`
+ * would act on — the flash alone faded after a second and left no sign of which card the next key would
+ * finish. An open drawer takes the keys (currentThreadSurface), so the border steps off while one is.
  *
  * A CLICK in a card makes it the card being read, held like a key's landing for as long as the page stays
  * put: the scrollspy's line is a third of the way down, so the last card or two — which the page cannot
