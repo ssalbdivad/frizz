@@ -700,8 +700,9 @@ export function ProjectRail() {
           // A DOTTED squircle, matching the project squares' own `rounded-[30%]` so it reads as an empty
           // slot in the same list rather than a control bolted under it. Dotted and not dashed: at 40px
           // a dashed border resolves into four long strokes that read as a frame, where dots read as
-          // "nothing here yet" — which is what it is.
-          className="mt-3 flex h-10 w-10 shrink-0 items-center justify-center rounded-[30%] border-[1.5px] border-dotted border-border-strong text-muted-80 outline-none transition-colors hover:border-fg/40 hover:text-fg focus-visible:ring-1 focus-visible:ring-focus-ink-60 disabled:opacity-50"
+          // "nothing here yet" — which is what it is. Under the Home square it keeps the list's own 8px
+          // rhythm, the next slot after Home; under the band it stands off by 12.
+          className={`${homeCard ? "mt-2" : "mt-3"} flex h-10 w-10 shrink-0 items-center justify-center rounded-[30%] border-[1.5px] border-dotted border-border-strong text-muted-80 outline-none transition-colors hover:border-fg/40 hover:text-fg focus-visible:ring-1 focus-visible:ring-focus-ink-60 disabled:opacity-50`}
         >
           <Plus size={16} />
         </button>

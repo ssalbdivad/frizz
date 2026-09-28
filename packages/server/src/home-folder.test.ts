@@ -22,9 +22,13 @@ test("expandHomeFolder: unset, blank and `~` are the home folder itself", () => 
 
 test("expandHomeFolder: `~/…` is under home, an absolute path is resolved as written", () => {
   const home = "/home/x"
-  assert.equal(expandHomeFolder("~/code", home), join(home, "code"))
-  assert.equal(expandHomeFolder("  ~/code  ", home), join(home, "code"), "trimmed, as typed into a field")
+  assert.equal(expandHomeFolder("~/code", home), resolve(home, "code"))
+  assert.equal(expandHomeFolder("  ~/code  ", home), resolve(home, "code"), "trimmed, as typed into a field")
   assert.equal(expandHomeFolder("/srv/work/../scratch", home), resolve("/srv/scratch"))
+  // Spelled either way, one folder: a trailing separator must not survive into "No folder at …" or a
+  // stale card's path while the two spellings of an existing folder already agree through realpath.
+  assert.equal(expandHomeFolder("~/code/", home), expandHomeFolder("~/code", home))
+  assert.equal(expandHomeFolder("/srv/code/", home), resolve("/srv/code"))
 })
 
 // The server's own cwd is whichever directory the launcher happened to start in — nothing the operator

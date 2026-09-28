@@ -118,7 +118,7 @@ if (childId && mode !== 'subagent-start') process.exit(0);
 // on a newer install switches every project's data back to it on the next boot. Frizz says so with
 // FRIZZ_BOARD_ROOT (Claude) or `--board-root` (codex's shared app-server carries no per-thread env), and
 // then the worker is told the directory by its absolute path, since the relative one names the wrong place.
-const boardRoot = flagValue('--board-root') || process.env.FRIZZ_BOARD_ROOT || '';
+const boardRoot = (flagValue('--board-root') || process.env.FRIZZ_BOARD_ROOT || '').trim();
 const projectDir = boardRoot || process.env.CLAUDE_PROJECT_DIR || process.cwd();
 
 // WHICH session keys the pad. On Claude the hook's `session_id` IS frizz's thread session id, so the

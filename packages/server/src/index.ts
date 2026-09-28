@@ -976,6 +976,7 @@ export async function startServer(opts: StartOptions = {}): Promise<StartedServe
         serverLockPath: serverLockPathFor(project),
         activeTenants,
         teardownProject,
+        reopenHomeWorkspace,
         launchProjectId: project.id,
         startup: {
           afterPhase: (p) => {

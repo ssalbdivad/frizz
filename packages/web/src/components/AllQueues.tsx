@@ -280,7 +280,12 @@ function ProjectPicker({ projects, focus, onPick }: { projects: QueuesProject[];
         {homeChoice && (
           <>
             {choices.length > 0 && <MenuSeparator />}
-            {choice(homeChoice, homeChoice.card && shortPath(homeChoice.card.path, homeChoice.homeDir))}
+            {/* Outside the scrolling list, so it never scrolls away — and inset by the scrollbar gutter that
+                list reserves (styles.css `scrollbar-gutter: stable`), or its hint ended 7px right of the
+                check marks above it. */}
+            <div className="pr-[var(--sbw)]">
+              {choice(homeChoice, homeChoice.card && shortPath(homeChoice.card.path, homeChoice.homeDir))}
+            </div>
           </>
         )}
       </MenuContent>

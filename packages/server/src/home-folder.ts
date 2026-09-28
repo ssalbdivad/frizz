@@ -1,6 +1,6 @@
 import { realpathSync, statSync } from "node:fs"
 import { homedir } from "node:os"
-import { basename, isAbsolute, join, resolve } from "node:path"
+import { basename, isAbsolute, resolve } from "node:path"
 import { findByPath } from "./project-registry.ts"
 
 // THE HOME FOLDER SETTING, AS A PATH — where the Home workspace's agents run (home-workspace.ts).
@@ -16,7 +16,8 @@ import { findByPath } from "./project-registry.ts"
 export function expandHomeFolder(value: string | undefined, home = homedir()): string {
   const typed = value?.trim()
   if (!typed || typed === "~") return home
-  if (typed.startsWith("~/") || typed.startsWith("~\\")) return join(home, typed.slice(2))
+  // resolve, not join, so `~/code/` and `/abs/code/` name the folder the same way — no trailing separator.
+  if (typed.startsWith("~/") || typed.startsWith("~\\")) return resolve(home, typed.slice(2))
   return isAbsolute(typed) ? resolve(typed) : resolve(home, typed)
 }
 

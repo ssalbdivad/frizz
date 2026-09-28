@@ -206,12 +206,15 @@ function HomeFolderField({ value, onCommit }: { value: string; onCommit: (folder
         placeholder="~"
         spellCheck={false}
         autoComplete="off"
-        className={`w-full rounded-md border bg-bg px-2.5 py-2 font-mono text-[12px] text-fg outline-none placeholder:text-muted-50 focus-visible:ring-1 focus-visible:ring-focus-ink-60 ${
-          reading?.problem ? "border-danger-fill/60" : "border-border-strong"
+        // The bordered Select's own box (ui/Select.tsx), so the field stands in the drawer's column as one
+        // of its controls; mono because what it holds is a path.
+        className={`w-full rounded-md border bg-bg px-2 py-1 font-mono text-[12px] text-fg outline-none placeholder:text-muted-50 focus-visible:ring-1 focus-visible:ring-focus-ink-60 ${
+          reading?.problem ? "border-danger-fill/60" : "border-border"
         }`}
       />
-      {/* Always a line tall, so the drawer does not jump as the reading comes and goes. */}
-      <p className={`mt-1.5 min-h-[1.4em] truncate text-[11.5px] ${reading?.problem ? "text-danger" : "text-muted-70"}`}>
+      {/* Always a line tall, so the drawer does not jump as the reading comes and goes. The notification
+          field's hint type (PermHint), at the same 6px from its control. */}
+      <p className={`mt-1.5 min-h-[1.4em] truncate text-[11px] ${reading?.problem ? "text-danger" : "text-muted-70"}`}>
         {reading ? reading.problem ?? `Threads started in Home run in ${reading.folder}` : ""}
       </p>
     </div>
