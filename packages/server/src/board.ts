@@ -10,7 +10,7 @@ import watcher from "@parcel/watcher"
 import type { BoardSnapshot, ClaudeModel, ThreadView, RuntimeState, ThreadRecurringPrompt, ProviderError } from "@frizz/shared"
 import { AskedQuestionSchema, BoardDiffer, PermissionMode, SnoozeUntil, ThreadSlug, isDirectSubAgent, questionAnswerMessage, questionsCancelledWakeMessage, type AskedQuestion, type PermissionMode as PermissionModeValue, type QuestionAnswer, type QuestionDismissal } from "@frizz/shared"
 import type { Bus } from "./bus.ts"
-import type { Project } from "./project.ts"
+import { workDirOf, type Project } from "./project.ts"
 import { isHeadlessRow, isBrokerClaudeRow, sessionTitleLocked, type ThreadQuestionRow } from "./storage.ts"
 import type { Storage, SessionRow, PrWatchRow, ThreadTimerRow, ThreadWatchRow, ThreadLinkRow } from "./storage.ts"
 import { threadLinkView } from "./thread-links.ts"
@@ -21,6 +21,7 @@ import type { InteractionChange } from "./interaction-store.ts"
 import { frizzDirExists } from "./frizz.ts"
 import { githubStatusKey, parkExpiresAt, parkIsHonoured, parseIssueRef, parsePrRef, readAwaitingPark, readGithubIssueStatusBook, readGithubStatusBook, GITHUB_ISSUE_STATUS_SETTING, GITHUB_STATUS_SETTING, type GithubIssueStatusBook, type GithubStatusBook } from "./awaiting.ts"
 import { findByPath } from "./project-registry.ts"
+import { homeWorkspaceSlug, isHomeWorkspace } from "./home-workspace.ts"
 import { parseDeliveryLedger } from "./delivery-ledger.ts"
 import { effectivePermissionMode, fallbackTitle, resolveLegacyThreadFile } from "./dispatch.ts"
 import { ProducerStoppedError } from "./shutdown.ts"
@@ -2091,11 +2092,14 @@ export function createBoard(
     // The URL slug comes from the machine-wide registry, not from `project` — the same lookup every
     // other link goes through, so the board can never name itself differently from the rail.
     const base = {
-      projectDir: project.dir,
+      // Where the agents run, since that is what every relative path they write resolves against — the
+      // checkout, or the Home workspace's folder (project.ts workDirOf).
+      projectDir: workDirOf(project),
       projectName: project.name,
       projectLabel: project.label,
       ...(project.githubRepo ? { githubRepo: project.githubRepo } : {}),
-      projectSlug: findByPath(project.dir)?.slug,
+      // Home is in no registry entry to be found by path (home-workspace.ts).
+      projectSlug: isHomeWorkspace(project.id) ? homeWorkspaceSlug() : findByPath(project.dir)?.slug,
       // So the client can expand a `~` a worker wrote in prose (see BoardSnapshot.homeDir).
       homeDir: homedir(),
     }

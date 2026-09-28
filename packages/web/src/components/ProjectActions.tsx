@@ -17,12 +17,14 @@ import { PROJECT_ICON_EXTENSIONS, slugify, type ProjectCard } from "@frizz/share
 import { rpc } from "../api/rpc.ts"
 import { everythingHref, innerPath, projectSlug } from "../lib/base-path.ts"
 import { showToast, store } from "../store.ts"
+import { rememberCrossProjectFocus } from "../lib/crossProject.ts"
 import { Dialog } from "./ui/Dialog.tsx"
 import { ProjectSquare } from "./ProjectRail.tsx"
 import { ROW_ACTION_CLASS } from "./Sidebar.tsx"
 
 /** `/Users/me/code/nub` → `~/code/nub`. The home prefix is noise on every row. */
 export function shortPath(path: string, home: string | undefined): string {
+  if (home && path === home) return "~"
   return home && path.startsWith(`${home}/`) ? `~${path.slice(home.length)}` : path
 }
 
@@ -151,6 +153,15 @@ export function ProjectMenu({
                 <RadixDropdown.Separator className="mx-1 my-1 h-px bg-border" />
               </>
             )}
+            {project.home ? (
+              // The Home workspace is Frizz's, not a folder the operator registered: it has no icon to
+              // choose, its name is fixed, and it cannot be deleted. What CAN change is the folder its
+              // agents run in, which is a setting — so the menu opens Settings there.
+              <RadixDropdown.Item className={MENU_ITEM} onSelect={() => { store.showSettings = true }}>
+                Change folder…
+              </RadixDropdown.Item>
+            ) : (
+            <>
             {!project.stale && (
               <>
                 <RadixDropdown.Item className={MENU_ITEM} onSelect={() => pick.mutate()}>
@@ -170,6 +181,8 @@ export function ProjectMenu({
             >
               Delete project…
             </RadixDropdown.Item>
+            </>
+            )}
           </RadixDropdown.Content>
         </RadixDropdown.Portal>
       </RadixDropdown.Root>
@@ -669,7 +682,8 @@ export function AddProjectHost() {
 
 /** The home directory, from the registry's own paths — only ever used to shorten a path for display. */
 export function homeOf(projects: readonly { path: string }[] | undefined): string | undefined {
-  return projects?.[0]?.path.match(/^(\/(?:Users|home)\/[^/]+)\//u)?.[1]
+  // Up to a `/` OR the end: the Home workspace's folder is, by default, the home folder itself.
+  return projects?.[0]?.path.match(/^(\/(?:Users|home)\/[^/]+)(?:\/|$)/u)?.[1]
 }
 
 /**
@@ -690,9 +704,13 @@ const MARK_PX = 76
  * directory is gone. Those are listed under the button with their menus, since deleting them (or finding
  * the folder again) is the way out, and a page that pretended they did not exist would strand them.
  */
-export function Welcome({ projects }: { projects: readonly ProjectCard[] }) {
+export function Welcome({ projects: cards }: { projects: readonly ProjectCard[] }) {
   const add = useAddProject()
-  const home = homeOf(projects)
+  const home = homeOf(cards)
+  // The Home workspace is always registered, so it is not what this page counts: a machine with only
+  // Home still has no project. It is offered below instead, as the other way to start.
+  const projects = cards.filter((card) => !card.home)
+  const homeCard = cards.find((card) => card.home && !card.stale)
   return (
     // m-auto rather than justify-center: a centred flex column clips its overflow at the top once the
     // content is taller than the viewport, and auto margins centre while still scrolling from the top.
@@ -739,6 +757,22 @@ export function Welcome({ projects }: { projects: readonly ProjectCard[] }) {
           <code className="rounded border border-border bg-panel px-1.5 py-0.5 font-mono text-muted">frizz</code>{" "}
           in any folder.
         </p>
+        {/* Choosing Home makes it the pick, and `/` then lands on Everything aimed at it (routes.tsx
+            useHomeFocus) — the way to clone a first repository without adding a project to hold it. */}
+        {homeCard && (
+          <p className="text-[11.5px] text-muted-70">
+            Or{" "}
+            <button
+              type="button"
+              data-welcome-home
+              onClick={() => rememberCrossProjectFocus(homeCard.id)}
+              className="rounded-sm text-fg/85 underline decoration-muted/40 underline-offset-2 outline-none transition-colors hover:text-fg hover:decoration-fg focus-visible:ring-1 focus-visible:ring-focus-ink-60"
+            >
+              start a thread in {shortPath(homeCard.path, home)}
+            </button>{" "}
+            without a project.
+          </p>
+        )}
       </div>
     </div>
   )
