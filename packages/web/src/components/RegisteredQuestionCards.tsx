@@ -25,7 +25,7 @@ import { X } from "lucide-react"
 import type { QuestionAnswer, RegisteredQuestionView, SettledQuestionView, ThreadView } from "@frizz/shared"
 import { rpc, type Api } from "../api/rpc.ts"
 import { draftKey, draftStore, useDraftValues, useProjectDir } from "../lib/drafts.ts"
-import { clearSteered, markSteered } from "../lib/steering.ts"
+import { clearSteered, clearSteeredIn, markSteered, markSteeredIn } from "../lib/steering.ts"
 import type { BlockAnswer } from "../lib/questionBlocks.ts"
 import type { PairedAnswer } from "../lib/answersMessage.ts"
 import { ROOT_PATH, liveQuestionNodes, nodeAnswered, registeredAnswer, settledQuestionNodes } from "../lib/registeredQuestion.ts"
@@ -72,6 +72,8 @@ export const RegisteredAnsweringContext = createContext<RegisteredAnswering | nu
 export interface RegisteredAnsweringScope {
   api: Pick<Api, "answerQuestions" | "dismissQuestions">
   projectDir: string | undefined
+  /** Whose steer an answer is: the project list reads it back for that project's row (lib/steering.ts). */
+  projectId: string
 }
 
 /** The state behind every registered card on a surface. `thread` undefined (a stack that found a
@@ -139,7 +141,8 @@ export function useRegisteredAnswering(thread: ThreadView | undefined, scope?: R
       // looking at a queue that quietly swallowed their reply. Same reversal an optimistic Mark-as-done
       // makes when the server declines it.
       queueDismiss?.cancel()
-      if (slug) clearSteered(slug)
+      if (slug && scope) clearSteeredIn(scope.projectId, slug)
+      else if (slug) clearSteered(slug)
       setError(errorText(cause))
     },
     // Server truth replaces the optimistic settled cards either way: on success it carries the real
@@ -163,7 +166,10 @@ export function useRegisteredAnswering(thread: ThreadView | undefined, scope?: R
     // batch), so this is a steer in all but name, and it takes the steer's overlay: without it the row
     // dropped its question mark on the board push, sat in the queue wearing the at-rest ellipsis, and only
     // moved to the running band once the delivery landed (lib/steering.ts).
-    markSteered(slug)
+    // On another project's card the record is that project's (markSteeredIn): a bare slug there would
+    // set the page project's thread of the same name to work.
+    if (scope) markSteeredIn(scope.projectId, slug)
+    else markSteered(slug)
     // THE CARD GREYS IN PLACE ON SEND, before the round-trip: the answered question joins the settled
     // list now, and the surface stops drawing the open card for any id that list holds (see
     // withoutSettledQuestions). Waiting for the server instead left a beat where the open card had gone

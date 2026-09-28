@@ -1,5 +1,6 @@
 import { projectApiBase, projectRpc } from "../api/rpc.ts"
 import { DELIVERY_SEND_TIMEOUT_MS, trackPendingSend, withDeliveryRetry } from "./eagerComposerSubmission.ts"
+import { clearSteeredIn, markSteeredIn } from "./steering.ts"
 
 /**
  * A follow-up into a thread of ANY project, named by id — delivered the way the board's composer delivers
@@ -18,7 +19,10 @@ export function deliverProjectFollowUp(
   const deliveryId = crypto.randomUUID()
   const sessionId = target.sessionId ?? ""
   const pending = { deliveryId, apiBase: projectApiBase(target.projectId), projectDir: target.projectDir, slug: target.slug, sessionId, message, at: Date.now() }
-  return trackPendingSend(pending, () => withDeliveryRetry(async () => {
+  // The thread is working again the moment the message is sent, so its row in the project list says so
+  // now rather than at the next poll (lib/steering.ts); a send that fails takes that back.
+  markSteeredIn(target.projectId, target.slug)
+  const sent = trackPendingSend(pending, () => withDeliveryRetry(async () => {
     const abort = new AbortController()
     const timer = setTimeout(() => abort.abort(), DELIVERY_SEND_TIMEOUT_MS)
     try {
@@ -27,4 +31,6 @@ export function deliverProjectFollowUp(
       clearTimeout(timer)
     }
   }, () => {}))
+  sent.catch(() => clearSteeredIn(target.projectId, target.slug))
+  return sent
 }

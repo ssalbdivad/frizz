@@ -187,7 +187,7 @@ export const AllQueuesCard = memo(function AllQueuesCard({
     onReturn()
     void queryClient.invalidateQueries({ queryKey: ["projectsQueues"] })
   }
-  const answeringScope = useMemo(() => ({ api, projectDir: project.projectDir }), [api, project.projectDir])
+  const answeringScope = useMemo(() => ({ api, projectDir: project.projectDir, projectId: project.id }), [api, project.projectDir, project.id])
 
   const openHere = (event: ReactMouseEvent<HTMLAnchorElement>) => {
     if (!isPlainLeftClick(event)) return

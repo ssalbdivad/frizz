@@ -692,10 +692,10 @@ export function awaitingReason(t: Pick<ThreadView, "lastFence">): string | null 
 // the tooltip trigger (a real DOM node Radix can ref).
 export function ThreadIndicator({ t }: { t: ThreadView }) {
   // No steer special-case here: the glyph is derived from `t` alone, by the same decision that bands the
-  // row. When this hook consulted the steer hint on its own, the glyph and the placement were two rules
-  // and drifted apart on every steer. (The project board's sidebar overlaid a just-sent steer onto its
-  // threads before they reached here, lib/steering.ts, until it went on 2026-09-28; Everything's list
-  // draws the row the poll reports.)
+  // row. The project list overlays a just-sent steer onto the thread before it gets here (lib/listBands.ts
+  // listOverlay), so `t` already reads as running and the ordinary derivation returns the spinner. When this
+  // hook consulted the steer hint on its own, the glyph and the placement were two rules and drifted apart
+  // on every steer.
   const { node, tip } = sessionIndicatorFor(t)
   // The resolved kind, on the shipped markup. Cheap, and it is what lets the rail's own glyphs be
   // measured where they actually render (scripts/verify-rail-status-glyphs.mjs holds the family to one

@@ -38,7 +38,10 @@ import { useBoard } from "../hooks.ts"
 import { threadKey, type QueuesProject } from "../lib/allQueues.ts"
 import { projectSlug } from "../lib/base-path.ts"
 import { setProjectCollapsed, setProjectDrilled, setQueueFilter, useCollapsedProjects, useDrilledProjects, useQueueFilter } from "../lib/crossProject.ts"
+import { useArchivingAt } from "../lib/optimisticArchive.ts"
+import { listOverlay, loudBands, type LoudBands } from "../lib/listBands.ts"
 import { prefetchProjectBoard, projectBoardKey, useProjectBoard } from "../lib/projectBoards.ts"
+import { useSteeredAt } from "../lib/steering.ts"
 import { drawerThreadSlug, store } from "../store.ts"
 import { useOpenThreadInPlace } from "./AllQueuesCard.tsx"
 import { BANDS, type BandKey } from "./BandLabel.tsx"
@@ -85,7 +88,14 @@ export function ProjectList({
   const collapsed = useCollapsedProjects()
   const drilled = useDrilledProjects()
   useReadAhead(projects)
-  const groups = projects.map((project) => ({ project, bands: loudBands(project, hidden) }))
+  const steeredAt = useSteeredAt()
+  const archivingAt = useArchivingAt()
+  const focus = projectSlug(useLocation().pathname)
+  const live = useBoard()
+  const groups = projects.map((project) => {
+    const onPage = project.slug === focus && live?.projectSlug === project.slug
+    return { project, bands: loudBands(project, hidden, listOverlay(project.id, onPage, steeredAt, archivingAt)) }
+  })
   // A folded project keeps its place: it is still busy, only quieter to look at.
   const busy = groups.filter((group) => group.bands.rows > 0)
   const quiet = groups.filter((group) => group.bands.rows === 0)
@@ -118,26 +128,6 @@ export function ProjectList({
   )
 }
 
-interface LoudBands {
-  /** Every pinned thread, whatever its state: the pin is the human's shelf, and it outranks Done. */
-  pinned: ThreadView[]
-  ready: ThreadView[]
-  working: ThreadView[]
-  rows: number
-}
-
-/**
- * A project's work in flight, as its rail banded it: Pinned first (the pin diverts a thread out of every
- * other band, groups.ts sectionThreads), then Ready in queue order, then Working. A Ready card being
- * finished leaves its row with it (`hidden`); one open in a drawer keeps its row, marked open.
- */
-function loudBands(project: QueuesProject, hidden: (key: string) => boolean): LoudBands {
-  const pinned = [...project.queued, ...project.running, ...project.snoozed].filter(isPinned)
-  pinned.sort((a, b) => (a.pinnedAt ?? "").localeCompare(b.pinnedAt ?? "") || a.id.localeCompare(b.id))
-  const ready = project.queued.filter((t) => !isPinned(t) && !hidden(threadKey(project.id, t.id)))
-  const working = project.running.filter((t) => !isPinned(t))
-  return { pinned, ready, working, rows: pinned.length + ready.length + working.length }
-}
 
 /**
  * READ EVERY PROJECT'S BOARD AHEAD, once the page is idle, so opening one never waits on a round trip
@@ -204,9 +194,7 @@ function ProjectGroup({
   const openSlug = onPage ? drawerThreadSlug(snap.drawers) : null
   const scope = useRowScope(project, onPage, onQueuedRow)
   const queryClient = useQueryClient()
-  // The threads with a card in the queue — a Ready row, or a pinned one that is Ready — which the thread
-  // across the gutter ties to that card (ThreadConnector).
-  const carded = new Set(project.queued.map((t) => t.id))
+  const carded = loud.carded
   const row = (restedAge: boolean) => (t: ThreadView) => (
     <RailRow
       key={t.id}

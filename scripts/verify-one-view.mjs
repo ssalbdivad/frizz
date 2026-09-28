@@ -347,6 +347,45 @@ try {
     await clickSettled(counts)
   })
 
+  // ── a reply moves its row to Working at once ─────────────────────────────────────────────────────
+  // The seeded workers are stand-ins that cannot take a message, so the follow-up is answered here, 1.5s
+  // late, as a loaded server would: the row must not wait for it (lib/steering.ts markSteeredIn).
+  await step("a reply sent from a card moves its row to Working before the server answers", async () => {
+    await page.goto(`${origin}/`, { waitUntil: "networkidle2" })
+    await page.waitForSelector('[data-xq-card] [data-surface="queueComposer"]')
+    await sleep(800)
+    const card = await page.$$eval('[data-xq-card]', (cards) => cards.map((c) => c.getAttribute("data-xq-card")).find((key) => !key.split("/")[1].startsWith("term-") && document.querySelector(`[data-xq-card="${key}"] [data-surface="queueComposer"]`)))
+    if (!card) throw new Error("no session card with a reply box")
+    const [projectId, slug] = card.split("/")
+    const row = `[data-xq-rail-project="${projectId}"] [data-sidebar-item="${slug}"]`
+    const carded = () => page.$$eval(`[data-xq-rail-project="${projectId}"] [data-sidebar-item][data-xq-rail-row]`, (rows) => rows.length)
+    const before = await carded()
+    check("…the row starts out Ready", (await page.$eval(row, (r) => r.hasAttribute("data-xq-rail-row"))) === true)
+    await page.setRequestInterception(true)
+    const held = (request) => {
+      if (request.isInterceptResolutionHandled()) return
+      if (request.method() === "POST" && request.url().endsWith("/rpc/followUp")) {
+        setTimeout(() => request.respond({ status: 200, contentType: "application/json", body: JSON.stringify({ result: null }) }).catch(() => {}), 1500)
+      } else request.continue().catch(() => {})
+    }
+    page.on("request", held)
+    try {
+      await clickSettled(`[data-xq-card="${card}"] [data-surface="queueComposer"]`)
+      await page.keyboard.type("Looks right, carry on")
+      const sent = Date.now()
+      await page.keyboard.press("Enter")
+      await page.waitForFunction((row) => document.querySelector(`${row} [data-rail-glyph="working"]`) !== null, { timeout: 1000, polling: 16 }, row)
+      const took = Date.now() - sent
+      check("the row wears Working before the server has answered", took < 1500, `${took}ms`)
+      check("…it has left Ready, and the project's Ready rows are one fewer", (await page.$eval(row, (r) => !r.hasAttribute("data-xq-rail-row"))) && (await carded()) === before - 1, `${await carded()} of ${before}`)
+      await page.screenshot({ path: join(shots, "one-view-steered-row.png") })
+      await sleep(1800)
+    } finally {
+      page.off("request", held)
+      await page.setRequestInterception(false)
+    }
+  })
+
   // ── /login is an account action, not a message ───────────────────────────────────────────────────
   await step("/login typed into a card opens sign-in and sends nothing", async () => {
     await page.goto(`${origin}/`, { waitUntil: "networkidle2" })

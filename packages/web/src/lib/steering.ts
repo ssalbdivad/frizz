@@ -1,5 +1,6 @@
 import { proxy, useSnapshot } from "valtio"
 import type { ThreadView } from "@frizz/shared"
+import { threadKey } from "./allQueues.ts"
 
 // OPTIMISTIC STEER STATE — "your message is in, this thread is working again", rendered the instant
 // the operator commits rather than when the server can prove it.
@@ -39,6 +40,19 @@ export function clearSteered(slug: string): void {
   const prior = expiries.get(slug)
   if (prior !== undefined) { clearTimeout(prior); expiries.delete(slug) }
   delete steering.at[slug]
+}
+
+// A steer sent to a thread of a NAMED project — from a card or a project-list row on the one page, whose
+// thread is usually not the page project's. A bare slug is ambiguous there (two projects can both have a
+// `fix-auth`), so this is filed under the thread's key (lib/allQueues.ts threadKey), which no bare slug
+// can collide with, and read back by the project list for that project's rows (ProjectList.tsx loudBands).
+// The bare-slug record above stays the PAGE project's: its drawer's composer and cards write it.
+export function markSteeredIn(projectId: string, slug: string, nowMs = Date.now()): void {
+  markSteered(threadKey(projectId, slug), nowMs)
+}
+
+export function clearSteeredIn(projectId: string, slug: string): void {
+  clearSteered(threadKey(projectId, slug))
 }
 
 // Whether `t` should render as working purely on the strength of a just-sent steer. Server truth wins

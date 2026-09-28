@@ -17,7 +17,7 @@ import type {
   InteractionValues,
   ThreadView,
 } from "@frizz/shared"
-import { useThreadApi, useThreadIsForeignToPage, useThreadProjectDir } from "../api/threadApi.tsx"
+import { useThreadApi, useThreadIsForeignToPage, useThreadProjectDir, useThreadProjectId } from "../api/threadApi.tsx"
 import { shouldSubmitStagedEnter } from "../lib/composerKeyboard.ts"
 import {
   failClosedAmbiguousInteraction,
@@ -43,7 +43,7 @@ import {
 } from "../lib/typedInteractions.ts"
 import { safeHttpUrl } from "../lib/external-links.ts"
 import { draftKey, draftStore, useDraftValues } from "../lib/drafts.ts"
-import { clearSteered, markSteered } from "../lib/steering.ts"
+import { clearSteered, clearSteeredIn, markSteered, markSteeredIn } from "../lib/steering.ts"
 import { QueueDismissContext } from "./ChatView.tsx"
 // THE question card. A native AskUserQuestion is a question, not an authorization request, so it
 // renders through the very component a ```question fence renders through — same card, same option
@@ -317,21 +317,24 @@ function steerOnDecision(decision: CanonicalInteractionDecision): boolean {
   return decision.semantic !== "cancel"
 }
 
-// How a steer SHOWS, which depends on where the card is drawn. On the thread's own project the rail row
-// takes the optimistic overlay. On an Everything queue card the overlay is not ours to write — it is keyed
-// by bare slug and read by the page's rail, which may be another project's (threadApi.tsx
-// useThreadIsForeignToPage) — and the card itself leaves the queue instead, the way a reply sent from its
-// box does; a failed send brings it back.
+// How a steer SHOWS. The thread's row in the project list takes the optimistic overlay, and a queue card
+// leaves the queue, the way a reply sent from its box does; a failed send undoes both. The record is
+// filed by bare slug for the page's own project (its drawer), and under the thread's key for a card
+// scoped to another project (threadApi.tsx useThreadIsForeignToPage) — a bare slug there would set the
+// page project's thread of the same name to work.
 function useSteerOnDecision(slug: string): { commit: () => void; undo: () => void } {
   const foreign = useThreadIsForeignToPage()
+  const projectId = useThreadProjectId()
   const queue = useContext(QueueDismissContext)
   return {
     commit: () => {
-      if (!foreign) markSteered(slug)
+      if (foreign && projectId) markSteeredIn(projectId, slug)
+      else if (!foreign) markSteered(slug)
       queue?.dismiss()
     },
     undo: () => {
-      if (!foreign) clearSteered(slug)
+      if (foreign && projectId) clearSteeredIn(projectId, slug)
+      else if (!foreign) clearSteered(slug)
       queue?.cancel()
     },
   }
