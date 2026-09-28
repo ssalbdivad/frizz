@@ -1,17 +1,16 @@
-import { createContext, Fragment, memo, useCallback, useContext, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore, type ComponentPropsWithoutRef, type CSSProperties, type KeyboardEvent as ReactKeyboardEvent, type MouseEvent as ReactMouseEvent, type ReactNode } from "react"
+import { createContext, memo, useCallback, useContext, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore, type KeyboardEvent as ReactKeyboardEvent, type MouseEvent as ReactMouseEvent, type ReactNode } from "react"
 import { createPortal } from "react-dom"
-import { useSnapshot } from "valtio"
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import { useVirtualizer } from "@tanstack/react-virtual"
-import { AlertTriangle, ArrowDown, ArrowUp, Bot, Check, ChevronRight, FileText, HelpCircle, Hourglass, KeyRound, ListChecks, Loader2, Radar, TerminalSquare, X, type LucideIcon } from "lucide-react"
-import { awaitingFenceTitle, parseRecurringPrompt, questionFencesLive } from "@frizz/shared"
+import { AlertTriangle, ArrowDown, ArrowUp, Bot, Check, ChevronRight, FileText, HelpCircle, Hourglass, KeyRound, Loader2, TerminalSquare, X } from "lucide-react"
+import { parseRecurringPrompt, questionFencesLive } from "@frizz/shared"
 import type { AskQuestion, AwaitingHint, BgShellView, PendingAsk, RegisteredQuestionView, SubAgentView, ThreadView as ThreadViewData, TranscriptEdit, TranscriptMessage, TranscriptPart, TranscriptTodo, TranscriptToolCall } from "@frizz/shared"
 import { store, threadBySlug, pushDrawer, pushSubAgentDrawer, pushBackgroundShellDrawer, showToast } from "../store.ts"
 import { useBackgroundShellLines, useBoard, useProjectDir, useTranscript, type ChatMessage, type TranscriptData } from "../hooks.ts"
 import { rpc } from "../api/rpc.ts"
 import { lastActiveLabelAt } from "../groups.ts"
 import { stripFrontmatter } from "../lib/markdown.ts"
-import { useMarkdownHtml, useInlineMarkdownHtml } from "../lib/useMarkdown.ts"
+import { useMarkdownHtml } from "../lib/useMarkdown.ts"
 import { splitComposerValue, splitProseAttachments } from "../lib/imagePaths.ts"
 import { localImageUrl } from "../lib/markdownTargets.ts"
 import { basename } from "../lib/paths.ts"
@@ -21,7 +20,7 @@ import { LinkedHtml } from "./LinkedHtml.tsx"
 import { CodeBody } from "./CodeBody.tsx"
 import { resolveFileLanguage } from "../lib/syntaxHighlight.ts"
 import { TodoBlock } from "./TodoBlock.tsx"
-import { splitQuestionBlocks, parseQuestionBlock, type QuestionKind, type BlockAnswer, type MessageAnswering } from "../lib/questionBlocks.ts"
+import { splitQuestionBlocks, type QuestionKind, type BlockAnswer, type MessageAnswering } from "../lib/questionBlocks.ts"
 import { splitFenceBlocks, type FenceKind } from "../lib/fenceBlocks.ts"
 import { showsRegisteredDoneCard } from "../lib/registeredDone.ts"
 import { RestedCard, showsRestedCard } from "./RestedCard.tsx"
@@ -44,13 +43,9 @@ import { useUnqueueFollowUp, useUnqueueSupported } from "../lib/unqueueFollowUp.
 import { useDeliverQueuedNow, useDeliverQueuedNowSupported } from "../lib/deliverQueuedNow.ts"
 import { useInnerHtml } from "../lib/innerHtml.ts"
 import { useLocalFileCodeLinks } from "../lib/localFileCode.ts"
-import { shouldSubmitStagedEnter } from "../lib/composerKeyboard.ts"
 import { lastAskIndex, messagePresentationText } from "../lib/messagePresentation.ts"
 import { stampHostFor } from "../lib/stampHost.ts"
-import { snoozePresetInstant, formatSnoozeWake } from "../lib/snooze.ts"
-import { noteGithubRefs } from "../lib/githubHovercards.ts"
 import { ICON_LABEL_NUDGE } from "../lib/iconAlign.ts"
-import { prefs } from "../lib/prefs.ts"
 import { getThemeSnapshot, subscribeTheme } from "../lib/theme.ts"
 import { isVisualizationThemeAck, visualizationThemeMessage } from "../lib/visualizationThemeProtocol.ts"
 import { canAdoptThread } from "../lib/adoption.ts"
@@ -72,7 +67,7 @@ import { agentCompletionCall, subAgentCompletionOutcome } from "../lib/subAgentC
 import { agentReading } from "../lib/agentReading.ts"
 import { ChildOpRow } from "./ChildOpRow.tsx"
 import { ThreadLinks } from "./ThreadLinks.tsx"
-import { MessageRow, MessageStamp } from "./MessageTimestamp.tsx"
+import { MessageRow } from "./MessageTimestamp.tsx"
 import { TRANSCRIPT_META_LABEL_CLASS, transcriptMetaChevronClass } from "../lib/transcriptMetaLabels.ts"
 import { InteractionStack } from "./InteractionCards.tsx"
 import { RegisteredAnsweringProvider, RegisteredQuestionStack, SettledQuestionStack, openQuestionsOf, useSettledQuestions, type SettledQuestion } from "./RegisteredQuestionCards.tsx"
@@ -80,7 +75,7 @@ import { RegisteredAnsweringProvider, RegisteredQuestionStack, SettledQuestionSt
 // surface can render them without importing the thread view. QuestionBlockCard in particular is
 // shared with the native-AskUserQuestion path, which reaches it through InteractionCards.tsx —
 // a file THIS one imports, so the card could not have stayed here without a module cycle.
-import { BLOCK_RADIUS, CARD_ACTION_EXPLAINER, CARD_ACTION_RADIUS, CARD_BODY, CARD_LINK, CARD_PRIMARY_ACTION, CARD_PRIMARY_BUTTON, CardActions, CardContent, CardHead, QUEUE_WRAP, TranscriptCard } from "./TranscriptCard.tsx"
+import { BLOCK_RADIUS, CARD_ACTION_RADIUS, CARD_BODY, CARD_PRIMARY_ACTION, CARD_PRIMARY_BUTTON, CardActions, QUEUE_WRAP, TranscriptCard } from "./TranscriptCard.tsx"
 import { QuestionBlockCard } from "./QuestionBlockCard.tsx"
 import { settledAskView } from "../lib/interactionQuestion.ts"
 // ONE frame for every image the chat renders — border, inset mat, centered picture. See its module
@@ -88,7 +83,7 @@ import { settledAskView } from "../lib/interactionQuestion.ts"
 import { FRAMED_IMAGE, ImageFrame } from "./ImageFrame.tsx"
 // The resting card, shared with the queue (TodosView passes it the event-Snooze; these two surfaces
 // deliberately pass no action — see the module header).
-import { AwaitingBackgroundCard, AwaitingWaitTable, issueStatusLine, showsRestingCard, watchStatusLine } from "./AwaitingBackgroundCard.tsx"
+import { AwaitingBackgroundCard, issueStatusLine, showsRestingCard, watchStatusLine } from "./AwaitingBackgroundCard.tsx"
 import { SnoozeCard, showsSnoozeCard } from "./SnoozeCard.tsx"
 // Re-exported from their new homes so existing importers (TodosView, the fixtures) keep one
 // import path while the definitions live where both question producers can reach them.
@@ -1791,15 +1786,6 @@ function blankText(m: ChatMessage, text: string, staleAwaiting?: boolean): boole
   // is the whole test. A ```done fence still draws its card and keeps the message visible.
   return splitFenceBlocks(text).every((s) => s.kind === "fence" && s.fenceKind === "awaiting")
 }
-// Would this message render anything under `textOnly` (tool bands dropped)? Mirrors messageRendersNothing
-// but counts ONLY text parts — the queue card uses it to decide whether a first/last agent message that
-// is pure batched tool calls (no prose) contributes a visible row, or folds entirely into the bar.
-export function messageHasRenderableText(m: ChatMessage, staleAwaiting?: boolean): boolean {
-  if (m.kind === "event" || m.kind === "reasoning" || m.role === "user") return false
-  if (m.parts && m.parts.length > 0) return m.parts.some((p) => p.kind === "text" && !blankText(m, p.text, staleAwaiting))
-  return typeof m.text === "string" && !blankText(m, m.text, staleAwaiting)
-}
-
 // The leading gap for the shimmer that tails a live transcript. The shimmer is a quiet single-line row
 // — the LIVE continuation of the very meta column that the reasoning rows and tool bands form above
 // it — so it joins their tight run rather than breaking to STEP whenever the last rendered message ends
@@ -3241,7 +3227,7 @@ function UserBubble({ text, rawText, queued, deliveryUnconfirmed, deliveryId, so
 // with explicit spacers, and a card that renders null still spent one — a 14px gap dangling under the
 // prose, above the resting card (maintainer 2026-08-28, with a screenshot of the gap). Only the last
 // agent message ever carries it, so the memo boundary holds for every other row.
-export const Message = memo(function Message({ m, answering, dense, paired, textOnly, showSendButton, staleAwaiting, shadowedBy, thread, restingCardShown }: { m: ChatMessage; answering?: MessageAnswering; dense?: boolean; paired?: PairedAnswer[] | null; textOnly?: boolean; showSendButton?: boolean; staleAwaiting?: boolean; shadowedBy?: readonly RegisteredQuestionView[]; thread?: ThreadViewData; restingCardShown?: boolean }) {
+export const Message = memo(function Message({ m, answering, dense, paired, showSendButton, staleAwaiting, shadowedBy, thread, restingCardShown }: { m: ChatMessage; answering?: MessageAnswering; dense?: boolean; paired?: PairedAnswer[] | null; showSendButton?: boolean; staleAwaiting?: boolean; shadowedBy?: readonly RegisteredQuestionView[]; thread?: ThreadViewData; restingCardShown?: boolean }) {
   // ANSWERING ON A PHONE happens in a sheet, one question at a time (MobileAnswerSheet) — the cards in
   // the transcript stay READ-ONLY there, so the questions are still visible in the context that
   // produced them but a 44pt-thumb answer never has to land on a 24pt chip inside a scrolling message.
@@ -3256,8 +3242,7 @@ export const Message = memo(function Message({ m, answering, dense, paired, text
   if (m.kind === "reasoning") return <ReasoningBlock text={m.text} sourceId={m.sourceId} />
   // A SUB-AGENT COMPLETION — the same class of event as the background-shell wake above, so it takes
   // the same divider (see AgentCompletionLine). Routed here, before the tool-band walk, so the marker
-  // copy never renders as a second AgentBlock card. Ahead of `textOnly` for the same reason the event
-  // line is: a queue card that hides tool bands still shows what came back underneath it.
+  // copy never renders as a second AgentBlock card.
   const completion = agentCompletionCall(m)
   if (completion) return <AgentCompletionLine call={completion} sourceId={m.sourceId} at={m.at} />
   // User messages: right-justified chat bubble; agent output stays left-aligned prose. A follow-up
@@ -3422,9 +3407,6 @@ export const Message = memo(function Message({ m, answering, dense, paired, text
     // seam withMessageSpacers erases across messages. Order is preserved; only invisible parts go.
     normalizeParts(m.parts).forEach((part, pi) => {
       if (part.kind === "tools") {
-        // textOnly (the queue card's first/last agent message): the batched tool band is dropped so only
-        // the agent's prose remains — its calls live inside the collapsed intermediate bar instead.
-        if (textOnly) return
         const collapsed = collapseTools(part.tools)
         if (collapsed.length) push(<ToolCalls key={`t${pi}`} tools={collapsed} dense={dense} at={m.at} />, toolBandEdges(collapsed))
       } else {
@@ -3434,10 +3416,8 @@ export const Message = memo(function Message({ m, answering, dense, paired, text
   } else {
     // LEGACY fallback (a pre-restart server ships no `parts`): the old flat layout — tool band first,
     // then all prose. Degrades to today's (order-lossy) rendering until the server bounce.
-    if (!textOnly) {
-      const collapsed = collapseTools(m.tools)
-      if (collapsed.length > 0) push(<ToolCalls key="tools" tools={collapsed} dense={dense} at={m.at} />, toolBandEdges(collapsed))
-    }
+    const collapsed = collapseTools(m.tools)
+    if (collapsed.length > 0) push(<ToolCalls key="tools" tools={collapsed} dense={dense} at={m.at} />, toolBandEdges(collapsed))
     renderText(m.text, "leg")
   }
 

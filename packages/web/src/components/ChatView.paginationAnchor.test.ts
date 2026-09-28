@@ -12,9 +12,9 @@ const wakeDivider = () => readFileSync(new URL("./WakeDivider.tsx", import.meta.
 const answersCard = () => readFileSync(new URL("./AnswersCard.tsx", import.meta.url), "utf8")
 
 // The REGRESSION this pins: `data-transcript-source-id` is load-bearing for transcript pagination —
-// captureTranscriptViewportAnchor / restoreTranscriptViewportAnchor and the virtualized
-// requestEarlier anchor all query it and expect it on ROW wrappers (which also carry
-// data-transcript-row-key). Stamping the same attribute on each nested MESSAGE root would put non-row
+// the virtualized requestEarlier anchor queries it and expects it on ROW wrappers (which also carry
+// data-transcript-row-key). (The project board's queue card anchored on it too, through
+// lib/transcriptPagination's viewport-anchor helpers, until both went on 2026-09-28.) Stamping the same attribute on each nested MESSAGE root would put non-row
 // nodes into those result sets. A message root's own handle is the SEPARATE `data-frizz-msg`
 // attribute. One legitimate site: the virtual row wrapper.
 test("a message root never joins the pagination-anchor attribute", () => {

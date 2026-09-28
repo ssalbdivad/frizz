@@ -111,18 +111,6 @@ export function fenceRestatesRegistered(
   })
 }
 
-/** Does every ```question fence in this message text restate a registration? False for a text with no
- *  fence at all — there is nothing to fold — so a caller gating chrome on the fenced ask can drop it
- *  exactly when the fold leaves that ask with no card of its own. */
-export function allFencesShadowed(
-  text: string,
-  registered: readonly Pick<RegisteredQuestionView, "id" | "spec">[],
-): boolean {
-  if (registered.length === 0 || !text.includes("```question")) return false
-  const fences = splitQuestionBlocks(text).filter((seg) => seg.kind === "question")
-  return fences.length > 0 && fences.every((seg) => seg.kind === "question" && fenceStandsFor(seg, registered) !== undefined)
-}
-
 /** The registration a ```question fence STANDS FOR, if any: the one its info-string id names, else the
  *  one its prose restates. The id is exact and the prose is not, so a worker that writes
  *  ```question qst_ab12cd34 never depends on the text rule above. */
