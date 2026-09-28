@@ -1,5 +1,5 @@
 // Verify TAIL FOLLOW in the thread transcript against a REAL running stack: a simulated worker's JSONL
-// is appended to while a real browser watches /thread/<slug>, so everything under test is production's
+// is appended to while a real browser watches the thread's drawer, so everything under test is production's
 // — tailer → board → socket push → react-query cache → virtualized transcript → scroll.
 //
 // The invariant: a reader parked AT the bottom stays there as the tail grows, and a reader who scrolled
@@ -18,6 +18,7 @@ import { mkdirSync, writeFileSync, appendFileSync } from "node:fs"
 import { join } from "node:path"
 import { tmpdir } from "node:os"
 import puppeteer from "puppeteer"
+import { createRpcClient } from "./lib/rpc-client.mjs"
 import { resolveSandboxDb, sessionProjectColumns } from "./lib/sandbox-db.mjs"
 
 const flags = Object.fromEntries(process.argv.slice(2).filter((a) => a.startsWith("--")).map((a) => a.replace(/^--/, "").split("=")))
@@ -77,7 +78,9 @@ try {
   await page.setViewport({ width: 1280, height: 900, deviceScaleFactor: 2 })
   page.on("console", (m) => { if (m.type() === "error") errors.push(m.text()) })
   page.on("pageerror", (e) => errors.push(String(e)))
-  await page.goto(new URL(`/thread/${SLUG}`, url).href, { waitUntil: "networkidle2", timeout: 30000 })
+  // The thread's drawer on the one page (rpc-client threadUrl); the bare `/thread/<slug>` it opened until
+  // 2026-09-28 now lands on `/`.
+  await page.goto(await createRpcClient(url).threadUrl(SLUG), { waitUntil: "networkidle2", timeout: 30000 })
   await page.waitForFunction("document.querySelector('[data-drawer-transcript-scroll] [data-virtualized-transcript]')", { timeout: 20000 })
 
   const settle = (ms = 1600) => page.evaluate(async (wait) => {

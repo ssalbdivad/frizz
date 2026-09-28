@@ -53,7 +53,10 @@ export async function seedLightModeFixture(stack, api) {
     writeFileSync(join(dir, `${sessionId}.jsonl`), records.map(JSON.stringify).join("\n") + "\n")
     const key = createHash("sha256").update(sessionId).digest("hex").slice(0, 16)
     writeFileSync(join(state, "claude-broker", `${key}.json`), JSON.stringify({ sessionId, daemonPid: process.pid, socketPath: join(state, "fixture.sock") }))
-    execFileSync("sqlite3", [db, `INSERT INTO session (project_id,slug,session_id,thread_name,spawned_at,title,backend,claude_runtime,model,effort,permission_mode,rested_at) VALUES (${[projectId, fixture.slug, sessionId, `frizz-${fixture.slug}`, timestamp, fixture.title, "claude", "broker", "opus", "high", "default"].map(quote).join(",")},${fixture.running ? "NULL" : quote(timestamp)})`])
+    // The server writes this database too (every seeded thread wakes its tailer), and the CLI's default
+    // busy timeout is zero, so a write that met one of the server's failed outright: "database is locked"
+    // (the same wait seed-all-queues.mjs gives its writes).
+    execFileSync("sqlite3", ["-cmd", ".timeout 10000", db, `INSERT INTO session (project_id,slug,session_id,thread_name,spawned_at,title,backend,claude_runtime,model,effort,permission_mode,rested_at) VALUES (${[projectId, fixture.slug, sessionId, `frizz-${fixture.slug}`, timestamp, fixture.title, "claude", "broker", "opus", "high", "default"].map(quote).join(",")},${fixture.running ? "NULL" : quote(timestamp)})`])
   }
   const vis = join(project, ".codex", "visualizations", "2026", "09", "11", fixtures[0].sessionId)
   mkdirSync(vis, { recursive: true })

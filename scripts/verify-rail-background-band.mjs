@@ -11,7 +11,13 @@
 // so a real `claude` cannot authenticate) — but everything DOWNSTREAM of the transcript is the shipped
 // code path, which is exactly the part under test.
 //
-// Usage: nub scripts/verify-rail-background-band.mjs --url=http://127.0.0.1:4931/ --home=/tmp/frizz-adhoc-home-X
+// "The rail" is now the project list's rows on the one page (ProjectList.tsx): a project's Ready rows,
+// each tied to its queue card, then its Working rows. Until 2026-09-28 it was the project board's
+// sidebar, whose running and rested bands a rule split; the question is the same one, asked of the rows
+// the page draws now.
+//
+// Usage (run from the stack's launching project dir — the fixture's transcript is keyed by the cwd):
+//   nub scripts/verify-rail-background-band.mjs --url=http://127.0.0.1:4931/ --home=/tmp/frizz-adhoc-home-X
 import { mkdirSync, writeFileSync, appendFileSync } from "node:fs"
 import { join } from "node:path"
 import { DatabaseSync } from "node:sqlite"
@@ -206,9 +212,10 @@ try {
     // running rail, its card shows up in the queue". Assert the ABSENCE on the real queue surface, not
     // just the `needsYou` bit that feeds it — the bit and the render are two things, and it was the
     // render the maintainer saw.
+    // A card is keyed `<project id>/<slug>` (AllQueuesCard), and the fixture's slug is unique to this run.
     const cards = await page.evaluate((slug) => ({
-      mine: !!document.querySelector(`[data-queue-card="${slug}"]`),
-      total: document.querySelectorAll("[data-queue-card]").length,
+      mine: !!document.querySelector(`[data-xq-card$="/${slug}"]`),
+      total: document.querySelectorAll("[data-xq-card]").length,
     }), SLUG)
     console.log(`      queue: card for this thread=${cards.mine}  cards on the board=${cards.total}`)
     if (cards.mine) failures.push("the thread is in the running band AND has a queue card — the exact pair that must not happen")
@@ -216,11 +223,10 @@ try {
     const seen = await page.evaluate((slug) => {
       const row = document.querySelector(`[data-sidebar-item="${slug}"]`)
       const mark = row?.querySelector("[data-rail-glyph]")
-      // The running band is everything before the <hr> the Sidebar draws between the two bands; a row
-      // AFTER that rule has dropped into the queue-ordered rested band.
-      const rail = document.querySelector("[data-sidebar-rail]")
-      const rule = rail?.querySelector("hr")
-      const inRunningBand = !!(row && rule && (row.compareDocumentPosition(rule) & Node.DOCUMENT_POSITION_FOLLOWING))
+      // A Ready row is tied to its queue card and says so (`data-xq-rail-row` names the card); a Working
+      // row carries none. With the project's bands shut, those are the only two kinds of row listed, so a
+      // row without the tie is in the running band, and one with it has dropped into the queue.
+      const inRunningBand = !!(row && row.closest("[data-xq-rail-project]") && !row.hasAttribute("data-xq-rail-row"))
       return {
         glyph: mark?.getAttribute("data-rail-glyph") ?? null,
         hasDot: !!row?.querySelector(".frizz-rail-dot"),
@@ -236,14 +242,16 @@ try {
 
     mkdirSync(shots, { recursive: true })
     await page.screenshot({ path: join(shots, "rail-e2e-full-board.png") })
-    const rail = await page.$("[data-sidebar-rail]")
-    await rail.screenshot({ path: join(shots, "rail-e2e-real-board.png") })
+    const rail = await page.evaluateHandle((slug) => document.querySelector(`[data-sidebar-item="${slug}"]`)?.closest("[data-xq-rail-project]"), SLUG)
+    await rail.asElement().screenshot({ path: join(shots, "rail-e2e-real-board.png") })
 
     // THE OTHER HALF of removing the queue card: with no card, the awaiting-background banner on the
     // thread page is the ONLY place this state is stated in words. If it were missing too, opening the
     // row would show a transcript that simply ends at rest — the "reads as if the agent died" failure of
     // 2026-07-29, which is precisely what that card exists to prevent. So assert it is still there.
-    await page.goto(`${url}thread/${SLUG}`, { waitUntil: "networkidle2", timeout: 30_000 })
+    // The thread's own page, /full: the unprefixed `/thread/<t>` it opened until 2026-09-28 now lands on
+    // `/`, and /full with no project prefix is the launching project's, which is where this fixture is.
+    await page.goto(new URL(`/thread/${SLUG}/full`, url).href, { waitUntil: "networkidle2", timeout: 30_000 })
     await new Promise((r) => setTimeout(r, 2000))
     const banner = await page.evaluate(() => {
       const el = document.querySelector("[data-awaiting-background]")

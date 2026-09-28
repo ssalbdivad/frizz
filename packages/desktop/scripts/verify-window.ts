@@ -213,9 +213,9 @@ try {
       openedUrls().length === openedBefore && (await pageCount(running.browser)) === before && page.url() === here,
       `${openedUrls().length - openedBefore} opened, ${await pageCount(running.browser)} windows, at ${page.url()}`)
 
-    // A path the board itself does not redirect (with one project, / and /queues both forward to it).
-    const projects = await (await fetch(`${origin}/_frizz/rpc/projectsList`, { headers: { "sec-fetch-site": "same-origin" } })).json() as { result?: Array<{ slug: string }> }
-    const projectPath = `/project/${projects.result?.[0]?.slug ?? "unknown"}`
+    // A path the app itself does not redirect: `/`, the one page. Until 2026-09-28 this was the project's
+    // board, `/project/<slug>`, because `/` then forwarded to it; now every `/project/…` lands on `/`.
+    const projectPath = "/"
     const popup = new Promise<Page | null>((ok) => running!.browser.once("targetcreated", async (t) => ok(await t.page())))
     await page.evaluate((u) => { window.open(u, "_blank") }, `${origin}${projectPath}`)
     const child = await Promise.race([popup, delay(10_000).then(() => null)])

@@ -7,7 +7,7 @@
 // file deep-link, the sub-agent drill-in, the chevron.
 //
 // Driven through the REAL pipeline — JSONL → tailer → transcript projection → ChatView → the real
-// `/thread/<slug>` route — with real mouse clicks at real coordinates, because this is pointer
+// thread drawer (`/all/<project>/thread/<slug>`) — with real mouse clicks at real coordinates, because this is pointer
 // behavior and nothing short of a browser can observe it. The fixture `.html` files in packages/web
 // are NOT servable through the frizz server (appType:"custom" sends every path to index.html).
 //
@@ -151,7 +151,9 @@ try {
       await page.setViewport({ width: 1400, height: 1100, deviceScaleFactor: 2 })
       if (stale) await stale.close()
     }
-    await page.goto(`http://127.0.0.1:${port}/thread/${SLUG}`, { waitUntil: "networkidle0" })
+    // The thread's drawer on the one page (rpc-client threadUrl); the bare `/thread/<slug>` it opened until
+    // 2026-09-28 now lands on `/`.
+    await page.goto(await api.threadUrl(SLUG), { waitUntil: "networkidle0" })
     await page.waitForSelector(".frizz-bash", { timeout: 20_000 })
     // Ordinary calls fold behind an "N tool calls" band; open every one so all four cards mount.
     for (const toggle of await page.$$('button[aria-label*="tool call"]')) {

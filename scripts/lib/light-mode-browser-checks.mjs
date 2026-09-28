@@ -136,11 +136,14 @@ export async function checkThemePreferences({ browser, url, check }) {
     await resolved(peer, "dark")
     check("Storage removal and clear restore System in the other tab")
     await set("light")
-    for (const route of [new URL("/", url).href, new URL("/project/second-project", url).href, `${url}/thread/theme-rich/full`, url]) {
+    // The page, the page focused on the OTHER project, a deep link and the stack's own url, which lands
+    // on the page again. Until 2026-09-28 the second of these was that project's board,
+    // `/project/second-project`, and the first the all-projects grid; both are the one page now.
+    for (const route of [new URL("/", url).href, new URL("/?focus=second-project", url).href, `${url}/thread/theme-rich/full`, url]) {
       await page.goto(route, { waitUntil: "networkidle2" })
       await resolved(page, "light")
     }
-    check("Light survives grid, other project, deep link and reload navigation")
+    check("Light survives the page, another project's focus, deep link and reload navigation")
 
     await page.evaluate(() => { Object.defineProperty(Storage.prototype, "setItem", { configurable: true, value() { throw new DOMException("Full", "QuotaExceededError") } }) })
     await set("dark")

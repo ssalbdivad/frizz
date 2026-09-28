@@ -28,20 +28,26 @@ export async function checkSurfaceStates({ page, url, font, palette, out, check,
       await element.dispose()
     } finally { await page.setViewport(viewport) }
   }
+  // `url` is the fixture project's drawer prefix, `/all/<slug>` (adhoc-stack.mjs); on its own it lands on
+  // `/`. The page is FOCUSED on a project the address does not name, so the checks that read the focus's
+  // live board land on `/?focus=<slug>` to say which — the launcher's own way in.
+  const home = new URL(`/?focus=${new URL(url).pathname.split("/")[2]}`, url).href
+  // A project's Snoozed and Done bands open in place under its row in the project list (ProjectList.tsx);
+  // until 2026-09-28 they were the board sidebar's collapsible bands, opened through the store.
+  const openBands = async () => {
+    await page.waitForSelector("[data-xq-project-row]")
+    await page.$$eval('[data-xq-project-row] button[aria-expanded="false"]', buttons => buttons.forEach(button => button.click()))
+    await page.waitForSelector('[data-xq-drill-band="snoozed"] [data-sidebar-item="theme-snoozed"]')
+    await page.waitForSelector('[data-xq-drill-band="done"] [data-sidebar-item="theme-done"]')
+  }
   await page.setViewport({ width: 1440, height: 1000, deviceScaleFactor: 1 })
-  await page.goto(url, { waitUntil: "networkidle2" })
-  await page.evaluate(async () => {
-    const { store } = await import("/src/store.ts")
-    store.sidebarCollapsed.snoozed = false
-    store.sidebarCollapsed.inactive = false
-  })
-  await page.waitForSelector('[data-sidebar-item="theme-snoozed"]')
-  await page.waitForSelector('[data-sidebar-item="theme-done"]')
+  await page.goto(home, { waitUntil: "networkidle2" })
+  await openBands()
   await contrast("expanded-bands")
   await shot("expanded-bands")
   const running = await page.evaluate(async () => (await import("/src/store.ts")).store.board.threads.find(t => t.id === "theme-running").runtime)
   assert.equal(running, "running")
-  check(`${name} real Rested, Active, Snoozed and Done bands`)
+  check(`${name} real Rested, Active, Snoozed and Done rows in the project list`)
 
   for (const width of [1440, 390]) {
     await page.setViewport({ width, height: 1000, deviceScaleFactor: 1 })
@@ -64,16 +70,22 @@ export async function checkSurfaceStates({ page, url, font, palette, out, check,
     await contrast(`thread-sheet-${width}`)
     await shot(`thread-sheet-${width}`)
   }
+  // The toast, over the page. It was raised over the archived status list until 2026-09-28, when the
+  // status list went with the project view.
   await page.setViewport({ width: 1440, height: 1000, deviceScaleFactor: 1 })
-  await page.goto(url, { waitUntil: 'networkidle2' })
-  await page.evaluate(async () => { const { store, showToast } = await import('/src/store.ts'); store.view = 'status:archived'; showToast('Settings saved', { duration: 10000 }) })
+  await page.goto(home, { waitUntil: 'networkidle2' })
+  await page.evaluate(async () => { const { showToast } = await import('/src/store.ts'); showToast('Settings saved', { duration: 10000 }) })
   await page.waitForFunction(() => document.body.textContent.includes('Settings saved'))
-  await contrast('status-list-toast')
-  await shot('status-list-toast')
-  await page.goto(url, { waitUntil: 'networkidle2' })
-  check(`${name} command palette, new-thread modal, stacked thread reader and status list`)
+  await contrast('page-toast')
+  await shot('page-toast')
+  check(`${name} command palette, new-thread modal, stacked thread reader and toast`)
 
-  // A fresh dispatch has no AI title yet; exercise that real row without dispatching a provider.
+  // A fresh dispatch has no AI title yet; exercise that real title without dispatching a provider. The
+  // drawer's header reads the focus's live board, which is what this edits; the project list's row
+  // reads the machine-wide poll instead, so it is no longer the row to exercise (until 2026-09-28 the
+  // board sidebar's row read the live board too).
+  await page.goto(`${url}/thread/theme-running`, { waitUntil: 'networkidle2' })
+  await page.waitForSelector('[data-thread-header]')
   const previousTitle = await page.evaluate(async () => {
     const { store } = await import('/src/store.ts')
     const thread = store.board.threads.find(t => t.id === 'theme-running')
@@ -81,7 +93,7 @@ export async function checkSurfaceStates({ page, url, font, palette, out, check,
     Object.assign(thread, { titleAuto: true, aiTitle: '', spawnedAt: new Date().toISOString() })
     return saved
   })
-  const provisional = '[data-sidebar-item="theme-running"]'
+  const provisional = '[data-thread-header]'
   await page.waitForFunction(selector => document.querySelector(selector)?.textContent.includes('Spinning up'), {}, provisional)
   await contrast('provisional-title')
   assert.ok(result[`${name}-provisional-title-contrast`].some(row => row.text.includes('Spinning up')), 'The provisional title was actually sampled')
@@ -90,7 +102,8 @@ export async function checkSurfaceStates({ page, url, font, palette, out, check,
     const { store } = await import('/src/store.ts')
     Object.assign(store.board.threads.find(t => t.id === 'theme-running'), saved)
   }, previousTitle)
-  check(`${name} provisional sidebar title`)
+  check(`${name} provisional thread title`)
+  await page.goto(home, { waitUntil: 'networkidle2' })
 
   await page.click('[aria-label="Model and effort"]')
   await page.waitForSelector('[aria-label="Claude Code settings"]')
@@ -123,18 +136,15 @@ export async function checkSurfaceStates({ page, url, font, palette, out, check,
   await page.keyboard.press('Escape')
   check(`${name} model-grid headers and nested context controls`)
 
-  // Upstream shares ThreadTitle between the queue and the drawer. Keep both editing paths and
-  // their semantic focus treatment covered when either header changes during palette migrations.
+  // ThreadTitle is shared by the drawer's header and /full's. Keep both editing paths and their semantic
+  // focus treatment covered when either header changes during palette migrations. Until 2026-09-28 the
+  // first was the board's queue card at desktop width; the page's queue card (AllQueuesCard) has a plain
+  // title link, so the drawer is the editable header off /full now, at both widths.
   for (const width of [1440, 390]) {
     await page.setViewport({ width, height: 1000, deviceScaleFactor: 1 })
-    for (const surface of ['queue', 'full']) {
-      await page.goto(surface === 'queue' ? url : `${url}/thread/theme-question/full`, { waitUntil: 'networkidle2' })
-      if (surface === 'queue') {
-        const item = width === 390 ? '[data-mobile-thread-row="theme-question"]' : '[data-sidebar-item="theme-question"]'
-        await page.waitForSelector(item)
-        await page.click(item)
-      }
-      const root = surface === 'queue' && width !== 390 ? '[data-queue-card="theme-question"]' : '[data-thread-header]'
+    for (const surface of ['drawer', 'full']) {
+      await page.goto(surface === 'drawer' ? `${url}/thread/theme-question` : `${url}/thread/theme-question/full`, { waitUntil: 'networkidle2' })
+      const root = '[data-thread-header]'
       const title = `${root} button[title="Edit title"]`
       const editor = `${root} input[aria-label="Thread title"]`
       await page.waitForSelector(title, { visible: true })
@@ -168,7 +178,7 @@ export async function checkSurfaceStates({ page, url, font, palette, out, check,
       await page.setViewport({ width, height: 1000, deviceScaleFactor: 1 })
     }
   }
-  check(`${name} queue and fullscreen title focus, rename and cancel at desktop and phone widths`)
+  check(`${name} drawer and fullscreen title focus, rename and cancel at desktop and phone widths`)
   await page.setViewport({ width: 1440, height: 1000, deviceScaleFactor: 1 })
 
   await page.goto(`${url}/thread/theme-question/full`, { waitUntil: "networkidle2" })
@@ -445,26 +455,22 @@ export async function checkSurfaceStates({ page, url, font, palette, out, check,
     await new Promise(resolve => gallery.close(resolve))
   }
 
-  await page.goto(url, { waitUntil: "networkidle2" })
+  // At a phone's width the page is the same page: its queue, and the project list with the quiet bands
+  // opened. Until 2026-09-28 a phone had its own board, with a tab per band and a "more" sheet of
+  // actions; both went with the project view, so there is no tab to press and no sheet to open.
   await page.setViewport({ width: 390, height: 844, deviceScaleFactor: 1 })
-  await page.waitForSelector('[data-mobile-tab="snoozed"]')
-  for (const band of ["snoozed", "done", "queue"]) {
-    await page.click(`[data-mobile-tab="${band}"]`)
-    await contrast(`phone-${band}`)
-    await shot(`phone-${band}`)
-  }
+  await page.goto(home, { waitUntil: "networkidle2" })
+  await page.waitForSelector("[data-xq-card]")
+  await contrast("phone-queue")
+  await shot("phone-queue")
+  await openBands()
+  await page.$eval('[data-xq-drill-band="snoozed"]', el => el.scrollIntoView({ block: "start" }))
+  await contrast("phone-bands")
+  await shot("phone-bands")
   await page.goto(`${url}/thread/theme-question/full`, { waitUntil: 'networkidle2' })
   await page.waitForSelector('[data-question-option]')
   await contrast('phone-question')
   await shot('phone-question')
-  await page.goto(url, { waitUntil: 'networkidle2' })
-  await page.click('[data-mobile-more]')
-  await page.waitForFunction(() => {
-    const panel = document.querySelector('[data-mobile-more-sheet] > div')
-    return panel && Math.abs(panel.getBoundingClientRect().bottom - innerHeight) < .5
-  })
-  await contrast('phone-actions')
-  await shot('phone-actions')
   await page.setViewport({ width: 1440, height: 1000, deviceScaleFactor: 1 })
   await page.goto(url, { waitUntil: "networkidle2" })
 }

@@ -44,11 +44,16 @@ function writeMirror(shown: boolean) {
  * the project the URL names at RENDER time (lib/queryKeyScope.ts), and the layout that calls this
  * hook is mounted once and never re-rendered by a navigation — so without the `useLocation()` below
  * it stayed bound to whichever project's entry it was cold-loaded on. The settings drawer writes its
- * save under the CURRENT project's entry (it only mounted inside a project's board then). Cold-load `/`,
+ * save under the CURRENT project's entry. Cold-load `/`,
  * click into a project, flip "Project sidebar" to "Always shown": the select flipped and the rail
  * did not, until a reload happened to land on a board (maintainer 2026-08-24: "it literally only
  * shows up when I'm in the home page"). Reading the location re-renders this on every navigation,
  * so the key re-hashes under the project now on screen — the same entry the drawer writes.
+ *
+ * A navigation is not the only switch, though. On the one page the prompt box's picker moves the page to
+ * another project at `/` — no navigation, so no re-render here — and the hook stays on the entry it was
+ * cold-loaded under. So a save also publishes its machine keys to EVERY project's entry
+ * (hooks/useSettingsAutosave.tsx publishMachineSettings), and whichever entry this reads has the flip.
  *
  * `keepPreviousData` is what keeps that re-hash from blinking: the new project's entry starts empty
  * and the rail would drop out for the round trip. `projectRail` is a MACHINE setting (server

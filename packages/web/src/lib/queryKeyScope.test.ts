@@ -98,3 +98,23 @@ test("the unprefixed launching project is a scope of its own, not the absence of
     assert.deepEqual(qc.getQueryData(["settingsGet"]), { font: "mono" }, "same launching project, different page")
   })
 })
+
+test("a save's machine settings reach every project's cached settings, and nothing else does", async () => {
+  const { publishMachineSettings } = await import("../hooks/useSettingsAutosave.tsx")
+  const qc = client()
+  // Two projects' entries, each holding its own per-project value: the rail reads alpha's (it was
+  // cold-loaded there), and the settings drawer saves under beta's (the page was switched to beta).
+  const base = { permissionMode: "bypassPermissions", projectRail: false, notifications: true, localFileOpener: "system" }
+  withPathname("/all/alpha/thread/x", () => qc.setQueryData(["settingsGet"], { ...base, permissionMode: "auto" }))
+  const saved = { ...base, projectRail: true, notifications: false }
+  withPathname("/all/beta/thread/x", () => {
+    qc.setQueryData(["settingsGet"], saved)
+    publishMachineSettings(qc, saved as never)
+  })
+  const alpha = withPathname("/all/alpha/thread/x", () => qc.getQueryData<typeof base>(["settingsGet"]))
+  assert.equal(alpha?.projectRail, true, "the machine's projectRail reaches the other project's entry")
+  assert.equal(alpha?.notifications, false, "…and so does every other machine key")
+  assert.equal(alpha?.permissionMode, "auto", "a project's own setting is left where it was")
+  const beta = withPathname("/all/beta/thread/x", () => qc.getQueryData<typeof base>(["settingsGet"]))
+  assert.equal(beta?.permissionMode, "bypassPermissions", "the saving project's own entry is the save")
+})

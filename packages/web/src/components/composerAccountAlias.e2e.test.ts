@@ -5,8 +5,13 @@ import test, { after, before } from "node:test"
 // submit boundary and never delivered to the worker as prompt text. That intercept used to live only in
 // the drawer's ThreadActionBar: the queue cue card had its own send path with NO alias check, so typing
 // `/login` into a card pasted the literal string into the running agent's stdin. The drawer renders
-// components/ThreadComposerBox, which owns the intercept, and these tests pin it there. They pinned the
-// board's queue card too until that card was deleted with the single-project board (2026-09-28).
+// components/ThreadComposerBox, which owns the intercept, and these tests pin it there.
+//
+// And they pin it on the page's QUEUE CARD (components/AllQueuesCard.tsx ReplyBox), which is where it
+// regressed a second time: the board's card shared the drawer's box, but when the board was deleted
+// (2026-09-28) the card that replaced it had a send path of its own with no alias check, and nothing
+// here covered it — the card cases had gone with the board's card. ReplyBox intercepts through
+// `parseAccountAlias` now, and the card cases are back, on the card that exists.
 //
 // Skipped unless a Vite URL serving the fixtures is provided (same pattern as the other *.e2e.test.ts
 // here): start `vite` in packages/web and set FRIZZ_COMPOSER_ALIAS_E2E_URL to its origin.
@@ -22,6 +27,7 @@ const baseUrl = process.env.FRIZZ_COMPOSER_ALIAS_E2E_URL
 
 const SLUG = "alias-thread"
 const CHAT = 'textarea[data-surface="chatComposer"]'
+const CARD = 'textarea[data-surface="queueComposer"]'
 
 type Worker = { sent: string[]; rpc: string[] }
 type PuppeteerModule = typeof import("puppeteer")
@@ -52,9 +58,9 @@ const boxValue = (sel: string): Promise<string> => page!.$eval(sel, (el) => (el 
 
 // A fresh surface with an empty draft cache — drafts are sessionStorage-backed and deliberately survive
 // navigation, so wipe + reload between cases.
-async function open(box: string) {
+async function open(surface: "drawer" | "card", box: string) {
   errors = []
-  await page!.goto(`${baseUrl}/composer-alias-fixture.html`, { waitUntil: "networkidle2" })
+  await page!.goto(`${baseUrl}/composer-alias-fixture.html?surface=${surface}`, { waitUntil: "networkidle2" })
   await page!.evaluate(() => sessionStorage.clear())
   await page!.reload({ waitUntil: "networkidle2" })
   await page!.waitForSelector(box)
@@ -80,15 +86,18 @@ async function dismissModal() {
   await new Promise((r) => setTimeout(r, 300))
 }
 
-{
-  const surface = "drawer"
-  const box = CHAT
+// Whether the card is fading out, as a sent reply makes it (the page's `onLeave`); "unmounted" once gone.
+const cardLeaving = (): Promise<string> =>
+  page!.evaluate((slug) => document.querySelector(`[data-xq-card$="/${slug}"]`)?.getAttribute("data-queue-leaving") ?? "unmounted", SLUG)
+
+for (const surface of ["drawer", "card"] as const) {
+  const box = surface === "card" ? CARD : CHAT
 
   test(`${surface} composer: /login opens the sign-in modal and never reaches the worker`, {
     skip: !baseUrl,
     timeout: 150_000,
   }, async () => {
-    await open(box)
+    await open(surface, box)
 
     await typeAndSend(box, "/login")
     const modal = await dialogText()
@@ -96,6 +105,8 @@ async function dismissModal() {
     assert.match(modal, /Signed out of Claude/, "…and it must be the sign-in modal for this thread's backend")
     assert.deepEqual(await sent(), [], "/login must NEVER be delivered to the worker")
     assert.equal(await boxValue(box), "", "the intercepted alias clears the draft, exactly like a real send")
+    // The card is not faded out from under the modal: nothing was sent, so it stays in the queue.
+    if (surface === "card") assert.equal(await cardLeaving(), "false", "an intercepted alias must not dissolve the card")
 
     // An ORDINARY follow-up from the same box still reaches the worker — the intercept is narrow.
     await dismissModal()
@@ -108,7 +119,7 @@ async function dismissModal() {
     skip: !baseUrl,
     timeout: 150_000,
   }, async () => {
-    await open(box)
+    await open(surface, box)
 
     await typeAndSend(box, "/logout")
     const modal = await dialogText()

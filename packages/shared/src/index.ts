@@ -3436,6 +3436,16 @@ export const Settings = z.object({
 })
 export type Settings = z.infer<typeof Settings>
 
+/**
+ * The settings that describe the MACHINE rather than a project — stored once for every project the
+ * server serves (server/settings.ts, which explains why each is one), while the rest of `Settings` is
+ * a project's own. The server reads the list to decide what goes in the machine record; the web reads
+ * it to publish a save of these keys to every project's cached copy (hooks/useSettingsAutosave.tsx),
+ * because the query cache keeps one `settingsGet` entry per project and a machine setting changed in
+ * one is changed in all.
+ */
+export const MACHINE_SETTING_KEYS = ["notifications", "localFileOpener", "projectRail", "homeFolder"] as const satisfies readonly (keyof Settings)[]
+
 // The new-thread composer's durable choices — MACHINE-wide, one record for every project the server
 // serves (server/dispatch-preferences.ts), because the profile belongs to the operator, not to a
 // repository. Keep one profile per runtime so
