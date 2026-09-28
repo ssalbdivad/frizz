@@ -1,6 +1,6 @@
 import assert from "node:assert/strict"
 import { test } from "node:test"
-import { defaultCrossProjectFocus, nextPick } from "./crossProject.ts"
+import { defaultCrossProjectFocus, stepPick } from "./crossProject.ts"
 
 const card = (id: string, lastOpenedAt: string, stale = false) => ({ id, slug: `${id}-slug`, stale, lastOpenedAt })
 
@@ -35,25 +35,30 @@ test("a project this server has not opened is not landed on while an open one ex
 
 const project = (slug: string, open = true, stale = false) => ({ slug, open, stale })
 
-test("⇧Tab moves the box to the next project in the picker's order, wrapping at the end", () => {
+test("⌥↓ / ⌥↑ step the box through the picker's order, wrapping round at either end", () => {
   const projects = [project("a"), project("b"), project("c")]
-  assert.equal(nextPick(projects, "a")?.slug, "b")
-  assert.equal(nextPick(projects, "c")?.slug, "a")
-  // A focus the list does not hold yet (a project registered a moment ago) steps onto the first.
-  assert.equal(nextPick(projects, "gone")?.slug, "a")
-  assert.equal(nextPick(projects, undefined)?.slug, "a")
+  assert.equal(stepPick(projects, "a", 1)?.slug, "b")
+  assert.equal(stepPick(projects, "c", 1)?.slug, "a")
+  assert.equal(stepPick(projects, "b", -1)?.slug, "a")
+  assert.equal(stepPick(projects, "a", -1)?.slug, "c")
+  // A focus the list does not hold yet (a project registered a moment ago) steps onto an end.
+  assert.equal(stepPick(projects, "gone", 1)?.slug, "a")
+  assert.equal(stepPick(projects, "gone", -1)?.slug, "c")
+  assert.equal(stepPick(projects, undefined, 1)?.slug, "a")
 })
 
-test("⇧Tab passes over a project that cannot take the draft it carries", () => {
+test("a step passes over a project that cannot take the draft it carries", () => {
   const projects = [project("a"), project("b", false), project("c", true, true), project("d")]
-  assert.equal(nextPick(projects, "a")?.slug, "d", "not open, then a directory that is gone")
-  assert.equal(nextPick(projects, "d")?.slug, "a")
+  assert.equal(stepPick(projects, "a", 1)?.slug, "d", "not open, then a directory that is gone")
+  assert.equal(stepPick(projects, "d", -1)?.slug, "a")
+  assert.equal(stepPick(projects, "d", 1)?.slug, "a")
   // A focus that is not open itself (chosen from the menu) still steps on to one that is.
-  assert.equal(nextPick(projects, "b")?.slug, "d")
+  assert.equal(stepPick(projects, "b", 1)?.slug, "d")
+  assert.equal(stepPick(projects, "b", -1)?.slug, "a")
 })
 
-test("with nowhere else to go, ⇧Tab is left to the browser", () => {
-  assert.equal(nextPick([project("a")], "a"), undefined)
-  assert.equal(nextPick([project("a"), project("b", false)], "a"), undefined)
-  assert.equal(nextPick([], undefined), undefined)
+test("with nowhere else to go, the key is left to the browser", () => {
+  assert.equal(stepPick([project("a")], "a", 1), undefined)
+  assert.equal(stepPick([project("a"), project("b", false)], "a", -1), undefined)
+  assert.equal(stepPick([], undefined, 1), undefined)
 })
