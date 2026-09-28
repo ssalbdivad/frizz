@@ -2,7 +2,8 @@
 // Drive the in-app picture viewer and file reader on a REAL, seeded, two-project stack — the half of the
 // feature no fixture reaches: real pictures from /local-image, real reads through each project's gate,
 // real links that only exist once the server has resolved a path on disk. Checks:
-//   · a picture on a TENANT's card on the everything page opens in the viewer, alone (its card's gallery);
+//   · a picture on a TENANT's card on the everything page opens in the viewer, alone (its card's gallery),
+//     and a queue letter key typed over it (D, mark as done) never reaches the card beneath;
 //   · a log cited on that card opens in the reader, read through the TENANT's gate — the tenant is checked
 //     out outside the sandbox's home and temp trees, and the control below proves the page's own
 //     project refuses that file, so a reader that asked the page would show an error instead;
@@ -78,11 +79,14 @@ try {
   // projects have no icon to serve (the rail draws their initials instead); nothing else may fail.
   page.on("response", (response) => { if (response.status() >= 400 && !/\/_frizz\/control\/status$|\/_frizz\/project-icon\?/.test(response.url())) errors.push(`${response.status()} ${response.url()}`) })
   // Every file read and open the page makes, by route — and the opener answered HERE, never by the server.
+  // And every write, so a key that reached a card through the viewer would show up.
   const reads = []
   const opens = []
+  const posts = []
   await page.setRequestInterception(true)
   page.on("request", (request) => {
     const url = new URL(request.url())
+    if (request.method() === "POST" && url.pathname.includes("/rpc/")) posts.push(url.pathname)
     if (url.pathname.endsWith("/rpc/openLocalFile")) {
       const input = JSON.parse(request.postData() ?? "{}")
       opens.push({ route: url.pathname, ...input })
@@ -144,6 +148,13 @@ try {
     const text = await headerText()
     check("a picture on the card opens in the viewer, alone", text.includes("board-after.png") && !/\d+ \/ \d+/.test(text), JSON.stringify(text))
     await settle("real-card-viewer.png")
+    // The queue's letter keys act on the card under the cursor — D marks it done. Over the viewer they
+    // must not: it is a modal, and the keyboard runtime stands down for one (keyboardRuntime overlayOpen).
+    // The control at the end proves D is live on this page, so this silence is the viewer's doing.
+    const before = posts.length
+    await page.keyboard.press("d")
+    await sleep(800)
+    check("D typed over the viewer does nothing to the card beneath", posts.length === before && !!(await page.$(`${card}[data-queue-leaving="false"]`)), JSON.stringify(posts.slice(before)))
     await page.keyboard.press("Escape")
     await page.waitForFunction((sel) => !document.querySelector(sel), { timeout: 5_000 }, viewer)
   })
@@ -202,6 +213,16 @@ try {
   })
 
   check("no console errors, page errors or failed requests", errors.length === 0, errors.slice(0, 5).join(" | "))
+
+  // LAST, because it finishes the thread: with no viewer up, the same D does act on the card.
+  await step("control: D marks the card done when no viewer is up", async () => {
+    await page.goto(`${origin}/`, { waitUntil: "networkidle2" })
+    await page.waitForSelector(`${card}[data-queue-leaving="false"]`, { timeout: 10_000 })
+    const before = posts.length
+    await page.keyboard.press("d")
+    await page.waitForFunction((sel) => !document.querySelector(`${sel}[data-queue-leaving="false"]`), { timeout: 5_000 }, card)
+    check("control: D marks the card done when no viewer is up", posts.length > before, JSON.stringify(posts.slice(before)))
+  })
 } finally {
   await browser.close()
 }
