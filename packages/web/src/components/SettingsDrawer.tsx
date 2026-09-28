@@ -23,7 +23,7 @@ function currentPerm(): NotifPerm {
 }
 
 // The drawer holds ONLY what belongs to the machine and this browser — appearance, the rail, how local
-// links open, density, queue order, notifications. Everything that belongs to a project or to one
+// links open, density, queue order, notifications, and the folder the Home workspace's threads run in. Everything that belongs to a project or to one
 // runtime is edited where it applies: a runtime's launch settings behind the gear on its band in the
 // model picker (AgentSettingsPopover), the GitHub triage prompt behind the gear in the GitHub picker's
 // header (GithubPromptPopover). A "Project settings" tab stood here for a few hours on 2026-09-19
