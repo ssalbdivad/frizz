@@ -206,9 +206,15 @@ try {
 
   await step("Mark as done on a tenant's card finishes ITS thread", async () => {
     const scope = card("billing-worker", "dunning-retry-schedule")
+    // What the thread was, and what the page wrote, from the click on: a thread already archived before it
+    // (or archived by some other write) passes the wait below without this button having done anything.
+    const before = await threadOf("billing-worker", "dunning-retry-schedule")
+    const from = writes.length
     await (await buttonIn(scope, "Mark as done")).click()
     const done = await waitFor("the tenant thread to archive", async () => { const t = await threadOf("billing-worker", "dunning-retry-schedule"); return t && (t.archived || t.state === "archived") ? t : null })
-    check("Mark as done on a tenant's card finishes ITS thread", Boolean(done) && wrote("billing-worker", "completeThread") && !wrote("acme-api", "completeThread"), `completeThread went to ${writes.filter((w) => w.endsWith("/completeThread")).join(", ") || "nobody"}`)
+    const ok = Boolean(done) && wrote("billing-worker", "completeThread") && !wrote("acme-api", "completeThread")
+    check("Mark as done on a tenant's card finishes ITS thread", ok, `completeThread went to ${writes.filter((w) => w.endsWith("/completeThread")).join(", ") || "nobody"}; before the click it was ${before ? `${before.state}${before.archived ? ", archived" : ""}` : "not on the board"}; the page wrote ${writes.slice(from).map((w) => w.split("/rpc/")[1]).join(", ") || "nothing"} after it`)
+    if (!ok) console.log(`  every write so far: ${writes.join(", ")}`)
   })
 
   await step("Mark as done on the launcher's same-slug card leaves the tenant's alone", async () => {
