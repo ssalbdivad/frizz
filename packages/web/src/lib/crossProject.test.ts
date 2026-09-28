@@ -1,6 +1,6 @@
 import assert from "node:assert/strict"
 import { test } from "node:test"
-import { defaultCrossProjectFocus } from "./crossProject.ts"
+import { defaultCrossProjectFocus, nextPick } from "./crossProject.ts"
 
 const card = (id: string, lastOpenedAt: string, stale = false) => ({ id, slug: `${id}-slug`, stale, lastOpenedAt })
 
@@ -31,4 +31,29 @@ test("a project this server has not opened is not landed on while an open one ex
   // Nothing open yet (a boot still opening them): land as if the list were unknown.
   assert.equal(defaultCrossProjectFocus(cards, "b", new Set()), "b-slug")
   assert.equal(defaultCrossProjectFocus(cards, null, new Set()), "a-slug")
+})
+
+const project = (slug: string, open = true, stale = false) => ({ slug, open, stale })
+
+test("⇧Tab moves the box to the next project in the picker's order, wrapping at the end", () => {
+  const projects = [project("a"), project("b"), project("c")]
+  assert.equal(nextPick(projects, "a")?.slug, "b")
+  assert.equal(nextPick(projects, "c")?.slug, "a")
+  // A focus the list does not hold yet (a project registered a moment ago) steps onto the first.
+  assert.equal(nextPick(projects, "gone")?.slug, "a")
+  assert.equal(nextPick(projects, undefined)?.slug, "a")
+})
+
+test("⇧Tab passes over a project that cannot take the draft it carries", () => {
+  const projects = [project("a"), project("b", false), project("c", true, true), project("d")]
+  assert.equal(nextPick(projects, "a")?.slug, "d", "not open, then a directory that is gone")
+  assert.equal(nextPick(projects, "d")?.slug, "a")
+  // A focus that is not open itself (chosen from the menu) still steps on to one that is.
+  assert.equal(nextPick(projects, "b")?.slug, "d")
+})
+
+test("with nowhere else to go, ⇧Tab is left to the browser", () => {
+  assert.equal(nextPick([project("a")], "a"), undefined)
+  assert.equal(nextPick([project("a"), project("b", false)], "a"), undefined)
+  assert.equal(nextPick([], undefined), undefined)
 })
