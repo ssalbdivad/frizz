@@ -132,8 +132,14 @@ export function useDispatchProfile(pickState: DispatchPickState = NO_PICK): {
 
   // The ACP catalogue counts once it has SETTLED either way: a saved ACP profile must not read as
   // unavailable merely because the list is cold, and an older server that lacks the RPC must not block
-  // the composer forever.
-  const controlsReady = !!preferences.data && !!codexModels.data && (acpAgents.isSuccess || acpAgents.isError)
+  // the composer forever. Only an ACP profile waits for it — it is all the list resolves — and the list
+  // is per project (it merges the project's settings), so a Claude or Codex profile sat on "Profile
+  // loading…", its Enter ignored, each time the box moved to a project it had not asked yet: 316ms and
+  // 2.3s stepping through four projects with ⌥↓ (2026-09-28). A pick is a profile here too: an ACP
+  // pick over a Claude default resolves against the same list.
+  const acpSettled = acpAgents.isSuccess || acpAgents.isError
+  const needsAcp = preferences.data?.backend === "acp" || pick?.backend === "acp"
+  const controlsReady = !!preferences.data && !!codexModels.data && (!needsAcp || acpSettled)
   const defaultResolved = useMemo(
     () => controlsReady ? resolveDispatchPreferences(preferences.data!, codexList, acpList) : undefined,
     [controlsReady, preferences.data, codexList, acpList],

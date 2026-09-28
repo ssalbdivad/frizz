@@ -1,32 +1,32 @@
 import type { CSSProperties, ReactNode } from "react"
-import { Check, ChevronDown, Infinity as InfinityIcon, ListFilter, X } from "lucide-react"
+import { Check, ChevronDown, Layers, ListFilter, X } from "lucide-react"
 import type { ProjectCard } from "@frizz/shared"
 import { ProjectSquare } from "./ProjectRail.tsx"
 import { Menu, MenuContent, MenuItem, MenuSeparator, MenuTrigger } from "./ui/Menu.tsx"
 
-// THE PROJECT FILTER — the status row's right end, in BOTH modes: what you are looking at, as a control
+// THE QUEUE FILTER — the READY header's right end: which projects' cards the queue shows, as a control
 // (maintainer 2026-09-28: the filtering was unclear — "there should be some kind of filtering symbol …
-// where you can click a project name or you can click everything", with "some clear filter indicator").
+// where you can click a project name or you can click everything", with "some clear filter indicator";
+// then, the same day: "have project filters only affect which threads are displayed on the right side and
+// have the ui reflect that").
 //
-//   Everything:        ⧩ Everything ▾                — the menu: Everything, then every project
+//   every project:     ⧩ All projects ▾             — quiet: the menu, All projects, then every project
 //   one project:      (⧩ ▣ name ✕)                  — a HELD pill; ✕ lifts the filter
 //
-// Choosing a project OPENS ITS PROJECT VIEW (maintainer, same day: "there shouldn't even be a concept of
-// a project board- the core UI should adapt and show more info when it is filtered to a single project
-// which should be easy to access and go back to the main board from with a single click, don't call it a
-// board call it 'project view'"). So the pill is what a project view wears, and its ✕ is the one click
-// back up to Everything — the same door as ∞, said as a filter. There is no other filtered state: the
-// in-place narrowing Everything had (which showed LESS than a project view) is gone.
+// It sits over the cards it filters, and filters nothing else: the list on the left keeps every project,
+// and marks the filtered one with the same glyph (ProjectList.tsx). It stood at the status row's right end
+// until then, above the prompt box, where it read as scoping the whole page — and choosing a project there
+// opened that project's own view, which is gone.
 //
 // It must not read like the prompt box's project picker (AllQueues.tsx ProjectPicker): that one says
 // where a new thread GOES; this one says what you are LOOKING AT. Hence the filter glyph leading this one,
 // and that one living INSIDE the box's bottom strip beside the model, drawn as a setting of the next
-// thread — it sat directly under this one until 2026-09-28, and the two names stacked read as one.
+// thread.
 //
-// Ink gaps (sans, scripts/ink-gaps.mjs): glyph→name 8.00px on the flex gap alone against 5.18px
-// name→chevron, so the glyph gives back 1px of its dead box (→7.00px); in the pill glyph→square 6.75px
-// and square→name 7.00px already read as one run, and the ✕ sits 10.37px off the name because it is a
-// separate control.
+// Ink gaps (sans, scripts/ink-gaps.mjs, measured in the status row at this same 12px): glyph→name 8.00px
+// on the flex gap alone against 5.18px name→chevron, so the glyph gives back 1px of its dead box
+// (→7.00px); in the pill glyph→square 6.75px and square→name 7.00px already read as one run, and the ✕
+// sits 10.37px off the name because it is a separate control.
 
 export interface FilterProject {
   id: string
@@ -64,12 +64,12 @@ export function ProjectFilter({
   projects: FilterProject[]
   /** The one project shown, or undefined for Everything. */
   current: FilterProject | undefined
-  /** What the pill says for `current` — its name by default (a project view shows owner/repo). */
+  /** What the pill says for `current` — its name by default. */
   label?: ReactNode
   onEverything: () => void
   onProject: (project: FilterProject) => void
   onClear: () => void
-  /** Extra menu items under the list — a repo link. */
+  /** Extra menu items under the list. */
   footer?: ReactNode
   onOpenChange?: (open: boolean) => void
 }) {
@@ -81,8 +81,10 @@ export function ProjectFilter({
         data-xq-view-filter={current ? "narrowed" : "everything"}
         title={current ? `Showing only ${current.name}. Choose what to show` : "Showing every project. Choose what to show"}
         aria-label={`Showing ${current ? `only ${current.name}` : "every project"}. Choose what to show`}
-        className={`flex min-w-0 items-baseline gap-1.5 py-0.5 font-semibold text-fg/90 outline-none transition-colors hover:text-fg focus-visible:ring-1 focus-visible:ring-focus-ink-60 data-[state=open]:text-fg ${
-          current ? "rounded-full pl-2 pr-1" : "-mr-1.5 rounded-md px-1.5 hover:bg-hover data-[state=open]:bg-hover"
+        // Quiet while it filters nothing — muted, like the READY label beside it — and full weight only as
+        // the held pill, when one project's cards are all there is to see.
+        className={`flex min-w-0 items-baseline gap-1.5 py-0.5 outline-none transition-colors hover:text-fg focus-visible:ring-1 focus-visible:ring-focus-ink-60 data-[state=open]:text-fg ${
+          current ? "rounded-full pl-2 pr-1 font-semibold text-fg/90" : "-mr-1.5 rounded-md px-1.5 font-medium text-muted-80 hover:bg-hover data-[state=open]:bg-hover"
         }`}
       >
         <ListFilter size={12} aria-hidden data-xq-view-filter-glyph className={`${current ? "" : "-mr-px "}shrink-0 self-baseline translate-y-[calc(0.5em_-_0.5cap)] text-muted`} />
@@ -91,7 +93,7 @@ export function ProjectFilter({
             <ProjectSquare project={current.card} size={14} />
           </span>
         )}
-        <span data-status-row-page className="min-w-0 truncate">{current ? (label ?? current.name) : "Everything"}</span>
+        <span data-xq-view-filter-label className="min-w-0 truncate">{current ? (label ?? current.name) : "All projects"}</span>
         {!current && <ChevronDown size={12} aria-hidden data-xq-view-filter-chevron className="-ml-[3.5px] shrink-0 self-baseline translate-y-[calc(0.5em_-_0.5cap)] text-muted" />}
       </button>
     </MenuTrigger>
@@ -119,8 +121,8 @@ export function ProjectFilter({
       )}
       <MenuContent align="end">
         <div className="px-2.5 pb-1 pt-1.5 text-[10.5px] font-medium text-muted-55">Show</div>
-        <MenuItem onSelect={onEverything} icon={<InfinityIcon size={14} aria-hidden />} value="everything">
-          <span className={`min-w-0 flex-1 truncate ${current ? "" : "text-fg"}`}>Everything</span>
+        <MenuItem onSelect={onEverything} icon={<Layers size={14} aria-hidden />} value="everything">
+          <span className={`min-w-0 flex-1 truncate ${current ? "" : "text-fg"}`}>All projects</span>
           {total > 0 && <QueueBadge count={total} />}
           <span className="flex w-3 shrink-0 justify-center">{!current && <Check size={12} aria-label="Current" className="text-fg" />}</span>
         </MenuItem>

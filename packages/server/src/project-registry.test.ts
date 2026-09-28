@@ -97,6 +97,20 @@ test("a slug that would shadow Frizz's own routes is refused", () => {
   assert.equal(deriveSlug("/x/_frizz", taken), "frizz")
 })
 
+// `home` is the Home workspace's address (home-workspace.ts). A project that took it would push Home
+// onto its id — so the name is reserved, and only a registry from before that keeps one.
+test("a project in a folder called `home` does not take the Home workspace's slug", () => {
+  const home = sandbox()
+  try {
+    const { entry } = registerProject({ dir: project(home, "work/home", A), id: A }, home)
+    assert.notEqual(entry?.slug, "home")
+    assert.equal(entry?.slug, "work-home")
+    assert.equal(findBySlug("home", home), undefined)
+  } finally {
+    rmSync(home, { recursive: true, force: true })
+  }
+})
+
 test("numeric suffixes carry on once every qualifier is taken", () => {
   const taken = new Set(["zod", "colinhacks-zod", "a-zod"])
   assert.equal(deriveSlug("/a/zod", taken, { remoteOwner: "colinhacks" }), "zod-2")

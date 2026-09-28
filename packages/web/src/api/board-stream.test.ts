@@ -2,6 +2,7 @@ import { test } from "node:test"
 import assert from "node:assert/strict"
 import type { ServerEvent } from "@frizz/shared"
 import { BoardStream, notify } from "./board-stream.ts"
+import { setHomeFocus } from "../lib/base-path.ts"
 import { store } from "../store.ts"
 
 test("BoardStream forwards typed-interaction invalidations without treating them as board deltas", () => {
@@ -41,7 +42,9 @@ test("a notification click opens the thread in the project it was raised for, no
     constructor(readonly title: string, readonly opts: { body?: string; tag?: string }) { raised.push(this) }
     close(): void {}
   }
-  const here = { pathname: "/project/alpha", assign: (url: string) => { assigned.push(url) } }
+  // The page is Everything at `/`; which project it is showing is its FOCUS (lib/base-path.ts).
+  const here = { pathname: "/", assign: (url: string) => { assigned.push(url) } }
+  setHomeFocus("alpha")
   let assigned: string[] = []
   install("Notification", FakeNotification)
   install("document", { hidden: true })
@@ -64,13 +67,14 @@ test("a notification click opens the thread in the project it was raised for, no
 
     // Raised on alpha, clicked after the tab moved to beta: beta must not open ITS `fix-auth`.
     assigned = []
-    here.pathname = "/project/alpha"
+    setHomeFocus("alpha")
     notify(event)
-    here.pathname = "/project/beta"
+    setHomeFocus("beta")
     raised.at(-1)!.onclick!()
-    assert.deepEqual(assigned, ["/project/alpha/thread/fix-auth"], "the click follows the notification's own project")
+    assert.deepEqual(assigned, ["/all/alpha/thread/fix-auth"], "the click follows the notification's own project")
     assert.equal(store.drawers.length, 0, "and opens nothing on the project that happens to be showing")
   } finally {
+    setHomeFocus(undefined)
     store.drawers = []
     store.notificationsEnabled = notificationsBefore
     for (const [key, descriptor] of globals) {

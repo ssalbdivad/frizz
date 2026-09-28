@@ -1,13 +1,17 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query"
 import { createRoot } from "react-dom/client"
-import type { BoardSnapshot, RegisteredQuestionView, ThreadView as ThreadViewModel, TranscriptMessage } from "@frizz/shared"
-import { TodosView } from "./components/TodosView.tsx"
+import { MemoryRouter } from "react-router"
+import type { BoardSnapshot, RegisteredQuestionView, ThreadHandoff, ThreadView as ThreadViewModel } from "@frizz/shared"
+import { AllQueuesCard } from "./components/AllQueuesCard.tsx"
 import { TooltipProvider } from "./components/Tooltip.tsx"
+import type { QueuesProject } from "./lib/allQueues.ts"
 import { store } from "./store.ts"
 import "./styles.css"
 
-// Browser QA for a REGISTERED question on the queue card — a question a worker created with the `ask`
-// tool, which is a row rather than a fence in a message. It renders through the shared QuestionBlockCard
+// Browser QA for a REGISTERED question on the queue card (components/AllQueuesCard.tsx, the Everything
+// page's card) — a question a worker created with the `ask` tool, which is a row rather than a fence in a
+// message. This fixture mounted the board's queue card (TodosView) until that card was deleted with the
+// single-project board (2026-09-28); the question stack is the same component on both. It renders through the shared QuestionBlockCard
 // (RegisteredQuestionCards.tsx), so what is worth looking at here is what a registration adds: the ×,
 // the rich option BODY (full markdown inside the chip, visible before anything is picked — one option
 // below writes the new multi-line `description`, the other the retired `preview`, and they must render
@@ -21,16 +25,15 @@ import "./styles.css"
 //   ?past=1     — the question was asked at an OLDER rest, the human replied past it without answering,
 //                 and the worker's newest handoff carries a LEGACY empty ```question qst_… marker naming
 //                 it — how a worker dispatched before 2026-09-28 says a newer handoff still owes the ask.
-//                 The card's window opens at the newest rest (hasEarlier), so the asking rest is above the
-//                 window. The marker must draw NOTHING, the card must render ONCE, at the BOTTOM under the
-//                 whole handoff, and the card-level "Send answers" must stand down (the registered card
-//                 carries its own).
+//                 The marker must draw NOTHING and the card must render ONCE, at the BOTTOM under the
+//                 whole handoff.
 //   ?table=1    — an option whose body carries a TABLE, a blockquote and a code fence: the blocks whose
 //                 opaque panel fills clashed with a selected chip's accent tint (screenshot 2026-09-02).
 //   ?wide=1     — a `multi` over THIRTY options: no count cap (2026-09-03), and lettering past `Z.`.
 //   ?placed=1   — RETIRED PLACEMENT (2026-09-28): two questions open at one rest, and the handoff carries
 //                 a legacy marker for ONE of them mid-prose, with a paragraph under it. The marker must
-//                 draw NOTHING: both cards render together UNDER the whole handoff, one stack, one Send.
+//                 draw NOTHING (lib/allQueues handoffParts): both cards render together UNDER the whole
+//                 handoff, one stack, one Send.
 //   ?woken=1    — the worker asked and rested, then frizz WOKE it (a PR watcher expired) and it wrote a
 //                 newer handoff with the question still open. Only frizz has spoken since, so the card
 //                 must render at the BOTTOM, under the newer handoff — not frozen above the wake.
@@ -195,33 +198,18 @@ const tail = "Both stores work. The choice is yours because it is the one thing 
 const past = params.get("past") === "1"
 const marker = `**Fixed** — nothing further to do on the store: \`c6c292e8\` is on local \`main\`.\n\nThe one card still on the board is yours to decide, and it is the reason this thread does not file itself away as done:\n\n\`\`\`question ${SETTINGS.id}\n\`\`\`\n\nAnswer it either way and this thread is finished.`
 const placedHandoff = `**Fixed** — the store is in and \`c6c292e8\` is on local \`main\`.\n\nOne call is yours, because it is the one thing here that is hard to reverse once there is data in it:\n\n\`\`\`question ${SETTINGS.id}\n\`\`\`\n\nEither store passes every gate today. The gates themselves are the other open card, below.`
-const askedHandoff = "[#1403](https://github.com/pullfrog/app/pull/1403) is merge-ready and needs a go-ahead to merge. CI is green (7 checks passed, 6 skipped), and the latest review found no new issues and no open threads."
-const wake = "⏰ Your watcher on pullfrog/app#1403 has expired and is no longer armed — nothing on that PR will wake you now."
 const wokenHandoff = "[#1403](https://github.com/pullfrog/app/pull/1403) is still open and merge-ready. Nothing has happened on it since the clean review: CI is green on `df703a8` and it is still mergeable.\n\nThe PR watch is re-armed for 30 days, so a conflict or a new review wakes this thread."
-const messages: TranscriptMessage[] = placed
-  ? [
-      { role: "user", at: ago(12), text: "Add a settings store.", tools: [], parts: [{ kind: "text", text: "Add a settings store." }] },
-      { role: "assistant", at: ago(1), text: placedHandoff, tools: [], parts: [{ kind: "text", text: placedHandoff }] },
-    ]
+// The card reads only the handoff — the human's last ask and the worker's answer to it — never the
+// transcript (AllQueuesCard's header comment), so each case is spelled as that pair.
+const handoff: ThreadHandoff = placed
+  ? { asked: "Add a settings store.", askedAt: ago(12), text: placedHandoff, at: ago(1) }
   : woken
-  ? [
-      { role: "user", at: ago(40), text: "Get #1403 merge-ready.", tools: [], parts: [{ kind: "text", text: "Get #1403 merge-ready." }] },
-      { role: "assistant", at: ago(30), text: askedHandoff, tools: [], parts: [{ kind: "text", text: askedHandoff }] },
-      { role: "assistant", kind: "event", boundary: "rest", at: ago(30), text: "Agent rested", tools: [], parts: [] },
-      { role: "user", at: ago(5), text: wake, wake: true, tools: [], parts: [] },
-      { role: "assistant", at: ago(4), text: wokenHandoff, tools: [], parts: [{ kind: "text", text: wokenHandoff }] },
-      { role: "assistant", kind: "event", boundary: "rest", at: ago(4), text: "Agent rested", tools: [], parts: [] },
-    ]
+  // Only frizz has spoken since the ask — a wake is not the human's — so the pair is the human's own ask
+  // and the worker's NEWER handoff.
+  ? { asked: "Get #1403 merge-ready.", askedAt: ago(40), text: wokenHandoff, at: ago(4) }
   : past
-  ? [
-      // The window opens at the human's reply; the rest the question was asked at is above it.
-      { role: "user", at: ago(2), text: "Well done, you did it.", tools: [], parts: [{ kind: "text", text: "Well done, you did it." }] },
-      { role: "assistant", at: ago(1), text: marker, tools: [], parts: [{ kind: "text", text: marker }] },
-    ]
-  : [
-      { role: "user", text: "Add a settings store.", tools: [], parts: [{ kind: "text", text: "Add a settings store." }] },
-      { role: "assistant", text: tail, tools: [], parts: [{ kind: "text", text: tail }] },
-    ]
+  ? { asked: "Well done, you did it.", askedAt: ago(2), text: marker, at: ago(1) }
+  : { asked: "Add a settings store.", askedAt: ago(3), text: tail, at: ago(1) }
 
 const thread = {
   id: "registered-question-demo",
@@ -259,27 +247,47 @@ const thread = {
     ? [{ id: "wch_aaa", kind: "shell", target: "bzvtnt3ig", state: "armed", createdAt: ago(6) }]
     : [],
   lastActivityAt: ago(1),
+  lastAssistantAt: ago(1),
+  lastAssistant: tail,
 } as unknown as ThreadViewModel
 
 store.board = { projectDir: "/fixture/frizz", threads: [thread] } as BoardSnapshot
 
-const transcriptPage = { messages, transcriptKey: "fixture-key", hasEarlier: past, historyLoaded: false }
+const project: QueuesProject = {
+  id: "fixture",
+  slug: "frizz",
+  name: "frizz",
+  card: undefined,
+  open: true,
+  stale: false,
+  projectDir: "/fixture/frizz",
+  homeDir: "/fixture",
+  githubRepo: undefined,
+  queued: [thread],
+  running: [],
+  snoozed: [],
+  doneCount: 0,
+}
+
 const originalFetch = window.fetch
 window.fetch = async (input, init) => {
   const url = new URL(typeof input === "string" ? input : (input as Request).url ?? input.toString(), location.origin)
-  if (url.pathname === "/_frizz/rpc/threadTranscript" || url.pathname === "/_frizz/rpc/threadTranscriptEarlier") {
-    return new Response(JSON.stringify({ result: transcriptPage }), { headers: { "content-type": "application/json" } })
+  // The card addresses its OWN project (`/_frizz/<project id>/rpc/…`, api/rpc.ts projectRpc), so every
+  // route is matched on the rpc name alone.
+  const rpc = /^\/_frizz\/[^/]+\/rpc\/([^/]+)$/.exec(url.pathname)?.[1] ?? null
+  if (rpc === "threadHandoff") {
+    return new Response(JSON.stringify({ result: handoff }), { headers: { "content-type": "application/json" } })
   }
   // The two writes the card makes, echoed onto the window so a probe can assert the exact payload the
   // worker would receive — above all that an answer RESTATES the question and carries the option's own
   // label rather than the lettered chip text.
-  if (url.pathname === "/_frizz/rpc/answerQuestions" || url.pathname === "/_frizz/rpc/dismissQuestions") {
+  if (rpc === "answerQuestions" || rpc === "dismissQuestions") {
     const body = JSON.parse(String(init?.body ?? "{}"))
-    window.dispatchEvent(new CustomEvent("fixture-rpc", { detail: { rpc: url.pathname.split("/").pop(), body } }))
+    window.dispatchEvent(new CustomEvent("fixture-rpc", { detail: { rpc, body } }))
     const ids: string[] = body.ids ?? (body.answers ?? []).map((a: { questionId: string }) => a.questionId)
     return new Response(JSON.stringify({ result: { answered: ids, dismissed: ids, open: [] } }), { headers: { "content-type": "application/json" } })
   }
-  if (url.pathname.startsWith("/_frizz/rpc/")) {
+  if (rpc !== null) {
     return new Response(JSON.stringify({ result: null }), { headers: { "content-type": "application/json" } })
   }
   return originalFetch(input, init)
@@ -287,10 +295,12 @@ window.fetch = async (input, init) => {
 
 createRoot(document.getElementById("root")!).render(
   <QueryClientProvider client={new QueryClient()}>
-    <TooltipProvider>
-      <div className="mx-auto w-[min(680px,calc(100%-32px))] py-8">
-        <TodosView />
-      </div>
-    </TooltipProvider>
+    <MemoryRouter>
+      <TooltipProvider>
+        <div className="mx-auto w-[min(680px,calc(100%-32px))] py-8">
+          <AllQueuesCard project={project} thread={thread} leaving={false} onLeave={() => {}} onReturn={() => {}} />
+        </div>
+      </TooltipProvider>
+    </MemoryRouter>
   </QueryClientProvider>,
 )

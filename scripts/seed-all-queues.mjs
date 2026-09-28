@@ -30,6 +30,7 @@ if (!line) throw new Error(`no stack json line in ${flags.stack} — has the sta
 const stack = JSON.parse(line)
 const home = stack.home
 const db = join(home, ".frizz", "ui.db")
+const WAIT_FOR_LOCK = ["-cmd", ".timeout 10000"]
 const projects = [
   { id: stack.launcher.id, slug: stack.launcher.slug, dir: stack.launcher.dir },
   ...stack.tenants.map((t) => ({ id: t.id, slug: t.slug, dir: t.dir })),
@@ -95,13 +96,17 @@ function seed(project, t) {
     const key = createHash("sha256").update(sessionId).digest("hex").slice(0, 16)
     writeFileSync(join(stateDir, "claude-broker", `${key}.json`), JSON.stringify({ sessionId, daemonPid: daemon.pid, socketPath: join(stateDir, "claude-broker", `${t.slug}.sock`) }))
   }
+  // The server writes this database too (every seeded thread wakes its tailer), and the CLI's default
+  // busy timeout is zero, so a write that met one of the server's failed outright: "database is locked".
   execFileSync("sqlite3", [
+    ...WAIT_FOR_LOCK,
     db,
     `INSERT OR REPLACE INTO session (project_id, slug, session_id, thread_name, spawned_at, title, title_auto, backend, claude_runtime, model, effort, permission_mode, state, unread, exited, archived, rested_at)
      VALUES (${q(project.id)}, ${q(t.slug)}, ${q(sessionId)}, ${q(`frizz-${t.slug}`)}, ${q(ago(started + 1))}, ${q(t.title)}, 0, 'claude', ${broker}, 'opus', 'high', 'default', ${t.archived ? "'archived'" : "'open'"}, ${t.unread ? 1 : 0}, 0, ${t.archived ? 1 : 0}, ${t.inFlight ? "NULL" : q(ago(t.rest))})`,
   ])
   if (t.question) {
     execFileSync("sqlite3", [
+      ...WAIT_FOR_LOCK,
       db,
       `INSERT OR REPLACE INTO thread_question (id, project_id, thread_slug, spec, state, answer, delivered, asked_at, settled_at)
        VALUES (${q(`qst_${createHash("sha256").update(`${project.slug}/${t.slug}`).digest("hex").slice(0, 8)}`)}, ${q(project.id)}, ${q(t.slug)}, ${q(JSON.stringify(t.question))}, 'open', NULL, 0, ${agoMs(t.rest)}, NULL)`,

@@ -2,7 +2,7 @@ import { useEffect, useState } from "react"
 import { useSnapshot } from "valtio"
 import { Loader2 } from "lucide-react"
 import { store, pushDrawer, type ToastLink } from "../store.ts"
-import { modeProjectHref, projectSlug } from "../lib/base-path.ts"
+import { crossProjectHref, projectSlug } from "../lib/base-path.ts"
 import { spaNavigate } from "../lib/router.ts"
 
 // Minimal toast (no dep): rises in at the BOTTOM RIGHT, holds, then sinks back down and fades.
@@ -109,10 +109,10 @@ export function isToastPointer(target: EventTarget | null): boolean {
 }
 
 function openToastLink(link: ToastLink) {
-  // Its own project's page, in this page's mode, when that is not the page any more; the thread route
-  // opens the right surface for it (a command thread's terminal included).
+  // Its own project's drawer, through the router, when the page is focused elsewhere by now; the thread
+  // route opens the right surface for it (a command thread's terminal included).
   if (link.project !== undefined && link.project !== projectSlug()) {
-    spaNavigate(`${modeProjectHref(encodeURIComponent(link.project))}/thread/${encodeURIComponent(link.slug)}`)
+    spaNavigate(`${crossProjectHref(encodeURIComponent(link.project))}/thread/${encodeURIComponent(link.slug)}`)
     return
   }
   pushDrawer(link.drawer ?? "thread", link.slug)
