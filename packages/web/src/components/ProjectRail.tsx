@@ -15,6 +15,7 @@ import { isPlainLeftClick } from "../lib/standaloneThreadRoute.ts"
 import { dropIndex, edgeScrollVelocity, moveItem, shiftFor } from "../lib/railReorder.ts"
 import { Tooltip } from "./Tooltip.tsx"
 import { useAddProject } from "./ProjectActions.tsx"
+import { useShortcutLabel, withShortcut } from "../lib/keyboardRuntime.ts"
 import { glideTo } from "../lib/viewportLock.ts"
 
 // THE PROJECT RAIL — every project on this machine as one icon square, always on screen.
@@ -485,6 +486,7 @@ export function ProjectRail() {
   // project. (The page's focus only aims its prompt box, which says so itself.)
   const filter = useQueueFilter()
   const add = useAddProject()
+  const addKeys = useShortcutLabel("app.newProject")
   const [drag, setDrag] = useState<DragState | null>(null)
   /** The order the operator is looking at, which leads the server for the whole round trip. */
   const [optimistic, setOptimistic] = useState<ProjectCard[] | null>(null)
@@ -678,7 +680,7 @@ export function ProjectRail() {
         </div>
       )}
 
-      <Tooltip side="right" label="Add a project">
+      <Tooltip side="right" label={withShortcut("Add a project", addKeys)}>
         <button
           type="button"
           disabled={add.pending}

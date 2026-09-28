@@ -18,6 +18,7 @@ import { rpc } from "../api/rpc.ts"
 import { everythingHref, innerPath, projectSlug } from "../lib/base-path.ts"
 import { showToast, store } from "../store.ts"
 import { rememberCrossProjectFocus } from "../lib/crossProject.ts"
+import { useShortcut } from "../lib/keyboardRuntime.ts"
 import { Dialog } from "./ui/Dialog.tsx"
 import { ProjectSquare } from "./ProjectRail.tsx"
 import { ROW_ACTION_CLASS } from "./Sidebar.tsx"
@@ -762,9 +763,15 @@ function useOpenAddedProject(): (project: { id: string; slug: string }) => void 
   }
 }
 
-/** The typed-path dialog, whenever something asked for it (`store.addProject`). Mounted once, by the layout. */
+/**
+ * The typed-path dialog, whenever something asked for it (`store.addProject`). Mounted once, by the layout
+ * — which is also why `p` (New project) is registered here: every page under the layout has this host,
+ * and the key opens the same folder picker the rail's + does.
+ */
 export function AddProjectHost() {
   const request = useSnapshot(store).addProject
+  const add = useAddProject()
+  useShortcut("app.newProject", add.start)
   if (!request) return null
   // Keyed on the folder so a second enclosed answer mounts fresh rather than inheriting a spent mutation.
   if (request.enclosed) return <EnclosedProjectDialog key={request.enclosed.path} enclosed={request.enclosed} onClose={() => (store.addProject = null)} />
