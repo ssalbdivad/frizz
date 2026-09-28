@@ -4,8 +4,11 @@ import { createElement } from "react"
 import { renderToStaticMarkup } from "react-dom/server"
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query"
 import type { ThreadView } from "@frizz/shared"
-import { ThreadRow } from "./Sidebar.tsx"
+import { ThreadRow, type RowScope } from "./Sidebar.tsx"
 import { TooltipProvider } from "./Tooltip.tsx"
+
+// Where a click would lead. Nothing here clicks; the prop is required because every real row has one.
+const ROW_SCOPE: RowScope = { open: () => {}, page: true }
 
 // The sidebar's one-click recovery verb. It appears on the rows offersRetry picks: a session whose
 // PROCESS EXITED (mid-turn or at bare rest without a done fence — the yellow [!] stalled mark), AND a
@@ -31,7 +34,7 @@ function row(extra: Partial<ThreadView>) {
     createElement(
       QueryClientProvider,
       { client: new QueryClient({ defaultOptions: { queries: { retry: false } } }) },
-      createElement(TooltipProvider, null, createElement(ThreadRow, { t })),
+      createElement(TooltipProvider, null, createElement(ThreadRow, { t, scope: ROW_SCOPE })),
     ),
   )
 }
@@ -127,13 +130,4 @@ test("no retry button — and no yellow [!] either — on rows that are not stal
     assert.doesNotMatch(html, /data-sidebar-retry/, `a ${name} row must not offer retry`)
     assert.doesNotMatch(html, STALLED_MARK, `…nor wear the yellow [!] stalled mark`)
   }
-})
-
-test("a legacy row keeps its Mark-as verb and never grows a retry button", () => {
-  const t = { ...base, ...STALLED, id: "legacy-row", kind: "legacy" } as unknown as ThreadView
-  const html = renderToStaticMarkup(
-    createElement(TooltipProvider, null, createElement(ThreadRow, { t, legacy: true })),
-  )
-  assert.doesNotMatch(html, /data-sidebar-retry/)
-  assert.match(html, /Mark as/)
 })

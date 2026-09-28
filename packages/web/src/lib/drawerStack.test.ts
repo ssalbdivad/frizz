@@ -13,7 +13,6 @@ import {
 
 function resetStore(): void {
   store.drawers = []
-  store.view = "todos"
 }
 
 // No drawer components are mounted in this environment, so closeDrawersById's animated path has no

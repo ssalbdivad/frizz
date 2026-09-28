@@ -4,8 +4,11 @@ import { createElement } from "react"
 import { renderToStaticMarkup } from "react-dom/server"
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query"
 import type { ThreadView } from "@frizz/shared"
-import { ThreadRow, awaitingReason, sessionIndicatorFor } from "./Sidebar.tsx"
+import { ThreadRow, awaitingReason, sessionIndicatorFor, type RowScope } from "./Sidebar.tsx"
 import { TooltipProvider } from "./Tooltip.tsx"
+
+// Where a click would lead. Nothing here clicks; the prop is required because every real row has one.
+const ROW_SCOPE: RowScope = { open: () => {}, page: true }
 
 // A RAIL ROW IS ITS TITLE, AND EVERYTHING ELSE IS ONE HOVER AWAY (maintainer 2026-08-19: "there should
 // never ever be any fucking thing in the sidebar except for the fucking title"). The row has no
@@ -47,7 +50,7 @@ function markup(t: ThreadView) {
     createElement(
       QueryClientProvider,
       { client: new QueryClient({ defaultOptions: { queries: { retry: false } } }) },
-      createElement(TooltipProvider, null, createElement(ThreadRow, { t })),
+      createElement(TooltipProvider, null, createElement(ThreadRow, { t, scope: ROW_SCOPE })),
     ),
   )
 }

@@ -4,8 +4,11 @@ import { createElement } from "react"
 import { renderToStaticMarkup } from "react-dom/server"
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query"
 import type { ThreadView } from "@frizz/shared"
-import { ThreadRow } from "./Sidebar.tsx"
+import { ThreadRow, type RowScope } from "./Sidebar.tsx"
 import { TooltipProvider } from "./Tooltip.tsx"
+
+// Where a click would lead. Nothing here clicks; the prop is required because every real row has one.
+const ROW_SCOPE: RowScope = { open: () => {}, page: true }
 
 // A SNOOZE IS TOOLTIP-ONLY ON THE RAIL, and so is everything else. No sidebar row spends a subtitle line
 // on a park — not the Snoozed ones (single-line since the two-styles fix), and since 2026-08-03 not the ones
@@ -37,7 +40,7 @@ function row(extra: Partial<ThreadView>) {
     createElement(
       QueryClientProvider,
       { client: new QueryClient({ defaultOptions: { queries: { retry: false } } }) },
-      createElement(TooltipProvider, null, createElement(ThreadRow, { t })),
+      createElement(TooltipProvider, null, createElement(ThreadRow, { t, scope: ROW_SCOPE })),
     ),
   )
 }

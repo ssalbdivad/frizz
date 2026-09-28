@@ -11,7 +11,8 @@ import { parseStandaloneThreadPath } from "./standaloneThreadRoute.ts"
 // History contract (standard SPA): opening a thread layer PUSHES an entry so the browser Back
 // button unwinds it; other transitions REPLACE so transient state never buries the back stack.
 //
-// (The focus machine this used to route through was deleted — the router writes store.view directly.)
+// (The focus machine this used to route through was deleted, and so, on 2026-09-28, was the `view` it
+// then wrote: `/status/<s>` lists went with the project board, so every non-thread path is the page.)
 
 function currentPath(): string {
   const top = topRoutedSlug()
@@ -40,10 +41,8 @@ export function applyPath(path: string): void {
     if (slug === null) {
       store.routeThreadSlug = null
       closeDrawersById(store.drawers.map((d) => d.id))
-      store.view = "todos"
       return
     }
-    store.view = "todos"
     // Back/forward landed on a thread path: if that thread is somewhere in the stack, unwind ABOVE
     // it and we're done — the surface it asks for is already up.
     const idx = store.drawers.findIndex((d) => (d.kind === "thread" || d.kind === "terminal") && d.slug === slug && !d.closing)
@@ -65,7 +64,6 @@ export function applyPath(path: string): void {
   // Everything else is the page; Back past the last thread layer unwinds the stack (animated).
   store.routeThreadSlug = null
   closeDrawersById(store.drawers.map((d) => d.id))
-  store.view = "todos"
 }
 
 // Cold-load adoption is initial application state, so establish it BEFORE React's first render.
