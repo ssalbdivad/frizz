@@ -18,7 +18,7 @@ const shared = {
   banner: {
     js: 'import { createRequire as __frizzCreateRequire } from "node:module"; const require = __frizzCreateRequire(import.meta.url);',
   },
-  external: ["better-sqlite3", "@parcel/watcher", "vite"],
+  external: ["better-sqlite3", "node-pty", "@parcel/watcher", "vite"],
   logLevel: "silent",
 };
 

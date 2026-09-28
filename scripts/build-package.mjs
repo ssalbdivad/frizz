@@ -22,7 +22,7 @@ const shared = {
   banner: {
     js: 'import { createRequire as __frizzCreateRequire } from "node:module"; const require = __frizzCreateRequire(import.meta.url);',
   },
-  external: ["@parcel/watcher", "vite"],
+  external: ["node-pty", "@parcel/watcher", "vite"],
   logLevel: "silent",
 }
 

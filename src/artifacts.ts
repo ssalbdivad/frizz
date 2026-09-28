@@ -745,12 +745,22 @@ function runArtifactCommand(args: string[], source: string): void {
 }
 
 // @parcel/watcher ships each platform's binary as its own optional package, copied below with the
-// rest of its closure. It was one of three until the database moved to node:sqlite and sign-in
-// moved off node-pty, both of which published every OS's prebuilds inside one package and needed a
-// host filter here.
+// rest of its closure. node-pty (terminal command threads, command-threads.ts) publishes every OS's
+// prebuilds inside one package, so it needs the host filter below.
 const RUNTIME_NATIVE_EXTERNALS = [
+  "node-pty",
   "@parcel/watcher",
 ] as const;
+
+/**
+ * Prebuild directory stems this host can load, used to strip every other platform's binaries out of
+ * a dependency cell. node-pty uses a directory per target (`prebuilds/darwin-arm64/pty.node`).
+ */
+const HOST_NATIVE_PREBUILDS = new Set(
+  platform() === "linux"
+    ? [`linux-${arch()}`, `linuxmusl-${arch()}`]
+    : [`${platform()}-${arch()}`]
+);
 
 interface FrizzDependencyCellManifest {
   version: 1;
@@ -876,6 +886,12 @@ function copyResolvedPackageClosure(source: string, modules: string): void {
         if (path === packageDir) return true;
         const relativePath = relative(packageDir, path);
         if (relativePath === "node_modules" || relativePath.startsWith(`node_modules${sep}`)) return false;
+        // node-pty publishes every OS's native binaries (and large Windows debug symbols) in one
+        // package. A cell is host-bound, so retain only the loaders this host can actually load.
+        if (relativePath.startsWith(`prebuilds${sep}`)) {
+          const [prebuild] = relativePath.slice(`prebuilds${sep}`.length).split(sep);
+          return HOST_NATIVE_PREBUILDS.has(prebuild.replace(/\.node$/, ""));
+        }
         return true;
       },
     });
