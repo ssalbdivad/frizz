@@ -159,54 +159,81 @@ export function useQueueFilter(): string | null {
   return useSyncExternalStore(subscribeQueueFilter, queueFilter, () => null)
 }
 
-// WHICH PROJECTS ARE OPEN IN THE LIST — the left side's own "show more", independent of the filter.
+// HOW MUCH OF EACH PROJECT THE LIST SHOWS — the left side's own folds, independent of the filter. Two of
+// them, one inside the other (maintainer 2026-09-28: "the collapse button associated with each project
+// should actually collapse all threads associated with that project, including open threads. There needs
+// to be perhaps a sub button that expands or collapses other categories like done or snoozed … But again,
+// we need a primary collapse button that would easily allow you to visually filter which projects you're
+// looking at"):
 //
-// Every project's current work (its Pinned, Ready and Working rows) is always listed; opening a project
-// adds the rest of it under its name — Snoozed, Done, External — which is everything its project view's
-// rail used to hold. Per BROWSER (localStorage), like the rail's own band folds: which projects you keep
-// open is how you arrange your desk, not how you are reading one window.
+//   COLLAPSED — the primary fold: the project is its one row and nothing under it, not even its work in
+//               flight. Every project starts open, so this set names the ones folded away.
+//   DRILLED   — the rest of a project: its Snoozed, Done and External bands, under its work in flight.
+//               Every project starts without them, so this set names the ones showing them.
+//
+// Per BROWSER (localStorage), like the rail's own band folds: which projects you keep open is how you
+// arrange your desk, not how you are reading one window.
 
-const EXPANDED_KEY = "frizz.expandedProjects"
-let expanded: ReadonlySet<string> | null = null
-const expandedListeners = new Set<() => void>()
-
-function expandedProjects(): ReadonlySet<string> {
-  if (!expanded) {
-    let ids: unknown = []
-    try {
-      ids = JSON.parse(localStorage.getItem(EXPANDED_KEY) ?? "[]")
-    } catch {
-      ids = []
+/** A set of project ids kept in localStorage, read once and live after that. */
+function persistedProjectSet(key: string) {
+  let ids: ReadonlySet<string> | null = null
+  const listeners = new Set<() => void>()
+  const read = (): ReadonlySet<string> => {
+    if (!ids) {
+      let stored: unknown = []
+      try {
+        stored = JSON.parse(localStorage.getItem(key) ?? "[]")
+      } catch {
+        stored = []
+      }
+      ids = new Set(Array.isArray(stored) ? stored.filter((id): id is string => typeof id === "string") : [])
     }
-    expanded = new Set(Array.isArray(ids) ? ids.filter((id): id is string => typeof id === "string") : [])
+    return ids
   }
-  return expanded
-}
-
-/** Open or close one project in the list; `open` omitted toggles it. */
-export function setProjectExpanded(projectId: string, open = !expandedProjects().has(projectId)): void {
-  const current = expandedProjects()
-  if (current.has(projectId) === open) return
-  const next = new Set(current)
-  if (open) next.add(projectId)
-  else next.delete(projectId)
-  expanded = next
-  try {
-    localStorage.setItem(EXPANDED_KEY, JSON.stringify([...next]))
-  } catch {
-    // Storage disabled or full: the list still opens, it just forgets on reload.
+  const set = (projectId: string, on = !read().has(projectId)): void => {
+    const current = read()
+    if (current.has(projectId) === on) return
+    const next = new Set(current)
+    if (on) next.add(projectId)
+    else next.delete(projectId)
+    ids = next
+    try {
+      localStorage.setItem(key, JSON.stringify([...next]))
+    } catch {
+      // Storage disabled or full: the list still folds, it just forgets on reload.
+    }
+    for (const listener of listeners) listener()
   }
-  for (const listener of expandedListeners) listener()
-}
-
-function subscribeExpanded(listener: () => void): () => void {
-  expandedListeners.add(listener)
-  return () => expandedListeners.delete(listener)
+  const subscribe = (listener: () => void) => {
+    listeners.add(listener)
+    return () => {
+      listeners.delete(listener)
+    }
+  }
+  return { read, set, subscribe }
 }
 
 const NONE: ReadonlySet<string> = new Set()
+const collapsed = persistedProjectSet("frizz.collapsedProjects")
+// The drill kept the key it had when it was the list's only fold, so a project opened then is open now.
+const drilled = persistedProjectSet("frizz.expandedProjects")
 
-/** The projects open in the list, by id — live, and a stable Set between changes. */
-export function useExpandedProjects(): ReadonlySet<string> {
-  return useSyncExternalStore(subscribeExpanded, expandedProjects, () => NONE)
+/** Fold one project away in the list, or back open; `on` omitted toggles it. */
+export function setProjectCollapsed(projectId: string, on?: boolean): void {
+  collapsed.set(projectId, on)
+}
+
+/** The projects folded away in the list, by id — live, and a stable Set between changes. */
+export function useCollapsedProjects(): ReadonlySet<string> {
+  return useSyncExternalStore(collapsed.subscribe, collapsed.read, () => NONE)
+}
+
+/** Show or hide the rest of one project — its Snoozed, Done and External; `on` omitted toggles it. */
+export function setProjectDrilled(projectId: string, on?: boolean): void {
+  drilled.set(projectId, on)
+}
+
+/** The projects showing the rest of themselves in the list, by id — live, and stable between changes. */
+export function useDrilledProjects(): ReadonlySet<string> {
+  return useSyncExternalStore(drilled.subscribe, drilled.read, () => NONE)
 }

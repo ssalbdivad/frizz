@@ -8,21 +8,24 @@
 // functionality must still be available without a project-specific view"). So every band that rail had is
 // here, for every project at once, at two volumes:
 //
-//   LOUD  — Pinned, Ready and Working: the work in flight, listed under its project, always.
+//   LOUD  — Pinned, Ready and Working: the work in flight, listed under its project unless it is folded.
 //   QUIET — Snoozed, Done and External: a muted count per band at the end of the project's own row, in the
 //           band's own glyph (the rail's legend, BandLabel.tsx), readable at a glance and never louder than
-//           the name. The row OPENS the project, in place, and those bands list under it with the rail's
-//           own headers, rows and verbs.
+//           the name. The counts are their own toggle, and those bands list under the project with the
+//           rail's own headers, rows and verbs.
+//
+// And the row itself FOLDS its project: one click and everything under it goes, work in flight included,
+// so the list shows only the projects being looked at (lib/crossProject.ts has the two folds).
 //
 // THE LIST IS NEVER FILTERED. The queue filter (lib/crossProject.ts) picks which cards the right side shows
-// and nothing else; opening a project here shows more of it here and nothing else. Two controls, two
-// columns, and neither reaches across.
+// and nothing else; folding or opening a project here changes this list and nothing else. Two controls,
+// two columns, and neither reaches across.
 //
 // EVERY ROW IS ITS PROJECT'S. The page project is the prompt box's pick, which is usually another project,
-// so each group sits in a ThreadProjectScope: pin, reopen and Retry go through the row's own project's
-// client, a click opens its card or its drawer in place (RowScope), and its fullscreen door names its own
-// project. The row itself is the rail's (Sidebar.tsx RailRow) — the same anatomy, hover strip and marks the
-// project view drew, measured once, not a second copy of them.
+// so each group sits in a ThreadProjectScope: pin, reopen, Retry and a sub-agent's × go through the row's
+// own project's client, and a click opens its card or its drawer in place (RowScope). The row itself is
+// the rail's (Sidebar.tsx RailRow) — the same anatomy, hover strip and marks the project view drew,
+// measured once, not a second copy of them.
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react"
 import { useQueryClient } from "@tanstack/react-query"
 import { ChevronRight, Ellipsis, ListFilter, Plus } from "lucide-react"
@@ -34,7 +37,7 @@ import { externalThreads, isPinned, queued, sectionThreads } from "../groups.ts"
 import { useBoard } from "../hooks.ts"
 import { threadKey, type QueuesProject } from "../lib/allQueues.ts"
 import { projectSlug } from "../lib/base-path.ts"
-import { setProjectExpanded, setQueueFilter, useExpandedProjects, useQueueFilter } from "../lib/crossProject.ts"
+import { setProjectCollapsed, setProjectDrilled, setQueueFilter, useCollapsedProjects, useDrilledProjects, useQueueFilter } from "../lib/crossProject.ts"
 import { prefetchProjectBoard, projectBoardKey, useProjectBoard } from "../lib/projectBoards.ts"
 import { drawerThreadSlug, store } from "../store.ts"
 import { useOpenThreadInPlace } from "./AllQueuesCard.tsx"
@@ -78,9 +81,11 @@ export function ProjectList({
   /** Bring a Ready card into view: its scroll offset, or null when the queue is not showing it. */
   onQueuedRow: (key: string) => number | null
 }) {
-  const expanded = useExpandedProjects()
+  const collapsed = useCollapsedProjects()
+  const drilled = useDrilledProjects()
   useReadAhead(projects)
   const groups = projects.map((project) => ({ project, bands: loudBands(project, hidden) }))
+  // A folded project keeps its place: it is still busy, only quieter to look at.
   const busy = groups.filter((group) => group.bands.rows > 0)
   const quiet = groups.filter((group) => group.bands.rows === 0)
   const group = (entry: (typeof groups)[number], spaced: boolean) => (
@@ -88,7 +93,8 @@ export function ProjectList({
       key={entry.project.id}
       project={entry.project}
       loud={entry.bands}
-      open={expanded.has(entry.project.id)}
+      collapsed={collapsed.has(entry.project.id)}
+      drilled={drilled.has(entry.project.id)}
       spaced={spaced}
       home={home}
       activeKey={activeKey}
@@ -161,7 +167,7 @@ function useReadAhead(projects: QueuesProject[]) {
 }
 
 /**
- * One project: its row, its work in flight, and — opened — the rest of it.
+ * One project: its row, its work in flight, and — drilled — the rest of it; folded away, only its row.
  *
  * Its FOCUS project (the page project, whose board is live in the store) reads the rest from that board;
  * every other reads its board through the cache, which the list read ahead.
@@ -169,7 +175,8 @@ function useReadAhead(projects: QueuesProject[]) {
 function ProjectGroup({
   project,
   loud,
-  open,
+  collapsed,
+  drilled,
   spaced,
   home,
   activeKey,
@@ -177,7 +184,8 @@ function ProjectGroup({
 }: {
   project: QueuesProject
   loud: LoudBands
-  open: boolean
+  collapsed: boolean
+  drilled: boolean
   spaced: boolean
   home: string | undefined
   activeKey: string | null
@@ -186,7 +194,8 @@ function ProjectGroup({
   const focus = projectSlug(useLocation().pathname)
   const live = useBoard()
   const onPage = project.slug === focus && live?.projectSlug === project.slug
-  const cached = useProjectBoard(project.id, open && !onPage && project.open)
+  const showsRest = drilled && !collapsed
+  const cached = useProjectBoard(project.id, showsRest && !onPage && project.open)
   const board = onPage ? live : cached
   const quiet = useMemo(() => quietBands(project, board), [project, board])
   const snap = useSnapshot(store)
@@ -212,21 +221,32 @@ function ProjectGroup({
     <section
       aria-label={project.name}
       data-xq-rail-project={project.id}
-      data-xq-project-open={open || undefined}
+      data-xq-project-collapsed={collapsed || undefined}
+      data-xq-project-drilled={showsRest || undefined}
       className={spaced ? "mt-3" : ""}
       // The rows are in the cache before the click lands (lib/projectBoards.ts).
       onPointerEnter={() => {
         if (!onPage && project.open && !project.stale) prefetchProjectBoard(queryClient, project.id)
       }}
     >
-      <ProjectRow project={project} busy={loud.rows > 0} count={loud.ready.length} quiet={quiet} open={open} home={home} />
-      <ThreadProjectScope projectId={project.id} projectDir={project.projectDir}>
-        {loud.pinned.map(row(false))}
-        {quiet.pinnedDone.map(row(false))}
-        {loud.ready.map(row(true))}
-        {loud.working.map(row(false))}
-        {open && <ProjectDrill project={project} quiet={quiet} row={row(false)} />}
-      </ThreadProjectScope>
+      <ProjectRow
+        project={project}
+        busy={loud.rows > 0}
+        count={loud.ready.length}
+        quiet={quiet}
+        collapsed={collapsed}
+        showsRest={showsRest}
+        home={home}
+      />
+      {!collapsed && (
+        <ThreadProjectScope projectId={project.id} projectDir={project.projectDir}>
+          {loud.pinned.map(row(false))}
+          {quiet.pinnedDone.map(row(false))}
+          {loud.ready.map(row(true))}
+          {loud.working.map(row(false))}
+          {drilled && <ProjectDrill project={project} quiet={quiet} row={row(false)} />}
+        </ThreadProjectScope>
+      )}
     </section>
   )
 }
@@ -279,27 +299,36 @@ function useRowScope(project: QueuesProject, page: boolean, onQueuedRow: (key: s
 /**
  * A project's own row — the same for a busy project heading its threads and a quiet one alone.
  *
- * Its click OPENS the project in place: the rest of it lists under it (ProjectDrill), and a second click
- * folds it away. Nothing navigates — the project view it used to open is gone. Its right edge carries, in
- * order: the quiet bands' counts (the drill-down, visible before it is opened), then its Ready count — the
- * accent badge, the one number in the list that wants you — or a note, only when something is wrong: its
- * directory is gone, or this server has not opened it. On hover the badge gives way to the "…"
- * (ProjectActions.tsx ProjectMenu): its icon, rename, delete and its repo. The badge's slot is held even
- * when empty, so the counts never slide under the menu.
+ * ITS CLICK FOLDS THE PROJECT (maintainer 2026-09-28: "we need a primary collapse button that would easily
+ * allow you to visually filter which projects you're looking at"). A busy project folds away EVERYTHING
+ * under its row — its work in flight and, if it is showing it, the rest — and a second click brings it all
+ * back; a quiet project has nothing under it but the rest, so its click brings that out, and folds it away
+ * again. Nothing navigates — the project view it used to open is gone. The whole row is the fold's target;
+ * only its own controls sit above it.
+ *
+ * Its right edge carries, in order: the quiet bands' counts — THEIR OWN toggle, the "sub button" that shows
+ * or hides the rest (Snoozed, Done, External) without touching the fold — then its Ready count: the accent
+ * badge, the one number in the list that wants you, which stays when the project is folded so a folded
+ * project still says it is waiting. Or, in their place, a note, only when something is wrong: its directory
+ * is gone, or this server has not opened it. On hover the badge gives way to the "…" (ProjectActions.tsx
+ * ProjectMenu): the queue filter, its repo, its icon, rename and delete. The badge's slot is held even when
+ * empty, so the counts never slide under the menu.
  */
 function ProjectRow({
   project,
   busy,
   count,
   quiet,
-  open,
+  collapsed,
+  showsRest,
   home,
 }: {
   project: QueuesProject
   busy: boolean
   count: number
   quiet: QuietBands
-  open: boolean
+  collapsed: boolean
+  showsRest: boolean
   home: string | undefined
 }) {
   const [menuOpen, setMenuOpen] = useState(false)
@@ -307,6 +336,18 @@ function ProjectRow({
   // own glyph beside its name — the READY header's pill, echoed on the row it names.
   const filtered = useQueueFilter() === project.id
   const note = project.stale ? "Directory is missing" : !project.open ? "Not open" : null
+  // Whether anything is listed under the row: the fold's own state, on either kind of project.
+  const unfolded = busy ? !collapsed : showsRest
+  const fold = () => {
+    if (busy) return setProjectCollapsed(project.id)
+    // A quiet project folds only the rest. A fold left over from when it was busy is lifted, so the click
+    // always shows what it says it will.
+    setProjectCollapsed(project.id, false)
+    setProjectDrilled(project.id, !showsRest)
+  }
+  const foldTitle = busy
+    ? `${collapsed ? "Show" : "Collapse"} ${project.name}'s threads`
+    : `${showsRest ? "Hide" : "Show"} everything in ${project.name}`
   return (
     <div
       data-xq-project-row={project.id}
@@ -314,21 +355,26 @@ function ProjectRow({
     >
       <button
         type="button"
-        onClick={() => setProjectExpanded(project.id)}
-        aria-expanded={open}
-        title={open ? `Show less of ${project.name}` : `Show everything in ${project.name}`}
-        // On a touch screen the "…" never hides, so the counts step left of it rather than under it.
-        className={`${ROW_BUTTON_CLASS} items-center [@media(hover:none)]:pr-7`}
+        data-xq-project-fold
+        onClick={fold}
+        aria-expanded={unfolded}
+        aria-label={foldTitle}
+        title={foldTitle}
+        // The whole row is the target (the `before:` layer), not just the name: the badge and the space
+        // around it fold too. The counts and the "…" sit above it. `pr-2` is the gap to the counts.
+        className={`${ROW_BUTTON_CLASS} !pr-2 items-center before:absolute before:inset-0 before:rounded-md before:content-['']`}
       >
         {/* THE DISCLOSURE, in the gutter the rail's scroll marker uses — where the rail's own collapsible
             band headers keep theirs (Sidebar.tsx SectionHeader), so the list folds the way the rail did.
-            Only while it means something: on hover (and always on touch), and held while the project is
-            open, turned down. */}
+            Only while it means something: on hover (and always on touch), and HELD whenever the project is
+            not as it starts — a busy project folded away (pointing right), a quiet one showing the rest
+            (turned down). A busy project open, the usual case, draws none, so the list is not a column of
+            chevrons. */}
         <span
           aria-hidden
           data-xq-project-chevron
-          className={`pointer-events-none absolute left-[4.5px] top-1 flex h-[19px] items-center text-muted-60 transition-[opacity,transform] ${
-            open ? "rotate-90 opacity-100" : "opacity-0 group-hover:opacity-100 group-has-[:focus-visible]:opacity-100 [@media(hover:none)]:opacity-100"
+          className={`pointer-events-none absolute left-[4.5px] top-1 flex h-[19px] items-center text-muted-60 transition-[opacity,transform] ${unfolded ? "rotate-90" : ""} ${
+            (busy ? collapsed : showsRest) ? "opacity-100" : "opacity-0 group-hover:opacity-100 group-has-[:focus-visible]:opacity-100 [@media(hover:none)]:opacity-100"
           }`}
         >
           <ChevronRight size={11} />
@@ -336,19 +382,28 @@ function ProjectRow({
         <span className={`${INDICATOR_SLOT} ${project.stale ? "grayscale" : ""}`}>
           <ProjectSquare project={project.card ?? squareCard(project)} size={16} />
         </span>
-        <span className={`flex min-w-0 flex-1 items-center gap-1.5 text-[12.5px] leading-[19px] ${busy ? "font-medium text-fg/90" : "text-fg/75"}`}>
+        {/* Baseline-aligned so the filter mark can sit on the NAME's cap band rather than centre its box:
+            the box-centred mark read 0.5px low in sans. `self-baseline` puts the 11px glyph's bottom on
+            the baseline and the translate lifts its centre to the cap band's, computed by the browser from
+            the resolved font (the same correction ProjectFilter.tsx gives its glyphs); lucide's list-filter
+            ink is symmetric in its box, so the box centre is the ink centre. */}
+        <span className={`flex min-w-0 flex-1 items-baseline gap-1.5 text-[12.5px] leading-[19px] ${busy ? "font-medium text-fg/90" : "text-fg/75"}`}>
           <span className="min-w-0 truncate">{project.name}</span>
           {filtered && (
-            <span data-xq-project-filtered title="The queue shows only this project" className="flex shrink-0 text-muted-60">
+            <span data-xq-project-filtered title="The queue shows only this project" className="flex shrink-0 self-baseline translate-y-[calc(5.5px_-_0.5cap)] text-muted-60">
               <ListFilter size={11} aria-label="The queue shows only this project" />
             </span>
           )}
         </span>
+      </button>
+      {/* The right edge, beside the fold rather than inside it: the counts are a button of their own. On a
+          touch screen the "…" never hides, so they step left of it rather than under it. */}
+      <div className="flex shrink-0 items-center gap-2 self-stretch pr-1.5 [@media(hover:none)]:pr-7">
         {note ? (
-          <span className="shrink-0 text-[10.5px] leading-[19px] text-muted-55">{note}</span>
+          <span className="text-[10.5px] leading-[19px] text-muted-55">{note}</span>
         ) : (
           <>
-            <QuietCounts quiet={quiet} />
+            <QuietToggle project={project} quiet={quiet} showsRest={showsRest} />
             {/* The Ready count, in the "…"'s own slot — it gives way to the menu on hover. */}
             {project.card && (
               <span
@@ -359,7 +414,7 @@ function ProjectRow({
             )}
           </>
         )}
-      </button>
+      </div>
       {project.card && (
         <div className={`absolute right-1.5 top-1 items-center group-hover:flex group-has-[:focus-visible]:flex [@media(hover:none)]:flex ${menuOpen ? "flex" : "hidden"}`}>
           <ProjectMenu
@@ -384,11 +439,16 @@ function ProjectRow({
 }
 
 /**
- * The drill-down, before it is opened: one muted count per quiet band, in that band's glyph — the rail's
- * legend (BandLabel.tsx), so "zz 2 · ☑ 43" reads as the Snoozed and Done headers it opens onto. Quieter
- * than the name and never the accent, which in this product means only "this many want you".
+ * The rest of a project, before it is shown: one muted count per quiet band, in that band's glyph — the
+ * rail's legend (BandLabel.tsx), so "zz 2 · ☑ 43" reads as the Snoozed and Done headers it opens onto.
+ * Quieter than the name and never the accent, which in this product means only "this many want you".
+ *
+ * And the toggle for them — the "sub button" beside the row's fold: it shows or hides the rest without
+ * folding anything else, and on a folded project it unfolds it too, so its click always shows what it
+ * says. `relative`, to sit above the fold's whole-row target; its wash hangs 4px past the counts' ink
+ * (`-mx-1 px-1`), so the ink stays exactly where it sat before it was a button.
  */
-function QuietCounts({ quiet }: { quiet: QuietBands }) {
+function QuietToggle({ project, quiet, showsRest }: { project: QueuesProject; quiet: QuietBands; showsRest: boolean }) {
   const entries: { band: BandKey; count: number; noun: string }[] = [
     { band: "snoozed", count: quiet.snoozed.length, noun: "snoozed" },
     { band: "done", count: quiet.doneCount, noun: "done" },
@@ -396,20 +456,39 @@ function QuietCounts({ quiet }: { quiet: QuietBands }) {
   ]
   const shown = entries.filter((entry) => entry.count > 0)
   if (shown.length === 0) return null
+  const counts = shown.map(({ count, noun }) => `${count} ${noun}`)
+  const label = `${showsRest ? "Hide" : "Show"} ${counts.length > 1 ? `${counts.slice(0, -1).join(", ")} and ${counts.at(-1)}` : counts[0]}`
   return (
-    <span data-xq-quiet-counts className="flex shrink-0 items-center gap-2 text-muted-50">
-      {shown.map(({ band, count, noun }) => {
+    <button
+      type="button"
+      data-xq-quiet-toggle
+      aria-expanded={showsRest}
+      aria-label={label}
+      title={label}
+      onClick={() => {
+        setProjectCollapsed(project.id, false)
+        setProjectDrilled(project.id, !showsRest)
+      }}
+      className={`relative -mx-1 flex h-[19px] shrink-0 items-center gap-2 rounded px-1 outline-none transition-colors hover:bg-hover-strong hover:text-fg/80 focus-visible:ring-1 focus-visible:ring-focus-ink-60 ${showsRest ? "text-muted-70" : "text-muted-50"}`}
+    >
+      {shown.map(({ band, count }) => {
         const { Icon } = BANDS[band]
         return (
-          <span key={band} data-xq-quiet-count={band} title={`${count} ${noun}`} aria-label={`${count} ${noun}`} className="flex items-center gap-[3px]">
-            <span aria-hidden className="flex">
+          // The glyph sits on its DIGIT's cap band, not beside its box: box-centred, all three glyphs read
+          // 1.5px low (sans, 10.5px). The pair shares one font size, set on the pair, so `cap` resolves
+          // against the digit's font; `self-baseline` lands the 10px glyph's bottom on the digit's
+          // baseline and the translate lifts its centre to the band's. Every band glyph's ink spans y 3–21
+          // of its 24-unit box (SquareCheck, ExternalLink, BandLabel's SnoozeMark), so the box centre is
+          // the ink centre for each.
+          <span key={band} data-xq-quiet-count={band} aria-hidden className="flex items-baseline gap-[3px] text-[10.5px] leading-[19px]">
+            <span className="flex self-baseline translate-y-[calc(5px_-_0.5cap)]">
               <Icon size={10} />
             </span>
-            <span aria-hidden className="text-[10.5px] leading-[19px] tabular-nums">{count}</span>
+            <span className="tabular-nums">{count}</span>
           </span>
         )
       })}
-    </span>
+    </button>
   )
 }
 
