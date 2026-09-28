@@ -196,8 +196,14 @@ try {
       await waitFor(name, until)
       await sleep(1500)
       after = await snap()
+    } catch (error) {
+      // It never landed the way it should (no ghost on a page that has none, say): a failure, not a crash,
+      // so the rest of the run still reports.
+      await stopSampler()
+      check(`${surface.name}: ${name}`, false, `${error.message}; order ${order(await snap())}`)
+      return { before, after: await snap() }
     } finally {
-      sampled = await stopSampler()
+      sampled ??= await stopSampler().catch(() => ({ max: 0, frames: 0 }))
     }
     let worst = { key: null, by: 0 }
     const missing = []
