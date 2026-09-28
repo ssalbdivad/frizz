@@ -68,13 +68,20 @@ export function crossProjectThreadHref(project: Pick<QueuesProject, "slug">, slu
  */
 export function useOpenThreadInPlace(): (project: Pick<QueuesProject, "slug">, slug: string) => void {
   const navigate = useNavigate()
-  const focus = projectSlug(useLocation().pathname)
   return useCallback(
     (project, slug) => {
+      // The focus AS OF THE CLICK, read off the address bar — never the one this component last rendered
+      // with. react-router renders a location change as a transition, and under load the page it leads to
+      // took up to 1.8s to commit, so for that long the page on screen was the one BEFORE it, clickable,
+      // its render-time focus naming the project of a drawer that had just closed. A click on that
+      // project's card then took the store-first open below on a page already rebinding to the pick: the
+      // address writer refused to name a board the page no longer owned, the rebind swept the drawer away,
+      // and the click did nothing. The address has moved on the moment the router has, so it cannot lag.
+      const focus = projectSlug()
       if (project.slug === focus && store.board?.projectSlug === focus) openThread(slug)
       else navigate(crossProjectThreadHref(project, slug), { state: IN_PLACE_OPEN_STATE })
     },
-    [focus, navigate],
+    [navigate],
   )
 }
 

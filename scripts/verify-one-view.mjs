@@ -16,7 +16,7 @@
 //   nub scripts/adhoc-stack.mjs --port=47631 --project=/tmp/x/acme-api --also-project=/tmp/x/marketing-site \
 //     --also-project=/tmp/x/billing-worker --also-project=/tmp/x/docs-portal > /tmp/stack.log 2>&1   # background
 //   nub scripts/seed-all-queues.mjs --stack=/tmp/stack.log
-//   nub scripts/verify-one-view.mjs --stack=/tmp/stack.log [--shots=/abs/dir]
+//   nub scripts/verify-one-view.mjs --stack=/tmp/stack.log [--shots=/abs/dir] [--only=<words in a step name>]
 import { mkdirSync, readFileSync } from "node:fs"
 import { join } from "node:path"
 import puppeteer from "puppeteer"
@@ -44,6 +44,9 @@ function check(name, ok, detail) {
 }
 let failures = 0
 async function step(name, run) {
+  // `--only=<words>` runs just the steps whose name carries them — the rest of a 4-minute pass is not
+  // needed to re-run one check.
+  if (typeof flags.only === "string" && !name.includes(flags.only)) return
   try {
     await run()
   } catch (error) {
@@ -53,24 +56,41 @@ async function step(name, run) {
     const where = await page?.evaluate(() => location.pathname).catch(() => "?")
     await page?.screenshot({ path: shot }).catch(() => {})
     check(name, false, `${error instanceof Error ? error.message : String(error)} (at ${where}; ${shot})`)
+    // And the page's last few address changes, which say whether a click went nowhere or went and came back.
+    console.log(addresses.slice(-6).map((entry) => `      ${entry}`).join("\n"))
   }
 }
 let page
+const addresses = []
 
 const browser = await puppeteer.launch({ headless: true, args: ["--no-sandbox", "--force-color-profile=srgb"] })
 try {
   page = await browser.newPage()
   await page.setViewport({ width: 1440, height: 1000, deviceScaleFactor: 2 })
   const errors = []
+  page.on("console", (message) => { if (message.text().startsWith("[address]")) addresses.push(message.text().slice(10)) })
+  await page.evaluateOnNewDocument(() => {
+    const t0 = performance.now()
+    const log = (how) => console.log(`[address] ${Math.round(performance.now() - t0)}ms ${how} ${location.pathname}`)
+    for (const method of ["pushState", "replaceState"]) {
+      const original = history[method].bind(history)
+      history[method] = (...args) => { const result = original(...args); log(method); return result }
+    }
+    addEventListener("popstate", () => log("popstate"))
+    // A click, and whether the page handled it — a handled click that moved nothing is a different bug from a lost one.
+    addEventListener("click", (event) => log(`click ${event.target instanceof Element ? (event.target.closest("a[href]")?.getAttribute("href") ?? event.target.tagName) : "?"} handled=${event.defaultPrevented} from`))
+  })
   page.on("pageerror", (error) => errors.push(`pageerror: ${error}`))
   page.on("console", (message) => { if (message.type() === "error" && !message.text().startsWith("Failed to load resource")) errors.push(`console: ${message.text()}`) })
-  // A disposable stack runs no supervisor, so its control endpoint 404s on every page; nothing else may.
-  page.on("response", (response) => { if (response.status() >= 400 && !response.url().endsWith("/_frizz/control/status")) errors.push(`${response.status()} ${response.url()}`) })
+  // A disposable stack runs no supervisor, so its control endpoint 404s on every page, and a project with
+  // no icon answers its rail square's request with a 404 (the square falls back to its monogram); nothing
+  // else may.
+  page.on("response", (response) => { if (response.status() >= 400 && !/\/_frizz\/control\/status$|\/_frizz\/project-icon\?/.test(response.url())) errors.push(`${response.status()} ${response.url()}`) })
   const posts = []
   page.on("request", (request) => { if (request.method() === "POST" && request.url().includes("/rpc/")) posts.push(new URL(request.url()).pathname) })
 
   const path = () => page.evaluate(() => location.pathname)
-  const waitPath = (predicate, what, ms = 10_000) => page.waitForFunction(predicate, { timeout: ms }).catch(async () => { throw new Error(`timed out waiting for ${what}; at ${await path()}`) })
+  const waitPath = (predicate, what, ms = 10_000, ...args) => page.waitForFunction(predicate, { timeout: ms }, ...args).catch(async () => { throw new Error(`timed out waiting for ${what}; at ${await path()}`) })
   const cardProjects = () => page.$$eval("[data-xq-card]", (cards) => [...new Set(cards.map((c) => c.getAttribute("data-xq-card")?.split("/")[0]))])
   const escapeAll = async () => {
     for (let i = 0; i < 4 && (await page.$("[data-drawer-layer]")); i++) {
@@ -128,8 +148,10 @@ try {
     const doors = await page.$$eval("[data-xq-card] [data-command='fullscreen'], [data-xq-card] a[href$='/full'], [data-sidebar-item] a[href$='/full']", (els) => els.length)
     check("no card or row carries a fullscreen door", doors === 0, `${doors} found`)
   })
+  // Every project the stack opened has a row — and so does the Home workspace, which every server lists
+  // and the stack's own line does not name.
   const everyProject = await page.$$eval("[data-xq-project-row]", (rows) => rows.map((r) => r.getAttribute("data-xq-project-row")))
-  check("the list shows every project", everyProject.length === projects.length, `${everyProject.length} of ${projects.length}`)
+  check("the list shows every project", projects.every((p) => everyProject.includes(p.id)), `${everyProject.length} rows for ${projects.length} projects`)
 
   // ── the filter scopes the right column only ──────────────────────────────────────────────────────
   const shown = await cardProjects()
@@ -143,7 +165,7 @@ try {
     const only = await cardProjects()
     check("…only that project's cards remain", only.length === 1 && only[0] === target.id, only.join(", "))
     const rows = await page.$$eval("[data-xq-project-row]", (r) => r.length)
-    check("…the list still shows every project", rows === projects.length, `${rows} rows`)
+    check("…the list still shows every project", rows === everyProject.length, `${rows} of ${everyProject.length} rows`)
     const marked = await page.$$eval("[data-xq-project-filtered]", (els) => els.map((el) => el.closest("[data-xq-project-row]")?.getAttribute("data-xq-project-row")))
     check("…and marks the filtered one", marked.length === 1 && marked[0] === target.id, marked.join(", "))
     check("…and the address stays /", (await path()) === "/")
@@ -261,6 +283,68 @@ try {
     check("`f` on a drawer goes to /full", true)
     await page.goto(`${origin}/`, { waitUntil: "networkidle2" })
     await page.waitForSelector("[data-xq-card]")
+  })
+
+  // ── a click while the page is still leaving a drawer ─────────────────────────────────────────────
+  // react-router renders a location change as a transition, so for a while after a drawer closes the page
+  // on screen is still the drawer's page, and clickable. A card of the drawer's own project clicked in that
+  // window once opened store-first on that stale page, and the rebind back to the pick swept the drawer
+  // away: the click did nothing (caught here at 1.8s under load, 2026-09-28). The CPU is throttled 4x
+  // across the close so the window is wide on any machine rather than only on a loaded one.
+  await step("a card clicked while the page is still leaving a drawer opens its thread", async () => {
+    await page.goto(`${origin}/`, { waitUntil: "networkidle2" })
+    await page.waitForSelector("[data-xq-card]")
+    await sleep(800)
+    // A project other than the focus with a card and a Done thread: the Done row opens that project's
+    // drawer (a Ready row would only bring its card into view), and the card is clicked on the way out.
+    const focus = await page.evaluate(async () => (await import("/src/lib/base-path.ts")).projectSlug("/"))
+    const target = await page.evaluate((focus) => {
+      for (const title of document.querySelectorAll("[data-xq-card] h3 a")) {
+        const href = title.getAttribute("href")
+        const [, , slug, , thread] = href.split("/")
+        if (slug === focus || thread.startsWith("term-")) continue
+        const id = title.closest("[data-xq-card]").getAttribute("data-xq-card").split("/")[0]
+        if (document.querySelector(`[data-xq-project-row="${id}"] [data-xq-quiet-count="done"]`)) return { card: href, id }
+      }
+      return null
+    }, focus)
+    if (!target) throw new Error("no project other than the focus has both a card and a Done thread")
+    const counts = `[data-xq-project-row="${target.id}"] [data-xq-quiet-toggle]`
+    await clickSettled(counts)
+    const doneRow = `[data-xq-drill="${target.id}"] [data-xq-drill-band="done"] [data-sidebar-item] button`
+    await page.waitForSelector(doneRow, { timeout: 8000 })
+    await page.$eval(`[data-xq-card] h3 a[href="${target.card}"]`, (a) => a.scrollIntoView({ block: "center" }))
+    await sleep(600)
+    await clickSettled(doneRow)
+    await waitPath(() => /^\/all\/[^/]+\/thread\/[^/]+$/.test(location.pathname), "the Done row's drawer")
+    await page.waitForSelector("[data-drawer-layer] [data-thread-menu]", { timeout: 15000 })
+    await sleep(800)
+    const second = target.card
+    const cdp = await page.createCDPSession()
+    await cdp.send("Emulation.setCPUThrottlingRate", { rate: 4 })
+    try {
+      await page.keyboard.press("Escape")
+      // The moment the address says `/` and the card can be hit — not a frame later, which is the point.
+      const at = await page.waitForFunction((href) => {
+        if (location.pathname !== "/") return null
+        const title = document.querySelector(`[data-xq-card] h3 a[href="${href}"]`)
+        const box = title?.getBoundingClientRect()
+        if (!box || box.width === 0 || box.top < 0 || box.bottom > innerHeight) return null
+        const x = box.x + Math.min(box.width / 2, 40)
+        const y = box.y + box.height / 2
+        const hit = document.elementFromPoint(x, y)
+        return hit && title.contains(hit) ? { x, y } : null
+      }, { timeout: 30_000, polling: 16 }, second).then((handle) => handle.jsonValue())
+      await page.mouse.click(at.x, at.y)
+    } finally {
+      await cdp.send("Emulation.setCPUThrottlingRate", { rate: 1 })
+    }
+    await waitPath((href) => location.pathname === href, `the second card's drawer (${second})`, 20_000, second)
+    await page.waitForSelector("[data-drawer-layer] [data-thread-menu]", { timeout: 15000 })
+    check("a card clicked while the page is still leaving a drawer opens its thread", true, second)
+    await escapeAll()
+    await waitPath(() => location.pathname === "/", "the page again")
+    await clickSettled(counts)
   })
 
   // ── /login is an account action, not a message ───────────────────────────────────────────────────
