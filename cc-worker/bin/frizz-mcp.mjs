@@ -602,6 +602,10 @@ const ASK = {
     "EXPLANATION BEFORE IT: what you found, what the choice turns on, what each answer would set in " +
     "motion. Never write the question itself into your handoff (one question, one card). There is no " +
     "placement marker: an empty ```question qst_… fence draws nothing.\n\n" +
+    "ONLY UNTIL THE HUMAN REPLIES. If they reply past the card without answering, they have moved on: " +
+    "the card stays ABOVE their reply, where it was asked, still answerable, and it no longer holds " +
+    "anything — not your sign-off, not a block on `done`. Work on what they said; never call that " +
+    "question \"still open below\". If the new work genuinely needs the answer, `unask` it and `ask` again.\n\n" +
     "SEVERAL AT ONCE IS ONE CALL. The card sends every answer as a unit, so a second `ask` for a second " +
     "question just makes the human send twice. Register them together.\n\n" +
     "The answer comes back to you as its own wake, restating what was asked. Withdraw one you no longer " +
@@ -845,15 +849,32 @@ async function activity() {
     links.map((link) => `  ${link.id}  ${link.kind}: ${link.label}\n    ${link.target}`).join("\n")
   // THE QUESTIONS ARE NOT PART OF THE FENCE, so they are printed in their own section and never fed to
   // the fence builder below. A question waits on a person; there is no `questions:` key to write it into.
-  const askedBlock = questions.length === 0 ? "" : (
-    `\n\n${questions.length} question${questions.length === 1 ? "" : "s"} still owed an answer:\n\n` +
-    questions.map((q) => `  question: ${q.id}\n    ${String(q?.spec?.question ?? "").replace(/\s+/g, " ").slice(0, 160)}`).join("\n") +
+  //
+  // …and split in two, because a question the human REPLIED PAST is no longer waiting on anyone: they
+  // moved on without answering, which is a pivot. Its card stays up where it was asked, still answerable,
+  // but it blocks nothing and is not at the bottom of anything — and a worker told "still owed" and "at
+  // the BOTTOM" about it wrote "the question is still open below" under a card that sat above.
+  const questionLine = (q) => `  question: ${q.id}\n    ${String(q?.spec?.question ?? "").replace(/\s+/g, " ").slice(0, 160)}`
+  const owed = questions.filter((q) => !q?.repliedPast)
+  const passed = questions.filter((q) => q?.repliedPast)
+  const owedBlock = owed.length === 0 ? "" : (
+    `\n\n${owed.length} question${owed.length === 1 ? "" : "s"} still owed an answer:\n\n` +
+    owed.map(questionLine).join("\n") +
     "\n\nEach one blocks `done` until it is answered or withdrawn, and draws its own card at the BOTTOM " +
     "of your handoff, below every word of it — never write it into a handoff, and put the explanation " +
     "above it. `unask` the ones since decided. A question is never named in an ```awaiting fence."
   )
+  const passedBlock = passed.length === 0 ? "" : (
+    `\n\n${passed.length} question${passed.length === 1 ? "" : "s"} the human replied past without answering:\n\n` +
+    passed.map(questionLine).join("\n") +
+    "\n\nTreat these as set aside — the human moved on. Each card stays ABOVE their reply, where it was " +
+    "asked, still answerable; if they answer, it arrives as its own wake. It blocks nothing, it is not your " +
+    "sign-off, and it is not \"below\" or \"still open\" in anything you write now. If the current work " +
+    "genuinely still needs it, `unask` it and `ask` again so a fresh card lands under the handoff that needs it."
+  )
+  const askedBlock = owedBlock + passedBlock
   if (!items.length) {
-    if (questions.length > 0) {
+    if (owed.length > 0) {
       return (
         "Nothing is RUNNING on this thread — no background shells, no sub-agents, no armed timers, no " +
         "registered PRs. So an ```awaiting fence would have nothing to name, and a fence naming nothing " +
@@ -862,9 +883,9 @@ async function activity() {
     }
     return (
       "Nothing is running on this thread — no background shells, no sub-agents, no armed timers, no " +
-      "registered PRs, and no open questions.\n\nSo there is nothing to wait on: an ```awaiting fence " +
+      "registered PRs, and no question still owed an answer.\n\nSo there is nothing to wait on: an ```awaiting fence " +
       "would have nothing to name, and a fence naming nothing is not a park. End with ```done, or " +
-      "register a question with `ask` if you need the human." + linksBlock
+      "register a question with `ask` if you need the human." + passedBlock + linksBlock
     )
   }
   const lines = items.map((i) => {

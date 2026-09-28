@@ -440,6 +440,56 @@ test("board interaction presence cache follows the exact session and rechecks af
   }
 })
 
+// The notification is often the only thing the operator reads before deciding whether to come back.
+// For a turn parked on a request it used to carry the progress line the turn printed BEFORE the tool
+// call — "…next I'm creating the lane worktrees" — which never mentioned that anything was being asked
+// (2026-09-28, a bypass-mode worker held on Claude Code's dangerous-removal check).
+test("a needs-decision notification for a turn held on a request says what the request asks", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "frizz-board-notify-"))
+  const project: Project = { dir, id: "project-notify", name: "fixture", label: "fixture", stateDir: dir, cwdSlug: "fixture" }
+  const storage = createStorage(join(dir, "ui.db"), "p")
+  storage.upsertSession(row({ slug: "gated", session_id: "session-a", thread_name: "frizz-gated", title: "Status of the split" }))
+  storage.setClaudeRuntime("gated", "broker") // as every live Claude row is; without it a turn with no process reads as a crash
+  const narration = "Baseline build is green; typecheck and tests are still running. Next I'm creating the lane worktrees."
+  const tailer = {
+    get: () => tele({ turn: "in-flight", lastAssistant: narration, lastAssistantAt: T0 }),
+    foreignIds: () => [],
+    subAgent: () => undefined,
+    forget: () => {},
+    start: () => {},
+    stop: () => {},
+    tick: () => {},
+  } satisfies Tailer
+  const bus = new Bus()
+  const notified: { slug: string; title: string; body?: string }[] = []
+  bus.subscribe((event) => { if (event.type === "notify" && event.kind === "needs-decision") notified.push({ slug: event.slug, title: event.title, body: event.body }) })
+  // A second after the narration, so the turn reads as working rather than gone quiet (QUIET_TURN_MS).
+  const board = createBoard(project, storage, bus, tailer, "notify-boot", { now: () => Date.parse(T0) + 1_000 })
+  const unsubscribe = storage.interactions.subscribe((change) => board.interactionChanged?.(change))
+  try {
+    assert.equal(board.refresh().threads.find((t) => t.id === "gated")?.needsYou, false, "the prime: working, not queued")
+    storage.interactions.create({
+      protocolVersion: 1,
+      contentFormat: "plain-text",
+      provider: { kind: "frizz" },
+      source: { kind: "tool", id: "toolu_1", label: "Bash" },
+      owner: { projectId: project.id, threadSlug: "gated", sessionId: "session-a", turnId: "turn", itemId: "req-1", sessionEpoch: 0, capabilityRevision: 0 },
+      providerRequestId: "req-1",
+      allowedDecisions: [{ id: "grant-turn", semantic: "approve", label: "Grant for turn" }, { id: "deny", semantic: "deny", label: "Deny" }],
+      payload: { kind: "permission-approval", title: "Run a command?", message: "Creating the lane worktrees", permission: "Bash", preview: "rm -rf $BASE/$d/$o" },
+      expiresAt: null,
+    })
+    assert.equal(board.refresh().threads.find((t) => t.id === "gated")?.needsYou, true)
+    assert.deepEqual(notified, [{ slug: "gated", title: "Status of the split", body: "Run a command? Creating the lane worktrees" }])
+  } finally {
+    unsubscribe()
+    await Promise.resolve()
+    await board.stop()
+    storage.close()
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+
 test("board keeps provider delivery visible while ordinary resting-thread queue membership survives response delivery and restart", async () => {
   const dir = mkdtempSync(join(tmpdir(), "frizz-board-provider-delivery-"))
   const project: Project = {
@@ -896,7 +946,10 @@ test("board: native Codex failures settle a lagging rollout, converge without du
   let current = tele({ turn: "in-flight", lastActivityAt: T0 })
   let live: { bridgeTurn: boolean; ownedSince: string; providerError: import("@frizz/shared").ProviderError } = { bridgeTurn: false, ownedSince: T0, providerError: error }
   const tailer = { get: () => current, foreignIds: () => [], subAgent: () => undefined, forget: () => {}, start: () => {}, stop: () => {}, tick: () => {} } satisfies Tailer
-  const board = createBoard(project, storage, new Bus(), tailer, "errors", { codexTurnLiveness: () => live })
+  // The clock sits beside the fixture's own dates. Unpinned, the final in-flight reading (last activity
+  // at LATER, months before any real run) was a turn gone quiet for months, which queues (QUIET_TURN_MS)
+  // — so the `needsYou === false` it ends on failed on the wall clock, not on the retry it pins.
+  const board = createBoard(project, storage, new Bus(), tailer, "errors", { codexTurnLiveness: () => live, now: () => Date.parse(LATER) + 1_000 })
   try {
     let thread = (await board.snapshot()).threads[0]!
     assert.equal(thread.runtime, "turn-idle")

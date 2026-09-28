@@ -1,4 +1,4 @@
-import { lazy, Suspense, useState } from "react"
+import { lazy, Suspense, useState, type ReactNode } from "react"
 import { TerminalSquare } from "lucide-react"
 import type { ThreadView } from "@frizz/shared"
 import { useThreadApi, useThreadApiBase } from "../api/threadApi.tsx"
@@ -27,12 +27,14 @@ const TerminalPane = lazy(() => import("./TerminalPane.tsx").then((m) => ({ defa
 // PROJECT-SCOPED through api/threadApi.tsx: on a board it acts on the page's project, and under the All
 // queues page's `ThreadProjectScope` its Restart, its pty and its Mark as done all go to the card's own
 // project. `onOpen` replaces the drawer there, which is the page's and would open the wrong thread.
-export function CommandQueueCard({ thread, leaving, onResolve, onUnresolve, onOpen }: {
+export function CommandQueueCard({ thread, leaving, onResolve, onUnresolve, onOpen, lead }: {
   thread: ThreadView
   leaving: boolean
   onResolve: (slug: string) => void
   onUnresolve: (slug: string) => void
   onOpen?: () => void
+  /** Leads the meta line under the command — the card's project, on a queue that holds several. */
+  lead?: ReactNode
 }) {
   const command = thread.command
   const api = useThreadApi()
@@ -62,6 +64,8 @@ export function CommandQueueCard({ thread, leaving, onResolve, onUnresolve, onOp
           <span className="min-w-0 flex-1">
             <span className="block truncate font-mono-keep text-[13px] leading-snug text-fg" title={command.command}>{command.command}</span>
             <span className="mt-0.5 flex items-baseline gap-1.5 text-[11px] leading-tight text-muted-75">
+              {lead}
+              {lead && <span aria-hidden>·</span>}
               <span className={failed ? "text-danger-soft" : undefined}>{commandStateLabel(command)}</span>
               <span aria-hidden>·</span>
               <LastActive at={command.exitedAt ?? thread.lastActivityAt ?? command.startedAt} className="truncate" />

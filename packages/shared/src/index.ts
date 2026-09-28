@@ -2271,8 +2271,32 @@ export const RegisteredQuestionView = z.object({
   id: z.string(),
   spec: AskedQuestionSchema,
   askedAt: z.string(),
+  /** The human has spoken since this was asked without answering it (questionRepliedPast). It stays
+   *  open and answerable where it was asked, but it no longer holds the thread: it is not the sign-off,
+   *  it does not block `done` or refuse a park, and the queue card does not draw it under a newer handoff.
+   *  Absent means current. */
+  repliedPast: z.literal(true).optional(),
 }).strict()
 export type RegisteredQuestionView = z.infer<typeof RegisteredQuestionView>
+
+/** HAS THE HUMAN MOVED ON FROM THIS QUESTION? True when their newest turn landed after it was asked — a
+ *  typed reply, or the answers to OTHER questions (`lastHumanAt` is the tailer's clock for exactly that,
+ *  the same reading as the web's `isHumanTurn`; frizz's own wakes never move it). Replying past an open
+ *  card instead of answering it is read as a pivot (maintainer 2026-09-28: "we should assume they want to
+ *  move on/pivot"): the card stays up with the handoff that asked it, still answerable, and the answer
+ *  still reaches the worker restating what was asked — but nothing waits on it any more. An unknown clock
+ *  reads as "not replied past", which is exactly the behaviour before this rule existed. */
+export function questionRepliedPast(askedAtMs: number, lastHumanAt: string | undefined): boolean {
+  if (!lastHumanAt) return false
+  const human = Date.parse(lastHumanAt)
+  return Number.isFinite(human) && Number.isFinite(askedAtMs) && human > askedAtMs
+}
+
+/** The open questions still HOLDING their thread — every one the human has not replied past. What every
+ *  "is this thread asking?" reading counts; the full list is only for drawing and answering cards. */
+export function questionsOwed<Q extends { repliedPast?: true }>(questions: readonly Q[] | undefined): Q[] {
+  return (questions ?? []).filter((q) => !q.repliedPast)
+}
 
 export const AskResult = z.object({
   registered: z.array(RegisteredQuestionView),
@@ -5321,6 +5345,36 @@ export const DirectoryPickResult = z.discriminatedUnion("kind", [
   z.object({ kind: z.literal("unavailable"), reason: z.string() }),
 ])
 export type DirectoryPickResult = z.infer<typeof DirectoryPickResult>
+
+/**
+ * The chosen folder sits INSIDE another project root — a Git checkout or a manifest root — and so
+ * would have added that root instead. Nothing was registered or written.
+ *
+ * Until 2026-09-28 the add path took the enclosing root silently: picking `~/app/yes` reopened `~/app`
+ * and navigated to its board, which read as "nothing happened". The page now asks — open the enclosing
+ * root, or add the folder as a project of its own (`projectAdd` with `exact`).
+ */
+export const ProjectEnclosed = z.object({
+  kind: z.literal("enclosed"),
+  /** The folder that was chosen, resolved. */
+  path: z.string(),
+  /** The root it would have resolved to. */
+  root: z.string(),
+  /** Whether that root is already a registered project (open it) or not yet (add it). */
+  rootRegistered: z.boolean(),
+})
+export type ProjectEnclosed = z.infer<typeof ProjectEnclosed>
+
+/** `projectAdd`'s answer: the project it registered, or the enclosing root it declined to take silently. */
+export const ProjectAddResult = z.discriminatedUnion("kind", [
+  z.object({ kind: z.literal("added"), project: ProjectCard }),
+  ProjectEnclosed,
+])
+export type ProjectAddResult = z.infer<typeof ProjectAddResult>
+
+/** `projectPick`'s answer — the picker's own outcomes, plus the same enclosed case `projectAdd` has. */
+export const ProjectPickResult = z.discriminatedUnion("kind", [...DirectoryPickResult.options, ProjectEnclosed])
+export type ProjectPickResult = z.infer<typeof ProjectPickResult>
 
 /**
  * One project's slice of the machine-wide queues read (`projectsQueues`) — the All queues page's data.

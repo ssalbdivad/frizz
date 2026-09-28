@@ -4,7 +4,7 @@ import { promisify } from "node:util"
 import { basename, join, win32 } from "node:path"
 import { homedir, tmpdir } from "node:os"
 import type { AskQuestion, AwaitingHint } from "@frizz/shared"
-import { insideFence, isAllInjectedNoise, isInterruptMarker, parseAskUserQuestionInput, PermissionMode, questionFencesLive, saysAllDone, splitAwaitingFrontmatter } from "@frizz/shared"
+import { BURIED_ANSWERS_HEADER, insideFence, isAllInjectedNoise, isInterruptMarker, isWakeDelivery, parseAskUserQuestionInput, PermissionMode, questionFencesLive, saysAllDone, splitAwaitingFrontmatter } from "@frizz/shared"
 import type { Bus } from "./bus.ts"
 import { permMarkerPath, workDirOf, type Project } from "./project.ts"
 import { isBrokerClaudeRow, isHeadlessRow } from "./storage.ts"
@@ -980,6 +980,14 @@ function isLocalCommandReceipt(content: unknown): boolean {
 // same SHARED classifier, so a record the chat does not even draw can never again change what the board
 // says the human owes. The row-order key below wants exactly this predicate too — its own comment
 // demanded it, and it was enforcing only the two cases anyone had hit.
+/** Of the turns isHumanSpeaking admits, did the HUMAN take this one — or did frizz? A scheduler wake
+ *  delivery is a real user turn to the model, but nobody typed it; the answers to registered questions
+ *  are the exception, delivered as a wake because the worker may be down when the human answers. The
+ *  same reading as the web's questionAnchor `isHumanTurn`. */
+function tookHumanTurn(text: string): boolean {
+  return !isWakeDelivery(text) || text.trimStart().startsWith(BURIED_ANSWERS_HEADER)
+}
+
 function isHumanSpeaking(rec: Record, text: string, system: boolean, compactSummary: boolean): boolean {
   if (system || compactSummary) return false // a peer/notification record, or claude's carry-over summary
   if (!isRealUserMessage(rec.message?.content)) return false // a bare tool_result is agent activity
@@ -1962,6 +1970,7 @@ export function applyRecord(state: TailState, rec: Record): void {
     // gate above, deliberately: "did the human take a turn" has exactly one answer per record.
     if (humanSpoke && typeof rec.timestamp === "string") {
       state.lastUserAt = rec.timestamp
+      if (tookHumanTurn(userMessageText(rec.message?.content))) state.lastHumanAt = rec.timestamp
       // SET ONCE. This is what names an external session whose harness never named it, so it has to be
       // the turn the conversation STARTED on, not the newest one.
       if (state.firstUserText === undefined) {
@@ -2086,7 +2095,10 @@ export function applyEvent(state: FoldState, ev: NormalizedEvent): void {
         // a synthetic turn that nobody typed was answering the agent's question on the human's behalf,
         // which put the row back in the Active rail with its ```question card still on screen.
         state.lastAssistantHasQuestion = false
-        if (typeof ev.at === "string") state.lastUserAt = ev.at
+        if (typeof ev.at === "string") {
+          state.lastUserAt = ev.at
+          if (tookHumanTurn(typeof ev.text === "string" ? ev.text : "")) state.lastHumanAt = ev.at
+        }
         // Keep the delivery-confirmation pair atomic. A genuine non-text user event may still bump
         // row activity, but its newer timestamp must never retain text from an older human turn.
         state.lastUserText = typeof ev.text === "string" ? ev.text : undefined
@@ -5104,7 +5116,7 @@ export function createTailer(deps: TailerDeps): Tailer {
       // thread has no row and reads as legacy, which is what `questionFencesLive` does with unknown.
       const pendingQuestion = s.lastAssistantHasQuestion && questionFencesLive(row?.spawned_at)
       const nowMs = now()
-      return { primed: s.primed, turn: s.turn, permPrompt: s.permPrompt, permPolicy: s.permPolicy, permDenies: s.permDenies, model: s.model, effort: s.effort, profileAt: s.profileAt, profileRevision: s.profileRevision, permissionMode: s.permissionMode, permissionModeAt: s.permissionModeAt, permissionModeRevision: s.permissionModeRevision, lastActivityAt: s.lastActivityAt, lastAssistantAt: s.lastAssistantAt, lastAssistant: s.lastAssistant, aiTitle: s.aiTitle, customTitle: s.customTitle, customTitleRevision: s.customTitleRevision, subAgents: subAgentViews(s, nowMs), droppedReports: [...s.queuedReports.values()], bgShells: [...bgShellViews(s), ...codexBgShellViews(s)], retiredShells: retiredShellViews(s), retiredSubAgents: retiredSubAgentViews(s), pendingAsk: s.pendingAsk, pendingQuestion, lastAssistantAllDone: s.lastAssistantAllDone, lastUserAt: s.lastUserAt, lastToolCallAt: s.lastToolCallAt, lastUserText: s.lastUserText, firstUserText: s.firstUserText, lastFence: s.lastFence, noTranscript: s.noTranscript, authFault: s.authFault, apiFault: s.apiFault, providerError: s.providerError, limitFault: s.limitFault, contextTokens: s.contextTokens, contextWindow: s.contextWindow, lastCompactionAt: s.lastCompactionAt }
+      return { primed: s.primed, turn: s.turn, permPrompt: s.permPrompt, permPolicy: s.permPolicy, permDenies: s.permDenies, model: s.model, effort: s.effort, profileAt: s.profileAt, profileRevision: s.profileRevision, permissionMode: s.permissionMode, permissionModeAt: s.permissionModeAt, permissionModeRevision: s.permissionModeRevision, lastActivityAt: s.lastActivityAt, lastAssistantAt: s.lastAssistantAt, lastAssistant: s.lastAssistant, aiTitle: s.aiTitle, customTitle: s.customTitle, customTitleRevision: s.customTitleRevision, subAgents: subAgentViews(s, nowMs), droppedReports: [...s.queuedReports.values()], bgShells: [...bgShellViews(s), ...codexBgShellViews(s)], retiredShells: retiredShellViews(s), retiredSubAgents: retiredSubAgentViews(s), pendingAsk: s.pendingAsk, pendingQuestion, lastAssistantAllDone: s.lastAssistantAllDone, lastUserAt: s.lastUserAt, lastHumanAt: s.lastHumanAt, lastToolCallAt: s.lastToolCallAt, lastUserText: s.lastUserText, firstUserText: s.firstUserText, lastFence: s.lastFence, noTranscript: s.noTranscript, authFault: s.authFault, apiFault: s.apiFault, providerError: s.providerError, limitFault: s.limitFault, contextTokens: s.contextTokens, contextWindow: s.contextWindow, lastCompactionAt: s.lastCompactionAt }
     },
     // The CURRENT fresh foreign session ids (mtime within FOREIGN_FRESH_MS, capped), mtime-desc. Kept
     // as the last scan's result — recomputed at most every FOREIGN_SCAN_EVERY ticks.

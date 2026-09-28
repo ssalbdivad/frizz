@@ -229,7 +229,7 @@ export function Composer({
     }
     if (paths.length && baseValue !== "" && valueRef.current === "") {
       showToast("Attachment discarded — the message was sent before the upload finished")
-      requestAnimationFrame(() => taRef.current?.focus())
+      requestAnimationFrame(() => taRef.current?.focus({ preventScroll: true }))
       return
     }
     // Commit against the LATEST value (valueRef), not this callback's render-time closure — the user
@@ -241,7 +241,7 @@ export function Composer({
       const latest = splitComposerValue(valueRef.current)
       onChange(joinComposerValue(latest.prose, [...latest.attachments.map((a) => a.path), ...paths]))
     }
-    requestAnimationFrame(() => taRef.current?.focus())
+    requestAnimationFrame(() => taRef.current?.focus({ preventScroll: true }))
   }
 
   // Auto-grow on every value change. A first layout pass
