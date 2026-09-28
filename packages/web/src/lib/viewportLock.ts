@@ -205,8 +205,13 @@ const SETTLE_MS = 250
 const RELOAD_KEY = "frizz.queueReading.v1"
 /** A note older than this is from an earlier visit, not the reload that is loading now. */
 const RELOAD_FRESH_MS = 60_000
-/** How long the page is held on the card after it first appears, while the cards around it load. */
+/**
+ * How long the page is held on the card after it first appears, while the cards around it load — and
+ * after every correction since: a slow machine is still loading the cards above it when a fixed window
+ * has run out, and the one the reader was on went down the page by what arrived late.
+ */
 const RELOAD_HOLD_MS = 3_000
+const RELOAD_QUIET_MS = 1_000
 /** How long to wait for the card at all. */
 const RELOAD_GIVE_UP_MS = 20_000
 
@@ -254,7 +259,7 @@ export function useViewportLock(slots: string, keyOf: (slot: HTMLElement) => str
   const note = useRef<Reading | null>(null)
   // `y`: the page offset the restore last left, so any other scroll — the human's, or the app's own landing
   // on a card the address names — is seen as taking the page over.
-  const restoring = useRef<{ key: string; top: number; until: number; found: boolean; y: number } | null>(null)
+  const restoring = useRef<{ key: string; top: number; until: number; giveUp: number; found: boolean; y: number } | null>(null)
   const requestRepaint = useRef(() => {})
   requestRepaint.current = () => {
     settle.current.pending = true
@@ -276,8 +281,13 @@ export function useViewportLock(slots: string, keyOf: (slot: HTMLElement) => str
         const slot = [...document.querySelectorAll<HTMLElement>(slots)].find((candidate) => keyOf(candidate) === restore.key)
         if (slot) {
           const delta = slot.getBoundingClientRect().top - restore.top
-          if (Math.abs(delta) > 0.5) scrollPage(delta)
-          restoring.current = { ...restore, y: pageScrollY(), ...(restore.found ? {} : { found: true, until: performance.now() + RELOAD_HOLD_MS }) }
+          const now = performance.now()
+          let until = restore.found ? restore.until : now + RELOAD_HOLD_MS
+          if (Math.abs(delta) > 0.5) {
+            scrollPage(delta)
+            until = Math.min(restore.giveUp, Math.max(until, now + RELOAD_QUIET_MS))
+          }
+          restoring.current = { ...restore, y: pageScrollY(), found: true, until }
         }
       }
     }
@@ -371,7 +381,10 @@ export function useViewportLock(slots: string, keyOf: (slot: HTMLElement) => str
     const restorationWas = history.scrollRestoration
     history.scrollRestoration = "manual"
     const reading = readReading(latest.current.slots)
-    if (reading) restoring.current = { key: reading.key, top: reading.top, until: performance.now() + RELOAD_GIVE_UP_MS, found: false, y: pageScrollY() }
+    if (reading) {
+      const giveUp = performance.now() + RELOAD_GIVE_UP_MS
+      restoring.current = { key: reading.key, top: reading.top, until: giveUp, giveUp, found: false, y: pageScrollY() }
+    }
     const stopRestoring = (event: Event) => {
       if (event.isTrusted) restoring.current = null
     }
