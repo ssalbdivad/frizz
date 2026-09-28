@@ -379,8 +379,8 @@ function RailLink({
           // border in the rail's own colour so it reads as sitting ON the square rather than beside it.
           // Accent, because the badge still answers the queue's question — "go there" — for work in
           // flight as much as for work waiting; the spinner is what tells the two apart at a glance, so
-          // a badge with no ring is purely a queue count, as MobileBoard's tab badge is. A SIBLING of the opacity
-          // wrapper, not a child: a non-current square is dimmed to 75%, and a signal must not dim with
+          // a badge with no ring is purely a queue count, as the phone board's tab badge was (MobileBoard,
+          // until 2026-09-28). A SIBLING of the opacity wrapper, not a child: a non-current square is dimmed to 75%, and a signal must not dim with
           // the surface it is reporting on. Positioned against the LINK (56px wide, the 40px square
           // centred in it), so `right-[3px]` puts the badge 5px past the square's right edge and
           // `-bottom-[5px]` 5px past its bottom — into the 8px gap, clear of the next square, and

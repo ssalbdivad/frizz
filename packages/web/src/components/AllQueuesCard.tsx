@@ -1,9 +1,9 @@
 // ONE QUEUE CARD ON THE CROSS-PROJECT PAGE — a thread of ANY project, whichever project the page is
 // focused on.
 //
-// It wears the board's queue card (TodosView QueueCard): the same bordered, shadowed shell, the same
-// header with the title and its rest time, the human's last message as their bubble, the handoff as
-// prose with its ```done card, the thread's registered questions, a reply box, and the lifecycle footer's
+// It wears the queue card a project's own board drew until 2026-09-28 (TodosView QueueCard): the same
+// bordered, shadowed shell, the same header with the title and its rest time, the human's last message
+// as their bubble, the handoff as prose with its ```done card, the thread's registered questions, a reply box, and the lifecycle footer's
 // Snooze and Mark as done. What it deliberately does NOT carry is the transcript — the tool calls, the
 // earlier rounds, the sub-agent rows. That is the next level down, one click away IN PLACE — the title
 // opens the thread's own drawer on this page (useOpenThreadInPlace) — and it is what makes a page of
@@ -13,8 +13,8 @@
 //
 // THE CARD NEVER ASKS THE PAGE WHICH PROJECT IT IS. Everything that could — the RPC client, the query
 // cache, the markdown's repo and paths, the lifecycle buttons, the question drafts — is handed the
-// card's own project explicitly (see the provider stack at the bottom). The board's queue card cannot be
-// reused here for exactly that reason: it reads its project from the address bar, the store and the
+// card's own project explicitly (see the provider stack at the bottom). The board's queue card could not
+// be reused here for exactly that reason: it read its project from the address bar, the store and the
 // page's socket, and on this page all three name the FOCUSED project, which is usually not the card's.
 import { memo, useCallback, useLayoutEffect, useMemo, useRef, useState, type MouseEvent as ReactMouseEvent, type ReactNode } from "react"
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
@@ -95,8 +95,8 @@ export function crossProjectThreadHref(project: Pick<QueuesProject, "slug">, slu
 /**
  * Open a thread of ANY project in place — the cross-project page's one verb for "show me this thread".
  *
- * A thread of the focused project whose board is already in the store opens the way a board's rail row
- * opens one (`openThread`: the drawer animates in and the store writes the URL). Any other thread moves
+ * A thread of the focused project whose board is already in the store opens the way its row in the
+ * project list opens one (`openThread`: the drawer animates in and the store writes the URL). Any other thread moves
  * the focus there by URL, which rebinds the page project and opens the drawer once its board lands
  * (routes.tsx CrossProjectPage → store.resolveRoutedThread).
  */
@@ -240,7 +240,7 @@ export const AllQueuesCard = memo(function AllQueuesCard({
                   </ClampedBody>
                 )
               ) : !handoff.data && (thread.lastAssistant || handoff.isError) ? (
-                // The board's own 200-character preview, until the whole message lands: a card that shows
+                // The server's own 200-character preview (`lastAssistant`), until the whole message lands: a card that shows
                 // the gist at once beats one that is blank for a round trip. Only UNTIL it lands: a handoff
                 // with no text is a worker that has not answered the human's last turn, and the preview is
                 // then the reply to an earlier one.
@@ -254,7 +254,7 @@ export const AllQueuesCard = memo(function AllQueuesCard({
                   with its real buttons, under the prose that led to it. It is the whole reason such a card
                   is in the queue, and this card drew none of it until 2026-09-28: a thread held on a
                   permission prompt showed its last progress line and a reply box, and read as a
-                  notification for nothing. Held until the handoff lands, for the board's old reason: these
+                  notification for nothing. Held until the handoff lands, for the reason the board's card held it: these
                   carry buttons, and the full handoff replacing the preview above would move them out from
                   under a cursor already on its way. Scoped to the card's project like every other control
                   here; the queue context lets a decision take the card out the way a reply does. */}
@@ -297,7 +297,7 @@ export const AllQueuesCard = memo(function AllQueuesCard({
 })
 
 /**
- * The board card's stall recovery (HeaderActions.tsx RetryButton): the same message through the same
+ * The thread header's stall recovery (HeaderActions.tsx RetryButton): the same message through the same
  * follow-up, sent to the thread's own project. The thread goes back to work, so the card leaves.
  */
 function RetryButton({ project, thread, onSent, onFailed }: { project: QueuesProject; thread: ThreadView; onSent: () => void; onFailed: () => void }) {
@@ -322,9 +322,11 @@ function RetryButton({ project, thread, onSent, onFailed }: { project: QueuesPro
         disabled={retry.isPending || !thread.sessionId}
         aria-label="Retry exited session"
         onMouseDown={(event) => event.preventDefault()}
-        // `mr-[9px]`: the pill's border IS its ink, and the ↗ beside it carries ~9.4px of dead box on its
-        // left, so this puts Retry at the cluster's own rhythm — MEASURED 2026-09-23 (ink-gaps.mjs, dsf 4,
-        // sans): ↗ → ⤢ 20.50px of ink; Retry → ↗ 15.43px at `mr-1`, 20.43px here.
+        // `mr-[9px]` was measured against a neighbour that is gone: the ↗ and ⤢ doors stood to Retry's
+        // right until 2026-09-28, and the ↗ carried ~9.4px of dead box on its left, so this margin put
+        // Retry at the cluster's rhythm — MEASURED 2026-09-23 (ink-gaps.mjs, dsf 4, sans): ↗ → ⤢ 20.50px
+        // of ink; Retry → ↗ 15.43px at `mr-1`, 20.43px here. Retry is now the header's LAST mark, so the
+        // margin only insets it from the card's padding, and nobody has measured what that inset should be.
         className="mr-[9px] flex items-center gap-1.5 rounded-md border border-accent/45 bg-accent/10 px-2.5 py-1 text-[12px] font-medium text-accent outline-none transition-colors hover:border-accent/70 hover:bg-accent/15 disabled:opacity-50"
       >
         <RotateCcw size={12} />
@@ -389,7 +391,7 @@ function ProjectLinkScope({ project, children }: { project: QueuesProject; child
   return <div className="contents" onClickCapture={onClickCapture}>{children}</div>
 }
 
-/** The human's last message, as the board draws it — their own bubble — clipped to a few lines. */
+/** The human's last message, as the transcript draws it — their own bubble — clipped to a few lines. */
 function AskedBubble({ text }: { text: string }) {
   const [open, setOpen] = useState(false)
   return (
@@ -413,7 +415,7 @@ function Prose({ md }: { md: string }) {
   return <LinkedHtml className={`md-body ${QUEUE_WRAP}`} html={html} />
 }
 
-/** A signal fence, drawn as the board's fence card — presentation only; the verbs live in the footer. */
+/** A signal fence, drawn as the transcript's fence card — presentation only; the verbs live in the footer. */
 function FenceBody({ kind, body }: { kind: "done" | "awaiting"; body: string }) {
   const html = useMarkdownHtml(body)
   return (
@@ -464,7 +466,7 @@ function ClampedBody({ resetKey, children }: { resetKey: string; children: React
         <div ref={inner} className="flex min-w-0 flex-col gap-4">{children}</div>
       </div>
       {overflows && (
-        // The board's disclosure row ("Ran 3 tool calls ›", ChatView.tsx): its label type, its hover, and
+        // The transcript's disclosure row ("Ran 3 tool calls ›", ChatView.tsx): its label type, its hover, and
         // its measured chevron (transcriptMetaChevronClass carries the ink trims and the cap-band shift),
         // so this toggle and the transcript's read as one control.
         <button
@@ -483,15 +485,15 @@ function ClampedBody({ resetKey, children }: { resetKey: string; children: React
 }
 
 /**
- * Reply to the agent, from here — the board's own prompt box (`Composer`: the same Enter keys, paste
- * and drop of attachments, auto-growth) with the board's model/effort and permission strip under it
+ * Reply to the agent, from here — the drawer's own prompt box (`Composer`: the same Enter keys, paste
+ * and drop of attachments, auto-growth) with the drawer's model/effort and permission strip under it
  * (useThreadComposerControls, handed this card's thread and scoped to its project by the caller's
- * ThreadProjectScope), so a thread can be re-pointed mid-flight from here without opening its board.
+ * ThreadProjectScope), so a thread can be re-pointed mid-flight from here without opening its drawer.
  *
- * THE DRAFT IS THE BOARD'S DRAFT. It is keyed exactly as that thread's composer keys it — its project's
- * directory, its slug, its session — so a reply half-typed here is waiting in the composer on its own
- * board, and the other way round. An attachment uploads to the THREAD's project (`attachBase`), not the
- * page's, which on this page would be the launching project.
+ * THE DRAFT IS THE DRAWER'S DRAFT. It is keyed exactly as that thread's composer keys it — its project's
+ * directory, its slug, its session — so a reply half-typed here is waiting in the thread's drawer, and
+ * the other way round. An attachment uploads to the THREAD's project (`attachBase`), not the page's,
+ * which on this page is the focused project.
  */
 function ReplyBox({ project, thread, onSent, onFailed }: { project: QueuesProject; thread: ThreadView; onSent: () => void; onFailed: () => void }) {
   const queryClient = useQueryClient()
@@ -539,7 +541,7 @@ function ReplyBox({ project, thread, onSent, onFailed }: { project: QueuesProjec
     }
     if (!thread.sessionId || send.isPending) return
     setError(undefined)
-    // Local truth first, then the network — the order every send on the board's card obeys.
+    // Local truth first, then the network — the order every send on the board's card obeyed.
     draftStore.set(key, "")
     onSent()
     send.mutate(message)

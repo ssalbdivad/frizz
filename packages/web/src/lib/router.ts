@@ -83,9 +83,10 @@ export function primeRoute(path = location.pathname): void {
 // effects run, and the store only learns the new URL in those effects (routes.tsx useRouteToStore). In
 // between, the store still describes the PREVIOUS URL — and any notification in that window (a socket
 // status, a toast timer) ran the store → URL writer, which "corrected" the address bar back to the old
-// state. On a board that window is empty, because a board opens its drawers store-first; the
-// cross-project page opens another project's thread URL-first, so there it put the previous project's
-// parked thread under the new project's prefix, or wrote the new project's bare page over the thread
+// state. For a thread of the focused project that window is empty, because `openThread` opens its
+// drawer store-first; a thread of another project opens URL-first (AllQueuesCard
+// useOpenThreadInPlace), so there it put the previous project's parked thread under the new project's
+// prefix, or wrote the new project's bare page over the thread
 // just clicked. So the writer only writes a URL the store has absorbed, and runs once more when it has.
 let absorbed: string | null = null
 let skippedWrite = false

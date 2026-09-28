@@ -15,7 +15,8 @@
 //                                                           ?only=B4    — one variant, on its own
 //
 // Row anatomy, group headings, statuses and the snooze pair are copied VERBATIM from the shipped
-// AwaitingBackgroundCard/TodosView so the sheet judges composition, not drift.
+// AwaitingBackgroundCard and the project board's queue (TodosView, gone since 2026-09-28) so the sheet
+// judges composition, not drift.
 import { createRoot } from "react-dom/client"
 import { useMemo, type ReactNode } from "react"
 import { ChevronRight, CircleCheck, Clock, Hourglass, TerminalSquare } from "lucide-react"
@@ -103,7 +104,7 @@ function Prose({ md }: { md: string }) {
   return <div className="md-body card-md text-fg/75" dangerouslySetInnerHTML={html} />
 }
 
-// The queue's snooze pair, verbatim (TodosView.AwaitingBackgroundBanner).
+// The queue's snooze pair, verbatim as it stood in TodosView.AwaitingBackgroundBanner until 2026-09-28.
 function Snooze() {
   return (
     <>

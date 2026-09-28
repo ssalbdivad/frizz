@@ -172,9 +172,10 @@ function PendingSnooze({ thread }: { thread: ThreadView }) {
 //
 // It is drift, not a design: the eye came first, and the maintainer then asked for the watchers to be
 // shown "underneath the prompt box, similar to how subagents work" (2026-08-13, `githubWatchViews`).
-// That strip SUPERSEDED this readout and nobody removed it. Every surface rendering this footer — the
-// queue card (TodosView) and the thread drawer (ChatView.ThreadView) — renders BackgroundOpsStrip one
-// line above it, so nothing lost a home.
+// That strip SUPERSEDED this readout and nobody removed it. The one surface rendering this footer — the
+// thread drawer and /full (ChatView.ThreadView) — renders BackgroundOpsStrip one line above it, so
+// nothing lost a home. (The project board's queue card rendered both too, until 2026-09-28; the
+// cross-project card, AllQueuesCard, borrows only this file's StateButton.)
 //
 // DO NOT REINTRODUCE A WATCHER LIST HERE. If a wait needs to be visible, it belongs in that strip, as a
 // row, beside the sub-agents and shells it is a peer of. What a shell's row cannot say on its own — that

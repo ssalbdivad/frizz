@@ -745,7 +745,9 @@ export function offersRetry(t: ThreadView): boolean {
   return kind === "stalled" || kind === "limit"
 }
 
-// This section is TWO rule-separated bands (the Sidebar draws the rule): the RESTED band (a.k.a. the
+// This section is TWO rule-separated bands (the project board's Sidebar drew the rule, until that board
+// went on 2026-09-28; ProjectList.tsx now draws Ready and Working from the server's queued and running
+// lists): the RESTED band (a.k.a. the
 // queue, a.k.a. the cue) on TOP, directly beneath the prompt box, then the ACTIVE band — everything the
 // human has nothing to answer, spinning or merely in flight — BELOW it. Rested is ordered by the EXACT
 // queue comparator (orderQueue), so the rested rows and the queue cards share ONE order. That shared
@@ -757,9 +759,10 @@ export function offersRetry(t: ThreadView): boolean {
 // no queue card, so their interaction-recency order never affects the marker — grouping them below just
 // keeps everything that isn't waiting on the human out of the rested run.
 //
-// This ORDER IS THE RENDER ORDER: the Sidebar splits the result with partitionActive and draws the two
-// bands in the order they come out of here, so the array and the rail can never disagree about which
-// band is on top.
+// This ORDER WAS THE RENDER ORDER: the project board's Sidebar split the result with partitionActive and
+// drew the two bands in the order they came out of here, so the array and the rail could never disagree
+// about which band was on top. No surface renders straight from it now; sectionThreads still orders its
+// `active` bucket with it.
 export function orderActive(threads: readonly ThreadView[], direction: QueueDirection = "fifo"): ThreadView[] {
   const running = threads.filter(inActiveBand)
   const rested = threads.filter((t) => !inActiveBand(t))
@@ -767,7 +770,8 @@ export function orderActive(threads: readonly ThreadView[], direction: QueueDire
 }
 
 // Split an ALREADY-ordered list (see orderActive) into its Active/Rested bands WITHOUT re-sorting —
-// filter() preserves orderActive's order — so the Sidebar can render the separating rule. `.running` is
+// filter() preserves orderActive's order — where the project board's Sidebar drew its separating rule,
+// and the band oracle the groups tests still check a row against. `.running` is
 // the ACTIVE band (spinning, plus the handful of rows that are in flight without a card of their own);
 // `.rested` is the queue's rows, exactly one per card. The key is named for the spinner that dominates
 // it, the band is named for the maintainer's word — see the vocabulary at the top of this section.

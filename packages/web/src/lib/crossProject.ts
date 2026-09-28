@@ -116,8 +116,9 @@ export function defaultCrossProjectFocus(
 // threads are displayed on the right side and have the ui reflect that"). The project list on the left
 // keeps every project whatever it is set to, and the prompt box keeps its own pick above — so the
 // control that sets it sits over the queue it filters (the READY header), not in the column beside it.
-// There is no other way to look at one project: the project view it replaced is gone, and every one of
-// its addresses lands here with this set (routes.tsx LegacyProjectRedirect).
+// There is no other way to look at one project: the project view went on 2026-09-28, and every one of
+// its old addresses now lands on `/` (routes.tsx HomeRedirect) with the filter left as it was — a
+// retired address names a project, but not how this tab has chosen to read the queue.
 //
 // Per TAB (sessionStorage): a filter is how this window is being read right now. It survives a reload —
 // which a dev server hands out constantly — but a new tab, or a fresh launch, opens on everything.
@@ -167,8 +168,8 @@ export function useQueueFilter(): string | null {
 // WHICH PROJECTS ARE OPEN IN THE LIST — the left side's own "show more", independent of the filter.
 //
 // Every project's current work (its Pinned, Ready and Working rows) is always listed; opening a project
-// adds the rest of it under its name — Snoozed, Done, External — which is everything its project view's
-// rail used to hold. Per BROWSER (localStorage), like the rail's own band folds: which projects you keep
+// adds the rest of it under its name — Snoozed, Done, External — which is everything a project's own
+// board used to list in its rail until 2026-09-28. Per BROWSER (localStorage), like the rail's own band folds: which projects you keep
 // open is how you arrange your desk, not how you are reading one window.
 
 const EXPANDED_KEY = "frizz.expandedProjects"

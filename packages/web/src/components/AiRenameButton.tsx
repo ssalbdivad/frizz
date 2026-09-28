@@ -8,9 +8,11 @@ import { Tooltip } from "./Tooltip.tsx"
 
 // RE-TITLE THIS THREAD FROM ITS OPENING REQUEST — the small refresh mark that appears to the right of
 // a thread's title when you point at it. Rendered beside the name by ThreadTitle — the one title
-// element the thread header (ChatView) and the queue card's header (TodosView) share, so the two
-// surfaces cannot drift; the queue used to have no rename affordance at all (maintainer 2026-08-26:
-// "it should show up in the cue card, in addition to showing up in the drawer").
+// element the thread header (ChatView) and the project board's queue card header (TodosView) shared
+// until that board went on 2026-09-28, so the two surfaces could not drift; the queue used to have no
+// rename affordance at all (maintainer 2026-08-26: "it should show up in the cue card, in addition to
+// showing up in the drawer"). The cross-project card (AllQueuesCard) renders neither, so today only the
+// drawer and /full offer it.
 //
 // A RELOAD MARK, NOT SPARKLES, and REVEALED ON HOVER rather than always drawn (same maintainer, same
 // day: "it should be a reload icon, not the sparkles icon for refreshing the title… it should not

@@ -8,7 +8,7 @@ import { optimisticallySteered, useSteeredAt } from "../lib/steering.ts"
 // THE BAND TABLE — every rail band's name and icon, in ONE place, because three surfaces say them and
 // the whole point is that all three say them IDENTICALLY:
 //   · the rail's band headers (Sidebar SectionHeader);
-//   · the inbox's own header over the queue cards (TodosView) — READY with the inbox, the name and
+//   · the header over the queue cards (AllQueues) — READY with the inbox, the name and
 //     glyph of the rail band whose rows ARE those cards;
 //   · the stamp in a thread's header (ChatView ThreadHeader) — WORKING with the bot on a drawer opened
 //     from the Working band, flipping to READY the moment that thread rests into the inbox behind it.

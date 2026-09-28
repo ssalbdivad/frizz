@@ -1,18 +1,18 @@
 // THE CROSS-PROJECT PAGE ("Everything") — every project's queue on one page, and the default mode: `/`
 // lands here, focused on a project the address does not name (see routes.tsx CrossProjectPage).
 //
-// It is the board, one level up, and it is laid out as one. The board is a floating sidebar beside a
-// 720px queue; so is this. The board's sidebar lists a project's threads in bands (Queue, Running,
-// Snoozed); this one lists every PROJECT, each with its own queue rows and running rows beneath it, in
-// the operator's own rail order. The board's queue is a column of cards; so is this one — ONE queue
-// across every project, in the order each card entered it (maintainer 2026-09-28: "One queue across all
+// It is laid out as a project's own board was, one level up — the board was a floating sidebar beside a
+// 720px queue, until 2026-09-28 when this page replaced it. The list on the left is every PROJECT, each
+// with its own queue rows and running rows beneath it, in the operator's own rail order
+// (ProjectList.tsx). The queue on the right is a column of cards — ONE queue across every project, in the order each card entered it (maintainer 2026-09-28: "One queue across all
 // projects"), each card wearing its project's chip (AllQueuesCard.tsx ProjectChip). It was one LANE per
 // project, in rail order, until then, and a project listed above the one being read put its whole lane
 // on top of the card the operator was reading the moment its first thread came to rest.
 //
-// NOTHING HERE THROWS THE OPERATOR INTO A PROJECT'S BOARD (single-project mode) except a door that says
-// so. The page has a FOCUS — one project — and the focus is the page project: the prompt box at the top
-// of the column dispatches into it, and a thread of it opens in the board's own drawer, in place. At `/`
+// NOTHING HERE LEAVES THE PAGE. There is no project page to leave for (routes.tsx), and fullscreen is a
+// choice in a drawer's own menu (ThreadMenu.tsx), not a door on a card. The page has a FOCUS — one
+// project — and the focus is the page project: the prompt box at the top of the column dispatches into
+// it, and a thread of it opens in the page's drawer stack, in place. At `/`
 // the focus is the box's own choice (the PICK, chosen in its bottom strip); opening a thread of ANOTHER
 // project moves it to that project for as long as the drawer is open (`/all/<slug>/thread/<t>`,
 // useOpenThreadInPlace), so every thread on the page is one click from its full transcript without
@@ -22,7 +22,7 @@
 //   1. the card — the handoff's opening lines, the questions, a reply box, Snooze and Mark as done;
 //   2. "Show more" — the whole handoff, in place;
 //   3. the card's title (or a rail row) — the thread's drawer, with its whole transcript and composer.
-// A card's ↗ and a project's "…" → Open board are the explicit doors to a board.
+// (A card's ↗ and a project's "…" → Open board were doors to that project's board until 2026-09-28.)
 //
 // WHAT THE RAIL AND THE CARDS MUST NEVER DO is ask the page which project anything belongs to. The page
 // project is the FOCUS, and they show every project. Every read they make is either machine-wide
@@ -69,12 +69,12 @@ import { isPlainLeftClick } from "../lib/standaloneThreadRoute.ts"
 /** How often the page re-reads every project. The rail's badges poll at 5s; this is the page the
  *  operator is looking AT, so it runs a little faster — the read is the servers' cached snapshots. */
 const POLL_MS = 3_000
-/** The card's exit fade — the board's (styles.css `.frizz-card-slot`, TodosView QUEUE_EXIT_MS). */
+/** The card's exit fade (styles.css `.frizz-card-slot`, which must stay in step with it). */
 const EXIT_MS = 200
 /**
  * How long an acted-on card stays gone while the server catches up. Past this, a thread that is STILL
  * queued comes back — the action evidently did not take — rather than staying hidden on the strength of
- * a click. The board's queue keeps the same guard.
+ * a click.
  */
 const REAPPEAR_MS = 8_000
 /** How long the prompt box's stand-in waits for the focused project's board before saying so. */
@@ -140,7 +140,7 @@ export function AllQueuesPage() {
 
   const leaving = useLeavingCards(projects)
   // A thread whose drawer is open is read THERE: its card would be a second copy of the same questions
-  // and reply box under the sheet (the board's rule, store.ts slugsInThreadDrawers). Drawers belong to
+  // and reply box under the sheet (store.ts slugsInThreadDrawers). Drawers belong to
   // the page project, so only the focus's cards can be hidden this way. HIDDEN, NOT REMOVED: the card
   // keeps its space (QueueCardOf `concealed`), so opening its drawer and closing it again moves nothing
   // under the sheet or after it.
@@ -218,13 +218,13 @@ export function AllQueuesPage() {
 
   return (
     <div className="flex min-h-screen justify-center gap-[clamp(28px,3.4vw,52px)] bg-bg px-5 text-sm text-fg max-[800px]:flex-col max-[800px]:justify-start max-[800px]:gap-0 max-[800px]:px-3">
-      {/* TOP-anchored, where the board centres its column: a click here changes the list's height (narrowing
+      {/* TOP-anchored, where the project board centred its column: a click here changes the list's height (narrowing
           folds every other project to one line), and a centred column moved the prompt box and the row just
           clicked out from under the pointer — by 110-200px with five projects. 48px sets the status row's middle
           level with the READY header's across the gutter (64 vs 59.85px at 52px). */}
       <aside aria-label="Projects" className={`${SIDEBAR_COLUMN_CLASS} !justify-start pt-[48px] max-[800px]:!pt-5`}>
         <div className="flex max-h-[calc(100vh-68px)] min-h-0 min-w-0 w-full flex-col max-[800px]:max-h-none">
-          {/* The board's own column head, one level up: the status row — naming what the page shows —
+          {/* The column head: the status row — naming what the page shows —
               and the prompt box under it: a new thread in any project without leaving, the project chosen
               in the box's own bottom strip, beside the model. */}
           <div className="mb-5 shrink-0 px-0.5" onKeyDown={onColumnKeyDown}>
@@ -286,7 +286,7 @@ export function AllQueuesPage() {
                   queue.map((slot, index) => (
                     <Fragment key={slot.key}>
                       <QueueCardOf entry={slot.item} ghost={slot.ghost ? ghostLabel(projects, slot.item) : undefined} concealed={inDrawer.has(slot.key)} leaving={leaving} chip={!filtered} />
-                      {/* The rule between two cards, as on the board: a sibling that FOLLOWS its card, so
+                      {/* The rule between two cards: a sibling that FOLLOWS its card, so
                           styles.css fades it with the card when that one leaves. */}
                       {index < queue.length - 1 && <hr className="my-10 border-0 border-t border-border/60" />}
                     </Fragment>
@@ -499,8 +499,8 @@ function useDepartedQueue(live: ProjectQueue | undefined, polledAt: number): Pro
 }
 
 /**
- * The board's own prompt box, bound to the focused project — the page project, so it is exactly the
- * board's DispatchForm, drafts, GitHub picker and agent settings included.
+ * The new-thread prompt box, bound to the focused project — the page project. It is the same
+ * DispatchForm the new-thread modal draws, drafts, GitHub picker and agent settings included.
  *
  * Only once the box knows WHICH DIRECTORY is the focus's: its drafts are keyed by it, and without one the
  * form would file what was typed under a shared "unresolved" bucket (lib/drafts.ts), from which it jumped
@@ -647,7 +647,7 @@ function QueueCardOf({ entry, ghost, concealed, leaving, chip }: { entry: QueueE
   return (
     <MarkdownScopeContext.Provider value={scope}>
       {thread.kind === "command" ? (
-        // A finished terminal command takes the board's own command card, scoped to its project: its
+        // A finished terminal command takes its own command card, scoped to its project: its
         // pty, its Restart and its Mark as done all belong to the card's project, not the page's.
         <div data-xq-card={key} data-queue-leaving={leaving.isLeaving(key)} data-queue-ghost={ghost === undefined ? undefined : true} data-queue-concealed={concealed || undefined} inert={concealed} className="frizz-card-slot min-w-0">
           <div className="frizz-card-clip min-h-0 min-w-0">
@@ -682,7 +682,7 @@ function QueueCardOf({ entry, ghost, concealed, leaving, chip }: { entry: QueueE
 }
 
 /**
- * Inbox zero — a project view's own empty queue, said of every project, admitting the ones this server
+ * Inbox zero — the queue empty in every project, admitting the ones this server
  * has not opened, whose queues it cannot see.
  */
 function EmptyQueues({ unopened }: { unopened: number }) {
@@ -770,7 +770,7 @@ function useLeavingCards(projects: QueuesProject[]): LeavingCards {
   }
 }
 
-/** Below the page's stacking point (`max-[800px]`, the board's own), where the columns stack. */
+/** Below the page's stacking point (`max-[800px]`), where the columns stack. */
 const STACKED_QUERY = "(max-width: 800px)"
 function useStacked(): boolean {
   return useSyncExternalStore(
@@ -785,8 +785,8 @@ function useStacked(): boolean {
 }
 
 /**
- * A queue row's click: bring its card to the top of the window and ring it — the board's own
- * scroll-to-card (store.ts scrollToQueueCard), for a page whose cards are keyed by project. Returns
+ * A queue row's click: bring its card to the top of the window and ring it, for a page whose cards are
+ * keyed by project. (The project board had its own, store.ts scrollToQueueCard, until 2026-09-28.) Returns
  * the scroll offset it landed on (null when the card is gone), which the keyboard's cursor holds on to.
  */
 function useScrollToCard(): (key: string) => number | null {
@@ -882,7 +882,7 @@ function useQueueKeys(activeKey: string | null, scrollToCard: (key: string) => n
 
 /**
  * Which card is being read — the one crossing the reading line a third of the way down the window — so
- * its row in the rail wears the board's scroll marker.
+ * its row in the list wears the scroll marker (Sidebar.tsx ThreadRow `active`).
  */
 function useScrollspy(cards: readonly { key: string }[]): string | null {
   const [active, setActive] = useState<string | null>(null)

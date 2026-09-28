@@ -81,11 +81,12 @@ import { settledAskView } from "../lib/interactionQuestion.ts"
 // ONE frame for every image the chat renders — border, inset mat, centered picture. See its module
 // header for why it spans the message width rather than shrink-wrapping each picture.
 import { FRAMED_IMAGE, ImageFrame } from "./ImageFrame.tsx"
-// The resting card, shared with the queue (TodosView passes it the event-Snooze; these two surfaces
-// deliberately pass no action — see the module header).
+// The resting card. The project board's queue (TodosView) passed it the event-Snooze's card exit
+// until 2026-09-28; nothing does now, and these two surfaces deliberately pass no action — see the
+// module header.
 import { AwaitingBackgroundCard, issueStatusLine, showsRestingCard, watchStatusLine } from "./AwaitingBackgroundCard.tsx"
 import { SnoozeCard, showsSnoozeCard } from "./SnoozeCard.tsx"
-// Re-exported from their new homes so existing importers (TodosView, the fixtures) keep one
+// Re-exported from their new homes so existing importers (the fixtures) keep one
 // import path while the definitions live where both question producers can reach them.
 export { CARD_BODY, CARD_PRIMARY_BUTTON, CardActions, TranscriptCard } from "./TranscriptCard.tsx"
 export { QuestionBlockCard } from "./QuestionBlockCard.tsx"
@@ -379,8 +380,8 @@ function ChatView({ slug, virtualized }: { slug: string; virtualized: boolean })
           virtualizer already corrects scrollTop itself every time a row above the reader is re-measured;
           Chrome's native scroll anchoring corrects it too, off its own anchor node, and neither knows
           about the other — so both firing on one layout change moves the reader by that correction
-          TWICE. TodosView suspends native anchoring around exactly this hazard for the queue
-          (suspendNativeAnchoring, "THE one owner"); the drawer transcript is the same hazard and was
+          TWICE. The queue suspends native anchoring around exactly this hazard
+          (lib/viewportLock.ts suspendNativeAnchoring); the drawer transcript is the same hazard and was
           simply never given the same treatment. */}
       <div className="relative min-h-0 flex-1 flex flex-col">
       <div
@@ -536,7 +537,8 @@ function ChatView({ slug, virtualized }: { slug: string; virtualized: boolean })
                 loading (count === 0 on both production callers), so without the hold it drew the whole
                 ladder — the resting card above all — alone at the top of an empty pane and then replaced
                 it with the transcript a beat later. The tail describes the END of the transcript and
-                mounts with it, exactly as the queue card holds its tail (TodosView). */}
+                mounts with it, exactly as the project board's queue card held its tail (TodosView,
+                until 2026-09-28). */}
             {tailReady && runtimeStatusRung(runtimeStatus) !== null && (
               <VSpace h={runtimeStatusGapFor(runtimeStatus, activityMessages.map((entry) => entry.message))} />
             )}
@@ -600,7 +602,7 @@ function ChatView({ slug, virtualized }: { slug: string; virtualized: boolean })
       {/* Prompt box FIRST, then the background-ops strip UNDERNEATH it at the very bottom (maintainer
           2026-07-09): running sub-agents / shells / monitors sit below the composer, not above it. */}
       {/* ONE hairline, at the queue card's weight. `border-border/60` is exactly the rule the queue
-          card draws under its header (TodosView); the chat footer used to draw full-strength
+          card draws under its header (AllQueuesCard); the chat footer used to draw full-strength
           `border-border` AND have ThreadActionBar draw a second one under it, which stacked into a
           2px rule. Keep the separator on THIS wrapper only — the bar inside is padding-only. */}
       <div data-thread-chat-footer className="z-10 shrink-0 border-t border-border/60 bg-panel">
@@ -1084,7 +1086,7 @@ function VirtualizedThreadTranscript({
     // the capture side refuses to anchor on.
     const handoff = takeFullscreenEnterAnchor(slug)
     // The topmost message the reader had that THIS window can place. Anything above it is a row the
-    // board surface drew and this one does not.
+    // surface the door was pressed in drew and this one does not.
     const anchor = handoff?.candidates
       .map((candidate) => ({ candidate, index: rows.findIndex((row) => row.kind === "message" && row.message.sourceId === candidate.sourceId) }))
       .find((hit) => hit.index >= 0)
@@ -1096,7 +1098,7 @@ function VirtualizedThreadTranscript({
         return
       }
       // Two steps, because the row is VIRTUAL: `scrollToIndex` gets it mounted (it may be thousands of
-      // estimated pixels away), then the align puts it at the exact height it had on the board. Release
+      // estimated pixels away), then the align puts it at the exact height it had in the drawer. Release
       // tail-follow first — `nextTailFollow` starts attached, so the settling growth below would
       // otherwise read as content arriving under a reader at the bottom and haul the page back there.
       virtualizer.scrollToIndex(anchor.index, { align: "start", behavior: "instant" })
@@ -3198,12 +3200,13 @@ function UserBubble({ text, rawText, queued, deliveryUnconfirmed, deliveryId, so
   )
 }
 
-// Exported so the Queue card reuses the exact same message rendering (user bubble right, agent prose
-// left, compact tool lines) — no duplicate renderer. `answering` (Queue-only, for the live message)
-// makes each ```question block answerable in place; without it the blocks render read-only.
+// Exported so the fixtures render the exact same message (user bubble right, agent prose left, compact
+// tool lines) — no duplicate renderer. The project board's queue card reused it too, until 2026-09-28;
+// the cross-project card (AllQueuesCard) draws its own prose instead. `answering` (the live message
+// only) makes each ```question block answerable in place; without it the blocks render read-only.
 //
-// MEMOIZED (the render-perf thread's chip-click fix): a queue card re-renders on EVERY chip click /
-// composer keystroke (answer + draft state live at card level) and on every board delta (TodosView's
+// MEMOIZED (the render-perf thread's chip-click fix): a queue card re-rendered on EVERY chip click /
+// composer keystroke (answer + draft state lived at card level) and on every board delta (TodosView's
 // snapshot scope), and each such render used to re-run every visible Message's whole subtree —
 // markdown/diff/tool cards included. Props are memo-friendly by construction: `m` keeps identity for
 // unchanged messages (TanStack Query's structural sharing on both the poll and socket write paths),

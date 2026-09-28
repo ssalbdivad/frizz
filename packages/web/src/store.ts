@@ -60,8 +60,7 @@ export const store = proxy({
   addProject: null as { reason?: string; proposed?: string; enclosed?: ProjectEnclosed } | null,
   showPalette: false,
   // The keyboard-shortcuts sheet (`?`, or the keyboard icon in the status row). Rendered by
-  // <KeyboardLayer/>, which every page shell mounts — so it opens on the board, Everything and /full
-  // alike.
+  // <KeyboardLayer/>, which every page shell mounts — so it opens on Everything and /full alike.
   showShortcuts: false,
   // The anywhere-modal behind the "New thread" pill (Gmail-compose style).
   showNewThread: false,

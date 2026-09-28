@@ -10,8 +10,8 @@
 // So the door notes which message is at the top of the reader's view and how far down the screen it
 // sits, and the /full transcript puts that same message back at that same height instead of jumping to
 // the tail. The message is named by its `sourceId`, which is the ONE identifier both surfaces already
-// stamp on their rows (`data-transcript-source-id`) — the card in TodosView, the virtualized rows in
-// ChatView — so no new plumbing is needed on either side to find it again.
+// stamp on their rows (`data-transcript-source-id`) — the virtualized rows in ChatView, which a drawer
+// and /full both render — so no new plumbing is needed on either side to find it again.
 //
 // It is a one-shot hand-off, not state: the door writes it, the next /full transcript to mount reads it
 // and clears it. A module-level slot rather than the valtio store for that reason, and the same shape
@@ -87,8 +87,8 @@ export function anchorCandidates(bands: readonly MessageBand[], box: { top: numb
 }
 
 /**
- * Note where the reader is in `surface` (the board surface the door was pressed in — a queue card or a
- * drawer panel), for the /full page about to mount.
+ * Note where the reader is in `surface` (the drawer panel the door was pressed in — ThreadMenu's
+ * Fullscreen item), for the /full page about to mount.
  */
 export function captureFullscreenEnterAnchor(surface: HTMLElement | null, slug: string): void {
   pending = null
@@ -124,17 +124,18 @@ export function clearFullscreenEnterAnchor(): void {
 // ─── WHERE THE READER CAME FROM ────────────────────────────────────────────────────────────────────
 //
 // The other thing the door has to carry. Leaving /full used to go to the board ROOT unconditionally —
-// the return arrow did it, and the collapse icon inherited it — which is right for a QUEUED thread,
-// whose board surface is a card sitting on that very page. It is wrong for every other thread: those
-// are read through a DRAWER, the board root does not mount one, and so the reverse view transition had
+// the return arrow did it, and the collapse icon inherited it — which was right for a QUEUED thread,
+// whose card sat on that very page. It was wrong for every other thread: those are read through a
+// DRAWER, the board root did not mount one, and so the reverse view transition had
 // nothing named `thread-chat` to morph into and hard cross-faded instead. Measured on a snoozed
 // fixture at seven widths from 767 to 2560: the morph was skipped at every one, and the reader was
-// dropped on a board with their thread nowhere on it.
+// dropped on a board with their thread nowhere on it. (The per-project board went on 2026-09-28; the
+// door is now only ever pressed in a drawer, so the address it hands back is always a drawer's.)
 //
-// The fix is not a new mechanism: `/thread/<slug>` is the drawer's OWN url, and BoardRoute already
-// re-mounts and names that surface when it is routed to (primeFullscreenReturn — the path built for
-// the browser Back button, which is why Back always morphed correctly while the button beside it did
-// not). So the door just has to remember the address it was pressed at and hand it back.
+// The fix is not a new mechanism: the drawer's own url (`/all/<slug>/thread/<t>`) is routed, and
+// CrossProjectPage (routes.tsx) re-mounts and names that surface when it is routed to
+// (primeFullscreenReturn — the path built for the browser Back button, which is why Back always morphed
+// correctly while the button beside it did not). So the door just has to remember the address it was pressed at and hand it back.
 //
 // One record, not a map: only the most recent door press can be the one being undone, and keying it by
 // slug means a stale record can never send the reader to some other thread's surface. It outlives the
