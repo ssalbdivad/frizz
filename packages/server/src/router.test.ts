@@ -1838,7 +1838,7 @@ test("projectAdd: a folder inside a checkout answers enclosed, and exact adopts 
     registerProject({ dir: repo, id: repoId }, home)
 
     const asked = addProjectAtPath(picked, home)
-    assert.deepEqual(asked, { kind: "enclosed", path: realpathSync(picked), root: realpathSync(repo), rootRegistered: true })
+    assert.deepEqual(asked, { kind: "enclosed", path: realpathSync(picked), root: realpathSync(repo), rootName: "app", rootRegistered: true })
     assert.equal(existsSync(join(picked, ".frizz")), false, "asking writes nothing")
 
     const added = addProjectAtPath(picked, home, { exact: true })
@@ -1857,6 +1857,41 @@ test("projectAdd: a folder inside a checkout answers enclosed, and exact adopts 
     // And the checkout itself still adds as the checkout.
     const root = addProjectAtPath(repo, home)
     assert.equal(root.kind === "added" ? root.project.id : undefined, repoId)
+  } finally {
+    rmSync(home, { recursive: true, force: true })
+  }
+})
+
+// ~/app/action/yes (2026-09-28): `action` is a package root of its own, nearer than the `app` checkout,
+// but the operator knows the folder as part of their `app` project — the dialog must name that, and
+// its "open" answer must open `app` rather than add `action`.
+test("projectAdd: a folder under a nested package root names the enclosing registered project", () => {
+  const home = mkdtempSync(join(tmpdir(), "frizz-add-nested-"))
+  try {
+    const repo = join(home, "app")
+    const pkg = join(repo, "action")
+    const picked = join(pkg, "yes")
+    mkdirSync(picked, { recursive: true })
+    execFileSync("git", ["init", "-q", repo])
+    writeFileSync(join(pkg, "package.json"), "{}")
+    registerProject({ dir: realpathSync(repo), id: "6e1c9b1f-4d66-4b8f-8e9f-1a5a7c8d3b22" }, home)
+
+    assert.deepEqual(addProjectAtPath(picked, home), {
+      kind: "enclosed",
+      path: realpathSync(picked),
+      root: realpathSync(repo),
+      rootName: "app",
+      rootRegistered: true,
+    })
+    // Negative control: with nothing registered, the nearest root is still what it names.
+    const bare = mkdtempSync(join(tmpdir(), "frizz-add-nested-bare-"))
+    try {
+      const asked = addProjectAtPath(picked, bare)
+      assert.equal(asked.kind === "enclosed" ? asked.rootName : undefined, "action")
+      assert.equal(asked.kind === "enclosed" ? asked.rootRegistered : undefined, false)
+    } finally {
+      rmSync(bare, { recursive: true, force: true })
+    }
   } finally {
     rmSync(home, { recursive: true, force: true })
   }

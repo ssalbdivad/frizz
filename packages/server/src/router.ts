@@ -182,14 +182,14 @@ import { projectRetiredBackgroundOps, retiredOpsFor } from "./transcript.ts"
 import { clearProjectIcon, customIconPath, findById, forgetProject, ICON_SCAN_VERSION, listProjects, moveProjectDirectory, renameProject, reorderProjects, setProjectIcon, type RegistryEntry } from "./project-registry.ts"
 import { HOME_WORKSPACE_NAME, isHomeWorkspace, listWorkspaces } from "./home-workspace.ts"
 import { expandHomeFolder, homeFolderProblem } from "./home-folder.ts"
-import { basename, dirname } from "node:path"
+import { basename, dirname, isAbsolute, relative } from "node:path"
 import { existsSync, mkdirSync, rmSync, writeFileSync } from "node:fs"
 import { activeBandThread, questionRepliedPast, ProjectCard, ProjectQueue, ProjectRailCounts, PROJECT_ICON_EXTENSIONS, PROJECT_ICON_MAX_BASE64_CHARS, queuedThread, ThreadHandoff, BURIED_ANSWERS_HEADER } from "@frizz/shared"
 import { imageDimensions } from "./image-header.ts"
 import { homedir } from "node:os"
 import { chosenProjectRoot, ensureProjectIdFile, existingProjectId, isHomeDirectory, writeProjectIdFile } from "./project-root.ts"
 import { resolveProjectLabel } from "./project-identity.ts"
-import { findByPath, registerProject } from "./project-registry.ts"
+import { findByPath, readRegistry, registerProject } from "./project-registry.ts"
 import { pickDirectory, pickImageFile } from "./directory-picker.ts"
 import { completePath } from "./path-complete.ts"
 import Database from "./sqlite.ts"
@@ -670,6 +670,19 @@ function projectCard(entry: RegistryEntry, stale: boolean): ProjectCard {
   }
 }
 
+/** The nearest registered project strictly above `dir`, if any — the one the operator already calls it part of. */
+function enclosingProject(dir: string, home: string): RegistryEntry | undefined {
+  const canonical = canonicalDir(dir)
+  let best: RegistryEntry | undefined
+  for (const entry of readRegistry(home).projects) {
+    if (isHomeWorkspace(entry.id) || entry.archived) continue
+    const rel = relative(entry.path, canonical)
+    if (!rel || rel.startsWith("..") || isAbsolute(rel)) continue
+    if (!best || entry.path.length > best.path.length) best = entry
+  }
+  return best
+}
+
 export function addProjectAtPath(
   input: string,
   home = homedir(),
@@ -694,11 +707,18 @@ export function addProjectAtPath(
   // navigated to a board the operator already had, which read as the add silently failing (2026-09-28).
   // The page asks instead, and `exact` is its "add this folder on its own" answer.
   if (enclosing !== absolute && !options.exact) {
+    // Name the PROJECT the folder already belongs to, not the nearest root: ~/app/action/yes sits under
+    // ~/app/action's manifest, but the operator knows it as part of their `app` project, and "open
+    // action" would add a project they never asked for. The nearest root is the fallback only when no
+    // registered project encloses the folder at all.
+    const project = enclosingProject(absolute, home)
+    const root = project?.path ?? canonicalDir(enclosing)
     return {
       kind: "enclosed",
       path: canonicalDir(absolute),
-      root: canonicalDir(enclosing),
-      rootRegistered: findByPath(canonicalDir(enclosing), home) !== undefined,
+      root,
+      rootName: project?.name ?? basename(root),
+      rootRegistered: project !== undefined || findByPath(root, home) !== undefined,
     }
   }
   const root = options.exact ? absolute : enclosing

@@ -509,8 +509,9 @@ function AddProjectDialog({
 }
 
 /**
- * The chosen folder sits inside another project root — `~/app/yes` inside the `~/app` checkout — so
- * adding it as-is would open that root instead. Until 2026-09-28 that happened without a word: the add
+ * The chosen folder sits inside another project — `~/app/action/yes` inside `app` — so adding it as-is
+ * would open that project instead. The server names the registered project over a nearer package root,
+ * because that is what the operator calls it. Until 2026-09-28 that happened without a word: the add
  * reopened `~/app`, navigated to a board the operator already had open, and read as a silent failure.
  * Both answers are real ones: a package folder usually means its repository, but someone who pointed
  * at a folder may mean exactly that folder, and `exact` adopts it with its own `.frizz/.id`.
@@ -531,8 +532,7 @@ function EnclosedProjectDialog({ enclosed, onClose }: { enclosed: ProjectEnclose
     },
   })
   const error = add.error instanceof Error ? add.error.message : add.error ? String(add.error) : null
-  const folder = baseName(enclosed.path)
-  const root = baseName(enclosed.root)
+  const root = enclosed.rootName
 
   return (
     <RadixDialog.Root open onOpenChange={(open) => { if (!open && !add.isPending) onClose() }}>
@@ -543,12 +543,11 @@ function EnclosedProjectDialog({ enclosed, onClose }: { enclosed: ProjectEnclose
           aria-describedby={undefined}
           className="fixed left-1/2 top-1/2 z-[210] w-[460px] max-w-[90vw] -translate-x-1/2 -translate-y-1/2 rounded-xl border border-border bg-panel p-5 shadow-2xl shadow-shadow-ink/50 outline-none"
         >
-          <RadixDialog.Title className="mb-1 text-[14px] font-medium">That folder is inside {root}</RadixDialog.Title>
+          <RadixDialog.Title className="mb-1 text-[14px] font-medium">
+            {enclosed.rootRegistered ? `That folder is inside the “${root}” project` : `That folder is inside “${root}”`}
+          </RadixDialog.Title>
           <p className="mb-3.5 text-[12.5px] leading-relaxed text-muted">
-            <span className="font-mono text-fg/80">{enclosed.path}</span> sits inside{" "}
-            <span className="font-mono text-fg/80">{enclosed.root}</span>
-            {enclosed.rootRegistered ? ", which is already a project" : ", a repository root"}, so adding it would{" "}
-            {enclosed.rootRegistered ? "just open" : "add"} that instead. Add <span className="font-mono text-fg/80">{folder}</span> on its own to give it a separate board.
+            Create a separate project for <span className="font-mono text-fg/80">{enclosed.path}</span>?
           </p>
           {error ? <p className="mb-2 text-[11.5px] text-danger">{error}</p> : null}
           <div className="flex justify-end gap-2">
@@ -575,17 +574,13 @@ function EnclosedProjectDialog({ enclosed, onClose }: { enclosed: ProjectEnclose
               disabled={add.isPending}
               className="rounded-md border border-accent bg-accent-fill px-3 py-1.5 text-[12.5px] font-medium text-on-accent outline-none hover:brightness-110 focus-visible:ring-1 focus-visible:ring-focus-ink-60 disabled:opacity-50"
             >
-              {add.isPending ? "Adding…" : `Add ${folder} on its own`}
+              {add.isPending ? "Adding…" : "Create separate project"}
             </button>
           </div>
         </RadixDialog.Content>
       </RadixDialog.Portal>
     </RadixDialog.Root>
   )
-}
-
-function baseName(path: string): string {
-  return path.replace(/[\\/]+$/u, "").split(/[\\/]/u).pop() || path
 }
 
 /**

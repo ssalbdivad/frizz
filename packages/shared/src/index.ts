@@ -5358,8 +5358,14 @@ export const ProjectEnclosed = z.object({
   kind: z.literal("enclosed"),
   /** The folder that was chosen, resolved. */
   path: z.string(),
-  /** The root it would have resolved to. */
+  /**
+   * The project it belongs to: the nearest REGISTERED project above it, else the root it would have
+   * resolved to. A registered ancestor wins over a nearer unregistered root — `~/app/action/yes` names
+   * `~/app`, not the `~/app/action` package the operator never added.
+   */
   root: z.string(),
+  /** What the operator calls that root: the project's display name, or the folder's own name. */
+  rootName: z.string(),
   /** Whether that root is already a registered project (open it) or not yet (add it). */
   rootRegistered: z.boolean(),
 })
