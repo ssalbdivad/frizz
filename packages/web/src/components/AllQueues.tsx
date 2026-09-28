@@ -32,7 +32,7 @@ import { useQuery, useQueryClient } from "@tanstack/react-query"
 import { ArrowUpRight, Check, ChevronDown, Ellipsis, Inbox, Plus, TerminalSquare } from "lucide-react"
 import { Link, useLocation, useNavigate } from "react-router"
 import { useSnapshot } from "valtio"
-import type { ProjectQueue, ThreadView } from "@frizz/shared"
+import type { BoardSnapshot, ProjectQueue, ThreadView } from "@frizz/shared"
 import { rpc } from "../api/rpc.ts"
 import { displayTitle } from "../groups.ts"
 import { isBusy, liveQueue, overlayQueues, queuesProjects, threadKey, type QueuesProject } from "../lib/allQueues.ts"
@@ -56,7 +56,7 @@ import { BandLabel } from "./BandLabel.tsx"
 import { ProjectMenu, homeOf, useAddProject } from "./ProjectActions.tsx"
 import { StatusRow } from "./StatusRow.tsx"
 import { ThreadConnector } from "./ThreadConnector.tsx"
-import { DispatchForm } from "./NewThreadModal.tsx"
+import { DispatchForm, type DispatchDirs } from "./NewThreadModal.tsx"
 import { Menu, MenuContent, MenuItem, MenuTrigger } from "./ui/Menu.tsx"
 import { ProjectFilter, QueueBadge } from "./ProjectFilter.tsx"
 import { ThreadProjectScope } from "../api/threadApi.tsx"
@@ -93,6 +93,10 @@ export function AllQueuesPage() {
   const departed = useDepartedQueue(live, queues.dataUpdatedAt)
   const base = useMemo(() => queuesProjects(cards.data, queues.data, direction), [cards.data, queues.data, direction])
   const projects = useMemo(() => overlayQueues(base, [live, departed], direction), [base, live, departed, direction])
+  const focusProject = projects.find((project) => project.slug === focus)
+  // The directories the prompt box is keyed by — and so the ones a choice of project carries its draft
+  // OUT of, which the store's board cannot say while a quick run of ⇧Tab is ahead of the feed.
+  const dirs = composerDirs(focus, board, focusProject)
   const pickProject = usePickProject()
   // Set by a choice of project — in the picker, or ⇧Tab in the box — so the prompt box it just re-aimed
   // takes the keyboard when it lands, with the caret where it was in the box it replaced.
@@ -111,7 +115,7 @@ export function AllQueuesPage() {
       slug: next.slug,
       caret: { value: box.value, start: box.selectionStart ?? box.value.length, end: box.selectionEnd ?? box.value.length, direction: box.selectionDirection ?? "none" },
     })
-    pickProject(next)
+    pickProject(next, dirs?.projectDir)
   }
 
 
@@ -119,7 +123,7 @@ export function AllQueuesPage() {
   // A thread whose drawer is open is read THERE: its card would be a second copy of the same questions
   // and reply box under the sheet (the board's rule, store.ts slugsInThreadDrawers). Drawers belong to
   // the page project, so only the focus's cards can be hidden this way.
-  const focusId = projects.find((project) => project.slug === focus)?.id
+  const focusId = focusProject?.id
   const inDrawer = new Set(focusId === undefined ? [] : [...slugsInThreadDrawers(snap.drawers)].map((slug) => threadKey(focusId, slug)))
   const hidden = (key: string) => leaving.hidden(key) || inDrawer.has(key)
   // Registered projects this server has not opened (still being opened after a boot, served by another
@@ -159,7 +163,8 @@ export function AllQueuesPage() {
             <StatusRow crossProject view={<ViewFilter projects={projects} hidden={hidden} />} />
             <FocusedComposer
               focus={focus}
-              project={projects.find((project) => project.slug === focus)}
+              project={focusProject}
+              dirs={dirs}
               autoFocus={focusComposerFor !== null && focusComposerFor.slug === focus}
               caret={focusComposerFor?.caret}
               onFocused={clearFocusComposerFor}
@@ -169,7 +174,7 @@ export function AllQueuesPage() {
                   focus={focus}
                   onPick={(project) => {
                     setFocusComposerFor({ slug: project.slug })
-                    pickProject(project)
+                    pickProject(project, dirs?.projectDir)
                   }}
                 />
               }
@@ -287,7 +292,7 @@ function ProjectPicker({ projects, focus, onPick }: { projects: QueuesProject[];
         <div className="px-2.5 pb-1 pt-1.5 text-[10.5px] font-medium text-muted-55">Start in</div>
         <div className="max-h-[min(60vh,420px)] overflow-y-auto">
           {choices.map((project) => (
-            <MenuItem key={project.id} onSelect={() => onPick(project)} icon={<ProjectSquare project={project.card ?? fallbackCard(project)} size={14} />}>
+            <MenuItem key={project.id} value={project.slug} onSelect={() => onPick(project)} icon={<ProjectSquare project={project.card ?? fallbackCard(project)} size={14} />}>
               <span className={`min-w-0 flex-1 truncate ${project.slug === focus ? "text-fg" : ""}`}>{project.name}</span>
               {/* Choosable — opening its board may be exactly what brings it up — but not a surprise. */}
               {!project.open && <span className="shrink-0 text-[10.5px] text-muted-55">Not open</span>}
@@ -301,20 +306,22 @@ function ProjectPicker({ projects, focus, onPick }: { projects: QueuesProject[];
 }
 
 /**
- * CHOOSE the project a new thread goes to, in the prompt box's picker. Remembered as the pick
- * (lib/crossProject.ts), which `/` is focused on.
+ * CHOOSE the project a new thread goes to, in the prompt box's picker or with ⇧Tab in the box.
+ * Remembered as the pick (lib/crossProject.ts), which `/` is focused on.
  *
  * What was typed in the prompt box goes WITH the choice. The box is one box whose target just changed,
  * and the commonest reason to change it is noticing, mid-prompt, that it pointed at the wrong project —
  * a draft left filed under the old one looked like the text had been lost. It moves only into an empty
- * box, so a draft already waiting in the chosen project is never overwritten.
+ * box, so a draft already waiting in the chosen project is never overwritten. `from` is the directory
+ * the box's draft is filed under now (composerDirs): the store's board lags a quick run of choices, and
+ * reading the source there stranded the draft in whichever project the run passed through last.
  */
-function usePickProject(): (project: QueuesProject) => void {
+function usePickProject(): (project: QueuesProject, from: string | undefined) => void {
   const navigate = useNavigate()
   return useCallback(
-    (project: QueuesProject) => {
-      carryDraft(draftKey.dispatch, store.board?.projectDir, project.projectDir)
-      carryDraft(draftKey.command, store.board?.projectDir, project.projectDir)
+    (project: QueuesProject, from: string | undefined) => {
+      carryDraft(draftKey.dispatch, from, project.projectDir)
+      carryDraft(draftKey.command, from, project.projectDir)
       rememberCrossProjectFocus(project.id)
       // A drawer open on the page has it focused on the drawer's project, and the box follows the focus,
       // so aiming the box closes the drawers: home, where the focus is the pick.
@@ -373,6 +380,7 @@ function useDepartedQueue(live: ProjectQueue | undefined, polledAt: number): Pro
 function FocusedComposer({
   focus,
   project,
+  dirs,
   target,
   autoFocus,
   caret,
@@ -380,18 +388,13 @@ function FocusedComposer({
 }: {
   focus: string | undefined
   project: QueuesProject | undefined
+  /** composerDirs — undefined while neither the focus's board nor the poll can say. */
+  dirs: DispatchDirs | undefined
   target: ReactNode
   autoFocus: boolean
   caret: Caret | undefined
   onFocused: () => void
 }) {
-  const board = useBoard()
-  const landed = Boolean(focus) && board?.projectSlug === focus
-  const dirs = landed
-    ? { projectDir: board?.projectDir, homeDir: board?.homeDir }
-    : project?.open && project.projectDir
-      ? { projectDir: project.projectDir, homeDir: project.homeDir }
-      : undefined
   const ready = dirs !== undefined
   const [slow, setSlow] = useState(false)
   useEffect(() => {
@@ -430,6 +433,17 @@ function FocusedComposer({
     )
   }
   return <DispatchForm key={focus} autoFocus={autoFocus} target={target} dirs={dirs} />
+}
+
+/**
+ * The directories the prompt box's drafts are keyed by: the focus's own board once it has landed, and
+ * before that the poll's reading of the same snapshot (router.ts projectsQueues) for a project this
+ * server has open. Undefined while neither knows, and the box waits (FocusedComposer).
+ */
+function composerDirs(focus: string | undefined, board: BoardSnapshot | null, project: QueuesProject | undefined): DispatchDirs | undefined {
+  if (focus && board?.projectSlug === focus) return { projectDir: board.projectDir, homeDir: board.homeDir }
+  if (project?.open && project.projectDir) return { projectDir: project.projectDir, homeDir: project.homeDir }
+  return undefined
 }
 
 /** The new-thread box's two textareas — its Prompt tab and its Terminal tab. */
