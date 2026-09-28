@@ -1,11 +1,12 @@
 // THE THREADS, STRUNG ON THEIR PROJECTS — the cross-project page's rail, and one thread out of it.
 //
-// A faint two-strand cord hangs from each project's square down the rail's icon column, through the
-// indicator of every thread row under it, twisted once in each gap between two icons (lib/threadConnector.ts
-// `twist`): a project reads as its threads twisted together, before any row says what state it is in. It
-// passes BEHIND every icon — a mask cuts each icon's box out of it, so it never touches what an indicator
-// says — and both its ends hide behind one: the project's square at the top, its last thread's indicator
-// at the bottom. A project with no threads has no cord.
+// A faint two-strand cord, in the accent the thread out of the rail wears but at a fraction of its
+// strength (gold in the dark theme, blue in the light), hangs from each project's square down the rail's
+// icon column, through the indicator of every thread row under it, twisted once in each gap between two
+// icons (lib/threadConnector.ts `twist`): a project reads as its threads twisted together, before any row
+// says what state it is in. It passes BEHIND every icon — a mask cuts each icon's box out of it, so it
+// never touches what an indicator says — and both its ends hide behind one: the project's square at the
+// top, its last thread's indicator at the bottom. A project with no threads has no cord.
 //
 // Tried and dropped (2026-09-28), each on a seeded stack beside this one: a plain weave in the gutter
 // between the rail and the cards, a stub out of every row across strands running down it, which read as a
@@ -320,7 +321,7 @@ export function ThreadConnector({ activeKey }: { activeKey: string | null }) {
           <stop offset="1" className="[stop-color:var(--color-accent)] [stop-opacity:0]" />
         </linearGradient>
       </defs>
-      <g data-thread-cords fill="none" strokeWidth={1} mask="url(#frizz-thread-cords)" className="stroke-fg opacity-18">
+      <g data-thread-cords fill="none" strokeWidth={1} mask="url(#frizz-thread-cords)" className="stroke-accent opacity-30">
         <path ref={strandRefs[0]} />
         <path ref={strandRefs[1]} />
       </g>
