@@ -2,6 +2,9 @@ import { closeSync, fstatSync, lstatSync, openSync, readSync, realpathSync } fro
 import { basename, dirname } from "node:path"
 
 const OUTPUT_TAIL_BYTES = 512 * 1024
+// One DELTA read by the drawer's poll. A chatty dev server writes tens of KB between 1.5s polls; past
+// this the reply says `more` and the client asks again at once rather than taking one huge response.
+const DELTA_READ_BYTES = 256 * 1024
 // One delta read. Sized so a chatty dev server (tens of KB between 1.5s polls) is one syscall.
 const SCAN_CHUNK_BYTES = 256 * 1024
 // The most this will ever scan for ONE file, across its whole life. A first sight of an already-huge
@@ -58,31 +61,96 @@ export function vetHarnessOutputPath(path: string, taskId: string | undefined): 
 
 export interface BackgroundShellOutput {
   output: string
+  /** The read began past byte 0 — earlier output exists and was not sent. */
   truncated: boolean
+  /** The byte offset the NEXT read passes as `from`. Never inside a UTF-8 sequence. */
+  end: number
+  /** `from` was past the end of the file: it shrank or was replaced, so this read started over. */
+  reset: boolean
+  /** A delta read stopped at its cap with more already on disk — ask again at once. */
+  more: boolean
+}
+
+export interface ReadShellOutputOptions {
+  /** Resume here (a previous read's `end`). Absent ⇒ a FIRST read: the newest `maxBytes`. */
+  from?: number
+  /** Keep the bytes as written — ANSI colour and bare `\r` — for a terminal emulator that renders them. */
+  raw?: boolean
+  maxBytes?: number
+  deltaBytes?: number
+}
+
+// The byte length of `buf` with any trailing, INCOMPLETE UTF-8 sequence cut off: the writer may be mid-way
+// through a character, or a read cap may split one. The cut bytes are simply read again next time.
+function completeUtf8Length(buf: Buffer): number {
+  const n = buf.length
+  for (let back = 1; back <= Math.min(4, n); back++) {
+    const byte = buf[n - back]!
+    if ((byte & 0xc0) === 0x80) continue // a continuation byte — keep looking for its lead
+    const need = byte < 0x80 ? 1 : (byte & 0xe0) === 0xc0 ? 2 : (byte & 0xf0) === 0xe0 ? 3 : (byte & 0xf8) === 0xf0 ? 4 : 1
+    return back >= need ? n : n - back
+  }
+  return n // nothing but continuation bytes — not UTF-8 we can repair; hold nothing back
+}
+
+function readAt(fd: number, offset: number, length: number): Buffer {
+  const buffer = Buffer.alloc(length)
+  let read = 0
+  while (read < length) {
+    const count = readSync(fd, buffer, read, length - read, offset + read)
+    if (count === 0) break
+    read += count
+  }
+  return buffer.subarray(0, read)
 }
 
 // Background task files are an undifferentiated process stream: Claude does not preserve stdout vs
-// stderr channel identity. Read only the newest bounded tail so a long-lived server cannot make one
-// drawer allocate or render an unbounded log. ANSI/OSC controls are presentation noise in a plain DOM
-// surface; carriage-return progress updates become readable lines instead of overprinting.
-export function readBackgroundShellOutput(path: string, maxBytes = OUTPUT_TAIL_BYTES): BackgroundShellOutput {
+// stderr channel identity. Read a bounded window so a long-lived server cannot make one drawer allocate
+// or render an unbounded log.
+//
+// TWO MODES. A FIRST read (no `from`) takes the newest `maxBytes` and, when that starts past byte 0,
+// opens just after the first line break in the window — so the view never begins mid-line or inside an
+// escape sequence. A DELTA read (`from`) takes what arrived since, capped at `deltaBytes` with `more` set
+// when the cap bit; a file now SHORTER than `from` was truncated or replaced, so it answers `reset` and
+// starts over as a first read. Either way `end` is backed off to a whole UTF-8 character, so polling by
+// offset never splits one.
+//
+// `raw` hands the bytes over as written, for the drawer's xterm, which renders colour and redraws a
+// `\r` progress line itself. Without it ANSI/OSC controls are stripped (presentation noise in a plain
+// DOM surface) and a bare `\r` becomes a line break — the same rewrite the line counter below counts,
+// so the two agree.
+export function readBackgroundShellOutput(path: string, opts: ReadShellOutputOptions = {}): BackgroundShellOutput {
+  const maxBytes = opts.maxBytes ?? OUTPUT_TAIL_BYTES
+  const deltaBytes = opts.deltaBytes ?? DELTA_READ_BYTES
+  const decode = (bytes: Buffer) => {
+    const text = bytes.toString("utf8")
+    return opts.raw ? text : text.replace(ANSI_ESCAPE_RE, "").replace(/\r(?!\n)/g, "\n")
+  }
   let fd: number | undefined
   try {
     fd = openSync(path, "r")
     const size = fstatSync(fd).size
-    const length = Math.min(size, maxBytes)
-    const offset = Math.max(0, size - length)
-    const buffer = Buffer.alloc(length)
-    let read = 0
-    while (read < length) {
-      const count = readSync(fd, buffer, read, length - read, offset + read)
-      if (count === 0) break
-      read += count
+    const reset = opts.from !== undefined && size < opts.from
+    if (opts.from !== undefined && !reset) {
+      const length = Math.min(size - opts.from, deltaBytes)
+      const bytes = readAt(fd, opts.from, length)
+      const whole = completeUtf8Length(bytes)
+      return { output: decode(bytes.subarray(0, whole)), truncated: false, end: opts.from + whole, reset: false, more: opts.from + length < size }
     }
-    const output = buffer.subarray(0, read).toString("utf8").replace(ANSI_ESCAPE_RE, "").replace(/\r(?!\n)/g, "\n")
-    return { output, truncated: offset > 0 }
+    const length = Math.min(size, maxBytes)
+    const offset = size - length
+    const bytes = readAt(fd, offset, length)
+    let start = 0
+    if (offset > 0) {
+      const lineBreak = bytes.indexOf(0x0a)
+      if (lineBreak !== -1) start = lineBreak + 1
+      // One enormous line (a progress bar that only ever `\r`s): keep it, but never open on half a character.
+      else while (start < bytes.length && (bytes[start]! & 0xc0) === 0x80) start++
+    }
+    const whole = completeUtf8Length(bytes)
+    return { output: decode(bytes.subarray(start, Math.max(start, whole))), truncated: offset > 0, end: offset + whole, reset, more: false }
   } catch {
-    return { output: "", truncated: false }
+    return { output: "", truncated: false, end: 0, reset: false, more: false }
   } finally {
     if (fd !== undefined) closeSync(fd)
   }

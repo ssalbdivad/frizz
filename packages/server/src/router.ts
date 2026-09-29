@@ -1782,7 +1782,10 @@ export function createRouter(ctx: AppContext) {
     // A live/recent background shell's command and combined process output. The tailer supplies the
     // scoped path; the reader caps the response so long-lived watchers/dev servers stay cheap.
     backgroundShellOutput: query({
-      input: z.object({ slug: ThreadSlug, id: z.string() }).strict(),
+      // `from` resumes a read at a previous reply's `end` — the agent-terminal drawer's poll, which
+      // appends only what arrived since. `raw` keeps colour and bare `\r` for its xterm. Both optional:
+      // absent, this is the whole-tail read every older caller makes.
+      input: z.object({ slug: ThreadSlug, id: z.string().max(128), from: z.number().int().nonnegative().optional(), raw: z.boolean().optional() }).strict(),
       output: z.object({
         command: z.string().nullable(),
         output: z.string(),
@@ -1796,22 +1799,32 @@ export function createRouter(ctx: AppContext) {
         // A path WAS named for this shell and nothing the vet accepts is readable there — a forged ack,
         // or a task log tmp cleanup removed. Optional, so a pre-change client parses unchanged.
         missing: z.boolean().optional(),
+        // The offset read's cursor (background-shell-output.ts readBackgroundShellOutput): where the next
+        // read starts, whether this one started over on a shrunk file, and whether more is waiting.
+        end: z.number().optional(),
+        reset: z.boolean().optional(),
+        more: z.boolean().optional(),
       }),
       handler: async ({ input }) => {
         // The path is never input: the tailer resolves it from this thread's own fold and vets it
         // (tailer.ts backgroundShellLookup), so an id belonging to another thread answers "gone".
         const info = ctx.tailer.backgroundShell?.(input.slug, input.id)
         if (!info) return { command: null, output: "", truncated: false, state: "gone" as const, stoppable: false, stopNote: null }
-        const content = info.outputFile ? readBackgroundShellOutput(info.outputFile) : { output: "", truncated: false }
+        const content = info.outputFile ? readBackgroundShellOutput(info.outputFile, { from: input.from, raw: input.raw }) : undefined
         const stop = subAgentStoppable(input.slug, input.id)
         return {
           command: info.command ?? null,
-          output: content.output,
-          truncated: content.truncated,
+          output: content?.output ?? "",
+          truncated: content?.truncated ?? false,
           state: info.state,
           stoppable: stop.sessionId !== null,
           stopNote: stop.sessionId === null ? stop.note : null,
           ...(info.outputNamed && !info.outputFile ? { missing: true } : {}),
+          // With no readable file the cursor stays where the caller left it, so a log that appears later
+          // is read from the start.
+          end: content?.end ?? input.from ?? 0,
+          ...(content?.reset ? { reset: true } : {}),
+          ...(content?.more ? { more: true } : {}),
         }
       },
     }),

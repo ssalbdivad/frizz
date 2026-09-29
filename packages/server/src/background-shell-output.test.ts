@@ -9,10 +9,15 @@ test("background shell output reads a bounded, presentation-safe tail", () => {
   const dir = mkdtempSync(join(tmpdir(), "frizz-shell-output-"))
   try {
     const path = join(dir, "task.output")
+    // 37 bytes; the window is the last 24, which hold no line break — one long overprinted line is kept
+    // whole rather than dropped.
     writeFileSync(path, `discard-me\n12345\u001b[31mred\u001b[0m\rprogress`)
-    assert.deepEqual(readBackgroundShellOutput(path, 24), {
+    assert.deepEqual(readBackgroundShellOutput(path, { maxBytes: 24 }), {
       output: "345red\nprogress",
       truncated: true,
+      end: 37,
+      reset: false,
+      more: false,
     })
   } finally {
     rmSync(dir, { recursive: true, force: true })
@@ -20,7 +25,82 @@ test("background shell output reads a bounded, presentation-safe tail", () => {
 })
 
 test("background shell output degrades safely when the task file is unavailable", () => {
-  assert.deepEqual(readBackgroundShellOutput("/definitely/missing/frizz-shell-output"), { output: "", truncated: false })
+  assert.deepEqual(readBackgroundShellOutput("/definitely/missing/frizz-shell-output"), { output: "", truncated: false, end: 0, reset: false, more: false })
+})
+
+// ── READING BY OFFSET — the agent-terminal drawer's poll ──────────────────────────────────────────
+
+function withShellFile(run: (path: string) => void): void {
+  const dir = mkdtempSync(join(tmpdir(), "frizz-shell-delta-"))
+  try {
+    run(join(dir, "task.output"))
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
+}
+
+test("a delta read returns only what arrived since `from`, and `end` is where the next one starts", () => {
+  withShellFile((path) => {
+    writeFileSync(path, "one\ntwo\n")
+    const first = readBackgroundShellOutput(path)
+    assert.deepEqual(first, { output: "one\ntwo\n", truncated: false, end: 8, reset: false, more: false })
+    appendFileSync(path, "three\n")
+    assert.deepEqual(readBackgroundShellOutput(path, { from: first.end }), { output: "three\n", truncated: false, end: 14, reset: false, more: false })
+    assert.deepEqual(readBackgroundShellOutput(path, { from: 14 }), { output: "", truncated: false, end: 14, reset: false, more: false }, "nothing new is an empty read, not a re-send")
+  })
+})
+
+test("a file SHORTER than `from` was truncated or replaced: the read says reset and starts over", () => {
+  withShellFile((path) => {
+    writeFileSync(path, "a long first run of output\n")
+    const before = readBackgroundShellOutput(path)
+    writeFileSync(path, "fresh\n")
+    assert.deepEqual(readBackgroundShellOutput(path, { from: before.end }), { output: "fresh\n", truncated: false, end: 6, reset: true, more: false })
+  })
+})
+
+test("a delta read stops at its cap with `more`, and the next one picks up exactly there", () => {
+  withShellFile((path) => {
+    writeFileSync(path, "0123456789abcdef")
+    const a = readBackgroundShellOutput(path, { from: 0, deltaBytes: 10 })
+    assert.deepEqual(a, { output: "0123456789", truncated: false, end: 10, reset: false, more: true })
+    const b = readBackgroundShellOutput(path, { from: a.end, deltaBytes: 10 })
+    assert.deepEqual(b, { output: "abcdef", truncated: false, end: 16, reset: false, more: false })
+  })
+})
+
+test("raw keeps colour and the bare \\r a terminal redraws with; the default still strips both", () => {
+  withShellFile((path) => {
+    writeFileSync(path, "\u001b[32mtick\u001b[0m 1\r10%\r20%\n")
+    assert.equal(readBackgroundShellOutput(path, { raw: true }).output, "\u001b[32mtick\u001b[0m 1\r10%\r20%\n")
+    assert.equal(readBackgroundShellOutput(path).output, "tick 1\n10%\n20%\n")
+  })
+})
+
+test("a first read that starts mid-file opens after the first line break, never mid-line", () => {
+  withShellFile((path) => {
+    writeFileSync(path, "line one is long\nline two\nline three\n")
+    // The window's last 24 bytes begin at "ong\n" — the tail of line one — which is dropped.
+    assert.deepEqual(readBackgroundShellOutput(path, { maxBytes: 24 }), { output: "line two\nline three\n", truncated: true, end: 37, reset: false, more: false })
+  })
+})
+
+test("`end` never splits a multi-byte character — the rest is read next time", () => {
+  withShellFile((path) => {
+    const e = Buffer.from("é") // 2 bytes
+    const smile = Buffer.from("🙂") // 4 bytes
+    writeFileSync(path, Buffer.concat([Buffer.from("a"), e.subarray(0, 1)]))
+    const first = readBackgroundShellOutput(path, { from: 0 })
+    assert.deepEqual(first, { output: "a", truncated: false, end: 1, reset: false, more: false }, "half an é is held back")
+    appendFileSync(path, Buffer.concat([e.subarray(1), smile.subarray(0, 3)]))
+    const second = readBackgroundShellOutput(path, { from: first.end })
+    assert.deepEqual(second, { output: "é", truncated: false, end: 3, reset: false, more: false }, "three quarters of 🙂 are held back")
+    appendFileSync(path, smile.subarray(3))
+    assert.equal(readBackgroundShellOutput(path, { from: second.end }).output, "🙂")
+    // A delta CAP landing mid-character backs off the same way.
+    writeFileSync(path, Buffer.concat([Buffer.from("ab"), smile]))
+    assert.deepEqual(readBackgroundShellOutput(path, { from: 0, deltaBytes: 4 }), { output: "ab", truncated: false, end: 2, reset: false, more: true })
+  })
 })
 
 // ── THE LIVE COUNTER on a shell row ──────────────────────────────────────────────────────────────

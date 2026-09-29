@@ -1,6 +1,6 @@
 import { test } from "node:test"
 import assert from "node:assert/strict"
-import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs"
+import { appendFileSync, mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { Bus } from "./bus.ts"
@@ -116,6 +116,31 @@ test("another thread's shell id answers gone — the lookup never leaves the nam
     // …and asked through ANOTHER thread's slug, the same id is nothing at all.
     const out = await s.router.backgroundShellOutput.handler({ input: { slug: "t", id: "toolu_u" } })
     assert.deepEqual(out, { command: null, output: "", truncated: false, state: "gone", stoppable: false, stopNote: null })
+  } finally {
+    s.cleanup()
+    rmSync(root, { recursive: true, force: true })
+  }
+})
+
+// The agent-terminal drawer's poll: a raw first read, then only what arrived since, by offset.
+test("the drawer streams a shell's log by offset, raw", async () => {
+  const root = realpathSync(mkdtempSync(join(tmpdir(), "frizz-stream-")))
+  const tasks = join(root, "tasks")
+  mkdirSync(tasks, { recursive: true })
+  const log = join(tasks, "bs1.output")
+  writeFileSync(log, "\u001b[32mtick\u001b[0m 1\n")
+  const s = stack({ t: { sessionId: "sid", lines: [backgroundBash("toolu_s", "loop"), result("toolu_s", `Command running in background with ID: bs1. Output is being written to: ${log}. You will be notified when it completes.`)] } })
+  try {
+    const first = await s.router.backgroundShellOutput.handler({ input: { slug: "t", id: "toolu_s", raw: true } })
+    assert.equal(first.output, "\u001b[32mtick\u001b[0m 1\n", "raw keeps the colour for xterm")
+    assert.equal(first.end, 16)
+    appendFileSync(log, "\u001b[32mtick\u001b[0m 2\n")
+    const next = await s.router.backgroundShellOutput.handler({ input: { slug: "t", id: "toolu_s", raw: true, from: first.end } })
+    assert.equal(next.output, "\u001b[32mtick\u001b[0m 2\n", "only the new line comes back")
+    assert.equal(next.end, 32)
+    assert.equal(next.reset, undefined)
+    // The plain read an older client makes is unchanged: colour stripped, the whole tail.
+    assert.equal((await s.router.backgroundShellOutput.handler({ input: { slug: "t", id: "toolu_s" } })).output, "tick 1\ntick 2\n")
   } finally {
     s.cleanup()
     rmSync(root, { recursive: true, force: true })
