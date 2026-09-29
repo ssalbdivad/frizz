@@ -473,6 +473,29 @@ export interface ThreadWatchRow {
   settled_at: number | null
 }
 
+/** One background shell's RUNTIME-BUDGET bookkeeping (shell-budget.ts, 2026-09-29). Written lazily —
+ *  only when the worker extends a shell or frizz warns about one — so a shell that finishes inside its
+ *  launch budget never gets a row at all.
+ *
+ *  `started_at` is the shell's own launch instant and is part of its identity: a codex `processId` can
+ *  recur across sessions of one thread, and a row recorded for an earlier shell under the same id must
+ *  never extend, or silence, a later one. Readers ignore a row whose instant disagrees. */
+export interface ShellBudgetRow {
+  thread_slug: string
+  /** BgShellView.id — the launch tool_use id (Claude) or the app-server `processId` (codex). */
+  shell_id: string
+  started_at: string
+  /** Epoch ms the budget now ends at, set by `extend_shell`. NULL ⇒ the launch budget stands. */
+  deadline_at: number | null
+  /** When the over-budget warning was queued, and the deadline it was queued FOR. A deadline that has
+   *  since moved (an extension) no longer matches, which is what re-arms the next warning. */
+  warned_at: number | null
+  warned_deadline: number | null
+  /** When frizz enforced the budget. Informational: the stop retires the shell from tracking. */
+  stopped_at: number | null
+  updated_at: number
+}
+
 /** A worker's registered QUESTION for the human — one row per ROOT question, its follow-up tree inside
  *  `spec` (plans/rest-by-registration.md, 2026-08-26).
  *
@@ -762,6 +785,16 @@ export interface Storage {
   /** The watched thing finished on its own — the runtime already woke the thread, so this only records
    *  that the row is no longer a reason to wait. */
   settleThreadWatch(id: string, settledAtMs: number, state?: "expired" | "settled"): boolean
+  // ---- BACKGROUND-SHELL RUNTIME BUDGETS (shell-budget.ts) --------------------------------------------
+  getShellBudget(slug: string, shellId: string): ShellBudgetRow | undefined
+  /** Every recorded budget row on one thread — the `activity` readout's single read. */
+  listShellBudgets(slug: string): ShellBudgetRow[]
+  /** `extend_shell`: the budget now ends at `deadlineAtMs`. Upserts; a row for a different shell under
+   *  the same id (another `startedAt`) is replaced outright. */
+  extendShellBudget(input: { slug: string; shellId: string; startedAt: string; deadlineAtMs: number; nowMs: number }): void
+  /** The scheduler queued the over-budget warning for `deadlineMs`. */
+  markShellBudgetWarned(input: { slug: string; shellId: string; startedAt: string; deadlineMs: number; nowMs: number }): void
+  markShellBudgetStopped(input: { slug: string; shellId: string; startedAt: string; nowMs: number }): void
   // ---- THE WORKER'S REGISTERED QUESTIONS -----------------------------------------------------------
   /** Register one root question. Never idempotent, unlike a watch: two identically-worded questions are
    *  two things the human owes an answer to, and collapsing them would silently drop one. */
@@ -1292,6 +1325,21 @@ export const STORAGE_SCHEMA = `
     );
     CREATE INDEX IF NOT EXISTS subagent_steer_timeline
       ON subagent_steer(project_id, thread_slug, subagent_id, sent_at);
+    -- A background shell's RUNTIME BUDGET bookkeeping (2026-09-29, shell-budget.ts): the worker's
+    -- extend_shell deadline and frizz's own warned/stopped marks, so neither an extension nor the
+    -- one-warning-per-deadline rule is lost to a restart. Written lazily; see ShellBudgetRow.
+    CREATE TABLE IF NOT EXISTS shell_budget (
+      project_id      TEXT NOT NULL,
+      thread_slug     TEXT NOT NULL,
+      shell_id        TEXT NOT NULL,
+      started_at      TEXT NOT NULL,
+      deadline_at     INTEGER,
+      warned_at       INTEGER,
+      warned_deadline INTEGER,
+      stopped_at      INTEGER,
+      updated_at      INTEGER NOT NULL,
+      PRIMARY KEY (project_id, thread_slug, shell_id)
+    );
     -- A TERMINAL COMMAND thread (2026-09-23): a shell command the human started from the prompt box's
     -- Terminal tab, whose pty the control plane owns (command-threads.ts). Only the DEFINITION and the
     -- last run's outcome are durable — the pty is a child of the server and dies with it, so a row whose
@@ -1321,7 +1369,7 @@ export const STORAGE_SCHEMA = `
 export const STORAGE_TABLES = [
   "session", "settings", "tombstone", "adoption_claim", "adoption_retired_attempt", "retired_op",
   "thread_timer", "pr_watch", "thread_watch", "thread_question", "thread_done", "subagent_steer", "thread_link",
-  "command_thread",
+  "command_thread", "shell_budget",
 ] as const
 
 /** Idempotent; run by every createStorage and by frizz-db.ts before an import. */
@@ -1899,6 +1947,26 @@ export function createStorage(source: string | Database, projectId: string): Sto
     WHERE project_id = @project_id AND id = ? AND state = 'armed'
   `)
   const delThreadWatches = scope.prepare("DELETE FROM thread_watch WHERE project_id = @project_id AND thread_slug = ?")
+  const shellBudgetStmt = scope.prepare<[string, string], ShellBudgetRow>(
+    "SELECT * FROM shell_budget WHERE project_id = @project_id AND thread_slug = ? AND shell_id = ?",
+  )
+  const shellBudgetsBySlugStmt = scope.prepare<[string], ShellBudgetRow>(
+    "SELECT * FROM shell_budget WHERE project_id = @project_id AND thread_slug = ?",
+  )
+  // One upsert per mark. A row whose started_at differs belongs to an EARLIER shell that used this id,
+  // so the conflict branch resets every mark it does not itself set rather than inheriting them.
+  const upsertShellBudgetStmt = scope.prepare(`
+    INSERT INTO shell_budget (project_id, thread_slug, shell_id, started_at, deadline_at, warned_at, warned_deadline, stopped_at, updated_at)
+    VALUES (@project_id, @slug, @shellId, @startedAt, @deadlineAt, @warnedAt, @warnedDeadline, @stoppedAt, @nowMs)
+    ON CONFLICT (project_id, thread_slug, shell_id) DO UPDATE SET
+      deadline_at     = CASE WHEN @setDeadline = 1 THEN excluded.deadline_at WHEN started_at = excluded.started_at THEN deadline_at ELSE NULL END,
+      warned_at       = CASE WHEN @setWarned = 1 THEN excluded.warned_at WHEN started_at = excluded.started_at THEN warned_at ELSE NULL END,
+      warned_deadline = CASE WHEN @setWarned = 1 THEN excluded.warned_deadline WHEN started_at = excluded.started_at THEN warned_deadline ELSE NULL END,
+      stopped_at      = CASE WHEN @setStopped = 1 THEN excluded.stopped_at WHEN started_at = excluded.started_at THEN stopped_at ELSE NULL END,
+      started_at      = excluded.started_at,
+      updated_at      = excluded.updated_at
+  `)
+  const delShellBudgets = scope.prepare("DELETE FROM shell_budget WHERE project_id = @project_id AND thread_slug = ?")
   const askThreadQuestionStmt = scope.prepare(`
     INSERT INTO thread_question (project_id, id, thread_slug, spec, state, answer, delivered, asked_at, settled_at)
     VALUES (@project_id, @id, @slug, @spec, 'open', NULL, 0, @askedAtMs, NULL)
@@ -2053,6 +2121,7 @@ export function createStorage(source: string | Database, projectId: string): Sto
     // to wake, and the scheduler polls every armed row.
     delPrWatches.run(existing.slug)
     delThreadWatches.run(existing.slug)
+    delShellBudgets.run(existing.slug)
     delThreadLinks.run(existing.slug)
     delThreadQuestions.run(existing.slug)
     delThreadDone.run(existing.slug)
@@ -2682,6 +2751,20 @@ export function createStorage(source: string | Database, projectId: string): Sto
     getThreadWatch: (id) => threadWatchByIdStmt.get(id),
     expiredThreadWatches: (nowMs) => expiredThreadWatchesStmt.all(nowMs),
     armedThreadWatches: () => armedThreadWatchesStmt.all(),
+    getShellBudget: (slug, shellId) => shellBudgetStmt.get(slug, shellId),
+    listShellBudgets: (slug) => shellBudgetsBySlugStmt.all(slug),
+    extendShellBudget: (i) => void upsertShellBudgetStmt.run({
+      slug: i.slug, shellId: i.shellId, startedAt: i.startedAt, nowMs: i.nowMs,
+      deadlineAt: i.deadlineAtMs, warnedAt: null, warnedDeadline: null, stoppedAt: null, setDeadline: 1, setWarned: 0, setStopped: 0,
+    }),
+    markShellBudgetWarned: (i) => void upsertShellBudgetStmt.run({
+      slug: i.slug, shellId: i.shellId, startedAt: i.startedAt, nowMs: i.nowMs,
+      deadlineAt: null, warnedAt: i.nowMs, warnedDeadline: i.deadlineMs, stoppedAt: null, setDeadline: 0, setWarned: 1, setStopped: 0,
+    }),
+    markShellBudgetStopped: (i) => void upsertShellBudgetStmt.run({
+      slug: i.slug, shellId: i.shellId, startedAt: i.startedAt, nowMs: i.nowMs,
+      deadlineAt: null, warnedAt: null, warnedDeadline: null, stoppedAt: i.nowMs, setDeadline: 0, setWarned: 0, setStopped: 1,
+    }),
     askThreadQuestion: (q) => {
       askThreadQuestionStmt.run(q)
       return threadQuestionByIdStmt.get(q.id)!

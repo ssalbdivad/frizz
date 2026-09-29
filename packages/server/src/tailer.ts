@@ -36,6 +36,7 @@ import {
 } from "./tail-cache.ts"
 import { log as frizzLog } from "./logging.ts"
 import { frizzTempDir } from "./frizz-paths.ts"
+import { SHELL_BUDGET_DEFAULT_MS, shellLaunchBudgetMs } from "./shell-budget.ts"
 
 // The JSONL tailer: incrementally reads each registered session's Claude Code transcript
 // (~/.claude/projects/<cwdSlug>/<session_id>.jsonl) to derive liveness telemetry — last activity
@@ -452,6 +453,11 @@ interface SubAgentEntry {
   label: string // the dispatch's input.description (shell: falls back to the command's first-line summary)
   startedAt: string // ISO8601 — the dispatch record's timestamp
   command?: string // shell only: raw launch command for the read-only output drawer
+  // Shell only: the Bash `timeout` the launch carried, RAW (ms) — the worker's declared runtime budget
+  // (shell-budget.ts). Stored raw and clamped in the view, so a change to the clamp needs no re-fold.
+  timeoutMs?: number
+  // Shell only: this entry is a `Monitor`, which carries no budget (see shell-budget.ts).
+  monitor?: true
   subagentType?: string // the dispatch's input.subagent_type verbatim (agents only; may be absent)
   outputFile?: string // the child/shell's output path (from the launch tool_result); its mtime = liveness
   // Transcript SCHEMA of `outputFile` when it isn't Claude's own JSONL. A codex sub-agent's output file
@@ -499,6 +505,10 @@ export interface BgShellView {
   /** The runtime's own background-task handle — the id the MODEL was given, and therefore the one a
    *  `shell` watcher is registered against. Full contract on the shared schema. */
   taskId?: string
+  /** The runtime budget this shell LAUNCHED with (shell-budget.ts): its Bash `timeout`, clamped, else the
+   *  1h default. Absent ⇒ no budget at all (a `Monitor`). An `extend_shell` never rewrites this — the
+   *  extension is a durable row the scheduler reads beside it. Full contract on the shared schema. */
+  budgetMs?: number
 }
 
 /** A background shell that has FINISHED, in the shape the scheduler's watcher pass matches against.
@@ -1065,7 +1075,7 @@ function trackDispatches(state: TailState, rec: Record): void {
     // shell never gets a terminal record — so without this line every re-prime mints the row afresh
     // and it reads "running" forever. See FoldState.dismissedOps.
     if (state.dismissedOps.has(id)) continue
-    const input = (b.input ?? {}) as { description?: unknown; run_in_background?: unknown; subagent_type?: unknown; model?: unknown; command?: unknown; summary?: unknown }
+    const input = (b.input ?? {}) as { description?: unknown; run_in_background?: unknown; subagent_type?: unknown; model?: unknown; command?: unknown; summary?: unknown; timeout?: unknown }
     const startedAt = typeof rec.timestamp === "string" ? rec.timestamp : (state.lastActivityAt ?? "")
     const previous = state.subAgents.get(id)
     const outputFile = previous?.outputFile
@@ -1079,7 +1089,10 @@ function trackDispatches(state: TailState, rec: Record): void {
       state.subAgents.set(id, { kind: "agent", toolUseId: id, label: desc ?? "sub-agent", startedAt, subagentType, outputFile })
     } else if ((b.name === "Bash" && input.run_in_background === true) || b.name === "Monitor") {
       const command = typeof input.command === "string" ? input.command : previous?.command
-      state.subAgents.set(id, { kind: "shell", toolUseId: id, label: desc ?? shellSummary(input.command), startedAt, command, outputFile, taskId: previous?.taskId })
+      // The launch's `timeout` is the worker's DECLARED budget for a background Bash (shell-budget.ts);
+      // a Monitor's own timeout means something else, and it carries no budget at all.
+      const timeoutMs = b.name === "Bash" && typeof input.timeout === "number" ? input.timeout : undefined
+      state.subAgents.set(id, { kind: "shell", toolUseId: id, label: desc ?? shellSummary(input.command), startedAt, command, outputFile, taskId: previous?.taskId, ...(timeoutMs !== undefined ? { timeoutMs } : {}), ...(b.name === "Monitor" ? { monitor: true as const } : {}) })
     } else if (b.name === "Bash") {
       // A FOREGROUND Bash — not a background op, and normally none of this map's business. But Claude
       // Code auto-backgrounds one that outlives its `timeout`, and only the RESULT says so, so park the
@@ -2978,7 +2991,11 @@ export function createTailer(deps: TailerDeps): Tailer {
       // positively confirmed nobody is running. `ToolStatusMeta` and the drawer have rendered a "stale"
       // shell all along; nothing ever produced one, because this was a literal "running".
       const shellState = shellIsGone(e) ? "stale" as const : "running" as const
-      out.push({ label: e.label, startedAt: e.startedAt, state: shellState, id: e.toolUseId, ...(e.taskId ? { stoppable: true, taskId: e.taskId } : {}), ...(lastActivityAt ? { lastActivityAt } : {}) })
+      // The budget is resolved HERE, off the raw launch `timeout`, rather than folded — see
+      // SubAgentEntry.timeoutMs. An auto-backgrounded foreground Bash carries none: its `timeout` was the
+      // foreground wait it outlived, not a lifetime anyone chose, so it takes the default.
+      const budget = e.monitor ? {} : { budgetMs: shellLaunchBudgetMs(e.timeoutMs) }
+      out.push({ label: e.label, startedAt: e.startedAt, state: shellState, id: e.toolUseId, ...(e.taskId ? { stoppable: true, taskId: e.taskId } : {}), ...(lastActivityAt ? { lastActivityAt } : {}), ...budget })
     }
     return out
   }
@@ -3031,6 +3048,9 @@ export function createTailer(deps: TailerDeps): Tailer {
       state: "running" as const,
       id: exec.processId,
       stoppable: true,
+      // Codex has no launch-time knob for a lifetime, so every background exec takes the default and is
+      // extended the same way a Claude shell is (shell-budget.ts).
+      budgetMs: SHELL_BUDGET_DEFAULT_MS,
       // Codex hands a yielded command's output back only when the MODEL polls it — there is no file
       // for frizz to tail, so the row carries its × and no drill-in rather than opening a drawer that
       // could only say "unavailable".

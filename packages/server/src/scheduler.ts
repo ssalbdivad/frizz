@@ -14,6 +14,7 @@ import { createWakeDeliveryStore, WAKE_QUIET_WINDOW_MS, type WakeDelivery } from
 // or the two disagree about whether a thread is finished.
 import { answersInFlight, registeredDoneFence, safeQuestionAnswer, safeQuestionSpec } from "./board.ts"
 import { ProducerStoppedError } from "./shutdown.ts"
+import { liveShellBudget, SHELL_BUDGET_GRACE_MS, shellBudgetWarningMessage, type ShellStopReason } from "./shell-budget.ts"
 import { completionsDueForRelay, relayMessage } from "./completion-relay.ts"
 import {
   createGithubReviewFetcher,
@@ -920,6 +921,23 @@ function isShellFenceId(fenceId: string): boolean {
   return fenceId.startsWith(`${SHELL_FENCE_PREFIX}:`)
 }
 
+/** An over-budget background shell's delivery namespace (SOURCE 13). Keyed on the DEADLINE as well as
+ *  the shell, because the deadline is the generation: an `extend_shell` moves it, which both supersedes a
+ *  warning still queued for the old one and earns the new one its own warning. The deadline leads so the
+ *  shell id — an opaque runtime string — can hold anything. (`shell-budget:` is not a `shell:` prefix, so
+ *  the completion namespace above never claims one of these.) */
+const SHELL_BUDGET_FENCE_PREFIX = "shell-budget"
+function shellBudgetFenceId(shellId: string, deadlineMs: number): string {
+  return `${SHELL_BUDGET_FENCE_PREFIX}:${deadlineMs}:${shellId}`
+}
+function isShellBudgetFenceId(fenceId: string): boolean {
+  return fenceId.startsWith(`${SHELL_BUDGET_FENCE_PREFIX}:`)
+}
+function parseShellBudgetFenceId(fenceId: string): { shellId: string; deadlineMs: number } | undefined {
+  const m = /^shell-budget:(\d+):(.+)$/.exec(fenceId)
+  return m ? { deadlineMs: Number(m[1]), shellId: m[2]! } : undefined
+}
+
 /** The delivery namespace of an INTERRUPT that ended background sub-agents (SOURCE 10). Keyed on the
  *  interrupt's own instant: one interrupt, one note, however many children it took with it. The router
  *  enqueues it (followUp `interrupt` / deliverQueuedNow) once the tailer has confirmed the children are
@@ -1231,6 +1249,14 @@ export interface SchedulerDeps {
   retryMaxMs?: number
   maxDeliveryAttempts?: number
   deliveryBatchSize?: number
+  // THE RUNTIME BUDGET'S TEETH (SOURCE 13, shell-budget.ts): whether frizz can end one live shell, and
+  // the ONE stop that ends it — shell-stop.ts, the operator's × path, so a budget kill tells the worker
+  // exactly as that one does. Absent ⇒ every over-budget shell is warned and none is ever stopped, which
+  // is also the honest behaviour for a composition with no control channel.
+  shellControl?: {
+    stoppable(slug: string, shellId: string): boolean
+    stop(slug: string, shellId: string, reason: ShellStopReason, opts: { notify: boolean }): Promise<{ stopped: boolean; note: string | null } | undefined>
+  }
   // Deterministic hard-crash fault injection. Throwing here escapes tick without compensating writes,
   // exactly like process death at the named durability boundary. Never configured in production.
   crashPoint?: (point: SchedulerCrashPoint, delivery: WakeDelivery) => void
@@ -1388,6 +1414,16 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
     }
     // The interrupt note is the same shape: sub-agents that ended have ended, whatever the thread says next.
     if (isInterruptEndedFenceId(item.fenceId)) {
+      return tele.turn === "idle" ? "current-idle" : "current-busy"
+    }
+    // An over-budget warning is bound to its shell STILL RUNNING under the SAME deadline. The worker
+    // stopping the shell, or extending it, between enqueue and delivery each make the warning untrue —
+    // and nothing the thread SAYS does. Without this branch it would fall to the fence logic below and
+    // be superseded on every pass: queued, never delivered.
+    if (isShellBudgetFenceId(item.fenceId)) {
+      const key = parseShellBudgetFenceId(item.fenceId)
+      const shell = key ? tele.bgShells?.find((sh) => sh.state === "running" && sh.id === key.shellId) : undefined
+      if (!key || !shell || liveShellBudget(deps.storage, item.slug, shell)?.deadlineMs !== key.deadlineMs) return "superseded"
       return tele.turn === "idle" ? "current-idle" : "current-busy"
     }
     // A REGISTERED PR WATCHER's report is bound to something that happened on GitHub, not to anything
@@ -1552,6 +1588,9 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
     // The interrupt note too: the worker is BUSY precisely because the interrupt just opened a turn on
     // the human's follow-up, and that turn is where it decides to wait on the child that no longer exists.
     if (isInterruptEndedFenceId(item.fenceId)) return true
+    // The budget warning is "in the moment" by definition: its grace clock is already running, and a
+    // worker mid-turn is the one most likely to still be using the shell — it has ten minutes to say so.
+    if (isShellBudgetFenceId(item.fenceId)) return true
     return nowMs - item.createdAt >= MID_TURN_HOLD_MAX_MS
   }
 
@@ -3091,6 +3130,91 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
     }
   }
 
+  // ---- SOURCE 13: A BACKGROUND SHELL OUTLIVED ITS RUNTIME BUDGET ----------------------------------
+  // Maintainer 2026-09-29: "background shells running for 16 hours makes no sense." Every shell carries a
+  // budget (shell-budget.ts — its launch `timeout`, else 1h; `extend_shell` moves it). Two steps, both
+  // keyed on the durable `shell_budget` row, so neither is lost to a restart nor repeated by one:
+  //
+  //  1. PAST THE DEADLINE → one warning wake, delivered mid-turn if the worker is busy, and the row
+  //     marked warned FOR THIS DEADLINE. An extension moves the deadline, so the next overrun is warned
+  //     afresh; the same deadline is never warned twice, however many passes or restarts see it.
+  //  2. GRACE AFTER THE WARNING, deadline unmoved → the shell is stopped through the operator's own ×
+  //     path, and the worker told why. Grace counts from the WARNING, not the deadline, so a server that
+  //     was down across the deadline still gives the worker its full window to answer.
+  //
+  // A shell frizz cannot stop (a pre-broker row, or no task id yet) is warned and never killed — the
+  // warning says so. An ARCHIVED thread is nobody's to wake: it gets no warning and no kill notice, but
+  // its shell still ends on the same clock, because a forgotten shell on a shelved thread is exactly the
+  // 16-hour case. A kill that fails is retried, spaced, rather than every tick.
+  const SHELL_BUDGET_STOP_RETRY_MS = 5 * 60_000
+  const shellBudgetStopAttempts = new Map<string, number>()
+  async function evalShellBudgets(nowMs: number): Promise<void> {
+    for (const row of deps.storage.allSessions()) {
+      const tele = deps.tailer.get(row.slug)
+      if (!tele?.bgShells?.length) continue
+      const archived = row.state === "archived" || row.archived === 1
+      for (const shell of tele.bgShells) {
+        if (shell.state !== "running") continue
+        const budget = liveShellBudget(deps.storage, row.slug, shell)
+        if (!budget || nowMs < budget.deadlineMs) continue
+        const startedAtMs = Date.parse(shell.startedAt)
+        const stoppable = deps.shellControl?.stoppable(row.slug, budget.shellId) ?? false
+        const warnedAtMs = budget.record?.warnedDeadlineMs === budget.deadlineMs ? budget.record.warnedAtMs : null
+        if (warnedAtMs === null) {
+          const handle = shell.taskId ?? budget.shellId
+          if (!archived) {
+            const fenceId = shellBudgetFenceId(budget.shellId, budget.deadlineMs)
+            const deliveryId = wakeDeliveryId(row.slug, row.session_id, fenceId)
+            if (!outbox.get(deliveryId)) {
+              const item = outbox.enqueue({
+                id: deliveryId,
+                slug: row.slug,
+                sessionId: row.session_id,
+                fenceId,
+                hintKey: fenceId,
+                message: withClock(shellBudgetWarningMessage({
+                  handle,
+                  label: shell.label,
+                  ranMs: nowMs - startedAtMs,
+                  budgetMs: budget.deadlineMs - startedAtMs,
+                  stoppable,
+                  backend: row.backend === "codex" ? "codex" : row.backend === "claude" || !row.backend ? "claude" : "other",
+                }), tele.lastAssistantAt),
+                reason: `background shell over budget (${handle})`,
+              }, nowMs).delivery
+              log(`waker: queued ${row.slug} — ${item.reason}`)
+              checkpoint("after-enqueue", item)
+            }
+          }
+          deps.storage.markShellBudgetWarned({ slug: row.slug, shellId: budget.shellId, startedAt: shell.startedAt, deadlineMs: budget.deadlineMs, nowMs })
+          continue
+        }
+        if (!stoppable || !deps.shellControl || nowMs < warnedAtMs + SHELL_BUDGET_GRACE_MS) continue
+        const attemptKey = `${row.slug}\u0000${budget.shellId}`
+        const lastAttempt = shellBudgetStopAttempts.get(attemptKey)
+        if (lastAttempt !== undefined && nowMs - lastAttempt < SHELL_BUDGET_STOP_RETRY_MS) continue
+        shellBudgetStopAttempts.set(attemptKey, nowMs)
+        try {
+          const result = await deps.shellControl.stop(
+            row.slug,
+            budget.shellId,
+            { kind: "budget", ranMs: nowMs - startedAtMs, budgetMs: budget.deadlineMs - startedAtMs },
+            { notify: !archived },
+          )
+          if (result?.stopped) {
+            deps.storage.markShellBudgetStopped({ slug: row.slug, shellId: budget.shellId, startedAt: shell.startedAt, nowMs })
+            shellBudgetStopAttempts.delete(attemptKey)
+            log(`waker: stopped ${row.slug} — background shell ${shell.taskId ?? budget.shellId} ran past its budget${result.note ? ` (${result.note})` : ""}`)
+          } else {
+            log(`waker: could not stop ${row.slug} — background shell ${shell.taskId ?? budget.shellId}: ${result?.note ?? "not stoppable"}`)
+          }
+        } catch (err) {
+          log(`waker: stopping ${row.slug}'s over-budget shell ${shell.taskId ?? budget.shellId} failed: ${err instanceof Error ? err.message : String(err)}`)
+        }
+      }
+    }
+  }
+
   /** THE REGISTERED-WATCH REGISTRY PASS. Two settle conditions, and only one of them is news.
    *
    *  EXPIRED → settled + a wake. The expiry is the whole reason a registration cannot outlive its own
@@ -3906,6 +4030,12 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
     } catch (err) {
       if (err instanceof InjectedSchedulerCrash) throw err
       log(`waker: shell-completion pass failed: ${err instanceof Error ? err.message : String(err)}`)
+    }
+    try {
+      await evalShellBudgets(now())
+    } catch (err) {
+      if (err instanceof InjectedSchedulerCrash) throw err
+      log(`waker: shell-budget pass failed: ${err instanceof Error ? err.message : String(err)}`)
     }
     try {
       evalTimers(now())

@@ -23,6 +23,7 @@ import { createBoard, type BoardManager } from "./board.ts"
 import { createPeriodicRetitler } from "./periodic-retitle.ts"
 import { readTranscript } from "./transcript.ts"
 import { createTailer, defaultLogDir, type Tailer } from "./tailer.ts"
+import { backgroundShellStoppable, stopBackgroundShell } from "./shell-stop.ts"
 import { createDispatcher, loadWorkerPrompt, scratchpadOrientation, frizzConfigBlock, claudeMcpConfig, resolveFrizzMcp, workerPluginDir, coldResumePermission, workerScratchPath, type Dispatcher, type FrizzMcpTarget } from "./dispatch.ts"
 import { createScheduler, type Scheduler, probeIssueReadable, probePrReadable, type PrRef, type PrProbe } from "./scheduler.ts"
 import {
@@ -985,9 +986,16 @@ function createContextUnchecked(opts: ContextOptions, resources: PartialContextR
 
   // Durable timer waker + legacy pr/ci compatibility. Reuses the SAME resume path as followUp;
   // boot-safe because it only fires on a condition it witnesses cross.
+  // The runtime budget's kill (scheduler SOURCE 13) is the operator's × — one shared body in
+  // shell-stop.ts, so a budget stop reaches the provider and tells the worker exactly as a click does.
+  const shellStopDeps = { project, storage, tailer, claudeBroker, codexAppServer, board, getSettings: () => getSettings(storage, home) }
   const scheduler = createScheduler({
     storage,
     tailer,
+    shellControl: {
+      stoppable: (slug, id) => backgroundShellStoppable(shellStopDeps, slug, id),
+      stop: (slug, id, reason, stopOpts) => stopBackgroundShell(shellStopDeps, slug, id, reason, stopOpts),
+    },
     // Second wake source: every thread a subscription window cut off mid-turn gets its own "continue"
     // once that window rolls, over this same delivery path. The quota reader supplies the fallback
     // instant for a weekly limit, whose message text carries a clock but no date; readQuota memoizes,

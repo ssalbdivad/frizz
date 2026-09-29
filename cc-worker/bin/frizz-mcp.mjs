@@ -448,6 +448,42 @@ const WATCH = {
   },
 }
 
+// A BACKGROUND SHELL'S RUNTIME BUDGET (2026-09-29). Every shell a worker backgrounds carries one — its
+// Bash `timeout`, else an hour — and outliving it earns one warning and then a stop. This is the "keep
+// it" answer. Its own verb rather than a `watch` option: a watch HOLDS the thread for a shell, this keeps
+// a shell alive, and a dev server the worker is not waiting on needs the second and must never get the first.
+const EXTEND_SHELL = {
+  name: "extend_shell",
+  description:
+    "EXTEND A BACKGROUND SHELL'S RUNTIME BUDGET so frizz does not stop it.\n\n" +
+    "Every background shell you launch has a budget: the Bash `timeout` you passed on the " +
+    "`run_in_background` call, or ONE HOUR if you passed none. When it runs out frizz wakes you once " +
+    "(mid-turn if you are busy) and, if you do nothing, stops the shell ten minutes later. Call this " +
+    "when the shell must keep running — in answer to that warning, or ahead of time for a shell you " +
+    "already know will run long.\n\n" +
+    "`for` is counted from NOW, not from launch, so pass how much LONGER it needs. Max 24h per call; " +
+    "call again before it runs out if it needs more. A shell you no longer need should be stopped " +
+    "instead (TaskStop), not extended.\n\n" +
+    "You can only extend a shell on your OWN thread. `activity` prints each shell's id and when its " +
+    "budget ends.",
+  inputSchema: {
+    type: "object",
+    properties: {
+      shell: {
+        type: "string",
+        description:
+          "The shell's handle — the runtime background-task id you were shown (\"Command running in " +
+          "background with ID: bzvtnt3ig\"); its launch tool_use id and its description are accepted too.",
+      },
+      for: {
+        type: "string",
+        description: "How much longer it may run, as a DURATION from now — `30m`, `2h` (max 24h).",
+      },
+    },
+    required: ["shell", "for"],
+  },
+}
+
 const UNWATCH = {
   name: "unwatch",
   description:
@@ -780,7 +816,8 @@ const UNLINK = {
 
 // WATCH_ISSUE rides at the END (2026-09-14): the tool list is read by position in frizz-mcp.test.ts, and a
 // worker's runtime reads it by name, so the order costs nothing and appending breaks nothing.
-const TOOLS = [SPAWN_THREAD, GOAL, TIMER, WATCH_PR, WATCH, UNWATCH, ASK, UNASK, DONE, TITLE, ACTIVITY, LINK, UNLINK, WATCH_ISSUE]
+// EXTEND_SHELL is appended after it for the same reason (2026-09-29).
+const TOOLS = [SPAWN_THREAD, GOAL, TIMER, WATCH_PR, WATCH, UNWATCH, ASK, UNASK, DONE, TITLE, ACTIVITY, LINK, UNLINK, WATCH_ISSUE, EXTEND_SHELL]
 
 /** @type {Record<string, (args: Record<string, unknown>) => Promise<string>>} */
 const HANDLERS = {
@@ -798,6 +835,25 @@ const HANDLERS = {
   [ACTIVITY.name]: activity,
   [LINK.name]: link,
   [UNLINK.name]: unlink,
+  [EXTEND_SHELL.name]: extendShell,
+}
+
+/** The `extend_shell` handler: move one background shell's runtime budget to `for` from now.
+ * @param {Record<string, unknown>} args @returns {Promise<string>} */
+async function extendShell(args) {
+  const shell = typeof args.shell === "string" ? args.shell.trim() : ""
+  if (!shell) throw new Error("`shell` is required — the shell's id; `activity` prints them all")
+  const forValue = typeof args.for === "string" ? args.for.trim() : ""
+  if (!forValue) throw new Error("`for` is required — a DURATION from now like `30m` or `2h` (max 24h)")
+  const result = (await callRpc("extendOwnShell", { slug: threadSlug(), shell, for: forValue }))?.result
+  if (!result?.budgetEndsAt) throw new Error("Frizz did not confirm the extension")
+  // A clamp is news for the same reason it is on `watch`: a worker told nothing believes it holds time it does not.
+  const clamped = result.clampedFrom ? ` Your \`for: ${result.clampedFrom}\` was CAPPED at 24h.` : ""
+  return (
+    `Extended \`${result.shell}\` (${result.label}): its budget now ends at ${result.budgetEndsAt}.${clamped} ` +
+    "Frizz will not warn about or stop it before then. Extend again before then if it needs longer; stop it " +
+    "when you no longer need it."
+  )
 }
 
 /** @param {Record<string, unknown>} args @returns {Promise<string>} */
@@ -890,10 +946,12 @@ async function activity() {
   }
   const lines = items.map((i) => {
     const when = i.until ? `  (fires ${i.until})` : i.since ? `  (since ${i.since})` : ""
+    // A shell's runtime budget — when frizz warns about it and, unextended, stops it (`extend_shell`).
+    const budget = i.budgetEndsAt ? `  [${budgetLeft(i.budgetEndsAt)}]` : ""
     // The `wch_…` id of the watch holding this item, where one is armed — this readout exists to hand a
     // worker back the ids it lost, and that includes the one `unwatch` takes.
     const held = i.watchId ? `  [watched as ${i.watchId}]` : ""
-    return `  ${i.kind}: ${i.id}${when}${held}\n    ${i.label}`
+    return `  ${i.kind}: ${i.id}${when}${held}${budget}\n    ${i.label}`
   })
   // A READY-TO-PASTE FENCE, not a description of one. The frontmatter is YAML since 2026-08-24 and its
   // keys are PLURAL sequences, so an id printed on its own line is no longer something a worker can copy
@@ -915,6 +973,18 @@ async function activity() {
     "ending and you never restate it. Anything already marked `[watched as …]` above needs no fence line." +
     askedBlock + linksBlock
   )
+}
+
+/** "budget: 42m left (ends <iso>)" in the house duration grammar (`2h 35m`), or the overrun. The ISO
+ *  instant rides along because the model has no clock of its own to read "42m" against later.
+ * @param {string} endsAt @returns {string} */
+function budgetLeft(endsAt) {
+  const ms = Date.parse(endsAt) - Date.now()
+  if (!Number.isFinite(ms)) return `budget ends ${endsAt}`
+  if (ms <= 0) return `PAST its budget (ended ${endsAt}) — extend_shell or stop it`
+  const m = Math.max(1, Math.round(ms / 60_000))
+  const left = m < 60 ? `${m}m` : m % 60 ? `${Math.floor(m / 60)}h ${m % 60}m` : `${m / 60}h`
+  return `budget: ${left} left, ends ${endsAt}`
 }
 
 /** @param {unknown} obj */

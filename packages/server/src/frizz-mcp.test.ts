@@ -64,7 +64,7 @@ test("the frizz MCP server identifies as `frizz` and exposes its worker tools", 
     rpc.send({ jsonrpc: "2.0", method: "notifications/initialized" })
     rpc.send({ jsonrpc: "2.0", id: 2, method: "tools/list" })
     const list = await rpc.next(2)
-    assert.deepEqual(list.result.tools.map((t: { name: string }) => t.name), ["spawn_thread", "goal", "timer", "watch_pr", "watch", "unwatch", "ask", "unask", "done", "title", "activity", "link", "unlink", "watch_issue"])
+    assert.deepEqual(list.result.tools.map((t: { name: string }) => t.name), ["spawn_thread", "goal", "timer", "watch_pr", "watch", "unwatch", "ask", "unask", "done", "title", "activity", "link", "unlink", "watch_issue", "extend_shell"])
     assert.deepEqual(list.result.tools.find((t: { name: string }) => t.name === "link").inputSchema.required, ["label", "target"])
     assert.deepEqual(list.result.tools.find((t: { name: string }) => t.name === "unlink").inputSchema.required, ["id"])
     for (const required of ["prompt", "model", "effort"]) {
@@ -154,13 +154,17 @@ test("the frizz MCP server identifies as `frizz` and exposes its worker tools", 
     // `wch_…` id of any watch holding one. It takes NOTHING: there is no thread parameter and no filter,
     // because the only correct answer is "everything you have running", and a worker that has lost its
     // ids cannot be trusted to name them.
-    assert.equal(list.result.tools.length, 14)
+    assert.equal(list.result.tools.length, 15)
     assert.deepEqual(list.result.tools[10].inputSchema.required, [])
     assert.deepEqual(Object.keys(list.result.tools[10].inputSchema.properties), [])
     // `watch_issue` — the issue twin of `watch_pr`, same shape: `action` alone is required, and NO thread
     // parameter a model could aim at somebody else's thread.
     assert.deepEqual(list.result.tools[13].inputSchema.required, ["action"])
     assert.deepEqual(Object.keys(list.result.tools[13].inputSchema.properties), ["action", "target", "for", "id"])
+    // `extend_shell` — a background shell's runtime budget: the handle and a duration, both required,
+    // and no thread parameter.
+    assert.deepEqual(list.result.tools[14].inputSchema.required, ["shell", "for"])
+    assert.deepEqual(Object.keys(list.result.tools[14].inputSchema.properties), ["shell", "for"])
 
     // An unregistered name is a protocol error, not a crash — the registry routes by name now.
     rpc.send({ jsonrpc: "2.0", id: 3, method: "tools/call", params: { name: "spawn_frizz_thread", arguments: {} } })
@@ -932,6 +936,54 @@ test("`watch` and `unwatch` register and withdraw against the CALLING thread", a
     assert.equal(noId.result.isError, true)
     assert.match(noId.result.content[0].text, /`id` is required/)
     assert.equal(seen.length, before, "not one of the four reached the server")
+  } finally {
+    rpc.kill()
+    http.close()
+  }
+})
+
+// `extend_shell` OVER THE REAL STDIO TRANSPORT (2026-09-29): the procedure, the shape, the read-back,
+// and the refusals the handler owns before anything reaches the server.
+test("`extend_shell` extends the CALLING thread's shell and reports the new end, clamp included", async () => {
+  const seen: Array<{ url: string; body: any }> = []
+  const replies: any[] = [
+    { shell: "bzvtnt3ig", label: "npx vite", budgetEndsAt: "2026-09-29T14:00:00.000Z", clampedFrom: "3d" },
+  ]
+  const http = createServer((req, res) => {
+    let body = ""
+    req.on("data", (c) => (body += c))
+    req.on("end", () => {
+      seen.push({ url: req.url ?? "", body: JSON.parse(body) })
+      res.writeHead(200, { "content-type": "application/json" })
+      res.end(JSON.stringify({ result: replies.shift() ?? null }))
+    })
+  })
+  await new Promise<void>((resolve) => http.listen(0, "127.0.0.1", resolve))
+  const port = (http.address() as { port: number }).port
+  const stateDir = mkdtempSync(join(tmpdir(), "frizz-mcp-"))
+  writeFileSync(join(stateDir, "server.lock"), JSON.stringify({ port }))
+  const rpc = startServer({ FRIZZ_STATE_DIR: stateDir, FRIZZ_THREAD_SLUG: "shell-thread" })
+  try {
+    rpc.send({ jsonrpc: "2.0", id: 1, method: "initialize", params: {} })
+    await rpc.next(1)
+    rpc.send({ jsonrpc: "2.0", id: 2, method: "tools/call", params: { name: "extend_shell", arguments: { shell: "bzvtnt3ig", for: "3d" } } })
+    const extended = await rpc.next(2)
+    assert.equal(extended.result.isError, undefined)
+    assert.deepEqual(seen[0], { url: "/_frizz/rpc/extendOwnShell", body: { slug: "shell-thread", shell: "bzvtnt3ig", for: "3d" } })
+    assert.match(extended.result.content[0].text, /Extended `bzvtnt3ig` \(npx vite\): its budget now ends at 2026-09-29T14:00:00.000Z/)
+    assert.match(extended.result.content[0].text, /CAPPED at 24h/)
+
+    const before = seen.length
+    for (const [id, args, pattern] of [
+      [3, { for: "2h" }, /`shell` is required/],
+      [4, { shell: "bzvtnt3ig" }, /`for` is required/],
+    ] as const) {
+      rpc.send({ jsonrpc: "2.0", id, method: "tools/call", params: { name: "extend_shell", arguments: args } })
+      const refused = await rpc.next(id)
+      assert.equal(refused.result.isError, true)
+      assert.match(refused.result.content[0].text, pattern)
+    }
+    assert.equal(seen.length, before, "neither refusal reached the server")
   } finally {
     rpc.kill()
     http.close()

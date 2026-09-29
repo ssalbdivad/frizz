@@ -103,6 +103,8 @@ import type {
   AddOwnPrWatchInput,
   AddOwnWatchInput,
   AddOwnWatchResult,
+  ExtendOwnShellInput,
+  ExtendOwnShellResult,
   DropOwnWatchInput,
   DropOwnWatchResult,
   AskInput,
@@ -224,6 +226,8 @@ export interface Api {
   // THE WORKER'S OWN WATCHES on its own running work, called by `mcp__frizz__watch` / `unwatch`. Same
   // story as the PR watchers above: declared for the drift gate, never called from the browser.
   addOwnWatch(input: AddOwnWatchInput): Promise<AddOwnWatchResult>
+  // `mcp__frizz__extend_shell` — a background shell's runtime budget. Drift gate only, like its neighbours.
+  extendOwnShell(input: ExtendOwnShellInput): Promise<ExtendOwnShellResult>
   upsertOwnLink(input: UpsertOwnLinkInput): Promise<UpsertOwnLinkResult>
   dropOwnLink(input: DropOwnLinkInput): Promise<DropOwnLinkResult>
   dropOwnWatch(input: DropOwnWatchInput): Promise<DropOwnWatchResult>
@@ -434,6 +438,7 @@ export const PROCEDURES = {
   dropOwnPrWatch: "mutation",
   listOwnPrWatches: "mutation",
   addOwnWatch: "mutation",
+  extendOwnShell: "mutation",
   upsertOwnLink: "mutation",
   dropOwnLink: "mutation",
   dropOwnWatch: "mutation",

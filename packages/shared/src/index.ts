@@ -357,6 +357,11 @@ export const BgShellView = z.object({
   // such watcher was unfireable (scheduler.evalWatchers, 2026-08-14). Absent for a CODEX row, whose
   // single `processId` IS its `id`, and for a Claude row between its tool_use and its launch ack.
   taskId: z.string().optional(),
+  // The runtime budget this shell LAUNCHED with, in ms (server shell-budget.ts, 2026-09-29): the Bash
+  // `timeout` the worker passed on its `run_in_background` call, clamped to 24h, else the 1h default.
+  // Past it the worker is warned once and, unextended, the shell is stopped. An `extend_shell` does not
+  // rewrite this — it is the launch-time declaration. Absent ⇒ unbudgeted (a `Monitor`, an old server).
+  budgetMs: z.number().optional(),
 })
 export type BgShellView = z.infer<typeof BgShellView>
 
@@ -2048,6 +2053,33 @@ export const AddOwnWatchInput = z.object({
   for: z.string().trim().min(1).max(16),
 }).strict()
 export type AddOwnWatchInput = z.infer<typeof AddOwnWatchInput>
+
+// ---- EXTENDING A BACKGROUND SHELL'S RUNTIME BUDGET (`mcp__frizz__extend_shell`, 2026-09-29) ----------
+// Every background shell carries a budget (server shell-budget.ts: its launch `timeout`, else 1h). Past
+// it the worker is warned once and, unextended, the shell is stopped ten minutes later. This is the
+// "keep it" answer to that warning — or a pre-emptive one for a shell the worker already knows will run
+// long. It sets the budget to end `for` from NOW, not from launch, so the worker never has to do
+// arithmetic against an instant it cannot see.
+export const ExtendOwnShellInput = z.object({
+  slug: ThreadSlug,
+  /** The shell's handle — the same three a `watch` of kind shell accepts: the runtime task id the worker
+   *  was shown, the launch tool_use id, or the shell's label. Resolved against live telemetry. */
+  shell: z.string().trim().min(1).max(200),
+  /** A DURATION (`30m`, `2h`), parseAwaitingDurationRaw, capped at 24h and the cap reported. */
+  for: z.string().trim().min(1).max(16),
+}).strict()
+export type ExtendOwnShellInput = z.infer<typeof ExtendOwnShellInput>
+
+export const ExtendOwnShellResult = z.object({
+  /** The handle the shell answers to in every other readout (its task id where it has one). */
+  shell: z.string(),
+  label: z.string(),
+  /** The new deadline, ISO8601. */
+  budgetEndsAt: z.string(),
+  /** The `for` as written, present ONLY when it exceeded 24h and was capped. */
+  clampedFrom: z.string().optional(),
+}).strict()
+export type ExtendOwnShellResult = z.infer<typeof ExtendOwnShellResult>
 
 export const OwnWatchView = z.object({
   id: z.string(),
@@ -3796,6 +3828,9 @@ export const ThreadActivityItem = z.object({
    *  the alternative and it would list the same shell twice, which is exactly the duplication that put
    *  two sub-agents under a "Background shells" heading. */
   watchId: z.string().optional(),
+  /** A SHELL's runtime-budget deadline (ISO8601) — when frizz warns about it and, unextended, stops it
+   *  ten minutes later. Its own field rather than `until`, which reads as "fires at" everywhere else. */
+  budgetEndsAt: z.string().optional(),
 }).strict()
 export type ThreadActivityItem = z.infer<typeof ThreadActivityItem>
 

@@ -107,6 +107,8 @@ import {
   PR_WATCH_FOR_MAX_MS,
   type PrWatchView,
   AddOwnWatchInput,
+  ExtendOwnShellInput,
+  ExtendOwnShellResult,
   AddOwnWatchResult,
   AskInput,
   AskResult,
@@ -161,6 +163,8 @@ import { resolveThreadLink, threadLinkView } from "./thread-links.ts"
 import { ghInstalled, ghAuthed, ghRepo, gitGithubRemote, listItems, hydrateIssue, hydratePr, renderGithubPrompt, effectiveTemplate, DEFAULT_GITHUB_PROMPT } from "./github.ts"
 import { createGithubHovercardService } from "./github-hovercard.ts"
 import { slugify, resolveSlug, resolveLegacyThreadFile, loadWorkerPrompt, scratchpadOrientation, frizzConfigBlock, coldResumePermission, workerScratchPath } from "./dispatch.ts"
+import { backgroundOpStoppable, claudeShellLabel, noticeClaudeShellStopped, stopBackgroundShell } from "./shell-stop.ts"
+import { liveShellBudget, SHELL_BUDGET_MAX_MS } from "./shell-budget.ts"
 import { readCodexModels } from "./backend/codex-models.ts"
 import { peekClaudeModels, readClaudeModels } from "./backend/claude-models.ts"
 import { claudeModelStanding, claudeModelUpgradeBlock, claudeModelUpgradeDue, claudeModelUpgradeRefusal, claudeUpgradeCandidate, SERVER_STARTED_AT_MS } from "./backend/claude-model-upgrade.ts"
@@ -1266,44 +1270,8 @@ export function createRouter(ctx: AppContext) {
     return { sessionId: row.session_id }
   }
 
-  // Can frizz END this live op, and if not, why not — for a sub-agent AND for a background shell.
-  //
-  // A SHELL used to be refused here categorically: "frizz tracks a background shell by reading the
-  // worker's transcript and holds no handle on its process". That was measured wrong. A background
-  // `Bash` is a TASK in the very registry `Query.stopTask` addresses — the SDK's own
-  // `backgroundTasks()` says as much ("Bash commands and subagents") — and frizz has been recording its
-  // task id all along, off the launch ack ("Command running in background with ID: …") and off the
-  // `task_started` stream. `backend/_live_shell_stop.mts` drove the production path end to end: the
-  // shell's OS process was gone within a second of the stop and the row left the board on its own.
-  // The maintainer's case for this is the 24-hour wedged watcher with no way to clear it.
-  //
-  // Only two things differ between the two kinds, and both are handled below rather than by forking
-  // the function: the LIVENESS reading, and the noun in every refusal.
-  // A CODEX background exec, resolved by the id its row carries — which for codex IS the `processId`
-  // the kill needs (see tailer.ts codexBgShellViews: there is exactly one handle and no correlation
-  // step). Undefined for every other kind of row, so the Claude path below is reached unchanged.
-  //
-  // It reads the BOARD's live shell list rather than the fold, because that list IS the app-server's
-  // item stream — a codex exec's processId never reaches the rollout frizz folds (measured in
-  // backend/_live_codex_bgterm_match.mts, where the rollout-projected row carried no handle at all).
-  function codexShellTarget(slug: string, id: string): { sessionId: string; processId: string; label: string } | undefined {
-    if (!ctx.codexAppServer) return undefined
-    const row = ctx.storage.getSession(slug)
-    if (!row || row.backend !== "codex" || row.codex_runtime !== "app-server") return undefined
-    const shell = ctx.tailer.get(slug)?.bgShells?.find((entry) => entry.id === id && entry.state === "running")
-    if (!shell) return undefined
-    return { sessionId: row.session_id, processId: id, label: shell.label }
-  }
-
-  // What the codex worker is told when frizz kills one of its background commands. Same sentence as the
-  // Claude one and for the same measured reason — neither provider tells its agent. Codex's silence is
-  // structural: completion there is POLLED, never pushed, so a killed exec's next `wait` reads
-  // "Script completed / output:''", which is indistinguishable from a clean finish (verified in
-  // backend/_live_codex_bgterm.mts). Delivered through `thread/inject_items`, the one channel that
-  // appends to the model's visible history without starting a turn.
-  function shellStopNotice(label: string): string {
-    return `[frizz] The operator stopped your background command ${JSON.stringify(label)} from the Frizz dashboard. It is no longer running and will never report a result — do not wait on it or poll it again.`
-  }
+  // Can frizz END this live op, and why not — shell-stop.ts, shared with the runtime budget's kill.
+  const subAgentStoppable = (slug: string, id: string) => backgroundOpStoppable(ctx, slug, id)
 
   // Apply the operator's retirements to a transcript page. Two surfaces render a background op and BOTH
   // have to hear about the ×: the board row (the tailer drops it on the click and remembers it durably)
@@ -1322,76 +1290,8 @@ export function createRouter(ctx: AppContext) {
     return { ...page, messages: projectRetiredBackgroundOps(page.messages, retired, gone) }
   }
 
-  function subAgentStoppable(slug: string, id: string): { sessionId: string; taskId: string; shell: boolean } | { sessionId: null; note: string | null } {
-    const blocked = (note: string | null) => ({ sessionId: null, note })
-    const info = ctx.tailer.subAgent(slug, id)
-    if (!info) return blocked(null)
-    const shell = ctx.tailer.backgroundShell?.(slug, id)
-    const noun = shell ? "background shell" : "sub-agent"
-    // A shell has NO staleness ceiling — its entry clears on a terminal notification, so a watcher that
-    // has printed nothing for a day is still `running`, not `stale`. Read the shell's own state, which
-    // says exactly that; `info.state` runs it through the sub-agent staleness rule and would report
-    // "stale" for precisely the wedged shell this control exists to kill.
-    if (!(shell ? shell.state === "running" : info.state === "running")) return blocked(null)
-    const row = ctx.storage.getSession(slug)
-    if (!row) return blocked(null)
-    if (row.backend === "codex") {
-      return blocked(shell
-        ? "Codex runs its background commands inside its own process and exposes no way to end one, so this shell can't be stopped from here."
-        : "Codex does not expose per-sub-agent interruption to Frizz, so this child can't be stopped from here.")
-    }
-    if (row.claude_runtime !== "broker" || !ctx.claudeBroker) {
-      return blocked(`Stopping a ${noun} needs the Claude session broker; this thread predates it.`)
-    }
-    if (!info.taskId) return blocked(`This ${noun} did not publish the task identifier needed to stop it.`)
-    return { sessionId: row.session_id, taskId: info.taskId, shell: Boolean(shell) }
-  }
-
-  // TELL THE WORKER ITS SHELL WAS KILLED — the half the provider does not do for us.
-  //
-  // Measured (backend/_live_shell_stop_notice.mts, 2026-08-01) on a real session: stopping a SUB-AGENT
-  // injects a `<task-notification>` user record the model reads and acts on ("the sub-agent was stopped
-  // before it finished, so it never reported back"). Stopping a background SHELL injects NOTHING — the
-  // transcript gains not one record — and asked afterwards the model still believed its shell was
-  // "presumably still running … I have received no completion notification". A worker left waiting on a
-  // watcher frizz already killed is the exact stall the × is meant to end, so frizz supplies the missing
-  // notice itself. Shell-only, deliberately: adding one on the sub-agent path would say it twice.
-  //
-  // `[frizz]` is the established prefix for a machine notice to a worker — transcript.ts NOISE_PREFIXES
-  // keeps it out of the human's chat, so this reaches the model without becoming a bubble the operator
-  // never typed.
-  //
-  // NEVER cold-starts a process. `stopSubAgent` already requires a daemon this bridge holds live, but a
-  // daemon can die in the gap, and `followUp` would then resume a whole `claude` from disk purely to
-  // announce a kill. The liveness check keeps the worst case at "nobody was there to tell", which is
-  // reported rather than hidden.
-  //
-  // `label` is read BEFORE the kill by the caller: the worker's own description of the shell ("Watching
-  // CI") is what it will recognise, and the row it comes from is retired moments later.
-  async function noticeShellStopped(slug: string, label: string): Promise<string | null> {
-    const bridge = ctx.claudeBroker
-    const row = ctx.storage.getSession(slug)
-    if (!bridge || !row) return "The worker could not be told — the Claude session broker is unavailable."
-    if (!bridge.isDaemonAlive(row.session_id)) return "The worker was not told — its session is no longer running."
-    try {
-      await bridge.followUp({
-        threadSlug: slug,
-        sessionId: row.session_id,
-        cwd: workDir,
-        text: `${shellStopNotice(label)} Whatever it wrote before the kill is still readable in its output file.`,
-        // `isDaemonAlive` above is a check, not a hold: the daemon can exit before this frame lands,
-        // and followUp then COLD-RESUMES rather than failing. Take the same floor every other fork
-        // takes, so a notice that loses the race cannot be the thing that rebuilds the worker at
-        // Claude's `default` — see coldResumePermission.
-        permissionMode: coldResumePermission(row, ctx.getSettings()),
-        model: row.model ?? undefined,
-        effort: row.effort ?? undefined,
-      })
-      return null
-    } catch (error) {
-      return `The worker could not be told: ${error instanceof Error ? error.message : String(error)}`
-    }
-  }
+  // TELLING THE WORKER ITS SHELL WAS KILLED lives in shell-stop.ts (noticeClaudeShellStopped), with
+  // the measurement that made it necessary: stopping a shell injects NOTHING the model can read.
 
   // STOP A SUBTREE, NOT A ROW — the shared body behind both stop paths (the drawer's button and the ×).
   //
@@ -1423,9 +1323,7 @@ export function createRouter(ctx: AppContext) {
     if (!bridge) throw new Error("Claude session broker is unavailable; cannot stop this sub-agent")
     // Read the shell's own name for itself while its row is still live — the notice below is delivered
     // after the kill, by which point the row it came from is on its way out of tracking.
-    const shellLabel = target.shell
-      ? ctx.tailer.get(slug)?.bgShells?.find((s) => s.id === id)?.label ?? ctx.tailer.backgroundShell?.(slug, id)?.command ?? "(unnamed)"
-      : undefined
+    const shellLabel = target.shell ? claudeShellLabel(ctx, slug, id) : undefined
     let descendantsStopped = 0
     let descendantsFailed = 0
     for (const taskId of ctx.tailer.subAgentDescendantTasks?.(slug, id) ?? []) {
@@ -1441,7 +1339,7 @@ export function createRouter(ctx: AppContext) {
     // must not leave a worker believing work ended that is still burning. A notice that fails to land
     // is reported, not thrown — the process IS dead by this line, and turning that into an error the
     // client reads as "the stop failed" would leave the row on the board over a delivery problem.
-    const noticeFailed = shellLabel === undefined ? null : await noticeShellStopped(slug, shellLabel)
+    const noticeFailed = shellLabel === undefined ? null : await noticeClaudeShellStopped(ctx, slug, shellLabel, { kind: "operator" })
     return { descendantsStopped, descendantsFailed, noticeFailed }
   }
 
@@ -1866,7 +1764,7 @@ export function createRouter(ctx: AppContext) {
     //     task id) → the real provider control, `Query.stopTask`, awaited to the daemon's answer. Then
     //     retire, so the row leaves every live surface on this click's own board frame instead of
     //     waiting for the fold. A SHELL additionally gets the notice the provider does not send (see
-    //     noticeShellStopped), so the worker is not left waiting on a watcher frizz already killed.
+    //     shell-stop.ts noticeClaudeShellStopped), so the worker is not left waiting on a watcher frizz already killed.
     //  2. The stop THREW → do NOT retire. A failed stop means the child is still working, and hiding
     //     it is exactly the bug above; the row stays and the error reaches the operator.
     //  3. NOT stoppable (a legacy claude thread, a codex thread, a stale/finished op) → retire anyway,
@@ -1881,24 +1779,10 @@ export function createRouter(ctx: AppContext) {
       input: z.object({ slug: ThreadSlug, id: z.string() }).strict(),
       output: z.object({ stopped: z.boolean(), dismissed: z.boolean(), note: z.string().nullable(), descendantsStopped: z.number() }),
       handler: async ({ input }) => {
-        // CODEX takes its own route, not a branch inside the Claude one: its shells never enter the
-        // fold's op map, so neither `tailer.subAgent` nor `tailer.backgroundShell` can see them, and
-        // its kill is a different protocol call against a different bridge. It shares the SHAPE — stop
-        // first, then let the row go — and the row leaves without `dismissOp` because the bridge drops
-        // it from the live level the board reads.
-        const codex = codexShellTarget(input.slug, input.id)
-        if (codex) {
-          const result = await ctx.codexAppServer!.terminateBackgroundExec({
-            threadSlug: input.slug,
-            sessionId: codex.sessionId,
-            processId: codex.processId,
-            notice: shellStopNotice(codex.label),
-          })
-          ctx.board.refresh()
-          // `terminated:false` is the app-server saying the PTY was already gone. Nothing was killed and
-          // nothing may claim it was — but the phantom row does clear, which is the ×'s other honest job.
-          return { stopped: result.terminated, dismissed: true, note: result.noticeFailed, descendantsStopped: 0 }
-        }
+        // A SHELL — Claude or codex — takes the one shared stop (shell-stop.ts), the same body the
+        // runtime budget's kill runs. A shell has no subtree, so nothing below is lost by leaving here.
+        const shell = await stopBackgroundShell(ctx, input.slug, input.id, { kind: "operator" })
+        if (shell && !shell.refused) return { stopped: shell.stopped, dismissed: shell.dismissed, note: shell.note, descendantsStopped: 0 }
         const target = subAgentStoppable(input.slug, input.id)
         let stopped = false
         let note: string | null = null
@@ -2906,7 +2790,11 @@ export function createRouter(ctx: AppContext) {
         for (const sh of tele?.bgShells ?? []) {
           if (sh.state !== "running") continue
           const id = sh.taskId ?? sh.id
-          if (id) activity.push({ kind: "shell", id, label: sh.label, since: sh.startedAt, ...watchFor("shell", [sh.taskId, sh.id, sh.label]) })
+          // Its runtime budget's end, so a worker reading this can see a shell about to be asked about
+          // (or stopped) before the warning arrives — shell-budget.ts.
+          const budget = liveShellBudget(ctx.storage, input.slug, sh)
+          const budgetEndsAt = budget ? { budgetEndsAt: new Date(budget.deadlineMs).toISOString() } : {}
+          if (id) activity.push({ kind: "shell", id, label: sh.label, since: sh.startedAt, ...watchFor("shell", [sh.taskId, sh.id, sh.label]), ...budgetEndsAt })
         }
         for (const a of tele?.subAgents ?? []) {
           if (a.state !== "running") continue
@@ -3121,6 +3009,48 @@ export function createRouter(ctx: AppContext) {
         ctx.storage.armThreadWatch({ id, slug: input.slug, kind: input.kind, target, createdAtMs: now, expiresAtMs: now + forMs })
         ctx.board.refresh()
         return { id, kind: input.kind, target, alreadyArmed: false, ...clampedFrom, watches: armedOwnWatchViews(input.slug) }
+      },
+    }),
+
+    // ---- A BACKGROUND SHELL'S RUNTIME BUDGET (`mcp__frizz__extend_shell`) --------------------------
+    // Every shell carries one (shell-budget.ts); this moves its end to `for` from NOW. Same caller and
+    // same rules as the watches around it: slug-only, and the handle checked against what is actually
+    // RUNNING rather than stored on trust — an extension of a shell that has finished would be a row
+    // nothing ever reads, and the worker would believe it bought time for work that is already over.
+    // Durable (storage `shell_budget`), so a restart neither drops the extension nor re-warns early.
+    extendOwnShell: mutation({
+      input: ExtendOwnShellInput,
+      output: ExtendOwnShellResult,
+      handler: async ({ input }) => {
+        const row = ctx.storage.getSession(input.slug)
+        if (!row) throw new Error(`thread ${input.slug} is not registered`)
+        const wanted = input.shell.trim()
+        const tele = ctx.tailer.get(input.slug)
+        const shell = tele?.bgShells?.find((sh) => sh.state === "running" && (sh.id === wanted || sh.taskId === wanted || sh.label === wanted))
+        if (!shell?.id) {
+          if (resolveLiveWatchTarget(tele, wanted)?.kind === "agent") {
+            throw new Error(`\`${wanted}\` is a sub-agent, not a background shell — sub-agents carry no runtime budget, so there is nothing to extend.`)
+          }
+          throw new Error(
+            `no background shell running on this thread answers to \`${wanted}\` — it has already finished (or been ` +
+            "stopped), or the id is wrong. Call `activity` for the exact ids of everything you have running.",
+          )
+        }
+        if (shell.budgetMs === undefined) {
+          throw new Error(`\`${wanted}\` carries no runtime budget (a Monitor runs until its own timeout or \`TaskStop\`), so there is nothing to extend.`)
+        }
+        const asked = parseAwaitingDurationRaw(input.for)
+        if (asked === null) throw new Error(`\`for: ${input.for}\` is not a duration — give one like \`30m\` or \`2h\` (max 24h)`)
+        // Clamped, not refused, and REPORTED — the rule every other `for:` here follows.
+        const forMs = Math.min(asked, SHELL_BUDGET_MAX_MS)
+        const now = Date.now()
+        ctx.storage.extendShellBudget({ slug: input.slug, shellId: shell.id, startedAt: shell.startedAt, deadlineAtMs: now + forMs, nowMs: now })
+        return {
+          shell: shell.taskId ?? shell.id,
+          label: shell.label,
+          budgetEndsAt: new Date(now + forMs).toISOString(),
+          ...(asked > SHELL_BUDGET_MAX_MS ? { clampedFrom: input.for } : {}),
+        }
       },
     }),
 

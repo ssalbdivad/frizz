@@ -6,6 +6,7 @@ import { join } from "node:path"
 import type { BoardSnapshot, Settings } from "@frizz/shared"
 import type { BoardManager } from "./board.ts"
 import { createRouter } from "./router.ts"
+import { backgroundShellStoppable, stopBackgroundShell } from "./shell-stop.ts"
 import { createStorage, type SessionRow } from "./storage.ts"
 import type { AppContext } from "./context.ts"
 import type { Project } from "./project.ts"
@@ -781,6 +782,74 @@ test("with no codex bridge the codex route never fires — the row just clears",
     const result = await h.router.stopBackgroundOp.handler({ input: { slug: "t", id: "24573" } })
     assert.equal(result.stopped, false)
     assert.deepEqual(h.codexTerminations, [])
+  } finally {
+    h.cleanup()
+  }
+})
+
+// ── THE SAME STOP, CALLED BY THE RUNTIME BUDGET ──────────────────────────────────────────────────
+//
+// shell-stop.ts is the one body the × and the scheduler's budget kill share (scheduler SOURCE 13). What
+// the budget changes is only the REASON the worker reads — and, for an archived thread, whether it is
+// told at all. What it must never do is the ×'s escape hatch: a shell frizz cannot stop is left exactly
+// where it is, not retired as a phantom while it keeps running.
+
+const BUDGET = { kind: "budget" as const, ranMs: 70 * 60_000, budgetMs: 60 * 60_000 }
+
+test("a BUDGET stop kills through the same provider control and tells the worker it was the budget", async () => {
+  const h = harness(RUNNING_SHELL, { backgroundShell: SHELL_LOOKUP, bgShells: [{ id: "toolu_sh", label: "Run vite dev server" }] })
+  try {
+    seed(h.storage, "t")
+    const result = await stopBackgroundShell(h.ctx, "t", "toolu_sh", BUDGET)
+    assert.deepEqual(result, { stopped: true, dismissed: true, note: null })
+    assert.deepEqual(h.stops, [{ threadSlug: "t", sessionId: "sid-t", taskId: "bshell1" }])
+    assert.deepEqual(h.dismissals, [{ slug: "t", id: "toolu_sh" }])
+    assert.equal(h.notices.length, 1)
+    assert.match(h.notices[0]!.text, /^\[frizz\] Frizz stopped your background command "Run vite dev server" after 1h 10m: it ran past its 1h budget/)
+    assert.doesNotMatch(h.notices[0]!.text, /operator/, "the operator did not do this, and the worker must not be told they did")
+  } finally {
+    h.cleanup()
+  }
+})
+
+test("a budget stop with notify:false kills without waking the worker", async () => {
+  const h = harness(RUNNING_SHELL, { backgroundShell: SHELL_LOOKUP, bgShells: [{ id: "toolu_sh", label: "Run vite dev server" }] })
+  try {
+    seed(h.storage, "t")
+    const result = await stopBackgroundShell(h.ctx, "t", "toolu_sh", BUDGET, { notify: false })
+    assert.equal(result?.stopped, true)
+    assert.deepEqual(h.notices, [])
+  } finally {
+    h.cleanup()
+  }
+})
+
+test("a budget stop of a shell frizz CANNOT stop does nothing at all — no kill, no retire", async () => {
+  const h = harness(RUNNING_SHELL, { backgroundShell: SHELL_LOOKUP, bgShells: [{ id: "toolu_sh", label: "Run vite dev server" }] })
+  try {
+    seed(h.storage, "t", { claudeRuntime: null }) // a pre-broker row: no control channel
+    assert.equal(backgroundShellStoppable(h.ctx, "t", "toolu_sh"), false)
+    const result = await stopBackgroundShell(h.ctx, "t", "toolu_sh", BUDGET)
+    assert.equal(result?.refused, true)
+    assert.equal(result?.stopped, false)
+    assert.deepEqual(h.stops, [])
+    assert.deepEqual(h.dismissals, [], "a live shell is never hidden as a phantom by the budget")
+  } finally {
+    h.cleanup()
+  }
+})
+
+test("a budget stop of a CODEX exec terminates it and injects the budget notice", async () => {
+  const h = harness(() => undefined, {
+    bgShells: [{ id: "24573", label: "npm run dev" }],
+    codexTerminate: () => ({ terminated: true, noticeFailed: null }),
+  })
+  try {
+    seed(h.storage, "t", { backend: "codex" })
+    assert.equal(backgroundShellStoppable(h.ctx, "t", "24573"), true)
+    const result = await stopBackgroundShell(h.ctx, "t", "24573", BUDGET)
+    assert.equal(result?.stopped, true)
+    assert.match(h.codexTerminations[0]!.notice ?? "", /past its 1h budget/)
   } finally {
     h.cleanup()
   }

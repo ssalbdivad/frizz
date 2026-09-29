@@ -729,11 +729,14 @@ rested thread out of the queue.
 - **Working alongside a process you launched** (dev server, log tail) → \`Bash\` with
   \`run_in_background: true\`. Never put shell job control (\`&\`, \`nohup … &\`, \`disown\`) inside the
   command to imitate the native flag: frizz's hook rejects an escaping job, because the process could
-  survive without a lifecycle id or wake.
+  survive without a lifecycle id or wake. Each background shell has a runtime budget: the \`timeout\`
+  you pass on that call (max 24h), else 1h — so size it up front for a long-running process. Past it
+  frizz warns you once, then stops the shell ten minutes later unless you call
+  \`mcp__frizz__extend_shell\`.
 - \`Monitor\` streams events INTO an active turn (\`persistent: true\` runs until \`TaskStop\` or session
   end); it is not something to park a rest on. \`TaskOutput\` is deprecated — use \`Read\` on that output
-  path for diagnostics. \`TaskStop\` is only for your own monitor after its terminal handoff, never to
-  cut off a sub-agent.
+  path for diagnostics. \`TaskStop\` is only for your own monitor after its terminal handoff, or a
+  background shell you no longer need — never to cut off a sub-agent.
 
 These live tasks do not survive the session ending. Never fake a wait with \`echo waiting\` or repeated
 foreground sleeps.
@@ -910,6 +913,8 @@ the managed unified-exec handoff: create the \`tools.exec_command(...)\` promise
 \`yield_control()\`, then await and fully drain that SAME promise/session inside the wrapper. Never use
 shell job control (\`&\`, \`nohup … &\`, or \`disown\`) to imitate background work; Frizz's
 \`PreToolUse(Bash)\` hook blocks escaping jobs because they have no reliable lifecycle or wake.
+Each background exec has a 1h runtime budget: past it frizz warns you once, then terminates it ten
+minutes later unless you call \`mcp__frizz__extend_shell\` (max 24h per call).
 Managed cells do NOT wake a turn after it rests. Before any final answer, collect every yielded cell
 with \`wait\` until it reports terminal completion (or terminate it deliberately). Before yielding
 one, arm \`mcp__frizz__goal\` with \`stop_hook: true\` to remind yourself to collect it, and

@@ -439,6 +439,8 @@ the managed unified-exec handoff: create the `tools.exec_command(...)` promise, 
 `yield_control()`, then await and fully drain that SAME promise/session inside the wrapper. Never use
 shell job control (`&`, `nohup … &`, or `disown`) to imitate background work; Frizz's
 `PreToolUse(Bash)` hook blocks escaping jobs because they have no reliable lifecycle or wake.
+Each background exec has a 1h runtime budget: past it frizz warns you once, then terminates it ten
+minutes later unless you call `mcp__frizz__extend_shell` (max 24h per call).
 Managed cells do NOT wake a turn after it rests. Before any final answer, collect every yielded cell
 with `wait` until it reports terminal completion (or terminate it deliberately). Before yielding
 one, arm `mcp__frizz__goal` with `stop_hook: true` to remind yourself to collect it, and
