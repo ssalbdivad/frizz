@@ -48,7 +48,7 @@ import { MarkdownScopeContext } from "../lib/useMarkdown.ts"
 import { GHOST_LABEL, stableQueue, type QueueSlot } from "../lib/stableQueue.ts"
 import { actedOnHere } from "../lib/humanActs.ts"
 import { useSteeredAt } from "../lib/steering.ts"
-import { glideTo, useViewportLock } from "../lib/viewportLock.ts"
+import { glideTo, gliding, useViewportLock } from "../lib/viewportLock.ts"
 import { registerQueueCursor, releaseAutoOpened } from "../lib/keyboardRuntime.ts"
 import { PROJECT_STEP_CHORDS, detectPlatform, formatChord, parseChord } from "../lib/keybindings.ts"
 import { AllQueuesCard, ProjectChip, ProjectMark, useOpenThreadInPlace } from "./AllQueuesCard.tsx"
@@ -221,7 +221,7 @@ export function AllQueuesPage() {
   // is not waiting on anyone. A card whose drawer is open still is, and still counts.
   const ready = queue.filter((slot) => !slot.ghost && !leaving.isLeaving(slot.key)).length
   const scrollToCard = useScrollToCard()
-  const activeKey = useQueueKeys(useScrollspy(queue), scrollToCard)
+  const { active: activeKey, land } = useQueueKeys(useScrollspy(queue), scrollToCard)
   const loading = (cards.isPending || queues.isPending) && !queues.data
   // Below the page's stacking point the columns are one above the other, so the list follows the queue
   // rather than sitting between the prompt box and the queue it indexes.
@@ -232,7 +232,7 @@ export function AllQueuesPage() {
   // finds their place, and a row that vanished when clicked left them nothing to find.
   const list = (
     <>
-      <ProjectList projects={projects} home={home} activeKey={activeKey} hidden={leaving.hidden} onQueuedRow={scrollToCard} />
+      <ProjectList projects={projects} home={home} activeKey={activeKey} hidden={leaving.hidden} onQueuedRow={land} />
       <AddProjectRow />
     </>
   )
@@ -846,7 +846,7 @@ function useScrollToCard(): (key: string) => number | null {
  * scroll that far — could otherwise never be picked at all. Returns the card being read, which the rail
  * and its connector mark, so they agree with the ring.
  */
-function useQueueKeys(activeKey: string | null, scrollToCard: (key: string) => number | null): string | null {
+function useQueueKeys(activeKey: string | null, scrollToCard: (key: string) => number | null): { active: string | null; land: (key: string) => number | null } {
   const reading = useRef(activeKey)
   reading.current = activeKey
   const landing = useRef<{ key: string; y: number; until: number } | null>(null)
@@ -855,7 +855,11 @@ function useQueueKeys(activeKey: string | null, scrollToCard: (key: string) => n
     // A held card that has since been finished or snoozed is not being read any more.
     if (held && document.querySelector(`[data-xq-card="${CSS.escape(held.key)}"][data-queue-leaving="false"]`)) {
       const reachable = Math.min(held.y, Math.max(0, document.documentElement.scrollHeight - window.innerHeight))
-      if (performance.now() < held.until || Math.abs(window.scrollY - reachable) <= 2) return held.key
+      // UNTIL THE GLIDE LANDS, however long it takes. `until` alone (700ms) ran out mid-glide on a long
+      // jump — a rail click from the top of the queue to its last card, measured 2026-09-29 — and the
+      // failed check below then DROPPED the hold, so the card being read fell back to the scrollspy
+      // before the page had even arrived, and after it landed the reading line sat on the card above.
+      if (performance.now() < held.until || gliding() || Math.abs(window.scrollY - reachable) <= 2) return held.key
     }
     landing.current = null
     return reading.current
@@ -865,6 +869,22 @@ function useQueueKeys(activeKey: string | null, scrollToCard: (key: string) => n
     return slot?.querySelector<HTMLElement>("[data-xq-card-root], [data-queue-card-root]") ?? slot
   }, [])
   const [ringed, setRinged] = useState<string | null>(null)
+  // THE ONE LANDING, for a key AND a rail row. The rail used to get the bare scrollToCard, so a row click
+  // glided with no hold and the card being read fell to the scrollspy's reading line. A card that cannot
+  // reach the landing spot — the last one, when the page bottoms out first — then left the line on the
+  // card ABOVE it: clicking "Rotate the signing key", last in the queue, marked and ringed "Pick the key
+  // rollout", and `d`/`s` would have finished or snoozed that one (driven 2026-09-29 on a real
+  // two-project stack, 1440×900 and 1440×1600). Held here, the clicked card is the one being read until
+  // the reader scrolls away, exactly as after `j`/`k`. Returns the glide's target (null: no such card),
+  // which the row reads to fall back to opening the thread.
+  const land = useCallback((key: string) => {
+    const y = scrollToCard(key)
+    if (y !== null) {
+      landing.current = { key, y, until: performance.now() + 700 }
+      setRinged(key)
+    }
+    return y
+  }, [scrollToCard])
   useEffect(() => registerQueueCursor({
     // Not a ghost (lib/stableQueue.ts), whose thread is no longer waiting, nor a card whose drawer is open.
     keys: () => [...document.querySelectorAll<HTMLElement>('[data-xq-card][data-queue-leaving="false"]:not([data-queue-ghost]):not([data-queue-concealed])')]
@@ -872,14 +892,8 @@ function useQueueKeys(activeKey: string | null, scrollToCard: (key: string) => n
       .filter(Boolean),
     current,
     root,
-    go: (key) => {
-      const y = scrollToCard(key)
-      if (y !== null) {
-        landing.current = { key, y, until: performance.now() + 700 }
-        setRinged(key)
-      }
-    },
-  }), [scrollToCard, current, root])
+    go: (key) => void land(key),
+  }), [land, current, root])
 
   // Re-read on every render (a card leaving re-renders the page) and on scroll (which can end a hold);
   // an unchanged key is a bail-out, not a render.
@@ -922,7 +936,7 @@ function useQueueKeys(activeKey: string | null, scrollToCard: (key: string) => n
     el?.setAttribute("data-queue-current", "")
     return () => el?.removeAttribute("data-queue-current")
   }, [target, root])
-  return ringed
+  return { active: ringed, land }
 }
 
 /**
