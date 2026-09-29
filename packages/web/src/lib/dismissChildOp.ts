@@ -79,3 +79,46 @@ export function childOpDismisser(
   const id = op.id
   return () => dismissChildOp(slug, id, kind, api)
 }
+
+// THE RESTING CARD'S "Stop shell" — the same stop as the × above, applied to every shell the card rows
+// at once (maintainer 2026-09-29: "there also needs to be a cancel button for background shell,
+// currently only snooze"). One click can end several shells, so it reports as ONE toast: N toasts
+// stacked for one gesture read as N separate events, and the partial-failure case — the one the
+// operator must not miss — would scroll out between two successes.
+export type ShellStopOutcome =
+  | { ok: true; stopped: boolean; note: string | null }
+  | { ok: false; error: string }
+
+/** The one toast for a batch of shell stops, or null when there is nothing worth announcing (every
+ *  shell had already finished, so each stop was a CLEAR and the rows leaving are the feedback — the
+ *  single-shell × stays silent in the same case). A failure outranks everything: a shell that is still
+ *  running is the one fact the operator has to act on. */
+export function shellStopSummary(outcomes: readonly ShellStopOutcome[]): { text: string; duration?: number } | null {
+  const failed = outcomes.filter((o): o is Extract<ShellStopOutcome, { ok: false }> => !o.ok)
+  const stopped = outcomes.filter((o): o is Extract<ShellStopOutcome, { ok: true }> => o.ok && o.stopped)
+  const shells = (n: number) => `${n} background shell${n === 1 ? "" : "s"}`
+  if (failed.length > 0) {
+    const why = failed[0].error.slice(0, 100)
+    if (stopped.length === 0) return { text: `Couldn’t stop: ${why}`, duration: 7000 }
+    return { text: `Stopped ${stopped.length} of ${shells(outcomes.length)}. Couldn’t stop the rest: ${why}`, duration: 7000 }
+  }
+  if (stopped.length === 0) return null
+  const noun = stopped.length === 1 ? "Background shell" : shells(stopped.length)
+  // A `note` is the kill landing while the WORKER could not be told — live confusion, not live work, but
+  // still the longer toast the single-shell path gives it.
+  const note = stopped.find((o) => o.note)?.note
+  if (note) return { text: `${noun} stopped. ${note}`, duration: 7000 }
+  return { text: `${noun} stopped — the worker was told` }
+}
+
+/** Stop each shell through the thread's own project client, then report once. Resolves when every
+ *  call has settled, and never rejects: the toast is the whole error path, as it is for the ×. */
+export async function stopBackgroundShells(slug: string, ids: readonly string[], api: Api = rpc): Promise<void> {
+  const outcomes = await Promise.all(ids.map((id): Promise<ShellStopOutcome> =>
+    api.stopBackgroundOp({ slug, id }).then(
+      ({ stopped, note }) => ({ ok: true, stopped, note }),
+      (error: unknown) => ({ ok: false, error: error instanceof Error ? error.message : String(error) }),
+    )))
+  const summary = shellStopSummary(outcomes)
+  if (summary) showToast(summary.text, summary.duration ? { duration: summary.duration } : undefined)
+}

@@ -37,11 +37,13 @@ import { useNowMs } from "../lib/liveClock.ts"
 import { useMarkdownHtml } from "../lib/useMarkdown.ts"
 import { pushBackgroundShellDrawer, pushSubAgentDrawer, showToast } from "../store.ts"
 import { rpc } from "../api/rpc.ts"
+import { useThreadApi } from "../api/threadApi.tsx"
+import { stopBackgroundShells } from "../lib/dismissChildOp.ts"
 import { threadLifecycleAvailability } from "../lib/threadLifecycle.ts"
 import { ICON_LABEL_NUDGE } from "../lib/iconAlign.ts"
 import { PRIMER, PRIMER_DANGER_LINK } from "../lib/primer.ts"
 import { LinkedHtml } from "./LinkedHtml.tsx"
-import { BLOCK_RADIUS_INNER_BOTTOM, CARD_ACTION_EXPLAINER, CARD_BODY, CARD_LINK, CARD_PRIMARY_ACTION, QUEUE_WRAP, TranscriptCard } from "./TranscriptCard.tsx"
+import { BLOCK_RADIUS_INNER_BOTTOM, CARD_ACTION_EXPLAINER, CARD_ACTION_RADIUS, CARD_BODY, CARD_LINK, CARD_PRIMARY_ACTION, QUEUE_WRAP, TranscriptCard } from "./TranscriptCard.tsx"
 
 // Name what the thread is ACTUALLY waiting on. Three real cases, and the sentence has to be true in all
 // of them: "sub-agents" is wrong for a shell-only thread (a launched dev server is not a child whose
@@ -982,6 +984,68 @@ function AwaitingSnooze({ thread }: { thread: Pick<ThreadView, "id" | "sessionId
   )
 }
 
+/** THE SHELLS THE FOOTER'S STOP ENDS — every shell the card ROWS that is running and that the server
+ *  says it can end, by launch id.
+ *
+ *  ROWED, not every running shell of the thread. The card lists only the shells the worker DECLARED
+ *  (see declaredShellWatches), and an undeclared dev server beside them is often one the human is
+ *  using; a "Stop 2 shells" over one visible row would end work the card never showed. The fullscreen
+ *  rail and the ops strip list every shell, each with its own ×, for the rest.
+ *
+ *  `stoppable` is the SERVER's answer, read exactly as childOpDismisser reads it (lib/dismissChildOp.ts)
+ *  and never re-derived: it depends on the thread's transport and on a task handle only the tailer
+ *  holds. A running shell without it (a codex exec, a Claude shell in the seconds before its launch ack)
+ *  is left out of the count rather than offered a button that would fail. */
+export function stoppableShellIds(thread: Pick<ThreadView, "id" | "subAgents" | "bgShells" | "watches">, hints: readonly AwaitingHint[] = NO_HINTS): string[] {
+  const ids = new Set<string>()
+  for (const watch of awaitingWaitItems(thread, { hints }).shells) {
+    const shell = resolveShell(thread, watch.target)
+    if (shell?.id && shell.state === "running" && shell.stoppable === true) ids.add(shell.id)
+  }
+  return [...ids]
+}
+
+/** "Stop shell", "Stop 2 shells". STOP, not Cancel: it is the same verb the × on a running row states
+ *  (CHILD_DISMISS_VERB) and the one the shell's own drawer footer says, and it kills a real process —
+ *  "cancel" reads as backing out of something that has not happened yet. */
+export function stopShellsLabel(count: number): string {
+  return count === 1 ? "Stop shell" : `Stop ${count} shells`
+}
+
+/** THE CARD'S SECOND VERB, beside Snooze. Snooze parks the card and leaves the shells running; this ends
+ *  them, and once they are gone the rest is over, so the card goes with them on the next board push.
+ *
+ *  Outlined, not white: the card family's rule is one white verb per card, and the one sanctioned
+ *  departure is a secondary sibling standing beside the primary, which stays outlined so the pair keeps
+ *  a hierarchy (the sign-in card's Retry, ChatView.ProviderFaultCard). The danger tint arrives on HOVER
+ *  only, as on the drawers' own "Stop shell" / "Stop sub-agent" — a card at rest should not shout. */
+function AwaitingStopShells({ slug, ids }: { slug: string; ids: readonly string[] }) {
+  // The thread's own project client, as the × uses — rpc is the address bar's project, and a surface
+  // that draws another project's thread wraps it in a ThreadProjectScope (api/threadApi.tsx).
+  const api = useThreadApi()
+  const [pending, setPending] = useState(false)
+  const stop = () => {
+    setPending(true)
+    // No optimism: the server refreshes the board once the stops land, and that push is what removes
+    // the rows (and this button with them). Re-enabled either way, so a stop that failed can be retried.
+    void stopBackgroundShells(slug, ids, api).finally(() => setPending(false))
+  }
+  const label = stopShellsLabel(ids.length)
+  return (
+    <button
+      type="button"
+      data-awaiting-stop-shells={ids.length}
+      onClick={stop}
+      disabled={pending}
+      onMouseDown={(e) => e.preventDefault()}
+      title={ids.length === 1 ? "Stop this background shell — the worker is told" : `Stop these ${ids.length} background shells — the worker is told`}
+      className={`shrink-0 ${CARD_ACTION_RADIUS} border border-border-strong px-2 py-[3px] text-[11px] font-medium text-fg/90 outline-none transition-colors hover:border-danger/40 hover:bg-danger/10 hover:text-danger-soft focus-visible:ring-1 focus-visible:ring-focus-ink-60 disabled:opacity-45`}
+    >
+      {pending ? "Stopping…" : label}
+    </button>
+  )
+}
+
 export function AwaitingBackgroundCard({ thread, fence }: {
   // `id` joins the Pick because the rows OPEN things now: a shell's output drawer and a sub-agent's
   // transcript are both addressed by the parent thread's slug. `lastFence` joined on 2026-08-24: the
@@ -1042,6 +1106,12 @@ export function AwaitingBackgroundCard({ thread, fence }: {
   // bg-snoozed — which would offer a park the mutation refuses (router.snoozeAwaitingBackground guards
   // on the rest instant). A thread running past its rest draws no awaiting card at all since 2026-09-24.
   const snoozable = thread !== undefined && showsRestingCard(thread) && threadLifecycleAvailability(thread).snooze
+  // THE STOP IS NOT GATED ON THE REST. Ending a shell is valid whenever one is running and the server can
+  // reach it — a bg-snoozed thread drawn through ChatView's fence block still has live shells worth
+  // stopping, even though it has no rest left to park. Owned and not archived, though: a foreign thread
+  // is another tool's session, and an archived one has no verbs at all (threadLifecycleAvailability).
+  const stopIds = thread !== undefined && threadLifecycleAvailability(thread).archive ? stoppableShellIds(thread, hints) : []
+  const footer = snoozable || stopIds.length > 0
   return (
     // The SAME shell as every transcript card (TranscriptCard). This card stacks directly under an
     // awaiting fence card on a queue card, and it used to be a visibly different object there —
@@ -1065,7 +1135,7 @@ export function AwaitingBackgroundCard({ thread, fence }: {
       aside={unrowed.length === 1 ? <WatchedRef watch={unrowed[0]} /> : undefined}
       // The recessed footer band below sits flush against the card's bottom edge, so the shell's own
       // bottom padding has to go when one renders — the band carries its own.
-      className={snoozable ? "pb-0" : ""}
+      className={footer ? "pb-0" : ""}
     >
       {/* THE WORKER'S PROSE — the fence's whole Markdown body, block-rendered, exactly as the old
           free-standing message drew it (md-body inside card-md; QUEUE_WRAP so a long unbreakable token
@@ -1136,10 +1206,26 @@ export function AwaitingBackgroundCard({ thread, fence }: {
       {/* THE FOOTER BAND — the card's snooze, in a recessed full-width strip flush with the card's
           bottom corners (the queue card's own footer idiom), so the control reads as chrome under the
           content rather than as one more row of it. It draws on EVERY surface the card is live on as of
-          2026-08-31; a thread with no snooze verb draws the card with the shell's normal padding. */}
-      {snoozable ? (
+          2026-08-31; a thread with no snooze verb draws the card with the shell's normal padding.
+          Since 2026-09-29 it also carries the Stop, and draws for EITHER verb. Stop TRAILS: the caption
+          belongs to Snooze and must stay one line directly beside it, and the caption's flex-grow then
+          carries the Stop to the band's right edge, apart from the pair. Stop-first (the sign-in card's
+          Retry-before-Sign-in order) was drawn and rejected: at 780px it forced the caption onto two
+          lines at widths where it fits one today. Alone, the Stop sits at the band's left edge. */}
+      {footer ? (
         <div data-awaiting-snooze className={`-mx-4 mt-3 flex flex-wrap items-center gap-x-2.5 gap-y-2 border-t border-border bg-fg/[0.03] px-4 py-2.5 ${BLOCK_RADIUS_INNER_BOTTOM}`}>
-          <AwaitingSnooze thread={thread} />
+          {/* Snooze and its caption as ONE flex item, sized to their content. The caption alone has a
+              flex-basis of 0, so beside a Stop the row would fit all three on one line by folding the
+              caption instead of wrapping the Stop. As a unit the PAIR yields a line: the Stop wraps
+              below it, and the caption behaves exactly as it did with no Stop at all — one line where
+              it fits, and at a 390px drawer the same two it already took (221px of caption beside a
+              76px button in 301px). */}
+          {snoozable && (
+            <div className="flex min-w-0 flex-1 basis-auto items-center gap-x-2.5">
+              <AwaitingSnooze thread={thread!} />
+            </div>
+          )}
+          {stopIds.length > 0 && <AwaitingStopShells key={stopIds.join(" ")} slug={thread!.id} ids={stopIds} />}
         </div>
       ) : null}
     </TranscriptCard>

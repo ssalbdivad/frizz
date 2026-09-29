@@ -2,7 +2,7 @@ import assert from "node:assert/strict"
 import test from "node:test"
 import { createElement } from "react"
 import { renderToStaticMarkup } from "react-dom/server"
-import { AwaitingBackgroundCard, AwaitingWaitTable, awaitingBackgroundSubject, hasAwaitingWaitRows } from "./AwaitingBackgroundCard.tsx"
+import { AwaitingBackgroundCard, AwaitingWaitTable, awaitingBackgroundSubject, hasAwaitingWaitRows, stoppableShellIds } from "./AwaitingBackgroundCard.tsx"
 import type { ThreadView } from "@frizz/shared"
 
 // One card, three surfaces, and since 2026-08-15 one TABLE: every kind of live work the thread declared
@@ -410,4 +410,58 @@ test("hasAwaitingWaitRows agrees with the table", () => {
   assert.equal(hasAwaitingWaitRows(rows), true)
   assert.equal(hasAwaitingWaitRows({ ...thread([], [shell("running")]), watches: [] } as Parameters<typeof AwaitingWaitTable>[0]["thread"]), false, "an undeclared shell is no row")
   assert.equal(hasAwaitingWaitRows({ ...thread([], [shell("running")]), watches: [] } as Parameters<typeof AwaitingWaitTable>[0]["thread"], { hints: [{ kind: "shell", value: "vite dev" }] }), true, "…a declared one is")
+})
+
+// THE STOP (maintainer 2026-09-29: "there also needs to be a cancel button for background shell,
+// currently only snooze"). What can silently go wrong: the button offering a stop the server said it
+// cannot deliver, counting a shell the card never showed, or vanishing on a thread that has no rest to
+// park but still has shells to end.
+type T = Parameters<typeof AwaitingBackgroundCard>[0]["thread"]
+const liveShell = (id: string, taskId: string, label: string, stoppable?: boolean) =>
+  ({ id, taskId, label, startedAt: "2026-07-28T09:00:00.000Z", state: "running" as const, ...(stoppable === undefined ? {} : { stoppable }) })
+const shellRest = (shells: ReturnType<typeof liveShell>[], declared: string[]) =>
+  ({ ...thread([], shells), watches: declared.map(shellWatch) }) as T
+
+test("a running, stoppable, declared shell puts Stop shell in the footer beside Snooze", () => {
+  const t = shellRest([liveShell("toolu_s", "bzvtnt3ig", "vite dev", true)], ["bzvtnt3ig"])
+  const html = render(t)
+  assert.match(html, /data-awaiting-stop-shells="1"/)
+  assert.match(text(t), /Stop shell/)
+  assert.match(html, /Snooze/, "Stop joins the footer; it does not replace the park")
+  // Stop TRAILS, so Snooze keeps its caption directly beside it.
+  assert.ok(html.indexOf("Hides card until new activity is detected") < html.indexOf("data-awaiting-stop-shells"))
+})
+
+test("the count follows the shells the card rows, and says so", () => {
+  const two = shellRest([liveShell("toolu_a", "ba", "vite dev", true), liveShell("toolu_b", "bb", "gh run watch", true)], ["ba", "bb"])
+  assert.match(text(two), /Stop 2 shells/)
+  assert.deepEqual(stoppableShellIds(two!), ["toolu_a", "toolu_b"])
+  // An UNDECLARED shell running beside a declared one has no row, so it is not in the count either — a
+  // "Stop 2 shells" over one visible row would end a dev server the card never showed.
+  const oneRowed = shellRest([liveShell("toolu_a", "ba", "vite dev", true), liveShell("toolu_x", "bx", "some other server", true)], ["ba"])
+  assert.deepEqual(stoppableShellIds(oneRowed!), ["toolu_a"])
+  assert.match(text(oneRowed), /Stop shell/)
+  assert.doesNotMatch(text(oneRowed), /Stop 2 shells/)
+})
+
+test("no stoppable running shell ⇒ no Stop, never a control that cannot deliver", () => {
+  // The server's `stoppable` absent or false (a codex exec; a Claude shell before its launch ack).
+  assert.doesNotMatch(render(shellRest([liveShell("toolu_s", "bzvtnt3ig", "vite dev")], ["bzvtnt3ig"])), /data-awaiting-stop-shells/)
+  assert.doesNotMatch(render(shellRest([liveShell("toolu_s", "bzvtnt3ig", "vite dev", false)], ["bzvtnt3ig"])), /data-awaiting-stop-shells/)
+  // A sub-agent rest has no shells at all.
+  assert.doesNotMatch(render(thread([agent("running")], [])), /data-awaiting-stop-shells/)
+  // Foreign and archived threads get no verbs, this one included.
+  const t = shellRest([liveShell("toolu_s", "bzvtnt3ig", "vite dev", true)], ["bzvtnt3ig"])
+  assert.doesNotMatch(render({ ...t, foreign: true } as T), /data-awaiting-stop-shells/)
+  assert.doesNotMatch(render({ ...t, state: "archived" } as T), /data-awaiting-stop-shells/)
+})
+
+test("Stop draws the footer on its own where there is no rest to park", () => {
+  // A bg-snoozed thread still reaches this card through ChatView's fence block: Snooze is gone, the
+  // shells are still running, and ending them is still valid.
+  const t = { ...shellRest([liveShell("toolu_s", "bzvtnt3ig", "vite dev", true)], ["bzvtnt3ig"]), bgSnoozed: true } as T
+  const html = render(t)
+  assert.doesNotMatch(html, /Snooze/)
+  assert.match(html, /data-awaiting-stop-shells="1"/)
+  assert.match(html, /pb-0/, "the band still sits flush with the card's bottom")
 })

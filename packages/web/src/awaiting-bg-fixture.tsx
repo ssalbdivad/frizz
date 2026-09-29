@@ -98,8 +98,8 @@ const thread = {
   // BOTH shells are always present; only ONE is declared (the fence's `shells:` below). That pairing is the
   // point — the card must list the declared one and say nothing about the dev server nobody tore down.
   bgShells: !wantShells ? [] : [
-        { id: "toolu_vite", taskId: "b7k2m1xq0", label: "vite dev --host", startedAt: ago(18), state: "running" },
-        { id: "toolu_ci", taskId: "bzvtnt3ig", label: "gh run watch 1842", startedAt: ago(4), state: "running" },
+        { id: "toolu_vite", taskId: "b7k2m1xq0", label: "vite dev --host", startedAt: ago(18), state: "running", stoppable: true },
+        { id: "toolu_ci", taskId: "bzvtnt3ig", label: "gh run watch 1842", startedAt: ago(4), state: "running", stoppable: true },
       ],
   // ?watch=1|both seeds FOUR PRs, one per check state, so the row's whole vocabulary is on screen at
   // once: running with counts, all-green-and-mergeable, red (whose failing jobs are now a `view failures`
@@ -112,7 +112,11 @@ const thread = {
   // gets a row, the dev server beside it never does.
   watches: [
     ...(wantShells
-      ? [{ id: "shell:demo:bzvtnt3ig", kind: "shell", target: "bzvtnt3ig", state: "armed", createdAt: ago(4) }]
+      ? [
+          { id: "shell:demo:bzvtnt3ig", kind: "shell", target: "bzvtnt3ig", state: "armed", createdAt: ago(4) },
+          // ?declare=both — the dev server declared too, so the footer's Stop counts two ("Stop 2 shells").
+          ...(params.get("declare") === "both" ? [{ id: "shell:demo:b7k2m1xq0", kind: "shell", target: "b7k2m1xq0", state: "armed", createdAt: ago(18) }] : []),
+        ]
       : []),
     ...(watchMode === "one"
     ? [
@@ -189,6 +193,11 @@ window.fetch = async (input, init) => {
     window.dispatchEvent(new CustomEvent("fixture-rpc", { detail: { rpc: "snoozeAwaitingBackground", body: JSON.parse(String(init?.body ?? "{}")) } }))
     // A void mutation serializes as {result:null} (rpc/server.ts) — mirror that so the web client parses success.
     return new Response(JSON.stringify({ result: null }), { headers: { "content-type": "application/json" } })
+  }
+  // The footer's Stop (2026-09-29): answered as a real stop, and announced for a harness to count.
+  if (url.pathname === "/_frizz/rpc/stopBackgroundOp") {
+    window.dispatchEvent(new CustomEvent("fixture-rpc", { detail: { rpc: "stopBackgroundOp", body: JSON.parse(String(init?.body ?? "{}")) } }))
+    return new Response(JSON.stringify({ result: { stopped: true, dismissed: true, note: null, descendantsStopped: 0 } }), { headers: { "content-type": "application/json" } })
   }
   if (url.pathname.startsWith("/_frizz/rpc/")) {
     return new Response(JSON.stringify({ result: null }), { headers: { "content-type": "application/json" } })
