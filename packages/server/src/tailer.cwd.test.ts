@@ -12,7 +12,7 @@ import type { Project } from "./project.ts"
 // WHERE THE AGENT IS WORKING, AND WHERE EACH OF ITS SHELLS STARTED — folded from the transcript the tailer
 // already reads, over real folders (a linked worktree's `.git` is a FILE, as in thread-cwd.test.ts).
 
-function world() {
+function world(opts: { shellCwd?: (outputFile: string) => string | undefined } = {}) {
   const root = realpathSync(mkdtempSync(join(tmpdir(), "frizz-tail-cwd-")))
   const project = join(root, "repo")
   mkdirSync(join(project, ".git"), { recursive: true })
@@ -38,6 +38,7 @@ function world() {
     now: () => Date.parse("2026-07-01T00:01:00.000Z"),
     paneDead: () => false,
     sessionLogDir: logDir,
+    ...(opts.shellCwd ? { shellCwd: opts.shellCwd } : {}),
   })
   return { root, project, worktree, tailer, append, changes, cleanup: () => { resetCheckoutMemo(); rmSync(root, { recursive: true, force: true }) } }
 }
@@ -218,4 +219,52 @@ test("codex: a tool call's workdir is the agent's folder — absolute, or relati
   assert.equal(s.cwd, "packages/web", "kept raw — the tailer resolves it against the project")
   applyEvent(s, { kind: "tool-call", at: "2026-07-01T00:00:03.000Z", id: "c3", name: "apply_patch", input: "*** Begin Patch" })
   assert.equal(s.cwd, "packages/web", "a call naming no folder moves nothing")
+})
+
+test("the OS outranks the transcript on where a running shell is — the batch-stamped cwd case", () => {
+  // MEASURED 2026-09-29 on a real haiku worker: it started a shell in the root, then `git worktree add
+  // … && cd` into the worktree, and the harness wrote that whole turn's records at once, every one
+  // stamped with the worktree. So the fold says worktree; the shell's process is in the root.
+  const asked: string[] = []
+  let os: string | undefined
+  const w = world({ shellCwd: (file) => (asked.push(file), os) })
+  os = w.project
+  try {
+    const file = "/nowhere/tasks/bm.output"
+    w.append(user(w.project), bash("toolu_main", "npm run dev", w.worktree), result("toolu_main", bgAck("bm", file), w.worktree))
+    w.tailer.tick()
+    const before = w.changes.n
+    let [row] = w.tailer.get("t")!.bgShells
+    assert.equal(row?.cwd, w.project, "the process's folder, not the batch's stamp")
+    assert.equal(row?.checkout, undefined, "so no worktree hint on a root shell")
+    assert.deepEqual(asked, [file])
+    // Asked once: the answer is kept, and written onto the entry the drawer's lookup reads.
+    w.tailer.tick()
+    ;[row] = w.tailer.get("t")!.bgShells
+    assert.equal(row?.cwd, w.project)
+    assert.deepEqual(asked, [file], "one OS question per shell, not one per tick")
+    assert.equal(w.tailer.backgroundShell?.("t", "toolu_main")?.cwd, w.project)
+    assert.equal(w.changes.n, before, "a settled reading moves nothing")
+    // And it outlives the shell: the retired ring carries the corrected folder.
+    w.append({ type: "queue-operation", operation: "enqueue", timestamp: at(), content: "<task-notification>\n<task-id>bm</task-id>\n<tool-use-id>toolu_main</tool-use-id>\n<status>completed</status>\n<summary>done</summary>\n</task-notification>" })
+    w.tailer.tick()
+    assert.equal(w.tailer.backgroundShell?.("t", "toolu_main")?.cwd, w.project)
+  } finally {
+    w.cleanup()
+  }
+})
+
+test("no OS answer leaves the transcript's reading, and the question is not asked forever", () => {
+  const asked: string[] = []
+  const w = world({ shellCwd: (file) => (asked.push(file), undefined) })
+  try {
+    w.append(user(w.project), bash("toolu_w", "nub test --watch", w.worktree), result("toolu_w", bgAck("bw", "/nowhere/tasks/bw.output"), w.worktree))
+    for (let i = 0; i < 6; i++) w.tailer.tick()
+    const [row] = w.tailer.get("t")!.bgShells
+    assert.equal(row?.cwd, w.worktree)
+    assert.equal(row?.checkout?.kind, "worktree")
+    assert.ok(asked.length >= 1 && asked.length <= 3, `a bounded number of asks, got ${asked.length}`)
+  } finally {
+    w.cleanup()
+  }
 })

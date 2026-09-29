@@ -39,6 +39,7 @@ import { frizzTempDir } from "./frizz-paths.ts"
 import { declaredShellBudgetMs } from "./shell-budget.ts"
 import { vetHarnessOutputPath } from "./background-shell-output.ts"
 import { liftCheckout, liftWorkingDir } from "./thread-cwd.ts"
+import { probeShellCwds } from "./shell-cwd-probe.ts"
 import { readWorkflowRun, workflowAgentState as sharedWorkflowAgentState, workflowAckRunDir, workflowAckTaskId, workflowLabel, type WorkflowAgent } from "./workflow-runs.ts"
 
 // The JSONL tailer: incrementally reads each registered session's Claude Code transcript
@@ -471,8 +472,11 @@ interface SubAgentEntry {
   timeoutMs?: number
   // Shell only: this entry is a `Monitor`, which carries no budget (see shell-budget.ts).
   monitor?: true
-  // Shell only: the absolute folder it STARTED in — the launch record's `cwd`, or where a leading
-  // `cd <path> &&` moved it (leadingCd). What its row's "Started in" and folder hint read.
+  // Shell only: the absolute folder it runs in. Folded from the launch record's `cwd`, or where a leading
+  // `cd <path> &&` moved it (leadingCd). That reading can be a whole turn late — the harness stamps `cwd`
+  // when it writes a batch, not when the command ran — so while the shell runs, the OS's answer
+  // (shell-cwd-probe.ts) replaces it here, and the retired ring and the drawer's lookup inherit it.
+  // What its row's "Started in" and folder hint read.
   cwd?: string
   subagentType?: string // the dispatch's input.subagent_type verbatim (agents only; may be absent)
   outputFile?: string // the child/shell's output path (from the launch tool_result); its mtime = liveness
@@ -2554,6 +2558,10 @@ export interface TailerDeps {
    *  liveness cannot be established (probe unavailable, path unknown) — never a guess. Injectable for
    *  tests; the default shells out to `lsof`. */
   shellAlive?: (outputFile: string) => boolean | undefined
+  /** Where a running background shell's process is, by its output file — the OS's answer, which
+   *  outranks the transcript's (shell-cwd-probe.ts). Undefined when it cannot be established. Injectable
+   *  for tests, and answered inline when injected; the default shells out to `lsof` off the event loop. */
+  shellCwd?: (outputFile: string) => string | undefined
   // The agent backend that locates + folds a session's transcript (Codex-support epic). Injected by
   // the composition layer as a ClaudeBackend; when absent (tests) the tailer folds with its own
   // corpus-verified applyRecord + deterministic Claude path — a byte-identical default.
@@ -3288,9 +3296,11 @@ export function createTailer(deps: TailerDeps): Tailer {
       // outlived, not a lifetime anyone chose.
       const declared = e.monitor ? undefined : declaredShellBudgetMs(e.timeoutMs)
       const budget = e.monitor ? { monitor: true } : declared !== undefined ? { budgetMs: declared } : {}
-      // Where it started, and — only when that is off the project root — the checkout it runs in.
-      const checkout = liftCheckout(e.cwd, projectWorkDir, now())
-      out.push({ label: e.label, startedAt: e.startedAt, state: shellState, id: e.toolUseId, ...(e.taskId ? { stoppable: true, taskId: e.taskId } : {}), ...(lastActivityAt ? { lastActivityAt } : {}), ...budget, ...(e.cwd ? { cwd: e.cwd } : {}), ...(checkout ? { checkout } : {}) })
+      // Where it runs — the OS's answer once it has one (shellCwd) — and, only when that is off the
+      // project root, the checkout it runs in.
+      const cwd = shellState === "running" ? shellCwd(e) : e.cwd
+      const checkout = liftCheckout(cwd, projectWorkDir, now())
+      out.push({ label: e.label, startedAt: e.startedAt, state: shellState, id: e.toolUseId, ...(e.taskId ? { stoppable: true, taskId: e.taskId } : {}), ...(lastActivityAt ? { lastActivityAt } : {}), ...budget, ...(cwd ? { cwd } : {}), ...(checkout ? { checkout } : {}) })
     }
     return out
   }
@@ -3376,7 +3386,7 @@ export function createTailer(deps: TailerDeps): Tailer {
     // Codex's shells join the key on the same terms: they come off a live stream rather than the fold,
     // so an exec starting or ending changes NOTHING on disk and would otherwise wait for the next
     // reconcile to reach the board.
-    const shells = [...bgShellViews(state), ...codexBgShellViews(state)].map((v) => `S:${v.label}|${v.state}|${v.startedAt}|${activityMinute(v.lastActivityAt)}`).join("")
+    const shells = [...bgShellViews(state), ...codexBgShellViews(state)].map((v) => `S:${v.label}|${v.state}|${v.startedAt}|${activityMinute(v.lastActivityAt)}|${v.cwd ?? ""}`).join("")
     const ask = state.pendingAsk ? `Q:${state.pendingAsk.id}:${state.pendingAsk.questions.length}` : ""
     // The agent's CHECKOUT, not its raw folder: moving into a worktree pushes exactly one board delta,
     // and a `cd packages/web` — which lifts to the same checkout — pushes none.
@@ -3831,6 +3841,75 @@ export function createTailer(deps: TailerDeps): Tailer {
     shellProbeWanted.add(e.outputFile)
     armShellProbeFlush()
     return false
+  }
+
+  // WHERE EACH RUNNING SHELL REALLY IS (shell-cwd-probe.ts). The fold's reading comes off the launch
+  // record's `cwd`, which the harness stamps when it writes a turn's batch — so a shell started in the
+  // root just before the agent moved into a worktree folds as the worktree's. The OS names the folder
+  // its process is in; that answer is written back onto the entry, so the retired ring and the drawer's
+  // lookup carry it too. Asked a few times per shell at most, never on the event loop, batched like the
+  // liveness probe, and only about a VETTED path (a forged ack could name another process's file).
+  const shellCwdReadings = new Map<string, string>()
+  const shellCwdAsks = new Map<string, number>()
+  const shellCwdWanted = new Map<string, string>() // raw output path → the vetted path lsof is asked about
+  const SHELL_CWD_ATTEMPTS = 3
+  let shellCwdInFlight = false
+  let shellCwdArmed: ReturnType<typeof setTimeout> | undefined
+  function shellCwd(e: SubAgentEntry): string | undefined {
+    const file = e.outputFile
+    if (!file) return e.cwd
+    const reading = shellCwdReadings.get(file)
+    if (reading !== undefined) {
+      e.cwd = reading
+      return reading
+    }
+    const asked = shellCwdAsks.get(file) ?? 0
+    if (asked >= SHELL_CWD_ATTEMPTS || shellCwdWanted.has(file)) return e.cwd
+    shellCwdAsks.set(file, asked + 1)
+    if (deps.shellCwd) {
+      const answer = deps.shellCwd(file)
+      if (answer) {
+        shellCwdReadings.set(file, answer)
+        e.cwd = answer
+      }
+      return e.cwd
+    }
+    const vetted = vetHarnessOutputPath(file, e.taskId)
+    if (!vetted) {
+      shellCwdAsks.set(file, SHELL_CWD_ATTEMPTS)
+      return e.cwd
+    }
+    shellCwdWanted.set(file, vetted)
+    if (!shellCwdArmed) {
+      shellCwdArmed = setTimeout(() => {
+        shellCwdArmed = undefined
+        flushShellCwds()
+      }, 0)
+      shellCwdArmed.unref?.()
+    }
+    return e.cwd
+  }
+  function flushShellCwds(): void {
+    if (shellCwdInFlight || shellCwdWanted.size === 0) return
+    const batch = [...shellCwdWanted]
+    shellCwdWanted.clear()
+    shellCwdInFlight = true
+    void probeShellCwds(batch.map(([, vetted]) => vetted))
+      .then((cwds) => {
+        let changed = false
+        for (const [file, vetted] of batch) {
+          const dir = cwds.get(vetted)
+          if (!dir) continue
+          if (shellCwdReadings.get(file) !== dir) changed = true
+          shellCwdReadings.set(file, dir)
+        }
+        // The next assembly writes the answer onto the entry and into the board signature.
+        if (changed) deps.onChange()
+      })
+      .catch(() => {}) // no reading: the transcript's stays
+      .finally(() => {
+        shellCwdInFlight = false
+      })
   }
 
   // THE DRAWER'S AND THE LINE COUNTER'S ONE LOOKUP, scoped to this thread's own fold: its live op map,
