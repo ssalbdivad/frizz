@@ -1,7 +1,7 @@
 import { useMutation } from "@tanstack/react-query"
 import { Loader2, RotateCw } from "lucide-react"
 import type { ThreadView } from "@frizz/shared"
-import { useThreadApi } from "../api/threadApi.tsx"
+import { rpc } from "../api/rpc.ts"
 import { showToast } from "../store.ts"
 import { aiRenameAvailability } from "../lib/threadTitle.ts"
 import { Tooltip } from "./Tooltip.tsx"
@@ -11,9 +11,8 @@ import { Tooltip } from "./Tooltip.tsx"
 // element the thread header (ChatView) and the project board's queue card header (TodosView) shared
 // until that board went on 2026-09-28, so the two surfaces could not drift; the queue used to have no
 // rename affordance at all (maintainer 2026-08-26: "it should show up in the cue card, in addition to
-// showing up in the drawer"). The cross-project card (AllQueuesCard) lost it when that board went and
-// has carried it again, beside its title link, since 2026-09-29 — so its client comes from the card's
-// project scope (useThreadApi), never the page's `rpc`, which on that page names the FOCUSED project.
+// showing up in the drawer"). The cross-project card (AllQueuesCard) renders neither, so today only the
+// drawer and /full offer it.
 //
 // A RELOAD MARK, NOT SPARKLES, and REVEALED ON HOVER rather than always drawn (same maintainer, same
 // day: "it should be a reload icon, not the sparkles icon for refreshing the title… it should not
@@ -30,9 +29,8 @@ import { Tooltip } from "./Tooltip.tsx"
 // EVERY CLICK ANSWERS. Where the verb genuinely cannot run — no live daemon to ask — the click says so
 // in a toast instead of doing nothing at all, which is what the old gate did on every running thread.
 export function AiRenameButton({ thread, hidden = false }: { thread: ThreadView; hidden?: boolean }) {
-  const api = useThreadApi()
   const rename = useMutation({
-    mutationFn: () => api.aiRenameThread({ slug: thread.id }),
+    mutationFn: () => rpc.aiRenameThread({ slug: thread.id }),
     onSuccess: ({ title }) => showToast(`Renamed to “${title}”`),
     onError: (error) => showToast(error instanceof Error ? error.message : "Could not rename with Claude", { duration: 7000 }),
   })
