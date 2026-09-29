@@ -749,13 +749,14 @@ test("stop hook: a REGISTERED done ends the arrangement exactly as the fence doe
     assert.deepEqual(h.delivered, [], "a thread that CALLED done is as finished as one that fenced it")
   } finally { h.close() }
 
-  // And it reopens on the human's next word, by the same "nothing newer from the human" rule the board
-  // reads it by — otherwise a completion would silence a thread the human has since sent more work to.
-  // The human spoke at :02 and the worker answered at :03, so this IS a rest — the ordering matters,
-  // because a thread whose LAST word is the human's is not resting and the trigger holds for that
-  // reason instead, which would have made this pass for the wrong one.
+  // And it reopens on NEW WORK from the human, by the same rule the board reads it by (add52ad1,
+  // `registeredDoneFence`): the human spoke after the done AND the worker then ran a tool — otherwise a
+  // completion would silence a thread the human has since sent more work to. The human spoke at :02, the
+  // worker ran a tool at :02.5 and answered at :03, so this IS a rest — the ordering matters, because a
+  // thread whose LAST word is the human's is not resting and the trigger holds for that reason instead,
+  // which would have made this pass for the wrong one.
   const reopened = scheduler(
-    { pendingQuestion: false, lastUserAt: "2026-08-02T00:00:02.000Z", lastAssistantAt: "2026-08-02T00:00:03.000Z", lastActivityAt: "2026-08-02T00:00:03.000Z" },
+    { pendingQuestion: false, lastUserAt: "2026-08-02T00:00:02.000Z", lastToolCallAt: "2026-08-02T00:00:02.500Z", lastAssistantAt: "2026-08-02T00:00:03.000Z", lastActivityAt: "2026-08-02T00:00:03.000Z" },
     { now: at("2026-08-02T00:00:05.000Z") },
   )
   try {
@@ -763,6 +764,19 @@ test("stop hook: a REGISTERED done ends the arrangement exactly as the fence doe
     await reopened.s.tick()
     assert.equal(reopened.delivered.length, 1, "new work from the human spends the completion")
   } finally { reopened.close() }
+
+  // THE NEGATIVE CONTROL for add52ad1's line: the same human message answered in PROSE alone is
+  // conversation about finished work, not new work, so the done stands and the Goal stays silent. Before
+  // add52ad1 the human's word alone spent the done, and this case fired.
+  const chatted = scheduler(
+    { pendingQuestion: false, lastUserAt: "2026-08-02T00:00:02.000Z", lastAssistantAt: "2026-08-02T00:00:03.000Z", lastActivityAt: "2026-08-02T00:00:03.000Z" },
+    { now: at("2026-08-02T00:00:05.000Z") },
+  )
+  try {
+    chatted.storage.markThreadDone(chatted.slug, "- **Shipped** it", Date.parse("2026-08-02T00:00:01.000Z"))
+    await chatted.s.tick()
+    assert.deepEqual(chatted.delivered, [], "a prose-only reply to the human keeps the done standing")
+  } finally { chatted.close() }
 })
 
 // RE-ARMING THE GOAL IS NEW WORK FROM THE HUMAN, and it was the one form of it the sign-off reading

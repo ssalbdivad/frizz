@@ -296,9 +296,18 @@ test("a poll publishes a reading the BOARD can actually read, and the queue rule
     // …and the row the card draws carries the same reading, off the same book.
     assert.deepEqual(fenceWatchViews(SLUG, tele, tele?.lastAssistantAt, book, [{ target: "acme/app#391", createdAt: at }])[0]?.github, status)
 
-    // CHECKS DONE → straight back into the queue, with no new fence and no worker turn.
+    // CHECKS DONE → STILL out of the queue. Until 12b4e536 (2026-09-24) green CI put the thread straight
+    // back into the queue with no worker turn; now an ```awaiting fence whose every item is registered and
+    // whose `for:` has not run out is an HONOURED PARK (board.hasHonouredPark), held until the watcher
+    // wakes the worker — the green checks are exactly a change it reports. The human has nothing to do
+    // with a reading the worker has not seen yet (maintainer 2026-09-24: nothing is ready unless it is
+    // explicitly waiting for human input).
     const done = { "acme/app#391": { ...status, checks: "passing" as const, running: 0, passed: 2 } }
-    assert.equal(deriveNeedsYou(row, tele, "turn-idle", false, Date.now(), undefined, true, false, done, registered), true)
+    assert.equal(deriveNeedsYou(row, tele, "turn-idle", false, Date.now(), undefined, true, false, done, registered), false)
+    // THE PARK IS BOUNDED BY ITS `for:`, which is what answers the old "a PR wait must never vanish" rule:
+    // past the 2h the fence declared, the same registered park queues.
+    const pastFor = Date.parse(tele!.lastAssistantAt!) + 2 * 3600_000 + 1_000
+    assert.equal(deriveNeedsYou(row, tele, "turn-idle", false, pastFor, undefined, true, false, done, registered), true)
     // AND AN UNREGISTERED DECLARATION IS NOT A WAIT. Same fence, same green-CI reading, no watcher: the
     // thread queues, because nothing will ever wake it.
     assert.equal(deriveNeedsYou(row, tele, "turn-idle", false, Date.now(), undefined, true, false, book, new Set()), true)
