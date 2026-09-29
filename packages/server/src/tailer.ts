@@ -36,7 +36,7 @@ import {
 } from "./tail-cache.ts"
 import { log as frizzLog } from "./logging.ts"
 import { frizzTempDir } from "./frizz-paths.ts"
-import { SHELL_BUDGET_DEFAULT_MS, shellLaunchBudgetMs } from "./shell-budget.ts"
+import { declaredShellBudgetMs } from "./shell-budget.ts"
 import { readWorkflowRun, workflowAgentState as sharedWorkflowAgentState, workflowAckRunDir, workflowAckTaskId, workflowLabel, type WorkflowAgent } from "./workflow-runs.ts"
 
 // The JSONL tailer: incrementally reads each registered session's Claude Code transcript
@@ -511,10 +511,16 @@ export interface BgShellView {
   /** The runtime's own background-task handle — the id the MODEL was given, and therefore the one a
    *  `shell` watcher is registered against. Full contract on the shared schema. */
   taskId?: string
-  /** The runtime budget this shell LAUNCHED with (shell-budget.ts): its Bash `timeout`, clamped, else the
-   *  1h default. Absent ⇒ no budget at all (a `Monitor`). An `extend_shell` never rewrites this — the
-   *  extension is a durable row the scheduler reads beside it. Full contract on the shared schema. */
+  /** The runtime budget this shell LAUNCHED with (shell-budget.ts): its Bash `timeout`, clamped. Absent ⇒
+   *  none was declared, and none is imposed — there is no default. An `extend_shell` never rewrites this;
+   *  the extension is a durable row the scheduler reads beside it. Full contract on the shared schema. */
   budgetMs?: number
+  /** A `Monitor` rather than a background Bash: never budgeted, and `extend_shell` refuses it. */
+  monitor?: boolean
+  /** When the budget actually runs out (ISO8601) — the declared budget, an `extend_shell`, or an armed
+   *  `watch` holding it later (shell-budget.ts resolveShellBudget). Stamped by the BOARD, which holds the
+   *  durable rows; the tailer never sets it. Absent ⇒ unbudgeted. */
+  budgetEndsAt?: string
 }
 
 /** A background shell that has FINISHED, in the shape the scheduler's watcher pass matches against.
@@ -3085,9 +3091,11 @@ export function createTailer(deps: TailerDeps): Tailer {
       // shell all along; nothing ever produced one, because this was a literal "running".
       const shellState = shellIsGone(e) ? "stale" as const : "running" as const
       // The budget is resolved HERE, off the raw launch `timeout`, rather than folded — see
-      // SubAgentEntry.timeoutMs. An auto-backgrounded foreground Bash carries none: its `timeout` was the
-      // foreground wait it outlived, not a lifetime anyone chose, so it takes the default.
-      const budget = e.monitor ? {} : { budgetMs: shellLaunchBudgetMs(e.timeoutMs) }
+      // SubAgentEntry.timeoutMs. None declared ⇒ none at all (no default since 2026-09-29, shell-budget.ts).
+      // An auto-backgrounded foreground Bash carries none: its `timeout` was the foreground wait it
+      // outlived, not a lifetime anyone chose.
+      const declared = e.monitor ? undefined : declaredShellBudgetMs(e.timeoutMs)
+      const budget = e.monitor ? { monitor: true } : declared !== undefined ? { budgetMs: declared } : {}
       out.push({ label: e.label, startedAt: e.startedAt, state: shellState, id: e.toolUseId, ...(e.taskId ? { stoppable: true, taskId: e.taskId } : {}), ...(lastActivityAt ? { lastActivityAt } : {}), ...budget })
     }
     return out
@@ -3141,9 +3149,8 @@ export function createTailer(deps: TailerDeps): Tailer {
       state: "running" as const,
       id: exec.processId,
       stoppable: true,
-      // Codex has no launch-time knob for a lifetime, so every background exec takes the default and is
-      // extended the same way a Claude shell is (shell-budget.ts).
-      budgetMs: SHELL_BUDGET_DEFAULT_MS,
+      // Codex has no launch-time knob for a lifetime, so a background exec carries NO budget unless the
+      // worker gives it one with `extend_shell` (shell-budget.ts) — the same as an undeclared Claude shell.
       // Codex hands a yielded command's output back only when the MODEL polls it — there is no file
       // for frizz to tail, so the row carries its × and no drill-in rather than opening a drawer that
       // could only say "unavailable".

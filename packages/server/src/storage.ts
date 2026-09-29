@@ -787,8 +787,11 @@ export interface Storage {
   settleThreadWatch(id: string, settledAtMs: number, state?: "expired" | "settled"): boolean
   // ---- BACKGROUND-SHELL RUNTIME BUDGETS (shell-budget.ts) --------------------------------------------
   getShellBudget(slug: string, shellId: string): ShellBudgetRow | undefined
-  /** Every recorded budget row on one thread — the `activity` readout's single read. */
+  /** Every recorded budget row on one thread. */
   listShellBudgets(slug: string): ShellBudgetRow[]
+  /** Every recorded budget row in the project, grouped by thread — the board's ONE read per build for
+   *  the `budgetEndsAt` it stamps on each shell (see board.ts ThreadRegistries for why it is batched). */
+  shellBudgetsBySlug(): Map<string, ShellBudgetRow[]>
   /** `extend_shell`: the budget now ends at `deadlineAtMs`. Upserts; a row for a different shell under
    *  the same id (another `startedAt`) is replaced outright. */
   extendShellBudget(input: { slug: string; shellId: string; startedAt: string; deadlineAtMs: number; nowMs: number }): void
@@ -1953,6 +1956,9 @@ export function createStorage(source: string | Database, projectId: string): Sto
   const shellBudgetsBySlugStmt = scope.prepare<[string], ShellBudgetRow>(
     "SELECT * FROM shell_budget WHERE project_id = @project_id AND thread_slug = ?",
   )
+  const allShellBudgetsStmt = scope.prepare<[], ShellBudgetRow>(
+    "SELECT * FROM shell_budget WHERE project_id = @project_id",
+  )
   // One upsert per mark. A row whose started_at differs belongs to an EARLIER shell that used this id,
   // so the conflict branch resets every mark it does not itself set rather than inheriting them.
   const upsertShellBudgetStmt = scope.prepare(`
@@ -2753,6 +2759,7 @@ export function createStorage(source: string | Database, projectId: string): Sto
     armedThreadWatches: () => armedThreadWatchesStmt.all(),
     getShellBudget: (slug, shellId) => shellBudgetStmt.get(slug, shellId),
     listShellBudgets: (slug) => shellBudgetsBySlugStmt.all(slug),
+    shellBudgetsBySlug: () => groupBySlug(allShellBudgetsStmt.all()),
     extendShellBudget: (i) => void upsertShellBudgetStmt.run({
       slug: i.slug, shellId: i.shellId, startedAt: i.startedAt, nowMs: i.nowMs,
       deadlineAt: i.deadlineAtMs, warnedAt: null, warnedDeadline: null, stoppedAt: null, setDeadline: 1, setWarned: 0, setStopped: 0,

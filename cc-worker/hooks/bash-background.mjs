@@ -196,12 +196,39 @@ export function hasEscapingBackgroundJob(raw, depth = 0) {
   return false;
 }
 
+// THE SPAWN-TIME BUDGET PROMPT. A background shell has a runtime budget only when one is DECLARED
+// (server shell-budget.ts): the `timeout` on this very call, or `mcp__frizz__extend_shell` later. No
+// default — a dev server and a CI poller look identical from outside, and a universal clock killed a
+// real shell its worker had registered a 20h watch on (2026-09-29). So the worker is ASKED, once, at
+// the one moment it knows what the shell is for: a `run_in_background` call with no `timeout` gets one
+// line of context. Never on a call that carries a timeout, never on a foreground call, never a block —
+// the call runs exactly as written. It arrives after the call is committed, so it points at the
+// in-the-moment verb (`extend_shell`) for this shell and at `timeout` for the next.
+export const BACKGROUND_NO_TIMEOUT_CONTEXT =
+  '⟦background shell with no `timeout`⟧ Frizz never stops this shell on a clock: it runs until it exits or is stopped. ' +
+  'Right for a dev server or watcher meant to keep running. If it is a poller, build or one-off check, give it an end — ' +
+  '`mcp__frizz__extend_shell` with its id and a `for` sized to it now (Frizz warns you past it, then stops it), or a ' +
+  '`timeout` (ms, max 24h) on the call next time. Either way, `TaskStop` it once you no longer need it.';
+
+/** @param {unknown} toolInput */
+function isUntimedBackgroundCall(toolInput) {
+  if (!toolInput || typeof toolInput !== 'object') return false;
+  const { run_in_background: background, timeout } = /** @type {Record<string, unknown>} */ (toolInput);
+  if (background !== true) return false;
+  return !(typeof timeout === 'number' && Number.isFinite(timeout) && timeout > 0);
+}
+
 export function evaluateBashBackgroundHook(input, env = process.env) {
   if (!String(env.FRIZZ_THREAD ?? '').trim()) return {};
   const command = input && typeof input === 'object'
     ? String(input.tool_input?.command ?? '')
     : '';
-  if (!hasEscapingBackgroundJob(command)) return {};
+  if (!hasEscapingBackgroundJob(command)) {
+    if (isUntimedBackgroundCall(input?.tool_input)) {
+      return { hookSpecificOutput: { hookEventName: 'PreToolUse', additionalContext: BACKGROUND_NO_TIMEOUT_CONTEXT } };
+    }
+    return {};
+  }
   const codex = typeof input?.model === 'string';
   return {
     hookSpecificOutput: {

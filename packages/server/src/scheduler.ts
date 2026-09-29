@@ -3207,9 +3207,11 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
   }
 
   // ---- SOURCE 13: A BACKGROUND SHELL OUTLIVED ITS RUNTIME BUDGET ----------------------------------
-  // Maintainer 2026-09-29: "background shells running for 16 hours makes no sense." Every shell carries a
-  // budget (shell-budget.ts — its launch `timeout`, else 1h; `extend_shell` moves it). Two steps, both
-  // keyed on the durable `shell_budget` row, so neither is lost to a restart nor repeated by one:
+  // Maintainer 2026-09-29: "background shells running for 16 hours makes no sense." A shell carries a
+  // budget only when one was DECLARED (shell-budget.ts — its launch `timeout`, or an `extend_shell`; there
+  // is no default, and an armed `watch` holds the deadline to its own expiry). An unbudgeted shell is
+  // never looked at here. For a budgeted one, two steps, both keyed on the durable `shell_budget` row,
+  // so neither is lost to a restart nor repeated by one:
   //
   //  1. PAST THE DEADLINE → one warning wake, delivered mid-turn if the worker is busy, and the row
   //     marked warned FOR THIS DEADLINE. An extension moves the deadline, so the next overrun is warned

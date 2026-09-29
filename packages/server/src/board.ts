@@ -12,7 +12,8 @@ import { AskedQuestionSchema, BoardDiffer, PermissionMode, SnoozeUntil, ThreadSl
 import type { Bus } from "./bus.ts"
 import { workDirOf, type Project } from "./project.ts"
 import { isHeadlessRow, isBrokerClaudeRow, sessionTitleLocked, type ThreadQuestionRow } from "./storage.ts"
-import type { Storage, SessionRow, PrWatchRow, ThreadTimerRow, ThreadWatchRow, ThreadLinkRow } from "./storage.ts"
+import type { Storage, SessionRow, PrWatchRow, ThreadTimerRow, ThreadWatchRow, ThreadLinkRow, ShellBudgetRow } from "./storage.ts"
+import { resolveShellBudget, shellBudgetRecordOf } from "./shell-budget.ts"
 import { threadLinkView } from "./thread-links.ts"
 import { normalizeObservedThreadModel } from "./backend/thread-profiles.ts"
 import { claudeModelStanding } from "./backend/claude-model-upgrade.ts"
@@ -347,6 +348,25 @@ function stampStoppable(agents: ThreadView["subAgents"], row: SessionRow): Threa
 function stampStoppableShells(shells: ThreadView["bgShells"], row: SessionRow): ThreadView["bgShells"] {
   if (isHeadlessRow(row)) return shells
   return shells.map((shell) => (shell.stoppable ? { ...shell, stoppable: false } : shell))
+}
+
+// WHEN EACH RUNNING SHELL'S BUDGET RUNS OUT, for the card's "2h left" — resolved by the SAME function the
+// scheduler enforces with (shell-budget.ts resolveShellBudget), off the rows this build already read, so
+// the reading on screen is the deadline that will actually be acted on: the declared budget, an
+// `extend_shell`, or an armed watch holding it later. An unbudgeted shell gets nothing, and reads as such.
+export function stampShellBudgets(
+  shells: ThreadView["bgShells"],
+  budgets: readonly ShellBudgetRow[] | undefined,
+  watches: readonly ThreadWatchRow[] | undefined,
+): ThreadView["bgShells"] {
+  if (!shells.some((shell) => shell.state === "running")) return shells
+  const armed = (watches ?? []).map((w) => ({ kind: w.kind, target: w.target, expiresAtMs: w.expires_at }))
+  return shells.map((shell) => {
+    if (shell.state !== "running" || !shell.id) return shell
+    const record = shellBudgetRecordOf(budgets?.find((b) => b.shell_id === shell.id))
+    const budget = resolveShellBudget(shell, record, armed)
+    return budget ? { ...shell, budgetEndsAt: new Date(budget.deadlineMs).toISOString() } : shell
+  })
 }
 
 // The thread's OWN dispatched work is still live — a sub-agent OR a launched background shell. It drives
@@ -1470,6 +1490,7 @@ interface ThreadRegistries {
   questions: Map<string, ThreadQuestionRow[]>
   watches: Map<string, ThreadWatchRow[]>
   done: Map<string, { body: string; doneAt: number }>
+  shellBudgets: Map<string, ShellBudgetRow[]>
 }
 
 function readThreadRegistries(storage: Storage): ThreadRegistries {
@@ -1480,6 +1501,7 @@ function readThreadRegistries(storage: Storage): ThreadRegistries {
     questions: storage.threadQuestionsBySlug(),
     watches: storage.armedThreadWatchesBySlug(),
     done: storage.threadDoneBySlug(),
+    shellBudgets: storage.shellBudgetsBySlug(),
   }
 }
 
@@ -1697,7 +1719,7 @@ function sessionThreadView(
     lastActivityAt: tele?.lastActivityAt,
     lastAssistantAt: tele?.lastAssistantAt,
     subAgents: stampStoppable(tele?.subAgents ?? [], row),
-    bgShells: stampStoppableShells(tele?.bgShells ?? [], row),
+    bgShells: stampShellBudgets(stampStoppableShells(tele?.bgShells ?? [], row), registries.shellBudgets.get(row.slug), registries.watches.get(row.slug)),
     links: (registries.links.get(row.slug) ?? []).map(threadLinkView),
     // ONE SOURCE: the FENCE. Both kinds are derived from what the worker wrote — `prs:` entries
     // become the github rows, `watch:` lines the shell rows — so this strip lists exactly what will

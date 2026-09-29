@@ -4,7 +4,7 @@ import { lstatSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, w
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { questionAnswerMessage, questionsCancelledWakeMessage, type InteractionRequest } from "@frizz/shared"
-import { ANSWER_IN_FLIGHT_EXCUSAL_MS, answerAwaitingDelivery, answersInFlight, appServerTurnStalled, createBoard, deriveAwaitingBackground, deriveNeedsYou, degradeIfAwaitingAnswer, degradeIfNoTranscript, fenceWatchViews, hasDeclaredWait, hasParkedTimerWatch, hasRegisteredBackgroundPark, isBoardRelevantFrizzPath, registeredDoneFence, resolveLimitPause, resolveSessionPermission, resolveSessionProfile, resolveSessionTitle, type RegisteredWatch, QUIET_TURN_MS, quietTurnSince } from "./board.ts"
+import { ANSWER_IN_FLIGHT_EXCUSAL_MS, answerAwaitingDelivery, answersInFlight, appServerTurnStalled, createBoard, deriveAwaitingBackground, deriveNeedsYou, degradeIfAwaitingAnswer, degradeIfNoTranscript, fenceWatchViews, hasDeclaredWait, hasParkedTimerWatch, hasRegisteredBackgroundPark, isBoardRelevantFrizzPath, registeredDoneFence, resolveLimitPause, resolveSessionPermission, resolveSessionProfile, resolveSessionTitle, stampShellBudgets, type RegisteredWatch, QUIET_TURN_MS, quietTurnSince } from "./board.ts"
 import { Bus } from "./bus.ts"
 import { createStorage, type ThreadQuestionRow } from "./storage.ts"
 import type { Project } from "./project.ts"
@@ -2510,4 +2510,28 @@ test("board: a silent in-flight turn queues while still running, and a snooze or
     storage.close()
     rmSync(dir, { recursive: true, force: true })
   }
+})
+
+// THE CARD'S "2h left" READS THE ENFORCED DEADLINE (shell-budget.ts resolveShellBudget): declared,
+// extended, or held later by an armed watch — and an unbudgeted shell carries none at all.
+test("stampShellBudgets: budgetEndsAt is the deadline the scheduler will act on, and absent when there is none", () => {
+  const start = Date.parse(T0)
+  const H = 3_600_000
+  const shells = [
+    { label: "npx vite", startedAt: T0, state: "running" as const, id: "toolu_dev" },
+    { label: "poll CI", startedAt: T0, state: "running" as const, id: "toolu_ci", taskId: "bci", budgetMs: H },
+    { label: "build", startedAt: T0, state: "running" as const, id: "toolu_b", budgetMs: H },
+    { label: "given one", startedAt: T0, state: "running" as const, id: "toolu_x" },
+    { label: "tail", startedAt: T0, state: "running" as const, id: "toolu_m", monitor: true },
+  ]
+  const budgets = [{ thread_slug: "t", shell_id: "toolu_x", started_at: T0, deadline_at: start + 5 * H, warned_at: null, warned_deadline: null, stopped_at: null, updated_at: start }]
+  const watches = [{ id: "wch_1", thread_slug: "t", kind: "shell" as const, target: "bci", expires_at: start + 20 * H, state: "armed" as const, created_at: start, settled_at: null }]
+  const out = Object.fromEntries(stampShellBudgets(shells, budgets, watches).map((s) => [s.id, s.budgetEndsAt]))
+  assert.deepEqual(out, {
+    toolu_dev: undefined,
+    toolu_ci: new Date(start + 20 * H).toISOString(),
+    toolu_b: new Date(start + H).toISOString(),
+    toolu_x: new Date(start + 5 * H).toISOString(),
+    toolu_m: undefined,
+  })
 })

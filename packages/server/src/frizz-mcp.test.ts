@@ -970,7 +970,7 @@ test("`extend_shell` extends the CALLING thread's shell and reports the new end,
     const extended = await rpc.next(2)
     assert.equal(extended.result.isError, undefined)
     assert.deepEqual(seen[0], { url: "/_frizz/rpc/extendOwnShell", body: { slug: "shell-thread", shell: "bzvtnt3ig", for: "3d" } })
-    assert.match(extended.result.content[0].text, /Extended `bzvtnt3ig` \(npx vite\): its budget now ends at 2026-09-29T14:00:00.000Z/)
+    assert.match(extended.result.content[0].text, /^`bzvtnt3ig` \(npx vite\): its budget now ends at 2026-09-29T14:00:00.000Z/)
     assert.match(extended.result.content[0].text, /CAPPED at 24h/)
 
     const before = seen.length
@@ -1266,6 +1266,7 @@ test("`activity` reads all four kinds back with the ids a fence names them by", 
       res.writeHead(200, { "content-type": "application/json" })
       res.end(JSON.stringify({ result: { activity: [
         { kind: "shell", id: "bzvtnt3ig", label: "Running the suite", since: "2026-08-15T09:00:00.000Z" },
+        { kind: "shell", id: "bpoll42", label: "Polling CI", since: "2026-08-15T09:00:00.000Z", budgetEndsAt: "2999-01-01T00:00:00.000Z" },
         { kind: "agent", id: "toolu_agent1", label: "Reviewing the diff", since: "2026-08-15T09:01:00.000Z" },
         { kind: "timer", id: "tmr_a1b2c3", label: "check the deploy", since: "2026-08-15T09:02:00.000Z", until: "2026-08-15T10:00:00.000Z" },
         { kind: "pr", id: "acme/app#391", label: "acme/app#391", since: "2026-08-15T09:03:00.000Z" },
@@ -1290,7 +1291,12 @@ test("`activity` reads all four kinds back with the ids a fence names them by", 
     for (const id of ["bzvtnt3ig", "toolu_agent1", "tmr_a1b2c3", "acme/app#391"]) {
       assert.match(text, new RegExp(id.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")), `${id} must be readable back`)
     }
-    assert.match(text, /4 things running/)
+    assert.match(text, /5 things running/)
+    // A shell with NO budget says so — it is the one that runs until somebody stops it (shell-budget.ts);
+    // the budgeted one prints its end instead, and never the no-budget line.
+    assert.match(text, /bzvtnt3ig[^\n]*\[no budget: runs until it ends or you stop it\]/)
+    assert.match(text, /bpoll42[^\n]*\[budget: [^\]]* left, ends 2999-01-01T00:00:00.000Z\]/)
+    assert.doesNotMatch(text, /bpoll42[^\n]*no budget/)
     assert.match(text, /for:/, "…and it says what else the fence needs")
   } finally {
     rpc.kill()

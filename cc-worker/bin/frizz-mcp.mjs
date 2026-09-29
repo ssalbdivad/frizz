@@ -448,24 +448,29 @@ const WATCH = {
   },
 }
 
-// A BACKGROUND SHELL'S RUNTIME BUDGET (2026-09-29). Every shell a worker backgrounds carries one — its
-// Bash `timeout`, else an hour — and outliving it earns one warning and then a stop. This is the "keep
-// it" answer. Its own verb rather than a `watch` option: a watch HOLDS the thread for a shell, this keeps
-// a shell alive, and a dev server the worker is not waiting on needs the second and must never get the first.
+// A BACKGROUND SHELL'S RUNTIME BUDGET (2026-09-29). A shell carries one only when it was DECLARED — its
+// Bash `timeout`, or this verb; there is no default (server shell-budget.ts) — and outliving it earns one
+// warning and then a stop. This is both the "keep it" answer and the way to GIVE a budget to a shell
+// launched without one. Its own verb rather than a `watch` option: a watch HOLDS the thread for a shell,
+// this sets how long a shell may live, and a dev server the worker is not waiting on may need the second
+// and must never get the first.
 const EXTEND_SHELL = {
   name: "extend_shell",
   description:
-    "EXTEND A BACKGROUND SHELL'S RUNTIME BUDGET so frizz does not stop it.\n\n" +
-    "Every background shell you launch has a budget: the Bash `timeout` you passed on the " +
-    "`run_in_background` call, or ONE HOUR if you passed none. When it runs out frizz wakes you once " +
-    "(mid-turn if you are busy) and, if you do nothing, stops the shell ten minutes later. Call this " +
-    "when the shell must keep running — in answer to that warning, or ahead of time for a shell you " +
-    "already know will run long.\n\n" +
-    "`for` is counted from NOW, not from launch, so pass how much LONGER it needs. Max 24h per call; " +
+    "SET OR EXTEND A BACKGROUND SHELL'S RUNTIME BUDGET — when frizz may stop it.\n\n" +
+    "A background shell has a budget only if one was declared: the Bash `timeout` you passed on the " +
+    "`run_in_background` call, or this tool. With none, frizz never stops it — it runs until it exits or " +
+    "you stop it, which is right for a dev server or watcher meant to keep running. Past a budget frizz " +
+    "wakes you once (mid-turn if you are busy) and, if you do nothing, stops the shell ten minutes later.\n\n" +
+    "Call this (a) to GIVE a budget to a shell launched without one — a poller, build or check that should " +
+    "not outlive its purpose (a codex exec can get one no other way); (b) to answer that warning when the " +
+    "shell must keep running; (c) ahead of time for a budgeted shell you know will run long.\n\n" +
+    "`for` is counted from NOW, not from launch, so pass how much LONGER it may run. Max 24h per call; " +
     "call again before it runs out if it needs more. A shell you no longer need should be stopped " +
-    "instead (TaskStop), not extended.\n\n" +
-    "You can only extend a shell on your OWN thread. `activity` prints each shell's id and when its " +
-    "budget ends.",
+    "instead (TaskStop), not extended. An armed `watch` on the shell already holds its budget to the " +
+    "watch's own `for:`.\n\n" +
+    "You can only extend a shell on your OWN thread. `activity` prints each shell's id and its budget, " +
+    "or that it has none.",
   inputSchema: {
     type: "object",
     properties: {
@@ -853,7 +858,7 @@ async function extendShell(args) {
   // A clamp is news for the same reason it is on `watch`: a worker told nothing believes it holds time it does not.
   const clamped = result.clampedFrom ? ` Your \`for: ${result.clampedFrom}\` was CAPPED at 24h.` : ""
   return (
-    `Extended \`${result.shell}\` (${result.label}): its budget now ends at ${result.budgetEndsAt}.${clamped} ` +
+    `\`${result.shell}\` (${result.label}): its budget now ends at ${result.budgetEndsAt}.${clamped} ` +
     "Frizz will not warn about or stop it before then. Extend again before then if it needs longer; stop it " +
     "when you no longer need it."
   )
@@ -950,8 +955,10 @@ async function activity() {
   }
   const lines = items.map((i) => {
     const when = i.until ? `  (fires ${i.until})` : i.since ? `  (since ${i.since})` : ""
-    // A shell's runtime budget — when frizz warns about it and, unextended, stops it (`extend_shell`).
-    const budget = i.budgetEndsAt ? `  [${budgetLeft(i.budgetEndsAt)}]` : ""
+    // A shell's runtime budget — when frizz warns about it and, unextended, stops it (`extend_shell`). A
+    // shell with NONE says so: it is the one that runs until somebody stops it, and the worker reading
+    // this is the somebody.
+    const budget = i.budgetEndsAt ? `  [${budgetLeft(i.budgetEndsAt)}]` : i.kind === "shell" ? "  [no budget: runs until it ends or you stop it]" : ""
     // The `wch_…` id of the watch holding this item, where one is armed — this readout exists to hand a
     // worker back the ids it lost, and that includes the one `unwatch` takes.
     const held = i.watchId ? `  [watched as ${i.watchId}]` : ""

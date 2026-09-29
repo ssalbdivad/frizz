@@ -1312,9 +1312,9 @@ test("tailer: a shell's view carries the runtime's own background-task id, not j
 
 // THE RUNTIME BUDGET a shell launched with (shell-budget.ts, 2026-09-29), read off the REAL launch record:
 // the Bash `timeout` on a `run_in_background` call is the worker's declaration, clamped to a day; no
-// `timeout` is the 1h default; a Monitor carries none at all, because its own `persistent`/`timeout_ms`
-// already say how long it lives.
-test("tailer: a background shell's view carries its launch budget — declared `timeout`, clamp, default, Monitor", () => {
+// `timeout` is NO budget (the 1h default was withdrawn the same day); a Monitor carries none at all and
+// says it is one, because its own `persistent`/`timeout_ms` already say how long it lives.
+test("tailer: a background shell's view carries its launch budget — declared `timeout`, clamp, none, Monitor", () => {
   const h = harness()
   h.storage.upsertSession(row())
   const withTimeout = (id: string, timeout: number) => {
@@ -1341,12 +1341,12 @@ test("tailer: a background shell's view carries its launch budget — declared `
   })
   h.clock.ms = Date.parse("2026-07-01T00:01:00.000Z")
   t.tick()
-  const budgets = Object.fromEntries((t.get("t")?.bgShells ?? []).map((s) => [s.id, s.budgetMs]))
+  const budgets = Object.fromEntries((t.get("t")?.bgShells ?? []).map((s) => [s.id, [s.budgetMs, s.monitor]]))
   assert.deepEqual(budgets, {
-    toolu_2h: 2 * 3_600_000,
-    toolu_3d: 24 * 3_600_000,
-    toolu_none: 3_600_000,
-    toolu_mon: undefined,
+    toolu_2h: [2 * 3_600_000, undefined],
+    toolu_3d: [24 * 3_600_000, undefined],
+    toolu_none: [undefined, undefined],
+    toolu_mon: [undefined, true],
   })
 })
 
@@ -1370,7 +1370,7 @@ test("tailer: a dead pane clears its background shells — a shell cannot outliv
 
   h.clock.ms = Date.parse("2026-07-01T00:01:00.000Z") // <5min since shell output → live
   t.tick()
-  assert.deepEqual(t.get("t")?.bgShells, [{ id: "toolu_sh", label: "Watch CI", startedAt: "2026-07-01T00:00:01.000Z", state: "running", stoppable: true, taskId: "b8p", lastActivityAt: "2026-07-01T00:00:02.000Z", budgetMs: 3_600_000 }])
+  assert.deepEqual(t.get("t")?.bgShells, [{ id: "toolu_sh", label: "Watch CI", startedAt: "2026-07-01T00:00:01.000Z", state: "running", stoppable: true, taskId: "b8p", lastActivityAt: "2026-07-01T00:00:02.000Z" }])
 
   // The agent process dies WITHOUT a terminal notification landing for the
   // shell. The shell is a child of that process, so it died with it — the board must stop reporting it
@@ -1412,7 +1412,7 @@ test("tailer: a BROKER (headless) thread reports its live background shells — 
 
   h.clock.ms = Date.parse("2026-07-01T00:01:00.000Z")
   t.tick() // prime — the tick that used to latch paneDead=true
-  assert.deepEqual(t.get("t")?.bgShells, [{ id: "toolu_sh", label: "Watch CI on PR 604", startedAt: "2026-07-01T00:00:01.000Z", state: "running", stoppable: true, taskId: "b63", lastActivityAt: "2026-07-01T00:00:02.000Z", budgetMs: 3_600_000 }])
+  assert.deepEqual(t.get("t")?.bgShells, [{ id: "toolu_sh", label: "Watch CI on PR 604", startedAt: "2026-07-01T00:00:01.000Z", state: "running", stoppable: true, taskId: "b63", lastActivityAt: "2026-07-01T00:00:02.000Z" }])
   t.tick() // and the steady tick keeps it, rather than latching on a stale prime reading
   assert.equal(t.get("t")?.bgShells.length, 1, "the shell survives the steady tick")
   assert.deepEqual(deadCalls, [], "a paneless row is never sniffed for pane death")
@@ -1751,7 +1751,7 @@ test("tailer: a manual TaskStop clears a live background shell from the board vi
 
   h.clock.ms = Date.parse("2026-07-01T00:01:00.000Z")
   t.tick()
-  assert.deepEqual(t.get("t")?.bgShells, [{ id: "toolu_sh", label: "Boot isolated stack", startedAt: "2026-07-01T00:00:01.000Z", state: "running", stoppable: true, taskId: "ba3y11c3t", lastActivityAt: "2026-07-01T00:00:02.000Z", budgetMs: 3_600_000 }])
+  assert.deepEqual(t.get("t")?.bgShells, [{ id: "toolu_sh", label: "Boot isolated stack", startedAt: "2026-07-01T00:00:01.000Z", state: "running", stoppable: true, taskId: "ba3y11c3t", lastActivityAt: "2026-07-01T00:00:02.000Z" }])
 
   // The worker TaskStops the shell (pane still alive). Its structured result is the terminal signal.
   appendFileSync(join(h.logDir, "sid.jsonl"), JSON.stringify(taskStopResult("ba3y11c3t", "nub scripts/adhoc-stack.mjs")) + "\n")
@@ -1835,7 +1835,7 @@ test("tailer: a background shell stays running however long it is quiet; only it
 
   h.clock.ms = Date.parse("2026-07-01T00:40:00.000Z") // 40min quiet — an ordinary CI wait
   t.tick()
-  assert.deepEqual(t.get("t")?.bgShells, [{ id: "toolu_srv", label: "Run vite dev server", startedAt: "2026-07-01T00:00:01.000Z", state: "running", stoppable: true, taskId: "ba3y11c3t", lastActivityAt: "2026-07-01T00:00:02.000Z", budgetMs: 3_600_000 }])
+  assert.deepEqual(t.get("t")?.bgShells, [{ id: "toolu_srv", label: "Run vite dev server", startedAt: "2026-07-01T00:00:01.000Z", state: "running", stoppable: true, taskId: "ba3y11c3t", lastActivityAt: "2026-07-01T00:00:02.000Z" }])
 
   h.clock.ms = Date.parse("2026-07-01T08:00:00.000Z") // 8h quiet — a dev server left running; still "running"
   t.tick()
