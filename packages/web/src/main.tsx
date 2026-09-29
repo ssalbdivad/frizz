@@ -20,6 +20,17 @@ import { innerPath } from "./lib/base-path.ts"
 import { projectScopedQueryKeyHash } from "./lib/queryKeyScope.ts"
 import { parseStandaloneThreadPath } from "./lib/standaloneThreadRoute.ts"
 
+// DEV ONLY: React 19.2's development build logs its Components/Scheduler performance tracks through
+// `performance.measure`, each entry carrying a `detail` object (a props diff for a re-render), and
+// Chrome buffers every measure for the life of the page — nothing ever evicts them. Measured
+// 2026-09-29 on the real board with the tab idle: 177 entries/s, so a dev tab left open overnight held
+// ~10M of them, and the GC pressure surfaced as multi-second freezes while typing. Nothing in the app
+// reads the buffer, and DevTools records these tracks from trace events at call time, so emptying it
+// loses no profiling data. Production React emits none of this.
+if (import.meta.env.DEV && typeof performance !== "undefined") {
+  setInterval(() => performance.clearMeasures(), 5_000)
+}
+
 const settingsFixture = typeof window !== "undefined" && window.location.pathname.endsWith("/settings-formatting-fixture.html")
 // innerPath, not location.pathname: under a project prefix the deep link is `/all/nub/thread/x/full`.
 const standaloneThreadSlug = typeof window !== "undefined" ? parseStandaloneThreadPath(innerPath()) : null
