@@ -59,20 +59,24 @@ import { BLOCK_RADIUS, BLOCK_RADIUS_INNER_BOTTOM, QUEUE_WRAP, TranscriptCard } f
  * that used to say whose they were are gone (lib/allQueues.ts mergedQueue). Given `onChoose` it is a button
  * that filters the queue to the project (the READY header's filter, lib/crossProject.ts setQueueFilter);
  * without it, plain text, for a line that already sits inside a control (the command card's open button).
+ * `square: false` drops its 12px square, for a card that already leads with the project's ProjectMark.
  */
-export function ProjectChip({ project, onChoose }: { project: QueuesProject; onChoose?: (project: QueuesProject) => void }) {
+export function ProjectChip({ project, onChoose, square = true }: { project: QueuesProject; onChoose?: (project: QueuesProject) => void; square?: boolean }) {
   const body = (
     <>
       {/* ON THE NAME'S CAP BAND: a filled square has no baseline of its own, so it sits ON the name's and is
           lowered by half its height less half a cap — computed by the browser, right in any font at any
           size (the prompt box's project picker places its square the same way). */}
-      <span className="flex shrink-0 self-baseline translate-y-[calc(6px_-_0.5cap)]">
-        <ProjectSquare project={squareCard(project)} size={12} />
-      </span>
+      {square && (
+        <span className="flex shrink-0 self-baseline translate-y-[calc(6px_-_0.5cap)]">
+          <ProjectSquare project={squareCard(project)} size={12} />
+        </span>
+      )}
       <span className="min-w-0 truncate">{project.name}</span>
     </>
   )
-  const className = "flex min-w-0 shrink items-baseline gap-1.5 text-fg/80"
+  // Beside a mark the name is the card's second project signal, set a step above the grey time it leads.
+  const className = `flex min-w-0 shrink items-baseline gap-1.5 ${square ? "text-fg/80" : "font-medium text-fg/90"}`
   if (!onChoose) return <span data-xq-chip={project.id} className={className}>{body}</span>
   return (
     <button
@@ -86,6 +90,36 @@ export function ProjectChip({ project, onChoose }: { project: QueuesProject; onC
     </button>
   )
 }
+
+/**
+ * THE PROJECT'S LOGO, leading a card's header on a queue that holds several projects — its icon, or its
+ * monogram tile, at the size the rail draws it small (ProjectRail.tsx ProjectSquare). The 12px square on
+ * the meta line said whose a card was only to someone reading that line; a column of cards is scanned
+ * down its left edge, so that is where the mark sits, big enough to pick one project's cards out of a
+ * page of them without reading a word (maintainer 2026-09-29: "a more visible indicator of the project
+ * name/logo … so users can easily visually filter through"). Given `onChoose` it filters the queue to the
+ * project, as the chip beside it does; it is out of the tab order because that chip is the same control.
+ */
+export function ProjectMark({ project, onChoose }: { project: QueuesProject; onChoose?: (project: QueuesProject) => void }) {
+  const square = <ProjectSquare project={squareCard(project)} size={PROJECT_MARK_PX} />
+  if (!onChoose) return <span data-xq-mark={project.id} aria-hidden className="flex shrink-0">{square}</span>
+  return (
+    <button
+      type="button"
+      tabIndex={-1}
+      aria-hidden
+      title={`Show only ${project.name}`}
+      data-xq-mark={project.id}
+      onClick={() => onChoose(project)}
+      className="flex shrink-0 cursor-pointer rounded-[30%] border-0 bg-transparent p-0 transition-opacity hover:opacity-80"
+    >
+      {square}
+    </button>
+  )
+}
+
+/** The mark's side: the header's two lines (a 15px title over the 11px meta line) are ~36px of type. */
+const PROJECT_MARK_PX = 32
 
 /** A thread opened IN PLACE on the cross-project page: the page focused on its project, its drawer open. */
 export function crossProjectThreadHref(project: Pick<QueuesProject, "slug">, slug: string): string {
@@ -167,7 +201,7 @@ export const AllQueuesCard = memo(function AllQueuesCard({
 }: AllQueuesCardProps) {
   const api = projectRpc(project.id)
   const key = threadKey(project.id, thread.id)
-  const chipNode = chip ? <ProjectChip project={project} onChoose={onChoose} /> : undefined
+  const chipNode = chip ? <ProjectChip project={project} onChoose={onChoose} square={false} /> : undefined
   const openInPlace = useOpenThreadInPlace()
   // KEYED ON THE REST, so a thread that rests again fetches its new handoff, and one that has not moved
   // is read exactly once however often the page polls. The previous handoff stays on screen while the
@@ -211,7 +245,8 @@ export const AllQueuesCard = memo(function AllQueuesCard({
           aria-label={displayTitle(thread)}
           className={`frizz-card-body flex min-w-0 max-w-full flex-col ${BLOCK_RADIUS} border border-border-strong bg-panel shadow-lg shadow-shadow-ink/25`}
         >
-          <header className="flex items-center gap-2 rounded-t-xl border-b border-border/60 px-5 py-3.5">
+          <header className="flex items-center gap-3 rounded-t-xl border-b border-border/60 px-5 py-3.5">
+            {chip && <ProjectMark project={project} onChoose={onChoose} />}
             <div className="min-w-0 flex-1">
               <h3 className="truncate text-[15px] font-semibold leading-snug" title={displayTitle(thread)}>
                 <a href={placeHref} onClick={openHere} className="rounded-sm outline-none hover:underline hover:underline-offset-2 focus-visible:ring-1 focus-visible:ring-focus-ink-60">

@@ -27,7 +27,7 @@ const TerminalPane = lazy(() => import("./TerminalPane.tsx").then((m) => ({ defa
 // PROJECT-SCOPED through api/threadApi.tsx: outside a scope it acts on the page's project, and under the
 // cross-project page's `ThreadProjectScope` its Restart, its pty and its Mark as done all go to the card's
 // own project. `onOpen` replaces the drawer there, which is the page's and would open the wrong thread.
-export function CommandQueueCard({ thread, leaving, onResolve, onUnresolve, onOpen, lead }: {
+export function CommandQueueCard({ thread, leaving, onResolve, onUnresolve, onOpen, lead, mark }: {
   thread: ThreadView
   leaving: boolean
   onResolve: (slug: string) => void
@@ -35,6 +35,8 @@ export function CommandQueueCard({ thread, leaving, onResolve, onUnresolve, onOp
   onOpen?: () => void
   /** Leads the meta line under the command — the card's project, on a queue that holds several. */
   lead?: ReactNode
+  /** Leads the header, outside the open button — the project's logo (AllQueuesCard.tsx ProjectMark). */
+  mark?: ReactNode
 }) {
   const command = thread.command
   const api = useThreadApi()
@@ -58,7 +60,8 @@ export function CommandQueueCard({ thread, leaving, onResolve, onUnresolve, onOp
       data-command-card={command.state}
       className={`flex min-w-0 max-w-full flex-col ${BLOCK_RADIUS} border border-border-strong bg-panel shadow-lg shadow-shadow-ink/25`}
     >
-      <div className={`flex items-center gap-2 bg-panel px-5 py-3.5 ${BLOCK_RADIUS_TOP} border-b border-border/60`}>
+      <div className={`flex items-center ${mark ? "gap-3" : "gap-2"} bg-panel px-5 py-3.5 ${BLOCK_RADIUS_TOP} border-b border-border/60`}>
+        {mark}
         <button type="button" onClick={onOpen ?? (() => openThread(thread.id))} className="flex min-w-0 flex-1 items-start gap-2 text-left">
           <TerminalSquare aria-hidden size={14} className={`mt-[3px] shrink-0 ${failed ? "text-danger-soft" : "text-muted-60"}`} />
           <span className="min-w-0 flex-1">

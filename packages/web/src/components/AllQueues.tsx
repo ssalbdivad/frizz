@@ -51,7 +51,7 @@ import { useSteeredAt } from "../lib/steering.ts"
 import { glideTo, useViewportLock } from "../lib/viewportLock.ts"
 import { registerQueueCursor, releaseAutoOpened } from "../lib/keyboardRuntime.ts"
 import { PROJECT_STEP_CHORDS, detectPlatform, formatChord, parseChord } from "../lib/keybindings.ts"
-import { AllQueuesCard, ProjectChip, useOpenThreadInPlace } from "./AllQueuesCard.tsx"
+import { AllQueuesCard, ProjectChip, ProjectMark, useOpenThreadInPlace } from "./AllQueuesCard.tsx"
 import { CommandQueueCard } from "./CommandQueueCard.tsx"
 import { ProjectSquare } from "./ProjectRail.tsx"
 import { SIDEBAR_COLUMN_CLASS } from "./Sidebar.tsx"
@@ -651,7 +651,8 @@ function QueueCardOf({ entry, ghost, concealed, leaving, chip }: { entry: QueueE
                   onResolve={leaving.leave(key)}
                   onUnresolve={leaving.restore(key)}
                   onOpen={() => openInPlace(project, thread.id)}
-                  lead={chip ? <ProjectChip project={project} /> : undefined}
+                  lead={chip ? <ProjectChip project={project} square={false} /> : undefined}
+                  mark={chip ? <ProjectMark project={project} onChoose={choose} /> : undefined}
                 />
               </ThreadProjectScope>
             </div>
