@@ -54,6 +54,9 @@ export function completionArchivesImmediately(thread: ThreadView): boolean {
   // a sub-agent), which only ever errs toward waiting. Checked FIRST: a pending ask on a dead thread is
   // still a dead thread.
   if (thread.runtime === "exited" && thread.crashed) return false
+  // A terminal the human opened on the thread and left running is asked about in EVERY state, a paused
+  // or dead worker included: Done stops it, and it is the human's own process (router.withTerminalHold).
+  if (thread.terminals?.some((terminal) => terminal.state === "running")) return false
   // Paused-for-a-human states are explicitly safe to stop on the server, regardless of any background work.
   if (thread.runtime === "perm-prompt" || thread.pendingAsk) return true
   // An executing (or still-spawning) turn always prompts.
@@ -68,8 +71,8 @@ export function completionArchivesImmediately(thread: ThreadView): boolean {
 
 // One named group of work the confirmation is holding on — "2 sub-agents", with the labels beneath it.
 export interface CompletionHoldGroup {
-  kind: "agent" | "shell"
-  heading: string // "1 sub-agent" / "3 background shells"
+  kind: "agent" | "shell" | "terminal"
+  heading: string // "1 sub-agent" / "3 background shells" / "1 terminal"
   // The ops the server named (already capped). `stale` is carried through rather than flattened: it
   // is not proof the op stopped — which is why it holds the completion — but claiming a silent child
   // is actively running would overstate what the tailer knows.
@@ -95,20 +98,27 @@ export function completionHoldSummary(hold: CompletionHold | undefined): Complet
     trailer: "Marking it done will stop its agent session, then move it to Done.",
   }
   if (!hold) return generic
-  // Nothing is running and nothing will be stopped: the worker is already gone, mid-turn. The correction
-  // the human needs is that the thread is NOT finished — and that Retry, not Done, is the verb that
-  // picks it back up. No groups: a dead worker's children cannot be live, and the server names none.
+  // The terminals the human opened on the thread and left running. They are held on in any state of the
+  // worker — resting, dead or mid-turn — because Done stops them too (router.withTerminalHold).
+  const terminals = holdGroup("terminal", "terminal", hold.terminals ?? [], hold.terminalCount ?? 0)
+  // Nothing of the agent's is running and nothing of its will be stopped: the worker is already gone,
+  // mid-turn. The correction the human needs is that the thread is NOT finished — and that Retry, not
+  // Done, is the verb that picks it back up. No agent groups: a dead worker's children cannot be live, and
+  // the server names none. Its terminals are not its children, so they can be, and are named.
   if (hold.cutOff) {
     return {
       lead: "This session was cut off mid-turn — its worker ended before the turn finished, so the thread isn’t done.",
-      groups: [],
-      trailer: "Marking it done files it under Done as it is. Retry resumes it where it left off.",
+      groups: terminals ? [terminals] : [],
+      trailer: terminals
+        ? "Marking it done stops its terminals and files it under Done as it is. Retry resumes it where it left off."
+        : "Marking it done files it under Done as it is. Retry resumes it where it left off.",
     }
   }
-  const groups = [
+  const agentGroups = [
     holdGroup("agent", "sub-agent", hold.subAgents, hold.subAgentCount),
     holdGroup("shell", "background shell", hold.bgShells, hold.bgShellCount),
   ].filter((group): group is CompletionHoldGroup => group !== null)
+  const groups = terminals ? [...agentGroups, terminals] : agentGroups
   if (hold.unobservable) {
     return {
       lead: "This session is live, but its transcript can’t be read right now — it may still be working.",
@@ -117,10 +127,22 @@ export function completionHoldSummary(hold: CompletionHold | undefined): Complet
     }
   }
   if (!hold.turnInFlight && groups.length === 0) return generic // defensive: a hold with no evidence
+  // Only terminals hold it: the agent itself is finished, and what Done would end is the human's own.
+  if (!hold.turnInFlight && agentGroups.length === 0) {
+    return {
+      lead: terminals!.heading === "1 terminal" ? "A terminal on this thread is still running:" : "Terminals on this thread are still running:",
+      groups,
+      trailer: "Marking it done will stop them, then move the thread to Done.",
+    }
+  }
   const lead = hold.turnInFlight
-    ? groups.length > 0
+    ? agentGroups.length > 0
       ? "The agent is mid-turn, and it still owns background work:"
+      : terminals
+      ? "The agent is mid-turn, and a terminal on this thread is still running:"
       : "The agent is mid-turn — it’s executing right now."
+    : terminals
+    ? "The agent is resting, but work on this thread is still running:"
     : "The agent is resting, but the background work it launched is still running:"
   return {
     lead,

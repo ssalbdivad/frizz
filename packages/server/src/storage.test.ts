@@ -1184,9 +1184,70 @@ test("queued_at: a pre-clock unified file gains the column, and the stamp surviv
     assert.equal(s.getSession("queued")?.queued_at, at)
     s.setQueuedAt("queued", null)
     assert.equal(s.getSession("queued")?.queued_at, null)
-    s.insertCommandThread({ slug: "term-1", command: "npm publish", createdAtMs: Date.parse(at) })
-    s.setCommandQueuedAt("term-1", at)
-    assert.equal(s.listCommandThreads().find((c) => c.slug === "term-1")?.queued_at, at, "a command thread's place in line persists too")
+    // The terminal table keeps its column (a pre-2026-09-29 command thread wrote it); nothing sets it now.
+    s.insertCommandThread({ slug: "term-1", parentSlug: "queued", command: "npm publish", cwd: dir, shell: false, createdAtMs: Date.parse(at) })
+    assert.equal(s.listCommandThreads().find((c) => c.slug === "term-1")?.queued_at, null)
+  } finally {
+    s.close()
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+// THREAD TERMINALS (2026-09-29): a terminal belongs to a thread. The table the top-level command threads
+// lived in gains the parent, the folder and the shell flag, and every row from before — a command thread
+// with no parent to show it under — is filed away rather than left open with nowhere to appear.
+test("command_thread: a pre-terminal file gains the parent, folder and shell columns, and its old rows are archived", () => {
+  const dir = mkdtempSync(join(tmpdir(), "frizz-storage-terminals-"))
+  const path = join(dir, "ui.db")
+  const old = new Database(path)
+  // The table exactly as the fork shipped it before thread terminals.
+  old.exec(`
+    CREATE TABLE command_thread (
+      project_id  TEXT NOT NULL,
+      slug        TEXT NOT NULL,
+      command     TEXT NOT NULL,
+      created_at  INTEGER NOT NULL,
+      started_at  INTEGER NOT NULL,
+      runs        INTEGER NOT NULL DEFAULT 1,
+      exited_at   INTEGER,
+      exit_code   INTEGER,
+      stopped     INTEGER NOT NULL DEFAULT 0,
+      state       TEXT NOT NULL DEFAULT 'open',
+      queued_at   TEXT,
+      PRIMARY KEY (project_id, slug)
+    );
+    INSERT INTO command_thread (project_id, slug, command, created_at, started_at, exited_at, exit_code) VALUES ('p', 'term-old', 'npm run dev', 1, 1, 2, 0);
+    INSERT INTO command_thread (project_id, slug, command, created_at, started_at, state) VALUES ('p', 'term-done', 'ls', 1, 1, 'archived');
+  `)
+  old.close()
+
+  let s = createStorage(path, "p")
+  try {
+    const legacy = s.listCommandThreads()
+    assert.deepEqual(legacy.map((r) => [r.slug, r.state, r.parent_slug ?? null, r.cwd ?? null, r.shell]), [
+      ["term-done", "archived", null, null, 0],
+      ["term-old", "archived", null, null, 0],
+    ], "kept for the record, filed away, and the new columns read as absent")
+
+    s.insertCommandThread({ slug: "term-new", parentSlug: "fix-auth", command: "zsh", cwd: dir, shell: true, createdAtMs: 5 })
+    s.insertCommandThread({ slug: "term-other", parentSlug: "other", command: "make", cwd: dir, shell: false, createdAtMs: 6 })
+    // A reopen does not re-archive a terminal that has a parent: the migration is for parentless rows only.
+    s.close()
+    s = createStorage(path, "p")
+    const fresh = s.listCommandThreads().find((r) => r.slug === "term-new")
+    assert.deepEqual([fresh?.state, fresh?.parent_slug, fresh?.cwd, fresh?.shell], ["open", "fix-auth", dir, 1])
+    // A follow-up line makes a shell terminal a command one; a plain restart keeps it a shell.
+    s.restartCommandThread("term-new", 7)
+    assert.equal(s.listCommandThreads().find((r) => r.slug === "term-new")?.shell, 1)
+    s.restartCommandThread("term-new", 8, "npm test")
+    const followed = s.listCommandThreads().find((r) => r.slug === "term-new")
+    assert.deepEqual([followed?.command, followed?.shell, followed?.runs], ["npm test", 0, 3])
+
+    assert.equal(s.archiveThreadTerminals("fix-auth"), 1)
+    assert.equal(s.archiveThreadTerminals("fix-auth"), 0, "idempotent")
+    assert.equal(s.listCommandThreads().find((r) => r.slug === "term-other")?.state, "open", "another thread's terminal is untouched")
+    assert.equal(s.dropThreadTerminals("fix-auth"), 1)
+    assert.deepEqual(s.listCommandThreads().map((r) => r.slug).sort(), ["term-done", "term-old", "term-other"])
   } finally {
     s.close()
     rmSync(dir, { recursive: true, force: true })

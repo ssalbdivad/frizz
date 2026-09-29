@@ -89,10 +89,10 @@ export const draftKey = {
   // The profile picked for that same prompt (useDraftDispatchPick): `{backend, model, effort}` as JSON,
   // one small non-secret record, kept and cleared with the prompt it belongs to.
   dispatchProfile: (projectDir: string | undefined) => `dispatch-profile:${projectDraftScope(projectDir)}:new`,
-  // The prompt box's Terminal tab: the shell command about to be run, kept apart from the prompt draft.
-  command: (projectDir: string | undefined) => `command:${projectDraftScope(projectDir)}:new`,
-  // A finished command thread's next line (CommandFollowUp) — one per thread, shared by its drawer and queue card.
-  commandNext: (projectDir: string | undefined, slug: string) => `command-next:${projectDraftScope(projectDir)}:${encodeURIComponent(slug)}`,
+  // The command half of a thread's "Open terminal" dialog (OpenTerminalDialog), one per thread.
+  terminalCommand: (projectDir: string | undefined, slug: string) => `terminal-command:${projectDraftScope(projectDir)}:${encodeURIComponent(slug)}`,
+  // A finished terminal's next line (TerminalFollowUp) — one per terminal.
+  terminalNext: (projectDir: string | undefined, id: string) => `terminal-next:${projectDraftScope(projectDir)}:${encodeURIComponent(id)}`,
   followUp: (projectDir: string | undefined, slug: string, sessionId?: string) => `followup:${projectDraftScope(projectDir)}:${encodeURIComponent(slug)}:${encodeURIComponent(sessionId ?? "unowned")}`,
   adopt: (projectDir: string | undefined, slug: string) => `adopt:${projectDraftScope(projectDir)}:${encodeURIComponent(slug)}`,
   answer: (projectDir: string | undefined, slug: string, sessionId: string | undefined, messageId: string, block: number) => `answer:${projectDraftScope(projectDir)}:${encodeURIComponent(slug)}:${encodeURIComponent(sessionId ?? "unowned")}:${encodeURIComponent(messageId)}:${block}`,

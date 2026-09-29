@@ -13,7 +13,7 @@ import { AllQueuesPage } from "./components/AllQueues.tsx"
 import { rpc } from "./api/rpc.ts"
 import { useCrossProjectNotifications } from "./lib/crossProjectNotify.ts"
 import { DrawerStack } from "./components/DrawerStack.tsx"
-import { NewThreadDialog, preferDispatchMode, type DispatchMode } from "./components/NewThreadModal.tsx"
+import { NewThreadDialog } from "./components/NewThreadModal.tsx"
 import { GithubPickerModal } from "./components/GithubPickerModal.tsx"
 import { useGithubStatus } from "./components/GithubTrigger.tsx"
 import { SettingsDrawer } from "./components/SettingsDrawer.tsx"
@@ -45,25 +45,19 @@ function maybeShowSignInHint() {
   showToast("Sign in to the GitHub CLI (`gh auth login`) to dispatch from issues/PRs.", { duration: 6000 })
 }
 
-// The new-thread keys: `c` for a prompt, `t` for a terminal command. With the page in front of you the
-// prompt box at the top of its left column IS the new-thread door, so the key presses that box's own tab
-// and puts the caret in it. With a drawer over the page the rail sits
-// behind its scrim, so the anywhere-modal opens on that tab instead and the drawer stays where it was —
-// Gmail's compose window over the conversation you were reading.
-function openDispatch(mode: DispatchMode): void {
+// The new-thread key, `c`. With the page in front of you the prompt box at the top of its left column IS
+// the new-thread door, so the key puts the caret in it. With a drawer over the page the rail sits behind
+// its scrim, so the anywhere-modal opens instead and the drawer stays where it was — Gmail's compose
+// window over the conversation you were reading. (`t` opened the box on its Terminal tab until
+// 2026-09-29; a terminal belongs to a thread now, and `t` opens one on the thread you are reading.)
+function openDispatch(): void {
   if (!store.drawers.some((drawer) => !drawer.closing)) {
     const form = [...document.querySelectorAll<HTMLElement>("[data-dispatch-form]")].find((el) => !el.closest('[role="dialog"]'))
     if (form) {
-      const tab = form.querySelector<HTMLElement>(`[data-dispatch-tab="${mode}"]`)
-      if (tab?.getAttribute("aria-selected") !== "true") tab?.click()
-      // After the tab's own render: switching tabs mounts the other box.
-      requestAnimationFrame(() => {
-        form.querySelector<HTMLElement>(mode === "prompt" ? '[data-surface="newComposer"]' : '[data-surface="commandComposer"]')?.focus()
-      })
+      form.querySelector<HTMLElement>('[data-surface="newComposer"]')?.focus()
       return
     }
   }
-  preferDispatchMode(mode)
   openNewThread()
 }
 
@@ -263,8 +257,7 @@ export function App() {
   useShortcut("app.settings", () => {
     store.showSettings = true
   })
-  useShortcut("app.newThread", () => openDispatch("prompt"))
-  useShortcut("app.newTerminal", () => openDispatch("terminal"))
+  useShortcut("app.newThread", () => openDispatch())
 
   const board = useBoard()
 

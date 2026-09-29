@@ -20,8 +20,8 @@ function harness(stored: Record<string, string> = {}, alive?: string) {
   const alives: string[] = []
   const clock = createQueueClock({
     load: () => ({ stamps: new Map(Object.entries(stored)), ...(alive ? { alive } : {}) }),
-    // Sessions and command threads persist in production; anything else stands in for a non-durable kind.
-    persists: (t) => t.kind === "session" || t.kind === "command",
+    // Sessions persist in production; anything else stands in for a non-durable kind.
+    persists: (t) => t.kind === "session",
     save: (t, value) => void saves.push([t.id, value]),
     saveAlive: (value) => void alives.push(value),
   })
@@ -195,7 +195,7 @@ test("the clock records that it is watching at most every 15s, starting with its
 
 test("a thread with no usable time at all enters now, never at the epoch", () => {
   const { run } = harness()
-  const bare = { id: "bare", kind: "command", needsYou: true } as unknown as ThreadView
+  const bare = { id: "bare", kind: "session", needsYou: true } as unknown as ThreadView
   assert.deepEqual(run("10:00", bare), { bare: at("10:00") })
 })
 
@@ -351,11 +351,3 @@ test("a claim survives a release it waits out, and returns with the place once t
   assert.deepEqual(run("10:03:12", thread("a", true, "10:02")), { a: at("10:00") })
 })
 
-test("a terminal command has no work of its own to wake it: leaving its prompt and coming back is a new arrival", () => {
-  const { run } = harness()
-  const command = (queued: boolean, active: string) => ({ id: "term", kind: "command", needsYou: queued, lastActivityAt: at(active) }) as unknown as ThreadView
-  run("09:59", command(false, "09:00"))
-  run("10:00", command(true, "10:00"))
-  run("10:01", command(false, "10:01"))
-  assert.deepEqual(run("10:05", command(true, "10:05")), { term: at("10:05") })
-})

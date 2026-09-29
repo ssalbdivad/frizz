@@ -786,14 +786,16 @@ test("an ANSWERED question no longer refuses the park", async () => {
   } finally { h.close() }
 })
 
-// …but one the human REPLIED PAST is a pivot, not a standing ask (shared questionRepliedPast): its card
-// stays up where it was asked, and the park the worker wrote for its new work takes.
-test("a question the human replied past does not refuse the park", async () => {
+// …and one the human TYPED PAST still does (2026-09-29): a typed message releases nothing by timestamp —
+// it released questions the human still meant to answer — so the question stands until the worker
+// `unask`s it, and a park beside it is refused exactly like one beside any open question.
+test("a question the human typed past still refuses the park", async () => {
   const h = parkHarness([{ kind: "shell", value: "bzvtnt3ig" }, { kind: "for", value: "1h" }], { shells: [LIVE_SHELL], lastHumanAt: new Date(Date.now() - 30 * 60_000).toISOString() })
   try {
     h.storage.askThreadQuestion({ id: "qst_repliedpast1", slug: "parked", askedAtMs: Date.now() - 90 * 60_000, spec: JSON.stringify({ question: "Which store — SQLite or a JSON file?", kind: "question" }) })
     await h.s.tick()
-    assert.equal(h.queued().length, 0, "nothing refused: the human moved on from that question")
+    assert.equal(h.queued().length, 1, "refused: the question still stands")
+    assert.equal(isParkCorrection(h.queued()[0].message), true)
   } finally { h.close() }
 })
 

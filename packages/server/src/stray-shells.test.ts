@@ -75,11 +75,13 @@ test("no question, no message — a bare rest lists its shells in SOURCE 9, and 
   } finally { h.close() }
 })
 
-test("a question the human replied past is not the rest's sign-off, so it does not trigger this", async () => {
+// A typed message releases no question since 2026-09-29 (shared questionRepliedPast): one the human wrote
+// past is still the rest's sign-off, and its card hides the shell exactly as before.
+test("a question the human typed past is still the rest's sign-off, so it triggers this too", async () => {
   const h = harness({ lastHumanAt: "2026-09-29T14:50:00.000Z", lastUserAt: "2026-09-29T14:50:00.000Z", lastAssistantAt: "2026-09-29T14:51:00.000Z" })
   try {
     await h.s.tick()
-    assert.deepEqual(h.rows(), [])
+    assert.equal(h.rows().length, 1)
   } finally { h.close() }
 })
 

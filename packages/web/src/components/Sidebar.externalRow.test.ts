@@ -10,10 +10,10 @@ import { TooltipProvider } from "./Tooltip.tsx"
 // Where a click would lead. Nothing here clicks; the prop is required because every real row has one.
 const ROW_SCOPE: RowScope = { open: () => {}, page: true }
 
-// An EXTERNAL row (the human's own `claude`/`codex` session) once wore a `terminal` pill. Since the
-// prompt box's Terminal tab, "terminal" names a command thread — a different kind of row with a live
-// pty behind it — so the pill claimed a kind the row is not. The External band's header already says
-// where the row came from, so the row carries no tag of its own.
+// An EXTERNAL row (the human's own `claude`/`codex` session) once wore a `terminal` pill. In Frizz
+// "terminal" names a live pty the human opened on a thread (thread-terminals.ts), so the pill claimed
+// something the row is not. The External band's header already says where the row came from, so the
+// row carries no tag of its own.
 
 function row(extra: Partial<ThreadView>) {
   const t = { kind: "session", backend: "claude", title: "A thread", status: "active", runtime: "turn-idle", subAgents: [], id: "thread", ...extra } as unknown as ThreadView

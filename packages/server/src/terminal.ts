@@ -4,10 +4,10 @@ import { WebSocket, WebSocketServer, type RawData } from "ws"
 import { ThreadSlug, type TermClientMsg, FRIZZ_ROUTE_PREFIX } from "@frizz/shared"
 import { isTrustedLocalWebSocketRequest, rejectWebSocketUpgrade } from "./local-origin.ts"
 
-// The /term/<slug> transport. It serves exactly ONE thing: a terminal command thread the human started
-// from the prompt box, whose pty command-threads.ts owns and shares across every viewing tab. (It also
-// served the sign-in modal's `claude auth login` pane until upstream replaced that pane with the bare
-// login command; command threads are the only pty left.)
+// The /term/<id> transport. It serves exactly ONE thing: a terminal the human opened on a thread, whose
+// pty thread-terminals.ts owns and shares across every viewing tab — the drawer, and a queue card showing
+// it at a prompt. (It also served the sign-in modal's `claude auth login` pane until upstream replaced
+// that pane with the bare login command; thread terminals are the only pty left.)
 //
 // It used to attach each viewer to a `tmux -L <socket> attach-session -t frizz-<slug>` so an operator
 // could watch an agent's TUI. Agents no longer run in panes — the broker drives them over pipes — so
@@ -91,7 +91,7 @@ export interface TerminalServer {
 }
 
 export interface TerminalServerDeps {
-  // Resolve one of this project's terminal command threads. Null ⇒ this slug is not attachable.
+  // Resolve one of this project's thread terminals by its id. Null ⇒ this id is not attachable.
   resolveCommand?: (slug: string) => TerminalAttachment | null
   maxOutputBufferBytes?: number
   maxViewers?: number
@@ -125,14 +125,14 @@ export interface TerminalSource {
   resize(cols: number, rows: number): void
   write(data: string): void
   /**
-   * Release THIS viewer's hold. Never the process: the shared pty belongs to command-threads.ts while
+   * Release THIS viewer's hold. Never the process: the shared pty belongs to thread-terminals.ts while
    * another tab may still be watching.
    */
   kill(): void
 }
 
-// Present a command's SHARED pty as a per-viewer source. Detaching disposes only this viewer's
-// listeners — never the pty, which another tab may still be watching and which command-threads.ts owns.
+// Present a terminal's SHARED pty as a per-viewer source. Detaching disposes only this viewer's
+// listeners — never the pty, which another tab may still be watching and which thread-terminals.ts owns.
 // The replay is delivered as the first data event so a tab opened late still sees the screen so far,
 // without this transport needing its own scrollback.
 function adaptSharedSource(attachment: TerminalAttachment): TerminalSource {
@@ -144,7 +144,7 @@ function adaptSharedSource(attachment: TerminalAttachment): TerminalSource {
       return { dispose: unsubscribe }
     },
     onExit(listener) {
-      // A command thread passes its real code, which the drawer shows; 0 keeps the close reason
+      // A terminal passes its real code, which the drawer shows; 0 keeps the close reason
       // well-formed should an exit ever arrive without one.
       const unsubscribe = attachment.onExit((exitCode) => listener({ exitCode: exitCode ?? 0 }))
       return { dispose: unsubscribe }
@@ -152,7 +152,7 @@ function adaptSharedSource(attachment: TerminalAttachment): TerminalSource {
     resize: (cols, rows) => attachment.resize(cols, rows),
     write: (data) => attachment.write(data),
     // Deliberately does NOT kill the pty: closing one tab must not stop a command another tab is still
-    // watching, and command-threads.ts owns that lifecycle (stop / restart / remove / shutdown).
+    // watching, and thread-terminals.ts owns that lifecycle (stop / restart / remove / shutdown).
     kill: () => attachment.close(),
   }
 }
@@ -336,9 +336,9 @@ export function createTerminalServer(deps: TerminalServerDeps = {}): TerminalSer
       return
     }
 
-    // /term serves a terminal command thread, whose pty belongs to command-threads.ts and is shared
-    // across viewers. An AGENT thread has no terminal to attach to — it runs inside a detached daemon
-    // over pipes — so a slug that is not a live command is simply not attachable.
+    // /term serves a thread's terminal, whose pty belongs to thread-terminals.ts and is shared across
+    // viewers. An AGENT thread has no terminal to attach to — it runs inside a detached daemon over pipes
+    // — so an id that is not one of its terminals is simply not attachable.
     let attachment: TerminalAttachment | null = null
     try {
       attachment = deps.resolveCommand?.(slug) ?? null
@@ -352,7 +352,7 @@ export function createTerminalServer(deps: TerminalServerDeps = {}): TerminalSer
     }
 
     try {
-      // command-threads.ts owns the pty, not this transport: two tabs on one command must watch the
+      // thread-terminals.ts owns the pty, not this transport: two tabs on one terminal must watch the
       // SAME process rather than each starting one.
       term = adaptSharedSource(attachment)
     } catch {

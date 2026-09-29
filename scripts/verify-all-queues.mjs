@@ -173,8 +173,9 @@ try {
     const shown = (await cardProjects()).sort()
     check("the queue holds the cards of every project with work queued, and only those", JSON.stringify(shown) === JSON.stringify(queued), `${shown.length} projects' cards`)
     const cards = await page.$$eval("[data-xq-card]", (els) => els.length)
-    // Eight agent threads, plus a finished terminal command in billing-worker and in the launcher.
-    check("every queued thread has a card", cards === 10, `${cards} cards`)
+    // Nine agent threads. A terminal is not a thread: billing-worker's, at its OTP prompt, has no card of
+    // its own — it rides the card of the thread it was opened on.
+    check("every queued thread has a card", cards === 9, `${cards} cards`)
     const both = await Promise.all([page.$(card("acme-api", "fix-flaky-login-test")), page.$(card("marketing-site", "fix-flaky-login-test"))])
     check("the same slug in two projects is two cards", both.every(Boolean))
   })
@@ -246,28 +247,43 @@ try {
     check("Mark as done on the launcher's same-slug card leaves the tenant's alone", tenant && !tenant.archived && tenant.state !== "archived", `tenant state ${tenant?.state}`)
   })
 
-  // The seed ran a real command in billing-worker and in the launcher; each finished run queues.
-  const commandOf = async (project) => (await api(project).query("board")).threads.find((t) => t.kind === "command")
+  // The seed opened a real terminal on a thread in billing-worker (at an OTP prompt) and in the launcher
+  // (finished). A terminal rides its thread: a line in the thread's strip, a mark on its rail row.
+  const terminalOf = async (project, slug) => (await threadOf(project, slug))?.terminals?.[0]
 
-  await step("a tenant's finished command shows its own run, in its card and its rail", async () => {
-    const command = await commandOf("billing-worker")
-    const scope = card("billing-worker", command.id)
+  await step("a tenant's terminal at a prompt shows its own screen on its thread's card, and marks its row", async () => {
+    const scope = card("billing-worker", "publish-billing-client")
     await page.$eval(scope, (el) => el.scrollIntoView({ block: "center" }))
-    // The screen is the pty's replay over `/term/<slug>` — which, addressed through the page, would ask the
-    // launcher's terminal server for a slug it never minted.
-    const screen = await waitFor("the command's screen", () => page.$eval(scope, (el) => el.querySelector(".xterm-rows")?.textContent?.includes("billing-worker ran") ?? false), 8_000).catch(() => false)
-    const text = await page.$eval(scope, (el) => el.textContent ?? "")
-    const rail = await page.$eval(`[data-xq-rail-project="${ids["billing-worker"]}"]`, (el) => el.textContent ?? "")
-    check("a tenant's finished command shows its own run, in its card and its rail", screen && text.includes("exit 3") && rail.includes("exit 3") && rail.includes("billing-worker ran"), `screen ${screen ? "replayed" : "blank"}, card ${text.includes("exit 3") ? "says exit 3" : "no state"}`)
-    await page.screenshot({ path: join(shots, "aq-verify-command.png") })
+    // The screen is the pty's replay over `/term/<id>` — which, addressed through the page, would ask the
+    // launcher's terminal server for an id it never minted.
+    const screen = await waitFor("the terminal's screen", () => page.$eval(scope, (el) => el.querySelector("[data-terminal-prompt-pane] .xterm-rows")?.textContent?.includes("Enter one-time password") ?? false), 8_000).catch(() => false)
+    const line = await page.$eval(scope, (el) => el.querySelector("[data-terminal-row]")?.textContent ?? "")
+    const mark = await page.$(`[data-xq-rail-project="${ids["billing-worker"]}"] [data-thread-terminal-mark="prompt"]`)
+    check("a tenant's terminal at a prompt shows its own screen on its thread's card, and marks its row", screen && line.includes("waiting for input") && Boolean(mark), `screen ${screen ? "replayed" : "blank"}, line "${line}", rail mark ${mark ? "present" : "missing"}`)
+    await page.screenshot({ path: join(shots, "aq-verify-terminal.png") })
   })
 
-  await step("Mark as done on a tenant's command finishes ITS command", async () => {
-    const command = await commandOf("billing-worker")
-    await (await buttonIn(card("billing-worker", command.id), "Mark as done")).click()
-    const done = await waitFor("the tenant command to archive", async () => { const t = await threadOf("billing-worker", command.id); return t?.state === "archived" ? t : null }).catch(() => null)
-    const launcher = await commandOf("acme-api")
-    check("Mark as done on a tenant's command finishes ITS command", Boolean(done) && (await wrote("billing-worker", "setThreadState")) && !(await wrote("acme-api", "setThreadState")) && launcher?.state !== "archived", `tenant ${done ? "archived" : "still open"}, launcher's ${launcher?.state}`)
+  await step("Mark as done on a tenant's thread stops ITS terminal, after asking", async () => {
+    const before = await terminalOf("billing-worker", "publish-billing-client")
+    await (await buttonIn(card("billing-worker", "publish-billing-client"), "Mark as done")).click()
+    // A running terminal holds Done back: the dialog names it, and only the confirmation stops it.
+    const named = await waitFor("the confirmation", () => page.evaluate(() => document.querySelector("[data-completion-hold]")?.textContent ?? null), 8_000).catch(() => null)
+    await waitFor("the confirm button", () => page.evaluate(() => {
+      const button = [...document.querySelectorAll("button")].find((b) => b.textContent?.trim() === "End session & mark done")
+      button?.click()
+      return Boolean(button)
+    }), 8_000)
+    const done = await waitFor("the tenant thread to archive", async () => { const t = await threadOf("billing-worker", "publish-billing-client"); return t?.state === "archived" ? t : null }).catch(() => null)
+    const launcher = await terminalOf("acme-api", "rate-limit-headers")
+    // Let the card finish leaving before the next step takes a handle on a card beneath it: the queue
+    // re-lays out as it goes, and a handle taken mid-exit is detached by the time it is clicked.
+    await waitFor("the done card to leave the page", async () => ((await page.$(card("billing-worker", "publish-billing-client"))) === null ? true : null), 8_000).catch(() => null)
+    await sleep(600)
+    check(
+      "Mark as done on a tenant's thread stops ITS terminal, after asking",
+      Boolean(named?.includes("1 terminal")) && Boolean(done) && (done.terminals ?? []).length === 0 && (await wrote("billing-worker", "completeThread")) && launcher !== undefined && launcher.id !== before?.id,
+      `dialog ${named ? `"${named.slice(0, 60)}…"` : "missing"}, tenant ${done ? "archived" : "still open"}, launcher's terminal ${launcher ? "kept" : "gone"}`,
+    )
   })
 
   await step("answering a tenant's registered question answers it there", async () => {
@@ -484,77 +500,6 @@ try {
     await page.keyboard.press("Backspace")
     await previousProject()
     await pickerSays("acme-api")
-  })
-
-  await step("⌥↓ in the Terminal box starts the command in the project it moved to", async () => {
-    await composerReady()
-    await page.click("[data-dispatch-tab=terminal]")
-    await page.waitForSelector('[data-surface="commandComposer"]')
-    await page.click('[data-surface="commandComposer"]')
-    await page.keyboard.type("echo stepped-with-alt-down")
-    await nextProject()
-    const target = await picker()
-    const kept = await box("commandComposer")
-    await page.keyboard.press("Enter")
-    const started = await waitFor("the command thread", async () => {
-      for (const slug of Object.keys(ids)) {
-        const found = (await api(slug).query("board")).threads.find((t) => t.command?.command === "echo stepped-with-alt-down")
-        if (found) return { slug, id: found.id }
-      }
-      return null
-    })
-    check(
-      "⌥↓ in the Terminal box starts the command in the project it moved to",
-      target !== "acme-api" && kept?.focused === true && kept.value === "echo stepped-with-alt-down" && started.slug === target,
-      `moved to "${target}", ran in ${started.slug}/${started.id}`,
-    )
-    // Its toast stays mounted once it fades, "Open thread" and all (Toaster.tsx), and the next step clicks
-    // the first one it finds: that step starts on a fresh page instead, the box back on the launcher.
-    await page.goto(`${origin}/?focus=acme-api`, { waitUntil: "networkidle2" })
-    await page.evaluate(() => { document.documentElement.dataset.theme = "dark" })
-    await page.waitForSelector('[data-surface="newComposer"]', { timeout: 10_000 })
-    await pickerSays("acme-api")
-  })
-
-  await step("a terminal command started from the page runs in the project chosen for it", async () => {
-    await pickerSays("acme-api")
-    await page.click("[data-xq-project-picker]")
-    // Found and clicked in one go: a handle held across the page's next render can be detached.
-    await page.waitForSelector("[role=menuitem]", { timeout: 5000 })
-    for (let attempt = 0; attempt < 5; attempt++) {
-      const item = (await page.evaluateHandle(() => [...document.querySelectorAll("[role=menuitem]")].find((el) => el.textContent?.includes("billing-worker")) ?? null)).asElement()
-      if (item && (await item.click().then(() => true, () => false))) break
-      await sleep(200)
-    }
-    await page.waitForFunction(() => location.pathname === "/", { timeout: 8000 })
-    // The PREVIOUS project's form stays up for the render after the address bar moves; wait for this
-    // project's own form (the picker names it, and the stand-in is gone) before typing into it.
-    await pickerSays("billing-worker")
-    await page.waitForFunction(() => !document.querySelector("[data-xq-composer-pending]") && document.querySelector("[data-dispatch-form]"), { timeout: 10_000 })
-    await page.click("[data-dispatch-tab=terminal]")
-    await page.waitForSelector('[data-surface="commandComposer"]')
-    await page.type('[data-surface="commandComposer"]', "echo started-from-everything")
-    await page.keyboard.press("Enter")
-    const started = await waitFor("the command thread", async () => (await api("billing-worker").query("board")).threads.find((t) => t.command?.command === "echo started-from-everything") ?? null)
-    const elsewhere = (await api("acme-api").query("board")).threads.some((t) => t.command?.command === "echo started-from-everything")
-    check("a terminal command started from the page runs in the project chosen for it", Boolean(started) && !elsewhere, started ? `billing-worker/${started.id}` : "")
-
-    // Its toast opens its TERMINAL, in place — a routed terminal layer that stays open.
-    // Clicked in the page, in the same task that finds it: the toast re-renders as it rises, and a
-    // handle held across that is detached.
-    await waitFor("the toast's link", () => page.evaluate(() => {
-      const button = [...document.querySelectorAll("[data-toast] button")].find((b) => b.textContent?.trim() === "Open thread")
-      button?.click()
-      return Boolean(button)
-    }), 8000)
-    await page.waitForFunction((slug) => location.pathname === `/all/billing-worker/thread/${slug}`, { timeout: 8000 }, started.id)
-    await sleep(1500)
-    const terminal = await page.evaluate(() => Boolean(document.querySelector(".xterm")) && location.pathname.includes("/thread/"))
-    await page.screenshot({ path: join(shots, "xp-verify-terminal.png") })
-    check("its toast opens its terminal in place, and it stays open", terminal, await page.evaluate(() => location.pathname))
-    await closeDrawer()
-    // The picker CHOSE billing-worker, so that is where the page settles.
-    await page.waitForFunction(() => location.pathname === "/", { timeout: 8000 })
   })
 
   // There is no project view to open (maintainer 2026-09-28: "urls like this should not exist anymore"):

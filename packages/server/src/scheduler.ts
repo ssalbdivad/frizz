@@ -1,7 +1,7 @@
 import { execFile } from "node:child_process"
 import { promisify } from "node:util"
 import { createHash, randomUUID } from "node:crypto"
-import { PARK_CORRECTION_NAMES_LEAD, questionRepliedPast, PARK_CORRECTION_QUESTION_LEAD, PARK_CORRECTION_RETIRED_LEAD, interruptEndedSubAgentsMessage, type InterruptEndedSubAgent, parkExpiredWakeMessage, parkFinishedWakeMessage, prWatchExpiredWakeMessage, ownWatchExpiredWakeMessage, questionAnswerMessage, questionsCancelledWakeMessage, type QuestionAnswer, type QuestionDismissal, RETIRED_AWAITING_REPLACEMENT, retiredAwaitingKindsIn, compactionPromptMessage, limitResumeSteer, limitModelSwitchSteer, formatGithubWakeSteer, GithubWakeItem, type GithubWatchStatus, type GithubIssueStatus, prWatchWakeMessage, issueWatchWakeMessage, shellDoneMessage, restPromptMessage, schedulePromptMessage, timerPromptMessage, signoffNudgeMessage, strayShellsMessage, liveOpsLines, wakeDeliveryToken, wakeTimeHeader, stripWakeTimeHeader, type QuotaSnapshot } from "@frizz/shared"
+import { PARK_CORRECTION_NAMES_LEAD, PARK_CORRECTION_QUESTION_LEAD, PARK_CORRECTION_RETIRED_LEAD, interruptEndedSubAgentsMessage, type InterruptEndedSubAgent, parkExpiredWakeMessage, parkFinishedWakeMessage, prWatchExpiredWakeMessage, ownWatchExpiredWakeMessage, mergeAnswerMessages, questionAnswerMessage, questionsCancelledWakeMessage, type QuestionAnswer, type QuestionDismissal, RETIRED_AWAITING_REPLACEMENT, retiredAwaitingKindsIn, compactionPromptMessage, limitResumeSteer, limitModelSwitchSteer, formatGithubWakeSteer, GithubWakeItem, type GithubWatchStatus, type GithubIssueStatus, prWatchWakeMessage, issueWatchWakeMessage, shellDoneMessage, restPromptMessage, schedulePromptMessage, timerPromptMessage, signoffNudgeMessage, strayShellsMessage, liveOpsLines, wakeDeliveryToken, wakeTimeHeader, stripWakeTimeHeader, type QuotaSnapshot } from "@frizz/shared"
 import { GITHUB_ISSUE_STATUS_SETTING, GITHUB_STATUS_SETTING, parkExpiresAt, parkIsHonoured, readAwaitingPark, unaccountedItems, type LiveActivity } from "./awaiting.ts"
 import type { PrWatchRow, SessionRow, Storage, ThreadQuestionRow } from "./storage.ts"
 import type { Tailer } from "./tailer.ts"
@@ -1345,6 +1345,8 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
   const reviewFailures = new Map<string, { signature: string; loggedAt: number; suppressed: number }>()
   let timer: NodeJS.Timeout | null = null
   let activeTick: Promise<void> | null = null // guard + shutdown drain for a slow poll/delivery
+  // A kick that landed while a tick was already running — see `kick`.
+  let rerun = false
   let stopped = false
 
   // ---- THE WATCHED-PR STATUS LEDGER ---------------------------------------------------------------
@@ -1622,6 +1624,15 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
     // The budget warning is "in the moment" by definition: its grace clock is already running, and a
     // worker mid-turn is the one most likely to still be using the shell — it has ten minutes to say so.
     if (isShellBudgetFenceId(item.fenceId)) return true
+    // AN ANSWER IS THE HUMAN'S OWN WORDS, and it goes out mid-turn exactly as their typed steer does
+    // (router followUp queues one into the running turn). Answers arrive ONE QUESTION AT A TIME since
+    // 2026-09-29 — the worker starts on the first while the human reads the rest — so the second usually
+    // lands while the worker is busy with the first. Held for the rest, it opened a turn of its own after
+    // the worker had already written a handoff without it, and a third opened a third: one turn per card,
+    // and a handoff per card the human had to read. Delivered now, it joins the turn already running at
+    // its next sampling boundary. It interrupts nothing, and the questions of one `ask` are independent by
+    // contract, so an answer arriving mid-work never changes the premise of the work in flight.
+    if (isQuestionAnswerFenceId(item.fenceId)) return true
     return nowMs - item.createdAt >= MID_TURN_HOLD_MAX_MS
   }
 
@@ -2066,8 +2077,9 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
         tele.lastFence ||
         tele.pendingQuestion ||
         registeredDoneFence(deps.storage.getThreadDone(row.slug), tele.lastUserAt, tele.lastToolCallAt, tele) !== undefined ||
-        // …a CURRENT one: a question the human replied past is a pivot, not this rest's sign-off.
-        questionRows.some((q) => q.state === "open" && !questionRepliedPast(q, tele.lastHumanAt)) ||
+        // …any open one, including one the human has typed past: it is still owed until answered,
+        // dismissed or withdrawn (shared questionRepliedPast — information since 2026-09-29, not a release).
+        questionRows.some((q) => q.state === "open") ||
         answersInFlight(questionRows, tele.lastUserAt, row.recurring_on_rest === 1 && Boolean(row.recurring_prompt?.trim())) !== undefined ||
         deps.storage.listThreadWatches(row.slug, { armedOnly: true }).length > 0
       ) {
@@ -2165,7 +2177,7 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
       // stands), and its correction already sends the worker back to rewrite this sign-off.
       if (tele.lastFence) continue
       const onQuestion = Boolean(tele.pendingQuestion) || deps.storage.listThreadQuestions(row.slug)
-        .some((q) => q.state === "open" && !questionRepliedPast(q, tele.lastHumanAt))
+        .some((q) => q.state === "open")
       if (!onQuestion) continue
       const watched = deps.storage.listThreadWatches(row.slug, { armedOnly: true }).filter((w) => w.kind === "shell").map((w) => w.target)
       const stray = (tele.bgShells ?? []).filter((sh) => sh.state === "running" && ![sh.id, sh.taskId, sh.label].some((h) => h !== undefined && watched.includes(h)))
@@ -2238,8 +2250,8 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
       // corrections, because a worker whose contract froze before this rule cannot learn it, and keyed
       // on the rest so one fence draws one bump. Checked BEFORE the honoured-park reset below on
       // purpose: live names do not make this park honoured.
-      // Current questions only: one the human replied past holds nothing, so it refuses no park either.
-      const openQuestions = deps.storage.listThreadQuestions(row.slug).filter((q) => q.state === "open" && !questionRepliedPast(q, tele.lastHumanAt))
+      // Every open question, one the human has typed past included — it is still owed (2026-09-29).
+      const openQuestions = deps.storage.listThreadQuestions(row.slug).filter((q) => q.state === "open")
       if (openQuestions.length > 0) {
         if ((row.park_bumps ?? 0) >= PARK_BUMP_MAX) continue
         const fenceId = parkFenceId("question", spokeAt)
@@ -3218,9 +3230,11 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
   //  1. PAST THE DEADLINE → one warning wake, delivered mid-turn if the worker is busy, and the row
   //     marked warned FOR THIS DEADLINE. An extension moves the deadline, so the next overrun is warned
   //     afresh; the same deadline is never warned twice, however many passes or restarts see it.
-  //  2. GRACE AFTER THE WARNING, deadline unmoved → the shell is stopped through the operator's own ×
-  //     path, and the worker told why. Grace counts from the WARNING, not the deadline, so a server that
-  //     was down across the deadline still gives the worker its full window to answer.
+  //  2. GRACE AFTER THE WARNING REACHED THE WORKER, deadline unmoved → the shell is stopped through the
+  //     operator's own × path, and the worker told why. Grace counts from the warning's DELIVERY — not
+  //     the deadline, and not the instant it was queued — so neither a server that was down across the
+  //     deadline nor a wake that waited in the outbox eats into the worker's window to answer. See
+  //     shellBudgetGraceFrom for how "delivered" is read.
   //
   // A shell frizz cannot stop (a pre-broker row, or no task id yet) is warned and never killed — the
   // warning says so. An ARCHIVED thread is nobody's to wake: it gets no warning and no kill notice, but
@@ -3228,6 +3242,33 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
   // 16-hour case. A kill that fails is retried, spaced, rather than every tick.
   const SHELL_BUDGET_STOP_RETRY_MS = 5 * 60_000
   const shellBudgetStopAttempts = new Map<string, number>()
+
+  // WHEN THE WARNING REACHED THE WORKER — the instant its grace runs from, or null while it is still on
+  // its way (nothing may be stopped yet). Read off the warning's own outbox row, which is durable, so a
+  // restart reads the same answer. Until 2026-09-29 the grace ran from `warned_at`, the instant the
+  // warning was QUEUED: two shells due 8s apart on a real stack had their warnings delivered ~5m apart
+  // (the quiet window, since exempted — wake-store.ts), and the second worker got ~5 of its 10 minutes.
+  //
+  //  · SENT to a live runtime, or DELIVERED → the handoff instant (`sentAt`, else `deliveredAt`). A sent
+  //    row is still leased awaiting confirmation; the worker has it, so its clock is running.
+  //  · PENDING, or leased and not yet sent → null. That includes a frame that was sent and LOST (its
+  //    runtime died with no token) and is going round again: the worker never read it.
+  //  · TERMINAL without reaching the worker (exhausted, abandoned), or NO ROW (an archived thread is
+  //    never warned; a pruned row) → `warned_at`. Nobody can be told, and a shell whose worker cannot
+  //    be reached is exactly the forgotten one the budget exists for, so it ends on the original clock
+  //    rather than living forever behind a wake that will never land.
+  //
+  // Looked up under the thread's CURRENT session: a warning queued under an earlier one is not found
+  // and falls to `warned_at`, the old behaviour, for a thread that restarted mid-grace.
+  function shellBudgetGraceFrom(slug: string, sessionId: string, shellId: string, deadlineMs: number, warnedAtMs: number): number | null {
+    const d = outbox.get(wakeDeliveryId(slug, sessionId, shellBudgetFenceId(shellId, deadlineMs)))
+    if (!d) return warnedAtMs
+    if (d.state === "delivered") return Math.max(warnedAtMs, d.sentAt ?? d.deliveredAt ?? warnedAtMs)
+    if (d.state === "leased") return d.sentAt === null ? null : Math.max(warnedAtMs, d.sentAt)
+    if (d.state === "pending") return null
+    return warnedAtMs
+  }
+
   async function evalShellBudgets(nowMs: number): Promise<void> {
     for (const row of deps.storage.allSessions()) {
       const tele = deps.tailer.get(row.slug)
@@ -3269,7 +3310,9 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
           deps.storage.markShellBudgetWarned({ slug: row.slug, shellId: budget.shellId, startedAt: shell.startedAt, deadlineMs: budget.deadlineMs, nowMs })
           continue
         }
-        if (!stoppable || !deps.shellControl || nowMs < warnedAtMs + SHELL_BUDGET_GRACE_MS) continue
+        if (!stoppable || !deps.shellControl) continue
+        const graceFromMs = archived ? warnedAtMs : shellBudgetGraceFrom(row.slug, row.session_id, budget.shellId, budget.deadlineMs, warnedAtMs)
+        if (graceFromMs === null || nowMs < graceFromMs + SHELL_BUDGET_GRACE_MS) continue
         const attemptKey = `${row.slug}\u0000${budget.shellId}`
         const lastAttempt = shellBudgetStopAttempts.get(attemptKey)
         if (lastAttempt !== undefined && nowMs - lastAttempt < SHELL_BUDGET_STOP_RETRY_MS) continue
@@ -3370,6 +3413,14 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
    *
    *  Marked delivered at ENQUEUE, not at receipt, because the outbox is itself durable (wake_delivery in
    *  SQLite) and owns retry from there. "Delivered" here means handed to the channel that cannot lose it.
+   *
+   *  ANSWERS ARRIVE A QUESTION AT A TIME (2026-09-29) and are delivered as they come, so the worker starts
+   *  on the first while the human reads the rest. Three things keep that from costing a turn per card:
+   *  every undelivered answer a pass finds for a thread goes as ONE message (below); an answer goes out
+   *  mid-turn like a typed steer instead of waiting for the rest and opening its own turn
+   *  (isDeliverableNow); and answer rows that piled up while none could go fold into one message at
+   *  claim (adoptCompanions). A kick that lands during a pass runs one more pass after it (`kick`), so an
+   *  answer stored while the previous one's delivery is in flight is picked up at once.
    */
   function evalQuestionAnswers(nowMs: number): void {
     const bySlug = new Map<string, ThreadQuestionRow[]>()
@@ -3845,16 +3896,26 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
   // is simply re-merged by the next claim; nothing is delivered on the strength of a message that was
   // composed and never read.
   //
-  // AN ANSWER NEVER MERGES, as carrier or as companion. `questionAnswerMessage` is the human's own words
-  // in a shape the chat parses by position — its first line must be the answers header and every trailing
-  // line is read as the last answer's continuation — so wrapping it in a heading or appending anything
-  // after it would render frizz's prose inside the human's answer chip. It is exempt from the quiet
-  // window for the same reason it cannot wait: it goes out alone, at once.
+  // AN ANSWER NEVER MERGES WITH ANYTHING BUT ANOTHER ANSWER. `questionAnswerMessage` is the human's own
+  // words in a shape the chat parses by position — its first line must be the answers header and every
+  // trailing line is read as the last answer's continuation — so wrapping it in a heading or appending
+  // anything after it would render frizz's prose inside the human's answer chip. It is exempt from the
+  // quiet window for the same reason it cannot wait.
+  //
+  // BUT ANSWERS FOLD INTO ONE ANOTHER (2026-09-29). They arrive a question at a time now, and every
+  // answer the scheduler found at once already went as one message (evalQuestionAnswers groups a
+  // thread's undelivered answers); what that missed is answers that piled up as SEPARATE rows while none
+  // could go — the worker's process down, its telemetry unreadable, a delivery failing and retrying. Each
+  // went out alone, a turn apiece. An answer carrier now adopts every other pending answer row and the
+  // frame goes as ONE answers message, rows renumbered in order (shared mergeAnswerMessages).
   function adoptCompanions(carrier: WakeDelivery, claimedAt: number): WakeDelivery[] {
-    if (isQuestionAnswerFenceId(carrier.fenceId)) return []
+    const answers = isQuestionAnswerFenceId(carrier.fenceId)
     const adopted: WakeDelivery[] = []
     for (const sibling of outbox.pendingFor(carrier.slug, carrier.sessionId)) {
-      if (sibling.id === carrier.id || isQuestionAnswerFenceId(sibling.fenceId)) continue
+      if (sibling.id === carrier.id || isQuestionAnswerFenceId(sibling.fenceId) !== answers) continue
+      // An answers carrier takes only what folds into the human's form: a cancellation wake is frizz's
+      // own voice (questionsCancelledWakeMessage) and goes on its own.
+      if (answers && (mergeAnswerMessages([carrier.message, sibling.message]) === undefined)) continue
       const context = deliveryContext(sibling)
       if (context === "confirmed") {
         outbox.confirm(sibling.id, now())
@@ -3946,9 +4007,10 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
       // creation order. One `resume`, one turn; see adoptCompanions.
       const companions = adoptCompanions(item, claimedAt)
       const frame = [...companions, item].sort((a, b) => a.createdAt - b.createdAt || a.id.localeCompare(b.id))
-      const message = companions.length === 0
-        ? item.message
+      const merged = companions.length === 0 ? undefined : isQuestionAnswerFenceId(item.fenceId)
+        ? withClock(mergeAnswerMessages(frame.map((d) => d.message))!, deps.tailer.get(item.slug)?.lastAssistantAt)
         : mergedWakeMessage(frame, deps.tailer.get(item.slug)?.lastAssistantAt)
+      const message = merged ?? item.message
       if (companions.length > 0) {
         log(`waker: merged ${frame.length} wakes for ${item.slug} into one delivery — ${frame.map((d) => d.reason).join("; ")}`)
       }
@@ -4167,6 +4229,25 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
     tick,
     kick() {
       if (stopped || !timer) return
+      // A KICK DURING A TICK RUNS ONE MORE AFTER IT. `tick` joins a running pass rather than starting a
+      // second, and that pass may already be past the part the kick was for — so the kick used to be
+      // swallowed, and the work it announced waited a whole interval. It bit the case kicks exist for:
+      // answers arrive a question at a time (2026-09-29), and the second one is stored while the first
+      // one's delivery is still awaiting its `resume`. Coalesced: however many kicks land during one
+      // pass, one more pass follows it, and that pass finds all of them together.
+      if (activeTick) {
+        if (rerun) return
+        rerun = true
+        void activeTick.then(
+          () => {
+            rerun = false
+            if (stopped || !timer) return
+            void tick().catch((error) => log(`waker: kick failed: ${error instanceof Error ? error.message : String(error)}`))
+          },
+          () => { rerun = false },
+        )
+        return
+      }
       void tick().catch((error) => log(`waker: kick failed: ${error instanceof Error ? error.message : String(error)}`))
     },
   }

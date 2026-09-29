@@ -72,6 +72,11 @@ test("focusing the free-text box unselects a registered question's chosen option
     assert.deepEqual(nonPointer, [], "every pixel of a live option row reads as clickable")
 
     // ── SINGLE: pick B, then click into the box — B must let go ──
+    // A draft in the reply box first: a single-choice pick that completes its question SENDS it
+    // (2026-09-29, one question at a time), and a card sent is greyed and done. A draft holds the send
+    // for the reply's Enter, which leaves the pick staged and the card live to focus into.
+    await page.focus("textarea[data-surface='queueComposer']")
+    await page.keyboard.type("draft")
     await mouseClick(page, `${single} [data-question-option]`, 1)
     assert.deepEqual(await selectedRows(page, single), [1])
     await mouseClick(page, `${single} textarea[data-surface='questionAnswer']`)
@@ -106,51 +111,54 @@ test("focusing the free-text box unselects a registered question's chosen option
   }
 })
 
-// Enter inside one card of a batch moves to the next UNANSWERED card instead of sending the batch
-// (maintainer 2026-09-29: one of seven answered, Enter pressed, all seven sent). Only once nothing is
-// left unanswered does Enter send.
-test("Enter in one registered question advances to the next unanswered one, and sends only when none is left", { skip: !baseUrl, timeout: 60_000 }, async () => {
+// Enter inside one card sends THAT question and moves on to the next unanswered one (2026-09-29, one
+// question at a time: "the agent should receive the answer to one question at a time so it can start
+// working"). It never sends another question — the bug before per-question sending was one of seven
+// answered, Enter pressed, all seven sent — and on an EMPTY card it sends nothing and just moves on.
+test("Enter in one registered question sends that question alone and moves to the next unanswered one", { skip: !baseUrl, timeout: 60_000 }, async () => {
   const { browser, page, errors } = await launch()
   try {
     await page.goto(`${baseUrl}/registered-question-fixture.html?many=1`, { waitUntil: "networkidle0" })
     await page.waitForSelector("[data-answerable-question]")
     await page.evaluate(() => {
-      const w = window as unknown as { sends: number; answered: number }
-      w.sends = 0
+      const w = window as unknown as { sent: string[][] }
+      w.sent = []
       window.addEventListener("fixture-rpc", (e) => {
         const { rpc, body } = (e as CustomEvent).detail
-        if (rpc !== "answerQuestions") return
-        w.sends += 1
-        w.answered = body.answers.length
+        if (rpc === "answerQuestions") w.sent.push(body.answers.map((a: { questionId: string }) => a.questionId))
       })
     })
-    const sends = () => page.evaluate(() => (window as unknown as { sends: number }).sends)
-    const boxes = "textarea[data-surface='questionAnswer']"
-    const focusedIdx = () => page.$$eval(boxes, (ns) => ns.indexOf(document.activeElement as HTMLTextAreaElement))
-    const cards = await page.$$eval(boxes, (ns) => ns.length)
-    assert.ok(cards >= 3, "the fixture renders several cards")
+    const sent = () => page.evaluate(() => (window as unknown as { sent: string[][] }).sent)
+    const focusedQuestion = () => page.evaluate(() => (document.activeElement?.closest("[data-question-id]") as HTMLElement | null)?.dataset.questionId ?? null)
+    const box = (id: string) => `[data-question-id='${id}'] textarea[data-surface='questionAnswer']`
+    const pause = () => new Promise((r) => setTimeout(r, 150))
 
-    // Answer the FIRST card only and press Enter: nothing is sent, and the caret lands on the second.
-    await mouseClick(page, boxes, 0)
+    // Answer the FIRST card by typing and press Enter: it goes, ALONE, and the caret lands on the second.
+    await mouseClick(page, box("qst_0001aaaa"))
     await page.keyboard.type("first")
     await page.keyboard.press("Enter")
-    assert.equal(await sends(), 0, "Enter with unanswered cards left does not send")
-    assert.equal(await focusedIdx(), 1)
+    await pause()
+    assert.deepEqual(await sent(), [["qst_0001aaaa"]], "Enter sends its own question and no other")
+    assert.equal(await focusedQuestion(), "qst_0002bbbb")
 
-    // Enter on an EMPTY card skips it too — on to the next unanswered one, never back to itself.
+    // Enter on an EMPTY card sends nothing and moves on to the next unanswered one.
     await page.keyboard.press("Enter")
-    assert.equal(await sends(), 0)
-    assert.equal(await focusedIdx(), 2)
+    await pause()
+    assert.deepEqual(await sent(), [["qst_0001aaaa"]])
+    assert.equal(await focusedQuestion(), "qst_0004dddd")
 
-    // Answer every card left by typing; the last Enter is the one that sends.
-    for (let i = 0; i < 20 && (await sends()) === 0; i++) {
-      assert.ok(await focusedIdx() >= 0, "the caret always lands in a card while any is unanswered")
-      await page.keyboard.type("x")
-      await page.keyboard.press("Enter")
-      await new Promise((r) => setTimeout(r, 50))
-    }
-    assert.equal(await sends(), 1)
-    assert.equal(await page.evaluate(() => (window as unknown as { answered: number }).answered), cards, "the one send carried every card's answer")
+    // The last card in the stack: its Enter sends it and WRAPS to the one skipped above.
+    await page.keyboard.type("only typecheck")
+    await page.keyboard.press("Enter")
+    await pause()
+    assert.deepEqual(await sent(), [["qst_0001aaaa"], ["qst_0004dddd"]])
+    assert.equal(await focusedQuestion(), "qst_0002bbbb")
+
+    await page.keyboard.type("hold it for now")
+    await page.keyboard.press("Enter")
+    await pause()
+    assert.deepEqual(await sent(), [["qst_0001aaaa"], ["qst_0004dddd"], ["qst_0002bbbb"]], "three Enters, three sends, one question each")
+    assert.equal(await page.$$eval("[data-registered-questions] [data-settled-question]", (ns) => ns.length), 3, "every card greyed in its own slot")
     assert.deepEqual(errors, [])
   } finally {
     await browser.close()

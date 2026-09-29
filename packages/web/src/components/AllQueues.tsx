@@ -51,8 +51,7 @@ import { useSteeredAt } from "../lib/steering.ts"
 import { glideTo, gliding, useViewportLock } from "../lib/viewportLock.ts"
 import { registerQueueCursor, releaseAutoOpened } from "../lib/keyboardRuntime.ts"
 import { PROJECT_STEP_CHORDS, detectPlatform, formatChord, parseChord } from "../lib/keybindings.ts"
-import { AllQueuesCard, ProjectChip, ProjectMark, useOpenThreadInPlace } from "./AllQueuesCard.tsx"
-import { CommandQueueCard } from "./CommandQueueCard.tsx"
+import { AllQueuesCard } from "./AllQueuesCard.tsx"
 import { ProjectSquare } from "./ProjectRail.tsx"
 import { SIDEBAR_COLUMN_CLASS } from "./Sidebar.tsx"
 import { BandLabel } from "./BandLabel.tsx"
@@ -63,7 +62,6 @@ import { DispatchForm, type DispatchDirs } from "./NewThreadModal.tsx"
 import { Menu, MenuContent, MenuItem, MenuSeparator, MenuTrigger } from "./ui/Menu.tsx"
 import { ProjectFilter } from "./ProjectFilter.tsx"
 import { AddProjectRow, ProjectList } from "./ProjectList.tsx"
-import { ThreadProjectScope } from "../api/threadApi.tsx"
 
 /** How often the page re-reads every project. The rail's badges poll at 5s; this is the page the
  *  operator is looking AT, so it runs a little faster — the read is the servers' cached snapshots. */
@@ -81,6 +79,23 @@ const COMPOSER_WAIT_MS = 6_000
 
 const entryKey = ({ project, thread }: QueueEntry): string => threadKey(project.id, thread.id)
 const xqCardKey = (slot: HTMLElement): string | undefined => slot.dataset.xqCard
+
+/** A HELD card (useLeavingCards `hold`) as it draws: frozen as it was last queued — the handoff the human
+ *  is reading does not change under them while the worker streams — except for its questions, which are
+ *  the live thread's, so one answered from the drawer or another tab leaves it and one the worker asks
+ *  while it works joins it. */
+function heldEntry(projects: readonly QueuesProject[], entry: QueueEntry): QueueEntry {
+  const project = projects.find((p) => p.id === entry.project.id)
+  const live = project && [...project.queued, ...project.running, ...project.snoozed].find((t) => t.id === entry.thread.id)
+  return live && live.questions !== entry.thread.questions ? { ...entry, thread: { ...entry.thread, questions: live.questions } } : entry
+}
+
+/** A held card whose worker is at work on the answer it sent says so, in place of the time it was ready:
+ *  its entry is frozen from when it was queued, and "Ready 2m ago" over a running worker is false. */
+function heldStatus(projects: readonly QueuesProject[], entry: QueueEntry): string | undefined {
+  const project = projects.find((p) => p.id === entry.project.id)
+  return project?.running.some((t) => t.id === entry.thread.id) ? "Working on your answer" : undefined
+}
 
 // Where a ghost's thread went, as far as the page can see (lib/stableQueue.ts GHOST_LABEL).
 function ghostLabel(projects: readonly QueuesProject[], { project, thread }: QueueEntry): string {
@@ -192,7 +207,7 @@ export function AllQueuesPage() {
     keyOf: entryKey,
     onScreen: lock.onScreen.current,
     mayGhost,
-    keep: new Set(prevSlots.current.map((slot) => slot.key).filter((key) => leaving.isLeaving(key) && !leaving.hidden(key))),
+    keep: new Set(prevSlots.current.map((slot) => slot.key).filter((key) => (leaving.isLeaving(key) && !leaving.hidden(key)) || leaving.isHeld(key))),
   })
   prevSlots.current = queue
   // A GHOST THE HUMAN REACHES FOR WAKES: a click or a tab into it draws it at full tone, in the same place,
@@ -308,7 +323,7 @@ export function AllQueuesPage() {
                 {queue.length > 0 ? (
                   queue.map((slot, index) => (
                     <Fragment key={slot.key}>
-                      <QueueCardOf entry={slot.item} ghost={slot.ghost ? ghostLabel(projects, slot.item) : undefined} woken={woken.has(slot.key)} concealed={inDrawer.has(slot.key)} leaving={leaving} chip={!filtered} />
+                      <QueueCardOf entry={leaving.isHeld(slot.key) ? heldEntry(projects, slot.item) : slot.item} ghost={slot.ghost ? ghostLabel(projects, slot.item) : undefined} status={leaving.isHeld(slot.key) ? heldStatus(projects, slot.item) : undefined} woken={woken.has(slot.key)} concealed={inDrawer.has(slot.key)} leaving={leaving} chip={!filtered} />
                       {/* The rule between two cards: a sibling that FOLLOWS its card, so
                           styles.css fades it with the card when that one leaves. */}
                       {index < queue.length - 1 && <hr className="my-10 border-0 border-t border-border/60" />}
@@ -451,7 +466,6 @@ function usePickProject(): (project: QueuesProject, from: string | undefined) =>
   return useCallback(
     (project: QueuesProject, from: string | undefined) => {
       carryDraft(draftKey.dispatch, from, project.projectDir)
-      carryDraft(draftKey.command, from, project.projectDir)
       rememberCrossProjectFocus(project.id)
       // A drawer open on the page has it focused on the drawer's project, and the box follows the focus,
       // so aiming the box closes the drawers: home, where the focus is the pick.
@@ -610,8 +624,8 @@ function composerDirs(focus: string | undefined, board: BoardSnapshot | null, pr
   return undefined
 }
 
-/** The new-thread box's two textareas — its Prompt tab and its Terminal tab. */
-const NEW_THREAD_BOXES = '[data-surface="newComposer"], [data-surface="commandComposer"]'
+/** The new-thread box's textarea. */
+const NEW_THREAD_BOXES = '[data-surface="newComposer"]'
 
 const PROJECT_STEP_KEYS = [PROJECT_STEP_CHORDS.previous, PROJECT_STEP_CHORDS.next].map((chord) => formatChord(parseChord(chord)!, detectPlatform())).join("/")
 
@@ -648,14 +662,13 @@ function placeCaret(box: HTMLTextAreaElement, caret: Caret | undefined): void {
  * relative path at its directory and a `/thread/<slug>` link at that thread on THIS page (opened in
  * place) — never at the page's focus, which is usually another project.
  */
-function QueueCardOf({ entry, ghost, woken, concealed, leaving, chip }: { entry: QueueEntry; ghost: string | undefined; woken: boolean; concealed: boolean; leaving: LeavingCards; chip: boolean }) {
+function QueueCardOf({ entry, ghost, status, woken, concealed, leaving, chip }: { entry: QueueEntry; ghost: string | undefined; status?: string; woken: boolean; concealed: boolean; leaving: LeavingCards; chip: boolean }) {
   const { project, thread } = entry
   // The READY header's filter, chosen from the card: a different set of cards is read from its top.
   const choose = useCallback((to: QueuesProject) => {
     setQueueFilter(to.id)
     glideTo(() => 0)
   }, [])
-  const openInPlace = useOpenThreadInPlace()
   const scope = useMemo(
     () => projectMarkdownScope(project),
     [project.id, project.githubRepo, project.slug, project.projectDir, project.homeDir],
@@ -663,40 +676,20 @@ function QueueCardOf({ entry, ghost, woken, concealed, leaving, chip }: { entry:
   const key = threadKey(project.id, thread.id)
   return (
     <MarkdownScopeContext.Provider value={scope}>
-      {thread.kind === "command" ? (
-        // A finished terminal command takes its own command card, scoped to its project: its
-        // pty, its Restart and its Mark as done all belong to the card's project, not the page's.
-        <div data-xq-card={key} data-queue-leaving={leaving.isLeaving(key)} data-queue-ghost={ghost === undefined ? undefined : true} data-queue-woken={(ghost !== undefined && woken) || undefined} data-queue-concealed={concealed || undefined} inert={concealed} className="frizz-card-slot min-w-0">
-          <div className="frizz-card-clip min-h-0 min-w-0">
-            <div className="frizz-card-body min-w-0">
-              <ThreadProjectScope projectId={project.id} projectDir={project.projectDir}>
-                <CommandQueueCard
-                  thread={thread}
-                  leaving={leaving.isLeaving(key)}
-                  onResolve={leaving.leave(key)}
-                  onUnresolve={leaving.restore(key)}
-                  onOpen={() => openInPlace(project, thread.id)}
-                  lead={chip ? <ProjectChip project={project} square={false} /> : undefined}
-                  mark={chip ? <ProjectMark project={project} onChoose={choose} /> : undefined}
-                />
-              </ThreadProjectScope>
-            </div>
-          </div>
-        </div>
-      ) : (
-        <AllQueuesCard
-          project={project}
-          thread={thread}
-          leaving={leaving.isLeaving(key)}
-          onLeave={leaving.leave(key)}
-          onReturn={leaving.restore(key)}
-          chip={chip}
-          onChoose={choose}
-          ghost={ghost}
-          woken={woken}
-          concealed={concealed}
-        />
-      )}
+      <AllQueuesCard
+        project={project}
+        thread={thread}
+        leaving={leaving.isLeaving(key)}
+        onLeave={leaving.leave(key)}
+        onReturn={leaving.restore(key)}
+        onHold={leaving.hold(key)}
+        chip={chip}
+        onChoose={choose}
+        ghost={ghost}
+        woken={woken}
+        status={status}
+        concealed={concealed}
+      />
     </MarkdownScopeContext.Provider>
   )
 }
@@ -723,6 +716,9 @@ interface LeavingCards {
   hidden: (key: string) => boolean
   leave: (key: string) => () => void
   restore: (key: string) => () => void
+  /** The card HOLDS: it stays where it is, live, after its thread leaves the queue — see `hold` below. */
+  isHeld: (key: string) => boolean
+  hold: (key: string) => () => void
 }
 
 /**
@@ -736,7 +732,7 @@ interface LeavingCards {
 export function useLeavingCards(projects: QueuesProject[]): LeavingCards {
   const [since, setSince] = useState<ReadonlyMap<string, number>>(() => new Map())
   const [, tick] = useState(0)
-  const callbacks = useRef(new Map<string, { leave: () => void; restore: () => void }>())
+  const callbacks = useRef(new Map<string, { leave: () => void; restore: () => void; hold: () => void }>())
 
   // A card whose thread has left its queue on the server needs no guard any more.
   const stillQueued = useMemo(() => new Set(projects.flatMap((p) => p.queued.map((t) => threadKey(p.id, t.id)))), [projects])
@@ -749,12 +745,32 @@ export function useLeavingCards(projects: QueuesProject[]): LeavingCards {
     })
   }, [stillQueued])
 
+  // A CARD STILL ASKING, WHOSE THREAD WENT TO WORK (2026-09-29). Answers go a question at a time now:
+  // one answered on the card sets the worker going, and its thread leaves the queue for the turn — while
+  // the card's other questions are still the human's to answer (maintainer: "the remaining questions …
+  // should stay there"). Neither way a card leaves fits it: fading takes the rest of the questions away,
+  // and a ghost is quiet and dimmed, for a card that waits on nobody. So it holds — drawn live in its
+  // place like a card whose thread is still queued — until it is sent away (its last question answered,
+  // a reply, done, snooze), it scrolls off, or its thread rests and it is simply queued again. A ref, not
+  // state: the hold is read when the queue next redraws, which is exactly when the thread leaves it.
+  // It lapses by itself once the thread asks nothing any more (answered from the drawer or another tab,
+  // done, archived): a hold keeps a card for its questions, and a card with none is not the human's.
+  const held = useRef(new Set<string>())
+  const asking = useMemo(
+    () => new Set(projects.flatMap((p) => [...p.queued, ...p.running, ...p.snoozed].filter((t) => (t.questions?.length ?? 0) > 0).map((t) => threadKey(p.id, t.id)))),
+    [projects],
+  )
+  useEffect(() => {
+    for (const key of held.current) if (!asking.has(key)) held.current.delete(key)
+  }, [asking])
+
   const now = Date.now()
   const handles = (key: string) => {
     let entry = callbacks.current.get(key)
     if (!entry) {
       entry = {
         leave: () => {
+          held.current.delete(key)
           setSince((prev) => new Map(prev).set(key, Date.now()))
           // Re-render at the end of the fade (to unmount) and at the reappear deadline (to restore).
           window.setTimeout(() => tick((n) => n + 1), EXIT_MS + 20)
@@ -767,6 +783,7 @@ export function useLeavingCards(projects: QueuesProject[]): LeavingCards {
             next.delete(key)
             return next
           }),
+        hold: () => { held.current.add(key) },
       }
       callbacks.current.set(key, entry)
     }
@@ -787,6 +804,8 @@ export function useLeavingCards(projects: QueuesProject[]): LeavingCards {
     },
     leave: (key) => handles(key).leave,
     restore: (key) => handles(key).restore,
+    isHeld: (key) => held.current.has(key) && asking.has(key),
+    hold: (key) => handles(key).hold,
   }
 }
 

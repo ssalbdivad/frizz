@@ -91,13 +91,13 @@ test("parseTermClientMsg: rejects malformed, unknown, oversized, and unsafe term
   })
 })
 
-// The transport serves ONLY terminal command threads, so its source arrives as a TerminalAttachment
+// The transport serves ONLY thread terminals, so its source arrives as a TerminalAttachment
 // rather than a per-viewer pty it spawned. FakePty already has the four members the transport uses;
 // this just presents it through the attachment shape.
 //
 // `close()` maps to kill() HERE so the existing "the transport releases its source on detach"
 // assertions keep their meaning. In production an attachment's close() detaches only its viewer —
-// the pty is shared and command-threads.ts owns it.
+// the pty is shared and thread-terminals.ts owns it.
 function attachmentFor(fake: FakePty): TerminalAttachment {
   return {
     replay: () => "",

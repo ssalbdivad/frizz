@@ -75,13 +75,13 @@ test("needsAction: a REGISTERED question at rest cards; mid-turn it does not (th
   assert.equal(needsAction(thread({ questions: regQuestion, runtime: "running" })), false)
 })
 
-// A reply past a question is a pivot (shared questionRepliedPast): the card stays up where it was asked,
-// but the thread is not asking any more, so neither the queue rule nor the rail mark may say it is.
-test("needsAction / sessionIndicatorKind: a question the human replied past asks nothing", () => {
+// A typed message past a question releases nothing (shared questionRepliedPast, 2026-09-29): the worker
+// decides what the message made moot and `unask`s it, so a question still open is still asked — the
+// queue rule and the rail mark say so, `repliedPast` or not.
+test("needsAction / sessionIndicatorKind: a question the human typed past still asks", () => {
   const passed = regQuestion.map((q) => ({ ...q, repliedPast: true as const }))
-  assert.equal(needsAction(thread({ questions: passed, runtime: "turn-idle" })), false)
-  assert.notEqual(sessionIndicatorKind(thread({ questions: passed, runtime: "turn-idle" })), "needs-input")
-  assert.equal(needsAction(thread({ questions: [...passed, ...regQuestion.map((q) => ({ ...q, id: `${q.id}-new` }))], runtime: "turn-idle" })), true, "one asked since still does")
+  assert.equal(needsAction(thread({ questions: passed, runtime: "turn-idle" })), true)
+  assert.equal(sessionIndicatorKind(thread({ questions: passed, runtime: "turn-idle" })), "needs-input")
 })
 
 test("needsAction: `unread` no longer drives carding (unread is dead)", () => {
@@ -1266,8 +1266,8 @@ test("bandOf: Snoozed, Done, External, and no band for a legacy row", () => {
   // A worker still running after Mark as done does not lift its row out of Done.
   assert.equal(bandOf(thread({ kind: "session", state: "archived", archived: true, runtime: "running" })), "done")
   assert.equal(bandOf(thread({ kind: "session", foreign: true, runtime: "turn-idle" })), "external")
-  assert.equal(bandOf(thread({ kind: "command", state: "archived" })), "done")
-  assert.equal(bandOf(thread({ kind: "command", state: "open", needsYou: true })), "ready")
+  // A terminal waiting at a prompt queues its THREAD (server board.withThreadTerminals); it has no row.
+  assert.equal(bandOf(thread({ kind: "session", state: "open", runtime: "turn-idle", needsYou: true, terminals: [{ id: "term-1", command: "npm publish", cwd: "/repo", state: "running", awaitingInput: true, runId: 1, startedAt: "2026-09-29T10:00:00.000Z" }] })), "ready")
   assert.equal(bandOf(thread({})), null, "a legacy .frizz row has no row, so no band")
 })
 

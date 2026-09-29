@@ -3,11 +3,7 @@ import { useEffect, useMemo, useRef, useState, type ReactNode } from "react"
 import { useIsMutating, useMutation, useQuery } from "@tanstack/react-query"
 import { type AccountBackend, type DispatchInput } from "@frizz/shared"
 import { rpc } from "../api/rpc.ts"
-import { showToast, store } from "../store.ts"
-import { useSnapshot } from "valtio"
-import { ArrowUp, Loader2 } from "lucide-react"
-import { abbreviateHome } from "../lib/paths.ts"
-import { RAIL_SEND_OFFSET } from "../lib/iconRhythm.ts"
+import { showToast } from "../store.ts"
 import { Composer } from "./Composer.tsx"
 import { GithubTrigger, useGithubTriggerVisible } from "./GithubTrigger.tsx"
 import { ProfileGridSelector } from "./ProfileGridSelector.tsx"
@@ -23,27 +19,19 @@ import { projectSlug } from "../lib/base-path.ts"
 import { parseAccountAlias } from "../lib/signIn.ts"
 import { PROMPT_CONTROL_TYPOGRAPHY_CLASS } from "../lib/promptControlTypography.ts"
 
-// Which tab the prompt box was last on. Module-level so every mount of the box (the rail, the empty
-// board, the anywhere-modal) opens where the human left it for the rest of the tab's life.
-let lastDispatchMode: DispatchMode = "prompt"
-export type DispatchMode = "prompt" | "terminal"
-
 /** The directories of the project a prompt box dispatches into, named by its caller (DispatchForm `dirs`). */
 export interface DispatchDirs {
   projectDir: string | undefined
   homeDir: string | undefined
 }
 
-/** The tab the NEXT prompt box mounts on — how the `t` key opens the anywhere-modal straight onto
- *  Terminal (a mounted box is switched by pressing its tab instead; see App's new-thread keys). */
-export function preferDispatchMode(mode: DispatchMode): void {
-  lastDispatchMode = mode
-}
-
-// THE prompt box, in two tabs: PROMPT starts an agent thread, TERMINAL runs a shell command in the
-// project directory as a thread of its own whose drawer is the live terminal (`npm run dev`, a test
-// watcher). Shared by every surface that can start a thread: the rail, the empty board's centered
-// box and the anywhere-modal.
+// THE prompt box: it starts an agent thread. Shared by every surface that can start one: the rail, the
+// empty board's centered box and the anywhere-modal.
+//
+// It had a second tab until 2026-09-29, TERMINAL, which ran one shell command as a top-level thread of
+// its own. A thread is a prompt now and nothing else; a terminal is opened ON a thread, in the folder its
+// agent is working in (ThreadTerminals.tsx), so it is never a row of its own and never ignores which
+// worktree the agent chose.
 export function DispatchForm({
   autoFocus,
   onDispatched,
@@ -69,177 +57,23 @@ export function DispatchForm({
    */
   dirs?: DispatchDirs
 }) {
-  const [mode, setModeState] = useState<DispatchMode>(lastDispatchMode)
-  const setMode = (next: DispatchMode) => {
-    lastDispatchMode = next
-    setModeState(next)
-  }
-  // SWITCHING FROM THE KEYBOARD keeps the caret in the box. Claude Code's own convention, which is the
-  // one every operator of this app already has in their fingers: `!` as the first character turns the
-  // prompt into a shell command (its "bash mode"), and Backspace in the empty command box turns it back.
-  // The tab that mounts then takes focus; a tab CLICKED with the mouse leaves focus where it was.
-  const [switchedByKey, setSwitchedByKey] = useState(false)
-  const switchByKey = (next: DispatchMode) => {
-    setMode(next)
-    setSwitchedByKey(true)
-  }
   return (
     <div data-dispatch-form className="w-full flex flex-col gap-1.5">
-      <DispatchTabs mode={mode} onChange={(next) => { setSwitchedByKey(false); setMode(next) }} />
-      {mode === "prompt" ? (
-        <PromptForm autoFocus={autoFocus || switchedByKey} onDispatched={onDispatched} onTerminal={() => switchByKey("terminal")} target={target} dirs={dirs} />
-      ) : (
-        <CommandForm autoFocus={autoFocus || switchedByKey} onDispatched={onDispatched} onPrompt={() => switchByKey("prompt")} target={target} dirs={dirs} />
-      )}
+      <PromptForm autoFocus={autoFocus} onDispatched={onDispatched} target={target} dirs={dirs} />
     </div>
   )
 }
 
-function DispatchTabs({ mode, onChange }: { mode: DispatchMode; onChange: (mode: DispatchMode) => void }) {
-  const tab = (value: DispatchMode, label: string) => (
-    <button
-      type="button"
-      role="tab"
-      aria-selected={mode === value}
-      data-dispatch-tab={value}
-      onClick={() => onChange(value)}
-      // The selected tab is a bordered chip: panel-2 alone is a 2% step off the page in light mode and
-      // left the selection readable only through the text colour.
-      className={`rounded-md border px-2 py-0.5 text-[11.5px] transition-colors outline-none focus-visible:ring-1 focus-visible:ring-focus-ink-60 ${
-        mode === value ? "border-border bg-panel-2 text-fg" : "border-transparent text-muted hover:text-fg"
-      }`}
-    >
-      {label}
-    </button>
-  )
-  return (
-    <div role="tablist" aria-label="Start a thread" className="flex items-center gap-0.5 px-0.5">
-      {tab("prompt", "Prompt")}
-      {tab("terminal", "Terminal")}
-    </div>
-  )
-}
-
-// The TERMINAL tab: one shell command, run by the server in a pty in the project directory. A command
-// thread is a thread like any other, so starting one behaves exactly like dispatching a prompt: you
-// stay where you are, the row appears in Running, and the toast's link opens its terminal drawer.
-function CommandForm({
-  autoFocus,
-  onDispatched,
-  onPrompt,
-  target,
-  dirs,
-}: {
-  autoFocus?: boolean
-  onDispatched?: () => void
-  onPrompt?: () => void
-  target?: ReactNode
-  dirs?: DispatchDirs
-}) {
-  const boardDir = useProjectDir()
-  const boardHome = useSnapshot(store).board?.homeDir
-  const projectDir = dirs ? dirs.projectDir : boardDir
-  const homeDir = dirs ? dirs.homeDir : boardHome
-  const [command, setCommand, clearCommand] = useDraft(draftKey.command(projectDir))
-  const start = useMutation({
-    // The project is read when the request goes out — the one it was sent to (see ToastLink).
-    mutationFn: (input: string) => {
-      const project = projectSlug()
-      return rpc.commandStart({ command: input }).then((res) => ({ ...res, project }))
-    },
-    onSuccess: (res) => {
-      onDispatched?.()
-      showToast("Thread started", { link: { label: "Open thread", slug: res.slug, drawer: "terminal", project: res.project } })
-    },
-    onError: (e, input) => {
-      if (!draftStore.get(draftKey.command(projectDir))) setCommand(input)
-      showToast(`Could not start the command: ${(e as Error).message.slice(0, 80)}`)
-    },
-  })
-  function submit() {
-    const trimmed = command.trim()
-    if (!trimmed || start.isPending) return
-    clearCommand()
-    start.mutate(trimmed)
-  }
-  const hasContent = command.trim().length > 0
-  return (
-    <div className="group relative rounded-xl border border-border bg-bg transition-colors focus-within:border-accent">
-      <div className="flex items-start">
-        {/* The shell's own prompt mark, in the input's font, so the box reads as a command line. */}
-        <span aria-hidden className="font-mono-keep select-none pl-3.5 pt-2.5 text-[13px] leading-relaxed text-muted-60">$</span>
-        <textarea
-          data-surface="commandComposer"
-          data-1p-ignore
-          data-claims-escape
-          value={command}
-          autoFocus={autoFocus}
-          disabled={start.isPending}
-          onChange={(e) => setCommand(e.target.value)}
-          onKeyDown={(e) => {
-            if (e.key === "Escape") {
-              e.stopPropagation()
-              e.currentTarget.blur()
-              return
-            }
-            // Backspace in an EMPTY command box leaves Terminal for Prompt — how Claude Code leaves bash
-            // mode (DispatchForm has the whole convention).
-            if (e.key === "Backspace" && !command && onPrompt) {
-              e.preventDefault()
-              onPrompt()
-              return
-            }
-            // A command is one line: Enter runs it, and Shift-Enter is not a newline worth offering.
-            if (e.key === "Enter" && !e.nativeEvent.isComposing) {
-              e.preventDefault()
-              submit()
-            }
-          }}
-          placeholder="npm run dev"
-          rows={1}
-          spellCheck={false}
-          autoCapitalize="off"
-          autoCorrect="off"
-          style={{ minHeight: 96, maxHeight: 340 }}
-          className="font-mono-keep block w-full min-w-0 flex-1 resize-none bg-transparent py-2.5 pl-2 pr-3.5 text-[13px] leading-relaxed text-fg outline-none placeholder:text-muted scrollbar-none disabled:opacity-60"
-        />
-      </div>
-      <div className={`flex min-w-0 items-center gap-1.5 pb-1.5 pr-20 ${target ? "pl-1.5" : "pl-3.5"}`}>
-        {target}
-        <span className="min-w-0 truncate py-1 text-[11px] text-muted-60" title={projectDir}>
-          Runs in <span className="font-mono-keep">{projectDir ? abbreviateHome(projectDir, homeDir) : "the project directory"}</span>
-        </span>
-      </div>
-      <button
-        type="button"
-        onMouseDown={(e) => e.preventDefault()}
-        onClick={submit}
-        disabled={!hasContent || start.isPending}
-        title="Run (Enter)"
-        aria-label="Run command"
-        className={`icon-hover-outline absolute bottom-2 ${RAIL_SEND_OFFSET} flex h-7 w-7 items-center justify-center rounded-lg transition-all ${
-          hasContent && !start.isPending ? "bg-fg text-bg hover:opacity-90 active:scale-95" : "bg-panel-2 text-muted"
-        }`}
-      >
-        {start.isPending ? <Loader2 size={14} strokeWidth={2.5} className="animate-spin" /> : <ArrowUp size={14} strokeWidth={2.5} />}
-      </button>
-    </div>
-  )
-}
-
-// The PROMPT tab — composer + quiet selects row. There is no title field — the server derives a
+// The prompt form — composer + quiet selects row. There is no title field — the server derives a
 // fallback and Claude names the session itself (ai-title), which the UI prefers for display.
 function PromptForm({
   autoFocus,
   onDispatched,
-  onTerminal,
   target,
   dirs,
 }: {
   autoFocus?: boolean
   onDispatched?: () => void
-  /** `!` typed into the EMPTY box: switch to Terminal instead of writing it (see DispatchForm). */
-  onTerminal?: () => void
   target?: ReactNode
   dirs?: DispatchDirs
 }) {
@@ -444,12 +278,7 @@ function PromptForm({
         surface="newComposer"
         autoFocus={autoFocus}
         value={prompt}
-        // Read off the value rather than a keydown so every way of producing the `!` — a layout that
-        // shifts for it, an IME, a paste of the one character — switches alike.
-        onChange={(next) => {
-          if (onTerminal && !prompt && next === "!") onTerminal()
-          else setPrompt(next)
-        }}
+        onChange={setPrompt}
         onSubmit={submit}
         placeholder="Describe the task…"
         minHeight={96}

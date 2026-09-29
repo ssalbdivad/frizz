@@ -323,6 +323,10 @@ body {
 .frizz-live-dot--shell { --live-dot: var(--color-shell); }
 .frizz-live-dot--agent { --live-dot: var(--color-accent); }
 .frizz-live-dot--github { --live-dot: var(--color-watch); }
+/* A THREAD TERMINAL waiting at a prompt (ThreadTerminals.tsx): the attention hue, and STILL — nothing is
+   moving, it is waiting on the human, which is also what queued its thread. Same geometry and halo as the
+   live dots, so the slot reads as one mark in another state. */
+.frizz-live-dot--attention { --live-dot: var(--color-attention); animation: none; }
 
 /* THE LIVENESS DOT'S SLOT on a child-op row (ChildOpRow, the card and sheet densities). The row is
    `items-center`, which centres the dot's BOX on the flex line — but the eye reads the dot against the
