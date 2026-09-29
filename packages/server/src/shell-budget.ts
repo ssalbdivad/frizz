@@ -1,37 +1,47 @@
 import { formatElapsed } from "@frizz/shared"
 import type { ShellBudgetRow, Storage } from "./storage.ts"
 
-// THE BACKGROUND-SHELL RUNTIME BUDGET — every shell a worker backgrounds gets an end time.
+// THE BACKGROUND-SHELL RUNTIME BUDGET — a shell ends on a clock only when somebody DECLARED one.
 //
-// Maintainer 2026-09-29: "background shells running for 16 hours makes no sense. there needs to be
-// built in reasonable defaults to avoid this and if an agent needs to run a tool longer it should
-// probably be a prompt ahead of time or in the moment if unexpected".
+// History, because the rule has already moved once. Colin built background shells with NO clock, on
+// purpose (tailer.bgShellViews: "NO clock is a correct clock"): frizz cannot tell a CI watcher from a
+// dev server from outside, and some shells legitimately run for days. On 2026-09-29 the maintainer
+// found a shell 16 hours old ("background shells running for 16 hours makes no sense") and 4e5eaca1
+// gave EVERY shell a budget — its Bash `timeout`, else a 1h default. Within the day the default killed a
+// real arktype shell at 17h that its worker had registered under a 20h `watch`: the clock was
+// universal, and a universal clock is exactly the rule Colin had rejected.
 //
-// Until then a background shell had NO clock at all — tailer.bgShellViews says so on purpose: frizz
-// cannot tell a CI watcher from a dev server, so no age rule could be right for both, and a shell only
-// ever left the board on its own terminal signal or on its owner's death. That was the right call for
-// DISPLAY, and it is still how the board reads a shell. What it left out is that the WORKER can tell the
-// two apart, and nothing ever asked it to. The budget is that question, asked twice:
+// So the budget is OPT-IN (maintainer 2026-09-29), and the question is asked of the one party that CAN
+// tell a poller from a server — the worker, at the moment it launches the shell:
 //
-//  · AHEAD OF TIME. A Claude worker sizes a shell when it launches it, with the Bash tool's own
-//    `timeout` on the `run_in_background` call — the knob it already has, already in milliseconds,
-//    already capped at 24h by BASH_MAX_TIMEOUT_MS (backend/types.ts). No `timeout` ⇒ the default.
-//  · IN THE MOMENT. A shell still running past its budget earns its worker ONE wake (scheduler SOURCE
-//    13), delivered mid-turn if it is busy: keep it (`mcp__frizz__extend_shell`) or stop it. Silence
-//    for SHELL_BUDGET_GRACE_MS after that wake ends it through the operator's own × path.
+//  · AT SPAWN. A Claude worker sizes a shell with the Bash tool's own `timeout` on its
+//    `run_in_background` call — the knob it already has, already in ms, already capped at 24h by
+//    BASH_MAX_TIMEOUT_MS (backend/types.ts). NO `timeout` ⇒ NO budget: the shell runs until it ends or
+//    is stopped. The worker is prompted to choose, not forced: the contract says so, and the
+//    PreToolUse hook (cc-worker/hooks/bash-background.mjs) adds one line of context to a background
+//    call that carries no `timeout` — a poller, build or check gets one; a server or watcher does not.
+//  · IN THE MOMENT. `mcp__frizz__extend_shell` sets or moves a budget on ANY running shell, including
+//    one launched without — which is also the only way a codex background exec (no launch-time knob)
+//    ever gets one.
+//  · ENFORCED only once declared: past the deadline the worker gets ONE wake (scheduler SOURCE 13),
+//    mid-turn if busy — keep it (`extend_shell`) or stop it — and silence for SHELL_BUDGET_GRACE_MS
+//    after that wake ends it through the operator's own × path.
 //
-// The three numbers:
-//  · DEFAULT 1h. Long enough that an ordinary build, test gate, or CI watch finishes inside it without
-//    anyone thinking about budgets; short enough that a forgotten dev server is asked about within the
-//    hour instead of running overnight.
+// WHAT KEEPS AN UNBUDGETED SHELL HONEST is visibility, not a clock: every running shell is on the
+// thread's drawer strip and its queue card, with its age and a Stop control (web QueueShellStrip /
+// BackgroundOpsStrip), and a worker coming to rest behind a question is nudged about strays.
+//
+// A `watch` on the shell MOVES its deadline to the watch's own expiry — see resolveShellBudget.
+//
+// The numbers:
 //  · GRACE 10m after the warning is queued, not after the deadline: a server that was down across the
 //    deadline must still give the worker its ten minutes to answer before anything is killed.
 //  · MAX 24h per declaration — the same ceiling as BASH_MAX_TIMEOUT_MS and a `watch`'s `for:`
-//    (AWAITING_FOR_MAX_MS). A shell that must outlive a day is re-declared, one day at a time.
+//    (AWAITING_FOR_MAX_MS). A shell that must outlive a day is re-declared, one day at a time — or
+//    launched without a budget at all.
 //
-// A `Monitor` carries NO budget: a persistent one is itself a declaration that it runs for the
-// session, and a non-persistent one ends at its own `timeout_ms` (Claude caps it at an hour).
-export const SHELL_BUDGET_DEFAULT_MS = 60 * 60_000
+// A `Monitor` carries NO budget and cannot be given one: a persistent one is itself a declaration that
+// it runs for the session, and a non-persistent one ends at its own `timeout_ms` (Claude caps it at 1h).
 export const SHELL_BUDGET_GRACE_MS = 10 * 60_000
 export const SHELL_BUDGET_MAX_MS = 24 * 60 * 60_000
 /** The floor on a DECLARED budget. The scheduler resolves budgets at its tick (10s), so a budget of
@@ -39,15 +49,10 @@ export const SHELL_BUDGET_MAX_MS = 24 * 60 * 60_000
 export const SHELL_BUDGET_MIN_MS = 60_000
 
 /** The budget a launch DECLARED through the Bash tool's `timeout`, clamped — or undefined when the
- *  call carried none (or something that is not a positive number), which means the default. */
+ *  call carried none (or something that is not a positive number), which means NO budget. */
 export function declaredShellBudgetMs(timeout: unknown): number | undefined {
   if (typeof timeout !== "number" || !Number.isFinite(timeout) || timeout <= 0) return undefined
   return Math.min(SHELL_BUDGET_MAX_MS, Math.max(SHELL_BUDGET_MIN_MS, Math.round(timeout)))
-}
-
-/** The budget a shell launch carries: its declared one, else the default. */
-export function shellLaunchBudgetMs(timeout: unknown): number {
-  return declaredShellBudgetMs(timeout) ?? SHELL_BUDGET_DEFAULT_MS
 }
 
 /** A durable budget row (storage `shell_budget`) as the deadline needs it. `startedAt` is the shell's own
@@ -58,16 +63,6 @@ export interface ShellBudgetRecord {
   deadlineAtMs: number | null
   warnedAtMs: number | null
   warnedDeadlineMs: number | null
-}
-
-/** When this shell's budget runs out: an `extend_shell` deadline if one is recorded for THIS shell,
- *  else launch + its launch budget. NaN when the launch instant is unreadable — never fires. */
-export function shellBudgetDeadlineMs(
-  shell: { startedAt: string; budgetMs: number },
-  record?: ShellBudgetRecord | null,
-): number {
-  if (record && record.startedAt === shell.startedAt && record.deadlineAtMs !== null) return record.deadlineAtMs
-  return Date.parse(shell.startedAt) + shell.budgetMs
 }
 
 /** The wake a shell earns by outliving its budget. Written for the model, which has no clock of its own
@@ -117,7 +112,7 @@ export function shellStopNotice(label: string, reason: ShellStopReason = { kind:
   return (
     `[frizz] Frizz stopped your background command ${JSON.stringify(label)} after ${formatElapsed(reason.ranMs)}: it ran ` +
     `past its ${formatElapsed(reason.budgetMs)} budget and was not extended with \`mcp__frizz__extend_shell\` after the ` +
-    `warning. ${tail} If you still need it, relaunch it with a Bash \`timeout\` sized for how long it must run.`
+    `warning. ${tail} If you still need it, relaunch it — with a Bash \`timeout\` sized to it, or none if it must run until you stop it.`
   )
 }
 
@@ -127,17 +122,87 @@ export function shellBudgetRecordOf(row: ShellBudgetRow | undefined): ShellBudge
   return { startedAt: row.started_at, deadlineAtMs: row.deadline_at, warnedAtMs: row.warned_at, warnedDeadlineMs: row.warned_deadline }
 }
 
-/** One live shell's budget as every reader needs it — the scheduler, `activity`, `extend_shell` — so the
- *  three can never disagree about when a shell's time is up. Undefined for an unbudgeted shell (a
- *  Monitor) or one with no stable id. */
+/** The shell as the budget needs it — a BgShellView, or anything carrying its handles. */
+export interface BudgetedShell {
+  id?: string
+  taskId?: string
+  label: string
+  startedAt: string
+  /** The DECLARED launch budget (clamped `timeout`); absent ⇒ none was declared. */
+  budgetMs?: number
+  /** A `Monitor`: never budgeted, never extendable. */
+  monitor?: boolean
+}
+
+/** An armed `watch` as the budget reads it — kind, the handle it was registered against, its expiry. */
+export interface BudgetWatch {
+  kind: string
+  target: string
+  expiresAtMs: number
+}
+
+export interface ResolvedShellBudget {
+  shellId: string
+  /** When the budget runs out — the instant SOURCE 13 warns at. */
+  deadlineMs: number
+  /** The durable row, when it belongs to THIS shell. */
+  record?: ShellBudgetRecord
+  /** Set when an armed `watch` is what holds the deadline where it is (it outlasts the budget). */
+  watchUntilMs?: number
+}
+
+/** THE ONE ANSWER to "when does this shell's time run out", for every reader — the scheduler, `activity`,
+ *  `extend_shell`, the board's `budgetEndsAt` — so none of them can disagree. Undefined ⇒ unbudgeted:
+ *  nothing is ever warned about or stopped.
+ *
+ *  The BASE is an `extend_shell` deadline recorded for THIS shell, else launch + its declared budget,
+ *  else nothing at all — there is no default.
+ *
+ *  AN ARMED WATCH EXTENDS, it does not exempt. The worker that registers `watch {shell, for: 20h}` has
+ *  declared, in the one place it declares a wait's length, that it expects the shell to be worth
+ *  waiting on for 20h; killing it at 17h (the arktype shell, 2026-09-29) betrays that declaration. So
+ *  the deadline becomes max(base, the watch's expiry). Extending rather than exempting because:
+ *   · every reader then sees the TRUE end — the `activity` readout, the card's "2h left" — where an
+ *     exemption would report a deadline long past while nothing happened at it;
+ *   · it is still bounded: a watch expires (≤24h) and wakes its worker (evalOwnWatches), and if the
+ *     shell is still running past a budget it DECLARED, the ordinary warning follows at that instant;
+ *   · `unwatch` hands the shell straight back to the budget it had, with no special case;
+ *   · arming a watch after a warning moves the deadline, which re-arms the warning and cancels the
+ *     pending kill exactly as `extend_shell` does — the same mechanism, not a second one.
+ *  A watch never CREATES a budget on an unbudgeted shell: the watch's `for:` is how long the WAIT is
+ *  registered, not how long the process may live. */
+export function resolveShellBudget(
+  shell: BudgetedShell,
+  record: ShellBudgetRecord | undefined,
+  watches: readonly BudgetWatch[] = [],
+): ResolvedShellBudget | undefined {
+  if (shell.monitor || !shell.id) return undefined
+  const own = record && record.startedAt === shell.startedAt ? record : undefined
+  const base = own?.deadlineAtMs ?? (shell.budgetMs !== undefined ? Date.parse(shell.startedAt) + shell.budgetMs : undefined)
+  if (base === undefined || !Number.isFinite(base)) return undefined
+  const handles = new Set([shell.id, shell.taskId, shell.label].filter((h): h is string => !!h))
+  let watchUntilMs: number | undefined
+  for (const w of watches) {
+    if (w.kind !== "shell" || !handles.has(w.target)) continue
+    if (watchUntilMs === undefined || w.expiresAtMs > watchUntilMs) watchUntilMs = w.expiresAtMs
+  }
+  const held = watchUntilMs !== undefined && watchUntilMs > base
+  return {
+    shellId: shell.id,
+    deadlineMs: held ? watchUntilMs! : base,
+    ...(own ? { record: own } : {}),
+    ...(held ? { watchUntilMs } : {}),
+  }
+}
+
+/** resolveShellBudget off live storage — its row and the thread's ARMED watches. */
 export function liveShellBudget(
-  storage: Pick<Storage, "getShellBudget">,
+  storage: Pick<Storage, "getShellBudget" | "listThreadWatches">,
   slug: string,
-  shell: { id?: string; startedAt: string; budgetMs?: number },
-): { shellId: string; deadlineMs: number; record?: ShellBudgetRecord } | undefined {
-  if (shell.budgetMs === undefined || !shell.id) return undefined
+  shell: BudgetedShell,
+): ResolvedShellBudget | undefined {
+  if (shell.monitor || !shell.id) return undefined
   const record = shellBudgetRecordOf(storage.getShellBudget(slug, shell.id))
-  const deadlineMs = shellBudgetDeadlineMs({ startedAt: shell.startedAt, budgetMs: shell.budgetMs }, record)
-  if (!Number.isFinite(deadlineMs)) return undefined
-  return { shellId: shell.id, deadlineMs, ...(record && record.startedAt === shell.startedAt ? { record } : {}) }
+  const watches = storage.listThreadWatches(slug, { armedOnly: true }).map((w) => ({ kind: w.kind, target: w.target, expiresAtMs: w.expires_at }))
+  return resolveShellBudget(shell, record, watches)
 }

@@ -395,11 +395,18 @@ export const BgShellView = z.object({
   // such watcher was unfireable (scheduler.evalWatchers, 2026-08-14). Absent for a CODEX row, whose
   // single `processId` IS its `id`, and for a Claude row between its tool_use and its launch ack.
   taskId: z.string().optional(),
-  // The runtime budget this shell LAUNCHED with, in ms (server shell-budget.ts, 2026-09-29): the Bash
-  // `timeout` the worker passed on its `run_in_background` call, clamped to 24h, else the 1h default.
-  // Past it the worker is warned once and, unextended, the shell is stopped. An `extend_shell` does not
-  // rewrite this — it is the launch-time declaration. Absent ⇒ unbudgeted (a `Monitor`, an old server).
+  // The runtime budget this shell LAUNCHED with, in ms (server shell-budget.ts): the Bash `timeout` the
+  // worker passed on its `run_in_background` call, clamped to [1m, 24h]. Absent ⇒ none was declared, and
+  // none is imposed — a shell with no budget runs until it ends or is stopped (the 1h default of
+  // 4e5eaca1 was withdrawn the same day). An `extend_shell` does not rewrite this; see `budgetEndsAt`.
   budgetMs: z.number().optional(),
+  // A `Monitor` rather than a background Bash — never budgeted, and `extend_shell` refuses it.
+  monitor: z.boolean().optional(),
+  // When the budget ACTUALLY runs out (ISO8601): launch + `budgetMs`, or the deadline an `extend_shell`
+  // set, held later by an armed `watch` on the shell (shell-budget.ts resolveShellBudget). This is what
+  // the card's "2h left" reads. Past it the worker is warned once and, unextended, the shell is stopped
+  // ten minutes later. Absent ⇒ unbudgeted.
+  budgetEndsAt: z.string().optional(),
 })
 export type BgShellView = z.infer<typeof BgShellView>
 
@@ -2115,11 +2122,12 @@ export const AddOwnWatchInput = z.object({
 export type AddOwnWatchInput = z.infer<typeof AddOwnWatchInput>
 
 // ---- EXTENDING A BACKGROUND SHELL'S RUNTIME BUDGET (`mcp__frizz__extend_shell`, 2026-09-29) ----------
-// Every background shell carries a budget (server shell-budget.ts: its launch `timeout`, else 1h). Past
-// it the worker is warned once and, unextended, the shell is stopped ten minutes later. This is the
-// "keep it" answer to that warning — or a pre-emptive one for a shell the worker already knows will run
-// long. It sets the budget to end `for` from NOW, not from launch, so the worker never has to do
-// arithmetic against an instant it cannot see.
+// A background shell carries a budget only when one was declared (server shell-budget.ts: its launch
+// `timeout`, or this; no default). Past it the worker is warned once and, unextended, the shell is
+// stopped ten minutes later. This GIVES a budget to a shell launched without one, answers that warning
+// ("keep it"), or pre-empts it for a shell the worker knows will run long. It sets the budget to end
+// `for` from NOW, not from launch, so the worker never has to do arithmetic against an instant it
+// cannot see.
 export const ExtendOwnShellInput = z.object({
   slug: ThreadSlug,
   /** The shell's handle — the same three a `watch` of kind shell accepts: the runtime task id the worker

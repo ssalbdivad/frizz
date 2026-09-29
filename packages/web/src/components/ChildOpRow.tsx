@@ -69,6 +69,7 @@ export function ChildOpRow({
   counter,
   counterTitle,
   counterTone,
+  budget,
   parentSlug,
   onOpen,
   onDismiss,
@@ -109,6 +110,11 @@ export function ChildOpRow({
   // timestamp (caught reading back this row's own first screenshot, 2026-09-04). Absent ⇒ the column's
   // grey, which is what every other row still takes.
   counterTone?: "danger"
+  // A BACKGROUND SHELL'S REMAINING RUNTIME BUDGET ("45m left", "over budget" — lib/shellBudget.ts), its own
+  // reading between the counter and the duration rather than joined into the counter's string: the two
+  // take different tones (an overrun is danger, a line count never is), and one string can carry only one.
+  // Absent ⇒ the row renders exactly as before, which is every shell launched without a budget.
+  budget?: { text: string; title?: string; tone?: "danger" }
   // Drill-in marker: keeps an open ThreadSheet for this slug from self-dismissing on the pointer-down,
   // so the child transcript STACKS over its parent instead of replacing it (see ThreadSheet).
   parentSlug?: string
@@ -204,14 +210,18 @@ export function ChildOpRow({
   // they take every pixel the (truncating) label leaves behind and sit flush at the right edge. The
   // DURATION stays rightmost whatever else joins it — that column is what a stack of rows is read down
   // — and the counter falls in beside it, separated by the same `·` the progress label already uses.
-  const reading: ReactNode = counter || elapsed ? (
+  const reading: ReactNode = counter || budget || elapsed ? (
     <span className="ml-auto flex shrink-0 items-center gap-1 pl-1.5 text-muted-40">
       {counter && (
         // The tone rides a Primer colour rather than a Tailwind red, because the same fact is drawn in
         // the same colour on the awaiting card two surfaces away (ChecksGlyph → PRIMER.fgDanger).
         <span data-child-op-counter title={counterTitle} style={counterTone === "danger" ? { color: PRIMER.fgDanger } : undefined}>{counter}</span>
       )}
-      {counter && elapsed && <span aria-hidden className="text-muted-25">·</span>}
+      {counter && budget && <span aria-hidden className="text-muted-25">·</span>}
+      {budget && (
+        <span data-child-op-budget title={budget.title} style={budget.tone === "danger" ? { color: PRIMER.fgDanger } : undefined}>{budget.text}</span>
+      )}
+      {(counter || budget) && elapsed && <span aria-hidden className="text-muted-25">·</span>}
       {elapsed && (returned
         ? <span title={`${outcomeWord[0]!.toUpperCase()}${outcomeWord.slice(1)} ${elapsed}`} style={outcome === "failed" ? { color: PRIMER.fgDanger } : undefined}>{outcomeWord} {elapsed}</span>
         : <span title={`Working for ${elapsed}`}>{elapsed}</span>)}

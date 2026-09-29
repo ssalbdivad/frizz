@@ -55,6 +55,7 @@ import { RegisteredAnsweringContext, RegisteredAnsweringProvider, RegisteredQues
 import { RestedCard, showsRestedCard } from "./RestedCard.tsx"
 import { LogoutConfirmModal, SignInModal } from "./SignInModal.tsx"
 import { QuietTurnCard, showsQuietTurnCard } from "./QuietTurnCard.tsx"
+import { QueueShellStrip } from "./QueueShellStrip.tsx"
 import { SnoozeButton } from "./SnoozeButton.tsx"
 import { StateButton } from "./ThreadLifecycleFooter.tsx"
 import { Tooltip } from "./Tooltip.tsx"
@@ -401,6 +402,8 @@ export const AllQueuesCard = memo(function AllQueuesCard({
 
           <ThreadProjectScope projectId={project.id} projectDir={project.projectDir}>
             <ReplyBox project={project} thread={thread} onSent={onLeave} onFailed={onReturn} />
+            {/* The shells it left running — a shell with no budget runs until someone stops it. */}
+            <QueueShellStrip thread={thread} api={api} onOpen={() => openInPlace(project, thread.id)} />
           </ThreadProjectScope>
           </RegisteredAnsweringProvider>
           </QueueDismissContext.Provider>

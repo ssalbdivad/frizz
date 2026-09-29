@@ -3032,7 +3032,8 @@ export function createRouter(ctx: AppContext) {
     }),
 
     // ---- A BACKGROUND SHELL'S RUNTIME BUDGET (`mcp__frizz__extend_shell`) --------------------------
-    // Every shell carries one (shell-budget.ts); this moves its end to `for` from NOW. Same caller and
+    // Sets a shell's budget to end `for` from NOW — moving a declared one, or giving one to a shell that
+    // was launched without (shell-budget.ts: there is no default). Same caller and
     // same rules as the watches around it: slug-only, and the handle checked against what is actually
     // RUNNING rather than stored on trust — an extension of a shell that has finished would be a row
     // nothing ever reads, and the worker would believe it bought time for work that is already over.
@@ -3055,8 +3056,10 @@ export function createRouter(ctx: AppContext) {
             "stopped), or the id is wrong. Call `activity` for the exact ids of everything you have running.",
           )
         }
-        if (shell.budgetMs === undefined) {
-          throw new Error(`\`${wanted}\` carries no runtime budget (a Monitor runs until its own timeout or \`TaskStop\`), so there is nothing to extend.`)
+        // A shell launched WITHOUT a budget is extendable — this is how it gets one (and the only way a
+        // codex exec ever does). A Monitor is not: it runs to its own `timeout_ms` or `persistent` session.
+        if (shell.monitor) {
+          throw new Error(`\`${wanted}\` is a Monitor, which carries no runtime budget (it runs until its own timeout or \`TaskStop\`), so there is nothing to extend.`)
         }
         const asked = parseAwaitingDurationRaw(input.for)
         if (asked === null) throw new Error(`\`for: ${input.for}\` is not a duration — give one like \`30m\` or \`2h\` (max 24h)`)
