@@ -1490,6 +1490,28 @@ export function signoffNudgeMessage(ops?: SignoffLiveOps): string {
   return lines.length === 0 ? SIGNOFF_NUDGE_MESSAGE : `${SIGNOFF_NUDGE_MESSAGE}\n${lines.join("\n")}`
 }
 
+// ---- STRAY SHELLS BEHIND A QUESTION (scheduler SOURCE 14) ---------------------------------------
+// A question outranks every other card, so a thread resting on one draws the question and NOTHING about
+// the background shells it left running — the resting card that would list them yields to the ask. The
+// human finds out only when "Mark as done" warns that ending the session will kill a shell they never
+// saw. Measured 2026-09-29: a worker launched a 6-hour poller waiting on a Workflow's output file,
+// `TaskStop`ped the Workflow when the human narrowed the job, never stopped the poller, and rested on a
+// commit question with it still polling a file nothing would ever write.
+//
+// So a question rest with live shells gets ONE message listing them — once per SET of shells, not per
+// rest, so a dev server kept on purpose is asked about once and then left alone.
+export function strayShellsMessage(shells: readonly { id?: string; label: string }[]): string {
+  return [
+    `**This message is from frizz, not from the human.** You rested on a question with ${shells.length === 1 ? "a background shell" : `${shells.length} background shells`} still running, and the question's card hides ${shells.length === 1 ? "it" : "them"} — the human cannot see ${shells.length === 1 ? "it is" : "they are"} there:`,
+    "",
+    ...shells.map((sh) => `- \`${sh.id ?? "?"}\` — ${sh.label}`),
+    "",
+    "`TaskStop` every one you no longer need, NOW. Above all a poller or waiter whose target has already finished or been stopped — and a shell that waits on a Workflow or a sub-agent was never needed: both notify you themselves when they finish.",
+    "Keep one only if it still serves the work (a dev server the human is about to open), and then say so in one line.",
+    "Then rest again. Your question stays open, and this will not repeat for these shells.",
+  ].join("\n")
+}
+
 export const SIGNOFF_NUDGE_MESSAGE = [
   `${SIGNOFF_NUDGE_MARKER} Nothing about your task has changed, and no new work is being asked of you.`,
   "",

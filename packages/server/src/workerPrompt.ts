@@ -737,6 +737,12 @@ rested thread out of the queue.
   end); it is not something to park a rest on. \`TaskOutput\` is deprecated — use \`Read\` on that output
   path for diagnostics. \`TaskStop\` is only for your own monitor after its terminal handoff, or a
   background shell you no longer need — never to cut off a sub-agent.
+- **A SHELL YOU NO LONGER NEED IS ONE YOU STOP, THE MOMENT YOU KNOW IT.** Stopping or abandoning the
+  thing a shell waits on — a Workflow, a build, a server it polls — means \`TaskStop\` on that shell in
+  the same breath; before you rest, stop every shell not still serving the work. Never write a shell
+  that polls for a Workflow or sub-agent to finish: both notify you themselves, so the poller is never
+  needed and outlives what it watched. A question's card hides your shells from the human, so a
+  forgotten one behind a question runs unseen until the session is ended.
 
 These live tasks do not survive the session ending. Never fake a wait with \`echo waiting\` or repeated
 foreground sleeps.

@@ -1,7 +1,7 @@
 import { execFile } from "node:child_process"
 import { promisify } from "node:util"
 import { createHash, randomUUID } from "node:crypto"
-import { PARK_CORRECTION_NAMES_LEAD, questionRepliedPast, PARK_CORRECTION_QUESTION_LEAD, PARK_CORRECTION_RETIRED_LEAD, interruptEndedSubAgentsMessage, type InterruptEndedSubAgent, parkExpiredWakeMessage, parkFinishedWakeMessage, prWatchExpiredWakeMessage, ownWatchExpiredWakeMessage, questionAnswerMessage, questionsCancelledWakeMessage, type QuestionAnswer, type QuestionDismissal, RETIRED_AWAITING_REPLACEMENT, retiredAwaitingKindsIn, compactionPromptMessage, limitResumeSteer, limitModelSwitchSteer, formatGithubWakeSteer, GithubWakeItem, type GithubWatchStatus, type GithubIssueStatus, prWatchWakeMessage, issueWatchWakeMessage, shellDoneMessage, restPromptMessage, schedulePromptMessage, timerPromptMessage, signoffNudgeMessage, liveOpsLines, wakeDeliveryToken, wakeTimeHeader, stripWakeTimeHeader, type QuotaSnapshot } from "@frizz/shared"
+import { PARK_CORRECTION_NAMES_LEAD, questionRepliedPast, PARK_CORRECTION_QUESTION_LEAD, PARK_CORRECTION_RETIRED_LEAD, interruptEndedSubAgentsMessage, type InterruptEndedSubAgent, parkExpiredWakeMessage, parkFinishedWakeMessage, prWatchExpiredWakeMessage, ownWatchExpiredWakeMessage, questionAnswerMessage, questionsCancelledWakeMessage, type QuestionAnswer, type QuestionDismissal, RETIRED_AWAITING_REPLACEMENT, retiredAwaitingKindsIn, compactionPromptMessage, limitResumeSteer, limitModelSwitchSteer, formatGithubWakeSteer, GithubWakeItem, type GithubWatchStatus, type GithubIssueStatus, prWatchWakeMessage, issueWatchWakeMessage, shellDoneMessage, restPromptMessage, schedulePromptMessage, timerPromptMessage, signoffNudgeMessage, strayShellsMessage, liveOpsLines, wakeDeliveryToken, wakeTimeHeader, stripWakeTimeHeader, type QuotaSnapshot } from "@frizz/shared"
 import { GITHUB_ISSUE_STATUS_SETTING, GITHUB_STATUS_SETTING, parkExpiresAt, parkIsHonoured, readAwaitingPark, unaccountedItems, type LiveActivity } from "./awaiting.ts"
 import type { PrWatchRow, SessionRow, Storage, ThreadQuestionRow } from "./storage.ts"
 import type { Tailer } from "./tailer.ts"
@@ -1063,6 +1063,28 @@ function isSignoffFenceId(fenceId: string): boolean {
   return fenceId.startsWith(`${SIGNOFF_FENCE_PREFIX}:`)
 }
 
+/** SOURCE 14's delivery namespace — `stray-shells:<sorted shell ids>`. Keyed on the SET of shells and
+ *  nothing else, deliberately not on the rest: a worker that keeps a dev server on purpose and says so
+ *  rests again on the same set, and the dedupe is what stops it being asked a second time. A NEW shell
+ *  changes the set, so it is asked about in turn. */
+const STRAY_SHELLS_FENCE_PREFIX = "stray-shells"
+function strayShellsFenceId(shellIds: readonly string[]): string {
+  return `${STRAY_SHELLS_FENCE_PREFIX}:${JSON.stringify([...shellIds].sort())}`
+}
+/** The shell keys a SOURCE 14 id was minted for. JSON rather than a join: a key can be a shell's LABEL
+ *  (before its launch ack names an id), and a label may hold any separator. */
+function strayShellsOf(fenceId: string): string[] {
+  try {
+    const ids: unknown = JSON.parse(fenceId.slice(STRAY_SHELLS_FENCE_PREFIX.length + 1))
+    return Array.isArray(ids) ? ids.filter((id): id is string => typeof id === "string") : []
+  } catch {
+    return []
+  }
+}
+function isStrayShellsFenceId(fenceId: string): boolean {
+  return fenceId.startsWith(`${STRAY_SHELLS_FENCE_PREFIX}:`)
+}
+
 /** The question a `thread_question` row asks, as one short line for a correction's list — the worker
  *  never saw the id frizz minted, so the id alone would not tell it which question is meant. */
 function questionLine(spec: string): string {
@@ -1501,6 +1523,14 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
       if (tele.authFault || tele.apiFault) return "superseded"
       if (item.fenceId !== signoffFenceId(tele.lastAssistantAt ?? "")) return "superseded"
       if (tele.lastFence || tele.pendingQuestion) return "superseded"
+      return tele.turn === "idle" ? "current-idle" : "current-busy"
+    }
+    // SOURCE 14 is bound to its shells still running: the worker stopping them between enqueue and
+    // delivery is the outcome it asks for, and telling it about shells that are gone would be noise.
+    // A question answered in the meantime does not supersede it — the shells are stray either way.
+    if (isStrayShellsFenceId(item.fenceId)) {
+      const ids = strayShellsOf(item.fenceId)
+      if (!(tele.bgShells ?? []).some((sh) => sh.state === "running" && ids.includes(sh.id ?? sh.label))) return "superseded"
       return tele.turn === "idle" ? "current-idle" : "current-busy"
     }
     // A report repair is bound to a report that is STILL missing from the model's context. If the
@@ -2108,6 +2138,52 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
     // Anchored on the REST this nudge was for (the agent's own last word, which is the fence id), so a
     // retry of the same delivery cannot count twice while a genuinely new fenceless rest does.
     deps.storage.countSignoffNudge(item.slug, item.fenceId)
+  }
+
+  // ---- SOURCE 14: BACKGROUND SHELLS LEFT RUNNING BEHIND A QUESTION ------------------------------
+  // See `strayShellsMessage` for the case that produced it. Scoped to a rest on a QUESTION because that
+  // is the one rest whose card hides live shells: a bare rest already lists them in SOURCE 9's nudge, an
+  // awaiting park draws them in its own table, and a done card's "Mark as done" ends the session, and
+  // every shell with it, the moment the human archives it.
+  //
+  // A shell under an armed `watch` is kept on purpose and is not listed. Nothing is killed here — a dev
+  // server the human is about to open looks exactly like a forgotten poller from outside, so the worker,
+  // which knows which one it is, decides.
+  function evalStrayShellNudges(nowMs: number): void {
+    for (const row of deps.storage.allSessions()) {
+      if (row.state === "archived" || row.archived === 1) continue
+      // Claude only: the remedy it names is `TaskStop`, which a Codex worker does not have.
+      if ((row.backend ?? "claude") !== "claude") continue
+      const tele = deps.tailer.get(row.slug)
+      if (!tele || tele.turn !== "idle") continue
+      const spokeAt = tele.lastAssistantAt
+      if (!spokeAt) continue
+      if (tele.lastUserAt && Date.parse(tele.lastUserAt) >= Date.parse(spokeAt)) continue
+      if (tele.authFault || tele.apiFault) continue
+      // A fence beside the question is SOURCE 12's to correct (a park is refused while a question
+      // stands), and its correction already sends the worker back to rewrite this sign-off.
+      if (tele.lastFence) continue
+      const onQuestion = Boolean(tele.pendingQuestion) || deps.storage.listThreadQuestions(row.slug)
+        .some((q) => q.state === "open" && !questionRepliedPast(q.asked_at, tele.lastHumanAt))
+      if (!onQuestion) continue
+      const watched = deps.storage.listThreadWatches(row.slug, { armedOnly: true }).filter((w) => w.kind === "shell").map((w) => w.target)
+      const stray = (tele.bgShells ?? []).filter((sh) => sh.state === "running" && ![sh.id, sh.taskId, sh.label].some((h) => h !== undefined && watched.includes(h)))
+      if (stray.length === 0) continue
+      const fenceId = strayShellsFenceId(stray.map((sh) => sh.id ?? sh.label))
+      const deliveryId = wakeDeliveryId(row.slug, row.session_id, fenceId)
+      if (outbox.get(deliveryId)) continue
+      const item = outbox.enqueue({
+        id: deliveryId,
+        slug: row.slug,
+        sessionId: row.session_id,
+        fenceId,
+        hintKey: fenceId,
+        message: withClock(strayShellsMessage(stray.map((sh) => ({ id: sh.taskId ?? sh.id, label: sh.label }))), spokeAt),
+        reason: `rested on a question with ${stray.length} background shell(s) running`,
+      }, nowMs).delivery
+      log(`waker: queued ${row.slug} — ${item.reason}`)
+      checkpoint("after-enqueue", item)
+    }
   }
 
 
@@ -3991,6 +4067,7 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
       // SOURCE 12, beside the nudge because they are the same job from two directions: the nudge catches
       // a rest that declared NOTHING, this catches one whose declaration stopped being true.
       evalParkIntegrity(now())
+      evalStrayShellNudges(now())
     } catch (err) {
       if (err instanceof InjectedSchedulerCrash) throw err
       log(`waker: sign-off nudge pass failed: ${err instanceof Error ? err.message : String(err)}`)
