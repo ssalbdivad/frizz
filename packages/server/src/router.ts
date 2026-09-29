@@ -1068,7 +1068,7 @@ export function createRouter(ctx: AppContext) {
     for (const q of ctx.storage.listThreadQuestions(slug, { openOnly: true })) {
       const spec = parseQuestionSpec(q.spec)
       if (!spec) continue
-      out.push({ id: q.id, spec, askedAt: new Date(q.asked_at).toISOString(), ...(questionRepliedPast(q.asked_at, lastHumanAt) ? { repliedPast: true as const } : {}) })
+      out.push({ id: q.id, spec, askedAt: new Date(q.asked_at).toISOString(), ...(questionRepliedPast(q, lastHumanAt) ? { repliedPast: true as const } : {}) })
     }
     return out
   }
@@ -1086,7 +1086,7 @@ export function createRouter(ctx: AppContext) {
     const fold = (s: string) => s.toLowerCase().replace(/[^\p{L}\p{N}]+/gu, " ").trim()
     const text = fold(q.question)
     return ctx.storage.listThreadQuestions(slug).find((row) => {
-      if (row.state === "answered" || !questionRepliedPast(row.asked_at, lastHumanAt)) return false
+      if (row.state === "answered" || !questionRepliedPast(row, lastHumanAt)) return false
       if (row.state === "withdrawn" && (row.settled_at ?? 0) <= humanMs) return false
       const spec = parseQuestionSpec(row.spec)
       return spec !== undefined && fold(spec.question) === text
@@ -3243,7 +3243,7 @@ export function createRouter(ctx: AppContext) {
         // must not force the worker to withdraw it just to finish the work the human pivoted to.
         const lastHumanAt = ctx.tailer.get(input.slug)?.lastHumanAt
         const blockingQuestions = ctx.storage.listThreadQuestions(input.slug, { openOnly: true }).flatMap((q) => {
-          if (questionRepliedPast(q.asked_at, lastHumanAt)) return []
+          if (questionRepliedPast(q, lastHumanAt)) return []
           const spec = parseQuestionSpec(q.spec)
           return spec ? [{ id: q.id, question: spec.question }] : []
         })

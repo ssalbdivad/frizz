@@ -1558,7 +1558,7 @@ function sessionThreadView(
   for (const q of questionRows) {
     if (q.state !== "open") continue
     const spec = safeQuestionSpec(q.spec)
-    if (spec) questions.push({ id: q.id, spec, askedAt: new Date(q.asked_at).toISOString(), ...(questionRepliedPast(q.asked_at, rawTele?.lastHumanAt) ? { repliedPast: true as const } : {}) })
+    if (spec) questions.push({ id: q.id, spec, askedAt: new Date(q.asked_at).toISOString(), ...(questionRepliedPast(q, rawTele?.lastHumanAt) ? { repliedPast: true as const } : {}) })
   }
   // The ones still HOLDING the thread. A question the human replied past is a pivot, not a pending ask:
   // it stays on the card list (answerable where it was asked) but queues nothing, supersedes no done,

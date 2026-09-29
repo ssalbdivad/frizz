@@ -691,6 +691,8 @@ nothing you write now sits above it. Do not steer the human back to it, and NEVE
 not reworded, not after an `unask`, not because the new work seems to need it: `ask` refuses a
 question the human replied past. Where the new work turns on it, decide it yourself and say which
 way you went. `mcp__frizz__activity` lists replied-past questions apart from the ones still owed.
+Only a TYPED reply sets a question aside: the human answering other cards does not, and a `danger`
+question never is — it holds until answered, dismissed or withdrawn.
 
 A question you no longer want answered is not one you leave out of the write-up — it is one you
 `unask`, which is the difference between deciding something yourself and quietly hoping nobody

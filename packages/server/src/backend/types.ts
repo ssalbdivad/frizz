@@ -101,8 +101,8 @@ export interface NormalizedTail {
   lastAssistant?: string
   aiTitle?: string
   lastUserAt?: string
-  // ISO8601 of the newest turn the HUMAN took — lastUserAt minus frizz's own wake deliveries (a watcher,
-  // a timer, a nudge), except the one that carries their answers. The clock questionRepliedPast reads.
+  // ISO8601 of the newest turn the HUMAN typed — lastUserAt minus every frizz wake delivery (a watcher,
+  // a timer, a nudge, and the one that carries their answers). The clock questionRepliedPast reads.
   lastHumanAt?: string
   lastToolCallAt?: string // ISO8601 of the agent's newest tool call — what tells a reply that did WORK from one that only talked
   lastUserText?: string // latest genuine human message (used to confirm wake-token delivery)
@@ -168,10 +168,10 @@ export interface FoldState {
   // guarded separately by storage's title_auto CAS).
   autoTitleSource?: "fallback" | "frizz" | "native"
   lastUserAt?: string // ISO8601 of the newest GENUINE (non-synthetic) human turn — the listing sort key
-  // …and of the newest one the human actually TOOK: a scheduler wake delivery reaches the fold as a
-  // genuine user turn (it bumps the row key like any delivery), so this skips every one of them except
-  // the answers-to-questions wake, which is the human speaking through frizz. Mirrors the web's
-  // questionAnchor `isHumanTurn`, so the server's "replied past" and the card's position agree.
+  // …and of the newest one the human actually TYPED: a scheduler wake delivery reaches the fold as a
+  // genuine user turn (it bumps the row key like any delivery), so this skips every one of them — the
+  // answers-to-questions wake included, because answering some cards is not replying past the rest
+  // (tailer.ts tookHumanTurn). The clock questionRepliedPast reads.
   lastHumanAt?: string
   // ISO8601 of the agent's newest TOOL CALL. A registered done outlives the human's next word only while
   // nothing newer than it is a tool call — a reply that only talked is conversation about finished work,
