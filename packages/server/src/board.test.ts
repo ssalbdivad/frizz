@@ -2563,6 +2563,7 @@ test("stampShellBudgets: budgetEndsAt is the deadline the scheduler will act on,
     toolu_x: new Date(start + 5 * H).toISOString(),
     toolu_m: undefined,
   })
+})
 
 // A DELIBERATE LONG WAIT IS NOT A WEDGE (Colin's rule, maintainer 2026-08-01: "if something is listed as
 // currently running, then it should never show up in the queue"; the Bash ceiling went to 24h because "a
