@@ -1,7 +1,7 @@
-import { closeSync, existsSync, openSync, readSync, statSync } from "node:fs"
+import { closeSync, existsSync, openSync, readSync, realpathSync, statSync } from "node:fs"
 import { homedir } from "node:os"
 import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path"
-import type { ThreadWorkingDir, TranscriptMessage } from "@frizz/shared"
+import type { ThreadWorkingDir, TranscriptMessage, WorkCheckout } from "@frizz/shared"
 
 // WHERE A THREAD IS WORKING NOW — the folder a terminal opened on it starts in (thread-terminals.ts).
 //
@@ -127,6 +127,79 @@ export function checkoutOf(dir: string, projectDir: string): string {
     const up = dirname(at)
     if (up === at) return dir
     at = up
+  }
+}
+
+// ── ONE CHECKOUT READING, shared by every surface ─────────────────────────────────────────────────────
+//
+// The agent's own folder (the tailer's fold), each background shell's start folder, a human terminal's
+// folder and the terminal dialog's prefill all go through `liftCheckout`, so the drawer header, the card,
+// a shell row and the dialog can never classify one folder two ways. Nothing else classifies a checkout.
+//
+// It is MEMOIZED because the tailer asks it on every tick for every thread (the board signature carries
+// the agent's checkout, so a move into a worktree pushes exactly one delta): one `.git` walk and one stat
+// per new folder, then a map hit. The TTL is what lets a worktree that was removed since stop reading as
+// present; 60s is well inside how long anyone looks at a stale token before it matters.
+const LIFT_TTL_MS = 60_000
+const LIFT_MAX = 256
+interface LiftReading {
+  /** The folder's checkout — the project root included. */
+  dir: string
+  /** Present only when that checkout is NOT the project root. */
+  checkout?: WorkCheckout
+}
+const liftMemo = new Map<string, { at: number; value: LiftReading | undefined }>()
+
+function sameFolder(a: string, b: string): boolean {
+  if (a === b) return true
+  // macOS spells `/tmp/x` as `/private/tmp/x` once a process resolves it, and a transcript records the
+  // resolved one: compare the real paths before calling the project root "somewhere else".
+  try {
+    return realpathSync(a) === realpathSync(b)
+  } catch {
+    return false
+  }
+}
+
+/** `dir` lifted to its checkout (checkoutOf), and whether that checkout is the project root. Undefined
+ *  when the folder does not exist — no reading, never a stale name. */
+export function liftWorkingDir(dir: string | undefined, projectDir: string | undefined, nowMs = Date.now()): LiftReading | undefined {
+  if (!dir || !projectDir || !isAbsolute(dir)) return undefined
+  const key = `${projectDir}\u0000${dir}`
+  const hit = liftMemo.get(key)
+  if (hit && nowMs - hit.at < LIFT_TTL_MS) return hit.value
+  let value: LiftReading | undefined
+  if (isDirectory(dir)) {
+    const checkout = checkoutOf(dir, projectDir)
+    if (sameFolder(checkout, projectDir)) value = { dir: projectDir }
+    else value = { dir: checkout, checkout: { dir: checkout, kind: isFile(join(checkout, ".git")) ? "worktree" : "folder" } }
+  }
+  liftMemo.delete(key)
+  liftMemo.set(key, { at: nowMs, value })
+  while (liftMemo.size > LIFT_MAX) {
+    const oldest = liftMemo.keys().next().value
+    if (oldest === undefined) break
+    liftMemo.delete(oldest)
+  }
+  return value
+}
+
+/** `dir` lifted to its checkout and classified; undefined when that checkout IS the project root (or the
+ *  folder is gone). kind "worktree" iff the checkout's `.git` is a FILE. */
+export function liftCheckout(dir: string | undefined, projectDir: string | undefined, nowMs = Date.now()): WorkCheckout | undefined {
+  return liftWorkingDir(dir, projectDir, nowMs)?.checkout
+}
+
+/** Test seam: the memo is process-lifetime state keyed by path. */
+export function resetCheckoutMemo(): void {
+  liftMemo.clear()
+}
+
+function isFile(path: string): boolean {
+  try {
+    return statSync(path).isFile()
+  } catch {
+    return false
   }
 }
 

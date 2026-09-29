@@ -14,6 +14,8 @@
 // nothing but the `PROCEDURES` data table as a value. Transport concerns (fetch, RpcCallOpts, the
 // Proxy) live in rpc.ts, which is browser-only and never enters the server program.
 import type {
+  BackgroundShellOutputInput,
+  BackgroundShellOutputResult,
   WorkflowAgentView,
   StartTerminalInput,
   TerminalInput,
@@ -155,7 +157,7 @@ export interface Api {
   // flat, so anything less orphans the grandchildren. `descendantsStopped` counts the extra tasks
   // ended; `note` narrates the fan-out, including any descendant that could NOT be stopped.
   subAgentStop(input: { slug: string; id: string }): Promise<{ stopped: boolean; descendantsStopped: number; note: string | null }>
-  backgroundShellOutput(input: { slug: string; id: string; from?: number; raw?: boolean }): Promise<{ command: string | null; output: string; truncated: boolean; state: "running" | "done" | "gone"; stoppable: boolean; stopNote: string | null; missing?: boolean; end?: number; reset?: boolean; more?: boolean }>
+  backgroundShellOutput(input: BackgroundShellOutputInput): Promise<BackgroundShellOutputResult>
   // The ops strip's live output counter, batched over every shell row it is showing. `lines: null` is
   // "no readable output yet" (a shell still between its tool_use and its launch ack) — never zero, and
   // never an omission, which would stop the poll before the path ever arrived.

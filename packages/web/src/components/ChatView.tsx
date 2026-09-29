@@ -177,6 +177,9 @@ export function transcriptBackgroundShells(messages: readonly ChatMessage[]): (B
         // else (see mergeBackgroundShells). Carried separately from `label`, which for a codex row is
         // the model's description of the step rather than the command it ran.
         ...(tool.command ? { command: tool.command } : {}),
+        // The folder the tool call named (Codex `workdir`) — backfilled onto the board's copy of the same
+        // shell when that one has none (mergeBackgroundShells).
+        ...(tool.cwd ? { cwd: tool.cwd } : {}),
       })
     }
   }

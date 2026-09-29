@@ -4,7 +4,7 @@ import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "nod
 import { homedir, tmpdir } from "node:os"
 import { join } from "node:path"
 import type { TranscriptMessage } from "@frizz/shared"
-import { checkoutOf, newestToolWorkdir, newestTranscriptCwd, resolveThreadWorkingDir, terminalFolder } from "./thread-cwd.ts"
+import { checkoutOf, liftCheckout, liftWorkingDir, newestToolWorkdir, newestTranscriptCwd, resetCheckoutMemo, resolveThreadWorkingDir, terminalFolder } from "./thread-cwd.ts"
 
 // WHERE A TERMINAL OPENED ON A THREAD STARTS. Real folders and real JSONL files: the reading is the
 // newest `cwd` a Claude transcript records (checked against real transcripts — see thread-cwd.ts), lifted
@@ -144,6 +144,54 @@ test("the folder a human types is checked: ~ expands, relative and missing folde
     writeFileSync(join(project, "README.md"), "x")
     assert.throws(() => terminalFolder(join(project, "README.md")), /No such folder/)
   } finally {
+    cleanup()
+  }
+})
+
+// THE ONE CHECKOUT READING every surface shares — the header token, the card, a shell row's folder hint
+// and the terminal dialog all classify a folder through this, so none can disagree.
+test("liftCheckout: absent for the project root, a worktree when .git is a FILE, a folder otherwise", () => {
+  const { root, project, worktree, cleanup } = fixture()
+  resetCheckoutMemo()
+  try {
+    // The root — and anywhere inside it — is the root: nothing to show.
+    assert.equal(liftCheckout(project, project), undefined)
+    assert.equal(liftCheckout(join(project, "packages", "web", "src"), project), undefined)
+    assert.deepEqual(liftWorkingDir(join(project, "packages", "web"), project), { dir: project })
+    // A linked worktree, from its root or from deep inside it.
+    assert.deepEqual(liftCheckout(worktree, project), { dir: worktree, kind: "worktree" })
+    assert.deepEqual(liftCheckout(join(worktree, "packages", "server"), project), { dir: worktree, kind: "worktree" })
+    // A nested CLONE inside the project (its own `.git` DIRECTORY) is another checkout, but no worktree.
+    const clone = join(project, "vendor", "lib")
+    mkdirSync(join(clone, ".git"), { recursive: true })
+    assert.deepEqual(liftCheckout(join(clone), project), { dir: clone, kind: "folder" })
+    // Outside the project: the nearest checkout, or the folder itself.
+    const elsewhere = join(root, "other")
+    mkdirSync(join(elsewhere, ".git"), { recursive: true })
+    mkdirSync(join(elsewhere, "src"))
+    assert.deepEqual(liftCheckout(join(elsewhere, "src"), project), { dir: elsewhere, kind: "folder" })
+    // A folder that is gone is NO reading — never a stale name.
+    assert.equal(liftCheckout(join(project, ".frizz", "worktrees", "removed"), project), undefined)
+    assert.equal(liftWorkingDir(join(project, ".frizz", "worktrees", "removed"), project), undefined)
+    // And with nothing to compare against there is nothing to say.
+    assert.equal(liftCheckout(worktree, undefined), undefined)
+    assert.equal(liftCheckout("relative/path", project), undefined)
+  } finally {
+    resetCheckoutMemo()
+    cleanup()
+  }
+})
+
+test("liftCheckout is memoized for a minute, then re-reads — a removed worktree stops reading as present", () => {
+  const { project, worktree, cleanup } = fixture()
+  resetCheckoutMemo()
+  try {
+    assert.deepEqual(liftCheckout(worktree, project, 1_000), { dir: worktree, kind: "worktree" })
+    rmSync(worktree, { recursive: true, force: true })
+    assert.deepEqual(liftCheckout(worktree, project, 30_000), { dir: worktree, kind: "worktree" }, "inside the TTL: the memo answers")
+    assert.equal(liftCheckout(worktree, project, 62_000), undefined, "past it: the folder is gone, so no reading")
+  } finally {
+    resetCheckoutMemo()
     cleanup()
   }
 })

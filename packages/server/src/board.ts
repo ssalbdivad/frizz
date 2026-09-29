@@ -11,6 +11,7 @@ import type { BoardSnapshot, ClaudeModel, ThreadTerminal, ThreadView, RuntimeSta
 import { AskedQuestionSchema, BoardDiffer, PermissionMode, SnoozeUntil, ThreadSlug, isDirectSubAgent, questionAnswerMessage, questionRepliedPast, questionsCancelledWakeMessage, type AskedQuestion, type PermissionMode as PermissionModeValue, type QuestionAnswer, type QuestionDismissal } from "@frizz/shared"
 import type { Bus } from "./bus.ts"
 import { workDirOf, type Project } from "./project.ts"
+import { liftCheckout } from "./thread-cwd.ts"
 import { isHeadlessRow, isBrokerClaudeRow, sessionTitleLocked, type ThreadQuestionRow } from "./storage.ts"
 import type { Storage, SessionRow, PrWatchRow, ThreadTimerRow, ThreadWatchRow, ThreadLinkRow, ShellBudgetRow } from "./storage.ts"
 import { resolveShellBudget, shellBudgetRecordOf } from "./shell-budget.ts"
@@ -1856,6 +1857,9 @@ function sessionThreadView(
     lastAssistantAt: tele?.lastAssistantAt,
     subAgents: stampStoppable(tele?.subAgents ?? [], row),
     bgShells: stampShellBudgets(stampStoppableShells(tele?.bgShells ?? [], row), registries.shellBudgets.get(row.slug), registries.watches.get(row.slug)),
+    // Where the agent is working when that is off the project root (tailer workingDirTelemetry) — the
+    // header's and the card's quiet checkout token. Each shell above already carries its own.
+    ...(tele?.checkout ? { checkout: tele.checkout } : {}),
     links: (registries.links.get(row.slug) ?? []).map(threadLinkView),
     // ONE SOURCE: the FENCE. Both kinds are derived from what the worker wrote — `prs:` entries
     // become the github rows, `watch:` lines the shell rows — so this strip lists exactly what will
@@ -2089,10 +2093,16 @@ export interface BoardManagerDeps {
  * on an archived row everywhere), and the human's own wall-clock snooze still parks it, as it parks a
  * silent turn.
  */
-export function withThreadTerminals(t: ThreadView, terminals: readonly ThreadTerminal[] | undefined): ThreadView {
+// `projectDir` classifies each terminal's folder by the same rule an agent's shell row uses (thread-cwd.ts
+// liftCheckout): a checkout hint only when it is off the project root. Absent ⇒ no hint is stamped.
+export function withThreadTerminals(t: ThreadView, terminals: readonly ThreadTerminal[] | undefined, projectDir?: string): ThreadView {
   if (!terminals || terminals.length === 0) return t
   const prompting = t.state !== "archived" && t.snoozedUntil === undefined && terminals.some((terminal) => terminal.awaitingInput === true)
-  return { ...t, terminals: [...terminals], ...(prompting ? { needsYou: true } : {}) }
+  const stamped = terminals.map((terminal) => {
+    const checkout = liftCheckout(terminal.cwd, projectDir)
+    return checkout ? { ...terminal, checkout } : terminal
+  })
+  return { ...t, terminals: stamped, ...(prompting ? { needsYou: true } : {}) }
 }
 
 /** The terminal a thread is queued on, when one is: the prompt the card and the notification name. */
@@ -2324,7 +2334,7 @@ export function createBoard(
     }
     // Each thread's terminals ride its row (withThreadTerminals) — read once per build, like the registries.
     const terminals = deps.threadTerminals?.()
-    const sessionThreads = buildSessionThreads(assembledAtMs).map((t) => withThreadTerminals(t, terminals?.get(t.id)))
+    const sessionThreads = buildSessionThreads(assembledAtMs).map((t) => withThreadTerminals(t, terminals?.get(t.id), workDirOf(project)))
     // REGISTERED ROWS ONLY reach these two, and that is the point rather than an oversight. A snooze
     // is a durable column on a row a foreign session does not have, and a needs-decision notification
     // is frizz telling you a WORKER is waiting on you — a terminal session is waiting on you in the

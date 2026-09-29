@@ -1,0 +1,221 @@
+import { test } from "node:test"
+import assert from "node:assert/strict"
+import { appendFileSync, mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs"
+import { homedir, tmpdir } from "node:os"
+import { join } from "node:path"
+import { Bus } from "./bus.ts"
+import { createStorage, type SessionRow } from "./storage.ts"
+import { applyEvent, createTailer, leadingCd, newTailState } from "./tailer.ts"
+import { resetCheckoutMemo } from "./thread-cwd.ts"
+import type { Project } from "./project.ts"
+
+// WHERE THE AGENT IS WORKING, AND WHERE EACH OF ITS SHELLS STARTED — folded from the transcript the tailer
+// already reads, over real folders (a linked worktree's `.git` is a FILE, as in thread-cwd.test.ts).
+
+function world() {
+  const root = realpathSync(mkdtempSync(join(tmpdir(), "frizz-tail-cwd-")))
+  const project = join(root, "repo")
+  mkdirSync(join(project, ".git"), { recursive: true })
+  mkdirSync(join(project, "packages", "web"), { recursive: true })
+  const worktree = join(project, ".frizz", "worktrees", "probe")
+  mkdirSync(join(worktree, "src"), { recursive: true })
+  writeFileSync(join(worktree, ".git"), `gitdir: ${join(project, ".git", "worktrees", "probe")}\n`)
+  const logDir = join(root, "projects", "-repo")
+  mkdirSync(logDir, { recursive: true })
+  const storage = createStorage(join(root, "ui.db"), "p")
+  const row: SessionRow = { slug: "t", session_id: "sid", thread_name: "frizz-t", spawned_at: "2026-07-01T00:00:00.000Z", last_read_at: null, unread: 0, exited: 0, archived: 0, rested_at: null, title_auto: 0, title: null, state: null, meta: null, seen_at: null, transcript_id: null }
+  storage.upsertSession(row)
+  const changes = { n: 0 }
+  const transcript = join(logDir, "sid.jsonl")
+  writeFileSync(transcript, "")
+  const append = (...records: unknown[]) => appendFileSync(transcript, records.map((r) => JSON.stringify(r) + "\n").join(""))
+  resetCheckoutMemo()
+  const tailer = createTailer({
+    project: { cwdSlug: "x", dir: project } as Project,
+    storage,
+    bus: new Bus(),
+    onChange: () => changes.n++,
+    now: () => Date.parse("2026-07-01T00:01:00.000Z"),
+    paneDead: () => false,
+    sessionLogDir: logDir,
+  })
+  return { root, project, worktree, tailer, append, changes, cleanup: () => { resetCheckoutMemo(); rmSync(root, { recursive: true, force: true }) } }
+}
+
+let n = 0
+const at = () => `2026-07-01T00:00:${String(++n % 60).padStart(2, "0")}.000Z`
+const user = (cwd: string, extra: Record<string, unknown> = {}) => ({ type: "user", timestamp: at(), cwd, message: { role: "user", content: "go" }, ...extra })
+const bash = (id: string, command: string, cwd: string, background = true) => ({
+  type: "assistant",
+  timestamp: at(),
+  cwd,
+  message: { stop_reason: "tool_use", content: [{ type: "tool_use", name: "Bash", id, input: { command, description: `run ${id}`, ...(background ? { run_in_background: true } : {}) } }] },
+})
+const monitor = (id: string, cwd: string) => ({
+  type: "assistant",
+  timestamp: at(),
+  cwd,
+  message: { stop_reason: "tool_use", content: [{ type: "tool_use", name: "Monitor", id, input: { command: "tail -f log", description: "watch the log", persistent: true } }] },
+})
+const result = (id: string, text: string, cwd: string) => ({ type: "user", timestamp: at(), cwd, message: { content: [{ type: "tool_result", tool_use_id: id, content: [{ type: "text", text }] }] } })
+const bgAck = (taskId: string, path: string) => `Command running in background with ID: ${taskId}. Output is being written to: ${path}. You will be notified when it completes.`
+
+test("leadingCd: one literal leading cd moves the start folder; anything cleverer does not", () => {
+  const base = "/home/u/repo"
+  assert.equal(leadingCd("cd /home/u/repo/packages/web && nubx vite", base), "/home/u/repo/packages/web")
+  assert.equal(leadingCd("cd .frizz/worktrees/x && nub test", base), "/home/u/repo/.frizz/worktrees/x")
+  assert.equal(leadingCd(`cd "packages/web" ; ls`, base), "/home/u/repo/packages/web")
+  assert.equal(leadingCd("cd 'a b' && ls", base), "/home/u/repo/a b")
+  assert.equal(leadingCd("cd ~/other && ls", base), join(homedir(), "other"))
+  assert.equal(leadingCd(`cd "$D" && ls`, base), undefined, "a variable is not a folder we can name")
+  assert.equal(leadingCd("cd $(git rev-parse --show-toplevel) && ls", base), undefined)
+  assert.equal(leadingCd("cd packages/* && ls", base), undefined)
+  assert.equal(leadingCd("cd - && ls", base), undefined)
+  assert.equal(leadingCd("cd packages/web", base), undefined, "a cd with nothing after it starts nothing there")
+  assert.equal(leadingCd("npm test && cd x", base), undefined, "only a LEADING cd")
+  assert.equal(leadingCd("cd x && ls", undefined), undefined)
+})
+
+test("a background shell's start folder rides its view; the thread's checkout flips on the move into a worktree", () => {
+  const w = world()
+  try {
+    w.append(user(w.project), bash("toolu_a", "npm run dev", w.project), result("toolu_a", bgAck("ba", "/nowhere/tasks/ba.output"), w.project))
+    w.tailer.tick()
+    let tele = w.tailer.get("t")!
+    assert.deepEqual(tele.bgShells.map((s) => [s.id, s.cwd, s.checkout]), [["toolu_a", w.project, undefined]], "a shell in the root carries its folder and no checkout hint")
+    assert.equal(tele.workingDir, w.project, "the fold has a reading: the project root")
+    assert.equal(tele.checkout, undefined, "and the root draws nothing")
+
+    // Isolate the SIGNATURE: a bookkeeping record that carries only `cwd` moves no clock, no turn and
+    // no preview, so whatever the board hears about it is the checkout alone. (Every record type in a
+    // real transcript carries `cwd`; an `attachment` is one of the quiet ones.)
+    const moveTo = (cwd: string) => ({ type: "attachment", cwd, attachment: { type: "hook_success" } })
+    // A `cd packages/web` lifts to the same checkout: no board delta for it.
+    const before = w.changes.n
+    w.append(moveTo(join(w.project, "packages", "web")))
+    w.tailer.tick()
+    assert.equal(w.tailer.get("t")!.checkout, undefined)
+    assert.equal(w.changes.n, before, "moving within the root does not change the board")
+
+    // EnterWorktree / a `cd` into the worktree: every later record carries its folder.
+    w.append(moveTo(join(w.worktree, "src")))
+    w.tailer.tick()
+    tele = w.tailer.get("t")!
+    assert.deepEqual(tele.checkout, { dir: w.worktree, kind: "worktree" })
+    assert.equal(tele.workingDir, w.worktree)
+    assert.equal(w.changes.n, before + 1, "the move into a worktree is exactly one board change")
+
+    // The next shell starts there, and says so; the first one still says the root.
+    w.append(bash("toolu_b", "nub test --watch", join(w.worktree, "src")), result("toolu_b", bgAck("bb", "/nowhere/tasks/bb.output"), join(w.worktree, "src")))
+    w.tailer.tick()
+    tele = w.tailer.get("t")!
+    assert.deepEqual(tele.bgShells.map((s) => [s.id, s.cwd, s.checkout?.kind]), [["toolu_a", w.project, undefined], ["toolu_b", join(w.worktree, "src"), "worktree"]])
+  } finally {
+    w.cleanup()
+  }
+})
+
+test("a sub-agent's record elsewhere is not where the thread is", () => {
+  const w = world()
+  try {
+    w.append(user(w.project), user(w.worktree, { isSidechain: true }))
+    w.tailer.tick()
+    assert.equal(w.tailer.get("t")!.workingDir, w.project)
+    assert.equal(w.tailer.get("t")!.checkout, undefined)
+  } finally {
+    w.cleanup()
+  }
+})
+
+test("a leading literal cd sets the start folder; `cd \"$D\"` keeps the session's", () => {
+  const w = world()
+  try {
+    w.append(
+      user(w.project),
+      bash("toolu_cd", "cd .frizz/worktrees/probe && nub test", w.project),
+      result("toolu_cd", bgAck("bc", "/nowhere/tasks/bc.output"), w.project),
+      bash("toolu_var", `cd "$D" && nub test`, w.project),
+      result("toolu_var", bgAck("bv", "/nowhere/tasks/bv.output"), w.project),
+    )
+    w.tailer.tick()
+    const shells = w.tailer.get("t")!.bgShells
+    assert.deepEqual(shells.find((s) => s.id === "toolu_cd")?.cwd, w.worktree)
+    assert.deepEqual(shells.find((s) => s.id === "toolu_cd")?.checkout, { dir: w.worktree, kind: "worktree" })
+    assert.equal(shells.find((s) => s.id === "toolu_var")?.cwd, w.project)
+    assert.equal(shells.find((s) => s.id === "toolu_var")?.checkout, undefined)
+  } finally {
+    w.cleanup()
+  }
+})
+
+test("an auto-backgrounded foreground Bash keeps the folder its CALL started in", () => {
+  const w = world()
+  try {
+    w.append(
+      user(w.project),
+      bash("toolu_fg", "nub test", w.worktree, false),
+      // The result record is written after the session has moved on — it is the CALL's folder that counts.
+      result("toolu_fg", "Command did not complete within its 5s timeout and was moved to the background (ID: bfg). Output is being written to: /nowhere/tasks/bfg.output. You will be notified when it completes.", w.project),
+    )
+    w.tailer.tick()
+    const shell = w.tailer.get("t")!.bgShells.find((s) => s.id === "toolu_fg")
+    assert.equal(shell?.cwd, w.worktree)
+    assert.equal(shell?.checkout?.kind, "worktree")
+  } finally {
+    w.cleanup()
+  }
+})
+
+test("a finished shell keeps its start folder for an open drawer", () => {
+  const w = world()
+  try {
+    w.append(
+      user(w.project),
+      bash("toolu_done", "nub test", w.worktree),
+      result("toolu_done", bgAck("bd", "/nowhere/tasks/bd.output"), w.worktree),
+      { type: "queue-operation", operation: "enqueue", timestamp: at(), content: "<task-notification>\n<task-id>bd</task-id>\n<tool-use-id>toolu_done</tool-use-id>\n<status>completed</status>\n<summary>done</summary>\n</task-notification>" },
+    )
+    w.tailer.tick()
+    assert.deepEqual(w.tailer.get("t")!.bgShells, [], "it has left every live surface")
+    assert.deepEqual(w.tailer.backgroundShell?.("t", "toolu_done"), { command: "nub test", outputNamed: true, state: "done", cwd: w.worktree })
+  } finally {
+    w.cleanup()
+  }
+})
+
+test("a Monitor's log is found beside the session's Bash logs, and only once it exists", () => {
+  const w = world()
+  try {
+    const tasks = join(w.root, "claude-1000", "-repo", "sid", "tasks")
+    mkdirSync(tasks, { recursive: true })
+    writeFileSync(join(tasks, "bsh.output"), "bash output\n")
+    w.append(
+      user(w.project),
+      // A Monitor's ack names its task and no path.
+      monitor("toolu_mon", w.project),
+      result("toolu_mon", "Monitor started (task bmon1, timeout 3600000ms). You will be notified on each event.", w.project),
+    )
+    w.tailer.tick()
+    assert.deepEqual(w.tailer.backgroundShell?.("t", "toolu_mon"), { command: "tail -f log", state: "running", monitor: true, cwd: w.project }, "no Bash ack yet: nowhere to look")
+    // A Bash ack teaches the session's task directory…
+    w.append(bash("toolu_sh", "npm run dev", w.project), result("toolu_sh", bgAck("bsh", join(tasks, "bsh.output")), w.project))
+    w.tailer.tick()
+    assert.equal(w.tailer.backgroundShell?.("t", "toolu_mon")?.outputFile, undefined, "…but the Monitor's candidate must exist before it is read")
+    assert.equal(w.tailer.backgroundShell?.("t", "toolu_mon")?.outputNamed, true)
+    writeFileSync(join(tasks, "bmon1.output"), "event 1\n")
+    assert.equal(w.tailer.backgroundShell?.("t", "toolu_mon")?.outputFile, join(tasks, "bmon1.output"))
+    assert.equal(w.tailer.backgroundShell?.("t", "toolu_sh")?.outputFile, join(tasks, "bsh.output"))
+  } finally {
+    w.cleanup()
+  }
+})
+
+test("codex: a tool call's workdir is the agent's folder — absolute, or relative to the project", () => {
+  const s = newTailState("t", "sid", "/x")
+  applyEvent(s, { kind: "tool-call", at: "2026-07-01T00:00:01.000Z", id: "c1", name: "exec_command", input: { cmd: "ls", workdir: "/repo/.frizz/worktrees/a" } })
+  assert.equal(s.cwd, "/repo/.frizz/worktrees/a")
+  applyEvent(s, { kind: "tool-call", at: "2026-07-01T00:00:02.000Z", id: "c2", name: "exec_command", input: { cmd: "ls", workdir: "packages/web" } })
+  assert.equal(s.cwd, "packages/web", "kept raw — the tailer resolves it against the project")
+  applyEvent(s, { kind: "tool-call", at: "2026-07-01T00:00:03.000Z", id: "c3", name: "apply_patch", input: "*** Begin Patch" })
+  assert.equal(s.cwd, "packages/web", "a call naming no folder moves nothing")
+})

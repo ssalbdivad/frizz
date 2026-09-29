@@ -1,6 +1,6 @@
 import { test } from "node:test"
 import assert from "node:assert/strict"
-import { mkdtempSync, rmSync } from "node:fs"
+import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import type { ThreadTerminal, ThreadView } from "@frizz/shared"
@@ -9,6 +9,7 @@ import { Bus } from "./bus.ts"
 import { createStorage, type SessionRow } from "./storage.ts"
 import type { Project } from "./project.ts"
 import type { SessionTelemetry, Tailer } from "./tailer.ts"
+import { resetCheckoutMemo } from "./thread-cwd.ts"
 
 // A THREAD'S TERMINALS ON THE BOARD (thread-terminals.ts): they ride their thread's row, and one waiting
 // at a prompt queues that THREAD — a terminal has no row of its own to queue.
@@ -76,6 +77,46 @@ test("a terminal at a prompt queues its RUNNING thread through the real board, a
   } finally {
     await board.stop()
     storage.close()
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+// ONE RULE FOR THE FOLDER HINT, both owners: shown iff the row runs off the project root. A terminal is
+// classified through the same lift as an agent's shell, and the agent's own checkout rides the row.
+test("the board stamps each terminal's checkout, and carries the agent's own, only when off the root", async () => {
+  const dir = realpathSync(mkdtempSync(join(tmpdir(), "frizz-board-checkout-")))
+  mkdirSync(join(dir, ".git"))
+  mkdirSync(join(dir, "packages", "web"), { recursive: true })
+  const worktree = join(dir, ".frizz", "worktrees", "probe")
+  mkdirSync(worktree, { recursive: true })
+  writeFileSync(join(worktree, ".git"), "gitdir: x\n")
+  resetCheckoutMemo()
+  // Pure: the lift decides, per terminal.
+  const stamped = withThreadTerminals(view(), [terminal({ id: "t-root", cwd: join(dir, "packages", "web") }), terminal({ id: "t-wt", cwd: worktree })], dir)
+  assert.deepEqual(stamped.terminals?.map((t) => [t.id, t.checkout]), [["t-root", undefined], ["t-wt", { dir: worktree, kind: "worktree" }]])
+
+  const project: Project = { dir, id: "project-checkout", name: "fixture", label: "fixture", stateDir: dir, cwdSlug: "fixture" }
+  const telemetry: SessionTelemetry = { turn: "idle", permPrompt: false, subAgents: [], bgShells: [], pendingQuestion: false, lastAssistantAt: at("09:00"), workingDir: worktree, checkout: { dir: worktree, kind: "worktree" } }
+  const tailer = {
+    get: (slug: string) => (slug === "wt" ? telemetry : undefined),
+    foreignIds: () => [],
+    subAgent: () => undefined,
+    forget: () => {},
+    start: () => {},
+    stop: () => {},
+    tick: () => {},
+  } satisfies Tailer
+  const storage = createStorage(join(dir, "ui.db"), "p")
+  storage.upsertSession({ slug: "wt", session_id: "wt-session", thread_name: "frizz-wt", spawned_at: at("08:00"), last_read_at: null, unread: 0, exited: 0, archived: 0, rested_at: null, title_auto: 0, title: null, state: "open", meta: null, seen_at: null, transcript_id: null })
+  const board = createBoard(project, storage, new Bus(), tailer, "checkout-boot", { now: () => Date.parse(at("10:00")), threadTerminals: () => new Map([["wt", [terminal({ cwd: worktree })]]]) })
+  try {
+    const row = board.refresh().threads.find((t) => t.id === "wt")
+    assert.deepEqual(row?.checkout, { dir: worktree, kind: "worktree" }, "the agent's checkout rides its row")
+    assert.deepEqual(row?.terminals?.[0]?.checkout, { dir: worktree, kind: "worktree" })
+  } finally {
+    await board.stop()
+    storage.close()
+    resetCheckoutMemo()
     rmSync(dir, { recursive: true, force: true })
   }
 })

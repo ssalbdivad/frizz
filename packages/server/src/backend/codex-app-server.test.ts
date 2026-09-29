@@ -2716,3 +2716,29 @@ test("two projects on one connection never see each other's bindings, even for t
     h.close()
   }
 })
+
+// A BACKGROUND EXEC'S FOLDER. The item's own `cwd` is an inference from the approval request (which carries
+// one); codex-cli was not on the box this was written on, so the fallback is the half that is certain.
+test("a background exec carries the folder its item names, else the session's", async () => {
+  const h = harness()
+  try {
+    const binding = await h.bridge.startDisposableSession({ threadSlug: "bg-cwd", sessionId: "bg-cwd-sid", cwd: h.dir, ephemeral: false })
+    const { turnId } = await h.bridge.startTurn({ threadSlug: "bg-cwd", sessionId: "bg-cwd-sid", text: "run things" })
+    const proc = h.processes.at(-1)!
+    const exec = (id: string, processId: string, extra: Record<string, unknown> = {}) => proc.notify("item/started", {
+      threadId: binding.codexThreadId,
+      turnId,
+      startedAtMs: Date.now(),
+      item: { type: "commandExecution", id, command: "/bin/zsh -lc 'sleep 900'", processId, status: "inProgress", ...extra },
+    })
+    exec("item-named", "p-named", { cwd: "/elsewhere/worktree" })
+    exec("item-bare", "p-bare")
+    await waitFor(() => h.bridge.backgroundExecs("bg-cwd", "bg-cwd-sid").length === 2, "both execs folded")
+    const byId = new Map(h.bridge.backgroundExecs("bg-cwd", "bg-cwd-sid").map((e) => [e.processId, e.cwd]))
+    assert.equal(byId.get("p-named"), "/elsewhere/worktree")
+    assert.equal(byId.get("p-bare"), h.dir, "no folder on the item ⇒ the session's")
+    assert.deepEqual(h.bridge.backgroundExecs("bg-cwd", "another-session"), [], "scoped to the thread's own binding")
+  } finally {
+    h.close()
+  }
+})

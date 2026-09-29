@@ -131,7 +131,9 @@ export interface NormalizedTail {
   // Live sub-agents. Claude fills these from its Agent dispatches (the tailer's trackDispatches); codex
   // from its `spawn_agent` children (codex-subagents.ts). Both land in the same TailState maps.
   subAgents: SubAgentView[]
-  bgShells: BgShellView[] // codex: always [] (codex has no background-shell tool)
+  // Live background shells. Claude folds them from its transcript (`run_in_background` Bash, Monitor);
+  // codex's come off its app-server item stream (tailer.ts codexBgShellViews), not from the fold.
+  bgShells: BgShellView[]
   pendingAsk?: PendingAskData // codex: undefined
   authFault?: "authentication_rejected" // runtime provider-auth rejection (see FoldState.authFault)
   apiFault?: boolean // the turn ended in a provider failure (see FoldState.apiFault)
@@ -256,6 +258,11 @@ export interface FoldState {
   // explicit `compaction` normalized event. Both are the harness's work, not the agent's, so this is the
   // ONLY field either of them moves — turn state, preview, fence and row order all stay put.
   lastCompactionAt?: string
+  // The newest folder the agent's OWN transcript says it is working in (thread-cwd.ts explains the two
+  // readings): a Claude record's `cwd`, which moves with a `cd` and with EnterWorktree, or a Codex tool
+  // call's `workdir`. May be RELATIVE on codex (a `workdir: "packages/web"`), in which case the tailer
+  // resolves it against the project's working folder. A sub-agent's records never set it.
+  cwd?: string
 }
 
 // A file a backend needs on disk BEFORE the detached spawn (e.g. codex's session-scoped AGENTS.md).

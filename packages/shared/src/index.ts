@@ -343,12 +343,23 @@ export function isDirectSubAgent(agent: { depth?: number }): boolean {
   return (agent.depth ?? 1) === 1
 }
 
+// A CHECKOUT THAT IS NOT THE PROJECT'S OWN ROOT — where an agent, a shell or a terminal is working when
+// that is somewhere else (server thread-cwd.ts liftCheckout). ABSENT EVERYWHERE MEANS THE ROOT: no surface
+// draws anything for the main checkout, so the readout appears only when it says something.
+//   kind "worktree" — the folder's `.git` is a FILE: a linked worktree (`git worktree add`, EnterWorktree).
+//   kind "folder"   — anything else off the root: another repository's own checkout, or a plain folder.
+// Frizz takes no position on worktrees; this INFORMS where a terminal will open and never prescribes.
+export const WorkCheckout = z.object({ dir: z.string(), kind: z.enum(["worktree", "folder"]) }).strict()
+export type WorkCheckout = z.infer<typeof WorkCheckout>
+
 // A LIVE background SHELL the worker launched (Bash run_in_background:true) — same tailer tracking as a
 // sub-agent (dispatch → launch output path → task-notification clear). Foreground-blocking waits keep
 // the turn in-flight, so the spinner already covers them; this is for ops that PERSIST across a rest
 // (a CI watcher, a long build). New servers include the stable tool-use id so the row can open its
 // read-only output drawer; it stays optional for old snapshots. The raw command remains behind that
-// drawer's scoped RPC rather than inflating or exposing it in every board snapshot.
+// drawer's scoped RPC rather than inflating or exposing it in every board snapshot. Its START FOLDER
+// (`cwd`) does ride the board: a folder is not the command, and it is what tells a shell running in the
+// agent's worktree from one running in the project root.
 export const BgShellView = z.object({
   label: z.string(), // the command's `description`, else its first-line summary
   startedAt: z.string(), // ISO8601 of the launch record
@@ -407,8 +418,57 @@ export const BgShellView = z.object({
   // the card's "2h left" reads. Past it the worker is warned once and, unextended, the shell is stopped
   // ten minutes later. Absent ⇒ unbudgeted.
   budgetEndsAt: z.string().optional(),
+  // The absolute folder the shell STARTED in — the session's `cwd` on its launch record, or the folder a
+  // leading `cd <path> &&` moved it to (server tailer.ts leadingCd). The effective start folder, NOT
+  // lifted to its checkout: it is what the row's tooltip and the drawer's subtitle say ("Started in").
+  cwd: z.string().optional(),
+  // That folder lifted to its checkout, present only when that checkout is NOT the project root — the
+  // row's quiet folder hint. Absent ⇒ the root (see WorkCheckout).
+  checkout: WorkCheckout.optional(),
 })
 export type BgShellView = z.infer<typeof BgShellView>
+
+// ONE AGENT TERMINAL'S LOG — the drawer's read of a background shell (server router backgroundShellOutput).
+//
+// Only `slug` and `id` name what is read: the path is the one the harness's own ack named, looked up in
+// that thread's fold and vetted to the harness's task-log shape (background-shell-output.ts). `from`
+// resumes at a previous reply's `end`, so the drawer's poll appends only what arrived; `raw` keeps colour
+// and bare `\r` for its xterm. Every field added since the first version is optional both ways, so an
+// older client's call and reply are unchanged.
+export const BackgroundShellOutputInput = z.object({
+  slug: ThreadSlug,
+  id: z.string().max(128),
+  from: z.number().int().nonnegative().optional(),
+  raw: z.boolean().optional(),
+}).strict()
+export type BackgroundShellOutputInput = z.infer<typeof BackgroundShellOutputInput>
+export const BackgroundShellOutputResult = z.object({
+  command: z.string().nullable(),
+  output: z.string(),
+  truncated: z.boolean(),
+  state: z.enum(["running", "done", "gone"]),
+  // The drawer renders Stop if and only if this is true, and states `stopNote` in its place when a
+  // running shell still cannot be reached. Never re-derived client-side.
+  stoppable: z.boolean(),
+  stopNote: z.string().nullable(),
+  // The offset read's cursor: where the next read starts, whether this one started over on a file that
+  // shrank, and whether more is already waiting.
+  end: z.number().optional(),
+  reset: z.boolean().optional(),
+  more: z.boolean().optional(),
+  // A path WAS named and nothing the vet accepts is readable there — a forged ack, or a task log tmp
+  // cleanup removed after the shell ended.
+  missing: z.boolean().optional(),
+  // A CODEX background exec: Codex keeps its output inside its own session and hands it to the model when
+  // it polls, so Frizz holds no file to read. The command, the folder and Stop still work.
+  outputUnavailable: z.boolean().optional(),
+  // Where it started (BgShellView.cwd) and that folder's checkout when it is off the project root — kept
+  // with the retired shell, so an open drawer keeps its subtitle after the shell ends.
+  cwd: z.string().nullable().optional(),
+  checkout: WorkCheckout.nullable().optional(),
+  monitor: z.boolean().optional(),
+})
+export type BackgroundShellOutputResult = z.infer<typeof BackgroundShellOutputResult>
 
 // WHY "Mark as done" stopped to ask instead of ending the session outright. The server already knows
 // the exact evidence it refused on (an executing turn, named live children, or no telemetry at all) —
@@ -2865,6 +2925,9 @@ export const ThreadTerminal = z.object({
   awaitingInput: z.boolean().optional(),
   // When it went quiet at that prompt — the queue entry's honest time.
   awaitingSince: z.string().optional(),
+  // `cwd` lifted to its checkout, present only when that is not the project root (WorkCheckout) — the
+  // same rule an agent's shell row follows, so the two kinds carry the folder hint on one condition.
+  checkout: WorkCheckout.optional(),
 })
 export type ThreadTerminal = z.infer<typeof ThreadTerminal>
 
@@ -2888,9 +2951,12 @@ export type StartTerminalResult = z.infer<typeof StartTerminalResult>
 // Where a new terminal on this thread would start, and how that was worked out — the drawer's folder
 // field opens on it. `source`: the agent's own latest reading (a Claude transcript's `cwd`, a Codex
 // tool call's `workdir`), the session's recorded folder, or the project root when neither is known.
+// `kind` says what that folder IS — the project root, a linked worktree, or somewhere else — so the dialog
+// can say so. Optional, so a client older than it still parses the answer.
 export const ThreadWorkingDir = z.object({
   dir: z.string(),
   source: z.enum(["transcript", "session", "project"]),
+  kind: z.enum(["root", "worktree", "folder"]).optional(),
 }).strict()
 export type ThreadWorkingDir = z.infer<typeof ThreadWorkingDir>
 
@@ -2963,6 +3029,11 @@ export const ThreadView = z.object({
   // Live background SHELLS the worker launched (tailer-derived). Same default-[] discipline. Rendered
   // in the anchored background-ops strip alongside sub-agents; ids make current rows drillable.
   bgShells: z.array(BgShellView).default([]),
+  // WHERE THE AGENT IS WORKING, when that is not the project root: the newest folder its own transcript
+  // names (a Claude record's `cwd`, a Codex tool call's `workdir`), lifted to its checkout. It flips the
+  // moment an agent moves into a worktree, and it is where a terminal opened on the thread starts. Absent
+  // ⇒ the root, or no reading — both draw nothing (see WorkCheckout).
+  checkout: WorkCheckout.optional(),
   // Optional for snapshots from a server that predates link registration.
   links: z.array(ThreadLinkView).optional(),
   // The thread's ARMED WATCHERS — registry-derived, not folded from the transcript, which is what makes

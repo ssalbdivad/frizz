@@ -1,9 +1,9 @@
 import { statSync, openSync, readSync, closeSync, readdirSync, realpathSync, mkdirSync, writeFileSync, readFileSync, existsSync } from "node:fs"
 import { execFile } from "node:child_process"
 import { promisify } from "node:util"
-import { basename, join, win32 } from "node:path"
+import { basename, dirname, isAbsolute, join, resolve, win32 } from "node:path"
 import { homedir, tmpdir } from "node:os"
-import type { AskQuestion, AwaitingHint } from "@frizz/shared"
+import type { AskQuestion, AwaitingHint, WorkCheckout } from "@frizz/shared"
 import { insideFence, isAllInjectedNoise, isInterruptMarker, isWakeDelivery, parseAskUserQuestionInput, PermissionMode, questionFencesLive, saysAllDone, splitAwaitingFrontmatter } from "@frizz/shared"
 import type { Bus } from "./bus.ts"
 import { permMarkerPath, workDirOf, type Project } from "./project.ts"
@@ -38,6 +38,7 @@ import { log as frizzLog } from "./logging.ts"
 import { frizzTempDir } from "./frizz-paths.ts"
 import { declaredShellBudgetMs } from "./shell-budget.ts"
 import { vetHarnessOutputPath } from "./background-shell-output.ts"
+import { liftCheckout, liftWorkingDir } from "./thread-cwd.ts"
 import { readWorkflowRun, workflowAgentState as sharedWorkflowAgentState, workflowAckRunDir, workflowAckTaskId, workflowLabel, type WorkflowAgent } from "./workflow-runs.ts"
 
 // The JSONL tailer: incrementally reads each registered session's Claude Code transcript
@@ -436,6 +437,12 @@ export interface SessionTelemetry extends NormalizedTail {
   // the wait still open, board.returnedSubAgentsView) plus the intervals its "until all sub-agents
   // return" snooze is measured against (board.subAgentsSnoozeHolds).
   retiredSubAgents?: RetiredSubAgentView[]
+  // WHERE THE AGENT IS WORKING (FoldState.cwd, lifted to its checkout). `workingDir` is that checkout —
+  // the project root included — and its presence means "the fold has a reading"; `checkout` only when it
+  // is NOT the root. The board carries `checkout` to every surface, and the terminal dialog's prefill
+  // (router threadWorkingDir) reads `workingDir` first, so the two can never name different folders.
+  workingDir?: string
+  checkout?: WorkCheckout
   pendingAsk?: PendingAskData // a pending native AskUserQuestion the session is frozen on (else absent)
   // The last assistant message carries an unanswered ```question fence AND the thread still speaks the
   // fence (dispatched before QUESTION_FENCE_RETIRED_AT — see `get`). Always false for a new-contract thread.
@@ -464,6 +471,9 @@ interface SubAgentEntry {
   timeoutMs?: number
   // Shell only: this entry is a `Monitor`, which carries no budget (see shell-budget.ts).
   monitor?: true
+  // Shell only: the absolute folder it STARTED in — the launch record's `cwd`, or where a leading
+  // `cd <path> &&` moved it (leadingCd). What its row's "Started in" and folder hint read.
+  cwd?: string
   subagentType?: string // the dispatch's input.subagent_type verbatim (agents only; may be absent)
   outputFile?: string // the child/shell's output path (from the launch tool_result); its mtime = liveness
   // Transcript SCHEMA of `outputFile` when it isn't Claude's own JSONL. A codex sub-agent's output file
@@ -524,6 +534,10 @@ export interface BgShellView {
    *  `watch` holding it later (shell-budget.ts resolveShellBudget). Stamped by the BOARD, which holds the
    *  durable rows; the tailer never sets it. Absent ⇒ unbudgeted. */
   budgetEndsAt?: string
+  /** The absolute folder it started in, and that folder's checkout when it is off the project root.
+   *  Full contract on the shared schema. */
+  cwd?: string
+  checkout?: WorkCheckout
 }
 
 /** One background shell as its drawer and its line counter read it (Tailer.backgroundShell). */
@@ -535,6 +549,9 @@ export interface BackgroundShellLookup {
    *  beside it, the drawer says the output is missing rather than that nothing was printed. */
   outputNamed?: boolean
   state: "running" | "done"
+  /** Where it started (SubAgentEntry.cwd) — kept after it retires, so an open drawer keeps its subtitle. */
+  cwd?: string
+  monitor?: boolean
 }
 
 /** A background shell that has FINISHED, in the shape the scheduler's watcher pass matches against.
@@ -599,6 +616,8 @@ interface RetiredShell {
   toolUseId: string
   command?: string
   outputFile?: string
+  cwd?: string // see SubAgentEntry.cwd — so an open drawer keeps its subtitle after the shell ends
+  monitor?: true
   status: "completed" | "failed" | "killed"
   // The handles a fence may NAME this shell by, kept so the board can check a declaration against a
   // shell that has already finished as well as one still running.
@@ -740,7 +759,12 @@ export interface TailState extends FoldState {
   // it), but Claude Code AUTO-BACKGROUNDS one that outlives its `timeout` — and it announces that in the
   // RESULT, which carries no command text. Without this the promoted row would have nothing to be
   // labelled with. Bounded; consumed on use. See AUTO_BACKGROUND_ACK_RE.
-  pendingShells?: Map<string, { label: string; command?: string; startedAt: string }>
+  pendingShells?: Map<string, { label: string; command?: string; startedAt: string; cwd?: string }>
+  // The directory the harness writes this session's task logs to — learned from the first background
+  // Bash ack that names one (`…/<session>/tasks/<id>.output`). A Monitor's ack names NO path, yet it
+  // writes `<taskId>.output` into the same directory, so this is how its drawer finds its log. Absent
+  // until a Bash ack has been seen in this session, which is why a Monitor's log is opportunistic.
+  tasksDir?: string
   // MONOTONIC high-water mark over every timestamped record folded so far. `lastActivityAt` cannot
   // serve this purpose: it tracks the LATEST record folded and therefore moves BACKWARD whenever a
   // transcript replays history (which Claude's do — see trackResumes). This only ever advances, and it
@@ -802,6 +826,10 @@ interface Record {
   // read only by the context reading, which would otherwise report a child's context as the parent's
   // the moment a build starts inlining them again.
   isSidechain?: boolean
+  // The session's working folder when this record was written. It MOVES: a `cd` into a folder inside
+  // the project sticks, and EnterWorktree moves it for the rest of the session (thread-cwd.ts has the
+  // measurements). The thread's own checkout, and each shell's start folder, are read off it.
+  cwd?: unknown
   // `usage` is the API's own accounting for the request this record answered: input + cache-creation +
   // cache-read is exactly what the model's context held. See applyRecord's context reading.
   // NOTE: `Record` here is this module's own transcript-record interface, which SHADOWS the global
@@ -1078,6 +1106,32 @@ function shellSummary(command: unknown): string {
   return first.length > 120 ? `${first.slice(0, 119)}…` : first
 }
 
+// WHERE A SHELL STARTS when its command opens with a `cd`. The launch record's `cwd` is where the SESSION
+// was; `cd /home/ssalb/frizz/packages/web && nubx vite` runs the server somewhere else, and a worktree
+// shell is very often exactly `cd .frizz/worktrees/x && …`. Deliberately NARROW: one leading `cd` to a
+// literal path, then `&&` or `;`. A bare token with no `$`, backtick, glob or subshell character, or the
+// same wrapped in plain quotes; `~` is the home folder and a relative path resolves against `base`.
+// Anything cleverer (`cd "$D"`, `pushd`, a `cd` mid-command, a subshell) answers undefined and the shell
+// keeps the session's folder — which the row words as "Started in", true either way.
+const LEADING_CD_RE = /^\s*cd\s+(?:"([^"$`*?(\\]+)"|'([^'$`*?(]+)'|([^\s"'$`*?(;&|<>\\]+))\s*(?:&&|;)/
+
+export function leadingCd(command: unknown, base: string | undefined): string | undefined {
+  if (typeof command !== "string" || !base) return undefined
+  const m = LEADING_CD_RE.exec(command)
+  const raw = (m?.[1] ?? m?.[2] ?? m?.[3])?.trim()
+  if (!raw || raw.startsWith("-")) return undefined // `cd -` / an option is not a folder
+  if (raw === "~") return homedir()
+  if (raw.startsWith("~/")) return join(homedir(), raw.slice(2))
+  if (raw.startsWith("~")) return undefined // `~user` — not ours to resolve
+  return isAbsolute(raw) ? resolve(raw) : resolve(base, raw)
+}
+
+// The folder a launch record says a shell starts in: its leading `cd`, else the session's own `cwd`.
+function shellStartCwd(rec: Record, command: unknown): string | undefined {
+  const base = typeof rec.cwd === "string" && isAbsolute(rec.cwd) ? rec.cwd : undefined
+  return leadingCd(command, base) ?? base
+}
+
 // OPEN CALLS — see FoldState.openCalls. Each is answered by its own result, usually the next record, so
 // this bounds only a turn whose results never land.
 const OPEN_CALLS_MAX = 32
@@ -1194,14 +1248,16 @@ function trackDispatches(state: TailState, rec: Record): void {
       // The launch's `timeout` is the worker's DECLARED budget for a background Bash (shell-budget.ts);
       // a Monitor's own timeout means something else, and it carries no budget at all.
       const timeoutMs = b.name === "Bash" && typeof input.timeout === "number" ? input.timeout : undefined
-      state.subAgents.set(id, { kind: "shell", toolUseId: id, label: desc ?? shellSummary(input.command), startedAt, command, outputFile, taskId: previous?.taskId, ...(timeoutMs !== undefined ? { timeoutMs } : {}), ...(b.name === "Monitor" ? { monitor: true as const } : {}) })
+      const cwd = shellStartCwd(rec, input.command) ?? previous?.cwd
+      state.subAgents.set(id, { kind: "shell", toolUseId: id, label: desc ?? shellSummary(input.command), startedAt, command, outputFile, taskId: previous?.taskId, ...(timeoutMs !== undefined ? { timeoutMs } : {}), ...(b.name === "Monitor" ? { monitor: true as const } : {}), ...(cwd ? { cwd } : {}) })
     } else if (b.name === "Bash") {
       // A FOREGROUND Bash — not a background op, and normally none of this map's business. But Claude
       // Code auto-backgrounds one that outlives its `timeout`, and only the RESULT says so, so park the
       // label/command here for trackLaunchResults to promote from. Dropped by the same result when the
       // command simply finished, which is the overwhelmingly common case.
       const pending = (state.pendingShells ??= new Map())
-      pending.set(id, { label: desc ?? shellSummary(input.command), command: typeof input.command === "string" ? input.command : undefined, startedAt })
+      const cwd = shellStartCwd(rec, input.command)
+      pending.set(id, { label: desc ?? shellSummary(input.command), command: typeof input.command === "string" ? input.command : undefined, startedAt, ...(cwd ? { cwd } : {}) })
       while (pending.size > PENDING_SHELLS_MAX) {
         const oldest = pending.keys().next().value
         if (oldest === undefined) break
@@ -1310,7 +1366,7 @@ function retireLive(state: TailState, entry: SubAgentEntry, finishedAt: string |
   state.subAgents.delete(entry.toolUseId)
   if (entry.kind === "shell") {
     state.retiredShells.delete(entry.toolUseId)
-    state.retiredShells.set(entry.toolUseId, { toolUseId: entry.toolUseId, command: entry.command, outputFile: entry.outputFile, status, taskId: entry.taskId, label: entry.label, finishedAt })
+    state.retiredShells.set(entry.toolUseId, { toolUseId: entry.toolUseId, command: entry.command, outputFile: entry.outputFile, status, taskId: entry.taskId, label: entry.label, finishedAt, ...(entry.cwd ? { cwd: entry.cwd } : {}), ...(entry.monitor ? { monitor: true as const } : {}) })
     while (state.retiredShells.size > RETAINED_SHELLS_MAX) {
       const oldest = state.retiredShells.keys().next().value
       if (oldest === undefined) break
@@ -1499,7 +1555,7 @@ function trackLaunchResults(state: TailState, rec: Record): void {
       state.pendingShells?.delete(id)
       if (state.dismissedOps.has(id)) continue // retired by the operator — see FoldState.dismissedOps
       if (b.is_error === true || !AUTO_BACKGROUND_ACK_RE.test(text)) continue
-      entry = { kind: "shell", toolUseId: id, label: parked.label, startedAt: parked.startedAt, command: parked.command }
+      entry = { kind: "shell", toolUseId: id, label: parked.label, startedAt: parked.startedAt, command: parked.command, ...(parked.cwd ? { cwd: parked.cwd } : {}) }
       state.subAgents.set(id, entry)
     }
     if (entry.workflow) {
@@ -1510,6 +1566,12 @@ function trackLaunchResults(state: TailState, rec: Record): void {
     } else {
       if (!entry.outputFile) entry.outputFile = launchOutputFile(state, text)
       if (!entry.taskId) entry.taskId = launchTaskId(text)
+      // Learn where this session's task logs live, for the Monitors whose acks name no path. Only off a
+      // path already shaped like the harness's own (`tasks/<its task id>.output`): a forged ack is still
+      // just text, and this must not become a way to point a Monitor's reads somewhere else.
+      if (entry.kind === "shell" && !entry.monitor && entry.outputFile && entry.taskId && basename(entry.outputFile) === `${entry.taskId}.output` && basename(dirname(entry.outputFile)) === "tasks") {
+        state.tasksDir = dirname(entry.outputFile)
+      }
     }
     if (LAUNCH_ACK_RE.test(text)) continue // background launch ack — the child/shell is alive, keep tracking
     if (entry.kind === "shell") {
@@ -1940,6 +2002,9 @@ export function applyRecord(state: TailState, rec: Record): void {
   if (typeof rec.timestamp === "string" && (state.maxRecordAt === undefined || rec.timestamp > state.maxRecordAt)) {
     state.maxRecordAt = rec.timestamp
   }
+  // Where the THREAD's agent is working now (FoldState.cwd). A sub-agent's records follow its own folder
+  // and are skipped; a relative reading is no reading.
+  if (rec.isSidechain !== true && typeof rec.cwd === "string" && isAbsolute(rec.cwd)) state.cwd = rec.cwd
   if (type === "permission-mode") {
     const parsed = PermissionMode.safeParse(rec.permissionMode)
     if (parsed.success) {
@@ -2151,6 +2216,13 @@ function applyFinalText(state: FoldState, text: string): void {
 // applyRecord does, so the tailer/board consume either identically. Claude does NOT use this path —
 // its 3-way stop_reason + 5s backstop turn signal can't round-trip through the union without loss
 // (see the NOTE on NormalizedEvent in backend/types.ts).
+function toolCallFolder(input: unknown): string | undefined {
+  if (!input || typeof input !== "object" || Array.isArray(input)) return undefined
+  const { workdir, cwd } = input as { workdir?: unknown; cwd?: unknown }
+  const dir = typeof workdir === "string" ? workdir : typeof cwd === "string" ? cwd : undefined
+  return dir?.trim() || undefined
+}
+
 export function applyEvent(state: FoldState, ev: NormalizedEvent): void {
   // Every timestamped event advances the activity clock (events map 1:1 to substantive lines; only the
   // untimestamped `title` lacks an `at`). Folded in file order, so the latest `at` wins. `context-usage`
@@ -2246,6 +2318,13 @@ export function applyEvent(state: FoldState, ev: NormalizedEvent): void {
       state.sawRecords = true
       if (ev.kind === "tool-call" && typeof ev.at === "string") state.lastToolCallAt = ev.at
       if (ev.kind === "tool-call") openCallIssued(state, ev.id, openCallFrom(ev.name, ev.input, ev.at))
+      // A CODEX tool call names the folder it runs in (`workdir`), which is the agent's own latest word on
+      // where it is working — the reading newestToolWorkdir takes by rescanning, folded here instead. Kept
+      // raw: a relative one is resolved against the project's folder by the tailer, which knows it.
+      if (ev.kind === "tool-call") {
+        const dir = toolCallFolder(ev.input)
+        if (dir) state.cwd = dir
+      }
       else state.openCalls?.delete(ev.id)
       break
     case "agent-report":
@@ -2533,7 +2612,7 @@ export interface TailerDeps {
   // rows the fold knows nothing about, because for codex there is nothing to enrich: the fold has never
   // produced a shell entry for a codex thread. Absent (claude rows, tests, a bridge-less server) ⇒ no
   // codex shell rows, exactly as before.
-  codexBackgroundExecs?: (threadSlug: string, sessionId: string) => readonly { processId: string; command?: string; startedAtMs: number }[]
+  codexBackgroundExecs?: (threadSlug: string, sessionId: string) => readonly { processId: string; command?: string; startedAtMs: number; cwd?: string }[]
   // The model's context SIZE for a broker Claude session, as the SDK reported it on that session's
   // `result` message (backend/claude-runtime-ingest.ts). It is the only place Claude names the number:
   // the JSONL carries per-request usage (the numerator) and nothing at all about the window. Absent
@@ -2740,6 +2819,9 @@ function rowIsArchived(row: SessionRow): boolean {
 
 export function createTailer(deps: TailerDeps): Tailer {
   const now = deps.now ?? Date.now
+  // Where this project's agents run (project.ts workDirOf) — what "the project root" means for every
+  // checkout reading below. Absent only on a test fixture's project, which then reads no checkouts.
+  const projectWorkDir: string | undefined = workDirOf(deps.project)
   const monotonicNow = deps.monotonicNow ?? (() => performance.now())
   // A row's liveness comes from its runtime (broker daemon / app-server), never from a screen. A
   // PRE-CUTOVER row has no transport left, so the default answers "dead" — the seam stays injectable
@@ -3168,6 +3250,21 @@ export function createTailer(deps: TailerDeps): Tailer {
   // (board.deriveNeedsYou reads hasLiveBackgroundWork, which is sub-agent-only), so the worst a
   // never-clearing entry can do is leave a card saying a shell is running — the thread is queued and in
   // front of the operator either way. It clears on the shell's real terminal signal or on owner death.
+  // WHERE THE THREAD'S AGENT IS WORKING (FoldState.cwd), lifted to its checkout. `dir` is present whenever
+  // the fold has a reading of a folder that exists — the project root included — and `checkout` only when
+  // that is somewhere else. Memoized in thread-cwd.ts, so asking per tick costs a map lookup.
+  function threadWorkingDir(state: TailState): { dir: string; checkout?: WorkCheckout } | undefined {
+    const raw = state.cwd
+    if (!raw || !projectWorkDir) return undefined
+    return liftWorkingDir(isAbsolute(raw) ? raw : resolve(projectWorkDir, raw), projectWorkDir, now())
+  }
+
+  function workingDirTelemetry(state: TailState): Pick<SessionTelemetry, "workingDir" | "checkout"> {
+    const reading = threadWorkingDir(state)
+    if (!reading) return {}
+    return { workingDir: reading.dir, ...(reading.checkout ? { checkout: reading.checkout } : {}) }
+  }
+
   function bgShellViews(state: TailState): BgShellView[] {
     if (state.subAgents.size === 0 || state.paneDead) return []
     const out: BgShellView[] = []
@@ -3191,7 +3288,9 @@ export function createTailer(deps: TailerDeps): Tailer {
       // outlived, not a lifetime anyone chose.
       const declared = e.monitor ? undefined : declaredShellBudgetMs(e.timeoutMs)
       const budget = e.monitor ? { monitor: true } : declared !== undefined ? { budgetMs: declared } : {}
-      out.push({ label: e.label, startedAt: e.startedAt, state: shellState, id: e.toolUseId, ...(e.taskId ? { stoppable: true, taskId: e.taskId } : {}), ...(lastActivityAt ? { lastActivityAt } : {}), ...budget })
+      // Where it started, and — only when that is off the project root — the checkout it runs in.
+      const checkout = liftCheckout(e.cwd, projectWorkDir, now())
+      out.push({ label: e.label, startedAt: e.startedAt, state: shellState, id: e.toolUseId, ...(e.taskId ? { stoppable: true, taskId: e.taskId } : {}), ...(lastActivityAt ? { lastActivityAt } : {}), ...budget, ...(e.cwd ? { cwd: e.cwd } : {}), ...(checkout ? { checkout } : {}) })
     }
     return out
   }
@@ -3234,7 +3333,9 @@ export function createTailer(deps: TailerDeps): Tailer {
   function codexBgShellViews(state: TailState): BgShellView[] {
     if (!deps.codexBackgroundExecs || state.foreign || state.paneDead) return []
     const execs = deps.codexBackgroundExecs(state.slug, state.sessionId)
-    return execs.map((exec) => ({
+    return execs.map((exec) => {
+      const checkout = liftCheckout(exec.cwd, projectWorkDir, now())
+      return {
       label: unwrapShellCommand(exec.command) ?? "Background command",
       // Carried SEPARATELY from the label even though they are the same string here: it is the client's
       // reconciliation key against the transcript's own copy of this shell, and the label is free to
@@ -3247,10 +3348,14 @@ export function createTailer(deps: TailerDeps): Tailer {
       // Codex has no launch-time knob for a lifetime, so a background exec carries NO budget unless the
       // worker gives it one with `extend_shell` (shell-budget.ts) — the same as an undeclared Claude shell.
       // Codex hands a yielded command's output back only when the MODEL polls it — there is no file
-      // for frizz to tail, so the row carries its × and no drill-in rather than opening a drawer that
-      // could only say "unavailable".
+      // for frizz to tail. The row still opens its drawer — its command, its folder and its Stop are all
+      // real — and the drawer says plainly that the output stays with Codex.
       outputUnavailable: true,
-    }))
+      // The item's own folder when codex names one, else the session's (codex-app-server backgroundExecs).
+      ...(exec.cwd ? { cwd: exec.cwd } : {}),
+      ...(checkout ? { checkout } : {}),
+      }
+    })
   }
 
   // A compact change-key over ALL derived background state — sub-agents + shells + the pending ask —
@@ -3273,7 +3378,10 @@ export function createTailer(deps: TailerDeps): Tailer {
     // reconcile to reach the board.
     const shells = [...bgShellViews(state), ...codexBgShellViews(state)].map((v) => `S:${v.label}|${v.state}|${v.startedAt}|${activityMinute(v.lastActivityAt)}`).join("")
     const ask = state.pendingAsk ? `Q:${state.pendingAsk.id}:${state.pendingAsk.questions.length}` : ""
-    return `${agents}\n${shells}\n${ask}`
+    // The agent's CHECKOUT, not its raw folder: moving into a worktree pushes exactly one board delta,
+    // and a `cd packages/web` — which lifts to the same checkout — pushes none.
+    const checkout = `C:${threadWorkingDir(state)?.checkout?.dir ?? ""}`
+    return `${agents}\n${shells}\n${ask}\n${checkout}`
   }
 
   // ---- descendant resolution (see the DescendantSidecar note above) ------------------------------
@@ -3740,11 +3848,17 @@ export function createTailer(deps: TailerDeps): Tailer {
       const outputFile = named ? vetHarnessOutputPath(named, taskId) : undefined
       return { ...(outputFile ? { outputFile } : {}), ...(named ? { outputNamed: true } : {}) }
     }
+    // A MONITOR's ack names no path, but it writes `<taskId>.output` beside this session's Bash logs
+    // (TailState.tasksDir). Only a candidate: it must still pass the vet and exist. Not used for the
+    // row's liveness probe, which keys on the ack-named path alone.
+    const monitorLog = (e: { monitor?: true; outputFile?: string; taskId?: string }) =>
+      e.monitor && !e.outputFile && e.taskId && state.tasksDir ? join(state.tasksDir, `${e.taskId}.output`) : e.outputFile
+    const extra = (e: { cwd?: string; monitor?: true }) => ({ ...(e.cwd ? { cwd: e.cwd } : {}), ...(e.monitor ? { monitor: true } : {}) })
     if (live?.kind === "shell") {
-      return { command: live.command, ...vetted(live.outputFile, live.taskId), state: state.paneDead ? "done" : "running" }
+      return { command: live.command, ...vetted(monitorLog(live), live.taskId), state: state.paneDead ? "done" : "running", ...extra(live) }
     }
     const dead = state.retiredShells.get(id)
-    if (dead) return { command: dead.command, ...vetted(dead.outputFile, dead.taskId), state: "done" }
+    if (dead) return { command: dead.command, ...vetted(monitorLog(dead), dead.taskId), state: "done", ...extra(dead) }
     return undefined
   }
 
@@ -5359,7 +5473,7 @@ export function createTailer(deps: TailerDeps): Tailer {
       // thread has no row and reads as legacy, which is what `questionFencesLive` does with unknown.
       const pendingQuestion = s.lastAssistantHasQuestion && questionFencesLive(row?.spawned_at)
       const nowMs = now()
-      return { primed: s.primed, turn: s.turn, permPrompt: s.permPrompt, permPolicy: s.permPolicy, permDenies: s.permDenies, model: s.model, effort: s.effort, profileAt: s.profileAt, profileRevision: s.profileRevision, permissionMode: s.permissionMode, permissionModeAt: s.permissionModeAt, permissionModeRevision: s.permissionModeRevision, lastActivityAt: s.lastActivityAt, lastAssistantAt: s.lastAssistantAt, lastAssistant: s.lastAssistant, aiTitle: s.aiTitle, customTitle: s.customTitle, customTitleRevision: s.customTitleRevision, subAgents: subAgentViews(s, nowMs), droppedReports: [...s.queuedReports.values()], bgShells: [...bgShellViews(s), ...codexBgShellViews(s)], retiredShells: retiredShellViews(s), retiredSubAgents: retiredSubAgentViews(s), pendingAsk: s.pendingAsk, pendingQuestion, lastAssistantAllDone: s.lastAssistantAllDone, lastUserAt: s.lastUserAt, lastHumanAt: s.lastHumanAt, lastToolCallAt: s.lastToolCallAt, openCall: newestOpenCall(s), lastUserText: s.lastUserText, firstUserText: s.firstUserText, lastFence: s.lastFence, noTranscript: s.noTranscript, authFault: s.authFault, apiFault: s.apiFault, providerError: s.providerError, limitFault: s.limitFault, contextTokens: s.contextTokens, contextWindow: s.contextWindow, lastCompactionAt: s.lastCompactionAt }
+      return { primed: s.primed, turn: s.turn, permPrompt: s.permPrompt, permPolicy: s.permPolicy, permDenies: s.permDenies, model: s.model, effort: s.effort, profileAt: s.profileAt, profileRevision: s.profileRevision, permissionMode: s.permissionMode, permissionModeAt: s.permissionModeAt, permissionModeRevision: s.permissionModeRevision, lastActivityAt: s.lastActivityAt, lastAssistantAt: s.lastAssistantAt, lastAssistant: s.lastAssistant, aiTitle: s.aiTitle, customTitle: s.customTitle, customTitleRevision: s.customTitleRevision, subAgents: subAgentViews(s, nowMs), droppedReports: [...s.queuedReports.values()], bgShells: [...bgShellViews(s), ...codexBgShellViews(s)], retiredShells: retiredShellViews(s), retiredSubAgents: retiredSubAgentViews(s), pendingAsk: s.pendingAsk, pendingQuestion, lastAssistantAllDone: s.lastAssistantAllDone, lastUserAt: s.lastUserAt, lastHumanAt: s.lastHumanAt, lastToolCallAt: s.lastToolCallAt, openCall: newestOpenCall(s), lastUserText: s.lastUserText, firstUserText: s.firstUserText, lastFence: s.lastFence, noTranscript: s.noTranscript, authFault: s.authFault, apiFault: s.apiFault, providerError: s.providerError, limitFault: s.limitFault, contextTokens: s.contextTokens, contextWindow: s.contextWindow, lastCompactionAt: s.lastCompactionAt, ...workingDirTelemetry(s) }
     },
     // The CURRENT fresh foreign session ids (mtime within FOREIGN_FRESH_MS, capped), mtime-desc. Kept
     // as the last scan's result — recomputed at most every FOREIGN_SCAN_EVERY ticks.

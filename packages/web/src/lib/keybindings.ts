@@ -4,7 +4,7 @@
 // components/KeyboardShortcuts.tsx, and the operator's overrides in prefs.ts.
 //
 // A LETTER IS ITS ACTION'S INITIAL: `r` reply, `d` mark as done, `s` snooze, `f` fullscreen, `o` open in
-// a drawer, `t` new terminal thread, `n` new project. One rule is worth more than any single well-chosen key, because it predicts the
+// a drawer, `t` a terminal on the thread, `n` new project. One rule is worth more than any single well-chosen key, because it predicts the
 // keys nobody has looked up yet, including ones added later (maintainer 2026-09-28: "establish the
 // convention in general that each action is associated with its first letter"). Until then Done and
 // Snooze were `e` and `h`, borrowed from keyboard-first inboxes: `e` is Gmail's archive and

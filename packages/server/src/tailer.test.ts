@@ -1,6 +1,6 @@
 import { test } from "node:test"
 import assert from "node:assert/strict"
-import { mkdtempSync, writeFileSync, appendFileSync, utimesSync, readFileSync, rmSync, openSync, closeSync, statSync } from "node:fs"
+import { mkdtempSync, writeFileSync, appendFileSync, utimesSync, readFileSync, rmSync, openSync, closeSync, statSync, realpathSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { dirname, join } from "node:path"
 import { createStorage, type Storage, type SessionRow } from "./storage.ts"
@@ -3567,6 +3567,52 @@ function pinCodexRow(h: Harness, codexId: string) {
   h.storage.setBackend("t", "codex")
   h.storage.setAgentSession("t", codexId)
 }
+
+// CODEX: where the agent works comes off its tool calls' `workdir`, and each background exec carries the
+// folder the app-server reports for it — or, when the item names none, the session's own.
+test("tailer: codex — a tool call's workdir moves the thread's checkout, and each exec row carries its folder", () => {
+  const h = harness()
+  const codexHome = tmp("frizz-codexhome-")
+  const codexId = "019f4e0d-1111-2222-3333-444455556666"
+  const project = realpathSync(tmp("frizz-codex-proj-"))
+  mkdirSync(join(project, ".git"))
+  const worktree = join(project, ".frizz", "worktrees", "cx")
+  mkdirSync(worktree, { recursive: true })
+  writeFileSync(join(worktree, ".git"), "gitdir: elsewhere\n")
+  const call = (id: string, workdir: string) => JSON.stringify({ timestamp: "2026-07-10T21:58:44.000Z", type: "response_item", payload: { type: "function_call", name: "exec_command", call_id: id, arguments: JSON.stringify({ cmd: "ls", workdir }) } })
+  const path = writeCodexRollout(codexHome, codexId, [cxMeta(codexId, project), cxTaskStarted, call("c1", project)])
+  pinCodexRow(h, codexId)
+  const execs = [
+    { processId: "p-root", command: "/bin/zsh -lc 'npm run dev'", startedAtMs: Date.parse("2026-07-10T21:58:44.000Z"), cwd: project },
+    { processId: "p-wt", command: "/bin/zsh -lc 'nub test --watch'", startedAtMs: Date.parse("2026-07-10T21:58:45.000Z"), cwd: worktree },
+  ]
+  const codexBackend = createCodexBackend({ codexHome })
+  const claudeBackend = createClaudeBackend({ logDir: h.logDir })
+  const t = createTailer({
+    project: { cwdSlug: "x", dir: project } as Project,
+    storage: h.storage,
+    bus: h.bus,
+    onChange: () => h.changes.n++,
+    now: () => h.clock.ms,
+    paneDead: () => false,
+    sessionLogDir: h.logDir,
+    backendFor: (kind?: string): AgentBackend => (kind === "codex" ? codexBackend : claudeBackend),
+    codexBackgroundExecs: () => execs,
+  })
+  h.clock.ms = Date.parse("2026-07-10T21:58:46.000Z")
+  t.tick()
+  let tele = t.get("t")!
+  assert.equal(tele.workingDir, project)
+  assert.equal(tele.checkout, undefined)
+  assert.deepEqual(tele.bgShells.map((s) => [s.id, s.cwd, s.checkout]), [["p-root", project, undefined], ["p-wt", worktree, { dir: worktree, kind: "worktree" }]])
+
+  // The next command runs in the worktree: that is now where the agent is.
+  appendFileSync(path, call("c2", ".frizz/worktrees/cx") + "\n")
+  h.clock.ms = Date.parse("2026-07-10T21:58:50.000Z")
+  t.tick()
+  tele = t.get("t")!
+  assert.deepEqual(tele.checkout, { dir: worktree, kind: "worktree" }, "a relative workdir resolves against the project")
+})
 
 test("tailer: a codex rollout primes to in-flight, then transitions to idle+fence THROUGH the tick", () => {
   const h = harness()

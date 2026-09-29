@@ -80,3 +80,17 @@ test("the command key never fires off a bare label — two same-named shells sta
   )
   assert.equal(merged.length, 2)
 })
+
+// A Codex tool call names the folder its command runs in; the app-server's copy of the same exec may not.
+// The board's row is kept — it carries the × — and gains the folder, never a second row.
+test("the transcript's copy backfills a folder onto the board's row it merges into, and never duplicates it", () => {
+  const board = [{ id: "p1", label: "nub test --watch", startedAt: "2026-07-31T19:11:28.190Z", command: "nub test --watch" }]
+  const transcript = [{ label: "Watching the tests", startedAt: "2026-07-31T19:11:32.200Z", command: "nub test --watch", cwd: "/repo/.frizz/worktrees/cx" }]
+  const merged = mergeBackgroundShells(board, transcript)
+  assert.equal(merged.length, 1)
+  assert.equal(merged[0]!.id, "p1", "the board's row is the one kept")
+  assert.equal(merged[0]!.cwd, "/repo/.frizz/worktrees/cx")
+  // A board row that already knows its folder keeps its own.
+  const known = mergeBackgroundShells([{ ...board[0]!, cwd: "/repo" }], transcript)
+  assert.equal(known[0]!.cwd, "/repo")
+})

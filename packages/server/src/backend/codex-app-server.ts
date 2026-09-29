@@ -423,6 +423,11 @@ const CommandExecutionItem = z.object({
   processId: z.union([z.string().max(128), z.number()]).nullish(),
   status: z.string().max(64).optional(),
   exitCode: z.number().nullish(),
+  // The folder the exec runs in. AN INFERENCE, not a measurement: the approval request for the same exec
+  // carries `cwd` (codex-app-server.test.ts), and codex-cli is not installed on the box this was written
+  // on, so the item's own field is unverified. Absent ⇒ undefined, and the row falls back to the
+  // session's folder (backgroundExecs).
+  cwd: z.string().max(8_192).nullish(),
 })
 /** One live codex background exec — what the ops-strip row is built from, and what its × addresses. */
 export interface LiveBackgroundExec {
@@ -430,6 +435,8 @@ export interface LiveBackgroundExec {
   processId: string
   command?: string
   startedAtMs: number
+  /** Where it runs: the item's own `cwd` when codex reports one, else the session's folder. */
+  cwd?: string
 }
 const ItemStartedNotification = z.object({
   item: z.unknown(),
@@ -3270,7 +3277,8 @@ export class CodexAppServerBridge {
     const binding = this.bindingForScope(threadSlug, sessionId)
     if (!binding) return []
     const byProcess = this.liveExecs.get(binding.codex_thread_id)
-    return byProcess ? [...byProcess.values()] : []
+    // An exec whose item named no folder ran where the session runs.
+    return byProcess ? [...byProcess.values()].map((exec) => (exec.cwd || !binding.cwd ? exec : { ...exec, cwd: binding.cwd })) : []
   }
 
   /**
@@ -3851,11 +3859,13 @@ export class CodexAppServerBridge {
     }
     if (!byProcess) { byProcess = new Map(); this.liveExecs.set(threadId, byProcess) }
     const existing = byProcess.get(processId)
+    const cwd = item.cwd ?? existing?.cwd
     byProcess.set(processId, {
       processId,
       command: item.command ?? existing?.command,
       // The FIRST sighting's instant, so the row's "running for 4h" does not reset on every update.
       startedAtMs: existing?.startedAtMs ?? startedAtMs ?? this.now().getTime(),
+      ...(cwd ? { cwd } : {}),
     })
   }
 

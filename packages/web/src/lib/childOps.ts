@@ -264,7 +264,7 @@ export function visibleChildOps<T extends ChildOpRecord>(ops: readonly T[], surf
 // So the LAUNCH ID is the key: `shellId` off the transcript card is by construction the same tool_use id
 // the tailer tracks the shell under. Label+startedAt survives only as the fallback for a transcript from
 // a pre-restart server that ships no `shellId` — matching there is better than the duplicate.
-export type ShellRecord = { readonly id?: string; readonly label: string; readonly startedAt?: string; readonly command?: string }
+export type ShellRecord = { readonly id?: string; readonly label: string; readonly startedAt?: string; readonly command?: string; readonly cwd?: string }
 
 // Deliberately NOT folded into `id`: `id` is the drill-in handle, and a transcript row is drawn only
 // because the board did NOT track that shell — so there is nothing for a drawer to open. The launch id
@@ -292,10 +292,19 @@ export function mergeBackgroundShells<T extends ShellRecord>(board: readonly T[]
   const out = [...board]
   // Every board row is indexed under BOTH identities: keying on the id alone let a transcript row with
   // no `launchId` (a pre-restart server) through, which is the duplicate this whole function exists for.
-  const seen = new Set(out.flatMap(shellKeys))
+  const index = new Map<string, number>()
+  out.forEach((shell, i) => { for (const key of shellKeys(shell)) index.set(key, i) })
   for (const shell of transcript) {
-    if (shellKeys(shell).some((key) => seen.has(key))) continue
-    out.push(shell)
+    const match = shellKeys(shell).map((key) => index.get(key)).find((i) => i !== undefined)
+    if (match === undefined) {
+      out.push(shell)
+      continue
+    }
+    // THE SAME PROCESS, and the board's row is the one kept. The transcript's copy can still know
+    // something the board's does not — a Codex tool call names the folder it runs in, which the
+    // app-server item may not — so fill that one field in, and never duplicate the row.
+    const kept = out[match]!
+    if (!kept.cwd && shell.cwd) out[match] = { ...kept, cwd: shell.cwd }
   }
   return out
 }

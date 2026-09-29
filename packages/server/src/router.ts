@@ -61,6 +61,8 @@ import {
   TerminalInput,
   StartTerminalResult,
   ThreadWorkingDir,
+  BackgroundShellOutputInput,
+  BackgroundShellOutputResult,
   RenameThreadInput,
   AiRenameThreadInput,
   AiRenameThreadResult,
@@ -161,7 +163,7 @@ import {
   projectTranscriptPageAgentLifecycles,
   threadTranscriptSource,
 } from "./transcript.ts"
-import { resolveThreadWorkingDir, terminalFolder } from "./thread-cwd.ts"
+import { liftCheckout, resolveThreadWorkingDir, terminalFolder } from "./thread-cwd.ts"
 import { openExternalUrl } from "./open-external.ts"
 import { openLocalFile, readLocalMarkdown, resolveOpenableFile, readLocalTextFile } from "./local-file.ts"
 import { openableFileRoots, workDirOf } from "./project.ts"
@@ -185,7 +187,7 @@ import { threadProfileOptions, validateThreadProfile } from "./backend/thread-pr
 import { adoptionRuntimeBinding, type AdoptionPaneLookup, type ExpectedAdoptionPane } from "./adoption-recovery.ts"
 import { parseIssueRef, parsePrRef, readGithubIssueStatusBook, readGithubStatusBook, GITHUB_ISSUE_STATUS_SETTING, GITHUB_STATUS_SETTING } from "./awaiting.ts"
 import { isBrokerClaudeRow, type RecurringWrite, type SessionRow, type Storage, type SubAgentSteerRow, type ThreadQuestionRow } from "./storage.ts"
-import { SUBAGENT_STALE_MS, type SessionTelemetry } from "./tailer.ts"
+import { SUBAGENT_STALE_MS, unwrapShellCommand, type SessionTelemetry } from "./tailer.ts"
 import { workflowAgentViews } from "./workflow-runs.ts"
 import { providerResumeCommand } from "./external-terminal.ts"
 import { backgroundShellLineCount, readBackgroundShellOutput } from "./background-shell-output.ts"
@@ -977,9 +979,53 @@ export function createRouter(ctx: AppContext) {
   // a path the resolver blesses is exactly a path the open action will accept.
   const openRoots = openableFileRoots(ctx.project)
 
+  // A CODEX background exec, for the drawer that opens on its row. Scoped to this thread's own app-server
+  // binding (backgroundExecs(slug, sessionId)), so another thread's process id finds nothing here either.
+  function codexExecFor(slug: string, id: string): BackgroundShellOutputResult | undefined {
+    const row = ctx.storage.getSession(slug)
+    if (!row || row.backend !== "codex" || !ctx.codexAppServer) return undefined
+    const exec = ctx.codexAppServer.backgroundExecs(slug, row.session_id).find((e) => e.processId === id)
+    if (!exec) return undefined
+    const checkout = liftCheckout(exec.cwd, workDir)
+    return {
+      command: unwrapShellCommand(exec.command) ?? null,
+      output: "",
+      truncated: false,
+      state: "running",
+      stoppable: true,
+      stopNote: null,
+      outputUnavailable: true,
+      end: 0,
+      ...(exec.cwd ? { cwd: exec.cwd } : {}),
+      ...(checkout ? { checkout } : {}),
+    }
+  }
+
   // Where a thread's agent is working NOW (thread-cwd.ts) — the folder a terminal opened on it starts in.
-  // Read on demand, never per board build: it touches the transcript file.
+  //
+  // THE FOLD FIRST: the tailer already folds the agent's newest folder for the board (the header's and the
+  // card's checkout token), so reading it here means the dialog's prefill, a `$ cmd` terminal and that
+  // token can never name two different places. The transcript rescan below remains for a thread the
+  // tailer has no reading for yet. `kind` says what the folder is, for the dialog's hint.
   function threadWorkingDir(slug: string): ThreadWorkingDir {
+    const withKind = (reading: ThreadWorkingDir): ThreadWorkingDir => {
+      const checkout = reading.dir === workDir ? undefined : liftCheckout(reading.dir, workDir)
+      return { ...reading, kind: checkout?.kind ?? "root" }
+    }
+    const folded = ctx.tailer.get(slug)?.workingDir
+    if (folded && isDirectory(folded)) return withKind({ dir: folded, source: "transcript" })
+    return withKind(threadWorkingDirFromTranscript(slug))
+  }
+
+  function isDirectory(path: string): boolean {
+    try {
+      return statSync(path).isDirectory()
+    } catch {
+      return false
+    }
+  }
+
+  function threadWorkingDirFromTranscript(slug: string): ThreadWorkingDir {
     const row = ctx.storage.getSession(slug)
     const backend = row?.backend === "codex" ? "codex" : row?.backend === "acp" ? "acp" : "claude"
     const source = row ? threadTranscriptSource(ctx.project, ctx.storage, slug, ctx.backendFor) : undefined
@@ -1781,37 +1827,29 @@ export function createRouter(ctx: AppContext) {
 
     // A live/recent background shell's command and combined process output. The tailer supplies the
     // scoped path; the reader caps the response so long-lived watchers/dev servers stay cheap.
+    // ONE AGENT TERMINAL'S LOG — the drawer's read of a background shell, and the whole of its ownership
+    // check. Only `slug` and `id` come from the client, and every other link is the server's own:
+    //   1. TENANT — this router is one project's (`/_frizz/<project>/rpc/…`), so is everything below.
+    //   2. THREAD — `tailer.backgroundShell(slug, id)` looks only in that thread's fold (live ops, then
+    //      the retired ring); another thread's id resolves to nothing and the answer is "gone".
+    //   3. PATH — never input: the one the harness's ack named, or a Monitor's log beside it.
+    //   4. SHAPE — the lookup vets that path to the harness's own `tasks/<id>.output` before any open
+    //      (vetHarnessOutputPath); a refusal reads back `missing`, never the bytes and never the path.
+    //   5. CODEX — an id the fold does not know, on a codex thread, is looked up in that thread's OWN
+    //      binding's live execs. Codex keeps the output, so the answer carries everything but it.
     backgroundShellOutput: query({
-      // `from` resumes a read at a previous reply's `end` — the agent-terminal drawer's poll, which
-      // appends only what arrived since. `raw` keeps colour and bare `\r` for its xterm. Both optional:
-      // absent, this is the whole-tail read every older caller makes.
-      input: z.object({ slug: ThreadSlug, id: z.string().max(128), from: z.number().int().nonnegative().optional(), raw: z.boolean().optional() }).strict(),
-      output: z.object({
-        command: z.string().nullable(),
-        output: z.string(),
-        truncated: z.boolean(),
-        state: z.enum(["running", "done", "gone"]),
-        // The same pair `subAgentTranscript` carries, for the same reason: the drawer renders a Stop
-        // button if and only if this is true, and states `stopNote` in its place when a running shell
-        // still cannot be reached. Never re-derived client-side — see subAgentStoppable.
-        stoppable: z.boolean(),
-        stopNote: z.string().nullable(),
-        // A path WAS named for this shell and nothing the vet accepts is readable there — a forged ack,
-        // or a task log tmp cleanup removed. Optional, so a pre-change client parses unchanged.
-        missing: z.boolean().optional(),
-        // The offset read's cursor (background-shell-output.ts readBackgroundShellOutput): where the next
-        // read starts, whether this one started over on a shrunk file, and whether more is waiting.
-        end: z.number().optional(),
-        reset: z.boolean().optional(),
-        more: z.boolean().optional(),
-      }),
+      input: BackgroundShellOutputInput,
+      output: BackgroundShellOutputResult,
       handler: async ({ input }) => {
-        // The path is never input: the tailer resolves it from this thread's own fold and vets it
-        // (tailer.ts backgroundShellLookup), so an id belonging to another thread answers "gone".
         const info = ctx.tailer.backgroundShell?.(input.slug, input.id)
-        if (!info) return { command: null, output: "", truncated: false, state: "gone" as const, stoppable: false, stopNote: null }
+        if (!info) {
+          const codex = codexExecFor(input.slug, input.id)
+          if (codex) return codex
+          return { command: null, output: "", truncated: false, state: "gone" as const, stoppable: false, stopNote: null }
+        }
         const content = info.outputFile ? readBackgroundShellOutput(info.outputFile, { from: input.from, raw: input.raw }) : undefined
         const stop = subAgentStoppable(input.slug, input.id)
+        const checkout = liftCheckout(info.cwd, workDir)
         return {
           command: info.command ?? null,
           output: content?.output ?? "",
@@ -1825,6 +1863,9 @@ export function createRouter(ctx: AppContext) {
           end: content?.end ?? input.from ?? 0,
           ...(content?.reset ? { reset: true } : {}),
           ...(content?.more ? { more: true } : {}),
+          ...(info.cwd ? { cwd: info.cwd } : {}),
+          ...(checkout ? { checkout } : {}),
+          ...(info.monitor ? { monitor: true } : {}),
         }
       },
     }),
