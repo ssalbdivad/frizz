@@ -733,7 +733,7 @@ interface LeavingCards {
  * Keyed by `threadKey` (project + slug), never by slug: this page holds several projects' threads, and
  * a slug is unique only within one.
  */
-function useLeavingCards(projects: QueuesProject[]): LeavingCards {
+export function useLeavingCards(projects: QueuesProject[]): LeavingCards {
   const [since, setSince] = useState<ReadonlyMap<string, number>>(() => new Map())
   const [, tick] = useState(0)
   const callbacks = useRef(new Map<string, { leave: () => void; restore: () => void }>())

@@ -76,8 +76,8 @@ export function useThreadComposerControls(slug: string, scopedThread?: ThreadVie
   // render in which a thread LEFT the board — a steered queue card whose row drops before its fade
   // ends, the moment the queue holds the card to dissolve it — called one hook fewer than the render
   // before, and React tore the whole queue down ("change in the order of Hooks"). Every card vanished in
-  // one frame instead of one card fading. The pin was queueSteerDissolve.e2e.test.ts, on the project
-  // board's queue, and it went with that board on 2026-09-28; AllQueues' card holds the same fade.
+  // one frame instead of one card fading. The browser pin is components/queueCardStates.e2e.test.ts,
+  // on AllQueues' card, which holds the same fade the project board's queue did until 2026-09-28.
   const acpAgents = useQuery({ queryKey: ["acpAgents"], queryFn: () => rpc.acpAgents(), enabled: Boolean(thread) && backend === "acp" })
 
   // Legacy/rowless and foreign transcripts have no Frizz-owned runtime profile to mutate. Keep their
