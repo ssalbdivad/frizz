@@ -638,10 +638,13 @@ const ASK = {
     "EXPLANATION BEFORE IT: what you found, what the choice turns on, what each answer would set in " +
     "motion. Never write the question itself into your handoff (one question, one card). There is no " +
     "placement marker: an empty ```question qst_… fence draws nothing.\n\n" +
-    "ONLY UNTIL THE HUMAN REPLIES. If they reply past the card without answering, they have moved on: " +
-    "the card stays ABOVE their reply, where it was asked, still answerable, and it no longer holds " +
+    "ONLY UNTIL THE HUMAN REPLIES. If they TYPE a reply past the card without answering, they have moved " +
+    "on: the card stays ABOVE their reply, where it was asked, still answerable, and it no longer holds " +
     "anything — not your sign-off, not a block on `done`. Work on what they said; never call that " +
-    "question \"still open below\". If the new work genuinely needs the answer, `unask` it and `ask` again.\n\n" +
+    "question \"still open below\", and never ask it again — `ask` refuses it, even after an `unask`. " +
+    "If the new work turns on it, decide it yourself and say which way you went. Two things do NOT set a " +
+    "question aside: the human answering OTHER cards, and a `danger` question, which holds until it is " +
+    "answered, dismissed or withdrawn.\n\n" +
     "SEVERAL AT ONCE IS ONE CALL. The card sends every answer as a unit, so a second `ask` for a second " +
     "question just makes the human send twice. Register them together.\n\n" +
     "The answer comes back to you as its own wake, restating what was asked. Withdraw one you no longer " +
@@ -925,8 +928,9 @@ async function activity() {
     passed.map(questionLine).join("\n") +
     "\n\nTreat these as set aside — the human moved on. Each card stays ABOVE their reply, where it was " +
     "asked, still answerable; if they answer, it arrives as its own wake. It blocks nothing, it is not your " +
-    "sign-off, and it is not \"below\" or \"still open\" in anything you write now. If the current work " +
-    "genuinely still needs it, `unask` it and `ask` again so a fresh card lands under the handoff that needs it."
+    "sign-off, and it is not \"below\" or \"still open\" in anything you write now. Never ask it again " +
+    "— `ask` refuses it, even after an `unask`; if the current work turns on it, decide it yourself and say " +
+    "which way you went."
   )
   const askedBlock = owedBlock + passedBlock
   if (!items.length) {

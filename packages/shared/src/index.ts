@@ -2351,17 +2351,38 @@ export const RegisteredQuestionView = z.object({
 }).strict()
 export type RegisteredQuestionView = z.infer<typeof RegisteredQuestionView>
 
-/** HAS THE HUMAN MOVED ON FROM THIS QUESTION? True when their newest turn landed after it was asked — a
- *  typed reply, or the answers to OTHER questions (`lastHumanAt` is the tailer's clock for exactly that,
- *  the same reading as the web's `isHumanTurn`; frizz's own wakes never move it). Replying past an open
- *  card instead of answering it is read as a pivot (maintainer 2026-09-28: "we should assume they want to
- *  move on/pivot"): the card stays up with the handoff that asked it, still answerable, and the answer
- *  still reaches the worker restating what was asked — but nothing waits on it any more. An unknown clock
- *  reads as "not replied past", which is exactly the behaviour before this rule existed. */
-export function questionRepliedPast(askedAtMs: number, lastHumanAt: string | undefined): boolean {
+/** HAS THE HUMAN MOVED ON FROM THIS QUESTION? True when their newest TYPED turn landed after it was asked
+ *  (`lastHumanAt` is the tailer's clock for exactly that; frizz's own wakes never move it, and neither
+ *  does a delivery of answers). Replying past an open card instead of answering it is read as a pivot
+ *  (maintainer 2026-09-28: "we should assume they want to move on/pivot"): the card stays up with the
+ *  handoff that asked it, still answerable, and the answer still reaches the worker restating what was
+ *  asked — but nothing waits on it any more. An unknown clock reads as "not replied past", which is
+ *  exactly the behaviour before this rule existed.
+ *
+ *  ANSWERING IS NOT MOVING ON (2026-09-29). Sending the answers to some cards used to count as replying
+ *  past every other open one, so answering one question of a batch of nine released the other eight — a
+ *  human working through a batch card by card lost the rest of it after the first send, and asked for the
+ *  questions again. Only a typed turn is a pivot now.
+ *
+ *  A DANGER QUESTION IS NEVER RELEASED BY A REPLY. `danger` marks the irreversible — a force-push, a
+ *  deletion, a rollback — and is exactly the question the human's × cannot dismiss and a Goal cannot
+ *  auto-dismiss (router.ts). Letting a timestamp retire it would hand the worker the call on the one kind
+ *  of question that must be the human's; it holds until answered, dismissed, or withdrawn. */
+export function questionRepliedPast(q: { asked_at: number; spec: string }, lastHumanAt: string | undefined): boolean {
   if (!lastHumanAt) return false
   const human = Date.parse(lastHumanAt)
-  return Number.isFinite(human) && Number.isFinite(askedAtMs) && human > askedAtMs
+  if (!(Number.isFinite(human) && Number.isFinite(q.asked_at) && human > q.asked_at)) return false
+  return !questionSpecIsDanger(q.spec)
+}
+
+/** The stored spec's top-level `danger`, read without validating the rest — a spec that does not parse
+ *  is not a danger question, the same answer the card gives it. */
+function questionSpecIsDanger(spec: string): boolean {
+  try {
+    return (JSON.parse(spec) as { danger?: unknown } | null)?.danger === true
+  } catch {
+    return false
+  }
 }
 
 /** The open questions still HOLDING their thread — every one the human has not replied past. What every

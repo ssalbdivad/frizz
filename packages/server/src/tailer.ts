@@ -4,7 +4,7 @@ import { promisify } from "node:util"
 import { basename, join, win32 } from "node:path"
 import { homedir, tmpdir } from "node:os"
 import type { AskQuestion, AwaitingHint } from "@frizz/shared"
-import { BURIED_ANSWERS_HEADER, insideFence, isAllInjectedNoise, isInterruptMarker, isWakeDelivery, parseAskUserQuestionInput, PermissionMode, questionFencesLive, saysAllDone, splitAwaitingFrontmatter } from "@frizz/shared"
+import { insideFence, isAllInjectedNoise, isInterruptMarker, isWakeDelivery, parseAskUserQuestionInput, PermissionMode, questionFencesLive, saysAllDone, splitAwaitingFrontmatter } from "@frizz/shared"
 import type { Bus } from "./bus.ts"
 import { permMarkerPath, workDirOf, type Project } from "./project.ts"
 import { isBrokerClaudeRow, isHeadlessRow } from "./storage.ts"
@@ -997,12 +997,15 @@ function isLocalCommandReceipt(content: unknown): boolean {
 // same SHARED classifier, so a record the chat does not even draw can never again change what the board
 // says the human owes. The row-order key below wants exactly this predicate too — its own comment
 // demanded it, and it was enforcing only the two cases anyone had hit.
-/** Of the turns isHumanSpeaking admits, did the HUMAN take this one — or did frizz? A scheduler wake
- *  delivery is a real user turn to the model, but nobody typed it; the answers to registered questions
- *  are the exception, delivered as a wake because the worker may be down when the human answers. The
- *  same reading as the web's questionAnchor `isHumanTurn`. */
+/** Of the turns isHumanSpeaking admits, did the human TYPE this one — or did frizz deliver it? A
+ *  scheduler wake delivery is a real user turn to the model, but nobody typed it. The answers to
+ *  registered questions ride a wake too (the worker may be down when the human answers), and they do
+ *  NOT count here: this is the clock questionRepliedPast reads, and answering some cards is not moving
+ *  on from the others — it released the unanswered rest of a batch the moment its first answer was sent
+ *  (2026-09-29). The web's questionAnchor `isHumanTurn` still counts answers, deliberately: it asks where
+ *  an exchange ENDS on screen, which an answer does. */
 function tookHumanTurn(text: string): boolean {
-  return !isWakeDelivery(text) || text.trimStart().startsWith(BURIED_ANSWERS_HEADER)
+  return !isWakeDelivery(text)
 }
 
 function isHumanSpeaking(rec: Record, text: string, system: boolean, compactSummary: boolean): boolean {

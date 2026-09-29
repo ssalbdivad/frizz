@@ -2066,7 +2066,7 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
         tele.pendingQuestion ||
         registeredDoneFence(deps.storage.getThreadDone(row.slug), tele.lastUserAt, tele.lastToolCallAt) !== undefined ||
         // …a CURRENT one: a question the human replied past is a pivot, not this rest's sign-off.
-        questionRows.some((q) => q.state === "open" && !questionRepliedPast(q.asked_at, tele.lastHumanAt)) ||
+        questionRows.some((q) => q.state === "open" && !questionRepliedPast(q, tele.lastHumanAt)) ||
         answersInFlight(questionRows, tele.lastUserAt, row.recurring_on_rest === 1 && Boolean(row.recurring_prompt?.trim())) !== undefined ||
         deps.storage.listThreadWatches(row.slug, { armedOnly: true }).length > 0
       ) {
@@ -2164,7 +2164,7 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
       // stands), and its correction already sends the worker back to rewrite this sign-off.
       if (tele.lastFence) continue
       const onQuestion = Boolean(tele.pendingQuestion) || deps.storage.listThreadQuestions(row.slug)
-        .some((q) => q.state === "open" && !questionRepliedPast(q.asked_at, tele.lastHumanAt))
+        .some((q) => q.state === "open" && !questionRepliedPast(q, tele.lastHumanAt))
       if (!onQuestion) continue
       const watched = deps.storage.listThreadWatches(row.slug, { armedOnly: true }).filter((w) => w.kind === "shell").map((w) => w.target)
       const stray = (tele.bgShells ?? []).filter((sh) => sh.state === "running" && ![sh.id, sh.taskId, sh.label].some((h) => h !== undefined && watched.includes(h)))
@@ -2238,7 +2238,7 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
       // on the rest so one fence draws one bump. Checked BEFORE the honoured-park reset below on
       // purpose: live names do not make this park honoured.
       // Current questions only: one the human replied past holds nothing, so it refuses no park either.
-      const openQuestions = deps.storage.listThreadQuestions(row.slug).filter((q) => q.state === "open" && !questionRepliedPast(q.asked_at, tele.lastHumanAt))
+      const openQuestions = deps.storage.listThreadQuestions(row.slug).filter((q) => q.state === "open" && !questionRepliedPast(q, tele.lastHumanAt))
       if (openQuestions.length > 0) {
         if ((row.park_bumps ?? 0) >= PARK_BUMP_MAX) continue
         const fenceId = parkFenceId("question", spokeAt)

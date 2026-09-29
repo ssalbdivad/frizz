@@ -595,6 +595,26 @@ test("a question the human replied past blocks nothing and reads back marked —
   } finally { h.close() }
 })
 
+// …EXCEPT A DANGER QUESTION. `danger` is the question the human's × cannot dismiss and a Goal cannot
+// auto-dismiss; a typed reply past it must not release it either, or the worker is told to "decide it
+// yourself" on exactly the irreversible call that has to stay the human's.
+test("a DANGER question the human replied past still blocks done and reads back owed", async () => {
+  const h = harness()
+  try {
+    h.storage.upsertSession(row("t"))
+    const [risky] = (await h.router.ask.handler({ input: { slug: "t", questions: [{ ...simple("Force-push the rewritten history to main?"), danger: true }] } })).registered
+    const [plain] = (await h.router.ask.handler({ input: { slug: "t", questions: [simple()] } })).registered
+    h.humanSpokeAt(new Date(Date.parse(plain.askedAt) + 1).toISOString())
+    await new Promise((resolve) => setTimeout(resolve, 5))
+    const read = await h.router.listOwnThreadActivity.handler({ input: { slug: "t" } })
+    // The negative control rides along: the ordinary question beside it IS released by the same reply.
+    assert.deepEqual(read.questions.map((q) => [q.id, q.repliedPast]), [[risky.id, undefined], [plain.id, true]])
+    const done = await h.router.markOwnDone.handler({ input: { slug: "t", body: "done" } })
+    assert.equal(done.done, false)
+    assert.deepEqual(done.blockingQuestions.map((q) => q.id), [risky.id], "the danger question alone still holds the thread")
+  } finally { h.close() }
+})
+
 // A PIVOT STICKS (maintainer 2026-09-28: "when a question is not answered and we pivot, the question
 // should not be asked again"). A worker `unask`ed both replied-past cards and re-registered them under
 // the human's unrelated next request; `ask` now refuses that, however it is cased or punctuated.

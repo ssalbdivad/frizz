@@ -80,9 +80,9 @@ test("applyRecord: a system-origin user record (peer / task-notification) RE-INV
   assert.equal(s.lastUserAt, "2026-07-01T00:00:09.000Z")
 })
 
-// `lastHumanAt` is the clock a question is "replied past" against (shared questionRepliedPast), so it has
-// to agree with the chat's own `isHumanTurn` (web lib/questionAnchor): a typed reply and the answers wake
-// move it, frizz's other wakes — a watcher, a timer, a nudge — never do, though they bump lastUserAt.
+// `lastHumanAt` is the clock a question is "replied past" against (shared questionRepliedPast): a typed
+// reply moves it; frizz's wakes — a watcher, a timer, a nudge, and the delivery of answers — never do,
+// though they bump lastUserAt. Answering one card of a batch must not release the unanswered rest.
 test("applyRecord: lastHumanAt moves on the human's turns only — a frizz wake bumps the row key but not it", () => {
   const s = newTailState("t", "sid", "/x")
   applyRecord(s, { type: "user", timestamp: "2026-07-01T00:00:00.000Z", message: { content: "fix the parser" } })
@@ -99,7 +99,8 @@ test("applyRecord: lastHumanAt moves on the human's turns only — a frizz wake 
     timestamp: "2026-07-01T00:02:00.000Z",
     message: { content: `${BURIED_ANSWERS_HEADER}\n1. “Which store?” → SQLite\n\n${wakeDeliveryToken("dlv_answers")}` },
   })
-  assert.equal(s.lastHumanAt, "2026-07-01T00:02:00.000Z", "answers are the human speaking through frizz")
+  assert.equal(s.lastUserAt, "2026-07-01T00:02:00.000Z")
+  assert.equal(s.lastHumanAt, "2026-07-01T00:00:00.000Z", "answering some cards is not replying past the others")
 })
 
 test("applyRecord: claude's post-compaction carry-over summary re-invokes but never reorders the row", () => {
