@@ -56,3 +56,18 @@ test("a batch of shell stops reads as one toast, and a failure outranks the succ
   // The kill landed but the worker could not be told — the longer toast, as on the single ×.
   assert.deepEqual(shellStopSummary([ok, { ok: true, stopped: true, note: "The worker could not be told." }]), { text: "2 background shells stopped. The worker could not be told.", duration: 7000 })
 })
+
+// THE TOAST NAMES WHAT WAS STOPPED in the words its row uses: a Monitor's row, tooltip and drawer all say
+// "agent monitor", and its × said "Agent terminal stopped" (verified on the stack, 2026-09-29).
+test("stopping a Monitor says 'Agent monitor', a shell 'Agent terminal'", async () => {
+  const { dismissChildOp } = await import("./dismissChildOp.ts")
+  const { store } = await import("../store.ts")
+  const api = { stopBackgroundOp: async () => ({ stopped: true, note: null, descendantsStopped: 0 }) } as unknown as Parameters<typeof dismissChildOp>[3]
+  assert.equal(await dismissChildOp("t", "toolu_m", "MONITOR", api), true)
+  assert.equal(store.toast?.text, "Agent monitor stopped — the agent was told")
+  await dismissChildOp("t", "toolu_s", "SHELL", api)
+  assert.equal(store.toast?.text, "Agent terminal stopped — the agent was told")
+  const noted = { stopBackgroundOp: async () => ({ stopped: true, note: "The agent could not be told.", descendantsStopped: 0 }) } as unknown as Parameters<typeof dismissChildOp>[3]
+  await dismissChildOp("t", "toolu_m", "MONITOR", noted)
+  assert.equal(store.toast?.text, "Agent monitor stopped. The agent could not be told.")
+})

@@ -42,13 +42,13 @@ test("the tooltip says where, in home-relative form, and that new terminals open
     checkoutTitle({ dir: "/home/u/frizz/.frizz/worktrees/rail-bands", kind: "worktree" }, "/home/u"),
     "Agent is working in a worktree\n~/frizz/.frizz/worktrees/rail-bands\nNew terminals open here",
   )
-  assert.equal(checkoutTitle({ dir: "/home/u/other", kind: "folder" }, "/home/u"), "Agent is working outside the project\n~/other\nNew terminals open here")
+  assert.equal(checkoutTitle({ dir: "/home/u/other", kind: "folder" }, "/home/u"), "Agent is working in another folder\n~/other\nNew terminals open here")
   assert.equal(checkoutName("C:\\work\\probe"), "probe")
 })
 
 test("the dialog's hint names the kind of place the folder is", () => {
   assert.equal(workingDirHint({ source: "transcript", kind: "worktree" }), "Where the agent is working now — a worktree.")
-  assert.equal(workingDirHint({ source: "transcript", kind: "folder" }), "Where the agent is working now — outside the project.")
+  assert.equal(workingDirHint({ source: "transcript", kind: "folder" }), "Where the agent is working now — another folder.")
   assert.equal(workingDirHint({ source: "transcript", kind: "root" }), "Where the agent is working now — the project root.")
   assert.equal(workingDirHint({ source: "transcript" }), "Where the agent is working now.", "an older server's reply still reads")
   assert.equal(workingDirHint({ source: "session", kind: "root" }), "The folder the agent's session started in.")

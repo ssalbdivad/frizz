@@ -31,7 +31,9 @@ export function checkoutName(dir: string): string {
 
 /** What the token means, in the words a human acts on: where, and that a new terminal starts there. */
 export function checkoutTitle(checkout: WorkCheckout, homeDir: string | undefined): string {
-  const head = checkout.kind === "worktree" ? "Agent is working in a worktree" : "Agent is working outside the project"
+  // Not "outside the project": a `folder` checkout can sit inside the root (a nested clone, or `~/frizz`
+  // in the Home workspace, whose root is the home folder). The path on the next line says which.
+  const head = checkout.kind === "worktree" ? "Agent is working in a worktree" : "Agent is working in another folder"
   return `${head}\n${abbreviateHome(checkout.dir, homeDir)}\nNew terminals open here`
 }
 

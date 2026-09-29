@@ -12,8 +12,10 @@ import "./styles.css"
 
 // ONE STRIP, TWO OWNERS — every state a terminal row can be in, side by side, for the states a live stack
 // cannot reach on demand: a finished and a failed run of yours, an agent shell over its budget or quiet,
-// a Codex exec whose output Frizz cannot read, a monitor. `?mode=codex` / `?mode=gone` show the agent
-// drawer's two empty states. `data-font="sans"` is on the page, as in the product. No server: every RPC
+// a Codex exec whose output Frizz cannot read, a monitor — once with the agent at the project root and once
+// with it in the `probe` worktree, where the rows in that worktree name nothing and a root row reads `root`.
+// `?mode=codex` / `?mode=gone` show the agent drawer's two empty states, `?mode=agent` a streaming one with a
+// long title and a worktree folder (for the narrow header). `data-font="sans"` is on the page, as in the product. No server: every RPC
 // is answered here, and nothing is started or stopped.
 const params = new URLSearchParams(location.search)
 const mode = params.get("mode") ?? "strip"
@@ -27,6 +29,12 @@ window.fetch = async (input, init) => {
   if (!url.pathname.startsWith("/_frizz/rpc/")) return nativeFetch(input, init)
   const method = url.pathname.split("/").at(-1)
   if (method === "backgroundShellOutput") {
+    if (mode === "agent") {
+      const body = init?.body ? JSON.parse(String(init.body)) as { input?: { from?: number } } : {}
+      const from = body.input?.from ?? 0
+      const line = `\x1b[32mtick\x1b[0m ${Math.floor(from / 16) + 1}\n`
+      return json({ state: "running", command: "for i in $(seq 600); do printf '\\e[32mtick\\e[0m %s\\n' $i; sleep 1; done", output: from === 0 ? line.repeat(3) : line, truncated: false, stoppable: true, stopNote: null, end: from + 16, cwd: "/home/u/repo/.frizz/worktrees/probe", checkout: WT })
+    }
     return mode === "codex"
       ? json({ state: "running", command: "cargo watch -x test", output: "", truncated: false, stoppable: true, stopNote: null, end: 0, outputUnavailable: true, cwd: "/home/u/repo/.frizz/worktrees/probe", checkout: { dir: "/home/u/repo/.frizz/worktrees/probe", kind: "worktree" } })
       : json({ state: "done", command: "nub run test", output: "", truncated: false, stoppable: false, stopNote: null, end: 0, missing: true, cwd: "/home/u/repo" })
@@ -50,7 +58,8 @@ const bgShells: BgShellView[] = [
   { id: "s-quiet", label: "tail the deploy log", startedAt: ago(20), state: "stale", taskId: "b4", monitor: true },
   { id: "s-codex", label: "cargo watch -x test", startedAt: ago(3), state: "running", stoppable: true, outputUnavailable: true, cwd: WT.dir, checkout: WT },
 ]
-const thread = { id: "fixture", terminals, bgShells, watches: [] } as Pick<ThreadView, "id" | "terminals" | "bgShells" | "watches">
+const thread = { id: "fixture", terminals, bgShells, watches: [] } as Pick<ThreadView, "id" | "terminals" | "bgShells" | "watches" | "checkout">
+const inWorktree = { ...thread, checkout: WT }
 
 createRoot(document.getElementById("root")!).render(
   <QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}>
@@ -69,8 +78,11 @@ createRoot(document.getElementById("root")!).render(
               <span className="min-w-0 truncate">Ready 9m ago</span>
               <ThreadCheckoutToken checkout={{ dir: "/srv/other-checkout", kind: "folder" }} homeDir="/home/u" lead={<span aria-hidden>·</span>} />
             </div>
-            <div data-fixture-strip className="rounded-md border border-border bg-panel px-4 py-3">
+            <div data-fixture-strip="root" className="rounded-md border border-border bg-panel px-4 py-3">
               <ThreadProcessStrip thread={thread} surface="card" onOpen={() => {}} />
+            </div>
+            <div data-fixture-strip="worktree" className="rounded-md border border-border bg-panel px-4 py-3">
+              <ThreadProcessStrip thread={inWorktree} surface="card" onOpen={() => {}} />
             </div>
             {/* The rail mark's three tones: yours at a prompt, yours running, only the agent's running. */}
             <div data-fixture-marks className="flex flex-col gap-2 text-[13px]">
@@ -80,8 +92,16 @@ createRoot(document.getElementById("root")!).render(
             </div>
           </div>
         )}
-        {(mode === "codex" || mode === "gone") && (
-          <TerminalSheet id={1} slug="fixture" source={{ owner: "agent", shellId: mode === "codex" ? "s-codex" : "s-gone" }} label={mode === "codex" ? "cargo watch -x test" : "nub run test"} startedAt={ago(3)} depth={0} widthDepth={0} />
+        {(mode === "codex" || mode === "gone" || mode === "agent") && (
+          <TerminalSheet
+            id={1}
+            slug="fixture"
+            source={{ owner: "agent", shellId: mode === "codex" ? "s-codex" : mode === "agent" ? "s-wt" : "s-gone" }}
+            label={mode === "codex" ? "cargo watch -x test" : mode === "agent" ? "Test watch in the probe worktree" : "nub run test"}
+            startedAt={ago(mode === "agent" ? 9 : 3)}
+            depth={0}
+            widthDepth={0}
+          />
         )}
       </main>
       <Toaster />

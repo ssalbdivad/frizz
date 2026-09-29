@@ -20,7 +20,9 @@ export function SheetHeader({
   initialFocus,
 }: {
   title: string
-  subtitle?: string
+  /** A string, or a node for a subtitle that must truncate somewhere other than its end (a path whose
+   *  last folder is the part worth keeping — TerminalSheet's). Rendered inside the one truncating line. */
+  subtitle?: ReactNode
   icon?: ReactNode
   meta?: ReactNode
   actions?: ReactNode

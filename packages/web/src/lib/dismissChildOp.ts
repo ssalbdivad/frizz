@@ -24,10 +24,14 @@ import { showToast } from "../store.ts"
 // Resolves to whether a live child was actually KILLED once the stop has settled, and never rejects (the
 // toast is the whole error path), so a caller that shows the result — the agent-terminal drawer's Stop on
 // a Codex exec — can re-read after it and say "stopped" only when it was.
-export function dismissChildOp(slug: string, id: string, kind: "AGENT" | "SHELL" = "AGENT", api: Api = rpc): Promise<boolean> {
+// A MONITOR is a shell to the server, and stops the same way; only its name differs. Its row, tooltip and
+// drawer all call it an "agent monitor", so its stop toast does too.
+export type DismissKind = "AGENT" | "SHELL" | "MONITOR"
+
+export function dismissChildOp(slug: string, id: string, kind: DismissKind = "AGENT", api: Api = rpc): Promise<boolean> {
   // "Agent terminal", the name its row and its drawer use (ThreadTerminals.tsx), so the × and the drawer's
   // Stop announce the same thing in the same words.
-  const noun = kind === "SHELL" ? "Agent terminal" : "Sub-agent"
+  const noun = kind === "SHELL" ? "Agent terminal" : kind === "MONITOR" ? "Agent monitor" : "Sub-agent"
   return api.stopBackgroundOp({ slug, id })
     .then(({ stopped, note, descendantsStopped }) => {
       // Only the KILL is worth announcing. A clear needs no toast — the row leaving IS the feedback.
@@ -46,7 +50,7 @@ export function dismissChildOp(slug: string, id: string, kind: "AGENT" | "SHELL"
       // told about leaves it waiting on a watcher that will never report — so "the worker was told" is
       // the half of this action the operator cannot otherwise verify. A sub-agent needs no such line:
       // the provider injects its own stop notification (backend/_live_shell_stop_notice.mts).
-      if (kind === "SHELL") showToast("Agent terminal stopped — the agent was told")
+      if (kind !== "AGENT") showToast(`${noun} stopped — the agent was told`)
       else showToast(descendantsStopped > 0 ? `Sub-agent and ${descendantsStopped} descendant${descendantsStopped === 1 ? "" : "s"} stopped` : "Sub-agent stopped")
       return true
     })
@@ -82,7 +86,7 @@ export function dismissChildOp(slug: string, id: string, kind: "AGENT" | "SHELL"
 export function childOpDismisser(
   slug: string,
   op: { id?: string; depth?: number; state?: string; stoppable?: boolean },
-  kind: "AGENT" | "SHELL" = "AGENT",
+  kind: DismissKind = "AGENT",
   api: Api = rpc,
 ): (() => void) | undefined {
   if (!op.id || !isDirectSubAgent(op)) return undefined

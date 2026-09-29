@@ -1617,7 +1617,7 @@ export function ThreadHeader({ slug, onStatusApplied, onClose, showReturnToQueue
               lead={<span aria-hidden className="shrink-0 opacity-60">·</span>}
               className="min-w-0 truncate"
             />
-            {/* Where the agent is working, only when that is a worktree or outside the project. */}
+            {/* Where the agent is working, only when that is off the project root (a worktree, or another folder). */}
             <ThreadCheckoutToken checkout={thread.checkout} homeDir={board?.homeDir} lead={<span aria-hidden className="shrink-0 opacity-60">·</span>} />
             <ThreadStatusLine status={thread.statusLine} lead={<span aria-hidden className="shrink-0 opacity-60">·</span>} />
           </div>

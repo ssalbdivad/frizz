@@ -288,7 +288,7 @@ export const AllQueuesCard = memo(function AllQueuesCard({
                     className="min-w-0 truncate"
                   />
                 )}
-                {/* Where the agent is working, only when that is a worktree or outside the project. */}
+                {/* Where the agent is working, only when that is off the project root (a worktree, or another folder). */}
                 <ThreadCheckoutToken checkout={thread.checkout} homeDir={project.homeDir} lead={<span aria-hidden>·</span>} />
                 {/* What the thread is doing NOW, beside the name that stays put (ThreadStatusLine). */}
                 <ThreadStatusLine status={thread.statusLine} lead={<span aria-hidden>·</span>} />

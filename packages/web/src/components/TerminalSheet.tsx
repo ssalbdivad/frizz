@@ -1,6 +1,6 @@
-import { lazy, Suspense, useRef, useState } from "react"
-import { Bot, SquareTerminal } from "lucide-react"
-import type { ThreadTerminal, WorkCheckout } from "@frizz/shared"
+import { lazy, Suspense, useRef, useState, type ReactNode } from "react"
+import { Bot, Copy, RotateCcw, SquareTerminal, Trash2 } from "lucide-react"
+import type { BackgroundShellOutputResult, ThreadTerminal, WorkCheckout } from "@frizz/shared"
 import { rpc } from "../api/rpc.ts"
 import { showToast, threadBySlug } from "../store.ts"
 import { useBoard, useShellLog } from "../hooks.ts"
@@ -10,7 +10,7 @@ import { compactElapsedSince } from "../lib/durationLabels.ts"
 import { useNowMs } from "../lib/liveClock.ts"
 import { abbreviateHome } from "../lib/paths.ts"
 import { shellBudgetLabel } from "../lib/shellBudget.ts"
-import { terminalFailed, terminalLive, terminalOf, terminalStateLabel } from "../lib/threadTerminals.ts"
+import { terminalFailed, terminalOf, terminalStateLabel } from "../lib/threadTerminals.ts"
 import { Sheet } from "./ui/Sheet.tsx"
 import { SheetHeader } from "./ui/SheetHeader.tsx"
 import { TerminalFollowUp } from "./TerminalFollowUp.tsx"
@@ -60,6 +60,50 @@ export function terminalSubtitle(cwd: string | undefined, checkout: WorkCheckout
   return `${abbreviateHome(cwd, homeDir)}${checkout?.kind === "worktree" ? " · worktree" : ""}`
 }
 
+// THE SAME LINE, laid out so a narrow drawer loses the right part of it. A path truncated at its END cut
+// away both the folder that names the worktree and the ` · worktree` after it — at 420px the one place the
+// drawer said so was gone (`/tmp/tu-v-repo/.frizz/worktr…`). So the path truncates at its START
+// (`…/.frizz/worktrees/probe`), by the right-to-left overflow idiom around an isolated left-to-right run
+// (so the slashes stay where they are), and the kind is its own run that never shrinks.
+function TerminalSubtitle({ cwd, checkout, homeDir }: { cwd: string; checkout: WorkCheckout | null | undefined; homeDir: string | undefined }): ReactNode {
+  return (
+    <span data-terminal-subtitle className="flex min-w-0" title={terminalSubtitle(cwd, checkout, homeDir)}>
+      <span dir="rtl" className="min-w-0 truncate text-left"><bdi>{abbreviateHome(cwd, homeDir)}</bdi></span>
+      {checkout?.kind === "worktree" ? <span className="shrink-0 whitespace-pre"> · worktree</span> : null}
+    </span>
+  )
+}
+
+// A HEADER ACTION'S LABEL: the words where there is room, the glyph where there is not. Both drawers'
+// headers are size containers (the wrapper around each SheetHeader), and under 28rem — a phone, or a
+// narrow split — two or three worded buttons took all the width and left the TITLE 0px wide beside them
+// (verified at 420px, 2026-09-29). Stop keeps its word at every width: it is the one action that ends
+// something, and the one a glyph would make easiest to hit by mistake.
+function NarrowGlyph({ icon: Icon, text }: { icon: typeof Copy; text: string }) {
+  return (
+    <>
+      <span className="@max-[28rem]:hidden">{text}</span>
+      <Icon aria-hidden size={13} className="hidden @max-[28rem]:block" />
+    </>
+  )
+}
+
+/** A terminal's state, its age while it runs, and (the agent's) what is left of its budget — the same
+ *  reading in both drawers' headers, joined the way every reading in the app is. */
+function StateReading({ state, age, budget, tone, attr }: { state: string; age?: string; budget?: string; tone?: "attention" | "danger"; attr: Record<string, string | undefined> }) {
+  return (
+    // min-w-0 + truncate: the reading gives way beside a long title rather than squeezing it to nothing
+    // (a `shrink-0` reading plus two header buttons left the agent drawer's title 0px wide at 420px).
+    // `shrink-[2]`: when both must give, the reading gives twice as fast — the title is which terminal
+    // this is, and the reading is repeated on its strip row.
+    <span {...attr} className="min-w-0 shrink-[2] truncate whitespace-nowrap text-[11.5px] text-muted-60">
+      <span className={tone === "attention" ? "text-attention" : tone === "danger" ? "text-danger-soft" : undefined}>{state}</span>
+      {age ? ` · ${age}` : ""}
+      {budget ? ` · ${budget}` : ""}
+    </span>
+  )
+}
+
 // The pane is keyed on the RUN, not the terminal: Restart starts a fresh process, and the browser should
 // see a fresh screen rather than the new process's output appended under the old one's.
 function HumanTerminalSheet({ id, slug, terminalId, depth, widthDepth }: { id: number; slug: string; terminalId: string; depth: number; widthDepth: number }) {
@@ -88,28 +132,31 @@ function HumanTerminalSheet({ id, slug, terminalId, depth, widthDepth }: { id: n
     <Sheet id={id} depth={depth} widthDepth={widthDepth}>
       {(close) => (
         <>
-          <SheetHeader
-            title={terminal?.command ?? "Terminal"}
-            subtitle={terminalSubtitle(terminal?.cwd, terminal?.checkout, board?.homeDir) ?? thread?.title}
-            icon={<SquareTerminal aria-hidden size={14} className="shrink-0 text-muted-60" data-terminal-owner="human" />}
-            meta={terminal ? <TerminalStateMeta terminal={terminal} /> : undefined}
-            actions={terminal ? (
-              <div className="flex shrink-0 items-center gap-1.5">
-                {terminal.state === "running" ? (
-                  <button type="button" data-terminal-stop disabled={pending !== null} onClick={() => act("stop", close)} className={stopClass}>
-                    {pending === "stop" ? "Stopping…" : "Stop"}
+          {/* A size container, so the header's secondary actions fold to glyphs when the drawer is narrow. */}
+          <div className="@container shrink-0">
+            <SheetHeader
+              title={terminal?.command ?? "Terminal"}
+              subtitle={terminal?.cwd ? <TerminalSubtitle cwd={terminal.cwd} checkout={terminal.checkout} homeDir={board?.homeDir} /> : thread?.title}
+              icon={<SquareTerminal aria-hidden size={14} className="shrink-0 text-muted-60" data-terminal-owner="human" />}
+              meta={terminal ? <TerminalStateMeta terminal={terminal} /> : undefined}
+              actions={terminal ? (
+                <div className="flex shrink-0 items-center gap-1.5">
+                  {terminal.state === "running" ? (
+                    <button type="button" data-terminal-stop disabled={pending !== null} onClick={() => act("stop", close)} className={stopClass}>
+                      {pending === "stop" ? "Stopping…" : "Stop"}
+                    </button>
+                  ) : null}
+                  <button type="button" data-terminal-restart disabled={pending !== null} onClick={() => act("restart", close)} title="Restart" aria-label="Restart" className={actionClass}>
+                    <NarrowGlyph icon={RotateCcw} text={pending === "restart" ? "Restarting…" : "Restart"} />
                   </button>
-                ) : null}
-                <button type="button" data-terminal-restart disabled={pending !== null} onClick={() => act("restart", close)} className={actionClass}>
-                  {pending === "restart" ? "Restarting…" : "Restart"}
-                </button>
-                <button type="button" data-terminal-remove disabled={pending !== null} onClick={() => act("remove", close)} className={actionClass}>
-                  {pending === "remove" ? "Removing…" : "Remove"}
-                </button>
-              </div>
-            ) : undefined}
-            onClose={close}
-          />
+                  <button type="button" data-terminal-remove disabled={pending !== null} onClick={() => act("remove", close)} title="Remove" aria-label="Remove" className={actionClass}>
+                    <NarrowGlyph icon={Trash2} text={pending === "remove" ? "Removing…" : "Remove"} />
+                  </button>
+                </div>
+              ) : undefined}
+              onClose={close}
+            />
+          </div>
           {terminal ? (
             <>
               <Suspense fallback={<div className="flex-1 bg-bg" />}>
@@ -134,15 +181,31 @@ function HumanTerminalSheet({ id, slug, terminalId, depth, widthDepth }: { id: n
   )
 }
 
+// Your terminal's reading, in the agent drawer's shape: `running · 12m`, `waiting for input · 3m`,
+// `exit 2`. It used to be a live dot and a bare state word, so how long it had run was in one drawer and
+// not the other; the header's glyph already says whose it is, and the words say how it stands.
 function TerminalStateMeta({ terminal }: { terminal: ThreadTerminal }) {
-  const failed = terminalFailed(terminal)
-  return (
-    <span className="flex shrink-0 items-center gap-1.5 whitespace-nowrap text-[11.5px] text-muted-60">
-      {terminalLive(terminal) && <span aria-hidden className="frizz-live-dot frizz-live-dot--shell" />}
-      {terminal.state === "running" && terminal.awaitingInput && <span aria-hidden className="frizz-live-dot frizz-live-dot--attention" />}
-      <span className={terminal.awaitingInput ? "text-attention" : failed ? "text-danger-soft" : undefined}>{terminalStateLabel(terminal)}</span>
-    </span>
-  )
+  const now = useNowMs()
+  const tone = terminal.awaitingInput ? "attention" : terminalFailed(terminal) ? "danger" : undefined
+  const age = terminal.state === "running" ? compactElapsedSince(terminal.startedAt, now) : undefined
+  return <StateReading state={terminalStateLabel(terminal)} age={age} tone={tone} attr={{ "data-terminal-state-reading": terminal.state }} />
+}
+
+/**
+ * What stands in an agent terminal's pane when there is nothing to draw yet — or ever. Undefined ⇒ the log.
+ *
+ * `missing` outranks `running`: a log named for this shell that can no longer be read will not start
+ * arriving, so "Waiting for the first output…" beside it was a promise nothing would keep. A read that
+ * keeps FAILING before any reply says so (the poll retries every 3s) rather than waiting forever on a reply
+ * that is not coming. Output already on screen is never replaced by any of these.
+ */
+export function agentTerminalEmpty(meta: Pick<BackgroundShellOutputResult, "state" | "missing" | "outputUnavailable"> | undefined, error: boolean, received: number): string | undefined {
+  if (!meta) return error ? "Could not read this terminal's output. Retrying…" : "Waiting for the first output…"
+  if (meta.state === "gone") return "This terminal is closed."
+  if (meta.outputUnavailable) return "Codex hands this command's output to the agent when it checks in, so Frizz can't show it here."
+  if (received > 0) return undefined
+  if (meta.missing) return "The output file is gone."
+  return meta.state === "running" ? "Waiting for the first output…" : "No output was captured."
 }
 
 // AN AGENT'S TERMINAL. Everything the header says comes from the same replies the log streams from (the
@@ -159,7 +222,7 @@ function AgentTerminalSheet({ id, slug, shellId, label, startedAt, depth, widthD
 }) {
   const board = useBoard()
   const row = threadBySlug(board, slug)?.bgShells?.find((shell) => shell.id === shellId)
-  const { stream, meta, refresh } = useShellLog(slug, shellId)
+  const { stream, meta, error, refresh } = useShellLog(slug, shellId)
   const now = useNowMs()
   const [stopping, setStopping] = useState(false)
   const [stopped, setStopped] = useState(false)
@@ -169,11 +232,7 @@ function AgentTerminalSheet({ id, slug, shellId, label, startedAt, depth, widthD
   const checkout = meta ? meta.checkout : row?.checkout
   const monitor = meta?.monitor ?? row?.monitor
   const stateWord = state === "running" ? "running" : state === "done" ? (stopped ? "stopped" : "finished") : state === "gone" ? (stopped ? "stopped" : "unavailable") : undefined
-  const reading = [
-    stateWord,
-    running ? compactElapsedSince(startedAt ?? row?.startedAt, now) : undefined,
-    running ? shellBudgetLabel(row?.budgetEndsAt, now) : undefined,
-  ].filter(Boolean).join(" · ")
+  const noun = monitor ? "Agent monitor" : "Agent terminal"
 
   // STOP FROM THE DRAWER — where a wedged watcher is actually diagnosed: you only know a shell is stuck
   // AFTER reading its output. A Claude shell stops through `subAgentStop`, which does not force-retire the
@@ -184,7 +243,7 @@ function AgentTerminalSheet({ id, slug, shellId, label, startedAt, depth, widthD
     if (stopping) return
     setStopping(true)
     if (meta?.outputUnavailable) {
-      void dismissChildOp(slug, shellId, "SHELL").then((killed) => {
+      void dismissChildOp(slug, shellId, monitor ? "MONITOR" : "SHELL").then((killed) => {
         if (killed) setStopped(true)
         setStopping(false)
         refresh()
@@ -196,8 +255,8 @@ function AgentTerminalSheet({ id, slug, shellId, label, startedAt, depth, widthD
         setStopped(true)
         // A shell has no subtree, so `note` can only be the one failure specific to it: the process is dead
         // but the AGENT could not be told, and may still be waiting on it.
-        if (note) showToast(`Agent terminal stopped. ${note}`, { duration: 7000 })
-        else showToast("Agent terminal stopped — the agent was told")
+        if (note) showToast(`${noun} stopped. ${note}`, { duration: 7000 })
+        else showToast(`${noun} stopped — the agent was told`)
         refresh()
       })
       .catch((error: unknown) => showToast(error instanceof Error ? error.message : "Could not stop this terminal"))
@@ -214,44 +273,43 @@ function AgentTerminalSheet({ id, slug, shellId, label, startedAt, depth, widthD
     }
   }
 
-  // What stands in the pane's place when there is nothing to draw yet — or ever.
-  const empty = !meta
-    ? "Waiting for the first output…"
-    : state === "gone"
-      ? "This terminal is closed."
-      : meta.outputUnavailable
-        ? "Codex doesn't share this command's output, so it can't be shown here."
-        : stream.received > 0
-          ? undefined
-          : running
-            ? "Waiting for the first output…"
-            : meta.missing
-              ? "The output file is gone."
-              : "No output was captured."
+  const empty = agentTerminalEmpty(meta, error, stream.received)
 
   return (
     <Sheet id={id} depth={depth} widthDepth={widthDepth}>
       {(close) => (
         <>
-          <SheetHeader
-            title={row?.label ?? label ?? (monitor ? "Agent monitor" : "Agent terminal")}
-            subtitle={terminalSubtitle(cwd ?? undefined, checkout, board?.homeDir)}
-            icon={<Bot aria-hidden size={14} className="shrink-0 text-muted-60" data-terminal-owner="agent" />}
-            meta={reading ? <span data-agent-terminal-state={state} className="shrink-0 whitespace-nowrap text-[11.5px] text-muted-60">{reading}</span> : undefined}
-            actions={(
-              <div className="flex shrink-0 items-center gap-1.5">
-                {meta?.command ? (
-                  <button type="button" data-agent-terminal-copy onClick={() => void copyCommand()} className={actionClass}>Copy command</button>
-                ) : null}
-                {running && meta?.stoppable ? (
-                  <button type="button" data-agent-terminal-stop disabled={stopping} onClick={stop} className={stopClass}>
-                    {stopping ? "Stopping…" : "Stop"}
-                  </button>
-                ) : null}
-              </div>
-            )}
-            onClose={close}
-          />
+          {/* A size container, so the header's secondary actions fold to glyphs when the drawer is narrow. */}
+          <div className="@container shrink-0">
+            <SheetHeader
+              title={row?.label ?? label ?? noun}
+              subtitle={cwd ? <TerminalSubtitle cwd={cwd} checkout={checkout} homeDir={board?.homeDir} /> : undefined}
+              icon={<Bot aria-hidden size={14} className="shrink-0 text-muted-60" data-terminal-owner="agent" />}
+              meta={stateWord ? (
+                <StateReading
+                  state={stateWord}
+                  age={running ? compactElapsedSince(startedAt ?? row?.startedAt, now) : undefined}
+                  budget={running ? shellBudgetLabel(row?.budgetEndsAt, now) : undefined}
+                  attr={{ "data-agent-terminal-state": state }}
+                />
+              ) : undefined}
+              actions={(
+                <div className="flex shrink-0 items-center gap-1.5">
+                  {meta?.command ? (
+                    <button type="button" data-agent-terminal-copy onClick={() => void copyCommand()} title="Copy command" aria-label="Copy command" className={actionClass}>
+                      <NarrowGlyph icon={Copy} text="Copy command" />
+                    </button>
+                  ) : null}
+                  {running && meta?.stoppable ? (
+                    <button type="button" data-agent-terminal-stop disabled={stopping} onClick={stop} className={stopClass}>
+                      {stopping ? "Stopping…" : "Stop"}
+                    </button>
+                  ) : null}
+                </div>
+              )}
+              onClose={close}
+            />
+          </div>
           {empty ? (
             <div data-agent-terminal-empty className={EMPTY}>{empty}</div>
           ) : (

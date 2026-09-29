@@ -635,7 +635,7 @@ function ShellWatchRow({ watch, thread, slug, now }: {
       mark={<Bot size={12} className={`${ON_CAP} text-shell`} />}
       name={watch.target}
       title={watch.target}
-      status={elapsed ? `running · ${elapsed}` : "running"}
+      status={elapsed || "running"}
     />
   )
 }
@@ -662,8 +662,11 @@ export function BgShellRow({ shell, slug, now, testId }: {
       name={shell.label}
       onOpen={openable ? () => pushBackgroundShellDrawer(slug, shell.id!, { label: shell.label, startedAt: shell.startedAt }) : undefined}
       title={openable ? `Open agent terminal — running for ${elapsed}` : shell.label}
-      // The remaining budget where one was declared (lib/shellBudget.ts); an unbudgeted shell has none.
-      status={[elapsed ? `running · ${elapsed}` : "running", shellBudgetLabel(shell.budgetEndsAt, now)].filter(Boolean).join(" · ")}
+      // Its age and, where one was declared, what is left of its budget (lib/shellBudget.ts). No "running":
+      // every row in this group is running (a finished shell leaves it), the sub-agent rows above state no
+      // such word either, and on the 308px fullscreen rail the word is what pushed "46m left" — the one
+      // reading with a deadline — past the status track's half-width cap into an ellipsis.
+      status={[elapsed || "running", shellBudgetLabel(shell.budgetEndsAt, now)].filter(Boolean).join(" · ")}
     />
   )
 }
@@ -680,7 +683,7 @@ export function TermWaitRow({ terminal, slug, now }: { terminal: ThreadTerminal;
       name={terminal.command}
       onOpen={() => pushTerminalDrawer(slug, terminal.id, { label: terminal.command })}
       title={`Open your terminal — ${terminal.command}`}
-      status={prompting ? <span className="text-attention">waiting for input</span> : elapsed ? `running · ${elapsed}` : "running"}
+      status={prompting ? <span className="text-attention">waiting for input</span> : elapsed || "running"}
     />
   )
 }

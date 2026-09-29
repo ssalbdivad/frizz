@@ -358,7 +358,9 @@ test("AwaitingWaitTable draws the resting card's rows off a thread that is not a
   assert.match(html, /data-wait-row="bzvtnt3ig" data-wait-kind="shell"/)
   assert.match(plain, /vite dev/)
   assert.doesNotMatch(plain, /bzvtnt3ig/, "a runtime id is never the reader's text")
-  assert.match(plain, /running · /)
+  // Its age, and no "running": every row in the group is running, as the sub-agent rows above say by not
+  // saying so — and on the fullscreen rail that word pushed the budget into the status track's ellipsis.
+  assert.doesNotMatch(plain, /running · /)
   // The divider is the caller's call — it separates prose the caller drew above.
   assert.match(html, /-mx-4 mt-3 border-t border-border/)
   assert.doesNotMatch(renderToStaticMarkup(createElement(AwaitingWaitTable, { thread: midTurn, divider: false })), /-mx-4 mt-3 border-t border-border/)
