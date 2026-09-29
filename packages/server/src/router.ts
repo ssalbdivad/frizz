@@ -56,10 +56,11 @@ import {
   AuthSnapshot,
   AccountLogoutInput,
   AccountLogoutResult,
-  StartCommandInput,
-  RunCommandInput,
-  CommandThreadInput,
-  CommandThreadResult,
+  StartTerminalInput,
+  RunTerminalInput,
+  TerminalInput,
+  StartTerminalResult,
+  ThreadWorkingDir,
   RenameThreadInput,
   AiRenameThreadInput,
   AiRenameThreadResult,
@@ -131,6 +132,7 @@ import {
   OWN_WATCH_MAX_ARMED,
   type OwnWatchView,
   humanGapNote,
+  openQuestionsNote,
   SetOwnThreadTitleInput,
   SetOwnThreadTitleResult,
   AcpAgent,
@@ -142,6 +144,7 @@ import {
 import { type AppContext } from "./context.ts"
 import { listAcpAgents } from "./backend/acp-agents.ts"
 import { sessionTitleLocked } from "./storage.ts"
+import { createThreadNamer, THREAD_NAME_MAX_WORDS, type ThreadNamer } from "./thread-names.ts"
 import { mayHaveLiveBackgroundWork, needsFreshProcessForLimit } from "./backend/usage-limit.ts"
 import { appServerTurnStalled, resolveLiveWatchTarget, resolveRecurringPrompt } from "./board.ts"
 import { runThreadUpdate } from "./frizz.ts"
@@ -156,7 +159,9 @@ import {
   readTranscriptFile,
   readCodexTranscriptFile,
   projectTranscriptPageAgentLifecycles,
+  threadTranscriptSource,
 } from "./transcript.ts"
+import { resolveThreadWorkingDir, terminalFolder } from "./thread-cwd.ts"
 import { openExternalUrl } from "./open-external.ts"
 import { openLocalFile, readLocalMarkdown, resolveOpenableFile, readLocalTextFile } from "./local-file.ts"
 import { openableFileRoots, workDirOf } from "./project.ts"
@@ -190,7 +195,7 @@ import { HOME_WORKSPACE_NAME, isHomeWorkspace, listWorkspaces } from "./home-wor
 import { expandHomeFolder, homeFolderProblem } from "./home-folder.ts"
 import { basename, dirname, isAbsolute, relative } from "node:path"
 import { existsSync, mkdirSync, rmSync, writeFileSync } from "node:fs"
-import { activeBandThread, questionRepliedPast, ProjectCard, ProjectQueue, ProjectRailCounts, PROJECT_ICON_EXTENSIONS, PROJECT_ICON_MAX_BASE64_CHARS, queuedThread, ThreadHandoff, BURIED_ANSWERS_HEADER } from "@frizz/shared"
+import { questionRepliedPast, ProjectCard, ProjectQueue, ProjectRailCounts, PROJECT_ICON_EXTENSIONS, PROJECT_ICON_MAX_BASE64_CHARS, queuedThread, ThreadHandoff, BURIED_ANSWERS_HEADER, workingThread } from "@frizz/shared"
 import { imageDimensions } from "./image-header.ts"
 import { homedir } from "node:os"
 import { chosenProjectRoot, ensureProjectIdFile, existingProjectId, isHomeDirectory, writeProjectIdFile } from "./project-root.ts"
@@ -533,6 +538,27 @@ export function cutOffHold(telemetry: SessionTelemetry | undefined): CompletionH
 // has been proved. A live resting shell is stopped and archived in one click; an executing or
 // unobservable runtime requires explicit confirmation. Adopted workers stay bound to their exact
 // runtime tuple; a same-name replacement is never killed or mistaken for the original worker.
+/** The thread's own TERMINALS, as a completion sees them (thread-terminals.ts): which are still running,
+ *  and the two halves of ending them — stop the processes, then file the rows away. */
+export interface CompletionTerminals {
+  live: readonly { command: string; shell?: boolean }[]
+  stop: () => Promise<void>
+  close: () => Promise<void>
+}
+
+// Fold a thread's running terminals into the hold. They hold Done back on their own, whatever the agent
+// is doing — a resting worker with `npm run dev` still up in a terminal the human opened is exactly the
+// case the dialog exists for — and ride along with any other evidence the hold already carries.
+function withTerminalHold(hold: CompletionHold | undefined, terminals: CompletionTerminals["live"]): CompletionHold | undefined {
+  if (terminals.length === 0) return hold
+  const base: CompletionHold = hold ?? { turnInFlight: false, unobservable: false, subAgents: [], subAgentCount: 0, bgShells: [], bgShellCount: 0 }
+  return {
+    ...base,
+    terminals: holdOps(terminals.map((terminal) => ({ label: terminal.shell ? `${terminal.command} (shell)` : terminal.command, state: "running" as const }))),
+    terminalCount: terminals.length,
+  }
+}
+
 export async function completeRegisteredThread(
   storage: Pick<Storage,
     "getAdoptionClaim" | "getAdoptionRuntimeSnapshot" | "getSession" | "completeIfCurrent"
@@ -544,6 +570,7 @@ export async function completeRegisteredThread(
   codex?: CodexTurnTerminator,
   claudeBroker?: ClaudeBrokerTerminator,
   acp?: AcpTurnTerminator,
+  terminals?: CompletionTerminals,
 ): Promise<{ needsConfirmation: boolean; hold?: CompletionHold }> {
   const binding = adoptionRuntimeBinding(storage, row)
   if (binding.kind === "conflict") {
@@ -576,7 +603,10 @@ export async function completeRegisteredThread(
 
   // A live runtime is asked about when it is still working; a dead one when it never finished. The
   // human's confirmation (`terminateLive`) clears both.
-  const hold = terminateLive ? undefined : live ? completionConfirmationHold(telemetry) : cutOffHold(telemetry)
+  // Running TERMINALS are asked about in either case: they are the human's own processes, and Done ends them.
+  const hold = terminateLive
+    ? undefined
+    : withTerminalHold(live ? completionConfirmationHold(telemetry) : cutOffHold(telemetry), terminals?.live ?? [])
   if (hold) return { needsConfirmation: true, hold }
   if (live) {
     // Ordering, both paths: TERMINATE FIRST, record Done only after. A stop that throws must leave the
@@ -593,10 +623,16 @@ export async function completeRegisteredThread(
     }
   }
 
+  // The terminals go down with the worker, before Done is recorded, for the same reason the worker does:
+  // nothing live is ever filed under Done. Their ROWS are filed away only once Done has been recorded, so
+  // a completion refused below (the thread was resumed meanwhile) leaves them in its strip, stopped and
+  // restartable, rather than hidden under a thread that is still open.
+  await terminals?.stop()
   const generation = row.runtime_generation ?? 0
   if (!storage.completeIfCurrent(row.slug, row.session_id, generation)) {
     throw new Error("This thread resumed or was replaced while it was being completed; the new worker was preserved")
   }
+  await terminals?.close()
   return { needsConfirmation: false }
 }
 
@@ -876,6 +912,15 @@ export function handoffOf(messages: readonly TranscriptMessage[]): ThreadHandoff
   }
 }
 
+/** Is this the human's turn, for the question "what did the human last SAY that this handoff answers"?
+ *
+ *  An answers delivery COUNTS here, and it differs on purpose from the two readings that no longer count
+ *  it — the tailer's `lastHumanAt` (the clock questionRepliedPast reads) and the web's questionAnchor,
+ *  where only a typed turn is the human moving the conversation and an answer to one card must not
+ *  release or strand the others (2026-09-29). This one pairs the queue card's quoted ask with the reply
+ *  under it. Answers now arrive one question at a time and the worker rests after acting on each, so
+ *  the newest handoff is usually the reply TO an answer; skipping the answer would quote the typed
+ *  message before it, over a reply about something else. */
 function isHumanTurn(m: TranscriptMessage): boolean {
   if (m.role !== "user" || m.kind || m.queued || m.peerFrom || m.agentInstruction) return false
   const said = (m.displayText ?? m.text).trim()
@@ -885,6 +930,11 @@ function isHumanTurn(m: TranscriptMessage): boolean {
 }
 
 export function createRouter(ctx: AppContext) {
+  // The name registry every title writer checks (thread-names.ts). A hand-built test context may carry
+  // none; uniqueness then reads storage and the tailer directly, which is all it ever needs — only the
+  // mint and the AI rename need the model.
+  const fallbackNamer = createThreadNamer({ storage: ctx.storage, aiTitleOf: (slug) => ctx.tailer?.get(slug)?.aiTitle })
+  const threadNamer = (): ThreadNamer => ctx.threadNamer ?? fallbackNamer
   // ONE DELIVERY PER deliveryId. The ledger guard inside `followUp` (`hasDelivery`) is not enough for a
   // broker thread, on two counts, both measured 2026-09-24 against a real broker worker with the
   // page-reload replay (web lib/pendingSends.ts) as the repeat:
@@ -926,6 +976,21 @@ export function createRouter(ctx: AppContext) {
   // Roots for the file-OPEN action + the inline-code path classifier (see openableFileRoots): shared so
   // a path the resolver blesses is exactly a path the open action will accept.
   const openRoots = openableFileRoots(ctx.project)
+
+  // Where a thread's agent is working NOW (thread-cwd.ts) — the folder a terminal opened on it starts in.
+  // Read on demand, never per board build: it touches the transcript file.
+  function threadWorkingDir(slug: string): ThreadWorkingDir {
+    const row = ctx.storage.getSession(slug)
+    const backend = row?.backend === "codex" ? "codex" : row?.backend === "acp" ? "acp" : "claude"
+    const source = row ? threadTranscriptSource(ctx.project, ctx.storage, slug, ctx.backendFor) : undefined
+    return resolveThreadWorkingDir({
+      projectDir: workDir,
+      backend,
+      transcriptPath: source?.path,
+      codexMessages: source && backend === "codex" ? () => readCodexTranscriptFile(source.path, source.nativeId) : undefined,
+      sessionCwd: row && backend === "codex" ? ctx.codexAppServer?.binding(slug, row.session_id)?.cwd : undefined,
+    })
+  }
 
   // An auto-titled registry row is session-first authority. A same-slug `.frizz/<slug>.md` may have
   // been planted independently and is never a readable or writable extension of that session.
@@ -1068,8 +1133,9 @@ export function createRouter(ctx: AppContext) {
   }
 
   // This thread's OPEN questions, in the shape the worker's read-back, the board and the card all use.
-  // Each carries `repliedPast` exactly as the board's does, so the worker reading its own questions back
-  // learns which ones the human moved on from — the ones nothing waits on any more.
+  // Each carries `repliedPast` exactly as the board's does — information only since 2026-09-29: the
+  // worker reading its questions back learns which ones the human has typed past, and decides for itself
+  // whether that message made any of them moot (shared questionRepliedPast).
   function openQuestionViews(slug: string): RegisteredQuestionView[] {
     const out: RegisteredQuestionView[] = []
     const lastHumanAt = ctx.tailer.get(slug)?.lastHumanAt
@@ -1081,21 +1147,29 @@ export function createRouter(ctx: AppContext) {
     return out
   }
 
-  /** The question on this thread that `q` would re-ask after the human replied past it, if any: one that
-   *  was still unanswered when the human's newest turn landed (open, dismissed, or withdrawn only after
-   *  that turn — a withdrawal before it was the worker's own call, never a pivot) and whose question text
-   *  matches with case, punctuation and spacing folded away. Text only, not option labels: two different
-   *  questions routinely share "Yes"/"No" or "Push it"/"Keep it local", and refusing those is worse than
-   *  missing a reworded re-ask, which the contract and this refusal's own message already rule out. */
-  function repliedPastTwin(slug: string, q: AskedQuestion): ThreadQuestionRow | undefined {
+  /** The question on this thread that `q` would re-ask after a PIVOT, if any, matched on its question
+   *  text with case, punctuation and spacing folded away. Two pivots count, and both are somebody's
+   *  explicit act — never a timestamp (a typed reply alone releases nothing since 2026-09-29, see shared
+   *  questionRepliedPast):
+   *
+   *    · the HUMAN DISMISSED it — the × says "decide it yourself", and the answer row says "do not re-ask";
+   *    · the WORKER WITHDREW it after the human's newest TYPED turn — the pivot the worker itself declared
+   *      on reading that message (openQuestionsNote asks it to). A withdrawal from before that turn was
+   *      the worker's own call about its own work, and the human has spoken since, so it may ask again.
+   *
+   *  That second one is what stops the failure d76c845d refused in the first place: a worker `unask`ing
+   *  the cards the human's message made moot and re-registering them word for word under it. Text only,
+   *  not option labels: two different questions routinely share "Yes"/"No" or "Push it"/"Keep it local",
+   *  and refusing those is worse than missing a reworded re-ask, which the contract already rules out. */
+  function pivotTwin(slug: string, q: AskedQuestion): ThreadQuestionRow | undefined {
     const lastHumanAt = ctx.tailer.get(slug)?.lastHumanAt
-    if (!lastHumanAt) return undefined
-    const humanMs = Date.parse(lastHumanAt)
+    const humanMs = lastHumanAt ? Date.parse(lastHumanAt) : Number.NaN
     const fold = (s: string) => s.toLowerCase().replace(/[^\p{L}\p{N}]+/gu, " ").trim()
     const text = fold(q.question)
     return ctx.storage.listThreadQuestions(slug).find((row) => {
-      if (row.state === "answered" || !questionRepliedPast(row, lastHumanAt)) return false
-      if (row.state === "withdrawn" && (row.settled_at ?? 0) <= humanMs) return false
+      const pivoted = row.state === "dismissed" ||
+        (row.state === "withdrawn" && Number.isFinite(humanMs) && (row.settled_at ?? 0) > humanMs)
+      if (!pivoted) return false
       const spec = parseQuestionSpec(row.spec)
       return spec !== undefined && fold(spec.question) === text
     })
@@ -1913,7 +1987,18 @@ export function createRouter(ctx: AppContext) {
         // carries the note, and the note names frizz as its author because the message it rides on is
         // not frizz's.
         const gapNote = humanGapNote(Date.now(), ctx.tailer.get(input.slug)?.lastAssistantAt)
-        const messageForWorker = gapNote ? `${input.message}\n\n${gapNote}` : input.message
+        // …AND THE QUESTIONS STILL OPEN, the same way and for the same reader. A typed message no longer
+        // releases open questions by timestamp (shared questionRepliedPast, 2026-09-29): it released seven
+        // the human still meant to answer when they typed a side question. The worker reads the message
+        // and decides which ones it made moot — so it is told, here, at the moment it reads it, which ones
+        // are open and by what id `unask` takes them. Appended AFTER the gap note, so that note's "the
+        // message above" still means the human's words.
+        const questionsNote = openQuestionsNote(ctx.storage.listThreadQuestions(input.slug, { openOnly: true }).flatMap((q) => {
+          const spec = parseQuestionSpec(q.spec)
+          return spec ? [{ id: q.id, question: spec.question }] : []
+        }))
+        const riders = [gapNote, questionsNote].filter((note): note is string => note !== undefined)
+        const messageForWorker = riders.length > 0 ? `${input.message}\n\n${riders.join("\n\n")}` : input.message
         if (row) reopenArchivedThreadForFollowUp(ctx, row)
         // Un-park HERE, above the runtime branches, for the same reason the reopen is here: a broker
         // Claude row and an app-server Codex row both return from their own branch below, so anything
@@ -2492,6 +2577,8 @@ export function createRouter(ctx: AppContext) {
         // path creates has `state = "open"` written explicitly, so this RPC set a bit nothing reads and
         // answered success while the card stayed exactly where it was. Caught 2026-08-08 archiving a
         // thread over the RPC: `archived = 1` in SQLite, `archived: false` on the board, forever.
+        // Filed under Done, so its terminals stop with it, as they do for Mark as done (completeThread).
+        await ctx.terminalRunner.closeThread(input.slug)
         ctx.storage.setState(input.slug, "archived")
         const t = (await ctx.board.snapshot()).threads.find((x) => x.id === input.slug)
         if (!isAutoTitledSession(input.slug) && t && t.status !== "done" && t.status !== "dismissed") {
@@ -2529,18 +2616,9 @@ export function createRouter(ctx: AppContext) {
     setThreadState: mutation({
       input: z.object({ slug: ThreadSlug, state: z.enum(["open", "archived"]) }).strict(),
       handler: async ({ input }) => {
-        // A terminal command thread shares the lifecycle (command-threads.ts). Marking a RUNNING one done
-        // stops it first, so nothing live is filed under Done. It used to refuse instead, which left a
-        // run parked at a 2FA prompt — queued as waiting for input, card showing Mark as done — with a
-        // button that only answered "Stop the command before marking it done" (maintainer 2026-09-24).
-        const command = ctx.commandRunner.threads().find((t) => t.id === input.slug)
-        if (command) {
-          if (input.state === "archived" && command.command?.state === "running") await ctx.commandRunner.stop(input.slug)
-          ctx.storage.setCommandThreadState(input.slug, input.state)
-          ctx.board.refresh()
-          return
-        }
         if (!ctx.storage.getSession(input.slug)) throw new Error(`no session registered for ${input.slug}`)
+        // Filed under Done ⇒ its terminals stop first (thread-terminals.ts), so nothing live is filed with it.
+        if (input.state === "archived") await ctx.terminalRunner.closeThread(input.slug)
         ctx.storage.setState(input.slug, input.state)
         ctx.board.refresh() // storage-only change — overlay is enough
       },
@@ -2556,6 +2634,11 @@ export function createRouter(ctx: AppContext) {
         const row = currentOwnedSession(input.slug, input.sessionId)
         const result = await completeRegisteredThread(
           ctx.storage, row, input.terminateLive, cachedLivenessTerminator, ctx.tailer.get(input.slug), ctx.codexAppServer, ctx.claudeBroker, ctx.acpBridge,
+          {
+            live: ctx.terminalRunner.live(input.slug),
+            stop: () => ctx.terminalRunner.stopThread(input.slug),
+            close: () => ctx.terminalRunner.closeThread(input.slug),
+          },
         )
         if (!result.needsConfirmation) ctx.board.refresh()
         return result
@@ -3042,7 +3125,8 @@ export function createRouter(ctx: AppContext) {
     }),
 
     // ---- A BACKGROUND SHELL'S RUNTIME BUDGET (`mcp__frizz__extend_shell`) --------------------------
-    // Every shell carries one (shell-budget.ts); this moves its end to `for` from NOW. Same caller and
+    // Sets a shell's budget to end `for` from NOW — moving a declared one, or giving one to a shell that
+    // was launched without (shell-budget.ts: there is no default). Same caller and
     // same rules as the watches around it: slug-only, and the handle checked against what is actually
     // RUNNING rather than stored on trust — an extension of a shell that has finished would be a row
     // nothing ever reads, and the worker would believe it bought time for work that is already over.
@@ -3065,8 +3149,10 @@ export function createRouter(ctx: AppContext) {
             "stopped), or the id is wrong. Call `activity` for the exact ids of everything you have running.",
           )
         }
-        if (shell.budgetMs === undefined) {
-          throw new Error(`\`${wanted}\` carries no runtime budget (a Monitor runs until its own timeout or \`TaskStop\`), so there is nothing to extend.`)
+        // A shell launched WITHOUT a budget is extendable — this is how it gets one (and the only way a
+        // codex exec ever does). A Monitor is not: it runs to its own `timeout_ms` or `persistent` session.
+        if (shell.monitor) {
+          throw new Error(`\`${wanted}\` is a Monitor, which carries no runtime budget (it runs until its own timeout or \`TaskStop\`), so there is nothing to extend.`)
         }
         const asked = parseAwaitingDurationRaw(input.for)
         if (asked === null) throw new Error(`\`for: ${input.for}\` is not a duration — give one like \`30m\` or \`2h\` (max 24h)`)
@@ -3133,21 +3219,21 @@ export function createRouter(ctx: AppContext) {
         // free-text box, silently).
         const faults = input.questions.flatMap((q) => askedQuestionFaults(q))
         if (faults.length > 0) throw new Error(faults.join("\n"))
-        // A PIVOT STICKS: a question the human replied past is never asked again (maintainer 2026-09-28,
-        // after a worker `unask`ed both of its replied-past cards and re-registered them word for word
-        // under the human's unrelated next request). The contract used to allow exactly that "when the
-        // new work cannot proceed without the answer", and workers read every pivot as that case. The
-        // old card is still up and answerable where it was asked, so a re-ask only ever duplicates it.
+        // A PIVOT STICKS: a question set aside is never asked again (maintainer 2026-09-28, after a worker
+        // `unask`ed both of its stale cards and re-registered them word for word under the human's
+        // unrelated next request). "Set aside" is an act since 2026-09-29 — the human's ×, or the worker's
+        // own `unask` after the human's newest typed message — never a timestamp (see pivotTwin).
         const reasked = input.questions.flatMap((q) => {
-          const prior = repliedPastTwin(input.slug, q)
-          return prior ? [`"${q.question.slice(0, 120)}" repeats ${prior.id}, which the human replied past without answering.`] : []
+          const prior = pivotTwin(input.slug, q)
+          if (!prior) return []
+          const why = prior.state === "dismissed" ? "which the human dismissed" : "which you withdrew after the human's newest message"
+          return [`"${q.question.slice(0, 120)}" repeats ${prior.id}, ${why}.`]
         })
         if (reasked.length > 0) {
           throw new Error(
-            `${reasked.join("\n")}\n\nA reply past a question is a pivot: the human has moved on, so the ` +
-            "question is not asked again, in these words or any others. Its card stays where it was asked, still " +
-            "answerable, and an answer reaches you as its own wake. Do what the human's newest message " +
-            "asks, decide anything it needs yourself, and say which way you went in your write-up.",
+            `${reasked.join("\n")}\n\nA question set aside is not asked again, in these words or any others: ` +
+            "decide it yourself — do what the human's newest message asks — and say which way you went in " +
+            "your write-up.",
           )
         }
         // NO CAP ON THE OPEN SET. Twelve was refused here until 2026-09-03 ("a worker holding more than
@@ -3248,12 +3334,10 @@ export function createRouter(ctx: AppContext) {
         // can, and the registration IS that judgement. Gating on raw liveness would make `done`
         // unreachable for any thread that left a log tail running.
         //
-        // A QUESTION THE HUMAN REPLIED PAST DOES NOT BLOCK. They moved on without answering it, which is a
-        // pivot (questionRepliedPast): its card stays up where it was asked, still answerable, and `done`
-        // must not force the worker to withdraw it just to finish the work the human pivoted to.
-        const lastHumanAt = ctx.tailer.get(input.slug)?.lastHumanAt
+        // EVERY OPEN QUESTION BLOCKS, including one the human has typed past (2026-09-29, shared
+        // questionRepliedPast): whether that message made it moot is the worker's call, and `unask` is how
+        // it makes it — so a question it means to leave behind is one it withdraws, by name, first.
         const blockingQuestions = ctx.storage.listThreadQuestions(input.slug, { openOnly: true }).flatMap((q) => {
-          if (questionRepliedPast(q, lastHumanAt)) return []
           const spec = parseQuestionSpec(q.spec)
           return spec ? [{ id: q.id, question: spec.question }] : []
         })
@@ -3323,12 +3407,48 @@ export function createRouter(ctx: AppContext) {
     // worker comes to a new rest. No deadline, no scheduler, no reaper: the session stays alive (it is
     // ALREADY resting) and the snooze expires itself on the next rest. Session-guarded so a stale tab
     // cannot snooze whatever now owns the slug.
+    //
+    // `clear` is the queue card's Undo (2026-09-29): the card fades on the click, and a mis-click on a
+    // snooze with no deadline would otherwise leave the thread parked until its work happens to report.
     snoozeAwaitingBackground: mutation({
-      input: z.object({ slug: ThreadSlug, sessionId: z.string().min(1) }).strict(),
+      input: z.object({ slug: ThreadSlug, sessionId: z.string().min(1), clear: z.boolean().optional() }).strict(),
       handler: async ({ input }) => {
         const row = currentOwnedSession(input.slug, input.sessionId)
+        if (input.clear) {
+          ctx.storage.setBgSnoozeRestedAtIfCurrent(input.slug, row.session_id, row.runtime_generation ?? 0, null)
+          ctx.board.refresh()
+          return
+        }
         if (!row.rested_at) throw new Error("This thread is not at rest; nothing to snooze")
         if (!ctx.storage.setBgSnoozeRestedAtIfCurrent(input.slug, row.session_id, row.runtime_generation ?? 0, row.rested_at)) {
+          throw new Error("This thread changed before it could be snoozed")
+        }
+        ctx.board.refresh()
+      },
+    }),
+
+    // SNOOZE UNTIL ALL SUB-AGENTS RETURN — the event-snooze above, widened from ONE rest to the whole
+    // batch. That one is spent by the parent's next rest, and a parent resting on N background children
+    // rests N times, so a human snoozing it met the card again after every return. This arms the instant
+    // instead, and the board holds the thread out of the queue while some direct sub-agent has been running
+    // ever since (board.subAgentsSnoozeHolds): each return still wakes the parent, and only the last one —
+    // or a question, a crash, a done, or the human speaking to it — brings the card back.
+    //
+    // Refused with nothing running: there would be no batch to wait out, and the arming would be inert
+    // anyway. `clear` is the card's Undo.
+    snoozeUntilSubAgentsReturn: mutation({
+      input: z.object({ slug: ThreadSlug, sessionId: z.string().min(1), clear: z.boolean().optional() }).strict(),
+      handler: async ({ input }) => {
+        const row = currentOwnedSession(input.slug, input.sessionId)
+        const generation = row.runtime_generation ?? 0
+        if (input.clear) {
+          ctx.storage.setSubAgentsSnoozedAtIfCurrent(input.slug, row.session_id, generation, null)
+          ctx.board.refresh()
+          return
+        }
+        const running = (ctx.tailer.get(input.slug)?.subAgents ?? []).some((agent) => isDirectSubAgent(agent) && agent.state === "running")
+        if (!running) throw new Error("No sub-agent is running; there is nothing to wait for")
+        if (!ctx.storage.setSubAgentsSnoozedAtIfCurrent(input.slug, row.session_id, generation, new Date().toISOString())) {
           throw new Error("This thread changed before it could be snoozed")
         }
         ctx.board.refresh()
@@ -3357,6 +3477,8 @@ export function createRouter(ctx: AppContext) {
           throw new Error("only a stalled or exited session can be dismissed — archive a live one instead")
         }
         await stopAndForgetRegisteredRuntime(ctx.storage, row, cachedLivenessTerminator, ctx.codexAppServer, ctx.claudeBroker, ctx.acpBridge)
+        // Its terminals have nothing left to show them in: stop them and drop the rows.
+        await ctx.terminalRunner.forgetThread(input.slug)
         ctx.tailer.forget(input.slug)
         ctx.board.refresh() // storage-only change — the removed row fans out as a delete delta on SSE
       },
@@ -3541,6 +3663,12 @@ export function createRouter(ctx: AppContext) {
       input: RenameThreadInput,
       handler: async ({ input }) => {
         if (!ctx.storage.getSession(input.slug)) throw new Error(`thread ${input.slug} is not editable`)
+        // Names are never duplicated (thread-names.ts), and a human's rename is no exception: the header
+        // editor shows this message inline and keeps the draft, so the human picks another.
+        // The NAME leads the message: the editor shows it truncated beside the box, and the name is the
+        // part that says what to avoid.
+        const holder = threadNamer().holder(input.title, input.slug)
+        if (holder) throw new Error(`“${holder.name}” is already another open thread's name`)
         ctx.storage.setTitle(input.slug, input.title)
         ctx.board.refresh() // storage-only overlay; publishes an immediate board delta to every client
       },
@@ -3559,16 +3687,30 @@ export function createRouter(ctx: AppContext) {
       handler: async ({ input }) => {
         const row = ctx.storage.getSession(input.slug)
         if (!row) throw new Error(`thread ${input.slug} is not registered`)
+        const namer = threadNamer()
+        const current = () => namer.threads().find((t) => t.slug === input.slug)?.name ?? (ctx.storage.getSession(input.slug)?.title?.trim() || input.slug)
         // A human who has renamed the thread owns its name. Report that as a REFUSAL rather than a
         // throw: the worker did nothing wrong, and an error is the one answer it would retry.
         const lockedByHuman = sessionTitleLocked(row)
-        const accepted = lockedByHuman ? false : ctx.storage.setAgentTitle(input.slug, input.title)
-        if (accepted) ctx.board.refresh()
-        return {
-          accepted,
-          title: accepted ? input.title : (ctx.storage.getSession(input.slug)?.title?.trim() || input.slug),
-          lockedByHuman,
+        if (lockedByHuman) return { accepted: false, title: current(), lockedByHuman }
+        // The worker gets ONE rename, and a name is one or two words that no other open thread carries
+        // (thread-names.ts). Each refusal says what to do next; only the spent rename says "stop".
+        const refuse = (refusal: string) => ({ accepted: false, title: current(), lockedByHuman: false, refusal })
+        if (row.title_worker_renamed) {
+          return refuse(`you already renamed this thread once, and a name is stable after that. It stays "${current()}"; do not call this again.`)
         }
+        if (input.title.split(/\s+/).length > THREAD_NAME_MAX_WORDS) {
+          return refuse(`"${input.title}" is longer than two words. A name is one or two words naming the subject (e.g. "Shell budgets"); call again with one.`)
+        }
+        const holder = namer.holder(input.title, input.slug)
+        if (holder) {
+          return refuse(`another open thread is already named "${holder.name}" (thread ${holder.slug}). Names are never duplicated; call again with a different one- or two-word subject that sets this thread apart.`)
+        }
+        const accepted = ctx.storage.setAgentTitle(input.slug, input.title)
+        if (accepted) ctx.board.refresh()
+        return accepted
+          ? { accepted, title: input.title, lockedByHuman: false }
+          : { accepted, title: current(), lockedByHuman: sessionTitleLocked(ctx.storage.getSession(input.slug) ?? row) }
       },
     }),
 
@@ -3589,6 +3731,8 @@ export function createRouter(ctx: AppContext) {
         if (!bridge || row.claude_runtime !== "broker") {
           throw new Error("Only a running broker-backed Claude thread can be renamed by the provider")
         }
+        const namer = ctx.threadNamer
+        if (!namer?.available) throw new Error("Claude is not available to name this thread")
         // What to name it FROM: the thread's own opening request, which is what the daemon seeds from.
         // The live tail would name the session after whatever was said most recently, which for a long
         // thread is a side conversation rather than the work — until 2026-08-24 this read the tail's
@@ -3599,11 +3743,15 @@ export function createRouter(ctx: AppContext) {
         const opening = readTranscript(ctx.project, row.session_id).find((m) => m.role === "user")
         const description =
           opening?.displayText?.trim() || opening?.text?.trim() || row.title?.trim() || input.slug
-        const title = await bridge.renameSession({ threadSlug: input.slug, sessionId: row.session_id, description })
-        if (!title?.trim()) throw new Error("Claude did not return a title for this thread")
-        ctx.storage.setTitle(input.slug, title.trim())
+        // Frizz's own namer, not the provider's titler (`bridge.renameSession`): that one runs Claude
+        // Code's fixed prompt — two to five words, every instruction in its input treated as data — so it
+        // can neither keep a name to one or two words nor be told which names are taken (thread-names.ts).
+        const named = await namer.name(description, input.slug)
+        // Re-checked against the registry as it stands NOW, synchronously with the write.
+        const title = namer.holder(named, input.slug) ? namer.distinct(named, description, input.slug) : named
+        ctx.storage.setTitle(input.slug, title)
         ctx.board.refresh()
-        return { title: title.trim() }
+        return { title }
       },
     }),
 
@@ -3695,49 +3843,65 @@ export function createRouter(ctx: AppContext) {
       },
     }),
 
-    // TERMINAL COMMAND THREADS — the prompt box's Terminal tab (command-threads.ts). `commandStart`
-    // runs a shell command in a pty in the project directory and puts it on the board; the browser
-    // attaches to it over /term/<slug>.
-    commandStart: mutation({
-      input: StartCommandInput,
-      output: CommandThreadResult,
-      handler: async ({ input }) => ctx.commandRunner.start(input.command),
+    // THREAD TERMINALS (thread-terminals.ts). A terminal is opened ON a thread, from its drawer, and runs
+    // in the folder that thread's agent is working in; the browser attaches to it over /term/<id>.
+    //
+    // Where a new terminal would start: the agent's own latest reading of its folder, lifted to the
+    // checkout it lies in (thread-cwd.ts). The drawer's folder field opens on this, for the human to
+    // confirm or edit before anything runs.
+    threadWorkingDir: query({
+      input: SlugInput,
+      output: ThreadWorkingDir,
+      handler: async ({ input }) => threadWorkingDir(input.slug),
     }),
 
-    commandStop: mutation({
-      input: CommandThreadInput,
+    terminalStart: mutation({
+      input: StartTerminalInput,
+      output: StartTerminalResult,
+      handler: async ({ input }) => {
+        const row = ctx.storage.getSession(input.slug)
+        if (!row) throw new Error(`no session registered for ${input.slug}`)
+        // Checked here, not left to the pty: a folder that does not exist would otherwise surface as a
+        // spawn failure on a terminal that already has a row.
+        const cwd = input.cwd ? terminalFolder(input.cwd) : threadWorkingDir(input.slug).dir
+        return ctx.terminalRunner.start({ parent: input.slug, command: input.command, cwd })
+      },
+    }),
+
+    terminalStop: mutation({
+      input: TerminalInput,
       output: z.object({}),
       handler: async ({ input }) => {
-        if (!ctx.commandRunner.has(input.slug)) throw new Error(`no terminal command ${input.slug}`)
-        await ctx.commandRunner.stop(input.slug)
+        if (!ctx.terminalRunner.has(input.id)) throw new Error(`no terminal ${input.id}`)
+        await ctx.terminalRunner.stop(input.id)
         return {}
       },
     }),
 
-    commandRestart: mutation({
-      input: CommandThreadInput,
+    terminalRestart: mutation({
+      input: TerminalInput,
       output: z.object({}),
       handler: async ({ input }) => {
-        await ctx.commandRunner.restart(input.slug)
+        await ctx.terminalRunner.restart(input.id)
         return {}
       },
     }),
 
-    // The drawer's follow-up line: the thread's next command, run where its last one finished.
-    commandRun: mutation({
-      input: RunCommandInput,
+    // The terminal drawer's `$` line once a run finished: its next command, in the same folder.
+    terminalRun: mutation({
+      input: RunTerminalInput,
       output: z.object({}),
       handler: async ({ input }) => {
-        await ctx.commandRunner.run(input.slug, input.command)
+        await ctx.terminalRunner.run(input.id, input.command)
         return {}
       },
     }),
 
-    commandRemove: mutation({
-      input: CommandThreadInput,
+    terminalRemove: mutation({
+      input: TerminalInput,
       output: z.object({}),
       handler: async ({ input }) => {
-        await ctx.commandRunner.remove(input.slug)
+        await ctx.terminalRunner.remove(input.id)
         return {}
       },
     }),
@@ -3759,8 +3923,9 @@ export function createRouter(ctx: AppContext) {
      *
      * The rail draws ONE yellow badge per project whose number is the SUM, with a spinner lapping it
      * while `running` is non-zero, and its tooltip splits the two (issue #41: which projects still
-     * have work in flight, at a glance). `running` is `activeBandThread` — the rows the sidebar draws
-     * below the rule — so the rail and the sidebar beside it count with one rule.
+     * have work in flight, at a glance). `running` is `workingThread` — the Active band's rows, plus
+     * any Done row whose session is still moving (shared doneButRunning), each of which wears a spinner
+     * in the list beside it — so the rail and the list count with one rule.
      *
      * MACHINE-WIDE, answered from the boards this process has OPEN. A queue count is a board fact:
      * `needsYou` is derived from the tailer's live view of each session, so a project with no board
@@ -3788,7 +3953,7 @@ export function createRouter(ctx: AppContext) {
             const { threads } = await board.snapshot()
             counts[project.id] = {
               queued: threads.filter(queuedThread).length,
-              running: threads.filter(activeBandThread).length,
+              running: threads.filter(workingThread).length,
             }
           } catch {
             // A board that is stopping mid-walk (its project is being deactivated) is a project with
@@ -3823,9 +3988,8 @@ export function createRouter(ctx: AppContext) {
             const snapshot = await board.snapshot()
             let doneCount = 0
             const threads = snapshot.threads.filter((thread) => {
-              // A terminal command thread queues like a session once its run ends (queuedThread), and
-              // the rail badge counts it — so the page that lists the queue must carry it too.
-              if ((thread.kind !== "session" && thread.kind !== "command") || thread.foreign) return false
+              // A thread's terminals ride its row (`terminals`), so the session rows are the whole list.
+              if (thread.kind !== "session" || thread.foreign) return false
               // Archived is Done, running or not — only the human reopens it (web groups.ts `sectionOf`).
               if (thread.state === "archived") {
                 doneCount++

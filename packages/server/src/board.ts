@@ -7,12 +7,13 @@ import {
 import { homedir } from "node:os"
 import { dirname, join } from "node:path"
 import watcher from "@parcel/watcher"
-import type { BoardSnapshot, ClaudeModel, ThreadView, RuntimeState, ThreadRecurringPrompt, ProviderError } from "@frizz/shared"
+import type { BoardSnapshot, ClaudeModel, ThreadTerminal, ThreadView, RuntimeState, ThreadRecurringPrompt, ProviderError } from "@frizz/shared"
 import { AskedQuestionSchema, BoardDiffer, PermissionMode, SnoozeUntil, ThreadSlug, isDirectSubAgent, questionAnswerMessage, questionRepliedPast, questionsCancelledWakeMessage, type AskedQuestion, type PermissionMode as PermissionModeValue, type QuestionAnswer, type QuestionDismissal } from "@frizz/shared"
 import type { Bus } from "./bus.ts"
 import { workDirOf, type Project } from "./project.ts"
 import { isHeadlessRow, isBrokerClaudeRow, sessionTitleLocked, type ThreadQuestionRow } from "./storage.ts"
-import type { Storage, SessionRow, PrWatchRow, ThreadTimerRow, ThreadWatchRow, ThreadLinkRow } from "./storage.ts"
+import type { Storage, SessionRow, PrWatchRow, ThreadTimerRow, ThreadWatchRow, ThreadLinkRow, ShellBudgetRow } from "./storage.ts"
+import { resolveShellBudget, shellBudgetRecordOf } from "./shell-budget.ts"
 import { threadLinkView } from "./thread-links.ts"
 import { normalizeObservedThreadModel } from "./backend/thread-profiles.ts"
 import { claudeModelStanding } from "./backend/claude-model-upgrade.ts"
@@ -347,6 +348,25 @@ function stampStoppable(agents: ThreadView["subAgents"], row: SessionRow): Threa
 function stampStoppableShells(shells: ThreadView["bgShells"], row: SessionRow): ThreadView["bgShells"] {
   if (isHeadlessRow(row)) return shells
   return shells.map((shell) => (shell.stoppable ? { ...shell, stoppable: false } : shell))
+}
+
+// WHEN EACH RUNNING SHELL'S BUDGET RUNS OUT, for the card's "2h left" — resolved by the SAME function the
+// scheduler enforces with (shell-budget.ts resolveShellBudget), off the rows this build already read, so
+// the reading on screen is the deadline that will actually be acted on: the declared budget, an
+// `extend_shell`, or an armed watch holding it later. An unbudgeted shell gets nothing, and reads as such.
+export function stampShellBudgets(
+  shells: ThreadView["bgShells"],
+  budgets: readonly ShellBudgetRow[] | undefined,
+  watches: readonly ThreadWatchRow[] | undefined,
+): ThreadView["bgShells"] {
+  if (!shells.some((shell) => shell.state === "running")) return shells
+  const armed = (watches ?? []).map((w) => ({ kind: w.kind, target: w.target, expiresAtMs: w.expires_at }))
+  return shells.map((shell) => {
+    if (shell.state !== "running" || !shell.id) return shell
+    const record = shellBudgetRecordOf(budgets?.find((b) => b.shell_id === shell.id))
+    const budget = resolveShellBudget(shell, record, armed)
+    return budget ? { ...shell, budgetEndsAt: new Date(budget.deadlineMs).toISOString() } : shell
+  })
 }
 
 // The thread's OWN dispatched work is still live — a sub-agent OR a launched background shell. It drives
@@ -783,6 +803,102 @@ function bgSnoozeArmed(row: Pick<SessionRow, "bg_snooze_rested_at" | "rested_at"
   return row.bg_snooze_rested_at != null && row.rested_at != null && row.bg_snooze_rested_at === row.rested_at
 }
 
+// ---- THE SUB-AGENT WAIT: which children are out, which came back, and the snooze that spans it ------
+// A parent that fans out N background sub-agents is re-invoked by EACH return: it wakes, reads the
+// report, and rests again. A rest that is not an honoured park queues (Colin: a partial return may give
+// the human something to act on), so a queued parent re-queues once per child. Two things follow, and
+// the maintainer ruled on both (2026-09-29): the card has to say where the batch stands — which children
+// are still out and which have come back — and the human needs a snooze that waits out the WHOLE batch
+// rather than one that the next return spends (bgSnoozeArmed, which is scoped to one rest by design).
+
+// The direct children still out: running, or tracked but quiet (`stale` — a completion signal we may
+// have lost). Descendants are a rendering concern and never move thread state (isDirectSubAgent).
+function outstandingDirectAgents(tele: SessionTelemetry | undefined): SessionTelemetry["subAgents"] {
+  return (tele?.subAgents ?? []).filter((a) => isDirectSubAgent(a) && (a.state === "running" || a.state === "stale"))
+}
+
+/** When the wait still open began: the DISPATCH of the oldest direct child still out. That is the park
+ *  instant in the sense the card needs — every child that came back since then belongs to the batch the
+ *  parent is resting on, including one that came back before the parent first rested, and nothing from a
+ *  batch that had fully returned before this one was sent. It is not the parent's `rested_at`: every
+ *  return moves that forward, so filtering on it would forget each return the moment it woke the parent.
+ *  Undefined when nothing is out — there is no wait to describe. */
+export function subAgentWaitOpenedAt(tele: SessionTelemetry | undefined): number | undefined {
+  const starts = outstandingDirectAgents(tele).map((a) => Date.parse(a.startedAt)).filter(Number.isFinite)
+  return starts.length > 0 ? Math.min(...starts) : undefined
+}
+
+/** The returned half of the wait, off the tailer's retired ring: every child that finished at or after
+ *  the wait opened, oldest return first. Only while a direct child is RUNNING — a batch whose last child
+ *  is merely stale is not something the parent is visibly waiting on, and the card that lists these
+ *  draws for a running wait alone. A child both retired and still listed (a SendMessage revival, a
+ *  `rested` child whose fan-out runs on) is counted where it is live, never twice. */
+export function returnedSubAgentsView(tele: SessionTelemetry | undefined): ThreadView["returnedSubAgents"] {
+  if (!hasLiveBackgroundWork(tele)) return undefined
+  const openedAt = subAgentWaitOpenedAt(tele)
+  if (openedAt === undefined) return undefined
+  const live = new Set((tele?.subAgents ?? []).flatMap((a) => (a.id ? [a.id] : [])))
+  const out = (tele?.retiredSubAgents ?? [])
+    .filter((r) => !live.has(r.id))
+    .filter((r) => {
+      const at = Date.parse(r.finishedAt ?? r.startedAt ?? "")
+      return Number.isFinite(at) && at >= openedAt
+    })
+    .sort((a, b) => Date.parse(a.finishedAt ?? "") - Date.parse(b.finishedAt ?? ""))
+    .map((r) => ({
+      id: r.id,
+      label: r.label,
+      status: r.status,
+      ...(r.startedAt ? { startedAt: r.startedAt } : {}),
+      ...(r.finishedAt ? { finishedAt: r.finishedAt } : {}),
+      ...(r.subagentType ? { subagentType: r.subagentType } : {}),
+    }))
+  return out.length > 0 ? out : undefined
+}
+
+/** Does "snooze until all sub-agents return" still hold this thread?
+ *
+ *  Armed at an instant (`subagents_snoozed_at`), it holds for as long as SOME direct sub-agent has been
+ *  running at every instant since — across any number of intermediate returns, each of which still wakes
+ *  the parent (a sibling returning is not the batch returning). It lets go:
+ *
+ *  - when no direct sub-agent is running now — the whole batch is back, which is the wake the human asked
+ *    for;
+ *  - when there was a GAP since the arming, an instant with nothing running, even if a new child is running
+ *    now. The batch the human snoozed on came back in full, and a second batch the worker dispatched after
+ *    reading it is new work the human has not seen. Measured off the retired ring's dispatch→return
+ *    intervals, so no write has to catch the gap as it happens and a restart cannot lose it;
+ *  - when the HUMAN has spoken to the thread since (lastHumanAt counts typed turns only, never a child's
+ *    report or a wake). Whatever they said supersedes a snooze set before it.
+ *
+ *  A question, a crash, a limit or a ```done outrank it without touching it: deriveNeedsYou checks those
+ *  first. Nothing ever clears the column, and nothing needs to — once any of the above has happened it is
+ *  true forever, so a stale arming is inert. */
+export function subAgentsSnoozeHolds(row: Pick<SessionRow, "subagents_snoozed_at">, tele: SessionTelemetry | undefined): boolean {
+  const armedMs = Date.parse(row.subagents_snoozed_at ?? "")
+  if (!Number.isFinite(armedMs)) return false
+  const running = (tele?.subAgents ?? []).filter((a) => isDirectSubAgent(a) && a.state === "running")
+  if (running.length === 0) return false
+  const humanMs = Date.parse(tele?.lastHumanAt ?? "")
+  if (Number.isFinite(humanMs) && humanMs > armedMs) return false
+  // Cover [armedMs, now] with the intervals children were out. A running child's interval is open-ended,
+  // so reaching one means covered to now; running out of intervals before that is the gap. A retired
+  // child missing either instant cannot vouch for any stretch, so it bridges nothing — the safe side,
+  // since a gap only ever releases the thread into the queue.
+  const spans = [
+    ...running.map((a) => ({ from: Date.parse(a.startedAt), to: Infinity })),
+    ...(tele?.retiredSubAgents ?? []).map((r) => ({ from: Date.parse(r.startedAt ?? ""), to: Date.parse(r.finishedAt ?? "") })),
+  ]
+    .filter((s) => Number.isFinite(s.from) && !Number.isNaN(s.to) && s.to >= s.from)
+    .sort((a, b) => a.from - b.from)
+  let coveredTo = armedMs
+  for (const span of spans) {
+    if (span.from > coveredTo) break
+    coveredTo = Math.max(coveredTo, span.to)
+  }
+  return coveredTo === Infinity
+}
+
 // A declared wait excuses an idle thread from the queue only for a specific external-human gate or a
 // valid future scheduler instant. Legacy PR/CI/session hints, malformed/elapsed timers, and hintless
 // fences are agent-owned work; if the worker nevertheless comes to rest, the queue must surface that
@@ -1119,6 +1235,14 @@ export function deriveNeedsYou(
   // rendered twice on one queue card (maintainer 2026-08-25: "I already hit the snooze button… but it's
   // still in the queue"). Checked against the registry, not the declaration: a fence naming a fired
   // timer is a bare rest, and a bare rest is not snoozable.
+  //
+  // SNOOZED UNTIL ALL SUB-AGENTS RETURN (2026-09-29). The human's other event-snooze, and the reason it
+  // sits here: it is the one that is NOT spent by the next rest. Each child that comes back still wakes
+  // the parent, which reads the report and rests again — that rest just does not re-queue it while a
+  // sibling is still out. It lets go when none is (see subAgentsSnoozeHolds), and everything above this
+  // line — a question, a crash, a limit, a fresh follow-up — has already outranked it. A ```done does too:
+  // the worker saying it has finished is a better reason to look than the children it left running.
+  if (runtime !== "exited" && tele?.lastFence?.kind !== "done" && subAgentsSnoozeHolds(row, tele)) return false
   if (runtime !== "exited" && (hasLiveOwnWork(tele, registeredPrWatches) || hasParkedTimerWatch(tele, armedTimerIds)) && tele?.lastFence?.kind !== "done") return !bgSnoozeArmed(row)
   // A final ```done fence is a CHECKED completion handoff: show its success card in the queue until the
   // human explicitly Archives the thread. Like a question, merely viewing it does not resolve it. The
@@ -1141,7 +1265,8 @@ export function deriveNeedsYou(
 // remain the only places this state is stated in words — which is why the card must keep rendering
 // without a queue card behind it, and why the snooze below is dropped.
 //
-// The queue's event-Snooze is deliberately NOT inherited (bg_snooze_rested_at is nulled out below).
+// The queue's event-Snooze is deliberately NOT inherited (bg_snooze_rested_at is nulled out below, and
+// so is the "until all sub-agents return" snooze beside it, for the same reason).
 // Snoozing is a QUEUE VERB — "stop showing me this card in the queue" — while this flag states a FACT
 // about the thread, and AwaitingBackgroundCard renders that fact on the drawer and the standalone page
 // too, where there is no Snooze affordance and nothing to dismiss. Inheriting the snooze let one queue
@@ -1224,7 +1349,7 @@ export function deriveAwaitingBackground(
   // drawer and full-screen page for a healthy thread resting on its children or on a shell. Since
   // 2026-08-01 that covers a shell-only rest too — it now has NO queue card at all, so this card in the
   // drawer and on the standalone page is the only place that state is stated in words.
-  return deriveNeedsYou({ ...row, bg_snooze_rested_at: null }, tele, runtime, hasActionableInteraction, nowMs, limitPause, false, deliveryProcessGone, {}, new Set(), armedTimerIds, armedWatches, openQuestions)
+  return deriveNeedsYou({ ...row, bg_snooze_rested_at: null, subagents_snoozed_at: null }, tele, runtime, hasActionableInteraction, nowMs, limitPause, false, deliveryProcessGone, {}, new Set(), armedTimerIds, armedWatches, openQuestions)
 }
 
 // A REGISTERED session thread's view (id = row.slug). Runtime via the shared deriveRuntime (transport-aware);
@@ -1416,7 +1541,11 @@ export function resolveSessionTitle(
   tele: Pick<SessionTelemetry, "aiTitle"> | undefined,
 ): Pick<ThreadView, "title" | "titleAuto" | "titleLocked" | "aiTitle"> {
   const locked = sessionTitleLocked(row)
-  const persisted = row.title_agent === 1 ? row.title?.trim() || undefined : undefined
+  // Any non-zero value: rows written between 2026-09-29 14:0x and this line's revert carry
+  // `title_agent = 2` (the retired setPeriodicTitle), and their titles are still the persisted ones. The
+  // name Frizz MINTS at dispatch (thread-names.ts) persists the same way, so it too outranks the
+  // transcript's live title the moment it lands.
+  const persisted = row.title_agent ? row.title?.trim() || undefined : undefined
   return {
     title: row.title ?? "",
     titleAuto: row.title_auto === 1,
@@ -1427,10 +1556,13 @@ export function resolveSessionTitle(
 
 /** A registered completion as the ```done fence it replaces, or undefined when it no longer stands.
  *
- *  ITS LIFETIME IS "NOTHING NEWER FROM THE HUMAN". A fence is superseded the moment the worker writes
- *  again; a ROW cannot be, so something has to spend it — and the human SENDING MORE WORK is exactly
- *  the moment a completion stops being true. Deciding that by comparing two timestamps means there is
- *  no sweep to forget one, and no window where a thread that was reopened still cards as finished.
+ *  ITS LIFETIME IS "NOTHING NEWER HAS BEEN DONE FOR THE HUMAN". A fence is superseded the moment the
+ *  worker writes again; a ROW cannot be, so something has to spend it. The human speaking after it is
+ *  necessary but not sufficient: a prose-only reply to that message is conversation about finished work,
+ *  and the done stands through it. Two things spend it — the worker running a TOOL after the human spoke
+ *  (the message was new work), or the turn that answered it FAILING (the new work died; see below).
+ *  Deciding that by comparing timestamps means there is no sweep to forget one, and no window where a
+ *  thread that was reopened still cards as finished.
  *
  *  The comparison is `<=`, not `<`: the two instants come from different clocks (the row's is frizz's
  *  own `Date.now()`, the telemetry's is the transcript record's), and a same-millisecond tie is the
@@ -1439,6 +1571,7 @@ export function registeredDoneFence(
   done: { body: string; doneAt: number } | undefined,
   lastUserAt: string | undefined,
   lastToolCallAt?: string,
+  fault?: Pick<SessionTelemetry, "apiFault" | "lastAssistantAt">,
 ): FenceView | undefined {
   if (!done) return undefined
   const userAt = lastUserAt ? Date.parse(lastUserAt) : Number.NaN
@@ -1452,6 +1585,15 @@ export function registeredDoneFence(
   if (Number.isFinite(userAt) && userAt > done.doneAt) {
     const toolAt = lastToolCallAt ? Date.parse(lastToolCallAt) : Number.NaN
     if (Number.isFinite(toolAt) && toolAt > done.doneAt) return undefined
+    // …OR IF THE TURN THAT ANSWERED IT FAILED. The tool-call line has a hole: an API error before the
+    // first tool call leaves no tool call to see, so the human's new request died and the thread still
+    // carded as finished over it. A synthetic error record advances `lastAssistantAt` like any output,
+    // so "the newest assistant record is a fault, and it is no older than the human's message" is that
+    // failed turn. The `>=` bound is what keeps a STALE fault out: `apiFault` is cleared only by real
+    // assistant TEXT, so a fault from before the done can survive a text-less `done` tool call and
+    // still be standing — and its `lastAssistantAt` then predates the human's message.
+    const faultAt = fault?.apiFault ? Date.parse(fault.lastAssistantAt ?? "") : Number.NaN
+    if (Number.isFinite(faultAt) && faultAt >= userAt) return undefined
   }
   // `registered` is the one thing the transcript needs that the fence it replaces never carried: a fenced
   // done is drawn from the message that holds it, and this one is in no message, so the client draws it
@@ -1482,6 +1624,7 @@ interface ThreadRegistries {
   questions: Map<string, ThreadQuestionRow[]>
   watches: Map<string, ThreadWatchRow[]>
   done: Map<string, { body: string; doneAt: number }>
+  shellBudgets: Map<string, ShellBudgetRow[]>
 }
 
 function readThreadRegistries(storage: Storage): ThreadRegistries {
@@ -1492,6 +1635,7 @@ function readThreadRegistries(storage: Storage): ThreadRegistries {
     questions: storage.threadQuestionsBySlug(),
     watches: storage.armedThreadWatchesBySlug(),
     done: storage.threadDoneBySlug(),
+    shellBudgets: storage.shellBudgetsBySlug(),
   }
 }
 
@@ -1572,10 +1716,10 @@ function sessionThreadView(
     const spec = safeQuestionSpec(q.spec)
     if (spec) questions.push({ id: q.id, spec, askedAt: new Date(q.asked_at).toISOString(), ...(questionRepliedPast(q, rawTele?.lastHumanAt) ? { repliedPast: true as const } : {}) })
   }
-  // The ones still HOLDING the thread. A question the human replied past is a pivot, not a pending ask:
-  // it stays on the card list (answerable where it was asked) but queues nothing, supersedes no done,
-  // and is not the rest's sign-off — see questionRepliedPast.
-  const currentQuestionCount = questions.filter((q) => !q.repliedPast).length
+  // The ones HOLDING the thread — every open one. `repliedPast` is information since 2026-09-29, not a
+  // release: a question the human typed past still queues, supersedes a done and is the rest's sign-off
+  // until it is answered, dismissed or withdrawn (see questionRepliedPast).
+  const currentQuestionCount = questions.length
   // The dismissal-only case counts as in flight EXACTLY when a cancellation wake is coming — an armed
   // rest Goal with text, the same gate the scheduler's evalQuestionAnswers wakes on. Anything looser
   // would also cover the human's own ×, which deliberately wakes nobody and has no arrival to bridge to.
@@ -1609,7 +1753,7 @@ function sessionThreadView(
     lastAssistant: providerError?.message, lastAssistantAt: providerError?.at,
     lastFence: undefined, lastAssistantAllDone: false,
   } : rawTele
-  const done = supersededDone || providerError ? undefined : registeredDoneFence(registries.done.get(row.slug), rawTele?.lastUserAt, rawTele?.lastToolCallAt)
+  const done = supersededDone || providerError ? undefined : registeredDoneFence(registries.done.get(row.slug), rawTele?.lastUserAt, rawTele?.lastToolCallAt, rawTele)
   const tele: SessionTelemetry | undefined = done && failedTele ? { ...failedTele, lastFence: done } : failedTele
   // A headless thread mid-turn with nobody driving it is a crash/stall, not a rest. For codex that is
   // an app-server that stopped advancing the rollout; for the broker it is a dead ownerless daemon (its
@@ -1689,6 +1833,8 @@ function sessionThreadView(
   return {
     id: row.slug,
     ...title,
+    // The live status line (periodic-status.ts) — what is happening now, beside a name that stays put.
+    ...(row.status?.trim() ? { statusLine: row.status.trim() } : {}),
     status: "active", // synthesized: the field is required but UNUSED for session rows (see note above)
     hasPlan: false,
     mechanism: null,
@@ -1709,7 +1855,7 @@ function sessionThreadView(
     lastActivityAt: tele?.lastActivityAt,
     lastAssistantAt: tele?.lastAssistantAt,
     subAgents: stampStoppable(tele?.subAgents ?? [], row),
-    bgShells: stampStoppableShells(tele?.bgShells ?? [], row),
+    bgShells: stampShellBudgets(stampStoppableShells(tele?.bgShells ?? [], row), registries.shellBudgets.get(row.slug), registries.watches.get(row.slug)),
     links: (registries.links.get(row.slug) ?? []).map(threadLinkView),
     // ONE SOURCE: the FENCE. Both kinds are derived from what the worker wrote — `prs:` entries
     // become the github rows, `watch:` lines the shell rows — so this strip lists exactly what will
@@ -1744,6 +1890,14 @@ function sessionThreadView(
     // states whether the thread is waiting, which the snooze does not change — so the suppression is a
     // presentation rule the client applies, not a second opinion about the thread's state.
     bgSnoozed: bgSnoozeArmed(row) || undefined,
+    // The "until all sub-agents return" snooze, only while it is what keeps the thread out of the queue:
+    // not while a question or a crash has already put it back in (needsYou), and not while the parent
+    // is mid-turn on a child's report — that turn spins in Active like any snoozed thread's, and the flag
+    // comes back at its next rest. isSnoozed parks the row in Snoozed on it.
+    subAgentsSnoozed: (!needsYou && runtime === "turn-idle" && subAgentsSnoozeHolds(row, tele)) || undefined,
+    // The queued parent's card: which children came back inside the wait still open. See
+    // returnedSubAgentsView; with the live `subAgents` above it is the whole batch.
+    returnedSubAgents: archived ? undefined : returnedSubAgentsView(tele),
     claudeRuntime: row.claude_runtime === "broker" ? "broker" as const : undefined,
     // The recurring prompt — the same projection the worker's own `action: "get"` reads back.
     recurringPrompt: resolveRecurringPrompt(row),
@@ -1751,6 +1905,7 @@ function sessionThreadView(
     awaitingBackground,
     crashed,
     quietTurnSince: quietSince,
+    quietTurnCall: quietSince !== undefined ? tele?.openCall : undefined,
     pendingInteraction: interactionPresence.pending,
     actionableInteraction: interactionPresence.needsUser,
     // Preserve only a durable, canonical backend identity. In particular, Claude is not inferred
@@ -1918,8 +2073,31 @@ export interface BoardManagerDeps {
   claudeBrokerDaemonAlive?: ClaudeBrokerLivenessReader
   /** The pinned Claude runtime's resolved catalogue, read synchronously per build (peekClaudeModels). */
   claudeModels?: () => readonly ClaudeModel[] | undefined
-  // The project's terminal command threads (command-threads.ts), already shaped as rows.
-  commandThreads?: () => ThreadView[]
+  // Every open thread terminal (thread-terminals.ts), grouped by the thread it belongs to.
+  threadTerminals?: () => Map<string, ThreadTerminal[]>
+}
+
+/**
+ * Put a thread's TERMINALS on its row, and let one waiting at a prompt queue it.
+ *
+ * A terminal has no row or card of its own (thread-terminals.ts), so the one moment it needs the human —
+ * `npm publish` stopped at "Enter one-time password:", an ssh passphrase, a `[y/N]` — can only reach the
+ * queue through its thread. That is the same trade the silent-turn rule makes (quietTurnSince): the
+ * thread queues whatever its own runtime is doing, since the process is alive and will wait forever, and
+ * a spurious card costs one click where a missed prompt stalls a publish for hours. Two gates: a thread
+ * filed under Done queues nothing (its terminals were stopped with it, and the server clears `needsYou`
+ * on an archived row everywhere), and the human's own wall-clock snooze still parks it, as it parks a
+ * silent turn.
+ */
+export function withThreadTerminals(t: ThreadView, terminals: readonly ThreadTerminal[] | undefined): ThreadView {
+  if (!terminals || terminals.length === 0) return t
+  const prompting = t.state !== "archived" && t.snoozedUntil === undefined && terminals.some((terminal) => terminal.awaitingInput === true)
+  return { ...t, terminals: [...terminals], ...(prompting ? { needsYou: true } : {}) }
+}
+
+/** The terminal a thread is queued on, when one is: the prompt the card and the notification name. */
+export function promptingTerminal(t: Pick<ThreadView, "terminals">): ThreadTerminal | undefined {
+  return t.terminals?.find((terminal) => terminal.awaitingInput === true)
 }
 
 export function createBoard(
@@ -1960,18 +2138,17 @@ export function createBoard(
   // server doesn't fire a storm for every historical resting thread already in the queue.
   let notifyPrimed = false
   // When each queued thread entered the queue — the queue's order key (queue-clock.ts), persisted on the
-  // session row or the command thread's row.
+  // session row.
   const queueClock = createQueueClock({
     load: () => {
       const alive = storage.getSetting(QUEUE_CLOCK_ALIVE_SETTING)
-      const rows = [...storage.allSessions(), ...storage.listCommandThreads()]
       return {
-        stamps: new Map(rows.flatMap((row) => (row.queued_at ? [[row.slug, row.queued_at] as const] : []))),
+        stamps: new Map(storage.allSessions().flatMap((row) => (row.queued_at ? [[row.slug, row.queued_at] as const] : []))),
         ...(typeof alive === "string" ? { alive } : {}),
       }
     },
-    persists: (thread) => thread.kind === "session" || thread.kind === "command",
-    save: (thread, at) => (thread.kind === "command" ? storage.setCommandQueuedAt(thread.id, at) : storage.setQueuedAt(thread.id, at)),
+    persists: (thread) => thread.kind === "session",
+    save: (thread, at) => storage.setQueuedAt(thread.id, at),
     saveAlive: (at) => storage.setSetting(QUEUE_CLOCK_ALIVE_SETTING, at),
   })
 
@@ -1982,6 +2159,9 @@ export function createBoard(
   // raised by a pending approval the notification never mentioned). Read here, not carried on the
   // view: this runs once per queue ENTRY, never per rebuild.
   function needsYouBody(t: ThreadView): string | undefined {
+    // A thread queued by its terminal's prompt says so — its agent's last line is about something else.
+    const prompting = promptingTerminal(t)
+    if (prompting) return capLine(`Terminal waiting for input: ${prompting.command}`)
     if (t.actionableInteraction && t.sessionId) {
       try {
         const [first] = storage.interactions
@@ -2142,17 +2322,18 @@ export function createBoard(
       // So the client can expand a `~` a worker wrote in prose (see BoardSnapshot.homeDir).
       homeDir: homedir(),
     }
-    const sessionThreads = buildSessionThreads(assembledAtMs)
+    // Each thread's terminals ride its row (withThreadTerminals) — read once per build, like the registries.
+    const terminals = deps.threadTerminals?.()
+    const sessionThreads = buildSessionThreads(assembledAtMs).map((t) => withThreadTerminals(t, terminals?.get(t.id)))
     // REGISTERED ROWS ONLY reach these two, and that is the point rather than an oversight. A snooze
     // is a durable column on a row a foreign session does not have, and a needs-decision notification
     // is frizz telling you a WORKER is waiting on you — a terminal session is waiting on you in the
     // window you opened it in, and pushing a notification for it would be frizz claiming an ask it
     // neither received nor can answer.
-    const commandThreads = deps.commandThreads?.() ?? []
     // Foreign rows never queue (queuedThread), so they have no place in line to keep. Ahead of the notify
     // on purpose: the clock withholds an entry off a park (queue-clock.ts), and a withheld entry must not
     // notify either.
-    queueClock.stamp([...sessionThreads, ...commandThreads], assembledAtMs, {
+    queueClock.stamp(sessionThreads, assembledAtMs, {
       // A session reading is only vouched for once the tailer has PRIMED the row — folded its transcript,
       // or given up on one and flagged it missing — or when durable row state alone decided it (archived,
       // snoozed). A row the tailer has not reached, or has set up but not yet folded, reads `running` by
@@ -2169,21 +2350,25 @@ export function createBoard(
         t.kind === "session" && !t.archived && (t.runtime === "turn-idle" || t.runtime === "exited") &&
         (t.snoozedUntil === undefined || t.snoozePrompt !== undefined) && !heldByDelivery.has(t.id),
       // deriveNeedsYou's hard gates: a request the human must answer, a question, a crash, a limit pause.
+      // A terminal at a prompt is one too: only a person can type the answer, whatever the thread's park.
       urgent: (t) =>
+        promptingTerminal(t) !== undefined ||
         t.actionableInteraction === true || t.runtime === "perm-prompt" || t.pendingAsk !== undefined ||
-        t.pendingQuestion === true || (t.questions?.some((q) => !q.repliedPast) ?? false) || t.crashed === true ||
+        t.pendingQuestion === true || (t.questions?.length ?? 0) > 0 || t.crashed === true ||
         t.limitPause !== undefined || (t.providerError !== undefined && t.providerError.retrying !== true),
       // What a person did, for a queued thread's place in line (queue-clock.ts: a thread only loses it
       // when someone acts on it). Every follow-up reaches the delivery ledger, and each router path that
       // writes one re-assembles the board before it returns, so one reading always sees it.
-      humanOut: (t) => t.archived || t.snoozedUntil !== undefined || t.bgSnoozed === true || heldByDelivery.has(t.id),
-      humanGate: (t) => t.actionableInteraction === true || t.runtime === "perm-prompt" || t.pendingAsk !== undefined,
+      humanOut: (t) => t.archived || t.snoozedUntil !== undefined || t.bgSnoozed === true || t.subAgentsSnoozed === true || heldByDelivery.has(t.id),
+      // A terminal's prompt is one: the only thing that clears it is the human typing the answer.
+      humanGate: (t) =>
+        promptingTerminal(t) !== undefined || t.actionableInteraction === true || t.runtime === "perm-prompt" || t.pendingAsk !== undefined,
     })
     armSnoozeWake(sessionThreads, assembledAtMs, queueClock.nextEntryAt(assembledAtMs))
     notifyNeedsYou(sessionThreads)
     return {
       ...base,
-      threads: [...sessionThreads, ...buildForeignThreads(), ...commandThreads],
+      threads: [...sessionThreads, ...buildForeignThreads()],
       errors: [],
       warnings: [],
       errorItems: [],

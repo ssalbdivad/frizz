@@ -56,7 +56,18 @@ export interface SessionRow {
   // discarding a perfectly good persisted title (maintainer 2026-08-07). Cleared by every other title
   // writer (human rename, re-dispatch) so it always describes the CURRENT text.
   // Optional in the TS shape for the same reason as `title_locked`: pre-existing row literals.
+  // Since 2026-09-29 it also marks the name Frizz MINTS at dispatch (thread-names.ts): any non-zero value
+  // is a persisted machine name that outranks the transcript's live title, and the dispatch-time writers
+  // (the mint, the Codex marker CAS) land only while it is still 0 — the first name to land stands.
   title_agent?: number
+  // 0 | 1 — the worker has spent its ONE rename (`mcp__frizz__title`). A name is stable (maintainer
+  // 2026-09-29): minted at dispatch, corrected once by the worker after orienting, and after that nothing
+  // automatic changes it — so a second call is refused, and a re-dispatch over the slug clears this.
+  title_worker_renamed?: number
+  // The thread's live STATUS: a short phrase of what is happening NOW, rewritten every 5th operator
+  // message by periodic-status.ts. Never the name — the name is `title`, and stays put. NULL until the
+  // first status lands; a re-dispatch clears it.
+  status?: string | null
   // ---- session-first columns (2026-07-09; all nullable — additive migration under a live server) ----
   title: string | null // dispatch title (new dispatches have no thread FILE to hold it); display prefers aiTitle
   // The filename stem of the DISCOVERED transcript when it drifted off the pinned `<session_id>.jsonl`
@@ -84,6 +95,12 @@ export interface SessionRow {
   // came to a new rest because a sub-agent/shell returned. NULL = no event-snooze armed. Distinct from
   // snoozed_until (a wall-clock park owned by the scheduler); this one clears itself on the next rest.
   bg_snooze_rested_at?: string | null
+  // "Snooze until all sub-agents return": the instant the human armed it (NULL = not armed). Unlike
+  // `bg_snooze_rested_at` it is NOT scoped to one rest — a child's return wakes the parent, which rests
+  // again, and this still holds. board.subAgentsSnoozeHolds decides when it has let go (no direct
+  // sub-agent running at some instant since this one, or the human spoke since), so nothing ever has to
+  // clear it: a stale value is inert, because the gap that released it lies between it and now forever.
+  subagents_snoozed_at?: string | null
   // The instant the human PINNED this thread out of the rail's band system (null/absent = not pinned).
   // Like Archive and the snooze it is lifecycle metadata the human owns — never inferred from a fence —
   // and the instant doubles as the pinned band's order. It survives every state change (a pinned thread
@@ -458,19 +475,29 @@ export interface PrWatchRow {
   cursor: string | null
 }
 
-/** A terminal command thread's definition and its latest run (command-threads.ts). */
+/** A thread terminal's definition and its latest run (thread-terminals.ts). The table and the type keep the
+ *  name the feature shipped under, terminal COMMAND THREADS (2026-09-23); `parent_slug` is what makes a
+ *  row a thread's terminal, and a row without one predates 2026-09-29 and is archived at boot. */
 export interface CommandThreadRow {
   slug: string
+  /** The thread the terminal belongs to. NULL only on a pre-2026-09-29 top-level command thread. */
+  parent_slug?: string | null
+  /** The line it runs; for an interactive shell (`shell` = 1), the shell's name. */
   command: string
+  /** The folder it runs in. NULL only on a pre-2026-09-29 row, which ran in the project root. */
+  cwd?: string | null
+  /** 1 ⇒ an interactive login shell rather than one command. */
+  shell?: number
   created_at: number
   started_at: number
   runs: number
   exited_at: number | null
   exit_code: number | null
   stopped: number
-  /** 'archived' once the human marks the finished run done; a restart reopens it. */
+  /** 'archived' once its thread is marked done (it leaves the thread's strip); a restart reopens it. */
   state: "open" | "archived"
-  /** When the thread last entered the queue — the board's queue clock, exactly as `session.queued_at`. */
+  /** The queue clock's stamp from when a command thread queued on its own. Unused since 2026-09-29: a
+   *  terminal waiting at a prompt queues its THREAD, whose `session.queued_at` keeps the place. */
   queued_at?: string | null
 }
 
@@ -716,6 +743,8 @@ export interface Storage {
   // Arm/clear the awaiting-background event-snooze. Session-guarded like the park above. `restedAt` is
   // the rest instant the card is snoozed FOR; the board re-surfaces it once rested_at moves past this.
   setBgSnoozeRestedAtIfCurrent(slug: string, sessionId: string, generation: number, restedAt: string | null): boolean
+  // Arm (an ISO instant) or clear (null) the "until all sub-agents return" snooze. Session-guarded the same way.
+  setSubAgentsSnoozedAtIfCurrent(slug: string, sessionId: string, generation: number, at: string | null): boolean
   // Arm / edit / clear the thread's RECURRING PROMPT in ONE write, because the popover's textarea, its
   // two trigger toggles and its minutes field are all views of one row — split into separate writes, a
   // tab holding a stale copy of one of them would clobber the rest.
@@ -785,19 +814,20 @@ export interface Storage {
   listThreadLinks(slug: string): ThreadLinkRow[]
   threadLinksBySlug(): Map<string, ThreadLinkRow[]>
   dropThreadLink(slug: string, id: string): boolean
-  insertCommandThread(row: { slug: string; command: string; createdAtMs: number }): void
+  insertCommandThread(row: { slug: string; parentSlug: string; command: string; cwd: string; shell: boolean; createdAtMs: number }): void
   listCommandThreads(): CommandThreadRow[]
-  /** A fresh run of an existing command: bumps `runs` and clears the previous outcome. */
-  /** A new run of the thread; `command` replaces the thread's command (a follow-up run), else it reruns it. */
+  /** A new run of the terminal: bumps `runs`, clears the previous outcome and reopens it. `command`
+   *  replaces its command (a follow-up line, which also makes a shell terminal a command one); absent,
+   *  it reruns what it ran. */
   restartCommandThread(slug: string, startedAtMs: number, command?: string): void
   recordCommandExit(slug: string, exit: { exitedAtMs: number; exitCode: number | null; stopped: boolean }): void
   /** Boot: every run with no recorded exit died with the previous server. */
   interruptRunningCommandThreads(exitedAtMs: number): void
   dropCommandThread(slug: string): boolean
-  /** Mark as done / reopen. False when no such command thread exists. */
-  setCommandThreadState(slug: string, state: "open" | "archived"): boolean
-  /** The queue clock's write for a command thread — see `setQueuedAt`. */
-  setCommandQueuedAt(slug: string, at: string | null): void
+  /** Its thread was marked done: file every one of its terminals away. Returns how many changed. */
+  archiveThreadTerminals(parentSlug: string): number
+  /** Its thread was forgotten: drop every one of its terminals. Returns how many went. */
+  dropThreadTerminals(parentSlug: string): number
   /** Register a watch, or return the armed one already covering this (thread, kind, target). Idempotent
    *  by that triple, so a worker re-registering the same wait after a wake gets one row, not two. */
   armThreadWatch(watch: { id: string; slug: string; kind: "shell" | "agent"; target: string; createdAtMs: number; expiresAtMs: number }): ThreadWatchRow
@@ -819,8 +849,11 @@ export interface Storage {
   settleThreadWatch(id: string, settledAtMs: number, state?: "expired" | "settled"): boolean
   // ---- BACKGROUND-SHELL RUNTIME BUDGETS (shell-budget.ts) --------------------------------------------
   getShellBudget(slug: string, shellId: string): ShellBudgetRow | undefined
-  /** Every recorded budget row on one thread — the `activity` readout's single read. */
+  /** Every recorded budget row on one thread. */
   listShellBudgets(slug: string): ShellBudgetRow[]
+  /** Every recorded budget row in the project, grouped by thread — the board's ONE read per build for
+   *  the `budgetEndsAt` it stamps on each shell (see board.ts ThreadRegistries for why it is batched). */
+  shellBudgetsBySlug(): Map<string, ShellBudgetRow[]>
   /** `extend_shell`: the budget now ends at `deadlineAtMs`. Upserts; a row for a different shell under
    *  the same id (another `startedAt`) is replaced outright. */
   extendShellBudget(input: { slug: string; shellId: string; startedAt: string; deadlineAtMs: number; nowMs: number }): void
@@ -917,7 +950,13 @@ export interface Storage {
   // claimed the name, because that is a legitimate answer the worker should be told rather than an
   // error it will retry. Never touches `title_auto`: which machine wrote the current text does not
   // change the row's display provenance, and leaving it set is what keeps a human rename outranking.
+  // ONCE: it stamps `title_worker_renamed`, and a second call is refused the same way.
   setAgentTitle(slug: string, title: string): boolean
+  // Persist the name Frizz MINTED at dispatch (thread-names.ts). Lands only on the same session, only
+  // while no human has claimed the name and no machine name is persisted yet — the first name stands.
+  setMintedTitle(slug: string, sessionId: string, title: string): boolean
+  // Write the thread's live status line (periodic-status.ts), keyed on the session it was read from.
+  setStatus(slug: string, sessionId: string, status: string): boolean
   // AI rename is asynchronous. Commit only if this is still the same session with the same title
   // provenance captured at start, so a later manual rename/re-dispatch always wins.
   setTitleIfCurrent(
@@ -1072,6 +1111,7 @@ export const STORAGE_SCHEMA = `
       snoozed_until TEXT,
       snooze_prompt TEXT,
       bg_snooze_rested_at TEXT,
+      subagents_snoozed_at TEXT,
       pinned_at   TEXT,
       meta        TEXT,
       seen_at     TEXT,
@@ -1131,8 +1171,13 @@ export const STORAGE_SCHEMA = `
       -- Cleared by resetParkBumps when a park is actually HONOURED.
       park_bumps INTEGER NOT NULL DEFAULT 0,
       park_bump_anchor TEXT,
-      -- Title provenance for the CURRENT text: 1 = the worker's own title signal wrote it.
+      -- Title provenance for the CURRENT text: non-zero = a persisted machine name (the dispatch mint,
+      -- the Codex marker, the worker's own title call).
       title_agent INTEGER NOT NULL DEFAULT 0,
+      -- 1 once the worker has spent its one rename; also in the ALTER list below.
+      title_worker_renamed INTEGER NOT NULL DEFAULT 0,
+      -- The live status line (periodic-status.ts), never the name; also in the ALTER list below.
+      status TEXT,
       PRIMARY KEY (project_id, slug)
     );
     CREATE INDEX IF NOT EXISTS session_snoozed_until_idx ON session(project_id, snoozed_until);
@@ -1389,11 +1434,13 @@ export const STORAGE_SCHEMA = `
       updated_at      INTEGER NOT NULL,
       PRIMARY KEY (project_id, thread_slug, shell_id)
     );
-    -- A TERMINAL COMMAND thread (2026-09-23): a shell command the human started from the prompt box's
-    -- Terminal tab, whose pty the control plane owns (command-threads.ts). Only the DEFINITION and the
-    -- last run's outcome are durable — the pty is a child of the server and dies with it, so a row whose
-    -- run never recorded an exit is one a restart interrupted, and boot says so rather than showing a
-    -- process that is not there. RUNS counts starts, so a restart is a new terminal to the browser.
+    -- A THREAD'S TERMINAL (thread-terminals.ts): a pty the control plane owns, opened on a thread and run
+    -- in the folder its agent works in. Named for what it shipped as on 2026-09-23 — a top-level TERMINAL
+    -- COMMAND thread from the prompt box's Terminal tab — and re-parented onto threads on 2026-09-29
+    -- (parent_slug, cwd, shell, all in the ALTER list below). Only the DEFINITION and the last run's
+    -- outcome are durable — the pty is a child of the server and dies with it, so a row whose run never
+    -- recorded an exit is one a restart interrupted, and boot says so rather than showing a process that
+    -- is not there. RUNS counts starts, so a restart is a new terminal to the browser.
     CREATE TABLE IF NOT EXISTS command_thread (
       project_id  TEXT NOT NULL,
       slug        TEXT NOT NULL,
@@ -1406,10 +1453,15 @@ export const STORAGE_SCHEMA = `
       exit_code   INTEGER,
       -- 1 ⇒ the human pressed Stop, so a non-zero code is not a failure worth colouring.
       stopped     INTEGER NOT NULL DEFAULT 0,
-      -- 'archived' once the human marks a finished run done (it leaves the threads band for Done).
+      -- 'archived' once its thread is marked done (it leaves the thread's terminals strip).
       state       TEXT NOT NULL DEFAULT 'open',
-      -- When the thread last entered the queue (queue-clock.ts); also in the ALTER list below.
+      -- A command thread's own queue stamp, from before 2026-09-29; unused since. Also in the ALTER list.
       queued_at   TEXT,
+      -- The thread the terminal belongs to, the folder it runs in, and 1 for an interactive shell. NULL
+      -- parent ⇒ a pre-2026-09-29 command thread. Also in the ALTER list below.
+      parent_slug TEXT,
+      cwd         TEXT,
+      shell       INTEGER NOT NULL DEFAULT 0,
       PRIMARY KEY (project_id, slug)
     );
 `
@@ -1429,7 +1481,9 @@ export function ensureStorageSchema(db: Database): void {
   // additive ALTER here, exactly the stack the schema comment above says the unified file was born
   // without. Keep the list append-only; the try/catch is the "already there" case.
   for (const column of [
-    "pinned_at TEXT", "acp_agent TEXT", "queued_at TEXT",
+    "pinned_at TEXT", "acp_agent TEXT", "queued_at TEXT", "subagents_snoozed_at TEXT",
+    // 2026-09-29: a thread's NAME split from its live STATUS (thread-names.ts).
+    "title_worker_renamed INTEGER NOT NULL DEFAULT 0", "status TEXT",
     // The Goal's limits and run counter (2026-09-29).
     "recurring_max_runs INTEGER", "recurring_for_ms INTEGER", "recurring_until_at TEXT",
     "recurring_runs INTEGER NOT NULL DEFAULT 0", "recurring_run_anchor TEXT",
@@ -1451,6 +1505,11 @@ export function ensureStorageSchema(db: Database): void {
     // `command_thread.queued_at` (2026-09-24): the queue clock's stamp, as on `session` — a run at a
     // prompt stays queued across a restart, and the boot's interrupted exit must not re-date it.
     ["command_thread", "queued_at TEXT"],
+    // `command_thread.parent_slug` / `cwd` / `shell` (2026-09-29): a terminal belongs to a thread and
+    // runs in that thread's working folder, rather than being a top-level thread in the project root.
+    ["command_thread", "parent_slug TEXT"],
+    ["command_thread", "cwd TEXT"],
+    ["command_thread", "shell INTEGER NOT NULL DEFAULT 0"],
   ] as const) {
     try {
       db.exec(`ALTER TABLE ${table} ADD COLUMN ${column}`)
@@ -1458,6 +1517,12 @@ export function ensureStorageSchema(db: Database): void {
       // duplicate column — the file already has it
     }
   }
+  // THE 2026-09-29 RE-PARENTING. A command thread that predates it was started from the prompt box, so
+  // nothing recorded which thread (if any) it went with: no row carries a parent to attach it to. The
+  // only honest move is to file every such row away — it has nowhere to render now — and keep it, since
+  // it is the record of a command someone ran. Idempotent: it matches nothing once they are archived,
+  // and every row written since carries a parent.
+  db.exec("UPDATE command_thread SET state = 'archived' WHERE parent_slug IS NULL AND state <> 'archived'")
 }
 
 /**
@@ -1573,6 +1638,9 @@ export function createStorage(source: string | Database, projectId: string): Sto
       -- re-dispatch over a slug whose worker had already named itself would otherwise keep reading as
       -- agent-written while displaying the fresh dispatch chop. The next title signal sets it again.
       title_agent = 0,
+      -- Same reasoning: a fresh session gets its own one rename and has no status yet.
+      title_worker_renamed = 0,
+      status = NULL,
       snoozed_until = excluded.snoozed_until,
       -- Always moves WITH the instant: a spread row carries both, a re-dispatch clears both. An armed
       -- prompt outliving its deadline would be a wake nothing can ever fire.
@@ -1782,6 +1850,10 @@ export function createStorage(source: string | Database, projectId: string): Sto
   `)
   const bgSnoozeRestedAtIfCurrentStmt = scope.prepare(`
     UPDATE session SET bg_snooze_rested_at = ?
+    WHERE project_id = @project_id AND slug = ? AND session_id = ? AND runtime_generation = ?
+  `)
+  const subAgentsSnoozedAtIfCurrentStmt = scope.prepare(`
+    UPDATE session SET subagents_snoozed_at = ?
     WHERE project_id = @project_id AND slug = ? AND session_id = ? AND runtime_generation = ?
   `)
   // Every SET expression here reads the ORIGINAL row (SQLite evaluates the whole SET list against the
@@ -2048,16 +2120,18 @@ export function createStorage(source: string | Database, projectId: string): Sto
   )
   const dropThreadLinkStmt = scope.prepare("DELETE FROM thread_link WHERE project_id = @project_id AND thread_slug = ? AND id = ?")
   const delThreadLinks = scope.prepare("DELETE FROM thread_link WHERE project_id = @project_id AND thread_slug = ?")
-  const insertCommandThreadStmt = scope.prepare<{ slug: string; command: string; createdAtMs: number }>(`
-    INSERT INTO command_thread (project_id, slug, command, created_at, started_at)
-    VALUES (@project_id, @slug, @command, @createdAtMs, @createdAtMs)
+  const insertCommandThreadStmt = scope.prepare<{ slug: string; parentSlug: string; command: string; cwd: string; shell: number; createdAtMs: number }>(`
+    INSERT INTO command_thread (project_id, slug, parent_slug, command, cwd, shell, created_at, started_at)
+    VALUES (@project_id, @slug, @parentSlug, @command, @cwd, @shell, @createdAtMs, @createdAtMs)
   `)
   const listCommandThreadsStmt = scope.prepare<[], CommandThreadRow>(
-    "SELECT slug, command, created_at, started_at, runs, exited_at, exit_code, stopped, state, queued_at FROM command_thread WHERE project_id = @project_id ORDER BY created_at, slug",
+    "SELECT slug, parent_slug, command, cwd, shell, created_at, started_at, runs, exited_at, exit_code, stopped, state, queued_at FROM command_thread WHERE project_id = @project_id ORDER BY created_at, slug",
   )
-  const restartCommandThreadStmt = scope.prepare(`
-    UPDATE command_thread SET command = COALESCE(?, command), started_at = ?, runs = runs + 1, exited_at = NULL, exit_code = NULL, stopped = 0, state = 'open'
-    WHERE project_id = @project_id AND slug = ?
+  // A follow-up line makes a shell terminal a command one: the shell ended, and the line is what runs now.
+  const restartCommandThreadStmt = scope.prepare<{ command: string | null; startedAtMs: number; slug: string }>(`
+    UPDATE command_thread SET command = COALESCE(@command, command), shell = CASE WHEN @command IS NULL THEN shell ELSE 0 END,
+      started_at = @startedAtMs, runs = runs + 1, exited_at = NULL, exit_code = NULL, stopped = 0, state = 'open'
+    WHERE project_id = @project_id AND slug = @slug
   `)
   const recordCommandExitStmt = scope.prepare(`
     UPDATE command_thread SET exited_at = ?, exit_code = ?, stopped = ?
@@ -2067,8 +2141,10 @@ export function createStorage(source: string | Database, projectId: string): Sto
     "UPDATE command_thread SET exited_at = ? WHERE project_id = @project_id AND exited_at IS NULL",
   )
   const dropCommandThreadStmt = scope.prepare("DELETE FROM command_thread WHERE project_id = @project_id AND slug = ?")
-  const setCommandThreadStateStmt = scope.prepare("UPDATE command_thread SET state = ? WHERE project_id = @project_id AND slug = ?")
-  const setCommandQueuedAtStmt = scope.prepare("UPDATE command_thread SET queued_at = ? WHERE project_id = @project_id AND slug = ?")
+  const archiveThreadTerminalsStmt = scope.prepare(
+    "UPDATE command_thread SET state = 'archived' WHERE project_id = @project_id AND parent_slug = ? AND state <> 'archived'",
+  )
+  const dropThreadTerminalsStmt = scope.prepare("DELETE FROM command_thread WHERE project_id = @project_id AND parent_slug = ?")
   const armThreadWatchStmt = scope.prepare(`
     INSERT INTO thread_watch (project_id, id, thread_slug, kind, target, state, created_at, expires_at, settled_at)
     VALUES (@project_id, @id, @slug, @kind, @target, 'armed', @createdAtMs, @expiresAtMs, NULL)
@@ -2103,6 +2179,9 @@ export function createStorage(source: string | Database, projectId: string): Sto
   )
   const shellBudgetsBySlugStmt = scope.prepare<[string], ShellBudgetRow>(
     "SELECT * FROM shell_budget WHERE project_id = @project_id AND thread_slug = ?",
+  )
+  const allShellBudgetsStmt = scope.prepare<[], ShellBudgetRow>(
+    "SELECT * FROM shell_budget WHERE project_id = @project_id",
   )
   // One upsert per mark. A row whose started_at differs belongs to an EARLIER shell that used this id,
   // so the conflict branch resets every mark it does not itself set rather than inheriting them.
@@ -2213,19 +2292,36 @@ export function createStorage(source: string | Database, projectId: string): Sto
   // alone — the row's DISPLAY provenance is unchanged by which machine produced the current text.
   // `title_agent` IS moved, because it describes the text this statement is writing: the worker's own
   // name. It is what lets the display trust a persisted codex title once the live telemetry is gone.
+  //
+  // Lands only while the row carries NO persisted name yet (`title_agent = 0`): the Codex marker is a
+  // DISPATCH-TIME name, and so is Frizz's own mint (setMintedTitle), so whichever lands first stands and
+  // the other never renames the thread behind it (thread-names.ts — a name is stable).
   const autoTitleCasStmt = scope.prepare(`
     UPDATE session SET title = ?, title_agent = 1
     WHERE project_id = @project_id AND slug = ? AND session_id = ? AND agent_session_id IS ?
-      AND runtime_generation = ? AND title_locked = 0
+      AND runtime_generation = ? AND title_locked = 0 AND title_agent = 0 AND title_worker_renamed = 0
   `)
+  // Frizz's dispatch-time NAME (thread-names.ts mint). Same gate as the marker CAS above, keyed on the
+  // session id so a mint that finishes after a re-dispatch over the slug cannot name the new session.
+  const mintedTitleStmt = scope.prepare(`
+    UPDATE session SET title = ?, title_agent = 1
+    WHERE project_id = @project_id AND slug = ? AND session_id = ?
+      AND title_locked = 0 AND title_agent = 0 AND title_worker_renamed = 0
+  `)
+  // The live status line (periodic-status.ts). Independent of every title flag: a human-locked name
+  // still gets a status, because the status is not the name.
+  const statusStmt = scope.prepare("UPDATE session SET status = ? WHERE project_id = @project_id AND slug = ? AND session_id = ?")
   // The WORKER's own considered name for its thread, from `mcp__frizz__title`. Writes exactly what the
   // auto-title CAS writes — the text plus `title_agent = 1`, gated on the LOCK so a human rename always
   // outranks it — but keyed on the SLUG alone. The caller is the live worker's own MCP server, which
   // knows the slug frizz stamped into its env and nothing about the session id underneath it; that env
   // survives every resume, while the session id does not.
+  //
+  // ONCE per session: it sets `title_worker_renamed`, and a row that already has it is refused, because
+  // after the worker's one correction the name is stable (thread-names.ts).
   const agentTitleStmt = scope.prepare(`
-    UPDATE session SET title = ?, title_agent = 1
-    WHERE project_id = @project_id AND slug = ? AND title_locked = 0
+    UPDATE session SET title = ?, title_agent = 1, title_worker_renamed = 1
+    WHERE project_id = @project_id AND slug = ? AND title_locked = 0 AND title_worker_renamed = 0
   `)
   const delSession = scope.prepare("DELETE FROM session WHERE project_id = @project_id AND slug = ?")
   const putRetiredOp = scope.prepare("INSERT OR IGNORE INTO retired_op (project_id, slug, session_id, op_id, retired_at) VALUES (@project_id, ?, ?, ?, ?)")
@@ -2852,6 +2948,8 @@ export function createStorage(source: string | Database, projectId: string): Sto
     setQueuedAt: (slug, at) => void queuedAtStmt.run(at, slug),
     setBgSnoozeRestedAtIfCurrent: (slug, sessionId, generation, restedAt) =>
       bgSnoozeRestedAtIfCurrentStmt.run(restedAt, slug, sessionId, generation).changes === 1,
+    setSubAgentsSnoozedAtIfCurrent: (slug, sessionId, generation, at) =>
+      subAgentsSnoozedAtIfCurrentStmt.run(at, slug, sessionId, generation).changes === 1,
     setRecurringPromptIfCurrent: (slug, sessionId, generation, write) =>
       guardedRecurringWrite(slug, write, () => recurringStmt.run(...recurringArgs(write), slug, sessionId, generation).changes),
     setRecurringPromptBySlug: (slug, write) =>
@@ -2876,14 +2974,14 @@ export function createStorage(source: string | Database, projectId: string): Sto
     listThreadLinks: (slug) => threadLinksBySlugStmt.all(slug),
     threadLinksBySlug: () => groupBySlug(threadLinksStmt.all()),
     dropThreadLink: (slug, id) => dropThreadLinkStmt.run(slug, id).changes === 1,
-    insertCommandThread: (row) => void insertCommandThreadStmt.run(row),
+    insertCommandThread: (row) => void insertCommandThreadStmt.run({ ...row, shell: row.shell ? 1 : 0 }),
     listCommandThreads: () => listCommandThreadsStmt.all(),
-    restartCommandThread: (slug, startedAtMs, command) => void restartCommandThreadStmt.run(command ?? null, startedAtMs, slug),
+    restartCommandThread: (slug, startedAtMs, command) => void restartCommandThreadStmt.run({ command: command ?? null, startedAtMs, slug }),
     recordCommandExit: (slug, exit) => void recordCommandExitStmt.run(exit.exitedAtMs, exit.exitCode, exit.stopped ? 1 : 0, slug),
     interruptRunningCommandThreads: (exitedAtMs) => void interruptCommandThreadsStmt.run(exitedAtMs),
     dropCommandThread: (slug) => dropCommandThreadStmt.run(slug).changes === 1,
-    setCommandThreadState: (slug, state) => setCommandThreadStateStmt.run(state, slug).changes === 1,
-    setCommandQueuedAt: (slug, at) => void setCommandQueuedAtStmt.run(at, slug),
+    archiveThreadTerminals: (parentSlug) => archiveThreadTerminalsStmt.run(parentSlug).changes,
+    dropThreadTerminals: (parentSlug) => dropThreadTerminalsStmt.run(parentSlug).changes,
     // IDEMPOTENT BY (thread, kind, target), which is what the partial unique index enforces. A worker
     // woken by an expiry re-registers the same wait, and a worker that simply calls twice must not end
     // up with two rows to drop — so an existing armed row is RETURNED rather than replaced. Replacing
@@ -2904,6 +3002,7 @@ export function createStorage(source: string | Database, projectId: string): Sto
     armedThreadWatches: () => armedThreadWatchesStmt.all(),
     getShellBudget: (slug, shellId) => shellBudgetStmt.get(slug, shellId),
     listShellBudgets: (slug) => shellBudgetsBySlugStmt.all(slug),
+    shellBudgetsBySlug: () => groupBySlug(allShellBudgetsStmt.all()),
     extendShellBudget: (i) => void upsertShellBudgetStmt.run({
       slug: i.slug, shellId: i.shellId, startedAt: i.startedAt, nowMs: i.nowMs,
       deadlineAt: i.deadlineAtMs, warnedAt: null, warnedDeadline: null, stoppedAt: null, setDeadline: 1, setWarned: 0, setStopped: 0,
@@ -2968,6 +3067,8 @@ export function createStorage(source: string | Database, projectId: string): Sto
     clearExpiredSnoozes: (now) => clearExpiredSnoozesStmt.run(now).changes,
     setTitle: (slug, title) => void titleStmt.run(title, slug),
     setAgentTitle: (slug, title) => agentTitleStmt.run(title, slug).changes === 1,
+    setMintedTitle: (slug, sessionId, title) => mintedTitleStmt.run(title, slug, sessionId).changes === 1,
+    setStatus: (slug, sessionId, status) => statusStmt.run(status, slug, sessionId).changes === 1,
     setTitleIfCurrent: (slug, title, expected) =>
       titleCasStmt.run(title, slug, expected.sessionId, expected.title, expected.titleAuto).changes === 1,
     setAutoTitleIfCurrent: (slug, title, expected) =>

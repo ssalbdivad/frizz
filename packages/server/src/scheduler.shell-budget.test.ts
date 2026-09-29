@@ -5,23 +5,26 @@ import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { createStorage, type SessionRow, type Storage } from "./storage.ts"
 import { createScheduler } from "./scheduler.ts"
+import { WAKE_QUIET_WINDOW_MS } from "./wake-store.ts"
 import type { BgShellView, SessionTelemetry, Tailer, TurnState } from "./tailer.ts"
 import {
   declaredShellBudgetMs,
   liveShellBudget,
-  SHELL_BUDGET_DEFAULT_MS,
+  resolveShellBudget,
   SHELL_BUDGET_GRACE_MS,
   SHELL_BUDGET_MAX_MS,
   SHELL_BUDGET_MIN_MS,
-  shellLaunchBudgetMs,
   shellStopNotice,
   type ShellStopReason,
 } from "./shell-budget.ts"
 
 // THE BACKGROUND-SHELL RUNTIME BUDGET (shell-budget.ts, scheduler SOURCE 13).
 //
-// Maintainer 2026-09-29: "background shells running for 16 hours makes no sense". What must hold:
-//  · the budget a launch carries — its Bash `timeout`, clamped, else 1h;
+// Maintainer 2026-09-29: "background shells running for 16 hours makes no sense" — and then, the same
+// day, that a universal clock is wrong: a budget exists only when one was DECLARED. What must hold:
+//  · the budget a launch carries — its Bash `timeout`, clamped; NONE declared ⇒ none at all;
+//  · `extend_shell` can give a budget to a shell launched without one;
+//  · an armed `watch` holds the deadline to its own expiry (it extends; it never creates a budget);
 //  · ONE warning per deadline, however many passes and however many restarts see it overrun;
 //  · the kill GRACE after that warning, through the injected stop (the operator's × in production);
 //  · an extension moving the deadline defers both, and supersedes a warning still in the outbox;
@@ -30,7 +33,7 @@ import {
 const HOUR = 60 * 60_000
 const START = Date.parse("2026-09-29T09:00:00.000Z")
 
-test("a launch's budget: its `timeout`, clamped to [1m, 24h]; none (or garbage) is the 1h default", () => {
+test("a launch's budget is only what it DECLARED: its `timeout`, clamped to [1m, 24h]; none (or garbage) is NO budget", () => {
   assert.equal(declaredShellBudgetMs(undefined), undefined)
   assert.equal(declaredShellBudgetMs("7200000"), undefined, "a string is not a declared budget")
   assert.equal(declaredShellBudgetMs(0), undefined)
@@ -38,9 +41,10 @@ test("a launch's budget: its `timeout`, clamped to [1m, 24h]; none (or garbage) 
   assert.equal(declaredShellBudgetMs(2 * HOUR), 2 * HOUR)
   assert.equal(declaredShellBudgetMs(48 * HOUR), SHELL_BUDGET_MAX_MS, "clamped to a day")
   assert.equal(declaredShellBudgetMs(5_000), SHELL_BUDGET_MIN_MS, "a budget of seconds is a mis-sized timeout, floored")
-  assert.equal(shellLaunchBudgetMs(undefined), SHELL_BUDGET_DEFAULT_MS)
-  assert.equal(SHELL_BUDGET_DEFAULT_MS, HOUR)
-  assert.equal(shellLaunchBudgetMs(3 * HOUR), 3 * HOUR)
+  const base = { id: "toolu_sh", label: "npx vite", startedAt: new Date(START).toISOString() }
+  assert.equal(resolveShellBudget(base, undefined), undefined, "undeclared: no deadline at all, not a default one")
+  assert.equal(resolveShellBudget({ ...base, budgetMs: HOUR }, undefined)?.deadlineMs, START + HOUR, "control: a declared one resolves")
+  assert.equal(resolveShellBudget({ ...base, budgetMs: HOUR, monitor: true }, undefined), undefined, "a Monitor never has one")
 })
 
 test("the kill notice says WHY: the operator's words stay put, a budget stop names the budget", () => {
@@ -69,13 +73,21 @@ function tele(shells: BgShellView[], turn: TurnState = "idle"): SessionTelemetry
   return { turn, permPrompt: false, subAgents: [], bgShells: shells, pendingQuestion: false }
 }
 
-function harness(opts: { stoppable?: boolean; stopThrows?: boolean } = {}) {
+function harness(opts: {
+  stoppable?: boolean
+  stopThrows?: boolean
+  quietWindowMs?: number
+  /** The transport refuses every wake until this instant — a delivery that lags its enqueue. */
+  resumeFailsUntilMs?: number
+  delivery?: { retryBaseMs?: number; retryMaxMs?: number; deliveryLeaseMs?: number; maxDeliveryAttempts?: number }
+  wakeRuntimeState?: () => "alive" | "dead" | "unknown"
+} = {}) {
   const dir = mkdtempSync(join(tmpdir(), "frizz-shell-budget-"))
   const dbPath = join(dir, "ui.db")
   let storage: Storage = createStorage(dbPath, "p")
   const teleMap = new Map<string, SessionTelemetry>()
-  const resumes: { slug: string; message: string; deliveryId: string }[] = []
-  const stops: { slug: string; id: string; reason: ShellStopReason; notify: boolean }[] = []
+  const resumes: { slug: string; message: string; deliveryId: string; at: number }[] = []
+  const stops: { slug: string; id: string; reason: ShellStopReason; notify: boolean; at: number }[] = []
   const clock = { ms: START }
   const tailer: Tailer = {
     get: (slug) => teleMap.get(slug), foreignIds: () => [], subAgent: () => undefined,
@@ -84,17 +96,22 @@ function harness(opts: { stoppable?: boolean; stopThrows?: boolean } = {}) {
   const make = () => createScheduler({
     storage,
     tailer,
-    resume: (slug, message, deliveryId) => void resumes.push({ slug, message, deliveryId }),
+    resume: (slug, message, deliveryId) => {
+      if (opts.resumeFailsUntilMs !== undefined && clock.ms < opts.resumeFailsUntilMs) throw new Error("socket down")
+      resumes.push({ slug, message, deliveryId, at: clock.ms })
+    },
     now: () => clock.ms,
     fetchPr: async () => undefined,
     fetchGithubReview: async () => [],
     log: () => {},
-    wakeQuietWindowMs: 0,
+    wakeQuietWindowMs: opts.quietWindowMs ?? 0,
+    ...opts.delivery,
+    ...(opts.wakeRuntimeState ? { wakeRuntimeState: opts.wakeRuntimeState } : {}),
     shellControl: {
       stoppable: () => opts.stoppable !== false,
       stop: async (slug, id, reason, stopOpts) => {
         if (opts.stopThrows) throw new Error("daemon went away")
-        stops.push({ slug, id, reason, notify: stopOpts.notify })
+        stops.push({ slug, id, reason, notify: stopOpts.notify, at: clock.ms })
         // The real stop retires the row from tracking; so does this.
         const t = teleMap.get(slug)
         if (t) teleMap.set(slug, { ...t, bgShells: t.bgShells.filter((s) => s.id !== id) })
@@ -115,7 +132,7 @@ function harness(opts: { stoppable?: boolean; stopThrows?: boolean } = {}) {
   }
 }
 
-const warnings = (resumes: { message: string }[]) => resumes.filter((r) => /past its .* budget/.test(r.message))
+const warnings = <R extends { message: string }>(resumes: R[]): R[] => resumes.filter((r) => /past its .* budget/.test(r.message))
 
 test("inside its budget a shell is left alone; past it, ONE warning — across passes and a restart", async () => {
   const h = harness()
@@ -217,6 +234,98 @@ test("the grace counts from the WARNING: a server down across the deadline still
   }
 })
 
+// ---- THE GRACE RUNS FROM DELIVERY (2026-09-29) ----
+//
+// Observed on a real stack: two shells whose warnings fell due 8s apart were DELIVERED ~5m apart — the
+// second was held by the thread's quiet window, opened by the first — while the kill clock ran from the
+// instant each warning was QUEUED. The second worker got ~5 of its 10 minutes. These drive the real
+// scheduler + outbox on a 10s tick, the production cadence, and read the grace off what the worker
+// actually received.
+
+/** Tick the scheduler every 10s from `from` to `to`, as production does. */
+async function run(h: { clock: { ms: number } }, s: { tick(): Promise<void> }, from: number, to: number): Promise<void> {
+  for (h.clock.ms = from; h.clock.ms <= to; h.clock.ms += 10_000) await s.tick()
+}
+
+test("two shells due 8s apart under the REAL quiet window: both warnings land promptly, each gets its full grace from delivery", async () => {
+  const h = harness({ quietWindowMs: WAKE_QUIET_WINDOW_MS })
+  try {
+    h.storage.upsertSession(row("t"))
+    h.tele.set("t", tele([
+      shell({ id: "toolu_a", taskId: "ba", label: "sleep 3600", budgetMs: HOUR }),
+      shell({ id: "toolu_b", taskId: "bb", label: "sleep 3601", budgetMs: HOUR + 8_000 }),
+    ]))
+    const s = h.make()
+    await run(h, s, START + HOUR + 5_000, START + HOUR + 40 * 60_000)
+    for (const [taskId, id, deadline] of [["ba", "toolu_a", START + HOUR], ["bb", "toolu_b", START + HOUR + 8_000]] as const) {
+      const warned = h.resumes.find((r) => r.message.includes(`\`${taskId}\``) && /past its/.test(r.message))
+      const stop = h.stops.find((x) => x.id === id)
+      assert.ok(warned, `${taskId} was warned`)
+      assert.ok(stop, `${taskId} was stopped`)
+      assert.ok(warned.at - deadline <= 20_000, `${taskId}'s warning lands within two ticks of its deadline, not a quiet window later (${(warned.at - deadline) / 1000}s)`)
+      assert.ok(stop.at - warned.at >= SHELL_BUDGET_GRACE_MS, `${taskId} gets its full grace after the warning REACHED it (${(stop.at - warned.at) / 1000}s)`)
+      assert.ok(stop.at - warned.at <= SHELL_BUDGET_GRACE_MS + 10_000, `…and is stopped within a tick of it running out`)
+    }
+    await s.stop()
+  } finally {
+    h.cleanup()
+  }
+})
+
+test("a warning DELIVERED late still gets its full grace — the clock runs from delivery, not from the queue", async () => {
+  const deadline = START + HOUR
+  // The transport is down for the first six minutes past the deadline; the wake is retried every tick.
+  const h = harness({ resumeFailsUntilMs: deadline + 6 * 60_000, delivery: { retryBaseMs: 1, retryMaxMs: 1, deliveryLeaseMs: 1, maxDeliveryAttempts: 1_000 } })
+  try {
+    h.storage.upsertSession(row("t"))
+    h.tele.set("t", tele([shell()]))
+    const s = h.make()
+    await run(h, s, deadline + 5_000, deadline + 30 * 60_000)
+    const warned = warnings(h.resumes)
+    assert.equal(warned.length, 1)
+    assert.ok(warned[0]!.at >= deadline + 6 * 60_000, "control: the delivery really did lag")
+    assert.equal(h.stops.length, 1)
+    assert.ok(h.stops[0]!.at - warned[0]!.at >= SHELL_BUDGET_GRACE_MS, `full grace after delivery (${(h.stops[0]!.at - warned[0]!.at) / 1000}s)`)
+    await s.stop()
+  } finally {
+    h.cleanup()
+  }
+})
+
+test("SENT to a live runtime counts as delivered: the grace runs from the send, not from the later confirmation", async () => {
+  const h = harness({ wakeRuntimeState: () => "alive", resumeFailsUntilMs: START + HOUR + 3 * 60_000, delivery: { retryBaseMs: 1, retryMaxMs: 1, deliveryLeaseMs: 1, maxDeliveryAttempts: 1_000 } })
+  try {
+    h.storage.upsertSession(row("t"))
+    h.tele.set("t", tele([shell()]))
+    const s = h.make()
+    await run(h, s, START + HOUR + 5_000, START + HOUR + 30 * 60_000)
+    const warned = warnings(h.resumes)
+    assert.equal(warned.length, 1)
+    assert.equal(h.stops.length, 1)
+    const grace = h.stops[0]!.at - warned[0]!.at
+    assert.ok(grace >= SHELL_BUDGET_GRACE_MS && grace <= SHELL_BUDGET_GRACE_MS + 10_000, `grace from the send (${grace / 1000}s)`)
+    await s.stop()
+  } finally {
+    h.cleanup()
+  }
+})
+
+test("a warning that can NEVER be delivered does not keep the shell alive: the clock falls back to when it was queued", async () => {
+  const h = harness({ resumeFailsUntilMs: Number.POSITIVE_INFINITY, delivery: { retryBaseMs: 1, retryMaxMs: 1, deliveryLeaseMs: 1, maxDeliveryAttempts: 3 } })
+  try {
+    h.storage.upsertSession(row("t"))
+    h.tele.set("t", tele([shell()]))
+    const s = h.make()
+    await run(h, s, START + HOUR + 5_000, START + HOUR + 30 * 60_000)
+    assert.equal(warnings(h.resumes).length, 0, "control: nothing ever reached the worker")
+    assert.equal(h.stops.length, 1, "the exhausted warning does not hold the kill forever")
+    assert.ok(h.stops[0]!.at - (START + HOUR + 5_000) <= SHELL_BUDGET_GRACE_MS + 10_000)
+    await s.stop()
+  } finally {
+    h.cleanup()
+  }
+})
+
 test("an extension defers the warning, supersedes one already queued, and re-arms at the new deadline", async () => {
   const h = harness()
   try {
@@ -312,7 +421,7 @@ test("a Monitor, a stale shell, and a shell under budget are all left alone", as
   try {
     h.storage.upsertSession(row("t"))
     h.tele.set("t", tele([
-      shell({ id: "toolu_mon", taskId: "bmon", budgetMs: undefined, label: "tail -f log" }),
+      shell({ id: "toolu_mon", taskId: "bmon", budgetMs: undefined, monitor: true, label: "tail -f log" }),
       shell({ id: "toolu_gone", taskId: "bgone", state: "stale" }),
       shell({ id: "toolu_long", taskId: "blong", budgetMs: 8 * HOUR }),
     ]))
@@ -384,7 +493,7 @@ test("a budget row recorded for a DIFFERENT shell under the same id is ignored (
     const older = "2026-09-28T09:00:00.000Z"
     h.storage.extendShellBudget({ slug: "t", shellId: "proc-1", startedAt: older, deadlineAtMs: START + 20 * HOUR, nowMs: START })
     h.storage.markShellBudgetWarned({ slug: "t", shellId: "proc-1", startedAt: older, deadlineMs: START + 20 * HOUR, nowMs: START })
-    const live = { id: "proc-1", startedAt: new Date(START).toISOString(), budgetMs: HOUR }
+    const live = { id: "proc-1", label: "sleep 900", startedAt: new Date(START).toISOString(), budgetMs: HOUR }
     const budget = liveShellBudget(h.storage, "t", live)
     assert.equal(budget?.deadlineMs, START + HOUR, "the earlier shell's extension does not carry over")
     assert.equal(budget?.record, undefined)
@@ -396,4 +505,131 @@ test("a budget row recorded for a DIFFERENT shell under the same id is ignored (
   } finally {
     h.cleanup()
   }
+})
+
+// ---- OPT-IN (2026-09-29): no declaration, no clock ----
+
+test("an UNDECLARED shell is never warned or stopped, however long it runs — beside a declared one that is", async () => {
+  const h = harness()
+  try {
+    h.storage.upsertSession(row("t"))
+    h.tele.set("t", tele([
+      shell({ id: "toolu_dev", taskId: "bdev", label: "npx vite --port 5231", budgetMs: undefined }),
+      // THE NEGATIVE CONTROL: the same thread, the same clock, one declared hour. If the pass could not
+      // fire at all, the undeclared shell's silence would prove nothing.
+      shell({ id: "toolu_poll", taskId: "bpoll", label: "until gh run view …; do sleep 30; done", budgetMs: HOUR }),
+    ]))
+    const s = h.make()
+    h.clock.ms = START + HOUR + 1_000
+    await s.tick()
+    assert.deepEqual(warnings(h.resumes).map((r) => /`(b\w+)`/.exec(r.message)?.[1]), ["bpoll"], "only the declared shell is warned")
+    h.clock.ms += SHELL_BUDGET_GRACE_MS
+    await s.tick()
+    assert.deepEqual(h.stops.map((x) => x.id), ["toolu_poll"], "…and only it is stopped")
+    // Days later, the dev server is still simply running.
+    h.clock.ms = START + 72 * HOUR
+    await s.tick()
+    await s.tick()
+    assert.equal(warnings(h.resumes).length, 1)
+    assert.deepEqual(h.stops.map((x) => x.id), ["toolu_poll"])
+    assert.equal(h.storage.getShellBudget("t", "toolu_dev"), undefined, "no bookkeeping is ever written for it")
+    await s.stop()
+  } finally {
+    h.cleanup()
+  }
+})
+
+test("a CODEX exec (no launch knob, no budget) is left alone until extend_shell gives it one", async () => {
+  const h = harness()
+  try {
+    h.storage.upsertSession(row("t"))
+    h.storage.setBackend("t", "codex")
+    const exec = shell({ id: "proc-7", taskId: undefined, label: "pnpm dev", budgetMs: undefined })
+    h.tele.set("t", tele([exec]))
+    const s = h.make()
+    h.clock.ms = START + 30 * HOUR
+    await s.tick()
+    assert.deepEqual(warnings(h.resumes), [], "unbudgeted")
+    // The worker gives it two hours from now.
+    h.storage.extendShellBudget({ slug: "t", shellId: "proc-7", startedAt: exec.startedAt, deadlineAtMs: h.clock.ms + 2 * HOUR, nowMs: h.clock.ms })
+    h.clock.ms += 2 * HOUR - 1_000
+    await s.tick()
+    assert.deepEqual(warnings(h.resumes), [], "a second short of the new deadline")
+    h.clock.ms += 2_000
+    await s.tick()
+    assert.equal(warnings(h.resumes).length, 1)
+    assert.match(warnings(h.resumes)[0]!.message, /`proc-7` \(pnpm dev\) has been running 1d 8h, past its 1d 8h budget/)
+    assert.match(warnings(h.resumes)[0]!.message, /end its process yourself/)
+    h.clock.ms += SHELL_BUDGET_GRACE_MS
+    await s.tick()
+    assert.deepEqual(h.stops.map((x) => x.id), ["proc-7"], "the budget it was given is enforced like a declared one")
+    await s.stop()
+  } finally {
+    h.cleanup()
+  }
+})
+
+test("an armed WATCH holds a declared shell to the watch's expiry — the 20h watch no longer dies at 17h", async () => {
+  const h = harness()
+  try {
+    h.storage.upsertSession(row("t"))
+    h.tele.set("t", tele([
+      shell({ id: "toolu_ci", taskId: "bci", label: "arktype CI poller", budgetMs: HOUR }),
+      // NEGATIVE CONTROL: the same declared hour, no watch on it.
+      shell({ id: "toolu_other", taskId: "bother", label: "vitest --watch", budgetMs: HOUR }),
+    ]))
+    h.storage.armThreadWatch({ id: "wch_ci", slug: "t", kind: "shell", target: "bci", createdAtMs: START, expiresAtMs: START + 20 * HOUR })
+    const s = h.make()
+    h.clock.ms = START + HOUR + 1_000
+    await s.tick()
+    assert.deepEqual(warnings(h.resumes).map((r) => /`(b\w+)`/.exec(r.message)?.[1]), ["bother"], "the unwatched shell is warned at its hour; the watched one is not")
+    h.clock.ms = START + 17 * HOUR
+    await s.tick()
+    assert.deepEqual(h.stops.map((x) => x.id), ["toolu_other"], "at 17h only the unwatched shell has been stopped")
+    assert.equal(liveShellBudget(h.storage, "t", shell({ id: "toolu_ci", taskId: "bci", label: "arktype CI poller" }))?.watchUntilMs, START + 20 * HOUR)
+    // The watch expires at 20h — evalOwnWatches settles it and wakes the worker — and the shell, still
+    // past the budget it declared, gets the ordinary warning at that instant, and its grace.
+    h.clock.ms = START + 20 * HOUR + 1_000
+    await s.tick()
+    assert.equal(warnings(h.resumes).length, 2)
+    assert.match(warnings(h.resumes)[1]!.message, /`bci` \(arktype CI poller\) has been running 20h, past its 1h budget/)
+    h.clock.ms += SHELL_BUDGET_GRACE_MS
+    await s.tick()
+    assert.deepEqual(h.stops.map((x) => x.id), ["toolu_other", "toolu_ci"])
+    await s.stop()
+  } finally {
+    h.cleanup()
+  }
+})
+
+test("arming a watch AFTER the warning cancels the pending kill, as extend_shell would", async () => {
+  const h = harness()
+  try {
+    h.storage.upsertSession(row("t"))
+    h.tele.set("t", tele([shell()]))
+    const s = h.make()
+    h.clock.ms = START + HOUR + 1_000
+    await s.tick()
+    assert.equal(warnings(h.resumes).length, 1)
+    h.storage.armThreadWatch({ id: "wch_v", slug: "t", kind: "shell", target: "npx vite --port 5231", createdAtMs: h.clock.ms, expiresAtMs: h.clock.ms + 6 * HOUR })
+    h.clock.ms += SHELL_BUDGET_GRACE_MS + 1_000
+    await s.tick()
+    assert.deepEqual(h.stops, [], "held by the watch (named by its label)")
+    await s.stop()
+  } finally {
+    h.cleanup()
+  }
+})
+
+test("a watch never CREATES a budget, and a watch on another shell or an agent holds nothing", () => {
+  const started = new Date(START).toISOString()
+  const watches = [
+    { kind: "shell", target: "bci", expiresAtMs: START + 20 * HOUR },
+    { kind: "agent", target: "bvite1", expiresAtMs: START + 20 * HOUR },
+  ]
+  assert.equal(resolveShellBudget({ id: "toolu_ci", taskId: "bci", label: "ci", startedAt: started }, undefined, watches), undefined, "unbudgeted stays unbudgeted under a watch")
+  const vite = { id: "toolu_sh", taskId: "bvite1", label: "npx vite", startedAt: started, budgetMs: HOUR }
+  assert.equal(resolveShellBudget(vite, undefined, watches)?.deadlineMs, START + HOUR, "an agent-kind watch on the same string and a watch on another shell do not hold it")
+  assert.equal(resolveShellBudget(vite, undefined, [{ kind: "shell", target: "toolu_sh", expiresAtMs: START + 30 * 60_000 }])?.deadlineMs, START + HOUR, "a watch that ends BEFORE the budget does not shorten it")
+  assert.equal(resolveShellBudget(vite, undefined, [{ kind: "shell", target: "toolu_sh", expiresAtMs: START + 5 * HOUR }])?.deadlineMs, START + 5 * HOUR, "control: a longer one on its launch id holds it")
 })

@@ -371,10 +371,10 @@ test("loadWorkerPrompt(codex) carries codex's OWN session/wake + model/effort/sa
 test("loadWorkerPrompt(codex) requests exactly one first-output invisible title comment", () => {
   const c = loadWorkerPrompt("codex")
   assert.match(c, /## Thread title signal/)
-  assert.match(c, /<!-- frizz title="Fix queue focus" -->/)
+  assert.match(c, /<!-- frizz title="Queue focus" -->/)
   assert.match(c, /very FIRST assistant message/)
   assert.match(c, /before any[\s\S]*commentary[\s\S]*tool call/)
-  assert.match(c, /3-8 word title/)
+  assert.match(c, /ONE or TWO words naming the SUBJECT/)
   assert.match(c, /strips this comment from visible chat/)
   assert.match(c, /human rename always wins/)
   assert.match(c, /Never use an H1\nfor the title signal/)

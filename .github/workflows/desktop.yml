@@ -4,11 +4,13 @@ name: desktop
 # a GitHub release named desktop-v<version>. Never to npm, and never as the repository's Latest
 # release — Latest stays the `frizz` shell's v<version>, which release.yml creates.
 #
-# IT RIDES `release` EXACTLY AS release.yml DOES: a push there means "verified and chosen to ship", and
-# the run is idempotent by the same construction — the release for this version exists or it does not.
-# So bumping packages/desktop/package.json is what ships a new build, and a release push that leaves it
-# alone is a no-op in seconds. (No path filter, for release.yml's reason: `release` fast-forwards over
-# several commits at once, and the bump is rarely in the pushed range's own diff.)
+# DISPATCH ONLY, off `release`, as release.yml is (2026-09-23: "No push publishes anything"). Moving
+# `release` selects the verified commit and starts nothing; a maintainer's
+# `gh workflow run desktop.yml --ref release` is what starts a desktop build. A `workflow_dispatch` needs
+# a GitHub session or token with write access, which a stolen git push credential does not carry, so
+# that credential alone cannot put installers on a GitHub release. The run is idempotent: the release for
+# this version exists or it does not. So a dispatch after bumping packages/desktop/package.json ships a
+# new build, and a dispatch that finds this version already released is a no-op in seconds.
 #
 # UNSIGNED, by the maintainer's decision (2026-09-28): the macOS builds are ad-hoc signed — an arm64 app
 # with no signature at all does not open — and not notarized; the Windows installer carries no
@@ -21,10 +23,9 @@ name: desktop
 # half-uploaded release is never public.
 
 on:
-  push:
-    branches: [release]
-  # For a run that died after building — `gh workflow run desktop.yml --ref release` rebuilds and
-  # replaces a draft, and no-ops on a release. Any other ref is refused (decide, below).
+  # The only trigger. `gh workflow run desktop.yml --ref release` builds this version, and after a run
+  # that died mid-publish it rebuilds and replaces the draft; on a published release it no-ops. Any
+  # other ref is refused (decide, below).
   workflow_dispatch:
 
 concurrency:

@@ -87,6 +87,12 @@ export function resumeViewportLock(): void {
 let endGlide: ((reland: boolean) => void) | null = null
 const GLIDE_TIMEOUT_MS = 1_200
 
+/** Whether a glide is still under way — for a caller holding its target as "the card being read" until
+ *  the glide lands (AllQueues.tsx useQueueKeys), however far it has to travel. */
+export function gliding(): boolean {
+  return endGlide !== null
+}
+
 /** Smooth-scroll the page to `target()` (a page offset, read again when the glide ends). Returns the offset it set out for. */
 export function glideTo(target: () => number): number {
   endGlide?.(false)

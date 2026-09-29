@@ -91,6 +91,29 @@ test("Bash background hook preserves self-contained concurrency and non-job ampe
   ]) assert.deepEqual(output(command), {}, command)
 })
 
+// THE SPAWN-TIME BUDGET PROMPT (server shell-budget.ts: no declared budget ⇒ none). A background call
+// with no `timeout` is asked, once, whether it should end on a clock — never blocked, and never nagged
+// when it already declared one.
+test("an untimed run_in_background call gets ONE non-blocking line; a timed one, a foreground one, or a non-worker gets nothing", () => {
+  const untimed = decision("npx vite --port 5231", true, { run_in_background: true })
+  assert.equal(untimed.hookSpecificOutput?.hookEventName, "PreToolUse")
+  assert.equal(untimed.hookSpecificOutput?.permissionDecision, undefined, "never a decision — the call runs as written")
+  assert.match(untimed.hookSpecificOutput?.additionalContext ?? "", /no `timeout`/)
+  assert.match(untimed.hookSpecificOutput?.additionalContext ?? "", /mcp__frizz__extend_shell/)
+  assert.match(untimed.hookSpecificOutput?.additionalContext ?? "", /dev server or watcher/)
+  assert.ok((untimed.hookSpecificOutput?.additionalContext ?? "").length < 500, "brief")
+  // The negative controls: the same command, every way that must stay silent.
+  assert.deepEqual(decision("npx vite --port 5231", true, { run_in_background: true, timeout: 600_000 }), {}, "a declared timeout is not nagged")
+  assert.deepEqual(decision("npx vite --port 5231", true, {}), {}, "a foreground call is not asked")
+  assert.deepEqual(decision("npx vite --port 5231", true, { run_in_background: false, timeout: undefined }), {})
+  assert.deepEqual(decision("npx vite --port 5231", false, { run_in_background: true }), {}, "inert outside a worker")
+  // Garbage is not a declaration (the server clamps the same way: shell-budget.ts declaredShellBudgetMs).
+  assert.match(decision("sleep 60", true, { run_in_background: true, timeout: 0 }).hookSpecificOutput?.additionalContext ?? "", /no `timeout`/)
+  // An escaping job is still DENIED, not merely advised — the deny outranks the prompt.
+  assert.equal(output("server &").permissionDecision, "deny")
+  assert.equal(decision("server &", true, { run_in_background: true }).hookSpecificOutput?.permissionDecision, "deny")
+})
+
 test("Bash background hook is inert outside a Frizz worker", () => {
   assert.deepEqual(decision("cargo test &", false), {})
 })

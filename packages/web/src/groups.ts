@@ -1,5 +1,6 @@
 import {
   atRest,
+  doneButRunning,
   futureSnoozedUntil,
   hasLiveOps,
   hasLiveSubAgents,
@@ -18,7 +19,7 @@ import {
 
 // The band predicates live in @frizz/shared so the server counts the rail's running badge with the
 // same rule the sidebar bands on. Re-exported here, where every web caller already imports them.
-export { futureSnoozedUntil, isActivelyRunning, isSnoozed, prChecksRunning, sectionOf, type SectionKey }
+export { doneButRunning, futureSnoozedUntil, isActivelyRunning, isSnoozed, prChecksRunning, sectionOf, type SectionKey }
 import { canRetry } from "./lib/status.ts"
 
 // Shared listing logic: the queue definition (needsAction), the sidebar's status-keyed sections
@@ -165,8 +166,9 @@ export function needsAction(t: ThreadView): boolean {
   // A REGISTERED question (open thread_question rows on the view) is the same ask through the durable
   // channel — the server queues it once at rest (deriveNeedsYou's openQuestions), and this predicate
   // must agree so the mobile asks-first ordering and the attention sort count it. Same rest-gate as the
-  // fence net above: the worker keeps working after registering, and the card lands at its rest. Owed
-  // ones only: a question the human replied past is a pivot and asks nothing (questionRepliedPast).
+  // fence net above: the worker keeps working after registering, and the card lands at its rest. Every
+  // open one: since 2026-09-29 a typed message past a question no longer sets it aside — the worker
+  // `unask`s what the message made moot — so a question stays the human's until it is settled.
   if (questionsOwed(t.questions).length > 0 && t.runtime !== "running" && t.runtime !== "spawning") return true
   // CRASH / STALL net (replaces the old `unread`-gated clause — `unread` no longer drives anything).
   // A thread whose status still claims WORK IN FLIGHT (active or planning) but whose backing agent
@@ -618,8 +620,11 @@ export type SessionIndicatorKind = "archived" | "needs-input" | "working" | "bac
 
 export function sessionIndicatorKind(t: ThreadView): SessionIndicatorKind {
   // DONE IS THE HUMAN'S TO UNDO, and nothing a worker does afterwards reads as undoing it — see
-  // `sectionOf`. A worker still finishing a turn after Mark as done keeps the check, not a spinner.
-  if (t.state === "archived") return "archived"
+  // `sectionOf`, which keeps the ROW under Done. But a live session never sits there SILENTLY
+  // (maintainer, hit 3× before 2026-07-10): while its turn drains or a sub-agent it dispatched is still
+  // out, the Done row wears the spinner (shared doneButRunning), and settles back to the check the moment
+  // it comes to rest. The mark says what the process is doing; the band says what the human decided.
+  if (t.state === "archived") return doneButRunning(t) ? "working" : "archived"
   const activelyRunning = isActivelyRunning(t)
 
   // A PARK THE OPERATOR SET OUTRANKS EVERY ASK MARK BELOW IT — the order the SERVER already derives the
@@ -636,6 +641,11 @@ export function sessionIndicatorKind(t: ThreadView): SessionIndicatorKind {
   // futureSnoozedUntil so ONLY the operator's own wall-clock park takes this branch: a declared wait or
   // an event-snooze leaves the thread QUEUED server-side, where the ask is reachable and the [?] is true.
   if (futureSnoozedUntil(t) !== undefined && isSnoozed(t)) return "snoozed"
+  // SNOOZED UNTIL ALL SUB-AGENTS RETURN is the other park that must outrank the spinner below: its row
+  // has live children by definition, so `working` would claim it on every rest, in the Snoozed band the
+  // human just put it in. The server only sets the flag while nothing queues the thread, so no ask mark
+  // below can be true of it; mid-turn it is dropped, and the row spins in Active like any snoozed one.
+  if (t.subAgentsSnoozed === true && isSnoozed(t)) return "snoozed"
 
   const explicitlyNeedsInput = Boolean(
     t.actionableInteraction ||

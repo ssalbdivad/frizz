@@ -6,7 +6,7 @@ import { homedir, tmpdir } from "node:os"
 import { join } from "node:path"
 import { Hono } from "hono"
 import { mountRouter } from "@frizz/rpc/server"
-import { DISPATCH_TASK_BANNER_MARKER, type BoardSnapshot, type Settings, type ThreadView, type TranscriptMessage } from "@frizz/shared"
+import { DISPATCH_TASK_BANNER_MARKER, openQuestionsNote, stripFollowUpRiders, type BoardSnapshot, type Settings, type ThreadView, type TranscriptMessage } from "@frizz/shared"
 import type { BoardManager } from "./board.ts"
 import { appendDelivery, parseDeliveryLedger, projectDeliveryLedger } from "./delivery-ledger.ts"
 import { createWakeDeliveryStore } from "./wake-store.ts"
@@ -31,6 +31,7 @@ import {
 import { projectTranscriptPageAgentLifecycles } from "./transcript.ts"
 import { readProjectIdFile, writeProjectIdFile } from "./project-root.ts"
 import { findByPath, registerProject } from "./project-registry.ts"
+import { createThreadNamer } from "./thread-names.ts"
 import { createStorage, type AdoptionClaimRow, type SessionRow } from "./storage.ts"
 import type { AdoptionPaneLookup, PaneIdentity, PaneIdentity as PaneSnapshot } from "./adoption-recovery.ts"
 import type { AppContext } from "./context.ts"
@@ -180,6 +181,14 @@ function harness(tailer: Tailer = noopTailer) {
     transcriptChange: new Emitter<string[]>(),
     backendFor: () => backend,
     getSettings: () => settings,
+    // Every lifecycle write (done, archive, forget) settles the thread's terminals first; these threads
+    // have none.
+    terminalRunner: {
+      live: () => [],
+      stopThread: async () => {},
+      closeThread: async () => {},
+      forgetThread: async () => {},
+    },
     dispatcher: {
       dispatch: async () => ({ slug: "dispatched", sessionId: "sid-dispatched" }),
       adopt: async (slug: string) => {
@@ -432,16 +441,107 @@ test("aiRenameThread RPC: the title request carries the opening task, not the la
       ].map((l) => l + "\n").join(""),
     )
     const described: string[] = []
-    ;(h.ctx as { claudeBroker?: unknown }).claudeBroker = {
-      renameSession: async (input: { description: string }) => {
-        described.push(input.description)
-        return "Fix the flaky resume test"
+    ;(h.ctx as { claudeBroker?: unknown }).claudeBroker = {}
+    ;(h.ctx as { threadNamer?: unknown }).threadNamer = createThreadNamer({
+      storage: h.storage,
+      aiTitleOf: () => undefined,
+      complete: async ({ prompt }) => {
+        described.push(prompt)
+        return "Resume flake"
       },
-    }
+    })
     const result = await h.router.aiRenameThread.handler({ input: { slug: "rename-src" } })
-    assert.deepEqual(result, { title: "Fix the flaky resume test" })
-    assert.deepEqual(described, [task])
-    assert.equal(h.storage.getSession("rename-src")?.title, "Fix the flaky resume test")
+    assert.deepEqual(result, { title: "Resume flake" })
+    assert.equal(described.length, 1)
+    assert.match(described[0]!, new RegExp(`<request>\\n${task}\\n</request>`))
+    assert.doesNotMatch(described[0]!, /orientation the operator never wrote|all green/)
+    assert.equal(h.storage.getSession("rename-src")?.title, "Resume flake")
+    h.storage.close()
+  } finally {
+    rmSync(logDir, { recursive: true, force: true })
+  }
+})
+
+// NAMES ARE NEVER DUPLICATED (thread-names.ts), and every writer is held to it — here the two the router
+// owns: a human's rename (an inline error in the header editor) and the worker's `mcp__frizz__title`
+// (a refusal that names the holder). Each has its negative control: a distinct name goes straight in.
+test("renameThread RPC: a human rename that duplicates an open thread's name is refused; a distinct one locks", async () => {
+  const h = harness()
+  h.storage.upsertSession(row("holder"))
+  h.storage.setTitle("holder", "Shell budgets")
+  h.storage.upsertSession({ ...row("mine"), title_auto: 1, title_locked: 0, title: "chop…" })
+  await assert.rejects(
+    h.router.renameThread.handler({ input: { slug: "mine", title: "shell-budgets" } }),
+    /“Shell budgets” is already another open thread's name/,
+  )
+  assert.equal(h.storage.getSession("mine")?.title, "chop…", "the refused name never landed")
+  assert.equal(h.storage.getSession("mine")?.title_locked, 0)
+  await h.router.renameThread.handler({ input: { slug: "mine", title: "Budget defaults" } })
+  assert.equal(h.storage.getSession("mine")?.title, "Budget defaults")
+  assert.equal(h.storage.getSession("mine")?.title_locked, 1, "a human rename locks the name")
+  // Renaming a thread to its own current name is not a collision with itself.
+  await h.router.renameThread.handler({ input: { slug: "holder", title: "Shell budgets" } })
+  h.storage.close()
+})
+
+test("setOwnThreadTitle RPC: a duplicate is refused NAMING its holder, a distinct one lands once, and a second rename is refused", async () => {
+  const h = harness()
+  h.storage.upsertSession(row("holder"))
+  h.storage.setTitle("holder", "Focus mode")
+  h.storage.upsertSession({ ...row("worker"), title_auto: 1, title_locked: 0, title: "chop…" })
+  const call = (title: string) => h.router.setOwnThreadTitle.handler({ input: { slug: "worker", title } })
+
+  const dupe = await call("Focus Mode")
+  assert.equal(dupe.accepted, false)
+  assert.equal(dupe.lockedByHuman, false)
+  assert.match(dupe.refusal ?? "", /already named "Focus mode" \(thread holder\)/)
+  assert.match(dupe.refusal ?? "", /different one- or two-word subject/)
+  assert.equal(h.storage.getSession("worker")?.title_worker_renamed, 0, "a refusal does not spend the rename")
+
+  const long = await call("Fix the focus mode rail")
+  assert.equal(long.accepted, false)
+  assert.match(long.refusal ?? "", /longer than two words/)
+
+  const ok = await call("Focus rail")
+  assert.deepEqual(ok, { accepted: true, title: "Focus rail", lockedByHuman: false })
+  assert.equal(h.storage.getSession("worker")?.title, "Focus rail")
+
+  const again = await call("Rail focus")
+  assert.equal(again.accepted, false)
+  assert.match(again.refusal ?? "", /already renamed this thread once/)
+  assert.equal(h.storage.getSession("worker")?.title, "Focus rail", "the name is stable after the one rename")
+  h.storage.close()
+})
+
+test("aiRenameThread RPC: a collision is retried once naming it, then falls back to a distinguishing word", async () => {
+  const cwdSlug = `-tmp-frizz-rename-dupe-${process.pid}-${Math.random().toString(36).slice(2, 8)}`
+  const logDir = join(homedir(), ".claude", "projects", cwdSlug)
+  mkdirSync(logDir, { recursive: true })
+  const h = harness()
+  try {
+    ;(h.ctx.project as { cwdSlug: string }).cwdSlug = cwdSlug
+    h.storage.upsertSession(row("holder"))
+    h.storage.setTitle("holder", "Shell budgets")
+    h.storage.upsertSession({ ...row("dupe-src"), exited: 0, title_auto: 1, title_locked: 0 })
+    h.storage.setBackend("dupe-src", "claude")
+    h.storage.setClaudeRuntime("dupe-src", "broker")
+    writeFileSync(
+      join(logDir, "sid-dupe-src.jsonl"),
+      JSON.stringify({ type: "user", timestamp: "2026-09-29T00:00:00.000Z", message: { role: "user", content: "the shell budget default is too low, raise the ceiling" } }) + "\n",
+    )
+    const prompts: string[] = []
+    ;(h.ctx as { claudeBroker?: unknown }).claudeBroker = {}
+    ;(h.ctx as { threadNamer?: unknown }).threadNamer = createThreadNamer({
+      storage: h.storage,
+      aiTitleOf: () => undefined,
+      complete: async ({ prompt }) => { prompts.push(prompt); return "Shell budgets" },
+    })
+    const result = await h.router.aiRenameThread.handler({ input: { slug: "dupe-src" } })
+    assert.equal(prompts.length, 2)
+    assert.match(prompts[0]!, /Names already taken in this project:\n- Shell budgets\n/)
+    assert.match(prompts[1]!, /Your previous answer, "Shell budgets", is already the name of another thread/)
+    assert.deepEqual(result, { title: "Shell default" })
+    assert.equal(h.storage.getSession("dupe-src")?.title, "Shell default")
     h.storage.close()
   } finally {
     rmSync(logDir, { recursive: true, force: true })
@@ -610,6 +710,40 @@ test("followUp wakes a snoozed thread and disarms the bump it owed", async () =>
   assert.equal(h.storage.getSession(slug)?.snooze_prompt, null, "and so is the bump it owed at that deadline")
   h.storage.close()
 })
+// THE WORKER DECIDES THE PIVOT (2026-09-29). A typed message no longer releases the open questions by
+// timestamp — it released seven the human still meant to answer when they typed a side question — so the
+// message reaches the worker with frizz's note naming every question still open, by the id `unask`
+// takes. The bubble keeps the human's bare words; only the worker's copy carries the note.
+test("a typed follow-up to a thread with questions open tells the worker which, by id, and to unask the moot ones", async () => {
+  const h = harness()
+  const slug = "asking-followup"
+  h.storage.upsertSession(row(slug))
+  h.storage.setBackend(slug, "codex")
+  h.storage.setCodexRuntime(slug, "app-server")
+  const sent: string[] = []
+  ;(h.ctx as { codexAppServer?: unknown }).codexAppServer = {
+    binding: () => ({ state: "active", currentTurnId: null }),
+    turnLiveness: () => undefined,
+    resumeOwnedSession: async () => {},
+    followUp: async ({ text }: { text: string }) => void sent.push(text),
+  }
+  // Negative control: nothing open, nothing appended.
+  await h.router.followUp.handler({ input: { slug, sessionId: `sid-${slug}`, message: "carry on" } })
+  assert.deepEqual(sent, ["carry on"])
+
+  h.storage.askThreadQuestion({ id: "qst_open0000001", slug, askedAtMs: Date.now(), spec: JSON.stringify({ question: "SQLite or a JSON file?", kind: "question" }) })
+  h.storage.askThreadQuestion({ id: "qst_answered001", slug, askedAtMs: Date.now(), spec: JSON.stringify({ question: "Which dist-tag?", kind: "question" }) })
+  h.storage.answerThreadQuestion("qst_answered001", JSON.stringify({ questionId: "qst_answered001", question: "Which dist-tag?", chosen: ["next"] }), Date.now())
+  await h.router.followUp.handler({ input: { slug, sessionId: `sid-${slug}`, message: "should we use this thread or the other one?" } })
+  const [, noted] = sent
+  assert.equal(noted, `should we use this thread or the other one?\n\n${openQuestionsNote([{ id: "qst_open0000001", question: "SQLite or a JSON file?" }])}`)
+  assert.match(noted, /`unask` exactly those/)
+  assert.doesNotMatch(noted, /qst_answered001/, "an answered question is not open")
+  // The human's own bubble, once the transcript reads it back, is their words and nothing else.
+  assert.equal(stripFollowUpRiders(noted), "should we use this thread or the other one?")
+  h.storage.close()
+})
+
 // (A test for a deleted awaiting-hint kind was removed here on 2026-08-15. See the AwaitingHint doc
 // block in @frizz/shared for why `human:`, `timer: <instant>` and `pr-watch:` no longer exist.)
 
@@ -756,6 +890,68 @@ test("completeRegisteredThread archives an inactive session without a confirmati
     }), { needsConfirmation: false })
     assert.equal(kills, 0)
     assert.equal(h.storage.getSession(slug)?.state, "archived")
+  } finally {
+    h.storage.close()
+    rmSync(h.dir, { recursive: true, force: true })
+  }
+})
+
+// A THREAD TERMINAL ends with its thread (thread-terminals.ts). Running ones hold Done back on their own
+// — a worker at rest with `npm run dev` still up in a terminal the human opened is the case the dialog is
+// for — and the confirmation stops them BEFORE Done is recorded, then files their rows away after.
+test("completeRegisteredThread names running terminals, stops them before Done, and files them only after", async () => {
+  const h = harness()
+  const dead = {
+    findExpectedAdoptionPane: () => ({ kind: "absent" as const }),
+    killExpectedAdoptionPane: () => false,
+    killSession: () => { throw new Error("a dead runtime must never be terminated") },
+    isLive: () => false,
+  }
+  const tele = { turn: "idle" as const, permPrompt: false, pendingQuestion: false, subAgents: [], bgShells: [] }
+  const log: string[] = []
+  const terminals = (slug: string, live: { command: string; shell?: boolean }[]) => ({
+    live,
+    stop: async () => { log.push(`stop while ${h.storage.getSession(slug)?.state}`) },
+    close: async () => { log.push(`close while ${h.storage.getSession(slug)?.state}`) },
+  })
+  try {
+    const saved = row("with-terminals")
+    h.storage.upsertSession(saved)
+    const running = terminals(saved.slug, [{ command: "npm run dev" }, { command: "zsh", shell: true }])
+    const asked = await completeRegisteredThread(h.storage, saved, false, dead, tele, undefined, undefined, undefined, running)
+    assert.equal(asked.needsConfirmation, true, "a resting worker is still asked about while its terminals run")
+    assert.deepEqual(asked.hold?.terminals?.map((t) => t.label), ["npm run dev", "zsh (shell)"])
+    assert.equal(asked.hold?.terminalCount, 2)
+    assert.equal(asked.hold?.turnInFlight, false)
+    assert.deepEqual(log, [], "nothing is stopped on the ask")
+    assert.equal(h.storage.getSession(saved.slug)?.state, "open")
+
+    assert.deepEqual(await completeRegisteredThread(h.storage, saved, true, dead, tele, undefined, undefined, undefined, running), { needsConfirmation: false })
+    assert.deepEqual(log, ["stop while open", "close while archived"], "stopped before Done, filed away after it")
+
+    // Nothing running: Done in one click, and the finished terminals are still filed away with it.
+    log.length = 0
+    const quiet = row("finished-terminals")
+    h.storage.upsertSession(quiet)
+    assert.deepEqual(await completeRegisteredThread(h.storage, quiet, false, dead, tele, undefined, undefined, undefined, terminals(quiet.slug, [])), { needsConfirmation: false })
+    assert.deepEqual(log, ["stop while open", "close while archived"])
+
+    // A completion refused because the thread resumed meanwhile leaves its terminals in its strip.
+    log.length = 0
+    const resumed = row("resumed-meanwhile")
+    h.storage.upsertSession(resumed)
+    // The human's follow-up lands while the terminals are being stopped (a stop can wait out a 5s grace).
+    const racing = terminals(resumed.slug, [{ command: "npm run dev" }])
+    const stopping = racing.stop
+    racing.stop = async () => {
+      await stopping()
+      h.storage.upsertSession({ ...resumed, session_id: "a-newer-worker" })
+    }
+    await assert.rejects(
+      completeRegisteredThread(h.storage, resumed, true, dead, tele, undefined, undefined, undefined, racing),
+      /resumed or was replaced/,
+    )
+    assert.deepEqual(log, ["stop while open"], "stopped (the human confirmed), but not filed away under an open thread")
   } finally {
     h.storage.close()
     rmSync(h.dir, { recursive: true, force: true })

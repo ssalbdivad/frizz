@@ -11,7 +11,7 @@ import { BackgroundShellSheet } from "./BackgroundShellSheet.tsx"
 import { FileReaderDrawer } from "./FileReaderDrawer.tsx"
 import { ImageViewer } from "./ImageViewer.tsx"
 import { ThreadDrawer } from "./ThreadDrawer.tsx"
-import { CommandSheet } from "./CommandSheet.tsx"
+import { TerminalSheet } from "./TerminalSheet.tsx"
 import { ErrorBoundary, DrawerErrorSheet } from "./ErrorBoundary.tsx"
 
 // The side-drawer STACK, and the Escape chain that unwinds it. Lives in its own component because
@@ -103,7 +103,7 @@ export function DrawerStack() {
             widthDepth={widthDepth}
           />
         ) : d.kind === "terminal" ? (
-          <CommandSheet key={d.id} id={d.id} slug={d.slug} depth={i} widthDepth={widthDepth} />
+          <TerminalSheet key={d.id} id={d.id} slug={d.slug} terminalId={d.subId ?? ""} depth={i} widthDepth={widthDepth} />
         ) : d.kind === "file" ? (
           <FileReaderDrawer key={d.id} id={d.id} path={d.path ?? d.slug} title={d.label ?? d.slug} scope={d.scope} depth={i} widthDepth={widthDepth} />
         ) : (

@@ -38,3 +38,41 @@ test("queue cards show BOTH running and stale child work, and no model+effort ta
   assert.match(html, /Old differential repro/)
   assert.match(html, /stale — no recent output/)
 })
+
+test("a queued parent's batch draws its RETURNED children after the live ones, each with how it ended", () => {
+  const ago = (ms: number) => new Date(Date.now() - ms).toISOString()
+  const html = renderToStaticMarkup(createElement(QueueSubAgentLines, {
+    slug: "parent-thread",
+    subAgents: [{ id: "c", label: "Audit the resolver", startedAt: ago(600_000), state: "running" }],
+    returned: [
+      { id: "a", label: "Trace the cache collision", status: "completed", startedAt: ago(600_000), finishedAt: ago(270_000) },
+      { id: "b", label: "Sweep normalizeId call sites", status: "failed", startedAt: ago(600_000), finishedAt: ago(150_000) },
+    ],
+  }))
+  // Live first: it is what the card is still waiting on.
+  assert.ok(html.indexOf("Audit the resolver") < html.indexOf("Trace the cache collision"))
+  assert.match(html, /data-returned-mark="completed"/)
+  assert.match(html, /data-returned-mark="failed"/)
+  // The reading says how long AGO it came back, in the house grammar — never how long it worked. (Half a
+  // minute past each mark: the row reads a shared ticking clock, which may sit a few seconds behind.)
+  assert.match(html, />returned 4m ago</)
+  assert.match(html, />failed 2m ago</)
+  // A returned child has nothing to stop: no × on it.
+  assert.equal((html.match(/data-op-row/g) ?? []).length, 0)
+  // NEGATIVE CONTROL: without the returned half the card draws the live row alone, and no mark.
+  const live = renderToStaticMarkup(createElement(QueueSubAgentLines, {
+    slug: "parent-thread",
+    subAgents: [{ id: "c", label: "Audit the resolver", startedAt: ago(600_000), state: "running" }],
+  }))
+  assert.doesNotMatch(live, /data-returned-mark/)
+})
+
+test("a return inside the last minute reads 'just now' — the page clock ticks every 30s, so seconds would freeze", () => {
+  const html = renderToStaticMarkup(createElement(QueueSubAgentLines, {
+    slug: "parent-thread",
+    subAgents: [{ id: "c", label: "Audit", startedAt: new Date(Date.now() - 60_000).toISOString(), state: "running" }],
+    // Ahead of the shared clock by a few seconds, exactly as a fresh return is: still "just now", never blank.
+    returned: [{ id: "a", label: "Trace", status: "completed", finishedAt: new Date(Date.now() + 5_000).toISOString() }],
+  }))
+  assert.match(html, />returned just now</)
+})

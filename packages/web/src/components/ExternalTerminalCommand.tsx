@@ -1,7 +1,8 @@
 import { useMutation, useQueryClient } from "@tanstack/react-query"
 import { Check, TerminalSquare } from "lucide-react"
 import { useEffect, useRef, useState } from "react"
-import { rpc } from "../api/rpc.ts"
+import type { Api } from "../api/rpc.ts"
+import { useThreadApi, useThreadProjectId } from "../api/threadApi.tsx"
 import { copyTextToClipboard } from "../lib/clipboard.ts"
 import { createCopyCommandFeedback } from "../lib/copyCommandFeedback.ts"
 import { showToast } from "../store.ts"
@@ -28,13 +29,16 @@ const BUTTON_LABEL: Record<TerminalMode, string> = {
 // clipboard gesture. That single change fixes both reported bugs: the copy stops silently failing inside
 // a live queue card (the async write otherwise lost its activation/focus window across the RPC), and the
 // "copied" check stops lagging a full round-trip behind the click.
-const terminalCommandKey = (slug: string) => ["terminalCommand", slug] as const
+// Keyed by PROJECT as well as slug: a thread slug is unique only within its project, and a queue card on
+// the cross-project page resolves another project's thread (useThreadApi) — two projects' `fix-auth`
+// must not share one cached command.
+const terminalCommandKey = (projectId: string | undefined, slug: string) => ["terminalCommand", projectId ?? "", slug] as const
 
 // Resolve the terminal command, surfacing the server's reason when there is none to copy. Carries the
 // MODE alongside the text so the label/toast can name what it actually is.
 interface ResolvedTerminalCommand { command: string; mode: TerminalMode }
-function resolveTerminalCommand(slug: string): Promise<ResolvedTerminalCommand> {
-  return rpc.threadTerminalCommand({ slug }).then((result) => {
+function resolveTerminalCommand(api: Api, slug: string): Promise<ResolvedTerminalCommand> {
+  return api.threadTerminalCommand({ slug }).then((result) => {
     if (!result.command) throw new Error(result.reason ?? "No verified provider session is available to resume")
     return { command: result.command, mode: result.mode === "attach" ? "attach" : "resume" }
   })
@@ -49,8 +53,8 @@ function resolveTerminalCommand(slug: string): Promise<ResolvedTerminalCommand> 
 // still reaches the toast. Older engines without async-ClipboardItem support — and INSECURE origins,
 // where the whole async clipboard API is undefined — fall back to fetch-then-copyTextToClipboard,
 // whose execCommand path is what makes the copy work on a plain-http LAN address at all.
-async function copyResumeCommandAsync(slug: string): Promise<TerminalMode> {
-  const resolved = resolveTerminalCommand(slug)
+async function copyResumeCommandAsync(api: Api, slug: string): Promise<TerminalMode> {
+  const resolved = resolveTerminalCommand(api, slug)
   if (typeof ClipboardItem !== "undefined" && navigator.clipboard?.write) {
     await navigator.clipboard.write([
       new ClipboardItem({ "text/plain": resolved.then(({ command }) => new Blob([command], { type: "text/plain" })) }),
@@ -68,9 +72,13 @@ interface CopyCallbacks {
   onError?: () => void
 }
 
+// The THREAD's project, not the page's (api/threadApi.tsx): on the cross-project page a queue card's
+// terminal net (ChatView TerminalNetCard) asks for another project's thread, and `rpc` there addresses
+// the focused project, which either has no such slug or has a different thread under it.
 export function useCopyTerminalCommand(slug: string): (callbacks?: CopyCallbacks) => void {
+  const api = useThreadApi()
   const copy = useMutation({
-    mutationFn: () => copyResumeCommandAsync(slug),
+    mutationFn: () => copyResumeCommandAsync(api, slug),
   })
   return (callbacks) => copy.mutate(undefined, {
     onSuccess: (mode) => {
@@ -99,6 +107,8 @@ export function CopyTerminalCommandButton({ slug }: { slug: string }) {
   }
   const queryClient = useQueryClient()
   const copyAsync = useCopyTerminalCommand(slug)
+  const api = useThreadApi()
+  const commandKey = terminalCommandKey(useThreadProjectId(), slug)
 
   useEffect(() => () => feedback.current?.dispose(), [])
 
@@ -108,8 +118,8 @@ export function CopyTerminalCommandButton({ slug }: { slug: string }) {
   // falls through to the async path (which re-runs the RPC and surfaces the reason).
   function prefetch() {
     void queryClient.prefetchQuery({
-      queryKey: terminalCommandKey(slug),
-      queryFn: () => resolveTerminalCommand(slug),
+      queryKey: commandKey,
+      queryFn: () => resolveTerminalCommand(api, slug),
       staleTime: 15_000,
     })
   }
@@ -121,7 +131,7 @@ export function CopyTerminalCommandButton({ slug }: { slug: string }) {
   // once the clipboard write actually resolves — honest, but effectively instant since the value is in
   // hand; a genuine failure toasts and leaves no check. COLD cache: the activation-safe async path, unchanged.
   function handleCopy() {
-    const resolved = queryClient.getQueryData<ResolvedTerminalCommand>(terminalCommandKey(slug))
+    const resolved = queryClient.getQueryData<ResolvedTerminalCommand>(commandKey)
     if (resolved) {
       void copyTextToClipboard(resolved.command).then(
         () => {
@@ -137,7 +147,7 @@ export function CopyTerminalCommandButton({ slug }: { slug: string }) {
 
   // The prefetch usually settles long before the click, so the label names the real mode. Before it
   // resolves there is nothing truthful to promise, so it stays generic rather than guessing "resume".
-  const prefetched = queryClient.getQueryData<ResolvedTerminalCommand>(terminalCommandKey(slug))
+  const prefetched = queryClient.getQueryData<ResolvedTerminalCommand>(commandKey)
   const label = copied
     ? (prefetched ? COPIED_TOAST[prefetched.mode] : "Terminal command copied")
     : (prefetched ? BUTTON_LABEL[prefetched.mode] : "Copy terminal command")

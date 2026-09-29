@@ -81,7 +81,7 @@ test("extend_shell caps at 24h and SAYS so", async () => {
 
 test("extend_shell refuses what it cannot extend — and names why", async () => {
   const h = harness({
-    bgShells: [shell({ id: "toolu_done", taskId: "bdone", state: "stale" }), shell({ id: "toolu_mon", taskId: "bmon", label: "tail log", budgetMs: undefined })],
+    bgShells: [shell({ id: "toolu_done", taskId: "bdone", state: "stale" }), shell({ id: "toolu_mon", taskId: "bmon", label: "tail log", budgetMs: undefined, monitor: true })],
     subAgents: [agent()],
   })
   try {
@@ -91,7 +91,7 @@ test("extend_shell refuses what it cannot extend — and names why", async () =>
     await refuse("nope", "2h", /no background shell running on this thread answers to `nope`/)
     await refuse("bdone", "2h", /no background shell running/)
     await refuse("toolu_agent", "2h", /is a sub-agent, not a background shell/)
-    await refuse("bmon", "2h", /carries no runtime budget/)
+    await refuse("bmon", "2h", /is a Monitor, which carries no runtime budget/)
     const live = harness({ bgShells: [shell()] })
     try {
       live.storage.upsertSession(row("t"))
@@ -107,16 +107,40 @@ test("extend_shell refuses what it cannot extend — and names why", async () =>
 })
 
 test("activity prints each running shell's budget end — the extension when there is one", async () => {
-  const h = harness({ bgShells: [shell(), shell({ id: "toolu_mon", taskId: "bmon", label: "tail log", budgetMs: undefined })] })
+  const h = harness({ bgShells: [shell(), shell({ id: "toolu_mon", taskId: "bmon", label: "tail log", budgetMs: undefined, monitor: true }), shell({ id: "toolu_dev", taskId: "bdev", label: "npx vite dev", budgetMs: undefined })] })
   try {
     h.storage.upsertSession(row("t"))
     const before = await h.router.listOwnThreadActivity.handler({ input: { slug: "t" } })
     const vite = before.activity.find((a) => a.id === "bvite1")!
     assert.equal(vite.budgetEndsAt, new Date(Date.parse(STARTED) + 3_600_000).toISOString(), "launch + its budget")
     assert.equal(before.activity.find((a) => a.id === "bmon")!.budgetEndsAt, undefined, "a Monitor has none")
+    assert.equal(before.activity.find((a) => a.id === "bdev")!.budgetEndsAt, undefined, "nor does a shell launched without a timeout")
     const ext = await h.router.extendOwnShell.handler({ input: { slug: "t", shell: "bvite1", for: "5h" } })
     const after = await h.router.listOwnThreadActivity.handler({ input: { slug: "t" } })
     assert.equal(after.activity.find((a) => a.id === "bvite1")!.budgetEndsAt, ext.budgetEndsAt)
+  } finally {
+    h.close()
+  }
+})
+
+// A shell launched with NO `timeout` has no budget (shell-budget.ts); extend_shell is how it gets one.
+test("extend_shell GIVES a budget to a shell launched without one — and only to that shell", async () => {
+  const dev = shell({ id: "toolu_dev", taskId: "bdev", label: "npx vite dev", budgetMs: undefined })
+  // NEGATIVE CONTROL: a second unbudgeted shell on the same thread, not extended.
+  const other = shell({ id: "toolu_srv", taskId: "bsrv", label: "node server.mjs", budgetMs: undefined })
+  const h = harness({ bgShells: [dev, other] })
+  try {
+    h.storage.upsertSession(row("t"))
+    assert.equal(liveShellBudget(h.storage, "t", dev), undefined, "unbudgeted before")
+    const before = Date.now()
+    const got = await h.router.extendOwnShell.handler({ input: { slug: "t", shell: "bdev", for: "3h" } })
+    const ends = Date.parse(got.budgetEndsAt)
+    assert.ok(ends >= before + 3 * 3_600_000 && ends <= Date.now() + 3 * 3_600_000)
+    assert.equal(liveShellBudget(h.storage, "t", dev)?.deadlineMs, ends, "the scheduler now reads a deadline for it")
+    assert.equal(liveShellBudget(h.storage, "t", other), undefined, "and still none for the shell nobody extended")
+    const activity = await h.router.listOwnThreadActivity.handler({ input: { slug: "t" } })
+    assert.equal(activity.activity.find((a) => a.id === "bdev")!.budgetEndsAt, got.budgetEndsAt)
+    assert.equal(activity.activity.find((a) => a.id === "bsrv")!.budgetEndsAt, undefined)
   } finally {
     h.close()
   }

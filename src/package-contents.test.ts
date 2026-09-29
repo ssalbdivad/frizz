@@ -19,7 +19,7 @@ const manifest = JSON.parse(
 ) as { files?: string[]; bin?: Record<string, string>; name?: string; frizzServer?: unknown; dependencies?: Record<string, string> };
 const serverManifest = JSON.parse(
   readFileSync(join(import.meta.dirname, "..", "packages", "server-release", "package.json"), "utf8")
-) as { files?: string[]; name?: string; frizzServer?: unknown; dependencies?: Record<string, string>; engines?: { node?: string } };
+) as { files?: string[]; name?: string; frizzServer?: unknown; dependencies?: Record<string, string>; engines?: { node?: string }; pnpm?: { onlyBuiltDependencies?: string[] } };
 const sourceServerManifest = JSON.parse(
   readFileSync(join(import.meta.dirname, "..", "packages", "server", "package.json"), "utf8")
 ) as { dependencies?: Record<string, string> };
@@ -81,12 +81,17 @@ test("the shell bootstraps the versioned public server contract", () => {
 });
 
 test("native server dependencies do not leak back into the stable shell", () => {
+  // The shell stays addon-free: it is what `npx frizz` installs first, on any box.
   assert.equal(manifest.dependencies?.["node-pty"], undefined);
-  // Sign-in runs over pipes: no pty, so the PUBLISHED server carries no native addon that needs a build.
-  assert.equal(serverManifest.dependencies?.["node-pty"], undefined);
-  // The source server's one pty is terminal command threads (command-threads.ts), pinned to the beta that
-  // ships glibc Linux prebuilds so a source install never needs a C++ toolchain.
+  // The server's one pty is a THREAD TERMINAL (server/src/thread-terminals.ts), and it is loaded LAZILY —
+  // on a terminal's start, never at boot — so a box where the addon will not load still serves every
+  // project and the terminal pane says why. Pinned to the beta that ships glibc Linux prebuilds (node-pty
+  // 1.1 had none, which is how #42 killed every Linux boot), in the published server and the source alike.
+  // No `onlyBuiltDependencies` entry: the generation installs with --ignore-scripts and node-pty loads its
+  // prebuild directly, so no install script (and no `node-gyp rebuild` fallback) ever runs.
+  assert.equal(serverManifest.dependencies?.["node-pty"], "1.2.0-beta.15");
   assert.equal(sourceServerManifest.dependencies?.["node-pty"], "1.2.0-beta.15");
+  assert.deepEqual(serverManifest.pnpm?.onlyBuiltDependencies, ["@parcel/watcher"]);
   assert.equal(serverManifest.dependencies?.["@parcel/watcher"], "^2.5");
 });
 

@@ -1,7 +1,7 @@
 import { test } from "node:test"
 import assert from "node:assert/strict"
-import type { ThreadView } from "@frizz/shared"
-import { bandOf, needsAction, queued, orderQueue, partitionActive, sectionOf, sectionThreads, isSnoozed, sessionIndicatorKind, offersRetry, titleIsProvisional, displayTitle, lastActiveLabelAt, queueLabelAt, queueLabelWord, SPINNING_UP_TITLE, UNTITLED_THREAD_TITLE } from "./groups.ts"
+import { workingThread, type ThreadView } from "@frizz/shared"
+import { bandOf, doneButRunning, needsAction, queued, orderQueue, partitionActive, sectionOf, sectionThreads, isSnoozed, sessionIndicatorKind, offersRetry, titleIsProvisional, displayTitle, lastActiveLabelAt, queueLabelAt, queueLabelWord, SPINNING_UP_TITLE, UNTITLED_THREAD_TITLE } from "./groups.ts"
 
 // Minimal ThreadView fixture — the same shape board-delta.test.ts uses, defaulting to a live/active
 // thread; each case overrides only the fields under test.
@@ -75,13 +75,13 @@ test("needsAction: a REGISTERED question at rest cards; mid-turn it does not (th
   assert.equal(needsAction(thread({ questions: regQuestion, runtime: "running" })), false)
 })
 
-// A reply past a question is a pivot (shared questionRepliedPast): the card stays up where it was asked,
-// but the thread is not asking any more, so neither the queue rule nor the rail mark may say it is.
-test("needsAction / sessionIndicatorKind: a question the human replied past asks nothing", () => {
+// A typed message past a question releases nothing (shared questionRepliedPast, 2026-09-29): the worker
+// decides what the message made moot and `unask`s it, so a question still open is still asked — the
+// queue rule and the rail mark say so, `repliedPast` or not.
+test("needsAction / sessionIndicatorKind: a question the human typed past still asks", () => {
   const passed = regQuestion.map((q) => ({ ...q, repliedPast: true as const }))
-  assert.equal(needsAction(thread({ questions: passed, runtime: "turn-idle" })), false)
-  assert.notEqual(sessionIndicatorKind(thread({ questions: passed, runtime: "turn-idle" })), "needs-input")
-  assert.equal(needsAction(thread({ questions: [...passed, ...regQuestion.map((q) => ({ ...q, id: `${q.id}-new` }))], runtime: "turn-idle" })), true, "one asked since still does")
+  assert.equal(needsAction(thread({ questions: passed, runtime: "turn-idle" })), true)
+  assert.equal(sessionIndicatorKind(thread({ questions: passed, runtime: "turn-idle" })), "needs-input")
 })
 
 test("needsAction: `unread` no longer drives carding (unread is dead)", () => {
@@ -586,8 +586,39 @@ test("sectionOf: an ARCHIVED thread is Done whatever its worker is doing — onl
   ]) {
     const t = thread({ kind: "session", state: "archived", archived: true, ...extra })
     assert.equal(sectionOf(t), "inactive", JSON.stringify(extra))
-    assert.equal(sessionIndicatorKind(t), "archived", JSON.stringify(extra))
+    assert.equal(bandOf(t), "done", JSON.stringify(extra))
   }
+})
+
+test("a RUNNING Done row wears its spinner in Done — never a silent check (maintainer, hit 3x)", () => {
+  // Restored from 7a20f425, where the spinner came with a lift into Active. The row stays in Done now
+  // (only the human reopens it); what it may not do is sit there looking finished while it works.
+  const sub = [{ label: "x", startedAt: "2026-07-10T00:00:00.000Z", state: "running" as const, id: "a1" }]
+  const shell = [{ label: "watch CI", startedAt: "2026-07-10T00:00:00.000Z", state: "running" as const }]
+  const moving = [
+    { runtime: "running" as const },
+    { runtime: "spawning" as const },
+    // A parent at rest with its own sub-agent out spins too (the ellipsis-in-spinner variant).
+    { runtime: "turn-idle" as const, subAgents: sub },
+  ]
+  for (const extra of moving) {
+    const t = thread({ kind: "session", state: "archived", archived: true, ...extra })
+    assert.equal(sessionIndicatorKind(t), "working", JSON.stringify(extra))
+    assert.equal(doneButRunning(t), true, JSON.stringify(extra))
+    assert.equal(workingThread(t), true, `the rail's working count carries it: ${JSON.stringify(extra)}`)
+    assert.equal(sectionOf(t), "inactive", "and it stays in Done")
+  }
+  // NEGATIVE CONTROLS: at rest, exited, or holding nothing but a background shell (never live work,
+  // 2026-07-22) — the quiet check, and no working count.
+  for (const extra of [{ runtime: "turn-idle" as const }, { runtime: "exited" as const }, { runtime: "turn-idle" as const, bgShells: shell }]) {
+    const t = thread({ kind: "session", state: "archived", archived: true, ...extra })
+    assert.equal(sessionIndicatorKind(t), "archived", JSON.stringify(extra))
+    assert.equal(workingThread(t), false, JSON.stringify(extra))
+  }
+  // A foreign terminal marked done has no worker of frizz's to count.
+  assert.equal(workingThread(thread({ kind: "session", foreign: true, state: "archived", archived: true, runtime: "running" })), false)
+  // …and an OPEN running row still counts exactly once, through the Active band.
+  assert.equal(workingThread(thread({ kind: "session", state: "open", runtime: "running" })), true)
 })
 
 test("sectionThreads v2: Active bands rested-on-top (queue order) then running; foreign + legacy excluded", () => {
@@ -1182,6 +1213,31 @@ test("isSnoozed: the event-snooze yields to a live sub-agent, a queue reason, an
   assert.equal(sessionIndicatorKind(thread({ ...base, runtime: "running" })), "working")
 })
 
+// SNOOZED UNTIL ALL SUB-AGENTS RETURN — the one park a live sub-agent does not outrank, because the live
+// sub-agents are what it parks on (maintainer 2026-09-29). The server sets the flag only while it is what
+// keeps the thread out of the queue, and only at rest.
+test("isSnoozed: 'until all sub-agents return' parks a parent with children still out, and nothing else", () => {
+  const parked = thread({
+    kind: "session", state: "open", runtime: "turn-idle", needsYou: false, awaitingBackground: false, subAgentsSnoozed: true, subAgents: liveSub,
+    lastFence: { kind: "awaiting", body: "Waiting on three audits.", hints: [] },
+  })
+  assert.equal(isSnoozed(parked), true)
+  assert.equal(sectionOf(parked), "snoozed")
+  assert.equal(sessionIndicatorKind(parked), "snoozed", "the park mark, not the spinner")
+  // NEGATIVE CONTROL: the same row without the flag is exactly what it was — a live child keeps it in
+  // Active, spinning, as it does over every other park.
+  const unparked = { ...parked, subAgentsSnoozed: undefined }
+  assert.equal(isSnoozed(unparked), false)
+  assert.equal(sectionOf(unparked), "active")
+  assert.equal(sessionIndicatorKind(unparked), "working")
+  // A child's report woke the parent: it spins in Active for that turn, flag or not.
+  assert.equal(isSnoozed({ ...parked, runtime: "running" }), false)
+  assert.equal(sessionIndicatorKind({ ...parked, runtime: "running" }), "working")
+  // A queue reason beside a stale flag is never hidden.
+  assert.equal(isSnoozed({ ...parked, needsYou: true, pendingQuestion: true }), false)
+  assert.equal(isSnoozed({ ...parked, state: "archived" }), false, "done is done")
+})
+
 // ---- bandOf: the band a surface names must be the band the row sits in ----
 
 // The drawer header's stamp and the rail read one derivation, and the check is the rail itself: over the
@@ -1210,8 +1266,8 @@ test("bandOf: Snoozed, Done, External, and no band for a legacy row", () => {
   // A worker still running after Mark as done does not lift its row out of Done.
   assert.equal(bandOf(thread({ kind: "session", state: "archived", archived: true, runtime: "running" })), "done")
   assert.equal(bandOf(thread({ kind: "session", foreign: true, runtime: "turn-idle" })), "external")
-  assert.equal(bandOf(thread({ kind: "command", state: "archived" })), "done")
-  assert.equal(bandOf(thread({ kind: "command", state: "open", needsYou: true })), "ready")
+  // A terminal waiting at a prompt queues its THREAD (server board.withThreadTerminals); it has no row.
+  assert.equal(bandOf(thread({ kind: "session", state: "open", runtime: "turn-idle", needsYou: true, terminals: [{ id: "term-1", command: "npm publish", cwd: "/repo", state: "running", awaitingInput: true, runId: 1, startedAt: "2026-09-29T10:00:00.000Z" }] })), "ready")
   assert.equal(bandOf(thread({})), null, "a legacy .frizz row has no row, so no band")
 })
 

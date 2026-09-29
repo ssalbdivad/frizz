@@ -347,6 +347,27 @@ try {
       expect: (_, after) => check("Everything: …saying it is back at work", find(after, first).text.includes("Back at work"), find(after, first).text.slice(0, 120)),
     })
     await page.screenshot({ path: join(shots, "everything-ghost.png") })
+    // Clicked, a ghost WAKES: full tone, the same place. The card at the top of a short page never
+    // scrolls off, so this is the only way its quiet ever ends while its thread works (maintainer
+    // 2026-09-29: "permanently stuck in a deemphasized background styling even if I directly click on
+    // it"). A DOM event on the card's body, not a link: puppeteer's own click would scroll first.
+    {
+      const tone = () => page.evaluate((slug) => {
+        const slot = [...document.querySelectorAll("[data-xq-card]")].find((el) => el.dataset.xqCard.endsWith(`/${slug}`))
+        return { woken: slot.hasAttribute("data-queue-woken"), opacity: getComputedStyle(slot.querySelector(".frizz-card-clip")).opacity, top: slot.getBoundingClientRect().top }
+      }, first)
+      const quiet = await tone()
+      await page.evaluate((slug) => {
+        const slot = [...document.querySelectorAll("[data-xq-card]")].find((el) => el.dataset.xqCard.endsWith(`/${slug}`))
+        slot.querySelector("[data-xq-card-root] header").dispatchEvent(new PointerEvent("pointerdown", { bubbles: true, button: 0 }))
+      }, first)
+      await sleep(600)
+      const woken = await tone()
+      check("Everything: …clicked, the ghost wakes to full tone in the same place",
+        quiet.opacity === "0.5" && !quiet.woken && woken.woken && woken.opacity === "1" && Math.abs(woken.top - quiet.top) < 0.5,
+        `opacity ${quiet.opacity} → ${woken.opacity}, woken ${woken.woken}, top ${quiet.top.toFixed(2)} → ${woken.top.toFixed(2)}`)
+      await page.screenshot({ path: join(shots, "everything-ghost-woken.png") })
+    }
     await stays("…and when it rests again it is the card again, in the same place: the card under the pointer holds", {
       spoke: [first],
       act: () => rest(key),

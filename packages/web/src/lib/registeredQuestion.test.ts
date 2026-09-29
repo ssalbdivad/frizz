@@ -2,7 +2,7 @@ import { test } from "node:test"
 import assert from "node:assert/strict"
 import type { AskedQuestion } from "@frizz/shared"
 import type { BlockAnswer } from "./questionBlocks.ts"
-import { ROOT_PATH, childPath, liveQuestionNodes, nodeAnswered, registeredAnswer, settledQuestionNodes, toParsedQuestion } from "./registeredQuestion.ts"
+import { ROOT_PATH, childPath, liveQuestionNodes, nodeAnswered, questionComplete, registeredAnswer, settledQuestionNodes, toParsedQuestion } from "./registeredQuestion.ts"
 
 const blank: BlockAnswer = { chosen: null, chosenSet: [], text: "" }
 const pick = (i: number): BlockAnswer => ({ chosen: i, chosenSet: [], text: "" })
@@ -231,4 +231,29 @@ test("free text settles as text with no option chips, and a multi keeps every to
 test("a chosen label the spec no longer names is kept as text rather than lost", () => {
   const nodes = settledQuestionNodes(STORE, { questionId: "qst_a", question: STORE.question, chosen: ["Postgres"] })
   assert.deepEqual(nodes[0].settled, { chosenIdxs: [], text: "Postgres" })
+})
+
+// ---- questionComplete: the moment a question is sent (2026-09-29) ----
+
+test("questionComplete: a pick with no follow-ups is the whole answer; one that opens follow-ups waits for them", () => {
+  const TREE: AskedQuestion = {
+    question: "Publish it?",
+    kind: "question",
+    options: [
+      { label: "Yes", followUps: [{ question: "Which tag?", kind: "question", options: [{ label: "latest" }, { label: "next" }] }, { question: "Release notes?", kind: "question" }] },
+      { label: "No" },
+    ],
+  }
+  const at = (entries: [string, BlockAnswer][]) => new Map(entries)
+  assert.equal(questionComplete(TREE, at([])), false, "nothing picked")
+  assert.equal(questionComplete(TREE, at([[ROOT_PATH, pick(1)]])), true, "a pick that opens no branch")
+  assert.equal(questionComplete(TREE, at([[ROOT_PATH, typed("Only on Friday")]])), true, "typed text opens no branch either")
+  const yes = childPath(ROOT_PATH, 0, 0)
+  const notes = childPath(ROOT_PATH, 0, 1)
+  assert.equal(questionComplete(TREE, at([[ROOT_PATH, pick(0)]])), false, "the branch it opened is unanswered")
+  assert.equal(questionComplete(TREE, at([[ROOT_PATH, pick(0)], [yes, pick(1)]])), false, "one follow-up of two")
+  assert.equal(questionComplete(TREE, at([[ROOT_PATH, pick(0)], [yes, pick(1)], [notes, typed("Short ones")]])), true)
+  // A branch not taken asks nothing, even with answers staged in it.
+  assert.equal(questionComplete(TREE, at([[ROOT_PATH, pick(1)], [yes, blank]])), true)
+  assert.equal(questionComplete({ question: "Which?", kind: "multi", options: [{ label: "A" }, { label: "B" }] }, at([[ROOT_PATH, toggle(0, 1)]])), true)
 })

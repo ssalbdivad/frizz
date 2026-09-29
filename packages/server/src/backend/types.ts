@@ -81,6 +81,15 @@ export type NormalizedEvent =
 // the transcript).
 // A documented contract for what every backend's fold must surface; Phase-1 Claude realizes it as
 // SessionTelemetry directly (see tailer.get()).
+// A tool call the agent issued and is still waiting on — named for the human, so a turn that has gone
+// quiet says WHAT is running instead of only that something is.
+export interface OpenCall {
+  name: string // the tool, verbatim (`Bash`, `mcp__chrome-devtools__click`, codex `exec_command`)
+  label?: string // the call's own description, when it gave one
+  command?: string // a shell call's command, capped
+  startedAt?: string // ISO8601 of the call record
+}
+
 export interface NormalizedTail {
   turn: TurnState
   // Backend-observed session profile when its transcript records it. Claude assistant records expose
@@ -102,9 +111,13 @@ export interface NormalizedTail {
   aiTitle?: string
   lastUserAt?: string
   // ISO8601 of the newest turn the HUMAN typed — lastUserAt minus every frizz wake delivery (a watcher,
-  // a timer, a nudge, and the one that carries their answers). The clock questionRepliedPast reads.
+  // a timer, a nudge, and the one that carries their answers). The clock questionRepliedPast reads —
+  // information only since 2026-09-29; it releases nothing.
   lastHumanAt?: string
   lastToolCallAt?: string // ISO8601 of the agent's newest tool call — what tells a reply that did WORK from one that only talked
+  // The newest tool call still waiting on its result — what a turn gone silent is actually blocked on
+  // (board.ts quietTurnSince). Absent when every call has answered.
+  openCall?: OpenCall
   lastUserText?: string // latest genuine human message (used to confirm wake-token delivery)
   // The FIRST genuine human turn. Read by the board to NAME an external session whose harness has not
   // named it — see foreignThreadView. Optional everywhere: a transcript with no human turn has none.
@@ -177,6 +190,10 @@ export interface FoldState {
   // nothing newer than it is a tool call — a reply that only talked is conversation about finished work,
   // one that ran a tool is new work (board.registeredDoneFence).
   lastToolCallAt?: string
+  // Tool calls issued and not yet answered, keyed by call id in issue order (newest last). Settled one
+  // by one as results land, and emptied by any record that opens a new turn, so a call orphaned by an
+  // interrupt never masquerades as the one a later turn is blocked on. Bounded (OPEN_CALLS_MAX).
+  openCalls?: Map<string, OpenCall>
   lastUserText?: string // exact text of that genuine human turn when the backend records it
   // The FIRST genuine human turn, kept forever — set once and never overwritten. It is what names an
   // EXTERNAL session (one of the human's own terminals) when its harness has not named it: both

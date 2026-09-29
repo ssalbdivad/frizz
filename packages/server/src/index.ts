@@ -694,7 +694,7 @@ export async function startServer(opts: StartOptions = {}): Promise<StartedServe
     requestOwnerStop,
   })
   const terminalOptionsFor = (c: AppContext) => ({
-    resolveCommand: (slug: string) => c.commandRunner.attach(slug),
+    resolveCommand: (slug: string) => c.terminalRunner.attach(slug),
   })
   const appSocketOptionsFor = (c: AppContext) => ({
     bus: c.bus,
@@ -802,7 +802,7 @@ export async function startServer(opts: StartOptions = {}): Promise<StartedServe
     }
   })
   const cleanupTailer = createRetryableCleanup(tenant.tailer)
-  const cleanupCommandRunner = createRetryableCleanup(tenant.commandRunner)
+  const cleanupTerminalRunner = createRetryableCleanup(tenant.terminalRunner)
   const cleanupSubscriptions = createRetryableCleanup(tenant.subscriptions)
   const cleanupScheduler = createRetryableCleanup(tenant.scheduler)
   const cleanupBoard = createRetryableCleanup(tenant.board)
@@ -837,8 +837,8 @@ export async function startServer(opts: StartOptions = {}): Promise<StartedServe
       },
       { name: "other projects", run: cleanupExtraTenants },
       { name: "tailer producer", run: cleanupTailer },
-      // Hang up every terminal command thread, so a dev server started from Frizz stops with it.
-      { name: "terminal commands", run: cleanupCommandRunner },
+      // Hang up every thread terminal, so a dev server started from Frizz stops with it.
+      { name: "thread terminals", run: cleanupTerminalRunner },
       { name: "context subscriptions", run: cleanupSubscriptions },
       { name: "wake scheduler", run: cleanupScheduler },
       { name: "board producer and watcher", run: cleanupBoard },

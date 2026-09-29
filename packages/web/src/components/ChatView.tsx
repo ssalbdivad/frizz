@@ -54,11 +54,13 @@ import { ThreadActionBar } from "./ThreadActionBar.tsx"
 import { HeaderActions } from "./HeaderActions.tsx"
 import { ThreadLifecycleFooter, StateButton } from "./ThreadLifecycleFooter.tsx"
 import { ThreadTitle } from "./ThreadTitle.tsx"
+import { ThreadStatusLine } from "./ThreadStatusLine.tsx"
 import { threadLifecycleAvailability } from "../lib/threadLifecycle.ts"
 import { ToolDisclosureHeader } from "./ToolDisclosureHeader.ts"
 import { subAgentProfileCell } from "../lib/subAgentProfile.ts"
 import { FOREGROUND_MARK_AFTER_MS, foregroundToolIsRunning, hasRunningToolIndicator, isPendingForegroundTool, liveBackgroundOperationState } from "../lib/operationIndicators.ts"
 import { formatRuntimeElapsed, formatToolDuration } from "../lib/durationLabels.ts"
+import { shellBudgetReading } from "../lib/shellBudget.ts"
 import { githubRefUrl } from "../lib/githubRef.ts"
 import { useNowMs } from "../lib/liveClock.ts"
 import { CHILD_OPEN_TITLE, CHILD_QUIET_SHELL_TITLE, CHILD_RESTED_DOT_CLASS, CHILD_RESTED_TITLE, CHILD_STALE_DOT_CLASS, CHILD_STALE_TITLE, checksCounterLabel, childOpSubtree, issueCounterLabel, mergeBackgroundShells, shellLinesLabel, visibleChildOps, type TranscriptShellRecord } from "../lib/childOps.ts"
@@ -96,6 +98,7 @@ import { CopyTerminalCommandButton, useCopyTerminalCommand } from "./ExternalTer
 import { SignInModal } from "./SignInModal.tsx"
 import { PROVIDER_LABEL } from "../lib/signIn.ts"
 import { ThreadMenu } from "./ThreadMenu.tsx"
+import { ThreadTerminalsStrip } from "./ThreadTerminals.tsx"
 import { takeFullscreenEnterAnchor } from "../lib/fullscreenHandoff.ts"
 import { prependEarlierPage } from "../lib/transcriptPagination.ts"
 import { buildVirtualTranscriptMessageRows, earlierLoadGate, nextTailFollow, TAIL_FOLLOW_PX, type VirtualTranscriptMessageRow } from "../lib/virtualTranscript.ts"
@@ -143,7 +146,11 @@ function useChildDrillSlug(): string | null {
 // an OPTIMISTICALLY dismissed card (its `onUnresolve(slug)`) when the completion RPC declines — reached
 // without threading either through the fence renderer. Null off the queue (the thread drawer), where there
 // is no queue to scroll — there the fence buttons behave as before (archive/snooze, no scroll).
-export const QueueDismissContext = createContext<{ dismiss: () => void; cancel: () => void } | null>(null)
+// `hold`: the card stays where it is, live, although its thread may leave the queue — a question on it was
+// answered and the worker went to work on it, while the rest of the card's questions are still the
+// human's to answer (RegisteredQuestionCards sendPairs, 2026-09-29). Optional: a surface with nothing to
+// hold ignores it.
+export const QueueDismissContext = createContext<{ dismiss: () => void; cancel: () => void; hold?: () => void } | null>(null)
 
 function isLiveTranscriptBackgroundTool(tool: TranscriptToolCall): boolean {
   return tool.status === "pending" && tool.backgroundState === "background"
@@ -653,9 +660,10 @@ type VirtualThreadRow =
   // correct while TanStack's own `anchorTo:"end"` preservation stays dormant. It renders nothing.
   | { key: "head-anchor"; kind: "head-anchor" }
   | { key: "interactions"; kind: "interactions" }
-  // A REGISTERED question the human has replied past, left at the bottom of the rest it belongs to rather
-  // than dragged to the tail — see lib/questionAnchor. Its own row because it belongs BETWEEN two
-  // messages, which the tail cannot be.
+  // A REGISTERED question still open while the worker works past the rest that asked it — its sibling was
+  // answered and set the worker going (2026-09-29, one question at a time). It holds at the bottom of that
+  // rest, where the human was answering, until the worker's next rest carries it to the tail — see
+  // lib/questionAnchor. Its own row because it belongs BETWEEN two messages, which the tail cannot be.
   | { key: string; kind: "questions"; questions: RegisteredQuestionView[] }
   // ANSWERED registered questions, greyed, in the slot the open card filled when it was answered — see
   // lib/settledQuestions. Its own row for the same reason: it sits between two messages.
@@ -716,6 +724,35 @@ function frozenPendingAsk(thread: ThreadViewData | undefined): PendingAsk | unde
   return terminalNetStandsDown(thread) ? undefined : thread?.pendingAsk
 }
 
+/** THE TERMINAL NET — the two rungs that say a turn is parked on something only the external terminal
+ *  can answer: a frozen native ask, then the generic permission banner. One function, so the transcript's
+ *  ladder (runtimeStatusRung) and the cross-project queue card (AllQueuesCard, TerminalNetCard) cannot
+ *  disagree about which one a thread gets. The server queues a thread on exactly these two states
+ *  (board.ts deriveNeedsYou), so a card that did not draw them was queued for a reason it never showed.
+ *
+ *  The generic banner stands down on the SAME premise the frozen ask does — see terminalNetStandsDown.
+ *  It did not until 2026-09-05, and a broker-path escalation sets `runtime: "perm-prompt"` AND journals
+ *  an answerable interaction, so the ask row's "Run a command?" card drew with Grant/Deny and this rung
+ *  told the operator to go and answer it in a terminal directly underneath. */
+export function terminalNetRung(thread: ThreadViewData | undefined): "pending-ask" | "perm-prompt" | null {
+  if (frozenPendingAsk(thread)) return "pending-ask"
+  if (thread?.runtime === "perm-prompt" && !terminalNetStandsDown(thread)) return "perm-prompt"
+  return null
+}
+
+/** The terminal net's card, for a surface that draws only this part of the ladder (the queue card). The
+ *  caller supplies `onTerminal` from a useCopyTerminalCommand scoped to the thread's own project. */
+export function TerminalNetCard({ thread, onTerminal }: { thread: ThreadViewData; onTerminal: () => void }) {
+  switch (terminalNetRung(thread)) {
+    case "pending-ask":
+      return <PendingAskCard ask={frozenPendingAsk(thread)!} onTerminal={onTerminal} />
+    case "perm-prompt":
+      return <PermPromptBanner onTerminal={onTerminal} />
+    default:
+      return null
+  }
+}
+
 /** WHICH RUNG WINS, or null when the slot draws nothing at all. The order is the ladder: a provider auth
  *  fault outranks everything (nothing in the thread can make progress until the credential is restored),
  *  a frozen ask outranks the generic perm banner and the Working… spinner, the human's own park outranks
@@ -725,12 +762,8 @@ function runtimeStatusRung({ thread, showWorking, registeredDone, restedCard, er
   if (thread?.providerError?.retrying) return "provider-error"
   if (thread?.providerFault && !thread.foreign) return "provider-fault"
   if (thread?.limitPause && !thread.foreign) return "limit-pause"
-  if (frozenPendingAsk(thread)) return "pending-ask"
-  // The generic banner stands down on the SAME premise the frozen ask does — see terminalNetStandsDown.
-  // It did not until 2026-09-05, and a broker-path escalation sets `runtime: "perm-prompt"` AND journals
-  // an answerable interaction, so the ask row's "Run a command?" card drew with Grant/Deny and this rung
-  // told the operator to go and answer it in a terminal directly underneath.
-  if (thread?.runtime === "perm-prompt" && !terminalNetStandsDown(thread)) return "perm-prompt"
+  const net = terminalNetRung(thread)
+  if (net) return net
   if (showWorking) return "working"
   if (thread?.providerError) return errorVisible ? null : "provider-error"
   if (showsSnoozeCard(thread)) return "snooze"
@@ -776,9 +809,8 @@ function RuntimeStatusLadder({
     case "limit-pause":
       return <LimitPauseCard slug={slug} sessionId={thread!.sessionId} pause={thread!.limitPause!} />
     case "pending-ask":
-      return <PendingAskCard ask={frozenPendingAsk(thread)!} onTerminal={onTerminal} />
     case "perm-prompt":
-      return <PermPromptBanner onTerminal={onTerminal} />
+      return <TerminalNetCard thread={thread!} onTerminal={onTerminal} />
     case "working":
       return <WorkingIndicator since={thread?.lastUserAt} startedAt={liveRuntimeStart} activityLabel={liveActivityLabel} run={liveToolRun} />
     case "snooze":
@@ -1409,7 +1441,7 @@ function VirtualizedThreadTranscript({
             : row.kind === "interactions" ? (
               <>
                 <InteractionStack thread={thread} className="px-6 pt-5" autoFocusFirst />
-                {/* The TAIL group only — a question the human replied past renders up at its own rest. The
+                {/* The TAIL group only — a question the worker is working past holds at its own rest. The
                     in-flight answer stays here whatever the questions do: it is the human's newest turn,
                     and the delivered copy of it lands at the tail a second later. */}
                 <RegisteredQuestionStack thread={thread} questions={questionGroups.tail} inFlight={inFlightAnswers} className="px-6 pt-5" />
@@ -1581,6 +1613,7 @@ export function ThreadHeader({ slug, onStatusApplied, onClose, showReturnToQueue
               lead={<span aria-hidden className="shrink-0 opacity-60">·</span>}
               className="min-w-0 truncate"
             />
+            <ThreadStatusLine status={thread.statusLine} lead={<span aria-hidden className="shrink-0 opacity-60">·</span>} />
           </div>
         </div>
       </div>
@@ -1598,6 +1631,8 @@ export function ThreadHeader({ slug, onStatusApplied, onClose, showReturnToQueue
             // The /full page is the one surface with a fullscreen to LEAVE, and it leaves through the
             // same slot it was entered by.
             collapse={showReturnToQueue}
+            // …and the drawer, the one surface with a fullscreen to ENTER, through that same slot.
+            expand={Boolean(onClose)}
             onDoc={hasDoc ? () => pushDrawer("doc", thread.id) : undefined}
             onDone={() => markComplete.mutate(undefined, { onSuccess: onStatusApplied })}
             doneBusy={markComplete.isPending}
@@ -3970,7 +4005,7 @@ export function PermPromptBanner({ onTerminal }: { onTerminal: () => void }) {
 export function PermPolicyDenialCard({ policy, denies }: { policy: NonNullable<ThreadViewData["permPolicy"]>; denies?: number }) {
   const what = [policy.tool, policy.command].filter(Boolean).join(": ")
   return (
-    <TranscriptCard tone="caution" icon={AlertTriangle} label="Blocked by frizz's permission policy">
+    <TranscriptCard tone="caution" icon={AlertTriangle} label="Blocked by Frizz's permission policy">
       {/* The refused command leads on its own line — it is the thing you actually need to see — and
           the reason follows as prose. The reason is the same text the WORKER was given, so it
           already opens with "Refused:"; prefixing it here too read as a stutter. */}
@@ -4033,7 +4068,10 @@ export function BackgroundOpsStrip({
   // listing the parent's here would credit the child with its parent's wait.
   const watchers = parentAgentId ? [] : (thread?.watches ?? []).filter((w) => w.kind === "github")
   const links = parentAgentId ? [] : thread?.links ?? []
-  const total = agents.length + shells.length + watchers.length
+  // The human's own TERMINALS on this thread (ThreadTerminals.tsx), thread-wide only: a sub-agent's
+  // drawer lists what that child launched, and nobody opens a terminal on a sub-agent.
+  const terminals = parentAgentId ? [] : thread?.terminals ?? []
+  const total = agents.length + shells.length + watchers.length + terminals.length
   // IS A WATCHER ARMED ON THIS SHELL? A `shell` watch gets NO row of its own — it is not a second thing
   // running, it is a property of the row already here, and drawing both listed one object twice
   // (maintainer 2026-08-14: "we do not need to redundantly list out background shells inside of the
@@ -4095,9 +4133,12 @@ export function BackgroundOpsStrip({
           density="sheet"
           startedAt={s.startedAt}
           // Absent until the first poll answers, and permanently absent for a shell whose output frizz
-          // cannot read — never a fabricated 0 for a number we do not have.
+          // cannot read — never a fabricated 0 for a number we do not have. Beside it, the REMAINING
+          // BUDGET where the worker declared one ("45m left", lib/shellBudget.ts) — a shell with none
+          // runs until it is stopped, so it reads its age alone.
           counter={s.id ? shellLinesLabel(shellLines.get(s.id)) : undefined}
           counterTitle="Lines of output so far — open the row to read them"
+          budget={shellBudgetReading(s.budgetEndsAt, Date.now())}
           // A codex shell has an id (its `processId`, which is what its × addresses) but no readable
           // output — codex keeps that inside its own session. So the two affordances part company
           // here: the row still stops, and it renders non-interactive rather than opening a drawer
@@ -4138,6 +4179,9 @@ export function BackgroundOpsStrip({
           onOpen={() => window.open(githubRefUrl(w.target, w.subject === "issue" ? "issue" : "pull") ?? `https://github.com/${w.target.replace("#", w.subject === "issue" ? "/issues/" : "/pull/")}`, "_blank", "noreferrer,noopener")}
         />
       ))}
+      {/* THE TERMINALS, after everything the agent launched: the human opened these, and a finished one
+          stays listed with its exit until it is removed — the one kind of row here that outlives its run. */}
+      {thread && terminals.length > 0 && <ThreadTerminalsStrip thread={thread} surface="drawer" />}
       <ThreadLinks links={links} />
     </div>
   )

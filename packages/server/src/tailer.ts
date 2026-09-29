@@ -10,7 +10,7 @@ import { permMarkerPath, workDirOf, type Project } from "./project.ts"
 import { isBrokerClaudeRow, isHeadlessRow } from "./storage.ts"
 import type { Storage, SessionRow } from "./storage.ts"
 import { discoverTranscriptDir, discoverTranscriptId, mtimeOfNonEmpty, DISCOVERY_GRACE_MS } from "./discover.ts"
-import type { AgentBackend, FoldState, NormalizedEvent, NormalizedTail } from "./backend/types.ts"
+import type { AgentBackend, FoldState, NormalizedEvent, NormalizedTail, OpenCall } from "./backend/types.ts"
 import { adoptionRuntimeBinding } from "./adoption-recovery.ts"
 import { normalizeObservedThreadModel, validateThreadProfile } from "./backend/thread-profiles.ts"
 import { dispatchProfileCell } from "./subagent-profile.ts"
@@ -36,7 +36,7 @@ import {
 } from "./tail-cache.ts"
 import { log as frizzLog } from "./logging.ts"
 import { frizzTempDir } from "./frizz-paths.ts"
-import { SHELL_BUDGET_DEFAULT_MS, shellLaunchBudgetMs } from "./shell-budget.ts"
+import { declaredShellBudgetMs } from "./shell-budget.ts"
 import { readWorkflowRun, workflowAgentState as sharedWorkflowAgentState, workflowAckRunDir, workflowAckTaskId, workflowLabel, type WorkflowAgent } from "./workflow-runs.ts"
 
 // The JSONL tailer: incrementally reads each registered session's Claude Code transcript
@@ -429,9 +429,11 @@ export interface SessionTelemetry extends NormalizedTail {
   // deliberately not on the board's wire, because no surface draws a finished shell; the scheduler's
   // watcher pass is the only consumer. See retiredShellViews for what it is for.
   retiredShells?: RetiredShellView[]
-  // Sub-agents that have ENDED, same ring and same reason: no surface draws one, and the only consumer
-  // is interrupt-ended.ts, which must name a child the interrupt KILLED and never one that simply
-  // finished in the same 30s — so the outcome rides along with the id.
+  // Sub-agents that have ENDED, same ring. Off the wire as a whole: interrupt-ended.ts reads it to name a
+  // child the interrupt KILLED and never one that simply finished in the same 30s — so the outcome rides
+  // along with the id — and the board reads the slice a queued parent's card needs (the returns inside
+  // the wait still open, board.returnedSubAgentsView) plus the intervals its "until all sub-agents
+  // return" snooze is measured against (board.subAgentsSnoozeHolds).
   retiredSubAgents?: RetiredSubAgentView[]
   pendingAsk?: PendingAskData // a pending native AskUserQuestion the session is frozen on (else absent)
   // The last assistant message carries an unanswered ```question fence AND the thread still speaks the
@@ -511,10 +513,16 @@ export interface BgShellView {
   /** The runtime's own background-task handle — the id the MODEL was given, and therefore the one a
    *  `shell` watcher is registered against. Full contract on the shared schema. */
   taskId?: string
-  /** The runtime budget this shell LAUNCHED with (shell-budget.ts): its Bash `timeout`, clamped, else the
-   *  1h default. Absent ⇒ no budget at all (a `Monitor`). An `extend_shell` never rewrites this — the
-   *  extension is a durable row the scheduler reads beside it. Full contract on the shared schema. */
+  /** The runtime budget this shell LAUNCHED with (shell-budget.ts): its Bash `timeout`, clamped. Absent ⇒
+   *  none was declared, and none is imposed — there is no default. An `extend_shell` never rewrites this;
+   *  the extension is a durable row the scheduler reads beside it. Full contract on the shared schema. */
   budgetMs?: number
+  /** A `Monitor` rather than a background Bash: never budgeted, and `extend_shell` refuses it. */
+  monitor?: boolean
+  /** When the budget actually runs out (ISO8601) — the declared budget, an `extend_shell`, or an armed
+   *  `watch` holding it later (shell-budget.ts resolveShellBudget). Stamped by the BOARD, which holds the
+   *  durable rows; the tailer never sets it. Absent ⇒ unbudgeted. */
+  budgetEndsAt?: string
 }
 
 /** A background shell that has FINISHED, in the shape the scheduler's watcher pass matches against.
@@ -535,6 +543,12 @@ export interface RetiredSubAgentView {
   label: string
   status: "completed" | "failed" | "killed"
   finishedAt?: string
+  // The DISPATCH instant and the profile, for the queued parent's card and the snooze that waits out
+  // its batch (board.returnedSubAgentsView, board.subAgentsSnoozeHolds): together with `finishedAt` they
+  // are the interval this child was out, which is what "has something been running ever since" is
+  // measured against.
+  startedAt?: string
+  subagentType?: string
 }
 
 // A pending native AskUserQuestion (structured, capped). Mirrors @frizz/shared PendingAsk; `id` is
@@ -1000,10 +1014,10 @@ function isLocalCommandReceipt(content: unknown): boolean {
 /** Of the turns isHumanSpeaking admits, did the human TYPE this one — or did frizz deliver it? A
  *  scheduler wake delivery is a real user turn to the model, but nobody typed it. The answers to
  *  registered questions ride a wake too (the worker may be down when the human answers), and they do
- *  NOT count here: this is the clock questionRepliedPast reads, and answering some cards is not moving
- *  on from the others — it released the unanswered rest of a batch the moment its first answer was sent
- *  (2026-09-29). The web's questionAnchor `isHumanTurn` still counts answers, deliberately: it asks where
- *  an exchange ENDS on screen, which an answer does. */
+ *  NOT count here: this is the clock questionRepliedPast reads (information only since 2026-09-29), and
+ *  answering some cards is not moving on from the others. The web's questionAnchor `isHumanTurn` reads
+ *  the same way now — an answer ends no exchange there either — while the router's `handoffOf` still
+ *  counts one, because it asks what the newest handoff is a reply TO. */
 function tookHumanTurn(text: string): boolean {
   return !isWakeDelivery(text)
 }
@@ -1050,6 +1064,67 @@ function shellSummary(command: unknown): string {
   const first = (command.split("\n").find((l) => l.trim()) ?? "").trim().replace(/\s+/g, " ")
   if (!first) return "background shell"
   return first.length > 120 ? `${first.slice(0, 119)}…` : first
+}
+
+// OPEN CALLS — see FoldState.openCalls. Each is answered by its own result, usually the next record, so
+// this bounds only a turn whose results never land.
+const OPEN_CALLS_MAX = 32
+const OPEN_CALL_COMMAND_MAX = 400
+
+// The call as the human should read it. A shell call's command is the thing worth naming, whatever key
+// the backend spells it with: Claude's `command`, codex's `cmd`, or codex's older argv array.
+function openCallFrom(name: string, input: unknown, at: string | undefined): OpenCall {
+  const i = (input && typeof input === "object" ? input : {}) as { description?: unknown; command?: unknown; cmd?: unknown }
+  const raw = typeof i.command === "string" ? i.command
+    : typeof i.cmd === "string" ? i.cmd
+    : Array.isArray(i.command) && i.command.every((a) => typeof a === "string") ? (i.command as string[]).at(-1)
+    : typeof input === "string" && /shell|exec|bash/i.test(name) ? input
+    : undefined
+  const command = raw?.trim() ? (raw.trim().length > OPEN_CALL_COMMAND_MAX ? `${raw.trim().slice(0, OPEN_CALL_COMMAND_MAX - 1)}…` : raw.trim()) : undefined
+  const label = typeof i.description === "string" && i.description.trim() ? i.description.trim() : undefined
+  return { name, ...(label ? { label } : {}), ...(command ? { command } : {}), ...(at ? { startedAt: at } : {}) }
+}
+
+function openCallIssued(state: FoldState, id: string, call: OpenCall): void {
+  const open = (state.openCalls ??= new Map())
+  open.delete(id) // a re-seen id moves to newest
+  open.set(id, call)
+  while (open.size > OPEN_CALLS_MAX) {
+    const oldest = open.keys().next().value
+    if (oldest === undefined) break
+    open.delete(oldest)
+  }
+}
+
+export function newestOpenCall(state: FoldState): OpenCall | undefined {
+  let last: OpenCall | undefined
+  for (const call of state.openCalls?.values() ?? []) last = call
+  return last
+}
+
+// Claude: every tool_use in an assistant record opens a call; every tool_result in a user record settles
+// one; a user record carrying NO tool_result (a human turn, a notification, an interrupt receipt) opens a
+// new turn and forgets whatever the old one left unanswered.
+function trackOpenCalls(state: TailState, rec: Record): void {
+  const content = rec.message?.content
+  if (!Array.isArray(content)) return
+  const at = typeof rec.timestamp === "string" ? rec.timestamp : undefined
+  for (const block of content) {
+    const b = block as { type?: string; name?: unknown; id?: unknown; input?: unknown } | null
+    if (b?.type === "tool_use" && typeof b.id === "string") openCallIssued(state, b.id, openCallFrom(typeof b.name === "string" ? b.name : "tool", b.input, at))
+  }
+}
+
+function settleOpenCalls(state: TailState, rec: Record): void {
+  const content = rec.message?.content
+  const results = Array.isArray(content)
+    ? content.filter((b): b is { type: "tool_result"; tool_use_id?: unknown } => (b as { type?: unknown } | null)?.type === "tool_result")
+    : []
+  if (results.length === 0) {
+    state.openCalls = undefined
+    return
+  }
+  for (const r of results) if (typeof r.tool_use_id === "string") state.openCalls?.delete(r.tool_use_id)
 }
 
 // Register each BACKGROUND OP in an assistant message as a tracked live entry, keyed by tool_use id:
@@ -1958,6 +2033,7 @@ export function applyRecord(state: TailState, rec: Record): void {
       state.lastToolCallAt = rec.timestamp
     }
     trackDispatches(state, rec) // register any background Agent dispatches + background shells
+    trackOpenCalls(state, rec) // what a silent turn is blocked on
     trackAsk(state, rec) // capture a pending native AskUserQuestion (frozen at a TUI dialog)
   } else if (type === "user" && !metaUserRec) {
     state.sawRecords = true
@@ -2014,6 +2090,7 @@ export function applyRecord(state: TailState, rec: Record): void {
         if (text) state.firstUserText = text.slice(0, FIRST_USER_TEXT_MAX)
       }
     }
+    settleOpenCalls(state, rec)
     trackLaunchResults(state, rec) // resolve a background dispatch's transcript path from its launch result
     trackResumes(state, rec) // a SendMessage that RESTARTED a stopped child is a fresh launch — revive it
     trackStops(state, rec) // a manual TaskStop is a terminal signal — retire the op it killed
@@ -2085,6 +2162,7 @@ export function applyEvent(state: FoldState, ev: NormalizedEvent): void {
       // A turn opened → the agent is working.
       state.sawRecords = true
       state.turn = "in-flight"
+      state.openCalls = undefined // a call the last turn left unanswered is not what this one waits on
       break
     case "turn-end":
       // A turn bracketed closed → idle. finalText (when the backend carries the final message on the
@@ -2155,6 +2233,8 @@ export function applyEvent(state: FoldState, ev: NormalizedEvent): void {
       // final message recomputes it), so a normalized backend must not let tool motion excuse a fence.
       state.sawRecords = true
       if (ev.kind === "tool-call" && typeof ev.at === "string") state.lastToolCallAt = ev.at
+      if (ev.kind === "tool-call") openCallIssued(state, ev.id, openCallFrom(ev.name, ev.input, ev.at))
+      else state.openCalls?.delete(ev.id)
       break
     case "agent-report":
     case "agent-instruction":
@@ -2400,9 +2480,14 @@ export interface TailerDeps {
   // fallback that used to cover it read a screen no runtime renders any more (see sniffPane).
   readPermMarker?: (slug: string) => PermMarker | undefined
   // Fired once per LIVE in-flight → idle edge, after `rested_at` is stamped — never for a rest observed
-  // at prime, which is a fact about the past rather than a turn that just ended. The periodic retitler
-  // (periodic-retitle.ts) rides it. Optional: unset = nothing extra happens at a rest.
+  // at prime, which is a fact about the past rather than a turn that just ended. The periodic status
+  // (periodic-status.ts) rides it. Optional: unset = nothing extra happens at a rest.
   onTurnDone?: (row: SessionRow) => void
+  // Hold a Codex first-output title to the project's name-uniqueness rule before it persists: the title
+  // itself when no other open thread is called that, else a distinguishing variant (thread-names.ts).
+  // `source` is the thread's opening request, for the distinguishing word. Optional: unset = persisted
+  // as written.
+  distinctTitle?: (slug: string, title: string, source?: string) => string
   // Durable prime cache (see tail-cache.ts). Defaults to a table in the project's own SQLite DB;
   // pass `null` to disable it entirely, which restores the historical "fold every transcript from
   // byte 0 on every boot" behaviour exactly (that is what the cache-off tests assert against).
@@ -2855,8 +2940,12 @@ export function createTailer(deps: TailerDeps): Tailer {
 
   function persistCodexAutoTitle(row: SessionRow, state: TailState, runtimeGeneration: number): boolean {
     if (row.backend !== "codex" || !state.aiTitle?.trim()) return false
+    // A persisted name already stands (the dispatch mint, or this marker on an earlier fold): the CAS
+    // would refuse anyway, so skip the uniqueness scan it would have paid for.
+    if (row.title_agent || row.title_worker_renamed) return false
     try {
-      return deps.storage.setAutoTitleIfCurrent(row.slug, state.aiTitle.trim(), {
+      const title = deps.distinctTitle?.(row.slug, state.aiTitle.trim(), state.firstUserText) ?? state.aiTitle.trim()
+      return deps.storage.setAutoTitleIfCurrent(row.slug, title, {
         sessionId: row.session_id,
         nativeSessionId: row.agent_session_id ?? null,
         runtimeGeneration,
@@ -3085,9 +3174,11 @@ export function createTailer(deps: TailerDeps): Tailer {
       // shell all along; nothing ever produced one, because this was a literal "running".
       const shellState = shellIsGone(e) ? "stale" as const : "running" as const
       // The budget is resolved HERE, off the raw launch `timeout`, rather than folded — see
-      // SubAgentEntry.timeoutMs. An auto-backgrounded foreground Bash carries none: its `timeout` was the
-      // foreground wait it outlived, not a lifetime anyone chose, so it takes the default.
-      const budget = e.monitor ? {} : { budgetMs: shellLaunchBudgetMs(e.timeoutMs) }
+      // SubAgentEntry.timeoutMs. None declared ⇒ none at all (no default since 2026-09-29, shell-budget.ts).
+      // An auto-backgrounded foreground Bash carries none: its `timeout` was the foreground wait it
+      // outlived, not a lifetime anyone chose.
+      const declared = e.monitor ? undefined : declaredShellBudgetMs(e.timeoutMs)
+      const budget = e.monitor ? { monitor: true } : declared !== undefined ? { budgetMs: declared } : {}
       out.push({ label: e.label, startedAt: e.startedAt, state: shellState, id: e.toolUseId, ...(e.taskId ? { stoppable: true, taskId: e.taskId } : {}), ...(lastActivityAt ? { lastActivityAt } : {}), ...budget })
     }
     return out
@@ -3109,7 +3200,7 @@ export function createTailer(deps: TailerDeps): Tailer {
   // shell matches no retirement either, so a typo still never fires.
   function retiredSubAgentViews(state: TailState): RetiredSubAgentView[] {
     const out: RetiredSubAgentView[] = []
-    for (const r of state.retiredSubAgents.values()) out.push({ id: r.toolUseId, taskId: r.taskId, label: r.label, status: r.status, finishedAt: r.finishedAt })
+    for (const r of state.retiredSubAgents.values()) out.push({ id: r.toolUseId, taskId: r.taskId, label: r.label, status: r.status, finishedAt: r.finishedAt, startedAt: r.startedAt, subagentType: r.subagentType })
     return out
   }
 
@@ -3141,9 +3232,8 @@ export function createTailer(deps: TailerDeps): Tailer {
       state: "running" as const,
       id: exec.processId,
       stoppable: true,
-      // Codex has no launch-time knob for a lifetime, so every background exec takes the default and is
-      // extended the same way a Claude shell is (shell-budget.ts).
-      budgetMs: SHELL_BUDGET_DEFAULT_MS,
+      // Codex has no launch-time knob for a lifetime, so a background exec carries NO budget unless the
+      // worker gives it one with `extend_shell` (shell-budget.ts) — the same as an undeclared Claude shell.
       // Codex hands a yielded command's output back only when the MODEL polls it — there is no file
       // for frizz to tail, so the row carries its × and no drill-in rather than opening a drawer that
       // could only say "unavailable".
@@ -5246,7 +5336,7 @@ export function createTailer(deps: TailerDeps): Tailer {
       // thread has no row and reads as legacy, which is what `questionFencesLive` does with unknown.
       const pendingQuestion = s.lastAssistantHasQuestion && questionFencesLive(row?.spawned_at)
       const nowMs = now()
-      return { primed: s.primed, turn: s.turn, permPrompt: s.permPrompt, permPolicy: s.permPolicy, permDenies: s.permDenies, model: s.model, effort: s.effort, profileAt: s.profileAt, profileRevision: s.profileRevision, permissionMode: s.permissionMode, permissionModeAt: s.permissionModeAt, permissionModeRevision: s.permissionModeRevision, lastActivityAt: s.lastActivityAt, lastAssistantAt: s.lastAssistantAt, lastAssistant: s.lastAssistant, aiTitle: s.aiTitle, customTitle: s.customTitle, customTitleRevision: s.customTitleRevision, subAgents: subAgentViews(s, nowMs), droppedReports: [...s.queuedReports.values()], bgShells: [...bgShellViews(s), ...codexBgShellViews(s)], retiredShells: retiredShellViews(s), retiredSubAgents: retiredSubAgentViews(s), pendingAsk: s.pendingAsk, pendingQuestion, lastAssistantAllDone: s.lastAssistantAllDone, lastUserAt: s.lastUserAt, lastHumanAt: s.lastHumanAt, lastToolCallAt: s.lastToolCallAt, lastUserText: s.lastUserText, firstUserText: s.firstUserText, lastFence: s.lastFence, noTranscript: s.noTranscript, authFault: s.authFault, apiFault: s.apiFault, providerError: s.providerError, limitFault: s.limitFault, contextTokens: s.contextTokens, contextWindow: s.contextWindow, lastCompactionAt: s.lastCompactionAt }
+      return { primed: s.primed, turn: s.turn, permPrompt: s.permPrompt, permPolicy: s.permPolicy, permDenies: s.permDenies, model: s.model, effort: s.effort, profileAt: s.profileAt, profileRevision: s.profileRevision, permissionMode: s.permissionMode, permissionModeAt: s.permissionModeAt, permissionModeRevision: s.permissionModeRevision, lastActivityAt: s.lastActivityAt, lastAssistantAt: s.lastAssistantAt, lastAssistant: s.lastAssistant, aiTitle: s.aiTitle, customTitle: s.customTitle, customTitleRevision: s.customTitleRevision, subAgents: subAgentViews(s, nowMs), droppedReports: [...s.queuedReports.values()], bgShells: [...bgShellViews(s), ...codexBgShellViews(s)], retiredShells: retiredShellViews(s), retiredSubAgents: retiredSubAgentViews(s), pendingAsk: s.pendingAsk, pendingQuestion, lastAssistantAllDone: s.lastAssistantAllDone, lastUserAt: s.lastUserAt, lastHumanAt: s.lastHumanAt, lastToolCallAt: s.lastToolCallAt, openCall: newestOpenCall(s), lastUserText: s.lastUserText, firstUserText: s.firstUserText, lastFence: s.lastFence, noTranscript: s.noTranscript, authFault: s.authFault, apiFault: s.apiFault, providerError: s.providerError, limitFault: s.limitFault, contextTokens: s.contextTokens, contextWindow: s.contextWindow, lastCompactionAt: s.lastCompactionAt }
     },
     // The CURRENT fresh foreign session ids (mtime within FOREIGN_FRESH_MS, capped), mtime-desc. Kept
     // as the last scan's result — recomputed at most every FOREIGN_SCAN_EVERY ticks.

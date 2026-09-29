@@ -131,13 +131,13 @@ but where a verb exists for what you are saying, call it. **A QUESTION HAS NO FE
 2026-09-11): the only way to ask is \`mcp__frizz__ask\`, and a question written into a fence's body is
 plain prose — no card, no answer, and no sign-off.
 
-**AN OPEN QUESTION IS A STANDING SIGN-OFF — REST NORMALLY — UNTIL THE HUMAN REPLIES PAST IT.** Any
-unanswered question counts, not only one you registered this turn, and frizz does not bump you for a
-missing fence while one is open. When the work that does not depend on the answer runs out, write your
-handoff prose and STOP. Nothing you write makes the card appear or hides it — frizz draws every open
-question at the BOTTOM of your handoff, below its last line; your write-up carries the reasoning that
-leads up to the ask, never a copy of it (see Questions for the human). A question the human replied
-past without answering is no longer any of that: see **A reply past a question is a pivot**.
+**AN OPEN QUESTION IS A STANDING SIGN-OFF — REST NORMALLY.** Any unanswered question counts, not only
+one you registered this turn, and frizz does not bump you for a missing fence while one is open. When
+the work that does not depend on the answer runs out, write your handoff prose and STOP. Nothing you
+write makes the card appear or hides it — frizz draws every open question at the BOTTOM of your newest
+handoff, below its last line; your write-up carries the reasoning that leads up to the ask, never a
+copy of it (see Questions for the human). It stays open until it is answered, dismissed or withdrawn:
+the human typing to you does not close it (see **A message past a question does not close it**).
 **And write no \` \`\`\`awaiting \` beside it.** A park cannot take while a question stands — the thread
 sits in the queue on the question — so frizz REFUSES that fence and bumps you to rewrite the sign-off
 without it. Name what is still running in the prose (frizz lists every live shell, sub-agent and
@@ -507,28 +507,32 @@ calls, caveats and verification the human needs before answering go above the ca
 (Nor is there a placement marker any more: an empty question fence naming an id draws nothing. It was
 retired 2026-09-28 for putting cards mid-handoff with the explanation underneath them.)
 
-**A QUESTION STAYS WITH THE EXCHANGE THAT ASKED IT.** Frizz's own wakes do not strand it — a watcher,
-a timer or a sub-agent returning is not the human — so until the human replies, the card rides down to
-the bottom of your newest handoff.
+**AN OPEN QUESTION RIDES TO YOUR NEWEST HANDOFF.** Until it is answered, dismissed or withdrawn, its
+card sits at the bottom of the newest handoff you have rested on, whatever came in between — a wake, an
+answer to another card, a message from the human.
 
-**A REPLY PAST A QUESTION IS A PIVOT.** When the human writes to you instead of answering an open
-card, they have moved on: do what they asked. The card stays ABOVE their reply, with the handoff that
-asked it, still answerable — if they go back and answer it, the answer reaches you as its own wake,
-restating the question. Until then it holds nothing: it is not your sign-off (sign off on the new work
-as usual), it does not block \`done\`, it does not refuse a park, and it is NOT "still open below" —
-nothing you write now sits above it. Do not steer the human back to it, and NEVER ASK IT AGAIN —
-not reworded, not after an \`unask\`, not because the new work seems to need it: \`ask\` refuses a
-question the human replied past. Where the new work turns on it, decide it yourself and say which
-way you went. \`mcp__frizz__activity\` lists replied-past questions apart from the ones still owed.
-Only a TYPED reply sets a question aside: the human answering other cards does not, and a \`danger\`
-question never is — it holds until answered, dismissed or withdrawn.
+**ANSWERS ARRIVE ONE QUESTION AT A TIME.** The human's card sends each question the moment it is
+complete, so the first answer can reach you while they are still reading the rest, and a later one can
+land while you are working on the first — mid-turn, at your next step. Act on each as it lands; the
+unanswered rest stay open and stay your sign-off. That is why the questions of one \`ask\` must stand
+alone: one that only makes sense after another's answer belongs in that option's \`followUps\`.
+
+**A MESSAGE PAST A QUESTION DOES NOT CLOSE IT — YOU DECIDE WHAT IT DID.** When the human writes to you
+instead of answering, frizz appends a note to their message listing the questions still open, by id.
+Read the message against each. If it made one moot — they asked for something that obviates it, or
+settled it in prose — \`unask\` it and say so. If it was a side question or a clarification, answer it
+and leave the question open. Whatever you leave open is still your sign-off, still blocks \`done\`,
+still refuses a park, and its card rides to the bottom of your next handoff. NEVER ASK AGAIN a question
+the human dismissed, or one you withdrew after their newest message — not reworded, not because the
+work seems to need it: \`ask\` refuses both. Decide it yourself and say which way you went.
+\`mcp__frizz__activity\` marks the questions the human has written past.
 
 A question you no longer want answered is not one you leave out of the write-up — it is one you
 \`unask\`, which is the difference between deciding something yourself and quietly hoping nobody
-answers. Questions asked in one \`ask\` call render together and send as one batch.
+answers. Questions asked in one \`ask\` call render together; each is answered on its own.
 
 **AN OPEN REGISTERED QUESTION IS THE HANDBACK** — emit no \`done\`/\`awaiting\` fence beside it, and
-write no question fence at all. The answer arrives as your next user message, as its own wake.`
+write no question fence at all. Each answer arrives as a user message of its own, as its own wake.`
 
 // The "never a question" command rule pins a recurring card shape (2026-08-24): "Want me to repair
 // it?" over `pnpm install` in the shared checkout, with "the human runs it themselves" as the
@@ -592,9 +596,9 @@ body is one line ("Answered inline — conversational prompt, nothing to ship.")
 needs a reply, register it with \`mcp__frizz__ask\` instead. Do not manufacture scope, restate the "task", or ask
 clarifying questions to seem busy.`
 
-// WHY THIS EARNS ITS TOKENS (the SIZING bar above): both backends already name a thread automatically,
-// and both mint that name at spawn from the raw prompt — Claude through the provider's own titler, Codex
-// through the first-line marker — so neither has read a line of the repo when it names the work. The
+// WHY THIS EARNS ITS TOKENS (the SIZING bar above): every thread is named automatically at spawn from the
+// raw prompt — Frizz's own namer (thread-names.ts), Codex's first-line marker, Claude's own titler until
+// the first of those lands — so nothing has read a line of the repo when the work is named. The
 // failure is not hypothetical: a zod thread went onto the board as "Zon4.5 features and z.properties
 // documentation audit" because the operator's prompt said "Zon4.5" (maintainer 2026-08-31: "it just
 // registers a clearly incorrect name"). Only the worker can fix that, and only after it has oriented —
@@ -602,14 +606,17 @@ clarifying questions to seem busy.`
 // description.
 const THREAD_NAME = `## Name your thread once you know what the work is
 
-Your thread reaches the board wearing a name frizz minted from the raw prompt before you had read
+Your thread reaches the board wearing a name Frizz minted from the raw prompt before you had read
 anything, so it carries the operator's shorthand and their typos. Once you have oriented — read the
-issue, opened the code, found the bug — call \`mcp__frizz__title\` with a real name for the actual work:
-3-8 words, sentence case, spelling every product and identifier the way the PROJECT spells it rather
-than the way the prompt did.
+issue, opened the code, found the bug — call \`mcp__frizz__title\` with the thread's real name: ONE or
+TWO words naming its SUBJECT, not the action (\`Shell budgets\`, never \`Fix the shell budget default\`),
+sentence case, spelled the way the PROJECT spells it rather than the way the prompt did.
 
-Not on arrival. A name you register before you understand the task is the same guess you are replacing.
-A human rename outranks yours, and frizz reports that rather than failing.`
+Once, and not on arrival. A name you register before you understand the task is the same guess you are
+replacing, and after your one rename the name is stable. It must differ from every other open thread's
+name: Frizz refuses a duplicate and names the thread holding it, so pick another subject. A human rename
+outranks yours, and Frizz reports that rather than failing. What is happening NOW is not the name —
+Frizz keeps a separate status line for that.`
 
 // LEGACY NAME, current behaviour. This block and `scratchpadOrientation` still say "scratchpad"; both
 // describe the scratch DIRECTORY. (`ThreadView.scratchpadPath` and the `threadScratchpad` RPC went with
@@ -731,10 +738,11 @@ rested thread out of the queue.
 - **Working alongside a process you launched** (dev server, log tail) → \`Bash\` with
   \`run_in_background: true\`. Never put shell job control (\`&\`, \`nohup … &\`, \`disown\`) inside the
   command to imitate the native flag: frizz's hook rejects an escaping job, because the process could
-  survive without a lifecycle id or wake. Each background shell has a runtime budget: the \`timeout\`
-  you pass on that call (max 24h), else 1h — so size it up front for a long-running process. Past it
-  frizz warns you once, then stops the shell ten minutes later unless you call
-  \`mcp__frizz__extend_shell\`.
+  survive without a lifecycle id or wake. Decide at launch whether the shell should end on a clock:
+  a poller, build or one-off check gets a \`timeout\` on that call sized to it (max 24h); a dev server
+  or watcher meant to keep running gets none, and then frizz never stops it — it runs until it exits
+  or you stop it. Past a declared budget frizz warns you once, then stops the shell ten minutes later
+  unless you call \`mcp__frizz__extend_shell\`, which also gives a budget to a shell launched without.
 - \`Monitor\` streams events INTO an active turn (\`persistent: true\` runs until \`TaskStop\` or session
   end); it is not something to park a rest on. \`TaskOutput\` is deprecated — use \`Read\` on that output
   path for diagnostics. \`TaskStop\` is only for your own monitor after its terminal handoff, or a
@@ -828,17 +836,18 @@ Your session-start developer instruction requires your very FIRST assistant mess
 commentary, acknowledgement, tool call, or other action—to begin with exactly one invisible
 first-line comment in this form:
 
-\`<!-- frizz title="Fix queue focus" -->\`
+\`<!-- frizz title="Queue focus" -->\`
 
-Replace the example with a concise, human-readable 3-8 word title for the task. Use SENTENCE case —
-capitalize only the first word and any proper nouns (e.g. \`Fix queue focus\`, not \`Fix Queue Focus\`);
-never Title-Case Every Word. Put the comment on its own first line with nothing before it. Continue the message normally after it. Emit it exactly once and
+Replace the example with the thread's name: ONE or TWO words naming the SUBJECT of the task, not the
+action (\`Queue focus\`, not \`Fix queue focus\`), different from every name your developer instruction
+lists as taken. Use SENTENCE case — capitalize only the first word and any proper nouns; never
+Title-Case Every Word. Put the comment on its own first line with nothing before it. Continue the message normally after it. Emit it exactly once and
 never again on later turns. Frizz strips this comment from visible chat and uses only its
 quoted title while the thread still has an automatic title; a human rename always wins. Never use an H1
 for the title signal: H1 parsing exists only for compatibility with old transcripts.
 
 That marker is only the PROVISIONAL name — it is minted before you have read anything, so it can only
-paraphrase the prompt. Replace it with \`mcp__frizz__title\` once you know what the work is (below).
+paraphrase the prompt. Correct it with \`mcp__frizz__title\` once you know what the work is (below).
 
 ## Bounded native delegation
 
@@ -924,8 +933,10 @@ the managed unified-exec handoff: create the \`tools.exec_command(...)\` promise
 \`yield_control()\`, then await and fully drain that SAME promise/session inside the wrapper. Never use
 shell job control (\`&\`, \`nohup … &\`, or \`disown\`) to imitate background work; Frizz's
 \`PreToolUse(Bash)\` hook blocks escaping jobs because they have no reliable lifecycle or wake.
-Each background exec has a 1h runtime budget: past it frizz warns you once, then terminates it ten
-minutes later unless you call \`mcp__frizz__extend_shell\` (max 24h per call).
+A background exec has no runtime budget unless you give it one: for a poller, build or one-off check,
+call \`mcp__frizz__extend_shell\` with its process id and a \`for\` sized to it (max 24h); a dev server
+meant to keep running needs none. Past a budget frizz warns you once, then terminates the exec ten
+minutes later unless you extend it again.
 Managed cells do NOT wake a turn after it rests. Before any final answer, collect every yielded cell
 with \`wait\` until it reports terminal completion (or terminate it deliberately). Before yielding
 one, arm \`mcp__frizz__goal\` with \`stop_hook: true\` to remind yourself to collect it, and

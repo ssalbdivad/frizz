@@ -4,7 +4,7 @@ import { mkdtempSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import type { TranscriptMessage } from "@frizz/shared"
-import { createPeriodicRetitler, operatorMessages, recentConversation } from "./periodic-retitle.ts"
+import { createPeriodicStatus, operatorMessages, recentConversation } from "./periodic-status.ts"
 import { createStorage, type SessionRow } from "./storage.ts"
 
 const SLUG = "long-thread"
@@ -15,7 +15,7 @@ const user = (text: string, extra: Partial<TranscriptMessage> = {}): TranscriptM
 const agent = (text: string): TranscriptMessage => ({ role: "assistant", text, tools: [], parts: [] }) as TranscriptMessage
 
 function harness(titleLocked = 0) {
-  const storage = createStorage(join(mkdtempSync(join(tmpdir(), "frizz-retitle-")), "ui.db"), "p")
+  const storage = createStorage(join(mkdtempSync(join(tmpdir(), "frizz-status-")), "ui.db"), "p")
   storage.upsertSession({
     slug: SLUG, session_id: SESSION, thread_name: `frizz-${SLUG}`, spawned_at: "2026-09-24T00:00:00Z",
     last_read_at: null, unread: 0, exited: 0, archived: 0, rested_at: null, title_auto: 1,
@@ -25,18 +25,20 @@ function harness(titleLocked = 0) {
   storage.setClaudeRuntime(SLUG, "broker")
   let messages: TranscriptMessage[] = []
   const asked: string[] = []
-  const retitler = createPeriodicRetitler({
+  const names: Array<string | undefined> = []
+  const periodic = createPeriodicStatus({
     storage,
-    generateTitle: async ({ description }) => { asked.push(description); return `Title ${asked.length}` },
+    writeStatus: async ({ name, conversation }) => { asked.push(conversation); names.push(name); return `Status ${asked.length}` },
+    nameOf: (row) => row.title ?? undefined,
     readMessages: () => messages,
-    onTitled: () => {},
+    onStatus: () => {},
   })
   const rest = async (next: TranscriptMessage[]) => {
     messages = next
-    retitler.onTurnDone(storage.getSession(SLUG)!)
+    periodic.onTurnDone(storage.getSession(SLUG)!)
     await new Promise((r) => setImmediate(r))
   }
-  return { storage, asked, rest }
+  return { storage, asked, names, rest }
 }
 
 function exchanges(n: number): TranscriptMessage[] {
@@ -63,15 +65,22 @@ test("the description is the recent window, both sides, never the opening ask", 
   assert.doesNotMatch(text, /ask 2\b/)
 })
 
-test("retitles on every 5th operator message and writes an unlocked agent title", async () => {
-  const { storage, asked, rest } = harness()
+test("every 5th operator message writes a STATUS and leaves the name alone", async () => {
+  const { storage, asked, names, rest } = harness()
+  storage.setMintedTitle(SLUG, SESSION, "Shell budgets")
   await rest(exchanges(1)) // first sighting only records the count
   await rest(exchanges(4))
   assert.equal(asked.length, 0)
   await rest(exchanges(5))
   assert.equal(asked.length, 1)
-  assert.equal(storage.getSession(SLUG)?.title, "Title 1")
-  assert.equal(storage.getSession(SLUG)?.title_agent, 1)
+  const row = storage.getSession(SLUG)!
+  assert.equal(row.status, "Status 1")
+  // The name is untouched — text, provenance and the worker's unspent rename alike.
+  assert.equal(row.title, "Shell budgets")
+  assert.equal(row.title_agent, 1)
+  assert.equal(row.title_worker_renamed, 0)
+  // The writer is told the name only so the status does not repeat it.
+  assert.equal(names[0], "Shell budgets")
   await rest([...exchanges(5), user("wake", { wake: true })]) // same window, nothing new
   await rest(exchanges(9))
   assert.equal(asked.length, 1)
@@ -79,17 +88,28 @@ test("retitles on every 5th operator message and writes an unlocked agent title"
   assert.equal(asked.length, 2)
   assert.match(asked[1]!, /ask 6/)
   assert.doesNotMatch(asked[1]!, /ask 5\b/)
+  assert.equal(storage.getSession(SLUG)?.status, "Status 2")
+  assert.equal(storage.getSession(SLUG)?.title, "Shell budgets")
 })
 
-test("a human-named thread is never retitled", async () => {
+test("a human-named thread still gets a status — the status is not the name", async () => {
   const { storage, asked, rest } = harness(1)
   await rest(exchanges(4))
   await rest(exchanges(5))
-  assert.equal(asked.length, 0)
+  assert.equal(asked.length, 1)
+  assert.equal(storage.getSession(SLUG)?.status, "Status 1")
   assert.equal(storage.getSession(SLUG)?.title, "Opening ask")
+  assert.equal(storage.getSession(SLUG)?.title_locked, 1)
 })
 
-test("a first sighting after a restart records the count instead of retitling at once", async () => {
+test("a status read from a replaced session never lands on its successor", async () => {
+  const { storage, rest } = harness()
+  await rest(exchanges(4))
+  assert.equal(storage.setStatus(SLUG, "22222222-2222-4222-8222-222222222222", "Stale"), false)
+  assert.equal(storage.getSession(SLUG)?.status ?? null, null)
+})
+
+test("a first sighting after a restart records the count instead of writing at once", async () => {
   const { asked, rest } = harness()
   await rest(exchanges(12))
   assert.equal(asked.length, 0)

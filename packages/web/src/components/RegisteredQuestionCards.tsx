@@ -12,13 +12,20 @@
 // once that option is picked, so one registration renders as a stack of cards that grows as it is
 // answered. lib/registeredQuestion.ts performs that walk; nothing here decides which nodes are live.
 //
-// ONE ANSWERING STATE PER THREAD, however many mounts. The `answerQuestions` RPC takes every staged
-// answer in ONE call (a per-question send would half-wake the worker), and one thread can have stacks at
-// more than one depth — a question the human replied past up at its own rest, a newer one at the tail —
-// so the staged picks cannot live in the stack that draws them. `useRegisteredAnswering` holds them for
-// the whole thread; the surface mounts it ONCE (RegisteredAnsweringProvider) and every stack on that
-// surface reads it through context, so either stack's Send sends both. A stack mounted with no provider
-// above it (a surface that draws one stack) owns a state of its own.
+// ONE QUESTION AT A TIME (2026-09-29, maintainer: "the agent should receive the answer to one question
+// at a time so it can start working but the remaining questions … should stay there"). A question is SENT
+// the moment it is complete — a single-choice pick that opens no follow-up, the last of its follow-ups
+// answered, an Enter in its own box, a multi confirmed with Enter or Send — and the rest stay open and
+// owed where they are. The questions of one `ask` are independent by contract (a dependent one is a
+// `followUps` entry), which is what makes one answer actionable alone. Send answers survives only as the
+// on-purpose send of whatever is half-filled (typed and not Entered, a multi not confirmed), and a typed
+// reply still carries anything staged ahead of itself.
+//
+// ONE ANSWERING STATE PER THREAD, however many mounts. The staged picks, what has been sent, and the
+// prompt box that carries staged answers ahead of a reply all have to agree, so the state cannot live
+// in the stack that draws the cards. `useRegisteredAnswering` holds it for the whole thread; the surface
+// mounts it ONCE (RegisteredAnsweringProvider) and every stack on that surface reads it through context.
+// A stack mounted with no provider above it (a surface that draws one stack) owns a state of its own.
 import { createContext, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from "react"
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import { X } from "lucide-react"
@@ -28,10 +35,10 @@ import { draftKey, draftStore, useDraftValues, useProjectDir } from "../lib/draf
 import { clearSteered, clearSteeredIn, markSteered, markSteeredIn } from "../lib/steering.ts"
 import type { BlockAnswer } from "../lib/questionBlocks.ts"
 import type { PairedAnswer } from "../lib/answersMessage.ts"
-import { ROOT_PATH, liveQuestionNodes, nodeAnswered, registeredAnswer, settledQuestionNodes } from "../lib/registeredQuestion.ts"
+import { ROOT_PATH, liveQuestionNodes, nodeAnswered, questionComplete, registeredAnswer, settledQuestionNodes } from "../lib/registeredQuestion.ts"
 import { AnswersCard } from "./AnswersCard.tsx"
 import { QueueDismissContext } from "./ChatView.tsx"
-import { QuestionBlockCard } from "./QuestionBlockCard.tsx"
+import { QuestionBlockCard, focusQuestionNode } from "./QuestionBlockCard.tsx"
 
 function errorText(error: unknown): string {
   const message = error instanceof Error ? error.message : "The answer could not be sent."
@@ -52,10 +59,21 @@ export interface RegisteredAnswering {
   onText: (q: RegisteredQuestionView, path: string, isMulti: boolean, text: string) => void
   dismiss: (id: string) => void
   dismissing: boolean
-  /** Send EVERY staged answer on the thread — this rest's or an older one's. `then` runs once they have
-   *  LANDED, never on a failure: the prompt box passes its own send here, so a reply typed with answers
-   *  staged goes out after them rather than instead of them. */
+  /** Send ONE question's staged answer — what completing a question does. Nothing staged: nothing sent. */
+  commit: (q: RegisteredQuestionView) => void
+  /** Send EVERY staged answer on the thread: the on-purpose Send answers, and a typed reply carrying what
+   *  is staged ahead of itself. `then` runs once they have LANDED, never on a failure: the prompt box
+   *  passes its own send here, so a reply typed with answers staged goes out after them rather than
+   *  instead of them. */
   submit: (then?: () => void) => void
+  /** Enter inside one of `q`'s cards (`grid` is that node's options grid): walk to `q`'s next unanswered
+   *  follow-up; with none left, send `q` — whatever it holds, which is how a half-filled one is sent on
+   *  purpose — and move to the next unanswered question. Enter never sends another question. */
+  enter: (q: RegisteredQuestionView, grid: HTMLElement) => void
+  /** Every question this state has sent and the server has not refused, as its greyed card will draw it.
+   *  A surface that keeps the answered card in place (the queue card) reads it; the thread page draws its
+   *  own from the settled list. */
+  sent: ReadonlyMap<string, SettledQuestion>
   staged: number
   sending: boolean
   error: string | undefined
@@ -88,12 +106,19 @@ export function useRegisteredAnswering(thread: ThreadView | undefined, scope?: R
   const api = scope?.api ?? rpc
   const [picks, setPicks] = useState<Picks>(() => new Map())
   const [error, setError] = useState<string>()
+  // What this state has sent, by id — kept until the server refuses it, so a question is never staged or
+  // sent twice however long the board takes to drop it, and so a surface can grey it where it stood.
+  const [sent, setSent] = useState<ReadonlyMap<string, SettledQuestion>>(() => new Map())
+  // Sends in flight. Several can be at once now — the human picks the next card while the last one's
+  // round-trip is still out — so one mutation's `isPending` no longer says it.
+  const [inFlight, setInFlight] = useState(0)
   // THE QUEUE CARD DISSOLVES ON SEND, like every other action on it. Answering is the same commitment as
   // a fenced Send answers or a composer steer — both of which take the card out of the queue the instant
   // the human commits, without waiting on the round-trip (see useLiveAnswering's onSent) — and this was
   // the one send that did not, so a card answered on a loaded machine sat there for the seconds it took
-  // the board to catch up, which is the window its answer rendered twice in (2026-09-01). Null on the
-  // thread page, where there is no card to dismiss.
+  // the board to catch up, which is the window its answer rendered twice in (2026-09-01). …UNLESS the
+  // card still asks something: then it HOLDS its place (see `sendPairs`). Null on the thread page, where
+  // there is no card to dismiss.
   const queueDismiss = useContext(QueueDismissContext)
 
   // Every free-text box of every question, subscribed as one batch — the draft store's own hook takes a
@@ -114,13 +139,12 @@ export function useRegisteredAnswering(thread: ThreadView | undefined, scope?: R
   const answersOf = (q: RegisteredQuestionView): ReadonlyMap<string, BlockAnswer> =>
     new Map(allPaths(q).map((path) => [path, answerFor(q, path)]))
 
-  // EVERY answered question goes in ONE call. A per-question send would half-wake the turn: the worker
-  // would come back to a payload it cannot act on and would have to ask for the rest again.
+  // What a send would carry, per question — never one already sent.
   const stagedPairs = questions.flatMap((q) => {
+    if (sent.has(q.id)) return []
     const built = registeredAnswer(q, answersOf(q))
     return built ? [{ q, answer: built }] : []
   })
-  const staged: QuestionAnswer[] = stagedPairs.map((pair) => pair.answer)
   const queryClient = useQueryClient()
 
   const send = useMutation({
@@ -138,18 +162,21 @@ export function useRegisteredAnswering(thread: ThreadView | undefined, scope?: R
         if (q && slug) for (const path of allPaths(q)) draftStore.set(draftKey.question(projectDir, slug, q.id, path), "")
       }
     },
-    onError: (cause) => {
-      // The card faded on click; the answer did not land, so put it back rather than leaving the human
-      // looking at a queue that quietly swallowed their reply. Same reversal an optimistic Mark-as-done
-      // makes when the server declines it.
+    onError: (cause, answers) => {
+      // The card faded (or greyed) on click; the answer did not land, so put it back rather than leaving
+      // the human looking at a queue that quietly swallowed their reply. Same reversal an optimistic
+      // Mark-as-done makes when the server declines it.
       queueDismiss?.cancel()
       if (slug && scope) clearSteeredIn(scope.projectId, slug)
       else if (slug) clearSteered(slug)
+      const ids = new Set(answers.map((a) => a.questionId))
+      setSent((prev) => new Map([...prev].filter(([id]) => !ids.has(id))))
       setError(errorText(cause))
     },
     // Server truth replaces the optimistic settled cards either way: on success it carries the real
     // `settledAt`, and on failure it no longer holds them, which brings the open card back.
     onSettled: () => {
+      setInFlight((n) => Math.max(0, n - 1))
       if (slug) void queryClient.invalidateQueries({ queryKey: settledQuestionsKey(slug) })
     },
   })
@@ -158,16 +185,22 @@ export function useRegisteredAnswering(thread: ThreadView | undefined, scope?: R
     onError: (cause) => setError(errorText(cause)),
   })
 
-  const submit = (then?: () => void) => {
-    if (!slug || staged.length === 0 || send.isPending) return
+  const sendPairs = (pairs: typeof stagedPairs, then?: () => void) => {
+    if (!slug || pairs.length === 0) return
     setError(undefined)
+    const ids = new Set(pairs.map((pair) => pair.q.id))
     // Local truth FIRST, then the network — the ordering every other send on this card obeys, and the
-    // whole of what "the card goes away when I answer it" means on a machine under load.
-    queueDismiss?.dismiss()
-    // …AND THE RAIL ROW GOES TO WORK WITH IT. Every answer wakes the worker (the scheduler delivers the
-    // batch), so this is a steer in all but name, and it takes the steer's overlay: without it the row
-    // dropped its question mark on the board push, sat in the queue wearing the at-rest ellipsis, and only
-    // moved to the running band once the delivery landed (lib/steering.ts).
+    // whole of what "the card goes away when I answer it" means on a machine under load. But a card that
+    // still asks something HOLDS (maintainer 2026-09-29: "the remaining questions … should stay there"):
+    // the worker starts on this answer and leaves the queue for it, and the card stays in its place, live,
+    // with the answered question greyed and the rest answerable, until the last one is sent.
+    const stillOpen = questions.some((q) => !ids.has(q.id) && !sent.has(q.id))
+    if (stillOpen) queueDismiss?.hold?.()
+    else queueDismiss?.dismiss()
+    // …AND THE RAIL ROW GOES TO WORK WITH IT. Every answer wakes the worker (the scheduler delivers it),
+    // so this is a steer in all but name, and it takes the steer's overlay: without it the row dropped
+    // its question mark on the board push, sat in the queue wearing the at-rest ellipsis, and only moved
+    // to the running band once the delivery landed (lib/steering.ts).
     // On another project's card the record is that project's (markSteeredIn): a bare slug there would
     // set the page project's thread of the same name to work.
     if (scope) markSteeredIn(scope.projectId, slug)
@@ -179,35 +212,57 @@ export function useRegisteredAnswering(thread: ThreadView | undefined, scope?: R
     const key = settledQuestionsKey(slug)
     void queryClient.cancelQueries({ queryKey: key })
     const settledAt = new Date().toISOString()
-    const ids = new Set(stagedPairs.map((pair) => pair.q.id))
-    queryClient.setQueryData<SettledQuestion[]>(key, (prev) => [
-      ...(prev ?? []).filter((s) => !ids.has(s.id)),
-      ...stagedPairs.map(({ q, answer }): SettledQuestion => ({ id: q.id, spec: q.spec, askedAt: q.askedAt, settledAt, answer, pending: true })),
-    ])
+    const settled = pairs.map(({ q, answer }): SettledQuestion => ({ id: q.id, spec: q.spec, askedAt: q.askedAt, settledAt, answer, pending: true }))
+    queryClient.setQueryData<SettledQuestion[]>(key, (prev) => [...(prev ?? []).filter((s) => !ids.has(s.id)), ...settled])
+    setSent((prev) => new Map([...prev, ...settled.map((s) => [s.id, s] as const)]))
+    setInFlight((n) => n + 1)
     // `mutateAsync`, not per-call callbacks: the queue card dissolves on this very click and unmounts,
     // and a mutate()-scoped onSuccess is dropped with the observer — the reply riding `then` with it.
-    send.mutateAsync(staged).then(() => then?.(), () => {})
+    send.mutateAsync(pairs.map((pair) => pair.answer)).then(() => then?.(), () => {})
   }
+  const commit = (q: RegisteredQuestionView) => sendPairs(stagedPairs.filter((pair) => pair.q.id === q.id))
+  const submit = (then?: () => void) => sendPairs(stagedPairs, then)
 
-  // A PICK THAT COMPLETES THE ASK SENDS IT (maintainer 2026-09-29: "the answers should be set dynamically
-  // as they are selected and if needed the agent waits until all questions are answered or the user types
-  // something and hits enter"). Before this, a chip only staged, and a human who picked one and then
-  // replied from the prompt box sent the reply and silently dropped the pick.
+  // A PICK THAT COMPLETES ITS QUESTION SENDS IT (maintainer 2026-09-29: "the agent should receive the
+  // answer to one question at a time so it can start working"). Before 2026-09-29 a pick sent only once
+  // EVERY owed question was answered, and before that only Send answers sent at all — so the worker sat
+  // idle while the human read the rest.
   //
   // Only a SINGLE-choice pick arms it. That click is the whole answer; a multi toggle is one of several,
-  // and a keystroke is half a word, so neither can say "done" — Enter (which walks the batch first, see
-  // QuestionBlockCard advanceOrSubmit) and Send answers stay the send for those. Read on the render AFTER
-  // the pick, because completeness includes the follow-ups the pick just opened. And it holds off while
-  // the thread's prompt box has a draft: that human is mid-note, and their Enter sends both.
-  const autoSend = useRef(false)
+  // and a keystroke is half a word, so neither can say "done" — Enter (see `enter`) and Send answers stay
+  // the send for those. Read on the render AFTER the pick, because completeness includes the follow-ups
+  // the pick just opened: a pick that opens some waits for them, and the pick that answers the last one
+  // sends the whole question. And it holds off while the thread's prompt box has a draft: that human is
+  // mid-note, and their Enter sends both (ThreadComposerBox).
+  const autoSend = useRef<string | null>(null)
   useEffect(() => {
-    if (!autoSend.current) return
-    autoSend.current = false
-    const owed = questionsOwed(questions)
-    const complete = owed.every((q) => stagedPairs.some((pair) => pair.q.id === q.id))
+    const id = autoSend.current
+    if (id === null) return
+    autoSend.current = null
+    const q = questions.find((entry) => entry.id === id)
+    if (!q || sent.has(q.id) || !questionComplete(q.spec, answersOf(q))) return
     const drafting = slug ? (draftStore.get(draftKey.followUp(projectDir, slug, thread?.sessionId)) ?? "").trim() !== "" : false
-    if (complete && !drafting) submit()
+    if (!drafting) commit(q)
   })
+
+  const enter = (q: RegisteredQuestionView, grid: HTMLElement) => {
+    // This question's own cards first — the root, then the follow-ups its pick opened, in order.
+    const article = grid.closest<HTMLElement>("[data-question-id]")
+    const own = article ? [...article.querySelectorAll<HTMLElement>("[data-answerable-question]")] : [grid]
+    const nextOwn = own.slice(own.indexOf(grid) + 1).find((node) => node.dataset.answered === "false")
+    if (nextOwn) {
+      focusQuestionNode(nextOwn)
+      return
+    }
+    // None left: send it, and go on to the next unanswered question of the set — found BEFORE the send,
+    // which greys this one out from under the walk. After this question first, then wrapping.
+    const set = grid.closest("[data-question-set]")
+    const others = set ? [...set.querySelectorAll<HTMLElement>("[data-answerable-question]")].filter((node) => !article?.contains(node)) : []
+    const after = others.filter((node) => article && article.compareDocumentPosition(node) & Node.DOCUMENT_POSITION_FOLLOWING)
+    const next = [...after, ...others.filter((node) => !after.includes(node))].find((node) => node.dataset.answered === "false")
+    commit(q)
+    if (next) focusQuestionNode(next)
+  }
 
   return {
     slug,
@@ -229,7 +284,7 @@ export function useRegisteredAnswering(thread: ThreadView | undefined, scope?: R
           next.set(key, { ...pick, chosenSet: set })
         } else {
           next.set(key, { ...pick, chosen: pick.chosen === optIdx ? null : optIdx })
-          if (pick.chosen !== optIdx) autoSend.current = true
+          if (pick.chosen !== optIdx) autoSend.current = q.id
         }
         return next
       })
@@ -249,9 +304,12 @@ export function useRegisteredAnswering(thread: ThreadView | undefined, scope?: R
     },
     dismiss: (id) => dismiss.mutate(id),
     dismissing: dismiss.isPending,
+    commit,
     submit,
-    staged: staged.length,
-    sending: send.isPending,
+    enter,
+    sent,
+    staged: stagedPairs.length,
+    sending: inFlight > 0,
     error,
   }
 }
@@ -408,6 +466,7 @@ export function RegisteredQuestionCard({ q, answering: given }: { q: RegisteredQ
         onChip: (optIdx) => a.onChip(q, node.path, node.spec.kind === "multi", optIdx),
         onText: (text) => a.onText(q, node.path, node.spec.kind === "multi", text),
         onSubmit: () => a.submit(),
+        onEnter: (grid) => a.enter(q, grid),
       }}
     />
   )
@@ -437,6 +496,7 @@ export function RegisteredQuestionStack({
   thread,
   questions: only,
   inFlight = null,
+  keepAnswered = false,
   className = "",
 }: {
   thread: ThreadView | undefined
@@ -450,15 +510,31 @@ export function RegisteredQuestionStack({
   // because only ONE mount may draw it: the answer is the human's newest turn and belongs at the tail
   // however deep the questions themselves sit. An anchored mount simply omits it.
   inFlight?: PairedAnswer[] | null
+  // KEEP EACH ANSWERED QUESTION IN ITS SLOT, greyed, after the board has dropped it — for a surface that
+  // draws nothing else of the answer: the queue card, which now HOLDS while it still asks something
+  // (useRegisteredAnswering sendPairs). Without it the answered card left the stack on the board push
+  // and every card under it moved up under the human's cursor. The thread page does not want it: it
+  // draws the greyed card itself, from the settled list, at the rest it was answered at.
+  keepAnswered?: boolean
   className?: string
 }) {
   const slug = thread?.id
-  const questions = only ?? thread?.questions ?? []
+  const listed = only ?? thread?.questions ?? []
   // A provider above this stack owns the state; without one, this stack does (a surface that draws only
   // one stack has no reason to mount the provider).
   const shared = useContext(RegisteredAnsweringContext)
   const own = useRegisteredAnswering(shared ? undefined : thread)
   const a = shared ?? own
+  // Every question this stack has drawn, in the order it drew them, so one answered and since dropped by
+  // the board keeps its slot (`keepAnswered`) — and a question asked since joins at the bottom.
+  const drawn = useRef<readonly RegisteredQuestionView[]>([])
+  let questions: readonly RegisteredQuestionView[] = listed
+  if (keepAnswered) {
+    const live = new Map(listed.map((q) => [q.id, q]))
+    const kept = drawn.current.flatMap((q) => (live.has(q.id) ? [live.get(q.id)!] : a.sent.has(q.id) ? [q] : []))
+    questions = [...kept, ...listed.filter((q) => !kept.some((k) => k.id === q.id))]
+    drawn.current = questions
+  }
 
   // THE ANSWER, ALREADY SENT AND NOT YET IN THE WORKER'S HANDS. Answering stores the row; a wake hands
   // it over a moment later (deliberately — an answer given while the worker's process is down has to
@@ -486,10 +562,18 @@ export function RegisteredQuestionStack({
       data-registered-questions
       // The batch a card's Enter walks before it sends (QuestionBlockCard advanceOrSubmit).
       data-question-set
-      aria-label={`${questions.length} question${questions.length === 1 ? "" : "s"} waiting for an answer`}
+      aria-label={(() => {
+        const waiting = questions.filter((q) => !a.sent.has(q.id)).length
+        return `${waiting} question${waiting === 1 ? "" : "s"} waiting for an answer`
+      })()}
       className={`flex min-w-0 flex-col gap-3 ${className}`}
     >
-      {questions.map((q) => <RegisteredQuestionCard key={q.id} q={q} answering={a} />)}
+      {questions.map((q) => {
+        // Sent from here: greyed in its own slot at once, before the round-trip, the way the thread page
+        // greys it from the settled list — never drawn open a second time while the board catches up.
+        const sentAs = a.sent.get(q.id)
+        return sentAs ? <SettledQuestionCard key={q.id} s={sentAs} /> : <RegisteredQuestionCard key={q.id} q={q} answering={a} />
+      })}
       {a.error && <div role="alert" className="break-words text-[11px] leading-snug text-danger-soft">{a.error}</div>}
       {a.sending && (
         <div role="status" aria-live="polite" className="text-[11px] leading-snug text-muted">Sending…</div>
@@ -499,19 +583,26 @@ export function RegisteredQuestionStack({
           stack's plain 12px there read as a button floating between the two, half an appendage of
           the box (the rule scripts/verify-open-ask-composer.mjs holds, from the maintainer's
           2026-07-22 "the spacing is insane": ≤10px up, at least 1.5x that down). Both marks here are
-          filled or bordered boxes, so the box gap IS the ink gap. */}
-      <div className="-mt-1 flex justify-start">
-        <button
-          type="button"
-          data-send-answers
-          disabled={a.staged === 0 || a.sending}
-          onClick={() => a.submit()}
-          onMouseDown={(e) => e.preventDefault()}
-          className="button-outline rounded-md bg-fg px-3 py-1.5 text-[12px] font-medium text-bg outline-none transition-all hover:opacity-90 active:scale-95 disabled:opacity-30 disabled:hover:opacity-30"
-        >
-          Send answers
-        </button>
-      </div>
+          filled or bordered boxes, so the box gap IS the ink gap.
+
+          ONLY WHILE SOMETHING IS HALF-FILLED (2026-09-29). A complete question sends itself, so this
+          is no longer the gate every answer passes through; it is the on-purpose send of what nothing
+          else sends — text typed and not Entered, a multi's toggles, a branch left partly answered.
+          Drawn disabled at all times, it read as the step still owed after every pick. */}
+      {a.staged > 0 && (
+        <div className="-mt-1 flex justify-start">
+          <button
+            type="button"
+            data-send-answers
+            disabled={a.sending}
+            onClick={() => a.submit()}
+            onMouseDown={(e) => e.preventDefault()}
+            className="button-outline rounded-md bg-fg px-3 py-1.5 text-[12px] font-medium text-bg outline-none transition-all hover:opacity-90 active:scale-95 disabled:opacity-30 disabled:hover:opacity-30"
+          >
+            {a.staged === 1 ? "Send answer" : "Send answers"}
+          </button>
+        </div>
+      )}
     </section>
   )
 }

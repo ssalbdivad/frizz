@@ -5,24 +5,24 @@ import { showToast } from "../store.ts"
 import { draftKey, draftStore, useDraft } from "../lib/drafts.ts"
 import { RAIL_SEND_OFFSET } from "../lib/iconRhythm.ts"
 
-// A FINISHED command thread's next line — the terminal's answer to an agent thread's follow-up prompt.
-// Someone who ran `whoami` wants `ls` next, in the same place, not a trip back to the prompt box's
-// Terminal tab and a second card in the queue. Enter runs the line as the thread's next run
-// (`commandRun`): the server carries the screen forward under a `$ ls` line, so the drawer reads as
-// one shell session, and the thread's title becomes the command now running.
+// A FINISHED terminal's next line — the terminal's answer to an agent thread's follow-up prompt. Someone
+// who ran `whoami` wants `ls` next, in the same place and the same folder, not a second terminal. Enter
+// runs the line as the terminal's next run (`terminalRun`): the server carries the screen forward under
+// a `$ ls` line, so the drawer reads as one shell session, and the terminal is named for the command now
+// running.
 //
 // Only offered once the run has ended: while it runs, the terminal itself takes the keystrokes.
 // ArrowUp in an empty box recalls the command that just ran, the shell's own gesture for "again, edited".
-export function CommandFollowUp({ slug, lastCommand, autoFocus, onRan }: {
-  slug: string
+export function TerminalFollowUp({ id, lastCommand, autoFocus, onRan }: {
+  id: string
   lastCommand: string
   autoFocus?: boolean
-  /** After the run starts — the queue card opens the drawer, since the card leaves the queue with it. */
+  /** After the run starts. */
   onRan?: () => void
 }) {
   const api = useThreadApi()
   const projectDir = useThreadProjectDir()
-  const key = draftKey.commandNext(projectDir, slug)
+  const key = draftKey.terminalNext(projectDir, id)
   const [value, setValue, clear] = useDraft(key)
   const [pending, setPending] = useState(false)
   const hasContent = value.trim().length > 0
@@ -33,7 +33,7 @@ export function CommandFollowUp({ slug, lastCommand, autoFocus, onRan }: {
     setPending(true)
     clear()
     api
-      .commandRun({ slug, command })
+      .terminalRun({ id, command })
       .then(() => onRan?.())
       .catch((error: unknown) => {
         if (!draftStore.get(key)) setValue(command)
@@ -43,11 +43,11 @@ export function CommandFollowUp({ slug, lastCommand, autoFocus, onRan }: {
   }
 
   return (
-    <div data-command-follow-up className="relative flex items-center rounded-lg border border-border bg-bg transition-colors focus-within:border-accent">
-      {/* The shell's prompt mark in the input's font, as on the Terminal tab, so the box reads as a command line. */}
+    <div data-terminal-follow-up className="relative flex items-center rounded-lg border border-border bg-bg transition-colors focus-within:border-accent">
+      {/* The shell's prompt mark in the input's font, so the box reads as a command line. */}
       <span aria-hidden className="font-mono-keep select-none pl-3 text-[13px] text-muted-60">$</span>
       <input
-        data-surface="commandFollowUp"
+        data-surface="terminalFollowUp"
         data-claims-escape
         value={value}
         autoFocus={autoFocus}

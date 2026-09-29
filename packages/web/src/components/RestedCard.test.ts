@@ -59,5 +59,5 @@ test("the two shapes render their own label", () => {
   assert.match(stalled, />Stalled</)
   const rested = renderToStaticMarkup(createElement(RestedCard, { thread: { crashed: false } }))
   assert.match(rested, /data-rested-card="bare"/)
-  assert.match(rested, />Rested without a sign-off</)
+  assert.match(rested, />Reply to continue</)
 })

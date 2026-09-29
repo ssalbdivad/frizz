@@ -20,7 +20,7 @@ import {
   parseAskUserQuestionInput,
   parseGithubWakeSteer,
   splitWakeDeliveries,
-  stripHumanGapNote,
+  stripFollowUpRiders,
   stripWakeDeliveryToken,
   stripWakeTimeHeader,
   stripWakeTrailer,
@@ -207,7 +207,7 @@ function userDisplayText(text: string, first: boolean): string | undefined {
   // The token comes off FIRST and the clock second, because that is the order they were appended in
   // (scheduler.withClock, then context's delivery token) and each is anchored to end-of-text.
   projected = stripWakeTimeHeader(projected)
-  projected = stripHumanGapNote(projected)
+  projected = stripFollowUpRiders(projected)
   // And frizz's own agent-facing trailer LAST, once the two riders above have uncovered it. The dividers
   // never render it, but a divider only happens for a delivery the browser's parsers RECOGNIZE — and a
   // tab is a build behind whenever frizz restarts under it, so a wake in a shape its bundle predates
@@ -4064,6 +4064,19 @@ interface TranscriptCursorPayload {
   snapshotBytes: number
   prefixDigest: string
   anchorSourceId: string
+}
+
+/** Where a thread's transcript is on disk and which reader it takes, for a reader outside this file that
+ *  needs the file itself (thread-cwd.ts reads a Claude transcript's newest `cwd`). The same binding every
+ *  transcript producer here resolves through, so it follows a transcript Claude Code re-bucketed. */
+export function threadTranscriptSource(
+  project: Project,
+  storage: Storage,
+  slug: string,
+  backendFor?: (kind?: string) => AgentBackend,
+): { backend: "claude" | "codex" | "acp"; path: string; nativeId: string } | undefined {
+  const binding = sourceForThread(project, storage, slug, backendFor)
+  return binding && { backend: binding.backend, path: binding.path, nativeId: binding.nativeId }
 }
 
 function sourceForThread(

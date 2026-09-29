@@ -4,7 +4,7 @@ import { House, Plus } from "lucide-react"
 import { Link } from "react-router"
 import { useSnapshot } from "valtio"
 import type { ProjectCard, ProjectRailCounts } from "@frizz/shared"
-import { activeBandThread, PROJECT_ICON_EXTENSIONS } from "@frizz/shared"
+import { PROJECT_ICON_EXTENSIONS, workingThread } from "@frizz/shared"
 import { rpc } from "../api/rpc.ts"
 import { queued } from "../groups.ts"
 import { asThreads } from "../hooks.ts"
@@ -473,7 +473,7 @@ function useRailCounts(currentSlug: string | undefined, projects: readonly Proje
   const board = useSnapshot(store).board
   // Only a board that IS the current project's: during a switch the store still holds the one being left.
   const threads = currentSlug !== undefined && board && board.projectSlug === currentSlug ? asThreads(board.threads) : undefined
-  const live = threads && { queued: threads.filter(queued).length, running: threads.filter(activeBandThread).length }
+  const live = threads && { queued: threads.filter(queued).length, running: threads.filter(workingThread).length }
   const currentId = currentSlug === undefined ? undefined : projects.find((project) => project.slug === currentSlug)?.id
   return (project) => (project.id === currentId && live ? live : polled.data?.[project.id])
 }

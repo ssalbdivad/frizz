@@ -655,10 +655,11 @@ test("a worker's own title persists on either backend, and a human's rename refu
   // provenance, and leaving it set is what keeps a later human rename outranking this name.
   assert.equal(s.getSession("claude-named")?.title_auto, 1)
 
-  // A second, better name from the same worker still lands — the task can genuinely turn out to be
-  // something else, and nothing about the first registration is a claim on the row.
-  assert.equal(s.setAgentTitle("claude-named", "Document z.properties"), true)
-  assert.equal(s.getSession("claude-named")?.title, "Document z.properties")
+  // ONCE (2026-09-29): after the worker's one correction the name is stable, so a second is refused
+  // and the first stands (thread-names.ts).
+  assert.equal(s.getSession("claude-named")?.title_worker_renamed, 1)
+  assert.equal(s.setAgentTitle("claude-named", "Document z.properties"), false)
+  assert.equal(s.getSession("claude-named")?.title, "Audit the Zod 4.5 docs")
 
   // THE HUMAN OUTRANKS IT, in both directions: a rename locks the row against every later worker name…
   s.setTitle("claude-named", "Named by hand")
@@ -701,6 +702,10 @@ test("automatic title CAS persists provenance and rejects manual, native-session
     s.setAutoTitleIfCurrent("codex-title", "Old generation", { ...expected, runtimeGeneration: 2 }),
     false,
   )
+
+  // The first persisted name STANDS: a later marker on the same session does not rename the thread.
+  assert.equal(s.setAutoTitleIfCurrent("codex-title", "Second marker", expected), false)
+  assert.equal(s.getSession("codex-title")?.title, "Useful generated title")
 
   s.setTitle("codex-title", "Manual title wins")
   assert.equal(s.setAutoTitleIfCurrent("codex-title", "Late generated title", expected), false)
@@ -1184,9 +1189,98 @@ test("queued_at: a pre-clock unified file gains the column, and the stamp surviv
     assert.equal(s.getSession("queued")?.queued_at, at)
     s.setQueuedAt("queued", null)
     assert.equal(s.getSession("queued")?.queued_at, null)
-    s.insertCommandThread({ slug: "term-1", command: "npm publish", createdAtMs: Date.parse(at) })
-    s.setCommandQueuedAt("term-1", at)
-    assert.equal(s.listCommandThreads().find((c) => c.slug === "term-1")?.queued_at, at, "a command thread's place in line persists too")
+    // The terminal table keeps its column (a pre-2026-09-29 command thread wrote it); nothing sets it now.
+    s.insertCommandThread({ slug: "term-1", parentSlug: "queued", command: "npm publish", cwd: dir, shell: false, createdAtMs: Date.parse(at) })
+    assert.equal(s.listCommandThreads().find((c) => c.slug === "term-1")?.queued_at, null)
+  } finally {
+    s.close()
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+// THREAD TERMINALS (2026-09-29): a terminal belongs to a thread. The table the top-level command threads
+// lived in gains the parent, the folder and the shell flag, and every row from before — a command thread
+// with no parent to show it under — is filed away rather than left open with nowhere to appear.
+test("command_thread: a pre-terminal file gains the parent, folder and shell columns, and its old rows are archived", () => {
+  const dir = mkdtempSync(join(tmpdir(), "frizz-storage-terminals-"))
+  const path = join(dir, "ui.db")
+  const old = new Database(path)
+  // The table exactly as the fork shipped it before thread terminals.
+  old.exec(`
+    CREATE TABLE command_thread (
+      project_id  TEXT NOT NULL,
+      slug        TEXT NOT NULL,
+      command     TEXT NOT NULL,
+      created_at  INTEGER NOT NULL,
+      started_at  INTEGER NOT NULL,
+      runs        INTEGER NOT NULL DEFAULT 1,
+      exited_at   INTEGER,
+      exit_code   INTEGER,
+      stopped     INTEGER NOT NULL DEFAULT 0,
+      state       TEXT NOT NULL DEFAULT 'open',
+      queued_at   TEXT,
+      PRIMARY KEY (project_id, slug)
+    );
+    INSERT INTO command_thread (project_id, slug, command, created_at, started_at, exited_at, exit_code) VALUES ('p', 'term-old', 'npm run dev', 1, 1, 2, 0);
+    INSERT INTO command_thread (project_id, slug, command, created_at, started_at, state) VALUES ('p', 'term-done', 'ls', 1, 1, 'archived');
+  `)
+  old.close()
+
+  let s = createStorage(path, "p")
+  try {
+    const legacy = s.listCommandThreads()
+    assert.deepEqual(legacy.map((r) => [r.slug, r.state, r.parent_slug ?? null, r.cwd ?? null, r.shell]), [
+      ["term-done", "archived", null, null, 0],
+      ["term-old", "archived", null, null, 0],
+    ], "kept for the record, filed away, and the new columns read as absent")
+
+    s.insertCommandThread({ slug: "term-new", parentSlug: "fix-auth", command: "zsh", cwd: dir, shell: true, createdAtMs: 5 })
+    s.insertCommandThread({ slug: "term-other", parentSlug: "other", command: "make", cwd: dir, shell: false, createdAtMs: 6 })
+    // A reopen does not re-archive a terminal that has a parent: the migration is for parentless rows only.
+    s.close()
+    s = createStorage(path, "p")
+    const fresh = s.listCommandThreads().find((r) => r.slug === "term-new")
+    assert.deepEqual([fresh?.state, fresh?.parent_slug, fresh?.cwd, fresh?.shell], ["open", "fix-auth", dir, 1])
+    // A follow-up line makes a shell terminal a command one; a plain restart keeps it a shell.
+    s.restartCommandThread("term-new", 7)
+    assert.equal(s.listCommandThreads().find((r) => r.slug === "term-new")?.shell, 1)
+    s.restartCommandThread("term-new", 8, "npm test")
+    const followed = s.listCommandThreads().find((r) => r.slug === "term-new")
+    assert.deepEqual([followed?.command, followed?.shell, followed?.runs], ["npm test", 0, 3])
+
+    assert.equal(s.archiveThreadTerminals("fix-auth"), 1)
+    assert.equal(s.archiveThreadTerminals("fix-auth"), 0, "idempotent")
+    assert.equal(s.listCommandThreads().find((r) => r.slug === "term-other")?.state, "open", "another thread's terminal is untouched")
+    assert.equal(s.dropThreadTerminals("fix-auth"), 1)
+    assert.deepEqual(s.listCommandThreads().map((r) => r.slug).sort(), ["term-done", "term-old", "term-other"])
+  } finally {
+    s.close()
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+test("subagents_snoozed_at: a pre-column unified file gains it, and the arming is session-guarded", () => {
+  const dir = mkdtempSync(join(tmpdir(), "frizz-storage-subsnooze-"))
+  const path = join(dir, "ui.db")
+  // Every live install's file predates the column; the ALTER in ensureStorageSchema must add it back.
+  const before = new Database(path)
+  const stripped = STORAGE_SCHEMA.replace(/^\s*subagents_snoozed_at\s+TEXT,\n/m, "")
+  assert.notEqual(stripped, STORAGE_SCHEMA, "the strip found the column line (keep this regex with the DDL)")
+  before.exec(stripped)
+  before.close()
+
+  const at = "2026-09-29T10:01:00.000Z"
+  let s = createStorage(path, "p")
+  try {
+    s.upsertSession(row({ slug: "fan", session_id: "sess", state: "open" }))
+    assert.equal(s.getSession("fan")?.subagents_snoozed_at, null)
+    assert.equal(s.setSubAgentsSnoozedAtIfCurrent("fan", "other-session", 0, at), false, "a stale tab cannot arm another session's thread")
+    assert.equal(s.setSubAgentsSnoozedAtIfCurrent("fan", "sess", 0, at), true)
+    s.close()
+    s = createStorage(path, "p")
+    assert.equal(s.getSession("fan")?.subagents_snoozed_at, at, "the arming survives a restart")
+    assert.equal(s.setSubAgentsSnoozedAtIfCurrent("fan", "sess", 0, null), true)
+    assert.equal(s.getSession("fan")?.subagents_snoozed_at, null, "and the Undo clears it")
   } finally {
     s.close()
     rmSync(dir, { recursive: true, force: true })
@@ -1287,4 +1381,37 @@ test("pr_watch.kind: an issue watcher stores its kind, an older caller means pul
   } finally {
     rmSync(dir, { recursive: true, force: true })
   }
+})
+
+test("the dispatch-time mint lands once, on its own session, never over a human's or a worker's name", () => {
+  const s = store()
+  s.upsertSession(row({ slug: "minted", session_id: "sid", title: "fix the shell budget default so…", title_auto: 1 }))
+  assert.equal(s.setMintedTitle("minted", "other-session", "Shell budgets"), false, "a mint read from a replaced session never lands")
+  assert.equal(s.setMintedTitle("minted", "sid", "Shell budgets"), true)
+  assert.equal(s.getSession("minted")?.title, "Shell budgets")
+  assert.equal(s.getSession("minted")?.title_agent, 1, "persisted, so it outranks the transcript's live title")
+  assert.equal(s.getSession("minted")?.title_worker_renamed, 0, "a mint does not spend the worker's rename")
+  assert.equal(s.setMintedTitle("minted", "sid", "Budget defaults"), false, "the first name to land stands")
+  // The worker's one rename still lands over the mint…
+  assert.equal(s.setAgentTitle("minted", "Shell budget"), true)
+  // …and a human's rename locks against everything after it.
+  s.setTitle("minted", "Budgets")
+  assert.equal(sessionTitleLocked(s.getSession("minted")!), true)
+  s.upsertSession(row({ slug: "minted", session_id: "sid2", title: "chop", title_auto: 1 }))
+  const fresh = s.getSession("minted")!
+  assert.equal(fresh.title_worker_renamed, 0, "a re-dispatch gets its own rename")
+  assert.equal(fresh.status ?? null, null, "and no inherited status")
+  s.close()
+})
+
+test("a status line is written per session and never touches the name", () => {
+  const s = store()
+  s.upsertSession(row({ slug: "busy", session_id: "sid", title: "Focus mode", title_auto: 0 }))
+  s.setTitle("busy", "Focus mode")
+  assert.equal(s.setStatus("busy", "sid", "Waiting on CI for the rail fix"), true)
+  assert.equal(s.getSession("busy")?.status, "Waiting on CI for the rail fix")
+  assert.equal(s.getSession("busy")?.title, "Focus mode")
+  assert.equal(s.getSession("busy")?.title_locked, 1)
+  assert.equal(s.setStatus("busy", "old-sid", "Stale"), false)
+  s.close()
 })

@@ -3,14 +3,14 @@
 //
 // It wears the queue card a project's own board drew until 2026-09-28 (TodosView QueueCard): the same
 // bordered, shadowed shell, the same header with the title and its rest time, the human's last message
-// as their bubble, the handoff as prose with its ```done card, the thread's registered questions, a reply box, and the lifecycle footer's
+// as their bubble, the handoff as prose with its ```done card (fenced or registered), the thread's registered questions, a reply box, and the lifecycle footer's
 // Snooze and Mark as done. What it deliberately does NOT carry is the transcript — the tool calls, the
 // earlier rounds, the sub-agent rows. That is the next level down, one click away IN PLACE — the title,
 // and "Show earlier messages" at the card's top, open the thread's own drawer on this page
 // (useOpenThreadInPlace) — and it is what makes a page of
-// every project's queue readable at all. There is no door off the page: the ↗ into a project's view and
-// the ⤢ into /full went on 2026-09-28 (maintainer: "too many places in the ui where it is easy to navigate
-// to a ui which is not the primary home ui"); fullscreen is a choice in the drawer's own menu now.
+// every project's queue readable at all. The ↗ into a project's view went on 2026-09-28 (maintainer: "too
+// many places in the ui where it is easy to navigate to a ui which is not the primary home ui"); the ⤢
+// into /full went with it and came back on 2026-09-29 (ExpandThreadLink), restoring Colin's card.
 //
 // THE CARD NEVER ASKS THE PAGE WHICH PROJECT IT IS. Everything that could — the RPC client, the query
 // cache, the markdown's repo and paths, the lifecycle buttons, the question drafts — is handed the
@@ -25,6 +25,7 @@ import { questionsOwed, type AccountBackend, type ThreadView } from "@frizz/shar
 import { projectApiBase, projectRpc } from "../api/rpc.ts"
 import { ThreadProjectScope } from "../api/threadApi.tsx"
 import { displayTitle, offersRetry, queueLabelAt, queueLabelWord } from "../groups.ts"
+import { GHOST_LABEL } from "../lib/stableQueue.ts"
 import { handoffParts, projectMarkdownScope, sameProjectAddress, squareCard, threadKey, type QueuesProject } from "../lib/allQueues.ts"
 import { draftKey, draftStore, useDraftValues } from "../lib/drafts.ts"
 import { rememberFullscreenOrigin } from "../lib/fullscreenHandoff.ts"
@@ -36,12 +37,20 @@ import { parseAccountAlias } from "../lib/signIn.ts"
 import { TRANSCRIPT_META_LABEL_CLASS, transcriptMetaChevronClass } from "../lib/transcriptMetaLabels.ts"
 import { isPlainLeftClick } from "../lib/standaloneThreadRoute.ts"
 import { useMarkdownHtml } from "../lib/useMarkdown.ts"
-import { IN_PLACE_OPEN_STATE, openThread, showToast, store } from "../store.ts"
+import { IN_PLACE_OPEN_STATE, openThread, pushTerminalDrawer, showToast, store } from "../store.ts"
 import { crossProjectHref, innerPath, projectSlug } from "../lib/base-path.ts"
-import { QueueDismissContext } from "./ChatView.tsx"
+import { QueueDismissContext, TerminalNetCard } from "./ChatView.tsx"
+import { useCopyTerminalCommand } from "./ExternalTerminalCommand.tsx"
+import { showsRegisteredDoneCard } from "../lib/registeredDone.ts"
+import { ThreadStatusLine } from "./ThreadStatusLine.tsx"
 import { Composer } from "./Composer.tsx"
 import { InteractionStack } from "./InteractionCards.tsx"
+import { BoxSpinner } from "./BoxSpinner.tsx"
+import { AwaitingSubAgentsCard, SubAgentWaitSnoozeItems } from "./AwaitingSubAgentsCard.tsx"
+import { showsSubAgentWait } from "../lib/subAgentWait.ts"
 import { useThreadComposerControls } from "../hooks/useThreadComposerControls.tsx"
+import { ExpandThreadLink } from "./ExpandThreadLink.tsx"
+import { HEADER_ICON_CLASS } from "../lib/headerIcon.ts"
 import { LastActive } from "./LastActive.tsx"
 import { ProjectSquare } from "./ProjectRail.tsx"
 import { LinkedHtml } from "./LinkedHtml.tsx"
@@ -50,8 +59,10 @@ import { RegisteredAnsweringContext, RegisteredAnsweringProvider, RegisteredQues
 import { RestedCard, showsRestedCard } from "./RestedCard.tsx"
 import { LogoutConfirmModal, SignInModal } from "./SignInModal.tsx"
 import { QuietTurnCard, showsQuietTurnCard } from "./QuietTurnCard.tsx"
+import { QueueShellStrip } from "./QueueShellStrip.tsx"
 import { SnoozeButton } from "./SnoozeButton.tsx"
 import { StateButton } from "./ThreadLifecycleFooter.tsx"
+import { focusedProject, ThreadTerminalsStrip } from "./ThreadTerminals.tsx"
 import { Tooltip } from "./Tooltip.tsx"
 import { BLOCK_RADIUS, BLOCK_RADIUS_INNER_BOTTOM, QUEUE_WRAP, TranscriptCard } from "./TranscriptCard.tsx"
 
@@ -172,6 +183,11 @@ interface AllQueuesCardProps {
    * until it scrolls off or the thread rests again.
    */
   ghost?: string
+  /** A ghost the human clicked or tabbed into: drawn at full tone, still in its place (AllQueues.tsx). */
+  woken?: boolean
+  /** Said on the meta line in place of the time the card was ready, WITHOUT a ghost's dimming: a held
+   *  card (`onHold`) whose worker is at work on the answer it sent. */
+  status?: string
   /**
    * Its drawer is open, where it is read: the card stays drawn in its place in the queue, inert — out of
    * the tab order and out of reach of a click — so the drawer is the one live copy (AllQueues.tsx).
@@ -181,6 +197,9 @@ interface AllQueuesCardProps {
   onLeave: () => void
   /** The action failed after the card had already faded: put it back. */
   onReturn: () => void
+  /** A question on the card was answered and the worker went to work on it, while the card still asks
+   *  more: keep it where it is, live, although its thread leaves the queue (AllQueues useLeavingCards). */
+  onHold?: () => void
   /** Lead the meta line under the title with the card's project, on a queue that holds several
    *  (ProjectChip) — a flag and a stable chooser rather than the element, which would be a new object on
    *  every render of the queue and so re-render the card every time (sameCard). */
@@ -195,9 +214,12 @@ export const AllQueuesCard = memo(function AllQueuesCard({
   leaving,
   onLeave,
   onReturn,
+  onHold,
   chip = false,
   onChoose,
   ghost,
+  woken = false,
+  status,
   concealed = false,
 }: AllQueuesCardProps) {
   const api = projectRpc(project.id)
@@ -215,14 +237,12 @@ export const AllQueuesCard = memo(function AllQueuesCard({
   })
   const text = handoff.data?.text
   const parts = useMemo(() => (text ? handoffParts(text, thread.questions) : null), [text, thread.questions])
-  // THIS CARD IS THE NEWEST HANDOFF, so it draws only the questions that handoff is still asking. One the
-  // human replied past belongs to an older rest and stays up there on the thread page, answerable; drawn
-  // here it sat under a handoff about something else, claiming to be its ask — and the worker, told the
-  // same thing, wrote "the question is still open below" (maintainer 2026-09-28: "we should assume they
-  // want to move on/pivot").
+  // THIS CARD IS THE NEWEST HANDOFF, and every open question rides to the bottom of the newest handoff
+  // (lib/questionAnchor, 2026-09-29): a typed message no longer sets one aside — the worker `unask`s what
+  // it made moot — so every question still open is still this handoff's ask.
   const owedQuestions = useMemo(() => questionsOwed(thread.questions), [thread.questions])
   const placeHref = crossProjectThreadHref(project, thread.id)
-  const dismiss = useMemo(() => ({ dismiss: onLeave, cancel: onReturn }), [onLeave, onReturn])
+  const dismiss = useMemo(() => ({ dismiss: onLeave, cancel: onReturn, hold: onHold }), [onLeave, onReturn, onHold])
   const queryClient = useQueryClient()
   // The snooze toast's Undo: the card comes back, and the page re-reads the queues now rather than at
   // the next poll, which left the card missing for up to 3s after the click.
@@ -239,7 +259,7 @@ export const AllQueuesCard = memo(function AllQueuesCard({
   }
 
   return (
-    <div data-xq-card={key} data-queue-leaving={leaving} data-queue-ghost={ghost === undefined ? undefined : true} data-queue-concealed={concealed || undefined} inert={concealed} className="frizz-card-slot min-w-0">
+    <div data-xq-card={key} data-queue-leaving={leaving} data-queue-ghost={ghost === undefined ? undefined : true} data-queue-woken={(ghost !== undefined && woken) || undefined} data-queue-concealed={concealed || undefined} inert={concealed} className="frizz-card-slot min-w-0">
       <div className="frizz-card-clip min-h-0 min-w-0">
         <article
           data-xq-card-root
@@ -250,7 +270,9 @@ export const AllQueuesCard = memo(function AllQueuesCard({
             {chip && <ProjectMark project={project} onChoose={onChoose} />}
             <div className="min-w-0 flex-1">
               <h3 className="truncate text-[15px] font-semibold leading-snug" title={displayTitle(thread)}>
-                <a href={placeHref} onClick={openHere} className="rounded-sm outline-none hover:underline hover:underline-offset-2 focus-visible:ring-1 focus-visible:ring-focus-ink-60">
+                {/* The card's title is its drawer door, and `o` presses it (lib/keyboardRuntime.ts). Only a
+                    queue card carries `open`: in a drawer or on /full the thread is already open. */}
+                <a href={placeHref} onClick={openHere} data-command="open" className="rounded-sm outline-none hover:underline hover:underline-offset-2 focus-visible:ring-1 focus-visible:ring-focus-ink-60">
                   {displayTitle(thread)}
                 </a>
               </h3>
@@ -258,10 +280,10 @@ export const AllQueuesCard = memo(function AllQueuesCard({
                 {chipNode}
                 {/* A ghost says why it is quiet, on the line that said since when it was ready: the same
                     one line, so the card keeps its height and nothing under it moves. */}
-                {ghost !== undefined ? (
+                {(ghost ?? status) !== undefined ? (
                   <>
                     {chip && <span aria-hidden>·</span>}
-                    <span className="min-w-0 truncate">{ghost}</span>
+                    <span className="min-w-0 truncate">{ghost ?? status}</span>
                   </>
                 ) : (
                   <LastActive
@@ -272,9 +294,25 @@ export const AllQueuesCard = memo(function AllQueuesCard({
                     className="min-w-0 truncate"
                   />
                 )}
+                {/* What the thread is doing NOW, beside the name that stays put (ThreadStatusLine). */}
+                <ThreadStatusLine status={thread.statusLine} lead={<span aria-hidden>·</span>} />
               </div>
             </div>
             <div className="flex shrink-0 items-center gap-0.5">
+              {/* THE FULLSCREEN DOOR (ExpandThreadLink), before Retry as on Colin's card (TodosView
+                  QueueCard @ 7a20f425). Its address carries the CARD's project — the page's own would
+                  name the focused project's thread of the same slug — and it owns `f` on this card.
+                  AS THE HEADER'S LAST MARK it takes `-mr-2`: its ink sits ~1.2px inside a 14px box
+                  centred in a 28px square, so untrimmed it drew ~29px in from the card's right border
+                  against the project mark's 20.75px on the left; trimmed, 21.0px — the inset Retry keeps
+                  when it is last (measured 2026-09-29, ink-gaps.mjs dsf 4, sans). Beside Retry it keeps
+                  its box: ⤢ → Retry measured 10px of ink, the gap-0.5 pairing Colin's card had. */}
+              <ExpandThreadLink
+                slug={thread.id}
+                href={`${placeHref}/full`}
+                command
+                className={`${HEADER_ICON_CLASS}${offersRetry(thread) ? "" : " -mr-2"}`}
+              />
               {offersRetry(thread) && <RetryButton project={project} thread={thread} onSent={onLeave} onFailed={onReturn} />}
             </div>
           </header>
@@ -318,7 +356,17 @@ export const AllQueuesCard = memo(function AllQueuesCard({
               {parts?.questions.map((question, index) => (
                 <QuestionBlockCard key={index} raw={question.raw} questionKind={question.questionKind} danger={question.danger} />
               ))}
-              {parts?.fences.map((fence, index) => <FenceBody key={index} kind={fence.kind} body={fence.body} />)}
+              {/* A parent resting on its sub-agents states the batch in place of its fence (AwaitingSubAgentsCard). */}
+              {parts?.fences.map((fence, index) => fence.kind === "awaiting" && showsSubAgentWait(thread)
+                ? <AwaitingSubAgentsCard key={index} project={project} thread={thread} body={fence.body} openThread={() => openInPlace(project, thread.id)} onSnoozed={onLeave} onUndone={onUnsnoozed} />
+                : <FenceBody key={index} kind={fence.kind} body={fence.body} />)}
+              {/* A DONE THE WORKER REGISTERED (`mcp__frizz__done`) rather than fenced — the sign-off the worker
+                  contract now asks for first — is in no message, so the handoff text above carries no fence
+                  for it and the card queued a finished thread with no Done card at all. The drawer draws it
+                  from the thread (ChatView's "registered-done" rung); this is the same predicate, keyed on
+                  the same handoff text, so a worker that fenced AND registered gets one card, the fenced one.
+                  Held until the handoff is read, or a fenced done would draw here first and then swap. */}
+              {(handoff.data || handoff.isError) && showsRegisteredDoneCard(thread, text) && <FenceBody kind="done" body={thread.lastFence!.body} />}
               {/* THE GATE: a turn parked on a request — "Run a command?", a native question, an MCP form —
                   with its real buttons, under the prose that led to it. It is the whole reason such a card
                   is in the queue, and this card drew none of it until 2026-09-28: a thread held on a
@@ -331,29 +379,62 @@ export const AllQueuesCard = memo(function AllQueuesCard({
                 <ThreadProjectScope projectId={project.id} projectDir={project.projectDir}>
                   <QueueDismissContext.Provider value={dismiss}>
                     <InteractionStack thread={thread} />
+                    <CardTerminalNet thread={thread} />
                   </QueueDismissContext.Provider>
                 </ThreadProjectScope>
               )}
               {/* Not gated on the handoff: a STALL's last record is often a tool call with no prose at
                   all, and its notice is about the process, not the message (showsRestedCard). */}
-              {showsRestedCard(thread, text) && <RestedCard thread={thread} />}
+              {/* A GHOST'S THREAD IS FROZEN from when it left the queue (lib/stableQueue.ts), so the state
+                  cards would describe a rest that is over: "Reply to continue" under a worker that woke
+                  itself on a finished shell, with only the small meta line saying otherwise (maintainer
+                  2026-09-29: "unclear what is happening"). A ghost back at work says so IN THAT SLOT, a
+                  one-line card for a one-line card, so the ghost keeps its height and nothing under it
+                  moves; a ghost that drew no state card gains none, for the same reason. */}
+              {showsRestedCard(thread, text) && (ghost === GHOST_LABEL.working && thread.crashed !== true
+                // The spinner stands in the glyph's place at the glyph's geometry — 16px, lifted by the
+                // same measured card-icon-offset (styles.css) — so it sits on the title's cap band as
+                // the lucide glyph it replaces does.
+                ? <TranscriptCard data-rested-card="working" label="Working" aside={<span className="block card-icon-offset"><BoxSpinner size={16} /></span>} />
+                : <RestedCard thread={thread} />)}
               {showsQuietTurnCard(thread) && <QuietTurnCard thread={thread} />}
+              {/* The thread's TERMINALS (ThreadTerminals.tsx): a line each, and — when one sits at a prompt,
+                  which is what queued this card — its live screen, so the answer is typed right here. A
+                  line opens the thread, then the terminal over it when the thread's project is the one in
+                  focus (the drawer stack is that project's); otherwise the thread's drawer carries it. */}
+              {thread.terminals && thread.terminals.length > 0 && (
+                <ThreadProjectScope projectId={project.id} projectDir={project.projectDir}>
+                  <ThreadTerminalsStrip
+                    thread={thread}
+                    surface="card"
+                    onOpen={(terminal) => {
+                      const here = focusedProject(project.slug)
+                      openInPlace(project, thread.id)
+                      if (here) pushTerminalDrawer(thread.id, terminal.id, { label: terminal.command })
+                    }}
+                  />
+                </ThreadProjectScope>
+              )}
             </div>
 
+            {/* Keyed on the rest: an answered card keeps its slot while the card holds for the worker's
+                turn, and a NEW handoff — which says what became of it — starts the stack over. */}
             {owedQuestions.length > 0 && (
-              <RegisteredQuestionStack thread={thread} questions={owedQuestions} className="shrink-0 px-5 pb-4 pt-0" />
+              <RegisteredQuestionStack key={handoff.data?.at ?? ""} thread={thread} questions={owedQuestions} keepAnswered className="shrink-0 px-5 pb-4 pt-0" />
             )}
           </ProjectLinkScope>
 
           <ThreadProjectScope projectId={project.id} projectDir={project.projectDir}>
             <ReplyBox project={project} thread={thread} onSent={onLeave} onFailed={onReturn} />
+            {/* The shells it left running — a shell with no budget runs until someone stops it. */}
+            <QueueShellStrip thread={thread} api={api} onOpen={() => openInPlace(project, thread.id)} />
           </ThreadProjectScope>
           </RegisteredAnsweringProvider>
           </QueueDismissContext.Provider>
 
           <ThreadProjectScope projectId={project.id} projectDir={project.projectDir}>
             <footer className={`${BLOCK_RADIUS_INNER_BOTTOM} flex min-h-10 flex-wrap items-center justify-end gap-3 border-t border-border/70 bg-panel/95 px-3 py-2 text-[12px]`}>
-              <SnoozeButton thread={thread} projectName={project.name} onSnoozed={onLeave} onUndone={onUnsnoozed} />
+              <SnoozeButton thread={thread} projectName={project.name} onSnoozed={onLeave} onUndone={onUnsnoozed} eventItems={showsSubAgentWait(thread) && <SubAgentWaitSnoozeItems thread={thread} onSnoozed={onLeave} onUndone={onUnsnoozed} />} />
               <StateButton thread={thread} onArchived={onLeave} onDismissCancel={onReturn} command />
             </footer>
           </ThreadProjectScope>
@@ -375,9 +456,12 @@ function sameCard(a: AllQueuesCardProps, b: AllQueuesCardProps): boolean {
     a.leaving === b.leaving &&
     a.onLeave === b.onLeave &&
     a.onReturn === b.onReturn &&
+    a.onHold === b.onHold &&
     a.chip === b.chip &&
     a.onChoose === b.onChoose &&
     a.ghost === b.ghost &&
+    a.woken === b.woken &&
+    a.status === b.status &&
     a.concealed === b.concealed &&
     sameProjectAddress(a.project, b.project)
   )
@@ -413,7 +497,8 @@ function RetryButton({ project, thread, onSent, onFailed }: { project: QueuesPro
         // card's border box, the title's inset on the left. It carried `mr-[9px]` until 2026-09-28 to sit at
         // the rhythm of the ↗ and ⤢ doors beside it (MEASURED 2026-09-23, ink-gaps.mjs, dsf 4, sans: Retry →
         // ↗ 20.43px); with the doors gone that margin left it 30px in against the title's 21 (measured
-        // 2026-09-28, composer-alias-fixture ?surface=card&runtime=exited, dsf 4, sans).
+        // 2026-09-28, composer-alias-fixture ?surface=card&runtime=exited, dsf 4, sans). The ⤢ came back
+        // BEFORE it on 2026-09-29 (ExpandThreadLink), so Retry is still last and still wants no margin.
         className="flex items-center gap-1.5 rounded-md border border-accent/45 bg-accent/10 px-2.5 py-1 text-[12px] font-medium text-accent outline-none transition-colors hover:border-accent/70 hover:bg-accent/15 disabled:opacity-50"
       >
         <RotateCcw size={12} />
@@ -470,6 +555,22 @@ function ProjectLinkScope({ project, children }: { project: QueuesProject; child
     navigate(inner.startsWith("/thread/") ? `${crossProjectHref(linked)}${inner}` : href)
   }
   return <div className="contents" onClickCapture={onClickCapture}>{children}</div>
+}
+
+/**
+ * THE TERMINAL NET on the card: a frozen native ask, or the generic permission banner — the two states the
+ * server queues a thread on (board.ts deriveNeedsYou) that journal nothing InteractionStack could draw. The
+ * card showed only InteractionStack from 2026-09-28, so a session parked on a terminal-only prompt queued
+ * with its last progress line and a reply box that cannot land, and never said why. The rungs are the
+ * drawer's own (ChatView TerminalNetCard), and they stand down the same way when an answerable
+ * interaction is on screen. Its copy reads the thread's command through the caller's ThreadProjectScope
+ * (useCopyTerminalCommand → useThreadApi), never the page's `rpc`, which names the FOCUSED project.
+ * PermPolicyDenialCard is deliberately absent: a denial already happened, queues nothing, and is one
+ * click away in the drawer.
+ */
+function CardTerminalNet({ thread }: { thread: ThreadView }) {
+  const copy = useCopyTerminalCommand(thread.id)
+  return <TerminalNetCard thread={thread} onTerminal={() => copy()} />
 }
 
 /** The human's last message, as the transcript draws it — their own bubble — clipped to a few lines. */
@@ -644,7 +745,7 @@ function ReplyBox({ project, thread, onSent, onFailed }: { project: QueuesProjec
         value={text}
         onChange={(value) => draftStore.set(key, value)}
         onSubmit={submit}
-        placeholder={answering?.staged ? "Add a note to your answers…" : questionsOwed(thread.questions).length > 0 ? "Or skip the questions and reply…" : "Reply to the agent…"}
+        placeholder={answering?.staged ? "Add a note to your answers…" : questionsOwed(thread.questions).length > 0 ? "Or reply — the questions stay open…" : "Reply to the agent…"}
         attachBase={projectApiBase(project.id)}
         busy={controls.busy}
         footer={controls.footer}

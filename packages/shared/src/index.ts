@@ -299,6 +299,26 @@ export const SubAgentView = z.object({
 })
 export type SubAgentView = z.infer<typeof SubAgentView>
 
+// A DIRECT sub-agent that has RETURNED while its siblings are still out — what a queued parent's card
+// lists beside the ones still running, so "2 of 3 sub-agents returned" can say which two.
+//
+// The server keeps a ring of every retired child (tailer RETAINED_SUBAGENTS_MAX) and deliberately keeps
+// it off the wire; this is the slice of it a card needs, filtered SERVER-side to the returns inside the
+// wait that is still open (board.returnedSubAgentsView). The wait opens when the oldest child still out
+// was dispatched, so a sibling that came back before the parent even rested counts, and a child from an
+// earlier, finished batch does not. Absent whenever no direct sub-agent is running: with nothing out
+// there is no "of N" to state.
+export const ReturnedSubAgentView = z.object({
+  id: z.string(), // the dispatch tool_use id — the same drill-in handle SubAgentView.id is
+  label: z.string(),
+  // How it ended, as the harness reported it. `killed` is a stop — the human's ×, or an interrupt.
+  status: z.enum(["completed", "failed", "killed"]),
+  startedAt: z.string().optional(), // ISO8601 of the dispatch
+  finishedAt: z.string().optional(), // ISO8601 of its completion notification
+  subagentType: z.string().optional(),
+})
+export type ReturnedSubAgentView = z.infer<typeof ReturnedSubAgentView>
+
 // One agent of a workflow run, as its drawer lists it — every agent the run has started, finished ones
 // included, so the run can be browsed after the fact. `id` is the agent id, which is also the drill-in
 // handle `subAgentTranscript` resolves.
@@ -375,11 +395,18 @@ export const BgShellView = z.object({
   // such watcher was unfireable (scheduler.evalWatchers, 2026-08-14). Absent for a CODEX row, whose
   // single `processId` IS its `id`, and for a Claude row between its tool_use and its launch ack.
   taskId: z.string().optional(),
-  // The runtime budget this shell LAUNCHED with, in ms (server shell-budget.ts, 2026-09-29): the Bash
-  // `timeout` the worker passed on its `run_in_background` call, clamped to 24h, else the 1h default.
-  // Past it the worker is warned once and, unextended, the shell is stopped. An `extend_shell` does not
-  // rewrite this — it is the launch-time declaration. Absent ⇒ unbudgeted (a `Monitor`, an old server).
+  // The runtime budget this shell LAUNCHED with, in ms (server shell-budget.ts): the Bash `timeout` the
+  // worker passed on its `run_in_background` call, clamped to [1m, 24h]. Absent ⇒ none was declared, and
+  // none is imposed — a shell with no budget runs until it ends or is stopped (the 1h default of
+  // 4e5eaca1 was withdrawn the same day). An `extend_shell` does not rewrite this; see `budgetEndsAt`.
   budgetMs: z.number().optional(),
+  // A `Monitor` rather than a background Bash — never budgeted, and `extend_shell` refuses it.
+  monitor: z.boolean().optional(),
+  // When the budget ACTUALLY runs out (ISO8601): launch + `budgetMs`, or the deadline an `extend_shell`
+  // set, held later by an armed `watch` on the shell (shell-budget.ts resolveShellBudget). This is what
+  // the card's "2h left" reads. Past it the worker is warned once and, unextended, the shell is stopped
+  // ten minutes later. Absent ⇒ unbudgeted.
+  budgetEndsAt: z.string().optional(),
 })
 export type BgShellView = z.infer<typeof BgShellView>
 
@@ -403,6 +430,11 @@ export const CompletionHold = z.object({
   subAgentCount: z.number().default(0), // total live sub-agents (≥ subAgents.length)
   bgShells: z.array(CompletionHoldOp).default([]),
   bgShellCount: z.number().default(0), // total live background shells (≥ bgShells.length)
+  // The thread's own TERMINALS still running (server thread-terminals.ts) — `npm run dev`, a shell the
+  // human opened. Marking the thread done stops them, so the dialog names them beside the shells. Their
+  // labels are the human's own command lines. Optional so a pre-change client reads a hold unchanged.
+  terminals: z.array(CompletionHoldOp).optional(),
+  terminalCount: z.number().optional(),
   // The worker is DEAD and its recorded turn never ended — cut off by a reboot, a signal or a crash
   // mid-tool-call (router.cutOffHold). Nothing is running, so nothing will be killed; the hold exists
   // because the thread is not finished and Done would say it was. Optional rather than defaulted so it
@@ -2162,11 +2194,12 @@ export const AddOwnWatchInput = z.object({
 export type AddOwnWatchInput = z.infer<typeof AddOwnWatchInput>
 
 // ---- EXTENDING A BACKGROUND SHELL'S RUNTIME BUDGET (`mcp__frizz__extend_shell`, 2026-09-29) ----------
-// Every background shell carries a budget (server shell-budget.ts: its launch `timeout`, else 1h). Past
-// it the worker is warned once and, unextended, the shell is stopped ten minutes later. This is the
-// "keep it" answer to that warning — or a pre-emptive one for a shell the worker already knows will run
-// long. It sets the budget to end `for` from NOW, not from launch, so the worker never has to do
-// arithmetic against an instant it cannot see.
+// A background shell carries a budget only when one was declared (server shell-budget.ts: its launch
+// `timeout`, or this; no default). Past it the worker is warned once and, unextended, the shell is
+// stopped ten minutes later. This GIVES a budget to a shell launched without one, answers that warning
+// ("keep it"), or pre-empts it for a shell the worker knows will run long. It sets the budget to end
+// `for` from NOW, not from launch, so the worker never has to do arithmetic against an instant it
+// cannot see.
 export const ExtendOwnShellInput = z.object({
   slug: ThreadSlug,
   /** The shell's handle — the same three a `watch` of kind shell accepts: the runtime task id the worker
@@ -2410,31 +2443,34 @@ export const RegisteredQuestionView = z.object({
   id: z.string(),
   spec: AskedQuestionSchema,
   askedAt: z.string(),
-  /** The human has spoken since this was asked without answering it (questionRepliedPast). It stays
-   *  open and answerable where it was asked, but it no longer holds the thread: it is not the sign-off,
-   *  it does not block `done` or refuse a park, and the queue card does not draw it under a newer handoff.
-   *  Absent means current. */
+  /** The human has TYPED to the worker since this was asked, without answering it (questionRepliedPast).
+   *  INFORMATIONAL ONLY since 2026-09-29: the question is still owed exactly like any other — it blocks
+   *  `done`, refuses a park, is the rest's sign-off and queues the thread — because a timestamp cannot
+   *  tell a pivot from a side question, and the worker, which reads the message, decides (it `unask`s
+   *  the ones the message made moot). The worker's `activity` readout names it. Absent means the human
+   *  has not typed since. */
   repliedPast: z.literal(true).optional(),
 }).strict()
 export type RegisteredQuestionView = z.infer<typeof RegisteredQuestionView>
 
-/** HAS THE HUMAN MOVED ON FROM THIS QUESTION? True when their newest TYPED turn landed after it was asked
- *  (`lastHumanAt` is the tailer's clock for exactly that; frizz's own wakes never move it, and neither
- *  does a delivery of answers). Replying past an open card instead of answering it is read as a pivot
- *  (maintainer 2026-09-28: "we should assume they want to move on/pivot"): the card stays up with the
- *  handoff that asked it, still answerable, and the answer still reaches the worker restating what was
- *  asked — but nothing waits on it any more. An unknown clock reads as "not replied past", which is
- *  exactly the behaviour before this rule existed.
+/** HAS THE HUMAN TYPED TO THE WORKER SINCE THIS WAS ASKED? True when their newest TYPED turn landed after
+ *  it was asked (`lastHumanAt` is the tailer's clock for exactly that; frizz's own wakes never move it, and
+ *  neither does a delivery of answers). An unknown clock reads as "no".
  *
- *  ANSWERING IS NOT MOVING ON (2026-09-29). Sending the answers to some cards used to count as replying
- *  past every other open one, so answering one question of a batch of nine released the other eight — a
- *  human working through a batch card by card lost the rest of it after the first send, and asked for the
- *  questions again. Only a typed turn is a pivot now.
+ *  IT GATES NOTHING (2026-09-29). From 2026-09-28 a typed turn past an open card was read as a pivot and
+ *  RELEASED the question: it stopped blocking `done`, stopped being the sign-off, left the queue card, and
+ *  could not be asked again. On this machine the next day the human, seven questions open, typed a SIDE
+ *  question ("should we use this thread or the other one?") and lost all seven — they still meant to
+ *  answer them and had to ask for them back. A server that sees a timestamp cannot tell a side question
+ *  or a clarification from a pivot; the worker, which reads the message, can. So every open question
+ *  stays owed until the human answers or dismisses it or the worker withdraws it (plans/rest-by-
+ *  registration.md Fork 2A), the typed message reaches the worker with a note asking it to `unask` the
+ *  ones it made moot (openQuestionsNote), and this survives only as information: the `activity` readout
+ *  names the questions the human has written past.
  *
- *  A DANGER QUESTION IS NEVER RELEASED BY A REPLY. `danger` marks the irreversible — a force-push, a
- *  deletion, a rollback — and is exactly the question the human's × cannot dismiss and a Goal cannot
- *  auto-dismiss (router.ts). Letting a timestamp retire it would hand the worker the call on the one kind
- *  of question that must be the human's; it holds until answered, dismissed, or withdrawn. */
+ *  A DANGER QUESTION NEVER READS AS WRITTEN PAST — unchanged from when this was a release: `danger` is
+ *  the irreversible call that must stay the human's, and nothing about the human typing makes it less
+ *  so. */
 export function questionRepliedPast(q: { asked_at: number; spec: string }, lastHumanAt: string | undefined): boolean {
   if (!lastHumanAt) return false
   const human = Date.parse(lastHumanAt)
@@ -2452,10 +2488,12 @@ function questionSpecIsDanger(spec: string): boolean {
   }
 }
 
-/** The open questions still HOLDING their thread — every one the human has not replied past. What every
- *  "is this thread asking?" reading counts; the full list is only for drawing and answering cards. */
+/** The open questions still HOLDING their thread — which, since 2026-09-29, is every open one:
+ *  `repliedPast` is information, not a release (see questionRepliedPast). Kept as the one name every "is
+ *  this thread asking?" reading goes through, so a future rule about which questions hold has one place
+ *  to live rather than a dozen `questions.length` checks to find. */
 export function questionsOwed<Q extends { repliedPast?: true }>(questions: readonly Q[] | undefined): Q[] {
-  return (questions ?? []).filter((q) => !q.repliedPast)
+  return questions ? [...questions] : []
 }
 
 export const AskResult = z.object({
@@ -2507,9 +2545,14 @@ export const QuestionAnswerSchema: z.ZodType<QuestionAnswer> = z.lazy(() => z.ob
 
 export const AnswerQuestionsInput = z.object({
   slug: ThreadSlug,
-  /** SUBMITTED AS A UNIT. The card sends whatever was answered in one call, because a per-question send
-   *  would half-wake a turn: the worker would come back to a payload it cannot act on and would have to
-   *  ask again for the rest. */
+  /** ONE QUESTION'S ANSWER, USUALLY — sent the moment that question is complete (a pick, an Enter in its
+   *  own box, a multi's confirm), so the worker starts on it while the human is still reading the rest
+   *  (maintainer 2026-09-29: "the agent should receive the answer to one question at a time so it can
+   *  start working"). Several when the human sends what they have staged on purpose, or when a typed reply
+   *  carries the staged answers ahead of itself. The contract already requires the questions of one `ask`
+   *  to be independent — dependent ones are `followUps` — which is what makes one answer actionable
+   *  alone. Answers stored before the scheduler's next pass still reach the worker as ONE delivery,
+   *  merged at claim (scheduler adoptCompanions, mergeAnswerMessages). */
   answers: z.array(QuestionAnswerSchema).min(1),
 }).strict()
 export type AnswerQuestionsInput = z.infer<typeof AnswerQuestionsInput>
@@ -2632,6 +2675,32 @@ export function questionAnswerMessage(answers: readonly QuestionAnswer[], dismis
   for (const a of answers) push(a, false)
   for (const d of dismissed) rows.push(`“${d.question}” → ${DISMISSED_ANSWER}`)
   return `${BURIED_ANSWERS_HEADER}\n${rows.map((row, i) => `${i + 1}. ${row}`).join("\n")}`
+}
+
+/** SEVERAL ANSWER DELIVERIES AS ONE — the outbox's merge for the one wake it cannot wrap (scheduler
+ *  adoptCompanions). Every other merged wake goes out under a heading per part, but an answers message is
+ *  the HUMAN'S OWN TURN in a shape the chat parses by position — the header first, and every line that
+ *  is not a row read as the last row's continuation — so a heading, or a second header halfway down,
+ *  would print frizz's prose inside the human's answer chip. So the parts are folded into the one form:
+ *  one header, every row renumbered in order. That is safe to do on the text because of the wire's own
+ *  invariant (ANSWER_CONTINUATION_INDENT): a row is the only line that starts `N. ` at column 0, so a
+ *  continuation can never be mistaken for one and renumbered.
+ *
+ *  Each part may carry its trailing clock line (the scheduler's withClock); it is dropped here and the
+ *  caller stamps ONE. Undefined when any part is not an answers message — a cancellation wake is frizz's
+ *  own voice and never merges into the human's. */
+export function mergeAnswerMessages(parts: readonly string[]): string | undefined {
+  const lines: string[] = []
+  let rows = 0
+  for (const part of parts) {
+    const [header, ...body] = stripWakeTimeHeader(part).trim().split("\n")
+    if (header !== BURIED_ANSWERS_HEADER) return undefined
+    for (const line of body) {
+      const row = /^\d+\. /.exec(line)
+      lines.push(row ? `${++rows}. ${line.slice(row[0].length)}` : line)
+    }
+  }
+  return rows === 0 ? undefined : `${BURIED_ANSWERS_HEADER}\n${lines.join("\n")}`
 }
 
 /** THE ONE WAKE ON THIS PATH FRIZZ WRITES IN ITS OWN VOICE, so it is the one the chat draws as a
@@ -2770,12 +2839,20 @@ export type DropOwnLinkInput = z.infer<typeof DropOwnLinkInput>
 export const DropOwnLinkResult = z.object({ dropped: z.boolean() }).strict()
 export type DropOwnLinkResult = z.infer<typeof DropOwnLinkResult>
 
-// A terminal command thread's run, as the rail and its drawer render it. `runId` counts starts, so a
-// restart is a NEW terminal to the browser (a fresh pty, a fresh screen) rather than more output on the
-// old one. An exited run with no `exitCode` is one the server went away under (a Frizz restart takes
-// its children with it) — shown as interrupted, never as a success.
-export const CommandThreadState = z.object({
+// A THREAD'S TERMINAL — a live pty the human opened on a thread, running in the folder that thread's
+// agent works in (server thread-terminals.ts). It is not a thread: it has no row and no card of its own,
+// and rides its parent's `ThreadView.terminals`. `id` is its /term/<id> handle. `runId` counts starts, so
+// a restart is a NEW terminal to the browser (a fresh pty, a fresh screen) rather than more output on the
+// old one. An exited run with no `exitCode` is one the server went away under (a Frizz restart takes its
+// children with it) — shown as interrupted, never as a success.
+export const ThreadTerminal = z.object({
+  id: ThreadSlug,
+  // The line it runs, or — for an interactive shell (`shell`) — the shell's name, which is what a
+  // terminal tab calls one.
   command: z.string(),
+  shell: z.boolean().optional(),
+  // The folder it runs in: the project root, or the worktree the agent had moved into when it opened.
+  cwd: z.string(),
   state: z.enum(["running", "exited"]),
   runId: z.number().int(),
   startedAt: z.string(),
@@ -2784,24 +2861,38 @@ export const CommandThreadState = z.object({
   // The human pressed Stop — the signal's code is theirs, not a failure.
   stopped: z.boolean().optional(),
   // A LIVE run that has gone quiet on an unterminated line — a password, OTP or [y/N] prompt. It queues
-  // like a finished run (the process is waiting on the human), and clears the moment it writes again.
+  // the terminal's THREAD (the terminal has no card of its own), and clears the moment it writes again.
   awaitingInput: z.boolean().optional(),
+  // When it went quiet at that prompt — the queue entry's honest time.
+  awaitingSince: z.string().optional(),
 })
-export type CommandThreadState = z.infer<typeof CommandThreadState>
+export type ThreadTerminal = z.infer<typeof ThreadTerminal>
 
-// The prompt box's Terminal tab. A command is ONE line of shell, run in the project directory.
-export const COMMAND_THREAD_MAX_CHARS = 4_000
-export const StartCommandInput = z.object({
-  command: z.string().trim().min(1).max(COMMAND_THREAD_MAX_CHARS),
+// Open a terminal on a thread. No `command` ⇒ an interactive login shell. `cwd` absent ⇒ the thread's
+// current working folder (threadWorkingDir); the drawer sends the one the human confirmed or edited.
+export const TERMINAL_COMMAND_MAX_CHARS = 4_000
+export const TerminalCommand = z.string().trim().min(1).max(TERMINAL_COMMAND_MAX_CHARS)
+export const StartTerminalInput = z.object({
+  slug: ThreadSlug,
+  command: TerminalCommand.optional(),
+  cwd: z.string().trim().min(1).max(4_096).optional(),
 }).strict()
-export type StartCommandInput = z.infer<typeof StartCommandInput>
-export const CommandThreadInput = z.object({ slug: ThreadSlug }).strict()
-export type CommandThreadInput = z.infer<typeof CommandThreadInput>
-// A follow-up command in a finished command thread's drawer: the thread's next run, of a new line.
-export const RunCommandInput = z.object({ slug: ThreadSlug, command: StartCommandInput.shape.command }).strict()
-export type RunCommandInput = z.infer<typeof RunCommandInput>
-export const CommandThreadResult = z.object({ slug: ThreadSlug }).strict()
-export type CommandThreadResult = z.infer<typeof CommandThreadResult>
+export type StartTerminalInput = z.infer<typeof StartTerminalInput>
+export const TerminalInput = z.object({ id: ThreadSlug }).strict()
+export type TerminalInput = z.infer<typeof TerminalInput>
+// The terminal drawer's `$` line once a run finished: the terminal's next run, of a new line.
+export const RunTerminalInput = z.object({ id: ThreadSlug, command: TerminalCommand }).strict()
+export type RunTerminalInput = z.infer<typeof RunTerminalInput>
+export const StartTerminalResult = z.object({ id: ThreadSlug }).strict()
+export type StartTerminalResult = z.infer<typeof StartTerminalResult>
+// Where a new terminal on this thread would start, and how that was worked out — the drawer's folder
+// field opens on it. `source`: the agent's own latest reading (a Claude transcript's `cwd`, a Codex
+// tool call's `workdir`), the session's recorded folder, or the project root when neither is known.
+export const ThreadWorkingDir = z.object({
+  dir: z.string(),
+  source: z.enum(["transcript", "session", "project"]),
+}).strict()
+export type ThreadWorkingDir = z.infer<typeof ThreadWorkingDir>
 
 // One sidebar row: frizz board thread + runtime overlay.
 export const ThreadView = z.object({
@@ -2846,6 +2937,14 @@ export const ThreadView = z.object({
   // lastActivityAt/spawnedAt when absent.
   lastAssistantAt: z.string().optional(),
   aiTitle: z.string().optional(), // Claude's own auto-generated session title (latest ai-title record)
+  // The thread's live STATUS — a short phrase of what is happening NOW, rewritten every 5th operator
+  // message (server periodic-status.ts). Never the NAME: the name is one or two stable words for the
+  // subject, and this is the part allowed to move. Shown beside the name on the queue card, in the
+  // drawer header and in the rail row's tooltip — never as a second rail line, which would cost the rail
+  // its density. Absent until the first one lands. Named `statusLine` because `status` above is the
+  // legacy .frizz-file lifecycle field, synthesized and unused for session rows; the registry column is
+  // `session.status`.
+  statusLine: z.string().optional(),
   // True when `title` is a machine-guessed dispatch slug (title_auto=1), NOT a real name — the display
   // then shows a "Spinning up a thread…" placeholder instead of the guess until aiTitle lands. Optional
   // (absent ⇒ legacy/slim row) so old snapshots parse; absent is treated as "not provisional".
@@ -2915,13 +3014,13 @@ export const ThreadView = z.object({
   // constructors that predate the model still typecheck and old snapshots parse unchanged. ----
   // "session" = a session-backed thread (the working rail's unit); "legacy" (or absent) = a .frizz
   // file row, rendered read-only in the collapsed Legacy shelf.
-  // "command" = a TERMINAL COMMAND thread: a shell command started from the prompt box's Terminal tab,
-  // running in a server-owned pty the browser attaches to over /term (see `command` below). Every
-  // session guard (`kind !== "session"`) already excludes it, which is the point: it has no agent, no
-  // transcript and no agent verb. It DOES share the lifecycle: a FINISHED run queues (`needsYou`) with a
-  // card of its own and is marked done like any thread (`state`); a running one sits with Running.
-  kind: z.enum(["session", "legacy", "command"]).optional(),
-  command: CommandThreadState.optional(),
+  // There is no third kind. Terminal COMMAND threads (`kind: "command"`, 2026-09-23) were rows of their
+  // own until 2026-09-29; a terminal now belongs to a session thread (`terminals` below).
+  kind: z.enum(["session", "legacy"]).optional(),
+  // The terminals the human opened on this thread that are not yet filed away — running, or finished and
+  // still worth reading. Absent ⇒ none. A terminal waiting at a prompt (`awaitingInput`) is what queues
+  // this thread on its behalf (server board.ts withThreadTerminals).
+  terminals: z.array(ThreadTerminal).optional(),
   // No registry row (a maintainer terminal discovered from the JSONL dir): read-only transcript,
   // no lifecycle verbs (no composer / kill / resume), never in Needs-you, no archive/seen state.
   foreign: z.boolean().optional(),
@@ -2950,6 +3049,16 @@ export const ThreadView = z.object({
    *  explicitly parked THIS rest, showing them the same card with the same button one surface over is
    *  not information, and they said so. */
   bgSnoozed: z.boolean().optional(),
+  /** The human snoozed this thread UNTIL ALL ITS SUB-AGENTS RETURN, and that snooze is what is keeping
+   *  it out of the queue right now. Server truth (board.subAgentsSnoozeHolds): unlike `bgSnoozed` it
+   *  survives the parent's intermediate rests — each child's return still wakes the parent, which runs
+   *  and rests again without re-queueing — and it lets go when no direct sub-agent is running, when the
+   *  human speaks to the thread, or earlier when something outranks it (a question, a crash, a done).
+   *  Present only while it is the reason the thread is out of the queue; isSnoozed parks the row in
+   *  Snoozed on it. */
+  subAgentsSnoozed: z.boolean().optional(),
+  /** Direct sub-agents that returned inside the wait still open — see ReturnedSubAgentView. */
+  returnedSubAgents: z.array(ReturnedSubAgentView).optional(),
   // Which Claude transport serves this thread. "broker" — a session-broker-owned Agent SDK session with
   // a typed control channel — is the only one there is; ABSENT means a row dispatched before the broker
   // became the sole transport, which frizz can no longer reach that way. Only the broker can be asked to
@@ -2985,6 +3094,14 @@ export const ThreadView = z.object({
   // foreground call blocked on a prompt or a 2FA approval nobody can see. It queues the thread with its
   // runtime left `running`, so the card's interrupt-and-send stays offered. ISO time of the last activity.
   quietTurnSince: z.string().optional(),
+  // …and the call it is blocked on, so the card names what is actually running. Absent when the turn went
+  // silent with no call open (the model itself stalled) or on a backend whose calls Frizz cannot see.
+  quietTurnCall: z.object({
+    name: z.string(),
+    label: z.string().optional(),
+    command: z.string().optional(),
+    startedAt: z.string().optional(),
+  }).optional(),
   // The queued reason is "resting while its OWN background work (sub-agents / shells) is still live,
   // with no human ask": the agent came to rest awaiting results it dispatched, not awaiting the human.
   // The card renders the informational awaiting-background banner + an event-Snooze that hides it until
@@ -3083,9 +3200,7 @@ export type ThreadView = z.infer<typeof ThreadView>
  * disagreed with the rail it sits beside would be worse than no badge.
  */
 export function queuedThread(t: Pick<ThreadView, "kind" | "foreign" | "needsYou" | "state">): boolean {
-  // A terminal COMMAND thread queues too, once its run has finished (command-threads.ts derives that
-  // `needsYou`): the human reads the result and marks it done, exactly as with a rested agent.
-  return (t.kind === "session" || t.kind === "command") && t.foreign !== true && t.needsYou === true && t.state !== "archived"
+  return t.kind === "session" && t.foreign !== true && t.needsYou === true && t.state !== "archived"
 }
 
 // ── THE SIDEBAR'S BANDS ────────────────────────────────────────────────────────────────────────────
@@ -3244,7 +3359,14 @@ export function isSnoozed(t: ThreadView, nowMs = Date.now()): boolean {
   // a child's return re-invokes the parent within seconds, so that row keeps spinning in Active
   // (maintainer 2026-07-10, "when an agent is merely awaiting its own sub-agents, we should NOT dim it").
   const eventSnooze = t.bgSnoozed === true && t.runtime === "turn-idle"
-  if (hasLiveSubAgents(t) || (hasLiveOps(t) && !eventSnooze)) return false
+  // "SNOOZE UNTIL ALL SUB-AGENTS RETURN" IS THE ONE PARK A LIVE SUB-AGENT DOES NOT OUTRANK, because the
+  // live sub-agents are exactly what it parks on. The human looked at the card, saw children still out,
+  // and chose to stop seeing the thread until they are all back; a row that spun in Active through each
+  // intermediate return would undo that choice on the one surface still showing the thread. While the
+  // parent is RUNNING a turn (a child's return woke it) it spins in Active like any snoozed row, and it
+  // comes back here at its next rest. The server drops the flag the moment the snooze lets go.
+  const subAgentsSnooze = t.subAgentsSnoozed === true && t.runtime === "turn-idle"
+  if (!subAgentsSnooze && (hasLiveSubAgents(t) || (hasLiveOps(t) && !eventSnooze))) return false
   // A user-owned snooze deliberately wins over a concrete ask, permission prompt, or crash. Those
   // states still exist in the transcript/runtime and re-enter Queue at the exact wake deadline; the
   // snooze merely parks their presentation until then. Mid-turn work keeps spinning in the Active band,
@@ -3271,7 +3393,7 @@ export function isSnoozed(t: ThreadView, nowMs = Date.now()): boolean {
   // 2026-08-31. It is now the hard NON-snooze gate above, and the queue's problem: see deriveNeedsYou.)
   // The event-snooze needs no fence behind it: a shell-only rest cards without one and its snooze is the
   // same click. It expires by itself at the thread's next rest, which is the wake the human asked for.
-  if (eventSnooze) return true
+  if (eventSnooze || subAgentsSnooze) return true
   // THE SERVER ALREADY DECIDED THIS, and the client must not re-derive it. A park is honoured only when
   // every item the fence names is still live — checked against telemetry and the registries, which the
   // browser cannot see (board.hasDeclaredBackgroundPark). What reaches here is that verdict: the server
@@ -3302,9 +3424,6 @@ export function sectionOf(t: ThreadView): SectionKey | null {
   // Rested bands together; the rule between them is drawn downstream (partitionActive), and the
   // needs-you/awaiting distinction renders as the row INDICATOR and the queue cards, not as sections.
   // Legacy (.frizz-file) rows are HIDDEN entirely (null; not even a shelf). Foreign never rows.
-  // A terminal COMMAND thread shares the lifecycle: running → Active, finished → Rested (the server
-  // sets `needsYou`), marked done → Done. It has no snooze, so the Snoozed band never claims one.
-  if (t.kind === "command") return t.state === "archived" ? "inactive" : "active"
   if (t.kind !== "session") return null
   // Archived → Done, WHATEVER the worker is doing. Marking a thread done is reversible only by the
   // human (maintainer 2026-09-24: "if something is marked as done ensure that the agent doesn't unmark
@@ -3359,6 +3478,31 @@ export function inActiveBand(t: ThreadView): boolean {
 export function activeBandThread(t: ThreadView): boolean {
   if (t.kind !== "session" || t.foreign === true) return false
   return sectionOf(t) === "active" && inActiveBand(t)
+}
+
+/**
+ * DONE, AND STILL MOVING — a thread the human marked done whose session is actively running anyway: a
+ * turn still draining, a sub-agent it dispatched still out.
+ *
+ * Its ROW stays in Done, because only the human reopens a thread (sectionOf, maintainer 2026-09-24). What
+ * it must not do is sit there SILENTLY: a live, in-flight session filed under Done with a quiet check was
+ * the bug the maintainer hit three times before 2026-07-10 ("a running thread must never sit silently
+ * under Done"). So the row keeps its place and wears its spinner (web groups.ts sessionIndicatorKind),
+ * and the rail's working count below includes it — the badge's spinner is "this project has work in
+ * flight", and this is work in flight.
+ */
+export function doneButRunning(t: ThreadView): boolean {
+  return t.kind === "session" && t.foreign !== true && t.state === "archived" && isActivelyRunning(t)
+}
+
+/**
+ * The rail badge's RUNNING count: every Active-band row, plus every Done row still moving
+ * (doneButRunning). Until 2026-09-24 the second half rode inside `activeBandThread` for free, because
+ * sectionOf lifted a running-yet-archived row into Active; Done stopped moving rows, and the count has to
+ * say so on its own or a project whose only live work was marked done reads as idle from the rail.
+ */
+export function workingThread(t: ThreadView): boolean {
+  return activeBandThread(t) || doneButRunning(t)
 }
 
 // STRUCTURED board error — a machine-readable companion to the legacy `errors: string[]` so the
@@ -4085,11 +4229,14 @@ export type SetOwnThreadTitleInput = z.infer<typeof SetOwnThreadTitleInput>
 
 // What the write answers with: whether it landed, and the name the thread carries NOW. A refusal is not
 // an error — a human who has renamed the thread owns its name — so it comes back as a flag the tool can
-// explain rather than a throw the model will retry.
+// explain rather than a throw the model will retry. `refusal` says why in words the worker can act on:
+// another open thread already holds the name (named, so it can pick a different subject), the name is
+// longer than two words, or the worker already spent its one rename (thread-names.ts).
 export const SetOwnThreadTitleResult = z.object({
   accepted: z.boolean(),
   title: z.string(),
   lockedByHuman: z.boolean(),
+  refusal: z.string().optional(),
 }).strict()
 export type SetOwnThreadTitleResult = z.infer<typeof SetOwnThreadTitleResult>
 
@@ -4329,6 +4476,53 @@ const HUMAN_GAP_NOTE_TAIL = /\n+⏱ Frizz: the message above arrived [^\n]* afte
 /** Display projection: the human's message without the clock note frizz appended for the worker. */
 export function stripHumanGapNote(text: string): string {
   return text.replace(HUMAN_GAP_NOTE_TAIL, "")
+}
+
+/** A TYPED MESSAGE REACHING A WORKER THAT HAS QUESTIONS OPEN, with frizz's note on what to do with them
+ *  — appended to the copy handed to the worker, exactly as humanGapNote is, and to that copy ONLY.
+ *
+ *  THE WORKER DECIDES THE PIVOT (2026-09-29). A typed reply past open cards used to release them by
+ *  timestamp (questionRepliedPast), and it released seven the human still meant to answer when they
+ *  typed a side question. Frizz cannot tell a pivot from a side question; the worker reading the message
+ *  can. So the questions stay owed, and this is where the worker is told, at the moment it reads the
+ *  message, which ones are open and what the message might have done to them: `unask` exactly the ones
+ *  it made moot, leave the rest — the human can still answer those, one at a time.
+ *
+ *  Each question is named by its text AND its id, because `unask` takes the id and the worker never
+ *  chose one. Folded to one line and clipped, so the note stays ONE line and its stripper can anchor on
+ *  it. Undefined with nothing open. */
+export function openQuestionsNote(open: readonly { id: string; question: string }[]): string | undefined {
+  if (open.length === 0) return undefined
+  const named = open.map((q) => {
+    const text = q.question.replace(/\s+/g, " ").trim()
+    return `“${text.length > 100 ? `${text.slice(0, 99)}…` : text}” (${q.id})`
+  })
+  const count = open.length === 1 ? "1 question you registered is" : `${open.length} questions you registered are`
+  return `❓ Frizz: ${count} still open: ${named.join(", ")}.${OPEN_QUESTIONS_NOTE_TAIL}`
+}
+
+const OPEN_QUESTIONS_NOTE_TAIL =
+  " If the message above made any of them moot, `unask` exactly those and say so; leave the rest open — " +
+  "they are still the human's to answer, and still your sign-off."
+
+// The stripper, for humanGapNote's reason exactly: the note rides the HUMAN'S message, and the chat reads
+// the worker's transcript, where it is simply part of their bubble. Anchored to end-of-text on a line of
+// its own and to the note's fixed opening AND closing words, so a message that quotes one keeps it.
+const OPEN_QUESTIONS_NOTE_LINE = new RegExp(
+  `\\n+❓ Frizz: (?:1 question you registered is|\\d+ questions you registered are) still open: [^\\n]*${OPEN_QUESTIONS_NOTE_TAIL.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}[ \\t]*$`,
+)
+
+/** Display projection: the human's message without the open-questions note frizz appended for the
+ *  worker. */
+export function stripOpenQuestionsNote(text: string): string {
+  return text.replace(OPEN_QUESTIONS_NOTE_LINE, "")
+}
+
+/** Every rider frizz appends to the worker's copy of a TYPED follow-up, off, in the reverse of the order
+ *  the router appends them (the gap note, then the open-questions note). The one call every display and
+ *  match key should make, so a rider added later cannot be stripped in one place and shown in another. */
+export function stripFollowUpRiders(text: string): string {
+  return stripHumanGapNote(stripOpenQuestionsNote(text))
 }
 
 export function wakeDeliveryToken(id: string): string {
@@ -5371,7 +5565,7 @@ export const TranscriptEarlierInput = z.object({
 }).strict()
 export type TranscriptEarlierInput = z.infer<typeof TranscriptEarlierInput>
 
-// ---- Terminal WebSocket protocol (ws://host/term/:slug) — terminal command threads ----
+// ---- Terminal WebSocket protocol (ws://host/term/:id) — a thread's terminals ----
 // client -> server: {t:"input", d:string} | {t:"resize", cols:number, rows:number}
 // server -> client: raw utf8 terminal output frames
 export type TermClientMsg = { t: "input"; d: string } | { t: "resize"; cols: number; rows: number }
@@ -5497,7 +5691,8 @@ export const ProjectCard = z.object({
 export type ProjectCard = z.infer<typeof ProjectCard>
 
 /**
- * One project's rail badge: its queue (`queuedThread`) and its Active band (`activeBandThread`).
+ * One project's rail badge: its queue (`queuedThread`) and its working rows (`workingThread` — the Active
+ * band plus any Done row still running).
  *
  * Two numbers rather than their sum because the tooltip splits them, and the spinner reads `running`
  * alone. A project absent from the map has no board open on this server — no badge, not a zero.
@@ -5572,9 +5767,8 @@ export type ProjectPickResult = z.infer<typeof ProjectPickResult>
  *
  * `threads` is every OPEN session thread — the Queue, Running, Snoozed and Pinned rows the project's own
  * rail draws. Every ARCHIVED thread is Done — running or not, since only the human reopens one — and
- * Done grows without bound (553 rows on one real board), so it is `doneCount` here. TERMINAL COMMAND
- * threads ride along on the same terms:
- * a finished run queues (`queuedThread`, which the rail badge counts too) and a running one is Running.
+ * Done grows without bound (553 rows on one real board), so it is `doneCount` here. A thread's
+ * TERMINALS ride its row (`ThreadView.terminals`), and one waiting at a prompt queues that thread.
  * Foreign sessions (a project's own terminals) are left out; they are read-only and never queue. The
  * client bands every row with the same pure `groups.ts` functions the rail uses.
  */
