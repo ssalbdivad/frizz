@@ -3,8 +3,8 @@
 // runtime that acts on a match lives in keyboardRuntime.ts, the sheet that rebinds them in
 // components/KeyboardShortcuts.tsx, and the operator's overrides in prefs.ts.
 //
-// A LETTER IS ITS ACTION'S INITIAL: `r` reply, `d` mark as done, `s` snooze, `f` fullscreen, `p` pin, `t` new
-// terminal thread, `n` new project. One rule is worth more than any single well-chosen key, because it predicts the
+// A LETTER IS ITS ACTION'S INITIAL: `r` reply, `d` mark as done, `s` snooze, `f` fullscreen, `o` open in
+// a drawer, `t` new terminal thread, `n` new project. One rule is worth more than any single well-chosen key, because it predicts the
 // keys nobody has looked up yet, including ones added later (maintainer 2026-09-28: "establish the
 // convention in general that each action is associated with its first letter"). Until then Done and
 // Snooze were `e` and `h`, borrowed from keyboard-first inboxes: `e` is Gmail's archive and
@@ -48,7 +48,7 @@ export type ActionId =
   | "thread.done"
   | "thread.snooze"
   | "thread.fullscreen"
-  | "thread.pin"
+  | "thread.open"
   | "app.newThread"
   | "app.newTerminal"
   | "app.newProject"
@@ -77,7 +77,7 @@ export const ACTIONS: readonly ActionDef[] = [
   { id: "thread.done", label: "Mark as done", group: "queue", defaultChord: "d" },
   { id: "thread.snooze", label: "Snooze", group: "queue", defaultChord: "s" },
   { id: "thread.fullscreen", label: "Fullscreen", group: "queue", defaultChord: "f" },
-  { id: "thread.pin", label: "Pin", group: "queue", defaultChord: "p" },
+  { id: "thread.open", label: "Open in a drawer", group: "queue", defaultChord: "o" },
   { id: "app.newThread", label: "New thread", group: "anywhere", defaultChord: "c" },
   { id: "app.newTerminal", label: "New terminal thread", group: "anywhere", defaultChord: "t" },
   { id: "app.newProject", label: "New project", group: "anywhere", defaultChord: "n" },

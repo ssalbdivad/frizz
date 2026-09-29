@@ -122,9 +122,10 @@ const warnedFor = () => {
   }
   return out
 }
-// Up to the grace itself: two warnings due within seconds on ONE thread are delivered one wake at a time,
-// and the second was measured arriving ~5m after the first (run 1, 2026-09-29) — the outbox's per-thread
-// pacing, which predates this change. Each arrival instant is printed so that delay stays visible.
+// Up to the grace itself. Run 1 (2026-09-29) measured the second of two warnings due seconds apart
+// arriving ~5m after the first — the outbox's per-thread quiet window — while the kill clock ran from the
+// queue. Budget warnings are now exempt from that window and the grace runs from delivery
+// (verify-shell-budget-grace.mjs pins both); each arrival instant is still printed so any lag stays visible.
 for (let deadline = Date.now() + 10 * 60_000; ;) {
   const w = warnedFor()
   if (w.has("A") && w.has("D")) break

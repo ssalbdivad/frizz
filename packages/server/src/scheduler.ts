@@ -3230,9 +3230,11 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
   //  1. PAST THE DEADLINE → one warning wake, delivered mid-turn if the worker is busy, and the row
   //     marked warned FOR THIS DEADLINE. An extension moves the deadline, so the next overrun is warned
   //     afresh; the same deadline is never warned twice, however many passes or restarts see it.
-  //  2. GRACE AFTER THE WARNING, deadline unmoved → the shell is stopped through the operator's own ×
-  //     path, and the worker told why. Grace counts from the WARNING, not the deadline, so a server that
-  //     was down across the deadline still gives the worker its full window to answer.
+  //  2. GRACE AFTER THE WARNING REACHED THE WORKER, deadline unmoved → the shell is stopped through the
+  //     operator's own × path, and the worker told why. Grace counts from the warning's DELIVERY — not
+  //     the deadline, and not the instant it was queued — so neither a server that was down across the
+  //     deadline nor a wake that waited in the outbox eats into the worker's window to answer. See
+  //     shellBudgetGraceFrom for how "delivered" is read.
   //
   // A shell frizz cannot stop (a pre-broker row, or no task id yet) is warned and never killed — the
   // warning says so. An ARCHIVED thread is nobody's to wake: it gets no warning and no kill notice, but
@@ -3240,6 +3242,33 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
   // 16-hour case. A kill that fails is retried, spaced, rather than every tick.
   const SHELL_BUDGET_STOP_RETRY_MS = 5 * 60_000
   const shellBudgetStopAttempts = new Map<string, number>()
+
+  // WHEN THE WARNING REACHED THE WORKER — the instant its grace runs from, or null while it is still on
+  // its way (nothing may be stopped yet). Read off the warning's own outbox row, which is durable, so a
+  // restart reads the same answer. Until 2026-09-29 the grace ran from `warned_at`, the instant the
+  // warning was QUEUED: two shells due 8s apart on a real stack had their warnings delivered ~5m apart
+  // (the quiet window, since exempted — wake-store.ts), and the second worker got ~5 of its 10 minutes.
+  //
+  //  · SENT to a live runtime, or DELIVERED → the handoff instant (`sentAt`, else `deliveredAt`). A sent
+  //    row is still leased awaiting confirmation; the worker has it, so its clock is running.
+  //  · PENDING, or leased and not yet sent → null. That includes a frame that was sent and LOST (its
+  //    runtime died with no token) and is going round again: the worker never read it.
+  //  · TERMINAL without reaching the worker (exhausted, abandoned), or NO ROW (an archived thread is
+  //    never warned; a pruned row) → `warned_at`. Nobody can be told, and a shell whose worker cannot
+  //    be reached is exactly the forgotten one the budget exists for, so it ends on the original clock
+  //    rather than living forever behind a wake that will never land.
+  //
+  // Looked up under the thread's CURRENT session: a warning queued under an earlier one is not found
+  // and falls to `warned_at`, the old behaviour, for a thread that restarted mid-grace.
+  function shellBudgetGraceFrom(slug: string, sessionId: string, shellId: string, deadlineMs: number, warnedAtMs: number): number | null {
+    const d = outbox.get(wakeDeliveryId(slug, sessionId, shellBudgetFenceId(shellId, deadlineMs)))
+    if (!d) return warnedAtMs
+    if (d.state === "delivered") return Math.max(warnedAtMs, d.sentAt ?? d.deliveredAt ?? warnedAtMs)
+    if (d.state === "leased") return d.sentAt === null ? null : Math.max(warnedAtMs, d.sentAt)
+    if (d.state === "pending") return null
+    return warnedAtMs
+  }
+
   async function evalShellBudgets(nowMs: number): Promise<void> {
     for (const row of deps.storage.allSessions()) {
       const tele = deps.tailer.get(row.slug)
@@ -3281,7 +3310,9 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
           deps.storage.markShellBudgetWarned({ slug: row.slug, shellId: budget.shellId, startedAt: shell.startedAt, deadlineMs: budget.deadlineMs, nowMs })
           continue
         }
-        if (!stoppable || !deps.shellControl || nowMs < warnedAtMs + SHELL_BUDGET_GRACE_MS) continue
+        if (!stoppable || !deps.shellControl) continue
+        const graceFromMs = archived ? warnedAtMs : shellBudgetGraceFrom(row.slug, row.session_id, budget.shellId, budget.deadlineMs, warnedAtMs)
+        if (graceFromMs === null || nowMs < graceFromMs + SHELL_BUDGET_GRACE_MS) continue
         const attemptKey = `${row.slug}\u0000${budget.shellId}`
         const lastAttempt = shellBudgetStopAttempts.get(attemptKey)
         if (lastAttempt !== undefined && nowMs - lastAttempt < SHELL_BUDGET_STOP_RETRY_MS) continue
