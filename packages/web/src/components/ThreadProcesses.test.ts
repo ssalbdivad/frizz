@@ -1,0 +1,127 @@
+import assert from "node:assert/strict"
+import test from "node:test"
+import { createElement } from "react"
+import { renderToStaticMarkup } from "react-dom/server"
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query"
+import type { BgShellView, ThreadTerminal, ThreadView } from "@frizz/shared"
+import { ProcessRow, ThreadProcessStrip, ThreadTerminalMark, processTitle } from "./ThreadTerminals.tsx"
+import { threadProcesses, type ThreadProcess } from "../lib/threadProcesses.ts"
+import { CHILD_MARK_SLOT_CLASS } from "../lib/childOps.ts"
+
+// ONE STRIP, TWO OWNERS. The row box is the ops strip's, so the checks that matter are the ones that keep
+// every label on one x — one mark slot, one kind tag, no extra element before the label — and the ones that
+// keep the two owners apart: the glyph in that slot, and the tooltip's first words.
+
+const at = (mm: string) => `2026-09-29T10:${mm}:00.000Z`
+const NOW = Date.parse(at("30"))
+const term = (over: Partial<ThreadTerminal> = {}): ThreadTerminal => ({ id: "term-1", command: "npm run dev", cwd: "/repo", state: "running", runId: 1, startedAt: at("00"), ...over })
+const shell = (over: Partial<BgShellView> = {}): BgShellView => ({ id: "toolu_1", label: "vite dev server", startedAt: at("00"), state: "running", cwd: "/repo", ...over })
+const processes = (thread: Pick<ThreadView, "terminals" | "bgShells">) => threadProcesses(thread, [], { now: NOW })
+
+const row = (p: ThreadProcess, extra: { onOpen?: () => void; lines?: number; watched?: boolean } = {}) =>
+  renderToStaticMarkup(createElement(ProcessRow, { process: p, slug: "t", ...extra }))
+
+const withQuery = (node: ReturnType<typeof createElement>) =>
+  renderToStaticMarkup(createElement(QueryClientProvider, { client: new QueryClient({ defaultOptions: { queries: { retry: false } } }) }, node))
+
+test("the owner glyph sits IN the mark slot: a bot for the agent's, the terminal square for yours", () => {
+  const [agent] = processes({ bgShells: [shell()] })
+  const [human] = processes({ terminals: [term()] })
+  const slot = (html: string) => html.slice(html.indexOf(`class="${CHILD_MARK_SLOT_CLASS}"`), html.indexOf("frizz-kind-tag"))
+  assert.match(slot(row(agent!)), /lucide-bot/)
+  assert.match(slot(row(human!)), /lucide-square-terminal/)
+  assert.doesNotMatch(slot(row(agent!)), /lucide-square-terminal/)
+})
+
+test("every row has exactly one TERM tag and nothing extra before its label — one label column", () => {
+  const all = processes({ terminals: [term(), term({ id: "t2", state: "exited", exitCode: 1 })], bgShells: [shell(), shell({ id: "m", monitor: true })] })
+  for (const p of all) {
+    const html = row(p, { onOpen: () => {} })
+    assert.equal(html.split("frizz-kind-tag").length - 1, 1, `${p.key}: one kind tag`)
+    assert.match(html, />TERM<\/span>/)
+    // Between the button's start and the label: the arrow, the one slot, the tag — nothing else.
+    const identity = html.slice(html.indexOf("<button"), html.indexOf("font-mono-keep"))
+    assert.equal(identity.split("<span").length - 1, 4, `${p.key}: arrow, slot, tag, and the label's own span`)
+  }
+})
+
+test("the hue is the row's liveness", () => {
+  const cases: [ThreadProcess, RegExp, string | undefined][] = [
+    [processes({ bgShells: [shell()] })[0]!, /text-shell frizz-live-glyph"/, "operation"],
+    [processes({ bgShells: [shell({ state: "stale" })] })[0]!, /text-shell frizz-live-glyph-quiet/, "operation-quiet"],
+    [processes({ terminals: [term({ awaitingInput: true })] })[0]!, /text-attention/, "prompt"],
+    [processes({ terminals: [term({ state: "exited", exitCode: 0 })] })[0]!, /text-muted-45/, undefined],
+    [processes({ terminals: [term({ state: "exited", exitCode: 2 })] })[0]!, /text-danger-soft/, undefined],
+  ]
+  for (const [p, hue, indicator] of cases) {
+    const html = row(p)
+    const mark = html.slice(html.indexOf("<svg"), html.indexOf("</svg>"))
+    assert.match(mark, hue, p.state)
+    if (indicator) assert.match(mark, new RegExp(`data-running-indicator="${indicator}"`), p.state)
+    else assert.doesNotMatch(mark, /data-running-indicator/, `${p.state}: a finished row claims no liveness`)
+  }
+})
+
+test("the folder hint appears only for a row off the project root, by one rule for both owners", () => {
+  const off = processes({ bgShells: [shell({ cwd: "/repo/.frizz/worktrees/probe", checkout: { dir: "/repo/.frizz/worktrees/probe", kind: "worktree" } })] })[0]!
+  assert.match(row(off), /data-process-checkout="worktree"[^>]*>probe</)
+  assert.doesNotMatch(row(processes({ bgShells: [shell()] })[0]!), /data-process-checkout/)
+  // A terminal in `packages/web` is still in the root checkout: no hint, whatever its folder's name.
+  assert.doesNotMatch(row(processes({ terminals: [term({ cwd: "/repo/packages/web" })] })[0]!), /data-process-checkout/)
+  const theirs = processes({ terminals: [term({ checkout: { dir: "/elsewhere", kind: "folder" } })] })[0]!
+  assert.match(row(theirs), /data-process-checkout="folder"[^>]*>elsewhere</)
+})
+
+test("the tooltip says whose it is, what it runs, and where it started", () => {
+  const home = "/home/u"
+  assert.equal(processTitle(processes({ terminals: [term({ cwd: "/home/u/repo" })] })[0]!, home), "Your terminal — npm run dev\n~/repo")
+  assert.equal(processTitle(processes({ bgShells: [shell({ cwd: "/home/u/repo" })] })[0]!, home), "Agent terminal — vite dev server\nStarted in ~/repo")
+  assert.equal(processTitle(processes({ bgShells: [shell({ cwd: "/home/u/repo" })] })[0]!, home, true), "Agent terminal — vite dev server\nStarted in ~/repo\nWatched — this thread wakes when it finishes")
+  assert.equal(processTitle(processes({ bgShells: [shell({ monitor: true, cwd: "/home/u/repo" })] })[0]!, home), "Agent monitor — vite dev server\nStarted in ~/repo")
+})
+
+test("a Codex exec's row opens like every other; a transcript-only row has nothing to open", async () => {
+  const strip = (thread: Pick<ThreadView, "id" | "terminals" | "bgShells" | "watches">, transcript: Parameters<typeof threadProcesses>[1] = []) =>
+    withQuery(createElement(ThreadProcessStrip, { thread, surface: "card", transcriptShells: transcript }))
+  const codex = strip({ id: "t", bgShells: [shell({ id: "p1", outputUnavailable: true, stoppable: true })], watches: [] })
+  assert.match(codex, /<button[^>]*aria-label="Open agent terminal: vite dev server"/)
+  assert.doesNotMatch(codex, /lines/, "no line counter for output Frizz cannot read")
+  const orphan = strip({ id: "t", bgShells: [], watches: [] }, [{ label: "child's watcher", startedAt: at("01"), state: "running" }])
+  assert.doesNotMatch(orphan, /aria-label="Open agent terminal/)
+  assert.match(orphan, /child&#x27;s watcher|child's watcher/)
+})
+
+test("the agent's row reads its line count and budget; yours reads its state once it has ended", () => {
+  // The row's clock is the page's (lib/liveClock.ts), so its age is measured from real time: 12m30s ago
+  // (half a minute of headroom — see ChildOpRow.test.ts for why exactly-12m is flaky).
+  const started = new Date(Date.now() - 12 * 60_000 - 30_000).toISOString()
+  const agent = processes({ bgShells: [shell({ budgetEndsAt: at("45"), startedAt: started })] })[0]!
+  const html = row(agent, { lines: 142 })
+  assert.match(html, /data-child-op-counter[^>]*>142 lines</)
+  assert.match(html, /data-child-op-budget[^>]*>15m left</)
+  assert.match(html, />12m</, "and its age, in the house grammar")
+  const prompt = row(processes({ terminals: [term({ awaitingInput: true, startedAt: started })] })[0]!)
+  assert.match(prompt, /text-attention">waiting for input</)
+  assert.doesNotMatch(prompt, />12m</, "a terminal at a prompt shows its state, not a clock")
+  assert.match(row(processes({ terminals: [term({ startedAt: started })] })[0]!), />12m</, "yours reads its age while it runs")
+  assert.match(row(processes({ terminals: [term({ state: "exited", exitCode: 2 })] })[0]!), /text-danger-soft">exit 2</)
+})
+
+test("the sidebar mark counts both owners, and its tone says whose is running", () => {
+  const mark = (thread: Pick<ThreadView, "terminals" | "bgShells">) => renderToStaticMarkup(createElement(ThreadTerminalMark, { thread }))
+  assert.equal(mark({ bgShells: [] }), "", "nothing running, nothing drawn")
+  const agentOnly = mark({ bgShells: [shell(), shell({ id: "b", label: "CI watch" })] })
+  assert.match(agentOnly, /data-thread-terminal-mark="agent"/)
+  assert.match(agentOnly, /text-muted-50/)
+  assert.match(agentOnly, /title="2 agent terminals running: vite dev server, CI watch"/)
+  const mine = mark({ terminals: [term()], bgShells: [shell()] })
+  assert.match(mine, /data-thread-terminal-mark="running"/)
+  assert.match(mine, /text-shell/)
+  assert.match(mine, /title="Terminal running: npm run dev · 1 agent terminal running: vite dev server"/)
+  const asking = mark({ terminals: [term({ awaitingInput: true, command: "npm login" })], bgShells: [] })
+  assert.match(asking, /data-thread-terminal-mark="prompt"/)
+  assert.match(asking, /text-attention/)
+  assert.match(asking, /title="Terminal waiting for input: npm login"/)
+  // A shell the OS says nobody holds is not counted as running.
+  assert.equal(mark({ bgShells: [shell({ state: "stale" })] }), "")
+})

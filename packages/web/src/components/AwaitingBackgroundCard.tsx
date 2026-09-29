@@ -26,8 +26,8 @@
 // and the parent genuinely resumes; measured 15/15 times on a live worker thread, with idle windows as
 // short as 0.13s. This card is what makes that alternation legible.)
 import { Fragment, useEffect, useState, type ReactNode } from "react"
-import { Bot, ChevronRight, CircleAlert, CircleCheck, CircleDashed, CircleDot, CircleSlash, CircleX, Clock, GitMerge, GitPullRequestClosed, Hourglass, TerminalSquare } from "lucide-react"
-import type { AwaitingHint, GithubIssueStatus, GithubWatchStatus, ThreadView, ThreadWatchView } from "@frizz/shared"
+import { Bot, ChevronRight, CircleAlert, CircleCheck, CircleDashed, CircleDot, CircleSlash, CircleX, Clock, GitMerge, GitPullRequestClosed, Hourglass, SquareTerminal, TerminalSquare } from "lucide-react"
+import type { AwaitingHint, GithubIssueStatus, GithubWatchStatus, ThreadTerminal, ThreadView, ThreadWatchView } from "@frizz/shared"
 import { awaitingFenceTitle, isDirectSubAgent } from "@frizz/shared"
 import { githubRefUrl } from "../lib/githubRef.ts"
 import { noteGithubRefs } from "../lib/githubHovercards.ts"
@@ -36,7 +36,7 @@ import { compactElapsedSince, formatCompactElapsed } from "../lib/durationLabels
 import { shellBudgetLabel } from "../lib/shellBudget.ts"
 import { useNowMs } from "../lib/liveClock.ts"
 import { useMarkdownHtml } from "../lib/useMarkdown.ts"
-import { pushBackgroundShellDrawer, pushSubAgentDrawer, showToast } from "../store.ts"
+import { pushBackgroundShellDrawer, pushSubAgentDrawer, pushTerminalDrawer, showToast } from "../store.ts"
 import { rpc } from "../api/rpc.ts"
 import { useThreadApi } from "../api/threadApi.tsx"
 import { stopBackgroundShells } from "../lib/dismissChildOp.ts"
@@ -448,7 +448,7 @@ export function WaitRow({ mark, name, status, onOpen, onPrewarm, href, ghRef, ti
    *  is right, because the whole row is the link. */
   ghRef?: string
   title?: string
-  testKind: "github" | "shell" | "agent" | "timer" | "file"
+  testKind: "github" | "shell" | "terminal" | "agent" | "timer" | "file"
   testId: string
 }) {
   const tree = indent !== undefined
@@ -632,7 +632,7 @@ function ShellWatchRow({ watch, thread, slug, now }: {
     <WaitRow
       testKind="shell"
       testId={watch.target}
-      mark={<TerminalSquare size={12} className={`${ON_CAP} text-shell`} />}
+      mark={<Bot size={12} className={`${ON_CAP} text-shell`} />}
       name={watch.target}
       title={watch.target}
       status={elapsed ? `running · ${elapsed}` : "running"}
@@ -640,9 +640,10 @@ function ShellWatchRow({ watch, thread, slug, now }: {
   )
 }
 
-/** A running background shell as a row — the declared-watch row above once its target resolved, and
- *  the fullscreen rail's row for EVERY running shell, declared or not (a dev server the worker walked
- *  away from is still what is going on in the thread). */
+/** A running AGENT TERMINAL as a row — the declared-watch row above once its target resolved, and the
+ *  fullscreen rail's row for EVERY running one, declared or not (a dev server the worker walked away from
+ *  is still what is going on in the thread). The bot is the owner mark the ops strip gives the same row
+ *  (ThreadTerminals.tsx ProcessRow); a human terminal's row beside it wears the terminal square. */
 export function BgShellRow({ shell, slug, now, testId }: {
   shell: ThreadView["bgShells"][number]
   slug: string
@@ -650,20 +651,36 @@ export function BgShellRow({ shell, slug, now, testId }: {
   testId?: string
 }) {
   const elapsed = compactElapsedSince(shell.startedAt, now)
-  // A CODEX shell has an id (its processId) but no readable output — codex keeps that inside its own
-  // session — so the row states its wait and declines the drill-in rather than opening a drawer that
-  // could only report "unavailable". Same parting of the two affordances as the ops strip.
-  const openable = shell.id && !shell.outputUnavailable
+  // Every row with an id opens the drawer — a Codex exec's too. Codex keeps that exec's output inside its
+  // own session, and the drawer says so, but its command, its folder and its Stop are all real.
+  const openable = Boolean(shell.id)
   return (
     <WaitRow
       testKind="shell"
       testId={testId ?? shell.id ?? shell.label}
-      mark={<TerminalSquare size={12} className={`${ON_CAP} text-shell`} />}
+      mark={<Bot size={12} className={`${ON_CAP} text-shell`} />}
       name={shell.label}
       onOpen={openable ? () => pushBackgroundShellDrawer(slug, shell.id!, { label: shell.label, startedAt: shell.startedAt }) : undefined}
-      title={openable ? `Read this shell's output — running for ${elapsed}` : shell.label}
+      title={openable ? `Open agent terminal — running for ${elapsed}` : shell.label}
       // The remaining budget where one was declared (lib/shellBudget.ts); an unbudgeted shell has none.
       status={[elapsed ? `running · ${elapsed}` : "running", shellBudgetLabel(shell.budgetEndsAt, now)].filter(Boolean).join(" · ")}
+    />
+  )
+}
+
+/** One of YOUR terminals, running or waiting at a prompt, as a rail row — the human twin of BgShellRow. */
+export function TermWaitRow({ terminal, slug, now }: { terminal: ThreadTerminal; slug: string; now: number }) {
+  const prompting = terminal.awaitingInput === true
+  const elapsed = compactElapsedSince(terminal.startedAt, now)
+  return (
+    <WaitRow
+      testKind="terminal"
+      testId={terminal.id}
+      mark={<SquareTerminal size={12} className={`${ON_CAP} ${prompting ? "text-attention" : "text-shell"}`} />}
+      name={terminal.command}
+      onOpen={() => pushTerminalDrawer(slug, terminal.id, { label: terminal.command })}
+      title={`Open your terminal — ${terminal.command}`}
+      status={prompting ? <span className="text-attention">waiting for input</span> : elapsed ? `running · ${elapsed}` : "running"}
     />
   )
 }

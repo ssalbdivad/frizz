@@ -5,8 +5,8 @@ import { useVirtualizer } from "@tanstack/react-virtual"
 import { AlertTriangle, ArrowDown, ArrowUp, Bot, Check, ChevronRight, FileText, HelpCircle, Hourglass, KeyRound, Loader2, TerminalSquare, X } from "lucide-react"
 import { parseRecurringPrompt, questionFencesLive } from "@frizz/shared"
 import type { AskQuestion, AwaitingHint, BgShellView, PendingAsk, RegisteredQuestionView, SubAgentView, ThreadView as ThreadViewData, TranscriptEdit, TranscriptMessage, TranscriptPart, TranscriptTodo, TranscriptToolCall } from "@frizz/shared"
-import { store, threadBySlug, pushDrawer, pushSubAgentDrawer, pushBackgroundShellDrawer, showToast } from "../store.ts"
-import { useBackgroundShellLines, useBoard, useProjectDir, useTranscript, type ChatMessage, type TranscriptData } from "../hooks.ts"
+import { store, threadBySlug, pushDrawer, pushSubAgentDrawer, showToast } from "../store.ts"
+import { useBoard, useProjectDir, useTranscript, type ChatMessage, type TranscriptData } from "../hooks.ts"
 import { rpc } from "../api/rpc.ts"
 import { lastActiveLabelAt } from "../groups.ts"
 import { stripFrontmatter } from "../lib/markdown.ts"
@@ -60,10 +60,9 @@ import { ToolDisclosureHeader } from "./ToolDisclosureHeader.ts"
 import { subAgentProfileCell } from "../lib/subAgentProfile.ts"
 import { FOREGROUND_MARK_AFTER_MS, foregroundToolIsRunning, hasRunningToolIndicator, isPendingForegroundTool, liveBackgroundOperationState } from "../lib/operationIndicators.ts"
 import { formatRuntimeElapsed, formatToolDuration } from "../lib/durationLabels.ts"
-import { shellBudgetReading } from "../lib/shellBudget.ts"
 import { githubRefUrl } from "../lib/githubRef.ts"
 import { useNowMs } from "../lib/liveClock.ts"
-import { CHILD_OPEN_TITLE, CHILD_QUIET_SHELL_TITLE, CHILD_RESTED_DOT_CLASS, CHILD_RESTED_TITLE, CHILD_STALE_DOT_CLASS, CHILD_STALE_TITLE, checksCounterLabel, childOpSubtree, issueCounterLabel, mergeBackgroundShells, shellLinesLabel, visibleChildOps, type TranscriptShellRecord } from "../lib/childOps.ts"
+import { CHILD_OPEN_TITLE, CHILD_QUIET_SHELL_TITLE, CHILD_RESTED_DOT_CLASS, CHILD_RESTED_TITLE, CHILD_STALE_DOT_CLASS, CHILD_STALE_TITLE, checksCounterLabel, childOpSubtree, issueCounterLabel, visibleChildOps, type TranscriptShellRecord } from "../lib/childOps.ts"
 import { childOpDismisser } from "../lib/dismissChildOp.ts"
 import { agentCompletionCall, subAgentCompletionOutcome } from "../lib/subAgentCompletion.ts"
 import { agentReading } from "../lib/agentReading.ts"
@@ -98,7 +97,8 @@ import { CopyTerminalCommandButton, useCopyTerminalCommand } from "./ExternalTer
 import { SignInModal } from "./SignInModal.tsx"
 import { PROVIDER_LABEL } from "../lib/signIn.ts"
 import { ThreadMenu } from "./ThreadMenu.tsx"
-import { ThreadTerminalsStrip } from "./ThreadTerminals.tsx"
+import { ThreadProcessStrip } from "./ThreadTerminals.tsx"
+import { threadProcesses } from "../lib/threadProcesses.ts"
 import { takeFullscreenEnterAnchor } from "../lib/fullscreenHandoff.ts"
 import { prependEarlierPage } from "../lib/transcriptPagination.ts"
 import { buildVirtualTranscriptMessageRows, earlierLoadGate, nextTailFollow, TAIL_FOLLOW_PX, type VirtualTranscriptMessageRow } from "../lib/virtualTranscript.ts"
@@ -4063,33 +4063,18 @@ export function BackgroundOpsStrip({
   // `depth` as it always has, so the field is optional here rather than back-filled onto every row.
   const agents: readonly (SubAgentView & { displayDepth?: number })[] =
     !includeAgents ? [] : parentAgentId ? childOpSubtree(allAgents, parentAgentId) : allAgents
-  // A single shell arrives through BOTH provider board telemetry and transcript projection; they are
-  // reconciled on the launch tool_use id (see mergeBackgroundShells for why label+startedAt could not).
-  const shells = parentAgentId ? [...transcriptShells] : mergeBackgroundShells(thread?.bgShells ?? [], transcriptShells)
+  // EVERY PROCESS on the thread — the agent's shells (board telemetry and transcript projection, reconciled
+  // on the launch id: see mergeBackgroundShells) and the human's own terminals — as ONE strip of rows
+  // (ThreadTerminals.tsx ThreadProcessStrip). Scoped to a sub-agent, it lists that child's own shells and
+  // none of the human's: nobody opens a terminal on a sub-agent.
+  const processThread = thread ?? { id: slug, bgShells: [], watches: [] }
+  const processes = threadProcesses(processThread, transcriptShells, { scopedToSubAgent: Boolean(parentAgentId), now: Date.now() })
   // PR WATCHERS the thread has parked on. Thread-wide only: a sub-agent cannot park on a fence, so the
   // drawer's scoped reading ("the ops running underneath THIS child") has none by construction, and
   // listing the parent's here would credit the child with its parent's wait.
   const watchers = parentAgentId ? [] : (thread?.watches ?? []).filter((w) => w.kind === "github")
   const links = parentAgentId ? [] : thread?.links ?? []
-  // The human's own TERMINALS on this thread (ThreadTerminals.tsx), thread-wide only: a sub-agent's
-  // drawer lists what that child launched, and nobody opens a terminal on a sub-agent.
-  const terminals = parentAgentId ? [] : thread?.terminals ?? []
-  const total = agents.length + shells.length + watchers.length + terminals.length
-  // IS A WATCHER ARMED ON THIS SHELL? A `shell` watch gets NO row of its own — it is not a second thing
-  // running, it is a property of the row already here, and drawing both listed one object twice
-  // (maintainer 2026-08-14: "we do not need to redundantly list out background shells inside of the
-  // watcher icon menu"). So the fact rides the shell's own row, in its tooltip.
-  //
-  // It is worth saying at all because the runtime's own completion notification does NOT survive the
-  // worker coming to rest: measured over ~/.claude/projects, 1601 background shells whose worker rested
-  // before the shell finished, and 1191 of them never received a notification even though the session
-  // provably kept working for minutes-to-days afterwards. An armed watcher is what closes that, so
-  // "will this thread actually hear about this" is a real question about a shell row, with two answers.
-  const watchedTargets = new Set(
-    (thread?.watches ?? []).filter((w) => w.kind === "shell" && w.state === "armed").map((w) => w.target),
-  )
-  const isWatched = (s: { id?: string; taskId?: string; label: string }) =>
-    watchedTargets.has(s.taskId ?? "") || watchedTargets.has(s.id ?? "") || watchedTargets.has(s.label)
+  const total = agents.length + processes.length + watchers.length
   // This is intentionally independent of transcript cards: it sits immediately below the affected
   // prompt box so a resting worker that owns a live shell still reads as active at a glance. Do not
   // add a thread-wide “Running” marker here: a foreground turn and several independent children are
@@ -4100,12 +4085,6 @@ export function BackgroundOpsStrip({
     const id = setInterval(() => force((n) => n + 1), 30_000)
     return () => clearInterval(id)
   }, [total])
-  // THE LIVE COUNTER on each shell row. Polled here rather than pushed on the board: output growth is a
-  // file fact the board's derived signature does not read, and the reading is wanted at seconds
-  // granularity — pushing that for every thread on the machine is churn nobody asked for (the same
-  // reason raw token counts are kept out of that signature). Scoped to the rows this strip is actually
-  // rendering, so it costs nothing when the view is closed. Hooks run before the early return below.
-  const shellLines = useBackgroundShellLines(slug, shells.flatMap((s) => (s.id && !s.outputUnavailable ? [s.id] : [])))
   if (total === 0 && links.length === 0) return null
   return (
     <div className={`flex flex-col gap-0.5 ${className}`} data-background-ops>
@@ -4127,33 +4106,9 @@ export function BackgroundOpsStrip({
           onDismiss={childOpDismisser(slug, s)}
         />
       ))}
-      {visibleChildOps(shells, "sheet").map((s, i) => (
-        <ChildOpRow
-          key={`s${i}`}
-          kind="SHELL"
-          label={s.label}
-          state={s.state}
-          density="sheet"
-          startedAt={s.startedAt}
-          // Absent until the first poll answers, and permanently absent for a shell whose output frizz
-          // cannot read — never a fabricated 0 for a number we do not have. Beside it, the REMAINING
-          // BUDGET where the worker declared one ("45m left", lib/shellBudget.ts) — a shell with none
-          // runs until it is stopped, so it reads its age alone.
-          counter={s.id ? shellLinesLabel(shellLines.get(s.id)) : undefined}
-          counterTitle="Lines of output so far — open the row to read them"
-          budget={shellBudgetReading(s.budgetEndsAt, Date.now())}
-          // A codex shell has an id (its `processId`, which is what its × addresses) but no readable
-          // output — codex keeps that inside its own session. So the two affordances part company
-          // here: the row still stops, and it renders non-interactive rather than opening a drawer
-          // that could only report "unavailable".
-          onOpen={s.id && !s.outputUnavailable ? () => pushBackgroundShellDrawer(slug, s.id!, { label: s.label, startedAt: s.startedAt }) : undefined}
-          onDismiss={childOpDismisser(slug, s, "SHELL")}
-          // Overriding the row's default open-tooltip only when there IS a watcher: an unwatched shell
-          // keeps exactly the row it has always had, so the marker is the exception rather than a new
-          // reading every row has to carry.
-          title={isWatched(s) ? `${s.label}\nWatched — this thread wakes when it finishes` : undefined}
-        />
-      ))}
+      {/* EVERY PROCESS — the agent's terminals and yours, one row shape, one label column, one drawer. The
+          line counter on the agent's rows is polled inside (the page's project, which a drawer always is). */}
+      <ThreadProcessStrip thread={processThread} surface="drawer" transcriptShells={transcriptShells} scopedToSubAgent={Boolean(parentAgentId)} />
       {/* THE PR WATCHERS, last, because they are the least likely to change while you are looking: a
           sub-agent and a shell are running RIGHT NOW, and a watcher is waiting on somebody else.
           They are always `running` — a parked watcher IS live, and the row vanishes the moment the
@@ -4182,9 +4137,6 @@ export function BackgroundOpsStrip({
           onOpen={() => window.open(githubRefUrl(w.target, w.subject === "issue" ? "issue" : "pull") ?? `https://github.com/${w.target.replace("#", w.subject === "issue" ? "/issues/" : "/pull/")}`, "_blank", "noreferrer,noopener")}
         />
       ))}
-      {/* THE TERMINALS, after everything the agent launched: the human opened these, and a finished one
-          stays listed with its exit until it is removed — the one kind of row here that outlives its run. */}
-      {thread && terminals.length > 0 && <ThreadTerminalsStrip thread={thread} surface="drawer" />}
       <ThreadLinks links={links} />
     </div>
   )

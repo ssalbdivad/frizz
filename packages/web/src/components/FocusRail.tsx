@@ -9,10 +9,11 @@ import { prewarmLocalFile } from "../lib/localFileQuery.ts"
 import { useNowMs } from "../lib/liveClock.ts"
 import { prefs } from "../lib/prefs.ts"
 import { PRIMER } from "../lib/primer.ts"
-import { AgentRow, BgShellRow, GithubWatchRow, ON_CAP, TimerRow, WaitGrid, WaitRow, liveAgents, type WaitGroup } from "./AwaitingBackgroundCard.tsx"
+import { threadProcesses } from "../lib/threadProcesses.ts"
+import { AgentRow, BgShellRow, GithubWatchRow, ON_CAP, TermWaitRow, TimerRow, WaitGrid, WaitRow, liveAgents, type WaitGroup } from "./AwaitingBackgroundCard.tsx"
 
 // THE FULLSCREEN PAGE'S OPERATIONAL RAIL — what is going on in this thread, listed beside the transcript
-// (maintainer 2026-08-28): its live sub-agents, its running background shells, the pull requests and
+// (maintainer 2026-08-28): its live sub-agents, its running terminals (the agent's and yours), the pull requests and
 // timers it is watching, and the files its worker has edited.
 //
 // IT IS THE AWAITING CARD'S TABLE, one surface over. Every row here is the card's own row component —
@@ -130,7 +131,9 @@ export function FocusRail({ thread }: { thread: ThreadView }) {
   const transcript = useTranscript(thread.id, { poll: false })
   const files = transcript.data?.editedFiles ?? []
   const agents = liveAgents(thread)
-  const shells = (thread.bgShells ?? []).filter((s) => s.state === "running")
+  // EVERY TERMINAL ON THE THREAD that is running or waiting on you — the agent's and yours, in the one order
+  // every surface lists them (lib/threadProcesses.ts): a prompt first, then the live ones oldest first.
+  const terminals = threadProcesses(thread, [], { now }).filter((p) => p.state === "prompt" || p.state === "running")
   const github = (thread.watches ?? []).filter((w) => w.kind === "github" && w.state === "armed")
   const prs = github.filter((w) => w.subject !== "issue")
   const issues = github.filter((w) => w.subject === "issue")
@@ -142,7 +145,12 @@ export function FocusRail({ thread }: { thread: ThreadView }) {
   // preference (lib/prefs.ts), so it holds across threads and reloads.
   const groups: WaitGroup[] = [
     { head: "Sub-agents", rows: agents.map((a) => <AgentRow key={a.id ?? a.label} agent={a} slug={thread.id} now={now} />) },
-    { head: "Background shells", rows: shells.map((s) => <BgShellRow key={s.id ?? s.label} shell={s} slug={thread.id} now={now} />) },
+    {
+      head: "Terminals",
+      rows: terminals.map((p) => (p.terminal
+        ? <TermWaitRow key={p.key} terminal={p.terminal} slug={thread.id} now={now} />
+        : <BgShellRow key={p.key} shell={p.shell!} slug={thread.id} now={now} />)),
+    },
     { head: "Pull requests", rows: prs.map((w) => <GithubWatchRow key={w.id} watch={w} />) },
     { head: "Issues", rows: issues.map((w) => <GithubWatchRow key={w.id} watch={w} />) },
     { head: "Timers", rows: timers.map((w) => <TimerRow key={w.id} watch={w} now={now} />) },

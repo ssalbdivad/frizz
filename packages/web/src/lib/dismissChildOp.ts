@@ -21,7 +21,9 @@ import { showToast } from "../store.ts"
 // any project on a page that names at most one, so it passes its scope's client (api/threadApi.tsx) —
 // else the × on another project's `fix-auth` child would stop the focused project's.
 export function dismissChildOp(slug: string, id: string, kind: "AGENT" | "SHELL" = "AGENT", api: Api = rpc): void {
-  const noun = kind === "SHELL" ? "Background shell" : "Sub-agent"
+  // "Agent terminal", the name its row and its drawer use (ThreadTerminals.tsx), so the × and the drawer's
+  // Stop announce the same thing in the same words.
+  const noun = kind === "SHELL" ? "Agent terminal" : "Sub-agent"
   api.stopBackgroundOp({ slug, id })
     .then(({ stopped, note, descendantsStopped }) => {
       // Only the KILL is worth announcing. A clear needs no toast — the row leaving IS the feedback.
@@ -37,7 +39,7 @@ export function dismissChildOp(slug: string, id: string, kind: "AGENT" | "SHELL"
       // told about leaves it waiting on a watcher that will never report — so "the worker was told" is
       // the half of this action the operator cannot otherwise verify. A sub-agent needs no such line:
       // the provider injects its own stop notification (backend/_live_shell_stop_notice.mts).
-      if (kind === "SHELL") return showToast("Background shell stopped — the worker was told")
+      if (kind === "SHELL") return showToast("Agent terminal stopped — the agent was told")
       showToast(descendantsStopped > 0 ? `Sub-agent and ${descendantsStopped} descendant${descendantsStopped === 1 ? "" : "s"} stopped` : "Sub-agent stopped")
     })
     .catch((error: unknown) => {

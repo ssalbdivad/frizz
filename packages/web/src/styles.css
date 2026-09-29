@@ -528,6 +528,24 @@ body {
      a 1.5px ring, and stacking the halo outside it would make the STATIC mark the largest of the three. */
   .frizz-live-dot-quiet { animation: none; opacity: 1; background: transparent; box-shadow: none; border: 1.5px solid var(--quiet-dot); }
 }
+/* THE OWNER GLYPH ON A PROCESS ROW (ThreadTerminals.tsx ProcessRow) — a bot or a terminal square in the
+   9px mark slot, where these dots used to sit, carrying the same liveness by the same motion: running
+   pulses on the live dot's own 1.25s cadence (tone only — 1 → 0.62 → 1, the dot's trough), quiet breathes
+   on the quiet dot's 2.6s (0.4 ↔ 0.9). Opacity alone, never a scale: the glyph's size is what says which
+   owner it is. Colour comes from the row (`text-shell`), so these carry motion and nothing else. */
+.frizz-live-glyph {
+  animation: frizz-live-glyph-pulse 1.25s ease-in-out infinite;
+}
+@keyframes frizz-live-glyph-pulse {
+  50% { opacity: 0.62; }
+}
+.frizz-live-glyph-quiet {
+  animation: frizz-live-breathe 2.6s ease-in-out infinite;
+}
+@media (prefers-reduced-motion: reduce) {
+  .frizz-live-glyph,
+  .frizz-live-glyph-quiet { animation: none; opacity: 1; }
+}
 /* NO "FINISHED" DOT EITHER. `.frizz-live-dot-done` briefly filled the liveness slot on every settled
    background/dispatch card so they stayed findable in a scrolled transcript. Removed 2026-08-01
    ("remove the status indicator entirely for a sub-agent or background shell that has completed"): the
