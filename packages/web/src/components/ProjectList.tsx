@@ -378,7 +378,7 @@ function ProjectRow({
             the baseline and the translate lifts its centre to the cap band's, computed by the browser from
             the resolved font (the same correction ProjectFilter.tsx gives its glyphs); lucide's list-filter
             ink is symmetric in its box, so the box centre is the ink centre. */}
-        <span className={`flex min-w-0 flex-1 items-baseline gap-1.5 text-[12.5px] leading-[19px] ${busy ? "font-medium text-fg/90" : "text-fg/75"}`}>
+        <span className={`flex min-w-0 flex-1 items-baseline gap-1.5 text-[13px] leading-[19px] font-semibold ${busy ? "text-fg" : "text-fg/70"}`}>
           <span className="min-w-0 truncate">{project.name}</span>
           {filtered && (
             <span data-xq-project-filtered title="The queue shows only this project" className="flex shrink-0 self-baseline translate-y-[calc(5.5px_-_0.5cap)] text-muted-60">
