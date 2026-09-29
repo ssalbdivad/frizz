@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react"
+import { useEffect, useId, useRef, useState } from "react"
 import { useMutation } from "@tanstack/react-query"
 import type { ThreadView } from "@frizz/shared"
 import { rpc } from "../api/rpc.ts"
@@ -29,7 +29,12 @@ export function ThreadTitle({ thread, className = "" }: { thread: ThreadView; cl
   const renameTitle = useMutation({ mutationFn: (title: string) => rpc.renameThread({ slug, title }) })
   const [editing, setEditing] = useState(false)
   const [draft, setDraft] = useState("")
+  // Why the last commit was refused — above all a name another open thread already carries (names are
+  // never duplicated; server thread-names.ts). Shown INLINE beside the reopened editor, not in a toast
+  // that leaves with the reason while the draft is still in the box; cleared by the next keystroke.
+  const [refusal, setRefusal] = useState<string>()
   const inputRef = useRef<HTMLInputElement>(null)
+  const refusalId = useId()
   useEffect(() => {
     if (!editing) return
     const frame = requestAnimationFrame(() => {
@@ -43,6 +48,7 @@ export function ThreadTitle({ thread, className = "" }: { thread: ThreadView; cl
   useEffect(() => {
     setEditing(false)
     setDraft("")
+    setRefusal(undefined)
   }, [slug])
   // Manual rename is registry metadata for either backend; the AI rename is Claude-only and gated
   // inside AiRenameButton.
@@ -51,23 +57,26 @@ export function ThreadTitle({ thread, className = "" }: { thread: ThreadView; cl
   function cancel(): void {
     setEditing(false)
     setDraft("")
+    setRefusal(undefined)
   }
   function commit(): void {
     const title = threadTitleToCommit(draft, shown)
     setEditing(false)
     if (!title) {
       setDraft("")
+      setRefusal(undefined)
       return
     }
     renameTitle.mutate(title, {
       onSuccess: () => {
         setDraft("")
+        setRefusal(undefined)
         showToast("Thread renamed")
       },
       onError: (error) => {
         setDraft(title)
         setEditing(true)
-        showToast(error instanceof Error ? error.message : "Could not rename thread")
+        setRefusal(error instanceof Error ? error.message : "Could not rename thread")
       },
     })
   }
@@ -82,7 +91,12 @@ export function ThreadTitle({ thread, className = "" }: { thread: ThreadView; cl
           aria-label="Thread title"
           value={draft}
           maxLength={THREAD_TITLE_MAX_LENGTH}
-          onChange={(event) => setDraft(event.target.value)}
+          aria-invalid={refusal ? true : undefined}
+          aria-describedby={refusal ? refusalId : undefined}
+          onChange={(event) => {
+            setDraft(event.target.value)
+            setRefusal(undefined)
+          }}
           onBlur={commit}
           // Every key stops here. Above this input sit handlers that would otherwise read the
           // editor's keys as their own: the queue card's root submits staged answers on an Enter from
@@ -104,7 +118,7 @@ export function ThreadTitle({ thread, className = "" }: { thread: ThreadView; cl
           // and `-my-px` the border, so the text stays where the button drew it (a 1px shift, the
           // border's own width) and the row keeps its height while the editor is open. The drawer's
           // editor used to jump the text 8px right and the "Last active" line 3px down.
-          className={`min-w-0 flex-1 -mx-1.5 -my-px rounded-md border border-border bg-elevated px-1.5 py-0 font-semibold text-[15px] text-fg outline-none focus:border-accent ${className}`}
+          className={`min-w-0 flex-1 -mx-1.5 -my-px rounded-md border bg-elevated px-1.5 py-0 font-semibold text-[15px] text-fg outline-none ${refusal ? "border-danger" : "border-border focus:border-accent"} ${className}`}
         />
       ) : canRename ? (
         <button
@@ -124,6 +138,17 @@ export function ThreadTitle({ thread, className = "" }: { thread: ThreadView; cl
         <div className={`min-w-0 max-w-full shrink truncate px-0.5 -mx-0.5 font-semibold text-[15px] ${className}`} title={shown}>
           {shown}
         </div>
+      )}
+      {editing && refusal && (
+        // Beside the box, not under it: the header's second line sits right below, and the row keeps its
+        // height. Truncated with the whole reason on hover, since the box needs most of the width (the
+        // server leads with the taken name, so the cut falls on the words that matter least).
+        // `ml-1.5` puts back what the box's own `-mx-1.5` takes from the row's `gap-2`: without it the
+        // message's ink sat 2.9px from the red border (dsf 4, sans), where every other pair in this row
+        // reads 8px.
+        <span id={refusalId} role="alert" data-rename-refusal className="ml-1.5 min-w-0 max-w-[50%] shrink truncate text-[11px] leading-tight text-danger" title={refusal}>
+          {refusal}
+        </span>
       )}
       <AiRenameButton thread={thread} hidden={editing} />
     </div>

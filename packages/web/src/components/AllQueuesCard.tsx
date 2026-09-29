@@ -40,6 +40,7 @@ import { useMarkdownHtml } from "../lib/useMarkdown.ts"
 import { IN_PLACE_OPEN_STATE, openThread, showToast, store } from "../store.ts"
 import { crossProjectHref, innerPath, projectSlug } from "../lib/base-path.ts"
 import { QueueDismissContext } from "./ChatView.tsx"
+import { ThreadStatusLine } from "./ThreadStatusLine.tsx"
 import { Composer } from "./Composer.tsx"
 import { InteractionStack } from "./InteractionCards.tsx"
 import { BoxSpinner } from "./BoxSpinner.tsx"
@@ -288,6 +289,8 @@ export const AllQueuesCard = memo(function AllQueuesCard({
                     className="min-w-0 truncate"
                   />
                 )}
+                {/* What the thread is doing NOW, beside the name that stays put (ThreadStatusLine). */}
+                <ThreadStatusLine status={thread.statusLine} lead={<span aria-hidden>·</span>} />
               </div>
             </div>
             <div className="flex shrink-0 items-center gap-0.5">
