@@ -7,7 +7,7 @@ import {
 import { homedir } from "node:os"
 import { dirname, join } from "node:path"
 import watcher from "@parcel/watcher"
-import type { BoardSnapshot, ClaudeModel, ThreadView, RuntimeState, ThreadRecurringPrompt, ProviderError } from "@frizz/shared"
+import type { BoardSnapshot, ClaudeModel, ThreadTerminal, ThreadView, RuntimeState, ThreadRecurringPrompt, ProviderError } from "@frizz/shared"
 import { AskedQuestionSchema, BoardDiffer, PermissionMode, SnoozeUntil, ThreadSlug, isDirectSubAgent, questionAnswerMessage, questionRepliedPast, questionsCancelledWakeMessage, type AskedQuestion, type PermissionMode as PermissionModeValue, type QuestionAnswer, type QuestionDismissal } from "@frizz/shared"
 import type { Bus } from "./bus.ts"
 import { workDirOf, type Project } from "./project.ts"
@@ -2056,8 +2056,31 @@ export interface BoardManagerDeps {
   claudeBrokerDaemonAlive?: ClaudeBrokerLivenessReader
   /** The pinned Claude runtime's resolved catalogue, read synchronously per build (peekClaudeModels). */
   claudeModels?: () => readonly ClaudeModel[] | undefined
-  // The project's terminal command threads (command-threads.ts), already shaped as rows.
-  commandThreads?: () => ThreadView[]
+  // Every open thread terminal (thread-terminals.ts), grouped by the thread it belongs to.
+  threadTerminals?: () => Map<string, ThreadTerminal[]>
+}
+
+/**
+ * Put a thread's TERMINALS on its row, and let one waiting at a prompt queue it.
+ *
+ * A terminal has no row or card of its own (thread-terminals.ts), so the one moment it needs the human —
+ * `npm publish` stopped at "Enter one-time password:", an ssh passphrase, a `[y/N]` — can only reach the
+ * queue through its thread. That is the same trade the silent-turn rule makes (quietTurnSince): the
+ * thread queues whatever its own runtime is doing, since the process is alive and will wait forever, and
+ * a spurious card costs one click where a missed prompt stalls a publish for hours. Two gates: a thread
+ * filed under Done queues nothing (its terminals were stopped with it, and the server clears `needsYou`
+ * on an archived row everywhere), and the human's own wall-clock snooze still parks it, as it parks a
+ * silent turn.
+ */
+export function withThreadTerminals(t: ThreadView, terminals: readonly ThreadTerminal[] | undefined): ThreadView {
+  if (!terminals || terminals.length === 0) return t
+  const prompting = t.state !== "archived" && t.snoozedUntil === undefined && terminals.some((terminal) => terminal.awaitingInput === true)
+  return { ...t, terminals: [...terminals], ...(prompting ? { needsYou: true } : {}) }
+}
+
+/** The terminal a thread is queued on, when one is: the prompt the card and the notification name. */
+export function promptingTerminal(t: Pick<ThreadView, "terminals">): ThreadTerminal | undefined {
+  return t.terminals?.find((terminal) => terminal.awaitingInput === true)
 }
 
 export function createBoard(
@@ -2098,18 +2121,17 @@ export function createBoard(
   // server doesn't fire a storm for every historical resting thread already in the queue.
   let notifyPrimed = false
   // When each queued thread entered the queue — the queue's order key (queue-clock.ts), persisted on the
-  // session row or the command thread's row.
+  // session row.
   const queueClock = createQueueClock({
     load: () => {
       const alive = storage.getSetting(QUEUE_CLOCK_ALIVE_SETTING)
-      const rows = [...storage.allSessions(), ...storage.listCommandThreads()]
       return {
-        stamps: new Map(rows.flatMap((row) => (row.queued_at ? [[row.slug, row.queued_at] as const] : []))),
+        stamps: new Map(storage.allSessions().flatMap((row) => (row.queued_at ? [[row.slug, row.queued_at] as const] : []))),
         ...(typeof alive === "string" ? { alive } : {}),
       }
     },
-    persists: (thread) => thread.kind === "session" || thread.kind === "command",
-    save: (thread, at) => (thread.kind === "command" ? storage.setCommandQueuedAt(thread.id, at) : storage.setQueuedAt(thread.id, at)),
+    persists: (thread) => thread.kind === "session",
+    save: (thread, at) => storage.setQueuedAt(thread.id, at),
     saveAlive: (at) => storage.setSetting(QUEUE_CLOCK_ALIVE_SETTING, at),
   })
 
@@ -2120,6 +2142,9 @@ export function createBoard(
   // raised by a pending approval the notification never mentioned). Read here, not carried on the
   // view: this runs once per queue ENTRY, never per rebuild.
   function needsYouBody(t: ThreadView): string | undefined {
+    // A thread queued by its terminal's prompt says so — its agent's last line is about something else.
+    const prompting = promptingTerminal(t)
+    if (prompting) return capLine(`Terminal waiting for input: ${prompting.command}`)
     if (t.actionableInteraction && t.sessionId) {
       try {
         const [first] = storage.interactions
@@ -2280,17 +2305,18 @@ export function createBoard(
       // So the client can expand a `~` a worker wrote in prose (see BoardSnapshot.homeDir).
       homeDir: homedir(),
     }
-    const sessionThreads = buildSessionThreads(assembledAtMs)
+    // Each thread's terminals ride its row (withThreadTerminals) — read once per build, like the registries.
+    const terminals = deps.threadTerminals?.()
+    const sessionThreads = buildSessionThreads(assembledAtMs).map((t) => withThreadTerminals(t, terminals?.get(t.id)))
     // REGISTERED ROWS ONLY reach these two, and that is the point rather than an oversight. A snooze
     // is a durable column on a row a foreign session does not have, and a needs-decision notification
     // is frizz telling you a WORKER is waiting on you — a terminal session is waiting on you in the
     // window you opened it in, and pushing a notification for it would be frizz claiming an ask it
     // neither received nor can answer.
-    const commandThreads = deps.commandThreads?.() ?? []
     // Foreign rows never queue (queuedThread), so they have no place in line to keep. Ahead of the notify
     // on purpose: the clock withholds an entry off a park (queue-clock.ts), and a withheld entry must not
     // notify either.
-    queueClock.stamp([...sessionThreads, ...commandThreads], assembledAtMs, {
+    queueClock.stamp(sessionThreads, assembledAtMs, {
       // A session reading is only vouched for once the tailer has PRIMED the row — folded its transcript,
       // or given up on one and flagged it missing — or when durable row state alone decided it (archived,
       // snoozed). A row the tailer has not reached, or has set up but not yet folded, reads `running` by
@@ -2307,7 +2333,9 @@ export function createBoard(
         t.kind === "session" && !t.archived && (t.runtime === "turn-idle" || t.runtime === "exited") &&
         (t.snoozedUntil === undefined || t.snoozePrompt !== undefined) && !heldByDelivery.has(t.id),
       // deriveNeedsYou's hard gates: a request the human must answer, a question, a crash, a limit pause.
+      // A terminal at a prompt is one too: only a person can type the answer, whatever the thread's park.
       urgent: (t) =>
+        promptingTerminal(t) !== undefined ||
         t.actionableInteraction === true || t.runtime === "perm-prompt" || t.pendingAsk !== undefined ||
         t.pendingQuestion === true || (t.questions?.length ?? 0) > 0 || t.crashed === true ||
         t.limitPause !== undefined || (t.providerError !== undefined && t.providerError.retrying !== true),
@@ -2315,13 +2343,15 @@ export function createBoard(
       // when someone acts on it). Every follow-up reaches the delivery ledger, and each router path that
       // writes one re-assembles the board before it returns, so one reading always sees it.
       humanOut: (t) => t.archived || t.snoozedUntil !== undefined || t.bgSnoozed === true || t.subAgentsSnoozed === true || heldByDelivery.has(t.id),
-      humanGate: (t) => t.actionableInteraction === true || t.runtime === "perm-prompt" || t.pendingAsk !== undefined,
+      // A terminal's prompt is one: the only thing that clears it is the human typing the answer.
+      humanGate: (t) =>
+        promptingTerminal(t) !== undefined || t.actionableInteraction === true || t.runtime === "perm-prompt" || t.pendingAsk !== undefined,
     })
     armSnoozeWake(sessionThreads, assembledAtMs, queueClock.nextEntryAt(assembledAtMs))
     notifyNeedsYou(sessionThreads)
     return {
       ...base,
-      threads: [...sessionThreads, ...buildForeignThreads(), ...commandThreads],
+      threads: [...sessionThreads, ...buildForeignThreads()],
       errors: [],
       warnings: [],
       errorItems: [],

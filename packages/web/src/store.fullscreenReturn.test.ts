@@ -35,8 +35,8 @@ test("a thread that is not queued returns to its drawer, as it always did", () =
   assert.deepEqual(returnFrom(thread({ runtime: "running" })), ["thread:fix-auth (routed)"])
 })
 
-test("a command returns to its terminal, not a chat drawer", () => {
-  assert.deepEqual(returnFrom(thread({ id: "term-1", kind: "command", needsYou: true })), ["terminal:term-1 (routed)"])
+test("a thread with a terminal on it still returns to its own drawer", () => {
+  assert.deepEqual(returnFrom(thread({ needsYou: true, terminals: [{ id: "term-1", command: "npm publish", cwd: "/repo", state: "running", awaitingInput: true, runId: 1, startedAt: "2026-09-29T10:00:00.000Z" }] })), ["thread:fix-auth (routed)"])
 })
 
 test("a return URL naming another thread pushes nothing", () => {

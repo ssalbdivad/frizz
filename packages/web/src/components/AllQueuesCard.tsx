@@ -37,7 +37,7 @@ import { parseAccountAlias } from "../lib/signIn.ts"
 import { TRANSCRIPT_META_LABEL_CLASS, transcriptMetaChevronClass } from "../lib/transcriptMetaLabels.ts"
 import { isPlainLeftClick } from "../lib/standaloneThreadRoute.ts"
 import { useMarkdownHtml } from "../lib/useMarkdown.ts"
-import { IN_PLACE_OPEN_STATE, openThread, showToast, store } from "../store.ts"
+import { IN_PLACE_OPEN_STATE, openThread, pushTerminalDrawer, showToast, store } from "../store.ts"
 import { crossProjectHref, innerPath, projectSlug } from "../lib/base-path.ts"
 import { QueueDismissContext } from "./ChatView.tsx"
 import { Composer } from "./Composer.tsx"
@@ -59,6 +59,7 @@ import { QuietTurnCard, showsQuietTurnCard } from "./QuietTurnCard.tsx"
 import { QueueShellStrip } from "./QueueShellStrip.tsx"
 import { SnoozeButton } from "./SnoozeButton.tsx"
 import { StateButton } from "./ThreadLifecycleFooter.tsx"
+import { focusedProject, ThreadTerminalsStrip } from "./ThreadTerminals.tsx"
 import { Tooltip } from "./Tooltip.tsx"
 import { BLOCK_RADIUS, BLOCK_RADIUS_INNER_BOTTOM, QUEUE_WRAP, TranscriptCard } from "./TranscriptCard.tsx"
 
@@ -384,6 +385,23 @@ export const AllQueuesCard = memo(function AllQueuesCard({
                 ? <TranscriptCard data-rested-card="working" label="Working" aside={<span className="block card-icon-offset"><BoxSpinner size={16} /></span>} />
                 : <RestedCard thread={thread} />)}
               {showsQuietTurnCard(thread) && <QuietTurnCard thread={thread} />}
+              {/* The thread's TERMINALS (ThreadTerminals.tsx): a line each, and — when one sits at a prompt,
+                  which is what queued this card — its live screen, so the answer is typed right here. A
+                  line opens the thread, then the terminal over it when the thread's project is the one in
+                  focus (the drawer stack is that project's); otherwise the thread's drawer carries it. */}
+              {thread.terminals && thread.terminals.length > 0 && (
+                <ThreadProjectScope projectId={project.id} projectDir={project.projectDir}>
+                  <ThreadTerminalsStrip
+                    thread={thread}
+                    surface="card"
+                    onOpen={(terminal) => {
+                      const here = focusedProject(project.slug)
+                      openInPlace(project, thread.id)
+                      if (here) pushTerminalDrawer(thread.id, terminal.id, { label: terminal.command })
+                    }}
+                  />
+                </ThreadProjectScope>
+              )}
             </div>
 
             {/* Keyed on the rest: an answered card keeps its slot while the card holds for the worker's

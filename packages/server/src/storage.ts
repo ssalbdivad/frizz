@@ -432,19 +432,29 @@ export interface PrWatchRow {
   cursor: string | null
 }
 
-/** A terminal command thread's definition and its latest run (command-threads.ts). */
+/** A thread terminal's definition and its latest run (thread-terminals.ts). The table and the type keep the
+ *  name the feature shipped under, terminal COMMAND THREADS (2026-09-23); `parent_slug` is what makes a
+ *  row a thread's terminal, and a row without one predates 2026-09-29 and is archived at boot. */
 export interface CommandThreadRow {
   slug: string
+  /** The thread the terminal belongs to. NULL only on a pre-2026-09-29 top-level command thread. */
+  parent_slug?: string | null
+  /** The line it runs; for an interactive shell (`shell` = 1), the shell's name. */
   command: string
+  /** The folder it runs in. NULL only on a pre-2026-09-29 row, which ran in the project root. */
+  cwd?: string | null
+  /** 1 ⇒ an interactive login shell rather than one command. */
+  shell?: number
   created_at: number
   started_at: number
   runs: number
   exited_at: number | null
   exit_code: number | null
   stopped: number
-  /** 'archived' once the human marks the finished run done; a restart reopens it. */
+  /** 'archived' once its thread is marked done (it leaves the thread's strip); a restart reopens it. */
   state: "open" | "archived"
-  /** When the thread last entered the queue — the board's queue clock, exactly as `session.queued_at`. */
+  /** The queue clock's stamp from when a command thread queued on its own. Unused since 2026-09-29: a
+   *  terminal waiting at a prompt queues its THREAD, whose `session.queued_at` keeps the place. */
   queued_at?: string | null
 }
 
@@ -761,19 +771,20 @@ export interface Storage {
   listThreadLinks(slug: string): ThreadLinkRow[]
   threadLinksBySlug(): Map<string, ThreadLinkRow[]>
   dropThreadLink(slug: string, id: string): boolean
-  insertCommandThread(row: { slug: string; command: string; createdAtMs: number }): void
+  insertCommandThread(row: { slug: string; parentSlug: string; command: string; cwd: string; shell: boolean; createdAtMs: number }): void
   listCommandThreads(): CommandThreadRow[]
-  /** A fresh run of an existing command: bumps `runs` and clears the previous outcome. */
-  /** A new run of the thread; `command` replaces the thread's command (a follow-up run), else it reruns it. */
+  /** A new run of the terminal: bumps `runs`, clears the previous outcome and reopens it. `command`
+   *  replaces its command (a follow-up line, which also makes a shell terminal a command one); absent,
+   *  it reruns what it ran. */
   restartCommandThread(slug: string, startedAtMs: number, command?: string): void
   recordCommandExit(slug: string, exit: { exitedAtMs: number; exitCode: number | null; stopped: boolean }): void
   /** Boot: every run with no recorded exit died with the previous server. */
   interruptRunningCommandThreads(exitedAtMs: number): void
   dropCommandThread(slug: string): boolean
-  /** Mark as done / reopen. False when no such command thread exists. */
-  setCommandThreadState(slug: string, state: "open" | "archived"): boolean
-  /** The queue clock's write for a command thread — see `setQueuedAt`. */
-  setCommandQueuedAt(slug: string, at: string | null): void
+  /** Its thread was marked done: file every one of its terminals away. Returns how many changed. */
+  archiveThreadTerminals(parentSlug: string): number
+  /** Its thread was forgotten: drop every one of its terminals. Returns how many went. */
+  dropThreadTerminals(parentSlug: string): number
   /** Register a watch, or return the armed one already covering this (thread, kind, target). Idempotent
    *  by that triple, so a worker re-registering the same wait after a wake gets one row, not two. */
   armThreadWatch(watch: { id: string; slug: string; kind: "shell" | "agent"; target: string; createdAtMs: number; expiresAtMs: number }): ThreadWatchRow
@@ -1352,11 +1363,13 @@ export const STORAGE_SCHEMA = `
       updated_at      INTEGER NOT NULL,
       PRIMARY KEY (project_id, thread_slug, shell_id)
     );
-    -- A TERMINAL COMMAND thread (2026-09-23): a shell command the human started from the prompt box's
-    -- Terminal tab, whose pty the control plane owns (command-threads.ts). Only the DEFINITION and the
-    -- last run's outcome are durable — the pty is a child of the server and dies with it, so a row whose
-    -- run never recorded an exit is one a restart interrupted, and boot says so rather than showing a
-    -- process that is not there. RUNS counts starts, so a restart is a new terminal to the browser.
+    -- A THREAD'S TERMINAL (thread-terminals.ts): a pty the control plane owns, opened on a thread and run
+    -- in the folder its agent works in. Named for what it shipped as on 2026-09-23 — a top-level TERMINAL
+    -- COMMAND thread from the prompt box's Terminal tab — and re-parented onto threads on 2026-09-29
+    -- (parent_slug, cwd, shell, all in the ALTER list below). Only the DEFINITION and the last run's
+    -- outcome are durable — the pty is a child of the server and dies with it, so a row whose run never
+    -- recorded an exit is one a restart interrupted, and boot says so rather than showing a process that
+    -- is not there. RUNS counts starts, so a restart is a new terminal to the browser.
     CREATE TABLE IF NOT EXISTS command_thread (
       project_id  TEXT NOT NULL,
       slug        TEXT NOT NULL,
@@ -1369,10 +1382,15 @@ export const STORAGE_SCHEMA = `
       exit_code   INTEGER,
       -- 1 ⇒ the human pressed Stop, so a non-zero code is not a failure worth colouring.
       stopped     INTEGER NOT NULL DEFAULT 0,
-      -- 'archived' once the human marks a finished run done (it leaves the threads band for Done).
+      -- 'archived' once its thread is marked done (it leaves the thread's terminals strip).
       state       TEXT NOT NULL DEFAULT 'open',
-      -- When the thread last entered the queue (queue-clock.ts); also in the ALTER list below.
+      -- A command thread's own queue stamp, from before 2026-09-29; unused since. Also in the ALTER list.
       queued_at   TEXT,
+      -- The thread the terminal belongs to, the folder it runs in, and 1 for an interactive shell. NULL
+      -- parent ⇒ a pre-2026-09-29 command thread. Also in the ALTER list below.
+      parent_slug TEXT,
+      cwd         TEXT,
+      shell       INTEGER NOT NULL DEFAULT 0,
       PRIMARY KEY (project_id, slug)
     );
 `
@@ -1408,6 +1426,11 @@ export function ensureStorageSchema(db: Database): void {
     // `command_thread.queued_at` (2026-09-24): the queue clock's stamp, as on `session` — a run at a
     // prompt stays queued across a restart, and the boot's interrupted exit must not re-date it.
     ["command_thread", "queued_at TEXT"],
+    // `command_thread.parent_slug` / `cwd` / `shell` (2026-09-29): a terminal belongs to a thread and
+    // runs in that thread's working folder, rather than being a top-level thread in the project root.
+    ["command_thread", "parent_slug TEXT"],
+    ["command_thread", "cwd TEXT"],
+    ["command_thread", "shell INTEGER NOT NULL DEFAULT 0"],
   ] as const) {
     try {
       db.exec(`ALTER TABLE ${table} ADD COLUMN ${column}`)
@@ -1415,6 +1438,12 @@ export function ensureStorageSchema(db: Database): void {
       // duplicate column — the file already has it
     }
   }
+  // THE 2026-09-29 RE-PARENTING. A command thread that predates it was started from the prompt box, so
+  // nothing recorded which thread (if any) it went with: no row carries a parent to attach it to. The
+  // only honest move is to file every such row away — it has nowhere to render now — and keep it, since
+  // it is the record of a command someone ran. Idempotent: it matches nothing once they are archived,
+  // and every row written since carries a parent.
+  db.exec("UPDATE command_thread SET state = 'archived' WHERE parent_slug IS NULL AND state <> 'archived'")
 }
 
 /**
@@ -1913,16 +1942,18 @@ export function createStorage(source: string | Database, projectId: string): Sto
   )
   const dropThreadLinkStmt = scope.prepare("DELETE FROM thread_link WHERE project_id = @project_id AND thread_slug = ? AND id = ?")
   const delThreadLinks = scope.prepare("DELETE FROM thread_link WHERE project_id = @project_id AND thread_slug = ?")
-  const insertCommandThreadStmt = scope.prepare<{ slug: string; command: string; createdAtMs: number }>(`
-    INSERT INTO command_thread (project_id, slug, command, created_at, started_at)
-    VALUES (@project_id, @slug, @command, @createdAtMs, @createdAtMs)
+  const insertCommandThreadStmt = scope.prepare<{ slug: string; parentSlug: string; command: string; cwd: string; shell: number; createdAtMs: number }>(`
+    INSERT INTO command_thread (project_id, slug, parent_slug, command, cwd, shell, created_at, started_at)
+    VALUES (@project_id, @slug, @parentSlug, @command, @cwd, @shell, @createdAtMs, @createdAtMs)
   `)
   const listCommandThreadsStmt = scope.prepare<[], CommandThreadRow>(
-    "SELECT slug, command, created_at, started_at, runs, exited_at, exit_code, stopped, state, queued_at FROM command_thread WHERE project_id = @project_id ORDER BY created_at, slug",
+    "SELECT slug, parent_slug, command, cwd, shell, created_at, started_at, runs, exited_at, exit_code, stopped, state, queued_at FROM command_thread WHERE project_id = @project_id ORDER BY created_at, slug",
   )
-  const restartCommandThreadStmt = scope.prepare(`
-    UPDATE command_thread SET command = COALESCE(?, command), started_at = ?, runs = runs + 1, exited_at = NULL, exit_code = NULL, stopped = 0, state = 'open'
-    WHERE project_id = @project_id AND slug = ?
+  // A follow-up line makes a shell terminal a command one: the shell ended, and the line is what runs now.
+  const restartCommandThreadStmt = scope.prepare<{ command: string | null; startedAtMs: number; slug: string }>(`
+    UPDATE command_thread SET command = COALESCE(@command, command), shell = CASE WHEN @command IS NULL THEN shell ELSE 0 END,
+      started_at = @startedAtMs, runs = runs + 1, exited_at = NULL, exit_code = NULL, stopped = 0, state = 'open'
+    WHERE project_id = @project_id AND slug = @slug
   `)
   const recordCommandExitStmt = scope.prepare(`
     UPDATE command_thread SET exited_at = ?, exit_code = ?, stopped = ?
@@ -1932,8 +1963,10 @@ export function createStorage(source: string | Database, projectId: string): Sto
     "UPDATE command_thread SET exited_at = ? WHERE project_id = @project_id AND exited_at IS NULL",
   )
   const dropCommandThreadStmt = scope.prepare("DELETE FROM command_thread WHERE project_id = @project_id AND slug = ?")
-  const setCommandThreadStateStmt = scope.prepare("UPDATE command_thread SET state = ? WHERE project_id = @project_id AND slug = ?")
-  const setCommandQueuedAtStmt = scope.prepare("UPDATE command_thread SET queued_at = ? WHERE project_id = @project_id AND slug = ?")
+  const archiveThreadTerminalsStmt = scope.prepare(
+    "UPDATE command_thread SET state = 'archived' WHERE project_id = @project_id AND parent_slug = ? AND state <> 'archived'",
+  )
+  const dropThreadTerminalsStmt = scope.prepare("DELETE FROM command_thread WHERE project_id = @project_id AND parent_slug = ?")
   const armThreadWatchStmt = scope.prepare(`
     INSERT INTO thread_watch (project_id, id, thread_slug, kind, target, state, created_at, expires_at, settled_at)
     VALUES (@project_id, @id, @slug, @kind, @target, 'armed', @createdAtMs, @expiresAtMs, NULL)
@@ -2746,14 +2779,14 @@ export function createStorage(source: string | Database, projectId: string): Sto
     listThreadLinks: (slug) => threadLinksBySlugStmt.all(slug),
     threadLinksBySlug: () => groupBySlug(threadLinksStmt.all()),
     dropThreadLink: (slug, id) => dropThreadLinkStmt.run(slug, id).changes === 1,
-    insertCommandThread: (row) => void insertCommandThreadStmt.run(row),
+    insertCommandThread: (row) => void insertCommandThreadStmt.run({ ...row, shell: row.shell ? 1 : 0 }),
     listCommandThreads: () => listCommandThreadsStmt.all(),
-    restartCommandThread: (slug, startedAtMs, command) => void restartCommandThreadStmt.run(command ?? null, startedAtMs, slug),
+    restartCommandThread: (slug, startedAtMs, command) => void restartCommandThreadStmt.run({ command: command ?? null, startedAtMs, slug }),
     recordCommandExit: (slug, exit) => void recordCommandExitStmt.run(exit.exitedAtMs, exit.exitCode, exit.stopped ? 1 : 0, slug),
     interruptRunningCommandThreads: (exitedAtMs) => void interruptCommandThreadsStmt.run(exitedAtMs),
     dropCommandThread: (slug) => dropCommandThreadStmt.run(slug).changes === 1,
-    setCommandThreadState: (slug, state) => setCommandThreadStateStmt.run(state, slug).changes === 1,
-    setCommandQueuedAt: (slug, at) => void setCommandQueuedAtStmt.run(at, slug),
+    archiveThreadTerminals: (parentSlug) => archiveThreadTerminalsStmt.run(parentSlug).changes,
+    dropThreadTerminals: (parentSlug) => dropThreadTerminalsStmt.run(parentSlug).changes,
     // IDEMPOTENT BY (thread, kind, target), which is what the partial unique index enforces. A worker
     // woken by an expiry re-registers the same wait, and a worker that simply calls twice must not end
     // up with two rows to drop — so an existing armed row is RETURNED rather than replaced. Replacing

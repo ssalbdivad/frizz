@@ -1,12 +1,11 @@
 import { memo, useCallback, useState } from "react"
 import { useQueryClient } from "@tanstack/react-query"
-import { AlarmClock, Check, ChevronRight, Ellipsis, Github, Hourglass, Loader2, Pin, PinOff, RotateCcw, TerminalSquare } from "lucide-react"
+import { AlarmClock, Check, ChevronRight, Ellipsis, Github, Hourglass, Loader2, Pin, PinOff, RotateCcw } from "lucide-react"
 import { questionsOwed, type ThreadView } from "@frizz/shared"
 import { pushSubAgentDrawer, showToast } from "../store.ts"
 import { displayTitle, titleIsProvisional, isPinned, isSnoozed, sessionIndicatorKind, offersRetry, futureSnoozedUntil, queueLabelAt, waitNamesPr, prChecksRunning, restingOnSubAgents } from "../groups.ts"
 import { ageSpan, relativeAge, limitResumeClock } from "../lib/activityTime.ts"
 import { useNowMs } from "../lib/liveClock.ts"
-import { commandFailed, commandLive, commandStateLabel } from "../lib/commandThreads.ts"
 import { BANDS, BAND_LABEL_TYPE, BandCount, BandGlyph, type BandKey } from "./BandLabel.tsx"
 import { BoxSpinner, STATUS_BOX } from "./BoxSpinner.tsx"
 import { ChildOpRow } from "./ChildOpRow.tsx"
@@ -14,6 +13,7 @@ import { visibleChildOps } from "../lib/childOps.ts"
 import { childOpDismisser } from "../lib/dismissChildOp.ts"
 import { Tooltip } from "./Tooltip.tsx"
 import { ProviderMark } from "./ProviderMark.tsx"
+import { ThreadTerminalMark } from "./ThreadTerminals.tsx"
 import { STALLED_RETRY_MESSAGE, retrySession } from "../lib/retrySession.ts"
 import { deliverProjectFollowUp } from "../lib/projectFollowUp.ts"
 import { useThreadApi, useThreadIsForeignToPage, useThreadProjectDir, useThreadProjectId } from "../api/threadApi.tsx"
@@ -96,10 +96,9 @@ export interface RowScope {
   page: boolean
 }
 
-// One row of a band, whichever kind of thread it is. Terminal command threads share the bands with
-// agent threads (groups.ts sectionOf) but not the agent row's verbs, so they get their own row.
+// One row of a band: the thread, then its live sub-agents as rows of their own. A thread's TERMINALS get
+// no row (ThreadTerminals.tsx): one small mark after its title says one is running.
 export function RailRow({ t, active, open = false, restedAge = false, scope, cardKey }: { t: ThreadView; active: boolean; open?: boolean; restedAge?: boolean; scope: RowScope; cardKey?: string }) {
-  if (t.kind === "command") return <CommandRow t={t} active={active} open={open} scope={scope} cardKey={cardKey} />
   return (
     <>
       <ThreadRow t={t} active={active} open={open} restedAge={restedAge} scope={scope} cardKey={cardKey} />
@@ -107,57 +106,6 @@ export function RailRow({ t, active, open = false, restedAge = false, scope, car
     </>
   )
 }
-
-// A TERMINAL COMMAND row. The same geometry as ThreadRow — marker rail, indicator column, 13px title,
-// right-justified state column in the rest time's place — and the same lifecycle: running it sits
-// with Working, finished it queues with a card (a click opens it through the row's scope), and marked
-// done it moves to Done, where its check unchecks to reopen. None of an agent row's verbs: the drawer holds Stop /
-// Restart / Remove.
-const CommandRow = memo(function CommandRow({ t, active, open = false, scope, cardKey }: { t: ThreadView; active: boolean; open?: boolean; scope: RowScope; cardKey?: string }) {
-  const command = t.command
-  if (!command) return null
-  const running = commandLive(command)
-  const failed = commandFailed(command)
-  const done = t.state === "archived"
-  return (
-    <div
-      data-sidebar-item={t.id}
-      data-command-row={command.state}
-      data-sidebar-open={open || undefined}
-      data-xq-thread-row
-      data-xq-rail-row={cardKey}
-      className={`group relative flex min-w-0 items-start rounded-md transition-[color,opacity] ${rowWashClass(open)} ${done ? "sidebar-row-dim" : ""}`}
-    >
-      <span aria-hidden="true" className="pointer-events-none absolute inset-y-0 left-0 w-5">
-        {active && <span className="absolute inset-y-0 left-1 w-[2px] rounded-full bg-accent" />}
-      </span>
-      <button
-        onClick={() => scope.open(t)}
-        aria-current={active ? "location" : undefined}
-        className="min-w-0 flex-1 flex items-start gap-2 pb-1 pl-5 pr-1.5 pt-1 text-left"
-      >
-        <span data-xq-indicator className="w-4 h-[19px] shrink-0 flex items-center justify-center">
-          {done ? null : running ? (
-            <span aria-label="Running" className="frizz-live-dot frizz-live-dot--shell" />
-          ) : (
-            <TerminalSquare aria-label={commandStateLabel(command)} size={13} className={failed ? "text-danger-soft" : "text-muted-60"} />
-          )}
-        </span>
-        <span className="flex min-w-0 flex-1 items-baseline gap-3">
-          <span className={`font-mono-keep min-w-0 flex-1 truncate text-[12px] leading-[19px] ${done ? "text-fg/75" : "text-fg/90"}`} title={command.command}>
-            {command.command}
-          </span>
-          {!running && (
-            <span className={`shrink-0 tabular-nums text-[10.5px] leading-[19px] ${failed ? "text-danger-soft" : "text-muted-55"}`}>
-              {commandStateLabel(command)}
-            </span>
-          )}
-        </span>
-      </button>
-      {done && <RowUncheckDone t={t} />}
-    </div>
-  )
-})
 
 // A section header: an optional collapse caret, the band's icon, its name, and the count. ONE source
 // of truth for every band header so they can never visually drift apart again. Snoozed, Done and
@@ -190,7 +138,7 @@ export function SectionHeader({ band, count, collapsed, onToggle }: { band: Band
   )
 }
 
-// The title's trailing adornments — today the provider mark alone —
+// The title's trailing adornments — the provider mark, and a running terminal's mark after it (ThreadTerminals.tsx) —
 // are ATOMIC inline boxes, and the line breaker is free to break right BEFORE one even though no
 // whitespace separates it from the title. On a wrapping title that regularly stranded the provider
 // mark ALONE on a second line, with the whole title above it (maintainer 2026-07-31: "often the only
@@ -333,6 +281,7 @@ export const ThreadRow = memo(function ThreadRow({
             <span className={`min-w-0 flex-1 break-words text-[13px] leading-[19px] ${dimLabel ? "text-provisional" : dim ? "text-fg/75" : "text-fg/90"}`}>
               <TitleWithTrailers title={displayTitle(t)}>
                 <ProviderMark backend={t.backend} model={t.model} className="ml-1" />
+                <ThreadTerminalMark thread={t} />
               </TitleWithTrailers>
             </span>
             {/* The Retry verb is an OVERLAY pinned to this same right edge, so on the rows that offer

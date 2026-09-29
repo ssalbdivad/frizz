@@ -67,7 +67,7 @@ function seed(storage: Storage): void {
     sentAtMs: 1,
   })
   storage.reserveAdoptionClaim({ slug: "gamma-thread", attemptToken: UUID, sessionId: `adopt-${storage.projectId}`, reservedAtMs: 1, leaseExpiresAtMs: 2 })
-  storage.insertCommandThread({ slug: "term-alpha", command: `echo ${storage.projectId}`, createdAtMs: 1 })
+  storage.insertCommandThread({ slug: "term-alpha", parentSlug: "alpha-thread", command: `echo ${storage.projectId}`, cwd: `/work/${storage.projectId}`, shell: false, createdAtMs: 1 })
 }
 
 /** Every row of every storage table for one project, in a stable order. */

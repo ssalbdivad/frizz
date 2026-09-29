@@ -44,11 +44,8 @@ test("answers every open project with its open threads, its Done count and the i
           // A project's own terminal is read-only and never queues; a legacy row is not a session.
           session("terminal", { foreign: true, needsYou: true }),
           { id: "legacy", kind: "legacy" },
-          // A terminal command thread shares the lifecycle: a finished run queues, a running one runs, and
-          // one marked done is Done like any other.
-          { id: "term-finished", kind: "command", state: "open", needsYou: true },
-          { id: "term-running", kind: "command", state: "open" },
-          { id: "term-done", kind: "command", state: "archived" },
+          // A thread's terminals ride its row; the thread is listed, the terminal never is.
+          session("publishing", { needsYou: true, terminals: [{ id: "term-otp", command: "npm publish", cwd: "/work/alpha", state: "running", awaitingInput: true, runId: 1, startedAt: "2026-09-29T09:00:00.000Z" }] }),
         ],
         { projectSlug: "alpha", projectName: "Alpha", projectDir: "/work/alpha", homeDir: "/home/me", githubRepo: "me/alpha" },
       ),
@@ -65,8 +62,9 @@ test("answers every open project with its open threads, its Done count and the i
     { projectSlug: alpha!.projectSlug, projectName: alpha!.projectName, projectDir: alpha!.projectDir, homeDir: alpha!.homeDir, githubRepo: alpha!.githubRepo },
     { projectSlug: "alpha", projectName: "Alpha", projectDir: "/work/alpha", homeDir: "/home/me", githubRepo: "me/alpha" },
   )
-  assert.deepEqual(alpha!.threads.map((t) => t.id), ["queued", "running", "snoozed", "term-finished", "term-running"])
-  assert.equal(alpha!.doneCount, 6)
+  assert.deepEqual(alpha!.threads.map((t) => t.id), ["queued", "running", "snoozed", "publishing"])
+  assert.equal(alpha!.doneCount, 5)
+  assert.deepEqual(alpha!.threads.find((t) => t.id === "publishing")?.terminals?.map((t) => t.id), ["term-otp"])
   assert.deepEqual(
     { projectSlug: beta!.projectSlug, projectName: beta!.projectName, projectDir: beta!.projectDir, threads: beta!.threads, doneCount: beta!.doneCount },
     { projectSlug: "b", projectName: "b", projectDir: "/work/b", threads: [], doneCount: 0 },

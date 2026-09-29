@@ -244,22 +244,6 @@ export function StateButton({
   // "done" card feels instantaneous, while an executing turn still waits and shows the confirm dialog.
   const complete = (terminateLive: boolean, optimistic: boolean) => {
     setPending(true)
-    // A TERMINAL COMMAND thread has no session to end: only a finished run is offered this button, and
-    // completing it is the plain lifecycle write. Always immediate, so always optimistic.
-    if (thread.kind === "command") {
-      onArchived?.()
-      if (overlayRail) markArchived(thread.id)
-      api
-        .setThreadState({ slug: thread.id, state: "archived" })
-        .then(() => showToast("Done"))
-        .catch((error) => {
-          if (overlayRail) clearArchived(thread.id)
-          onDismissCancel?.()
-          showToast(`Couldn’t finish: ${(error as Error).message.slice(0, 80)}`)
-          setPending(false)
-        })
-      return
-    }
     if (optimistic) onArchived?.() // start the exit animation immediately
     // Move the SIDEBAR row to Done now, on the same prediction the queue card's fade already runs on —
     // and gated on the prediction rather than on `optimistic`, because the thread drawer's copy of this
@@ -354,9 +338,10 @@ export function StateButton({
 }
 
 // The confirm dialog's body. Ending a session kills its whole process tree, so this names what is
-// about to die: the executing turn and/or every live sub-agent and background shell, counted and
-// listed by label. The human clicked Done believing the thread was finished — the specific "2
-// background shells: `Watch CI`, `vite dev`" is the correction, and a bare "still running" was not.
+// about to die: the executing turn and/or every live sub-agent and background shell, and every terminal
+// the human opened on the thread that is still running, counted and listed by label. The human clicked
+// Done believing the thread was finished — the specific "2 background shells: `Watch CI`, `vite dev`" is
+// the correction, and a bare "still running" was not.
 function CompletionHoldBody({ hold }: { hold: CompletionHold | undefined }) {
   const summary = completionHoldSummary(hold)
   return (

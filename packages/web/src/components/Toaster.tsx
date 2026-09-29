@@ -110,10 +110,10 @@ export function isToastPointer(target: EventTarget | null): boolean {
 
 function openToastLink(link: ToastLink) {
   // Its own project's drawer, through the router, when the page is focused elsewhere by now; the thread
-  // route opens the right surface for it (a command thread's terminal included).
+  // route opens the right surface for it.
   if (link.project !== undefined && link.project !== projectSlug()) {
     spaNavigate(`${crossProjectHref(encodeURIComponent(link.project))}/thread/${encodeURIComponent(link.slug)}`)
     return
   }
-  pushDrawer(link.drawer ?? "thread", link.slug)
+  pushDrawer("thread", link.slug)
 }

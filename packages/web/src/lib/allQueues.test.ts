@@ -135,14 +135,17 @@ test("an archived row an older server still sends is counted Done, working or no
   assert.equal(project!.doneCount, 7)
 })
 
-test("a terminal command thread takes the band its own rail gives it: a finished run queues, a running one runs", () => {
-  const run = (state: "running" | "exited") => ({ command: "pnpm test", state, runId: 1, startedAt: "2026-09-23T09:00:00.000Z", ...(state === "exited" ? { exitedAt: "2026-09-23T09:05:00.000Z", exitCode: 1 } : {}) })
+test("a thread's terminals ride its row: one at a prompt queues the thread, and no terminal rows on its own", () => {
+  const terminal = (id: string, over: Partial<NonNullable<ThreadView["terminals"]>[number]> = {}) => ({ id, command: "npm publish", cwd: "/repo", state: "running" as const, runId: 1, startedAt: "2026-09-29T09:00:00.000Z", ...over })
   const [project] = queuesProjects([card("a")], [queue("a", [
-    thread("term-finished", { kind: "command", needsYou: true, command: run("exited") }),
-    thread("term-running", { kind: "command", command: run("running") }),
+    // The server queued it for the terminal's OTP prompt (board.ts withThreadTerminals).
+    thread("publishes", { runtime: "turn-idle", needsYou: true, terminals: [terminal("term-otp", { awaitingInput: true })] }),
+    thread("serves", { runtime: "running", terminals: [terminal("term-dev", { command: "npm run dev" })] }),
   ])])
-  assert.deepEqual(project!.queued.map((t) => t.id), ["term-finished"])
-  assert.deepEqual(project!.running.map((t) => t.id), ["term-running"])
+  assert.deepEqual(project!.queued.map((t) => t.id), ["publishes"])
+  assert.deepEqual(project!.running.map((t) => t.id), ["serves"])
+  const ids = [...project!.queued, ...project!.running].map((t) => t.id)
+  assert.equal(ids.some((id) => id.startsWith("term-")), false)
 })
 
 // The focused project is the page project, so its board is live in the store; the poll lags it by up to
