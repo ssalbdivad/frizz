@@ -36,7 +36,7 @@ import { parseAccountAlias } from "../lib/signIn.ts"
 import { TRANSCRIPT_META_LABEL_CLASS, transcriptMetaChevronClass } from "../lib/transcriptMetaLabels.ts"
 import { isPlainLeftClick } from "../lib/standaloneThreadRoute.ts"
 import { useMarkdownHtml } from "../lib/useMarkdown.ts"
-import { IN_PLACE_OPEN_STATE, openThread, pushTerminalDrawer, showToast, store } from "../store.ts"
+import { IN_PLACE_OPEN_STATE, openThread, showToast, store } from "../store.ts"
 import { crossProjectHref, innerPath, projectSlug } from "../lib/base-path.ts"
 import { QueueDismissContext, TerminalNetCard } from "./ChatView.tsx"
 import { useCopyTerminalCommand } from "./ExternalTerminalCommand.tsx"
@@ -57,10 +57,11 @@ import { RegisteredAnsweringContext, RegisteredAnsweringProvider, RegisteredQues
 import { RestedCard, showsRestedCard } from "./RestedCard.tsx"
 import { LogoutConfirmModal, SignInModal } from "./SignInModal.tsx"
 import { QuietTurnCard, showsQuietTurnCard } from "./QuietTurnCard.tsx"
-import { QueueShellStrip } from "./QueueShellStrip.tsx"
 import { SnoozeButton } from "./SnoozeButton.tsx"
 import { StateButton } from "./ThreadLifecycleFooter.tsx"
-import { focusedProject, ThreadTerminalsStrip } from "./ThreadTerminals.tsx"
+import { focusedProject, openProcessDrawer, TerminalPromptPane, ThreadProcessStrip } from "./ThreadTerminals.tsx"
+import { ThreadCheckoutToken } from "./ThreadCheckoutToken.tsx"
+import { threadProcesses } from "../lib/threadProcesses.ts"
 import { Tooltip } from "./Tooltip.tsx"
 import { BLOCK_RADIUS, BLOCK_RADIUS_INNER_BOTTOM, QUEUE_WRAP, TranscriptCard } from "./TranscriptCard.tsx"
 
@@ -287,6 +288,8 @@ export const AllQueuesCard = memo(function AllQueuesCard({
                     className="min-w-0 truncate"
                   />
                 )}
+                {/* Where the agent is working, only when that is a worktree or outside the project. */}
+                <ThreadCheckoutToken checkout={thread.checkout} homeDir={project.homeDir} lead={<span aria-hidden>·</span>} />
                 {/* What the thread is doing NOW, beside the name that stays put (ThreadStatusLine). */}
                 <ThreadStatusLine status={thread.statusLine} lead={<span aria-hidden>·</span>} />
               </div>
@@ -380,23 +383,11 @@ export const AllQueuesCard = memo(function AllQueuesCard({
                   all, and its notice is about the process, not the message (showsRestedCard). */}
               {showsRestedCard(thread, text) && <RestedCard thread={thread} />}
               {showsQuietTurnCard(thread) && <QuietTurnCard thread={thread} />}
-              {/* The thread's TERMINALS (ThreadTerminals.tsx): a line each, and — when one sits at a prompt,
-                  which is what queued this card — its live screen, so the answer is typed right here. A
-                  line opens the thread, then the terminal over it when the thread's project is the one in
-                  focus (the drawer stack is that project's); otherwise the thread's drawer carries it. */}
-              {thread.terminals && thread.terminals.length > 0 && (
-                <ThreadProjectScope projectId={project.id} projectDir={project.projectDir}>
-                  <ThreadTerminalsStrip
-                    thread={thread}
-                    surface="card"
-                    onOpen={(terminal) => {
-                      const here = focusedProject(project.slug)
-                      openInPlace(project, thread.id)
-                      if (here) pushTerminalDrawer(thread.id, terminal.id, { label: terminal.command })
-                    }}
-                  />
-                </ThreadProjectScope>
-              )}
+              {/* A terminal of yours waiting at a prompt — what queued this card — as its live screen, so the
+                  answer is typed right here. Its row, with every other terminal's, is in the strip below. */}
+              <ThreadProjectScope projectId={project.id} projectDir={project.projectDir}>
+                <TerminalPromptPane thread={thread} />
+              </ThreadProjectScope>
             </div>
 
             {/* Keyed on the rest: an answered card keeps its slot while the card holds for the worker's
@@ -408,8 +399,31 @@ export const AllQueuesCard = memo(function AllQueuesCard({
 
           <ThreadProjectScope projectId={project.id} projectDir={project.projectDir}>
             <ReplyBox project={project} thread={thread} onSent={onLeave} onFailed={onReturn} />
-            {/* The shells it left running — a shell with no budget runs until someone stops it. */}
-            <QueueShellStrip thread={thread} api={api} onOpen={() => openInPlace(project, thread.id)} />
+            {/* EVERY TERMINAL ON THE THREAD, yours and the agent's, in the drawer's one strip
+                (ThreadTerminals.tsx) — a shell with no budget runs until someone stops it, so the card it
+                rests on is where it must be seen. The drawer's geometry: the reply box above ends in
+                `pb-3`, which `-mt-3` hands back so the strip hangs `pt-1.5` off the prompt box, and
+                `.ops-column-optical-inset` puts the last row's baseline 12px off the footer's hairline.
+                A row opens the thread, then its terminal over it when the thread's project is the one in
+                focus (the drawer stack is that project's); otherwise the thread's drawer carries it. */}
+            {/* Gated on the rows the strip will draw, not on the arrays: the inset's negative margin would
+                otherwise pull the footer up 4.25px under a card whose only shell has finished. */}
+            {threadProcesses(thread, [], { now: Date.now() }).length > 0 && (
+              <div className="-mt-3 shrink-0 px-5 pb-3" data-queue-processes={thread.id}>
+                <div className="ops-column-optical-inset">
+                  <ThreadProcessStrip
+                    thread={thread}
+                    surface="card"
+                    className="px-1 pt-1.5"
+                    onOpen={(process) => {
+                      const here = focusedProject(project.slug)
+                      openInPlace(project, thread.id)
+                      if (here) openProcessDrawer(thread.id, process)
+                    }}
+                  />
+                </div>
+              </div>
+            )}
           </ThreadProjectScope>
           </RegisteredAnsweringProvider>
           </QueueDismissContext.Provider>

@@ -127,3 +127,16 @@ test("the sidebar mark counts both owners, and its tone says whose is running", 
   // A shell the OS says nobody holds is not counted as running.
   assert.equal(mark({ bgShells: [shell({ state: "stale" })] }), "")
 })
+
+test("the queue card draws the same strip under its reply box, and only the prompting screen above it", async () => {
+  const { readFileSync } = await import("node:fs")
+  const card = readFileSync(new URL("./AllQueuesCard.tsx", import.meta.url), "utf8")
+  assert.match(card, /data-queue-processes=\{thread\.id\}[\s\S]{0,200}<ThreadProcessStrip[\s\S]{0,80}surface="card"/)
+  assert.match(card, /<TerminalPromptPane thread=\{thread\} \/>/)
+  assert.doesNotMatch(card, /QueueShellStrip|ThreadTerminalsStrip/, "no second strip for either owner")
+  // A row opens the drawer only where the drawer stack is the card's own project's.
+  assert.match(card, /const here = focusedProject\(project\.slug\)\s+openInPlace\(project, thread\.id\)\s+if \(here\) openProcessDrawer\(thread\.id, process\)/)
+  // The meta line carries the checkout token between the time and the status, as the drawer header does.
+  const meta = card.slice(card.indexOf("<LastActive"), card.indexOf("<ThreadStatusLine"))
+  assert.match(meta, /<ThreadCheckoutToken checkout=\{thread\.checkout\} homeDir=\{project\.homeDir\}/)
+})

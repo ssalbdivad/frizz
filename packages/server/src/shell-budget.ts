@@ -28,7 +28,7 @@ import type { ShellBudgetRow, Storage } from "./storage.ts"
 //    after that wake REACHES the worker ends it through the operator's own × path.
 //
 // WHAT KEEPS AN UNBUDGETED SHELL HONEST is visibility, not a clock: every running shell is on the
-// thread's drawer strip and its queue card, with its age and a Stop control (web QueueShellStrip /
+// thread's drawer strip and its queue card, with its age and a Stop control (web ThreadProcessStrip /
 // BackgroundOpsStrip), and a worker coming to rest behind a question is nudged about strays.
 //
 // A `watch` on the shell MOVES its deadline to the watch's own expiry — see resolveShellBudget.
