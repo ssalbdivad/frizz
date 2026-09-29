@@ -138,14 +138,16 @@ export function AllQueuesPage() {
 
 
   const leaving = useLeavingCards(projects)
-  // A thread whose drawer is open is read THERE: its card would be a second copy of the same questions
-  // and reply box under the sheet (store.ts slugsInThreadDrawers). Drawers belong to
-  // the page project, so only the focus's cards can be hidden this way. HIDDEN, NOT REMOVED: the card
-  // keeps its space (QueueCardOf `concealed`), so opening its drawer and closing it again moves nothing
-  // under the sheet or after it.
+  // A thread whose drawer is open is read THERE, so its card goes INERT — a second live copy of the same
+  // questions and reply box under the sheet would take keys and clicks meant for the drawer (store.ts
+  // slugsInThreadDrawers). Drawers belong to the page project, so only the focus's cards can be. It
+  // STAYS IN THE QUEUE: drawn where it was, and counted in READY and the filter, because opening a
+  // thread to read it is not taking it off the queue (maintainer 2026-09-29: "it shouldn't move it out
+  // of the queue though it should be displayed on below and non interactable and ready should still
+  // include it"). It was hidden and uncounted until then.
   const focusId = focusProject?.id
   const inDrawer = new Set(focusId === undefined ? [] : [...slugsInThreadDrawers(snap.drawers)].map((slug) => threadKey(focusId, slug)))
-  const hidden = (key: string) => leaving.hidden(key) || inDrawer.has(key)
+  const hidden = (key: string) => leaving.hidden(key)
   // Registered projects this server has not opened (still being opened after a boot, served by another
   // Frizz, or failed to open): their queues are unknown, so "nothing in any queue" would be a claim.
   const unopened = projects.filter((project) => !project.open && !project.stale).length
@@ -195,8 +197,8 @@ export function AllQueuesPage() {
   prevSlots.current = queue
   // Counted from what the page SHOWS: a card the operator just finished is gone from the count at once,
   // and a header still counting it read "1 in the queue" over an empty page until the next poll. A ghost
-  // is not waiting on anyone, and a card whose drawer is open is being read there.
-  const ready = queue.filter((slot) => !slot.ghost && !leaving.isLeaving(slot.key) && !inDrawer.has(slot.key)).length
+  // is not waiting on anyone. A card whose drawer is open still is, and still counts.
+  const ready = queue.filter((slot) => !slot.ghost && !leaving.isLeaving(slot.key)).length
   const scrollToCard = useScrollToCard()
   const activeKey = useQueueKeys(useScrollspy(queue), scrollToCard)
   const loading = (cards.isPending || queues.isPending) && !queues.data

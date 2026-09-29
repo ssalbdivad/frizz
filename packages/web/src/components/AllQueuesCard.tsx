@@ -173,8 +173,8 @@ interface AllQueuesCardProps {
    */
   ghost?: string
   /**
-   * Its drawer is open, where it is read: the card keeps its place and its space, hidden and out of the
-   * tab order, so opening the drawer and closing it again moves nothing (AllQueues.tsx).
+   * Its drawer is open, where it is read: the card stays drawn in its place in the queue, inert — out of
+   * the tab order and out of reach of a click — so the drawer is the one live copy (AllQueues.tsx).
    */
   concealed?: boolean
   /** The card has been acted on — answered, replied to, snoozed or finished — so it fades out now. */

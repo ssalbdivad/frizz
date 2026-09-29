@@ -1484,10 +1484,8 @@ a[href] {
    so the card holds its place — quiet, at full height, still usable — until it scrolls off or the thread
    rests again. Quiet by tone only: its size and position must not change, or it moves what is under it. */
 .frizz-card-slot[data-queue-ghost] > .frizz-card-clip { opacity: 0.5; }
-/* CONCEALED: its drawer is open, where it is read. Hidden but still laid out, so the cards around it —
-   under the sheet, and after it closes — stay exactly where they were; `inert` takes it out of the tab
-   order and out of reach of a click. */
-.frizz-card-slot[data-queue-concealed] { visibility: hidden; }
+/* CONCEALED: its drawer is open, where it is read. It stays drawn in its place in the queue, under the
+   sheet — `inert` alone takes it out of the tab order and out of reach of a click (AllQueues.tsx). */
 @media (prefers-reduced-motion: no-preference) {
   .frizz-card-slot > .frizz-card-clip { transition: opacity 200ms cubic-bezier(0.4, 0, 0.2, 1); }
   .frizz-card-slot[data-queue-leaving="true"],
