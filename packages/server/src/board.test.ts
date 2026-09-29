@@ -4,7 +4,7 @@ import { lstatSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, w
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { questionAnswerMessage, questionsCancelledWakeMessage, type InteractionRequest } from "@frizz/shared"
-import { ANSWER_IN_FLIGHT_EXCUSAL_MS, answerAwaitingDelivery, answersInFlight, appServerTurnStalled, createBoard, deriveAwaitingBackground, deriveNeedsYou, degradeIfAwaitingAnswer, degradeIfNoTranscript, fenceWatchViews, hasDeclaredWait, hasParkedTimerWatch, hasRegisteredBackgroundPark, isBoardRelevantFrizzPath, registeredDoneFence, resolveLimitPause, resolveSessionPermission, resolveSessionProfile, resolveSessionTitle, type RegisteredWatch, QUIET_TURN_MS, quietTurnSince } from "./board.ts"
+import { ANSWER_IN_FLIGHT_EXCUSAL_MS, answerAwaitingDelivery, answersInFlight, appServerTurnStalled, createBoard, deriveAwaitingBackground, deriveNeedsYou, degradeIfAwaitingAnswer, degradeIfNoTranscript, fenceWatchViews, hasDeclaredWait, hasParkedTimerWatch, hasRegisteredBackgroundPark, isBoardRelevantFrizzPath, registeredDoneFence, resolveLimitPause, returnedSubAgentsView, resolveSessionPermission, resolveSessionProfile, resolveSessionTitle, type RegisteredWatch, QUIET_TURN_MS, quietTurnSince } from "./board.ts"
 import { Bus } from "./bus.ts"
 import { createStorage, type ThreadQuestionRow } from "./storage.ts"
 import type { Project } from "./project.ts"
@@ -701,6 +701,139 @@ test("deriveNeedsYou: the event-snooze parks a shell-only rest for exactly the c
   const fenced = tele({ bgShells: [{ label: "watch", startedAt: T0, state: "running" }], lastFence: prWatch, lastActivityAt: LATER })
   assert.equal(deriveNeedsYou(row({ rested_at: T0 }), fenced, "turn-idle"), true, "a pr-watch handoff stays visible")
   assert.equal(deriveNeedsYou(row({ rested_at: T0, bg_snooze_rested_at: T0 }), fenced, "turn-idle"), false, "…unless snoozed for this exact rest")
+})
+
+// ---- SNOOZE UNTIL ALL SUB-AGENTS RETURN ------------------------------------------------------------
+// The shape it exists for: a parent fanned out three background children and rests on a fence that is not
+// an honoured park (Colin's rule — such a rest queues, because a partial return may be actionable). Each
+// return wakes it and it rests again. The one-rest event-snooze is spent by every one of those rests; this
+// one waits out the batch.
+const FAN_T0 = "2026-09-29T10:00:00.000Z" // three children dispatched
+const FAN_REST = "2026-09-29T10:00:05.000Z" // the parent's first rest
+const FAN_ARMED = "2026-09-29T10:01:00.000Z" // the human snoozes it off the card
+const FAN_A_BACK = "2026-09-29T10:03:00.000Z" // the first child returns; the parent wakes
+const FAN_REREST = "2026-09-29T10:03:20.000Z" // …and rests again, two still out
+const FAN_ALL_BACK = "2026-09-29T10:09:00.000Z"
+const FAN_D_START = "2026-09-29T10:10:00.000Z"
+const hintless = { kind: "awaiting" as const, body: "Waiting on the three audits.", hints: [] }
+const agent = (id: string, state: "running" | "stale" = "running", startedAt = FAN_T0) => ({ label: `audit ${id}`, startedAt, state, id })
+const retired = (id: string, finishedAt: string | undefined, over: Record<string, unknown> = {}) =>
+  ({ id, label: `audit ${id}`, status: "completed" as const, startedAt: FAN_T0, finishedAt, ...over })
+
+test("deriveNeedsYou: 'until all sub-agents return' holds across intermediate returns and lets go on the last", () => {
+  const armed = { rested_at: FAN_REREST, subagents_snoozed_at: FAN_ARMED }
+  const oneBack = tele({ subAgents: [agent("b"), agent("c")], retiredSubAgents: [retired("a", FAN_A_BACK)], lastFence: hintless, lastAssistantAt: FAN_REREST })
+  // NEGATIVE CONTROL: the rest this whole feature is about queues when nothing is armed — so every
+  // `false` below is the snooze, not some other excusal the fixture happens to trip.
+  assert.equal(deriveNeedsYou(row({ rested_at: FAN_REREST }), oneBack, "turn-idle"), true, "an unhonoured re-rest queues")
+  // THE POINT: the one-rest event-snooze, armed at the FIRST rest, is spent by the re-rest a return caused…
+  assert.equal(deriveNeedsYou(row({ rested_at: FAN_REREST, bg_snooze_rested_at: FAN_REST }), oneBack, "turn-idle"), true, "the one-rest snooze does not survive a child's return")
+  // …and this one is not.
+  assert.equal(deriveNeedsYou(row(armed), oneBack, "turn-idle"), false, "held across an intermediate return")
+  // Still out, still held, however many returns it has seen.
+  const twoBack = tele({ subAgents: [agent("c")], retiredSubAgents: [retired("a", FAN_A_BACK), retired("b", "2026-09-29T10:05:00.000Z")], lastFence: hintless })
+  assert.equal(deriveNeedsYou(row(armed), twoBack, "turn-idle"), false, "held while the last one is out")
+  // The last one back: nothing running, so it lets go and the card comes back.
+  const allBack = tele({ subAgents: [], retiredSubAgents: [retired("a", FAN_A_BACK), retired("b", "2026-09-29T10:05:00.000Z"), retired("c", FAN_ALL_BACK)], lastFence: hintless })
+  assert.equal(deriveNeedsYou(row(armed), allBack, "turn-idle"), true, "released when every sub-agent is back")
+  // A merely STALE child is not running: it neither holds nor is what the human is waiting to see.
+  assert.equal(deriveNeedsYou(row(armed), tele({ ...twoBack, subAgents: [agent("c", "stale")] }), "turn-idle"), true, "a stale child does not hold it")
+})
+
+test("deriveNeedsYou: 'until all sub-agents return' lets go on a gap, a human turn, and everything that outranks it", () => {
+  const armed = row({ rested_at: FAN_REREST, subagents_snoozed_at: FAN_ARMED })
+  const batch = [retired("a", FAN_A_BACK), retired("b", "2026-09-29T10:05:00.000Z"), retired("c", FAN_ALL_BACK)]
+  // A SECOND BATCH IS NEW WORK. The first came back in full at FAN_ALL_BACK, the worker dispatched `d` a
+  // minute later: something is running now, but there was an instant with nothing out since the arming.
+  const secondBatch = tele({ subAgents: [agent("d", "running", FAN_D_START)], retiredSubAgents: batch, lastFence: hintless })
+  assert.equal(deriveNeedsYou(armed, secondBatch, "turn-idle"), true, "a gap since the arming releases it, whatever runs now")
+  // CONTROL for the gap reading: `d` dispatched while `c` was still out is the same wait, and holds.
+  const overlapping = tele({ subAgents: [agent("d", "running", "2026-09-29T10:08:00.000Z")], retiredSubAgents: batch, lastFence: hintless })
+  assert.equal(deriveNeedsYou(armed, overlapping, "turn-idle"), false, "a child sent before the last one returned continues the wait")
+  // A retired child with no dispatch instant cannot vouch for the stretch it would have bridged.
+  const blind = tele({ subAgents: [agent("d", "running", "2026-09-29T10:08:00.000Z")], retiredSubAgents: [retired("a", FAN_A_BACK), retired("c", FAN_ALL_BACK, { startedAt: undefined })], lastFence: hintless })
+  assert.equal(deriveNeedsYou(armed, blind, "turn-idle"), true, "an unplaceable interval bridges nothing")
+
+  const out = tele({ subAgents: [agent("b"), agent("c")], retiredSubAgents: [retired("a", FAN_A_BACK)], lastFence: hintless })
+  assert.equal(deriveNeedsYou(armed, out, "turn-idle"), false, "control: held")
+  // THE HUMAN SPOKE SINCE. A typed turn after the arming supersedes it; one before does not.
+  assert.equal(deriveNeedsYou(armed, tele({ ...out, lastHumanAt: "2026-09-29T10:04:00.000Z" }), "turn-idle"), true, "a human turn since the arming releases it")
+  assert.equal(deriveNeedsYou(armed, tele({ ...out, lastHumanAt: FAN_T0 }), "turn-idle"), false, "…one from before it does not")
+  // OUTRANKED, each checked earlier in deriveNeedsYou: a question, a done, a crash, a limit.
+  assert.equal(deriveNeedsYou(armed, tele({ ...out, pendingQuestion: true }), "turn-idle"), true, "a question breaks through")
+  assert.equal(deriveNeedsYou(armed, out, "turn-idle", false, Date.now(), undefined, true, false, {}, new Set(), new Set(), [], 1), true, "a registered question breaks through")
+  assert.equal(deriveNeedsYou(armed, tele({ ...out, lastFence: { kind: "done", body: "", hints: [] } }), "turn-idle"), true, "a done breaks through")
+  assert.equal(deriveNeedsYou(armed, tele({ ...out, turn: "in-flight" }), "exited"), true, "a crash breaks through")
+  // Not armed at all: an unparseable column is not an arming.
+  assert.equal(deriveNeedsYou(row({ rested_at: FAN_REREST, subagents_snoozed_at: "soon" }), out, "turn-idle"), true)
+  // A QUEUE verb, never a fact: the awaiting card the drawer draws off deriveAwaitingBackground ignores it.
+  const declared = tele({ ...out, lastFence: { kind: "awaiting", body: "", hints: [{ kind: "agent", value: "b" }, { kind: "agent", value: "c" }] } })
+  assert.equal(deriveAwaitingBackground(armed, declared, "turn-idle"), deriveAwaitingBackground(row({ rested_at: FAN_REREST }), declared, "turn-idle"), "the snooze never changes the resting-card fact")
+})
+
+test("returnedSubAgentsView: the returns inside the wait still open, never an earlier batch's", () => {
+  const earlier = retired("old", "2026-09-29T09:40:00.000Z", { startedAt: "2026-09-29T09:30:00.000Z" })
+  const failed = retired("b", "2026-09-29T10:05:00.000Z", { status: "failed", subagentType: "frizz:opus-high" })
+  const view = returnedSubAgentsView(tele({ subAgents: [agent("c")], retiredSubAgents: [failed, earlier, retired("a", FAN_A_BACK)] }))
+  assert.deepEqual(view?.map((r) => [r.id, r.status]), [["a", "completed"], ["b", "failed"]], "oldest return first, the earlier batch left out")
+  assert.equal(view?.[1]?.subagentType, "frizz:opus-high")
+  // A child that came back before the parent even rested is still part of the batch.
+  const fast = retired("fast", "2026-09-29T10:00:02.000Z")
+  assert.deepEqual(returnedSubAgentsView(tele({ subAgents: [agent("c")], retiredSubAgents: [fast] }))?.map((r) => r.id), ["fast"])
+  // Nothing running: no wait to describe.
+  assert.equal(returnedSubAgentsView(tele({ subAgents: [agent("c", "stale")], retiredSubAgents: [retired("a", FAN_A_BACK)] })), undefined)
+  assert.equal(returnedSubAgentsView(tele({ subAgents: [], retiredSubAgents: [retired("a", FAN_A_BACK)] })), undefined)
+  // A child both retired and live again (a SendMessage revival) is counted where it is live, once.
+  assert.equal(returnedSubAgentsView(tele({ subAgents: [agent("a"), agent("c")], retiredSubAgents: [retired("a", FAN_A_BACK)] })), undefined)
+  // A descendant is never a sibling in the batch: it neither opens the wait nor is listed.
+  assert.equal(returnedSubAgentsView(tele({ subAgents: [{ ...agent("g"), depth: 2 }], retiredSubAgents: [retired("a", FAN_A_BACK)] })), undefined)
+})
+
+test("board: a queued parent carries its returned sub-agents, and the snooze parks it through the view", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "frizz-board-fanout-"))
+  const project: Project = { dir, id: "project-fanout", name: "fixture", label: "fixture", stateDir: dir, cwdSlug: "fixture" }
+  const storage = createStorage(join(dir, "ui.db"), "p")
+  storage.upsertSession(row({ slug: "parent", session_id: "sess-parent", thread_name: "frizz-parent", rested_at: FAN_REREST }))
+  storage.setBackend("parent", "claude")
+  storage.setClaudeRuntime("parent", "broker")
+  let current = tele({ turn: "idle", subAgents: [agent("b"), agent("c")], retiredSubAgents: [retired("a", FAN_A_BACK)], lastFence: hintless, lastAssistantAt: FAN_REREST })
+  const tailer = {
+    get: () => current,
+    foreignIds: () => [], subAgent: () => undefined, forget: () => {},
+    start: () => {}, stop: () => {}, tick: () => {},
+  } satisfies Tailer
+  const board = createBoard(project, storage, new Bus(), tailer, "fanout", { claudeBrokerDaemonAlive: () => true, now: () => Date.parse(FAN_REREST) + 60_000 })
+  try {
+    let parent = board.refresh().threads.find((t) => t.id === "parent")!
+    assert.equal(parent.runtime, "turn-idle")
+    assert.equal(parent.needsYou, true, "control: unsnoozed, the re-rest queues")
+    assert.deepEqual(parent.returnedSubAgents?.map((r) => r.id), ["a"], "the card's returned half rides the view")
+    assert.equal(parent.subAgentsSnoozed, undefined)
+
+    assert.equal(storage.setSubAgentsSnoozedAtIfCurrent("parent", "sess-parent", 0, FAN_ARMED), true)
+    assert.equal(storage.setSubAgentsSnoozedAtIfCurrent("parent", "someone-else", 0, FAN_ARMED), false, "session-guarded")
+    parent = board.refresh().threads.find((t) => t.id === "parent")!
+    assert.equal(parent.needsYou, false, "snoozed")
+    assert.equal(parent.subAgentsSnoozed, true, "and it says why, for the Snoozed band")
+
+    // Mid-turn on a child's report the flag drops (the row spins in Active), and it is back at the next rest.
+    current = tele({ ...current, turn: "in-flight" })
+    parent = board.refresh().threads.find((t) => t.id === "parent")!
+    assert.equal(parent.subAgentsSnoozed, undefined, "no flag while the parent is running")
+    current = tele({ ...current, turn: "idle", pendingQuestion: true })
+    parent = board.refresh().threads.find((t) => t.id === "parent")!
+    assert.equal(parent.needsYou, true, "a question puts it back in the queue")
+    assert.equal(parent.subAgentsSnoozed, undefined, "and the flag does not claim a thread that is queued")
+
+    current = tele({ turn: "idle", subAgents: [], retiredSubAgents: [retired("a", FAN_A_BACK), retired("b", "2026-09-29T10:05:00.000Z"), retired("c", FAN_ALL_BACK)], lastFence: hintless })
+    parent = board.refresh().threads.find((t) => t.id === "parent")!
+    assert.equal(parent.subAgentsSnoozed, undefined)
+    assert.equal(parent.returnedSubAgents, undefined, "with nothing out there is no batch to state")
+  } finally {
+    board.stop()
+    storage.close()
+    rmSync(dir, { recursive: true, force: true })
+  }
 })
 
 test("deriveAwaitingBackground: true only when own-work rest is the SOLE reason for the card", () => {

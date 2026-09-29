@@ -1,4 +1,4 @@
-import { useEffect, useId, useMemo, useRef, useState } from "react"
+import { useEffect, useId, useMemo, useRef, useState, type ReactNode } from "react"
 import { useSnapshot } from "valtio"
 import { AlarmClock, ChevronDown, Loader2 } from "lucide-react"
 import { SNOOZE_PROMPT_MAX, type ThreadView } from "@frizz/shared"
@@ -28,6 +28,7 @@ export function SnoozeButton({
   projectName,
   onSnoozed,
   onUndone,
+  eventItems,
 }: {
   thread: ThreadView
   /** The project the thread waits under once snoozed, named in the toast. Defaults to the page's — the
@@ -36,6 +37,10 @@ export function SnoozeButton({
   onSnoozed?: () => void
   /** The toast's Undo put the snooze back as it was: give back whatever `onSnoozed` took away. */
   onUndone?: () => void
+  /** EVENT snoozes the surface can offer, above the wall-clock presets — a snooze whose wake is something
+   *  the thread does rather than an instant. The queue card of a parent waiting on its sub-agents passes
+   *  its two (AwaitingSubAgentsCard SubAgentWaitSnoozeItems), each ending in its own separator. */
+  eventItems?: ReactNode
 }) {
   const api = useThreadApi()
   const board = useBoard()
@@ -181,6 +186,7 @@ export function SnoozeButton({
             </button>
           </MenuTrigger>
           <MenuContent align="end">
+            {eventItems}
             {SNOOZE_PRESETS.map((preset) => (
               <MenuItem key={preset.value} value={preset.value} onSelect={() => applyPreset(preset.value)} icon={<AlarmClock size={12} />}>
                 <span className="flex min-w-0 flex-1 items-center justify-between gap-4">

@@ -808,6 +808,102 @@ function bgSnoozeArmed(row: Pick<SessionRow, "bg_snooze_rested_at" | "rested_at"
   return row.bg_snooze_rested_at != null && row.rested_at != null && row.bg_snooze_rested_at === row.rested_at
 }
 
+// ---- THE SUB-AGENT WAIT: which children are out, which came back, and the snooze that spans it ------
+// A parent that fans out N background sub-agents is re-invoked by EACH return: it wakes, reads the
+// report, and rests again. A rest that is not an honoured park queues (Colin: a partial return may give
+// the human something to act on), so a queued parent re-queues once per child. Two things follow, and
+// the maintainer ruled on both (2026-09-29): the card has to say where the batch stands — which children
+// are still out and which have come back — and the human needs a snooze that waits out the WHOLE batch
+// rather than one that the next return spends (bgSnoozeArmed, which is scoped to one rest by design).
+
+// The direct children still out: running, or tracked but quiet (`stale` — a completion signal we may
+// have lost). Descendants are a rendering concern and never move thread state (isDirectSubAgent).
+function outstandingDirectAgents(tele: SessionTelemetry | undefined): SessionTelemetry["subAgents"] {
+  return (tele?.subAgents ?? []).filter((a) => isDirectSubAgent(a) && (a.state === "running" || a.state === "stale"))
+}
+
+/** When the wait still open began: the DISPATCH of the oldest direct child still out. That is the park
+ *  instant in the sense the card needs — every child that came back since then belongs to the batch the
+ *  parent is resting on, including one that came back before the parent first rested, and nothing from a
+ *  batch that had fully returned before this one was sent. It is not the parent's `rested_at`: every
+ *  return moves that forward, so filtering on it would forget each return the moment it woke the parent.
+ *  Undefined when nothing is out — there is no wait to describe. */
+export function subAgentWaitOpenedAt(tele: SessionTelemetry | undefined): number | undefined {
+  const starts = outstandingDirectAgents(tele).map((a) => Date.parse(a.startedAt)).filter(Number.isFinite)
+  return starts.length > 0 ? Math.min(...starts) : undefined
+}
+
+/** The returned half of the wait, off the tailer's retired ring: every child that finished at or after
+ *  the wait opened, oldest return first. Only while a direct child is RUNNING — a batch whose last child
+ *  is merely stale is not something the parent is visibly waiting on, and the card that lists these
+ *  draws for a running wait alone. A child both retired and still listed (a SendMessage revival, a
+ *  `rested` child whose fan-out runs on) is counted where it is live, never twice. */
+export function returnedSubAgentsView(tele: SessionTelemetry | undefined): ThreadView["returnedSubAgents"] {
+  if (!hasLiveBackgroundWork(tele)) return undefined
+  const openedAt = subAgentWaitOpenedAt(tele)
+  if (openedAt === undefined) return undefined
+  const live = new Set((tele?.subAgents ?? []).flatMap((a) => (a.id ? [a.id] : [])))
+  const out = (tele?.retiredSubAgents ?? [])
+    .filter((r) => !live.has(r.id))
+    .filter((r) => {
+      const at = Date.parse(r.finishedAt ?? r.startedAt ?? "")
+      return Number.isFinite(at) && at >= openedAt
+    })
+    .sort((a, b) => Date.parse(a.finishedAt ?? "") - Date.parse(b.finishedAt ?? ""))
+    .map((r) => ({
+      id: r.id,
+      label: r.label,
+      status: r.status,
+      ...(r.startedAt ? { startedAt: r.startedAt } : {}),
+      ...(r.finishedAt ? { finishedAt: r.finishedAt } : {}),
+      ...(r.subagentType ? { subagentType: r.subagentType } : {}),
+    }))
+  return out.length > 0 ? out : undefined
+}
+
+/** Does "snooze until all sub-agents return" still hold this thread?
+ *
+ *  Armed at an instant (`subagents_snoozed_at`), it holds for as long as SOME direct sub-agent has been
+ *  running at every instant since — across any number of intermediate returns, each of which still wakes
+ *  the parent (a sibling returning is not the batch returning). It lets go:
+ *
+ *  - when no direct sub-agent is running now — the whole batch is back, which is the wake the human asked
+ *    for;
+ *  - when there was a GAP since the arming, an instant with nothing running, even if a new child is running
+ *    now. The batch the human snoozed on came back in full, and a second batch the worker dispatched after
+ *    reading it is new work the human has not seen. Measured off the retired ring's dispatch→return
+ *    intervals, so no write has to catch the gap as it happens and a restart cannot lose it;
+ *  - when the HUMAN has spoken to the thread since (lastHumanAt counts typed turns only, never a child's
+ *    report or a wake). Whatever they said supersedes a snooze set before it.
+ *
+ *  A question, a crash, a limit or a ```done outrank it without touching it: deriveNeedsYou checks those
+ *  first. Nothing ever clears the column, and nothing needs to — once any of the above has happened it is
+ *  true forever, so a stale arming is inert. */
+export function subAgentsSnoozeHolds(row: Pick<SessionRow, "subagents_snoozed_at">, tele: SessionTelemetry | undefined): boolean {
+  const armedMs = Date.parse(row.subagents_snoozed_at ?? "")
+  if (!Number.isFinite(armedMs)) return false
+  const running = (tele?.subAgents ?? []).filter((a) => isDirectSubAgent(a) && a.state === "running")
+  if (running.length === 0) return false
+  const humanMs = Date.parse(tele?.lastHumanAt ?? "")
+  if (Number.isFinite(humanMs) && humanMs > armedMs) return false
+  // Cover [armedMs, now] with the intervals children were out. A running child's interval is open-ended,
+  // so reaching one means covered to now; running out of intervals before that is the gap. A retired
+  // child missing either instant cannot vouch for any stretch, so it bridges nothing — the safe side,
+  // since a gap only ever releases the thread into the queue.
+  const spans = [
+    ...running.map((a) => ({ from: Date.parse(a.startedAt), to: Infinity })),
+    ...(tele?.retiredSubAgents ?? []).map((r) => ({ from: Date.parse(r.startedAt ?? ""), to: Date.parse(r.finishedAt ?? "") })),
+  ]
+    .filter((s) => Number.isFinite(s.from) && !Number.isNaN(s.to) && s.to >= s.from)
+    .sort((a, b) => a.from - b.from)
+  let coveredTo = armedMs
+  for (const span of spans) {
+    if (span.from > coveredTo) break
+    coveredTo = Math.max(coveredTo, span.to)
+  }
+  return coveredTo === Infinity
+}
+
 // A declared wait excuses an idle thread from the queue only for a specific external-human gate or a
 // valid future scheduler instant. Legacy PR/CI/session hints, malformed/elapsed timers, and hintless
 // fences are agent-owned work; if the worker nevertheless comes to rest, the queue must surface that
@@ -1144,6 +1240,14 @@ export function deriveNeedsYou(
   // rendered twice on one queue card (maintainer 2026-08-25: "I already hit the snooze button… but it's
   // still in the queue"). Checked against the registry, not the declaration: a fence naming a fired
   // timer is a bare rest, and a bare rest is not snoozable.
+  //
+  // SNOOZED UNTIL ALL SUB-AGENTS RETURN (2026-09-29). The human's other event-snooze, and the reason it
+  // sits here: it is the one that is NOT spent by the next rest. Each child that comes back still wakes
+  // the parent, which reads the report and rests again — that rest just does not re-queue it while a
+  // sibling is still out. It lets go when none is (see subAgentsSnoozeHolds), and everything above this
+  // line — a question, a crash, a limit, a fresh follow-up — has already outranked it. A ```done does too:
+  // the worker saying it has finished is a better reason to look than the children it left running.
+  if (runtime !== "exited" && tele?.lastFence?.kind !== "done" && subAgentsSnoozeHolds(row, tele)) return false
   if (runtime !== "exited" && (hasLiveOwnWork(tele, registeredPrWatches) || hasParkedTimerWatch(tele, armedTimerIds)) && tele?.lastFence?.kind !== "done") return !bgSnoozeArmed(row)
   // A final ```done fence is a CHECKED completion handoff: show its success card in the queue until the
   // human explicitly Archives the thread. Like a question, merely viewing it does not resolve it. The
@@ -1166,7 +1270,8 @@ export function deriveNeedsYou(
 // remain the only places this state is stated in words — which is why the card must keep rendering
 // without a queue card behind it, and why the snooze below is dropped.
 //
-// The queue's event-Snooze is deliberately NOT inherited (bg_snooze_rested_at is nulled out below).
+// The queue's event-Snooze is deliberately NOT inherited (bg_snooze_rested_at is nulled out below, and
+// so is the "until all sub-agents return" snooze beside it, for the same reason).
 // Snoozing is a QUEUE VERB — "stop showing me this card in the queue" — while this flag states a FACT
 // about the thread, and AwaitingBackgroundCard renders that fact on the drawer and the standalone page
 // too, where there is no Snooze affordance and nothing to dismiss. Inheriting the snooze let one queue
@@ -1249,7 +1354,7 @@ export function deriveAwaitingBackground(
   // drawer and full-screen page for a healthy thread resting on its children or on a shell. Since
   // 2026-08-01 that covers a shell-only rest too — it now has NO queue card at all, so this card in the
   // drawer and on the standalone page is the only place that state is stated in words.
-  return deriveNeedsYou({ ...row, bg_snooze_rested_at: null }, tele, runtime, hasActionableInteraction, nowMs, limitPause, false, deliveryProcessGone, {}, new Set(), armedTimerIds, armedWatches, openQuestions)
+  return deriveNeedsYou({ ...row, bg_snooze_rested_at: null, subagents_snoozed_at: null }, tele, runtime, hasActionableInteraction, nowMs, limitPause, false, deliveryProcessGone, {}, new Set(), armedTimerIds, armedWatches, openQuestions)
 }
 
 // A REGISTERED session thread's view (id = row.slug). Runtime via the shared deriveRuntime (transport-aware);
@@ -1771,6 +1876,14 @@ function sessionThreadView(
     // states whether the thread is waiting, which the snooze does not change — so the suppression is a
     // presentation rule the client applies, not a second opinion about the thread's state.
     bgSnoozed: bgSnoozeArmed(row) || undefined,
+    // The "until all sub-agents return" snooze, only while it is what keeps the thread out of the queue:
+    // not while a question or a crash has already put it back in (needsYou), and not while the parent
+    // is mid-turn on a child's report — that turn spins in Active like any snoozed thread's, and the flag
+    // comes back at its next rest. isSnoozed parks the row in Snoozed on it.
+    subAgentsSnoozed: (!needsYou && runtime === "turn-idle" && subAgentsSnoozeHolds(row, tele)) || undefined,
+    // The queued parent's card: which children came back inside the wait still open. See
+    // returnedSubAgentsView; with the live `subAgents` above it is the whole batch.
+    returnedSubAgents: archived ? undefined : returnedSubAgentsView(tele),
     claudeRuntime: row.claude_runtime === "broker" ? "broker" as const : undefined,
     // The recurring prompt — the same projection the worker's own `action: "get"` reads back.
     recurringPrompt: resolveRecurringPrompt(row),
@@ -2203,7 +2316,7 @@ export function createBoard(
       // What a person did, for a queued thread's place in line (queue-clock.ts: a thread only loses it
       // when someone acts on it). Every follow-up reaches the delivery ledger, and each router path that
       // writes one re-assembles the board before it returns, so one reading always sees it.
-      humanOut: (t) => t.archived || t.snoozedUntil !== undefined || t.bgSnoozed === true || heldByDelivery.has(t.id),
+      humanOut: (t) => t.archived || t.snoozedUntil !== undefined || t.bgSnoozed === true || t.subAgentsSnoozed === true || heldByDelivery.has(t.id),
       humanGate: (t) => t.actionableInteraction === true || t.runtime === "perm-prompt" || t.pendingAsk !== undefined,
     })
     armSnoozeWake(sessionThreads, assembledAtMs, queueClock.nextEntryAt(assembledAtMs))

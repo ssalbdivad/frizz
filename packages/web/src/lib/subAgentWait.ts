@@ -1,0 +1,59 @@
+import { isDirectSubAgent, questionsOwed, type ReturnedSubAgentView, type SubAgentView, type ThreadView } from "@frizz/shared"
+
+// ── A QUEUED PARENT'S SUB-AGENT WAIT — what its card says about the batch it fanned out ──────────────
+//
+// A parent that dispatched several background sub-agents is re-invoked by each one's return, and a rest
+// that is not an honoured park queues (a partial return may give the human something to act on). So the
+// queue meets the same parent once per return, and until 2026-09-29 its card said only "Awaiting" over the
+// worker's prose — nothing about which children were still out, which had come back, or why it was back.
+// The pure half of that card lives here, beside the words it puts on screen, so a test can pin them
+// without a DOM (AwaitingSubAgentsCard draws them).
+
+/** The toasts, shared with the rail's Snoozed tooltip (Sidebar.tsx), which states the same park in the
+ *  same words once the card is gone. */
+export const SUBAGENTS_SNOOZE_TOAST = "Snoozed until all sub-agents return"
+export const ACTIVITY_SNOOZE_TOAST = "Snoozed until the background work returns"
+
+/** The batch-long snooze's explainer, in the tooltip of both places it is offered (the card's band and
+ *  the footer's snooze menu). The second clause is the part a human would not guess: the agent is not
+ *  put to sleep, only the card is. */
+export const SUBAGENTS_SNOOZE_EXPLAINER = "Hides card until every sub-agent has returned — each return still wakes the agent"
+
+export interface SubAgentWait {
+  /** The direct children the thread still has out, in any liveness state the card draws. */
+  out: readonly SubAgentView[]
+  /** The ones that came back inside the wait (server-filtered — board.returnedSubAgentsView). */
+  returned: readonly ReturnedSubAgentView[]
+  running: number
+  total: number
+}
+
+/** The batch, or undefined when nothing is running — with no child out there is no "of N" to state. */
+export function subAgentWait(thread: Pick<ThreadView, "subAgents" | "returnedSubAgents">): SubAgentWait | undefined {
+  const out = (thread.subAgents ?? []).filter(isDirectSubAgent)
+  const running = out.filter((agent) => agent.state === "running").length
+  if (running === 0) return undefined
+  const returned = thread.returnedSubAgents ?? []
+  return { out, returned, running, total: out.length + returned.length }
+}
+
+/** THE HEADING, in place of the bare "Awaiting" (maintainer 2026-09-29: the card's header "says it
+ *  plainly"). Nothing back yet reads as a wait on a count; anything back reads as progress through it. */
+export function subAgentWaitHeading(wait: Pick<SubAgentWait, "returned" | "total">): string {
+  if (wait.returned.length === 0) return `Waiting on ${wait.total} sub-agent${wait.total === 1 ? "" : "s"}`
+  return `${wait.returned.length} of ${wait.total} sub-agents returned`
+}
+
+/** Does this queue card draw the wait in place of its ```awaiting fence?
+ *
+ *  At rest, with a direct child running, and nothing that outranks "waiting on its children": a done
+ *  handoff is the worker's own last word, and an ask is the actionable thing on the card — the same
+ *  ordering deriveAwaitingBackground keeps for the drawer's resting card. */
+export function showsSubAgentWait(
+  thread: Pick<ThreadView, "kind" | "foreign" | "runtime" | "lastFence" | "pendingAsk" | "pendingQuestion" | "questions" | "subAgents" | "returnedSubAgents">,
+): boolean {
+  if (thread.kind !== "session" || thread.foreign === true || thread.runtime !== "turn-idle") return false
+  if (thread.lastFence?.kind === "done") return false
+  if (thread.pendingAsk || thread.pendingQuestion || questionsOwed(thread.questions).length > 0) return false
+  return subAgentWait(thread) !== undefined
+}

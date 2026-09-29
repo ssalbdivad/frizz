@@ -429,9 +429,11 @@ export interface SessionTelemetry extends NormalizedTail {
   // deliberately not on the board's wire, because no surface draws a finished shell; the scheduler's
   // watcher pass is the only consumer. See retiredShellViews for what it is for.
   retiredShells?: RetiredShellView[]
-  // Sub-agents that have ENDED, same ring and same reason: no surface draws one, and the only consumer
-  // is interrupt-ended.ts, which must name a child the interrupt KILLED and never one that simply
-  // finished in the same 30s — so the outcome rides along with the id.
+  // Sub-agents that have ENDED, same ring. Off the wire as a whole: interrupt-ended.ts reads it to name a
+  // child the interrupt KILLED and never one that simply finished in the same 30s — so the outcome rides
+  // along with the id — and the board reads the slice a queued parent's card needs (the returns inside
+  // the wait still open, board.returnedSubAgentsView) plus the intervals its "until all sub-agents
+  // return" snooze is measured against (board.subAgentsSnoozeHolds).
   retiredSubAgents?: RetiredSubAgentView[]
   pendingAsk?: PendingAskData // a pending native AskUserQuestion the session is frozen on (else absent)
   // The last assistant message carries an unanswered ```question fence AND the thread still speaks the
@@ -550,6 +552,12 @@ export interface RetiredSubAgentView {
   label: string
   status: "completed" | "failed" | "killed"
   finishedAt?: string
+  // The DISPATCH instant and the profile, for the queued parent's card and the snooze that waits out
+  // its batch (board.returnedSubAgentsView, board.subAgentsSnoozeHolds): together with `finishedAt` they
+  // are the interval this child was out, which is what "has something been running ever since" is
+  // measured against.
+  startedAt?: string
+  subagentType?: string
 }
 
 // A pending native AskUserQuestion (structured, capped). Mirrors @frizz/shared PendingAsk; `id` is
@@ -3190,7 +3198,7 @@ export function createTailer(deps: TailerDeps): Tailer {
   // shell matches no retirement either, so a typo still never fires.
   function retiredSubAgentViews(state: TailState): RetiredSubAgentView[] {
     const out: RetiredSubAgentView[] = []
-    for (const r of state.retiredSubAgents.values()) out.push({ id: r.toolUseId, taskId: r.taskId, label: r.label, status: r.status, finishedAt: r.finishedAt })
+    for (const r of state.retiredSubAgents.values()) out.push({ id: r.toolUseId, taskId: r.taskId, label: r.label, status: r.status, finishedAt: r.finishedAt, startedAt: r.startedAt, subagentType: r.subagentType })
     return out
   }
 

@@ -90,6 +90,12 @@ export interface SessionRow {
   // came to a new rest because a sub-agent/shell returned. NULL = no event-snooze armed. Distinct from
   // snoozed_until (a wall-clock park owned by the scheduler); this one clears itself on the next rest.
   bg_snooze_rested_at?: string | null
+  // "Snooze until all sub-agents return": the instant the human armed it (NULL = not armed). Unlike
+  // `bg_snooze_rested_at` it is NOT scoped to one rest — a child's return wakes the parent, which rests
+  // again, and this still holds. board.subAgentsSnoozeHolds decides when it has let go (no direct
+  // sub-agent running at some instant since this one, or the human spoke since), so nothing ever has to
+  // clear it: a stale value is inert, because the gap that released it lies between it and now forever.
+  subagents_snoozed_at?: string | null
   // The instant the human PINNED this thread out of the rail's band system (null/absent = not pinned).
   // Like Archive and the snooze it is lifecycle metadata the human owns — never inferred from a fence —
   // and the instant doubles as the pinned band's order. It survives every state change (a pinned thread
@@ -690,6 +696,8 @@ export interface Storage {
   // Arm/clear the awaiting-background event-snooze. Session-guarded like the park above. `restedAt` is
   // the rest instant the card is snoozed FOR; the board re-surfaces it once rested_at moves past this.
   setBgSnoozeRestedAtIfCurrent(slug: string, sessionId: string, generation: number, restedAt: string | null): boolean
+  // Arm (an ISO instant) or clear (null) the "until all sub-agents return" snooze. Session-guarded the same way.
+  setSubAgentsSnoozedAtIfCurrent(slug: string, sessionId: string, generation: number, at: string | null): boolean
   // Arm / edit / clear the thread's RECURRING PROMPT in ONE write, because the popover's textarea, its
   // two trigger toggles and its minutes field are all views of one row — split into separate writes, a
   // tab holding a stale copy of one of them would clobber the rest.
@@ -1043,6 +1051,7 @@ export const STORAGE_SCHEMA = `
       snoozed_until TEXT,
       snooze_prompt TEXT,
       bg_snooze_rested_at TEXT,
+      subagents_snoozed_at TEXT,
       pinned_at   TEXT,
       meta        TEXT,
       seen_at     TEXT,
@@ -1392,7 +1401,7 @@ export function ensureStorageSchema(db: Database): void {
   // a file that already exists, and every live install predates any column below — so each rides one
   // additive ALTER here, exactly the stack the schema comment above says the unified file was born
   // without. Keep the list append-only; the try/catch is the "already there" case.
-  for (const column of ["pinned_at TEXT", "acp_agent TEXT", "queued_at TEXT"]) {
+  for (const column of ["pinned_at TEXT", "acp_agent TEXT", "queued_at TEXT", "subagents_snoozed_at TEXT"]) {
     try {
       db.exec(`ALTER TABLE session ADD COLUMN ${column}`)
     } catch {
@@ -1740,6 +1749,10 @@ export function createStorage(source: string | Database, projectId: string): Sto
   `)
   const bgSnoozeRestedAtIfCurrentStmt = scope.prepare(`
     UPDATE session SET bg_snooze_rested_at = ?
+    WHERE project_id = @project_id AND slug = ? AND session_id = ? AND runtime_generation = ?
+  `)
+  const subAgentsSnoozedAtIfCurrentStmt = scope.prepare(`
+    UPDATE session SET subagents_snoozed_at = ?
     WHERE project_id = @project_id AND slug = ? AND session_id = ? AND runtime_generation = ?
   `)
   // Every SET expression here reads the ORIGINAL row (SQLite evaluates the whole SET list against the
@@ -2720,6 +2733,8 @@ export function createStorage(source: string | Database, projectId: string): Sto
     setQueuedAt: (slug, at) => void queuedAtStmt.run(at, slug),
     setBgSnoozeRestedAtIfCurrent: (slug, sessionId, generation, restedAt) =>
       bgSnoozeRestedAtIfCurrentStmt.run(restedAt, slug, sessionId, generation).changes === 1,
+    setSubAgentsSnoozedAtIfCurrent: (slug, sessionId, generation, at) =>
+      subAgentsSnoozedAtIfCurrentStmt.run(at, slug, sessionId, generation).changes === 1,
     setRecurringPromptIfCurrent: (slug, sessionId, generation, write) =>
       recurringStmt.run(...recurringArgs(write), slug, sessionId, generation).changes === 1,
     setRecurringPromptBySlug: (slug, write) =>

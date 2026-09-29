@@ -1213,6 +1213,31 @@ test("isSnoozed: the event-snooze yields to a live sub-agent, a queue reason, an
   assert.equal(sessionIndicatorKind(thread({ ...base, runtime: "running" })), "working")
 })
 
+// SNOOZED UNTIL ALL SUB-AGENTS RETURN — the one park a live sub-agent does not outrank, because the live
+// sub-agents are what it parks on (maintainer 2026-09-29). The server sets the flag only while it is what
+// keeps the thread out of the queue, and only at rest.
+test("isSnoozed: 'until all sub-agents return' parks a parent with children still out, and nothing else", () => {
+  const parked = thread({
+    kind: "session", state: "open", runtime: "turn-idle", needsYou: false, awaitingBackground: false, subAgentsSnoozed: true, subAgents: liveSub,
+    lastFence: { kind: "awaiting", body: "Waiting on three audits.", hints: [] },
+  })
+  assert.equal(isSnoozed(parked), true)
+  assert.equal(sectionOf(parked), "snoozed")
+  assert.equal(sessionIndicatorKind(parked), "snoozed", "the park mark, not the spinner")
+  // NEGATIVE CONTROL: the same row without the flag is exactly what it was — a live child keeps it in
+  // Active, spinning, as it does over every other park.
+  const unparked = { ...parked, subAgentsSnoozed: undefined }
+  assert.equal(isSnoozed(unparked), false)
+  assert.equal(sectionOf(unparked), "active")
+  assert.equal(sessionIndicatorKind(unparked), "working")
+  // A child's report woke the parent: it spins in Active for that turn, flag or not.
+  assert.equal(isSnoozed({ ...parked, runtime: "running" }), false)
+  assert.equal(sessionIndicatorKind({ ...parked, runtime: "running" }), "working")
+  // A queue reason beside a stale flag is never hidden.
+  assert.equal(isSnoozed({ ...parked, needsYou: true, pendingQuestion: true }), false)
+  assert.equal(isSnoozed({ ...parked, state: "archived" }), false, "done is done")
+})
+
 // ---- bandOf: the band a surface names must be the band the row sits in ----
 
 // The drawer header's stamp and the rail read one derivation, and the check is the rail itself: over the

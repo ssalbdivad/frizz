@@ -640,6 +640,11 @@ export function sessionIndicatorKind(t: ThreadView): SessionIndicatorKind {
   // futureSnoozedUntil so ONLY the operator's own wall-clock park takes this branch: a declared wait or
   // an event-snooze leaves the thread QUEUED server-side, where the ask is reachable and the [?] is true.
   if (futureSnoozedUntil(t) !== undefined && isSnoozed(t)) return "snoozed"
+  // SNOOZED UNTIL ALL SUB-AGENTS RETURN is the other park that must outrank the spinner below: its row
+  // has live children by definition, so `working` would claim it on every rest, in the Snoozed band the
+  // human just put it in. The server only sets the flag while nothing queues the thread, so no ask mark
+  // below can be true of it; mid-turn it is dropped, and the row spins in Active like any snoozed one.
+  if (t.subAgentsSnoozed === true && isSnoozed(t)) return "snoozed"
 
   const explicitlyNeedsInput = Boolean(
     t.actionableInteraction ||

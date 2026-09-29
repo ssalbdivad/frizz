@@ -1,4 +1,5 @@
-import type { SubAgentView } from "@frizz/shared"
+import type { ReturnedSubAgentView, SubAgentView } from "@frizz/shared"
+import type { Api } from "../api/rpc.ts"
 import { pushSubAgentDrawer } from "../store.ts"
 import { visibleChildOps } from "../lib/childOps.ts"
 import { childOpDismisser } from "../lib/dismissChildOp.ts"
@@ -28,9 +29,16 @@ export function hasQueueSubAgentLines(subAgents: readonly SubAgentView[]): boole
   return visibleChildOps(subAgents, "card").length > 0
 }
 
+/** How a row opens its child. `pushSubAgentDrawer` by default — the child's transcript stacked over its
+ *  parent — which reads the PAGE's project; a card drawn for another project's thread passes its own. */
+export type OpenQueueSubAgent = (child: { id: string; label: string; subagentType?: string; startedAt?: string }) => void
+
 export function QueueSubAgentLines({
   slug,
   subAgents,
+  returned = [],
+  api,
+  onOpenChild,
   // The ops COLUMN's padding, which is positional and therefore the caller's to set — the same prop
   // BackgroundOpsStrip takes, for the same reason. These lines and that strip stack into one column,
   // so only the list that ends the column may carry its bottom air (8px before the lifecycle footer);
@@ -40,10 +48,17 @@ export function QueueSubAgentLines({
 }: {
   slug: string
   subAgents: readonly SubAgentView[]
+  /** The batch's RETURNED half (ThreadView.returnedSubAgents), drawn after the live rows with the mark and
+   *  reading of a finished child. Only a queued parent's card passes it (AwaitingSubAgentsCard). */
+  returned?: readonly ReturnedSubAgentView[]
+  /** The thread's own project's client for the × — `rpc` (the page's project) when absent. */
+  api?: Api
+  onOpenChild?: OpenQueueSubAgent
   className?: string
 }) {
   const visible = visibleChildOps(subAgents, "card")
-  if (visible.length === 0) return null
+  if (visible.length === 0 && returned.length === 0) return null
+  const open: OpenQueueSubAgent = onOpenChild ?? ((child) => pushSubAgentDrawer(slug, child.id, child))
   return (
     <div data-queue-subagents className={`flex min-w-0 flex-col gap-0.5 ${className}`}>
       {visible.map((agent, index) => (
@@ -57,8 +72,23 @@ export function QueueSubAgentLines({
           startedAt={agent.startedAt}
           // What the child is DOING right now. The counters stay off a handoff card (see ChildOpRow).
           parentSlug={slug}
-          onOpen={agent.id ? () => pushSubAgentDrawer(slug, agent.id!, { label: agent.label, subagentType: agent.subagentType, startedAt: agent.startedAt }) : undefined}
-          onDismiss={childOpDismisser(slug, agent)}
+          onOpen={agent.id ? () => open({ id: agent.id!, label: agent.label, subagentType: agent.subagentType, startedAt: agent.startedAt }) : undefined}
+          onDismiss={childOpDismisser(slug, agent, "AGENT", api)}
+        />
+      ))}
+      {returned.map((child) => (
+        <ChildOpRow
+          key={child.id}
+          kind="AGENT"
+          label={child.label}
+          state="returned"
+          outcome={child.status}
+          endedAt={child.finishedAt}
+          density="card"
+          parentSlug={slug}
+          // A retired child's transcript stays resolvable for review (the tailer's retained ring), and
+          // reading what it came back with is the reason to click it.
+          onOpen={() => open({ id: child.id, label: child.label, subagentType: child.subagentType, startedAt: child.startedAt })}
         />
       ))}
     </div>
