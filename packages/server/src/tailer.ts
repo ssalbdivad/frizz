@@ -2271,6 +2271,7 @@ export interface SubAgentLookup {
   // says whether the run itself is still tracked as running — the only thing that makes a journalled
   // "started" agent trustworthy as running.
   workflow?: { runDir?: string; live: boolean }
+  workflowAgent?: true // the id names one AGENT of a workflow run, resolved through its run's journal
 }
 
 export interface Tailer {
@@ -3505,6 +3506,7 @@ export function createTailer(deps: TailerDeps): Tailer {
         outputFile: found.agent.transcript,
         state: agentState === "failed" ? "done" : agentState,
         direct: false,
+        workflowAgent: true,
         ...(found.agent.startedAtMs === undefined ? {} : { startedAt: new Date(found.agent.startedAtMs).toISOString() }),
         ...(agentState === "failed" ? { outcome: "failed" as const } : {}),
       }

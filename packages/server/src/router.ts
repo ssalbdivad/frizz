@@ -1256,6 +1256,7 @@ export function createRouter(ctx: AppContext) {
     const info = ctx.tailer.subAgent(slug, id)
     if (!info) return blocked(null)
     if (info.state !== "running") return blocked(null)
+    if (info.workflowAgent) return blocked("Workflow agents are run by their workflow and can't be steered.")
     if (!info.direct) return blocked("Only sub-agents this thread dispatched itself can be steered — this one belongs to another agent.")
     const row = ctx.storage.getSession(slug)
     if (!row) return blocked(null)

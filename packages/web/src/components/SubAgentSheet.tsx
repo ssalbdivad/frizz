@@ -299,9 +299,12 @@ function SubAgentSteerFooter({
     return (
       <div data-subagent-steer-note className="w-full shrink-0 border-t border-border bg-panel px-3 py-3">
         <div className="px-1 pb-2 text-[11.5px] text-muted-70">{unavailableNote}</div>
-        <div className="pl-1.5">
-          <SubAgentProfileReadout subagentType={subagentType} />
-        </div>
+        {/* A workflow run has no model of its own — each of its agents picks one — so no profile chip. */}
+        {noun !== "workflow" && (
+          <div className="pl-1.5">
+            <SubAgentProfileReadout subagentType={subagentType} />
+          </div>
+        )}
         {/* Same optical bottom inset ThreadComposerBox gives the thread-level prompt box (styles.css).
             No `empty:hidden` wrapper needed — the strip itself renders nothing when it has no rows, so
             the class comes and goes with them. */}

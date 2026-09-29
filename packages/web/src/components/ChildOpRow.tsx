@@ -25,7 +25,9 @@ import {
 // something running underneath the thread that will wake it — even though nothing of ours is executing:
 // it is GitHub that is being watched (maintainer 2026-08-13: "now GitHub watchers can be included in the
 // ranks of those").
-export type ChildOpKind = "AGENT" | "SHELL" | "GITHUB"
+// WORKFLOW is a `Workflow` run: an agent-kind child in every liveness sense, whose drill-in is the tree
+// of agents it fanned out rather than one transcript, and whose own agents indent beneath it.
+export type ChildOpKind = "AGENT" | "WORKFLOW" | "SHELL" | "GITHUB"
 
 // The ONE surface knob, and the only thing any caller may vary. It encodes REAL information-density
 // differences between the three places a child row appears — not styling preference:
@@ -123,7 +125,7 @@ export function ChildOpRow({
   const running = isRunningOperation(state)
   // ONE HUE PER RUNTIME CONCERN, and the row is the only place they are named. A sub-agent pulses the
   // accent-yellow, a background shell the azure blue, a PR watcher the green.
-  const LIVE_DOT_HUE = { AGENT: "frizz-live-dot--agent", SHELL: "frizz-live-dot--shell", GITHUB: "frizz-live-dot--github" } as const
+  const LIVE_DOT_HUE = { AGENT: "frizz-live-dot--agent", WORKFLOW: "frizz-live-dot--agent", SHELL: "frizz-live-dot--shell", GITHUB: "frizz-live-dot--github" } as const
   // THE TAG IS FIVE CHARACTERS ON EVERY KIND. `GITHUB` is six, and before this column had a track of
   // its own it pushed that row's label 4.3px right of every other row under the mono stack (where
   // five-letter tags are pixel-identical at 21.39px). `WATCH` is also the more accurate word: the row is
@@ -134,7 +136,8 @@ export function ChildOpRow({
   // File/Link rows that share the strip beneath them. That is what closed the ~2px AGENT-vs-SHELL
   // raggedness the sans stack used to carry. Keep the words five letters anyway: the mono track is
   // sized to exactly that width.
-  const KIND_TAG = { AGENT: "AGENT", SHELL: "SHELL", GITHUB: "WATCH" } as const
+  // `FLOW`, not `WORKFLOW`: four letters sit inside the five-letter track the rule above sizes.
+  const KIND_TAG = { AGENT: "AGENT", WORKFLOW: "FLOW", SHELL: "SHELL", GITHUB: "WATCH" } as const
   const clickable = !!onOpen
   const rail = density === "rail"
   const sheet = density === "sheet"

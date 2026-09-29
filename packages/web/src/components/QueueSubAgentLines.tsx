@@ -49,7 +49,7 @@ export function QueueSubAgentLines({
       {visible.map((agent, index) => (
         <ChildOpRow
           key={agent.id ?? `${agent.startedAt}-${index}`}
-          kind="AGENT"
+          kind={agent.workflow ? "WORKFLOW" : "AGENT"}
           label={agent.label}
           state={agent.state}
           density="card"

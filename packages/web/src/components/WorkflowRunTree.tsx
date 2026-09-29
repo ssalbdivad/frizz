@@ -58,21 +58,23 @@ export function WorkflowRunTree({ slug, agents }: { slug: string; agents: readon
 function WorkflowAgentRow({ slug, agent, now }: { slug: string; agent: WorkflowAgentView; now: number }): ReactElement {
   const live = agent.state === "running" || agent.state === "stale"
   const elapsed = live ? compactElapsedSince(agent.startedAt, now) : undefined
+  // Each mark is lifted onto the label's CAP BAND by its own measured amount (sans, 13px labels, ink
+  // centre vs cap-band centre, 2026-09-29): the dots and the ✕ read 0.78px low, the check 0.53px low.
+  // In `em` so the lift tracks the row's font size. Re-measure rather than re-guess if the row changes.
   const mark =
-    agent.state === "running" ? <span aria-hidden className="frizz-live-dot frizz-live-dot--agent" data-running-indicator="workflow-agent" />
-    : agent.state === "stale" ? <span className={CHILD_STALE_DOT_CLASS} title={CHILD_STALE_TITLE} />
-    : agent.state === "failed" ? <X aria-label="failed" className="h-3 w-3 shrink-0 text-danger-soft" strokeWidth={2.25} />
-    : <Check aria-label="done" className="h-3 w-3 shrink-0 text-muted-45" strokeWidth={2.25} />
+    agent.state === "running" ? <span aria-hidden className="frizz-live-dot frizz-live-dot--agent -translate-y-[0.06em]" data-running-indicator="workflow-agent" />
+    : agent.state === "stale" ? <span className={`${CHILD_STALE_DOT_CLASS} -translate-y-[0.06em]`} title={CHILD_STALE_TITLE} />
+    : agent.state === "failed" ? <X aria-label="failed" className="h-3 w-3 shrink-0 -translate-y-[0.06em] text-danger-soft" strokeWidth={2.25} />
+    : <Check aria-label="done" className="h-3 w-3 shrink-0 -translate-y-[0.04em] text-muted-45" strokeWidth={2.25} />
   return (
     <button
       type="button"
       data-workflow-agent={agent.id}
       onClick={() => pushSubAgentDrawer(slug, agent.id, { label: agent.label, startedAt: agent.startedAt })}
       title="Open agent transcript"
-      className="group -mx-2 flex min-w-0 items-center gap-2 rounded-md px-2 py-1 text-left text-[13px] outline-none transition-colors hover:bg-panel-2/60 focus-visible:ring-1 focus-visible:ring-inset focus-visible:ring-focus-ink-60"
+      className="group -mx-2 flex min-w-0 items-center gap-1 rounded-md px-2 py-1 text-left text-[13px] outline-none transition-colors hover:bg-panel-2/60 focus-visible:ring-1 focus-visible:ring-inset focus-visible:ring-focus-ink-60"
     >
-      {/* The dots take the ops strip's cap-band lift (`.frizz-op-dot-slot`); the 12px icons fill the slot. */}
-      <span className={`${live ? "frizz-op-dot-slot " : ""}flex w-3 shrink-0 items-center justify-center`}>{mark}</span>
+      <span className="flex w-3 shrink-0 items-center justify-center">{mark}</span>
       <span className={`min-w-0 truncate ${live ? "text-fg/85" : "text-muted-70"} group-hover:text-fg group-hover:underline`}>{agent.label}</span>
       {elapsed && <span className="ml-auto shrink-0 pl-2 text-[12px] text-muted-40" title={`Working for ${elapsed}`}>{elapsed}</span>}
     </button>

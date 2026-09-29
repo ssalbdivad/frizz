@@ -4069,7 +4069,7 @@ export function BackgroundOpsStrip({
       {visibleChildOps(agents, "sheet").map((s, i) => (
         <ChildOpRow
           key={`a${i}`}
-          kind="AGENT"
+          kind={s.workflow ? "WORKFLOW" : "AGENT"}
           label={s.label}
           state={s.state}
           density="sheet"
