@@ -104,7 +104,7 @@ const SPAWN_THREAD = {
         enum: ["claude", "codex"],
         description: "Optional agent backend (default `claude`). If `codex`, `model` must be a codex model id.",
       },
-      title: { type: "string", description: "Optional short title for the new thread (else derived from the prompt)." },
+      title: { type: "string", description: "Optional name for the new thread: one or two words naming its subject, distinct from the project's other open threads (else frizz names it from the prompt)." },
     },
     required: ["prompt", "model", "effort"],
   },
@@ -751,11 +751,14 @@ const TITLE = {
     "called Zod. You know. That is the entire point of this tool.\n\n" +
     "WHEN TO CALL IT: after you have oriented — read the issue, opened the code, found the bug — and " +
     "can name the actual work in your own words. Not on arrival: a name you register before you " +
-    "understand the task is the same guess the board already has. Once is normally enough; call it " +
-    "again only if the work turns out to be genuinely something else.\n\n" +
-    "NAME THE WORK, NOT THE PROMPT. \"Is this true? We should probably…\" is what the human said, not " +
-    "what you are doing. A good name is the thing a reader picking one card out of thirty needs: the " +
-    "subject and the verb.\n\n" +
+    "understand the task is the same guess the board already has. ONCE: after your rename the name is " +
+    "stable, and Frizz refuses a second one. What the thread is doing NOW is not its name — Frizz keeps a " +
+    "separate status line for that.\n\n" +
+    "NAME THE SUBJECT, NOT THE ACTION. One or two words a reader picking one card out of thirty needs: " +
+    "\"Shell budgets\", \"Focus mode\", \"ArkType perf\" — never \"Fix the shell budget default\".\n\n" +
+    "IT MUST BE DISTINCT. No two open threads in the project share a name (compared ignoring case and " +
+    "punctuation). Frizz refuses a duplicate and names the thread that holds it; pick a different 1-2 " +
+    "word subject that sets THIS thread apart and call again — a refusal does not spend your rename.\n\n" +
     "A HUMAN RENAME OUTRANKS YOU, always. If the human has already named this thread, frizz refuses " +
     "this and tells you so — that is a correct answer, not a failure, and you should not retry it.",
   inputSchema: {
@@ -764,10 +767,10 @@ const TITLE = {
       title: {
         type: "string",
         description:
-          "The thread's name: 3-8 words, SENTENCE case (capitalize only the first word and proper " +
-          "nouns — \"Fix queue focus\", never \"Fix Queue Focus\"). No trailing period, no ticks, no " +
-          "issue-body quoting. Spell every product, file and identifier the way the PROJECT spells it, " +
-          "not the way the prompt did.",
+          "The thread's name: ONE or TWO words naming its subject, SENTENCE case (capitalize only the " +
+          "first word and proper nouns — \"Queue focus\", never \"Queue Focus\"), distinct from every " +
+          "other open thread's name. No trailing period, no ticks, no issue-body quoting. Spell every " +
+          "product, file and identifier the way the PROJECT spells it, not the way the prompt did.",
       },
     },
     required: ["title"],
@@ -892,9 +895,12 @@ async function unlink(args) {
 async function title(args) {
   const slug = threadSlug()
   const wanted = typeof args.title === "string" ? args.title.trim() : ""
-  if (!wanted) throw new Error("`title` is required — 3-8 words naming the work, in sentence case")
+  if (!wanted) throw new Error("`title` is required — one or two words naming the subject, in sentence case")
   const result = (await callRpc("setOwnThreadTitle", { slug, title: wanted }))?.result
   if (result?.accepted) return `This thread is now named "${result.title}" on the board.`
+  // A duplicate, an over-long name or a spent rename: the server says which, in words the worker can
+  // act on (pick another subject, or leave the name alone).
+  if (result?.refusal) return `Not renamed — ${result.refusal}`
   // The refusal is REPORTED, never thrown: a human who renamed the thread owns its name, and a worker
   // told "error" would retry a call that can only ever fail again.
   if (result?.lockedByHuman) {

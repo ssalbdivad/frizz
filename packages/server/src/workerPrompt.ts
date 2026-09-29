@@ -596,9 +596,9 @@ body is one line ("Answered inline — conversational prompt, nothing to ship.")
 needs a reply, register it with \`mcp__frizz__ask\` instead. Do not manufacture scope, restate the "task", or ask
 clarifying questions to seem busy.`
 
-// WHY THIS EARNS ITS TOKENS (the SIZING bar above): both backends already name a thread automatically,
-// and both mint that name at spawn from the raw prompt — Claude through the provider's own titler, Codex
-// through the first-line marker — so neither has read a line of the repo when it names the work. The
+// WHY THIS EARNS ITS TOKENS (the SIZING bar above): every thread is named automatically at spawn from the
+// raw prompt — Frizz's own namer (thread-names.ts), Codex's first-line marker, Claude's own titler until
+// the first of those lands — so nothing has read a line of the repo when the work is named. The
 // failure is not hypothetical: a zod thread went onto the board as "Zon4.5 features and z.properties
 // documentation audit" because the operator's prompt said "Zon4.5" (maintainer 2026-08-31: "it just
 // registers a clearly incorrect name"). Only the worker can fix that, and only after it has oriented —
@@ -606,14 +606,17 @@ clarifying questions to seem busy.`
 // description.
 const THREAD_NAME = `## Name your thread once you know what the work is
 
-Your thread reaches the board wearing a name frizz minted from the raw prompt before you had read
+Your thread reaches the board wearing a name Frizz minted from the raw prompt before you had read
 anything, so it carries the operator's shorthand and their typos. Once you have oriented — read the
-issue, opened the code, found the bug — call \`mcp__frizz__title\` with a real name for the actual work:
-3-8 words, sentence case, spelling every product and identifier the way the PROJECT spells it rather
-than the way the prompt did.
+issue, opened the code, found the bug — call \`mcp__frizz__title\` with the thread's real name: ONE or
+TWO words naming its SUBJECT, not the action (\`Shell budgets\`, never \`Fix the shell budget default\`),
+sentence case, spelled the way the PROJECT spells it rather than the way the prompt did.
 
-Not on arrival. A name you register before you understand the task is the same guess you are replacing.
-A human rename outranks yours, and frizz reports that rather than failing.`
+Once, and not on arrival. A name you register before you understand the task is the same guess you are
+replacing, and after your one rename the name is stable. It must differ from every other open thread's
+name: Frizz refuses a duplicate and names the thread holding it, so pick another subject. A human rename
+outranks yours, and Frizz reports that rather than failing. What is happening NOW is not the name —
+Frizz keeps a separate status line for that.`
 
 // LEGACY NAME, current behaviour. This block and `scratchpadOrientation` still say "scratchpad"; both
 // describe the scratch DIRECTORY. (`ThreadView.scratchpadPath` and the `threadScratchpad` RPC went with
@@ -830,17 +833,18 @@ Your session-start developer instruction requires your very FIRST assistant mess
 commentary, acknowledgement, tool call, or other action—to begin with exactly one invisible
 first-line comment in this form:
 
-\`<!-- frizz title="Fix queue focus" -->\`
+\`<!-- frizz title="Queue focus" -->\`
 
-Replace the example with a concise, human-readable 3-8 word title for the task. Use SENTENCE case —
-capitalize only the first word and any proper nouns (e.g. \`Fix queue focus\`, not \`Fix Queue Focus\`);
-never Title-Case Every Word. Put the comment on its own first line with nothing before it. Continue the message normally after it. Emit it exactly once and
+Replace the example with the thread's name: ONE or TWO words naming the SUBJECT of the task, not the
+action (\`Queue focus\`, not \`Fix queue focus\`), different from every name your developer instruction
+lists as taken. Use SENTENCE case — capitalize only the first word and any proper nouns; never
+Title-Case Every Word. Put the comment on its own first line with nothing before it. Continue the message normally after it. Emit it exactly once and
 never again on later turns. Frizz strips this comment from visible chat and uses only its
 quoted title while the thread still has an automatic title; a human rename always wins. Never use an H1
 for the title signal: H1 parsing exists only for compatibility with old transcripts.
 
 That marker is only the PROVISIONAL name — it is minted before you have read anything, so it can only
-paraphrase the prompt. Replace it with \`mcp__frizz__title\` once you know what the work is (below).
+paraphrase the prompt. Correct it with \`mcp__frizz__title\` once you know what the work is (below).
 
 ## Bounded native delegation
 
