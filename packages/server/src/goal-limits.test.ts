@@ -71,7 +71,7 @@ function harness(write: Partial<RecurringWrite> = {}, opts: { busyAfterBump?: bo
     .prepare("SELECT COUNT(*) AS n FROM wake_delivery WHERE thread_slug = ? AND fence_id LIKE ? AND state = 'delivered'")
     .get(slug, like) as { n: number }).n
   return {
-    s, storage, slug, delivered,
+    s, storage, slug, delivered, tele,
     row: () => storage.getSession(slug)!,
     view: () => resolveRecurringPrompt(storage.getSession(slug)!),
     /** The agent takes a turn and rests again: a genuinely new rest instant, spoken after the bump. */
@@ -86,6 +86,10 @@ function harness(write: Partial<RecurringWrite> = {}, opts: { busyAfterBump?: bo
     goalBumps: () => deliveredWhere("stophook:%"),
     beats: () => deliveredWhere("heartbeat:%"),
     goalEnds: () => deliveredWhere("goalend:%"),
+    /** The outbox's own record of when a trigger's delivery crossed to the worker. */
+    sentAtOf: (like: string) => (storage.db
+      .prepare("SELECT sent_at FROM wake_delivery WHERE thread_slug = ? AND fence_id LIKE ? ORDER BY sent_at DESC LIMIT 1")
+      .get(slug, like) as { sent_at: number | null } | undefined)?.sent_at ?? null,
     goalEndsQueued: () => (storage.db
       .prepare("SELECT COUNT(*) AS n FROM wake_delivery WHERE thread_slug = ? AND fence_id LIKE 'goalend:%'")
       .get(slug) as { n: number }).n,
@@ -135,6 +139,67 @@ test("a live runtime that answers each bump before it settles still counts every
     assert.equal(h.row().recurring_runs, 3, "every one of them counted, though none settled as delivered")
     assert.equal(h.row().recurring_stop_reason, "runs")
     assert.equal(h.goalEndsQueued(), 1)
+  } finally { h.close() }
+})
+
+// THE PANEL'S "LAST SENT" READING has the same blindness the run count had, and needs the same cure.
+// Each trigger's stamp (`recurring_{rest,schedule,compact}_fired_at`) used to be written only when the
+// delivery SETTLED — and a stop-hook bump to a live Claude worker never settles as delivered: the
+// worker's answer is a new rest, `deliveryContext` reads the bump superseded, and the superseded
+// branch stamps nothing. So "Last sent at rest" never appeared on a Claude thread at all, while a
+// Codex thread (runtime "unknown", acknowledged on return) showed it. The heartbeat and the
+// post-compaction bump are not rest-bound, so they did settle — but a minute late, at the confirmation
+// grace, which also slid every beat's next due time by that minute. The stamp is now the SEND.
+test("a live runtime that answers the rest bump still stamps 'last sent at rest', at the send", async () => {
+  const h = harness({}, { liveRuntimeAnswers: true })
+  try {
+    await h.s.tick()
+    const sentAt = h.sentAtOf("stophook:%")
+    assert.ok(sentAt !== null, "the bump crossed to a live runtime and was left as sent")
+    assert.equal(h.row().recurring_rest_fired_at, iso(sentAt), "stamped when it was sent, not when it settled")
+    // The reconcile after the grace reads it superseded (the worker already answered) and stamps
+    // nothing; the worker's answer was a new rest, so the next bump goes out and the reading follows
+    // THAT send.
+    h.setNow(T0 + 5 * 60_000)
+    await h.s.tick()
+    assert.equal(h.delivered.filter((m) => m.startsWith("keep going")).length, 2)
+    const second = h.sentAtOf("stophook:%")
+    assert.ok(second !== null && second > sentAt)
+    assert.equal(h.row().recurring_rest_fired_at, iso(second))
+    assert.ok(h.view()!.lastRestFiredAt, "and the panel's view carries it")
+  } finally { h.close() }
+})
+
+test("a live runtime's heartbeat and post-compaction stamps read the send, not the confirmation a grace later", async () => {
+  const h = harness({ stopHook: false, heartbeat: true, postCompaction: true, intervalMs: 60 * 60_000 }, { liveRuntimeAnswers: true })
+  try {
+    h.tele.lastCompactionAt = iso(T0 + 30_000)
+    h.setNow(T0 + 60 * 60_000 + 1_000)
+    await h.s.tick()
+    const beatSent = h.sentAtOf("heartbeat:%")
+    const compactSent = h.sentAtOf("compact:%")
+    assert.ok(beatSent !== null && compactSent !== null, "both went out to the live runtime")
+    assert.equal(h.row().recurring_schedule_fired_at, iso(beatSent))
+    assert.equal(h.row().recurring_compact_fired_at, iso(compactSent))
+    // Past the confirmation grace the live runtime confirms both; that must not move either stamp to
+    // the confirmation instant — the next beat is due an interval after the beat was SENT.
+    h.setNow(T0 + 60 * 60_000 + 5 * 60_000)
+    await h.s.tick()
+    assert.equal(h.row().recurring_schedule_fired_at, iso(beatSent), "the confirmation does not re-stamp the beat")
+    assert.equal(h.row().recurring_compact_fired_at, iso(compactSent))
+    assert.equal(h.beats() + (h.storage.db.prepare("SELECT COUNT(*) AS n FROM wake_delivery WHERE fence_id LIKE 'compact:%' AND state = 'delivered'").get() as { n: number }).n, 2, "and both did settle as delivered")
+  } finally { h.close() }
+})
+
+// The control: a runtime that cannot tell sent from delivered (Codex, ACP — "unknown") is acknowledged
+// on return, and was always stamped there. It still is, on the injected clock.
+test("control: an acknowledged delivery (no live-runtime signal) stamps 'last sent at rest' as before", async () => {
+  const h = harness()
+  try {
+    h.rest(T0 + 60_000)
+    await h.s.tick()
+    assert.equal(h.goalBumps(), 1)
+    assert.equal(h.row().recurring_rest_fired_at, iso(T0 + 60_000))
   } finally { h.close() }
 })
 
@@ -214,14 +279,11 @@ test("the time bound fires with NO event to hang on — a thread that never rest
 test("the cap counts heartbeat deliveries too: beat 2 of 2 is the last", async () => {
   const h = harness({ stopHook: false, heartbeat: true, intervalMs: 60 * 60_000, maxRuns: 2 })
   try {
-    const armedAt = h.row().recurring_armed_at!
     for (const hour of [1, 2, 3, 4]) {
       h.setNow(T0 + hour * 60 * 60_000 + 1_000)
       await h.s.tick()
-      // The beat's settle stamps its clock with the REAL `Date`, not the injected one, so the stamp is
-      // re-written onto the fake timeline here — the next beat is due an hour after THIS one, as it would
-      // be in production.
-      h.storage.stampRecurringScheduleFired(h.slug, armedAt, iso(T0 + hour * 60 * 60_000 + 1_000))
+      // The beat stamps its clock on the injected timeline, so the next one is due an hour after this.
+      assert.equal(h.row().recurring_schedule_fired_at, hour <= 2 ? iso(T0 + hour * 60 * 60_000 + 1_000) : iso(T0 + 2 * 60 * 60_000 + 1_000))
     }
     assert.equal(h.beats(), 2)
     assert.equal(h.row().recurring_on_schedule, 0)

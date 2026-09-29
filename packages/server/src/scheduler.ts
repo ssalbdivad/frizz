@@ -3642,21 +3642,46 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
   }
 
   // Stamp the beat clock once a beat has genuinely REACHED the worker, so the next one is due an
-  // interval after it actually landed. Called only from the three settle points that mean delivery
-  // happened (acknowledged, or confirmed by the wake token in the transcript) — deliberately NOT from
-  // the superseded/exhausted/abandoned ones the snooze settles on. A beat dropped because the human
-  // pressed pause, or one that exhausted its attempts, never fired, and advancing the clock for it
-  // would silently swallow the next interval.
+  // interval after it actually landed. Called from the points that establish delivery — the send to a
+  // live runtime (`stampGoalSent`), the acknowledgement, the transcript or grace confirmation — and
+  // deliberately NOT from the superseded/exhausted/abandoned ones the snooze settles on. A beat dropped
+  // because the human pressed pause, or one that never crossed the transport, never fired, and
+  // advancing the clock for it would silently swallow the next interval.
   //
   // Guarded on the generation for the same reason as the snooze: a beat that settles after the worker
   // re-armed or switched off the trigger must not write a schedule onto settings it no longer describes.
-  function settleSchedulePrompt(item: WakeDelivery): void {
+  function settleSchedulePrompt(item: WakeDelivery, atMs = goalSentAtMs(item)): void {
     if (!isHeartbeatFenceId(item.fenceId)) return
     const row = deps.storage.getSession(item.slug)
     if (!row || row.session_id !== item.sessionId) return
     const armedAt = row.recurring_armed_at
     if (!armedAt || !item.fenceId.startsWith(`${HEARTBEAT_FENCE_PREFIX}:${armedAt}:`)) return
-    deps.storage.stampRecurringScheduleFired(item.slug, armedAt, new Date().toISOString())
+    deps.storage.stampRecurringScheduleFired(item.slug, armedAt, new Date(atMs).toISOString())
+  }
+
+  // WHEN A GOAL PROMPT WAS SENT — the one instant all three triggers' stamps record (2026-09-29). The
+  // stamps are the panel's "Last sent …" reading and, for the schedule, the beat clock, and both mean
+  // the moment the prompt crossed to the worker. A delivery a live runtime took carries that instant as
+  // `sentAt`, and it survives confirmation, so the confirmation a grace later re-writes the SAME value
+  // instead of sliding the reading (and the next beat) by the grace. One acknowledged on return (Codex,
+  // ACP, a runtime that cannot say) has no `sentAt`: its acknowledgement IS the send, so it is now.
+  // The injected clock rather than `new Date()`, so the stamps sit on the same timeline as everything
+  // else the scheduler decides with — the beat's due time is computed from this.
+  function goalSentAtMs(item: WakeDelivery): number {
+    return item.sentAt ?? now()
+  }
+
+  // STAMP AT THE SEND, for the reason the run count is taken there (see countGoalDelivery). The stamps
+  // were written only when a delivery SETTLED, and a stop-hook bump to a live Claude worker never
+  // settles as delivered: the worker's answer is a new rest, `deliveryContext` reads the bump
+  // superseded, and the superseded branch stamps nothing. So "Last sent at rest" never appeared on a
+  // Claude thread at all, while a Codex thread — acknowledged on return — always showed it. The
+  // heartbeat and the post-compaction bump are not bound to a rest, so they did settle, a confirmation
+  // grace late. Called with the send's own instant because the in-memory row predates `markSent`.
+  function stampGoalSent(item: WakeDelivery, sentAtMs: number): void {
+    settleSchedulePrompt(item, sentAtMs)
+    settleRestPrompt(item, sentAtMs)
+    settleCompactPrompt(item, sentAtMs)
   }
 
   // ---- The GOAL'S LIMITS (see the block above goalLimitHit) ------------------------------------
@@ -3883,26 +3908,26 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
   // Stamp the POST-COMPACTION readout once its delivery is terminal. Cosmetic (the panel's "last sent"),
   // guarded on the generation for the same reason as its siblings: a bump settling after the operator
   // edited the text must not write onto words it no longer describes.
-  function settleCompactPrompt(item: WakeDelivery): void {
+  function settleCompactPrompt(item: WakeDelivery, atMs = goalSentAtMs(item)): void {
     if (!isCompactFenceId(item.fenceId)) return
     const row = deps.storage.getSession(item.slug)
     if (!row || row.session_id !== item.sessionId) return
     const armedAt = row.recurring_armed_at
     if (!armedAt || !item.fenceId.startsWith(`${COMPACT_FENCE_PREFIX}:${armedAt}:`)) return
-    deps.storage.stampRecurringCompactFired(item.slug, armedAt, new Date().toISOString())
+    deps.storage.stampRecurringCompactFired(item.slug, armedAt, new Date(atMs).toISOString())
   }
 
-  // Stamp the bump clock once a bump has genuinely REACHED the worker — the HEARTBEAT's input, and
-  // called only from the settle points that mean delivery genuinely happened.
-  // Guarded on the generation so a bump settling after the operator edited the text cannot write onto
-  // words it no longer describes.
-  function settleRestPrompt(item: WakeDelivery): void {
+  // Stamp the rest trigger's "last sent" once a bump has genuinely REACHED the worker — at the send to a
+  // live runtime (`stampGoalSent`; for a Claude worker nothing later ever settles it as delivered) or at
+  // the acknowledgement / confirmation. Guarded on the generation so a bump settling after the operator
+  // edited the text cannot write onto words it no longer describes.
+  function settleRestPrompt(item: WakeDelivery, atMs = goalSentAtMs(item)): void {
     if (!isStopHookFenceId(item.fenceId)) return
     const row = deps.storage.getSession(item.slug)
     if (!row || row.session_id !== item.sessionId) return
     const armedAt = row.recurring_armed_at
     if (!armedAt || !item.fenceId.startsWith(`${STOP_HOOK_FENCE_PREFIX}:${armedAt}:`)) return
-    deps.storage.stampRecurringRestFired(item.slug, armedAt, new Date().toISOString())
+    deps.storage.stampRecurringRestFired(item.slug, armedAt, new Date(atMs).toISOString())
   }
 
   // Disarm the row a snooze wake came from, once that wake is terminal. Guarded on the fence id still
@@ -4210,8 +4235,12 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
           // Counting here is also the honest anchor: the tokens are spent when the message is sent,
           // and confirmation is exactly what a thread failing every turn can never supply.
           for (const d of frame) settleSignoffNudge(d)
-          // …and a Goal run is counted here for the same reason (see countGoalDelivery).
-          for (const d of frame) countGoalDelivery(d)
+          // …and a Goal run is counted here for the same reason (see countGoalDelivery), and its
+          // "last sent" stamp written with this send's instant (see stampGoalSent).
+          for (const d of frame) {
+            stampGoalSent(d, sentAt)
+            countGoalDelivery(d)
+          }
           log(`waker: sent ${item.slug} — ${item.reason}; confirming within ${Math.round(confirmGraceMs / 1000)}s`)
           checkpoint("after-delivery", item)
           continue

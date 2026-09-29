@@ -147,10 +147,13 @@ export interface SessionRow {
   // does not lose the interval the operator chose.
   recurring_interval_ms?: number | null
   recurring_armed_at?: string | null
-  // Terminal-delivery stamps, ONE PER TRIGGER. They are separate because they answer different
-  // questions: the schedule's is load-bearing (the next delivery is due an interval after THIS, so a
-  // thread cannot accumulate a backlog), while the rest and post-compaction triggers' are only the
-  // panel's "last sent" readout — they have no floor and fire on every rest / every compaction.
+  // Last-SENT stamps, ONE PER TRIGGER: the instant the trigger's last delivery crossed to the worker
+  // (the send to a live runtime, or the acknowledgement of one that cannot say — scheduler
+  // `stampGoalSent`), not when it later settled, which for a Claude rest bump is never. They are
+  // separate because they answer different questions: the schedule's is load-bearing (the next
+  // delivery is due an interval after THIS, so a thread cannot accumulate a backlog), while the rest and
+  // post-compaction triggers' are only the panel's "last sent" readout — they have no floor and fire on
+  // every rest / every compaction.
   recurring_rest_fired_at?: string | null
   recurring_schedule_fired_at?: string | null
   recurring_compact_fired_at?: string | null
