@@ -47,6 +47,7 @@ import {
   GithubBatchResult,
   Settings,
   TranscriptMessage,
+  WorkflowAgentView,
   TranscriptPage,
   TranscriptEarlierInput,
   ClaudeModel,
@@ -179,7 +180,8 @@ import { threadProfileOptions, validateThreadProfile } from "./backend/thread-pr
 import { adoptionRuntimeBinding, type AdoptionPaneLookup, type ExpectedAdoptionPane } from "./adoption-recovery.ts"
 import { parseIssueRef, parsePrRef, readGithubIssueStatusBook, readGithubStatusBook, GITHUB_ISSUE_STATUS_SETTING, GITHUB_STATUS_SETTING } from "./awaiting.ts"
 import { isBrokerClaudeRow, type SessionRow, type Storage, type SubAgentSteerRow, type ThreadQuestionRow } from "./storage.ts"
-import type { SessionTelemetry } from "./tailer.ts"
+import { SUBAGENT_STALE_MS, type SessionTelemetry } from "./tailer.ts"
+import { workflowAgentViews } from "./workflow-runs.ts"
 import { providerResumeCommand } from "./external-terminal.ts"
 import { backgroundShellLineCount, readBackgroundShellOutput } from "./background-shell-output.ts"
 import { projectRetiredBackgroundOps, retiredOpsFor } from "./transcript.ts"
@@ -1254,6 +1256,7 @@ export function createRouter(ctx: AppContext) {
     const info = ctx.tailer.subAgent(slug, id)
     if (!info) return blocked(null)
     if (info.state !== "running") return blocked(null)
+    if (info.workflowAgent) return blocked("Workflow agents are run by their workflow and can't be steered.")
     if (!info.direct) return blocked("Only sub-agents this thread dispatched itself can be steered — this one belongs to another agent.")
     const row = ctx.storage.getSession(slug)
     if (!row) return blocked(null)
@@ -1594,9 +1597,25 @@ export function createRouter(ctx: AppContext) {
         steerNote: z.string().nullable(),
         stoppable: z.boolean(),
         stopNote: z.string().nullable(),
+        // Present iff the id names a WORKFLOW run: every agent it has started, in start order, finished
+        // ones included. A run is not a conversation — its drawer is this tree, and each row drills into
+        // that agent's own transcript through this same query.
+        workflow: z.array(WorkflowAgentView).optional(),
       }),
       handler: async ({ input }) => {
         const info = ctx.tailer.subAgent(input.slug, input.id)
+        if (info?.workflow) {
+          const stop = subAgentStoppable(input.slug, input.id)
+          return {
+            messages: [],
+            state: info.state,
+            steerable: false,
+            steerNote: null,
+            stoppable: stop.sessionId !== null,
+            stopNote: stop.sessionId === null ? stop.note : null,
+            workflow: workflowAgentViews(info.workflow.runDir, info.workflow.live, Date.now(), SUBAGENT_STALE_MS),
+          }
+        }
         if (!info) return { messages: [], state: "gone" as const, steerable: false, steerNote: null, stoppable: false, stopNote: null }
         // A CODEX sub-agent is itself a codex thread, so its "output file" is a rollout in codex's own
         // schema — parse it with the codex reader or the drawer renders empty.

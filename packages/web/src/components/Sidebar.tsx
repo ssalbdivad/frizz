@@ -629,7 +629,7 @@ function SubAgentRows({ t, scope }: { t: ThreadView; scope: RowScope }) {
       {subs.map((s) => (
         <ChildOpRow
           key={s.id}
-          kind="AGENT"
+          kind={s.workflow ? "WORKFLOW" : "AGENT"}
           label={s.label}
           state={s.state}
           density="rail"
@@ -642,7 +642,7 @@ function SubAgentRows({ t, scope }: { t: ThreadView; scope: RowScope }) {
           // is where a phantom child is most often SEEN, so it is where retiring one has to be possible.
           onDismiss={childOpDismisser(t.id, s, "AGENT", api)}
           // The rail has no room for the worker-profile tag the ops strip can show, so it rides the tooltip.
-          title={s.subagentType ? `[${s.subagentType}] ${s.label}` : s.label}
+          title={s.workflow ? `[workflow] ${s.label}` : s.phase ? `${s.phase} › ${s.label}` : s.subagentType ? `[${s.subagentType}] ${s.label}` : s.label}
         />
       ))}
     </div>

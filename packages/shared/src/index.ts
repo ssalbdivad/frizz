@@ -290,8 +290,26 @@ export const SubAgentView = z.object({
   // The dispatch tool_use id of the sub-agent that dispatched THIS one — the `id` of another row in the
   // same list. Absent at depth 1 (the thread itself is the parent). Present → the row indents under it.
   parentId: z.string().optional(),
+  // ---- WORKFLOWS: a `Workflow` tool run, and the agents it fans out ----
+  // true on the row for the RUN itself — a phased fan-out of many agents behind one tool call, which the
+  // row drills into as a tree rather than as a transcript (see WorkflowAgentView).
+  workflow: z.boolean().optional(),
+  // On a workflow AGENT's row (depth 2, `parentId` = the run's id): the script phase it ran in.
+  phase: z.string().optional(),
 })
 export type SubAgentView = z.infer<typeof SubAgentView>
+
+// One agent of a workflow run, as its drawer lists it — every agent the run has started, finished ones
+// included, so the run can be browsed after the fact. `id` is the agent id, which is also the drill-in
+// handle `subAgentTranscript` resolves.
+export const WorkflowAgentView = z.object({
+  id: z.string(),
+  label: z.string(),
+  phase: z.string().optional(),
+  state: z.enum(["running", "stale", "done", "failed"]),
+  startedAt: z.string().optional(),
+})
+export type WorkflowAgentView = z.infer<typeof WorkflowAgentView>
 
 // A sub-agent THIS thread's worker dispatched itself, as opposed to one of its descendants.
 //

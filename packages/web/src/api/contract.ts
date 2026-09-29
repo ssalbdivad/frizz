@@ -14,6 +14,7 @@
 // nothing but the `PROCEDURES` data table as a value. Transport concerns (fetch, RpcCallOpts, the
 // Proxy) live in rpc.ts, which is browser-only and never enters the server program.
 import type {
+  WorkflowAgentView,
   StartCommandInput,
   CommandThreadInput,
   RunCommandInput,
@@ -145,7 +146,7 @@ export interface Api {
   // `steerable` is the server's answer to "can this child be prompted right now" — a broker-backed
   // claude thread's own live Agent-tool child, and nothing else. The drawer renders its prompt box
   // if and only if this is true; the client never re-derives the policy.
-  subAgentTranscript(input: { slug: string; id: string }): Promise<{ messages: TranscriptMessage[]; state: "running" | "stale" | "done" | "gone"; steerable: boolean; steerNote: string | null; stoppable: boolean; stopNote: string | null }>
+  subAgentTranscript(input: { slug: string; id: string }): Promise<{ messages: TranscriptMessage[]; state: "running" | "stale" | "done" | "gone"; steerable: boolean; steerNote: string | null; stoppable: boolean; stopNote: string | null; workflow?: WorkflowAgentView[] }>
   // Deliver a steer INTO one running sub-agent's own conversation (not the thread's main turn).
   // Throws when the child settled first — see the router's subAgentSteer for why that must fail loudly.
   subAgentSteer(input: { slug: string; id: string; message: string; deliveryId?: string }): Promise<{ delivered: boolean }>

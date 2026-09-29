@@ -61,7 +61,7 @@ export const CHILD_QUIET_SHELL_TITLE = "running — no recent output"
 // removed: it put a mark on nearly every row of a settled transcript while saying nothing the row's own
 // runtime reading did not already say.
 
-export const CHILD_OPEN_TITLE = { AGENT: "Open sub-agent transcript", SHELL: "Open background shell output", GITHUB: "Open this pull request on GitHub" } as const
+export const CHILD_OPEN_TITLE = { AGENT: "Open sub-agent transcript", WORKFLOW: "Open workflow agents", SHELL: "Open background shell output", GITHUB: "Open this pull request on GitHub" } as const
 
 // ── HOW MUCH the child has done — the quiet counter beside its current step ──────────────────────
 //
@@ -170,7 +170,7 @@ export const CHILD_DISMISS_TITLE = {
   settled: "Clear — stop tracking this finished operation",
 } as const
 export const CHILD_DISMISS_VERB = { running: "Stop", settled: "Clear" } as const
-export const CHILD_DISMISS_NOUN = { AGENT: "sub-agent", SHELL: "background shell", GITHUB: "PR watcher" } as const
+export const CHILD_DISMISS_NOUN = { AGENT: "sub-agent", WORKFLOW: "workflow", SHELL: "background shell", GITHUB: "PR watcher" } as const
 
 // ── LIVENESS FILTERS — the surfaces' policies, in ONE place ──────────────────────────────────────
 //

@@ -327,7 +327,10 @@ function hasUnretiredOwnAgents(tele: SessionTelemetry | undefined): boolean {
 // provider control and works everywhere. The flag answers "can this be KILLED", not "can this be clicked".
 function stampStoppable(agents: ThreadView["subAgents"], row: SessionRow): ThreadView["subAgents"] {
   if (!isBrokerClaudeRow(row)) return agents
-  return agents.map((agent) => (agent.state === "running" ? { ...agent, stoppable: true } : agent))
+  // A WORKFLOW's agents belong to its run, which schedules them itself: stopping the run is the control,
+  // and no per-agent handle is held for them (tailer.subAgentLookup), so their rows offer no ×.
+  const workflowRuns = new Set(agents.filter((agent) => agent.workflow && agent.id).map((agent) => agent.id!))
+  return agents.map((agent) => (agent.state === "running" && !(agent.parentId && workflowRuns.has(agent.parentId)) ? { ...agent, stoppable: true } : agent))
 }
 
 // The same question for a background SHELL, and it is deliberately the other way round: the tailer has

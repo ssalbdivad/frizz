@@ -37,6 +37,7 @@ import {
 import { log as frizzLog } from "./logging.ts"
 import { frizzTempDir } from "./frizz-paths.ts"
 import { SHELL_BUDGET_DEFAULT_MS, shellLaunchBudgetMs } from "./shell-budget.ts"
+import { readWorkflowRun, workflowAgentState as sharedWorkflowAgentState, workflowAckRunDir, workflowAckTaskId, workflowLabel, type WorkflowAgent } from "./workflow-runs.ts"
 
 // The JSONL tailer: incrementally reads each registered session's Claude Code transcript
 // (~/.claude/projects/<cwdSlug>/<session_id>.jsonl) to derive liveness telemetry — last activity
@@ -123,7 +124,7 @@ const MAX_POLL_MS = 10_000
 //
 // AGENTS ONLY: a child appends on every step, so silence there is a real (if coarse) liveness signal.
 // A background SHELL has no such property and is not judged this way at all — see bgShellViews.
-const SUBAGENT_STALE_MS = 15 * 60_000
+export const SUBAGENT_STALE_MS = 15 * 60_000
 
 // IS A BACKGROUND SHELL STILL ALIVE? Asked of the OPERATING SYSTEM, not guessed from age or output.
 //
@@ -373,6 +374,8 @@ export interface SubAgentView {
   // to what it was before nesting existed.
   depth?: number
   parentId?: string // the dispatch id of the sub-agent that dispatched this one; absent at depth 1
+  workflow?: boolean // this row IS a `Workflow` run (see workflow-runs.ts)
+  phase?: string // on a workflow agent's row: the script phase it runs in
 }
 
 // A signal fence parsed from the FINAL assistant message (mirrors @frizz/shared ThreadFence; kept
@@ -475,6 +478,9 @@ interface SubAgentEntry {
   // What the provider says this child is doing, folded from the SDK `task_*` stream (broker rows only).
   // Purely additive telemetry: absent for every codex row and every row with no provider event stream.
   progress?: SubAgentProgress
+  // A `Workflow` run rather than a single Agent (see workflow-runs.ts). Set on the dispatch; `runDir`
+  // arrives with the launch ack ("Transcript dir: …") and is where every agent of the run is written.
+  workflow?: { runDir?: string }
 }
 
 // Provider-reported progress for one live op — the payload the protocol used to discard. Stored on the
@@ -561,6 +567,7 @@ interface RetiredSubAgent {
   // back to the row it was retired from, so the board shows one row per child rather than a new one
   // (or, before that path existed, none at all) on every re-steer.
   taskId?: string
+  workflow?: { runDir?: string } // see SubAgentEntry.workflow — kept so a finished run's tree stays browsable
 }
 interface RetiredShell {
   toolUseId: string
@@ -1087,6 +1094,11 @@ function trackDispatches(state: TailState, rec: Record): void {
       // at — see subagent-profile.ts, which composes both halves into the one form every surface reads.
       const subagentType = dispatchProfileCell({ subagentType: input.subagent_type, model: input.model, turnModel: rec.message?.model, turnEffort: rec.effort })
       state.subAgents.set(id, { kind: "agent", toolUseId: id, label: desc ?? "sub-agent", startedAt, subagentType, outputFile })
+    } else if (b.name === "Workflow") {
+      // A WORKFLOW run: one tool call, a whole phased fan-out of agents behind it, background by default.
+      // Tracked as an agent-kind child so it holds the thread exactly as a live sub-agent does; its
+      // agents surface beneath it from the run's journal (see workflow-runs.ts).
+      state.subAgents.set(id, { kind: "agent", toolUseId: id, label: workflowLabel((b.input ?? {}) as Parameters<typeof workflowLabel>[0]), startedAt, outputFile, taskId: previous?.taskId, workflow: { runDir: previous?.workflow?.runDir } })
     } else if ((b.name === "Bash" && input.run_in_background === true) || b.name === "Monitor") {
       const command = typeof input.command === "string" ? input.command : previous?.command
       // The launch's `timeout` is the worker's DECLARED budget for a background Bash (shell-budget.ts);
@@ -1135,7 +1147,7 @@ function trackDispatches(state: TailState, rec: Record): void {
 // its completion (an error/denial result also means the dispatch is over). The earlier discriminator
 // ("no output_file: token ⇒ foreground") retired live background children of the two path-less ack
 // shapes — including every mailbox-style Agent and every background shell — on their own launch ack.
-const LAUNCH_ACK_RE = /^\s*(Async agent launched successfully|Spawned successfully|Command running in background|Monitor started|Command did not complete within its)/
+const LAUNCH_ACK_RE = /^\s*(Async agent launched successfully|Spawned successfully|Command running in background|Monitor started|Command did not complete within its|Workflow launched in background)/
 
 // The FIFTH launch shape, and the only one that arrives for a call nothing registered: Claude Code
 // AUTO-BACKGROUNDS a foreground `Bash` that outlives its `timeout` and says so in the result —
@@ -1164,6 +1176,7 @@ function retireToRing(state: TailState, entry: SubAgentEntry, finishedAt: string
     startedAt: entry.startedAt,
     finishedAt,
     status,
+    ...(entry.workflow ? { workflow: entry.workflow } : {}),
   })
   while (state.retiredSubAgents.size > RETAINED_SUBAGENTS_MAX) {
     const oldest = state.retiredSubAgents.keys().next().value
@@ -1399,8 +1412,15 @@ function trackLaunchResults(state: TailState, rec: Record): void {
       entry = { kind: "shell", toolUseId: id, label: parked.label, startedAt: parked.startedAt, command: parked.command }
       state.subAgents.set(id, entry)
     }
-    if (!entry.outputFile) entry.outputFile = launchOutputFile(state, text)
-    if (!entry.taskId) entry.taskId = launchTaskId(text)
+    if (entry.workflow) {
+      // A workflow's ack names a run DIRECTORY, not a transcript — never let the agent-shaped parsers
+      // below mint an outputFile from it.
+      entry.workflow.runDir ??= workflowAckRunDir(text)
+      entry.taskId ??= workflowAckTaskId(text)
+    } else {
+      if (!entry.outputFile) entry.outputFile = launchOutputFile(state, text)
+      if (!entry.taskId) entry.taskId = launchTaskId(text)
+    }
     if (LAUNCH_ACK_RE.test(text)) continue // background launch ack — the child/shell is alive, keep tracking
     if (entry.kind === "shell") {
       state.subAgents.delete(id) // synchronous launch failure: no notification will ever arrive
@@ -2247,6 +2267,11 @@ export interface SubAgentLookup {
   startedAt?: string
   finishedAt?: string
   outcome?: "completed" | "failed" | "killed"
+  // Set when the id names a WORKFLOW run: its agents live in `runDir` (see workflow-runs.ts), and `live`
+  // says whether the run itself is still tracked as running — the only thing that makes a journalled
+  // "started" agent trustworthy as running.
+  workflow?: { runDir?: string; live: boolean }
+  workflowAgent?: true // the id names one AGENT of a workflow run, resolved through its run's journal
 }
 
 export interface Tailer {
@@ -2874,16 +2899,55 @@ export function createTailer(deps: TailerDeps): Tailer {
   }
 
   function entryStale(state: TailState, e: SubAgentEntry, nowMs: number): boolean {
+    if (e.workflow) {
+      if (!e.workflow.runDir) return false // before its ack: nothing to measure, so never stale
+      const m = workflowActivityMs(e.workflow.runDir)
+      return m === undefined || nowMs - m > SUBAGENT_STALE_MS
+    }
     const path = entryTranscript(state, e)
     if (!path) return false
     const m = mtimeMs(path)
     return m === undefined || nowMs - m > SUBAGENT_STALE_MS
   }
 
+  // A WORKFLOW's last sign of life. Its journal only moves when an agent starts or finishes, so a run
+  // whose one remaining agent has been grinding for 20 minutes would read stale off the journal alone —
+  // the newest write among its running agents' own transcripts is the real reading.
+  function workflowActivityMs(runDir: string): number | undefined {
+    let latest = mtimeMs(join(runDir, "journal.jsonl"))
+    for (const agent of readWorkflowRun(runDir)) {
+      if (agent.status !== "running") continue
+      const m = mtimeMs(agent.transcript)
+      if (m !== undefined && (latest === undefined || m > latest)) latest = m
+    }
+    return latest
+  }
+
+  function workflowAgentState(agent: WorkflowAgent, runLive: boolean, nowMs: number): "running" | "stale" | "done" | "failed" {
+    return sharedWorkflowAgentState(agent, runLive, nowMs, SUBAGENT_STALE_MS, mtimeMs)
+  }
+
+  // The workflow run a tracked or retained entry names, live runs first. Used to resolve a workflow
+  // AGENT's drill-in id (its agentId), which no dispatch record in this thread's transcript carries.
+  function workflowRunOfAgent(state: TailState, agentId: string): { runDir: string; runLive: boolean; agent: WorkflowAgent } | undefined {
+    const runs: Array<{ runDir: string; runLive: boolean }> = []
+    for (const e of state.subAgents.values()) if (e.workflow?.runDir) runs.push({ runDir: e.workflow.runDir, runLive: true })
+    for (const dead of state.retiredSubAgents.values()) if (dead.workflow?.runDir) runs.push({ runDir: dead.workflow.runDir, runLive: false })
+    for (const run of runs) {
+      const agent = readWorkflowRun(run.runDir).find((a) => a.agentId === agentId)
+      if (agent) return { ...run, agent }
+    }
+    return undefined
+  }
+
   // The child's last-append instant (its output file's mtime, the same stat entryStale reads), as ISO
   // for the surfaced view. Undefined before the path resolves or when the file no longer stats — the
   // caller then simply omits lastActivityAt (an absent reading is correct; a fabricated one is not).
   function entryLastActivity(state: TailState, e: SubAgentEntry): string | undefined {
+    if (e.workflow) {
+      const m = e.workflow.runDir ? workflowActivityMs(e.workflow.runDir) : undefined
+      return m === undefined ? undefined : new Date(m).toISOString()
+    }
     const path = entryTranscript(state, e)
     if (!path) return undefined
     const m = mtimeMs(path)
@@ -2920,7 +2984,9 @@ export function createTailer(deps: TailerDeps): Tailer {
         ...(p?.toolUses !== undefined ? { toolUses: p.toolUses } : {}),
         ...(p?.totalTokens !== undefined ? { tokens: p.totalTokens } : {}),
         ...(p?.durationMs !== undefined ? { durationMs: p.durationMs } : {}),
+        ...(e.workflow ? { workflow: true } : {}),
       })
+      if (e.workflow?.runDir) out.push(...workflowAgentRows(e.toolUseId, e.workflow.runDir, nowMs))
       const subtree = subtrees.get(e.toolUseId)
       if (subtree) out.push(...subtree)
     }
@@ -2949,6 +3015,30 @@ export function createTailer(deps: TailerDeps): Tailer {
         ...(lastActivityAt === undefined ? {} : { lastActivityAt: new Date(lastActivityAt).toISOString() }),
       })
       out.push(...subtree)
+    }
+    return out
+  }
+
+  // A live workflow's RUNNING agents, one level under its row — running-only for the same reason the
+  // descendant tree is: every surface these reach is a live surface, and a 40-agent run would otherwise
+  // bury the strip under finished work. The workflow's own drawer lists the whole run (router.ts).
+  // `id` is the agent id: it is what the drill-in resolves (workflowRunOfAgent), and it is unique.
+  function workflowAgentRows(parentId: string, runDir: string, nowMs: number): SubAgentView[] {
+    const out: SubAgentView[] = []
+    for (const agent of readWorkflowRun(runDir)) {
+      const agentState = workflowAgentState(agent, true, nowMs)
+      if (agentState !== "running") continue
+      const activeAt = mtimeMs(agent.transcript)
+      out.push({
+        label: agent.label,
+        startedAt: new Date(agent.startedAtMs ?? activeAt ?? nowMs).toISOString(),
+        state: "running",
+        id: agent.agentId,
+        ...(activeAt === undefined ? {} : { lastActivityAt: new Date(activeAt).toISOString() }),
+        ...(agent.phase ? { phase: agent.phase } : {}),
+        depth: 2,
+        parentId,
+      })
     }
     return out
   }
@@ -3383,7 +3473,9 @@ export function createTailer(deps: TailerDeps): Tailer {
       outputFile: live.outputFile,
       ...(live.outputFormat ? { outputFormat: live.outputFormat } : {}),
       state: entryStale(state, live, now()) ? "stale" : "running",
-      direct: live.kind === "agent",
+      // A workflow is not a conversation: a steer addressed to its tool_use id reaches nobody.
+      direct: live.kind === "agent" && !live.workflow,
+      ...(live.workflow ? { workflow: { runDir: live.workflow.runDir, live: true } } : {}),
       ...(live.taskId ? { taskId: live.taskId } : {}),
       startedAt: live.startedAt,
     }
@@ -3396,6 +3488,7 @@ export function createTailer(deps: TailerDeps): Tailer {
       ...(dead.startedAt ? { startedAt: dead.startedAt } : {}),
       ...(dead.finishedAt ? { finishedAt: dead.finishedAt } : {}),
       outcome: dead.status,
+      ...(dead.workflow ? { workflow: { runDir: dead.workflow.runDir, live: false } } : {}),
     }
     // A DESCENDANT — a child of a child, of a child, at any depth. Its dispatch is in an ANCESTOR's
     // transcript rather than this thread's, so neither map above can hold it; the flat sidecar index
@@ -3403,7 +3496,21 @@ export function createTailer(deps: TailerDeps): Tailer {
     // cannot place keeps degrading to the drawer's stated "unavailable" — this ADDS a resolution, it
     // never invents one.
     const descendant = descendantSidecar(state, id)
-    if (!descendant) return undefined
+    if (!descendant) {
+      // A WORKFLOW AGENT, named by its agent id. Readable, never steerable (it is not this session's
+      // dispatch), and not offered a stop: the run owns its agents, and stopping the RUN is the control.
+      const found = workflowRunOfAgent(state, id)
+      if (!found) return undefined
+      const agentState = workflowAgentState(found.agent, found.runLive, now())
+      return {
+        outputFile: found.agent.transcript,
+        state: agentState === "failed" ? "done" : agentState,
+        direct: false,
+        workflowAgent: true,
+        ...(found.agent.startedAtMs === undefined ? {} : { startedAt: new Date(found.agent.startedAtMs).toISOString() }),
+        ...(agentState === "failed" ? { outcome: "failed" as const } : {}),
+      }
+    }
     return {
       outputFile: descendantTranscript(state, descendant),
       state: descendantState(state, descendant),
