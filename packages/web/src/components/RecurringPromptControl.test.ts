@@ -1,7 +1,8 @@
 import assert from "node:assert/strict"
 import test from "node:test"
 import type { ThreadView } from "@frizz/shared"
-import { draftIntervalSeconds, seedsDefaults } from "./RecurringPromptControl.tsx"
+import { draftForSeconds, draftIntervalSeconds, draftMaxRuns, seedsDefaults } from "./RecurringPromptControl.tsx"
+import { goalLoopReading } from "../lib/goalLoop.ts"
 
 // The Goal panel batches: nothing writes until the panel is LEFT (2026-09-02 — dismissal is the save
 // gesture; the 2026-08-31 Save button is gone, but the batching it bought stays, because checking a
@@ -65,4 +66,35 @@ test("an ARMED thread shows its own words, never the default", () => {
 
 test("an ARCHIVED thread opens empty — the server would refuse the write an edit makes", () => {
   assert.equal(seedsDefaults(view({ archived: true }), undefined), false)
+})
+
+// THE LIMIT FIELDS resolve like the minutes field: empty is "no limit", unusable keeps what is stored —
+// so a dismiss never silently clears a cap because the operator was halfway through retyping it.
+test("the limit fields: empty clears, valid wins, unusable keeps the stored value", () => {
+  assert.equal(draftMaxRuns("", 20), null)
+  assert.equal(draftMaxRuns(" 7 ", 20), 7)
+  for (const raw of ["0", "-1", "2.5", "abc", "10001"]) assert.equal(draftMaxRuns(raw, 20), 20, raw)
+  assert.equal(draftForSeconds("", 7200), null)
+  assert.equal(draftForSeconds("30m", null), 1800)
+  assert.equal(draftForSeconds("3d", null), 3 * 86_400)
+  for (const raw of ["2 hours", "2hr", "30s", "31d"]) assert.equal(draftForSeconds(raw, 7200), 7200, raw)
+})
+
+const rp = (over: Partial<NonNullable<ThreadView["recurringPrompt"]>> = {}): NonNullable<ThreadView["recurringPrompt"]> => ({
+  prompt: "keep going", stopHook: true, heartbeat: false, postCompaction: false, armedAt: "2026-09-29T00:00:00.000Z", ...over,
+})
+const NOW = Date.parse("2026-09-29T01:00:00.000Z")
+
+test("the footer reading: run N of M, run N, time left, and why it stopped", () => {
+  assert.equal(goalLoopReading(rp({ runs: 7, maxRuns: 20 }), NOW), "run 7 of 20")
+  assert.equal(goalLoopReading(rp({ runs: 7 }), NOW), "run 7")
+  assert.equal(goalLoopReading(rp({ runs: 0, maxRuns: 3 }), NOW), "0 of 3 runs")
+  assert.equal(goalLoopReading(rp({ runs: 0 }), NOW), null, "an unbounded Goal with nothing delivered says nothing")
+  assert.equal(
+    goalLoopReading(rp({ runs: 3, maxRuns: 20, forSeconds: 7200, endsAt: "2026-09-29T02:12:00.000Z" }), NOW),
+    "run 3 of 20 · 1h 12m left",
+  )
+  assert.equal(goalLoopReading(rp({ runs: 3, maxRuns: 3, stopHook: false, stopped: { reason: "runs", at: "x" } }), NOW), "stopped · 3 of 3 runs")
+  assert.equal(goalLoopReading(rp({ runs: 5, forSeconds: 7200, stopHook: false, stopped: { reason: "time", at: "x" } }), NOW), "stopped · 2h limit reached")
+  assert.equal(goalLoopReading(rp({ runs: 4, maxRuns: 9, stopHook: false }), NOW), null, "switched off by hand: nothing to count toward")
 })

@@ -956,8 +956,75 @@ export const ThreadRecurringPrompt = z.object({
   lastRestFiredAt: z.string().optional(),
   lastScheduleFiredAt: z.string().optional(),
   lastCompactFiredAt: z.string().optional(),
+  /** THE RUN COUNTER: deliveries that actually reached the worker under THIS generation (a text or
+   *  cadence edit starts a new one at 0). Optional only so a view built by an older server still parses. */
+  runs: z.number().int().nonnegative().optional(),
+  /** The LIMITS (2026-09-29). Either, both or neither: with neither the Goal is unbounded, as before. */
+  maxRuns: z.number().int().positive().optional(),
+  forSeconds: z.number().int().positive().optional(),
+  /** The instant a time bound runs out — present exactly when `forSeconds` is. */
+  endsAt: z.string().optional(),
+  /** Present when the Goal DISARMED ITSELF at a limit: which one, and when. Retired the moment any
+   *  trigger is switched back on or the text changes. */
+  stopped: z.object({ reason: z.enum(["runs", "time"]), at: z.string() }).strict().optional(),
 }).strict()
 export type ThreadRecurringPrompt = z.infer<typeof ThreadRecurringPrompt>
+
+// ---- THE GOAL'S LIMITS ---------------------------------------------------------------------------
+// A Goal is a loop when it has an end. Maintainer 2026-09-29: loops are a Goal SETTING, not a new thread
+// type — so the end is two optional numbers on the same row: a count of deliveries, and a span from
+// arming. Reaching either disarms the Goal (text kept, exactly as a switch-off keeps it), and the worker
+// hears ONE wake saying which limit ended it (`goalLimitMessage`).
+//
+// The span is written in the SAME grammar the worker contract teaches for an ```awaiting fence's
+// `for:` — `30m`, `2h`, `3d` — because a worker arming a bounded loop already knows that grammar and
+// should not learn a second one for the same idea. It is parsed by that grammar's own parser rather than
+// a copy, so the two cannot drift; the bounds below are the Goal's own.
+export const GOAL_MAX_RUNS = 10_000
+/** A time bound shorter than a minute is shorter than most single runs — it could only ever stop the
+ *  loop before its first delivery landed. Thirty days matches the one-off timer's ceiling. */
+export const GOAL_MIN_FOR_SECONDS = 60
+export const GOAL_MAX_FOR_SECONDS = 30 * 24 * 60 * 60
+export const GoalMaxRuns = z.number().int().min(1).max(GOAL_MAX_RUNS)
+export const GoalForSeconds = z.number().int().min(GOAL_MIN_FOR_SECONDS).max(GOAL_MAX_FOR_SECONDS)
+
+/** `2h` → 7200. `null` for anything the `for:` grammar does not accept, or out of the Goal's bounds. */
+export function parseGoalForSeconds(value: string): number | null {
+  const ms = parseAwaitingDurationRaw(value)
+  if (ms === null) return null
+  const seconds = Math.round(ms / 1000)
+  return seconds >= GOAL_MIN_FOR_SECONDS && seconds <= GOAL_MAX_FOR_SECONDS ? seconds : null
+}
+
+/** A time bound as the `for:` grammar writes it, so it reads back in the shape it was typed: the
+ *  LARGEST unit that divides it exactly (`2h`, `90m`, `3d`). Always a single token, which is what makes
+ *  it round-trip through `parseGoalForSeconds`. */
+export function formatGoalFor(seconds: number): string {
+  if (seconds % 86_400 === 0) return `${seconds / 86_400}d`
+  if (seconds % 3_600 === 0) return `${seconds / 3_600}h`
+  if (seconds % 60 === 0) return `${seconds / 60}m`
+  return `${seconds}s`
+}
+
+/** What frizz delivers ONCE when a Goal disarms itself at a limit (scheduler `evalGoalLimits`). Frizz is
+ *  the author, so this is the news and not an operator prompt: which limit, and how many runs landed.
+ *
+ *  It tells the worker NOT to re-arm around the limit. The limit is the loop's terminating condition —
+ *  whoever set it (the human in the footer, or the worker itself) chose where the loop ends, and a
+ *  worker that reads "stopped" as an obstacle and calls `start` again has turned a bounded loop back
+ *  into an unbounded one. */
+export function goalLimitMessage(o: { reason: "runs" | "time"; runs: number; maxRuns?: number | null; forSeconds?: number | null }): string {
+  const runs = `${o.runs} run${o.runs === 1 ? "" : "s"}`
+  const head = o.reason === "runs"
+    ? `Your Goal reached its run limit and stopped: ${o.runs} of ${o.maxRuns ?? o.runs} runs delivered.`
+    : `Your Goal reached its time limit${o.forSeconds ? ` (${formatGoalFor(o.forSeconds)})` : ""} and stopped after ${runs}.`
+  return (
+    `${head} Frizz will not send it again.\n\n` +
+    "(The loop is over by design. Wrap up what it was doing and say where the work stands. Its text is" +
+    " kept in the thread footer, so it can be re-armed — but do not re-arm it yourself just to keep going" +
+    " past the limit that ended it.)"
+  )
+}
 
 // ---- The opt-out ---------------------------------------------------------------------------------
 // THE OPT-OUT IS THE ```done FENCE, as of 2026-08-11. A worker that signs off as done has said "there
@@ -3766,6 +3833,10 @@ export const SetThreadRecurringPromptInput = z.object({
   // with the trigger off, which is the honest reading of a caller that has never heard of it.
   postCompaction: z.boolean().default(false),
   intervalSeconds: RecurringIntervalSeconds.optional(),
+  // The LIMITS. Omitted KEEPS what the row holds (a tab that predates them must not drop a cap the
+  // worker set); `null` clears one.
+  maxRuns: GoalMaxRuns.nullable().optional(),
+  forSeconds: GoalForSeconds.nullable().optional(),
 }).strict()
 // z.input, not z.infer: `postCompaction` is `.default(false)`, so the parsed OUTPUT has it
 // required while the wire INPUT does not — and rpc-contract.ts compares the client type against
@@ -3805,6 +3876,10 @@ export const SetOwnThreadRecurringPromptInput = z.object({
    *  The BROWSER input above needs no such clause — a stale tab is one reload away. */
   pauseOnQuestions: z.boolean().optional(),
   intervalSeconds: RecurringIntervalSeconds.optional(),
+  // The LIMITS, as above. The `goal` tool's `start` sends both explicitly (null for "no limit"), since a
+  // `start` replaces the whole Goal; an older MCP server sends neither, and keeps whatever is set.
+  maxRuns: GoalMaxRuns.nullable().optional(),
+  forSeconds: GoalForSeconds.nullable().optional(),
 }).strict()
 // z.input, not z.infer: `postCompaction` is `.default(false)`, so the parsed OUTPUT has it
 // required while the wire INPUT does not — and rpc-contract.ts compares the client type against

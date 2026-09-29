@@ -2,10 +2,15 @@ import { useEffect, useRef, useState } from "react"
 import {
   RECURRING_PROMPT_MAX,
   DEFAULT_RECURRING_PROMPT,
+  GOAL_MAX_RUNS,
+  formatGoalFor,
+  parseGoalForSeconds,
   type ThreadView,
 } from "@frizz/shared"
 import { rpc } from "../api/rpc.ts"
 import { formatAgo } from "../lib/durationLabels.ts"
+import { goalLimitsSentence, goalLoopParts, goalLoopReading } from "../lib/goalLoop.ts"
+import { useNowMs } from "../lib/liveClock.ts"
 import { showToast } from "../store.ts"
 import { shouldSubmitStagedEnter } from "../lib/composerKeyboard.ts"
 import { Popover, PopoverAnchor, PopoverContent } from "./ui/Popover.tsx"
@@ -93,6 +98,10 @@ export function RecurringPromptControl({ thread }: { thread: ThreadView }) {
   // COLOURED IF ANY MECHANISM IS LIVE. The glyph answers one question — "is frizz going to re-prompt
   // this thread on its own?" — and any one of them is a yes.
   const live = armed?.stopHook === true || armed?.heartbeat === true || armed?.postCompaction === true
+  // THE LOOP'S COUNTER, beside the mark (2026-09-29): `run 7 of 20 · 1h 12m left`, or why it stopped.
+  // Null — and so absent — for a Goal with nothing to count toward; see lib/goalLoop.ts.
+  const nowMs = useNowMs()
+  const reading = goalLoopParts(armed, nowMs)
 
   // The preview NEVER interrupts the panel: once it is open, crossing the glyph again must not swap the
   // writing surface out from under the pointer on its way there.
@@ -141,7 +150,9 @@ export function RecurringPromptControl({ thread }: { thread: ThreadView }) {
           // what is armed, exactly as hovering it would.
           onFocus={() => setMode((m) => (m === "closed" ? "preview" : m))}
           onBlur={closePreview}
-          className="icon-hover-outline flex items-center rounded-md p-1 outline-none"
+          // `items-baseline` once a reading rides beside the mark, so the mark can seat itself on the
+          // reading's cap band (GOAL_MARK_BESIDE_TEXT below) — centring the two boxes is what reads ~1px off.
+          className={`icon-hover-outline flex rounded-md p-1 outline-none ${reading ? "items-baseline gap-[5px] pr-1.5" : "items-center"}`}
         >
           {/* A TARGET WITH AN ARROW IN IT (see GoalMark for the geometry and why it is drawn rather
               than imported), and the ONLY surface that says this exists (the rail deliberately carries
@@ -171,7 +182,26 @@ export function RecurringPromptControl({ thread }: { thread: ThreadView }) {
               look absolutely terrible"). The cluster is one status group, so it takes one tone — the
               armed/idle distinction is carried by the amber, which is the state worth seeing, and not
               by holding the resting glyph a step below the readouts beside it. */}
-          <GoalMark size={12} className={live ? "text-attention-90" : "text-muted-60 hover:text-muted"} />
+          <GoalMark
+            size={12}
+            className={`${live ? "text-attention-90" : "text-muted-60 hover:text-muted"} ${reading ? GOAL_MARK_BESIDE_TEXT : ""}`}
+          />
+          {reading && (
+            // A READOUT, in the cluster's one tone — the amber belongs to the mark, which already says
+            // whether anything is armed. Tabular digits so the count ticking over does not shift the strip.
+            //
+            // IT GIVES WAY BEFORE THE BUTTONS DO. The footer wraps, and at phone widths a full reading
+            // pushed "Mark as done" onto a second line (measured at 420px). So it reads the FOOTER's
+            // width (ThreadLifecycleFooter is an `@container`, measured on its content box): the time left
+            // goes first, below 29rem, and the whole reading below 24rem — the mark stays, and the hover and
+            // the panel still say it all. Fitted 2026-09-29: the full reading wrapped the strip at a 458px
+            // footer and fit at 470; the count alone wrapped at 392 and fit at 400 — each threshold sits
+            // ~20px above its wrap for a wider count or a longer span.
+            <span data-goal-loop className="whitespace-nowrap text-[11px] leading-none tabular-nums text-muted-60 @max-[24rem]:hidden">
+              {reading.lead}
+              {reading.tail && <span className="@max-[29rem]:hidden"> · {reading.tail}</span>}
+            </span>
+          )}
         </button>
       </PopoverAnchor>
       {mode === "preview" ? (
@@ -212,6 +242,10 @@ export function RecurringPromptControl({ thread }: { thread: ThreadView }) {
   )
 }
 
+// The limit fields wear the minutes field's box exactly, so the three inputs in the panel read as one kind.
+const LIMIT_INPUT =
+  "w-[5ch] rounded-md border border-border bg-bg px-1 py-[3px] text-center text-[11px] leading-none tabular-nums text-fg outline-none placeholder:text-muted-50 focus:border-border-strong"
+
 // Long enough that dragging the pointer ACROSS the strip on the way to the send button does not flash a
 // panel over the footer, short enough that deliberately resting on the glyph answers immediately.
 const HOVER_DELAY_MS = 260
@@ -235,12 +269,16 @@ function GoalPreview({ armed }: { armed: ThreadView["recurringPrompt"] }) {
       seconds: armed.intervalSeconds ?? DEFAULT_INTERVAL_SECONDS,
     })
     : []
+  const limits = armed && (armed.maxRuns || armed.forSeconds) ? goalLimitsSentence(armed) : null
   return (
     <div data-recurring-preview-body>
       <div className="mb-1 flex items-baseline gap-2">
         <span className="font-medium">Goal</span>
         <span className="text-muted-70">
-          {clauses.length > 0 ? `sent ${clauses.join(", ")}` : text ? "no trigger is on" : "not set"}
+          {armed?.stopped
+            ? `stopped at its ${armed.stopped.reason === "runs" ? "run" : "time"} limit ${formatAgo(armed.stopped.at)}`
+            : clauses.length > 0 ? `sent ${clauses.join(", ")}${limits ? `, ${limits}` : ""}`
+            : text ? "no trigger is on" : "not set"}
         </span>
       </div>
       {/* FOUR LINES, then an ellipsis — `line-clamp` rather than a character cut, so the clamp lands on
@@ -266,12 +304,41 @@ const MIN_MINUTES = 1
 const MAX_MINUTES = 24 * 60
 const DEFAULT_INTERVAL_SECONDS = 600
 
+// THE GOAL MARK BESIDE ITS COUNTER. Centring the two boxes is what reads off, so the mark takes the house
+// cap-band seat — `self-baseline` plus half an em less half a cap, computed by the browser, so nothing
+// needs re-measuring when the type scale moves. Measured 2026-09-29 in sans (scripts/shot.mjs, geometry
+// ink of the mark against the 11px reading's baseline→cap band): the mark's ink centre sits 0.12px below
+// the band's, sub-pixel and left alone. The ink gap mark → reading is 6.5px, set against the 7px the
+// footer's own "✓ Mark as done" draws at 12px — a mark and its label, scaled to the 11px reading.
+const GOAL_MARK_BESIDE_TEXT = "shrink-0 self-baseline translate-y-[calc(0.5em_-_0.5cap)]"
+
 interface Draft {
   text: string
   stopHook: boolean
   heartbeat: boolean
   postCompaction: boolean
   seconds: number
+  // The LIMITS (2026-09-29). `null` is "no limit", the unbounded Goal every thread had before them.
+  maxRuns: number | null
+  forSeconds: number | null
+}
+
+/** The run cap a draft carries, resolved from the typed field exactly as the cadence is (see
+ *  `draftIntervalSeconds`): an EMPTY field means no cap, and anything unusable falls back to what is
+ *  stored rather than silently clearing a cap on a dismiss. */
+export function draftMaxRuns(field: string, stored: number | null): number | null {
+  const trimmed = field.trim()
+  if (trimmed === "") return null
+  const n = Number(trimmed)
+  return Number.isInteger(n) && n >= 1 && n <= GOAL_MAX_RUNS ? n : stored
+}
+
+/** The time bound a draft carries, typed in the worker contract's `for:` grammar (`30m`, `2h`, `3d`) —
+ *  the same token a worker gives the `goal` tool. Empty means none; unusable keeps what is stored. */
+export function draftForSeconds(field: string, stored: number | null): number | null {
+  const trimmed = field.trim()
+  if (trimmed === "") return null
+  return parseGoalForSeconds(trimmed) ?? stored
 }
 
 /** The cadence a draft actually carries, resolved from the STRING in the minutes field rather than from
@@ -315,6 +382,8 @@ function draftAsSent(d: Draft) {
     heartbeat: d.heartbeat,
     postCompaction: d.postCompaction,
     seconds: d.seconds,
+    maxRuns: d.maxRuns,
+    forSeconds: d.forSeconds,
   }
 }
 
@@ -327,6 +396,8 @@ function sameAsSent(next: Draft, sent: ReturnType<typeof draftAsSent>): boolean 
     && next.heartbeat === sent.heartbeat
     && next.postCompaction === sent.postCompaction
     && next.seconds === sent.seconds
+    && next.maxRuns === sent.maxRuns
+    && next.forSeconds === sent.forSeconds
 }
 
 /** Does this panel open PRE-FILLED with the standard sentence rather than empty?
@@ -406,6 +477,12 @@ function PromptPanel({ thread, armed, close }: {
   // The minutes field is a STRING while it is being typed, so a half-typed value ("", "1" on the way to
   // "120") is not immediately clamped out from under the caret. It becomes a number on commit.
   const [minutes, setMinutes] = useState(String(Math.round((carried?.seconds ?? armed?.intervalSeconds ?? DEFAULT_INTERVAL_SECONDS) / 60)))
+  // The two LIMIT fields, strings for the same reason the minutes field is: a half-typed value must not be
+  // clamped out from under the caret. Resolved on every draft (draftMaxRuns / draftForSeconds).
+  const storedMaxRuns = carried ? carried.maxRuns : armed?.maxRuns ?? null
+  const storedForSeconds = carried ? carried.forSeconds : armed?.forSeconds ?? null
+  const [runsField, setRunsField] = useState(storedMaxRuns === null ? "" : String(storedMaxRuns))
+  const [forField, setForField] = useState(storedForSeconds === null ? "" : formatGoalFor(storedForSeconds))
   const textarea = useRef<HTMLTextAreaElement>(null)
   // What the server row is holding (as far as this panel knows), so a save can skip the round-trip when
   // nothing actually changed, and the unmount can tell a draft worth writing from one already stored.
@@ -422,6 +499,8 @@ function PromptPanel({ thread, armed, close }: {
     heartbeat: armed?.heartbeat ?? false,
     postCompaction: armed?.postCompaction ?? false,
     seconds: armed?.intervalSeconds ?? DEFAULT_INTERVAL_SECONDS,
+    maxRuns: armed?.maxRuns ?? null,
+    forSeconds: armed?.forSeconds ?? null,
   })
 
   /** THE WHOLE PANEL AS ONE VALUE, which is what every save sends. The cadence comes from the minutes
@@ -433,6 +512,8 @@ function PromptPanel({ thread, armed, close }: {
     heartbeat,
     postCompaction,
     seconds: draftIntervalSeconds(minutes, seconds),
+    maxRuns: draftMaxRuns(runsField, storedMaxRuns),
+    forSeconds: draftForSeconds(forField, storedForSeconds),
     ...over,
   })
 
@@ -506,7 +587,18 @@ function PromptPanel({ thread, armed, close }: {
         // so an operator who parked a 30-minute schedule got 10 back when they switched it on again,
         // with nothing to indicate their number had been discarded. Caught in the browser, not by a
         // test: every unit here asserted on rows that still had a cadence.
-        ...(prompt === null ? {} : { intervalSeconds: next.seconds }),
+        //
+        // EXCEPT the untouched DEFAULT on a row that never had a cadence (a worker's stop-hook-only
+        // `start` stores none). Sending it there changed the stored interval null → 600, which storage
+        // reads as new settings and mints a new GENERATION — so editing only a Goal's LIMIT from the
+        // footer reset its run count to 0 (driven 2026-09-29: run 2 of 20, cap edited to 5, came back
+        // as run 0 of 5). A cadence nobody chose is not the operator's to keep.
+        ...(prompt === null || (!next.heartbeat && armed?.intervalSeconds === undefined && next.seconds === DEFAULT_INTERVAL_SECONDS)
+          ? {}
+          : { intervalSeconds: next.seconds }),
+        // The limits travel with every save, explicit nulls included — the panel shows both fields, so
+        // an empty one IS the operator saying "no limit".
+        ...(prompt === null ? {} : { maxRuns: next.maxRuns, forSeconds: next.forSeconds }),
       })
       sent.current = { ...draftAsSent(next), prompt: prompt ?? "" }
       // The toast names WHAT WILL HAPPEN, not which switch moved. "On"/"off" was legible when there was
@@ -515,7 +607,7 @@ function PromptPanel({ thread, armed, close }: {
       showToast(
         prompt === null ? "Goal cleared"
           : clauses.length === 0 ? "Goal saved — no trigger is on, so nothing is sent"
-          : `Goal: sent ${clauses.join(", ")}`,
+          : `Goal: sent ${clauses.join(", ")}${next.maxRuns || next.forSeconds ? `, ${goalLimitsSentence(next)}` : ""}`,
       )
     } catch (error) {
       showToast((error instanceof Error ? error.message : "Could not save the recurring prompt").slice(0, 100))
@@ -533,6 +625,14 @@ function PromptPanel({ thread, armed, close }: {
     if (sameAsSent(draft(), sent.current) || (text.trim() === "" && !armed)) { close(); return }
     void persistNow(draft()).then((ok) => { if (ok) close() })
   }
+  // The limit fields snap to what the draft actually carries on commit, so a value the draft could not
+  // use (`2 hours`, `0`) is visibly replaced by the one it kept rather than sitting there looking saved.
+  function commitLimits(): void {
+    const runs = draftMaxRuns(runsField, storedMaxRuns)
+    setRunsField(runs === null ? "" : String(runs))
+    const span = draftForSeconds(forField, storedForSeconds)
+    setForField(span === null ? "" : formatGoalFor(span))
+  }
   // Clamp on COMMIT, not on keystroke. An out-of-range or empty field snaps back to something legal and
   // the field is rewritten to match, so what the operator sees is always what the draft carries.
   function commitMinutes(): void {
@@ -540,6 +640,7 @@ function PromptPanel({ thread, armed, close }: {
     setMinutes(String(Math.round(next / 60)))
     setSeconds(next)
   }
+  const nowMs = useNowMs()
   // The far end of the header belongs to the reading, not to a control. Each trigger keeps its own clock,
   // so this names WHICH one last fired rather than implying they share a stamp — and only while exactly
   // one has ever fired, because "last sent at rest" over a row where the schedule fired more recently
@@ -553,6 +654,7 @@ function PromptPanel({ thread, armed, close }: {
     (best, s) => (best && Date.parse(best.at) >= Date.parse(s.at) ? best : s),
     undefined,
   )
+  const panelReading = goalLoopReading(armed, nowMs)
   const lastLabel = newest === undefined ? null
     : stamps.length > 1 ? `Last sent ${formatAgo(newest.at)}`
     : `Last sent ${newest.how} ${formatAgo(newest.at)}`
@@ -561,6 +663,8 @@ function PromptPanel({ thread, armed, close }: {
     <section data-recurring-panel>
       <div className="mb-2 flex items-center gap-3">
         <span className="font-medium">Goal</span>
+        {/* The loop's reading, the same phrase the footer shows beside the mark. */}
+        {panelReading && <span data-goal-loop-panel className="tabular-nums text-muted">{panelReading}</span>}
         {lastLabel && <span className="ml-auto truncate text-muted-55">{lastLabel}</span>}
       </div>
       {/* ALWAYS EDITABLE. It used to be `readOnly` until a master toggle was on, which made sense while
@@ -719,6 +823,42 @@ function PromptPanel({ thread, armed, close }: {
         />
         <span className={`font-medium ${postCompaction ? "text-fg" : "text-muted"}`}>Compaction</span>
         <span className="text-muted">when the context is summarized away — link the doc to re-read</span>
+
+        {/* THE LIMITS (2026-09-29) — what makes this Goal a bounded LOOP. No switch of their own: an empty
+            field is "no limit", so the leading column holds a spacer and the row keeps its siblings' shape.
+            Either limit, reached, switches every trigger above OFF by itself and leaves the text, exactly as
+            switching them off by hand would; the footer then says which limit ended it. The span is typed
+            in the worker contract's `for:` grammar, the same token the worker gives the `goal` tool. */}
+        <span aria-hidden />
+        <span className={`font-medium ${runsField.trim() || forField.trim() ? "text-fg" : "text-muted"}`}>Limit</span>
+        <span className="flex items-center gap-1.5 text-muted">
+          stop after
+          <input
+            type="text"
+            data-goal-max-runs
+            inputMode="numeric"
+            value={runsField}
+            placeholder="∞"
+            onChange={(e) => setRunsField(e.target.value)}
+            onBlur={commitLimits}
+            onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); commitLimits() } }}
+            aria-label="Maximum number of runs"
+            className={LIMIT_INPUT}
+          />
+          runs or
+          <input
+            type="text"
+            data-goal-for
+            value={forField}
+            placeholder="∞"
+            onChange={(e) => setForField(e.target.value)}
+            onBlur={commitLimits}
+            onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); commitLimits() } }}
+            aria-label="Time limit, like 30m, 2h or 3d"
+            className={LIMIT_INPUT}
+          />
+          <span className="text-muted-55">e.g. 30m, 2h, 3d</span>
+        </span>
 
         {/* THERE IS NO FOURTH ROW. An "Autonomous mode" switch sat here under a rule — the inverted face of
             a `pause_on_questions` column that held every trigger while the thread was waiting on the human

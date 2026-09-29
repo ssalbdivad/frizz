@@ -1,7 +1,7 @@
 import { execFile } from "node:child_process"
 import { promisify } from "node:util"
 import { createHash, randomUUID } from "node:crypto"
-import { PARK_CORRECTION_NAMES_LEAD, questionRepliedPast, PARK_CORRECTION_QUESTION_LEAD, PARK_CORRECTION_RETIRED_LEAD, interruptEndedSubAgentsMessage, type InterruptEndedSubAgent, parkExpiredWakeMessage, parkFinishedWakeMessage, prWatchExpiredWakeMessage, ownWatchExpiredWakeMessage, questionAnswerMessage, questionsCancelledWakeMessage, type QuestionAnswer, type QuestionDismissal, RETIRED_AWAITING_REPLACEMENT, retiredAwaitingKindsIn, compactionPromptMessage, limitResumeSteer, limitModelSwitchSteer, formatGithubWakeSteer, GithubWakeItem, type GithubWatchStatus, type GithubIssueStatus, prWatchWakeMessage, issueWatchWakeMessage, shellDoneMessage, restPromptMessage, schedulePromptMessage, timerPromptMessage, signoffNudgeMessage, strayShellsMessage, liveOpsLines, wakeDeliveryToken, wakeTimeHeader, stripWakeTimeHeader, type QuotaSnapshot } from "@frizz/shared"
+import { PARK_CORRECTION_NAMES_LEAD, questionRepliedPast, PARK_CORRECTION_QUESTION_LEAD, PARK_CORRECTION_RETIRED_LEAD, interruptEndedSubAgentsMessage, type InterruptEndedSubAgent, parkExpiredWakeMessage, parkFinishedWakeMessage, prWatchExpiredWakeMessage, ownWatchExpiredWakeMessage, questionAnswerMessage, questionsCancelledWakeMessage, type QuestionAnswer, type QuestionDismissal, RETIRED_AWAITING_REPLACEMENT, retiredAwaitingKindsIn, compactionPromptMessage, goalLimitMessage, limitResumeSteer, limitModelSwitchSteer, formatGithubWakeSteer, GithubWakeItem, type GithubWatchStatus, type GithubIssueStatus, prWatchWakeMessage, issueWatchWakeMessage, shellDoneMessage, restPromptMessage, schedulePromptMessage, timerPromptMessage, signoffNudgeMessage, strayShellsMessage, liveOpsLines, wakeDeliveryToken, wakeTimeHeader, stripWakeTimeHeader, type QuotaSnapshot } from "@frizz/shared"
 import { GITHUB_ISSUE_STATUS_SETTING, GITHUB_STATUS_SETTING, parkExpiresAt, parkIsHonoured, readAwaitingPark, unaccountedItems, type LiveActivity } from "./awaiting.ts"
 import type { PrWatchRow, SessionRow, Storage, ThreadQuestionRow } from "./storage.ts"
 import type { Tailer } from "./tailer.ts"
@@ -534,6 +534,7 @@ type RecurringRow = Pick<
   | "recurring_prompt" | "recurring_on_rest" | "recurring_on_schedule" | "recurring_on_compact"
   | "recurring_interval_ms" | "recurring_armed_at"
   | "recurring_rest_fired_at" | "recurring_schedule_fired_at" | "recurring_compact_fired_at"
+  | "recurring_runs" | "recurring_max_runs" | "recurring_until_at" | "recurring_stop_reason"
 >
 
 // ---- WHAT A PENDING QUESTION DOES TO THE THREE TRIGGERS -------------------------------------------
@@ -884,6 +885,43 @@ function armedCompact(row: RecurringRow): ArmedRest | undefined {
   if (!prompt || !armedAt) return undefined
   if (row.recurring_on_compact !== 1) return undefined
   return { prompt, armedAt }
+}
+
+// ---- THE GOAL'S LIMITS: WHERE A LOOP ENDS ---------------------------------------------------------
+// A Goal may carry a run cap and/or a time bound (2026-09-29; storage.ts SessionRow has the columns).
+// Reaching either DISARMS it — every trigger off, the text kept — and the worker hears exactly ONE wake
+// saying which limit ended it. Without limits nothing below applies and the Goal is as unbounded as it
+// always was; the ```done fence and the worker's own `stop` remain the other two exits.
+//
+// WHERE THE COUNT IS CHECKED. The run count moves when a delivery is SENT to a live runtime or otherwise
+// established as delivered (see `countGoalDelivery` for why the send itself has to count), and the cap
+// is applied right there, in the same call — not on the next tick. That ordering is the whole guarantee of "exactly N": a sibling
+// trigger's delivery already sitting in the outbox reaches `deliveryContext` after the disarm and reads
+// as superseded, instead of slipping out as run N+1 later in the same tick. The time bound has no event
+// to hang on, so `evalGoalLimits` checks it at the top of every tick, before any trigger's pass runs.
+//
+// THE WAKE IS ONE PER GENERATION BY CONSTRUCTION: its delivery id is keyed on the generation alone, and
+// `stopRecurringAtLimit` only succeeds on a row not already stopped. It waits for REST like most wakes —
+// the last run is still being worked when the cap is reached, and the news is for after that run, not an
+// interruption of it.
+const GOAL_END_FENCE_PREFIX = "goalend"
+function goalEndFenceId(armedAt: string): string {
+  return `${GOAL_END_FENCE_PREFIX}:${armedAt}`
+}
+function isGoalEndFenceId(fenceId: string): boolean {
+  return fenceId.startsWith(`${GOAL_END_FENCE_PREFIX}:`)
+}
+
+/** Which limit this LIVE Goal has reached, if any. A row with every trigger off, no generation, or one
+ *  already stopped has nothing left to stop. */
+function goalLimitHit(row: RecurringRow, nowMs: number): "runs" | "time" | undefined {
+  if (!row.recurring_prompt?.trim() || !row.recurring_armed_at || row.recurring_stop_reason) return undefined
+  if (row.recurring_on_rest !== 1 && row.recurring_on_schedule !== 1 && row.recurring_on_compact !== 1) return undefined
+  const max = row.recurring_max_runs
+  if (typeof max === "number" && max > 0 && (row.recurring_runs ?? 0) >= max) return "runs"
+  const until = Date.parse(row.recurring_until_at ?? "")
+  if (Number.isFinite(until) && nowMs >= until) return "time"
+  return undefined
 }
 
 // ---- SOURCE 6: THE WORKER'S ONE-OFF TIMERS -------------------------------------------------------
@@ -1474,6 +1512,13 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
     // with different settings, and either side switching it off all read as
     // supersession here — each one means the queued text no longer describes what the thread wants.
     // Disabling therefore drops a beat already waiting, rather than delivering it on re-enable.
+    // THE GOAL'S END is bound to the generation it ended STILL BEING STOPPED. The human (or the worker)
+    // re-arming before it lands makes "your loop stopped" untrue, so it supersedes rather than arriving
+    // on top of a loop that is running again.
+    if (isGoalEndFenceId(item.fenceId)) {
+      if (!row.recurring_armed_at || !row.recurring_stop_reason || item.fenceId !== goalEndFenceId(row.recurring_armed_at)) return "superseded"
+      return tele.turn === "idle" ? "current-idle" : "current-busy"
+    }
     if (isHeartbeatFenceId(item.fenceId)) {
       const armed = armedSchedule(row)
       if (!armed || !item.fenceId.startsWith(`${HEARTBEAT_FENCE_PREFIX}:${armed.armedAt}:`)) return "superseded"
@@ -3489,6 +3534,7 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
       if (row.state === "archived" || row.archived === 1) continue
       const armed = armedSchedule(row)
       if (!armed || armed.dueAtMs > nowMs) continue
+      if (goalLimitHit(row, nowMs) || goalCapReserved(row)) continue // never deliver past a limit
       // The ONE thing that silences a beat. Everything else about this source is unconditional — rest,
       // sub-agents, shells, all irrelevant — but a worker that has said there is no further work has
       // ended the arrangement, and a "permanently stalled" run that keeps being woken every interval is
@@ -3558,6 +3604,89 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
     deps.storage.stampRecurringScheduleFired(item.slug, armedAt, new Date().toISOString())
   }
 
+  // ---- The GOAL'S LIMITS (see the block above goalLimitHit) ------------------------------------
+  // One run counted per DELIVERED Goal prompt, whichever trigger sent it, and the cap applied in the
+  // same breath — see "WHERE THE COUNT IS CHECKED".
+  //
+  // COUNTED AT SEND, not only at settlement, and a real stack is why (2026-09-29). A wake written to a
+  // LIVE runtime is left leased as "sent" and settled later by reconcileOutbox — and a stop-hook
+  // delivery is bound to the rest it was queued for, so the moment the worker answers it (a one-word
+  // reply takes two seconds; the confirmation grace is longer) `deliveryContext` reads it SUPERSEDED,
+  // and the superseded branch settles nothing. Counted only there, five real deliveries to a real Claude
+  // worker counted zero and a cap of 3 never stopped anything. The signoff nudge's cap hit the same wall
+  // and is spent at send for the same reason. So every point that establishes a delivery calls this —
+  // the send to a live runtime, the acknowledgement, the transcript confirmation — and storage counts
+  // each delivery once, by fence id. The cost is a frame lost with a runtime that died mid-read: it
+  // counts, and is re-sent under the same fence id, which does not count again.
+  function countGoalDelivery(item: WakeDelivery): void {
+    const prefix = isStopHookFenceId(item.fenceId) ? STOP_HOOK_FENCE_PREFIX
+      : isHeartbeatFenceId(item.fenceId) ? HEARTBEAT_FENCE_PREFIX
+      : isCompactFenceId(item.fenceId) ? COMPACT_FENCE_PREFIX
+      : undefined
+    if (!prefix) return
+    const row = deps.storage.getSession(item.slug)
+    if (!row || row.session_id !== item.sessionId) return
+    const armedAt = row.recurring_armed_at
+    if (!armedAt || !item.fenceId.startsWith(`${prefix}:${armedAt}:`)) return
+    if (deps.storage.countRecurringRun(item.slug, armedAt, item.fenceId) === undefined) return
+    const counted = deps.storage.getSession(item.slug)
+    if (counted) applyGoalLimit(counted, now())
+  }
+
+  // Disarm a Goal that has reached a limit, and queue the one wake that says so. Returns nothing: the
+  // storage guard is what makes this idempotent, so every caller can simply call it.
+  function applyGoalLimit(row: SessionRow, nowMs: number): void {
+    const reason = goalLimitHit(row, nowMs)
+    const armedAt = row.recurring_armed_at
+    if (!reason || !armedAt) return
+    if (!deps.storage.stopRecurringAtLimit(row.slug, armedAt, reason, new Date(nowMs).toISOString())) return
+    const runs = row.recurring_runs ?? 0
+    log(`waker: ${row.slug} goal stopped at its ${reason === "runs" ? `run limit (${runs}/${row.recurring_max_runs})` : "time limit"}`)
+    const fenceId = goalEndFenceId(armedAt)
+    const deliveryId = wakeDeliveryId(row.slug, row.session_id, fenceId)
+    if (outbox.get(deliveryId)) return
+    // Archived: the loop is still stopped (a re-opened thread must not find it running), but nobody is
+    // there to tell.
+    if (row.state === "archived" || row.archived === 1) return
+    const item = outbox.enqueue({
+      id: deliveryId,
+      slug: row.slug,
+      sessionId: row.session_id,
+      fenceId,
+      hintKey: fenceId,
+      message: goalLimitMessage({
+        reason,
+        runs,
+        maxRuns: row.recurring_max_runs,
+        forSeconds: row.recurring_for_ms ? Math.round(row.recurring_for_ms / 1000) : null,
+      }),
+      reason: `goal reached its ${reason === "runs" ? "run" : "time"} limit`,
+    }, nowMs).delivery
+    log(`waker: queued ${row.slug} — ${item.reason}`)
+    checkpoint("after-enqueue", item)
+  }
+
+  // THE CAP IS RESERVED AT ENQUEUE, not only counted at settle. Two triggers can each have a delivery
+  // open at once (a beat due on the same tick as a rest), and the outbox MERGES a thread's ready wakes
+  // into one frame — so both would go out together, and counting them afterwards would already be
+  // N+1. A Goal whose delivered runs plus its still-open deliveries reach the cap queues nothing more.
+  function goalCapReserved(row: SessionRow): boolean {
+    const max = row.recurring_max_runs
+    if (typeof max !== "number" || max <= 0) return false
+    const open = outbox.listOpen().filter((item) =>
+      item.slug === row.slug && item.sessionId === row.session_id &&
+      (isHeartbeatFenceId(item.fenceId) || isStopHookFenceId(item.fenceId) || isCompactFenceId(item.fenceId)),
+    ).length
+    return (row.recurring_runs ?? 0) + open >= max
+  }
+
+  // The TIME bound's check, and the catch-all for a cap LOWERED under a count already past it (the
+  // settle path only fires on a delivery). Runs first in the tick, so no trigger's pass sees a Goal
+  // that should already have ended.
+  function evalGoalLimits(nowMs: number): void {
+    for (const row of deps.storage.allSessions()) applyGoalLimit(row, nowMs)
+  }
+
   // ---- The ON REST pass -----------------------------------------------------------------------
   // Unlike every other pass here this one DOES filter on `turn === "idle"`, because rest is not a
   // deadline it can queue against — it IS the trigger. Queueing a bump for a busy thread would bind it
@@ -3568,6 +3697,7 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
       if (row.state === "archived" || row.archived === 1) continue
       const armed = armedRest(row)
       if (!armed) continue
+      if (goalLimitHit(row, nowMs) || goalCapReserved(row)) continue // never deliver past a limit
       const tele = deps.tailer.get(row.slug)
       if (!tele || tele.turn !== "idle") continue
       // THE AGENT MUST HAVE SPOKEN LAST. `turn === "idle"` alone is not "the agent rested": a thread
@@ -3666,6 +3796,7 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
       if (row.state === "archived" || row.archived === 1) continue
       const armed = armedCompact(row)
       if (!armed) continue
+      if (goalLimitHit(row, nowMs) || goalCapReserved(row)) continue // never deliver past a limit
       const tele = deps.tailer.get(row.slug)
       if (!tele?.lastCompactionAt) continue
       // NEVER fire for a compaction that predates the arming. Without this, switching the trigger on for
@@ -3761,6 +3892,7 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
             settleCompactPrompt(item)
             settleTimer(item)
             settleSignoffNudge(item)
+            countGoalDelivery(item)
             log(`waker: delivered ${item.slug} — ${item.reason}${item.attempts > 1 ? ` (on attempt ${item.attempts})` : ""}`)
           }
           continue
@@ -3818,6 +3950,7 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
     settleRestPrompt(item)
     settleCompactPrompt(item)
     settleTimer(item)
+    countGoalDelivery(item)
   }
 
   // ---- THE MERGE: ONE THREAD, ONE TURN --------------------------------------------------------------
@@ -4011,6 +4144,8 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
           // Counting here is also the honest anchor: the tokens are spent when the message is sent,
           // and confirmation is exactly what a thread failing every turn can never supply.
           for (const d of frame) settleSignoffNudge(d)
+          // …and a Goal run is counted here for the same reason (see countGoalDelivery).
+          for (const d of frame) countGoalDelivery(d)
           log(`waker: sent ${item.slug} — ${item.reason}; confirming within ${Math.round(confirmGraceMs / 1000)}s`)
           checkpoint("after-delivery", item)
           continue
@@ -4046,6 +4181,12 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
     } catch (err) {
       if (err instanceof InjectedSchedulerCrash) throw err
       log(`waker: limit-resume pass failed: ${err instanceof Error ? err.message : String(err)}`)
+    }
+    try {
+      evalGoalLimits(now())
+    } catch (err) {
+      if (err instanceof InjectedSchedulerCrash) throw err
+      log(`waker: goal-limit pass failed: ${err instanceof Error ? err.message : String(err)}`)
     }
     try {
       evalSnoozes(now())
