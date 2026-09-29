@@ -20,8 +20,9 @@
 //
 // A card whose thread leaves the queue while its card is on screen, without the human putting it away
 // (it woke itself on a finished shell, a child's return, a timer; or someone acted on it from another
-// tab), becomes a GHOST: it keeps its place, drawn quiet, until it scrolls off screen — or until the
-// thread rests again, when it is simply the card again, in the same place. A card the human put away
+// tab), becomes a GHOST: an empty gap the card's height, holding its place until it scrolls off screen or the
+// human next scrolls or presses a key (AllQueues.tsx) — or until the thread rests again, when it is simply
+// the card again, in the same place. A card the human put away
 // (done, snooze, a reply sent from its own box) is not a ghost; it leaves the ordinary way, and anything
 // that follows it moving is the human's own doing. A card that leaves while OFF screen simply goes (the
 // viewport lock holds the page if it was above), and should its thread come back, it is an arrival.
@@ -80,15 +81,3 @@ export function stableQueue<T>({ prev, target, keyOf, onScreen, mayGhost, keep }
   return out
 }
 
-/**
- * What a ghost says in place of since-when-it-was-ready: where its thread went, so a card that stopped
- * waiting while the human read it says so rather than just going quiet. `gone` is a thread the view can
- * no longer see — done from somewhere without a list of done threads, forgotten, or its project closed.
- */
-export type GhostReason = "working" | "snoozed" | "done" | "gone"
-export const GHOST_LABEL: Record<GhostReason, string> = {
-  working: "Back at work",
-  snoozed: "Snoozed",
-  done: "Done",
-  gone: "No longer waiting",
-}

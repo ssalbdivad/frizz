@@ -253,7 +253,7 @@ try {
       `prompt box ${promptMoved.toFixed(2)}px${missing.length ? `; GONE from screen: ${missing.join(" ")}` : ""}${appeared.length ? `; APPEARED above: ${appeared.join(" ")}` : ""}; ` +
       `order ${order(after)}; scrollY ${before.scrollY} → ${after.scrollY}` +
       (ok || !sampled.at ? "" : `\n      worst ${sampled.at}`))
-    if (expect) expect(before, after, landed)
+    if (expect) await expect(before, after, landed)
     return { before, after }
   }
 
@@ -344,36 +344,39 @@ try {
     await stays("a card on screen that wakes itself stays where it is, as a ghost", {
       act: () => wake(key),
       until: (snapshot) => find(snapshot, first)?.ghost,
-      expect: (_, after) => check("Everything: …saying it is back at work", find(after, first).text.includes("Back at work"), find(after, first).text.slice(0, 120)),
+      // An EMPTY GAP, not a card (maintainer 2026-09-29: "maybe just make the space above empty in this
+      // scenario until you scroll"): hidden at its own height, and out of reach of a click.
+      expect: () => page.evaluate((slug) => {
+        const slot = [...document.querySelectorAll("[data-xq-card]")].find((el) => el.dataset.xqCard.endsWith(`/${slug}`))
+        return { hidden: getComputedStyle(slot.querySelector(".frizz-card-clip")).visibility, inert: slot.inert, height: slot.getBoundingClientRect().height }
+      }, first).then((gap) => check("Everything: …as an empty gap the card's height", gap.hidden === "hidden" && gap.inert && gap.height > 100, JSON.stringify(gap))),
     })
     await page.screenshot({ path: join(shots, "everything-ghost.png") })
-    // Clicked, a ghost WAKES: full tone, the same place. The card at the top of a short page never
-    // scrolls off, so this is the only way its quiet ever ends while its thread works (maintainer
-    // 2026-09-29: "permanently stuck in a deemphasized background styling even if I directly click on
-    // it"). A DOM event on the card's body, not a link: puppeteer's own click would scroll first.
-    {
-      const tone = () => page.evaluate((slug) => {
-        const slot = [...document.querySelectorAll("[data-xq-card]")].find((el) => el.dataset.xqCard.endsWith(`/${slug}`))
-        return { woken: slot.hasAttribute("data-queue-woken"), opacity: getComputedStyle(slot.querySelector(".frizz-card-clip")).opacity, top: slot.getBoundingClientRect().top }
-      }, first)
-      const quiet = await tone()
-      await page.evaluate((slug) => {
-        const slot = [...document.querySelectorAll("[data-xq-card]")].find((el) => el.dataset.xqCard.endsWith(`/${slug}`))
-        slot.querySelector("[data-xq-card-root] header").dispatchEvent(new PointerEvent("pointerdown", { bubbles: true, button: 0 }))
-      }, first)
-      await sleep(600)
-      const woken = await tone()
-      check("Everything: …clicked, the ghost wakes to full tone in the same place",
-        quiet.opacity === "0.5" && !quiet.woken && woken.woken && woken.opacity === "1" && Math.abs(woken.top - quiet.top) < 0.5,
-        `opacity ${quiet.opacity} → ${woken.opacity}, woken ${woken.woken}, top ${quiet.top.toFixed(2)} → ${woken.top.toFixed(2)}`)
-      await page.screenshot({ path: join(shots, "everything-ghost-woken.png") })
-    }
     await stays("…and when it rests again it is the card again, in the same place: the card under the pointer holds", {
       spoke: [first],
       act: () => rest(key),
       until: (snapshot) => find(snapshot, first) && !find(snapshot, first).ghost,
       expect: (_, after) => check("Everything: …still first in line", slugOf(after.list[0].key) === first, order(after)),
     })
+    // The human's next move closes the gap: a wheel, before it has scrolled anything. The card under the
+    // pointer holds — unless the gap was taller than the page had scrolled, when the page is at its top
+    // and the lock has nothing left to scroll back (the one move a gap at the top of the page can make).
+    await stays("a gap stays until the human moves", {
+      act: () => wake(key),
+      until: (snapshot) => find(snapshot, first)?.ghost,
+    })
+    {
+      const before = await snap()
+      await page.evaluate(() => window.dispatchEvent(new WheelEvent("wheel", { deltaY: 1, bubbles: true })))
+      await sleep(800)
+      const after = await snap()
+      const by = find(after, second).top - find(before, second).top
+      check("Everything: …a wheel closes the gap, and the card under the pointer holds",
+        find(after, first) === undefined && (Math.abs(by) < 1 || after.scrollY === 0),
+        `${first} ${find(after, first) ? "still drawn" : "gone"}; ${second} moved ${by.toFixed(2)}px; scrollY ${before.scrollY} → ${after.scrollY}; order ${order(after)}`)
+      await rest(key)
+      await sleep(1500)
+    }
   }
   // The human's own moves that must not move anything: a card's drawer opened over it and closed again.
   // Opened from a title already on screen: a click the browser has to scroll to first is not this test.

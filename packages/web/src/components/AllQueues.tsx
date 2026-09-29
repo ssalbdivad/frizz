@@ -52,7 +52,7 @@ import { useBoard } from "../hooks.ts"
 import { prefs } from "../lib/prefs.ts"
 import { PROMPT_CONTROL_TYPOGRAPHY_CLASS } from "../lib/promptControlTypography.ts"
 import { MarkdownScopeContext } from "../lib/useMarkdown.ts"
-import { GHOST_LABEL, stableQueue, type QueueSlot } from "../lib/stableQueue.ts"
+import { stableQueue, type QueueSlot } from "../lib/stableQueue.ts"
 import { actedOnHere } from "../lib/humanActs.ts"
 import { useSteeredAt } from "../lib/steering.ts"
 import { glideTo, gliding, useViewportLock } from "../lib/viewportLock.ts"
@@ -104,13 +104,9 @@ function heldStatus(projects: readonly QueuesProject[], entry: QueueEntry): stri
   return project?.running.some((t) => t.id === entry.thread.id) ? "Working on your answer" : undefined
 }
 
-// Where a ghost's thread went, as far as the page can see (lib/stableQueue.ts GHOST_LABEL).
-function ghostLabel(projects: readonly QueuesProject[], { project, thread }: QueueEntry): string {
-  const now = projects.find((candidate) => candidate.id === project.id)
-  if (now?.running.some((t) => t.id === thread.id)) return GHOST_LABEL.working
-  if (now?.snoozed.some((t) => t.id === thread.id)) return GHOST_LABEL.snoozed
-  return GHOST_LABEL.gone
-}
+// The human's moves that close every empty gap a ghost left (lib/stableQueue.ts): the start of a scroll
+// by wheel or touch, and any key. A scrollbar drag closes none, but its gap soon scrolls off.
+const GAP_CLOSERS = ["wheel", "touchmove", "keydown"] as const
 
 export function AllQueuesPage() {
   const cards = useQuery({ queryKey: ["projectsList"], queryFn: () => rpc.projectsList() })
@@ -208,10 +204,12 @@ export function AllQueuesPage() {
     orderedAs.current = `${direction}|${viewKey(view)}`
     prevSlots.current = []
   }
+  // Gaps the human's last move closed (below).
+  const [closed, setClosed] = useState<ReadonlySet<string>>(() => new Set())
   const mayGhost = (key: string): boolean => {
     if (leaving.isLeaving(key)) return false
     const was = prevSlots.current.find((slot) => slot.key === key)?.item
-    return was !== undefined && steeredAt[was.thread.id] === undefined && !actedOnHere(was.thread.id)
+    return was !== undefined && !closed.has(key) && steeredAt[was.thread.id] === undefined && !actedOnHere(was.thread.id)
   }
   const queue = stableQueue({
     prev: prevSlots.current,
@@ -222,27 +220,28 @@ export function AllQueuesPage() {
     keep: new Set(prevSlots.current.map((slot) => slot.key).filter((key) => (leaving.isLeaving(key) && !leaving.hidden(key)) || leaving.isHeld(key))),
   })
   prevSlots.current = queue
-  // A GHOST THE HUMAN REACHES FOR WAKES: a click or a tab into it draws it at full tone, in the same place,
-  // until it stops being a ghost. Scrolling off is how a ghost otherwise ends, and the card at the top of a
-  // short page never scrolls off — so a thread that worked for an hour left its card quiet for an hour,
-  // however deliberately it was being read (maintainer 2026-09-29: "permanently stuck in a deemphasized
-  // background styling even if I directly click on it"). A wake is forgotten with the ghost, so the next
-  // time that thread leaves on its own its card goes quiet again.
-  const [woken, setWoken] = useState<ReadonlySet<string>>(() => new Set())
+  // A GHOST IS AN EMPTY GAP, and the human's next move closes it (maintainer 2026-09-29, of the quiet card
+  // it replaced: "maybe just make the space above empty in this scenario until you scroll"). Scrolling off
+  // is how a gap otherwise ends, but the one at the top of a short page never scrolls off, so a wheel, a
+  // touch or a key closes every gap on the page — the human is moving, so the lock (lib/viewportLock.ts)
+  // holds the card they are engaged with while the space under it goes. A close is forgotten with the
+  // ghost, so the next time that thread leaves on its own its card holds its place again.
   const ghostKeys = queue.filter((slot) => slot.ghost).map((slot) => slot.key)
   const ghostKeysId = ghostKeys.join("\n")
   useEffect(() => {
-    setWoken((prev) => {
+    setClosed((prev) => {
       const kept = [...prev].filter((key) => ghostKeys.includes(key))
       return kept.length === prev.size ? prev : new Set(kept)
     })
+    if (!ghostKeys.length) return
+    const close = () => setClosed(new Set(ghostKeys))
+    const options = { capture: true, passive: true, once: true }
+    for (const type of GAP_CLOSERS) window.addEventListener(type, close, options)
+    return () => {
+      for (const type of GAP_CLOSERS) window.removeEventListener(type, close, options)
+    }
     // eslint-disable-next-line react-hooks/exhaustive-deps -- keyed on the ghosts' identity, not the array
   }, [ghostKeysId])
-  const wake = (event: { target: EventTarget }) => {
-    if (!(event.target instanceof Element)) return
-    const key = event.target.closest<HTMLElement>("[data-xq-card][data-queue-ghost]")?.dataset.xqCard
-    if (key && !woken.has(key)) setWoken((prev) => new Set(prev).add(key))
-  }
   // Counted from what the page SHOWS: a card the operator just finished is gone from the count at once,
   // and a header still counting it read "1 in the queue" over an empty page until the next poll. A ghost
   // is not waiting on anyone. A card whose drawer is open still is, and still counts.
@@ -308,8 +307,6 @@ export function AllQueuesPage() {
       </aside>
       <main
         id="workpane"
-        onPointerDownCapture={wake}
-        onFocusCapture={wake}
         aria-label="Queue"
         className="flex min-h-screen w-[720px] max-w-[62vw] min-w-0 flex-col py-5 max-[800px]:min-h-0 max-[800px]:w-full max-[800px]:max-w-none"
       >
@@ -336,7 +333,7 @@ export function AllQueuesPage() {
             {queue.length > 0 ? (
               queue.map((slot, index) => (
                 <Fragment key={slot.key}>
-                  <QueueCardOf entry={leaving.isHeld(slot.key) ? heldEntry(projects, slot.item) : slot.item} ghost={slot.ghost ? ghostLabel(projects, slot.item) : undefined} status={leaving.isHeld(slot.key) ? heldStatus(projects, slot.item) : undefined} woken={woken.has(slot.key)} concealed={inDrawer.has(slot.key)} leaving={leaving} chip={!focused} />
+                  <QueueCardOf entry={leaving.isHeld(slot.key) ? heldEntry(projects, slot.item) : slot.item} ghost={slot.ghost} status={leaving.isHeld(slot.key) ? heldStatus(projects, slot.item) : undefined} concealed={inDrawer.has(slot.key)} leaving={leaving} chip={!focused} />
                   {/* The rule between two cards: a sibling that FOLLOWS its card, so
                       styles.css fades it with the card when that one leaves. */}
                   {index < queue.length - 1 && <hr className="my-10 border-0 border-t border-border/60" />}
@@ -688,7 +685,7 @@ function placeCaret(box: HTMLTextAreaElement, caret: Caret | undefined): void {
  * relative path at its directory and a `/thread/<slug>` link at that thread on THIS page (opened in
  * place) — never at the page's focus, which is usually another project.
  */
-function QueueCardOf({ entry, ghost, status, woken, concealed, leaving, chip }: { entry: QueueEntry; ghost: string | undefined; status?: string; woken: boolean; concealed: boolean; leaving: LeavingCards; chip: boolean }) {
+function QueueCardOf({ entry, ghost, status, concealed, leaving, chip }: { entry: QueueEntry; ghost: boolean; status?: string; concealed: boolean; leaving: LeavingCards; chip: boolean }) {
   const { project, thread } = entry
   // The card's project, chosen from its chip or mark: the page focused on it, read from its top.
   const navigate = useNavigate()
@@ -713,7 +710,6 @@ function QueueCardOf({ entry, ghost, status, woken, concealed, leaving, chip }: 
         chip={chip}
         onChoose={choose}
         ghost={ghost}
-        woken={woken}
         status={status}
         concealed={concealed}
       />
@@ -989,9 +985,10 @@ function useQueueKeys(activeKey: string | null, scrollToCard: (key: string) => n
  * Which card is being read — the one crossing the reading line a third of the way down the window — so
  * its row in the list wears the scroll marker (Sidebar.tsx ThreadRow `active`).
  */
-function useScrollspy(cards: readonly { key: string }[]): string | null {
+function useScrollspy(cards: readonly { key: string; ghost: boolean }[]): string | null {
   const [active, setActive] = useState<string | null>(null)
-  const signature = cards.map((card) => card.key).join(",")
+  // A card turning into a gap re-reads the line too: it is skipped, so the card being read changes.
+  const signature = cards.map((card) => `${card.key}${card.ghost ? "~" : ""}`).join(",")
   useEffect(() => {
     let frame = 0
     const sync = () => {
@@ -999,7 +996,8 @@ function useScrollspy(cards: readonly { key: string }[]): string | null {
       frame = requestAnimationFrame(() => {
         const line = window.innerHeight / 3
         let found: string | null = null
-        for (const slot of document.querySelectorAll<HTMLElement>("[data-xq-card]")) {
+        // Never a ghost's empty gap (lib/stableQueue.ts): there is nothing there to read.
+        for (const slot of document.querySelectorAll<HTMLElement>("[data-xq-card]:not([data-queue-ghost])")) {
           const { top, bottom } = slot.getBoundingClientRect()
           if (top <= line && bottom >= line) { found = slot.dataset.xqCard ?? null; break }
           if (top > line) { found ??= slot.dataset.xqCard ?? null; break }
