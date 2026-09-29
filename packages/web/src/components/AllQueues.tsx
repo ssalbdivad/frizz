@@ -195,6 +195,27 @@ export function AllQueuesPage() {
     keep: new Set(prevSlots.current.map((slot) => slot.key).filter((key) => leaving.isLeaving(key) && !leaving.hidden(key))),
   })
   prevSlots.current = queue
+  // A GHOST THE HUMAN REACHES FOR WAKES: a click or a tab into it draws it at full tone, in the same place,
+  // until it stops being a ghost. Scrolling off is how a ghost otherwise ends, and the card at the top of a
+  // short page never scrolls off — so a thread that worked for an hour left its card quiet for an hour,
+  // however deliberately it was being read (maintainer 2026-09-29: "permanently stuck in a deemphasized
+  // background styling even if I directly click on it"). A wake is forgotten with the ghost, so the next
+  // time that thread leaves on its own its card goes quiet again.
+  const [woken, setWoken] = useState<ReadonlySet<string>>(() => new Set())
+  const ghostKeys = queue.filter((slot) => slot.ghost).map((slot) => slot.key)
+  const ghostKeysId = ghostKeys.join("\n")
+  useEffect(() => {
+    setWoken((prev) => {
+      const kept = [...prev].filter((key) => ghostKeys.includes(key))
+      return kept.length === prev.size ? prev : new Set(kept)
+    })
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- keyed on the ghosts' identity, not the array
+  }, [ghostKeysId])
+  const wake = (event: { target: EventTarget }) => {
+    if (!(event.target instanceof Element)) return
+    const key = event.target.closest<HTMLElement>("[data-xq-card][data-queue-ghost]")?.dataset.xqCard
+    if (key && !woken.has(key)) setWoken((prev) => new Set(prev).add(key))
+  }
   // Counted from what the page SHOWS: a card the operator just finished is gone from the count at once,
   // and a header still counting it read "1 in the queue" over an empty page until the next poll. A ghost
   // is not waiting on anyone. A card whose drawer is open still is, and still counts.
@@ -257,6 +278,8 @@ export function AllQueuesPage() {
       </aside>
       <main
         id="workpane"
+        onPointerDownCapture={wake}
+        onFocusCapture={wake}
         aria-label="Queue"
         className="flex min-h-screen w-[720px] max-w-[62vw] min-w-0 flex-col py-5 max-[800px]:min-h-0 max-[800px]:w-full max-[800px]:max-w-none"
       >
@@ -285,7 +308,7 @@ export function AllQueuesPage() {
                 {queue.length > 0 ? (
                   queue.map((slot, index) => (
                     <Fragment key={slot.key}>
-                      <QueueCardOf entry={slot.item} ghost={slot.ghost ? ghostLabel(projects, slot.item) : undefined} concealed={inDrawer.has(slot.key)} leaving={leaving} chip={!filtered} />
+                      <QueueCardOf entry={slot.item} ghost={slot.ghost ? ghostLabel(projects, slot.item) : undefined} woken={woken.has(slot.key)} concealed={inDrawer.has(slot.key)} leaving={leaving} chip={!filtered} />
                       {/* The rule between two cards: a sibling that FOLLOWS its card, so
                           styles.css fades it with the card when that one leaves. */}
                       {index < queue.length - 1 && <hr className="my-10 border-0 border-t border-border/60" />}
@@ -625,7 +648,7 @@ function placeCaret(box: HTMLTextAreaElement, caret: Caret | undefined): void {
  * relative path at its directory and a `/thread/<slug>` link at that thread on THIS page (opened in
  * place) — never at the page's focus, which is usually another project.
  */
-function QueueCardOf({ entry, ghost, concealed, leaving, chip }: { entry: QueueEntry; ghost: string | undefined; concealed: boolean; leaving: LeavingCards; chip: boolean }) {
+function QueueCardOf({ entry, ghost, woken, concealed, leaving, chip }: { entry: QueueEntry; ghost: string | undefined; woken: boolean; concealed: boolean; leaving: LeavingCards; chip: boolean }) {
   const { project, thread } = entry
   // The READY header's filter, chosen from the card: a different set of cards is read from its top.
   const choose = useCallback((to: QueuesProject) => {
@@ -643,7 +666,7 @@ function QueueCardOf({ entry, ghost, concealed, leaving, chip }: { entry: QueueE
       {thread.kind === "command" ? (
         // A finished terminal command takes its own command card, scoped to its project: its
         // pty, its Restart and its Mark as done all belong to the card's project, not the page's.
-        <div data-xq-card={key} data-queue-leaving={leaving.isLeaving(key)} data-queue-ghost={ghost === undefined ? undefined : true} data-queue-concealed={concealed || undefined} inert={concealed} className="frizz-card-slot min-w-0">
+        <div data-xq-card={key} data-queue-leaving={leaving.isLeaving(key)} data-queue-ghost={ghost === undefined ? undefined : true} data-queue-woken={(ghost !== undefined && woken) || undefined} data-queue-concealed={concealed || undefined} inert={concealed} className="frizz-card-slot min-w-0">
           <div className="frizz-card-clip min-h-0 min-w-0">
             <div className="frizz-card-body min-w-0">
               <ThreadProjectScope projectId={project.id} projectDir={project.projectDir}>
@@ -670,6 +693,7 @@ function QueueCardOf({ entry, ghost, concealed, leaving, chip }: { entry: QueueE
           chip={chip}
           onChoose={choose}
           ghost={ghost}
+          woken={woken}
           concealed={concealed}
         />
       )}

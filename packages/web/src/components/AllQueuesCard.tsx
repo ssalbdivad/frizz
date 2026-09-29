@@ -172,6 +172,8 @@ interface AllQueuesCardProps {
    * until it scrolls off or the thread rests again.
    */
   ghost?: string
+  /** A ghost the human clicked or tabbed into: drawn at full tone, still in its place (AllQueues.tsx). */
+  woken?: boolean
   /**
    * Its drawer is open, where it is read: the card stays drawn in its place in the queue, inert — out of
    * the tab order and out of reach of a click — so the drawer is the one live copy (AllQueues.tsx).
@@ -198,6 +200,7 @@ export const AllQueuesCard = memo(function AllQueuesCard({
   chip = false,
   onChoose,
   ghost,
+  woken = false,
   concealed = false,
 }: AllQueuesCardProps) {
   const api = projectRpc(project.id)
@@ -239,7 +242,7 @@ export const AllQueuesCard = memo(function AllQueuesCard({
   }
 
   return (
-    <div data-xq-card={key} data-queue-leaving={leaving} data-queue-ghost={ghost === undefined ? undefined : true} data-queue-concealed={concealed || undefined} inert={concealed} className="frizz-card-slot min-w-0">
+    <div data-xq-card={key} data-queue-leaving={leaving} data-queue-ghost={ghost === undefined ? undefined : true} data-queue-woken={(ghost !== undefined && woken) || undefined} data-queue-concealed={concealed || undefined} inert={concealed} className="frizz-card-slot min-w-0">
       <div className="frizz-card-clip min-h-0 min-w-0">
         <article
           data-xq-card-root
@@ -378,6 +381,7 @@ function sameCard(a: AllQueuesCardProps, b: AllQueuesCardProps): boolean {
     a.chip === b.chip &&
     a.onChoose === b.onChoose &&
     a.ghost === b.ghost &&
+    a.woken === b.woken &&
     a.concealed === b.concealed &&
     sameProjectAddress(a.project, b.project)
   )
