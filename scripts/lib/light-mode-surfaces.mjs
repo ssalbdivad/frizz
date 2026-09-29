@@ -184,8 +184,16 @@ export async function checkSurfaceStates({ page, url, font, palette, out, check,
   await page.setViewport({ width: 1440, height: 1000, deviceScaleFactor: 1 })
 
   await page.goto(`${url}/thread/theme-question/full`, { waitUntil: "networkidle2" })
-  await page.click("[data-question-option] > button")
-  await page.waitForFunction(() => [...document.querySelectorAll("button")].some(el => el.textContent.trim() === "Send answers" && !el.disabled && getComputedStyle(el).opacity === "1"))
+  // A STAGED answer, typed and not sent — no longer a picked option. Since 2c41b46f (2026-09-29) a
+  // single-choice pick that completes the ask is its own send, and since f515ee44 Send answers is drawn
+  // only while something is half-filled, so the pick this step made found no button (and would now answer
+  // the fixture's one question, leaving the next palette's pass nothing to measure). Typed text is still
+  // staged until Enter, which is the state that draws the send button; it is cleared again below.
+  const answer = 'textarea[data-surface="questionAnswer"]'
+  await page.waitForSelector("[data-question-option] > button")
+  await page.click(answer)
+  await page.keyboard.type("Both, renderer first")
+  await page.waitForFunction(() => { const el = document.querySelector("[data-send-answers]"); return el && !el.disabled && getComputedStyle(el).opacity === "1" })
   await contrast("selected-question")
   const outlineContract = await page.evaluate(() => {
     const question = getComputedStyle(document.querySelector('.bg-question'))
@@ -204,6 +212,13 @@ export async function checkSurfaceStates({ page, url, font, palette, out, check,
   assert.ok(await page.evaluate(() => getSelection().toString().length > 0))
   await shot("text-selection")
   await page.evaluate(() => getSelection().removeAllRanges())
+  // Unstage it: the draft outlives the page, and the next palette's pass types into this box again.
+  await page.$eval(answer, el => { el.focus(); el.select() })
+  await page.keyboard.press("Backspace")
+  await page.waitForFunction(() => !document.querySelector("[data-send-answers]"), { timeout: 10_000 }).catch(async error => {
+    console.log("UNSTAGE", await page.evaluate(sel => ({ value: document.querySelector(sel)?.value, button: document.querySelector("[data-send-answers]")?.outerHTML.slice(0, 200) }), answer))
+    throw error
+  })
 
   await page.goto(url, { waitUntil: "networkidle2" })
   await page.evaluate(async () => { (await import("/src/store.ts")).store.showSettings = true })
@@ -345,9 +360,13 @@ export async function checkSurfaceStates({ page, url, font, palette, out, check,
   await page.click('#rename-project input[type="checkbox"]')
   const refusal = page.waitForResponse(response => response.url().endsWith('/rpc/projectRename'))
   await page.click('button[form="rename-project"]')
-  assert.equal((await refusal).status(), 500, 'The real server refuses moving its own launching directory')
+  const refused = await refusal
+  assert.equal(refused.status(), 500, 'The real server refuses moving its own launching directory')
+  // Expect the refusal at the address it was actually sent to. The rename addresses the project by its
+  // own prefix, `/_frizz/<slug>/rpc/…`, since the one page made every per-project call name its project;
+  // this line hardcoded the unprefixed `/_frizz/rpc/projectRename` and so rejected its own refusal.
   result.expectedConsoleErrors ??= []
-  result.expectedConsoleErrors.push(`Failed to load resource: the server responded with a status of 500 (Internal Server Error) ${new URL('/_frizz/rpc/projectRename', url)}`)
+  result.expectedConsoleErrors.push(`Failed to load resource: the server responded with a status of 500 (Internal Server Error) ${refused.url()}`)
   await page.waitForFunction(() => document.querySelector('#rename-project')?.textContent.includes('cannot be renamed'))
   await contrast('rename-project-error')
   await shot('rename-project-error')
