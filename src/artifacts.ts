@@ -745,8 +745,8 @@ function runArtifactCommand(args: string[], source: string): void {
 }
 
 // @parcel/watcher ships each platform's binary as its own optional package, copied below with the
-// rest of its closure. node-pty (terminal command threads, command-threads.ts) publishes every OS's
-// prebuilds inside one package, so it needs the host filter below.
+// rest of its closure. node-pty (thread terminals, server/src/thread-terminals.ts, loaded lazily on a
+// terminal's start) publishes every OS's prebuilds inside one package, so it needs the host filter below.
 const RUNTIME_NATIVE_EXTERNALS = [
   "node-pty",
   "@parcel/watcher",

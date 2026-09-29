@@ -5,6 +5,11 @@
 // node-pty's missing prebuild killed every boot (#42). The server resolves the provider CLIs from PATH
 // here (`FRIZZ_RUNTIMES=path`), which is why the image installs Claude Code first.
 //
+// node-pty is back in the server package since 2026-09-29, for thread terminals only, and loaded LAZILY
+// (server/src/thread-terminals.ts): nothing imports it at boot. So this checks both halves on a box with
+// no C++ toolchain — the server boots, and the installed generation's node-pty loads its shipped Linux
+// prebuild and spawns a real pty, with no install script run (the generation installs --ignore-scripts).
+//
 // Pack both tarballs with the shell pinning the server (see verify-server-package.mjs), then run it in a
 // slim image with no C++ toolchain — Docker's `--tmpfs` keeps it off a full Docker disk:
 //
@@ -72,7 +77,7 @@ try {
   } else {
     const shell = packed(resolve(arg("shell"))), server = packed(resolve(arg("server")))
     assert.equal(shell.manifest.frizzServer?.version, server.manifest.version, "the shell pins this server")
-    assert.equal(server.manifest.dependencies?.["node-pty"], undefined, "the server package declares no node-pty")
+    assert.equal(server.manifest.dependencies?.["node-pty"], "1.2.0-beta.15", "the server package pins the node-pty that ships Linux prebuilds")
     shellVersion = shell.manifest.version
     const packages = new Map([["frizz", shell], ["frizz-server", server]])
     registry = createServer(async (request, response) => {
@@ -108,7 +113,15 @@ try {
   const generations = join(home, "cache", "frizz", "server-releases")
   const key = readdirSync(generations)[0]
   const generation = readdirSync(join(generations, key)).find((id) => !id.endsWith(".staging"))
-  check("the installed generation carries no node-pty", !existsSync(join(generations, key, generation, "node_modules", "node-pty")))
+  // Thread terminals: the addon is installed with the generation, carries this platform's prebuild, and
+  // spawns a real pty in a separate process — a crash there must not take the harness with it.
+  const pty = join(generations, key, generation, "node_modules", "node-pty")
+  const prebuild = join(pty, "prebuilds", `${process.platform}-${process.arch}`, "pty.node")
+  check("the installed generation carries node-pty's prebuild for this platform", existsSync(prebuild), prebuild)
+  const probe = `const { spawn } = require(${JSON.stringify(pty)}); let out = ""; const term = spawn("/bin/sh", ["-c", "echo pty-ok in $PWD"], { cwd: ${JSON.stringify(project)}, cols: 80, rows: 24 }); term.onData((d) => { out += d }); term.onExit(({ exitCode }) => { process.stdout.write(out.trim() + " exit=" + exitCode); process.exit(exitCode) })`
+  let spawned = ""
+  try { spawned = execFileSync(process.execPath, ["-e", probe], { encoding: "utf8", timeout: 20_000 }) } catch (error) { spawned = String(error.stderr || error.message) }
+  check("a thread terminal's pty spawns from the installed generation", spawned.includes(`pty-ok in ${project}`) && spawned.endsWith("exit=0"), spawned.slice(0, 200))
 
   // A real RPC through the booted server. The provider credential read is the one Linux-specific path a
   // board takes on its first render (a file under ~/.claude, where macOS reads the Keychain).
