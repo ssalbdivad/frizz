@@ -4459,3 +4459,56 @@ test("lastToolCallAt: advanced by a tool call on either backend, never by prose"
   applyEvent(c, { kind: "assistant-text", at: "2026-07-01T00:00:03.000Z", text: "just talking", final: true })
   assert.equal(c.lastToolCallAt, "2026-07-01T00:00:02.000Z")
 })
+
+// ── THE PENDING CALL'S TIMEOUT (board.ts quietTurnSince) ─────────────────────────────────────────────
+// A turn blocked on one foreground call writes nothing, and the board queues it after QUIET_TURN_MS —
+// unless the call was sized on purpose. The tailer is what knows which call is pending and what timeout
+// the worker put on it.
+const fgCall = (id: string, name: string, input: Record<string, unknown>, at = "2026-07-01T00:00:01.000Z") =>
+  ({ type: "assistant", timestamp: at, message: { stop_reason: "tool_use", content: [{ type: "tool_use", name, id, input }] } })
+
+test("applyRecord: a pending call carries the timeout it declared, and its result retires it", () => {
+  const s = newTailState("t", "s", "/x")
+  applyRecord(s, fgCall("toolu_gate", "Bash", { command: "nub run test", timeout: 1_800_000 }))
+  assert.deepEqual([...(s.pendingToolCalls?.values() ?? [])], [{ name: "Bash", startedAt: "2026-07-01T00:00:01.000Z", timeoutMs: 1_800_000 }])
+  applyRecord(s, resultText("toolu_gate", "ok"))
+  assert.equal(s.pendingToolCalls?.size ?? 0, 0, "the result retires the call")
+})
+
+test("applyRecord: a call that named no timeout is pending WITHOUT one — the case that must still queue", () => {
+  const s = newTailState("t", "s", "/x")
+  applyRecord(s, fgCall("toolu_mcp", "mcp__chrome__click", { uid: "1" }))
+  applyRecord(s, fgCall("toolu_wait", "mcp__chrome__wait_for", { text: "done", timeout_ms: 600_000 }))
+  const calls = [...(s.pendingToolCalls?.values() ?? [])]
+  assert.deepEqual(calls.map((c) => [c.name, c.timeoutMs]), [["mcp__chrome__click", undefined], ["mcp__chrome__wait_for", 600_000]])
+})
+
+test("applyRecord: an interrupt or a record that calls nothing ends every pending call", () => {
+  const s = newTailState("t", "s", "/x")
+  applyRecord(s, fgCall("toolu_a", "Bash", { command: "sleep 9999", timeout: 86_400_000 }))
+  applyRecord(s, { type: "user", timestamp: "2026-07-01T00:00:03.000Z", message: { content: [{ type: "text", text: "[Request interrupted by user]" }] } })
+  assert.equal(s.pendingToolCalls?.size ?? 0, 0, "an interrupted turn abandoned its call")
+  applyRecord(s, fgCall("toolu_b", "Bash", { command: "sleep 9999", timeout: 86_400_000 }))
+  // A result that never landed (lost), then the turn moves on and speaks: the stale call must not
+  // excuse a later silence for the rest of its 24h.
+  applyRecord(s, { type: "assistant", timestamp: "2026-07-01T00:00:04.000Z", message: { stop_reason: "end_turn", content: [{ type: "text", text: "done" }] } })
+  assert.equal(s.pendingToolCalls?.size ?? 0, 0)
+})
+
+test("tailer: the pending call's timeout reaches telemetry through a real tick", () => {
+  const h = harness()
+  h.storage.upsertSession(row())
+  fixture(h.logDir, "sid", [IN_FLIGHT, JSON.stringify(fgCall("toolu_gate", "Bash", { command: "nub run test", timeout: 1_800_000 }))])
+  const t = makeTailer(h)
+  t.tick()
+  const tele = t.get("t")
+  assert.equal(tele?.turn, "in-flight")
+  assert.deepEqual(tele?.pendingToolCalls, [{ name: "Bash", startedAt: "2026-07-01T00:00:01.000Z", timeoutMs: 1_800_000 }])
+  // Negative control: the same transcript once the call has answered exposes nothing pending.
+  const h2 = harness()
+  h2.storage.upsertSession(row())
+  fixture(h2.logDir, "sid", [IN_FLIGHT, JSON.stringify(fgCall("toolu_gate", "Bash", { command: "nub run test", timeout: 1_800_000 })), JSON.stringify(resultText("toolu_gate", "ok"))])
+  const t2 = makeTailer(h2)
+  t2.tick()
+  assert.equal(t2.get("t")?.pendingToolCalls, undefined)
+})

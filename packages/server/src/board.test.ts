@@ -2511,3 +2511,62 @@ test("board: a silent in-flight turn queues while still running, and a snooze or
     rmSync(dir, { recursive: true, force: true })
   }
 })
+
+// A DELIBERATE LONG WAIT IS NOT A WEDGE (Colin's rule, maintainer 2026-08-01: "if something is listed as
+// currently running, then it should never show up in the queue"; the Bash ceiling went to 24h because "a
+// blocking wait is DELIBERATE"). The silent-turn card stays for the 2FA wedge — a call nobody sized.
+test("quietTurnSince: a call with an explicit timeout still running, or a live registered wait, is not quiet", () => {
+  const now = Date.parse(LATER)
+  const stale = new Date(now - QUIET_TURN_MS - 1_000).toISOString()
+  const call = (timeoutMs?: number, startedAt = stale) => ({ name: "Bash", startedAt, ...(timeoutMs !== undefined ? { timeoutMs } : {}) })
+  const silent = (over: Partial<SessionTelemetry> = {}) => tele({ turn: "in-flight", lastActivityAt: stale, ...over })
+
+  // The worker sized it: `timeout: 1800000` on a test gate, 15m in. Not a wedge.
+  assert.equal(quietTurnSince("running", silent({ pendingToolCalls: [call(30 * 60_000)] }), now), undefined)
+  // NEGATIVE CONTROLS — each still queues:
+  // …no timeout named (a default Bash, an MCP call with no ceiling — the 2FA wedge itself),
+  assert.equal(quietTurnSince("running", silent({ pendingToolCalls: [call()] }), now), stale)
+  // …a timeout SHORTER than the silence (it has already run out, so the call should have bounced),
+  assert.equal(quietTurnSince("running", silent({ pendingToolCalls: [call(10 * 60_000)] }), now), stale)
+  // …and no pending call at all.
+  assert.equal(quietTurnSince("running", silent(), now), stale)
+  // One sized call in a parallel batch is enough: the turn is deliberately blocked at least that long.
+  assert.equal(quietTurnSince("running", silent({ pendingToolCalls: [call(), call(60 * 60_000)] }), now), undefined)
+
+  // A wait the worker REGISTERED (`mcp__frizz__watch`) on work that still resolves live.
+  const watched = silent({ bgShells: [LIVE_SHELL] })
+  assert.equal(quietTurnSince("running", watched, now, [registeredWatch()]), undefined)
+  // …negative controls: the watch expired, or the shell it names is gone.
+  assert.equal(quietTurnSince("running", watched, now, [registeredWatch({ expiresAt: new Date(now - 1).toISOString() })]), stale)
+  assert.equal(quietTurnSince("running", silent(), now, [registeredWatch()]), stale)
+})
+
+test("board: a silent turn on a sized call stays Active, and queues once its timeout has run out", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "frizz-board-quiet-sized-"))
+  const project: Project = { dir, id: "p", name: "fixture", label: "fixture", stateDir: dir, cwdSlug: "fixture" }
+  const storage = createStorage(join(dir, "ui.db"), "p")
+  storage.upsertSession(row({ slug: "gate", session_id: "sid", thread_name: "frizz-gate", seen_at: LATER }))
+  storage.setBackend("gate", "codex")
+  storage.setCodexRuntime("gate", "app-server")
+  const now = Date.now()
+  const quietAt = new Date(now - QUIET_TURN_MS - 60_000).toISOString()
+  let current = tele({ turn: "in-flight", lastActivityAt: quietAt, pendingToolCalls: [{ name: "Bash", startedAt: quietAt, timeoutMs: 60 * 60_000 }] })
+  const tailer = { get: () => current, foreignIds: () => [], subAgent: () => undefined, forget: () => {}, start: () => {}, stop: () => {}, tick: () => {} } satisfies Tailer
+  const board = createBoard(project, storage, new Bus(), tailer, "quiet-sized", { codexTurnLiveness: () => ({ bridgeTurn: true, ownedSince: T0 }) })
+  try {
+    let thread = (await board.snapshot()).threads[0]!
+    assert.equal(thread.runtime, "running")
+    assert.equal(thread.needsYou, false, "a wait the worker sized is running, not queued")
+    assert.equal(thread.quietTurnSince, undefined)
+
+    // The same silence on a call whose declared timeout has already passed: that is a wedge.
+    current = tele({ turn: "in-flight", lastActivityAt: quietAt, pendingToolCalls: [{ name: "Bash", startedAt: quietAt, timeoutMs: 60_000 }] })
+    thread = board.refresh().threads[0]!
+    assert.equal(thread.needsYou, true)
+    assert.equal(thread.quietTurnSince, quietAt)
+  } finally {
+    await board.stop()
+    storage.close()
+    rmSync(dir, { recursive: true, force: true })
+  }
+})

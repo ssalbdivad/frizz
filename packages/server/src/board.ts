@@ -90,14 +90,27 @@ export function appServerTurnStalled(
 //
 // Fifteen minutes: well past the 60-second default a foreground Bash bounces at, past the ~5-minute test
 // gate, and short enough that a turn blocked on a human is in front of one before they wonder where it
-// went. A deliberate long foreground wait does queue — the maintainer's standing trade applies: "a
-// spurious queue card costs one click, while a wrongly-held thread is invisible for hours" — and the
-// card's own Snooze parks it.
+// went.
+//
+// A DELIBERATE LONG WAIT DOES NOT QUEUE. Colin's rule is that a thread listed as running never shows up
+// in the queue (maintainer 2026-08-01: "if something is listed as currently running, then it should
+// never show up in the queue"), and the Bash ceiling went to 24 hours precisely because "a blocking wait
+// is DELIBERATE" (backend/types.ts BASH_MAX_TIMEOUT_MS): a call that names its own timeout was sized by a
+// worker that knew what it was waiting for. Queuing that thread at minute fifteen turned every
+// `nub run test` with `timeout: 1800000` into a card asking the human to interrupt it. So the silence is
+// excused while either (deliberateWait):
+//   - a tool call the turn is still blocked on declared an explicit timeout that has not run out yet
+//     (the tailer's pendingToolCalls — Bash's `timeout`, any tool's `timeout_ms`), or
+//   - the worker REGISTERED a wait (`mcp__frizz__watch`) on work that still resolves live, within the
+//     row's own `for` (hasRegisteredBackgroundPark — the same predicate that parks a rest on it).
+// Everything else still queues — a default-timeout Bash, an MCP call with no ceiling, a call whose
+// declared timeout has passed — which is the 2FA wedge this exists for; the card's Snooze parks the rest.
 export const QUIET_TURN_MS = 15 * 60_000
 export function quietTurnSince(
   runtime: RuntimeState,
-  tele: Pick<SessionTelemetry, "turn" | "lastActivityAt" | "subAgents"> | undefined,
+  tele: SessionTelemetry | undefined,
   nowMs: number,
+  armedWatches: readonly RegisteredWatch[] = [],
 ): string | undefined {
   if (runtime !== "running" || tele?.turn !== "in-flight" || !tele.lastActivityAt) return undefined
   let latest = Date.parse(tele.lastActivityAt)
@@ -110,7 +123,19 @@ export function quietTurnSince(
     if (!Number.isFinite(at)) return undefined
     latest = Math.max(latest, at)
   }
-  return nowMs - latest >= QUIET_TURN_MS ? new Date(latest).toISOString() : undefined
+  if (nowMs - latest < QUIET_TURN_MS) return undefined
+  if (deliberateWait(tele, armedWatches, nowMs)) return undefined
+  return new Date(latest).toISOString()
+}
+
+/** The turn is silent on purpose — see quietTurnSince. */
+export function deliberateWait(tele: SessionTelemetry, armedWatches: readonly RegisteredWatch[], nowMs: number): boolean {
+  for (const call of tele.pendingToolCalls ?? []) {
+    if (call.timeoutMs === undefined) continue
+    const started = Date.parse(call.startedAt)
+    if (Number.isFinite(started) && nowMs < started + call.timeoutMs) return true
+  }
+  return hasRegisteredBackgroundPark(tele, armedWatches, nowMs)
 }
 
 // Runtime derivation: no session row → never spawned (none); a row whose worker is dead/absent →
@@ -1648,7 +1673,7 @@ function sessionThreadView(
   const state = effectiveSessionState(row, registeredLegacyTerminal)
   const archived = state === "archived"
   const limitPause = resolveLimitPause(row, tele, nowMs)
-  const quietSince = archived ? undefined : quietTurnSince(runtime, tele, nowMs)
+  const quietSince = archived ? undefined : quietTurnSince(runtime, tele, nowMs, armedWatches)
   // A silent turn queues past every rest gate in deriveNeedsYou (it is not at rest), except the human's
   // own wall-clock snooze, which is how a deliberate long wait is parked.
   const needsYou = archived ? false : deriveNeedsYou(row, tele, runtime, interactionPresence.needsUser, nowMs, limitPause, true, deliveryProcessGone, github, registeredPrWatches, armedTimerIds, armedWatches, currentQuestionCount, answerAwaitingDelivery(questionRows, rawTele?.lastUserAt, nowMs)) || (quietSince !== undefined && !futureSnooze(row, nowMs))

@@ -2917,6 +2917,8 @@ export const ThreadView = z.object({
   // A turn still in flight that has written nothing for a long stretch (board.ts quietTurnSince) — a
   // foreground call blocked on a prompt or a 2FA approval nobody can see. It queues the thread with its
   // runtime left `running`, so the card's interrupt-and-send stays offered. ISO time of the last activity.
+  // Never set while the blocking call declared an explicit timeout that has not run out, or the worker
+  // registered a live wait — a deliberate long wait is running, not queued.
   quietTurnSince: z.string().optional(),
   // The queued reason is "resting while its OWN background work (sub-agents / shells) is still live,
   // with no human ask": the agent came to rest awaiting results it dispatched, not awaiting the human.
