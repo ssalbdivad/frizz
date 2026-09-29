@@ -1,9 +1,9 @@
 import assert from "node:assert/strict"
-import { appendFileSync, mkdtempSync, rmSync, writeFileSync } from "node:fs"
+import { appendFileSync, mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import test from "node:test"
-import { backgroundShellLineCount, readBackgroundShellOutput, resetBackgroundShellLineCounts } from "./background-shell-output.ts"
+import { backgroundShellLineCount, readBackgroundShellOutput, resetBackgroundShellLineCounts, vetHarnessOutputPath } from "./background-shell-output.ts"
 
 test("background shell output reads a bounded, presentation-safe tail", () => {
   const dir = mkdtempSync(join(tmpdir(), "frizz-shell-output-"))
@@ -106,4 +106,49 @@ test("the line counter re-counts when a LARGER file replaces the one at that pat
 
 test("the line counter reports nothing — never zero — for a file it cannot read", () => {
   assert.equal(backgroundShellLineCount("/definitely/missing/frizz-shell-output"), undefined)
+})
+
+// ── THE HARNESS-PATH GUARD ────────────────────────────────────────────────────────────────────────
+// The path a shell's output is read from comes out of an ACK — text in a tool_result — and one ack shape
+// is the output of a FOREGROUND command, so its path is whatever that command printed. Only the harness's
+// own task-log shape may be opened.
+
+test("vetHarnessOutputPath: only a real file shaped tasks/<taskId>.output passes", () => {
+  const root = realpathSync(mkdtempSync(join(tmpdir(), "frizz-vet-")))
+  try {
+    const tasks = join(root, "claude-1000", "-proj", "sid", "tasks")
+    mkdirSync(tasks, { recursive: true })
+    const good = join(tasks, "b1.output")
+    writeFileSync(good, "tick 1\n")
+    assert.equal(vetHarnessOutputPath(good, "b1"), good)
+    // No task id known yet (a Monitor's derived path, an ack that named no id): the shape alone decides.
+    assert.equal(vetHarnessOutputPath(good, undefined), good)
+
+    assert.equal(vetHarnessOutputPath("/etc/passwd", undefined), undefined, "an arbitrary file is refused")
+    // A symlink in the right place is judged by what it POINTS AT.
+    const secret = join(root, "id_rsa")
+    writeFileSync(secret, "PRIVATE KEY")
+    const link = join(tasks, "b9.output")
+    symlinkSync(secret, link)
+    assert.equal(vetHarnessOutputPath(link, "b9"), undefined, "a tasks/ symlink to a secret resolves to the secret and fails")
+    symlinkSync("/etc/passwd", join(tasks, "b8.output"))
+    assert.equal(vetHarnessOutputPath(join(tasks, "b8.output"), "b8"), undefined)
+    // A directory with the right name is not a log.
+    mkdirSync(join(tasks, "b2.output"))
+    assert.equal(vetHarnessOutputPath(join(tasks, "b2.output"), "b2"), undefined)
+    // The right shape, the wrong task: never another shell's log.
+    const other = join(tasks, "b3.output")
+    writeFileSync(other, "x")
+    assert.equal(vetHarnessOutputPath(other, "b1"), undefined)
+    // `..` resolves before the shape check: `tasks/../x.output` is not in `tasks`.
+    writeFileSync(join(tasks, "..", "x.output"), "x")
+    assert.equal(vetHarnessOutputPath(join(tasks, "..", "x.output"), "x"), undefined)
+    // A name outside the harness's id alphabet.
+    writeFileSync(join(tasks, "a b.output"), "x")
+    assert.equal(vetHarnessOutputPath(join(tasks, "a b.output"), undefined), undefined)
+    // Missing entirely.
+    assert.equal(vetHarnessOutputPath(join(tasks, "gone.output"), "gone"), undefined)
+  } finally {
+    rmSync(root, { recursive: true, force: true })
+  }
 })

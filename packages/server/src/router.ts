@@ -1793,18 +1793,25 @@ export function createRouter(ctx: AppContext) {
         // still cannot be reached. Never re-derived client-side — see subAgentStoppable.
         stoppable: z.boolean(),
         stopNote: z.string().nullable(),
+        // A path WAS named for this shell and nothing the vet accepts is readable there — a forged ack,
+        // or a task log tmp cleanup removed. Optional, so a pre-change client parses unchanged.
+        missing: z.boolean().optional(),
       }),
       handler: async ({ input }) => {
+        // The path is never input: the tailer resolves it from this thread's own fold and vets it
+        // (tailer.ts backgroundShellLookup), so an id belonging to another thread answers "gone".
         const info = ctx.tailer.backgroundShell?.(input.slug, input.id)
         if (!info) return { command: null, output: "", truncated: false, state: "gone" as const, stoppable: false, stopNote: null }
         const content = info.outputFile ? readBackgroundShellOutput(info.outputFile) : { output: "", truncated: false }
         const stop = subAgentStoppable(input.slug, input.id)
         return {
           command: info.command ?? null,
-          ...content,
+          output: content.output,
+          truncated: content.truncated,
           state: info.state,
           stoppable: stop.sessionId !== null,
           stopNote: stop.sessionId === null ? stop.note : null,
+          ...(info.outputNamed && !info.outputFile ? { missing: true } : {}),
         }
       },
     }),

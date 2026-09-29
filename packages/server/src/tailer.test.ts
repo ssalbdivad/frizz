@@ -1845,7 +1845,9 @@ test("tailer: a background shell stays running however long it is quiet; only it
   appendFileSync(join(h.logDir, "sid.jsonl"), JSON.stringify(taskNotification("toolu_srv", "completed")) + "\n")
   t.tick()
   assert.deepEqual(t.get("t")?.bgShells, [])
-  assert.deepEqual(t.backgroundShell?.("t", "toolu_srv"), { command: "npx vite --port 5231", outputFile: "/tmp/tasks/ba3y11c3t.output", state: "done" })
+  // The ack's path names no real file here, so the vetted lookup holds none — but it says one WAS named,
+  // which the drawer reports as missing (background-shell-output.ts vetHarnessOutputPath).
+  assert.deepEqual(t.backgroundShell?.("t", "toolu_srv"), { command: "npx vite --port 5231", outputNamed: true, state: "done" })
 })
 
 // ---- derived pending-question detection (chat-only ```question the worker didn't encode as blocked) ----

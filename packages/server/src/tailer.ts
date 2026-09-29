@@ -37,6 +37,7 @@ import {
 import { log as frizzLog } from "./logging.ts"
 import { frizzTempDir } from "./frizz-paths.ts"
 import { declaredShellBudgetMs } from "./shell-budget.ts"
+import { vetHarnessOutputPath } from "./background-shell-output.ts"
 import { readWorkflowRun, workflowAgentState as sharedWorkflowAgentState, workflowAckRunDir, workflowAckTaskId, workflowLabel, type WorkflowAgent } from "./workflow-runs.ts"
 
 // The JSONL tailer: incrementally reads each registered session's Claude Code transcript
@@ -523,6 +524,17 @@ export interface BgShellView {
    *  `watch` holding it later (shell-budget.ts resolveShellBudget). Stamped by the BOARD, which holds the
    *  durable rows; the tailer never sets it. Absent ⇒ unbudgeted. */
   budgetEndsAt?: string
+}
+
+/** One background shell as its drawer and its line counter read it (Tailer.backgroundShell). */
+export interface BackgroundShellLookup {
+  command?: string
+  /** The VETTED output path — see vetHarnessOutputPath. Absent ⇒ nothing readable. */
+  outputFile?: string
+  /** A path WAS named for this shell (its ack), whether or not it passed the vet. With no `outputFile`
+   *  beside it, the drawer says the output is missing rather than that nothing was printed. */
+  outputNamed?: boolean
+  state: "running" | "done"
 }
 
 /** A background shell that has FINISHED, in the shape the scheduler's watcher pass matches against.
@@ -2394,7 +2406,7 @@ export interface Tailer {
   // have it, and a server without it degrades to the old stop-one-row behaviour.
   subAgentDescendantTasks?(slug: string, id: string): string[]
   // Read-only background-shell drawer lookup. Output content stays server-side until the scoped query.
-  backgroundShell?(slug: string, id: string): { command?: string; outputFile?: string; state: "running" | "done" } | undefined
+  backgroundShell?(slug: string, id: string): BackgroundShellLookup | undefined
   // "Is the process that owned this thread's background ops gone?" — ONE authority for a question three
   // runtimes answer differently, already computed once per tick as `paneDead` (see paneDeadForRow): a
   // broker whose daemon record fails its pid probe, an app-server codex row frizz stopped, or a
@@ -3713,15 +3725,26 @@ export function createTailer(deps: TailerDeps): Tailer {
     return false
   }
 
-  function backgroundShellLookup(slug: string, id: string): { command?: string; outputFile?: string; state: "running" | "done" } | undefined {
+  // THE DRAWER'S AND THE LINE COUNTER'S ONE LOOKUP, scoped to this thread's own fold: its live op map,
+  // then its retired-shell ring. An id from another thread resolves to nothing.
+  //
+  // `outputFile` is only ever a VETTED path (background-shell-output.ts vetHarnessOutputPath): the one
+  // the ack named, resolved, and shaped like the harness's own `tasks/<taskId>.output`. A path that was
+  // named but fails that — a forged ack, or a task log tmp cleanup has since removed — comes back as
+  // `outputNamed` with no `outputFile`, which the drawer reports as missing rather than as "no output".
+  function backgroundShellLookup(slug: string, id: string): BackgroundShellLookup | undefined {
     const state = states.get(slug)
     if (!state || !registeredStateIsCurrent(state)) return undefined
     const live = state.subAgents.get(id)
+    const vetted = (named: string | undefined, taskId: string | undefined) => {
+      const outputFile = named ? vetHarnessOutputPath(named, taskId) : undefined
+      return { ...(outputFile ? { outputFile } : {}), ...(named ? { outputNamed: true } : {}) }
+    }
     if (live?.kind === "shell") {
-      return { command: live.command, outputFile: live.outputFile, state: state.paneDead ? "done" : "running" }
+      return { command: live.command, ...vetted(live.outputFile, live.taskId), state: state.paneDead ? "done" : "running" }
     }
     const dead = state.retiredShells.get(id)
-    if (dead) return { command: dead.command, outputFile: dead.outputFile, state: "done" }
+    if (dead) return { command: dead.command, ...vetted(dead.outputFile, dead.taskId), state: "done" }
     return undefined
   }
 
