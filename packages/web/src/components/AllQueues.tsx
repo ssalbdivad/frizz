@@ -932,8 +932,9 @@ function useQueueKeys(activeKey: string | null, scrollToCard: (key: string) => n
     return y
   }, [scrollToCard])
   useEffect(() => registerQueueCursor({
-    // Not a ghost (lib/stableQueue.ts), whose thread is no longer waiting, nor a card whose drawer is open.
-    keys: () => [...document.querySelectorAll<HTMLElement>('[data-xq-card][data-queue-leaving="false"]:not([data-queue-ghost]):not([data-queue-concealed])')]
+    // Not a quiet ghost (lib/stableQueue.ts), whose thread is no longer waiting, nor a card whose drawer is
+    // open. A WOKEN ghost is in: the human reached for it, so it is a card they are reading like any other.
+    keys: () => [...document.querySelectorAll<HTMLElement>('[data-xq-card][data-queue-leaving="false"]:not([data-queue-ghost]:not([data-queue-woken])):not([data-queue-concealed])')]
       .map((slot) => slot.dataset.xqCard ?? "")
       .filter(Boolean),
     current,
@@ -960,8 +961,11 @@ function useQueueKeys(activeKey: string | null, scrollToCard: (key: string) => n
   useEffect(() => {
     const pick = (event: PointerEvent) => {
       if (event.button !== 0 || !(event.target instanceof Element)) return
+      // A ghost is picked too: the same pointerdown wakes it (the page's `wake`), and a click that
+      // restored its tone but left the ring on another card read as a card that ignored the click
+      // (maintainer 2026-09-29: "still seems to be in a bad state where I can't click on it to activate it").
       const slot = event.target.closest<HTMLElement>(
-        '[data-xq-card][data-queue-leaving="false"]:not([data-queue-ghost]):not([data-queue-concealed])',
+        '[data-xq-card][data-queue-leaving="false"]:not([data-queue-concealed])',
       )
       const key = slot?.dataset.xqCard
       if (!key) return

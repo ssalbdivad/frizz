@@ -354,7 +354,7 @@ try {
     {
       const tone = () => page.evaluate((slug) => {
         const slot = [...document.querySelectorAll("[data-xq-card]")].find((el) => el.dataset.xqCard.endsWith(`/${slug}`))
-        return { woken: slot.hasAttribute("data-queue-woken"), opacity: getComputedStyle(slot.querySelector(".frizz-card-clip")).opacity, top: slot.getBoundingClientRect().top }
+        return { woken: slot.hasAttribute("data-queue-woken"), current: slot.querySelector("[data-queue-current]") !== null, opacity: getComputedStyle(slot.querySelector(".frizz-card-clip")).opacity, top: slot.getBoundingClientRect().top }
       }, first)
       const quiet = await tone()
       await page.evaluate((slug) => {
@@ -366,6 +366,15 @@ try {
       check("Everything: …clicked, the ghost wakes to full tone in the same place",
         quiet.opacity === "0.5" && !quiet.woken && woken.woken && woken.opacity === "1" && Math.abs(woken.top - quiet.top) < 0.5,
         `opacity ${quiet.opacity} → ${woken.opacity}, woken ${woken.woken}, top ${quiet.top.toFixed(2)} → ${woken.top.toFixed(2)}`)
+      // …and the card's keys reach it: `r` puts the caret in ITS reply box. Before, the ghost could wear the
+      // reading ring and still be skipped by every card key, so a click seemed to do nothing (maintainer
+      // 2026-09-29: "I can't click on it to activate it").
+      await page.evaluate(() => document.activeElement instanceof HTMLElement && document.activeElement.blur())
+      await page.keyboard.press("r")
+      await sleep(300)
+      const replyIn = await page.evaluate(() => document.activeElement?.closest("[data-xq-card]")?.dataset.xqCard ?? null)
+      check("Everything: …clicked, the ghost is the card the keys act on — `r` focuses its reply box", replyIn?.endsWith(`/${first}`) === true, `focus in ${replyIn}, current ${woken.current}`)
+      await page.keyboard.press("Escape")
       await page.screenshot({ path: join(shots, "everything-ghost-woken.png") })
     }
     await stays("…and when it rests again it is the card again, in the same place: the card under the pointer holds", {
