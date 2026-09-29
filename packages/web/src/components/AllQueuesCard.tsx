@@ -1,5 +1,5 @@
-// ONE QUEUE CARD ON THE CROSS-PROJECT PAGE — a thread of ANY project, whichever project the page is
-// focused on.
+// ONE QUEUE CARD ON THE CROSS-PROJECT PAGE — a thread of ANY project, in either of the page's views:
+// focused on one project, or All projects, where the cards of every project share one queue.
 //
 // It wears the queue card a project's own board drew until 2026-09-28 (TodosView QueueCard): the same
 // bordered, shadowed shell, the same header with the title and its rest time, the human's last message
@@ -67,10 +67,13 @@ import { Tooltip } from "./Tooltip.tsx"
 import { BLOCK_RADIUS, BLOCK_RADIUS_INNER_BOTTOM, QUEUE_WRAP, TranscriptCard } from "./TranscriptCard.tsx"
 
 /**
- * WHOSE CARD THIS IS, on its meta line — the page's one queue holds every project's threads, and the lanes
- * that used to say whose they were are gone (lib/allQueues.ts mergedQueue). Given `onChoose` it is a button
- * that filters the queue to the project (the READY header's filter, lib/crossProject.ts setQueueFilter);
- * without it, plain text, for a line that already sits inside a control (the command card's open button).
+ * WHOSE CARD THIS IS, on its meta line — in All projects the page's one queue holds every project's
+ * threads, and the lanes that used to say whose they were are gone (lib/allQueues.ts mergedQueue). A
+ * focused view shows one project's cards, so it draws no chip (AllQueues.tsx passes `chip={!focused}`).
+ * Given `onChoose` it is a button that focuses the page on the project — navigates to its
+ * `/?project=<slug>` view (lib/pageView.ts projectViewHref), the same place the READY header's switcher
+ * goes; it filtered the queue in place until focus mode retired the queue filter on 2026-09-29.
+ * Without it, plain text, for a line that already sits inside a control (the command card's open button).
  * `square: false` drops its 12px square, for a card that already leads with the project's ProjectMark.
  */
 export function ProjectChip({ project, onChoose, square = true }: { project: QueuesProject; onChoose?: (project: QueuesProject) => void; square?: boolean }) {
@@ -109,7 +112,7 @@ export function ProjectChip({ project, onChoose, square = true }: { project: Que
  * the meta line said whose a card was only to someone reading that line; a column of cards is scanned
  * down its left edge, so that is where the mark sits, big enough to pick one project's cards out of a
  * page of them without reading a word (maintainer 2026-09-29: "a more visible indicator of the project
- * name/logo … so users can easily visually filter through"). Given `onChoose` it filters the queue to the
+ * name/logo … so users can easily visually filter through"). Given `onChoose` it focuses the page on the
  * project, as the chip beside it does; it is out of the tab order because that chip is the same control.
  */
 export function ProjectMark({ project, onChoose }: { project: QueuesProject; onChoose?: (project: QueuesProject) => void }) {
@@ -204,7 +207,7 @@ interface AllQueuesCardProps {
    *  (ProjectChip) — a flag and a stable chooser rather than the element, which would be a new object on
    *  every render of the queue and so re-render the card every time (sameCard). */
   chip?: boolean
-  /** What choosing the chip does: filter the queue to the card's project. */
+  /** What choosing the chip does: focus the page on the card's project (its `/?project=<slug>` view). */
   onChoose?: (project: QueuesProject) => void
 }
 
