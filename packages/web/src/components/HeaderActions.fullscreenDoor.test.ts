@@ -9,13 +9,13 @@ import { HeaderActions } from "./HeaderActions.tsx"
 import { TooltipProvider } from "./Tooltip.tsx"
 import { clearFullscreenOrigin, rememberFullscreenOrigin } from "../lib/fullscreenHandoff.ts"
 
-// THE WAY OUT OF FULLSCREEN, AND NO WAY IN ON THE STRIP.
+// THE FULLSCREEN DOOR, ONE SLOT, BOTH DIRECTIONS.
 //
-// The /full page's header carries the door CLOSING (CollapseThreadLink, ⤡) in the thread's action strip.
-// The door OPENING was a ⤢ on every queue card and list row, and in the drawer header, until 2026-09-28
-// (maintainer: "the single thread view is only marginally useful at best and should probably be a
-// dropdown option"): it is the drawer menu's "Open fullscreen" now (ThreadMenu.tsx), so no strip offers
-// a way in.
+// The /full page's header carries the door CLOSING (CollapseThreadLink, ⤡) in the thread's action strip,
+// and the drawer's strip carries the door OPENING (ExpandThreadLink, ⤢) in the same slot (maintainer
+// 2026-09-02: a collapse icon "in the same place where the expand icon is"). The ⤢ left every surface for
+// the drawer's ⋯ menu on 2026-09-28 and came back on 2026-09-29, restoring 7a20f425; the menu entry and
+// its `f` key stay.
 //
 // Before 2026-09-02, /full's way out was an ArrowLeft sitting BEFORE THE TITLE, at the header's far
 // left: a second, unrelated place to look for a whole-thread verb, and a "previous page" glyph on a
@@ -47,14 +47,22 @@ function controls(html: string): string[] {
   return [...html.matchAll(/aria-label="([^"]+)"/g)].map((m) => m[1])
 }
 
-test("the /full strip carries the way out, and no strip carries a way in", () => {
+test("the drawer strip opens /full and the /full strip leaves it, from the same slot", () => {
   const closing = controls(strip({ collapse: true }))
   assert.ok(closing.includes("Exit fullscreen"), `the /full strip carries the door closing: ${closing.join(" · ")}`)
-  // Retry stays the strip's last verb: the way out stands among the thread's own verbs, not after them.
+  // Retry stays the strip's last verb: the door stands among the thread's own verbs, not after them.
   assert.ok(closing.indexOf("Exit fullscreen") < closing.findIndex((l) => l.startsWith("Retry")), `the door precedes Retry: ${closing.join(" · ")}`)
 
+  const opening = controls(strip({ expand: true }))
+  assert.ok(opening.includes("Open fullscreen"), `the drawer strip carries the door opening: ${opening.join(" · ")}`)
+  // THE SAME SLOT: each half sits at the same index among the same neighbours.
+  assert.equal(opening.indexOf("Open fullscreen"), closing.indexOf("Exit fullscreen"), `one position, both directions: ${opening.join(" · ")} / ${closing.join(" · ")}`)
+  // The drawer's ⋯ trigger owns `f` there; the strip's ⤢ must not be a second target for it.
+  assert.doesNotMatch(strip({ expand: true }), /data-expand-thread="t"[^>]*data-command|data-command="fullscreen"[^>]*data-expand-thread/)
+
+  // Negative control: a strip asked for neither carries neither.
   const plain = controls(strip({}))
-  assert.ok(!plain.some((l) => l === "Open fullscreen" || l === "Exit fullscreen"), `no strip opens /full: ${plain.join(" · ")}`)
+  assert.ok(!plain.some((l) => l === "Open fullscreen" || l === "Exit fullscreen"), `a bare strip has no door: ${plain.join(" · ")}`)
 })
 
 /** Render with the address bar at `pathname` — the collapse link reads the page's own address. */

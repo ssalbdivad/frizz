@@ -71,3 +71,23 @@ test("without a tenant map (a test context, a one-project server) it answers for
   const router = harness(undefined, { project: project("solo"), board: board([session(true), session(false, { runtime: "running" })]) })
   assert.deepEqual(await router.projectsRailCounts.handler({ input: undefined }), { solo: { queued: 1, running: 1 } })
 })
+
+test("a Done row whose session is still running counts as running, and a Done row at rest does not", async () => {
+  // Before 2026-09-24 this rode in through sectionOf, which lifted the row into Active. The row stays in
+  // Done now (only the human reopens it) but it wears a spinner there, and the badge's spinner says
+  // "this project has work in flight" — which a draining turn is (shared doneButRunning).
+  const router = harness(() => [
+    {
+      project: project("p"),
+      board: board([
+        session(false, { state: "archived", runtime: "running" }),
+        session(false, { state: "archived", runtime: "turn-idle", subAgents: [{ state: "running" }] } as Partial<ThreadView>),
+        // Negative controls: at rest, exited, and a foreign terminal.
+        session(false, { state: "archived", runtime: "turn-idle" }),
+        session(false, { state: "archived", runtime: "exited" }),
+        session(false, { state: "archived", runtime: "running", foreign: true }),
+      ]),
+    },
+  ])
+  assert.deepEqual(await router.projectsRailCounts.handler({ input: undefined }), { p: { queued: 0, running: 2 } })
+})

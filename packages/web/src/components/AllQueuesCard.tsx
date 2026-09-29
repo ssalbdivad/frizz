@@ -8,9 +8,9 @@
 // earlier rounds, the sub-agent rows. That is the next level down, one click away IN PLACE — the title,
 // and "Show earlier messages" at the card's top, open the thread's own drawer on this page
 // (useOpenThreadInPlace) — and it is what makes a page of
-// every project's queue readable at all. There is no door off the page: the ↗ into a project's view and
-// the ⤢ into /full went on 2026-09-28 (maintainer: "too many places in the ui where it is easy to navigate
-// to a ui which is not the primary home ui"); fullscreen is a choice in the drawer's own menu now.
+// every project's queue readable at all. The ↗ into a project's view went on 2026-09-28 (maintainer: "too
+// many places in the ui where it is easy to navigate to a ui which is not the primary home ui"); the ⤢
+// into /full went with it and came back on 2026-09-29 (ExpandThreadLink), restoring Colin's card.
 //
 // THE CARD NEVER ASKS THE PAGE WHICH PROJECT IT IS. Everything that could — the RPC client, the query
 // cache, the markdown's repo and paths, the lifecycle buttons, the question drafts — is handed the
@@ -38,10 +38,13 @@ import { isPlainLeftClick } from "../lib/standaloneThreadRoute.ts"
 import { useMarkdownHtml } from "../lib/useMarkdown.ts"
 import { IN_PLACE_OPEN_STATE, openThread, showToast, store } from "../store.ts"
 import { crossProjectHref, innerPath, projectSlug } from "../lib/base-path.ts"
-import { QueueDismissContext } from "./ChatView.tsx"
+import { LimitPauseCard, QueueDismissContext } from "./ChatView.tsx"
+import { AiRenameButton } from "./AiRenameButton.tsx"
 import { Composer } from "./Composer.tsx"
 import { InteractionStack } from "./InteractionCards.tsx"
 import { useThreadComposerControls } from "../hooks/useThreadComposerControls.tsx"
+import { ExpandThreadLink } from "./ExpandThreadLink.tsx"
+import { HEADER_ICON_CLASS } from "../lib/headerIcon.ts"
 import { LastActive } from "./LastActive.tsx"
 import { ProjectSquare } from "./ProjectRail.tsx"
 import { LinkedHtml } from "./LinkedHtml.tsx"
@@ -234,6 +237,16 @@ export const AllQueuesCard = memo(function AllQueuesCard({
     void queryClient.invalidateQueries({ queryKey: ["projectsQueues"] })
   }
   const answeringScope = useMemo(() => ({ api, projectDir: project.projectDir, projectId: project.id }), [api, project.projectDir, project.id])
+  const continueFromLimit = (message: string) => {
+    onLeave()
+    return deliverFollowUp(project, thread, message).then(
+      () => void queryClient.invalidateQueries({ queryKey: ["projectsQueues"] }),
+      (error: unknown) => {
+        onReturn()
+        throw error
+      },
+    )
+  }
 
   const openHere = (event: ReactMouseEvent<HTMLAnchorElement>) => {
     if (!isPlainLeftClick(event)) return
@@ -252,11 +265,22 @@ export const AllQueuesCard = memo(function AllQueuesCard({
           <header className="flex items-center gap-3 rounded-t-xl border-b border-border/60 px-5 py-3.5">
             {chip && <ProjectMark project={project} onChoose={onChoose} />}
             <div className="min-w-0 flex-1">
-              <h3 className="truncate text-[15px] font-semibold leading-snug" title={displayTitle(thread)}>
-                <a href={placeHref} onClick={openHere} className="rounded-sm outline-none hover:underline hover:underline-offset-2 focus-visible:ring-1 focus-visible:ring-focus-ink-60">
-                  {displayTitle(thread)}
-                </a>
-              </h3>
+              {/* THE TITLE AND ITS AI-RENAME MARK, revealed on the row's hover (`group/thread-title`, the
+                  zone AiRenameButton listens to). Colin's card carried it (TodosView QueueCard @ 7a20f425,
+                  maintainer 2026-08-26: "it should show up in the cue card, in addition to showing up in
+                  the drawer"). The mark sits OUTSIDE the link, so pressing it never opens the drawer, and
+                  the link shrinks to its text so the mark rides at the title's end. Scoped to the card's
+                  project, whose client the rename must use. */}
+              <div className="group/thread-title flex min-w-0 items-center gap-2">
+                <h3 className="min-w-0 shrink truncate text-[15px] font-semibold leading-snug" title={displayTitle(thread)}>
+                  <a href={placeHref} onClick={openHere} className="rounded-sm outline-none hover:underline hover:underline-offset-2 focus-visible:ring-1 focus-visible:ring-focus-ink-60">
+                    {displayTitle(thread)}
+                  </a>
+                </h3>
+                <ThreadProjectScope projectId={project.id} projectDir={project.projectDir}>
+                  <AiRenameButton thread={thread} />
+                </ThreadProjectScope>
+              </div>
               <div className="mt-0.5 flex min-w-0 items-baseline gap-1.5 text-[11px] leading-tight text-muted-75">
                 {chipNode}
                 {/* A ghost says why it is quiet, on the line that said since when it was ready: the same
@@ -278,6 +302,20 @@ export const AllQueuesCard = memo(function AllQueuesCard({
               </div>
             </div>
             <div className="flex shrink-0 items-center gap-0.5">
+              {/* THE FULLSCREEN DOOR (ExpandThreadLink), before Retry as on Colin's card (TodosView
+                  QueueCard @ 7a20f425). Its address carries the CARD's project — the page's own would
+                  name the focused project's thread of the same slug — and it owns `f` on this card.
+                  AS THE HEADER'S LAST MARK it takes `-mr-2`: its ink sits ~1.2px inside a 14px box
+                  centred in a 28px square, so untrimmed it drew ~29px in from the card's right border
+                  against the project mark's 20.75px on the left; trimmed, 21.0px — the inset Retry keeps
+                  when it is last (measured 2026-09-29, ink-gaps.mjs dsf 4, sans). Beside Retry it keeps
+                  its box: ⤢ → Retry measured 10px of ink, the gap-0.5 pairing Colin's card had. */}
+              <ExpandThreadLink
+                slug={thread.id}
+                href={`${placeHref}/full`}
+                command
+                className={`${HEADER_ICON_CLASS}${offersRetry(thread) ? "" : " -mr-2"}`}
+              />
               {offersRetry(thread) && <RetryButton project={project} thread={thread} onSent={onLeave} onFailed={onReturn} />}
             </div>
           </header>
@@ -339,6 +377,14 @@ export const AllQueuesCard = memo(function AllQueuesCard({
               )}
               {/* Not gated on the handoff: a STALL's last record is often a tool call with no prose at
                   all, and its notice is about the process, not the message (showsRestedCard). */}
+              {/* KILLED BY A USAGE LIMIT — the reason such a card is in the queue at all (a limit fault is
+                  a hard queue member), so it says which window blew, when Frizz continues it, and offers
+                  "Continue now" — the drawer's own card, as Colin's queue card drew it (TodosView
+                  QueueCard @ 7a20f425). Delivered to the CARD's project, and the card leaves while the
+                  thread goes back to work, returning if the send fails, as Retry does. */}
+              {thread.limitPause && thread.foreign !== true && (
+                <LimitPauseCard slug={thread.id} sessionId={thread.sessionId} pause={thread.limitPause} continueWith={continueFromLimit} />
+              )}
               {showsRestedCard(thread, text) && <RestedCard thread={thread} />}
               {showsQuietTurnCard(thread) && <QuietTurnCard thread={thread} />}
             </div>
@@ -417,7 +463,8 @@ function RetryButton({ project, thread, onSent, onFailed }: { project: QueuesPro
         // card's border box, the title's inset on the left. It carried `mr-[9px]` until 2026-09-28 to sit at
         // the rhythm of the ↗ and ⤢ doors beside it (MEASURED 2026-09-23, ink-gaps.mjs, dsf 4, sans: Retry →
         // ↗ 20.43px); with the doors gone that margin left it 30px in against the title's 21 (measured
-        // 2026-09-28, composer-alias-fixture ?surface=card&runtime=exited, dsf 4, sans).
+        // 2026-09-28, composer-alias-fixture ?surface=card&runtime=exited, dsf 4, sans). The ⤢ came back
+        // BEFORE it on 2026-09-29 (ExpandThreadLink), so Retry is still last and still wants no margin.
         className="flex items-center gap-1.5 rounded-md border border-accent/45 bg-accent/10 px-2.5 py-1 text-[12px] font-medium text-accent outline-none transition-colors hover:border-accent/70 hover:bg-accent/15 disabled:opacity-50"
       >
         <RotateCcw size={12} />

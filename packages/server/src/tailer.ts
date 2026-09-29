@@ -444,6 +444,21 @@ export interface SessionTelemetry extends NormalizedTail {
   noTranscript?: boolean
   contextTokens?: number // tokens the model's last request carried (see FoldState.contextTokens)
   contextWindow?: number // the context size this session RUNS IN (see FoldState.contextWindow)
+  // The tool calls this turn is still BLOCKED on — issued, result not yet written — each with the
+  // `timeout` the worker declared for it, if it declared one. Claude only (absent ⇒ none known). The
+  // board reads it to tell a deliberate long wait from a wedge (board.ts quietTurnSince).
+  pendingToolCalls?: PendingToolCallView[]
+}
+
+/** A tool call the turn is still waiting on (see TailState.pendingToolCalls). */
+export interface PendingToolCallView {
+  name: string
+  /** ISO8601 of the tool_use record that issued it. */
+  startedAt: string
+  /** The EXPLICIT timeout the worker put on the call — Bash's `timeout`, or any tool's `timeout_ms` —
+   *  in milliseconds. Absent when the call named none, which is the case that must still queue: a
+   *  default-timeout Bash or an MCP call has not been sized by anyone. */
+  timeoutMs?: number
 }
 
 // One tracked live background sub-agent, keyed in TailState by its dispatch tool_use id (the
@@ -597,6 +612,9 @@ const PENDING_RESUMES_MAX = 32
 // Each is consumed by its own tool_result — usually the very next record — so this bounds nothing but
 // the pathological case of a turn whose results never land.
 const PENDING_SHELLS_MAX = 32
+// How many in-flight tool calls to hold (see TailState.pendingToolCalls). A parallel batch is a handful;
+// this bounds only a turn whose results never land.
+const PENDING_TOOL_CALLS_MAX = 32
 // How far behind the fold's high-water mark a restart ack may sit and still count as live. Covers
 // ordinary out-of-order writes between sibling records; a REPLAYED ack (see trackResumes) carries its
 // original timestamp and is stale by minutes to days, so nothing near this boundary is ambiguous.
@@ -715,6 +733,13 @@ export interface TailState extends FoldState {
   // RESULT, which carries no command text. Without this the promoted row would have nothing to be
   // labelled with. Bounded; consumed on use. See AUTO_BACKGROUND_ACK_RE.
   pendingShells?: Map<string, { label: string; command?: string; startedAt: string }>
+  // EVERY tool_use id this turn issued whose tool_result has not landed yet, with the timeout the call
+  // declared (PendingToolCallView). A foreground call that sits for a long time writes NOTHING, which is
+  // exactly what board.ts quietTurnSince reads as a wedge — and a call the worker sized with an explicit
+  // `timeout` is the one silence that is deliberate (backend/types.ts BASH_MAX_TIMEOUT_MS: "a blocking
+  // wait is DELIBERATE"). Cleared per result, and wholesale when the turn ends or is interrupted, so an
+  // abandoned call can never excuse a later turn. Bounded (PENDING_TOOL_CALLS_MAX).
+  pendingToolCalls?: Map<string, PendingToolCallView>
   // MONOTONIC high-water mark over every timestamped record folded so far. `lastActivityAt` cannot
   // serve this purpose: it tracks the LATEST record folded and therefore moves BACKWARD whenever a
   // transcript replays history (which Claude's do — see trackResumes). This only ever advances, and it
@@ -1819,6 +1844,53 @@ function clearAskOnResult(state: TailState, rec: Record): void {
   }
 }
 
+// The explicit timeout a tool call declared, in ms: Bash's `timeout` (its documented unit), or any
+// tool's `timeout_ms`. A tool whose `timeout` is in some larger unit reads SHORTER here, never longer,
+// so a misread can only fail to excuse a silence — never hide a wedge.
+function declaredTimeoutMs(input: unknown): number | undefined {
+  if (!input || typeof input !== "object") return undefined
+  const { timeout, timeout_ms } = input as { timeout?: unknown; timeout_ms?: unknown }
+  for (const value of [timeout_ms, timeout]) {
+    if (typeof value === "number" && Number.isFinite(value) && value > 0) return value
+  }
+  return undefined
+}
+
+// Record every tool call an assistant record issues (TailState.pendingToolCalls).
+function trackPendingCalls(state: TailState, rec: Record): void {
+  const content = rec.message?.content
+  if (!Array.isArray(content)) return
+  for (const block of content) {
+    if (!block || typeof block !== "object") continue
+    const b = block as { type?: string; name?: unknown; id?: unknown; input?: unknown }
+    if (b.type !== "tool_use" || typeof b.id !== "string") continue
+    const pending = (state.pendingToolCalls ??= new Map())
+    const timeoutMs = declaredTimeoutMs(b.input)
+    pending.set(b.id, {
+      name: typeof b.name === "string" ? b.name : "tool",
+      startedAt: typeof rec.timestamp === "string" ? rec.timestamp : (state.lastActivityAt ?? ""),
+      ...(timeoutMs !== undefined ? { timeoutMs } : {}),
+    })
+    while (pending.size > PENDING_TOOL_CALLS_MAX) {
+      const oldest = pending.keys().next().value
+      if (oldest === undefined) break
+      pending.delete(oldest)
+    }
+  }
+}
+
+// A tool_result retires the call it answers.
+function clearPendingCallsOnResult(state: TailState, rec: Record): void {
+  if (!state.pendingToolCalls?.size) return
+  const content = rec.message?.content
+  if (!Array.isArray(content)) return
+  for (const block of content) {
+    if (!block || typeof block !== "object") continue
+    const b = block as { type?: string; tool_use_id?: unknown }
+    if (b.type === "tool_result" && typeof b.tool_use_id === "string") state.pendingToolCalls.delete(b.tool_use_id)
+  }
+}
+
 // Fold one record into the running derivation. Only assistant/user records are "substantive" (they
 // move the turn state); assistant/user/system records with a timestamp advance lastActivityAt.
 export function applyRecord(state: TailState, rec: Record): void {
@@ -1959,6 +2031,12 @@ export function applyRecord(state: TailState, rec: Record): void {
     }
     trackDispatches(state, rec) // register any background Agent dispatches + background shells
     trackAsk(state, rec) // capture a pending native AskUserQuestion (frozen at a TUI dialog)
+    // A record that calls no tool ends the calling: whatever was still pending belonged to a turn that
+    // has moved on (its results were lost, or the turn ended), and must not excuse a later silence.
+    if (!(Array.isArray(rec.message?.content) && rec.message.content.some((b: unknown) => (b as { type?: unknown } | null)?.type === "tool_use"))) {
+      state.pendingToolCalls?.clear()
+    }
+    trackPendingCalls(state, rec) // every call this record issued is pending until its result lands
   } else if (type === "user" && !metaUserRec) {
     state.sawRecords = true
     // A user record — human turn, tool_result, OR a re-invoking system record (peer/notification) —
@@ -1974,6 +2052,9 @@ export function applyRecord(state: TailState, rec: Record): void {
     // frozen" — 23 hours in the Active band with an idle worker behind it).
     const userText = lastTextBlock(rec.message?.content) ?? ""
     state.interrupted = isInterruptMarker(userText) || undefined
+    // An interrupted turn has abandoned whatever it was waiting on.
+    if (state.interrupted) state.pendingToolCalls?.clear()
+    clearPendingCallsOnResult(state, rec)
     // …and the second one: a local command's output receipt, which follows a command the model never saw.
     state.localCommandDone = isLocalCommandReceipt(rec.message?.content) || undefined
     // A newer user record supersedes any pending chat question / excusal fence (they only signal as the
@@ -5246,7 +5327,7 @@ export function createTailer(deps: TailerDeps): Tailer {
       // thread has no row and reads as legacy, which is what `questionFencesLive` does with unknown.
       const pendingQuestion = s.lastAssistantHasQuestion && questionFencesLive(row?.spawned_at)
       const nowMs = now()
-      return { primed: s.primed, turn: s.turn, permPrompt: s.permPrompt, permPolicy: s.permPolicy, permDenies: s.permDenies, model: s.model, effort: s.effort, profileAt: s.profileAt, profileRevision: s.profileRevision, permissionMode: s.permissionMode, permissionModeAt: s.permissionModeAt, permissionModeRevision: s.permissionModeRevision, lastActivityAt: s.lastActivityAt, lastAssistantAt: s.lastAssistantAt, lastAssistant: s.lastAssistant, aiTitle: s.aiTitle, customTitle: s.customTitle, customTitleRevision: s.customTitleRevision, subAgents: subAgentViews(s, nowMs), droppedReports: [...s.queuedReports.values()], bgShells: [...bgShellViews(s), ...codexBgShellViews(s)], retiredShells: retiredShellViews(s), retiredSubAgents: retiredSubAgentViews(s), pendingAsk: s.pendingAsk, pendingQuestion, lastAssistantAllDone: s.lastAssistantAllDone, lastUserAt: s.lastUserAt, lastHumanAt: s.lastHumanAt, lastToolCallAt: s.lastToolCallAt, lastUserText: s.lastUserText, firstUserText: s.firstUserText, lastFence: s.lastFence, noTranscript: s.noTranscript, authFault: s.authFault, apiFault: s.apiFault, providerError: s.providerError, limitFault: s.limitFault, contextTokens: s.contextTokens, contextWindow: s.contextWindow, lastCompactionAt: s.lastCompactionAt }
+      return { primed: s.primed, turn: s.turn, permPrompt: s.permPrompt, permPolicy: s.permPolicy, permDenies: s.permDenies, model: s.model, effort: s.effort, profileAt: s.profileAt, profileRevision: s.profileRevision, permissionMode: s.permissionMode, permissionModeAt: s.permissionModeAt, permissionModeRevision: s.permissionModeRevision, lastActivityAt: s.lastActivityAt, lastAssistantAt: s.lastAssistantAt, lastAssistant: s.lastAssistant, aiTitle: s.aiTitle, customTitle: s.customTitle, customTitleRevision: s.customTitleRevision, subAgents: subAgentViews(s, nowMs), droppedReports: [...s.queuedReports.values()], bgShells: [...bgShellViews(s), ...codexBgShellViews(s)], retiredShells: retiredShellViews(s), retiredSubAgents: retiredSubAgentViews(s), pendingAsk: s.pendingAsk, pendingQuestion, lastAssistantAllDone: s.lastAssistantAllDone, lastUserAt: s.lastUserAt, lastHumanAt: s.lastHumanAt, lastToolCallAt: s.lastToolCallAt, lastUserText: s.lastUserText, firstUserText: s.firstUserText, lastFence: s.lastFence, noTranscript: s.noTranscript, authFault: s.authFault, apiFault: s.apiFault, providerError: s.providerError, limitFault: s.limitFault, contextTokens: s.contextTokens, contextWindow: s.contextWindow, lastCompactionAt: s.lastCompactionAt, pendingToolCalls: s.pendingToolCalls?.size ? [...s.pendingToolCalls.values()] : undefined }
     },
     // The CURRENT fresh foreign session ids (mtime within FOREIGN_FRESH_MS, capped), mtime-desc. Kept
     // as the last scan's result — recomputed at most every FOREIGN_SCAN_EVERY ticks.

@@ -11,8 +11,8 @@ import { AiRenameButton } from "./AiRenameButton.tsx"
 // and press the refresh mark to have Claude re-derive one. Rendered by the thread header (ChatView),
 // and by the project board's queue card header (TodosView) from this ONE component until that board
 // went on 2026-09-28, so the two surfaces could not drift. The cross-project card (AllQueuesCard)
-// does NOT render it — its title is a link that opens the drawer — so the queue has no rename in place
-// today, which is the asymmetry below come back. They drifted once before: the queue card carried only
+// does NOT render it — its title is a link that opens the drawer — so the queue has no MANUAL rename in
+// place today, which is the asymmetry below come back; it does carry the AI-rename mark beside that link. They drifted once before: the queue card carried only
 // the refresh mark until 2026-09-13 — its title was a plain div, on the theory that the queue is a
 // triage surface and a manual rename belongs in the drawer — and the maintainer met the asymmetry on
 // the first card they wanted to retitle ("It only lets me rename. I should be able to click on it to

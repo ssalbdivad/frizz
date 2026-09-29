@@ -1,7 +1,7 @@
 import { test } from "node:test"
 import assert from "node:assert/strict"
-import type { ThreadView } from "@frizz/shared"
-import { bandOf, needsAction, queued, orderQueue, partitionActive, sectionOf, sectionThreads, isSnoozed, sessionIndicatorKind, offersRetry, titleIsProvisional, displayTitle, lastActiveLabelAt, queueLabelAt, queueLabelWord, SPINNING_UP_TITLE, UNTITLED_THREAD_TITLE } from "./groups.ts"
+import { workingThread, type ThreadView } from "@frizz/shared"
+import { bandOf, doneButRunning, needsAction, queued, orderQueue, partitionActive, sectionOf, sectionThreads, isSnoozed, sessionIndicatorKind, offersRetry, titleIsProvisional, displayTitle, lastActiveLabelAt, queueLabelAt, queueLabelWord, SPINNING_UP_TITLE, UNTITLED_THREAD_TITLE } from "./groups.ts"
 
 // Minimal ThreadView fixture — the same shape board-delta.test.ts uses, defaulting to a live/active
 // thread; each case overrides only the fields under test.
@@ -586,8 +586,39 @@ test("sectionOf: an ARCHIVED thread is Done whatever its worker is doing — onl
   ]) {
     const t = thread({ kind: "session", state: "archived", archived: true, ...extra })
     assert.equal(sectionOf(t), "inactive", JSON.stringify(extra))
-    assert.equal(sessionIndicatorKind(t), "archived", JSON.stringify(extra))
+    assert.equal(bandOf(t), "done", JSON.stringify(extra))
   }
+})
+
+test("a RUNNING Done row wears its spinner in Done — never a silent check (maintainer, hit 3x)", () => {
+  // Restored from 7a20f425, where the spinner came with a lift into Active. The row stays in Done now
+  // (only the human reopens it); what it may not do is sit there looking finished while it works.
+  const sub = [{ label: "x", startedAt: "2026-07-10T00:00:00.000Z", state: "running" as const, id: "a1" }]
+  const shell = [{ label: "watch CI", startedAt: "2026-07-10T00:00:00.000Z", state: "running" as const }]
+  const moving = [
+    { runtime: "running" as const },
+    { runtime: "spawning" as const },
+    // A parent at rest with its own sub-agent out spins too (the ellipsis-in-spinner variant).
+    { runtime: "turn-idle" as const, subAgents: sub },
+  ]
+  for (const extra of moving) {
+    const t = thread({ kind: "session", state: "archived", archived: true, ...extra })
+    assert.equal(sessionIndicatorKind(t), "working", JSON.stringify(extra))
+    assert.equal(doneButRunning(t), true, JSON.stringify(extra))
+    assert.equal(workingThread(t), true, `the rail's working count carries it: ${JSON.stringify(extra)}`)
+    assert.equal(sectionOf(t), "inactive", "and it stays in Done")
+  }
+  // NEGATIVE CONTROLS: at rest, exited, or holding nothing but a background shell (never live work,
+  // 2026-07-22) — the quiet check, and no working count.
+  for (const extra of [{ runtime: "turn-idle" as const }, { runtime: "exited" as const }, { runtime: "turn-idle" as const, bgShells: shell }]) {
+    const t = thread({ kind: "session", state: "archived", archived: true, ...extra })
+    assert.equal(sessionIndicatorKind(t), "archived", JSON.stringify(extra))
+    assert.equal(workingThread(t), false, JSON.stringify(extra))
+  }
+  // A foreign terminal marked done has no worker of frizz's to count.
+  assert.equal(workingThread(thread({ kind: "session", foreign: true, state: "archived", archived: true, runtime: "running" })), false)
+  // …and an OPEN running row still counts exactly once, through the Active band.
+  assert.equal(workingThread(thread({ kind: "session", state: "open", runtime: "running" })), true)
 })
 
 test("sectionThreads v2: Active bands rested-on-top (queue order) then running; foreign + legacy excluded", () => {
