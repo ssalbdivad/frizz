@@ -14,7 +14,8 @@
 // without a done card, a question or a registered wait. Frizz nudges it for one; a reply here also
 // wakes it." — the worker contract's vocabulary and the nudge machinery, recited to the operator
 // (maintainer 2026-09-29: "ensure we don't leak explanations of internal behaviors"). The nudge still
-// runs; the reader does not need to know it exists to act on the card. Both are last in ChatView's chain: every rung above
+// runs; the reader does not need to know it exists to act on the card. Nor does "handoff" belong on
+// it — that is our word, not the user's — so the card is one line: the thing they can do. Both are last in ChatView's chain: every rung above
 // is a harder reading of the same slot and wins it.
 import { CircleDashed, TriangleAlert } from "lucide-react"
 import { questionsOwed, type ThreadView } from "@frizz/shared"
@@ -70,8 +71,6 @@ export function RestedCard({ thread }: { thread: Pick<ThreadView, "crashed"> }) 
     )
   }
   return (
-    <TranscriptCard data-rested-card="bare" icon={CircleDashed} label="Stopped without a handoff">
-      <p className={CARD_BODY}>Reply to pick up where it left off.</p>
-    </TranscriptCard>
+    <TranscriptCard data-rested-card="bare" icon={CircleDashed} label="Reply to continue" />
   )
 }

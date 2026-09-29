@@ -99,11 +99,11 @@ from taste.
 
 A card, banner, toast or empty state tells the operator what is true and what they can do about it — in
 the fewest words that do that. It never recites internal machinery: no worker-contract vocabulary ("done
-card", "registered wait", "sign-off", "fence"), no scheduler behaviour ("Frizz nudges it"), no process
+card", "registered wait", "sign-off", "handoff", "fence"), no scheduler behaviour ("Frizz nudges it"), no process
 mechanics ("the process exited"). Pick the message that is most USEFUL at that moment and stop; the
 mechanism belongs in a code comment. Before: "The worker stopped without a done card, a question or a
-registered wait. Frizz nudges it for one; a reply here also wakes it." After: "Stopped without a
-handoff — Reply to pick up where it left off." (maintainer 2026-09-29.)
+registered wait. Frizz nudges it for one; a reply here also wakes it." After: a one-line card,
+"Reply to continue." (maintainer 2026-09-29.)
 
 # Copy capitalization: sentence case, never title case
 
