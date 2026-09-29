@@ -1598,6 +1598,8 @@ export function ThreadHeader({ slug, onStatusApplied, onClose, showReturnToQueue
             // The /full page is the one surface with a fullscreen to LEAVE, and it leaves through the
             // same slot it was entered by.
             collapse={showReturnToQueue}
+            // …and the drawer, the one surface with a fullscreen to ENTER, through that same slot.
+            expand={Boolean(onClose)}
             onDoc={hasDoc ? () => pushDrawer("doc", thread.id) : undefined}
             onDone={() => markComplete.mutate(undefined, { onSuccess: onStatusApplied })}
             doneBusy={markComplete.isPending}
