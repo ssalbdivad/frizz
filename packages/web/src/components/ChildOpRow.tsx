@@ -1,5 +1,5 @@
 import type { ReactElement, ReactNode } from "react"
-import { X } from "lucide-react"
+import { Check, CircleSlash, X } from "lucide-react"
 import { BoxSpinner } from "./BoxSpinner.tsx"
 import { isRunningOperation } from "../lib/operationIndicators.ts"
 import { compactElapsedSince } from "../lib/durationLabels.ts"
@@ -73,13 +73,15 @@ export function ChildOpRow({
   onOpen,
   onDismiss,
   title,
+  outcome,
+  endedAt,
 }: {
   kind: ChildOpKind
   label: string
   // "rested" is a sub-AGENT only reading: its own run ended while the fan-out it dispatched kept going
   // (see CHILD_RESTED_TITLE). It draws a hollow dot in place of the live/stale one and nothing else on
   // the row changes — the live children still pulse, indented one step beneath it.
-  state: "running" | "stale" | "rested"
+  state: "running" | "stale" | "rested" | "returned"
   density: ChildOpDensity
   // How far down the dispatch tree this row sits: 1 (or absent) = a child the THREAD dispatched, 2 = a
   // child of that child, and so on. Each level past the first steps the row right by one indent, so a
@@ -121,6 +123,12 @@ export function ChildOpRow({
   onDismiss?: () => void
   // Tooltip override. The rail passes "[subagent-type] label" — the type reading it has no room to render.
   title?: string
+  // A RETURNED child (state "returned", card density only): how it ended, and when. The one surface
+  // that draws a finished child is a queued parent's card listing its batch (AwaitingSubAgentsCard),
+  // where "which ones came back" is the whole question — see RETURNED_MARK for why it earns a mark there
+  // when the live strips deliberately draw none.
+  outcome?: "completed" | "failed" | "killed"
+  endedAt?: string
 }): ReactElement {
   const running = isRunningOperation(state)
   // ONE HUE PER RUNTIME CONCERN, and the row is the only place they are named. A sub-agent pulses the
@@ -144,7 +152,8 @@ export function ChildOpRow({
   // Live-ticking recency, on every density. useNowMs re-renders this row ~every 30s so the reading
   // keeps counting up even while the board sends nothing (a steadily-quiet child pushes no delta).
   const now = useNowMs()
-  const elapsed = compactElapsedSince(startedAt, now)
+  const returned = state === "returned"
+  const elapsed = returned ? returnedAgo(endedAt, now) : compactElapsedSince(startedAt, now)
   // One indent step per level below the first. 13px is the arrow glyph's own advance plus its gap, so a
   // nested row's arrow lands under its parent's LABEL — the same relationship the rail's child rows
   // already have with their thread row. Clamped: a runaway depth must step the row, never push the label
@@ -154,6 +163,7 @@ export function ChildOpRow({
   // an `onDismiss` when the server said it is stoppable (lib/dismissChildOp.ts), so "running" here is
   // always a real kill; everything else is retiring a finished op.
   const dismissTone = running ? "running" : "settled"
+  const outcomeWord = outcome === "failed" ? "failed" : outcome === "killed" ? "stopped" : "returned"
   const openTitle = CHILD_OPEN_TITLE[kind]
   const rowTitle = title ?? (clickable ? openTitle : undefined)
 
@@ -178,6 +188,10 @@ export function ChildOpRow({
           className={`frizz-live-dot ${LIVE_DOT_HUE[kind]}`}
           data-running-indicator={density === "card" ? "queue-subagent" : "operation"}
         />
+      ) : returned ? (
+        <span aria-hidden className={RETURNED_MARK[outcome ?? "completed"]} data-returned-mark={outcome ?? "completed"} title={outcomeWord}>
+          {outcome === "failed" ? <X size={10} strokeWidth={2.5} /> : outcome === "killed" ? <CircleSlash size={9} strokeWidth={2.25} /> : <Check size={10} strokeWidth={2.5} />}
+        </span>
       ) : kind === "SHELL" ? (
         <span aria-hidden className="frizz-live-dot-quiet frizz-live-dot-quiet--shell" data-running-indicator="operation-quiet" title={CHILD_QUIET_SHELL_TITLE} />
       ) : (
@@ -198,7 +212,9 @@ export function ChildOpRow({
         <span data-child-op-counter title={counterTitle} style={counterTone === "danger" ? { color: PRIMER.fgDanger } : undefined}>{counter}</span>
       )}
       {counter && elapsed && <span aria-hidden className="text-muted-25">·</span>}
-      {elapsed && <span title={`Working for ${elapsed}`}>{elapsed}</span>}
+      {elapsed && (returned
+        ? <span title={`${outcomeWord[0]!.toUpperCase()}${outcomeWord.slice(1)} ${elapsed}`} style={outcome === "failed" ? { color: PRIMER.fgDanger } : undefined}>{outcomeWord} {elapsed}</span>
+        : <span title={`Working for ${elapsed}`}>{elapsed}</span>)}
     </span>
   ) : null
 
@@ -309,4 +325,37 @@ export function ChildOpRow({
       {reading}
     </div>
   )
+}
+
+// THE RETURNED MARK — the one finished-child glyph, and it lives on exactly one surface. The live strips
+// draw NO mark for a finished child (lib/childOps.ts, maintainer 2026-08-01: a done-dot "put a mark on
+// nearly every row of a settled transcript while saying nothing"), because there every row is live work
+// and a finished one simply leaves. A queued parent's card is the opposite list: a BATCH, where the
+// finished rows are half the answer to "2 of 3 returned — which two?". Colin's focus-mode mockup
+// (4d7b3cb8) drew them with a muted check, and this is that check, sized into the dot's 9px slot so the
+// labels of both kinds of row start at one x. A failure takes Primer's danger red, the colour the same
+// fact wears on the awaiting card's checks; a stop (the human's ×, an interrupt) takes the slashed circle
+// the GitHub rows use for "not planned".
+//
+// LIFTED 0.043em. The slot is `items-center` like the dot's, and a check's ink is not centred in its box
+// (lucide's path spans y 6–17 of 24): measured 2026-09-29 on a real queued parent (sans, 11.5px row,
+// canvas cap-band reference, adhoc stack), the check's ink centre sat 0.49px below the label's cap band.
+// 0.49 / 11.5 = 0.043em; re-measure if the row's type scale moves.
+const RETURNED_MARK_BOX = "flex translate-y-[-0.043em]"
+const RETURNED_MARK = {
+  completed: `${RETURNED_MARK_BOX} text-muted-45`,
+  failed: `${RETURNED_MARK_BOX} text-danger-soft`,
+  killed: `${RETURNED_MARK_BOX} text-muted-45`,
+} as const
+
+// A RETURNED row reads how long AGO it came back, not how long it worked: the live rows beside it count
+// up, this one has stopped, and "4m ago" says which of the two it is at a glance. Under a minute it is
+// "just now", never a seconds count: the page's clock ticks every 30s (lib/liveClock.ts), so a return
+// that landed after the last tick would read as nothing at all, and one before it would freeze on "12s
+// ago" for half a minute — a number that looks live and is not.
+function returnedAgo(endedAt: string | undefined, nowMs: number): string {
+  const ended = Date.parse(endedAt ?? "")
+  if (!Number.isFinite(ended)) return ""
+  const ms = nowMs - ended
+  return ms < 60_000 ? "just now" : `${compactElapsedSince(endedAt, nowMs)} ago`
 }

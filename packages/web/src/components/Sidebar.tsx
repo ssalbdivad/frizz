@@ -18,6 +18,7 @@ import { STALLED_RETRY_MESSAGE, retrySession } from "../lib/retrySession.ts"
 import { deliverProjectFollowUp } from "../lib/projectFollowUp.ts"
 import { useThreadApi, useThreadIsForeignToPage, useThreadProjectDir, useThreadProjectId } from "../api/threadApi.tsx"
 import { formatAutoSnoozedUntil, formatUserSnooze } from "../lib/snooze.ts"
+import { SUBAGENTS_SNOOZE_TOAST } from "../lib/subAgentWait.ts"
 import { formatCompactElapsed } from "../lib/durationLabels.ts"
 import { awaitingProse, awaitingWaitClause } from "../lib/awaitingPresentation.ts"
 import { clearArchived } from "../lib/optimisticArchive.ts"
@@ -1018,7 +1019,8 @@ function sessionStateIndicatorFor(t: ThreadView): { node: ReactElement; tip: str
     // the state reads the way the card's own toast did when it was clicked. A fence, when there is
     // one, still supplies the clause and the glyph below; a shell-only rest has no fence, and its snooze
     // wears the shell's blue dot rather than the hourglass, because nothing here is on a clock.
-    const eventSnoozed = t.bgSnoozed === true ? "Snoozed until the background work returns" : null
+    // The batch-long twin (subAgentsSnoozed) reads the way its own toast did, for the same reason.
+    const eventSnoozed = t.subAgentsSnoozed === true ? SUBAGENTS_SNOOZE_TOAST : t.bgSnoozed === true ? "Snoozed until the background work returns" : null
     // Canonical blocked+timer status can arrive from an older/pre-session snapshot without a fence.
     if (t.lastFence?.kind !== "awaiting") {
       // The event-snooze reaches here for a rest on a shell, a timer OR a registered PR watch, and only

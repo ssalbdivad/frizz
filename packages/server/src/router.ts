@@ -3313,12 +3313,48 @@ export function createRouter(ctx: AppContext) {
     // worker comes to a new rest. No deadline, no scheduler, no reaper: the session stays alive (it is
     // ALREADY resting) and the snooze expires itself on the next rest. Session-guarded so a stale tab
     // cannot snooze whatever now owns the slug.
+    //
+    // `clear` is the queue card's Undo (2026-09-29): the card fades on the click, and a mis-click on a
+    // snooze with no deadline would otherwise leave the thread parked until its work happens to report.
     snoozeAwaitingBackground: mutation({
-      input: z.object({ slug: ThreadSlug, sessionId: z.string().min(1) }).strict(),
+      input: z.object({ slug: ThreadSlug, sessionId: z.string().min(1), clear: z.boolean().optional() }).strict(),
       handler: async ({ input }) => {
         const row = currentOwnedSession(input.slug, input.sessionId)
+        if (input.clear) {
+          ctx.storage.setBgSnoozeRestedAtIfCurrent(input.slug, row.session_id, row.runtime_generation ?? 0, null)
+          ctx.board.refresh()
+          return
+        }
         if (!row.rested_at) throw new Error("This thread is not at rest; nothing to snooze")
         if (!ctx.storage.setBgSnoozeRestedAtIfCurrent(input.slug, row.session_id, row.runtime_generation ?? 0, row.rested_at)) {
+          throw new Error("This thread changed before it could be snoozed")
+        }
+        ctx.board.refresh()
+      },
+    }),
+
+    // SNOOZE UNTIL ALL SUB-AGENTS RETURN — the event-snooze above, widened from ONE rest to the whole
+    // batch. That one is spent by the parent's next rest, and a parent resting on N background children
+    // rests N times, so a human snoozing it met the card again after every return. This arms the instant
+    // instead, and the board holds the thread out of the queue while some direct sub-agent has been running
+    // ever since (board.subAgentsSnoozeHolds): each return still wakes the parent, and only the last one —
+    // or a question, a crash, a done, or the human speaking to it — brings the card back.
+    //
+    // Refused with nothing running: there would be no batch to wait out, and the arming would be inert
+    // anyway. `clear` is the card's Undo.
+    snoozeUntilSubAgentsReturn: mutation({
+      input: z.object({ slug: ThreadSlug, sessionId: z.string().min(1), clear: z.boolean().optional() }).strict(),
+      handler: async ({ input }) => {
+        const row = currentOwnedSession(input.slug, input.sessionId)
+        const generation = row.runtime_generation ?? 0
+        if (input.clear) {
+          ctx.storage.setSubAgentsSnoozedAtIfCurrent(input.slug, row.session_id, generation, null)
+          ctx.board.refresh()
+          return
+        }
+        const running = (ctx.tailer.get(input.slug)?.subAgents ?? []).some((agent) => isDirectSubAgent(agent) && agent.state === "running")
+        if (!running) throw new Error("No sub-agent is running; there is nothing to wait for")
+        if (!ctx.storage.setSubAgentsSnoozedAtIfCurrent(input.slug, row.session_id, generation, new Date().toISOString())) {
           throw new Error("This thread changed before it could be snoozed")
         }
         ctx.board.refresh()

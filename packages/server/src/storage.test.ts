@@ -1193,6 +1193,34 @@ test("queued_at: a pre-clock unified file gains the column, and the stamp surviv
   }
 })
 
+test("subagents_snoozed_at: a pre-column unified file gains it, and the arming is session-guarded", () => {
+  const dir = mkdtempSync(join(tmpdir(), "frizz-storage-subsnooze-"))
+  const path = join(dir, "ui.db")
+  // Every live install's file predates the column; the ALTER in ensureStorageSchema must add it back.
+  const before = new Database(path)
+  const stripped = STORAGE_SCHEMA.replace(/^\s*subagents_snoozed_at\s+TEXT,\n/m, "")
+  assert.notEqual(stripped, STORAGE_SCHEMA, "the strip found the column line (keep this regex with the DDL)")
+  before.exec(stripped)
+  before.close()
+
+  const at = "2026-09-29T10:01:00.000Z"
+  let s = createStorage(path, "p")
+  try {
+    s.upsertSession(row({ slug: "fan", session_id: "sess", state: "open" }))
+    assert.equal(s.getSession("fan")?.subagents_snoozed_at, null)
+    assert.equal(s.setSubAgentsSnoozedAtIfCurrent("fan", "other-session", 0, at), false, "a stale tab cannot arm another session's thread")
+    assert.equal(s.setSubAgentsSnoozedAtIfCurrent("fan", "sess", 0, at), true)
+    s.close()
+    s = createStorage(path, "p")
+    assert.equal(s.getSession("fan")?.subagents_snoozed_at, at, "the arming survives a restart")
+    assert.equal(s.setSubAgentsSnoozedAtIfCurrent("fan", "sess", 0, null), true)
+    assert.equal(s.getSession("fan")?.subagents_snoozed_at, null, "and the Undo clears it")
+  } finally {
+    s.close()
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+
 // ── the batched registry reads ──────────────────────────────────────────────────────────────────────
 // The board reads five per-thread tables for EVERY row it assembles, and it used to ask each of them
 // one thread at a time: 2,790 statements per rebuild on the maintainer's 558-thread board, all of it

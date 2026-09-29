@@ -299,6 +299,26 @@ export const SubAgentView = z.object({
 })
 export type SubAgentView = z.infer<typeof SubAgentView>
 
+// A DIRECT sub-agent that has RETURNED while its siblings are still out — what a queued parent's card
+// lists beside the ones still running, so "2 of 3 sub-agents returned" can say which two.
+//
+// The server keeps a ring of every retired child (tailer RETAINED_SUBAGENTS_MAX) and deliberately keeps
+// it off the wire; this is the slice of it a card needs, filtered SERVER-side to the returns inside the
+// wait that is still open (board.returnedSubAgentsView). The wait opens when the oldest child still out
+// was dispatched, so a sibling that came back before the parent even rested counts, and a child from an
+// earlier, finished batch does not. Absent whenever no direct sub-agent is running: with nothing out
+// there is no "of N" to state.
+export const ReturnedSubAgentView = z.object({
+  id: z.string(), // the dispatch tool_use id — the same drill-in handle SubAgentView.id is
+  label: z.string(),
+  // How it ended, as the harness reported it. `killed` is a stop — the human's ×, or an interrupt.
+  status: z.enum(["completed", "failed", "killed"]),
+  startedAt: z.string().optional(), // ISO8601 of the dispatch
+  finishedAt: z.string().optional(), // ISO8601 of its completion notification
+  subagentType: z.string().optional(),
+})
+export type ReturnedSubAgentView = z.infer<typeof ReturnedSubAgentView>
+
 // One agent of a workflow run, as its drawer lists it — every agent the run has started, finished ones
 // included, so the run can be browsed after the fact. `id` is the agent id, which is also the drill-in
 // handle `subAgentTranscript` resolves.
@@ -2883,6 +2903,16 @@ export const ThreadView = z.object({
    *  explicitly parked THIS rest, showing them the same card with the same button one surface over is
    *  not information, and they said so. */
   bgSnoozed: z.boolean().optional(),
+  /** The human snoozed this thread UNTIL ALL ITS SUB-AGENTS RETURN, and that snooze is what is keeping
+   *  it out of the queue right now. Server truth (board.subAgentsSnoozeHolds): unlike `bgSnoozed` it
+   *  survives the parent's intermediate rests — each child's return still wakes the parent, which runs
+   *  and rests again without re-queueing — and it lets go when no direct sub-agent is running, when the
+   *  human speaks to the thread, or earlier when something outranks it (a question, a crash, a done).
+   *  Present only while it is the reason the thread is out of the queue; isSnoozed parks the row in
+   *  Snoozed on it. */
+  subAgentsSnoozed: z.boolean().optional(),
+  /** Direct sub-agents that returned inside the wait still open — see ReturnedSubAgentView. */
+  returnedSubAgents: z.array(ReturnedSubAgentView).optional(),
   // Which Claude transport serves this thread. "broker" — a session-broker-owned Agent SDK session with
   // a typed control channel — is the only one there is; ABSENT means a row dispatched before the broker
   // became the sole transport, which frizz can no longer reach that way. Only the broker can be asked to
@@ -3177,7 +3207,14 @@ export function isSnoozed(t: ThreadView, nowMs = Date.now()): boolean {
   // a child's return re-invokes the parent within seconds, so that row keeps spinning in Active
   // (maintainer 2026-07-10, "when an agent is merely awaiting its own sub-agents, we should NOT dim it").
   const eventSnooze = t.bgSnoozed === true && t.runtime === "turn-idle"
-  if (hasLiveSubAgents(t) || (hasLiveOps(t) && !eventSnooze)) return false
+  // "SNOOZE UNTIL ALL SUB-AGENTS RETURN" IS THE ONE PARK A LIVE SUB-AGENT DOES NOT OUTRANK, because the
+  // live sub-agents are exactly what it parks on. The human looked at the card, saw children still out,
+  // and chose to stop seeing the thread until they are all back; a row that spun in Active through each
+  // intermediate return would undo that choice on the one surface still showing the thread. While the
+  // parent is RUNNING a turn (a child's return woke it) it spins in Active like any snoozed row, and it
+  // comes back here at its next rest. The server drops the flag the moment the snooze lets go.
+  const subAgentsSnooze = t.subAgentsSnoozed === true && t.runtime === "turn-idle"
+  if (!subAgentsSnooze && (hasLiveSubAgents(t) || (hasLiveOps(t) && !eventSnooze))) return false
   // A user-owned snooze deliberately wins over a concrete ask, permission prompt, or crash. Those
   // states still exist in the transcript/runtime and re-enter Queue at the exact wake deadline; the
   // snooze merely parks their presentation until then. Mid-turn work keeps spinning in the Active band,
@@ -3204,7 +3241,7 @@ export function isSnoozed(t: ThreadView, nowMs = Date.now()): boolean {
   // 2026-08-31. It is now the hard NON-snooze gate above, and the queue's problem: see deriveNeedsYou.)
   // The event-snooze needs no fence behind it: a shell-only rest cards without one and its snooze is the
   // same click. It expires by itself at the thread's next rest, which is the wake the human asked for.
-  if (eventSnooze) return true
+  if (eventSnooze || subAgentsSnooze) return true
   // THE SERVER ALREADY DECIDED THIS, and the client must not re-derive it. A park is honoured only when
   // every item the fence names is still live — checked against telemetry and the registries, which the
   // browser cannot see (board.hasDeclaredBackgroundPark). What reaches here is that verdict: the server
