@@ -26,12 +26,20 @@
 // own project's client, and a click opens its card or its drawer in place (RowScope). The row itself is
 // the rail's (Sidebar.tsx RailRow) — the same anatomy, hover strip and marks the project view drew,
 // measured once, not a second copy of them.
-import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react"
-import { useQueryClient } from "@tanstack/react-query"
+//
+// AND THE PROJECTS DRAG. A project's row is its grip: press, travel a few pixels, and the whole group —
+// row and threads — lifts and follows the pointer while the groups it passes slide aside; drop it and the
+// machine-wide order the rail shows is rewritten (`projectsReorder`), so the rail and the list move as
+// one. A drag stays inside its run — the busy projects, or the quiet ones under them — because busy-ness,
+// not the order, decides which run a project is in: a busy project dropped among the quiet ones would
+// only jump back. Alt+Arrow on a focused row moves it one place, for anyone not using a mouse.
+import { useCallback, useEffect, useMemo, useRef, useState, type KeyboardEvent as KeyboardEvent_, type PointerEvent as PointerEvent_, type ReactNode } from "react"
+import { useMutation, useQueryClient } from "@tanstack/react-query"
 import { ChevronRight, Ellipsis, ListFilter, Plus } from "lucide-react"
 import { useLocation } from "react-router"
 import { useSnapshot } from "valtio"
-import type { BoardSnapshot, ThreadView } from "@frizz/shared"
+import type { BoardSnapshot, ProjectCard, ThreadView } from "@frizz/shared"
+import { rpc } from "../api/rpc.ts"
 import { ThreadProjectScope } from "../api/threadApi.tsx"
 import { externalThreads, isPinned, queued, sectionThreads } from "../groups.ts"
 import { useBoard } from "../hooks.ts"
@@ -41,6 +49,7 @@ import { setProjectCollapsed, setProjectDrilled, setQueueFilter, useCollapsedPro
 import { useArchivingAt } from "../lib/optimisticArchive.ts"
 import { listOverlay, loudBands, type LoudBands } from "../lib/listBands.ts"
 import { prefetchProjectBoard, projectBoardKey, useProjectBoard } from "../lib/projectBoards.ts"
+import { edgeScrollVelocity, listDropIndex, listPitch, placeAmong, shiftFor, type ListBox } from "../lib/railReorder.ts"
 import { useSteeredAt } from "../lib/steering.ts"
 import { drawerThreadSlug, store } from "../store.ts"
 import { useOpenThreadInPlace } from "./AllQueuesCard.tsx"
@@ -92,17 +101,20 @@ export function ProjectList({
   const archivingAt = useArchivingAt()
   const focus = projectSlug(useLocation().pathname)
   const live = useBoard()
-  const groups = projects.map((project) => {
+  const reorder = useListReorder(projects)
+  const groups = reorder.ordered.map((project) => {
     const onPage = project.slug === focus && live?.projectSlug === project.slug
     return { project, bands: loudBands(project, hidden, listOverlay(project.id, onPage, steeredAt, archivingAt)) }
   })
   // A folded project keeps its place: it is still busy, only quieter to look at.
   const busy = groups.filter((group) => group.bands.rows > 0)
   const quiet = groups.filter((group) => group.bands.rows === 0)
+  const grip = reorder.grips([busy.map((entry) => entry.project), quiet.map((entry) => entry.project)])
   const group = (entry: (typeof groups)[number], spaced: boolean) => (
     <ProjectGroup
       key={entry.project.id}
       project={entry.project}
+      grip={grip(entry.project.id)}
       loud={entry.bands}
       collapsed={collapsed.has(entry.project.id)}
       drilled={drilled.has(entry.project.id)}
@@ -128,6 +140,203 @@ export function ProjectList({
   )
 }
 
+
+/** What a group needs to be dragged: its element, its displacement, and its row's handlers. */
+interface Grip {
+  ref: (element: HTMLElement | null) => void
+  /** Px to translate the group by: the pointer's travel when held, a slide aside when passed over. */
+  offset: number
+  held: boolean
+  /** Whether ANY group is held — the others animate only then, so a re-sort after a drop does not glide. */
+  dragging: boolean
+  onPointerDown: (event: PointerEvent_<HTMLButtonElement>) => void
+  onKeyDown: (event: KeyboardEvent_<HTMLButtonElement>) => void
+}
+
+/** A drag in flight, within one run. `toIndex` is derived from `deltaY` every move (lib/railReorder.ts). */
+interface ListDrag {
+  run: readonly string[]
+  fromIndex: number
+  toIndex: number
+  deltaY: number
+  pitch: number
+}
+
+/** The rail's threshold (ProjectRail.tsx): the row is a fold first, so a drag starts only past a press. */
+const DRAG_THRESHOLD_PX = 4
+
+/** The click a drag ends with is swallowed, and nothing later — the rail's module stamp, for the same reason. */
+let lastDragEndedAt = 0
+function justDragged(): boolean {
+  return Date.now() - lastDragEndedAt < 250
+}
+
+/** A project that can hold a place in the order: a registered one. Home has no registry entry to hold one. */
+function orderable(project: QueuesProject): boolean {
+  return project.card !== undefined && !project.card.home
+}
+
+/**
+ * The list's drag and keyboard reorder, writing the order the rail reads.
+ *
+ * TWO COPIES OF THE NEW ORDER, for two readers. The list holds its own (`pending`) from the drop until
+ * the projects it is handed agree with it: it is set in the same React batch that lets go of the drag,
+ * so the group lands where it was dropped with no frame back in its old slot. And the `projectsList`
+ * cache is rewritten at once, so the rail moves with it before the server answers; the server's answer
+ * replaces that, and a failure puts back what was there.
+ */
+function useListReorder(projects: readonly QueuesProject[]) {
+  const queryClient = useQueryClient()
+  const [drag, setDrag] = useState<ListDrag | null>(null)
+  const [pending, setPending] = useState<string[] | null>(null)
+  const elements = useRef(new Map<string, HTMLElement>())
+  const refs = useRef(new Map<string, (element: HTMLElement | null) => void>())
+  const reorder = useMutation({
+    mutationFn: ({ ids }: { ids: string[]; before: ProjectCard[] | undefined }) => rpc.projectsReorder({ ids }),
+    onSuccess: (cards) => queryClient.setQueryData(["projectsList"], cards),
+    onSettled: () => setPending(null),
+    onError: (_error, { before }) => {
+      if (before) queryClient.setQueryData(["projectsList"], before)
+      void queryClient.invalidateQueries({ queryKey: ["projectsList"] })
+    },
+  })
+  const ordered = useMemo(() => (pending ? byOrder(projects, pending, (project) => project.id) : projects), [projects, pending])
+  const order = ordered.filter(orderable).map((project) => project.id)
+  const handed = projects.filter(orderable).map((project) => project.id).join()
+  // Let go of the list's copy once the projects it is handed say the same thing — which is at once, since
+  // the cache was rewritten with it. `onSettled` lets go regardless, for a list that moved on meanwhile.
+  useEffect(() => {
+    if (pending && handed === pending.join()) setPending(null)
+  }, [handed, pending])
+
+  const commit = (run: readonly string[], fromIndex: number, toIndex: number) => {
+    const next = placeAmong(order, run, fromIndex, toIndex)
+    if (next.join() === order.join()) return
+    setPending(next)
+    void queryClient.cancelQueries({ queryKey: ["projectsList"] })
+    const before = queryClient.getQueryData<ProjectCard[]>(["projectsList"])
+    if (before) queryClient.setQueryData(["projectsList"], byOrder(before, next, (card) => card.id))
+    reorder.mutate({ ids: next, before })
+  }
+
+  const ref = (id: string) => {
+    let bound = refs.current.get(id)
+    if (!bound) {
+      bound = (element) => {
+        if (element) elements.current.set(id, element)
+        else elements.current.delete(id)
+      }
+      refs.current.set(id, bound)
+    }
+    return bound
+  }
+
+  /** The grip for each project, given the runs the list drew — busy, then quiet — in its order. */
+  const grips = (groups: readonly (readonly QueuesProject[])[]) => {
+    const runs = groups.map((group) => group.filter(orderable).map((project) => project.id))
+    const runOf = (id: string) => runs.find((run) => run.includes(id))
+
+    const onPointerDown = (id: string) => (event: PointerEvent_<HTMLButtonElement>) => {
+      // Left button only, never modified: those clicks are someone else's.
+      if (event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return
+      const run = runOf(id)
+      if (!run || run.length < 2) return
+      const fromIndex = run.indexOf(id)
+      const button = event.currentTarget
+      // The list's own scroll box when it has one; stacked under the queue, the page scrolls instead.
+      const scroller = button.closest<HTMLElement>("[data-xq-rail]")
+      const scrollTop = () => scroller?.scrollTop ?? window.scrollY
+      const startY = event.clientY
+      const startScroll = scrollTop()
+      let boxes: ListBox[] = []
+      let started = false
+      let latest: ListDrag | null = null
+      let frame = 0
+
+      const apply = (clientY: number) => {
+        // Auto-scroll near the scroll box's edges, folding the scroll into the delta — a list longer than
+        // its column is otherwise reorderable only within one screen of itself.
+        if (scroller) {
+          const velocity = edgeScrollVelocity(clientY, scroller.getBoundingClientRect())
+          if (velocity) scroller.scrollTop += velocity
+        }
+        const deltaY = clientY - startY + scrollTop() - startScroll
+        latest = { run, fromIndex, toIndex: listDropIndex(boxes, fromIndex, deltaY), deltaY, pitch: listPitch(boxes, fromIndex) }
+        setDrag(latest)
+      }
+
+      const onMove = (moveEvent: PointerEvent) => {
+        if (!started) {
+          if (Math.abs(moveEvent.clientY - startY) < DRAG_THRESHOLD_PX) return
+          started = true
+          button.setPointerCapture(moveEvent.pointerId)
+          // Measured ONCE, as laid out before anything moved: the transforms that follow would skew any
+          // later reading, and this snapshot is what every hit-test is against.
+          boxes = run.map((runId) => {
+            const box = elements.current.get(runId)?.getBoundingClientRect()
+            return { top: box?.top ?? 0, height: box?.height ?? 0 }
+          })
+        }
+        moveEvent.preventDefault()
+        const clientY = moveEvent.clientY
+        // One update per frame, and the loop keeps running while the pointer is HELD STILL in the edge
+        // zone, which a move-driven update alone never would.
+        cancelAnimationFrame(frame)
+        const tick = () => {
+          apply(clientY)
+          if (scroller && edgeScrollVelocity(clientY, scroller.getBoundingClientRect())) frame = requestAnimationFrame(tick)
+        }
+        frame = requestAnimationFrame(tick)
+      }
+
+      const onUp = () => {
+        cancelAnimationFrame(frame)
+        window.removeEventListener("pointermove", onMove)
+        window.removeEventListener("pointerup", onUp)
+        window.removeEventListener("pointercancel", onUp)
+        setDrag(null)
+        if (!started || !latest) return
+        lastDragEndedAt = Date.now()
+        commit(run, latest.fromIndex, latest.toIndex)
+      }
+
+      window.addEventListener("pointermove", onMove, { passive: false })
+      window.addEventListener("pointerup", onUp)
+      window.addEventListener("pointercancel", onUp)
+    }
+
+    // Alt+Arrow, not bare arrows: a bare arrow on a focused button is how the page scrolls. The row's
+    // button is the same element after the move (keyed by project), so focus rides along with it.
+    const onKeyDown = (id: string) => (event: KeyboardEvent_<HTMLButtonElement>) => {
+      if (!event.altKey || (event.key !== "ArrowUp" && event.key !== "ArrowDown")) return
+      const run = runOf(id)
+      if (!run) return
+      const fromIndex = run.indexOf(id)
+      const toIndex = fromIndex + (event.key === "ArrowUp" ? -1 : 1)
+      if (toIndex < 0 || toIndex >= run.length) return
+      event.preventDefault()
+      commit(run, fromIndex, toIndex)
+    }
+
+    return (id: string): Grip | undefined => {
+      if (!runOf(id)) return undefined
+      const index = drag ? drag.run.indexOf(id) : -1
+      const held = drag !== null && index === drag.fromIndex
+      // The held group follows the pointer; the ones it has passed slide one pitch towards its old slot.
+      const offset = !drag || index < 0 ? 0 : held ? drag.deltaY : shiftFor(index, drag.fromIndex, drag.toIndex, drag.pitch)
+      return { ref: ref(id), offset, held, dragging: drag !== null, onPointerDown: onPointerDown(id), onKeyDown: onKeyDown(id) }
+    }
+  }
+
+  return { ordered, grips }
+}
+
+/** `list` in `ids`' order; anything `ids` does not name keeps its relative place, after them. */
+function byOrder<T>(list: readonly T[], ids: readonly string[], idOf: (item: T) => string): T[] {
+  const rank = new Map(ids.map((id, index) => [id, index]))
+  const at = (item: T) => rank.get(idOf(item)) ?? ids.length
+  return [...list].sort((a, b) => at(a) - at(b))
+}
 
 /**
  * READ EVERY PROJECT'S BOARD AHEAD, once the page is idle, so opening one never waits on a round trip
@@ -165,6 +374,7 @@ function useReadAhead(projects: QueuesProject[]) {
  */
 function ProjectGroup({
   project,
+  grip,
   loud,
   collapsed,
   drilled,
@@ -174,6 +384,7 @@ function ProjectGroup({
   onQueuedRow,
 }: {
   project: QueuesProject
+  grip: Grip | undefined
   loud: LoudBands
   collapsed: boolean
   drilled: boolean
@@ -208,11 +419,20 @@ function ProjectGroup({
   )
   return (
     <section
+      ref={grip?.ref}
       aria-label={project.name}
       data-xq-rail-project={project.id}
       data-xq-project-collapsed={collapsed || undefined}
       data-xq-project-drilled={showsRest || undefined}
-      className={spaced ? "mt-3" : ""}
+      data-xq-project-held={grip?.held || undefined}
+      // Lifted while held: the page's own colour under it, so the rows it slides over do not show through,
+      // and a shadow that says it is off the list. `relative` so the lift stacks above its neighbours.
+      className={`${spaced ? "mt-3" : ""} ${grip?.held ? "relative z-10 cursor-grabbing rounded-md bg-bg shadow-lg shadow-shadow-ink/50" : ""}`}
+      style={{
+        transform: grip?.offset ? `translateY(${grip.offset}px)` : undefined,
+        // The held group tracks the pointer exactly; the ones it passes are what animate.
+        transition: grip?.dragging && !grip.held ? "transform 160ms ease" : undefined,
+      }}
       // The rows are in the cache before the click lands (lib/projectBoards.ts).
       onPointerEnter={() => {
         if (!onPage && project.open && !project.stale) prefetchProjectBoard(queryClient, project.id)
@@ -220,6 +440,7 @@ function ProjectGroup({
     >
       <ProjectRow
         project={project}
+        grip={grip}
         busy={loud.rows > 0}
         count={loud.ready.length}
         quiet={quiet}
@@ -305,6 +526,7 @@ function useRowScope(project: QueuesProject, page: boolean, onQueuedRow: (key: s
  */
 function ProjectRow({
   project,
+  grip,
   busy,
   count,
   quiet,
@@ -313,6 +535,7 @@ function ProjectRow({
   home,
 }: {
   project: QueuesProject
+  grip: Grip | undefined
   busy: boolean
   count: number
   quiet: QuietBands
@@ -345,7 +568,14 @@ function ProjectRow({
       <button
         type="button"
         data-xq-project-fold
-        onClick={fold}
+        onClick={() => {
+          // A drag ENDS over the row it lifted, so the browser fires a click on release; that one is not
+          // a fold.
+          if (justDragged()) return
+          fold()
+        }}
+        onPointerDown={grip?.onPointerDown}
+        onKeyDown={grip?.onKeyDown}
         aria-expanded={unfolded}
         aria-label={foldTitle}
         title={foldTitle}
