@@ -9,7 +9,8 @@ const source = readFileSync(new URL("./useThreadComposerControls.tsx", import.me
 // fade: on the render where the row is gone, `thread` is undefined and the function returns early.
 // A hook below that return is then skipped on exactly that render, and React tears down the tree with
 // "change in the order of Hooks" — which is how a steered queue card took every other card with it in
-// one frame (2026-09-19). The browser pin is queueSteerDissolve.e2e.test.ts; this keeps the shape.
+// one frame (2026-09-19). The browser pin is components/queueCardStates.e2e.test.ts ("a steered card
+// dissolves without taking its neighbour down"); this keeps the shape.
 test("no hook is called after the early return for a thread without a runtime profile", () => {
   const body = source.slice(source.indexOf("export function useThreadComposerControls"))
   const earlyReturn = body.indexOf("if (!thread || thread.foreign || thread.kind !== \"session\") return")

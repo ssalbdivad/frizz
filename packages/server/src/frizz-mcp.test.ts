@@ -77,7 +77,7 @@ test("the frizz MCP server identifies as `frizz` and exposes its worker tools", 
     assert.deepEqual(list.result.tools[1].inputSchema.required, ["action"])
     assert.deepEqual(
       Object.keys(list.result.tools[1].inputSchema.properties).sort(),
-      ["action", "heartbeat_seconds", "post_compaction", "prompt", "stop_hook"],
+      ["action", "for", "heartbeat_seconds", "max_runs", "post_compaction", "prompt", "stop_hook"],
     )
     // The READ action is part of the advertised surface, not just the handler — a worker only reaches for
     // what `tools/list` shows it, and writing blind is what having no read at all produced.
@@ -394,7 +394,9 @@ test("`goal` arms and disarms the CALLING thread, identified from its env", asyn
     // a running turn and cannot fire on a thread that has stopped needing it.
     assert.deepEqual(seen.at(-1), {
       url: "/_frizz/rpc/setOwnThreadRecurringPrompt",
-      body: { slug: "owning-thread", prompt: "keep the migration moving", stopHook: true, heartbeat: false, postCompaction: false },
+      // The limits go EXPLICITLY null: a `start` replaces the whole goal, so one naming no limit is an
+      // unbounded goal, not "keep the cap that was there".
+      body: { slug: "owning-thread", prompt: "keep the migration moving", stopHook: true, heartbeat: false, postCompaction: false, maxRuns: null, forSeconds: null },
     })
     // The reply must teach how it ENDS, or a worker only knows how to start one — and it must warn
     // about the sign-off rather than merely offering it, since that exit files the thread away.
@@ -411,7 +413,7 @@ test("`goal` arms and disarms the CALLING thread, identified from its env", asyn
     assert.equal(scheduled.result.isError, undefined)
     assert.deepEqual(seen.at(-1), {
       url: "/_frizz/rpc/setOwnThreadRecurringPrompt",
-      body: { slug: "owning-thread", prompt: "check the deploy", stopHook: false, heartbeat: true, postCompaction: false, intervalSeconds: 600 },
+      body: { slug: "owning-thread", prompt: "check the deploy", stopHook: false, heartbeat: true, postCompaction: false, intervalSeconds: 600, maxRuns: null, forSeconds: null },
     }, "giving a cadence and nothing else means the schedule trigger alone")
     assert.match(scheduled.result.content[0].text, /every 10m/)
 
@@ -422,8 +424,34 @@ test("`goal` arms and disarms the CALLING thread, identified from its env", asyn
     await rpc.next(7)
     assert.deepEqual(seen.at(-1), {
       url: "/_frizz/rpc/setOwnThreadRecurringPrompt",
-      body: { slug: "owning-thread", prompt: "keep going", stopHook: true, heartbeat: true, postCompaction: false, intervalSeconds: 900 },
+      body: { slug: "owning-thread", prompt: "keep going", stopHook: true, heartbeat: true, postCompaction: false, intervalSeconds: 900, maxRuns: null, forSeconds: null },
     }, "both triggers at once is the ordinary keep-this-moving case")
+
+    // A BOUNDED LOOP: `max_runs` and `for`, the latter in the `for:` grammar, both carried through.
+    rpc.send({
+      jsonrpc: "2.0", id: 9, method: "tools/call",
+      params: { name: "goal", arguments: { action: "start", prompt: "one more pass", max_runs: 20, for: "2h" } },
+    })
+    const bounded = await rpc.next(9)
+    assert.equal(bounded.result.isError, undefined)
+    assert.deepEqual(seen.at(-1), {
+      url: "/_frizz/rpc/setOwnThreadRecurringPrompt",
+      body: { slug: "owning-thread", prompt: "one more pass", stopHook: true, heartbeat: false, postCompaction: false, maxRuns: 20, forSeconds: 7200 },
+    })
+    assert.match(bounded.result.content[0].text, /bounded loop: at most 20 times, and for 2h/)
+    // A span outside the grammar, or outside the Goal's bounds, never reaches the server.
+    const beforeBad = seen.length
+    for (const [id, args, pattern] of [
+      [10, { for: "2 hours" }, /`for` must be a duration/],
+      [11, { for: "30s" }, /between `1m` and `30d`/],
+      [12, { max_runs: 0 }, /`max_runs` must be a whole number/],
+    ] as const) {
+      rpc.send({ jsonrpc: "2.0", id, method: "tools/call", params: { name: "goal", arguments: { action: "start", prompt: "x", ...args } } })
+      const bad = await rpc.next(id)
+      assert.equal(bad.result.isError, true)
+      assert.match(bad.result.content[0].text, pattern)
+    }
+    assert.equal(seen.length, beforeBad)
 
     // NO QUESTION HOLD TO OPT OUT OF. A `pause_on_questions` argument held every trigger while the thread
     // was waiting on the human; it and the footer switch that inverted it were deleted 2026-08-16, so a

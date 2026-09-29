@@ -110,6 +110,15 @@ const SPAWN_THREAD = {
   },
 }
 
+// The Goal's LIMITS, mirrored from @frizz/shared (GOAL_MAX_RUNS, GOAL_MIN/MAX_FOR_SECONDS, and the
+// `for:` grammar's regex) for the same reason the timer bounds are: this file cannot import them, and a
+// wrong value should be refused HERE, with an explanation, rather than come back as an HTTP 400.
+const GOAL_MAX_RUNS = 10_000
+const GOAL_MIN_FOR_SECONDS = 60
+const GOAL_MAX_FOR_SECONDS = 30 * 24 * 60 * 60
+const GOAL_FOR_RE = /^(\d{1,5})(s|m|h|d)$/
+const GOAL_FOR_UNIT_SECONDS = { s: 1, m: 60, h: 3_600, d: 86_400 }
+
 const GOAL = {
   name: "goal",
   description:
@@ -126,6 +135,10 @@ const GOAL = {
     "you keep notes in your scratch directory, a prompt that LINKS them comes back at the exact moment " +
     "you have lost everything else. Also mid-turn — a compaction happens while you are working.\n\n" +
     "Set at least one; any combination is fine.\n\n" +
+    "MAKE IT A BOUNDED LOOP with `max_runs` and/or `for`. Either limit, once reached, DISARMS the goal " +
+    "by itself — every trigger off, the text kept — and you get ONE message saying which limit ended it. " +
+    "Without either it runs until you stop it, sign off, or the human switches it off. Every delivery " +
+    "that actually reaches you counts as a run, whichever trigger sent it; `get` shows the count.\n\n" +
     "USE THIS RATHER THAN `CronCreate` or `ScheduleWakeup`. Those are Claude Code's own in-session " +
     "schedulers and they CANNOT fire in the runtime frizz runs you in: their gate stays shut for as long " +
     "as ANY background task of yours is outstanding, so the moment you are parked behind a background " +
@@ -184,6 +197,19 @@ const GOAL = {
         description:
           "Also send it every time your context is compacted, into the emptied window — useful when the " +
           "prompt links notes you keep in your scratch directory.",
+      },
+      max_runs: {
+        type: "integer",
+        description:
+          `For \`start\`: stop after this many deliveries (1 to ${GOAL_MAX_RUNS}). The goal disarms itself ` +
+          "once the last one has reached you, and you are told once. Omit for no cap.",
+      },
+      for: {
+        type: "string",
+        description:
+          "For `start`: stop this long after arming — a duration in the same grammar as an ```awaiting " +
+          "fence's `for:`, e.g. `30m`, `2h`, `3d` (at least `1m`, at most `30d`). The goal disarms itself " +
+          "when it runs out, and you are told once. Omit for no time bound.",
       },
     },
     required: ["action"],
@@ -1304,7 +1330,8 @@ function cadenceLabel(seconds) {
  * instruction is exactly as blind as not reading it).
  * @param {{ prompt: string, stopHook: boolean, heartbeat: boolean, postCompaction: boolean,
  *           intervalSeconds?: number, armedAt: string, lastRestFiredAt?: string,
- *           lastScheduleFiredAt?: string, lastCompactFiredAt?: string }} rp */
+ *           lastScheduleFiredAt?: string, lastCompactFiredAt?: string, runs?: number, maxRuns?: number,
+ *           forSeconds?: number, endsAt?: string, stopped?: { reason: string, at: string } }} rp */
 function goalReport(rp) {
   const fired = (/** @type {string|undefined} */ at) => (at ? `last fired ${at}` : "never fired yet")
   const triggers = [
@@ -1318,10 +1345,45 @@ function goalReport(rp) {
   ].filter(Boolean)
   // EVERY trigger off is a real, reachable state — the human can switch them off in the footer without
   // clearing the words — and it is the one a worker would otherwise misread as "armed and running".
-  const head = triggers.length
+  const head = rp.stopped
+    ? `STOPPED at its ${rp.stopped.reason === "runs" ? "run" : "time"} limit (${rp.stopped.at}). Every trigger is off; ` +
+      "the text is kept, and nothing will fire until the goal is re-armed — which starts a fresh count."
+    : triggers.length
     ? `Armed since ${rp.armedAt}, on:\n${triggers.join("\n")}`
     : `Text is parked (armed ${rp.armedAt}) but EVERY TRIGGER IS OFF — nothing will fire until one is switched back on.`
-  return `${head}\n\nThe text, verbatim:\n\n${rp.prompt}`
+  return `${head}\n${goalRunsLine(rp)}\n\nThe text, verbatim:\n\n${rp.prompt}`
+}
+
+/** The run counter and the limits, one line — the same reading the thread footer shows.
+ * @param {{ runs?: number, maxRuns?: number, forSeconds?: number, endsAt?: string }} rp */
+function goalRunsLine(rp) {
+  const runs = rp.runs ?? 0
+  const count = rp.maxRuns ? `Run ${runs} of ${rp.maxRuns}` : `Run ${runs} (no run cap)`
+  if (!rp.forSeconds) return `${count}; no time bound.`
+  const leftMs = rp.endsAt ? Date.parse(rp.endsAt) - Date.now() : NaN
+  const left = Number.isFinite(leftMs) && leftMs > 0 ? `, ${durationLabel(Math.round(leftMs / 1000))} left` : ""
+  return `${count}; time bound ${goalForLabel(rp.forSeconds)}, ends ${rp.endsAt ?? "?"}${left}.`
+}
+
+/** A span in the house grammar, two units at most: `45s`, `12m`, `2h 5m`, `3d 4h`.
+ * @param {number} seconds */
+function durationLabel(seconds) {
+  if (seconds < 60) return `${seconds}s`
+  const minutes = Math.floor(seconds / 60)
+  if (minutes < 60) return `${minutes}m`
+  const hours = Math.floor(minutes / 60)
+  if (hours < 24) return minutes % 60 ? `${hours}h ${minutes % 60}m` : `${hours}h`
+  const days = Math.floor(hours / 24)
+  return hours % 24 ? `${days}d ${hours % 24}h` : `${days}d`
+}
+
+/** A time bound as the `for:` grammar writes it — the largest unit that divides it exactly.
+ * @param {number} seconds */
+function goalForLabel(seconds) {
+  if (seconds % 86_400 === 0) return `${seconds / 86_400}d`
+  if (seconds % 3_600 === 0) return `${seconds / 3_600}h`
+  if (seconds % 60 === 0) return `${seconds / 60}m`
+  return `${seconds}s`
 }
 
 /** The `goal` handler: arm, disarm, or READ BACK this thread's re-prompt.
@@ -1384,6 +1446,25 @@ async function goal(args) {
     throw new Error("at least one is required: set `stop_hook: true`, give `heartbeat_seconds`, set `post_compaction: true`, or any combination")
   }
 
+  // THE LIMITS. Sent EXPLICITLY, null included: a `start` replaces the whole goal, so one that names no
+  // limit means an unbounded goal, not "keep whatever cap was there".
+  let maxRuns = null
+  if (args.max_runs !== undefined && args.max_runs !== null) {
+    maxRuns = typeof args.max_runs === "number" ? Math.round(args.max_runs) : NaN
+    if (!Number.isFinite(maxRuns) || maxRuns < 1 || maxRuns > GOAL_MAX_RUNS) {
+      throw new Error(`\`max_runs\` must be a whole number from 1 to ${GOAL_MAX_RUNS}`)
+    }
+  }
+  let forSeconds = null
+  if (args.for !== undefined && args.for !== null && args.for !== "") {
+    const m = typeof args.for === "string" ? GOAL_FOR_RE.exec(args.for.trim()) : null
+    forSeconds = m ? Number(m[1]) * GOAL_FOR_UNIT_SECONDS[/** @type {"s"|"m"|"h"|"d"} */ (m[2])] : NaN
+    if (!m) throw new Error("`for` must be a duration like `30m`, `2h` or `3d` — a number glued to one of s, m, h, d")
+    if (forSeconds < GOAL_MIN_FOR_SECONDS || forSeconds > GOAL_MAX_FOR_SECONDS) {
+      throw new Error("`for` must be between `1m` and `30d`")
+    }
+  }
+
   const written = await callRpc("setOwnThreadRecurringPrompt", {
     slug,
     prompt,
@@ -1391,6 +1472,8 @@ async function goal(args) {
     heartbeat,
     postCompaction,
     ...(heartbeat ? { intervalSeconds: interval } : {}),
+    maxRuns,
+    forSeconds,
   })
   // `replaced` is absent against a server that predates it, which is indistinguishable from "there was
   // nothing" — so the clause only ever appears when the row genuinely carried something.
@@ -1418,8 +1501,15 @@ async function goal(args) {
   // the at-rest one fires over your own unanswered registered question — the delivery says so, and expects
   // you to decide the question yourself rather than re-ask it. A ```done fence, and an ```awaiting on a
   // wait frizz itself will deliver, still stop the at-rest trigger.
+  const limits = [
+    maxRuns ? `at most ${maxRuns} time${maxRuns === 1 ? "" : "s"}` : null,
+    forSeconds ? `for ${goalForLabel(forSeconds)}` : null,
+  ].filter(Boolean)
+  const bound = limits.length
+    ? ` It is a bounded loop: ${limits.join(", and ")} — whichever comes first disarms it, and you will be told once.`
+    : ""
   return (
-    `Goal armed — frizz will send you this ${when}.${superseded}\n\n` +
+    `Goal armed — frizz will send you this ${when}.${bound}${superseded}\n\n` +
     "Call this tool again with `action: \"stop\"` once the work it drives is finished — one left armed on " +
     "a finished thread wakes it forever. The human can also edit or switch it off in the thread footer. " +
     "Signing off with a ```done fence stops it too, but only when there is genuinely nothing left: it " +

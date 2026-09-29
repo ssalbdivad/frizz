@@ -154,6 +154,30 @@ export interface SessionRow {
   recurring_rest_fired_at?: string | null
   recurring_schedule_fired_at?: string | null
   recurring_compact_fired_at?: string | null
+  // THE GOAL'S LIMITS (2026-09-29) — what turns a Goal into a bounded LOOP rather than a new thread
+  // type (maintainer: "Loops are a Goal setting"). Both are optional and either may be set alone; with
+  // neither, the Goal runs exactly as it did before they existed.
+  //
+  //   max_runs  — disarm after this many DELIVERIES of this generation;
+  //   for_ms    — disarm this long after the loop started; `until_at` is the resolved instant. The start
+  //               is the arming (a new generation, or a switch back on from off), kept across edits.
+  //
+  // `runs` counts REAL deliveries only — a Goal prompt that crossed to a live runtime, or that the
+  // transcript or an acknowledgement confirmed (scheduler `countGoalDelivery`); one superseded or dropped
+  // before it was sent never counts. `run_anchor` holds the fence ids it last counted, so the several
+  // places one delivery is observed count it once. A new generation zeroes both.
+  //
+  // `stop_reason` ('runs' | 'time') and `stopped_at` say the Goal disarmed ITSELF at a limit, which is
+  // what the footer reads to say why it went quiet. The text is kept, as with a switch-off; switching a
+  // trigger back on over a stopped row mints a fresh generation, so a re-armed loop starts from run 0
+  // rather than instantly re-hitting the limit it just stopped at.
+  recurring_max_runs?: number | null
+  recurring_for_ms?: number | null
+  recurring_until_at?: string | null
+  recurring_runs?: number
+  recurring_run_anchor?: string | null
+  recurring_stop_reason?: string | null
+  recurring_stopped_at?: string | null
   meta: string | null // JSON blob for future annotations (unparsed here)
   seen_at: string | null // ISO8601 — interaction clearance: recorded when the human opens the thread
   // Which agent backend serves this session (Codex-support epic). Optional in the TS shape (older rows
@@ -287,7 +311,15 @@ export interface RecurringWrite {
   postCompaction: boolean // scheduler SOURCE 7 — on every context compaction
   intervalMs: number | null
   armedAt: string
+  /** The Goal's limits. UNDEFINED KEEPS what the row holds — a caller that predates limits (an older tab,
+   *  a detached worker's older MCP server, the legacy single-trigger aliases) must not silently drop a
+   *  cap somebody else set. `null` clears it. */
+  maxRuns?: number | null
+  forMs?: number | null
 }
+
+/** Why a Goal disarmed itself. */
+export type RecurringStopReason = "runs" | "time"
 
 export type RuntimeControlKind = "permission" | "profile" | "resume" | "follow-up" | "ai-rename"
 
@@ -896,6 +928,15 @@ export interface Storage {
   // Stamp a delivered POST-COMPACTION prompt. Same guard; cosmetic like the rest trigger's, since a
   // compaction is an event rather than a deadline and every one of them fires.
   stampRecurringCompactFired(slug: string, armedAt: string, firedAt: string): boolean
+  // COUNT one delivered Goal prompt toward its run limit, guarded on the generation like the stamps
+  // above and idempotent per delivery (`fenceId` is remembered: counting the same delivery again is a
+  // no-op, as is counting anything once the Goal has stopped). Returns the row's count after the call,
+  // or undefined when the generation moved.
+  countRecurringRun(slug: string, armedAt: string, fenceId: string): number | undefined
+  // The Goal DISARMING ITSELF at a limit: every trigger off, the text, cadence and limits kept, and the
+  // reason stamped. Guarded on the generation and on the row not already being stopped, so it returns
+  // true exactly once per generation — which is what makes the "your loop stopped" wake a one-off.
+  stopRecurringAtLimit(slug: string, armedAt: string, reason: RecurringStopReason, stoppedAt: string): boolean
   // Clears elapsed PROMPTLESS values atomically and returns the number changed. The board calls this at
   // each refresh and at its exact wake timer so restart/reload cannot leave a stale Snoozed marker behind.
   // A snooze carrying a prompt survives its deadline until the scheduler has delivered its bump.
@@ -1115,6 +1156,14 @@ export const STORAGE_SCHEMA = `
       recurring_rest_fired_at TEXT,
       recurring_schedule_fired_at TEXT,
       recurring_compact_fired_at TEXT,
+      -- The Goal's limits and run counter (2026-09-29); see SessionRow. Also in the ALTER list below.
+      recurring_max_runs INTEGER,
+      recurring_for_ms INTEGER,
+      recurring_until_at TEXT,
+      recurring_runs INTEGER NOT NULL DEFAULT 0,
+      recurring_run_anchor TEXT,
+      recurring_stop_reason TEXT,
+      recurring_stopped_at TEXT,
       -- THE BUILT-IN SIGN-OFF NUDGE (scheduler SOURCE 9): how many times in a row frizz has told this
       -- thread how to sign off without a fence appearing, and the last-nudged delivery id.
       signoff_nudges INTEGER NOT NULL DEFAULT 0,
@@ -1435,6 +1484,10 @@ export function ensureStorageSchema(db: Database): void {
     "pinned_at TEXT", "acp_agent TEXT", "queued_at TEXT", "subagents_snoozed_at TEXT",
     // 2026-09-29: a thread's NAME split from its live STATUS (thread-names.ts).
     "title_worker_renamed INTEGER NOT NULL DEFAULT 0", "status TEXT",
+    // The Goal's limits and run counter (2026-09-29).
+    "recurring_max_runs INTEGER", "recurring_for_ms INTEGER", "recurring_until_at TEXT",
+    "recurring_runs INTEGER NOT NULL DEFAULT 0", "recurring_run_anchor TEXT",
+    "recurring_stop_reason TEXT", "recurring_stopped_at TEXT",
   ]) {
     try {
       db.exec(`ALTER TABLE session ADD COLUMN ${column}`)
@@ -1863,6 +1916,102 @@ export function createStorage(source: string | Database, projectId: string): Sto
   const recurringStmt = scope.prepare(`UPDATE session SET ${RECURRING_SET}
     WHERE project_id = @project_id AND slug = ? AND session_id = ? AND runtime_generation = ?`)
   const recurringBySlugStmt = scope.prepare(`UPDATE session SET ${RECURRING_SET} WHERE project_id = @project_id AND slug = ?`)
+  // ---- THE GOAL'S LIMITS, written beside the SET list above rather than inside it ----------------
+  // The limit columns depend on what the main write DECIDED (did it mint a generation? did it switch
+  // the Goal on from off?), and the SET list decides that in SQL from the original row. Restating those
+  // decisions as more CASE arms would be a third copy of the generation rule; instead the whole write is
+  // one transaction that reads the row before and after and derives the limit columns from the two.
+  //
+  // THE ONE THING THE LIMITS CHANGE ABOUT THE GENERATION: switching a trigger back on over a row that
+  // STOPPED ITSELF at a limit mints a new one. Without it the generation survives (text and interval are
+  // unchanged), its run count survives with it, and a re-armed loop capped at 3 would stop again on the
+  // very next delivery. Clearing `recurring_armed_at` first lets the SET list's own rule do it — a null
+  // generation is never "kept" — and clears the fired stamps with it, so the heartbeat restarts its
+  // clock from the re-arming exactly as it does for new words.
+  const recurringUnstopStmt = scope.prepare(
+    "UPDATE session SET recurring_armed_at = NULL WHERE project_id = @project_id AND slug = ? AND recurring_stop_reason IS NOT NULL",
+  )
+  const recurringLimitsStmt = scope.prepare(`
+    UPDATE session SET recurring_max_runs = @maxRuns, recurring_for_ms = @forMs, recurring_until_at = @untilAt,
+      recurring_runs = @runs, recurring_run_anchor = @runAnchor,
+      recurring_stop_reason = @stopReason, recurring_stopped_at = @stoppedAt
+    WHERE project_id = @project_id AND slug = @slug
+  `)
+  const recurringRunStmt = scope.prepare(`
+    UPDATE session SET recurring_runs = recurring_runs + 1, recurring_run_anchor = ?
+    WHERE project_id = @project_id AND slug = ? AND recurring_armed_at = ? AND recurring_stop_reason IS NULL
+  `)
+  // The run counter's dedupe: the fence ids of the last few deliveries it counted, newline-joined. A
+  // LIST rather than the last id alone, because one delivery is legitimately counted from more than one
+  // place (at send, and again at acknowledgement or confirmation — scheduler `countGoalDelivery`), and
+  // with two triggers each holding a delivery open those calls interleave: send A, send B, confirm A.
+  // A last-id anchor would count A twice there. A handful is plenty — the cap reservation keeps a capped
+  // Goal to one open delivery, and an uncapped one has at most one per trigger.
+  const RUN_ANCHOR_KEEP = 8
+  const countRecurringRunTxn = db.transaction((slug: string, armedAt: string, fenceId: string): number | undefined => {
+    const row = selOne.get(slug)
+    if (!row || row.recurring_armed_at !== armedAt) return undefined
+    const counted = (row.recurring_run_anchor ?? "").split("\n").filter(Boolean)
+    if (counted.includes(fenceId) || row.recurring_stop_reason) return row.recurring_runs ?? 0
+    const anchor = [...counted, fenceId].slice(-RUN_ANCHOR_KEEP).join("\n")
+    recurringRunStmt.run(anchor, slug, armedAt)
+    return (row.recurring_runs ?? 0) + 1
+  })
+  const recurringStopStmt = scope.prepare(`
+    UPDATE session SET recurring_on_rest = 0, recurring_on_schedule = 0, recurring_on_compact = 0,
+      recurring_stop_reason = ?, recurring_stopped_at = ?
+    WHERE project_id = @project_id AND slug = ? AND recurring_armed_at = ? AND recurring_stop_reason IS NULL
+  `)
+  const anyTriggerOn = (row: SessionRow | undefined) =>
+    row !== undefined && (row.recurring_on_rest === 1 || row.recurring_on_schedule === 1 || row.recurring_on_compact === 1)
+  class RecurringWriteRefused extends Error {}
+  const writeRecurring = db.transaction((slug: string, write: RecurringWrite, apply: () => number): boolean => {
+    const before = selOne.get(slug)
+    if (!before) return false
+    const armsSomething = write.prompt !== null && (write.stopHook || write.heartbeat || write.postCompaction)
+    if (armsSomething) recurringUnstopStmt.run(slug)
+    // A refused guarded write must leave the row exactly as it was, including the generation the line
+    // above may have cleared — hence a throw (the transaction rolls back) rather than a plain return.
+    if (apply() !== 1) throw new RecurringWriteRefused()
+    const after = selOne.get(slug)!
+    const cleared = after.recurring_prompt === null || after.recurring_prompt === undefined
+    const newGeneration = after.recurring_armed_at !== before.recurring_armed_at
+    const maxRuns = cleared ? null : write.maxRuns === undefined ? before.recurring_max_runs ?? null : write.maxRuns
+    const forMs = cleared ? null : write.forMs === undefined ? before.recurring_for_ms ?? null : write.forMs
+    // THE BOUND'S START. It runs from when the loop started — a new generation, or a switch back on from
+    // all-off, starts it at THIS write — and a later edit keeps that start: shortening a 2h bound to 90m
+    // half an hour in ends it an hour from now, not 90 minutes from now, and flipping one trigger while
+    // another stays on moves nothing. A bound ADDED to a loop that had none starts when it is added: the
+    // operator is bounding what is left, not retroactively ending a loop that has already run past it.
+    const restarting = newGeneration || (!anyTriggerOn(before) && anyTriggerOn(after))
+    const priorStart = before.recurring_until_at && before.recurring_for_ms
+      ? Date.parse(before.recurring_until_at) - before.recurring_for_ms
+      : Number.NaN
+    const startMs = !restarting && Number.isFinite(priorStart) ? priorStart : Date.parse(write.armedAt)
+    const untilAt = forMs === null ? null : new Date(startMs + forMs).toISOString()
+    // A stop marker says why the Goal went QUIET, so it lives exactly as long as the quiet does: any
+    // trigger back on, new words, or a cleared row retires it.
+    const keepStop = !cleared && !newGeneration && !anyTriggerOn(after)
+    recurringLimitsStmt.run({
+      slug,
+      maxRuns,
+      forMs,
+      untilAt,
+      runs: cleared || newGeneration ? 0 : before.recurring_runs ?? 0,
+      runAnchor: cleared || newGeneration ? null : before.recurring_run_anchor ?? null,
+      stopReason: keepStop ? before.recurring_stop_reason ?? null : null,
+      stoppedAt: keepStop ? before.recurring_stopped_at ?? null : null,
+    })
+    return true
+  })
+  const guardedRecurringWrite = (slug: string, write: RecurringWrite, apply: () => number): boolean => {
+    try {
+      return writeRecurring(slug, write, apply)
+    } catch (error) {
+      if (error instanceof RecurringWriteRefused) return false
+      throw error
+    }
+  }
   const recurringRestFiredStmt = scope.prepare(`
     UPDATE session SET recurring_rest_fired_at = ?
     WHERE project_id = @project_id AND slug = ? AND recurring_armed_at = ?
@@ -2802,9 +2951,9 @@ export function createStorage(source: string | Database, projectId: string): Sto
     setSubAgentsSnoozedAtIfCurrent: (slug, sessionId, generation, at) =>
       subAgentsSnoozedAtIfCurrentStmt.run(at, slug, sessionId, generation).changes === 1,
     setRecurringPromptIfCurrent: (slug, sessionId, generation, write) =>
-      recurringStmt.run(...recurringArgs(write), slug, sessionId, generation).changes === 1,
+      guardedRecurringWrite(slug, write, () => recurringStmt.run(...recurringArgs(write), slug, sessionId, generation).changes),
     setRecurringPromptBySlug: (slug, write) =>
-      recurringBySlugStmt.run(...recurringArgs(write), slug).changes === 1,
+      guardedRecurringWrite(slug, write, () => recurringBySlugStmt.run(...recurringArgs(write), slug).changes),
     countSignoffNudge: (slug, anchor) => void countNudgeStmt.run(anchor, slug, anchor),
     resetSignoffNudges: (slug) => void resetNudgesStmt.run(slug),
     countParkBump: (slug, anchor) => void countParkBumpStmt.run(anchor, slug),
@@ -2912,6 +3061,9 @@ export function createStorage(source: string | Database, projectId: string): Sto
       recurringScheduleFiredStmt.run(firedAt, slug, armedAt).changes === 1,
     stampRecurringCompactFired: (slug, armedAt, firedAt) =>
       recurringCompactFiredStmt.run(firedAt, slug, armedAt).changes === 1,
+    countRecurringRun: (slug, armedAt, fenceId) => countRecurringRunTxn(slug, armedAt, fenceId),
+    stopRecurringAtLimit: (slug, armedAt, reason, stoppedAt) =>
+      recurringStopStmt.run(reason, stoppedAt, slug, armedAt).changes === 1,
     clearExpiredSnoozes: (now) => clearExpiredSnoozesStmt.run(now).changes,
     setTitle: (slug, title) => void titleStmt.run(title, slug),
     setAgentTitle: (slug, title) => agentTitleStmt.run(title, slug).changes === 1,

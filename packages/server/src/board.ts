@@ -1447,6 +1447,8 @@ export function resolveRecurringPrompt(
     | "recurring_prompt" | "recurring_armed_at" | "recurring_on_rest" | "recurring_on_schedule"
     | "recurring_on_compact" | "recurring_interval_ms" | "recurring_rest_fired_at"
     | "recurring_schedule_fired_at" | "recurring_compact_fired_at"
+    | "recurring_runs" | "recurring_max_runs" | "recurring_for_ms" | "recurring_until_at"
+    | "recurring_stop_reason" | "recurring_stopped_at"
   >,
 ): ThreadRecurringPrompt | undefined {
   if (!row.recurring_prompt || !row.recurring_armed_at) return undefined
@@ -1462,6 +1464,16 @@ export function resolveRecurringPrompt(
     lastRestFiredAt: row.recurring_rest_fired_at ?? undefined,
     lastScheduleFiredAt: row.recurring_schedule_fired_at ?? undefined,
     lastCompactFiredAt: row.recurring_compact_fired_at ?? undefined,
+    // The loop's counter and limits — see SessionRow. The stop marker is projected only with its
+    // reason AND instant, and only for a reason this build knows, so a row written by a newer server
+    // cannot put an unparseable value on the wire.
+    runs: row.recurring_runs ?? 0,
+    maxRuns: row.recurring_max_runs ?? undefined,
+    forSeconds: row.recurring_for_ms ? Math.round(row.recurring_for_ms / 1000) : undefined,
+    endsAt: row.recurring_for_ms ? row.recurring_until_at ?? undefined : undefined,
+    stopped: (row.recurring_stop_reason === "runs" || row.recurring_stop_reason === "time") && row.recurring_stopped_at
+      ? { reason: row.recurring_stop_reason, at: row.recurring_stopped_at }
+      : undefined,
   }
 }
 
@@ -1893,6 +1905,7 @@ function sessionThreadView(
     awaitingBackground,
     crashed,
     quietTurnSince: quietSince,
+    quietTurnCall: quietSince !== undefined ? tele?.openCall : undefined,
     pendingInteraction: interactionPresence.pending,
     actionableInteraction: interactionPresence.needsUser,
     // Preserve only a durable, canonical backend identity. In particular, Claude is not inferred

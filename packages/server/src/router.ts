@@ -184,7 +184,7 @@ import { liveThreadsForBackend, runProviderLogout } from "./backend/account-acti
 import { threadProfileOptions, validateThreadProfile } from "./backend/thread-profiles.ts"
 import { adoptionRuntimeBinding, type AdoptionPaneLookup, type ExpectedAdoptionPane } from "./adoption-recovery.ts"
 import { parseIssueRef, parsePrRef, readGithubIssueStatusBook, readGithubStatusBook, GITHUB_ISSUE_STATUS_SETTING, GITHUB_STATUS_SETTING } from "./awaiting.ts"
-import { isBrokerClaudeRow, type SessionRow, type Storage, type SubAgentSteerRow, type ThreadQuestionRow } from "./storage.ts"
+import { isBrokerClaudeRow, type RecurringWrite, type SessionRow, type Storage, type SubAgentSteerRow, type ThreadQuestionRow } from "./storage.ts"
 import { SUBAGENT_STALE_MS, type SessionTelemetry } from "./tailer.ts"
 import { workflowAgentViews } from "./workflow-runs.ts"
 import { providerResumeCommand } from "./external-terminal.ts"
@@ -1070,6 +1070,14 @@ export function createRouter(ctx: AppContext) {
   function recurringIntervalMs(input: RecurringPromptWrite): number | null {
     if (input.prompt === null || input.intervalSeconds === undefined) return null
     return input.intervalSeconds * 1000
+  }
+  // The Goal's LIMITS in storage's shape. `undefined` passes through as "keep what the row holds" — the
+  // browser and the worker both send explicit values, and only a caller that predates limits omits them.
+  function recurringLimits(input: { maxRuns?: number | null; forSeconds?: number | null }): Pick<RecurringWrite, "maxRuns" | "forMs"> {
+    return {
+      maxRuns: input.maxRuns,
+      forMs: input.forSeconds === undefined ? undefined : input.forSeconds === null ? null : input.forSeconds * 1000,
+    }
   }
 
   // A thread's ARMED one-off timers, in the shape the worker's tool reads back. Instants are epoch ms in
@@ -2721,6 +2729,7 @@ export function createRouter(ctx: AppContext) {
           postCompaction: input.postCompaction,
           intervalMs: recurringIntervalMs(input),
           armedAt: new Date().toISOString(),
+          ...recurringLimits(input),
         })) {
           throw new Error("This thread moved on; reopen it and try again")
         }
@@ -2765,6 +2774,7 @@ export function createRouter(ctx: AppContext) {
           postCompaction: input.postCompaction,
           intervalMs: recurringIntervalMs(input),
           armedAt: new Date().toISOString(),
+          ...recurringLimits(input),
         })) {
           throw new Error(`thread ${input.slug} could not be updated`)
         }
