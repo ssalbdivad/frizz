@@ -6,7 +6,6 @@ import { join } from "node:path"
 import type { TranscriptMessage } from "@frizz/shared"
 import { createPeriodicRetitler, operatorMessages, recentConversation } from "./periodic-retitle.ts"
 import { createStorage, type SessionRow } from "./storage.ts"
-import { resolveSessionTitle } from "./board.ts"
 
 const SLUG = "long-thread"
 const SESSION = "11111111-1111-4111-8111-111111111111"
@@ -72,8 +71,7 @@ test("retitles on every 5th operator message and writes an unlocked agent title"
   await rest(exchanges(5))
   assert.equal(asked.length, 1)
   assert.equal(storage.getSession(SLUG)?.title, "Title 1")
-  // Frizz's own summary, recorded as such (2) — not as the worker's name (1).
-  assert.equal(storage.getSession(SLUG)?.title_agent, 2)
+  assert.equal(storage.getSession(SLUG)?.title_agent, 1)
   await rest([...exchanges(5), user("wake", { wake: true })]) // same window, nothing new
   await rest(exchanges(9))
   assert.equal(asked.length, 1)
@@ -97,66 +95,4 @@ test("a first sighting after a restart records the count instead of retitling at
   assert.equal(asked.length, 0)
   await rest(exchanges(15))
   assert.equal(asked.length, 1)
-})
-
-test("a title the worker chose itself (mcp__frizz__title) is never overwritten", async () => {
-  const { storage, asked, rest } = harness()
-  await rest(exchanges(1))
-  // The worker names its thread — the same write setOwnThreadTitle makes.
-  assert.equal(storage.setAgentTitle(SLUG, "Worker's own name"), true)
-  await rest(exchanges(5))
-  await rest(exchanges(10))
-  assert.equal(asked.length, 0, "the titler is not even asked")
-  assert.equal(storage.getSession(SLUG)?.title, "Worker's own name")
-  assert.equal(storage.getSession(SLUG)?.title_agent, 1)
-})
-
-test("a worker naming the thread WHILE the titler runs wins the race", async () => {
-  const storage = createStorage(join(mkdtempSync(join(tmpdir(), "frizz-retitle-")), "ui.db"), "p")
-  storage.upsertSession({
-    slug: SLUG, session_id: SESSION, thread_name: `frizz-${SLUG}`, spawned_at: "2026-09-24T00:00:00Z",
-    last_read_at: null, unread: 0, exited: 0, archived: 0, rested_at: null, title_auto: 1,
-    title_locked: 0, title: "Opening ask", state: "open", meta: null, seen_at: null, transcript_id: null,
-  } as SessionRow)
-  storage.setBackend(SLUG, "claude")
-  storage.setClaudeRuntime(SLUG, "broker")
-  let messages = exchanges(1)
-  const retitler = createPeriodicRetitler({
-    storage,
-    generateTitle: async () => {
-      // Mid-flight, the worker calls mcp__frizz__title.
-      storage.setAgentTitle(SLUG, "Worker's own name")
-      return "Frizz summary"
-    },
-    readMessages: () => messages,
-    onTitled: () => {},
-  })
-  retitler.onTurnDone(storage.getSession(SLUG)!)
-  messages = exchanges(5)
-  retitler.onTurnDone(storage.getSession(SLUG)!)
-  await new Promise((r) => setImmediate(r))
-  assert.equal(storage.getSession(SLUG)?.title, "Worker's own name")
-  // …and the SQL gate holds on its own, without the caller's re-read.
-  assert.equal(storage.setPeriodicTitle(SLUG, "Frizz summary"), false)
-})
-
-test("a title frizz itself wrote keeps being refreshed — the negative control for the skip", async () => {
-  const { storage, asked, rest } = harness()
-  await rest(exchanges(1))
-  await rest(exchanges(5))
-  await rest(exchanges(10))
-  assert.equal(asked.length, 2)
-  assert.equal(storage.getSession(SLUG)?.title, "Title 2")
-  // A human rename still locks it against both writers.
-  storage.setTitle(SLUG, "Human name")
-  assert.equal(storage.setPeriodicTitle(SLUG, "x"), false)
-  assert.equal(storage.setAgentTitle(SLUG, "x"), false)
-})
-
-test("the board shows frizz's periodic title the way it shows the worker's own", () => {
-  // Both are persisted machine names and outrank the spawn-time transcript guess; only the retitle's
-  // own skip tells them apart.
-  const row = { title: "Frizz summary", title_auto: 1, title_locked: 0, title_agent: 2 }
-  assert.equal(resolveSessionTitle(row, { aiTitle: "spawn-time guess" }).aiTitle, "Frizz summary")
-  assert.equal(resolveSessionTitle({ ...row, title_agent: 0 }, { aiTitle: "spawn-time guess" }).aiTitle, "spawn-time guess")
 })

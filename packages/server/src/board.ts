@@ -1534,8 +1534,9 @@ export function resolveSessionTitle(
   tele: Pick<SessionTelemetry, "aiTitle"> | undefined,
 ): Pick<ThreadView, "title" | "titleAuto" | "titleLocked" | "aiTitle"> {
   const locked = sessionTitleLocked(row)
-  // Any machine title frizz persisted: the worker's own (1) or frizz's periodic summary (2).
-  const persisted = (row.title_agent ?? 0) !== 0 ? row.title?.trim() || undefined : undefined
+  // Any non-zero value: rows written between 2026-09-29 14:0x and this line's revert carry
+  // `title_agent = 2` (the retired setPeriodicTitle), and their titles are still the persisted ones.
+  const persisted = row.title_agent ? row.title?.trim() || undefined : undefined
   return {
     title: row.title ?? "",
     titleAuto: row.title_auto === 1,
