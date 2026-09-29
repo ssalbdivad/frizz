@@ -3978,7 +3978,7 @@ export function PermPromptBanner({ onTerminal }: { onTerminal: () => void }) {
 export function PermPolicyDenialCard({ policy, denies }: { policy: NonNullable<ThreadViewData["permPolicy"]>; denies?: number }) {
   const what = [policy.tool, policy.command].filter(Boolean).join(": ")
   return (
-    <TranscriptCard tone="caution" icon={AlertTriangle} label="Blocked by frizz's permission policy">
+    <TranscriptCard tone="caution" icon={AlertTriangle} label="Blocked by Frizz's permission policy">
       {/* The refused command leads on its own line — it is the thing you actually need to see — and
           the reason follows as prose. The reason is the same text the WORKER was given, so it
           already opens with "Refused:"; prefixing it here too read as a stutter. */}

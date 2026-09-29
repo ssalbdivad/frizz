@@ -7,9 +7,14 @@
 // handoff"; then "always some kind of handoff card that will show up no matter what").
 //
 // Two shapes reach it. A BARE REST — the worker spoke last, signed nothing off, registered nothing — is
-// the one the sign-off nudge exists for (scheduler.evalSignoffNudges), and the card says so in the
-// worker's absence. A STALL — the process exited mid-turn (`crashed`) — is not a rest at all, and the
-// card says that instead, beside the header's Retry. Both are last in ChatView's chain: every rung above
+// the one the sign-off nudge exists for (scheduler.evalSignoffNudges). A STALL — the process exited
+// mid-turn (`crashed`) — is not a rest at all, and its card points at the header's Retry.
+//
+// THE COPY SAYS WHAT THE HUMAN CAN DO, NOT HOW FRIZZ WORKS. The bare card once read "The worker stopped
+// without a done card, a question or a registered wait. Frizz nudges it for one; a reply here also
+// wakes it." — the worker contract's vocabulary and the nudge machinery, recited to the operator
+// (maintainer 2026-09-29: "ensure we don't leak explanations of internal behaviors"). The nudge still
+// runs; the reader does not need to know it exists to act on the card. Both are last in ChatView's chain: every rung above
 // is a harder reading of the same slot and wins it.
 import { CircleDashed, TriangleAlert } from "lucide-react"
 import { questionsOwed, type ThreadView } from "@frizz/shared"
@@ -60,13 +65,13 @@ export function RestedCard({ thread }: { thread: Pick<ThreadView, "crashed"> }) 
   if (thread.crashed === true) {
     return (
       <TranscriptCard data-rested-card="stalled" icon={TriangleAlert} label="Stalled">
-        <p className={CARD_BODY}>The agent's process exited mid-turn. Retry, in the header, re-sends the last message.</p>
+        <p className={CARD_BODY}>The agent stopped unexpectedly. Retry in the header to resend the last message.</p>
       </TranscriptCard>
     )
   }
   return (
-    <TranscriptCard data-rested-card="bare" icon={CircleDashed} label="Rested without a sign-off">
-      <p className={CARD_BODY}>The worker stopped without a done card, a question or a registered wait. Frizz nudges it for one; a reply here also wakes it.</p>
+    <TranscriptCard data-rested-card="bare" icon={CircleDashed} label="Stopped without a handoff">
+      <p className={CARD_BODY}>Reply to pick up where it left off.</p>
     </TranscriptCard>
   )
 }
