@@ -1,25 +1,25 @@
 import { useSyncExternalStore } from "react"
 import type { ProjectCard } from "@frizz/shared"
 
-// THE CROSS-PROJECT PAGE'S FOCUS — which project `/` is aimed at.
+// ALL PROJECTS' PICK — which project the prompt box dispatches into while the page shows every project.
 //
-// The cross-project page is always focused on one project: the one its prompt box dispatches into, and
-// the page project for every "which project" question (see base-path.ts). The address does not name it
-// — where a new thread goes is the box's setting, like its model (maintainer 2026-09-28) — so `/` reads
-// it from here: the project the operator last chose in this browser, and failing that the one opened
-// most recently on the machine, which is the project a `frizz` run in a repo has just opened, so a fresh
-// launch lands where the operator is standing.
+// The page is always bound to one project — the page project, for every "which project" question (see
+// base-path.ts). Focused on a project (lib/pageView.ts, the default), that is the project the page shows.
+// Showing All projects, it is the prompt box's own setting, like its model (maintainer 2026-09-28): the
+// project the operator last chose in its picker, in this browser, and failing that the one opened most
+// recently on the machine.
 //
 // Remembered by ID, not slug: a rename changes the slug, and a remembered slug that no longer resolves
 // would quietly fall back to another project.
 
 const FOCUS_KEY = "frizz.crossProjectFocus"
 
-// THE PICK, as opposed to the focus. The focus moves whenever a thread of another project is opened (its
-// drawer needs that project bound, and its address names it: `/all/<slug>/thread/<t>`), but the operator
-// did not CHOOSE that project for their next thread by reading one of its threads. So `/` is focused on
-// the last project they did choose — in the prompt box's picker, or by arriving with `?focus=` — and
-// closing the last drawer, which goes home, is going back to it.
+// THE PICK, as opposed to the page project. The page project moves whenever a thread of another project
+// is opened (its drawer needs that project bound, and its address names it: `/all/<slug>/thread/<t>`), but
+// the operator did not CHOOSE that project for their next thread by reading one of its threads. So All
+// projects is bound to the last project they did choose — in the prompt box's picker, or the project they
+// were focused on when they chose All projects — and closing the last drawer, which goes home, is going
+// back to it. One per BROWSER, unlike the view: it is a default for a box, not a place.
 let pick: string | null = null
 let loaded = false
 const listeners = new Set<() => void>()
@@ -53,7 +53,7 @@ export function subscribeCrossProjectFocus(listener: () => void): () => void {
   return () => listeners.delete(listener)
 }
 
-/** The project the operator last CHOSE on the cross-project page, by id — live across the page. */
+/** The project the operator last CHOSE for All projects' prompt box, by id — live across the page. */
 export function useCrossProjectPick(): string | null {
   return useSyncExternalStore(subscribeCrossProjectFocus, rememberedCrossProjectFocus, () => null)
 }
@@ -80,9 +80,9 @@ export function stepPick<P extends { slug: string; open: boolean; stale: boolean
 }
 
 /**
- * The project `/` focuses: the remembered one if it is still registered and its directory still exists,
- * else the most recently opened such project, else none (no usable project — `/` then shows the welcome
- * page, where one is added).
+ * The project All projects is bound to: the remembered pick if it is still registered and its directory
+ * still exists, else the most recently opened such project, else none (no usable project — the page then
+ * shows the welcome, where one is added).
  *
  * `openIds`, when known, narrows that to projects whose board this server has open: a project another
  * Frizz serves, or one that failed to open, can be focused but never takes a thread, and landing on it
@@ -110,78 +110,25 @@ export function defaultCrossProjectFocus(
   return latest?.slug
 }
 
-// THE QUEUE FILTER — which project's cards the page's RIGHT side shows, by id; `null` is every project.
-//
-// It filters the queue and NOTHING ELSE (maintainer 2026-09-28: "have project filters only affect which
-// threads are displayed on the right side and have the ui reflect that"). The project list on the left
-// keeps every project whatever it is set to, and the prompt box keeps its own pick above — so the
-// control that sets it sits over the queue it filters (the READY header), not in the column beside it.
-// There is no other way to look at one project: the project view went on 2026-09-28, and every one of
-// its old addresses now lands on `/` (routes.tsx HomeRedirect) with the filter left as it was — a
-// retired address names a project, but not how this tab has chosen to read the queue.
-//
-// Per TAB (sessionStorage): a filter is how this window is being read right now. It survives a reload —
-// which a dev server hands out constantly — but a new tab, or a fresh launch, opens on everything.
-// Remembered by id, like the pick, so a rename does not quietly clear it.
-
-const FILTER_KEY = "frizz.queueFilter"
-let filter: string | null = null
-let filterLoaded = false
-const filterListeners = new Set<() => void>()
-
-/** The project the queue is filtered to, by id, or `null` for every project. */
-export function queueFilter(): string | null {
-  if (!filterLoaded) {
-    filterLoaded = true
-    try {
-      filter = sessionStorage.getItem(FILTER_KEY)
-    } catch {
-      filter = null
-    }
-  }
-  return filter
-}
-
-/** Filter the queue to one project, by id — or `null` to show every project's cards again. */
-export function setQueueFilter(projectId: string | null): void {
-  if (queueFilter() === projectId) return
-  filter = projectId
-  try {
-    if (projectId) sessionStorage.setItem(FILTER_KEY, projectId)
-    else sessionStorage.removeItem(FILTER_KEY)
-  } catch {
-    // Storage disabled: the filter still holds for this page, it just does not survive a reload.
-  }
-  for (const listener of filterListeners) listener()
-}
-
-function subscribeQueueFilter(listener: () => void): () => void {
-  filterListeners.add(listener)
-  return () => filterListeners.delete(listener)
-}
-
-/** The queue filter, live: the project id the right side shows, or `null` for every project. */
-export function useQueueFilter(): string | null {
-  return useSyncExternalStore(subscribeQueueFilter, queueFilter, () => null)
-}
-
-// HOW MUCH OF EACH PROJECT THE LIST SHOWS — the left side's own folds, independent of the filter. Two of
-// them, one inside the other (maintainer 2026-09-28: "the collapse button associated with each project
-// should actually collapse all threads associated with that project, including open threads. There needs
-// to be perhaps a sub button that expands or collapses other categories like done or snoozed … But again,
-// we need a primary collapse button that would easily allow you to visually filter which projects you're
-// looking at"):
+// HOW MUCH OF EACH PROJECT THE LIST SHOWS — the list's own folds, in both views. Two of them (maintainer
+// 2026-09-28: "the collapse button associated with each project should actually collapse all threads
+// associated with that project, including open threads. There needs to be perhaps a sub button that
+// expands or collapses other categories like done or snoozed … But again, we need a primary collapse
+// button that would easily allow you to visually filter which projects you're looking at"):
 //
 //   COLLAPSED — the primary fold: the project is its one row and nothing under it, not even its work in
 //               flight. Every project starts open, so this set names the ones folded away.
-//   DRILLED   — the rest of a project: its Snoozed, Done and External bands, under its work in flight.
-//               Every project starts without them, so this set names the ones showing them.
+//   OPEN BANDS — a project's quiet bands, EACH ON ITS OWN: Snoozed, Done and External open and close
+//               independently, and every one starts collapsed (Colin's sidebar did the same — each its own
+//               collapsible section, collapsed by default). This set names the ones open, as
+//               `<projectId>:<band>`. It was one "drill" per project, opening all three at once, until
+//               2026-09-29.
 //
 // Per BROWSER (localStorage), like the rail's own band folds: which projects you keep open is how you
 // arrange your desk, not how you are reading one window.
 
-/** A set of project ids kept in localStorage, read once and live after that. */
-function persistedProjectSet(key: string) {
+/** A set of ids kept in localStorage, read once and live after that. */
+function persistedSet(key: string) {
   let ids: ReadonlySet<string> | null = null
   const listeners = new Set<() => void>()
   const read = (): ReadonlySet<string> => {
@@ -196,12 +143,7 @@ function persistedProjectSet(key: string) {
     }
     return ids
   }
-  const set = (projectId: string, on = !read().has(projectId)): void => {
-    const current = read()
-    if (current.has(projectId) === on) return
-    const next = new Set(current)
-    if (on) next.add(projectId)
-    else next.delete(projectId)
+  const write = (next: Set<string>): void => {
     ids = next
     try {
       localStorage.setItem(key, JSON.stringify([...next]))
@@ -210,19 +152,36 @@ function persistedProjectSet(key: string) {
     }
     for (const listener of listeners) listener()
   }
+  const set = (id: string, on = !read().has(id)): void => {
+    const current = read()
+    if (current.has(id) === on) return
+    const next = new Set(current)
+    if (on) next.add(id)
+    else next.delete(id)
+    write(next)
+  }
+  const setMany = (entries: readonly string[], on: boolean): void => {
+    const current = read()
+    if (entries.every((id) => current.has(id) === on)) return
+    const next = new Set(current)
+    for (const id of entries) {
+      if (on) next.add(id)
+      else next.delete(id)
+    }
+    write(next)
+  }
   const subscribe = (listener: () => void) => {
     listeners.add(listener)
     return () => {
       listeners.delete(listener)
     }
   }
-  return { read, set, subscribe }
+  return { read, set, setMany, subscribe }
 }
 
 const NONE: ReadonlySet<string> = new Set()
-const collapsed = persistedProjectSet("frizz.collapsedProjects")
-// The drill kept the key it had when it was the list's only fold, so a project opened then is open now.
-const drilled = persistedProjectSet("frizz.expandedProjects")
+const collapsed = persistedSet("frizz.collapsedProjects")
+const openBands = persistedSet("frizz.openBands")
 
 /** Fold one project away in the list, or back open; `on` omitted toggles it. */
 export function setProjectCollapsed(projectId: string, on?: boolean): void {
@@ -234,12 +193,25 @@ export function useCollapsedProjects(): ReadonlySet<string> {
   return useSyncExternalStore(collapsed.subscribe, collapsed.read, () => NONE)
 }
 
-/** Show or hide the rest of one project — its Snoozed, Done and External; `on` omitted toggles it. */
-export function setProjectDrilled(projectId: string, on?: boolean): void {
-  drilled.set(projectId, on)
+/** The list's quiet bands, which open one at a time. */
+export type QuietBandKey = "snoozed" | "done" | "external"
+
+/** The key a project's quiet band is remembered under. */
+export function bandKey(projectId: string, band: QuietBandKey): string {
+  return `${projectId}:${band}`
 }
 
-/** The projects showing the rest of themselves in the list, by id — live, and stable between changes. */
-export function useDrilledProjects(): ReadonlySet<string> {
-  return useSyncExternalStore(drilled.subscribe, drilled.read, () => NONE)
+/** Open or close one of a project's quiet bands; `on` omitted toggles it. */
+export function setBandOpen(projectId: string, band: QuietBandKey, on?: boolean): void {
+  openBands.set(bandKey(projectId, band), on)
+}
+
+/** Open or close several of a project's quiet bands together — a quiet project's row opens all of its. */
+export function setBandsOpen(projectId: string, bands: readonly QuietBandKey[], on: boolean): void {
+  openBands.setMany(bands.map((band) => bandKey(projectId, band)), on)
+}
+
+/** The open quiet bands, as `bandKey`s — live, and a stable Set between changes. */
+export function useOpenBands(): ReadonlySet<string> {
+  return useSyncExternalStore(openBands.subscribe, openBands.read, () => NONE)
 }

@@ -1,6 +1,6 @@
 import assert from "node:assert/strict"
 import { test } from "node:test"
-import { apiBase, basePath, crossProjectHref, everythingHref, innerPath, isCrossProjectPath, isRetiredAppPath, outerPath, prefixedAppRoute, projectSlug, setHomeFocus } from "./base-path.ts"
+import { apiBase, basePath, crossProjectHref, innerPath, isCrossProjectPath, isRetiredAppPath, outerPath, prefixedAppRoute, projectSlug, setHomeFocus } from "./base-path.ts"
 
 // The launching project's fullscreen page is still served unprefixed, so an empty base is a supported state.
 test("an unprefixed page has no base and addresses the unprefixed API", () => {
@@ -113,10 +113,10 @@ test("an agent's unprefixed in-app link is re-pointed at the project the page is
   assert.equal(prefixedAppRoute("/thread/other", "/thread/fix-auth/full"), null)
 })
 
-// AT `/` THE FOCUS IS NOT IN THE ADDRESS. Where a new thread goes is the prompt box's own setting; the
-// route hands it over with `setHomeFocus`, and from then on `/` answers every "which project" question
-// as a drawer's `/all/<focus>/…` would — while the address bar stays `/`.
-test("the cross-project page at / is focused on a project the URL does not name", () => {
+// AT `/` THE PAGE PROJECT IS NOT IN THE PATH. The route resolves it — the view's project, or All
+// projects' pick — and hands it over with `setHomeFocus`, and from then on `/` answers every "which
+// project" question as a drawer's `/all/<focus>/…` would, whatever the query says.
+test("the page at / is bound to a project its path does not name", () => {
   try {
     setHomeFocus("nub")
     assert.equal(projectSlug("/"), "nub")
@@ -128,8 +128,6 @@ test("the cross-project page at / is focused on a project the URL does not name"
     assert.equal(prefixedAppRoute("/thread/x", "/"), "/all/nub/thread/x")
     // Only `/` — every other machine page still names nothing.
     assert.equal(projectSlug("/projects"), undefined)
-    assert.equal(everythingHref("zod"), "/?focus=zod")
-    assert.equal(everythingHref(), "/")
   } finally {
     setHomeFocus(undefined)
   }

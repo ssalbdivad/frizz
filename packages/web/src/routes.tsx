@@ -11,7 +11,8 @@ import { Toaster } from "./components/Toaster.tsx"
 import { KeyboardLayer } from "./components/KeyboardShortcuts.tsx"
 import { applyLocation, registerNavigate } from "./lib/router.ts"
 import { setHomeFocus } from "./lib/base-path.ts"
-import { defaultCrossProjectFocus, rememberCrossProjectFocus, useCrossProjectPick } from "./lib/crossProject.ts"
+import { defaultCrossProjectFocus, useCrossProjectPick } from "./lib/crossProject.ts"
+import { lastFocusedProject, rememberLastFocusedProject, rememberTabView, resolveView, retiredProjectHref, tabView, viewAt, viewInSearch, viewSearch, type PageView } from "./lib/pageView.ts"
 import type { ProjectCard } from "@frizz/shared"
 import { rpc } from "./api/rpc.ts"
 import { feedIsBoundTo, rebindProject } from "./api/socket.ts"
@@ -57,9 +58,9 @@ function RootLayout() {
   return (
     <TooltipProvider>
       {/* Outside the <Outlet/> on purpose: this is the element that must survive the navigation.
-          OPT-IN: a permanent column of every project is a standing invitation to leave the thread
-          you are in, so it is off unless asked for. Hidden, the way back is the status bar's home
-          crumb (StatusRow's home button), which costs a click exactly when you meant to switch. */}
+          OPT-IN: a permanent column of every project is a standing invitation to leave the project
+          you are in, so it is off unless asked for. Hidden, the READY header's project switcher is the
+          way to another project (AllQueues.tsx Switcher), a click away exactly when you meant to switch. */}
       {railVisible ? <ProjectRail /> : null}
       <div className={railVisible ? RAIL_INSET_CLASS : undefined}>
         <Outlet />
@@ -108,38 +109,37 @@ function useProjectBinding(slug: string | undefined) {
   }, [slug])
 }
 
-// THERE IS NO PROJECT VIEW. Everything at `/` is the one page (maintainer 2026-09-28: "urls like this
-// should not exist anymore: http://127.0.0.1:9393/project/frizz"). A project's page — its board, then its
-// "project view" — showed one project's queue beside its rail's bands; the queue filter now shows one
-// project's cards (lib/crossProject.ts), and its bands open in place in the project list (ProjectList.tsx).
-// Its old addresses are not translated ("backward compat not important at this point"): `/project/…`,
-// the unprefixed `/thread/<t>` of the one-server-per-repo era, `/status/…` and anything else unknown
-// land on `/`, keeping the query a launcher may have sent (`?add=`, `?focus=`).
+// THERE IS NO PROJECT PAGE. Everything is the one page at `/` (maintainer 2026-09-28: "urls like this
+// should not exist anymore: http://127.0.0.1:9393/project/frizz"), and what it shows is its VIEW, in its
+// query: one project (`?project=<slug>`, focus mode, the default) or every project (`?all`) — see
+// lib/pageView.ts. A retired `/project/<slug>` address lands focused on the project it names
+// (retiredProjectHref); `/status/…` and anything else unknown lands on `/`, keeping the query a launcher
+// may have sent (`?add=`, `?project=`).
 
 /**
- * THE CROSS-PROJECT PAGE — every project's queue on one page, and the only page there is. At `/` it is focused
- * on the project the operator last chose for a new thread (the PICK, lib/crossProject.ts), which the
- * address does not name: where a new thread goes is the prompt box's setting, not a place. With a
- * thread drawer open it is `/all/<slug>/thread/<t>` — the thread's own address, focused on its project.
+ * THE PAGE — one project's queue, or every project's, and the only page there is. At `/` it shows the
+ * VIEW its address names (lib/pageView.ts). With a thread drawer open it is `/all/<slug>/thread/<t>` — the
+ * thread's own address — and the view is the tab's.
  *
- * The focus IS the page project: it binds the live feed, the store and every page-relative helper
- * (base-path.ts answers `/` through `setHomeFocus`, and `/all/<slug>/…` from the address), so the
- * prompt box dispatches into it and a thread drawer of it opens in place with the whole drawer stack.
- * The page's list and queue are every project's — they read machine-wide data and name their project on
- * every call (AllQueues.tsx, ProjectList.tsx).
+ * It is always BOUND to one project, the page project: the live feed, the store and every page-relative
+ * helper (base-path.ts answers `/` through `setHomeFocus`, and `/all/<slug>/…` from the address) follow
+ * it, so the prompt box dispatches into it and a thread drawer of it opens in place with the whole drawer
+ * stack. Focused, the page project IS the view's project; showing All projects, it is the prompt box's
+ * PICK (lib/crossProject.ts); under a drawer, the drawer's project. The list and the queue read
+ * machine-wide data and name their project on every call (AllQueues.tsx, ProjectList.tsx).
  *
  * ONE component for both addresses, at the same depth, so react-router keeps the one instance mounted
- * across a drawer opening or closing — the page must not remount under the operator. `<App/>` is keyed
- * by a CONSTANT for the same reason: what is per-project (the store's board and drawer stack) is reset
- * by the binding instead.
+ * across a drawer opening or closing, and across a change of view — the page must not remount under the
+ * operator. `<App/>` is keyed by a CONSTANT for the same reason: what is per-project (the store's board
+ * and drawer stack) is reset by the binding instead.
  *
- * With no project to focus — an empty machine, or one whose every directory is gone — there is no page,
- * so `/` renders the welcome instead (ProjectActions.tsx), the one place a project is added from.
+ * With nothing to show — All projects on an empty machine, or one whose every directory is gone — there
+ * is no page, so `/` renders the welcome instead (ProjectActions.tsx), the one place a project is added from.
  */
 function CrossProjectPage() {
   const { slug: drawerSlug, thread } = useParams()
-  const home = useHomeFocus(drawerSlug === undefined)
-  const slug = drawerSlug ?? (home.kind === "focus" ? home.slug : undefined)
+  const home = usePageResolution(drawerSlug)
+  const slug = drawerSlug ?? (home.kind === "page" ? home.slug : undefined)
   // Render-phase, before anything below asks base-path which project `/` is.
   if (drawerSlug === undefined) setHomeFocus(slug)
   useProjectBinding(slug)
@@ -163,68 +163,89 @@ function CrossProjectPage() {
   return <App key="cross-project" />
 }
 
-type HomeFocus =
-  | { kind: "focus"; slug: string }
+type PageResolution =
+  | { kind: "page"; view: PageView; slug: string | undefined }
   | { kind: "loading" }
   | { kind: "error"; error: string }
   | { kind: "welcome"; projects: ProjectCard[] }
 
 /**
- * Which project `/` is focused on: the operator's PICK if it is still usable, else the project opened
- * most recently (lib/crossProject.ts defaultCrossProjectFocus). Only asked at `/` — under a drawer the
- * address names the project.
+ * What the page at this address shows, and which project it is bound to.
  *
- * `?focus=<slug>` is how the launcher names the project it was run in, and how a door that means "start
- * a thread there" aims the box at a project. It is a CHOICE, so it is remembered as the pick,
- * and then dropped from the address. It is a query on `/` rather than a path so a new launcher that joins
- * an OLDER server — one whose page has no such route — still lands somewhere real.
+ * At `/` the view is resolved against the registry (lib/pageView.ts resolveView) and then WRITTEN into
+ * the address, so a bare `/` becomes `/?project=<slug>` or `/?all` before anything paints: a reload, a
+ * bookmark or a copied link of this tab reopens exactly what it shows, whatever another tab has done
+ * since. Under a drawer the view is the tab's (lib/pageView.ts viewAt), and the drawer's address is left
+ * alone.
  *
- * Two more arrive from outside and are answered HERE, on the way through, since the page they meant —
- * the project grid, folded into this one on 2026-09-24 — is gone:
+ * `?project=<slug>` is how the launcher names the project it was run in (and `?focus=<slug>`, the same
+ * from a launcher older than 2026-09-29). It is a query on `/` rather than a path so a new launcher that
+ * joins an OLDER server — one whose page has no such view — still lands somewhere real.
+ *
+ * Two more arrive from outside and are answered HERE, on the way through:
  *  - `?add=<dir>` is the LAUNCHER asking: running `frizz` in an unknown folder does not adopt it, it
  *    sends the operator here to say yes. It opens the one add-project dialog, pre-filled.
  *  - `?unknown=<slug>` is the SERVER saying it sent a page here rather than let it hang: a drawer's
  *    `/all/<x>/thread/…` for a project nobody has (renamed, removed) would render the app, 404 every
- *    call and sit on its boot spinner forever (index.ts
- *    `unknownProjectPage`). A URL that silently became the home page reads as Frizz having swallowed it.
+ *    call and sit on its boot spinner forever (index.ts `unknownProjectPage`). A URL that silently
+ *    became the home page reads as Frizz having swallowed it. `?project=<slug>` for a slug nobody has
+ *    is said the same way.
  */
-function useHomeFocus(atHome: boolean): HomeFocus {
-  const { search } = useLocation()
+function usePageResolution(drawerSlug: string | undefined): PageResolution {
+  const atHome = drawerSlug === undefined
+  const { pathname, search } = useLocation()
   const navigate = useNavigate()
   const cards = useQuery({ queryKey: ["projectsList"], queryFn: () => rpc.projectsList() })
-  // Which projects this server has open, so the landing prefers one that can take a thread. Shared with
+  // Which projects this server has open, so All projects binds one that can take a thread. Shared with
   // the page itself (same key), so the page it lands on paints from this read.
   const queues = useQuery({ queryKey: ["projectsQueues"], queryFn: () => rpc.projectsQueues() })
   const pickId = useCrossProjectPick()
-  const asked = atHome ? new URLSearchParams(search) : null
   useState(() => {
-    const proposed = asked?.get("add")
+    if (!atHome) return
+    const asked = new URLSearchParams(search)
+    const proposed = asked.get("add")
     if (proposed) store.addProject = { proposed }
-    const unknown = asked?.get("unknown")
+    const unknown = asked.get("unknown")
     if (unknown) showToast(`No project named ${unknown}`, { duration: 7000 })
   })
-  const focusParam = asked?.get("focus") ?? null
-  const askedCard = focusParam === null ? undefined : cards.data?.find((card) => card.slug === focusParam && !card.stale)
-  // A LAYOUT effect, so the address is clean before anything paints under it.
+  const resolved = !atHome
+    ? { view: viewAt(pathname, search) ?? ({ kind: "project", slug: drawerSlug } as const) }
+    : cards.data
+      ? resolveView(cards.data, viewInSearch(search), tabView(), lastFocusedProject())
+      : undefined
+  const view = resolved?.view
+  // Render-phase and idempotent, like setHomeFocus: everything below reads the tab's view (usePageView),
+  // and a drawer's close goes home to it (lib/router.ts).
+  if (view) rememberTabView(view)
+  const focusedId = view?.kind === "project" ? cards.data?.find((card) => card.slug === view.slug)?.id : undefined
+  useEffect(() => {
+    if (focusedId) rememberLastFocusedProject(focusedId)
+  }, [focusedId])
+  const unknown = resolved && "unknown" in resolved ? resolved.unknown : undefined
+  useEffect(() => {
+    if (unknown) showToast(`No project named ${unknown}`, { duration: 7000 })
+  }, [unknown])
+  // A LAYOUT effect, so the address says what the page shows before anything paints under it.
+  const canonical = atHome && view ? viewSearch(view) : null
   useLayoutEffect(() => {
-    if (!asked || !asked.toString() || !cards.data) return
-    if (askedCard) rememberCrossProjectFocus(askedCard.id)
-    navigate("/", { replace: true })
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [search, cards.data])
+    if (canonical !== null && search !== canonical) navigate(`/${canonical}`, { replace: true })
+  }, [canonical, search, navigate])
   if (!atHome) return { kind: "loading" }
   if (cards.error) return { kind: "error", error: String(cards.error) }
-  if (!cards.data || queues.isPending) return { kind: "loading" }
-  if (askedCard) return { kind: "focus", slug: askedCard.slug }
+  if (!cards.data || !view || queues.isPending) return { kind: "loading" }
+  if (view.kind === "project") return { kind: "page", view, slug: view.slug }
   const openIds = queues.data ? new Set(queues.data.map((queue) => queue.projectId)) : undefined
-  const focus = defaultCrossProjectFocus(cards.data, pickId, openIds)
-  return focus ? { kind: "focus", slug: focus } : { kind: "welcome", projects: cards.data }
+  const pick = defaultCrossProjectFocus(cards.data, pickId, openIds)
+  return pick ? { kind: "page", view, slug: pick } : { kind: "welcome", projects: cards.data }
 }
 
-/** Any address the page does not have: `/`, keeping the query (`?add=`, `?focus=`, `?unknown=`) it carries. */
+/**
+ * Any address the page does not have: a retired project address focused on its project, anything else
+ * `/`, keeping the query (`?add=`, `?project=`, `?unknown=`) it carries.
+ */
 function HomeRedirect() {
-  const { search } = useLocation()
-  return <Navigate to={`/${search}`} replace />
+  const { pathname, search } = useLocation()
+  return <Navigate to={retiredProjectHref(pathname) ?? `/${search}`} replace />
 }
 
 /**

@@ -3,6 +3,7 @@ import { store, topRoutedSlug, closeDrawersById } from "../store.ts"
 import { ownedByThisPage } from "./projectOwnership.ts"
 import { innerPath, outerPath } from "./base-path.ts"
 import { parseStandaloneThreadPath } from "./standaloneThreadRoute.ts"
+import { homeHref } from "./pageView.ts"
 
 // URL ⇄ state sync, SPA-style. Inner paths: `/` (the page), and `/thread/<slug>` (the page with that
 // thread open in the drawer STACK's topmost thread layer — `/all/<project>/thread/<slug>` in the
@@ -91,11 +92,32 @@ export function primeRoute(path = location.pathname): void {
 let absorbed: string | null = null
 let skippedWrite = false
 let activeWriter: (() => void) | null = null
+// AN ADDRESS THE WRITER WROTE THAT THE STORE HAS SINCE MOVED PAST. The guard above holds a write back
+// while the route catches up, and the route then APPLIED the address it caught up to — undoing whatever
+// the store did meanwhile. A drawer opened store-first (a row of the page's own project, which in focus
+// mode is every row) and closed before the route had committed its address was re-opened by that
+// address, so Escape did nothing: 6 of 6 tries at a load average of ~10-40, where the commit trailed
+// the push by over 800ms (2026-09-29). So an address the writer wrote (`written`) that arrives while a
+// write is held back (`skippedWrite`: the store has moved since) is `stale` — absorbed, not applied —
+// and the held-back write then says what the store says now.
+//
+// Stale until that write has run, not for one application: each commit applies its address TWICE — App
+// re-registering this writer (its `navigate` changes on the same commit, and startRouter primes again)
+// and the route's own effect — and the second was enough to re-open the drawer on its own. Everywhere
+// else the writer's address is applied like any other, which is what resets a parked slug on the way
+// back from /full; skipping it there too left the address on a drawer the reader had closed.
+let written: string | null = null
+let stale: string | null = null
 
 /** URL → store for the page's current address (routes.tsx useRouteToStore, and boot). */
 export function applyLocation(pathname: string): void {
   absorbed = typeof location !== "undefined" && typeof location.pathname === "string" ? location.pathname : pathname
-  applyPath(innerPath(pathname))
+  if (skippedWrite && pathname === written) stale = pathname
+  written = null
+  if (pathname !== stale) {
+    stale = null
+    applyPath(innerPath(pathname))
+  }
   if (skippedWrite) {
     skippedWrite = false
     queueMicrotask(() => activeWriter?.())
@@ -160,12 +182,17 @@ export function startRouter(navigate: (path: string, options: { replace: boolean
       skippedWrite = true
       return
     }
+    // The held-back write is running: whatever address was stale, the store says its piece now.
+    stale = null
     const path = outerPath(currentPath())
     if (path === location.pathname) return
     // A NEW topmost thread pushes history; unwinding or non-thread transitions replace. `startsWith`
     // is checked against the INNER path: under a project prefix every path starts with `/all/`.
     const openingThread = currentPath().startsWith("/thread/")
-    navigate(path, { replace: !openingThread })
+    // Home is the page showing THIS TAB'S view (lib/pageView.ts): closing the last drawer goes back to
+    // `/?project=<slug>` or `/?all`, never to a bare `/` that would have to guess it again.
+    written = path
+    navigate(path === "/" ? homeHref() : path, { replace: !openingThread })
   }
   activeWriter = write
   const unsubscribe = subscribe(store, write)

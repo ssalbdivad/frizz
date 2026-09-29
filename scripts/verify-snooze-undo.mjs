@@ -6,9 +6,10 @@
 //
 // Written 2026-09-28 for the operator's "I accidentally snoozed a thread, I don't know where it went".
 // Three paths, because the card comes back by three different routes:
-//   • a TENANT's card on Everything — its queue arrives by the 3s poll, so the Undo must refetch rather
+//   • a TENANT's card in All projects — its queue arrives by the 3s poll, so the Undo must refetch rather
 //     than wait for the next tick (checked after the poll has already dropped the thread);
-//   • the FOCUSED project's card — its queue is the live board, and the fade guard must lift at once;
+//   • the PAGE project's card (All projects' pick, set to the launcher here) — its queue is the live
+//     board, and the fade guard must lift at once;
 //   • the thread DRAWER's footer — no card at all, and the thread there may already be snoozed.
 //
 // Usage: node scripts/verify-snooze-undo.mjs --stack=/abs/stack.log [--shots=/abs/dir]
@@ -109,7 +110,12 @@ try {
     return path
   }
 
-  await page.goto(`${origin}/?focus=acme-api`, { waitUntil: "networkidle2" })
+  // All projects (`/?all`, lib/pageView.ts), bound to the launcher: the prompt box's pick, which the page
+  // binds in that view, is set before the page loads.
+  const ALL = `${origin}/?all`
+  await page.goto(`${origin}/?project=acme-api`, { waitUntil: "networkidle2" })
+  await page.evaluate((id) => localStorage.setItem("frizz.crossProjectFocus", id), ids["acme-api"])
+  await page.goto(ALL, { waitUntil: "networkidle2" })
   await page.evaluate(() => { document.documentElement.dataset.theme = "dark" })
   await page.waitForSelector("[data-xq-card]")
   await sleep(800)
@@ -213,7 +219,7 @@ try {
   await step("with no drawer open, a faded toast's Undo is inert too", async () => {
     // Without a drawer the toast rests at the page's bottom edge, and its fade drops it 32px — which
     // left part of the button inside the viewport, where it still caught clicks.
-    await page.goto(`${origin}/?focus=acme-api`, { waitUntil: "networkidle2" })
+    await page.goto(ALL, { waitUntil: "networkidle2" })
     await page.waitForSelector("[data-xq-card]")
     await sleep(800)
     const scope = card("acme-api", "fix-pagination-cursor")

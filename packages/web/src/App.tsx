@@ -63,10 +63,11 @@ function openDispatch(): void {
 
 
 /**
- * THE SHELL AROUND THE ONE PAGE, Everything (AllQueues.tsx). It hosts the standing surfaces the page does
- * not draw itself — the drawer stack, the modals, the palette, the restart overlay, the keyboard, the
- * router sync and the board seed — and all of them are the page project's: its FOCUS (routes.tsx
- * CrossProjectPage), which is what lets a thread of any project open in place with the whole drawer stack.
+ * THE SHELL AROUND THE ONE PAGE (AllQueues.tsx), focused on one project or showing All projects
+ * (lib/pageView.ts). It hosts the standing surfaces the page does not draw itself — the drawer stack, the
+ * modals, the palette, the restart overlay, the keyboard, the router sync and the board seed — and all of
+ * them are the PAGE PROJECT's (routes.tsx CrossProjectPage: the focused project, All projects' pick, or a
+ * drawer's project), which is what lets a thread of any project open in place with the whole drawer stack.
  * A project's own board shared this shell until 2026-09-28, when it went with the project view.
  */
 export function App() {

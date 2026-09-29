@@ -18,9 +18,11 @@ const baseUrl = process.env.FRIZZ_PROJECT_SWITCH_E2E_URL
 // project's threads under another project's URL, and nothing but a document load recovered it
 // (reported 2026-08-11). The rebind now asks the feed itself (routes.tsx useProjectBinding).
 //
-// The switch is the one the page has: the prompt box's project picker re-focuses `/` on another project
-// without a navigation, and the page binds it (routes.tsx CrossProjectPage). Until 2026-09-28 it was a
-// project row's ⋯ → Open board, a client-side navigation to `/project/<slug>`; the board is gone.
+// The page has TWO client-side switches, and both rebind: focused, the READY header's switcher moves the
+// page to `/?project=<slug>` (a navigation within the one mounted page — routes.tsx CrossProjectPage), and
+// in All projects the prompt box's project picker re-binds the page to its pick without any navigation.
+// Until 2026-09-28 the switch was a project row's ⋯ → Open board, a client-side navigation to
+// `/project/<slug>`; from then until focus mode (2026-09-29) the picker was the only one.
 //
 // So this asserts the socket URL, not the render: it is the one artifact that says which project the
 // page's live data is actually coming from, and it is recorded from `evaluateOnNewDocument` so the
@@ -29,7 +31,7 @@ test("switching the page to another project re-points the live feed at that proj
   skip: !baseUrl,
   timeout: 90_000,
 }, async () => {
-  // Every registered project, opened: the server activates a tenant on its first request, and the picker
+  // Every registered project, opened: the server activates a tenant on its first request, and the page
   // only binds a project the server has open.
   const headers = { origin: baseUrl!, "content-type": "application/json" }
   const listed = (await (await fetch(`${baseUrl}/_frizz/rpc/projectsList`, { headers })).json()) as { result: Array<{ slug: string; home?: boolean; stale?: boolean }> }
@@ -53,9 +55,11 @@ test("switching the page to another project re-points the live feed at that proj
         },
       })
     })
-    // The page, focused on the LAST of them and bound to it, so both switches below move the feed.
-    await page.goto(`${baseUrl}/?focus=${slugs.at(-1)}`, { waitUntil: "networkidle2" })
-    await page.waitForSelector("[data-xq-project-picker]", { timeout: 15_000 })
+    // The page, focused on the LAST of them and bound to it, so every switch below moves the feed.
+    await page.goto(`${baseUrl}/?project=${slugs.at(-1)}`, { waitUntil: "networkidle2" })
+    await page.waitForSelector('[data-inbox-header] [data-xq-switcher="project"]', { timeout: 15_000 })
+    // A document load would rebind the feed and hide the bug, so the page must be this one throughout.
+    await page.evaluate(() => { (window as unknown as { __sameDocument: boolean }).__sameDocument = true })
 
     // The BOARD socket for a project, ignoring any other socket the page opens. Matched
     // with a regex rather than `endsWith("…")`, which frizzRouteUrls.test.ts reads as a hand-built
@@ -64,20 +68,24 @@ test("switching the page to another project re-points the live feed at that proj
     const boardSocket = async () => (await page.evaluate(() =>
       (window as unknown as { __wsUrls: string[] }).__wsUrls))
       .filter((u) => isBoard.test(u)).at(-1)
-
-    for (const slug of slugs.slice(0, 2)) {
-      // CLIENT-SIDE, through the picker — a document load would rebind the feed and hide the bug. A Radix
-      // menu mounts its items before it positions them, so the item is clicked once it holds still.
-      await page.click("[data-xq-project-picker]")
-      await page.waitForSelector(`[role="menuitem"][data-value="${slug}"]`, { timeout: 10_000 })
+    // Open a menu and choose from it. A Radix menu mounts its items before it positions them, so the item
+    // is clicked once it holds still.
+    const choose = async (trigger: string, value: string) => {
+      // The last menu's close first (while a Radix menu is up the page under it takes no clicks), and the
+      // trigger mounted: the picker is drawn only once All projects has rendered.
+      await page.waitForFunction(() => !document.querySelector('[role="menu"]'), { timeout: 10_000 })
+      await page.waitForSelector(trigger, { visible: true, timeout: 15_000 })
+      await page.click(trigger)
+      await page.waitForSelector(`[role="menuitem"][data-value="${value}"]`, { timeout: 10_000 })
       await page.waitForFunction((s) => new Promise((resolve) => {
         const at = document.querySelector(`[role="menuitem"][data-value="${s}"]`)?.getBoundingClientRect()
         if (!at || at.top < 0 || at.bottom > innerHeight) return resolve(false)
         requestAnimationFrame(() => requestAnimationFrame(() => resolve(document.querySelector(`[role="menuitem"][data-value="${s}"]`)?.getBoundingClientRect().y === at.y)))
-      }), { timeout: 10_000 }, slug)
-      await page.click(`[role="menuitem"][data-value="${slug}"]`)
-      await page.waitForFunction((s) => document.querySelector("[data-xq-picker-name]")?.textContent?.trim() === s, { timeout: 15_000 }, slug)
-      assert.equal(new URL(page.url()).pathname, "/", "the switch is not a navigation")
+      }), { timeout: 10_000 }, value)
+      await page.click(`[role="menuitem"][data-value="${value}"]`)
+    }
+    const feedFollows = async (slug: string, how: string) => {
+      assert.equal(await page.evaluate(() => (window as unknown as { __sameDocument?: boolean }).__sameDocument), true, `${how}: no document load`)
       // The rebind is an effect + a socket open, so give the new one a moment to be constructed.
       await page.waitForFunction((s) =>
         ((window as unknown as { __wsUrls: string[] }).__wsUrls
@@ -86,14 +94,29 @@ test("switching the page to another project re-points the live feed at that proj
       assert.match(
         (await boardSocket()) ?? "",
         new RegExp(`/_frizz/${slug}/ws$`),
-        `the page's feed, switched to ${slug}, must address ${slug}, not whichever project it was last bound to`,
+        `${how}: the page's feed, switched to ${slug}, must address ${slug}, not whichever project it was last bound to`,
       )
       // …and the keyframe that feed delivers actually lands: the prompt box swaps its stand-in for the
       // project's real form once the project's board is in (AllQueues.tsx FocusedComposer), which is what
       // a page bound to nothing never does.
       await page.waitForFunction(() => !document.querySelector("[data-xq-composer-pending]") && document.querySelector("[data-dispatch-form]"), { timeout: 15_000 })
-        .catch(() => assert.fail(`the prompt box never took ${slug}'s form`))
+        .catch(() => assert.fail(`${how}: the prompt box never took ${slug}'s form`))
     }
+
+    for (const slug of slugs.slice(0, 2)) {
+      await choose("[data-inbox-header] [data-xq-switcher]", slug)
+      await page.waitForFunction((s) => location.pathname === "/" && new URLSearchParams(location.search).get("project") === s, { timeout: 15_000 }, slug)
+      await feedFollows(slug, `the switcher, to ${slug}`)
+    }
+
+    // All projects keeps the project just left as the page's (the pick); the picker then moves it.
+    await choose("[data-inbox-header] [data-xq-switcher]", "all-projects")
+    await page.waitForFunction(() => location.search === "?all", { timeout: 15_000 })
+    const other = slugs[0]!
+    await choose("[data-xq-project-picker]", other)
+    await page.waitForFunction((s) => document.querySelector("[data-xq-picker-name]")?.textContent?.trim() === s, { timeout: 15_000 }, other)
+    assert.equal(new URL(page.url()).search, "?all", "the picker's switch is not a navigation")
+    await feedFollows(other, `the picker, to ${other}`)
   } finally {
     await browser.close()
   }

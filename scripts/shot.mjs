@@ -14,6 +14,8 @@
 //   --mouse:  render as a desktop with a mouse — `(hover: hover)`, fine pointer — instead of headless
 //             Chrome's touch screen (lib/mouse-pointer.mjs). Without it every Tailwind hover: style is
 //             dead and the app's `(hover: none)` touch rules apply.
+//   --dark:   render with `prefers-color-scheme: dark`, the theme the app follows by default — headless
+//             Chrome otherwise reports light, so a shot without it shows a theme few operators run.
 //   --clip:   shoot only that element's box (+ --pad px of margin) instead of the viewport, and --dsf
 //             raises the device pixel ratio — together they make a 27px row judgeable without zooming
 //             the page (a `zoom`/`transform` hack reflows this app's centered layout and moves the very
@@ -53,6 +55,7 @@ try {
   const errors = []
   page.on("console", (m) => { if (m.type() === "error") errors.push(m.text()) })
   page.on("pageerror", (e) => errors.push(String(e)))
+  if (flags.dark) await page.emulateMediaFeatures([{ name: "prefers-color-scheme", value: "dark" }])
   await page.goto(url, { waitUntil: "networkidle2", timeout: 30000 })
   await new Promise((r) => setTimeout(r, WAIT)) // let the SSE board render
   if (flags.before) {

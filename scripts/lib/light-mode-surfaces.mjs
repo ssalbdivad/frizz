@@ -29,14 +29,16 @@ export async function checkSurfaceStates({ page, url, font, palette, out, check,
     } finally { await page.setViewport(viewport) }
   }
   // `url` is the fixture project's drawer prefix, `/all/<slug>` (adhoc-stack.mjs); on its own it lands on
-  // `/`. The page is FOCUSED on a project the address does not name, so the checks that read the focus's
-  // live board land on `/?focus=<slug>` to say which — the launcher's own way in.
-  const home = new URL(`/?focus=${new URL(url).pathname.split("/")[2]}`, url).href
+  // `/`, in whatever view this tab last showed. The checks read the fixture project's live board, so they
+  // land on `/?project=<slug>` — the page focused on it, the launcher's own way in (lib/pageView.ts).
+  const home = new URL(`/?project=${new URL(url).pathname.split("/")[2]}`, url).href
   // A project's Snoozed and Done bands open in place under its row in the project list (ProjectList.tsx);
   // until 2026-09-28 they were the board sidebar's collapsible bands, opened through the store.
   const openBands = async () => {
     await page.waitForSelector("[data-xq-project-row]")
-    await page.$$eval('[data-xq-project-row] button[aria-expanded="false"]', buttons => buttons.forEach(button => button.click()))
+    // Each quiet band opens by its own count — on the project's row while it lists nothing, under its
+    // threads (the footer) while it does.
+    await page.$$eval('[data-xq-project-row] button[aria-expanded="false"], [data-xq-quiet-footer] button[aria-expanded="false"]', buttons => buttons.forEach(button => button.click()))
     await page.waitForSelector('[data-xq-drill-band="snoozed"] [data-sidebar-item="theme-snoozed"]')
     await page.waitForSelector('[data-xq-drill-band="done"] [data-sidebar-item="theme-done"]')
   }

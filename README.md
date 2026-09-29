@@ -35,7 +35,7 @@ $ npx frizz
 
   FRIZZ v0.4.0  ready in 4.0s
 
-  ➜  Local:    http://127.0.0.1:9393/?focus=acme
+  ➜  Local:    http://127.0.0.1:9393/?project=acme
   ➜  Project:  acme — path/to/acme
   ➜  Logs:     ~/Library/Application Support/Frizz/projects/979dae3c-fe15-4038-817e-11d0e7491959/logs/frizz-2026-08-01T13-44-43-16931.log
 

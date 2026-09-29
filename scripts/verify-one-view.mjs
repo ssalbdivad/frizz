@@ -1,12 +1,14 @@
 #!/usr/bin/env node
-// Drive the ONE page — Everything, with no project view (2026-09-28) — on a real, seeded, multi-project
-// stack, and check what the retirement promised the maintainer:
-//   · no `/project/<slug>` address exists: every one lands on `/`, and nothing on the page links to one;
-//   · the queue filter scopes the RIGHT column only — from the READY header's pill, from a project row's
-//     ⋯ menu, and back out through the pill's ✕ — while the list keeps every project and marks the
-//     filtered one;
-//   · a project's other bands (Snoozed, Done, External) open in place under its row, and a row there
-//     opens its thread's drawer on the page;
+// Drive ALL PROJECTS — the one page's every-project view, `/?all` (web lib/pageView.ts) — on a real,
+// seeded, multi-project stack, and check what the one page promised the maintainer. It was the page's
+// only view, at `/`, from 2026-09-28 until focus mode (2026-09-29) made one project the default, which
+// scripts/verify-focus-mode.mjs drives; this drives the view that shows them all:
+//   · no `/project/<slug>` page exists: every such address lands on the one page, and nothing on the page
+//     links to one;
+//   · the READY header's switcher leaves All projects for one project and comes back, by address, and a
+//     project row's ⋯ menu focuses on its project too;
+//   · a project's other bands (Snoozed, Done, External) open in place under its row, each by its own
+//     count and one at a time, and a row there opens its thread's drawer on the page;
 //   · /full is an option of the drawer's own menu, not a door on cards and rows; `f` in a drawer takes
 //     it, and leaving /full comes back to the drawer;
 //   · a `/login` typed into a card's reply box opens sign-in instead of reaching the worker;
@@ -15,7 +17,7 @@
 // Usage:
 //   nub scripts/adhoc-stack.mjs --port=47631 --project=/tmp/x/acme-api --also-project=/tmp/x/marketing-site \
 //     --also-project=/tmp/x/billing-worker --also-project=/tmp/x/docs-portal > /tmp/stack.log 2>&1   # background
-//   nub scripts/seed-all-queues.mjs --stack=/tmp/stack.log
+//   nub scripts/seed-all-queues.mjs --stack=/tmp/stack.log   # and optionally seed-focus-mode.mjs (last run had both)
 //   nub scripts/verify-one-view.mjs --stack=/tmp/stack.log [--shots=/abs/dir] [--only=<words in a step name>]
 import { mkdirSync, readFileSync } from "node:fs"
 import { join } from "node:path"
@@ -53,7 +55,7 @@ async function step(name, run) {
     // What the page looked like when the step gave up — the only way to tell a real regression from a
     // selector that stopped matching.
     const shot = join(shots, `one-view-fail-${++failures}.png`)
-    const where = await page?.evaluate(() => location.pathname).catch(() => "?")
+    const where = await page?.evaluate(() => location.pathname + location.search).catch(() => "?")
     await page?.screenshot({ path: shot }).catch(() => {})
     check(name, false, `${error instanceof Error ? error.message : String(error)} (at ${where}; ${shot})`)
     // And the page's last few address changes, which say whether a click went nowhere or went and came back.
@@ -67,11 +69,15 @@ const browser = await puppeteer.launch({ headless: true, args: ["--no-sandbox", 
 try {
   page = await browser.newPage()
   await page.setViewport({ width: 1440, height: 1000, deviceScaleFactor: 2 })
+  // Generous, because this machine is shared: at a load average of 30+ a cold page load alone has taken
+  // 20s, and every wait below is for a condition, so a slow pass costs time and never a verdict.
+  page.setDefaultNavigationTimeout(90_000)
+  page.setDefaultTimeout(30_000)
   const errors = []
   page.on("console", (message) => { if (message.text().startsWith("[address]")) addresses.push(message.text().slice(10)) })
   await page.evaluateOnNewDocument(() => {
     const t0 = performance.now()
-    const log = (how) => console.log(`[address] ${Math.round(performance.now() - t0)}ms ${how} ${location.pathname}`)
+    const log = (how) => console.log(`[address] ${Math.round(performance.now() - t0)}ms ${how} ${location.pathname}${location.search}`)
     for (const method of ["pushState", "replaceState"]) {
       const original = history[method].bind(history)
       history[method] = (...args) => { const result = original(...args); log(method); return result }
@@ -90,6 +96,9 @@ try {
   page.on("request", (request) => { if (request.method() === "POST" && request.url().includes("/rpc/")) posts.push(new URL(request.url()).pathname) })
 
   const path = () => page.evaluate(() => location.pathname)
+  const search = () => page.evaluate(() => location.search)
+  // Every visit names its view: a bare `/` opens this tab's own, which is whatever the step before left.
+  const ALL = `${origin}/?all`
   const waitPath = (predicate, what, ms = 10_000, ...args) => page.waitForFunction(predicate, { timeout: ms }, ...args).catch(async () => { throw new Error(`timed out waiting for ${what}; at ${await path()}`) })
   const cardProjects = () => page.$$eval("[data-xq-card]", (cards) => [...new Set(cards.map((c) => c.getAttribute("data-xq-card")?.split("/")[0]))])
   const escapeAll = async () => {
@@ -128,15 +137,25 @@ try {
     await handle.asElement().click()
   }
 
-  // ── no project view ──────────────────────────────────────────────────────────────────────────────
-  for (const address of [`/project/${projects[0].slug}`, `/project/${projects[1].slug}/thread/whatever`, "/status/active", "/projects"]) {
-    await step(`${address} lands on /`, async () => {
+  // ── no project page ──────────────────────────────────────────────────────────────────────────────
+  // A retired project address lands on the page focused on its project (a thread's, on that thread's
+  // drawer); any other retired address on the page in this tab's view.
+  const [first, second] = [projects[0].slug, projects[1].slug]
+  for (const [address, lands] of [
+    [`/project/${first}`, (slug) => location.pathname === "/" && new URLSearchParams(location.search).get("project") === slug, first],
+    // A thread the project does not have: its drawer address, which hands a missing thread to the /full
+    // page's own recovery (store.ts resolveRoutedThread) — so either is the landing.
+    [`/project/${second}/thread/whatever`, (slug) => location.pathname.startsWith(`/all/${slug}/thread/whatever`), second],
+    ["/status/active", () => location.pathname === "/"],
+    ["/projects", () => location.pathname === "/"],
+  ]) {
+    await step(`${address} lands on the page`, async () => {
       await page.goto(`${origin}${address}`, { waitUntil: "networkidle2" })
-      await waitPath(() => location.pathname === "/", "the page at /")
-      check(`${address} lands on /`, true)
+      await waitPath(lands, "the page", 10_000, address.startsWith("/project/") ? address.split("/")[2] : undefined)
+      check(`${address} lands on the page`, true, `${await path()}${await search()}`)
     })
   }
-  await page.goto(`${origin}/`, { waitUntil: "networkidle2" })
+  await page.goto(ALL, { waitUntil: "networkidle2" })
   await page.waitForSelector("[data-xq-card]")
   await sleep(1200)
   await page.screenshot({ path: join(shots, "one-view-home.png") })
@@ -153,49 +172,48 @@ try {
   const everyProject = await page.$$eval("[data-xq-project-row]", (rows) => rows.map((r) => r.getAttribute("data-xq-project-row")))
   check("the list shows every project", projects.every((p) => everyProject.includes(p.id)), `${everyProject.length} rows for ${projects.length} projects`)
 
-  // ── the filter scopes the right column only ──────────────────────────────────────────────────────
+  // ── leaving All projects for one project, and back ─────────────────────────────────────────────────
   const shown = await cardProjects()
   const target = projects.find((p) => shown.includes(p.id)) ?? projects[0]
-  await step("the READY header's pill filters the queue to one project", async () => {
-    check("unfiltered, the pill reads All projects", (await page.$eval("[data-inbox-header] [data-xq-view-filter]", (b) => b.textContent?.trim())) === "All projects")
-    await page.click("[data-inbox-header] [data-xq-view-filter]")
+  const listed = () => page.$$eval("[data-xq-project-row]", (rows) => rows.map((r) => r.getAttribute("data-xq-project-row")))
+  const focusedOn = (slug) => waitPath((slug) => location.pathname === "/" && new URLSearchParams(location.search).get("project") === slug, `/?project=${slug}`, 10_000, slug)
+  // The page follows its address as a transition, which on a loaded machine lands seconds after the
+  // address does: wait for the cards to say it, rather than for a fixed time.
+  const cardsFrom = (ids) => page.waitForFunction((ids) => {
+    const got = new Set([...document.querySelectorAll("[data-xq-card]")].map((c) => c.getAttribute("data-xq-card")?.split("/")[0]))
+    return got.size === ids.length && ids.every((id) => got.has(id))
+  }, { timeout: 30_000 }, ids).catch(() => {})
+  await step("the READY header's switcher focuses the page on one project, and brings All projects back", async () => {
+    const reads = await page.$eval("[data-inbox-header] [data-xq-switcher]", (b) => `${b.getAttribute("data-xq-switcher")} ${b.querySelector("[data-xq-switcher-label]")?.textContent?.trim()}`)
+    check("in All projects, the switcher reads All projects", reads === "all All projects", reads)
+    await page.click("[data-inbox-header] [data-xq-switcher]")
     await clickSettled(`[role="menuitem"][data-value="${target.slug}"]`)
-    await page.waitForSelector("[data-xq-view-filter-pill]", { timeout: 5000 })
-    await sleep(500)
+    await focusedOn(target.slug)
+    await cardsFrom([target.id])
     const only = await cardProjects()
-    check("…only that project's cards remain", only.length === 1 && only[0] === target.id, only.join(", "))
-    const rows = await page.$$eval("[data-xq-project-row]", (r) => r.length)
-    check("…the list still shows every project", rows === everyProject.length, `${rows} of ${everyProject.length} rows`)
-    const marked = await page.$$eval("[data-xq-project-filtered]", (els) => els.map((el) => el.closest("[data-xq-project-row]")?.getAttribute("data-xq-project-row")))
-    check("…and marks the filtered one", marked.length === 1 && marked[0] === target.id, marked.join(", "))
-    check("…and the address stays /", (await path()) === "/")
-    await page.screenshot({ path: join(shots, "one-view-filtered.png") })
-    await page.click("[data-xq-view-filter-clear]")
-    await sleep(500)
+    check("…focused, only that project's cards remain", only.length === 1 && only[0] === target.id, only.join(", "))
+    const rows = await listed()
+    check("…and the list shows only that project", rows.length === 1 && rows[0] === target.id, rows.join(", "))
+    await page.screenshot({ path: join(shots, "one-view-focused.png") })
+    await page.click("[data-inbox-header] [data-xq-switcher]")
+    await clickSettled('[role="menuitem"][data-value="all-projects"]')
+    await waitPath(() => location.search === "?all", "/?all")
+    await cardsFrom(shown)
     const back = await cardProjects()
-    check("the pill's ✕ shows every project again", back.length === shown.length, `${back.length} projects' cards`)
+    check("the switcher's All projects shows every project again", back.length === shown.length && (await listed()).length === everyProject.length, `${back.length} projects' cards`)
   })
-  await step("a project row's ⋯ menu filters the queue too", async () => {
+  await step("a project row's ⋯ menu focuses the page on it", async () => {
     const other = projects.find((p) => p.id !== target.id && shown.includes(p.id)) ?? target
     const row = `[data-xq-project-row="${other.id}"]`
     await page.hover(row)
     await page.click(`${row} button[aria-label^="More actions for"]`)
-    await clickSettled('[role="menuitem"]', { text: "Filter the queue to this project" })
-    await sleep(600)
+    await clickSettled('[role="menuitem"]', { text: "Focus on this project" })
+    await focusedOn(other.slug)
+    await cardsFrom([other.id])
     const only = await cardProjects()
-    check("the ⋯ menu's filter leaves only that project's cards", only.length === 1 && only[0] === other.id, only.join(", "))
-    await page.click("[data-xq-view-filter-clear]")
-    await sleep(400)
-  })
-  await step("the filter survives a reload of the tab", async () => {
-    await page.click("[data-inbox-header] [data-xq-view-filter]")
-    await clickSettled(`[role="menuitem"][data-value="${target.slug}"]`)
-    await page.waitForSelector("[data-xq-view-filter-pill]")
-    await page.reload({ waitUntil: "networkidle2" })
-    await page.waitForSelector("[data-xq-view-filter-pill]", { timeout: 10_000 })
-    const only = await cardProjects()
-    check("the filter survives a reload of the tab", only.length === 1 && only[0] === target.id, only.join(", "))
-    await page.click("[data-xq-view-filter-clear]")
+    check("the ⋯ menu's Focus on this project leaves only that project's cards", only.length === 1 && only[0] === other.id, only.join(", "))
+    await page.goto(ALL, { waitUntil: "networkidle2" })
+    await page.waitForSelector("[data-xq-card]")
     await sleep(400)
   })
 
@@ -211,12 +229,21 @@ try {
     const countsBefore = await counts("[data-xq-quiet-footer]")
     const badge = async () => page.$eval(`[data-xq-project-row="${busy}"]`, (row) => {
       const bare = row.cloneNode(true)
-      bare.querySelector("[data-xq-quiet-toggle]")?.remove()
+      bare.querySelector("[data-xq-quiet-toggles]")?.remove()
       return bare.textContent
     })
     const badgeBefore = await badge()
-    // Its Working rows are the ones no queue card ties to (this seed pins nothing).
-    const workingBefore = await page.$$eval(`[data-xq-rail-project="${busy}"] [data-sidebar-item]`, (rows) => rows.filter((r) => !r.hasAttribute("data-xq-rail-row")).length)
+    // Its Working rows: the ones under its Working band's name (a pinned row is neither Ready nor Working).
+    const workingBefore = await page.$eval(`[data-xq-rail-project="${busy}"]`, (g) => {
+      let band = null
+      let n = 0
+      for (const el of g.querySelectorAll("[data-xq-band-label], [data-sidebar-item]")) {
+        if (el.closest("[data-xq-drill]")) continue
+        if (el.hasAttribute("data-xq-band-label")) band = el.getAttribute("data-xq-band-label")
+        else if (band === "working") n++
+      }
+      return n
+    })
     await clickSettled(`[data-xq-project-row="${busy}"] [data-xq-project-fold]`)
     await sleep(300)
     const after = await rowsOf(busy)
@@ -235,17 +262,27 @@ try {
     await sleep(300)
     check("a second click brings every row back", (await rowsOf(busy)) === before, `${await rowsOf(busy)} of ${before}`)
   })
-  await step("a project's counts open its quiet bands in place, and a Done row opens its drawer on the page", async () => {
+  await step("a project's counts open its quiet bands in place, one at a time, and a Done row opens its drawer on the page", async () => {
     const withDone = await page.$$eval("[data-xq-project-row]", (rows) => rows.find((r) => r.closest("[data-xq-rail-project]").querySelector('[data-xq-quiet-count="done"]'))?.getAttribute("data-xq-project-row"))
     if (!withDone) throw new Error("no project has a Done count to open")
-    const counts = `[data-xq-rail-project="${withDone}"] [data-xq-quiet-toggle]`
+    const count = (band) => `[data-xq-rail-project="${withDone}"] [data-xq-quiet-count="${band}"]`
+    const bandsOpen = () => page.$$eval(`[data-xq-drill="${withDone}"] [data-xq-drill-band]`, (bands) => bands.map((b) => b.getAttribute("data-xq-drill-band")).join(" "))
     const loud = await rowsOf(withDone)
-    await clickSettled(counts)
+    await clickSettled(count("done"))
     await page.waitForSelector(`[data-xq-drill="${withDone}"] [data-xq-drill-band="done"] [data-sidebar-item]`, { timeout: 8000 })
-    check("the counts list a project's Done band under it", true)
+    check("the Done count lists a project's Done band under it, and only that band", (await bandsOpen()) === "done", await bandsOpen())
     const inFlight = await page.$$eval(`[data-xq-rail-project="${withDone}"] [data-sidebar-item]`, (rows) => rows.filter((r) => !r.closest("[data-xq-drill]")).length)
     check("…below its rows in flight, which stay", inFlight === loud, `${inFlight} of ${loud}`)
-    check("…and the address stays /", (await path()) === "/")
+    check("…and the address stays on All projects", (await path()) === "/" && (await search()) === "?all", `${await path()}${await search()}`)
+    // A second band opens beside it, and its own name puts only it away.
+    if (await page.$(count("snoozed"))) {
+      await clickSettled(count("snoozed"))
+      await page.waitForSelector(`[data-xq-drill="${withDone}"] [data-xq-drill-band="snoozed"]`, { timeout: 8000 })
+      check("…the Snoozed count opens Snoozed beside it", (await bandsOpen()) === "snoozed done", await bandsOpen())
+      await clickSettled(`[data-xq-drill="${withDone}"] [data-xq-drill-band="snoozed"] [data-xq-band-label]`)
+      await sleep(300)
+      check("…and Snoozed's name closes Snoozed alone", (await bandsOpen()) === "done", await bandsOpen())
+    }
     await page.screenshot({ path: join(shots, "one-view-drill.png") })
     // The fold folds the rest too, and brings it back as it was.
     await clickSettled(`[data-xq-project-row="${withDone}"] [data-xq-project-fold]`)
@@ -256,13 +293,14 @@ try {
     check("…and unfolding it brings them back", true)
     await clickSettled(`[data-xq-drill="${withDone}"] [data-xq-drill-band="done"] [data-sidebar-item] button`)
     await waitPath(() => /^\/all\/[^/]+\/thread\/[^/]+$/.test(location.pathname), "a drawer address")
-    await page.waitForSelector("[data-drawer-layer]", { timeout: 8000 })
+    await page.waitForSelector("[data-drawer-layer]")
     check("a Done row opens its thread's drawer on the page", true, await path())
     await escapeAll()
     await waitPath(() => location.pathname === "/", "the page again")
-    await clickSettled(counts)
+    check("…which closes back to All projects", (await search()) === "?all", await search())
+    await clickSettled(count("done"))
     await sleep(300)
-    check("the counts put the bands away again", (await page.$(`[data-xq-drill="${withDone}"]`)) === null && (await rowsOf(withDone)) === loud)
+    check("the Done count puts its band away again", (await page.$(`[data-xq-drill="${withDone}"]`)) === null && (await rowsOf(withDone)) === loud)
   })
 
   // ── /full is the drawer's option ─────────────────────────────────────────────────────────────────
@@ -282,18 +320,24 @@ try {
     await clickSettled('[role="menuitem"][data-value="fullscreen"]')
     await waitPath(() => location.pathname.endsWith("/full"), "the /full page")
     check("the drawer's ⋯ → Open fullscreen goes to /full", (await path()) === `${drawer}/full`, await path())
+    // Each door waits out the one before it. A door taken while the last morph still runs skips it, and
+    // the way back names the drawer `thread-chat` for 600ms (store.ts primeFullscreenReturn), so `f` inside
+    // that window collides with the forward door's own name and the browser aborts the transition. The
+    // navigation lands either way; the page errors say "Transition was skipped" and "duplicate
+    // view-transition-name". Waiting 600ms here, exactly the name's lifetime, raised both on a loaded
+    // machine — on the build before focus mode as well (2 of 4 runs each, load 30+, 2026-09-29).
     await page.waitForSelector("[data-standalone-return]", { timeout: 8000 })
-    await sleep(600)
+    await sleep(1500)
     await page.click("[data-standalone-return]")
     await waitPath(() => !location.pathname.endsWith("/full"), "leaving /full")
     check("leaving /full comes back to the drawer", (await path()) === drawer, await path())
     await page.waitForSelector("[data-drawer-layer]", { timeout: 8000 })
-    await sleep(600)
+    await sleep(1500)
     // `f` on the drawer being read takes the same way.
     await page.keyboard.press("f")
     await waitPath(() => location.pathname.endsWith("/full"), "/full by the f key")
     check("`f` on a drawer goes to /full", true)
-    await page.goto(`${origin}/`, { waitUntil: "networkidle2" })
+    await page.goto(ALL, { waitUntil: "networkidle2" })
     await page.waitForSelector("[data-xq-card]")
   })
 
@@ -304,24 +348,30 @@ try {
   // away: the click did nothing (caught here at 1.8s under load, 2026-09-28). The CPU is throttled 4x
   // across the close so the window is wide on any machine rather than only on a loaded one.
   await step("a card clicked while the page is still leaving a drawer opens its thread", async () => {
-    await page.goto(`${origin}/`, { waitUntil: "networkidle2" })
+    await page.goto(ALL, { waitUntil: "networkidle2" })
     await page.waitForSelector("[data-xq-card]")
     await sleep(800)
-    // A project other than the focus with a card and a Done thread: the Done row opens that project's
-    // drawer (a Ready row would only bring its card into view), and the card is clicked on the way out.
-    const focus = await page.evaluate(async () => (await import("/src/lib/base-path.ts")).projectSlug("/"))
-    const target = await page.evaluate((focus) => {
+    // A project with a card and a Done thread, and the page's own project set to ANOTHER one (the prompt
+    // box's pick, which All projects binds the page to): the Done row then opens that project's drawer
+    // address-first (a Ready row would only bring its card into view), and the card is clicked on the way
+    // out.
+    const target = await page.evaluate(() => {
       for (const title of document.querySelectorAll("[data-xq-card] h3 a")) {
         const href = title.getAttribute("href")
-        const [, , slug, , thread] = href.split("/")
-        if (slug === focus || thread.startsWith("term-")) continue
+        const [, , , , thread] = href.split("/")
+        if (thread.startsWith("term-")) continue
         const id = title.closest("[data-xq-card]").getAttribute("data-xq-card").split("/")[0]
         if (document.querySelector(`[data-xq-rail-project="${id}"] [data-xq-quiet-count="done"]`)) return { card: href, id }
       }
       return null
-    }, focus)
-    if (!target) throw new Error("no project other than the focus has both a card and a Done thread")
-    const counts = `[data-xq-rail-project="${target.id}"] [data-xq-quiet-toggle]`
+    })
+    if (!target) throw new Error("no project has both a card and a Done thread")
+    const elsewhere = projects.find((p) => p.id !== target.id)
+    await page.evaluate((id) => localStorage.setItem("frizz.crossProjectFocus", id), elsewhere.id)
+    await page.reload({ waitUntil: "networkidle2" })
+    await page.waitForSelector(`[data-xq-card] h3 a[href="${target.card}"]`)
+    await sleep(800)
+    const counts = `[data-xq-rail-project="${target.id}"] [data-xq-quiet-count="done"]`
     await clickSettled(counts)
     const doneRow = `[data-xq-drill="${target.id}"] [data-xq-drill-band="done"] [data-sidebar-item] button`
     await page.waitForSelector(doneRow, { timeout: 8000 })
@@ -363,7 +413,7 @@ try {
   // The seeded workers are stand-ins that cannot take a message, so the follow-up is answered here, 1.5s
   // late, as a loaded server would: the row must not wait for it (lib/steering.ts markSteeredIn).
   await step("a reply sent from a card moves its row to Working before the server answers", async () => {
-    await page.goto(`${origin}/`, { waitUntil: "networkidle2" })
+    await page.goto(ALL, { waitUntil: "networkidle2" })
     await page.waitForSelector('[data-xq-card] [data-surface="queueComposer"]')
     await sleep(800)
     const card = await page.$$eval('[data-xq-card]', (cards) => cards.map((c) => c.getAttribute("data-xq-card")).find((key) => !key.split("/")[1].startsWith("term-") && document.querySelector(`[data-xq-card="${key}"] [data-surface="queueComposer"]`)))
@@ -400,7 +450,7 @@ try {
 
   // ── /login is an account action, not a message ───────────────────────────────────────────────────
   await step("/login typed into a card opens sign-in and sends nothing", async () => {
-    await page.goto(`${origin}/`, { waitUntil: "networkidle2" })
+    await page.goto(ALL, { waitUntil: "networkidle2" })
     await clickSettled('[data-xq-card] [data-surface="queueComposer"]')
     await page.keyboard.type("/login")
     const before = posts.length
@@ -416,7 +466,7 @@ try {
   // ── a phone's width ──────────────────────────────────────────────────────────────────────────────
   await step("at 420px nothing overflows sideways", async () => {
     await page.setViewport({ width: 420, height: 900, deviceScaleFactor: 2 })
-    await page.goto(`${origin}/`, { waitUntil: "networkidle2" })
+    await page.goto(ALL, { waitUntil: "networkidle2" })
     await page.waitForSelector("[data-xq-card]")
     await sleep(800)
     const overflow = await page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth)

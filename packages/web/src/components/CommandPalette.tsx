@@ -102,7 +102,7 @@ export function CommandPalette() {
 
           {threads.length > 0 && (
             // On the cross-project page the palette searches the FOCUSED project only (the page project) —
-            // say whose, since the page around it shows every project's.
+            // say whose, since in All projects the page around it shows every project's.
             <Command.Group heading={isCrossProjectPath() ? `Threads in ${board?.projectName ?? board?.projectLabel ?? "this project"}` : "Threads"} className="cmdk-group">
               {threads.map((t) => (
                 <Item key={t.id} value={`${displayTitle(t)} ${t.id}`} onSelect={() => run(() => jump(t.id))}>

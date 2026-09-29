@@ -15,9 +15,10 @@ import { useNavigate } from "react-router"
 import { useSnapshot } from "valtio"
 import { PROJECT_ICON_EXTENSIONS, slugify, type ProjectAddResult, type ProjectCard, type ProjectEnclosed } from "@frizz/shared"
 import { rpc } from "../api/rpc.ts"
-import { everythingHref, innerPath, projectSlug } from "../lib/base-path.ts"
+import { innerPath, projectSlug } from "../lib/base-path.ts"
 import { showToast, store } from "../store.ts"
 import { rememberCrossProjectFocus } from "../lib/crossProject.ts"
+import { ALL_PROJECTS, homeHref, projectViewHref, tabView, viewHref } from "../lib/pageView.ts"
 import { useShortcut } from "../lib/keyboardRuntime.ts"
 import { Dialog } from "./ui/Dialog.tsx"
 import { ProjectSquare } from "./ProjectRail.tsx"
@@ -57,8 +58,8 @@ export function ProjectMenu({
   project,
   home,
   githubRepo,
-  filtered = false,
-  onFilter,
+  focused = false,
+  onFocus,
   onOpenChange,
   children,
 }: {
@@ -66,9 +67,9 @@ export function ProjectMenu({
   home: string | undefined
   /** `owner/repo` when the project's origin is github.com — its board's `githubRepo`, host-strict. */
   githubRepo?: string
-  /** The queue is filtered to this project (lib/crossProject.ts); with `onFilter`, the menu toggles it. */
-  filtered?: boolean
-  onFilter?: () => void
+  /** The page is focused on this project (lib/pageView.ts); with `onFocus`, the menu switches the view. */
+  focused?: boolean
+  onFocus?: () => void
   onOpenChange?: (open: boolean) => void
   children: ReactNode
 }) {
@@ -133,12 +134,12 @@ export function ProjectMenu({
             <RadixDropdown.Label title={project.path} className="truncate px-2 pb-1.5 pt-1 font-mono text-[11px] text-muted-70">
               {shortPath(project.path, home)}
             </RadixDropdown.Label>
-            {onFilter && (
+            {onFocus && (
               <>
-                {/* The queue's filter, from the project it names — the READY header's own control, said
-                    here too, since this row is where a reader looking at one project already is. */}
-                <RadixDropdown.Item className={MENU_ITEM} onSelect={onFilter}>
-                  {filtered ? "Clear the queue filter" : "Filter the queue to this project"}
+                {/* The page's view, from the project it names — the READY header's switcher, said here
+                    too: focused on this project it offers every project back, and otherwise this one. */}
+                <RadixDropdown.Item className={MENU_ITEM} onSelect={onFocus}>
+                  {focused ? "Show all projects" : "Focus on this project"}
                 </RadixDropdown.Item>
                 <RadixDropdown.Separator className="mx-1 my-1 h-px bg-border" />
               </>
@@ -233,10 +234,14 @@ function RenameProjectDialog({
       void queryClient.invalidateQueries({ queryKey: ["projectsQueues"] })
       showToast(`Renamed ${project.name} to ${updated.name}`)
       onClose()
-      // A drawer's address names its project by the OLD slug, which no longer names anything: home, still
-      // aimed at the renamed project. At `/` itself nothing names it — the pick is kept by id.
-      if (projectSlug() === project.slug && updated.slug !== project.slug && innerPath() !== "/") {
-        navigate(everythingHref(encodeURIComponent(updated.slug)), { replace: true })
+      // The OLD slug no longer names anything. A page focused on the project follows it to the new one;
+      // a drawer of it (its address names the project) closes, home to the tab's view. The pick is kept
+      // by id, so All projects needs nothing.
+      if (updated.slug !== project.slug) {
+        const view = tabView()
+        const focused = view?.kind === "project" && view.slug === project.slug
+        if (focused) navigate(projectViewHref(updated.slug), { replace: true })
+        else if (projectSlug() === project.slug && innerPath() !== "/") navigate(homeHref(), { replace: true })
       }
     },
   })
@@ -364,8 +369,11 @@ function DeleteProjectDialog({
           : `Deleted ${project.name}`,
       )
       onClose()
-      // Deleting the project the page is focused on leaves it addressed to nothing; `/` picks another.
-      if (projectSlug() === project.slug) navigate("/", { replace: true })
+      // Deleting the project the page is focused on leaves it showing nothing: All projects. Deleting the
+      // one it is merely bound to (All projects' pick, a drawer's) goes home, which binds another.
+      const view = tabView()
+      if (view?.kind === "project" && view.slug === project.slug) navigate(viewHref(ALL_PROJECTS), { replace: true })
+      else if (projectSlug() === project.slug) navigate(homeHref(), { replace: true })
     },
   })
   const error = remove.error instanceof Error ? remove.error.message : remove.error ? String(remove.error) : null
@@ -746,17 +754,16 @@ export function useAddProject(): { start: () => void; pending: boolean } {
 }
 
 /**
- * Adding a project is only ever a step towards working in it, so it lands there: Everything with its
- * prompt box aimed at it (`?focus=`, a PICK — routes.tsx useHomeFocus), from the page or from the welcome
- * page of a machine with nothing on it. `navigate`, not location.assign: the rail must not be torn down on
- * the way.
+ * Adding a project is only ever a step towards working in it, so it lands there: the page focused on it
+ * (`?project=`, lib/pageView.ts), from the page or from the welcome page of a machine with nothing on it.
+ * `navigate`, not location.assign: the rail must not be torn down on the way.
  */
 function useOpenAddedProject(): (project: { id: string; slug: string }) => void {
   const navigate = useNavigate()
   const queryClient = useQueryClient()
   return (project) => {
     void queryClient.invalidateQueries({ queryKey: ["projectsList"] })
-    navigate(everythingHref(encodeURIComponent(project.slug)))
+    navigate(projectViewHref(project.slug))
   }
 }
 
@@ -801,6 +808,7 @@ const MARK_PX = 76
  */
 export function Welcome({ projects: cards }: { projects: readonly ProjectCard[] }) {
   const add = useAddProject()
+  const navigate = useNavigate()
   const home = homeOf(cards)
   // The Home workspace is always registered, so it is not what this page counts: a machine with only
   // Home still has no project. It is offered below instead, as the other way to start.
@@ -852,15 +860,18 @@ export function Welcome({ projects: cards }: { projects: readonly ProjectCard[] 
           <code className="rounded border border-border bg-panel px-1.5 py-0.5 font-mono text-muted">frizz</code>{" "}
           in any folder.
         </p>
-        {/* Choosing Home makes it the pick, and `/` then lands on Everything aimed at it (routes.tsx
-            useHomeFocus) — the way to clone a first repository without adding a project to hold it. */}
+        {/* Choosing Home focuses the page on it (and makes it All projects' pick too) — the way to clone a
+            first repository without adding a project to hold it. */}
         {homeCard && (
           <p className="text-[11.5px] text-muted-70">
             Or{" "}
             <button
               type="button"
               data-welcome-home
-              onClick={() => rememberCrossProjectFocus(homeCard.id)}
+              onClick={() => {
+                rememberCrossProjectFocus(homeCard.id)
+                navigate(projectViewHref(homeCard.slug))
+              }}
               className="rounded-sm text-fg/85 underline decoration-muted/40 underline-offset-2 outline-none transition-colors hover:text-fg hover:decoration-fg focus-visible:ring-1 focus-visible:ring-focus-ink-60"
             >
               start a thread in {shortPath(homeCard.path, home)}

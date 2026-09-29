@@ -18,11 +18,11 @@ const baseUrl = process.env.FRIZZ_PROJECT_RAIL_E2E_URL
 // Every piece is fine in isolation; only a real switch followed by a real save reaches the seam, so
 // this drives exactly that sequence.
 //
-// The switch is the prompt box's project picker, which re-focuses `/` on another project without a
-// navigation: the page binds that project, and page-relative scopes follow it (routes.tsx
-// CrossProjectPage). Until 2026-09-28 it was a client-side navigation from Everything to the other
-// project's board, `/project/<slug>`, through its row's ⋯ menu; the board is gone, and a focus change is
-// the switch the one page has.
+// The switch is the READY header's project switcher, a navigation WITHIN the one mounted page, from
+// `/?project=<a>` to `/?project=<b>`: the page binds the new project, and page-relative scopes follow it
+// (routes.tsx CrossProjectPage). Until 2026-09-28 it was a client-side navigation from Everything to the
+// other project's board, `/project/<slug>`; from then until focus mode (2026-09-29), the prompt box's
+// picker re-focusing `/`.
 test("flipping 'Project sidebar' after switching the page to another project shows the rail without a reload", {
   skip: !baseUrl,
   timeout: 90_000,
@@ -34,7 +34,7 @@ test("flipping 'Project sidebar' after switching the page to another project sho
   const current = (await (await fetch(`${rpc}/settingsGet`, { headers })).json()) as { result: Record<string, unknown> }
   const reset = await fetch(`${rpc}/settingsSet`, { method: "POST", headers, body: JSON.stringify({ ...current.result, projectRail: false }) })
   assert.equal(reset.status, 200, `settingsSet must succeed: ${await reset.text()}`)
-  // Every registered project, opened: the server activates a tenant on its first request, and the picker
+  // Every registered project, opened: the server activates a tenant on its first request, and the page
   // only binds a project the server has open.
   const listed = (await (await fetch(`${rpc}/projectsList`, { headers })).json()) as { result: Array<{ slug: string; home?: boolean; stale?: boolean }> }
   const slugs = listed.result.filter((p) => !p.home && !p.stale).map((p) => p.slug)
@@ -49,16 +49,18 @@ test("flipping 'Project sidebar' after switching the page to another project sho
     page.on("pageerror", (error) => errors.push(String(error)))
     await page.setViewport({ width: 1440, height: 900, deviceScaleFactor: 1 })
     const rail = () => page.evaluate(() => document.querySelector('nav[aria-label="Projects"]') !== null)
-    const picked = () => page.$eval("[data-xq-picker-name]", (el) => el.textContent?.trim() ?? "")
+    const focused = () => page.evaluate(() => new URLSearchParams(location.search).get("project") ?? "")
 
-    await page.goto(`${baseUrl}/?focus=${slugs[0]}`, { waitUntil: "networkidle2" })
-    await page.waitForFunction((s) => document.querySelector("[data-xq-picker-name]")?.textContent?.trim() === s, { timeout: 15_000 }, slugs[0])
+    await page.goto(`${baseUrl}/?project=${slugs[0]}`, { waitUntil: "networkidle2" })
+    await page.waitForSelector('[data-inbox-header] [data-xq-switcher="project"]', { timeout: 15_000 })
     assert.equal(await rail(), false, "the rail starts hidden")
+    // A document load would rebind the cache and hide the bug, so the page must be this one throughout.
+    await page.evaluate(() => { (window as unknown as { __sameDocument: boolean }).__sameDocument = true })
 
-    // CLIENT-SIDE, through the prompt box's picker — a document load would rebind the cache. A project
-    // OTHER than the cold load's focus, so the page's scope differs from the one the rail was read under.
+    // CLIENT-SIDE, through the switcher. A project OTHER than the cold load's, so the page's scope differs
+    // from the one the rail was read under.
     const slug = slugs[1]!
-    await page.click("[data-xq-project-picker]")
+    await page.click("[data-inbox-header] [data-xq-switcher]")
     await page.waitForSelector(`[role="menuitem"][data-value="${slug}"]`, { timeout: 10_000 })
     // A Radix menu mounts its items before it positions them; click once the item holds still on screen.
     await page.waitForFunction((s) => new Promise((resolve) => {
@@ -67,10 +69,12 @@ test("flipping 'Project sidebar' after switching the page to another project sho
       requestAnimationFrame(() => requestAnimationFrame(() => resolve(document.querySelector(`[role="menuitem"][data-value="${s}"]`)?.getBoundingClientRect().y === at.y)))
     }), { timeout: 10_000 }, slug)
     await page.click(`[role="menuitem"][data-value="${slug}"]`)
-    await page.waitForFunction((s) => document.querySelector("[data-xq-picker-name]")?.textContent?.trim() === s, { timeout: 15_000 }, slug)
-      .catch(async () => assert.fail(`the picker never moved to ${slug}; it names "${await picked()}"`))
+    await page.waitForFunction((s) => new URLSearchParams(location.search).get("project") === s && document.querySelector('[data-inbox-header] [data-xq-switcher="project"]'), { timeout: 15_000 }, slug)
+      .catch(async () => assert.fail(`the switcher never moved to ${slug}; the page is on "${await focused()}"`))
     assert.equal(await rail(), false, "still hidden after the switch")
 
+    // The menu's own close first: while a Radix menu is up, the page under it takes no clicks.
+    await page.waitForFunction(() => !document.querySelector('[role="menu"]'), { timeout: 10_000 })
     await page.click('[aria-label="Settings"]')
     // The setting is an Off/On pair under its label (SettingsDrawer.tsx OnOffToggle), with no name of
     // its own — so the field is found by its label and "On" pressed inside it.
@@ -87,8 +91,8 @@ test("flipping 'Project sidebar' after switching the page to another project sho
     // The save is one round trip; the rail must follow it on THIS page, not on the next load.
     await page.waitForFunction(() => document.querySelector('nav[aria-label="Projects"]') !== null, { timeout: 10_000 })
       .catch(() => assert.fail("the rail never appeared after the setting flipped — the drawer's save landed in a cache entry the rail was not reading"))
-    assert.equal(new URL(page.url()).pathname, "/", "no navigation happened along the way")
-    assert.equal(await picked(), slug, "the page is still on the project it was switched to")
+    assert.equal(await page.evaluate(() => (window as unknown as { __sameDocument?: boolean }).__sameDocument), true, "no document load along the way")
+    assert.equal(await focused(), slug, "the page is still on the project it was switched to")
     assert.deepEqual(errors, [], "no page errors")
   } finally {
     await browser.close()

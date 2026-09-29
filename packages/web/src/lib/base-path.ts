@@ -2,28 +2,28 @@ import { FRIZZ_ROUTE_PREFIX } from "@frizz/shared"
 
 // WHICH PROJECT THIS PAGE IS SHOWING, taken from its own URL.
 //
-// One Frizz per machine serves every project from one origin, and ONE PAGE shows them all: Everything,
-// at bare `/`. A thread drawer open on it is `/all/<slug>/thread/<t>` — the address names the thread's
-// project, because that is the thread's address — and its fullscreen page is the same plus `/full`.
-// That works because Frizz's own routes live under `/_frizz/`, so the top-level namespace is the SPA's.
+// One Frizz per machine serves every project from one origin, and ONE PAGE shows them, at bare `/`: one
+// project (`/?project=<slug>`, focus mode, the default) or every project (`/?all`) — its VIEW, which is a
+// query and not a path segment (lib/pageView.ts). A thread drawer open on it is `/all/<slug>/thread/<t>` —
+// the address names the thread's project, because that is the thread's address — and its fullscreen page
+// is the same plus `/full`. That works because Frizz's own routes live under `/_frizz/`, so the top-level
+// namespace is the SPA's.
 //
 // THERE IS NO PROJECT PAGE. `/project/<slug>` was one — a project's board, then its "project view" —
 // until 2026-09-28 (maintainer: "urls like this should not exist anymore"); nothing here parses or mints
-// it now, and the route tree sends it home like any other unknown address (routes.tsx).
+// it now, and the route tree lands it on the page focused on that project (routes.tsx HomeRedirect).
 //
 // AN EMPTY BASE IS A SUPPORTED STATE, not a bug: an unprefixed `/thread/<slug>/full` is the launching
 // project's fullscreen page, and a page with no project at all (the welcome) has nothing to prefix.
 //
-// The page is always FOCUSED on one project — the one its prompt box dispatches into, or the one whose
-// drawer is open — and the focus IS the page project: every helper below answers for it (the same API
-// base, the same live feed, the same cache scope), which is what lets the whole drawer stack and composer
-// work for any project on the one page.
+// The page is always BOUND to one project — the page project: the project it is focused on, All
+// projects' prompt-box pick, or the one whose drawer is open — and every helper below answers for it
+// (the same API base, the same live feed, the same cache scope), which is what lets the whole drawer
+// stack and composer work for any project on the one page.
 //
-// AT `/` THE FOCUS IS NOT IN THE URL. Where a new thread goes is a setting of the prompt box, like its
-// model, not an address (maintainer 2026-09-28: "should not be reflected as a top-level url route like
-// this: /all/frizz"). The route resolves it — the operator's remembered pick (lib/crossProject.ts) —
-// and hands it here with `setHomeFocus`, so `/` answers as `/all/<focus>` did. A drawer's URL still
-// names its thread's project, because that is the thread's address, not the box's target.
+// AT `/` THE PAGE PROJECT IS NOT IN THE PATH. The route resolves it — the view's project, or the pick
+// (lib/crossProject.ts) — and hands it here with `setHomeFocus`, so `/` answers as `/all/<slug>` did. A
+// drawer's URL still names its thread's project, because that is the thread's address.
 
 /**
  * The SPA's own top-level route names — the in-app links an agent writes unprefixed, and the ones a page
@@ -118,19 +118,11 @@ export function isCrossProjectPath(pathname?: string): boolean {
 
 /**
  * The cross-project page's prefix for a project — the one place that knows the shape, and only ever
- * with a path after it, a thread's (`/all/<slug>/thread/<t>`). The page itself is `/`: see
- * `everythingHref`.
+ * with a path after it, a thread's (`/all/<slug>/thread/<t>`). The page itself is `/`, its view in the
+ * query (lib/pageView.ts).
  */
 export function crossProjectHref(slug: string): string {
   return `${CROSS_PROJECT_PREFIX}/${slug}`
-}
-
-/**
- * The cross-project page, `/` — optionally aiming its prompt box at a project on the way in. `?focus=`
- * is read once by the route, remembered as the pick, and dropped from the address (routes.tsx).
- */
-export function everythingHref(focusSlug?: string): string {
-  return focusSlug ? `/?focus=${focusSlug}` : "/"
 }
 
 /** `/all/nub`, or `""` when this page names no project (the launching project's unprefixed /full). */
