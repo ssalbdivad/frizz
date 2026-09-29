@@ -44,6 +44,11 @@ before(async () => {
   // A 500 from the stubbed completeThread is the failure case's own input, not a page error.
   page.on("console", (m) => { if (m.type() === "error" && !/404|favicon|status of 500/i.test(m.text())) errors.push(m.text()) })
   page.on("pageerror", (e) => errors.push(String(e)))
+  // WARM A COLD VITE before any timed step. A fresh server optimizes this fixture's dependencies on the
+  // first load and reloads the page when it is done; that ran 45s once and failed the first test's
+  // 30s wait, with nothing wrong with the card.
+  await page.goto(`${baseUrl}/queue-card-states-fixture.html`, { waitUntil: "networkidle0", timeout: 120_000 })
+  await page.waitForSelector(FIRST, { timeout: 120_000 })
 })
 
 after(async () => { await browser?.close() })
