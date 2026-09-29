@@ -102,7 +102,8 @@ export interface NormalizedTail {
   aiTitle?: string
   lastUserAt?: string
   // ISO8601 of the newest turn the HUMAN typed — lastUserAt minus every frizz wake delivery (a watcher,
-  // a timer, a nudge, and the one that carries their answers). The clock questionRepliedPast reads.
+  // a timer, a nudge, and the one that carries their answers). The clock questionRepliedPast reads —
+  // information only since 2026-09-29; it releases nothing.
   lastHumanAt?: string
   lastToolCallAt?: string // ISO8601 of the agent's newest tool call — what tells a reply that did WORK from one that only talked
   lastUserText?: string // latest genuine human message (used to confirm wake-token delivery)

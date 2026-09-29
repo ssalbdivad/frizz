@@ -113,6 +113,14 @@ export function nodeAnswered(spec: AskedQuestion, answer: BlockAnswer | undefine
   return answer.chosen !== null
 }
 
+/** Is this registration COMPLETE — every question in it that is live answered, the root and each
+ *  follow-up the taken option opened? The moment a question is complete is the moment it is sent
+ *  (2026-09-29: answers go one question at a time), so a pick that opens follow-ups waits for them, and a
+ *  pick that opens none is the whole answer. */
+export function questionComplete(spec: AskedQuestion, answers: ReadonlyMap<string, BlockAnswer>): boolean {
+  return liveQuestionNodes(spec, answers).every((node) => nodeAnswered(node.spec, answers.get(node.path)))
+}
+
 /** Fold the staged answers back into the payload the worker receives, or undefined when the ROOT is
  *  unanswered — a registration whose root is blank has said nothing, whatever was typed further down a
  *  branch that is no longer live.

@@ -382,6 +382,108 @@ test("question: an archived thread keeps its answer rather than spending it", as
   assert.equal(h.storage.getThreadQuestion("qst_1")?.delivered, 0)
 })
 
+// ---- ANSWERS ARRIVE A QUESTION AT A TIME (2026-09-29) ----
+//
+// The card sends each question the moment it is complete, so the worker starts on the first answer while
+// the human reads the rest — and the second usually lands while the worker is busy with the first. None
+// of that may cost a turn per card.
+
+function answerQ(h: Harness, id: string, question: string, chosen = "A") {
+  h.storage.answerThreadQuestion(id, JSON.stringify({ questionId: id, question, chosen: [chosen] }), h.clock.ms)
+}
+
+test("question: an answer goes out MID-TURN, like the human's typed steer, instead of waiting to open a turn of its own", async () => {
+  const h = harness()
+  h.storage.upsertSession(row("t"))
+  askQ(h, "t", "qst_1", "Which store?")
+  askQ(h, "t", "qst_2", "Which dist-tag?")
+  h.tele.set("t", tele())
+  const s = h.make()
+  answerQ(h, "qst_1", "Which store?")
+  await s.tick()
+  assert.equal(h.resumes.length, 1, "the first answer starts the worker")
+
+  // The worker is busy with it. The negative control: a watch expiring now is HELD for the rest, as
+  // every wake about a thread that has stopped is.
+  h.tele.set("t", tele(undefined, "in-flight"))
+  armWatch(h, "t", { expiresAtMs: h.clock.ms - 1 })
+  answerQ(h, "qst_2", "Which dist-tag?")
+  await s.tick()
+  assert.equal(h.resumes.length, 2, "the second answer joins the running turn")
+  assert.match(h.resumes[1].message, /^1\. “Which dist-tag\?” → A$/m)
+  assert.doesNotMatch(h.resumes[1].message, /watch/, "the expired watch is not folded into the human's answer")
+  assert.equal(createWakeDeliveryStore(h.storage.scope).listOpen().length, 1, "the watch wake waits for the rest")
+  h.storage.close()
+})
+
+test("question: answers that piled up as SEPARATE rows while none could go reach the worker as ONE answers message", async () => {
+  const h = harness()
+  h.storage.upsertSession(row("t"))
+  askQ(h, "t", "qst_1", "Which store?")
+  askQ(h, "t", "qst_2", "Which dist-tag?")
+  askQ(h, "t", "qst_3", "Rename it first?")
+  const s = h.make()
+  // No telemetry: frizz cannot read the thread, so nothing goes — but each answer is its own row, minted
+  // by its own pass.
+  answerQ(h, "qst_1", "Which store?", "SQLite")
+  await s.tick()
+  h.clock.ms += 2_000
+  answerQ(h, "qst_2", "Which dist-tag?", "next")
+  answerQ(h, "qst_3", "Rename it first?", "No")
+  await s.tick()
+  assert.equal(h.resumes.length, 0)
+  assert.equal(createWakeDeliveryStore(h.storage.scope).listOpen().length, 2, "two rows: the first pass's and the second's")
+
+  h.tele.set("t", tele())
+  h.clock.ms += 60_000 // past the deferral, so both rows are claimable again
+  await s.tick()
+  assert.equal(h.resumes.length, 1, "one delivery, not one per row")
+  // ONE header and every row renumbered in order: the chat reads this by position, so a second header or
+  // a heading per part would print frizz's text inside the human's answer chip.
+  const lines = h.resumes[0].message.split("\n")
+  assert.equal(lines.filter((line) => line === "Answers to earlier questions:").length, 1)
+  assert.deepEqual(lines.filter((line) => /^\d+\. /.test(line)), ["1. “Which store?” → SQLite", "2. “Which dist-tag?” → next", "3. “Rename it first?” → No"])
+  assert.doesNotMatch(h.resumes[0].message, /held \d+ wakes|###/)
+  assert.equal((h.resumes[0].message.match(/⏱/g) ?? []).length, 1, "one clock at the foot")
+  assert.deepEqual(createWakeDeliveryStore(h.storage.scope).list().map((d) => d.state), ["delivered", "delivered"], "each row reaches its own terminal state")
+  await s.tick()
+  assert.equal(h.resumes.length, 1, "nothing goes round again")
+  h.storage.close()
+})
+
+test("question: a kick that lands while a pass is delivering runs one more pass, so the next answer is not a whole tick late", async () => {
+  const h = harness()
+  h.storage.upsertSession(row("t"))
+  askQ(h, "t", "qst_1", "Which store?")
+  askQ(h, "t", "qst_2", "Which dist-tag?")
+  h.tele.set("t", tele())
+  let release!: () => void
+  const gate = new Promise<void>((resolve) => { release = resolve })
+  const s = h.make({
+    // Far longer than the test: every pass after the first is a KICK's.
+    tickMs: 3_600_000,
+    resume: async (slug, message, deliveryId) => {
+      h.resumes.push({ slug, message, deliveryId })
+      if (h.resumes.length === 1) await gate
+    },
+  })
+  s.start()
+  await s.tick()
+  answerQ(h, "qst_1", "Which store?")
+  s.kick() // the pass that delivers it, held open inside `resume`
+  await new Promise((resolve) => setTimeout(resolve, 20))
+  assert.equal(h.resumes.length, 1)
+  answerQ(h, "qst_2", "Which dist-tag?")
+  s.kick() // lands mid-pass — this used to be swallowed
+  s.kick() // …and several coalesce into one more pass
+  release()
+  for (let i = 0; i < 50 && h.resumes.length < 2; i++) await new Promise((resolve) => setTimeout(resolve, 10))
+  assert.equal(h.resumes.length, 2, "the second answer went on the pass the kick asked for")
+  assert.match(h.resumes[1].message, /“Which dist-tag\?”/)
+  await s.stop()
+  h.storage.close()
+})
+
 // ---- single-fire on a witnessed transition ----
 
 test("timer: fires exactly once on the witnessed crossing, with the prose in the steer", async () => {

@@ -59,13 +59,13 @@ but where a verb exists for what you are saying, call it. **A QUESTION HAS NO FE
 2026-09-11): the only way to ask is `mcp__frizz__ask`, and a question written into a fence's body is
 plain prose — no card, no answer, and no sign-off.
 
-**AN OPEN QUESTION IS A STANDING SIGN-OFF — REST NORMALLY — UNTIL THE HUMAN REPLIES PAST IT.** Any
-unanswered question counts, not only one you registered this turn, and frizz does not bump you for a
-missing fence while one is open. When the work that does not depend on the answer runs out, write your
-handoff prose and STOP. Nothing you write makes the card appear or hides it — frizz draws every open
-question at the BOTTOM of your handoff, below its last line; your write-up carries the reasoning that
-leads up to the ask, never a copy of it (see Questions for the human). A question the human replied
-past without answering is no longer any of that: see **A reply past a question is a pivot**.
+**AN OPEN QUESTION IS A STANDING SIGN-OFF — REST NORMALLY.** Any unanswered question counts, not only
+one you registered this turn, and frizz does not bump you for a missing fence while one is open. When
+the work that does not depend on the answer runs out, write your handoff prose and STOP. Nothing you
+write makes the card appear or hides it — frizz draws every open question at the BOTTOM of your newest
+handoff, below its last line; your write-up carries the reasoning that leads up to the ask, never a
+copy of it (see Questions for the human). It stays open until it is answered, dismissed or withdrawn:
+the human typing to you does not close it (see **A message past a question does not close it**).
 **And write no ` ```awaiting ` beside it.** A park cannot take while a question stands — the thread
 sits in the queue on the question — so frizz REFUSES that fence and bumps you to rewrite the sign-off
 without it. Name what is still running in the prose (frizz lists every live shell, sub-agent and
@@ -562,28 +562,32 @@ calls, caveats and verification the human needs before answering go above the ca
 (Nor is there a placement marker any more: an empty question fence naming an id draws nothing. It was
 retired 2026-09-28 for putting cards mid-handoff with the explanation underneath them.)
 
-**A QUESTION STAYS WITH THE EXCHANGE THAT ASKED IT.** Frizz's own wakes do not strand it — a watcher,
-a timer or a sub-agent returning is not the human — so until the human replies, the card rides down to
-the bottom of your newest handoff.
+**AN OPEN QUESTION RIDES TO YOUR NEWEST HANDOFF.** Until it is answered, dismissed or withdrawn, its
+card sits at the bottom of the newest handoff you have rested on, whatever came in between — a wake, an
+answer to another card, a message from the human.
 
-**A REPLY PAST A QUESTION IS A PIVOT.** When the human writes to you instead of answering an open
-card, they have moved on: do what they asked. The card stays ABOVE their reply, with the handoff that
-asked it, still answerable — if they go back and answer it, the answer reaches you as its own wake,
-restating the question. Until then it holds nothing: it is not your sign-off (sign off on the new work
-as usual), it does not block `done`, it does not refuse a park, and it is NOT "still open below" —
-nothing you write now sits above it. Do not steer the human back to it, and NEVER ASK IT AGAIN —
-not reworded, not after an `unask`, not because the new work seems to need it: `ask` refuses a
-question the human replied past. Where the new work turns on it, decide it yourself and say which
-way you went. `mcp__frizz__activity` lists replied-past questions apart from the ones still owed.
-Only a TYPED reply sets a question aside: the human answering other cards does not, and a `danger`
-question never is — it holds until answered, dismissed or withdrawn.
+**ANSWERS ARRIVE ONE QUESTION AT A TIME.** The human's card sends each question the moment it is
+complete, so the first answer can reach you while they are still reading the rest, and a later one can
+land while you are working on the first — mid-turn, at your next step. Act on each as it lands; the
+unanswered rest stay open and stay your sign-off. That is why the questions of one `ask` must stand
+alone: one that only makes sense after another's answer belongs in that option's `followUps`.
+
+**A MESSAGE PAST A QUESTION DOES NOT CLOSE IT — YOU DECIDE WHAT IT DID.** When the human writes to you
+instead of answering, frizz appends a note to their message listing the questions still open, by id.
+Read the message against each. If it made one moot — they asked for something that obviates it, or
+settled it in prose — `unask` it and say so. If it was a side question or a clarification, answer it
+and leave the question open. Whatever you leave open is still your sign-off, still blocks `done`,
+still refuses a park, and its card rides to the bottom of your next handoff. NEVER ASK AGAIN a question
+the human dismissed, or one you withdrew after their newest message — not reworded, not because the
+work seems to need it: `ask` refuses both. Decide it yourself and say which way you went.
+`mcp__frizz__activity` marks the questions the human has written past.
 
 A question you no longer want answered is not one you leave out of the write-up — it is one you
 `unask`, which is the difference between deciding something yourself and quietly hoping nobody
-answers. Questions asked in one `ask` call render together and send as one batch.
+answers. Questions asked in one `ask` call render together; each is answered on its own.
 
 **AN OPEN REGISTERED QUESTION IS THE HANDBACK** — emit no `done`/`awaiting` fence beside it, and
-write no question fence at all. The answer arrives as your next user message, as its own wake.
+write no question fence at all. Each answer arrives as a user message of its own, as its own wake.
 
 ## The stop criterion
 

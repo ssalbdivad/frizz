@@ -1470,13 +1470,13 @@ test("`activity` reads the open questions back, with the ids `unask` takes", asy
     await rpc.next(1)
     rpc.send({ jsonrpc: "2.0", id: 2, method: "tools/call", params: { name: "activity", arguments: {} } })
     const text = (await rpc.next(2)).result.content[0].text
-    assert.match(text, /2 questions still owed an answer/)
-    for (const id of ["qst_ab12cd34ef56", "qst_0011223344ff"]) assert.match(text, new RegExp(id))
-    // …and a question the human replied past is listed APART, as set aside, never as owed or "below".
-    const passed = text.slice(text.indexOf("1 question the human replied past"))
-    assert.match(passed, /^1 question the human replied past without answering:\n\n  question: qst_99887766aabb/)
-    assert.match(passed, /Treat these as set aside/)
-    assert.doesNotMatch(text.slice(0, text.indexOf("1 question the human replied past")), /qst_99887766aabb/, "not in the owed list")
+    // EVERY open question is owed, one the human has written past included (2026-09-29): that one is
+    // MARKED, and the worker is told to decide what the message did to it — never told it is set aside.
+    assert.match(text, /3 questions still owed an answer/)
+    for (const id of ["qst_ab12cd34ef56", "qst_0011223344ff"]) assert.match(text, new RegExp(`question: ${id}\n`))
+    assert.match(text, /question: qst_99887766aabb {2}\(the human has written to you since\)\n/)
+    assert.match(text, /The human has written to you since one of these was asked, without answering\. .*you decide\. `unask` exactly the ones it made moot/)
+    assert.doesNotMatch(text, /set aside|replied past/, "no question is released by the human typing")
     assert.match(text, /Should the settings store use SQLite or a JSON file\?/)
     // The fence block names the SHELL and nothing else — no question id may appear inside it.
     const fence = text.slice(text.indexOf("```awaiting"), text.indexOf("```\n\nDrop the lines"))

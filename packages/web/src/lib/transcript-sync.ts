@@ -1,4 +1,4 @@
-import { stripHumanGapNote, stripWakeDeliveryToken, type TranscriptMessage } from "@frizz/shared"
+import { stripFollowUpRiders, stripWakeDeliveryToken, type TranscriptMessage } from "@frizz/shared"
 
 // A transcript message that may carry the client-only/queued flag (server pending OR local optimistic).
 export type QueuedMessage = TranscriptMessage & { queued?: boolean }
@@ -14,7 +14,7 @@ export type QueuedMessage = TranscriptMessage & { queued?: boolean }
 // own ledger projection (delivery-ledger.renderMatchKey, the maintainer's 2026-08-24 double render); this
 // is the same shedding on the client half. `displayText` is the server's own projection of these riders,
 // so it is preferred where present and the strippers cover a record that arrived without one.
-const matchKey = (m: QueuedMessage): string => stripHumanGapNote(stripWakeDeliveryToken(m.displayText ?? m.text)).trim()
+const matchKey = (m: QueuedMessage): string => stripFollowUpRiders(stripWakeDeliveryToken(m.displayText ?? m.text)).trim()
 
 function freshServerUserTexts(prev: QueuedMessage[], incoming: QueuedMessage[]): string[] {
   const previousSourceIds = new Set(
