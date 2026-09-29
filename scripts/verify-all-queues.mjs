@@ -291,8 +291,11 @@ try {
     // An option is a row whose button carries no text of its own (it is labelled by the row).
     const option = (await page.evaluateHandle((scope) => [...document.querySelectorAll(`${scope} [data-question-option]`)].find((row) => row.textContent?.includes("Every agent, one board"))?.querySelector("button") ?? null, scope)).asElement()
     if (!option) throw new Error("no option \"Every agent, one board\"")
+    // THE PICK IS THE SEND. Since 2c41b46f (2026-09-29) a single-choice pick that completes the ask is
+    // sent on the spot, and since f515ee44 each question is sent the moment it is complete, with Send
+    // answers drawn only while something is half-filled. This step clicked Send answers after the pick
+    // until then, and found no button to click.
     await option.click()
-    await page.click(`${scope} [data-send-answers]`)
     await waitFor("the tenant question to settle", async () => { const t = await threadOf("marketing-site", "hero-copy-variants"); return t && (t.questions ?? []).length === 0 ? t : null })
     const other = await threadOf("acme-api", "rate-limit-headers")
     // A thread's `questions` lists only its OPEN rows, so the launcher's must still carry one.
