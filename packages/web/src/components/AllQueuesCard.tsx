@@ -231,6 +231,16 @@ export const AllQueuesCard = memo(function AllQueuesCard({
     onReturn()
     void queryClient.invalidateQueries({ queryKey: ["projectsQueues"] })
   }
+  // Blank space under the card that its history asked for, when the page was too short to scroll far
+  // enough to hold the card's exchange still as history landed above it (QueueCardHistory). Reset with
+  // the history on a new rest.
+  const [reserve, setReserve] = useState(0)
+  const reserveBelow = useCallback((px: number) => setReserve((current) => current + px), [])
+  const [reserveRest, setReserveRest] = useState(thread.lastAssistantAt)
+  if (reserveRest !== thread.lastAssistantAt) {
+    setReserveRest(thread.lastAssistantAt)
+    setReserve(0)
+  }
   const answeringScope = useMemo(() => ({ api, projectDir: project.projectDir, projectId: project.id }), [api, project.projectDir, project.id])
 
   const openHere = (event: ReactMouseEvent<HTMLAnchorElement>) => {
@@ -286,7 +296,7 @@ export const AllQueuesCard = memo(function AllQueuesCard({
                   handoff: a thread that rests again is a new exchange with a new "before". */}
               {handoff.data && (
                 <ThreadProjectScope projectId={project.id} projectDir={project.projectDir}>
-                  <QueueCardHistory key={thread.lastAssistantAt ?? ""} api={api} slug={thread.id} handoff={handoff.data} />
+                  <QueueCardHistory key={thread.lastAssistantAt ?? ""} api={api} slug={thread.id} handoff={handoff.data} onShortfall={reserveBelow} />
                 </ThreadProjectScope>
               )}
               {handoff.data?.asked && <AskedBubble text={handoff.data.asked} />}
@@ -351,6 +361,7 @@ export const AllQueuesCard = memo(function AllQueuesCard({
           </ThreadProjectScope>
         </article>
       </div>
+      {reserve > 0 && <div aria-hidden data-xq-history-reserve style={{ height: reserve }} />}
     </div>
   )
 }, sameCard)
