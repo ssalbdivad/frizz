@@ -142,7 +142,7 @@ export function createTenantMap<App = unknown>(options: TenantMapOptions<App>): 
     for (const [name, run] of [
       ["transports", async () => { if (entry.app !== undefined) await options.closeApp?.(entry.app) }],
       ["tailer", cleanups.tailer],
-      ["terminal commands", cleanups.commandRunner],
+      ["thread terminals", cleanups.terminalRunner],
       ["subscriptions", cleanups.subscriptions],
       ["scheduler", cleanups.scheduler],
       ["board", cleanups.board],

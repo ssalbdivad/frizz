@@ -10,9 +10,9 @@ import type { ThreadView } from "@frizz/shared"
 // ended long ago. Under oldest-first that sorted it ABOVE everything the human had been waiting on,
 // straight into the card they were reading or answering, and the "queue" behaved like a stack
 // (maintainer 2026-09-24: "when a new thread is ready, it moves to the top of the *stack* which can be
-// jarring if you're reading/typing input on another thread. make it work like an actual queue"). A
-// terminal command thread had it worse: at rest it had no rest time at all, so it sorted by when the
-// run STARTED.
+// jarring if you're reading/typing input on another thread. make it work like an actual queue"). The
+// top-level terminal command threads of the time had it worse: at rest they had no rest time at all, so
+// they sorted by when the run STARTED.
 //
 // So the order key is the enqueue instant itself, observed rather than inferred: the board runs every
 // thread through `stamp` on each assembly (the tailer's ~1s nudge plus the 15s reconcile), and the
@@ -30,9 +30,9 @@ import type { ThreadView } from "@frizz/shared"
 //
 // DURABLE, because the server restarts constantly and the alternative is re-deriving the key from the
 // rest time at every boot — which puts every thread that entered off a wait back at the front of the
-// line. Session rows persist it (`session.queued_at`), and so do terminal command threads
-// (`command_thread.queued_at`): a run sitting at a prompt is queued before a restart and after it, and
-// the boot's "interrupted" exit time must not re-date it.
+// line. Session rows persist it (`session.queued_at`). (Terminal command threads persisted their own in
+// `command_thread.queued_at` until 2026-09-29, when a terminal stopped being a thread: one waiting at a
+// prompt now queues the thread it belongs to, on that thread's stamp.)
 //
 // AN UNKNOWN READING IS NOT A DEPARTURE. The board starts before the tailer, and the tailer primes at
 // most 25 rows a tick, so for the first seconds after a boot every row it has not reached yet has no
@@ -47,7 +47,7 @@ import type { ThreadView } from "@frizz/shared"
 // A STORED STAMP IS CHECKED ONCE, the first time its thread reads as queued after a boot: if the agent
 // has spoken since it (a rest newer than the stamp), the thread left and re-entered while this server was
 // not watching, and the stamp is refused for a fresh one. After that the stamp simply holds — a thread
-// can be queued MID-TURN (a permission prompt, a silent turn, a command at a prompt), and whatever its
+// can be queued MID-TURN (a permission prompt, a silent turn, its terminal at a prompt), and whatever its
 // agent or process writes while it waits must not move it.
 //
 // A RESTART IS A GAP IN THE SIGHTINGS, and the clock bridges it with one durable instant: when the last
@@ -161,8 +161,8 @@ function allStillOpen(ids: ReadonlySet<string>, open: ReadonlySet<string>): bool
 }
 
 // The latest instant the thread itself can vouch for having stopped: the agent's own last output, or —
-// for a thread with no agent output (a terminal command, a worker that died before speaking) — its last
-// activity, then its spawn.
+// for a thread with no agent output (a worker that died before speaking) — its last activity, then its
+// spawn.
 function restMs(t: ThreadView): number {
   for (const at of [t.lastAssistantAt, t.lastActivityAt, t.spawnedAt]) {
     const ms = Date.parse(at ?? "")
@@ -243,7 +243,8 @@ export function createQueueClock(store: QueueClockStore): QueueClock {
           const left = stints.get(t.id)
           stints.delete(t.id)
           if (reading.humanOut(t)) claims.delete(t.id)
-          // Only an agent can wake itself: a terminal command leaves its prompt because someone typed at it.
+          // Only an agent can wake itself. A thread that leaves its terminal's prompt left because someone
+          // typed the answer — a human gate (board.ts humanGate) — so its stint is `touched` and keeps no claim.
           else if (held !== undefined && t.kind === "session" && left && !left.touched) claims.set(t.id, { at: held, open: left.open })
           if (held !== undefined) {
             stamps.delete(t.id)
@@ -259,8 +260,8 @@ export function createQueueClock(store: QueueClockStore): QueueClock {
           continue
         }
         const rest = restMs(t)
-        // "Spoken since" means the AGENT's own output, never the activity fallback: a terminal command has
-        // none, and the boot that marks a run at a prompt interrupted re-dates its activity to the boot.
+        // "Spoken since" means the AGENT's own output, never the activity fallback, which moves for reasons
+        // that are not the agent speaking.
         const spoke = Date.parse(t.lastAssistantAt ?? "")
         const stale = unchecked.delete(t.id) && held !== undefined && spoke > held
         if (held !== undefined && !stale) {

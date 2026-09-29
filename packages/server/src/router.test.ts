@@ -181,6 +181,14 @@ function harness(tailer: Tailer = noopTailer) {
     transcriptChange: new Emitter<string[]>(),
     backendFor: () => backend,
     getSettings: () => settings,
+    // Every lifecycle write (done, archive, forget) settles the thread's terminals first; these threads
+    // have none.
+    terminalRunner: {
+      live: () => [],
+      stopThread: async () => {},
+      closeThread: async () => {},
+      forgetThread: async () => {},
+    },
     dispatcher: {
       dispatch: async () => ({ slug: "dispatched", sessionId: "sid-dispatched" }),
       adopt: async (slug: string) => {
@@ -882,6 +890,68 @@ test("completeRegisteredThread archives an inactive session without a confirmati
     }), { needsConfirmation: false })
     assert.equal(kills, 0)
     assert.equal(h.storage.getSession(slug)?.state, "archived")
+  } finally {
+    h.storage.close()
+    rmSync(h.dir, { recursive: true, force: true })
+  }
+})
+
+// A THREAD TERMINAL ends with its thread (thread-terminals.ts). Running ones hold Done back on their own
+// — a worker at rest with `npm run dev` still up in a terminal the human opened is the case the dialog is
+// for — and the confirmation stops them BEFORE Done is recorded, then files their rows away after.
+test("completeRegisteredThread names running terminals, stops them before Done, and files them only after", async () => {
+  const h = harness()
+  const dead = {
+    findExpectedAdoptionPane: () => ({ kind: "absent" as const }),
+    killExpectedAdoptionPane: () => false,
+    killSession: () => { throw new Error("a dead runtime must never be terminated") },
+    isLive: () => false,
+  }
+  const tele = { turn: "idle" as const, permPrompt: false, pendingQuestion: false, subAgents: [], bgShells: [] }
+  const log: string[] = []
+  const terminals = (slug: string, live: { command: string; shell?: boolean }[]) => ({
+    live,
+    stop: async () => { log.push(`stop while ${h.storage.getSession(slug)?.state}`) },
+    close: async () => { log.push(`close while ${h.storage.getSession(slug)?.state}`) },
+  })
+  try {
+    const saved = row("with-terminals")
+    h.storage.upsertSession(saved)
+    const running = terminals(saved.slug, [{ command: "npm run dev" }, { command: "zsh", shell: true }])
+    const asked = await completeRegisteredThread(h.storage, saved, false, dead, tele, undefined, undefined, undefined, running)
+    assert.equal(asked.needsConfirmation, true, "a resting worker is still asked about while its terminals run")
+    assert.deepEqual(asked.hold?.terminals?.map((t) => t.label), ["npm run dev", "zsh (shell)"])
+    assert.equal(asked.hold?.terminalCount, 2)
+    assert.equal(asked.hold?.turnInFlight, false)
+    assert.deepEqual(log, [], "nothing is stopped on the ask")
+    assert.equal(h.storage.getSession(saved.slug)?.state, "open")
+
+    assert.deepEqual(await completeRegisteredThread(h.storage, saved, true, dead, tele, undefined, undefined, undefined, running), { needsConfirmation: false })
+    assert.deepEqual(log, ["stop while open", "close while archived"], "stopped before Done, filed away after it")
+
+    // Nothing running: Done in one click, and the finished terminals are still filed away with it.
+    log.length = 0
+    const quiet = row("finished-terminals")
+    h.storage.upsertSession(quiet)
+    assert.deepEqual(await completeRegisteredThread(h.storage, quiet, false, dead, tele, undefined, undefined, undefined, terminals(quiet.slug, [])), { needsConfirmation: false })
+    assert.deepEqual(log, ["stop while open", "close while archived"])
+
+    // A completion refused because the thread resumed meanwhile leaves its terminals in its strip.
+    log.length = 0
+    const resumed = row("resumed-meanwhile")
+    h.storage.upsertSession(resumed)
+    // The human's follow-up lands while the terminals are being stopped (a stop can wait out a 5s grace).
+    const racing = terminals(resumed.slug, [{ command: "npm run dev" }])
+    const stopping = racing.stop
+    racing.stop = async () => {
+      await stopping()
+      h.storage.upsertSession({ ...resumed, session_id: "a-newer-worker" })
+    }
+    await assert.rejects(
+      completeRegisteredThread(h.storage, resumed, true, dead, tele, undefined, undefined, undefined, racing),
+      /resumed or was replaced/,
+    )
+    assert.deepEqual(log, ["stop while open"], "stopped (the human confirmed), but not filed away under an open thread")
   } finally {
     h.storage.close()
     rmSync(h.dir, { recursive: true, force: true })

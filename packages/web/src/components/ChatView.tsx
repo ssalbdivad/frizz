@@ -98,6 +98,7 @@ import { CopyTerminalCommandButton, useCopyTerminalCommand } from "./ExternalTer
 import { SignInModal } from "./SignInModal.tsx"
 import { PROVIDER_LABEL } from "../lib/signIn.ts"
 import { ThreadMenu } from "./ThreadMenu.tsx"
+import { ThreadTerminalsStrip } from "./ThreadTerminals.tsx"
 import { takeFullscreenEnterAnchor } from "../lib/fullscreenHandoff.ts"
 import { prependEarlierPage } from "../lib/transcriptPagination.ts"
 import { buildVirtualTranscriptMessageRows, earlierLoadGate, nextTailFollow, TAIL_FOLLOW_PX, type VirtualTranscriptMessageRow } from "../lib/virtualTranscript.ts"
@@ -4043,7 +4044,10 @@ export function BackgroundOpsStrip({
   // listing the parent's here would credit the child with its parent's wait.
   const watchers = parentAgentId ? [] : (thread?.watches ?? []).filter((w) => w.kind === "github")
   const links = parentAgentId ? [] : thread?.links ?? []
-  const total = agents.length + shells.length + watchers.length
+  // The human's own TERMINALS on this thread (ThreadTerminals.tsx), thread-wide only: a sub-agent's
+  // drawer lists what that child launched, and nobody opens a terminal on a sub-agent.
+  const terminals = parentAgentId ? [] : thread?.terminals ?? []
+  const total = agents.length + shells.length + watchers.length + terminals.length
   // IS A WATCHER ARMED ON THIS SHELL? A `shell` watch gets NO row of its own — it is not a second thing
   // running, it is a property of the row already here, and drawing both listed one object twice
   // (maintainer 2026-08-14: "we do not need to redundantly list out background shells inside of the
@@ -4151,6 +4155,9 @@ export function BackgroundOpsStrip({
           onOpen={() => window.open(githubRefUrl(w.target, w.subject === "issue" ? "issue" : "pull") ?? `https://github.com/${w.target.replace("#", w.subject === "issue" ? "/issues/" : "/pull/")}`, "_blank", "noreferrer,noopener")}
         />
       ))}
+      {/* THE TERMINALS, after everything the agent launched: the human opened these, and a finished one
+          stays listed with its exit until it is removed — the one kind of row here that outlives its run. */}
+      {thread && terminals.length > 0 && <ThreadTerminalsStrip thread={thread} surface="drawer" />}
       <ThreadLinks links={links} />
     </div>
   )

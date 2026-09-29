@@ -430,6 +430,11 @@ export const CompletionHold = z.object({
   subAgentCount: z.number().default(0), // total live sub-agents (≥ subAgents.length)
   bgShells: z.array(CompletionHoldOp).default([]),
   bgShellCount: z.number().default(0), // total live background shells (≥ bgShells.length)
+  // The thread's own TERMINALS still running (server thread-terminals.ts) — `npm run dev`, a shell the
+  // human opened. Marking the thread done stops them, so the dialog names them beside the shells. Their
+  // labels are the human's own command lines. Optional so a pre-change client reads a hold unchanged.
+  terminals: z.array(CompletionHoldOp).optional(),
+  terminalCount: z.number().optional(),
   // The worker is DEAD and its recorded turn never ended — cut off by a reboot, a signal or a crash
   // mid-tool-call (router.cutOffHold). Nothing is running, so nothing will be killed; the hold exists
   // because the thread is not finished and Done would say it was. Optional rather than defaulted so it
@@ -2767,12 +2772,20 @@ export type DropOwnLinkInput = z.infer<typeof DropOwnLinkInput>
 export const DropOwnLinkResult = z.object({ dropped: z.boolean() }).strict()
 export type DropOwnLinkResult = z.infer<typeof DropOwnLinkResult>
 
-// A terminal command thread's run, as the rail and its drawer render it. `runId` counts starts, so a
-// restart is a NEW terminal to the browser (a fresh pty, a fresh screen) rather than more output on the
-// old one. An exited run with no `exitCode` is one the server went away under (a Frizz restart takes
-// its children with it) — shown as interrupted, never as a success.
-export const CommandThreadState = z.object({
+// A THREAD'S TERMINAL — a live pty the human opened on a thread, running in the folder that thread's
+// agent works in (server thread-terminals.ts). It is not a thread: it has no row and no card of its own,
+// and rides its parent's `ThreadView.terminals`. `id` is its /term/<id> handle. `runId` counts starts, so
+// a restart is a NEW terminal to the browser (a fresh pty, a fresh screen) rather than more output on the
+// old one. An exited run with no `exitCode` is one the server went away under (a Frizz restart takes its
+// children with it) — shown as interrupted, never as a success.
+export const ThreadTerminal = z.object({
+  id: ThreadSlug,
+  // The line it runs, or — for an interactive shell (`shell`) — the shell's name, which is what a
+  // terminal tab calls one.
   command: z.string(),
+  shell: z.boolean().optional(),
+  // The folder it runs in: the project root, or the worktree the agent had moved into when it opened.
+  cwd: z.string(),
   state: z.enum(["running", "exited"]),
   runId: z.number().int(),
   startedAt: z.string(),
@@ -2781,24 +2794,38 @@ export const CommandThreadState = z.object({
   // The human pressed Stop — the signal's code is theirs, not a failure.
   stopped: z.boolean().optional(),
   // A LIVE run that has gone quiet on an unterminated line — a password, OTP or [y/N] prompt. It queues
-  // like a finished run (the process is waiting on the human), and clears the moment it writes again.
+  // the terminal's THREAD (the terminal has no card of its own), and clears the moment it writes again.
   awaitingInput: z.boolean().optional(),
+  // When it went quiet at that prompt — the queue entry's honest time.
+  awaitingSince: z.string().optional(),
 })
-export type CommandThreadState = z.infer<typeof CommandThreadState>
+export type ThreadTerminal = z.infer<typeof ThreadTerminal>
 
-// The prompt box's Terminal tab. A command is ONE line of shell, run in the project directory.
-export const COMMAND_THREAD_MAX_CHARS = 4_000
-export const StartCommandInput = z.object({
-  command: z.string().trim().min(1).max(COMMAND_THREAD_MAX_CHARS),
+// Open a terminal on a thread. No `command` ⇒ an interactive login shell. `cwd` absent ⇒ the thread's
+// current working folder (threadWorkingDir); the drawer sends the one the human confirmed or edited.
+export const TERMINAL_COMMAND_MAX_CHARS = 4_000
+export const TerminalCommand = z.string().trim().min(1).max(TERMINAL_COMMAND_MAX_CHARS)
+export const StartTerminalInput = z.object({
+  slug: ThreadSlug,
+  command: TerminalCommand.optional(),
+  cwd: z.string().trim().min(1).max(4_096).optional(),
 }).strict()
-export type StartCommandInput = z.infer<typeof StartCommandInput>
-export const CommandThreadInput = z.object({ slug: ThreadSlug }).strict()
-export type CommandThreadInput = z.infer<typeof CommandThreadInput>
-// A follow-up command in a finished command thread's drawer: the thread's next run, of a new line.
-export const RunCommandInput = z.object({ slug: ThreadSlug, command: StartCommandInput.shape.command }).strict()
-export type RunCommandInput = z.infer<typeof RunCommandInput>
-export const CommandThreadResult = z.object({ slug: ThreadSlug }).strict()
-export type CommandThreadResult = z.infer<typeof CommandThreadResult>
+export type StartTerminalInput = z.infer<typeof StartTerminalInput>
+export const TerminalInput = z.object({ id: ThreadSlug }).strict()
+export type TerminalInput = z.infer<typeof TerminalInput>
+// The terminal drawer's `$` line once a run finished: the terminal's next run, of a new line.
+export const RunTerminalInput = z.object({ id: ThreadSlug, command: TerminalCommand }).strict()
+export type RunTerminalInput = z.infer<typeof RunTerminalInput>
+export const StartTerminalResult = z.object({ id: ThreadSlug }).strict()
+export type StartTerminalResult = z.infer<typeof StartTerminalResult>
+// Where a new terminal on this thread would start, and how that was worked out — the drawer's folder
+// field opens on it. `source`: the agent's own latest reading (a Claude transcript's `cwd`, a Codex
+// tool call's `workdir`), the session's recorded folder, or the project root when neither is known.
+export const ThreadWorkingDir = z.object({
+  dir: z.string(),
+  source: z.enum(["transcript", "session", "project"]),
+}).strict()
+export type ThreadWorkingDir = z.infer<typeof ThreadWorkingDir>
 
 // One sidebar row: frizz board thread + runtime overlay.
 export const ThreadView = z.object({
@@ -2920,13 +2947,13 @@ export const ThreadView = z.object({
   // constructors that predate the model still typecheck and old snapshots parse unchanged. ----
   // "session" = a session-backed thread (the working rail's unit); "legacy" (or absent) = a .frizz
   // file row, rendered read-only in the collapsed Legacy shelf.
-  // "command" = a TERMINAL COMMAND thread: a shell command started from the prompt box's Terminal tab,
-  // running in a server-owned pty the browser attaches to over /term (see `command` below). Every
-  // session guard (`kind !== "session"`) already excludes it, which is the point: it has no agent, no
-  // transcript and no agent verb. It DOES share the lifecycle: a FINISHED run queues (`needsYou`) with a
-  // card of its own and is marked done like any thread (`state`); a running one sits with Running.
-  kind: z.enum(["session", "legacy", "command"]).optional(),
-  command: CommandThreadState.optional(),
+  // There is no third kind. Terminal COMMAND threads (`kind: "command"`, 2026-09-23) were rows of their
+  // own until 2026-09-29; a terminal now belongs to a session thread (`terminals` below).
+  kind: z.enum(["session", "legacy"]).optional(),
+  // The terminals the human opened on this thread that are not yet filed away — running, or finished and
+  // still worth reading. Absent ⇒ none. A terminal waiting at a prompt (`awaitingInput`) is what queues
+  // this thread on its behalf (server board.ts withThreadTerminals).
+  terminals: z.array(ThreadTerminal).optional(),
   // No registry row (a maintainer terminal discovered from the JSONL dir): read-only transcript,
   // no lifecycle verbs (no composer / kill / resume), never in Needs-you, no archive/seen state.
   foreign: z.boolean().optional(),
@@ -3098,9 +3125,7 @@ export type ThreadView = z.infer<typeof ThreadView>
  * disagreed with the rail it sits beside would be worse than no badge.
  */
 export function queuedThread(t: Pick<ThreadView, "kind" | "foreign" | "needsYou" | "state">): boolean {
-  // A terminal COMMAND thread queues too, once its run has finished (command-threads.ts derives that
-  // `needsYou`): the human reads the result and marks it done, exactly as with a rested agent.
-  return (t.kind === "session" || t.kind === "command") && t.foreign !== true && t.needsYou === true && t.state !== "archived"
+  return t.kind === "session" && t.foreign !== true && t.needsYou === true && t.state !== "archived"
 }
 
 // ── THE SIDEBAR'S BANDS ────────────────────────────────────────────────────────────────────────────
@@ -3324,9 +3349,6 @@ export function sectionOf(t: ThreadView): SectionKey | null {
   // Rested bands together; the rule between them is drawn downstream (partitionActive), and the
   // needs-you/awaiting distinction renders as the row INDICATOR and the queue cards, not as sections.
   // Legacy (.frizz-file) rows are HIDDEN entirely (null; not even a shelf). Foreign never rows.
-  // A terminal COMMAND thread shares the lifecycle: running → Active, finished → Rested (the server
-  // sets `needsYou`), marked done → Done. It has no snooze, so the Snoozed band never claims one.
-  if (t.kind === "command") return t.state === "archived" ? "inactive" : "active"
   if (t.kind !== "session") return null
   // Archived → Done, WHATEVER the worker is doing. Marking a thread done is reversible only by the
   // human (maintainer 2026-09-24: "if something is marked as done ensure that the agent doesn't unmark
@@ -5460,7 +5482,7 @@ export const TranscriptEarlierInput = z.object({
 }).strict()
 export type TranscriptEarlierInput = z.infer<typeof TranscriptEarlierInput>
 
-// ---- Terminal WebSocket protocol (ws://host/term/:slug) — terminal command threads ----
+// ---- Terminal WebSocket protocol (ws://host/term/:id) — a thread's terminals ----
 // client -> server: {t:"input", d:string} | {t:"resize", cols:number, rows:number}
 // server -> client: raw utf8 terminal output frames
 export type TermClientMsg = { t: "input"; d: string } | { t: "resize"; cols: number; rows: number }
@@ -5662,9 +5684,8 @@ export type ProjectPickResult = z.infer<typeof ProjectPickResult>
  *
  * `threads` is every OPEN session thread — the Queue, Running, Snoozed and Pinned rows the project's own
  * rail draws. Every ARCHIVED thread is Done — running or not, since only the human reopens one — and
- * Done grows without bound (553 rows on one real board), so it is `doneCount` here. TERMINAL COMMAND
- * threads ride along on the same terms:
- * a finished run queues (`queuedThread`, which the rail badge counts too) and a running one is Running.
+ * Done grows without bound (553 rows on one real board), so it is `doneCount` here. A thread's
+ * TERMINALS ride its row (`ThreadView.terminals`), and one waiting at a prompt queues that thread.
  * Foreign sessions (a project's own terminals) are left out; they are read-only and never queue. The
  * client bands every row with the same pure `groups.ts` functions the rail uses.
  */

@@ -1266,8 +1266,8 @@ test("bandOf: Snoozed, Done, External, and no band for a legacy row", () => {
   // A worker still running after Mark as done does not lift its row out of Done.
   assert.equal(bandOf(thread({ kind: "session", state: "archived", archived: true, runtime: "running" })), "done")
   assert.equal(bandOf(thread({ kind: "session", foreign: true, runtime: "turn-idle" })), "external")
-  assert.equal(bandOf(thread({ kind: "command", state: "archived" })), "done")
-  assert.equal(bandOf(thread({ kind: "command", state: "open", needsYou: true })), "ready")
+  // A terminal waiting at a prompt queues its THREAD (server board.withThreadTerminals); it has no row.
+  assert.equal(bandOf(thread({ kind: "session", state: "open", runtime: "turn-idle", needsYou: true, terminals: [{ id: "term-1", command: "npm publish", cwd: "/repo", state: "running", awaitingInput: true, runId: 1, startedAt: "2026-09-29T10:00:00.000Z" }] })), "ready")
   assert.equal(bandOf(thread({})), null, "a legacy .frizz row has no row, so no band")
 })
 

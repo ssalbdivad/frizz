@@ -123,8 +123,8 @@ export function queuesProjects(
  *
  * Only when the store's board is PROVABLY the focused project's (its own `projectSlug` says so): during a
  * focus change the store is cleared and refilled, and a board that is not yet the new focus must not be
- * drawn under its name. The rows are filtered as the server filters them for the poll (sessions and
- * terminal commands of this project, nothing foreign); Done is left to the rail's own banding, which
+ * drawn under its name. The rows are filtered as the server filters them for the poll (sessions of this
+ * project, nothing foreign); Done is left to the rail's own banding, which
  * counts what it files there, so the server's Done count is dropped rather than added to.
  */
 export function liveQueue(
@@ -135,7 +135,7 @@ export function liveQueue(
   if (!queues || !board || !focusSlug || board.projectSlug !== focusSlug) return undefined
   const polled = queues.find((queue) => queue.projectSlug === focusSlug)
   if (!polled) return undefined
-  const threads = board.threads.filter((thread) => (thread.kind === "session" || thread.kind === "command") && !thread.foreign)
+  const threads = board.threads.filter((thread) => thread.kind === "session" && !thread.foreign)
   return { ...polled, threads, doneCount: 0 }
 }
 

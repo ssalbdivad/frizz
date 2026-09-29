@@ -13,6 +13,8 @@ import { parseAccountAlias } from "../lib/signIn.ts"
 import { useEagerFollowUp, type EagerFollowUpCallbacks } from "../lib/eagerComposerSubmission.ts"
 import { canInterruptAndSend } from "../lib/composerKeyboard.ts"
 import { RegisteredAnsweringContext } from "./RegisteredQuestionCards.tsx"
+import { composerTerminalLine } from "../lib/threadTerminals.ts"
+import { startComposerTerminal } from "./ThreadTerminals.tsx"
 
 // THE prompt box for a registered thread — the single block every "steer this thread" surface renders.
 // The <Composer> leaf was already shared; the ~14 lines AROUND it were not, and the queue card's copy had
@@ -127,6 +129,17 @@ export function ThreadComposerBox({
       const backend: AccountBackend = thread?.backend === "codex" ? "codex" : "claude"
       if (alias === "login") setSignInFor(backend)
       else setLogoutFor(backend)
+      return
+    }
+    // `$ npm test` is not a message: it opens a terminal on this thread, in the folder its agent is working
+    // in, running that line — a bare `$` opens a shell there (lib/threadTerminals.ts composerTerminalLine).
+    // Only on a thread Frizz owns; the queue card's copy of this box stays a reply box.
+    const terminal = surface === "chatComposer" && thread?.kind === "session" && !thread.foreign ? composerTerminalLine(text) : undefined
+    if (terminal) {
+      clearMessage()
+      startComposerTerminal(rpc, slug, terminal.command, () => {
+        if (!draftStore.get(key)) setMessage(message)
+      })
       return
     }
     // Staged ⌘I context items ride the send: serialized into the text (before any trailing

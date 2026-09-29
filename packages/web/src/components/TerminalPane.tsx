@@ -17,10 +17,10 @@ function terminalTheme() {
   }
 }
 
-// One xterm + WebSocket per selected thread. Remounts on slug change (keyed by
-// the parent), so mount = attach and unmount = detach. The pty is owned by the server
-// (command-threads.ts) and shared across viewers — a ws close releases only THIS viewer's hold —
-// so reattach cheaply replays the buffered screen state.
+// One xterm + WebSocket per thread terminal. Remounts on id change (keyed by the parent, on the run
+// too), so mount = attach and unmount = detach. The pty is owned by the server (thread-terminals.ts)
+// and shared across viewers — a ws close releases only THIS viewer's hold — so reattach cheaply
+// replays the buffered screen state.
 //
 // RENDERER: the built-in DOM renderer, NOT @xterm/addon-webgl. The WebGL addon desynced its
 // canvas backing store from xterm's dpr-scaled cell geometry whenever the effective
@@ -36,17 +36,17 @@ function terminalTheme() {
 // agent's TUI the DOM renderer's throughput is more than enough; revisit WebGL only with an
 // explicit devicePixelRatio-resync if profiling ever demands it.
 //
-// `exitedStatus` replaces the exited status line. A terminal command thread passes one: its process
-// finishing is the whole story (with a code worth showing), and "Resume" — which focuses an agent's
-// composer — has nothing to resume there.
+// `exitedStatus` replaces the exited status line. A thread terminal passes one: its process finishing is
+// the whole story (with a code worth showing), and "Resume" — which focuses an agent's composer — has
+// nothing to resume there.
 //
-// `focusOnMount: false` leaves focus where it is: a finished run has nothing to type into (a command
-// thread's drawer focuses its follow-up line instead), and a queue card is one of many on the page.
+// `focusOnMount: false` leaves focus where it is: a finished run has nothing to type into (the terminal
+// drawer focuses its follow-up line instead), and a queue card is one of many on the page.
 //
 // `base` names the project whose pty this is. It defaults to the page's (`apiBase()`), which is right in
-// a command thread's own drawer; the cross-project page's queue draws other projects' command cards and
-// passes theirs, since the page's base there names the FOCUSED project's terminal server.
-export function TerminalPane({ slug, exitedStatus, base, focusOnMount = true }: { slug: string; exitedStatus?: (exitCode: number | null) => ReactNode; base?: string; focusOnMount?: boolean }) {
+// a terminal's own drawer; a queue card on the cross-project page draws another project's terminal and
+// passes that project's, since the page's base there names the FOCUSED project's terminal server.
+export function TerminalPane({ id, exitedStatus, base, focusOnMount = true }: { id: string; exitedStatus?: (exitCode: number | null) => ReactNode; base?: string; focusOnMount?: boolean }) {
   const hostRef = useRef<HTMLDivElement>(null)
   const termRef = useRef<Terminal | null>(null)
   const [connection, setConnection] = useState<"connecting" | "open" | "reconnecting" | "exited">("connecting")
@@ -89,7 +89,7 @@ export function TerminalPane({ slug, exitedStatus, base, focusOnMount = true }: 
     }
 
     const proto = location.protocol === "https:" ? "wss" : "ws"
-    const url = `${proto}://${location.host}${base ?? apiBase()}/term/${slug}`
+    const url = `${proto}://${location.host}${base ?? apiBase()}/term/${id}`
     let ws: WebSocket | null = null
     let reconnectTimer: ReturnType<typeof setTimeout> | undefined
     let disposed = false
@@ -262,7 +262,7 @@ export function TerminalPane({ slug, exitedStatus, base, focusOnMount = true }: 
       //
       // DEFERRED ONE TASK. `term.open()` queues a `setTimeout(() => viewport.syncScrollArea())` (xterm
       // 5.5 Viewport's constructor), and a pane torn down before it fires — a queue card mounted and
-      // dropped in the same beat (a switch into a project board holding a command card did it, until
+      // dropped in the same beat (a switch into a project board holding a terminal card did it, until
       // that board went on 2026-09-28) — disposed the renderer underneath it: an uncaught "reading
       // 'dimensions'" on every such switch. Timers of
       // one delay run in the order they were set, so this one lands after xterm's, against a live term.
@@ -274,14 +274,14 @@ export function TerminalPane({ slug, exitedStatus, base, focusOnMount = true }: 
         }
       })
     }
-  }, [slug, base])
+  }, [id, base])
 
   return (
     <div className="relative flex-1 min-h-0 bg-bg">
       <div ref={hostRef} className="absolute inset-0 p-2" />
       {connection === "exited" && !inputOverflow && exitedStatus ? (
-        // An exitedStatus that renders nothing asks for NO bar (the command queue card states the
-        // outcome in its own header), not for the generic "Session exited" one below.
+        // An exitedStatus that renders nothing asks for NO bar (the terminal's own header states the
+        // outcome), not for the generic "Session exited" one below.
         exitedNode(exitedStatus(exitCode))
       ) : (connection !== "open" || inputOverflow) && (
         <div role="status" aria-live="polite" className="absolute bottom-0 inset-x-0 flex items-center justify-between px-3 py-1.5 bg-panel border-t border-border text-xs">

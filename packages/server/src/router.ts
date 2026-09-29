@@ -56,10 +56,11 @@ import {
   AuthSnapshot,
   AccountLogoutInput,
   AccountLogoutResult,
-  StartCommandInput,
-  RunCommandInput,
-  CommandThreadInput,
-  CommandThreadResult,
+  StartTerminalInput,
+  RunTerminalInput,
+  TerminalInput,
+  StartTerminalResult,
+  ThreadWorkingDir,
   RenameThreadInput,
   AiRenameThreadInput,
   AiRenameThreadResult,
@@ -158,7 +159,9 @@ import {
   readTranscriptFile,
   readCodexTranscriptFile,
   projectTranscriptPageAgentLifecycles,
+  threadTranscriptSource,
 } from "./transcript.ts"
+import { resolveThreadWorkingDir, terminalFolder } from "./thread-cwd.ts"
 import { openExternalUrl } from "./open-external.ts"
 import { openLocalFile, readLocalMarkdown, resolveOpenableFile, readLocalTextFile } from "./local-file.ts"
 import { openableFileRoots, workDirOf } from "./project.ts"
@@ -535,6 +538,27 @@ export function cutOffHold(telemetry: SessionTelemetry | undefined): CompletionH
 // has been proved. A live resting shell is stopped and archived in one click; an executing or
 // unobservable runtime requires explicit confirmation. Adopted workers stay bound to their exact
 // runtime tuple; a same-name replacement is never killed or mistaken for the original worker.
+/** The thread's own TERMINALS, as a completion sees them (thread-terminals.ts): which are still running,
+ *  and the two halves of ending them — stop the processes, then file the rows away. */
+export interface CompletionTerminals {
+  live: readonly { command: string; shell?: boolean }[]
+  stop: () => Promise<void>
+  close: () => Promise<void>
+}
+
+// Fold a thread's running terminals into the hold. They hold Done back on their own, whatever the agent
+// is doing — a resting worker with `npm run dev` still up in a terminal the human opened is exactly the
+// case the dialog exists for — and ride along with any other evidence the hold already carries.
+function withTerminalHold(hold: CompletionHold | undefined, terminals: CompletionTerminals["live"]): CompletionHold | undefined {
+  if (terminals.length === 0) return hold
+  const base: CompletionHold = hold ?? { turnInFlight: false, unobservable: false, subAgents: [], subAgentCount: 0, bgShells: [], bgShellCount: 0 }
+  return {
+    ...base,
+    terminals: holdOps(terminals.map((terminal) => ({ label: terminal.shell ? `${terminal.command} (shell)` : terminal.command, state: "running" as const }))),
+    terminalCount: terminals.length,
+  }
+}
+
 export async function completeRegisteredThread(
   storage: Pick<Storage,
     "getAdoptionClaim" | "getAdoptionRuntimeSnapshot" | "getSession" | "completeIfCurrent"
@@ -546,6 +570,7 @@ export async function completeRegisteredThread(
   codex?: CodexTurnTerminator,
   claudeBroker?: ClaudeBrokerTerminator,
   acp?: AcpTurnTerminator,
+  terminals?: CompletionTerminals,
 ): Promise<{ needsConfirmation: boolean; hold?: CompletionHold }> {
   const binding = adoptionRuntimeBinding(storage, row)
   if (binding.kind === "conflict") {
@@ -578,7 +603,10 @@ export async function completeRegisteredThread(
 
   // A live runtime is asked about when it is still working; a dead one when it never finished. The
   // human's confirmation (`terminateLive`) clears both.
-  const hold = terminateLive ? undefined : live ? completionConfirmationHold(telemetry) : cutOffHold(telemetry)
+  // Running TERMINALS are asked about in either case: they are the human's own processes, and Done ends them.
+  const hold = terminateLive
+    ? undefined
+    : withTerminalHold(live ? completionConfirmationHold(telemetry) : cutOffHold(telemetry), terminals?.live ?? [])
   if (hold) return { needsConfirmation: true, hold }
   if (live) {
     // Ordering, both paths: TERMINATE FIRST, record Done only after. A stop that throws must leave the
@@ -595,10 +623,16 @@ export async function completeRegisteredThread(
     }
   }
 
+  // The terminals go down with the worker, before Done is recorded, for the same reason the worker does:
+  // nothing live is ever filed under Done. Their ROWS are filed away only once Done has been recorded, so
+  // a completion refused below (the thread was resumed meanwhile) leaves them in its strip, stopped and
+  // restartable, rather than hidden under a thread that is still open.
+  await terminals?.stop()
   const generation = row.runtime_generation ?? 0
   if (!storage.completeIfCurrent(row.slug, row.session_id, generation)) {
     throw new Error("This thread resumed or was replaced while it was being completed; the new worker was preserved")
   }
+  await terminals?.close()
   return { needsConfirmation: false }
 }
 
@@ -942,6 +976,21 @@ export function createRouter(ctx: AppContext) {
   // Roots for the file-OPEN action + the inline-code path classifier (see openableFileRoots): shared so
   // a path the resolver blesses is exactly a path the open action will accept.
   const openRoots = openableFileRoots(ctx.project)
+
+  // Where a thread's agent is working NOW (thread-cwd.ts) — the folder a terminal opened on it starts in.
+  // Read on demand, never per board build: it touches the transcript file.
+  function threadWorkingDir(slug: string): ThreadWorkingDir {
+    const row = ctx.storage.getSession(slug)
+    const backend = row?.backend === "codex" ? "codex" : row?.backend === "acp" ? "acp" : "claude"
+    const source = row ? threadTranscriptSource(ctx.project, ctx.storage, slug, ctx.backendFor) : undefined
+    return resolveThreadWorkingDir({
+      projectDir: workDir,
+      backend,
+      transcriptPath: source?.path,
+      codexMessages: source && backend === "codex" ? () => readCodexTranscriptFile(source.path, source.nativeId) : undefined,
+      sessionCwd: row && backend === "codex" ? ctx.codexAppServer?.binding(slug, row.session_id)?.cwd : undefined,
+    })
+  }
 
   // An auto-titled registry row is session-first authority. A same-slug `.frizz/<slug>.md` may have
   // been planted independently and is never a readable or writable extension of that session.
@@ -2520,6 +2569,8 @@ export function createRouter(ctx: AppContext) {
         // path creates has `state = "open"` written explicitly, so this RPC set a bit nothing reads and
         // answered success while the card stayed exactly where it was. Caught 2026-08-08 archiving a
         // thread over the RPC: `archived = 1` in SQLite, `archived: false` on the board, forever.
+        // Filed under Done, so its terminals stop with it, as they do for Mark as done (completeThread).
+        await ctx.terminalRunner.closeThread(input.slug)
         ctx.storage.setState(input.slug, "archived")
         const t = (await ctx.board.snapshot()).threads.find((x) => x.id === input.slug)
         if (!isAutoTitledSession(input.slug) && t && t.status !== "done" && t.status !== "dismissed") {
@@ -2557,18 +2608,9 @@ export function createRouter(ctx: AppContext) {
     setThreadState: mutation({
       input: z.object({ slug: ThreadSlug, state: z.enum(["open", "archived"]) }).strict(),
       handler: async ({ input }) => {
-        // A terminal command thread shares the lifecycle (command-threads.ts). Marking a RUNNING one done
-        // stops it first, so nothing live is filed under Done. It used to refuse instead, which left a
-        // run parked at a 2FA prompt — queued as waiting for input, card showing Mark as done — with a
-        // button that only answered "Stop the command before marking it done" (maintainer 2026-09-24).
-        const command = ctx.commandRunner.threads().find((t) => t.id === input.slug)
-        if (command) {
-          if (input.state === "archived" && command.command?.state === "running") await ctx.commandRunner.stop(input.slug)
-          ctx.storage.setCommandThreadState(input.slug, input.state)
-          ctx.board.refresh()
-          return
-        }
         if (!ctx.storage.getSession(input.slug)) throw new Error(`no session registered for ${input.slug}`)
+        // Filed under Done ⇒ its terminals stop first (thread-terminals.ts), so nothing live is filed with it.
+        if (input.state === "archived") await ctx.terminalRunner.closeThread(input.slug)
         ctx.storage.setState(input.slug, input.state)
         ctx.board.refresh() // storage-only change — overlay is enough
       },
@@ -2584,6 +2626,11 @@ export function createRouter(ctx: AppContext) {
         const row = currentOwnedSession(input.slug, input.sessionId)
         const result = await completeRegisteredThread(
           ctx.storage, row, input.terminateLive, cachedLivenessTerminator, ctx.tailer.get(input.slug), ctx.codexAppServer, ctx.claudeBroker, ctx.acpBridge,
+          {
+            live: ctx.terminalRunner.live(input.slug),
+            stop: () => ctx.terminalRunner.stopThread(input.slug),
+            close: () => ctx.terminalRunner.closeThread(input.slug),
+          },
         )
         if (!result.needsConfirmation) ctx.board.refresh()
         return result
@@ -3420,6 +3467,8 @@ export function createRouter(ctx: AppContext) {
           throw new Error("only a stalled or exited session can be dismissed — archive a live one instead")
         }
         await stopAndForgetRegisteredRuntime(ctx.storage, row, cachedLivenessTerminator, ctx.codexAppServer, ctx.claudeBroker, ctx.acpBridge)
+        // Its terminals have nothing left to show them in: stop them and drop the rows.
+        await ctx.terminalRunner.forgetThread(input.slug)
         ctx.tailer.forget(input.slug)
         ctx.board.refresh() // storage-only change — the removed row fans out as a delete delta on SSE
       },
@@ -3784,49 +3833,65 @@ export function createRouter(ctx: AppContext) {
       },
     }),
 
-    // TERMINAL COMMAND THREADS — the prompt box's Terminal tab (command-threads.ts). `commandStart`
-    // runs a shell command in a pty in the project directory and puts it on the board; the browser
-    // attaches to it over /term/<slug>.
-    commandStart: mutation({
-      input: StartCommandInput,
-      output: CommandThreadResult,
-      handler: async ({ input }) => ctx.commandRunner.start(input.command),
+    // THREAD TERMINALS (thread-terminals.ts). A terminal is opened ON a thread, from its drawer, and runs
+    // in the folder that thread's agent is working in; the browser attaches to it over /term/<id>.
+    //
+    // Where a new terminal would start: the agent's own latest reading of its folder, lifted to the
+    // checkout it lies in (thread-cwd.ts). The drawer's folder field opens on this, for the human to
+    // confirm or edit before anything runs.
+    threadWorkingDir: query({
+      input: SlugInput,
+      output: ThreadWorkingDir,
+      handler: async ({ input }) => threadWorkingDir(input.slug),
     }),
 
-    commandStop: mutation({
-      input: CommandThreadInput,
+    terminalStart: mutation({
+      input: StartTerminalInput,
+      output: StartTerminalResult,
+      handler: async ({ input }) => {
+        const row = ctx.storage.getSession(input.slug)
+        if (!row) throw new Error(`no session registered for ${input.slug}`)
+        // Checked here, not left to the pty: a folder that does not exist would otherwise surface as a
+        // spawn failure on a terminal that already has a row.
+        const cwd = input.cwd ? terminalFolder(input.cwd) : threadWorkingDir(input.slug).dir
+        return ctx.terminalRunner.start({ parent: input.slug, command: input.command, cwd })
+      },
+    }),
+
+    terminalStop: mutation({
+      input: TerminalInput,
       output: z.object({}),
       handler: async ({ input }) => {
-        if (!ctx.commandRunner.has(input.slug)) throw new Error(`no terminal command ${input.slug}`)
-        await ctx.commandRunner.stop(input.slug)
+        if (!ctx.terminalRunner.has(input.id)) throw new Error(`no terminal ${input.id}`)
+        await ctx.terminalRunner.stop(input.id)
         return {}
       },
     }),
 
-    commandRestart: mutation({
-      input: CommandThreadInput,
+    terminalRestart: mutation({
+      input: TerminalInput,
       output: z.object({}),
       handler: async ({ input }) => {
-        await ctx.commandRunner.restart(input.slug)
+        await ctx.terminalRunner.restart(input.id)
         return {}
       },
     }),
 
-    // The drawer's follow-up line: the thread's next command, run where its last one finished.
-    commandRun: mutation({
-      input: RunCommandInput,
+    // The terminal drawer's `$` line once a run finished: its next command, in the same folder.
+    terminalRun: mutation({
+      input: RunTerminalInput,
       output: z.object({}),
       handler: async ({ input }) => {
-        await ctx.commandRunner.run(input.slug, input.command)
+        await ctx.terminalRunner.run(input.id, input.command)
         return {}
       },
     }),
 
-    commandRemove: mutation({
-      input: CommandThreadInput,
+    terminalRemove: mutation({
+      input: TerminalInput,
       output: z.object({}),
       handler: async ({ input }) => {
-        await ctx.commandRunner.remove(input.slug)
+        await ctx.terminalRunner.remove(input.id)
         return {}
       },
     }),
@@ -3913,9 +3978,8 @@ export function createRouter(ctx: AppContext) {
             const snapshot = await board.snapshot()
             let doneCount = 0
             const threads = snapshot.threads.filter((thread) => {
-              // A terminal command thread queues like a session once its run ends (queuedThread), and
-              // the rail badge counts it — so the page that lists the queue must carry it too.
-              if ((thread.kind !== "session" && thread.kind !== "command") || thread.foreign) return false
+              // A thread's terminals ride its row (`terminals`), so the session rows are the whole list.
+              if (thread.kind !== "session" || thread.foreign) return false
               // Archived is Done, running or not — only the human reopens it (web groups.ts `sectionOf`).
               if (thread.state === "archived") {
                 doneCount++

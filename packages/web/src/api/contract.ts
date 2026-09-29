@@ -15,10 +15,11 @@
 // Proxy) live in rpc.ts, which is browser-only and never enters the server program.
 import type {
   WorkflowAgentView,
-  StartCommandInput,
-  CommandThreadInput,
-  RunCommandInput,
-  CommandThreadResult,
+  StartTerminalInput,
+  TerminalInput,
+  RunTerminalInput,
+  StartTerminalResult,
+  ThreadWorkingDir,
   ProjectQueue,
   ThreadHandoff,
   UpsertOwnLinkInput,
@@ -317,11 +318,13 @@ export interface Api {
   // overloaded "unavailable" — reports only whether a credential exists. Never rejects.
   authStatus(input?: undefined, opts?: RpcCallOpts): Promise<AuthSnapshot>
   accountLogout(input: AccountLogoutInput): Promise<AccountLogoutResult>
-  commandStart(input: StartCommandInput): Promise<CommandThreadResult>
-  commandStop(input: CommandThreadInput): Promise<Record<never, never>>
-  commandRestart(input: CommandThreadInput): Promise<Record<never, never>>
-  commandRun(input: RunCommandInput): Promise<Record<never, never>>
-  commandRemove(input: CommandThreadInput): Promise<Record<never, never>>
+  // A thread's TERMINALS (server thread-terminals.ts): where a new one would start, and its verbs.
+  threadWorkingDir(input: { slug: string }): Promise<ThreadWorkingDir>
+  terminalStart(input: StartTerminalInput): Promise<StartTerminalResult>
+  terminalStop(input: TerminalInput): Promise<Record<never, never>>
+  terminalRestart(input: TerminalInput): Promise<Record<never, never>>
+  terminalRun(input: RunTerminalInput): Promise<Record<never, never>>
+  terminalRemove(input: TerminalInput): Promise<Record<never, never>>
   // Machine-scoped: the registry is one file, so the project list reads the same from every project.
   // Which project owns a thread slug. Every URL from the per-project era is unprefixed, so a
   // bookmark that named its project by PORT now resolves against whichever project launched the
@@ -485,11 +488,12 @@ export const PROCEDURES = {
   quota: "query",
   authStatus: "query",
   accountLogout: "mutation",
-  commandStart: "mutation",
-  commandStop: "mutation",
-  commandRestart: "mutation",
-  commandRun: "mutation",
-  commandRemove: "mutation",
+  threadWorkingDir: "query",
+  terminalStart: "mutation",
+  terminalStop: "mutation",
+  terminalRestart: "mutation",
+  terminalRun: "mutation",
+  terminalRemove: "mutation",
   threadLocate: "query",
   projectsList: "query",
   projectPick: "mutation",
