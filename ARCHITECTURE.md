@@ -386,13 +386,19 @@ plugin directory. The published package does this for you.
   hourglass for a timer wait, each in WHICHEVER band the row sits — a timer park queues, and its queued
   row wore the shell's dot until 2026-09-07; the hourglass for a user snooze, "?"
   needs-action, "!" stalled, faint · idle); a petite-caps PLAN tag marks a doc with a
-  `## Plan` section (derived `hasPlan`). ENTIRELY MOUSE-DRIVEN — no arrow-walk, no chevron, no focus
-  machine (all deleted): a row click opens the thread's drawer in place (chat; the frizz DOC composite
-  for a never-spawned thread — `store.openThread`) — a Ready row whose card the queue is showing
-  scrolls to that card instead — and the remaining keyboard is ⌘K/⌘I + Esc
-  unwinding overlays then drawers. A machine with NO usable project gets the welcome page at `/`
-  instead of the column (the zero-thread board, which hid its sidebar and centered the dispatch prompt
-  as the whole screen, went with the board on 2026-09-28).
+  `## Plan` section (derived `hasPlan`). Rows are clicked, not walked — no arrow-walk, no
+  chevron, no focus machine (all deleted): a row click opens the thread's drawer in place (chat; the
+  frizz DOC composite for a never-spawned thread — `store.openThread`) — a Ready row whose card the
+  queue is showing scrolls to that card instead. The keyboard is a set of REBINDABLE shortcuts
+  (`lib/keybindings.ts` defines them, `lib/keyboardRuntime.ts` runs them, the `?` sheet lists and
+  rebinds them): `j`/`k` step through the Ready cards; `r` reply, `d` done, `s` snooze and `f`
+  fullscreen press the real control on whatever is in front of you — the top drawer, the /full page,
+  or the card being read; `c`/`t`/`p` start a thread, a terminal, a project. A plain key is inert
+  while you type in a field and under any overlay (a thread drawer is not one, at any width); ⌘K
+  (palette) and ⌘I (details) work anywhere, and Esc unwinds overlays then drawers. A machine with
+  NO usable project gets the welcome page at `/` instead of the column (the zero-thread board, which
+  hid its sidebar and centered the dispatch prompt as the whole screen, went with the board on
+  2026-09-28).
 
 ## Provisioned runtimes (Frizz owns the Claude Code and Codex it runs)
 

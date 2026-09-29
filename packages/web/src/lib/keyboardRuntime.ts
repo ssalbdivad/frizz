@@ -230,14 +230,24 @@ function isTypingTarget(target: EventTarget | null): boolean {
 }
 
 // A plain key is for the page, so anything layered over the page takes it away: the app's own
-// overlays by their store flags, and any open Radix dialog, menu or listbox by its DOM (a modal Radix
+// overlays by their store flags, and any open modal dialog, menu or listbox by its DOM (a modal Radix
 // layer also pins `pointer-events: none` on the body, which is the catch-all). Thread drawers are
 // NOT in this list: they are the page you are reading, and `d` in one finishes its thread.
+//
+// That includes a NARROW drawer. Below 800px ThreadSheet renders a modal Radix dialog (it covers the
+// screen, so it takes the scroll lock and the focus trap), which wears `aria-modal` AND pins the body's
+// pointer events — both of this test's tells at once. Read literally, every plain key died the moment a
+// half-width laptop window opened a thread (found 2026-09-29: `f` fullscreened a drawer at 1200px and
+// did nothing at 700px). So a drawer layer is excluded from the selector, and a body lock counts only
+// when no drawer is modal: with one open the lock is the drawer's own, and anything genuinely on top
+// of it — a confirm, the picture viewer, a menu — still matches the selector by itself.
+const OVERLAY_SELECTOR = ':is([role="dialog"], [role="alertdialog"])[aria-modal="true"]:not([data-drawer-layer]), [role="menu"], [role="listbox"]'
+
 function overlayOpen(): boolean {
   if (store.showPalette || store.showNewThread || store.showGithubPicker || store.showSettings || store.showShortcuts) return true
   if (typeof document === "undefined") return false
-  if (document.body.style.pointerEvents === "none") return true
-  return document.querySelector('[role="dialog"][aria-modal="true"], [role="menu"], [role="listbox"]') !== null
+  if (document.querySelector(OVERLAY_SELECTOR) !== null) return true
+  return document.body.style.pointerEvents === "none" && document.querySelector('[data-drawer-layer][aria-modal="true"]') === null
 }
 
 let cachedOverrides: unknown = null
