@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState, type ReactElement, type ReactNode } from "react"
+import { useContext, useEffect, useMemo, useState, type ReactElement, type ReactNode } from "react"
 import { useSnapshot } from "valtio"
 import type { AccountBackend, ThreadSkill } from "@frizz/shared"
 import { rpc } from "../api/rpc.ts"
@@ -12,6 +12,7 @@ import { draftKey, draftStore, useDraft, useProjectDir } from "../lib/drafts.ts"
 import { parseAccountAlias } from "../lib/signIn.ts"
 import { useEagerFollowUp, type EagerFollowUpCallbacks } from "../lib/eagerComposerSubmission.ts"
 import { canInterruptAndSend } from "../lib/composerKeyboard.ts"
+import { RegisteredAnsweringContext } from "./RegisteredQuestionCards.tsx"
 
 // THE prompt box for a registered thread — the single block every "steer this thread" surface renders.
 // The <Composer> leaf was already shared; the ~14 lines AROUND it were not, and the queue card's copy had
@@ -88,6 +89,8 @@ export function ThreadComposerBox({
   const [signInFor, setSignInFor] = useState<AccountBackend | null>(null)
   const slashSuggest = useMemo(() => () => fetchThreadSkills(slug), [slug])
   const [logoutFor, setLogoutFor] = useState<AccountBackend | null>(null)
+  // The thread's registered-question state, when this box sits under the surface that draws the cards.
+  const answering = useContext(RegisteredAnsweringContext)
 
   // The ⌘I roster and its tokens. DELETING A TOKEN IS THE REMOVAL GESTURE: whenever the draft or
   // the roster changes, any staged item whose `@` token no longer appears in the prose is dropped —
@@ -138,8 +141,20 @@ export function ThreadComposerBox({
         restoreContextItems(slug, staged)
       },
     }
-    if (submitOverride) submitOverride(outgoing, callbacks)
-    else followUp.submit(outgoing, { ...callbacks, interrupt })
+    const deliver = () => {
+      if (submitOverride) submitOverride(outgoing, callbacks)
+      else followUp.submit(outgoing, { ...callbacks, interrupt })
+    }
+    // PICKED ANSWERS RIDE THE REPLY. A reply typed with a card's chip lit is the human adding a note to
+    // that answer, not skipping it — sending the reply alone replied past the question and dropped the
+    // pick (2026-09-29). The answers go first and the reply only once they have landed, so the worker
+    // reads them in that order and a failed answer keeps the note in the box beside the card it belongs to.
+    if (answering?.slug === slug && answering.staged > 0) {
+      if (answering.sending) return
+      answering.submit(deliver)
+      return
+    }
+    deliver()
   }
 
   return (
@@ -159,7 +174,7 @@ export function ThreadComposerBox({
         onSubmit={() => send()}
         onInterruptSubmit={canInterrupt ? () => send(true) : undefined}
         slashSuggest={slashSuggest}
-        placeholder={placeholder}
+        placeholder={answering?.slug === slug && answering.staged > 0 ? "Add a note to your answers…" : placeholder}
         // NOT `|| followUp.pending`. The send is already committed locally (draft cleared, bubble
         // appended, and in the queue the card has already begun dissolving), so gating the textarea on
         // its round-trip only made the box go dead — and, because the browser blurs a disabled element,

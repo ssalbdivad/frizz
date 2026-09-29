@@ -17,7 +17,7 @@
 // card's own project explicitly (see the provider stack at the bottom). The board's queue card could not
 // be reused here for exactly that reason: it read its project from the address bar, the store and the
 // page's socket, and on this page all three name the FOCUSED project, which is usually not the card's.
-import { memo, useCallback, useLayoutEffect, useMemo, useRef, useState, type MouseEvent as ReactMouseEvent, type ReactNode } from "react"
+import { memo, useCallback, useContext, useLayoutEffect, useMemo, useRef, useState, type MouseEvent as ReactMouseEvent, type ReactNode } from "react"
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import { Check, ChevronRight, Hourglass, RotateCcw } from "lucide-react"
 import { useLocation, useNavigate } from "react-router"
@@ -46,7 +46,7 @@ import { LastActive } from "./LastActive.tsx"
 import { ProjectSquare } from "./ProjectRail.tsx"
 import { LinkedHtml } from "./LinkedHtml.tsx"
 import { QuestionBlockCard } from "./QuestionBlockCard.tsx"
-import { RegisteredAnsweringProvider, RegisteredQuestionStack } from "./RegisteredQuestionCards.tsx"
+import { RegisteredAnsweringContext, RegisteredAnsweringProvider, RegisteredQuestionStack } from "./RegisteredQuestionCards.tsx"
 import { RestedCard, showsRestedCard } from "./RestedCard.tsx"
 import { LogoutConfirmModal, SignInModal } from "./SignInModal.tsx"
 import { QuietTurnCard, showsQuietTurnCard } from "./QuietTurnCard.tsx"
@@ -279,6 +279,10 @@ export const AllQueuesCard = memo(function AllQueuesCard({
             </div>
           </header>
 
+          {/* ONE answering state for the cards AND the reply box, so a reply sent with a pick staged
+              carries the pick (ReplyBox) instead of replying past it. */}
+          <QueueDismissContext.Provider value={dismiss}>
+          <RegisteredAnsweringProvider thread={thread} scope={answeringScope}>
           <ProjectLinkScope project={project}>
             <div className="flex min-w-0 flex-col gap-4 px-5 pt-5 pb-4">
               {/* EARLIER MESSAGES OPEN THE DRAWER, never the card. History drawn into the card grew it
@@ -337,17 +341,15 @@ export const AllQueuesCard = memo(function AllQueuesCard({
             </div>
 
             {owedQuestions.length > 0 && (
-              <QueueDismissContext.Provider value={dismiss}>
-                <RegisteredAnsweringProvider thread={thread} scope={answeringScope}>
-                  <RegisteredQuestionStack thread={thread} questions={owedQuestions} className="shrink-0 px-5 pb-4 pt-0" />
-                </RegisteredAnsweringProvider>
-              </QueueDismissContext.Provider>
+              <RegisteredQuestionStack thread={thread} questions={owedQuestions} className="shrink-0 px-5 pb-4 pt-0" />
             )}
           </ProjectLinkScope>
 
           <ThreadProjectScope projectId={project.id} projectDir={project.projectDir}>
             <ReplyBox project={project} thread={thread} onSent={onLeave} onFailed={onReturn} />
           </ThreadProjectScope>
+          </RegisteredAnsweringProvider>
+          </QueueDismissContext.Provider>
 
           <ThreadProjectScope projectId={project.id} projectDir={project.projectDir}>
             <footer className={`${BLOCK_RADIUS_INNER_BOTTOM} flex min-h-10 flex-wrap items-center justify-end gap-3 border-t border-border/70 bg-panel/95 px-3 py-2 text-[12px]`}>
@@ -582,6 +584,7 @@ function ReplyBox({ project, thread, onSent, onFailed }: { project: QueuesProjec
   const controls = useThreadComposerControls(thread.id, thread)
   const [signInFor, setSignInFor] = useState<AccountBackend | null>(null)
   const [logoutFor, setLogoutFor] = useState<AccountBackend | null>(null)
+  const answering = useContext(RegisteredAnsweringContext)
   const send = useMutation({
     mutationFn: (message: string) => deliverFollowUp(project, thread, message),
     onSuccess: () => void queryClient.invalidateQueries({ queryKey: ["projectsQueues"] }),
@@ -620,10 +623,19 @@ function ReplyBox({ project, thread, onSent, onFailed }: { project: QueuesProjec
     }
     if (!thread.sessionId || send.isPending) return
     setError(undefined)
-    // Local truth first, then the network — the order every send on the board's card obeyed.
-    draftStore.set(key, "")
-    onSent()
-    send.mutate(message)
+    const deliver = () => {
+      // Local truth first, then the network — the order every send on the board's card obeyed.
+      draftStore.set(key, "")
+      onSent()
+      send.mutate(message)
+    }
+    // Picked answers ride the reply rather than being replied past — ThreadComposerBox's send has the why.
+    if (answering?.slug === thread.id && answering.staged > 0) {
+      if (answering.sending) return
+      answering.submit(deliver)
+      return
+    }
+    deliver()
   }
   return (
     <div className="shrink-0 px-5 pb-3 pt-0">
@@ -632,7 +644,7 @@ function ReplyBox({ project, thread, onSent, onFailed }: { project: QueuesProjec
         value={text}
         onChange={(value) => draftStore.set(key, value)}
         onSubmit={submit}
-        placeholder={questionsOwed(thread.questions).length > 0 ? "Or skip the questions and reply…" : "Reply to the agent…"}
+        placeholder={answering?.staged ? "Add a note to your answers…" : questionsOwed(thread.questions).length > 0 ? "Or skip the questions and reply…" : "Reply to the agent…"}
         attachBase={projectApiBase(project.id)}
         busy={controls.busy}
         footer={controls.footer}

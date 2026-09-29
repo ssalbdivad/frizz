@@ -22,7 +22,7 @@
 import { createContext, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from "react"
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import { X } from "lucide-react"
-import type { QuestionAnswer, RegisteredQuestionView, SettledQuestionView, ThreadView } from "@frizz/shared"
+import { questionsOwed, type QuestionAnswer, type RegisteredQuestionView, type SettledQuestionView, type ThreadView } from "@frizz/shared"
 import { rpc, type Api } from "../api/rpc.ts"
 import { draftKey, draftStore, useDraftValues, useProjectDir } from "../lib/drafts.ts"
 import { clearSteered, clearSteeredIn, markSteered, markSteeredIn } from "../lib/steering.ts"
@@ -52,8 +52,10 @@ export interface RegisteredAnswering {
   onText: (q: RegisteredQuestionView, path: string, isMulti: boolean, text: string) => void
   dismiss: (id: string) => void
   dismissing: boolean
-  /** Send EVERY staged answer on the thread — this rest's or an older one's. */
-  submit: () => void
+  /** Send EVERY staged answer on the thread — this rest's or an older one's. `then` runs once they have
+   *  LANDED, never on a failure: the prompt box passes its own send here, so a reply typed with answers
+   *  staged goes out after them rather than instead of them. */
+  submit: (then?: () => void) => void
   staged: number
   sending: boolean
   error: string | undefined
@@ -156,7 +158,7 @@ export function useRegisteredAnswering(thread: ThreadView | undefined, scope?: R
     onError: (cause) => setError(errorText(cause)),
   })
 
-  const submit = () => {
+  const submit = (then?: () => void) => {
     if (!slug || staged.length === 0 || send.isPending) return
     setError(undefined)
     // Local truth FIRST, then the network — the ordering every other send on this card obeys, and the
@@ -182,8 +184,30 @@ export function useRegisteredAnswering(thread: ThreadView | undefined, scope?: R
       ...(prev ?? []).filter((s) => !ids.has(s.id)),
       ...stagedPairs.map(({ q, answer }): SettledQuestion => ({ id: q.id, spec: q.spec, askedAt: q.askedAt, settledAt, answer, pending: true })),
     ])
-    send.mutate(staged)
+    // `mutateAsync`, not per-call callbacks: the queue card dissolves on this very click and unmounts,
+    // and a mutate()-scoped onSuccess is dropped with the observer — the reply riding `then` with it.
+    send.mutateAsync(staged).then(() => then?.(), () => {})
   }
+
+  // A PICK THAT COMPLETES THE ASK SENDS IT (maintainer 2026-09-29: "the answers should be set dynamically
+  // as they are selected and if needed the agent waits until all questions are answered or the user types
+  // something and hits enter"). Before this, a chip only staged, and a human who picked one and then
+  // replied from the prompt box sent the reply and silently dropped the pick.
+  //
+  // Only a SINGLE-choice pick arms it. That click is the whole answer; a multi toggle is one of several,
+  // and a keystroke is half a word, so neither can say "done" — Enter (which walks the batch first, see
+  // QuestionBlockCard advanceOrSubmit) and Send answers stay the send for those. Read on the render AFTER
+  // the pick, because completeness includes the follow-ups the pick just opened. And it holds off while
+  // the thread's prompt box has a draft: that human is mid-note, and their Enter sends both.
+  const autoSend = useRef(false)
+  useEffect(() => {
+    if (!autoSend.current) return
+    autoSend.current = false
+    const owed = questionsOwed(questions)
+    const complete = owed.every((q) => stagedPairs.some((pair) => pair.q.id === q.id))
+    const drafting = slug ? (draftStore.get(draftKey.followUp(projectDir, slug, thread?.sessionId)) ?? "").trim() !== "" : false
+    if (complete && !drafting) submit()
+  })
 
   return {
     slug,
@@ -205,6 +229,7 @@ export function useRegisteredAnswering(thread: ThreadView | undefined, scope?: R
           next.set(key, { ...pick, chosenSet: set })
         } else {
           next.set(key, { ...pick, chosen: pick.chosen === optIdx ? null : optIdx })
+          if (pick.chosen !== optIdx) autoSend.current = true
         }
         return next
       })
@@ -382,7 +407,7 @@ export function RegisteredQuestionCard({ q, answering: given }: { q: RegisteredQ
         answer: a.answerFor(q, node.path),
         onChip: (optIdx) => a.onChip(q, node.path, node.spec.kind === "multi", optIdx),
         onText: (text) => a.onText(q, node.path, node.spec.kind === "multi", text),
-        onSubmit: a.submit,
+        onSubmit: () => a.submit(),
       }}
     />
   )
@@ -480,7 +505,7 @@ export function RegisteredQuestionStack({
           type="button"
           data-send-answers
           disabled={a.staged === 0 || a.sending}
-          onClick={a.submit}
+          onClick={() => a.submit()}
           onMouseDown={(e) => e.preventDefault()}
           className="button-outline rounded-md bg-fg px-3 py-1.5 text-[12px] font-medium text-bg outline-none transition-all hover:opacity-90 active:scale-95 disabled:opacity-30 disabled:hover:opacity-30"
         >

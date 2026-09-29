@@ -275,6 +275,9 @@ window.fetch = async (input, init) => {
   // The card addresses its OWN project (`/_frizz/<project id>/rpc/…`, api/rpc.ts projectRpc), so every
   // route is matched on the rpc name alone.
   const rpc = /^\/_frizz\/[^/]+\/rpc\/([^/]+)$/.exec(url.pathname)?.[1] ?? null
+  // Every write, in order, for a probe asserting WHICH sends happened and in what sequence (a reply sent
+  // with answers staged must send the answers first — registeredQuestionAutoSend.e2e).
+  if (rpc !== null && rpc !== "threadHandoff") ((window as unknown as { __rpcs?: string[] }).__rpcs ??= []).push(rpc)
   if (rpc === "threadHandoff") {
     return new Response(JSON.stringify({ result: handoff }), { headers: { "content-type": "application/json" } })
   }
