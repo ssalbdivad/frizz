@@ -25,7 +25,7 @@ import { splitFenceBlocks, type FenceKind } from "../lib/fenceBlocks.ts"
 import { showsRegisteredDoneCard } from "../lib/registeredDone.ts"
 import { RestedCard, showsRestedCard } from "./RestedCard.tsx"
 import { ProviderErrorCard, providerErrorVisible } from "./ProviderErrorCard.tsx"
-import { parseAnswersCard, pairAllAnswers, unrenderedAnswers, type PairedAnswer } from "../lib/answersMessage.ts"
+import { answersForDisplay, parseAnswersCard, pairAllAnswers, settledAnswerKeys, unrenderedAnswers, withoutSettledAnswers, type PairedAnswer } from "../lib/answersMessage.ts"
 import { fenceStandsFor, registeredStandingAt, questionStacks } from "../lib/questionShadow.ts"
 import { settledQuestionPositions } from "../lib/settledQuestions.ts"
 import { FrizzWake } from "./FrizzWake.tsx"
@@ -282,10 +282,19 @@ function ChatView({ slug, virtualized }: { slug: string; virtualized: boolean })
   // Question↔answer pairing for "Answers:" user messages, precomputed at the LIST level (the lookback
   // needs the whole list; Message renders per-message). null — a stable primitive — at every ordinary
   // index, so the memoized Message only sees a `paired` prop change on actual answers-messages.
-  const paired = useMemo(() => pairAllAnswers(messages), [messages])
+  // Where each ANSWERED question's card stood when it was answered — the open cards' own reader, replayed
+  // over the transcript as it was before the answer (lib/settledQuestions).
+  const settledByAnchor = useMemo(() => settledQuestionPositions(messages, settledQuestions), [messages, settledQuestions])
+  // The answers those greyed cards already show, which the human's Answers card then leaves out rather
+  // than repeating — and a message left with nothing to say draws nothing (see withoutSettledAnswers).
+  const settledKeys = useMemo(() => settledAnswerKeys([...settledByAnchor.values()].flat().map((s) => s.answer)), [settledByAnchor])
+  const paired = useMemo(() => pairAllAnswers(messages).map((rows) => withoutSettledAnswers(rows, settledKeys)), [messages, settledKeys])
   // What the human's in-flight answer still has to SAY — the rows of it no message above is already
   // drawing, so the pinned card stands down instead of doubling one the transcript now carries itself.
-  const inFlightAnswers = useMemo(() => unrenderedAnswers(messages, thread?.answersInFlight), [messages, thread?.answersInFlight])
+  const inFlightAnswers = useMemo(() => {
+    const rows = withoutSettledAnswers(unrenderedAnswers(messages, thread?.answersInFlight), settledKeys)
+    return rows && answersForDisplay(rows).length > 0 ? rows : null
+  }, [messages, thread?.answersInFlight, settledKeys])
   // The CURRENT ASK — the human's most recent landed turn (see lastAskIndex for what is excluded and
   // why); it supplies the retry text after a provider fault. -1 when the transcript has no human turn yet.
   const lastUserIdx = useMemo(() => lastAskIndex(messages), [messages])
@@ -305,9 +314,6 @@ function ChatView({ slug, virtualized }: { slug: string; virtualized: boolean })
   // The registered questions standing at each message — its rest and every later one — so a fence
   // restating or naming one folds into its card.
   const shadowedByMessage = useMemo(() => registeredStandingAt(messages, openQuestions), [messages, openQuestions])
-  // Where each ANSWERED question's card stood when it was answered — the open cards' own reader, replayed
-  // over the transcript as it was before the answer (lib/settledQuestions).
-  const settledByAnchor = useMemo(() => settledQuestionPositions(messages, settledQuestions), [messages, settledQuestions])
   // A thread dispatched after the free-form fence was retired never gets a fence controller: a
   // ```question with a body is prose there, drawn read-only, and the registered card is the only
   // answerable thing (shared QUESTION_FENCE_RETIRED_AT). A legacy thread keeps the whole fence path.
@@ -860,9 +866,12 @@ function VirtualizedThreadTranscript({
   // draws-nothing reason (the resting card stating the last message's fence).
   const restingShown = showsRestingCard(thread)
   const activityMessages = useMemo(() => {
-    const entries = running ? historicalToolActivityMessages(coalescedActivityMessages) : coalescedActivityMessages
+    const all = running ? historicalToolActivityMessages(coalescedActivityMessages) : coalescedActivityMessages
+    // An answers turn whose every row a greyed settled card already shows has nothing left to draw, so
+    // it is not a row at all — a row that rendered null would still spend its spacer.
+    const entries = all.filter((entry) => !answeredBySettledCards(paired[entry.messageIndex]))
     return withoutRedundantRestDividers(entries, rendersNothingIn(entries, awaitingCut, restingShown))
-  }, [coalescedActivityMessages, running, awaitingCut, restingShown])
+  }, [coalescedActivityMessages, running, awaitingCut, restingShown, paired])
   const showWorking = running
   const messageRows = useMemo(() => {
     return buildVirtualTranscriptMessageRows(
@@ -962,13 +971,13 @@ function VirtualizedThreadTranscript({
     if (hasRuntimeStatus) next.push({ key: "runtime-status", kind: "runtime-status" })
     let queuedGap = hasRuntimeStatus || messageRows.length > 0 ? STEP : 0
     messages.forEach((message, messageIndex) => {
-      if (!message.queued) return
+      if (!message.queued || answeredBySettledCards(paired[messageIndex])) return
       const key = `queued:${message.deliveryId ?? message.sourceId ?? messageIndex}`
       next.push({ key, kind: "queued", message, messageIndex, gap: queuedGap })
       queuedGap = STEP
     })
     return next
-  }, [beforeCursor, earlierError, hasEarlier, hasRuntimeStatus, loadingEarlier, messageRows, messages, questionGroups, settledByRow, transportFallback])
+  }, [beforeCursor, earlierError, hasEarlier, hasRuntimeStatus, loadingEarlier, messageRows, messages, paired, questionGroups, settledByRow, transportFallback])
 
   const virtualizer = useVirtualizer({
     count: rows.length,
@@ -1725,6 +1734,11 @@ export function messageGap(previous: ChatMessage, next: ChatMessage): number {
   // USER_TAIL_EXTRA. Measured against the NEXT rendered message, so a user message followed by another
   // user message keeps the plain step between them.
   return base + (previous.role === "user" && next.role !== "user" ? USER_TAIL_EXTRA : 0)
+}
+// A composed-answers turn left with no row to show once the settled cards' rows are taken out (see
+// withoutSettledAnswers). Null — not an answers turn — is never this.
+function answeredBySettledCards(paired: PairedAnswer[] | null | undefined): boolean {
+  return Boolean(paired) && answersForDisplay(paired!).length === 0
 }
 // Matches exactly when Message returns null (an empty/thinking-only assistant turn) — such a message
 // takes no slot, so the adjacency-spacer walk must SKIP it (else two spacers stack into a double gap).

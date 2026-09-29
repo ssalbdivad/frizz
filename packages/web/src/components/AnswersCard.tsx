@@ -13,13 +13,16 @@ import { BLOCK_RADIUS, CardContent, CardHead } from "./TranscriptCard.tsx"
 // card from the same bytes (RegisteredQuestionStack, board.answersInFlight) or the answer visibly
 // disappears and comes back.
 export function AnswersCard({ answers, queued, sourceId }: { answers: PairedAnswer[]; queued?: boolean; sourceId?: string }) {
+  const rows = answersForDisplay(answers)
+  // Every row already drawn by a settled question card (ChatView's withoutSettledAnswers): no empty shell.
+  if (rows.length === 0) return null
   return (
     <div data-frizz-msg={sourceId} data-answers-card className={`self-end flex w-full max-w-[85%] flex-col items-end ${queued ? "opacity-50" : ""}`}>
       <div className={`w-full min-w-0 ${BLOCK_RADIUS} rounded-br-sm border border-border-strong bg-elevated p-4`}>
         <CardHead icon={ListChecks} label="Answers" />
         <CardContent>
           <div className="flex flex-col gap-2.5">
-            {answersForDisplay(answers).map((a, i) => (
+            {rows.map((a, i) => (
               // A FOLLOW-UP sits under the answer that opened it, behind the same rule every nested
               // question in this app wears (RegisteredQuestionCards). The wire form is flat — an
               // indented line there reads as a continuation of the row above (see questionAnswerMessage)

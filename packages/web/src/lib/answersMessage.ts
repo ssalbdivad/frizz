@@ -1,4 +1,4 @@
-import { ANSWER_CONTINUATION_INDENT, ANSWER_FOLLOW_UP_MARKER, BURIED_ANSWERS_HEADER, DISMISSED_ANSWER } from "@frizz/shared"
+import { ANSWER_CONTINUATION_INDENT, ANSWER_FOLLOW_UP_MARKER, BURIED_ANSWERS_HEADER, DISMISSED_ANSWER, questionAnswerMessage, type QuestionAnswer } from "@frizz/shared"
 import { splitQuestionBlocks, parseQuestionBlock, type MessageSegment } from "./questionBlocks.ts"
 
 // Detect + parse OUR OWN composed-answer format, so a user message that is a multi-block answer renders
@@ -244,6 +244,28 @@ export function unrenderedAnswers(messages: readonly MsgLike[], wire: string | u
   if (shown.size === 0) return rows
   const left = rows.filter((a) => !shown.has(answerKey(a)))
   return left.length > 0 ? left : null
+}
+
+/** The row keys of answers a SETTLED registered-question card is already drawing. That card stays in
+ *  the transcript greyed with the picked option in it (lib/settledQuestions), so the human's Answers
+ *  card right under it said the same question and the same answer a second time (maintainer
+ *  2026-09-29: "question and answer duplicate same info in ui"). Keyed through the very wire the server
+ *  delivered those answers in (questionAnswerMessage), so the match is byte-for-byte what the Answers
+ *  card parsed — no second spelling of how an answer reads that could drift from the first. */
+export function settledAnswerKeys(answers: readonly QuestionAnswer[]): ReadonlySet<string> {
+  if (answers.length === 0) return new Set()
+  return new Set((parseAnswersCard(questionAnswerMessage(answers)) ?? []).map(answerKey))
+}
+
+/** `rows` minus every row a settled card already draws — the SAME array when none is, so a memoized
+ *  message sees no prop change. What is left can be nothing to display (answersForDisplay empty), and
+ *  then the message draws nothing: the settled card above it is the answer. */
+export function withoutSettledAnswers(rows: PairedAnswer[], settled: ReadonlySet<string>): PairedAnswer[]
+export function withoutSettledAnswers(rows: PairedAnswer[] | null, settled: ReadonlySet<string>): PairedAnswer[] | null
+export function withoutSettledAnswers(rows: PairedAnswer[] | null, settled: ReadonlySet<string>): PairedAnswer[] | null {
+  if (!rows || settled.size === 0) return rows
+  const left = rows.filter((a) => !settled.has(answerKey(a)))
+  return left.length === rows.length ? rows : left
 }
 
 // The ```question blocks of the NEAREST EARLIER ask, looking backward from `index` with the same skip

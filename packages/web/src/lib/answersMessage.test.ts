@@ -1,7 +1,7 @@
 import { test } from "node:test"
 import assert from "node:assert/strict"
 import { ANSWER_FOLLOW_UP_MARKER, BURIED_ANSWERS_HEADER, DISMISSED_ANSWER, questionAnswerMessage } from "@frizz/shared"
-import { answersForDisplay, parseAnswersMessage, parseBuriedAnswersMessage, parseAnswersCard, pairAnswersMessage, pairAllAnswers, unrenderedAnswers, type MsgLike } from "./answersMessage.ts"
+import { answersForDisplay, parseAnswersMessage, parseBuriedAnswersMessage, parseAnswersCard, pairAnswersMessage, pairAllAnswers, settledAnswerKeys, unrenderedAnswers, withoutSettledAnswers, type MsgLike } from "./answersMessage.ts"
 import { composeAnswerWire } from "./answering.ts"
 
 test("parses the multi-block composed-answer format into numbered rows", () => {
@@ -412,4 +412,25 @@ test("unrenderedAnswers: no wire, or an unreadable one, draws nothing", () => {
 test("unrenderedAnswers: the question is part of what makes two rows the same answer", () => {
   const other = user('Answers to earlier questions:\n1. “Something else entirely?” → just test it ad hoc')
   assert.equal(unrenderedAnswers([other], WIRE)?.length, 1)
+})
+
+// ---- withoutSettledAnswers (the Answers card leaves out what a greyed settled card already shows) ---
+
+test("the Answers card drops every row a settled question card draws, follow-ups included", () => {
+  const color = { questionId: "q1", question: "What is David's favorite color?", chosen: [], text: "goldenrod" }
+  const ship = { questionId: "q2", question: "Ship it?", chosen: ["Yes"], followUps: [{ questionId: "q3", question: "Tag it?", chosen: ["v1"] }] }
+  const other = { questionId: "q4", question: "Still separate?", chosen: ["No"], text: "keep\nboth lines" }
+  const rows = parseAnswersCard(questionAnswerMessage([color, ship, other]))!
+  assert.equal(rows.length, 4)
+  const left = withoutSettledAnswers(rows, settledAnswerKeys([color, ship]))
+  assert.deepEqual(left?.map((a) => a.question), ["Still separate?"])
+  // Nothing left to display once every row is settled — the message draws nothing.
+  assert.deepEqual(answersForDisplay(withoutSettledAnswers(rows, settledAnswerKeys([color, ship, other]))!), [])
+})
+
+test("an answer no settled card draws keeps its exact rows array", () => {
+  const rows = parseAnswersCard(questionAnswerMessage([{ questionId: "q1", question: "Ship it?", chosen: ["Yes"] }]))!
+  assert.equal(withoutSettledAnswers(rows, settledAnswerKeys([{ questionId: "q1", question: "Ship it?", chosen: ["No"] }])), rows)
+  assert.equal(withoutSettledAnswers(rows, settledAnswerKeys([])), rows)
+  assert.equal(withoutSettledAnswers(null, settledAnswerKeys([])), null)
 })
