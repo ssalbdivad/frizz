@@ -1,14 +1,17 @@
 #!/usr/bin/env node
-// Drive the cross-project page ("Everything", `/`) in a real headless browser against a seeded
+// Drive the page's ALL PROJECTS view (`/?all`, web lib/pageView.ts — "Everything", at `/`, until focus
+// mode made one project the default on 2026-09-29) in a real headless browser against a seeded
 // multi-project stack, and check that every action taken on a card lands on the card's OWN project — and
-// that the page works as a MODE: threads open in place, and new ones start in any project from it.
+// that the view works as a MODE: threads open in place, and new ones start in any project from it.
 //
-// Its one hard problem: the page shows every project but is FOCUSED on one (the page project), so the
-// page-level client (`rpc`) means the focus there, and a slug is unique only within a project — an action
-// wired to the wrong client either fails against the focus or, worse, succeeds on the focus's namesake.
-// So the page is focused on the launcher, every write is taken on a TENANT's card (where the page client
-// would be wrong), and the same-slug pair the seed plants (`fix-flaky-login-test`, in the launcher AND a
-// tenant) is checked from both sides — from the cards, and from a tenant's drawer opened in place.
+// Its one hard problem: All projects shows every project but is BOUND to one (the page project — the
+// prompt box's pick), so the page-level client (`rpc`) means that project there, and a slug is unique only
+// within a project — an action wired to the wrong client either fails against the page's project or,
+// worse, succeeds on its namesake. So the page is bound to the launcher (reached the way a person reaches
+// it: the launcher's own `/?project=` landing, then the switcher's All projects, which carries the project
+// over as the pick), every write is taken on a TENANT's card (where the page client would be wrong), and
+// the same-slug pair the seed plants (`fix-flaky-login-test`, in the launcher AND a tenant) is checked from
+// both sides — from the cards, and from a tenant's drawer opened in place.
 //
 // Usage: node scripts/verify-all-queues.mjs --stack=/abs/stack.log [--shots=/abs/dir]
 //   against a stack booted by adhoc-stack.mjs (with --also-project for marketing-site, billing-worker and
@@ -112,11 +115,9 @@ try {
     return element
   }
 
-  // The launcher's own landing URL (src/index.ts slugPath): `/` focused on the project it was run in.
-  await page.goto(`${origin}/?focus=acme-api`, { waitUntil: "networkidle2" })
-  await page.evaluate(() => { document.documentElement.dataset.theme = "dark" })
-  await page.waitForSelector("[data-xq-card]")
-  await sleep(800)
+  // Generous, because this machine is shared: at a load average of 30+ a cold page load alone has taken
+  // 20s, and every wait below is for a condition, so a slow pass costs time and never a verdict.
+  page.setDefaultNavigationTimeout(90_000)
   // Escape leaves a focused composer first and closes the drawer on the next press; a terminal keeps its
   // Escape (it belongs to the program in the pty), so that one is closed by a click outside the sheet.
   const closeDrawer = async () => {
@@ -155,11 +156,27 @@ try {
     ).catch(() => { throw new Error(`${selector} never settled on screen`) })
     await handle.asElement().click()
   }
+  // All projects, reached the way a person reaches it: the launcher's own landing URL (src/index.ts
+  // slugPath), `/?project=<slug>`, focused on the project it was run in — then the READY header's
+  // switcher, whose All projects keeps that project as the prompt box's pick (AllQueues.tsx Switcher).
+  const allFrom = async (slug) => {
+    await page.goto(`${origin}/?project=${slug}`, { waitUntil: "networkidle2" })
+    await page.waitForSelector('[data-inbox-header] [data-xq-switcher="project"]', { timeout: 30_000 })
+    await clickSettled("[data-inbox-header] [data-xq-switcher]")
+    await clickSettled('[role="menuitem"][data-value="all-projects"]')
+    await page.waitForFunction(() => location.search === "?all", { timeout: 15_000 })
+    await page.evaluate(() => { document.documentElement.dataset.theme = "dark" })
+    await page.waitForSelector('[data-surface="newComposer"]', { timeout: 30_000 })
+    await pickerSays(slug, 30_000)
+    await sleep(800)
+  }
 
-  await step("/ lands on the page focused on the named project, with its prompt box", async () => {
+  await allFrom("acme-api")
+
+  await step("All projects keeps the project it was left from as the page's, with its prompt box", async () => {
     await page.waitForSelector('[data-surface="newComposer"]', { timeout: 10_000 })
     const path = await page.evaluate(() => location.pathname + location.search)
-    check("/ lands on the page focused on the named project, with its prompt box", path === "/" && (await pickerSays("acme-api")), `${path}, picker "${await picker()}"`)
+    check("All projects keeps the project it was left from as the page's, with its prompt box", path === "/?all" && (await pickerSays("acme-api")), `${path}, picker "${await picker()}"`)
   })
 
   // Until 2026-09-28 this checked a lane per project in the rail's order; the queue is one queue now, in
@@ -202,6 +219,12 @@ try {
   await step("a queue row in the rail brings its card up and rings it", async () => {
     await page.evaluate(() => window.scrollTo(0, 0))
     const row = await buttonIn(`[data-xq-rail-project="${ids["marketing-site"]}"]`, "Fix the flaky login test")
+    // The ring lasts 1100ms, so it is WATCHED for rather than sampled: at a load average of 30+ the read
+    // below landed past it once, on a ring that had been set 5ms after the click.
+    await page.$eval(`${card("marketing-site", "fix-flaky-login-test")} [data-xq-card-root]`, (root) => {
+      window.__rang = false
+      new MutationObserver(() => { if (root.hasAttribute("data-queue-flash")) window.__rang = true }).observe(root, { attributes: true })
+    })
     await row.click()
     await sleep(900)
     const at = await page.$eval(card("marketing-site", "fix-flaky-login-test"), (el) => ({
@@ -209,7 +232,7 @@ try {
       // A card in the page's last screenful cannot reach the top; the page scrolling to its end is the
       // most it can do, and the card is then in view.
       atEnd: Math.ceil(window.scrollY + window.innerHeight) >= document.documentElement.scrollHeight - 1 && el.getBoundingClientRect().bottom <= window.innerHeight,
-      flash: el.querySelector("[data-xq-card-root]")?.hasAttribute("data-queue-flash"),
+      flash: window.__rang === true,
     }))
     check("a queue row in the rail brings its card up and rings it", ((at.top >= 0 && at.top < 160) || at.atEnd) && at.flash === true, `card top ${at.top}px${at.atEnd ? " (page end)" : ""}, ring ${at.flash}`)
   })
@@ -272,11 +295,20 @@ try {
 
   await step("answering a tenant's registered question answers it there", async () => {
     const scope = card("marketing-site", "hero-copy-variants")
-    // An option is a row whose button carries no text of its own (it is labelled by the row).
-    const option = (await page.evaluateHandle((scope) => [...document.querySelectorAll(`${scope} [data-question-option]`)].find((row) => row.textContent?.includes("Every agent, one board"))?.querySelector("button") ?? null, scope)).asElement()
-    if (!option) throw new Error("no option \"Every agent, one board\"")
-    await option.click()
-    await page.click(`${scope} [data-send-answers]`)
+    // An option is a row whose button carries no text of its own (it is labelled by the row). Found again
+    // on each try: the card re-renders on the 3s poll, and a handle held across that is detached.
+    let chose = false
+    for (let attempt = 0; attempt < 5 && !chose; attempt++) {
+      const option = (await page.evaluateHandle((scope) => [...document.querySelectorAll(`${scope} [data-question-option]`)].find((row) => row.textContent?.includes("Every agent, one board"))?.querySelector("button") ?? null, scope)).asElement()
+      chose = option !== null && (await option.click().then(() => true, () => false))
+      if (!chose) await sleep(200)
+    }
+    if (!chose) throw new Error("no option \"Every agent, one board\" to click")
+    // A single-choice pick that completes the ask sends it (RegisteredQuestionCards, since 2026-09-29's
+    // "a pick is an answer"), taking the card's Send answers with it; an ask still owed more waits for it.
+    await sleep(500)
+    const send = await page.$(`${scope} [data-send-answers]:not([disabled])`)
+    if (send) await send.click().catch(() => {})
     await waitFor("the tenant question to settle", async () => { const t = await threadOf("marketing-site", "hero-copy-variants"); return t && (t.questions ?? []).length === 0 ? t : null })
     const other = await threadOf("acme-api", "rate-limit-headers")
     // A thread's `questions` lists only its OPEN rows, so the launcher's must still carry one.
@@ -510,10 +542,7 @@ try {
     )
     // Its toast stays mounted once it fades, "Open thread" and all (Toaster.tsx), and the next step clicks
     // the first one it finds: that step starts on a fresh page instead, the box back on the launcher.
-    await page.goto(`${origin}/?focus=acme-api`, { waitUntil: "networkidle2" })
-    await page.evaluate(() => { document.documentElement.dataset.theme = "dark" })
-    await page.waitForSelector('[data-surface="newComposer"]', { timeout: 10_000 })
-    await pickerSays("acme-api")
+    await allFrom("acme-api")
   })
 
   await step("a terminal command started from the page runs in the project chosen for it", async () => {
@@ -557,80 +586,80 @@ try {
     await page.waitForFunction(() => location.pathname === "/", { timeout: 8000 })
   })
 
-  // There is no project view to open (maintainer 2026-09-28: "urls like this should not exist anymore"):
-  // showing one project is a FILTER on the queue column, held per tab, and the address stays `/`. Until
-  // then a rail square, a project's row, its lane header and the filter menu each navigated to
-  // `/project/<slug>`; now the square, a card's project chip and the READY header's menu filter in place, and
-  // a project's row opens its other bands under it instead (verify-one-view.mjs checks that, and the
-  // row's ⋯ → Filter). What each check reads is whose cards the queue shows: filtered, exactly the one
-  // project's. (A lane's header was the second door until the lanes went, the same day; the card's own
-  // project chip is that door now.)
-  const filteredTo = async (slug) => {
-    await page.waitForSelector("[data-xq-view-filter-pill]", { timeout: 8000 })
-    await page.waitForFunction((id) => { const shown = new Set([...document.querySelectorAll("[data-xq-card]")].map((el) => el.getAttribute("data-xq-card")?.split("/")[0])); return shown.size === 1 && shown.has(id) }, { timeout: 8000 }, ids[slug]).catch(() => {})
-    return { projects: await cardProjects(), path: await page.evaluate(() => location.pathname) }
+  // Leaving All projects for ONE project is a change of view, by address (lib/pageView.ts): `/?project=`.
+  // It was a filter on the queue column, held per tab at `/`, from 2026-09-28 until focus mode; before
+  // that, each of these doors navigated to `/project/<slug>`. The doors are a rail square, a card's
+  // project chip (All projects draws one on every card), the READY header's switcher, and a project row's
+  // ⋯ (verify-one-view.mjs). What each check reads is the address and whose cards the queue shows:
+  // focused, exactly the one project's.
+  const focusedTo = async (slug) => {
+    await page.waitForFunction((slug) => new URLSearchParams(location.search).get("project") === slug, { timeout: 15_000 }, slug).catch(() => {})
+    await page.waitForFunction((id) => { const shown = new Set([...document.querySelectorAll("[data-xq-card]")].map((el) => el.getAttribute("data-xq-card")?.split("/")[0])); return shown.size === 1 && shown.has(id) }, { timeout: 30_000 }, ids[slug]).catch(() => {})
+    return { projects: await cardProjects(), path: await page.evaluate(() => location.pathname + location.search) }
   }
-  const only = (seen, slug) => JSON.stringify(seen.projects) === JSON.stringify([ids[slug]]) && seen.path === "/"
+  const only = (seen, slug) => JSON.stringify(seen.projects) === JSON.stringify([ids[slug]]) && seen.path === `/?project=${slug}`
   const same = (a, b) => JSON.stringify([...a].sort()) === JSON.stringify([...b].sort())
-  const clearFilter = async () => {
-    await page.waitForFunction(() => { const clear = document.querySelector("[data-xq-view-filter-clear]"); clear?.click(); return clear !== null }, { timeout: 8000 })
-    await page.waitForFunction(() => !document.querySelector("[data-xq-view-filter-pill]"), { timeout: 8000 })
-    await page.waitForSelector("[data-xq-card]", { timeout: 8000 })
+  // Back to All projects, and every project's cards in it.
+  const backToAll = async (count) => {
+    await page.waitForFunction(() => location.search === "?all", { timeout: 15_000 }).catch(() => {})
+    await page.waitForFunction((count) => new Set([...document.querySelectorAll("[data-xq-card]")].map((el) => el.getAttribute("data-xq-card")?.split("/")[0])).size === count, { timeout: 30_000 }, count).catch(() => {})
     await sleep(400)
+    return cardProjects()
+  }
+  const switchTo = async (value) => {
+    await clickSettled("[data-inbox-header] [data-xq-switcher]")
+    await clickSettled(`[role="menuitem"][data-value="${value}"]`)
   }
 
-  await step("a rail square filters the queue to its project, and pressing it again lifts the filter", async () => {
+  await step("a rail square focuses the page on its project, and the switcher's All projects comes back to it", async () => {
     const settings = await api("acme-api").query("settingsGet")
     await api("acme-api").mutate("settingsSet", { ...settings, projectRail: true })
     try {
-      await page.goto(`${origin}/?focus=acme-api`, { waitUntil: "networkidle2" })
+      await allFrom("acme-api")
       await page.waitForSelector("[data-xq-card]")
-      await sleep(800)
       const everything = await cardProjects()
       // The rail's scrolling band draws the registry's order, one square per project, each a plain link to
-      // `/`; the Home workspace's square is pinned below the band, outside that order (ProjectRail.tsx).
+      // its focused page; the Home workspace's square is pinned below the band, outside that order
+      // (ProjectRail.tsx).
       const index = (await api("acme-api").query("projectsList")).filter((p) => !p.home).map((p) => p.slug).indexOf("marketing-site")
-      const band = 'nav[aria-label="Projects"] .frizz-rail-scroll a[href="/"]'
+      const band = 'nav[aria-label="Projects"] .frizz-rail-scroll a[href^="/?project="]'
       await page.waitForSelector(band, { timeout: 10_000 })
       const squares = await page.$$(band)
       if (squares.length !== Object.keys(ids).length) throw new Error(`${squares.length} rail squares for ${Object.keys(ids).length} projects`)
       await squares[index].click()
-      const filtered = await filteredTo("marketing-site")
-      const current = await squares[index].evaluate((el) => el.getAttribute("aria-current"))
-      await squares[index].click()
-      await page.waitForFunction(() => !document.querySelector("[data-xq-view-filter-pill]"), { timeout: 8000 }).catch(() => {})
-      await sleep(400)
-      const lifted = await cardProjects()
-      const says = await pickerSays("acme-api")
+      const focused = await focusedTo("marketing-site")
+      const current = await page.$eval('nav[aria-label="Projects"] a[href="/?project=marketing-site"]', (el) => el.getAttribute("aria-current"))
+      await switchTo("all-projects")
+      const back = await backToAll(everything.length)
+      // The project just left is All projects' pick now, as the switcher promised.
+      const says = await pickerSays("marketing-site")
       check(
-        "a rail square filters the queue to its project, and pressing it again lifts the filter",
-        only(filtered, "marketing-site") && current === "page" && same(lifted, everything) && says,
-        `square → ${filtered.projects.length} project(s) at ${filtered.path}, marked ${current}; again → ${lifted.length}/${everything.length} projects; picker "${await picker()}"`,
+        "a rail square focuses the page on its project, and the switcher's All projects comes back to it",
+        only(focused, "marketing-site") && current === "page" && same(back, everything) && says,
+        `square → ${focused.projects.length} project(s) at ${focused.path}, marked ${current}; All → ${back.length}/${everything.length} projects; picker "${await picker()}"`,
       )
     } finally {
       await api("acme-api").mutate("settingsSet", settings)
     }
   })
 
-  await step("a card's project chip and the filter menu each filter the queue to it; ✕ comes back", async () => {
-    await page.goto(`${origin}/?focus=billing-worker`, { waitUntil: "networkidle2" })
+  await step("a card's project chip and the switcher each focus the page on it; Back and All projects come back", async () => {
+    await allFrom("billing-worker")
     await page.waitForSelector("[data-xq-card]")
-    await sleep(800)
     const everything = await cardProjects()
     await page.click(`[data-xq-card^="${ids["acme-api"]}/"] button[data-xq-chip]`)
-    const byChip = await filteredTo("acme-api")
-    await page.screenshot({ path: join(shots, "xp-verify-filtered.png") })
-    await clearFilter()
-    const widened = await cardProjects()
-    await page.click("[data-inbox-header] [data-xq-view-filter]")
-    await clickSettled('[role="menuitem"][data-value="marketing-site"]')
-    const byMenu = await filteredTo("marketing-site")
-    await clearFilter()
-    const cleared = await cardProjects()
+    const byChip = await focusedTo("acme-api")
+    await page.screenshot({ path: join(shots, "xp-verify-focused.png") })
+    await page.goBack()
+    const widened = await backToAll(everything.length)
+    await switchTo("marketing-site")
+    const byMenu = await focusedTo("marketing-site")
+    await switchTo("all-projects")
+    const cleared = await backToAll(everything.length)
     check(
-      "a card's project chip and the filter menu each filter the queue to it; ✕ comes back",
+      "a card's project chip and the switcher each focus the page on it; Back and All projects come back",
       only(byChip, "acme-api") && same(widened, everything) && only(byMenu, "marketing-site") && same(cleared, everything),
-      `chip → ${byChip.projects.length} project(s) at ${byChip.path}, ✕ → ${widened.length}/${everything.length} projects, menu → ${byMenu.projects.length} project(s) at ${byMenu.path}, ✕ → ${cleared.length} projects`,
+      `chip → ${byChip.projects.length} project(s) at ${byChip.path}, Back → ${widened.length}/${everything.length} projects, switcher → ${byMenu.projects.length} project(s) at ${byMenu.path}, All → ${cleared.length} projects`,
     )
   })
 

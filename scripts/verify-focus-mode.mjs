@@ -209,7 +209,7 @@ try {
     check("a Working row opens its drawer on the page", true, await address(page))
     // At once, not once it has settled: a focused project's row opens its drawer STORE-first, and a close
     // that landed before the route had committed the drawer's address was re-opened by that address
-    // (lib/router.ts `written`) — 6 of 6 tries stuck on a loaded machine before the fix. Escape leaves a
+    // (lib/router.ts `stale`) — 6 of 6 tries stuck on a loaded machine before the fix. Escape leaves a
     // focused composer first and closes the drawer on a later press, so three, 150ms apart.
     for (let i = 0; i < 3; i++) {
       await page.keyboard.press("Escape")
