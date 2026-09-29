@@ -1,8 +1,8 @@
 import { test } from "node:test"
 import assert from "node:assert/strict"
 import type { BoardSnapshot } from "@frizz/shared"
-import { markDrawerClosing, resolveRoutedThread, store } from "../store.ts"
-import { applyLocation, primeRoute, startRouter } from "./router.ts"
+import { markDrawerClosing, noteStandaloneThreadRender, resolveRoutedThread, store } from "../store.ts"
+import { applyLocation, noteRouterTransition, primeReturnFromFullscreen, primeRoute, startRouter } from "./router.ts"
 
 function resetStore(): void {
   store.drawers = []
@@ -295,6 +295,92 @@ test("the writer's own address is applied when the store has not moved past it",
     assert.equal(store.routeThreadSlug, null, "applied: the drawer is in the stack, so nothing stays parked")
     stop()
   } finally {
+    globals.location = previous
+    resetStore()
+  }
+})
+
+// THE WAY BACK FROM /full opens the drawer in the page's FIRST render (store.ts primeFullscreenReturn),
+// and the page's route effects — its store → URL writer and useRouteToStore — run only after the return's
+// view transition lets them, over a second later on a loaded machine. An Escape in that window closed the
+// drawer with no writer to record it, and the route then applied the drawer's address: parked, settled by
+// the board, re-opened (3 to 5 of 6 tries, 2026-09-29). The page opened on that address, so a close before
+// the route caught up is the store moving past it, like a write held back.
+test("a drawer the return from /full opened, closed before the route caught up, stays closed", async () => {
+  const globals = globalThis as typeof globalThis & { location?: Location; window?: Window & typeof globalThis }
+  const previous = { location: globals.location, window: globals.window }
+  const settle = () => new Promise((resolve) => setTimeout(resolve, 0))
+  // The return leg, up to the page's first effects: /full rendered, then the page primed its drawer.
+  const returnTo = () => {
+    resetStore()
+    globals.location = { pathname: "/thread/t" } as unknown as Location
+    boardWith([{ id: "t" }])
+    noteStandaloneThreadRender("t")
+    primeReturnFromFullscreen("t")
+  }
+  const effects = (navigated: string[]) => {
+    const stop = startRouter((path) => {
+      navigated.push(path)
+      globals.location = { pathname: new URL(path, "http://page").pathname } as unknown as Location
+    })
+    applyLocation(globals.location!.pathname)
+    return stop
+  }
+  try {
+    globals.window = { setTimeout: () => 0 } as unknown as Window & typeof globalThis
+    returnTo()
+    assert.deepEqual(store.drawers.map((d) => d.slug), ["t"], "the page opens on the drawer")
+    store.drawers = [] // Escape, before any route effect has run
+    const navigated: string[] = []
+    const stop = effects(navigated)
+    await settle()
+    resolveRoutedThread() // the render the board is authoritative on
+    assert.equal(store.routeThreadSlug, null, "the drawer's address did not park it again")
+    assert.equal(store.drawers.length, 0, "…or re-open it")
+    assert.deepEqual(navigated, ["/"], "and the close is written")
+    stop()
+
+    // CONTROL: left open, the same return applies its address and writes nothing.
+    returnTo()
+    const untouched: string[] = []
+    const stopUntouched = effects(untouched)
+    await settle()
+    resolveRoutedThread()
+    assert.deepEqual(store.drawers.map((d) => d.slug), ["t"], "the drawer stays up")
+    assert.deepEqual(untouched, [], "and the address stays on it")
+    stopUntouched()
+  } finally {
+    globals.location = previous.location
+    globals.window = previous.window
+    resetStore()
+  }
+})
+
+// A navigation issued while react-router's view transition is running — the way back from /full is one —
+// moved history and the router but was not rendered, leaving the page on the address it was leaving
+// (2026-09-29). The writer holds its write until the transition has finished.
+test("the store → URL writer waits out react-router's view transition", async () => {
+  resetStore()
+  const globals = globalThis as typeof globalThis & { location?: Location }
+  const previous = globals.location
+  const navigated: string[] = []
+  const settle = () => new Promise((resolve) => setTimeout(resolve, 0))
+  try {
+    globals.location = { pathname: "/" } as unknown as Location
+    const stop = startRouter((path) => {
+      navigated.push(path)
+      globals.location = { pathname: new URL(path, "http://page").pathname } as unknown as Location
+    })
+    noteRouterTransition(true)
+    store.drawers = [{ id: 1, kind: "thread", slug: "t" } as never]
+    await settle()
+    assert.deepEqual(navigated, [], "nothing is written while the transition runs")
+    noteRouterTransition(false)
+    await settle()
+    assert.deepEqual(navigated, ["/thread/t"], "and the write lands as it finishes")
+    stop()
+  } finally {
+    noteRouterTransition(false)
     globals.location = previous
     resetStore()
   }
