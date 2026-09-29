@@ -592,15 +592,16 @@ function saidDone(tele: Pick<SessionTelemetry, "lastFence" | "lastAssistantAllDo
  *
  *  Without this the arrangement outlived the sign-off it was built to end: a worker that used the verb
  *  instead of the fence kept being woken at every rest, forever, by a Goal it had explicitly finished
- *  with. `registeredDoneFence` carries the same "nothing newer from the human" lifetime the board reads
- *  it by, so the loop reopens on the human's next word exactly as the fence's version does. */
+ *  with. `registeredDoneFence` carries the same lifetime the board reads it by: the done stands through a
+ *  prose-only human reply, and the loop reopens once the worker runs a tool after the human spoke, or
+ *  once the turn that answered the human failed. */
 function threadSaidDone(
   storage: Storage,
   slug: string,
-  tele: Pick<SessionTelemetry, "lastFence" | "lastAssistantAllDone" | "lastUserAt" | "lastToolCallAt" | "lastAssistantAt">,
+  tele: Pick<SessionTelemetry, "lastFence" | "lastAssistantAllDone" | "lastUserAt" | "lastToolCallAt" | "lastAssistantAt" | "apiFault">,
   armedAt?: string | null,
 ): boolean {
-  const registered = registeredDoneFence(storage.getThreadDone(slug), tele.lastUserAt, tele.lastToolCallAt) !== undefined
+  const registered = registeredDoneFence(storage.getThreadDone(slug), tele.lastUserAt, tele.lastToolCallAt, tele) !== undefined
   const fenced = saidDone(tele)
   if (!registered && !fenced) return false
   return !armReopenedTheLoop(storage, slug, tele, registered, fenced, armedAt)
@@ -2064,7 +2065,7 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
       if (
         tele.lastFence ||
         tele.pendingQuestion ||
-        registeredDoneFence(deps.storage.getThreadDone(row.slug), tele.lastUserAt, tele.lastToolCallAt) !== undefined ||
+        registeredDoneFence(deps.storage.getThreadDone(row.slug), tele.lastUserAt, tele.lastToolCallAt, tele) !== undefined ||
         // …a CURRENT one: a question the human replied past is a pivot, not this rest's sign-off.
         questionRows.some((q) => q.state === "open" && !questionRepliedPast(q, tele.lastHumanAt)) ||
         answersInFlight(questionRows, tele.lastUserAt, row.recurring_on_rest === 1 && Boolean(row.recurring_prompt?.trim())) !== undefined ||
@@ -3170,15 +3171,16 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
       // lets a worker sign off with a background process still running — a dev server, a poller it has
       // moved on from — naming it in the body. Waking that thread when the process exits hands a
       // finished worker news it declared it did not need, and it answers the only way it can: by saying
-      // done again — a second Done card, and a registered done is un-done by the wake's own user record
-      // until it does (registeredDoneFence reads the last user instant). SOURCES 4 and 5 already decline
+      // done again — a second Done card, and a wake whose turn runs any tool withdraws the registered done
+      // until it does (registeredDoneFence: a done stands through a prose-only reply to a newer user
+      // record, not through a tool call or a failed turn after it). SOURCES 4 and 5 already decline
       // a done thread; this is the same guard. The one exception is a shell the worker REGISTERED a wait
       // on (`mcp__frizz__watch`): a registration trumps a done on the board, so it trumps it here too —
       // the wake is the thing it registered for. Matched by ROW, in any state but dropped, because
       // evalOwnWatches has already settled that row silently by the time this pass runs (it runs first
-      // in the tick, and "target ended" is its silent case — the wake is this pass's to send). The
-      // human's next word re-opens the thread as ever, and by then the exit is folded into the turn
-      // that answers it.
+      // in the tick, and "target ended" is its silent case — the wake is this pass's to send). Once the
+      // human's next message turns into work (a tool call) or dies (a failed turn), the done stops
+      // standing, and by then the exit is folded into the turn that answers it.
       const walkedAway = threadSaidDone(deps.storage, row.slug, tele)
       const registeredShells = walkedAway ? deps.storage.listThreadWatches(row.slug).filter((w) => w.kind === "shell" && w.state !== "dropped") : []
       const restedAt = Date.parse(tele.lastAssistantAt ?? "")

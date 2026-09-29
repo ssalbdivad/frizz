@@ -51,12 +51,13 @@ Mac.
 ## Releases
 
 [`desktop.yml`](../../.github/workflows/desktop.yml) publishes the installers as the GitHub release
-`desktop-v<version>` when `release` moves and that release does not exist yet — so bumping this
-package's `version` is what ships a new build. It builds on four runners (Linux x64, Apple silicon,
+`desktop-v<version>` when a maintainer dispatches it with `gh workflow run desktop.yml --ref release`
+and that release does not exist yet. Moving `release` starts nothing, so a bump to this package's
+`version` ships once that dispatch runs. It builds on four runners (Linux x64, Apple silicon,
 Intel Mac, Windows x64), and each one installs its own installer and launches it
 (`scripts/smoke.mjs --install`) before anything is published. The builds are unsigned by decision:
-ad-hoc on macOS, none on Windows. A run that died is retried with
-`gh workflow run desktop.yml --ref release`; it refuses any other ref.
+ad-hoc on macOS, none on Windows. A run that died is retried with the
+same dispatch; it refuses any other ref.
 
 ## Verifying it
 

@@ -19,19 +19,24 @@ import { Menu, MenuContent, MenuItem, MenuTrigger } from "./ui/Menu.tsx"
 // row opens the drawer, and the drawer is where you choose to take it further. `f` is the item's
 // accelerator, pressed on the drawer you are reading (lib/keyboardRuntime.ts), and on /full the same key
 // leaves (CollapseThreadLink).
+//
+// The ⤢ came back beside it on 2026-09-29 (ExpandThreadLink.tsx) — on the queue card's header and in the
+// drawer's strip, where Colin had it — as a restoration of the original's one-click door; this menu keeps
+// its entry and the drawer keeps `f` on it, and both halves navigate through openFullscreen below.
 
 /**
  * Go to a thread's /full page from the surface it is shown in — a route change, not a document load,
  * wrapped in a VIEW TRANSITION so the drawer's panel visibly slides into its /full position.
  *
- * `from` is any element inside that surface: the surface is read off it once, whether or not the
+ * `href` defaults to the page project's /full address; a queue card of ANOTHER project passes its own
+ * (its project's prefix), because the page's is the focused project's. `from` is any element inside that surface: the surface is read off it once, whether or not the
  * navigation animates, because it is also what the reader's place is measured against (the scroll
  * hand-off is continuity, not decoration, and a reader on reduced motion needs it more, not less). The
  * drawer-stack clear this needs happens on the /full route's first render (routes.tsx StandaloneRoute),
  * not here: the old page is snapshotted two renders AFTER the click, so a click-time clear removed the
  * very sheet the transition slides.
  */
-export function openFullscreen(slug: string, from: HTMLElement | null): void {
+export function openFullscreen(slug: string, from: HTMLElement | null, href = standaloneThreadHref(slug)): void {
   const animate = !prefersReducedMotion()
   const surface = from?.closest<HTMLElement>("[data-vt-chat]") ?? null
   // Where they are in it, for /full to restore instead of jumping to the tail (lib/fullscreenHandoff).
@@ -46,7 +51,7 @@ export function openFullscreen(slug: string, from: HTMLElement | null): void {
     surface.style.viewTransitionName = "thread-chat"
     armFullscreenMorph(surface)
   }
-  spaNavigate(standaloneThreadHref(slug), { viewTransition: animate })
+  spaNavigate(href, { viewTransition: animate })
 }
 
 export function ThreadMenu({ slug }: { slug: string }) {

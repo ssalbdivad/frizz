@@ -251,9 +251,10 @@ export const ThreadRow = memo(function ThreadRow({
   // (maintainer 2026-09-11: "a thread that's marked as done should always be grayed out, even if it's
   // pinned"). The pin freezes a row's PLACE, never its state, so the dim has to ride the ROW rather than
   // the band it happens to sit in; the two dims share one treatment so the rail has exactly one way of
-  // saying "nothing here is moving". Read off the indicator's own predicate, so the dim and the check
-  // can never disagree — an archived row is Done even while its worker drains a last turn.
-  const done = sessionIndicatorKind(t) === "archived"
+  // saying "nothing here is moving". Read off the row's STATE, not the indicator: a Done row whose
+  // worker is still draining a turn wears the spinner (groups.ts sessionIndicatorKind, shared
+  // doneButRunning) and is still Done — dimmed, and still the human's to uncheck.
+  const done = t.state === "archived"
   const dim = snoozed || done
   // The done CHECK is a real checkbox on a row frizz owns: unchecking it reopens the thread. A foreign
   // row is read-only (the server has no session to write), so its check stays a plain mark.
@@ -578,13 +579,17 @@ function RowUncheckDone({ t }: { t: ThreadView }) {
   // The page's optimistic overlays are keyed by bare slug for the PAGE project's rail; a row of another
   // project must not touch them (api/threadApi.tsx useThreadIsForeignToPage).
   const scoped = useThreadIsForeignToPage()
+  // A Done row still moving draws the SPINNER here, not the check (doneButRunning): the box is still the
+  // uncheck, and the label says both halves so the glyph under the pointer is not a mystery.
+  const mark = sessionIndicatorKind(t)
+  const label = mark === "working" ? "Done, still working — uncheck to reopen" : "Done — uncheck to reopen"
   return (
-    <Tooltip label="Done — uncheck to reopen" side="left">
+    <Tooltip label={label} side="left">
       <button
         type="button"
         role="checkbox"
         aria-checked
-        aria-label="Done — uncheck to reopen"
+        aria-label={label}
         data-sidebar-uncheck-done={t.id}
         disabled={busy}
         onMouseDown={(e) => e.preventDefault()}
@@ -604,7 +609,7 @@ function RowUncheckDone({ t }: { t: ThreadView }) {
       >
         {/* The indicator's NODE, not ThreadIndicator: that wraps its own "Done" tooltip, and this
             button's tooltip already says it — nested, the two would open together. */}
-        <span data-rail-glyph="archived" className="flex items-center justify-center">{sessionIndicatorFor(t).node}</span>
+        <span data-rail-glyph={mark} className="flex items-center justify-center">{sessionIndicatorFor(t).node}</span>
       </button>
     </Tooltip>
   )

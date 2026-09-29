@@ -49,6 +49,12 @@ test("open and foreign rows carry no uncheck control", () => {
   assert.doesNotMatch(row({ ...DONE, foreign: true }), /data-sidebar-uncheck-done/)
 })
 
-test("a done row whose worker is still running keeps its check — only the human unchecks it", () => {
-  assert.match(row({ ...DONE, runtime: "running" }), /data-sidebar-uncheck-done/)
+test("a done row whose worker is still running keeps its uncheck — and shows its spinner in it", () => {
+  const html = row({ ...DONE, runtime: "running" })
+  // Only the human unchecks Done, so the control stays…
+  assert.match(html, /data-sidebar-uncheck-done/)
+  // …but the glyph in it is the running spinner, never a silent check (maintainer, hit 3x; 7a20f425).
+  assert.match(html, /data-rail-glyph="working"/)
+  assert.doesNotMatch(html, /data-rail-glyph="archived"/)
+  assert.match(html, /aria-label="Done, still working — uncheck to reopen"/)
 })

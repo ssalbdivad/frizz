@@ -1,5 +1,6 @@
 import {
   atRest,
+  doneButRunning,
   futureSnoozedUntil,
   hasLiveOps,
   hasLiveSubAgents,
@@ -18,7 +19,7 @@ import {
 
 // The band predicates live in @frizz/shared so the server counts the rail's running badge with the
 // same rule the sidebar bands on. Re-exported here, where every web caller already imports them.
-export { futureSnoozedUntil, isActivelyRunning, isSnoozed, prChecksRunning, sectionOf, type SectionKey }
+export { doneButRunning, futureSnoozedUntil, isActivelyRunning, isSnoozed, prChecksRunning, sectionOf, type SectionKey }
 import { canRetry } from "./lib/status.ts"
 
 // Shared listing logic: the queue definition (needsAction), the sidebar's status-keyed sections
@@ -618,8 +619,11 @@ export type SessionIndicatorKind = "archived" | "needs-input" | "working" | "bac
 
 export function sessionIndicatorKind(t: ThreadView): SessionIndicatorKind {
   // DONE IS THE HUMAN'S TO UNDO, and nothing a worker does afterwards reads as undoing it — see
-  // `sectionOf`. A worker still finishing a turn after Mark as done keeps the check, not a spinner.
-  if (t.state === "archived") return "archived"
+  // `sectionOf`, which keeps the ROW under Done. But a live session never sits there SILENTLY
+  // (maintainer, hit 3× before 2026-07-10): while its turn drains or a sub-agent it dispatched is still
+  // out, the Done row wears the spinner (shared doneButRunning), and settles back to the check the moment
+  // it comes to rest. The mark says what the process is doing; the band says what the human decided.
+  if (t.state === "archived") return doneButRunning(t) ? "working" : "archived"
   const activelyRunning = isActivelyRunning(t)
 
   // A PARK THE OPERATOR SET OUTRANKS EVERY ASK MARK BELOW IT — the order the SERVER already derives the

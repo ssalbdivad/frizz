@@ -91,14 +91,27 @@ export function appServerTurnStalled(
 //
 // Fifteen minutes: well past the 60-second default a foreground Bash bounces at, past the ~5-minute test
 // gate, and short enough that a turn blocked on a human is in front of one before they wonder where it
-// went. A deliberate long foreground wait does queue — the maintainer's standing trade applies: "a
-// spurious queue card costs one click, while a wrongly-held thread is invisible for hours" — and the
-// card's own Snooze parks it.
+// went.
+//
+// A DELIBERATE LONG WAIT DOES NOT QUEUE. Colin's rule is that a thread listed as running never shows up
+// in the queue (maintainer 2026-08-01: "if something is listed as currently running, then it should
+// never show up in the queue"), and the Bash ceiling went to 24 hours precisely because "a blocking wait
+// is DELIBERATE" (backend/types.ts BASH_MAX_TIMEOUT_MS): a call that names its own timeout was sized by a
+// worker that knew what it was waiting for. Queuing that thread at minute fifteen turned every
+// `nub run test` with `timeout: 1800000` into a card asking the human to interrupt it. So the silence is
+// excused while either (deliberateWait):
+//   - a tool call the turn is still blocked on declared an explicit timeout that has not run out yet
+//     (the tailer's pendingToolCalls — Bash's `timeout`, any tool's `timeout_ms`), or
+//   - the worker REGISTERED a wait (`mcp__frizz__watch`) on work that still resolves live, within the
+//     row's own `for` (hasRegisteredBackgroundPark — the same predicate that parks a rest on it).
+// Everything else still queues — a default-timeout Bash, an MCP call with no ceiling, a call whose
+// declared timeout has passed — which is the 2FA wedge this exists for; the card's Snooze parks the rest.
 export const QUIET_TURN_MS = 15 * 60_000
 export function quietTurnSince(
   runtime: RuntimeState,
-  tele: Pick<SessionTelemetry, "turn" | "lastActivityAt" | "subAgents"> | undefined,
+  tele: SessionTelemetry | undefined,
   nowMs: number,
+  armedWatches: readonly RegisteredWatch[] = [],
 ): string | undefined {
   if (runtime !== "running" || tele?.turn !== "in-flight" || !tele.lastActivityAt) return undefined
   let latest = Date.parse(tele.lastActivityAt)
@@ -111,7 +124,19 @@ export function quietTurnSince(
     if (!Number.isFinite(at)) return undefined
     latest = Math.max(latest, at)
   }
-  return nowMs - latest >= QUIET_TURN_MS ? new Date(latest).toISOString() : undefined
+  if (nowMs - latest < QUIET_TURN_MS) return undefined
+  if (deliberateWait(tele, armedWatches, nowMs)) return undefined
+  return new Date(latest).toISOString()
+}
+
+/** The turn is silent on purpose — see quietTurnSince. */
+export function deliberateWait(tele: SessionTelemetry, armedWatches: readonly RegisteredWatch[], nowMs: number): boolean {
+  for (const call of tele.pendingToolCalls ?? []) {
+    if (call.timeoutMs === undefined) continue
+    const started = Date.parse(call.startedAt)
+    if (Number.isFinite(started) && nowMs < started + call.timeoutMs) return true
+  }
+  return hasRegisteredBackgroundPark(tele, armedWatches, nowMs)
 }
 
 // Runtime derivation: no session row → never spawned (none); a row whose worker is dead/absent →
@@ -1424,7 +1449,8 @@ export function resolveSessionTitle(
   tele: Pick<SessionTelemetry, "aiTitle"> | undefined,
 ): Pick<ThreadView, "title" | "titleAuto" | "titleLocked" | "aiTitle"> {
   const locked = sessionTitleLocked(row)
-  const persisted = row.title_agent === 1 ? row.title?.trim() || undefined : undefined
+  // Any machine title frizz persisted: the worker's own (1) or frizz's periodic summary (2).
+  const persisted = (row.title_agent ?? 0) !== 0 ? row.title?.trim() || undefined : undefined
   return {
     title: row.title ?? "",
     titleAuto: row.title_auto === 1,
@@ -1435,10 +1461,13 @@ export function resolveSessionTitle(
 
 /** A registered completion as the ```done fence it replaces, or undefined when it no longer stands.
  *
- *  ITS LIFETIME IS "NOTHING NEWER FROM THE HUMAN". A fence is superseded the moment the worker writes
- *  again; a ROW cannot be, so something has to spend it — and the human SENDING MORE WORK is exactly
- *  the moment a completion stops being true. Deciding that by comparing two timestamps means there is
- *  no sweep to forget one, and no window where a thread that was reopened still cards as finished.
+ *  ITS LIFETIME IS "NOTHING NEWER HAS BEEN DONE FOR THE HUMAN". A fence is superseded the moment the
+ *  worker writes again; a ROW cannot be, so something has to spend it. The human speaking after it is
+ *  necessary but not sufficient: a prose-only reply to that message is conversation about finished work,
+ *  and the done stands through it. Two things spend it — the worker running a TOOL after the human spoke
+ *  (the message was new work), or the turn that answered it FAILING (the new work died; see below).
+ *  Deciding that by comparing timestamps means there is no sweep to forget one, and no window where a
+ *  thread that was reopened still cards as finished.
  *
  *  The comparison is `<=`, not `<`: the two instants come from different clocks (the row's is frizz's
  *  own `Date.now()`, the telemetry's is the transcript record's), and a same-millisecond tie is the
@@ -1447,6 +1476,7 @@ export function registeredDoneFence(
   done: { body: string; doneAt: number } | undefined,
   lastUserAt: string | undefined,
   lastToolCallAt?: string,
+  fault?: Pick<SessionTelemetry, "apiFault" | "lastAssistantAt">,
 ): FenceView | undefined {
   if (!done) return undefined
   const userAt = lastUserAt ? Date.parse(lastUserAt) : Number.NaN
@@ -1460,6 +1490,15 @@ export function registeredDoneFence(
   if (Number.isFinite(userAt) && userAt > done.doneAt) {
     const toolAt = lastToolCallAt ? Date.parse(lastToolCallAt) : Number.NaN
     if (Number.isFinite(toolAt) && toolAt > done.doneAt) return undefined
+    // …OR IF THE TURN THAT ANSWERED IT FAILED. The tool-call line has a hole: an API error before the
+    // first tool call leaves no tool call to see, so the human's new request died and the thread still
+    // carded as finished over it. A synthetic error record advances `lastAssistantAt` like any output,
+    // so "the newest assistant record is a fault, and it is no older than the human's message" is that
+    // failed turn. The `>=` bound is what keeps a STALE fault out: `apiFault` is cleared only by real
+    // assistant TEXT, so a fault from before the done can survive a text-less `done` tool call and
+    // still be standing — and its `lastAssistantAt` then predates the human's message.
+    const faultAt = fault?.apiFault ? Date.parse(fault.lastAssistantAt ?? "") : Number.NaN
+    if (Number.isFinite(faultAt) && faultAt >= userAt) return undefined
   }
   // `registered` is the one thing the transcript needs that the fence it replaces never carried: a fenced
   // done is drawn from the message that holds it, and this one is in no message, so the client draws it
@@ -1619,7 +1658,7 @@ function sessionThreadView(
     lastAssistant: providerError?.message, lastAssistantAt: providerError?.at,
     lastFence: undefined, lastAssistantAllDone: false,
   } : rawTele
-  const done = supersededDone || providerError ? undefined : registeredDoneFence(registries.done.get(row.slug), rawTele?.lastUserAt, rawTele?.lastToolCallAt)
+  const done = supersededDone || providerError ? undefined : registeredDoneFence(registries.done.get(row.slug), rawTele?.lastUserAt, rawTele?.lastToolCallAt, rawTele)
   const tele: SessionTelemetry | undefined = done && failedTele ? { ...failedTele, lastFence: done } : failedTele
   // A headless thread mid-turn with nobody driving it is a crash/stall, not a rest. For codex that is
   // an app-server that stopped advancing the rollout; for the broker it is a dead ownerless daemon (its
@@ -1669,7 +1708,7 @@ function sessionThreadView(
   const state = effectiveSessionState(row, registeredLegacyTerminal)
   const archived = state === "archived"
   const limitPause = resolveLimitPause(row, tele, nowMs)
-  const quietSince = archived ? undefined : quietTurnSince(runtime, tele, nowMs)
+  const quietSince = archived ? undefined : quietTurnSince(runtime, tele, nowMs, armedWatches)
   // A silent turn queues past every rest gate in deriveNeedsYou (it is not at rest), except the human's
   // own wall-clock snooze, which is how a deliberate long wait is parked.
   const needsYou = archived ? false : deriveNeedsYou(row, tele, runtime, interactionPresence.needsUser, nowMs, limitPause, true, deliveryProcessGone, github, registeredPrWatches, armedTimerIds, armedWatches, currentQuestionCount, answerAwaitingDelivery(questionRows, rawTele?.lastUserAt, nowMs)) || (quietSince !== undefined && !futureSnooze(row, nowMs))
