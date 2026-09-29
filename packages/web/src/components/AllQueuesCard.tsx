@@ -58,7 +58,7 @@ import { LogoutConfirmModal, SignInModal } from "./SignInModal.tsx"
 import { QuietTurnCard, showsQuietTurnCard } from "./QuietTurnCard.tsx"
 import { QueueShellStrip } from "./QueueShellStrip.tsx"
 import { SnoozeButton } from "./SnoozeButton.tsx"
-import { PinButton, StateButton } from "./ThreadLifecycleFooter.tsx"
+import { StateButton } from "./ThreadLifecycleFooter.tsx"
 import { Tooltip } from "./Tooltip.tsx"
 import { BLOCK_RADIUS, BLOCK_RADIUS_INNER_BOTTOM, QUEUE_WRAP, TranscriptCard } from "./TranscriptCard.tsx"
 
@@ -266,7 +266,9 @@ export const AllQueuesCard = memo(function AllQueuesCard({
             {chip && <ProjectMark project={project} onChoose={onChoose} />}
             <div className="min-w-0 flex-1">
               <h3 className="truncate text-[15px] font-semibold leading-snug" title={displayTitle(thread)}>
-                <a href={placeHref} onClick={openHere} className="rounded-sm outline-none hover:underline hover:underline-offset-2 focus-visible:ring-1 focus-visible:ring-focus-ink-60">
+                {/* The card's title is its drawer door, and `o` presses it (lib/keyboardRuntime.ts). Only a
+                    queue card carries `open`: in a drawer or on /full the thread is already open. */}
+                <a href={placeHref} onClick={openHere} data-command="open" className="rounded-sm outline-none hover:underline hover:underline-offset-2 focus-visible:ring-1 focus-visible:ring-focus-ink-60">
                   {displayTitle(thread)}
                 </a>
               </h3>
@@ -402,7 +404,6 @@ export const AllQueuesCard = memo(function AllQueuesCard({
           <ThreadProjectScope projectId={project.id} projectDir={project.projectDir}>
             <footer className={`${BLOCK_RADIUS_INNER_BOTTOM} flex min-h-10 flex-wrap items-center justify-end gap-3 border-t border-border/70 bg-panel/95 px-3 py-2 text-[12px]`}>
               <SnoozeButton thread={thread} projectName={project.name} onSnoozed={onLeave} onUndone={onUnsnoozed} eventItems={showsSubAgentWait(thread) && <SubAgentWaitSnoozeItems thread={thread} onSnoozed={onLeave} onUndone={onUnsnoozed} />} />
-              <PinButton thread={thread} />
               <StateButton thread={thread} onArchived={onLeave} onDismissCancel={onReturn} command />
             </footer>
           </ThreadProjectScope>

@@ -16,7 +16,7 @@ import { actionDef, bindingLookup, detectPlatform, effectiveBindings, formatChor
 //     (AllQueues) already knows which card is being read, and how to land on one; the keys reuse
 //     exactly that, so the rail's marker and the key never disagree. (The project board's sidebar
 //     registered one too, until 2026-09-28 — hence a stack of cursors rather than a single slot.)
-//   · A THREAD COMMAND (done, snooze, pin, reply, fullscreen) PRESSES THE REAL CONTROL on the surface you
+//   · A THREAD COMMAND (done, snooze, reply, fullscreen, open) PRESSES THE REAL CONTROL on the surface you
 //     are looking at — the top drawer, the /full page, or the card being read. Each control opts in
 //     with `data-command`, and the key clicks it, so every gate that control already obeys (the
 //     completion confirm, the optimistic fade, a disabled state, a foreign session) applies to the key
@@ -168,7 +168,7 @@ export function currentThreadSurface(): HTMLElement | null {
  *  a click (a Radix menu trigger opens on pointerdown/keydown) can claim it with preventDefault. */
 export const COMMAND_EVENT = "frizz:command"
 
-export type ThreadCommand = "done" | "snooze" | "fullscreen" | "pin" | "reply"
+export type ThreadCommand = "done" | "snooze" | "fullscreen" | "open" | "reply"
 
 // Every prompt box that answers the thing on screen. Deliberately NOT the question card's free-text
 // answer box (`questionAnswer`) — `r` is a reply to the thread, and a question has its own chips.
@@ -216,7 +216,7 @@ const BUILT_INS: Partial<Record<ActionId, Handler>> = {
   "thread.done": () => runThreadCommand("done"),
   "thread.snooze": () => runThreadCommand("snooze"),
   "thread.fullscreen": () => runThreadCommand("fullscreen"),
-  "thread.pin": () => runThreadCommand("pin"),
+  "thread.open": () => runThreadCommand("open"),
   "app.shortcuts": () => {
     store.showShortcuts = !store.showShortcuts
   },

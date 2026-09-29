@@ -1,13 +1,12 @@
 import { useRef, useState } from "react"
-import { AlarmClock, Check, Loader2, Pin, PinOff } from "lucide-react"
+import { AlarmClock, Check, Loader2 } from "lucide-react"
 import type { CompletionHold, ThreadView } from "@frizz/shared"
 import { useThreadApi, useThreadIsForeignToPage } from "../api/threadApi.tsx"
-import { useAfterScopedWrite } from "../api/afterScopedWrite.ts"
 import { showToast } from "../store.ts"
 import { threadLifecycleAvailability, completionArchivesImmediately, completionHoldSummary } from "../lib/threadLifecycle.ts"
 import { markArchived, clearArchived } from "../lib/optimisticArchive.ts"
 import { useShortcutLabel, withShortcut } from "../lib/keyboardRuntime.ts"
-import { futureSnoozedUntil, isPinned } from "../groups.ts"
+import { futureSnoozedUntil } from "../groups.ts"
 import { formatAgo } from "../lib/durationLabels.ts"
 import { formatSnoozeWake } from "../lib/snooze.ts"
 import { CHILD_ARROW, CHILD_ARROW_CLASS } from "../lib/childOps.ts"
@@ -88,7 +87,6 @@ export function ThreadLifecycleFooter({
       ) : (
         <>
           {available.snooze && <SnoozeButton thread={thread} onSnoozed={onSnoozed} />}
-          <PinButton thread={thread} />
           <StateButton thread={thread} onArchived={onArchived} onDismissCancel={onDismissCancel} command />
         </>
       )}
@@ -183,43 +181,6 @@ function PendingSnooze({ thread }: { thread: ThreadView }) {
 // row, beside the sub-agents and shells it is a peer of. What a shell's row cannot say on its own — that
 // a watcher is armed on it, so this thread will actually wake when it ends — is stated in that row's own
 // tooltip (see BackgroundOpsStrip).
-
-// PIN beside Mark as done, on every card's footer — the same `setThreadPinned` the rail row's hover pin
-// writes, as a pill so it sits in the strip's rhythm (a bordered pill paints its whole box, so the strip's
-// one gap needs no trim for it; lib/iconRhythm.ts). It is the control the `p` shortcut presses
-// (lib/keyboardRuntime.ts). Only a thread Frizz owns can be pinned (groups.ts isPinned; the server refuses
-// the rest), so a foreign session or a terminal command thread gets no button at all.
-export function PinButton({ thread }: { thread: ThreadView }) {
-  const [busy, setBusy] = useState(false)
-  const api = useThreadApi()
-  const afterWrite = useAfterScopedWrite()
-  const keys = useShortcutLabel("thread.pin")
-  if (thread.kind !== "session" || thread.foreign === true) return null
-  const pinned = isPinned(thread)
-  const label = pinned ? "Unpin" : "Pin"
-  return (
-    <button
-      type="button"
-      disabled={busy}
-      aria-label={pinned ? "Unpin thread" : "Pin thread"}
-      title={withShortcut(pinned ? "Unpin — return this thread to its band" : "Pin — keep this thread at the top of the rail", keys)}
-      data-command="pin"
-      onMouseDown={(event) => event.preventDefault()}
-      onClick={() => {
-        setBusy(true)
-        api
-          .setThreadPinned({ slug: thread.id, sessionId: thread.sessionId ?? "", pinned: !pinned })
-          .then(afterWrite)
-          .catch((error: unknown) => showToast(`${label} failed: ${String(error instanceof Error ? error.message : error).slice(0, 80)}`))
-          .finally(() => setBusy(false))
-      }}
-      className="flex items-center gap-1 rounded-md border border-border-strong bg-panel-2/60 px-2.5 py-1 text-[12px] font-medium text-fg/80 outline-none transition-colors hover:bg-panel-2 hover:text-fg focus-visible:ring-1 focus-visible:ring-focus-ink-60 disabled:opacity-45"
-    >
-      {pinned ? <PinOff size={12} /> : <Pin size={12} />}
-      {label}
-    </button>
-  )
-}
 
 // Also rendered — deliberately redundant — as a white primary button at the bottom of the in-chat
 // ```done card (see FenceCard). Same completion mutation and live-session confirmation flow; only the

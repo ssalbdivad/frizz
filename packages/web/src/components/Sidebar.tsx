@@ -17,7 +17,6 @@ import { ProviderMark } from "./ProviderMark.tsx"
 import { STALLED_RETRY_MESSAGE, retrySession } from "../lib/retrySession.ts"
 import { deliverProjectFollowUp } from "../lib/projectFollowUp.ts"
 import { useThreadApi, useThreadIsForeignToPage, useThreadProjectDir, useThreadProjectId } from "../api/threadApi.tsx"
-import { useAfterScopedWrite } from "../api/afterScopedWrite.ts"
 import { formatAutoSnoozedUntil, formatUserSnooze } from "../lib/snooze.ts"
 import { SUBAGENTS_SNOOZE_TOAST } from "../lib/subAgentWait.ts"
 import { formatCompactElapsed } from "../lib/durationLabels.ts"
@@ -58,6 +57,21 @@ export const ROW_ACTION_CLASS = "flex h-[19px] w-[19px] items-center justify-cen
 // (BandLabel.tsx), while a Ready row lights nothing here because its thread is a card in the middle
 // column, which the scroll marker already tracks. Stronger than hover so pointing at a neighbour
 // cannot be mistaken for opening it.
+/**
+ * After a row's verb lands, re-read what the row was drawn from. Everything polls every project, so a
+ * row asks for that poll now, and for its project's full board (Done, External), rather than showing the
+ * old state for up to a poll. A row under no ThreadProjectScope (a fixture's) has nothing to re-read.
+ */
+function useAfterScopedWrite(): () => void {
+  const queryClient = useQueryClient()
+  const projectId = useThreadProjectId()
+  return useCallback(() => {
+    if (!projectId) return
+    void queryClient.invalidateQueries({ queryKey: ["projectsQueues"] })
+    void queryClient.invalidateQueries({ queryKey: ["ofProject", projectId, "board"] })
+  }, [queryClient, projectId])
+}
+
 function rowWashClass(open: boolean): string {
   return `after:pointer-events-none after:absolute after:inset-0 after:rounded-md after:transition-opacity ${
     open ? "after:bg-hover-strong after:opacity-100" : "after:bg-hover after:opacity-0 hover:after:opacity-100"
