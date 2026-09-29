@@ -206,13 +206,21 @@ try {
     if (!busy) throw new Error("no project lists any rows to fold")
     const before = await rowsOf(busy)
     const cards = await page.$$eval("[data-xq-card]", (c) => c.length)
-    const badge = async () => page.$eval(`[data-xq-project-row="${busy}"]`, (row) => row.textContent)
+    // Its quiet counts sit under its threads while it lists them, and move up onto its row when it folds.
+    const counts = async (scope) => page.$eval(`[data-xq-rail-project="${busy}"]`, (g, scope) => [...g.querySelectorAll(`${scope} [data-xq-quiet-count]`)].map((c) => c.textContent).join(" "), scope)
+    const countsBefore = await counts("[data-xq-quiet-footer]")
+    const badge = async () => page.$eval(`[data-xq-project-row="${busy}"]`, (row) => {
+      const bare = row.cloneNode(true)
+      bare.querySelector("[data-xq-quiet-toggle]")?.remove()
+      return bare.textContent
+    })
     const badgeBefore = await badge()
     await clickSettled(`[data-xq-project-row="${busy}"] [data-xq-project-fold]`)
     await sleep(300)
     const after = await rowsOf(busy)
     check("folding a project hides all its rows", before > 0 && after === 0, `${before} → ${after}`)
-    check("…its row still carries its counts", (await badge()) === badgeBefore)
+    check("…its row still carries its Ready count", (await badge()) === badgeBefore, badgeBefore)
+    check("…and takes its quiet counts up from under the threads", (await counts("[data-xq-project-row]")) === countsBefore && !(await page.$(`[data-xq-quiet-footer="${busy}"]`)), countsBefore || "(none)")
     check("…and the queue on the right is untouched", (await page.$$eval("[data-xq-card]", (c) => c.length)) === cards)
     await page.screenshot({ path: join(shots, "one-view-folded.png") })
     await page.reload({ waitUntil: "networkidle2" })
@@ -224,9 +232,9 @@ try {
     check("a second click brings every row back", (await rowsOf(busy)) === before, `${await rowsOf(busy)} of ${before}`)
   })
   await step("a project's counts open its quiet bands in place, and a Done row opens its drawer on the page", async () => {
-    const withDone = await page.$$eval("[data-xq-project-row]", (rows) => rows.find((r) => r.querySelector('[data-xq-quiet-count="done"]'))?.getAttribute("data-xq-project-row"))
+    const withDone = await page.$$eval("[data-xq-project-row]", (rows) => rows.find((r) => r.closest("[data-xq-rail-project]").querySelector('[data-xq-quiet-count="done"]'))?.getAttribute("data-xq-project-row"))
     if (!withDone) throw new Error("no project has a Done count to open")
-    const counts = `[data-xq-project-row="${withDone}"] [data-xq-quiet-toggle]`
+    const counts = `[data-xq-rail-project="${withDone}"] [data-xq-quiet-toggle]`
     const loud = await rowsOf(withDone)
     await clickSettled(counts)
     await page.waitForSelector(`[data-xq-drill="${withDone}"] [data-xq-drill-band="done"] [data-sidebar-item]`, { timeout: 8000 })
@@ -304,12 +312,12 @@ try {
         const [, , slug, , thread] = href.split("/")
         if (slug === focus || thread.startsWith("term-")) continue
         const id = title.closest("[data-xq-card]").getAttribute("data-xq-card").split("/")[0]
-        if (document.querySelector(`[data-xq-project-row="${id}"] [data-xq-quiet-count="done"]`)) return { card: href, id }
+        if (document.querySelector(`[data-xq-rail-project="${id}"] [data-xq-quiet-count="done"]`)) return { card: href, id }
       }
       return null
     }, focus)
     if (!target) throw new Error("no project other than the focus has both a card and a Done thread")
-    const counts = `[data-xq-project-row="${target.id}"] [data-xq-quiet-toggle]`
+    const counts = `[data-xq-rail-project="${target.id}"] [data-xq-quiet-toggle]`
     await clickSettled(counts)
     const doneRow = `[data-xq-drill="${target.id}"] [data-xq-drill-band="done"] [data-sidebar-item] button`
     await page.waitForSelector(doneRow, { timeout: 8000 })

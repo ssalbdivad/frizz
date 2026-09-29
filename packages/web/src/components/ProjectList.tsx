@@ -406,6 +406,11 @@ function ProjectGroup({
   const scope = useRowScope(project, onPage, onQueuedRow)
   const queryClient = useQueryClient()
   const carded = loud.carded
+  // Where the counts sit: under the threads they sit beside, once the project lists any (maintainer
+  // 2026-09-29: "more intuitive to have buttons to see other thread types where current threads are
+  // listed") — so the click opens the rest right where it was made. Folded, or with nothing in flight,
+  // there is no list to sit under, and the row keeps them.
+  const footed = !collapsed && loud.rows > 0
   const row = (restedAge: boolean) => (t: ThreadView) => (
     <RailRow
       key={t.id}
@@ -446,6 +451,7 @@ function ProjectGroup({
         quiet={quiet}
         collapsed={collapsed}
         showsRest={showsRest}
+        counts={!footed}
         home={home}
       />
       {!collapsed && (
@@ -454,6 +460,7 @@ function ProjectGroup({
           {quiet.pinnedDone.map(row(false))}
           {loud.ready.map(row(true))}
           {loud.working.map(row(false))}
+          {footed && <QuietFooter project={project} quiet={quiet} showsRest={showsRest} />}
           {drilled && <ProjectDrill project={project} quiet={quiet} row={row(false)} />}
         </ThreadProjectScope>
       )}
@@ -517,7 +524,8 @@ function useRowScope(project: QueuesProject, page: boolean, onQueuedRow: (key: s
  * only its own controls sit above it.
  *
  * Its right edge carries, in order: the quiet bands' counts — THEIR OWN toggle, the "sub button" that shows
- * or hides the rest (Snoozed, Done, External) without touching the fold — then its Ready count: the accent
+ * or hides the rest (Snoozed, Done, External) without touching the fold, here only while the project lists
+ * no threads for them to sit under (QuietFooter) — then its Ready count: the accent
  * badge, the one number in the list that wants you, which stays when the project is folded so a folded
  * project still says it is waiting. Or, in their place, a note, only when something is wrong: its directory
  * is gone, or this server has not opened it. On hover the badge gives way to the "…" (ProjectActions.tsx
@@ -532,6 +540,7 @@ function ProjectRow({
   quiet,
   collapsed,
   showsRest,
+  counts,
   home,
 }: {
   project: QueuesProject
@@ -541,6 +550,8 @@ function ProjectRow({
   quiet: QuietBands
   collapsed: boolean
   showsRest: boolean
+  /** Whether the row carries the quiet counts, or they sit under its threads instead (QuietFooter). */
+  counts: boolean
   home: string | undefined
 }) {
   const [menuOpen, setMenuOpen] = useState(false)
@@ -624,7 +635,7 @@ function ProjectRow({
           <span className="text-[10.5px] leading-[19px] text-muted-55">{note}</span>
         ) : (
           <>
-            <QuietToggle project={project} quiet={quiet} showsRest={showsRest} />
+            {counts && <QuietToggle project={project} quiet={quiet} showsRest={showsRest} />}
             {/* The Ready count, in the "…"'s own slot — it gives way to the menu on hover. */}
             {project.card && (
               <span
@@ -710,6 +721,21 @@ function QuietToggle({ project, quiet, showsRest }: { project: QueuesProject; qu
         )
       })}
     </button>
+  )
+}
+
+/**
+ * The counts, under a busy project's threads rather than on its row: the last line of what is in flight,
+ * and the head of the rest it opens, which lands directly beneath it. Left-aligned on the titles' column
+ * (pl-5, the 16px indicator, the 8px gap — the "Show more" and "Loading…" lines' 44px), so it reads as one
+ * more line of the list rather than a control hung off its edge.
+ */
+function QuietFooter({ project, quiet, showsRest }: { project: QueuesProject; quiet: QuietBands; showsRest: boolean }) {
+  if (quiet.snoozed.length === 0 && quiet.doneCount === 0 && quiet.external.length === 0) return null
+  return (
+    <div data-xq-quiet-footer={project.id} className="flex py-1 pl-[44px] pr-1.5">
+      <QuietToggle project={project} quiet={quiet} showsRest={showsRest} />
+    </div>
   )
 }
 
