@@ -31,6 +31,7 @@ import {
 import { projectTranscriptPageAgentLifecycles } from "./transcript.ts"
 import { readProjectIdFile, writeProjectIdFile } from "./project-root.ts"
 import { findByPath, registerProject } from "./project-registry.ts"
+import { createThreadNamer } from "./thread-names.ts"
 import { createStorage, type AdoptionClaimRow, type SessionRow } from "./storage.ts"
 import type { AdoptionPaneLookup, PaneIdentity, PaneIdentity as PaneSnapshot } from "./adoption-recovery.ts"
 import type { AppContext } from "./context.ts"
@@ -432,16 +433,107 @@ test("aiRenameThread RPC: the title request carries the opening task, not the la
       ].map((l) => l + "\n").join(""),
     )
     const described: string[] = []
-    ;(h.ctx as { claudeBroker?: unknown }).claudeBroker = {
-      renameSession: async (input: { description: string }) => {
-        described.push(input.description)
-        return "Fix the flaky resume test"
+    ;(h.ctx as { claudeBroker?: unknown }).claudeBroker = {}
+    ;(h.ctx as { threadNamer?: unknown }).threadNamer = createThreadNamer({
+      storage: h.storage,
+      aiTitleOf: () => undefined,
+      complete: async ({ prompt }) => {
+        described.push(prompt)
+        return "Resume flake"
       },
-    }
+    })
     const result = await h.router.aiRenameThread.handler({ input: { slug: "rename-src" } })
-    assert.deepEqual(result, { title: "Fix the flaky resume test" })
-    assert.deepEqual(described, [task])
-    assert.equal(h.storage.getSession("rename-src")?.title, "Fix the flaky resume test")
+    assert.deepEqual(result, { title: "Resume flake" })
+    assert.equal(described.length, 1)
+    assert.match(described[0]!, new RegExp(`<request>\\n${task}\\n</request>`))
+    assert.doesNotMatch(described[0]!, /orientation the operator never wrote|all green/)
+    assert.equal(h.storage.getSession("rename-src")?.title, "Resume flake")
+    h.storage.close()
+  } finally {
+    rmSync(logDir, { recursive: true, force: true })
+  }
+})
+
+// NAMES ARE NEVER DUPLICATED (thread-names.ts), and every writer is held to it — here the two the router
+// owns: a human's rename (an inline error in the header editor) and the worker's `mcp__frizz__title`
+// (a refusal that names the holder). Each has its negative control: a distinct name goes straight in.
+test("renameThread RPC: a human rename that duplicates an open thread's name is refused; a distinct one locks", async () => {
+  const h = harness()
+  h.storage.upsertSession(row("holder"))
+  h.storage.setTitle("holder", "Shell budgets")
+  h.storage.upsertSession({ ...row("mine"), title_auto: 1, title_locked: 0, title: "chop…" })
+  await assert.rejects(
+    h.router.renameThread.handler({ input: { slug: "mine", title: "shell-budgets" } }),
+    /“Shell budgets” is already another open thread's name/,
+  )
+  assert.equal(h.storage.getSession("mine")?.title, "chop…", "the refused name never landed")
+  assert.equal(h.storage.getSession("mine")?.title_locked, 0)
+  await h.router.renameThread.handler({ input: { slug: "mine", title: "Budget defaults" } })
+  assert.equal(h.storage.getSession("mine")?.title, "Budget defaults")
+  assert.equal(h.storage.getSession("mine")?.title_locked, 1, "a human rename locks the name")
+  // Renaming a thread to its own current name is not a collision with itself.
+  await h.router.renameThread.handler({ input: { slug: "holder", title: "Shell budgets" } })
+  h.storage.close()
+})
+
+test("setOwnThreadTitle RPC: a duplicate is refused NAMING its holder, a distinct one lands once, and a second rename is refused", async () => {
+  const h = harness()
+  h.storage.upsertSession(row("holder"))
+  h.storage.setTitle("holder", "Focus mode")
+  h.storage.upsertSession({ ...row("worker"), title_auto: 1, title_locked: 0, title: "chop…" })
+  const call = (title: string) => h.router.setOwnThreadTitle.handler({ input: { slug: "worker", title } })
+
+  const dupe = await call("Focus Mode")
+  assert.equal(dupe.accepted, false)
+  assert.equal(dupe.lockedByHuman, false)
+  assert.match(dupe.refusal ?? "", /already named "Focus mode" \(thread holder\)/)
+  assert.match(dupe.refusal ?? "", /different one- or two-word subject/)
+  assert.equal(h.storage.getSession("worker")?.title_worker_renamed, 0, "a refusal does not spend the rename")
+
+  const long = await call("Fix the focus mode rail")
+  assert.equal(long.accepted, false)
+  assert.match(long.refusal ?? "", /longer than two words/)
+
+  const ok = await call("Focus rail")
+  assert.deepEqual(ok, { accepted: true, title: "Focus rail", lockedByHuman: false })
+  assert.equal(h.storage.getSession("worker")?.title, "Focus rail")
+
+  const again = await call("Rail focus")
+  assert.equal(again.accepted, false)
+  assert.match(again.refusal ?? "", /already renamed this thread once/)
+  assert.equal(h.storage.getSession("worker")?.title, "Focus rail", "the name is stable after the one rename")
+  h.storage.close()
+})
+
+test("aiRenameThread RPC: a collision is retried once naming it, then falls back to a distinguishing word", async () => {
+  const cwdSlug = `-tmp-frizz-rename-dupe-${process.pid}-${Math.random().toString(36).slice(2, 8)}`
+  const logDir = join(homedir(), ".claude", "projects", cwdSlug)
+  mkdirSync(logDir, { recursive: true })
+  const h = harness()
+  try {
+    ;(h.ctx.project as { cwdSlug: string }).cwdSlug = cwdSlug
+    h.storage.upsertSession(row("holder"))
+    h.storage.setTitle("holder", "Shell budgets")
+    h.storage.upsertSession({ ...row("dupe-src"), exited: 0, title_auto: 1, title_locked: 0 })
+    h.storage.setBackend("dupe-src", "claude")
+    h.storage.setClaudeRuntime("dupe-src", "broker")
+    writeFileSync(
+      join(logDir, "sid-dupe-src.jsonl"),
+      JSON.stringify({ type: "user", timestamp: "2026-09-29T00:00:00.000Z", message: { role: "user", content: "the shell budget default is too low, raise the ceiling" } }) + "\n",
+    )
+    const prompts: string[] = []
+    ;(h.ctx as { claudeBroker?: unknown }).claudeBroker = {}
+    ;(h.ctx as { threadNamer?: unknown }).threadNamer = createThreadNamer({
+      storage: h.storage,
+      aiTitleOf: () => undefined,
+      complete: async ({ prompt }) => { prompts.push(prompt); return "Shell budgets" },
+    })
+    const result = await h.router.aiRenameThread.handler({ input: { slug: "dupe-src" } })
+    assert.equal(prompts.length, 2)
+    assert.match(prompts[0]!, /Names already taken in this project:\n- Shell budgets\n/)
+    assert.match(prompts[1]!, /Your previous answer, "Shell budgets", is already the name of another thread/)
+    assert.deepEqual(result, { title: "Shell default" })
+    assert.equal(h.storage.getSession("dupe-src")?.title, "Shell default")
     h.storage.close()
   } finally {
     rmSync(logDir, { recursive: true, force: true })

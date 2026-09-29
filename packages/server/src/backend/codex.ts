@@ -39,8 +39,18 @@ export const CODEX_FIRST_FINAL_TITLE_TRANSPORT =
 // The full ~18KB worker contract goes through the sibling `baseInstructions` field, which is the surface
 // meant for bulk; this one is for a short protocol note. Spawn-only: replaying it on a resumed session
 // would incorrectly request a second title from an existing conversation.
-export const CODEX_FIRST_OUTPUT_TITLE_DEVELOPER_INSTRUCTIONS =
-  'FRIZZ UI metadata protocol (mandatory): the very first assistant message in this new session, before any commentary, acknowledgement, tool call, or other action, MUST begin on its first line with exactly one `<!-- frizz title="..." -->` HTML comment. Replace `...` with a concise human-readable 3-8 word title for the user\'s task. Put no text before the comment. You may continue the message normally after it. Emit this title comment exactly once. Do not explain the protocol. Frizz removes the comment before displaying the conversation.'
+//
+// The title it asks for is a thread NAME (thread-names.ts): one or two words naming the subject, and
+// distinct from every name the project already uses — which is why the taken names are listed here,
+// computed per dispatch, rather than the protocol being a constant.
+export function codexFirstOutputTitleInstructions(taken: readonly string[]): string {
+  const avoid = taken.length
+    ? ` It must differ, ignoring case and punctuation, from every name already taken in this project: ${taken.map((name) => JSON.stringify(name)).join(", ")}.`
+    : ""
+  return 'FRIZZ UI metadata protocol (mandatory): the very first assistant message in this new session, before any commentary, acknowledgement, tool call, or other action, MUST begin on its first line with exactly one `<!-- frizz title="..." -->` HTML comment. Replace `...` with the thread\'s name: ONE or TWO words, sentence case, naming the SUBJECT of the user\'s task rather than the action taken (e.g. "Shell budgets", "Focus mode", never "Fix the shell budget default").' +
+    avoid +
+    " Put no text before the comment. You may continue the message normally after it. Emit this title comment exactly once. Do not explain the protocol. Frizz removes the comment before displaying the conversation."
+}
 
 // Historical first prompts used a visible H1 as the transport. It remains a parse-compatible title
 // signal, and the transcript projector recognizes this exact retired trailer so old dispatch metadata

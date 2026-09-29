@@ -27,7 +27,8 @@ import { FRIZZ_MCP, WORKER_DISALLOWED_TOOLS, claudeWorkerEnv, frizzMcpEnv } from
 export { WORKER_MAX_WEB_SEARCHES, WORKER_MAX_SUBAGENTS, WORKER_MAX_CONCURRENT_SUBAGENTS } from "./backend/types.ts"
 import { resolveWorkerPluginDir } from "./worker-plugin-dir.ts"
 import { buildWorkerPrompt } from "./workerPrompt.ts"
-import { codexSandbox, CODEX_FIRST_OUTPUT_TITLE_DEVELOPER_INSTRUCTIONS } from "./backend/codex.ts"
+import { codexSandbox, codexFirstOutputTitleInstructions } from "./backend/codex.ts"
+import type { ThreadNamer } from "./thread-names.ts"
 import type { CodexAppServerBridge } from "./backend/codex-app-server.ts"
 import type { AcpBridge } from "./backend/acp-bridge.ts"
 import { acpAgentIdFromModel } from "./backend/acp-agents.ts"
@@ -806,6 +807,10 @@ export interface DispatchDeps {
   // The Claude session-broker bridge (context.ts). Every claude dispatch runs over it — headless, in a
   // detached daemon, with no terminal and no PTY. Absent ⇒ a claude dispatch fails loudly.
   claudeBroker?: ClaudeAgentBrokerBridge
+  // Names (thread-names.ts): mints a fresh thread's 1-2 word, project-unique name once the row exists,
+  // and holds a caller's hard-coded title to the same uniqueness rule. Absent (tests) ⇒ the row keeps
+  // its dispatch chop / caller title exactly as before, and nothing is minted.
+  threadNamer?: ThreadNamer
   // Failure cleanup targets only the exact freshly-spawned slug and its session-id-keyed files
   // (cleanupDispatchFiles), so a failed dispatch can never disturb a neighbouring thread.
   // Provider auth preflight (claude-auth plan, Slice A): resolves the target provider's credential
@@ -895,12 +900,20 @@ export function createDispatcher(deps: DispatchDeps): Dispatcher {
         (await deps.preflightCodexBinary().catch((): "unknown" => "unknown")) === "missing") {
         throw new Error("Codex is not installed, or the `codex` executable is not on PATH. Install the Codex CLI and retry.")
       }
-      // Title: explicit human title, else the heuristic chop. (A headless `claude -p` titling pass
-      // was tried and REMOVED — print mode is going away for Max subscription auth, which is the
-      // whole reason a frizz worker has never been a `-p` invocation: it runs as a full interactive
-      // session, today inside the broker daemon. Claude's own evolving ai-title
-      // takes over the display name seconds after the session starts; only the slug is heuristic.)
-      const title = input.title?.trim() || fallbackTitle(input.prompt)
+      // Title: a caller's title, else the heuristic chop, which is only ever the SLUG and a placeholder.
+      // A thread with no caller title is minted its real NAME — one or two words, unique in the project —
+      // once its row exists (`mintName`, thread-names.ts), through a short Claude completion off the
+      // dispatch path; Claude's own ai-title shows in the seconds before it lands. (A headless `claude -p`
+      // titling pass was tried and REMOVED — print mode is going away for Max subscription auth. The mint
+      // is an SDK stream-json session, the mode every broker worker runs in.)
+      // A CALLER's title (a parent's `spawn_thread`, the GitHub batch) is a name like any other, so it is
+      // held to the project's uniqueness rule here.
+      const callerTitle = input.title?.trim()
+      const title = (callerTitle && deps.threadNamer ? deps.threadNamer.distinct(callerTitle, input.prompt, input.slug) : callerTitle) ||
+        fallbackTitle(input.prompt)
+      const mintName = (slug: string, sessionId: string) => {
+        if (!callerTitle) void deps.threadNamer?.mint(slug, sessionId, input.prompt)
+      }
       const base = input.slug ?? slugify(title)
       const slug = resolveSlug(frizzDir, base, (s) => deps.storage.getSession(s) !== undefined)
       // Codex TUI does not reliably emit either a native title or Frizz's requested hidden marker.
@@ -953,7 +966,7 @@ export function createDispatcher(deps: DispatchDeps): Dispatcher {
             effort,
             sandbox: codexSandbox(permissionMode) as "read-only" | "workspace-write" | "danger-full-access",
             baseInstructions: [loadWorkerPrompt("codex"), extraSystemPrompt].filter(Boolean).join("\n\n"),
-            developerInstructions: CODEX_FIRST_OUTPUT_TITLE_DEVELOPER_INSTRUCTIONS,
+            developerInstructions: codexFirstOutputTitleInstructions(deps.threadNamer?.promptNames(slug) ?? []),
             config: { model_reasoning_summary: "detailed", ...codexScratchpadHookConfig(scratchpadHookScript(), sessionId, boardRoot) },
           })
           deps.storage.upsertSession({
@@ -987,6 +1000,7 @@ export function createDispatcher(deps: DispatchDeps): Dispatcher {
           // The codex SESSION id (not the thread id) matches the rollout filename the tailer scans for.
           deps.storage.setAgentSession(slug, spawned.binding.codexSessionId)
           deps.storage.setCodexRuntime(slug, "app-server")
+          mintName(slug, sessionId)
           void deps.board.rebuild().catch(() => {})
           return { slug, sessionId }
         } catch (err) {
@@ -1040,6 +1054,7 @@ export function createDispatcher(deps: DispatchDeps): Dispatcher {
           deps.storage.setBackend(slug, "acp")
           deps.storage.setAgentSession(slug, spawned.acpSessionId)
           deps.storage.setAcpAgent(slug, agentId)
+          mintName(slug, sessionId)
           void deps.board.rebuild().catch(() => {})
           return { slug, sessionId }
         } catch (err) {
@@ -1110,6 +1125,7 @@ export function createDispatcher(deps: DispatchDeps): Dispatcher {
           // and that panel prefills the default text without switching any trigger on.
           deps.storage.setBackend(slug, "claude")
           deps.storage.setClaudeRuntime(slug, "broker")
+          mintName(slug, sessionId)
           void deps.board.rebuild().catch(() => {})
           return { slug, sessionId }
         } catch (err) {

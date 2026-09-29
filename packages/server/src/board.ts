@@ -1530,7 +1530,9 @@ export function resolveSessionTitle(
 ): Pick<ThreadView, "title" | "titleAuto" | "titleLocked" | "aiTitle"> {
   const locked = sessionTitleLocked(row)
   // Any non-zero value: rows written between 2026-09-29 14:0x and this line's revert carry
-  // `title_agent = 2` (the retired setPeriodicTitle), and their titles are still the persisted ones.
+  // `title_agent = 2` (the retired setPeriodicTitle), and their titles are still the persisted ones. The
+  // name Frizz MINTS at dispatch (thread-names.ts) persists the same way, so it too outranks the
+  // transcript's live title the moment it lands.
   const persisted = row.title_agent ? row.title?.trim() || undefined : undefined
   return {
     title: row.title ?? "",
@@ -1819,6 +1821,8 @@ function sessionThreadView(
   return {
     id: row.slug,
     ...title,
+    // The live status line (periodic-status.ts) — what is happening now, beside a name that stays put.
+    ...(row.status?.trim() ? { statusLine: row.status.trim() } : {}),
     status: "active", // synthesized: the field is required but UNUSED for session rows (see note above)
     hasPlan: false,
     mechanism: null,

@@ -2414,9 +2414,14 @@ export interface TailerDeps {
   // fallback that used to cover it read a screen no runtime renders any more (see sniffPane).
   readPermMarker?: (slug: string) => PermMarker | undefined
   // Fired once per LIVE in-flight → idle edge, after `rested_at` is stamped — never for a rest observed
-  // at prime, which is a fact about the past rather than a turn that just ended. The periodic retitler
-  // (periodic-retitle.ts) rides it. Optional: unset = nothing extra happens at a rest.
+  // at prime, which is a fact about the past rather than a turn that just ended. The periodic status
+  // (periodic-status.ts) rides it. Optional: unset = nothing extra happens at a rest.
   onTurnDone?: (row: SessionRow) => void
+  // Hold a Codex first-output title to the project's name-uniqueness rule before it persists: the title
+  // itself when no other open thread is called that, else a distinguishing variant (thread-names.ts).
+  // `source` is the thread's opening request, for the distinguishing word. Optional: unset = persisted
+  // as written.
+  distinctTitle?: (slug: string, title: string, source?: string) => string
   // Durable prime cache (see tail-cache.ts). Defaults to a table in the project's own SQLite DB;
   // pass `null` to disable it entirely, which restores the historical "fold every transcript from
   // byte 0 on every boot" behaviour exactly (that is what the cache-off tests assert against).
@@ -2869,8 +2874,12 @@ export function createTailer(deps: TailerDeps): Tailer {
 
   function persistCodexAutoTitle(row: SessionRow, state: TailState, runtimeGeneration: number): boolean {
     if (row.backend !== "codex" || !state.aiTitle?.trim()) return false
+    // A persisted name already stands (the dispatch mint, or this marker on an earlier fold): the CAS
+    // would refuse anyway, so skip the uniqueness scan it would have paid for.
+    if (row.title_agent || row.title_worker_renamed) return false
     try {
-      return deps.storage.setAutoTitleIfCurrent(row.slug, state.aiTitle.trim(), {
+      const title = deps.distinctTitle?.(row.slug, state.aiTitle.trim(), state.firstUserText) ?? state.aiTitle.trim()
+      return deps.storage.setAutoTitleIfCurrent(row.slug, title, {
         sessionId: row.session_id,
         nativeSessionId: row.agent_session_id ?? null,
         runtimeGeneration,

@@ -655,10 +655,11 @@ test("a worker's own title persists on either backend, and a human's rename refu
   // provenance, and leaving it set is what keeps a later human rename outranking this name.
   assert.equal(s.getSession("claude-named")?.title_auto, 1)
 
-  // A second, better name from the same worker still lands — the task can genuinely turn out to be
-  // something else, and nothing about the first registration is a claim on the row.
-  assert.equal(s.setAgentTitle("claude-named", "Document z.properties"), true)
-  assert.equal(s.getSession("claude-named")?.title, "Document z.properties")
+  // ONCE (2026-09-29): after the worker's one correction the name is stable, so a second is refused
+  // and the first stands (thread-names.ts).
+  assert.equal(s.getSession("claude-named")?.title_worker_renamed, 1)
+  assert.equal(s.setAgentTitle("claude-named", "Document z.properties"), false)
+  assert.equal(s.getSession("claude-named")?.title, "Audit the Zod 4.5 docs")
 
   // THE HUMAN OUTRANKS IT, in both directions: a rename locks the row against every later worker name…
   s.setTitle("claude-named", "Named by hand")
@@ -701,6 +702,10 @@ test("automatic title CAS persists provenance and rejects manual, native-session
     s.setAutoTitleIfCurrent("codex-title", "Old generation", { ...expected, runtimeGeneration: 2 }),
     false,
   )
+
+  // The first persisted name STANDS: a later marker on the same session does not rename the thread.
+  assert.equal(s.setAutoTitleIfCurrent("codex-title", "Second marker", expected), false)
+  assert.equal(s.getSession("codex-title")?.title, "Useful generated title")
 
   s.setTitle("codex-title", "Manual title wins")
   assert.equal(s.setAutoTitleIfCurrent("codex-title", "Late generated title", expected), false)
@@ -1315,4 +1320,37 @@ test("pr_watch.kind: an issue watcher stores its kind, an older caller means pul
   } finally {
     rmSync(dir, { recursive: true, force: true })
   }
+})
+
+test("the dispatch-time mint lands once, on its own session, never over a human's or a worker's name", () => {
+  const s = store()
+  s.upsertSession(row({ slug: "minted", session_id: "sid", title: "fix the shell budget default so…", title_auto: 1 }))
+  assert.equal(s.setMintedTitle("minted", "other-session", "Shell budgets"), false, "a mint read from a replaced session never lands")
+  assert.equal(s.setMintedTitle("minted", "sid", "Shell budgets"), true)
+  assert.equal(s.getSession("minted")?.title, "Shell budgets")
+  assert.equal(s.getSession("minted")?.title_agent, 1, "persisted, so it outranks the transcript's live title")
+  assert.equal(s.getSession("minted")?.title_worker_renamed, 0, "a mint does not spend the worker's rename")
+  assert.equal(s.setMintedTitle("minted", "sid", "Budget defaults"), false, "the first name to land stands")
+  // The worker's one rename still lands over the mint…
+  assert.equal(s.setAgentTitle("minted", "Shell budget"), true)
+  // …and a human's rename locks against everything after it.
+  s.setTitle("minted", "Budgets")
+  assert.equal(sessionTitleLocked(s.getSession("minted")!), true)
+  s.upsertSession(row({ slug: "minted", session_id: "sid2", title: "chop", title_auto: 1 }))
+  const fresh = s.getSession("minted")!
+  assert.equal(fresh.title_worker_renamed, 0, "a re-dispatch gets its own rename")
+  assert.equal(fresh.status ?? null, null, "and no inherited status")
+  s.close()
+})
+
+test("a status line is written per session and never touches the name", () => {
+  const s = store()
+  s.upsertSession(row({ slug: "busy", session_id: "sid", title: "Focus mode", title_auto: 0 }))
+  s.setTitle("busy", "Focus mode")
+  assert.equal(s.setStatus("busy", "sid", "Waiting on CI for the rail fix"), true)
+  assert.equal(s.getSession("busy")?.status, "Waiting on CI for the rail fix")
+  assert.equal(s.getSession("busy")?.title, "Focus mode")
+  assert.equal(s.getSession("busy")?.title_locked, 1)
+  assert.equal(s.setStatus("busy", "old-sid", "Stale"), false)
+  s.close()
 })

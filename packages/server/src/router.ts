@@ -143,6 +143,7 @@ import {
 import { type AppContext } from "./context.ts"
 import { listAcpAgents } from "./backend/acp-agents.ts"
 import { sessionTitleLocked } from "./storage.ts"
+import { createThreadNamer, THREAD_NAME_MAX_WORDS, type ThreadNamer } from "./thread-names.ts"
 import { mayHaveLiveBackgroundWork, needsFreshProcessForLimit } from "./backend/usage-limit.ts"
 import { appServerTurnStalled, resolveLiveWatchTarget, resolveRecurringPrompt } from "./board.ts"
 import { runThreadUpdate } from "./frizz.ts"
@@ -895,6 +896,11 @@ function isHumanTurn(m: TranscriptMessage): boolean {
 }
 
 export function createRouter(ctx: AppContext) {
+  // The name registry every title writer checks (thread-names.ts). A hand-built test context may carry
+  // none; uniqueness then reads storage and the tailer directly, which is all it ever needs — only the
+  // mint and the AI rename need the model.
+  const fallbackNamer = createThreadNamer({ storage: ctx.storage, aiTitleOf: (slug) => ctx.tailer?.get(slug)?.aiTitle })
+  const threadNamer = (): ThreadNamer => ctx.threadNamer ?? fallbackNamer
   // ONE DELIVERY PER deliveryId. The ledger guard inside `followUp` (`hasDelivery`) is not enough for a
   // broker thread, on two counts, both measured 2026-09-24 against a real broker worker with the
   // page-reload replay (web lib/pendingSends.ts) as the repeat:
@@ -3598,6 +3604,12 @@ export function createRouter(ctx: AppContext) {
       input: RenameThreadInput,
       handler: async ({ input }) => {
         if (!ctx.storage.getSession(input.slug)) throw new Error(`thread ${input.slug} is not editable`)
+        // Names are never duplicated (thread-names.ts), and a human's rename is no exception: the header
+        // editor shows this message inline and keeps the draft, so the human picks another.
+        // The NAME leads the message: the editor shows it truncated beside the box, and the name is the
+        // part that says what to avoid.
+        const holder = threadNamer().holder(input.title, input.slug)
+        if (holder) throw new Error(`“${holder.name}” is already another open thread's name`)
         ctx.storage.setTitle(input.slug, input.title)
         ctx.board.refresh() // storage-only overlay; publishes an immediate board delta to every client
       },
@@ -3616,16 +3628,30 @@ export function createRouter(ctx: AppContext) {
       handler: async ({ input }) => {
         const row = ctx.storage.getSession(input.slug)
         if (!row) throw new Error(`thread ${input.slug} is not registered`)
+        const namer = threadNamer()
+        const current = () => namer.threads().find((t) => t.slug === input.slug)?.name ?? (ctx.storage.getSession(input.slug)?.title?.trim() || input.slug)
         // A human who has renamed the thread owns its name. Report that as a REFUSAL rather than a
         // throw: the worker did nothing wrong, and an error is the one answer it would retry.
         const lockedByHuman = sessionTitleLocked(row)
-        const accepted = lockedByHuman ? false : ctx.storage.setAgentTitle(input.slug, input.title)
-        if (accepted) ctx.board.refresh()
-        return {
-          accepted,
-          title: accepted ? input.title : (ctx.storage.getSession(input.slug)?.title?.trim() || input.slug),
-          lockedByHuman,
+        if (lockedByHuman) return { accepted: false, title: current(), lockedByHuman }
+        // The worker gets ONE rename, and a name is one or two words that no other open thread carries
+        // (thread-names.ts). Each refusal says what to do next; only the spent rename says "stop".
+        const refuse = (refusal: string) => ({ accepted: false, title: current(), lockedByHuman: false, refusal })
+        if (row.title_worker_renamed) {
+          return refuse(`you already renamed this thread once, and a name is stable after that. It stays "${current()}"; do not call this again.`)
         }
+        if (input.title.split(/\s+/).length > THREAD_NAME_MAX_WORDS) {
+          return refuse(`"${input.title}" is longer than two words. A name is one or two words naming the subject (e.g. "Shell budgets"); call again with one.`)
+        }
+        const holder = namer.holder(input.title, input.slug)
+        if (holder) {
+          return refuse(`another open thread is already named "${holder.name}" (thread ${holder.slug}). Names are never duplicated; call again with a different one- or two-word subject that sets this thread apart.`)
+        }
+        const accepted = ctx.storage.setAgentTitle(input.slug, input.title)
+        if (accepted) ctx.board.refresh()
+        return accepted
+          ? { accepted, title: input.title, lockedByHuman: false }
+          : { accepted, title: current(), lockedByHuman: sessionTitleLocked(ctx.storage.getSession(input.slug) ?? row) }
       },
     }),
 
@@ -3646,6 +3672,8 @@ export function createRouter(ctx: AppContext) {
         if (!bridge || row.claude_runtime !== "broker") {
           throw new Error("Only a running broker-backed Claude thread can be renamed by the provider")
         }
+        const namer = ctx.threadNamer
+        if (!namer?.available) throw new Error("Claude is not available to name this thread")
         // What to name it FROM: the thread's own opening request, which is what the daemon seeds from.
         // The live tail would name the session after whatever was said most recently, which for a long
         // thread is a side conversation rather than the work — until 2026-08-24 this read the tail's
@@ -3656,11 +3684,15 @@ export function createRouter(ctx: AppContext) {
         const opening = readTranscript(ctx.project, row.session_id).find((m) => m.role === "user")
         const description =
           opening?.displayText?.trim() || opening?.text?.trim() || row.title?.trim() || input.slug
-        const title = await bridge.renameSession({ threadSlug: input.slug, sessionId: row.session_id, description })
-        if (!title?.trim()) throw new Error("Claude did not return a title for this thread")
-        ctx.storage.setTitle(input.slug, title.trim())
+        // Frizz's own namer, not the provider's titler (`bridge.renameSession`): that one runs Claude
+        // Code's fixed prompt — two to five words, every instruction in its input treated as data — so it
+        // can neither keep a name to one or two words nor be told which names are taken (thread-names.ts).
+        const named = await namer.name(description, input.slug)
+        // Re-checked against the registry as it stands NOW, synchronously with the write.
+        const title = namer.holder(named, input.slug) ? namer.distinct(named, description, input.slug) : named
+        ctx.storage.setTitle(input.slug, title)
         ctx.board.refresh()
-        return { title: title.trim() }
+        return { title }
       },
     }),
 

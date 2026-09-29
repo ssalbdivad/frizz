@@ -20,7 +20,9 @@ import { readCodexModels } from "./backend/codex-models.ts"
 import { readQuota } from "./quota.ts"
 import { refreshClaudeQuotaInBackground } from "./backend/claude-quota.ts"
 import { createBoard, type BoardManager } from "./board.ts"
-import { createPeriodicRetitler } from "./periodic-retitle.ts"
+import { createPeriodicStatus } from "./periodic-status.ts"
+import { createThreadNamer, type ThreadNamer } from "./thread-names.ts"
+import { createClaudeOneShot } from "./backend/claude-oneshot.ts"
 import { readTranscript } from "./transcript.ts"
 import { createTailer, defaultLogDir, type Tailer } from "./tailer.ts"
 import { backgroundShellStoppable, stopBackgroundShell } from "./shell-stop.ts"
@@ -159,6 +161,10 @@ export interface AppContext {
   board: BoardManager
   tailer: Tailer
   dispatcher: Dispatcher
+  // Names and statuses (thread-names.ts): the dispatch mint, the AI rename, the status line, and the
+  // project-wide uniqueness check every title writer runs. Optional so a hand-built test context need
+  // not supply one; the router then checks uniqueness against storage alone.
+  threadNamer?: ThreadNamer
   // Per-session agent-backend resolver behind the spawn/resume/transcript seam (Codex-support epic).
   // Maps a row's `backend` column (claude|codex) to its AgentBackend; DEFAULTS to claude for any unset/
   // unknown kind, so every existing session and all current behavior are unchanged until a dispatch
@@ -890,13 +896,31 @@ function createContextUnchecked(opts: ContextOptions, resources: PartialContextR
   // here was the source of multi-second RPC stalls). Late-bound `board` breaks the cycle.
   // It ALSO reports, per tick, which sessions' JSONL advanced → fanned out on transcriptChange so the
   // /ws transcript producer can push (no board dependency; the two signals are independent).
-  // Every 5th operator message, re-name the thread after the recent conversation (periodic-retitle.ts).
-  const retitler = createPeriodicRetitler({
+  // THE THREAD NAMER (thread-names.ts): mints a 1-2 word, project-unique NAME at dispatch, answers the AI
+  // rename, and writes the live STATUS line — all through one short Claude completion with Frizz's own
+  // prompt (backend/claude-oneshot.ts). It spawns nothing on its own: every call is a dispatch, a click or
+  // a thread's 5th message. FRIZZ_THREAD_NAMER=0 switches the model off; uniqueness still holds for
+  // every writer without it, because that check reads the registry, not a model.
+  const threadNamer: ThreadNamer = createThreadNamer({
     storage,
-    generateTitle: claudeBroker ? (input) => claudeBroker.renameSession(input) : undefined,
+    aiTitleOf: (slug) => tailer.get(slug)?.aiTitle,
+    complete: process.env.FRIZZ_THREAD_NAMER === "0"
+      ? undefined
+      : createClaudeOneShot({ claudeBin: opts.claudeBin, cwd: workDirOf(project) }),
+    onNamed: () => board.refresh(),
+    log: (message) => frizzLog.warn("server", `thread namer: ${message}`),
+  })
+  // Every 5th operator message, write the thread's live STATUS from the recent conversation — never its
+  // name (periodic-status.ts). FRIZZ_STATUS_EVERY lowers the cadence for a verification run only.
+  const statusEvery = Number(process.env.FRIZZ_STATUS_EVERY)
+  const periodicStatus = createPeriodicStatus({
+    storage,
+    writeStatus: threadNamer.available ? (input) => threadNamer.status(input) : undefined,
+    nameOf: (row) => threadNamer.threads().find((t) => t.slug === row.slug)?.name,
     readMessages: (sessionId) => readTranscript(project, sessionId),
-    onTitled: () => board.refresh(),
-    onError: (slug, error) => process.stderr.write(`[frizz] periodic retitle of ${slug} failed: ${error instanceof Error ? error.message : String(error)}\n`),
+    onStatus: () => board.refresh(),
+    onError: (slug, error) => process.stderr.write(`[frizz] status of ${slug} failed: ${error instanceof Error ? error.message : String(error)}\n`),
+    every: Number.isInteger(statusEvery) && statusEvery > 0 ? statusEvery : undefined,
   })
   const tailer = createTailer({
     project,
@@ -904,7 +928,10 @@ function createContextUnchecked(opts: ContextOptions, resources: PartialContextR
     bus,
     backendFor,
     onChange: () => board.refresh(),
-    onTurnDone: (row) => retitler.onTurnDone(row),
+    onTurnDone: (row) => periodicStatus.onTurnDone(row),
+    // The Codex first-output marker is a dispatch-time name like any other: held to the project's
+    // uniqueness rule before it persists (thread-names.ts).
+    distinctTitle: (slug, title, source) => threadNamer.distinct(title, source ?? "", slug),
     onTranscriptChange: (slugs) => transcriptChange.emit(slugs),
     // The SDK's own reading of a headless broker session: its turn (so the fold's 5s unknown-stop_reason
     // guess need not run out before a finished turn reaches the queue) and its event count (so a tick
@@ -973,6 +1000,7 @@ function createContextUnchecked(opts: ContextOptions, resources: PartialContextR
     codexAppServer,
     acpBridge,
     claudeBroker,
+    threadNamer,
     // Auth preflight (claude-auth plan, Slice A): Claude reads its local credential and confirms only
     // a positive signed-out against its CLI (readClaudePreflightAuth — the comment there records why
     // the CLI must not sit on the signed-in path); Codex reads the local auth.json/env. Both block
@@ -1147,6 +1175,7 @@ function createContextUnchecked(opts: ContextOptions, resources: PartialContextR
     board,
     tailer,
     dispatcher,
+    threadNamer,
     scheduler,
     probePr: probePrReadable,
     probeIssue: probeIssueReadable,

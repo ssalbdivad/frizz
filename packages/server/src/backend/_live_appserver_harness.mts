@@ -11,7 +11,7 @@ import { readdirSync, readFileSync } from "node:fs"
 import { homedir } from "node:os"
 import { createInteractionStore } from "../interaction-store.ts"
 import { CodexAppServerBridge, type CodexAppServerSpawn } from "./codex-app-server.ts"
-import { CODEX_FIRST_OUTPUT_TITLE_DEVELOPER_INSTRUCTIONS } from "./codex.ts"
+import { codexFirstOutputTitleInstructions } from "./codex.ts"
 
 function findRollout(sessionId: string): string | undefined {
   const root = join(process.env.CODEX_HOME || join(homedir(), ".codex"), "sessions")
@@ -53,7 +53,7 @@ async function waitTurnClear(label: string, ms = 40_000) {
     console.log("=== startDisposableSession (ephemeral:false) + config injection (M2) ===")
     const binding = await bridge.startDisposableSession({
       threadSlug: slug, sessionId, cwd: dir, sandbox: "read-only", ephemeral: false,
-      developerInstructions: CODEX_FIRST_OUTPUT_TITLE_DEVELOPER_INSTRUCTIONS,
+      developerInstructions: codexFirstOutputTitleInstructions([]),
       config: { model_reasoning_summary: "detailed" },
     })
     console.log("thread bound:", binding.codexThreadId, " codexSessionId:", binding.codexSessionId)
