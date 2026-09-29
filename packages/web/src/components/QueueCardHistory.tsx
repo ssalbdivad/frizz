@@ -14,6 +14,11 @@
 // upward and push its header off the screen before anyone asked. The control stays, as the thing the
 // load is seen happening on and for a reader without a wheel.
 //
+// ONCE, THEN THE BUTTON. Only the FIRST page loads on a scroll; further back takes a press. Loading on
+// every scroll up made a long thread a wall: the queue is one page, so scrolling up to the card ABOVE
+// passes this card's top, and each notch there read another page into the gap — hundreds of rounds
+// before the card above came back into reach (maintainer 2026-09-29 chose the cap).
+//
 // SCOPED TO THE CARD'S PROJECT, never the page's: the drawer's transcript cache is keyed by slug alone
 // and read through the FOCUSED project's client (hooks.ts useTranscript), which on this page is usually
 // another project. This reads through the card's own client into its own local state, and nothing is
@@ -148,6 +153,8 @@ export function QueueCardHistory({ api, slug, handoff, onShortfall }: { api: Api
 
   const loadRef = useRef(load)
   loadRef.current = load
+  const loadedRef = useRef(false)
+  loadedRef.current = page !== null
   const failed = error !== null
   useEffect(() => {
     const root = rootRef.current
@@ -162,22 +169,25 @@ export function QueueCardHistory({ api, slug, handoff, onShortfall }: { api: Api
     // wheel, a touch, a scrollbar drag or a key.
     let gestureAt = 0
     const onGesture = () => { gestureAt = performance.now() }
+    const autoLoad = () => {
+      if (!loadedRef.current) void loadRef.current()
+    }
     let lastY = window.scrollY
     const onScroll = () => {
       const y = window.scrollY
       const up = y < lastY
       lastY = y
-      if (up && performance.now() - gestureAt < GESTURE_MS && near()) void loadRef.current()
+      if (up && performance.now() - gestureAt < GESTURE_MS && near()) autoLoad()
     }
     const onWheel = (event: WheelEvent) => {
-      if (event.deltaY < 0 && near()) void loadRef.current()
+      if (event.deltaY < 0 && near()) autoLoad()
     }
     let touchY: number | null = null
     const onTouchStart = (event: TouchEvent) => { touchY = event.touches[0]?.clientY ?? null }
     const onTouchMove = (event: TouchEvent) => {
       const y = event.touches[0]?.clientY
       // A finger moving DOWN the screen scrolls the page up.
-      if (touchY !== null && y !== undefined && y > touchY && near()) void loadRef.current()
+      if (touchY !== null && y !== undefined && y > touchY && near()) autoLoad()
     }
     for (const type of GESTURES) window.addEventListener(type, onGesture, { capture: true, passive: true })
     window.addEventListener("scroll", onScroll, { passive: true })
