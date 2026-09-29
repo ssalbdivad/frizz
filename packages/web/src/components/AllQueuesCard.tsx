@@ -38,7 +38,8 @@ import { isPlainLeftClick } from "../lib/standaloneThreadRoute.ts"
 import { useMarkdownHtml } from "../lib/useMarkdown.ts"
 import { IN_PLACE_OPEN_STATE, openThread, showToast, store } from "../store.ts"
 import { crossProjectHref, innerPath, projectSlug } from "../lib/base-path.ts"
-import { QueueDismissContext } from "./ChatView.tsx"
+import { LimitPauseCard, QueueDismissContext } from "./ChatView.tsx"
+import { AiRenameButton } from "./AiRenameButton.tsx"
 import { Composer } from "./Composer.tsx"
 import { InteractionStack } from "./InteractionCards.tsx"
 import { useThreadComposerControls } from "../hooks/useThreadComposerControls.tsx"
@@ -233,6 +234,16 @@ export const AllQueuesCard = memo(function AllQueuesCard({
     void queryClient.invalidateQueries({ queryKey: ["projectsQueues"] })
   }
   const answeringScope = useMemo(() => ({ api, projectDir: project.projectDir, projectId: project.id }), [api, project.projectDir, project.id])
+  const continueFromLimit = (message: string) => {
+    onLeave()
+    return deliverFollowUp(project, thread, message).then(
+      () => void queryClient.invalidateQueries({ queryKey: ["projectsQueues"] }),
+      (error: unknown) => {
+        onReturn()
+        throw error
+      },
+    )
+  }
 
   const openHere = (event: ReactMouseEvent<HTMLAnchorElement>) => {
     if (!isPlainLeftClick(event)) return
@@ -251,11 +262,22 @@ export const AllQueuesCard = memo(function AllQueuesCard({
           <header className="flex items-center gap-3 rounded-t-xl border-b border-border/60 px-5 py-3.5">
             {chip && <ProjectMark project={project} onChoose={onChoose} />}
             <div className="min-w-0 flex-1">
-              <h3 className="truncate text-[15px] font-semibold leading-snug" title={displayTitle(thread)}>
-                <a href={placeHref} onClick={openHere} className="rounded-sm outline-none hover:underline hover:underline-offset-2 focus-visible:ring-1 focus-visible:ring-focus-ink-60">
-                  {displayTitle(thread)}
-                </a>
-              </h3>
+              {/* THE TITLE AND ITS AI-RENAME MARK, revealed on the row's hover (`group/thread-title`, the
+                  zone AiRenameButton listens to). Colin's card carried it (TodosView QueueCard @ 7a20f425,
+                  maintainer 2026-08-26: "it should show up in the cue card, in addition to showing up in
+                  the drawer"). The mark sits OUTSIDE the link, so pressing it never opens the drawer, and
+                  the link shrinks to its text so the mark rides at the title's end. Scoped to the card's
+                  project, whose client the rename must use. */}
+              <div className="group/thread-title flex min-w-0 items-center gap-2">
+                <h3 className="min-w-0 shrink truncate text-[15px] font-semibold leading-snug" title={displayTitle(thread)}>
+                  <a href={placeHref} onClick={openHere} className="rounded-sm outline-none hover:underline hover:underline-offset-2 focus-visible:ring-1 focus-visible:ring-focus-ink-60">
+                    {displayTitle(thread)}
+                  </a>
+                </h3>
+                <ThreadProjectScope projectId={project.id} projectDir={project.projectDir}>
+                  <AiRenameButton thread={thread} />
+                </ThreadProjectScope>
+              </div>
               <div className="mt-0.5 flex min-w-0 items-baseline gap-1.5 text-[11px] leading-tight text-muted-75">
                 {chipNode}
                 {/* A ghost says why it is quiet, on the line that said since when it was ready: the same
@@ -352,6 +374,14 @@ export const AllQueuesCard = memo(function AllQueuesCard({
               )}
               {/* Not gated on the handoff: a STALL's last record is often a tool call with no prose at
                   all, and its notice is about the process, not the message (showsRestedCard). */}
+              {/* KILLED BY A USAGE LIMIT — the reason such a card is in the queue at all (a limit fault is
+                  a hard queue member), so it says which window blew, when Frizz continues it, and offers
+                  "Continue now" — the drawer's own card, as Colin's queue card drew it (TodosView
+                  QueueCard @ 7a20f425). Delivered to the CARD's project, and the card leaves while the
+                  thread goes back to work, returning if the send fails, as Retry does. */}
+              {thread.limitPause && thread.foreign !== true && (
+                <LimitPauseCard slug={thread.id} sessionId={thread.sessionId} pause={thread.limitPause} continueWith={continueFromLimit} />
+              )}
               {showsRestedCard(thread, text) && <RestedCard thread={thread} />}
               {showsQuietTurnCard(thread) && <QuietTurnCard thread={thread} />}
             </div>
