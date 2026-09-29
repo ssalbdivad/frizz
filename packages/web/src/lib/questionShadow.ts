@@ -1,6 +1,6 @@
 // ONE QUESTION, ONE CARD — folding a ```question fence into the registered question it restates, and
-// reading the one thing an empty ```question qst_… marker still says: WHICH rest a question belongs to
-// (see MARKERS at the foot of this file — never where inside a message its card goes; a card is always
+// placing every open card at the bottom of the newest rest (questionStacks; see MARKERS at the foot of
+// this file for the empty ```question qst_… marker, which places nothing any more — a card is always
 // drawn at the bottom of its rest, after everything the worker wrote there).
 //
 // A worker can ask the same question twice at one rest: register it with `ask` (a row, the durable
@@ -25,45 +25,46 @@ import type { RegisteredQuestionView } from "@frizz/shared"
 import { type AnchorMessage, isHumanTurn, questionsByAnchor } from "./questionAnchor.ts"
 import { type MessageSegment, parseQuestionBlock, splitQuestionBlocks } from "./questionBlocks.ts"
 
-/** The rest a question's anchor closes: the index of its first message — the one after the previous
- *  human turn — or 0 for an anchor above the loaded window, whose rest is off the page entirely. */
-function restStart(messages: readonly AnchorMessage[], anchor: number): number {
-  for (let i = anchor; i >= 0; i--) {
+/** Where the exchange that ASKED a question begins: the message after the last turn the human typed
+ *  before it was asked, or 0 when that is above the loaded window. Frizz's wakes and answer deliveries
+ *  inside it are the same exchange (lib/questionAnchor isHumanTurn), so a fence the worker wrote before
+ *  a watcher woke it and then registered the same question is still "this question". */
+function askingExchangeStart(messages: readonly AnchorMessage[], askedAt: string): number {
+  const asked = Date.parse(askedAt)
+  let at = messages.length - 1
+  if (Number.isFinite(asked)) {
+    while (at >= 0) {
+      const t = messages[at].at ? Date.parse(messages[at].at!) : Number.NaN
+      if (Number.isFinite(t) && t <= asked) break
+      at--
+    }
+  }
+  for (let i = at; i >= 0; i--) {
     if (isHumanTurn(messages[i])) return i + 1
   }
   return 0
 }
 
-/** The rest a message belongs to, from the other end: the index of its last message — the one before
- *  the human's next turn, or the transcript's tail when they have not spoken since. */
-function restEnd(messages: readonly AnchorMessage[], at: number): number {
-  let end = at
-  while (end + 1 < messages.length && !isHumanTurn(messages[end + 1])) end++
-  return end
-}
-
 /** The registered questions STANDING at each message, keyed by message index: every message of the
- *  rest a question was asked at AND of every rest after it, so a fence anywhere from the ask onward can
- *  be checked against it. A question stands until it is answered or withdrawn, and the human can reply
- *  past one without answering it (the composer is right there) — the worker's NEXT handoff then names
- *  it again, and that fence must fold exactly as one at the asking rest does. Until 2026-08-28 only the
- *  asking rest saw it, so a marker in a later handoff drew its own slot while the card sat at its anchor
- *  — a rest above the queue card's window, which pinned it at the very top of the card while the handoff
- *  below spoke of it as if it sat right there (maintainer: "why is the question showing up above my last
- *  message?"). A group anchored above the loaded window (-1) stands at every loaded message: its rest is
- *  off the page, and everything on the page is later. User records map to nothing — a human turn, a
- *  wake or a sub-agent's report carries no fence of the worker's. */
+ *  exchange a question was asked in AND of everything after it, so a fence anywhere from the ask onward
+ *  can be checked against it. A question stands until it is answered, dismissed or withdrawn, whatever
+ *  the human says meanwhile — the worker's NEXT handoff may name it again, and that fence must fold
+ *  exactly as one at the asking rest does. Until 2026-08-28 only the asking rest saw it, so a marker in a
+ *  later handoff drew its own slot while the card sat at its anchor (maintainer: "why is the question
+ *  showing up above my last message?"). A question asked above the loaded window stands at every loaded
+ *  message: its rest is off the page, and everything on the page is later. User records map to nothing
+ *  — a human turn, a wake or a sub-agent's report carries no fence of the worker's. */
 export function registeredStandingAt<Q extends { askedAt: string }>(
   messages: readonly AnchorMessage[],
   questions: readonly Q[],
 ): Map<number, Q[]> {
   const byMessage = new Map<number, Q[]>()
-  for (const [anchor, group] of questionsByAnchor(messages, questions)) {
-    for (let i = restStart(messages, anchor); i < messages.length; i++) {
+  for (const q of questions) {
+    for (let i = askingExchangeStart(messages, q.askedAt); i < messages.length; i++) {
       if (messages[i].role === "user") continue
       const at = byMessage.get(i)
-      if (at) at.push(...group)
-      else byMessage.set(i, [...group])
+      if (at) at.push(q)
+      else byMessage.set(i, [q])
     }
   }
   return byMessage
@@ -122,7 +123,7 @@ export function fenceStandsFor<Q extends Pick<RegisteredQuestionView, "id" | "sp
   return registered.find((q) => fenceRestatesRegistered(seg.text, [q]))
 }
 
-// ---- MARKERS: which rest a question belongs to, and nothing else --------------------------------
+// ---- MARKERS: a fence that folds, and places nothing ---------------------------------------------
 //
 // An empty ```question qst_… fence was a PLACEMENT MARKER from 2026-08-28 to 2026-08-30 and again from
 // 2026-09-11 to 2026-09-28: the registered card it named rendered IN ITS SLOT, so a worker could couch a
@@ -138,13 +139,11 @@ export function fenceStandsFor<Q extends Pick<RegisteredQuestionView, "id" | "sp
 // So a card NEVER renders inside a message. It renders after the rest it belongs to — below the whole
 // handoff — and a marker draws nothing in its own slot, whatever it names.
 //
-// What a marker still carries is the one thing its slot never needed to express: that a LATER handoff
-// still owes the ask. A worker dispatched before 2026-09-28 was taught to bring an open question forward
-// by writing its marker into the newer handoff (the 2026-09-24 rule keeps a question the human replied
-// past at the rest that asked it), and that thread keeps the contract it was dispatched under. So the
-// newest marker naming a question, from its own rest onward, moves the card to the bottom of THAT
-// marker's rest. A worker under the current contract says the same thing by asking again, which mints a
-// row in the rest that needs it — see lib/questionAnchor.
+// A marker once also CARRIED its question to a later handoff: a worker dispatched before 2026-09-28 was
+// taught to bring an open question forward by writing its marker into the newer handoff, because a
+// question the human replied past stayed up at the rest that asked it. Since 2026-09-29 every open
+// question rides to the newest rest on its own (lib/questionAnchor), so a marker can only ever point at a
+// rest the card has already reached, and carries nothing. It is still read — as a fence that must fold.
 
 /** The ids a message's markers name, lowercased, in order — the empty-bodied ```question qst_… fences
  *  only. A fence WITH a body is a legacy question (or, under the new contract, prose), never a marker. */
@@ -163,46 +162,26 @@ export function aboveTrailingEvents(messages: readonly AnchorMessage[], anchor: 
 }
 
 /** WHERE EACH QUESTION'S CARD RENDERS: every question grouped by the index of the message its stack
- *  renders AFTER — the last message of the rest it belongs to. That is the rest that asked it
- *  (questionsByAnchor), or a later one whose worker message names it with a legacy marker (see MARKERS
- *  above), and in either case the card sits at the bottom of that rest, never inside one of its
- *  messages. -1 is a rest older than the loaded window. Questions asked in one `ask` call share a key,
- *  so a batch still renders as one stack.
+ *  renders AFTER — the bottom of the newest rest since it was asked (lib/questionAnchor), never inside
+ *  one of its messages. -1 is a rest older than the loaded window. Every open question shares the newest
+ *  rest, so a batch — and the questions of several asks still open — render as one stack.
  *
- *  A rest the human has spoken after ends at its "Agent rested" divider, and the card goes ABOVE that
- *  divider, exactly where its greyed twin lands once answered (lib/settledQuestions), so answering it
- *  does not make it jump. Until 2026-09-28 the open card hung below the divider and the settled one above
- *  it. The TAIL keeps its anchor (`messages.length - 1`): the divider there draws nothing, and the
- *  surfaces read that index as the interactions row. */
+ *  A rest a turn has started after (the human typed, an answer or a wake was delivered, and the worker is
+ *  working) ends at its "Agent rested" divider, and the card goes ABOVE that divider, exactly where its
+ *  greyed twin lands once answered (lib/settledQuestions), so answering it does not make it jump. The
+ *  TAIL keeps its anchor (`messages.length - 1`): the divider there draws nothing, and the surfaces read
+ *  that index as the interactions row. */
 export function questionStacks<Q extends Pick<RegisteredQuestionView, "id"> & { askedAt: string }>(
   messages: readonly (AnchorMessage & { text?: string })[],
   questions: readonly Q[],
 ): Map<number, Q[]> {
   const stacks = new Map<number, Q[]>()
   if (questions.length === 0) return stacks
-  // One parse per marker-bearing message, however many questions are open.
-  const markersAt = new Map<number, string[]>()
-  const markersOf = (i: number): string[] => {
-    let ids = markersAt.get(i)
-    if (ids === undefined) {
-      const m = messages[i]
-      ids = m.role === "assistant" && m.text ? markerIdsIn(m.text) : []
-      markersAt.set(i, ids)
-    }
-    return ids
-  }
   for (const [anchor, group] of questionsByAnchor(messages, questions)) {
-    for (const q of group) {
-      const id = q.id.toLowerCase()
-      let at = anchor
-      for (let i = restStart(messages, anchor); i < messages.length; i++) {
-        if (i > at && markersOf(i).includes(id)) at = restEnd(messages, i)
-      }
-      if (at >= 0 && at < messages.length - 1) at = aboveTrailingEvents(messages, at)
-      const stack = stacks.get(at)
-      if (stack) stack.push(q)
-      else stacks.set(at, [q])
-    }
+    const at = anchor >= 0 && anchor < messages.length - 1 ? aboveTrailingEvents(messages, anchor) : anchor
+    const stack = stacks.get(at)
+    if (stack) stack.push(...group)
+    else stacks.set(at, [...group])
   }
   return stacks
 }

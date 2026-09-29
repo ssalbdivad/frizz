@@ -762,7 +762,7 @@ function useOpenAddedProject(): (project: { id: string; slug: string }) => void 
 
 /**
  * The typed-path dialog, whenever something asked for it (`store.addProject`). Mounted once, by the layout
- * — which is also why `p` (New project) is registered here: every page under the layout has this host,
+ * — which is also why `n` (New project) is registered here: every page under the layout has this host,
  * and the key opens the same folder picker the rail's + does.
  */
 export function AddProjectHost() {

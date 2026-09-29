@@ -6,7 +6,7 @@ import { homedir, tmpdir } from "node:os"
 import { join } from "node:path"
 import { Hono } from "hono"
 import { mountRouter } from "@frizz/rpc/server"
-import { DISPATCH_TASK_BANNER_MARKER, type BoardSnapshot, type Settings, type ThreadView, type TranscriptMessage } from "@frizz/shared"
+import { DISPATCH_TASK_BANNER_MARKER, openQuestionsNote, stripFollowUpRiders, type BoardSnapshot, type Settings, type ThreadView, type TranscriptMessage } from "@frizz/shared"
 import type { BoardManager } from "./board.ts"
 import { appendDelivery, parseDeliveryLedger, projectDeliveryLedger } from "./delivery-ledger.ts"
 import { createWakeDeliveryStore } from "./wake-store.ts"
@@ -610,6 +610,40 @@ test("followUp wakes a snoozed thread and disarms the bump it owed", async () =>
   assert.equal(h.storage.getSession(slug)?.snooze_prompt, null, "and so is the bump it owed at that deadline")
   h.storage.close()
 })
+// THE WORKER DECIDES THE PIVOT (2026-09-29). A typed message no longer releases the open questions by
+// timestamp — it released seven the human still meant to answer when they typed a side question — so the
+// message reaches the worker with frizz's note naming every question still open, by the id `unask`
+// takes. The bubble keeps the human's bare words; only the worker's copy carries the note.
+test("a typed follow-up to a thread with questions open tells the worker which, by id, and to unask the moot ones", async () => {
+  const h = harness()
+  const slug = "asking-followup"
+  h.storage.upsertSession(row(slug))
+  h.storage.setBackend(slug, "codex")
+  h.storage.setCodexRuntime(slug, "app-server")
+  const sent: string[] = []
+  ;(h.ctx as { codexAppServer?: unknown }).codexAppServer = {
+    binding: () => ({ state: "active", currentTurnId: null }),
+    turnLiveness: () => undefined,
+    resumeOwnedSession: async () => {},
+    followUp: async ({ text }: { text: string }) => void sent.push(text),
+  }
+  // Negative control: nothing open, nothing appended.
+  await h.router.followUp.handler({ input: { slug, sessionId: `sid-${slug}`, message: "carry on" } })
+  assert.deepEqual(sent, ["carry on"])
+
+  h.storage.askThreadQuestion({ id: "qst_open0000001", slug, askedAtMs: Date.now(), spec: JSON.stringify({ question: "SQLite or a JSON file?", kind: "question" }) })
+  h.storage.askThreadQuestion({ id: "qst_answered001", slug, askedAtMs: Date.now(), spec: JSON.stringify({ question: "Which dist-tag?", kind: "question" }) })
+  h.storage.answerThreadQuestion("qst_answered001", JSON.stringify({ questionId: "qst_answered001", question: "Which dist-tag?", chosen: ["next"] }), Date.now())
+  await h.router.followUp.handler({ input: { slug, sessionId: `sid-${slug}`, message: "should we use this thread or the other one?" } })
+  const [, noted] = sent
+  assert.equal(noted, `should we use this thread or the other one?\n\n${openQuestionsNote([{ id: "qst_open0000001", question: "SQLite or a JSON file?" }])}`)
+  assert.match(noted, /`unask` exactly those/)
+  assert.doesNotMatch(noted, /qst_answered001/, "an answered question is not open")
+  // The human's own bubble, once the transcript reads it back, is their words and nothing else.
+  assert.equal(stripFollowUpRiders(noted), "should we use this thread or the other one?")
+  h.storage.close()
+})
+
 // (A test for a deleted awaiting-hint kind was removed here on 2026-08-15. See the AwaitingHint doc
 // block in @frizz/shared for why `human:`, `timer: <instant>` and `pr-watch:` no longer exist.)
 

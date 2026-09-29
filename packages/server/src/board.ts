@@ -1702,10 +1702,10 @@ function sessionThreadView(
     const spec = safeQuestionSpec(q.spec)
     if (spec) questions.push({ id: q.id, spec, askedAt: new Date(q.asked_at).toISOString(), ...(questionRepliedPast(q, rawTele?.lastHumanAt) ? { repliedPast: true as const } : {}) })
   }
-  // The ones still HOLDING the thread. A question the human replied past is a pivot, not a pending ask:
-  // it stays on the card list (answerable where it was asked) but queues nothing, supersedes no done,
-  // and is not the rest's sign-off — see questionRepliedPast.
-  const currentQuestionCount = questions.filter((q) => !q.repliedPast).length
+  // The ones HOLDING the thread — every open one. `repliedPast` is information since 2026-09-29, not a
+  // release: a question the human typed past still queues, supersedes a done and is the rest's sign-off
+  // until it is answered, dismissed or withdrawn (see questionRepliedPast).
+  const currentQuestionCount = questions.length
   // The dismissal-only case counts as in flight EXACTLY when a cancellation wake is coming — an armed
   // rest Goal with text, the same gate the scheduler's evalQuestionAnswers wakes on. Anything looser
   // would also cover the human's own ×, which deliberately wakes nobody and has no arrival to bridge to.
@@ -2309,7 +2309,7 @@ export function createBoard(
       // deriveNeedsYou's hard gates: a request the human must answer, a question, a crash, a limit pause.
       urgent: (t) =>
         t.actionableInteraction === true || t.runtime === "perm-prompt" || t.pendingAsk !== undefined ||
-        t.pendingQuestion === true || (t.questions?.some((q) => !q.repliedPast) ?? false) || t.crashed === true ||
+        t.pendingQuestion === true || (t.questions?.length ?? 0) > 0 || t.crashed === true ||
         t.limitPause !== undefined || (t.providerError !== undefined && t.providerError.retrying !== true),
       // What a person did, for a queued thread's place in line (queue-clock.ts: a thread only loses it
       // when someone acts on it). Every follow-up reaches the delivery ledger, and each router path that

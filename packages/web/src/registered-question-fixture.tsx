@@ -19,7 +19,8 @@ import "./styles.css"
 //
 //   ?tree=1     — a root whose "Yes" carries two follow-ups. Pick A and watch them appear indented.
 //   ?danger=1   — the destructive gate: `risk` tone, and NO × (declining is an option INSIDE it).
-//   ?many=1     — three open questions at once, which is what the ONE shared "Send answers" is for.
+//   ?many=1     — three open questions at once: each is sent on its own as it is completed, and the
+//                 others stay open (one question at a time, 2026-09-29).
 //   ?busy=1     — a question AND live background work, which is the case the memo calls out: the
 //                 question expands and the waits must not compete with it for the one glance.
 //   ?past=1     — the question was asked at an OLDER rest, the human replied past it without answering,

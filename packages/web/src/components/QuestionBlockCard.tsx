@@ -31,6 +31,19 @@ export interface BlockInteractive {
    *  a focused box until 2026-08-28. MULTI keeps its toggled set. */
   onText: (text: string) => void
   onSubmit: () => void
+  /** What Enter means in this card, when the producer decides it rather than the batch walk below. The
+   *  registered producer sends ONE QUESTION per Enter (2026-09-29): it walks that question's own
+   *  unanswered follow-ups first, then sends it and moves on — never the others. Handed the options grid
+   *  of the node the key was pressed in. Absent: `advanceOrSubmit`, the fence and native producers' batch. */
+  onEnter?: (grid: HTMLElement) => void
+}
+
+/** Put the caret in a question node: its free-text box when it has one, else its options grid, scrolled
+ *  just into view. `node` is a `[data-answerable-question]` grid. */
+export function focusQuestionNode(node: HTMLElement) {
+  const target = node.querySelector<HTMLElement>("textarea[data-surface='questionAnswer']") ?? node
+  target.focus({ preventScroll: true })
+  target.scrollIntoView({ block: "nearest" })
 }
 
 /**
@@ -51,9 +64,7 @@ function advanceOrSubmit(grid: HTMLElement, submit: () => void) {
     const order = at < 0 ? cards : [...cards.slice(at + 1), ...cards.slice(0, at)]
     const next = order.find((c) => c.dataset.answered === "false")
     if (next) {
-      const target = next.querySelector<HTMLElement>("textarea[data-surface='questionAnswer']") ?? next
-      target.focus({ preventScroll: true })
-      target.scrollIntoView({ block: "nearest" })
+      focusQuestionNode(next)
       return
     }
   }
@@ -68,9 +79,10 @@ function advanceOrSubmit(grid: HTMLElement, submit: () => void) {
 // The context renders as markdown; the convention-parsed trailing options render as choice chips (radio
 // feel for single-select, toggleable checkboxes for `multi`) and the "Recommendation:" line as a muted
 // note. When `interactive` is present (the live message), chips are clickable and a freetext textarea
-// appears; otherwise everything is read-only. EVERY kind stages its answer the same way — pick a chip
-// and/or type, then Send answers. Nothing in a question card sends on a single click (maintainer
-// 2026-07-26: the old approval gate's one-click Approve was the lone exception and it is gone).
+// appears; otherwise everything is read-only. How an answer is SENT is the producer's: a fence and a
+// native ask stage every answer until Send answers (the native tool call returns all of them at once),
+// while a REGISTERED question is sent the moment it is complete — a single-choice pick, an Enter in its
+// own box, a multi's confirm — one question at a time (RegisteredQuestionCards, 2026-09-29).
 //
 // THE MODEL IT RENDERS is `ParsedQuestion` (lib/questionBlocks.ts) — the neutral shape, not a
 // fence-shaped one. A caller supplies EITHER the raw fence body (producer 1, parsed here) or an
@@ -195,7 +207,8 @@ export function QuestionBlockCard({
             })) {
               e.preventDefault()
               e.stopPropagation()
-              advanceOrSubmit(e.currentTarget, interactive.onSubmit)
+              if (interactive.onEnter) interactive.onEnter(e.currentTarget)
+              else advanceOrSubmit(e.currentTarget, interactive.onSubmit)
             }
           }}
           data-answerable-question={interactive ? "" : undefined}
@@ -288,7 +301,8 @@ export function QuestionBlockCard({
                   keyCode: e.nativeEvent.keyCode,
                 })) {
                   e.preventDefault()
-                  if (gridRef.current) advanceOrSubmit(gridRef.current, interactive.onSubmit)
+                  if (gridRef.current && interactive.onEnter) interactive.onEnter(gridRef.current)
+                  else if (gridRef.current) advanceOrSubmit(gridRef.current, interactive.onSubmit)
                   else interactive.onSubmit()
                 }
               }}

@@ -2371,31 +2371,34 @@ export const RegisteredQuestionView = z.object({
   id: z.string(),
   spec: AskedQuestionSchema,
   askedAt: z.string(),
-  /** The human has spoken since this was asked without answering it (questionRepliedPast). It stays
-   *  open and answerable where it was asked, but it no longer holds the thread: it is not the sign-off,
-   *  it does not block `done` or refuse a park, and the queue card does not draw it under a newer handoff.
-   *  Absent means current. */
+  /** The human has TYPED to the worker since this was asked, without answering it (questionRepliedPast).
+   *  INFORMATIONAL ONLY since 2026-09-29: the question is still owed exactly like any other — it blocks
+   *  `done`, refuses a park, is the rest's sign-off and queues the thread — because a timestamp cannot
+   *  tell a pivot from a side question, and the worker, which reads the message, decides (it `unask`s
+   *  the ones the message made moot). The worker's `activity` readout names it. Absent means the human
+   *  has not typed since. */
   repliedPast: z.literal(true).optional(),
 }).strict()
 export type RegisteredQuestionView = z.infer<typeof RegisteredQuestionView>
 
-/** HAS THE HUMAN MOVED ON FROM THIS QUESTION? True when their newest TYPED turn landed after it was asked
- *  (`lastHumanAt` is the tailer's clock for exactly that; frizz's own wakes never move it, and neither
- *  does a delivery of answers). Replying past an open card instead of answering it is read as a pivot
- *  (maintainer 2026-09-28: "we should assume they want to move on/pivot"): the card stays up with the
- *  handoff that asked it, still answerable, and the answer still reaches the worker restating what was
- *  asked — but nothing waits on it any more. An unknown clock reads as "not replied past", which is
- *  exactly the behaviour before this rule existed.
+/** HAS THE HUMAN TYPED TO THE WORKER SINCE THIS WAS ASKED? True when their newest TYPED turn landed after
+ *  it was asked (`lastHumanAt` is the tailer's clock for exactly that; frizz's own wakes never move it, and
+ *  neither does a delivery of answers). An unknown clock reads as "no".
  *
- *  ANSWERING IS NOT MOVING ON (2026-09-29). Sending the answers to some cards used to count as replying
- *  past every other open one, so answering one question of a batch of nine released the other eight — a
- *  human working through a batch card by card lost the rest of it after the first send, and asked for the
- *  questions again. Only a typed turn is a pivot now.
+ *  IT GATES NOTHING (2026-09-29). From 2026-09-28 a typed turn past an open card was read as a pivot and
+ *  RELEASED the question: it stopped blocking `done`, stopped being the sign-off, left the queue card, and
+ *  could not be asked again. On this machine the next day the human, seven questions open, typed a SIDE
+ *  question ("should we use this thread or the other one?") and lost all seven — they still meant to
+ *  answer them and had to ask for them back. A server that sees a timestamp cannot tell a side question
+ *  or a clarification from a pivot; the worker, which reads the message, can. So every open question
+ *  stays owed until the human answers or dismisses it or the worker withdraws it (plans/rest-by-
+ *  registration.md Fork 2A), the typed message reaches the worker with a note asking it to `unask` the
+ *  ones it made moot (openQuestionsNote), and this survives only as information: the `activity` readout
+ *  names the questions the human has written past.
  *
- *  A DANGER QUESTION IS NEVER RELEASED BY A REPLY. `danger` marks the irreversible — a force-push, a
- *  deletion, a rollback — and is exactly the question the human's × cannot dismiss and a Goal cannot
- *  auto-dismiss (router.ts). Letting a timestamp retire it would hand the worker the call on the one kind
- *  of question that must be the human's; it holds until answered, dismissed, or withdrawn. */
+ *  A DANGER QUESTION NEVER READS AS WRITTEN PAST — unchanged from when this was a release: `danger` is
+ *  the irreversible call that must stay the human's, and nothing about the human typing makes it less
+ *  so. */
 export function questionRepliedPast(q: { asked_at: number; spec: string }, lastHumanAt: string | undefined): boolean {
   if (!lastHumanAt) return false
   const human = Date.parse(lastHumanAt)
@@ -2413,10 +2416,12 @@ function questionSpecIsDanger(spec: string): boolean {
   }
 }
 
-/** The open questions still HOLDING their thread — every one the human has not replied past. What every
- *  "is this thread asking?" reading counts; the full list is only for drawing and answering cards. */
+/** The open questions still HOLDING their thread — which, since 2026-09-29, is every open one:
+ *  `repliedPast` is information, not a release (see questionRepliedPast). Kept as the one name every "is
+ *  this thread asking?" reading goes through, so a future rule about which questions hold has one place
+ *  to live rather than a dozen `questions.length` checks to find. */
 export function questionsOwed<Q extends { repliedPast?: true }>(questions: readonly Q[] | undefined): Q[] {
-  return (questions ?? []).filter((q) => !q.repliedPast)
+  return questions ? [...questions] : []
 }
 
 export const AskResult = z.object({
@@ -2468,9 +2473,14 @@ export const QuestionAnswerSchema: z.ZodType<QuestionAnswer> = z.lazy(() => z.ob
 
 export const AnswerQuestionsInput = z.object({
   slug: ThreadSlug,
-  /** SUBMITTED AS A UNIT. The card sends whatever was answered in one call, because a per-question send
-   *  would half-wake a turn: the worker would come back to a payload it cannot act on and would have to
-   *  ask again for the rest. */
+  /** ONE QUESTION'S ANSWER, USUALLY — sent the moment that question is complete (a pick, an Enter in its
+   *  own box, a multi's confirm), so the worker starts on it while the human is still reading the rest
+   *  (maintainer 2026-09-29: "the agent should receive the answer to one question at a time so it can
+   *  start working"). Several when the human sends what they have staged on purpose, or when a typed reply
+   *  carries the staged answers ahead of itself. The contract already requires the questions of one `ask`
+   *  to be independent — dependent ones are `followUps` — which is what makes one answer actionable
+   *  alone. Answers stored before the scheduler's next pass still reach the worker as ONE delivery,
+   *  merged at claim (scheduler adoptCompanions, mergeAnswerMessages). */
   answers: z.array(QuestionAnswerSchema).min(1),
 }).strict()
 export type AnswerQuestionsInput = z.infer<typeof AnswerQuestionsInput>
@@ -2593,6 +2603,32 @@ export function questionAnswerMessage(answers: readonly QuestionAnswer[], dismis
   for (const a of answers) push(a, false)
   for (const d of dismissed) rows.push(`“${d.question}” → ${DISMISSED_ANSWER}`)
   return `${BURIED_ANSWERS_HEADER}\n${rows.map((row, i) => `${i + 1}. ${row}`).join("\n")}`
+}
+
+/** SEVERAL ANSWER DELIVERIES AS ONE — the outbox's merge for the one wake it cannot wrap (scheduler
+ *  adoptCompanions). Every other merged wake goes out under a heading per part, but an answers message is
+ *  the HUMAN'S OWN TURN in a shape the chat parses by position — the header first, and every line that
+ *  is not a row read as the last row's continuation — so a heading, or a second header halfway down,
+ *  would print frizz's prose inside the human's answer chip. So the parts are folded into the one form:
+ *  one header, every row renumbered in order. That is safe to do on the text because of the wire's own
+ *  invariant (ANSWER_CONTINUATION_INDENT): a row is the only line that starts `N. ` at column 0, so a
+ *  continuation can never be mistaken for one and renumbered.
+ *
+ *  Each part may carry its trailing clock line (the scheduler's withClock); it is dropped here and the
+ *  caller stamps ONE. Undefined when any part is not an answers message — a cancellation wake is frizz's
+ *  own voice and never merges into the human's. */
+export function mergeAnswerMessages(parts: readonly string[]): string | undefined {
+  const lines: string[] = []
+  let rows = 0
+  for (const part of parts) {
+    const [header, ...body] = stripWakeTimeHeader(part).trim().split("\n")
+    if (header !== BURIED_ANSWERS_HEADER) return undefined
+    for (const line of body) {
+      const row = /^\d+\. /.exec(line)
+      lines.push(row ? `${++rows}. ${line.slice(row[0].length)}` : line)
+    }
+  }
+  return rows === 0 ? undefined : `${BURIED_ANSWERS_HEADER}\n${lines.join("\n")}`
 }
 
 /** THE ONE WAKE ON THIS PATH FRIZZ WRITES IN ITS OWN VOICE, so it is the one the chat draws as a
@@ -4324,6 +4360,53 @@ const HUMAN_GAP_NOTE_TAIL = /\n+⏱ Frizz: the message above arrived [^\n]* afte
 /** Display projection: the human's message without the clock note frizz appended for the worker. */
 export function stripHumanGapNote(text: string): string {
   return text.replace(HUMAN_GAP_NOTE_TAIL, "")
+}
+
+/** A TYPED MESSAGE REACHING A WORKER THAT HAS QUESTIONS OPEN, with frizz's note on what to do with them
+ *  — appended to the copy handed to the worker, exactly as humanGapNote is, and to that copy ONLY.
+ *
+ *  THE WORKER DECIDES THE PIVOT (2026-09-29). A typed reply past open cards used to release them by
+ *  timestamp (questionRepliedPast), and it released seven the human still meant to answer when they
+ *  typed a side question. Frizz cannot tell a pivot from a side question; the worker reading the message
+ *  can. So the questions stay owed, and this is where the worker is told, at the moment it reads the
+ *  message, which ones are open and what the message might have done to them: `unask` exactly the ones
+ *  it made moot, leave the rest — the human can still answer those, one at a time.
+ *
+ *  Each question is named by its text AND its id, because `unask` takes the id and the worker never
+ *  chose one. Folded to one line and clipped, so the note stays ONE line and its stripper can anchor on
+ *  it. Undefined with nothing open. */
+export function openQuestionsNote(open: readonly { id: string; question: string }[]): string | undefined {
+  if (open.length === 0) return undefined
+  const named = open.map((q) => {
+    const text = q.question.replace(/\s+/g, " ").trim()
+    return `“${text.length > 100 ? `${text.slice(0, 99)}…` : text}” (${q.id})`
+  })
+  const count = open.length === 1 ? "1 question you registered is" : `${open.length} questions you registered are`
+  return `❓ Frizz: ${count} still open: ${named.join(", ")}.${OPEN_QUESTIONS_NOTE_TAIL}`
+}
+
+const OPEN_QUESTIONS_NOTE_TAIL =
+  " If the message above made any of them moot, `unask` exactly those and say so; leave the rest open — " +
+  "they are still the human's to answer, and still your sign-off."
+
+// The stripper, for humanGapNote's reason exactly: the note rides the HUMAN'S message, and the chat reads
+// the worker's transcript, where it is simply part of their bubble. Anchored to end-of-text on a line of
+// its own and to the note's fixed opening AND closing words, so a message that quotes one keeps it.
+const OPEN_QUESTIONS_NOTE_LINE = new RegExp(
+  `\\n+❓ Frizz: (?:1 question you registered is|\\d+ questions you registered are) still open: [^\\n]*${OPEN_QUESTIONS_NOTE_TAIL.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}[ \\t]*$`,
+)
+
+/** Display projection: the human's message without the open-questions note frizz appended for the
+ *  worker. */
+export function stripOpenQuestionsNote(text: string): string {
+  return text.replace(OPEN_QUESTIONS_NOTE_LINE, "")
+}
+
+/** Every rider frizz appends to the worker's copy of a TYPED follow-up, off, in the reverse of the order
+ *  the router appends them (the gap note, then the open-questions note). The one call every display and
+ *  match key should make, so a rider added later cannot be stripped in one place and shown in another. */
+export function stripFollowUpRiders(text: string): string {
+  return stripHumanGapNote(stripOpenQuestionsNote(text))
 }
 
 export function wakeDeliveryToken(id: string): string {

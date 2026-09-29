@@ -1,4 +1,4 @@
-import { stripHumanGapNote, stripWakeDeliveryToken, type TranscriptMessage } from "@frizz/shared"
+import { stripFollowUpRiders, stripWakeDeliveryToken, type TranscriptMessage } from "@frizz/shared"
 import type { Storage } from "./storage.ts"
 import { decodeDeliveryMarkers, deliveryTag, stripDeliveryMarkers } from "./delivery-marker.ts"
 
@@ -683,7 +683,7 @@ export function ageDeliveries(items: DeliveryLedgerItem[], nowMs: number, observ
 // matcher takes the item as a PREFIX of the record — but the projection compares whole strings, so
 // it must shed the riders first. Applied to BOTH sides, so a message that genuinely ends in a
 // quoted note still matches its own record.
-const renderMatchKey = (s: string): string => canon(stripHumanGapNote(stripWakeDeliveryToken(stripDeliveryMarkers(s))))
+const renderMatchKey = (s: string): string => canon(stripFollowUpRiders(stripWakeDeliveryToken(stripDeliveryMarkers(s))))
 
 // How far past the cancellation instant a rendered bubble may still be the cancelled send. Covers the
 // clock skew between frizz's own timestamp and the CLI's record, and nothing more: the bound is what

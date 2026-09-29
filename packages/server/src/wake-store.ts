@@ -29,7 +29,8 @@ export const WAKE_QUIET_WINDOW_MS = 5 * 60_000
 /** Hint-key prefixes the quiet window does NOT hold. An answer from the human (`answers:`) is the one
  *  delivery a worker is actually waiting on, and the human is sitting right there; a usage-limit
  *  resume (`limit:`) is the thread coming back from a wall it did not choose, and holding it would
- *  only lengthen the outage. Both still merge with anything already pending for the thread.
+ *  only lengthen the outage. A limit resume still merges with anything already pending for the thread;
+ *  an answer merges only with other answers (scheduler adoptCompanions).
  *
  *  A background-shell BUDGET WARNING (`shell-budget:`, scheduler SOURCE 13) is a deadline notice: it
  *  tells the worker a kill is coming and asks for an answer. Held, it arrived a whole window late —
