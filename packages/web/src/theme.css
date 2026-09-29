@@ -378,8 +378,11 @@
   --frizz-muted-90: #595959;
   --frizz-muted-95: #595959;
   /* Light flattens the muted steps for contrast, so the version gets its own ink: the lightest gray that
-     still clears WCAG AA on the white menu surface (#767676 on #fff is 4.54:1). */
-  --frizz-edition: #767676;
+     still clears WCAG AA on every surface it rests on. It was picked against the white menu alone
+     (#767676, 4.54:1 on #fff), and since 87eccbac the prompt box's trigger draws it too, on the page's
+     #f7f7f7, where that is 4.24:1 (scripts/verify-light-mode.mjs, 2026-09-29). #6f6f6f is 5.02:1 on
+     #fff, 4.81 on panel-2 #fafafa, 4.69 on bg #f7f7f7 and 4.57 on inset #f4f4f4; muted is #606060. */
+  --frizz-edition: #6f6f6f;
   --frizz-danger-faint: #a40e26;
   --frizz-danger-soft: #a40e26;
   --frizz-danger: #b6232d;
@@ -546,7 +549,7 @@
     --frizz-muted-85: #595959;
     --frizz-muted-90: #595959;
     --frizz-muted-95: #595959;
-    --frizz-edition: #767676;
+    --frizz-edition: #6f6f6f;
     --frizz-danger-faint: #a40e26;
     --frizz-danger-soft: #a40e26;
     --frizz-danger: #b6232d;
