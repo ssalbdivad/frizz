@@ -119,7 +119,7 @@ test("references inside a question card are live, and clicking one does not pick
     })
     await page.mouse.click(a0.x, a0.y)
     assert.deepEqual(await chips(page), [0])
-    assert.equal(await page.$eval(A, (n) => n.classList.contains("border-accent")), true)
+    assert.equal(await page.$eval(A, (n) => n.classList.contains("border-selection-border")), true)
     // And the "Recommended" badge is part of the row's hit area too.
     await mouseClick(page, `${A} .float-right`)
     assert.deepEqual(await chips(page), [0, 0])

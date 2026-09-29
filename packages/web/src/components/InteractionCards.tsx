@@ -231,6 +231,7 @@ function InteractionQuestionCard({
       data-interaction-id={record.id}
       data-interaction-kind={record.payload.kind}
       data-interaction-question="native"
+      data-question-set
       data-delivery-effect={record.delivery?.effect}
       className="flex min-w-0 flex-col gap-2 outline-none"
     >

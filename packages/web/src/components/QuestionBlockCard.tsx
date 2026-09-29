@@ -33,6 +33,33 @@ export interface BlockInteractive {
   onSubmit: () => void
 }
 
+/**
+ * Enter inside ONE card of a batch moves on to the next UNANSWERED card rather than sending the whole
+ * batch; only once none is left does it send. Every producer's `onSubmit` sends EVERY staged answer at
+ * once, so a bare send here shipped a seven-question ask with one answer typed in (maintainer
+ * 2026-09-29: "if i'm in a question checkbox, it probably shouldn't submit the whole response"). The
+ * batch is the nearest `[data-question-set]` the producer stamps; a card outside one (the mobile sheet,
+ * which steps through its blocks itself) keeps the plain send. The Send answers button still sends
+ * whatever is staged — this changes only what Enter means.
+ */
+function advanceOrSubmit(grid: HTMLElement, submit: () => void) {
+  const set = grid.closest("[data-question-set]")
+  if (set) {
+    const cards = [...set.querySelectorAll<HTMLElement>("[data-answerable-question]")]
+    const at = cards.indexOf(grid)
+    // After this card first, then wrapping round to the ones above it.
+    const order = at < 0 ? cards : [...cards.slice(at + 1), ...cards.slice(0, at)]
+    const next = order.find((c) => c.dataset.answered === "false")
+    if (next) {
+      const target = next.querySelector<HTMLElement>("textarea[data-surface='questionAnswer']") ?? next
+      target.focus({ preventScroll: true })
+      target.scrollIntoView({ block: "nearest" })
+      return
+    }
+  }
+  submit()
+}
+
 // A ```question block, set off from the surrounding prose: rounded neutral border + slightly elevated
 // bg + a muted label (NOT yellow — that's the focus motif). The label tracks the kind — "Question" for
 // a plain ask, "Select multiple" for `multi` — with no corner glyph (see KindIcon below for why it was
@@ -97,6 +124,9 @@ export function QuestionBlockCard({
   const chosen = interactive?.answer.chosen ?? null
   const chosenSet = interactive?.answer.chosenSet ?? []
   const freetext = interactive?.answer.text ?? ""
+  // Whether this card holds an answer the send would carry — read by a SIBLING card's Enter (see
+  // advanceOrSubmit) off the grid's data-answered, so it must track the staged state exactly.
+  const answered = isMulti ? chosenSet.length > 0 || freetext.trim() !== "" : chosen !== null || freetext.trim() !== ""
   // The free-text answer is an AUTO-EXPANDING textarea (not a fixed one-line input): reset to `auto`
   // so it can SHRINK when text is deleted, then lock to the content height so the box grows line-by-line
   // as the answer is typed. Runs on every freetext change (incl. an external clear via a chip-click).
@@ -165,9 +195,11 @@ export function QuestionBlockCard({
             })) {
               e.preventDefault()
               e.stopPropagation()
-              interactive.onSubmit()
+              advanceOrSubmit(e.currentTarget, interactive.onSubmit)
             }
           }}
+          data-answerable-question={interactive ? "" : undefined}
+          data-answered={interactive ? String(answered) : undefined}
           className="mt-2 grid grid-cols-1 gap-1.5 outline-none"
         >
           {parsed.options.map((opt, i) => (
@@ -256,7 +288,8 @@ export function QuestionBlockCard({
                   keyCode: e.nativeEvent.keyCode,
                 })) {
                   e.preventDefault()
-                  interactive.onSubmit()
+                  if (gridRef.current) advanceOrSubmit(gridRef.current, interactive.onSubmit)
+                  else interactive.onSubmit()
                 }
               }}
               // SINGLE: clicking into the input MOVES the selection here — any chosen chip deselects (its

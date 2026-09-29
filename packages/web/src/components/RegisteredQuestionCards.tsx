@@ -459,6 +459,8 @@ export function RegisteredQuestionStack({
   return (
     <section
       data-registered-questions
+      // The batch a card's Enter walks before it sends (QuestionBlockCard advanceOrSubmit).
+      data-question-set
       aria-label={`${questions.length} question${questions.length === 1 ? "" : "s"} waiting for an answer`}
       className={`flex min-w-0 flex-col gap-3 ${className}`}
     >

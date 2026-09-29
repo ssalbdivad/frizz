@@ -105,3 +105,54 @@ test("focusing the free-text box unselects a registered question's chosen option
     await browser.close()
   }
 })
+
+// Enter inside one card of a batch moves to the next UNANSWERED card instead of sending the batch
+// (maintainer 2026-09-29: one of seven answered, Enter pressed, all seven sent). Only once nothing is
+// left unanswered does Enter send.
+test("Enter in one registered question advances to the next unanswered one, and sends only when none is left", { skip: !baseUrl, timeout: 60_000 }, async () => {
+  const { browser, page, errors } = await launch()
+  try {
+    await page.goto(`${baseUrl}/registered-question-fixture.html?many=1`, { waitUntil: "networkidle0" })
+    await page.waitForSelector("[data-answerable-question]")
+    await page.evaluate(() => {
+      const w = window as unknown as { sends: number; answered: number }
+      w.sends = 0
+      window.addEventListener("fixture-rpc", (e) => {
+        const { rpc, body } = (e as CustomEvent).detail
+        if (rpc !== "answerQuestions") return
+        w.sends += 1
+        w.answered = body.answers.length
+      })
+    })
+    const sends = () => page.evaluate(() => (window as unknown as { sends: number }).sends)
+    const boxes = "textarea[data-surface='questionAnswer']"
+    const focusedIdx = () => page.$$eval(boxes, (ns) => ns.indexOf(document.activeElement as HTMLTextAreaElement))
+    const cards = await page.$$eval(boxes, (ns) => ns.length)
+    assert.ok(cards >= 3, "the fixture renders several cards")
+
+    // Answer the FIRST card only and press Enter: nothing is sent, and the caret lands on the second.
+    await mouseClick(page, boxes, 0)
+    await page.keyboard.type("first")
+    await page.keyboard.press("Enter")
+    assert.equal(await sends(), 0, "Enter with unanswered cards left does not send")
+    assert.equal(await focusedIdx(), 1)
+
+    // Enter on an EMPTY card skips it too — on to the next unanswered one, never back to itself.
+    await page.keyboard.press("Enter")
+    assert.equal(await sends(), 0)
+    assert.equal(await focusedIdx(), 2)
+
+    // Answer every card left by typing; the last Enter is the one that sends.
+    for (let i = 0; i < 20 && (await sends()) === 0; i++) {
+      assert.ok(await focusedIdx() >= 0, "the caret always lands in a card while any is unanswered")
+      await page.keyboard.type("x")
+      await page.keyboard.press("Enter")
+      await new Promise((r) => setTimeout(r, 50))
+    }
+    assert.equal(await sends(), 1)
+    assert.equal(await page.evaluate(() => (window as unknown as { answered: number }).answered), cards, "the one send carried every card's answer")
+    assert.deepEqual(errors, [])
+  } finally {
+    await browser.close()
+  }
+})

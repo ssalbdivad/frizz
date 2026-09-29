@@ -3490,7 +3490,9 @@ export const Message = memo(function Message({ m, answering, dense, paired, show
   // `data-frizz-msg` stamps this root with the message's own `sourceId`: a stable per-message handle for
   // an inspector or an e2e selector, distinct from the pagination-anchor attribute (see the anchor test).
   return (
-    <div data-frizz-msg={m.sourceId} className="flex flex-col text-[13px] min-w-0">
+    // `data-question-set`: this message's fence cards are one batch, which a card's Enter walks before
+    // it sends (QuestionBlockCard advanceOrSubmit).
+    <div data-frizz-msg={m.sourceId} data-question-set={answering ? "" : undefined} className="flex flex-col text-[13px] min-w-0">
       {withSpacers(blocks, pictureAwareGap(pictureEdges, STEP))}
       {answerSheetOpen && answering && askBlocks.length > 0 ? (
         <MobileAnswerSheet blocks={askBlocks} answering={answering} onClose={() => setAnswerSheetOpen(false)} />
