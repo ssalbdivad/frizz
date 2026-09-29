@@ -30,8 +30,16 @@ export const WAKE_QUIET_WINDOW_MS = 5 * 60_000
  *  delivery a worker is actually waiting on, and the human is sitting right there; a usage-limit
  *  resume (`limit:`) is the thread coming back from a wall it did not choose, and holding it would
  *  only lengthen the outage. A limit resume still merges with anything already pending for the thread;
- *  an answer merges only with other answers (scheduler adoptCompanions). */
-export const WAKE_QUIET_EXEMPT_HINT_PREFIXES = ["answers:", "limit:", "interrupt-ended:"] as const
+ *  an answer merges only with other answers (scheduler adoptCompanions).
+ *
+ *  A background-shell BUDGET WARNING (`shell-budget:`, scheduler SOURCE 13) is a deadline notice: it
+ *  tells the worker a kill is coming and asks for an answer. Held, it arrived a whole window late —
+ *  observed 2026-09-29, two shells due 8s apart delivered ~5m apart, because the first warning's
+ *  handoff opened the window that held the second. The kill clock now runs from delivery, so holding
+ *  it no longer shortens the worker's grace, but it still delays the decision and keeps the shell
+ *  running a window longer for nothing. And the hold buys no turn: the warning is deliverable
+ *  MID-TURN, so a second one due seconds after the first lands inside the turn the first one opened. */
+export const WAKE_QUIET_EXEMPT_HINT_PREFIXES = ["answers:", "limit:", "interrupt-ended:", "shell-budget:"] as const
 
 export function isQuietWindowExempt(hintKey: string): boolean {
   return WAKE_QUIET_EXEMPT_HINT_PREFIXES.some((prefix) => hintKey.startsWith(prefix))
