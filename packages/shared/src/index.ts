@@ -2451,8 +2451,8 @@ export const AnswerQuestionsInput = z.object({
    *  start working"). Several when the human sends what they have staged on purpose, or when a typed reply
    *  carries the staged answers ahead of itself. The contract already requires the questions of one `ask`
    *  to be independent — dependent ones are `followUps` — which is what makes one answer actionable
-   *  alone. Answers landing seconds apart still reach the worker as ONE delivery (scheduler
-   *  evalQuestionAnswers' coalescing window). */
+   *  alone. Answers stored before the scheduler's next pass still reach the worker as ONE delivery,
+   *  merged at claim (scheduler adoptCompanions, mergeAnswerMessages). */
   answers: z.array(QuestionAnswerSchema).min(1),
 }).strict()
 export type AnswerQuestionsInput = z.infer<typeof AnswerQuestionsInput>

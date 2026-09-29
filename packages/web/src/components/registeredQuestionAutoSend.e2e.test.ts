@@ -27,7 +27,9 @@ async function launch(query: string) {
   page.on("console", (m) => { if (m.type() === "error" && !/404|favicon/i.test(m.text())) errors.push(m.text()) })
   page.on("pageerror", (e) => errors.push(String(e)))
   await page.goto(`${baseUrl}/registered-question-fixture.html${query}`, { waitUntil: "networkidle0" })
-  await page.waitForSelector("[data-question-option]")
+  // Generous on the first paint only: the run's first page waits on vite's cold dependency pass, which
+  // took over 30s on a loaded machine (2026-09-29) and failed whichever test happened to go first.
+  await page.waitForSelector("[data-question-option]", { timeout: 90_000 })
   // Every answerQuestions payload, in order — the fixture echoes each write as a `fixture-rpc` event.
   await page.evaluate(() => {
     const w = window as unknown as { __answers: unknown[][] }
@@ -64,7 +66,7 @@ const live = (page: Page) => page.$$eval("[data-registered-questions] [data-ques
 const greyed = (page: Page) => page.$$eval("[data-registered-questions] [data-settled-question]", (ns) => ns.map((n) => (n as HTMLElement).dataset.questionId))
 const sendButton = (page: Page) => page.$eval("[data-send-answers]", (b) => b.textContent?.trim() ?? "").catch(() => null)
 
-test("a single-choice pick that completes its question sends it", { skip: !baseUrl, timeout: 60_000 }, async () => {
+test("a single-choice pick that completes its question sends it", { skip: !baseUrl, timeout: 120_000 }, async () => {
   const { browser, page, errors, rpcs } = await launch("")
   try {
     await mouseClick(page, `${SETTINGS} [data-question-option]`, 0)
@@ -76,7 +78,7 @@ test("a single-choice pick that completes its question sends it", { skip: !baseU
   }
 })
 
-test("a pick sends ITS question alone; the others stay open and it greys in its slot", { skip: !baseUrl, timeout: 60_000 }, async () => {
+test("a pick sends ITS question alone; the others stay open and it greys in its slot", { skip: !baseUrl, timeout: 120_000 }, async () => {
   const { browser, page, errors, rpcs, answers } = await launch("?many=1")
   try {
     assert.equal(await sendButton(page), null, "nothing staged, so no Send button stands under the cards")
@@ -94,7 +96,7 @@ test("a pick sends ITS question alone; the others stay open and it greys in its 
   }
 })
 
-test("a pick that opens follow-ups waits for them; the last one sends the whole branch", { skip: !baseUrl, timeout: 60_000 }, async () => {
+test("a pick that opens follow-ups waits for them; the last one sends the whole branch", { skip: !baseUrl, timeout: 120_000 }, async () => {
   const { browser, page, errors, rpcs, answers } = await launch("?tree=1")
   try {
     // "Land it" opens two follow-ups: a single-choice and a free text.
@@ -130,7 +132,7 @@ test("a pick that opens follow-ups waits for them; the last one sends the whole 
   }
 })
 
-test("a multi stages its toggles until Enter confirms it, and sends it alone", { skip: !baseUrl, timeout: 60_000 }, async () => {
+test("a multi stages its toggles until Enter confirms it, and sends it alone", { skip: !baseUrl, timeout: 120_000 }, async () => {
   const { browser, page, errors, rpcs, answers } = await launch("?many=1")
   try {
     await mouseClick(page, `${GATES} [data-question-option]`, 0)
@@ -152,7 +154,7 @@ test("a multi stages its toggles until Enter confirms it, and sends it alone", {
   }
 })
 
-test("a typed reply sends what is staged first, then itself — and every question it did not answer stays open", { skip: !baseUrl, timeout: 60_000 }, async () => {
+test("a typed reply sends what is staged first, then itself — and every question it did not answer stays open", { skip: !baseUrl, timeout: 120_000 }, async () => {
   const { browser, page, errors, rpcs, answers } = await launch("?many=1")
   try {
     // Nothing staged: the reply goes alone, and it settles nothing — no answer, no dismissal.
@@ -183,7 +185,7 @@ test("a typed reply sends what is staged first, then itself — and every questi
   }
 })
 
-test("a pick made while the reply box holds a draft waits for the reply's Enter", { skip: !baseUrl, timeout: 60_000 }, async () => {
+test("a pick made while the reply box holds a draft waits for the reply's Enter", { skip: !baseUrl, timeout: 120_000 }, async () => {
   const { browser, page, rpcs } = await launch("")
   try {
     await page.focus(reply)

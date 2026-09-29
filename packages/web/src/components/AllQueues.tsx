@@ -92,6 +92,13 @@ function heldEntry(projects: readonly QueuesProject[], entry: QueueEntry): Queue
   return live && live.questions !== entry.thread.questions ? { ...entry, thread: { ...entry.thread, questions: live.questions } } : entry
 }
 
+/** A held card whose worker is at work on the answer it sent says so, in place of the time it was ready:
+ *  its entry is frozen from when it was queued, and "Ready 2m ago" over a running worker is false. */
+function heldStatus(projects: readonly QueuesProject[], entry: QueueEntry): string | undefined {
+  const project = projects.find((p) => p.id === entry.project.id)
+  return project?.running.some((t) => t.id === entry.thread.id) ? "Working on your answer" : undefined
+}
+
 // Where a ghost's thread went, as far as the page can see (lib/stableQueue.ts GHOST_LABEL).
 function ghostLabel(projects: readonly QueuesProject[], { project, thread }: QueueEntry): string {
   const now = projects.find((candidate) => candidate.id === project.id)
@@ -295,7 +302,7 @@ export function AllQueuesPage() {
                 {queue.length > 0 ? (
                   queue.map((slot, index) => (
                     <Fragment key={slot.key}>
-                      <QueueCardOf entry={leaving.isHeld(slot.key) ? heldEntry(projects, slot.item) : slot.item} ghost={slot.ghost ? ghostLabel(projects, slot.item) : undefined} concealed={inDrawer.has(slot.key)} leaving={leaving} chip={!filtered} />
+                      <QueueCardOf entry={leaving.isHeld(slot.key) ? heldEntry(projects, slot.item) : slot.item} ghost={slot.ghost ? ghostLabel(projects, slot.item) : undefined} status={leaving.isHeld(slot.key) ? heldStatus(projects, slot.item) : undefined} concealed={inDrawer.has(slot.key)} leaving={leaving} chip={!filtered} />
                       {/* The rule between two cards: a sibling that FOLLOWS its card, so
                           styles.css fades it with the card when that one leaves. */}
                       {index < queue.length - 1 && <hr className="my-10 border-0 border-t border-border/60" />}
@@ -635,7 +642,7 @@ function placeCaret(box: HTMLTextAreaElement, caret: Caret | undefined): void {
  * relative path at its directory and a `/thread/<slug>` link at that thread on THIS page (opened in
  * place) — never at the page's focus, which is usually another project.
  */
-function QueueCardOf({ entry, ghost, concealed, leaving, chip }: { entry: QueueEntry; ghost: string | undefined; concealed: boolean; leaving: LeavingCards; chip: boolean }) {
+function QueueCardOf({ entry, ghost, status, concealed, leaving, chip }: { entry: QueueEntry; ghost: string | undefined; status?: string; concealed: boolean; leaving: LeavingCards; chip: boolean }) {
   const { project, thread } = entry
   // The READY header's filter, chosen from the card: a different set of cards is read from its top.
   const choose = useCallback((to: QueuesProject) => {
@@ -681,6 +688,7 @@ function QueueCardOf({ entry, ghost, concealed, leaving, chip }: { entry: QueueE
           chip={chip}
           onChoose={choose}
           ghost={ghost}
+          status={status}
           concealed={concealed}
         />
       )}

@@ -172,6 +172,9 @@ interface AllQueuesCardProps {
    * until it scrolls off or the thread rests again.
    */
   ghost?: string
+  /** Said on the meta line in place of the time the card was ready, WITHOUT a ghost's dimming: a held
+   *  card (`onHold`) whose worker is at work on the answer it sent. */
+  status?: string
   /**
    * Its drawer is open, where it is read: the card stays drawn in its place in the queue, inert — out of
    * the tab order and out of reach of a click — so the drawer is the one live copy (AllQueues.tsx).
@@ -202,6 +205,7 @@ export const AllQueuesCard = memo(function AllQueuesCard({
   chip = false,
   onChoose,
   ghost,
+  status,
   concealed = false,
 }: AllQueuesCardProps) {
   const api = projectRpc(project.id)
@@ -260,10 +264,10 @@ export const AllQueuesCard = memo(function AllQueuesCard({
                 {chipNode}
                 {/* A ghost says why it is quiet, on the line that said since when it was ready: the same
                     one line, so the card keeps its height and nothing under it moves. */}
-                {ghost !== undefined ? (
+                {(ghost ?? status) !== undefined ? (
                   <>
                     {chip && <span aria-hidden>·</span>}
-                    <span className="min-w-0 truncate">{ghost}</span>
+                    <span className="min-w-0 truncate">{ghost ?? status}</span>
                   </>
                 ) : (
                   <LastActive
@@ -342,8 +346,10 @@ export const AllQueuesCard = memo(function AllQueuesCard({
               {showsQuietTurnCard(thread) && <QuietTurnCard thread={thread} />}
             </div>
 
+            {/* Keyed on the rest: an answered card keeps its slot while the card holds for the worker's
+                turn, and a NEW handoff — which says what became of it — starts the stack over. */}
             {owedQuestions.length > 0 && (
-              <RegisteredQuestionStack thread={thread} questions={owedQuestions} keepAnswered className="shrink-0 px-5 pb-4 pt-0" />
+              <RegisteredQuestionStack key={handoff.data?.at ?? ""} thread={thread} questions={owedQuestions} keepAnswered className="shrink-0 px-5 pb-4 pt-0" />
             )}
           </ProjectLinkScope>
 
@@ -381,6 +387,7 @@ function sameCard(a: AllQueuesCardProps, b: AllQueuesCardProps): boolean {
     a.chip === b.chip &&
     a.onChoose === b.onChoose &&
     a.ghost === b.ghost &&
+    a.status === b.status &&
     a.concealed === b.concealed &&
     sameProjectAddress(a.project, b.project)
   )
