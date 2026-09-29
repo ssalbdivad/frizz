@@ -7,7 +7,6 @@ import { closeDrawerAnimated, closeSettingsAnimated } from "../lib/overlays.ts"
 import { dismissOpenSelect } from "../lib/selectOverlay.ts"
 import { ThreadSheet } from "./ThreadSheet.tsx"
 import { SubAgentSheet } from "./SubAgentSheet.tsx"
-import { BackgroundShellSheet } from "./BackgroundShellSheet.tsx"
 import { FileReaderDrawer } from "./FileReaderDrawer.tsx"
 import { ImageViewer } from "./ImageViewer.tsx"
 import { ThreadDrawer } from "./ThreadDrawer.tsx"
@@ -40,8 +39,10 @@ export function DrawerStack() {
   useEffect(() => {
     function onKey(e: KeyboardEvent) {
       if (e.key !== "Escape") return
-      // The terminal is a native TUI surface. Its Escape belongs to xterm, never to this layer.
-      if (e.target instanceof Element && e.target.closest(".xterm")) return
+      // YOUR terminal is a native TUI surface: its Escape belongs to the program in it, never to this layer.
+      // An agent terminal's log is read-only — nothing in it can take an Escape — so there it closes the
+      // drawer as it does anywhere else.
+      if (e.target instanceof Element && e.target.closest(".xterm") && !e.target.closest("[data-shell-log-pane]")) return
       // Portaled selectors are not descendants of their owning dialog/drawer. Give the topmost
       // model/effort matrix or Select this physical Escape before unwinding the app overlay stack.
       if (dismissOpenSelect()) {
@@ -92,18 +93,11 @@ export function DrawerStack() {
             widthDepth={widthDepth}
           />
         ) : d.kind === "shell" ? (
-          <BackgroundShellSheet
-            key={d.id}
-            id={d.id}
-            slug={d.slug}
-            shellId={d.subId ?? ""}
-            label={d.label ?? "Background shell"}
-            startedAt={d.startedAt}
-            depth={i}
-            widthDepth={widthDepth}
-          />
+          // An AGENT's terminal and yours open the same drawer; the layer kinds stay distinct only because
+          // drawer stacks persist and a stored "shell" layer must still reopen.
+          <TerminalSheet key={d.id} id={d.id} slug={d.slug} source={{ owner: "agent", shellId: d.subId ?? "" }} label={d.label} startedAt={d.startedAt} depth={i} widthDepth={widthDepth} />
         ) : d.kind === "terminal" ? (
-          <TerminalSheet key={d.id} id={d.id} slug={d.slug} terminalId={d.subId ?? ""} depth={i} widthDepth={widthDepth} />
+          <TerminalSheet key={d.id} id={d.id} slug={d.slug} source={{ owner: "human", terminalId: d.subId ?? "" }} depth={i} widthDepth={widthDepth} />
         ) : d.kind === "file" ? (
           <FileReaderDrawer key={d.id} id={d.id} path={d.path ?? d.slug} title={d.label ?? d.slug} scope={d.scope} depth={i} widthDepth={widthDepth} />
         ) : (

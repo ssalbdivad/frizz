@@ -1,21 +1,9 @@
 import { useEffect, useRef, useState, type ReactNode } from "react"
-import { Terminal } from "@xterm/xterm"
-import { FitAddon } from "@xterm/addon-fit"
+import type { Terminal } from "@xterm/xterm"
 import type { TermClientMsg } from "@frizz/shared"
 import { queuedTerminalInputBytes, terminalCloseKind, terminalExitCode, terminalReconnectDelay } from "../lib/terminalConnection.ts"
-import { FRIZZ_ROUTE_PREFIX } from "@frizz/shared"
 import { apiBase } from "../lib/base-path.ts"
-import { getThemeSnapshot, subscribeTheme } from "../lib/theme.ts"
-
-function terminalTheme() {
-  const root = getComputedStyle(document.documentElement)
-  const color = (name: string) => root.getPropertyValue(name).trim()
-  return {
-    background: color("--color-bg"), foreground: color("--color-fg"), cursor: color("--terminal-cursor"), cursorAccent: color("--terminal-cursor-accent") || color("--color-bg"), selectionBackground: color("--terminal-selection"),
-    black: color("--terminal-black"), red: color("--terminal-red"), green: color("--terminal-green"), yellow: color("--terminal-yellow"), blue: color("--terminal-blue"), magenta: color("--terminal-magenta"), cyan: color("--terminal-cyan"), white: color("--terminal-white"),
-    brightBlack: color("--terminal-bright-black"), brightRed: color("--terminal-bright-red"), brightGreen: color("--terminal-bright-green"), brightYellow: color("--terminal-bright-yellow"), brightBlue: color("--terminal-bright-blue"), brightMagenta: color("--terminal-bright-magenta"), brightCyan: color("--terminal-bright-cyan"), brightWhite: color("--terminal-bright-white"),
-  }
-}
+import { mountXterm } from "../lib/xtermSetup.ts"
 
 // One xterm + WebSocket per thread terminal. Remounts on id change (keyed by the parent, on the run
 // too), so mount = attach and unmount = detach. The pty is owned by the server (thread-terminals.ts)
@@ -57,36 +45,17 @@ export function TerminalPane({ id, exitedStatus, base, focusOnMount = true }: { 
     const host = hostRef.current
     if (!host) return
 
-    const term = new Terminal({
-      fontFamily: "Menlo, ui-monospace, monospace",
-      fontSize: 13,
-      theme: terminalTheme(),
-      scrollback: 10000,
-      allowProposedApi: true,
-      cursorBlink: true,
+    // The xterm itself — font, theme and its live recolour, the fit, the degenerate-host guard and the
+    // resize observer — is built by lib/xtermSetup.ts, shared with the agent-terminal log pane. What is
+    // HERE is the pty: the socket, input, reconnects. A grid change is sent to the pty as a resize.
+    const mounted = mountXterm(host, {}, (cols, rows) => {
+      send({ t: "resize", cols, rows })
     })
+    const term = mounted.term
     termRef.current = term
-    let resolvedTheme = getThemeSnapshot().resolved
-    const unsubscribeTheme = subscribeTheme(() => {
-      const nextResolved = getThemeSnapshot().resolved
-      if (nextResolved === resolvedTheme) return
-      resolvedTheme = nextResolved
-      term.options.theme = terminalTheme()
-    })
-    // No auto-focus on attach (that would swallow keys the user meant elsewhere) — clicking the
-    // terminal focuses it natively; there is no focus machine anymore.
-    const fit = new FitAddon()
-    term.loadAddon(fit)
-    term.open(host)
     // Mounting TerminalPane is explicit user intent (or a persisted explicit choice after a server
     // reload). Focus immediately; input typed before the socket opens is queued below, never dropped.
     if (focusOnMount) term.focus()
-    // NEVER fit against a degenerate host (a mid-layout zero-height mount produced NaN grid state
-    // that corrupted xterm internals and crashed dispose, unmounting the whole workpane).
-    const initialDims = fit.proposeDimensions()
-    if (initialDims && Number.isFinite(initialDims.cols) && Number.isFinite(initialDims.rows) && initialDims.rows > 1) {
-      fit.fit()
-    }
 
     const proto = location.protocol === "https:" ? "wss" : "ws"
     const url = `${proto}://${location.host}${base ?? apiBase()}/term/${id}`
@@ -219,27 +188,7 @@ export function TerminalPane({ id, exitedStatus, base, focusOnMount = true }: { 
     window.addEventListener("pagehide", onPageHide)
     window.addEventListener("pageshow", onPageShow)
 
-    // Resize ONLY when the grid actually changes. The naive version (fit + send on every
-    // ResizeObserver tick) fed a repaint storm: each ~1s board push re-rendered the layout, the
-    // observer fired on no-op layout passes, every fit() forced an xterm reflow, and every resize
-    // message forced the pty to reflow and repaint the whole screen ("random line-shifting
-    // repaints"). Now we debounce a beat, compute the PROPOSED grid, and touch xterm/the pty only on
-    // a real cols/rows change.
-    let resizeTimer: ReturnType<typeof setTimeout> | undefined
-    const ro = new ResizeObserver(() => {
-      clearTimeout(resizeTimer)
-      resizeTimer = setTimeout(() => {
-        const dims = fit.proposeDimensions()
-        if (!dims || !Number.isFinite(dims.cols) || !Number.isFinite(dims.rows) || dims.rows <= 1) return
-        if (dims.cols === term.cols && dims.rows === term.rows) return
-        fit.fit()
-        send({ t: "resize", cols: term.cols, rows: term.rows })
-      }, 120)
-    })
-    ro.observe(host)
-
     return () => {
-      clearTimeout(resizeTimer)
       clearTimeout(reconnectTimer)
       disposed = true
       window.removeEventListener("online", reconnectNow)
@@ -247,8 +196,6 @@ export function TerminalPane({ id, exitedStatus, base, focusOnMount = true }: { 
       window.removeEventListener("pagehide", onPageHide)
       window.removeEventListener("pageshow", onPageShow)
       document.removeEventListener("visibilitychange", onVisibility)
-      ro.disconnect()
-      unsubscribeTheme()
       dataSub.dispose()
       if (ws) {
         ws.onopen = null
@@ -257,22 +204,8 @@ export function TerminalPane({ id, exitedStatus, base, focusOnMount = true }: { 
         ws.onclose = null
         ws.close()
       }
-      // dispose() can throw if xterm internals were corrupted (e.g. a zero-dim fit) — a cleanup
-      // throw would take the whole React tree down with it, which is far worse than a leak.
-      //
-      // DEFERRED ONE TASK. `term.open()` queues a `setTimeout(() => viewport.syncScrollArea())` (xterm
-      // 5.5 Viewport's constructor), and a pane torn down before it fires — a queue card mounted and
-      // dropped in the same beat (a switch into a project board holding a terminal card did it, until
-      // that board went on 2026-09-28) — disposed the renderer underneath it: an uncaught "reading
-      // 'dimensions'" on every such switch. Timers of
-      // one delay run in the order they were set, so this one lands after xterm's, against a live term.
-      setTimeout(() => {
-        try {
-          term.dispose()
-        } catch (e) {
-          console.warn("xterm dispose failed", e)
-        }
-      })
+      // The observer, the theme subscription, and the terminal — deferred one task (lib/xtermSetup.ts).
+      mounted.dispose()
     }
   }, [id, base])
 

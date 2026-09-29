@@ -20,30 +20,39 @@ import { showToast } from "../store.ts"
 // which is right for the drawer and the /full page; a row in Everything's project list names a thread of
 // any project on a page that names at most one, so it passes its scope's client (api/threadApi.tsx) —
 // else the × on another project's `fix-auth` child would stop the focused project's.
-export function dismissChildOp(slug: string, id: string, kind: "AGENT" | "SHELL" = "AGENT", api: Api = rpc): void {
+//
+// Resolves to whether a live child was actually KILLED once the stop has settled, and never rejects (the
+// toast is the whole error path), so a caller that shows the result — the agent-terminal drawer's Stop on
+// a Codex exec — can re-read after it and say "stopped" only when it was.
+export function dismissChildOp(slug: string, id: string, kind: "AGENT" | "SHELL" = "AGENT", api: Api = rpc): Promise<boolean> {
   // "Agent terminal", the name its row and its drawer use (ThreadTerminals.tsx), so the × and the drawer's
   // Stop announce the same thing in the same words.
   const noun = kind === "SHELL" ? "Agent terminal" : "Sub-agent"
-  api.stopBackgroundOp({ slug, id })
+  return api.stopBackgroundOp({ slug, id })
     .then(({ stopped, note, descendantsStopped }) => {
       // Only the KILL is worth announcing. A clear needs no toast — the row leaving IS the feedback.
-      if (!stopped) return
+      if (!stopped) return false
       // The count belongs in the toast because the SUBTREE is the part the operator cannot see: the
       // row they clicked leaves the board either way, and until this stop covered the fan-out its
       // grandchildren kept running and reported back under an agent that was already gone. A
       // descendant frizz failed to stop rides in `note` and outranks the count — that is live work
       // still burning, and it gets the longer toast the error path uses. A shell's `note` carries the
       // other failure only it can have: the kill landed but the WORKER could not be told.
-      if (note) return showToast(`${noun} stopped. ${note}`, { duration: 7000 })
+      if (note) {
+        showToast(`${noun} stopped. ${note}`, { duration: 7000 })
+        return true
+      }
       // A shell says who else knows. The worker is not watching the dashboard, and a stop it was never
       // told about leaves it waiting on a watcher that will never report — so "the worker was told" is
       // the half of this action the operator cannot otherwise verify. A sub-agent needs no such line:
       // the provider injects its own stop notification (backend/_live_shell_stop_notice.mts).
-      if (kind === "SHELL") return showToast("Agent terminal stopped — the agent was told")
-      showToast(descendantsStopped > 0 ? `Sub-agent and ${descendantsStopped} descendant${descendantsStopped === 1 ? "" : "s"} stopped` : "Sub-agent stopped")
+      if (kind === "SHELL") showToast("Agent terminal stopped — the agent was told")
+      else showToast(descendantsStopped > 0 ? `Sub-agent and ${descendantsStopped} descendant${descendantsStopped === 1 ? "" : "s"} stopped` : "Sub-agent stopped")
+      return true
     })
     .catch((error: unknown) => {
       showToast(`Couldn’t stop: ${(error instanceof Error ? error.message : String(error)).slice(0, 100)}`, { duration: 7000 })
+      return false
     })
 }
 

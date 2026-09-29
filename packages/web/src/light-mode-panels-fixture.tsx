@@ -1,7 +1,7 @@
 import { createRoot } from "react-dom/client"
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query"
 import type { InteractionRecord } from "@frizz/shared"
-import { BackgroundShellSheet } from "./components/BackgroundShellSheet.tsx"
+import { TerminalSheet } from "./components/TerminalSheet.tsx"
 import { FileReaderDrawer } from "./components/FileReaderDrawer.tsx"
 import { FileViewerPanel } from "./components/FileViewerPanel.tsx"
 import { ProviderErrorCard } from "./components/ProviderErrorCard.tsx"
@@ -32,7 +32,7 @@ window.fetch = async (input, init) => {
   const method = url.pathname.split("/").at(-1)
   if (method === "localMarkdown") return json({ path: "/fixture/review.md", markdown, truncated: false })
   if (method === "localFile") return json({ path: "/fixture/theme.ts", text: "// Browser-local appearance\nexport const palette = {\n  canvas: '#f7f7f7',\n  question: '#ffffff',\n  outline: '#dcdcdc',\n}\n", truncated: false })
-  if (method === "backgroundShellOutput") return json({ state: "running", command: "nub run test", output: "✔ Theme preferences\n✔ Settings migration\n✔ Question selection\n\nChecking browser rendering…\n" })
+  if (method === "backgroundShellOutput") return json({ state: "running", command: "nub run test", output: "\u001b[32m✔\u001b[0m Theme preferences\n\u001b[32m✔\u001b[0m Settings migration\n\u001b[32m✔\u001b[0m Question selection\n\nChecking browser rendering…\n", truncated: false, stoppable: false, stopNote: null, end: 120, cwd: "/fixture" })
   if (method === "authStatus") return json({ claude: "signed-out", codex: "signed-out", emails: {} })
   return json({})
 }
@@ -55,7 +55,7 @@ createRoot(document.getElementById("root")!).render(
           <ProviderErrorCard error={{ code: "authentication_failed", message: "Sign in again to continue this thread." }} />
           <ImageFrame><img className={FRAMED_IMAGE} src={picture} alt="Palette reference" /></ImageFrame>
         </div>}
-        {mode === "shell" && <BackgroundShellSheet id={1} slug="theme" shellId="shell" label="Checking the theme" startedAt={new Date(Date.now() - 95000).toISOString()} depth={0} widthDepth={0} />}
+        {mode === "shell" && <TerminalSheet id={1} slug="theme" source={{ owner: "agent", shellId: "shell" }} label="Checking the theme" startedAt={new Date(Date.now() - 95000).toISOString()} depth={0} widthDepth={0} />}
         {mode === "markdown" && <FileReaderDrawer id={1} path="/fixture/review.md" title="Palette verification" depth={0} widthDepth={0} />}
         {mode === "file" && <div className="h-[calc(100vh-40px)] border border-border"><FileViewerPanel slug="theme" path="/fixture/theme.ts" active /></div>}
         {mode === "signin" && <SignInModal backend="claude" onClose={() => {}} onAuthed={() => {}} />}

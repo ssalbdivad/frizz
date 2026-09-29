@@ -148,7 +148,7 @@ export function formatCountdown(ms: number): string {
 // Human-friendly elapsed since an ISO timestamp, measured against NOW: "just now", "12m", "1h 3m".
 // Empty when absent or unparseable. Distinct from formatFixedDuration, which formats an already-
 // COMPLETED span (a dispatch→completion elapsed, in ms). This was written twice verbatim — in
-// ChatView's ops strip and in BackgroundShellSheet — while every other duration formatter already
+// ChatView's ops strip and in the agent-terminal drawer — while every other duration formatter already
 // lived here.
 export function elapsedSince(startedAt: string | undefined, nowMs = Date.now()): string {
   if (!startedAt) return ""

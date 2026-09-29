@@ -1,7 +1,7 @@
-import { useEffect, useMemo } from "react"
+import { useEffect, useMemo, useRef, useState } from "react"
 import { useSnapshot } from "valtio"
 import { useQuery, useQueryClient, type QueryClient } from "@tanstack/react-query"
-import type { BoardSnapshot, InteractionRecord, ThreadView, TranscriptMessage } from "@frizz/shared"
+import type { BackgroundShellOutputResult, BoardSnapshot, InteractionRecord, ThreadView, TranscriptMessage } from "@frizz/shared"
 import { store, threadBySlug } from "./store.ts"
 import { rpc } from "./api/rpc.ts"
 import { useThreadApi } from "./api/threadApi.tsx"
@@ -9,6 +9,7 @@ import { retryTranscriptSocket, subscribeFile, subscribeTranscript, unsubscribeF
 import { mergeOptimistic, preserveMessageIdentity, isTranscriptStale, newestRenderedAt } from "./lib/transcript-sync.ts"
 import { pendingInteractionsKey } from "./api/interaction-cache.ts"
 import { reconcileLatestPage, type PaginatedTranscriptData } from "./lib/transcriptPagination.ts"
+import { nextShellLogDelay, ShellLogStream } from "./lib/shellLog.ts"
 
 // A transcript message carrying a transient client-only flag: a follow-up we optimistically appended
 // on send that hasn't yet appeared in a server refetch. The flag drives the "queued" affordance and
@@ -312,12 +313,60 @@ export function useSubAgentTranscript(slug: string, id: string) {
   })
 }
 
-export function useBackgroundShellOutput(slug: string, id: string) {
-  return useQuery({
-    queryKey: ["backgroundShellOutput", slug, id],
-    queryFn: () => rpc.backgroundShellOutput({ slug, id }),
-    refetchInterval: (query) => (query.state.data?.state === "running" ? 1500 : false),
-  })
+// AN AGENT TERMINAL'S LOG, FOLLOWED — the one poll behind an open agent-terminal drawer (TerminalSheet): the
+// header reads the reply's metadata, the read-only xterm (ShellLogPane) writes the stream. Each read resumes
+// at the last reply's `end`, raw, so only what arrived is sent and colour survives; it asks again at once
+// while `more` is waiting, every 1.5s while the shell runs, and stops once it has ended. `refresh` reads now
+// — after a Stop, so the header says so without waiting out the poll.
+//
+// The page's `rpc`, never a card's project: the drawer stack is always the FOCUSED project's, which is why
+// a queue card only pushes this drawer when its thread's project is the one in focus.
+export function useShellLog(slug: string, shellId: string): { stream: ShellLogStream; meta: BackgroundShellOutputResult | undefined; error: boolean; refresh: () => void } {
+  const stream = useMemo(() => new ShellLogStream(), [slug, shellId])
+  const [meta, setMeta] = useState<BackgroundShellOutputResult>()
+  const [error, setError] = useState(false)
+  const kick = useRef<() => void>(() => {})
+  useEffect(() => {
+    let stopped = false
+    let inflight = false
+    let again = false
+    let timer: ReturnType<typeof setTimeout> | undefined
+    const read = async (): Promise<void> => {
+      if (stopped) return
+      if (inflight) {
+        again = true
+        return
+      }
+      inflight = true
+      clearTimeout(timer)
+      try {
+        const reply = await rpc.backgroundShellOutput({ slug, id: shellId, raw: true, ...(stream.from !== undefined ? { from: stream.from } : {}) })
+        if (stopped) return
+        stream.apply(reply)
+        setMeta({ ...reply, output: "" })
+        setError(false)
+        const delay = nextShellLogDelay(reply)
+        if (delay !== undefined) timer = setTimeout(() => void read(), delay)
+      } catch {
+        if (stopped) return
+        setError(true)
+        timer = setTimeout(() => void read(), 3_000)
+      } finally {
+        inflight = false
+        if (again && !stopped) {
+          again = false
+          void read()
+        }
+      }
+    }
+    kick.current = () => void read()
+    void read()
+    return () => {
+      stopped = true
+      clearTimeout(timer)
+    }
+  }, [slug, shellId, stream])
+  return { stream, meta, error, refresh: () => kick.current() }
 }
 
 // The ops strip's LIVE OUTPUT COUNTER: lines produced, per shell row on screen, refreshed while any of

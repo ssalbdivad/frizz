@@ -4456,7 +4456,7 @@ function EventLine({ text, boundary, sourceId, at }: { text: string; boundary?: 
   //
   // The glyph is why the server names the KIND rather than sending a bare flag. A `wake` is a
   // background shell/task coming back, and it takes the terminal glyph the rest of the app already uses
-  // for a background shell (BackgroundShellSheet, ExternalTerminalCommand). A `compaction` is not a
+  // for a background shell (TerminalSheet, ExternalTerminalCommand). A `compaction` is not a
   // child returning at all — nothing ran, the provider just dropped the conversation above this line —
   // so it takes NO glyph rather than borrowing one that would misname it. Nor does a `rest`: it was the
   // most FREQUENT divider by far — one per turn — and a mark on every one of them is noise the quieter
