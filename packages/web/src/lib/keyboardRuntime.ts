@@ -80,9 +80,9 @@ function stepCard(step: 1 | -1): boolean {
   if (!keys.length) return true
   const index = keys.indexOf(cursor.current() ?? "")
   // Nothing marked (scrolled past every card, or none reached yet): either key starts at the top.
-  const target = index === -1 ? keys[0] : keys[Math.min(keys.length - 1, Math.max(0, index + step))]
-  // At either end the key lands the card it is already on — the same re-ring a second click on its
-  // rail row plays — so the press is visibly received rather than silently eaten.
+  // Past either end the key wraps: `j` on the last card lands the first, `k` on the first lands the
+  // last. A lone card lands itself — the same re-ring a second click on its rail row plays.
+  const target = index === -1 ? keys[0] : keys[(index + step + keys.length) % keys.length]
   cursor.go(target)
   openCard(target, cursor.root(target))
   return true
