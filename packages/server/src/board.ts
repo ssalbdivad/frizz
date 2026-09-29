@@ -1415,10 +1415,13 @@ export function resolveSessionTitle(
 
 /** A registered completion as the ```done fence it replaces, or undefined when it no longer stands.
  *
- *  ITS LIFETIME IS "NOTHING NEWER FROM THE HUMAN". A fence is superseded the moment the worker writes
- *  again; a ROW cannot be, so something has to spend it — and the human SENDING MORE WORK is exactly
- *  the moment a completion stops being true. Deciding that by comparing two timestamps means there is
- *  no sweep to forget one, and no window where a thread that was reopened still cards as finished.
+ *  ITS LIFETIME IS "NOTHING NEWER HAS BEEN DONE FOR THE HUMAN". A fence is superseded the moment the
+ *  worker writes again; a ROW cannot be, so something has to spend it. The human speaking after it is
+ *  necessary but not sufficient: a prose-only reply to that message is conversation about finished work,
+ *  and the done stands through it. Two things spend it — the worker running a TOOL after the human spoke
+ *  (the message was new work), or the turn that answered it FAILING (the new work died; see below).
+ *  Deciding that by comparing timestamps means there is no sweep to forget one, and no window where a
+ *  thread that was reopened still cards as finished.
  *
  *  The comparison is `<=`, not `<`: the two instants come from different clocks (the row's is frizz's
  *  own `Date.now()`, the telemetry's is the transcript record's), and a same-millisecond tie is the
@@ -1427,6 +1430,7 @@ export function registeredDoneFence(
   done: { body: string; doneAt: number } | undefined,
   lastUserAt: string | undefined,
   lastToolCallAt?: string,
+  fault?: Pick<SessionTelemetry, "apiFault" | "lastAssistantAt">,
 ): FenceView | undefined {
   if (!done) return undefined
   const userAt = lastUserAt ? Date.parse(lastUserAt) : Number.NaN
@@ -1440,6 +1444,15 @@ export function registeredDoneFence(
   if (Number.isFinite(userAt) && userAt > done.doneAt) {
     const toolAt = lastToolCallAt ? Date.parse(lastToolCallAt) : Number.NaN
     if (Number.isFinite(toolAt) && toolAt > done.doneAt) return undefined
+    // …OR IF THE TURN THAT ANSWERED IT FAILED. The tool-call line has a hole: an API error before the
+    // first tool call leaves no tool call to see, so the human's new request died and the thread still
+    // carded as finished over it. A synthetic error record advances `lastAssistantAt` like any output,
+    // so "the newest assistant record is a fault, and it is no older than the human's message" is that
+    // failed turn. The `>=` bound is what keeps a STALE fault out: `apiFault` is cleared only by real
+    // assistant TEXT, so a fault from before the done can survive a text-less `done` tool call and
+    // still be standing — and its `lastAssistantAt` then predates the human's message.
+    const faultAt = fault?.apiFault ? Date.parse(fault.lastAssistantAt ?? "") : Number.NaN
+    if (Number.isFinite(faultAt) && faultAt >= userAt) return undefined
   }
   // `registered` is the one thing the transcript needs that the fence it replaces never carried: a fenced
   // done is drawn from the message that holds it, and this one is in no message, so the client draws it
@@ -1597,7 +1610,7 @@ function sessionThreadView(
     lastAssistant: providerError?.message, lastAssistantAt: providerError?.at,
     lastFence: undefined, lastAssistantAllDone: false,
   } : rawTele
-  const done = supersededDone || providerError ? undefined : registeredDoneFence(registries.done.get(row.slug), rawTele?.lastUserAt, rawTele?.lastToolCallAt)
+  const done = supersededDone || providerError ? undefined : registeredDoneFence(registries.done.get(row.slug), rawTele?.lastUserAt, rawTele?.lastToolCallAt, rawTele)
   const tele: SessionTelemetry | undefined = done && failedTele ? { ...failedTele, lastFence: done } : failedTele
   // A headless thread mid-turn with nobody driving it is a crash/stall, not a rest. For codex that is
   // an app-server that stopped advancing the rollout; for the broker it is a dead ownerless daemon (its

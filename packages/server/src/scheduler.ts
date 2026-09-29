@@ -597,10 +597,10 @@ function saidDone(tele: Pick<SessionTelemetry, "lastFence" | "lastAssistantAllDo
 function threadSaidDone(
   storage: Storage,
   slug: string,
-  tele: Pick<SessionTelemetry, "lastFence" | "lastAssistantAllDone" | "lastUserAt" | "lastToolCallAt" | "lastAssistantAt">,
+  tele: Pick<SessionTelemetry, "lastFence" | "lastAssistantAllDone" | "lastUserAt" | "lastToolCallAt" | "lastAssistantAt" | "apiFault">,
   armedAt?: string | null,
 ): boolean {
-  const registered = registeredDoneFence(storage.getThreadDone(slug), tele.lastUserAt, tele.lastToolCallAt) !== undefined
+  const registered = registeredDoneFence(storage.getThreadDone(slug), tele.lastUserAt, tele.lastToolCallAt, tele) !== undefined
   const fenced = saidDone(tele)
   if (!registered && !fenced) return false
   return !armReopenedTheLoop(storage, slug, tele, registered, fenced, armedAt)
@@ -2064,7 +2064,7 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
       if (
         tele.lastFence ||
         tele.pendingQuestion ||
-        registeredDoneFence(deps.storage.getThreadDone(row.slug), tele.lastUserAt, tele.lastToolCallAt) !== undefined ||
+        registeredDoneFence(deps.storage.getThreadDone(row.slug), tele.lastUserAt, tele.lastToolCallAt, tele) !== undefined ||
         // …a CURRENT one: a question the human replied past is a pivot, not this rest's sign-off.
         questionRows.some((q) => q.state === "open" && !questionRepliedPast(q, tele.lastHumanAt)) ||
         answersInFlight(questionRows, tele.lastUserAt, row.recurring_on_rest === 1 && Boolean(row.recurring_prompt?.trim())) !== undefined ||

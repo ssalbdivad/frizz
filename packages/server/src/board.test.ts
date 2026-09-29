@@ -2353,6 +2353,35 @@ test("a reply that only TALKS keeps the done standing; the first tool call spend
   assert.equal(registeredDoneFence(done, asked, "2026-08-27T01:05:02.000Z"), undefined)
 })
 
+test("a turn that FAILS after the human's new message spends the done — there is no tool call to see", () => {
+  // The human sends new work after the sign-off and the turn dies on an API error before it runs
+  // anything. Without this the thread carded as finished while the request it was just given was lost.
+  const done = { body: "done", doneAt: Date.parse("2026-08-27T01:00:00.000Z") }
+  const asked = "2026-08-27T01:05:00.000Z"
+  const failed = { apiFault: true, lastAssistantAt: "2026-08-27T01:05:03.000Z" }
+  assert.equal(registeredDoneFence(done, asked, undefined, failed), undefined)
+  // The tool calls that led up to the sign-off do not change it: the failure is what spends it.
+  assert.equal(registeredDoneFence(done, asked, "2026-08-27T00:59:59.000Z", failed), undefined)
+  // The same fault instant as the message (one clock, the transcript's) is still the failed turn.
+  assert.equal(registeredDoneFence(done, asked, undefined, { apiFault: true, lastAssistantAt: asked }), undefined)
+  // The same telemetry with no fault is a prose-only reply, and the done stands through it.
+  assert.equal(registeredDoneFence(done, asked, undefined, { apiFault: undefined, lastAssistantAt: "2026-08-27T01:05:03.000Z" })?.kind, "done")
+})
+
+test("a STALE fault from before the human's message cannot withdraw the done", () => {
+  // `apiFault` is cleared only by real assistant text, so a fault from before the sign-off can survive a
+  // text-less `done` tool call. Its newest assistant record then predates the human's message: the turn
+  // answering it has not failed (it may not have produced anything yet), so the completion stands.
+  const done = { body: "done", doneAt: Date.parse("2026-08-27T01:00:00.000Z") }
+  const asked = "2026-08-27T01:05:00.000Z"
+  assert.equal(registeredDoneFence(done, asked, undefined, { apiFault: true, lastAssistantAt: "2026-08-27T00:58:00.000Z" })?.kind, "done")
+  assert.equal(registeredDoneFence(done, asked, undefined, { apiFault: true, lastAssistantAt: "2026-08-27T01:04:59.999Z" })?.kind, "done")
+  // A fault with no human message after the done is the done's own business, not a reopening.
+  assert.equal(registeredDoneFence(done, "2026-08-27T00:59:00.000Z", undefined, { apiFault: true, lastAssistantAt: "2026-08-27T01:05:03.000Z" })?.kind, "done")
+  // An unreadable fault instant is not evidence of a failed turn.
+  assert.equal(registeredDoneFence(done, asked, undefined, { apiFault: true, lastAssistantAt: undefined })?.kind, "done")
+})
+
 test("a same-instant tie stands, because the two instants come off DIFFERENT clocks", () => {
   // The row's instant is frizz's own Date.now(); the telemetry's is the transcript record's. A worker
   // signing off on the turn a user record started is the ordinary case, not a reopening.
