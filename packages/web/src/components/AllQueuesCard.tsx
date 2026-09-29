@@ -25,6 +25,7 @@ import { questionsOwed, type AccountBackend, type ThreadView } from "@frizz/shar
 import { projectApiBase, projectRpc } from "../api/rpc.ts"
 import { ThreadProjectScope } from "../api/threadApi.tsx"
 import { displayTitle, offersRetry, queueLabelAt, queueLabelWord } from "../groups.ts"
+import { GHOST_LABEL } from "../lib/stableQueue.ts"
 import { handoffParts, projectMarkdownScope, sameProjectAddress, squareCard, threadKey, type QueuesProject } from "../lib/allQueues.ts"
 import { draftKey, draftStore, useDraftValues } from "../lib/drafts.ts"
 import { rememberFullscreenOrigin } from "../lib/fullscreenHandoff.ts"
@@ -41,6 +42,7 @@ import { crossProjectHref, innerPath, projectSlug } from "../lib/base-path.ts"
 import { QueueDismissContext } from "./ChatView.tsx"
 import { Composer } from "./Composer.tsx"
 import { InteractionStack } from "./InteractionCards.tsx"
+import { BoxSpinner } from "./BoxSpinner.tsx"
 import { AwaitingSubAgentsCard, SubAgentWaitSnoozeItems } from "./AwaitingSubAgentsCard.tsx"
 import { showsSubAgentWait } from "../lib/subAgentWait.ts"
 import { useThreadComposerControls } from "../hooks/useThreadComposerControls.tsx"
@@ -56,7 +58,7 @@ import { LogoutConfirmModal, SignInModal } from "./SignInModal.tsx"
 import { QuietTurnCard, showsQuietTurnCard } from "./QuietTurnCard.tsx"
 import { QueueShellStrip } from "./QueueShellStrip.tsx"
 import { SnoozeButton } from "./SnoozeButton.tsx"
-import { StateButton } from "./ThreadLifecycleFooter.tsx"
+import { PinButton, StateButton } from "./ThreadLifecycleFooter.tsx"
 import { Tooltip } from "./Tooltip.tsx"
 import { BLOCK_RADIUS, BLOCK_RADIUS_INNER_BOTTOM, QUEUE_WRAP, TranscriptCard } from "./TranscriptCard.tsx"
 
@@ -367,8 +369,20 @@ export const AllQueuesCard = memo(function AllQueuesCard({
               )}
               {/* Not gated on the handoff: a STALL's last record is often a tool call with no prose at
                   all, and its notice is about the process, not the message (showsRestedCard). */}
-              {showsRestedCard(thread, text) && <RestedCard thread={thread} />}
-              {showsQuietTurnCard(thread) && <QuietTurnCard thread={thread} />}
+              {/* A GHOST'S THREAD IS FROZEN from when it left the queue (lib/stableQueue.ts), so the state
+                  cards would describe a rest that is over: "Reply to continue" under a worker that woke
+                  itself on a finished shell, with only the small meta line saying otherwise (maintainer
+                  2026-09-29: "unclear what is happening"). A ghost back at work says so IN THAT SLOT, a
+                  one-line card for a one-line card, so the ghost keeps its height and nothing under it
+                  moves; a ghost that drew no state card gains none, for the same reason. */}
+              {ghost === GHOST_LABEL.working && (showsRestedCard(thread, text) || showsQuietTurnCard(thread)) ? (
+                <TranscriptCard data-rested-card="working" label="Working" aside={<BoxSpinner />} />
+              ) : (
+                <>
+                  {showsRestedCard(thread, text) && <RestedCard thread={thread} />}
+                  {showsQuietTurnCard(thread) && <QuietTurnCard thread={thread} />}
+                </>
+              )}
             </div>
 
             {/* Keyed on the rest: an answered card keeps its slot while the card holds for the worker's
@@ -389,6 +403,7 @@ export const AllQueuesCard = memo(function AllQueuesCard({
           <ThreadProjectScope projectId={project.id} projectDir={project.projectDir}>
             <footer className={`${BLOCK_RADIUS_INNER_BOTTOM} flex min-h-10 flex-wrap items-center justify-end gap-3 border-t border-border/70 bg-panel/95 px-3 py-2 text-[12px]`}>
               <SnoozeButton thread={thread} projectName={project.name} onSnoozed={onLeave} onUndone={onUnsnoozed} eventItems={showsSubAgentWait(thread) && <SubAgentWaitSnoozeItems thread={thread} onSnoozed={onLeave} onUndone={onUnsnoozed} />} />
+              <PinButton thread={thread} />
               <StateButton thread={thread} onArchived={onLeave} onDismissCancel={onReturn} command />
             </footer>
           </ThreadProjectScope>
