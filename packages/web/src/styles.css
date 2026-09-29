@@ -1485,12 +1485,12 @@ a[href] {
    would pin a GPU layer per queue row for its whole lifetime. */
 .frizz-card-slot[data-queue-leaving="true"] > .frizz-card-clip > .frizz-card-body { will-change: transform, filter; }
 /* A GHOST (lib/stableQueue.ts): the card's thread left the queue on its own while the card was on screen,
-   so the card holds its place — quiet, at full height, still usable — until it scrolls off or the thread
-   rests again. Quiet by tone only: its size and position must not change, or it moves what is under it.
-   A ghost the human clicks or tabs into is WOKEN (AllQueues.tsx): full tone, same place. A card at the top
-   of a short page never scrolls off, so without that it stayed quiet for as long as its thread worked,
-   however deliberately it was being read. */
-.frizz-card-slot[data-queue-ghost]:not([data-queue-woken]) > .frizz-card-clip { opacity: 0.5; }
+   so its place is held as an EMPTY GAP until the human's next scroll or key closes it (AllQueues.tsx).
+   Hidden, not removed: the gap is exactly the card's own height, so nothing on screen moves. The rule
+   after it goes too, or one gap would read as two rules around nothing. It replaced a half-tone card the
+   maintainer found confusing and could not act on (2026-09-29). */
+.frizz-card-slot[data-queue-ghost] > .frizz-card-clip,
+.frizz-card-slot[data-queue-ghost] + hr { visibility: hidden; }
 /* CONCEALED: its drawer is open, where it is read. It stays drawn in its place in the queue, under the
    sheet — `inert` alone takes it out of the tab order and out of reach of a click (AllQueues.tsx). */
 @media (prefers-reduced-motion: no-preference) {

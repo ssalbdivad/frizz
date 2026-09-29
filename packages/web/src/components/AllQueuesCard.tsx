@@ -25,7 +25,6 @@ import { questionsOwed, type AccountBackend, type ThreadView } from "@frizz/shar
 import { projectApiBase, projectRpc } from "../api/rpc.ts"
 import { ThreadProjectScope } from "../api/threadApi.tsx"
 import { displayTitle, offersRetry, queueLabelAt, queueLabelWord } from "../groups.ts"
-import { GHOST_LABEL } from "../lib/stableQueue.ts"
 import { handoffParts, projectMarkdownScope, sameProjectAddress, squareCard, threadKey, type QueuesProject } from "../lib/allQueues.ts"
 import { draftKey, draftStore, useDraftValues } from "../lib/drafts.ts"
 import { rememberFullscreenOrigin } from "../lib/fullscreenHandoff.ts"
@@ -45,7 +44,6 @@ import { showsRegisteredDoneCard } from "../lib/registeredDone.ts"
 import { ThreadStatusLine } from "./ThreadStatusLine.tsx"
 import { Composer } from "./Composer.tsx"
 import { InteractionStack } from "./InteractionCards.tsx"
-import { BoxSpinner } from "./BoxSpinner.tsx"
 import { AwaitingSubAgentsCard, SubAgentWaitSnoozeItems } from "./AwaitingSubAgentsCard.tsx"
 import { showsSubAgentWait } from "../lib/subAgentWait.ts"
 import { useThreadComposerControls } from "../hooks/useThreadComposerControls.tsx"
@@ -179,12 +177,10 @@ interface AllQueuesCardProps {
   leaving: boolean
   /**
    * Its thread left the queue while the card was on screen, and not by the human's hand in this tab
-   * (lib/stableQueue.ts): the card holds its place, quiet, saying where the thread went (GHOST_LABEL),
-   * until it scrolls off or the thread rests again.
+   * (lib/stableQueue.ts): the card holds its place as an empty gap of its own height, out of reach of
+   * the pointer and the keyboard, until it is closed (AllQueues.tsx) or the thread rests again.
    */
-  ghost?: string
-  /** A ghost the human clicked or tabbed into: drawn at full tone, still in its place (AllQueues.tsx). */
-  woken?: boolean
+  ghost?: boolean
   /** Said on the meta line in place of the time the card was ready, WITHOUT a ghost's dimming: a held
    *  card (`onHold`) whose worker is at work on the answer it sent. */
   status?: string
@@ -218,7 +214,6 @@ export const AllQueuesCard = memo(function AllQueuesCard({
   chip = false,
   onChoose,
   ghost,
-  woken = false,
   status,
   concealed = false,
 }: AllQueuesCardProps) {
@@ -259,7 +254,7 @@ export const AllQueuesCard = memo(function AllQueuesCard({
   }
 
   return (
-    <div data-xq-card={key} data-queue-leaving={leaving} data-queue-ghost={ghost === undefined ? undefined : true} data-queue-woken={(ghost !== undefined && woken) || undefined} data-queue-concealed={concealed || undefined} inert={concealed} className="frizz-card-slot min-w-0">
+    <div data-xq-card={key} data-queue-leaving={leaving} data-queue-ghost={ghost || undefined} aria-hidden={ghost || undefined} data-queue-concealed={concealed || undefined} inert={concealed || ghost} className="frizz-card-slot min-w-0">
       <div className="frizz-card-clip min-h-0 min-w-0">
         <article
           data-xq-card-root
@@ -278,12 +273,10 @@ export const AllQueuesCard = memo(function AllQueuesCard({
               </h3>
               <div className="mt-0.5 flex min-w-0 items-baseline gap-1.5 text-[11px] leading-tight text-muted-75">
                 {chipNode}
-                {/* A ghost says why it is quiet, on the line that said since when it was ready: the same
-                    one line, so the card keeps its height and nothing under it moves. */}
-                {(ghost ?? status) !== undefined ? (
+                {status !== undefined ? (
                   <>
                     {chip && <span aria-hidden>·</span>}
-                    <span className="min-w-0 truncate">{ghost ?? status}</span>
+                    <span className="min-w-0 truncate">{status}</span>
                   </>
                 ) : (
                   <LastActive
@@ -385,18 +378,7 @@ export const AllQueuesCard = memo(function AllQueuesCard({
               )}
               {/* Not gated on the handoff: a STALL's last record is often a tool call with no prose at
                   all, and its notice is about the process, not the message (showsRestedCard). */}
-              {/* A GHOST'S THREAD IS FROZEN from when it left the queue (lib/stableQueue.ts), so the state
-                  cards would describe a rest that is over: "Reply to continue" under a worker that woke
-                  itself on a finished shell, with only the small meta line saying otherwise (maintainer
-                  2026-09-29: "unclear what is happening"). A ghost back at work says so IN THAT SLOT, a
-                  one-line card for a one-line card, so the ghost keeps its height and nothing under it
-                  moves; a ghost that drew no state card gains none, for the same reason. */}
-              {showsRestedCard(thread, text) && (ghost === GHOST_LABEL.working && thread.crashed !== true
-                // The spinner stands in the glyph's place at the glyph's geometry — 16px, lifted by the
-                // same measured card-icon-offset (styles.css) — so it sits on the title's cap band as
-                // the lucide glyph it replaces does.
-                ? <TranscriptCard data-rested-card="working" label="Working" aside={<span className="block card-icon-offset"><BoxSpinner size={16} /></span>} />
-                : <RestedCard thread={thread} />)}
+              {showsRestedCard(thread, text) && <RestedCard thread={thread} />}
               {showsQuietTurnCard(thread) && <QuietTurnCard thread={thread} />}
               {/* The thread's TERMINALS (ThreadTerminals.tsx): a line each, and — when one sits at a prompt,
                   which is what queued this card — its live screen, so the answer is typed right here. A
@@ -460,7 +442,6 @@ function sameCard(a: AllQueuesCardProps, b: AllQueuesCardProps): boolean {
     a.chip === b.chip &&
     a.onChoose === b.onChoose &&
     a.ghost === b.ghost &&
-    a.woken === b.woken &&
     a.status === b.status &&
     a.concealed === b.concealed &&
     sameProjectAddress(a.project, b.project)
