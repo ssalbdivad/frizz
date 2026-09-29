@@ -3,6 +3,7 @@ import { store, topRoutedSlug, closeDrawersById } from "../store.ts"
 import { ownedByThisPage } from "./projectOwnership.ts"
 import { innerPath, outerPath } from "./base-path.ts"
 import { parseStandaloneThreadPath } from "./standaloneThreadRoute.ts"
+import { homeHref } from "./pageView.ts"
 
 // URL ⇄ state sync, SPA-style. Inner paths: `/` (the page), and `/thread/<slug>` (the page with that
 // thread open in the drawer STACK's topmost thread layer — `/all/<project>/thread/<slug>` in the
@@ -165,7 +166,9 @@ export function startRouter(navigate: (path: string, options: { replace: boolean
     // A NEW topmost thread pushes history; unwinding or non-thread transitions replace. `startsWith`
     // is checked against the INNER path: under a project prefix every path starts with `/all/`.
     const openingThread = currentPath().startsWith("/thread/")
-    navigate(path, { replace: !openingThread })
+    // Home is the page showing THIS TAB'S view (lib/pageView.ts): closing the last drawer goes back to
+    // `/?project=<slug>` or `/?all`, never to a bare `/` that would have to guess it again.
+    navigate(path === "/" ? homeHref() : path, { replace: !openingThread })
   }
   activeWriter = write
   const unsubscribe = subscribe(store, write)

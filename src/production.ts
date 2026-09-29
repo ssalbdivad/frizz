@@ -360,24 +360,25 @@ function ownSlug(): string | undefined {
 
 let cachedSlugPath: string | undefined;
 /**
- * Where to land: the cross-project page focused on this project (the default mode — its prompt box
- * dispatches here, and every other project's queue is beside it), the cross-project page with no
- * particular project, or the add-project dialog asking about a directory (`/?add=` opens it on `/`).
+ * Where to land: the page focused on this project (`/?project=<slug>` — the default view, whose list,
+ * queue and prompt box are this project's alone), the page showing All projects (`/?all`, for a launch from
+ * $HOME, which names no project), or the add-project dialog asking about a directory (`/?add=` opens it on
+ * `/`). The view is the page's query, not a path, so every tab keeps its own (web lib/pageView.ts).
  *
- * `/?focus=<slug>` rather than the page's own `/all/<slug>`: this launcher may be JOINING an older
- * server, whose page has no `/all` route and would draw the launching project's board there. An older
- * page ignores the query and shows its own `/`.
+ * A QUERY on `/` rather than a path because this launcher may be JOINING an older server, whose page has
+ * no such view: an older page ignores the query and shows its own `/`. A launcher older than this one
+ * sends `?focus=<slug>` for the same thing, which this page still reads as `?project=`.
  *
  * `?add=` is a REQUEST, not a registration — nothing on disk changes until the operator confirms on
  * the page, which is the only reason an unmarked directory is safe to point the launcher at at all.
  */
 function slugPath(): string {
   if (cachedSlugPath === undefined) {
-    if (launchIntent?.kind === "everything") cachedSlugPath = "/";
+    if (launchIntent?.kind === "everything") cachedSlugPath = "/?all";
     else if (launchIntent?.kind === "offer") cachedSlugPath = `/?add=${encodeURIComponent(launchIntent.directory)}`;
     else {
       const slug = ownSlug();
-      cachedSlugPath = slug ? `/?focus=${encodeURIComponent(slug)}` : "";
+      cachedSlugPath = slug ? `/?project=${encodeURIComponent(slug)}` : "";
     }
   }
   return cachedSlugPath;

@@ -34,9 +34,9 @@ function writeMirror(shown: boolean) {
 /**
  * Whether the permanent project rail is showing.
  *
- * ONE definition, because two surfaces depend on it and they must never both be absent: the rail
- * itself, and the status bar's home crumb, which exists precisely to be the way back when the rail
- * is not there. While the query is still in flight it answers with the localStorage mirror above,
+ * ONE definition, so every surface that reads it agrees. (It was two that must never both be absent —
+ * the rail and the status bar's home crumb — until the crumb went; the READY header's project switcher,
+ * which is always drawn, is the way to another project now.) While the query is still in flight it answers with the localStorage mirror above,
  * which is the server's last answer in this browser; before the mirror existed it defaulted to
  * HIDDEN, and every refresh with the rail on shifted the whole page once the answer arrived.
  *

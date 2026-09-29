@@ -1,22 +1,28 @@
-// THE CROSS-PROJECT PAGE ("Everything") — every project's queue on one page, and the default mode: `/`
-// lands here, focused on a project the address does not name (see routes.tsx CrossProjectPage).
+// THE PAGE — one project's list and queue, or every project's: `/`, showing its VIEW (lib/pageView.ts).
+//
+// FOCUSED ON A PROJECT — the default, `/?project=<slug>` — the list on the left is that project and the
+// queue on the right is its cards, and the prompt box dispatches into it. ALL PROJECTS — `/?all`, opt-in
+// from the READY header's switcher — is every project's list and ONE queue across all of them. The two are
+// the same page drawn from the same parts, not two UIs: the list's bands (ProjectList.tsx) are identical in
+// both, and focus mode is All projects with one project in it and the prompt box's picker gone.
 //
 // It is laid out as a project's own board was, one level up — the board was a floating sidebar beside a
-// 720px queue, until 2026-09-28 when this page replaced it. The list on the left is every PROJECT, each
-// with its own queue rows and running rows beneath it, in the operator's own rail order
-// (ProjectList.tsx). The queue on the right is a column of cards — ONE queue across every project, in the order each card entered it (maintainer 2026-09-28: "One queue across all
+// 720px queue, until 2026-09-28 when this page replaced it. The list on the left is the view's PROJECTS,
+// each with its own queue rows and running rows beneath it, in the operator's own rail order
+// (ProjectList.tsx). The queue on the right is a column of cards in the order each card entered it; showing
+// All projects it is ONE queue across every project (maintainer 2026-09-28: "One queue across all
 // projects"), each card wearing its project's chip (AllQueuesCard.tsx ProjectChip). It was one LANE per
 // project, in rail order, until then, and a project listed above the one being read put its whole lane
 // on top of the card the operator was reading the moment its first thread came to rest.
 //
 // NOTHING HERE LEAVES THE PAGE. There is no project page to leave for (routes.tsx), and fullscreen is a
-// choice in a drawer's own menu (ThreadMenu.tsx), not a door on a card. The page has a FOCUS — one
-// project — and the focus is the page project: the prompt box at the top of the column dispatches into
-// it, and a thread of it opens in the page's drawer stack, in place. At `/`
-// the focus is the box's own choice (the PICK, chosen in its bottom strip); opening a thread of ANOTHER
-// project moves it to that project for as long as the drawer is open (`/all/<slug>/thread/<t>`,
-// useOpenThreadInPlace), so every thread on the page is one click from its full transcript without
-// leaving the page, and closing the drawer returns home to the pick.
+// choice in a drawer's own menu (ThreadMenu.tsx), not a door on a card. The page is BOUND to one project
+// — the page project: the prompt box at the top of the column dispatches into it, and a thread of it opens
+// in the page's drawer stack, in place. Focused, that is the view's project; showing All projects, it is
+// the box's own choice (the PICK, chosen in its bottom strip). Opening a thread of ANOTHER project moves
+// it to that project for as long as the drawer is open (`/all/<slug>/thread/<t>`, useOpenThreadInPlace),
+// so every thread on the page is one click from its full transcript without leaving the page, and closing
+// the drawer returns home to the view.
 //
 // THE DRILL-DOWN, three steps, each one click, none of them leaving:
 //   1. the card — the handoff's opening lines, the questions, a reply box, Snooze and Mark as done;
@@ -25,7 +31,7 @@
 // (A card's ↗ and a project's "…" → Open board were doors to that project's board until 2026-09-28.)
 //
 // WHAT THE RAIL AND THE CARDS MUST NEVER DO is ask the page which project anything belongs to. The page
-// project is the FOCUS, and they show every project. Every read they make is either machine-wide
+// project is only what the page is BOUND to, and they may show every project. Every read they make is either machine-wide
 // (`projectsList`, `projectsQueues`) or carries its project explicitly, and every action goes through
 // that project's own client (`projectRpc`). See AllQueuesCard.tsx for the card's half of the same rule.
 // The prompt box and the drawers are the page project's, which is exactly what they should be.
@@ -38,7 +44,8 @@ import type { BoardSnapshot, ProjectCard, ProjectQueue } from "@frizz/shared"
 import { rpc } from "../api/rpc.ts"
 import { isBusy, liveQueue, mergedQueue, overlayQueues, projectMarkdownScope, queuesProjects, threadKey, type QueueEntry, type QueuesProject } from "../lib/allQueues.ts"
 import { innerPath, projectSlug } from "../lib/base-path.ts"
-import { rememberCrossProjectFocus, setQueueFilter, stepPick, useQueueFilter } from "../lib/crossProject.ts"
+import { rememberCrossProjectFocus, stepPick } from "../lib/crossProject.ts"
+import { ALL_PROJECTS, homeHref, projectViewHref, usePageView, viewHref, viewKey } from "../lib/pageView.ts"
 import { draftKey, draftStore } from "../lib/drafts.ts"
 import { QUEUE_CARD_VIEWPORT_TOP, slugsInThreadDrawers, store } from "../store.ts"
 import { useBoard } from "../hooks.ts"
@@ -56,12 +63,12 @@ import { CommandQueueCard } from "./CommandQueueCard.tsx"
 import { ProjectSquare } from "./ProjectRail.tsx"
 import { SIDEBAR_COLUMN_CLASS } from "./Sidebar.tsx"
 import { BandLabel } from "./BandLabel.tsx"
-import { homeOf, shortPath } from "./ProjectActions.tsx"
+import { homeOf, shortPath, useAddProject } from "./ProjectActions.tsx"
 import { StatusRow } from "./StatusRow.tsx"
 import { ThreadConnector } from "./ThreadConnector.tsx"
 import { DispatchForm, type DispatchDirs } from "./NewThreadModal.tsx"
 import { Menu, MenuContent, MenuItem, MenuSeparator, MenuTrigger } from "./ui/Menu.tsx"
-import { ProjectFilter } from "./ProjectFilter.tsx"
+import { ProjectSwitcher, type SwitcherProject } from "./ProjectSwitcher.tsx"
 import { AddProjectRow, ProjectList } from "./ProjectList.tsx"
 import { ThreadProjectScope } from "../api/threadApi.tsx"
 
@@ -110,6 +117,12 @@ export function AllQueuesPage() {
   const base = useMemo(() => queuesProjects(cards.data, polled, direction), [cards.data, polled, direction])
   const projects = useMemo(() => overlayQueues(base, [live, departed], direction), [base, live, departed, direction])
   const focusProject = projects.find((project) => project.slug === focus)
+  // THE VIEW (lib/pageView.ts): one project, or every project. Focused, the list and the queue are that
+  // project's alone and the prompt box is its; showing All projects, they are every project's.
+  const view = usePageView()
+  const viewed = view.kind === "project" ? projects.find((project) => project.slug === view.slug) : undefined
+  const focused = view.kind === "project"
+  const navigate = useNavigate()
   // The directories the prompt box is keyed by — and so the ones a choice of project carries its draft
   // OUT of, which the store's board cannot say while a quick run of ⌥↓ is ahead of the feed.
   const dirs = composerDirs(focus, board, focusProject)
@@ -133,7 +146,13 @@ export function AllQueuesPage() {
       slug: next.slug,
       caret: { value: box.value, start: box.selectionStart ?? box.value.length, end: box.selectionEnd ?? box.value.length, direction: box.selectionDirection ?? "none" },
     })
-    pickProject(next, dirs?.projectDir)
+    // Focused, the box's project IS the page's, so stepping it moves the page: the next project, with
+    // what was typed carried along as a pick carries it.
+    if (focused) {
+      carryDraft(draftKey.dispatch, dirs?.projectDir, next.projectDir)
+      carryDraft(draftKey.command, dirs?.projectDir, next.projectDir)
+      navigate(projectViewHref(next.slug))
+    } else pickProject(next, dirs?.projectDir)
   }
 
 
@@ -151,16 +170,10 @@ export function AllQueuesPage() {
   // Registered projects this server has not opened (still being opened after a boot, served by another
   // Frizz, or failed to open): their queues are unknown, so "nothing in any queue" would be a claim.
   const unopened = projects.filter((project) => !project.open && !project.stale).length
-  // THE QUEUE FILTER scopes the right side and nothing else (maintainer 2026-09-28: "have project filters
-  // only affect which threads are displayed on the right side and have the ui reflect that"): the list on
-  // the left keeps every project. Its control is the READY header's, over the cards it filters. A filter
-  // naming a project this machine no longer lists shows everything rather than an empty page.
-  const filterId = useQueueFilter()
-  const filtered = filterId === null ? undefined : projects.find((project) => project.id === filterId)
-  useEffect(() => {
-    if (filterId !== null && cards.data && !filtered) setQueueFilter(null)
-  }, [filterId, cards.data, filtered])
-  const shown = filtered ? [filtered] : projects
+  // What the view shows, in the list and the queue alike: its one project, or every project. A view
+  // naming a project this machine does not list is the route's to correct (routes.tsx), so for the moment
+  // before it does, the page shows nothing rather than every project.
+  const shown = focused ? (viewed ? [viewed] : []) : projects
   const [, repaint] = useState(0)
   // THE VIEWPORT LOCK (lib/viewportLock.ts), and the one thing it asks back: a render once the page is
   // still, when a ghost has scrolled off screen (it can go now that nobody sees it go) or the cards on
@@ -176,9 +189,9 @@ export function AllQueuesPage() {
   // re-filtering is the human choosing a different queue, so it starts over from the queue's own order.
   const ordered = mergedQueue(shown, direction).filter(({ project, thread }) => !leaving.hidden(threadKey(project.id, thread.id)))
   const prevSlots = useRef<QueueSlot<QueueEntry>[]>([])
-  const orderedAs = useRef(`${direction}|${filterId ?? ""}`)
-  if (orderedAs.current !== `${direction}|${filterId ?? ""}`) {
-    orderedAs.current = `${direction}|${filterId ?? ""}`
+  const orderedAs = useRef(`${direction}|${viewKey(view)}`)
+  if (orderedAs.current !== `${direction}|${viewKey(view)}`) {
+    orderedAs.current = `${direction}|${viewKey(view)}`
     prevSlots.current = []
   }
   const mayGhost = (key: string): boolean => {
@@ -208,11 +221,12 @@ export function AllQueuesPage() {
   const home = homeOf(cards.data)
   // The list drops a row only with a card being FINISHED. A thread open in a drawer keeps its row, marked
   // open: the card steps aside because the drawer is the same thread, but the list is where the reader
-  // finds their place, and a row that vanished when clicked left them nothing to find.
+  // finds their place, and a row that vanished when clicked left them nothing to find. Focused, it is the
+  // one project, and adding another is the switcher's (its last item) rather than a row of this list.
   const list = (
     <>
-      <ProjectList projects={projects} home={home} activeKey={activeKey} hidden={leaving.hidden} onQueuedRow={scrollToCard} />
-      <AddProjectRow />
+      <ProjectList projects={shown} home={home} activeKey={activeKey} hidden={leaving.hidden} onQueuedRow={scrollToCard} />
+      {!focused && <AddProjectRow />}
     </>
   )
 
@@ -224,9 +238,9 @@ export function AllQueuesPage() {
           level with the READY header's across the gutter (64 vs 59.85px at 52px). */}
       <aside aria-label="Projects" className={`${SIDEBAR_COLUMN_CLASS} !justify-start pt-[48px] max-[800px]:!pt-5`}>
         <div className="flex max-h-[calc(100vh-68px)] min-h-0 min-w-0 w-full flex-col max-[800px]:max-h-none">
-          {/* The column head: the status row — naming what the page shows —
-              and the prompt box under it: a new thread in any project without leaving, the project chosen
-              in the box's own bottom strip, beside the model. */}
+          {/* The column head: the status row, and the prompt box under it — a new thread without leaving.
+              Focused, it starts in the view's project; showing All projects, in the project chosen in the
+              box's own bottom strip, beside the model. */}
           <div className="mb-5 shrink-0 px-0.5" onKeyDown={onColumnKeyDown}>
             <StatusRow />
             <FocusedComposer
@@ -237,14 +251,16 @@ export function AllQueuesPage() {
               caret={focusComposerFor?.caret}
               onFocused={clearFocusComposerFor}
               target={
-                <ProjectPicker
-                  projects={projects}
-                  focus={focus}
-                  onPick={(project) => {
-                    setFocusComposerFor({ slug: project.slug })
-                    pickProject(project, dirs?.projectDir)
-                  }}
-                />
+                focused ? undefined : (
+                  <ProjectPicker
+                    projects={projects}
+                    focus={focus}
+                    onPick={(project) => {
+                      setFocusComposerFor({ slug: project.slug })
+                      pickProject(project, dirs?.projectDir)
+                    }}
+                  />
+                )
               }
             />
           </div>
@@ -267,36 +283,32 @@ export function AllQueuesPage() {
         ) : queues.error && !queues.data ? (
           <p className="my-auto text-center text-[13px] text-muted">Could not read the queues: {String(queues.error)}</p>
         ) : (
-          <div className={`${queue.length > 0 || filtered ? "" : "my-auto "}flex w-full min-w-0 flex-col py-8 max-[800px]:pt-2`}>
-            {queue.length > 0 || filtered ? (
-              <>
-                {/* THE INBOX, NAMED — every card below is a Ready thread, whichever project it is from — and
-                    at its right end the one control that scopes it: which projects' cards these are.
-                    `pl-[21px]` stands the glyph over the card titles, and
-                    `pr-[21px]` stands the filter over the cards' own right-hand controls. */}
-                <div data-inbox-header className="mb-3 flex min-w-0 items-center gap-3 pl-[21px] pr-[21px]">
-                  <h2 className="flex shrink-0">
-                    <BandLabel band="ready" count={ready} />
-                  </h2>
-                  <div className="ml-auto flex min-w-0 text-[12px]">
-                    <QueueFilter projects={projects} hidden={hidden} current={filtered} />
-                  </div>
-                </div>
-                {queue.length > 0 ? (
-                  queue.map((slot, index) => (
-                    <Fragment key={slot.key}>
-                      <QueueCardOf entry={slot.item} ghost={slot.ghost ? ghostLabel(projects, slot.item) : undefined} concealed={inDrawer.has(slot.key)} leaving={leaving} chip={!filtered} />
-                      {/* The rule between two cards: a sibling that FOLLOWS its card, so
-                          styles.css fades it with the card when that one leaves. */}
-                      {index < queue.length - 1 && <hr className="my-10 border-0 border-t border-border/60" />}
-                    </Fragment>
-                  ))
-                ) : (
-                  <p data-xq-filtered-empty className="mt-16 text-center text-[13px] text-muted">
-                    Nothing from {filtered!.name} is waiting on you.
-                  </p>
-                )}
-              </>
+          <div className="flex w-full min-w-0 flex-col py-8 max-[800px]:pt-2">
+            {/* THE INBOX, NAMED — every card below is a Ready thread — and at its right end the one control
+                that says what the page shows: which project, or All projects. Always drawn, empty queue or
+                not, since it is also the way to every other project. `pl-[21px]` stands the glyph over the
+                card titles, and `pr-[21px]` stands the switcher over the cards' own right-hand controls. */}
+            <div data-inbox-header className="mb-3 flex min-w-0 items-center gap-3 pl-[21px] pr-[21px]">
+              <h2 className="flex shrink-0">
+                <BandLabel band="ready" count={ready} />
+              </h2>
+              <div className="ml-auto flex min-w-0 text-[12px]">
+                <Switcher projects={projects} hidden={hidden} current={viewed} />
+              </div>
+            </div>
+            {queue.length > 0 ? (
+              queue.map((slot, index) => (
+                <Fragment key={slot.key}>
+                  <QueueCardOf entry={slot.item} ghost={slot.ghost ? ghostLabel(projects, slot.item) : undefined} concealed={inDrawer.has(slot.key)} leaving={leaving} chip={!focused} />
+                  {/* The rule between two cards: a sibling that FOLLOWS its card, so
+                      styles.css fades it with the card when that one leaves. */}
+                  {index < queue.length - 1 && <hr className="my-10 border-0 border-t border-border/60" />}
+                </Fragment>
+              ))
+            ) : focused ? (
+              <p data-xq-focus-empty className="mt-16 text-center text-[13px] text-muted">
+                Nothing in {viewed?.name ?? "this project"} is waiting on you.
+              </p>
             ) : (
               <EmptyQueues unopened={unopened} />
             )}
@@ -314,32 +326,45 @@ export function AllQueuesPage() {
 }
 
 /**
- * The READY header's filter (ProjectFilter.tsx): which projects' cards the queue shows — every project's,
- * or one's. Per tab (lib/crossProject.ts), and it scopes this column only: the list on the left keeps
- * every project, since that is where the rest of each one is.
+ * The READY header's project switcher (ProjectSwitcher.tsx): the project the page is focused on, or All
+ * projects. Choosing is a navigation to that view (lib/pageView.ts), so Back returns to the one before.
+ * Leaving a project for All projects carries it over as the prompt box's pick, so the box there starts
+ * where the operator just was.
  */
-function QueueFilter({ projects, hidden, current }: { projects: QueuesProject[]; hidden: (key: string) => boolean; current: QueuesProject | undefined }) {
-  // The list's own order (ProjectList): busy projects first, then the quiet ones.
-  const ordered = [...projects.filter(isBusy), ...projects.filter((project) => !isBusy(project))]
-  const items = ordered.map((project) => ({
+function Switcher({ projects, hidden, current }: { projects: QueuesProject[]; hidden: (key: string) => boolean; current: QueuesProject | undefined }) {
+  const navigate = useNavigate()
+  const add = useAddProject()
+  // The list's own order (ProjectList): busy projects first, then the quiet ones; Home last, on its own.
+  const listed = projects.filter((project) => !project.card?.home)
+  const ordered = [...listed.filter(isBusy), ...listed.filter((project) => !isBusy(project))]
+  const item = (project: QueuesProject): SwitcherProject => ({
     id: project.id,
     slug: project.slug,
     name: project.name,
     card: project.card ?? fallbackCard(project),
     ready: project.queued.filter((t) => !hidden(threadKey(project.id, t.id))).length,
-  }))
+    note: project.stale ? "Missing" : undefined,
+  })
+  const homeProject = projects.find((project) => project.card?.home)
+  const items = ordered.map(item)
+  const home = homeProject && item(homeProject)
   // A different set of cards is a different page to read, so it is read from its top.
-  const choose = (id: string | null) => {
-    setQueueFilter(id)
+  const go = (href: string) => {
+    navigate(href)
     glideTo(() => 0)
   }
   return (
-    <ProjectFilter
+    <ProjectSwitcher
       projects={items}
-      current={current && items.find((item) => item.id === current.id)}
-      onEverything={() => choose(null)}
-      onProject={(project) => choose(project.id)}
-      onClear={() => choose(null)}
+      home={home}
+      homeHint={homeProject?.card && shortPath(homeProject.card.path, homeProject.homeDir)}
+      current={current && (current.card?.home ? home : items.find((entry) => entry.id === current.id))}
+      onAll={() => {
+        if (current) rememberCrossProjectFocus(current.id)
+        go(viewHref(ALL_PROJECTS))
+      }}
+      onProject={(project) => go(projectViewHref(project.slug))}
+      onAdd={add.start}
     />
   )
 }
@@ -347,11 +372,13 @@ function QueueFilter({ projects, hidden, current }: { projects: QueuesProject[];
 // ---- The column head --------------------------------------------------------------------------------
 
 /**
- * WHICH PROJECT A NEW THREAD GOES TO — the first pill in the prompt box's bottom strip, beside the model
- * (NewThreadModal.tsx DispatchForm `target`), drawn as that pill is: a setting of the thread about to
- * start, not a view. Choosing one makes it the PICK (lib/crossProject.ts), which `/` is focused on and
- * the box dispatches into — remembered, never in the address. ⌥↓ and ⌥↑ in the box step it down and up
- * this menu (AllQueuesPage), which its tooltip says wherever there is another to step to.
+ * WHICH PROJECT A NEW THREAD GOES TO, while the page shows All projects — the first pill in the prompt
+ * box's bottom strip, beside the model (NewThreadModal.tsx DispatchForm `target`), drawn as that pill is: a
+ * setting of the thread about to start, not a view. Choosing one makes it the PICK (lib/crossProject.ts),
+ * which All projects is bound to and the box dispatches into — remembered, never in the address. ⌥↓ and ⌥↑
+ * in the box step it down and up this menu (AllQueuesPage), which its tooltip says wherever there is
+ * another to step to. Focused on a project there is no picker: the box starts in the page's project, and
+ * ⌥↓/⌥↑ step the page itself.
  */
 function ProjectPicker({ projects, focus, onPick }: { projects: QueuesProject[]; focus: string | undefined; onPick: (project: QueuesProject) => void }) {
   const current = projects.find((project) => project.slug === focus)
@@ -413,8 +440,8 @@ function ProjectPicker({ projects, focus, onPick }: { projects: QueuesProject[];
 }
 
 /**
- * CHOOSE the project a new thread goes to, in the prompt box's picker or with ⌥↑/⌥↓ in the box.
- * Remembered as the pick (lib/crossProject.ts), which `/` is focused on.
+ * CHOOSE the project a new thread goes to while the page shows All projects, in the prompt box's picker
+ * or with ⌥↑/⌥↓ in the box. Remembered as the pick (lib/crossProject.ts), which All projects is bound to.
  *
  * What was typed in the prompt box goes WITH the choice. The box is one box whose target just changed,
  * and the commonest reason to change it is noticing, mid-prompt, that it pointed at the wrong project —
@@ -430,9 +457,9 @@ function usePickProject(): (project: QueuesProject, from: string | undefined) =>
       carryDraft(draftKey.dispatch, from, project.projectDir)
       carryDraft(draftKey.command, from, project.projectDir)
       rememberCrossProjectFocus(project.id)
-      // A drawer open on the page has it focused on the drawer's project, and the box follows the focus,
-      // so aiming the box closes the drawers: home, where the focus is the pick.
-      if (innerPath() !== "/") navigate("/", { replace: true })
+      // A drawer open on the page has it bound to the drawer's project, and the box follows the binding,
+      // so aiming the box closes the drawers: home, where the binding is the pick.
+      if (innerPath() !== "/") navigate(homeHref(), { replace: true })
     },
     [navigate],
   )
@@ -618,8 +645,8 @@ function placeCaret(box: HTMLTextAreaElement, caret: Caret | undefined): void {
 // ---- The queue (the workpane) -----------------------------------------------------------------------
 
 /**
- * One card of the one queue, whichever project it is from, wearing that project's chip on its meta line
- * — a filter to that project, as the lane headers were — unless the queue is already filtered to it.
+ * One card of the queue, whichever project it is from — showing All projects, wearing that project's chip
+ * on its meta line, which focuses the page on that project.
  *
  * EVERYTHING INSIDE RENDERS AS ITS PROJECT. The markdown scope points a `#123` at the card's repo, a
  * relative path at its directory and a `/thread/<slug>` link at that thread on THIS page (opened in
@@ -627,11 +654,12 @@ function placeCaret(box: HTMLTextAreaElement, caret: Caret | undefined): void {
  */
 function QueueCardOf({ entry, ghost, concealed, leaving, chip }: { entry: QueueEntry; ghost: string | undefined; concealed: boolean; leaving: LeavingCards; chip: boolean }) {
   const { project, thread } = entry
-  // The READY header's filter, chosen from the card: a different set of cards is read from its top.
+  // The card's project, chosen from its chip or mark: the page focused on it, read from its top.
+  const navigate = useNavigate()
   const choose = useCallback((to: QueuesProject) => {
-    setQueueFilter(to.id)
+    navigate(projectViewHref(to.slug))
     glideTo(() => 0)
-  }, [])
+  }, [navigate])
   const openInPlace = useOpenThreadInPlace()
   const scope = useMemo(
     () => projectMarkdownScope(project),
@@ -678,8 +706,8 @@ function QueueCardOf({ entry, ghost, concealed, leaving, chip }: { entry: QueueE
 }
 
 /**
- * Inbox zero — the queue empty in every project, admitting the ones this server
- * has not opened, whose queues it cannot see.
+ * Inbox zero, showing All projects — the queue empty in every project, admitting the ones this server has
+ * not opened, whose queues it cannot see.
  */
 function EmptyQueues({ unopened }: { unopened: number }) {
   return (

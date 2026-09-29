@@ -1,8 +1,8 @@
 // THE THREADS, STRUNG ON THEIR PROJECTS — the cross-project page's rail, and one thread out of it.
 //
 // A two-strand cord in the accent — gold in the dark theme, blue in the light — hangs from each project's
-// square down the rail's icon column, through the indicator of every thread row under it, twisted once in
-// each gap between two icons (lib/threadConnector.ts `twist`): a project reads as its threads twisted
+// square down the rail's icon column, through the glyph of every band name and the indicator of every
+// thread row under it, twisted once in each gap between two icons (lib/threadConnector.ts `twist`): a project reads as its threads twisted
 // together, before any row says what state it is in. At 70% it is brighter than the thread out of the rail
 // (55%) and still the lighter mark: it only ever paints short 1px stitches in the gaps between icons, where
 // that thread is one long stroke (30% was tried first and read as olive, not gold). It passes BEHIND every
@@ -93,11 +93,12 @@ interface Rail {
 }
 
 /**
- * The rail's icon column: a project's square, then the indicator of each thread row listed under it
- * (`data-xq-indicator`, ProjectList.tsx and Sidebar.tsx). Only rows that TOUCH are strung together, so
- * whatever sits between two of them — a thread's sub-agents — cuts the cord there, and an open project's
- * bands, in a drill of their own below its rows, are never on it. Rows scrolled out of the list count too:
- * a cord runs on past the list's edge and is cut there, as the rows are.
+ * The rail's icon column: a project's square, then the glyph of each band name and the indicator of each
+ * thread row listed under it (`data-xq-indicator`, ProjectList.tsx and Sidebar.tsx) — so a band's name is
+ * strung on its project's cord like a row, and the names cost the cord nothing. Only rows that TOUCH are
+ * strung together, so whatever sits between two of them — a thread's sub-agents — cuts the cord there, and
+ * an open project's quiet bands, in a container of their own below the counts, are never on it. Rows
+ * scrolled out of the list count too: a cord runs on past the list's edge and is cut there, as the rows are.
  */
 function readRail(dpr: number): Rail | null {
   const list = document.querySelector<HTMLElement>("[data-xq-rail]")
@@ -114,7 +115,7 @@ function readRail(dpr: number): Rail | null {
   }
   for (const project of list.querySelectorAll<HTMLElement>("[data-xq-rail-project]")) {
     let bottom = NaN
-    for (const row of project.querySelectorAll<HTMLElement>(":scope > [data-xq-project-row], :scope > [data-xq-thread-row]")) {
+    for (const row of project.querySelectorAll<HTMLElement>(":scope > [data-xq-project-row], :scope > [data-xq-band-label], :scope > [data-xq-thread-row]")) {
       const slot = row.querySelector<HTMLElement>("[data-xq-indicator]")
       const r = row.getBoundingClientRect()
       if (!slot || Math.abs(r.top - bottom) > 1) tie()
