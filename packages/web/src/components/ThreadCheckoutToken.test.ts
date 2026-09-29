@@ -26,6 +26,7 @@ test("a worktree reads as its folder's name beside the git-folder glyph", () => 
   assert.match(html, /text-muted-60/, "a step quieter than the meta line around it")
   assert.match(html, /max-w-\[16ch\] truncate/)
   assert.match(html, /self-baseline translate-y-\[calc\(0\.5em_-_0\.5cap\)\]/, "the glyph sits on the cap band by the browser's own cap unit")
+  assert.match(html, /-mt-\[1em\]/, "and adds no height above the text's line box")
 })
 
 test("a folder outside the project takes the plain folder glyph", () => {

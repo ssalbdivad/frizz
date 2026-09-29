@@ -165,11 +165,27 @@ function TerminalLine({ terminal, onOpen }: { terminal: ThreadTerminal; onOpen: 
 // (BandLabel.tsx: at 11px a round head reads as an emoji), and the terminal glyph is the one your own
 // terminals already wore.
 //
-// GEOMETRY: centred on the label's cap band by the browser's own `cap` unit (DONE_ICON above), which
-// needs no per-font constant. Both glyphs fill their 24-unit viewBox symmetrically — lucide's bot inks
-// y 4–20 (the antenna to the chin), the terminal square y 3–21 — so the box centre IS the ink centre.
-// Measured in the unified-terminals fixture (sans, 11.5px row, dsf 6): see the handoff's optics table.
+// GEOMETRY: centred on the LABEL's cap band by the browser's own `cap` unit, which needs no per-font
+// constant. Both glyphs fill their 24-unit viewBox symmetrically (lucide's bot inks y 3–21 with its
+// stroke, the antenna to the chin; the terminal square y 2–22), so the box centre IS the ink centre.
+//
+// `translate-y-[calc(0.5em_-_0.5cap)]` assumes the glyph's box BOTTOM sits on the text baseline, and in
+// an `items-center` row nothing puts it there: the first cut (DONE_ICON alone) centred the box on the
+// flex line and then pushed it DOWN, and on the live stack the glyph's ink centre measured 3.3px below
+// the label's cap band (pixels, dsf 8, sans; the label's baseline at 10.00, the glyph's ink 4.50–14.12).
+// So the slot is its own `items-baseline` line, and a zero-width strut in the LABEL's font gives it the
+// label's baseline: the strut's line box is the label's (same font, size and line-height), and both are
+// centred on the one flex line, so the two baselines coincide wherever the row sits. The glyph's bottom
+// then rests on that baseline and the translate lifts its centre onto the cap band. The arrow and the
+// tag keep the ops strip's `items-center`, so these rows' marks stay where the AGENT rows' are.
+// `-mt-[1em]` keeps the glyph from ADDING height above that baseline: a 1em box standing on it rose
+// 1.9px above the strut's line box, grew the slot past the label's box (the row went 16.43 → 17.20px),
+// and re-centring the taller slot put its baseline 0.94px under the label's. With the margin the glyph's
+// margin box is zero-tall at the baseline, so the slot is exactly the strut's box.
 const OWNER_GLYPH = { agent: Bot, human: SquareTerminal } as const
+const OWNER_SLOT = `${CHILD_MARK_SLOT_CLASS} items-baseline`
+const LABEL_STRUT = "font-mono-keep text-[11px]"
+const OWNER_ICON = `${DONE_ICON} self-baseline -mt-[1em]`
 
 // Liveness in the rail mark's vocabulary: the shell's azure while it runs (pulsing on the dot's own
 // 1.25s cadence), breathing when quiet, the attention yellow and STILL at a prompt, muted once finished,
@@ -253,8 +269,9 @@ export function ProcessRow({ process: p, slug, lines, watched, onOpen }: {
   const identity = (
     <>
       <span aria-hidden className={CHILD_ARROW_CLASS}>{CHILD_ARROW}</span>
-      <span className={CHILD_MARK_SLOT_CLASS}>
-        <Glyph aria-hidden className={`${DONE_ICON} ${PROCESS_HUE[p.state]}`} data-process-mark={p.owner} data-running-indicator={RUNNING_INDICATOR[p.state]} />
+      <span className={OWNER_SLOT}>
+        <span aria-hidden className={LABEL_STRUT}>{"\u200b"}</span>
+        <Glyph aria-hidden className={`${OWNER_ICON} ${PROCESS_HUE[p.state]}`} data-process-mark={p.owner} data-running-indicator={RUNNING_INDICATOR[p.state]} />
       </span>
       <span className={CHILD_KIND_TAG_CLASS}>TERM</span>
       <span className={`font-mono-keep min-w-0 truncate text-[11px] text-muted-70 ${onOpen ? "group-hover:text-fg/80 group-hover:underline" : ""}`}>{p.label}</span>
@@ -307,7 +324,14 @@ export function ProcessRow({ process: p, slug, lines, watched, onOpen }: {
         </button>
       )}
       {readings.length > 0 && (
-        <span className="ml-auto flex min-w-0 shrink-0 items-center gap-1 pl-1.5 text-muted-40">
+        // LIFTED ONTO THE LABEL'S BASELINE. The label is mono 11px and the readings sans 11.5px, and two
+        // boxes centred on one flex line put their baselines where each font's ascent/descent balance
+        // says — measured on the live stack (sans UI, dsf 2 geometry): the readings sat 1.64px under the
+        // label's baseline, so "probe · 12m" read as dropped. No CSS unit derives that (it is the
+        // difference of two fonts' ascent-minus-descent), so this is a measured constant: 1.64 / 11.5 =
+        // 0.143em, for the mono label against the sans readings. ChildOpRow's rows need none — their
+        // label is the readings' own sans. Re-measure if either font or size moves.
+        <span className="ml-auto flex min-w-0 shrink-0 -translate-y-[0.143em] items-center gap-1 pl-1.5 text-muted-40">
           {readings.flatMap((node, i) => (i === 0 ? [node] : [<span key={`sep${i}`} aria-hidden className="text-muted-25">·</span>, node]))}
         </span>
       )}

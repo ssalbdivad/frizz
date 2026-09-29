@@ -17,7 +17,11 @@ import { abbreviateHome } from "../lib/paths.ts"
 // line holds it — the drawer header's `items-center` line or the queue card's `items-baseline` one. On it,
 // `self-baseline` + `translate-y-[calc(0.5em_-_0.5cap)]` puts a symmetric 1em glyph's centre on the text's
 // cap band in any font at any size (the same browser-computed correction as ThreadTerminals' DONE_ICON), so
-// there is no per-font constant here to re-measure.
+// there is no per-font constant here to re-measure. `-mt-[1em]` stops that 1em box, standing on the
+// baseline, from rising above the text's own line box: without it the token was taller than the time
+// beside it, and the drawer header's `items-center` line then set its baseline 0.5px under the time's.
+// Measured on the live stack (sans, 11px, dsf 2 geometry): glyph box centre 0.04px from the text's cap
+// band, ink centre 0.27px low (FolderGit2's ink sits a hair low in its viewBox; sub-pixel, left alone).
 
 /** The token's text: the checkout's own folder name, the part that tells two worktrees apart. */
 export function checkoutName(dir: string): string {
@@ -42,7 +46,7 @@ export function ThreadCheckoutToken({ checkout, homeDir, lead }: { checkout: Wor
         title={checkoutTitle(checkout, homeDir)}
         className="inline-flex shrink-0 items-baseline gap-[0.25em] text-muted-60"
       >
-        <Glyph aria-hidden className="h-[1em] w-[1em] shrink-0 self-baseline translate-y-[calc(0.5em_-_0.5cap)]" />
+        <Glyph aria-hidden className="-mt-[1em] h-[1em] w-[1em] shrink-0 self-baseline translate-y-[calc(0.5em_-_0.5cap)]" />
         <span className="max-w-[16ch] truncate">{checkoutName(checkout.dir)}</span>
       </span>
     </>

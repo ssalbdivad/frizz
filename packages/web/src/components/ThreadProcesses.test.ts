@@ -27,7 +27,7 @@ const withQuery = (node: ReturnType<typeof createElement>) =>
 test("the owner glyph sits IN the mark slot: a bot for the agent's, the terminal square for yours", () => {
   const [agent] = processes({ bgShells: [shell()] })
   const [human] = processes({ terminals: [term()] })
-  const slot = (html: string) => html.slice(html.indexOf(`class="${CHILD_MARK_SLOT_CLASS}"`), html.indexOf("frizz-kind-tag"))
+  const slot = (html: string) => html.slice(html.indexOf(`class="${CHILD_MARK_SLOT_CLASS} items-baseline"`), html.indexOf("frizz-kind-tag"))
   assert.match(slot(row(agent!)), /lucide-bot/)
   assert.match(slot(row(human!)), /lucide-square-terminal/)
   assert.doesNotMatch(slot(row(agent!)), /lucide-square-terminal/)
@@ -39,9 +39,11 @@ test("every row has exactly one TERM tag and nothing extra before its label — 
     const html = row(p, { onOpen: () => {} })
     assert.equal(html.split("frizz-kind-tag").length - 1, 1, `${p.key}: one kind tag`)
     assert.match(html, />TERM<\/span>/)
-    // Between the button's start and the label: the arrow, the one slot, the tag — nothing else.
-    const identity = html.slice(html.indexOf("<button"), html.indexOf("font-mono-keep"))
-    assert.equal(identity.split("<span").length - 1, 4, `${p.key}: arrow, slot, tag, and the label's own span`)
+    // Between the button's start and the label: the arrow, the one slot (holding the glyph and the
+    // zero-width strut that lends it the label's baseline), the tag — nothing else.
+    const identity = html.slice(html.indexOf("<button"), html.indexOf("font-mono-keep min-w-0 truncate"))
+    assert.equal(identity.split("<span").length - 1, 5, `${p.key}: arrow, slot, strut, tag, and the label's own span`)
+    assert.match(identity, /items-baseline"><span aria-hidden="true" class="font-mono-keep text-\[11px\]">\u200b<\/span><svg[^>]*-mt-\[1em\]/, `${p.key}: the glyph stands on the label's baseline`)
   }
 })
 
