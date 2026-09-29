@@ -5,6 +5,7 @@ import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { createStorage, type SessionRow, type Storage } from "./storage.ts"
 import { createScheduler } from "./scheduler.ts"
+import { WAKE_QUIET_WINDOW_MS } from "./wake-store.ts"
 import type { BgShellView, SessionTelemetry, Tailer, TurnState } from "./tailer.ts"
 import {
   declaredShellBudgetMs,
@@ -72,13 +73,21 @@ function tele(shells: BgShellView[], turn: TurnState = "idle"): SessionTelemetry
   return { turn, permPrompt: false, subAgents: [], bgShells: shells, pendingQuestion: false }
 }
 
-function harness(opts: { stoppable?: boolean; stopThrows?: boolean } = {}) {
+function harness(opts: {
+  stoppable?: boolean
+  stopThrows?: boolean
+  quietWindowMs?: number
+  /** The transport refuses every wake until this instant — a delivery that lags its enqueue. */
+  resumeFailsUntilMs?: number
+  delivery?: { retryBaseMs?: number; retryMaxMs?: number; deliveryLeaseMs?: number; maxDeliveryAttempts?: number }
+  wakeRuntimeState?: () => "alive" | "dead" | "unknown"
+} = {}) {
   const dir = mkdtempSync(join(tmpdir(), "frizz-shell-budget-"))
   const dbPath = join(dir, "ui.db")
   let storage: Storage = createStorage(dbPath, "p")
   const teleMap = new Map<string, SessionTelemetry>()
-  const resumes: { slug: string; message: string; deliveryId: string }[] = []
-  const stops: { slug: string; id: string; reason: ShellStopReason; notify: boolean }[] = []
+  const resumes: { slug: string; message: string; deliveryId: string; at: number }[] = []
+  const stops: { slug: string; id: string; reason: ShellStopReason; notify: boolean; at: number }[] = []
   const clock = { ms: START }
   const tailer: Tailer = {
     get: (slug) => teleMap.get(slug), foreignIds: () => [], subAgent: () => undefined,
@@ -87,17 +96,22 @@ function harness(opts: { stoppable?: boolean; stopThrows?: boolean } = {}) {
   const make = () => createScheduler({
     storage,
     tailer,
-    resume: (slug, message, deliveryId) => void resumes.push({ slug, message, deliveryId }),
+    resume: (slug, message, deliveryId) => {
+      if (opts.resumeFailsUntilMs !== undefined && clock.ms < opts.resumeFailsUntilMs) throw new Error("socket down")
+      resumes.push({ slug, message, deliveryId, at: clock.ms })
+    },
     now: () => clock.ms,
     fetchPr: async () => undefined,
     fetchGithubReview: async () => [],
     log: () => {},
-    wakeQuietWindowMs: 0,
+    wakeQuietWindowMs: opts.quietWindowMs ?? 0,
+    ...opts.delivery,
+    ...(opts.wakeRuntimeState ? { wakeRuntimeState: opts.wakeRuntimeState } : {}),
     shellControl: {
       stoppable: () => opts.stoppable !== false,
       stop: async (slug, id, reason, stopOpts) => {
         if (opts.stopThrows) throw new Error("daemon went away")
-        stops.push({ slug, id, reason, notify: stopOpts.notify })
+        stops.push({ slug, id, reason, notify: stopOpts.notify, at: clock.ms })
         // The real stop retires the row from tracking; so does this.
         const t = teleMap.get(slug)
         if (t) teleMap.set(slug, { ...t, bgShells: t.bgShells.filter((s) => s.id !== id) })
@@ -118,7 +132,7 @@ function harness(opts: { stoppable?: boolean; stopThrows?: boolean } = {}) {
   }
 }
 
-const warnings = (resumes: { message: string }[]) => resumes.filter((r) => /past its .* budget/.test(r.message))
+const warnings = <R extends { message: string }>(resumes: R[]): R[] => resumes.filter((r) => /past its .* budget/.test(r.message))
 
 test("inside its budget a shell is left alone; past it, ONE warning — across passes and a restart", async () => {
   const h = harness()
@@ -214,6 +228,98 @@ test("the grace counts from the WARNING: a server down across the deadline still
     h.clock.ms += SHELL_BUDGET_GRACE_MS
     await s.tick()
     assert.equal(h.stops.length, 1)
+    await s.stop()
+  } finally {
+    h.cleanup()
+  }
+})
+
+// ---- THE GRACE RUNS FROM DELIVERY (2026-09-29) ----
+//
+// Observed on a real stack: two shells whose warnings fell due 8s apart were DELIVERED ~5m apart — the
+// second was held by the thread's quiet window, opened by the first — while the kill clock ran from the
+// instant each warning was QUEUED. The second worker got ~5 of its 10 minutes. These drive the real
+// scheduler + outbox on a 10s tick, the production cadence, and read the grace off what the worker
+// actually received.
+
+/** Tick the scheduler every 10s from `from` to `to`, as production does. */
+async function run(h: { clock: { ms: number } }, s: { tick(): Promise<void> }, from: number, to: number): Promise<void> {
+  for (h.clock.ms = from; h.clock.ms <= to; h.clock.ms += 10_000) await s.tick()
+}
+
+test("two shells due 8s apart under the REAL quiet window: both warnings land promptly, each gets its full grace from delivery", async () => {
+  const h = harness({ quietWindowMs: WAKE_QUIET_WINDOW_MS })
+  try {
+    h.storage.upsertSession(row("t"))
+    h.tele.set("t", tele([
+      shell({ id: "toolu_a", taskId: "ba", label: "sleep 3600", budgetMs: HOUR }),
+      shell({ id: "toolu_b", taskId: "bb", label: "sleep 3601", budgetMs: HOUR + 8_000 }),
+    ]))
+    const s = h.make()
+    await run(h, s, START + HOUR + 5_000, START + HOUR + 40 * 60_000)
+    for (const [taskId, id, deadline] of [["ba", "toolu_a", START + HOUR], ["bb", "toolu_b", START + HOUR + 8_000]] as const) {
+      const warned = h.resumes.find((r) => r.message.includes(`\`${taskId}\``) && /past its/.test(r.message))
+      const stop = h.stops.find((x) => x.id === id)
+      assert.ok(warned, `${taskId} was warned`)
+      assert.ok(stop, `${taskId} was stopped`)
+      assert.ok(warned.at - deadline <= 20_000, `${taskId}'s warning lands within two ticks of its deadline, not a quiet window later (${(warned.at - deadline) / 1000}s)`)
+      assert.ok(stop.at - warned.at >= SHELL_BUDGET_GRACE_MS, `${taskId} gets its full grace after the warning REACHED it (${(stop.at - warned.at) / 1000}s)`)
+      assert.ok(stop.at - warned.at <= SHELL_BUDGET_GRACE_MS + 10_000, `…and is stopped within a tick of it running out`)
+    }
+    await s.stop()
+  } finally {
+    h.cleanup()
+  }
+})
+
+test("a warning DELIVERED late still gets its full grace — the clock runs from delivery, not from the queue", async () => {
+  const deadline = START + HOUR
+  // The transport is down for the first six minutes past the deadline; the wake is retried every tick.
+  const h = harness({ resumeFailsUntilMs: deadline + 6 * 60_000, delivery: { retryBaseMs: 1, retryMaxMs: 1, deliveryLeaseMs: 1, maxDeliveryAttempts: 1_000 } })
+  try {
+    h.storage.upsertSession(row("t"))
+    h.tele.set("t", tele([shell()]))
+    const s = h.make()
+    await run(h, s, deadline + 5_000, deadline + 30 * 60_000)
+    const warned = warnings(h.resumes)
+    assert.equal(warned.length, 1)
+    assert.ok(warned[0]!.at >= deadline + 6 * 60_000, "control: the delivery really did lag")
+    assert.equal(h.stops.length, 1)
+    assert.ok(h.stops[0]!.at - warned[0]!.at >= SHELL_BUDGET_GRACE_MS, `full grace after delivery (${(h.stops[0]!.at - warned[0]!.at) / 1000}s)`)
+    await s.stop()
+  } finally {
+    h.cleanup()
+  }
+})
+
+test("SENT to a live runtime counts as delivered: the grace runs from the send, not from the later confirmation", async () => {
+  const h = harness({ wakeRuntimeState: () => "alive", resumeFailsUntilMs: START + HOUR + 3 * 60_000, delivery: { retryBaseMs: 1, retryMaxMs: 1, deliveryLeaseMs: 1, maxDeliveryAttempts: 1_000 } })
+  try {
+    h.storage.upsertSession(row("t"))
+    h.tele.set("t", tele([shell()]))
+    const s = h.make()
+    await run(h, s, START + HOUR + 5_000, START + HOUR + 30 * 60_000)
+    const warned = warnings(h.resumes)
+    assert.equal(warned.length, 1)
+    assert.equal(h.stops.length, 1)
+    const grace = h.stops[0]!.at - warned[0]!.at
+    assert.ok(grace >= SHELL_BUDGET_GRACE_MS && grace <= SHELL_BUDGET_GRACE_MS + 10_000, `grace from the send (${grace / 1000}s)`)
+    await s.stop()
+  } finally {
+    h.cleanup()
+  }
+})
+
+test("a warning that can NEVER be delivered does not keep the shell alive: the clock falls back to when it was queued", async () => {
+  const h = harness({ resumeFailsUntilMs: Number.POSITIVE_INFINITY, delivery: { retryBaseMs: 1, retryMaxMs: 1, deliveryLeaseMs: 1, maxDeliveryAttempts: 3 } })
+  try {
+    h.storage.upsertSession(row("t"))
+    h.tele.set("t", tele([shell()]))
+    const s = h.make()
+    await run(h, s, START + HOUR + 5_000, START + HOUR + 30 * 60_000)
+    assert.equal(warnings(h.resumes).length, 0, "control: nothing ever reached the worker")
+    assert.equal(h.stops.length, 1, "the exhausted warning does not hold the kill forever")
+    assert.ok(h.stops[0]!.at - (START + HOUR + 5_000) <= SHELL_BUDGET_GRACE_MS + 10_000)
     await s.stop()
   } finally {
     h.cleanup()

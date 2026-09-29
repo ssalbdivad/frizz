@@ -25,7 +25,7 @@ import type { ShellBudgetRow, Storage } from "./storage.ts"
 //    ever gets one.
 //  · ENFORCED only once declared: past the deadline the worker gets ONE wake (scheduler SOURCE 13),
 //    mid-turn if busy — keep it (`extend_shell`) or stop it — and silence for SHELL_BUDGET_GRACE_MS
-//    after that wake ends it through the operator's own × path.
+//    after that wake REACHES the worker ends it through the operator's own × path.
 //
 // WHAT KEEPS AN UNBUDGETED SHELL HONEST is visibility, not a clock: every running shell is on the
 // thread's drawer strip and its queue card, with its age and a Stop control (web QueueShellStrip /
@@ -34,8 +34,9 @@ import type { ShellBudgetRow, Storage } from "./storage.ts"
 // A `watch` on the shell MOVES its deadline to the watch's own expiry — see resolveShellBudget.
 //
 // The numbers:
-//  · GRACE 10m after the warning is queued, not after the deadline: a server that was down across the
-//    deadline must still give the worker its ten minutes to answer before anything is killed.
+//  · GRACE 10m after the warning is DELIVERED — not after the deadline, and not after it was queued: a
+//    server that was down across the deadline, or a wake that sat in the outbox, must still leave the
+//    worker its full ten minutes to answer before anything is killed (scheduler shellBudgetGraceFrom).
 //  · MAX 24h per declaration — the same ceiling as BASH_MAX_TIMEOUT_MS and a `watch`'s `for:`
 //    (AWAITING_FOR_MAX_MS). A shell that must outlive a day is re-declared, one day at a time — or
 //    launched without a budget at all.
