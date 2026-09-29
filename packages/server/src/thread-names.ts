@@ -1,0 +1,378 @@
+import { sessionTitleLocked, type SessionRow, type Storage } from "./storage.ts"
+import type { ClaudeOneShot, ClaudeOneShotRequest } from "./backend/claude-oneshot.ts"
+
+// A THREAD'S NAME AND ITS STATUS ARE TWO DIFFERENT THINGS (maintainer 2026-09-29).
+//
+// The NAME is one or two words: the SUBJECT of the thread — "Shell budgets", "Focus mode", "ArkType
+// perf" — never the action taken ("Fix the shell budget default"). In his words: "choose ideal two words
+// to differentiate not necessarily based on prompt but best 1 or 2 word summary of intent - the sort of
+// subject of the prompt rather than exactly what was done". It is minted once at dispatch, the worker may
+// correct it ONCE after orienting (`mcp__frizz__title`), a human rename locks it, and nothing automatic
+// touches it after that. A name that keeps moving is not a name; it is how the reader lost track of which
+// card was which.
+//
+// The STATUS is the part that is allowed to move: a short phrase of what is happening NOW, rewritten every
+// 5th operator message (periodic-status.ts). It used to be the name itself being rewritten, and that is
+// the conflation this module ends.
+//
+// NAMES ARE NEVER DUPLICATED: "that has to be part of the prompt". No two of a project's non-archived
+// threads may share a name once case and punctuation are folded away, and every writer is told the names
+// already taken rather than finding out afterwards. The rule is enforced at each writer — the dispatch
+// mint and the AI rename (here), the worker's own `mcp__frizz__title` and a human rename (router.ts), and
+// the Codex first-output marker (tailer.ts) — because a writer that was merely ASKED to be distinct will
+// eventually not be.
+
+export const THREAD_NAME_MAX_WORDS = 2
+// The status line's target and its hard clamp. The model is asked for ~60; the clamp only exists so a
+// model that ignores the ask cannot push a paragraph onto the card header.
+export const THREAD_STATUS_TARGET_CHARS = 60
+const THREAD_STATUS_MAX_CHARS = 80
+// How many taken names ride a naming prompt. Every OPEN thread matters (those are the ones a new name must
+// not collide with), but a board with hundreds of open threads should not turn a two-word ask into a
+// 4k-token prompt; the newest are the ones a near-duplicate is likely to be. Recently DONE names ride too,
+// capped lower — they are not enforced (a finished thread's name is free again), but a new thread named
+// exactly like yesterday's finished one reads as the same work.
+const PROMPT_OPEN_NAMES = 60
+const PROMPT_DONE_NAMES = 20
+// Enough of the request to find its subject, bounded well under anything a one-shot should carry.
+const SOURCE_CHARS = 4_000
+const CONVERSATION_CHARS = 12_000
+
+/** The comparison key: case, diacritics, punctuation AND spacing folded away, so "Focus mode",
+ *  "focus-mode" and "Focus  Mode!" are one name — and a plain plural on the last word, so "Shell budget"
+ *  cannot sit beside "Shell budgets" as if it were a different thread. Empty for a name with no letters
+ *  or digits. */
+export function foldThreadName(name: string): string {
+  const words = name.normalize("NFKD").replace(/\p{M}+/gu, "").toLowerCase().split(/[^\p{L}\p{N}]+/u).filter(Boolean)
+  const last = words.length - 1
+  if (last >= 0 && words[last]!.length > 3 && words[last]!.endsWith("s") && !words[last]!.endsWith("ss")) {
+    words[last] = words[last]!.slice(0, -1)
+  }
+  return words.join("")
+}
+
+export interface NamedThread {
+  slug: string
+  name: string
+  /** Not archived — the set a name must be unique within. */
+  open: boolean
+  /** Recency, for which names ride a prompt first (epoch ms). */
+  at: number
+}
+
+/** The name a row is SHOWN under, mirroring the web's `displayTitle` minus its placeholders: a human's
+ *  or a persisted machine name first, else the transcript's live title, else a caller's dispatch title.
+ *  Undefined for a row whose only text is the dispatch chop — that is a placeholder, not a name. */
+export function rowThreadName(
+  row: Pick<SessionRow, "title" | "title_auto" | "title_locked" | "title_agent">,
+  aiTitle: string | undefined,
+): string | undefined {
+  const stored = row.title?.trim() || undefined
+  if (sessionTitleLocked(row) || row.title_agent) return stored
+  if (aiTitle?.trim()) return aiTitle.trim()
+  return row.title_auto === 1 ? undefined : stored
+}
+
+export function projectThreadNames(
+  rows: readonly SessionRow[],
+  aiTitleOf: (slug: string) => string | undefined,
+): NamedThread[] {
+  const out: NamedThread[] = []
+  for (const row of rows) {
+    const name = rowThreadName(row, aiTitleOf(row.slug))
+    if (!name) continue
+    const at = Date.parse(row.rested_at ?? row.spawned_at)
+    out.push({
+      slug: row.slug,
+      name,
+      open: row.state !== "archived" && row.archived !== 1,
+      at: Number.isFinite(at) ? at : 0,
+    })
+  }
+  return out
+}
+
+/** The OPEN thread (other than `exceptSlug`) already called `name`, if any. */
+export function nameHolder(name: string, threads: readonly NamedThread[], exceptSlug?: string): NamedThread | undefined {
+  const key = foldThreadName(name)
+  if (!key) return undefined
+  return threads.find((t) => t.open && t.slug !== exceptSlug && foldThreadName(t.name) === key)
+}
+
+/** The names a naming prompt lists as taken: the project's open threads, then its recently done ones,
+ *  newest first within each, capped, one entry per folded name. */
+export function namesForPrompt(threads: readonly NamedThread[], exceptSlug?: string): string[] {
+  const seen = new Set<string>()
+  const pick = (open: boolean, cap: number) =>
+    threads
+      .filter((t) => t.open === open && t.slug !== exceptSlug)
+      .sort((a, b) => b.at - a.at)
+      .filter((t) => {
+        const key = foldThreadName(t.name)
+        if (!key || seen.has(key)) return false
+        seen.add(key)
+        return true
+      })
+      .slice(0, cap)
+      .map((t) => t.name)
+  return [...pick(true, PROMPT_OPEN_NAMES), ...pick(false, PROMPT_DONE_NAMES)]
+}
+
+const NAMER_SYSTEM = "You name threads on a developer's dashboard of coding-agent threads. You reply with the name alone."
+
+/** THE NAMING PROMPT. The instructions ride the user turn, not only the system prompt: measured on Haiku
+ *  4.5 (2026-09-29), a request left bare in the user turn was ANSWERED — "Could you provide more context
+ *  about …" — rather than named, while the same request fenced as data under the instructions was named. */
+export function namingRequest(
+  source: string,
+  taken: readonly string[],
+  rejected?: { name: string; reason: string },
+): ClaudeOneShotRequest {
+  const request = source.length > SOURCE_CHARS ? `${source.slice(0, SOURCE_CHARS)}…` : source
+  const lines = [
+    "Name a thread on a developer's dashboard of coding-agent threads. The name is how they tell this thread apart from every other one at a glance.",
+    "",
+    "Rules:",
+    "- ONE or TWO words. Never more.",
+    "- Name the SUBJECT or intent of the request, not the action taken: \"Shell budgets\", \"Focus mode\", \"ArkType perf\" — never \"Fix the shell budget default\".",
+    "- No request verbs: fix, add, update, investigate, implement, check, refactor.",
+    "- Sentence case: capitalize the first word only, plus proper nouns. Spell product names and identifiers exactly as the request spells them.",
+    "- The name must differ from every name already taken below, ignoring case and punctuation. If the obvious subject is taken, pick the word that sets THIS thread apart from that one.",
+    "",
+    "Names already taken in this project:",
+    ...(taken.length ? taken.map((name) => `- ${name}`) : ["(none)"]),
+    "",
+    "The request:",
+    "<request>",
+    request,
+    "</request>",
+    "",
+  ]
+  if (rejected) lines.push(`Your previous answer, "${rejected.name}", ${rejected.reason}. Choose another.`, "")
+  lines.push("Reply with the name alone: no quotes, no punctuation, no explanation.")
+  return { system: NAMER_SYSTEM, prompt: lines.join("\n") }
+}
+
+const STATUS_SYSTEM = "You write the one-line live status of a coding-agent thread on a developer's dashboard. You reply with the status line alone."
+
+/** THE STATUS PROMPT: what is happening now, from the last few exchanges — never the name again. */
+export function statusRequest(name: string | undefined, conversation: string): ClaudeOneShotRequest {
+  const body = conversation.length > CONVERSATION_CHARS ? `…${conversation.slice(conversation.length - CONVERSATION_CHARS)}` : conversation
+  // Measured against a real five-message thread (2026-09-29). Haiku 4.5, with the rules BEFORE the
+  // conversation, answered "Thread complete, user satisfied" and "Completed README review" (the name
+  // again); with the conversation first and the rules after it, "Answered project questions, awaiting
+  // next task" — better, but on the real stack it still wrote "User satisfied with README overview,
+  // thread paused", straight through the rule that forbids both words. Sonnet on the same input, three
+  // of three: "Answered four README questions, nothing edited" and the like. A status is written in the
+  // background every fifth message, so it can afford the larger model; the NAME, which a fresh dispatch
+  // waits on, stays on the smallest one.
+  const lines = [
+    "Below is the most recent part of a conversation between a developer and a coding agent.",
+    "",
+    "<conversation>",
+    body,
+    "</conversation>",
+    "",
+    "Write the live STATUS line for this thread on the developer's dashboard: where the work stands RIGHT NOW, judged mostly from the LAST exchange above.",
+    "",
+    "Rules:",
+    `- One short phrase, at most ${THREAD_STATUS_TARGET_CHARS} characters.`,
+    "- Say what the agent is doing, what it just finished, or what it is waiting on — and name the specific thing (file, test, PR, finding, decision): \"Waiting on CI for the budget fix\", \"Pushed the rail fix, awaiting review\", \"Asked whether to drop the mono font\".",
+    "- Never generic: not \"Thread complete\", \"Task done\", \"User satisfied\", \"Working on it\". Do not say \"the user\" or \"the thread\".",
+    ...(name ? [`- The thread is already named "${name}" and the status sits beside that name, so do not repeat it.`] : []),
+    "- Sentence case, no trailing period, no quotes.",
+    "",
+    "Reply with the status line alone.",
+  ]
+  return { system: STATUS_SYSTEM, prompt: lines.join("\n"), model: "sonnet" }
+}
+
+// Words a distinguishing fallback never borrows from the request.
+const STOP_WORDS = new Set([
+  "the", "and", "for", "with", "that", "this", "from", "into", "onto", "about", "then", "than", "when", "what",
+  "which", "where", "while", "should", "would", "could", "can", "will", "just", "also", "please", "make", "sure",
+  "our", "your", "their", "its", "not", "but", "are", "was", "were", "been", "have", "has", "had", "does", "did",
+  "lets", "need", "needs", "want", "some", "any", "all", "one", "two", "new", "now", "why", "how", "there",
+  // Request verbs: the name is the subject, never the action, so a fallback word never is one either.
+  "fix", "add", "update", "investigate", "implement", "check", "refactor", "look", "see", "use", "get", "let",
+  "raise", "lower", "change", "remove", "drop", "move", "set", "bump", "rename", "improve", "show", "hide",
+  "allow", "support", "handle", "create", "write", "run", "test", "debug", "review", "ensure", "keep", "stop",
+  "start", "try", "find", "figure", "build", "ship", "land", "merge", "revert", "clean", "tweak", "adjust",
+])
+
+function firstLine(raw: string): string {
+  return raw.split("\n").map((line) => line.trim()).find(Boolean) ?? ""
+}
+
+function stripDecoration(text: string): string {
+  let out = text.replace(/^(?:name|title|status)\s*:\s*/i, "").replace(/\s+/g, " ").trim()
+  // Quotes and trailing punctuation nest either way round (`"Shell budgets".`, `"Shell budgets."`), so
+  // peel until nothing changes.
+  for (let previous = ""; previous !== out;) {
+    previous = out
+    out = out.replace(/^["'`*“”‘’«»]+|["'`*“”‘’«»]+$/g, "").replace(/[.!?,;:]+$/g, "").trim()
+  }
+  return out
+}
+
+/** Sentence case that survives identifiers: the first word gets a capital only if it is a plain
+ *  lowercase word ("zod" → "Zod", but `z.properties` and "ArkType" stay as written), and a later word
+ *  in plain Title case is lowered UNLESS the request itself capitalizes it — "Shell Budget" is drift,
+ *  "Focus mode for Frizz" is a proper noun. */
+export function sentenceCaseName(name: string, source: string): string {
+  return name.split(" ").map((word, index) => {
+    if (index === 0) return /^[a-z]+$/.test(word) ? word.charAt(0).toUpperCase() + word.slice(1) : word
+    if (/^[A-Z][a-z]+$/.test(word) && !new RegExp(`(^|[^\\p{L}])${word}(?![\\p{L}])`, "u").test(source)) return word.toLowerCase()
+    return word
+  }).join(" ")
+}
+
+/** A model's answer as a name, or undefined when it is not one (empty, or more than two words). */
+export function cleanThreadName(raw: string, source = ""): string | undefined {
+  const name = stripDecoration(firstLine(raw))
+  if (!name || !foldThreadName(name)) return undefined
+  if (name.split(" ").length > THREAD_NAME_MAX_WORDS) return undefined
+  return sentenceCaseName(name, source)
+}
+
+/** A model's answer as a status line, clamped. */
+export function cleanThreadStatus(raw: string): string | undefined {
+  const status = stripDecoration(firstLine(raw))
+  if (!status) return undefined
+  if (status.length <= THREAD_STATUS_MAX_CHARS) return status
+  const cut = status.slice(0, THREAD_STATUS_MAX_CHARS - 1)
+  const space = cut.lastIndexOf(" ")
+  return `${(space > THREAD_STATUS_MAX_CHARS / 2 ? cut.slice(0, space) : cut).trimEnd()}…`
+}
+
+function significantWords(source: string): string[] {
+  const words: string[] = []
+  const seen = new Set<string>()
+  for (const raw of source.split(/\s+/)) {
+    const word = raw.replace(/^[^\p{L}\p{N}]+|[^\p{L}\p{N}]+$/gu, "")
+    const key = word.toLowerCase()
+    if (word.length < 3 || !/\p{L}/u.test(word) || STOP_WORDS.has(key) || seen.has(key)) continue
+    seen.add(key)
+    words.push(/^[A-Z][a-z]+$/.test(word) ? key : word)
+  }
+  return words
+}
+
+/** The last resort when the model will not produce a free name: keep the name's lead word and give it a
+ *  SECOND word from the request that sets it apart ("Shell budgets" taken → "Shell defaults"), and only
+ *  when the request has no such word left, a number. Always returns a name `isTaken` refuses. */
+export function distinguishingName(name: string, source: string, isTaken: (candidate: string) => boolean): string {
+  const clean = stripDecoration(name) || "Thread"
+  if (!isTaken(clean)) return clean
+  // Words, not whitespace runs: a model's `shell-budgets` leads with "shell", not the whole token.
+  const words = clean.split(/[\s_-]+/).filter(Boolean)
+  const head = words[0] ?? "Thread"
+  const used = new Set(words.map(foldThreadName))
+  for (const word of significantWords(source)) {
+    if (used.has(foldThreadName(word))) continue
+    const candidate = sentenceCaseName(`${head} ${word}`, source)
+    if (!isTaken(candidate)) return candidate
+  }
+  for (let n = 2; ; n++) {
+    const candidate = `${clean} ${n}`
+    if (!isTaken(candidate)) return candidate
+  }
+}
+
+/** A name from the request alone, for when the model returned nothing usable twice. */
+function nameFromSource(source: string): string {
+  const words = significantWords(source).slice(0, THREAD_NAME_MAX_WORDS)
+  return words.length ? sentenceCaseName(words.join(" "), source) : "Thread"
+}
+
+export interface ThreadNamerDeps {
+  storage: Pick<Storage, "allSessions" | "setMintedTitle">
+  /** The live transcript title for a slug (tailer telemetry), which is a row's shown name until a
+   *  machine name is persisted. Late-bound in context.ts: the tailer is built after the namer. */
+  aiTitleOf: (slug: string) => string | undefined
+  /** The model. Absent ⇒ uniqueness still holds for every writer, but nothing is minted. */
+  complete?: ClaudeOneShot
+  /** A persisted name changed; refresh the board. */
+  onNamed?: () => void
+  log?: (message: string) => void
+}
+
+export interface ThreadNamer {
+  /** Whether a model is wired — the mint and the AI rename need one; uniqueness does not. */
+  readonly available: boolean
+  threads(): NamedThread[]
+  /** The open thread other than `exceptSlug` already carrying `name`. */
+  holder(name: string, exceptSlug?: string): NamedThread | undefined
+  /** The taken names a naming prompt lists (open, then recently done; capped). */
+  promptNames(exceptSlug?: string): string[]
+  /** `name` if it is free, else the distinguishing fallback. */
+  distinct(name: string, source: string, exceptSlug?: string): string
+  /** Ask the model for a distinct name: once, again naming the collision, then the fallback. Throws when
+   *  no model is wired or it fails outright. */
+  name(source: string, exceptSlug?: string): Promise<string>
+  /** Fire-and-forget: mint a fresh dispatch's name and persist it, unless something already named the
+   *  thread. Mints are SERIAL, so the second of two near-identical dispatches is asked with the first's
+   *  name already in its taken list — the model then picks a distinct name itself rather than colliding
+   *  and falling back. Resolves when this mint is settled (tests await it). */
+  mint(slug: string, sessionId: string, source: string): Promise<void>
+  /** A status line for a thread from its recent conversation, or undefined. Throws with no model. */
+  status(input: { name?: string; conversation: string }): Promise<string | undefined>
+}
+
+export function createThreadNamer(deps: ThreadNamerDeps): ThreadNamer {
+  const threads = () => projectThreadNames(deps.storage.allSessions(), deps.aiTitleOf)
+  const holder = (name: string, exceptSlug?: string) => nameHolder(name, threads(), exceptSlug)
+  const distinct = (name: string, source: string, exceptSlug?: string) =>
+    distinguishingName(name, source, (candidate) => holder(candidate, exceptSlug) !== undefined)
+  let mintChain: Promise<void> = Promise.resolve()
+
+  async function name(source: string, exceptSlug?: string): Promise<string> {
+    const complete = deps.complete
+    if (!complete) throw new Error("No model is available to name this thread")
+    const taken = namesForPrompt(threads(), exceptSlug)
+    let rejected: { name: string; reason: string } | undefined
+    let lastCandidate: string | undefined
+    for (let attempt = 0; attempt < 2; attempt++) {
+      const raw = await complete(namingRequest(source, taken, rejected))
+      const candidate = cleanThreadName(raw, source)
+      if (!candidate) {
+        rejected = { name: firstLine(raw).slice(0, 80), reason: "is not a name of one or two words" }
+        continue
+      }
+      const taker = holder(candidate, exceptSlug)
+      if (!taker) return candidate
+      lastCandidate = candidate
+      rejected = { name: candidate, reason: `is already the name of another thread (${taker.name})` }
+    }
+    return distinct(lastCandidate ?? nameFromSource(source), source, exceptSlug)
+  }
+
+  return {
+    get available() { return deps.complete !== undefined },
+    threads,
+    holder,
+    promptNames: (exceptSlug) => namesForPrompt(threads(), exceptSlug),
+    distinct,
+    name,
+    mint(slug, sessionId, source) {
+      const run = mintChain.then(async () => {
+        if (!deps.complete) return
+        try {
+          const minted = await name(source, slug)
+          // Re-checked at the WRITE, synchronously with it: whatever landed while the model was
+          // answering (a Codex marker, a human rename, another thread's name) is seen here.
+          const final = holder(minted, slug) ? distinct(minted, source, slug) : minted
+          if (deps.storage.setMintedTitle(slug, sessionId, final)) deps.onNamed?.()
+        } catch (error) {
+          deps.log?.(`naming ${slug} failed: ${error instanceof Error ? error.message : String(error)}`)
+        }
+      })
+      mintChain = run
+      return run
+    },
+    async status({ name: current, conversation }) {
+      if (!deps.complete) throw new Error("No model is available to write a status")
+      return cleanThreadStatus(await deps.complete(statusRequest(current, conversation)))
+    },
+  }
+}

@@ -280,6 +280,24 @@ test("resolveSessionTitle: a PERSISTED worker title survives the loss of its tel
   )
 })
 
+test("resolveSessionTitle: rows written before the name/status split resolve exactly as they did", () => {
+  // The split added two columns and bulk-renamed nothing, so an existing long title is still the name:
+  // a pre-split worker title, a retired periodic retitle (`title_agent = 2`), a legacy human title with
+  // no lock column — each resolves to its stored text, and a new row's status never enters the title.
+  assert.deepEqual(
+    resolveSessionTitle(row({ title: "Investigate the flaky resolver test on CI", title_auto: 1, title_locked: 0, title_agent: 1 }), tele({ aiTitle: "Flaky resolver" })),
+    { title: "Investigate the flaky resolver test on CI", titleAuto: true, titleLocked: false, aiTitle: "Investigate the flaky resolver test on CI" },
+  )
+  assert.deepEqual(
+    resolveSessionTitle(row({ title: "Periodic retitle from last week", title_auto: 1, title_locked: 0, title_agent: 2 }), undefined),
+    { title: "Periodic retitle from last week", titleAuto: true, titleLocked: false, aiTitle: "Periodic retitle from last week" },
+  )
+  assert.deepEqual(
+    resolveSessionTitle(row({ title: "Legacy human name", title_auto: 0, title_locked: undefined, title_agent: 0, status: "Waiting on CI" }), tele({ aiTitle: "guess" })),
+    { title: "Legacy human name", titleAuto: false, titleLocked: true, aiTitle: undefined },
+  )
+})
+
 test("deriveNeedsYou: a perm-prompt process block always queues (a view can't clear it)", () => {
   assert.equal(deriveNeedsYou(row({ seen_at: LATER }), tele({ lastActivityAt: T0 }), "perm-prompt"), true)
 })

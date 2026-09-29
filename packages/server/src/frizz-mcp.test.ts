@@ -512,6 +512,14 @@ test("`title` names the CALLING thread, and a human's own name refuses it out lo
     assert.match(refused.result.content[0].text, /outranks yours/)
     assert.match(refused.result.content[0].text, /do not call this again/)
 
+    // A DUPLICATE is the server's call, and its words — naming the holder — reach the worker verbatim,
+    // so it can pick another subject rather than retry the same name.
+    reply = { accepted: false, title: "chop", lockedByHuman: false, refusal: "another open thread is already named \"Focus mode\" (thread holder)." }
+    rpc.send({ jsonrpc: "2.0", id: 5, method: "tools/call", params: { name: "title", arguments: { title: "Focus mode" } } })
+    const dupe = await rpc.next(5)
+    assert.equal(dupe.result.isError, undefined)
+    assert.match(dupe.result.content[0].text, /^Not renamed — another open thread is already named "Focus mode" \(thread holder\)/)
+
     // An empty name is refused in the HANDLER, so a whitespace-only title never reaches the server.
     const before = seen.length
     rpc.send({ jsonrpc: "2.0", id: 4, method: "tools/call", params: { name: "title", arguments: { title: "   " } } })

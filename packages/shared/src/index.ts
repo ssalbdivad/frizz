@@ -2870,6 +2870,14 @@ export const ThreadView = z.object({
   // lastActivityAt/spawnedAt when absent.
   lastAssistantAt: z.string().optional(),
   aiTitle: z.string().optional(), // Claude's own auto-generated session title (latest ai-title record)
+  // The thread's live STATUS — a short phrase of what is happening NOW, rewritten every 5th operator
+  // message (server periodic-status.ts). Never the NAME: the name is one or two stable words for the
+  // subject, and this is the part allowed to move. Shown beside the name on the queue card, in the
+  // drawer header and in the rail row's tooltip — never as a second rail line, which would cost the rail
+  // its density. Absent until the first one lands. Named `statusLine` because `status` above is the
+  // legacy .frizz-file lifecycle field, synthesized and unused for session rows; the registry column is
+  // `session.status`.
+  statusLine: z.string().optional(),
   // True when `title` is a machine-guessed dispatch slug (title_auto=1), NOT a real name — the display
   // then shows a "Spinning up a thread…" placeholder instead of the guess until aiTitle lands. Optional
   // (absent ⇒ legacy/slim row) so old snapshots parse; absent is treated as "not provisional".
@@ -4138,11 +4146,14 @@ export type SetOwnThreadTitleInput = z.infer<typeof SetOwnThreadTitleInput>
 
 // What the write answers with: whether it landed, and the name the thread carries NOW. A refusal is not
 // an error — a human who has renamed the thread owns its name — so it comes back as a flag the tool can
-// explain rather than a throw the model will retry.
+// explain rather than a throw the model will retry. `refusal` says why in words the worker can act on:
+// another open thread already holds the name (named, so it can pick a different subject), the name is
+// longer than two words, or the worker already spent its one rename (thread-names.ts).
 export const SetOwnThreadTitleResult = z.object({
   accepted: z.boolean(),
   title: z.string(),
   lockedByHuman: z.boolean(),
+  refusal: z.string().optional(),
 }).strict()
 export type SetOwnThreadTitleResult = z.infer<typeof SetOwnThreadTitleResult>
 

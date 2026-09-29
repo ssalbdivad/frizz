@@ -54,6 +54,7 @@ import { ThreadActionBar } from "./ThreadActionBar.tsx"
 import { HeaderActions } from "./HeaderActions.tsx"
 import { ThreadLifecycleFooter, StateButton } from "./ThreadLifecycleFooter.tsx"
 import { ThreadTitle } from "./ThreadTitle.tsx"
+import { ThreadStatusLine } from "./ThreadStatusLine.tsx"
 import { threadLifecycleAvailability } from "../lib/threadLifecycle.ts"
 import { ToolDisclosureHeader } from "./ToolDisclosureHeader.ts"
 import { subAgentProfileCell } from "../lib/subAgentProfile.ts"
@@ -1612,6 +1613,7 @@ export function ThreadHeader({ slug, onStatusApplied, onClose, showReturnToQueue
               lead={<span aria-hidden className="shrink-0 opacity-60">·</span>}
               className="min-w-0 truncate"
             />
+            <ThreadStatusLine status={thread.statusLine} lead={<span aria-hidden className="shrink-0 opacity-60">·</span>} />
           </div>
         </div>
       </div>

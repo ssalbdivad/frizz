@@ -651,7 +651,11 @@ export function ThreadIndicator({ t }: { t: ThreadView }) {
   // listOverlay), so `t` already reads as running and the ordinary derivation returns the spinner. When this
   // hook consulted the steer hint on its own, the glyph and the placement were two rules and drifted apart
   // on every steer.
-  const { node, tip } = sessionIndicatorFor(t)
+  const { node, tip: stateTip } = sessionIndicatorFor(t)
+  // The thread's live STATUS rides this tooltip, under the state — the rail's one hover of detail, never
+  // a second line on the row (see "A ROW IS ITS TITLE" above, and ThreadStatusLine.tsx).
+  const status = t.statusLine?.trim()
+  const tip = status ? (stateTip ? `${stateTip}\n${status}` : status) : stateTip
   // The resolved kind, on the shipped markup. Cheap, and it is what lets the rail's own glyphs be
   // measured where they actually render (scripts/verify-rail-status-glyphs.mjs holds the family to one
   // weight band) instead of against a reconstruction that can drift from the real thing.
