@@ -96,8 +96,8 @@ export function nextInteractionExpiryDelay(interactions: readonly InteractionRec
   return Math.max(250, earliest - now + 50)
 }
 
-// Read through the thread's OWN project (useThreadApi): an Everything card lists every project's
-// threads, and `rpc` addresses whichever one the page is focused on. The key needs no project — a
+// Read through the thread's OWN project (useThreadApi): in All projects the cards list every project's
+// threads, and `rpc` addresses whichever one the page is bound to. The key needs no project — a
 // session id names one session on the machine.
 export function usePendingInteractions(thread: ThreadView | undefined) {
   const scope = pendingInteractionScope(thread)
