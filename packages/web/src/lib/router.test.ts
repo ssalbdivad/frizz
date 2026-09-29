@@ -19,7 +19,7 @@ test("primeRoute parks a direct thread route until the board can settle it", () 
   resetStore()
   primeRoute("/thread/cold-load")
   // No board yet, so no drawer — deciding blind cannot tell this project's thread from another's, or a
-  // chat from a command thread's terminal. The slug is held instead, and the address bar stays on it.
+  // chat drawer from a doc drawer. The slug is held instead, and the address bar stays on it.
   assert.equal(store.routeThreadSlug, "cold-load")
   assert.equal(store.drawers.length, 0)
 })

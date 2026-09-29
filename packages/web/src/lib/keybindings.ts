@@ -48,8 +48,8 @@ export type ActionId =
   | "thread.done"
   | "thread.snooze"
   | "thread.fullscreen"
+  | "thread.terminal"
   | "app.newThread"
-  | "app.newTerminal"
   | "app.newProject"
   | "app.palette"
   | "app.details"
@@ -76,8 +76,10 @@ export const ACTIONS: readonly ActionDef[] = [
   { id: "thread.done", label: "Mark as done", group: "queue", defaultChord: "d" },
   { id: "thread.snooze", label: "Snooze", group: "queue", defaultChord: "s" },
   { id: "thread.fullscreen", label: "Fullscreen", group: "queue", defaultChord: "f" },
+  // A terminal belongs to a thread (ThreadTerminals.tsx), so `t` opens one on the thread being read. It
+  // was "New terminal thread", from anywhere, until the Terminal tab went on 2026-09-29.
+  { id: "thread.terminal", label: "Open terminal", group: "queue", defaultChord: "t" },
   { id: "app.newThread", label: "New thread", group: "anywhere", defaultChord: "c" },
-  { id: "app.newTerminal", label: "New terminal thread", group: "anywhere", defaultChord: "t" },
   { id: "app.newProject", label: "New project", group: "anywhere", defaultChord: "p" },
   { id: "app.palette", label: "Jump to a thread", group: "anywhere", defaultChord: "mod+k" },
   { id: "app.details", label: "Thread details", group: "anywhere", defaultChord: "mod+i" },
@@ -103,8 +105,9 @@ export const GROUP_LABELS: Record<ActionGroup, string> = {
 export const PROJECT_STEP_CHORDS = { next: "alt+arrowdown", previous: "alt+arrowup" } as const
 
 // The keys the prompt boxes own. Listed on the sheet so it is the whole keyboard in one place, but not
-// rebindable: composerKeyboard.ts is the contract for the first group, every box in the app shares it,
-// and the second is Claude Code's own conventions (NewThreadModal.tsx DispatchForm, AllQueues.tsx).
+// rebindable: composerKeyboard.ts is the contract for the first group, every box in the app shares it;
+// the thread box's `$` line is lib/threadTerminals.ts composerTerminalLine; the last group is the page's
+// own new-thread box (AllQueues.tsx).
 export const FIXED_SHORTCUTS: readonly { heading: string; keys: readonly { label: string; chord: string }[] }[] = [
   {
     heading: "In a prompt box",
@@ -116,10 +119,14 @@ export const FIXED_SHORTCUTS: readonly { heading: string; keys: readonly { label
     ],
   },
   {
+    heading: "In a thread's prompt box",
+    keys: [
+      { label: "Run a command in a terminal on the thread, typed first", chord: "$" },
+    ],
+  },
+  {
     heading: "In the new-thread box",
     keys: [
-      { label: "Switch to Terminal, typed first", chord: "!" },
-      { label: "Back to Prompt, in an empty box", chord: "backspace" },
       { label: "Start in the next project", chord: PROJECT_STEP_CHORDS.next },
       { label: "Start in the previous project", chord: PROJECT_STEP_CHORDS.previous },
     ],

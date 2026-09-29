@@ -125,12 +125,13 @@ test("re-clicking the open parent thread closes the child stacked over it", () =
 test("slugsInThreadDrawers names live chat and terminal layers, not docs or closing layers", () => {
   const slugs = slugsInThreadDrawers([
     { kind: "thread", slug: "chat" },
-    { kind: "terminal", slug: "term" },
+    // A terminal layer carries its THREAD's slug (and the terminal's id as subId).
+    { kind: "terminal", slug: "has-a-terminal" },
     { kind: "doc", slug: "doc-only" },
     { kind: "subagent", slug: "parent-of-sub" },
     { kind: "thread", slug: "sliding-out", closing: true },
   ])
-  assert.deepEqual([...slugs].sort(), ["chat", "term"])
+  assert.deepEqual([...slugs].sort(), ["chat", "has-a-terminal"])
 })
 
 test("drawerThreadSlug names the thread the topmost live layer belongs to, passing under files and closing layers", () => {

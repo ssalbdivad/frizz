@@ -1,5 +1,5 @@
-import { useRef } from "react"
-import { Ellipsis, Maximize2 } from "lucide-react"
+import { useRef, useState } from "react"
+import { Ellipsis, Maximize2, SquareTerminal } from "lucide-react"
 import { captureFullscreenEnterAnchor, rememberFullscreenOrigin } from "../lib/fullscreenHandoff.ts"
 import { armFullscreenMorph } from "../lib/fullscreenMorph.ts"
 import { spaNavigate } from "../lib/router.ts"
@@ -8,6 +8,7 @@ import { standaloneThreadHref } from "../lib/standaloneThreadRoute.ts"
 import { HEADER_ICON_CLASS } from "../lib/headerIcon.ts"
 import { useCommandHandler, useShortcutLabel } from "../lib/keyboardRuntime.ts"
 import { Menu, MenuContent, MenuItem, MenuTrigger } from "./ui/Menu.tsx"
+import { OpenTerminalDialog } from "./ThreadTerminals.tsx"
 
 // THE DRAWER'S "MORE" MENU, and the one way into a thread's /full page.
 //
@@ -49,13 +50,24 @@ export function openFullscreen(slug: string, from: HTMLElement | null): void {
   spaNavigate(standaloneThreadHref(slug), { viewTransition: animate })
 }
 
+// OPEN TERMINAL lives here too (ThreadTerminals.tsx): a terminal belongs to the thread you are reading,
+// so it is opened from that thread's drawer, in the folder its agent is working in. `t` is its key; the
+// menu trigger already answers to `f`, so the terminal's `data-command` rides a hidden element whose only
+// job is to receive the key's press (lib/keyboardRuntime.ts runThreadCommand finds it in this drawer).
 export function ThreadMenu({ slug }: { slug: string }) {
   const trigger = useRef<HTMLButtonElement>(null)
+  const terminalKey = useRef<HTMLSpanElement>(null)
+  const [terminalOpen, setTerminalOpen] = useState(false)
   const keys = useShortcutLabel("thread.fullscreen")
+  const terminalKeys = useShortcutLabel("thread.terminal")
   // `f` on this drawer goes straight to /full: the key presses the thread's `fullscreen` control, which is
   // this menu's trigger, and the handler takes the press instead of opening the menu.
   useCommandHandler(trigger, () => openFullscreen(slug, trigger.current))
+  useCommandHandler(terminalKey, () => setTerminalOpen(true))
   return (
+    <>
+    <span ref={terminalKey} data-command="terminal" hidden />
+    <OpenTerminalDialog slug={slug} open={terminalOpen} onOpenChange={setTerminalOpen} />
     <Menu>
       <MenuTrigger asChild>
         <button
@@ -80,7 +92,14 @@ export function ThreadMenu({ slug }: { slug: string }) {
             {keys && <span className="text-[10px] text-muted-55">{keys}</span>}
           </span>
         </MenuItem>
+        <MenuItem value="terminal" onSelect={() => setTerminalOpen(true)} icon={<SquareTerminal size={12} aria-hidden />}>
+          <span className="flex min-w-0 flex-1 items-center justify-between gap-4">
+            <span>Open terminal</span>
+            {terminalKeys && <span className="text-[10px] text-muted-55">{terminalKeys}</span>}
+          </span>
+        </MenuItem>
       </MenuContent>
     </Menu>
+    </>
   )
 }

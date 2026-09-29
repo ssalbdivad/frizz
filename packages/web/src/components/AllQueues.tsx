@@ -51,8 +51,7 @@ import { useSteeredAt } from "../lib/steering.ts"
 import { glideTo, useViewportLock } from "../lib/viewportLock.ts"
 import { registerQueueCursor, releaseAutoOpened } from "../lib/keyboardRuntime.ts"
 import { PROJECT_STEP_CHORDS, detectPlatform, formatChord, parseChord } from "../lib/keybindings.ts"
-import { AllQueuesCard, ProjectChip, ProjectMark, useOpenThreadInPlace } from "./AllQueuesCard.tsx"
-import { CommandQueueCard } from "./CommandQueueCard.tsx"
+import { AllQueuesCard } from "./AllQueuesCard.tsx"
 import { ProjectSquare } from "./ProjectRail.tsx"
 import { SIDEBAR_COLUMN_CLASS } from "./Sidebar.tsx"
 import { BandLabel } from "./BandLabel.tsx"
@@ -63,7 +62,6 @@ import { DispatchForm, type DispatchDirs } from "./NewThreadModal.tsx"
 import { Menu, MenuContent, MenuItem, MenuSeparator, MenuTrigger } from "./ui/Menu.tsx"
 import { ProjectFilter } from "./ProjectFilter.tsx"
 import { AddProjectRow, ProjectList } from "./ProjectList.tsx"
-import { ThreadProjectScope } from "../api/threadApi.tsx"
 
 /** How often the page re-reads every project. The rail's badges poll at 5s; this is the page the
  *  operator is looking AT, so it runs a little faster — the read is the servers' cached snapshots. */
@@ -428,7 +426,6 @@ function usePickProject(): (project: QueuesProject, from: string | undefined) =>
   return useCallback(
     (project: QueuesProject, from: string | undefined) => {
       carryDraft(draftKey.dispatch, from, project.projectDir)
-      carryDraft(draftKey.command, from, project.projectDir)
       rememberCrossProjectFocus(project.id)
       // A drawer open on the page has it focused on the drawer's project, and the box follows the focus,
       // so aiming the box closes the drawers: home, where the focus is the pick.
@@ -587,8 +584,8 @@ function composerDirs(focus: string | undefined, board: BoardSnapshot | null, pr
   return undefined
 }
 
-/** The new-thread box's two textareas — its Prompt tab and its Terminal tab. */
-const NEW_THREAD_BOXES = '[data-surface="newComposer"], [data-surface="commandComposer"]'
+/** The new-thread box's textarea. */
+const NEW_THREAD_BOXES = '[data-surface="newComposer"]'
 
 const PROJECT_STEP_KEYS = [PROJECT_STEP_CHORDS.previous, PROJECT_STEP_CHORDS.next].map((chord) => formatChord(parseChord(chord)!, detectPlatform())).join("/")
 
@@ -632,7 +629,6 @@ function QueueCardOf({ entry, ghost, concealed, leaving, chip }: { entry: QueueE
     setQueueFilter(to.id)
     glideTo(() => 0)
   }, [])
-  const openInPlace = useOpenThreadInPlace()
   const scope = useMemo(
     () => projectMarkdownScope(project),
     [project.id, project.githubRepo, project.slug, project.projectDir, project.homeDir],
@@ -640,39 +636,17 @@ function QueueCardOf({ entry, ghost, concealed, leaving, chip }: { entry: QueueE
   const key = threadKey(project.id, thread.id)
   return (
     <MarkdownScopeContext.Provider value={scope}>
-      {thread.kind === "command" ? (
-        // A finished terminal command takes its own command card, scoped to its project: its
-        // pty, its Restart and its Mark as done all belong to the card's project, not the page's.
-        <div data-xq-card={key} data-queue-leaving={leaving.isLeaving(key)} data-queue-ghost={ghost === undefined ? undefined : true} data-queue-concealed={concealed || undefined} inert={concealed} className="frizz-card-slot min-w-0">
-          <div className="frizz-card-clip min-h-0 min-w-0">
-            <div className="frizz-card-body min-w-0">
-              <ThreadProjectScope projectId={project.id} projectDir={project.projectDir}>
-                <CommandQueueCard
-                  thread={thread}
-                  leaving={leaving.isLeaving(key)}
-                  onResolve={leaving.leave(key)}
-                  onUnresolve={leaving.restore(key)}
-                  onOpen={() => openInPlace(project, thread.id)}
-                  lead={chip ? <ProjectChip project={project} square={false} /> : undefined}
-                  mark={chip ? <ProjectMark project={project} onChoose={choose} /> : undefined}
-                />
-              </ThreadProjectScope>
-            </div>
-          </div>
-        </div>
-      ) : (
-        <AllQueuesCard
-          project={project}
-          thread={thread}
-          leaving={leaving.isLeaving(key)}
-          onLeave={leaving.leave(key)}
-          onReturn={leaving.restore(key)}
-          chip={chip}
-          onChoose={choose}
-          ghost={ghost}
-          concealed={concealed}
-        />
-      )}
+      <AllQueuesCard
+        project={project}
+        thread={thread}
+        leaving={leaving.isLeaving(key)}
+        onLeave={leaving.leave(key)}
+        onReturn={leaving.restore(key)}
+        chip={chip}
+        onChoose={choose}
+        ghost={ghost}
+        concealed={concealed}
+      />
     </MarkdownScopeContext.Provider>
   )
 }

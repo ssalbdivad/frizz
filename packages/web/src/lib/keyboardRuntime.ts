@@ -168,11 +168,11 @@ export function currentThreadSurface(): HTMLElement | null {
  *  a click (a Radix menu trigger opens on pointerdown/keydown) can claim it with preventDefault. */
 export const COMMAND_EVENT = "frizz:command"
 
-export type ThreadCommand = "done" | "snooze" | "fullscreen" | "reply"
+export type ThreadCommand = "done" | "snooze" | "fullscreen" | "terminal" | "reply"
 
 // Every prompt box that answers the thing on screen. Deliberately NOT the question card's free-text
 // answer box (`questionAnswer`) — `r` is a reply to the thread, and a question has its own chips.
-const REPLY_BOXES = ["queueComposer", "chatComposer", "adoptComposer", "subAgentComposer", "commandFollowUp"]
+const REPLY_BOXES = ["queueComposer", "chatComposer", "adoptComposer", "subAgentComposer", "terminalFollowUp"]
   .map((surface) => `[data-surface="${surface}"]`)
   .join(",")
 
@@ -216,6 +216,7 @@ const BUILT_INS: Partial<Record<ActionId, Handler>> = {
   "thread.done": () => runThreadCommand("done"),
   "thread.snooze": () => runThreadCommand("snooze"),
   "thread.fullscreen": () => runThreadCommand("fullscreen"),
+  "thread.terminal": () => runThreadCommand("terminal"),
   "app.shortcuts": () => {
     store.showShortcuts = !store.showShortcuts
   },

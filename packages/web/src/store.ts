@@ -85,7 +85,7 @@ export const store = proxy({
     kind: "thread" | "doc" | "subagent" | "shell" | "file" | "terminal"
     slug: string
     routed?: boolean // URL/deep-link-created thread: visible on first paint, never an invisible animated backdrop
-    subId?: string // subagent/shell: the launch tool_use id (the RPC handle + dedupe key)
+    subId?: string // subagent/shell: the launch tool_use id (the RPC handle + dedupe key) / terminal: its id
     label?: string // subagent: the dispatch description (header title) / file: the basename
     path?: string // file: the absolute file path
     scope?: MarkdownScope // file: opened from ANOTHER project's card on the everything page — whose gate
@@ -110,10 +110,9 @@ export const store = proxy({
   socketBoardFallback: null as SocketPayloadFallback | null,
   socketTranscriptFallbacks: {} as Record<string, SocketTranscriptFallback>,
   // A `/thread/<slug>` URL whose destination is not settled yet. The router cannot decide it alone: on
-  // a cold load the board hasn't arrived, so it cannot say whether the slug is this project's thread, or
-  // a command thread whose drawer is its terminal. The router parks the slug here and App resolves it
-  // the first render the board is authoritative (see resolveRoutedThread). Parked slugs keep the
-  // address bar on /thread/<slug> meanwhile.
+  // a cold load the board hasn't arrived, so it cannot say whether the slug is this project's thread.
+  // The router parks the slug here and App resolves it the first render the board is authoritative
+  // (see resolveRoutedThread). Parked slugs keep the address bar on /thread/<slug> meanwhile.
   routeThreadSlug: null as string | null,
   // The slug whose BOARD surface (thread drawer or queue card) is currently wearing
   // `view-transition-name: thread-chat`, so the /full page's thread column has somewhere to morph
@@ -166,7 +165,7 @@ let toastSeq = 0
 // it was started: a slug names a thread only within its project, and by the time the toast is clicked
 // the page may be another project's — on the cross-project page, one dispatch and one click on another
 // project's card apart.
-export type ToastLink = { label: string; slug: string; drawer?: "thread" | "terminal"; project?: string }
+export type ToastLink = { label: string; slug: string; project?: string }
 // A toast's own verb — the snooze confirmation's "Undo". A callback where `link` is data, because the
 // act belongs to whoever raised the toast: its thread's project client, and the card it faded out.
 export type ToastAction = { label: string; run: () => void }
@@ -184,20 +183,20 @@ type Drawer = (typeof store.drawers)[number]
 function sameDrawer(a: Drawer, b: Pick<Drawer, "kind" | "slug" | "path" | "subId">): boolean {
   if (a.kind !== b.kind) return false
   if (a.kind === "file") return a.path === b.path
-  if (a.kind === "subagent" || a.kind === "shell") return a.subId === b.subId
+  if (a.kind === "subagent" || a.kind === "shell" || a.kind === "terminal") return a.subId === b.subId
   return a.slug === b.slug
 }
 
 // The only layers a new drawer legitimately stacks OVER are its own thread's family: a sub-agent
-// transcript over its parent thread/doc, and a thread⇄doc pair sharing a slug. Everything else —
-// sibling threads, sibling sub-agents — is a lateral move, not a drill-in.
+// transcript, a shell's output or a terminal over its parent thread/doc, and a thread⇄doc pair sharing a
+// slug. Everything else — sibling threads, sibling sub-agents — is a lateral move, not a drill-in.
 function stacksOver(below: Drawer, next: Pick<Drawer, "kind" | "slug">): boolean {
   // A file reader is always a DRILL-IN: it is opened by clicking a link inside whatever is already
   // showing (a chat message, another document), so replacing that layer would close the very
   // prose the link was read from. It stacks over anything, its own kind included — following a doc's
   // link to a sibling doc and pressing Esc to come back is the whole point of a reader.
   if (next.kind === "file") return true
-  if (next.kind === "subagent" || next.kind === "shell") return (below.kind === "thread" || below.kind === "doc") && below.slug === next.slug
+  if (next.kind === "subagent" || next.kind === "shell" || next.kind === "terminal") return (below.kind === "thread" || below.kind === "doc") && below.slug === next.slug
   if (next.kind === "doc") return below.kind === "thread" && below.slug === next.slug
   if (next.kind === "thread") return below.kind === "doc" && below.slug === next.slug
   return false
@@ -227,12 +226,12 @@ function openOrRaiseDrawer(next: Omit<Drawer, "id" | "closing" | "openedAt">): v
   queueMicrotask(() => focusDrawer(existing.id))
 }
 
-// Slugs whose FULL panel is up in a live drawer — the chat sheet, or a command thread's terminal. The
-// queue hides these threads' cards (AllQueues.tsx): a card is a second copy of the same questions and
-// reply box, and a thread whose drawer is ALREADY open can rest INTO the queue, where its card then
-// mounted behind the drawer showing the identical panel twice (maintainer 2026-09-23). Hiding the card rather than closing the drawer is deliberate: the reader is usually in
-// that drawer's composer at exactly that moment. A closing layer does not count, so the card is back in
-// place as the drawer slides off it. A doc drawer shows different content and does not hide the card.
+// Slugs whose panel is up in a live drawer — the chat sheet, or one of the thread's terminals (a terminal
+// layer's slug is its thread's). The queue makes these threads' cards inert (AllQueues.tsx): a card is a
+// second copy of the same questions and reply box — and, for a terminal waiting at a prompt, of the same
+// live screen — so a second live copy under the sheet would take keys meant for the drawer (maintainer
+// 2026-09-23). A closing layer does not count, so the card wakes as the drawer slides off it. A doc
+// drawer shows different content and leaves the card alone.
 export function slugsInThreadDrawers(drawers: readonly Pick<Drawer, "kind" | "slug" | "closing">[]): Set<string> {
   return new Set(drawers.filter((d) => !d.closing && (d.kind === "thread" || d.kind === "terminal")).map((d) => d.slug))
 }
@@ -251,8 +250,15 @@ export function drawerThreadSlug(drawers: readonly Pick<Drawer, "kind" | "slug" 
   return null
 }
 
-export function pushDrawer(kind: "thread" | "doc" | "terminal", slug: string, opts?: { routed?: boolean }): void {
+export function pushDrawer(kind: "thread" | "doc", slug: string, opts?: { routed?: boolean }): void {
   openOrRaiseDrawer({ kind, slug, routed: opts?.routed })
+}
+
+// Open one of a thread's TERMINALS (lib/threadTerminals.ts) as a layer over the thread it belongs to.
+// `slug` is the THREAD, as for a sub-agent or a shell, so the layer is that thread's family: it stacks over
+// the thread's own drawer and lights the thread's row. `id` is the terminal's /term handle and dedupe key.
+export function pushTerminalDrawer(slug: string, id: string, opts?: { label?: string }): void {
+  openOrRaiseDrawer({ kind: "terminal", slug, subId: id, label: opts?.label })
 }
 
 // Open a sub-agent's transcript as a new drawer layer OVER whatever's on top (typically the thread it
@@ -275,8 +281,6 @@ export function pushBackgroundShellDrawer(slug: string, id: string, opts: { labe
 // worth seeing) opens the chat drawer. The doc drawer carries the adopt ("Start a session") affordance.
 export function openThread(slug: string): void {
   const t = store.board?.threads.find((x) => x.id === slug)
-  // A terminal command thread has no chat and no document: its drawer IS the live terminal.
-  if (t?.kind === "command") return pushDrawer("terminal", slug)
   pushDrawer(t && t.runtime === "none" ? "doc" : "thread", slug)
 }
 
@@ -299,7 +303,7 @@ export function resolveRoutedThread(): void {
     if (typeof location !== "undefined") location.replace(standaloneThreadHref(slug))
     return
   }
-  pushDrawer(route.kind === "found" && route.thread.kind === "command" ? "terminal" : "thread", slug, { routed: !openedInPlace() })
+  pushDrawer("thread", slug, { routed: !openedInPlace() })
 }
 
 // Navigation state for a thread opened IN PLACE by a click on the page — the cross-project page opening
@@ -347,7 +351,7 @@ export function primeFullscreenReturn(routedSlug: string | undefined): void {
     }, 600)
   }
   // The drawer itself, when the return URL names this thread: the same painted-open push
-  // resolveRoutedThread would make — a command's terminal, anything else its chat — just in the commit
+  // resolveRoutedThread would make — its chat — just in the commit
   // the snapshot actually reads; applyPath then finds the layer already present and leaves it be. A
   // QUEUED thread returns to its drawer too. It was skipped until 2026-09-28, for the project board,
   // where a queued thread's surface was its card; on the one page the card is a summary and the drawer
@@ -355,9 +359,8 @@ export function primeFullscreenReturn(routedSlug: string | undefined): void {
   if (routedSlug !== slug || !store.board) return
   const route = resolveThreadRoute(store.board, slug)
   if (route.kind !== "found") return
-  const kind = route.thread.kind === "command" ? "terminal" : "thread"
-  if (store.drawers.some((d) => d.kind === kind && d.slug === slug && !d.closing)) return
-  pushDrawer(kind, slug, { routed: true })
+  if (store.drawers.some((d) => d.kind === "thread" && d.slug === slug && !d.closing)) return
+  pushDrawer("thread", slug, { routed: true })
 }
 
 // Open a file that lives on disk in Frizz's OWN reader — a `.md` rendered, anything else as source —
@@ -491,15 +494,12 @@ export function topThreadSlug(): string | null {
   return null
 }
 
-// The slug the ADDRESS BAR names: the topmost thread layer, or a command thread's terminal layer. A
-// command thread has no chat, so its terminal IS its thread surface, and `/thread/<slug>` already opens
-// it (resolveRoutedThread). Left out of the URL, a routed terminal opened, found the URL naming no
-// thread, and was closed by the very sync that had opened it — every deep link to a command thread, and
-// every command thread of another project opened from the cross-project page.
+// The slug the ADDRESS BAR names: the topmost thread layer. A thread's terminal, like its sub-agents and
+// shells, is a drill-in the URL does not name — it stacks over the thread the address already names.
 export function topRoutedSlug(): string | null {
   for (let i = store.drawers.length - 1; i >= 0; i--) {
     const d = store.drawers[i]
-    if ((d.kind === "thread" || d.kind === "terminal") && !d.closing) return d.slug
+    if (d.kind === "thread" && !d.closing) return d.slug
   }
   return null
 }
