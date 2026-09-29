@@ -77,17 +77,22 @@ for (let deadline = Date.now() + 300_000; ;) {
 const tLaunched = Date.now()
 for (const [k, s] of Object.entries(SECS)) check(alive(s), `${k} (sleep ${s}) is a real running process after launch`)
 
-// Which Bash calls the hook context followed: every record carrying the prompt, matched to the tool_use
-// it annotates by the nearest preceding Bash launch in the file.
+// Which Bash calls the hook's context was attached to: Claude Code records it as a
+// `hook_additional_context` attachment carrying the tool_use id it annotates — the proof that the text
+// reached the model's context, not only the hook's stdout. (Run 3's first cut matched by file position
+// and misattributed a parallel batch; the id is exact.)
 const PROMPT_MARK = "background shell with no `timeout`"
-const lines = transcript().split("\n")
-const annotated = []
-let lastBash = null
-for (const line of lines) {
-  const m = line.match(/"command":"sleep (178\d)"/)
-  if (m && /"name":"Bash"/.test(line)) lastBash = Number(m[1])
-  if (line.includes(PROMPT_MARK) && lastBash) annotated.push(lastBash)
+const commandOf = new Map()
+for (const r of records()) {
+  if (r.type !== "assistant") continue
+  for (const b of r.message?.content ?? []) {
+    const m = b?.type === "tool_use" && b.name === "Bash" ? /^sleep (178\d)$/.exec(String(b.input?.command ?? "")) : null
+    if (m) commandOf.set(b.id, Number(m[1]))
+  }
 }
+const annotated = records()
+  .filter((r) => r.attachment?.type === "hook_additional_context" && JSON.stringify(r.attachment.content ?? "").includes(PROMPT_MARK))
+  .map((r) => commandOf.get(r.attachment.toolUseID))
 const annotatedSet = new Set(annotated)
 check(annotatedSet.has(SECS.B) && annotatedSet.has(SECS.D), `the spawn-time prompt reached the model after the untimed launches (B, D): saw ${JSON.stringify([...annotatedSet])}`)
 check(!annotatedSet.has(SECS.A) && !annotatedSet.has(SECS.C), "…and after neither timed launch (A, C) — a declared timeout is not nagged")
