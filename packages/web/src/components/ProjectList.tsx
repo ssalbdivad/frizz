@@ -447,6 +447,7 @@ function ProjectGroup({
         project={project}
         grip={grip}
         busy={loud.rows > 0}
+        working={loud.working.length}
         count={loud.ready.length}
         quiet={quiet}
         collapsed={collapsed}
@@ -541,6 +542,7 @@ function ProjectRow({
   collapsed,
   showsRest,
   counts,
+  working,
   home,
 }: {
   project: QueuesProject
@@ -552,6 +554,8 @@ function ProjectRow({
   showsRest: boolean
   /** Whether the row carries the quiet counts, or they sit under its threads instead (QuietFooter). */
   counts: boolean
+  /** Its Working rows — counted on the row while it is folded, the one state that hides them. */
+  working: number
   home: string | undefined
 }) {
   const [menuOpen, setMenuOpen] = useState(false)
@@ -635,7 +639,7 @@ function ProjectRow({
           <span className="text-[10.5px] leading-[19px] text-muted-55">{note}</span>
         ) : (
           <>
-            {counts && <QuietToggle project={project} quiet={quiet} showsRest={showsRest} />}
+            {counts && <QuietToggle project={project} quiet={quiet} showsRest={showsRest} working={collapsed ? working : 0} />}
             {/* The Ready count, in the "…"'s own slot — it gives way to the menu on hover. */}
             {project.card && (
               <span
@@ -674,14 +678,18 @@ function ProjectRow({
  * The rest of a project, before it is shown: one muted count per quiet band, in that band's glyph — the
  * rail's legend (BandLabel.tsx), so "zz 2 · ☑ 43" reads as the Snoozed and Done headers it opens onto.
  * Quieter than the name and never the accent, which in this product means only "this many want you".
+ * A folded project counts its Working rows the same way, first (maintainer 2026-09-29: "when collapsed
+ * ... it should also show the number of running/ready threads"); its Ready rows are the accent badge
+ * beside these, which already stays through a fold, so they are not counted twice.
  *
  * And the toggle for them — the "sub button" beside the row's fold: it shows or hides the rest without
  * folding anything else, and on a folded project it unfolds it too, so its click always shows what it
  * says. `relative`, to sit above the fold's whole-row target; its wash hangs 4px past the counts' ink
  * (`-mx-1 px-1`), so the ink stays exactly where it sat before it was a button.
  */
-function QuietToggle({ project, quiet, showsRest }: { project: QueuesProject; quiet: QuietBands; showsRest: boolean }) {
+function QuietToggle({ project, quiet, showsRest, working = 0 }: { project: QueuesProject; quiet: QuietBands; showsRest: boolean; working?: number }) {
   const entries: { band: BandKey; count: number; noun: string }[] = [
+    { band: "working", count: working, noun: "working" },
     { band: "snoozed", count: quiet.snoozed.length, noun: "snoozed" },
     { band: "done", count: quiet.doneCount, noun: "done" },
     { band: "external", count: quiet.external.length, noun: "external" },

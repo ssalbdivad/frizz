@@ -207,7 +207,7 @@ try {
     const before = await rowsOf(busy)
     const cards = await page.$$eval("[data-xq-card]", (c) => c.length)
     // Its quiet counts sit under its threads while it lists them, and move up onto its row when it folds.
-    const counts = async (scope) => page.$eval(`[data-xq-rail-project="${busy}"]`, (g, scope) => [...g.querySelectorAll(`${scope} [data-xq-quiet-count]`)].map((c) => c.textContent).join(" "), scope)
+    const counts = async (scope) => page.$eval(`[data-xq-rail-project="${busy}"]`, (g, scope) => [...g.querySelectorAll(`${scope} [data-xq-quiet-count]:not([data-xq-quiet-count="working"])`)].map((c) => c.textContent).join(" "), scope)
     const countsBefore = await counts("[data-xq-quiet-footer]")
     const badge = async () => page.$eval(`[data-xq-project-row="${busy}"]`, (row) => {
       const bare = row.cloneNode(true)
@@ -215,11 +215,15 @@ try {
       return bare.textContent
     })
     const badgeBefore = await badge()
+    // Its Working rows are the ones no queue card ties to (this seed pins nothing).
+    const workingBefore = await page.$$eval(`[data-xq-rail-project="${busy}"] [data-sidebar-item]`, (rows) => rows.filter((r) => !r.hasAttribute("data-xq-rail-row")).length)
     await clickSettled(`[data-xq-project-row="${busy}"] [data-xq-project-fold]`)
     await sleep(300)
     const after = await rowsOf(busy)
     check("folding a project hides all its rows", before > 0 && after === 0, `${before} → ${after}`)
     check("…its row still carries its Ready count", (await badge()) === badgeBefore, badgeBefore)
+    const workingAfter = await page.$eval(`[data-xq-project-row="${busy}"]`, (row) => Number(row.querySelector('[data-xq-quiet-count="working"]')?.textContent ?? 0))
+    check("…and counts the Working rows it folded away", workingAfter === workingBefore, `${workingAfter} of ${workingBefore}`)
     check("…and takes its quiet counts up from under the threads", (await counts("[data-xq-project-row]")) === countsBefore && !(await page.$(`[data-xq-quiet-footer="${busy}"]`)), countsBefore || "(none)")
     check("…and the queue on the right is untouched", (await page.$$eval("[data-xq-card]", (c) => c.length)) === cards)
     await page.screenshot({ path: join(shots, "one-view-folded.png") })
