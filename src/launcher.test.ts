@@ -3,7 +3,7 @@ import { randomUUID } from "node:crypto";
 import { once } from "node:events";
 import { createServer, type AddressInfo } from "node:net";
 import { createServer as createHttpServer } from "node:http";
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, symlinkSync, utimesSync, writeFileSync, lstatSync, readlinkSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, symlinkSync, unlinkSync, utimesSync, writeFileSync, lstatSync, readlinkSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, sep } from "node:path";
 import { test } from "node:test";
@@ -673,7 +673,8 @@ test("linked worktree identity survives moves and is retired on removal", () => 
     assert.equal(afterMove.root, realpathSync(moved));
     assert.equal(resolveGitWorktree(moved).identityConfig, privateConfig);
 
-    rmSync(alias);
+    // unlinkSync, not rmSync: Node 25's rmSync follows a symlink to a directory and throws EISDIR.
+    unlinkSync(alias);
     execFileSync("git", ["worktree", "remove", moved], { cwd: main });
     assert.equal(existsSync(privateConfig), false);
     execFileSync("git", ["worktree", "add", "-q", moved, "movable"], {
@@ -1931,7 +1932,8 @@ test("global allocation lock is exclusive and recovers stale, partial, and crash
     releaseCrashed();
     assert.equal(existsSync(lockPath), false);
   } finally {
-    rmSync(homeAlias, { force: true });
+    // The alias is a symlink to a directory, which Node 25's rmSync refuses (EISDIR) — unlink the link.
+    if (lstatSync(homeAlias, { throwIfNoEntry: false })) unlinkSync(homeAlias);
     rmSync(home, { recursive: true, force: true });
   }
 });
