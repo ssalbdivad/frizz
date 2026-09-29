@@ -36,8 +36,8 @@ test("the click writes a PREFETCHED command synchronously (no RPC inside the cli
   // the laggy check. Cold cache falls through to the activation-safe async path.
   assert.match(source, /onPointerEnter=\{prefetch\}/)
   assert.match(source, /onFocus=\{prefetch\}/)
-  assert.match(source, /queryClient\.prefetchQuery\(\{\s*queryKey: terminalCommandKey\(slug\)/)
-  assert.match(source, /const resolved = queryClient\.getQueryData<ResolvedTerminalCommand>\(terminalCommandKey\(slug\)\)/)
+  assert.match(source, /queryClient\.prefetchQuery\(\{\s*queryKey: commandKey/)
+  assert.match(source, /const resolved = queryClient\.getQueryData<ResolvedTerminalCommand>\(commandKey\)/)
   assert.match(source, /if \(resolved\) \{/)
 })
 

@@ -3,7 +3,7 @@
 //
 // It wears the queue card a project's own board drew until 2026-09-28 (TodosView QueueCard): the same
 // bordered, shadowed shell, the same header with the title and its rest time, the human's last message
-// as their bubble, the handoff as prose with its ```done card, the thread's registered questions, a reply box, and the lifecycle footer's
+// as their bubble, the handoff as prose with its ```done card (fenced or registered), the thread's registered questions, a reply box, and the lifecycle footer's
 // Snooze and Mark as done. What it deliberately does NOT carry is the transcript — the tool calls, the
 // earlier rounds, the sub-agent rows. That is the next level down, one click away IN PLACE — the title,
 // and "Show earlier messages" at the card's top, open the thread's own drawer on this page
@@ -38,7 +38,9 @@ import { isPlainLeftClick } from "../lib/standaloneThreadRoute.ts"
 import { useMarkdownHtml } from "../lib/useMarkdown.ts"
 import { IN_PLACE_OPEN_STATE, openThread, showToast, store } from "../store.ts"
 import { crossProjectHref, innerPath, projectSlug } from "../lib/base-path.ts"
-import { QueueDismissContext } from "./ChatView.tsx"
+import { QueueDismissContext, TerminalNetCard } from "./ChatView.tsx"
+import { useCopyTerminalCommand } from "./ExternalTerminalCommand.tsx"
+import { showsRegisteredDoneCard } from "../lib/registeredDone.ts"
 import { Composer } from "./Composer.tsx"
 import { InteractionStack } from "./InteractionCards.tsx"
 import { AwaitingSubAgentsCard, SubAgentWaitSnoozeItems } from "./AwaitingSubAgentsCard.tsx"
@@ -344,6 +346,13 @@ export const AllQueuesCard = memo(function AllQueuesCard({
               {parts?.fences.map((fence, index) => fence.kind === "awaiting" && showsSubAgentWait(thread)
                 ? <AwaitingSubAgentsCard key={index} project={project} thread={thread} body={fence.body} openThread={() => openInPlace(project, thread.id)} onSnoozed={onLeave} onUndone={onUnsnoozed} />
                 : <FenceBody key={index} kind={fence.kind} body={fence.body} />)}
+              {/* A DONE THE WORKER REGISTERED (`mcp__frizz__done`) rather than fenced — the sign-off the worker
+                  contract now asks for first — is in no message, so the handoff text above carries no fence
+                  for it and the card queued a finished thread with no Done card at all. The drawer draws it
+                  from the thread (ChatView's "registered-done" rung); this is the same predicate, keyed on
+                  the same handoff text, so a worker that fenced AND registered gets one card, the fenced one.
+                  Held until the handoff is read, or a fenced done would draw here first and then swap. */}
+              {(handoff.data || handoff.isError) && showsRegisteredDoneCard(thread, text) && <FenceBody kind="done" body={thread.lastFence!.body} />}
               {/* THE GATE: a turn parked on a request — "Run a command?", a native question, an MCP form —
                   with its real buttons, under the prose that led to it. It is the whole reason such a card
                   is in the queue, and this card drew none of it until 2026-09-28: a thread held on a
@@ -356,6 +365,7 @@ export const AllQueuesCard = memo(function AllQueuesCard({
                 <ThreadProjectScope projectId={project.id} projectDir={project.projectDir}>
                   <QueueDismissContext.Provider value={dismiss}>
                     <InteractionStack thread={thread} />
+                    <CardTerminalNet thread={thread} />
                   </QueueDismissContext.Provider>
                 </ThreadProjectScope>
               )}
@@ -499,6 +509,22 @@ function ProjectLinkScope({ project, children }: { project: QueuesProject; child
     navigate(inner.startsWith("/thread/") ? `${crossProjectHref(linked)}${inner}` : href)
   }
   return <div className="contents" onClickCapture={onClickCapture}>{children}</div>
+}
+
+/**
+ * THE TERMINAL NET on the card: a frozen native ask, or the generic permission banner — the two states the
+ * server queues a thread on (board.ts deriveNeedsYou) that journal nothing InteractionStack could draw. The
+ * card showed only InteractionStack from 2026-09-28, so a session parked on a terminal-only prompt queued
+ * with its last progress line and a reply box that cannot land, and never said why. The rungs are the
+ * drawer's own (ChatView TerminalNetCard), and they stand down the same way when an answerable
+ * interaction is on screen. Its copy reads the thread's command through the caller's ThreadProjectScope
+ * (useCopyTerminalCommand → useThreadApi), never the page's `rpc`, which names the FOCUSED project.
+ * PermPolicyDenialCard is deliberately absent: a denial already happened, queues nothing, and is one
+ * click away in the drawer.
+ */
+function CardTerminalNet({ thread }: { thread: ThreadView }) {
+  const copy = useCopyTerminalCommand(thread.id)
+  return <TerminalNetCard thread={thread} onTerminal={() => copy()} />
 }
 
 /** The human's last message, as the transcript draws it — their own bubble — clipped to a few lines. */

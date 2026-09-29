@@ -717,6 +717,35 @@ function frozenPendingAsk(thread: ThreadViewData | undefined): PendingAsk | unde
   return terminalNetStandsDown(thread) ? undefined : thread?.pendingAsk
 }
 
+/** THE TERMINAL NET — the two rungs that say a turn is parked on something only the external terminal
+ *  can answer: a frozen native ask, then the generic permission banner. One function, so the transcript's
+ *  ladder (runtimeStatusRung) and the cross-project queue card (AllQueuesCard, TerminalNetCard) cannot
+ *  disagree about which one a thread gets. The server queues a thread on exactly these two states
+ *  (board.ts deriveNeedsYou), so a card that did not draw them was queued for a reason it never showed.
+ *
+ *  The generic banner stands down on the SAME premise the frozen ask does — see terminalNetStandsDown.
+ *  It did not until 2026-09-05, and a broker-path escalation sets `runtime: "perm-prompt"` AND journals
+ *  an answerable interaction, so the ask row's "Run a command?" card drew with Grant/Deny and this rung
+ *  told the operator to go and answer it in a terminal directly underneath. */
+export function terminalNetRung(thread: ThreadViewData | undefined): "pending-ask" | "perm-prompt" | null {
+  if (frozenPendingAsk(thread)) return "pending-ask"
+  if (thread?.runtime === "perm-prompt" && !terminalNetStandsDown(thread)) return "perm-prompt"
+  return null
+}
+
+/** The terminal net's card, for a surface that draws only this part of the ladder (the queue card). The
+ *  caller supplies `onTerminal` from a useCopyTerminalCommand scoped to the thread's own project. */
+export function TerminalNetCard({ thread, onTerminal }: { thread: ThreadViewData; onTerminal: () => void }) {
+  switch (terminalNetRung(thread)) {
+    case "pending-ask":
+      return <PendingAskCard ask={frozenPendingAsk(thread)!} onTerminal={onTerminal} />
+    case "perm-prompt":
+      return <PermPromptBanner onTerminal={onTerminal} />
+    default:
+      return null
+  }
+}
+
 /** WHICH RUNG WINS, or null when the slot draws nothing at all. The order is the ladder: a provider auth
  *  fault outranks everything (nothing in the thread can make progress until the credential is restored),
  *  a frozen ask outranks the generic perm banner and the Working… spinner, the human's own park outranks
@@ -726,12 +755,8 @@ function runtimeStatusRung({ thread, showWorking, registeredDone, restedCard, er
   if (thread?.providerError?.retrying) return "provider-error"
   if (thread?.providerFault && !thread.foreign) return "provider-fault"
   if (thread?.limitPause && !thread.foreign) return "limit-pause"
-  if (frozenPendingAsk(thread)) return "pending-ask"
-  // The generic banner stands down on the SAME premise the frozen ask does — see terminalNetStandsDown.
-  // It did not until 2026-09-05, and a broker-path escalation sets `runtime: "perm-prompt"` AND journals
-  // an answerable interaction, so the ask row's "Run a command?" card drew with Grant/Deny and this rung
-  // told the operator to go and answer it in a terminal directly underneath.
-  if (thread?.runtime === "perm-prompt" && !terminalNetStandsDown(thread)) return "perm-prompt"
+  const net = terminalNetRung(thread)
+  if (net) return net
   if (showWorking) return "working"
   if (thread?.providerError) return errorVisible ? null : "provider-error"
   if (showsSnoozeCard(thread)) return "snooze"
@@ -777,9 +802,8 @@ function RuntimeStatusLadder({
     case "limit-pause":
       return <LimitPauseCard slug={slug} sessionId={thread!.sessionId} pause={thread!.limitPause!} />
     case "pending-ask":
-      return <PendingAskCard ask={frozenPendingAsk(thread)!} onTerminal={onTerminal} />
     case "perm-prompt":
-      return <PermPromptBanner onTerminal={onTerminal} />
+      return <TerminalNetCard thread={thread!} onTerminal={onTerminal} />
     case "working":
       return <WorkingIndicator since={thread?.lastUserAt} startedAt={liveRuntimeStart} activityLabel={liveActivityLabel} run={liveToolRun} />
     case "snooze":
