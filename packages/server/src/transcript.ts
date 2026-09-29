@@ -1,4 +1,5 @@
 import { closeSync, existsSync, fstatSync, mkdirSync, openSync, readdirSync, readFileSync, readSync, renameSync, statSync, unlinkSync, writeFileSync } from "node:fs"
+import { workflowAckTaskId, workflowLabel } from "./workflow-runs.ts"
 import { createHash } from "node:crypto"
 import { StringDecoder } from "node:string_decoder"
 import { join } from "node:path"
@@ -1658,7 +1659,7 @@ function attachToolResults(
     // task-notification in that case. A launch error, however, may never produce a notification and
     // must not leave the card spinning forever.
     if (
-      (entry.name === "Agent" || entry.calls.some((call) => call.backgroundState === "background")) &&
+      (entry.name === "Agent" || entry.name === "Workflow" || entry.calls.some((call) => call.backgroundState === "background")) &&
       b.is_error !== true &&
       !(text && (cancelledToolResult(text) || failedToolResult(text)))
     ) {
@@ -1692,6 +1693,7 @@ function attachToolResults(
         text?.match(/Command running in background with ID:\s*(\S+)/)?.[1]?.replace(/\.$/, "") ??
         text?.match(/was moved to the background \(ID:\s*([^)\s]+)\)/)?.[1] ??
         text?.match(/Monitor started \(task\s+(\w+)/)?.[1] ??
+        (entry.name === "Workflow" ? workflowAckTaskId(text ?? "") : undefined) ??
         (dispatchId ? (ackAgentId || text?.match(/agentId:\s*(\S+)/)?.[1]) : undefined)
       if (taskId) backgroundTaskIds.set(taskId, b.tool_use_id)
       continue
@@ -1788,6 +1790,15 @@ function toolCalls(block: any, turn: { turnModel?: string; turnEffort?: string }
       })
       const agentId = typeof block.id === "string" ? block.id : undefined
       return [{ name, detail: description ?? detail, prompt: capAgentPrompt(input.prompt), subagentType, agentId }]
+    }
+    // A WORKFLOW run renders on the same card as an Agent dispatch: its name is the header, its script
+    // the expandable body, and block.id the drill-in handle — the run's drawer lists its agents
+    // (workflow-runs.ts). Carrying `agentId` also registers it as a dispatch, so its completion
+    // notification settles the card and drops the same inline completion line an agent's does.
+    if (name === "Workflow") {
+      const agentId = typeof block.id === "string" ? block.id : undefined
+      const body = typeof input.script === "string" ? input.script : typeof input.scriptPath === "string" ? input.scriptPath : undefined
+      return [{ name, detail: redactToolPayload(workflowLabel(input)), prompt: body ? capAgentPrompt(redactToolPayload(body)) : undefined, agentId }]
     }
     // A SendMessage (peer/agent-to-agent) renders as its own SendMessageCard (Bash/Agent family): the
     // recipient (`to`, alias `recipient`) rides the header as "→ <name>", the `summary` is the one-line

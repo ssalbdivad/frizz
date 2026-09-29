@@ -9,6 +9,7 @@ import { coalesceToolActivityMessages, historicalToolActivityMessages, liveRunti
 import { BackgroundOpsStrip, ChildDrillSlugContext, Message, VSpace, WorkingIndicator, transcriptBackgroundShells, withMessageSpacers, withoutLiveTranscriptBackgroundTools, workingIndicatorGap } from "./ChatView.tsx"
 import { Composer } from "./Composer.tsx"
 import { Sheet } from "./ui/Sheet.tsx"
+import { WorkflowRunTree } from "./WorkflowRunTree.tsx"
 import { SheetHeader } from "./ui/SheetHeader.tsx"
 
 // One SUB-AGENT layer of the side-drawer stack: a right sheet (same slide/backdrop family as the
@@ -94,7 +95,9 @@ export function SubAgentSheet({
   // Unavailable = the RPC errored (e.g. a pre-restart server without this endpoint), the id is unknown
   // ("gone"), or a settled child (done/stale) whose transcript file is empty/cleaned. A RUNNING child
   // with no messages yet is just starting → a spinner, not "unavailable".
-  const unavailable = q.isError || state === "gone" || (messages.length === 0 && (state === "done" || state === "stale"))
+  // A WORKFLOW run has no transcript of its own: its body is the tree of agents it fanned out.
+  const workflowAgents = q.data?.workflow
+  const unavailable = q.isError || state === "gone" || (!workflowAgents && messages.length === 0 && (state === "done" || state === "stale"))
 
   // Defer the transcript body one frame past the shell's own slide-in (the shared <Sheet> flips `shown`
   // on the first frame; this lands bodyReady on the next) so the sheet paints instantly.
@@ -144,6 +147,8 @@ export function SubAgentSheet({
               <div className="flex h-full items-center justify-center px-8 text-center text-[13px] text-muted">
                 Transcript unavailable (agent completed or cleaned up).
               </div>
+            ) : workflowAgents && bodyReady ? (
+              <WorkflowRunTree slug={slug} agents={workflowAgents} />
             ) : !bodyReady || q.isLoading || messages.length === 0 ? (
               <div className="flex h-full items-center justify-center">
                 <span className="block h-5 w-5 rounded-full border-2 border-muted/50 border-t-transparent animate-spin" />
@@ -185,10 +190,12 @@ export function SubAgentSheet({
             note={q.data?.steerNote ?? null}
             stoppable={q.data?.stoppable === true}
             stopNote={q.data?.stopNote ?? null}
+            noun={workflowAgents ? "workflow" : "sub-agent"}
             // The same anchored strip the thread's prompt box carries, scoped to THIS child's own
             // subtree. Without it a sub-agent that fanned out read as idle in its own drawer while its
             // grandchildren were still working — the one surface where that fan-out is the whole story.
-            ops={(className) => (
+            // A workflow's drawer body already IS its live subtree, so the strip would only repeat it.
+            ops={workflowAgents ? undefined : (className) => (
               <BackgroundOpsStrip slug={slug} parentAgentId={subId} transcriptShells={liveTranscriptShells} className={className} />
             )}
           />
@@ -212,6 +219,7 @@ function SubAgentSteerFooter({
   note,
   stoppable,
   stopNote,
+  noun = "sub-agent",
   ops,
 }: {
   slug: string
@@ -221,6 +229,8 @@ function SubAgentSteerFooter({
   note: string | null
   stoppable: boolean
   stopNote: string | null
+  // What the Stop button and its toasts call this child — "workflow" for a Workflow run.
+  noun?: "sub-agent" | "workflow"
   // Rows for the work running UNDER this sub-agent. A RENDER PROP rather than a node, because this
   // footer has two shapes and the strip needs different chrome in each: inside the prompt panel it is
   // just padding under the box (the same composition ThreadComposerBox uses), and where there is no
@@ -269,12 +279,13 @@ function SubAgentSteerFooter({
         // The subtree is the part the drawer cannot show: this sheet renders ONE child's transcript,
         // so its own fan-out ending is only ever visible here. A descendant frizz could not stop is
         // live work and gets the longer toast.
-        if (subtree) showToast(`Sub-agent stopped. ${subtree}`, { duration: 7000 })
-        else showToast(descendantsStopped > 0 ? `Sub-agent and ${descendantsStopped} descendant${descendantsStopped === 1 ? "" : "s"} stopped` : "Sub-agent stopped")
+        const Noun = noun === "workflow" ? "Workflow" : "Sub-agent"
+        if (subtree) showToast(`${Noun} stopped. ${subtree}`, { duration: 7000 })
+        else showToast(descendantsStopped > 0 ? `${Noun} and ${descendantsStopped} descendant${descendantsStopped === 1 ? "" : "s"} stopped` : `${Noun} stopped`)
         void qc.invalidateQueries({ queryKey: ["subAgentTranscript", slug, subId] })
       })
       .catch((error: unknown) => {
-        showToast(error instanceof Error ? error.message : "Could not stop this sub-agent")
+        showToast(error instanceof Error ? error.message : `Could not stop this ${noun}`)
       })
       .finally(() => setStopping(false))
   }
@@ -341,7 +352,7 @@ function SubAgentSteerFooter({
             onClick={stop}
             className="rounded-md border border-border-strong bg-panel-2/60 px-2.5 py-1 text-[12px] text-fg/80 transition-colors hover:border-danger/40 hover:bg-danger/10 hover:text-danger-soft disabled:opacity-50"
           >
-            {stopping ? "Stopping…" : "Stop sub-agent"}
+            {stopping ? "Stopping…" : `Stop ${noun}`}
           </button>
         </footer>
       )}

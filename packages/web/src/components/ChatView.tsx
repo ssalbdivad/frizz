@@ -2153,7 +2153,7 @@ export function ToolCardRouter({ t, startedAt }: { t: CollapsedTool; startedAt?:
   // A dispatch renders as an AgentBlock on EITHER signal: a prompt (Claude) or just the correlation id
   // (codex — it encrypts the dispatch message, so there is no prompt to show, but the child is still
   // tracked and drillable). Gating on the prompt alone left every codex sub-agent as a mute generic card.
-  if (t.prompt || t.agentId) return <AgentBlock detail={t.detail} prompt={t.prompt} subagentType={t.subagentType} agentId={t.agentId} agentStatus={t.agentStatus} agentElapsedMs={t.agentElapsedMs} status={t.status} durationMs={t.durationMs} />
+  if (t.prompt || t.agentId) return <AgentBlock kind={t.name === "Workflow" ? "Workflow" : "Agent"} detail={t.detail} prompt={t.prompt} subagentType={t.subagentType} agentId={t.agentId} agentStatus={t.agentStatus} agentElapsedMs={t.agentElapsedMs} status={t.status} durationMs={t.durationMs} />
   if (t.sendTo !== undefined || t.sendBody !== undefined) return <SendMessageBlock to={t.sendTo} summary={t.sendSummary} body={t.sendBody ?? ""} type={t.sendType} dispatchId={t.sendDispatchId} targetLabel={t.sendTargetLabel} status={t.status} durationMs={t.durationMs} at={startedAt} />
   if (t.sentImages || t.sentFiles) return <SentFilesCard images={t.sentImages ?? []} files={t.sentFiles ?? []} caption={t.caption} status={t.status} durationMs={t.durationMs} />
   // The built-in to-do list, ahead of the generic input/output card (a codex plan's `explanation` rides
@@ -2706,6 +2706,7 @@ function ReadBlock({ detail, read, status, durationMs }: { detail?: string; read
 // coverage — the double-indicator bug shipped precisely because the fixture skipped it.
 const AGENT_MAX_LINES = 16
 export function AgentBlock({
+  kind = "Agent",
   detail,
   prompt,
   subagentType,
@@ -2715,6 +2716,8 @@ export function AgentBlock({
   status,
   durationMs,
 }: {
+  // The card's kind label. "Workflow" for a `Workflow` run, which drills into its tree of agents.
+  kind?: "Agent" | "Workflow"
   detail?: string
   // Only the initial instruction belongs in this disclosure, never fork settings or the spawn ACK.
   // Codex may encrypt it; an unavailable prompt must not be replaced by unrelated tool metadata.
@@ -2811,7 +2814,7 @@ export function AgentBlock({
         className="frizz-bash-header"
         controls={bodyId}
         expanded={open}
-        label={`${open ? "Collapse" : "Expand"} Agent dispatch: ${title}`}
+        label={`${open ? "Collapse" : "Expand"} ${kind} dispatch: ${title}`}
         onToggle={() => setOpen((v) => !v)}
         meta={
           // THE READOUT: the child's PROFILE, then its RUNTIME — the order and the separator the resting
@@ -2864,13 +2867,13 @@ export function AgentBlock({
             for a petite-caps label beside a path, and at full width a 6px dot floated away from the word
             it qualifies. Same slot, same class, same numbers as a background shell card's mark. */}
         {mark && <span className="frizz-tool-mark -mr-1 flex w-[9px] shrink-0 justify-center">{mark}</span>}
-        <span className="petite-caps frizz-bash-label shrink-0">Agent</span>
+        <span className="petite-caps frizz-bash-label shrink-0">{kind}</span>
         {canDrill ? (
           <button
             type="button"
-            aria-label={`Open sub-agent transcript: ${title}`}
+            aria-label={`${kind === "Workflow" ? "Open workflow agents" : "Open sub-agent transcript"}: ${title}`}
             // The profile renders in the header now, so this tooltip is back to naming its own action.
-            title="Open sub-agent transcript"
+            title={kind === "Workflow" ? "Open workflow agents" : "Open sub-agent transcript"}
             onClick={openDrawer}
             className="min-w-[4rem] flex-1 truncate text-left text-[11.5px] text-muted outline-none hover:underline hover:text-fg/80 focus-visible:underline focus-visible:text-fg/80"
           >
@@ -4199,11 +4202,12 @@ function AgentCompletionLine({ call, sourceId, at }: { call: TranscriptToolCall;
   const title = call.detail ?? "sub-agent"
   const { tail } = subAgentCompletionOutcome(call)
   const canDrill = !!(slug && call.agentId)
+  const noun = call.name === "Workflow" ? "Workflow" : "Sub-agent"
   // `at` is the instant the completion LANDED, and it sits after the run's own duration in `tail`
   // ("finished · 35 min · 2h ago"): how long it ran, then how long ago it came back.
   return (
-    <WakeDivider icon={Bot} sourceId={sourceId} marker="agent" ariaLabel={canDrill ? undefined : `Sub-agent ${title} ${tail}`} at={at}>
-      <span className="shrink-0">Sub-agent</span>
+    <WakeDivider icon={Bot} sourceId={sourceId} marker="agent" ariaLabel={canDrill ? undefined : `${noun} ${title} ${tail}`} at={at}>
+      <span className="shrink-0">{noun}</span>
       {/* The guillemets sit OUTSIDE the truncating element (and inside a gap-less nested flex) so a
           title clipped at a narrow width still closes its quote — `«a long title…` reads as broken
           punctuation, not as a truncation. It also scopes the link underline to the title itself. */}
