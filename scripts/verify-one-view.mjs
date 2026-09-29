@@ -9,7 +9,8 @@
 //     project row's ⋯ menu focuses on its project too;
 //   · a project's other bands (Snoozed, Done, External) open in place under its row, each by its own
 //     count and one at a time, and a row there opens its thread's drawer on the page;
-//   · /full is an option of the drawer's own menu, not a door on cards and rows; `f` in a drawer takes
+//   · /full is a card's ⤢ (addressed with the card's own project) and an option of the drawer's menu,
+//     never a door on a list row; `f` in a drawer takes
 //     it, and leaving /full comes back to the drawer;
 //   · a `/login` typed into a card's reply box opens sign-in instead of reaching the worker;
 //   · at a phone's width nothing overflows sideways.
@@ -163,9 +164,14 @@ try {
     const links = await page.$$eval("a[href]", (as) => as.map((a) => a.getAttribute("href")).filter((h) => /^\/project(\/|$)/.test(h ?? "")))
     check("nothing on the page links to a project view", links.length === 0, links.slice(0, 3).join(", "))
   })
-  await step("no card or row carries a fullscreen door", async () => {
-    const doors = await page.$$eval("[data-xq-card] [data-command='fullscreen'], [data-xq-card] a[href$='/full'], [data-sidebar-item] a[href$='/full']", (els) => els.length)
-    check("no card or row carries a fullscreen door", doors === 0, `${doors} found`)
+  // A card's ⤢ is its door to /full again (1e36e154, 2026-09-29: Colin's card had one), addressed with
+  // the CARD's project, never the page's; a row in the list has none.
+  await step("a card's fullscreen door names the card's own project, and no list row carries one", async () => {
+    const slugOf = Object.fromEntries(projects.map((p) => [p.id, p.slug]))
+    const doors = await page.$$eval("[data-xq-card] [data-command='fullscreen']", (els) => els.map((el) => ({ key: el.closest("[data-xq-card]").getAttribute("data-xq-card"), href: el.getAttribute("href") })))
+    const wrong = doors.filter(({ key, href }) => { const [id, slug] = key.split("/"); return href !== `/all/${slugOf[id]}/thread/${slug}/full` })
+    const rowDoors = await page.$$eval("[data-sidebar-item] a[href$='/full']", (els) => els.length)
+    check("a card's fullscreen door names the card's own project, and no list row carries one", doors.length > 0 && wrong.length === 0 && rowDoors === 0, `${doors.length} card doors, ${wrong.length} mis-addressed${wrong[0] ? ` (${wrong[0].key} → ${wrong[0].href})` : ""}, ${rowDoors} on rows`)
   })
   // Every project the stack opened has a row — and so does the Home workspace, which every server lists
   // and the stack's own line does not name.
