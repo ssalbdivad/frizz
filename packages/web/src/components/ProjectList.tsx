@@ -798,7 +798,9 @@ function QuietToggles({ project, quiet, opened, working = 0 }: { project: Queues
             title={label}
             onClick={() => {
               setProjectCollapsed(project.id, false)
-              if (band !== "working") setBandOpen(project.id, band as QuietBandKey)
+              // To the state the click SAW, not a toggle of whatever the store holds by now: two clicks
+              // landing before a render (the row's fold and a count, from a script) must agree.
+              if (band !== "working") setBandOpen(project.id, band as QuietBandKey, !isOpen)
             }}
             // The glyph sits on its DIGIT's cap band, not beside its box: box-centred, all three glyphs read
             // 1.5px low (sans, 10.5px). The pair shares one font size, set on the pair, so `cap` resolves
