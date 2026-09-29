@@ -1893,6 +1893,7 @@ function sessionThreadView(
     awaitingBackground,
     crashed,
     quietTurnSince: quietSince,
+    quietTurnCall: quietSince !== undefined ? tele?.openCall : undefined,
     pendingInteraction: interactionPresence.pending,
     actionableInteraction: interactionPresence.needsUser,
     // Preserve only a durable, canonical backend identity. In particular, Claude is not inferred

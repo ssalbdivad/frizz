@@ -10,7 +10,7 @@ import { permMarkerPath, workDirOf, type Project } from "./project.ts"
 import { isBrokerClaudeRow, isHeadlessRow } from "./storage.ts"
 import type { Storage, SessionRow } from "./storage.ts"
 import { discoverTranscriptDir, discoverTranscriptId, mtimeOfNonEmpty, DISCOVERY_GRACE_MS } from "./discover.ts"
-import type { AgentBackend, FoldState, NormalizedEvent, NormalizedTail } from "./backend/types.ts"
+import type { AgentBackend, FoldState, NormalizedEvent, NormalizedTail, OpenCall } from "./backend/types.ts"
 import { adoptionRuntimeBinding } from "./adoption-recovery.ts"
 import { normalizeObservedThreadModel, validateThreadProfile } from "./backend/thread-profiles.ts"
 import { dispatchProfileCell } from "./subagent-profile.ts"
@@ -1066,6 +1066,67 @@ function shellSummary(command: unknown): string {
   return first.length > 120 ? `${first.slice(0, 119)}…` : first
 }
 
+// OPEN CALLS — see FoldState.openCalls. Each is answered by its own result, usually the next record, so
+// this bounds only a turn whose results never land.
+const OPEN_CALLS_MAX = 32
+const OPEN_CALL_COMMAND_MAX = 400
+
+// The call as the human should read it. A shell call's command is the thing worth naming, whatever key
+// the backend spells it with: Claude's `command`, codex's `cmd`, or codex's older argv array.
+function openCallFrom(name: string, input: unknown, at: string | undefined): OpenCall {
+  const i = (input && typeof input === "object" ? input : {}) as { description?: unknown; command?: unknown; cmd?: unknown }
+  const raw = typeof i.command === "string" ? i.command
+    : typeof i.cmd === "string" ? i.cmd
+    : Array.isArray(i.command) && i.command.every((a) => typeof a === "string") ? (i.command as string[]).at(-1)
+    : typeof input === "string" && /shell|exec|bash/i.test(name) ? input
+    : undefined
+  const command = raw?.trim() ? (raw.trim().length > OPEN_CALL_COMMAND_MAX ? `${raw.trim().slice(0, OPEN_CALL_COMMAND_MAX - 1)}…` : raw.trim()) : undefined
+  const label = typeof i.description === "string" && i.description.trim() ? i.description.trim() : undefined
+  return { name, ...(label ? { label } : {}), ...(command ? { command } : {}), ...(at ? { startedAt: at } : {}) }
+}
+
+function openCallIssued(state: FoldState, id: string, call: OpenCall): void {
+  const open = (state.openCalls ??= new Map())
+  open.delete(id) // a re-seen id moves to newest
+  open.set(id, call)
+  while (open.size > OPEN_CALLS_MAX) {
+    const oldest = open.keys().next().value
+    if (oldest === undefined) break
+    open.delete(oldest)
+  }
+}
+
+export function newestOpenCall(state: FoldState): OpenCall | undefined {
+  let last: OpenCall | undefined
+  for (const call of state.openCalls?.values() ?? []) last = call
+  return last
+}
+
+// Claude: every tool_use in an assistant record opens a call; every tool_result in a user record settles
+// one; a user record carrying NO tool_result (a human turn, a notification, an interrupt receipt) opens a
+// new turn and forgets whatever the old one left unanswered.
+function trackOpenCalls(state: TailState, rec: Record): void {
+  const content = rec.message?.content
+  if (!Array.isArray(content)) return
+  const at = typeof rec.timestamp === "string" ? rec.timestamp : undefined
+  for (const block of content) {
+    const b = block as { type?: string; name?: unknown; id?: unknown; input?: unknown } | null
+    if (b?.type === "tool_use" && typeof b.id === "string") openCallIssued(state, b.id, openCallFrom(typeof b.name === "string" ? b.name : "tool", b.input, at))
+  }
+}
+
+function settleOpenCalls(state: TailState, rec: Record): void {
+  const content = rec.message?.content
+  const results = Array.isArray(content)
+    ? content.filter((b): b is { type: "tool_result"; tool_use_id?: unknown } => (b as { type?: unknown } | null)?.type === "tool_result")
+    : []
+  if (results.length === 0) {
+    state.openCalls = undefined
+    return
+  }
+  for (const r of results) if (typeof r.tool_use_id === "string") state.openCalls?.delete(r.tool_use_id)
+}
+
 // Register each BACKGROUND OP in an assistant message as a tracked live entry, keyed by tool_use id:
 //   • an `Agent` dispatch (unless run_in_background:false — a foreground/blocking child the spinner
 //     already covers; Agent defaults to background) → kind "agent" (drill-in + [type] tag).
@@ -1972,6 +2033,7 @@ export function applyRecord(state: TailState, rec: Record): void {
       state.lastToolCallAt = rec.timestamp
     }
     trackDispatches(state, rec) // register any background Agent dispatches + background shells
+    trackOpenCalls(state, rec) // what a silent turn is blocked on
     trackAsk(state, rec) // capture a pending native AskUserQuestion (frozen at a TUI dialog)
   } else if (type === "user" && !metaUserRec) {
     state.sawRecords = true
@@ -2028,6 +2090,7 @@ export function applyRecord(state: TailState, rec: Record): void {
         if (text) state.firstUserText = text.slice(0, FIRST_USER_TEXT_MAX)
       }
     }
+    settleOpenCalls(state, rec)
     trackLaunchResults(state, rec) // resolve a background dispatch's transcript path from its launch result
     trackResumes(state, rec) // a SendMessage that RESTARTED a stopped child is a fresh launch — revive it
     trackStops(state, rec) // a manual TaskStop is a terminal signal — retire the op it killed
@@ -2099,6 +2162,7 @@ export function applyEvent(state: FoldState, ev: NormalizedEvent): void {
       // A turn opened → the agent is working.
       state.sawRecords = true
       state.turn = "in-flight"
+      state.openCalls = undefined // a call the last turn left unanswered is not what this one waits on
       break
     case "turn-end":
       // A turn bracketed closed → idle. finalText (when the backend carries the final message on the
@@ -2169,6 +2233,8 @@ export function applyEvent(state: FoldState, ev: NormalizedEvent): void {
       // final message recomputes it), so a normalized backend must not let tool motion excuse a fence.
       state.sawRecords = true
       if (ev.kind === "tool-call" && typeof ev.at === "string") state.lastToolCallAt = ev.at
+      if (ev.kind === "tool-call") openCallIssued(state, ev.id, openCallFrom(ev.name, ev.input, ev.at))
+      else state.openCalls?.delete(ev.id)
       break
     case "agent-report":
     case "agent-instruction":
@@ -5270,7 +5336,7 @@ export function createTailer(deps: TailerDeps): Tailer {
       // thread has no row and reads as legacy, which is what `questionFencesLive` does with unknown.
       const pendingQuestion = s.lastAssistantHasQuestion && questionFencesLive(row?.spawned_at)
       const nowMs = now()
-      return { primed: s.primed, turn: s.turn, permPrompt: s.permPrompt, permPolicy: s.permPolicy, permDenies: s.permDenies, model: s.model, effort: s.effort, profileAt: s.profileAt, profileRevision: s.profileRevision, permissionMode: s.permissionMode, permissionModeAt: s.permissionModeAt, permissionModeRevision: s.permissionModeRevision, lastActivityAt: s.lastActivityAt, lastAssistantAt: s.lastAssistantAt, lastAssistant: s.lastAssistant, aiTitle: s.aiTitle, customTitle: s.customTitle, customTitleRevision: s.customTitleRevision, subAgents: subAgentViews(s, nowMs), droppedReports: [...s.queuedReports.values()], bgShells: [...bgShellViews(s), ...codexBgShellViews(s)], retiredShells: retiredShellViews(s), retiredSubAgents: retiredSubAgentViews(s), pendingAsk: s.pendingAsk, pendingQuestion, lastAssistantAllDone: s.lastAssistantAllDone, lastUserAt: s.lastUserAt, lastHumanAt: s.lastHumanAt, lastToolCallAt: s.lastToolCallAt, lastUserText: s.lastUserText, firstUserText: s.firstUserText, lastFence: s.lastFence, noTranscript: s.noTranscript, authFault: s.authFault, apiFault: s.apiFault, providerError: s.providerError, limitFault: s.limitFault, contextTokens: s.contextTokens, contextWindow: s.contextWindow, lastCompactionAt: s.lastCompactionAt }
+      return { primed: s.primed, turn: s.turn, permPrompt: s.permPrompt, permPolicy: s.permPolicy, permDenies: s.permDenies, model: s.model, effort: s.effort, profileAt: s.profileAt, profileRevision: s.profileRevision, permissionMode: s.permissionMode, permissionModeAt: s.permissionModeAt, permissionModeRevision: s.permissionModeRevision, lastActivityAt: s.lastActivityAt, lastAssistantAt: s.lastAssistantAt, lastAssistant: s.lastAssistant, aiTitle: s.aiTitle, customTitle: s.customTitle, customTitleRevision: s.customTitleRevision, subAgents: subAgentViews(s, nowMs), droppedReports: [...s.queuedReports.values()], bgShells: [...bgShellViews(s), ...codexBgShellViews(s)], retiredShells: retiredShellViews(s), retiredSubAgents: retiredSubAgentViews(s), pendingAsk: s.pendingAsk, pendingQuestion, lastAssistantAllDone: s.lastAssistantAllDone, lastUserAt: s.lastUserAt, lastHumanAt: s.lastHumanAt, lastToolCallAt: s.lastToolCallAt, openCall: newestOpenCall(s), lastUserText: s.lastUserText, firstUserText: s.firstUserText, lastFence: s.lastFence, noTranscript: s.noTranscript, authFault: s.authFault, apiFault: s.apiFault, providerError: s.providerError, limitFault: s.limitFault, contextTokens: s.contextTokens, contextWindow: s.contextWindow, lastCompactionAt: s.lastCompactionAt }
     },
     // The CURRENT fresh foreign session ids (mtime within FOREIGN_FRESH_MS, capped), mtime-desc. Kept
     // as the last scan's result — recomputed at most every FOREIGN_SCAN_EVERY ticks.

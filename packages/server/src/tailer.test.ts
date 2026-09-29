@@ -9,7 +9,7 @@ import type { ServerEvent } from "@frizz/shared"
 import { AwaitingHint, BURIED_ANSWERS_HEADER, QUESTION_FENCE_RETIRED_AT, wakeDeliveryToken } from "@frizz/shared"
 import { permMarkerPath, type Project } from "./project.ts"
 import { degradeIfAwaitingAnswer, deriveNeedsYou } from "./board.ts"
-import { parseLine, applyRecord, applyEvent, computeTurn, newTailState, createTailer, defaultBrokerDaemonAlive, hasQuestionBlock, isClaudeAuthErrorText, isRealUserMessage, parseSignalFence, markerDecision, unwrapShellCommand, FOREIGN_FRESH_MS, parseWindowsShellHolderReport, probeShellsAlive, windowsShellHolderCommand } from "./tailer.ts"
+import { parseLine, applyRecord, applyEvent, newestOpenCall, computeTurn, newTailState, createTailer, defaultBrokerDaemonAlive, hasQuestionBlock, isClaudeAuthErrorText, isRealUserMessage, parseSignalFence, markerDecision, unwrapShellCommand, FOREIGN_FRESH_MS, parseWindowsShellHolderReport, probeShellsAlive, windowsShellHolderCommand } from "./tailer.ts"
 import { claudeBrokerRecordPath } from "./backend/claude-broker-host.ts"
 import type { AgentBackend, NormalizedEvent } from "./backend/types.ts"
 import { createClaudeBackend } from "./backend/claude.ts"
@@ -4441,6 +4441,35 @@ test("tailer: an ACP row past the discovery grace with no transcript yet is NOT 
 // A registered done outlives the human's next word only while the worker has not RUN anything since
 // (board.registeredDoneFence), so both backends have to fold the instant of the newest tool call — and
 // only a tool call: prose must never move it, or a chat reply would read as new work.
+test("openCall: names the call still waiting on its result, on either backend", () => {
+  const s = newTailState("t", "sid", "/x")
+  applyRecord(s, {
+    type: "assistant",
+    timestamp: "2026-07-01T00:00:01.000Z",
+    message: { stop_reason: "tool_use", content: [
+      { type: "tool_use", id: "tu_1", name: "Read", input: { file_path: "/a" } },
+      { type: "tool_use", id: "tu_2", name: "Bash", input: { command: "  npm publish\n", description: "Publishing" } },
+    ] },
+  })
+  assert.deepEqual(newestOpenCall(s), { name: "Bash", label: "Publishing", command: "npm publish", startedAt: "2026-07-01T00:00:01.000Z" })
+  applyRecord(s, { type: "user", timestamp: "2026-07-01T00:00:02.000Z", message: { content: [{ type: "tool_result", tool_use_id: "tu_2", content: "ok" }] } })
+  assert.equal(newestOpenCall(s)?.name, "Read", "a settled call is no longer what the turn waits on")
+  // A record that opens a new turn (here an interrupt receipt) drops what the old turn left unanswered.
+  applyRecord(s, { type: "user", timestamp: "2026-07-01T00:00:03.000Z", message: { content: [{ type: "text", text: "[Request interrupted by user]" }] } })
+  assert.equal(newestOpenCall(s), undefined)
+
+  const c = newTailState("t", "sid", "/x")
+  applyEvent(c, { kind: "turn-start", at: "2026-07-01T00:00:01.000Z" })
+  applyEvent(c, { kind: "tool-call", at: "2026-07-01T00:00:02.000Z", id: "c1", name: "exec_command", input: { cmd: "gh auth login" } })
+  assert.deepEqual(newestOpenCall(c), { name: "exec_command", command: "gh auth login", startedAt: "2026-07-01T00:00:02.000Z" })
+  applyEvent(c, { kind: "tool-result", at: "2026-07-01T00:00:03.000Z", id: "c1", text: "" })
+  assert.equal(newestOpenCall(c), undefined)
+  applyEvent(c, { kind: "tool-call", at: "2026-07-01T00:00:04.000Z", id: "c2", name: "shell", input: { command: ["bash", "-lc", "sleep 1"] } })
+  assert.equal(newestOpenCall(c)?.command, "sleep 1")
+  applyEvent(c, { kind: "turn-start", at: "2026-07-01T00:00:05.000Z" })
+  assert.equal(newestOpenCall(c), undefined, "a new turn is not blocked on the last one's call")
+})
+
 test("lastToolCallAt: advanced by a tool call on either backend, never by prose", () => {
   const s = newTailState("t", "sid", "/x")
   applyRecord(s, {

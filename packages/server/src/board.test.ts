@@ -2667,7 +2667,8 @@ test("board: a silent in-flight turn queues while still running, and a snooze or
   storage.setBackend("wedged", "codex")
   storage.setCodexRuntime("wedged", "app-server")
   const now = Date.now()
-  let current = tele({ turn: "in-flight", lastActivityAt: new Date(now - QUIET_TURN_MS - 60_000).toISOString() })
+  const openCall = { name: "Bash", label: "Publishing", command: "npm publish", startedAt: T0 }
+  let current = tele({ turn: "in-flight", lastActivityAt: new Date(now - QUIET_TURN_MS - 60_000).toISOString(), openCall })
   const tailer = { get: () => current, foreignIds: () => [], subAgent: () => undefined, forget: () => {}, start: () => {}, stop: () => {}, tick: () => {} } satisfies Tailer
   const board = createBoard(project, storage, new Bus(), tailer, "quiet-turn", { codexTurnLiveness: () => ({ bridgeTurn: true, ownedSince: T0 }) })
   try {
@@ -2675,11 +2676,13 @@ test("board: a silent in-flight turn queues while still running, and a snooze or
     assert.equal(thread.runtime, "running")
     assert.equal(thread.needsYou, true)
     assert.equal(thread.quietTurnSince, current.lastActivityAt)
+    assert.deepEqual(thread.quietTurnCall, openCall, "the card names what the turn is blocked on")
 
-    current = tele({ turn: "in-flight", lastActivityAt: new Date(now - 30_000).toISOString() })
+    current = tele({ turn: "in-flight", lastActivityAt: new Date(now - 30_000).toISOString(), openCall })
     thread = board.refresh().threads[0]!
     assert.equal(thread.needsYou, false)
     assert.equal(thread.quietTurnSince, undefined)
+    assert.equal(thread.quietTurnCall, undefined, "an open call on a working turn is not news")
 
     current = tele({ turn: "in-flight", lastActivityAt: new Date(now - QUIET_TURN_MS - 60_000).toISOString() })
     storage.setSnoozedUntil("wedged", new Date(now + 3_600_000).toISOString())
