@@ -205,6 +205,12 @@ const SCRIPTS = {
       prompt: "Some failed payments are never retried. Find out why.",
       closing: "**Not fixed** — the retries are scheduled, but the job runner drops any job whose `run_at` is in the past at enqueue time, and dunning computes `run_at` from the invoice date rather than now.\n\nThe fix is a one-line clamp in `jobs/enqueue.ts`, but it changes when 1,240 overdue retries fire — all of them at once on deploy. Next step is to stagger them before landing it.",
     },
+    // The thread the seed opens a terminal on below: `npm publish` is sitting at its OTP prompt.
+    {
+      slug: "publish-billing-client", title: "Publish the billing client to npm", rest: 6,
+      prompt: "Publish @acme/billing-client 2.4.0.",
+      closing: "**Ready to publish** — the changelog and the version bump are in. I opened `npm publish` in a terminal on this thread; it is waiting for your one-time password.",
+    },
     { slug: "stripe-api-bump", title: "Bump the Stripe API version", rest: 600, archived: true, prompt: "Bump Stripe to the 2026-08 API version.", closing: done("**Fixed** — on the 2026-08 API version.", ["**Bumped** the pinned version and regenerated fixtures."]) },
   ],
   "docs-portal": [
@@ -231,21 +237,26 @@ for (const project of projects) {
 const origin = new URL(stack.url).origin
 for (const project of projects) await createRpcClient(`${origin}/`, project.id).query("board")
 
-// A FINISHED TERMINAL COMMAND in a tenant and in the launcher — the prompt box's Terminal tab, run for
-// real through each project's own `commandStart`, so each pty lives on its own project's terminal server.
-// A finished run queues with a card of its own, and that card's screen, Restart and Mark as done must
-// reach the card's project: a bare `/term/<slug>` on a page that names no project is the LAUNCHER's.
-const commands = { "billing-worker": "printf 'billing-worker ran\\n'; exit 3", [stack.launcher.slug]: "printf 'acme-api ran\\n'" }
+// A TERMINAL ON A THREAD in a tenant and in the launcher — opened for real through each project's own
+// `terminalStart`, so each pty lives on its own project's terminal server. billing-worker's sits at an
+// OTP prompt, which queues its THREAD and draws its live screen on that thread's card; the launcher's
+// has finished and is a line in its thread's strip. The card's screen over `/term/<id>` must reach the
+// card's project: a bare `/term/<id>` on a page that names no project is the LAUNCHER's.
+const terminals = {
+  "billing-worker": { thread: "publish-billing-client", command: "printf 'billing-worker ran\\n'; printf 'Enter one-time password: '; read otp; echo \"got $otp\"; sleep 600" },
+  [stack.launcher.slug]: { thread: "rate-limit-headers", command: "printf 'acme-api ran\\n'" },
+}
 for (const project of projects) {
-  const command = commands[project.slug]
-  if (!command) continue
+  const seed = terminals[project.slug]
+  if (!seed) continue
   const api = createRpcClient(`${origin}/`, project.id)
-  const { slug } = await api.mutate("commandStart", { command })
-  const deadline = Date.now() + 15_000
-  while ((await api.query("board")).threads.find((t) => t.id === slug)?.command?.state !== "exited") {
-    if (Date.now() > deadline) throw new Error(`${project.slug}'s command ${slug} never finished`)
+  const { id } = await api.mutate("terminalStart", { slug: seed.thread, command: seed.command })
+  const settled = (t) => (seed.command.includes("read otp") ? t?.awaitingInput === true : t?.state === "exited")
+  const deadline = Date.now() + 20_000
+  while (!settled((await api.query("board")).threads.find((t) => t.id === seed.thread)?.terminals?.find((t) => t.id === id))) {
+    if (Date.now() > deadline) throw new Error(`${project.slug}'s terminal ${id} on ${seed.thread} never settled`)
     await new Promise((resolve) => setTimeout(resolve, 200))
   }
-  console.log(`seeded ${project.slug}/${slug} (terminal command)`)
+  console.log(`seeded ${project.slug}/${seed.thread} terminal ${id}`)
 }
 console.log(JSON.stringify({ seeded: projects.map((p) => p.slug), daemonPid: daemon.pid }))
