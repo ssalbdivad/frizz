@@ -92,26 +92,30 @@ export function primeRoute(path = location.pathname): void {
 let absorbed: string | null = null
 let skippedWrite = false
 let activeWriter: (() => void) | null = null
-// THE ADDRESS THE WRITER ITSELF MOVED TO, until the address moves anywhere else. That URL came FROM the
-// store, so applying it back can add nothing — and it UNDID whatever the store did while the route caught
-// up. A drawer opened store-first (a row of the page's own project, which in focus mode is every row) and
-// closed before the route had committed its address was re-opened by that address — the close held back
-// by the guard above, then the stale URL applied — so Escape did nothing: 3 of 4 tries at a load average
-// of ~10, where the commit trailed the push by over 800ms (2026-09-29). So the writer's own URL is
-// absorbed without being applied, and the write the guard held back then says what the store says now.
+// AN ADDRESS THE WRITER WROTE THAT THE STORE HAS SINCE MOVED PAST. The guard above holds a write back
+// while the route catches up, and the route then APPLIED the address it caught up to — undoing whatever
+// the store did meanwhile. A drawer opened store-first (a row of the page's own project, which in focus
+// mode is every row) and closed before the route had committed its address was re-opened by that
+// address, so Escape did nothing: 6 of 6 tries at a load average of ~10-40, where the commit trailed
+// the push by over 800ms (2026-09-29). So an address the writer wrote (`written`) that arrives while a
+// write is held back (`skippedWrite`: the store has moved since) is `stale` — absorbed, not applied —
+// and the held-back write then says what the store says now.
 //
-// Not consumed by the first application: each commit applies its address TWICE — the route's effect,
-// and App re-registering this writer (its `navigate` changes on the same commit), whose startRouter
-// primes again — and the second was enough to re-open the drawer on its own.
+// Stale until that write has run, not for one application: each commit applies its address TWICE — App
+// re-registering this writer (its `navigate` changes on the same commit, and startRouter primes again)
+// and the route's own effect — and the second was enough to re-open the drawer on its own. Everywhere
+// else the writer's address is applied like any other, which is what resets a parked slug on the way
+// back from /full; skipping it there too left the address on a drawer the reader had closed.
 let written: string | null = null
+let stale: string | null = null
 
 /** URL → store for the page's current address (routes.tsx useRouteToStore, and boot). */
 export function applyLocation(pathname: string): void {
   absorbed = typeof location !== "undefined" && typeof location.pathname === "string" ? location.pathname : pathname
-  // Any OTHER address ends it, so a later Back or link to the writer's old address is applied like any
-  // address the store did not write.
-  if (pathname !== written) {
-    written = null
+  if (skippedWrite && pathname === written) stale = pathname
+  written = null
+  if (pathname !== stale) {
+    stale = null
     applyPath(innerPath(pathname))
   }
   if (skippedWrite) {
@@ -178,6 +182,8 @@ export function startRouter(navigate: (path: string, options: { replace: boolean
       skippedWrite = true
       return
     }
+    // The held-back write is running: whatever address was stale, the store says its piece now.
+    stale = null
     const path = outerPath(currentPath())
     if (path === location.pathname) return
     // A NEW topmost thread pushes history; unwinding or non-thread transitions replace. `startsWith`
@@ -193,7 +199,5 @@ export function startRouter(navigate: (path: string, options: { replace: boolean
   return () => {
     unsubscribe()
     if (activeWriter === write) activeWriter = null
-    // `written` outlives the writer: App re-registers it whenever react-router's `navigate` changes,
-    // which is on the very commit that applies the written address.
   }
 }

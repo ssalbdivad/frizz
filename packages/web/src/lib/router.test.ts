@@ -224,10 +224,12 @@ test("the store→URL sync waits until the route has applied a URL-first navigat
 
 // A drawer opened STORE-first — a row of the page's own project, every row in focus mode — has its
 // address written by the store → URL writer, and the route applies it a beat later (react-router commits
-// history first, the route's effect after). Closed inside that beat, the close was held back by the
-// guard above and then UNDONE when the route applied the drawer's address: the drawer re-opened and
-// Escape did nothing (3 of 4 tries on a loaded machine, 2026-09-29). The writer's own address is absorbed
-// without being applied; an address from anywhere else still is.
+// history first, the route's effects after, and TWO of them apply it: App re-registering the writer, and
+// useRouteToStore). Closed inside that beat, the close was held back by the guard above and then UNDONE
+// when the route applied the drawer's address: the drawer re-opened and Escape did nothing (6 of 6 tries
+// on a loaded machine, 2026-09-29). An address the writer wrote that arrives while a write is held back
+// is absorbed without being applied; an address from anywhere else, or the writer's own with nothing held
+// back, still is.
 test("a drawer closed before the route has applied its own address stays closed", async () => {
   resetStore()
   const globals = globalThis as typeof globalThis & { location?: Location }
@@ -250,6 +252,8 @@ test("a drawer closed before the route has applied its own address stays closed"
     await settle()
     assert.deepEqual(navigated, ["/thread/t"], "the close waits for the route")
 
+    // Both of the commit's applications, back to back as its effects run them.
+    applyLocation("/thread/t")
     applyLocation("/thread/t")
     await settle()
     assert.equal(store.routeThreadSlug, null, "the drawer's own address did not park it again")
@@ -261,6 +265,34 @@ test("a drawer closed before the route has applied its own address stays closed"
     globals.location = { pathname: "/thread/t" } as unknown as Location
     applyLocation("/thread/t")
     assert.equal(store.routeThreadSlug, "t", "an address the store did not write is still applied")
+    stop()
+  } finally {
+    globals.location = previous
+    resetStore()
+  }
+})
+
+// The writer's own address with NOTHING held back is applied like any other: it is what clears a slug
+// left parked when the page comes back from /full to the drawer it left, and skipping it there left the
+// address on a drawer the reader had since closed.
+test("the writer's own address is applied when the store has not moved past it", async () => {
+  resetStore()
+  const globals = globalThis as typeof globalThis & { location?: Location }
+  const previous = globals.location
+  const navigated: string[] = []
+  const settle = () => new Promise((resolve) => setTimeout(resolve, 0))
+  try {
+    globals.location = { pathname: "/" } as unknown as Location
+    const stop = startRouter((path) => {
+      navigated.push(path)
+      globals.location = { pathname: new URL(path, "http://page").pathname } as unknown as Location
+    })
+    store.drawers = [{ id: 1, kind: "thread", slug: "t" } as never]
+    await settle()
+    assert.deepEqual(navigated, ["/thread/t"])
+    store.routeThreadSlug = "t" // a slug parked meanwhile, which applying the address settles
+    applyLocation("/thread/t")
+    assert.equal(store.routeThreadSlug, null, "applied: the drawer is in the stack, so nothing stays parked")
     stop()
   } finally {
     globals.location = previous
