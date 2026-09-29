@@ -26,8 +26,8 @@ test("a message root never joins the pagination-anchor attribute", () => {
 
 // `data-frizz-msg` outlived the hover-revealed debug-id chip it was introduced for (dropped 2026-08-01,
 // maintainer: "they're not necessary anymore"). It stays because it is the only per-message handle the
-// e2e suites can select on — workingTailSpacing, metaColumnRhythm and intermediateCollapseDivider all
-// query it to find message roots and read their geometry. Losing it in a later cleanup would take
+// e2e suites can select on — workingTailSpacing, metaColumnRhythm, pictureSpacing, singleAnswerCard and
+// frizzWake all query it to find message roots and read their geometry. Losing it in a later cleanup would take
 // those with it, so the count is pinned here.
 test("every rendered message variant still carries its own data-frizz-msg handle", () => {
   const sources = [chatView(), wakeDivider(), answersCard()]

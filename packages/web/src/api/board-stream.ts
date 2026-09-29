@@ -73,7 +73,10 @@ export class BoardStream {
 // Fire a desktop notification for a server-pushed event, but only when the user opted in
 // (settings.notifications, mirrored on the store) and the app isn't the focused/visible window —
 // we never notify for what the user is already looking at. Clicking focuses the thread.
-export function notify(event: Extract<ServerEvent, { type: "notify" }>): void {
+//
+// `forProject` names the thread's project when it is not the page's: the cross-project poll
+// (lib/crossProjectNotify.ts) raises notifications for every project the page is not bound to.
+export function notify(event: Extract<ServerEvent, { type: "notify" }>, forProject?: string): void {
   if (!store.notificationsEnabled) return
   if (!document.hidden) return
   if (typeof Notification === "undefined" || Notification.permission !== "granted") return
@@ -83,7 +86,7 @@ export function notify(event: Extract<ServerEvent, { type: "notify" }>): void {
   // was raised and in a tab that has since switched projects. `openThread` opens a slug in whatever
   // project is showing, and slugs are unique only WITHIN a project (see `rebindProject`), so the click
   // opened a DIFFERENT thread that happened to share the name rather than failing and saying so.
-  const project = projectSlug() ?? store.board?.projectSlug
+  const project = forProject ?? projectSlug() ?? store.board?.projectSlug
   // The tag is the browser's REPLACE key, so a bare slug collapses two projects' identically-named
   // threads into one notification — and the click would open whichever tab happened to fire it. Spelled
   // by the thread's own address, so two tabs focused on the same project raise one notification

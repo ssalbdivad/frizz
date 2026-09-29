@@ -11,6 +11,7 @@ import { startRouter } from "./lib/router.ts"
 import { projectSlug } from "./lib/base-path.ts"
 import { AllQueuesPage } from "./components/AllQueues.tsx"
 import { rpc } from "./api/rpc.ts"
+import { useCrossProjectNotifications } from "./lib/crossProjectNotify.ts"
 import { DrawerStack } from "./components/DrawerStack.tsx"
 import { NewThreadDialog } from "./components/NewThreadModal.tsx"
 import { GithubPickerModal } from "./components/GithubPickerModal.tsx"
@@ -208,6 +209,8 @@ export function App() {
   useEffect(() => {
     store.notificationsEnabled = settings.data?.notifications ?? false
   }, [settings.data?.notifications])
+  // …and for every project the page is NOT bound to, whose events never reach this socket.
+  useCrossProjectNotifications(settings.data?.notifications ?? false)
 
   // GitHub availability drives two things: the picker TRIGGER (in the sidebar / brand-new view, gated
   // in GithubTrigger off this same cached query) and — when the repo IS a GitHub repo but gh is NOT
