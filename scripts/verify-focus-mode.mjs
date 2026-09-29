@@ -207,16 +207,19 @@ try {
     await page.waitForFunction(() => /^\/all\/[^/]+\/thread\/[^/]+$/.test(location.pathname), { timeout: 8000 })
     await page.waitForSelector("[data-drawer-layer]", { timeout: 8000 })
     check("a Working row opens its drawer on the page", true, await address(page))
-    // Let the route settle first: a close that lands before the page has absorbed the drawer's address
-    // (lib/router.ts `absorbed`) is re-opened by that address when it is — a race of its own, which only a
-    // loaded machine shows. Then Escape leaves a focused composer first and closes the drawer on a later press.
-    await sleep(2500)
-    for (let i = 0; i < 6 && (await page.$("[data-drawer-layer]")); i++) {
+    // At once, not once it has settled: a focused project's row opens its drawer STORE-first, and a close
+    // that landed before the route had committed the drawer's address was re-opened by that address
+    // (lib/router.ts `written`) — 6 of 6 tries stuck on a loaded machine before the fix. Escape leaves a
+    // focused composer first and closes the drawer on a later press, so three, 150ms apart.
+    for (let i = 0; i < 3; i++) {
       await page.keyboard.press("Escape")
-      await sleep(500)
+      await sleep(150)
     }
     await waitAddress(page, `/?project=${A.slug}`)
     check("closing it comes back to /?project=<slug>", true)
+    await sleep(3000)
+    const reopened = await page.evaluate(() => ({ drawer: Boolean(document.querySelector("[data-drawer-layer]")), at: location.pathname + location.search }))
+    check("…and it stays closed, though Escape came before the route had caught up", !reopened.drawer && reopened.at === `/?project=${A.slug}`, reopened.at)
   })
 
   // ── the switcher ───────────────────────────────────────────────────────────────────────────────────

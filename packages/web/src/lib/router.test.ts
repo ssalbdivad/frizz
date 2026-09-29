@@ -221,3 +221,49 @@ test("the store→URL sync waits until the route has applied a URL-first navigat
     resetStore()
   }
 })
+
+// A drawer opened STORE-first — a row of the page's own project, every row in focus mode — has its
+// address written by the store → URL writer, and the route applies it a beat later (react-router commits
+// history first, the route's effect after). Closed inside that beat, the close was held back by the
+// guard above and then UNDONE when the route applied the drawer's address: the drawer re-opened and
+// Escape did nothing (3 of 4 tries on a loaded machine, 2026-09-29). The writer's own address is absorbed
+// without being applied; an address from anywhere else still is.
+test("a drawer closed before the route has applied its own address stays closed", async () => {
+  resetStore()
+  const globals = globalThis as typeof globalThis & { location?: Location }
+  const previous = globals.location
+  const navigated: string[] = []
+  const settle = () => new Promise((resolve) => setTimeout(resolve, 0))
+  try {
+    globals.location = { pathname: "/" } as unknown as Location
+    // The router writes history at once, as react-router does; the route applies it only when told to.
+    const stop = startRouter((path) => {
+      navigated.push(path)
+      globals.location = { pathname: new URL(path, "http://page").pathname } as unknown as Location
+    })
+    store.drawers = [{ id: 1, kind: "thread", slug: "t" } as never]
+    await settle()
+    assert.deepEqual(navigated, ["/thread/t"], "opening the drawer writes its address")
+
+    // Escape, before the route has applied that address.
+    store.drawers = []
+    await settle()
+    assert.deepEqual(navigated, ["/thread/t"], "the close waits for the route")
+
+    applyLocation("/thread/t")
+    await settle()
+    assert.equal(store.routeThreadSlug, null, "the drawer's own address did not park it again")
+    assert.equal(store.drawers.length, 0, "…or re-open it")
+    assert.deepEqual(navigated, ["/thread/t", "/"], "and the held-back close is written")
+    applyLocation("/")
+
+    // CONTROL: the same address arriving from outside — Back, a link, a reload — is applied.
+    globals.location = { pathname: "/thread/t" } as unknown as Location
+    applyLocation("/thread/t")
+    assert.equal(store.routeThreadSlug, "t", "an address the store did not write is still applied")
+    stop()
+  } finally {
+    globals.location = previous
+    resetStore()
+  }
+})
