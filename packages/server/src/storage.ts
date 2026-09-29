@@ -56,6 +56,12 @@ export interface SessionRow {
   // discarding a perfectly good persisted title (maintainer 2026-08-07). Cleared by every other title
   // writer (human rename, re-dispatch) so it always describes the CURRENT text.
   // Optional in the TS shape for the same reason as `title_locked`: pre-existing row literals.
+  //
+  // 2 — FRIZZ's periodic retitle wrote it (periodic-retitle.ts), a summary of the recent conversation.
+  // Machine-authored like 1 and displayed the same way (board.ts resolveSessionTitle reads any non-zero
+  // value as a persisted title), but it is NOT the worker's own considered name, and that difference is
+  // the whole reason it has its own value: the periodic retitle must never overwrite a name the worker
+  // chose with `mcp__frizz__title` (value 1), while it may keep refreshing one it wrote itself (value 2).
   title_agent?: number
   // ---- session-first columns (2026-07-09; all nullable — additive migration under a live server) ----
   title: string | null // dispatch title (new dispatches have no thread FILE to hold it); display prefers aiTitle
@@ -877,6 +883,12 @@ export interface Storage {
   // error it will retry. Never touches `title_auto`: which machine wrote the current text does not
   // change the row's display provenance, and leaving it set is what keeps a human rename outranking.
   setAgentTitle(slug: string, title: string): boolean
+  // Persist FRIZZ's periodic summary title (periodic-retitle.ts), marked `title_agent = 2`. Refused —
+  // `false` — when a human has claimed the name (the lock) OR the worker named the thread itself
+  // (`title_agent = 1`): the worker's `mcp__frizz__title` is a deliberate choice, and a summary frizz
+  // wrote from the last five exchanges must not silently replace it. Gated in SQL, not only by the
+  // caller's earlier read, because the titler runs for seconds and the worker may title mid-flight.
+  setPeriodicTitle(slug: string, title: string): boolean
   // AI rename is asynchronous. Commit only if this is still the same session with the same title
   // provenance captured at start, so a later manual rename/re-dispatch always wins.
   setTitleIfCurrent(
@@ -1082,7 +1094,8 @@ export const STORAGE_SCHEMA = `
       -- Cleared by resetParkBumps when a park is actually HONOURED.
       park_bumps INTEGER NOT NULL DEFAULT 0,
       park_bump_anchor TEXT,
-      -- Title provenance for the CURRENT text: 1 = the worker's own title signal wrote it.
+      -- Title provenance for the CURRENT text: 1 = the worker's own title signal wrote it; 2 = frizz's
+      -- periodic retitle wrote it (see SessionRow.title_agent).
       title_agent INTEGER NOT NULL DEFAULT 0,
       PRIMARY KEY (project_id, slug)
     );
@@ -2076,6 +2089,12 @@ export function createStorage(source: string | Database, projectId: string): Sto
     UPDATE session SET title = ?, title_agent = 1
     WHERE project_id = @project_id AND slug = ? AND title_locked = 0
   `)
+  // Frizz's periodic retitle: the same unlocked write, minus any row whose CURRENT text the worker chose
+  // (`title_agent = 1`). See Storage.setPeriodicTitle.
+  const periodicTitleStmt = scope.prepare(`
+    UPDATE session SET title = ?, title_agent = 2
+    WHERE project_id = @project_id AND slug = ? AND title_locked = 0 AND title_agent <> 1
+  `)
   const delSession = scope.prepare("DELETE FROM session WHERE project_id = @project_id AND slug = ?")
   const putRetiredOp = scope.prepare("INSERT OR IGNORE INTO retired_op (project_id, slug, session_id, op_id, retired_at) VALUES (@project_id, ?, ?, ?, ?)")
   const getRetiredOps = scope.prepare<[string, string], { op_id: string }>("SELECT op_id FROM retired_op WHERE project_id = @project_id AND slug = ? AND session_id = ?")
@@ -2814,6 +2833,7 @@ export function createStorage(source: string | Database, projectId: string): Sto
     clearExpiredSnoozes: (now) => clearExpiredSnoozesStmt.run(now).changes,
     setTitle: (slug, title) => void titleStmt.run(title, slug),
     setAgentTitle: (slug, title) => agentTitleStmt.run(title, slug).changes === 1,
+    setPeriodicTitle: (slug, title) => periodicTitleStmt.run(title, slug).changes === 1,
     setTitleIfCurrent: (slug, title, expected) =>
       titleCasStmt.run(title, slug, expected.sessionId, expected.title, expected.titleAuto).changes === 1,
     setAutoTitleIfCurrent: (slug, title, expected) =>

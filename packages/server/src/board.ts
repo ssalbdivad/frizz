@@ -1404,7 +1404,8 @@ export function resolveSessionTitle(
   tele: Pick<SessionTelemetry, "aiTitle"> | undefined,
 ): Pick<ThreadView, "title" | "titleAuto" | "titleLocked" | "aiTitle"> {
   const locked = sessionTitleLocked(row)
-  const persisted = row.title_agent === 1 ? row.title?.trim() || undefined : undefined
+  // Any machine title frizz persisted: the worker's own (1) or frizz's periodic summary (2).
+  const persisted = (row.title_agent ?? 0) !== 0 ? row.title?.trim() || undefined : undefined
   return {
     title: row.title ?? "",
     titleAuto: row.title_auto === 1,

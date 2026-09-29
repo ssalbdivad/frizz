@@ -15,9 +15,18 @@ import { isBrokerClaudeRow, sessionTitleLocked, type SessionRow, type Storage } 
 // `SendMessage`, completion boundaries and still-queued bubbles are all user-side turns nobody typed,
 // and counting them would retitle a quiet thread every few watcher ticks.
 //
-// The name lands through `setAgentTitle` — the same unlocked write `mcp__frizz__title` uses — so a
+// The name lands through `setPeriodicTitle` — an unlocked write like `mcp__frizz__title`'s — so a
 // HUMAN rename still outranks it both before and after, and it outranks the transcript's spawn-time
 // `aiTitle` on the board (board.ts resolveSessionTitle).
+//
+// A NAME THE WORKER CHOSE ITSELF OUTRANKS IT TOO. This wrote through `setAgentTitle` until 2026-09-29,
+// the very write `mcp__frizz__title` makes, so on the fifth operator message a worker's deliberate name
+// for its own task was silently replaced by a summary of the last five exchanges, and only a HUMAN
+// rename could stop it. That is backwards: the worker's title is a considered claim about what it is
+// doing, and Colin's contract gave it the same standing everywhere else (board.ts resolveSessionTitle:
+// "title_agent = 1 now means a worker DELIBERATELY named the thread after reading the task"). So the
+// periodic title is recorded as `title_agent = 2`, a thread whose current title is `1` is skipped, and
+// one whose title frizz itself wrote keeps being refreshed — the drift this module exists for.
 export const RETITLE_EVERY_MESSAGES = 5
 // Enough to name what the conversation is about, bounded well under the SDK's 64KiB control frame.
 const PER_MESSAGE_CHARS = 1_500
@@ -51,8 +60,13 @@ export function recentConversation(messages: readonly TranscriptMessage[], windo
   return `Name this thread after what the RECENT conversation below is about — not the first request.\n\n${body}`
 }
 
+/** The row's CURRENT title is the worker's own `mcp__frizz__title` (storage SessionRow.title_agent). */
+function workerNamedIt(row: Pick<SessionRow, "title_agent">): boolean {
+  return row.title_agent === 1
+}
+
 export interface PeriodicRetitlerDeps {
-  storage: Pick<Storage, "getSession" | "setAgentTitle">
+  storage: Pick<Storage, "getSession" | "setPeriodicTitle">
   /** The provider's titler (the broker's `generateSessionTitle`). Absent ⇒ nothing is retitled. */
   generateTitle?: (input: { threadSlug: string; sessionId: string; description: string }) => Promise<string | undefined>
   readMessages: (sessionId: string) => TranscriptMessage[]
@@ -77,7 +91,7 @@ export function createPeriodicRetitler(deps: PeriodicRetitlerDeps): PeriodicReti
   return {
     onTurnDone(row) {
       if (!deps.generateTitle || !isBrokerClaudeRow(row)) return
-      if (sessionTitleLocked(row)) return
+      if (sessionTitleLocked(row) || workerNamedIt(row)) return
       const key = `${row.slug}\0${row.session_id}`
       if (inFlight.has(key)) return
       const messages = deps.readMessages(row.session_id)
@@ -92,10 +106,11 @@ export function createPeriodicRetitler(deps: PeriodicRetitlerDeps): PeriodicReti
         .then((title) => {
           const clean = title?.trim()
           if (!clean) return
-          // Re-read: a human may have renamed it, or the slug been re-dispatched, while the titler ran.
+          // Re-read: a human may have renamed it, the worker titled it, or the slug been re-dispatched,
+          // while the titler ran. (setPeriodicTitle refuses the first two in SQL as well.)
           const current = deps.storage.getSession(row.slug)
-          if (!current || current.session_id !== row.session_id || sessionTitleLocked(current)) return
-          if (deps.storage.setAgentTitle(row.slug, clean)) deps.onTitled()
+          if (!current || current.session_id !== row.session_id || sessionTitleLocked(current) || workerNamedIt(current)) return
+          if (deps.storage.setPeriodicTitle(row.slug, clean)) deps.onTitled()
         })
         .catch((error: unknown) => deps.onError?.(row.slug, error))
         .finally(() => inFlight.delete(key))
