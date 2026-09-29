@@ -20,6 +20,12 @@ export function ShellLogPane({ stream }: { stream: ShellLogStream }) {
     // Nothing reads keystrokes here, so a cursor block would only claim otherwise (DECTCEM hide).
     const HIDE_CURSOR = "\x1b[?25l"
     term.write(HIDE_CURSOR)
+    // ESCAPE CLOSES THIS DRAWER, even with focus in the xterm. xterm handles every keydown on its own
+    // textarea and CANCELS it (stopPropagation) once it has turned it into bytes — `disableStdin` only
+    // drops the bytes afterwards — so the drawer stack's window listener never heard it (measured on the
+    // live stack: focus in the pane, Escape, drawer still open). Returning false from the custom handler
+    // is xterm's own "not mine": it returns before the cancel and the event bubbles on.
+    term.attachCustomKeyEventHandler((event) => event.key !== "Escape")
     const detach = stream.attach((event) => {
       if (event.kind === "reset") {
         term.reset()
