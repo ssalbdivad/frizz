@@ -190,7 +190,7 @@ import { HOME_WORKSPACE_NAME, isHomeWorkspace, listWorkspaces } from "./home-wor
 import { expandHomeFolder, homeFolderProblem } from "./home-folder.ts"
 import { basename, dirname, isAbsolute, relative } from "node:path"
 import { existsSync, mkdirSync, rmSync, writeFileSync } from "node:fs"
-import { activeBandThread, questionRepliedPast, ProjectCard, ProjectQueue, ProjectRailCounts, PROJECT_ICON_EXTENSIONS, PROJECT_ICON_MAX_BASE64_CHARS, queuedThread, ThreadHandoff, BURIED_ANSWERS_HEADER } from "@frizz/shared"
+import { questionRepliedPast, ProjectCard, ProjectQueue, ProjectRailCounts, PROJECT_ICON_EXTENSIONS, PROJECT_ICON_MAX_BASE64_CHARS, queuedThread, ThreadHandoff, BURIED_ANSWERS_HEADER, workingThread } from "@frizz/shared"
 import { imageDimensions } from "./image-header.ts"
 import { homedir } from "node:os"
 import { chosenProjectRoot, ensureProjectIdFile, existingProjectId, isHomeDirectory, writeProjectIdFile } from "./project-root.ts"
@@ -3749,8 +3749,9 @@ export function createRouter(ctx: AppContext) {
      *
      * The rail draws ONE yellow badge per project whose number is the SUM, with a spinner lapping it
      * while `running` is non-zero, and its tooltip splits the two (issue #41: which projects still
-     * have work in flight, at a glance). `running` is `activeBandThread` — the rows the sidebar draws
-     * below the rule — so the rail and the sidebar beside it count with one rule.
+     * have work in flight, at a glance). `running` is `workingThread` — the Active band's rows, plus
+     * any Done row whose session is still moving (shared doneButRunning), each of which wears a spinner
+     * in the list beside it — so the rail and the list count with one rule.
      *
      * MACHINE-WIDE, answered from the boards this process has OPEN. A queue count is a board fact:
      * `needsYou` is derived from the tailer's live view of each session, so a project with no board
@@ -3778,7 +3779,7 @@ export function createRouter(ctx: AppContext) {
             const { threads } = await board.snapshot()
             counts[project.id] = {
               queued: threads.filter(queuedThread).length,
-              running: threads.filter(activeBandThread).length,
+              running: threads.filter(workingThread).length,
             }
           } catch {
             // A board that is stopping mid-walk (its project is being deactivated) is a project with

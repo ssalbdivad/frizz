@@ -3294,6 +3294,31 @@ export function activeBandThread(t: ThreadView): boolean {
   return sectionOf(t) === "active" && inActiveBand(t)
 }
 
+/**
+ * DONE, AND STILL MOVING — a thread the human marked done whose session is actively running anyway: a
+ * turn still draining, a sub-agent it dispatched still out.
+ *
+ * Its ROW stays in Done, because only the human reopens a thread (sectionOf, maintainer 2026-09-24). What
+ * it must not do is sit there SILENTLY: a live, in-flight session filed under Done with a quiet check was
+ * the bug the maintainer hit three times before 2026-07-10 ("a running thread must never sit silently
+ * under Done"). So the row keeps its place and wears its spinner (web groups.ts sessionIndicatorKind),
+ * and the rail's working count below includes it — the badge's spinner is "this project has work in
+ * flight", and this is work in flight.
+ */
+export function doneButRunning(t: ThreadView): boolean {
+  return t.kind === "session" && t.foreign !== true && t.state === "archived" && isActivelyRunning(t)
+}
+
+/**
+ * The rail badge's RUNNING count: every Active-band row, plus every Done row still moving
+ * (doneButRunning). Until 2026-09-24 the second half rode inside `activeBandThread` for free, because
+ * sectionOf lifted a running-yet-archived row into Active; Done stopped moving rows, and the count has to
+ * say so on its own or a project whose only live work was marked done reads as idle from the rail.
+ */
+export function workingThread(t: ThreadView): boolean {
+  return activeBandThread(t) || doneButRunning(t)
+}
+
 // STRUCTURED board error — a machine-readable companion to the legacy `errors: string[]` so the
 // client can tell a REPAIRABLE error from an inert one and which file it names. `no-frontmatter` is
 // the one-click-repairable case (a thread .md written with no YAML frontmatter, invisible to the
@@ -5422,7 +5447,8 @@ export const ProjectCard = z.object({
 export type ProjectCard = z.infer<typeof ProjectCard>
 
 /**
- * One project's rail badge: its queue (`queuedThread`) and its Active band (`activeBandThread`).
+ * One project's rail badge: its queue (`queuedThread`) and its working rows (`workingThread` — the Active
+ * band plus any Done row still running).
  *
  * Two numbers rather than their sum because the tooltip splits them, and the spinner reads `running`
  * alone. A project absent from the map has no board open on this server — no badge, not a zero.
