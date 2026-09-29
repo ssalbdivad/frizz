@@ -4,10 +4,10 @@
 // It wears the queue card a project's own board drew until 2026-09-28 (TodosView QueueCard): the same
 // bordered, shadowed shell, the same header with the title and its rest time, the human's last message
 // as their bubble, the handoff as prose with its ```done card, the thread's registered questions, a reply box, and the lifecycle footer's
-// Snooze and Mark as done. What it does NOT draw by default is the transcript — the tool calls, the
-// earlier rounds, the sub-agent rows. The rounds BEFORE the card's exchange are one press away at its top
-// (QueueCardHistory, "Show earlier messages"); the whole thread is the next level down, IN PLACE — the title
-// opens the thread's own drawer on this page (useOpenThreadInPlace) — and it is what makes a page of
+// Snooze and Mark as done. What it deliberately does NOT carry is the transcript — the tool calls, the
+// earlier rounds, the sub-agent rows. That is the next level down, one click away IN PLACE — the title,
+// and "Show earlier messages" at the card's top, open the thread's own drawer on this page
+// (useOpenThreadInPlace) — and it is what makes a page of
 // every project's queue readable at all. There is no door off the page: the ↗ into a project's view and
 // the ⤢ into /full went on 2026-09-28 (maintainer: "too many places in the ui where it is easy to navigate
 // to a ui which is not the primary home ui"); fullscreen is a choice in the drawer's own menu now.
@@ -46,7 +46,6 @@ import { LastActive } from "./LastActive.tsx"
 import { ProjectSquare } from "./ProjectRail.tsx"
 import { LinkedHtml } from "./LinkedHtml.tsx"
 import { QuestionBlockCard } from "./QuestionBlockCard.tsx"
-import { QueueCardHistory } from "./QueueCardHistory.tsx"
 import { RegisteredAnsweringProvider, RegisteredQuestionStack } from "./RegisteredQuestionCards.tsx"
 import { RestedCard, showsRestedCard } from "./RestedCard.tsx"
 import { LogoutConfirmModal, SignInModal } from "./SignInModal.tsx"
@@ -231,16 +230,6 @@ export const AllQueuesCard = memo(function AllQueuesCard({
     onReturn()
     void queryClient.invalidateQueries({ queryKey: ["projectsQueues"] })
   }
-  // Blank space under the card that its history asked for, when the page was too short to scroll far
-  // enough to hold the card's exchange still as history landed above it (QueueCardHistory). Reset with
-  // the history on a new rest.
-  const [reserve, setReserve] = useState(0)
-  const reserveBelow = useCallback((px: number) => setReserve((current) => current + px), [])
-  const [reserveRest, setReserveRest] = useState(thread.lastAssistantAt)
-  if (reserveRest !== thread.lastAssistantAt) {
-    setReserveRest(thread.lastAssistantAt)
-    setReserve(0)
-  }
   const answeringScope = useMemo(() => ({ api, projectDir: project.projectDir, projectId: project.id }), [api, project.projectDir, project.id])
 
   const openHere = (event: ReactMouseEvent<HTMLAnchorElement>) => {
@@ -292,13 +281,20 @@ export const AllQueuesCard = memo(function AllQueuesCard({
 
           <ProjectLinkScope project={project}>
             <div className="flex min-w-0 flex-col gap-4 px-5 pt-5 pb-4">
-              {/* The thread before this exchange, on request (QueueCardHistory). Keyed on the rest, like the
-                  handoff: a thread that rests again is a new exchange with a new "before". */}
-              {handoff.data && (
-                <ThreadProjectScope projectId={project.id} projectDir={project.projectDir}>
-                  <QueueCardHistory key={thread.lastAssistantAt ?? ""} api={api} slug={thread.id} handoff={handoff.data} onShortfall={reserveBelow} />
-                </ThreadProjectScope>
-              )}
+              {/* EARLIER MESSAGES OPEN THE DRAWER, never the card. History drawn into the card grew it
+                  inside the queue, and the queue is ONE page: whether a page loaded on a press or on a
+                  scroll up, the card swelled between the reader and the card above it (tried and
+                  reverted 2026-09-29; maintainer: "offer opening the sidebar as a way to see more to not
+                  interfere with threads queue"). The drawer is the thread's own scroller, where reading
+                  back loads as it goes and the queue under it does not move. */}
+              <a
+                href={placeHref}
+                onClick={openHere}
+                title="Open the thread to read back through it"
+                className="self-center rounded-md border border-border px-2 py-0.5 text-[11px] text-muted outline-none transition-colors hover:bg-panel-2 hover:text-fg focus-visible:ring-1 focus-visible:ring-border-strong"
+              >
+                Show earlier messages
+              </a>
               {handoff.data?.asked && <AskedBubble text={handoff.data.asked} />}
               {/* Only the PROSE clamps. The fence card under it is the handoff's ledger — what shipped, or
                   what it is waiting on — and the rested notice is its state; both are the glance. */}
@@ -361,7 +357,6 @@ export const AllQueuesCard = memo(function AllQueuesCard({
           </ThreadProjectScope>
         </article>
       </div>
-      {reserve > 0 && <div aria-hidden data-xq-history-reserve style={{ height: reserve }} />}
     </div>
   )
 }, sameCard)
