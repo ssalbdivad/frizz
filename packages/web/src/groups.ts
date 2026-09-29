@@ -165,8 +165,9 @@ export function needsAction(t: ThreadView): boolean {
   // A REGISTERED question (open thread_question rows on the view) is the same ask through the durable
   // channel — the server queues it once at rest (deriveNeedsYou's openQuestions), and this predicate
   // must agree so the mobile asks-first ordering and the attention sort count it. Same rest-gate as the
-  // fence net above: the worker keeps working after registering, and the card lands at its rest. Owed
-  // ones only: a question the human replied past is a pivot and asks nothing (questionRepliedPast).
+  // fence net above: the worker keeps working after registering, and the card lands at its rest. Every
+  // open one: since 2026-09-29 a typed message past a question no longer sets it aside — the worker
+  // `unask`s what the message made moot — so a question stays the human's until it is settled.
   if (questionsOwed(t.questions).length > 0 && t.runtime !== "running" && t.runtime !== "spawning") return true
   // CRASH / STALL net (replaces the old `unread`-gated clause — `unread` no longer drives anything).
   // A thread whose status still claims WORK IN FLIGHT (active or planning) but whose backing agent

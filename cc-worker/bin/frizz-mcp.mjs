@@ -638,16 +638,18 @@ const ASK = {
     "EXPLANATION BEFORE IT: what you found, what the choice turns on, what each answer would set in " +
     "motion. Never write the question itself into your handoff (one question, one card). There is no " +
     "placement marker: an empty ```question qst_… fence draws nothing.\n\n" +
-    "ONLY UNTIL THE HUMAN REPLIES. If they TYPE a reply past the card without answering, they have moved " +
-    "on: the card stays ABOVE their reply, where it was asked, still answerable, and it no longer holds " +
-    "anything — not your sign-off, not a block on `done`. Work on what they said; never call that " +
-    "question \"still open below\", and never ask it again — `ask` refuses it, even after an `unask`. " +
-    "If the new work turns on it, decide it yourself and say which way you went. Two things do NOT set a " +
-    "question aside: the human answering OTHER cards, and a `danger` question, which holds until it is " +
-    "answered, dismissed or withdrawn.\n\n" +
-    "SEVERAL AT ONCE IS ONE CALL. The card sends every answer as a unit, so a second `ask` for a second " +
-    "question just makes the human send twice. Register them together.\n\n" +
-    "The answer comes back to you as its own wake, restating what was asked. Withdraw one you no longer " +
+    "A QUESTION STAYS OPEN UNTIL IT IS ANSWERED, DISMISSED OR WITHDRAWN — the human typing to you does " +
+    "not close it. When they write instead of answering, the message comes with a note listing what is " +
+    "still open: YOU decide whether it made any of those moot (a pivot) or was a side question. `unask` " +
+    "exactly the ones it made moot and say so; the rest stay open, stay your sign-off, and ride to the " +
+    "bottom of your next handoff. Never ask again a question the human dismissed, or one you withdrew " +
+    "after their newest message — `ask` refuses both; decide it yourself and say which way you went.\n\n" +
+    "SEVERAL AT ONCE IS ONE CALL — register them together, so they render as one stack. Each must stand " +
+    "alone (a question that only makes sense after another's answer is that option's `followUps`), " +
+    "because ANSWERS ARRIVE ONE AT A TIME: each card is sent the moment the human completes it, so you " +
+    "hear the first while they are still reading the rest, and a later one may land while you are " +
+    "working. Act on each as it lands; the unanswered rest stay open.\n\n" +
+    "An answer comes back to you as its own wake, restating what was asked. Withdraw one you no longer " +
     "need with `unask` — a question you have since answered yourself, still sitting on the human's " +
     "board, is worse than never having asked it.\n\n" +
     "ON AN AUTONOMOUS THREAD THIS REFUSES, and tells you the standing instruction you are working " +
@@ -678,8 +680,10 @@ const UNASK = {
     "WITHDRAW A QUESTION you registered with `ask`, by its id. Its card disappears and the human is " +
     "never asked.\n\n" +
     "Use it the moment the question stops mattering: you worked out the answer yourself, the code moved " +
-    "and the fork is gone, or you are about to finish. A stale question on someone's board is worse " +
-    "than no question — they answer it, and the answer is about a decision that no longer exists.\n\n" +
+    "and the fork is gone, the human's newest message made it moot, or you are about to finish. A stale " +
+    "question on someone's board is worse than no question — they answer it, and the answer is about a " +
+    "decision that no longer exists. Withdrawn after the human's newest message, it is a pivot you " +
+    "declared, and `ask` will not take it back.\n\n" +
     "You do NOT need this for a question that gets answered; that settles itself and wakes you. " +
     "Withdrawing is YOUR move and is never reported back to you as news.",
   inputSchema: {
@@ -909,28 +913,29 @@ async function activity() {
   // THE QUESTIONS ARE NOT PART OF THE FENCE, so they are printed in their own section and never fed to
   // the fence builder below. A question waits on a person; there is no `questions:` key to write it into.
   //
-  // …and split in two, because a question the human REPLIED PAST is no longer waiting on anyone: they
-  // moved on without answering, which is a pivot. Its card stays up where it was asked, still answerable,
-  // but it blocks nothing and is not at the bottom of anything — and a worker told "still owed" and "at
-  // the BOTTOM" about it wrote "the question is still open below" under a card that sat above.
-  const questionLine = (q) => `  question: ${q.id}\n    ${String(q?.spec?.question ?? "").replace(/\s+/g, " ").slice(0, 160)}`
-  const owed = questions.filter((q) => !q?.repliedPast)
+  // EVERY OPEN QUESTION IS OWED (2026-09-29). From 2026-09-28 a question the human TYPED past was listed
+  // apart as "set aside": it blocked nothing and was never to be asked again, on the strength of a
+  // timestamp — which released seven questions the human still meant to answer when they typed a side
+  // question. The worker decides now; the readout only says which ones the human has written past, so
+  // the worker knows to weigh that message against them.
+  const questionLine = (q) =>
+    `  question: ${q.id}${q?.repliedPast ? "  (the human has written to you since)" : ""}\n` +
+    `    ${String(q?.spec?.question ?? "").replace(/\s+/g, " ").slice(0, 160)}`
+  const owed = questions
   const passed = questions.filter((q) => q?.repliedPast)
   const owedBlock = owed.length === 0 ? "" : (
     `\n\n${owed.length} question${owed.length === 1 ? "" : "s"} still owed an answer:\n\n` +
     owed.map(questionLine).join("\n") +
-    "\n\nEach one blocks `done` until it is answered or withdrawn, and draws its own card at the BOTTOM " +
-    "of your handoff, below every word of it — never write it into a handoff, and put the explanation " +
-    "above it. `unask` the ones since decided. A question is never named in an ```awaiting fence."
+    "\n\nEach one blocks `done` until it is answered, dismissed or withdrawn, and draws its own card at the " +
+    "BOTTOM of your newest handoff, below every word of it — never write it into a handoff, and put the " +
+    "explanation above it. Answers arrive one question at a time; act on each as it lands. `unask` the " +
+    "ones since decided. A question is never named in an ```awaiting fence."
   )
   const passedBlock = passed.length === 0 ? "" : (
-    `\n\n${passed.length} question${passed.length === 1 ? "" : "s"} the human replied past without answering:\n\n` +
-    passed.map(questionLine).join("\n") +
-    "\n\nTreat these as set aside — the human moved on. Each card stays ABOVE their reply, where it was " +
-    "asked, still answerable; if they answer, it arrives as its own wake. It blocks nothing, it is not your " +
-    "sign-off, and it is not \"below\" or \"still open\" in anything you write now. Never ask it again " +
-    "— `ask` refuses it, even after an `unask`; if the current work turns on it, decide it yourself and say " +
-    "which way you went."
+    `\n\nThe human has written to you since ${passed.length === 1 ? "one of these was" : `${passed.length} of these were`} ` +
+    "asked, without answering. That message may have made some moot, or it may have been a side question: " +
+    "you decide. `unask` exactly the ones it made moot and say so; leave the rest open. A question you " +
+    "withdraw after their message, or one they dismiss, cannot be asked again."
   )
   const askedBlock = owedBlock + passedBlock
   if (!items.length) {
@@ -945,7 +950,7 @@ async function activity() {
       "Nothing is running on this thread — no background shells, no sub-agents, no armed timers, no " +
       "registered PRs, and no question still owed an answer.\n\nSo there is nothing to wait on: an ```awaiting fence " +
       "would have nothing to name, and a fence naming nothing is not a park. End with ```done, or " +
-      "register a question with `ask` if you need the human." + passedBlock + linksBlock
+      "register a question with `ask` if you need the human." + linksBlock
     )
   }
   const lines = items.map((i) => {

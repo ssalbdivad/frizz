@@ -1000,10 +1000,10 @@ function isLocalCommandReceipt(content: unknown): boolean {
 /** Of the turns isHumanSpeaking admits, did the human TYPE this one — or did frizz deliver it? A
  *  scheduler wake delivery is a real user turn to the model, but nobody typed it. The answers to
  *  registered questions ride a wake too (the worker may be down when the human answers), and they do
- *  NOT count here: this is the clock questionRepliedPast reads, and answering some cards is not moving
- *  on from the others — it released the unanswered rest of a batch the moment its first answer was sent
- *  (2026-09-29). The web's questionAnchor `isHumanTurn` still counts answers, deliberately: it asks where
- *  an exchange ENDS on screen, which an answer does. */
+ *  NOT count here: this is the clock questionRepliedPast reads (information only since 2026-09-29), and
+ *  answering some cards is not moving on from the others. The web's questionAnchor `isHumanTurn` reads
+ *  the same way now — an answer ends no exchange there either — while the router's `handoffOf` still
+ *  counts one, because it asks what the newest handoff is a reply TO. */
 function tookHumanTurn(text: string): boolean {
   return !isWakeDelivery(text)
 }

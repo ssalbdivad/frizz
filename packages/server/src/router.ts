@@ -131,6 +131,7 @@ import {
   OWN_WATCH_MAX_ARMED,
   type OwnWatchView,
   humanGapNote,
+  openQuestionsNote,
   SetOwnThreadTitleInput,
   SetOwnThreadTitleResult,
   AcpAgent,
@@ -876,6 +877,15 @@ export function handoffOf(messages: readonly TranscriptMessage[]): ThreadHandoff
   }
 }
 
+/** Is this the human's turn, for the question "what did the human last SAY that this handoff answers"?
+ *
+ *  An answers delivery COUNTS here, and it differs on purpose from the two readings that no longer count
+ *  it — the tailer's `lastHumanAt` (the clock questionRepliedPast reads) and the web's questionAnchor,
+ *  where only a typed turn is the human moving the conversation and an answer to one card must not
+ *  release or strand the others (2026-09-29). This one pairs the queue card's quoted ask with the reply
+ *  under it. Answers now arrive one question at a time and the worker rests after acting on each, so
+ *  the newest handoff is usually the reply TO an answer; skipping the answer would quote the typed
+ *  message before it, over a reply about something else. */
 function isHumanTurn(m: TranscriptMessage): boolean {
   if (m.role !== "user" || m.kind || m.queued || m.peerFrom || m.agentInstruction) return false
   const said = (m.displayText ?? m.text).trim()
@@ -1060,8 +1070,9 @@ export function createRouter(ctx: AppContext) {
   }
 
   // This thread's OPEN questions, in the shape the worker's read-back, the board and the card all use.
-  // Each carries `repliedPast` exactly as the board's does, so the worker reading its own questions back
-  // learns which ones the human moved on from — the ones nothing waits on any more.
+  // Each carries `repliedPast` exactly as the board's does — information only since 2026-09-29: the
+  // worker reading its questions back learns which ones the human has typed past, and decides for itself
+  // whether that message made any of them moot (shared questionRepliedPast).
   function openQuestionViews(slug: string): RegisteredQuestionView[] {
     const out: RegisteredQuestionView[] = []
     const lastHumanAt = ctx.tailer.get(slug)?.lastHumanAt
@@ -1073,21 +1084,29 @@ export function createRouter(ctx: AppContext) {
     return out
   }
 
-  /** The question on this thread that `q` would re-ask after the human replied past it, if any: one that
-   *  was still unanswered when the human's newest turn landed (open, dismissed, or withdrawn only after
-   *  that turn — a withdrawal before it was the worker's own call, never a pivot) and whose question text
-   *  matches with case, punctuation and spacing folded away. Text only, not option labels: two different
-   *  questions routinely share "Yes"/"No" or "Push it"/"Keep it local", and refusing those is worse than
-   *  missing a reworded re-ask, which the contract and this refusal's own message already rule out. */
-  function repliedPastTwin(slug: string, q: AskedQuestion): ThreadQuestionRow | undefined {
+  /** The question on this thread that `q` would re-ask after a PIVOT, if any, matched on its question
+   *  text with case, punctuation and spacing folded away. Two pivots count, and both are somebody's
+   *  explicit act — never a timestamp (a typed reply alone releases nothing since 2026-09-29, see shared
+   *  questionRepliedPast):
+   *
+   *    · the HUMAN DISMISSED it — the × says "decide it yourself", and the answer row says "do not re-ask";
+   *    · the WORKER WITHDREW it after the human's newest TYPED turn — the pivot the worker itself declared
+   *      on reading that message (openQuestionsNote asks it to). A withdrawal from before that turn was
+   *      the worker's own call about its own work, and the human has spoken since, so it may ask again.
+   *
+   *  That second one is what stops the failure d76c845d refused in the first place: a worker `unask`ing
+   *  the cards the human's message made moot and re-registering them word for word under it. Text only,
+   *  not option labels: two different questions routinely share "Yes"/"No" or "Push it"/"Keep it local",
+   *  and refusing those is worse than missing a reworded re-ask, which the contract already rules out. */
+  function pivotTwin(slug: string, q: AskedQuestion): ThreadQuestionRow | undefined {
     const lastHumanAt = ctx.tailer.get(slug)?.lastHumanAt
-    if (!lastHumanAt) return undefined
-    const humanMs = Date.parse(lastHumanAt)
+    const humanMs = lastHumanAt ? Date.parse(lastHumanAt) : Number.NaN
     const fold = (s: string) => s.toLowerCase().replace(/[^\p{L}\p{N}]+/gu, " ").trim()
     const text = fold(q.question)
     return ctx.storage.listThreadQuestions(slug).find((row) => {
-      if (row.state === "answered" || !questionRepliedPast(row, lastHumanAt)) return false
-      if (row.state === "withdrawn" && (row.settled_at ?? 0) <= humanMs) return false
+      const pivoted = row.state === "dismissed" ||
+        (row.state === "withdrawn" && Number.isFinite(humanMs) && (row.settled_at ?? 0) > humanMs)
+      if (!pivoted) return false
       const spec = parseQuestionSpec(row.spec)
       return spec !== undefined && fold(spec.question) === text
     })
@@ -1905,7 +1924,18 @@ export function createRouter(ctx: AppContext) {
         // carries the note, and the note names frizz as its author because the message it rides on is
         // not frizz's.
         const gapNote = humanGapNote(Date.now(), ctx.tailer.get(input.slug)?.lastAssistantAt)
-        const messageForWorker = gapNote ? `${input.message}\n\n${gapNote}` : input.message
+        // …AND THE QUESTIONS STILL OPEN, the same way and for the same reader. A typed message no longer
+        // releases open questions by timestamp (shared questionRepliedPast, 2026-09-29): it released seven
+        // the human still meant to answer when they typed a side question. The worker reads the message
+        // and decides which ones it made moot — so it is told, here, at the moment it reads it, which ones
+        // are open and by what id `unask` takes them. Appended AFTER the gap note, so that note's "the
+        // message above" still means the human's words.
+        const questionsNote = openQuestionsNote(ctx.storage.listThreadQuestions(input.slug, { openOnly: true }).flatMap((q) => {
+          const spec = parseQuestionSpec(q.spec)
+          return spec ? [{ id: q.id, question: spec.question }] : []
+        }))
+        const riders = [gapNote, questionsNote].filter((note): note is string => note !== undefined)
+        const messageForWorker = riders.length > 0 ? `${input.message}\n\n${riders.join("\n\n")}` : input.message
         if (row) reopenArchivedThreadForFollowUp(ctx, row)
         // Un-park HERE, above the runtime branches, for the same reason the reopen is here: a broker
         // Claude row and an app-server Codex row both return from their own branch below, so anything
@@ -3123,21 +3153,21 @@ export function createRouter(ctx: AppContext) {
         // free-text box, silently).
         const faults = input.questions.flatMap((q) => askedQuestionFaults(q))
         if (faults.length > 0) throw new Error(faults.join("\n"))
-        // A PIVOT STICKS: a question the human replied past is never asked again (maintainer 2026-09-28,
-        // after a worker `unask`ed both of its replied-past cards and re-registered them word for word
-        // under the human's unrelated next request). The contract used to allow exactly that "when the
-        // new work cannot proceed without the answer", and workers read every pivot as that case. The
-        // old card is still up and answerable where it was asked, so a re-ask only ever duplicates it.
+        // A PIVOT STICKS: a question set aside is never asked again (maintainer 2026-09-28, after a worker
+        // `unask`ed both of its stale cards and re-registered them word for word under the human's
+        // unrelated next request). "Set aside" is an act since 2026-09-29 — the human's ×, or the worker's
+        // own `unask` after the human's newest typed message — never a timestamp (see pivotTwin).
         const reasked = input.questions.flatMap((q) => {
-          const prior = repliedPastTwin(input.slug, q)
-          return prior ? [`"${q.question.slice(0, 120)}" repeats ${prior.id}, which the human replied past without answering.`] : []
+          const prior = pivotTwin(input.slug, q)
+          if (!prior) return []
+          const why = prior.state === "dismissed" ? "which the human dismissed" : "which you withdrew after the human's newest message"
+          return [`"${q.question.slice(0, 120)}" repeats ${prior.id}, ${why}.`]
         })
         if (reasked.length > 0) {
           throw new Error(
-            `${reasked.join("\n")}\n\nA reply past a question is a pivot: the human has moved on, so the ` +
-            "question is not asked again, in these words or any others. Its card stays where it was asked, still " +
-            "answerable, and an answer reaches you as its own wake. Do what the human's newest message " +
-            "asks, decide anything it needs yourself, and say which way you went in your write-up.",
+            `${reasked.join("\n")}\n\nA question set aside is not asked again, in these words or any others: ` +
+            "decide it yourself — do what the human's newest message asks — and say which way you went in " +
+            "your write-up.",
           )
         }
         // NO CAP ON THE OPEN SET. Twelve was refused here until 2026-09-03 ("a worker holding more than
@@ -3238,12 +3268,10 @@ export function createRouter(ctx: AppContext) {
         // can, and the registration IS that judgement. Gating on raw liveness would make `done`
         // unreachable for any thread that left a log tail running.
         //
-        // A QUESTION THE HUMAN REPLIED PAST DOES NOT BLOCK. They moved on without answering it, which is a
-        // pivot (questionRepliedPast): its card stays up where it was asked, still answerable, and `done`
-        // must not force the worker to withdraw it just to finish the work the human pivoted to.
-        const lastHumanAt = ctx.tailer.get(input.slug)?.lastHumanAt
+        // EVERY OPEN QUESTION BLOCKS, including one the human has typed past (2026-09-29, shared
+        // questionRepliedPast): whether that message made it moot is the worker's call, and `unask` is how
+        // it makes it — so a question it means to leave behind is one it withdraws, by name, first.
         const blockingQuestions = ctx.storage.listThreadQuestions(input.slug, { openOnly: true }).flatMap((q) => {
-          if (questionRepliedPast(q, lastHumanAt)) return []
           const spec = parseQuestionSpec(q.spec)
           return spec ? [{ id: q.id, question: spec.question }] : []
         })

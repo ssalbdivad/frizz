@@ -181,6 +181,9 @@ interface AllQueuesCardProps {
   onLeave: () => void
   /** The action failed after the card had already faded: put it back. */
   onReturn: () => void
+  /** A question on the card was answered and the worker went to work on it, while the card still asks
+   *  more: keep it where it is, live, although its thread leaves the queue (AllQueues useLeavingCards). */
+  onHold?: () => void
   /** Lead the meta line under the title with the card's project, on a queue that holds several
    *  (ProjectChip) — a flag and a stable chooser rather than the element, which would be a new object on
    *  every render of the queue and so re-render the card every time (sameCard). */
@@ -195,6 +198,7 @@ export const AllQueuesCard = memo(function AllQueuesCard({
   leaving,
   onLeave,
   onReturn,
+  onHold,
   chip = false,
   onChoose,
   ghost,
@@ -215,14 +219,12 @@ export const AllQueuesCard = memo(function AllQueuesCard({
   })
   const text = handoff.data?.text
   const parts = useMemo(() => (text ? handoffParts(text, thread.questions) : null), [text, thread.questions])
-  // THIS CARD IS THE NEWEST HANDOFF, so it draws only the questions that handoff is still asking. One the
-  // human replied past belongs to an older rest and stays up there on the thread page, answerable; drawn
-  // here it sat under a handoff about something else, claiming to be its ask — and the worker, told the
-  // same thing, wrote "the question is still open below" (maintainer 2026-09-28: "we should assume they
-  // want to move on/pivot").
+  // THIS CARD IS THE NEWEST HANDOFF, and every open question rides to the bottom of the newest handoff
+  // (lib/questionAnchor, 2026-09-29): a typed message no longer sets one aside — the worker `unask`s what
+  // it made moot — so every question still open is still this handoff's ask.
   const owedQuestions = useMemo(() => questionsOwed(thread.questions), [thread.questions])
   const placeHref = crossProjectThreadHref(project, thread.id)
-  const dismiss = useMemo(() => ({ dismiss: onLeave, cancel: onReturn }), [onLeave, onReturn])
+  const dismiss = useMemo(() => ({ dismiss: onLeave, cancel: onReturn, hold: onHold }), [onLeave, onReturn, onHold])
   const queryClient = useQueryClient()
   // The snooze toast's Undo: the card comes back, and the page re-reads the queues now rather than at
   // the next poll, which left the card missing for up to 3s after the click.
@@ -341,7 +343,7 @@ export const AllQueuesCard = memo(function AllQueuesCard({
             </div>
 
             {owedQuestions.length > 0 && (
-              <RegisteredQuestionStack thread={thread} questions={owedQuestions} className="shrink-0 px-5 pb-4 pt-0" />
+              <RegisteredQuestionStack thread={thread} questions={owedQuestions} keepAnswered className="shrink-0 px-5 pb-4 pt-0" />
             )}
           </ProjectLinkScope>
 
@@ -375,6 +377,7 @@ function sameCard(a: AllQueuesCardProps, b: AllQueuesCardProps): boolean {
     a.leaving === b.leaving &&
     a.onLeave === b.onLeave &&
     a.onReturn === b.onReturn &&
+    a.onHold === b.onHold &&
     a.chip === b.chip &&
     a.onChoose === b.onChoose &&
     a.ghost === b.ghost &&
@@ -644,7 +647,7 @@ function ReplyBox({ project, thread, onSent, onFailed }: { project: QueuesProjec
         value={text}
         onChange={(value) => draftStore.set(key, value)}
         onSubmit={submit}
-        placeholder={answering?.staged ? "Add a note to your answers…" : questionsOwed(thread.questions).length > 0 ? "Or skip the questions and reply…" : "Reply to the agent…"}
+        placeholder={answering?.staged ? "Add a note to your answers…" : questionsOwed(thread.questions).length > 0 ? "Or reply — the questions stay open…" : "Reply to the agent…"}
         attachBase={projectApiBase(project.id)}
         busy={controls.busy}
         footer={controls.footer}

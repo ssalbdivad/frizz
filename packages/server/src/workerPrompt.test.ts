@@ -61,11 +61,19 @@ test("the contract teaches that a registered question draws itself at the bottom
     assert.match(prompt, /draws NOTHING: one question, one card/)
     // The card is last, so the explanation is first — said where the worker asks AND where it stops.
     assert.match(c, /THE CARD IS THE LAST THING THE HUMAN READS — PUT EVERY WORD OF EXPLANATION BEFORE IT/)
-    assert.match(c, /frizz draws every open question at the BOTTOM of your handoff, below its last line/)
-    // Frizz's wakes carry it down; the human replying past it leaves it up — and it is never asked again.
-    assert.match(c, /A QUESTION STAYS WITH THE EXCHANGE THAT ASKED IT/)
-    assert.match(c, /NEVER ASK IT AGAIN/)
+    assert.match(c, /frizz draws every open question at the BOTTOM of your newest handoff, below its last line/)
+    // An open question rides to the newest handoff through anything — a wake, another card's answer, a
+    // typed message (2026-09-29): the worker decides what a message did to it, and a question set aside
+    // (dismissed, or withdrawn after the human's message) is never asked again.
+    assert.match(c, /AN OPEN QUESTION RIDES TO YOUR NEWEST HANDOFF/)
+    assert.match(c, /A MESSAGE PAST A QUESTION DOES NOT CLOSE IT — YOU DECIDE WHAT IT DID/)
+    assert.match(c, /NEVER ASK AGAIN a question the human dismissed, or one you withdrew after their newest message/)
+    assert.doesNotMatch(c, /A REPLY PAST A QUESTION IS A PIVOT/)
     assert.doesNotMatch(c, /`unask` the old id and `ask` again/)
+    // Answers come a question at a time, so the worker must act on each as it lands — the reason the
+    // questions of one `ask` must be independent.
+    assert.match(c, /ANSWERS ARRIVE ONE QUESTION AT A TIME/)
+    assert.doesNotMatch(c, /send as one batch/)
     // Leaving one out is not how a worker drops it — that is what `unask` is for.
     assert.match(prompt, /it is one you\s+`unask`/)
     // The 2026-08-28 grammar ("place them all, or unask") must stay gone, and so must the couching.

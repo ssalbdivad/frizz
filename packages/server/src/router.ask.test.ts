@@ -564,78 +564,79 @@ test("questions asked in ONE call keep their order — the tiebreak is insertion
   } finally { h.close() }
 })
 
-// A REPLY PAST A QUESTION IS A PIVOT (maintainer 2026-09-28: "if a user doesn't answer questions and
-// instead responds … we should assume they want to move on/pivot"). The card stays open and answerable
-// where it was asked, but it no longer holds the thread — so `done` must not force the worker to withdraw
-// it, and the read-back must tell the worker which questions the human moved on from.
-test("a question the human replied past blocks nothing and reads back marked — one asked since still blocks", async () => {
+// A MESSAGE PAST A QUESTION DOES NOT CLOSE IT (2026-09-29). From 2026-09-28 a typed reply past an open
+// card released it by timestamp — it stopped blocking `done` and could not be asked again — and on this
+// machine the next day it released seven questions the human still meant to answer, when they typed a
+// side question. The worker decides now (router followUp's openQuestionsNote); `repliedPast` survives
+// only as information in the read-back.
+test("a question the human typed past still blocks done, reads back MARKED, and holds until withdrawn", async () => {
   const h = harness()
   try {
     h.storage.upsertSession(row("t"))
     const [passed] = (await h.router.ask.handler({ input: { slug: "t", questions: [simple()] } })).registered
-    // Negative control first: the human's last turn PREDATES the ask, so the question is current.
+    // Negative control first: the human's last turn PREDATES the ask, so nothing is marked.
     h.humanSpokeAt(new Date(Date.parse(passed.askedAt) - 60_000).toISOString())
-    const early = await h.router.markOwnDone.handler({ input: { slug: "t", body: "done" } })
-    assert.equal(early.done, false)
-    assert.deepEqual(early.blockingQuestions.map((q) => q.id), [passed.id])
     assert.equal((await h.router.listOwnThreadActivity.handler({ input: { slug: "t" } })).questions[0].repliedPast, undefined)
 
     h.humanSpokeAt(new Date(Date.parse(passed.askedAt) + 1).toISOString())
-    await new Promise((resolve) => setTimeout(resolve, 5)) // the next ask lands strictly after the reply
     const read = await h.router.listOwnThreadActivity.handler({ input: { slug: "t" } })
-    assert.deepEqual(read.questions.map((q) => [q.id, q.repliedPast]), [[passed.id, true]], "still open, marked replied past")
-
-    const [current] = (await h.router.ask.handler({ input: { slug: "t", questions: [simple("Which dist-tag should 4.5.0 publish under?")] } })).registered
+    assert.deepEqual(read.questions.map((q) => [q.id, q.repliedPast]), [[passed.id, true]], "still open, marked")
     const blocked = await h.router.markOwnDone.handler({ input: { slug: "t", body: "done" } })
-    assert.deepEqual(blocked.blockingQuestions.map((q) => q.id), [current.id], "only the question asked since the reply blocks")
+    assert.equal(blocked.done, false, "a timestamp releases nothing — the worker decides")
+    assert.deepEqual(blocked.blockingQuestions.map((q) => q.id), [passed.id])
 
-    await h.router.unask.handler({ input: { slug: "t", id: current.id } })
+    // The worker's decision, made the one way it can be: withdrawing it by name.
+    await h.router.unask.handler({ input: { slug: "t", id: passed.id } })
     assert.equal((await h.router.markOwnDone.handler({ input: { slug: "t", body: "done" } })).done, true)
-    assert.equal(h.storage.getThreadQuestion(passed.id)?.state, "open", "done leaves the replied-past card open and answerable")
   } finally { h.close() }
 })
 
-// …EXCEPT A DANGER QUESTION. `danger` is the question the human's × cannot dismiss and a Goal cannot
-// auto-dismiss; a typed reply past it must not release it either, or the worker is told to "decide it
-// yourself" on exactly the irreversible call that has to stay the human's.
-test("a DANGER question the human replied past still blocks done and reads back owed", async () => {
+// A danger question never reads as written past — unchanged from when that mark was a release.
+test("a DANGER question the human typed past is never marked, and blocks done like any other", async () => {
   const h = harness()
   try {
     h.storage.upsertSession(row("t"))
     const [risky] = (await h.router.ask.handler({ input: { slug: "t", questions: [{ ...simple("Force-push the rewritten history to main?"), danger: true }] } })).registered
     const [plain] = (await h.router.ask.handler({ input: { slug: "t", questions: [simple()] } })).registered
     h.humanSpokeAt(new Date(Date.parse(plain.askedAt) + 1).toISOString())
-    await new Promise((resolve) => setTimeout(resolve, 5))
     const read = await h.router.listOwnThreadActivity.handler({ input: { slug: "t" } })
-    // The negative control rides along: the ordinary question beside it IS released by the same reply.
+    // The negative control rides along: the ordinary question beside it IS marked by the same message.
     assert.deepEqual(read.questions.map((q) => [q.id, q.repliedPast]), [[risky.id, undefined], [plain.id, true]])
     const done = await h.router.markOwnDone.handler({ input: { slug: "t", body: "done" } })
-    assert.equal(done.done, false)
-    assert.deepEqual(done.blockingQuestions.map((q) => q.id), [risky.id], "the danger question alone still holds the thread")
+    assert.deepEqual(done.blockingQuestions.map((q) => q.id), [risky.id, plain.id], "both hold the thread")
   } finally { h.close() }
 })
 
 // A PIVOT STICKS (maintainer 2026-09-28: "when a question is not answered and we pivot, the question
-// should not be asked again"). A worker `unask`ed both replied-past cards and re-registered them under
-// the human's unrelated next request; `ask` now refuses that, however it is cased or punctuated.
-test("a question the human replied past is REFUSED if asked again — even withdrawn first", async () => {
+// should not be asked again"). A worker `unask`ed stale cards and re-registered them word for word under
+// the human's unrelated next request. Since 2026-09-29 a pivot is an ACT, never a timestamp: the human's
+// ×, or the worker's own `unask` after the human's newest typed message.
+test("a question the worker withdrew after the human's message, or the human dismissed, is REFUSED if asked again", async () => {
   const h = harness()
   try {
     h.storage.upsertSession(row("t"))
-    const [passed] = (await h.router.ask.handler({ input: { slug: "t", questions: [simple()] } })).registered
-    // Negative control: before the human replies past it, the same question is simply a second question.
-    const before = await h.router.ask.handler({ input: { slug: "t", questions: [simple()] } })
-    await h.router.unask.handler({ input: { slug: "t", id: before.registered[0].id } })
-
-    h.humanSpokeAt(new Date(Date.parse(passed.askedAt) + 1).toISOString())
+    const [first] = (await h.router.ask.handler({ input: { slug: "t", questions: [simple()] } })).registered
+    // Negative control: withdrawn BEFORE the human's newest message, it was the worker's own call about
+    // its own work — and the human has spoken since — so it may be asked again.
+    await h.router.unask.handler({ input: { slug: "t", id: first.id } })
     await new Promise((resolve) => setTimeout(resolve, 5))
-    await assert.rejects(h.router.ask.handler({ input: { slug: "t", questions: [simple()] } }), new RegExp(`repeats ${passed.id}.*\\n\\nA reply past a question is a pivot`))
-    // The dodge in the screenshot: withdraw the old card, then ask it again.
-    await h.router.unask.handler({ input: { slug: "t", id: passed.id } })
-    await assert.rejects(h.router.ask.handler({ input: { slug: "t", questions: [simple("sqlite, or a json file")] } }), /repeats/)
-    // A different question is fine, even with the same options: "Yes"/"No" is not a question.
-    const fresh = await h.router.ask.handler({ input: { slug: "t", questions: [simple("Which dist-tag should 4.5.0 publish under?")] } })
-    assert.equal(fresh.registered.length, 1)
+    h.humanSpokeAt(new Date().toISOString())
+    await new Promise((resolve) => setTimeout(resolve, 5))
+    const [again] = (await h.router.ask.handler({ input: { slug: "t", questions: [simple()] } })).registered
+    // Nor does the human typing past an OPEN one refuse a twin: two identical questions are two.
+    assert.equal((await h.router.ask.handler({ input: { slug: "t", questions: [simple("Which dist-tag should 4.5.0 publish under?")] } })).registered.length, 1)
+
+    // The dodge: the human's message made it moot, the worker withdraws it — then asks it again.
+    await h.router.unask.handler({ input: { slug: "t", id: again.id } })
+    await assert.rejects(
+      h.router.ask.handler({ input: { slug: "t", questions: [simple("sqlite, or a json file")] } }),
+      new RegExp(`repeats ${again.id}, which you withdrew after the human's newest message\\.\\n\\nA question set aside is not asked again`),
+    )
+
+    // The human's ×: "decide it yourself; do not re-ask" — refused however long ago.
+    const [dismissible] = (await h.router.ask.handler({ input: { slug: "t", questions: [simple("Rename the package first?")] } })).registered
+    await h.router.dismissQuestions.handler({ input: { slug: "t", ids: [dismissible.id] } })
+    await assert.rejects(h.router.ask.handler({ input: { slug: "t", questions: [simple("Rename the package first?")] } }), /which the human dismissed/)
     assert.equal(h.storage.listThreadQuestions("t").filter((q) => q.state === "open").length, 1, "nothing refused was stored")
   } finally { h.close() }
 })

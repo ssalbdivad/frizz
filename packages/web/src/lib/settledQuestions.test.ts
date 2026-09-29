@@ -6,6 +6,8 @@ import { settledQuestionPositions } from "./settledQuestions.ts"
 // A transcript as the position reader sees it: roles, kinds, instants, and the text a marker lives in.
 const msg = (role: "user" | "assistant", at: string, text = "…", kind?: string) => ({ role, at, text, ...(kind ? { kind } : {}) })
 const settled = (id: string, askedAt: string, settledAt: string, pending?: true) => ({ id, askedAt, settledAt, ...(pending ? { pending } : {}) })
+// The divider the server emits at every rest (transcript.ts restMessage).
+const rest = (at: string) => ({ role: "assistant" as const, at, text: "Agent rested", kind: "event", boundary: "rest" as const })
 
 test("an answered question stays after the rest it was answered at, not after the answer or the turn it woke", () => {
   const messages = [
@@ -19,17 +21,34 @@ test("an answered question stays after the rest it was answered at, not after th
   assert.deepEqual([...anchored.keys()], [2])
 })
 
-test("a question the human replied past and answered later stays at the rest that asked it", () => {
-  // An open question stays at the rest that asked it once the human has replied past it (questionAnchor);
-  // the card the human clicked was therefore under the first handoff, not the second.
+// Since 2026-09-29 an open question rides to the newest rest whatever woke the worker — a typed message
+// included — so the card the human clicked, and its greyed twin, sit under the newest handoff.
+test("a question the human typed past and answered later stays under the newer handoff it was answered under", () => {
   const messages = [
     msg("user", "2026-09-25T10:00:00Z"),
     msg("assistant", "2026-09-25T10:02:00Z"), // asked here
-    msg("user", "2026-09-25T10:03:00Z"), // replied past it
-    msg("assistant", "2026-09-25T10:04:00Z"), // rested again, question still open
+    rest("2026-09-25T10:02:00Z"),
+    msg("user", "2026-09-25T10:03:00Z"), // typed past it
+    msg("assistant", "2026-09-25T10:04:00Z"), // rested again, question still open; the card rode down
+    rest("2026-09-25T10:04:00Z"),
     msg("user", "2026-09-25T10:09:00Z"), // the answer
   ]
   const anchored = settledQuestionPositions(messages, [settled("qst_a", "2026-09-25T10:01:30Z", "2026-09-25T10:08:00Z")])
+  assert.deepEqual([...anchored.keys()], [4])
+})
+
+// ANSWERED WHILE THE WORKER WORKED ON ANOTHER ANSWER (2026-09-29): the open card held at the rest the
+// human was reading, above the running turn, and the greyed one lands in the same slot.
+test("a question answered mid-turn greys where it stood, above the turn the first answer woke", () => {
+  const messages = [
+    msg("user", "2026-09-25T10:00:00Z"),
+    msg("assistant", "2026-09-25T10:02:00Z"), // two asked here
+    rest("2026-09-25T10:02:00Z"),
+    { ...msg("user", "2026-09-25T10:03:00Z", "Answers to earlier questions:\n1. “First?” → A"), wake: true },
+    msg("assistant", "2026-09-25T10:04:00Z"), // the worker, busy with the first answer
+    { ...msg("user", "2026-09-25T10:06:00Z", "Answers to earlier questions:\n1. “Second?” → B"), wake: true },
+  ]
+  const anchored = settledQuestionPositions(messages, [settled("qst_b", "2026-09-25T10:01:30Z", "2026-09-25T10:05:00Z")])
   assert.deepEqual([...anchored.keys()], [1])
 })
 
@@ -104,15 +123,14 @@ test("the card stays above the rest divider that closes its rest, not below it",
   assert.deepEqual([...anchored.keys()], [1])
 })
 
-test("a question the human replied past fills ONE slot open and answered, so answering it does not move it", () => {
+test("a question the human typed past fills ONE slot open and answered, so answering it does not move it", () => {
   // Until 2026-09-28 the open card hung below the asking rest's divider and its greyed twin above it.
   const messages = [
     msg("user", "2026-09-25T10:00:00Z"),
     msg("assistant", "2026-09-25T10:02:00Z"), // asked here
-    msg("assistant", "2026-09-25T10:02:00Z", "Agent rested", "event"),
-    msg("user", "2026-09-25T10:03:00Z"), // replied past it
-    msg("assistant", "2026-09-25T10:04:00Z"),
-    msg("assistant", "2026-09-25T10:04:00Z", "Agent rested", "event"),
+    rest("2026-09-25T10:02:00Z"),
+    msg("user", "2026-09-25T10:03:00Z"), // typed past it
+    msg("assistant", "2026-09-25T10:04:00Z"), // still working on the message
   ]
   const open = questionStacks(messages, [{ id: "qst_a", askedAt: "2026-09-25T10:01:30Z" }])
   const answered = settledQuestionPositions([...messages, msg("user", "2026-09-25T10:09:00Z")], [settled("qst_a", "2026-09-25T10:01:30Z", "2026-09-25T10:08:00Z")])
