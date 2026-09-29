@@ -375,14 +375,13 @@ export const AllQueuesCard = memo(function AllQueuesCard({
                   2026-09-29: "unclear what is happening"). A ghost back at work says so IN THAT SLOT, a
                   one-line card for a one-line card, so the ghost keeps its height and nothing under it
                   moves; a ghost that drew no state card gains none, for the same reason. */}
-              {ghost === GHOST_LABEL.working && (showsRestedCard(thread, text) || showsQuietTurnCard(thread)) ? (
-                <TranscriptCard data-rested-card="working" label="Working" aside={<BoxSpinner />} />
-              ) : (
-                <>
-                  {showsRestedCard(thread, text) && <RestedCard thread={thread} />}
-                  {showsQuietTurnCard(thread) && <QuietTurnCard thread={thread} />}
-                </>
-              )}
+              {showsRestedCard(thread, text) && (ghost === GHOST_LABEL.working && thread.crashed !== true
+                // The spinner stands in the glyph's place at the glyph's geometry — 16px, lifted by the
+                // same measured card-icon-offset (styles.css) — so it sits on the title's cap band as
+                // the lucide glyph it replaces does.
+                ? <TranscriptCard data-rested-card="working" label="Working" aside={<span className="block card-icon-offset"><BoxSpinner size={16} /></span>} />
+                : <RestedCard thread={thread} />)}
+              {showsQuietTurnCard(thread) && <QuietTurnCard thread={thread} />}
             </div>
 
             {/* Keyed on the rest: an answered card keeps its slot while the card holds for the worker's
