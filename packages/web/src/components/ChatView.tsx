@@ -3891,21 +3891,7 @@ export function ProviderFaultCard({
 // credential is fine and the recovery is TIME, not an action. So the card leads with information —
 // when the window comes back, and that frizz will pick the thread up itself — and keeps a manual
 // continue as the secondary, for the operator who has capacity elsewhere and doesn't want to wait.
-const CONTINUE_MESSAGE = "Continue exactly where you left off."
-
-export function LimitPauseCard({
-  slug,
-  sessionId,
-  pause,
-  continueWith,
-}: {
-  slug: string
-  sessionId: string | undefined
-  pause: NonNullable<ThreadViewData["limitPause"]>
-  /** Deliver "Continue now" somewhere other than the PAGE project's thread — the cross-project queue
-   *  card, whose thread is usually another project's (AllQueuesCard). Absent, the eager in-place send. */
-  continueWith?: (message: string) => Promise<void>
-}) {
+export function LimitPauseCard({ slug, sessionId, pause }: { slug: string; sessionId: string | undefined; pause: NonNullable<ThreadViewData["limitPause"]> }) {
   // Only Claude and Codex report a limit window Frizz can read; an ACP agent's limits stay inside its
   // own CLI, so a pause attributed to one is labelled generically rather than crashing on the lookup.
   const label = pause.backend === "acp" ? "The agent" : PROVIDER_LABEL[pause.backend]
@@ -3918,16 +3904,9 @@ export function LimitPauseCard({
   // only this button.
   const continueNow = () => {
     setContinuing(true)
-    if (continueWith) {
-      continueWith(CONTINUE_MESSAGE)
-        .then(() => showToast("Continuing…"))
-        .catch((error: unknown) => showToast(`Continue failed: ${(error instanceof Error ? error.message : "unknown error").slice(0, 80)}`))
-        .finally(() => setContinuing(false))
-      return
-    }
     // The message is a non-empty constant, so `started` is always true here; the reset-on-false is a
     // belt-and-suspenders that keeps the button from sticking disabled if that ever changes.
-    const started = sendEagerFollowUp(queryClient, slug, CONTINUE_MESSAGE, {
+    const started = sendEagerFollowUp(queryClient, slug, "Continue exactly where you left off.", {
       onSuccess: () => { setContinuing(false); showToast("Continuing…") },
       onRollback: () => setContinuing(false),
       failureToast: (m) => `Continue failed: ${m.slice(0, 80)}`,
