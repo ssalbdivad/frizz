@@ -3116,7 +3116,12 @@ function UserBubble({ text, rawText, queued, deliveryUnconfirmed, deliveryId, so
             "data-unqueue": deliveryId,
             "aria-label": "Unqueue this message and put it back in the prompt box",
             title: unqueuePending ? "Taking it back…" : undefined,
-            onClick: (e: ReactMouseEvent<HTMLDivElement>) => unqueue({ deliveryId: deliveryId!, text, rawText: rawText ?? text, from: e.currentTarget }),
+            // A drag across the words ends in a click on this same node, so selecting text in a queued
+            // bubble used to take the message back. A live selection means the human is reading.
+            onClick: (e: ReactMouseEvent<HTMLDivElement>) => {
+              if (window.getSelection()?.toString()) return
+              unqueue({ deliveryId: deliveryId!, text, rawText: rawText ?? text, from: e.currentTarget })
+            },
             onKeyDown: (e: ReactKeyboardEvent<HTMLDivElement>) => {
               if (e.key !== "Enter" && e.key !== " ") return
               e.preventDefault()
