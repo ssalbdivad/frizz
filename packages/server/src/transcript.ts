@@ -41,7 +41,7 @@ import { RELAYED_MARKER, relayNotificationBlock } from "./completion-relay.ts"
 import { CODEX_FIRST_FINAL_TITLE_TRANSPORT, CODEX_LEGACY_FIRST_FINAL_TITLE_TRANSPORT, parseCodexLine, createCodexBackend, extractCodexFrizzTitle } from "./backend/codex.ts"
 import { projectAcpTranscript, readAcpTranscriptFile } from "./backend/acp-transcript.ts"
 import { discoverTranscriptDir, discoverTranscriptId, DISCOVERY_GRACE_MS } from "./discover.ts"
-import { isClaudeAuthErrorText, parseSignalFence } from "./tailer.ts"
+import { isClaudeAuthErrorText, MONITOR_END_RE, parseSignalFence } from "./tailer.ts"
 import { redactCredentialStructure, redactCredentialSyntax } from "./credential-redaction.ts"
 import { hasEscapingBackgroundJob } from "../../../cc-worker/hooks/bash-background.mjs"
 import { frizzTempDir, isPromptAttachmentPath } from "./frizz-paths.ts"
@@ -2021,7 +2021,8 @@ function backgroundWakeLabel(call: TranscriptToolCall, status: string, raw: stri
   const rawDesc = (call.desc ?? call.detail ?? "background command").trim()
   const desc = rawDesc.length > 64 ? `${rawDesc.slice(0, 63)}…` : rawDesc
   let outcome: string
-  if (raw.includes("<event>[Monitor timed out")) outcome = "timed out"
+  const monitorEnd = raw.match(MONITOR_END_RE)?.[1]
+  if (monitorEnd) outcome = monitorEnd
   else if (status === "completed") outcome = "finished"
   else if (status === "killed") outcome = "stopped"
   else {
@@ -2041,7 +2042,8 @@ function backgroundWakeLabel(call: TranscriptToolCall, status: string, raw: stri
 function uncorrelatedWakeLabel(rawDesc: string, status: string, raw: string): string {
   const desc = rawDesc.length > 64 ? `${rawDesc.slice(0, 63)}…` : rawDesc
   let outcome: string
-  if (raw.includes("<event>[Monitor timed out")) outcome = "timed out"
+  const monitorEnd = raw.match(MONITOR_END_RE)?.[1]
+  if (monitorEnd) outcome = monitorEnd
   else if (status === "completed") outcome = "finished"
   else if (status === "killed") outcome = "stopped"
   else {
@@ -2121,7 +2123,7 @@ function completionEvents(
     // ordinary Monitor progress events also have <event> and no <status>, so "missing status ⇒ terminal"
     // would retire every live monitor on its first event. The sentinel is harness prose and could drift —
     // same fragility as the launch-ack strings this parser already depends on.
-    const timedOut = block.includes("<event>[Monitor timed out")
+    const timedOut = MONITOR_END_RE.test(block) // see MONITOR_END_RE: the wording drifted from "timed out" to "expired"
     const status =
       rawStatus === "completed" || rawStatus === "failed" || rawStatus === "killed"
         ? rawStatus

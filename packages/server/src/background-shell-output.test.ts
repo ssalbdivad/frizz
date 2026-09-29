@@ -25,7 +25,9 @@ test("background shell output reads a bounded, presentation-safe tail", () => {
 })
 
 test("background shell output degrades safely when the task file is unavailable", () => {
-  assert.deepEqual(readBackgroundShellOutput("/definitely/missing/frizz-shell-output"), { output: "", truncated: false, end: 0, reset: false, more: false })
+  assert.deepEqual(readBackgroundShellOutput("/definitely/missing/frizz-shell-output"), { output: "", truncated: false, reset: false, more: false }, "no cursor: the next read is a first read again")
+  // A caller mid-stream keeps its cursor, so a vanished log never sends it back to byte 0.
+  assert.equal(readBackgroundShellOutput("/definitely/missing/frizz-shell-output", { from: 4096 }).end, 4096)
 })
 
 // ── READING BY OFFSET — the agent-terminal drawer's poll ──────────────────────────────────────────

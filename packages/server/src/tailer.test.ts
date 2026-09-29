@@ -550,8 +550,10 @@ function bashFg(id: string, description: string | null, command: string) {
   }
 }
 // The harness's auto-background handoff, verbatim (reproduced live 2026-07-30 with timeout: 5000).
-function autoBackgroundAck(taskId: string, seconds = 590) {
-  return `Command did not complete within its ${seconds}s timeout and was moved to the background (ID: ${taskId}). Output is being written to: /tmp/tasks/${taskId}.output. You will be notified when it completes. To check interim output, use Read on that file path.`
+// The path is the harness's real shape — `<tmp>/claude-<uid>/<cwd slug>/<sessionId>/tasks/<taskId>.output` —
+// under the session `resultText` stamps, which is the one folder a promoted ack may name (ackPathTrusted).
+function autoBackgroundAck(taskId: string, seconds = 590, dir = "/tmp/claude-1000/-x/sid/tasks") {
+  return `Command did not complete within its ${seconds}s timeout and was moved to the background (ID: ${taskId}). Output is being written to: ${dir}/${taskId}.output. You will be notified when it completes. To check interim output, use Read on that file path.`
 }
 // A Claude Code Monitor is inherently a background watcher; persistent=true removes its timeout.
 function monitorUse(id: string, description: string, command: string, persistent = true) {
@@ -783,6 +785,13 @@ test("applyRecord: a Monitor timeout notification (no <status>, no <tool-use-id>
   applyRecord(s, monitorEvent("bnmdbtlwx", "[Monitor timed out — re-arm if needed.]"))
   assert.equal(s.subAgents.size, 0, "the timeout sentinel is terminal even with no <status>")
   assert.equal(s.retiredShells.get("toolu_mon")?.status, "killed")
+  // THE WORDING TODAY — every one of the 57 in ~/.claude/projects on 2026-09-29, verbatim. Keyed on "timed
+  // out" alone, this Monitor stayed a pulsing "running" row after the harness had ended it.
+  applyRecord(s, monitorUse("toolu_mon2", "harness compare completion", "tail -f log", false))
+  applyRecord(s, resultText("toolu_mon2", "Monitor started (task buhepo6db, timeout 1800000ms). You will be notified on each event."))
+  applyRecord(s, monitorEvent("buhepo6db", "[Monitor expired after 30m with no events delivered. Re-arm it if you still need the watch — and widen the filter if silence was unexpected.]"))
+  assert.equal(s.subAgents.has("toolu_mon2"), false, "an expired Monitor is over")
+  assert.equal(s.retiredShells.get("toolu_mon2")?.status, "killed")
 })
 
 test("applyRecord: a manual TaskStop clears a Monitor (task-id parsed from the real '(task <id>' ack)", () => {
@@ -929,8 +938,9 @@ test("applyRecord: a TaskStop for an UNRELATED task id leaves every tracked op a
 })
 
 // A tool_result user record with arbitrary text for a given tool_use id (ack/report shapes below).
-function resultText(id: string, text: string) {
-  return { type: "user", timestamp: "2026-07-01T00:00:02.000Z", message: { content: [{ type: "tool_result", tool_use_id: id, content: [{ type: "text", text }] }] } }
+// `sessionId` rides every record the harness writes; the fold checks an auto-background ack's path by it.
+function resultText(id: string, text: string, sessionId = "sid") {
+  return { type: "user", timestamp: "2026-07-01T00:00:02.000Z", sessionId, message: { content: [{ type: "tool_result", tool_use_id: id, content: [{ type: "text", text }] }] } }
 }
 // A TaskStop tool_result — the REAL structured shape (content is a JSON STRING carrying `task_id` and
 // the "Successfully stopped task:" confirmation). This is the terminal signal for a manually-killed op.
@@ -1000,8 +1010,34 @@ test("applyRecord: a FOREGROUND Bash auto-backgrounded on timeout becomes a trac
   assert.equal(entry?.kind, "shell")
   assert.equal(entry?.label, "Wait for the backfill to finish", "the label comes from the parked launch, not the ack")
   assert.equal(entry?.taskId, "bhlfxzwg1", "the runtime task id must be captured for TaskStop correlation")
-  assert.equal(entry?.outputFile, "/tmp/tasks/bhlfxzwg1.output", "sentence period stripped from the captured path")
+  assert.equal(entry?.outputFile, "/tmp/claude-1000/-x/sid/tasks/bhlfxzwg1.output", "sentence period stripped from the captured path")
   assert.equal(s.pendingShells?.size ?? 0, 0, "the park is consumed by the result that promoted it")
+})
+
+test("applyRecord: a promoted ack's path is taken only from this session's own task folder", () => {
+  // The result of a FOREGROUND Bash is whatever it printed, so a command can print the handoff sentence
+  // and name any file. Another session's real task log is the right SHAPE; only its folder gives it away.
+  const s = newTailState("t", "s", "/x")
+  applyRecord(s, bashFg("toolu_forged", "cat notes.txt", "cat notes.txt"))
+  applyRecord(s, resultText("toolu_forged", autoBackgroundAck("bx", 5, "/tmp/claude-1000/-other/their-session/tasks"), "sid"))
+  const forged = s.subAgents.get("toolu_forged")
+  assert.equal(forged?.kind, "shell", "still promoted: the refusal is of the path")
+  assert.equal(forged?.outputFile, undefined, "another session's log is never this shell's output")
+  assert.equal(forged?.outputRefused, true, "and the drawer is told the named output is missing")
+  assert.equal(s.tasksDir, undefined, "a refused path teaches the fold nothing")
+  // A record with no session id (none is ever written without one) cannot vouch for any folder either.
+  applyRecord(s, bashFg("toolu_bare", "nub test", "nub test"))
+  applyRecord(s, { ...resultText("toolu_bare", autoBackgroundAck("by")), sessionId: undefined })
+  assert.equal(s.subAgents.get("toolu_bare")?.outputFile, undefined)
+  // An EXPLICIT launch's ack is harness text a command cannot write, and is taken as named.
+  applyRecord(s, bashBg("toolu_bg", "Dev server", "npm run dev"))
+  applyRecord(s, resultText("toolu_bg", "Command running in background with ID: bz. Output is being written to: /tmp/claude-1000/-x/moved/tasks/bz.output.", "sid"))
+  assert.equal(s.subAgents.get("toolu_bg")?.outputFile, "/tmp/claude-1000/-x/moved/tasks/bz.output")
+  assert.equal(s.tasksDir, "/tmp/claude-1000/-x/moved/tasks")
+  // …and the folder it named vouches for a promoted ack in it.
+  applyRecord(s, bashFg("toolu_after", "nub test", "nub test"))
+  applyRecord(s, resultText("toolu_after", autoBackgroundAck("bw", 5, "/tmp/claude-1000/-x/moved/tasks"), "sid"))
+  assert.equal(s.subAgents.get("toolu_after")?.outputFile, "/tmp/claude-1000/-x/moved/tasks/bw.output")
 })
 
 test("applyRecord: an auto-backgrounded shell retires on its own <task-notification>", () => {

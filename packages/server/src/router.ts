@@ -1825,8 +1825,6 @@ export function createRouter(ctx: AppContext) {
       },
     }),
 
-    // A live/recent background shell's command and combined process output. The tailer supplies the
-    // scoped path; the reader caps the response so long-lived watchers/dev servers stay cheap.
     // ONE AGENT TERMINAL'S LOG — the drawer's read of a background shell, and the whole of its ownership
     // check. Only `slug` and `id` come from the client, and every other link is the server's own:
     //   1. TENANT — this router is one project's (`/_frizz/<project>/rpc/…`), so is everything below.
@@ -1848,6 +1846,7 @@ export function createRouter(ctx: AppContext) {
           return { command: null, output: "", truncated: false, state: "gone" as const, stoppable: false, stopNote: null }
         }
         const content = info.outputFile ? readBackgroundShellOutput(info.outputFile, { from: input.from, raw: input.raw }) : undefined
+        const end = content ? content.end : input.from
         const stop = subAgentStoppable(input.slug, input.id)
         const checkout = liftCheckout(info.cwd, workDir)
         return {
@@ -1858,9 +1857,11 @@ export function createRouter(ctx: AppContext) {
           stoppable: stop.sessionId !== null,
           stopNote: stop.sessionId === null ? stop.note : null,
           ...(info.outputNamed && !info.outputFile ? { missing: true } : {}),
-          // With no readable file the cursor stays where the caller left it, so a log that appears later
-          // is read from the start.
-          end: content?.end ?? input.from ?? 0,
+          // With no readable file the cursor stays where the caller left it — or stays UNSET for a caller
+          // that had none, so a log that only appears later (a Monitor's, once a Bash ack teaches the fold
+          // its folder) opens on its newest 512 KB like any first read, not on byte 0 of a file that may
+          // already be megabytes long.
+          ...(end !== undefined ? { end } : {}),
           ...(content?.reset ? { reset: true } : {}),
           ...(content?.more ? { more: true } : {}),
           ...(info.cwd ? { cwd: info.cwd } : {}),

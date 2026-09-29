@@ -889,6 +889,13 @@ test("a Monitor card stays pending through launch ack + progress event; the time
   const boundary = msgs[1]
   assert.equal(boundary.kind, "event")
   assert.equal(boundary.text, "Background task «wait for agent sweep» timed out")
+  // Today's wording (all 57 in ~/.claude/projects, 2026-09-29). It left the card pending, so the drawer's
+  // strip kept an expired Monitor as a live terminal the card and the rail had already dropped.
+  const expired = parseTranscript(
+    [launch, acked, monitorEvent("[Monitor expired after 5m with no events delivered. Re-arm it if you still need the watch — and widen the filter if silence was unexpected.]", "2026-07-01T00:05:00.000Z")].join("\n"),
+  )
+  assert.equal(expired[0].tools[0].status, "cancelled")
+  assert.equal(expired[1].text, "Background task «wait for agent sweep» expired")
 })
 
 test("a manual TaskStop result marks the stopped Monitor's card cancelled (no dangling pending card)", () => {

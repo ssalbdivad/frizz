@@ -1,11 +1,12 @@
-import { closeSync, fstatSync, lstatSync, openSync, readSync, realpathSync } from "node:fs"
+import { closeSync, constants, fstatSync, lstatSync, openSync, readSync, realpathSync } from "node:fs"
 import { basename, dirname } from "node:path"
 
 const OUTPUT_TAIL_BYTES = 512 * 1024
 // One DELTA read by the drawer's poll. A chatty dev server writes tens of KB between 1.5s polls; past
 // this the reply says `more` and the client asks again at once rather than taking one huge response.
 const DELTA_READ_BYTES = 256 * 1024
-// One delta read. Sized so a chatty dev server (tens of KB between 1.5s polls) is one syscall.
+// One read of the line counter's incremental scan. Sized so a chatty dev server (tens of KB between
+// 1.5s polls) is one syscall.
 const SCAN_CHUNK_BYTES = 256 * 1024
 // The most this will ever scan for ONE file, across its whole life. A first sight of an already-huge
 // log is the only place this bites; past it the shell simply reports no counter, which is honest —
@@ -41,7 +42,10 @@ const ANSI_ESCAPE_RE = /\x1b(?:\][^\x07]*(?:\x07|\x1b\\)|\[[0-?]*[ -/]*[@-~])/g
 // the prefix is `/tmp/claude-<uid>/…` on Linux and unverified elsewhere, and the shape already pins it.
 //
 // Returns the realpath to open, or undefined, which every caller treats as "no readable output" —
-// never an error that would echo the path back.
+// never an error that would echo the path back. The shape is the LAST line of defence, not the only one:
+// a forged ack can still name another session's real task log, which is this exact shape, so the fold
+// refuses such a path before it ever gets here (tailer.ts ackPathTrusted). And the open that follows is
+// O_NOFOLLOW (openVetted), so a file swapped for a symlink between this check and that open fails.
 const HARNESS_OUTPUT_NAME_RE = /^[A-Za-z0-9_-]{1,64}\.output$/
 
 export function vetHarnessOutputPath(path: string, taskId: string | undefined): string | undefined {
@@ -59,12 +63,26 @@ export function vetHarnessOutputPath(path: string, taskId: string | undefined): 
   return real
 }
 
+// Open a path vetHarnessOutputPath returned. O_NOFOLLOW refuses a final component that became a symlink
+// after the vet (the realpath it returned had none), and the fstat refuses anything that is no longer a
+// regular file. Platforms without O_NOFOLLOW (Windows) keep the fstat check alone.
+function openVetted(path: string): number {
+  const fd = openSync(path, constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0))
+  if (!fstatSync(fd).isFile()) {
+    closeSync(fd)
+    throw new Error("not a regular file")
+  }
+  return fd
+}
+
 export interface BackgroundShellOutput {
   output: string
   /** The read began past byte 0 — earlier output exists and was not sent. */
   truncated: boolean
-  /** The byte offset the NEXT read passes as `from`. Never inside a UTF-8 sequence. */
-  end: number
+  /** The byte offset the NEXT read passes as `from`. Never inside a UTF-8 sequence. Absent when nothing
+   *  could be opened and there was no `from` to stand on: the next read is then a FIRST read again, so a
+   *  log that only appears later opens on its newest 512 KB rather than on byte 0. */
+  end?: number
   /** `from` was past the end of the file: it shrank or was replaced, so this read started over. */
   reset: boolean
   /** A delta read stopped at its cap with more already on disk — ask again at once. */
@@ -128,7 +146,7 @@ export function readBackgroundShellOutput(path: string, opts: ReadShellOutputOpt
   }
   let fd: number | undefined
   try {
-    fd = openSync(path, "r")
+    fd = openVetted(path)
     const size = fstatSync(fd).size
     const reset = opts.from !== undefined && size < opts.from
     if (opts.from !== undefined && !reset) {
@@ -150,7 +168,9 @@ export function readBackgroundShellOutput(path: string, opts: ReadShellOutputOpt
     const whole = completeUtf8Length(bytes)
     return { output: decode(bytes.subarray(start, Math.max(start, whole))), truncated: offset > 0, end: offset + whole, reset, more: false }
   } catch {
-    return { output: "", truncated: false, end: 0, reset: false, more: false }
+    // Nothing readable: the cursor stays where the caller left it (a vanished file keeps an open pane's
+    // buffered lines), or stays unset for a caller that had none.
+    return { output: "", truncated: false, ...(opts.from !== undefined ? { end: opts.from } : {}), reset: false, more: false }
   } finally {
     if (fd !== undefined) closeSync(fd)
   }
@@ -212,7 +232,7 @@ function readHead(fd: number, length: number): string {
 export function backgroundShellLineCount(path: string): number | undefined {
   let fd: number | undefined
   try {
-    fd = openSync(path, "r")
+    fd = openVetted(path)
     const stat = fstatSync(fd)
     const size = stat.size
     let state = scans.get(path)

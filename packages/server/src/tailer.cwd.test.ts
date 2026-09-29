@@ -12,7 +12,7 @@ import type { Project } from "./project.ts"
 // WHERE THE AGENT IS WORKING, AND WHERE EACH OF ITS SHELLS STARTED — folded from the transcript the tailer
 // already reads, over real folders (a linked worktree's `.git` is a FILE, as in thread-cwd.test.ts).
 
-function world(opts: { shellCwd?: (outputFile: string) => string | undefined } = {}) {
+function world(opts: { shellCwd?: (outputFile: string) => string | undefined; deps?: Partial<Parameters<typeof createTailer>[0]> } = {}) {
   const root = realpathSync(mkdtempSync(join(tmpdir(), "frizz-tail-cwd-")))
   const project = join(root, "repo")
   mkdirSync(join(project, ".git"), { recursive: true })
@@ -39,6 +39,7 @@ function world(opts: { shellCwd?: (outputFile: string) => string | undefined } =
     paneDead: () => false,
     sessionLogDir: logDir,
     ...(opts.shellCwd ? { shellCwd: opts.shellCwd } : {}),
+    ...opts.deps,
   })
   return { root, project, worktree, tailer, append, changes, cleanup: () => { resetCheckoutMemo(); rmSync(root, { recursive: true, force: true }) } }
 }
@@ -202,7 +203,9 @@ test("a Monitor's log is found beside the session's Bash logs, and only once it 
     w.append(bash("toolu_sh", "npm run dev", w.project), result("toolu_sh", bgAck("bsh", join(tasks, "bsh.output")), w.project))
     w.tailer.tick()
     assert.equal(w.tailer.backgroundShell?.("t", "toolu_mon")?.outputFile, undefined, "…but the Monitor's candidate must exist before it is read")
-    assert.equal(w.tailer.backgroundShell?.("t", "toolu_mon")?.outputNamed, true)
+    // Not NAMED either: no ack gave this path, and a Monitor that has printed nothing may simply not have
+    // written its file yet — the drawer says "waiting", not "the output file is gone".
+    assert.equal(w.tailer.backgroundShell?.("t", "toolu_mon")?.outputNamed, undefined)
     writeFileSync(join(tasks, "bmon1.output"), "event 1\n")
     assert.equal(w.tailer.backgroundShell?.("t", "toolu_mon")?.outputFile, join(tasks, "bmon1.output"))
     assert.equal(w.tailer.backgroundShell?.("t", "toolu_sh")?.outputFile, join(tasks, "bsh.output"))
@@ -249,6 +252,52 @@ test("the OS outranks the transcript on where a running shell is — the batch-s
     w.append({ type: "queue-operation", operation: "enqueue", timestamp: at(), content: "<task-notification>\n<task-id>bm</task-id>\n<tool-use-id>toolu_main</tool-use-id>\n<status>completed</status>\n<summary>done</summary>\n</task-notification>" })
     w.tailer.tick()
     assert.equal(w.tailer.backgroundShell?.("t", "toolu_main")?.cwd, w.project)
+  } finally {
+    w.cleanup()
+  }
+})
+
+// THE BATCHED PROBE, which the inline `shellCwd` seam above skips. A shell that asks while a probe is in
+// flight lands in the wanted set, its own flush returns into the in-flight guard, and every later ask sees
+// it already wanted — so nothing asked for it again until some unrelated shell arrived. The probe's own
+// settle has to re-arm for whatever queued behind it.
+test("a shell that asks while a folder probe is in flight is probed when that probe settles", async () => {
+  const calls: string[][] = []
+  const pending: Array<(answer: Map<string, string | undefined>) => void> = []
+  const w = world({
+    deps: {
+      probeShellCwds: (files) => {
+        calls.push([...files])
+        return new Promise((resolve) => pending.push(resolve))
+      },
+      shellAlive: () => undefined, // keep the real lsof liveness probe out of this
+    },
+  })
+  const macrotask = () => new Promise((resolve) => setTimeout(resolve, 5))
+  try {
+    const tasks = join(w.root, "claude-1000", "-repo", "sid", "tasks")
+    mkdirSync(tasks, { recursive: true })
+    writeFileSync(join(tasks, "b1.output"), "")
+    writeFileSync(join(tasks, "b2.output"), "")
+    w.append(user(w.project), bash("toolu_1", "npm run dev", w.worktree), result("toolu_1", bgAck("b1", join(tasks, "b1.output")), w.worktree))
+    w.tailer.tick()
+    await macrotask()
+    assert.deepEqual(calls, [[join(tasks, "b1.output")]], "the first shell is asked about")
+    // A second shell arrives while that probe is still out.
+    w.append(bash("toolu_2", "nub test --watch", w.worktree), result("toolu_2", bgAck("b2", join(tasks, "b2.output")), w.worktree))
+    w.tailer.tick()
+    await macrotask()
+    w.tailer.tick()
+    await macrotask()
+    assert.equal(calls.length, 1, "one probe at a time")
+    pending.shift()!(new Map([[join(tasks, "b1.output"), w.project]]))
+    await macrotask()
+    assert.ok(calls[1]?.includes(join(tasks, "b2.output")), "the shell that queued behind it is asked about as soon as it settles")
+    pending.shift()!(new Map([[join(tasks, "b2.output"), w.project]]))
+    await macrotask()
+    w.tailer.tick()
+    const rows = w.tailer.get("t")!.bgShells
+    assert.deepEqual(rows.map((r) => [r.id, r.cwd, r.checkout]), [["toolu_1", w.project, undefined], ["toolu_2", w.project, undefined]], "both carry the OS's folder")
   } finally {
     w.cleanup()
   }
