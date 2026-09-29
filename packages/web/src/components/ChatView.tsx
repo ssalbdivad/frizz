@@ -59,6 +59,7 @@ import { ToolDisclosureHeader } from "./ToolDisclosureHeader.ts"
 import { subAgentProfileCell } from "../lib/subAgentProfile.ts"
 import { FOREGROUND_MARK_AFTER_MS, foregroundToolIsRunning, hasRunningToolIndicator, isPendingForegroundTool, liveBackgroundOperationState } from "../lib/operationIndicators.ts"
 import { formatRuntimeElapsed, formatToolDuration } from "../lib/durationLabels.ts"
+import { shellBudgetReading } from "../lib/shellBudget.ts"
 import { githubRefUrl } from "../lib/githubRef.ts"
 import { useNowMs } from "../lib/liveClock.ts"
 import { CHILD_OPEN_TITLE, CHILD_QUIET_SHELL_TITLE, CHILD_RESTED_DOT_CLASS, CHILD_RESTED_TITLE, CHILD_STALE_DOT_CLASS, CHILD_STALE_TITLE, checksCounterLabel, childOpSubtree, issueCounterLabel, mergeBackgroundShells, shellLinesLabel, visibleChildOps, type TranscriptShellRecord } from "../lib/childOps.ts"
@@ -4095,9 +4096,12 @@ export function BackgroundOpsStrip({
           density="sheet"
           startedAt={s.startedAt}
           // Absent until the first poll answers, and permanently absent for a shell whose output frizz
-          // cannot read — never a fabricated 0 for a number we do not have.
+          // cannot read — never a fabricated 0 for a number we do not have. Beside it, the REMAINING
+          // BUDGET where the worker declared one ("45m left", lib/shellBudget.ts) — a shell with none
+          // runs until it is stopped, so it reads its age alone.
           counter={s.id ? shellLinesLabel(shellLines.get(s.id)) : undefined}
           counterTitle="Lines of output so far — open the row to read them"
+          budget={shellBudgetReading(s.budgetEndsAt, Date.now())}
           // A codex shell has an id (its `processId`, which is what its × addresses) but no readable
           // output — codex keeps that inside its own session. So the two affordances part company
           // here: the row still stops, and it renders non-interactive rather than opening a drawer

@@ -281,3 +281,18 @@ test("a runaway depth still renders a row — the indent clamps, the label never
   assert.match(clamped, /style="padding-left:78px"/)
   assert.equal(render({ density: "rail", depth: 40, onOpen: () => {} }), clamped.replace('data-subagent-depth="5"', 'data-subagent-depth="40"'))
 })
+
+// A shell's REMAINING BUDGET is its own reading (lib/shellBudget.ts), between the counter and the age,
+// so an overrun can take the danger tone without dragging the line count into it.
+test("the budget reading sits between counter and age, takes its own tone, and is absent for an unbudgeted shell", () => {
+  const base = { kind: "SHELL" as const, label: "npx vite", density: "sheet" as const, startedAt: TWELVE_MIN_AGO, counter: "142 lines" }
+  const none = renderToStaticMarkup(createElement(ChildOpRow, { ...base, state: "running" }))
+  assert.doesNotMatch(none, /data-child-op-budget/, "no budget declared ⇒ no reading")
+  const over = renderToStaticMarkup(createElement(ChildOpRow, { ...base, state: "running", budget: { text: "over budget", title: "Past its runtime budget", tone: "danger" } }))
+  const order = ["142 lines", "over budget", "12m"].map((t) => over.indexOf(t))
+  assert.ok(order.every((i) => i >= 0) && order[0]! < order[1]! && order[1]! < order[2]!, "counter · budget · age, in that order")
+  assert.match(over, /<span data-child-op-budget="true" title="Past its runtime budget" style="color:[^"]+">over budget<\/span>/)
+  assert.match(over, /<span data-child-op-counter="true">142 lines<\/span>/, "the line count keeps the column's grey")
+  const left = renderToStaticMarkup(createElement(ChildOpRow, { ...base, state: "running", budget: { text: "45m left" } }))
+  assert.match(left, /<span data-child-op-budget="true">45m left<\/span>/, "inside the budget: no tone")
+})

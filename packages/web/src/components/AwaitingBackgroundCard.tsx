@@ -33,6 +33,7 @@ import { githubRefUrl } from "../lib/githubRef.ts"
 import { noteGithubRefs } from "../lib/githubHovercards.ts"
 import { AWAITING_FALLBACK_TITLE, AWAITING_NO_PROSE, awaitingProseBlock, prWatchRefs } from "../lib/awaitingPresentation.ts"
 import { compactElapsedSince, formatCompactElapsed } from "../lib/durationLabels.ts"
+import { shellBudgetLabel } from "../lib/shellBudget.ts"
 import { useNowMs } from "../lib/liveClock.ts"
 import { useMarkdownHtml } from "../lib/useMarkdown.ts"
 import { pushBackgroundShellDrawer, pushSubAgentDrawer, showToast } from "../store.ts"
@@ -661,7 +662,8 @@ export function BgShellRow({ shell, slug, now, testId }: {
       name={shell.label}
       onOpen={openable ? () => pushBackgroundShellDrawer(slug, shell.id!, { label: shell.label, startedAt: shell.startedAt }) : undefined}
       title={openable ? `Read this shell's output — running for ${elapsed}` : shell.label}
-      status={elapsed ? `running · ${elapsed}` : "running"}
+      // The remaining budget where one was declared (lib/shellBudget.ts); an unbudgeted shell has none.
+      status={[elapsed ? `running · ${elapsed}` : "running", shellBudgetLabel(shell.budgetEndsAt, now)].filter(Boolean).join(" · ")}
     />
   )
 }
