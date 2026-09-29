@@ -1,7 +1,7 @@
 import { lazy, Suspense, useEffect, useRef, useState } from "react"
 import { useQuery } from "@tanstack/react-query"
 import { Bot, Loader2, SquareTerminal, X } from "lucide-react"
-import type { BgShellView, ThreadTerminal, ThreadView } from "@frizz/shared"
+import type { BgShellView, ThreadTerminal, ThreadView, ThreadWorkingDir } from "@frizz/shared"
 import { useThreadApi, useThreadApiBase, useThreadProjectDir } from "../api/threadApi.tsx"
 import type { Api } from "../api/rpc.ts"
 import { useBackgroundShellLines, useBoard } from "../hooks.ts"
@@ -452,12 +452,23 @@ export function startComposerTerminal(api: Api, slug: string, command: string | 
   })
 }
 
-// What the folder above is, in the dialog's own words.
+// What the folder above is, in the dialog's own words. Where the agent is working now also says WHICH kind
+// of place that is — the same fact the header's checkout token shows (ThreadCheckoutToken), so a worktree
+// is never a surprise at the moment a terminal is about to open in it.
 const SOURCE_HINT = {
-  transcript: "Where the agent is working now.",
   session: "The folder the agent's session started in.",
   project: "The project root.",
 } as const
+const WORKING_HINT = {
+  worktree: "Where the agent is working now — a worktree.",
+  folder: "Where the agent is working now — outside the project.",
+  root: "Where the agent is working now — the project root.",
+} as const
+
+export function workingDirHint(where: Pick<ThreadWorkingDir, "source" | "kind">): string {
+  if (where.source !== "transcript") return SOURCE_HINT[where.source]
+  return where.kind ? WORKING_HINT[where.kind] : "Where the agent is working now."
+}
 
 // THE "OPEN TERMINAL" DIALOG — two fields and a button. The FOLDER opens on where the thread's agent is
 // working right now (the server's threadWorkingDir: the newest folder its transcript names, lifted to the
@@ -565,7 +576,7 @@ export function OpenTerminalDialog({ slug, open, onOpenChange }: { slug: string;
             className={field}
           />
           <span className="text-[11px] text-muted-60">
-            {where.data && !touched ? SOURCE_HINT[where.data.source] : where.isError ? "Could not tell where the agent is working." : " "}
+            {where.data && !touched ? workingDirHint(where.data) : where.isError ? "Could not tell where the agent is working." : " "}
           </span>
         </label>
         <label className="flex flex-col gap-1">
