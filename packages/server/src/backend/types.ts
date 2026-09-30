@@ -575,19 +575,16 @@ export function claudeCompactionWindowOf(env: Record<string, string> | undefined
   return Number.isInteger(window) && window > 0 ? window : undefined
 }
 
-// Tools an ARGV-SPAWNED Claude worker never gets — the argv turns this into `--disallowedTools=…`.
+// Tools a Claude worker never gets — `--disallowedTools=…` on the argv path, the SDK's `disallowedTools`
+// in the broker.
 //
-// ARGV PATH ONLY, and the asymmetry is deliberate. A worker frizz launched as its own interactive
-// `claude` process answered AskUserQuestion with a native TUI dialog on a terminal screen nobody was
-// watching, so the question had literally nowhere to go and the session froze invisibly. The BROKER
-// path — how every Claude thread is dispatched today — does NOT pass this: it intercepts the same call
-// at canUseTool and renders a real dashboard question card whose answer reaches the model
-// (claude-agent-broker.ts says so at the query site).
-//
-// The other hazard — a parked turn swallowing a follow-up the operator typed instead of answering —
-// argued for blocking it on both paths for a few hours on 2026-08-02. It is handled where it actually
-// lives instead: the bridge retires an open card when a follow-up arrives, which unwinds the tool call
-// and lets the turn read the message. See `retirePendingFor`.
+// AskUserQuestion, on BOTH paths since 2026-09-30. The argv path dropped it first: a worker launched as
+// its own interactive `claude` process answered it with a TUI dialog nobody was watching, and froze.
+// The broker kept it, rendering the call as a dashboard card through canUseTool — until a worker asked
+// for ten name suggestions offered three and "keep it", because the tool's own schema caps a question at
+// FOUR options and nothing in Frizz can widen that. `mcp__frizz__ask` has no cap and a lifecycle that
+// survives the turn, so it is the only way a worker asks. The bridge's card path for the native tool
+// stays as the fallback for a session that reaches it anyway.
 export const WORKER_DISALLOWED_TOOLS = ["AskUserQuestion"] as const
 
 export interface SpawnOpts {

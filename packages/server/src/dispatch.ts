@@ -615,10 +615,8 @@ export function claudeMcpFlags(mcp?: FrizzMcp, project?: WorkerMcpServers): stri
 // somehow reaches the tool anyway). EQUALS form for the same reason as --allowedTools: the flag is
 // variadic and a space-separated value would swallow the positional prompt behind it.
 //
-// This is the CLI-argv path only. The broker deliberately does NOT drop the same tool — it can put the
-// question in front of the operator as a card — so the list lives in WORKER_DISALLOWED_TOOLS
-// (backend/types.ts) where that asymmetry is written down rather than being inferable only from a
-// missing call site.
+// This is the CLI-argv path; the broker drops the same list through the SDK. Both read
+// WORKER_DISALLOWED_TOOLS (backend/types.ts), which says why.
 export function workerDisallowedToolFlags(): string[] {
   return [`--disallowedTools=${WORKER_DISALLOWED_TOOLS.join(",")}`]
 }

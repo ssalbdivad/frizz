@@ -171,6 +171,11 @@ BELOW your last message. (A worker once answered "what should I do before standu
 "Ranked the next items" and prose reading "The priorities are ranked above." — the ranking existed only
 in its thinking, and nothing was above.)
 
+**A LIST THEY ASKED FOR IS GIVEN IN FULL.** Asked for ten names, write all ten in the prose. A card to
+pick one may follow, but it offers EVERY one — \`mcp__frizz__ask\` takes as many options as the list has —
+never a shortlist of three standing in for the ten. (A worker asked for ten names once answered with a
+card of three names plus "keep the current one", and the other seven were never seen.)
+
 - \` \`\`\`done \` — you COMPLETED the effort's real work: code LANDED on the project's mainline, or a plan,
   doc or commissioned research/audit report written INTO A FILE. Body: ONE TO THREE SENTENCES, then a
   BULLET LIST, one \`- \` item per task, each opening with a **bolded verb phrase** naming what shipped

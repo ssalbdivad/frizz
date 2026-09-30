@@ -28,7 +28,7 @@ import { createClaudeQueryFactory } from "./claude-agent-sdk.ts"
 import { inheritWorkerEnvironment } from "./worker-env.ts"
 import { leaseRuntime } from "../runtime-lease.ts"
 import { projectMcpServers, workerMcpServers, type WorkerMcpServers } from "./project-mcp-servers.ts"
-import { claudeCompactionWindowOf } from "./types.ts"
+import { WORKER_DISALLOWED_TOOLS, claudeCompactionWindowOf } from "./types.ts"
 import { createClaudeBrokerDiagnosticWriter, createClaudeBrokerExitWriter, type ClaudeBrokerExitReason } from "./claude-broker-diagnostics.ts"
 import { CLAUDE_BROKER_CAPABILITY_CANCEL_INPUT, CLAUDE_BROKER_CAPABILITY_LIST_SKILLS, CLAUDE_BROKER_CAPABILITY_RELOAD_PLUGINS, CLAUDE_BROKER_CAPABILITY_RENAME, CLAUDE_BROKER_CAPABILITY_STOP_TASK, CLAUDE_BROKER_CAPABILITY_SUBAGENT_STEER, CLAUDE_INPUT_DROP_DIAGNOSTIC_PREFIX } from "./claude-agent-sdk-protocol.ts"
 import type {
@@ -183,13 +183,11 @@ export function runClaudeBroker(config: ClaudeBrokerConfig): RunningBroker {
     mcpServers: workerMcpServers(projectMcpServers(config.cwd, { env }), config.mcpServers),
     strictMcpConfig: true,
     allowedTools: config.allowedTools,
-    // NO `disallowedTools` here, and the asymmetry with the argv path (WORKER_DISALLOWED_TOOLS →
-    // `--disallowedTools=AskUserQuestion`) is DELIBERATE. That flag exists because a worker launched as
-    // its own interactive `claude` process had nowhere to put the question: it opened a TUI dialog on a
-    // terminal screen nobody was looking at. On this path it
-    // has somewhere to go — canUseTool routes it to a real dashboard question card, the operator answers
-    // it, and the chosen labels reach the model. A follow-up sent instead of an answer retires the card
-    // and unwinds the tool call (see retirePendingFor in the bridge), so a parked turn is still steerable.
+    // The same prohibition as the argv path (WORKER_DISALLOWED_TOOLS). This path kept AskUserQuestion
+    // until 2026-09-30 because canUseTool could render it as a real dashboard card — but the tool's own
+    // schema caps a question at FOUR options, and a worker asked to "suggest 10 names" answered with three
+    // and "keep it". `mcp__frizz__ask` has no cap, so the capped tool is taken away rather than rendered.
+    disallowedTools: WORKER_DISALLOWED_TOOLS,
     canUseTool: async (request, context) => {
       const requestId = `perm-${++permSeq}`
       return await new Promise<ClaudePermissionDecision>((resolve) => {

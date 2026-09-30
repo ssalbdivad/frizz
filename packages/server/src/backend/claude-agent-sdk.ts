@@ -124,9 +124,7 @@ export interface ClaudeQueryStartOptions {
   // project-mcp-servers.ts and applied by the broker daemon.
   strictMcpConfig?: boolean
   // Tools taken away from the session outright — the SDK equivalent of the argv path's
-  // `--disallowedTools=`. NOTHING passes it today: the broker deliberately keeps AskUserQuestion (it can
-  // render the question as a dashboard card), which is the only tool that argv drops. Kept as the
-  // plumbed seam so a future prohibition does not have to be argued for AND wired in the same change.
+  // `--disallowedTools=`. The broker passes WORKER_DISALLOWED_TOOLS (backend/types.ts) here.
   disallowedTools?: readonly string[]
   // Which of Claude Code's own settings layers the session loads — and, critically, whether it reads
   // the PROJECT's `CLAUDE.md` / `AGENTS.md` and `.claude/skills` at all.
