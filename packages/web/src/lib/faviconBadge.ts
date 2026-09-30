@@ -35,18 +35,19 @@ const DOT_Y = DOT_RADIUS + RING
 // its hue alone — a canvas cannot resolve a CSS variable, and a tab strip has no shell vocabulary.
 const DOT_COLOR = "#4a9eff"
 
-// THE COUNT'S PILL, in the same 64px space. It has to carry a digit legible at 16px, so it is far bigger
-// than the dot: 44px tall is 11 tab px, and a bold digit inside it inks ~7px — the smallest a tab strip
-// renders a numeral that still reads without squinting. It sits in the same top-right corner, its outer
-// ring flush with the canvas edges. Past MAX_COUNT it reads "9+", a pill across the tile's top in a
-// smaller face — a two-digit count at full size would be wider than the tile itself.
-const PILL_HEIGHT = 44
-const PILL_RING = 4
+// THE COUNT'S PILL, in the same 64px space. It has to carry a digit, so it is bigger than the dot, but it
+// must leave the logo readable: 44px tall (11 tab px) covered the whole mark (maintainer 2026-09-30: "the
+// number needs to be smaller and/or more top right aligned so it doesnt cover the whole logo"). 34px is
+// 8.5 tab px, a bold digit inking ~6px, and the pill sits FLUSH in the corner — its own edge on the
+// canvas edge, the clear ring surviving only on the two sides that face the tile, which are the only
+// sides it separates anything from. Past MAX_COUNT it reads "9+" in a smaller face.
+const PILL_HEIGHT = 34
+const PILL_RING = 3
 const MAX_COUNT = 9
 // Azure is too light for white type (2.9:1), and the dot's own hue is what says "badge" here; this is the
 // same azure darkened until white on it clears 4.5:1, so the numeral is the pill's contrast, not its ring.
 const PILL_COLOR = "#1f6fd1"
-const DIGIT_PX = 38
+const DIGIT_PX = 30
 const digitFont = (px: number) => `700 ${px}px ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif`
 
 /** What the tab shows: nothing, the bare rest dot, or a count of waiting cards. */
@@ -109,9 +110,9 @@ export function drawBadgedIcon(base: CanvasImageSource, label = "dot"): string {
     ctx.fill()
     return canvas.toDataURL("image/png")
   }
-  // The widest the pill can be with its ring still inside the canvas, and the ink that leaves room for.
-  const maxWidth = SIZE - PILL_RING * 2
-  const sideBearing = 8
+  // The widest the pill may grow — three quarters of the tile, so "9+" still leaves the mark its left side.
+  const maxWidth = SIZE * 0.75
+  const sideBearing = 5
   let fontPx = DIGIT_PX
   ctx.font = digitFont(fontPx)
   let ink = ctx.measureText(label)
@@ -126,8 +127,8 @@ export function drawBadgedIcon(base: CanvasImageSource, label = "dot"): string {
   const inkWidth = ink.actualBoundingBoxLeft + ink.actualBoundingBoxRight
   // A single digit gets a circle; more get a pill as wide as its ink plus the side bearing.
   const width = Math.min(maxWidth, Math.max(PILL_HEIGHT, inkWidth + sideBearing * 2))
-  const right = SIZE - PILL_RING
-  const top = PILL_RING
+  const right = SIZE
+  const top = 0
   punch(ctx, () => pill(ctx, right + PILL_RING, top - PILL_RING, width + PILL_RING * 2, PILL_HEIGHT + PILL_RING * 2))
   ctx.fillStyle = PILL_COLOR
   ctx.beginPath()

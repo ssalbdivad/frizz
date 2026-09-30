@@ -100,7 +100,7 @@ test("the rest dot or a count repoints every icon link at a badged raster, and c
       ctx.drawImage(img, 0, 0)
       const at = (x: number, y: number) => [...ctx.getImageData(x, y, 1, 1).data]
       // Inside the pill, clear of the numeral; and the punched ring just below the pill.
-      return { body: at(56, 26), ring: at(38, 50), tile: at(8, 56) }
+      return { body: at(60, 17), ring: at(47, 35), tile: at(8, 56) }
     }, three)
     assert.deepEqual(pill.body, [0x1f, 0x6f, 0xd1, 255])
     assert.equal(pill.ring[3], 0)
