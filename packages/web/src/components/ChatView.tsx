@@ -45,7 +45,7 @@ import { useDeliverQueuedNow, useDeliverQueuedNowSupported } from "../lib/delive
 import { useInnerHtml } from "../lib/innerHtml.ts"
 import { useLocalFileCodeLinks } from "../lib/localFileCode.ts"
 import { lastAskIndex, messagePresentationText } from "../lib/messagePresentation.ts"
-import { withoutSpinoffCalls } from "../lib/spinoffCalls.ts"
+import { startedSpinoffsKey, withoutSpinoffCalls } from "../lib/spinoffCalls.ts"
 import { stampHostFor } from "../lib/stampHost.ts"
 import { ICON_LABEL_NUDGE } from "../lib/iconAlign.ts"
 import { getThemeSnapshot, subscribeTheme } from "../lib/theme.ts"
@@ -255,9 +255,11 @@ function ChatView({ slug, virtualized }: { slug: string; virtualized: boolean })
   // useLiveAnswering's `liveMsg` identity check compares objects from THIS same list.
   const messages = useMemo(() => q.data?.messages ?? [], [q.data])
   const liveTranscriptShells = useMemo(() => transcriptBackgroundShells(messages), [messages])
-  // …minus the `spawn_thread` call behind each spinoff card, which the card already stands for
-  // (lib/spinoffCalls.ts).
-  const presentationMessages = useMemo(() => withoutSpinoffCalls(withoutLiveTranscriptBackgroundTools(messages)), [messages])
+  // …minus the `spawn_thread` call behind each spinoff card that STARTED its thread, which the card
+  // already stands for — a failed or unrecorded one keeps its line (lib/spinoffCalls.ts). Keyed on the
+  // string of started request ids, not on `thread`, which is a new object on every board push.
+  const startedSpinoffs = startedSpinoffsKey(thread)
+  const presentationMessages = useMemo(() => withoutSpinoffCalls(withoutLiveTranscriptBackgroundTools(messages), startedSpinoffs), [messages, startedSpinoffs])
   // Cut over presentationMessages, not messages: the coalesced entries below carry a messageIndex into
   // THIS list, and comparing the two index spaces is how a live fence gets marked settled.
   const lastAgentIdx = useMemo(() => lastAssistantIndex(presentationMessages), [presentationMessages])

@@ -150,6 +150,6 @@ test("Message draws a child's first turn as the origin card, before the user-bub
 })
 
 test("the thread transcript's message list drops spinoff calls before any reader of it, and Message takes no thread", () => {
-  assert.match(chatView, /const presentationMessages = useMemo\(\(\) => withoutSpinoffCalls\(withoutLiveTranscriptBackgroundTools\(messages\)\), \[messages\]\)/)
+  assert.match(chatView, /const startedSpinoffs = startedSpinoffsKey\(thread\)\n\s+const presentationMessages = useMemo\(\(\) => withoutSpinoffCalls\(withoutLiveTranscriptBackgroundTools\(messages\), startedSpinoffs\), \[messages, startedSpinoffs\]\)/)
   assert.doesNotMatch(chatView, /export const Message = memo\(function Message\(\{[^}]*\bthread\b/)
 })
