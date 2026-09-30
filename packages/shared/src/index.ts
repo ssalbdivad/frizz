@@ -3331,6 +3331,33 @@ export function queuedThread(t: Pick<ThreadView, "kind" | "foreign" | "needsYou"
   return t.kind === "session" && t.foreign !== true && t.needsYou === true && t.state !== "archived"
 }
 
+/**
+ * The reasons a queued thread must be seen AT ONCE, as one comparable string ("" when there are none) —
+ * the server's hard gates: a terminal at a prompt, a request the human must answer, a question, a crash,
+ * a limit pause. Registered questions by id, because a Codex worker can register one without moving its
+ * rest. The queue clock reads it as a yes/no (never withhold an urgent entry); both needs-decision
+ * notifiers — the server's (board.ts notifyNeedsYou) and the All queues page's for other projects
+ * (web crossProjectNotify.ts) — compare the whole string, so a thread that comes back to the place and
+ * rest it left with is news only if it came back with a reason it did not leave with.
+ *
+ * ONE definition for both notifiers (2026-09-30): the web kept a yes/no copy, so a parent resting on a
+ * question that came back from a spinoff's side turn with that same question was silent on the server
+ * and announced by the page — the disagreement the shared rule exists to remove.
+ */
+export function queueUrgency(t: ThreadView): string {
+  const reasons: string[] = []
+  if (t.terminals?.some((terminal) => terminal.awaitingInput === true)) reasons.push("terminal")
+  if (t.actionableInteraction === true) reasons.push("interaction")
+  if (t.runtime === "perm-prompt") reasons.push("perm-prompt")
+  if (t.pendingAsk !== undefined) reasons.push("ask")
+  if (t.pendingQuestion === true) reasons.push("question")
+  for (const q of t.questions ?? []) reasons.push(`q:${q.id}`)
+  if (t.crashed === true) reasons.push("crashed")
+  if (t.limitPause !== undefined) reasons.push("limit")
+  if (t.providerError !== undefined && t.providerError.retrying !== true) reasons.push("provider-error")
+  return reasons.join(" ")
+}
+
 // ── THE SIDEBAR'S BANDS ────────────────────────────────────────────────────────────────────────────
 // Moved here from web/src/groups.ts (which re-exports them) so the SERVER can count a project's Active
 // band for the rail — the same reason `queuedThread` lives here: a rail badge that disagreed with the

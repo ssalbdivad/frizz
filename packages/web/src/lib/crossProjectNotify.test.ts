@@ -67,6 +67,22 @@ test("a thread back at the place it left, with the rest it left with, is not a n
   assert.deepEqual(queueArrivals(gone.next, read({})).arrivals.map((a) => a.thread.id), ["p"])
 })
 
+// The server compares the urgent REASONS whole (shared queueUrgency), so a parent resting on a question keeps
+// it through a side turn and stays quiet; a first cut here exempted anything urgent and announced it anyway.
+test("a thread resting on a question comes back from a side turn with that question and stays quiet", () => {
+  const place = { queuedAt: "2026-09-30T09:30:00.000Z", lastAssistantAt: "2026-09-30T09:29:00.000Z" }
+  const asked = { questions: [{ id: "q_1" }] } as Partial<ThreadView>
+  const read = (over: Partial<ThreadView>) => [project("beta", [thread("p", { ...place, ...asked, ...over })])]
+  const first = queueArrivals(null, read({}))
+  const sideTurn = queueArrivals(first.next, read({ needsYou: false, runtime: "running", queuedAt: undefined }))
+  assert.deepEqual(queueArrivals(sideTurn.next, read({})).arrivals, [], "the same question is the same card")
+  // A second question it did not leave with is news.
+  assert.deepEqual(
+    queueArrivals(sideTurn.next, read({ questions: [{ id: "q_1" }, { id: "q_2" }] } as Partial<ThreadView>)).arrivals.map((a) => a.thread.id),
+    ["p"],
+  )
+})
+
 test("only session threads queue a notification, as on the server", () => {
   const first = queueArrivals(null, [project("beta", [])])
   const { arrivals } = queueArrivals(first.next, [project("beta", [thread("cmd", { kind: "command" } as Partial<ThreadView>), thread("ext", { foreign: true })])])

@@ -201,7 +201,7 @@ const HEADER_LINK = "min-w-0 truncate rounded-sm font-medium text-fg underline d
 const BODY = "mt-1.5 whitespace-pre-wrap [overflow-wrap:anywhere]"
 
 /** Where a spinoff request stands, as its card shows it. */
-export type SpinoffCardState = "started" | "starting" | "waiting" | "unconfirmed" | "unstarted"
+export type SpinoffCardState = "started" | "starting" | "waiting" | "unconfirmed" | "unstarted" | "detached"
 
 /** What the card reads a request's standing from: the edge, the delivery ledger's state for the send
  *  (while the ledger still holds it), and the parent thread's live reading. */
@@ -213,6 +213,11 @@ export interface SpinoffCardInputs {
   runtime?: ThreadView["runtime"]
   /** The turn is paused on a decision only the human can make — a typed interaction or a native ask. */
   blocked?: boolean
+  /** A later message reached the thread after this request, so the thread's LIVE reading (running,
+   *  blocked) is about some later turn, not the one this request was in. */
+  superseded?: boolean
+  /** The thread's board row carries its spinoff edges, but none for this request — the row is gone. */
+  edgeGone?: boolean
 }
 
 /** A request with a child has STARTED. One without says "didn't start" ONLY once the worker has genuinely
@@ -231,11 +236,23 @@ export interface SpinoffCardInputs {
  *     reads as idle — the "didn't start" flash the review caught), or the worker is at work.
  *  The worker's own words about an unstarted request sit in the chat under the card, and so does the
  *  call it made, when that call failed (lib/spinoffCalls.ts). */
+//
+//  Two readings sit outside that order (review, 2026-09-30):
+//   · SUPERSEDED — a later message reached the thread after this request, so its turn is over and the live
+//     runtime is about a LATER turn. An old request with no child is then "didn't start" whatever the
+//     thread is doing now; without this, every old unstarted card in the transcript turned "starting…"
+//     or "waiting on you" whenever a later turn ran or stopped on an approval.
+//   · DETACHED — the board row lists the thread's spinoffs and this request is not among them: the row is
+//     gone, which in practice means its child was forgotten (storage drops the edge with the child so a
+//     thread that later reuses the slug is not mistaken for it). The card then states only that it was a
+//     spinoff — not "didn't start", which would be false, and no link to a thread that no longer exists.
 export function spinoffCardState(edge: SpinoffView | undefined, opts: SpinoffCardInputs): SpinoffCardState {
   if (edge?.childSlug) return "started"
   if (opts.deliveryState === "unconfirmed") return "unconfirmed"
+  if (opts.queued || opts.deliveryState !== undefined) return opts.blocked || opts.runtime === "perm-prompt" ? "waiting" : "starting"
+  if (!edge && opts.edgeGone) return "detached"
+  if (opts.superseded) return "unstarted"
   if (opts.blocked || opts.runtime === "perm-prompt") return "waiting"
-  if (opts.queued || opts.deliveryState !== undefined) return "starting"
   return opts.runtime === "running" || opts.runtime === "spawning" ? "starting" : "unstarted"
 }
 
@@ -245,6 +262,7 @@ const PENDING_LABEL: Record<Exclude<SpinoffCardState, "started">, string> = {
   waiting: "waiting on you",
   unconfirmed: "delivery unconfirmed",
   unstarted: "didn't start",
+  detached: "",
 }
 
 /** The thread a transcript belongs to, off the board — the card's own read of the edge and of whether the
@@ -258,9 +276,11 @@ function useTranscriptThread(): ThreadView | undefined {
  *  the human's instructions under it. `queued`, `deliveryState` and `deliveryId` are the delivery ledger's
  *  word on the send (the ledger's echo of it, or the transcript's enqueue record it tagged), and `rawText`
  *  the message's own text, which the transcript cache is keyed on for a take-back. */
-export function SpinoffCard({ id, instructions, queued, deliveryState, deliveryId, rawText, sourceId }: {
+export function SpinoffCard({ id, instructions, at, queued, deliveryState, deliveryId, rawText, sourceId }: {
   id: string
   instructions: string
+  /** When the request reached the worker (the transcript record's instant); absent while the ledger holds it. */
+  at?: string
   queued?: boolean
   deliveryState?: SpinoffCardInputs["deliveryState"]
   deliveryId?: string
@@ -274,6 +294,10 @@ export function SpinoffCard({ id, instructions, queued, deliveryState, deliveryI
     deliveryState,
     runtime: thread?.runtime,
     blocked: thread?.actionableInteraction === true || thread?.pendingAsk !== undefined,
+    // The request itself reads as the human speaking, so the thread's newest human instant IS this request
+    // until something later arrives. ISO instants from the same transcript compare as strings.
+    superseded: at !== undefined && thread?.lastUserAt !== undefined && thread.lastUserAt > at,
+    edgeGone: thread?.spinoffs !== undefined,
   })
   // TAKE IT BACK (2026-09-30, review). A request still in the parent's queue can be withdrawn exactly as a
   // queued human bubble can (ChatView UserBubble, lib/unqueueFollowUp.ts) — the same gates, the same click,
@@ -342,7 +366,7 @@ export function SpinoffCard({ id, instructions, queued, deliveryState, deliveryI
           <span className="shrink-0">Spinoff</span>
           {state === "started" ? (
             <ThreadHandleLink slug={edge!.childSlug!} className={HEADER_LINK} />
-          ) : (
+          ) : state === "detached" ? null : (
             // Unconfirmed wears the attention tone the bubble's own "Delivery unconfirmed" line does: it is
             // the one state the human may need to act on (send it again), and the only one that is a warning.
             <span data-spinoff-pending className={`min-w-0 truncate ${state === "unconfirmed" ? "text-attention-80" : "text-muted-70"}`}>{PENDING_LABEL[state]}</span>

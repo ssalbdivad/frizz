@@ -3365,7 +3365,7 @@ export const Message = memo(function Message({ m, answering, dense, paired, show
     // send with no receipt from one in progress, and its id is what a queued request is taken back by —
     // the two things the gray bubble this card replaced already did.
     const spinoff = m.spinoff ?? parseSpinoffRequest(m.text)
-    if (spinoff) return <SpinoffCard id={spinoff.id} instructions={spinoff.instructions} queued={m.queued} deliveryState={m.deliveryState} deliveryId={m.deliveryId} rawText={m.text} sourceId={m.sourceId} />
+    if (spinoff) return <SpinoffCard id={spinoff.id} instructions={spinoff.instructions} at={m.at} queued={m.queued} deliveryState={m.deliveryState} deliveryId={m.deliveryId} rawText={m.text} sourceId={m.sourceId} />
     // A SPINOFF CHILD'S FIRST TURN: the human's instructions, and the parent worker's brief folded
     // beneath them — never one bubble holding both, since the brief is not the human speaking.
     if (m.spinoffOrigin) return <SpinoffOriginCard instructions={m.spinoffOrigin.instructions} context={m.spinoffOrigin.brief.trim() ? <ProseHtml md={m.spinoffOrigin.brief} wrap /> : null} sourceId={m.sourceId} />

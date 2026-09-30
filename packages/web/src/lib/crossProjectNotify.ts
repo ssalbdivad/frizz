@@ -1,10 +1,9 @@
 import { useEffect, useRef } from "react"
 import { useQuery } from "@tanstack/react-query"
-import { queuedThread, type ProjectQueue, type ThreadView } from "@frizz/shared"
+import { queueUrgency, queuedThread, type ProjectQueue, type ThreadView } from "@frizz/shared"
 import { rpc } from "../api/rpc.ts"
 import { notify } from "../api/board-stream.ts"
 import { store } from "../store.ts"
-import { promptingTerminal } from "./threadTerminals.ts"
 
 // DESKTOP NOTIFICATIONS FOR EVERY PROJECT, not only the one the page is bound to.
 //
@@ -24,12 +23,12 @@ import { promptingTerminal } from "./threadTerminals.ts"
 // The first read is a baseline, and so is a project's first appearance in a read: a page that opens onto
 // a full queue, or a project that has just been opened, is not news.
 
-/** One session thread as the last read saw it: whether it was queued, and the place (`queuedAt`) and rest
- *  (`lastAssistantAt`) it last held IN the queue — kept after it leaves, which is what lets a return to the
- *  same place with the same rest be told from a new entry (see queueArrivals). */
+/** One session thread as the last read saw it: whether it was queued, and the place (`queuedAt`), rest
+ *  (`lastAssistantAt`) and urgent reasons (shared queueUrgency) it last held IN the queue — kept after it
+ *  leaves, which is what lets a return to the same card be told from a new entry (see queueArrivals). */
 export interface QueueSighting {
   queued: boolean
-  lastInQueue?: { queuedAt?: string; rest?: string }
+  lastInQueue?: { queuedAt?: string; rest?: string; urgency?: string }
 }
 
 /** Each project's SESSION threads by id, as of the last read. */
@@ -40,14 +39,6 @@ export interface QueueArrival {
   thread: ThreadView
 }
 
-/** A queue reason only a person can clear — the server's own `urgent` reading (board.ts, the queue clock's
- *  `urgent`), which is also what exempts a re-entry from the server's resumed-entry silence. */
-function urgent(t: ThreadView): boolean {
-  return promptingTerminal(t) !== undefined ||
-    t.actionableInteraction === true || t.runtime === "perm-prompt" || t.pendingAsk !== undefined ||
-    t.pendingQuestion === true || (t.questions?.length ?? 0) > 0 || t.crashed === true ||
-    t.limitPause !== undefined || (t.providerError !== undefined && t.providerError.retrying !== true)
-}
 
 /**
  * The threads that entered a queue since `prev`, and the sightings to compare the next read against.
@@ -62,9 +53,12 @@ function urgent(t: ThreadView): boolean {
  * SpinoffButton) takes that parent out of the queue for its side turn — a cold resume plus the spawn,
  * several of this poll's 3s reads — and the side turn puts the same rest back (spinoff-side-turn.ts), so
  * this watcher saw an absent → present edge and raised a desktop notification for nothing. A re-entry that
- * is URGENT — a permission prompt, a question, a crash — still notifies whatever its place and rest: the
- * queue clock gives the old place back to an urgent entry too, and a Codex approval moves no rest, so
- * "same place, same rest" cannot tell a new blocking ask from nothing happening.
+ * comes back with a NEW urgent reason — a permission prompt, a question, a crash it did not leave with —
+ * still notifies whatever its place and rest: the queue clock gives the old place back to an urgent entry
+ * too, and a Codex approval moves no rest, so "same place, same rest" cannot tell a new blocking ask from
+ * nothing happening. The reasons are compared whole (queueUrgency), the server's own rule: a parent resting
+ * on a question keeps that question through its side turn and must stay as quiet as a plain handoff — the
+ * first cut exempted anything urgent, and announced exactly that parent while the server stayed silent.
  */
 export function queueArrivals(prev: QueueSightings | null, queues: readonly ProjectQueue[]): { next: Map<string, Map<string, QueueSighting>>; arrivals: QueueArrival[] } {
   const next = new Map<string, Map<string, QueueSighting>>()
@@ -79,11 +73,12 @@ export function queueArrivals(prev: QueueSightings | null, queues: readonly Proj
       const queued = queuedThread(thread)
       const before = seen?.get(thread.id)
       const left = before?.lastInQueue
+      const urgency = queueUrgency(thread)
       const resumed = left !== undefined && thread.queuedAt !== undefined && left.queuedAt === thread.queuedAt &&
-        thread.lastAssistantAt !== undefined && left.rest === thread.lastAssistantAt && !urgent(thread)
+        thread.lastAssistantAt !== undefined && left.rest === thread.lastAssistantAt && left.urgency === urgency
       // A project's first appearance is a baseline, like the first read.
       if (seen && queued && !before?.queued && !resumed) arrivals.push({ project, thread })
-      sightings.set(thread.id, { queued, lastInQueue: queued ? { queuedAt: thread.queuedAt, rest: thread.lastAssistantAt } : left })
+      sightings.set(thread.id, { queued, lastInQueue: queued ? { queuedAt: thread.queuedAt, rest: thread.lastAssistantAt, urgency } : left })
     }
   }
   return { next, arrivals }

@@ -68,6 +68,33 @@ test("a turn paused on the human is waiting, never didn't start — nor starting
   assert.equal(spinoffCardState(pending, { queued: true, deliveryState: "unconfirmed", runtime: "perm-prompt" }), "unconfirmed")
 })
 
+// Review 2026-09-30: an old request with no child must not borrow the runtime of a LATER turn, and one whose
+// edge the board no longer carries (its child was forgotten) must not claim it never started.
+test("a request a later message superseded reads didn't start whatever the thread does now; one whose edge is gone reads detached", () => {
+  const pending = edge({ childSlug: null })
+  assert.equal(spinoffCardState(pending, { superseded: true, runtime: "running" }), "unstarted")
+  assert.equal(spinoffCardState(pending, { superseded: true, runtime: "perm-prompt", blocked: true }), "unstarted")
+  // …but the ledger still owns a send it holds, and a child still wins.
+  assert.equal(spinoffCardState(pending, { superseded: true, queued: true, runtime: "running" }), "starting")
+  assert.equal(spinoffCardState(edge(), { superseded: true }), "started")
+  assert.equal(spinoffCardState(undefined, { edgeGone: true, runtime: "running" }), "detached")
+  assert.equal(spinoffCardState(undefined, { edgeGone: true, queued: true }), "starting", "a send the board has not caught up with yet")
+  assert.equal(spinoffCardState(undefined, { runtime: "turn-idle" }), "unstarted", "no board row to read the edge list from")
+
+  board([thread({ id: "live-sub-agents", title: "Live sub agents", runtime: "running", lastUserAt: "2026-09-30T10:05:00.000Z", spinoffs: [pending] } as Partial<ThreadView> & { id: string; title: string })])
+  const old = inThread("live-sub-agents", createElement(SpinoffCard, { id: pending.id, instructions: "x", at: "2026-09-30T10:00:00.000Z" }))
+  assert.match(old, /data-spinoff-state="unstarted"/)
+  const current = inThread("live-sub-agents", createElement(SpinoffCard, { id: pending.id, instructions: "x", at: "2026-09-30T10:05:00.000Z" }))
+  assert.match(current, /data-spinoff-state="starting"/, "the request that IS the newest message is the turn running now")
+
+  board([thread({ id: "live-sub-agents", title: "Live sub agents", runtime: "turn-idle", spinoffs: [] })])
+  const detached = inThread("live-sub-agents", createElement(SpinoffCard, { id: pending.id, instructions: "Is it worth keeping?" }))
+  assert.match(detached, /data-spinoff-state="detached"/)
+  assert.match(detached, /Is it worth keeping\?/)
+  assert.doesNotMatch(detached, /didn(?:'|&#x27;)t start/)
+  assert.doesNotMatch(detached, /<a /)
+})
+
 test("the parent's card names the child by @handle, links it, and is outlined rather than the human's filled bubble", () => {
   board([
     thread({ id: "live-sub-agents", title: "Live sub agents", spinoffs: [edge()] }),
@@ -200,7 +227,7 @@ test("the child's header line is a spinoff of its parent by @handle, and a queue
 const chatView = readFileSync(new URL("./ChatView.tsx", import.meta.url), "utf8")
 
 test("Message draws a spinoff request — the transcript's tell or a ledger send's raw envelope — as the card", () => {
-  assert.match(chatView, /const spinoff = m\.spinoff \?\? parseSpinoffRequest\(m\.text\)\n\s+if \(spinoff\) return <SpinoffCard id=\{spinoff\.id\} instructions=\{spinoff\.instructions\} queued=\{m\.queued\} deliveryState=\{m\.deliveryState\} deliveryId=\{m\.deliveryId\} rawText=\{m\.text\}/, "the ledger's state and id reach the card")
+  assert.match(chatView, /const spinoff = m\.spinoff \?\? parseSpinoffRequest\(m\.text\)\n\s+if \(spinoff\) return <SpinoffCard id=\{spinoff\.id\} instructions=\{spinoff\.instructions\} at=\{m\.at\} queued=\{m\.queued\} deliveryState=\{m\.deliveryState\} deliveryId=\{m\.deliveryId\} rawText=\{m\.text\}/, "the ledger's state and id reach the card")
 })
 
 test("Message draws a child's first turn as the origin card, before the user-bubble fallback", () => {

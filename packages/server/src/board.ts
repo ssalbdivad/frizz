@@ -9,7 +9,7 @@ import { homedir } from "node:os"
 import { dirname, join } from "node:path"
 import watcher from "@parcel/watcher"
 import type { BoardSnapshot, ClaudeModel, ThreadTerminal, ThreadView, RuntimeState, ThreadRecurringPrompt, ProviderError } from "@frizz/shared"
-import { AskedQuestionSchema, BoardDiffer, PermissionMode, SnoozeUntil, ThreadSlug, isDirectSubAgent, questionAnswerMessage, questionRepliedPast, questionsCancelledWakeMessage, type AskedQuestion, type PermissionMode as PermissionModeValue, type QuestionAnswer, type QuestionDismissal } from "@frizz/shared"
+import { AskedQuestionSchema, BoardDiffer, PermissionMode, SnoozeUntil, ThreadSlug, isDirectSubAgent, queueUrgency, questionAnswerMessage, questionRepliedPast, questionsCancelledWakeMessage, type AskedQuestion, type PermissionMode as PermissionModeValue, type QuestionAnswer, type QuestionDismissal } from "@frizz/shared"
 import type { Bus } from "./bus.ts"
 import { workDirOf, type Project } from "./project.ts"
 import { isHeadlessRow, isBrokerClaudeRow, sessionTitleLocked, type ThreadQuestionRow } from "./storage.ts"
@@ -2211,25 +2211,10 @@ export function createBoard(
     return capLine(t.lastAssistant)
   }
 
-  // THE REASONS A THREAD MUST BE SEEN AT ONCE, as one comparable string ("" when there are none) —
-  // deriveNeedsYou's hard gates: a request the human must answer, a question, a crash, a limit pause. A
-  // terminal at a prompt is one too: only a person can type the answer, whatever the thread's park. The
-  // queue clock reads it as a yes/no (never withhold an urgent entry); notifyNeedsYou reads the whole
-  // string, so a thread that comes back to its old place with a reason it did not leave with is news.
-  // Registered questions by id, because a Codex worker can register one without moving its rest.
-  function urgencyOf(t: ThreadView): string {
-    const reasons: string[] = []
-    if (promptingTerminal(t) !== undefined) reasons.push("terminal")
-    if (t.actionableInteraction === true) reasons.push("interaction")
-    if (t.runtime === "perm-prompt") reasons.push("perm-prompt")
-    if (t.pendingAsk !== undefined) reasons.push("ask")
-    if (t.pendingQuestion === true) reasons.push("question")
-    for (const q of t.questions ?? []) reasons.push(`q:${q.id}`)
-    if (t.crashed === true) reasons.push("crashed")
-    if (t.limitPause !== undefined) reasons.push("limit")
-    if (t.providerError !== undefined && t.providerError.retrying !== true) reasons.push("provider-error")
-    return reasons.join(" ")
-  }
+  // THE REASONS A THREAD MUST BE SEEN AT ONCE — deriveNeedsYou's hard gates, as one comparable string. A
+  // terminal at a prompt is one too: only a person can type the answer, whatever the thread's park. Shared
+  // (queueUrgency) with the All queues page's notifier, so the two agree on what is news.
+  const urgencyOf = queueUrgency
 
   // AN ARCHIVED OR SNOOZED PARENT'S SIDE TURN THAT STOPS BEING QUIET (review, 2026-09-30). A spinoff
   // request's delivery leaves the row where it is — no reopen, no unsnooze (router.ts FollowUpDelivery) —
