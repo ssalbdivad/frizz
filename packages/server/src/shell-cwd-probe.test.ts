@@ -45,6 +45,24 @@ test("the lowest holder is the shell, and its folder is the answer", async () =>
   }
 })
 
+// Frizz's own server holds the same log for the length of a drawer read or a line count. Sampled then, it
+// is the lowest holder, and its folder was taken for the shell's — for good (the tailer keeps the reading).
+test("the server's own pid is never taken for the shell, even as the lowest holder", async () => {
+  const log = taskLog()
+  try {
+    const exec = fakeExec({ stdout: `p200\nn${log.file}\np90\nn${log.file}\n` })
+    const read: number[] = []
+    const cwds = await probeShellCwds([log.file], { platform: "linux", exec, selfPid: 90, readCwd: async (pid) => (read.push(pid), `/dir/of/${pid}`) })
+    assert.equal(cwds.get(log.file), "/dir/of/200")
+    assert.deepEqual(read, [200])
+    // Only the server holding it (the shell has exited mid-read) is no reading at all.
+    const alone = await probeShellCwds([log.file], { platform: "linux", exec: fakeExec({ stdout: `p90\nn${log.file}\n` }), selfPid: 90, readCwd: async () => "/server" })
+    assert.equal(alone.get(log.file), undefined)
+  } finally {
+    log.cleanup()
+  }
+})
+
 test("every uncertain step is no reading, never a guess", async () => {
   const log = taskLog()
   try {

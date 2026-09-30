@@ -257,6 +257,42 @@ test("the OS outranks the transcript on where a running shell is — the batch-s
   }
 })
 
+// "RUNS IN" IS WHERE IT IS NOW. A running shell's folder was asked once and kept for the shell's life, so a
+// `cd` the command made later, or one bad sample, stood forever. It is asked again once a minute while the
+// shell runs; the last answer stands in between.
+test("a running shell's folder is asked again after a minute, and a move is seen", () => {
+  let clock = Date.parse("2026-07-01T00:01:00.000Z")
+  const asked: string[] = []
+  let os: string | undefined
+  const w = world({ shellCwd: (file) => (asked.push(file), os), deps: { now: () => clock } })
+  os = w.project
+  try {
+    const file = "/nowhere/tasks/bc.output"
+    w.append(user(w.project), bash("toolu_cd", "npm run dev", w.project), result("toolu_cd", bgAck("bc", file), w.project))
+    w.tailer.tick()
+    assert.equal(w.tailer.get("t")!.bgShells[0]?.cwd, w.project)
+    // The command moved into the worktree. Within the minute, nothing asks.
+    os = w.worktree
+    clock += 30_000
+    w.tailer.tick()
+    assert.equal(w.tailer.get("t")!.bgShells[0]?.cwd, w.project)
+    assert.equal(asked.length, 1)
+    clock += 31_000
+    w.tailer.tick()
+    const [row] = w.tailer.get("t")!.bgShells
+    assert.equal(asked.length, 2, "asked again once the reading is a minute old")
+    assert.equal(row?.cwd, w.worktree, "the move is seen")
+    assert.equal(row?.checkout?.kind, "worktree")
+    // No answer on a later ask (the shell is ending) leaves the last reading, not the transcript's.
+    os = undefined
+    clock += 61_000
+    w.tailer.tick()
+    assert.equal(w.tailer.get("t")!.bgShells[0]?.cwd, w.worktree)
+  } finally {
+    w.cleanup()
+  }
+})
+
 // THE FOLD STAYS THE TRANSCRIPT'S. The tail cache persists folded states as a pure function of the
 // transcript's bytes, and a retired shell is never probed again — so an OS answer written onto the entry
 // rode into the retired ring and the cache, and a cached boot then told a different folder from a cold one.

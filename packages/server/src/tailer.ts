@@ -4067,14 +4067,20 @@ export function createTailer(deps: TailerDeps): Tailer {
   // lookup, a retired shell's subtitle. It is NOT written onto the entry: the fold is persisted by the tail
   // cache as a pure function of the transcript's bytes (tail-cache.ts), and an OS answer on the entry rode
   // into the retired ring and the cache, so a cached boot and a cold one gave one retired shell two
-  // folders. Asked a few times per shell at most, never on the event loop, batched like the
-  // liveness probe, and only about a VETTED path (a forged ack could name another process's file).
+  // folders. Never on the event loop, batched like the liveness probe, and only about a VETTED path (a
+  // forged ack could name another process's file).
+  //
+  // A RUNNING shell's reading is asked again once a minute. The folder is where its process is NOW — a `cd`
+  // inside the command moves it, and the row's tooltip says "Runs in" — and it was taken once and kept for
+  // the shell's life, so a single bad sample (the shell mid-`cd`, or before the pid fix a Frizz read holding
+  // the log) could never be corrected. A shell with no answer at all is still asked only a few times.
   // Both maps are keyed by output path, one entry per background shell ever seen, so both are bounded
   // the way the line counter's scan cache is: insertion order, oldest out (a shell that finished long ago
   // is the one least likely to be asked about again, and losing its entry costs one more probe at most).
-  const shellCwdReadings = new Map<string, string>()
+  const shellCwdReadings = new Map<string, { dir: string; at: number }>()
   const shellCwdAsks = new Map<string, number>()
   const SHELL_CWD_MEMORY = 512
+  const SHELL_CWD_TTL_MS = 60_000
   const remember = <V>(map: Map<string, V>, key: string, value: V) => {
     map.delete(key)
     map.set(key, value)
@@ -4100,20 +4106,32 @@ export function createTailer(deps: TailerDeps): Tailer {
    *  shell), else the transcript's start folder (SubAgentEntry.cwd). Asks nothing. */
   function observedShellCwd(state: TailState, e: { cwd?: string; outputFile?: string; promotedAck?: PromotedAck }): string | undefined {
     const file = shellOutputFile(state, e)
-    return (file ? shellCwdReadings.get(file) : undefined) ?? e.cwd
+    return (file ? shellCwdReadings.get(file)?.dir : undefined) ?? e.cwd
   }
   function shellCwd(state: TailState, e: SubAgentEntry): string | undefined {
     const file = shellOutputFile(state, e)
     if (!file) return e.cwd
     const reading = shellCwdReadings.get(file)
-    if (reading !== undefined) return reading
+    if (reading !== undefined) {
+      if (now() - reading.at < SHELL_CWD_TTL_MS || shellCwdWanted.has(file)) return reading.dir
+      // Due for a fresh look: the last answer stands until the new one lands.
+      if (deps.shellCwd) {
+        remember(shellCwdReadings, file, { dir: deps.shellCwd(file) ?? reading.dir, at: now() })
+        return shellCwdReadings.get(file)!.dir
+      }
+      const vetted = vetHarnessOutputPath(file, e.taskId)
+      if (!vetted) return reading.dir
+      shellCwdWanted.set(file, vetted)
+      armShellCwdFlush()
+      return reading.dir
+    }
     const asked = shellCwdAsks.get(file) ?? 0
     if (asked >= SHELL_CWD_ATTEMPTS || shellCwdWanted.has(file)) return e.cwd
     remember(shellCwdAsks, file, asked + 1)
     if (deps.shellCwd) {
       const answer = deps.shellCwd(file)
       if (!answer) return e.cwd
-      remember(shellCwdReadings, file, answer)
+      remember(shellCwdReadings, file, { dir: answer, at: now() })
       return answer
     }
     const vetted = vetHarnessOutputPath(file, e.taskId)
@@ -4135,9 +4153,14 @@ export function createTailer(deps: TailerDeps): Tailer {
         let changed = false
         for (const [file, vetted] of batch) {
           const dir = cwds.get(vetted)
-          if (!dir) continue
-          if (shellCwdReadings.get(file) !== dir) changed = true
-          remember(shellCwdReadings, file, dir)
+          const known = shellCwdReadings.get(file)
+          // No answer on a re-ask (the shell has just ended): the last reading stands, asked again later.
+          if (!dir) {
+            if (known) remember(shellCwdReadings, file, { dir: known.dir, at: now() })
+            continue
+          }
+          if (known?.dir !== dir) changed = true
+          remember(shellCwdReadings, file, { dir, at: now() })
         }
         // The next assembly reads the answer (observedShellCwd) into the row and the board signature.
         if (changed) deps.onChange()

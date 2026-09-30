@@ -22,6 +22,9 @@ import { promisify } from "node:util"
 //   1. `lsof -F pn -- <paths>` names each path's holders: a `p<pid>` line, then an `n<path>` line per fd.
 //   2. The LOWEST pid holding a path is taken as the shell. Its children (a `sleep`, a dev server's
 //      workers) inherit the same fds and were spawned after it, and they almost always share its folder.
+//      Never THIS process: Frizz's server opens the same log for the drawer's read and the line counter,
+//      and an lsof that sampled one of those reads found the server — whose pid is almost always the lower
+//      — so the server's own folder would have been taken for the shell's.
 //   3. That pid's cwd: `/proc/<pid>/cwd` on Linux (a readlink, no process spawned);
 //      `lsof -a -d cwd -F pn -p <pids>` on macOS, which has no /proc.
 //
@@ -41,6 +44,8 @@ export interface ShellCwdProbeOptions {
   exec?: typeof execFileAsync
   /** Linux's cwd reader, injectable for tests on other platforms. */
   readCwd?: (pid: number) => Promise<string>
+  /** The pid never taken for a shell — this server's own (see step 2). */
+  selfPid?: number
 }
 
 /** `lsof -F pn` output → each named path's holder pids, in the order lsof printed them. */
@@ -91,9 +96,11 @@ export async function probeShellCwds(outputFiles: readonly string[], opts: Shell
   if (byReal.size === 0) return out
   const report = await lsof(exec, ["-F", "pn", "--", ...byReal.keys()])
   if (report === undefined) return out
+  const self = opts.selfPid ?? process.pid
   const shellPid = new Map<string, number>()
-  for (const [real, pids] of parseLsofHolders(report)) {
+  for (const [real, holders] of parseLsofHolders(report)) {
     const file = byReal.get(real)
+    const pids = holders.filter((pid) => pid !== self)
     if (file && pids.length > 0) shellPid.set(file, Math.min(...pids))
   }
   if (shellPid.size === 0) return out
