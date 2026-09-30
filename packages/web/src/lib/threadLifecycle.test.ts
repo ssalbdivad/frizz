@@ -114,9 +114,9 @@ test("completionHoldSummary names the live sub-agents and shells, with counts", 
     bgShellCount: 2,
   }))
   assert.match(summary.lead, /resting, but the background work it launched is still running/)
-  assert.deepEqual(summary.groups.map((g) => g.heading), ["1 sub-agent", "2 background shells"], "singular/plural counts, per kind")
+  assert.deepEqual(summary.groups.map((g) => g.heading), ["1 sub-agent", "2 terminals"], "singular/plural counts, per kind")
   assert.deepEqual(summary.groups[0].items, [{ label: "Audit the resolver", stale: false }])
-  assert.deepEqual(summary.groups[1].items, [{ label: "Watch CI", stale: false }, { label: "vite dev", stale: true }])
+  assert.deepEqual(summary.groups[1].items, [{ label: "Watch CI", stale: false, owner: "agent" }, { label: "vite dev", stale: true, owner: "agent" }])
   assert.match(summary.trailer, /stop the session and everything running under it/)
 })
 
@@ -138,7 +138,7 @@ test("completionHoldSummary distinguishes a mid-turn agent from the work hanging
   // Mid-turn AND owning children: both facts survive; neither replaces the other.
   const both = completionHoldSummary(hold({ turnInFlight: true, bgShells: [{ label: "Watch CI", state: "running" }], bgShellCount: 1 }))
   assert.match(both.lead, /mid-turn, and it still owns background work/)
-  assert.deepEqual(both.groups.map((g) => g.heading), ["1 background shell"])
+  assert.deepEqual(both.groups.map((g) => g.heading), ["1 terminal"])
 })
 
 test("completionHoldSummary reports withheld labels as '+N more' and never claims a false cause", () => {
@@ -190,7 +190,7 @@ test("a running terminal on the thread is asked about, and named, whatever the w
   const only = completionHoldSummary(hold({ terminals: [{ label: "npm run dev", state: "running" }], terminalCount: 1 }))
   assert.equal(only.lead, "A terminal on this thread is still running:")
   assert.deepEqual(only.groups.map((g) => [g.kind, g.heading]), [["terminal", "1 terminal"]])
-  assert.deepEqual(only.groups[0].items, [{ label: "npm run dev", stale: false }])
+  assert.deepEqual(only.groups[0].items, [{ label: "npm run dev", stale: false, owner: "human" }])
   assert.match(only.trailer, /stop them/)
 
   const withShell = completionHoldSummary(hold({
@@ -199,8 +199,14 @@ test("a running terminal on the thread is asked about, and named, whatever the w
     terminals: [{ label: "npm run dev", state: "running" }, { label: "bash (shell)", state: "running" }],
     terminalCount: 2,
   }))
-  assert.deepEqual(withShell.groups.map((g) => g.heading), ["1 background shell", "2 terminals"], "terminals listed after the agent's own work")
+  // ONE group for every terminal on the thread — the agent's first, then yours — each with its owner, as
+  // every other surface lists them. It read "1 BACKGROUND SHELL" over "2 TERMINALS" until 2026-09-29.
+  assert.deepEqual(withShell.groups.map((g) => [g.kind, g.heading]), [["terminal", "3 terminals"]])
+  assert.deepEqual(withShell.groups[0]!.items.map((item) => [item.label, item.owner]), [["Watch CI", "agent"], ["npm run dev", "human"], ["bash (shell)", "human"]])
   assert.match(withShell.lead, /work on this thread is still running/)
+  // Each side is capped on its own server-side, so the withheld labels add.
+  const capped = completionHoldSummary(hold({ bgShells: [{ label: "a", state: "running" }], bgShellCount: 4, terminals: [{ label: "b", state: "running" }], terminalCount: 2 }))
+  assert.deepEqual([capped.groups[0]!.heading, capped.groups[0]!.overflow], ["6 terminals", 4])
 
   // A dead worker's children cannot be live, but its terminals are not its children.
   const cutOff = completionHoldSummary(hold({ turnInFlight: true, cutOff: true, terminals: [{ label: "npm run dev", state: "running" }], terminalCount: 1 }))

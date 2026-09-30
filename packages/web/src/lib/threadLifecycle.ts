@@ -70,13 +70,19 @@ export function completionArchivesImmediately(thread: ThreadView): boolean {
 }
 
 // One named group of work the confirmation is holding on — "2 sub-agents", with the labels beneath it.
+//
+// THE AGENT'S TERMINALS AND YOURS ARE ONE GROUP, "3 terminals", each item marked with its owner — the one
+// place every process on the thread is listed together, and every other surface (the strip, the rail's
+// "Terminals", the sidebar mark) already calls both terminals. It split them into "1 background shell"
+// and "2 terminals" until 2026-09-29, the last surface still to.
 export interface CompletionHoldGroup {
-  kind: "agent" | "shell" | "terminal"
-  heading: string // "1 sub-agent" / "3 background shells" / "1 terminal"
+  kind: "agent" | "terminal"
+  heading: string // "1 sub-agent" / "3 terminals"
   // The ops the server named (already capped). `stale` is carried through rather than flattened: it
   // is not proof the op stopped — which is why it holds the completion — but claiming a silent child
-  // is actively running would overstate what the tailer knows.
-  items: { label: string; stale: boolean }[]
+  // is actively running would overstate what the tailer knows. `owner` is a terminal's: the agent's
+  // (a background shell) or yours.
+  items: { label: string; stale: boolean; owner?: "agent" | "human" }[]
   overflow: number // labels the server withheld; >0 renders a "+N more" line
 }
 
@@ -88,7 +94,7 @@ export interface CompletionHoldSummary {
 
 // The confirm dialog's copy. "This thread is still running" answers nothing the human can act on —
 // they clicked Done precisely because they thought it was finished — so the reason gets spelled out:
-// an executing turn, a specific count of live sub-agents/background shells with their labels, or an
+// an executing turn, a specific count of live sub-agents and terminals with their labels, or an
 // unreadable transcript. `hold` absent (an older server, or a mispredicted needsConfirmation with no
 // evidence attached) degrades to the original generic sentence rather than asserting something false.
 export function completionHoldSummary(hold: CompletionHold | undefined): CompletionHoldSummary {
@@ -100,7 +106,7 @@ export function completionHoldSummary(hold: CompletionHold | undefined): Complet
   if (!hold) return generic
   // The terminals the human opened on the thread and left running. They are held on in any state of the
   // worker — resting, dead or mid-turn — because Done stops them too (router.withTerminalHold).
-  const terminals = holdGroup("terminal", "terminal", hold.terminals ?? [], hold.terminalCount ?? 0)
+  const terminals = holdGroup("terminal", "terminal", hold.terminals ?? [], hold.terminalCount ?? 0, "human")
   // Nothing of the agent's is running and nothing of its will be stopped: the worker is already gone,
   // mid-turn. The correction the human needs is that the thread is NOT finished — and that Retry, not
   // Done, is the verb that picks it back up. No agent groups: a dead worker's children cannot be live, and
@@ -114,11 +120,12 @@ export function completionHoldSummary(hold: CompletionHold | undefined): Complet
         : "Marking it done files it under Done as it is. Retry resumes it where it left off.",
     }
   }
-  const agentGroups = [
-    holdGroup("agent", "sub-agent", hold.subAgents, hold.subAgentCount),
-    holdGroup("shell", "background shell", hold.bgShells, hold.bgShellCount),
-  ].filter((group): group is CompletionHoldGroup => group !== null)
-  const groups = terminals ? [...agentGroups, terminals] : agentGroups
+  const subAgents = holdGroup("agent", "sub-agent", hold.subAgents, hold.subAgentCount)
+  const agentShells = holdGroup("terminal", "terminal", hold.bgShells, hold.bgShellCount, "agent")
+  // What the AGENT owns, for the lead's wording; the dialog lists its terminals with yours.
+  const agentGroups = [subAgents, agentShells].filter((group): group is CompletionHoldGroup => group !== null)
+  const allTerminals = mergeHoldGroups(agentShells, terminals)
+  const groups = [subAgents, allTerminals].filter((group): group is CompletionHoldGroup => group !== null)
   if (hold.unobservable) {
     return {
       lead: "This session is live, but its transcript can’t be read right now — it may still be working.",
@@ -158,14 +165,26 @@ function holdGroup(
   noun: string,
   ops: CompletionHold["subAgents"],
   count: number,
+  owner?: "agent" | "human",
 ): CompletionHoldGroup | null {
   // The count is authoritative — the label list is capped server-side and can be shorter.
   const total = Math.max(count, ops.length)
   if (total === 0) return null
   return {
     kind,
-    heading: `${total} ${noun}${total === 1 ? "" : "s"}`,
-    items: ops.map((op) => ({ label: op.label, stale: op.state === "stale" })),
+    heading: headingFor(total, noun),
+    items: ops.map((op) => ({ label: op.label, stale: op.state === "stale", ...(owner ? { owner } : {}) })),
     overflow: Math.max(0, total - ops.length),
   }
+}
+
+const headingFor = (total: number, noun: string) => `${total} ${noun}${total === 1 ? "" : "s"}`
+
+/** The agent's terminals and yours as the one group every other surface draws: the agent's first (they
+ *  are what "the background work it launched" names in the lead), then yours. Each list is capped on its
+ *  own server-side, so the withheld labels add. */
+function mergeHoldGroups(agent: CompletionHoldGroup | null, human: CompletionHoldGroup | null): CompletionHoldGroup | null {
+  if (!agent || !human) return agent ?? human
+  const total = agent.items.length + agent.overflow + human.items.length + human.overflow
+  return { kind: "terminal", heading: headingFor(total, "terminal"), items: [...agent.items, ...human.items], overflow: agent.overflow + human.overflow }
 }

@@ -1,5 +1,5 @@
 import { useRef, useState } from "react"
-import { AlarmClock, Check, Loader2 } from "lucide-react"
+import { AlarmClock, Bot, Check, Loader2, SquareTerminal } from "lucide-react"
 import type { CompletionHold, ThreadView } from "@frizz/shared"
 import { useThreadApi, useThreadIsForeignToPage } from "../api/threadApi.tsx"
 import { showToast } from "../store.ts"
@@ -9,7 +9,7 @@ import { useShortcutLabel, withShortcut } from "../lib/keyboardRuntime.ts"
 import { futureSnoozedUntil } from "../groups.ts"
 import { formatAgo } from "../lib/durationLabels.ts"
 import { formatSnoozeWake } from "../lib/snooze.ts"
-import { CHILD_ARROW, CHILD_ARROW_CLASS } from "../lib/childOps.ts"
+import { AGENT_GLYPH_STROKE, CHILD_ARROW, CHILD_ARROW_CLASS } from "../lib/childOps.ts"
 import { INK_TRIM_ALARM, STRIP_INK_GAP } from "../lib/iconRhythm.ts"
 import { SnoozeButton } from "./SnoozeButton.tsx"
 import { ContextMeter } from "./ContextMeter.tsx"
@@ -340,10 +340,26 @@ export function StateButton({
 }
 
 // The confirm dialog's body. Ending a session kills its whole process tree, so this names what is
-// about to die: the executing turn and/or every live sub-agent and background shell, and every terminal
-// the human opened on the thread that is still running, counted and listed by label. The human clicked
-// Done believing the thread was finished — the specific "2 background shells: `Watch CI`, `vite dev`" is
-// the correction, and a bare "still running" was not.
+// about to die: the executing turn and/or every live sub-agent, and every terminal on the thread still
+// running — the agent's and yours, one group — counted and listed by label. The human clicked Done
+// believing the thread was finished — the specific "2 terminals: `Watch CI`, `vite dev`" is the
+// correction, and a bare "still running" was not.
+//
+// A TERMINAL'S OWNER is the strip's own mark: the bot for the agent's, the terminal square for yours
+// (ThreadTerminals ProcessRow), after the ⤷, at the text's size. Baseline geometry, as the header's
+// checkout token: the glyph's box stands on the baseline and `1cap` lifts its centre onto the cap band.
+function HoldOwnerGlyph({ owner }: { owner: "agent" | "human" }) {
+  const Glyph = owner === "agent" ? Bot : SquareTerminal
+  return (
+    <Glyph
+      aria-label={owner === "agent" ? "The agent's" : "Yours"}
+      data-hold-owner={owner}
+      strokeWidth={owner === "agent" ? AGENT_GLYPH_STROKE : 2}
+      className="h-[1em] w-[1em] shrink-0 self-baseline translate-y-[calc(0.5em_-_0.5cap)] text-muted-60"
+    />
+  )
+}
+
 function CompletionHoldBody({ hold }: { hold: CompletionHold | undefined }) {
   const summary = completionHoldSummary(hold)
   return (
@@ -359,6 +375,7 @@ function CompletionHoldBody({ hold }: { hold: CompletionHold | undefined }) {
                     dialog, not an operations surface, so it stops at the arrow: no liveness mark, no
                     drill-in, no dismiss — hence the tokens rather than ChildOpRow itself. */}
                 <span aria-hidden className={CHILD_ARROW_CLASS}>{CHILD_ARROW}</span>
+                {item.owner ? <HoldOwnerGlyph owner={item.owner} /> : null}
                 <span className="min-w-0 truncate text-fg/80">{item.label}</span>
                 {/* Stale is why we ask rather than proof of life: say so instead of implying either. */}
                 {item.stale && <span className="shrink-0 text-[11px] text-muted-60">no recent output</span>}

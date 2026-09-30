@@ -125,7 +125,7 @@ test("a needsConfirmation reply reinstates the card and opens the End-session di
   assert.match(state.dialog, /End this session\?/)
   assert.match(state.hold, /1 sub-agent(?!s)/, "the live child is counted, singular")
   assert.match(state.hold, /Audit the refresh-token rotation/)
-  assert.match(state.hold, /2 background shells/)
+  assert.match(state.hold, /2 terminals/, "the agent's terminals, counted with any of yours in one group")
   assert.match(state.hold, /Watch origin\/main CI/)
   assert.match(state.hold, /no recent output/, "the quiet shell is marked, not overclaimed as running")
   // And it is still there after the exit window: nothing unmounted it behind the dialog.
