@@ -342,3 +342,60 @@ test("opening storage drops a spinoff edge whose child was already forgotten", (
     rmSync(dir, { recursive: true, force: true })
   }
 })
+
+// ---- where a parent's first read starts ------------------------------------------------------------
+
+// Every spinoff is pending from the request until its spawn, so a request made while the server runs
+// used to have its parent's WHOLE history read from byte 0, 32 MB a tick. Announced as it is recorded,
+// its parent is read from where the transcript stood: the proof is a decoy answer in the history, which a
+// read from byte 0 would stamp first.
+test("a request made while the server runs is read from where its parent's transcript stood, not from byte 0", () => {
+  const h = recoveryHarness()
+  try {
+    for (const slug of ["parent", "decoy", "child"]) h.storage.upsertSession(sessionRow(slug))
+    const id = "spn_00000000000000a1"
+    const path = h.transcript("parent", [
+      userRecord(envelope("the parent's own task")),
+      spawnCall("t0", { prompt: "p", spinoff: id }), spawnResult("t0", "decoy"),
+      ...Array.from({ length: 50 }, (_, i) => assistantText(`history ${i}`, `m${i}`)),
+    ])
+    h.storage.insertSpinoff({ id, parentSlug: "parent", instructions: "a", createdAtMs: REQUEST_AT })
+    h.recovery.noteRequest("parent", id)
+    appendFileSync(path, [userRecord("the request"), spawnCall("t1", { prompt: "p", spinoff: id }), spawnResult("t1", "child")].map((l) => l + "\n").join(""))
+    h.recovery.sweep(["somebody-else"])
+    assert.equal(h.storage.getSpinoff(id)?.child_slug, null, "a seeded parent is caught up until it grows")
+    h.recovery.sweep(["parent"])
+    assert.equal(h.storage.getSpinoff(id)?.child_slug, "child")
+    assert.deepEqual(h.repaired, [`${id}->child`])
+  } finally {
+    h.done()
+  }
+})
+
+// …but a parent with an OLDER request still pending — one an earlier server left, whose answer may be
+// anywhere in the history — is still read whole, and a parent with no transcript yet is simply not seeded.
+test("a new request never skips the history an older pending request on the same parent needs", () => {
+  const h = recoveryHarness()
+  try {
+    for (const slug of ["parent", "old-child", "new-child", "fresh"]) h.storage.upsertSession(sessionRow(slug))
+    const path = h.transcript("parent", [
+      spawnCall("t0", { prompt: "p", spinoff: "spn_00000000000000b1" }), spawnResult("t0", "old-child"),
+    ])
+    h.storage.insertSpinoff({ id: "spn_00000000000000b1", parentSlug: "parent", instructions: "old", createdAtMs: REQUEST_AT })
+    h.storage.insertSpinoff({ id: "spn_00000000000000b2", parentSlug: "parent", instructions: "new", createdAtMs: REQUEST_AT })
+    h.recovery.noteRequest("parent", "spn_00000000000000b2")
+    appendFileSync(path, [spawnCall("t1", { prompt: "p", spinoff: "spn_00000000000000b2" }), spawnResult("t1", "new-child")].map((l) => l + "\n").join(""))
+    h.recovery.sweep(["parent"])
+    assert.equal(h.storage.getSpinoff("spn_00000000000000b1")?.child_slug, "old-child")
+    assert.equal(h.storage.getSpinoff("spn_00000000000000b2")?.child_slug, "new-child")
+
+    h.storage.insertSpinoff({ id: "spn_00000000000000b3", parentSlug: "fresh", instructions: "x", createdAtMs: REQUEST_AT })
+    h.recovery.noteRequest("fresh", "spn_00000000000000b3") // no transcript yet: nothing to seed, and no throw
+    h.transcript("fresh", [spawnCall("t2", { prompt: "p", spinoff: "spn_00000000000000b3" }), spawnResult("t2", "child-of-fresh")])
+    h.storage.upsertSession(sessionRow("child-of-fresh"))
+    h.recovery.sweep(["fresh"])
+    assert.equal(h.storage.getSpinoff("spn_00000000000000b3")?.child_slug, "child-of-fresh")
+  } finally {
+    h.done()
+  }
+})

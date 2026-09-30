@@ -2393,7 +2393,15 @@ test("dispatch still fulfils a spinoff named in its first-day spelling", async (
 test("spinoff delivers the request to the thread's own worker, and drops it when delivery fails", async () => {
   const { h, slug, calls } = restartHarness()
   try {
+    // The edge recovery is told about the request BEFORE it is delivered, so its read of the parent
+    // starts where the transcript stood rather than at byte 0 (spinoff-edge-recovery.ts).
+    const noted: { parent: string; id: string; deliveredYet: boolean }[] = []
+    ;(h.ctx as { spinoffEdges?: unknown }).spinoffEdges = {
+      sweep: () => false,
+      noteRequest: (parent: string, id: string) => noted.push({ parent, id, deliveredYet: calls.length > 0 }),
+    }
     const { id } = await h.router.spinoff.handler({ input: { slug, sessionId: `sid-${slug}`, instructions: "investigate perf" } })
+    assert.deepEqual(noted, [{ parent: slug, id, deliveredYet: false }])
     assert.equal(calls.length, 1)
     assert.ok(calls[0].text.startsWith(`<spinoff-request id="${id}">`), calls[0].text)
     assert.match(calls[0].text, /<instructions>\ninvestigate perf\n<\/instructions>/)

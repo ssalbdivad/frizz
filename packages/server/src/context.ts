@@ -25,7 +25,7 @@ import { createLiveStatus } from "./live-status.ts"
 import { createThreadNamer, type ThreadNamer } from "./thread-names.ts"
 import { createClaudeOneShot } from "./backend/claude-oneshot.ts"
 import { readTranscript, sourceForThread } from "./transcript.ts"
-import { createSpinoffEdgeRecovery } from "./spinoff-edge-recovery.ts"
+import { createSpinoffEdgeRecovery, type SpinoffEdgeRecovery } from "./spinoff-edge-recovery.ts"
 import { createTailer, defaultLogDir, type Tailer } from "./tailer.ts"
 import { backgroundShellStoppable, stopBackgroundShell } from "./shell-stop.ts"
 import { createDispatcher, loadWorkerPrompt, scratchpadOrientation, frizzConfigBlock, claudeMcpConfig, resolveFrizzMcp, workerPluginDir, coldResumePermission, workerScratchPath, type Dispatcher, type FrizzMcpTarget } from "./dispatch.ts"
@@ -167,6 +167,10 @@ export interface AppContext {
   // project-wide uniqueness check every title writer runs. Optional so a hand-built test context need
   // not supply one; the router then checks uniqueness against storage alone.
   threadNamer?: ThreadNamer
+  // Recovers a spinoff edge an old MCP server never sent (spinoff-edge-recovery.ts). The router tells it
+  // about each request as it records one, so a parent is read from there rather than from byte 0.
+  // Optional so a hand-built test context need not supply one.
+  spinoffEdges?: SpinoffEdgeRecovery
   // Per-session agent-backend resolver behind the spawn/resume/transcript seam (Codex-support epic).
   // Maps a row's `backend` column (claude|codex) to its AgentBackend; DEFAULTS to claude for any unset/
   // unknown kind, so every existing session and all current behavior are unchanged until a dispatch
@@ -1215,6 +1219,7 @@ function createContextUnchecked(opts: ContextOptions, resources: PartialContextR
     tailer,
     dispatcher,
     threadNamer,
+    spinoffEdges,
     scheduler,
     probePr: probePrReadable,
     probeIssue: probeIssueReadable,

@@ -2107,6 +2107,9 @@ export function createRouter(ctx: AppContext) {
         currentOwnedSession(input.slug, input.sessionId)
         const id = `spn_${randomBytes(8).toString("hex")}`
         ctx.storage.insertSpinoff({ id, parentSlug: input.slug, instructions: input.instructions, createdAtMs: Date.now() })
+        // BEFORE the delivery, so the edge recovery's read of this parent starts where its transcript
+        // stands now — the request's answer can only come after it (spinoff-edge-recovery.ts).
+        ctx.spinoffEdges?.noteRequest(input.slug, id)
         try {
           await deliverFollowUp!({ input: {
             slug: input.slug,
