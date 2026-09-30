@@ -226,7 +226,13 @@ export function AllQueuesPage() {
   // (maintainer 2026-09-30: "scrolling jumps around and makes it hard to read/type"). Drawn as it was
   // while the focus stays in it; the draft is the thread's either way, and a reply still reaches it. Read
   // off the DOM at render, which is when the thread's leaving is drawn.
-  const typingKey = typingInCard()
+  //
+  // NOT A CARD THE HUMAN JUST SENT AWAY. Sending a reply leaves the caret in the emptied box, so the
+  // replied-to card read as "being typed in" and was drawn straight back after its fade — the handoff
+  // again, with no sign of the reply — until a click elsewhere took the focus (maintainer 2026-09-30:
+  // "I see the same card reappear without the response, then it goes away again"). Leaving wins.
+  const typing = typingInCard()
+  const typingKey = typing !== undefined && !leaving.isLeaving(typing) ? typing : undefined
   // Gaps the human's last move closed (below).
   const [closed, setClosed] = useState<ReadonlySet<string>>(() => new Set())
   const mayGhost = (key: string): boolean => {
