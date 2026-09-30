@@ -1666,12 +1666,9 @@ export function ThreadHeader({ slug, onStatusApplied, onClose, showReturnToQueue
             doneBusy={markComplete.isPending}
             onStatusApplied={onStatusApplied}
           />
-          {/* The ⋯ menu (ThreadMenu.tsx), which holds the rarer verbs. Only the drawer offers fullscreen
-              from it: the /full page is already there, and leaves by
-              HeaderActions `collapse`. */}
+          {/* The ⋯ menu (ThreadMenu.tsx), which holds the rarer verbs. */}
           <ThreadMenu
             thread={thread}
-            fullscreen={Boolean(onClose)}
             onDoc={hasDoc ? () => pushDrawer("doc", thread.id) : undefined}
           />
         </div>

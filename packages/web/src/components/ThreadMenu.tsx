@@ -1,6 +1,6 @@
 import { useRef, useState } from "react"
 import { useQueryClient } from "@tanstack/react-query"
-import { Copy, Ellipsis, FileText, Maximize2, Plug, RefreshCw, SquareTerminal } from "lucide-react"
+import { Copy, Ellipsis, FileText, Plug, RefreshCw, SquareTerminal } from "lucide-react"
 import type { ThreadView } from "@frizz/shared"
 import { captureFullscreenEnterAnchor, rememberFullscreenOrigin } from "../lib/fullscreenHandoff.ts"
 import { armFullscreenMorph } from "../lib/fullscreenMorph.ts"
@@ -17,20 +17,10 @@ import { useDevFrizzBuild } from "../lib/devBuild.ts"
 import { restartWorker } from "../lib/restartWorker.ts"
 import { offersReloadPlugins, offersRestartWorker, reloadThreadPlugins } from "../lib/workerMaintenance.ts"
 
-// THE DRAWER'S "MORE" MENU, and the one way into a thread's /full page.
-//
-// Fullscreen was a door on every surface a thread appears on — the ⤢ on each queue card, on each row of
-// the list, and in the drawer header — until 2026-09-28 (maintainer: "generally there are too many places
-// in the ui where it is easy to navigate to a ui which is not the primary home ui (cross project). the
-// single thread view is only marginally useful at best and should probably be a dropdown option"). So it
-// is an option now, in the drawer of the thread you are already reading, and nowhere else: a card or a
-// row opens the drawer, and the drawer is where you choose to take it further. `f` is the item's
-// accelerator, pressed on the drawer you are reading (lib/keyboardRuntime.ts), and on /full the same key
-// leaves (CollapseThreadLink).
-//
-// The ⤢ came back beside it on 2026-09-29 (ExpandThreadLink.tsx) — on the queue card's header and in the
-// drawer's strip, where Colin had it — as a restoration of the original's one-click door; this menu keeps
-// its entry and the drawer keeps `f` on it, and both halves navigate through openFullscreen below.
+// openFullscreen, the one navigation into a thread's /full page, shared by the ⤢ door (ExpandThreadLink.tsx)
+// on the queue card and in the drawer header. It lived here while fullscreen was this menu's item
+// (2026-09-28, maintainer: "the single thread view is only marginally useful at best and should probably
+// be a dropdown option"); the ⤢ came back as an icon on 2026-09-29, and the duplicate menu item went.
 
 /**
  * Go to a thread's /full page from the surface it is shown in — a route change, not a document load,
@@ -93,19 +83,15 @@ export function ThreadTerminalButton({ slug }: { slug: string }) {
   )
 }
 
-// THE DRAWER'S ⋯ MENU: the rarer verbs. `f` presses its trigger and goes straight to /full where there is
-// fullscreen to enter (`fullscreen`); on /full itself the ⤡ owns `f` and this menu offers only the rest.
-export function ThreadMenu({ thread, fullscreen, onDoc }: { thread: ThreadView; fullscreen: boolean; onDoc?: () => void }) {
+// THE HEADER'S ⋯ MENU: the rarer verbs. It carried "Open fullscreen" and owned `f` until 2026-09-29, when
+// the ⤢ beside it came back as an icon (ExpandThreadLink) and took the key: one door, not two.
+export function ThreadMenu({ thread, onDoc }: { thread: ThreadView; onDoc?: () => void }) {
   const slug = thread.id
   const trigger = useRef<HTMLButtonElement>(null)
   const queryClient = useQueryClient()
   const devBuild = useDevFrizzBuild()
-  const keys = useShortcutLabel("thread.fullscreen")
   const ownSession = thread.kind === "session" && thread.foreign !== true
   const terminalCommand = useTerminalCommandMenuItem(slug)
-  // `f` on this drawer goes straight to /full: the key presses the thread's `fullscreen` control, which is
-  // this menu's trigger, and the handler takes the press instead of opening the menu.
-  useCommandHandler(trigger, () => { if (fullscreen) openFullscreen(slug, trigger.current) })
   return (
     <Menu onOpenChange={(open) => { if (open && ownSession) terminalCommand.prefetch() }}>
       <MenuTrigger asChild>
@@ -115,7 +101,6 @@ export function ThreadMenu({ thread, fullscreen, onDoc }: { thread: ThreadView; 
           aria-label="More"
           title="More"
           data-thread-menu={slug}
-          data-command={fullscreen ? "fullscreen" : undefined}
           // The strip's shared focus behaviour: a click here must not take the keyboard away from the
           // composer below it.
           onMouseDown={(event) => event.preventDefault()}
@@ -125,14 +110,6 @@ export function ThreadMenu({ thread, fullscreen, onDoc }: { thread: ThreadView; 
         </button>
       </MenuTrigger>
       <MenuContent align="end">
-        {fullscreen && (
-          <MenuItem value="fullscreen" onSelect={() => openFullscreen(slug, trigger.current)} icon={<Maximize2 size={12} aria-hidden />}>
-            <span className="flex min-w-0 flex-1 items-center justify-between gap-4">
-              <span>Open fullscreen</span>
-              {keys && <span className="text-[10px] text-muted-55">{keys}</span>}
-            </span>
-          </MenuItem>
-        )}
         {onDoc && (
           <MenuItem value="doc" onSelect={onDoc} icon={<FileText size={12} aria-hidden />}>
             Frizz document
