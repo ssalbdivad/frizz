@@ -109,6 +109,7 @@ export function SpinOffButton({ thread, sourceId, excerpt }: { thread: ThreadVie
             rows={3}
             placeholder="What should the new thread do? Fix this, investigate perf…"
             aria-label="Instructions for the new thread"
+            data-1p-ignore
             className={`w-full resize-none ${BLOCK_RADIUS} border border-border bg-bg px-3 py-2 text-[13px] leading-5 text-fg outline-none placeholder:text-muted-70 focus:border-border-strong`}
           />
           <p className="text-[11px] leading-4 text-muted-75">
