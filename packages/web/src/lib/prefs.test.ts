@@ -7,10 +7,16 @@ test("client preferences persist a validated snooze preset across reloads", () =
   assert.equal(parseStoredPrefs(JSON.stringify({ compactDiffs: true, snoozePreset: "tomorrow", diffsRedefaulted: true })).snoozePreset, "tomorrow")
 })
 
-test("missing, malformed, and stale snooze preferences fall back to one day", () => {
-  assert.equal(parseStoredPrefs(null).snoozePreset, "1d")
-  assert.equal(parseStoredPrefs("not-json").snoozePreset, "1d")
-  assert.equal(parseStoredPrefs(JSON.stringify({ snoozePreset: "custom", diffsRedefaulted: true })).snoozePreset, "1d")
+test("missing, malformed, and stale snooze preferences fall back to tomorrow", () => {
+  assert.equal(parseStoredPrefs(null).snoozePreset, "tomorrow")
+  assert.equal(parseStoredPrefs("not-json").snoozePreset, "tomorrow")
+  assert.equal(parseStoredPrefs(JSON.stringify({ snoozePreset: "custom", diffsRedefaulted: true })).snoozePreset, "tomorrow")
+})
+
+test("a stored 1d from before the tomorrow default is re-defaulted once, then sticks", () => {
+  assert.equal(parseStoredPrefs(JSON.stringify({ snoozePreset: "1d", diffsRedefaulted: true })).snoozePreset, "tomorrow")
+  assert.equal(parseStoredPrefs(JSON.stringify({ snoozePreset: "3d", diffsRedefaulted: true })).snoozePreset, "3d")
+  assert.equal(parseStoredPrefs(JSON.stringify({ snoozePreset: "1d", diffsRedefaulted: true, snoozeRedefaulted: true })).snoozePreset, "1d")
 })
 
 test("queue order defaults to FIFO and only accepts fifo/lifo", () => {
