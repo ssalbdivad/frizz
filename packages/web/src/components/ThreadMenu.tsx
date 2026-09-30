@@ -1,6 +1,6 @@
-import { useRef } from "react"
-import { useQueryClient } from "@tanstack/react-query"
-import { Code, Copy, Ellipsis, FileText, Plug, RefreshCw, SquareTerminal } from "lucide-react"
+import { useRef, useState } from "react"
+import { useMutation, useQueryClient } from "@tanstack/react-query"
+import { Code, Copy, Ellipsis, FileText, Loader2, Plug, RefreshCw, SquareTerminal, Trash2 } from "lucide-react"
 import type { ThreadView } from "@frizz/shared"
 import type { Api } from "../api/contract.ts"
 import { captureFullscreenEnterAnchor, rememberFullscreenOrigin } from "../lib/fullscreenHandoff.ts"
@@ -10,7 +10,9 @@ import { prefersReducedMotion } from "../lib/sheet.ts"
 import { standaloneThreadHref } from "../lib/standaloneThreadRoute.ts"
 import { HEADER_ICON_CLASS } from "../lib/headerIcon.ts"
 import { useCommandHandler, useShortcutLabel } from "../lib/keyboardRuntime.ts"
-import { Menu, MenuContent, MenuItem, MenuTrigger } from "./ui/Menu.tsx"
+import { Menu, MenuContent, MenuItem, MenuSeparator, MenuTrigger } from "./ui/Menu.tsx"
+import { Dialog } from "./ui/Dialog.tsx"
+import { displayTitle } from "../groups.ts"
 import { startComposerTerminal } from "./ThreadTerminals.tsx"
 import { useThreadApi } from "../api/threadApi.tsx"
 import { Tooltip } from "./Tooltip.tsx"
@@ -116,7 +118,9 @@ export function ThreadMenu({ thread, onDoc, restart = true, className = HEADER_I
   // `e` opens the editor without opening this menu: the trigger is the surface's one always-rendered
   // anchor for it (an item exists only while the menu is open), so it carries the command.
   useCommandHandler(trigger, () => { if (ownSession) openInEditor(api, slug) })
+  const [deleting, setDeleting] = useState(false)
   return (
+    <>
     <Menu onOpenChange={(open) => { if (open && ownSession) terminalCommand.prefetch() }}>
       <MenuTrigger asChild>
         <button
@@ -160,7 +164,74 @@ export function ThreadMenu({ thread, onDoc, restart = true, className = HEADER_I
             Restart worker
           </MenuItem>
         )}
+        {ownSession && (
+          <>
+            <MenuSeparator />
+            <MenuItem value="delete-thread" danger onSelect={() => setDeleting(true)} icon={<Trash2 size={12} aria-hidden />}>
+              Delete thread…
+            </MenuItem>
+          </>
+        )}
       </MenuContent>
     </Menu>
+    {deleting && <DeleteThreadDialog thread={thread} onClose={() => setDeleting(false)} />}
+    </>
+  )
+}
+
+/**
+ * The ⋯ menu's Delete, confirmed. It says what the operator could not otherwise know: a working agent is
+ * stopped, and the name is free for a new thread (server router.ts deleteOwnedThread). Deleting old done
+ * threads in bulk lives in Settings.
+ */
+function DeleteThreadDialog({ thread, onClose }: { thread: ThreadView; onClose: () => void }) {
+  const api = useThreadApi()
+  const name = displayTitle(thread)
+  // Only a turn in flight earns the line: an idle worker is stopped too, but nobody is waiting on it.
+  const working = thread.runtime === "running" || thread.runtime === "spawning" || thread.runtime === "perm-prompt"
+  const remove = useMutation({
+    mutationFn: () => api.deleteThread({ slug: thread.id }),
+    onSuccess: () => {
+      showToast(`Deleted ${name}`)
+      onClose()
+    },
+  })
+  const error = remove.error instanceof Error ? remove.error.message : remove.error ? String(remove.error) : null
+  return (
+    <Dialog
+      open
+      onOpenChange={(open) => { if (!open && !remove.isPending) onClose() }}
+      title={`Delete ${name}?`}
+      className="w-[420px] max-w-[92vw]"
+      footer={
+        <>
+          <button
+            type="button"
+            onClick={onClose}
+            disabled={remove.isPending}
+            className="button-outline rounded-md px-3 py-1.5 text-[12px] text-muted outline-none transition-colors hover:bg-panel-2 hover:text-fg disabled:opacity-45"
+          >
+            Cancel
+          </button>
+          <button
+            type="button"
+            onClick={() => remove.mutate()}
+            disabled={remove.isPending}
+            className="button-outline flex items-center gap-1.5 rounded-md bg-danger-button/90 px-3 py-1.5 text-[12.5px] font-medium text-white outline-none transition-opacity hover:opacity-90 disabled:opacity-60"
+          >
+            {remove.isPending && <Loader2 size={12} className="animate-spin" />}
+            Delete thread
+          </button>
+        </>
+      }
+    >
+      <div className="flex flex-col gap-3 p-4 text-[12.5px] leading-relaxed text-muted">
+        <p>
+          {working ? "Its agent is stopped mid-turn, and the thread is" : "The thread is"} removed from Frizz with its notes and
+          terminals. Its name is free for a new thread. This cannot be undone.
+        </p>
+        {error ? <p className="text-[11.5px] text-danger">{error}</p> : null}
+      </div>
+    </Dialog>
   )
 }
