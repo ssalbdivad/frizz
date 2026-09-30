@@ -96,6 +96,7 @@ export function Composer({
   contextTokens,
   slashSuggest,
   mentionCandidates,
+  ownMention,
   onInterruptSubmit,
   attachBase,
 }: {
@@ -137,6 +138,11 @@ export function Composer({
   // owns the list (lib/threadMentions.ts mentionCandidates — the project's threads minus the one being
   // written into); omitted, the affordance is inert.
   mentionCandidates?: readonly MentionCandidate[]
+  // The thread this box writes INTO, as a candidate for the head of a DOTTED mention only. A thread has no
+  // use for `@itself`, so the flat list leaves it out — but `@itself.cacheKeys` is how the human points
+  // the worker at one of its OWN sub-agents ("what did @portTheParser.cacheKeys find?"), which is the
+  // commonest sub-agent mention there is. Absent on a box that writes into no thread (the dispatch box).
+  ownMention?: MentionCandidate
   // INTERRUPT AND SEND — what the FORCED chord (⌘/Ctrl-Enter) does while the thread's worker is
   // mid-turn AND its runtime can be preempted; the caller owns that policy entirely. When it is not
   // set, the same chord is an ordinary send, so ⌘-Enter never goes dead (three Enter keys everywhere:
@@ -429,17 +435,18 @@ export function Composer({
   // that one needs the whole draft to be a single `/` token, and a `/` right before `@` never opens this.
   const [caret, setCaret] = useState<number | null>(null)
   const trackCaret = (el: HTMLTextAreaElement) => setCaret(el.selectionStart === el.selectionEnd ? el.selectionStart : null)
-  const mention = mentionCandidates && mentionCandidates.length > 0 && !suggestOpen ? mentionQueryAt(prose, caret) : undefined
+  const mentionable = (mentionCandidates?.length ?? 0) > 0 || ownMention !== undefined
+  const mention = mentionable && !suggestOpen ? mentionQueryAt(prose, caret) : undefined
   // AFTER THE DOT the menu is the named thread's SUB-AGENTS (`@portTheParser.ca`): the head resolves to
   // one of the candidates by the same fold a plain mention does, and its children arrive from the
   // server's directory through SubAgentMentionSource below — mounted only while such a query is open, so
   // a box nobody types a dot into never asks, and a surface with no query client never needs one.
   const dotted = mention ? splitMentionQuery(mention.query) : undefined
-  const mentionThread = dotted && mentionCandidates ? resolveMention(mentionCandidates, dotted.head) : undefined
+  const mentionThread = dotted ? resolveMention(ownMention ? [...(mentionCandidates ?? []), ownMention] : mentionCandidates ?? [], dotted.head) : undefined
   const [subMentions, setSubMentions] = useState<{ slug: string; candidates: MentionCandidate[] } | null>(null)
   const mentionMatches = useMemo(() => {
-    if (!mention || !mentionCandidates || dismissedFor === prose) return []
-    if (!dotted) return matchMentions(mentionCandidates, mention.query)
+    if (!mention || dismissedFor === prose) return []
+    if (!dotted) return matchMentions(mentionCandidates ?? [], mention.query)
     return mentionThread && subMentions?.slug === mentionThread.slug ? matchMentions(subMentions.candidates, dotted.rest) : []
   }, [mention?.start, mention?.query, mentionCandidates, dismissedFor, prose, mentionThread?.slug, subMentions])
   const mentionOpen = mentionMatches.length > 0
