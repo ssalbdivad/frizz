@@ -1,6 +1,6 @@
 import { lazy, Suspense, useEffect, useRef, useState } from "react"
 import { useQuery } from "@tanstack/react-query"
-import { Bot, Loader2, SquareTerminal, X } from "lucide-react"
+import { Bot, Folder, FolderGit2, Loader2, SquareTerminal, X } from "lucide-react"
 import type { BgShellView, ThreadView, ThreadWorkingDir, WorkCheckout } from "@frizz/shared"
 import { useThreadApi, useThreadApiBase, useThreadProjectDir } from "../api/threadApi.tsx"
 import type { Api } from "../api/rpc.ts"
@@ -37,7 +37,9 @@ const TerminalPane = lazy(() => import("./TerminalPane.tsx").then((m) => ({ defa
 // finished glyph"), and a terminal's finished run is worth a line: its exit code is the reason the human
 // opened it.
 const ROW = "flex min-w-0 items-center gap-1.5 text-[11.5px]"
-const IDENTITY = "group flex min-w-0 max-w-[70%] items-center gap-1.5 overflow-hidden text-left outline-none rounded-sm focus-visible:ring-1 focus-visible:ring-inset focus-visible:ring-focus-ink-60"
+// No width cap: the label is the row's identity and gives way LAST (see WHO GIVES WAY). A `max-w-[70%]`
+// here truncated a long command at 70% of the row while a folder hint beside it still had room.
+const IDENTITY = "group flex min-w-0 items-center gap-1.5 overflow-hidden text-left outline-none rounded-sm focus-visible:ring-1 focus-visible:ring-inset focus-visible:ring-focus-ink-60"
 
 // THE OWNER MARK sits IN THE MARK SLOT — the 9px column the liveness dot used to fill — and its hue is the
 // row's liveness. Not a glyph slot of its own beside the tag: `.frizz-kind-tag` is a fixed track so every
@@ -136,15 +138,18 @@ export function processTitle(p: ThreadProcess, homeDir: string | undefined, watc
 export const QUIET_TITLE = "Quiet — no process is writing its output, so it has probably ended"
 
 /** The word for the project's own checkout, on a row that runs there while the header says the agent is
- *  somewhere else. Git's own name for it ("the main worktree") and the maintainer's ("a worktree instead of
- *  main"). Not `root`: beside `tail -f /dev/null` that read as "running as root". Not a path: a path is the
- *  width the hint exists to save, and it is in the hint's tooltip. */
-export const MAIN_CHECKOUT_WORD = "main"
+ *  somewhere else. `root` — the dialog's "the project root", and true in the Home workspace too, whose root
+ *  is a plain folder and no checkout at all. It was `main` for one round: that collided with the branch
+ *  name, which the root checkout need not be on, and said "the project's main checkout" of the home folder.
+ *  `root` was dropped once before because, bare beside `tail -f /dev/null`, it read as "running as root";
+ *  it is no longer bare — the hint leads with a folder mark. Not a path: a path is the width the hint exists
+ *  to save, and it is in the hint's tooltip. */
+export const ROOT_CHECKOUT_WORD = "root"
 
 export interface ProcessFolderHint {
   text: string
-  kind: WorkCheckout["kind"] | "main"
-  /** The checkout's folder. Absent for `main`, whose folder is the project's (the tooltip reads it). */
+  kind: WorkCheckout["kind"] | "root"
+  /** The checkout's folder. Absent for `root`, whose folder is the project's (the tooltip reads it). */
   dir?: string
 }
 
@@ -153,7 +158,7 @@ export interface ProcessFolderHint {
  * working (`here`, the thread's checkout — ThreadCheckoutToken, absent at the project root). So a strip whose
  * rows all run in the thread's current checkout shows no hint at all, wherever that checkout is: the header
  * token already said it once. When the agent is in `probe`, a row still in the project's own checkout says
- * `main`; when it is back at the root, a row left in `probe` says `probe`.
+ * `root`; when it is back at the root, a row left in `probe` says `probe`.
  *
  * Measured against the ROW ALONE for one round (a hint iff the row is off the project root), `probe` then
  * repeated down the strip whenever the agent was in a worktree — 5 of 11 rows in one verifier's drawer,
@@ -162,33 +167,110 @@ export interface ProcessFolderHint {
  * a hint says "not where the header says". It reads against the header directly above it, the one place
  * `here` is spelled out.
  *
- * `checkout` is the server's lift (thread-cwd.ts liftCheckout), absent at the root, so a terminal in
- * `packages/web` is in the root checkout. A row the server did not PLACE (a transcript-only shell: a
- * sub-agent's, a Codex tool call's raw `workdir`) claims nothing either way.
+ * `checkout` is the server's lift (thread-cwd.ts liftWorkingDir), absent at the root, so a terminal in
+ * `packages/web` is in the root checkout. A row the server did not PLACE — it had no reading: a folder since
+ * removed, a Codex exec whose item named none, a transcript-only shell — claims nothing either way.
  */
-export function processFolderHint(p: ThreadProcess, here: WorkCheckout | null | undefined): ProcessFolderHint | undefined {
+export function processFolderHint(p: Pick<ThreadProcess, "placed" | "checkout">, here: WorkCheckout | null | undefined): ProcessFolderHint | undefined {
   if (!p.placed) return undefined
   if ((p.checkout?.dir ?? null) === (here?.dir ?? null)) return undefined
-  return p.checkout ? { text: folderName(p.checkout.dir), kind: p.checkout.kind, dir: p.checkout.dir } : { text: MAIN_CHECKOUT_WORD, kind: "main" }
+  return p.checkout ? { text: folderName(p.checkout.dir), kind: p.checkout.kind, dir: p.checkout.dir } : { text: ROOT_CHECKOUT_WORD, kind: "root" }
 }
 
-/** The hint's tooltip: where, in full — and for `main`, what the word means. */
-function folderHintTitle(hint: ProcessFolderHint, projectDir: string | undefined, homeDir: string | undefined): string {
-  if (hint.kind !== "main") return abbreviateHome(hint.dir!, homeDir)
-  return projectDir ? `The project's main checkout\n${abbreviateHome(projectDir, homeDir)}` : "The project's main checkout"
+/** The hint's tooltip: where it runs, in words and in full. */
+export function folderHintTitle(hint: ProcessFolderHint, projectDir: string | undefined, homeDir: string | undefined): string {
+  if (hint.kind === "root") return projectDir ? `Runs in the project root\n${abbreviateHome(projectDir, homeDir)}` : "Runs in the project root"
+  const head = hint.kind === "worktree" ? `Runs in the ${hint.text} worktree` : "Runs in another folder"
+  return `${head}\n${abbreviateHome(hint.dir!, homeDir)}`
 }
 
-// THE HINT GIVES WAY FIRST. It is a flex item of its own, before the readings, that shrinks ahead of
-// everything else on the row (`shrink-[999]` against the label's 1) and WRAPS rather than truncating: its
-// line is one line tall and clips, and a zero-width strut holds that first line, so a hint that no longer
-// fits in full drops to the clipped second line — gone, not "pr…". Only then does the label start to
-// truncate. The readings stay whole (`shrink-0`): a budget and an age are the row's live state.
-const HINT_BOX = "ml-auto flex h-[1lh] min-w-0 shrink-[999] flex-wrap items-center overflow-hidden pl-1.5 text-muted-40"
+// THE HINT'S MARK, the header token's own glyph for the same kind of place (ThreadCheckoutToken): a git
+// folder for a worktree, a plain one for the root or any other folder. It is what tells a hint from the
+// readings beside it — the bare word, in the readings' own tone, read as one more reading (`main · 52 lines
+// · 40m`) — and it is the part of the hint that never gives way (WHO GIVES WAY).
+const HINT_GLYPH = { worktree: FolderGit2, folder: Folder, root: Folder } as const
+// One step louder than the readings (muted-40) and one quieter than the label (muted-70) — the header
+// token's own muted-60 — so a place reads as a fact about the row, not as a count or a clock.
+const HINT_TONE = "text-muted-60"
+// Centred on the row's line like every other mark on it — but not by the row's shared MARK_LIFT, because the
+// two folders ink their 24-unit viewBox differently: lucide's plain folder spans y 2–21 with its stroke (a
+// hair above centre), the git folder y 2–23 (its branch stem hangs to the bottom edge). MEASURED, label
+// cap-band centre minus the glyph's ink centre, sans description label, dsf 6, live stack, 2026-09-29: with
+// MARK_LIFT on both, the plain folder read +0.18px (high) and the git folder −0.30px (low). So each takes
+// its own lift, in em at the row's 11.5px: MARK_LIFT's −0.345px plus the residual, i.e. −0.165px and
+// −0.645px. On a mono command row the whole line sits ~0.15px higher (see MARK_LIFT), as every mark does.
+const HINT_ICON: Record<ProcessFolderHint["kind"], string> = {
+  worktree: "h-[1em] w-[1em] shrink-0 -translate-y-[0.056em]",
+  folder: "h-[1em] w-[1em] shrink-0 -translate-y-[0.0143em]",
+  root: "h-[1em] w-[1em] shrink-0 -translate-y-[0.0143em]",
+}
+
+// The header token's `1cap` centring, per glyph for the reason HINT_ICON gives: MEASURED on the rail, status
+// cap-band centre minus glyph ink centre, sans, 12px, dsf 6, live stack, 2026-09-30 — the plain folder +0.13px
+// (high: sub-pixel, left alone) and the git folder −0.37px (low), which a further 0.031em lifts to ~0.
+const RAIL_HINT_LIFT: Record<ProcessFolderHint["kind"], string> = {
+  worktree: "translate-y-[calc(0.5em_-_0.5cap_-_0.031em)]",
+  folder: "translate-y-[calc(0.5em_-_0.5cap)]",
+  root: "translate-y-[calc(0.5em_-_0.5cap)]",
+}
+
+/** A folder hint on a BASELINE line — the fullscreen rail's rows — giving way as the strip's does (WHO GIVES
+ *  WAY, below): a box sized from zero that grows into what the row's NAME leaves (WaitRow sets it in the
+ *  name's cell, right-justified), so the word shows wherever the name has room for it and wraps away (the box
+ *  is one line tall and clips) before the name loses a pixel, and the glyph — its first item — never does.
+ *
+ *  The glyph takes the header token's geometry (ThreadCheckoutToken): its box stands on the baseline and
+ *  `1cap` lifts its centre onto the cap band, in any font. The zero-width space beside it gives the first
+ *  line a TEXT baseline, so the glyph holds its place with the word wrapped away — a flex line holding only
+ *  an SVG has no baseline of its own. The strip lays its hint out itself (ProcessRow), on a centred line. */
+export function FolderHintToken({ hint, title }: { hint: ProcessFolderHint; title: string }) {
+  const Glyph = HINT_GLYPH[hint.kind]
+  return (
+    <span
+      data-process-checkout={hint.kind}
+      title={title}
+      className={`ml-2 flex h-[1lh] w-0 min-w-[1em] flex-1 basis-0 flex-wrap content-start items-baseline justify-end overflow-hidden ${HINT_TONE}`}
+    >
+      <span className="shrink-0">
+        {"\u200b"}
+        <Glyph aria-hidden className={`inline h-[1em] w-[1em] align-baseline ${RAIL_HINT_LIFT[hint.kind]}`} />
+      </span>
+      <span data-process-checkout-word className="ml-[0.25em] max-w-[12ch] shrink-0 truncate">{hint.text}</span>
+    </span>
+  )
+}
+
+// WHO GIVES WAY at a narrow width, first to last (the maintainer's rule: the label keeps priority over the
+// hint, and the hint truncates or drops first):
+//   1. the line counter — the least identifying reading, and one a card never shows at all;
+//   2. the hint's WORD (`root`, `probe`) — its glyph stays;
+//   3. the label, by truncating.
+// Never: the arrow, the owner mark, the tag, the ×, the hint's GLYPH, or the budget / state / age.
+//
+// The glyph is the one piece of a hint that never goes, because an ABSENT hint is a claim too: it says "runs
+// where the header says". Dropping the whole hint at 390px made a row running in the root read as running
+// in `probe`, directly under a sibling that still said `root`. So a hint's minimum is its folder mark, 1em
+// wide, with the place in its tooltip.
+//
+// HOW, in plain flexbox and with nothing measured: the counter and the word sit in one box, GIVE, sized from
+// ZERO (`flex: 1 1 0`, `w-0`), so it grows only into what the row has left AFTER the label has its full width
+// and can never take a pixel from it. Inside, its items wrap onto a hidden second line (the box is one line
+// tall and clips) the moment they no longer fit, the LAST one first — the counter, then the word. The glyph
+// is GIVE's first item, and a flex line always keeps its first item, so it never wraps; `min-w-[1em]` keeps
+// room for it. A row with no hint leads with a zero-width strut instead, which holds line one and lets the
+// counter wrap. The readings after GIVE are `shrink-0`, so it is the label that truncates before them.
+//
+// SPACING, in the readings' own rhythm (4px · 4px): GIVE's `-mr-0.5` takes the row's 6px gap to FIXED down
+// to the 4px the readings keep between themselves. A row with a hint always shows its glyph, so FIXED opens
+// with a `·` and the counter carries one before it; without a hint the counter carries one after it.
+const GIVE = "flex h-[1lh] w-0 min-w-0 flex-1 basis-0 flex-wrap content-start items-center justify-end overflow-hidden -mr-0.5"
+const FIXED = "flex shrink-0 items-center gap-1 whitespace-nowrap text-muted-40"
+const SEP = <span aria-hidden className="text-muted-25">·</span>
 
 /**
  * ONE ROW for one process, whoever started it. The ops strip's row box (ChildOpRow's sheet density):
  *
- *   ⤷ [owner glyph, hue = state] TERM  label ……  × [checkout ·] [N lines ·] [45m left | state] · 12m
+ *   ⤷ [owner glyph, hue = state] TERM  label  × ……  [📁 root ·] [N lines ·] [45m left | state] · 12m
  *
  * The tag is `TERM` for every row: the owner is the glyph's job, and the tag's word is the kind of thing
  * this is — a terminal, whether its output streams from a pty (yours) or from the file the harness writes
@@ -255,12 +337,15 @@ export function ProcessRow({ process: p, slug, here, lines, watched, onOpen }: {
       </span>
     </>
   )
-  const readings = [
-    counter ? <span key="lines" data-child-op-counter title="Lines of output so far — open the row to read them">{counter}</span> : null,
+  // The readings that never give way, in the one order every surface reads them: the budget or the state,
+  // then the age, rightmost — the column a stack of rows is read down (ChildOpRow's rule).
+  const fixed = [
     p.budget ? <span key="budget" data-child-op-budget title={p.budget.title} style={p.budget.tone === "danger" ? { color: PRIMER.fgDanger } : undefined}>{p.budget.text}</span> : null,
     stateText ? <span key="state" className={p.state === "prompt" ? "text-attention" : p.state === "failed" ? DANGER : undefined}>{stateText}</span> : null,
     age ? <span key="age" title={`Running for ${age}`}>{age}</span> : null,
   ].filter((node) => node !== null)
+  const hintTitle = hint ? folderHintTitle(hint, projectDir ?? board?.projectDir, board?.homeDir) : undefined
+  const HintGlyph = hint ? HINT_GLYPH[hint.kind] : undefined
 
   return (
     <div
@@ -300,21 +385,33 @@ export function ProcessRow({ process: p, slug, here, lines, watched, onOpen }: {
           {busy ? <Loader2 size={11} className={`animate-spin ${MARK_LIFT}`} /> : <X size={11} className={MARK_LIFT} />}
         </button>
       )}
-      {hint && (
-        <span data-process-checkout={hint.kind} title={folderHintTitle(hint, projectDir ?? board?.projectDir, board?.homeDir)} className={HINT_BOX}>
-          <span aria-hidden className="h-[1lh] w-0" />
-          <span className="flex shrink-0 items-center gap-1">
-            <span className="max-w-[12ch] truncate">{hint.text}</span>
-            {readings.length > 0 && <span aria-hidden className="text-muted-25">·</span>}
+      <span data-process-give className={`${GIVE} ${hint ? "min-w-[1em]" : ""}`}>
+        {hint && HintGlyph ? (
+          // A full line tall, like the strut it stands in for: GIVE's first LINE is as tall as its tallest item,
+          // and a 1em glyph alone made it 11.5px — riding 2.5px high, with the wrapped word's top peeking in
+          // under it.
+          <span data-process-checkout={hint.kind} title={hintTitle} className={`flex h-[1lh] shrink-0 items-center ${HINT_TONE}`}>
+            <HintGlyph aria-hidden className={HINT_ICON[hint.kind]} />
           </span>
-        </span>
-      )}
-      {readings.length > 0 && (
+        ) : (
+          <span aria-hidden className="h-[1lh] w-0" />
+        )}
+        {/* `ml-[0.2em]`: 4.0px of ink from the folder to its name at 11.5px, the header token's own 3.9px at
+            11px (ink-gaps, dsf 6); its 0.25em drew 4.55 here, the glyph's 1px of dead box on each side. */}
+        {hint && <span data-process-checkout-word title={hintTitle} className={`ml-[0.2em] max-w-[12ch] shrink-0 truncate ${HINT_TONE}`}>{hint.text}</span>}
+        {counter && (
+          <span className="flex shrink-0 items-center gap-1 text-muted-40">
+            {hint ? <span className="ml-1 text-muted-25" aria-hidden>·</span> : null}
+            <span data-child-op-counter title="Lines of output so far — open the row to read them">{counter}</span>
+            {!hint && fixed.length > 0 ? SEP : null}
+          </span>
+        )}
+      </span>
+      {fixed.length > 0 && (
         // The readings are the row's sans, on the same line as the label (see LABEL), so they need no lift.
-        // After a hint, the row's own 6px gap is what separates them; `-ml-0.5` brings that to the 4px the
-        // readings keep between themselves, so the hint's `·` sits evenly between its neighbours.
-        <span className={`flex shrink-0 items-center gap-1 text-muted-40 ${hint ? "-ml-0.5" : "ml-auto pl-1.5"}`}>
-          {readings.flatMap((node, i) => (i === 0 ? [node] : [<span key={`sep${i}`} aria-hidden className="text-muted-25">·</span>, node]))}
+        <span className={FIXED}>
+          {hint ? SEP : null}
+          {fixed.flatMap((node, i) => (i === 0 ? [node] : [<span key={`sep${i}`} aria-hidden className="text-muted-25">·</span>, node]))}
         </span>
       )}
     </div>

@@ -437,9 +437,17 @@ function Chevron() {
   return <ChevronRight size={13} aria-hidden className={`${ON_CAP} ml-[3px] -mr-[4px] text-muted-35 transition-colors group-hover:text-muted-70`} />
 }
 
-export function WaitRow({ mark, name, mono, status, onOpen, onPrewarm, href, ghRef, title, testKind, testId, indent }: {
+export function WaitRow({ mark, name, mono, hint, status, onOpen, onPrewarm, href, ghRef, title, testKind, testId, indent }: {
   mark: ReactNode
   name: string
+  /** A terminal row's folder hint (ThreadTerminals' FolderHintToken), set in the NAME's cell, right-justified
+   *  in whatever the name leaves of it — never in the status cell. The status column is one `fit-content`
+   *  track shared by every row in the grid, sized before the `1fr` name gets anything, so a hint counted into
+   *  it narrowed every label in the group and clipped a prompting row's own reading (`📁 root · waiting for
+   *  i…`, 2026-09-30), while a hint sized from zero inside it showed its word only where some other row had
+   *  widened the track. In the name's cell it is the strip's GIVE again: the name takes its full width first,
+   *  the word shows in the slack and wraps away before the name loses a pixel, and the glyph stays. */
+  hint?: ReactNode
   /** The name is a COMMAND LINE (a terminal of yours), set in mono as the strip sets the same command —
    *  one process, one typeface, on every surface. An inline run on the row's baseline, a step smaller so
    *  mono's wider, taller face reads at the sans name's size (the strip's 11px-in-11.5px ratio), and at
@@ -496,6 +504,12 @@ export function WaitRow({ mark, name, mono, status, onOpen, onPrewarm, href, ghR
       </button>
     )
     : <span className={nameClass} title={title}>{label}</span>
+  // With a hint, the name's cell is a flex line: the name at its natural width (it still truncates, last), then
+  // the hint's zero-based box growing into what is left. The cell keeps the name's `min-w-0` so the 1fr track
+  // can squeeze it.
+  const nameCell = hint
+    ? <span className={`flex min-w-0 items-baseline ${tree ? "flex-1" : ""}`}>{open}{hint}</span>
+    : open
   const interactive = !!(href || onOpen)
   return (
     <div
@@ -507,7 +521,7 @@ export function WaitRow({ mark, name, mono, status, onOpen, onPrewarm, href, ghR
       className={`${tree ? ROW_FLEX : ROW} ${interactive ? "cursor-pointer transition-colors hover:bg-fg/[0.045]" : ""}`}
     >
       <span className="flex shrink-0">{mark}</span>
-      {open}
+      {nameCell}
       <span data-wait-status className={STATUS}>{status}</span>
       {interactive ? <Chevron /> : <span />}
     </div>
@@ -658,11 +672,14 @@ function ShellWatchRow({ watch, thread, slug, now }: {
  *  fullscreen rail's row for EVERY running one, declared or not (a dev server the worker walked away from
  *  is still what is going on in the thread). The bot is the owner mark the ops strip gives the same row
  *  (ThreadTerminals.tsx ProcessRow); a human terminal's row beside it wears the terminal square. */
-export function BgShellRow({ shell, slug, now, testId }: {
+export function BgShellRow({ shell, slug, now, testId, hint }: {
   shell: ThreadView["bgShells"][number]
   slug: string
   now: number
   testId?: string
+  /** Where it runs, when that is not where the thread's header says the agent is (ThreadTerminals'
+   *  processFolderHint) — the strip's own hint, on the rail's rows too. */
+  hint?: ReactNode
 }) {
   const elapsed = liveAgeSince(shell.startedAt, now)
   // Every row with an id opens the drawer — a Codex exec's too. Codex keeps that exec's output inside its
@@ -676,17 +693,20 @@ export function BgShellRow({ shell, slug, now, testId }: {
       name={shell.label}
       onOpen={openable ? () => pushBackgroundShellDrawer(slug, shell.id!, { label: shell.label, startedAt: shell.startedAt }) : undefined}
       title={openable ? `Open agent terminal — running for ${elapsed}` : shell.label}
-      // Its age and, where one was declared, what is left of its budget (lib/shellBudget.ts). No "running":
-      // every row in this group is running (a finished shell leaves it), the sub-agent rows above state no
-      // such word either, and on the 308px fullscreen rail the word is what pushed "46m left" — the one
-      // reading with a deadline — past the status track's half-width cap into an ellipsis.
-      status={[elapsed || "running", shellBudgetLabel(shell.budgetEndsAt, now)].filter(Boolean).join(" · ")}
+      // Where one was declared, what is left of its budget (lib/shellBudget.ts), then its age — the strip's
+      // order, so one shell reads one way on neighbouring surfaces (it read `1m · 13m left` here beside the
+      // strip's `13m left · 1m`). No "running": every row in this group is running (a finished shell leaves
+      // it), the sub-agent rows above state no such word either, and on the 308px fullscreen rail the word
+      // is what pushed "46m left" — the one reading with a deadline — past the status track's half-width
+      // cap into an ellipsis.
+      hint={hint}
+      status={[shellBudgetLabel(shell.budgetEndsAt, now), elapsed || "running"].filter(Boolean).join(" · ")}
     />
   )
 }
 
 /** One of YOUR terminals, running or waiting at a prompt, as a rail row — the human twin of BgShellRow. */
-export function TermWaitRow({ terminal, slug, now }: { terminal: ThreadTerminal; slug: string; now: number }) {
+export function TermWaitRow({ terminal, slug, now, hint }: { terminal: ThreadTerminal; slug: string; now: number; hint?: ReactNode }) {
   const prompting = terminal.awaitingInput === true
   const elapsed = liveAgeSince(terminal.startedAt, now)
   return (
@@ -698,6 +718,7 @@ export function TermWaitRow({ terminal, slug, now }: { terminal: ThreadTerminal;
       mono
       onOpen={() => pushTerminalDrawer(slug, terminal.id, { label: terminal.command })}
       title={`Open your terminal — ${terminal.command}`}
+      hint={hint}
       status={prompting ? <span className="text-attention">waiting for input</span> : elapsed || "running"}
     />
   )

@@ -16,7 +16,8 @@ import "./styles.css"
 // ONE STRIP, TWO OWNERS — every state a terminal row can be in, side by side, for the states a live stack
 // cannot reach on demand: a finished and a failed run of yours, an agent shell over its budget or quiet,
 // a Codex exec whose output Frizz cannot read, a monitor — once as the drawer draws them (every row) and once
-// as a queue card does (the live rows only). A row names its checkout only when it is off the project root.
+// as a queue card does (the live rows only). A row names its folder only when it is not where the header
+// token says the agent is (`?here=`); a row the server could not place names nothing.
 // `?mode=codex` / `?mode=gone` show the agent drawer's two empty states, `?mode=agent` a streaming one with a
 // long title and a worktree folder (for the narrow header). `data-font="sans"` is on the page, as in the product. No server: every RPC
 // is answered here, and nothing is started or stopped.
@@ -53,20 +54,28 @@ window.fetch = async (input, init) => {
 const ago = (m: number) => new Date(Date.now() - m * 60_000).toISOString()
 const ahead = (m: number) => new Date(Date.now() + m * 60_000).toISOString()
 const WT = { dir: "/home/u/repo/.frizz/worktrees/probe", kind: "worktree" as const }
+// Where the header says the agent is working: `?here=probe` (the default) puts it in the worktree, so the
+// rows still at the root say `root`; `?here=root` puts it at the root, so the rows in `probe` say `probe`.
+const here = params.get("here") === "root" ? undefined : WT
+const ROOT = "/home/u/repo"
 const terminals: ThreadTerminal[] = [
-  { id: "t-prompt", command: "npm login", cwd: "/home/u/repo", state: "running", awaitingInput: true, awaitingSince: ago(1), runId: 1, startedAt: ago(2) },
+  { id: "t-prompt", command: "npm login", cwd: ROOT, atRoot: true, state: "running", awaitingInput: true, awaitingSince: ago(1), runId: 1, startedAt: ago(2) },
   { id: "t-run", command: "npm run dev", cwd: WT.dir, checkout: WT, state: "running", runId: 1, startedAt: ago(40) },
-  { id: "t-ok", command: "git status", cwd: "/home/u/repo", state: "exited", exitCode: 0, runId: 1, startedAt: ago(9) },
-  { id: "t-fail", command: "nub run typecheck", cwd: "/home/u/repo", state: "exited", exitCode: 2, runId: 1, startedAt: ago(5) },
+  { id: "t-long", command: 'read -p "Deploy to staging? " x; sleep 200', cwd: ROOT, atRoot: true, state: "running", runId: 1, startedAt: ago(4) },
+  { id: "t-ok", command: "git status", cwd: ROOT, atRoot: true, state: "exited", exitCode: 0, runId: 1, startedAt: ago(9) },
+  { id: "t-fail", command: "nub run typecheck-that-fails-on-purpose", cwd: ROOT, atRoot: true, state: "exited", exitCode: 2, runId: 1, startedAt: ago(5) },
+  // Left in a worktree that has since been removed: the server has no reading, so it claims no place.
+  { id: "t-gone", command: "tail -f build.log", cwd: `${ROOT}/.frizz/worktrees/removed`, state: "running", runId: 1, startedAt: ago(30) },
 ]
 const bgShells: BgShellView[] = [
-  { id: "s-root", label: "vite dev server", startedAt: ago(72), state: "running", stoppable: true, taskId: "b1", cwd: "/home/u/repo" },
-  { id: "s-wt", label: "nub test --watch", startedAt: ago(12), state: "running", stoppable: true, taskId: "b2", budgetEndsAt: ahead(33), cwd: WT.dir, checkout: WT },
-  { id: "s-over", label: "CI watch", startedAt: ago(61), state: "running", stoppable: true, taskId: "b3", budgetEndsAt: ago(1) },
+  { id: "s-root", label: "vite dev server", startedAt: ago(72), state: "running", stoppable: true, taskId: "b1", cwd: ROOT, atRoot: true },
+  { id: "s-wt", label: "Test watch in the probe worktree", startedAt: ago(12), state: "running", stoppable: true, taskId: "b2", budgetEndsAt: ahead(33), cwd: WT.dir, checkout: WT },
+  { id: "s-over", label: "Watch the CI run for the strip branch", startedAt: ago(61), state: "running", stoppable: true, taskId: "b3", budgetEndsAt: ago(1), cwd: ROOT, atRoot: true },
   { id: "s-quiet", label: "tail the deploy log", startedAt: ago(20), state: "stale", taskId: "b4", monitor: true },
-  { id: "s-codex", label: "cargo watch -x test", startedAt: ago(3), state: "running", stoppable: true, outputUnavailable: true, cwd: WT.dir, checkout: WT },
+  // A Codex exec whose item named no folder: no place claimed.
+  { id: "s-codex", label: "cargo watch -x test", command: "cargo watch -x test", startedAt: ago(3), state: "running", stoppable: true, outputUnavailable: true },
 ]
-const thread = { id: "fixture", terminals, bgShells, watches: [] } as Pick<ThreadView, "id" | "terminals" | "bgShells" | "watches">
+const thread = { id: "fixture", terminals, bgShells, watches: [], ...(here ? { checkout: here } : {}) } as Pick<ThreadView, "id" | "terminals" | "bgShells" | "watches" | "checkout">
 
 createRoot(document.getElementById("root")!).render(
   <QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}>
@@ -79,7 +88,7 @@ createRoot(document.getElementById("root")!).render(
               <span>READY</span>
               <span aria-hidden className="shrink-0 opacity-60">·</span>
               <time className="min-w-0 truncate">Last active 9m ago</time>
-              <ThreadCheckoutToken checkout={WT} homeDir="/home/u" lead={<span aria-hidden className="shrink-0 opacity-60">·</span>} />
+              <ThreadCheckoutToken checkout={here} homeDir="/home/u" lead={<span aria-hidden className="shrink-0 opacity-60">·</span>} />
             </div>
             <div data-fixture-meta="card" className="flex min-w-0 items-baseline gap-1.5 text-[11px] leading-tight text-muted-75">
               <span className="min-w-0 truncate">Ready 9m ago</span>

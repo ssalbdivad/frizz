@@ -4,9 +4,11 @@ import { createElement } from "react"
 import { renderToStaticMarkup } from "react-dom/server"
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query"
 import type { BgShellView, ThreadTerminal, ThreadView } from "@frizz/shared"
-import { MAIN_CHECKOUT_WORD, ProcessRow, QUIET_TITLE, TerminalPromptPane, ThreadProcessStrip, ThreadTerminalMark, cardProcesses, processFolderHint, processTitle } from "./ThreadTerminals.tsx"
+import { ROOT_CHECKOUT_WORD, ProcessRow, QUIET_TITLE, TerminalPromptPane, ThreadProcessStrip, ThreadTerminalMark, cardProcesses, folderHintTitle, processFolderHint, processTitle } from "./ThreadTerminals.tsx"
 import { threadProcesses, type ThreadProcess } from "../lib/threadProcesses.ts"
 import { AGENT_GLYPH_STROKE, CHILD_MARK_SLOT_CLASS } from "../lib/childOps.ts"
+import { BgShellRow, TermWaitRow } from "./AwaitingBackgroundCard.tsx"
+import { FolderHintToken } from "./ThreadTerminals.tsx"
 
 // ONE STRIP, TWO OWNERS. The row box is the ops strip's, so the checks that matter are the ones that keep
 // every label on one x — one mark slot, one kind tag, no extra element before the label — and the ones that
@@ -14,8 +16,10 @@ import { AGENT_GLYPH_STROKE, CHILD_MARK_SLOT_CLASS } from "../lib/childOps.ts"
 
 const at = (mm: string) => `2026-09-29T10:${mm}:00.000Z`
 const NOW = Date.parse(at("30"))
-const term = (over: Partial<ThreadTerminal> = {}): ThreadTerminal => ({ id: "term-1", command: "npm run dev", cwd: "/repo", state: "running", runId: 1, startedAt: at("00"), ...over })
-const shell = (over: Partial<BgShellView> = {}): BgShellView => ({ id: "toolu_1", label: "vite dev server", startedAt: at("00"), state: "running", cwd: "/repo", ...over })
+// As the board sends them: a folder the server read is placed — `checkout` off the root, `atRoot` in it.
+const placedAt = (over: { checkout?: unknown; atRoot?: unknown }) => ("checkout" in over || "atRoot" in over ? {} : { atRoot: true as const })
+const term = (over: Partial<ThreadTerminal> = {}): ThreadTerminal => ({ id: "term-1", command: "npm run dev", cwd: "/repo", state: "running", runId: 1, startedAt: at("00"), ...placedAt(over), ...over })
+const shell = (over: Partial<BgShellView> = {}): BgShellView => ({ id: "toolu_1", label: "vite dev server", startedAt: at("00"), state: "running", cwd: "/repo", ...placedAt(over), ...over })
 const processes = (thread: Pick<ThreadView, "terminals" | "bgShells">) => threadProcesses(thread, [], { now: NOW })
 
 const row = (p: ThreadProcess, extra: { onOpen?: () => void; lines?: number; watched?: boolean; here?: ThreadView["checkout"] } = {}) =>
@@ -100,16 +104,41 @@ test("the folder hint names a row's checkout only when it is NOT where the heade
   assert.equal(processFolderHint(humanAtRoot, undefined), undefined, "a terminal in packages/web is in the root checkout")
   // The agent in `probe` (the header's token says so): a row there says nothing more…
   assert.equal(processFolderHint(inProbe, probe), undefined, "the header already said probe")
-  // …a row in the project's own checkout says `main`, one word, for both owners…
-  assert.deepEqual(processFolderHint(atRoot, probe), { text: MAIN_CHECKOUT_WORD, kind: "main" })
-  assert.deepEqual(processFolderHint(humanAtRoot, probe), { text: "main", kind: "main" })
-  assert.match(row(atRoot, { here: probe }), /data-process-checkout="main" title="The project&#x27;s main checkout[^"]*"[^>]*>(?:<[^>]*>)*main</)
+  // …a row in the project's own checkout says `root`, one word, for both owners…
+  assert.deepEqual(processFolderHint(atRoot, probe), { text: ROOT_CHECKOUT_WORD, kind: "root" })
+  assert.deepEqual(processFolderHint(humanAtRoot, probe), { text: "root", kind: "root" })
+  assert.match(row(atRoot, { here: probe }), /data-process-checkout="root" title="Runs in the project root[^"]*"[^>]*><svg[^>]*lucide-folder /)
+  assert.match(row(atRoot, { here: probe }), /data-process-checkout-word="true" title="Runs in the project root[^"]*"[^>]*>root</)
   // …and a row in a third checkout names it.
   assert.deepEqual(processFolderHint(inOther, probe), { text: "other", kind: "worktree", dir: other.dir })
   // A row the server did not place (transcript-only) claims nothing, wherever the agent is.
   const transcriptOnly = threadProcesses({ bgShells: [] }, [{ label: "codex exec", startedAt: at("01"), state: "running", cwd: "packages/web" }], { now: NOW })[0]!
   assert.equal(processFolderHint(transcriptOnly, undefined), undefined)
   assert.equal(processFolderHint(transcriptOnly, probe), undefined)
+})
+
+// NO READING IS NOT THE ROOT. The server says `atRoot` only for a folder it read and found in the project's
+// own checkout; with neither that nor a `checkout`, a row claims no place. Reading such a row as the root
+// said `root` beside a terminal left in a worktree removed since, and beside a Codex exec whose item named
+// no folder while the agent's own workdir was a worktree.
+test("a row the server could not place claims no folder, even while the agent is elsewhere", () => {
+  const probe = { dir: "/repo/.frizz/worktrees/probe", kind: "worktree" as const }
+  const removed = processes({ terminals: [term({ cwd: "/repo/.frizz/worktrees/gone", atRoot: undefined })] })[0]!
+  const bareCodex = processes({ bgShells: [shell({ id: "p-bare", cwd: undefined, atRoot: undefined, outputUnavailable: true })] })[0]!
+  // A transcript copy can fill in the board row's folder (mergeBackgroundShells) — for the tooltip only.
+  const backfilled = threadProcesses({ bgShells: [shell({ id: "p-bf", command: "cargo watch", cwd: undefined, atRoot: undefined })] }, [{ label: "cargo watch", command: "cargo watch", startedAt: at("00"), state: "running", cwd: "/repo/.frizz/worktrees/probe" }], { now: NOW })[0]!
+  assert.equal(backfilled.cwd, "/repo/.frizz/worktrees/probe", "the tooltip still says where the transcript ran it")
+  for (const p of [removed, bareCodex, backfilled]) {
+    assert.equal(p.placed, false, p.key)
+    assert.equal(processFolderHint(p, probe), undefined, p.key)
+    assert.doesNotMatch(row(p, { here: probe }), /data-process-checkout/, p.key)
+  }
+})
+
+test("the hint's tooltip names the place in words, then in full", () => {
+  assert.equal(folderHintTitle({ text: "root", kind: "root" }, "/home/u/frizz", "/home/u"), "Runs in the project root\n~/frizz")
+  assert.equal(folderHintTitle({ text: "probe", kind: "worktree", dir: "/home/u/frizz/.frizz/worktrees/probe" }, "/home/u/frizz", "/home/u"), "Runs in the probe worktree\n~/frizz/.frizz/worktrees/probe")
+  assert.equal(folderHintTitle({ text: "other", kind: "folder", dir: "/srv/other" }, "/home/u/frizz", "/home/u"), "Runs in another folder\n/srv/other")
 })
 
 test("a strip whose rows all run where the agent is shows no hints — the header said it once", () => {
@@ -124,21 +153,34 @@ test("a strip whose rows all run where the agent is shows no hints — the heade
   // One row left behind in the project's own checkout is the one that speaks.
   const mixed = strip({ checkout: probe, bgShells: [shell({ checkout: probe }), shell({ id: "b", label: "left at root" })] })
   assert.equal(mixed.split("data-process-checkout=").length - 1, 1)
-  assert.match(mixed, /data-process-checkout="main"/)
+  assert.match(mixed, /data-process-checkout="root"/)
 })
 
-test("the hint gives way before the label: it shrinks first, and drops whole rather than truncating", () => {
-  const html = row(processes({ bgShells: [shell({ label: "Test watch in the probe worktree", budgetEndsAt: at("45") })] })[0]!, { here: { dir: "/repo/.frizz/worktrees/probe", kind: "worktree" } })
-  // The hint is its own flex item AFTER the label's, shrinking ahead of it and clipping to one line…
-  const hint = /<span data-process-checkout="main"[^>]*class="([^"]*)"/.exec(html)?.[1] ?? ""
-  for (const cls of ["shrink-[999]", "min-w-0", "flex-wrap", "overflow-hidden", "h-[1lh]"]) assert.ok(hint.split(" ").includes(cls), `hint box: ${cls}`)
-  assert.ok(html.indexOf("data-process-label") < html.indexOf("data-process-checkout"), "after the label")
-  // …with a zero-width strut holding the first line, so a hint that does not fit wraps off it whole.
-  assert.match(html, /data-process-checkout="main"[^>]*><span aria-hidden="true" class="h-\[1lh\] w-0"><\/span>/)
-  // The readings never shrink: the budget and the age are the row's live state.
-  assert.match(html, /<span class="flex shrink-0 items-center gap-1 text-muted-40 -ml-0\.5">/)
-  // The label is the only other thing that may give, and only by truncating.
-  assert.match(html, /<span data-process-label="true" class="min-w-0 truncate text-muted-70">/)
+// WHO GIVES WAY (ThreadTerminals.tsx): the counter, then the hint's word, then the label — and never the
+// hint's glyph, because a missing hint claims "runs where the header says".
+test("at a narrow width the counter and the hint's word give way before the label, and the hint's glyph never does", () => {
+  const probe = { dir: "/repo/.frizz/worktrees/probe", kind: "worktree" as const }
+  const html = row(processes({ bgShells: [shell({ label: "Test watch in the probe worktree", budgetEndsAt: at("45") })] })[0]!, { here: probe, lines: 54 })
+  const classOf = (marker: string) => new RegExp(`<span ${marker}[^>]*class="([^"]*)"`).exec(html)?.[1]?.split(" ") ?? []
+  // The label's box has no width cap: it truncates only when the row cannot hold it.
+  const identity = /<button[^>]*class="([^"]*)"/.exec(html)?.[1]?.split(" ") ?? []
+  assert.ok(!identity.some((cls) => cls.startsWith("max-w-")), `identity: ${identity.join(" ")}`)
+  // GIVE is sized from zero and grows only into what is left, one line tall and clipped, wrapping its items off.
+  const give = classOf("data-process-give")
+  for (const cls of ["flex-1", "basis-0", "w-0", "min-w-0", "flex-wrap", "overflow-hidden", "h-[1lh]", "justify-end", "min-w-[1em]"]) assert.ok(give.includes(cls), `give: ${cls}`)
+  // Its FIRST item is the hint's glyph (a flex line always keeps its first item), then the word, then the counter.
+  const inGive = html.slice(html.indexOf("data-process-give"))
+  const at_ = (needle: string) => inGive.indexOf(needle)
+  assert.ok(at_('data-process-checkout="root"') > 0 && at_('data-process-checkout="root"') < at_("data-process-checkout-word") && at_("data-process-checkout-word") < at_("data-child-op-counter"), "glyph, word, counter")
+  assert.doesNotMatch(inGive.slice(0, at_('data-process-checkout="root"')), /class="h-\[1lh\] w-0"/, "no strut ahead of the glyph")
+  // The budget and the age never give way, budget first, age rightmost; after a hint they open with a `·`.
+  const fixed = html.slice(html.lastIndexOf('<span class="flex shrink-0 items-center gap-1 whitespace-nowrap text-muted-40">'))
+  assert.ok(fixed.indexOf("data-child-op-budget") > 0 && fixed.indexOf("data-child-op-budget") < fixed.indexOf("Running for"), "budget, then age")
+  assert.match(fixed, /^<span class="[^"]*"><span aria-hidden="true" class="text-muted-25">·<\/span><span data-child-op-budget/)
+  // A row with no hint: a zero-width strut holds GIVE's line, so the counter is what wraps off.
+  const plain = row(processes({ bgShells: [shell({ label: "Test watch", budgetEndsAt: at("45") })] })[0]!, { lines: 54 })
+  assert.doesNotMatch(plain, /data-process-checkout/)
+  assert.match(plain, /data-process-give[^>]*class="[^"]*"><span aria-hidden="true" class="h-\[1lh\] w-0"><\/span><span class="flex shrink-0 items-center gap-1 text-muted-40"><span data-child-op-counter/)
 })
 
 test("the tooltip says whose it is, what it runs, and where it runs", () => {
@@ -226,8 +268,8 @@ test("the sidebar mark counts both owners, and its tone says whose is running", 
 test("the queue card draws the same strip under its reply box, and only the prompting screen above it", async () => {
   const { readFileSync } = await import("node:fs")
   const card = readFileSync(new URL("./AllQueuesCard.tsx", import.meta.url), "utf8")
-  // In QueueChildOps' column, after its AGENT / FLOW rows, with its own SHELL rows off (one row per shell).
-  assert.match(card, /<QueueChildOps[\s\S]{0,200}shells=\{false\}[\s\S]{0,200}after=\{[\s\S]{0,120}data-queue-processes=\{thread\.id\}[\s\S]{0,120}<ThreadProcessStrip thread=\{thread\} surface="card"/)
+  // In QueueChildOps' column, after its AGENT / FLOW rows (it draws no shell rows of its own: one row per shell).
+  assert.match(card, /<QueueChildOps[\s\S]{0,300}after=\{[\s\S]{0,120}data-queue-processes=\{thread\.id\}[\s\S]{0,120}<ThreadProcessStrip thread=\{thread\} surface="card"/)
   assert.match(card, /<TerminalPromptPane thread=\{thread\} onOpen=\{openProcess\} \/>/)
   assert.doesNotMatch(card, /QueueShellStrip|ThreadTerminalsStrip/, "no second strip for either owner")
   // A row opens the drawer only where the drawer stack is the card's own project's.
@@ -259,4 +301,42 @@ test("the card's prompt pane wears its terminal's row as its caption, and the st
   assert.equal(cardProcesses({ terminals: [asking], bgShells: [] }, NOW).length, 0)
   // No prompt, no pane and no caption.
   assert.equal(withQuery(createElement(TerminalPromptPane, { thread: { ...thread, terminals: [term()] }, base: "/x" })), "")
+})
+
+// THE FULLSCREEN RAIL'S TERMINAL ROWS read the strip's order (budget, then age) and carry its folder hint on
+// its rule; they read `1m · 13m left` with no hint beside a strip reading `root · 13m left · 1m`.
+test("the rail's terminal rows read the strip's order, and its folder hint", () => {
+  const started = new Date(Date.now() - 12 * 60_000 - 30_000).toISOString()
+  const probe = { dir: "/repo/.frizz/worktrees/probe", kind: "worktree" as const }
+  const agent = processes({ bgShells: [shell({ startedAt: started, budgetEndsAt: new Date(Date.now() + 15 * 60_000 + 20_000).toISOString() })] })[0]!
+  const where = processFolderHint(agent, probe)!
+  const hint = createElement(FolderHintToken, { hint: where, title: folderHintTitle(where, "/repo", undefined) })
+  const status = (html: string) => /data-wait-status[^>]*>([\s\S]*?)<\/span><svg/.exec(html)?.[1]?.replace(/<[^>]+>/g, "") ?? html
+  const rail = renderToStaticMarkup(createElement(BgShellRow, { shell: agent.shell!, slug: "t", now: Date.now(), hint }))
+  assert.match(rail, /data-process-checkout="root"/)
+  assert.equal(status(rail), "15m left · 12m")
+  const yours = renderToStaticMarkup(createElement(TermWaitRow, { terminal: term({ startedAt: started }), slug: "t", now: Date.now(), hint }))
+  assert.match(yours, /data-process-checkout="root"/)
+  assert.equal(status(yours), "12m")
+  // No hint where the row runs where the header says.
+  assert.doesNotMatch(renderToStaticMarkup(createElement(BgShellRow, { shell: agent.shell!, slug: "t", now: Date.now() })), /data-process-checkout/)
+})
+
+// THE RAIL'S HINT GIVES WAY AS THE STRIP'S DOES. The rail's status column is one `fit-content` track shared by
+// every row and sized before the `1fr` name, so a hint INSIDE it narrowed every label in the group and clipped a
+// prompting row's reading (`📁 root · waiting for i…`); sized from zero inside it, its word showed only where
+// another row had widened the track. It sits in the NAME's cell instead, after the name: a box sized from zero,
+// one line tall and clipping, whose word wraps away first and whose glyph — its first item — never does.
+test("the rail's folder hint gives way in the name's own slack, never in the shared status column", () => {
+  const where = processFolderHint(processes({ bgShells: [shell()] })[0]!, { dir: "/repo/.frizz/worktrees/probe", kind: "worktree" })!
+  const hint = createElement(FolderHintToken, { hint: where, title: "t" })
+  const html = renderToStaticMarkup(createElement(TermWaitRow, { terminal: term({ awaitingInput: true }), slug: "t", now: Date.now(), hint }))
+  // In the name's cell, after the name, and nowhere in the status.
+  assert.match(html, /<span class="flex min-w-0 items-baseline "><button[\s\S]*?<\/button><span data-process-checkout="root"/)
+  assert.doesNotMatch(/data-wait-status[\s\S]*$/.exec(html)![0], /data-process-checkout/)
+  assert.match(html, /data-wait-status[^>]*><span class="text-attention">waiting for input<\/span><\/span>/)
+  const token = /<span data-process-checkout="root"[^>]*class="([^"]*)"/.exec(html)?.[1] ?? ""
+  for (const cls of ["w-0", "flex-1", "basis-0", "min-w-[1em]", "flex-wrap", "h-[1lh]", "overflow-hidden", "justify-end", "items-baseline"]) assert.ok(token.split(" ").includes(cls), `hint: ${cls} in ${token}`)
+  // The glyph, behind a zero-width text strut that gives a word-less first line its baseline, then the word.
+  assert.match(html, /data-process-checkout="root"[^>]*><span class="shrink-0">\u200b<svg[^>]*class="[^"]*inline[^"]*align-baseline[^"]*"[\s\S]*?<\/svg><\/span><span data-process-checkout-word="true" class="[^"]*">root<\/span><\/span>/)
 })

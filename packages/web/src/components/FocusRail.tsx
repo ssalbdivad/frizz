@@ -2,7 +2,7 @@ import { FileDiff, Folder } from "lucide-react"
 import { useQueryClient } from "@tanstack/react-query"
 import { useSnapshot } from "valtio"
 import type { EditedFile, ThreadView } from "@frizz/shared"
-import { useProjectDir, useTranscript } from "../hooks.ts"
+import { useBoard, useProjectDir, useTranscript } from "../hooks.ts"
 import { editedFileTree, flattenEditedFileTree } from "../lib/editedFileTree.ts"
 import { openLocalPath } from "../lib/local-file-links.ts"
 import { prewarmLocalFile } from "../lib/localFileQuery.ts"
@@ -11,6 +11,7 @@ import { prefs } from "../lib/prefs.ts"
 import { PRIMER } from "../lib/primer.ts"
 import { threadProcesses } from "../lib/threadProcesses.ts"
 import { AgentRow, BgShellRow, GithubWatchRow, ON_CAP, TermWaitRow, TimerRow, WaitGrid, WaitRow, liveAgents, type WaitGroup } from "./AwaitingBackgroundCard.tsx"
+import { FolderHintToken, folderHintTitle, processFolderHint } from "./ThreadTerminals.tsx"
 
 // THE FULLSCREEN PAGE'S OPERATIONAL RAIL — what is going on in this thread, listed beside the transcript
 // (maintainer 2026-08-28): its live sub-agents, its running terminals (the agent's and yours), the pull requests and
@@ -127,6 +128,8 @@ function FileRow({ file, name, depth }: { file: EditedFile; name: string; depth:
 
 export function FocusRail({ thread }: { thread: ThreadView }) {
   const now = useNowMs()
+  const board = useBoard()
+  const projectDir = useProjectDir()
   // Shared with ChatView's own subscription (same key), so this adds no request and no poll.
   const transcript = useTranscript(thread.id, { poll: false })
   const files = transcript.data?.editedFiles ?? []
@@ -147,9 +150,15 @@ export function FocusRail({ thread }: { thread: ThreadView }) {
     { head: "Sub-agents", rows: agents.map((a) => <AgentRow key={a.id ?? a.label} agent={a} slug={thread.id} now={now} />) },
     {
       head: "Terminals",
-      rows: terminals.map((p) => (p.terminal
-        ? <TermWaitRow key={p.key} terminal={p.terminal} slug={thread.id} now={now} />
-        : <BgShellRow key={p.key} shell={p.shell!} slug={thread.id} now={now} />)),
+      rows: terminals.map((p) => {
+        // The strip's folder hint, on the strip's rule: only where a row runs somewhere other than where
+        // the thread's header says the agent is working (processFolderHint).
+        const where = processFolderHint(p, thread.checkout)
+        const hint = where ? <FolderHintToken hint={where} title={folderHintTitle(where, projectDir, board?.homeDir)} /> : undefined
+        return p.terminal
+          ? <TermWaitRow key={p.key} terminal={p.terminal} slug={thread.id} now={now} hint={hint} />
+          : <BgShellRow key={p.key} shell={p.shell!} slug={thread.id} now={now} hint={hint} />
+      }),
     },
     { head: "Pull requests", rows: prs.map((w) => <GithubWatchRow key={w.id} watch={w} />) },
     { head: "Issues", rows: issues.map((w) => <GithubWatchRow key={w.id} watch={w} />) },
