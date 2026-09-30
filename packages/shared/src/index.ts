@@ -3990,6 +3990,14 @@ export const Settings = z.object({
    * parses; defaultSettings pins true. Machine-level. See server/worktree-cleanup.ts.
    */
   removeWorktreesOnDone: z.boolean().optional(),
+  /**
+   * Done threads idle this many days are deleted, in every open project, by an hourly sweep
+   * (server/thread-retention.ts). 0 = never, the default — a delete cannot be undone, so nothing is
+   * deleted on an operator's behalf until they choose a period. A number rather than an absent key for
+   * "never" because an absent machine key falls back to a project's stored blob (settings.ts), which
+   * would resurrect the period just cleared. Machine-level.
+   */
+  deleteDoneThreadsAfterDays: z.number().int().min(0).max(3650).optional(),
   // There is no `font` key any more. The interface rendered in one of two type families as a machine
   // setting until 2026-09-19 (maintainer: "let's drop monospace as an option"); every surface is sans
   // now, and index.html pins `data-font="sans"` on <html> directly. Settings is a non-strict object,
@@ -4057,7 +4065,7 @@ export type Settings = z.infer<typeof Settings>
  * because the query cache keeps one `settingsGet` entry per project and a machine setting changed in
  * one is changed in all.
  */
-export const MACHINE_SETTING_KEYS = ["notifications", "localFileOpener", "projectRail", "homeFolder", "worktreeDir", "removeWorktreesOnDone"] as const satisfies readonly (keyof Settings)[]
+export const MACHINE_SETTING_KEYS = ["notifications", "localFileOpener", "projectRail", "homeFolder", "worktreeDir", "removeWorktreesOnDone", "deleteDoneThreadsAfterDays"] as const satisfies readonly (keyof Settings)[]
 
 // The new-thread composer's durable choices — MACHINE-wide, one record for every project the server
 // serves (server/dispatch-preferences.ts), because the profile belongs to the operator, not to a

@@ -296,9 +296,11 @@ export interface Api {
   // Hide the thread until ALL its running sub-agents have returned: each return still wakes the parent,
   // but only the last one (or a question, a crash, a done) re-queues it. Refused with none running.
   snoozeUntilSubAgentsReturn(input: { slug: string; sessionId: string; clear?: boolean }): Promise<void>
-  // Hard-delete: drop a stalled/exited phantom's registry row and tombstone its transcript id.
-  // Refused for a genuinely live session — archive that one instead.
-  forgetThread(input: { slug: string }): Promise<void>
+  // Hard-delete any thread (a live worker is stopped first): its rows, its terminals, its scratch
+  // directory. Frees its slug and @handle (server router.ts deleteOwnedThread).
+  deleteThread(input: { slug: string }): Promise<void>
+  // Every OPEN project's done threads idle more than `olderThanDays` days; `dryRun` only counts them.
+  deleteDoneThreads(input: { olderThanDays: number; dryRun?: boolean }): Promise<{ count: number }>
   // Server-authoritative, shell-safe provider resume command for a registered Frizz-owned session.
   // A live Frizz-owned runtime is deliberately unavailable: a second provider client is uncoordinated.
   threadTerminalCommand(input: { slug: string }): Promise<{ command: string | null; mode: "attach" | "resume" | "unavailable"; reason: string | null }>
@@ -495,7 +497,8 @@ export const PROCEDURES = {
   reloadThreadPlugins: "mutation",
   snoozeAwaitingBackground: "mutation",
   snoozeUntilSubAgentsReturn: "mutation",
-  forgetThread: "mutation",
+  deleteThread: "mutation",
+  deleteDoneThreads: "mutation",
   threadTerminalCommand: "query",
   openExternal: "mutation",
   openLocalFile: "mutation",
