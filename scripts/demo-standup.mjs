@@ -306,13 +306,15 @@ let parserAudit
   t.user("Bump node-pty to beta.16 and regenerate the lockfile.", ago(6))
     .tool("l1", "Read", { file_path: `${frizzDir}/README.md` }, "# Frizz", ago(5))
     .say("Regenerating the lockfile.", ago(4), "tool_use")
-  const r = register(t, { title: "Lockfile bump" })
+  // The approval BEFORE the row: the board caches a thread's "nothing pending" on its first read and only
+  // an in-process write clears it, so a row the board saw first would never show this card.
   const database = new Database(db)
   createInteractionStore(database).create(buildClaudePermissionInteraction(
     { requestId: "lockfile-req", toolUseId: "lockfile-tool", toolName: "Bash", input: { command: "nub install --lockfile-only", description: "Regenerating the lockfile" }, description: "Regenerating the lockfile", suggestions: [] },
-    { projectId: F.id, threadSlug: r.slug, sessionId: r.sessionId, sessionEpoch: 0, capabilityRevision: 0, cwd: frizzDir },
+    { projectId: F.id, threadSlug: t.slug, sessionId: t.sessionId, sessionEpoch: 0, capabilityRevision: 0, cwd: frizzDir },
   ))
   database.close()
+  register(t, { title: "Lockfile bump" })
 }
 
 { // A bare "Not fixed" handoff.
@@ -587,5 +589,5 @@ setInterval(() => {
   }
 }, 20_000)
 
-console.log(`\nFrizz standup demo is up:\n\n  ${origin}/all/frizz    (focused on one project; the title menu opens All projects)\n\nDemo repos: ${root}\nStack log:  ${stackLog}\nCtrl-C tears it all down.\n`)
-console.log(JSON.stringify({ url: `${origin}/all/frizz`, home, root, stackPid: stackProc.pid, daemonPid: daemon.pid }))
+console.log(`\nFrizz standup demo is up:\n\n  ${origin}/                 All projects (home)\n  ${origin}/?project=frizz   focused on the showcase project\n\nDemo repos: ${root}\nStack log:  ${stackLog}\nCtrl-C tears it all down.\n`)
+console.log(JSON.stringify({ url: `${origin}/`, focused: `${origin}/?project=frizz`, home, root, stackPid: stackProc.pid, daemonPid: daemon.pid }))
