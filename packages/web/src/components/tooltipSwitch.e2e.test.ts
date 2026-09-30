@@ -3,12 +3,13 @@ import test from "node:test"
 
 const baseUrl = process.env.FRIZZ_TOOLTIP_SWITCH_E2E_URL
 
-// The two maintenance verbs sit shoulder to shoulder, and the tooltip has to name the one you are
-// actually pointing at. It did not: hovering Restart and then sliding onto the plug left the RESTART
-// label up while the pointer sat squarely on Reload plugins (maintainer 2026-08-06: "the popover
+// Two icon verbs sitting shoulder to shoulder, and the tooltip has to name the one you are actually
+// pointing at. It did not, first reported on the maintenance pair (Restart worker, Reload plugins):
+// hovering Restart and then sliding onto the plug left the RESTART label up while the pointer sat squarely on Reload plugins (maintainer 2026-08-06: "the popover
 // associated with the restart button continued to show up. It didn't switch over"). They were in the
-// lifecycle footer then and are in the thread header's action strip now (2026-08-26); the gesture and
-// the bug are properties of the pair, not of the surface, so this drives them wherever they live.
+// lifecycle footer then, the thread header's action strip later (2026-08-26), and the drawer's ⋯ menu
+// since 2026-09-29; the gesture and the bug are properties of any adjacent pair, not of those two, so
+// this now drives the strip's Collapse and Open fullscreen icons.
 //
 // The cause was NOT the thing it looks like. In the footer these two marks wore negative ink trims
 // that overlapped their 24px hover squares by 3px, which was the obvious suspect and the wrong one —
@@ -61,7 +62,7 @@ test("the tooltip names whichever icon verb the pointer is on, including the nei
         const box = el.getBoundingClientRect()
         return { x: box.x + box.width / 2, y: box.y + box.height / 2 }
       }
-      return { plug: centre("[data-reload-plugins]"), restart: centre('[aria-label="Restart worker"]') }
+      return { plug: centre("[data-expand-thread]"), restart: centre('[aria-label="Collapse"]') }
     })
 
     // Whichever verb the pointer is over, and what the one open tooltip says — asserted together, so
@@ -84,15 +85,15 @@ test("the tooltip names whichever icon verb the pointer is on, including the nei
     assert.equal((await pointing()).open, 0, "nothing is open before the pointer reaches the strip")
 
     await moveTo(centres.restart)
-    assert.deepEqual(await pointing(), { label: "Restart worker", open: 1 })
+    assert.deepEqual(await pointing(), { label: "Collapse", open: 1 })
 
     // The reported gesture: onto the neighbour without leaving the strip.
     await moveTo(centres.plug)
-    assert.deepEqual(await pointing(), { label: "Reload plugins", open: 1 })
+    assert.deepEqual(await pointing(), { label: "Open fullscreen", open: 1 })
 
     // And back the other way, so the fix is not direction-dependent.
     await moveTo(centres.restart)
-    assert.deepEqual(await pointing(), { label: "Restart worker", open: 1 })
+    assert.deepEqual(await pointing(), { label: "Collapse", open: 1 })
 
     // Leaving the strip closes it rather than leaving a label stranded over the row.
     await moveTo({ x: 20, y: 20 })

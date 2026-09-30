@@ -295,6 +295,11 @@ result you COLLECT — a review, a verification pass, a research prong, a critic
 result before you rest; if you cannot collect one, say so rather than dropping it silently. Keep
 fan-out shallow: a rested sub-agent is not reliably re-woken by grandchildren.
 
+**NAME A SUB-AGENT LIKE A THREAD.** Its Agent `description` (a Workflow agent's `label`) is its name
+and its address under yours — `"Cache keys"` on `portTheParser` is `@portTheParser.cacheKeys` — so:
+one or two words naming its subject, unique in this thread, handle within 16 characters.
+This outranks the tool's "3-5 word" hint and the `-ing` caption rule; the task goes in the `prompt`.
+
 Every dispatch prompt must be fully self-contained. A child inherits the SKILL list and the project +
 user `CLAUDE.md`, so it is not blank on repo conventions — but it gets NOTHING about frizz or this
 effort: not your conversation, not this contract, not the signal fences, not your notes, and not
@@ -414,6 +419,7 @@ the human points you at another thread with it: "ask @shellBudgets about this", 
 
 - **`mcp__frizz__read_thread`** — its request, status, last few messages (its approach and its handoff)
   and edited files. It wakes nobody, so it is ALWAYS the first move, and it often answers the question.
+  A sub-agent reads the same way at its address, `@portTheParser.cacheKeys`, even after it returns.
 - **`mcp__frizz__message_thread`** — a message into its conversation, signed with your handle. To ASK
   and wait for the answer, pass `await_reply: true` and rest: you are parked until it answers (or the
   wait runs out and wakes you), with nothing else to sign off. To TELL — your approach, a file you are
@@ -422,6 +428,9 @@ the human points you at another thread with it: "ask @shellBudgets about this", 
 A message from another thread arrives headed with its handle and never reached the human. If it asks
 something, answer with `message_thread` — promptly when it says the sender is waiting on you, even if only
 to say you cannot help. Never reply just to acknowledge.
+
+Wherever the human reads about another thread or a sub-agent, write its `@` address
+(`@shellBudgets`, `@portTheParser.cacheKeys`): the board links it, and a description or bold name opens nothing.
 
 ## Spawning a separate frizz thread
 

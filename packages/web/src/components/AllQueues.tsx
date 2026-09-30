@@ -45,6 +45,7 @@ import { rpc } from "../api/rpc.ts"
 import { isBusy, liveQueue, mergedQueue, overlayQueues, projectMarkdownScope, queuesProjects, threadKey, type QueueEntry, type QueuesProject } from "../lib/allQueues.ts"
 import { innerPath, projectSlug } from "../lib/base-path.ts"
 import { rememberCrossProjectFocus, stepPick } from "../lib/crossProject.ts"
+import { setFaviconBadge } from "../lib/faviconBadge.ts"
 import { ALL_PROJECTS, homeHref, projectViewHref, usePageView, viewHref, viewKey } from "../lib/pageView.ts"
 import { draftKey, draftStore } from "../lib/drafts.ts"
 import { QUEUE_CARD_VIEWPORT_TOP, slugsInThreadDrawers, store } from "../store.ts"
@@ -246,6 +247,21 @@ export function AllQueuesPage() {
   // and a header still counting it read "1 in the queue" over an empty page until the next poll. A ghost
   // is not waiting on anyone. A card whose drawer is open still is, and still counts.
   const ready = queue.filter((slot) => !slot.ghost && !leaving.isLeaving(slot.key)).length
+  // THE TAB NAMES ITS VIEW. Someone who keeps one tab per project (Colin McDonnell's way of working, and
+  // how his one-project-per-page Frizz titled its tabs) tells them apart by title and favicon alone, so a
+  // focused tab reads "<project> — Frizz" and wears the rest dot (lib/faviconBadge.ts) while that
+  // project's queue holds a card; All projects reads so, dotted for any card at all. Set here, not in
+  // <App/>, because only this page knows its view — and an effect in App would run AFTER this child's on
+  // mount and overwrite it. Cleared back to the bare mark when the page goes (the welcome page, `/full`).
+  const tabName = focused ? viewed?.name : "All projects"
+  useEffect(() => {
+    document.title = tabName ? `${tabName} — Frizz` : "Frizz"
+  }, [tabName])
+  useEffect(() => () => { document.title = "Frizz" }, [])
+  useEffect(() => {
+    setFaviconBadge(ready > 0)
+    return () => setFaviconBadge(false)
+  }, [ready])
   const scrollToCard = useScrollToCard()
   const { active: activeKey, land } = useQueueKeys(useScrollspy(queue), scrollToCard)
   const loading = (cards.isPending || queues.isPending) && !queues.data
@@ -272,11 +288,12 @@ export function AllQueuesPage() {
           level with the READY header's across the gutter (64 vs 59.85px at 52px). */}
       <aside aria-label="Projects" className={`${SIDEBAR_COLUMN_CLASS} !justify-start pt-[48px] max-[800px]:!pt-5`}>
         <div className="flex max-h-[calc(100vh-68px)] min-h-0 min-w-0 w-full flex-col max-[800px]:max-h-none">
-          {/* The column head: the status row, and the prompt box under it — a new thread without leaving.
+          {/* The column head: the status row, led by the page's title (the switcher), and the prompt box
+              under it — a new thread without leaving.
               Focused, it starts in the view's project; showing All projects, in the project chosen in the
               box's own bottom strip, beside the model. */}
           <div className="mb-5 shrink-0 px-0.5" onKeyDown={onColumnKeyDown}>
-            <StatusRow />
+            <StatusRow title={<Switcher projects={projects} hidden={hidden} current={viewed} />} />
             <FocusedComposer
               focus={focus}
               project={focusProject}
@@ -318,17 +335,13 @@ export function AllQueuesPage() {
           <p className="my-auto text-center text-[13px] text-muted">Could not read the queues: {String(queues.error)}</p>
         ) : (
           <div className="flex w-full min-w-0 flex-col py-8 max-[800px]:pt-2">
-            {/* THE INBOX, NAMED — every card below is a Ready thread — and at its right end the one control
-                that says what the page shows: which project, or All projects. Always drawn, empty queue or
-                not, since it is also the way to every other project. `pl-[21px]` stands the glyph over the
-                card titles, and `pr-[21px]` stands the switcher over the cards' own right-hand controls. */}
+            {/* THE INBOX, NAMED — every card below is a Ready thread. Which project's is the page's title,
+                over the prompt box (StatusRow.tsx), not here: it scopes the whole page, not these cards.
+                `pl-[21px]` stands the glyph over the card titles. */}
             <div data-inbox-header className="mb-3 flex min-w-0 items-center gap-3 pl-[21px] pr-[21px]">
               <h2 className="flex shrink-0">
                 <BandLabel band="ready" count={ready} />
               </h2>
-              <div className="ml-auto flex min-w-0 text-[12px]">
-                <Switcher projects={projects} hidden={hidden} current={viewed} />
-              </div>
             </div>
             {queue.length > 0 ? (
               queue.map((slot, index) => (
@@ -360,7 +373,7 @@ export function AllQueuesPage() {
 }
 
 /**
- * The READY header's project switcher (ProjectSwitcher.tsx): the project the page is focused on, or All
+ * The page's title, the project switcher (ProjectSwitcher.tsx): the project the page is focused on, or All
  * projects. Choosing is a navigation to that view (lib/pageView.ts), so Back returns to the one before.
  * Leaving a project for All projects carries it over as the prompt box's pick, so the box there starts
  * where the operator just was.

@@ -14,3 +14,12 @@ export function useMentionCandidates(excludeSlug?: string, project?: string): Me
   const threads = project === undefined || board?.projectSlug === project ? (board?.threads as readonly ThreadView[] | undefined) : undefined
   return useMemo(() => (threads ? mentionCandidates(threads, excludeSlug) : []), [threads, excludeSlug])
 }
+
+/** The thread `slug` itself as a mention candidate — the head a dotted `@thisThread.child` resolves
+ *  against in its OWN prompt box (Composer `ownMention`). Same project rule as above. */
+export function useOwnMention(slug: string, project?: string): MentionCandidate | undefined {
+  const snap = useSnapshot(store)
+  const board = snap.board
+  const threads = project === undefined || board?.projectSlug === project ? (board?.threads as readonly ThreadView[] | undefined) : undefined
+  return useMemo(() => (threads ? mentionCandidates(threads.filter((t) => t.id === slug))[0] : undefined), [threads, slug])
+}

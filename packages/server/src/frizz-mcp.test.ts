@@ -7,6 +7,7 @@ import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { resolveFrizzMcp } from "./dispatch.ts"
 import { FRIZZ_MCP } from "./backend/types.ts"
+import { SPAWN_THREAD_RESULT_RE } from "./spinoff-edge-recovery.ts"
 
 // Drives the REAL cc-worker/bin/frizz-mcp.mjs over its real stdio JSON-RPC transport (no mocks, no
 // re-implementation of the protocol) and — for the tool call — against a REAL http server standing in
@@ -207,6 +208,7 @@ test("`spawn_thread` POSTs the real dispatch RPC and returns the thread's drawer
     const call = await rpc.next(2)
     assert.equal(call.result.isError, undefined)
     assert.match(call.result.content[0].text, /\[Child\]\(\/thread\/spawned-child\)/)
+    assert.equal(SPAWN_THREAD_RESULT_RE.exec(call.result.content[0].text)?.[1], "spawned-child", "the sentence an old spinoff's edge is recovered from")
     assert.deepEqual(seen, [{ url: "/_frizz/rpc/dispatch", body: { prompt: "do the thing", model: "opus", effort: "high", title: "Child" } }])
 
     // model/effort stay REQUIRED server-side, not only in the schema — a lenient client must not be
@@ -1621,9 +1623,11 @@ test("`watch_issue` registers, lists and drops against the CALLING thread, and l
   }
 })
 
-// A SPIN-OFF names its request AND its caller — the caller from the server's own identity, never from the
-// model's arguments — so the dispatch can refuse a request that belongs to another thread.
-test("spawn_thread with a spinoff forwards the request id and the calling thread", async () => {
+// A SPINOFF names its request AND its caller — the caller from the server's own identity, never from the
+// model's arguments — so the dispatch can refuse a request that belongs to another thread. Its result
+// tells the worker to write NOTHING about the spinoff: the human's chat already shows it, linked to the new
+// thread, and what workers wrote here (a link, then a second sign-off) was the confusing part (2026-09-30).
+test("spawn_thread with a spinoff forwards the request id and the calling thread, and asks for no announcement", async () => {
   const seen: unknown[] = []
   const http = createServer((req, res) => {
     let body = ""
@@ -1650,7 +1654,15 @@ test("spawn_thread with a spinoff forwards the request id and the calling thread
     })
     const call = await rpc.next(2)
     assert.equal(call.result.isError, undefined)
-    assert.deepEqual(seen, [{ prompt: "brief", model: "opus", effort: "high", spinOff: "spn_0123456789abcdef", spinOffFrom: "the-parent" }])
+    assert.deepEqual(seen, [{ prompt: "brief", model: "opus", effort: "high", spinoff: "spn_0123456789abcdef", spinoffFrom: "the-parent" }])
+    const text: string = call.result.content[0].text
+    assert.equal(SPAWN_THREAD_RESULT_RE.exec(text)?.[1], "spawned-child", "the sentence an old spinoff's edge is recovered from")
+    assert.match(text, /already shows this spinoff/)
+    assert.match(text, /do not announce it, paste a link to it, or summarize your brief/)
+    assert.match(text, /If you had come to rest[^.]*end your turn now with the two words `Spun off\.` and nothing else/)
+    assert.match(text, /do not sign off again/)
+    assert.match(text, /If you were in the middle of work, carry on with it/)
+    assert.doesNotMatch(text, /Paste this link|\/thread\//, "no link to paste")
   } finally {
     rpc.kill()
     http.close()

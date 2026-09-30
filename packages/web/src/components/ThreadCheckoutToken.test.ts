@@ -4,10 +4,10 @@ import { readFileSync } from "node:fs"
 import { createElement } from "react"
 import { renderToStaticMarkup } from "react-dom/server"
 import { ThreadCheckoutToken, checkoutName, checkoutTitle } from "./ThreadCheckoutToken.tsx"
-import { workingDirHint } from "./ThreadTerminals.tsx"
 
-// The agent's checkout, "subtle but visible": absent in the ordinary case, one quiet token otherwise, and
-// the Open terminal dialog saying the same fact in words.
+// The agent's checkout, "subtle but visible": absent in the ordinary case, one quiet token otherwise. The
+// header's terminal button opens a shell in that same folder with no dialog, so the token is the one place
+// this fact is said.
 
 const token = (checkout: Parameters<typeof ThreadCheckoutToken>[0]["checkout"]) =>
   renderToStaticMarkup(createElement(ThreadCheckoutToken, { checkout, homeDir: "/home/u", lead: createElement("span", { "data-lead": "" }, "·") }))
@@ -44,15 +44,6 @@ test("the tooltip says where, in home-relative form, and that new terminals open
   )
   assert.equal(checkoutTitle({ dir: "/home/u/other", kind: "folder" }, "/home/u"), "Agent is working in another folder\n~/other\nNew terminals open here")
   assert.equal(checkoutName("C:\\work\\probe"), "probe")
-})
-
-test("the dialog's hint names the kind of place the folder is", () => {
-  assert.equal(workingDirHint({ source: "transcript", kind: "worktree" }), "Where the agent is working now — a worktree.")
-  assert.equal(workingDirHint({ source: "transcript", kind: "folder" }), "Where the agent is working now — another folder.")
-  assert.equal(workingDirHint({ source: "transcript", kind: "root" }), "Where the agent is working now — the project root.")
-  assert.equal(workingDirHint({ source: "transcript" }), "Where the agent is working now.", "an older server's reply still reads")
-  assert.equal(workingDirHint({ source: "session", kind: "root" }), "The folder the agent's session started in.")
-  assert.equal(workingDirHint({ source: "project", kind: "root" }), "The project root.")
 })
 
 test("the drawer header sets the token between the time and the status, which still truncates first", () => {

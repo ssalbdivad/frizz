@@ -16,7 +16,9 @@ import { isBrokerClaudeRow, type SessionRow, type Storage } from "./storage.ts"
 //
 // What counts is the OPERATOR's messages, not every user-role record: frizz's wakes, a child's upward
 // `SendMessage`, completion boundaries and still-queued bubbles are all user-side turns nobody typed,
-// and counting them would rewrite a quiet thread's status every few watcher ticks.
+// and counting them would rewrite a quiet thread's status every few watcher ticks. A SPINOFF REQUEST is not
+// one either (2026-09-30), though the human asked for it: it is about the NEW thread, so it neither moves
+// this thread's conversation on nor names the request live-status.ts should describe this one's work by.
 export const STATUS_EVERY_MESSAGES = 5
 // Enough to say what the conversation is doing, bounded well under anything a one-shot should carry.
 const PER_MESSAGE_CHARS = 1_500
@@ -24,7 +26,7 @@ const CONVERSATION_CHARS = 12_000
 
 export function operatorMessages(messages: readonly TranscriptMessage[]): TranscriptMessage[] {
   return messages.filter((m) =>
-    m.role === "user" && !m.wake && !m.peerFrom && !m.agentInstruction && !m.boundary && !m.kind && !m.queued &&
+    m.role === "user" && !m.wake && !m.peerFrom && !m.agentInstruction && !m.boundary && !m.kind && !m.queued && !m.spinoff &&
     (m.displayText ?? m.text).trim() !== "")
 }
 

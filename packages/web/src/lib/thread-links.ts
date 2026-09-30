@@ -1,4 +1,7 @@
+import type { QueryClient } from "@tanstack/react-query"
 import { openThread } from "../store.ts"
+import { rpc } from "../api/rpc.ts"
+import { openSubAgentMention } from "../hooks/useSubAgentDirectory.ts"
 import { crossProjectHref, innerPath, projectSlug } from "./base-path.ts"
 import { spaNavigate } from "./router.ts"
 
@@ -17,9 +20,22 @@ import { spaNavigate } from "./router.ts"
 // only right for a thread of the project already in focus; a link naming a DIFFERENT project goes to
 // that thread's drawer address through the router, which opens it in place (the focus moves), where
 // leaving it to the browser reloaded the whole page.
-const THREAD_HREF = /^\/thread\/([a-z0-9][a-z0-9-]*)\/?$/
+//
+// A SUB-AGENT MENTION in agent prose (`@portTheParser.cacheKeys`, lib/mentionAutolink.ts) is the same
+// link with the child's address in the fragment — `/thread/<slug>#portTheParser.cacheKeys` — so a
+// modified click still lands on the thread, and a plain one here resolves the address against the
+// thread's sub-agent directory and opens the child (openSubAgentMention, the path a human's mention
+// takes too). Across projects the fragment is dropped: the directory is asked of the page's project.
+const THREAD_HREF = /^\/thread\/([a-z0-9][a-z0-9-]*)\/?(?:#([\p{L}\p{N}_.-]+))?$/u
 
-export function installThreadLinkInterceptor(): () => void {
+/** The thread an in-app href (its INNER path) opens, and the sub-agent address in its fragment. */
+export function threadLinkTarget(inner: string): { slug: string; address?: string } | null {
+  const match = THREAD_HREF.exec(inner)
+  if (!match) return null
+  return match[2] ? { slug: match[1]!, address: match[2] } : { slug: match[1]! }
+}
+
+export function installThreadLinkInterceptor(queryClient: QueryClient): () => void {
   const handler = (event: MouseEvent) => {
     if (event.button !== 0 || event.defaultPrevented) return
     if (event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return
@@ -28,15 +44,16 @@ export function installThreadLinkInterceptor(): () => void {
     if (!anchor || !href || !href.startsWith("/")) return
     const linked = projectSlug(href)
     const inner = innerPath(href)
-    const match = THREAD_HREF.exec(inner)
-    if (!match) return
+    const target = threadLinkTarget(inner)
+    if (!target) return
     event.preventDefault()
     event.stopPropagation()
     if (linked && linked !== projectSlug()) {
-      spaNavigate(`${crossProjectHref(linked)}${inner}`)
+      spaNavigate(`${crossProjectHref(linked)}/thread/${target.slug}`)
       return
     }
-    openThread(match[1])
+    if (target.address) void openSubAgentMention(queryClient, rpc, undefined, target.slug, target.address)
+    else openThread(target.slug)
   }
   document.addEventListener("click", handler)
   return () => document.removeEventListener("click", handler)

@@ -657,47 +657,56 @@ function ProjectRow({
       data-xq-project-row={project.id}
       className={`${ROW_CLASS} ${project.stale ? "opacity-60" : ""} ${menuOpen ? SELECTED_ROW : ""}`}
     >
-      <button
-        type="button"
-        data-xq-project-fold
-        onClick={() => {
-          // A drag ENDS over the row it lifted, so the browser fires a click on release; that one is not
-          // a fold.
-          if (justDragged()) return
-          fold()
-        }}
-        onPointerDown={grip?.onPointerDown}
-        onKeyDown={grip?.onKeyDown}
-        aria-expanded={unfolded}
-        aria-label={foldTitle}
-        title={foldTitle}
-        // The whole row is the target (the `before:` layer), not just the name: the badge and the space
-        // around it fold too. The counts and the "…" sit above it. `pr-2` is the gap to the counts.
-        className={`${HEAD_BUTTON_CLASS} !pr-2 items-center before:absolute before:inset-0 before:rounded-md before:content-['']`}
-      >
-        {/* THE DISCLOSURE, in the gutter the rail's scroll marker uses — where the rail's own collapsible
-            band headers kept theirs, so the list folds the way the rail did. Only while it means
-            something: on hover (and always on touch), and HELD whenever the project is not as it starts —
-            a busy project folded away (pointing right), a quiet one showing the rest (turned down). A busy
-            project open, the usual case, draws none, so the list is not a column of chevrons. */}
-        <span
-          aria-hidden
-          data-xq-project-chevron
-          className={`pointer-events-none absolute left-[4.5px] top-0.5 flex h-[19px] items-center text-muted-60 transition-[opacity,transform] ${unfolded ? "rotate-90" : ""} ${
-            (busy ? collapsed : opened.length > 0) ? "opacity-100" : "opacity-0 group-hover:opacity-100 group-has-[:focus-visible]:opacity-100 [@media(hover:none)]:opacity-100"
-          }`}
+      {/* FOCUSED, THE PAGE'S TITLE NAMES THE PROJECT (StatusRow.tsx, the switcher), so its row here keeps
+          only its counts and "…": the name drawn twice, 180px apart, was the page's one duplicate
+          (maintainer 2026-09-29). Nor does it fold — putting away every thread of the only project on the
+          page leaves nothing to look at. With no square the cord starts at the first band name instead
+          (ThreadConnector ties only rows that carry an indicator). */}
+      {focused ? (
+        <span className="flex-1" />
+      ) : (
+        <button
+          type="button"
+          data-xq-project-fold
+          onClick={() => {
+            // A drag ENDS over the row it lifted, so the browser fires a click on release; that one is not
+            // a fold.
+            if (justDragged()) return
+            fold()
+          }}
+          onPointerDown={grip?.onPointerDown}
+          onKeyDown={grip?.onKeyDown}
+          aria-expanded={unfolded}
+          aria-label={foldTitle}
+          title={foldTitle}
+          // The whole row is the target (the `before:` layer), not just the name: the badge and the space
+          // around it fold too. The counts and the "…" sit above it. `pr-2` is the gap to the counts.
+          className={`${HEAD_BUTTON_CLASS} !pr-2 items-center before:absolute before:inset-0 before:rounded-md before:content-['']`}
         >
-          <ChevronRight size={11} />
-        </span>
-        {/* The top of the project's cord, which hangs from this square behind every band name's glyph and
-            thread row's indicator under it (ThreadConnector). */}
-        <span data-xq-indicator className={`${INDICATOR_SLOT} ${project.stale ? "grayscale" : ""}`}>
-          <ProjectSquare project={project.card ?? squareCard(project)} size={16} />
-        </span>
-        <span className={`flex min-w-0 flex-1 items-baseline text-[13px] leading-[19px] font-semibold ${busy ? "text-fg" : "text-fg/70"}`}>
-          <span className="min-w-0 truncate">{project.name}</span>
-        </span>
-      </button>
+          {/* THE DISCLOSURE, in the gutter the rail's scroll marker uses — where the rail's own collapsible
+              band headers kept theirs, so the list folds the way the rail did. Only while it means
+              something: on hover (and always on touch), and HELD whenever the project is not as it starts —
+              a busy project folded away (pointing right), a quiet one showing the rest (turned down). A busy
+              project open, the usual case, draws none, so the list is not a column of chevrons. */}
+          <span
+            aria-hidden
+            data-xq-project-chevron
+            className={`pointer-events-none absolute left-[4.5px] top-0.5 flex h-[19px] items-center text-muted-60 transition-[opacity,transform] ${unfolded ? "rotate-90" : ""} ${
+              (busy ? collapsed : opened.length > 0) ? "opacity-100" : "opacity-0 group-hover:opacity-100 group-has-[:focus-visible]:opacity-100 [@media(hover:none)]:opacity-100"
+            }`}
+          >
+            <ChevronRight size={11} />
+          </span>
+          {/* The top of the project's cord, which hangs from this square behind every band name's glyph and
+              thread row's indicator under it (ThreadConnector). */}
+          <span data-xq-indicator className={`${INDICATOR_SLOT} ${project.stale ? "grayscale" : ""}`}>
+            <ProjectSquare project={project.card ?? squareCard(project)} size={16} />
+          </span>
+          <span className={`flex min-w-0 flex-1 items-baseline text-[13px] leading-[19px] font-semibold ${busy ? "text-fg" : "text-fg/70"}`}>
+            <span className="min-w-0 truncate">{project.name}</span>
+          </span>
+        </button>
+      )}
       {/* The right edge, beside the fold rather than inside it: the counts are buttons of their own. On a
           touch screen the "…" never hides, so they step left of it rather than under it. */}
       <div className="flex shrink-0 items-center gap-2 self-stretch pr-1.5 [@media(hover:none)]:pr-7">

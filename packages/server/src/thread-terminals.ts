@@ -92,7 +92,8 @@ export interface TerminalRunner {
   closeThread(parent: string): Promise<void>
   /** The parent was forgotten (dismissed): stop its terminals and drop them — nothing is left to show them. */
   forgetThread(parent: string): Promise<void>
-  /** The confirmation dialog's list: this thread's terminals whose process is still alive. */
+  /** The confirmation dialog's list: this thread's terminals still running something — alive, and not an
+   *  interactive shell idle at its own prompt (`shellIdle`). */
   live(parent: string): ThreadTerminal[]
   /** The /term transport's gate: non-null iff this id is one of this project's terminals. */
   attach(id: string): TerminalAttachment | null
@@ -129,6 +130,23 @@ interface Run {
   promptTimer?: NodeJS.Timeout
   /** An interactive shell sits at its own prompt by design; the input heuristic must never read it. */
   interactive: boolean
+  /** An interactive shell's own foreground-process name, read at spawn — see `shellIdle`. */
+  shellProcess?: string
+}
+
+/** An interactive shell with nothing running in it: the pty's FOREGROUND process is still the shell it
+ *  spawned. node-pty reads that off the terminal's foreground process group (measured on Linux 2026-09-29:
+ *  "/bin/bash" at the prompt, "sleep" / "vim" while one runs, back to "/bin/bash" after), so a `npm run dev`
+ *  typed into the shell reads busy and a bare prompt reads idle. Mark as done still stops an idle shell —
+ *  it just is not work worth a confirmation. On Windows node-pty reports the spawned file whatever runs,
+ *  so a shell there always reads idle. */
+function shellIdle(run: Run | undefined): boolean {
+  if (!run?.interactive || !run.term || run.exited || run.shellProcess === undefined) return false
+  try {
+    return run.term.process === run.shellProcess
+  } catch {
+    return false
+  }
 }
 
 /** True when a screen ENDS ON AN UNTERMINATED LINE with something printed on it — the shape of every
@@ -320,6 +338,7 @@ export function createTerminalRunner(deps: TerminalRunnerDeps): TerminalRunner {
       return
     }
     run.term = term
+    if (interactive) run.shellProcess = term.process
     runs.set(id, run)
     trimReplay(run)
     term.onData((chunk) => {
@@ -510,7 +529,8 @@ export function createTerminalRunner(deps: TerminalRunnerDeps): TerminalRunner {
       if (deps.storage.dropThreadTerminals(parent) > 0) deps.onChange()
     },
     live(parent) {
-      return [...rows().values()].filter((row) => row.parent_slug === parent).map(view).filter((t) => t.state === "running")
+      return [...rows().values()].filter((row) => row.parent_slug === parent).map(view)
+        .filter((t) => t.state === "running" && !shellIdle(runs.get(t.id)))
     },
     attach(id) {
       if (!rows().has(id)) return null

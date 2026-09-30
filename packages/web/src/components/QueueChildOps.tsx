@@ -26,6 +26,7 @@
 import type { ReactNode } from "react"
 import type { ThreadView } from "@frizz/shared"
 import type { Api } from "../api/rpc.ts"
+import { subAgentName } from "../groups.ts"
 import { projectSlug } from "../lib/base-path.ts"
 import { visibleChildOps } from "../lib/childOps.ts"
 import { childOpDismisser } from "../lib/dismissChildOp.ts"
@@ -67,7 +68,7 @@ export function QueueChildOps({ project, thread, api, agents = true, after, onOp
             <ChildOpRow
               key={agent.id ?? `a${i}`}
               kind={agent.workflow ? "WORKFLOW" : "AGENT"}
-              label={agent.label}
+              label={subAgentName(agent.label)}
               state={agent.state}
               density="sheet"
               depth={agent.depth}

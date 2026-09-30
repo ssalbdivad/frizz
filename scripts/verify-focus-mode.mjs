@@ -180,7 +180,10 @@ try {
     // ThreadConnector's own rule (readRail): the square, each band name and each row are strung while they
     // TOUCH and each holds an icon. A name that broke the run, or held no glyph, would cut the cord there.
     const run = await page.$eval(`[data-xq-rail-project="${A.id}"]`, (group) => {
+      // Focused, the project's row draws no square (the page's title names the project — ProjectList.tsx
+      // ProjectRow), so the cord starts at the first name or row under it.
       const links = [...group.querySelectorAll(":scope > [data-xq-project-row], :scope > [data-xq-band-label], :scope > [data-xq-thread-row]")]
+        .filter((el) => !el.matches("[data-xq-project-row]") || el.querySelector("[data-xq-indicator]"))
       let bottom = NaN
       let strung = 0
       for (const el of links) {
@@ -191,7 +194,7 @@ try {
       }
       return { strung, links: links.length, names: group.querySelectorAll(":scope > [data-xq-band-label]").length }
     })
-    check("the cord strings the square, any band name and every row", run.links > 1 && run.strung === run.links, `${run.strung} of ${run.links} strung, ${run.names} names`)
+    check("the cord strings any band name and every row", run.links > 1 && run.strung === run.links, `${run.strung} of ${run.links} strung, ${run.names} names`)
     // And the connector drew it: its strands reach from the square to the last row.
     const span = await page.evaluate((id) => {
       const d = document.querySelector("[data-thread-cords] path")?.getAttribute("d") ?? ""

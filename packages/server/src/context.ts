@@ -24,7 +24,8 @@ import { createPeriodicStatus } from "./periodic-status.ts"
 import { createLiveStatus } from "./live-status.ts"
 import { createThreadNamer, type ThreadNamer } from "./thread-names.ts"
 import { createClaudeOneShot } from "./backend/claude-oneshot.ts"
-import { readTranscript } from "./transcript.ts"
+import { readTranscript, sourceForThread } from "./transcript.ts"
+import { createSpinoffEdgeRecovery, type SpinoffEdgeRecovery } from "./spinoff-edge-recovery.ts"
 import { createTailer, defaultLogDir, type Tailer } from "./tailer.ts"
 import { backgroundShellStoppable, stopBackgroundShell } from "./shell-stop.ts"
 import { createDispatcher, loadWorkerPrompt, scratchpadOrientation, frizzConfigBlock, claudeMcpConfig, resolveFrizzMcp, workerPluginDir, coldResumePermission, workerScratchPath, type Dispatcher, type FrizzMcpTarget } from "./dispatch.ts"
@@ -166,6 +167,10 @@ export interface AppContext {
   // project-wide uniqueness check every title writer runs. Optional so a hand-built test context need
   // not supply one; the router then checks uniqueness against storage alone.
   threadNamer?: ThreadNamer
+  // Recovers a spinoff edge an old MCP server never sent (spinoff-edge-recovery.ts). The router tells it
+  // about each request as it records one, so a parent is read from there rather than from byte 0.
+  // Optional so a hand-built test context need not supply one.
+  spinoffEdges?: SpinoffEdgeRecovery
   // Per-session agent-backend resolver behind the spawn/resume/transcript seam (Codex-support epic).
   // Maps a row's `backend` column (claude|codex) to its AgentBackend; DEFAULTS to claude for any unset/
   // unknown kind, so every existing session and all current behavior are unchanged until a dispatch
@@ -997,6 +1002,27 @@ function createContextUnchecked(opts: ContextOptions, resources: PartialContextR
     claudeModels: peekClaudeModels,
   })
   resources.board = board
+  // A spinoff whose parent's MCP server predated the `spinoff` argument dispatched its child without the
+  // edge; the parent's transcript still proves it (spinoff-edge-recovery.ts). Read on every tick that
+  // grew a parent with a pending spinoff, and once at boot for the rows an earlier server left pending.
+  const spinoffEdges = createSpinoffEdgeRecovery({
+    storage,
+    transcriptOf: (slug) => {
+      const source = sourceForThread(project, storage, slug, backendFor)
+      return source ? { path: source.path, parseLine: (line) => backendFor(source.backend).parseLine(line) } : undefined
+    },
+    onRepaired: (row, childSlug) => {
+      frizzLog.info("server", `spinoff ${row.id}: recovered its thread ${childSlug} from ${row.parent_slug}'s transcript`)
+      board.refresh()
+    },
+  })
+  contextUnsubscribers.push(transcriptChange.on((slugs) => void spinoffEdges.sweep(slugs)))
+  let spinoffBootSweep: ReturnType<typeof setTimeout> | undefined
+  const sweepSpinoffEdgesAtBoot = () => {
+    spinoffBootSweep = spinoffEdges.sweep() ? setTimeout(sweepSpinoffEdgesAtBoot, 0) : undefined
+  }
+  spinoffBootSweep = setTimeout(sweepSpinoffEdgesAtBoot, 0)
+  contextUnsubscribers.push(() => clearTimeout(spinoffBootSweep))
   // The pinned runtime's catalogue, resolved once so the board can say which threads run an older edition
   // than their family now resolves to, and so the upgrade at compaction does not wait for a browser to
   // ask for it first. The board re-derives the moment it lands. Same gate as the quota warm-up: a
@@ -1195,6 +1221,7 @@ function createContextUnchecked(opts: ContextOptions, resources: PartialContextR
     tailer,
     dispatcher,
     threadNamer,
+    spinoffEdges,
     scheduler,
     probePr: probePrReadable,
     probeIssue: probeIssueReadable,

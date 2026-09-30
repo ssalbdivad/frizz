@@ -1,8 +1,12 @@
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react"
 import { useQueryClient } from "@tanstack/react-query"
+import { useSnapshot } from "valtio"
+import type { SubAgentDirectory, ThreadView } from "@frizz/shared"
+import { subAgentTitle } from "../groups.ts"
+import { subAgentDirectoryKey } from "../hooks/useSubAgentDirectory.ts"
 import { useProjectDir, useSubAgentTranscript } from "../hooks.ts"
 import { rpc } from "../api/rpc.ts"
-import { showToast } from "../store.ts"
+import { showToast, store } from "../store.ts"
 import { PROMPT_CONTROL_TYPOGRAPHY_CLASS } from "../lib/promptControlTypography.ts"
 import { subAgentProfileLabel } from "../lib/subAgentProfile.ts"
 import { coalesceToolActivityMessages, historicalToolActivityMessages, liveRuntimeStartedAt, liveToolActivityRun, liveToolActivityTail, toolActivityLabel } from "../lib/toolActivity.ts"
@@ -46,6 +50,18 @@ import { SheetHeader } from "./ui/SheetHeader.tsx"
 // INSTANT OPEN: the frame + header + spinner mount and paint IMMEDIATELY; the heavy transcript body is
 // deferred one frame (bodyReady) so the click→sheet-visible latency isn't gated on parsing/rendering a
 // large transcript. The spinner covers the gap.
+// The header NAMES the child by its address (`portTheParser.cacheKeys`, groups.ts subAgentTitle) — the
+// thing to type after `@` to point another thread at it. Its own component because it reads the BOARD,
+// which is rewritten many times a minute; subscribed here, a board push re-renders one line of header
+// rather than the whole transcript beneath it. A returned child has left the board's live list, so the
+// directory a `@` mention already fetched for this thread (the page's project) is the second source.
+function SubAgentSheetHeader({ slug, subId, label, onClose }: { slug: string; subId: string; label: string; onClose: () => void }) {
+  const snap = useSnapshot(store)
+  const thread = snap.board?.threads.find((t) => t.id === slug) as ThreadView | undefined
+  const known = useQueryClient().getQueryData<SubAgentDirectory>(subAgentDirectoryKey(undefined, slug))?.agents
+  return <SheetHeader title={subAgentTitle(thread, subId, label, known)} onClose={onClose} />
+}
+
 export function SubAgentSheet({
   id,
   slug,
@@ -140,7 +156,7 @@ export function SubAgentSheet({
         <>
           {/* Header shell paints immediately (part of the instant-open shell). Runtime/profile details
               live on the dispatch row that opens this drawer; the drawer header only names the work. */}
-          <SheetHeader title={label} onClose={close} />
+          <SubAgentSheetHeader slug={slug} subId={subId} label={label} onClose={close} />
 
           <div ref={scrollerRef} className="flex-1 min-h-0 overflow-y-auto">
             {unavailable ? (

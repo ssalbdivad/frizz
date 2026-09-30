@@ -1,7 +1,7 @@
 import { test } from "node:test"
 import assert from "node:assert/strict"
 import { workingThread, type ThreadView } from "@frizz/shared"
-import { bandOf, doneButRunning, needsAction, queued, orderQueue, partitionActive, sectionOf, sectionThreads, isSnoozed, sessionIndicatorKind, offersRetry, titleIsProvisional, displayTitle, displayName, threadHandleOf, lastActiveLabelAt, queueLabelAt, queueLabelWord, SPINNING_UP_TITLE, UNTITLED_THREAD_TITLE } from "./groups.ts"
+import { bandOf, doneButRunning, needsAction, queued, orderQueue, partitionActive, sectionOf, sectionThreads, isSnoozed, sessionIndicatorKind, offersRetry, titleIsProvisional, displayTitle, displayName, threadHandleOf, subAgentName, subAgentAddressOf, subAgentTitle, UNNAMED_SUB_AGENT_LABEL, lastActiveLabelAt, queueLabelAt, queueLabelWord, SPINNING_UP_TITLE, UNTITLED_THREAD_TITLE } from "./groups.ts"
 
 // Minimal ThreadView fixture — the same shape board-delta.test.ts uses, defaulting to a live/active
 // thread; each case overrides only the fields under test.
@@ -1307,4 +1307,39 @@ test("bandOf: a pin moves the row, never the band — a pinned thread still says
   const pinnedAt = "2026-09-02T00:00:00.000Z"
   assert.equal(bandOf(thread({ kind: "session", state: "open", runtime: "running", needsYou: false, pinnedAt })), "working")
   assert.equal(bandOf(thread({ kind: "session", state: "open", runtime: "turn-idle", needsYou: true, pinnedAt })), "ready")
+})
+
+// A SUB-AGENT IS NAMED BY ITS HANDLE UNDER ITS THREAD (maintainer 2026-09-30: "subagents accessible as
+// `topLevel.subagent`"): the dispatch name camelCases by the thread rule, and the drawer header reads the
+// whole address down the live dispatch tree.
+test("subAgentName: a dispatch name shows as its handle; a sentence shows as written", () => {
+  assert.equal(subAgentName("Cache keys"), "cacheKeys")
+  assert.equal(subAgentName("impl:W3"), "implW3")
+  assert.equal(subAgentName("fix:r1"), "fixR1")
+  assert.equal(subAgentName("Verify goal caps on a real stack"), "Verify goal caps on a real stack", "six words is a sentence")
+})
+
+test("subAgentAddressOf / subAgentTitle: the full address when the board resolves it, else the name, else the label", () => {
+  const t = thread({
+    titleAuto: false,
+    title: "Port the parser",
+    subAgents: [
+      { id: "k", label: "Cache keys", startedAt: "2026-09-30T11:00:00Z", state: "running" },
+      { id: "wf", label: "wave2", startedAt: "2026-09-30T11:00:00Z", state: "running", workflow: true },
+      { id: "w3", label: "impl:W3", startedAt: "2026-09-30T11:00:00Z", state: "running", parentId: "wf", depth: 2 },
+      { id: "orphan", label: "Deep one", startedAt: "2026-09-30T11:00:00Z", state: "running", parentId: "gone", depth: 3 },
+      { id: "long", label: "Look at every call site of the cap", startedAt: "2026-09-30T11:00:00Z", state: "running" },
+    ],
+  })
+  assert.equal(subAgentAddressOf(t, "k"), "portTheParser.cacheKeys")
+  assert.equal(subAgentAddressOf(t, "w3"), "portTheParser.wave2.implW3", "a Workflow's agent sits one segment further down")
+  assert.equal(subAgentAddressOf(t, "orphan"), undefined, "a parent that has left the board leaves a hole in the address")
+  assert.equal(subAgentAddressOf(t, "long"), undefined, "a sentence has no handle")
+  assert.equal(subAgentAddressOf(thread({ titleAuto: false, title: "Fix the flaky parser test on CI", subAgents: t.subAgents }), "k"), undefined, "no thread handle, no address")
+
+  assert.equal(subAgentTitle(t, "w3", "impl:W3"), "portTheParser.wave2.implW3")
+  assert.equal(subAgentTitle(t, "orphan", "Deep one"), "deepOne", "falls back to the child's own handle")
+  assert.equal(subAgentTitle(t, "long", "Look at every call site of the cap"), "Look at every call site of the cap", "then to the label as written")
+  assert.equal(subAgentTitle(undefined, "gone", "Cap audit", [{ id: "gone", address: "portTheParser.capAudit" }]), "portTheParser.capAudit", "a returned child's address from the directory")
+  assert.equal(subAgentTitle(undefined, "x", UNNAMED_SUB_AGENT_LABEL), UNNAMED_SUB_AGENT_LABEL, "the unnamed stand-in is not camelCased")
 })

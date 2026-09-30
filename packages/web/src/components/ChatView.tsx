@@ -3,12 +3,12 @@ import { createPortal } from "react-dom"
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import { useVirtualizer } from "@tanstack/react-virtual"
 import { AlertTriangle, ArrowDown, ArrowUp, Bot, Check, ChevronRight, FileText, HelpCircle, Hourglass, KeyRound, Loader2, TerminalSquare, X } from "lucide-react"
-import { parseRecurringPrompt, questionFencesLive } from "@frizz/shared"
+import { parseRecurringPrompt, parseSpinoffRequest, questionFencesLive } from "@frizz/shared"
 import type { AskQuestion, AwaitingHint, BgShellView, PendingAsk, RegisteredQuestionView, SubAgentView, ThreadView as ThreadViewData, TranscriptEdit, TranscriptMessage, TranscriptPart, TranscriptTodo, TranscriptToolCall } from "@frizz/shared"
 import { store, threadBySlug, pushDrawer, pushSubAgentDrawer, showToast } from "../store.ts"
 import { useBoard, useProjectDir, useTranscript, type ChatMessage, type TranscriptData } from "../hooks.ts"
 import { rpc } from "../api/rpc.ts"
-import { lastActiveLabelAt } from "../groups.ts"
+import { UNNAMED_SUB_AGENT_LABEL, lastActiveLabelAt, subAgentName } from "../groups.ts"
 import { stripFrontmatter } from "../lib/markdown.ts"
 import { useMarkdownHtml } from "../lib/useMarkdown.ts"
 import { splitComposerValue, splitProseAttachments } from "../lib/imagePaths.ts"
@@ -45,6 +45,7 @@ import { useDeliverQueuedNow, useDeliverQueuedNowSupported } from "../lib/delive
 import { useInnerHtml } from "../lib/innerHtml.ts"
 import { useLocalFileCodeLinks } from "../lib/localFileCode.ts"
 import { lastAskIndex, messagePresentationText } from "../lib/messagePresentation.ts"
+import { startedSpinoffsKey, withoutSpinoffCalls } from "../lib/spinoffCalls.ts"
 import { stampHostFor } from "../lib/stampHost.ts"
 import { ICON_LABEL_NUDGE } from "../lib/iconAlign.ts"
 import { getThemeSnapshot, subscribeTheme } from "../lib/theme.ts"
@@ -95,10 +96,10 @@ export { CARD_BODY, CARD_PRIMARY_BUTTON, CardActions, TranscriptCard } from "./T
 export { QuestionBlockCard } from "./QuestionBlockCard.tsx"
 import { LastActive } from "./LastActive.tsx"
 import { ThreadBandStamp } from "./BandLabel.tsx"
-import { CopyTerminalCommandButton, useCopyTerminalCommand } from "./ExternalTerminalCommand.tsx"
+import { useCopyTerminalCommand } from "./ExternalTerminalCommand.tsx"
 import { SignInModal } from "./SignInModal.tsx"
 import { PROVIDER_LABEL } from "../lib/signIn.ts"
-import { ThreadMenu } from "./ThreadMenu.tsx"
+import { ThreadMenu, ThreadTerminalButton } from "./ThreadMenu.tsx"
 import { ThreadProcessStrip } from "./ThreadTerminals.tsx"
 import { threadProcesses } from "../lib/threadProcesses.ts"
 import { takeFullscreenEnterAnchor } from "../lib/fullscreenHandoff.ts"
@@ -108,7 +109,9 @@ import { withoutRedundantRestDividers } from "../lib/restDividers.ts"
 import { coalesceToolActivityMessages, editedFileCount, historicalToolActivityMessages, isPictureTool, isSettledAsk, isToolActivityException, liveRuntimeStartedAt, liveToolActivityRun, liveToolActivityTail, settledToolActivityLabel, thinkingToolActivityLabel, toolActivityLabel, toolActivityStampAt } from "../lib/toolActivity.ts"
 import { CodexDirectiveCard, MermaidDiagram } from "./CodexRichOutput.tsx"
 import { META_CARD_STEP, PICTURE_STEP, STEP, USER_TAIL_EXTRA, VSpace } from "./rhythm.tsx"
-import { SpinOffBubble, SpinOffButton, SpunOffFrom } from "./SpinOff.tsx"
+import { SpinoffButton, SpinoffCard, SpinoffOf, SpinoffOriginCard } from "./Spinoff.tsx"
+import { ThreadSlugContext } from "./threadSlugContext.ts"
+import { HEADER_ICON_CLASS } from "../lib/headerIcon.ts"
 
 // Answer types moved to lib/questionBlocks.ts (shared by the queue card, the thread view, and the
 // answering controller). Re-exported here so existing importers keep working.
@@ -120,7 +123,9 @@ export type { BlockAnswer, MessageAnswering }
 // sub-agent's own transcript) → AgentBlocks there render as plain (non-live) prompt cards. The QUEUE
 // card also provides this now (maintainer 2026-07-15): its sub-agent blocks go live (spinner +
 // drill-in) AND its done/awaiting fence cards resolve their thread to show the confirm button.
-export const ThreadSlugContext = createContext<string | null>(null)
+// (Declared in its own module so a component ChatView renders — the spinoff cards — can read it without
+// importing ChatView back.)
+export { ThreadSlugContext }
 
 // The slug a rendered SUB-AGENT REFERENCE resolves its drill-in against, for message trees that are
 // NOT the thread's own transcript. Only the sub-agent drawer sets it (with the PARENT thread's slug),
@@ -227,7 +232,11 @@ function ChatView({ slug, virtualized }: { slug: string; virtualized: boolean })
   // useLiveAnswering's `liveMsg` identity check compares objects from THIS same list.
   const messages = useMemo(() => q.data?.messages ?? [], [q.data])
   const liveTranscriptShells = useMemo(() => transcriptBackgroundShells(messages), [messages])
-  const presentationMessages = useMemo(() => withoutLiveTranscriptBackgroundTools(messages), [messages])
+  // …minus the `spawn_thread` call behind each spinoff card that STARTED its thread, which the card
+  // already stands for — a failed or unrecorded one keeps its line (lib/spinoffCalls.ts). Keyed on the
+  // string of started request ids, not on `thread`, which is a new object on every board push.
+  const startedSpinoffs = startedSpinoffsKey(thread)
+  const presentationMessages = useMemo(() => withoutSpinoffCalls(withoutLiveTranscriptBackgroundTools(messages), startedSpinoffs), [messages, startedSpinoffs])
   // Cut over presentationMessages, not messages: the coalesced entries below carry a messageIndex into
   // THIS list, and comparing the two index spaces is how a live fence gets marked settled.
   const lastAgentIdx = useMemo(() => lastAssistantIndex(presentationMessages), [presentationMessages])
@@ -517,7 +526,6 @@ function ChatView({ slug, virtualized }: { slug: string; virtualized: boolean })
                     staleAwaiting={awaitingCut >= 0 && messageIndex < awaitingCut}
                     restingCardShown={messageIndex === lastAgentIdx && restingShown}
                     shadowedBy={shadowedByMessage.get(messageIndex)}
-                    thread={thread}
                   />
                 )
               },
@@ -1476,14 +1484,7 @@ function VirtualizedThreadTranscript({
               // a turn was recorded on, and three shapes recorded as the human's end on text ink
               // rather than a bubble: a frizz wake, a recurring-prompt line and a sub-agent's report,
               // all three hairline dividers. See lib/stampHost.ts.
-              <MessageRow
-                at={row.stampAt}
-                host={stampHostFor(row.message, paired[row.messageIndex])}
-                gap={row.gap}
-                action={spinOffSource(row.message, thread) && thread ? (
-                  <SpinOffButton thread={thread} sourceId={row.message.sourceId ?? ""} excerpt={spinOffSource(row.message, thread)!} />
-                ) : undefined}
-              >
+              <MessageRow at={row.stampAt} host={stampHostFor(row.message, paired[row.messageIndex])} gap={row.gap}>
                 <Message
                   m={row.message}
                   answering={fencesLive ? answeringForMessage(row.message) : undefined}
@@ -1492,7 +1493,6 @@ function VirtualizedThreadTranscript({
                   staleAwaiting={awaitingCut >= 0 && row.messageIndex < awaitingCut}
                   restingCardShown={row.messageIndex === lastAgentIdx && restingShown}
                   shadowedBy={shadowedByMessage.get(row.messageIndex)}
-                  thread={thread}
                 />
               </MessageRow>
             ) : row.kind === "runtime-status" ? (
@@ -1562,24 +1562,6 @@ function JumpToLatest({ overlay, hidden, onJump }: { overlay: HTMLElement | null
 // The thread's top bar: title and — at the far right — the shared non-lifecycle HeaderActions. Snooze
 // and Archive stay in the persistent thread footer. Owned sessions expose a command-copy icon; foreign
 // rows do not. It carried a Chat|Doc tab strip until 2026-08-06; see ThreadView for why that went.
-// WHICH MESSAGES A NEW THREAD CAN BE SPUN OFF FROM, and the text it would quote: the human's own words and
-// the agent's prose — never frizz's wakes, a sub-agent's report, a queued send, or a request that is itself
-// a spin-off. Only a live frizz session thread takes one; a foreign row has no worker of ours to brief it.
-function spinOffSource(m: ChatMessage, thread: ThreadViewData | undefined): string | undefined {
-  if (!thread || thread.kind !== "session" || thread.foreign === true || !thread.sessionId) return undefined
-  if (m.kind || m.providerError || m.queued || !m.sourceId) return undefined
-  if (m.role === "user") {
-    if (m.wake || m.peerFrom || m.spinOff || m.agentInstruction) return undefined
-    const text = messagePresentationText(m).trim()
-    return text || undefined
-  }
-  if (agentCompletionCall(m)) return undefined
-  const text = m.parts && m.parts.length > 0
-    ? m.parts.flatMap((p) => (p.kind === "tools" ? [] : [p.text])).join("\n\n").trim()
-    : m.text.trim()
-  return text || undefined
-}
-
 export function ThreadHeader({ slug, onStatusApplied, onClose, showReturnToQueue = false }: { slug: string; onStatusApplied?: () => void; onClose?: () => void; showReturnToQueue?: boolean }) {
   const board = useBoard()
   const thread = threadBySlug(board, slug)
@@ -1592,7 +1574,6 @@ export function ThreadHeader({ slug, onStatusApplied, onClose, showReturnToQueue
   const docQ = useQuery({ queryKey: ["threadBody", slug], queryFn: () => rpc.threadBody({ slug }) })
   const hasDoc = stripFrontmatter(docQ.data?.markdown ?? "").trim().length > 0
   if (!thread) return null
-  const showTerminalCommand = thread.kind === "session" && thread.foreign !== true
   return (
     <header
       data-thread-header
@@ -1622,8 +1603,9 @@ export function ThreadHeader({ slug, onStatusApplied, onClose, showReturnToQueue
             />
             {/* Where the agent is working, only when that is off the project root (a worktree, or another folder). */}
             <ThreadCheckoutToken checkout={thread.checkout} homeDir={board?.homeDir} lead={<span aria-hidden className="shrink-0 opacity-60">·</span>} />
+            {/* A spinoff child's way back, ahead of the status line that takes the rest of the row. */}
+            <SpinoffOf thread={thread} lead={<span aria-hidden className="shrink-0 opacity-60">·</span>} />
             <ThreadStatusLine thread={thread} lead={<span aria-hidden className="shrink-0 opacity-60">·</span>} />
-            <SpunOffFrom thread={thread} lead={<span aria-hidden className="shrink-0 opacity-60">·</span>} />
           </div>
         </div>
       </div>
@@ -1631,11 +1613,11 @@ export function ThreadHeader({ slug, onStatusApplied, onClose, showReturnToQueue
           clickable title and its activity stamp readable instead of competing with fixed-width
           tabs/actions, while the control row itself remains a single unbroken cluster. */}
       <div className={THREAD_HEADER_CONTROLS_CLASS}>
-        {/* `gap-0.5` — the action strip's own distance, so the copy button and HeaderActions' icons
-            read as one row. With no gap at all this button sat 17.75px of ink from its neighbour where
-            the rest of the strip kept 20.25 and 21.5 (`scripts/ink-gaps.mjs` --dsf=4, real drawer). */}
+        {/* `gap-0.5` — the action strip's own distance, so HeaderActions' icons and the menu's read as
+            one row. */}
         <div className="flex shrink-0 items-center gap-0.5">
-          {showTerminalCommand && <CopyTerminalCommandButton slug={slug} />}
+          <ThreadTerminalButton slug={slug} />
+          <SpinoffButton thread={thread} className={HEADER_ICON_CLASS} />
           <HeaderActions
             thread={thread}
             // The /full page is the one surface with a fullscreen to LEAVE, and it leaves through the
@@ -1643,14 +1625,15 @@ export function ThreadHeader({ slug, onStatusApplied, onClose, showReturnToQueue
             collapse={showReturnToQueue}
             // …and the drawer, the one surface with a fullscreen to ENTER, through that same slot.
             expand={Boolean(onClose)}
-            onDoc={hasDoc ? () => pushDrawer("doc", thread.id) : undefined}
             onDone={() => markComplete.mutate(undefined, { onSuccess: onStatusApplied })}
             doneBusy={markComplete.isPending}
             onStatusApplied={onStatusApplied}
           />
-          {/* The drawer's own menu, and in it the one way to /full (ThreadMenu.tsx). Only where there is
-              a drawer to leave: the /full page is already there, and leaves by HeaderActions `collapse`. */}
-          {onClose && <ThreadMenu slug={slug} />}
+          {/* The ⋯ menu (ThreadMenu.tsx), which holds the rarer verbs. */}
+          <ThreadMenu
+            thread={thread}
+            onDoc={hasDoc ? () => pushDrawer("doc", thread.id) : undefined}
+          />
         </div>
         {/* Close-X for the DRAWER context (onClose passed by ThreadSheet) — parity with the Settings,
             sub-agent, and Doc drawers, all of which carry a corner "Close". Wired to the SAME animated
@@ -3297,7 +3280,11 @@ function UserBubble({ text, rawText, queued, deliveryUnconfirmed, deliveryId, so
 // with explicit spacers, and a card that renders null still spent one — a 14px gap dangling under the
 // prose, above the resting card (maintainer 2026-08-28, with a screenshot of the gap). Only the last
 // agent message ever carries it, so the memo boundary holds for every other row.
-export const Message = memo(function Message({ m, answering, dense, paired, showSendButton, staleAwaiting, shadowedBy, thread, restingCardShown }: { m: ChatMessage; answering?: MessageAnswering; dense?: boolean; paired?: PairedAnswer[] | null; showSendButton?: boolean; staleAwaiting?: boolean; shadowedBy?: readonly RegisteredQuestionView[]; thread?: ThreadViewData; restingCardShown?: boolean }) {
+//
+// NO `thread` PROP. It was passed for the spinoff card alone, and a thread object is new on every board
+// tick, so it re-rendered every row of a running thread's transcript many times a minute for the sake of
+// one card. The spinoff cards read the board themselves (Spinoff.tsx useTranscriptThread).
+export const Message = memo(function Message({ m, answering, dense, paired, showSendButton, staleAwaiting, shadowedBy, restingCardShown }: { m: ChatMessage; answering?: MessageAnswering; dense?: boolean; paired?: PairedAnswer[] | null; showSendButton?: boolean; staleAwaiting?: boolean; shadowedBy?: readonly RegisteredQuestionView[]; restingCardShown?: boolean }) {
   // ANSWERING ON A PHONE happens in a sheet, one question at a time (MobileAnswerSheet) — the cards in
   // the transcript stay READ-ONLY there, so the questions are still visible in the context that
   // produced them but a 44pt-thumb answer never has to land on a 24pt chip inside a scrolling message.
@@ -3349,8 +3336,18 @@ export const Message = memo(function Message({ m, answering, dense, paired, show
     // It is settled first because it is not a child: no report verb, no drawer, and a body to keep.
     if (m.peerSession && m.peerFrom) return <PeerSessionMessageLine from={m.peerFrom} unnamed={m.peerUnnamed} text={text} sourceId={m.sourceId} at={m.at} />
     if (m.peerFrom) return <SubAgentReportLine from={m.peerFrom} unnamed={m.peerUnnamed} dispatchId={m.peerDispatchId} sourceId={m.sourceId} at={m.at} />
-    // A SPIN-OFF REQUEST: the human's instructions for a new thread, not the brief frizz handed the worker.
-    if (m.spinOff) return <SpinOffBubble id={m.spinOff.id} instructions={m.spinOff.instructions} excerpt={m.spinOff.excerpt} spinOffs={thread?.spinOffs} sourceId={m.sourceId} />
+    // A SPINOFF REQUEST: the human's instructions for a new thread, not the brief Frizz handed the worker.
+    // `m.spinoff` is the server's tell on a transcript turn. A send the transcript has not echoed yet
+    // arrives from the delivery ledger as its RAW text — the whole `<spinoff-request>` envelope — so it is
+    // read here too, or the brief to the worker printed at the human as a gray bubble until the echo.
+    // The ledger's word on the send rides along whole (2026-09-30, review): its state is what tells a
+    // send with no receipt from one in progress, and its id is what a queued request is taken back by —
+    // the two things the gray bubble this card replaced already did.
+    const spinoff = m.spinoff ?? parseSpinoffRequest(m.text)
+    if (spinoff) return <SpinoffCard id={spinoff.id} instructions={spinoff.instructions} at={m.at} queued={m.queued} deliveryState={m.deliveryState} deliveryId={m.deliveryId} rawText={m.text} sourceId={m.sourceId} />
+    // A SPINOFF CHILD'S FIRST TURN: the human's instructions, and the parent worker's brief folded
+    // beneath them — never one bubble holding both, since the brief is not the human speaking.
+    if (m.spinoffOrigin) return <SpinoffOriginCard instructions={m.spinoffOrigin.instructions} context={m.spinoffOrigin.brief.trim() ? <ProseHtml md={m.spinoffOrigin.brief} wrap /> : null} sourceId={m.sourceId} />
     // `rawText` rides alongside the presentation text because the two differ: the bubble shows the
     // stripped/normalized copy, while the optimistic cache entry an unqueue has to evict is keyed on
     // the message's own raw text.
@@ -4101,7 +4098,7 @@ export function BackgroundOpsStrip({
         <ChildOpRow
           key={`a${i}`}
           kind={s.workflow ? "WORKFLOW" : "AGENT"}
-          label={s.label}
+          label={subAgentName(s.label)}
           state={s.state}
           density="sheet"
           // The INDENT reading (see childOpSubtree): inside a sub-agent drawer a row's distance is
@@ -4210,6 +4207,9 @@ export function PendingAskCard({ ask, onTerminal }: { ask: PendingAsk; onTermina
 function AgentCompletionLine({ call, sourceId, at }: { call: TranscriptToolCall; sourceId?: string; at?: string }) {
   const slug = useChildDrillSlug()
   const title = call.detail ?? "sub-agent"
+  // The quoted slot shows the child's HANDLE (`cacheKeys`), as every row that names a child does
+  // (groups.ts subAgentName); the dispatch's own words stay on the hover and go to the drawer.
+  const name = call.detail ? subAgentName(call.detail) : title
   const { tail } = subAgentCompletionOutcome(call)
   const canDrill = !!(slug && call.agentId)
   const noun = call.name === "Workflow" ? "Workflow" : "Sub-agent"
@@ -4227,16 +4227,16 @@ function AgentCompletionLine({ call, sourceId, at }: { call: TranscriptToolCall;
           <button
             type="button"
             data-subagent-completion-open
-            title={CHILD_OPEN_TITLE.AGENT}
+            title={name === title ? CHILD_OPEN_TITLE.AGENT : `${CHILD_OPEN_TITLE.AGENT} — ${title}`}
             aria-label={`${CHILD_OPEN_TITLE.AGENT}: ${title}`}
             onClick={() => pushSubAgentDrawer(slug!, call.agentId!, { label: title, subagentType: call.subagentType })}
             onMouseDown={(e) => e.preventDefault()}
             className="min-w-0 truncate rounded-sm underline decoration-muted/30 underline-offset-2 outline-none transition-colors hover:text-fg hover:decoration-fg/60 focus-visible:text-fg focus-visible:ring-1 focus-visible:ring-focus-ink-60"
           >
-            {title}
+            {name}
           </button>
         ) : (
-          <span className="min-w-0 truncate">{title}</span>
+          <span className="min-w-0 truncate" title={name === title ? undefined : title}>{name}</span>
         )}
         <span className="shrink-0">»</span>
       </span>
@@ -4279,6 +4279,8 @@ function SubAgentReportLine({ from, unnamed, dispatchId, sourceId, at }: { from:
   // borrowed one. The cell stays in the tooltip, where it is a fact about the child rather than its
   // identity, and the drill-in survives: the word "Sub-agent" carries the link.
   const label = unnamed ? undefined : from
+  // Shown as the child's handle, like the completion line above; `label` itself still titles the drawer.
+  const name = label === undefined ? undefined : subAgentName(label)
   const openTitle = unnamed && from ? `${CHILD_OPEN_TITLE.AGENT} — ${from}` : CHILD_OPEN_TITLE.AGENT
   // ONE element for the whole unnamed reading, never a "Sub-agent" span plus the shared trailing verb.
   // The divider's flex `gap` is 12px — a full em at its 12px petite-caps — because it was tuned to stand
@@ -4293,7 +4295,7 @@ function SubAgentReportLine({ from, unnamed, dispatchId, sourceId, at }: { from:
             data-subagent-report-open
             title={openTitle}
             aria-label={`${CHILD_OPEN_TITLE.AGENT}${from ? `: ${from}` : ""}`}
-            onClick={() => pushSubAgentDrawer(slug!, dispatchId!, { label: "Sub-agent", subagentType: from })}
+            onClick={() => pushSubAgentDrawer(slug!, dispatchId!, { label: UNNAMED_SUB_AGENT_LABEL, subagentType: from })}
             onMouseDown={(e) => e.preventDefault()}
             className="shrink-0 rounded-sm underline decoration-muted/30 underline-offset-2 outline-none transition-colors hover:text-fg hover:decoration-fg/60 focus-visible:text-fg focus-visible:ring-1 focus-visible:ring-focus-ink-60"
           >
@@ -4322,16 +4324,16 @@ function SubAgentReportLine({ from, unnamed, dispatchId, sourceId, at }: { from:
           <button
             type="button"
             data-subagent-report-open
-            title={CHILD_OPEN_TITLE.AGENT}
+            title={name === label ? CHILD_OPEN_TITLE.AGENT : `${CHILD_OPEN_TITLE.AGENT} — ${label}`}
             aria-label={`${CHILD_OPEN_TITLE.AGENT}: ${label}`}
             onClick={() => pushSubAgentDrawer(slug!, dispatchId!, { label, subagentType: from })}
             onMouseDown={(e) => e.preventDefault()}
             className="min-w-0 truncate rounded-sm underline decoration-muted/30 underline-offset-2 outline-none transition-colors hover:text-fg hover:decoration-fg/60 focus-visible:text-fg focus-visible:ring-1 focus-visible:ring-focus-ink-60"
           >
-            {label}
+            {name}
           </button>
         ) : (
-          <span className="min-w-0 truncate">{label}</span>
+          <span className="min-w-0 truncate" title={name === label ? undefined : label}>{name}</span>
         )}
         <span className="shrink-0">»</span>
       </span>
@@ -4423,6 +4425,9 @@ function SendMessageLine({ to, type, dispatchId, targetLabel, sourceId, at }: { 
   // `to === "main"` is an upward report, whose recipient is the conversation itself — there is no title
   // worth showing and nothing to drill into, so the divider states the verb alone.
   const title = to === "main" ? undefined : (targetLabel ?? to)
+  // A resolved dispatch description shows as the child's handle, like the completion and report lines;
+  // a raw `to` (a codex peer target, an id) is an identifier already and stays as written.
+  const name = targetLabel && title === targetLabel ? subAgentName(targetLabel) : title
   const canDrill = !!(slug && dispatchId)
   return (
     <WakeDivider icon={Bot} sourceId={sourceId} marker="agent-steer" ariaLabel={canDrill ? undefined : `${verb}${title ? ` ${title}` : ""}`} at={at}>
@@ -4437,16 +4442,16 @@ function SendMessageLine({ to, type, dispatchId, targetLabel, sourceId, at }: { 
             <button
               type="button"
               data-subagent-steer-open
-              title={CHILD_OPEN_TITLE.AGENT}
+              title={name === title ? CHILD_OPEN_TITLE.AGENT : `${CHILD_OPEN_TITLE.AGENT} — ${title}`}
               aria-label={`${CHILD_OPEN_TITLE.AGENT}: ${title}`}
               onClick={() => pushSubAgentDrawer(slug!, dispatchId!, { label: title })}
               onMouseDown={(e) => e.preventDefault()}
               className="min-w-0 truncate rounded-sm underline decoration-muted/30 underline-offset-2 outline-none transition-colors hover:text-fg hover:decoration-fg/60 focus-visible:text-fg focus-visible:ring-1 focus-visible:ring-focus-ink-60"
             >
-              {title}
+              {name}
             </button>
           ) : (
-            <span className="min-w-0 truncate">{title}</span>
+            <span className="min-w-0 truncate" title={name === title ? undefined : title}>{name}</span>
           )}
           <span className="shrink-0">»</span>
         </span>

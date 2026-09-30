@@ -21,8 +21,9 @@ const render = (props: Partial<Parameters<typeof QueueChildOps>[0]> = {}) =>
 test("the card's ops column lists every sub-agent and Workflow, in the drawer's row shape, and no shell", () => {
   const html = render()
   assert.match(html, /data-queue-ops="parent"/)
-  // Dispatch order, a workflow's agents under it — the drawer strip's order.
-  const order = ["Verify goal caps on a real stack", "verify-wave", "verify:S8:0.1", "Quiet one"].map((label) => html.indexOf(label))
+  // Dispatch order, a workflow's agents under it — the drawer strip's order. An agent row shows its handle
+  // (a six-word sentence has none and stays as written).
+  const order = [">Verify goal caps on a real stack<", ">verifyWave<", ">verifyS801<", ">quietOne<"].map((label) => html.indexOf(label))
   assert.ok(order.every((at, i) => at > 0 && (i === 0 || at > order[i - 1]!)), `order ${order}`)
   // The drawer's "sheet" density: kind tags, the live dots, and the stale child still listed.
   for (const tag of [">AGENT<", ">FLOW<"]) assert.ok(html.includes(tag), tag)
@@ -42,7 +43,7 @@ test("while the awaiting card lists the children, nothing of its own is left her
 test("the card's strip hangs in this column under the agents, once", () => {
   const strip = createElement("div", { "data-strip": "" }, "TERM rows")
   const html = render({ after: strip })
-  assert.ok(html.indexOf("Quiet one") < html.indexOf("data-strip"), "the strip hangs under the agent rows")
+  assert.ok(html.indexOf(">quietOne<") > 0 && html.indexOf(">quietOne<") < html.indexOf("data-strip"), "the strip hangs under the agent rows")
   assert.match(render({ agents: false, after: strip }), /^<div class="-mt-3 shrink-0 px-5 pb-3" data-queue-ops="parent">[\s\S]*data-strip/, "the strip alone still gets the column")
   assert.equal(render({ agents: false, after: null }), "", "nothing to draw ⇒ no empty inset")
 })

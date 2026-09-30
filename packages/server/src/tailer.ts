@@ -3,7 +3,7 @@ import { execFile } from "node:child_process"
 import { promisify } from "node:util"
 import { basename, dirname, isAbsolute, join, resolve, win32 } from "node:path"
 import { homedir, tmpdir } from "node:os"
-import type { AskQuestion, AwaitingHint, WorkCheckout } from "@frizz/shared"
+import type { AskQuestion, AwaitingHint, SubAgentDirectoryEntry, WorkCheckout } from "@frizz/shared"
 import { insideFence, isAllInjectedNoise, isInterruptMarker, isWakeDelivery, parseAskUserQuestionInput, PermissionMode, questionFencesLive, saysAllDone, splitAwaitingFrontmatter } from "@frizz/shared"
 import type { Bus } from "./bus.ts"
 import { permMarkerPath, workDirOf, type Project } from "./project.ts"
@@ -47,6 +47,7 @@ import { threadNameProblem } from "./thread-names.ts"
 import { readWorkflowRun, workflowAgentState as sharedWorkflowAgentState, workflowAckRunDir, workflowAckTaskId, workflowLabel, type WorkflowAgent } from "./workflow-runs.ts"
 import { transcriptQuietPast } from "./pending-call.ts"
 import { processAwakeClock, wallSpan } from "./awake-clock.ts"
+import { claudeSideTurnSteps, foldSideTurn, hiddenSideTurnRest, normalizedSideTurnSteps, sideTurnRunning, type SideTurn } from "./spinoff-side-turn.ts"
 
 // The JSONL tailer: incrementally reads each registered session's Claude Code transcript
 // (~/.claude/projects/<cwdSlug>/<session_id>.jsonl) to derive liveness telemetry — last activity
@@ -467,6 +468,11 @@ export interface SessionTelemetry extends NormalizedTail {
   noTranscript?: boolean
   contextTokens?: number // tokens the model's last request carried (see FoldState.contextTokens)
   contextWindow?: number // the context size this session RUNS IN (see FoldState.contextWindow)
+  // The spinoff side turn in progress, or the one that ended last until the next turn closes it — the
+  // RAW reading, hidden or not (spinoff-side-turn.ts). Server-internal: the board reads it to take an
+  // archived or snoozed parent out of Done/Snoozed once its side turn stops being quietly clean
+  // (board.ts surfaceSideTurn), because the request's delivery deliberately left the row where it was.
+  sideTurn?: SideTurn
 }
 
 // One tracked live background sub-agent, keyed in TailState by its dispatch tool_use id (the
@@ -2118,6 +2124,13 @@ function clearAskOnResult(state: TailState, rec: Record): void {
 // Fold one record into the running derivation. Only assistant/user records are "substantive" (they
 // move the turn state); assistant/user/system records with a timestamp advance lastActivityAt.
 export function applyRecord(state: TailState, rec: Record): void {
+  // THE SPINOFF SIDE TURN, read before anything below moves: a request's rest is saved as the request
+  // found it, and a hidden side turn's rest is put back before the next turn's record touches it (see
+  // spinoff-side-turn.ts). A state the tail cache restored from a build that predates the reading starts
+  // it from the turn it already folded — a promoted artifact's fold digest is a constant, so such a cache
+  // is not invalidated — rather than reading its first request as mid-turn.
+  if (!state.sideTurn && state.sawRecords) state.sideTurn = { resting: state.lastKind === "assistant" && state.lastStopReason === "end_turn" }
+  foldSideTurn(state, claudeSideTurnSteps(rec))
   const type = rec.type
   // A `type:"user"` record with promptSource:"system" is a peer (SendMessage) message or a sub-agent
   // <task-notification> — NOT a human turn. It DOES re-invoke the agent (the model wakes to process
@@ -2369,6 +2382,12 @@ export function applyEvent(state: FoldState, ev: NormalizedEvent): void {
   // is the exception: it is telemetry that always RIDES a real event which moves the clock itself, so
   // letting it move the clock would only add a way for pure bookkeeping to mask a stall.
   if ("at" in ev && typeof ev.at === "string" && ev.kind !== "context-usage") state.lastActivityAt = ev.at
+  // The spinoff side turn, ahead of the switch for applyRecord's reason (spinoff-side-turn.ts). ACP's
+  // transcript folds through here too, so all three providers read side turns one way — and an ACP row
+  // can come back from the tail cache (Codex never does), so a state folded before the reading existed
+  // starts it from the turn it already knows, as applyRecord's does.
+  if (!state.sideTurn && state.sawRecords) state.sideTurn = { resting: state.turn === "idle" && state.providerError === undefined }
+  foldSideTurn(state, normalizedSideTurnSteps(ev))
   switch (ev.kind) {
     case "provider-error":
       state.sawRecords = true
@@ -2593,6 +2612,9 @@ export interface SubAgentLookup {
   workflowAgent?: true // the id names one AGENT of a workflow run, resolved through its run's journal
 }
 
+/** One row of a thread's sub-agent directory — the shared entry minus its address. */
+export type SubAgentDirectoryRecord = Omit<SubAgentDirectoryEntry, "address">
+
 export interface Tailer {
   get(slug: string): SessionTelemetry | undefined
   // FOREIGN session ids (JSONL files in the project dir with no registry row — maintainer terminals)
@@ -2618,6 +2640,10 @@ export interface Tailer {
   // `taskId` is the provider's session-wide background-task handle. Unlike `direct`, which controls
   // steer safety, it is available for descendants too and is what the SDK's stopTask accepts.
   subAgent(slug: string, id: string): SubAgentLookup | undefined
+  // EVERY sub-agent the thread ever dispatched, live first and then finished newest first, each a row the
+  // drawer can open by `id` — the `subAgentDirectory` RPC (addresses are the router's: it holds the
+  // thread's name). Optional so a narrow test stub may omit it; absent reads as "no sub-agents".
+  subAgentDirectory?(slug: string): SubAgentDirectoryRecord[]
   // Resolve a child by its RUNTIME agent id — the identity an upward report names its sender with. The
   // paged transcript RPC folds a bounded window and therefore cannot always translate that id itself;
   // this answers for as long as the tailer tracks the child. Optional so a narrow test stub may omit it
@@ -3873,6 +3899,104 @@ export function createTailer(deps: TailerDeps): Tailer {
       if (out.length > 0) subtrees.set(rootId, out)
     }
     return remember(subtrees)
+  }
+
+  // EVERY SUB-AGENT THIS THREAD EVER DISPATCHED (maintainer 2026-09-30: "some subagents are transient so
+  // probably we want to maintain some history of completed subagents so we can reference the thread if
+  // needed"). The board lists only LIVE children; this is what `@thread.subAgent` resolves against, in
+  // the prompt box's completion and in `read_thread`, once a child has returned as well as while it runs.
+  //
+  // Frizz keeps NO history of its own for this, because the provider already does, durably: every
+  // Claude sub-agent at every depth writes a sidecar (name, dispatch id, parent) and its transcript into
+  // the session's flat `subagents/` dir at spawn, and neither is ever deleted — so a child that returned
+  // an hour, or a restart, ago is still on disk exactly as it ran, for as long as Claude keeps the
+  // session. The union, in order of authority:
+  //   · the LIVE views the board shows (subAgentViews), in the board's order — running, stale, rested;
+  //   · every agent of a Workflow run, live or retained, off its own journal, finished ones included;
+  //   · the RETAINED ring — finished direct children and Workflow runs, with how and when each ended;
+  //   · the flat SIDECAR index — everything else, which is what makes this a history and not a ring.
+  // Live rows lead; the finished ones follow newest first, since "the review" means the latest review.
+  function subAgentDirectory(slug: string): SubAgentDirectoryRecord[] {
+    const state = states.get(slug)
+    if (!state || !registeredStateIsCurrent(state)) return []
+    const nowMs = now()
+    const live: SubAgentDirectoryRecord[] = []
+    const done: SubAgentDirectoryRecord[] = []
+    const seen = new Set<string>()
+    const add = (row: SubAgentDirectoryRecord) => {
+      if (seen.has(row.id)) return
+      seen.add(row.id)
+      ;(row.state === "done" ? done : live).push(row)
+    }
+    const iso = (ms: number | undefined) => (ms === undefined ? {} : { startedAt: new Date(ms).toISOString() })
+    const runAgents = (parentId: string, runDir: string, runLive: boolean) => {
+      for (const agent of readWorkflowRun(runDir)) {
+        const agentState = workflowAgentState(agent, runLive, nowMs)
+        const finished = agentState === "done" || agentState === "failed"
+        add({
+          id: agent.agentId,
+          label: agent.label,
+          parentId,
+          depth: 2,
+          state: finished ? "done" : agentState,
+          ...(agentState === "failed" ? { outcome: "failed" as const } : {}),
+          ...iso(agent.startedAtMs),
+        })
+      }
+    }
+    for (const view of subAgentViews(state, nowMs)) {
+      if (!view.id) continue
+      add({
+        id: view.id,
+        label: view.label,
+        ...(view.parentId ? { parentId: view.parentId } : {}),
+        depth: view.depth ?? 1,
+        state: view.state,
+        startedAt: view.startedAt,
+        ...(view.workflow ? { workflow: true } : {}),
+        ...(view.subagentType ? { subagentType: view.subagentType } : {}),
+      })
+    }
+    for (const e of state.subAgents.values()) if (e.kind === "agent" && e.workflow?.runDir) runAgents(e.toolUseId, e.workflow.runDir, true)
+    for (const dead of [...state.retiredSubAgents.values()].reverse()) {
+      add({
+        id: dead.toolUseId,
+        label: dead.label,
+        depth: 1,
+        state: "done",
+        outcome: dead.status,
+        ...(dead.startedAt ? { startedAt: dead.startedAt } : {}),
+        ...(dead.finishedAt ? { finishedAt: dead.finishedAt } : {}),
+        ...(dead.workflow ? { workflow: true } : {}),
+        ...(dead.subagentType ? { subagentType: dead.subagentType } : {}),
+      })
+      if (dead.workflow?.runDir) runAgents(dead.toolUseId, dead.workflow.runDir, false)
+    }
+    const sidecars = descendantSidecars(state)
+    const dispatchOf = new Map(sidecars.flatMap((meta) => (meta.toolUseId ? [[meta.agentId, meta.toolUseId] as const] : [])))
+    for (const meta of sidecars) {
+      if (!meta.toolUseId) continue
+      const parentId = meta.parentAgentId ? dispatchOf.get(meta.parentAgentId) : undefined
+      // A link to a parent with no sidecar of its own cannot be placed in the tree, and a row placed at
+      // the top would claim the THREAD dispatched it. Left out rather than misfiled.
+      if (meta.parentAgentId && !parentId) continue
+      // A direct child missing from the live map and the ring has returned and aged out of the ring. A
+      // deeper one has no retirement signal of its own, so its liveness is the descendant reading — but a
+      // quiet one is history here, not "stale" work: nothing surfaced it as live.
+      const running = meta.parentAgentId !== undefined && descendantState(state, meta) === "running"
+      add({
+        id: meta.toolUseId,
+        label: meta.description?.trim() || meta.agentType || "sub-agent",
+        ...(parentId ? { parentId } : {}),
+        depth: meta.spawnDepth ?? (parentId ? 2 : 1),
+        state: running ? "running" : "done",
+        ...iso(meta.spawnedAtMs),
+        ...(meta.agentType ? { subagentType: meta.agentType } : {}),
+      })
+    }
+    const recency = (row: SubAgentDirectoryRecord) => row.finishedAt ?? row.startedAt ?? ""
+    done.sort((a, b) => recency(b).localeCompare(recency(a)))
+    return [...live, ...done]
   }
 
   // Resolve a tracked sub-agent (thread slug + dispatch tool_use id) to its transcript path + state —
@@ -5431,7 +5555,9 @@ export function createTailer(deps: TailerDeps): Tailer {
         }
         state.turn = nextTurn
       }
-      if (nextTurn === "in-flight" && state.offset !== prevOffset) deps.onTurnActivity?.(row)
+      // Not for a spinoff side turn still gathering its brief: the working status it would start is about
+      // a request that is not this thread's work, and a hidden one ends without the rest that clears it.
+      if (nextTurn === "in-flight" && state.offset !== prevOffset && !sideTurnRunning(state)) deps.onTurnActivity?.(row)
 
       // interactive permission prompt: no jsonl signal, so read the worker's permission marker on a
       // quiet in-flight turn. Cleared automatically once jsonl activity resumes (turn no longer quiet)
@@ -5568,6 +5694,12 @@ export function createTailer(deps: TailerDeps): Tailer {
   // in-flight → idle: the turn finished. Badge unread if this completion post-dates the last read,
   // and fire a one-shot turn-done notify (the transition itself is the dedupe).
   function onTurnDone(row: SessionRow, state: TailState): void {
+    // A HIDDEN SPINOFF SIDE TURN IS NOT A REST (spinoff-side-turn.ts). The thread is back where the request
+    // found it, and every effect of an ending turn below would say otherwise: a later `rested_at` spends
+    // the event-snooze armed on the rest it found, `unread` badges a thread whose chat gained nothing but
+    // the spinoff card the human just made, the notify announces a handoff that is not new, and the status
+    // writers would rewrite the thread's status around a request that was never its work.
+    if (hiddenSideTurnRest(state)) return
     const generation = row.runtime_generation ?? 0
     const eventAt = state.lastActivityAt ?? new Date(now()).toISOString()
     // The rest moment drives the nav's most-recently-rested-first order. A DISCRETE event (once
@@ -5640,7 +5772,9 @@ export function createTailer(deps: TailerDeps): Tailer {
     // Only a FOLDED rest counts. `sawRecords` keeps a transcript-less session — whose turn reads idle
     // by default rather than by evidence — from minting a rest it never took.
     if (state.turn !== "idle" || !state.sawRecords) return
-    const eventAt = state.lastAssistantAt
+    // The rest a hidden spinoff side turn put back, not the side turn's own end — the edge skipped it
+    // (onTurnDone), so a restart after one must not stamp it either.
+    const eventAt = (hiddenSideTurnRest(state) ?? state).lastAssistantAt
     if (!eventAt) return // at rest with no output of its own: nothing to date the rest by
     const at = Date.parse(eventAt)
     if (!Number.isFinite(at)) return
@@ -5824,15 +5958,24 @@ export function createTailer(deps: TailerDeps): Tailer {
       // reads — sees only what leaves here. Gated on the live row rather than a value stamped into the
       // state at creation so a (re)spawn that bumps `spawned_at` is read the moment it lands. A foreign
       // thread has no row and reads as legacy, which is what `questionFencesLive` does with unknown.
-      const pendingQuestion = s.lastAssistantHasQuestion && questionFencesLive(row?.spawned_at)
+      //
+      // AND THE REST A HIDDEN SPINOFF SIDE TURN FOUND (2026-09-30, spinoff-side-turn.ts). Once a side turn
+      // has done only what it was asked and the worker is idle again, every rest field leaves here as it
+      // stood BEFORE the request: the fence and the registered done still stand, the rest time — the key
+      // the queue, the sign-off nudge, the Goal and the park bumps read — is the old one, and nothing asks
+      // the human anything new. While the side turn runs, the raw fold shows: the thread is genuinely
+      // working, so it reads Active.
+      const rest = (s.turn === "idle" ? hiddenSideTurnRest(s) : undefined) ?? s
+      const pendingQuestion = rest.lastAssistantHasQuestion && questionFencesLive(row?.spawned_at)
       const nowMs = now()
-      return { primed: s.primed, turn: s.turn, permPrompt: s.permPrompt, permPolicy: s.permPolicy, permDenies: s.permDenies, model: s.model, effort: s.effort, profileAt: s.profileAt, profileRevision: s.profileRevision, permissionMode: s.permissionMode, permissionModeAt: s.permissionModeAt, permissionModeRevision: s.permissionModeRevision, lastActivityAt: s.lastActivityAt, lastAssistantAt: s.lastAssistantAt, lastAssistant: s.lastAssistant, aiTitle: s.aiTitle, customTitle: s.customTitle, customTitleRevision: s.customTitleRevision, subAgents: subAgentViews(s, nowMs), droppedReports: [...s.queuedReports.values()], bgShells: [...bgShellViews(s), ...codexBgShellViews(s)], retiredShells: retiredShellViews(s), retiredSubAgents: retiredSubAgentViews(s), pendingAsk: s.pendingAsk, pendingQuestion, lastAssistantAllDone: s.lastAssistantAllDone, lastUserAt: s.lastUserAt, lastHumanAt: s.lastHumanAt, lastToolCallAt: s.lastToolCallAt, openCall: newestOpenCall(s), lastUserText: s.lastUserText, firstUserText: s.firstUserText, lastFence: s.lastFence, noTranscript: s.noTranscript, authFault: s.authFault, apiFault: s.apiFault, providerError: s.providerError, limitFault: s.limitFault, contextTokens: s.contextTokens, contextWindow: s.contextWindow, lastCompactionAt: s.lastCompactionAt, ...workingDirTelemetry(s) }
+      return { primed: s.primed, turn: s.turn, permPrompt: s.permPrompt, permPolicy: s.permPolicy, permDenies: s.permDenies, model: s.model, effort: s.effort, profileAt: s.profileAt, profileRevision: s.profileRevision, permissionMode: s.permissionMode, permissionModeAt: s.permissionModeAt, permissionModeRevision: s.permissionModeRevision, lastActivityAt: s.lastActivityAt, lastAssistantAt: rest.lastAssistantAt, lastAssistant: rest.lastAssistant, aiTitle: s.aiTitle, customTitle: s.customTitle, customTitleRevision: s.customTitleRevision, subAgents: subAgentViews(s, nowMs), droppedReports: [...s.queuedReports.values()], bgShells: [...bgShellViews(s), ...codexBgShellViews(s)], retiredShells: retiredShellViews(s), retiredSubAgents: retiredSubAgentViews(s), pendingAsk: s.pendingAsk, pendingQuestion, lastAssistantAllDone: rest.lastAssistantAllDone, lastUserAt: rest.lastUserAt, lastHumanAt: rest.lastHumanAt, lastToolCallAt: rest.lastToolCallAt, openCall: newestOpenCall(s), lastUserText: rest.lastUserText, firstUserText: s.firstUserText, lastFence: rest.lastFence, noTranscript: s.noTranscript, authFault: s.authFault, apiFault: s.apiFault, providerError: s.providerError, limitFault: s.limitFault, contextTokens: s.contextTokens, contextWindow: s.contextWindow, lastCompactionAt: s.lastCompactionAt, ...(s.sideTurn?.current ? { sideTurn: { ...s.sideTurn.current } } : {}), ...workingDirTelemetry(s) }
     },
     // The CURRENT fresh foreign session ids (mtime within FOREIGN_FRESH_MS, capped), mtime-desc. Kept
     // as the last scan's result — recomputed at most every FOREIGN_SCAN_EVERY ticks.
     foreignIds: () => foreignFresh.map((f) => f.id),
     foreignBackend: (id) => foreignFresh.find((f) => f.id === id)?.backend,
     subAgent: subAgentLookup,
+    subAgentDirectory,
     subAgentByTaskId,
     subAgentDescendantTasks,
     backgroundShell: backgroundShellLookup,

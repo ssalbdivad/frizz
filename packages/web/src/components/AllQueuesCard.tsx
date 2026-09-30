@@ -25,7 +25,7 @@ import { questionsOwed, type AccountBackend, type ThreadView } from "@frizz/shar
 import { projectApiBase, projectRpc } from "../api/rpc.ts"
 import { ThreadProjectScope } from "../api/threadApi.tsx"
 import { displayTitle, offersRetry, queueLabelAt, queueLabelWord } from "../groups.ts"
-import { useMentionCandidates } from "../hooks/useMentionCandidates.ts"
+import { useMentionCandidates, useOwnMention } from "../hooks/useMentionCandidates.ts"
 import { handoffParts, projectMarkdownScope, sameProjectAddress, squareCard, threadKey, type QueuesProject } from "../lib/allQueues.ts"
 import { draftKey, draftStore, useDraftValues } from "../lib/drafts.ts"
 import { rememberFullscreenOrigin } from "../lib/fullscreenHandoff.ts"
@@ -49,6 +49,7 @@ import { AwaitingSubAgentsCard, SubAgentWaitSnoozeItems } from "./AwaitingSubAge
 import { drawsSubAgentWaitCard, showsSubAgentWait } from "../lib/subAgentWait.ts"
 import { useThreadComposerControls } from "../hooks/useThreadComposerControls.tsx"
 import { ExpandThreadLink } from "./ExpandThreadLink.tsx"
+import { SpinoffButton, SpinoffOf } from "./Spinoff.tsx"
 import { HEADER_ICON_CLASS } from "../lib/headerIcon.ts"
 import { LastActive } from "./LastActive.tsx"
 import { ProjectSquare } from "./ProjectRail.tsx"
@@ -167,6 +168,16 @@ export function useOpenThreadInPlace(): (project: Pick<QueuesProject, "slug">, s
     },
     [navigate],
   )
+}
+
+/** A thread of a queue card's project by slug, for a line that names another thread of it (SpinoffOf): the
+ *  project's own open rows, then the page's board when the page is showing that project (a done thread is
+ *  on the board and in no queue). Never another project's board — a same-named slug there is not this. */
+function queueThread(project: QueuesProject, slug: string): ThreadView | undefined {
+  return project.queued.find((t) => t.id === slug)
+    ?? project.running.find((t) => t.id === slug)
+    ?? project.snoozed.find((t) => t.id === slug)
+    ?? (store.board?.projectSlug === project.slug ? store.board.threads.find((t) => t.id === slug) : undefined)
 }
 
 /** A follow-up into another project's thread (lib/projectFollowUp.ts, which the project list's Retry shares). */
@@ -306,19 +317,36 @@ export const AllQueuesCard = memo(function AllQueuesCard({
                 )}
                 {/* Where the agent is working, only when that is off the project root (a worktree, or another folder). */}
                 <ThreadCheckoutToken checkout={thread.checkout} homeDir={project.homeDir} lead={<span aria-hidden>·</span>} />
+                {/* A SPINOFF CHILD says whose, as its drawer header does — ahead of the status line, which
+                    takes the rest of the row. Resolved, addressed and opened in the CARD's project: the
+                    page's board names the focused one. */}
+                <SpinoffOf
+                  compact
+                  thread={thread}
+                  lead={<span aria-hidden>·</span>}
+                  resolve={(slug) => queueThread(project, slug)}
+                  href={(slug) => crossProjectThreadHref(project, slug)}
+                  onOpen={(slug) => openInPlace(project, slug)}
+                />
                 {/* What the thread is doing NOW, beside the name that stays put (ThreadStatusLine). */}
                 <ThreadStatusLine thread={thread} lead={<span aria-hidden>·</span>} />
               </div>
             </div>
             <div className="flex shrink-0 items-center gap-0.5">
+              {/* SPINOFF, on every card (Spinoff.tsx), leading the strip as the one verb that starts new
+                  work. In the card's OWN project scope: the header sits outside the body's, and the
+                  page's api names the focused project. */}
+              <ThreadProjectScope projectId={project.id} projectDir={project.projectDir}>
+                <SpinoffButton thread={thread} className={HEADER_ICON_CLASS} />
+              </ThreadProjectScope>
               {/* THE FULLSCREEN DOOR (ExpandThreadLink), before Retry as on Colin's card (TodosView
                   QueueCard @ 7a20f425). Its address carries the CARD's project — the page's own would
                   name the focused project's thread of the same slug — and it owns `f` on this card.
                   AS THE HEADER'S LAST MARK it takes `-mr-2`: its ink sits ~1.2px inside a 14px box
                   centred in a 28px square, so untrimmed it drew ~29px in from the card's right border
-                  against the project mark's 20.75px on the left; trimmed, 21.0px — the inset Retry keeps
-                  when it is last (measured 2026-09-29, ink-gaps.mjs dsf 4, sans). Beside Retry it keeps
-                  its box: ⤢ → Retry measured 10px of ink, the gap-0.5 pairing Colin's card had. */}
+                  against the project mark's 20.75px on the left; trimmed, 21.0px (measured 2026-09-29,
+                  ink-gaps.mjs dsf 4, sans). Beside Retry it keeps its box and Retry, an icon of the same
+                  square since 2026-09-29, takes the trim as the last mark instead. */}
               <ExpandThreadLink
                 slug={thread.id}
                 href={`${placeHref}/full`}
@@ -501,16 +529,14 @@ function RetryButton({ project, thread, onSent, onFailed }: { project: QueuesPro
         disabled={retry.isPending || !thread.sessionId}
         aria-label="Retry exited session"
         onMouseDown={(event) => event.preventDefault()}
-        // No margin: Retry is the header's last mark, so the header's own padding insets it — 21px from the
-        // card's border box, the title's inset on the left. It carried `mr-[9px]` until 2026-09-28 to sit at
-        // the rhythm of the ↗ and ⤢ doors beside it (MEASURED 2026-09-23, ink-gaps.mjs, dsf 4, sans: Retry →
-        // ↗ 20.43px); with the doors gone that margin left it 30px in against the title's 21 (measured
-        // 2026-09-28, composer-alias-fixture ?surface=card&runtime=exited, dsf 4, sans). The ⤢ came back
-        // BEFORE it on 2026-09-29 (ExpandThreadLink), so Retry is still last and still wants no margin.
-        className="flex items-center gap-1.5 rounded-md border border-accent/45 bg-accent/10 px-2.5 py-1 text-[12px] font-medium text-accent outline-none transition-colors hover:border-accent/70 hover:bg-accent/15 disabled:opacity-50"
+        // AN ICON in the header strip's chrome — the same mark as the drawer's Retry
+        // (HeaderActions.tsx). It was a labelled accent pill until 2026-09-29, and one worded pill beside
+        // the bare ⤢ read as a stray (maintainer: "having a retry button labeled with other non labeled
+        // icons looks awful").
+        // `-mr-2` as the header's last mark, the ⤢'s trim (see the strip above).
+        className={`${HEADER_ICON_CLASS} -mr-2`}
       >
-        <RotateCcw size={12} />
-        Retry
+        <RotateCcw size={14} strokeWidth={2} />
       </button>
     </Tooltip>
   )
@@ -724,6 +750,7 @@ function ReplyBox({ project, thread, onSent, onFailed }: { project: QueuesProjec
   const answering = useContext(RegisteredAnsweringContext)
   // `@` mentions of this card's project's threads — offered only when the page's board IS that project.
   const mentions = useMentionCandidates(thread.id, project.slug)
+  const ownMention = useOwnMention(thread.id, project.slug)
   const send = useMutation({
     mutationFn: (message: string) => deliverFollowUp(project, thread, message),
     onSuccess: () => void queryClient.invalidateQueries({ queryKey: ["projectsQueues"] }),
@@ -786,6 +813,7 @@ function ReplyBox({ project, thread, onSent, onFailed }: { project: QueuesProjec
         placeholder={answering?.staged ? "Add a note to your answers…" : questionsOwed(thread.questions).length > 0 ? "Or reply — the questions stay open…" : "Reply to the agent…"}
         attachBase={projectApiBase(project.id)}
         mentionCandidates={mentions}
+        ownMention={ownMention}
         busy={controls.busy}
         footer={controls.footer}
       />

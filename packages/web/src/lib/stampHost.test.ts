@@ -59,3 +59,10 @@ test("a wake that also parses as answers is still a wake", () => {
 test("displayText wins over text, as it does everywhere the transcript reads a message", () => {
   assert.equal(stampHostFor(msg({ text: "raw", displayText: "Answers:\n1. A" })), "bubble")
 })
+
+test("both spinoff cards end on a hard edge, the request and a child's first turn alike", () => {
+  // Outlined rather than filled (components/Spinoff.tsx), but an outline is as hard an edge as a fill.
+  const envelope = '<spinoff-request id="spn_0123456789abcdef">\n…\n</spinoff-request>'
+  assert.equal(stampHostFor(msg({ text: envelope, displayText: "Profile the cold start." })), "bubble")
+  assert.equal(stampHostFor(msg({ text: "A spinoff of @parent, at the human's request.", displayText: "Profile the cold start." })), "bubble")
+})

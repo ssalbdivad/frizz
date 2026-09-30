@@ -139,6 +139,11 @@ import {
   SetOwnThreadTitleResult,
   ReadThreadInput,
   ReadThreadResult,
+  SubAgentDirectory,
+  addressSegments,
+  subAgentAddress,
+  subAgentChain,
+  subAgentHandle,
   MessageThreadInput,
   MessageThreadResult,
   AcpAgent,
@@ -146,16 +151,17 @@ import {
   acpModelIdFromModel,
   AcpAgentModels,
   AcpAgentModelsInput,
-  SpinOffInput,
-  SpinOffResult,
-  spinOffChildPrompt,
-  spinOffRequestMessage,
+  SpinoffInput,
+  SpinoffResult,
+  spinoffChildPrompt,
+  spinoffNameSource,
+  spinoffRequestMessage,
 } from "@frizz/shared"
 import { type AppContext } from "./context.ts"
 import { listAcpAgents } from "./backend/acp-agents.ts"
 import { sessionTitleLocked } from "./storage.ts"
 import { createThreadNamer, threadNameProblem, type ThreadNamer } from "./thread-names.ts"
-import { handleOf, isReplyWaitFor, knownHandles, replyWaitPrompt, resolveThreadHandle, THREAD_MESSAGE_HOURLY_CAP, threadMessageBody } from "./thread-mentions.ts"
+import { handleOf, isReplyWaitFor, knownHandles, replyWaitPrompt, resolveSubAgent, resolveThreadHandle, subAgentAddresses, THREAD_MESSAGE_HOURLY_CAP, threadMessageBody } from "./thread-mentions.ts"
 import { enqueueThreadMessageWake } from "./scheduler.ts"
 import { editedFilesOf } from "./edited-files.ts"
 import { mayHaveLiveBackgroundWork, needsFreshProcessForLimit } from "./backend/usage-limit.ts"
@@ -164,6 +170,7 @@ import { runThreadUpdate } from "./frizz.ts"
 import { repairThreadFile } from "./repair.ts"
 import { reopenArchivedThreadForFollowUp, resumeThread, wakeParkedThreadForFollowUp } from "./resume.ts"
 import { appendDelivery, cancelDelivery, deliverOutstandingDeliveries, deliveryItem, hasDelivery, retireOutstandingDeliveries } from "./delivery-ledger.ts"
+import { SPINOFF_DELIVERY_PREFIX, spinoffIdOfDelivery } from "./spinoff-side-turn.ts"
 import { noteSubAgentsEndedByInterrupt, runningSubAgentsOf } from "./interrupt-ended.ts"
 import {
   readEarlierThreadTranscriptPage,
@@ -174,6 +181,7 @@ import {
   readThreadTranscript,
   projectTranscriptPageAgentLifecycles,
   threadTranscriptSource,
+  withSpinoffChildOrigin,
 } from "./transcript.ts"
 import { liftCheckout, resolveThreadWorkingDir, terminalFolder } from "./thread-cwd.ts"
 import { openExternalUrl } from "./open-external.ts"
@@ -934,9 +942,14 @@ export function handoffOf(messages: readonly TranscriptMessage[]): ThreadHandoff
  *  release or strand the others (2026-09-29). This one pairs the queue card's quoted ask with the reply
  *  under it. Answers now arrive one question at a time and the worker rests after acting on each, so
  *  the newest handoff is usually the reply TO an answer; skipping the answer would quote the typed
- *  message before it, over a reply about something else. */
+ *  message before it, over a reply about something else.
+ *
+ *  A spinoff request does NOT count (2026-09-30), though the human asked for it: it asks for another
+ *  thread, so nothing this thread says afterwards answers it, and its side turn is dropped from the chat
+ *  when it did only that (spinoff-side-turn.ts). Anchoring on it would quote the spinoff's instructions
+ *  over no reply at all — the card's handoff is the one the request found. */
 function isHumanTurn(m: TranscriptMessage): boolean {
-  if (m.role !== "user" || m.kind || m.queued || m.peerFrom || m.agentInstruction) return false
+  if (m.role !== "user" || m.kind || m.queued || m.peerFrom || m.agentInstruction || m.spinoff) return false
   const said = (m.displayText ?? m.text).trim()
   if (!said) return false
   // questionAnswerMessage's form; the wake token rides outside `displayText`.
@@ -949,6 +962,59 @@ export function createRouter(ctx: AppContext) {
   // mint and the AI rename need the model.
   const fallbackNamer = createThreadNamer({ storage: ctx.storage, aiTitleOf: (slug) => ctx.tailer?.get(slug)?.aiTitle })
   const threadNamer = (): ThreadNamer => ctx.threadNamer ?? fallbackNamer
+  // A THREAD'S SUB-AGENTS BY ADDRESS (shared thread-handle.ts): the tailer's directory — every child the
+  // thread ever dispatched, live first — with each row's `thread.subAgent` address filled in from the
+  // thread's own handle, which only the name registry knows.
+  const subAgentDirectoryOf = (slug: string): SubAgentDirectory => {
+    const named = threadNamer().threads().find((t) => t.slug === slug)
+    const threadHandle = named ? handleOf(named) : undefined
+    const rows = ctx.tailer.subAgentDirectory?.(slug) ?? []
+    return {
+      ...(threadHandle ? { threadHandle } : {}),
+      agents: rows.map((row) => {
+        const chain = threadHandle ? subAgentChain(rows, row.id) : undefined
+        return chain ? { ...row, address: subAgentAddress(threadHandle!, chain) } : row
+      }),
+    }
+  }
+
+  // `read_thread` on a SUB-AGENT's address: the answer a thread gives, off the child's OWN transcript —
+  // its dispatch prompt as the request, its newest words as the latest (its report, once it has
+  // returned), and the three before them. Live or finished alike: the directory reaches back through the
+  // session's own sidecars. A Workflow run is not a conversation, so its latest is its agents and where
+  // each one stands.
+  const readSubAgent = (slug: string, threadHandle: string, path: readonly string[], clip: (text: string, max: number) => string) => {
+    const { agents } = subAgentDirectoryOf(slug)
+    const child = resolveSubAgent(path, agents)
+    if (!child) return { found: false, subAgentOf: threadHandle, known: subAgentAddresses(threadHandle, agents) }
+    const address = agents.find((a) => a.id === child.id)?.address ?? subAgentAddress(threadHandle, path)
+    const info = ctx.tailer.subAgent(slug, child.id)
+    const state = child.state === "done" ? "done" as const : child.state === "rested" ? "resting" as const : "running" as const
+    const outcome = child.outcome ?? info?.outcome
+    const base = { found: true, handle: address, slug, state, subAgentOf: threadHandle, ...(outcome ? { outcome } : {}) }
+    if (info?.workflow) {
+      const runAgents = agents.filter((a) => a.parentId === child.id)
+      const lines = runAgents.map((a) => `- @${a.address ?? a.label} — ${a.state === "done" ? a.outcome === "failed" ? "failed" : "finished" : a.state}`)
+      return { ...base, ...(lines.length ? { latest: lines.join("\n") } : {}) }
+    }
+    const read = info?.outputFormat === "codex" ? readCodexTranscriptFile : readTranscriptFile
+    const messages = info?.outputFile ? read(info.outputFile) : []
+    const said = (m: (typeof messages)[number]) => (m.displayText ?? m.text).trim()
+    const opening = messages.find((m) => m.role === "user" && !m.kind && said(m))
+    // The dispatch prompt as the WORKER wrote it: the transcript projection already cut Frizz's helper
+    // epilogue off it (transcript.ts subAgentDispatchDisplayText), the same cut the drawer reads.
+    const request = opening ? said(opening) : ""
+    const spoken = messages.filter((m) => m.role === "assistant" && !m.kind && said(m))
+    const latest = spoken.at(-1)
+    const earlier = spoken.slice(-4, -1).map((m) => clip(said(m), 2_000))
+    return {
+      ...base,
+      ...(request ? { request: clip(request, 4_000) } : {}),
+      ...(earlier.length ? { earlier } : {}),
+      ...(latest ? { latest: clip(said(latest), 8_000), ...(latest.at ? { latestAt: latest.at } : {}) } : {}),
+    }
+  }
+
   // Messages one thread sent another, by ordered (from, to) pair — the hourly cap on `messageThread`.
   // In memory: a restart forgets it, which only ever loosens a cap that exists to stop a runaway loop.
   const threadMessageLog = new Map<string, number[]>()
@@ -1571,40 +1637,68 @@ export function createRouter(ctx: AppContext) {
     return await gitGithubRemote(ctx.project.dir)
   }
 
-  // The followUp procedure, captured where it is defined below so `spinOff` delivers through the SAME
+  // The followUp handler, captured where it is defined below so `spinoff` delivers through the SAME
   // handler rather than a copy of its ~350 lines of runtime routing.
-  let followUpProcedure: { handler: (args: { input: z.infer<typeof FollowUpInput> }) => Promise<void> } | undefined
+  let deliverFollowUp: ((args: { input: z.infer<typeof FollowUpInput> }, delivery?: FollowUpDelivery) => Promise<void>) | undefined
+
+  // How a delivery reaches the worker, for callers INSIDE the server. It is a second parameter of the
+  // handler, never a field of FollowUpInput: a client could set a wire field, and nothing a tab sends may
+  // claim that its message is not the human speaking.
+  //
+  // `sideRequest` (2026-09-30): the message is a spinoff request — an errand the thread was asked to run on
+  // the side (start another thread), NOT the human picking this one back up. Everything a follow-up does
+  // BECAUSE the human re-engaged is skipped for it:
+  //   • the riders (humanGapNote, openQuestionsNote) — they tell the worker about ITS work ("the human
+  //     answered after 4h", "these questions are still open"), which is noise on an errand whose answer is
+  //     one spawn_thread call, and an invitation to reopen the thread's own work inside the side turn;
+  //   • reopening an archived thread and clearing a snooze — the human finished or shelved THIS thread, and
+  //     a spinoff from it did not change their mind. The request's side turn is kept out of the thread
+  //     entirely when it is clean (spinoff-side-turn.ts), so the row should be exactly where it was;
+  //   • the model upgrade at compaction — it restarts the worker's process, which is the thread's business
+  //     at the next real turn, not the errand's.
+  // What it keeps is everything about GETTING the message to a working process: the runtime routing, the
+  // limit restart, the ledger entry, the `exited` clearing.
+  interface FollowUpDelivery { sideRequest?: boolean }
 
   // One request can become one thread. The check-then-stamp below spans an await (the dispatch), so two
   // racing `spawn_thread` calls for the same id would both pass the pending check; this set closes that.
-  const spinOffsInFlight = new Set<string>()
+  const spinoffsInFlight = new Set<string>()
 
-  // A `spawn_thread` that names a spin-off: check it is a pending request of the CALLING thread, write the
-  // human's instructions and a link back above the parent's brief (spinOffChildPrompt), dispatch, and
+  // A `spawn_thread` that names a spinoff: check it is a pending request of the CALLING thread, write the
+  // human's instructions and a link back above the parent's brief (spinoffChildPrompt), dispatch, and
   // stamp the child. Refusals are errors the parent's worker reads, so each says what went wrong.
-  async function fulfilSpinOff(id: string, from: string | undefined, input: Omit<DispatchInput, "spinOff" | "spinOffFrom">) {
-    const request = ctx.storage.getSpinOff(id)
-    if (!request) throw new Error(`No spin-off request ${id} exists in this project`)
+  async function fulfilSpinoff(id: string, from: string | undefined, input: Omit<DispatchInput, "spinoff" | "spinoffFrom" | "spinOff" | "spinOffFrom">) {
+    const request = ctx.storage.getSpinoff(id)
+    if (!request) throw new Error(`No spinoff request ${id} exists in this project`)
     if (from !== undefined && from !== request.parent_slug) {
-      throw new Error(`Spin-off ${id} was requested from another thread, so this thread cannot fulfil it`)
+      throw new Error(`Spinoff ${id} was requested from another thread, so this thread cannot fulfil it`)
     }
-    if (request.child_slug) throw new Error(`Spin-off ${id} already started thread ${request.child_slug}; do not spawn it twice`)
-    if (spinOffsInFlight.has(id)) throw new Error(`Spin-off ${id} is already being dispatched`)
-    spinOffsInFlight.add(id)
+    if (request.child_slug) throw new Error(`Spinoff ${id} already started thread ${request.child_slug}; do not spawn it twice`)
+    if (spinoffsInFlight.has(id)) throw new Error(`Spinoff ${id} is already being dispatched`)
+    spinoffsInFlight.add(id)
     try {
       const parent = ctx.storage.getSession(request.parent_slug)
-      const prompt = spinOffChildPrompt({
+      // The parent by the handle the board SHOWS (handleOf over the name registry — the same name the
+      // rail, `read_thread` and the child's own autolinks resolve), so the child's prompt says
+      // `@liveSubAgents` rather than a link titled with the parent's stored dispatch words.
+      const named = threadNamer().threads().find((t) => t.slug === request.parent_slug)
+      const prompt = spinoffChildPrompt({
         parentSlug: request.parent_slug,
         parentTitle: parent?.title || request.parent_slug,
+        ...(named ? { parentHandle: handleOf(named) } : {}),
         instructions: request.instructions,
         brief: input.prompt,
       })
-      const result = await ctx.dispatcher.dispatch({ ...input, prompt }, { backend: input.backend })
-      ctx.storage.completeSpinOff(id, result.slug, Date.now())
+      // Named from what the human asked (and the brief under it), never from the prompt's opening
+      // "A spinoff of @parent…" line — see Dispatcher.dispatch's `nameSource`, and aiRenameThread, which
+      // names a spinoff child from the same text.
+      const nameSource = spinoffNameSource({ instructions: request.instructions, brief: input.prompt })
+      const result = await ctx.dispatcher.dispatch({ ...input, prompt }, { backend: input.backend, nameSource })
+      ctx.storage.completeSpinoff(id, result.slug, Date.now())
       ctx.board.refresh()
       return result
     } finally {
-      spinOffsInFlight.delete(id)
+      spinoffsInFlight.delete(id)
     }
   }
 
@@ -1755,6 +1849,31 @@ export function createRouter(ctx: AppContext) {
         }
         const result = ctx.interactions.cancel(scope, input)
         return { effect: result.effect, interaction: result.interaction }
+      },
+    }),
+
+    // Every sub-agent a thread ever dispatched, live first then finished newest first, each with its
+    // `thread.subAgent` address — what `@thread.` completes against in the prompt box and what a
+    // `@thread.subAgent` mention opens (subAgentDirectoryOf above; the tailer's subAgentDirectory for
+    // where the history comes from).
+    subAgentDirectory: query({
+      input: z.object({ slug: ThreadSlug }).strict(),
+      output: SubAgentDirectory,
+      handler: async ({ input }) => subAgentDirectoryOf(input.slug),
+    }),
+
+    // The address a sub-agent this thread is dispatching will answer to — `portTheParser.spelling` for
+    // `description: "Spelling"` — for the worker's post-dispatch hook (cc-worker/hooks/agent-address.mjs),
+    // which puts it in front of the worker the moment the child starts, so the handoff names it by the
+    // address the board links rather than as "a sub-agent" (maintainer 2026-09-30). Computed HERE so the
+    // one naming rule (shared thread-handle.ts) has one implementation; the hook knows only the words.
+    subAgentAddressFor: query({
+      input: z.object({ slug: ThreadSlug, label: z.string().trim().min(1).max(500) }).strict(),
+      output: z.object({ address: z.string().optional() }).strict(),
+      handler: async ({ input }) => {
+        const named = threadNamer().threads().find((t) => t.slug === input.slug)
+        const child = subAgentHandle(input.label)
+        return named && child ? { address: subAgentAddress(handleOf(named), [child]) } : {}
       },
     }),
 
@@ -2027,37 +2146,41 @@ export function createRouter(ctx: AppContext) {
       // byte-identical. The resume path needs NO analog — resume reads the backend from the row's
       // `backend` column (backendFor(row.backend)), which dispatch already stamped for a codex thread.
       handler: async ({ input }) => {
-        const { spinOff, spinOffFrom, ...rest } = input
-        if (!spinOff) return ctx.dispatcher.dispatch(rest, { backend: input.backend })
-        return fulfilSpinOff(spinOff, spinOffFrom, rest)
+        // `spinOff`/`spinOffFrom` are the first-day spelling a long-lived worker's MCP server still sends.
+        const { spinoff, spinoffFrom, spinOff, spinOffFrom, ...rest } = input
+        const request = spinoff ?? spinOff
+        if (!request) return ctx.dispatcher.dispatch(rest, { backend: input.backend })
+        return fulfilSpinoff(request, spinoffFrom ?? spinOffFrom, rest)
       },
     }),
 
-    // SPIN OFF a new thread from one message of this one (SpinOffInput). Records the request, then hands
-    // it to THIS thread's worker as a message — through the very path a typed follow-up takes, so it wakes
-    // a rested thread, queues behind a running turn, and reopens a done one exactly as the human's own
-    // words would. The worker answers by dispatching through `spawn_thread` with the request's id, which
-    // lands in `fulfilSpinOff` above. A delivery that fails drops the row: a request the worker never
-    // received must not sit on the thread as one it is ignoring.
-    spinOff: mutation({
-      input: SpinOffInput,
-      output: SpinOffResult,
+    // SPINOFF a new thread from this one (SpinoffInput). Records the request, then hands it to THIS
+    // thread's worker as a message — through the very path a typed follow-up takes, so it wakes a rested
+    // (or hibernated) worker and queues behind a running turn exactly as the human's own words would. It
+    // is delivered as a SIDE REQUEST (FollowUpDelivery above): a done thread stays done and a snoozed one
+    // stays snoozed, because the human asked for a new thread, not for this one back. The worker answers
+    // by dispatching through `spawn_thread` with the request's id, which lands in `fulfilSpinoff` above. A
+    // delivery that fails drops the row: a request the worker never received must not sit on the thread
+    // as one it is ignoring — and so does one the human takes back out of the queue (unqueueFollowUp).
+    spinoff: mutation({
+      input: SpinoffInput,
+      output: SpinoffResult,
       handler: async ({ input }) => {
         currentOwnedSession(input.slug, input.sessionId)
         const id = `spn_${randomBytes(8).toString("hex")}`
-        ctx.storage.insertSpinOff({
-          id, parentSlug: input.slug, sourceId: input.sourceId, excerpt: input.excerpt,
-          instructions: input.instructions, createdAtMs: Date.now(),
-        })
+        ctx.storage.insertSpinoff({ id, parentSlug: input.slug, instructions: input.instructions, createdAtMs: Date.now() })
+        // BEFORE the delivery, so the edge recovery's read of this parent starts where its transcript
+        // stands now — the request's answer can only come after it (spinoff-edge-recovery.ts).
+        ctx.spinoffEdges?.noteRequest(input.slug, id)
         try {
-          await followUpProcedure!.handler({ input: {
+          await deliverFollowUp!({ input: {
             slug: input.slug,
             sessionId: input.sessionId,
-            message: spinOffRequestMessage({ id, instructions: input.instructions, excerpt: input.excerpt }),
-            deliveryId: `spinoff-${id}`,
-          } })
+            message: spinoffRequestMessage({ id, instructions: input.instructions }),
+            deliveryId: `${SPINOFF_DELIVERY_PREFIX}${id}`,
+          } }, { sideRequest: true })
         } catch (err) {
-          ctx.storage.dropSpinOff(id)
+          ctx.storage.dropSpinoff(id)
           throw err
         }
         ctx.board.refresh()
@@ -2072,9 +2195,10 @@ export function createRouter(ctx: AppContext) {
       handler: ({ input }) => ctx.dispatcher.adopt(input.slug, input.message),
     }),
 
-    followUp: followUpProcedure = mutation({
+    followUp: mutation({
       input: FollowUpInput,
-      handler: ({ input }) => joinInflightFollowUp(input.slug, input.deliveryId, async () => {
+      handler: deliverFollowUp = ({ input }, delivery = {}) => joinInflightFollowUp(input.slug, input.deliveryId, async () => {
+        const side = delivery.sideRequest === true
         // Every follow-up crosses a TYPED CONTROL CHANNEL now, never a terminal: a codex row goes to the
         // app-server bridge and a claude row to the session broker, each of which owns its own
         // steer-vs-start decision and reconnects or cold-resumes a dead session itself. Nothing types
@@ -2136,24 +2260,27 @@ export function createRouter(ctx: AppContext) {
         // uses below): what the human typed is what the board shows. Only the copy handed to the worker
         // carries the note, and the note names frizz as its author because the message it rides on is
         // not frizz's.
-        const gapNote = humanGapNote(Date.now(), ctx.tailer.get(input.slug)?.lastAssistantAt)
+        // Neither rider rides a side request (FollowUpDelivery): both speak to the thread's own work.
+        const gapNote = side ? undefined : humanGapNote(Date.now(), ctx.tailer.get(input.slug)?.lastAssistantAt)
         // …AND THE QUESTIONS STILL OPEN, the same way and for the same reader. A typed message no longer
         // releases open questions by timestamp (shared questionRepliedPast, 2026-09-29): it released seven
         // the human still meant to answer when they typed a side question. The worker reads the message
         // and decides which ones it made moot — so it is told, here, at the moment it reads it, which ones
         // are open and by what id `unask` takes them. Appended AFTER the gap note, so that note's "the
         // message above" still means the human's words.
-        const questionsNote = openQuestionsNote(ctx.storage.listThreadQuestions(input.slug, { openOnly: true }).flatMap((q) => {
+        const questionsNote = side ? undefined : openQuestionsNote(ctx.storage.listThreadQuestions(input.slug, { openOnly: true }).flatMap((q) => {
           const spec = parseQuestionSpec(q.spec)
           return spec ? [{ id: q.id, question: spec.question }] : []
         }))
         const riders = [gapNote, questionsNote].filter((note): note is string => note !== undefined)
         const messageForWorker = riders.length > 0 ? `${input.message}\n\n${riders.join("\n\n")}` : input.message
-        if (row) reopenArchivedThreadForFollowUp(ctx, row)
+        if (row && !side) reopenArchivedThreadForFollowUp(ctx, row)
         // Un-park HERE, above the runtime branches, for the same reason the reopen is here: a broker
         // Claude row and an app-server Codex row both return from their own branch below, so anything
-        // that must hold for every runtime has to run before the split.
-        if (row) wakeParkedThreadForFollowUp(ctx, row)
+        // that must hold for every runtime has to run before the split. A side request does neither — until
+        // its side turn stops being quiet (it goes unclean, or blocks on the human), when the board runs
+        // these same two helpers for it (board.ts surfaceSideTurn).
+        if (row && !side) wakeParkedThreadForFollowUp(ctx, row)
         // Every Codex follow-up flows through the app-server bridge — no terminal composer, no queue, no
         // stale-draft class. The bridge owns the steer-vs-start decision atomically and dedups on
         // deliveryId. A LEGACY Codex row (dispatched before the cutover) is migrated on its first
@@ -2276,7 +2403,8 @@ export function createRouter(ctx: AppContext) {
           // family has since moved past takes this message in a fresh process, forked from the current pin.
           // Only at rest — the gate refuses a turn in flight, a sub-agent, a shell, an approval or an
           // undelivered send, so a steer never restarts anything.
-          const upgradeCandidate = claudeUpgradeCandidate({ stateDir: ctx.project.stateDir, projectId: ctx.project.id, storage: ctx.storage, telemetry: ctx.tailer.get(input.slug) }, row)
+          // Not for a side request: the errand runs in the process the thread has (FollowUpDelivery).
+          const upgradeCandidate = side ? undefined : claudeUpgradeCandidate({ stateDir: ctx.project.stateDir, projectId: ctx.project.id, storage: ctx.storage, telemetry: ctx.tailer.get(input.slug) }, row)
           const upgrade = upgradeCandidate
             ? claudeModelUpgradeDue(upgradeCandidate, { catalogue: peekClaudeModels(), nowMs: Date.now(), serverStartedAtMs: SERVER_STARTED_AT_MS })
             : undefined
@@ -2486,6 +2614,13 @@ export function createRouter(ctx: AppContext) {
         // would hide a message the agent is about to read — the one failure this feature must not have.
         if (!cancelled) return tooLate
         cancelDelivery(ctx.storage, input.slug, input.deliveryId)
+        // A spinoff request taken back before the worker read it is a request that will never be answered,
+        // so its row goes the way a failed delivery's does (the `spinoff` mutation): left behind, it would
+        // sit on the thread as a pending spinoff card nothing is ever going to fulfil. Only a PENDING row of
+        // THIS thread — one already fulfilled is a thread that exists.
+        const spinoffId = spinoffIdOfDelivery(input.deliveryId)
+        const spinoff = spinoffId ? ctx.storage.getSpinoff(spinoffId) : undefined
+        if (spinoff && spinoff.parent_slug === input.slug && spinoff.child_slug === null) ctx.storage.dropSpinoff(spinoff.id)
         ctx.board.refresh()
         return { unqueued: true }
       },
@@ -3058,9 +3193,15 @@ export function createRouter(ctx: AppContext) {
           const budgetEndsAt = budget ? { budgetEndsAt: new Date(budget.deadlineMs).toISOString() } : {}
           if (id) activity.push({ kind: "shell", id, label: sh.label, since: sh.startedAt, ...watchFor("shell", [sh.taskId, sh.id, sh.label]), ...budgetEndsAt })
         }
+        // Each sub-agent with its `thread.subAgent` address, and the thread's own handle on the result, so a
+        // worker writes the names the board links (maintainer 2026-09-30: agents refer to each other "by the
+        // fully qualified name so you can easily click to view that agent", never as "another agent").
+        const directory = subAgentDirectoryOf(input.slug)
+        const addressOf = new Map(directory.agents.flatMap((row) => (row.address ? [[row.id, row.address] as const] : [])))
         for (const a of tele?.subAgents ?? []) {
           if (a.state !== "running") continue
-          if (a.id) activity.push({ kind: "agent", id: a.taskId ?? a.id, label: a.label, since: a.startedAt, ...watchFor("agent", [a.taskId, a.id, a.label]) })
+          const address = a.id ? addressOf.get(a.id) : undefined
+          if (a.id) activity.push({ kind: "agent", id: a.taskId ?? a.id, label: a.label, since: a.startedAt, ...(address ? { address } : {}), ...watchFor("agent", [a.taskId, a.id, a.label]) })
         }
         for (const t of ctx.storage.listThreadTimers(input.slug, { armedOnly: true })) {
           activity.push({
@@ -3078,7 +3219,7 @@ export function createRouter(ctx: AppContext) {
         // The WATCHES are already readable: each armed one rides its live item as `watchId`, and the
         // scheduler settles a watch the tick its target stops being live, so an armed row always has an
         // item to ride. The QUESTIONS had nowhere at all — hence their own list.
-        return { activity, questions: openQuestionViews(input.slug), links: ctx.storage.listThreadLinks(input.slug).map(threadLinkView) }
+        return { ...(directory.threadHandle ? { handle: directory.threadHandle } : {}), activity, questions: openQuestionViews(input.slug), links: ctx.storage.listThreadLinks(input.slug).map(threadLinkView) }
       },
     }),
 
@@ -3873,13 +4014,18 @@ export function createRouter(ctx: AppContext) {
       output: ReadThreadResult,
       handler: async ({ input }) => {
         const threads = threadNamer().threads()
-        const hit = resolveThreadHandle(input.handle, threads)
+        // `portTheParser.cacheKeys` names a SUB-AGENT of `portTheParser` (shared thread-handle.ts): the
+        // thread resolves first, then the rest of the address down its live children.
+        const [threadPart = input.handle, ...childPath] = addressSegments(input.handle)
+        const hit = resolveThreadHandle(threadPart, threads)
         const row = hit ? ctx.storage.getSession(hit.slug) : undefined
         if (!hit || !row) return { found: false, known: knownHandles(threads, input.slug) }
+        const clip = (text: string, max: number) => (text.length > max ? `${text.slice(0, max)}\n…[truncated]` : text)
+        if (childPath.length > 0) return readSubAgent(hit.slug, handleOf(hit), childPath, clip)
         const messages = readThreadTranscript(ctx.project, ctx.storage, hit.slug, ctx.backendFor)
         const said = (m: (typeof messages)[number]) => (m.displayText ?? m.text).trim()
-        const opening = messages.find((m) => m.role === "user" && !m.kind && said(m))
-        const clip = (text: string, max: number) => (text.length > max ? `${text.slice(0, max)}\n…[truncated]` : text)
+        // Never a spinoff request (isHumanTurn): it asks for ANOTHER thread, so it is never this one's request.
+        const opening = messages.find((m) => m.role === "user" && !m.kind && !m.spinoff && said(m))
         // The newest assistant words: the handoff when it is resting, the latest narration when it is not —
         // and the three before them, which is where the APPROACH lives when the newest is a terse handoff.
         const spoken = messages.filter((m) => m.role === "assistant" && !m.kind && said(m))
@@ -3911,8 +4057,16 @@ export function createRouter(ctx: AppContext) {
       output: MessageThreadResult,
       handler: async ({ input }) => {
         const threads = threadNamer().threads()
-        const hit = resolveThreadHandle(input.handle, threads)
+        const [threadPart = input.handle, ...childPath] = addressSegments(input.handle)
+        const hit = resolveThreadHandle(threadPart, threads)
         const target = hit ? ctx.storage.getSession(hit.slug) : undefined
+        // A SUB-AGENT is reached through its own thread, never directly: it lives inside that thread's
+        // session, where a message from outside would land on the thread's main turn instead (see
+        // subAgentSteer for the measured misdelivery). Said plainly, with the handle that does work.
+        if (hit && target && childPath.length > 0) {
+          const handle = handleOf(hit)
+          return { sent: false, handle: `${handle}.${childPath.join(".")}`, refusal: `that is a sub-agent of @${handle}, and only its own thread can reach it. Read it with read_thread, or message @${handle} and ask it to pass the message on.` }
+        }
         if (!hit || !target) {
           return { sent: false, refusal: `no thread is called ${input.handle}.`, known: knownHandles(threads, input.slug) }
         }
@@ -3999,8 +4153,16 @@ export function createRouter(ctx: AppContext) {
         // came out naming "the very last agent action". `displayText` is the opening prompt with
         // frizz's dispatch envelope peeled off, so the titler summarizes the operator's task rather
         // than boilerplate shared by every dispatched thread.
-        const opening = readTranscript(ctx.project, row.session_id).find((m) => m.role === "user")
-        const description =
+        //
+        // A SPINOFF CHILD is the exception (2026-09-30): its opening turn's `displayText` is the human's
+        // bare instructions (the spinoff header's projection), which are often subject-less —
+        // "evaluate whether this is a good idea" — so it is named from the instructions AND the parent's
+        // brief, the same text its dispatch minted its name from (spinoffNameSource). The whole
+        // projection goes through withSpinoffChildOrigin first, so a legacy child whose prompt predates
+        // the framing is named from its row's instructions and its raw brief the same way.
+        const opening = withSpinoffChildOrigin(readTranscript(ctx.project, row.session_id), ctx.storage, input.slug, true)
+          .find((m) => m.role === "user")
+        const description = (opening?.spinoffOrigin && spinoffNameSource(opening.spinoffOrigin)) ||
           opening?.displayText?.trim() || opening?.text?.trim() || row.title?.trim() || input.slug
         // Frizz's own namer, not the provider's titler (`bridge.renameSession`): that one runs Claude
         // Code's fixed prompt — two to five words, every instruction in its input treated as data — so it

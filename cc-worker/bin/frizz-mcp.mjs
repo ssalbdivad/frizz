@@ -108,10 +108,11 @@ const SPAWN_THREAD = {
       spinoff: {
         type: "string",
         description:
-          "Set ONLY when fulfilling a spin-off request — a message from frizz wrapped in `<spin-off-request id=\"spn_…\">` " +
-          "asking for a new thread from one message of your conversation. Pass that id verbatim. Frizz then puts the " +
-          "human's own instructions and a link back to your thread above your `prompt`, and links the two threads on " +
-          "the board. A spin-off is the human's explicit request, so the last-resort caution above does not apply to it.",
+          "Set ONLY when fulfilling a spinoff request — a message from frizz wrapped in `<spinoff-request id=\"spn_…\">` " +
+          "asking for a new thread from your conversation. Pass that id verbatim. Frizz then puts the " +
+          "human's own instructions and a reference back to your thread above your `prompt`, links the two threads on " +
+          "the board, and shows the human the new thread itself — so do not announce it afterwards. A spinoff is " +
+          "the human's explicit request, so the last-resort caution above does not apply to it.",
       },
     },
     required: ["prompt", "model", "effort"],
@@ -828,11 +829,15 @@ const READ_THREAD = {
     "ALWAYS READ BEFORE YOU MESSAGE: this wakes nobody and costs the other thread nothing, and it usually " +
     "answers \"what is @x doing, how, and what did it change\" on its own. For the diff itself, read the " +
     "files it lists or `git log`. It reaches finished threads too. A handle that names nothing is answered " +
-    "with the handles that exist.",
+    "with the handles that exist.\n\n" +
+    "A thread's SUB-AGENTS answer to its handle, a dot, then theirs: `portTheParser.cacheKeys`, and a " +
+    "Workflow's agents one segment further (`portTheParser.wave2.implW3`). Reading one returns its own " +
+    "request and its newest messages — its report, once it has returned. It reaches sub-agents that have " +
+    "already returned too; a name used twice means the running one, else the latest.",
   inputSchema: {
     type: "object",
     properties: {
-      handle: { type: "string", description: "The other thread's handle, with or without the `@` — any casing." },
+      handle: { type: "string", description: "The other thread's handle, or a sub-agent's `thread.subAgent` address — with or without the `@`, any casing." },
     },
     required: ["handle"],
   },
@@ -858,7 +863,8 @@ const MESSAGE_THREAD = {
     "its message says so; answer it promptly, even if only to say you cannot help.\n\n" +
     "`read_thread` FIRST — often it already answers the question. Write each message to stand alone: " +
     "the other thread has none of your context. Never reply just to acknowledge. A finished thread cannot " +
-    "be messaged (read it instead). Messages between two threads are capped per hour.",
+    "be messaged (read it instead), and neither can a sub-agent (`thread.subAgent`): only its own thread " +
+    "reaches it, so message that thread. Messages between two threads are capped per hour.",
   inputSchema: {
     type: "object",
     properties: {
@@ -962,10 +968,18 @@ async function readThread(args) {
   const handle = typeof args.handle === "string" ? args.handle.trim() : typeof args.to === "string" ? args.to.trim() : ""
   if (!handle) throw new Error("`handle` is required — the other thread's camelCase name, e.g. `shellBudgets`")
   const r = (await callRpc("readThread", { slug: threadSlug(), handle }))?.result
+  if (!r?.found && r?.subAgentOf) {
+    return r.known?.length
+      ? `@${r.subAgentOf} has no sub-agent called ${handle.replace(/^@/, "").split(".").slice(1).join(".")}.\n\nIts sub-agents: ${r.known.join(", ")}`
+      : `@${r.subAgentOf} has not dispatched any sub-agent that can be named.`
+  }
   if (!r?.found) return `No thread is called ${handle}.${knownLine(r?.known)}`
-  const state = r.state === "done" ? "done" : r.state === "resting" ? "resting (not working right now)" : "running (mid-turn)"
+  // A sub-agent's state is its own: "done" once it has returned, with how it ended.
+  const state = r.subAgentOf
+    ? r.state === "done" ? `returned${r.outcome && r.outcome !== "completed" ? ` (${r.outcome})` : ""}` : r.state === "resting" ? "resting, with its own sub-agents still running" : "running"
+    : r.state === "done" ? "done" : r.state === "resting" ? "resting (not working right now)" : "running (mid-turn)"
   return [
-    `@${r.handle} — ${state}${r.status ? `\nStatus: ${r.status}` : ""}`,
+    `@${r.handle} — ${r.subAgentOf ? `a sub-agent of @${r.subAgentOf}, ` : ""}${state}${r.status ? `\nStatus: ${r.status}` : ""}`,
     r.request ? `\n## Its request\n\n${r.request}` : "",
     r.earlier?.length ? `\n## Its earlier messages, oldest first\n\n${r.earlier.join("\n\n---\n\n")}` : "",
     r.latest ? `\n## Its newest message${r.latestAt ? ` (${r.latestAt})` : ""}\n\n${r.latest}` : "\nIt has not said anything yet.",
@@ -1071,6 +1085,11 @@ async function activity() {
   const items = Array.isArray(result?.activity) ? result.activity : []
   const questions = Array.isArray(result?.questions) ? result.questions : []
   const links = Array.isArray(result?.links) ? result.links : []
+  // WHO THIS THREAD IS, first: the handle other threads and the human call it, and the head of every
+  // sub-agent address below — the names to write in prose, where the board turns each into a link.
+  const selfLine = typeof result?.handle === "string" && result.handle
+    ? `This thread is @${result.handle}. Name it, other threads and every sub-agent by their @ address in anything the human reads — the board links each one.\n\n`
+    : ""
   const linksBlock = links.length === 0 ? "" : "\n\nSaved links and files (not running work; remove with unlink):\n" +
     links.map((link) => `  ${link.id}  ${link.kind}: ${link.label}\n    ${link.target}`).join("\n")
   // THE QUESTIONS ARE NOT PART OF THE FENCE, so they are printed in their own section and never fed to
@@ -1103,13 +1122,13 @@ async function activity() {
   const askedBlock = owedBlock + passedBlock
   if (!items.length) {
     if (owed.length > 0) {
-      return (
+      return selfLine + (
         "Nothing is RUNNING on this thread — no background shells, no sub-agents, no armed timers, no " +
         "registered PRs. So an ```awaiting fence would have nothing to name, and a fence naming nothing " +
         "is not a park." + askedBlock + linksBlock
       )
     }
-    return (
+    return selfLine + (
       "Nothing is running on this thread — no background shells, no sub-agents, no armed timers, no " +
       "registered PRs, and no question still owed an answer.\n\nSo there is nothing to wait on: an ```awaiting fence " +
       "would have nothing to name, and a fence naming nothing is not a park. End with ```done, or " +
@@ -1125,7 +1144,7 @@ async function activity() {
     // The `wch_…` id of the watch holding this item, where one is armed — this readout exists to hand a
     // worker back the ids it lost, and that includes the one `unwatch` takes.
     const held = i.watchId ? `  [watched as ${i.watchId}]` : ""
-    return `  ${i.kind}: ${i.id}${when}${held}${budget}\n    ${i.label}`
+    return `  ${i.kind}: ${i.id}${when}${held}${budget}\n    ${i.address ? `@${i.address} — ` : ""}${i.label}`
   })
   // A READY-TO-PASTE FENCE, not a description of one. The frontmatter is YAML since 2026-08-24 and its
   // keys are PLURAL sequences, so an id printed on its own line is no longer something a worker can copy
@@ -1136,7 +1155,7 @@ async function activity() {
   const block = Object.entries({ shells: byKind.shell, agents: byKind.agent, timers: byKind.timer, prs: byKind.pr, issues: byKind.issue })
     .filter(([, ids]) => ids.length > 0)
     .map(([key, ids]) => `  ${key}: [${ids.join(", ")}]`)
-  return (
+  return selfLine + (
     `${items.length} thing${items.length === 1 ? "" : "s"} running on this thread:\n\n${lines.join("\n")}\n\n` +
     "Name the ones you are ACTUALLY waiting on in your ```awaiting fence. The frontmatter is YAML — one " +
     "PLURAL key per kind, taking a list — plus a required `for:` duration, and your handoff prose BELOW " +
@@ -1327,11 +1346,11 @@ async function spawnThread(args) {
   const body = { prompt, model, effort }
   if (typeof args.title === "string" && args.title.trim()) body.title = args.title.trim()
   if (args.backend === "claude" || args.backend === "codex") body.backend = args.backend
-  // A spin-off names the request it fulfils, and the CALLER — read from our own identity, never from the
+  // A spinoff names the request it fulfils, and the CALLER — read from our own identity, never from the
   // arguments — so the server can refuse a request that belongs to another thread.
   if (typeof args.spinoff === "string" && args.spinoff.trim()) {
-    body.spinOff = args.spinoff.trim()
-    body.spinOffFrom = threadSlug()
+    body.spinoff = args.spinoff.trim()
+    body.spinoffFrom = threadSlug()
   }
 
   const port = serverLockPort()
@@ -1359,9 +1378,28 @@ async function spawnThread(args) {
   const payload = await res.json().catch(() => null)
   const slug = payload?.result?.slug
   if (typeof slug !== "string" || !slug) throw new Error(`dispatch response missing a slug: ${JSON.stringify(payload)?.slice(0, 300)}`)
+  // The result OPENS with the same sentence either way, and the server depends on it: a spinoff whose
+  // MCP server predated the `spinoff` argument is recovered from this line in the parent's transcript
+  // (packages/server/src/spinoff-edge-recovery.ts, SPAWN_THREAD_RESULT_RE). Reword it there too.
+  const spawned = `Spawned a new frizz thread \`${slug}\`.`
+  // A SPINOFF is already on the human's screen: the chat draws the request as a card that links to this
+  // new thread by name. What the worker once wrote after it — "I started [Sub-agent addresses](…)", then
+  // a whole second sign-off reading "Nothing new landed here" — was the confusing part (maintainer
+  // 2026-09-30), so the result tells it to announce nothing, and a resting worker that ends on two words is
+  // a side turn the server folds away. Two words rather than none: a worker told to end in silence did, and
+  // Claude Code re-prompted it for visible output — one more model call for every spinoff.
+  if (body.spinoff) {
+    return (
+      `${spawned} The human's chat already shows this spinoff, linked to the new thread, so do not ` +
+      `announce it, paste a link to it, or summarize your brief. If you had come to rest when the request ` +
+      `arrived, end your turn now with the two words \`Spun off.\` and nothing else: Frizz keeps your previous handoff and this ` +
+      `thread's state exactly as they were, so do not sign off again. If you were in the middle of work, ` +
+      `carry on with it. Do not wait on the new thread; it reports to the human, not to you.`
+    )
+  }
   const label = typeof body.title === "string" ? body.title : slug
   return (
-    `Spawned a new frizz thread \`${slug}\`. It is now on the board driving independently — it reports ` +
+    `${spawned} It is now on the board driving independently — it reports ` +
     `to the human via its own final message, NOT back to you, so do not wait on a result from it.\n\n` +
     `Paste this link to let the human open it in the drawer:\n\n[${label}](/thread/${slug})`
   )

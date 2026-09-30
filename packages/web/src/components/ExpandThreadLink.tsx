@@ -10,8 +10,8 @@ import { Tooltip } from "./Tooltip.tsx"
 // thread appeared on (it replaced the ↗ "Open in new tab" arrow on 2026-08-28: the fullscreen view is the
 // ordinary way to focus on a thread, in THIS tab, with the address bar following — and a new tab only on
 // the gestures a browser already reserves for that). The fork moved fullscreen into the drawer's ⋯ menu
-// on 2026-09-28 and deleted this; the menu entry and its `f` key stay (ThreadMenu.tsx), and this door is
-// back beside them because a verb one click deep in a menu is not the same as a door you can see.
+// on 2026-09-28 and deleted this; it came back on 2026-09-29 because a verb one click deep in a menu is not
+// the same as a door you can see, and the menu's duplicate entry went the same day — so this owns `f`.
 //
 // It stands in HeaderActions' fullscreen slot in the drawer — the slot the /full page's ⤡ closing half
 // (CollapseThreadLink) occupies, so the icon that takes the reader in and the one that brings them back
@@ -31,8 +31,7 @@ export function ExpandThreadLink({
   slug: string
   /** The /full address. Defaults to the PAGE project's; a card of another project passes its own. */
   href?: string
-  /** Carry `data-command="fullscreen"`, so `f` on this surface presses it (lib/keyboardRuntime.ts). Off
-   *  in the drawer, where the ⋯ menu's trigger already owns the key. */
+  /** Carry `data-command="fullscreen"`, so `f` on this surface presses it (lib/keyboardRuntime.ts). */
   command?: boolean
   size?: number
   className?: string

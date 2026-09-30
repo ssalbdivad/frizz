@@ -52,7 +52,7 @@ test("flipping 'Project sidebar' after switching the page to another project sho
     const focused = () => page.evaluate(() => new URLSearchParams(location.search).get("project") ?? "")
 
     await page.goto(`${baseUrl}/?project=${slugs[0]}`, { waitUntil: "networkidle2" })
-    await page.waitForSelector('[data-inbox-header] [data-xq-switcher="project"]', { timeout: 15_000 })
+    await page.waitForSelector('[data-status-row] [data-xq-switcher="project"]', { timeout: 15_000 })
     assert.equal(await rail(), false, "the rail starts hidden")
     // A document load would rebind the cache and hide the bug, so the page must be this one throughout.
     await page.evaluate(() => { (window as unknown as { __sameDocument: boolean }).__sameDocument = true })
@@ -60,7 +60,7 @@ test("flipping 'Project sidebar' after switching the page to another project sho
     // CLIENT-SIDE, through the switcher. A project OTHER than the cold load's, so the page's scope differs
     // from the one the rail was read under.
     const slug = slugs[1]!
-    await page.click("[data-inbox-header] [data-xq-switcher]")
+    await page.click("[data-status-row] [data-xq-switcher]")
     await page.waitForSelector(`[role="menuitem"][data-value="${slug}"]`, { timeout: 10_000 })
     // A Radix menu mounts its items before it positions them; click once the item holds still on screen.
     await page.waitForFunction((s) => new Promise((resolve) => {
@@ -69,7 +69,10 @@ test("flipping 'Project sidebar' after switching the page to another project sho
       requestAnimationFrame(() => requestAnimationFrame(() => resolve(document.querySelector(`[role="menuitem"][data-value="${s}"]`)?.getBoundingClientRect().y === at.y)))
     }), { timeout: 10_000 }, slug)
     await page.click(`[role="menuitem"][data-value="${slug}"]`)
-    await page.waitForFunction((s) => new URLSearchParams(location.search).get("project") === s && document.querySelector('[data-inbox-header] [data-xq-switcher="project"]'), { timeout: 15_000 }, slug)
+    // Until the switcher NAMES the new project, not merely until it exists: it is the page's title and never
+    // unmounts, so its presence says nothing, and a click on Settings before the page has rebound is closed
+    // again by the rebind (store.ts resetProjectState).
+    await page.waitForFunction((s) => new URLSearchParams(location.search).get("project") === s && document.querySelector('[data-status-row] [data-xq-switcher-label]')?.textContent?.trim() === s, { timeout: 15_000 }, slug)
       .catch(async () => assert.fail(`the switcher never moved to ${slug}; the page is on "${await focused()}"`))
     assert.equal(await rail(), false, "still hidden after the switch")
 

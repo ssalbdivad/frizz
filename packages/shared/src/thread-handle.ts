@@ -43,10 +43,62 @@ export function threadHandle(name: string): string | undefined {
   return lead + rest.map((w) => w.charAt(0).toUpperCase() + w.slice(1)).join("")
 }
 
+// A SUB-AGENT IS ADDRESSED UNDER ITS THREAD (maintainer 2026-09-30: "subagents accessible as
+// `topLevel.subagent` and given name ids with the same prompting as the top-level threads"). A child's
+// name is its dispatch `description` (a Workflow agent's, its `label`), and the worker is prompted to
+// write it the way a thread's name is written — one or two words naming its subject — so it camelCases
+// into a handle by the same rule: "Cache keys" under `portTheParser` is `portTheParser.cacheKeys`, and a
+// Workflow's agents sit one segment further down. The address is what the board shows in a sub-agent's
+// drawer header, what the `@` typeahead completes, and what `read_thread` resolves.
+//
+// A child whose description is a sentence (six words or more — a worker that did not follow the prompt,
+// or one dispatched before it existed) has no handle, exactly as a sentence-length thread title has
+// none: it shows as written and is left out of the typeahead.
+export const SUB_AGENT_SEPARATOR = "."
+
+/** A sub-agent's handle: its dispatch name, camelCased by the thread rule, or undefined for a sentence. */
+export function subAgentHandle(label: string): string | undefined {
+  return threadHandle(label)
+}
+
+/** The handles a `thread.subAgent` address names, outermost first, without the `@`. */
+export function addressSegments(address: string): string[] {
+  return address.trim().replace(/^@/, "").split(SUB_AGENT_SEPARATOR).filter(Boolean)
+}
+
+type ChainAgent = { readonly id?: string; readonly label: string; readonly parentId?: string }
+
+/** Each sub-agent's handle from the thread down to `id`, by walking `parentId`: `["wave2", "implW3"]`.
+ *  Undefined when a link in the chain has no handle or is not in `agents` (a descendant whose parent has
+ *  already returned), since an address with a hole in it would name nothing. */
+export function subAgentChain(agents: readonly ChainAgent[], id: string): string[] | undefined {
+  const byId = new Map(agents.flatMap((a) => (a.id ? [[a.id, a] as const] : [])))
+  const chain: string[] = []
+  const seen = new Set<string>()
+  let at = byId.get(id)
+  while (at) {
+    if (seen.has(at.id!)) return undefined
+    seen.add(at.id!)
+    const handle = subAgentHandle(at.label)
+    if (!handle) return undefined
+    chain.unshift(handle)
+    if (!at.parentId) return chain
+    at = byId.get(at.parentId)
+  }
+  return undefined
+}
+
+/** `portTheParser.cacheKeys` — the thread's handle, then each sub-agent's down the dispatch tree. */
+export function subAgentAddress(threadHandle: string, chain: readonly string[]): string {
+  return [threadHandle, ...chain].join(SUB_AGENT_SEPARATOR)
+}
+
 /** `@handle` mentions in free text, in order, without the `@`. A mention starts at a word boundary (so an
- *  email address is not one) and runs over letters, digits, `-` and `_`. */
+ *  email address is not one) and runs over letters, digits, `-` and `_`, and on through a `.` that is
+ *  followed by another segment (`@portTheParser.cacheKeys`) — so a sentence's full stop after a mention is
+ *  never part of it. */
 export function threadMentions(text: string): string[] {
   const out: string[] = []
-  for (const m of text.matchAll(/(?:^|[^\p{L}\p{N}_@./])@([\p{L}\p{N}][\p{L}\p{N}_-]*)/gu)) out.push(m[1]!)
+  for (const m of text.matchAll(/(?:^|[^\p{L}\p{N}_@./])@([\p{L}\p{N}][\p{L}\p{N}_-]*(?:\.[\p{L}\p{N}][\p{L}\p{N}_-]*)*)/gu)) out.push(m[1]!)
   return out
 }

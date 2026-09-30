@@ -9,6 +9,7 @@ import { resolveThreadRoute } from "./lib/threadRouteState.ts"
 import { standaloneThreadHref } from "./lib/standaloneThreadRoute.ts"
 import { ownedByThisPage } from "./lib/projectOwnership.ts"
 import { setGithubRepo } from "./lib/githubAutolink.ts"
+import { setMentionIndex } from "./lib/mentionAutolink.ts"
 import { resetGithubCards } from "./lib/githubHovercards.ts"
 import { setLocalPathBase } from "./lib/localPathBase.ts"
 import { basename } from "./lib/paths.ts"
@@ -524,6 +525,7 @@ export function setBoard(board: BoardSnapshot) {
   if (!ownedByThisPage(board.projectSlug)) return
   setGithubRepo(board.githubRepo)
   setLocalPathBase(board.projectDir, board.homeDir)
+  setMentionIndex(board.projectSlug, board.threads)
   store.board = board
 }
 
@@ -541,6 +543,7 @@ export function setBoard(board: BoardSnapshot) {
 export function resetProjectState() {
   setGithubRepo(null)
   setLocalPathBase(null)
+  setMentionIndex(null, null)
   resetGithubCards()
   store.board = null
   store.connection = "connecting"
@@ -570,6 +573,7 @@ export function seedBoard(board: BoardSnapshot) {
   if (store.board !== null) return
   setGithubRepo(board.githubRepo)
   setLocalPathBase(board.projectDir, board.homeDir)
+  setMentionIndex(board.projectSlug, board.threads)
   store.board = board
 }
 

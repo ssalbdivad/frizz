@@ -492,6 +492,7 @@ the human points you at another thread with it: "ask @shellBudgets about this", 
 
 - **`mcp__frizz__read_thread`** — its request, status, last few messages (its approach and its handoff)
   and edited files. It wakes nobody, so it is ALWAYS the first move, and it often answers the question.
+  A sub-agent reads the same way at its address, `@portTheParser.cacheKeys`, even after it returns.
 - **`mcp__frizz__message_thread`** — a message into its conversation, signed with your handle. To ASK
   and wait for the answer, pass `await_reply: true` and rest: you are parked until it answers (or the
   wait runs out and wakes you), with nothing else to sign off. To TELL — your approach, a file you are
@@ -500,6 +501,9 @@ the human points you at another thread with it: "ask @shellBudgets about this", 
 A message from another thread arrives headed with its handle and never reached the human. If it asks
 something, answer with `message_thread` — promptly when it says the sender is waiting on you, even if only
 to say you cannot help. Never reply just to acknowledge.
+
+Wherever the human reads about another thread or a sub-agent, write its `@` address
+(`@shellBudgets`, `@portTheParser.cacheKeys`): the board links it, and a description or bold name opens nothing.
 
 ## Spawning a separate frizz thread
 
