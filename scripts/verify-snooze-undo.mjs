@@ -110,9 +110,9 @@ try {
     return path
   }
 
-  // All projects (`/?all`, lib/pageView.ts), bound to the launcher: the prompt box's pick, which the page
+  // All projects (bare `/`, lib/pageView.ts), bound to the launcher: the prompt box's pick, which the page
   // binds in that view, is set before the page loads.
-  const ALL = `${origin}/?all`
+  const ALL = `${origin}/`
   await page.goto(`${origin}/?project=acme-api`, { waitUntil: "networkidle2" })
   await page.evaluate((id) => localStorage.setItem("frizz.crossProjectFocus", id), ids["acme-api"])
   await page.goto(ALL, { waitUntil: "networkidle2" })

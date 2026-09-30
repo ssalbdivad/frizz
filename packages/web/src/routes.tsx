@@ -12,7 +12,7 @@ import { KeyboardLayer } from "./components/KeyboardShortcuts.tsx"
 import { applyLocation, noteRouterTransition, primeReturnFromFullscreen, registerNavigate } from "./lib/router.ts"
 import { setHomeFocus } from "./lib/base-path.ts"
 import { defaultCrossProjectFocus, useCrossProjectPick } from "./lib/crossProject.ts"
-import { lastFocusedProject, rememberLastFocusedProject, rememberTabView, resolveView, retiredProjectHref, tabView, viewAt, viewInSearch, viewSearch, type PageView } from "./lib/pageView.ts"
+import { rememberTabView, resolveView, retiredProjectHref, viewAt, viewInSearch, viewSearch, type PageView } from "./lib/pageView.ts"
 import type { ProjectCard } from "@frizz/shared"
 import { rpc } from "./api/rpc.ts"
 import { feedIsBoundTo, rebindProject } from "./api/socket.ts"
@@ -111,7 +111,7 @@ function useProjectBinding(slug: string | undefined) {
 
 // THERE IS NO PROJECT PAGE. Everything is the one page at `/` (maintainer 2026-09-28: "urls like this
 // should not exist anymore: http://127.0.0.1:9393/project/frizz"), and what it shows is its VIEW, in its
-// query: one project (`?project=<slug>`, focus mode, the default) or every project (`?all`) — see
+// query: every project (bare `/`, the default) or one project (`?project=<slug>`, focus mode) — see
 // lib/pageView.ts. A retired `/project/<slug>` address lands focused on the project it names
 // (retiredProjectHref); `/status/…` and anything else unknown lands on `/`, keeping the query a launcher
 // may have sent (`?add=`, `?project=`).
@@ -174,14 +174,12 @@ type PageResolution =
  * What the page at this address shows, and which project it is bound to.
  *
  * At `/` the view is resolved against the registry (lib/pageView.ts resolveView) and then WRITTEN into
- * the address, so a bare `/` becomes `/?project=<slug>` or `/?all` before anything paints: a reload, a
- * bookmark or a copied link of this tab reopens exactly what it shows, whatever another tab has done
- * since. Under a drawer the view is the tab's (lib/pageView.ts viewAt), and the drawer's address is left
- * alone.
+ * the address — `/?project=<slug>` focused, bare `/` for All projects (a retired `?all`, or a slug nobody
+ * has, is rewritten to it) — before anything paints, so a reload, a bookmark or a copied link of this tab
+ * reopens exactly what it shows. Under a drawer the view is the tab's (lib/pageView.ts viewAt), and the
+ * drawer's address is left alone.
  *
- * `?project=<slug>` is how the launcher names the project it was run in (and `?focus=<slug>`, the same
- * from a launcher older than 2026-09-29). It is a query on `/` rather than a path so a new launcher that
- * joins an OLDER server — one whose page has no such view — still lands somewhere real.
+ * `?focus=<slug>` still reads as `?project=<slug>`: a launcher older than 2026-09-29 sends it.
  *
  * Two more arrive from outside and are answered HERE, on the way through:
  *  - `?add=<dir>` is the LAUNCHER asking: running `frizz` in an unknown folder does not adopt it, it
@@ -210,18 +208,14 @@ function usePageResolution(drawerSlug: string | undefined): PageResolution {
     if (unknown) showToast(`No project named ${unknown}`, { duration: 7000 })
   })
   const resolved = !atHome
-    ? { view: viewAt(pathname, search) ?? ({ kind: "project", slug: drawerSlug } as const) }
+    ? { view: viewAt(pathname, search) }
     : cards.data
-      ? resolveView(cards.data, viewInSearch(search), tabView(), lastFocusedProject())
+      ? resolveView(cards.data, viewInSearch(search))
       : undefined
   const view = resolved?.view
   // Render-phase and idempotent, like setHomeFocus: everything below reads the tab's view (usePageView),
   // and a drawer's close goes home to it (lib/router.ts).
   if (view) rememberTabView(view)
-  const focusedId = view?.kind === "project" ? cards.data?.find((card) => card.slug === view.slug)?.id : undefined
-  useEffect(() => {
-    if (focusedId) rememberLastFocusedProject(focusedId)
-  }, [focusedId])
   const unknown = resolved && "unknown" in resolved ? resolved.unknown : undefined
   useEffect(() => {
     if (unknown) showToast(`No project named ${unknown}`, { duration: 7000 })

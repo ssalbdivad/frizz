@@ -1,8 +1,8 @@
 // THE PAGE — one project's list and queue, or every project's: `/`, showing its VIEW (lib/pageView.ts).
 //
-// FOCUSED ON A PROJECT — the default, `/?project=<slug>` — the list on the left is that project and the
-// queue on the right is its cards, and the prompt box dispatches into it. ALL PROJECTS — `/?all`, opt-in
-// from the READY header's switcher — is every project's list and ONE queue across all of them. The two are
+// ALL PROJECTS — the default, bare `/` — is every project's list and ONE queue across all of them. FOCUSED
+// ON A PROJECT — `/?project=<slug>`, from the switcher — the list on the left is that project and the
+// queue on the right is its cards, and the prompt box dispatches into it. The two are
 // the same page drawn from the same parts, not two UIs: the list's bands (ProjectList.tsx) are identical in
 // both, and focus mode is All projects with one project in it and the prompt box's picker gone.
 //

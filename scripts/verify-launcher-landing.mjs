@@ -1,13 +1,13 @@
 #!/usr/bin/env node
-// The launcher's REAL launch path, end to end, and where it lands: the page focused on the project it was
-// run in (`/?project=<slug>`, focus mode's default view, 2026-09-29), for a cold start and for a second
-// launch that JOINS the running server from another repository.
+// The launcher's REAL launch path, end to end, and where it lands: the home page, All projects (bare `/`,
+// 2026-09-30; the page focused on the launch's project, `/?project=<slug>`, from 2026-09-29), for a cold
+// start and for a second launch that JOINS the running server from another repository.
 //
 // Nothing is stood in except the browser. The source launcher (`src/index.ts`, what `frizz-dev` runs)
 // selects or builds its immutable artifact, starts the server, waits for health and "opens the default
 // browser" — on Linux by exec'ing `xdg-open <url>`, which a stub first on PATH records instead. That
-// recorded URL is then loaded in a headless Chrome and must show that project alone: the address kept,
-// the READY header's switcher naming it, the list holding it and nothing else, no prompt-box picker.
+// recorded URL is then loaded in a headless Chrome and must show All projects: the address kept bare, the
+// switcher reading "All projects", the list holding every project launched so far, the prompt-box picker.
 //
 // Everything runs under a throwaway HOME (so it never reaches ~/.frizz or a live board) with every
 // FRIZZ_* variable dropped, on its own port — asked of BOTH launches, since a launch joins only a server
@@ -83,7 +83,7 @@ try {
     try {
       await page.setViewport({ width: 1440, height: 900 })
       await page.goto(url, { waitUntil: "networkidle2", timeout: 90_000 })
-      await page.waitForFunction((slug) => document.querySelector("[data-xq-switcher-label]")?.textContent?.trim() === slug, { timeout: 30_000 }, slug).catch(() => {})
+      await page.waitForFunction(() => document.querySelector("[data-xq-switcher-label]")?.textContent?.trim() === "All projects", { timeout: 30_000 }).catch(() => {})
       await sleep(1000)
       await page.screenshot({ path: join(root, `landing-${slug}.png`) })
       const seen = await page.evaluate(async () => {
@@ -101,21 +101,21 @@ try {
       await page.close()
     }
   }
-  const expectFocused = (what, url, seen, slug) => {
-    check(`${what} opens /?project=${slug}`, url === `http://127.0.0.1:${port}/?project=${slug}`, url)
-    check(`…which lands focused on ${slug} alone`, seen.address === `/?project=${slug}` && seen.switcher === slug && seen.listed.length === 1 && seen.listed[0] === slug && !seen.picker && seen.errors.length === 0, JSON.stringify(seen))
+  const expectHome = (what, url, seen, slugs) => {
+    check(`${what} opens /`, url === `http://127.0.0.1:${port}/`, url)
+    check(`…which lands on All projects, listing ${slugs.join(", ")}`, seen.address === "/" && seen.switcher === "All projects" && slugs.every((slug) => seen.listed.includes(slug)) && seen.picker && seen.errors.length === 0, JSON.stringify(seen))
   }
 
   const first = launch(projects[0])
   launches.push(first)
   const url1 = await waitForOpen(1, first, 600_000)
-  expectFocused("a cold launch", url1, await landing(url1, projects[0]), projects[0])
+  expectHome("a cold launch", url1, await landing(url1, projects[0]), [projects[0]])
 
   const second = launch(projects[1])
   launches.push(second)
   const url2 = await waitForOpen(2, second, 180_000)
   check("the second launch joins the running server", /already running on port/.test(second.log()), second.log().split("\n").find((l) => l.includes("server")) ?? "")
-  expectFocused("the joining launch", url2, await landing(url2, projects[1]), projects[1])
+  expectHome("the joining launch", url2, await landing(url2, projects[1]), [projects[0], projects[1]])
 } finally {
   await browser?.close()
   for (const project of projects) {

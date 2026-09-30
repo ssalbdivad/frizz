@@ -249,7 +249,7 @@ export function startRouter(navigate: (path: string, options: { replace: boolean
     // is checked against the INNER path: under a project prefix every path starts with `/all/`.
     const openingThread = currentPath().startsWith("/thread/")
     // Home is the page showing THIS TAB'S view (lib/pageView.ts): closing the last drawer goes back to
-    // `/?project=<slug>` or `/?all`, never to a bare `/` that would have to guess it again.
+    // `/?project=<slug>` when the tab was focused, else to `/`, All projects.
     written = path
     navigate(path === "/" ? homeHref() : path, { replace: !openingThread })
   }

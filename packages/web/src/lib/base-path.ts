@@ -2,8 +2,8 @@ import { FRIZZ_ROUTE_PREFIX } from "@frizz/shared"
 
 // WHICH PROJECT THIS PAGE IS SHOWING, taken from its own URL.
 //
-// One Frizz per machine serves every project from one origin, and ONE PAGE shows them, at bare `/`: one
-// project (`/?project=<slug>`, focus mode, the default) or every project (`/?all`) — its VIEW, which is a
+// One Frizz per machine serves every project from one origin, and ONE PAGE shows them, at `/`: every
+// project (bare `/`, the default) or one project (`/?project=<slug>`, focus mode) — its VIEW, which is a
 // query and not a path segment (lib/pageView.ts). A thread drawer open on it is `/all/<slug>/thread/<t>` —
 // the address names the thread's project, because that is the thread's address — and its fullscreen page
 // is the same plus `/full`. That works because Frizz's own routes live under `/_frizz/`, so the top-level

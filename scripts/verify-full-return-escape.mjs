@@ -10,7 +10,7 @@
 //
 // Each round trip: open a card's drawer from its title, ⋯ → Open fullscreen, the way back, then Escape
 // three times 150ms apart as soon as the drawer is in the DOM. `--view=all` runs it on All projects
-// (`/?all`) instead of the launcher's focused view; `--stay` is the control — no Escape, and the drawer
+// (bare `/`) instead of the launcher's focused view; `--stay` is the control — no Escape, and the drawer
 // and its address must still be there.
 //
 // Usage:
@@ -32,7 +32,7 @@ if (!flags.stack) {
 const stack = JSON.parse(readFileSync(flags.stack, "utf8").split("\n").find((l) => l.startsWith('{"url"')))
 const origin = new URL(stack.url).origin
 const trips = Number(flags.trips ?? 8)
-const home = flags.view === "all" ? "/?all" : `/?project=${stack.launcher.slug}`
+const home = flags.view === "all" ? "/" : `/?project=${stack.launcher.slug}`
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms))
 
 const browser = await puppeteer.launch({ headless: true, args: ["--no-sandbox"] })

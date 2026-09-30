@@ -1,10 +1,10 @@
 #!/usr/bin/env node
-// Drive FOCUS MODE — the page showing one project, its default view (web lib/pageView.ts) — on a real,
+// Drive FOCUS MODE — the page showing one project, chosen from the switcher (web lib/pageView.ts) — on a real,
 // seeded, multi-project stack, and check what it promised:
 //   · the launcher's `/?project=<slug>` (and an older launcher's `?focus=<slug>`) shows that project alone:
 //     its list, its cards, and a prompt box that dispatches into it with no picker;
-//   · the view lives in the ADDRESS, per tab: two tabs on two projects stay there across reloads, a bare
-//     `/` opens the tab's own view, a fresh tab the project last focused, a fresh browser All projects;
+//   · the view lives in the ADDRESS, per tab: two tabs on two projects stay there across reloads, and a
+//     bare `/` is always All projects (2026-09-30), as is a retired `/?all`;
 //   · the READY header's switcher changes the view by navigating, and Back undoes it; All projects is the
 //     unified page, with the prompt box's picker carried over to the project just left;
 //   · a thread drawer closes back to the tab's view, not to a guess;
@@ -245,7 +245,7 @@ try {
   })
   await step("All projects is the unified page, its picker carried over from the project left", async () => {
     await choose(page, "all-projects")
-    await waitAddress(page, "/?all")
+    await waitAddress(page, "/")
     await showing(page, null)
     const groups = await listed(page)
     check("All projects lists every project", projects.every((p) => groups.includes(p.id)), `${groups.length} groups for ${projects.length} projects`)
@@ -268,7 +268,7 @@ try {
     await page.hover(`[data-xq-project-row="${B.id}"]`)
     await clickSettled(page, `[data-xq-project-row="${B.id}"] button[aria-label^="More actions for"]`)
     await clickSettled(page, '[role="menuitem"]', { text: "Show all projects" })
-    await waitAddress(page, "/?all")
+    await waitAddress(page, "/")
     await showing(page, null)
     await page.hover(`[data-xq-project-row="${A.id}"]`)
     await clickSettled(page, `[data-xq-project-row="${A.id}"] button[aria-label^="More actions for"]`)
@@ -279,7 +279,7 @@ try {
   })
 
   // ── per tab, across reloads ────────────────────────────────────────────────────────────────────────
-  await step("two tabs on two projects stay there across reloads, and a bare / keeps the tab's own", async () => {
+  await step("two tabs on two projects stay there across reloads", async () => {
     const first = page
     const second = await open(main, `${origin}/?project=${B.slug}`)
     await showing(second, B)
@@ -289,29 +289,23 @@ try {
     await second.reload({ waitUntil: "networkidle2" })
     await showing(second, B)
     check("each tab keeps its project across a reload", (await address(first)) === `/?project=${A.slug}` && (await address(second)) === `/?project=${B.slug}`, `${await address(first)} | ${await address(second)}`)
-    // The second tab focused B last, so B is this browser's last-focused project — and yet the first tab's
-    // bare `/` is still its own.
     await first.goto(`${origin}/`, { waitUntil: "networkidle2" })
-    await waitAddress(first, `/?project=${A.slug}`)
-    await showing(first, A)
-    check("a bare / in a tab opens that tab's own view", true)
-    await second.goto(`${origin}/`, { waitUntil: "networkidle2" })
-    await waitAddress(second, `/?project=${B.slug}`)
-    check("…in the other tab too", true)
+    await waitAddress(first, "/")
+    await showing(first, null)
+    check("a bare / is All projects, even in a tab focused a moment ago", true)
     await second.close()
     current = first
   })
-  await step("a fresh tab opens the project last focused; a fresh browser, All projects", async () => {
-    // The last focus in this browser was the second tab's bare `/` → B.
-    const fresh = await open(main, `${origin}/`)
-    await waitAddress(fresh, `/?project=${B.slug}`)
-    check("a fresh tab at / opens the project last focused in this browser", true)
-    await fresh.close()
+  await step("a fresh browser opens All projects, and a retired ?all lands on /", async () => {
     const empty = await browser.createBrowserContext()
     const blank = await open(empty, `${origin}/`)
-    await waitAddress(blank, "/?all")
+    await waitAddress(blank, "/")
     await showing(blank, null)
-    check("a browser that never focused a project opens All projects", true)
+    check("a fresh browser at / opens All projects", true)
+    await blank.goto(`${origin}/?all`, { waitUntil: "networkidle2" })
+    await waitAddress(blank, "/")
+    await showing(blank, null)
+    check("?all is rewritten to /", true)
     await empty.close()
     current = page
   })
@@ -359,7 +353,7 @@ try {
   })
 
   // ── a phone's width ────────────────────────────────────────────────────────────────────────────────
-  for (const [view, url] of [["focused", `/?project=${A.slug}`], ["All projects", "/?all"]]) {
+  for (const [view, url] of [["focused", `/?project=${A.slug}`], ["All projects", "/"]]) {
     await step(`at 420px nothing overflows sideways (${view})`, async () => {
       await page.setViewport({ width: 420, height: 900, deviceScaleFactor: 2 })
       await page.goto(`${origin}${url}`, { waitUntil: "networkidle2" })

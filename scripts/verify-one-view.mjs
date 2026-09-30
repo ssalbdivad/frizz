@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// Drive ALL PROJECTS — the one page's every-project view, `/?all` (web lib/pageView.ts) — on a real,
+// Drive ALL PROJECTS — the one page's every-project view, bare `/` (web lib/pageView.ts) — on a real,
 // seeded, multi-project stack, and check what the one page promised the maintainer. It was the page's
 // only view, at `/`, from 2026-09-28 until focus mode (2026-09-29) made one project the default, which
 // scripts/verify-focus-mode.mjs drives; this drives the view that shows them all:
@@ -99,7 +99,7 @@ try {
   const path = () => page.evaluate(() => location.pathname)
   const search = () => page.evaluate(() => location.search)
   // Every visit names its view: a bare `/` opens this tab's own, which is whatever the step before left.
-  const ALL = `${origin}/?all`
+  const ALL = `${origin}/`
   const waitPath = (predicate, what, ms = 10_000, ...args) => page.waitForFunction(predicate, { timeout: ms }, ...args).catch(async () => { throw new Error(`timed out waiting for ${what}; at ${await path()}`) })
   const cardProjects = () => page.$$eval("[data-xq-card]", (cards) => [...new Set(cards.map((c) => c.getAttribute("data-xq-card")?.split("/")[0]))])
   const escapeAll = async () => {
@@ -203,7 +203,7 @@ try {
     await page.screenshot({ path: join(shots, "one-view-focused.png") })
     await page.click("[data-status-row] [data-xq-switcher]")
     await clickSettled('[role="menuitem"][data-value="all-projects"]')
-    await waitPath(() => location.search === "?all", "/?all")
+    await waitPath(() => location.pathname === "/" && location.search === "", "/")
     await cardsFrom(shown)
     const back = await cardProjects()
     check("the switcher's All projects shows every project again", back.length === shown.length && (await listed()).length === everyProject.length, `${back.length} projects' cards`)
@@ -270,7 +270,7 @@ try {
     check("the Done count lists a project's Done band under it, and only that band", (await bandsOpen()) === "done", await bandsOpen())
     const inFlight = await page.$$eval(`[data-xq-rail-project="${withDone}"] [data-sidebar-item]`, (rows) => rows.filter((r) => !r.closest("[data-xq-drill]")).length)
     check("…below its rows in flight, which stay", inFlight === loud, `${inFlight} of ${loud}`)
-    check("…and the address stays on All projects", (await path()) === "/" && (await search()) === "?all", `${await path()}${await search()}`)
+    check("…and the address stays on All projects", (await path()) === "/" && (await search()) === "", `${await path()}${await search()}`)
     // A second band opens beside it, and its own name puts only it away.
     if (await page.$(count("snoozed"))) {
       await clickSettled(count("snoozed"))
@@ -294,7 +294,7 @@ try {
     check("a Done row opens its thread's drawer on the page", true, await path())
     await escapeAll()
     await waitPath(() => location.pathname === "/", "the page again")
-    check("…which closes back to All projects", (await search()) === "?all", await search())
+    check("…which closes back to All projects", (await path()) === "/" && (await search()) === "", `${await path()}${await search()}`)
     await clickSettled(count("done"))
     await sleep(300)
     check("the Done count puts its band away again", (await page.$(`[data-xq-drill="${withDone}"]`)) === null && (await rowsOf(withDone)) === loud)

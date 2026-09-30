@@ -1,31 +1,27 @@
-// THE PAGE'S VIEW — which projects the one page shows: ONE project (focus mode, the default) or every
-// project (All projects, opt-in).
+// THE PAGE'S VIEW — which projects the one page shows: every project (All projects, the home and the
+// default) or ONE project (focus mode, chosen from the switcher).
 //
-// Focus mode is the default because cross-project noise breaks flow: a project is meant to be
-// self-contained, and a page that interleaves every project's queue asks the reader to keep switching
-// context they did not choose to switch (Colin McDonnell, Frizz's original author, whose version had one
-// project per page and an opt-in rail of the others). Focused on a project, the list shows that project,
-// the queue shows its cards, and the prompt box dispatches into it. All projects is the unified view the
-// page was from 2026-09-24 to 2026-09-29 — every project's list and one queue across all of them, with the
-// prompt box's own project picker — kept as a choice in the switcher (AllQueues.tsx ProjectSwitcher).
+// All projects is home (maintainer 2026-09-30: "by default frizz should open the all projects view that
+// should be home and it shouldnt need a dedicated /all path"): every project's list and one queue across
+// all of them, with the prompt box's own project picker. Focus mode — from 2026-09-29 to 2026-09-30 the
+// default, after Colin McDonnell, Frizz's original author, whose version had one project per page — is a
+// choice in the switcher (AllQueues.tsx ProjectSwitcher): focused on a project, the list shows that
+// project, the queue shows its cards, and the prompt box dispatches into it.
 //
 // THE VIEW LIVES IN THE ADDRESS, so every tab, bookmark and launch keeps its own:
 //
-//   /?project=<slug>   focused on that project — the launcher opens this for the project it ran in
-//   /?all              All projects
-//   /                  no view named: this TAB's view if it has one, else the project last focused in this
-//                      browser, else All projects — and the address is rewritten to say which (routes.tsx)
+//   /                  All projects — the launcher opens this
+//   /?project=<slug>   focused on that project
+//   /?all              All projects' address until 2026-09-30, rewritten to `/` (routes.tsx)
 //
 // A thread drawer's address (`/all/<slug>/thread/<t>`) names the thread, not the view, so under a drawer
 // the view is the tab's (sessionStorage), or the drawer's own project for a tab that has none — a link to
 // a thread opened in a new tab lands focused on that thread's project. The query rides along when it is
 // there; nothing strips it.
 //
-// NEVER SHARED BETWEEN TABS. The one cross-tab reading is the last-focused project (localStorage), and it
-// is read only by a tab with no view of its own, at a bare `/`. Two tabs focused on two projects stay on
-// them across reloads, whatever the other does. That is the whole reason the view is not the prompt box's
-// PICK (lib/crossProject.ts), which IS one per browser: the pick aims All projects' prompt box and nothing
-// else.
+// NEVER SHARED BETWEEN TABS. Two tabs focused on two projects stay on them across reloads, whatever the
+// other does. That is the whole reason the view is not the prompt box's PICK (lib/crossProject.ts), which
+// IS one per browser: the pick aims All projects' prompt box and nothing else.
 
 import { useLocation } from "react-router"
 
@@ -42,7 +38,10 @@ const ALL_PARAM = "all"
  */
 const LEGACY_FOCUS_PARAM = "focus"
 
-/** The view an address's query names, or undefined when it names none. */
+/**
+ * The view an address's query names, or undefined when it names none. At `/` none means All projects
+ * (viewAt); `?all` still reads as it, for a bookmark or launcher from before 2026-09-30.
+ */
 export function viewInSearch(search: string): PageView | undefined {
   const params = new URLSearchParams(search)
   if (params.has(ALL_PARAM)) return ALL_PROJECTS
@@ -50,12 +49,12 @@ export function viewInSearch(search: string): PageView | undefined {
   return slug ? { kind: "project", slug } : undefined
 }
 
-/** `?project=<slug>` or `?all` — the query that names a view. */
+/** `?project=<slug>`, or `""` for All projects — the query that names a view. */
 export function viewSearch(view: PageView): string {
-  return view.kind === "all" ? `?${ALL_PARAM}` : `?${PROJECT_PARAM}=${encodeURIComponent(view.slug)}`
+  return view.kind === "all" ? "" : `?${PROJECT_PARAM}=${encodeURIComponent(view.slug)}`
 }
 
-/** The page showing a view: `/?project=<slug>` or `/?all`. */
+/** The page showing a view: `/?project=<slug>` or `/`. */
 export function viewHref(view: PageView): string {
   return `/${viewSearch(view)}`
 }
@@ -107,28 +106,6 @@ export function rememberTabView(view: PageView): void {
   }
 }
 
-// ---- The last project focused, in this browser ---------------------------------------------------------
-
-// By ID, not slug: a rename changes the slug, and a remembered slug that no longer resolves would quietly
-// fall back to All projects.
-const LAST_KEY = "frizz.lastFocusedProject"
-
-export function lastFocusedProject(): string | null {
-  try {
-    return localStorage.getItem(LAST_KEY)
-  } catch {
-    return null
-  }
-}
-
-export function rememberLastFocusedProject(projectId: string): void {
-  try {
-    if (localStorage.getItem(LAST_KEY) !== projectId) localStorage.setItem(LAST_KEY, projectId)
-  } catch {
-    // Storage disabled: a bare `/` opens All projects instead.
-  }
-}
-
 // ---- Reading it -----------------------------------------------------------------------------------------
 
 /** A thread drawer's project, from its address (`/all/<slug>/thread/<t>`), or undefined. */
@@ -143,17 +120,15 @@ function drawerProject(pathname: string): string | undefined {
 }
 
 /**
- * The view a page at this address shows: the one its query names, else this tab's, else — under a thread
- * drawer — the drawer's own project. Undefined only at a bare `/` in a tab that has shown nothing yet,
- * which the route resolves from the last-focused project (routes.tsx) before anything renders under it.
+ * The view a page at this address shows: the one its query names; else, under a thread drawer, this tab's
+ * or the drawer's own project; else — a bare `/` — All projects.
  */
-export function viewAt(pathname: string, search: string): PageView | undefined {
+export function viewAt(pathname: string, search: string): PageView {
   const asked = viewInSearch(search)
   if (asked) return asked
-  const remembered = tabView()
-  if (remembered) return remembered
   const slug = drawerProject(pathname)
-  return slug ? { kind: "project", slug } : undefined
+  if (!slug) return ALL_PROJECTS
+  return tabView() ?? { kind: "project", slug }
 }
 
 /**
@@ -169,36 +144,24 @@ export function homeHref(): string {
 /** The view the page is showing, live. */
 export function usePageView(): PageView {
   const { pathname, search } = useLocation()
-  return viewAt(pathname, search) ?? ALL_PROJECTS
+  return viewAt(pathname, search)
 }
 
 /**
- * The view a page at a bare-or-named `/` resolves to, against the projects this machine has:
- *
- *   1. the view the address names — `?all`, or `?project=<slug>` when that slug is a registered project
- *      (its directory may be gone: asked for by name, it is shown, saying so);
- *   2. else this tab's own view, if its project is still here;
- *   3. else the project last focused in this browser, if it is still here;
- *   4. else All projects.
+ * The view a page at `/` resolves to, against the projects this machine has: `?project=<slug>` when that
+ * slug is a registered project (its directory may be gone: asked for by name, it is shown, saying so),
+ * else All projects.
  *
  * `unknown` is a slug the address asked for that no project has — renamed, removed, a typo — which the
  * page says rather than silently showing something else.
  */
 export function resolveView(
-  cards: readonly { id: string; slug: string; stale?: boolean }[],
+  cards: readonly { slug: string }[],
   asked: PageView | undefined,
-  remembered: PageView | null,
-  lastId: string | null,
 ): { view: PageView; unknown?: string } {
-  if (asked?.kind === "all") return { view: ALL_PROJECTS }
-  if (asked?.kind === "project" && cards.some((card) => card.slug === asked.slug)) return { view: asked }
-  const unknown = asked?.kind === "project" ? asked.slug : undefined
-  const usable = (slug: string) => cards.some((card) => card.slug === slug && !card.stale)
-  if (remembered?.kind === "all") return { view: ALL_PROJECTS, unknown }
-  if (remembered?.kind === "project" && usable(remembered.slug)) return { view: remembered, unknown }
-  const last = lastId ? cards.find((card) => card.id === lastId && !card.stale) : undefined
-  if (last) return { view: { kind: "project", slug: last.slug }, unknown }
-  return { view: ALL_PROJECTS, unknown }
+  if (asked?.kind !== "project") return { view: ALL_PROJECTS }
+  if (cards.some((card) => card.slug === asked.slug)) return { view: asked }
+  return { view: ALL_PROJECTS, unknown: asked.slug }
 }
 
 /**
