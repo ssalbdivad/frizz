@@ -1,10 +1,11 @@
 import type { ReactElement, ReactNode } from "react"
-import { Check, CircleSlash, X } from "lucide-react"
+import { Check, ChevronRight, CircleSlash, X } from "lucide-react"
 import { BoxSpinner } from "./BoxSpinner.tsx"
 import { isRunningOperation } from "../lib/operationIndicators.ts"
 import { compactElapsedSince } from "../lib/durationLabels.ts"
 import { useNowMs } from "../lib/liveClock.ts"
 import { PRIMER } from "../lib/primer.ts"
+import { transcriptMetaChevronClass } from "../lib/transcriptMetaLabels.ts"
 import {
   CHILD_ARROW,
   CHILD_ARROW_CLASS,
@@ -76,6 +77,7 @@ export function ChildOpRow({
   title,
   outcome,
   endedAt,
+  disclosure,
 }: {
   kind: ChildOpKind
   label: string
@@ -135,6 +137,12 @@ export function ChildOpRow({
   // when the live strips deliberately draw none.
   outcome?: "completed" | "failed" | "killed"
   endedAt?: string
+  // THE ROW AS A FOLD: it stands for rows hidden under it, and `onOpen` shows or hides them. The rail's
+  // "3 sub-agents" line (lib/subAgentFold.ts) is the one caller. It is this component rather than a
+  // look-alike so the fold keeps the child rows' geometry by construction — arrow, mark and label sit
+  // in the same columns as the rows it opens to. It adds the disclosure chevron after the label and
+  // speaks as a disclosure (aria-expanded; its label names the batch, not "open sub-agent").
+  disclosure?: { open: boolean }
 }): ReactElement {
   const running = isRunningOperation(state)
   // ONE HUE PER RUNTIME CONCERN, and the row is the only place they are named. A sub-agent pulses the
@@ -228,12 +236,20 @@ export function ChildOpRow({
     </span>
   ) : null
 
+  const labelText = <span className={`min-w-0 truncate text-muted-70 ${rail ? "leading-[16px]" : clickable ? "group-hover:text-fg/80 group-hover:underline" : ""}`}>{label}</span>
   const identity = (
     <>
       <span aria-hidden className={CHILD_ARROW_CLASS}>{CHILD_ARROW}</span>
       {indicator}
       {sheet && <span className={CHILD_KIND_TAG_CLASS}>{KIND_TAG[kind]}</span>}
-      <span className={`min-w-0 truncate text-muted-70 ${rail ? "leading-[16px]" : clickable ? "group-hover:text-fg/80 group-hover:underline" : ""}`}>{label}</span>
+      {disclosure ? (
+        // The chevron is the transcript column's measured one (transcriptMetaChevronClass): 1em, lifted
+        // onto the cap band, trimmed to its ink so this `gap-1.5` IS the 6px the eye reads.
+        <span className="flex min-w-0 items-baseline gap-1.5">
+          {labelText}
+          <ChevronRight aria-hidden size={12} className={transcriptMetaChevronClass(disclosure.open)} />
+        </span>
+      ) : labelText}
     </>
   )
 
@@ -267,7 +283,8 @@ export function ChildOpRow({
       // ThreadSheet reads it (via data-subagent-parent) to decide to STACK rather than dismiss.
       onMouseDown={sheet ? (e) => e.stopPropagation() : undefined}
       title={rowTitle}
-      aria-label={`${openTitle}: ${label}`}
+      aria-label={disclosure ? label : `${openTitle}: ${label}`}
+      aria-expanded={disclosure?.open}
       className={rowClass}
     >
       {identity}

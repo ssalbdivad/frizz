@@ -11,6 +11,7 @@ import { BANDS, BAND_LABEL_TYPE, BandCount, BandGlyph, type BandKey } from "./Ba
 import { BoxSpinner, STATUS_BOX } from "./BoxSpinner.tsx"
 import { ChildOpRow } from "./ChildOpRow.tsx"
 import { visibleChildOps } from "../lib/childOps.ts"
+import { subAgentFold, toggleSubAgentFold, useSubAgentFoldOpen } from "../lib/subAgentFold.ts"
 import { childOpDismisser } from "../lib/dismissChildOp.ts"
 import { Tooltip } from "./Tooltip.tsx"
 import { ProviderMark } from "./ProviderMark.tsx"
@@ -612,26 +613,44 @@ function RowUncheckDone({ t }: { t: ThreadView }) {
 // clear the parent row's indicator column). The liveness policy is the rail's own and is deliberately
 // unchanged: running OR stale, and only children carrying an id (the drill-in drawer's RPC handle —
 // see lib/childOps.ts, which lists all three surfaces' divergent policies in one place).
+//
+// FOLDED BY DEFAULT (maintainer 2026-09-29): one "3 sub-agents" line that spins while any of them runs,
+// and opens to the rows themselves one indent step deeper, so they read as its contents. See
+// lib/subAgentFold.ts for why the names wait for a click.
 function SubAgentRows({ t, scope }: { t: ThreadView; scope: RowScope }) {
   const api = useThreadApi()
+  const open = useSubAgentFoldOpen(t.id)
   const subs = visibleChildOps(t.subAgents ?? [], "rail")
   if (subs.length === 0) return null
+  const fold = subAgentFold(subs)
   // A child's drawer is pushed on the PAGE project, so a row of another project opens its parent's
   // drawer instead (its ops strip lists the same children, one click from their own). Its × goes
   // through the row's own project's client, so it stops THIS thread's child and not a child of the page
   // project's same-named thread.
   const foreignToPage = !scope.page
   return (
-    <div className="flex flex-col">
-      {subs.map((s) => (
+    <div className="flex flex-col" data-rail-subagents={t.id}>
+      <ChildOpRow
+        kind="AGENT"
+        label={fold.label}
+        state={fold.state}
+        density="rail"
+        startedAt={fold.startedAt}
+        parentSlug={t.id}
+        onOpen={() => toggleSubAgentFold(t.id)}
+        disclosure={{ open }}
+        title={fold.names}
+      />
+      {open && subs.map((s) => (
         <ChildOpRow
           key={s.id}
           kind={s.workflow ? "WORKFLOW" : "AGENT"}
           label={s.label}
           state={s.state}
           density="rail"
-          // A sub-agent's own sub-agents indent one step further under it, so a branch reads as a tree.
-          depth={s.depth}
+          // One step under the fold line, and a sub-agent's own sub-agents one further, so a branch reads
+          // as a tree. `s.depth` itself is untouched: the dismisser keys off the child's real depth.
+          depth={(s.depth ?? 1) + 1}
           startedAt={s.startedAt}
           parentSlug={t.id}
           onOpen={() => (foreignToPage ? scope.open(t) : pushSubAgentDrawer(t.id, s.id, { label: s.label, subagentType: s.subagentType, startedAt: s.startedAt }))}
