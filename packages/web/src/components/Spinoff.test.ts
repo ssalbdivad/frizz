@@ -3,6 +3,7 @@ import test from "node:test"
 import { readFileSync } from "node:fs"
 import { createElement, type ReactNode } from "react"
 import { renderToStaticMarkup } from "react-dom/server"
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query"
 import type { BoardSnapshot, SpinoffView, ThreadView } from "@frizz/shared"
 import { store } from "../store.ts"
 import { ThreadHandleLink } from "./MentionLinks.tsx"
@@ -27,18 +28,44 @@ function board(threads: ThreadView[]): void {
   store.board = { threads, projectSlug: "frizz" } as unknown as BoardSnapshot
 }
 
+// The request card takes a queued send back through the transcript cache, so it needs a query client.
 function inThread(slug: string, node: ReactNode): string {
-  return renderToStaticMarkup(createElement(ThreadSlugContext.Provider, { value: slug }, node))
+  return renderToStaticMarkup(createElement(QueryClientProvider, { client: new QueryClient() }, createElement(ThreadSlugContext.Provider, { value: slug }, node)))
 }
 
 test("a request is started once it has a child, starting while it can still become one, and unstarted at rest", () => {
+  const pending = edge({ childSlug: null })
   assert.equal(spinoffCardState(edge(), {}), "started")
-  assert.equal(spinoffCardState(edge({ childSlug: null }), { queued: true }), "starting")
-  assert.equal(spinoffCardState(edge({ childSlug: null }), { working: true }), "starting")
+  assert.equal(spinoffCardState(pending, { queued: true }), "starting")
+  assert.equal(spinoffCardState(pending, { runtime: "running" }), "starting")
+  assert.equal(spinoffCardState(pending, { runtime: "spawning" }), "starting")
   assert.equal(spinoffCardState(undefined, { queued: true }), "starting", "a send the board has not caught up with yet")
-  assert.equal(spinoffCardState(edge({ childSlug: null }), {}), "unstarted")
+  assert.equal(spinoffCardState(pending, { runtime: "turn-idle" }), "unstarted")
+  assert.equal(spinoffCardState(pending, { runtime: "exited" }), "unstarted")
   // A child outranks a stale queued flag: the ledger echo can briefly outlive the dispatch.
-  assert.equal(spinoffCardState(edge(), { queued: true, working: true }), "started")
+  assert.equal(spinoffCardState(edge(), { queued: true, runtime: "running", deliveryState: "unconfirmed" }), "started")
+})
+
+// Review 2026-09-30: "didn't start" only once the worker has really finished a turn holding the request.
+test("the ledger's state decides a request still in it: unconfirmed is said, and a delivered send is starting whatever the runtime reads", () => {
+  const pending = edge({ childSlug: null })
+  // No receipt inside the ledger's window: not a spinner for an hour, and not a claim it failed either.
+  assert.equal(spinoffCardState(pending, { queued: true, deliveryState: "unconfirmed", runtime: "turn-idle" }), "unconfirmed")
+  // The provider took it straight into a turn whose record is not on disk yet — the tailer still reads idle.
+  assert.equal(spinoffCardState(pending, { queued: false, deliveryState: "delivered", runtime: "turn-idle" }), "starting")
+  assert.equal(spinoffCardState(pending, { deliveryState: "pending", runtime: "turn-idle" }), "starting")
+  assert.equal(spinoffCardState(pending, { deliveryState: "enqueued", runtime: "exited" }), "starting")
+})
+
+test("a turn paused on the human is waiting, never didn't start — nor starting, which it is not", () => {
+  const pending = edge({ childSlug: null })
+  assert.equal(spinoffCardState(pending, { runtime: "perm-prompt" }), "waiting")
+  // A Codex approval reads running AND a typed interaction at once; the pause is the truth.
+  assert.equal(spinoffCardState(pending, { runtime: "running", blocked: true }), "waiting")
+  assert.equal(spinoffCardState(pending, { runtime: "turn-idle", blocked: true }), "waiting", "a native ask the session is frozen on")
+  assert.equal(spinoffCardState(pending, { queued: true, runtime: "perm-prompt" }), "waiting", "queued behind a turn that is paused on you")
+  // …and unconfirmed still outranks it: that send may never have reached the paused turn at all.
+  assert.equal(spinoffCardState(pending, { queued: true, deliveryState: "unconfirmed", runtime: "perm-prompt" }), "unconfirmed")
 })
 
 test("the parent's card names the child by @handle, links it, and is outlined rather than the human's filled bubble", () => {
@@ -74,6 +101,40 @@ test("a request without a child reads starting while the worker is at it or the 
   assert.match(resting, /data-spinoff-state="unstarted"/)
   assert.match(resting, /didn(?:'|&#x27;)t start/)
   assert.doesNotMatch(resting, /animate-spin/)
+})
+
+test("the card reads the thread's live pause and the ledger's verdict", () => {
+  const pending = edge({ childSlug: null })
+  board([thread({ id: "live-sub-agents", title: "Live sub agents", runtime: "perm-prompt", spinoffs: [pending] })])
+  const waiting = inThread("live-sub-agents", createElement(SpinoffCard, { id: pending.id, instructions: "x" }))
+  assert.match(waiting, /data-spinoff-state="waiting"/)
+  assert.match(waiting, /waiting on you/)
+  assert.doesNotMatch(waiting, /animate-spin/, "nothing is moving")
+
+  board([thread({ id: "live-sub-agents", title: "Live sub agents", runtime: "turn-idle", actionableInteraction: true, spinoffs: [pending] })])
+  assert.match(inThread("live-sub-agents", createElement(SpinoffCard, { id: pending.id, instructions: "x" })), /data-spinoff-state="waiting"/)
+
+  board([thread({ id: "live-sub-agents", title: "Live sub agents", runtime: "turn-idle", spinoffs: [pending] })])
+  const unconfirmed = inThread("live-sub-agents", createElement(SpinoffCard, { id: pending.id, instructions: "x", queued: true, deliveryState: "unconfirmed" }))
+  assert.match(unconfirmed, /data-spinoff-state="unconfirmed"/)
+  assert.match(unconfirmed, /delivery unconfirmed/)
+  assert.match(unconfirmed, /text-attention-80/, "the one warning among the states wears the bubble's warning tone")
+  assert.doesNotMatch(unconfirmed, /opacity-50/, "and is not dimmed into illegibility")
+  assert.doesNotMatch(unconfirmed, /animate-spin/)
+  const delivered = inThread("live-sub-agents", createElement(SpinoffCard, { id: pending.id, instructions: "x", deliveryState: "delivered" }))
+  assert.match(delivered, /data-spinoff-state="starting"/)
+})
+
+// The take-back itself — the click, the provider's confirmation, the card leaving and the dialog reopening
+// on the instructions — is driven in the browser (Spinoff.e2e.test.ts): its support gate is a
+// useSyncExternalStore whose server snapshot is always false, so static markup cannot show it.
+test("a queued request reads as the queued bubble does; one that started does not", () => {
+  const pending = edge({ childSlug: null })
+  board([thread({ id: "live-sub-agents", title: "Live sub agents", runtime: "running", spinoffs: [pending] })])
+  assert.match(inThread("live-sub-agents", createElement(SpinoffCard, { id: pending.id, instructions: "x", queued: true, deliveryState: "enqueued", deliveryId: `spinoff-${pending.id}` })), /opacity-50/)
+  assert.doesNotMatch(inThread("live-sub-agents", createElement(SpinoffCard, { id: pending.id, instructions: "x", deliveryState: "delivered" })), /opacity-50/)
+  board([thread({ id: "live-sub-agents", title: "Live sub agents", runtime: "running", spinoffs: [edge()] })])
+  assert.doesNotMatch(inThread("live-sub-agents", createElement(SpinoffCard, { id: edge().id, instructions: "x", queued: true })), /opacity-50/, "a child outranks a stale queued echo")
 })
 
 test("the child's card heads it as a spinoff of its parent, with the brief folded beneath", () => {
@@ -139,7 +200,7 @@ test("the child's header line is a spinoff of its parent by @handle, and a queue
 const chatView = readFileSync(new URL("./ChatView.tsx", import.meta.url), "utf8")
 
 test("Message draws a spinoff request — the transcript's tell or a ledger send's raw envelope — as the card", () => {
-  assert.match(chatView, /const spinoff = m\.spinoff \?\? parseSpinoffRequest\(m\.text\)\n\s+if \(spinoff\) return <SpinoffCard id=\{spinoff\.id\} instructions=\{spinoff\.instructions\} queued=\{m\.queued\}/)
+  assert.match(chatView, /const spinoff = m\.spinoff \?\? parseSpinoffRequest\(m\.text\)\n\s+if \(spinoff\) return <SpinoffCard id=\{spinoff\.id\} instructions=\{spinoff\.instructions\} queued=\{m\.queued\} deliveryState=\{m\.deliveryState\} deliveryId=\{m\.deliveryId\} rawText=\{m\.text\}/, "the ledger's state and id reach the card")
 })
 
 test("Message draws a child's first turn as the origin card, before the user-bubble fallback", () => {
