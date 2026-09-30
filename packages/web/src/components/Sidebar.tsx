@@ -332,8 +332,11 @@ export const ThreadRow = memo(function ThreadRow({
             {restedAge && <RestedAge t={t} yieldsToRetry={hoverActions} />}
             {/* A pinned row wears the small solid pin in this same right-edge column (the cue's
                 rest-time spot — the approved mockup's variant A), and yields to the hover actions the
-                same way the rest time does. Never both: the pinned band passes no restedAge. */}
-            {pinned && !restedAge && !working && <PinnedMark />}
+                same way the rest time does. Never both: the pinned band passes no restedAge. A WORKING
+                pinned row keeps it too, rightmost after its task clock, where the unpin appears on
+                hover (maintainer 2026-09-30: "i shouldnt have to mouse over a thread to see that it is
+                pinned" — gating the mark on `!working` hid it on every spinning pinned row). */}
+            {pinned && !restedAge && <PinnedMark besideClock={!!working} />}
           </span>
         </span>
       </button>
@@ -497,7 +500,12 @@ function RowRetryButton({ t }: { t: ThreadView }) {
 // `-ml-1` is a layout trim, not spacing: this slot is 8px wider than the 11px mark it replaced, and
 // without the trim the title's own box pays all of it. Giving 4px back leaves the ink gap from a filled
 // title line to the pin at 14.0px, against 14.29px before this change.
-function PinnedMark() {
+//
+// `besideClock` (a WORKING pinned row, whose task clock stands left of the mark) trims 10px instead:
+// the row's gap-3 plus the pin's 6px of dead box drew 14.34px of ink between "12m" and the pin, which
+// read as two columns; `-ml-2.5` leaves 8.34px (scripts/ink-gaps.mjs on sidebar-pin-fixture, sans, dsf 4,
+// 2026-09-30). The mark stays the flex line's last box, so the unpin still lands exactly on it.
+function PinnedMark({ besideClock = false }: { besideClock?: boolean }) {
   return (
     <span
       aria-hidden
@@ -505,7 +513,7 @@ function PinnedMark() {
       // `text-muted opacity-55`, not `text-muted-55`: the mark is filled AND stroked, and an alpha colour
       // compounds where the stroke overlaps the fill — see ROW_ACTION_CLASS. The hover hide is the same
       // opacity axis, and the variant wins over the bare 55.
-      className="-ml-1 flex h-[19px] w-[19px] shrink-0 items-center justify-center self-start text-muted opacity-55 transition-opacity group-hover:opacity-0 group-focus-within:opacity-0"
+      className={`${besideClock ? "-ml-2.5" : "-ml-1"} flex h-[19px] w-[19px] shrink-0 items-center justify-center self-start text-muted opacity-55 transition-opacity group-hover:opacity-0 group-focus-within:opacity-0`}
     >
       <Pin size={12} fill="currentColor" />
     </span>

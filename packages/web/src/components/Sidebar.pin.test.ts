@@ -94,6 +94,23 @@ test("a pinned row wears the solid mark and offers the solid unpin RIGHTMOST", (
   assert.ok(rest.startsWith("</div>"), `the unpin is the strip's last action, got: ${rest.slice(0, 40)}`)
 })
 
+// A pinned row that is WORKING shows its task clock in the right-edge column, and the mark must survive
+// beside it, rightmost where the unpin appears on hover (maintainer 2026-09-30: "i shouldnt have to mouse
+// over a thread to see that it is pinned" — the mark was gated off every spinning row).
+test("a pinned row that is working still wears the mark, after its task clock", () => {
+  const html = row({
+    ...PINNED,
+    runtime: "running",
+    statusLine: "Running focused tests",
+    statusSince: new Date(Date.now() - 754_000).toISOString(),
+  } as Partial<ThreadView>)
+  const clockAt = html.indexOf("data-rail-working-age")
+  const markAt = html.indexOf("data-rail-pin-mark")
+  assert.notEqual(clockAt, -1, "the working row shows its task clock")
+  assert.notEqual(markAt, -1, "…and still shows the pin mark")
+  assert.ok(clockAt < markAt, "clock → mark, left to right")
+})
+
 // The GEOMETRY of that swap is pinned in the browser by railHoverNoShift.e2e.test.ts, which is where a
 // 4px jump actually shows up. This is the cheap half of the same contract: the mark and the unpin share
 // ONE box, so a future edit that resizes either has to change both deliberately rather than by drift.

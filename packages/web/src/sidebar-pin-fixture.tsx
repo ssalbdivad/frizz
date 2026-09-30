@@ -71,6 +71,17 @@ const pinnedShort = {
   pinnedAt: PINNED_AT,
 } as unknown as ThreadView
 
+// PINNED and WORKING: its status inline, its task clock, and the mark still rightmost after the clock.
+const pinnedWorking = {
+  ...base,
+  id: "pinned-working",
+  title: "Port the parser",
+  runtime: "running",
+  statusLine: "Running focused tests",
+  statusSince: new Date(Date.now() - 754_000).toISOString(),
+  pinnedAt: PINNED_AT,
+} as unknown as ThreadView
+
 // PINNED and STALLED: door, Retry, unpin — the unpin stays rightmost even past Retry.
 const pinnedStalled = {
   ...base,
@@ -116,7 +127,7 @@ const activeLong = {
   runtime: "running",
 } as unknown as ThreadView
 
-const threads = [unpinnedLong, pinnedLong, pinnedShort, pinnedStalled, pinnedDone, unpinnedStalled, activeLong]
+const threads = [unpinnedLong, pinnedLong, pinnedShort, pinnedWorking, pinnedStalled, pinnedDone, unpinnedStalled, activeLong]
 store.board = { threads } as BoardSnapshot
 
 createRoot(document.getElementById("root")!).render(
@@ -127,6 +138,7 @@ createRoot(document.getElementById("root")!).render(
           <ThreadRow scope={ROW_SCOPE} t={unpinnedLong} restedAge />
           <ThreadRow scope={ROW_SCOPE} t={pinnedLong} />
           <ThreadRow scope={ROW_SCOPE} t={pinnedShort} />
+          <ThreadRow scope={ROW_SCOPE} t={pinnedWorking} />
           <ThreadRow scope={ROW_SCOPE} t={pinnedStalled} />
           <ThreadRow scope={ROW_SCOPE} t={pinnedDone} />
           <ThreadRow scope={ROW_SCOPE} t={unpinnedStalled} />
