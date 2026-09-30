@@ -506,7 +506,13 @@ export function completionConfirmationHold(telemetry: SessionTelemetry | undefin
   const busy = <T extends { state: string; depth?: number }>(op: T): op is T & { state: "running" } =>
     op.state === "running" && isDirectSubAgent(op)
   const subAgents = telemetry.subAgents.filter(busy)
-  const bgShells = telemetry.bgShells.filter(busy)
+  // A worker that SIGNED OFF DONE has already said its shells are not work: the contract tells it to fence
+  // done over a watcher or dev server it has moved on from, and name it in the body. Asking again made
+  // Done a two-step for exactly the threads that are finished — and a dialog left unconfirmed meant the
+  // thread was never archived, so when the shell ended (another agent killed a hung test run, 2026-09-30)
+  // the worker woke and its card came back to the queue the human had cleared it from. The shell goes
+  // down with the daemon. Sub-agents and an executing turn still ask; the human's own terminals too.
+  const bgShells = telemetry.lastFence?.kind === "done" ? [] : telemetry.bgShells.filter(busy)
   const turnInFlight = telemetry.turn === "in-flight"
   if (!turnInFlight && subAgents.length === 0 && bgShells.length === 0) return undefined
   return {
@@ -2940,8 +2946,13 @@ export function createRouter(ctx: AppContext) {
       output: z.object({ needsConfirmation: z.boolean(), hold: CompletionHold.optional() }),
       handler: async ({ input }) => {
         const row = currentOwnedSession(input.slug, input.sessionId)
+        // The standing sign-off, as the BOARD reads it: a done registered through the tool is in no
+        // transcript record, so the tailer's own `lastFence` never carries it (board.registeredDoneFence).
+        const raw = ctx.tailer.get(input.slug)
+        const fence = raw && (await ctx.board.snapshot()).threads.find((t) => t.id === input.slug)?.lastFence
+        const telemetry = raw && fence ? { ...raw, lastFence: fence } : raw
         const result = await completeRegisteredThread(
-          ctx.storage, row, input.terminateLive, cachedLivenessTerminator, ctx.tailer.get(input.slug), ctx.codexAppServer, ctx.claudeBroker, ctx.acpBridge,
+          ctx.storage, row, input.terminateLive, cachedLivenessTerminator, telemetry, ctx.codexAppServer, ctx.claudeBroker, ctx.acpBridge,
           {
             live: ctx.terminalRunner.live(input.slug),
             stop: () => ctx.terminalRunner.stopThread(input.slug),
@@ -4015,7 +4026,7 @@ export function createRouter(ctx: AppContext) {
         }
         const problem = threadNameProblem(input.title)
         if (problem) {
-          return refuse(`"${input.title}" ${problem}. A name is one or two short words naming the subject (e.g. "Shell budgets", typed as @shellBudgets); call again with one.`)
+          return refuse(`"${input.title}" ${problem}. A name is one or two short words naming the subject (e.g. "Shell budgets", typed as @shell-budgets); call again with one.`)
         }
         const holder = namer.holder(input.title, input.slug)
         if (holder) {

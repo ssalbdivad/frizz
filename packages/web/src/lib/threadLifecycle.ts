@@ -65,7 +65,9 @@ export function completionArchivesImmediately(thread: ThreadView): boolean {
   const busy = (op: { state: string }) => op.state === "running" || op.state === "stale"
   // Sub-agents: DIRECT children only, because that is what the server's completionConfirmationHold
   // counts. This guess only stays useful while it agrees with the verdict it is predicting.
-  if (thread.subAgents?.some((op) => isDirectSubAgent(op) && busy(op)) || thread.bgShells?.some(busy)) return false
+  // A worker that signed off done has disowned its shells, so they no longer ask (router.completionConfirmationHold).
+  const shellsHold = thread.lastFence?.kind !== "done" && thread.bgShells?.some(busy)
+  if (thread.subAgents?.some((op) => isDirectSubAgent(op) && busy(op)) || shellsHold) return false
   return true
 }
 

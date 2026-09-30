@@ -552,7 +552,7 @@ test("setOwnThreadTitle RPC: a duplicate is refused NAMING its holder, a distinc
   assert.match(long.refusal ?? "", /longer than two words/)
   const untypable = await call("Visualization distinctions")
   assert.equal(untypable.accepted, false)
-  assert.match(untypable.refusal ?? "", /@visualizationDistinctions is 25 characters, past the limit of 16/)
+  assert.match(untypable.refusal ?? "", /@visualization-distinctions is 26 characters, past the limit of 20/)
 
   const ok = await call("Focus rail")
   assert.deepEqual(ok, { accepted: true, title: "Focus rail", lockedByHuman: false })
@@ -899,6 +899,23 @@ test("completionConfirmationHold names WHY it declined: the executing turn plus 
     bgShells: [{ label: "Watch CI", state: "running" }],
     bgShellCount: 1,
   }, "only ACTIVELY-running ops are named; a stale child no longer holds Done, matching the queue rule")
+})
+
+// A worker that signed off done has disowned its shells (the contract: fence done over a watcher you have
+// moved on from). Asking about them left the thread unarchived behind an unconfirmed dialog, and it came
+// back to the queue when the shell ended. Its sub-agents and an executing turn still ask.
+test("completionConfirmationHold lets a done sign-off take its own shells down without asking", () => {
+  const at = "2026-09-30T00:00:00.000Z"
+  const done = { kind: "done" as const, body: "Shipped.", hints: [], registered: true }
+  const base = { turn: "idle" as const, permPrompt: false, pendingQuestion: false, subAgents: [], bgShells: [{ label: "Hung test run", startedAt: at, state: "running" as const }] }
+  assert.equal(completionConfirmationHold({ ...base, lastFence: done }), undefined, "a done rest's shell does not hold Done")
+  assert.equal(completionConfirmationHold({ ...base })?.bgShellCount, 1, "without the done, the shell still asks")
+  assert.equal(
+    completionConfirmationHold({ ...base, lastFence: done, subAgents: [{ id: "a1", label: "Child", startedAt: at, state: "running" as const }] })?.subAgentCount,
+    1,
+    "a running sub-agent still asks after a done",
+  )
+  assert.equal(completionConfirmationHold({ ...base, lastFence: done, turn: "in-flight" })?.turnInFlight, true, "an executing turn still asks")
 })
 
 test("completionConfirmationHold caps worker-authored labels but reports the untruncated count", () => {
@@ -2347,7 +2364,7 @@ test("dispatch fulfils a spinoff once, from its parent only, with the human's wo
 
     assert.deepEqual(await dispatch("parent"), { slug: "child", sessionId: "sid-child" })
     assert.equal(calls.length, 1)
-    assert.match(calls[0].prompt, /^A spinoff of @shellBudgets, at the human's request\. Their instructions:\n\n> investigate perf\n\nThe context @shellBudgets gathered for you:/)
+    assert.match(calls[0].prompt, /^A spinoff of @shell-budgets, at the human's request\. Their instructions:\n\n> investigate perf\n\nThe context @shell-budgets gathered for you:/)
     assert.ok(calls[0].prompt.endsWith("Brief: the N+1 in loadUsers"))
     assert.equal("spinoff" in calls[0], false)
     assert.deepEqual(opts, [{ backend: undefined, nameSource: "investigate perf\n\nBrief: the N+1 in loadUsers" }])

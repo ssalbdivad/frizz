@@ -98,6 +98,9 @@ test("completionArchivesImmediately mirrors the server's no-confirmation cases",
   assert.equal(completionArchivesImmediately(thread({ runtime: "turn-idle", subAgents: [busySub] })), false)
   assert.equal(completionArchivesImmediately(thread({ runtime: "turn-idle", subAgents: [staleSub] })), false)
   assert.equal(completionArchivesImmediately(thread({ runtime: "turn-idle", bgShells: [busyShell] })), false)
+  // …unless the worker signed off done: its shells go down with it, no dialog (router.completionConfirmationHold).
+  assert.equal(completionArchivesImmediately(thread({ runtime: "turn-idle", bgShells: [busyShell], lastFence: { kind: "done", body: "", hints: [] } })), true)
+  assert.equal(completionArchivesImmediately(thread({ runtime: "turn-idle", subAgents: [busySub], lastFence: { kind: "done", body: "", hints: [] } })), false)
 })
 
 // "This thread is still running" told the human nothing they could act on — they clicked Done because
