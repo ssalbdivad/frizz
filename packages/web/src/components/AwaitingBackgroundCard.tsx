@@ -29,6 +29,7 @@ import { Fragment, useEffect, useState, type ReactNode } from "react"
 import { Bot, ChevronRight, CircleAlert, CircleCheck, CircleDashed, CircleDot, CircleSlash, CircleX, Clock, GitMerge, GitPullRequestClosed, Hourglass, TerminalSquare } from "lucide-react"
 import type { AwaitingHint, GithubIssueStatus, GithubWatchStatus, ThreadView, ThreadWatchView } from "@frizz/shared"
 import { awaitingFenceTitle, isDirectSubAgent } from "@frizz/shared"
+import { subAgentName } from "../groups.ts"
 import { githubRefUrl } from "../lib/githubRef.ts"
 import { noteGithubRefs } from "../lib/githubHovercards.ts"
 import { AWAITING_FALLBACK_TITLE, AWAITING_NO_PROSE, awaitingProseBlock, prWatchRefs } from "../lib/awaitingPresentation.ts"
@@ -717,7 +718,8 @@ export function AgentRow({ agent, slug, now }: { agent: ThreadView["subAgents"][
       // so it is always the spinner, never a static mark. Accent-yellow rather than the checks' amber,
       // matching the rail's one-hue-per-runtime-concern (a sub-agent pulses accent, a shell pulses blue).
       mark={<Spinner tone="border-accent" />}
-      name={agent.label}
+      // Its handle (`cacheKeys`), as on every row that shows a child as itself (groups.ts subAgentName).
+      name={subAgentName(agent.label)}
       onOpen={agent.id ? () => pushSubAgentDrawer(slug, agent.id!, { label: agent.label, subagentType: agent.subagentType, startedAt: agent.startedAt }) : undefined}
       title={agent.id ? `Open this sub-agent — working for ${elapsed}` : agent.label}
       status={[profile, elapsed].filter(Boolean).join(" · ")}

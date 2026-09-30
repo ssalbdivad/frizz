@@ -174,7 +174,7 @@ test("a finished sub-agent draws the shell's wake divider, and every sub-agent t
     // The drawer defers its transcript body a frame past the slide-in, so wait for the child's content.
     await page.waitForFunction(() => document.body.innerText.includes("Reading the tier table"), { timeout: 5000 })
     const nested = await page.$$eval("[data-subagent-completion-open]", (n) => n.map((e) => (e as HTMLElement).innerText))
-    assert.ok(nested.some((t) => t.includes("Write property tests")), "the child's own completion divider links too")
+    assert.ok(nested.some((t) => t.includes("writePropertyTests")), "the child's own completion divider links too, by the child's handle")
     const nestedCard = await page.$$eval('button[aria-label^="Open sub-agent transcript"]', (n) => n.map((e) => e.getAttribute("aria-label")))
     assert.ok(nestedCard.some((t) => t?.includes("Write property tests")), "the child's own dispatch card links too")
 

@@ -3,7 +3,7 @@ import { useQueryClient } from "@tanstack/react-query"
 import { AlarmClock, Check, ChevronRight, Ellipsis, Github, Hourglass, Loader2, Pin, PinOff, RotateCcw } from "lucide-react"
 import { questionsOwed, type ThreadView } from "@frizz/shared"
 import { pushSubAgentDrawer, showToast } from "../store.ts"
-import { displayTitle, titleIsProvisional, isPinned, isSnoozed, sessionIndicatorKind, offersRetry, futureSnoozedUntil, queueLabelAt, waitNamesPr, prChecksRunning, restingOnSubAgents } from "../groups.ts"
+import { displayTitle, subAgentName, titleIsProvisional, isPinned, isSnoozed, sessionIndicatorKind, offersRetry, futureSnoozedUntil, queueLabelAt, waitNamesPr, prChecksRunning, restingOnSubAgents } from "../groups.ts"
 import { ageSpan, relativeAge, limitResumeClock } from "../lib/activityTime.ts"
 import { useNowMs } from "../lib/liveClock.ts"
 import { humpStarts } from "../lib/threadMentions.ts"
@@ -644,7 +644,9 @@ function SubAgentRows({ t, scope }: { t: ThreadView; scope: RowScope }) {
         <ChildOpRow
           key={s.id}
           kind={s.workflow ? "WORKFLOW" : "AGENT"}
-          label={s.label}
+          // The child's HANDLE (`cacheKeys`), the segment typed after `@thread.`; the fold line above
+          // is a count, not a name, and keeps its words.
+          label={subAgentName(s.label)}
           state={s.state}
           density="rail"
           // One step under the fold line, and a sub-agent's own sub-agents one further, so a branch reads

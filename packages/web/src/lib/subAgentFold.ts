@@ -1,5 +1,6 @@
 import { useSyncExternalStore } from "react"
 import { isDirectSubAgent } from "@frizz/shared"
+import { subAgentName } from "../groups.ts"
 
 // ── THE RAIL'S SUB-AGENT FOLD — one line per thread in place of one line per child ──────────────────
 //
@@ -25,7 +26,7 @@ export interface SubAgentFold {
   label: string
   /** Spins while ANY row under it runs, at any depth, since the fold is all the rail shows of them. */
   state: "running" | "stale"
-  /** The names the fold hides, for its tooltip. */
+  /** The names the fold hides, for its tooltip — as the handles the rows it opens to show. */
   names: string
 }
 
@@ -44,7 +45,7 @@ export function subAgentFold(children: readonly FoldChild[]): SubAgentFold {
   return {
     label,
     state: children.some((child) => child.state === "running") ? "running" : "stale",
-    names: direct.map((child) => child.label).join(", "),
+    names: direct.map((child) => subAgentName(child.label)).join(", "),
   }
 }
 

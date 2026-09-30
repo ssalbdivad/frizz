@@ -8,7 +8,7 @@ import type { AskQuestion, AwaitingHint, BgShellView, PendingAsk, RegisteredQues
 import { store, threadBySlug, pushDrawer, pushSubAgentDrawer, pushBackgroundShellDrawer, showToast } from "../store.ts"
 import { useBackgroundShellLines, useBoard, useProjectDir, useTranscript, type ChatMessage, type TranscriptData } from "../hooks.ts"
 import { rpc } from "../api/rpc.ts"
-import { lastActiveLabelAt } from "../groups.ts"
+import { UNNAMED_SUB_AGENT_LABEL, lastActiveLabelAt, subAgentName } from "../groups.ts"
 import { stripFrontmatter } from "../lib/markdown.ts"
 import { useMarkdownHtml } from "../lib/useMarkdown.ts"
 import { splitComposerValue, splitProseAttachments } from "../lib/imagePaths.ts"
@@ -4142,7 +4142,7 @@ export function BackgroundOpsStrip({
         <ChildOpRow
           key={`a${i}`}
           kind={s.workflow ? "WORKFLOW" : "AGENT"}
-          label={s.label}
+          label={subAgentName(s.label)}
           state={s.state}
           density="sheet"
           // The INDENT reading (see childOpSubtree): inside a sub-agent drawer a row's distance is
@@ -4278,6 +4278,9 @@ export function PendingAskCard({ ask, onTerminal }: { ask: PendingAsk; onTermina
 function AgentCompletionLine({ call, sourceId, at }: { call: TranscriptToolCall; sourceId?: string; at?: string }) {
   const slug = useChildDrillSlug()
   const title = call.detail ?? "sub-agent"
+  // The quoted slot shows the child's HANDLE (`cacheKeys`), as every row that names a child does
+  // (groups.ts subAgentName); the dispatch's own words stay on the hover and go to the drawer.
+  const name = call.detail ? subAgentName(call.detail) : title
   const { tail } = subAgentCompletionOutcome(call)
   const canDrill = !!(slug && call.agentId)
   const noun = call.name === "Workflow" ? "Workflow" : "Sub-agent"
@@ -4295,16 +4298,16 @@ function AgentCompletionLine({ call, sourceId, at }: { call: TranscriptToolCall;
           <button
             type="button"
             data-subagent-completion-open
-            title={CHILD_OPEN_TITLE.AGENT}
+            title={name === title ? CHILD_OPEN_TITLE.AGENT : `${CHILD_OPEN_TITLE.AGENT} — ${title}`}
             aria-label={`${CHILD_OPEN_TITLE.AGENT}: ${title}`}
             onClick={() => pushSubAgentDrawer(slug!, call.agentId!, { label: title, subagentType: call.subagentType })}
             onMouseDown={(e) => e.preventDefault()}
             className="min-w-0 truncate rounded-sm underline decoration-muted/30 underline-offset-2 outline-none transition-colors hover:text-fg hover:decoration-fg/60 focus-visible:text-fg focus-visible:ring-1 focus-visible:ring-focus-ink-60"
           >
-            {title}
+            {name}
           </button>
         ) : (
-          <span className="min-w-0 truncate">{title}</span>
+          <span className="min-w-0 truncate" title={name === title ? undefined : title}>{name}</span>
         )}
         <span className="shrink-0">»</span>
       </span>
@@ -4347,6 +4350,8 @@ function SubAgentReportLine({ from, unnamed, dispatchId, sourceId, at }: { from:
   // borrowed one. The cell stays in the tooltip, where it is a fact about the child rather than its
   // identity, and the drill-in survives: the word "Sub-agent" carries the link.
   const label = unnamed ? undefined : from
+  // Shown as the child's handle, like the completion line above; `label` itself still titles the drawer.
+  const name = label === undefined ? undefined : subAgentName(label)
   const openTitle = unnamed && from ? `${CHILD_OPEN_TITLE.AGENT} — ${from}` : CHILD_OPEN_TITLE.AGENT
   // ONE element for the whole unnamed reading, never a "Sub-agent" span plus the shared trailing verb.
   // The divider's flex `gap` is 12px — a full em at its 12px petite-caps — because it was tuned to stand
@@ -4361,7 +4366,7 @@ function SubAgentReportLine({ from, unnamed, dispatchId, sourceId, at }: { from:
             data-subagent-report-open
             title={openTitle}
             aria-label={`${CHILD_OPEN_TITLE.AGENT}${from ? `: ${from}` : ""}`}
-            onClick={() => pushSubAgentDrawer(slug!, dispatchId!, { label: "Sub-agent", subagentType: from })}
+            onClick={() => pushSubAgentDrawer(slug!, dispatchId!, { label: UNNAMED_SUB_AGENT_LABEL, subagentType: from })}
             onMouseDown={(e) => e.preventDefault()}
             className="shrink-0 rounded-sm underline decoration-muted/30 underline-offset-2 outline-none transition-colors hover:text-fg hover:decoration-fg/60 focus-visible:text-fg focus-visible:ring-1 focus-visible:ring-focus-ink-60"
           >
@@ -4390,16 +4395,16 @@ function SubAgentReportLine({ from, unnamed, dispatchId, sourceId, at }: { from:
           <button
             type="button"
             data-subagent-report-open
-            title={CHILD_OPEN_TITLE.AGENT}
+            title={name === label ? CHILD_OPEN_TITLE.AGENT : `${CHILD_OPEN_TITLE.AGENT} — ${label}`}
             aria-label={`${CHILD_OPEN_TITLE.AGENT}: ${label}`}
             onClick={() => pushSubAgentDrawer(slug!, dispatchId!, { label, subagentType: from })}
             onMouseDown={(e) => e.preventDefault()}
             className="min-w-0 truncate rounded-sm underline decoration-muted/30 underline-offset-2 outline-none transition-colors hover:text-fg hover:decoration-fg/60 focus-visible:text-fg focus-visible:ring-1 focus-visible:ring-focus-ink-60"
           >
-            {label}
+            {name}
           </button>
         ) : (
-          <span className="min-w-0 truncate">{label}</span>
+          <span className="min-w-0 truncate" title={name === label ? undefined : label}>{name}</span>
         )}
         <span className="shrink-0">»</span>
       </span>
@@ -4491,6 +4496,9 @@ function SendMessageLine({ to, type, dispatchId, targetLabel, sourceId, at }: { 
   // `to === "main"` is an upward report, whose recipient is the conversation itself — there is no title
   // worth showing and nothing to drill into, so the divider states the verb alone.
   const title = to === "main" ? undefined : (targetLabel ?? to)
+  // A resolved dispatch description shows as the child's handle, like the completion and report lines;
+  // a raw `to` (a codex peer target, an id) is an identifier already and stays as written.
+  const name = targetLabel && title === targetLabel ? subAgentName(targetLabel) : title
   const canDrill = !!(slug && dispatchId)
   return (
     <WakeDivider icon={Bot} sourceId={sourceId} marker="agent-steer" ariaLabel={canDrill ? undefined : `${verb}${title ? ` ${title}` : ""}`} at={at}>
@@ -4505,16 +4513,16 @@ function SendMessageLine({ to, type, dispatchId, targetLabel, sourceId, at }: { 
             <button
               type="button"
               data-subagent-steer-open
-              title={CHILD_OPEN_TITLE.AGENT}
+              title={name === title ? CHILD_OPEN_TITLE.AGENT : `${CHILD_OPEN_TITLE.AGENT} — ${title}`}
               aria-label={`${CHILD_OPEN_TITLE.AGENT}: ${title}`}
               onClick={() => pushSubAgentDrawer(slug!, dispatchId!, { label: title })}
               onMouseDown={(e) => e.preventDefault()}
               className="min-w-0 truncate rounded-sm underline decoration-muted/30 underline-offset-2 outline-none transition-colors hover:text-fg hover:decoration-fg/60 focus-visible:text-fg focus-visible:ring-1 focus-visible:ring-focus-ink-60"
             >
-              {title}
+              {name}
             </button>
           ) : (
-            <span className="min-w-0 truncate">{title}</span>
+            <span className="min-w-0 truncate" title={name === title ? undefined : title}>{name}</span>
           )}
           <span className="shrink-0">»</span>
         </span>
