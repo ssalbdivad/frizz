@@ -893,12 +893,12 @@ test("sectionThreads: only human/future-timer waits partition into Snoozed; live
 test("displayTitle: an explicit human title wins over stale backend AI-title and slug fallbacks", () => {
   assert.equal(
     displayTitle(thread({ id: "generated-slug", title: "Human-readable thread title", titleAuto: false, titleLocked: true, aiTitle: "generated-slug" })),
-    "Human-readable thread title",
+    "humanReadableThreadTitle",
   )
   // A pre-split row carries no titleLocked; its real-looking title must still read as the human's.
   assert.equal(
     displayTitle(thread({ id: "generated-slug", title: "Human-readable thread title", titleAuto: false, aiTitle: "generated-slug" })),
-    "Human-readable thread title",
+    "humanReadableThreadTitle",
   )
 })
 
@@ -907,7 +907,7 @@ test("displayTitle: a title a dispatch CALLER hard-coded shows until the worker 
   // "Spinning up…" placeholder, but nobody human chose it.
   const hardCoded = { id: "investigate-acme-app-391", title: "Investigate acme/app#391", titleAuto: false, titleLocked: false }
   assert.equal(titleIsProvisional(thread({ ...hardCoded, spawnedAt: new Date().toISOString() })), false)
-  assert.equal(displayTitle(thread(hardCoded)), "Investigate acme/app#391")
+  assert.equal(displayTitle(thread(hardCoded)), "investigateAcmeApp391")
   // …and the moment the worker reports what the task actually is, that wins.
   assert.equal(
     displayTitle(thread({ ...hardCoded, aiTitle: "Cache key collides on normalized ids" })),
@@ -947,9 +947,9 @@ test("displayTitle: a real name shows as its camelCase handle; placeholders, ids
   // A proper noun keeps its casing behind the capital; a leading acronym lowercases whole.
   assert.equal(displayTitle(thread({ titleAuto: false, title: "ArkType perf" })), "arkTypePerf")
   assert.equal(displayTitle(thread({ titleAuto: false, title: "API keys" })), "apiKeys")
-  // Past three words it is a sentence, not a name: shown as written, and not addressable.
-  const sentence = thread({ titleAuto: false, title: "Fix the flaky parser test" })
-  assert.equal(displayTitle(sentence), "Fix the flaky parser test")
+  // Past five words it is a sentence, not a name: shown as written, and not addressable.
+  const sentence = thread({ titleAuto: false, title: "Fix the flaky parser test on CI" })
+  assert.equal(displayTitle(sentence), "Fix the flaky parser test on CI")
   assert.equal(threadHandleOf(sentence), undefined)
   // Placeholders and a legacy row's bare id are never camelCased or offered as a handle.
   const spinning = thread({ titleAuto: true, title: "fix it", spawnedAt: new Date().toISOString() })
@@ -990,7 +990,7 @@ test("titleIsProvisional / displayTitle: 'Spinning up' shows briefly, then falls
   // STALE spawn, still no aiTitle (e.g. a compacted session whose transcript frizz lost track of) → NOT
   // provisional: fall back to the dispatch title, never stick on "Spinning up…" forever.
   assert.equal(titleIsProvisional(thread({ titleAuto: true, title: "fix the parser bug", spawnedAt: "2026-07-08T00:00:00.000Z" })), false)
-  assert.equal(displayTitle(thread({ titleAuto: true, title: "fix the parser bug", spawnedAt: "2026-07-08T00:00:00.000Z" })), "fix the parser bug")
+  assert.equal(displayTitle(thread({ titleAuto: true, title: "fix the parser bug", spawnedAt: "2026-07-08T00:00:00.000Z" })), "fixTheParserBug")
   // A user-supplied title (titleAuto false) is real — shown as-is, never provisional.
   assert.equal(titleIsProvisional(thread({ titleAuto: false, title: "My thread", spawnedAt: fresh })), false)
   assert.equal(displayTitle(thread({ titleAuto: false, title: "My thread" })), "myThread")

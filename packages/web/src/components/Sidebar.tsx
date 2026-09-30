@@ -1,4 +1,4 @@
-import { memo, useCallback, useState } from "react"
+import { Fragment, memo, useCallback, useState } from "react"
 import { useQueryClient } from "@tanstack/react-query"
 import { AlarmClock, Check, ChevronRight, Ellipsis, Github, Hourglass, Loader2, Pin, PinOff, RotateCcw } from "lucide-react"
 import { questionsOwed, type ThreadView } from "@frizz/shared"
@@ -6,6 +6,7 @@ import { pushSubAgentDrawer, showToast } from "../store.ts"
 import { displayTitle, titleIsProvisional, isPinned, isSnoozed, sessionIndicatorKind, offersRetry, futureSnoozedUntil, queueLabelAt, waitNamesPr, prChecksRunning, restingOnSubAgents } from "../groups.ts"
 import { ageSpan, relativeAge, limitResumeClock } from "../lib/activityTime.ts"
 import { useNowMs } from "../lib/liveClock.ts"
+import { humpStarts } from "../lib/threadMentions.ts"
 import { BANDS, BAND_LABEL_TYPE, BandCount, BandGlyph, type BandKey } from "./BandLabel.tsx"
 import { BoxSpinner, STATUS_BOX } from "./BoxSpinner.tsx"
 import { ChildOpRow } from "./ChildOpRow.tsx"
@@ -151,16 +152,31 @@ export function SectionHeader({ band, count, collapsed, onToggle }: { band: Band
 // wrapping. Cutting a long token is safe: an element boundary mid-word adds no break opportunity of
 // its own, so the head still breaks exactly where `break-words` would have broken it, and the mark
 // keeps a dozen characters of company either way.
+//
+// A HANDLE is one token with its words run together (`shipTheResolverFix`, groups.ts displayTitle), so
+// its humps stand in for the spaces: the last hump is the word the mark glues to, and a `<wbr>` before
+// every other hump lets a handle wider than the rail wrap BETWEEN its words rather than wherever
+// `break-words` runs out of room mid-word ("shipTh / eResolverFix").
 const MAX_GLUED_TITLE_WORD = 16
 const GLUED_TITLE_TAIL = 12
 export function TitleWithTrailers({ title, children }: { title: string; children: ReactNode }) {
   const text = title.trimEnd()
-  const wordStart = text.lastIndexOf(" ") + 1
+  const humps = text.includes(" ") ? [] : humpStarts(text).slice(1)
+  const wordStart = humps.length > 0 ? humps.at(-1)! : text.lastIndexOf(" ") + 1
   const cut = text.length - wordStart <= MAX_GLUED_TITLE_WORD ? wordStart : text.length - GLUED_TITLE_TAIL
   if (cut >= text.length) return <>{title}{children}</>
+  const breaks = humps.filter((i) => i < cut)
+  const head = text.slice(0, cut)
   return (
     <>
-      {text.slice(0, cut)}
+      {breaks.length === 0
+        ? head
+        : [0, ...breaks].map((start, i) => (
+            <Fragment key={start}>
+              {i > 0 && <wbr />}
+              {head.slice(start, breaks[i] ?? cut)}
+            </Fragment>
+          ))}
       <span className="whitespace-nowrap">{text.slice(cut)}{children}</span>
     </>
   )

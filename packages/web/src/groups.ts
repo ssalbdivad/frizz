@@ -35,7 +35,7 @@ type TitleFields = Pick<ThreadView, "title" | "aiTitle" | "id" | "titleAuto" | "
 // represent ids"). Everything that is NOT a name renders as it always did: the "Spinning up…" and
 // "Untitled thread" placeholders, a legacy row's bare id, an external terminal session's resolved
 // title (Frizz holds no registry name for it, so there is nothing to address), and a name too long to
-// be a handle (a legacy sentence-length title — threadHandle declines past three words).
+// be a handle (a legacy sentence-length title — threadHandle declines past five words).
 //
 // One place so every render site (sidebar, palette, header, drawer, tab title) agrees. The narrow Pick
 // accepts a valtio readonly snapshot as readily as a plain ThreadView.

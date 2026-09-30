@@ -45,7 +45,8 @@ test("the provider mark shares a nowrap group with the title's last word", () =>
 })
 
 test("an over-long last word glues only its tail, so its head can still break", () => {
-  const html = row("Fix ThisIsOneAbsurdlyLongUnbreakableIdentifier")
+  // Six words, so a sentence shown as written rather than a handle (which would wrap at its humps).
+  const html = row("Fix the parser for the ThisIsOneAbsurdlyLongUnbreakableIdentifier")
 
   assert.match(
     html,
@@ -55,7 +56,15 @@ test("an over-long last word glues only its tail, so its head can still break", 
 })
 
 test("a single-word title still glues the mark to it", () => {
+  // A one-word name shows as its handle — the same word, lowercased (groups.ts displayTitle).
   const html = row("Triage")
 
-  assert.match(html, /<span class="whitespace-nowrap">Triage<span role="img"/, "no leading text is invented")
+  assert.match(html, /<span class="whitespace-nowrap">triage<span role="img"/, "no leading text is invented")
+})
+
+test("a handle wraps between its words, and the mark glues to its last one", () => {
+  // "Ship the resolver fix" shows as `shipTheResolverFix`: one token, so its humps are its words.
+  const html = row("Ship the resolver fix")
+
+  assert.match(html, />ship<wbr\/>The<wbr\/>Resolver<span class="whitespace-nowrap">Fix<span role="img"/)
 })
