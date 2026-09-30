@@ -32,8 +32,9 @@ import { awaitingFenceTitle, isDirectSubAgent } from "@frizz/shared"
 import { githubRefUrl } from "../lib/githubRef.ts"
 import { noteGithubRefs } from "../lib/githubHovercards.ts"
 import { AWAITING_FALLBACK_TITLE, AWAITING_NO_PROSE, awaitingProseBlock, prWatchRefs } from "../lib/awaitingPresentation.ts"
-import { compactElapsedSince, formatCompactElapsed } from "../lib/durationLabels.ts"
+import { compactElapsedSince, formatCompactElapsed, liveAgeSince } from "../lib/durationLabels.ts"
 import { shellBudgetLabel } from "../lib/shellBudget.ts"
+import { AGENT_GLYPH_STROKE } from "../lib/childOps.ts"
 import { useNowMs } from "../lib/liveClock.ts"
 import { useMarkdownHtml } from "../lib/useMarkdown.ts"
 import { pushBackgroundShellDrawer, pushSubAgentDrawer, pushTerminalDrawer, showToast } from "../store.ts"
@@ -51,8 +52,9 @@ import { BLOCK_RADIUS_INNER_BOTTOM, CARD_ACTION_EXPLAINER, CARD_ACTION_RADIUS, C
 // result you await), so shells get their own noun; and a thread with BOTH kinds live must name both
 // rather than silently dropping the shells behind the agent count.
 //
-// The noun is "background shell", which is what the maintainer calls them and what the card's own title
-// now says (it was the vaguer "background task" while the two shapes shared one title).
+// The noun is "agent terminal" (2026-09-29), the name the rows under it and the ops strip now give the same
+// processes — it was "background shell", the maintainer's earlier name, until his terminals and the agent's
+// became one strip; one process with two names on neighbouring surfaces read as two things.
 //
 // The count is DIRECT children only. The sentence below says "it dispatched", and a descendant — a
 // sub-agent's own sub-agent, which `subAgents` also carries now so the rows can nest — was dispatched by
@@ -78,10 +80,10 @@ export function awaitingBackgroundSubject(
   // have all three out, and silently dropping one behind another's count is what this replaced.
   const parts = [
     agents > 0 ? `${agents} sub-agent${agents === 1 ? "" : "s"}` : null,
-    shells > 0 ? `${shells} background shell${shells === 1 ? "" : "s"}` : null,
+    shells > 0 ? `${shells} agent terminal${shells === 1 ? "" : "s"}` : null,
     watchers > 0 ? `${watchers} PR watcher${watchers === 1 ? "" : "s"}` : null,
   ].filter((p): p is string => p !== null)
-  if (parts.length === 0) return "0 background shells" // unreachable via the card's own gate; never an empty sentence
+  if (parts.length === 0) return "0 agent terminals" // unreachable via the card's own gate; never an empty sentence
   if (parts.length === 1) return parts[0]
   return `${parts.slice(0, -1).join(", ")} and ${parts[parts.length - 1]}`
 }
@@ -148,8 +150,13 @@ export function awaitingBackgroundLabel(
   thread: Pick<ThreadView, "subAgents" | "bgShells" | "watches">,
   hints: readonly AwaitingHint[],
 ): string {
-  return awaitingFenceTitle(hints) ?? (shellsAlone(thread) ? "Background shells running" : AWAITING_FALLBACK_TITLE)
+  return awaitingFenceTitle(hints) ?? (shellsAlone(thread) ? SHELLS_ALONE_TITLE : AWAITING_FALLBACK_TITLE)
 }
+
+/** The shell-only rest's title. The maintainer named this shape "Background shells running" (2026-08-04);
+ *  the noun moved with the rows' (2026-09-29, "agent terminal" — see awaitingBackgroundSubject), the rule
+ *  that this one shape keeps a kind-naming title did not. */
+export const SHELLS_ALONE_TITLE = "Agent terminals running"
 
 /** Background shells and nothing else — the one shape with a title of its own. An armed timer
  *  disqualifies it the same way a PR watcher does: the card then holds a Timers group too, and a
@@ -639,7 +646,7 @@ function ShellWatchRow({ watch, thread, slug, now }: {
     <WaitRow
       testKind="shell"
       testId={watch.target}
-      mark={<Bot size={12} className={`${ON_CAP} text-shell`} />}
+      mark={<Bot size={12} strokeWidth={AGENT_GLYPH_STROKE} className={`${ON_CAP} text-shell`} />}
       name={watch.target}
       title={watch.target}
       status={elapsed || "running"}
@@ -657,7 +664,7 @@ export function BgShellRow({ shell, slug, now, testId }: {
   now: number
   testId?: string
 }) {
-  const elapsed = compactElapsedSince(shell.startedAt, now)
+  const elapsed = liveAgeSince(shell.startedAt, now)
   // Every row with an id opens the drawer — a Codex exec's too. Codex keeps that exec's output inside its
   // own session, and the drawer says so, but its command, its folder and its Stop are all real.
   const openable = Boolean(shell.id)
@@ -665,7 +672,7 @@ export function BgShellRow({ shell, slug, now, testId }: {
     <WaitRow
       testKind="shell"
       testId={testId ?? shell.id ?? shell.label}
-      mark={<Bot size={12} className={`${ON_CAP} text-shell`} />}
+      mark={<Bot size={12} strokeWidth={AGENT_GLYPH_STROKE} className={`${ON_CAP} text-shell`} />}
       name={shell.label}
       onOpen={openable ? () => pushBackgroundShellDrawer(slug, shell.id!, { label: shell.label, startedAt: shell.startedAt }) : undefined}
       title={openable ? `Open agent terminal — running for ${elapsed}` : shell.label}
@@ -681,7 +688,7 @@ export function BgShellRow({ shell, slug, now, testId }: {
 /** One of YOUR terminals, running or waiting at a prompt, as a rail row — the human twin of BgShellRow. */
 export function TermWaitRow({ terminal, slug, now }: { terminal: ThreadTerminal; slug: string; now: number }) {
   const prompting = terminal.awaitingInput === true
-  const elapsed = compactElapsedSince(terminal.startedAt, now)
+  const elapsed = liveAgeSince(terminal.startedAt, now)
   return (
     <WaitRow
       testKind="terminal"
@@ -827,7 +834,7 @@ function awaitingWaitGroups(thread: Pick<ThreadView, "id" | "subAgents" | "bgShe
   // most-alive first. An empty group renders nothing — never a heading over no rows.
   return [
     { head: "Sub-agents", rows: agents.map((a) => <AgentRow key={a.id ?? a.label} agent={a} slug={thread.id} now={now} />) },
-    { head: "Background shells", rows: shells.map((w) => <ShellWatchRow key={w.id} watch={w} thread={thread} slug={thread.id} now={now} />) },
+    { head: "Agent terminals", rows: shells.map((w) => <ShellWatchRow key={w.id} watch={w} thread={thread} slug={thread.id} now={now} />) },
     { head: "Pull requests", rows: prs.map((w) => <GithubWatchRow key={w.id} watch={w} />) },
     // Its own group, under GitHub's own noun — an issue beside a PR under "Pull requests" would be the
     // one row on the card whose heading lied about it.
@@ -1019,7 +1026,7 @@ function AwaitingSnooze({ thread }: { thread: Pick<ThreadView, "id" | "sessionId
  *
  *  ROWED, not every running shell of the thread. The card lists only the shells the worker DECLARED
  *  (see declaredShellWatches), and an undeclared dev server beside them is often one the human is
- *  using; a "Stop 2 shells" over one visible row would end work the card never showed. The fullscreen
+ *  using; a "Stop 2 terminals" over one visible row would end work the card never showed. The fullscreen
  *  rail and the ops strip list every shell, each with its own ×, for the rest.
  *
  *  `stoppable` is the SERVER's answer, read exactly as childOpDismisser reads it (lib/dismissChildOp.ts)
@@ -1035,11 +1042,12 @@ export function stoppableShellIds(thread: Pick<ThreadView, "id" | "subAgents" | 
   return [...ids]
 }
 
-/** "Stop shell", "Stop 2 shells". STOP, not Cancel: it is the same verb the × on a running row states
+/** "Stop terminal", "Stop 2 terminals" — the noun of the rows it ends ("Agent terminals"; it said "shell" while
+ *  they did). STOP, not Cancel: it is the same verb the × on a running row states
  *  (CHILD_DISMISS_VERB) and the one the shell's own drawer footer says, and it kills a real process —
  *  "cancel" reads as backing out of something that has not happened yet. */
 export function stopShellsLabel(count: number): string {
-  return count === 1 ? "Stop shell" : `Stop ${count} shells`
+  return count === 1 ? "Stop terminal" : `Stop ${count} terminals`
 }
 
 /** THE CARD'S SECOND VERB, beside Snooze. Snooze parks the card and leaves the shells running; this ends
@@ -1048,7 +1056,7 @@ export function stopShellsLabel(count: number): string {
  *  Outlined, not white: the card family's rule is one white verb per card, and the one sanctioned
  *  departure is a secondary sibling standing beside the primary, which stays outlined so the pair keeps
  *  a hierarchy (the sign-in card's Retry, ChatView.ProviderFaultCard). The danger tint arrives on HOVER
- *  only, as on the drawers' own "Stop shell" / "Stop sub-agent" — a card at rest should not shout. */
+ *  only, as on the drawers' own "Stop" / "Stop sub-agent" — a card at rest should not shout. */
 function AwaitingStopShells({ slug, ids }: { slug: string; ids: readonly string[] }) {
   // The thread's own project client, as the × uses — rpc is the address bar's project, and a surface
   // that draws another project's thread wraps it in a ThreadProjectScope (api/threadApi.tsx).
@@ -1068,7 +1076,7 @@ function AwaitingStopShells({ slug, ids }: { slug: string; ids: readonly string[
       onClick={stop}
       disabled={pending}
       onMouseDown={(e) => e.preventDefault()}
-      title={ids.length === 1 ? "Stop this background shell — the worker is told" : `Stop these ${ids.length} background shells — the worker is told`}
+      title={ids.length === 1 ? "Stop this agent terminal — the agent is told" : `Stop these ${ids.length} agent terminals — the agent is told`}
       className={`shrink-0 ${CARD_ACTION_RADIUS} border border-border-strong px-2 py-[3px] text-[11px] font-medium text-fg/90 outline-none transition-colors hover:border-danger/40 hover:bg-danger/10 hover:text-danger-soft focus-visible:ring-1 focus-visible:ring-focus-ink-60 disabled:opacity-45`}
     >
       {pending ? "Stopping…" : label}

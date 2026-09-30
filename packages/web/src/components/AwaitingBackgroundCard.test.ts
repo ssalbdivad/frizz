@@ -49,14 +49,14 @@ test("awaitingBackgroundSubject names exactly the work that is RUNNING", () => {
   assert.equal(awaitingBackgroundSubject(thread([agent("running")], [])), "1 sub-agent")
   assert.equal(awaitingBackgroundSubject(thread([agent("running"), agent("running")], [])), "2 sub-agents")
   // A shell-only thread must never claim a sub-agent: a launched dev server is not a child whose
-  // result you await. The noun is the maintainer's own ("background shells"), matching the title.
-  assert.equal(awaitingBackgroundSubject(thread([], [shell("running")])), "1 background shell")
-  assert.equal(awaitingBackgroundSubject(thread([], [shell("running"), shell("running")])), "2 background shells")
+  // result you await. The noun is the rows' own ("agent terminals", as the ops strip names them), matching the title.
+  assert.equal(awaitingBackgroundSubject(thread([], [shell("running")])), "1 agent terminal")
+  assert.equal(awaitingBackgroundSubject(thread([], [shell("running"), shell("running")])), "2 agent terminals")
   // BOTH kinds live — the case that used to drop the shells behind the agent count entirely.
-  assert.equal(awaitingBackgroundSubject(thread([agent("running")], [shell("running")])), "1 sub-agent and 1 background shell")
+  assert.equal(awaitingBackgroundSubject(thread([agent("running")], [shell("running")])), "1 sub-agent and 1 agent terminal")
   // A STALE sub-agent is not live work: it must not be counted, and with a live shell beside it the
   // sentence falls back to the shell alone rather than claiming a sub-agent that stopped reporting.
-  assert.equal(awaitingBackgroundSubject(thread([agent("stale")], [shell("running")])), "1 background shell")
+  assert.equal(awaitingBackgroundSubject(thread([agent("stale")], [shell("running")])), "1 agent terminal")
   // A DESCENDANT — a sub-agent's own sub-agent — rides `subAgents` so the rows can nest, but the
   // sentence says "it dispatched", and this thread's worker dispatched no such thing.
   assert.equal(awaitingBackgroundSubject(thread([agent("running"), nested(2), nested(3)], [])), "1 sub-agent")
@@ -96,12 +96,12 @@ test("a thread nobody can park draws no snooze — foreign or archived", () => {
 // the rest it describes: a shell-only rest is the one that queues, and it is not awaiting anything.
 test("the card's title names the shape: shells running vs awaiting a dispatched result", () => {
   const shellsOnly = text(thread([], [shell("running"), shell("running")]))
-  assert.match(shellsOnly, /Background shells running/)
+  assert.match(shellsOnly, /Agent terminals running/)
   assert.doesNotMatch(shellsOnly, /Awaiting/)
 
   const withChild = text(thread([agent("running")], [shell("running")]))
   assert.match(withChild, /Awaiting/)
-  assert.doesNotMatch(withChild, /Background shells running/)
+  assert.doesNotMatch(withChild, /Agent terminals running/)
 })
 
 // …AND THE WORKER MAY OVERRIDE BOTH (maintainer 2026-08-26: "let's let the agent specify its own title
@@ -117,7 +117,7 @@ test("a title: in the fence replaces the derived heading, on either shape", () =
   // The shell-only shape has a kind-naming heading of its own, and a declared title beats that too.
   const shells = { ...thread([], [shell("running")]), lastFence: titled("Nightly bench, arm 3 of 3") } as Parameters<typeof AwaitingBackgroundCard>[0]["thread"]
   assert.match(text(shells), /Nightly bench, arm 3 of 3/)
-  assert.doesNotMatch(text(shells), /Background shells running/)
+  assert.doesNotMatch(text(shells), /Agent terminals running/)
 })
 
 test("an empty or absent title falls back to the derived heading", () => {
@@ -188,11 +188,11 @@ test("every kind the thread declared gets a row, under its own heading", () => {
   assert.match(html, /data-wait-kind="github"/)
   assert.match(html, /data-wait-kind="timer"/)
   const body = text(t)
-  for (const head of ["Sub-agents", "Background shells", "Pull requests", "Timers"]) assert.match(body, new RegExp(head))
+  for (const head of ["Sub-agents", "Agent terminals", "Pull requests", "Timers"]) assert.match(body, new RegExp(head))
   // MOST-ALIVE FIRST, the order the ops strip already settled: a sub-agent and a shell are running right
   // now, a watched PR is waiting on somebody else, and a timer is waiting on nothing but the clock.
-  assert.ok(body.indexOf("Sub-agents") < body.indexOf("Background shells"))
-  assert.ok(body.indexOf("Background shells") < body.indexOf("Pull requests"))
+  assert.ok(body.indexOf("Sub-agents") < body.indexOf("Agent terminals"))
+  assert.ok(body.indexOf("Agent terminals") < body.indexOf("Pull requests"))
   assert.ok(body.indexOf("Pull requests") < body.indexOf("Timers"))
 })
 
@@ -219,13 +219,13 @@ test("an armed timer gets a row: named by its prompt, counting down, non-interac
 test("a timer beside running shells takes the generic title", () => {
   const t = { ...thread([], [shell("running")]), watches: [shellWatch("bzvtnt3ig"), timerWatch()] } as Parameters<typeof AwaitingBackgroundCard>[0]["thread"]
   assert.match(text(t), /Awaiting/)
-  assert.doesNotMatch(text(t), /Background shells running/)
+  assert.doesNotMatch(text(t), /Agent terminals running/)
 })
 
 test("a heading never appears over an empty group", () => {
   const agentsOnly = text(thread([agent("running")], []))
   assert.match(agentsOnly, /Sub-agents/)
-  assert.doesNotMatch(agentsOnly, /Background shells/)
+  assert.doesNotMatch(agentsOnly, /Agent terminals/)
   assert.doesNotMatch(agentsOnly, /Pull requests/)
 })
 
@@ -290,7 +290,7 @@ test("the prose sentence yields to the rows entirely", () => {
   assert.doesNotMatch(withRows, /still running\./)
   // …and survives for the one reachable gap: a declared wait whose rows all failed to resolve.
   const noRows = text(thread([agent("stale")], [shell("running")]))
-  assert.match(noRows, /1 background shell is still running/)
+  assert.match(noRows, /1 agent terminal is still running/)
 })
 
 // ---- THE UNIFIED CARD (2026-08-24) ---------------------------------------------------------------
@@ -352,8 +352,8 @@ test("AwaitingWaitTable draws the resting card's rows off a thread that is not a
   const html = renderToStaticMarkup(createElement(AwaitingWaitTable, { thread: midTurn, divider: true }))
   const plain = html.replace(/<[^>]+>/g, "")
   // One row per kind, grouped under the resting card's own headings, in its order.
-  for (const head of ["Sub-agents", "Background shells", "Pull requests", "Timers"]) assert.match(plain, new RegExp(head))
-  assert.ok(plain.indexOf("Sub-agents") < plain.indexOf("Background shells") && plain.indexOf("Background shells") < plain.indexOf("Pull requests") && plain.indexOf("Pull requests") < plain.indexOf("Timers"))
+  for (const head of ["Sub-agents", "Agent terminals", "Pull requests", "Timers"]) assert.match(plain, new RegExp(head))
+  assert.ok(plain.indexOf("Sub-agents") < plain.indexOf("Agent terminals") && plain.indexOf("Agent terminals") < plain.indexOf("Pull requests") && plain.indexOf("Pull requests") < plain.indexOf("Timers"))
   // The shell row resolves its declared handle to the shell's NAME, and the id stays in data attributes.
   assert.match(html, /data-wait-row="bzvtnt3ig" data-wait-kind="shell"/)
   assert.match(plain, /vite dev/)
@@ -390,7 +390,7 @@ test("a fence's shell hint rows the shell the board no longer lists", () => {
   const plain = html.replace(/<[^>]+>/g, "")
   assert.match(html, /data-wait-row="bzvtnt3ig" data-wait-kind="shell"/, "the declared shell is a row again")
   assert.match(plain, /vite dev/, "…named by the shell, not the handle")
-  for (const head of ["Background shells", "Pull requests", "Timers"]) assert.match(plain, new RegExp(head))
+  for (const head of ["Agent terminals", "Pull requests", "Timers"]) assert.match(plain, new RegExp(head))
   // Without the hints the same thread draws two rows — the exact bug.
   assert.doesNotMatch(renderToStaticMarkup(createElement(AwaitingWaitTable, { thread: bumped, divider: true })), /data-wait-kind="shell"/)
   // A hint naming nothing running is not a wait: the shell finished, or the worker mistyped it. No row,
@@ -424,11 +424,11 @@ const liveShell = (id: string, taskId: string, label: string, stoppable?: boolea
 const shellRest = (shells: ReturnType<typeof liveShell>[], declared: string[]) =>
   ({ ...thread([], shells), watches: declared.map(shellWatch) }) as T
 
-test("a running, stoppable, declared shell puts Stop shell in the footer beside Snooze", () => {
+test("a running, stoppable, declared shell puts Stop terminal in the footer beside Snooze", () => {
   const t = shellRest([liveShell("toolu_s", "bzvtnt3ig", "vite dev", true)], ["bzvtnt3ig"])
   const html = render(t)
   assert.match(html, /data-awaiting-stop-shells="1"/)
-  assert.match(text(t), /Stop shell/)
+  assert.match(text(t), /Stop terminal/)
   assert.match(html, /Snooze/, "Stop joins the footer; it does not replace the park")
   // Stop TRAILS, so Snooze keeps its caption directly beside it.
   assert.ok(html.indexOf("Hides card until new activity is detected") < html.indexOf("data-awaiting-stop-shells"))
@@ -436,14 +436,14 @@ test("a running, stoppable, declared shell puts Stop shell in the footer beside 
 
 test("the count follows the shells the card rows, and says so", () => {
   const two = shellRest([liveShell("toolu_a", "ba", "vite dev", true), liveShell("toolu_b", "bb", "gh run watch", true)], ["ba", "bb"])
-  assert.match(text(two), /Stop 2 shells/)
+  assert.match(text(two), /Stop 2 terminals/)
   assert.deepEqual(stoppableShellIds(two!), ["toolu_a", "toolu_b"])
   // An UNDECLARED shell running beside a declared one has no row, so it is not in the count either — a
   // "Stop 2 shells" over one visible row would end a dev server the card never showed.
   const oneRowed = shellRest([liveShell("toolu_a", "ba", "vite dev", true), liveShell("toolu_x", "bx", "some other server", true)], ["ba"])
   assert.deepEqual(stoppableShellIds(oneRowed!), ["toolu_a"])
-  assert.match(text(oneRowed), /Stop shell/)
-  assert.doesNotMatch(text(oneRowed), /Stop 2 shells/)
+  assert.match(text(oneRowed), /Stop terminal/)
+  assert.doesNotMatch(text(oneRowed), /Stop 2 terminals/)
 })
 
 test("no stoppable running shell ⇒ no Stop, never a control that cannot deliver", () => {

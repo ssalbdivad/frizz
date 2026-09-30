@@ -132,3 +132,15 @@ test("a quiet-but-alive background shell breathes, and stays visible as a static
   // …and degrade to a static ring (never fully disappear) when motion is reduced.
   assert.match(css, /\.frizz-live-dot-quiet \{ animation: none;[^}]*border: 1\.5px solid/)
 })
+
+// A process row's OWNER GLYPH carries the same two live states by motion (ThreadTerminals.tsx PROCESS_HUE):
+// running pulses, quiet breathes. With motion reduced both stopped at full opacity, so a quiet agent
+// terminal looked exactly like a running one; the quiet one now holds a calmer, still opacity.
+test("reduced motion keeps a quiet process glyph distinct from a running one", () => {
+  const css = readFileSync(new URL("../styles.css", import.meta.url), "utf8")
+  const reduced = [...css.matchAll(/@media \(prefers-reduced-motion: reduce\) \{([\s\S]*?)\n\}/g)].map((m) => m[1]).join("\n")
+  const opacity = (selector: string) => Number(new RegExp(`\\${selector} \\{ animation: none; opacity: ([\\d.]+); \\}`).exec(reduced)?.[1])
+  assert.equal(opacity(".frizz-live-glyph"), 1, "running: still, at full strength")
+  const quiet = opacity(".frizz-live-glyph-quiet")
+  assert.ok(quiet > 0.3 && quiet < 0.8, `quiet: still, visibly calmer, never gone (${quiet})`)
+})

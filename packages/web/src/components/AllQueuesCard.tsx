@@ -60,6 +60,7 @@ import { QuietTurnCard, showsQuietTurnCard } from "./QuietTurnCard.tsx"
 import { SnoozeButton } from "./SnoozeButton.tsx"
 import { StateButton } from "./ThreadLifecycleFooter.tsx"
 import { cardProcesses, focusedProject, openProcessDrawer, TerminalPromptPane, ThreadProcessStrip } from "./ThreadTerminals.tsx"
+import type { ThreadProcess } from "../lib/threadProcesses.ts"
 import { ThreadCheckoutToken } from "./ThreadCheckoutToken.tsx"
 import { Tooltip } from "./Tooltip.tsx"
 import { BLOCK_RADIUS, BLOCK_RADIUS_INNER_BOTTOM, QUEUE_WRAP, TranscriptCard } from "./TranscriptCard.tsx"
@@ -247,6 +248,15 @@ export const AllQueuesCard = memo(function AllQueuesCard({
   }
   const answeringScope = useMemo(() => ({ api, projectDir: project.projectDir, projectId: project.id }), [api, project.projectDir, project.id])
 
+  // A terminal row on the card — in the strip, or the caption over a prompt's screen — opens the thread,
+  // then that terminal's drawer over it when the thread's project is the one in focus (the drawer stack is
+  // that project's); otherwise the thread's drawer carries it.
+  const openProcess = (process: ThreadProcess) => {
+    const here = focusedProject(project.slug)
+    openInPlace(project, thread.id)
+    if (here) openProcessDrawer(thread.id, process)
+  }
+
   const openHere = (event: ReactMouseEvent<HTMLAnchorElement>) => {
     if (!isPlainLeftClick(event)) return
     event.preventDefault()
@@ -382,10 +392,11 @@ export const AllQueuesCard = memo(function AllQueuesCard({
                   all, and its notice is about the process, not the message (showsRestedCard). */}
               {showsRestedCard(thread, text) && <RestedCard thread={thread} />}
               {showsQuietTurnCard(thread) && <QuietTurnCard thread={thread} />}
-              {/* A terminal of yours waiting at a prompt — what queued this card — as its live screen, so the
-                  answer is typed right here. Its row, with every other terminal's, is in the strip below. */}
+              {/* A terminal of yours waiting at a prompt — what queued this card — as its live screen under its
+                  own row, so the answer is typed right here and the row says which terminal is asking. The
+                  strip below lists every other one. */}
               <ThreadProjectScope projectId={project.id} projectDir={project.projectDir}>
-                <TerminalPromptPane thread={thread} />
+                <TerminalPromptPane thread={thread} onOpen={openProcess} />
               </ThreadProjectScope>
             </div>
 
@@ -414,11 +425,7 @@ export const AllQueuesCard = memo(function AllQueuesCard({
                     thread={thread}
                     surface="card"
                     className="px-1 pt-1.5"
-                    onOpen={(process) => {
-                      const here = focusedProject(project.slug)
-                      openInPlace(project, thread.id)
-                      if (here) openProcessDrawer(thread.id, process)
-                    }}
+                    onOpen={openProcess}
                   />
                 </div>
               </div>

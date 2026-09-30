@@ -4,9 +4,9 @@ import { createElement } from "react"
 import { renderToStaticMarkup } from "react-dom/server"
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query"
 import type { BgShellView, ThreadTerminal, ThreadView } from "@frizz/shared"
-import { ProcessRow, QUIET_TITLE, ThreadProcessStrip, ThreadTerminalMark, cardProcesses, processFolderHint, processTitle } from "./ThreadTerminals.tsx"
+import { MAIN_CHECKOUT_WORD, ProcessRow, QUIET_TITLE, TerminalPromptPane, ThreadProcessStrip, ThreadTerminalMark, cardProcesses, processFolderHint, processTitle } from "./ThreadTerminals.tsx"
 import { threadProcesses, type ThreadProcess } from "../lib/threadProcesses.ts"
-import { CHILD_MARK_SLOT_CLASS } from "../lib/childOps.ts"
+import { AGENT_GLYPH_STROKE, CHILD_MARK_SLOT_CLASS } from "../lib/childOps.ts"
 
 // ONE STRIP, TWO OWNERS. The row box is the ops strip's, so the checks that matter are the ones that keep
 // every label on one x — one mark slot, one kind tag, no extra element before the label — and the ones that
@@ -18,7 +18,7 @@ const term = (over: Partial<ThreadTerminal> = {}): ThreadTerminal => ({ id: "ter
 const shell = (over: Partial<BgShellView> = {}): BgShellView => ({ id: "toolu_1", label: "vite dev server", startedAt: at("00"), state: "running", cwd: "/repo", ...over })
 const processes = (thread: Pick<ThreadView, "terminals" | "bgShells">) => threadProcesses(thread, [], { now: NOW })
 
-const row = (p: ThreadProcess, extra: { onOpen?: () => void; lines?: number; watched?: boolean } = {}) =>
+const row = (p: ThreadProcess, extra: { onOpen?: () => void; lines?: number; watched?: boolean; here?: ThreadView["checkout"] } = {}) =>
   renderToStaticMarkup(createElement(ProcessRow, { process: p, slug: "t", ...extra }))
 
 const withQuery = (node: ReturnType<typeof createElement>) =>
@@ -43,10 +43,19 @@ test("every row has exactly one TERM tag and nothing extra before its label — 
     // nothing else, so every label on the strip starts at one x.
     const identity = html.slice(html.indexOf("<button"), html.indexOf("data-process-label"))
     assert.equal(identity.split("<span").length - 1, 4, `${p.key}: arrow, slot, tag, and the label's own span`)
-    // 1em for the terminal square, 1.1em for the bot — the size that gives the two owners one weight.
-    const size = p.owner === "agent" ? "1\\.1em" : "1em"
-    assert.match(identity, new RegExp(`items-center"><svg[^>]*class="lucide lucide-[a-z-]+ h-\\[${size}\\] w-\\[${size}\\] shrink-0 `), `${p.key}: the glyph is centred in the slot, like the dot it replaces`)
+    // ONE box for both owners (1em, lifted by the measured MARK_LIFT); the bot's missing weight is its pen
+    // (AGENT_GLYPH_STROKE), not its size — at 1.1em it was the widest, loudest mark on the strip.
+    assert.match(identity, /items-center"><svg[^>]*class="lucide lucide-[a-z-]+ h-\[1em\] w-\[1em\] shrink-0 -translate-y-\[0\.03em\] /, `${p.key}: the glyph is centred in the slot, like the dot it replaces`)
+    assert.match(identity, new RegExp(`stroke-width="${p.owner === "agent" ? AGENT_GLYPH_STROKE : 2}"`), `${p.key}: the owner's pen`)
   }
+})
+
+test("a Codex exec whose label IS its command is set as a command, in mono, like yours", () => {
+  const [codex] = processes({ bgShells: [shell({ id: "p1", label: "cargo watch -x test", command: "cargo watch -x test", outputUnavailable: true })] })
+  assert.match(row(codex!), /<span data-process-label="true" class="min-w-0 truncate text-muted-70"><span class="font-mono-keep text-\[11px\] leading-none">cargo watch -x test<\/span><\/span>/)
+  // A described one stays prose, even with its command beside it.
+  const [described] = processes({ bgShells: [shell({ id: "p2", label: "Run the tests on change", command: "cargo watch -x test" })] })
+  assert.doesNotMatch(row(described!), /font-mono-keep/)
 })
 
 test("the agent's label is its description in the row's sans; yours is the command, a mono run on the sans line", () => {
@@ -78,24 +87,58 @@ test("the hue is the row's liveness", () => {
   }
 })
 
-test("the folder hint names a row's checkout only when it is off the project root — read off the row alone", () => {
+test("the folder hint names a row's checkout only when it is NOT where the header says the agent is", () => {
   const probe = { dir: "/repo/.frizz/worktrees/probe", kind: "worktree" as const }
-  const off = processes({ bgShells: [shell({ cwd: "/repo/.frizz/worktrees/probe", checkout: probe })] })[0]!
-  assert.match(row(off), /data-process-checkout="worktree"[^>]*>probe</)
-  assert.doesNotMatch(row(processes({ bgShells: [shell()] })[0]!), /data-process-checkout/, "the root names nothing")
-  // A terminal in `packages/web` is still in the root checkout: no hint, whatever its folder's name.
-  assert.doesNotMatch(row(processes({ terminals: [term({ cwd: "/repo/packages/web" })] })[0]!), /data-process-checkout/)
-  const theirs = processes({ terminals: [term({ checkout: { dir: "/elsewhere", kind: "folder" } })] })[0]!
-  assert.match(row(theirs), /data-process-checkout="folder"[^>]*>elsewhere</, "one rule for both owners")
-  // NEVER `root`, and never a function of where the agent is now: the same row reads the same wherever
-  // the header's token says the agent went (a verifier watched every root row read `root` while the agent
-  // sat in `probe`, then every probe row read `probe` once it came back).
-  const html = withQuery(createElement(ThreadProcessStrip, { thread: { id: "t", bgShells: [shell(), shell({ id: "w", cwd: probe.dir, checkout: probe })], terminals: [term()], watches: [], checkout: probe } as ThreadView, surface: "card" }))
-  assert.doesNotMatch(html, />root</)
-  assert.equal(html.split("data-process-checkout").length - 1, 1, "only the worktree row carries a hint")
-  // A transcript-only row was never lifted: it claims nothing.
-  const transcriptOnly = threadProcesses({ bgShells: [] }, [{ label: "codex exec", startedAt: at("01"), state: "running", cwd: "/repo/.frizz/worktrees/probe/src" }], { now: NOW })[0]!
-  assert.equal(processFolderHint(transcriptOnly), undefined)
+  const other = { dir: "/repo/.frizz/worktrees/other", kind: "worktree" as const }
+  const inProbe = processes({ bgShells: [shell({ cwd: "/repo/.frizz/worktrees/probe/packages/web", checkout: probe })] })[0]!
+  const atRoot = processes({ bgShells: [shell()] })[0]!
+  const humanAtRoot = processes({ terminals: [term({ cwd: "/repo/packages/web" })] })[0]!
+  const inOther = processes({ terminals: [term({ checkout: other })] })[0]!
+  // The agent at the project root (no header token): only a row off the root says where it is.
+  assert.match(row(inProbe), /data-process-checkout="worktree"[^>]*>(?:<[^>]*>)*probe</)
+  assert.equal(processFolderHint(atRoot, undefined), undefined, "the root, while the header says the root, names nothing")
+  assert.equal(processFolderHint(humanAtRoot, undefined), undefined, "a terminal in packages/web is in the root checkout")
+  // The agent in `probe` (the header's token says so): a row there says nothing more…
+  assert.equal(processFolderHint(inProbe, probe), undefined, "the header already said probe")
+  // …a row in the project's own checkout says `main`, one word, for both owners…
+  assert.deepEqual(processFolderHint(atRoot, probe), { text: MAIN_CHECKOUT_WORD, kind: "main" })
+  assert.deepEqual(processFolderHint(humanAtRoot, probe), { text: "main", kind: "main" })
+  assert.match(row(atRoot, { here: probe }), /data-process-checkout="main" title="The project&#x27;s main checkout[^"]*"[^>]*>(?:<[^>]*>)*main</)
+  // …and a row in a third checkout names it.
+  assert.deepEqual(processFolderHint(inOther, probe), { text: "other", kind: "worktree", dir: other.dir })
+  // A row the server did not place (transcript-only) claims nothing, wherever the agent is.
+  const transcriptOnly = threadProcesses({ bgShells: [] }, [{ label: "codex exec", startedAt: at("01"), state: "running", cwd: "packages/web" }], { now: NOW })[0]!
+  assert.equal(processFolderHint(transcriptOnly, undefined), undefined)
+  assert.equal(processFolderHint(transcriptOnly, probe), undefined)
+})
+
+test("a strip whose rows all run where the agent is shows no hints — the header said it once", () => {
+  const probe = { dir: "/repo/.frizz/worktrees/probe", kind: "worktree" as const }
+  const strip = (thread: Partial<ThreadView>) =>
+    withQuery(createElement(ThreadProcessStrip, { thread: { id: "t", watches: [], terminals: [], bgShells: [], ...thread } as ThreadView, surface: "drawer" }))
+  // The verifier's drawer: the agent in probe and five rows there. Every one of them used to end in `probe`.
+  const allInProbe = strip({ checkout: probe, bgShells: [shell({ checkout: probe }), shell({ id: "b", checkout: probe })], terminals: [term({ checkout: probe }), term({ id: "t2", checkout: probe, state: "exited", exitCode: 0 })] })
+  assert.doesNotMatch(allInProbe, /data-process-checkout/)
+  const allAtRoot = strip({ bgShells: [shell()], terminals: [term()] })
+  assert.doesNotMatch(allAtRoot, /data-process-checkout/)
+  // One row left behind in the project's own checkout is the one that speaks.
+  const mixed = strip({ checkout: probe, bgShells: [shell({ checkout: probe }), shell({ id: "b", label: "left at root" })] })
+  assert.equal(mixed.split("data-process-checkout=").length - 1, 1)
+  assert.match(mixed, /data-process-checkout="main"/)
+})
+
+test("the hint gives way before the label: it shrinks first, and drops whole rather than truncating", () => {
+  const html = row(processes({ bgShells: [shell({ label: "Test watch in the probe worktree", budgetEndsAt: at("45") })] })[0]!, { here: { dir: "/repo/.frizz/worktrees/probe", kind: "worktree" } })
+  // The hint is its own flex item AFTER the label's, shrinking ahead of it and clipping to one line…
+  const hint = /<span data-process-checkout="main"[^>]*class="([^"]*)"/.exec(html)?.[1] ?? ""
+  for (const cls of ["shrink-[999]", "min-w-0", "flex-wrap", "overflow-hidden", "h-[1lh]"]) assert.ok(hint.split(" ").includes(cls), `hint box: ${cls}`)
+  assert.ok(html.indexOf("data-process-label") < html.indexOf("data-process-checkout"), "after the label")
+  // …with a zero-width strut holding the first line, so a hint that does not fit wraps off it whole.
+  assert.match(html, /data-process-checkout="main"[^>]*><span aria-hidden="true" class="h-\[1lh\] w-0"><\/span>/)
+  // The readings never shrink: the budget and the age are the row's live state.
+  assert.match(html, /<span class="flex shrink-0 items-center gap-1 text-muted-40 pl-1">/)
+  // The label is the only other thing that may give, and only by truncating.
+  assert.match(html, /<span data-process-label="true" class="min-w-0 truncate text-muted-70">/)
 })
 
 test("the tooltip says whose it is, what it runs, and where it runs", () => {
@@ -119,7 +162,7 @@ test("a card lists only live terminals; the drawer keeps your finished ones", ()
   assert.match(drawer, /exit 2/)
   // …and the card gates its wrapper on the same rows, so a card with only finished runs draws nothing.
   assert.equal(cardProcesses({ terminals: [term({ state: "exited", exitCode: 0 })], bgShells: [] }, NOW).length, 0)
-  assert.equal(cardProcesses({ terminals: [term({ awaitingInput: true })], bgShells: [shell({ state: "stale" })] }, NOW).length, 2, "a prompt and a quiet shell are live")
+  assert.deepEqual(cardProcesses({ terminals: [term({ awaitingInput: true })], bgShells: [shell({ state: "stale" })] }, NOW).map((p) => p.state), ["quiet"], "a quiet shell is live; the prompt is its pane's caption, not a strip row")
 })
 
 test("a Codex exec's row opens like every other; a transcript-only row has nothing to open", async () => {
@@ -149,6 +192,14 @@ test("the agent's row reads its line count and budget; yours reads its state onc
   assert.match(row(processes({ terminals: [term({ state: "exited", exitCode: 2 })] })[0]!), /text-\[color:var\(--gh-fg-danger\)\]">exit 2</)
 })
 
+test("a row that has just started reads its age at once, and never in seconds", () => {
+  // Started AFTER the page clock's last 30s tick: the elapsed is negative against that reading. It used to
+  // show no age at all until the next tick, then a seconds value frozen for 30s.
+  const justNow = new Date(Date.now() + 5_000).toISOString()
+  assert.match(row(processes({ bgShells: [shell({ startedAt: justNow, budgetEndsAt: new Date(Date.now() + 15 * 60_000).toISOString() })] })[0]!), /title="Running for &lt;1m">&lt;1m</)
+  assert.match(row(processes({ terminals: [term({ startedAt: new Date(Date.now() - 24_000).toISOString() })] })[0]!), />&lt;1m</)
+})
+
 test("the sidebar mark counts both owners, and its tone says whose is running", () => {
   const mark = (thread: Pick<ThreadView, "terminals" | "bgShells">) => renderToStaticMarkup(createElement(ThreadTerminalMark, { thread }))
   assert.equal(mark({ bgShells: [] }), "", "nothing running, nothing drawn")
@@ -176,11 +227,35 @@ test("the queue card draws the same strip under its reply box, and only the prom
   const { readFileSync } = await import("node:fs")
   const card = readFileSync(new URL("./AllQueuesCard.tsx", import.meta.url), "utf8")
   assert.match(card, /data-queue-processes=\{thread\.id\}[\s\S]{0,200}<ThreadProcessStrip[\s\S]{0,80}surface="card"/)
-  assert.match(card, /<TerminalPromptPane thread=\{thread\} \/>/)
+  assert.match(card, /<TerminalPromptPane thread=\{thread\} onOpen=\{openProcess\} \/>/)
   assert.doesNotMatch(card, /QueueShellStrip|ThreadTerminalsStrip/, "no second strip for either owner")
   // A row opens the drawer only where the drawer stack is the card's own project's.
-  assert.match(card, /const here = focusedProject\(project\.slug\)\s+openInPlace\(project, thread\.id\)\s+if \(here\) openProcessDrawer\(thread\.id, process\)/)
+  assert.match(card, /const openProcess = \(process: ThreadProcess\) => \{\s+const here = focusedProject\(project\.slug\)\s+openInPlace\(project, thread\.id\)\s+if \(here\) openProcessDrawer\(thread\.id, process\)/)
+  assert.match(card, /<ThreadProcessStrip[\s\S]{0,200}onOpen=\{openProcess\}/)
   // The meta line carries the checkout token between the time and the status, as the drawer header does.
   const meta = card.slice(card.indexOf("<LastActive"), card.indexOf("<ThreadStatusLine"))
   assert.match(meta, /<ThreadCheckoutToken checkout=\{thread\.checkout\} homeDir=\{project\.homeDir\}/)
+})
+
+// THE PROMPT'S CAPTION. The card shows the screen of the terminal that is asking; its row — the strip's own
+// row anatomy — sits directly above that screen and says which terminal it is and where it runs, and the
+// strip under the reply box does not list it a second time.
+test("the card's prompt pane wears its terminal's row as its caption, and the strip skips that terminal", () => {
+  const asking = term({ id: "ask", command: 'read -p "name? " x; echo $x', awaitingInput: true })
+  const thread = { id: "t", watches: [], bgShells: [shell()], terminals: [asking, term({ id: "dev", command: "npm run dev" })] } as Pick<ThreadView, "id" | "terminals" | "bgShells" | "watches" | "checkout">
+  const pane = withQuery(createElement(TerminalPromptPane, { thread, base: "/x" }))
+  const caption = pane.indexOf('data-process-row="t:ask"')
+  assert.ok(caption > -1, "the asking terminal's row is there")
+  assert.ok(caption < pane.indexOf("data-terminal-prompt-pane"), "directly above its screen")
+  assert.match(pane, /<button[^>]*aria-label="Open your terminal: read -p/)
+  assert.match(pane, /text-attention">waiting for input</)
+  const strip = withQuery(createElement(ThreadProcessStrip, { thread, surface: "card" }))
+  assert.doesNotMatch(strip, /t:ask/, "not listed twice")
+  assert.equal(strip.split("data-process-row=").length - 1, 2, "the other terminal and the agent's")
+  // The drawer has no screen of its own, so there the asking terminal keeps its row in the strip.
+  assert.match(withQuery(createElement(ThreadProcessStrip, { thread, surface: "drawer" })), /t:ask/)
+  // A card whose only live terminal is the one asking draws no empty strip under its reply box.
+  assert.equal(cardProcesses({ terminals: [asking], bgShells: [] }, NOW).length, 0)
+  // No prompt, no pane and no caption.
+  assert.equal(withQuery(createElement(TerminalPromptPane, { thread: { ...thread, terminals: [term()] }, base: "/x" })), "")
 })

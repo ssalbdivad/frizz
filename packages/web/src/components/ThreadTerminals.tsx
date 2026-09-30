@@ -5,11 +5,11 @@ import type { BgShellView, ThreadView, ThreadWorkingDir, WorkCheckout } from "@f
 import { useThreadApi, useThreadApiBase, useThreadProjectDir } from "../api/threadApi.tsx"
 import type { Api } from "../api/rpc.ts"
 import { useBackgroundShellLines, useBoard } from "../hooks.ts"
-import { CHILD_ARROW, CHILD_ARROW_CLASS, CHILD_DISMISS_TITLE, CHILD_KIND_TAG_CLASS, CHILD_MARK_SLOT_CLASS, shellLinesLabel, type TranscriptShellRecord } from "../lib/childOps.ts"
+import { AGENT_GLYPH_STROKE, CHILD_ARROW, CHILD_ARROW_CLASS, CHILD_DISMISS_TITLE, CHILD_KIND_TAG_CLASS, CHILD_MARK_SLOT_CLASS, shellLinesLabel, type TranscriptShellRecord } from "../lib/childOps.ts"
 import { childOpDismisser } from "../lib/dismissChildOp.ts"
 import { PRIMER } from "../lib/primer.ts"
-import { processIsLive, threadProcesses, type ProcessState, type ThreadProcess } from "../lib/threadProcesses.ts"
-import { compactElapsedSince } from "../lib/durationLabels.ts"
+import { humanProcess, processIsLive, threadProcesses, type ProcessState, type ThreadProcess } from "../lib/threadProcesses.ts"
+import { liveAgeSince } from "../lib/durationLabels.ts"
 import { draftKey, useDraft } from "../lib/drafts.ts"
 import { useNowMs } from "../lib/liveClock.ts"
 import { abbreviateHome } from "../lib/paths.ts"
@@ -57,23 +57,22 @@ const IDENTITY = "group flex min-w-0 max-w-[70%] items-center gap-1.5 overflow-h
 // too — see LABEL.
 //
 // MEASURED, label cap-band centre minus each mark's ink centre (negative = the mark sits lower), on the
-// live stack in sans, 2026-09-29, drawer strip and queue card alike, and IDENTICAL on every row — mono
-// command labels and sans description labels, both owners:
-//     arrow −0.20px · owner glyph −0.70px · TERM tag +0.08px · × −0.70px · readings 0.00px
-// The AGENT row above them (ChildOpRow) reads the same: its dot −0.70px, its × −0.70px. So the TERM rows
-// now sit exactly as the ops strip's own rows do; the shared 0.7px is that strip's, not these rows', and
-// correcting it here alone would put these marks out of line with the AGENT row's. Before this, a mono
-// label read × −2.34px, arrow −1.84px, tag −1.06px. Re-measure if the row's size or line-height moves.
+// live stack in sans at dsf 6, 2026-09-29 (canvas cap band at 10× size — the 1× metrics round the cap
+// ascent to a whole pixel on this box and read every mark ~0.35px lower than it is):
+//     centred:  arrow −0.05 · owner glyph −0.41 · TERM tag −0.17 · × −0.40   (sans description label)
+//               arrow +0.10 · owner glyph −0.25 · TERM tag −0.02 · × −0.25   (mono command label)
+// A centred 1em box sits a hair under the sans cap band, so the glyph and the × are LIFTED by one
+// measured constant, MARK_LIFT: −0.03em = 0.35px at 11.5px, which leaves both label fonts within 0.1px
+// (sans −0.06, mono +0.10) — one lift, because the owner mark must not change height between an agent
+// row and yours. The arrow, the tag and the readings are text on the same line and need none. The AGENT
+// row (ChildOpRow) keeps its own dot and ×, measured the same −0.40 and untouched here: that row is every
+// other surface's too, and its own reviewer. Re-measure if the row's size or line-height moves.
+const MARK_LIFT = "-translate-y-[0.03em]"
 const OWNER_GLYPH = { agent: Bot, human: SquareTerminal } as const
 const OWNER_SLOT = `${CHILD_MARK_SLOT_CLASS} items-center`
-// THE TWO GLYPHS AT ONE WEIGHT. At one size the bot read lighter and smaller than the terminal square
-// beside it: lucide's bot is a 16×12 body with a hairline antenna, the square an 18×18 frame, so at 1em
-// their ink measured 9.58×7.67px against 8.63×8.63px (11.5px row, 2026-09-29) — and since both wear the
-// row's liveness hue, shape is the ONLY owner cue. At 1.1em the bot's body is the square's width and its
-// ink 10.5×8.4px, its stroke a tenth heavier. Its ink is symmetric in its viewBox (y 4–20), so the larger
-// box stays centred on the line, and the 9px slot's overflow grows from 1.25px a side to 1.8px — still
-// inside the row's 6px gaps, so the label column does not move.
-const OWNER_ICON = { agent: "h-[1.1em] w-[1.1em] shrink-0", human: "h-[1em] w-[1em] shrink-0" } as const
+// Both glyphs at the square's 1em box; the bot's weight is its pen, not its size — AGENT_GLYPH_STROKE.
+const OWNER_ICON = `h-[1em] w-[1em] shrink-0 ${MARK_LIFT}`
+const OWNER_STROKE = { agent: AGENT_GLYPH_STROKE, human: 2 } as const
 
 // THE LABEL, ON THE STRIP'S ONE LINE. The agent's is the tool call's own DESCRIPTION — prose, "Test watch in
 // the probe worktree" — so it is set as every ops-strip label is, in the row's sans (it was mono for one
@@ -136,24 +135,55 @@ export function processTitle(p: ThreadProcess, homeDir: string | undefined, watc
 
 export const QUIET_TITLE = "Quiet — no process is writing its output, so it has probably ended"
 
-/**
- * THE ROW'S FOLDER HINT: the checkout a row runs in, named only when that is NOT the project root — one
- * rule for both owners, read off the row alone. `checkout` is the server's lift (thread-cwd.ts
- * liftCheckout), absent at the root, so a terminal in `packages/web` is still the root and says nothing.
- * Absent means the root here as on every surface; nothing is ever drawn for the main checkout.
- *
- * For one commit this was measured against where the HEADER said the agent was, to spare the header's
- * worktree name from repeating down the strip. It inverted the rule: with the agent in a worktree the ROOT
- * rows read `root` (which, beside `tail -f /dev/null`, reads as "running as root"), and when the agent
- * moved back every worktree row suddenly named `probe` — the same row's hint changing when the row had
- * not. A hint that depends on something other than its own row cannot be read at a glance.
- *
- * A transcript-only row (a sub-agent's shell, a Codex tool call's `workdir`) was never lifted, so it has
- * no `checkout` and no hint — it claims nothing it cannot know.
- */
-export function processFolderHint(p: ThreadProcess): { text: string; kind: WorkCheckout["kind"]; dir: string } | undefined {
-  return p.checkout ? { text: folderName(p.checkout.dir), kind: p.checkout.kind, dir: p.checkout.dir } : undefined
+/** The word for the project's own checkout, on a row that runs there while the header says the agent is
+ *  somewhere else. Git's own name for it ("the main worktree") and the maintainer's ("a worktree instead of
+ *  main"). Not `root`: beside `tail -f /dev/null` that read as "running as root". Not a path: a path is the
+ *  width the hint exists to save, and it is in the hint's tooltip. */
+export const MAIN_CHECKOUT_WORD = "main"
+
+export interface ProcessFolderHint {
+  text: string
+  kind: WorkCheckout["kind"] | "main"
+  /** The checkout's folder. Absent for `main`, whose folder is the project's (the tooltip reads it). */
+  dir?: string
 }
+
+/**
+ * THE ROW'S FOLDER HINT: named ONLY when a row runs somewhere OTHER than where the header says the agent is
+ * working (`here`, the thread's checkout — ThreadCheckoutToken, absent at the project root). So a strip whose
+ * rows all run in the thread's current checkout shows no hint at all, wherever that checkout is: the header
+ * token already said it once. When the agent is in `probe`, a row still in the project's own checkout says
+ * `main`; when it is back at the root, a row left in `probe` says `probe`.
+ *
+ * Measured against the ROW ALONE for one round (a hint iff the row is off the project root), `probe` then
+ * repeated down the strip whenever the agent was in a worktree — 5 of 11 rows in one verifier's drawer,
+ * since a new terminal opens where the agent works — and, being never allowed to give way, it cost the
+ * label its width at 390px ("Test wat…" beside `probe · 415 lines`). The rule is now one line, both owners:
+ * a hint says "not where the header says". It reads against the header directly above it, the one place
+ * `here` is spelled out.
+ *
+ * `checkout` is the server's lift (thread-cwd.ts liftCheckout), absent at the root, so a terminal in
+ * `packages/web` is in the root checkout. A row the server did not PLACE (a transcript-only shell: a
+ * sub-agent's, a Codex tool call's raw `workdir`) claims nothing either way.
+ */
+export function processFolderHint(p: ThreadProcess, here: WorkCheckout | null | undefined): ProcessFolderHint | undefined {
+  if (!p.placed) return undefined
+  if ((p.checkout?.dir ?? null) === (here?.dir ?? null)) return undefined
+  return p.checkout ? { text: folderName(p.checkout.dir), kind: p.checkout.kind, dir: p.checkout.dir } : { text: MAIN_CHECKOUT_WORD, kind: "main" }
+}
+
+/** The hint's tooltip: where, in full — and for `main`, what the word means. */
+function folderHintTitle(hint: ProcessFolderHint, projectDir: string | undefined, homeDir: string | undefined): string {
+  if (hint.kind !== "main") return abbreviateHome(hint.dir!, homeDir)
+  return projectDir ? `The project's main checkout\n${abbreviateHome(projectDir, homeDir)}` : "The project's main checkout"
+}
+
+// THE HINT GIVES WAY FIRST. It is a flex item of its own, before the readings, that shrinks ahead of
+// everything else on the row (`shrink-[999]` against the label's 1) and WRAPS rather than truncating: its
+// line is one line tall and clips, and a zero-width strut holds that first line, so a hint that no longer
+// fits in full drops to the clipped second line — gone, not "pr…". Only then does the label start to
+// truncate. The readings stay whole (`shrink-0`): a budget and an age are the row's live state.
+const HINT_BOX = "ml-auto flex h-[1lh] min-w-0 shrink-[999] flex-wrap items-center overflow-hidden pl-1.5 text-muted-40"
 
 /**
  * ONE ROW for one process, whoever started it. The ops strip's row box (ChildOpRow's sheet density):
@@ -164,9 +194,11 @@ export function processFolderHint(p: ThreadProcess): { text: string; kind: WorkC
  * this is — a terminal, whether its output streams from a pty (yours) or from the file the harness writes
  * (the agent's). Every row opens the same drawer.
  */
-export function ProcessRow({ process: p, slug, lines, watched, onOpen }: {
+export function ProcessRow({ process: p, slug, here, lines, watched, onOpen }: {
   process: ThreadProcess
   slug: string
+  /** Where the header says the thread's agent is working (thread.checkout) — the folder hint's reference. */
+  here?: WorkCheckout | null
   /** The agent row's live line count, when the surface polls for one (the drawer does, a card does not). */
   lines?: number
   watched?: boolean
@@ -175,16 +207,21 @@ export function ProcessRow({ process: p, slug, lines, watched, onOpen }: {
 }) {
   const api = useThreadApi()
   const board = useBoard()
+  const projectDir = useThreadProjectDir()
   const now = useNowMs()
   const [busy, setBusy] = useState(false)
   const Glyph = OWNER_GLYPH[p.owner]
   const terminal = p.terminal
   const human = p.owner === "human"
   const live = p.state === "running" || p.state === "quiet"
-  const age = live ? compactElapsedSince(p.startedAt, now) : undefined
+  const age = live ? liveAgeSince(p.startedAt, now) : undefined
   const stateText = human && !live && terminal ? terminalStateLabel(terminal) : undefined
   const counter = !human && p.shell?.id && !p.outputUnavailable ? shellLinesLabel(lines) : undefined
-  const hint = processFolderHint(p)
+  const hint = processFolderHint(p, here)
+  // A COMMAND is set in mono, whoever ran it: yours always is one, and so is an agent row whose label IS
+  // its command (a Codex exec with no description — its board row carries the command as its label). The
+  // same text changing typeface from one row to the next read as two kinds of thing.
+  const commandLabel = human || (p.shell?.command !== undefined && p.shell.command === p.label)
   const title = processTitle(p, board?.homeDir, watched)
   const noun = human ? "your terminal" : p.monitor ? "agent monitor" : "agent terminal"
 
@@ -210,20 +247,15 @@ export function ProcessRow({ process: p, slug, lines, watched, onOpen }: {
     <>
       <span aria-hidden className={CHILD_ARROW_CLASS}>{CHILD_ARROW}</span>
       <span className={OWNER_SLOT}>
-        <Glyph aria-hidden className={`${OWNER_ICON[p.owner]} ${PROCESS_HUE[p.state]}`} data-process-mark={p.owner} data-running-indicator={RUNNING_INDICATOR[p.state]} />
+        <Glyph aria-hidden strokeWidth={OWNER_STROKE[p.owner]} className={`${OWNER_ICON} ${PROCESS_HUE[p.state]}`} data-process-mark={p.owner} data-running-indicator={RUNNING_INDICATOR[p.state]} />
       </span>
       <span className={CHILD_KIND_TAG_CLASS}>TERM</span>
       <span data-process-label className={onOpen ? `${LABEL} group-hover:text-fg/80 group-hover:underline` : LABEL}>
-        {human ? <span className={COMMAND_RUN}>{p.label}</span> : p.label}
+        {commandLabel ? <span className={COMMAND_RUN}>{p.label}</span> : p.label}
       </span>
     </>
   )
   const readings = [
-    hint ? (
-      <span key="checkout" data-process-checkout={hint.kind} className="min-w-0 max-w-[12ch] truncate" title={abbreviateHome(hint.dir, board?.homeDir)}>
-        {hint.text}
-      </span>
-    ) : null,
     counter ? <span key="lines" data-child-op-counter title="Lines of output so far — open the row to read them">{counter}</span> : null,
     p.budget ? <span key="budget" data-child-op-budget title={p.budget.title} style={p.budget.tone === "danger" ? { color: PRIMER.fgDanger } : undefined}>{p.budget.text}</span> : null,
     stateText ? <span key="state" className={p.state === "prompt" ? "text-attention" : p.state === "failed" ? DANGER : undefined}>{stateText}</span> : null,
@@ -265,12 +297,21 @@ export function ProcessRow({ process: p, slug, lines, watched, onOpen }: {
           aria-label={`${dismissVerb} ${noun}: ${p.label}`}
           className={DISMISS}
         >
-          {busy ? <Loader2 size={11} className="animate-spin" /> : <X size={11} />}
+          {busy ? <Loader2 size={11} className={`animate-spin ${MARK_LIFT}`} /> : <X size={11} className={MARK_LIFT} />}
         </button>
+      )}
+      {hint && (
+        <span data-process-checkout={hint.kind} title={folderHintTitle(hint, projectDir ?? board?.projectDir, board?.homeDir)} className={HINT_BOX}>
+          <span aria-hidden className="h-[1lh] w-0" />
+          <span className="flex shrink-0 items-center gap-1">
+            <span className="max-w-[12ch] truncate">{hint.text}</span>
+            {readings.length > 0 && <span aria-hidden className="text-muted-25">·</span>}
+          </span>
+        </span>
       )}
       {readings.length > 0 && (
         // The readings are the row's sans, on the same line as the label (see LABEL), so they need no lift.
-        <span className="ml-auto flex min-w-0 shrink-0 items-center gap-1 pl-1.5 text-muted-40">
+        <span className={`flex shrink-0 items-center gap-1 text-muted-40 ${hint ? "pl-1" : "ml-auto pl-1.5"}`}>
           {readings.flatMap((node, i) => (i === 0 ? [node] : [<span key={`sep${i}`} aria-hidden className="text-muted-25">·</span>, node]))}
         </span>
       )}
@@ -307,7 +348,7 @@ export function ThreadProcessStrip({
   onOpen,
   className,
 }: {
-  thread: Pick<ThreadView, "id" | "terminals" | "bgShells" | "watches">
+  thread: Pick<ThreadView, "id" | "terminals" | "bgShells" | "watches" | "checkout">
   surface: "drawer" | "card"
   /** The transcript's copy of the agent's shells (Codex's live execs, a sub-agent's own shells). */
   transcriptShells?: readonly (BgShellView & TranscriptShellRecord)[]
@@ -319,7 +360,7 @@ export function ThreadProcessStrip({
 }) {
   const now = useNowMs()
   const all = threadProcesses(thread, transcriptShells, { scopedToSubAgent, now })
-  const processes = surface === "card" ? all.filter(processIsLive) : all
+  const processes = surface === "card" ? all.filter(onCard(thread)) : all
   const polled = surface === "drawer" ? processes.flatMap((p) => (p.owner === "agent" && p.shell?.id && !p.outputUnavailable ? [p.shell.id] : [])) : []
   const lines = useBackgroundShellLines(thread.id, polled)
   // IS A WATCHER ARMED ON THIS SHELL? A `shell` watch is a property of the row already here, never a row
@@ -338,6 +379,7 @@ export function ThreadProcessStrip({
           key={p.key}
           process={p}
           slug={thread.id}
+          here={thread.checkout}
           lines={p.shell?.id ? lines.get(p.shell.id) : undefined}
           watched={isWatched(p)}
           onOpen={processOpenable(p) ? () => open(p) : undefined}
@@ -347,18 +389,35 @@ export function ThreadProcessStrip({
   )
 }
 
-/** The live screen of the terminal a thread is queued on — a card's copy, so the answer is typed right
- *  there. A few rows tall: the prompt and the lines above it. Keyed on the RUN, like the drawer's pane, so
- *  a restart is a fresh screen; no focus grab, because a card is one of many. Renders nothing otherwise. */
-export function TerminalPromptPane({ thread, base }: { thread: Pick<ThreadView, "terminals">; base?: string }) {
+/**
+ * The live screen of the terminal a thread is queued on — a card's copy, so the answer is typed right there
+ * — under ITS OWN ROW, the same row anatomy as the strip's, as its caption: which terminal is asking, what
+ * it runs, where. The row is not listed again in the card's strip (onCard). Split apart for one round, the
+ * pane sat above the reply box with no header and its row ~150px below in the strip, so with several
+ * terminals nothing said which one was asking (main had the row directly above the pane, as here).
+ *
+ * A few rows tall: the prompt and the lines above it. Keyed on the RUN, like the drawer's pane, so a restart
+ * is a fresh screen; no focus grab, because a card is one of many. Renders nothing otherwise.
+ */
+export function TerminalPromptPane({ thread, base, onOpen }: {
+  thread: Pick<ThreadView, "id" | "terminals" | "checkout">
+  base?: string
+  /** What opening the caption row does. Absent ⇒ the terminal's own drawer, over this thread's. */
+  onOpen?: (process: ThreadProcess) => void
+}) {
   const prompting = promptingTerminal(thread)
   const fallback = useThreadApiBase()
   if (!prompting) return null
+  const process = humanProcess(prompting)
+  const open = onOpen ?? ((p: ThreadProcess) => openProcessDrawer(thread.id, p))
   return (
-    <div data-terminal-prompt-pane={prompting.id} className="mt-1.5 flex h-[168px] min-w-0 overflow-hidden rounded-md border border-attention/40">
-      <Suspense fallback={<div className="flex-1 bg-bg" />}>
-        <TerminalPane key={`${prompting.id}:${prompting.runId}`} id={prompting.id} base={base ?? fallback} focusOnMount={false} exitedStatus={() => null} />
-      </Suspense>
+    <div data-terminal-prompt={prompting.id} className="flex min-w-0 flex-col">
+      <ProcessRow process={process} slug={thread.id} here={thread.checkout} onOpen={() => open(process)} />
+      <div data-terminal-prompt-pane={prompting.id} className="mt-1.5 flex h-[168px] min-w-0 overflow-hidden rounded-md border border-attention/40">
+        <Suspense fallback={<div className="flex-1 bg-bg" />}>
+          <TerminalPane key={`${prompting.id}:${prompting.runId}`} id={prompting.id} base={base ?? fallback} focusOnMount={false} exitedStatus={() => null} />
+        </Suspense>
+      </div>
     </div>
   )
 }
@@ -588,10 +647,17 @@ function expandHome(path: string, homeDir: string | undefined): string {
   return path.startsWith("~/") ? `${homeDir}/${path.slice(2)}` : path
 }
 
-/** The rows a queue card's strip draws — the live ones (see ThreadProcessStrip). The card gates its strip's
- *  wrapper on this, so a card whose terminals have all finished draws no empty inset. */
+/** Which rows a queue card's strip draws: the live ones (see ThreadProcessStrip), minus the terminal whose
+ *  prompt the card already shows with its own row above its screen (TerminalPromptPane). */
+function onCard(thread: Pick<ThreadView, "terminals">): (p: ThreadProcess) => boolean {
+  const prompting = promptingTerminal(thread)
+  return (p) => processIsLive(p) && !(prompting && p.terminal?.id === prompting.id)
+}
+
+/** The rows a queue card's strip draws. The card gates its strip's wrapper on this, so a card whose
+ *  terminals have all finished — or whose only one is the prompt it shows above — draws no empty inset. */
 export function cardProcesses(thread: Pick<ThreadView, "terminals" | "bgShells">, now: number): ThreadProcess[] {
-  return threadProcesses(thread, [], { now }).filter(processIsLive)
+  return threadProcesses(thread, [], { now }).filter(onCard(thread))
 }
 
 /** Whether a card's thread is the page's focused project's, so its terminal can open over its drawer here. */

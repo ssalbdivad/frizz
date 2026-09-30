@@ -28,6 +28,10 @@ export interface ThreadProcess {
   cwd?: string
   /** That folder's checkout, only when it is off the project root (server liftCheckout). */
   checkout?: WorkCheckout
+  /** The SERVER placed this row: it read the row's folder and lifted it, so an absent `checkout` means the
+   *  project root rather than "unknown". False for a transcript-only row (a sub-agent's shell, a Codex
+   *  tool call's raw `workdir`), which claims no place at all. */
+  placed: boolean
   /** The agent's only — what is left of the runtime budget it declared. */
   budget?: ShellBudgetReading
   monitor?: boolean
@@ -50,6 +54,9 @@ function agentProcess(shell: AgentShell, now: number): ThreadProcess {
     startedAt: shell.startedAt,
     ...(shell.cwd ? { cwd: shell.cwd } : {}),
     ...(shell.checkout ? { checkout: shell.checkout } : {}),
+    // A board row (it has an id) whose folder the server reported — bgShellViews/codexBgShellViews lift
+    // every folder they emit. A transcript-only row has no id; its folder is the tool call's own words.
+    placed: Boolean(shell.id && shell.cwd),
     ...(budget ? { budget } : {}),
     ...(shell.monitor ? { monitor: true } : {}),
     ...(shell.outputUnavailable ? { outputUnavailable: true } : {}),
@@ -63,7 +70,7 @@ function humanState(terminal: ThreadTerminal): ProcessState {
   return terminalFailed(terminal) ? "failed" : "finished"
 }
 
-function humanProcess(terminal: ThreadTerminal): ThreadProcess {
+export function humanProcess(terminal: ThreadTerminal): ThreadProcess {
   return {
     key: `t:${terminal.id}`,
     owner: "human",
@@ -72,6 +79,8 @@ function humanProcess(terminal: ThreadTerminal): ThreadProcess {
     startedAt: terminal.startedAt,
     cwd: terminal.cwd,
     ...(terminal.checkout ? { checkout: terminal.checkout } : {}),
+    // The board lifts every terminal's folder (board.ts withThreadTerminals).
+    placed: Boolean(terminal.cwd),
     terminal,
   }
 }

@@ -36,6 +36,21 @@ export const CHILD_KIND_TAG_CLASS = "frizz-kind-tag petite-caps shrink-0 text-[9
 // is part of where the label starts.
 export const CHILD_MARK_SLOT_CLASS = "flex w-[9px] shrink-0 justify-center"
 
+// THE AGENT'S TERMINAL GLYPH (lucide `Bot`) beside YOURS (`SquareTerminal`), at one size and one weight,
+// wherever the two owners sit together — the ops strip's rows (ThreadTerminals.tsx ProcessRow) and the
+// rail's / resting card's rows (AwaitingBackgroundCard.tsx BgShellRow beside TermWaitRow).
+//
+// Lucide draws the bot 22×18 units and the square 20×20, so at one box the bot is wider, shorter and
+// LIGHTER: at 1em in the 11.5px row its painted ink measured 10.63×8.75px and 18.57px² of ink mass against
+// the square's 9.75×9.75px and 21.00px² (pixels at dsf 8, animation frozen, live stack, sans, 2026-09-29).
+// Scaling it up to catch the mass up (1.1em for one round) made it BIGGER instead — 11.63×9.63px, the
+// widest mark on the strip, "visibly bigger and bolder" to the next reviewer. So it stays at the square's
+// 1em box, where their ink AREAS already agree (93 vs 95px²), and takes the missing weight in its pen:
+// strokeWidth 2.25 brings its mass to 20.96px², the square's to 0.2%. Both ink centres sit on one x (the
+// slot centres them: 716.72 / 716.72px), so the column is even; the bot's edges sit 0.44px a side outside
+// the square's, which is the two drawings' own shape. Re-measure if either glyph's size moves.
+export const AGENT_GLYPH_STROKE = 2.25
+
 // The flat dot for a child with no recent output. /30 (the rail's value); the ops strip's /25 was the
 // outlier and read as a smudge next to the same dot one surface over.
 export const CHILD_STALE_DOT_CLASS = "block h-1.5 w-1.5 rounded-full bg-muted/30"

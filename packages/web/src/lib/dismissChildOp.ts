@@ -111,19 +111,21 @@ export type ShellStopOutcome =
 export function shellStopSummary(outcomes: readonly ShellStopOutcome[]): { text: string; duration?: number } | null {
   const failed = outcomes.filter((o): o is Extract<ShellStopOutcome, { ok: false }> => !o.ok)
   const stopped = outcomes.filter((o): o is Extract<ShellStopOutcome, { ok: true }> => o.ok && o.stopped)
-  const shells = (n: number) => `${n} background shell${n === 1 ? "" : "s"}`
+  // The single row's × and the agent drawer's Stop say "Agent terminal stopped — the agent was told"; one
+  // process, one name, whichever control ended it.
+  const shells = (n: number) => `${n} agent terminal${n === 1 ? "" : "s"}`
   if (failed.length > 0) {
     const why = failed[0].error.slice(0, 100)
     if (stopped.length === 0) return { text: `Couldn’t stop: ${why}`, duration: 7000 }
     return { text: `Stopped ${stopped.length} of ${shells(outcomes.length)}. Couldn’t stop the rest: ${why}`, duration: 7000 }
   }
   if (stopped.length === 0) return null
-  const noun = stopped.length === 1 ? "Background shell" : shells(stopped.length)
+  const noun = stopped.length === 1 ? "Agent terminal" : shells(stopped.length)
   // A `note` is the kill landing while the WORKER could not be told — live confusion, not live work, but
   // still the longer toast the single-shell path gives it.
   const note = stopped.find((o) => o.note)?.note
   if (note) return { text: `${noun} stopped. ${note}`, duration: 7000 }
-  return { text: `${noun} stopped — the worker was told` }
+  return { text: `${noun} stopped — the agent was told` }
 }
 
 /** Stop each shell through the thread's own project client, then report once. Resolves when every

@@ -542,9 +542,14 @@ body {
 .frizz-live-glyph-quiet {
   animation: frizz-live-breathe 2.6s ease-in-out infinite;
 }
+/* STILL, BUT STILL TWO STATES. With motion reduced the pulse and the breath both stop, and a quiet row at
+   full opacity read exactly as a running one — both `text-shell`, only the tooltip telling them apart. The
+   quiet DOT keeps its difference as a hollow ring; a glyph is already strokes, so the quiet one keeps the
+   breath's own middle instead (0.4 ↔ 0.9, held at 0.5): the same shell hue, visibly calmer, and still far
+   from the grey a finished row wears. */
 @media (prefers-reduced-motion: reduce) {
-  .frizz-live-glyph,
-  .frizz-live-glyph-quiet { animation: none; opacity: 1; }
+  .frizz-live-glyph { animation: none; opacity: 1; }
+  .frizz-live-glyph-quiet { animation: none; opacity: 0.5; }
 }
 /* NO "FINISHED" DOT EITHER. `.frizz-live-dot-done` briefly filled the liveness slot on every settled
    background/dispatch card so they stayed findable in a scrolled transcript. Removed 2026-08-01

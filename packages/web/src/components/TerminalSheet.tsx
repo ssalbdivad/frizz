@@ -6,7 +6,7 @@ import { showToast, threadBySlug } from "../store.ts"
 import { useBoard, useShellLog } from "../hooks.ts"
 import { copyTextToClipboard } from "../lib/clipboard.ts"
 import { dismissChildOp } from "../lib/dismissChildOp.ts"
-import { compactElapsedSince } from "../lib/durationLabels.ts"
+import { liveAgeSince } from "../lib/durationLabels.ts"
 import { useNowMs } from "../lib/liveClock.ts"
 import { abbreviateHome } from "../lib/paths.ts"
 import { shellBudgetLabel } from "../lib/shellBudget.ts"
@@ -190,7 +190,7 @@ function HumanTerminalSheet({ id, slug, terminalId, depth, widthDepth }: { id: n
 function TerminalStateMeta({ terminal }: { terminal: ThreadTerminal }) {
   const now = useNowMs()
   const tone = terminal.awaitingInput ? "attention" : terminalFailed(terminal) ? "danger" : undefined
-  const age = terminal.state === "running" ? compactElapsedSince(terminal.startedAt, now) : undefined
+  const age = terminal.state === "running" ? liveAgeSince(terminal.startedAt, now) : undefined
   return <StateReading state={terminalStateLabel(terminal)} age={age} tone={tone} attr={{ "data-terminal-state-reading": terminal.state }} />
 }
 
@@ -294,7 +294,7 @@ function AgentTerminalSheet({ id, slug, shellId, label, startedAt, depth, widthD
               meta={stateWord ? (
                 <StateReading
                   state={stateWord}
-                  age={running ? compactElapsedSince(startedAt ?? row?.startedAt, now) : undefined}
+                  age={running ? liveAgeSince(startedAt ?? row?.startedAt, now) : undefined}
                   budget={running ? shellBudgetLabel(row?.budgetEndsAt, now) : undefined}
                   attr={{ "data-agent-terminal-state": state }}
                 />

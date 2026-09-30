@@ -759,7 +759,7 @@ export const AWAITING_HINT_MAX = 8
 export const AWAITING_HINT_VALUE_MAX = 200
 
 /** `title:` — the resting card's heading in the WORKER'S OWN WORDS, replacing the derived one
- *  ("Awaiting" / "Background shells running", see awaitingBackgroundLabel).
+ *  ("Awaiting" / "Agent terminals running", see awaitingBackgroundLabel).
  *
  *  IT IS A HEADING, NOT A SENTENCE, and the cap is what keeps it one. The card already carries the
  *  worker's full prose below it and a row per awaited thing under that, so a title that restates either

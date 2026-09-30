@@ -1,7 +1,7 @@
 import assert from "node:assert/strict"
 import test from "node:test"
 import { formatAgo, formatCountdown, formatCountdownSeconds, formatElapsedMinutes, formatFixedDuration,
-  formatToolDuration, formatCompactElapsed, formatRuntimeElapsed,
+  formatToolDuration, formatCompactElapsed, formatRuntimeElapsed, liveAgeSince,
 } from "./durationLabels.ts"
 
 // THE HOUSE DURATION GRAMMAR (maintainer 2026-08-31: `"40 minutes" -> "40m"` / `2hr 35m` / "Use this
@@ -41,8 +41,25 @@ test("every formatter spells its units in the house grammar", () => {
     formatCountdownSeconds(5_400), formatCountdownSeconds(128), formatCompactElapsed(65 * 60_000),
     formatRuntimeElapsed(3 * 86_400_000 + 4 * 3_600_000), formatRuntimeElapsed(13 * 3_600_000 + 48 * 60_000),
     formatCountdown(3 * 3_600_000 + 5 * 60_000), formatCountdown(2 * 86_400_000 + 3 * 3_600_000),
+    liveAgeSince(new Date(0).toISOString(), 20_000), liveAgeSince(new Date(0).toISOString(), 65 * 60_000),
   ]
   for (const reading of readings) assert.match(reading, HOUSE_GRAMMAR, `off the house grammar: "${reading}"`)
+})
+
+// A terminal row's age is read on the page's 30s clock (lib/liveClock.ts), whose last reading can be up to
+// 30s older than a row that just started. In seconds that read NOTHING (negative elapsed) and then a frozen
+// `24s`; it now says `<1m` from the first render and minutes after.
+test("liveAgeSince: a live process's age is `<1m` from its first render, then minutes, never seconds", () => {
+  const start = "2026-09-29T10:00:00.000Z"
+  const at = (ms: number) => Date.parse(start) + ms
+  assert.equal(liveAgeSince(start, at(-12_000)), "<1m", "a row that started after the clock's last tick still reads")
+  assert.equal(liveAgeSince(start, at(0)), "<1m")
+  assert.equal(liveAgeSince(start, at(24_000)), "<1m", "no seconds to sit frozen between ticks")
+  assert.equal(liveAgeSince(start, at(60_000)), "1m")
+  assert.equal(liveAgeSince(start, at(12 * 60_000 + 30_000)), "12m")
+  assert.equal(liveAgeSince(start, at(65 * 60_000)), "1h 5m")
+  assert.equal(liveAgeSince(undefined, at(0)), "")
+  assert.equal(liveAgeSince("not a date", at(0)), "")
 })
 
 test("formatCompactElapsed: seconds, minutes, hours — the dense child-row forms", () => {

@@ -46,15 +46,15 @@ test("no handle, no ×: an id-less row and a descendant are both unactionable", 
 // THE RESTING CARD'S STOP ends several shells in one click and reports ONCE.
 test("a batch of shell stops reads as one toast, and a failure outranks the successes", () => {
   const ok = { ok: true as const, stopped: true, note: null }
-  assert.equal(shellStopSummary([ok])?.text, "Background shell stopped — the worker was told")
-  assert.equal(shellStopSummary([ok, ok])?.text, "2 background shells stopped — the worker was told")
+  assert.equal(shellStopSummary([ok])?.text, "Agent terminal stopped — the agent was told")
+  assert.equal(shellStopSummary([ok, ok])?.text, "2 agent terminals stopped — the agent was told")
   // Every shell had already finished: each stop was a clear, and the rows leaving are the feedback.
   assert.equal(shellStopSummary([{ ok: true, stopped: false, note: null }]), null)
   const failed = { ok: false as const, error: "provider refused" }
   assert.deepEqual(shellStopSummary([failed]), { text: "Couldn’t stop: provider refused", duration: 7000 })
-  assert.deepEqual(shellStopSummary([ok, failed]), { text: "Stopped 1 of 2 background shells. Couldn’t stop the rest: provider refused", duration: 7000 })
+  assert.deepEqual(shellStopSummary([ok, failed]), { text: "Stopped 1 of 2 agent terminals. Couldn’t stop the rest: provider refused", duration: 7000 })
   // The kill landed but the worker could not be told — the longer toast, as on the single ×.
-  assert.deepEqual(shellStopSummary([ok, { ok: true, stopped: true, note: "The worker could not be told." }]), { text: "2 background shells stopped. The worker could not be told.", duration: 7000 })
+  assert.deepEqual(shellStopSummary([ok, { ok: true, stopped: true, note: "The worker could not be told." }]), { text: "2 agent terminals stopped. The worker could not be told.", duration: 7000 })
 })
 
 // THE TOAST NAMES WHAT WAS STOPPED in the words its row uses: a Monitor's row, tooltip and drawer all say

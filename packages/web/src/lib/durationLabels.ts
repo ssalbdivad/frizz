@@ -112,6 +112,20 @@ export function compactElapsedSince(startedAt: string | undefined, nowMs = Date.
   return formatCompactElapsed(nowMs - started)
 }
 
+// A LIVE PROCESS'S AGE — a terminal row's, yours or the agent's (ThreadTerminals.tsx ProcessRow, the agent
+// drawer's header, the rail's terminal rows). Those read the page's ONE clock (lib/liveClock.ts), which
+// ticks every 30s, so the reading keeps minutes and says `<1m` before the first one: in seconds it was a
+// lie at that cadence. A row born between two ticks started AFTER the clock's last reading, so its elapsed
+// was negative and it showed no age at all for up to 30s; the next tick then printed `24s` and held it,
+// frozen, for another 30. `<1m` is the budget reading's own spelling (`<1m left`, lib/shellBudget.ts).
+export function liveAgeSince(startedAt: string | undefined, nowMs: number): string {
+  if (!startedAt) return ""
+  const started = Date.parse(startedAt)
+  if (!Number.isFinite(started)) return ""
+  const ms = nowMs - started
+  return ms < 60_000 ? "<1m" : formatCompactElapsed(ms)
+}
+
 export function formatFixedDuration(ms: number): string {
   if (!Number.isFinite(ms) || ms < 0) return ""
   const mins = Math.floor(ms / 60_000)
