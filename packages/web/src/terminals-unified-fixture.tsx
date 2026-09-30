@@ -8,12 +8,15 @@ import { TooltipProvider } from "./components/Tooltip.tsx"
 import { Toaster } from "./components/Toaster.tsx"
 import { initFont } from "./lib/font.ts"
 import { setThemePreference } from "./lib/theme.ts"
+// xterm's own sheet, as main.tsx loads it: without it the agent drawer's hidden measure row (`1111…`) and
+// helper textarea render visibly above the log, and a shot of it is not the product's.
+import "@xterm/xterm/css/xterm.css"
 import "./styles.css"
 
 // ONE STRIP, TWO OWNERS — every state a terminal row can be in, side by side, for the states a live stack
 // cannot reach on demand: a finished and a failed run of yours, an agent shell over its budget or quiet,
-// a Codex exec whose output Frizz cannot read, a monitor — once with the agent at the project root and once
-// with it in the `probe` worktree, where the rows in that worktree name nothing and a root row reads `root`.
+// a Codex exec whose output Frizz cannot read, a monitor — once as the drawer draws them (every row) and once
+// as a queue card does (the live rows only). A row names its checkout only when it is off the project root.
 // `?mode=codex` / `?mode=gone` show the agent drawer's two empty states, `?mode=agent` a streaming one with a
 // long title and a worktree folder (for the narrow header). `data-font="sans"` is on the page, as in the product. No server: every RPC
 // is answered here, and nothing is started or stopped.
@@ -28,6 +31,11 @@ window.fetch = async (input, init) => {
   const url = new URL(href, location.href)
   if (!url.pathname.startsWith("/_frizz/rpc/")) return nativeFetch(input, init)
   const method = url.pathname.split("/").at(-1)
+  if (method === "backgroundShellActivity") {
+    // A query: its input rides the URL (`?input=<json>`), not a body.
+    const input = JSON.parse(url.searchParams.get("input") ?? "{}") as { ids?: string[] }
+    return json({ shells: (input.ids ?? []).map((id, i) => ({ id, lines: 40 + i * 37, running: true })) })
+  }
   if (method === "backgroundShellOutput") {
     if (mode === "agent") {
       const body = init?.body ? JSON.parse(String(init.body)) as { input?: { from?: number } } : {}
@@ -58,8 +66,7 @@ const bgShells: BgShellView[] = [
   { id: "s-quiet", label: "tail the deploy log", startedAt: ago(20), state: "stale", taskId: "b4", monitor: true },
   { id: "s-codex", label: "cargo watch -x test", startedAt: ago(3), state: "running", stoppable: true, outputUnavailable: true, cwd: WT.dir, checkout: WT },
 ]
-const thread = { id: "fixture", terminals, bgShells, watches: [] } as Pick<ThreadView, "id" | "terminals" | "bgShells" | "watches" | "checkout">
-const inWorktree = { ...thread, checkout: WT }
+const thread = { id: "fixture", terminals, bgShells, watches: [] } as Pick<ThreadView, "id" | "terminals" | "bgShells" | "watches">
 
 createRoot(document.getElementById("root")!).render(
   <QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}>
@@ -78,11 +85,11 @@ createRoot(document.getElementById("root")!).render(
               <span className="min-w-0 truncate">Ready 9m ago</span>
               <ThreadCheckoutToken checkout={{ dir: "/srv/other-checkout", kind: "folder" }} homeDir="/home/u" lead={<span aria-hidden>·</span>} />
             </div>
-            <div data-fixture-strip="root" className="rounded-md border border-border bg-panel px-4 py-3">
-              <ThreadProcessStrip thread={thread} surface="card" onOpen={() => {}} />
+            <div data-fixture-strip="drawer" className="rounded-md border border-border bg-panel px-4 py-3">
+              <ThreadProcessStrip thread={thread} surface="drawer" onOpen={() => {}} />
             </div>
-            <div data-fixture-strip="worktree" className="rounded-md border border-border bg-panel px-4 py-3">
-              <ThreadProcessStrip thread={inWorktree} surface="card" onOpen={() => {}} />
+            <div data-fixture-strip="card" className="rounded-md border border-border bg-panel px-4 py-3">
+              <ThreadProcessStrip thread={thread} surface="card" onOpen={() => {}} />
             </div>
             {/* The rail mark's three tones: yours at a prompt, yours running, only the agent's running. */}
             <div data-fixture-marks className="flex flex-col gap-2 text-[13px]">
