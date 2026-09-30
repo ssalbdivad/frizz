@@ -49,7 +49,9 @@ export interface BubbleMessageLike {
  * Two shapes that are NOT the bubble still count as one, because the constant is about the EDGE and
  * theirs is just as hard: an ANSWERS card (bordered, filled, right-justified — the human's composed
  * reply to a question block) and an ATTACHMENT-ONLY send, which skips the bubble and ends on a framed
- * picture or a row of file pills.
+ * picture or a row of file pills. The SPINOFF cards are the same case (Spinoff.tsx): a request in the
+ * parent and a child's first turn are outlined, right-justified cards, not bubbles — but an outline is as
+ * hard an edge as a fill, so they fall through to `true` with the bubble and need no branch here.
  *
  * THIS MIRRORS `Message`'s BRANCH ORDER (components/ChatView.tsx) AND MUST MOVE WITH IT — a shape that
  * stops drawing a bubble, or a new one that starts, belongs in both. It is a separate function rather

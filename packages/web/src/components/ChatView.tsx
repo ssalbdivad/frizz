@@ -3,7 +3,7 @@ import { createPortal } from "react-dom"
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import { useVirtualizer } from "@tanstack/react-virtual"
 import { AlertTriangle, ArrowDown, ArrowUp, Bot, Check, ChevronRight, FileText, HelpCircle, Hourglass, KeyRound, Loader2, TerminalSquare, X } from "lucide-react"
-import { parseRecurringPrompt, questionFencesLive } from "@frizz/shared"
+import { parseRecurringPrompt, parseSpinoffRequest, questionFencesLive } from "@frizz/shared"
 import type { AskQuestion, AwaitingHint, BgShellView, PendingAsk, RegisteredQuestionView, SubAgentView, ThreadView as ThreadViewData, TranscriptEdit, TranscriptMessage, TranscriptPart, TranscriptTodo, TranscriptToolCall } from "@frizz/shared"
 import { store, threadBySlug, pushDrawer, pushSubAgentDrawer, pushBackgroundShellDrawer, showToast } from "../store.ts"
 import { useBackgroundShellLines, useBoard, useProjectDir, useTranscript, type ChatMessage, type TranscriptData } from "../hooks.ts"
@@ -45,6 +45,7 @@ import { useDeliverQueuedNow, useDeliverQueuedNowSupported } from "../lib/delive
 import { useInnerHtml } from "../lib/innerHtml.ts"
 import { useLocalFileCodeLinks } from "../lib/localFileCode.ts"
 import { lastAskIndex, messagePresentationText } from "../lib/messagePresentation.ts"
+import { withoutSpinoffCalls } from "../lib/spinoffCalls.ts"
 import { stampHostFor } from "../lib/stampHost.ts"
 import { ICON_LABEL_NUDGE } from "../lib/iconAlign.ts"
 import { getThemeSnapshot, subscribeTheme } from "../lib/theme.ts"
@@ -107,7 +108,8 @@ import { withoutRedundantRestDividers } from "../lib/restDividers.ts"
 import { coalesceToolActivityMessages, editedFileCount, historicalToolActivityMessages, isPictureTool, isSettledAsk, isToolActivityException, liveRuntimeStartedAt, liveToolActivityRun, liveToolActivityTail, settledToolActivityLabel, thinkingToolActivityLabel, toolActivityLabel, toolActivityStampAt } from "../lib/toolActivity.ts"
 import { CodexDirectiveCard, MermaidDiagram } from "./CodexRichOutput.tsx"
 import { META_CARD_STEP, PICTURE_STEP, STEP, USER_TAIL_EXTRA, VSpace } from "./rhythm.tsx"
-import { SpinoffBubble, SpinoffButton, SpinoffOf } from "./Spinoff.tsx"
+import { SpinoffButton, SpinoffCard, SpinoffOf, SpinoffOriginCard } from "./Spinoff.tsx"
+import { ThreadSlugContext } from "./threadSlugContext.ts"
 import { HEADER_ICON_CLASS } from "../lib/headerIcon.ts"
 
 // Answer types moved to lib/questionBlocks.ts (shared by the queue card, the thread view, and the
@@ -120,7 +122,9 @@ export type { BlockAnswer, MessageAnswering }
 // sub-agent's own transcript) → AgentBlocks there render as plain (non-live) prompt cards. The QUEUE
 // card also provides this now (maintainer 2026-07-15): its sub-agent blocks go live (spinner +
 // drill-in) AND its done/awaiting fence cards resolve their thread to show the confirm button.
-export const ThreadSlugContext = createContext<string | null>(null)
+// (Declared in its own module so a component ChatView renders — the spinoff cards — can read it without
+// importing ChatView back.)
+export { ThreadSlugContext }
 
 // The slug a rendered SUB-AGENT REFERENCE resolves its drill-in against, for message trees that are
 // NOT the thread's own transcript. Only the sub-agent drawer sets it (with the PARENT thread's slug),
@@ -251,7 +255,9 @@ function ChatView({ slug, virtualized }: { slug: string; virtualized: boolean })
   // useLiveAnswering's `liveMsg` identity check compares objects from THIS same list.
   const messages = useMemo(() => q.data?.messages ?? [], [q.data])
   const liveTranscriptShells = useMemo(() => transcriptBackgroundShells(messages), [messages])
-  const presentationMessages = useMemo(() => withoutLiveTranscriptBackgroundTools(messages), [messages])
+  // …minus the `spawn_thread` call behind each spinoff card, which the card already stands for
+  // (lib/spinoffCalls.ts).
+  const presentationMessages = useMemo(() => withoutSpinoffCalls(withoutLiveTranscriptBackgroundTools(messages)), [messages])
   // Cut over presentationMessages, not messages: the coalesced entries below carry a messageIndex into
   // THIS list, and comparing the two index spaces is how a live fence gets marked settled.
   const lastAgentIdx = useMemo(() => lastAssistantIndex(presentationMessages), [presentationMessages])
@@ -541,7 +547,6 @@ function ChatView({ slug, virtualized }: { slug: string; virtualized: boolean })
                     staleAwaiting={awaitingCut >= 0 && messageIndex < awaitingCut}
                     restingCardShown={messageIndex === lastAgentIdx && restingShown}
                     shadowedBy={shadowedByMessage.get(messageIndex)}
-                    thread={thread}
                   />
                 )
               },
@@ -1509,7 +1514,6 @@ function VirtualizedThreadTranscript({
                   staleAwaiting={awaitingCut >= 0 && row.messageIndex < awaitingCut}
                   restingCardShown={row.messageIndex === lastAgentIdx && restingShown}
                   shadowedBy={shadowedByMessage.get(row.messageIndex)}
-                  thread={thread}
                 />
               </MessageRow>
             ) : row.kind === "runtime-status" ? (
@@ -1618,8 +1622,9 @@ export function ThreadHeader({ slug, onStatusApplied, onClose, showReturnToQueue
               lead={<span aria-hidden className="shrink-0 opacity-60">·</span>}
               className="min-w-0 truncate"
             />
-            <ThreadStatusLine thread={thread} lead={<span aria-hidden className="shrink-0 opacity-60">·</span>} />
+            {/* A spinoff child's way back, ahead of the status line that takes the rest of the row. */}
             <SpinoffOf thread={thread} lead={<span aria-hidden className="shrink-0 opacity-60">·</span>} />
+            <ThreadStatusLine thread={thread} lead={<span aria-hidden className="shrink-0 opacity-60">·</span>} />
           </div>
         </div>
       </div>
@@ -3294,7 +3299,11 @@ function UserBubble({ text, rawText, queued, deliveryUnconfirmed, deliveryId, so
 // with explicit spacers, and a card that renders null still spent one — a 14px gap dangling under the
 // prose, above the resting card (maintainer 2026-08-28, with a screenshot of the gap). Only the last
 // agent message ever carries it, so the memo boundary holds for every other row.
-export const Message = memo(function Message({ m, answering, dense, paired, showSendButton, staleAwaiting, shadowedBy, thread, restingCardShown }: { m: ChatMessage; answering?: MessageAnswering; dense?: boolean; paired?: PairedAnswer[] | null; showSendButton?: boolean; staleAwaiting?: boolean; shadowedBy?: readonly RegisteredQuestionView[]; thread?: ThreadViewData; restingCardShown?: boolean }) {
+//
+// NO `thread` PROP. It was passed for the spinoff card alone, and a thread object is new on every board
+// tick, so it re-rendered every row of a running thread's transcript many times a minute for the sake of
+// one card. The spinoff cards read the board themselves (Spinoff.tsx useTranscriptThread).
+export const Message = memo(function Message({ m, answering, dense, paired, showSendButton, staleAwaiting, shadowedBy, restingCardShown }: { m: ChatMessage; answering?: MessageAnswering; dense?: boolean; paired?: PairedAnswer[] | null; showSendButton?: boolean; staleAwaiting?: boolean; shadowedBy?: readonly RegisteredQuestionView[]; restingCardShown?: boolean }) {
   // ANSWERING ON A PHONE happens in a sheet, one question at a time (MobileAnswerSheet) — the cards in
   // the transcript stay READ-ONLY there, so the questions are still visible in the context that
   // produced them but a 44pt-thumb answer never has to land on a 24pt chip inside a scrolling message.
@@ -3347,7 +3356,14 @@ export const Message = memo(function Message({ m, answering, dense, paired, show
     if (m.peerSession && m.peerFrom) return <PeerSessionMessageLine from={m.peerFrom} unnamed={m.peerUnnamed} text={text} sourceId={m.sourceId} at={m.at} />
     if (m.peerFrom) return <SubAgentReportLine from={m.peerFrom} unnamed={m.peerUnnamed} dispatchId={m.peerDispatchId} sourceId={m.sourceId} at={m.at} />
     // A SPINOFF REQUEST: the human's instructions for a new thread, not the brief Frizz handed the worker.
-    if (m.spinoff) return <SpinoffBubble id={m.spinoff.id} instructions={m.spinoff.instructions} spinoffs={thread?.spinoffs} sourceId={m.sourceId} />
+    // `m.spinoff` is the server's tell on a transcript turn. A send the transcript has not echoed yet
+    // arrives from the delivery ledger as its RAW text — the whole `<spinoff-request>` envelope — so it is
+    // read here too, or the brief to the worker printed at the human as a gray bubble until the echo.
+    const spinoff = m.spinoff ?? parseSpinoffRequest(m.text)
+    if (spinoff) return <SpinoffCard id={spinoff.id} instructions={spinoff.instructions} queued={m.queued} sourceId={m.sourceId} />
+    // A SPINOFF CHILD'S FIRST TURN: the human's instructions, and the parent worker's brief folded
+    // beneath them — never one bubble holding both, since the brief is not the human speaking.
+    if (m.spinoffOrigin) return <SpinoffOriginCard instructions={m.spinoffOrigin.instructions} context={m.spinoffOrigin.brief.trim() ? <ProseHtml md={m.spinoffOrigin.brief} wrap /> : null} sourceId={m.sourceId} />
     // `rawText` rides alongside the presentation text because the two differ: the bubble shows the
     // stripped/normalized copy, while the optimistic cache entry an unqueue has to evict is keyed on
     // the message's own raw text.
