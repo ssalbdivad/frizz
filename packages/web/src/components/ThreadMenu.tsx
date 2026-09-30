@@ -1,4 +1,4 @@
-import { useRef, useState } from "react"
+import { useRef } from "react"
 import { useQueryClient } from "@tanstack/react-query"
 import { Copy, Ellipsis, FileText, Plug, RefreshCw, SquareTerminal } from "lucide-react"
 import type { ThreadView } from "@frizz/shared"
@@ -10,7 +10,6 @@ import { standaloneThreadHref } from "../lib/standaloneThreadRoute.ts"
 import { HEADER_ICON_CLASS } from "../lib/headerIcon.ts"
 import { useCommandHandler, useShortcutLabel } from "../lib/keyboardRuntime.ts"
 import { Menu, MenuContent, MenuItem, MenuTrigger } from "./ui/Menu.tsx"
-import { canSpinoff, SpinoffDialog, SpinoffMark } from "./Spinoff.tsx"
 import { startComposerTerminal } from "./ThreadTerminals.tsx"
 import { useThreadApi } from "../api/threadApi.tsx"
 import { Tooltip } from "./Tooltip.tsx"
@@ -90,11 +89,9 @@ export function ThreadTerminalButton({ slug }: { slug: string }) {
 }
 
 // THE HEADER'S ⋯ MENU: the rarer verbs. It carried "Open fullscreen" and owned `f` until 2026-09-29, when
-// the ⤢ beside it came back as an icon (ExpandThreadLink) and took the key: one door, not two.
-//
-// SPINOFF leads it (Spinoff.tsx): a new thread briefed from this one, asked of the thread as a whole, and
-// this item is its only door. It has no key: the single-letter rule (lib/keybindings.ts) wants an initial
-// of its label, and `s` is Snooze's.
+// the ⤢ beside it came back as an icon (ExpandThreadLink) and took the key: one door, not two. Spinoff
+// led it for an evening, until the maintainer wanted it one press away on every card and header
+// (SpinoffButton, Spinoff.tsx).
 export function ThreadMenu({ thread, onDoc }: { thread: ThreadView; onDoc?: () => void }) {
   const slug = thread.id
   const trigger = useRef<HTMLButtonElement>(null)
@@ -102,10 +99,7 @@ export function ThreadMenu({ thread, onDoc }: { thread: ThreadView; onDoc?: () =
   const devBuild = useDevFrizzBuild()
   const ownSession = thread.kind === "session" && thread.foreign !== true
   const terminalCommand = useTerminalCommandMenuItem(slug)
-  const [spinoffOpen, setSpinoffOpen] = useState(false)
   return (
-    <>
-    {canSpinoff(thread) && <SpinoffDialog thread={thread} open={spinoffOpen} onOpenChange={setSpinoffOpen} />}
     <Menu onOpenChange={(open) => { if (open && ownSession) terminalCommand.prefetch() }}>
       <MenuTrigger asChild>
         <button
@@ -123,11 +117,6 @@ export function ThreadMenu({ thread, onDoc }: { thread: ThreadView; onDoc?: () =
         </button>
       </MenuTrigger>
       <MenuContent align="end">
-        {canSpinoff(thread) && (
-          <MenuItem value="spinoff" onSelect={() => setSpinoffOpen(true)} icon={<SpinoffMark size={12} />}>
-            Spinoff
-          </MenuItem>
-        )}
         {onDoc && (
           <MenuItem value="doc" onSelect={onDoc} icon={<FileText size={12} aria-hidden />}>
             Frizz document
@@ -150,6 +139,5 @@ export function ThreadMenu({ thread, onDoc }: { thread: ThreadView; onDoc?: () =
         )}
       </MenuContent>
     </Menu>
-    </>
   )
 }

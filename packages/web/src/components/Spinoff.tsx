@@ -7,13 +7,15 @@ import { useBoard } from "../hooks.ts"
 import { draftKey, useDraft } from "../lib/drafts.ts"
 import { openThread, threadBySlug } from "../store.ts"
 import { Dialog } from "./ui/Dialog.tsx"
+import { Tooltip } from "./Tooltip.tsx"
 import { BLOCK_RADIUS } from "./TranscriptCard.tsx"
 
 // SPINOFFS — a new thread the human asks for from this one ("fix this", "investigate perf"), with this
 // thread supplying the context. Three surfaces, one concept:
 //
-//   · SpinoffDialog — opened from the thread's ⋯ menu (ThreadMenu.tsx), and the only way to ask for one.
-//     The request goes to this thread's worker (the `spinoff` RPC), which briefs and dispatches the new one.
+//   · SpinoffButton — the icon in every thread header: each queue card's, and the drawer's and /full's.
+//     It opens the one-field dialog, and the request goes to this thread's worker (the `spinoff` RPC),
+//     which briefs and dispatches the new one.
 //   · SpinoffBubble — the request, in this thread's timeline where the human sent it, and the link to the
 //     thread it became once the worker has started it.
 //   · SpinoffOf — the child's way back, on its header's second line.
@@ -21,25 +23,55 @@ import { BLOCK_RADIUS } from "./TranscriptCard.tsx"
 // A spinoff belongs to the THREAD. On its first day (2026-09-29) it was a hover action on every message,
 // quoting the one it was clicked from; the maintainer moved it to the thread that evening. The human
 // writes instructions either way, and those say what to spin off — so a control on every row bought
-// only a quote. "Spinoff" is one word, verb and noun alike.
+// only a quote. It went into the ⋯ menu first, then straight out onto the header strip (maintainer:
+// "spinoff should appear on every card and in the drawer without having to expand"). "Spinoff" is one
+// word, verb and noun alike.
 //
 // The server holds the edge (`thread_spinoff`, carried on ThreadView.spinoffs at both ends), so every
 // surface reads the same row and none of them has to find the other thread in a transcript.
 
 /** The mark every spinoff surface wears: lucide's Split turned to branch sideways. */
-export function SpinoffMark({ size, className = "" }: { size: number; className?: string }) {
+function SpinoffMark({ size, className = "" }: { size: number; className?: string }) {
   return <Split size={size} strokeWidth={2} aria-hidden className={`shrink-0 rotate-90 ${className}`} />
 }
 
 /** Whether a thread can be asked for a spinoff: a live Frizz session, whose worker is the one that briefs
  *  the new thread. A foreign row has no worker of ours. */
-export function canSpinoff(thread: ThreadView | undefined): thread is ThreadView & { sessionId: string } {
+function canSpinoff(thread: ThreadView | undefined): thread is ThreadView & { sessionId: string } {
   return Boolean(thread && thread.kind === "session" && thread.foreign !== true && thread.sessionId)
 }
 
-/** The dialog behind the ⋯ menu's "Spinoff": one field, the instructions. The draft is kept per thread,
- *  so a dialog closed by accident reopens on what was typed. */
-export function SpinoffDialog({ thread, open, onOpenChange }: { thread: ThreadView & { sessionId: string }; open: boolean; onOpenChange: (open: boolean) => void }) {
+/** The Spinoff icon in a thread's header strip, and its dialog; nothing for a thread that cannot take one.
+ *  `className` is the strip's own icon class (HEADER_ICON_CLASS, plus whatever trim its place asks for).
+ *  A queue card of another project must render this inside that project's ThreadProjectScope, or the
+ *  request would go to the focused project's thread of the same slug. */
+export function SpinoffButton({ thread, className }: { thread: ThreadView; className: string }) {
+  const [open, setOpen] = useState(false)
+  if (!canSpinoff(thread)) return null
+  return (
+    <>
+      <SpinoffDialog thread={thread} open={open} onOpenChange={setOpen} />
+      <Tooltip label="Spinoff a new thread from this one">
+        <button
+          type="button"
+          aria-label="Spinoff"
+          data-spinoff-button={thread.id}
+          // The strip's shared focus behaviour: a click here must not take the keyboard away from the
+          // prompt box below it.
+          onMouseDown={(event) => event.preventDefault()}
+          onClick={() => setOpen(true)}
+          className={className}
+        >
+          <SpinoffMark size={14} />
+        </button>
+      </Tooltip>
+    </>
+  )
+}
+
+/** The dialog behind SpinoffButton: one field, the instructions. The draft is kept per thread, so a
+ *  dialog closed by accident reopens on what was typed. */
+function SpinoffDialog({ thread, open, onOpenChange }: { thread: ThreadView & { sessionId: string }; open: boolean; onOpenChange: (open: boolean) => void }) {
   const api = useThreadApi()
   const projectDir = useThreadProjectDir()
   const [instructions, setInstructions, clearInstructions] = useDraft(draftKey.spinoff(projectDir, thread.id))

@@ -49,6 +49,7 @@ import { AwaitingSubAgentsCard, SubAgentWaitSnoozeItems } from "./AwaitingSubAge
 import { drawsSubAgentWaitCard, showsSubAgentWait } from "../lib/subAgentWait.ts"
 import { useThreadComposerControls } from "../hooks/useThreadComposerControls.tsx"
 import { ExpandThreadLink } from "./ExpandThreadLink.tsx"
+import { SpinoffButton } from "./Spinoff.tsx"
 import { HEADER_ICON_CLASS } from "../lib/headerIcon.ts"
 import { LastActive } from "./LastActive.tsx"
 import { ProjectSquare } from "./ProjectRail.tsx"
@@ -298,6 +299,12 @@ export const AllQueuesCard = memo(function AllQueuesCard({
               </div>
             </div>
             <div className="flex shrink-0 items-center gap-0.5">
+              {/* SPINOFF, on every card (Spinoff.tsx), leading the strip as the one verb that starts new
+                  work. In the card's OWN project scope: the header sits outside the body's, and the
+                  page's api names the focused project. */}
+              <ThreadProjectScope projectId={project.id} projectDir={project.projectDir}>
+                <SpinoffButton thread={thread} className={HEADER_ICON_CLASS} />
+              </ThreadProjectScope>
               {/* THE FULLSCREEN DOOR (ExpandThreadLink), before Retry as on Colin's card (TodosView
                   QueueCard @ 7a20f425). Its address carries the CARD's project — the page's own would
                   name the focused project's thread of the same slug — and it owns `f` on this card.

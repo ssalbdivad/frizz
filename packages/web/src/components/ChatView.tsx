@@ -107,7 +107,8 @@ import { withoutRedundantRestDividers } from "../lib/restDividers.ts"
 import { coalesceToolActivityMessages, editedFileCount, historicalToolActivityMessages, isPictureTool, isSettledAsk, isToolActivityException, liveRuntimeStartedAt, liveToolActivityRun, liveToolActivityTail, settledToolActivityLabel, thinkingToolActivityLabel, toolActivityLabel, toolActivityStampAt } from "../lib/toolActivity.ts"
 import { CodexDirectiveCard, MermaidDiagram } from "./CodexRichOutput.tsx"
 import { META_CARD_STEP, PICTURE_STEP, STEP, USER_TAIL_EXTRA, VSpace } from "./rhythm.tsx"
-import { SpinoffBubble, SpinoffOf } from "./Spinoff.tsx"
+import { SpinoffBubble, SpinoffButton, SpinoffOf } from "./Spinoff.tsx"
+import { HEADER_ICON_CLASS } from "../lib/headerIcon.ts"
 
 // Answer types moved to lib/questionBlocks.ts (shared by the queue card, the thread view, and the
 // answering controller). Re-exported here so existing importers keep working.
@@ -1630,6 +1631,7 @@ export function ThreadHeader({ slug, onStatusApplied, onClose, showReturnToQueue
             one row. */}
         <div className="flex shrink-0 items-center gap-0.5">
           <ThreadTerminalButton slug={slug} />
+          <SpinoffButton thread={thread} className={HEADER_ICON_CLASS} />
           <HeaderActions
             thread={thread}
             // The /full page is the one surface with a fullscreen to LEAVE, and it leaves through the
