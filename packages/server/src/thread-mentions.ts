@@ -43,16 +43,40 @@ export function knownHandles(threads: readonly NamedThread[], exceptSlug?: strin
  *  on both sides, and nothing a human sees would stop it. Ten is far past any real exchange. */
 export const THREAD_MESSAGE_HOURLY_CAP = 10
 
-/** The delivered text: who it is from, how to answer, and when not to. */
-export function threadMessageBody(input: { fromHandle: string; message: string }): string {
+/** The delivered text: who it is from, whether they are waiting, and how to answer. */
+export function threadMessageBody(input: { fromHandle: string; message: string; awaitsReply?: boolean; answersWait?: boolean }): string {
+  const from = input.fromHandle
+  const how = input.awaitsReply
+    ? `@${from} is WAITING on your answer — it is parked until you reply. Answer with \`mcp__frizz__message_thread\` ` +
+      `(handle \`${from}\`) as soon as you can, even if only to say you cannot help; it reaches that thread, not the human.`
+    : `Answer with \`mcp__frizz__message_thread\` (handle \`${from}\`) only if it asks you something; it reaches that ` +
+      "thread, not the human. Do not reply just to acknowledge."
   return [
-    `Message from @${input.fromHandle}, another Frizz thread in this project:`,
+    `Message from @${from}, another Frizz thread in this project${input.answersWait ? " — this answers the message you were waiting on" : ""}:`,
     "",
     input.message,
     "",
-    `---`,
-    `Answer with \`mcp__frizz__message_thread\` (handle \`${input.fromHandle}\`) if it asks you something; ` +
-      "its reply reaches that thread, not the human. Do not reply just to acknowledge, and do not drop your own work " +
-      `for it unless it matters to that work. \`mcp__frizz__read_thread\` reads @${input.fromHandle}'s own request and latest handoff.`,
+    "---",
+    `${how} Do not drop your own work for it unless it matters to that work. ` +
+      `\`mcp__frizz__read_thread\` reads @${from}'s own request, approach and latest handoff.`,
   ].join("\n")
+}
+
+// A REPLY WAIT is an ordinary one-off timer whose prompt names the thread it waits on. The prompt is also
+// its NAME on the card and in `activity`, so it reads as the wait; the `(thread \`slug\`)` tail is what
+// the answer is matched by (the handle can change with a rename, the slug cannot).
+export function replyWaitPrompt(handle: string, slug: string): string {
+  return (
+    `Waiting on @${handle} to reply (thread \`${slug}\`) — it has not answered in time. Read where it is with ` +
+    "`mcp__frizz__read_thread`, then ask again with `mcp__frizz__message_thread` (`await_reply: true`) if the " +
+    "answer still matters, or go on without it."
+  )
+}
+
+export function isReplyWait(prompt: string): boolean {
+  return prompt.startsWith("Waiting on @") && prompt.includes(" to reply (thread `")
+}
+
+export function isReplyWaitFor(prompt: string, slug: string): boolean {
+  return isReplyWait(prompt) && prompt.includes(`(thread \`${slug}\`)`)
 }

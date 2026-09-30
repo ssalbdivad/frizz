@@ -10,6 +10,7 @@ import type { LimitFault } from "./backend/types.ts"
 import { limitFaultResetKey, limitPauseIsStale, mayHaveLiveBackgroundWork, quotaWindowKeyFor, quotaWindowRecovered, scopedQuotaWindow, scopedQuotaWindowRecovered, textResetInstant } from "./backend/usage-limit.ts"
 import { claudeFallbackModel, claudeModelFromLimitName, claudeProfile, normalizeObservedThreadModel } from "./backend/thread-profiles.ts"
 import { createWakeDeliveryStore, WAKE_QUIET_WINDOW_MS, type WakeDelivery } from "./wake-store.ts"
+import { isReplyWait } from "./thread-mentions.ts"
 // The board owns the registered-done lifetime rule, and the waker must read it by exactly the same rule
 // or the two disagree about whether a thread is finished.
 import { answersInFlight, registeredDoneFence, safeQuestionAnswer, safeQuestionSpec } from "./board.ts"
@@ -2161,7 +2162,10 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
         // dismissed or withdrawn (shared questionRepliedPast — information since 2026-09-29, not a release).
         questionRows.some((q) => q.state === "open") ||
         answersInFlight(questionRows, tele.lastUserAt, row.recurring_on_rest === 1 && Boolean(row.recurring_prompt?.trim())) !== undefined ||
-        deps.storage.listThreadWatches(row.slug, { armedOnly: true }).length > 0
+        deps.storage.listThreadWatches(row.slug, { armedOnly: true }).length > 0 ||
+        // A wait on ANOTHER THREAD's answer (`message_thread` with `await_reply`) is a registration like a
+        // watch: the tool tells the worker to rest on it with nothing else, so it must count here too.
+        deps.storage.listThreadTimers(row.slug, { armedOnly: true }).some((t) => isReplyWait(t.prompt))
       ) {
         if ((row.signoff_nudges ?? 0) > 0) deps.storage.resetSignoffNudges(row.slug)
         continue

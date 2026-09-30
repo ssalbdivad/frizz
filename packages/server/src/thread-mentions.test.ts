@@ -118,3 +118,42 @@ test("messageThread queues a signed message for the other thread, and refuses se
     assert.equal(createWakeDeliveryStore(h.storage.scope).list().length, THREAD_MESSAGE_HOURLY_CAP)
   } finally { h.close() }
 })
+
+test("await_reply parks the asker on a timer that the ANSWER cancels, and the answer says so", async () => {
+  const h = harness()
+  try {
+    h.storage.upsertSession(row("me", "Mentions"))
+    h.storage.upsertSession(row("sb", "Shell budgets"))
+    const asked = await h.router.messageThread.handler({ input: { slug: "me", handle: "shellBudgets", message: "Which file owns the cap?", awaitReply: true, for: "30m" } })
+    assert.equal(asked.sent, true)
+    assert.match(asked.timerId ?? "", /^tmr_/)
+    const waits = h.storage.listThreadTimers("me", { armedOnly: true })
+    assert.equal(waits.length, 1, "the asker holds one armed wait")
+    assert.match(waits[0]!.prompt, /^Waiting on @shellBudgets to reply \(thread `sb`\)/)
+    assert.ok(Math.abs(waits[0]!.fire_at - Date.now() - 30 * 60_000) < 5_000)
+    assert.match(createWakeDeliveryStore(h.storage.scope).list()[0]!.message, /@mentions is WAITING on your answer/)
+
+    // An unrelated thread messaging the asker does not end the wait; the one it waits on does.
+    h.storage.upsertSession(row("fm", "Focus mode"))
+    const other = await h.router.messageThread.handler({ input: { slug: "fm", handle: "mentions", message: "fyi" } })
+    assert.equal(other.answered, undefined)
+    assert.equal(h.storage.listThreadTimers("me", { armedOnly: true }).length, 1)
+    const reply = await h.router.messageThread.handler({ input: { slug: "sb", handle: "@mentions", message: "src/shell-budget.ts" } })
+    assert.equal(reply.answered, true)
+    assert.equal(h.storage.listThreadTimers("me", { armedOnly: true }).length, 0, "the answer settled the wait")
+    const delivered = createWakeDeliveryStore(h.storage.scope).list().find((d) => d.slug === "me" && /shell-budget\.ts/.test(d.message))
+    assert.match(delivered?.message ?? "", /this answers the message you were waiting on/)
+  } finally { h.close() }
+})
+
+test("a bad await_reply duration refuses before anything is sent", async () => {
+  const h = harness()
+  try {
+    h.storage.upsertSession(row("me", "Mentions"))
+    h.storage.upsertSession(row("sb", "Shell budgets"))
+    const bad = await h.router.messageThread.handler({ input: { slug: "me", handle: "sb", message: "q", awaitReply: true, for: "soon" } })
+    assert.equal(bad.sent, false)
+    assert.equal(createWakeDeliveryStore(h.storage.scope).list().length, 0)
+    assert.equal(h.storage.listThreadTimers("me", { armedOnly: true }).length, 0)
+  } finally { h.close() }
+})

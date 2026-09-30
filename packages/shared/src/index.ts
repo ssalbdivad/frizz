@@ -4360,6 +4360,9 @@ export const ReadThreadResult = z.object({
   request: z.string().optional(),
   latest: z.string().optional(),
   latestAt: z.string().optional(),
+  /** Up to three assistant messages BEFORE the newest, oldest first — the thread's approach and progress,
+   *  which the newest message alone (often a terse handoff) does not carry. */
+  earlier: z.array(z.string()).optional(),
   editedFiles: z.array(z.string()).optional(),
   known: z.array(z.string()).optional(),
 }).strict()
@@ -4369,6 +4372,11 @@ export const MessageThreadInput = z.object({
   slug: ThreadSlug,
   handle: z.string().trim().min(1).max(200),
   message: z.string().trim().min(1).max(20_000),
+  /** Park the SENDER until the other thread answers. The wait is a one-off TIMER on the sender (so it parks
+   *  the thread, blocks `done` and shows on the card like any timer) that the ANSWER cancels; if it fires
+   *  first, the sender is woken to re-decide. `for` is how long to wait (a duration, default 1h, max 24h). */
+  awaitReply: z.boolean().optional(),
+  for: z.string().trim().min(1).max(16).optional(),
 }).strict()
 export type MessageThreadInput = z.infer<typeof MessageThreadInput>
 
@@ -4376,6 +4384,11 @@ export const MessageThreadResult = z.object({
   sent: z.boolean(),
   handle: z.string().optional(),
   from: z.string().optional(),
+  /** The `tmr_…` id of the reply wait, when `awaitReply` armed one, and when it runs out. */
+  timerId: z.string().optional(),
+  waitUntil: z.string().optional(),
+  /** A reply wait on the RECIPIENT's side that this message answered, now settled. */
+  answered: z.boolean().optional(),
   refusal: z.string().optional(),
   known: z.array(z.string()).optional(),
 }).strict()

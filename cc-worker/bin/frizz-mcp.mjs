@@ -811,17 +811,22 @@ const TITLE = {
   },
 }
 
+// THREAD-TO-THREAD, BY HANDLE. The board shows every thread under a camelCase handle (`shellBudgets`), and
+// the human points one thread at another with it: "ask @shellBudgets", "reconcile with @focusMode". Two
+// tools, one protocol: READ first (free, wakes nobody); MESSAGE when reading is not enough, with
+// `await_reply` when you need the answer before you can go on — that parks you until it comes.
 const READ_THREAD = {
   name: "read_thread",
   description:
     "READ ANOTHER THREAD in this project by its handle — the camelCase name the board shows it under " +
     "(`shellBudgets`, `focusMode`). The human writes these as `@shellBudgets`: \"ask @shellBudgets about " +
     "this\", \"reconcile with @focusMode\". Returns that thread's original request, its status line, " +
-    "whether it is running, resting or done, its newest message (its handoff, when it is resting) and the " +
-    "files it edited.\n\n" +
-    "Read FIRST, message second: this wakes nobody and costs the other thread nothing, and it usually " +
-    "answers \"what is @x doing / what did @x change\" on its own. For the diff itself, read the files it " +
-    "lists or `git log` its commits. A handle that names nothing is answered with the handles that exist.",
+    "whether it is running, resting or done, its last few messages (its approach, and its handoff when it " +
+    "is resting) and the files it edited.\n\n" +
+    "ALWAYS READ BEFORE YOU MESSAGE: this wakes nobody and costs the other thread nothing, and it usually " +
+    "answers \"what is @x doing, how, and what did it change\" on its own. For the diff itself, read the " +
+    "files it lists or `git log`. It reaches finished threads too. A handle that names nothing is answered " +
+    "with the handles that exist.",
   inputSchema: {
     type: "object",
     properties: {
@@ -834,21 +839,37 @@ const READ_THREAD = {
 const MESSAGE_THREAD = {
   name: "message_thread",
   description:
-    "SEND A MESSAGE TO ANOTHER RUNNING THREAD in this project, by handle (`@shellBudgets`). It arrives in " +
-    "that thread's conversation labelled with THIS thread's handle — joining its current turn if it is " +
-    "working, waking it if it is resting — and its answer comes back to you the same way, as a message of " +
-    "its own. Nothing reaches the human.\n\n" +
-    "USE IT when the other thread holds context you cannot read off its transcript (`read_thread` first), " +
-    "or when the two of you must coordinate — who changes a shared file, what an interface should be. " +
-    "Write the message to stand alone: the other thread has none of your context. Keep working on " +
-    "whatever does not depend on the answer.\n\n" +
-    "DO NOT reply just to acknowledge, and do not message a thread that is done (read it instead; only " +
-    "the human reopens one). Exchanges between two threads are capped per hour.",
+    "SEND A MESSAGE TO ANOTHER OPEN THREAD in this project, by handle (`@shellBudgets`) — to ask it a " +
+    "question, to tell it what you are doing and how, or to agree who changes what. It arrives in that " +
+    "thread's conversation signed with THIS thread's handle, joining its current turn if it is working and " +
+    "waking it if it is resting. Nothing reaches the human.\n\n" +
+    "THE PROTOCOL:\n" +
+    "- ASKING, and you need the answer before you can go on → `await_reply: true`. You are PARKED until " +
+    "that thread messages you back (or `for` runs out, default 1h), so rest right after, with nothing " +
+    "else to sign off: the wait is registered like a timer and shows in `activity`. Its answer arrives as " +
+    "a message of its own and ends the wait.\n" +
+    "- ASKING, but you have other work → leave `await_reply` off and keep working; the answer still " +
+    "arrives as a message.\n" +
+    "- TELLING (context, your approach, a heads-up that you are changing a shared file) → no " +
+    "`await_reply`. The other thread answers only if it has something to say.\n" +
+    "- ANSWERING a message you received → message its sender back. When the sender is waiting on you, " +
+    "its message says so; answer it promptly, even if only to say you cannot help.\n\n" +
+    "`read_thread` FIRST — often it already answers the question. Write each message to stand alone: " +
+    "the other thread has none of your context. Never reply just to acknowledge. A finished thread cannot " +
+    "be messaged (read it instead). Messages between two threads are capped per hour.",
   inputSchema: {
     type: "object",
     properties: {
       handle: { type: "string", description: "The other thread's handle, with or without the `@` — any casing." },
       message: { type: "string", description: "What to tell or ask it, self-contained." },
+      await_reply: {
+        type: "boolean",
+        description: "Park this thread until that thread answers. Use when you need the answer before you can go on.",
+      },
+      for: {
+        type: "string",
+        description: "With `await_reply`: how long to wait for the answer, as a duration — `30m`, `2h` (default 1h, max 24h). If it runs out you are woken to decide what to do without it.",
+      },
     },
     required: ["handle", "message"],
   },
@@ -932,10 +953,10 @@ const HANDLERS = {
   [MESSAGE_THREAD.name]: messageThread,
 }
 
-/** The `read_thread` handler: another thread's request, status and newest message, by handle.
+/** The `read_thread` handler: another thread's request, status, approach and newest message, by handle.
  * @param {Record<string, unknown>} args @returns {Promise<string>} */
 async function readThread(args) {
-  // \`to\` is accepted too: it is the name a worker reaches for first (seen on a real worker, 2026-09-29).
+  // `to` is accepted too: it is the name a worker reaches for first (seen on a real worker, 2026-09-29).
   const handle = typeof args.handle === "string" ? args.handle.trim() : typeof args.to === "string" ? args.to.trim() : ""
   if (!handle) throw new Error("`handle` is required — the other thread's camelCase name, e.g. `shellBudgets`")
   const r = (await callRpc("readThread", { slug: threadSlug(), handle }))?.result
@@ -944,24 +965,36 @@ async function readThread(args) {
   return [
     `@${r.handle} — ${state}${r.status ? `\nStatus: ${r.status}` : ""}`,
     r.request ? `\n## Its request\n\n${r.request}` : "",
+    r.earlier?.length ? `\n## Its earlier messages, oldest first\n\n${r.earlier.join("\n\n---\n\n")}` : "",
     r.latest ? `\n## Its newest message${r.latestAt ? ` (${r.latestAt})` : ""}\n\n${r.latest}` : "\nIt has not said anything yet.",
     r.editedFiles?.length ? `\n## Files it edited\n\n${r.editedFiles.map((f) => `- ${f}`).join("\n")}` : "",
   ].filter(Boolean).join("\n")
 }
 
-/** The `message_thread` handler: deliver a message into another open thread's conversation.
+/** The `message_thread` handler: deliver a message into another open thread's conversation, optionally
+ * parking this one until it answers.
  * @param {Record<string, unknown>} args @returns {Promise<string>} */
 async function messageThread(args) {
-  // \`to\` is accepted too: it is the name a worker reaches for first (seen on a real worker, 2026-09-29).
   const handle = typeof args.handle === "string" ? args.handle.trim() : typeof args.to === "string" ? args.to.trim() : ""
   const message = typeof args.message === "string" ? args.message.trim() : ""
   if (!handle) throw new Error("`handle` is required — the other thread's camelCase name, e.g. `shellBudgets`")
   if (!message) throw new Error("`message` is required")
-  const r = (await callRpc("messageThread", { slug: threadSlug(), handle, message }))?.result
+  const awaitReply = args.await_reply === true || args.await_reply === "true"
+  const body = { slug: threadSlug(), handle, message, ...(awaitReply ? { awaitReply: true } : {}), ...(awaitReply && typeof args.for === "string" && args.for.trim() ? { for: args.for.trim() } : {}) }
+  const r = (await callRpc("messageThread", body))?.result
   if (!r?.sent) return `Not sent — ${r?.refusal ?? "Frizz did not accept it."}${knownLine(r?.known)}`
+  const answered = r.answered ? ` It answers the message @${r.handle} was waiting on, so that thread is no longer parked on you.` : ""
+  if (r.timerId) {
+    return (
+      `Sent to @${r.handle}, signed @${r.from}, and you are now WAITING on its answer (${r.timerId}, until ` +
+      `${r.waitUntil}).${answered} Rest now unless you have other work — the wait holds your thread and needs ` +
+      "no fence, and the answer arrives as a message of its own and ends the wait. If none comes in time, " +
+      `that timer wakes you to decide. \`timer\` with \`action: "cancel"\` and \`id: "${r.timerId}"\` stops waiting.`
+    )
+  }
   return (
-    `Sent to @${r.handle}, signed @${r.from}. Its answer, if it has one, arrives as a message of its own — ` +
-    "keep working on whatever does not depend on it."
+    `Sent to @${r.handle}, signed @${r.from}.${answered} Any answer arrives as a message of its own — keep ` +
+    "working. (If you need the answer before you can go on, send with `await_reply: true` instead.)"
   )
 }
 

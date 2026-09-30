@@ -153,7 +153,7 @@ import { type AppContext } from "./context.ts"
 import { listAcpAgents } from "./backend/acp-agents.ts"
 import { sessionTitleLocked } from "./storage.ts"
 import { createThreadNamer, THREAD_NAME_MAX_WORDS, type ThreadNamer } from "./thread-names.ts"
-import { handleOf, knownHandles, resolveThreadHandle, THREAD_MESSAGE_HOURLY_CAP, threadMessageBody } from "./thread-mentions.ts"
+import { handleOf, isReplyWaitFor, knownHandles, replyWaitPrompt, resolveThreadHandle, THREAD_MESSAGE_HOURLY_CAP, threadMessageBody } from "./thread-mentions.ts"
 import { enqueueThreadMessageWake } from "./scheduler.ts"
 import { editedFilesOf } from "./edited-files.ts"
 import { mayHaveLiveBackgroundWork, needsFreshProcessForLimit } from "./backend/usage-limit.ts"
@@ -3816,9 +3816,12 @@ export function createRouter(ctx: AppContext) {
         const messages = readThreadTranscript(ctx.project, ctx.storage, hit.slug, ctx.backendFor)
         const said = (m: (typeof messages)[number]) => (m.displayText ?? m.text).trim()
         const opening = messages.find((m) => m.role === "user" && !m.kind && said(m))
-        // The newest assistant words: the handoff when it is resting, the latest narration when it is not.
-        const latest = [...messages].reverse().find((m) => m.role === "assistant" && !m.kind && said(m))
         const clip = (text: string, max: number) => (text.length > max ? `${text.slice(0, max)}\n…[truncated]` : text)
+        // The newest assistant words: the handoff when it is resting, the latest narration when it is not —
+        // and the three before them, which is where the APPROACH lives when the newest is a terse handoff.
+        const spoken = messages.filter((m) => m.role === "assistant" && !m.kind && said(m))
+        const latest = spoken.at(-1)
+        const earlier = spoken.slice(-4, -1).map((m) => clip(said(m), 2_000))
         const archived = row.state === "archived" || row.archived === 1
         const state = archived ? "done" as const : ctx.tailer.get(hit.slug)?.turn === "idle" ? "resting" as const : "running" as const
         const editedFiles = editedFilesOf(messages, workDir).map((f) => f.path).slice(0, 40)
@@ -3829,6 +3832,7 @@ export function createRouter(ctx: AppContext) {
           state,
           ...(row.status?.trim() ? { status: row.status.trim() } : {}),
           ...(opening ? { request: clip(said(opening), 4_000) } : {}),
+          ...(earlier.length ? { earlier } : {}),
           ...(latest ? { latest: clip(said(latest), 8_000), ...(latest.at ? { latestAt: latest.at } : {}) } : {}),
           ...(editedFiles.length ? { editedFiles } : {}),
         }
@@ -3862,16 +3866,47 @@ export function createRouter(ctx: AppContext) {
         }
         const self = threads.find((t) => t.slug === input.slug)
         const from = self ? handleOf(self) : input.slug
+        // THE WAIT FOR THE ANSWER is a one-off TIMER on the sender: an armed timer already parks a thread,
+        // blocks `done`, shows on its card and in `activity`, and wakes it when it fires — which here means
+        // "no answer in time". The answer CANCELS it (below, on the other side of the same exchange), so
+        // the only wake the sender gets is the answer itself. Checked before anything is sent, so a refusal
+        // never leaves a message out that nothing is waiting for.
+        let wait: { id: string; fireAtMs: number } | undefined
+        if (input.awaitReply) {
+          const asked = input.for === undefined ? 3_600_000 : parseAwaitingDurationRaw(input.for)
+          if (asked === null) {
+            return { sent: false, handle, refusal: `\`for: ${input.for}\` is not a duration — give one like \`30m\` or \`2h\` (max 24h).` }
+          }
+          if (ctx.storage.listThreadTimers(input.slug, { armedOnly: true }).length >= TIMER_MAX_ARMED) {
+            return { sent: false, handle, refusal: `this thread already has ${TIMER_MAX_ARMED} armed timers, and a reply wait is one — cancel one first.` }
+          }
+          wait = { id: `tmr_${randomUUID().replace(/-/g, "").slice(0, 12)}`, fireAtMs: nowMs + Math.min(asked, AWAITING_FOR_MAX_MS) }
+        }
+        // …AND THIS MESSAGE MAY BE THE ANSWER to a wait on the recipient's side: every reply wait it holds
+        // on THIS thread is settled by it, whatever the message says — the recipient reads it and decides.
+        const answered = ctx.storage.listThreadTimers(hit.slug, { armedOnly: true })
+          .filter((t) => isReplyWaitFor(t.prompt, input.slug))
+          .map((t) => ctx.storage.cancelThreadTimer(hit.slug, t.id, nowMs))
+          .some(Boolean)
         enqueueThreadMessageWake(ctx.storage, {
           slug: hit.slug,
           sessionId: target.session_id,
           fromSlug: input.slug,
-          message: threadMessageBody({ fromHandle: from, message: input.message }),
+          message: threadMessageBody({ fromHandle: from, message: input.message, awaitsReply: Boolean(wait), answersWait: answered }),
           nowMs,
         })
         threadMessageLog.set(pair, [...recent, nowMs])
+        if (wait) {
+          ctx.storage.clearThreadDone(input.slug)
+          ctx.storage.armThreadTimer({ id: wait.id, slug: input.slug, prompt: replyWaitPrompt(handle, hit.slug), fireAtMs: wait.fireAtMs, createdAtMs: nowMs })
+        }
+        ctx.board.refresh()
         ctx.scheduler?.kick?.()
-        return { sent: true, handle, from }
+        return {
+          sent: true, handle, from,
+          ...(wait ? { timerId: wait.id, waitUntil: new Date(wait.fireAtMs).toISOString() } : {}),
+          ...(answered ? { answered } : {}),
+        }
       },
     }),
 
