@@ -1558,11 +1558,31 @@ function readDescendantSidecars(sessionDir: string, mtimeMs: (path: string) => n
 // 64 real auto-background acks in top-level transcripts name `<their record's sessionId>/tasks/`; the one
 // that did not was a forge. Explicit acks are NOT held to it — 11 of 668 real ones name a different
 // session folder (one session's harness switched folders mid-life), and they cannot be forged.
+//
+// Judged where the file REALLY is. On the name alone, `/tmp/x/<this sessionId>/tasks/b1.output` passed
+// as a symlink to another session's log, and the read-time vet, which only checks the shape, then
+// followed it there. A file that does not exist yet (or any more) is judged by its name: there is
+// nothing behind it to read, and the vet refuses whatever appears there later unless it is a regular,
+// singly-linked `tasks/<id>.output`.
+//
+// WHAT THIS GUARDS, honestly: an ack that turned up QUOTED at the head of some command's output — a grep
+// of a transcript, a `cat` of a log — being taken for this session's handoff and pointing the drawer at a
+// file nobody meant it to read. It is not a boundary against a hostile agent: one that wanted another
+// log shown could `cat` it into its own genuine background shell, whose log is shown by design, and a
+// deliberate swap after this check (the check runs once, at fold time) is that same agent.
 function ackPathTrusted(state: TailState, rec: Record, path: string): boolean {
-  const dir = dirname(path)
+  const dir = dirname(realpathOr(path))
   if (basename(dir) !== "tasks") return false
-  if (state.tasksDir !== undefined && dir === state.tasksDir) return true
+  if (state.tasksDir !== undefined && (dir === state.tasksDir || dir === realpathOr(state.tasksDir))) return true
   return typeof rec.sessionId === "string" && rec.sessionId !== "" && basename(dirname(dir)) === rec.sessionId
+}
+
+function realpathOr(path: string): string {
+  try {
+    return realpathSync(path)
+  } catch {
+    return path
+  }
 }
 
 // Process tool_results for tracked background ops: enrich a launch ack with the child's transcript
@@ -3871,7 +3891,14 @@ export function createTailer(deps: TailerDeps): Tailer {
         shellProbeInFlight = false
       })
   }
-  function shellIsGone(e: { outputFile?: string; startedAt: string }): boolean {
+  function shellIsGone(e: { outputFile?: string; outputRefused?: true; startedAt: string }): boolean {
+    // A promoted ack whose path the fold refused (ackPathTrusted) has no file to ask the OS about, so the
+    // probe below never ran and the row pulsed "running" for good. Refused means the ack was, almost
+    // surely, a command's own output quoting one — that command has already finished (all 64 real
+    // auto-background acks on 2026-09-29 passed) — so it reads as gone: a quiet row whose × clears it,
+    // counted by no running mark and no "Terminals" rail group. A genuine handoff refused by some folder
+    // layout not yet seen would read quiet while it runs, the under-report this function prefers.
+    if (e.outputRefused) return true
     if (!e.outputFile) return false
     const started = Date.parse(e.startedAt)
     if (!Number.isFinite(started) || now() - started < SHELL_PROBE_GRACE_MS) return false

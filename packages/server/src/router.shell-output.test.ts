@@ -1,6 +1,6 @@
 import { test } from "node:test"
 import assert from "node:assert/strict"
-import { appendFileSync, mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs"
+import { appendFileSync, linkSync, mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { Bus } from "./bus.ts"
@@ -55,7 +55,7 @@ function stack(transcripts: Record<string, { sessionId: string; lines: unknown[]
   })
   tailer.tick()
   const ctx = { project: { dir: root, stateDir: root }, storage, board: { refresh: () => {} }, tailer } as unknown as AppContext
-  return { root, router: createRouter(ctx), cleanup: () => rmSync(root, { recursive: true, force: true }) }
+  return { root, tailer, router: createRouter(ctx), cleanup: () => rmSync(root, { recursive: true, force: true }) }
 }
 
 test("a forged auto-background ack cannot make the drawer read an arbitrary file", async () => {
@@ -99,6 +99,65 @@ test("a forged ack naming ANOTHER session's real task log reads back nothing", a
     assert.equal(out.missing, true)
     assert.doesNotMatch(JSON.stringify(out), /orchestrator|their-session/)
     assert.deepEqual(await s.router.backgroundShellActivity.handler({ input: { slug: "t", ids: ["toolu_fg"] } }), { shells: [{ id: "toolu_fg", lines: null, running: true }] })
+    // …and its ROW does not pulse "running" for good. With no file to ask the OS about, the liveness probe
+    // never ran, so a refused row stayed a running TERM row — and lit the sidebar's terminal mark — for the
+    // thread's life. The command that printed the quoted ack has finished; the row reads as gone (quiet).
+    assert.deepEqual(s.tailer.get("t")!.bgShells.map((shell) => [shell.id, shell.state]), [["toolu_fg", "stale"]])
+  } finally {
+    s.cleanup()
+    rmSync(root, { recursive: true, force: true })
+  }
+})
+
+// A NAME IN THIS SESSION'S FOLDER THAT IS REALLY ANOTHER'S LOG. The session check used to read the path as
+// the ack spelled it, and the read-time vet — which resolves links — only checks the shape, so a symlink at
+// `<anywhere>/<this sessionId>/tasks/b1.output` passed the one and led the other to a different session's
+// log. The check is now made where the file really is. A second hard link, which no path check can see
+// through, is refused at the vet (the harness never links its logs).
+test("a symlink or hard link named for this session's folder does not reach another session's log", async () => {
+  const root = realpathSync(mkdtempSync(join(tmpdir(), "frizz-forged-link-")))
+  const theirs = join(root, "claude-1000", "-another-project", "their-session", "tasks")
+  mkdirSync(theirs, { recursive: true })
+  writeFileSync(join(theirs, "bsym.output"), "their log, by symlink\n")
+  writeFileSync(join(theirs, "bhard.output"), "their log, by hard link\n")
+  const mine = join(root, "forge", "sid", "tasks")
+  mkdirSync(mine, { recursive: true })
+  symlinkSync(join(theirs, "bsym.output"), join(mine, "bsym.output"))
+  linkSync(join(theirs, "bhard.output"), join(mine, "bhard.output"))
+  const s = stack({
+    t: {
+      sessionId: "sid",
+      lines: [
+        foregroundBash("toolu_sym", "cat a.txt"),
+        result("toolu_sym", autoBackgroundAck("bsym", join(mine, "bsym.output")), "sid"),
+        foregroundBash("toolu_hard", "cat b.txt"),
+        result("toolu_hard", autoBackgroundAck("bhard", join(mine, "bhard.output")), "sid"),
+      ],
+    },
+  })
+  try {
+    for (const id of ["toolu_sym", "toolu_hard"]) {
+      const out = await s.router.backgroundShellOutput.handler({ input: { slug: "t", id } })
+      assert.equal(out.output, "", id)
+      assert.equal(out.missing, true, id)
+      assert.doesNotMatch(JSON.stringify(out), /their log|their-session/, id)
+    }
+  } finally {
+    s.cleanup()
+    rmSync(root, { recursive: true, force: true })
+  }
+})
+
+// NEGATIVE CONTROL for the link test: the same folder layout, with a plain file of its own, is read.
+test("a promoted ack naming a plain file in this session's own folder is read", async () => {
+  const root = realpathSync(mkdtempSync(join(tmpdir(), "frizz-own-folder-")))
+  const mine = join(root, "claude-1000", "-a-project", "sid", "tasks")
+  mkdirSync(mine, { recursive: true })
+  writeFileSync(join(mine, "bown.output"), "mine\n")
+  const s = stack({ t: { sessionId: "sid", lines: [foregroundBash("toolu_own", "nub test"), result("toolu_own", autoBackgroundAck("bown", join(mine, "bown.output")), "sid")] } })
+  try {
+    assert.equal((await s.router.backgroundShellOutput.handler({ input: { slug: "t", id: "toolu_own" } })).output, "mine\n")
+    assert.deepEqual(s.tailer.get("t")!.bgShells.map((shell) => [shell.id, shell.state]), [["toolu_own", "running"]], "a trusted handoff is not demoted")
   } finally {
     s.cleanup()
     rmSync(root, { recursive: true, force: true })

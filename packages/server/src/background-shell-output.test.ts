@@ -1,5 +1,5 @@
 import assert from "node:assert/strict"
-import { appendFileSync, mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs"
+import { appendFileSync, linkSync, mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import test from "node:test"
@@ -230,6 +230,14 @@ test("vetHarnessOutputPath: only a real file shaped tasks/<taskId>.output passes
     assert.equal(vetHarnessOutputPath(join(tasks, "a b.output"), undefined), undefined)
     // Missing entirely.
     assert.equal(vetHarnessOutputPath(join(tasks, "gone.output"), "gone"), undefined)
+    // A second hard link: the right shape here, another file's bytes. Realpath cannot see through it, so a
+    // log with more than one name is refused — the harness never links its own.
+    const elsewhere = join(root, "claude-1000", "-other", "their-sid", "tasks")
+    mkdirSync(elsewhere, { recursive: true })
+    writeFileSync(join(elsewhere, "b4.output"), "theirs")
+    linkSync(join(elsewhere, "b4.output"), join(tasks, "b4.output"))
+    assert.equal(vetHarnessOutputPath(join(tasks, "b4.output"), "b4"), undefined)
+    assert.equal(vetHarnessOutputPath(join(elsewhere, "b4.output"), "b4"), undefined, "…under either name")
   } finally {
     rmSync(root, { recursive: true, force: true })
   }

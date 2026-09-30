@@ -43,16 +43,25 @@ const ANSI_ESCAPE_RE = /\x1b(?:\][^\x07]*(?:\x07|\x1b\\)|\[[0-?]*[ -/]*[@-~])/g
 //
 // Returns the realpath to open, or undefined, which every caller treats as "no readable output" —
 // never an error that would echo the path back. The shape is the LAST line of defence, not the only one:
-// a forged ack can still name another session's real task log, which is this exact shape, so the fold
-// refuses such a path before it ever gets here (tailer.ts ackPathTrusted). And the open that follows is
-// O_NOFOLLOW (openVetted), so a file swapped for a symlink between this check and that open fails.
+// a quoted ack can still name another session's real task log, which is this exact shape, so the fold
+// refuses such a path before it ever gets here (tailer.ts ackPathTrusted). A file with a second hard link
+// is refused too — the harness never links its logs (none of the 388 regular task logs under /tmp/claude-1000 on 2026-09-29), and a link
+// is the one way to give another session's log a name in this session's folder that realpath cannot see
+// through. The open that follows is O_NOFOLLOW (openVetted), so a file swapped for a symlink between this
+// check and that open fails.
+//
+// WHAT THIS IS NOT: a boundary against a hostile agent. An agent runs commands as the operator, so it can
+// `cat` any file into its own genuine background shell's log, and that log is shown by design. These
+// checks keep the drawer from reading a file NOBODY meant it to — an ack that turned up quoted in some
+// command's output — which is the case that actually happens.
 const HARNESS_OUTPUT_NAME_RE = /^[A-Za-z0-9_-]{1,64}\.output$/
 
 export function vetHarnessOutputPath(path: string, taskId: string | undefined): string | undefined {
   let real: string
   try {
     real = realpathSync(path)
-    if (!lstatSync(real).isFile()) return undefined
+    const stat = lstatSync(real)
+    if (!stat.isFile() || stat.nlink !== 1) return undefined
   } catch {
     return undefined
   }
@@ -65,10 +74,11 @@ export function vetHarnessOutputPath(path: string, taskId: string | undefined): 
 
 // Open a path vetHarnessOutputPath returned. O_NOFOLLOW refuses a final component that became a symlink
 // after the vet (the realpath it returned had none), and the fstat refuses anything that is no longer a
-// regular file. Platforms without O_NOFOLLOW (Windows) keep the fstat check alone.
+// regular file with one name. Platforms without O_NOFOLLOW (Windows) keep the fstat check alone.
 function openVetted(path: string): number {
   const fd = openSync(path, constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0))
-  if (!fstatSync(fd).isFile()) {
+  const stat = fstatSync(fd)
+  if (!stat.isFile() || stat.nlink !== 1) {
     closeSync(fd)
     throw new Error("not a regular file")
   }
