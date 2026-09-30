@@ -28,6 +28,10 @@ test("a handle resolves in any spelling, including one whose last word is short"
   assert.equal(resolveThreadHandle("@devOps", threads)?.slug, "b")
   assert.equal(resolveThreadHandle("arkTypePerf", threads)?.slug, "c")
   assert.equal(resolveThreadHandle("c", threads)?.slug, "c", "a raw slug resolves too")
+  // …and so does the slug's own camelCase, for a thread whose shown name drifted from its dispatch title.
+  assert.equal(resolveThreadHandle("@teaRecipes", [named("tea-recipes", "Test fixture with secret word")])?.slug, "tea-recipes")
+  // A name always outranks another thread's slug.
+  assert.equal(resolveThreadHandle("@focusMode", [named("focus-mode", "Old thing"), named("x", "Focus mode")])?.slug, "x")
   assert.equal(resolveThreadHandle("@nothing", threads), undefined)
 })
 

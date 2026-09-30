@@ -20,12 +20,15 @@ function key(handle: string): string {
 }
 
 /** The thread `handle` names: an OPEN thread first (names are unique among those), else the most recent
- *  finished one that carried it. A raw slug resolves too. */
+ *  finished one that carried it. The SLUG resolves too, folded the same way: it is minted from the
+ *  dispatch title, so `@teaRecipes` still finds a thread dispatched as "Tea recipes" whose shown name has
+ *  since become Claude's own session title (seen on a real run, 2026-09-29). */
 export function resolveThreadHandle(handle: string, threads: readonly NamedThread[]): NamedThread | undefined {
   const bare = handle.trim().replace(/^@/, "")
   const want = key(bare)
   if (!want) return undefined
-  const hits = threads.filter((t) => key(handleOf(t)) === want || t.slug === bare)
+  const named = threads.filter((t) => key(handleOf(t)) === want || t.slug === bare)
+  const hits = named.length ? named : threads.filter((t) => key(t.slug) === want)
   return hits.find((t) => t.open) ?? [...hits].sort((a, b) => b.at - a.at)[0]
 }
 
