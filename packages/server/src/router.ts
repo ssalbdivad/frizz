@@ -152,6 +152,7 @@ import {
   SpinoffInput,
   SpinoffResult,
   spinoffChildPrompt,
+  spinoffNameSource,
   spinoffRequestMessage,
 } from "@frizz/shared"
 import { type AppContext } from "./context.ts"
@@ -178,6 +179,7 @@ import {
   readThreadTranscript,
   projectTranscriptPageAgentLifecycles,
   threadTranscriptSource,
+  withSpinoffChildOrigin,
 } from "./transcript.ts"
 import { resolveThreadWorkingDir, terminalFolder } from "./thread-cwd.ts"
 import { openExternalUrl } from "./open-external.ts"
@@ -1642,8 +1644,9 @@ export function createRouter(ctx: AppContext) {
         brief: input.prompt,
       })
       // Named from what the human asked (and the brief under it), never from the prompt's opening
-      // "A spinoff of @parent…" line — see Dispatcher.dispatch's `nameSource`.
-      const nameSource = `${request.instructions.trim()}\n\n${input.prompt.trim()}`
+      // "A spinoff of @parent…" line — see Dispatcher.dispatch's `nameSource`, and aiRenameThread, which
+      // names a spinoff child from the same text.
+      const nameSource = spinoffNameSource({ instructions: request.instructions, brief: input.prompt })
       const result = await ctx.dispatcher.dispatch({ ...input, prompt }, { backend: input.backend, nameSource })
       ctx.storage.completeSpinoff(id, result.slug, Date.now())
       ctx.board.refresh()
@@ -2104,6 +2107,9 @@ export function createRouter(ctx: AppContext) {
         currentOwnedSession(input.slug, input.sessionId)
         const id = `spn_${randomBytes(8).toString("hex")}`
         ctx.storage.insertSpinoff({ id, parentSlug: input.slug, instructions: input.instructions, createdAtMs: Date.now() })
+        // BEFORE the delivery, so the edge recovery's read of this parent starts where its transcript
+        // stands now — the request's answer can only come after it (spinoff-edge-recovery.ts).
+        ctx.spinoffEdges?.noteRequest(input.slug, id)
         try {
           await deliverFollowUp!({ input: {
             slug: input.slug,
@@ -4085,8 +4091,16 @@ export function createRouter(ctx: AppContext) {
         // came out naming "the very last agent action". `displayText` is the opening prompt with
         // frizz's dispatch envelope peeled off, so the titler summarizes the operator's task rather
         // than boilerplate shared by every dispatched thread.
-        const opening = readTranscript(ctx.project, row.session_id).find((m) => m.role === "user")
-        const description =
+        //
+        // A SPINOFF CHILD is the exception (2026-09-30): its opening turn's `displayText` is the human's
+        // bare instructions (the spinoff header's projection), which are often subject-less —
+        // "evaluate whether this is a good idea" — so it is named from the instructions AND the parent's
+        // brief, the same text its dispatch minted its name from (spinoffNameSource). The whole
+        // projection goes through withSpinoffChildOrigin first, so a legacy child whose prompt predates
+        // the framing is named from its row's instructions and its raw brief the same way.
+        const opening = withSpinoffChildOrigin(readTranscript(ctx.project, row.session_id), ctx.storage, input.slug, true)
+          .find((m) => m.role === "user")
+        const description = (opening?.spinoffOrigin && spinoffNameSource(opening.spinoffOrigin)) ||
           opening?.displayText?.trim() || opening?.text?.trim() || row.title?.trim() || input.slug
         // Frizz's own namer, not the provider's titler (`bridge.renameSession`): that one runs Claude
         // Code's fixed prompt — two to five words, every instruction in its input treated as data — so it

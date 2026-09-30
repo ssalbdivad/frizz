@@ -24,10 +24,19 @@ import type { Storage, ThreadSpinoffRow } from "./storage.ts"
 // WHY HERE, NOT IN THE TAILER'S FOLD. The fold is the thread's rest/turn state, and a spinoff edge is a
 // row in another table; the tail cache also restores a primed fold WITHOUT re-reading its lines, so a
 // fold hook would never see the historical row this exists to repair. This keeps its own byte cursor per
-// parent instead: the first visit reads the parent's whole transcript (the repair of a row left by an
-// earlier server), every later one reads only what was appended, and a parent with no pending spinoff
-// is never read at all — which is every parent, almost always, since an in-band fulfilment stamps its
-// row before the call's result is even written.
+// parent instead, and reads only while the parent has a pending spinoff; every visit after the first
+// reads only what was appended.
+//
+// WHERE THE FIRST VISIT STARTS (2026-09-30). EVERY spinoff is pending from the human's request until
+// its spawn — the whole time the worker spends gathering its brief, tick after tick of transcript growth
+// — not only the old-MCP case this module exists for; an in-band fulfilment stamps the row at the spawn,
+// not before. So a first visit from byte 0 read the parent's entire history on every spinoff, 32 MB of
+// synchronous reads per tick until caught up (~60 ms a slice on a 218 MB page-cached transcript; the
+// repo has seen 566 MB ones). A request made while THIS server runs is announced (`noteRequest`) as the
+// router records it, and its parent's cursor starts at the transcript's size at that moment: the call
+// answering the request can only follow the request's own delivery, which comes after the row. Byte 0
+// stays the start for everything else — a row an earlier server left pending (the boot repair), or a
+// parent that already had another pending row nobody has read for yet.
 //
 // What it will stamp, and nothing else: a PENDING row (a stamped one is never overwritten —
 // completeSpinoff is guarded on `child_slug IS NULL`), from the transcript of the row's OWN parent, by a
@@ -62,6 +71,9 @@ export interface SpinoffEdgeRecovery {
    *  names the threads whose transcript just grew; a parent not among them is read only if it was never
    *  read, or its last read stopped short. Returns true while some parent still has unread bytes. */
   sweep(advanced?: readonly string[]): boolean
+  /** The router just recorded spinoff `id` on `parent` and has not delivered it yet. Starts that parent's
+   *  cursor where its transcript stands now, rather than at byte 0 — see the header. */
+  noteRequest(parent: string, id: string): void
 }
 
 interface Cursor {
@@ -162,6 +174,24 @@ export function createSpinoffEdgeRecovery(deps: SpinoffEdgeRecoveryDeps): Spinof
   }
 
   return {
+    noteRequest(parent, id) {
+      if (cursors.has(parent)) return // already reading it, from wherever that read started
+      try {
+        // Another request on this parent still pending, with no cursor, was made before this one —
+        // perhaps by an earlier server — so its call may lie anywhere in the history: leave the full
+        // read to it.
+        if (deps.storage.pendingSpinoffs().some((row) => row.parent_slug === parent && row.id !== id)) return
+        const source = deps.transcriptOf(parent)
+        if (!source) return
+        // A line caught half written leaves its tail as the first "line" read: a fragment of JSON that
+        // no transcript parser accepts as a record, and one that began before the request besides.
+        const offset = statSync(source.path).size
+        cursors.set(parent, { path: source.path, offset, carry: Buffer.alloc(0), caughtUp: true, calls: new Map() })
+      } catch {
+        // No transcript yet (the first sweep then starts at byte 0 of a file holding nothing older), or
+        // anything else: a missed seed only costs the old full read, and must never fail the request.
+      }
+    },
     sweep(advanced) {
       const rows = deps.storage.pendingSpinoffs()
       const byParent = new Map<string, Map<string, ThreadSpinoffRow>>()

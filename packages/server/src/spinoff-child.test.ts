@@ -282,3 +282,120 @@ test("a restarted server repairs a historical row across budgeted sweeps", () =>
     h.done()
   }
 })
+
+// ---- a forgotten child ------------------------------------------------------------------------------
+
+// A FORGOTTEN CHILD TAKES ITS EDGE WITH IT (2026-09-30). forgetThread frees the slug, and the next thread
+// slugified to it — the human re-dispatching the task by hand — used to inherit the dead child's edge:
+// its opening turn was rewritten to the OLD request, with the human's own prompt folded away as context.
+test("forgetting a spinoff child drops its edge, so the next thread under its slug is nobody's spinoff", () => {
+  const h = recoveryHarness()
+  try {
+    h.storage.upsertSession(sessionRow("parent"))
+    h.storage.upsertSession(sessionRow("investigate-perf"))
+    h.storage.insertSpinoff({ id: "spn_00000000000000f1", parentSlug: "parent", instructions: "OLD INSTRUCTIONS", createdAtMs: REQUEST_AT })
+    h.storage.completeSpinoff("spn_00000000000000f1", "investigate-perf", REQUEST_AT + 1)
+    h.storage.forgetSession("investigate-perf")
+    assert.equal(h.storage.spinoffOfChild("investigate-perf"), undefined)
+    assert.equal(h.storage.getSpinoff("spn_00000000000000f1"), undefined, "deleted, not left pending for a re-stamp")
+    assert.equal(h.storage.spinoffsBySlug().get("parent"), undefined)
+
+    // The human dispatches the same task by hand; it slugifies to the freed slug.
+    h.storage.upsertSession(sessionRow("investigate-perf", { session_id: "sid-new", spawned_at: "2026-09-30T05:00:00.000Z" }))
+    const mine = parseTranscript([userRecord(envelope("My brand new unrelated request")), assistantText("ok")].join("\n"))
+    assert.equal(withSpinoffChildOrigin(mine, h.storage, "investigate-perf", true), mine, "the human's own request stays theirs")
+
+    // …and a GENUINE new spinoff under the reused slug is recovered, not refused as another spinoff's child.
+    h.storage.insertSpinoff({ id: "spn_00000000000000f2", parentSlug: "parent", instructions: "new", createdAtMs: Date.parse("2026-09-30T04:59:00.000Z") })
+    h.transcript("parent", [spawnCall("t1", { prompt: "p", spinoff: "spn_00000000000000f2" }), spawnResult("t1", "investigate-perf")])
+    h.recovery.sweep()
+    assert.equal(h.storage.getSpinoff("spn_00000000000000f2")?.child_slug, "investigate-perf")
+  } finally {
+    h.done()
+  }
+})
+
+// …and the edge a forget left behind BEFORE that fix is swept the next time the database is opened; a
+// live child's edge, and a still-pending request, are left exactly as they are.
+test("opening storage drops a spinoff edge whose child was already forgotten", () => {
+  const dir = mkdtempSync(join(tmpdir(), "frizz-spinoff-child-"))
+  try {
+    const first = createStorage(join(dir, "ui.db"), "p")
+    first.upsertSession(sessionRow("parent"))
+    first.upsertSession(sessionRow("alive"))
+    first.insertSpinoff({ id: "spn_00000000000000f3", parentSlug: "parent", instructions: "a", createdAtMs: REQUEST_AT })
+    first.completeSpinoff("spn_00000000000000f3", "ghost", REQUEST_AT + 1) // a child with no row: forgotten
+    first.insertSpinoff({ id: "spn_00000000000000f4", parentSlug: "parent", instructions: "b", createdAtMs: REQUEST_AT })
+    first.completeSpinoff("spn_00000000000000f4", "alive", REQUEST_AT + 1)
+    first.insertSpinoff({ id: "spn_00000000000000f5", parentSlug: "parent", instructions: "c", createdAtMs: REQUEST_AT })
+    first.close()
+    const reopened = createStorage(join(dir, "ui.db"), "p")
+    try {
+      assert.equal(reopened.getSpinoff("spn_00000000000000f3"), undefined)
+      assert.equal(reopened.spinoffOfChild("ghost"), undefined)
+      assert.equal(reopened.getSpinoff("spn_00000000000000f4")?.child_slug, "alive")
+      assert.equal(reopened.getSpinoff("spn_00000000000000f5")?.child_slug, null)
+    } finally {
+      reopened.close()
+    }
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+// ---- where a parent's first read starts ------------------------------------------------------------
+
+// Every spinoff is pending from the request until its spawn, so a request made while the server runs
+// used to have its parent's WHOLE history read from byte 0, 32 MB a tick. Announced as it is recorded,
+// its parent is read from where the transcript stood: the proof is a decoy answer in the history, which a
+// read from byte 0 would stamp first.
+test("a request made while the server runs is read from where its parent's transcript stood, not from byte 0", () => {
+  const h = recoveryHarness()
+  try {
+    for (const slug of ["parent", "decoy", "child"]) h.storage.upsertSession(sessionRow(slug))
+    const id = "spn_00000000000000a1"
+    const path = h.transcript("parent", [
+      userRecord(envelope("the parent's own task")),
+      spawnCall("t0", { prompt: "p", spinoff: id }), spawnResult("t0", "decoy"),
+      ...Array.from({ length: 50 }, (_, i) => assistantText(`history ${i}`, `m${i}`)),
+    ])
+    h.storage.insertSpinoff({ id, parentSlug: "parent", instructions: "a", createdAtMs: REQUEST_AT })
+    h.recovery.noteRequest("parent", id)
+    appendFileSync(path, [userRecord("the request"), spawnCall("t1", { prompt: "p", spinoff: id }), spawnResult("t1", "child")].map((l) => l + "\n").join(""))
+    h.recovery.sweep(["somebody-else"])
+    assert.equal(h.storage.getSpinoff(id)?.child_slug, null, "a seeded parent is caught up until it grows")
+    h.recovery.sweep(["parent"])
+    assert.equal(h.storage.getSpinoff(id)?.child_slug, "child")
+    assert.deepEqual(h.repaired, [`${id}->child`])
+  } finally {
+    h.done()
+  }
+})
+
+// …but a parent with an OLDER request still pending — one an earlier server left, whose answer may be
+// anywhere in the history — is still read whole, and a parent with no transcript yet is simply not seeded.
+test("a new request never skips the history an older pending request on the same parent needs", () => {
+  const h = recoveryHarness()
+  try {
+    for (const slug of ["parent", "old-child", "new-child", "fresh"]) h.storage.upsertSession(sessionRow(slug))
+    const path = h.transcript("parent", [
+      spawnCall("t0", { prompt: "p", spinoff: "spn_00000000000000b1" }), spawnResult("t0", "old-child"),
+    ])
+    h.storage.insertSpinoff({ id: "spn_00000000000000b1", parentSlug: "parent", instructions: "old", createdAtMs: REQUEST_AT })
+    h.storage.insertSpinoff({ id: "spn_00000000000000b2", parentSlug: "parent", instructions: "new", createdAtMs: REQUEST_AT })
+    h.recovery.noteRequest("parent", "spn_00000000000000b2")
+    appendFileSync(path, [spawnCall("t1", { prompt: "p", spinoff: "spn_00000000000000b2" }), spawnResult("t1", "new-child")].map((l) => l + "\n").join(""))
+    h.recovery.sweep(["parent"])
+    assert.equal(h.storage.getSpinoff("spn_00000000000000b1")?.child_slug, "old-child")
+    assert.equal(h.storage.getSpinoff("spn_00000000000000b2")?.child_slug, "new-child")
+
+    h.storage.insertSpinoff({ id: "spn_00000000000000b3", parentSlug: "fresh", instructions: "x", createdAtMs: REQUEST_AT })
+    h.recovery.noteRequest("fresh", "spn_00000000000000b3") // no transcript yet: nothing to seed, and no throw
+    h.transcript("fresh", [spawnCall("t2", { prompt: "p", spinoff: "spn_00000000000000b3" }), spawnResult("t2", "child-of-fresh")])
+    h.storage.upsertSession(sessionRow("child-of-fresh"))
+    h.recovery.sweep(["fresh"])
+    assert.equal(h.storage.getSpinoff("spn_00000000000000b3")?.child_slug, "child-of-fresh")
+  } finally {
+    h.done()
+  }
+})
