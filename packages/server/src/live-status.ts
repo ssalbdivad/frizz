@@ -146,7 +146,7 @@ export function createLiveStatus(deps: LiveStatusDeps): LiveStatus {
   const states = new Map<string, KeyState>()
   const keyOf = (row: SessionRow) => `${row.slug}\0${row.session_id}`
 
-  return {
+  const api: LiveStatus = {
     onActivity(row) {
       // Broker Claude rows only, like periodic-status: `readMessages` reads a Claude transcript.
       const complete = deps.complete
@@ -163,6 +163,16 @@ export function createLiveStatus(deps: LiveStatusDeps): LiveStatus {
         st.turnStartedAt = at
         st.wroteThisTurn = false
         st.nextCheckAt = at + firstMs
+        // The FIRST check runs on a timer, not on the next transcript write: a turn that goes straight
+        // into one long foreground command writes nothing until it returns, and measured on a real
+        // worker (a 45s `sleep`) it showed no status at all for the whole command. Later checks need no
+        // timer — with nothing written, nothing has moved, and the status standing is still true.
+        const opened = st
+        setTimeout(() => {
+          if (!opened.turnOpen || opened.turnStartedAt !== at) return
+          const fresh = deps.storage.getSession(row.slug)
+          if (fresh?.session_id === row.session_id) api.onActivity(fresh)
+        }, firstMs).unref?.()
       }
       if (st.inFlight || at < st.nextCheckAt) return
       st.nextCheckAt = at + intervalMs
@@ -207,4 +217,5 @@ export function createLiveStatus(deps: LiveStatusDeps): LiveStatus {
       return wore
     },
   }
+  return api
 }

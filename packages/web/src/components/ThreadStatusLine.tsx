@@ -1,5 +1,5 @@
 import type { ReactNode } from "react"
-import type { ThreadView } from "@frizz/shared"
+import { isActivelyRunning, type ThreadView } from "@frizz/shared"
 import { formatFixedDuration } from "../lib/durationLabels.ts"
 import { useNowMs } from "../lib/liveClock.ts"
 
@@ -24,11 +24,13 @@ import { useNowMs } from "../lib/liveClock.ts"
 // it has been on it — `statusSince` only moves when the task does, so this is the task's clock, not the
 // turn's. The clock never truncates: the status gives up its room first, and the clock sits right after
 // the text rather than at the far end of the line.
-type StatusThread = Pick<ThreadView, "statusLine" | "statusSince" | "runtime">
+// "Working" is the band's own reading (isActivelyRunning), so the clock shows exactly when the header's
+// stamp says WORKING — a turn in flight, or a rest held open by a live shell or sub-agent.
+type StatusThread = Pick<ThreadView, "statusLine" | "statusSince"> & Partial<ThreadView>
 
 /** How long a WORKING thread has been on the task its status names (`4m`, `1h 12m`), else undefined. */
 export function statusElapsed(thread: StatusThread, nowMs: number): string | undefined {
-  if (thread.runtime !== "running" || !thread.statusLine?.trim() || !thread.statusSince) return undefined
+  if (!isActivelyRunning(thread as ThreadView) || !thread.statusLine?.trim() || !thread.statusSince) return undefined
   const since = Date.parse(thread.statusSince)
   if (!Number.isFinite(since)) return undefined
   return formatFixedDuration(Math.max(0, nowMs - since)) || undefined

@@ -156,3 +156,24 @@ test("an answer parses as SAME, a cleaned status, or nothing", () => {
   assert.equal(parseLiveStatus("The agent has retired the project board"), undefined, "narration is not a status")
   assert.equal(parseLiveStatus("Reviewing the agent's activity"), undefined)
 })
+
+test("the first check fires on its own when the turn writes nothing more", async () => {
+  const storage = createStorage(join(mkdtempSync(join(tmpdir(), "frizz-live-status-")), "ui.db"), "p")
+  storage.upsertSession({
+    slug: SLUG, session_id: SESSION, thread_name: `frizz-${SLUG}`, spawned_at: "2026-09-29T00:00:00Z",
+    last_read_at: null, unread: 0, exited: 0, archived: 0, rested_at: null, title_auto: 1,
+    title_locked: 0, title: "Resolver", state: "open", meta: null, seen_at: null, transcript_id: null,
+  } as SessionRow)
+  storage.setBackend(SLUG, "claude")
+  storage.setClaudeRuntime(SLUG, "broker")
+  const live = createLiveStatus({
+    storage,
+    complete: async () => "Running the long migration",
+    readMessages: () => [user("migrate"), agent("", [{ name: "Bash", desc: "Running the migration" }])],
+    onStatus: () => {},
+    firstMs: 30,
+  })
+  live.onActivity(storage.getSession(SLUG)!)
+  await new Promise((r) => setTimeout(r, 80))
+  assert.equal(storage.getSession(SLUG)?.status, "Running the long migration")
+})

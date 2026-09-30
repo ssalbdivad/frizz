@@ -300,12 +300,14 @@ export const ThreadRow = memo(function ThreadRow({
               8px is ~2 word spaces at 13px, which reads as the title running into its own timestamp.
               12px is a gutter, and it costs the title 4px it does not miss. */}
           <span className="flex min-w-0 items-baseline gap-3">
-            <span className={`min-w-0 flex-1 break-words text-[13px] leading-[19px] ${dimLabel ? "text-provisional" : dim ? "text-fg/75" : "text-fg/90"}`}>
-              <TitleWithTrailers title={displayTitle(t)}>
-                <ProviderMark backend={t.backend} model={t.model} className="ml-1" />
-                <ThreadTerminalMark thread={t} />
-              </TitleWithTrailers>
-            </span>
+            <RowStatusTip t={t}>
+              <span className={`min-w-0 flex-1 break-words text-[13px] leading-[19px] ${dimLabel ? "text-provisional" : dim ? "text-fg/75" : "text-fg/90"}`}>
+                <TitleWithTrailers title={displayTitle(t)}>
+                  <ProviderMark backend={t.backend} model={t.model} className="ml-1" />
+                  <ThreadTerminalMark thread={t} />
+                </TitleWithTrailers>
+              </span>
+            </RowStatusTip>
             {/* The Retry verb is an OVERLAY pinned to this same right edge, so on the rows that offer
                 it the two would collide — a 19px opaque button landing halfway across "20 seconds",
                 which reads as a rendering fault rather than an affordance. The label gives way to it
@@ -663,6 +665,29 @@ export function awaitingReason(t: Pick<ThreadView, "lastFence">): string | null 
   return awaitingProse(t.lastFence)
 }
 
+// ── the status hover (one per row) ───────────────────────────────────────────────────────────────
+
+// THE ROW'S STATUS, ON HOVER. A row is its title and nothing else ("A ROW IS ITS TITLE" above), so the
+// status a working thread carries (ThreadStatusLine.tsx) cannot be a second line here — every running
+// thread's status at once would be the overwhelming rail that rule exists to prevent (maintainer
+// 2026-09-29: "if displaying the statuses for all running threads would be visually overwhelming, maybe on
+// hover it should show status"). Pointing at the title shows it, with the task's clock while the thread
+// works: "Tracing the cache miss · 4m". It sat on the 16px state glyph's tooltip before, which almost
+// nobody found. The delay keeps a pointer sweeping down the rail from flashing a tip per row it crosses.
+const ROW_STATUS_TIP_DELAY_MS = 350
+
+function RowStatusTip({ t, children }: { t: ThreadView; children: ReactElement }) {
+  const nowMs = useNowMs()
+  const status = t.statusLine?.trim()
+  if (!status) return children
+  const elapsed = statusElapsed(t, nowMs)
+  return (
+    <Tooltip label={elapsed ? `${status} · ${elapsed}` : status} side="right" delay={ROW_STATUS_TIP_DELAY_MS}>
+      {children}
+    </Tooltip>
+  )
+}
+
 // ── the indicator (one per row) ──────────────────────────────────────────────────────────────────
 
 // Each indicator carries a terse hover tooltip naming the state it signals. A plain wrapper <span> is
@@ -674,13 +699,9 @@ export function ThreadIndicator({ t }: { t: ThreadView }) {
   // hook consulted the steer hint on its own, the glyph and the placement were two rules and drifted apart
   // on every steer.
   const { node, tip: stateTip } = sessionIndicatorFor(t)
-  // The thread's live STATUS rides this tooltip, under the state — the rail's one hover of detail, never
-  // a second line on the row (see "A ROW IS ITS TITLE" above, and ThreadStatusLine.tsx).
-  // While it works, the task's clock rides with it (ThreadStatusLine statusElapsed).
-  const nowMs = useNowMs()
-  const elapsed = statusElapsed(t, nowMs)
-  const status = t.statusLine?.trim() && (elapsed ? `${t.statusLine.trim()} · ${elapsed}` : t.statusLine.trim())
-  const tip = status ? (stateTip ? `${stateTip}\n${status}` : status) : stateTip
+  // The thread's STATUS is not here: it is the TITLE's hover (RowStatusTip), a target the size of the
+  // row rather than of this 16px glyph, so the glyph says the state and nothing else.
+  const tip = stateTip
   // The resolved kind, on the shipped markup. Cheap, and it is what lets the rail's own glyphs be
   // measured where they actually render (scripts/verify-rail-status-glyphs.mjs holds the family to one
   // weight band) instead of against a reconstruction that can drift from the real thing.
