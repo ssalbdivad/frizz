@@ -131,10 +131,10 @@ async function openExternally(path: string, project?: string, fallback?: () => v
   )
 }
 
-/** The toast a finished local-file open leaves: the copied path, or which file went out. */
+/** What a finished local-file open leaves behind: the copied path for Copy path; an opened file's
+ *  window is its own confirmation. */
 export async function settleLocalFileOpen(result: { action: string; path: string }): Promise<void> {
-  if (result.action === "copy") {
-    await copyTextToClipboard(result.path)
-    showToast("Copied local path")
-  } else showToast(`Opened ${baseName(result.path)}`)
+  if (result.action !== "copy") return
+  await copyTextToClipboard(result.path)
+  showToast("Copied local path")
 }

@@ -12,6 +12,7 @@ export interface SpawnedOpener {
   unref(): void
   once(event: "spawn", listener: () => void): unknown
   once(event: "error", listener: (error: Error) => void): unknown
+  once(event: "exit", listener: (code: number | null, signal: NodeJS.Signals | null) => void): unknown
 }
 
 export type LocalFileSpawn = (command: string, args: readonly string[], options: SpawnOptions) => SpawnedOpener
@@ -184,6 +185,29 @@ export async function awaitOpenerStart(child: SpawnedOpener, command: string): P
   })
 }
 
+/**
+ * Wait until the opener has HANDED THE PATH OFF — the point the window is up or about to be — rather
+ * than merely started. Every GUI opener Frizz runs is a launcher that exits once the app has the path:
+ * `code`/`cursor` exit when the running instance (or the one it started) acknowledges the window — over
+ * WSL after the remote handshake too, which is the multi-second part — `open -a`, `xdg-open` and
+ * `explorer.exe` once the handler is dispatched. So the exit is the "it is showing" signal the page
+ * keeps its spinner for (2026-09-30: an RPC that answered at spawn left seconds of nothing before
+ * VS Code appeared, and the key got pressed again). A launcher that exits non-zero failed, and says so;
+ * `explorer.exe` is the exception, returning 1 on success. An opener that never exits — a terminal
+ * `$EDITOR` detached from any tty — resolves at `capMs`, since nothing better is coming.
+ */
+export async function awaitOpenerHandoff(child: SpawnedOpener, command: string, capMs = OPENER_HANDOFF_CAP_MS): Promise<void> {
+  const exited = new Promise<number | null>((resolve) => child.once("exit", (code) => resolve(code)))
+  await awaitOpenerStart(child, command)
+  let timer: NodeJS.Timeout | undefined
+  const code = await Promise.race([exited, new Promise<"cap">((resolve) => { timer = setTimeout(resolve, capMs, "cap"); timer.unref?.() })])
+  clearTimeout(timer)
+  if (typeof code === "number" && code !== 0 && !/(^|[\\/])explorer(\.exe)?$/iu.test(command)) {
+    throw new Error(`${command} exited with code ${code}`)
+  }
+}
+export const OPENER_HANDOFF_CAP_MS = 30_000
+
 export interface OpenerCommand {
   command: string
   args: readonly string[]
@@ -294,7 +318,8 @@ export function localFileOpenCommand(path: string, selected: Exclude<LocalFileOp
 // Open only a previously canonicalized, allowlisted local path. No shell is ever involved; each
 // platform integration gets a fixed command plus an argv array. `copy` deliberately performs no OS
 // action: the trusted same-origin client writes the returned canonical path to its clipboard.
-// Resolves once the opener has STARTED, and rejects — as the RPC's error — when it cannot.
+// Resolves once the opener has handed the file off (awaitOpenerHandoff), and rejects — as the RPC's
+// error — when it cannot.
 export async function openLocalFile(
   rawPath: string,
   opener: LocalFileOpener,
@@ -310,7 +335,7 @@ export async function openLocalFile(
     detached: true, stdio: "ignore", shell: false, windowsHide: true,
     ...(spec.verbatim ? { windowsVerbatimArguments: true } : {}),
   })
-  await awaitOpenerStart(child, spec.command)
+  await awaitOpenerHandoff(child, spec.command)
   return { action: "opened", path }
 }
 
@@ -349,6 +374,6 @@ export async function openLocalFolder(
     detached: true, stdio: "ignore", shell: false, windowsHide: true,
     ...(spec.verbatim ? { windowsVerbatimArguments: true } : {}),
   })
-  await awaitOpenerStart(child, spec.command)
+  await awaitOpenerHandoff(child, spec.command)
   return { path: dir }
 }

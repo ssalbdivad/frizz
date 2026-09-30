@@ -20,7 +20,7 @@ import { useTerminalCommandMenuItem } from "./ExternalTerminalCommand.tsx"
 import { useDevFrizzBuild } from "../lib/devBuild.ts"
 import { restartWorker } from "../lib/restartWorker.ts"
 import { closeDrawersById, showToast, store } from "../store.ts"
-import { baseName, runExternalOpen } from "../lib/externalOpen.ts"
+import { runExternalOpen } from "../lib/externalOpen.ts"
 import { offersReloadPlugins, offersRestartWorker, reloadThreadPlugins } from "../lib/workerMaintenance.ts"
 
 // openFullscreen, the one navigation into a thread's /full page, shared by the ⤢ door (ExpandThreadLink.tsx)
@@ -98,9 +98,9 @@ export function ThreadTerminalButton({ slug }: { slug: string }) {
 function openInEditor(api: Api, slug: string): void {
   void runExternalOpen(
     `editor:${slug}`,
-    "Opening editor…",
+    "Opening in editor…",
     () => api.openThreadFolder({ slug }),
-    ({ path }) => showToast(`Opened ${baseName(path)} in editor`, { detail: path }),
+    () => {},
     (message) => `Could not open an editor: ${message}`,
   )
 }

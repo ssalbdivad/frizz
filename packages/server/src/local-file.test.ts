@@ -10,6 +10,7 @@ import type { LocalFileOpener } from "@frizz/shared"
 import {
   MARKDOWN_READ_LIMIT,
   localFileOpenCommand,
+  awaitOpenerHandoff,
   openLocalFile,
   openLocalFolder,
   type LocalFileSpawn,
@@ -109,7 +110,11 @@ function fakeSpawn(calls: SpawnCall[], fail?: NodeJS.ErrnoException): LocalFileS
   return (command, args, options) => {
     calls.push({ command, args, options })
     const child = Object.assign(new EventEmitter(), { unref() {} })
-    queueMicrotask(() => { if (fail) child.emit("error", fail); else child.emit("spawn") })
+    queueMicrotask(() => {
+      if (fail) return void child.emit("error", fail)
+      child.emit("spawn")
+      child.emit("exit", 0, null)
+    })
     return child
   }
 }
@@ -144,6 +149,22 @@ test("an opener that cannot start is the RPC's error, not an unhandled `error` e
     openLocalFile(file, "cursor", [root], { platform: "linux", spawn: fakeSpawn([], eacces) }),
     /^Error: could not start cursor: spawn cursor EACCES$/u,
   )
+})
+
+test("an opener counts as open when its launcher EXITS: non-zero is its error, explorer's 1 is not, a hang is capped", async () => {
+  const launched = (events: (child: EventEmitter) => void) => {
+    const child = Object.assign(new EventEmitter(), { unref() {} })
+    queueMicrotask(() => events(child))
+    return child
+  }
+  let settled = false
+  const handoff = awaitOpenerHandoff(launched((c) => { c.emit("spawn"); setTimeout(() => c.emit("exit", 0, null), 30) }), "code").then(() => { settled = true })
+  await new Promise((resolve) => setTimeout(resolve, 10))
+  assert.equal(settled, false, "started is not open: the window is still coming")
+  await handoff
+  await assert.rejects(awaitOpenerHandoff(launched((c) => { c.emit("spawn"); c.emit("exit", 2, null) }), "xdg-open"), /^Error: xdg-open exited with code 2$/u)
+  await awaitOpenerHandoff(launched((c) => { c.emit("spawn"); c.emit("exit", 1, null) }), "explorer.exe")
+  await awaitOpenerHandoff(launched((c) => c.emit("spawn")), "vim", 20)
 })
 
 test("Open in editor: a folder opens in the External app's editor, else $EDITOR, else a reason", async (t) => {
