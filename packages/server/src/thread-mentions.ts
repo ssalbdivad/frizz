@@ -1,4 +1,4 @@
-import { threadHandle } from "@frizz/shared"
+import { subAgentAddress, subAgentChain, subAgentHandle, threadHandle } from "@frizz/shared"
 import { foldThreadName, type NamedThread } from "./thread-names.ts"
 
 // ONE THREAD POINTING AT ANOTHER BY HANDLE — "ask @shellBudgets about this", "reconcile with @focusMode"
@@ -40,6 +40,42 @@ export function knownHandles(threads: readonly NamedThread[], exceptSlug?: strin
     .sort((a, b) => Number(b.open) - Number(a.open) || b.at - a.at)
     .slice(0, cap)
     .map((t) => `@${handleOf(t)}${t.open ? "" : " (done)"}`)
+}
+
+// A THREAD'S SUB-AGENTS, BY ADDRESS — `portTheParser.cacheKeys` (shared thread-handle.ts), resolved against
+// the thread's sub-agent DIRECTORY: every child it ever dispatched, live first, then finished ones newest
+// first (tailer subAgentDirectory). A name reused over a thread's life — a second "Review" an hour after the
+// first — therefore means the one still running, else the latest, the way a thread handle means the open
+// thread before a finished one; the id always names exactly one.
+
+type Child = { readonly id: string; readonly label: string; readonly parentId?: string; readonly state: string; readonly outcome?: string }
+
+/** The sub-agent `segments` walks down to under one thread, or undefined. Each segment matches a child
+ *  of the one before it (the thread's own children first) by its handle, folded like a thread's, or by
+ *  its id. Among several matches the directory's order decides — live before finished, newest finished
+ *  first — with a RUNNING child ahead of a quiet live one. */
+export function resolveSubAgent<T extends Child>(segments: readonly string[], agents: readonly T[]): T | undefined {
+  let parentId: string | undefined
+  let hit: T | undefined
+  for (const segment of segments) {
+    const want = key(segment)
+    const matches = agents.filter((a) => a.parentId === parentId && (a.id === segment || (want !== "" && key(subAgentHandle(a.label) ?? "") === want)))
+    hit = matches.find((a) => a.state === "running") ?? matches[0]
+    if (!hit) return undefined
+    parentId = hit.id
+  }
+  return hit
+}
+
+/** The addresses a miss is answered with, live first and finished ones tagged, capped like thread
+ *  handles. A child with no handle (a sentence-length description) has no address and is left out. */
+export function subAgentAddresses(threadHandle: string, agents: readonly Child[], cap = 40): string[] {
+  return agents
+    .flatMap((a) => {
+      const chain = subAgentChain(agents, a.id)
+      return chain ? [`@${subAgentAddress(threadHandle, chain)}${a.state === "done" ? " (done)" : ""}`] : []
+    })
+    .slice(0, cap)
 }
 
 /** How many messages one thread may send ANOTHER per hour. Two workers told to "reconcile with each

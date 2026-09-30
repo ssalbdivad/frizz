@@ -828,11 +828,15 @@ const READ_THREAD = {
     "ALWAYS READ BEFORE YOU MESSAGE: this wakes nobody and costs the other thread nothing, and it usually " +
     "answers \"what is @x doing, how, and what did it change\" on its own. For the diff itself, read the " +
     "files it lists or `git log`. It reaches finished threads too. A handle that names nothing is answered " +
-    "with the handles that exist.",
+    "with the handles that exist.\n\n" +
+    "A thread's SUB-AGENTS answer to its handle, a dot, then theirs: `portTheParser.cacheKeys`, and a " +
+    "Workflow's agents one segment further (`portTheParser.wave2.implW3`). Reading one returns its own " +
+    "request and its newest messages — its report, once it has returned. It reaches sub-agents that have " +
+    "already returned too; a name used twice means the running one, else the latest.",
   inputSchema: {
     type: "object",
     properties: {
-      handle: { type: "string", description: "The other thread's handle, with or without the `@` — any casing." },
+      handle: { type: "string", description: "The other thread's handle, or a sub-agent's `thread.subAgent` address — with or without the `@`, any casing." },
     },
     required: ["handle"],
   },
@@ -858,7 +862,8 @@ const MESSAGE_THREAD = {
     "its message says so; answer it promptly, even if only to say you cannot help.\n\n" +
     "`read_thread` FIRST — often it already answers the question. Write each message to stand alone: " +
     "the other thread has none of your context. Never reply just to acknowledge. A finished thread cannot " +
-    "be messaged (read it instead). Messages between two threads are capped per hour.",
+    "be messaged (read it instead), and neither can a sub-agent (`thread.subAgent`): only its own thread " +
+    "reaches it, so message that thread. Messages between two threads are capped per hour.",
   inputSchema: {
     type: "object",
     properties: {
@@ -962,10 +967,18 @@ async function readThread(args) {
   const handle = typeof args.handle === "string" ? args.handle.trim() : typeof args.to === "string" ? args.to.trim() : ""
   if (!handle) throw new Error("`handle` is required — the other thread's camelCase name, e.g. `shellBudgets`")
   const r = (await callRpc("readThread", { slug: threadSlug(), handle }))?.result
+  if (!r?.found && r?.subAgentOf) {
+    return r.known?.length
+      ? `@${r.subAgentOf} has no sub-agent called ${handle.replace(/^@/, "")}.\n\nIts sub-agents: ${r.known.join(", ")}`
+      : `@${r.subAgentOf} has not dispatched any sub-agent that can be named.`
+  }
   if (!r?.found) return `No thread is called ${handle}.${knownLine(r?.known)}`
-  const state = r.state === "done" ? "done" : r.state === "resting" ? "resting (not working right now)" : "running (mid-turn)"
+  // A sub-agent's state is its own: "done" once it has returned, with how it ended.
+  const state = r.subAgentOf
+    ? r.state === "done" ? `returned${r.outcome && r.outcome !== "completed" ? ` (${r.outcome})` : ""}` : r.state === "resting" ? "resting, with its own sub-agents still running" : "running"
+    : r.state === "done" ? "done" : r.state === "resting" ? "resting (not working right now)" : "running (mid-turn)"
   return [
-    `@${r.handle} — ${state}${r.status ? `\nStatus: ${r.status}` : ""}`,
+    `@${r.handle} — ${r.subAgentOf ? `a sub-agent of @${r.subAgentOf}, ` : ""}${state}${r.status ? `\nStatus: ${r.status}` : ""}`,
     r.request ? `\n## Its request\n\n${r.request}` : "",
     r.earlier?.length ? `\n## Its earlier messages, oldest first\n\n${r.earlier.join("\n\n---\n\n")}` : "",
     r.latest ? `\n## Its newest message${r.latestAt ? ` (${r.latestAt})` : ""}\n\n${r.latest}` : "\nIt has not said anything yet.",

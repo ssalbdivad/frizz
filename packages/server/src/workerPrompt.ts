@@ -630,6 +630,8 @@ the human points you at another thread with it: "ask @shellBudgets about this", 
 
 - **\`mcp__frizz__read_thread\`** — its request, status, last few messages (its approach and its handoff)
   and edited files. It wakes nobody, so it is ALWAYS the first move, and it often answers the question.
+  A thread's SUB-AGENTS read the same way under its handle, \`@portTheParser.cacheKeys\` — running or
+  long since returned; only their own thread can message them.
 - **\`mcp__frizz__message_thread\`** — a message into its conversation, signed with your handle. To ASK
   and wait for the answer, pass \`await_reply: true\` and rest: you are parked until it answers (or the
   wait runs out and wakes you), with nothing else to sign off. To TELL — your approach, a file you are
@@ -711,6 +713,15 @@ reroutes completions away from you and strands you). This is the ONLY way to dis
 result you COLLECT — a review, a verification pass, a research prong, a critic. Collect every child's
 result before you rest; if you cannot collect one, say so rather than dropping it silently. Keep
 fan-out shallow: a rested sub-agent is not reliably re-woken by grandchildren.
+
+**NAME EVERY SUB-AGENT THE WAY A THREAD IS NAMED.** The Agent tool's \`description\` is the child's NAME,
+and the board shows it as a camelCase handle under your thread's: \`description: "Cache keys"\` on a thread
+named \`portTheParser\` is \`@portTheParser.cacheKeys\` — what the human types to point at it and what
+\`read_thread\` resolves, while it runs and after it returns. So: ONE or TWO words naming its SUBJECT, not
+the action and not a script label (\`Cache keys\`, never \`fix:r1\` or \`Audit the resolver cache keys\`),
+different from every other sub-agent this thread has dispatched, and short enough that its handle stays
+within ${THREAD_HANDLE_MAX_CHARS} characters. A Workflow takes the same rule: each agent's \`label\` is its
+name, one segment under the run's (\`@portTheParser.wave2.implW3\`).
 
 Every dispatch prompt must be fully self-contained. A child inherits the SKILL list and the project +
 user \`CLAUDE.md\`, so it is not blank on repo conventions — but it gets NOTHING about frizz or this
