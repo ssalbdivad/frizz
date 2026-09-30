@@ -1616,3 +1616,39 @@ test("`watch_issue` registers, lists and drops against the CALLING thread, and l
     http.close()
   }
 })
+
+// A SPIN-OFF names its request AND its caller — the caller from the server's own identity, never from the
+// model's arguments — so the dispatch can refuse a request that belongs to another thread.
+test("spawn_thread with a spinoff forwards the request id and the calling thread", async () => {
+  const seen: unknown[] = []
+  const http = createServer((req, res) => {
+    let body = ""
+    req.on("data", (c) => (body += c))
+    req.on("end", () => {
+      seen.push(JSON.parse(body))
+      res.writeHead(200, { "content-type": "application/json" })
+      res.end(JSON.stringify({ result: { slug: "spawned-child" } }))
+    })
+  })
+  await new Promise<void>((resolve) => http.listen(0, "127.0.0.1", resolve))
+  const port = (http.address() as { port: number }).port
+  const stateDir = mkdtempSync(join(tmpdir(), "frizz-mcp-"))
+  writeFileSync(join(stateDir, "server.lock"), JSON.stringify({ port }))
+  const rpc = startServer({ FRIZZ_STATE_DIR: stateDir, FRIZZ_THREAD_SLUG: "the-parent" })
+  try {
+    rpc.send({ jsonrpc: "2.0", id: 1, method: "initialize", params: {} })
+    await rpc.next(1)
+    rpc.send({
+      jsonrpc: "2.0",
+      id: 2,
+      method: "tools/call",
+      params: { name: "spawn_thread", arguments: { prompt: "brief", model: "opus", effort: "high", spinoff: " spn_0123456789abcdef " } },
+    })
+    const call = await rpc.next(2)
+    assert.equal(call.result.isError, undefined)
+    assert.deepEqual(seen, [{ prompt: "brief", model: "opus", effort: "high", spinOff: "spn_0123456789abcdef", spinOffFrom: "the-parent" }])
+  } finally {
+    rpc.kill()
+    http.close()
+  }
+})

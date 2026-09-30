@@ -106,6 +106,7 @@ import { withoutRedundantRestDividers } from "../lib/restDividers.ts"
 import { coalesceToolActivityMessages, editedFileCount, historicalToolActivityMessages, isPictureTool, isSettledAsk, isToolActivityException, liveRuntimeStartedAt, liveToolActivityRun, liveToolActivityTail, settledToolActivityLabel, thinkingToolActivityLabel, toolActivityLabel, toolActivityStampAt } from "../lib/toolActivity.ts"
 import { CodexDirectiveCard, MermaidDiagram } from "./CodexRichOutput.tsx"
 import { META_CARD_STEP, PICTURE_STEP, STEP, USER_TAIL_EXTRA, VSpace } from "./rhythm.tsx"
+import { SpinOffBubble, SpinOffButton, SpunOffFrom } from "./SpinOff.tsx"
 
 // Answer types moved to lib/questionBlocks.ts (shared by the queue card, the thread view, and the
 // answering controller). Re-exported here so existing importers keep working.
@@ -1494,7 +1495,14 @@ function VirtualizedThreadTranscript({
               // a turn was recorded on, and three shapes recorded as the human's end on text ink
               // rather than a bubble: a frizz wake, a recurring-prompt line and a sub-agent's report,
               // all three hairline dividers. See lib/stampHost.ts.
-              <MessageRow at={row.stampAt} host={stampHostFor(row.message, paired[row.messageIndex])} gap={row.gap}>
+              <MessageRow
+                at={row.stampAt}
+                host={stampHostFor(row.message, paired[row.messageIndex])}
+                gap={row.gap}
+                action={spinOffSource(row.message, thread) && thread ? (
+                  <SpinOffButton thread={thread} sourceId={row.message.sourceId ?? ""} excerpt={spinOffSource(row.message, thread)!} />
+                ) : undefined}
+              >
                 <Message
                   m={row.message}
                   answering={fencesLive ? answeringForMessage(row.message) : undefined}
@@ -1573,6 +1581,24 @@ function JumpToLatest({ overlay, hidden, onJump }: { overlay: HTMLElement | null
 // The thread's top bar: title and — at the far right — the shared non-lifecycle HeaderActions. Snooze
 // and Archive stay in the persistent thread footer. Owned sessions expose a command-copy icon; foreign
 // rows do not. It carried a Chat|Doc tab strip until 2026-08-06; see ThreadView for why that went.
+// WHICH MESSAGES A NEW THREAD CAN BE SPUN OFF FROM, and the text it would quote: the human's own words and
+// the agent's prose — never frizz's wakes, a sub-agent's report, a queued send, or a request that is itself
+// a spin-off. Only a live frizz session thread takes one; a foreign row has no worker of ours to brief it.
+function spinOffSource(m: ChatMessage, thread: ThreadViewData | undefined): string | undefined {
+  if (!thread || thread.kind !== "session" || thread.foreign === true || !thread.sessionId) return undefined
+  if (m.kind || m.providerError || m.queued || !m.sourceId) return undefined
+  if (m.role === "user") {
+    if (m.wake || m.peerFrom || m.spinOff || m.agentInstruction) return undefined
+    const text = messagePresentationText(m).trim()
+    return text || undefined
+  }
+  if (agentCompletionCall(m)) return undefined
+  const text = m.parts && m.parts.length > 0
+    ? m.parts.flatMap((p) => (p.kind === "tools" ? [] : [p.text])).join("\n\n").trim()
+    : m.text.trim()
+  return text || undefined
+}
+
 export function ThreadHeader({ slug, onStatusApplied, onClose, showReturnToQueue = false }: { slug: string; onStatusApplied?: () => void; onClose?: () => void; showReturnToQueue?: boolean }) {
   const board = useBoard()
   const thread = threadBySlug(board, slug)
@@ -1614,6 +1640,7 @@ export function ThreadHeader({ slug, onStatusApplied, onClose, showReturnToQueue
               className="min-w-0 truncate"
             />
             <ThreadStatusLine status={thread.statusLine} lead={<span aria-hidden className="shrink-0 opacity-60">·</span>} />
+            <SpunOffFrom thread={thread} lead={<span aria-hidden className="shrink-0 opacity-60">·</span>} />
           </div>
         </div>
       </div>
@@ -3339,6 +3366,8 @@ export const Message = memo(function Message({ m, answering, dense, paired, show
     // It is settled first because it is not a child: no report verb, no drawer, and a body to keep.
     if (m.peerSession && m.peerFrom) return <PeerSessionMessageLine from={m.peerFrom} unnamed={m.peerUnnamed} text={text} sourceId={m.sourceId} at={m.at} />
     if (m.peerFrom) return <SubAgentReportLine from={m.peerFrom} unnamed={m.peerUnnamed} dispatchId={m.peerDispatchId} sourceId={m.sourceId} at={m.at} />
+    // A SPIN-OFF REQUEST: the human's instructions for a new thread, not the brief frizz handed the worker.
+    if (m.spinOff) return <SpinOffBubble id={m.spinOff.id} instructions={m.spinOff.instructions} excerpt={m.spinOff.excerpt} spinOffs={thread?.spinOffs} sourceId={m.sourceId} />
     // `rawText` rides alongside the presentation text because the two differ: the bubble shows the
     // stripped/normalized copy, while the optimistic cache entry an unqueue has to evict is keyed on
     // the message's own raw text.

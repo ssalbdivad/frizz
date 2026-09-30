@@ -2266,3 +2266,42 @@ test("a repeat of a deliveryId already delivered is a no-op even after the ledge
   assert.equal(calls.length, 1, "the worker got the message once")
   h.storage.close()
 })
+
+// A SPIN-OFF is fulfilled by the parent's own `spawn_thread` naming the request: the dispatch writes the
+// human's words and a link back above the parent's brief, stamps the child once, and refuses a second
+// spawn or a caller that is not the parent.
+test("dispatch fulfils a spin-off once, from its parent only, with the human's words above the brief", async () => {
+  const h = harness()
+  try {
+    h.storage.upsertSession(row("parent"))
+    const id = "spn_00000000000000aa"
+    h.storage.insertSpinOff({ id, parentSlug: "parent", sourceId: "m1", excerpt: "slow query", instructions: "investigate perf", createdAtMs: 1 })
+    const calls: { prompt: string; model?: string }[] = []
+    ;(h.ctx.dispatcher as { dispatch: unknown }).dispatch = async (input: { prompt: string; model?: string }) => {
+      calls.push(input)
+      return { slug: "child", sessionId: "sid-child" }
+    }
+    const dispatch = (from: string) =>
+      h.router.dispatch.handler({ input: { prompt: "Brief: the N+1 in loadUsers", model: "opus", effort: "high", spinOff: id, spinOffFrom: from } })
+
+    await assert.rejects(dispatch("someone-else"), /requested from another thread/)
+    assert.equal(calls.length, 0)
+
+    assert.deepEqual(await dispatch("parent"), { slug: "child", sessionId: "sid-child" })
+    assert.equal(calls.length, 1)
+    assert.match(calls[0].prompt, /^Spun off from \[parent\]\(\/thread\/parent\) at the human's request\. Their instructions:\n\n> investigate perf\n/)
+    assert.ok(calls[0].prompt.endsWith("Brief: the N+1 in loadUsers"))
+    assert.equal("spinOff" in calls[0], false)
+    assert.equal(h.storage.getSpinOff(id)?.child_slug, "child")
+
+    await assert.rejects(dispatch("parent"), /already started thread child/)
+    assert.equal(calls.length, 1)
+
+    // Both ends see the edge.
+    const edges = h.storage.spinOffsBySlug()
+    assert.deepEqual(edges.get("parent")?.map((e) => e.id), [id])
+    assert.deepEqual(edges.get("child")?.map((e) => e.id), [id])
+  } finally {
+    rmSync(h.dir, { recursive: true, force: true })
+  }
+})

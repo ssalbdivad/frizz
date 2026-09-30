@@ -507,6 +507,19 @@ export interface CommandThreadRow {
   queued_at?: string | null
 }
 
+/** A SPIN-OFF: a new thread the human asked for from one message of `parent_slug` — see the table. */
+export interface ThreadSpinOffRow {
+  id: string
+  parent_slug: string
+  source_id: string
+  excerpt: string
+  instructions: string
+  /** Null until the parent's worker has dispatched it. */
+  child_slug: string | null
+  created_at: number
+  spawned_at: number | null
+}
+
 /** A saved destination, independent of running work and completion. */
 export interface ThreadLinkRow {
   id: string
@@ -816,6 +829,14 @@ export interface Storage {
   // dropped the row cannot resurrect it.
   setPrWatchCursor(id: string, cursor: string): boolean
   // A label is a stable slot: re-registering it updates the destination without moving the row.
+  insertSpinOff(row: { id: string; parentSlug: string; sourceId: string; excerpt: string; instructions: string; createdAtMs: number }): void
+  getSpinOff(id: string): ThreadSpinOffRow | undefined
+  dropSpinOff(id: string): boolean
+  /** Stamp the dispatched child onto a PENDING spin-off. False when it is unknown or already spawned, so
+   *  one request can never produce two threads. */
+  completeSpinOff(id: string, childSlug: string, atMs: number): boolean
+  /** Every spin-off, keyed by BOTH ends: a parent sees the ones it was asked for, a child the one it came from. */
+  spinOffsBySlug(): Map<string, ThreadSpinOffRow[]>
   upsertThreadLink(link: { id: string; slug: string; kind: "link" | "file"; label: string; target: string; createdAtMs: number }): ThreadLinkRow
   listThreadLinks(slug: string): ThreadLinkRow[]
   threadLinksBySlug(): Map<string, ThreadLinkRow[]>
@@ -1319,6 +1340,27 @@ export const STORAGE_SCHEMA = `
     CREATE INDEX IF NOT EXISTS pr_watch_slug
       ON pr_watch(project_id, thread_slug, state, created_at);
     -- Saved destinations have no liveness or expiry. The label is a stable slot within one thread.
+    -- A SPIN-OFF (2026-09-29): the human picked one message in a thread and asked for a NEW thread from it
+    -- ("fix this", "investigate perf"). The row is the request, and the link it becomes. It is created when
+    -- the human asks and delivered to the PARENT's worker, which gathers the context the new thread needs
+    -- and dispatches it through spawn_thread naming this id; the dispatch then stamps CHILD_SLUG. So a
+    -- row with no child is a request the parent has not acted on yet, and one with a child is the edge
+    -- both threads render (the parent's card links forward, the child's header links back).
+    --
+    -- SOURCE_ID is the chat's handle on the selected message (TranscriptMessage.sourceId) and EXCERPT the
+    -- text the human saw, kept because a transcript can page or compact the message out of reach.
+    CREATE TABLE IF NOT EXISTS thread_spinoff (
+      id           TEXT PRIMARY KEY,
+      project_id   TEXT NOT NULL,
+      parent_slug  TEXT NOT NULL,
+      source_id    TEXT NOT NULL,
+      excerpt      TEXT NOT NULL,
+      instructions TEXT NOT NULL,
+      child_slug   TEXT,
+      created_at   INTEGER NOT NULL,
+      spawned_at   INTEGER
+    );
+    CREATE INDEX IF NOT EXISTS thread_spinoff_parent_idx ON thread_spinoff(project_id, parent_slug);
     CREATE TABLE IF NOT EXISTS thread_link (
       id          TEXT PRIMARY KEY,
       project_id  TEXT NOT NULL,
@@ -1480,7 +1522,7 @@ export const STORAGE_SCHEMA = `
 export const STORAGE_TABLES = [
   "session", "settings", "tombstone", "adoption_claim", "adoption_retired_attempt", "retired_op",
   "thread_timer", "pr_watch", "thread_watch", "thread_question", "thread_done", "subagent_steer", "thread_link",
-  "command_thread", "shell_budget",
+  "command_thread", "shell_budget", "thread_spinoff",
 ] as const
 
 /** Idempotent; run by every createStorage and by frizz-db.ts before an import. */
@@ -2117,6 +2159,17 @@ export function createStorage(source: string | Database, projectId: string): Sto
   `)
   const prWatchCursorStmt = scope.prepare("UPDATE pr_watch SET cursor = ? WHERE project_id = @project_id AND id = ? AND state = 'armed'")
   const delPrWatches = scope.prepare("DELETE FROM pr_watch WHERE project_id = @project_id AND thread_slug = ?")
+  const insertSpinOffStmt = scope.prepare(`
+    INSERT INTO thread_spinoff (project_id, id, parent_slug, source_id, excerpt, instructions, created_at)
+    VALUES (@project_id, @id, @parentSlug, @sourceId, @excerpt, @instructions, @createdAtMs)
+  `)
+  const getSpinOffStmt = scope.prepare<[string], ThreadSpinOffRow>("SELECT * FROM thread_spinoff WHERE project_id = @project_id AND id = ?")
+  const completeSpinOffStmt = scope.prepare(
+    "UPDATE thread_spinoff SET child_slug = ?, spawned_at = ? WHERE project_id = @project_id AND id = ? AND child_slug IS NULL",
+  )
+  const spinOffsStmt = scope.prepare<[], ThreadSpinOffRow>("SELECT * FROM thread_spinoff WHERE project_id = @project_id ORDER BY created_at, rowid")
+  const dropSpinOffStmt = scope.prepare("DELETE FROM thread_spinoff WHERE project_id = @project_id AND id = ?")
+  const delSpinOffs = scope.prepare("DELETE FROM thread_spinoff WHERE project_id = @project_id AND parent_slug = ?")
   const upsertThreadLinkStmt = scope.prepare<{
     id: string; slug: string; kind: "link" | "file"; label: string; target: string; createdAtMs: number
   }, ThreadLinkRow>(`
@@ -2386,6 +2439,7 @@ export function createStorage(source: string | Database, projectId: string): Sto
     delThreadWatches.run(existing.slug)
     delShellBudgets.run(existing.slug)
     delThreadLinks.run(existing.slug)
+    delSpinOffs.run(existing.slug)
     delThreadQuestions.run(existing.slug)
     delThreadDone.run(existing.slug)
     delSubAgentSteers.run(existing.slug)
@@ -2986,6 +3040,23 @@ export function createStorage(source: string | Database, projectId: string): Sto
     dropPrWatch: (slug, id, settledAtMs) => dropPrWatchStmt.run(settledAtMs, id, slug).changes === 1,
     settlePrWatch: (id, settledAtMs) => settlePrWatchStmt.run(settledAtMs, id).changes === 1,
     setPrWatchCursor: (id, cursor) => prWatchCursorStmt.run(cursor, id).changes === 1,
+    insertSpinOff: (row) => { insertSpinOffStmt.run(row) },
+    getSpinOff: (id) => getSpinOffStmt.get(id),
+    dropSpinOff: (id) => dropSpinOffStmt.run(id).changes === 1,
+    completeSpinOff: (id, childSlug, atMs) => completeSpinOffStmt.run(childSlug, atMs, id).changes === 1,
+    spinOffsBySlug: () => {
+      const bySlug = new Map<string, ThreadSpinOffRow[]>()
+      const add = (slug: string, row: ThreadSpinOffRow) => {
+        const bucket = bySlug.get(slug)
+        if (bucket) bucket.push(row)
+        else bySlug.set(slug, [row])
+      }
+      for (const row of spinOffsStmt.all()) {
+        add(row.parent_slug, row)
+        if (row.child_slug && row.child_slug !== row.parent_slug) add(row.child_slug, row)
+      }
+      return bySlug
+    },
     upsertThreadLink: (link) => upsertThreadLinkStmt.get(link)!,
     listThreadLinks: (slug) => threadLinksBySlugStmt.all(slug),
     threadLinksBySlug: () => groupBySlug(threadLinksStmt.all()),
