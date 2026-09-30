@@ -86,7 +86,7 @@ export function projectIconSrc(project: ProjectCard): string {
 
 /** The square for any card: the Home workspace's house, or a project's icon or monogram. */
 export function ProjectSquare({ project, size }: { project: ProjectCard; size: number }) {
-  return project.home ? <HomeSquare size={size} /> : <IconSquare project={project} size={size} />
+  return project.home ? <HomeSquare size={size} /> : <IconSquare key={projectIconSrc(project)} project={project} size={size} />
 }
 
 /**
@@ -110,27 +110,67 @@ function HomeSquare({ size }: { size: number }) {
 }
 
 /**
+ * What each icon URL turned out to be, for the life of the page: loaded (and whether it fills its
+ * tile), or failed. A square mounted for a URL already known here draws its final state on the FIRST
+ * frame instead of starting transparent and fading in on `onLoad`.
+ *
+ * That start is what stepping the prompt box's project picker (⌥↑/⌥↓, All projects) showed: every step
+ * re-keys the prompt box (AllQueues FocusedComposer), so the pill's square is a fresh mount each time,
+ * and even with the bytes in the HTTP cache it sat as a bare dark tile for the async decode, the
+ * `onLoad` task and a 150ms opacity fade — long enough to read as a black square on every step.
+ */
+const iconOutcomes = new Map<string, { fills: boolean } | "failed">()
+
+/**
+ * Fetch and decode an icon before anything draws it, and remember the outcome. The `Image` is kept on
+ * the pending map until it settles, so the decode is not collected away; afterwards Chrome's memory
+ * cache holds the decoded bitmap for the URL.
+ */
+const iconWarming = new Map<string, HTMLImageElement>()
+export function warmProjectIcon(project: ProjectCard): void {
+  if (project.home || project.iconStatus === "none") return
+  const src = projectIconSrc(project)
+  if (iconOutcomes.has(src) || iconWarming.has(src)) return
+  const img = new Image()
+  iconWarming.set(src, img)
+  img.src = src
+  img.decode().then(
+    () => iconOutcomes.set(src, { fills: fillsTile(img) }),
+    () => { if (!img.complete || img.naturalWidth === 0) iconOutcomes.set(src, "failed") },
+  ).finally(() => iconWarming.delete(src))
+}
+
+// A near-square mark fills the tile; a genuinely letterboxed one is contained and padded. Measured:
+// a 372x368 screenshot is 1.1% off square and looked WRONG contained — object-contain letterboxed
+// it and the 6% padding inset it again, so a full-bleed square read as a stamp with a gap around it.
+// A real logo (.github/logo.webp, 300x331) is 9.4% off, so 5% separates the two cleanly.
+function fillsTile(img: HTMLImageElement): boolean {
+  return img.naturalWidth > 0 && img.naturalHeight > 0 && Math.abs(img.naturalWidth / img.naturalHeight - 1) <= 0.05
+}
+
+/**
  * A registered project's square: its icon, or its monogram until we know there isn't one.
  *
- * The monogram is what renders while the icon loads AND if it never does, with the `<img>` laid over
- * it and revealed only on load. That ordering is deliberate — a rail of forty squares fetches forty
- * icons, and the alternative (blank until loaded) is a rail that assembles itself in front of you.
+ * The `<img>` is laid over the tile and revealed only on load. That ordering is deliberate — a rail of
+ * forty squares fetches forty icons, and the alternative (drawn as they arrive) is a rail that
+ * assembles itself in front of you. An icon this page has already loaded skips the reveal
+ * (iconOutcomes).
  */
 function IconSquare({ project, size }: { project: ProjectCard; size: number }) {
-  const [loaded, setLoaded] = useState(false)
-  // A near-square mark fills the tile; a genuinely letterboxed one is contained and padded. Measured:
-  // a 372x368 screenshot is 1.1% off square and looked WRONG contained — object-contain letterboxed
-  // it and the 6% padding inset it again, so a full-bleed square read as a stamp with a gap around it.
-  // A real logo (.github/logo.webp, 300x331) is 9.4% off, so 5% separates the two cleanly.
-  const [fills, setFills] = useState(false)
+  const src = projectIconSrc(project)
+  const known = iconOutcomes.get(src)
+  const [loaded, setLoaded] = useState(known !== undefined && known !== "failed")
+  const [fills, setFills] = useState(known !== undefined && known !== "failed" && known.fills)
   const hue = monogramHue(project.id)
   // Draw the image unless we KNOW there is nothing to draw. Skipping it for a project that has simply
   // never been scanned deadlocks the feature — the image request is what triggers the lazy scan, so
   // no request means no scan means never any icon. `iconVersion` cannot decide this on its own: it is
   // stamped whenever a scan RAN, found or not. See ProjectCard.iconStatus.
   const hasIcon = project.iconStatus !== "none"
-  const [failed, setFailed] = useState(false)
+  const [failed, setFailed] = useState(known === "failed")
   const showMonogram = !hasIcon || failed
+  // Already on screen once: no fade, and a synchronous decode so the first frame has the pixels.
+  const [instant] = useState(loaded)
   return (
     <span
       className="relative block overflow-hidden rounded-[30%] bg-elevated"
@@ -170,27 +210,29 @@ function IconSquare({ project, size }: { project: ProjectCard; size: number }) {
       )}
       {hasIcon && !failed && (
       <img
-        src={projectIconSrc(project)}
+        src={src}
         alt=""
         width={size}
         height={size}
         // Not lazy: a rail is a handful of squares, all of them on screen, and deferring them is
         // half of what the swap looked like.
         loading="eager"
-        decoding="async"
+        decoding={instant ? "sync" : "async"}
         onLoad={(event) => {
-          const img = event.currentTarget
-          if (img.naturalWidth > 0 && img.naturalHeight > 0) {
-            setFills(Math.abs(img.naturalWidth / img.naturalHeight - 1) <= 0.05)
-          }
+          const fill = fillsTile(event.currentTarget)
+          iconOutcomes.set(src, { fills: fill })
+          setFills(fill)
           setLoaded(true)
         }}
-        onError={() => setFailed(true)}
+        onError={() => {
+          iconOutcomes.set(src, "failed")
+          setFailed(true)
+        }}
         // object-contain, never cover: a logo cropped to fill its square is a mangled logo, and the
         // scan admits some non-square marks (a 300×331 `.github/logo.webp` is a real case). The
         // padding keeps a full-bleed icon off the rounded corners without shrinking a letterboxed one
         // into a stamp.
-        className={`relative h-full w-full transition-opacity ${
+        className={`relative h-full w-full ${instant ? "" : "transition-opacity"} ${
           fills ? "object-cover" : "object-contain p-[6%]"
         } ${loaded ? "opacity-100" : "opacity-0"}`}
       />

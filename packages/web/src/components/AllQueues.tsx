@@ -60,7 +60,7 @@ import { glideTo, gliding, useViewportLock } from "../lib/viewportLock.ts"
 import { registerQueueCursor, releaseAutoOpened } from "../lib/keyboardRuntime.ts"
 import { PROJECT_STEP_CHORDS, detectPlatform, formatChord, parseChord } from "../lib/keybindings.ts"
 import { AllQueuesCard } from "./AllQueuesCard.tsx"
-import { ProjectSquare } from "./ProjectRail.tsx"
+import { ProjectSquare, warmProjectIcon } from "./ProjectRail.tsx"
 import { SIDEBAR_COLUMN_CLASS } from "./Sidebar.tsx"
 import { BandLabel } from "./BandLabel.tsx"
 import { homeOf, shortPath, useAddProject } from "./ProjectActions.tsx"
@@ -437,6 +437,10 @@ function ProjectPicker({ projects, focus, onPick }: { projects: QueuesProject[];
   // it runs in, because "Home" alone does not say that its agents start outside every project. Last is
   // also where stepping from the box reaches it (pickOrder).
   const homeChoice = projects.find((project) => !project.stale && project.card?.home)
+  // Every square ⌥↑/⌥↓ can step to, fetched and decoded now, so each step draws its icon on arrival.
+  useEffect(() => {
+    for (const project of projects) if (!project.stale) warmProjectIcon(project.card ?? fallbackCard(project))
+  }, [projects])
   const choice = (project: QueuesProject, hint?: string) => (
     <MenuItem key={project.id} value={project.slug} onSelect={() => onPick(project)} icon={<ProjectSquare project={project.card ?? fallbackCard(project)} size={14} />}>
       <span className={`min-w-0 flex-1 truncate ${project.slug === focus ? "text-fg" : ""}`}>{project.name}</span>
