@@ -696,7 +696,9 @@ export function Composer({
           truncated, and a `done` tag in the tag column for a thread already filed. A sub-agent's row is
           its whole address, how it stands (`running 12m`, `returned 3h ago`), and the same `done` tag
           once it has returned. */}
-      {mentionThread && <SubAgentMentionSource slug={mentionThread.slug} onCandidates={setSubMentions} />}
+      {/* Another project's thread has no children to offer here: the directory is asked of the box's own
+          project, where its slug names nothing (or something else). */}
+      {mentionThread && !mentionThread.project && <SubAgentMentionSource slug={mentionThread.slug} onCandidates={setSubMentions} />}
       {mentionOpen && (
         <div
           ref={suggestListRef}
@@ -720,6 +722,7 @@ export function Composer({
               <span className="shrink-0 text-[12px] font-medium text-fg">@{m.handle}</span>
               {m.status && <span className="min-w-0 truncate text-[11px] text-muted">{m.status}</span>}
               {m.done && <span className="petite-caps ml-auto shrink-0 text-[10px] text-muted-70">done</span>}
+              {m.project && <span className={`${m.done ? "" : "ml-auto "}shrink-0 text-[11px] text-muted-70`}>{m.project.name}</span>}
             </button>
           ))}
         </div>

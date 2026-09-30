@@ -1,7 +1,8 @@
 import { test } from "node:test"
 import assert from "node:assert/strict"
-import type { SubAgentDirectory, ThreadView } from "@frizz/shared"
+import type { ProjectQueue, SubAgentDirectory, ThreadView } from "@frizz/shared"
 import {
+  crossProjectMentionCandidates,
   foldAddress,
   foldHandle,
   humpStarts,
@@ -210,4 +211,24 @@ test("resolveSubAgentMention / foldAddress: a mention finds its directory entry 
   assert.equal(resolveSubAgentMention(directory, "shellBudgets.capAudit")?.id, "t3", "a returned child still resolves")
   assert.equal(resolveSubAgentMention(directory, "shellBudgets.implW3"), undefined, "an address skipping its Workflow names nothing")
   assert.equal(resolveSubAgentMention(directory, "shellBudgets.nothing"), undefined)
+})
+
+test("crossProjectMentionCandidates: other projects' threads, tagged, minus the box's project and handles it has", () => {
+  const queue = (projectSlug: string, threads: ThreadView[]) =>
+    ({ projectId: projectSlug, projectSlug, projectName: `${projectSlug} name`, projectDir: "/", threads, doneCount: 0 }) as ProjectQueue
+  const own = mentionCandidates(board)
+  const queues = [
+    queue("frizz", board),
+    queue("nub", [thread({ id: "n1", title: "Shell budgets" }), thread({ id: "n2", title: "Parser port" })]),
+    queue("app", [thread({ id: "p1", title: "Parser port" }), thread({ id: "p2", title: "Billing" })]),
+  ]
+  const cross = crossProjectMentionCandidates(queues, "frizz", own)
+  assert.deepEqual(cross.map((c) => [c.handle, c.slug, c.project?.slug]), [
+    ["parserPort", "n2", "nub"],
+    ["billing", "p2", "app"],
+  ], "a handle the box's project has, or an earlier project already offered, is not offered again")
+  assert.equal(cross[0]!.project?.name, "nub name")
+  const typed = matchMentions([...own, ...cross], "bil")
+  assert.equal(typed[0]?.slug, "p2")
+  assert.deepEqual(mentionSegments("ask @billing", [...own, ...cross]).at(-1), { kind: "mention", text: "@billing", slug: "p2", status: undefined, project: "app" })
 })

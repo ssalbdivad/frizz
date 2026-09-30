@@ -1,10 +1,10 @@
 import { test, before, after } from "node:test"
 import assert from "node:assert/strict"
 import { Marked } from "marked"
-import type { ThreadView } from "@frizz/shared"
+import type { ProjectQueue, ThreadView } from "@frizz/shared"
 import { MARKDOWN_OPTIONS } from "./markdown.ts"
 import { setGithubRepo } from "./githubAutolink.ts"
-import { mentionHref, mentionIndexVersion, setMentionIndex, subscribeMentionIndex, withMentionProject } from "./mentionAutolink.ts"
+import { mentionHref, mentionIndexVersion, setCrossProjectMentions, setMentionIndex, subscribeMentionIndex, withMentionProject } from "./mentionAutolink.ts"
 import { threadLinkTarget } from "./thread-links.ts"
 
 // `@thread` / `@thread.child` in AGENT markdown → in-app links (mentionAutolink.ts), driven through the
@@ -82,6 +82,27 @@ test("another project's prose resolves nothing against this page's board", () =>
   assert.equal(withMentionProject("other", () => render("ask @shellBudgets")), "ask @shellBudgets")
   assert.match(withMentionProject("frizz", () => render("ask @shellBudgets")), /href="\/thread\/shell-budgets"/, "its own project's prose still links")
   assert.match(render("ask @shellBudgets"), /href=/, "…and the index is back after the override")
+})
+
+const queue = (projectSlug: string, threads: ThreadView[]) =>
+  ({ projectId: projectSlug, projectSlug, projectName: projectSlug, projectDir: `/${projectSlug}`, threads, doneCount: 0 }) as ProjectQueue
+
+test("showing All projects, another project's thread links to it there, and this project's still wins", () => {
+  setCrossProjectMentions([
+    queue("frizz", BOARD.filter((t) => t.state === "open")),
+    queue("nub", [thread("focus-mode", "Focus mode"), thread("sb-nub", "Shell budgets")]),
+  ])
+  try {
+    assert.equal(render("ask @focusMode"), 'ask <a href="/all/nub/thread/focus-mode" title="Open thread">@focusMode</a>')
+    assert.match(render("ask @shellBudgets"), /href="\/thread\/shell-budgets"/, "the page's own thread, not nub's")
+    // A card of ANOTHER project: its own threads first, and every link names its project.
+    assert.match(withMentionProject("nub", () => render("ask @shellBudgets")), /href="\/all\/nub\/thread\/sb-nub"/)
+    assert.match(withMentionProject("nub", () => render("ask @portTheParser")), /href="\/all\/frizz\/thread\/port-parser"/)
+    assert.equal(withMentionProject("gone", () => render("ask @focusMode")), "ask @focusMode", "a project the poll does not carry")
+  } finally {
+    setCrossProjectMentions(null)
+  }
+  assert.equal(render("ask @focusMode"), "ask @focusMode", "a project's own page resolves its own threads alone")
 })
 
 test("the index notifies only when a handle changes, not on every board push", () => {

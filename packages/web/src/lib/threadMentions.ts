@@ -1,4 +1,4 @@
-import { addressSegments, SUB_AGENT_SEPARATOR, sectionOf, type SubAgentDirectory, type SubAgentDirectoryEntry, type ThreadView } from "@frizz/shared"
+import { addressSegments, SUB_AGENT_SEPARATOR, sectionOf, type ProjectQueue, type SubAgentDirectory, type SubAgentDirectoryEntry, type ThreadView } from "@frizz/shared"
 import { orderByInteraction, threadHandleOf } from "../groups.ts"
 import { compactAge } from "./activityTime.ts"
 import { formatCompactElapsed } from "./durationLabels.ts"
@@ -20,6 +20,9 @@ export interface MentionCandidate {
   done: boolean
   /** Set on a SUB-AGENT candidate: its drill-in id (unique where `slug` is shared by its siblings). */
   subAgentId?: string
+  /** Set on a thread of ANOTHER project than the one the prompt box writes into (All projects,
+   *  crossProjectMentionCandidates): whose it is, to show in the menu and to open it in place. */
+  project?: { slug: string; name: string }
 }
 
 /** How many done threads the typeahead offers: the recent ones a message plausibly means, the same
@@ -45,6 +48,32 @@ export function mentionCandidates(threads: readonly ThreadView[], excludeSlug?: 
     else open.push(candidate)
   }
   return [...open, ...done.slice(0, doneLimit)]
+}
+
+// ACROSS PROJECTS (maintainer 2026-09-30: "tagging threads with @ should work cross project in cross
+// project mode"). Showing All projects, a prompt box offers every open project's threads, not only its
+// own: the worker resolves a handle its own project does not carry in the other projects Frizz has open
+// (server router resolveElsewhere). Its OWN project still wins there — names are unique only within a
+// project — so another project's thread whose handle folds to one this project already has is not
+// offered: inserted, it would name this project's thread instead. Open threads only, because that is
+// what the machine-wide poll carries; the worker still resolves a finished one by name.
+
+/** Every other open project's threads as candidates, each tagged with its project, in the poll's project
+ *  order; `home` is the project the box writes into, and `taken` the candidates it already has. */
+export function crossProjectMentionCandidates(queues: readonly ProjectQueue[], home: string | undefined, taken: readonly MentionCandidate[]): MentionCandidate[] {
+  const seen = new Set(taken.map((c) => foldHandle(c.handle)))
+  const out: MentionCandidate[] = []
+  for (const queue of queues) {
+    if (queue.projectSlug === home) continue
+    const project = { slug: queue.projectSlug, name: queue.projectName }
+    for (const candidate of mentionCandidates(queue.threads)) {
+      const key = foldHandle(candidate.handle)
+      if (seen.has(key)) continue
+      seen.add(key)
+      out.push({ ...candidate, project })
+    }
+  }
+  return out
 }
 
 // The characters a handle runs over, and what may sit right before its `@` — mirrors @frizz/shared
@@ -202,7 +231,7 @@ export function resolveMention(candidates: readonly MentionCandidate[], mention:
 
 /** A mention segment names a thread by `slug`; a `@thread.child` one also carries the child's
  *  `address` (without the `@`), which is resolved against the thread's directory only when clicked. */
-export type MentionSegment = { kind: "text"; text: string } | { kind: "mention"; text: string; slug: string; status?: string; address?: string }
+export type MentionSegment = { kind: "text"; text: string } | { kind: "mention"; text: string; slug: string; status?: string; address?: string; project?: string }
 
 // Same boundary rule and the same dotted continuation as @frizz/shared threadMentions: a mention starts
 // after a non-word character, and runs on through a `.` only when another segment follows it. The TAIL
@@ -213,7 +242,7 @@ const MENTION = /(^|[^\p{L}\p{N}_@./])(@([\p{L}\p{N}][\p{L}\p{N}_-]*(?:\.[\p{L}\
 
 /** One mention found in a plain string that names a thread in `candidates`: where it sits, its text
  *  with the `@`, the thread's slug, and for a dotted `@thread.child` the whole address. */
-export type MentionMatch = { start: number; text: string; slug: string; status?: string; address?: string }
+export type MentionMatch = { start: number; text: string; slug: string; status?: string; address?: string; project?: string }
 
 /** Every mention in `text` whose THREAD resolves in `candidates` (by the fold resolveMention uses); the
  *  rest are not mentions of anything and are skipped. A dotted `@thread.child` counts when its thread
@@ -226,9 +255,10 @@ export function scanMentions(text: string, candidates: readonly MentionCandidate
     const hit = resolveMention(candidates, segments[0]!)
     if (!hit) continue
     const start = m.index! + m[1]!.length
+    const project = hit.project ? { project: hit.project.slug } : {}
     out.push(segments.length > 1
-      ? { start, text: m[2]!, slug: hit.slug, address: m[3]! }
-      : { start, text: m[2]!, slug: hit.slug, status: hit.status })
+      ? { start, text: m[2]!, slug: hit.slug, address: m[3]!, ...project }
+      : { start, text: m[2]!, slug: hit.slug, status: hit.status, ...project })
   }
   return out
 }

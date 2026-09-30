@@ -160,7 +160,7 @@ import {
 import { type AppContext } from "./context.ts"
 import { listAcpAgents } from "./backend/acp-agents.ts"
 import { sessionTitleLocked } from "./storage.ts"
-import { createThreadNamer, threadNameProblem, type ThreadNamer } from "./thread-names.ts"
+import { createThreadNamer, threadNameProblem, type NamedThread, type ThreadNamer } from "./thread-names.ts"
 import { handleOf, isReplyWaitFor, knownHandles, replyWaitPrompt, resolveSubAgent, resolveThreadHandle, subAgentAddresses, THREAD_MESSAGE_HOURLY_CAP, threadMessageBody } from "./thread-mentions.ts"
 import { enqueueThreadMessageWake } from "./scheduler.ts"
 import { editedFilesOf } from "./edited-files.ts"
@@ -956,6 +956,12 @@ function isHumanTurn(m: TranscriptMessage): boolean {
   return !m.wake || said.startsWith(BURIED_ANSWERS_HEADER)
 }
 
+// Each project's router, by its context — so a handle another project answers (resolveElsewhere) is read
+// by THAT project's own `readThread`, over its own transcripts, tailer and sub-agent directory.
+// Typed by the one procedure read through it: the whole router's type is inferred from this function's
+// own return, so naming it here would be circular.
+const routersByContext = new WeakMap<AppContext, { readThread: { handler: (args: { input: ReadThreadInput }) => Promise<ReadThreadResult> } }>()
+
 export function createRouter(ctx: AppContext) {
   // The name registry every title writer checks (thread-names.ts). A hand-built test context may carry
   // none; uniqueness then reads storage and the tailer directly, which is all it ever needs — only the
@@ -1013,6 +1019,23 @@ export function createRouter(ctx: AppContext) {
       ...(earlier.length ? { earlier } : {}),
       ...(latest ? { latest: clip(said(latest), 8_000), ...(latest.at ? { latestAt: latest.at } : {}) } : {}),
     }
+  }
+
+  // ANOTHER PROJECT'S THREAD, BY HANDLE (maintainer 2026-09-30: "tagging threads with @ should work cross
+  // project in cross project mode"). All projects' prompt box offers every open project's threads, so a
+  // handle this project's threads do not answer is looked for in every OTHER project this server has open
+  // — never by opening one. This project always wins: names are unique only within a project, so a handle
+  // both carry means the one here. Across the others, an open thread beats a finished one and then the
+  // most recent does, the rule resolveThreadHandle applies inside one project.
+  const resolveElsewhere = (handle: string) => {
+    let best: { tenant: AppContext; hit: NamedThread } | undefined
+    for (const { project, ctx: tenant } of ctx.activeTenants?.() ?? []) {
+      if (!tenant || project.id === ctx.project.id) continue
+      const namer = tenant.threadNamer ?? createThreadNamer({ storage: tenant.storage, aiTitleOf: (slug) => tenant.tailer?.get(slug)?.aiTitle })
+      const hit = resolveThreadHandle(handle, namer.threads())
+      if (hit && (!best || (hit.open !== best.hit.open ? hit.open : hit.at > best.hit.at))) best = { tenant, hit }
+    }
+    return best
   }
 
   // Messages one thread sent another, by ordered (from, to) pair — the hourly cap on `messageThread`.
@@ -1702,7 +1725,7 @@ export function createRouter(ctx: AppContext) {
     }
   }
 
-  return {
+  const router = {
     board: query({
       output: BoardSnapshot,
       handler: () => ctx.board.snapshot(),
@@ -4019,7 +4042,14 @@ export function createRouter(ctx: AppContext) {
         const [threadPart = input.handle, ...childPath] = addressSegments(input.handle)
         const hit = resolveThreadHandle(threadPart, threads)
         const row = hit ? ctx.storage.getSession(hit.slug) : undefined
-        if (!hit || !row) return { found: false, known: knownHandles(threads, input.slug) }
+        if (!hit || !row) {
+          // Another open project's thread is read by that project's own router, and says whose it is.
+          const elsewhere = resolveElsewhere(threadPart)
+          const other = elsewhere && routersByContext.get(elsewhere.tenant)
+          const read = other ? await other.readThread.handler({ input }) : undefined
+          if (read?.found) return { ...read, project: elsewhere!.tenant.project.name }
+          return { found: false, known: knownHandles(threads, input.slug) }
+        }
         const clip = (text: string, max: number) => (text.length > max ? `${text.slice(0, max)}\n…[truncated]` : text)
         if (childPath.length > 0) return readSubAgent(hit.slug, handleOf(hit), childPath, clip)
         const messages = readThreadTranscript(ctx.project, ctx.storage, hit.slug, ctx.backendFor)
@@ -4058,8 +4088,14 @@ export function createRouter(ctx: AppContext) {
       handler: async ({ input }) => {
         const threads = threadNamer().threads()
         const [threadPart = input.handle, ...childPath] = addressSegments(input.handle)
-        const hit = resolveThreadHandle(threadPart, threads)
-        const target = hit ? ctx.storage.getSession(hit.slug) : undefined
+        const local = resolveThreadHandle(threadPart, threads)
+        // A handle no thread here carries may name one in another open project; `home` is the
+        // RECIPIENT's project from here on, and `ctx` stays the sender's.
+        const elsewhere = local && ctx.storage.getSession(local.slug) ? undefined : resolveElsewhere(threadPart)
+        const hit = elsewhere?.hit ?? local
+        const home = elsewhere?.tenant ?? ctx
+        const project = elsewhere ? home.project.name : undefined
+        const target = hit ? home.storage.getSession(hit.slug) : undefined
         // A SUB-AGENT is reached through its own thread, never directly: it lives inside that thread's
         // session, where a message from outside would land on the thread's main turn instead (see
         // subAgentSteer for the measured misdelivery). Said plainly, with the handle that does work.
@@ -4071,12 +4107,12 @@ export function createRouter(ctx: AppContext) {
           return { sent: false, refusal: `no thread is called ${input.handle}.`, known: knownHandles(threads, input.slug) }
         }
         const handle = handleOf(hit)
-        if (hit.slug === input.slug) return { sent: false, handle, refusal: "that is this thread." }
+        if (!elsewhere && hit.slug === input.slug) return { sent: false, handle, refusal: "that is this thread." }
         if (target.state === "archived" || target.archived === 1) {
           return { sent: false, handle, refusal: `@${handle} is done, and a message would reopen it. Read it with read_thread instead; only the human reopens a finished thread.` }
         }
         const nowMs = Date.now()
-        const pair = `${input.slug}\u0000${hit.slug}`
+        const pair = `${input.slug}\u0000${home.project.id}\u0000${hit.slug}`
         const recent = (threadMessageLog.get(pair) ?? []).filter((at) => nowMs - at < 3_600_000)
         if (recent.length >= THREAD_MESSAGE_HOURLY_CAP) {
           return { sent: false, handle, refusal: `this thread has sent @${handle} ${recent.length} messages in the last hour, which is the cap. Stop the exchange here, or ask the human.` }
@@ -4101,26 +4137,30 @@ export function createRouter(ctx: AppContext) {
         }
         // …AND THIS MESSAGE MAY BE THE ANSWER to a wait on the recipient's side: every reply wait it holds
         // on THIS thread is settled by it, whatever the message says — the recipient reads it and decides.
-        const answered = ctx.storage.listThreadTimers(hit.slug, { armedOnly: true })
-          .filter((t) => isReplyWaitFor(t.prompt, input.slug))
-          .map((t) => ctx.storage.cancelThreadTimer(hit.slug, t.id, nowMs))
+        const answered = home.storage.listThreadTimers(hit.slug, { armedOnly: true })
+          .filter((t) => isReplyWaitFor(t.prompt, input.slug, elsewhere ? ctx.project.name : undefined))
+          .map((t) => home.storage.cancelThreadTimer(hit.slug, t.id, nowMs))
           .some(Boolean)
-        enqueueThreadMessageWake(ctx.storage, {
+        enqueueThreadMessageWake(home.storage, {
           slug: hit.slug,
           sessionId: target.session_id,
           fromSlug: input.slug,
-          message: threadMessageBody({ fromHandle: from, message: input.message, awaitsReply: Boolean(wait), answersWait: answered }),
+          message: threadMessageBody({ fromHandle: from, message: input.message, awaitsReply: Boolean(wait), answersWait: answered, ...(elsewhere ? { fromProject: ctx.project.name } : {}) }),
           nowMs,
         })
         threadMessageLog.set(pair, [...recent, nowMs])
         if (wait) {
           ctx.storage.clearThreadDone(input.slug)
-          ctx.storage.armThreadTimer({ id: wait.id, slug: input.slug, prompt: replyWaitPrompt(handle, hit.slug), fireAtMs: wait.fireAtMs, createdAtMs: nowMs })
+          ctx.storage.armThreadTimer({ id: wait.id, slug: input.slug, prompt: replyWaitPrompt(handle, hit.slug, project), fireAtMs: wait.fireAtMs, createdAtMs: nowMs })
         }
         ctx.board.refresh()
         ctx.scheduler?.kick?.()
+        if (elsewhere) {
+          home.board.refresh()
+          home.scheduler?.kick?.()
+        }
         return {
-          sent: true, handle, from,
+          sent: true, handle, from, ...(project ? { project } : {}),
           ...(wait ? { timerId: wait.id, waitUntil: new Date(wait.fireAtMs).toISOString() } : {}),
           ...(answered ? { answered } : {}),
         }
@@ -4847,6 +4887,8 @@ export function createRouter(ctx: AppContext) {
       },
     }),
   }
+  routersByContext.set(ctx, router)
+  return router
 }
 
 export type AppRouter = ReturnType<typeof createRouter>

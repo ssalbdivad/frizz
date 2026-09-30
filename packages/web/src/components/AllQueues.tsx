@@ -70,6 +70,7 @@ import { DispatchForm, type DispatchDirs } from "./NewThreadModal.tsx"
 import { Menu, MenuContent, MenuItem, MenuSeparator, MenuTrigger } from "./ui/Menu.tsx"
 import { ProjectSwitcher, type SwitcherProject } from "./ProjectSwitcher.tsx"
 import { AddProjectRow, ProjectList } from "./ProjectList.tsx"
+import { setCrossProjectMentions } from "../lib/mentionAutolink.ts"
 
 /** How often the page re-reads every project. The rail's badges poll at 5s; this is the page the
  *  operator is looking AT, so it runs a little faster — the read is the servers' cached snapshots. */
@@ -133,6 +134,10 @@ export function AllQueuesPage() {
   // project's alone and the prompt box is its; showing All projects, they are every project's.
   const view = usePageView()
   const viewed = view.kind === "project" ? projects.find((project) => project.slug === view.slug) : undefined
+  // Showing All projects, an `@handle` in agent prose links to any open project's thread.
+  const crossProjectMentions = view.kind === "all" ? queues.data : null
+  useEffect(() => setCrossProjectMentions(crossProjectMentions), [crossProjectMentions])
+  useEffect(() => () => setCrossProjectMentions(null), [])
   const focused = view.kind === "project"
   const navigate = useNavigate()
   // The directories the prompt box is keyed by — and so the ones a choice of project carries its draft

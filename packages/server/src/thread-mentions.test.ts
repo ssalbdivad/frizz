@@ -41,9 +41,9 @@ test("an open thread outranks a finished one carrying the same name", () => {
   assert.deepEqual(knownHandles(threads), ["@focusMode", "@focusMode (done)"])
 })
 
-function harness(tailerOver: Partial<Tailer> = {}) {
+function harness(tailerOver: Partial<Tailer> = {}, id = "m", name = "test") {
   const dir = mkdtempSync(join(tmpdir(), "frizz-mentions-rpc-"))
-  const project: Project = { dir, id: "m", name: "test", label: "test", stateDir: dir, cwdSlug: "test" }
+  const project: Project = { dir, id, name, label: name, stateDir: dir, cwdSlug: name }
   const storage = createStorage(join(dir, "ui.db"), "p")
   const snapshot: BoardSnapshot = { projectDir: dir, projectName: "test", projectLabel: "test", threads: [], errors: [], warnings: [] }
   const board: BoardManager = {
@@ -62,7 +62,7 @@ function harness(tailerOver: Partial<Tailer> = {}) {
     getSettings: () => ({ permissionMode: "auto" }) as unknown as Settings,
   } as unknown as AppContext
   return {
-    dir, storage, router: createRouter(ctx), kicks: () => kicks,
+    dir, storage, ctx, project, board, router: createRouter(ctx), kicks: () => kicks,
     close: () => { storage.close(); rmSync(dir, { recursive: true, force: true }) },
   }
 }
@@ -161,6 +161,68 @@ test("a bad await_reply duration refuses before anything is sent", async () => {
     assert.equal(createWakeDeliveryStore(h.storage.scope).list().length, 0)
     assert.equal(h.storage.listThreadTimers("me", { armedOnly: true }).length, 0)
   } finally { h.close() }
+})
+
+// ACROSS PROJECTS: a handle the caller's project does not carry resolves in the other projects the server
+// has open (All projects' prompt box offers them), and the caller's own project wins a shared handle.
+function twoProjects() {
+  const a = harness({}, "pa", "alpha")
+  const b = harness({}, "pb", "beta")
+  const open = () => [a, b].map((h) => ({ project: h.project, board: h.board, ctx: h.ctx }))
+  Object.assign(a.ctx, { activeTenants: open })
+  Object.assign(b.ctx, { activeTenants: open })
+  return { a, b, close: () => { a.close(); b.close() } }
+}
+
+test("readThread reaches another open project's thread, says whose it is, and prefers its own project's", async () => {
+  const { a, b, close } = twoProjects()
+  try {
+    a.storage.upsertSession(row("me", "Mentions"))
+    b.storage.upsertSession(row("sb", "Shell budgets"))
+    b.storage.setStatus("sb", "sid-sb", "Moving the cap")
+    const hit = await a.router.readThread.handler({ input: { slug: "me", handle: "@shellBudgets" } })
+    assert.equal(hit.found, true)
+    assert.equal(hit.slug, "sb")
+    assert.equal(hit.status, "Moving the cap")
+    assert.equal(hit.project, "beta")
+
+    a.storage.upsertSession(row("mine", "Shell budgets"))
+    const own = await a.router.readThread.handler({ input: { slug: "me", handle: "@shellBudgets" } })
+    assert.equal(own.slug, "mine")
+    assert.equal(own.project, undefined, "the caller's own project wins a handle both carry")
+
+    const miss = await a.router.readThread.handler({ input: { slug: "me", handle: "@nothing" } })
+    assert.equal(miss.found, false)
+  } finally { close() }
+})
+
+test("messageThread delivers into another project's thread, and its answer settles the wait", async () => {
+  const { a, b, close } = twoProjects()
+  try {
+    a.storage.upsertSession(row("me", "Mentions"))
+    b.storage.upsertSession(row("sb", "Shell budgets"))
+    // The same slug in the SENDER's project: a message from it must not settle the cross-project wait.
+    a.storage.upsertSession(row("sb", "Other thing"))
+    const asked = await a.router.messageThread.handler({ input: { slug: "me", handle: "shellBudgets", message: "Which file?", awaitReply: true } })
+    assert.equal(asked.sent, true)
+    assert.equal(asked.project, "beta")
+    assert.equal(createWakeDeliveryStore(a.storage.scope).list().length, 0, "nothing lands in the sender's project")
+    const delivered = createWakeDeliveryStore(b.storage.scope).list()
+    assert.equal(delivered.length, 1)
+    assert.equal(delivered[0]!.slug, "sb")
+    assert.match(delivered[0]!.message, /^Message from @mentions, another Frizz thread in the alpha project/)
+    assert.equal(b.kicks(), 1, "the recipient's scheduler is kicked")
+    const waits = a.storage.listThreadTimers("me", { armedOnly: true })
+    assert.match(waits[0]!.prompt, /^Waiting on @shellBudgets to reply \(thread `sb` in beta\)/)
+
+    assert.equal((await a.router.messageThread.handler({ input: { slug: "sb", handle: "mentions", message: "hi" } })).answered, undefined)
+    assert.equal(a.storage.listThreadTimers("me", { armedOnly: true }).length, 1, "a same-slug thread here is not the one waited on")
+    const reply = await b.router.messageThread.handler({ input: { slug: "sb", handle: "@mentions", message: "src/cap.ts" } })
+    assert.equal(reply.sent, true)
+    assert.equal(reply.project, "alpha")
+    assert.equal(reply.answered, true)
+    assert.equal(a.storage.listThreadTimers("me", { armedOnly: true }).length, 0, "the answer settled the wait")
+  } finally { close() }
 })
 
 // A THREAD'S SUB-AGENTS BY ADDRESS — `portTheParser.cacheKeys`, resolved against the thread's directory

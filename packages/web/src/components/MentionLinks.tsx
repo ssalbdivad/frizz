@@ -4,6 +4,8 @@ import { useMentionCandidates } from "../hooks/useMentionCandidates.ts"
 import { openSubAgentMention } from "../hooks/useSubAgentDirectory.ts"
 import { useThreadApi, useThreadProjectId } from "../api/threadApi.tsx"
 import { basePath } from "../lib/base-path.ts"
+import { mentionHref } from "../lib/mentionAutolink.ts"
+import { spaNavigate } from "../lib/router.ts"
 import { mentionSegments, type MentionCandidate, type MentionSegment } from "../lib/threadMentions.ts"
 import type { ThreadView } from "@frizz/shared"
 import { displayName, displayTitle, threadHandleOf } from "../groups.ts"
@@ -14,7 +16,8 @@ import { openThread, threadBySlug } from "../store.ts"
 // board's handles once, and every verbatim text run under it (LinkifiedText) links the mentions that
 // resolve. Scoped by provider on purpose: only a transcript of the PAGE's project may resolve against the
 // page's board — a cross-project queue card renders no provider, so its mentions stay text rather than
-// linking to a same-named thread of the wrong project.
+// linking to a same-named thread of the wrong project. Showing All projects, the index also carries every
+// other open project's threads, each tagged with its project and linking to it there.
 const MentionIndexContext = createContext<readonly MentionCandidate[]>([])
 
 export function MentionIndexProvider({ children }: { children: ReactNode }) {
@@ -33,6 +36,12 @@ export function useMentionSegments(text: string): MentionSegment[] {
 }
 
 export function MentionLink({ segment }: { segment: Extract<MentionSegment, { kind: "mention" }> }) {
+  // Another project's thread (All projects) opens there, in place; its sub-agents are that project's to
+  // resolve, so a dotted mention of one opens the thread.
+  if (segment.project) {
+    const href = mentionHref(segment.slug, undefined, segment.project)
+    return <ThreadMentionLink segment={segment} href={href} onOpen={() => spaNavigate(href)} />
+  }
   return segment.address ? <SubAgentMentionLink segment={segment} /> : <ThreadMentionLink segment={segment} />
 }
 

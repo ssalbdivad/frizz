@@ -821,8 +821,9 @@ const TITLE = {
 const READ_THREAD = {
   name: "read_thread",
   description:
-    "READ ANOTHER THREAD in this project by its handle — the camelCase name the board shows it under " +
-    "(`shellBudgets`, `focusMode`). The human writes these as `@shellBudgets`: \"ask @shellBudgets about " +
+    "READ ANOTHER THREAD by its handle — the camelCase name the board shows it under (`shellBudgets`, " +
+    "`focusMode`), in this project or, when no thread here carries it, in another project Frizz has open. " +
+    "The human writes these as `@shellBudgets`: \"ask @shellBudgets about " +
     "this\", \"reconcile with @focusMode\". Returns that thread's original request, its status line, " +
     "whether it is running, resting or done, its last few messages (its approach, and its handoff when it " +
     "is resting) and the files it edited.\n\n" +
@@ -846,7 +847,8 @@ const READ_THREAD = {
 const MESSAGE_THREAD = {
   name: "message_thread",
   description:
-    "SEND A MESSAGE TO ANOTHER OPEN THREAD in this project, by handle (`@shellBudgets`) — to ask it a " +
+    "SEND A MESSAGE TO ANOTHER OPEN THREAD by handle (`@shellBudgets`) — in this project, or another " +
+    "project Frizz has open when no thread here carries the handle — to ask it a " +
     "question, to tell it what you are doing and how, or to agree who changes what. It arrives in that " +
     "thread's conversation signed with THIS thread's handle, joining its current turn if it is working and " +
     "waking it if it is resting. Nothing reaches the human.\n\n" +
@@ -979,7 +981,7 @@ async function readThread(args) {
     ? r.state === "done" ? `returned${r.outcome && r.outcome !== "completed" ? ` (${r.outcome})` : ""}` : r.state === "resting" ? "resting, with its own sub-agents still running" : "running"
     : r.state === "done" ? "done" : r.state === "resting" ? "resting (not working right now)" : "running (mid-turn)"
   return [
-    `@${r.handle} — ${r.subAgentOf ? `a sub-agent of @${r.subAgentOf}, ` : ""}${state}${r.status ? `\nStatus: ${r.status}` : ""}`,
+    `@${r.handle} — ${r.project ? `a thread in the ${r.project} project, ` : ""}${r.subAgentOf ? `a sub-agent of @${r.subAgentOf}, ` : ""}${state}${r.status ? `\nStatus: ${r.status}` : ""}`,
     r.request ? `\n## Its request\n\n${r.request}` : "",
     r.earlier?.length ? `\n## Its earlier messages, oldest first\n\n${r.earlier.join("\n\n---\n\n")}` : "",
     r.latest ? `\n## Its newest message${r.latestAt ? ` (${r.latestAt})` : ""}\n\n${r.latest}` : "\nIt has not said anything yet.",
@@ -999,17 +1001,18 @@ async function messageThread(args) {
   const body = { slug: threadSlug(), handle, message, ...(awaitReply ? { awaitReply: true } : {}), ...(awaitReply && typeof args.for === "string" && args.for.trim() ? { for: args.for.trim() } : {}) }
   const r = (await callRpc("messageThread", body))?.result
   if (!r?.sent) return `Not sent — ${r?.refusal ?? "Frizz did not accept it."}${knownLine(r?.known)}`
+  const where = r.project ? ` (in the ${r.project} project)` : ""
   const answered = r.answered ? ` It answers the message @${r.handle} was waiting on, so that thread is no longer parked on you.` : ""
   if (r.timerId) {
     return (
-      `Sent to @${r.handle}, signed @${r.from}, and you are now WAITING on its answer (${r.timerId}, until ` +
+      `Sent to @${r.handle}${where}, signed @${r.from}, and you are now WAITING on its answer (${r.timerId}, until ` +
       `${r.waitUntil}).${answered} Rest now unless you have other work — the wait holds your thread and needs ` +
       "no fence, and the answer arrives as a message of its own and ends the wait. If none comes in time, " +
       `that timer wakes you to decide. \`timer\` with \`action: "cancel"\` and \`id: "${r.timerId}"\` stops waiting.`
     )
   }
   return (
-    `Sent to @${r.handle}, signed @${r.from}.${answered} Any answer arrives as a message of its own — keep ` +
+    `Sent to @${r.handle}${where}, signed @${r.from}.${answered} Any answer arrives as a message of its own — keep ` +
     "working. (If you need the answer before you can go on, send with `await_reply: true` instead.)"
   )
 }

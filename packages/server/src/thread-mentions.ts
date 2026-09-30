@@ -84,15 +84,18 @@ export function subAgentAddresses(threadHandle: string, agents: readonly Child[]
 export const THREAD_MESSAGE_HOURLY_CAP = 10
 
 /** The delivered text: who it is from, whether they are waiting, and how to answer. */
-export function threadMessageBody(input: { fromHandle: string; message: string; awaitsReply?: boolean; answersWait?: boolean }): string {
+export function threadMessageBody(input: { fromHandle: string; message: string; awaitsReply?: boolean; answersWait?: boolean; fromProject?: string }): string {
   const from = input.fromHandle
+  // A sender in ANOTHER project is still answered by its bare handle: a handle this project's threads do
+  // not carry resolves in the other open projects (router resolveElsewhere).
+  const where = input.fromProject ? `in the ${input.fromProject} project` : "in this project"
   const how = input.awaitsReply
     ? `@${from} is WAITING on your answer — it is parked until you reply. Answer with \`mcp__frizz__message_thread\` ` +
       `(handle \`${from}\`) as soon as you can, even if only to say you cannot help; it reaches that thread, not the human.`
     : `Answer with \`mcp__frizz__message_thread\` (handle \`${from}\`) only if it asks you something; it reaches that ` +
       "thread, not the human. Do not reply just to acknowledge."
   return [
-    `Message from @${from}, another Frizz thread in this project${input.answersWait ? " — this answers the message you were waiting on" : ""}:`,
+    `Message from @${from}, another Frizz thread ${where}${input.answersWait ? " — this answers the message you were waiting on" : ""}:`,
     "",
     input.message,
     "",
@@ -105,11 +108,11 @@ export function threadMessageBody(input: { fromHandle: string; message: string; 
 // A REPLY WAIT is an ordinary one-off timer whose prompt names the thread it waits on. The prompt is also
 // its NAME on the card and in `activity`, so it reads as the wait; the `(thread \`slug\`)` tail is what
 // the answer is matched by (the handle can change with a rename, the slug cannot).
-export function replyWaitPrompt(handle: string, slug: string): string {
+export function replyWaitPrompt(handle: string, slug: string, project?: string): string {
   return (
     // Read in two places: as the wait's name on the card while it stands, and as the wake if it fires —
     // so the first sentence is the wait and the rest is conditional on it having run out.
-    `Waiting on @${handle} to reply (thread \`${slug}\`). If this fires, no answer came in time: read where it is ` +
+    `Waiting on @${handle} to reply (${replyWaitRef(slug, project)}). If this fires, no answer came in time: read where it is ` +
     "with `mcp__frizz__read_thread`, then ask again with `mcp__frizz__message_thread` (`await_reply: true`) if " +
     "the answer still matters, or go on without it."
   )
@@ -119,6 +122,12 @@ export function isReplyWait(prompt: string): boolean {
   return prompt.startsWith("Waiting on @") && prompt.includes(" to reply (thread `")
 }
 
-export function isReplyWaitFor(prompt: string, slug: string): boolean {
-  return isReplyWait(prompt) && prompt.includes(`(thread \`${slug}\`)`)
+/** A wait on a thread in ANOTHER project names that project too: slugs are unique only within one, so
+ *  an answer from a same-slug thread here must not settle a wait on the other project's. */
+function replyWaitRef(slug: string, project?: string): string {
+  return project ? `thread \`${slug}\` in ${project}` : `thread \`${slug}\``
+}
+
+export function isReplyWaitFor(prompt: string, slug: string, project?: string): boolean {
+  return isReplyWait(prompt) && prompt.includes(`(${replyWaitRef(slug, project)})`)
 }

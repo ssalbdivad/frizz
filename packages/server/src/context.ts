@@ -205,8 +205,10 @@ export interface AppContext {
    * than opening databases: a count is a board fact (`needsYou` needs the tailer's runtime view), so a
    * project nobody has opened has no honest count, and this deliberately does not activate one to get
    * it. Absent under a test context or a one-project server, which read as "only this project".
+   * `ctx` is that project's whole context, for a read that needs more than its board — another
+   * project's thread named by handle (router `readThread` / `messageThread`).
    */
-  activeTenants?: () => ReadonlyArray<{ project: Project; board: BoardManager }>
+  activeTenants?: () => ReadonlyArray<{ project: Project; board: BoardManager; ctx?: AppContext }>
   /**
    * Take ONE project apart while every other project keeps serving — the resource half of deleting a
    * project (router `projectRemove`). The registry half is a machine-level index file the router

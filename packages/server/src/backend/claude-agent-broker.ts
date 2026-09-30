@@ -293,6 +293,10 @@ export function runClaudeBroker(config: ClaudeBrokerConfig): RunningBroker {
     (error) => shutdown(0, "event-pump-failed", error instanceof Error ? error.message : String(error)),
   )
 
+  // `closed` guards the re-arm: shutdown() clears this timer and THEN destroys the client, whose async
+  // "close" handler lands here. Unguarded, that re-armed a fresh 6h timer on a dead broker — invisible
+  // in the standalone daemon (process.exit follows) but it held an in-process host's event loop open
+  // for 6h, which is how `claude-agent-broker.test.ts` hung a `nub --test` run for hours.
   const armIdle = () => { if (client) return; clearTimeout(idleTimer); idleTimer = setTimeout(() => shutdown(0, "idle-timeout"), IDLE_EXIT_MS) }
 
   const server = net.createServer((sock) => {

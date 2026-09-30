@@ -4559,6 +4559,9 @@ export const ReadThreadResult = z.object({
    *  `state` is then the child's own — "done" once it has returned — and `outcome` how it ended. */
   subAgentOf: z.string().optional(),
   outcome: z.enum(["completed", "failed", "killed"]).optional(),
+  /** Set when the thread is in ANOTHER open project than the caller's (a handle the caller's own project
+   *  does not carry): that project's name. */
+  project: z.string().optional(),
 }).strict()
 export type ReadThreadResult = z.infer<typeof ReadThreadResult>
 
@@ -4618,6 +4621,8 @@ export const MessageThreadResult = z.object({
   answered: z.boolean().optional(),
   refusal: z.string().optional(),
   known: z.array(z.string()).optional(),
+  /** Set when the recipient is in ANOTHER open project than the sender's: that project's name. */
+  project: z.string().optional(),
 }).strict()
 export type MessageThreadResult = z.infer<typeof MessageThreadResult>
 

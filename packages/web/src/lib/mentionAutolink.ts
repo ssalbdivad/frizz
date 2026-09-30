@@ -1,7 +1,8 @@
 import type { Token, Tokens } from "marked"
-import type { ThreadView } from "@frizz/shared"
+import type { ProjectQueue, ThreadView } from "@frizz/shared"
+import { crossProjectHref } from "./base-path.ts"
 import { childArrays } from "./githubAutolink.ts"
-import { mentionCandidates, scanMentions, type MentionCandidate } from "./threadMentions.ts"
+import { crossProjectMentionCandidates, mentionCandidates, scanMentions, type MentionCandidate } from "./threadMentions.ts"
 
 // `@handle` AND `@thread.child` IN AGENT PROSE ARE LINKS (maintainer 2026-09-30: "ensure that in cases
 // where agents refer to each other, it doesn't refer to 'another agent' but refers to the fully
@@ -24,10 +25,27 @@ import { mentionCandidates, scanMentions, type MentionCandidate } from "./thread
 // (githubAutolink.ts `repo`): a dozen memoizing call sites, one project per page, and the board is the
 // source — set from its own door (store.ts setBoard/seedBoard), notified so memoized HTML rebuilds.
 let project: string | null = null
+let board: readonly MentionCandidate[] = []
+let boardKey = ""
+// Showing All projects, every open project's threads too (setCrossProjectMentions), so a mention of
+// another project's thread links to it there — each tagged with its project, and a handle the page's
+// own board carries still meaning the page's thread (threadMentions.ts crossProjectMentionCandidates).
+let queues: readonly ProjectQueue[] | null = null
+let queuesKey = ""
+// What a render resolves against: the page's own prose's index, or — under withMentionProject — a card's.
 let index: readonly MentionCandidate[] = []
-let indexKey = ""
 let version = 0
 const listeners = new Set<() => void>()
+
+function handlesKey(candidates: readonly MentionCandidate[]): string {
+  return candidates.map((c) => `${c.slug}\u0000${c.handle}`).join("\u0001")
+}
+
+function rebuild(): void {
+  index = queues ? [...board, ...crossProjectMentionCandidates(queues, project ?? undefined, board)] : board
+  version++
+  for (const listener of listeners) listener()
+}
 
 /**
  * Point the mention linker at this page's board. Called on every board push, so it notifies only when
@@ -37,13 +55,29 @@ const listeners = new Set<() => void>()
  */
 export function setMentionIndex(projectSlug: string | null | undefined, threads: readonly ThreadView[] | null | undefined): void {
   const next = threads ? mentionCandidates(threads, undefined, Number.POSITIVE_INFINITY) : []
-  const key = `${projectSlug ?? ""}\u0002${next.map((c) => `${c.slug}\u0000${c.handle}`).join("\u0001")}`
+  const key = `${projectSlug ?? ""}\u0002${handlesKey(next)}`
   project = projectSlug ?? null
-  index = next
-  if (key === indexKey) return
-  indexKey = key
-  version++
-  for (const listener of listeners) listener()
+  board = next
+  if (key === boardKey) {
+    // Same handles: keep what renders resolving against the fresh rows without a rebuild everywhere.
+    if (!queues) index = next
+    return
+  }
+  boardKey = key
+  rebuild()
+}
+
+/**
+ * Every open project's threads, while the page shows All projects (the page's own poll, AllQueues.tsx);
+ * null on a project's own page, where a mention means that project's threads alone. Notifies only when a
+ * handle anywhere is added, removed or renamed, for the reason setMentionIndex does.
+ */
+export function setCrossProjectMentions(next: readonly ProjectQueue[] | null | undefined): void {
+  const key = next ? next.map((q) => `${q.projectSlug}\u0002${handlesKey(mentionCandidates(q.threads))}`).join("\u0003") : ""
+  queues = next ?? null
+  if (key === queuesKey) return
+  queuesKey = key
+  rebuild()
 }
 
 /** A scalar that moves whenever the index does — the `getSnapshot` half of the subscription. */
@@ -65,7 +99,7 @@ export function subscribeMentionIndex(listener: () => void): () => void {
 export function withMentionProject<T>(projectSlug: string | undefined, run: () => T): T {
   if (projectSlug === undefined || projectSlug === project) return run()
   const previous = index
-  index = []
+  index = cardIndex(projectSlug)
   try {
     return run()
   } finally {
@@ -73,9 +107,27 @@ export function withMentionProject<T>(projectSlug: string | undefined, run: () =
   }
 }
 
-/** The in-app destination a mention links to: its thread, and for a dotted one the address after `#`. */
-export function mentionHref(slug: string, address?: string): string {
-  return address ? `/thread/${slug}#${address}` : `/thread/${slug}`
+/** Another project's card's index, showing All projects: its own open threads first, then every other
+ *  project's, ALL tagged with their project — none of them is the page's board, whose bare `/thread/`
+ *  link would open the page project's same-slug thread. Nothing when the page is not showing them all. */
+const cardIndexes = new Map<string, { version: number; candidates: readonly MentionCandidate[] }>()
+function cardIndex(projectSlug: string): readonly MentionCandidate[] {
+  const own = queues?.find((q) => q.projectSlug === projectSlug)
+  if (!queues || !own) return []
+  const cached = cardIndexes.get(projectSlug)
+  if (cached?.version === version) return cached.candidates
+  const tagged = mentionCandidates(own.threads).map((c) => ({ ...c, project: { slug: own.projectSlug, name: own.projectName } }))
+  const candidates = [...tagged, ...crossProjectMentionCandidates(queues, projectSlug, tagged)]
+  cardIndexes.set(projectSlug, { version, candidates })
+  return candidates
+}
+
+/** The in-app destination a mention links to: its thread, and for a dotted one the address after `#`.
+ *  A thread of another project links to it there (`/all/<project>/thread/…`), which lib/thread-links.ts
+ *  opens in place. */
+export function mentionHref(slug: string, address?: string, projectSlug?: string): string {
+  const path = address ? `/thread/${slug}#${address}` : `/thread/${slug}`
+  return projectSlug ? `${crossProjectHref(encodeURIComponent(projectSlug))}${path}` : path
 }
 
 function textToken(text: string): Tokens.Text {
@@ -91,9 +143,9 @@ function splitMentions(source: string): Token[] | null {
   if (matches.length === 0) return null
   const pieces: Token[] = []
   let consumed = 0
-  for (const { start, text, slug, address } of matches) {
+  for (const { start, text, slug, address, project: projectSlug } of matches) {
     if (start > consumed) pieces.push(textToken(source.slice(consumed, start)))
-    pieces.push(linkToken(text, mentionHref(slug, address), address ? "Open sub-agent" : "Open thread"))
+    pieces.push(linkToken(text, mentionHref(slug, address, projectSlug), address ? "Open sub-agent" : "Open thread"))
     consumed = start + text.length
   }
   if (consumed < source.length) pieces.push(textToken(source.slice(consumed)))
