@@ -8,7 +8,7 @@ import { useBackgroundShellLines, useBoard } from "../hooks.ts"
 import { CHILD_ARROW, CHILD_ARROW_CLASS, CHILD_DISMISS_TITLE, CHILD_KIND_TAG_CLASS, CHILD_MARK_SLOT_CLASS, shellLinesLabel, type TranscriptShellRecord } from "../lib/childOps.ts"
 import { childOpDismisser } from "../lib/dismissChildOp.ts"
 import { PRIMER } from "../lib/primer.ts"
-import { threadProcesses, type ProcessState, type ThreadProcess } from "../lib/threadProcesses.ts"
+import { processIsLive, threadProcesses, type ProcessState, type ThreadProcess } from "../lib/threadProcesses.ts"
 import { compactElapsedSince } from "../lib/durationLabels.ts"
 import { draftKey, useDraft } from "../lib/drafts.ts"
 import { useNowMs } from "../lib/liveClock.ts"
@@ -66,7 +66,14 @@ const IDENTITY = "group flex min-w-0 max-w-[70%] items-center gap-1.5 overflow-h
 // label read × −2.34px, arrow −1.84px, tag −1.06px. Re-measure if the row's size or line-height moves.
 const OWNER_GLYPH = { agent: Bot, human: SquareTerminal } as const
 const OWNER_SLOT = `${CHILD_MARK_SLOT_CLASS} items-center`
-const OWNER_ICON = "h-[1em] w-[1em] shrink-0"
+// THE TWO GLYPHS AT ONE WEIGHT. At one size the bot read lighter and smaller than the terminal square
+// beside it: lucide's bot is a 16×12 body with a hairline antenna, the square an 18×18 frame, so at 1em
+// their ink measured 9.58×7.67px against 8.63×8.63px (11.5px row, 2026-09-29) — and since both wear the
+// row's liveness hue, shape is the ONLY owner cue. At 1.1em the bot's body is the square's width and its
+// ink 10.5×8.4px, its stroke a tenth heavier. Its ink is symmetric in its viewBox (y 4–20), so the larger
+// box stays centred on the line, and the 9px slot's overflow grows from 1.25px a side to 1.8px — still
+// inside the row's 6px gaps, so the label column does not move.
+const OWNER_ICON = { agent: "h-[1.1em] w-[1.1em] shrink-0", human: "h-[1em] w-[1em] shrink-0" } as const
 
 // THE LABEL, ON THE STRIP'S ONE LINE. The agent's is the tool call's own DESCRIPTION — prose, "Test watch in
 // the probe worktree" — so it is set as every ops-strip label is, in the row's sans (it was mono for one
@@ -109,7 +116,11 @@ function folderName(dir: string): string {
 /** What a row's identity button says on hover — who owns it, what it runs, where, and (when it has gone
  *  quiet) what the breathing mark means. The old SHELL row's quiet dot carried that in its own title, as
  *  "running — no recent output"; the reading behind it is the OS's (tailer.ts shellIsGone: no process
- *  holds the shell's log any more), so the line says that, rather than that it is still running. */
+ *  holds the shell's log any more), so the line says that, rather than that it is still running.
+ *
+ *  "Runs in", not "Started in": while an agent shell runs, its folder is the OS's answer for where its
+ *  process is NOW (server shell-cwd-probe.ts), which a `cd` inside the command moves; "Ran in" once it
+ *  has gone quiet, the last place it was seen. */
 export function processTitle(p: ThreadProcess, homeDir: string | undefined, watched = false): string {
   const where = p.cwd ? abbreviateHome(p.cwd, homeDir) : undefined
   if (p.owner === "human") return where ? `Your terminal — ${p.label}\n${where}` : `Your terminal — ${p.label}`
@@ -117,7 +128,7 @@ export function processTitle(p: ThreadProcess, homeDir: string | undefined, watc
   const lines = [
     head,
     ...(p.state === "quiet" ? [QUIET_TITLE] : []),
-    ...(where ? [`Started in ${where}`] : []),
+    ...(where ? [`${p.state === "quiet" ? "Ran" : "Runs"} in ${where}`] : []),
     ...(watched ? ["Watched — this thread wakes when it finishes"] : []),
   ]
   return lines.join("\n")
@@ -125,31 +136,23 @@ export function processTitle(p: ThreadProcess, homeDir: string | undefined, watc
 
 export const QUIET_TITLE = "Quiet — no process is writing its output, so it has probably ended"
 
-function isInside(dir: string, root: string): boolean {
-  const base = root.replace(/[\\/]+$/, "")
-  return dir === base || dir.startsWith(`${base}/`) || dir.startsWith(`${base}\\`)
-}
-
 /**
- * THE ROW'S FOLDER HINT: shown only where the row runs somewhere OTHER than where the thread's header says
- * the agent is (`thread.checkout`, ThreadCheckoutToken) — so the header token and the row hints never say
- * the same thing twice. With the agent at the project root that is the plain rule, "a row off the root
- * names its checkout". Once the agent has moved into a worktree, every terminal opened from the thread's
- * default folder is in that worktree too, and naming it on each of them was the header's word repeated on
- * half the strip; there the rows that stand out are the ones still at the root, which read `root`.
+ * THE ROW'S FOLDER HINT: the checkout a row runs in, named only when that is NOT the project root — one
+ * rule for both owners, read off the row alone. `checkout` is the server's lift (thread-cwd.ts
+ * liftCheckout), absent at the root, so a terminal in `packages/web` is still the root and says nothing.
+ * Absent means the root here as on every surface; nothing is ever drawn for the main checkout.
  *
- * `checkout` is the server's lift (thread-cwd.ts liftCheckout), absent at the root. A transcript-only row
- * (a Codex tool call's `workdir`, never lifted) has a `cwd` and no `checkout`, so it is compared by folder:
- * inside the thread's checkout is "where the agent is", and only a row the board lifted is called `root`.
+ * For one commit this was measured against where the HEADER said the agent was, to spare the header's
+ * worktree name from repeating down the strip. It inverted the rule: with the agent in a worktree the ROOT
+ * rows read `root` (which, beside `tail -f /dev/null`, reads as "running as root"), and when the agent
+ * moved back every worktree row suddenly named `probe` — the same row's hint changing when the row had
+ * not. A hint that depends on something other than its own row cannot be read at a glance.
+ *
+ * A transcript-only row (a sub-agent's shell, a Codex tool call's `workdir`) was never lifted, so it has
+ * no `checkout` and no hint — it claims nothing it cannot know.
  */
-export function processFolderHint(p: ThreadProcess, threadCheckout: WorkCheckout | null | undefined): { text: string; kind: WorkCheckout["kind"] | "root"; dir?: string } | undefined {
-  const own = p.checkout?.dir
-  const thread = threadCheckout?.dir
-  if (own === thread) return undefined
-  if (p.checkout) return { text: folderName(p.checkout.dir), kind: p.checkout.kind, dir: p.checkout.dir }
-  const lifted = p.owner === "human" || Boolean(p.shell?.id)
-  if (!p.cwd || !thread || isInside(p.cwd, thread) || !lifted) return undefined
-  return { text: "root", kind: "root" }
+export function processFolderHint(p: ThreadProcess): { text: string; kind: WorkCheckout["kind"]; dir: string } | undefined {
+  return p.checkout ? { text: folderName(p.checkout.dir), kind: p.checkout.kind, dir: p.checkout.dir } : undefined
 }
 
 /**
@@ -161,11 +164,9 @@ export function processFolderHint(p: ThreadProcess, threadCheckout: WorkCheckout
  * this is — a terminal, whether its output streams from a pty (yours) or from the file the harness writes
  * (the agent's). Every row opens the same drawer.
  */
-export function ProcessRow({ process: p, slug, threadCheckout, lines, watched, onOpen }: {
+export function ProcessRow({ process: p, slug, lines, watched, onOpen }: {
   process: ThreadProcess
   slug: string
-  /** Where the thread's agent is working (its header token) — the folder a row's hint is measured against. */
-  threadCheckout?: WorkCheckout | null
   /** The agent row's live line count, when the surface polls for one (the drawer does, a card does not). */
   lines?: number
   watched?: boolean
@@ -183,7 +184,7 @@ export function ProcessRow({ process: p, slug, threadCheckout, lines, watched, o
   const age = live ? compactElapsedSince(p.startedAt, now) : undefined
   const stateText = human && !live && terminal ? terminalStateLabel(terminal) : undefined
   const counter = !human && p.shell?.id && !p.outputUnavailable ? shellLinesLabel(lines) : undefined
-  const hint = processFolderHint(p, threadCheckout)
+  const hint = processFolderHint(p)
   const title = processTitle(p, board?.homeDir, watched)
   const noun = human ? "your terminal" : p.monitor ? "agent monitor" : "agent terminal"
 
@@ -209,7 +210,7 @@ export function ProcessRow({ process: p, slug, threadCheckout, lines, watched, o
     <>
       <span aria-hidden className={CHILD_ARROW_CLASS}>{CHILD_ARROW}</span>
       <span className={OWNER_SLOT}>
-        <Glyph aria-hidden className={`${OWNER_ICON} ${PROCESS_HUE[p.state]}`} data-process-mark={p.owner} data-running-indicator={RUNNING_INDICATOR[p.state]} />
+        <Glyph aria-hidden className={`${OWNER_ICON[p.owner]} ${PROCESS_HUE[p.state]}`} data-process-mark={p.owner} data-running-indicator={RUNNING_INDICATOR[p.state]} />
       </span>
       <span className={CHILD_KIND_TAG_CLASS}>TERM</span>
       <span data-process-label className={onOpen ? `${LABEL} group-hover:text-fg/80 group-hover:underline` : LABEL}>
@@ -219,7 +220,7 @@ export function ProcessRow({ process: p, slug, threadCheckout, lines, watched, o
   )
   const readings = [
     hint ? (
-      <span key="checkout" data-process-checkout={hint.kind} className="min-w-0 max-w-[12ch] truncate" title={hint.dir ? abbreviateHome(hint.dir, board?.homeDir) : "The project root"}>
+      <span key="checkout" data-process-checkout={hint.kind} className="min-w-0 max-w-[12ch] truncate" title={abbreviateHome(hint.dir, board?.homeDir)}>
         {hint.text}
       </span>
     ) : null,
@@ -292,6 +293,11 @@ export function processOpenable(p: ThreadProcess): boolean {
  * EVERY PROCESS ON THE THREAD, in one strip (lib/threadProcesses.ts): your terminals and the agent's, one
  * row shape, one label column, one drawer. `surface="drawer"` polls the agent rows' line counters (the
  * page's own project, which a drawer always is); a card's rows carry their age and budget alone.
+ *
+ * A CARD LISTS ONLY WHAT IS LIVE (cardProcesses). Your finished terminals stay in the drawer's strip until
+ * removed, where their exit is worth a line; on a card they only grew it — ten rows and a 959px card at
+ * 420px in one verifier's session (2026-09-29), three of them runs long over. The agent's finished shells
+ * already left every surface, so on the card the two owners now follow one rule.
  */
 export function ThreadProcessStrip({
   thread,
@@ -301,7 +307,7 @@ export function ThreadProcessStrip({
   onOpen,
   className,
 }: {
-  thread: Pick<ThreadView, "id" | "terminals" | "bgShells" | "watches" | "checkout">
+  thread: Pick<ThreadView, "id" | "terminals" | "bgShells" | "watches">
   surface: "drawer" | "card"
   /** The transcript's copy of the agent's shells (Codex's live execs, a sub-agent's own shells). */
   transcriptShells?: readonly (BgShellView & TranscriptShellRecord)[]
@@ -312,7 +318,8 @@ export function ThreadProcessStrip({
   className?: string
 }) {
   const now = useNowMs()
-  const processes = threadProcesses(thread, transcriptShells, { scopedToSubAgent, now })
+  const all = threadProcesses(thread, transcriptShells, { scopedToSubAgent, now })
+  const processes = surface === "card" ? all.filter(processIsLive) : all
   const polled = surface === "drawer" ? processes.flatMap((p) => (p.owner === "agent" && p.shell?.id && !p.outputUnavailable ? [p.shell.id] : [])) : []
   const lines = useBackgroundShellLines(thread.id, polled)
   // IS A WATCHER ARMED ON THIS SHELL? A `shell` watch is a property of the row already here, never a row
@@ -331,7 +338,6 @@ export function ThreadProcessStrip({
           key={p.key}
           process={p}
           slug={thread.id}
-          threadCheckout={thread.checkout}
           lines={p.shell?.id ? lines.get(p.shell.id) : undefined}
           watched={isWatched(p)}
           onOpen={processOpenable(p) ? () => open(p) : undefined}
@@ -580,6 +586,12 @@ function expandHome(path: string, homeDir: string | undefined): string {
   if (!homeDir) return path
   if (path === "~") return homeDir
   return path.startsWith("~/") ? `${homeDir}/${path.slice(2)}` : path
+}
+
+/** The rows a queue card's strip draws — the live ones (see ThreadProcessStrip). The card gates its strip's
+ *  wrapper on this, so a card whose terminals have all finished draws no empty inset. */
+export function cardProcesses(thread: Pick<ThreadView, "terminals" | "bgShells">, now: number): ThreadProcess[] {
+  return threadProcesses(thread, [], { now }).filter(processIsLive)
 }
 
 /** Whether a card's thread is the page's focused project's, so its terminal can open over its drawer here. */

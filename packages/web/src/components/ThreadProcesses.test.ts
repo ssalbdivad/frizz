@@ -4,7 +4,7 @@ import { createElement } from "react"
 import { renderToStaticMarkup } from "react-dom/server"
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query"
 import type { BgShellView, ThreadTerminal, ThreadView } from "@frizz/shared"
-import { ProcessRow, QUIET_TITLE, ThreadProcessStrip, ThreadTerminalMark, processFolderHint, processTitle } from "./ThreadTerminals.tsx"
+import { ProcessRow, QUIET_TITLE, ThreadProcessStrip, ThreadTerminalMark, cardProcesses, processFolderHint, processTitle } from "./ThreadTerminals.tsx"
 import { threadProcesses, type ThreadProcess } from "../lib/threadProcesses.ts"
 import { CHILD_MARK_SLOT_CLASS } from "../lib/childOps.ts"
 
@@ -18,7 +18,7 @@ const term = (over: Partial<ThreadTerminal> = {}): ThreadTerminal => ({ id: "ter
 const shell = (over: Partial<BgShellView> = {}): BgShellView => ({ id: "toolu_1", label: "vite dev server", startedAt: at("00"), state: "running", cwd: "/repo", ...over })
 const processes = (thread: Pick<ThreadView, "terminals" | "bgShells">) => threadProcesses(thread, [], { now: NOW })
 
-const row = (p: ThreadProcess, extra: { onOpen?: () => void; lines?: number; watched?: boolean; threadCheckout?: ThreadView["checkout"] } = {}) =>
+const row = (p: ThreadProcess, extra: { onOpen?: () => void; lines?: number; watched?: boolean } = {}) =>
   renderToStaticMarkup(createElement(ProcessRow, { process: p, slug: "t", ...extra }))
 
 const withQuery = (node: ReturnType<typeof createElement>) =>
@@ -43,7 +43,9 @@ test("every row has exactly one TERM tag and nothing extra before its label — 
     // nothing else, so every label on the strip starts at one x.
     const identity = html.slice(html.indexOf("<button"), html.indexOf("data-process-label"))
     assert.equal(identity.split("<span").length - 1, 4, `${p.key}: arrow, slot, tag, and the label's own span`)
-    assert.match(identity, /items-center"><svg[^>]*class="lucide lucide-[a-z-]+ h-\[1em\] w-\[1em\] shrink-0 /, `${p.key}: the glyph is centred in the slot, like the dot it replaces`)
+    // 1em for the terminal square, 1.1em for the bot — the size that gives the two owners one weight.
+    const size = p.owner === "agent" ? "1\\.1em" : "1em"
+    assert.match(identity, new RegExp(`items-center"><svg[^>]*class="lucide lucide-[a-z-]+ h-\\[${size}\\] w-\\[${size}\\] shrink-0 `), `${p.key}: the glyph is centred in the slot, like the dot it replaces`)
   }
 })
 
@@ -76,37 +78,48 @@ test("the hue is the row's liveness", () => {
   }
 })
 
-test("the folder hint appears only where a row runs somewhere other than the header says the agent is", () => {
+test("the folder hint names a row's checkout only when it is off the project root — read off the row alone", () => {
   const probe = { dir: "/repo/.frizz/worktrees/probe", kind: "worktree" as const }
   const off = processes({ bgShells: [shell({ cwd: "/repo/.frizz/worktrees/probe", checkout: probe })] })[0]!
-  // The agent at the root: a row off it names its checkout, and a root row names nothing.
   assert.match(row(off), /data-process-checkout="worktree"[^>]*>probe</)
-  assert.doesNotMatch(row(processes({ bgShells: [shell()] })[0]!), /data-process-checkout/)
+  assert.doesNotMatch(row(processes({ bgShells: [shell()] })[0]!), /data-process-checkout/, "the root names nothing")
   // A terminal in `packages/web` is still in the root checkout: no hint, whatever its folder's name.
   assert.doesNotMatch(row(processes({ terminals: [term({ cwd: "/repo/packages/web" })] })[0]!), /data-process-checkout/)
   const theirs = processes({ terminals: [term({ checkout: { dir: "/elsewhere", kind: "folder" } })] })[0]!
-  assert.match(row(theirs), /data-process-checkout="folder"[^>]*>elsewhere</)
-  // The agent IN the worktree: the header already says `probe`, so the rows there say nothing, and the one
-  // still at the root is the one that stands out.
-  assert.doesNotMatch(row(off, { threadCheckout: probe }), /data-process-checkout/, "the header's word is not repeated on its rows")
-  assert.match(row(processes({ bgShells: [shell()] })[0]!, { threadCheckout: probe }), /data-process-checkout="root"[^>]*>root</)
-  assert.match(row(processes({ terminals: [term()] })[0]!, { threadCheckout: probe }), /data-process-checkout="root"/, "one rule for both owners")
-  assert.match(row(theirs, { threadCheckout: probe }), />elsewhere</)
-  // A transcript-only row was never lifted by the server: inside the agent's checkout is "where the agent
-  // is", and anything else is not claimed to be the root.
-  const transcriptOnly = (cwd: string) => threadProcesses({ bgShells: [] }, [{ label: "codex exec", startedAt: at("01"), state: "running", cwd }], { now: NOW })[0]!
-  assert.equal(processFolderHint(transcriptOnly("/repo/.frizz/worktrees/probe/src"), probe), undefined)
-  assert.equal(processFolderHint(transcriptOnly("/repo"), probe), undefined)
+  assert.match(row(theirs), /data-process-checkout="folder"[^>]*>elsewhere</, "one rule for both owners")
+  // NEVER `root`, and never a function of where the agent is now: the same row reads the same wherever
+  // the header's token says the agent went (a verifier watched every root row read `root` while the agent
+  // sat in `probe`, then every probe row read `probe` once it came back).
+  const html = withQuery(createElement(ThreadProcessStrip, { thread: { id: "t", bgShells: [shell(), shell({ id: "w", cwd: probe.dir, checkout: probe })], terminals: [term()], watches: [], checkout: probe } as ThreadView, surface: "card" }))
+  assert.doesNotMatch(html, />root</)
+  assert.equal(html.split("data-process-checkout").length - 1, 1, "only the worktree row carries a hint")
+  // A transcript-only row was never lifted: it claims nothing.
+  const transcriptOnly = threadProcesses({ bgShells: [] }, [{ label: "codex exec", startedAt: at("01"), state: "running", cwd: "/repo/.frizz/worktrees/probe/src" }], { now: NOW })[0]!
+  assert.equal(processFolderHint(transcriptOnly), undefined)
 })
 
-test("the tooltip says whose it is, what it runs, and where it started", () => {
+test("the tooltip says whose it is, what it runs, and where it runs", () => {
   const home = "/home/u"
   assert.equal(processTitle(processes({ terminals: [term({ cwd: "/home/u/repo" })] })[0]!, home), "Your terminal — npm run dev\n~/repo")
-  assert.equal(processTitle(processes({ bgShells: [shell({ cwd: "/home/u/repo" })] })[0]!, home), "Agent terminal — vite dev server\nStarted in ~/repo")
-  assert.equal(processTitle(processes({ bgShells: [shell({ cwd: "/home/u/repo" })] })[0]!, home, true), "Agent terminal — vite dev server\nStarted in ~/repo\nWatched — this thread wakes when it finishes")
-  assert.equal(processTitle(processes({ bgShells: [shell({ monitor: true, cwd: "/home/u/repo" })] })[0]!, home), "Agent monitor — vite dev server\nStarted in ~/repo")
+  // "Runs in": a running shell's folder is the OS's answer for where its process is now, not where it began.
+  assert.equal(processTitle(processes({ bgShells: [shell({ cwd: "/home/u/repo" })] })[0]!, home), "Agent terminal — vite dev server\nRuns in ~/repo")
+  assert.equal(processTitle(processes({ bgShells: [shell({ cwd: "/home/u/repo" })] })[0]!, home, true), "Agent terminal — vite dev server\nRuns in ~/repo\nWatched — this thread wakes when it finishes")
+  assert.equal(processTitle(processes({ bgShells: [shell({ monitor: true, cwd: "/home/u/repo" })] })[0]!, home), "Agent monitor — vite dev server\nRuns in ~/repo")
   // The breathing mark says what it means, as the old SHELL row's quiet dot did in its title.
-  assert.equal(processTitle(processes({ bgShells: [shell({ state: "stale", cwd: "/home/u/repo" })] })[0]!, home), `Agent terminal — vite dev server\n${QUIET_TITLE}\nStarted in ~/repo`)
+  assert.equal(processTitle(processes({ bgShells: [shell({ state: "stale", cwd: "/home/u/repo" })] })[0]!, home), `Agent terminal — vite dev server\n${QUIET_TITLE}\nRan in ~/repo`)
+})
+
+test("a card lists only live terminals; the drawer keeps your finished ones", () => {
+  const thread = { id: "t", watches: [], bgShells: [shell()], terminals: [term({ id: "live" }), term({ id: "done", state: "exited", exitCode: 0, command: "git status" }), term({ id: "failed", state: "exited", exitCode: 2, command: "nub run typecheck" })] } as Pick<ThreadView, "id" | "terminals" | "bgShells" | "watches">
+  const card = withQuery(createElement(ThreadProcessStrip, { thread, surface: "card" }))
+  const drawer = withQuery(createElement(ThreadProcessStrip, { thread, surface: "drawer" }))
+  assert.equal(card.split("data-process-row=").length - 1, 2, "the running terminal and the agent's shell")
+  assert.doesNotMatch(card, /git status|typecheck/)
+  assert.equal(drawer.split("data-process-row=").length - 1, 4)
+  assert.match(drawer, /exit 2/)
+  // …and the card gates its wrapper on the same rows, so a card with only finished runs draws nothing.
+  assert.equal(cardProcesses({ terminals: [term({ state: "exited", exitCode: 0 })], bgShells: [] }, NOW).length, 0)
+  assert.equal(cardProcesses({ terminals: [term({ awaitingInput: true })], bgShells: [shell({ state: "stale" })] }, NOW).length, 2, "a prompt and a quiet shell are live")
 })
 
 test("a Codex exec's row opens like every other; a transcript-only row has nothing to open", async () => {

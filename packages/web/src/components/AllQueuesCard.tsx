@@ -59,9 +59,8 @@ import { LogoutConfirmModal, SignInModal } from "./SignInModal.tsx"
 import { QuietTurnCard, showsQuietTurnCard } from "./QuietTurnCard.tsx"
 import { SnoozeButton } from "./SnoozeButton.tsx"
 import { StateButton } from "./ThreadLifecycleFooter.tsx"
-import { focusedProject, openProcessDrawer, TerminalPromptPane, ThreadProcessStrip } from "./ThreadTerminals.tsx"
+import { cardProcesses, focusedProject, openProcessDrawer, TerminalPromptPane, ThreadProcessStrip } from "./ThreadTerminals.tsx"
 import { ThreadCheckoutToken } from "./ThreadCheckoutToken.tsx"
-import { threadProcesses } from "../lib/threadProcesses.ts"
 import { Tooltip } from "./Tooltip.tsx"
 import { BLOCK_RADIUS, BLOCK_RADIUS_INNER_BOTTOM, QUEUE_WRAP, TranscriptCard } from "./TranscriptCard.tsx"
 
@@ -408,7 +407,7 @@ export const AllQueuesCard = memo(function AllQueuesCard({
                 focus (the drawer stack is that project's); otherwise the thread's drawer carries it. */}
             {/* Gated on the rows the strip will draw, not on the arrays: the inset's negative margin would
                 otherwise pull the footer up 4.25px under a card whose only shell has finished. */}
-            {threadProcesses(thread, [], { now: Date.now() }).length > 0 && (
+            {cardProcesses(thread, Date.now()).length > 0 && (
               <div className="-mt-3 shrink-0 px-5 pb-3" data-queue-processes={thread.id}>
                 <div className="ops-column-optical-inset">
                   <ThreadProcessStrip

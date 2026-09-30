@@ -430,9 +430,15 @@ function Chevron() {
   return <ChevronRight size={13} aria-hidden className={`${ON_CAP} ml-[3px] -mr-[4px] text-muted-35 transition-colors group-hover:text-muted-70`} />
 }
 
-export function WaitRow({ mark, name, status, onOpen, onPrewarm, href, ghRef, title, testKind, testId, indent }: {
+export function WaitRow({ mark, name, mono, status, onOpen, onPrewarm, href, ghRef, title, testKind, testId, indent }: {
   mark: ReactNode
   name: string
+  /** The name is a COMMAND LINE (a terminal of yours), set in mono as the strip sets the same command —
+   *  one process, one typeface, on every surface. An inline run on the row's baseline, a step smaller so
+   *  mono's wider, taller face reads at the sans name's size (the strip's 11px-in-11.5px ratio), and at
+   *  the regular weight the strip uses: the row's `font-medium` set the mono visibly bolder than the sans
+   *  names beside it (2026-09-29, dsf 3). */
+  mono?: boolean
   status: ReactNode
   onOpen?: () => void
   /** Left inset in px for a row in a TREE (the rail's edited files). Switches the row from the shared
@@ -453,6 +459,7 @@ export function WaitRow({ mark, name, status, onOpen, onPrewarm, href, ghRef, ti
 }) {
   const tree = indent !== undefined
   const nameClass = tree ? `${NAME} flex-1` : NAME
+  const label = mono ? <span className="font-mono-keep text-[11.5px] font-normal">{name}</span> : name
   const open = href
     ? (
       <a
@@ -466,7 +473,7 @@ export function WaitRow({ mark, name, status, onOpen, onPrewarm, href, ghRef, ti
         onMouseDown={(e) => e.stopPropagation()}
         className={`${nameClass} ${STRETCH} group-hover:underline group-hover:decoration-fg/40 group-hover:underline-offset-2`}
       >
-        {name}
+        {label}
       </a>
     )
     : onOpen
@@ -478,10 +485,10 @@ export function WaitRow({ mark, name, status, onOpen, onPrewarm, href, ghRef, ti
         title={title}
         className={`${nameClass} ${STRETCH} text-left group-hover:underline group-hover:decoration-fg/40 group-hover:underline-offset-2`}
       >
-        {name}
+        {label}
       </button>
     )
-    : <span className={nameClass} title={title}>{name}</span>
+    : <span className={nameClass} title={title}>{label}</span>
   const interactive = !!(href || onOpen)
   return (
     <div
@@ -681,6 +688,7 @@ export function TermWaitRow({ terminal, slug, now }: { terminal: ThreadTerminal;
       testId={terminal.id}
       mark={<SquareTerminal size={12} className={`${ON_CAP} ${prompting ? "text-attention" : "text-shell"}`} />}
       name={terminal.command}
+      mono
       onOpen={() => pushTerminalDrawer(slug, terminal.id, { label: terminal.command })}
       title={`Open your terminal — ${terminal.command}`}
       status={prompting ? <span className="text-attention">waiting for input</span> : elapsed || "running"}
