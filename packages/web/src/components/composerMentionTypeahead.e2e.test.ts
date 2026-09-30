@@ -180,3 +180,35 @@ test("a sent @thread.child opens that sub-agent's drawer; an unknown child opens
   assert.deepEqual(await directoryRequests(), ["shell-budgets"], "three clicks, one fetch")
   assert.deepEqual(errors, [], `no page errors: ${errors.join(" | ")}`)
 })
+
+// AGENT PROSE (maintainer 2026-09-30: agents referring to each other name "the fully qualified name so
+// you can easily click to view that agent"): the real markdown pipeline, the real sanitizer, and the
+// app's own delegated `/thread/` listener.
+test("an agent's @thread and @thread.child in rendered markdown are links that open what they name", {
+  skip: !baseUrl,
+  timeout: 150_000,
+}, async () => {
+  await open()
+  const links = await page!.$$eval("[data-agent-prose] a", (as) => as.map((a) => [a.textContent, a.getAttribute("href"), a.getAttribute("target")]))
+  assert.deepEqual(links, [
+    ["@shellBudgets", "/thread/shell-budgets", "_blank"],
+    ["@shellBudgets.cacheKeys", "/thread/shell-budgets#shellBudgets.cacheKeys", "_blank"],
+    ["@ShellBudget.capAudit", "/thread/shell-budgets#ShellBudget.capAudit", "_blank"],
+    ["@shellBudgets", "https://example.com", "_blank"],
+  ], "code, a package, an author's own link and an unknown thread are untouched")
+  const code = await page!.$$eval("[data-agent-prose] code", (cs) => cs.map((c) => c.textContent))
+  assert.deepEqual(code, ["@shellBudgets"])
+  const top = () => page!.evaluate(() => (window as unknown as { __drawers: () => string[] }).__drawers().at(-1))
+  const click = async (selector: string) => {
+    const before = await page!.evaluate(() => JSON.stringify((window as unknown as { __drawers: () => string[] }).__drawers()))
+    await page!.click(selector)
+    await page!.waitForFunction((was) => JSON.stringify((window as unknown as { __drawers: () => string[] }).__drawers()) !== was, {}, before)
+    return top()
+  }
+  assert.equal(await click('[data-agent-prose] a[href="/thread/shell-budgets#shellBudgets.cacheKeys"]'), "subagent:shell-budgets:toolu_keys")
+  assert.equal(await click('[data-agent-prose] a[href="/thread/shell-budgets#ShellBudget.capAudit"]'), "subagent:shell-budgets:toolu_audit")
+  assert.equal(await click('[data-agent-prose] a[href="/thread/shell-budgets"]'), "thread:shell-budgets")
+  assert.equal(page!.url().endsWith("/thread-mentions-fixture.html"), true, "a plain click never navigated")
+  assert.equal((await browser!.pages()).length, 2, "…nor opened a tab")
+  assert.deepEqual(errors, [], `no page errors: ${errors.join(" | ")}`)
+})

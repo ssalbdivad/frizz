@@ -83,6 +83,8 @@ test("mentionSegments: a mention that names a thread becomes a link run; anythin
   assert.equal(segs.map((s) => s.text).join(""), text, "byte-for-byte")
   assert.deepEqual(segs.filter((s) => s.kind === "mention").map((s) => [s.text, s.kind === "mention" && s.slug]), [["@shellBudgets", "a"]])
   assert.deepEqual(mentionSegments("@focus-mode!", all).map((s) => s.kind), ["mention", "text"])
+  // A mention cut short by `/` or `@` is a package or a path, never its first letters (`@shell`).
+  assert.deepEqual(mentionSegments("npm i @shellBudgets/core and @shellBudgets@2", all).map((s) => s.kind), ["text"])
 })
 
 // ── SUB-AGENTS AFTER THE DOT ─────────────────────────────────────────────────────────────────────────

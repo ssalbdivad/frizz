@@ -8,6 +8,9 @@ import { Composer } from "./components/Composer.tsx"
 import { LinkifiedText } from "./components/LinkifiedText.tsx"
 import { MentionIndexProvider } from "./components/MentionLinks.tsx"
 import { useMentionCandidates } from "./hooks/useMentionCandidates.ts"
+import { useMarkdownHtml } from "./lib/useMarkdown.ts"
+import { setMentionIndex } from "./lib/mentionAutolink.ts"
+import { installThreadLinkInterceptor } from "./lib/thread-links.ts"
 import { store } from "./store.ts"
 import "./styles.css"
 
@@ -22,6 +25,10 @@ import "./styles.css"
 // a Workflow, one sentence-named and so unaddressable, two returned), so `@shellBudgets.` completes its
 // children and `@shellBudgets.cacheKeys` in a message opens one. `window.__directoryRequests` counts the
 // fetches, so a test can prove typing on does not refetch per keystroke.
+//
+// `[data-agent-prose]` is AGENT markdown through the real pipeline (useMarkdownHtml → marked → the
+// sanitizer) with the app's real delegated `/thread/` listener installed, so its mentions are the links
+// an assistant turn draws (lib/mentionAutolink.ts), and clicking one runs the app's own click path.
 //
 // Sans only: `data-font="sans"` is on <html>, the one font the product renders.
 document.documentElement.dataset.font = "sans"
@@ -44,6 +51,8 @@ const threads = [
   t({ id: "billing", title: "Billing webhooks", state: "archived", archived: true, runtime: "exited", statusLine: "Merged", lastAssistantAt: "2026-09-28T10:00:00Z" }),
 ]
 store.board = { threads, projectSlug: "frizz" } as unknown as BoardSnapshot
+// What setBoard does on a real page: point the markdown mention linker at this board.
+setMentionIndex("frizz", threads)
 
 const minutesAgo = (m: number) => new Date(Date.now() - m * 60_000).toISOString()
 const DIRECTORY = {
@@ -62,7 +71,7 @@ const directoryRequests: string[] = []
 const nativeFetch = window.fetch.bind(window)
 window.fetch = async (input, init) => {
   const url = new URL(typeof input === "string" ? input : input instanceof Request ? input.url : input.toString(), window.location.origin)
-  if (url.pathname.endsWith("/rpc/subAgentDirectory")) {
+  if (url.pathname === "/_frizz/rpc/subAgentDirectory") {
     const slug = (JSON.parse(url.searchParams.get("input") ?? "{}") as { slug?: string }).slug ?? ""
     directoryRequests.push(slug)
     const result = slug === "shell-budgets" ? DIRECTORY : { threadHandle: undefined, agents: [] }
@@ -105,8 +114,23 @@ function Box() {
   )
 }
 
+const AGENT_PROSE = [
+  "Handed the cap to @shellBudgets; @shellBudgets.cacheKeys has the key table, and @ShellBudget.capAudit.",
+  "",
+  "- `@shellBudgets` in code stays code, and so does @types/node.",
+  "- [@shellBudgets](https://example.com) is the author's own link. @nobody.cacheKeys stays text.",
+].join("\n")
+
+function AgentProse() {
+  const html = useMarkdownHtml(AGENT_PROSE)
+  return <div data-agent-prose className="md-body max-w-[520px] text-[14px]" dangerouslySetInnerHTML={{ __html: html }} />
+}
+
+const client = new QueryClient({ defaultOptions: { queries: { retry: false } } })
+installThreadLinkInterceptor(client)
+
 createRoot(document.getElementById("root")!).render(
-  <QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}>
+  <QueryClientProvider client={client}>
     <TooltipProvider>
       <main className="flex min-h-screen gap-10 bg-bg p-10 text-fg">
         <div data-sidebar-rail className="w-[240px] shrink-0">
@@ -123,6 +147,7 @@ createRoot(document.getElementById("root")!).render(
               <LinkifiedText text={"Compare @shellBudgets.cacheKeys with @ShellBudget.capAudit. @shellBudgets.nothing opens the thread."} />
             </div>
           </MentionIndexProvider>
+          <AgentProse />
           <Box />
         </div>
       </main>

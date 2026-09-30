@@ -2,6 +2,8 @@ import { useQuery, type QueryClient } from "@tanstack/react-query"
 import type { SubAgentDirectory } from "@frizz/shared"
 import type { Api } from "../api/rpc.ts"
 import { useThreadApi, useThreadProjectId } from "../api/threadApi.tsx"
+import { resolveSubAgentMention } from "../lib/threadMentions.ts"
+import { openThread, pushSubAgentDrawer } from "../store.ts"
 
 // A THREAD'S SUB-AGENT DIRECTORY — every child it ever dispatched, live and returned, with each one's
 // `thread.child` address (the `subAgentDirectory` RPC). Read by the `@thread.` typeahead and by a click
@@ -41,4 +43,20 @@ export function fetchSubAgentDirectory(queryClient: QueryClient, api: Api, proje
     queryFn: () => api.subAgentDirectory({ slug }),
     staleTime: SUB_AGENT_DIRECTORY_STALE_MS,
   })
+}
+
+/**
+ * OPEN WHAT A `@thread.child` MENTION NAMES — the one click path behind a human's mention link
+ * (MentionLinks.tsx) and an agent's (lib/thread-links.ts, for prose rendered through markdown). The
+ * child is found by its folded address in the thread's directory, which keeps the children that have
+ * already returned (maintainer 2026-09-30: "some subagents are transient so probably we want to maintain
+ * some history of completed subagents so we can reference the thread if needed"), and opens in its
+ * sub-agent drawer. A child the directory does not know — a typo, a name since changed, a server that
+ * cannot answer — opens its thread instead, which is where it would have been.
+ */
+export async function openSubAgentMention(queryClient: QueryClient, api: Api, projectId: string | undefined, slug: string, address: string): Promise<void> {
+  const directory = await fetchSubAgentDirectory(queryClient, api, projectId, slug).catch(() => undefined)
+  const entry = directory && resolveSubAgentMention(directory, address)
+  if (entry) pushSubAgentDrawer(slug, entry.id, { label: entry.label, subagentType: entry.subagentType, startedAt: entry.startedAt })
+  else openThread(slug)
 }

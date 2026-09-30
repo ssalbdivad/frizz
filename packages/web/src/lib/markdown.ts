@@ -4,6 +4,7 @@ import { CODE_BLOCK_CLASS, renderHighlightedCode } from "./syntaxHighlight.ts"
 import { isLocalMarkdownFile, localImageUrlForTarget, localMarkdownTarget, resolveRelativeLocalPath } from "./markdownTargets.ts"
 import { prefixedAppRoute } from "./base-path.ts"
 import { githubRefFromUrl, linkifyGithubRefs, withGithubRepo } from "./githubAutolink.ts"
+import { linkifyThreadMentions, withMentionProject } from "./mentionAutolink.ts"
 import { restoreWindowsPathEscapes } from "./windowsPathEscapes.ts"
 import { FRAMED_IMAGE, IMAGE_FRAME, IMAGE_FRAME_MAT } from "../components/ImageFrame.tsx"
 
@@ -244,6 +245,10 @@ export const MARKDOWN_OPTIONS = {
       // so the autolinker splits the text tokens the way the reader will see them.
       restoreWindowsPathEscapes(tokens)
       linkifyGithubRefs(tokens)
+      // `@thread` / `@thread.child` → an in-app link when the thread resolves (mentionAutolink.ts). After
+      // the GitHub pass, whose anchors it then declines to enter; the two grammars never overlap anyway
+      // (a GitHub ref never follows an `@`).
+      linkifyThreadMentions(tokens)
       return tokens
     },
   },
@@ -282,7 +287,7 @@ export function mdToHtml(md: string, opts?: MarkdownScopeOptions & { document?: 
   // breaks: single newlines are HARD breaks (chat convention — Slack/GitHub-comment style);
   // CommonMark default silently glued "item ✅\nitem ✅" lists onto one line.
   const parser = opts?.document ? documentMarkdown : markdown
-  const parse = () => parser.parse(md, { async: false }) as string
+  const parse = () => withMentionProject(opts?.projectSlug, () => parser.parse(md, { async: false }) as string)
   const html = opts?.repo === undefined ? parse() : withGithubRepo(opts.repo, parse)
   return sanitize(html, { block: true, baseDir: opts?.baseDir, homeDir: opts?.homeDir, appPath: opts?.appPath })
 }
@@ -292,13 +297,16 @@ export function mdToHtml(md: string, opts?: MarkdownScopeOptions & { document?: 
  *
  * `baseDir`/`homeDir` resolve a relative or `~` path; `repo` is what a `#123` autolinks into — `null`
  * means "no GitHub repo", and leaving it `undefined` means the page's own (githubAutolink.ts module
- * state); `appPath` is the page an in-app `/thread/<slug>` link is pointed at.
+ * state); `appPath` is the page an in-app `/thread/<slug>` link is pointed at; `projectSlug` is whose
+ * threads an `@handle` names — the page's board links them only when it is that project
+ * (mentionAutolink.ts), and leaving it `undefined` means the page's own.
  */
 export interface MarkdownScopeOptions {
   baseDir?: string
   homeDir?: string
   repo?: string | null
   appPath?: string
+  projectSlug?: string
 }
 
 // INLINE-only render: emphasis/strong/code/del/links but NO block wrapping (`<p>`, headings, lists).
@@ -312,7 +320,7 @@ export interface MarkdownScopeOptions {
 // (components/QuestionBlockCard.tsx), so a file named in an option opens like one named in a paragraph.
 export function mdInlineToHtml(md: string, opts?: MarkdownScopeOptions): string {
   if (!md.trim()) return ""
-  const parse = () => markdown.parseInline(md, { async: false }) as string
+  const parse = () => withMentionProject(opts?.projectSlug, () => markdown.parseInline(md, { async: false }) as string)
   const html = opts?.repo === undefined ? parse() : withGithubRepo(opts.repo, parse)
   return sanitize(html, { baseDir: opts?.baseDir, homeDir: opts?.homeDir, appPath: opts?.appPath })
 }

@@ -70,6 +70,9 @@ export function projectMarkdownScope(project: Pick<QueuesProject, "id" | "slug" 
     projectId: project.id,
     repo: project.githubRepo ?? null,
     appPath: crossProjectHref(encodeURIComponent(project.slug)),
+    // Whose threads an `@handle` in this card's prose names: linked from the page's board only when the
+    // page is showing this project (lib/mentionAutolink.ts withMentionProject).
+    projectSlug: project.slug,
     baseDir: project.projectDir,
     homeDir: project.homeDir,
   }

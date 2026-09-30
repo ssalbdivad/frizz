@@ -1,11 +1,11 @@
 import { createContext, useContext, useMemo, type ReactNode } from "react"
 import { useQueryClient } from "@tanstack/react-query"
 import { useMentionCandidates } from "../hooks/useMentionCandidates.ts"
-import { fetchSubAgentDirectory } from "../hooks/useSubAgentDirectory.ts"
+import { openSubAgentMention } from "../hooks/useSubAgentDirectory.ts"
 import { useThreadApi, useThreadProjectId } from "../api/threadApi.tsx"
 import { basePath } from "../lib/base-path.ts"
-import { mentionSegments, resolveSubAgentMention, type MentionCandidate, type MentionSegment } from "../lib/threadMentions.ts"
-import { openThread, pushSubAgentDrawer } from "../store.ts"
+import { mentionSegments, type MentionCandidate, type MentionSegment } from "../lib/threadMentions.ts"
+import { openThread } from "../store.ts"
 
 // `@handle` IN A HUMAN'S MESSAGE OPENS THE THREAD IT NAMES. A transcript provides the index of the
 // board's handles once, and every verbatim text run under it (LinkifiedText) links the mentions that
@@ -56,24 +56,15 @@ function ThreadMentionLink({ segment }: { segment: Extract<MentionSegment, { kin
   )
 }
 
-// `@thread.child` OPENS THE CHILD — its sub-agent drawer, found by address in the thread's directory,
-// which keeps the children that have already returned (maintainer 2026-09-30: "some subagents are
-// transient so probably we want to maintain some history of completed subagents so we can reference
-// the thread if needed"). The segment links as soon as its THREAD resolves; whether the child is real is
-// asked only on the click, so a transcript full of mentions costs no requests to draw. A child the
-// directory does not know — a typo, a name since renamed — opens its thread instead, which is where it
-// would have been. Only a query hook lives here, so it is a component of its own: a thread mention
-// renders on surfaces with no query client.
+// `@thread.child` OPENS THE CHILD — its sub-agent drawer, or its thread when the directory does not know
+// it (openSubAgentMention, the click path agent prose shares). The segment links as soon as its THREAD
+// resolves; whether the child is real is asked only on the click, so a transcript full of mentions costs
+// no requests to draw. A component of its own because only it needs the query client: a thread mention
+// renders on surfaces with none.
 function SubAgentMentionLink({ segment }: { segment: Extract<MentionSegment, { kind: "mention" }> }) {
   const queryClient = useQueryClient()
   const api = useThreadApi()
   const projectId = useThreadProjectId()
-  const open = async () => {
-    const directory = await fetchSubAgentDirectory(queryClient, api, projectId, segment.slug).catch(() => undefined)
-    const entry = directory && resolveSubAgentMention(directory, segment.address!)
-    if (entry) pushSubAgentDrawer(segment.slug, entry.id, { label: entry.label, subagentType: entry.subagentType, startedAt: entry.startedAt })
-    else openThread(segment.slug)
-  }
   return (
     <a
       href={`${basePath()}/thread/${segment.slug}`}
@@ -87,7 +78,7 @@ function SubAgentMentionLink({ segment }: { segment: Extract<MentionSegment, { k
         e.stopPropagation()
         if (e.button !== 0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return
         e.preventDefault()
-        void open()
+        void openSubAgentMention(queryClient, api, projectId, segment.slug, segment.address!)
       }}
       onKeyDown={(e) => e.stopPropagation()}
     >

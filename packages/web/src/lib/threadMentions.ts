@@ -28,8 +28,10 @@ const DONE_CANDIDATES = 20
 
 /** The threads a prompt box can mention: every open thread with a handle, most recently active first,
  *  then the most recent done ones. `excludeSlug` drops the thread being written INTO — a thread has no
- *  use for a mention of itself. External rows are never offered: Frizz holds no name for them. */
-export function mentionCandidates(threads: readonly ThreadView[], excludeSlug?: string): MentionCandidate[] {
+ *  use for a mention of itself. External rows are never offered: Frizz holds no name for them.
+ *  `doneLimit` is the typeahead's bound; a surface that only RESOLVES what was already written (agent
+ *  prose, lib/mentionAutolink.ts) lifts it, since an old thread named there is still that thread. */
+export function mentionCandidates(threads: readonly ThreadView[], excludeSlug?: string, doneLimit = DONE_CANDIDATES): MentionCandidate[] {
   const open: MentionCandidate[] = []
   const done: MentionCandidate[] = []
   for (const t of orderByInteraction(threads)) {
@@ -42,7 +44,7 @@ export function mentionCandidates(threads: readonly ThreadView[], excludeSlug?: 
     if (candidate.done) done.push(candidate)
     else open.push(candidate)
   }
-  return [...open, ...done.slice(0, DONE_CANDIDATES)]
+  return [...open, ...done.slice(0, doneLimit)]
 }
 
 // The characters a handle runs over, and what may sit right before its `@` — mirrors @frizz/shared
@@ -203,27 +205,46 @@ export function resolveMention(candidates: readonly MentionCandidate[], mention:
 export type MentionSegment = { kind: "text"; text: string } | { kind: "mention"; text: string; slug: string; status?: string; address?: string }
 
 // Same boundary rule and the same dotted continuation as @frizz/shared threadMentions: a mention starts
-// after a non-word character, and runs on through a `.` only when another segment follows it.
-const MENTION = /(^|[^\p{L}\p{N}_@./])(@([\p{L}\p{N}][\p{L}\p{N}_-]*(?:\.[\p{L}\p{N}][\p{L}\p{N}_-]*)*))/gu
+// after a non-word character, and runs on through a `.` only when another segment follows it. The TAIL
+// guard is this side's own, because here a mention becomes a LINK and a wrong one is worse than none:
+// a mention cut short by a `/` or an `@` is a package or a path (`@types/node`, `@scope/pkg@2`), and
+// without the guard the engine would back off one letter at a time until something linked (`@type`).
+const MENTION = /(^|[^\p{L}\p{N}_@./])(@([\p{L}\p{N}][\p{L}\p{N}_-]*(?:\.[\p{L}\p{N}][\p{L}\p{N}_-]*)*))(?![\p{L}\p{N}_/@-]|\.[\p{L}\p{N}])/gu
 
-/** Split verbatim text into plain runs and the `@handle` mentions that name a thread in `candidates`.
- *  A mention that resolves to nothing stays text. A dotted `@thread.child` links when its THREAD
- *  resolves — whether the child exists is the directory's to say, and only when it is clicked.
- *  Concatenating every segment's `text` yields the input byte-for-byte. */
-export function mentionSegments(text: string, candidates: readonly MentionCandidate[]): MentionSegment[] {
-  if (candidates.length === 0 || !text.includes("@")) return [{ kind: "text", text }]
-  const out: MentionSegment[] = []
-  let consumed = 0
+/** One mention found in a plain string that names a thread in `candidates`: where it sits, its text
+ *  with the `@`, the thread's slug, and for a dotted `@thread.child` the whole address. */
+export type MentionMatch = { start: number; text: string; slug: string; status?: string; address?: string }
+
+/** Every mention in `text` whose THREAD resolves in `candidates` (by the fold resolveMention uses); the
+ *  rest are not mentions of anything and are skipped. A dotted `@thread.child` counts when its thread
+ *  resolves — whether the child exists is the directory's to say, and only when it is clicked. */
+export function scanMentions(text: string, candidates: readonly MentionCandidate[]): MentionMatch[] {
+  if (candidates.length === 0 || !text.includes("@")) return []
+  const out: MentionMatch[] = []
   for (const m of text.matchAll(MENTION)) {
     const segments = addressSegments(m[3]!)
     const hit = resolveMention(candidates, segments[0]!)
     if (!hit) continue
     const start = m.index! + m[1]!.length
-    if (start > consumed) out.push({ kind: "text", text: text.slice(consumed, start) })
     out.push(segments.length > 1
-      ? { kind: "mention", text: m[2]!, slug: hit.slug, address: m[3]! }
-      : { kind: "mention", text: m[2]!, slug: hit.slug, status: hit.status })
-    consumed = start + m[2]!.length
+      ? { start, text: m[2]!, slug: hit.slug, address: m[3]! }
+      : { start, text: m[2]!, slug: hit.slug, status: hit.status })
+  }
+  return out
+}
+
+/** Split verbatim text into plain runs and the `@handle` mentions that name a thread in `candidates`
+ *  (scanMentions). A mention that resolves to nothing stays text. Concatenating every segment's `text`
+ *  yields the input byte-for-byte. */
+export function mentionSegments(text: string, candidates: readonly MentionCandidate[]): MentionSegment[] {
+  const matches = scanMentions(text, candidates)
+  if (matches.length === 0) return [{ kind: "text", text }]
+  const out: MentionSegment[] = []
+  let consumed = 0
+  for (const { start, ...match } of matches) {
+    if (start > consumed) out.push({ kind: "text", text: text.slice(consumed, start) })
+    out.push({ kind: "mention", ...match })
+    consumed = start + match.text.length
   }
   if (consumed < text.length) out.push({ kind: "text", text: text.slice(consumed) })
   return out
