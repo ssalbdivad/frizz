@@ -2372,7 +2372,7 @@ test("a registered question does NOT degrade a running thread to turn-idle", () 
 // 2026-08-27). This is what fills it, and its whole subtlety is WHEN IT STOPS.
 
 const askedRow = (over: Partial<ThreadQuestionRow> = {}): ThreadQuestionRow => ({
-  id: "qst_1", thread_slug: "t", state: "answered", delivered: 0, asked_at: 1000, settled_at: 2000,
+  id: "qst_1", thread_slug: "t", state: "answered", delivered: 0, asked_at: 1000, settled_at: 2000, kept_at: null,
   spec: JSON.stringify({ question: "SQLite or a JSON file?", kind: "question", options: [{ label: "SQLite" }] }),
   answer: JSON.stringify({ questionId: "qst_1", question: "SQLite or a JSON file?", chosen: ["SQLite"] }),
   ...over,

@@ -65,8 +65,12 @@ test("the frizz MCP server identifies as `frizz` and exposes its worker tools", 
     rpc.send({ jsonrpc: "2.0", method: "notifications/initialized" })
     rpc.send({ jsonrpc: "2.0", id: 2, method: "tools/list" })
     const list = await rpc.next(2)
-    assert.deepEqual(list.result.tools.map((t: { name: string }) => t.name), ["spawn_thread", "goal", "timer", "watch_pr", "watch", "unwatch", "ask", "unask", "done", "title", "activity", "link", "unlink", "watch_issue", "extend_shell", "read_thread", "message_thread"])
+    assert.deepEqual(list.result.tools.map((t: { name: string }) => t.name), ["spawn_thread", "goal", "timer", "watch_pr", "watch", "unwatch", "ask", "unask", "done", "title", "activity", "link", "unlink", "watch_issue", "extend_shell", "read_thread", "message_thread", "keep"])
     assert.deepEqual(list.result.tools.find((t: { name: string }) => t.name === "link").inputSchema.required, ["label", "target"])
+    // `keep` takes the id, and optionally a whole reworded question in `ask`'s own tree shape.
+    const keepTool = list.result.tools.find((t: { name: string }) => t.name === "keep")
+    assert.deepEqual(keepTool.inputSchema.required, ["id"])
+    assert.deepEqual(keepTool.inputSchema.properties.question.required, ["question", "kind"])
     assert.deepEqual(list.result.tools.find((t: { name: string }) => t.name === "unlink").inputSchema.required, ["id"])
     for (const required of ["prompt", "model", "effort"]) {
       assert.ok(list.result.tools[0].inputSchema.required.includes(required))
@@ -155,7 +159,7 @@ test("the frizz MCP server identifies as `frizz` and exposes its worker tools", 
     // `wch_…` id of any watch holding one. It takes NOTHING: there is no thread parameter and no filter,
     // because the only correct answer is "everything you have running", and a worker that has lost its
     // ids cannot be trusted to name them.
-    assert.equal(list.result.tools.length, 17)
+    assert.equal(list.result.tools.length, 18)
     // `read_thread` / `message_thread` name the OTHER thread by handle; the CALLER still comes from the
     // env, so a message is always signed by the thread that really sent it.
     assert.deepEqual(list.result.tools[15].inputSchema.required, ["handle"])
@@ -1054,6 +1058,7 @@ test("`ask` and `unask` register and withdraw the CALLING thread's questions, tr
   const replies: any[] = [
     { registered: [{ id: "qst_aaa111", spec, askedAt: "2026-08-27T00:00:00.000Z" }], open: [{ id: "qst_aaa111", spec, askedAt: "2026-08-27T00:00:00.000Z" }] },
     { withdrawn: true, open: [] },
+    { kept: true, open: [{ id: "qst_bbb222", spec: { question: "Merge #12, or fold in the second fix first?", kind: "question" }, askedAt: "2026-08-27T00:00:00.000Z", keptAt: "2026-08-27T01:00:00.000Z" }] },
   ]
   const http = createServer((req, res) => {
     let body = ""
@@ -1090,6 +1095,13 @@ test("`ask` and `unask` register and withdraw the CALLING thread's questions, tr
     assert.deepEqual(seen[1], { url: "/_frizz/rpc/unask", body: { slug: "asking-thread", id: "qst_aaa111" } })
     assert.match(withdrawn.result.content[0].text, /Question qst_aaa111 withdrawn/)
     assert.match(withdrawn.result.content[0].text, /Nothing else is open on this thread/)
+
+    // `keep` carries the id and, when given, the whole reworded question to the RPC.
+    const reworded = { question: "Merge #12, or fold in the second fix first?", kind: "question" }
+    rpc.send({ jsonrpc: "2.0", id: 6, method: "tools/call", params: { name: "keep", arguments: { id: "qst_bbb222", question: reworded } } })
+    const kept = await rpc.next(6)
+    assert.deepEqual(seen[2], { url: "/_frizz/rpc/keepQuestion", body: { slug: "asking-thread", id: "qst_bbb222", question: reworded } })
+    assert.match(kept.result.content[0].text, /Question qst_bbb222 kept, reworded/)
 
     // The refusals live in the HANDLER, not only in the schema.
     const before = seen.length
@@ -1512,13 +1524,11 @@ test("`activity` reads the open questions back, with the ids `unask` takes", asy
     await rpc.next(1)
     rpc.send({ jsonrpc: "2.0", id: 2, method: "tools/call", params: { name: "activity", arguments: {} } })
     const text = (await rpc.next(2)).result.content[0].text
-    // EVERY open question is owed, one the human has written past included (2026-09-29): that one is
-    // MARKED, and the worker is told to decide what the message did to it — never told it is set aside.
-    assert.match(text, /3 questions still owed an answer/)
-    for (const id of ["qst_ab12cd34ef56", "qst_0011223344ff"]) assert.match(text, new RegExp(`question: ${id}\n`))
-    assert.match(text, /question: qst_99887766aabb {2}\(the human has written to you since\)\n/)
-    assert.match(text, /The human has written to you since one of these was asked, without answering\. .*you decide\. `unask` exactly the ones it made moot/)
-    assert.doesNotMatch(text, /set aside|replied past/, "no question is released by the human typing")
+    // One the human has written past is SET ASIDE (2026-09-30): listed apart from the owed ones, with
+    // `keep` named as the way back in.
+    assert.match(text, /2 questions still owed an answer:\n\n {2}question: qst_ab12cd34ef56\n.*\n {2}question: qst_0011223344ff\n/)
+    assert.match(text, /1 question set aside — the human wrote to you since, without answering:\n\n {2}question: qst_99887766aabb\n/)
+    assert.match(text, /If the conversation still needs one, `keep` it/)
     assert.match(text, /Should the settings store use SQLite or a JSON file\?/)
     // The fence block names the SHELL and nothing else — no question id may appear inside it.
     const fence = text.slice(text.indexOf("```awaiting"), text.indexOf("```\n\nDrop the lines"))

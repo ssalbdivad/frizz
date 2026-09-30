@@ -47,7 +47,15 @@
 // now, `unask`ing the ones the message made moot. What is still open after that is still current by the
 // worker's own judgment — which is the premise the 2026-09-24 reversal found missing.
 //
-// So an open question renders at the bottom of the NEWEST REST — the last "Agent rested" boundary the
+// AND ON 2026-09-30 THE HUMAN'S TYPED MESSAGE ENDS IT AGAIN, as an opt-in rather than a release. The
+// 2026-09-29 premise — "what is still open is still current by the worker's own judgment" — held only if
+// the worker `unask`ed; it rarely did, so a merge question rode under a handoff that had since raised a
+// second fix it did not mention (maintainer 2026-09-30: "the questions feel out of date"). Now a typed
+// message sets the question aside (shared questionRepliedPast, surfaced here as `repliedPast`): its card
+// stays at the bottom of the last rest BEFORE that message, still answerable, and rides forward again
+// only if the worker `keep`s it — which stamps `keptAt`, and a kept question reads from there.
+//
+// So a CURRENT open question renders at the bottom of the NEWEST REST — the last "Agent rested" boundary the
 // server emits (transcript.ts restMessage) — at or after it was asked. While a turn is running past that
 // rest (the human typed, an answer or a wake was delivered), the card stays where it was, at the bottom
 // of the handoff the human was reading, instead of riding under the worker's streaming output; the
@@ -90,14 +98,53 @@ function isActivity(m: AnchorMessage): boolean {
   return m.kind !== "event" && m.kind !== "reasoning"
 }
 
-/** The index of the message this question renders AFTER: the newest rest at or after it was asked — its
+/** A question as placement reads it: when it became current (asked, or last kept), and whether the human
+ *  has typed past it since. */
+export interface AnchoredQuestion {
+  askedAt: string
+  keptAt?: string
+  repliedPast?: true
+}
+
+/** Where a SET-ASIDE question stays: the bottom of the last rest before the human's first typed message
+ *  after it became current — or, when the human typed before the worker rested at all, just above that
+ *  message. Undefined when that message is not in the window (a pending send, or one not yet recorded),
+ *  so the caller falls back to the current-question reading rather than guessing. */
+function setAsideAnchorIndex(messages: readonly AnchorMessage[], current: number): number | undefined {
+  let human = -1
+  for (let i = 0; i < messages.length; i++) {
+    const m = messages[i]
+    const at = m.at ? Date.parse(m.at) : Number.NaN
+    if (isHumanTurn(m) && Number.isFinite(at) && at > current) {
+      human = i
+      break
+    }
+  }
+  if (human < 0) return undefined
+  for (let i = human - 1; i >= 0; i--) {
+    const m = messages[i]
+    if (!isRestBoundary(m)) continue
+    const at = m.at ? Date.parse(m.at) : Number.NaN
+    if (Number.isFinite(at) && at >= current) return i
+    break
+  }
+  return human - 1
+}
+
+/** The index of the message this question renders AFTER. Set aside (the human typed past it): see
+ *  setAsideAnchorIndex. Otherwise: the newest rest at or after it became current — its
  *  "Agent rested" row, which the caller lifts the card above (questionShadow aboveTrailingEvents) — or
  *  `messages.length - 1`, the tail, when that rest IS the tail (the thread is at rest) or the question was
  *  asked after it (the worker asked in the turn still running). `-1` when the rest it belongs to is older
  *  than the loaded window, which puts it at the top of what is loaded rather than at the bottom where it
  *  would lie about being current. */
-export function questionAnchorIndex(messages: readonly AnchorMessage[], askedAt: string): number {
-  const asked = Date.parse(askedAt)
+export function questionAnchorIndex(messages: readonly AnchorMessage[], question: string | AnchoredQuestion): number {
+  const q = typeof question === "string" ? { askedAt: question } : question
+  const asked = Math.max(Date.parse(q.askedAt), q.keptAt ? Date.parse(q.keptAt) : -Infinity)
+  if (q.repliedPast && Number.isFinite(asked)) {
+    const aside = setAsideAnchorIndex(messages, asked)
+    if (aside !== undefined) return aside
+  }
   const tail = messages.length - 1
   if (!Number.isFinite(asked)) return tail
   for (let i = tail; i >= 0; i--) {
@@ -116,15 +163,16 @@ export function questionAnchorIndex(messages: readonly AnchorMessage[], askedAt:
 }
 
 /** Every question grouped by the message index it renders after, so a call site walks the transcript once
- *  and drops each group in place. Every open question shares the newest rest, so questions asked at
- *  different rests — and a batch — render as one stack at the bottom of the newest handoff. */
-export function questionsByAnchor<Q extends { askedAt: string }>(
+ *  and drops each group in place. Every CURRENT question shares the newest rest, so questions asked at
+ *  different rests — and a batch — render as one stack at the bottom of the newest handoff; a set-aside
+ *  one stays in the history where the human typed past it. */
+export function questionsByAnchor<Q extends AnchoredQuestion>(
   messages: readonly AnchorMessage[],
   questions: readonly Q[],
 ): Map<number, Q[]> {
   const byAnchor = new Map<number, Q[]>()
   for (const q of questions) {
-    const anchor = questionAnchorIndex(messages, q.askedAt)
+    const anchor = questionAnchorIndex(messages, q)
     const group = byAnchor.get(anchor)
     if (group) group.push(q)
     else byAnchor.set(anchor, [q])

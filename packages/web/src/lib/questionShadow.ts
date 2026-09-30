@@ -171,7 +171,7 @@ export function aboveTrailingEvents(messages: readonly AnchorMessage[], anchor: 
  *  greyed twin lands once answered (lib/settledQuestions), so answering it does not make it jump. The
  *  TAIL keeps its anchor (`messages.length - 1`): the divider there draws nothing, and the surfaces read
  *  that index as the interactions row. */
-export function questionStacks<Q extends Pick<RegisteredQuestionView, "id"> & { askedAt: string }>(
+export function questionStacks<Q extends Pick<RegisteredQuestionView, "id" | "askedAt" | "keptAt" | "repliedPast">>(
   messages: readonly (AnchorMessage & { text?: string })[],
   questions: readonly Q[],
 ): Map<number, Q[]> {

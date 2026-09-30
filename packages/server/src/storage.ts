@@ -592,6 +592,8 @@ export interface ThreadQuestionRow {
   delivered: number
   asked_at: number
   settled_at: number | null
+  /** When the worker last `keep`-ed it current; null if never. See questionRepliedPast. */
+  kept_at: number | null
 }
 
 /** One operator-authored steer that Frizz delivered into a sub-agent from its drawer.
@@ -912,6 +914,9 @@ export interface Storage {
   markSettlementDelivered(id: string): boolean
   /** The worker's own `unask`, thread-scoped so one thread can never withdraw another's question. */
   withdrawThreadQuestion(slug: string, id: string, atMs: number): boolean
+  /** The worker KEEPS an open question current: stamps `kept_at`, and replaces its spec when given one.
+   *  Slug-scoped like the withdrawal, so one thread can never touch another's question. */
+  keepThreadQuestion(slug: string, id: string, spec: string | undefined, atMs: number): boolean
   /** The human's x. Distinct from `withdrawn` on purpose: the two states answer different questions
    *  about what happened, and the worker is told which. */
   dismissThreadQuestion(id: string, atMs: number): boolean
@@ -1436,7 +1441,10 @@ export const STORAGE_SCHEMA = `
       -- worker's process was down is lost in the same silence the fence used to lose the question in.
       delivered   INTEGER NOT NULL DEFAULT 0,
       asked_at    INTEGER NOT NULL,
-      settled_at  INTEGER
+      settled_at  INTEGER,
+      -- When the worker last KEPT the question current (keep) after the human typed past it — what
+      -- questionRepliedPast measures the human's newest message against, instead of asked_at.
+      kept_at     INTEGER
     );
     CREATE INDEX IF NOT EXISTS thread_question_slug
       ON thread_question(project_id, thread_slug, state, asked_at);
@@ -1567,6 +1575,9 @@ export function ensureStorageSchema(db: Database): void {
     ["command_thread", "parent_slug TEXT"],
     ["command_thread", "cwd TEXT"],
     ["command_thread", "shell INTEGER NOT NULL DEFAULT 0"],
+    // `thread_question.kept_at` (2026-09-30): a typed message sets open questions aside, and the worker
+    // opts one back in with `keep`, which stamps this.
+    ["thread_question", "kept_at INTEGER"],
   ] as const) {
     try {
       db.exec(`ALTER TABLE ${table} ADD COLUMN ${column}`)
@@ -2329,6 +2340,10 @@ export function createStorage(source: string | Database, projectId: string): Sto
   const withdrawThreadQuestionStmt = scope.prepare(`
     UPDATE thread_question SET state = 'withdrawn', settled_at = ?
     WHERE project_id = @project_id AND id = ? AND thread_slug = ? AND state = 'open'
+  `)
+  const keepThreadQuestionStmt = scope.prepare(`
+    UPDATE thread_question SET kept_at = @atMs, spec = COALESCE(@spec, spec)
+    WHERE project_id = @project_id AND id = @id AND thread_slug = @slug AND state = 'open'
   `)
   const dismissThreadQuestionStmt = scope.prepare(`
     UPDATE thread_question SET state = 'dismissed', settled_at = ?
@@ -3150,6 +3165,7 @@ export function createStorage(source: string | Database, projectId: string): Sto
     undeliveredSettlements: () => undeliveredSettlementsStmt.all(),
     markSettlementDelivered: (id) => markSettlementDeliveredStmt.run(id).changes === 1,
     withdrawThreadQuestion: (slug, id, atMs) => withdrawThreadQuestionStmt.run(atMs, id, slug).changes === 1,
+    keepThreadQuestion: (slug, id, spec, atMs) => keepThreadQuestionStmt.run({ slug, id, spec: spec ?? null, atMs }).changes === 1,
     dismissThreadQuestion: (id, atMs) => dismissThreadQuestionStmt.run(atMs, id).changes === 1,
     markThreadDone: (slug, body, atMs) => { markThreadDoneStmt.run(slug, body, atMs) },
     getThreadDone: (slug) => {
