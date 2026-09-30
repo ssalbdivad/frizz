@@ -17,6 +17,9 @@ test("a running shell whose named log is gone says so, rather than waiting for o
 test("output already on screen is never replaced", () => {
   assert.equal(agentTerminalEmpty({ state: "running", missing: true }, false, 120), undefined, "a vanished log keeps the lines an open pane holds")
   assert.equal(agentTerminalEmpty({ state: "running" }, true, 120), undefined)
+  // Not by a later `gone` either (the retired ring moved on, a re-register hid it for a tick): that unmounted
+  // the xterm with its log and put "This terminal is closed." in its place.
+  assert.equal(agentTerminalEmpty({ state: "gone" }, false, 120), undefined)
 })
 
 test("a poll that keeps failing before any reply says so", () => {

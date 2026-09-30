@@ -343,7 +343,9 @@ export function useShellLog(slug: string, shellId: string): { stream: ShellLogSt
         const reply = await rpc.backgroundShellOutput({ slug, id: shellId, raw: true, ...(stream.from !== undefined ? { from: stream.from } : {}) })
         if (stopped) return
         stream.apply(reply)
-        setMeta({ ...reply, output: "" })
+        // A `gone` after output keeps what the last real reply said — the command (Copy command), the
+        // folder (the subtitle) — and changes only the state, as the log itself stays (ShellLogStream.apply).
+        setMeta((prev) => (reply.state === "gone" && stream.received > 0 && prev ? { ...prev, state: "gone", stoppable: false } : { ...reply, output: "" }))
         setError(false)
         const delay = nextShellLogDelay(reply)
         if (delay !== undefined) timer = setTimeout(() => void read(), delay)

@@ -30,6 +30,11 @@ export class ShellLogStream {
 
   /** Fold one reply in. Returns whether it carried anything to write. */
   apply(reply: BackgroundShellOutputResult): boolean {
+    // A `gone` reply is not a read: the server no longer knows the shell (its retired ring moved on, or a
+    // session re-register briefly hid it), and it carries no bytes and no cursor. Taken as a fresh start —
+    // it has no `end` — it wiped a log already on screen. Before anything has arrived there is nothing to
+    // keep, and the drawer says the terminal is closed.
+    if (reply.state === "gone" && this.started) return false
     // A server from before offset reads returns no `end`: every reply is the whole tail again, so every
     // reply is a fresh start rather than a duplicate appended under the last.
     const fresh = !this.started || reply.reset === true || reply.end === undefined
@@ -68,12 +73,18 @@ export class ShellLogStream {
   }
 }
 
-/** When to ask again after a reply: at once when more is already waiting, on the poll while the shell
- *  runs, and never once it has ended or is gone. */
+/** When to ask again after a reply: at once when more is already waiting — whether or not the shell is
+ *  still running — on the poll while it runs, and never once it has ended with nothing left to read.
+ *
+ *  `more` comes first. A shell that writes past one delta read (256 KB) inside a poll window and then
+ *  exits — a test runner dumping its failures — answers `{ state: "done", more: true }`, and stopping on
+ *  "done" there left its newest output, usually the summary, unread in a pane that said nothing was
+ *  missing. */
 export function nextShellLogDelay(reply: Pick<BackgroundShellOutputResult, "more" | "state" | "outputUnavailable">): number | undefined {
+  if (reply.more) return 0
   if (reply.state !== "running") return undefined
   if (reply.outputUnavailable) return 5_000 // nothing to read — only the state can change
-  return reply.more ? 0 : 1_500
+  return 1_500
 }
 
 /** The dim lines a fresh start opens with — the idiom a human terminal's follow-up run uses. */

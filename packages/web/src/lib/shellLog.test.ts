@@ -95,6 +95,25 @@ test("the poll asks again at once when more is waiting, on a beat while running,
   assert.equal(nextShellLogDelay({ state: "running", outputUnavailable: true }), 5_000)
   assert.equal(nextShellLogDelay({ state: "done" }), undefined)
   assert.equal(nextShellLogDelay({ state: "gone" }), undefined)
+  // A shell that wrote past one delta read in its last poll window and then EXITED: the rest — usually the
+  // summary a test runner prints last — is still on disk, so the poll drains it before it stops.
+  assert.equal(nextShellLogDelay({ state: "done", more: true }), 0)
+})
+
+test("a gone reply after output leaves the log on screen", () => {
+  // The server forgets a shell (its retired ring moved on, a session re-register hid it for a tick). The
+  // reply has no bytes and no cursor, and read as a fresh start it cleared the pane.
+  const stream = new ShellLogStream()
+  const { seen } = record(stream)
+  stream.apply(reply({ output: "tick 1\ntick 2\n", end: 14 }))
+  assert.equal(stream.apply(reply({ state: "gone", command: null })), false)
+  assert.equal(stream.received, 14)
+  assert.equal(stream.from, 14)
+  assert.deepEqual(seen.map((e) => e.kind), ["reset", "data"], "no second reset")
+  // Before anything arrived there is nothing to keep: the drawer shows "closed", not a blank log.
+  const fresh = new ShellLogStream()
+  fresh.apply(reply({ state: "gone", command: null }))
+  assert.equal(fresh.received, 0)
 })
 
 test("the head is the command as a dim $ line, and says when earlier output is cut", () => {

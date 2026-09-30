@@ -92,11 +92,14 @@ function NarrowGlyph({ icon: Icon, text }: { icon: typeof Copy; text: string }) 
  *  reading in both drawers' headers, joined the way every reading in the app is. */
 function StateReading({ state, age, budget, tone, attr }: { state: string; age?: string; budget?: string; tone?: "attention" | "danger"; attr: Record<string, string | undefined> }) {
   return (
-    // min-w-0 + truncate: the reading gives way beside a long title rather than squeezing it to nothing
-    // (a `shrink-0` reading plus two header buttons left the agent drawer's title 0px wide at 420px).
-    // `shrink-[2]`: when both must give, the reading gives twice as fast — the title is which terminal
-    // this is, and the reading is repeated on its strip row.
-    <span {...attr} className="min-w-0 shrink-[2] truncate whitespace-nowrap text-[11.5px] text-muted-60">
+    // THE READING KEEPS ITS WORDS; THE TITLE GIVES WAY. The reading is what the drawer was opened to learn
+    // — `exit 2`, `running · 28m · 31m left` — and the title is the row the human just clicked. When this
+    // gave way first (`shrink-[2]`), 420px drew `ex…` and `running ·…`, losing the one reading with a
+    // deadline. `shrink-0` alone is not safe either — it once left the title 0px wide beside two worded
+    // buttons — so the reading is capped at 70% of the line and truncates only past that; the header's
+    // actions fold to glyphs under 28rem, which is what leaves the title its 30% there. At 420px the agent
+    // line is 226px: `running · 17m · 42m left` needs 140 (60% clipped it by 5px), the title keeps 78.
+    <span {...attr} className="min-w-0 max-w-[70%] shrink-0 truncate whitespace-nowrap text-[11.5px] text-muted-60">
       <span className={tone === "attention" ? "text-attention" : tone === "danger" ? "text-danger-soft" : undefined}>{state}</span>
       {age ? ` · ${age}` : ""}
       {budget ? ` · ${budget}` : ""}
@@ -200,10 +203,12 @@ function TerminalStateMeta({ terminal }: { terminal: ThreadTerminal }) {
  * that is not coming. Output already on screen is never replaced by any of these.
  */
 export function agentTerminalEmpty(meta: Pick<BackgroundShellOutputResult, "state" | "missing" | "outputUnavailable"> | undefined, error: boolean, received: number): string | undefined {
+  // First: a `gone` that follows output used to unmount the log it had written and say "closed" instead —
+  // the header's state word already says the shell is no longer known.
+  if (received > 0) return undefined
   if (!meta) return error ? "Could not read this terminal's output. Retrying…" : "Waiting for the first output…"
   if (meta.state === "gone") return "This terminal is closed."
   if (meta.outputUnavailable) return "Codex hands this command's output to the agent when it checks in, so Frizz can't show it here."
-  if (received > 0) return undefined
   if (meta.missing) return "The output file is gone."
   return meta.state === "running" ? "Waiting for the first output…" : "No output was captured."
 }
@@ -284,7 +289,8 @@ function AgentTerminalSheet({ id, slug, shellId, label, startedAt, depth, widthD
             <SheetHeader
               title={row?.label ?? label ?? noun}
               subtitle={cwd ? <TerminalSubtitle cwd={cwd} checkout={checkout} homeDir={board?.homeDir} /> : undefined}
-              icon={<Bot aria-hidden size={14} className="shrink-0 text-muted-60" data-terminal-owner="agent" />}
+              // 15px against your terminal's 14: the same weight match as the strip's owner glyphs (ThreadTerminals OWNER_ICON).
+              icon={<Bot aria-hidden size={15} className="shrink-0 text-muted-60" data-terminal-owner="agent" />}
               meta={stateWord ? (
                 <StateReading
                   state={stateWord}
