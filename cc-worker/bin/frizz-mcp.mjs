@@ -110,8 +110,9 @@ const SPAWN_THREAD = {
         description:
           "Set ONLY when fulfilling a spinoff request — a message from frizz wrapped in `<spinoff-request id=\"spn_…\">` " +
           "asking for a new thread from your conversation. Pass that id verbatim. Frizz then puts the " +
-          "human's own instructions and a link back to your thread above your `prompt`, and links the two threads on " +
-          "the board. A spinoff is the human's explicit request, so the last-resort caution above does not apply to it.",
+          "human's own instructions and a reference back to your thread above your `prompt`, links the two threads on " +
+          "the board, and shows the human the new thread itself — so write nothing about it afterwards. A spinoff is " +
+          "the human's explicit request, so the last-resort caution above does not apply to it.",
       },
     },
     required: ["prompt", "model", "effort"],
@@ -1377,9 +1378,27 @@ async function spawnThread(args) {
   const payload = await res.json().catch(() => null)
   const slug = payload?.result?.slug
   if (typeof slug !== "string" || !slug) throw new Error(`dispatch response missing a slug: ${JSON.stringify(payload)?.slice(0, 300)}`)
+  // The result OPENS with the same sentence either way, and the server depends on it: a spinoff whose
+  // MCP server predated the `spinoff` argument is recovered from this line in the parent's transcript
+  // (packages/server/src/spinoff-edge-recovery.ts, SPAWN_THREAD_RESULT_RE). Reword it there too.
+  const spawned = `Spawned a new frizz thread \`${slug}\`.`
+  // A SPINOFF is already on the human's screen: the chat draws the request as a card that links to this
+  // new thread by name. What the worker once wrote after it — "I started [Sub-agent addresses](…)", then
+  // a whole second sign-off reading "Nothing new landed here" — was the confusing part (maintainer
+  // 2026-09-30), so the result tells it to write nothing, and a resting worker that stays silent is a
+  // side turn the server folds away.
+  if (body.spinoff) {
+    return (
+      `${spawned} The human's chat already shows this spinoff, linked to the new thread, so do not ` +
+      `announce it, paste a link to it, or summarize your brief. If you had come to rest when the request ` +
+      `arrived, end your turn now without writing anything: Frizz keeps your previous handoff and this ` +
+      `thread's state exactly as they were, so do not sign off again. If you were in the middle of work, ` +
+      `carry on with it. Do not wait on the new thread; it reports to the human, not to you.`
+    )
+  }
   const label = typeof body.title === "string" ? body.title : slug
   return (
-    `Spawned a new frizz thread \`${slug}\`. It is now on the board driving independently — it reports ` +
+    `${spawned} It is now on the board driving independently — it reports ` +
     `to the human via its own final message, NOT back to you, so do not wait on a result from it.\n\n` +
     `Paste this link to let the human open it in the drawer:\n\n[${label}](/thread/${slug})`
   )
