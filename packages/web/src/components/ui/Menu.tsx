@@ -43,11 +43,14 @@ export function MenuItem({
   icon,
   danger,
   value,
+  shortcut,
 }: {
   children: ReactNode
   onSelect: () => void
   icon?: ReactNode
   danger?: boolean
+  /** The item's key, formatted (useShortcutLabel), drawn muted at the row's end. */
+  shortcut?: string | null
   /** Rendered as `data-value`, so a caller can find and focus one item (SnoozeButton opens its menu
    *  on the remembered preset rather than the first row). */
   value?: string
@@ -64,6 +67,7 @@ export function MenuItem({
     >
       {icon && <span className="flex w-3.5 shrink-0 items-center justify-center">{icon}</span>}
       {children}
+      {shortcut && <span className="ml-auto pl-4 text-[11px] text-muted-55">{shortcut}</span>}
     </RadixMenu.Item>
   )
 }
