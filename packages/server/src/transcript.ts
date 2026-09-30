@@ -30,6 +30,8 @@ import {
   type TranscriptTodo,
   type TranscriptToolCall,
   parseSpinoffRequest,
+  parseSpinoffChildPrompt,
+  spinoffIdOfSpawnCall,
 } from "@frizz/shared"
 import { workDirOf, type Project } from "./project.ts"
 import type { Storage } from "./storage.ts"
@@ -236,7 +238,7 @@ function userDisplayText(text: string, first: boolean): string | undefined {
 // Both derive from the same raw record, and every site that pushes a user message needs both — keeping
 // them in one helper is what stops a new push site from shipping the display projection while silently
 // dropping the wake flag (which would put a scheduler steer back in the human's own bubble).
-function userProjection(text: string, first: boolean): { displayText?: string; spinoff?: { id: string; instructions: string }; wake?: true; wakeSteer?: GithubWakeSteer; peerFrom?: string; peerSession?: true; peerUnnamed?: true } {
+function userProjection(text: string, first: boolean): { displayText?: string; spinoff?: { id: string; instructions: string }; spinoffOrigin?: { instructions: string; brief: string }; wake?: true; wakeSteer?: GithubWakeSteer; peerFrom?: string; peerSession?: true; peerUnnamed?: true } {
   // An UPWARD agent-to-agent message — a background child calling `SendMessage({to:"main"})` — is not
   // the human's text at all, so it is settled FIRST and returns on its own. Its body, not the
   // `<agent-message>` wrapper, is what a reader wants, and none of the projections below apply: the
@@ -253,6 +255,17 @@ function userProjection(text: string, first: boolean): { displayText?: string; s
   // The chat draws the human's instructions as a spinoff card; the brief stays in `text` for the worker.
   const spinoff = parseSpinoffRequest(displayText ?? text)
   if (spinoff) return { displayText: spinoff.instructions, spinoff }
+  // …and a SPINOFF CHILD's opening turn is the mirror image: the human's instructions with the parent
+  // worker's brief below them (spinoffChildPrompt). The brief is not the human speaking, so the chat
+  // draws the two as the thread's spinoff header rather than one giant user bubble (maintainer
+  // 2026-09-30: "this kind of context can't be included as a user message"). FIRST turn only, and read
+  // below the dispatch envelope, where the composed prompt starts. `displayText` is the instructions —
+  // never empty (the parser refuses empty instructions) — because every reader that quotes a thread's
+  // request takes the first user turn with non-empty display text.
+  if (first) {
+    const origin = parseSpinoffChildPrompt(displayText ?? text)
+    if (origin) return { displayText: origin.instructions, spinoffOrigin: origin }
+  }
   if (!isWakeDelivery(text)) return { ...(displayText ? { displayText } : {}) }
   // Parse the steer HERE, not in the browser. The formatter that composed this text and the parser
   // reading it are the same build on this side, so they cannot disagree; a browser tab is routinely a
@@ -1108,8 +1121,12 @@ export function createTranscriptFold(identityPrefix = "claude"): TranscriptFold 
           m.text = m.text ? `${m.text}\n\n${block.text}` : block.text
         } else if (block?.type === "tool_use") {
           const calls = toolCalls(block, { turnModel: msg.model, turnEffort: rec.effort })
+          // The spinoff a `spawn_thread` call fulfils: the chat draws that spinoff as its own card, so
+          // this call is not drawn a second time as a tool line (TranscriptToolCall.spinoff).
+          const spinoff = spinoffIdOfSpawnCall(String(block.name ?? ""), block.input)
           for (const call of calls) {
             call.status = "pending"
+            if (spinoff) call.spinoff = spinoff
             pushToolPart(m, call)
             m.tools.push(call)
             // An Agent dispatch is registered by its tool_use id so a later completion notification can
@@ -3034,6 +3051,10 @@ interface CodexToolCards {
 function codexToolCards(name: string, input: unknown, callId?: string): CodexToolCards {
   if (name === "exec" && typeof input === "string") return codexExecWrapperCards(input, callId)
   const owner = codexToolCall(name, input, callId)
+  // A spinoff's `spawn_thread` (Codex names an MCP tool `mcp__frizz__spawn_thread`, or bare) — see the
+  // Claude arm's note on TranscriptToolCall.spinoff.
+  const spinoff = spinoffIdOfSpawnCall(name, input)
+  if (spinoff) owner.spinoff = spinoff
   return { owner, cards: [owner] }
 }
 
@@ -3371,10 +3392,17 @@ function wrappedSingleCall(call: WrappedInvocation, source: string, callId?: str
 
   if (call.name === "web__run") return wrappedWebCall(call.args)
 
+  // The unified exec wrapper can call an MCP tool too (`tools.mcp__frizz__spawn_thread({…})`); its
+  // arguments are JavaScript source, so the spinoff id is read as a static string property.
+  const spinoff = spinoffIdOfSpawnCall(call.name, {
+    spinoff: jsStringProperty(call.args, "spinoff"),
+    spinOff: jsStringProperty(call.args, "spinOff"),
+  })
   return {
     name: wrappedToolLabel(call.name),
     detail: wrappedArgumentDetail(call.args),
     input: capToolInput(call.args || source.trim()),
+    ...(spinoff ? { spinoff } : {}),
   }
 }
 
