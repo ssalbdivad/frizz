@@ -3893,8 +3893,10 @@ export const PermissionMode = z.enum(["auto", "default", "acceptEdits", "plan", 
 export type PermissionMode = z.infer<typeof PermissionMode>
 
 // Where a vetted local artifact link opens. This is intentionally a server-owned setting: the
-// browser never gets permission to navigate to file:// or choose an arbitrary executable.
-export const LocalFileOpener = z.enum(["system", "cursor", "vscode", "finder", "copy"])
+// browser never gets permission to navigate to file:// or choose an arbitrary executable. `editor` is
+// the SERVER's own `$VISUAL`/`$EDITOR`, read from the environment Frizz was started in — the browser
+// still names no executable, it only picks "whatever this machine's shell already says".
+export const LocalFileOpener = z.enum(["system", "cursor", "vscode", "editor", "finder", "copy"])
 export type LocalFileOpener = z.infer<typeof LocalFileOpener>
 
 export const Settings = z.object({

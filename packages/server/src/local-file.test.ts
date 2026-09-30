@@ -329,3 +329,24 @@ test("a watch attaches exactly where the read is allowed, and a decoy .md arms n
   assert.throws(() => resolveWatchableLocalFile(join(root, "decoy.md"), [root]), /not a Markdown file/)
   assert.throws(() => resolveWatchableLocalFile(join(outside, "other.ts"), [root]), /trusted roots/)
 })
+
+test("the $EDITOR opener runs $VISUAL/$EDITOR as an argv, skipping terminal editors, and says why it cannot", () => {
+  const argv = (env: NodeJS.ProcessEnv, platform: NodeJS.Platform = "linux") => {
+    const spec = localFileOpenCommand("/p/app.ts", "editor", { env, platform })
+    return [spec.command, ...spec.args]
+  }
+  assert.deepEqual(argv({ EDITOR: "code --wait" }), ["code", "--wait", "/p/app.ts"])
+  assert.deepEqual(argv({ EDITOR: `"/opt/Sublime Text/subl" -w` }), ["/opt/Sublime Text/subl", "-w", "/p/app.ts"])
+  // $VISUAL wins when it can open without a terminal…
+  assert.deepEqual(argv({ VISUAL: "zed", EDITOR: "code" }), ["zed", "/p/app.ts"])
+  // …and a terminal $VISUAL falls through to a GUI $EDITOR.
+  assert.deepEqual(argv({ VISUAL: "nvim", EDITOR: "code -w" }), ["code", "-w", "/p/app.ts"])
+  assert.deepEqual(argv({ EDITOR: "emacs" }), ["emacs", "/p/app.ts"])
+  assert.throws(() => argv({ EDITOR: "emacs -nw" }), /needs a terminal/)
+  assert.throws(() => argv({ EDITOR: "/usr/bin/vim" }), /vim, which needs a terminal/)
+  assert.throws(() => argv({ EDITOR: "  " }), /not set/)
+  assert.throws(() => argv({}), /not set/)
+  // Windows: a bare name is a `.cmd` shim, so it goes through cmd.exe quoted; a real exe runs directly.
+  assert.deepEqual(argv({ EDITOR: "code -w" }, "win32"), ["cmd.exe", "/d", "/s", "/c", `""code" "-w" "/p/app.ts""`])
+  assert.deepEqual(argv({ EDITOR: "C:\\Zed\\zed.exe" }, "win32"), ["C:\\Zed\\zed.exe", "/p/app.ts"])
+})

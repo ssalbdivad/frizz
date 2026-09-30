@@ -206,6 +206,44 @@ const WINDOWS_EDITOR_EXE: Record<"cursor" | "vscode", { exe: readonly string[]; 
   vscode: { exe: ["Programs", "Microsoft VS Code", "Code.exe"], shim: "code" },
 }
 
+// Editors that draw in the terminal they are started from. The opener is detached with no stdio, so
+// one of these would start with no terminal and exit (or hang) invisibly — refuse it with a reason
+// instead. Matched on the executable's basename, minus a Windows `.exe`.
+const TERMINAL_EDITORS = new Set([
+  "vi", "vim", "nvim", "view", "vimx", "nano", "pico", "micro", "hx", "helix", "kak", "joe", "jed",
+  "ne", "mg", "ed", "ex", "emacsclient-nw", "amp", "vis", "zile",
+])
+
+// A shell-word split, quotes only (`code --wait`, `"/Applications/Sublime Text.app/…/subl" -w`). No
+// expansion of any kind, because nothing here runs through a shell: the words become an argv.
+function splitEditorCommand(raw: string): string[] {
+  const words: string[] = []
+  const pattern = /"([^"]*)"|'([^']*)'|(\S+)/g
+  for (const match of raw.matchAll(pattern)) words.push(match[1] ?? match[2] ?? match[3]!)
+  return words
+}
+
+function isTerminalEditor(words: readonly string[]): boolean {
+  const name = (words[0] ?? "").split(/[\\/]/).pop()!.toLowerCase().replace(/\.exe$/, "")
+  // `emacs` is a GUI app unless told otherwise; `emacs -nw` / `emacsclient -t` are the terminal forms.
+  if (name === "emacs" || name === "emacsclient") return words.some((w) => w === "-nw" || w === "-t" || w === "--tty")
+  return TERMINAL_EDITORS.has(name)
+}
+
+/**
+ * The editor `$VISUAL` / `$EDITOR` names, as an argv. `$VISUAL` is the conventional "full-screen
+ * editor" and wins when it is usable; when it names a terminal editor, a GUI `$EDITOR` still serves
+ * (the common `VISUAL=nvim EDITOR=…` split runs the other way, so both are tried). Throws a reason the
+ * RPC carries to the toast when neither names an editor that can open without a terminal.
+ */
+export function envEditorCommand(env: NodeJS.ProcessEnv): string[] {
+  const candidates = [env.VISUAL, env.EDITOR].map((raw) => splitEditorCommand(raw?.trim() ?? "")).filter((w) => w.length > 0)
+  if (candidates.length === 0) throw new Error("$EDITOR is not set where Frizz was started")
+  const usable = candidates.find((words) => !isTerminalEditor(words))
+  if (!usable) throw new Error(`$EDITOR is ${candidates[0]![0]}, which needs a terminal; set a GUI editor`)
+  return usable
+}
+
 /**
  * The fixed command plus argv that opens `path` with the selected app on `platform`. Pure over its
  * inputs so the Windows shapes are testable from a Mac.
@@ -219,6 +257,15 @@ const WINDOWS_EDITOR_EXE: Record<"cursor" | "vscode", { exe: readonly string[]; 
  */
 export function localFileOpenCommand(path: string, selected: Exclude<LocalFileOpener, "copy">, options: OpenerCommandOptions = {}): OpenerCommand {
   const platform = options.platform ?? process.platform
+  if (selected === "editor") {
+    const [command, ...args] = envEditorCommand(options.env ?? process.env)
+    if (platform !== "win32" || /\.exe$/i.test(command!)) return { command: command!, args: [...args, path] }
+    // A bare name on Windows is usually a `.cmd` shim (`code`, `subl`), which node will not spawn
+    // without a shell — so the same quoted `cmd.exe /c` shape as the editor shims below.
+    const words = [command!, ...args, path]
+    if (words.some((w) => /["%\r\n]/u.test(w))) throw new Error(`cannot hand ${path} to ${command} through cmd.exe`)
+    return { command: "cmd.exe", args: ["/d", "/s", "/c", `"${words.map((w) => `"${w}"`).join(" ")}"`], verbatim: true }
+  }
   if (platform === "darwin") {
     return selected === "cursor" ? { command: "open", args: ["-a", "Cursor", path] }
       : selected === "vscode" ? { command: "open", args: ["-a", "Visual Studio Code", path] }

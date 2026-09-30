@@ -143,6 +143,7 @@ export function SettingsDrawer() {
                   { value: "system", label: "System default" },
                   { value: "cursor", label: "Cursor" },
                   { value: "vscode", label: "VS Code" },
+                  { value: "editor", label: "$EDITOR" },
                   { value: "finder", label: "Reveal in Finder" },
                   { value: "copy", label: "Copy path" },
                 ]}
