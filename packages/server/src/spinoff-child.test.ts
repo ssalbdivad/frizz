@@ -285,7 +285,7 @@ test("a restarted server repairs a historical row across budgeted sweeps", () =>
 
 // ---- a forgotten child ------------------------------------------------------------------------------
 
-// A FORGOTTEN CHILD TAKES ITS EDGE WITH IT (2026-09-30). forgetThread frees the slug, and the next thread
+// A FORGOTTEN CHILD TAKES ITS EDGE WITH IT (2026-09-30). deleteThread frees the slug, and the next thread
 // slugified to it — the human re-dispatching the task by hand — used to inherit the dead child's edge:
 // its opening turn was rewritten to the OLD request, with the human's own prompt folded away as context.
 test("forgetting a spinoff child drops its edge, so the next thread under its slug is nobody's spinoff", () => {

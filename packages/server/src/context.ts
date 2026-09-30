@@ -77,6 +77,7 @@ import {
   type ShutdownDiagnostic,
 } from "./shutdown.ts"
 import { log as frizzLog } from "./logging.ts"
+import { RETENTION_FIRST_SWEEP_MS, RETENTION_SWEEP_INTERVAL_MS } from "./thread-retention.ts"
 import { projectScopedEnvironment } from "./project-launch.ts"
 import { homedir } from "node:os"
 
@@ -1208,7 +1209,7 @@ function createContextUnchecked(opts: ContextOptions, resources: PartialContextR
     return result
   }
 
-  return {
+  const appContext: AppContext = {
     bootId,
     project,
     bus,
@@ -1242,4 +1243,34 @@ function createContextUnchecked(opts: ContextOptions, resources: PartialContextR
     codexBin: opts.codexBin,
     terminalRunner,
   }
+  startThreadRetention(appContext, contextUnsubscribers)
+  return appContext
+}
+
+/**
+ * Settings → "Delete done threads after": apply it to this project once shortly after boot and hourly
+ * after that (thread-retention.ts). Read fresh each pass, so a changed period takes effect within the
+ * hour without a restart. The delete itself is the router's (`deleteExpiredDoneThreads`), imported at
+ * fire time because router.ts already imports this module.
+ */
+function startThreadRetention(ctx: AppContext, unsubscribers: (() => void)[]): void {
+  let stopped = false
+  const sweep = async () => {
+    const days = ctx.getSettings().deleteDoneThreadsAfterDays ?? 0
+    if (stopped || !(days > 0)) return
+    const { deleteExpiredDoneThreads } = await import("./router.ts")
+    if (stopped) return
+    const deleted = await deleteExpiredDoneThreads(ctx, days)
+    if (deleted) frizzLog.info("thread-retention", `${ctx.project.name}: deleted ${deleted} done thread${deleted === 1 ? "" : "s"} idle over ${days}d`)
+  }
+  const run = () => void sweep().catch((error) => frizzLog.warn("thread-retention", `${ctx.project.name}: sweep failed: ${String(error)}`))
+  const first = setTimeout(run, RETENTION_FIRST_SWEEP_MS)
+  const timer = setInterval(run, RETENTION_SWEEP_INTERVAL_MS)
+  first.unref?.()
+  timer.unref?.()
+  unsubscribers.push(() => {
+    stopped = true
+    clearTimeout(first)
+    clearInterval(timer)
+  })
 }

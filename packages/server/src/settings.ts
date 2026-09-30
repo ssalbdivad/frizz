@@ -94,6 +94,8 @@ export const defaultSettings = (): Settings => ({
   // Inside the project, never beside it — see the schema and cc-worker/hooks/worktree.mjs.
   worktreeDir: ".frizz/worktrees",
   removeWorktreesOnDone: true,
+  // Never — see the schema.
+  deleteDoneThreadsAfterDays: 0,
 })
 
 // Settings persist as one JSON blob under settings['settings']. Read merges over defaults

@@ -15,6 +15,7 @@ import { SaveStatus, useSettingsDraft } from "../hooks/useSettingsAutosave.tsx"
 import { SheetHeader } from "./ui/SheetHeader.tsx"
 import { Select } from "./ui/Select.tsx"
 import { SettingsField } from "./SettingsField.tsx"
+import { DeleteOldThreads, RETENTION_DAYS } from "./DeleteOldThreads.tsx"
 
 type NotifPerm = "default" | "granted" | "denied" | "unsupported"
 function currentPerm(): NotifPerm {
@@ -141,6 +142,21 @@ export function SettingsDrawer() {
                 value={draft.removeWorktreesOnDone ?? true}
                 onChange={(removeWorktreesOnDone) => update({ ...draft, removeWorktreesOnDone })}
               />
+            </SettingsField>
+
+            <SettingsField label="Delete done threads" help={SETTINGS_HELP.deleteDoneThreadsAfterDays}>
+              <Select
+                variant="bordered"
+                value={String(draft.deleteDoneThreadsAfterDays ?? 0)}
+                onValueChange={(v) => update({ ...draft, deleteDoneThreadsAfterDays: Number(v) })}
+                options={[{ value: "0", label: "Never" }, ...RETENTION_DAYS.map((days) => ({ value: String(days), label: `After ${days}d` }))]}
+                indicatorPosition="right"
+                ariaLabel="Delete done threads automatically"
+              />
+            </SettingsField>
+
+            <SettingsField label="Delete old threads now" help={SETTINGS_HELP.deleteOldThreads}>
+              <DeleteOldThreads />
             </SettingsField>
 
             {/* LAST, on purpose: where a vetted local path opens is the one power-user pair in the

@@ -1196,7 +1196,7 @@ test("rowless adoption claim blocks kill, dismiss-status, and forget RPC handler
     h.router.setThreadStatus.handler({ input: { slug, status: "dismissed" } }),
     /adoption attempt is in progress/i,
   )
-  await assert.rejects(h.router.forgetThread.handler({ input: { slug } }), /adoption attempt is in progress/i)
+  await assert.rejects(h.router.deleteThread.handler({ input: { slug } }), /adoption attempt is in progress/i)
   assert.equal(h.storage.getAdoptionClaim(slug)?.state, "reserved")
 })
 

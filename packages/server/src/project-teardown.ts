@@ -26,7 +26,7 @@ import { stopThreadRuntime } from "./router.ts"
  * is about to be unlinked, writes into files nobody can see, and can no longer be stopped from the UI
  * because the board it belonged to is gone.
  *
- * Per-row and forgiving, for the same reason `forgetThread` is: a broker that will not answer for one
+ * Per-row and forgiving, for the same reason `deleteExpiredDoneThreads` is (router.ts): a broker that will not answer for one
  * session must not strand the twenty after it. Returns how many were actually alive to stop, which is
  * what the operator is told.
  */

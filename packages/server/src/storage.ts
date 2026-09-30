@@ -2526,7 +2526,7 @@ export function createStorage(source: string | Database, projectId: string): Sto
     // withSpinoffChildOrigin replaced its opening turn with the OLD request's instructions and folded the
     // human's real prompt away as "context", the board linked it back to a parent it never came from,
     // and the edge recovery refused a genuine new child under the slug as "already another spinoff's
-    // child". A dismissed stalled child is exactly what forgetThread exists for, so this was reachable.
+    // child". A dismissed stalled child is exactly what deleteThread exists for, so this was reachable.
     //
     // Deleted rather than un-stamped: a row with `child_slug` NULL is a PENDING request, which the
     // recovery would stamp again onto whatever thread next holds the slug, and which fulfilSpinoff would

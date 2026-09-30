@@ -193,13 +193,14 @@ import { openableFileRoots, workDirOf } from "./project.ts"
 import { resolveThreadLink, threadLinkView } from "./thread-links.ts"
 import { ghInstalled, ghAuthed, ghRepo, gitGithubRemote, listItems, hydrateIssue, hydratePr, renderGithubPrompt, effectiveTemplate, DEFAULT_GITHUB_PROMPT } from "./github.ts"
 import { createGithubHovercardService } from "./github-hovercard.ts"
-import { slugify, resolveSlug, resolveLegacyThreadFile, loadWorkerPrompt, scratchpadOrientation, frizzConfigBlock, coldResumePermission, workerScratchPath } from "./dispatch.ts"
+import { slugify, resolveSlug, resolveLegacyThreadFile, loadWorkerPrompt, scratchpadOrientation, frizzConfigBlock, coldResumePermission, scratchDirRelPath, workerScratchPath } from "./dispatch.ts"
 import { backgroundOpStoppable, claudeShellLabel, noticeClaudeShellStopped, stopBackgroundShell } from "./shell-stop.ts"
 import { liveShellBudget, SHELL_BUDGET_MAX_MS } from "./shell-budget.ts"
 import { readCodexModels } from "./backend/codex-models.ts"
 import { peekClaudeModels, readClaudeModels } from "./backend/claude-models.ts"
 import { claudeModelStanding, claudeModelUpgradeBlock, claudeModelUpgradeDue, claudeModelUpgradeRefusal, claudeUpgradeCandidate, SERVER_STARTED_AT_MS } from "./backend/claude-model-upgrade.ts"
 import { log as frizzLog } from "./logging.ts"
+import { expiredDoneThreads } from "./thread-retention.ts"
 import { readProjectInstructions, writeProjectInstructions } from "./project-instructions.ts"
 import { codexSandbox } from "./backend/codex.ts"
 import type { CodexSandboxMode } from "./backend/codex-app-server.ts"
@@ -692,6 +693,61 @@ export async function stopAndForgetRegisteredRuntime(
     throw new Error("This thread resumed or was replaced while it was being dismissed; the new worker was preserved")
   }
   return forgotten
+}
+
+/**
+ * DELETE ONE THREAD — the one body behind the ⋯ menu's Delete, the Settings drawer's bulk delete and the
+ * retention sweep (thread-retention.ts). Stops its worker if one is still running (the same stop Mark as
+ * done performs), then drops every row Frizz keeps for it (storage `forgetOwnedRow`) and tombstones its
+ * transcript so discovery cannot bring it back, stops its terminals, drops the tailer's state and removes
+ * its scratch directory. Its slug and `@handle` are free the moment this returns: the next thread named
+ * like it gets the bare slug, and a mention no longer finds it.
+ *
+ * The provider's own transcript is left where the provider wrote it — it belongs to Claude or Codex,
+ * not to Frizz. The caller refreshes the board, so a bulk delete rebuilds it once.
+ */
+export async function deleteOwnedThread(
+  ctx: Pick<AppContext, "storage" | "tailer" | "terminalRunner" | "project" | "codexAppServer" | "claudeBroker" | "acpBridge">,
+  slug: string,
+): Promise<boolean> {
+  const row = ctx.storage.getSession(slug)
+  if (!row) {
+    if (ctx.storage.getAdoptionClaim(slug)) throw new Error("An adoption attempt is in progress; nothing was deleted")
+    return false // already gone — idempotent
+  }
+  const forgotten = await stopAndForgetRegisteredRuntime(ctx.storage, row, cachedLivenessTerminator, ctx.codexAppServer, ctx.claudeBroker, ctx.acpBridge)
+  // Its terminals have nothing left to show them in: stop them and drop the rows.
+  await ctx.terminalRunner.forgetThread(slug)
+  ctx.tailer.forget(slug)
+  // The worker's notes (dispatch writeScratchDir): nothing can reach them once the thread is gone. The id
+  // is checked before it is spliced into a path, as writeScratchDir checks it.
+  if (/^[A-Za-z0-9][A-Za-z0-9_-]{0,199}$/.test(forgotten.session_id)) {
+    try {
+      rmSync(join(ctx.project.dir, scratchDirRelPath(forgotten.session_id)), { recursive: true, force: true })
+    } catch {
+      // A scratch directory that will not go is litter, not a failed delete.
+    }
+  }
+  return true
+}
+
+/** Delete every done thread in one project idle for more than `days` days (thread-retention.ts picks
+ *  them). Per-thread and forgiving: one that will not stop must not strand the rest. Returns how many went. */
+export async function deleteExpiredDoneThreads(
+  ctx: Pick<AppContext, "storage" | "tailer" | "terminalRunner" | "project" | "codexAppServer" | "claudeBroker" | "acpBridge" | "board">,
+  days: number,
+  now = Date.now(),
+): Promise<number> {
+  let deleted = 0
+  for (const row of expiredDoneThreads(ctx.storage.allSessions(), days, now)) {
+    try {
+      if (await deleteOwnedThread(ctx, row.slug)) deleted++
+    } catch (error) {
+      frizzLog.warn("thread-retention", `${ctx.project.name}: ${row.slug} was not deleted: ${error instanceof Error ? error.message : String(error)}`)
+    }
+  }
+  if (deleted) ctx.board.refresh()
+  return deleted
 }
 
 // The typed RPC surface. Every handler is thin: state mutations go through frizz scripts
@@ -3883,32 +3939,36 @@ export function createRouter(ctx: AppContext) {
       },
     }),
 
-    // Dismiss/forget: the HARD-DELETE verb for a stalled/exited phantom the user wants GONE, not merely
-    // shelved (Archive = state='archived', still listed in Inactive). Removes the registry row AND
-    // tombstones its transcript id so a log-dir rescan / foreign-discovery can never resurrect it, then
-    // drops the tailer's in-memory state. GATED on a NOT-live row: only a thread whose derived runtime is
-    // "exited" (a dead worker, or a boot-failure "Stalled" session degradeIfNoTranscript flags) can be
-    // forgotten — a genuinely-live session (running / turn-idle / perm-prompt) is refused so it can't be
-    // yanked out from under itself. Idempotent: an already-forgotten slug no-ops.
-    forgetThread: mutation({
+    // Delete: the HARD-DELETE verb (Mark as done only files a thread under Done, still listed, still
+    // holding its name). Any thread, live or not — a live worker is stopped first, and the web asks
+    // before it sends this. See deleteOwnedThread. Idempotent: an already-deleted slug no-ops.
+    deleteThread: mutation({
       input: SlugInput,
       handler: async ({ input }) => {
+        // A thread deleted before it was marked done never had its worktrees cleaned up; do what done
+        // would have. It reads the transcript synchronously, so it has what it needs before the row goes.
         const row = ctx.storage.getSession(input.slug)
-        if (!row) {
-          if (ctx.storage.getAdoptionClaim(input.slug)) {
-            throw new Error("An adoption attempt is in progress; nothing was dismissed")
-          }
-          return // already gone — idempotent
+        if (row && row.state !== "archived" && row.archived !== 1) cleanupThreadWorktrees(input.slug)
+        if (await deleteOwnedThread(ctx, input.slug)) ctx.board.refresh() // the removed row fans out as a delete delta on SSE
+      },
+    }),
+
+    // Settings → "Delete done threads older than": the same set the retention sweep takes
+    // (thread-retention.ts), across every OPEN project — the drawer is machine-wide, and so is the
+    // automatic setting beside it. `dryRun` is the count the confirmation shows.
+    deleteDoneThreads: mutation({
+      input: z.object({ olderThanDays: z.number().int().min(1).max(3650), dryRun: z.boolean().optional() }).strict(),
+      output: z.object({ count: z.number().int().nonnegative() }),
+      handler: async ({ input }) => {
+        const now = Date.now()
+        let count = 0
+        for (const { ctx: tenant } of ctx.activeTenants?.() ?? [{ ctx }]) {
+          if (!tenant) continue
+          count += input.dryRun
+            ? expiredDoneThreads(tenant.storage.allSessions(), input.olderThanDays, now).length
+            : await deleteExpiredDoneThreads(tenant, input.olderThanDays, now)
         }
-        const t = (await ctx.board.snapshot()).threads.find((x) => x.id === input.slug)
-        if (t && t.runtime !== "exited") {
-          throw new Error("only a stalled or exited session can be dismissed — archive a live one instead")
-        }
-        await stopAndForgetRegisteredRuntime(ctx.storage, row, cachedLivenessTerminator, ctx.codexAppServer, ctx.claudeBroker, ctx.acpBridge)
-        // Its terminals have nothing left to show them in: stop them and drop the rows.
-        await ctx.terminalRunner.forgetThread(input.slug)
-        ctx.tailer.forget(input.slug)
-        ctx.board.refresh() // storage-only change — the removed row fans out as a delete delta on SSE
+        return { count }
       },
     }),
 
