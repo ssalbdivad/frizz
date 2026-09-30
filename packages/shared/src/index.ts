@@ -4202,9 +4202,10 @@ export type DispatchInput = z.infer<typeof DispatchInput>
 // ---- SPINOFFS (2026-09-29) -----------------------------------------------------------------------
 // A new thread the HUMAN asks for from an existing one — "fix this", "investigate perf" — with the
 // current thread supplying the context. It is not a sub-agent (nothing returns to the parent) and not a
-// bare dispatch (the new thread does not start cold): the request is delivered to the PARENT's worker,
-// which gathers what the new thread needs and dispatches it through `spawn_thread` naming the request's
-// id. Both threads then carry the edge: the parent's timeline shows the request as a card linking
+// bare dispatch (the new thread does not start cold). On a Claude thread the new thread is a FORK of the
+// parent's session and starts with its whole conversation (2026-09-30, spinoffForkPrompt, server
+// router.ts forkSpinoff). Everywhere else the request is delivered to the PARENT's worker, which gathers
+// what the new thread needs and dispatches it through `spawn_thread` naming the request's id. Both threads then carry the edge: the parent's timeline shows the request as a card linking
 // forward, and the child's header links back. "Spinoff" is one word, verb and noun alike (maintainer
 // 2026-09-29); it is asked of the whole thread, never of one message (spinoffRequestMessage).
 export const SPINOFF_INSTRUCTIONS_MAX = 4_000

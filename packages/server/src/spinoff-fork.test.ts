@@ -122,7 +122,8 @@ function row(over: Partial<SessionRow> = {}): SessionRow {
 
 function tailHarness(forked: boolean) {
   __clearForkPointsForTests()
-  const logDir = join(mkdtempSync(join(tmpdir(), "frizz-fork-tail-")), "-a-project")
+  const root = mkdtempSync(join(tmpdir(), "frizz-fork-tail-"))
+  const logDir = join(root, "-a-project")
   mkdirSync(logDir, { recursive: true })
   const storage = createStorage(join(logDir, "ui.db"), "p")
   storage.upsertSession(row())
@@ -138,7 +139,7 @@ function tailHarness(forked: boolean) {
     storage, bus, onChange: () => {}, now: () => clock.ms, paneDead: () => false, sessionLogDir: logDir, tailCache: null,
   })
   const path = join(logDir, `${CHILD_SID}.jsonl`)
-  return { storage, tailer, clock, path, notifies, close: () => { storage.close(); rmSync(logDir, { recursive: true, force: true }) } }
+  return { storage, tailer, clock, path, notifies, close: () => { storage.close(); rmSync(root, { recursive: true, force: true }) } }
 }
 
 test("tailer: a forked row folds nothing of the copied parent, before or after its own first record", () => {
