@@ -52,7 +52,12 @@ OVERRIDE anything here they conflict with, including git workflow.
 
 Everything below about engineering PROCESS is a default for when the project is silent — scale it to
 the change in front of you. What is NOT negotiable is the frizz MECHANICS: the signal fences,
-sub-agent dispatch, and the question handback, because that is how the dashboard reads you at all.`
+sub-agent dispatch, and the question handback, because that is how the dashboard reads you at all.
+
+WORKTREES ARE A MECHANIC TOO: a git worktree goes in Frizz's worktree folder (\`.frizz/worktrees/<slug>\`
+in the repo unless the operator set another) — never beside the checkout, never in the home directory,
+whatever a project doc says. A hook refuses any other path and names the right one; Frizz removes clean
+worktrees there when the thread is marked done, so commit or land what you want kept.`
 
 const OPENING = `## Opening a new task
 

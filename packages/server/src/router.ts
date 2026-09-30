@@ -166,6 +166,7 @@ import { createThreadNamer, rowThreadName, threadNameProblem, type NamedThread, 
 import { handleOf, isReplyWaitFor, knownHandles, replyWaitPrompt, resolveSubAgent, resolveThreadHandle, subAgentAddresses, THREAD_MESSAGE_HOURLY_CAP, threadMessageBody } from "./thread-mentions.ts"
 import { enqueueThreadMessageWake } from "./scheduler.ts"
 import { editedFilesOf } from "./edited-files.ts"
+import { removeThreadWorktrees, worktreesAddedBy } from "./worktree-cleanup.ts"
 import { mayHaveLiveBackgroundWork, needsFreshProcessForLimit } from "./backend/usage-limit.ts"
 import { appServerTurnStalled, resolveLiveWatchTarget, resolveRecurringPrompt } from "./board.ts"
 import { runThreadUpdate } from "./frizz.ts"
@@ -1198,6 +1199,22 @@ export function createRouter(ctx: AppContext) {
       ...(tele?.aiTitle ? { title: tele.aiTitle.slice(0, 200) } : {}),
     })
     return true
+  }
+
+  // Marked done ⇒ the worktrees the thread made in the worktree folder go too, when the setting says so
+  // (worktree-cleanup.ts: clean ones only, so nothing unrecoverable). Off the request path: `git
+  // worktree remove` on a tree full of node_modules takes seconds, and the card should move now.
+  function cleanupThreadWorktrees(slug: string): void {
+    const settings = ctx.getSettings()
+    if (settings.removeWorktreesOnDone === false) return
+    void (async () => {
+      const messages = readThreadTranscript(ctx.project, ctx.storage, slug, ctx.backendFor)
+      const checkout = ctx.tailer.get(slug)?.checkout
+      const candidates = [...worktreesAddedBy(messages, workDir), ...(checkout?.kind === "worktree" ? [checkout.dir] : [])]
+      const { removed, kept } = await removeThreadWorktrees(candidates, settings.worktreeDir)
+      for (const dir of removed) frizzLog.info("worktree", `removed ${dir} (thread ${slug} marked done)`)
+      for (const { path: dir, reason } of kept) frizzLog.info("worktree", `kept ${dir} (thread ${slug}): ${reason}`)
+    })().catch((error) => frizzLog.warn("worktree", `cleanup for ${slug} failed: ${String(error)}`))
   }
 
   function currentOwnedSession(slug: string, sessionId: string) {
@@ -2946,6 +2963,7 @@ export function createRouter(ctx: AppContext) {
         // Filed under Done, so its terminals stop with it, as they do for Mark as done (completeThread).
         await ctx.terminalRunner.closeThread(input.slug)
         ctx.storage.setState(input.slug, "archived")
+        cleanupThreadWorktrees(input.slug)
         const t = (await ctx.board.snapshot()).threads.find((x) => x.id === input.slug)
         if (!isAutoTitledSession(input.slug) && t && t.status !== "done" && t.status !== "dismissed") {
           await runThreadUpdate(ctx.project.dir, input.slug, ["--status", "done"]).catch(() => {})
@@ -2986,6 +3004,7 @@ export function createRouter(ctx: AppContext) {
         // Filed under Done ⇒ its terminals stop first (thread-terminals.ts), so nothing live is filed with it.
         if (input.state === "archived") await ctx.terminalRunner.closeThread(input.slug)
         ctx.storage.setState(input.slug, input.state)
+        if (input.state === "archived") cleanupThreadWorktrees(input.slug)
         ctx.board.refresh() // storage-only change — overlay is enough
       },
     }),
@@ -3011,7 +3030,10 @@ export function createRouter(ctx: AppContext) {
             close: () => ctx.terminalRunner.closeThread(input.slug),
           },
         )
-        if (!result.needsConfirmation) ctx.board.refresh()
+        if (!result.needsConfirmation) {
+          cleanupThreadWorktrees(input.slug)
+          ctx.board.refresh()
+        }
         return result
       },
     }),
@@ -3967,6 +3989,18 @@ export function createRouter(ctx: AppContext) {
       ),
     }),
 
+    // "Open in editor": the thread's working folder, in the External app when that is an editor and
+    // `$EDITOR` otherwise. The folder is the one a terminal on the thread starts in, resolved here —
+    // the page names only the thread, so this can open no path the server did not choose.
+    openThreadFolder: mutation({
+      input: SlugInput,
+      output: z.object({ path: z.string() }),
+      handler: async ({ input }) => {
+        if (!ctx.storage.getSession(input.slug)) throw new Error(`no session registered for ${input.slug}`)
+        return openLocalFolder(threadWorkingDir(input.slug).dir, ctx.getSettings().localFileOpener ?? "system")
+      },
+    }),
+
     // A local Markdown file's source, for the built-in reader. Same openable-root gate as openLocalFile
     // — the click that reaches here already had to pass it — plus an extension check on BOTH the
     // requested and the canonical path, so this route reads Markdown or nothing. It is the only local
@@ -3987,18 +4021,6 @@ export function createRouter(ctx: AppContext) {
       handler: async ({ input }) => readLocalTextFile(input.path, openRoots),
     }),
 
-    }),
-
-    // "Open in editor": the thread's working folder, in the External app when that is an editor and
-    // `$EDITOR` otherwise. The folder is the one a terminal on the thread starts in, resolved here —
-    // the page names only the thread, so this can open no path the server did not choose.
-    openThreadFolder: mutation({
-      input: SlugInput,
-      output: z.object({ path: z.string() }),
-      handler: async ({ input }) => {
-        if (!ctx.storage.getSession(input.slug)) throw new Error(`no session registered for ${input.slug}`)
-        return openLocalFolder(threadWorkingDir(input.slug).dir, ctx.getSettings().localFileOpener ?? "system")
-      },
     // Batch-classify path REFERENCES (as they appear in inline code) → their canonical openable path, or
     // null when a candidate doesn't resolve to a real file under the openable roots. The client renders
     // resolved ones as clickable inline code (opened via openLocalFile). Pure read: it only realpath-

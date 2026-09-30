@@ -3976,6 +3976,20 @@ export const Settings = z.object({
    * Home per machine, not one per project. See server/home-workspace.ts.
    */
   homeFolder: z.string().max(4_096).optional(),
+  /**
+   * Where a worker's git worktrees go. Relative is resolved against the repository's main checkout
+   * (`.frizz/worktrees` — git-ignored in every Frizz project); absolute or `~/…` is one folder for
+   * every repository. Enforced, not suggested: a worker hook refuses `git worktree add` anywhere else,
+   * because a prompt line alone kept producing `~/<repo>-<slug>` folders (cc-worker/hooks/worktree.mjs).
+   * Optional so an old blob parses; defaultSettings pins `.frizz/worktrees`. Machine-level.
+   */
+  worktreeDir: z.string().max(4_096).optional(),
+  /**
+   * Whether marking a thread done removes the worktrees it made in `worktreeDir` — only CLEAN ones
+   * (`git worktree remove` without --force), plus their branch when merged. Optional so an old blob
+   * parses; defaultSettings pins true. Machine-level. See server/worktree-cleanup.ts.
+   */
+  removeWorktreesOnDone: z.boolean().optional(),
   // There is no `font` key any more. The interface rendered in one of two type families as a machine
   // setting until 2026-09-19 (maintainer: "let's drop monospace as an option"); every surface is sans
   // now, and index.html pins `data-font="sans"` on <html> directly. Settings is a non-strict object,
@@ -4043,7 +4057,7 @@ export type Settings = z.infer<typeof Settings>
  * because the query cache keeps one `settingsGet` entry per project and a machine setting changed in
  * one is changed in all.
  */
-export const MACHINE_SETTING_KEYS = ["notifications", "localFileOpener", "projectRail", "homeFolder"] as const satisfies readonly (keyof Settings)[]
+export const MACHINE_SETTING_KEYS = ["notifications", "localFileOpener", "projectRail", "homeFolder", "worktreeDir", "removeWorktreesOnDone"] as const satisfies readonly (keyof Settings)[]
 
 // The new-thread composer's durable choices — MACHINE-wide, one record for every project the server
 // serves (server/dispatch-preferences.ts), because the profile belongs to the operator, not to a

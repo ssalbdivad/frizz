@@ -91,6 +91,9 @@ export const defaultSettings = (): Settings => ({
   codexContextWindow: undefined,
   // Hidden until asked for — see the schema for why.
   projectRail: false,
+  // Inside the project, never beside it — see the schema and cc-worker/hooks/worktree.mjs.
+  worktreeDir: ".frizz/worktrees",
+  removeWorktreesOnDone: true,
 })
 
 // Settings persist as one JSON blob under settings['settings']. Read merges over defaults
