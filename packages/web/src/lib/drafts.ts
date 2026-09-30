@@ -89,8 +89,6 @@ export const draftKey = {
   // The profile picked for that same prompt (useDraftDispatchPick): `{backend, model, effort}` as JSON,
   // one small non-secret record, kept and cleared with the prompt it belongs to.
   dispatchProfile: (projectDir: string | undefined) => `dispatch-profile:${projectDraftScope(projectDir)}:new`,
-  // The command half of a thread's "Open terminal" dialog (OpenTerminalDialog), one per thread.
-  terminalCommand: (projectDir: string | undefined, slug: string) => `terminal-command:${projectDraftScope(projectDir)}:${encodeURIComponent(slug)}`,
   // A thread's "Spinoff" dialog (SpinoffDialog) — the instructions for the new thread, one per thread.
   spinoff: (projectDir: string | undefined, slug: string) => `spinoff:${projectDraftScope(projectDir)}:${encodeURIComponent(slug)}`,
   // A finished terminal's next line (TerminalFollowUp) — one per terminal.

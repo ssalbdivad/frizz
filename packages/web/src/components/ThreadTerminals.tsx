@@ -1,19 +1,16 @@
-import { lazy, Suspense, useEffect, useRef, useState } from "react"
-import { useQuery } from "@tanstack/react-query"
+import { lazy, Suspense, useState } from "react"
 import { Loader2, SquareTerminal, X } from "lucide-react"
 import type { ThreadTerminal, ThreadView } from "@frizz/shared"
-import { useThreadApi, useThreadApiBase, useThreadProjectDir } from "../api/threadApi.tsx"
+import { useThreadApi, useThreadApiBase } from "../api/threadApi.tsx"
 import type { Api } from "../api/rpc.ts"
 import { useBoard } from "../hooks.ts"
 import { CHILD_ARROW, CHILD_ARROW_CLASS, CHILD_KIND_TAG_CLASS, CHILD_MARK_SLOT_CLASS } from "../lib/childOps.ts"
 import { compactElapsedSince } from "../lib/durationLabels.ts"
-import { draftKey, useDraft } from "../lib/drafts.ts"
 import { useNowMs } from "../lib/liveClock.ts"
 import { abbreviateHome } from "../lib/paths.ts"
 import { promptingTerminal, runningTerminals, terminalFailed, terminalLive, terminalStateLabel } from "../lib/threadTerminals.ts"
 import { projectSlug } from "../lib/base-path.ts"
 import { pushTerminalDrawer, showToast, store } from "../store.ts"
-import { Dialog } from "./ui/Dialog.tsx"
 
 // A THREAD'S TERMINALS, drawn inside the thread (server thread-terminals.ts; lib/threadTerminals.ts). A
 // terminal is opened ON a thread — the drawer's ⋯ menu, `t`, or a `$ cmd` line in its prompt box — and
@@ -198,155 +195,6 @@ export function startComposerTerminal(api: Api, slug: string, command: string | 
     onFailed()
     showToast(`Could not open a terminal: ${(error instanceof Error ? error.message : String(error)).slice(0, 80)}`)
   })
-}
-
-// What the folder above is, in the dialog's own words.
-const SOURCE_HINT = {
-  transcript: "Where the agent is working now.",
-  session: "The folder the agent's session started in.",
-  project: "The project root.",
-} as const
-
-// THE "OPEN TERMINAL" DIALOG — two fields and a button. The FOLDER opens on where the thread's agent is
-// working right now (the server's threadWorkingDir: the newest folder its transcript names, lifted to the
-// checkout it lies in — the project root, or the worktree the agent moved into), and the human can
-// retarget it before anything runs. The COMMAND is optional: empty opens an interactive shell there.
-export function OpenTerminalDialog({ slug, open, onOpenChange }: { slug: string; open: boolean; onOpenChange: (open: boolean) => void }) {
-  const api = useThreadApi()
-  const board = useBoard()
-  const projectDir = useThreadProjectDir()
-  const [command, setCommand, clearCommand] = useDraft(draftKey.terminalCommand(projectDir, slug))
-  const commandRef = useRef<HTMLInputElement>(null)
-  const where = useQuery({
-    queryKey: ["threadWorkingDir", projectDir, slug],
-    queryFn: () => api.threadWorkingDir({ slug }),
-    enabled: open,
-    // Re-read on every opening: the agent may have moved since.
-    staleTime: 0,
-  })
-  const [folder, setFolder] = useState("")
-  const [touched, setTouched] = useState(false)
-  const [pending, setPending] = useState(false)
-  const [error, setError] = useState<string | null>(null)
-  // Fill the folder from the reading until the human edits it; reset both when the dialog reopens.
-  useEffect(() => {
-    if (!open) {
-      setTouched(false)
-      setError(null)
-      return
-    }
-    if (!touched && where.data) setFolder(abbreviateHome(where.data.dir, board?.homeDir))
-  }, [open, where.data, touched, board?.homeDir])
-
-  function submit() {
-    const cwd = folder.trim()
-    if (pending || !cwd) return
-    setPending(true)
-    setError(null)
-    const line = command.trim() || undefined
-    openThreadTerminal(api, slug, { command: line, cwd: expandHome(cwd, board?.homeDir) })
-      .then(() => {
-        clearCommand()
-        onOpenChange(false)
-      })
-      .catch((cause: unknown) => setError(cause instanceof Error ? cause.message : String(cause)))
-      .finally(() => setPending(false))
-  }
-
-  const field = "font-mono-keep block w-full min-w-0 rounded-md border border-border bg-bg px-2.5 py-1.5 text-[12.5px] text-fg outline-none transition-colors placeholder:font-sans placeholder:text-muted focus:border-accent"
-  return (
-    <Dialog
-      open={open}
-      onOpenChange={(next) => { if (!pending) onOpenChange(next) }}
-      title="Open terminal"
-      className="w-[460px] max-w-[92vw]"
-      onOpenAutoFocus={(event) => {
-        event.preventDefault()
-        commandRef.current?.focus()
-      }}
-      footer={
-        <>
-          <button
-            type="button"
-            disabled={pending}
-            onClick={() => onOpenChange(false)}
-            className="button-outline rounded-md px-3 py-1.5 text-[12px] text-muted outline-none transition-colors hover:bg-panel-2 hover:text-fg disabled:opacity-45"
-          >
-            Cancel
-          </button>
-          <button
-            type="button"
-            data-open-terminal-submit
-            disabled={pending || !folder.trim()}
-            onClick={submit}
-            className="button-outline flex items-center gap-1.5 rounded-md bg-fg px-3 py-1.5 text-[12px] font-medium text-bg outline-none transition-opacity hover:opacity-90 disabled:opacity-45"
-          >
-            {pending && <Loader2 size={12} className="animate-spin" />}
-            Open terminal
-          </button>
-        </>
-      }
-    >
-      <form
-        data-open-terminal
-        className="flex flex-col gap-3 p-4 text-[12px]"
-        onSubmit={(event) => {
-          event.preventDefault()
-          submit()
-        }}
-      >
-        <label className="flex flex-col gap-1">
-          <span className="text-muted">Folder</span>
-          <input
-            data-open-terminal-folder
-            value={folder}
-            onChange={(event) => {
-              setTouched(true)
-              setFolder(event.target.value)
-            }}
-            placeholder={where.isLoading ? "Finding where the agent is working…" : "/path/to/folder"}
-            spellCheck={false}
-            autoCapitalize="off"
-            autoCorrect="off"
-            autoComplete="off"
-            data-1p-ignore
-            className={field}
-          />
-          <span className="text-[11px] text-muted-60">
-            {where.data && !touched ? SOURCE_HINT[where.data.source] : where.isError ? "Could not tell where the agent is working." : " "}
-          </span>
-        </label>
-        <label className="flex flex-col gap-1">
-          <span className="text-muted">Command</span>
-          <div className="relative flex items-center">
-            <span aria-hidden className="font-mono-keep pointer-events-none absolute left-2.5 select-none text-[12.5px] text-muted-60">$</span>
-            <input
-              ref={commandRef}
-              data-open-terminal-command
-              value={command}
-              onChange={(event) => setCommand(event.target.value)}
-              placeholder="Leave empty for a shell"
-              spellCheck={false}
-              autoCapitalize="off"
-              autoCorrect="off"
-              autoComplete="off"
-              data-1p-ignore
-              className={`${field} pl-6`}
-            />
-          </div>
-        </label>
-        {error && <p role="alert" className="text-[11.5px] text-danger-soft">{error}</p>}
-        {/* Enter in either field submits; the hidden button is what makes it a real form submit. */}
-        <button type="submit" hidden />
-      </form>
-    </Dialog>
-  )
-}
-
-function expandHome(path: string, homeDir: string | undefined): string {
-  if (!homeDir) return path
-  if (path === "~") return homeDir
-  return path.startsWith("~/") ? `${homeDir}/${path.slice(2)}` : path
 }
 
 /** Whether a card's thread is the page's focused project's, so its terminal can open over its drawer here. */

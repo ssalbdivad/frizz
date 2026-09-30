@@ -11,7 +11,8 @@ import { HEADER_ICON_CLASS } from "../lib/headerIcon.ts"
 import { useCommandHandler, useShortcutLabel } from "../lib/keyboardRuntime.ts"
 import { Menu, MenuContent, MenuItem, MenuTrigger } from "./ui/Menu.tsx"
 import { canSpinoff, SpinoffDialog, SpinoffMark } from "./Spinoff.tsx"
-import { OpenTerminalDialog } from "./ThreadTerminals.tsx"
+import { startComposerTerminal } from "./ThreadTerminals.tsx"
+import { useThreadApi } from "../api/threadApi.tsx"
 import { Tooltip } from "./Tooltip.tsx"
 import { useTerminalCommandMenuItem } from "./ExternalTerminalCommand.tsx"
 import { useDevFrizzBuild } from "../lib/devBuild.ts"
@@ -59,28 +60,32 @@ export function openFullscreen(slug: string, from: HTMLElement | null, href = st
 // fullscreen door, the terminal and close: the terminal came up to an icon, LEADING the strip so the ⋯
 // menu stays beside close, and the verbs that had held icon space there (copy terminal command, Reload
 // plugins, Restart worker, the Frizz document) went down into the menu.
+//
+// One press opens a SHELL there, with nothing to fill in. It opened a folder + command dialog until
+// 2026-09-29 (maintainer: "it should open shell by default, don't ask what command to run"): the server
+// already resolves the agent's folder when none is sent (router terminalStart -> threadWorkingDir), and a
+// one-off command already has its own door, a `$ cmd` line in the thread's prompt box.
 export function ThreadTerminalButton({ slug }: { slug: string }) {
+  const api = useThreadApi()
   const button = useRef<HTMLButtonElement>(null)
-  const [open, setOpen] = useState(false)
   const keys = useShortcutLabel("thread.terminal")
-  useCommandHandler(button, () => setOpen(true))
+  const open = () => startComposerTerminal(api, slug, undefined, () => {})
+  useCommandHandler(button, open)
+  const label = "Open a terminal where this agent is working"
   return (
-    <>
-      <OpenTerminalDialog slug={slug} open={open} onOpenChange={setOpen} />
-      <Tooltip label={keys ? `Open terminal (${keys})` : "Open terminal"}>
-        <button
-          ref={button}
-          type="button"
-          aria-label="Open terminal"
-          data-command="terminal"
-          onMouseDown={(event) => event.preventDefault()}
-          onClick={() => setOpen(true)}
-          className={HEADER_ICON_CLASS}
-        >
-          <SquareTerminal size={14} strokeWidth={2} aria-hidden />
-        </button>
-      </Tooltip>
-    </>
+    <Tooltip label={keys ? `${label} (${keys})` : label}>
+      <button
+        ref={button}
+        type="button"
+        aria-label={label}
+        data-command="terminal"
+        onMouseDown={(event) => event.preventDefault()}
+        onClick={open}
+        className={HEADER_ICON_CLASS}
+      >
+        <SquareTerminal size={14} strokeWidth={2} aria-hidden />
+      </button>
+    </Tooltip>
   )
 }
 
