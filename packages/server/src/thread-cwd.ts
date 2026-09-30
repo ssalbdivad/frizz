@@ -150,19 +150,25 @@ interface LiftReading {
 }
 const liftMemo = new Map<string, { at: number; value: LiftReading | undefined }>()
 
-function sameFolder(a: string, b: string): boolean {
-  if (a === b) return true
-  // macOS spells `/tmp/x` as `/private/tmp/x` once a process resolves it, and a transcript records the
-  // resolved one: compare the real paths before calling the project root "somewhere else".
+function realpathOr(path: string): string {
   try {
-    return realpathSync(a) === realpathSync(b)
+    return realpathSync(path)
   } catch {
-    return false
+    return path
   }
 }
 
 /** `dir` lifted to its checkout (checkoutOf), and whether that checkout is the project root. Undefined
- *  when the folder does not exist — no reading, never a stale name. */
+ *  when the folder does not exist — no reading, never a stale name.
+ *
+ *  ONE SPELLING PER FOLDER: the lift walks the folder's REAL path, so a checkout reads the same whichever
+ *  way it was reached. The readings it compares come from different places — the thread's folder off the
+ *  transcript's `cwd`, a running shell's off the OS (`/proc/<pid>/cwd`, always resolved) — and the web
+ *  decides a row's folder hint by comparing checkouts as strings (ThreadTerminals processFolderHint), so a
+ *  worktree reached through a symlink named itself twice: every live row in it said `probe` under a header
+ *  that already did. It was once only the ROOT comparison that resolved (macOS spells `/tmp/x` as
+ *  `/private/tmp/x` once a process resolves it, and a transcript records the resolved one). The root keeps
+ *  the project's own spelling. */
 export function liftWorkingDir(dir: string | undefined, projectDir: string | undefined, nowMs = Date.now()): LiftReading | undefined {
   if (!dir || !projectDir || !isAbsolute(dir)) return undefined
   const key = `${projectDir}\u0000${dir}`
@@ -170,8 +176,9 @@ export function liftWorkingDir(dir: string | undefined, projectDir: string | und
   if (hit && nowMs - hit.at < LIFT_TTL_MS) return hit.value
   let value: LiftReading | undefined
   if (isDirectory(dir)) {
-    const checkout = checkoutOf(dir, projectDir)
-    if (sameFolder(checkout, projectDir)) value = { dir: projectDir }
+    const project = realpathOr(projectDir)
+    const checkout = checkoutOf(realpathOr(dir), project)
+    if (checkout === project) value = { dir: projectDir }
     else value = { dir: checkout, checkout: { dir: checkout, kind: isFile(join(checkout, ".git")) ? "worktree" : "folder" } }
   }
   liftMemo.delete(key)

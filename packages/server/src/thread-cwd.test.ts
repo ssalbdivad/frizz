@@ -1,6 +1,6 @@
 import { test } from "node:test"
 import assert from "node:assert/strict"
-import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs"
+import { mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs"
 import { homedir, tmpdir } from "node:os"
 import { join } from "node:path"
 import type { TranscriptMessage } from "@frizz/shared"
@@ -176,6 +176,28 @@ test("liftCheckout: absent for the project root, a worktree when .git is a FILE,
     // And with nothing to compare against there is nothing to say.
     assert.equal(liftCheckout(worktree, undefined), undefined)
     assert.equal(liftCheckout("relative/path", project), undefined)
+  } finally {
+    resetCheckoutMemo()
+    cleanup()
+  }
+})
+
+// ONE SPELLING PER CHECKOUT. The thread's folder comes off the transcript and a running shell's off the OS,
+// which always resolves links — and the strip compares the two as strings, so a worktree reached through a
+// symlink showed its own name as a hint under a header that already said it.
+test("a checkout reached through a symlink lifts to the same checkout as its real path", () => {
+  const { root, project, worktree, cleanup } = fixture()
+  resetCheckoutMemo()
+  try {
+    const link = join(root, "probe-link")
+    symlinkSync(worktree, link)
+    assert.deepEqual(liftCheckout(join(link, "packages", "server"), project), { dir: worktree, kind: "worktree" })
+    assert.deepEqual(liftCheckout(join(link, "packages", "server"), project), liftCheckout(join(worktree, "packages", "server"), project))
+    // A project reached through a link is still the project, and keeps the spelling it was registered by.
+    const projectLink = join(root, "repo-link")
+    symlinkSync(project, projectLink)
+    assert.deepEqual(liftWorkingDir(join(project, "packages", "web"), projectLink), { dir: projectLink })
+    assert.deepEqual(liftWorkingDir(join(projectLink, "packages", "web"), project), { dir: project })
   } finally {
     resetCheckoutMemo()
     cleanup()
