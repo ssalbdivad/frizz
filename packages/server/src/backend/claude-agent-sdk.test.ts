@@ -315,6 +315,29 @@ test("resume selection uses the explicit owned UUID and never falls back to a ne
   }
 })
 
+// A FORK (the Claude spinoff route): the SDK is asked to resume the PARENT with forkSession, under the
+// child's own pinned id — and the session this handle owns is the child's, never the parent's.
+test("fork selection resumes the source session into a new pinned session id", { timeout: 10_000 }, async () => {
+  const PARENT = "00000000-0000-4000-8000-0000000000aa"
+  const harness = startHarness("basic", {}, {}, { kind: "fork", sessionId: SESSION_ID, from: PARENT })
+  try {
+    assert.equal((await harness.handle.ready()).sessionId, SESSION_ID)
+    await harness.handle.send({ id: INPUT_ID, text: "fork input" })
+    await collectThrough(harness.handle, "result")
+    const records = await waitForCapture(harness.capturePath, (rows) => rows.some((row) => row.kind === "user-input"))
+    const argv = records.find((row) => row.kind === "startup")?.argv as string[]
+    assert.equal(flagValue(argv, "--resume"), PARENT)
+    assert.equal(flagValue(argv, "--session-id"), SESSION_ID)
+    assert.ok(argv.includes("--fork-session"), `argv carries --fork-session: ${argv.join(" ")}`)
+  } finally {
+    await harness.close()
+  }
+})
+
+test("a fork of a session into itself is refused before anything starts", () => {
+  assert.throws(() => startHarness("basic", {}, {}, { kind: "fork", sessionId: SESSION_ID, from: SESSION_ID }), /a session id of its own/)
+})
+
 test("initialization capabilities remain hidden when the provider never establishes session ownership", { timeout: 10_000 }, async () => {
   const harness = startHarness("no-init")
   const initialization = harness.handle.initializationResult()
