@@ -106,6 +106,11 @@ test("an empty command opens the human's shell there, named for it, and its own 
   // Sitting at `$ ` well past the quiet window: a shell is interactive by design, not asking.
   await new Promise((resolve) => setTimeout(resolve, 600))
   assert.equal(term(runner, id)?.awaitingInput, undefined)
+  // Idle at its own prompt, it is nothing Mark as done has to confirm; running a command, it is.
+  assert.deepEqual(runner.live(PARENT), [], "an idle shell is not running anything")
+  attachment.write("sleep 1\r")
+  await until(() => (runner.live(PARENT).length === 1 ? true : undefined), "the shell's command to read as running")
+  await until(() => (runner.live(PARENT).length === 0 ? true : undefined), "the shell to go idle again")
   attachment.write("exit 0\r")
   assert.equal((await exitedTerm(runner, id)).exitCode, 0)
   runner.shutdown()
