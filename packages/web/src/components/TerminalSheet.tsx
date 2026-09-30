@@ -61,16 +61,34 @@ export function terminalSubtitle(cwd: string | undefined, checkout: WorkCheckout
   return `${abbreviateHome(cwd, homeDir)}${checkout?.kind === "worktree" ? " · worktree" : ""}`
 }
 
-// THE SAME LINE, laid out so a narrow drawer loses the right part of it. A path truncated at its END cut
-// away both the folder that names the worktree and the ` · worktree` after it — at 420px the one place the
-// drawer said so was gone (`/tmp/tu-v-repo/.frizz/worktr…`). So the path truncates at its START
-// (`…/.frizz/worktrees/probe`), by the right-to-left overflow idiom around an isolated left-to-right run
-// (so the slashes stay where they are), and the kind is its own run that never shrinks.
-function TerminalSubtitle({ cwd, checkout, homeDir }: { cwd: string; checkout: WorkCheckout | null | undefined; homeDir: string | undefined }): ReactNode {
+/** A folder split for the header: everything up to the last separator (the part that may be cut) and the
+ *  last segment with its separator (the part that names the place, and stays). */
+export function splitFolder(path: string): { head: string; tail: string } {
+  const trimmed = path.length > 1 ? path.replace(/[\\/]+$/, "") : path
+  const at = Math.max(trimmed.lastIndexOf("/"), trimmed.lastIndexOf("\\"))
+  // A head of a character or two (`~`) is shorter than the ellipsis it would shrink to, so it is kept whole.
+  return at <= 2 ? { head: "", tail: trimmed } : { head: trimmed.slice(0, at), tail: trimmed.slice(at) }
+}
+
+// THE SAME LINE, laid out so a narrow drawer loses the right part of it — and never the part that says where.
+// A path truncated at its END cut away both the folder that names the worktree and the ` · worktree` after it
+// (`/tmp/tu-v-repo/.frizz/worktr…`). So the path truncates at its START, by the right-to-left overflow idiom
+// around an isolated left-to-right run (so the slashes stay where they are).
+//
+// AND ITS LAST SEGMENT IS KEPT, with the kind: the head shrinks to its ellipsis and no further, and the tail
+// (`/probe`, 16ch at most, ellipsized past that) and ` · worktree` never shrink. With the head alone truncating,
+// a narrow header whose second line also carries `waiting for input · 4m` shrank the WHOLE path to 0px and
+// left ` · worktree` orphaned, clipped mid-word at 390px (2026-09-30). The head's `w-0` makes it count
+// nothing toward this line's minimum (bar its 1em ellipsis), so the minimum SheetHeader keeps
+// (its `subtitleKeeps`) is exactly `…/probe · worktree`; `grow` and `max-w-max` give the head back up to its
+// whole width whenever the line has room.
+export function TerminalSubtitle({ cwd, checkout, homeDir }: { cwd: string; checkout: WorkCheckout | null | undefined; homeDir: string | undefined }): ReactNode {
+  const { head, tail } = splitFolder(abbreviateHome(cwd, homeDir))
   return (
     <span data-terminal-subtitle className="flex min-w-0" title={terminalSubtitle(cwd, checkout, homeDir)}>
-      <span dir="rtl" className="min-w-0 truncate text-left"><bdi>{abbreviateHome(cwd, homeDir)}</bdi></span>
-      {checkout?.kind === "worktree" ? <span className="shrink-0 whitespace-pre"> · worktree</span> : null}
+      {head ? <span data-terminal-subtitle-head dir="rtl" className="w-0 min-w-[1em] max-w-max grow truncate text-left"><bdi>{head}</bdi></span> : null}
+      <span data-terminal-subtitle-tail className="max-w-[16ch] shrink-0 truncate">{tail}</span>
+      {checkout?.kind === "worktree" ? <span data-terminal-subtitle-kind className="shrink-0 whitespace-pre"> · worktree</span> : null}
     </span>
   )
 }
@@ -153,34 +171,14 @@ function HumanTerminalSheet({ id, slug, terminalId, depth, widthDepth }: { id: n
     <Sheet id={id} depth={depth} widthDepth={widthDepth}>
       {(close) => (
         <>
-          {/* A size container, so the header's secondary actions fold to glyphs when the drawer is narrow. */}
-          <div className="@container shrink-0">
-            <SheetHeader
-              title={terminal?.command ?? "Terminal"}
-              // A command is set in mono wherever it appears (ThreadTerminals ProcessRow): the row you
-              // click and the drawer it opens name one thing in one typeface.
-              titleMono={Boolean(terminal)}
-              subtitle={terminal?.cwd ? <TerminalSubtitle cwd={terminal.cwd} checkout={terminal.checkout} homeDir={board?.homeDir} /> : thread ? displayTitle(thread) : undefined}
-              icon={<SquareTerminal aria-hidden size={14} className="shrink-0 text-muted-60" data-terminal-owner="human" />}
-              meta={terminal ? <TerminalStateMeta terminal={terminal} /> : undefined}
-              actions={terminal ? (
-                <div className="flex shrink-0 items-center gap-1.5">
-                  {terminal.state === "running" ? (
-                    <button type="button" data-terminal-stop disabled={pending !== null} onClick={() => act("stop", close)} className={stopClass}>
-                      {pending === "stop" ? "Stopping…" : "Stop"}
-                    </button>
-                  ) : null}
-                  <button type="button" data-terminal-restart disabled={pending !== null} onClick={() => act("restart", close)} title="Restart" aria-label="Restart" className={actionClass}>
-                    <NarrowGlyph icon={RotateCcw} text={pending === "restart" ? "Restarting…" : "Restart"} />
-                  </button>
-                  <button type="button" data-terminal-remove disabled={pending !== null} onClick={() => act("remove", close)} title="Remove" aria-label="Remove" className={actionClass}>
-                    <NarrowGlyph icon={Trash2} text={pending === "remove" ? "Removing…" : "Remove"} />
-                  </button>
-                </div>
-              ) : undefined}
-              onClose={close}
-            />
-          </div>
+          <HumanTerminalHeader
+            terminal={terminal}
+            fallbackSubtitle={thread ? displayTitle(thread) : undefined}
+            homeDir={board?.homeDir}
+            pending={pending}
+            onAct={(kind) => act(kind, close)}
+            onClose={close}
+          />
           {terminal ? (
             <>
               <Suspense fallback={<div className="flex-1 bg-bg" />}>
@@ -202,6 +200,50 @@ function HumanTerminalSheet({ id, slug, terminalId, depth, widthDepth }: { id: n
         </>
       )}
     </Sheet>
+  )
+}
+
+/** YOUR TERMINAL'S DRAWER HEADER — the command, where it runs, how it stands, and its actions — split out so
+ *  the terminals fixture draws the very header the drawer does (terminals-unified-fixture `?mode=header`). */
+export function HumanTerminalHeader({ terminal, fallbackSubtitle, homeDir, pending, onAct, onClose }: {
+  terminal: ThreadTerminal | undefined
+  /** The thread's title, for a terminal with no folder (or none yet). */
+  fallbackSubtitle?: string
+  homeDir: string | undefined
+  pending: "stop" | "restart" | "remove" | null
+  onAct: (kind: "stop" | "restart" | "remove") => void
+  onClose: () => void
+}) {
+  // A size container, so the header's secondary actions fold to glyphs when the drawer is narrow.
+  return (
+    <div className="@container shrink-0">
+      <SheetHeader
+        title={terminal?.command ?? "Terminal"}
+        // A command is set in mono wherever it appears (ThreadTerminals ProcessRow): the row you
+        // click and the drawer it opens name one thing in one typeface.
+        titleMono={Boolean(terminal)}
+        subtitle={terminal?.cwd ? <TerminalSubtitle cwd={terminal.cwd} checkout={terminal.checkout} homeDir={homeDir} /> : fallbackSubtitle}
+        subtitleKeeps={Boolean(terminal?.cwd)}
+        icon={<SquareTerminal aria-hidden size={14} className="shrink-0 text-muted-60" data-terminal-owner="human" />}
+        meta={terminal ? <TerminalStateMeta terminal={terminal} /> : undefined}
+        actions={terminal ? (
+          <div className="flex shrink-0 items-center gap-1.5">
+            {terminal.state === "running" ? (
+              <button type="button" data-terminal-stop disabled={pending !== null} onClick={() => onAct("stop")} className={stopClass}>
+                {pending === "stop" ? "Stopping…" : "Stop"}
+              </button>
+            ) : null}
+            <button type="button" data-terminal-restart disabled={pending !== null} onClick={() => onAct("restart")} title="Restart" aria-label="Restart" className={actionClass}>
+              <NarrowGlyph icon={RotateCcw} text={pending === "restart" ? "Restarting…" : "Restart"} />
+            </button>
+            <button type="button" data-terminal-remove disabled={pending !== null} onClick={() => onAct("remove")} title="Remove" aria-label="Remove" className={actionClass}>
+              <NarrowGlyph icon={Trash2} text={pending === "remove" ? "Removing…" : "Remove"} />
+            </button>
+          </div>
+        ) : undefined}
+        onClose={onClose}
+      />
+    </div>
   )
 }
 
@@ -312,6 +354,7 @@ function AgentTerminalSheet({ id, slug, shellId, label, startedAt, depth, widthD
               // A Codex exec with no description is labelled by its command, and its row sets it in mono.
               titleMono={row?.command !== undefined && row.command === row.label}
               subtitle={cwd ? <TerminalSubtitle cwd={cwd} checkout={checkout} homeDir={board?.homeDir} /> : undefined}
+              subtitleKeeps
               // 15px against your terminal's 14: the same weight match as the strip's owner glyphs (ThreadTerminals OWNER_ICON).
               icon={<Bot aria-hidden size={15} className="shrink-0 text-muted-60" data-terminal-owner="agent" />}
               meta={stateWord ? (

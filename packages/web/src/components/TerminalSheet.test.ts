@@ -2,7 +2,7 @@ import assert from "node:assert/strict"
 import test from "node:test"
 import { createElement } from "react"
 import { renderToStaticMarkup } from "react-dom/server"
-import { StateReading, agentTerminalEmpty } from "./TerminalSheet.tsx"
+import { StateReading, TerminalSubtitle, agentTerminalEmpty, splitFolder } from "./TerminalSheet.tsx"
 import { SheetHeader } from "./ui/SheetHeader.tsx"
 
 // WHAT AN AGENT TERMINAL'S DRAWER SAYS IN PLACE OF ITS LOG. Each of these was a wrong sentence once.
@@ -85,7 +85,37 @@ test("the header's title and reading share a baseline, and a narrow header puts 
   const title = /<span class="([^"]*)" title="Test watch/.exec(html)?.[1]?.split(" ") ?? []
   for (const cls of ["grow", "basis-0", "max-w-max", "truncate", "@max-[28rem]:basis-full", "@max-[28rem]:max-w-full"]) assert.ok(title.includes(cls), `title: ${cls}`)
   const meta = /<span data-sheet-meta="true" class="([^"]*)"/.exec(html)?.[1]?.split(" ") ?? []
-  for (const cls of ["shrink-0", "max-w-[70%]", "@max-[28rem]:order-2"]) assert.ok(meta.includes(cls), `meta: ${cls}`)
+  for (const cls of ["shrink-0", "max-w-[70%]"]) assert.ok(meta.includes(cls), `meta: ${cls}`)
   const sub = /<span class="([^"]*)">~\/repo/.exec(html)?.[1]?.split(" ") ?? []
-  for (const cls of ["basis-full", "@max-[28rem]:order-3", "@max-[28rem]:basis-0", "@max-[28rem]:grow"]) assert.ok(sub.includes(cls), `subtitle: ${cls}`)
+  for (const cls of ["basis-full", "@max-[28rem]:basis-0", "@max-[28rem]:grow"]) assert.ok(sub.includes(cls), `subtitle: ${cls}`)
+})
+
+// THE FOLDER OUTRANKS THE READING ON A NARROW HEADER'S SECOND LINE (2026-09-30: at 390px a terminal waiting for
+// input drew `waiting for input` and an orphaned `· workt`, its path shrunk to 0px). Under 28rem the reading
+// and the folder share their own non-wrapping row; the reading SHRINKS (its age wraps off whole, its state
+// word ellipsizes), and the folder keeps at least `…/probe · worktree` — its min-content, which is what the
+// path's head is built to contribute nothing to but its ellipsis.
+test("a narrow header's second line keeps the folder's last segment and kind, and the reading gives way to it", () => {
+  const subtitle = createElement(TerminalSubtitle, { cwd: "/tmp/tu-r3-v-repo/.frizz/worktrees/probe", checkout: { dir: "/tmp/tu-r3-v-repo/.frizz/worktrees/probe", kind: "worktree" }, homeDir: "/home/u" })
+  const html = renderToStaticMarkup(createElement(SheetHeader, { title: 'read -p "name? " x', titleMono: true, subtitle, subtitleKeeps: true, meta: createElement(StateReading, { state: "waiting for input", age: "4m", tone: "attention", stopShown: true, attr: {} }), onClose: () => {} }))
+  const classOf = (re: RegExp) => re.exec(html)?.[1]?.split(" ") ?? []
+  const line = classOf(/<span data-sheet-second-line="true" class="([^"]*)"/)
+  for (const cls of ["contents", "@max-[28rem]:flex", "@max-[28rem]:basis-full", "@max-[28rem]:min-w-0"]) assert.ok(line.includes(cls), `second line: ${cls}`)
+  assert.ok(!line.some((cls) => cls.includes("flex-wrap")), "the second line never wraps the folder away")
+  const meta = classOf(/<span data-sheet-meta="true" class="([^"]*)"/)
+  for (const cls of ["@max-[28rem]:shrink", "@max-[28rem]:max-w-none", "min-w-0"]) assert.ok(meta.includes(cls), `meta gives way: ${cls}`)
+  const sub = classOf(/<span class="([^"]*)"><span data-terminal-subtitle/)
+  assert.ok(sub.includes("@max-[28rem]:min-w-min"), "the folder keeps its minimum")
+  // The path splits into a head that shrinks to its ellipsis and a tail that never shrinks, then the kind.
+  const head = classOf(/<span data-terminal-subtitle-head="true" dir="rtl" class="([^"]*)"/)
+  for (const cls of ["w-0", "min-w-[1em]", "max-w-max", "grow", "truncate"]) assert.ok(head.includes(cls), `head: ${cls}`)
+  const tail = classOf(/<span data-terminal-subtitle-tail="true" class="([^"]*)"/)
+  for (const cls of ["shrink-0", "truncate", "max-w-[16ch]"]) assert.ok(tail.includes(cls), `tail: ${cls}`)
+  assert.match(html, /<bdi>\/tmp\/tu-r3-v-repo\/\.frizz\/worktrees<\/bdi><\/span><span data-terminal-subtitle-tail="true" class="[^"]*">\/probe<\/span><span data-terminal-subtitle-kind="true" class="shrink-0 whitespace-pre"> · worktree<\/span>/)
+  // A plain-string subtitle (a thread title) keeps no minimum: it is not a place.
+  const plain = renderToStaticMarkup(createElement(SheetHeader, { title: "x", subtitle: "Fix the login flow", meta: createElement("span", null, "exit 2"), onClose: () => {} }))
+  assert.doesNotMatch(plain, /min-w-min/)
+  assert.deepEqual(splitFolder("~/frizz/.frizz/worktrees/probe/"), { head: "~/frizz/.frizz/worktrees", tail: "/probe" })
+  assert.deepEqual(splitFolder("~/probe"), { head: "", tail: "~/probe" }, "a head shorter than its ellipsis stays whole")
+  assert.deepEqual(splitFolder("C:\\work\\repo"), { head: "C:\\work", tail: "\\repo" })
 })

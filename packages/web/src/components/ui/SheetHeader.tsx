@@ -19,6 +19,7 @@ export function SheetHeader({
   onClose,
   initialFocus,
   titleMono,
+  subtitleKeeps,
 }: {
   title: string
   /** A string, or a node for a subtitle that must truncate somewhere other than its end (a path whose
@@ -34,6 +35,9 @@ export function SheetHeader({
    *  and at the regular weight the strip and the rail set a command in — mono at the sans title's
    *  `font-medium` reads visibly bolder (the rail's finding, AwaitingBackgroundCard WaitRow `mono`). */
   titleMono?: boolean
+  /** The subtitle node declares a part it must KEEP (its min-content — TerminalSubtitle's `…/probe ·
+   *  worktree`): under 28rem, where the meta shares its line, the meta gives way before that part does. */
+  subtitleKeeps?: boolean
 }): ReactElement {
   // THE TEXT BLOCK IS ONE WRAPPING LINE OF THREE PIECES — title, meta, subtitle — so a narrow drawer can move
   // the meta down beside the subtitle rather than squeeze the title to nothing. Wide: title and meta share
@@ -43,6 +47,14 @@ export function SheetHeader({
   // nothing here changes): the title takes the first line alone, and the meta leads the second. At 390px the
   // one-line header drew `read…` beside `waiting for input…` and `Test …` beside `running · 34m left · 2…`
   // (2026-09-30): neither what the drawer is nor a whole reading.
+  //
+  // THE SECOND LINE, UNDER 28rem, IS ITS OWN ROW that never wraps: the meta and the subtitle in one flex line
+  // (a `contents` box wide, so nothing changes there). It was the same wrapping line as the title, the meta
+  // `shrink-0` up to 70% and the subtitle sized from zero — so `waiting for input · 4m` took what it wanted
+  // and the folder's path shrank to 0px, leaving an orphaned ` · worktree`, cut mid-word (`· workt`) at 390px
+  // (2026-09-30). Now the meta keeps its natural width only while the subtitle's kept part fits beside it
+  // (`subtitleKeeps`); past that it is the meta that gives way — its age wraps off whole, then its state
+  // word ellipsizes (StateReading) — and the subtitle grows into whatever is left.
   //
   // BASELINES, not centres: the meta is a smaller run beside the title, and centring two sizes on one flex
   // line put the agent drawer's reading 1.06px under the title's baseline (sans 13px title) and your
@@ -58,10 +70,14 @@ export function SheetHeader({
         >
           {title}
         </span>
-        {meta && <span data-sheet-meta className="flex min-w-0 max-w-[70%] shrink-0 @max-[28rem]:order-2">{meta}</span>}
-        {subtitle && (
-          <span className="min-w-0 basis-full truncate text-[10px] text-muted-60 @max-[28rem]:order-3 @max-[28rem]:grow @max-[28rem]:basis-0">
-            {subtitle}
+        {(meta || subtitle) && (
+          <span data-sheet-second-line className="contents @max-[28rem]:flex @max-[28rem]:min-w-0 @max-[28rem]:basis-full @max-[28rem]:items-baseline @max-[28rem]:gap-x-2">
+            {meta && <span data-sheet-meta className="flex min-w-0 max-w-[70%] shrink-0 @max-[28rem]:max-w-none @max-[28rem]:shrink">{meta}</span>}
+            {subtitle && (
+              <span className={`min-w-0 basis-full truncate text-[10px] text-muted-60 @max-[28rem]:grow @max-[28rem]:basis-0 ${subtitleKeeps ? "@max-[28rem]:min-w-min" : ""}`}>
+                {subtitle}
+              </span>
+            )}
           </span>
         )}
       </div>

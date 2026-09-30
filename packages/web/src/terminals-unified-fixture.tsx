@@ -6,7 +6,7 @@ import { BgShellRow, TermWaitRow, WaitGrid } from "./components/AwaitingBackgrou
 import { RAIL_WIDTH } from "./components/FocusRail.tsx"
 import { humanProcess, threadProcesses } from "./lib/threadProcesses.ts"
 import { ThreadCheckoutToken } from "./components/ThreadCheckoutToken.tsx"
-import { TerminalSheet } from "./components/TerminalSheet.tsx"
+import { HumanTerminalHeader, TerminalSheet } from "./components/TerminalSheet.tsx"
 import { TooltipProvider } from "./components/Tooltip.tsx"
 import { Toaster } from "./components/Toaster.tsx"
 import { initFont } from "./lib/font.ts"
@@ -22,7 +22,8 @@ import "./styles.css"
 // as a queue card does (the live rows only). A row names its folder only when it is not where the header
 // token says the agent is (`?here=`); a row the server could not place names nothing.
 // `?mode=codex` / `?mode=gone` show the agent drawer's two empty states, `?mode=agent` a streaming one with a
-// long title and a worktree folder (for the narrow header). `data-font="sans"` is on the page, as in the product. No server: every RPC
+// long title and a worktree folder (for the narrow header), `?mode=header` your terminal's drawer header while
+// it waits for input in a worktree (the folder must survive beside `waiting for input · 4m` at 390px). `data-font="sans"` is on the page, as in the product. No server: every RPC
 // is answered here, and nothing is started or stopped.
 const params = new URLSearchParams(location.search)
 const mode = params.get("mode") ?? "strip"
@@ -131,6 +132,17 @@ createRoot(document.getElementById("root")!).render(
               <span className="flex items-center">Rail bands<ThreadTerminalMark thread={{ terminals: [terminals[1]!], bgShells: [bgShells[0]!] }} /></span>
               <span className="flex items-center">Dev server<ThreadTerminalMark thread={{ terminals: [], bgShells: [bgShells[0]!] }} /></span>
             </div>
+          </div>
+        )}
+        {mode === "header" && (
+          <div data-fixture-header className="fixed inset-x-0 top-0 bg-panel">
+            <HumanTerminalHeader
+              terminal={{ id: "t-read", command: 'read -p "name? " x; echo "got $x"; sleep 600', cwd: "/tmp/tu-r3-v-repo/.frizz/worktrees/probe", checkout: { dir: "/tmp/tu-r3-v-repo/.frizz/worktrees/probe", kind: "worktree" }, state: "running", awaitingInput: true, awaitingSince: ago(4), runId: 1, startedAt: ago(4) }}
+              homeDir="/home/u"
+              pending={null}
+              onAct={() => {}}
+              onClose={() => {}}
+            />
           </div>
         )}
         {(mode === "codex" || mode === "gone" || mode === "agent") && (

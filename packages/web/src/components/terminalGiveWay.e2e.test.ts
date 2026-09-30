@@ -106,6 +106,37 @@ test("a terminal row's label outranks its folder hint, which shows whole or not 
       // At 1400 `running` stands before the age; narrower, beside the Stop, it goes with its `·`.
       if (width === 1400) assert.ok(header.parts.some((p) => p.shown && p.dotGap !== null), `${width}px: a separator was measured`)
     }
+    // YOUR terminal's drawer header, waiting for input in a worktree: the folder's last segment and its kind stay
+    // whole at every width (at 390px they were an orphaned, clipped `· workt`), the path's head shrinks to its
+    // ellipsis and no further, and the reading's parts are whole or gone.
+    for (const width of [1400, 420, 390]) {
+      await page.setViewport({ width, height: 400, deviceScaleFactor: 1 })
+      await page.goto(`${baseUrl}/terminals-unified-fixture.html?mode=header`, { waitUntil: "networkidle0" })
+      await page.waitForSelector("[data-fixture-header] [data-terminal-subtitle-tail]")
+      await page.evaluate(() => document.fonts.ready)
+      const hdr = await page.$eval("[data-fixture-header] header", (h) => {
+        const box = (sel: string) => h.querySelector(sel)?.getBoundingClientRect()
+        const item = h.querySelector("[data-terminal-subtitle]")!.parentElement!.getBoundingClientRect()
+        const tail = h.querySelector("[data-terminal-subtitle-tail]") as HTMLElement
+        const reading = h.querySelector("[data-sheet-meta]")!.firstElementChild!.getBoundingClientRect()
+        const parts = [...h.querySelectorAll("[data-reading-part]")].map((p) => {
+          const b = p.getBoundingClientRect()
+          return { whole: b.right <= reading.right + 0.5, shown: b.top < reading.bottom - 1 }
+        })
+        return {
+          item: [item.left, item.right],
+          head: box("[data-terminal-subtitle-head]")?.width ?? 0,
+          tail: [tail.getBoundingClientRect().left, tail.getBoundingClientRect().right, tail.scrollWidth <= tail.clientWidth + 0.5],
+          kind: [box("[data-terminal-subtitle-kind]")!.left, box("[data-terminal-subtitle-kind]")!.right],
+          parts,
+        }
+      })
+      const [l, r] = hdr.item
+      assert.ok((hdr.tail[0] as number) >= l - 0.5 && (hdr.tail[1] as number) <= r + 0.5 && hdr.tail[2], `${width}px: the folder's last segment is whole (${JSON.stringify(hdr)})`)
+      assert.ok(hdr.kind[0]! >= l - 0.5 && hdr.kind[1]! <= r + 0.5, `${width}px: \` · worktree\` is whole (${JSON.stringify(hdr)})`)
+      assert.ok(hdr.head >= 8, `${width}px: the path's head keeps room for its ellipsis (${hdr.head}px)`)
+      for (const p of hdr.parts) assert.ok(!p.shown || p.whole, `${width}px: a reading part is cut`)
+    }
     assert.deepEqual(errors, [])
   } finally {
     await browser.close()
