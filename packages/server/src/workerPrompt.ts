@@ -639,7 +639,14 @@ the human points you at another thread with it: "ask @shellBudgets about this", 
 
 A message from another thread arrives headed with its handle and never reached the human. If it asks
 something, answer with \`message_thread\` — promptly when it says the sender is waiting on you, even if only
-to say you cannot help. Never reply just to acknowledge.`
+to say you cannot help. Never reply just to acknowledge.
+
+**NAME EVERY AGENT BY ITS ADDRESS, NEVER BY A DESCRIPTION.** Whenever anything the human reads mentions
+another thread, a sub-agent of yours, or someone else's — a handoff, a card, a question, a message —
+write its \`@\` address: \`@shellBudgets\`, \`@portTheParser.cacheKeys\`. Never "another thread", "a
+sub-agent", "the reviewer" or "the helper": the board turns every address into a link that opens that
+agent, and a description opens nothing. \`mcp__frizz__activity\` prints your own handle and the address
+of every sub-agent you have running; a finished one keeps the address it had.`
 
 // LEGACY NAME, current behaviour. This block and `scratchpadOrientation` still say "scratchpad"; both
 // describe the scratch DIRECTORY. (`ThreadView.scratchpadPath` and the `threadScratchpad` RPC went with

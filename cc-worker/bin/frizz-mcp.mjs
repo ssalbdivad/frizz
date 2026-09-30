@@ -1084,6 +1084,11 @@ async function activity() {
   const items = Array.isArray(result?.activity) ? result.activity : []
   const questions = Array.isArray(result?.questions) ? result.questions : []
   const links = Array.isArray(result?.links) ? result.links : []
+  // WHO THIS THREAD IS, first: the handle other threads and the human call it, and the head of every
+  // sub-agent address below — the names to write in prose, where the board turns each into a link.
+  const selfLine = typeof result?.handle === "string" && result.handle
+    ? `This thread is @${result.handle}. Name it, other threads and every sub-agent by their @ address in anything the human reads — the board links each one.\n\n`
+    : ""
   const linksBlock = links.length === 0 ? "" : "\n\nSaved links and files (not running work; remove with unlink):\n" +
     links.map((link) => `  ${link.id}  ${link.kind}: ${link.label}\n    ${link.target}`).join("\n")
   // THE QUESTIONS ARE NOT PART OF THE FENCE, so they are printed in their own section and never fed to
@@ -1116,13 +1121,13 @@ async function activity() {
   const askedBlock = owedBlock + passedBlock
   if (!items.length) {
     if (owed.length > 0) {
-      return (
+      return selfLine + (
         "Nothing is RUNNING on this thread — no background shells, no sub-agents, no armed timers, no " +
         "registered PRs. So an ```awaiting fence would have nothing to name, and a fence naming nothing " +
         "is not a park." + askedBlock + linksBlock
       )
     }
-    return (
+    return selfLine + (
       "Nothing is running on this thread — no background shells, no sub-agents, no armed timers, no " +
       "registered PRs, and no question still owed an answer.\n\nSo there is nothing to wait on: an ```awaiting fence " +
       "would have nothing to name, and a fence naming nothing is not a park. End with ```done, or " +
@@ -1138,7 +1143,7 @@ async function activity() {
     // The `wch_…` id of the watch holding this item, where one is armed — this readout exists to hand a
     // worker back the ids it lost, and that includes the one `unwatch` takes.
     const held = i.watchId ? `  [watched as ${i.watchId}]` : ""
-    return `  ${i.kind}: ${i.id}${when}${held}${budget}\n    ${i.label}`
+    return `  ${i.kind}: ${i.id}${when}${held}${budget}\n    ${i.address ? `@${i.address} — ` : ""}${i.label}`
   })
   // A READY-TO-PASTE FENCE, not a description of one. The frontmatter is YAML since 2026-08-24 and its
   // keys are PLURAL sequences, so an id printed on its own line is no longer something a worker can copy
@@ -1149,7 +1154,7 @@ async function activity() {
   const block = Object.entries({ shells: byKind.shell, agents: byKind.agent, timers: byKind.timer, prs: byKind.pr, issues: byKind.issue })
     .filter(([, ids]) => ids.length > 0)
     .map(([key, ids]) => `  ${key}: [${ids.join(", ")}]`)
-  return (
+  return selfLine + (
     `${items.length} thing${items.length === 1 ? "" : "s"} running on this thread:\n\n${lines.join("\n")}\n\n` +
     "Name the ones you are ACTUALLY waiting on in your ```awaiting fence. The frontmatter is YAML — one " +
     "PLURAL key per kind, taking a list — plus a required `for:` duration, and your handoff prose BELOW " +

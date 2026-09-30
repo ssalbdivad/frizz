@@ -3068,9 +3068,15 @@ export function createRouter(ctx: AppContext) {
           const budgetEndsAt = budget ? { budgetEndsAt: new Date(budget.deadlineMs).toISOString() } : {}
           if (id) activity.push({ kind: "shell", id, label: sh.label, since: sh.startedAt, ...watchFor("shell", [sh.taskId, sh.id, sh.label]), ...budgetEndsAt })
         }
+        // Each sub-agent with its `thread.subAgent` address, and the thread's own handle on the result, so a
+        // worker writes the names the board links (maintainer 2026-09-30: agents refer to each other "by the
+        // fully qualified name so you can easily click to view that agent", never as "another agent").
+        const directory = subAgentDirectoryOf(input.slug)
+        const addressOf = new Map(directory.agents.flatMap((row) => (row.address ? [[row.id, row.address] as const] : [])))
         for (const a of tele?.subAgents ?? []) {
           if (a.state !== "running") continue
-          if (a.id) activity.push({ kind: "agent", id: a.taskId ?? a.id, label: a.label, since: a.startedAt, ...watchFor("agent", [a.taskId, a.id, a.label]) })
+          const address = a.id ? addressOf.get(a.id) : undefined
+          if (a.id) activity.push({ kind: "agent", id: a.taskId ?? a.id, label: a.label, since: a.startedAt, ...(address ? { address } : {}), ...watchFor("agent", [a.taskId, a.id, a.label]) })
         }
         for (const t of ctx.storage.listThreadTimers(input.slug, { armedOnly: true })) {
           activity.push({
@@ -3088,7 +3094,7 @@ export function createRouter(ctx: AppContext) {
         // The WATCHES are already readable: each armed one rides its live item as `watchId`, and the
         // scheduler settles a watch the tick its target stops being live, so an armed row always has an
         // item to ride. The QUESTIONS had nowhere at all — hence their own list.
-        return { activity, questions: openQuestionViews(input.slug), links: ctx.storage.listThreadLinks(input.slug).map(threadLinkView) }
+        return { ...(directory.threadHandle ? { handle: directory.threadHandle } : {}), activity, questions: openQuestionViews(input.slug), links: ctx.storage.listThreadLinks(input.slug).map(threadLinkView) }
       },
     }),
 

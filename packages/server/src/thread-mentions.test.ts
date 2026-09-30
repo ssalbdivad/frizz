@@ -251,3 +251,16 @@ test("messageThread refuses a sub-agent address and names the thread that can re
     assert.equal(createWakeDeliveryStore(h.storage.scope).list().length, 0, "nothing was queued anywhere")
   } finally { h.close() }
 })
+
+test("activity names the thread by its handle and each running sub-agent by its address", async () => {
+  const h = harness({
+    get: (slug) => (slug === "pp" ? { subAgents: [{ id: "toolu_keys", taskId: "aKeys", label: "Cache keys", state: "running", startedAt: "2026-09-30T02:00:00.000Z" }] } as unknown as ReturnType<Tailer["get"]> : undefined),
+    subAgentDirectory: (slug) => (slug === "pp" ? [{ id: "toolu_keys", label: "Cache keys", depth: 1, state: "running" }] : []),
+  })
+  try {
+    h.storage.upsertSession(row("pp", "Port the parser"))
+    const read = await h.router.listOwnThreadActivity.handler({ input: { slug: "pp" } })
+    assert.equal(read.handle, "portTheParser")
+    assert.deepEqual(read.activity.map((i) => [i.kind, i.id, i.address]), [["agent", "aKeys", "portTheParser.cacheKeys"]])
+  } finally { h.close() }
+})

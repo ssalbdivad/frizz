@@ -4216,6 +4216,9 @@ export const ThreadActivityItem = z.object({
    *  the alternative and it would list the same shell twice, which is exactly the duplication that put
    *  two sub-agents under a "Background shells" heading. */
   watchId: z.string().optional(),
+  /** A SUB-AGENT's `thread.subAgent` address (thread-handle.ts), so the worker names it in its prose the
+   *  way the board shows it — as a link the human can click — rather than as "a sub-agent". */
+  address: z.string().optional(),
   /** A SHELL's runtime-budget deadline (ISO8601) — when frizz warns about it and, unextended, stops it
    *  ten minutes later. Its own field rather than `until`, which reads as "fires at" everywhere else. */
   budgetEndsAt: z.string().optional(),
@@ -4228,6 +4231,8 @@ export const ListOwnThreadActivityInput = z.object({
 export type ListOwnThreadActivityInput = z.infer<typeof ListOwnThreadActivityInput>
 
 export const OwnThreadActivityResult = z.object({
+  /** This thread's own handle — the head of every sub-agent address above, and what other threads call it. */
+  handle: z.string().optional(),
   activity: z.array(ThreadActivityItem),
   links: z.array(ThreadLinkView).optional(),
   /** Every question still owed an answer. NOT a `ThreadActivityItem` and deliberately its own list: a
