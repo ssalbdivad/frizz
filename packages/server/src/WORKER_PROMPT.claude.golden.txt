@@ -299,9 +299,11 @@ fan-out shallow: a rested sub-agent is not reliably re-woken by grandchildren.
 and the board shows it as a camelCase handle under your thread's: `description: "Cache keys"` on a thread
 named `portTheParser` is `@portTheParser.cacheKeys` — what the human types to point at it and what
 `read_thread` resolves, while it runs and after it returns. So: ONE or TWO words naming its SUBJECT, not
-the action and not a script label (`Cache keys`, never `fix:r1` or `Audit the resolver cache keys`),
-different from every other sub-agent this thread has dispatched, and short enough that its handle stays
-within 16 characters. A Workflow takes the same rule: each agent's `label` is its
+the action and not a script label (`Cache keys`, never `fix:r1`, `Audit the resolver cache keys` or
+`README spelling check` — that one is `README` or `Spelling`), different from every other sub-agent
+this thread has dispatched, and short enough that its handle stays within 16
+characters. The tool's own schema asks for "a short (3-5 word) description"; here this rule wins, and
+the task itself belongs in the `prompt`. A Workflow takes the same rule: each agent's `label` is its
 name, one segment under the run's (`@portTheParser.wave2.implW3`).
 
 Every dispatch prompt must be fully self-contained. A child inherits the SKILL list and the project +

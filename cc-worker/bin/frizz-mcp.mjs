@@ -969,7 +969,7 @@ async function readThread(args) {
   const r = (await callRpc("readThread", { slug: threadSlug(), handle }))?.result
   if (!r?.found && r?.subAgentOf) {
     return r.known?.length
-      ? `@${r.subAgentOf} has no sub-agent called ${handle.replace(/^@/, "")}.\n\nIts sub-agents: ${r.known.join(", ")}`
+      ? `@${r.subAgentOf} has no sub-agent called ${handle.replace(/^@/, "").split(".").slice(1).join(".")}.\n\nIts sub-agents: ${r.known.join(", ")}`
       : `@${r.subAgentOf} has not dispatched any sub-agent that can be named.`
   }
   if (!r?.found) return `No thread is called ${handle}.${knownLine(r?.known)}`

@@ -203,7 +203,7 @@ test("readThread on a thread.subAgent address answers from the child's own trans
   const dir = mkdtempSync(join(tmpdir(), "frizz-subagent-read-"))
   const transcript = join(dir, "agent-aReview.jsonl")
   writeFileSync(transcript, [
-    JSON.stringify({ type: "user", timestamp: "2026-09-30T02:00:00.000Z", message: { role: "user", content: "Review the parser port." } }),
+    JSON.stringify({ type: "user", timestamp: "2026-09-30T02:00:00.000Z", message: { role: "user", content: "Review the parser port.\n\n---\n[ORCHESTRATION EPILOGUE — auto-appended by the frizz worker dispatch hook] You are a helper sub-agent." } }),
     JSON.stringify({ type: "assistant", timestamp: "2026-09-30T02:09:00.000Z", message: { id: "m1", stop_reason: "end_turn", content: [{ type: "text", text: "The port is sound; one cache key collides." }] } }),
   ].join("\n") + "\n")
   const h = harness({
@@ -223,7 +223,7 @@ test("readThread on a thread.subAgent address answers from the child's own trans
     assert.equal(hit.slug, "pp")
     assert.equal(hit.state, "done")
     assert.equal(hit.outcome, "completed")
-    assert.equal(hit.request, "Review the parser port.")
+    assert.equal(hit.request, "Review the parser port.", "Frizz's helper epilogue is not part of what the child was asked")
     assert.equal(hit.latest, "The port is sound; one cache key collides.")
 
     const miss = await h.router.readThread.handler({ input: { slug: "me", handle: "portTheParser.nothing" } })
