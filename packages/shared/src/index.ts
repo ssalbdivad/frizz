@@ -1791,9 +1791,10 @@ export function parseTimerWake(text: string): TimerWake | null {
  *  gone, it signed off a second time: "I started [Sub-agent addresses](…)" over a whole Done card
  *  reading "Nothing new landed here" (maintainer: "very confusing and doesn't explicitly just link and
  *  mention the spinoff by name"). The chat's spinoff card already says which thread it became, so the
- *  worker now writes nothing about it, and a request that found the worker at rest is a SIDE TURN: Frizz
- *  keeps the thread's previous handoff, state and queue place as if it never happened (server
- *  spinoff-side-turn.ts). */
+ *  worker now announces nothing, and a request that found the worker at rest is a SIDE TURN: Frizz keeps
+ *  the thread's previous handoff, state and queue place as if it never happened (server
+ *  spinoff-side-turn.ts). It still ends that turn with two words rather than none: asked for silence, a
+ *  worker complied and Claude Code re-prompted it for visible output — an extra model call per spinoff. */
 export function spinoffRequestMessage(input: { id: string; instructions: string }): string {
   return [
     `<spinoff-request id="${input.id}">`,
@@ -1805,7 +1806,7 @@ export function spinoffRequestMessage(input: { id: string; instructions: string 
     "Do this now, before anything else:",
     "1. Gather what the new thread needs to start cold — the relevant facts, decisions, file paths, commands, errors and open questions from this conversation, and whatever in the code is worth pointing at. Unless the instructions point elsewhere, they are about the most recent part of the conversation. Brief it; do not do its work.",
     `2. Call \`mcp__frizz__spawn_thread\` with \`spinoff: "${input.id}"\`, a self-contained \`prompt\` (the new thread sees none of this conversation; Frizz adds the human's instructions and a link back here itself), and a \`model\` and \`effort\` fit for the task. This is the human's explicit request, so the tool's last-resort caution does not apply.`,
-    "3. Write nothing about the spinoff afterwards: the human's chat already shows it, linked to the new thread. If you were in the middle of work when this arrived, carry on with it. If you had come to rest, end your turn right after the tool call without another word — this is a side request, and Frizz keeps your previous handoff and this thread's state exactly as they were, so do not sign off again. Do not wait on the new thread.",
+    "3. Do not announce the new thread, link it or summarize your brief: the human's chat already shows the spinoff, linked to it. If you were in the middle of work when this arrived, carry on with it. If you had come to rest, end your turn right after the tool call with the two words `Spun off.` and nothing else — this is a side request, and Frizz keeps your previous handoff and this thread's state exactly as they were, so do not sign off again. Do not wait on the new thread.",
     "</spinoff-request>",
   ].join("\n")
 }

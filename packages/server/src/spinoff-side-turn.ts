@@ -107,6 +107,10 @@ export type SideTurnStep =
   | { kind: "result"; id: string; started: () => boolean }
   // The worker wrote something without ending its turn.
   | { kind: "output" }
+  // The RUNTIME re-prompted a turn that ended with no visible output (Claude Code's meta record "[Your
+  // previous response had no visible output. Please continue…]"). The same turn going on, not something
+  // new reaching the worker.
+  | { kind: "companion" }
   // The worker ended its turn. `message` is the provider's id for the message that ended it, when it has
   // one: Claude writes one message as several records, every one of them ending the turn. `failed` when
   // the bracket itself says the turn did not succeed (a Codex/ACP turn aborted with no answer).
@@ -211,6 +215,24 @@ export function stepSideTurn(st: SideTurnState, step: SideTurnStep): SideTurnTra
       resume(st)
       return NONE
     }
+    case "companion": {
+      // THE RUNTIME'S OWN "SAY SOMETHING" (2026-09-30, the first real run). Asked to end a side turn in
+      // silence, a haiku worker did exactly that — and Claude Code, which will not let a turn end with no
+      // visible output, re-prompted it with a meta record; its "Spinoff thread created." then arrived as a
+      // DIFFERENT message after the rest, which `rest` below reads as the worker speaking again unprompted.
+      // The side turn went unclean, the thread requeued, the sign-off nudge fired and the worker filed a
+      // fresh Done card over its real one — the very thing this module exists to prevent. The re-prompt is
+      // the harness finishing the turn it was already in, so the answer is the side turn's own.
+      //
+      // `ended` stays true on purpose. The tailer's turn reading skips meta records, so the thread reads idle
+      // throughout, and the seconds between the re-prompt and the answer must not flash the raw rest — a
+      // bare rest with the fence gone, exactly what the sign-off nudge fires on. Anything that makes the
+      // answer real work (a call after the spawn, a message reaching the worker first) still spends it.
+      if (!st.resting) return NONE
+      st.resting = false
+      st.restMessage = undefined
+      return NONE
+    }
     case "rest": {
       if (st.resting) {
         // Another record of the message that already ended the turn, or a repeated bracket (Codex writes
@@ -257,6 +279,15 @@ function text(content: unknown): string {
   return parts.join("\n")
 }
 
+// Claude Code's re-prompt of a turn that ended with nothing visible: a meta user record the SDK marks
+// `turnCompanion` (2.1.282), whose text is fixed. Either tell is enough, so a build that drops the flag or
+// rewords the line still reads as what it is.
+const SILENT_TURN_REPROMPT = /^\[Your previous response had no visible output\b/
+function isSilentTurnCompanion(record: object): boolean {
+  const rec = record as { turnCompanion?: unknown; message?: { content?: unknown } }
+  return rec.turnCompanion === true || SILENT_TURN_REPROMPT.test(text(rec.message?.content).trimStart())
+}
+
 /** A Claude transcript record in side-turn terms. Both Claude folds — the tailer's applyRecord and the
  *  chat's createTranscriptFold — call this on every record, in file order. */
 export function claudeSideTurnSteps(record: unknown): SideTurnStep[] {
@@ -285,8 +316,12 @@ export function claudeSideTurnSteps(record: unknown): SideTurnStep[] {
     return steps
   }
   // A meta record is the harness's own (a loaded skill's body, an image's dimensions, a /rename reminder):
-  // it re-invokes nothing, which is why the tailer's turn reading skips it too.
-  if (rec.type === "user" && rec.isMeta !== true) {
+  // it re-invokes nothing, which is why the tailer's turn reading skips it too — except the one that
+  // re-prompts a silent rest, which the worker answers inside the turn it just ended (see `companion`).
+  if (rec.type === "user" && rec.isMeta === true) {
+    return isSilentTurnCompanion(record) ? [{ kind: "companion" }] : []
+  }
+  if (rec.type === "user") {
     const content = rec.message?.content
     if (typeof content === "string") return [{ kind: "prompt", request: sideTurnRequestId(content) }]
     if (!Array.isArray(content)) return []

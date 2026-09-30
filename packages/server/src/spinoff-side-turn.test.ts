@@ -132,6 +132,31 @@ test("side turn: anything else reaching the worker before the turn ends makes it
   assert.deepEqual(sideTurnsOf([...RESTED, request(10), spawnCall(11), started(12, 11), say(13, "", "msg_end"), say(13, "Done.", "msg_end")]), [{ id: SPN, hidden: true }])
 })
 
+// The first real run (2026-09-30, haiku): the worker ended its side turn in silence, Claude Code re-prompted
+// it with this exact meta record, and it answered as a new message. Copied from that transcript.
+const silentReprompt = (n: number, flagged = true) => JSON.stringify({
+  type: "user", timestamp: ts(n), uuid: `m${n}`, isMeta: true, ...(flagged ? { turnCompanion: true } : {}),
+  message: { role: "user", content: "[Your previous response had no visible output. Please continue and produce a user-visible response.]" },
+})
+
+test("side turn: the runtime's re-prompt of a silent rest is the same side turn going on", () => {
+  for (const flagged of [true, false]) {
+    assert.deepEqual(
+      sideTurnsOf([...RESTED, request(10), spawnCall(11), started(12, 11), say(13, "", "msg_silent"), silentReprompt(14, flagged), say(15, "Spinoff thread created.", "msg_after")]),
+      [{ id: SPN, hidden: true }],
+      flagged ? "by the SDK's flag" : "by the fixed text alone",
+    )
+  }
+  // It re-opens nothing on its own: work after it is still work after the spawn.
+  assert.deepEqual(
+    sideTurnsOf([...RESTED, request(10), spawnCall(11), started(12, 11), say(13, "", "msg_silent"), silentReprompt(14), call(15, "toolu_ls", "Bash", { command: "ls" }), result(16, "toolu_ls", "a"), say(17, "Looked around.")]),
+    [{ id: SPN, hidden: false }],
+  )
+  // …and any other meta record is still nothing at all.
+  const skillBody = JSON.stringify({ type: "user", timestamp: ts(14), isMeta: true, message: { role: "user", content: "Base directory for this skill: /x" } })
+  assert.deepEqual(sideTurnsOf([...RESTED, request(10), spawnCall(11), started(12, 11), say(13, "", "msg_silent"), skillBody, say(15, "More.", "msg_after")]), [{ id: SPN, hidden: false }])
+})
+
 test("side turn: two requests in a row at rest are two side turns", () => {
   assert.deepEqual(
     sideTurnsOf([...RESTED, request(10), spawnCall(11), started(12, 11), say(13, ""), request(20, SPN2), spawnCall(21, SPN2), started(22, 21), say(23, "")]),
@@ -338,6 +363,28 @@ test("tailer: a clean side turn leaves the thread's rest exactly as the request 
   assert.equal(turnDone, 1)
 })
 
+test("tailer: a silent rest the runtime re-prompts stays hidden before, during and after the answer", () => {
+  const h = harness()
+  h.storage.upsertSession(row({ last_read_at: ts(5) }))
+  write(h, RESTED)
+  let turnDone = 0
+  const t = tailerOf(h, { onTurnDone: () => void turnDone++ })
+  t.tick()
+  const before = t.get("t")
+  const restedAt = h.storage.getSession("t")?.rested_at
+  // One tick per record, so every intermediate reading is observed — the scheduler can look at any of them.
+  const steps = [request(10), spawnCall(11), started(12, 11), say(13, "", "msg_silent"), silentReprompt(14), say(15, "Spinoff thread created.", "msg_after")]
+  for (const [i, line] of steps.entries()) {
+    append(h, [line])
+    h.clock.ms = Date.parse(ts(10 + i)) + 500
+    t.tick()
+    if (i >= 3) assert.deepEqual(restOf(t.get("t")), restOf(before), `the rest it found stands after record ${i}`)
+  }
+  assert.equal(t.get("t")?.turn, "idle")
+  assert.equal(h.storage.getSession("t")?.rested_at, restedAt, "rested_at did not move")
+  assert.equal(turnDone, 0, "no turn-done hook")
+})
+
 test("tailer: an unclean side turn is an ordinary turn — its rest, its badge, its notify", () => {
   const h = harness()
   h.storage.upsertSession(row({ last_read_at: ts(5) }))
@@ -440,6 +487,10 @@ test("chat (Claude): a clean side turn drops the worker's side of it and keeps t
   fold.ingest(clean.slice(RESTED.length + 2).map((l) => l + "\n").join(""))
   fold.finalize()
   assert.deepEqual(shape(fold.messages()), shape(parseTranscript(clean.join("\n"))))
+
+  // A silent rest the runtime re-prompted drops the same way, answer and all.
+  const reprompted = [...RESTED, request(10), spawnCall(11), started(12, 11), say(13, "", "msg_silent"), silentReprompt(14), say(15, "Spinoff thread created.", "msg_after")]
+  assert.deepEqual(shape(parseTranscript(reprompted.join("\n"))), [...baseline, "user(spinoff): evaluate whether the idea holds up"])
 
   // Unclean: every message stays.
   const unclean = [...RESTED, request(10), spawnCall(11), started(12, 11), call(13, "toolu_ls", "Bash", { command: "ls" }), result(14, "toolu_ls", "a"), say(15, "Also looked.")]

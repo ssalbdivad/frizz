@@ -111,7 +111,7 @@ const SPAWN_THREAD = {
           "Set ONLY when fulfilling a spinoff request — a message from frizz wrapped in `<spinoff-request id=\"spn_…\">` " +
           "asking for a new thread from your conversation. Pass that id verbatim. Frizz then puts the " +
           "human's own instructions and a reference back to your thread above your `prompt`, links the two threads on " +
-          "the board, and shows the human the new thread itself — so write nothing about it afterwards. A spinoff is " +
+          "the board, and shows the human the new thread itself — so do not announce it afterwards. A spinoff is " +
           "the human's explicit request, so the last-resort caution above does not apply to it.",
       },
     },
@@ -1385,13 +1385,14 @@ async function spawnThread(args) {
   // A SPINOFF is already on the human's screen: the chat draws the request as a card that links to this
   // new thread by name. What the worker once wrote after it — "I started [Sub-agent addresses](…)", then
   // a whole second sign-off reading "Nothing new landed here" — was the confusing part (maintainer
-  // 2026-09-30), so the result tells it to write nothing, and a resting worker that stays silent is a
-  // side turn the server folds away.
+  // 2026-09-30), so the result tells it to announce nothing, and a resting worker that ends on two words is
+  // a side turn the server folds away. Two words rather than none: a worker told to end in silence did, and
+  // Claude Code re-prompted it for visible output — one more model call for every spinoff.
   if (body.spinoff) {
     return (
       `${spawned} The human's chat already shows this spinoff, linked to the new thread, so do not ` +
       `announce it, paste a link to it, or summarize your brief. If you had come to rest when the request ` +
-      `arrived, end your turn now without writing anything: Frizz keeps your previous handoff and this ` +
+      `arrived, end your turn now with the two words \`Spun off.\` and nothing else: Frizz keeps your previous handoff and this ` +
       `thread's state exactly as they were, so do not sign off again. If you were in the middle of work, ` +
       `carry on with it. Do not wait on the new thread; it reports to the human, not to you.`
     )

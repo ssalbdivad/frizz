@@ -17,7 +17,9 @@ test("a spinoff request round-trips through the chat's parser, multi-line text i
   assert.match(message, /spawn_thread` with `spinoff: "spn_0123456789abcdef"`/)
   assert.match(message, /most recent part of the conversation/)
   // A side request: the worker announces nothing and does not sign off again (the chat's card says it all).
-  assert.match(message, /Write nothing about the spinoff afterwards/)
+  assert.match(message, /Do not announce the new thread/)
+  // Two words, not silence: a silent rest makes Claude Code re-prompt the worker for visible output.
+  assert.match(message, /end your turn right after the tool call with the two words `Spun off\.` and nothing else/)
   assert.match(message, /do not sign off again/)
   assert.doesNotMatch(message, /Say in one line/)
 })

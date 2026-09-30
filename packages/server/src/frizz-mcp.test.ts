@@ -1627,7 +1627,7 @@ test("`watch_issue` registers, lists and drops against the CALLING thread, and l
 // model's arguments — so the dispatch can refuse a request that belongs to another thread. Its result
 // tells the worker to write NOTHING about the spinoff: the human's chat already shows it, linked to the new
 // thread, and what workers wrote here (a link, then a second sign-off) was the confusing part (2026-09-30).
-test("spawn_thread with a spinoff forwards the request id and the calling thread, and asks for silence", async () => {
+test("spawn_thread with a spinoff forwards the request id and the calling thread, and asks for no announcement", async () => {
   const seen: unknown[] = []
   const http = createServer((req, res) => {
     let body = ""
@@ -1659,7 +1659,7 @@ test("spawn_thread with a spinoff forwards the request id and the calling thread
     assert.equal(SPAWN_THREAD_RESULT_RE.exec(text)?.[1], "spawned-child", "the sentence an old spinoff's edge is recovered from")
     assert.match(text, /already shows this spinoff/)
     assert.match(text, /do not announce it, paste a link to it, or summarize your brief/)
-    assert.match(text, /If you had come to rest[^.]*end your turn now without writing anything/)
+    assert.match(text, /If you had come to rest[^.]*end your turn now with the two words `Spun off\.` and nothing else/)
     assert.match(text, /do not sign off again/)
     assert.match(text, /If you were in the middle of work, carry on with it/)
     assert.doesNotMatch(text, /Paste this link|\/thread\//, "no link to paste")
