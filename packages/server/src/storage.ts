@@ -835,6 +835,10 @@ export interface Storage {
   completeSpinoff(id: string, childSlug: string, atMs: number): boolean
   /** Every spinoff, keyed by BOTH ends: a parent sees the ones it was asked for, a child the one it came from. */
   spinoffsBySlug(): Map<string, ThreadSpinoffRow[]>
+  /** The spinoff `childSlug` came from, if it is a spinoff child. */
+  spinoffOfChild(childSlug: string): ThreadSpinoffRow | undefined
+  /** Every spinoff still waiting for its thread (no child yet), oldest first. */
+  pendingSpinoffs(): ThreadSpinoffRow[]
   upsertThreadLink(link: { id: string; slug: string; kind: "link" | "file"; label: string; target: string; createdAtMs: number }): ThreadLinkRow
   listThreadLinks(slug: string): ThreadLinkRow[]
   threadLinksBySlug(): Map<string, ThreadLinkRow[]>
@@ -2170,6 +2174,8 @@ export function createStorage(source: string | Database, projectId: string): Sto
   )
   const spinoffsStmt = scope.prepare<[], ThreadSpinoffRow>(`SELECT ${SPINOFF_COLUMNS} FROM thread_spinoff WHERE project_id = @project_id ORDER BY created_at, rowid`)
   const dropSpinoffStmt = scope.prepare("DELETE FROM thread_spinoff WHERE project_id = @project_id AND id = ?")
+  const spinoffOfChildStmt = scope.prepare<[string], ThreadSpinoffRow>(`SELECT ${SPINOFF_COLUMNS} FROM thread_spinoff WHERE project_id = @project_id AND child_slug = ? ORDER BY created_at, rowid LIMIT 1`)
+  const pendingSpinoffsStmt = scope.prepare<[], ThreadSpinoffRow>(`SELECT ${SPINOFF_COLUMNS} FROM thread_spinoff WHERE project_id = @project_id AND child_slug IS NULL ORDER BY created_at, rowid`)
   const delSpinoffs = scope.prepare("DELETE FROM thread_spinoff WHERE project_id = @project_id AND parent_slug = ?")
   const upsertThreadLinkStmt = scope.prepare<{
     id: string; slug: string; kind: "link" | "file"; label: string; target: string; createdAtMs: number
@@ -3058,6 +3064,8 @@ export function createStorage(source: string | Database, projectId: string): Sto
       }
       return bySlug
     },
+    spinoffOfChild: (childSlug) => spinoffOfChildStmt.get(childSlug),
+    pendingSpinoffs: () => pendingSpinoffsStmt.all(),
     upsertThreadLink: (link) => upsertThreadLinkStmt.get(link)!,
     listThreadLinks: (slug) => threadLinksBySlugStmt.all(slug),
     threadLinksBySlug: () => groupBySlug(threadLinksStmt.all()),

@@ -4125,7 +4125,7 @@ export function threadTranscriptSource(
   return binding && { backend: binding.backend, path: binding.path, nativeId: binding.nativeId }
 }
 
-function sourceForThread(
+export function sourceForThread(
   project: Project,
   storage: Storage,
   slug: string,
@@ -4462,6 +4462,38 @@ function emptyTranscriptPage(source?: TranscriptSourceBinding): TranscriptPage {
   }
 }
 
+// A SPINOFF CHILD WHOSE PROMPT PREDATES ITS ENVELOPE. A child whose edge was recovered after the fact
+// (spinoff-edge-recovery.ts — its parent's MCP server predated the `spinoff` argument, so the dispatch
+// took the plain path) opened on the parent worker's raw brief, with none of spinoffChildPrompt's
+// framing for the projection to read back. It still IS a spinoff child, and its opening turn is still
+// not the human speaking, so it gets the same header a framed child gets: the human's instructions off
+// the spinoff row, and the whole opening turn as the context beneath them.
+//
+// Applied by every reader that serves a thread's transcript — both pages, the push, `read_thread`, the
+// handoff — to the projection BEFORE anything is appended to it, and only ever to the thread's OPENING
+// turn. `whole` says the array is the entire projection, so its first user message is the opening one;
+// a latest WINDOW can start at a later human turn, so there the turn must also carry the dispatch
+// envelope, which only the opening turn does. A child whose opening turn already projected its origin
+// (the framed case) is left exactly as it is. Never mutates: the projection's messages are the retained
+// fold's own objects.
+export function withSpinoffChildOrigin(
+  messages: TranscriptMessage[],
+  storage: Pick<Storage, "spinoffOfChild">,
+  slug: string,
+  whole: boolean,
+): TranscriptMessage[] {
+  const i = messages.findIndex((m) => m.role === "user" && !m.queued)
+  const opening = i === -1 ? undefined : messages[i]
+  if (!opening || opening.spinoffOrigin || opening.spinoff || opening.kind || opening.peerFrom || opening.wake) return messages
+  if (!whole && frizzDispatchDisplayText(opening.text) === undefined) return messages
+  const brief = (opening.displayText ?? opening.text).trim()
+  const instructions = storage.spinoffOfChild(slug)?.instructions.trim()
+  if (!instructions || !brief) return messages
+  const out = [...messages]
+  out[i] = { ...opening, displayText: instructions, spinoffOrigin: { instructions, brief } }
+  return out
+}
+
 export function readLatestThreadTranscriptPage(
   project: Project,
   storage: Storage,
@@ -4496,6 +4528,7 @@ export function readLatestThreadTranscriptPage(
       projected = projectSnapshot(snapshot)
     }
   }
+  projected = withSpinoffChildOrigin(projected, storage, slug, true)
   const latest = latestTranscriptWindow(projected)
   // The cursor has to name the window's REAL head, not the raw MAX_MESSAGES cut: once the window reaches
   // back for the human's ask, a cursor anchored at the cut sits INSIDE what was already sent, and the
@@ -4555,7 +4588,7 @@ export function readEarlierThreadTranscriptPage(
   if (digestPrefix(snapshot.readRange(0, payload.snapshotBytes)) !== payload.prefixDigest) {
     throw new Error("transcript cursor is stale because prior transcript bytes changed")
   }
-  const projected = projectSnapshot(snapshot)
+  const projected = withSpinoffChildOrigin(projectSnapshot(snapshot), storage, slug, true)
   const anchor = projected.findIndex((message) => message.sourceId === payload.anchorSourceId)
   if (anchor < 0) throw new Error("transcript cursor boundary is no longer present")
   const page = pageProjectedTranscript(projected, anchor)
@@ -4593,6 +4626,16 @@ export function readCodexTranscriptFile(absPath: string, nativeId = absPath): Tr
 // isn't blank while the tailer catches up. The single resolution the threadTranscript RPC and the /ws
 // transcript producer share, so foreign threads render identically on both paths. Degrades to [].
 export function readThreadTranscript(
+  project: Project,
+  storage: Storage,
+  slug: string,
+  backendFor?: (kind?: string) => AgentBackend,
+): TranscriptMessage[] {
+  // Only an ACP read is the WHOLE projection; Claude's and Codex's are the latest window.
+  return withSpinoffChildOrigin(readThreadTranscriptMessages(project, storage, slug, backendFor), storage, slug, storage.getSession(slug)?.backend === "acp")
+}
+
+function readThreadTranscriptMessages(
   project: Project,
   storage: Storage,
   slug: string,
