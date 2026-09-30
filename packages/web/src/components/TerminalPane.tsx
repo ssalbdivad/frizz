@@ -100,6 +100,11 @@ export function TerminalPane({ id, exitedStatus, base, focusOnMount = true }: { 
       sock.onopen = () => {
         if (disposed || ws !== sock) return
         connectedOnce = true
+        // Attached — say so now, not on the first byte. A command that prints nothing (`sleep 600`) sent
+        // no message, so its drawer read "Connecting to terminal…" for as long as it ran. A socket the
+        // server closes straight after opening goes to "reconnecting" through onclose as before; the
+        // backoff still resets only on real traffic (onmessage), so such a socket cannot spin.
+        setConnection("open")
         send({ t: "resize", cols: term.cols, rows: term.rows })
         flushInput()
       }
