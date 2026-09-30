@@ -135,6 +135,10 @@ import {
   openQuestionsNote,
   SetOwnThreadTitleInput,
   SetOwnThreadTitleResult,
+  ReadThreadInput,
+  ReadThreadResult,
+  MessageThreadInput,
+  MessageThreadResult,
   AcpAgent,
   acpAgentIdFromModel,
   acpModelIdFromModel,
@@ -145,6 +149,9 @@ import { type AppContext } from "./context.ts"
 import { listAcpAgents } from "./backend/acp-agents.ts"
 import { sessionTitleLocked } from "./storage.ts"
 import { createThreadNamer, THREAD_NAME_MAX_WORDS, type ThreadNamer } from "./thread-names.ts"
+import { handleOf, knownHandles, resolveThreadHandle, THREAD_MESSAGE_HOURLY_CAP, threadMessageBody } from "./thread-mentions.ts"
+import { enqueueThreadMessageWake } from "./scheduler.ts"
+import { editedFilesOf } from "./edited-files.ts"
 import { mayHaveLiveBackgroundWork, needsFreshProcessForLimit } from "./backend/usage-limit.ts"
 import { appServerTurnStalled, resolveLiveWatchTarget, resolveRecurringPrompt } from "./board.ts"
 import { runThreadUpdate } from "./frizz.ts"
@@ -158,6 +165,7 @@ import {
   readTranscript,
   readTranscriptFile,
   readCodexTranscriptFile,
+  readThreadTranscript,
   projectTranscriptPageAgentLifecycles,
   threadTranscriptSource,
 } from "./transcript.ts"
@@ -935,6 +943,9 @@ export function createRouter(ctx: AppContext) {
   // mint and the AI rename need the model.
   const fallbackNamer = createThreadNamer({ storage: ctx.storage, aiTitleOf: (slug) => ctx.tailer?.get(slug)?.aiTitle })
   const threadNamer = (): ThreadNamer => ctx.threadNamer ?? fallbackNamer
+  // Messages one thread sent another, by ordered (from, to) pair — the hourly cap on `messageThread`.
+  // In memory: a restart forgets it, which only ever loosens a cap that exists to stop a runaway loop.
+  const threadMessageLog = new Map<string, number[]>()
   // ONE DELIVERY PER deliveryId. The ledger guard inside `followUp` (`hasDelivery`) is not enough for a
   // broker thread, on two counts, both measured 2026-09-24 against a real broker worker with the
   // page-reload replay (web lib/pendingSends.ts) as the repeat:
@@ -3711,6 +3722,79 @@ export function createRouter(ctx: AppContext) {
         return accepted
           ? { accepted, title: input.title, lockedByHuman: false }
           : { accepted, title: current(), lockedByHuman: sessionTitleLocked(ctx.storage.getSession(input.slug) ?? row) }
+      },
+    }),
+
+    // ONE THREAD READING ANOTHER BY HANDLE (`mcp__frizz__read_thread`, thread-mentions.ts): its opening
+    // request, its status line and its newest handoff — what "ask @x for context" or "reconcile with @x"
+    // needs first, without waking @x at all. Read-only, so it reaches finished threads too.
+    readThread: mutation({
+      input: ReadThreadInput,
+      output: ReadThreadResult,
+      handler: async ({ input }) => {
+        const threads = threadNamer().threads()
+        const hit = resolveThreadHandle(input.handle, threads)
+        const row = hit ? ctx.storage.getSession(hit.slug) : undefined
+        if (!hit || !row) return { found: false, known: knownHandles(threads, input.slug) }
+        const messages = readThreadTranscript(ctx.project, ctx.storage, hit.slug, ctx.backendFor)
+        const said = (m: (typeof messages)[number]) => (m.displayText ?? m.text).trim()
+        const opening = messages.find((m) => m.role === "user" && !m.kind && said(m))
+        // The newest assistant words: the handoff when it is resting, the latest narration when it is not.
+        const latest = [...messages].reverse().find((m) => m.role === "assistant" && !m.kind && said(m))
+        const clip = (text: string, max: number) => (text.length > max ? `${text.slice(0, max)}\n…[truncated]` : text)
+        const archived = row.state === "archived" || row.archived === 1
+        const state = archived ? "done" as const : ctx.tailer.get(hit.slug)?.turn === "idle" ? "resting" as const : "running" as const
+        const editedFiles = editedFilesOf(messages, workDir).map((f) => f.path).slice(0, 40)
+        return {
+          found: true,
+          handle: handleOf(hit),
+          slug: hit.slug,
+          state,
+          ...(row.status?.trim() ? { status: row.status.trim() } : {}),
+          ...(opening ? { request: clip(said(opening), 4_000) } : {}),
+          ...(latest ? { latest: clip(said(latest), 8_000), ...(latest.at ? { latestAt: latest.at } : {}) } : {}),
+          ...(editedFiles.length ? { editedFiles } : {}),
+        }
+      },
+    }),
+
+    // ONE THREAD MESSAGING ANOTHER (`mcp__frizz__message_thread`). Delivered through the wake outbox, so
+    // it survives a restart and a busy recipient exactly as a timer does, and joins a running turn the
+    // way a typed steer does (scheduler THREAD_MESSAGE_FENCE_PREFIX). Refusals are answers, not throws:
+    // a worker told "error" retries, and every refusal here says what to do instead.
+    messageThread: mutation({
+      input: MessageThreadInput,
+      output: MessageThreadResult,
+      handler: async ({ input }) => {
+        const threads = threadNamer().threads()
+        const hit = resolveThreadHandle(input.handle, threads)
+        const target = hit ? ctx.storage.getSession(hit.slug) : undefined
+        if (!hit || !target) {
+          return { sent: false, refusal: `no thread is called ${input.handle}.`, known: knownHandles(threads, input.slug) }
+        }
+        const handle = handleOf(hit)
+        if (hit.slug === input.slug) return { sent: false, handle, refusal: "that is this thread." }
+        if (target.state === "archived" || target.archived === 1) {
+          return { sent: false, handle, refusal: `@${handle} is done, and a message would reopen it. Read it with read_thread instead; only the human reopens a finished thread.` }
+        }
+        const nowMs = Date.now()
+        const pair = `${input.slug}\u0000${hit.slug}`
+        const recent = (threadMessageLog.get(pair) ?? []).filter((at) => nowMs - at < 3_600_000)
+        if (recent.length >= THREAD_MESSAGE_HOURLY_CAP) {
+          return { sent: false, handle, refusal: `this thread has sent @${handle} ${recent.length} messages in the last hour, which is the cap. Stop the exchange here, or ask the human.` }
+        }
+        const self = threads.find((t) => t.slug === input.slug)
+        const from = self ? handleOf(self) : input.slug
+        enqueueThreadMessageWake(ctx.storage, {
+          slug: hit.slug,
+          sessionId: target.session_id,
+          fromSlug: input.slug,
+          message: threadMessageBody({ fromHandle: from, message: input.message }),
+          nowMs,
+        })
+        threadMessageLog.set(pair, [...recent, nowMs])
+        ctx.scheduler?.kick?.()
+        return { sent: true, handle, from }
       },
     }),
 

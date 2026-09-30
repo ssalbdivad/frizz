@@ -152,7 +152,7 @@ try {
     const group = `[data-xq-rail-project="${A.id}"]`
     const opened = () => page.$$eval(`${group} [data-xq-drill-band]`, (els) => els.map((el) => el.getAttribute("data-xq-drill-band")))
     check("every quiet band starts collapsed", (await opened()).length === 0, (await opened()).join(", "))
-    const toggles = await page.$$eval(`${group} [data-xq-quiet-footer] [data-xq-quiet-count]`, (els) => els.map((el) => el.getAttribute("data-xq-quiet-count")))
+    const toggles = await page.$$eval(`[data-xq-project-row="${A.id}"] [data-xq-quiet-count]`, (els) => els.map((el) => el.getAttribute("data-xq-quiet-count")))
     if (!toggles.includes("done") || !toggles.includes("snoozed")) throw new Error(`the seed needs Snoozed and Done here; counts: ${toggles.join(", ")}`)
     await clickSettled(page, `${group} [data-xq-quiet-count="done"]`)
     await page.waitForSelector(`${group} [data-xq-drill-band="done"] [data-sidebar-item]`, { timeout: 8000 })

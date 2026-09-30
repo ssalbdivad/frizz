@@ -4,6 +4,7 @@ import type { ThreadTerminal } from "@frizz/shared"
 import { rpc } from "../api/rpc.ts"
 import { showToast, threadBySlug } from "../store.ts"
 import { useBoard } from "../hooks.ts"
+import { displayTitle } from "../groups.ts"
 import { abbreviateHome } from "../lib/paths.ts"
 import { terminalFailed, terminalLive, terminalOf, terminalStateLabel } from "../lib/threadTerminals.ts"
 import { Sheet } from "./ui/Sheet.tsx"
@@ -55,7 +56,7 @@ export function TerminalSheet({ id, slug, terminalId, depth, widthDepth }: { id:
         <>
           <SheetHeader
             title={terminal?.command ?? "Terminal"}
-            subtitle={terminal?.cwd ? abbreviateHome(terminal.cwd, board?.homeDir) : thread?.title}
+            subtitle={terminal?.cwd ? abbreviateHome(terminal.cwd, board?.homeDir) : thread ? displayTitle(thread) : undefined}
             icon={<SquareTerminal aria-hidden size={14} className="shrink-0 text-muted-60" />}
             meta={terminal ? <TerminalStateMeta terminal={terminal} /> : undefined}
             actions={terminal ? (

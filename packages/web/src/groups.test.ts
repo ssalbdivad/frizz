@@ -1,7 +1,7 @@
 import { test } from "node:test"
 import assert from "node:assert/strict"
 import { workingThread, type ThreadView } from "@frizz/shared"
-import { bandOf, doneButRunning, needsAction, queued, orderQueue, partitionActive, sectionOf, sectionThreads, isSnoozed, sessionIndicatorKind, offersRetry, titleIsProvisional, displayTitle, lastActiveLabelAt, queueLabelAt, queueLabelWord, SPINNING_UP_TITLE, UNTITLED_THREAD_TITLE } from "./groups.ts"
+import { bandOf, doneButRunning, needsAction, queued, orderQueue, partitionActive, sectionOf, sectionThreads, isSnoozed, sessionIndicatorKind, offersRetry, titleIsProvisional, displayTitle, displayName, threadHandleOf, lastActiveLabelAt, queueLabelAt, queueLabelWord, SPINNING_UP_TITLE, UNTITLED_THREAD_TITLE } from "./groups.ts"
 
 // Minimal ThreadView fixture — the same shape board-delta.test.ts uses, defaulting to a live/active
 // thread; each case overrides only the fields under test.
@@ -916,7 +916,7 @@ test("displayTitle: a title a dispatch CALLER hard-coded shows until the worker 
   // Renaming it locks it again — a later/stale backend record can no longer displace the human's choice.
   assert.equal(
     displayTitle(thread({ ...hardCoded, title: "Resolver cache bug", titleLocked: true, aiTitle: "generated-slug" })),
-    "Resolver cache bug",
+    "resolverCacheBug",
   )
 })
 
@@ -926,10 +926,42 @@ test("displayTitle: a machine-generated session slug is never presented as a suc
     "Untitled thread",
   )
   assert.equal(
-    displayTitle(thread({ id: "internal-id", title: "internal-id", titleAuto: true, aiTitle: "conversation-summary-task" })),
+    displayName(thread({ id: "internal-id", title: "internal-id", titleAuto: true, aiTitle: "conversation-summary-task" })),
     "Conversation summary task",
     "a native backend slug is humanized (sentence case) even when it differs from the Frizz thread id",
   )
+  // …and, being a real name of three words, it SHOWS as its handle.
+  assert.equal(
+    displayTitle(thread({ id: "internal-id", title: "internal-id", titleAuto: true, aiTitle: "conversation-summary-task" })),
+    "conversationSummaryTask",
+  )
+})
+
+// A THREAD'S NAME SHOWS AS ITS HANDLE (maintainer 2026-09-29): the words a name is stored as render as
+// the camelCase handle an operator types after `@`, and everything that is not a name renders as before.
+test("displayTitle: a real name shows as its camelCase handle; placeholders, ids and external rows do not", () => {
+  const named = thread({ titleAuto: false, title: "Shell budgets" })
+  assert.equal(displayTitle(named), "shellBudgets")
+  assert.equal(displayName(named), "Shell budgets", "a rename edits the stored words, not the handle")
+  assert.equal(threadHandleOf(named), "shellBudgets")
+  // A proper noun keeps its casing behind the capital; a leading acronym lowercases whole.
+  assert.equal(displayTitle(thread({ titleAuto: false, title: "ArkType perf" })), "arkTypePerf")
+  assert.equal(displayTitle(thread({ titleAuto: false, title: "API keys" })), "apiKeys")
+  // Past three words it is a sentence, not a name: shown as written, and not addressable.
+  const sentence = thread({ titleAuto: false, title: "Fix the flaky parser test" })
+  assert.equal(displayTitle(sentence), "Fix the flaky parser test")
+  assert.equal(threadHandleOf(sentence), undefined)
+  // Placeholders and a legacy row's bare id are never camelCased or offered as a handle.
+  const spinning = thread({ titleAuto: true, title: "fix it", spawnedAt: new Date().toISOString() })
+  assert.equal(displayTitle(spinning), SPINNING_UP_TITLE)
+  assert.equal(threadHandleOf(spinning), undefined)
+  const bareId = thread({ id: "legacy-slug", title: "" })
+  assert.equal(displayTitle(bareId), "legacy-slug")
+  assert.equal(threadHandleOf(bareId), undefined)
+  // An external terminal session has no registry name to address: its resolved title shows verbatim.
+  const external = thread({ foreign: true, titleAuto: false, title: "Fix queue focus" })
+  assert.equal(displayTitle(external), "Fix queue focus")
+  assert.equal(threadHandleOf(external), undefined)
 })
 
 test("a legacy session/hintless declared wait is never Snoozed — at rest it is simply a rested/queued row", () => {
@@ -954,14 +986,14 @@ test("titleIsProvisional / displayTitle: 'Spinning up' shows briefly, then falls
   assert.equal(displayTitle(thread({ titleAuto: true, title: "fix the parser bug", spawnedAt: fresh })), SPINNING_UP_TITLE)
   // aiTitle landed → not provisional; the real name wins.
   assert.equal(titleIsProvisional(thread({ titleAuto: true, aiTitle: "Parser fix", spawnedAt: fresh })), false)
-  assert.equal(displayTitle(thread({ titleAuto: true, aiTitle: "Parser fix", spawnedAt: fresh })), "Parser fix")
+  assert.equal(displayTitle(thread({ titleAuto: true, aiTitle: "Parser fix", spawnedAt: fresh })), "parserFix")
   // STALE spawn, still no aiTitle (e.g. a compacted session whose transcript frizz lost track of) → NOT
   // provisional: fall back to the dispatch title, never stick on "Spinning up…" forever.
   assert.equal(titleIsProvisional(thread({ titleAuto: true, title: "fix the parser bug", spawnedAt: "2026-07-08T00:00:00.000Z" })), false)
   assert.equal(displayTitle(thread({ titleAuto: true, title: "fix the parser bug", spawnedAt: "2026-07-08T00:00:00.000Z" })), "fix the parser bug")
   // A user-supplied title (titleAuto false) is real — shown as-is, never provisional.
   assert.equal(titleIsProvisional(thread({ titleAuto: false, title: "My thread", spawnedAt: fresh })), false)
-  assert.equal(displayTitle(thread({ titleAuto: false, title: "My thread" })), "My thread")
+  assert.equal(displayTitle(thread({ titleAuto: false, title: "My thread" })), "myThread")
   // Absent titleAuto (legacy/slim/foreign row) ⇒ never provisional.
   assert.equal(titleIsProvisional(thread({ title: "legacy" })), false)
 })
@@ -1006,11 +1038,11 @@ test("Codex automatic titles follow runtime and never expose the raw initial-pro
 
   assert.equal(
     displayTitle(thread({ backend: "codex", runtime: "turn-idle", titleAuto: true, title: "slug", aiTitle: "Fix queue focus" })),
-    "Fix queue focus",
+    "fixQueueFocus",
   )
   assert.equal(
     displayTitle(thread({ backend: "codex", runtime: "turn-idle", titleAuto: false, title: "Human rename" })),
-    "Human rename",
+    "humanRename",
   )
 })
 

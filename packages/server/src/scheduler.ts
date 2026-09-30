@@ -1005,6 +1005,34 @@ export function enqueueInterruptEndedWake(
   }, input.nowMs ?? Date.now())
 }
 
+/** A message from ANOTHER THREAD (`mcp__frizz__message_thread`, thread-mentions.ts). Keyed on a fresh id
+ *  per message, because every message is news of its own. Bound to a FACT — the other thread said it —
+ *  so nothing this thread writes supersedes it, and deliverable INTO a busy turn exactly like a human's
+ *  steer: the sender is often waiting on the answer, and the recipient's own work is not interrupted,
+ *  only joined at its next sampling boundary. Exempt from the quiet window for the same reason. */
+const THREAD_MESSAGE_FENCE_PREFIX = "thread-message"
+function isThreadMessageFenceId(fenceId: string): boolean {
+  return fenceId.startsWith(`${THREAD_MESSAGE_FENCE_PREFIX}:`)
+}
+
+export function enqueueThreadMessageWake(
+  storage: Storage,
+  input: { slug: string; sessionId: string; fromSlug: string; message: string; nowMs?: number },
+): string {
+  const fenceId = `${THREAD_MESSAGE_FENCE_PREFIX}:${randomUUID()}`
+  const id = wakeDeliveryId(input.slug, input.sessionId, fenceId)
+  createWakeDeliveryStore(storage.scope).enqueue({
+    id,
+    slug: input.slug,
+    sessionId: input.sessionId,
+    fenceId,
+    hintKey: fenceId,
+    message: input.message,
+    reason: `a message from thread ${input.fromSlug}`,
+  }, input.nowMs ?? Date.now())
+  return id
+}
+
 /** A registered PR watcher's delivery namespace. The id plus a monotonically-increasing REPORT number,
  *  because this watcher fires many times over one PR's life — the id alone would dedupe every wake after
  *  the first, which is exactly the bug a one-shot namespace would hide. */
@@ -1479,6 +1507,10 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
     if (isInterruptEndedFenceId(item.fenceId)) {
       return tele.turn === "idle" ? "current-idle" : "current-busy"
     }
+    // So is a message from another thread: it was said, whatever this thread says next.
+    if (isThreadMessageFenceId(item.fenceId)) {
+      return tele.turn === "idle" ? "current-idle" : "current-busy"
+    }
     // An over-budget warning is bound to its shell STILL RUNNING under the SAME deadline. The worker
     // stopping the shell, or extending it, between enqueue and delivery each make the warning untrue —
     // and nothing the thread SAYS does. Without this branch it would fall to the fence logic below and
@@ -1666,6 +1698,9 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
     // The interrupt note too: the worker is BUSY precisely because the interrupt just opened a turn on
     // the human's follow-up, and that turn is where it decides to wait on the child that no longer exists.
     if (isInterruptEndedFenceId(item.fenceId)) return true
+    // Another thread's message joins a running turn the way a human's typed steer does — see
+    // THREAD_MESSAGE_FENCE_PREFIX.
+    if (isThreadMessageFenceId(item.fenceId)) return true
     // The budget warning is "in the moment" by definition: its grace clock is already running, and a
     // worker mid-turn is the one most likely to still be using the shell — it has ten minutes to say so.
     if (isShellBudgetFenceId(item.fenceId)) return true

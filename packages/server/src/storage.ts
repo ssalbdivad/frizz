@@ -68,6 +68,9 @@ export interface SessionRow {
   // message by periodic-status.ts. Never the name — the name is `title`, and stays put. NULL until the
   // first status lands; a re-dispatch clears it.
   status?: string | null
+  // When `status` was last CHANGED (ISO) — the start of the task it names, which the board reads as
+  // "working on this for 4m" (live-status.ts). A write that keeps the same text keeps this instant.
+  status_at?: string | null
   // ---- session-first columns (2026-07-09; all nullable — additive migration under a live server) ----
   title: string | null // dispatch title (new dispatches have no thread FILE to hold it); display prefers aiTitle
   // The filename stem of the DISCOVERED transcript when it drifted off the pinned `<session_id>.jsonl`
@@ -958,8 +961,10 @@ export interface Storage {
   // Persist the name Frizz MINTED at dispatch (thread-names.ts). Lands only on the same session, only
   // while no human has claimed the name and no machine name is persisted yet — the first name stands.
   setMintedTitle(slug: string, sessionId: string, title: string): boolean
-  // Write the thread's live status line (periodic-status.ts), keyed on the session it was read from.
-  setStatus(slug: string, sessionId: string, status: string): boolean
+  // Write the thread's live status line (periodic-status.ts, live-status.ts), keyed on the session it was
+  // read from. `at` stamps `status_at` only when the text actually changes, so re-writing the same
+  // status never restarts its clock.
+  setStatus(slug: string, sessionId: string, status: string, at?: string): boolean
   // AI rename is asynchronous. Commit only if this is still the same session with the same title
   // provenance captured at start, so a later manual rename/re-dispatch always wins.
   setTitleIfCurrent(
@@ -1181,6 +1186,8 @@ export const STORAGE_SCHEMA = `
       title_worker_renamed INTEGER NOT NULL DEFAULT 0,
       -- The live status line (periodic-status.ts), never the name; also in the ALTER list below.
       status TEXT,
+      -- When the status last changed (live-status.ts); also in the ALTER list below.
+      status_at TEXT,
       PRIMARY KEY (project_id, slug)
     );
     CREATE INDEX IF NOT EXISTS session_snoozed_until_idx ON session(project_id, snoozed_until);
@@ -1491,6 +1498,8 @@ export function ensureStorageSchema(db: Database): void {
     "recurring_max_runs INTEGER", "recurring_for_ms INTEGER", "recurring_until_at TEXT",
     "recurring_runs INTEGER NOT NULL DEFAULT 0", "recurring_run_anchor TEXT",
     "recurring_stop_reason TEXT", "recurring_stopped_at TEXT",
+    // When the live status last changed — its elapsed clock (live-status.ts).
+    "status_at TEXT",
   ]) {
     try {
       db.exec(`ALTER TABLE session ADD COLUMN ${column}`)
@@ -1644,6 +1653,7 @@ export function createStorage(source: string | Database, projectId: string): Sto
       -- Same reasoning: a fresh session gets its own one rename and has no status yet.
       title_worker_renamed = 0,
       status = NULL,
+      status_at = NULL,
       snoozed_until = excluded.snoozed_until,
       -- Always moves WITH the instant: a spread row carries both, a re-dispatch clears both. An armed
       -- prompt outliving its deadline would be a wake nothing can ever fire.
@@ -2313,7 +2323,10 @@ export function createStorage(source: string | Database, projectId: string): Sto
   `)
   // The live status line (periodic-status.ts). Independent of every title flag: a human-locked name
   // still gets a status, because the status is not the name.
-  const statusStmt = scope.prepare("UPDATE session SET status = ? WHERE project_id = @project_id AND slug = ? AND session_id = ?")
+  const statusStmt = scope.prepare(`
+    UPDATE session SET status_at = CASE WHEN status IS ? THEN status_at ELSE ? END, status = ?
+    WHERE project_id = @project_id AND slug = ? AND session_id = ?
+  `)
   // The WORKER's own considered name for its thread, from `mcp__frizz__title`. Writes exactly what the
   // auto-title CAS writes — the text plus `title_agent = 1`, gated on the LOCK so a human rename always
   // outranks it — but keyed on the SLUG alone. The caller is the live worker's own MCP server, which
@@ -3071,7 +3084,8 @@ export function createStorage(source: string | Database, projectId: string): Sto
     setTitle: (slug, title) => void titleStmt.run(title, slug),
     setAgentTitle: (slug, title) => agentTitleStmt.run(title, slug).changes === 1,
     setMintedTitle: (slug, sessionId, title) => mintedTitleStmt.run(title, slug, sessionId).changes === 1,
-    setStatus: (slug, sessionId, status) => statusStmt.run(status, slug, sessionId).changes === 1,
+    setStatus: (slug, sessionId, status, at = new Date().toISOString()) =>
+      statusStmt.run(status, at, status, slug, sessionId).changes === 1,
     setTitleIfCurrent: (slug, title, expected) =>
       titleCasStmt.run(title, slug, expected.sessionId, expected.title, expected.titleAuto).changes === 1,
     setAutoTitleIfCurrent: (slug, title, expected) =>

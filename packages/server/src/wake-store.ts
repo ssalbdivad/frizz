@@ -38,8 +38,11 @@ export const WAKE_QUIET_WINDOW_MS = 5 * 60_000
  *  handoff opened the window that held the second. The kill clock now runs from delivery, so holding
  *  it no longer shortens the worker's grace, but it still delays the decision and keeps the shell
  *  running a window longer for nothing. And the hold buys no turn: the warning is deliverable
- *  MID-TURN, so a second one due seconds after the first lands inside the turn the first one opened. */
-export const WAKE_QUIET_EXEMPT_HINT_PREFIXES = ["answers:", "limit:", "interrupt-ended:", "shell-budget:"] as const
+ *  MID-TURN, so a second one due seconds after the first lands inside the turn the first one opened.
+ *
+ *  A message from ANOTHER THREAD (`thread-message:`) is the same case as an answer: its sender is often
+ *  waiting on the reply, and holding it five minutes would make two threads talking cost ten per round. */
+export const WAKE_QUIET_EXEMPT_HINT_PREFIXES = ["answers:", "limit:", "interrupt-ended:", "shell-budget:", "thread-message:"] as const
 
 export function isQuietWindowExempt(hintKey: string): boolean {
   return WAKE_QUIET_EXEMPT_HINT_PREFIXES.some((prefix) => hintKey.startsWith(prefix))

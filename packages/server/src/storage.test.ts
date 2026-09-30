@@ -1415,3 +1415,16 @@ test("a status line is written per session and never touches the name", () => {
   assert.equal(s.setStatus("busy", "old-sid", "Stale"), false)
   s.close()
 })
+
+test("a status's clock starts when its text changes, and a same-text write keeps it", () => {
+  const s = store()
+  s.upsertSession(row({ slug: "busy", session_id: "sid" }))
+  s.setStatus("busy", "sid", "Tracing the cache miss", "2026-09-29T10:00:00.000Z")
+  s.setStatus("busy", "sid", "Tracing the cache miss", "2026-09-29T10:05:00.000Z")
+  assert.equal(s.getSession("busy")?.status_at, "2026-09-29T10:00:00.000Z")
+  s.setStatus("busy", "sid", "Running the resolver tests", "2026-09-29T10:07:00.000Z")
+  assert.equal(s.getSession("busy")?.status_at, "2026-09-29T10:07:00.000Z")
+  s.upsertSession(row({ slug: "busy", session_id: "sid2" }))
+  assert.equal(s.getSession("busy")?.status_at ?? null, null, "a re-dispatch clears the clock with the status")
+  s.close()
+})

@@ -4232,6 +4232,47 @@ export type SetOwnThreadTitleInput = z.infer<typeof SetOwnThreadTitleInput>
 // explain rather than a throw the model will retry. `refusal` says why in words the worker can act on:
 // another open thread already holds the name (named, so it can pick a different subject), the name is
 // longer than two words, or the worker already spent its one rename (thread-names.ts).
+// ONE THREAD READING OR MESSAGING ANOTHER, BY HANDLE (thread-handle.ts). `slug` is the CALLER, stamped
+// into the worker's MCP env exactly as for `title`; `handle` is the other thread's camelCase name as the
+// board shows it — `shellBudgets`, with or without the `@`, in any casing.
+export const ReadThreadInput = z.object({
+  slug: ThreadSlug,
+  handle: z.string().trim().min(1).max(200),
+}).strict()
+export type ReadThreadInput = z.infer<typeof ReadThreadInput>
+
+// Either the thread, or — when the handle names none — the handles that DO exist, so the worker can
+// correct a typo without a second lookup.
+export const ReadThreadResult = z.object({
+  found: z.boolean(),
+  handle: z.string().optional(),
+  slug: z.string().optional(),
+  state: z.enum(["running", "resting", "done"]).optional(),
+  status: z.string().optional(),
+  request: z.string().optional(),
+  latest: z.string().optional(),
+  latestAt: z.string().optional(),
+  editedFiles: z.array(z.string()).optional(),
+  known: z.array(z.string()).optional(),
+}).strict()
+export type ReadThreadResult = z.infer<typeof ReadThreadResult>
+
+export const MessageThreadInput = z.object({
+  slug: ThreadSlug,
+  handle: z.string().trim().min(1).max(200),
+  message: z.string().trim().min(1).max(20_000),
+}).strict()
+export type MessageThreadInput = z.infer<typeof MessageThreadInput>
+
+export const MessageThreadResult = z.object({
+  sent: z.boolean(),
+  handle: z.string().optional(),
+  from: z.string().optional(),
+  refusal: z.string().optional(),
+  known: z.array(z.string()).optional(),
+}).strict()
+export type MessageThreadResult = z.infer<typeof MessageThreadResult>
+
 export const SetOwnThreadTitleResult = z.object({
   accepted: z.boolean(),
   title: z.string(),
