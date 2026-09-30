@@ -2164,8 +2164,12 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
         answersInFlight(questionRows, tele.lastUserAt, row.recurring_on_rest === 1 && Boolean(row.recurring_prompt?.trim())) !== undefined ||
         deps.storage.listThreadWatches(row.slug, { armedOnly: true }).length > 0 ||
         // A wait on ANOTHER THREAD's answer (`message_thread` with `await_reply`) is a registration like a
-        // watch: the tool tells the worker to rest on it with nothing else, so it must count here too.
-        deps.storage.listThreadTimers(row.slug, { armedOnly: true }).some((t) => isReplyWait(t.prompt))
+        // watch: the tool tells the worker to rest on it with nothing else, so it must count here too…
+        deps.storage.listThreadTimers(row.slug, { armedOnly: true }).some((t) => isReplyWait(t.prompt)) ||
+        // …and so does a thread's message ON ITS WAY, the twin of the answer-in-flight case above: the
+        // answer CANCELS the wait the instant it is sent, so until it is delivered the rest reads bare.
+        // Seen on a real run (2026-09-29): the nudge was merged into the very delivery carrying the answer.
+        outbox.pendingFor(row.slug, row.session_id).some((d) => isThreadMessageFenceId(d.fenceId))
       ) {
         if ((row.signoff_nudges ?? 0) > 0) deps.storage.resetSignoffNudges(row.slug)
         continue

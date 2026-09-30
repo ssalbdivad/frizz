@@ -104,7 +104,7 @@ const SPAWN_THREAD = {
         enum: ["claude", "codex"],
         description: "Optional agent backend (default `claude`). If `codex`, `model` must be a codex model id.",
       },
-      title: { type: "string", description: "Optional name for the new thread: one or two words naming its subject, distinct from the project's other open threads (else frizz names it from the prompt)." },
+      title: { type: "string", description: "Optional name for the new thread: one or two SHORT words naming its subject — its camelCase handle (\"Shell budgets\" → @shellBudgets) at most 16 characters — distinct from the project's other open threads. A longer one is ignored and frizz names the thread from the prompt instead." },
       spinoff: {
         type: "string",
         description:
@@ -790,6 +790,8 @@ const TITLE = {
     "separate status line for that.\n\n" +
     "NAME THE SUBJECT, NOT THE ACTION. One or two words a reader picking one card out of thirty needs: " +
     "\"Shell budgets\", \"Focus mode\", \"ArkType perf\" — never \"Fix the shell budget default\".\n\n" +
+    "KEEP IT SHORT. The human refers to the thread by its camelCase handle (\"Shell budgets\" is typed " +
+    "@shellBudgets), so Frizz refuses a name whose handle runs past 16 characters. Short, plain words.\n\n" +
     "IT MUST BE DISTINCT. No two open threads in the project share a name (compared ignoring case and " +
     "punctuation). Frizz refuses a duplicate and names the thread that holds it; pick a different 1-2 " +
     "word subject that sets THIS thread apart and call again — a refusal does not spend your rename.\n\n" +
@@ -801,7 +803,7 @@ const TITLE = {
       title: {
         type: "string",
         description:
-          "The thread's name: ONE or TWO words naming its subject, SENTENCE case (capitalize only the " +
+          "The thread's name: ONE or TWO short words naming its subject (camelCase handle at most 16 characters), SENTENCE case (capitalize only the " +
           "first word and proper nouns — \"Queue focus\", never \"Queue Focus\"), distinct from every " +
           "other open thread's name. No trailing period, no ticks, no issue-body quoting. Spell every " +
           "product, file and identifier the way the PROJECT spells it, not the way the prompt did.",

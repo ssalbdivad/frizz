@@ -16,6 +16,7 @@ import { isHeadlessRow, isBrokerClaudeRow, sessionTitleLocked, type ThreadQuesti
 import type { Storage, SessionRow, PrWatchRow, ThreadTimerRow, ThreadWatchRow, ThreadLinkRow, ShellBudgetRow, ThreadSpinOffRow } from "./storage.ts"
 import { resolveShellBudget, shellBudgetRecordOf } from "./shell-budget.ts"
 import { threadLinkView } from "./thread-links.ts"
+import { isReplyWait } from "./thread-mentions.ts"
 import { normalizeObservedThreadModel } from "./backend/thread-profiles.ts"
 import { claudeModelStanding } from "./backend/claude-model-upgrade.ts"
 import type { Tailer, SessionTelemetry, FenceView } from "./tailer.ts"
@@ -1812,7 +1813,13 @@ function sessionThreadView(
   const quietSince = archived ? undefined : quietTurnSince(runtime, tele, nowMs)
   // A silent turn queues past every rest gate in deriveNeedsYou (it is not at rest), except the human's
   // own wall-clock snooze, which is how a deliberate long wait is parked.
-  const needsYou = archived ? false : deriveNeedsYou(row, tele, runtime, interactionPresence.needsUser, nowMs, limitPause, true, deliveryProcessGone, github, registeredPrWatches, armedTimerIds, armedWatches, currentQuestionCount, answerAwaitingDelivery(questionRows, rawTele?.lastUserAt, nowMs)) || (quietSince !== undefined && !futureSnooze(row, nowMs))
+  // WAITING ON ANOTHER THREAD'S ANSWER (`message_thread` with `await_reply`) is a wait on automation, like a
+  // sub-agent: the human owes nothing until that thread answers, so the rest stays OUT of the queue while
+  // the card still states the wait. Only when nothing else here is theirs — an open question or a
+  // permission prompt still queues it. The wait is a timer (thread-mentions.ts), so it lapses on its own.
+  const waitingOnThread = !archived && runtime === "turn-idle" && currentQuestionCount === 0 && !interactionPresence.needsUser &&
+    armedTimers.some((t) => isReplyWait(t.prompt) && Date.parse(t.fireAt) > nowMs)
+  const needsYou = archived || waitingOnThread ? false : deriveNeedsYou(row, tele, runtime, interactionPresence.needsUser, nowMs, limitPause, true, deliveryProcessGone, github, registeredPrWatches, armedTimerIds, armedWatches, currentQuestionCount, answerAwaitingDelivery(questionRows, rawTele?.lastUserAt, nowMs)) || (quietSince !== undefined && !futureSnooze(row, nowMs))
   const awaitingBackground = archived ? false : deriveAwaitingBackground(row, tele, runtime, interactionPresence.needsUser, nowMs, limitPause, deliveryProcessGone, github, registeredPrWatches, armedTimerIds, armedWatches, currentQuestionCount)
   // A worker that exited with work still outstanding — a turn in flight, OR a sub-agent still reading
   // "running" (its parent is gone, so it cannot actually be live) — is a crash/stall, not a clean
