@@ -35,9 +35,13 @@ export class ShellLogStream {
     // it has no `end` — it wiped a log already on screen. Before anything has arrived there is nothing to
     // keep, and the drawer says the terminal is closed.
     if (reply.state === "gone" && this.started) return false
-    // A server from before offset reads returns no `end`: every reply is the whole tail again, so every
-    // reply is a fresh start rather than a duplicate appended under the last.
-    const fresh = !this.started || reply.reset === true || reply.end === undefined
+    // A reply with no `end` is a whole tail again (a server from before offset reads), so one that carries
+    // bytes is a fresh start rather than a duplicate appended under the last. One that carries NOTHING is
+    // not: a running shell whose log does not exist yet answers exactly that, every 1.5s, and taking each
+    // as a fresh start reset the pane and rewrote its `$ command` head on every poll until the first byte.
+    // The first bytes after such waiting ARE a fresh start (`from` is still unset): the head is written
+    // again once, now knowing whether the read began mid-file.
+    const fresh = !this.started || reply.reset === true || (!!reply.output && (reply.end === undefined || this.from === undefined))
     if (fresh) {
       this.started = true
       this.events = []

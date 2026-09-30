@@ -61,6 +61,29 @@ test("a server with no offsets makes every reply a fresh start, never a duplicat
   assert.deepEqual(seen.map((e) => e.kind), ["reset", "data", "reset", "data"])
 })
 
+// A MONITOR'S LOG CAN BE A WHILE COMING: a running shell whose file does not exist yet answers with no bytes
+// and no `end`, every poll. Taken as a fresh start each time, the pane reset and rewrote its head every 1.5s.
+test("a running shell with no log yet resets the pane once, not on every poll", () => {
+  const stream = new ShellLogStream()
+  const { seen } = record(stream)
+  for (let i = 0; i < 4; i++) stream.apply(reply({ output: "" }))
+  assert.deepEqual(seen.map((e) => e.kind), ["reset"], "the head once, while nothing has arrived")
+  assert.equal(stream.from, undefined)
+  // The first bytes start it over once more, so the head can say the read began mid-file.
+  stream.apply(reply({ output: "tick 1\n", end: 7, truncated: true }))
+  stream.apply(reply({ output: "tick 2\n", end: 14 }))
+  assert.deepEqual(seen, [
+    { kind: "reset", command: "npm run dev", truncated: false },
+    { kind: "reset", command: "npm run dev", truncated: true },
+    { kind: "data", text: "tick 1\n" },
+    { kind: "data", text: "tick 2\n" },
+  ])
+  // A later reply with nothing readable (the file gone) leaves what is on screen.
+  stream.apply(reply({ output: "", missing: true }))
+  assert.equal(seen.length, 4)
+  assert.equal(stream.received, 14)
+})
+
 test("a pane that attaches late replays everything since the last fresh start, then follows", () => {
   const stream = new ShellLogStream()
   stream.apply(reply({ output: "old\n", end: 4 }))
