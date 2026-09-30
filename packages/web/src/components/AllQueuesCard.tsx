@@ -25,7 +25,7 @@ import { questionsOwed, type AccountBackend, type ThreadView } from "@frizz/shar
 import { projectApiBase, projectRpc } from "../api/rpc.ts"
 import { ThreadProjectScope } from "../api/threadApi.tsx"
 import { displayTitle, offersRetry, queueLabelAt, queueLabelWord } from "../groups.ts"
-import { useMentionCandidates } from "../hooks/useMentionCandidates.ts"
+import { useMentionCandidates, useOwnMention } from "../hooks/useMentionCandidates.ts"
 import { handoffParts, projectMarkdownScope, sameProjectAddress, squareCard, threadKey, type QueuesProject } from "../lib/allQueues.ts"
 import { draftKey, draftStore, useDraftValues } from "../lib/drafts.ts"
 import { rememberFullscreenOrigin } from "../lib/fullscreenHandoff.ts"
@@ -709,6 +709,7 @@ function ReplyBox({ project, thread, onSent, onFailed }: { project: QueuesProjec
   const answering = useContext(RegisteredAnsweringContext)
   // `@` mentions of this card's project's threads — offered only when the page's board IS that project.
   const mentions = useMentionCandidates(thread.id, project.slug)
+  const ownMention = useOwnMention(thread.id, project.slug)
   const send = useMutation({
     mutationFn: (message: string) => deliverFollowUp(project, thread, message),
     onSuccess: () => void queryClient.invalidateQueries({ queryKey: ["projectsQueues"] }),
@@ -771,6 +772,7 @@ function ReplyBox({ project, thread, onSent, onFailed }: { project: QueuesProjec
         placeholder={answering?.staged ? "Add a note to your answers…" : questionsOwed(thread.questions).length > 0 ? "Or reply — the questions stay open…" : "Reply to the agent…"}
         attachBase={projectApiBase(project.id)}
         mentionCandidates={mentions}
+        ownMention={ownMention}
         busy={controls.busy}
         footer={controls.footer}
       />

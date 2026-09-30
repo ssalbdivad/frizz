@@ -828,11 +828,15 @@ const READ_THREAD = {
     "ALWAYS READ BEFORE YOU MESSAGE: this wakes nobody and costs the other thread nothing, and it usually " +
     "answers \"what is @x doing, how, and what did it change\" on its own. For the diff itself, read the " +
     "files it lists or `git log`. It reaches finished threads too. A handle that names nothing is answered " +
-    "with the handles that exist.",
+    "with the handles that exist.\n\n" +
+    "A thread's SUB-AGENTS answer to its handle, a dot, then theirs: `portTheParser.cacheKeys`, and a " +
+    "Workflow's agents one segment further (`portTheParser.wave2.implW3`). Reading one returns its own " +
+    "request and its newest messages — its report, once it has returned. It reaches sub-agents that have " +
+    "already returned too; a name used twice means the running one, else the latest.",
   inputSchema: {
     type: "object",
     properties: {
-      handle: { type: "string", description: "The other thread's handle, with or without the `@` — any casing." },
+      handle: { type: "string", description: "The other thread's handle, or a sub-agent's `thread.subAgent` address — with or without the `@`, any casing." },
     },
     required: ["handle"],
   },
@@ -858,7 +862,8 @@ const MESSAGE_THREAD = {
     "its message says so; answer it promptly, even if only to say you cannot help.\n\n" +
     "`read_thread` FIRST — often it already answers the question. Write each message to stand alone: " +
     "the other thread has none of your context. Never reply just to acknowledge. A finished thread cannot " +
-    "be messaged (read it instead). Messages between two threads are capped per hour.",
+    "be messaged (read it instead), and neither can a sub-agent (`thread.subAgent`): only its own thread " +
+    "reaches it, so message that thread. Messages between two threads are capped per hour.",
   inputSchema: {
     type: "object",
     properties: {
@@ -962,10 +967,18 @@ async function readThread(args) {
   const handle = typeof args.handle === "string" ? args.handle.trim() : typeof args.to === "string" ? args.to.trim() : ""
   if (!handle) throw new Error("`handle` is required — the other thread's camelCase name, e.g. `shellBudgets`")
   const r = (await callRpc("readThread", { slug: threadSlug(), handle }))?.result
+  if (!r?.found && r?.subAgentOf) {
+    return r.known?.length
+      ? `@${r.subAgentOf} has no sub-agent called ${handle.replace(/^@/, "").split(".").slice(1).join(".")}.\n\nIts sub-agents: ${r.known.join(", ")}`
+      : `@${r.subAgentOf} has not dispatched any sub-agent that can be named.`
+  }
   if (!r?.found) return `No thread is called ${handle}.${knownLine(r?.known)}`
-  const state = r.state === "done" ? "done" : r.state === "resting" ? "resting (not working right now)" : "running (mid-turn)"
+  // A sub-agent's state is its own: "done" once it has returned, with how it ended.
+  const state = r.subAgentOf
+    ? r.state === "done" ? `returned${r.outcome && r.outcome !== "completed" ? ` (${r.outcome})` : ""}` : r.state === "resting" ? "resting, with its own sub-agents still running" : "running"
+    : r.state === "done" ? "done" : r.state === "resting" ? "resting (not working right now)" : "running (mid-turn)"
   return [
-    `@${r.handle} — ${state}${r.status ? `\nStatus: ${r.status}` : ""}`,
+    `@${r.handle} — ${r.subAgentOf ? `a sub-agent of @${r.subAgentOf}, ` : ""}${state}${r.status ? `\nStatus: ${r.status}` : ""}`,
     r.request ? `\n## Its request\n\n${r.request}` : "",
     r.earlier?.length ? `\n## Its earlier messages, oldest first\n\n${r.earlier.join("\n\n---\n\n")}` : "",
     r.latest ? `\n## Its newest message${r.latestAt ? ` (${r.latestAt})` : ""}\n\n${r.latest}` : "\nIt has not said anything yet.",
@@ -1071,6 +1084,11 @@ async function activity() {
   const items = Array.isArray(result?.activity) ? result.activity : []
   const questions = Array.isArray(result?.questions) ? result.questions : []
   const links = Array.isArray(result?.links) ? result.links : []
+  // WHO THIS THREAD IS, first: the handle other threads and the human call it, and the head of every
+  // sub-agent address below — the names to write in prose, where the board turns each into a link.
+  const selfLine = typeof result?.handle === "string" && result.handle
+    ? `This thread is @${result.handle}. Name it, other threads and every sub-agent by their @ address in anything the human reads — the board links each one.\n\n`
+    : ""
   const linksBlock = links.length === 0 ? "" : "\n\nSaved links and files (not running work; remove with unlink):\n" +
     links.map((link) => `  ${link.id}  ${link.kind}: ${link.label}\n    ${link.target}`).join("\n")
   // THE QUESTIONS ARE NOT PART OF THE FENCE, so they are printed in their own section and never fed to
@@ -1103,13 +1121,13 @@ async function activity() {
   const askedBlock = owedBlock + passedBlock
   if (!items.length) {
     if (owed.length > 0) {
-      return (
+      return selfLine + (
         "Nothing is RUNNING on this thread — no background shells, no sub-agents, no armed timers, no " +
         "registered PRs. So an ```awaiting fence would have nothing to name, and a fence naming nothing " +
         "is not a park." + askedBlock + linksBlock
       )
     }
-    return (
+    return selfLine + (
       "Nothing is running on this thread — no background shells, no sub-agents, no armed timers, no " +
       "registered PRs, and no question still owed an answer.\n\nSo there is nothing to wait on: an ```awaiting fence " +
       "would have nothing to name, and a fence naming nothing is not a park. End with ```done, or " +
@@ -1125,7 +1143,7 @@ async function activity() {
     // The `wch_…` id of the watch holding this item, where one is armed — this readout exists to hand a
     // worker back the ids it lost, and that includes the one `unwatch` takes.
     const held = i.watchId ? `  [watched as ${i.watchId}]` : ""
-    return `  ${i.kind}: ${i.id}${when}${held}${budget}\n    ${i.label}`
+    return `  ${i.kind}: ${i.id}${when}${held}${budget}\n    ${i.address ? `@${i.address} — ` : ""}${i.label}`
   })
   // A READY-TO-PASTE FENCE, not a description of one. The frontmatter is YAML since 2026-08-24 and its
   // keys are PLURAL sequences, so an id printed on its own line is no longer something a worker can copy
@@ -1136,7 +1154,7 @@ async function activity() {
   const block = Object.entries({ shells: byKind.shell, agents: byKind.agent, timers: byKind.timer, prs: byKind.pr, issues: byKind.issue })
     .filter(([, ids]) => ids.length > 0)
     .map(([key, ids]) => `  ${key}: [${ids.join(", ")}]`)
-  return (
+  return selfLine + (
     `${items.length} thing${items.length === 1 ? "" : "s"} running on this thread:\n\n${lines.join("\n")}\n\n` +
     "Name the ones you are ACTUALLY waiting on in your ```awaiting fence. The frontmatter is YAML — one " +
     "PLURAL key per kind, taking a list — plus a required `for:` duration, and your handoff prose BELOW " +

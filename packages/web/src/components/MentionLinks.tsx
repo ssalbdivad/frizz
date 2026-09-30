@@ -1,5 +1,8 @@
 import { createContext, useContext, useMemo, type ReactNode } from "react"
+import { useQueryClient } from "@tanstack/react-query"
 import { useMentionCandidates } from "../hooks/useMentionCandidates.ts"
+import { openSubAgentMention } from "../hooks/useSubAgentDirectory.ts"
+import { useThreadApi, useThreadProjectId } from "../api/threadApi.tsx"
 import { basePath } from "../lib/base-path.ts"
 import { mentionSegments, type MentionCandidate, type MentionSegment } from "../lib/threadMentions.ts"
 import { openThread } from "../store.ts"
@@ -27,6 +30,10 @@ export function useMentionSegments(text: string): MentionSegment[] {
 }
 
 export function MentionLink({ segment }: { segment: Extract<MentionSegment, { kind: "mention" }> }) {
+  return segment.address ? <SubAgentMentionLink segment={segment} /> : <ThreadMentionLink segment={segment} />
+}
+
+function ThreadMentionLink({ segment }: { segment: Extract<MentionSegment, { kind: "mention" }> }) {
   return (
     <a
       href={`${basePath()}/thread/${segment.slug}`}
@@ -41,6 +48,37 @@ export function MentionLink({ segment }: { segment: Extract<MentionSegment, { ki
         if (e.button !== 0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return
         e.preventDefault()
         openThread(segment.slug)
+      }}
+      onKeyDown={(e) => e.stopPropagation()}
+    >
+      {segment.text}
+    </a>
+  )
+}
+
+// `@thread.child` OPENS THE CHILD — its sub-agent drawer, or its thread when the directory does not know
+// it (openSubAgentMention, the click path agent prose shares). The segment links as soon as its THREAD
+// resolves; whether the child is real is asked only on the click, so a transcript full of mentions costs
+// no requests to draw. A component of its own because only it needs the query client: a thread mention
+// renders on surfaces with none.
+function SubAgentMentionLink({ segment }: { segment: Extract<MentionSegment, { kind: "mention" }> }) {
+  const queryClient = useQueryClient()
+  const api = useThreadApi()
+  const projectId = useThreadProjectId()
+  return (
+    <a
+      href={`${basePath()}/thread/${segment.slug}`}
+      title="Open sub-agent"
+      data-thread-mention={segment.slug}
+      data-subagent-mention={segment.address}
+      className="underline underline-offset-2"
+      // The thread link's click contract: a modified click is the browser's (⌘-click opens the THREAD in
+      // a new tab — a sub-agent has no URL of its own), and the bubble never sees the click.
+      onClick={(e) => {
+        e.stopPropagation()
+        if (e.button !== 0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return
+        e.preventDefault()
+        void openSubAgentMention(queryClient, api, projectId, segment.slug, segment.address!)
       }}
       onKeyDown={(e) => e.stopPropagation()}
     >

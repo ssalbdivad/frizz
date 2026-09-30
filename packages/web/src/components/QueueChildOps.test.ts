@@ -22,7 +22,9 @@ test("the card's ops column lists every sub-agent, Workflow and shell, in the dr
   const html = render()
   assert.match(html, /data-queue-ops="parent"/)
   // Agents first (dispatch order, a workflow's agents under it), then shells — the drawer strip's order.
-  const order = ["Verify goal caps on a real stack", "verify-wave", "verify:S8:0.1", "Quiet one", "nub run dev"].map((label) => html.indexOf(label))
+  // An agent row shows its handle (a six-word sentence has none and stays as written); a shell row shows
+  // its command as written, never camelCased.
+  const order = [">Verify goal caps on a real stack<", ">verifyWave<", ">verifyS801<", ">quietOne<", ">nub run dev<"].map((label) => html.indexOf(label))
   assert.ok(order.every((at, i) => at > 0 && (i === 0 || at > order[i - 1]!)), `order ${order}`)
   // The drawer's "sheet" density: kind tags, the live dots, and the stale child still listed.
   for (const tag of [">AGENT<", ">FLOW<", ">SHELL<"]) assert.ok(html.includes(tag), tag)

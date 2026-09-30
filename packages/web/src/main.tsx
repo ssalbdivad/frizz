@@ -73,7 +73,7 @@ if (!settingsFixture) {
   installExternalLinkInterceptor()
   installLocalFileLinkInterceptor()
   installCodeCopyInterceptor()
-  installThreadLinkInterceptor()
+  installThreadLinkInterceptor(queryClient)
   installViewTransitionRejectionFilter()
   // A reply still on the wire when the last page in this tab went away — see lib/pendingSends.ts.
   setTimeout(() => void replayPendingSends(), PENDING_SEND_REPLAY_DELAY_MS)

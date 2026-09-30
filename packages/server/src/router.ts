@@ -137,6 +137,11 @@ import {
   SetOwnThreadTitleResult,
   ReadThreadInput,
   ReadThreadResult,
+  SubAgentDirectory,
+  addressSegments,
+  subAgentAddress,
+  subAgentChain,
+  subAgentHandle,
   MessageThreadInput,
   MessageThreadResult,
   AcpAgent,
@@ -153,7 +158,7 @@ import { type AppContext } from "./context.ts"
 import { listAcpAgents } from "./backend/acp-agents.ts"
 import { sessionTitleLocked } from "./storage.ts"
 import { createThreadNamer, threadNameProblem, type ThreadNamer } from "./thread-names.ts"
-import { handleOf, isReplyWaitFor, knownHandles, replyWaitPrompt, resolveThreadHandle, THREAD_MESSAGE_HOURLY_CAP, threadMessageBody } from "./thread-mentions.ts"
+import { handleOf, isReplyWaitFor, knownHandles, replyWaitPrompt, resolveSubAgent, resolveThreadHandle, subAgentAddresses, THREAD_MESSAGE_HOURLY_CAP, threadMessageBody } from "./thread-mentions.ts"
 import { enqueueThreadMessageWake } from "./scheduler.ts"
 import { editedFilesOf } from "./edited-files.ts"
 import { mayHaveLiveBackgroundWork, needsFreshProcessForLimit } from "./backend/usage-limit.ts"
@@ -941,12 +946,69 @@ function isHumanTurn(m: TranscriptMessage): boolean {
   return !m.wake || said.startsWith(BURIED_ANSWERS_HEADER)
 }
 
+// Where cc-worker/hooks/agent-dispatch.mjs's auto-appended helper epilogue begins in a sub-agent's prompt.
+const SUBAGENT_EPILOGUE_MARK = "\n---\n[ORCHESTRATION EPILOGUE"
+
 export function createRouter(ctx: AppContext) {
   // The name registry every title writer checks (thread-names.ts). A hand-built test context may carry
   // none; uniqueness then reads storage and the tailer directly, which is all it ever needs — only the
   // mint and the AI rename need the model.
   const fallbackNamer = createThreadNamer({ storage: ctx.storage, aiTitleOf: (slug) => ctx.tailer?.get(slug)?.aiTitle })
   const threadNamer = (): ThreadNamer => ctx.threadNamer ?? fallbackNamer
+  // A THREAD'S SUB-AGENTS BY ADDRESS (shared thread-handle.ts): the tailer's directory — every child the
+  // thread ever dispatched, live first — with each row's `thread.subAgent` address filled in from the
+  // thread's own handle, which only the name registry knows.
+  const subAgentDirectoryOf = (slug: string): SubAgentDirectory => {
+    const named = threadNamer().threads().find((t) => t.slug === slug)
+    const threadHandle = named ? handleOf(named) : undefined
+    const rows = ctx.tailer.subAgentDirectory?.(slug) ?? []
+    return {
+      ...(threadHandle ? { threadHandle } : {}),
+      agents: rows.map((row) => {
+        const chain = threadHandle ? subAgentChain(rows, row.id) : undefined
+        return chain ? { ...row, address: subAgentAddress(threadHandle!, chain) } : row
+      }),
+    }
+  }
+
+  // `read_thread` on a SUB-AGENT's address: the answer a thread gives, off the child's OWN transcript —
+  // its dispatch prompt as the request, its newest words as the latest (its report, once it has
+  // returned), and the three before them. Live or finished alike: the directory reaches back through the
+  // session's own sidecars. A Workflow run is not a conversation, so its latest is its agents and where
+  // each one stands.
+  const readSubAgent = (slug: string, threadHandle: string, path: readonly string[], clip: (text: string, max: number) => string) => {
+    const { agents } = subAgentDirectoryOf(slug)
+    const child = resolveSubAgent(path, agents)
+    if (!child) return { found: false, subAgentOf: threadHandle, known: subAgentAddresses(threadHandle, agents) }
+    const address = agents.find((a) => a.id === child.id)?.address ?? subAgentAddress(threadHandle, path)
+    const info = ctx.tailer.subAgent(slug, child.id)
+    const state = child.state === "done" ? "done" as const : child.state === "rested" ? "resting" as const : "running" as const
+    const outcome = child.outcome ?? info?.outcome
+    const base = { found: true, handle: address, slug, state, subAgentOf: threadHandle, ...(outcome ? { outcome } : {}) }
+    if (info?.workflow) {
+      const runAgents = agents.filter((a) => a.parentId === child.id)
+      const lines = runAgents.map((a) => `- @${a.address ?? a.label} — ${a.state === "done" ? a.outcome === "failed" ? "failed" : "finished" : a.state}`)
+      return { ...base, ...(lines.length ? { latest: lines.join("\n") } : {}) }
+    }
+    const read = info?.outputFormat === "codex" ? readCodexTranscriptFile : readTranscriptFile
+    const messages = info?.outputFile ? read(info.outputFile) : []
+    const said = (m: (typeof messages)[number]) => (m.displayText ?? m.text).trim()
+    const opening = messages.find((m) => m.role === "user" && !m.kind && said(m))
+    // The dispatch prompt as the WORKER wrote it: Frizz's dispatch hook appends its helper epilogue to
+    // every Agent prompt (cc-worker/hooks/agent-dispatch.mjs), and a reader asking what the child was sent
+    // to do wants the task, not two paragraphs of Frizz's rules for helpers — seen on the first real read.
+    const request = opening ? said(opening).split(SUBAGENT_EPILOGUE_MARK)[0]!.trimEnd() : ""
+    const spoken = messages.filter((m) => m.role === "assistant" && !m.kind && said(m))
+    const latest = spoken.at(-1)
+    const earlier = spoken.slice(-4, -1).map((m) => clip(said(m), 2_000))
+    return {
+      ...base,
+      ...(request ? { request: clip(request, 4_000) } : {}),
+      ...(earlier.length ? { earlier } : {}),
+      ...(latest ? { latest: clip(said(latest), 8_000), ...(latest.at ? { latestAt: latest.at } : {}) } : {}),
+    }
+  }
+
   // Messages one thread sent another, by ordered (from, to) pair — the hourly cap on `messageThread`.
   // In memory: a restart forgets it, which only ever loosens a cap that exists to stop a runaway loop.
   const threadMessageLog = new Map<string, number[]>()
@@ -1709,6 +1771,31 @@ export function createRouter(ctx: AppContext) {
         }
         const result = ctx.interactions.cancel(scope, input)
         return { effect: result.effect, interaction: result.interaction }
+      },
+    }),
+
+    // Every sub-agent a thread ever dispatched, live first then finished newest first, each with its
+    // `thread.subAgent` address — what `@thread.` completes against in the prompt box and what a
+    // `@thread.subAgent` mention opens (subAgentDirectoryOf above; the tailer's subAgentDirectory for
+    // where the history comes from).
+    subAgentDirectory: query({
+      input: z.object({ slug: ThreadSlug }).strict(),
+      output: SubAgentDirectory,
+      handler: async ({ input }) => subAgentDirectoryOf(input.slug),
+    }),
+
+    // The address a sub-agent this thread is dispatching will answer to — `portTheParser.spelling` for
+    // `description: "Spelling"` — for the worker's post-dispatch hook (cc-worker/hooks/agent-address.mjs),
+    // which puts it in front of the worker the moment the child starts, so the handoff names it by the
+    // address the board links rather than as "a sub-agent" (maintainer 2026-09-30). Computed HERE so the
+    // one naming rule (shared thread-handle.ts) has one implementation; the hook knows only the words.
+    subAgentAddressFor: query({
+      input: z.object({ slug: ThreadSlug, label: z.string().trim().min(1).max(500) }).strict(),
+      output: z.object({ address: z.string().optional() }).strict(),
+      handler: async ({ input }) => {
+        const named = threadNamer().threads().find((t) => t.slug === input.slug)
+        const child = subAgentHandle(input.label)
+        return named && child ? { address: subAgentAddress(handleOf(named), [child]) } : {}
       },
     }),
 
@@ -2995,9 +3082,15 @@ export function createRouter(ctx: AppContext) {
           const budgetEndsAt = budget ? { budgetEndsAt: new Date(budget.deadlineMs).toISOString() } : {}
           if (id) activity.push({ kind: "shell", id, label: sh.label, since: sh.startedAt, ...watchFor("shell", [sh.taskId, sh.id, sh.label]), ...budgetEndsAt })
         }
+        // Each sub-agent with its `thread.subAgent` address, and the thread's own handle on the result, so a
+        // worker writes the names the board links (maintainer 2026-09-30: agents refer to each other "by the
+        // fully qualified name so you can easily click to view that agent", never as "another agent").
+        const directory = subAgentDirectoryOf(input.slug)
+        const addressOf = new Map(directory.agents.flatMap((row) => (row.address ? [[row.id, row.address] as const] : [])))
         for (const a of tele?.subAgents ?? []) {
           if (a.state !== "running") continue
-          if (a.id) activity.push({ kind: "agent", id: a.taskId ?? a.id, label: a.label, since: a.startedAt, ...watchFor("agent", [a.taskId, a.id, a.label]) })
+          const address = a.id ? addressOf.get(a.id) : undefined
+          if (a.id) activity.push({ kind: "agent", id: a.taskId ?? a.id, label: a.label, since: a.startedAt, ...(address ? { address } : {}), ...watchFor("agent", [a.taskId, a.id, a.label]) })
         }
         for (const t of ctx.storage.listThreadTimers(input.slug, { armedOnly: true })) {
           activity.push({
@@ -3015,7 +3108,7 @@ export function createRouter(ctx: AppContext) {
         // The WATCHES are already readable: each armed one rides its live item as `watchId`, and the
         // scheduler settles a watch the tick its target stops being live, so an armed row always has an
         // item to ride. The QUESTIONS had nowhere at all — hence their own list.
-        return { activity, questions: openQuestionViews(input.slug), links: ctx.storage.listThreadLinks(input.slug).map(threadLinkView) }
+        return { ...(directory.threadHandle ? { handle: directory.threadHandle } : {}), activity, questions: openQuestionViews(input.slug), links: ctx.storage.listThreadLinks(input.slug).map(threadLinkView) }
       },
     }),
 
@@ -3810,13 +3903,17 @@ export function createRouter(ctx: AppContext) {
       output: ReadThreadResult,
       handler: async ({ input }) => {
         const threads = threadNamer().threads()
-        const hit = resolveThreadHandle(input.handle, threads)
+        // `portTheParser.cacheKeys` names a SUB-AGENT of `portTheParser` (shared thread-handle.ts): the
+        // thread resolves first, then the rest of the address down its live children.
+        const [threadPart = input.handle, ...childPath] = addressSegments(input.handle)
+        const hit = resolveThreadHandle(threadPart, threads)
         const row = hit ? ctx.storage.getSession(hit.slug) : undefined
         if (!hit || !row) return { found: false, known: knownHandles(threads, input.slug) }
+        const clip = (text: string, max: number) => (text.length > max ? `${text.slice(0, max)}\n…[truncated]` : text)
+        if (childPath.length > 0) return readSubAgent(hit.slug, handleOf(hit), childPath, clip)
         const messages = readThreadTranscript(ctx.project, ctx.storage, hit.slug, ctx.backendFor)
         const said = (m: (typeof messages)[number]) => (m.displayText ?? m.text).trim()
         const opening = messages.find((m) => m.role === "user" && !m.kind && said(m))
-        const clip = (text: string, max: number) => (text.length > max ? `${text.slice(0, max)}\n…[truncated]` : text)
         // The newest assistant words: the handoff when it is resting, the latest narration when it is not —
         // and the three before them, which is where the APPROACH lives when the newest is a terse handoff.
         const spoken = messages.filter((m) => m.role === "assistant" && !m.kind && said(m))
@@ -3848,8 +3945,16 @@ export function createRouter(ctx: AppContext) {
       output: MessageThreadResult,
       handler: async ({ input }) => {
         const threads = threadNamer().threads()
-        const hit = resolveThreadHandle(input.handle, threads)
+        const [threadPart = input.handle, ...childPath] = addressSegments(input.handle)
+        const hit = resolveThreadHandle(threadPart, threads)
         const target = hit ? ctx.storage.getSession(hit.slug) : undefined
+        // A SUB-AGENT is reached through its own thread, never directly: it lives inside that thread's
+        // session, where a message from outside would land on the thread's main turn instead (see
+        // subAgentSteer for the measured misdelivery). Said plainly, with the handle that does work.
+        if (hit && target && childPath.length > 0) {
+          const handle = handleOf(hit)
+          return { sent: false, handle: `${handle}.${childPath.join(".")}`, refusal: `that is a sub-agent of @${handle}, and only its own thread can reach it. Read it with read_thread, or message @${handle} and ask it to pass the message on.` }
+        }
         if (!hit || !target) {
           return { sent: false, refusal: `no thread is called ${input.handle}.`, known: knownHandles(threads, input.slug) }
         }

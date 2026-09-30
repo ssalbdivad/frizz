@@ -89,6 +89,8 @@ test("the cross-project page is focused on a project", () => {
   assert.equal(crossProjectHref("nub"), "/all/nub")
   // An agent's `/thread/<slug>` link opens in place, on this page.
   assert.equal(prefixedAppRoute("/thread/other", page), "/all/nub/thread/other")
+  // …and an agent's `@thread.child` mention keeps the child's address in the fragment (mentionAutolink.ts).
+  assert.equal(prefixedAppRoute("/thread/other#portTheParser.cacheKeys", page), "/all/nub/thread/other#portTheParser.cacheKeys")
   assert.equal(prefixedAppRoute("/all/zod/thread/x", page), null, "already names its project")
 })
 

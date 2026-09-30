@@ -4215,6 +4215,9 @@ export const ThreadActivityItem = z.object({
    *  the alternative and it would list the same shell twice, which is exactly the duplication that put
    *  two sub-agents under a "Background shells" heading. */
   watchId: z.string().optional(),
+  /** A SUB-AGENT's `thread.subAgent` address (thread-handle.ts), so the worker names it in its prose the
+   *  way the board shows it — as a link the human can click — rather than as "a sub-agent". */
+  address: z.string().optional(),
   /** A SHELL's runtime-budget deadline (ISO8601) — when frizz warns about it and, unextended, stops it
    *  ten minutes later. Its own field rather than `until`, which reads as "fires at" everywhere else. */
   budgetEndsAt: z.string().optional(),
@@ -4227,6 +4230,8 @@ export const ListOwnThreadActivityInput = z.object({
 export type ListOwnThreadActivityInput = z.infer<typeof ListOwnThreadActivityInput>
 
 export const OwnThreadActivityResult = z.object({
+  /** This thread's own handle — the head of every sub-agent address above, and what other threads call it. */
+  handle: z.string().optional(),
   activity: z.array(ThreadActivityItem),
   links: z.array(ThreadLinkView).optional(),
   /** Every question still owed an answer. NOT a `ThreadActivityItem` and deliberately its own list: a
@@ -4364,8 +4369,45 @@ export const ReadThreadResult = z.object({
   earlier: z.array(z.string()).optional(),
   editedFiles: z.array(z.string()).optional(),
   known: z.array(z.string()).optional(),
+  /** Set when the handle named a SUB-AGENT (`thread.subAgent`): the handle of the thread it belongs to.
+   *  `state` is then the child's own — "done" once it has returned — and `outcome` how it ended. */
+  subAgentOf: z.string().optional(),
+  outcome: z.enum(["completed", "failed", "killed"]).optional(),
 }).strict()
 export type ReadThreadResult = z.infer<typeof ReadThreadResult>
+
+// A THREAD'S SUB-AGENTS, EVERY ONE IT EVER DISPATCHED — live first, then the finished ones newest first
+// (the `subAgentDirectory` RPC). The board's `subAgents` is the LIVE list only; a child that has returned
+// leaves it, but its name, its transcript and its place in the tree stay on disk in the session's own
+// `subagents/` dir (Claude's `agent-<id>.meta.json` sidecars, and each Workflow run's journal), so the
+// directory is read from there rather than kept by Frizz. It is what `@thread.` completes against in the
+// prompt box, and what a `@thread.subAgent` mention opens — after the child has returned as well as while
+// it runs (shared thread-handle.ts for the address itself).
+export const SubAgentDirectoryEntry = z.object({
+  /** The drill-in id — what `subAgentTranscript` and the sub-agent drawer take. */
+  id: z.string(),
+  /** The dispatch name as written (`description`, or a Workflow agent's `label`). */
+  label: z.string(),
+  /** Its full `thread.subAgent` address without the `@`, when every link down to it has a handle. */
+  address: z.string().optional(),
+  /** The drill-in id of the sub-agent that dispatched it; absent for the thread's own children. */
+  parentId: z.string().optional(),
+  depth: z.number().int().min(1),
+  state: z.enum(["running", "stale", "rested", "done"]),
+  outcome: z.enum(["completed", "failed", "killed"]).optional(),
+  startedAt: z.string().optional(),
+  finishedAt: z.string().optional(),
+  workflow: z.boolean().optional(),
+  subagentType: z.string().optional(),
+}).strict()
+export type SubAgentDirectoryEntry = z.infer<typeof SubAgentDirectoryEntry>
+
+export const SubAgentDirectory = z.object({
+  /** The thread's own handle, the head of every address below; absent when its name has none. */
+  threadHandle: z.string().optional(),
+  agents: z.array(SubAgentDirectoryEntry),
+}).strict()
+export type SubAgentDirectory = z.infer<typeof SubAgentDirectory>
 
 export const MessageThreadInput = z.object({
   slug: ThreadSlug,

@@ -492,6 +492,8 @@ the human points you at another thread with it: "ask @shellBudgets about this", 
 
 - **`mcp__frizz__read_thread`** — its request, status, last few messages (its approach and its handoff)
   and edited files. It wakes nobody, so it is ALWAYS the first move, and it often answers the question.
+  A thread's SUB-AGENTS read the same way under its handle, `@portTheParser.cacheKeys` — running or
+  long since returned; only their own thread can message them.
 - **`mcp__frizz__message_thread`** — a message into its conversation, signed with your handle. To ASK
   and wait for the answer, pass `await_reply: true` and rest: you are parked until it answers (or the
   wait runs out and wakes you), with nothing else to sign off. To TELL — your approach, a file you are
@@ -500,6 +502,13 @@ the human points you at another thread with it: "ask @shellBudgets about this", 
 A message from another thread arrives headed with its handle and never reached the human. If it asks
 something, answer with `message_thread` — promptly when it says the sender is waiting on you, even if only
 to say you cannot help. Never reply just to acknowledge.
+
+**NAME EVERY AGENT BY ITS ADDRESS, NEVER BY A DESCRIPTION.** Whenever anything the human reads mentions
+another thread, a sub-agent of yours, or someone else's — a handoff, a card, a question, a message —
+write its `@` address: `@shellBudgets`, `@portTheParser.cacheKeys`. Never "another thread", "a
+sub-agent", "the reviewer" or "the helper": the board turns every address into a link that opens that
+agent, and a description opens nothing — nor does its name in bold. `mcp__frizz__activity` prints your
+own handle and the address of every sub-agent you have running; a finished one keeps the address it had.
 
 ## Spawning a separate frizz thread
 

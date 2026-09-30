@@ -1,6 +1,7 @@
 import { createContext, useContext, useEffect, useMemo, useSyncExternalStore } from "react"
 import { mdToHtml, mdInlineToHtml, type MarkdownScopeOptions } from "./markdown.ts"
 import { githubRepoForLinks, subscribeGithubRepo } from "./githubAutolink.ts"
+import { mentionIndexVersion, subscribeMentionIndex } from "./mentionAutolink.ts"
 import { githubRefsInHtml, noteGithubRefs } from "./githubHovercards.ts"
 import { localPathBase, subscribeLocalPathBase, type LocalPathBase } from "./localPathBase.ts"
 
@@ -29,11 +30,19 @@ export const MarkdownScopeContext = createContext<MarkdownScope | null>(null)
 
 /** A project named explicitly, for its prose: `projectId` is also whose files an inline-code path is
  *  looked up among (localFileCode.ts). */
-export type MarkdownScope = Required<Pick<MarkdownScopeOptions, "repo" | "appPath">> & Pick<MarkdownScopeOptions, "baseDir" | "homeDir"> & { projectId: string }
+export type MarkdownScope = Required<Pick<MarkdownScopeOptions, "repo" | "appPath">> & Pick<MarkdownScopeOptions, "baseDir" | "homeDir" | "projectSlug"> & { projectId: string }
 
 /** The repo GitHub-style references link to, as a render input. */
 export function useGithubRepoForLinks(): string | null {
   return useSyncExternalStore(subscribeGithubRepo, githubRepoForLinks, githubRepoForLinks)
+}
+
+/**
+ * The board's `@handle` index, as a render input (lib/mentionAutolink.ts) — the same late-arriving
+ * module state as the repo above, so prose memoized before the board landed rebuilds its mention links.
+ */
+export function useMentionIndexVersion(): number {
+  return useSyncExternalStore(subscribeMentionIndex, mentionIndexVersion, mentionIndexVersion)
 }
 
 /**
@@ -54,6 +63,7 @@ export function useLocalPathBase(): LocalPathBase {
  */
 export function useMarkdownHtml(md: string, opts?: { baseDir?: string; asDocument?: boolean }): string {
   const pageRepo = useGithubRepoForLinks()
+  const mentions = useMentionIndexVersion()
   const pageBase = useLocalPathBase()
   const scope = useContext(MarkdownScopeContext)
   const { baseDir, asDocument } = opts ?? {}
@@ -62,8 +72,8 @@ export function useMarkdownHtml(md: string, opts?: { baseDir?: string; asDocumen
   // `pageRepo` is deliberately a dependency even where it is not passed: without a scope it is an input
   // to mdToHtml through githubAutolink.ts's module state, not through this argument list.
   const html = useMemo(
-    () => mdToHtml(md, { baseDir: dir, homeDir: home, document: asDocument, repo: scope?.repo, appPath: scope?.appPath }),
-    [md, dir, home, asDocument, pageRepo, scope?.repo, scope?.appPath],
+    () => mdToHtml(md, { baseDir: dir, homeDir: home, document: asDocument, repo: scope?.repo, appPath: scope?.appPath, projectSlug: scope?.projectSlug }),
+    [md, dir, home, asDocument, pageRepo, mentions, scope?.repo, scope?.appPath, scope?.projectSlug],
   )
   useGithubHovercardRefs(html)
   return html
@@ -88,13 +98,14 @@ function useGithubHovercardRefs(html: string): void {
 /** Inline-only prose → sanitized HTML, for hosts that are one line tall (see mdInlineToHtml). */
 export function useInlineMarkdownHtml(md: string): string {
   const pageRepo = useGithubRepoForLinks()
+  const mentions = useMentionIndexVersion()
   const pageBase = useLocalPathBase()
   const scope = useContext(MarkdownScopeContext)
   const dir = scope ? scope.baseDir : pageBase.dir
   const home = scope ? scope.homeDir : pageBase.home
   const html = useMemo(
-    () => mdInlineToHtml(md, { baseDir: dir, homeDir: home, repo: scope?.repo, appPath: scope?.appPath }),
-    [md, dir, home, pageRepo, scope?.repo, scope?.appPath],
+    () => mdInlineToHtml(md, { baseDir: dir, homeDir: home, repo: scope?.repo, appPath: scope?.appPath, projectSlug: scope?.projectSlug }),
+    [md, dir, home, pageRepo, mentions, scope?.repo, scope?.appPath, scope?.projectSlug],
   )
   useGithubHovercardRefs(html)
   return html

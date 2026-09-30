@@ -3,7 +3,7 @@
 // scheduler.test.ts, "thread message: …".
 import { test } from "node:test"
 import assert from "node:assert/strict"
-import { mkdtempSync, rmSync } from "node:fs"
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import type { BoardSnapshot, Settings } from "@frizz/shared"
@@ -14,7 +14,7 @@ import type { AppContext } from "./context.ts"
 import type { Project } from "./project.ts"
 import type { Tailer } from "./tailer.ts"
 import { createWakeDeliveryStore } from "./wake-store.ts"
-import { knownHandles, resolveThreadHandle, THREAD_MESSAGE_HOURLY_CAP } from "./thread-mentions.ts"
+import { knownHandles, resolveSubAgent, resolveThreadHandle, subAgentAddresses, THREAD_MESSAGE_HOURLY_CAP } from "./thread-mentions.ts"
 import type { NamedThread } from "./thread-names.ts"
 
 const named = (slug: string, name: string, open = true, at = 0): NamedThread => ({ slug, name, open, at })
@@ -41,7 +41,7 @@ test("an open thread outranks a finished one carrying the same name", () => {
   assert.deepEqual(knownHandles(threads), ["@focusMode", "@focusMode (done)"])
 })
 
-function harness() {
+function harness(tailerOver: Partial<Tailer> = {}) {
   const dir = mkdtempSync(join(tmpdir(), "frizz-mentions-rpc-"))
   const project: Project = { dir, id: "m", name: "test", label: "test", stateDir: dir, cwdSlug: "test" }
   const storage = createStorage(join(dir, "ui.db"), "p")
@@ -53,6 +53,7 @@ function harness() {
   const tailer: Tailer = {
     get: () => undefined, foreignIds: () => [], subAgent: () => undefined,
     forget: () => {}, start: () => {}, stop: () => {}, tick: () => {},
+    ...tailerOver,
   }
   let kicks = 0
   const ctx = {
@@ -61,7 +62,7 @@ function harness() {
     getSettings: () => ({ permissionMode: "auto" }) as unknown as Settings,
   } as unknown as AppContext
   return {
-    storage, router: createRouter(ctx), kicks: () => kicks,
+    dir, storage, router: createRouter(ctx), kicks: () => kicks,
     close: () => { storage.close(); rmSync(dir, { recursive: true, force: true }) },
   }
 }
@@ -159,5 +160,117 @@ test("a bad await_reply duration refuses before anything is sent", async () => {
     assert.equal(bad.sent, false)
     assert.equal(createWakeDeliveryStore(h.storage.scope).list().length, 0)
     assert.equal(h.storage.listThreadTimers("me", { armedOnly: true }).length, 0)
+  } finally { h.close() }
+})
+
+// A THREAD'S SUB-AGENTS BY ADDRESS — `portTheParser.cacheKeys`, resolved against the thread's directory
+// (live first, then finished newest first; tailer subAgentDirectory).
+const DIRECTORY = [
+  { id: "toolu_keys", label: "Cache keys", state: "stale" },
+  { id: "toolu_keys2", label: "cache-keys", state: "running" },
+  { id: "toolu_wave", label: "Wave 2", state: "running" },
+  { id: "aW3", label: "impl:W3", parentId: "toolu_wave", state: "running" },
+  { id: "toolu_review", label: "Review", state: "done", outcome: "completed" },
+  { id: "toolu_old_review", label: "Review", state: "done", outcome: "completed" },
+  { id: "toolu_essay", label: "Fresh-context review of the whole effort diff", state: "done" },
+]
+
+test("a sub-agent address walks the thread's directory, one segment per level", () => {
+  assert.equal(resolveSubAgent(["wave2", "implW3"], DIRECTORY)?.id, "aW3")
+  assert.equal(resolveSubAgent(["implW3"], DIRECTORY), undefined, "a workflow's agent is not the thread's own child")
+  assert.equal(resolveSubAgent(["nothing"], DIRECTORY), undefined)
+})
+
+test("a reused name means the running child, else the newest finished one; the id always names one", () => {
+  assert.equal(resolveSubAgent(["cacheKeys"], DIRECTORY)?.id, "toolu_keys2", "running beats a quiet live sibling")
+  assert.equal(resolveSubAgent(["review"], DIRECTORY)?.id, "toolu_review", "directory order puts the newest first")
+  assert.equal(resolveSubAgent(["toolu_old_review"], DIRECTORY)?.id, "toolu_old_review")
+  assert.equal(resolveSubAgent(["toolu_essay"], DIRECTORY)?.id, "toolu_essay", "a child with no handle is still reachable by id")
+})
+
+test("a miss is answered with the addresses that exist, finished ones tagged, sentences left out", () => {
+  assert.deepEqual(subAgentAddresses("portTheParser", DIRECTORY), [
+    "@portTheParser.cacheKeys",
+    "@portTheParser.cacheKeys",
+    "@portTheParser.wave2",
+    "@portTheParser.wave2.implW3",
+    "@portTheParser.review (done)",
+    "@portTheParser.review (done)",
+  ])
+})
+
+test("readThread on a thread.subAgent address answers from the child's own transcript, finished ones too", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "frizz-subagent-read-"))
+  const transcript = join(dir, "agent-aReview.jsonl")
+  writeFileSync(transcript, [
+    JSON.stringify({ type: "user", timestamp: "2026-09-30T02:00:00.000Z", message: { role: "user", content: "Review the parser port.\n\n---\n[ORCHESTRATION EPILOGUE — auto-appended by the frizz worker dispatch hook] You are a helper sub-agent." } }),
+    JSON.stringify({ type: "assistant", timestamp: "2026-09-30T02:09:00.000Z", message: { id: "m1", stop_reason: "end_turn", content: [{ type: "text", text: "The port is sound; one cache key collides." }] } }),
+  ].join("\n") + "\n")
+  const h = harness({
+    subAgentDirectory: (slug) => (slug === "pp" ? [
+      { id: "toolu_keys", label: "Cache keys", depth: 1, state: "running" },
+      { id: "toolu_review", label: "Review", depth: 1, state: "done", outcome: "completed", finishedAt: "2026-09-30T02:10:00.000Z" },
+    ] : []),
+    subAgent: (slug, id) => (slug === "pp" && id === "toolu_review" ? { outputFile: transcript, state: "done", direct: false, outcome: "completed" } : undefined),
+  })
+  try {
+    h.storage.upsertSession(row("me", "Mentions"))
+    h.storage.upsertSession(row("pp", "Port the parser"))
+    const hit = await h.router.readThread.handler({ input: { slug: "me", handle: "@portTheParser.review" } })
+    assert.equal(hit.found, true)
+    assert.equal(hit.handle, "portTheParser.review")
+    assert.equal(hit.subAgentOf, "portTheParser")
+    assert.equal(hit.slug, "pp")
+    assert.equal(hit.state, "done")
+    assert.equal(hit.outcome, "completed")
+    assert.equal(hit.request, "Review the parser port.", "Frizz's helper epilogue is not part of what the child was asked")
+    assert.equal(hit.latest, "The port is sound; one cache key collides.")
+
+    const miss = await h.router.readThread.handler({ input: { slug: "me", handle: "portTheParser.nothing" } })
+    assert.equal(miss.found, false)
+    assert.equal(miss.subAgentOf, "portTheParser")
+    assert.deepEqual(miss.known, ["@portTheParser.cacheKeys", "@portTheParser.review (done)"])
+
+    const directory = await h.router.subAgentDirectory.handler({ input: { slug: "pp" } })
+    assert.equal(directory.threadHandle, "portTheParser")
+    assert.deepEqual(directory.agents.map((a) => a.address), ["portTheParser.cacheKeys", "portTheParser.review"])
+  } finally {
+    h.close()
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+test("messageThread refuses a sub-agent address and names the thread that can reach it", async () => {
+  const h = harness()
+  try {
+    h.storage.upsertSession(row("me", "Mentions"))
+    h.storage.upsertSession(row("pp", "Port the parser"))
+    const refused = await h.router.messageThread.handler({ input: { slug: "me", handle: "@portTheParser.cacheKeys", message: "hi" } })
+    assert.equal(refused.sent, false)
+    assert.match(refused.refusal ?? "", /sub-agent of @portTheParser.*message @portTheParser/)
+    assert.equal(createWakeDeliveryStore(h.storage.scope).list().length, 0, "nothing was queued anywhere")
+  } finally { h.close() }
+})
+
+test("activity names the thread by its handle and each running sub-agent by its address", async () => {
+  const h = harness({
+    get: (slug) => (slug === "pp" ? { subAgents: [{ id: "toolu_keys", taskId: "aKeys", label: "Cache keys", state: "running", startedAt: "2026-09-30T02:00:00.000Z" }] } as unknown as ReturnType<Tailer["get"]> : undefined),
+    subAgentDirectory: (slug) => (slug === "pp" ? [{ id: "toolu_keys", label: "Cache keys", depth: 1, state: "running" }] : []),
+  })
+  try {
+    h.storage.upsertSession(row("pp", "Port the parser"))
+    const read = await h.router.listOwnThreadActivity.handler({ input: { slug: "pp" } })
+    assert.equal(read.handle, "portTheParser")
+    assert.deepEqual(read.activity.map((i) => [i.kind, i.id, i.address]), [["agent", "aKeys", "portTheParser.cacheKeys"]])
+  } finally { h.close() }
+})
+
+test("subAgentAddressFor names a child the thread is dispatching, by the one naming rule", async () => {
+  const h = harness()
+  try {
+    h.storage.upsertSession(row("pp", "Port the parser"))
+    assert.deepEqual(await h.router.subAgentAddressFor.handler({ input: { slug: "pp", label: "Cache keys" } }), { address: "portTheParser.cacheKeys" })
+    assert.deepEqual(await h.router.subAgentAddressFor.handler({ input: { slug: "pp", label: "Fresh-context review of the whole effort diff" } }), {}, "a sentence has no handle")
+    assert.deepEqual(await h.router.subAgentAddressFor.handler({ input: { slug: "nope", label: "Cache keys" } }), {})
   } finally { h.close() }
 })

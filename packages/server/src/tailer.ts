@@ -3,7 +3,7 @@ import { execFile } from "node:child_process"
 import { promisify } from "node:util"
 import { basename, join, win32 } from "node:path"
 import { homedir, tmpdir } from "node:os"
-import type { AskQuestion, AwaitingHint } from "@frizz/shared"
+import type { AskQuestion, AwaitingHint, SubAgentDirectoryEntry } from "@frizz/shared"
 import { insideFence, isAllInjectedNoise, isInterruptMarker, isWakeDelivery, parseAskUserQuestionInput, PermissionMode, questionFencesLive, saysAllDone, splitAwaitingFrontmatter } from "@frizz/shared"
 import type { Bus } from "./bus.ts"
 import { permMarkerPath, workDirOf, type Project } from "./project.ts"
@@ -2366,6 +2366,9 @@ export interface SubAgentLookup {
   workflowAgent?: true // the id names one AGENT of a workflow run, resolved through its run's journal
 }
 
+/** One row of a thread's sub-agent directory — the shared entry minus its address. */
+export type SubAgentDirectoryRecord = Omit<SubAgentDirectoryEntry, "address">
+
 export interface Tailer {
   get(slug: string): SessionTelemetry | undefined
   // FOREIGN session ids (JSONL files in the project dir with no registry row — maintainer terminals)
@@ -2391,6 +2394,10 @@ export interface Tailer {
   // `taskId` is the provider's session-wide background-task handle. Unlike `direct`, which controls
   // steer safety, it is available for descendants too and is what the SDK's stopTask accepts.
   subAgent(slug: string, id: string): SubAgentLookup | undefined
+  // EVERY sub-agent the thread ever dispatched, live first and then finished newest first, each a row the
+  // drawer can open by `id` — the `subAgentDirectory` RPC (addresses are the router's: it holds the
+  // thread's name). Optional so a narrow test stub may omit it; absent reads as "no sub-agents".
+  subAgentDirectory?(slug: string): SubAgentDirectoryRecord[]
   // Resolve a child by its RUNTIME agent id — the identity an upward report names its sender with. The
   // paged transcript RPC folds a bounded window and therefore cannot always translate that id itself;
   // this answers for as long as the tailer tracks the child. Optional so a narrow test stub may omit it
@@ -3591,6 +3598,104 @@ export function createTailer(deps: TailerDeps): Tailer {
       if (out.length > 0) subtrees.set(rootId, out)
     }
     return remember(subtrees)
+  }
+
+  // EVERY SUB-AGENT THIS THREAD EVER DISPATCHED (maintainer 2026-09-30: "some subagents are transient so
+  // probably we want to maintain some history of completed subagents so we can reference the thread if
+  // needed"). The board lists only LIVE children; this is what `@thread.subAgent` resolves against, in
+  // the prompt box's completion and in `read_thread`, once a child has returned as well as while it runs.
+  //
+  // Frizz keeps NO history of its own for this, because the provider already does, durably: every
+  // Claude sub-agent at every depth writes a sidecar (name, dispatch id, parent) and its transcript into
+  // the session's flat `subagents/` dir at spawn, and neither is ever deleted — so a child that returned
+  // an hour, or a restart, ago is still on disk exactly as it ran, for as long as Claude keeps the
+  // session. The union, in order of authority:
+  //   · the LIVE views the board shows (subAgentViews), in the board's order — running, stale, rested;
+  //   · every agent of a Workflow run, live or retained, off its own journal, finished ones included;
+  //   · the RETAINED ring — finished direct children and Workflow runs, with how and when each ended;
+  //   · the flat SIDECAR index — everything else, which is what makes this a history and not a ring.
+  // Live rows lead; the finished ones follow newest first, since "the review" means the latest review.
+  function subAgentDirectory(slug: string): SubAgentDirectoryRecord[] {
+    const state = states.get(slug)
+    if (!state || !registeredStateIsCurrent(state)) return []
+    const nowMs = now()
+    const live: SubAgentDirectoryRecord[] = []
+    const done: SubAgentDirectoryRecord[] = []
+    const seen = new Set<string>()
+    const add = (row: SubAgentDirectoryRecord) => {
+      if (seen.has(row.id)) return
+      seen.add(row.id)
+      ;(row.state === "done" ? done : live).push(row)
+    }
+    const iso = (ms: number | undefined) => (ms === undefined ? {} : { startedAt: new Date(ms).toISOString() })
+    const runAgents = (parentId: string, runDir: string, runLive: boolean) => {
+      for (const agent of readWorkflowRun(runDir)) {
+        const agentState = workflowAgentState(agent, runLive, nowMs)
+        const finished = agentState === "done" || agentState === "failed"
+        add({
+          id: agent.agentId,
+          label: agent.label,
+          parentId,
+          depth: 2,
+          state: finished ? "done" : agentState,
+          ...(agentState === "failed" ? { outcome: "failed" as const } : {}),
+          ...iso(agent.startedAtMs),
+        })
+      }
+    }
+    for (const view of subAgentViews(state, nowMs)) {
+      if (!view.id) continue
+      add({
+        id: view.id,
+        label: view.label,
+        ...(view.parentId ? { parentId: view.parentId } : {}),
+        depth: view.depth ?? 1,
+        state: view.state,
+        startedAt: view.startedAt,
+        ...(view.workflow ? { workflow: true } : {}),
+        ...(view.subagentType ? { subagentType: view.subagentType } : {}),
+      })
+    }
+    for (const e of state.subAgents.values()) if (e.kind === "agent" && e.workflow?.runDir) runAgents(e.toolUseId, e.workflow.runDir, true)
+    for (const dead of [...state.retiredSubAgents.values()].reverse()) {
+      add({
+        id: dead.toolUseId,
+        label: dead.label,
+        depth: 1,
+        state: "done",
+        outcome: dead.status,
+        ...(dead.startedAt ? { startedAt: dead.startedAt } : {}),
+        ...(dead.finishedAt ? { finishedAt: dead.finishedAt } : {}),
+        ...(dead.workflow ? { workflow: true } : {}),
+        ...(dead.subagentType ? { subagentType: dead.subagentType } : {}),
+      })
+      if (dead.workflow?.runDir) runAgents(dead.toolUseId, dead.workflow.runDir, false)
+    }
+    const sidecars = descendantSidecars(state)
+    const dispatchOf = new Map(sidecars.flatMap((meta) => (meta.toolUseId ? [[meta.agentId, meta.toolUseId] as const] : [])))
+    for (const meta of sidecars) {
+      if (!meta.toolUseId) continue
+      const parentId = meta.parentAgentId ? dispatchOf.get(meta.parentAgentId) : undefined
+      // A link to a parent with no sidecar of its own cannot be placed in the tree, and a row placed at
+      // the top would claim the THREAD dispatched it. Left out rather than misfiled.
+      if (meta.parentAgentId && !parentId) continue
+      // A direct child missing from the live map and the ring has returned and aged out of the ring. A
+      // deeper one has no retirement signal of its own, so its liveness is the descendant reading — but a
+      // quiet one is history here, not "stale" work: nothing surfaced it as live.
+      const running = meta.parentAgentId !== undefined && descendantState(state, meta) === "running"
+      add({
+        id: meta.toolUseId,
+        label: meta.description?.trim() || meta.agentType || "sub-agent",
+        ...(parentId ? { parentId } : {}),
+        depth: meta.spawnDepth ?? (parentId ? 2 : 1),
+        state: running ? "running" : "done",
+        ...iso(meta.spawnedAtMs),
+        ...(meta.agentType ? { subagentType: meta.agentType } : {}),
+      })
+    }
+    const recency = (row: SubAgentDirectoryRecord) => row.finishedAt ?? row.startedAt ?? ""
+    done.sort((a, b) => recency(b).localeCompare(recency(a)))
+    return [...live, ...done]
   }
 
   // Resolve a tracked sub-agent (thread slug + dispatch tool_use id) to its transcript path + state —
@@ -5388,6 +5493,7 @@ export function createTailer(deps: TailerDeps): Tailer {
     foreignIds: () => foreignFresh.map((f) => f.id),
     foreignBackend: (id) => foreignFresh.find((f) => f.id === id)?.backend,
     subAgent: subAgentLookup,
+    subAgentDirectory,
     subAgentByTaskId,
     subAgentDescendantTasks,
     backgroundShell: backgroundShellLookup,

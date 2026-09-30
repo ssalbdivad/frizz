@@ -1,5 +1,6 @@
 import type { ReturnedSubAgentView, SubAgentView } from "@frizz/shared"
 import type { Api } from "../api/rpc.ts"
+import { subAgentName } from "../groups.ts"
 import { pushSubAgentDrawer } from "../store.ts"
 import { visibleChildOps } from "../lib/childOps.ts"
 import { childOpDismisser } from "../lib/dismissChildOp.ts"
@@ -65,7 +66,7 @@ export function QueueSubAgentLines({
         <ChildOpRow
           key={agent.id ?? `${agent.startedAt}-${index}`}
           kind={agent.workflow ? "WORKFLOW" : "AGENT"}
-          label={agent.label}
+          label={subAgentName(agent.label)}
           state={agent.state}
           density="card"
           depth={agent.depth}
@@ -80,7 +81,7 @@ export function QueueSubAgentLines({
         <ChildOpRow
           key={child.id}
           kind="AGENT"
-          label={child.label}
+          label={subAgentName(child.label)}
           state="returned"
           outcome={child.status}
           endedAt={child.finishedAt}
