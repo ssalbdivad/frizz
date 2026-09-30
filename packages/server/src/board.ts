@@ -13,7 +13,7 @@ import { AskedQuestionSchema, BoardDiffer, PermissionMode, SnoozeUntil, ThreadSl
 import type { Bus } from "./bus.ts"
 import { workDirOf, type Project } from "./project.ts"
 import { isHeadlessRow, isBrokerClaudeRow, sessionTitleLocked, type ThreadQuestionRow } from "./storage.ts"
-import type { Storage, SessionRow, PrWatchRow, ThreadTimerRow, ThreadWatchRow, ThreadLinkRow, ShellBudgetRow } from "./storage.ts"
+import type { Storage, SessionRow, PrWatchRow, ThreadTimerRow, ThreadWatchRow, ThreadLinkRow, ShellBudgetRow, ThreadSpinOffRow } from "./storage.ts"
 import { resolveShellBudget, shellBudgetRecordOf } from "./shell-budget.ts"
 import { threadLinkView } from "./thread-links.ts"
 import { normalizeObservedThreadModel } from "./backend/thread-profiles.ts"
@@ -1629,6 +1629,7 @@ interface ThreadRegistries {
   watches: Map<string, ThreadWatchRow[]>
   done: Map<string, { body: string; doneAt: number }>
   shellBudgets: Map<string, ShellBudgetRow[]>
+  spinOffs: Map<string, ThreadSpinOffRow[]>
 }
 
 function readThreadRegistries(storage: Storage): ThreadRegistries {
@@ -1640,6 +1641,7 @@ function readThreadRegistries(storage: Storage): ThreadRegistries {
     watches: storage.armedThreadWatchesBySlug(),
     done: storage.threadDoneBySlug(),
     shellBudgets: storage.shellBudgetsBySlug(),
+    spinOffs: storage.spinOffsBySlug(),
   }
 }
 
@@ -1838,7 +1840,7 @@ function sessionThreadView(
     id: row.slug,
     ...title,
     // The live status line (periodic-status.ts) — what is happening now, beside a name that stays put.
-    ...(row.status?.trim() ? { statusLine: row.status.trim() } : {}),
+    ...(row.status?.trim() ? { statusLine: row.status.trim(), ...(row.status_at ? { statusSince: row.status_at } : {}) } : {}),
     status: "active", // synthesized: the field is required but UNUSED for session rows (see note above)
     hasPlan: false,
     mechanism: null,
@@ -1861,6 +1863,10 @@ function sessionThreadView(
     subAgents: stampStoppable(tele?.subAgents ?? [], row),
     bgShells: stampShellBudgets(stampStoppableShells(tele?.bgShells ?? [], row), registries.shellBudgets.get(row.slug), registries.watches.get(row.slug)),
     links: (registries.links.get(row.slug) ?? []).map(threadLinkView),
+    spinOffs: (registries.spinOffs.get(row.slug) ?? []).map((o) => ({
+      id: o.id, parentSlug: o.parent_slug, childSlug: o.child_slug, sourceId: o.source_id,
+      instructions: o.instructions, createdAt: o.created_at,
+    })),
     // ONE SOURCE: the FENCE. Both kinds are derived from what the worker wrote — `prs:` entries
     // become the github rows, `watch:` lines the shell rows — so this strip lists exactly what will
     // actually wake the thread, and the two cannot drift into claiming different things. There is no

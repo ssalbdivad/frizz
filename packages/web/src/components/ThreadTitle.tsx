@@ -3,7 +3,7 @@ import { useMutation } from "@tanstack/react-query"
 import type { ThreadView } from "@frizz/shared"
 import { rpc } from "../api/rpc.ts"
 import { showToast } from "../store.ts"
-import { displayTitle } from "../groups.ts"
+import { displayName, displayTitle } from "../groups.ts"
 import { THREAD_TITLE_MAX_LENGTH, manualThreadTitleSeed, threadTitleToCommit } from "../lib/threadTitle.ts"
 import { AiRenameButton } from "./AiRenameButton.tsx"
 
@@ -53,14 +53,18 @@ export function ThreadTitle({ thread, className = "" }: { thread: ThreadView; cl
   // Manual rename is registry metadata for either backend; the AI rename is Claude-only and gated
   // inside AiRenameButton.
   const canRename = thread.kind === "session" && thread.foreign !== true
+  // The name SHOWS as its `@` handle (`shellBudgets`) but is stored as the words it was minted as
+  // ("Shell budgets"), and a rename writes words — so the editor opens on the words, and "unchanged" is
+  // judged against them. Seeding the handle would have every rename store a camelCase run.
   const shown = displayTitle(thread)
+  const stored = displayName(thread)
   function cancel(): void {
     setEditing(false)
     setDraft("")
     setRefusal(undefined)
   }
   function commit(): void {
-    const title = threadTitleToCommit(draft, shown)
+    const title = threadTitleToCommit(draft, stored)
     setEditing(false)
     if (!title) {
       setDraft("")
@@ -127,7 +131,7 @@ export function ThreadTitle({ thread, className = "" }: { thread: ThreadView; cl
           aria-label={`Edit thread title: ${shown}`}
           disabled={renameTitle.isPending}
           onClick={() => {
-            setDraft(manualThreadTitleSeed(shown, slug))
+            setDraft(manualThreadTitleSeed(stored, slug))
             setEditing(true)
           }}
           className={`min-w-0 max-w-full shrink truncate rounded px-0.5 -mx-0.5 font-semibold text-[15px] text-left outline-none transition-colors hover:bg-panel-2 focus-visible:ring-1 focus-visible:ring-focus-ink-60 disabled:cursor-not-allowed disabled:opacity-40 ${className}`}

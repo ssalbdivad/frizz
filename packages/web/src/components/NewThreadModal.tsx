@@ -5,6 +5,7 @@ import { type AccountBackend, type DispatchInput } from "@frizz/shared"
 import { rpc } from "../api/rpc.ts"
 import { showToast } from "../store.ts"
 import { Composer } from "./Composer.tsx"
+import { useMentionCandidates } from "../hooks/useMentionCandidates.ts"
 import { GithubTrigger, useGithubTriggerVisible } from "./GithubTrigger.tsx"
 import { ProfileGridSelector } from "./ProfileGridSelector.tsx"
 import { SETTINGS_WRITE_KEY } from "../hooks/useSettingsAutosave.tsx"
@@ -83,6 +84,8 @@ function PromptForm({
   // Gate the leftAction slot itself, not just the icon: Composer reserves rail space whenever the
   // prop is set, so a hidden GithubTrigger must mean NO prop — not a null-rendering element.
   const githubTriggerVisible = useGithubTriggerVisible()
+  // A new thread can be pointed at any thread on the board it is dispatched into (`@shellBudgets`).
+  const mentions = useMentionCandidates()
   const boardDir = useProjectDir()
   const projectDir = dirs ? dirs.projectDir : boardDir
   // Queue and modal are the same semantic new-thread composer.
@@ -281,6 +284,7 @@ function PromptForm({
         onChange={setPrompt}
         onSubmit={submit}
         placeholder="Describe the task…"
+        mentionCandidates={mentions}
         minHeight={96}
         maxHeight={340}
         busy={dispatch.isPending || savingSettings}

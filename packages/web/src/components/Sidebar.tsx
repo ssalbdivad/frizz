@@ -1,4 +1,4 @@
-import { memo, useCallback, useState } from "react"
+import { Fragment, memo, useCallback, useState } from "react"
 import { useQueryClient } from "@tanstack/react-query"
 import { AlarmClock, Check, ChevronRight, Ellipsis, Github, Hourglass, Loader2, Pin, PinOff, RotateCcw } from "lucide-react"
 import { questionsOwed, type ThreadView } from "@frizz/shared"
@@ -6,6 +6,7 @@ import { pushSubAgentDrawer, showToast } from "../store.ts"
 import { displayTitle, titleIsProvisional, isPinned, isSnoozed, sessionIndicatorKind, offersRetry, futureSnoozedUntil, queueLabelAt, waitNamesPr, prChecksRunning, restingOnSubAgents } from "../groups.ts"
 import { ageSpan, relativeAge, limitResumeClock } from "../lib/activityTime.ts"
 import { useNowMs } from "../lib/liveClock.ts"
+import { humpStarts } from "../lib/threadMentions.ts"
 import { BANDS, BAND_LABEL_TYPE, BandCount, BandGlyph, type BandKey } from "./BandLabel.tsx"
 import { BoxSpinner, STATUS_BOX } from "./BoxSpinner.tsx"
 import { ChildOpRow } from "./ChildOpRow.tsx"
@@ -20,6 +21,7 @@ import { useThreadApi, useThreadIsForeignToPage, useThreadProjectDir, useThreadP
 import { formatAutoSnoozedUntil, formatUserSnooze } from "../lib/snooze.ts"
 import { SUBAGENTS_SNOOZE_TOAST } from "../lib/subAgentWait.ts"
 import { formatCompactElapsed } from "../lib/durationLabels.ts"
+import { statusElapsed } from "./ThreadStatusLine.tsx"
 import { awaitingProse, awaitingWaitClause } from "../lib/awaitingPresentation.ts"
 import { clearArchived } from "../lib/optimisticArchive.ts"
 import type { ReactElement, ReactNode } from "react"
@@ -98,10 +100,10 @@ export interface RowScope {
 
 // One row of a band: the thread, then its live sub-agents as rows of their own. A thread's TERMINALS get
 // no row (ThreadTerminals.tsx): one small mark after its title says one is running.
-export function RailRow({ t, active, open = false, restedAge = false, scope, cardKey }: { t: ThreadView; active: boolean; open?: boolean; restedAge?: boolean; scope: RowScope; cardKey?: string }) {
+export function RailRow({ t, active, open = false, restedAge = false, scope, cardKey, band }: { t: ThreadView; active: boolean; open?: boolean; restedAge?: boolean; scope: RowScope; cardKey?: string; band?: BandKey }) {
   return (
     <>
-      <ThreadRow t={t} active={active} open={open} restedAge={restedAge} scope={scope} cardKey={cardKey} />
+      <ThreadRow t={t} active={active} open={open} restedAge={restedAge} scope={scope} cardKey={cardKey} band={band} />
       <SubAgentRows t={t} scope={scope} />
     </>
   )
@@ -150,16 +152,31 @@ export function SectionHeader({ band, count, collapsed, onToggle }: { band: Band
 // wrapping. Cutting a long token is safe: an element boundary mid-word adds no break opportunity of
 // its own, so the head still breaks exactly where `break-words` would have broken it, and the mark
 // keeps a dozen characters of company either way.
+//
+// A HANDLE is one token with its words run together (`shipTheResolverFix`, groups.ts displayTitle), so
+// its humps stand in for the spaces: the last hump is the word the mark glues to, and a `<wbr>` before
+// every other hump lets a handle wider than the rail wrap BETWEEN its words rather than wherever
+// `break-words` runs out of room mid-word ("shipTh / eResolverFix").
 const MAX_GLUED_TITLE_WORD = 16
 const GLUED_TITLE_TAIL = 12
 export function TitleWithTrailers({ title, children }: { title: string; children: ReactNode }) {
   const text = title.trimEnd()
-  const wordStart = text.lastIndexOf(" ") + 1
+  const humps = text.includes(" ") ? [] : humpStarts(text).slice(1)
+  const wordStart = humps.length > 0 ? humps.at(-1)! : text.lastIndexOf(" ") + 1
   const cut = text.length - wordStart <= MAX_GLUED_TITLE_WORD ? wordStart : text.length - GLUED_TITLE_TAIL
   if (cut >= text.length) return <>{title}{children}</>
+  const breaks = humps.filter((i) => i < cut)
+  const head = text.slice(0, cut)
   return (
     <>
-      {text.slice(0, cut)}
+      {breaks.length === 0
+        ? head
+        : [0, ...breaks].map((start, i) => (
+            <Fragment key={start}>
+              {i > 0 && <wbr />}
+              {head.slice(start, breaks[i] ?? cut)}
+            </Fragment>
+          ))}
       <span className="whitespace-nowrap">{text.slice(cut)}{children}</span>
     </>
   )
@@ -179,6 +196,7 @@ export const ThreadRow = memo(function ThreadRow({
   restedAge = false,
   scope,
   cardKey,
+  band,
 }: {
   t: ThreadView
   active?: boolean
@@ -191,6 +209,9 @@ export const ThreadRow = memo(function ThreadRow({
   /** A Ready row's card on Everything (`threadKey`) — what the thread across the gutter ties it to
    *  (ThreadConnector). */
   cardKey?: string
+  /** The band the list drew this row in, as `data-xq-band` — Ready and Working carry no name over their
+   *  rows (ProjectList.tsx), so this is how a script tells them apart. */
+  band?: BandKey
 }) {
   const foreign = t.foreign === true
   // Snoozed rows are uniformly grayed as a whole; provisional titles retain their local dim treatment.
@@ -247,6 +268,7 @@ export const ThreadRow = memo(function ThreadRow({
       // Strung on its project's cord at its indicator, card or none (ThreadConnector).
       data-xq-thread-row
       data-xq-rail-row={cardKey}
+      data-xq-band={band}
       className={`group relative flex min-w-0 items-start rounded-md transition-[color,opacity] ${rowWashClass(open)} ${dim ? "sidebar-row-dim" : ""}`}
     >
       {/* The reading position owns a real, in-row rail rather than borrowing the status-icon column.
@@ -278,12 +300,14 @@ export const ThreadRow = memo(function ThreadRow({
               8px is ~2 word spaces at 13px, which reads as the title running into its own timestamp.
               12px is a gutter, and it costs the title 4px it does not miss. */}
           <span className="flex min-w-0 items-baseline gap-3">
-            <span className={`min-w-0 flex-1 break-words text-[13px] leading-[19px] ${dimLabel ? "text-provisional" : dim ? "text-fg/75" : "text-fg/90"}`}>
-              <TitleWithTrailers title={displayTitle(t)}>
-                <ProviderMark backend={t.backend} model={t.model} className="ml-1" />
-                <ThreadTerminalMark thread={t} />
-              </TitleWithTrailers>
-            </span>
+            <RowStatusTip t={t}>
+              <span className={`min-w-0 flex-1 break-words text-[13px] leading-[19px] ${dimLabel ? "text-provisional" : dim ? "text-fg/75" : "text-fg/90"}`}>
+                <TitleWithTrailers title={displayTitle(t)}>
+                  <ProviderMark backend={t.backend} model={t.model} className="ml-1" />
+                  <ThreadTerminalMark thread={t} />
+                </TitleWithTrailers>
+              </span>
+            </RowStatusTip>
             {/* The Retry verb is an OVERLAY pinned to this same right edge, so on the rows that offer
                 it the two would collide — a 19px opaque button landing halfway across "20 seconds",
                 which reads as a rendering fault rather than an affordance. The label gives way to it
@@ -641,6 +665,29 @@ export function awaitingReason(t: Pick<ThreadView, "lastFence">): string | null 
   return awaitingProse(t.lastFence)
 }
 
+// ── the status hover (one per row) ───────────────────────────────────────────────────────────────
+
+// THE ROW'S STATUS, ON HOVER. A row is its title and nothing else ("A ROW IS ITS TITLE" above), so the
+// status a working thread carries (ThreadStatusLine.tsx) cannot be a second line here — every running
+// thread's status at once would be the overwhelming rail that rule exists to prevent (maintainer
+// 2026-09-29: "if displaying the statuses for all running threads would be visually overwhelming, maybe on
+// hover it should show status"). Pointing at the title shows it, with the task's clock while the thread
+// works: "Tracing the cache miss · 4m". It sat on the 16px state glyph's tooltip before, which almost
+// nobody found. The delay keeps a pointer sweeping down the rail from flashing a tip per row it crosses.
+const ROW_STATUS_TIP_DELAY_MS = 350
+
+function RowStatusTip({ t, children }: { t: ThreadView; children: ReactElement }) {
+  const nowMs = useNowMs()
+  const status = t.statusLine?.trim()
+  if (!status) return children
+  const elapsed = statusElapsed(t, nowMs)
+  return (
+    <Tooltip label={elapsed ? `${status} · ${elapsed}` : status} side="right" delay={ROW_STATUS_TIP_DELAY_MS}>
+      {children}
+    </Tooltip>
+  )
+}
+
 // ── the indicator (one per row) ──────────────────────────────────────────────────────────────────
 
 // Each indicator carries a terse hover tooltip naming the state it signals. A plain wrapper <span> is
@@ -652,10 +699,9 @@ export function ThreadIndicator({ t }: { t: ThreadView }) {
   // hook consulted the steer hint on its own, the glyph and the placement were two rules and drifted apart
   // on every steer.
   const { node, tip: stateTip } = sessionIndicatorFor(t)
-  // The thread's live STATUS rides this tooltip, under the state — the rail's one hover of detail, never
-  // a second line on the row (see "A ROW IS ITS TITLE" above, and ThreadStatusLine.tsx).
-  const status = t.statusLine?.trim()
-  const tip = status ? (stateTip ? `${stateTip}\n${status}` : status) : stateTip
+  // The thread's STATUS is not here: it is the TITLE's hover (RowStatusTip), a target the size of the
+  // row rather than of this 16px glyph, so the glyph says the state and nothing else.
+  const tip = stateTip
   // The resolved kind, on the shipped markup. Cheap, and it is what lets the rail's own glyphs be
   // measured where they actually render (scripts/verify-rail-status-glyphs.mjs holds the family to one
   // weight band) instead of against a reconstruction that can drift from the real thing.

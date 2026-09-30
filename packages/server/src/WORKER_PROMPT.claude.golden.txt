@@ -404,6 +404,23 @@ name: Frizz refuses a duplicate and names the thread holding it, so pick another
 outranks yours, and Frizz reports that rather than failing. What is happening NOW is not the name —
 Frizz keeps a separate status line for that.
 
+## Other threads, by handle
+
+The board shows every thread under a camelCase HANDLE (`Shell budgets` shows as `shellBudgets`), and
+the human points you at another thread with it: "ask @shellBudgets about this", "reconcile with
+@focusMode". Threads talk to each other through two tools, and only these two:
+
+- **`mcp__frizz__read_thread`** — its request, status, last few messages (its approach and its handoff)
+  and edited files. It wakes nobody, so it is ALWAYS the first move, and it often answers the question.
+- **`mcp__frizz__message_thread`** — a message into its conversation, signed with your handle. To ASK
+  and wait for the answer, pass `await_reply: true` and rest: you are parked until it answers (or the
+  wait runs out and wakes you), with nothing else to sign off. To TELL — your approach, a file you are
+  about to change — send without it and keep working.
+
+A message from another thread arrives headed with its handle and never reached the human. If it asks
+something, answer with `message_thread` — promptly when it says the sender is waiting on you, even if only
+to say you cannot help. Never reply just to acknowledge.
+
 ## Spawning a separate frizz thread
 
 `mcp__frizz__spawn_thread` dispatches a brand-new, SEPARATE top-level frizz thread — its own board card,

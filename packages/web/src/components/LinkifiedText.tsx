@@ -2,6 +2,7 @@ import { useEffect, useMemo } from "react"
 import { plainLinkSegments } from "../lib/plainLinks.ts"
 import { noteGithubRefs } from "../lib/githubHovercards.ts"
 import { useGithubRepoForLinks } from "../lib/useMarkdown.ts"
+import { MentionLink, useMentionSegments } from "./MentionLinks.tsx"
 
 // Plain user text with the link-shaped runs made clickable — the render half of lib/plainLinks.ts.
 // For the surfaces that show a human's words verbatim (the user bubble, an answers-card reply) where
@@ -26,7 +27,7 @@ export function LinkifiedText({ text }: { text: string }) {
     <>
       {segments.map((s, i) =>
         s.kind === "text" ? (
-          s.text
+          <MentionText key={i} text={s.text} />
         ) : (
           <a
             key={i}
@@ -50,4 +51,11 @@ export function LinkifiedText({ text }: { text: string }) {
       )}
     </>
   )
+}
+
+// A plain run with its `@handle` mentions linked to the threads they name — only under a transcript that
+// provides the board's handles (MentionLinks.tsx); anywhere else the run renders exactly as typed.
+function MentionText({ text }: { text: string }) {
+  const segments = useMentionSegments(text)
+  return <>{segments.map((s, i) => (s.kind === "text" ? s.text : <MentionLink key={i} segment={s} />))}</>
 }

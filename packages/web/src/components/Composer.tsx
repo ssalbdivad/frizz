@@ -10,6 +10,7 @@ import { RAIL_ACTION_OFFSET, RAIL_PAPERCLIP_OFFSET, RAIL_PAPERCLIP_PLAIN_OFFSET,
 import { apiBase } from "../lib/base-path.ts"
 import { localImageUrl } from "../lib/markdownTargets.ts"
 import { basename } from "../lib/paths.ts"
+import { insertMention, matchMentions, mentionQueryAt, type MentionCandidate } from "../lib/threadMentions.ts"
 
 // The shared prompt composer (the pattern the user called "perfect"): ONE rounded bordered box
 // holding a borderless auto-growing textarea plus a small round accent send button hovering INSIDE
@@ -58,6 +59,10 @@ const SKILL_SOURCE_LABEL: Record<NonNullable<ThreadSkill["source"]>, string> = {
   plugin: "plugin",
 }
 
+// Both typeahead menus' row inset: the textarea's 14px on the left, and 6px on the right because the
+// list's reserved 8px scrollbar gutter supplies the rest (see the skills menu's row).
+const MENU_ROW_INSET = "pl-3.5 pr-1.5"
+
 // A staged context reference in the prose is the literal `@guide.md:3` token the ⌘I flow splices in
 // at the caret (lib/composerContext.ts) — the chip's own label, so the text reads as the chip. The
 // BACKDROP below paints the pill behind each staged token; the token itself is ordinary textarea
@@ -89,6 +94,7 @@ export function Composer({
   leftAction,
   contextTokens,
   slashSuggest,
+  mentionCandidates,
   onInterruptSubmit,
   attachBase,
 }: {
@@ -125,6 +131,11 @@ export function Composer({
   // renders and completes. Surfaces without a session to ask (the dispatch composer) omit it and the
   // whole affordance is inert.
   slashSuggest?: () => Promise<ThreadSkill[]>
+  // MENTION TYPEAHEAD. When set, an `@` at a word boundary with the caret inside its token opens a menu
+  // of these threads' handles above the box; choosing one inserts `@handle ` as plain text. The caller
+  // owns the list (lib/threadMentions.ts mentionCandidates — the project's threads minus the one being
+  // written into); omitted, the affordance is inert.
+  mentionCandidates?: readonly MentionCandidate[]
   // INTERRUPT AND SEND — what the FORCED chord (⌘/Ctrl-Enter) does while the thread's worker is
   // mid-turn AND its runtime can be preempted; the caller owns that policy entirely. When it is not
   // set, the same chord is an ordinary send, so ⌘-Enter never goes dead (three Enter keys everywhere:
@@ -411,6 +422,31 @@ export function Composer({
   useEffect(() => {
     suggestListRef.current?.querySelector(`[data-suggest-index="${suggestSel}"]`)?.scrollIntoView({ block: "nearest" })
   }, [suggestSel])
+  // MENTION TYPEAHEAD state. Unlike `/`, a mention can sit anywhere in the prose, so the menu follows
+  // the CARET: `caret` is the textarea's collapsed selection (null while blurred or while a range is
+  // selected), refreshed on every edit and caret move. Disjoint from the skills menu by construction —
+  // that one needs the whole draft to be a single `/` token, and a `/` right before `@` never opens this.
+  const [caret, setCaret] = useState<number | null>(null)
+  const trackCaret = (el: HTMLTextAreaElement) => setCaret(el.selectionStart === el.selectionEnd ? el.selectionStart : null)
+  const mention = mentionCandidates && mentionCandidates.length > 0 && !suggestOpen ? mentionQueryAt(prose, caret) : undefined
+  const mentionMatches = useMemo(
+    () => (mention && mentionCandidates && dismissedFor !== prose ? matchMentions(mentionCandidates, mention.query) : []),
+    [mention?.start, mention?.query, mentionCandidates, dismissedFor, prose],
+  )
+  const mentionOpen = mentionMatches.length > 0
+  function acceptMention(item: MentionCandidate) {
+    if (!mention || caret === null) return
+    const next = insertMention(prose, mention.start, caret, item.handle)
+    setProse(next.prose)
+    setCaret(next.caret)
+    requestAnimationFrame(() => taRef.current?.setSelectionRange(next.caret, next.caret))
+  }
+  // The open menu's length and accept, whichever of the two menus it is — one keyboard contract for both.
+  const menuLength = suggestOpen ? suggestions.length : mentionMatches.length
+  const acceptHighlighted = () => {
+    if (suggestOpen) acceptSuggestion(suggestions[suggestSel] ?? suggestions[0]!)
+    else acceptMention(mentionMatches[suggestSel] ?? mentionMatches[0]!)
+  }
   function acceptSuggestion(item: { name: string }) {
     const next = `/${item.name} `
     setProse(next)
@@ -436,22 +472,22 @@ export function Composer({
       isComposing: e.nativeEvent.isComposing,
       keyCode: e.keyCode,
     }
-    // The open skills menu claims its keys FIRST — above all Enter (accept, not send) and Escape
-    // (close the menu, not blur; the blur branch below must not see this keypress). Modified Enter
-    // deliberately falls through: ⌘-Enter mid-name is the operator overriding the menu, not using it.
-    if (suggestOpen && !e.nativeEvent.isComposing) {
+    // An open menu (skills or mentions) claims its keys FIRST — above all Enter (accept, not send) and
+    // Escape (close the menu, not blur; the blur branch below must not see this keypress). Modified
+    // Enter deliberately falls through: ⌘-Enter mid-name is the operator overriding the menu, not using it.
+    if ((suggestOpen || mentionOpen) && !e.nativeEvent.isComposing) {
       if (e.key === "ArrowDown" || e.key === "ArrowUp") {
         e.preventDefault()
         setSuggestSel((current) => {
           const delta = e.key === "ArrowDown" ? 1 : -1
-          return (current + delta + suggestions.length) % suggestions.length
+          return (current + delta + menuLength) % menuLength
         })
         return
       }
       if ((e.key === "Enter" || e.key === "Tab") && !e.altKey && !e.ctrlKey && !e.metaKey && !e.shiftKey) {
         e.preventDefault()
         e.stopPropagation()
-        acceptSuggestion(suggestions[suggestSel] ?? suggestions[0])
+        acceptHighlighted()
         return
       }
       if (e.key === "Escape") {
@@ -581,9 +617,13 @@ export function Composer({
               onMouseDown={(e) => e.preventDefault()}
               onClick={() => acceptSuggestion(s)}
               onMouseEnter={() => setSuggestSel(i)}
-              // px-3.5 matches the textarea's own text inset, so the completed `/name` lands exactly
-              // under the row that offered it.
-              className={`flex w-full items-baseline gap-2 px-3.5 py-1.5 text-left ${i === suggestSel ? "bg-panel-2" : ""}`}
+              // pl-3.5 matches the textarea's own text inset, so the completed `/name` lands exactly
+              // under the row that offered it. The RIGHT inset is 6px, not 14: the list keeps an 8px
+              // scrollbar gutter reserved even when nothing scrolls (styles.css `scrollbar-gutter:
+              // stable`), so pr-3.5 put the tag column 22px off the box's right edge against 15px of
+              // ink on the left. With MENU_ROW_INSET the text boxes sit 15px from the left edge and
+              // 14px from the right (mention menu, sans, 2026-09-29).
+              className={`flex w-full items-baseline gap-2 ${MENU_ROW_INSET} py-1.5 text-left ${i === suggestSel ? "bg-panel-2" : ""}`}
             >
               <span className="shrink-0 text-[12px] font-medium text-fg">/{s.name}</span>
               {s.description && <span className="min-w-0 truncate text-[11px] text-muted">{s.description}</span>}
@@ -605,6 +645,36 @@ export function Composer({
                   </span>
                 </span>
               )}
+            </button>
+          ))}
+        </div>
+      )}
+      {/* The mention menu: the skills menu's box and rows, so the two read as one control. A row is the
+          handle — exactly the text that will land in the box — then the thread's live status, dimmed and
+          truncated, and a `done` tag in the tag column for a thread already filed. */}
+      {mentionOpen && (
+        <div
+          ref={suggestListRef}
+          data-mention-menu
+          role="listbox"
+          aria-label="Threads"
+          className="absolute bottom-full left-0 right-0 z-20 mb-1.5 max-h-56 overflow-y-auto rounded-lg border border-border bg-bg py-1 shadow-lg"
+        >
+          {mentionMatches.map((m, i) => (
+            <button
+              key={m.slug}
+              type="button"
+              role="option"
+              aria-selected={i === suggestSel}
+              data-suggest-index={i}
+              onMouseDown={(e) => e.preventDefault()}
+              onClick={() => acceptMention(m)}
+              onMouseEnter={() => setSuggestSel(i)}
+              className={`flex w-full items-baseline gap-2 ${MENU_ROW_INSET} py-1.5 text-left ${i === suggestSel ? "bg-panel-2" : ""}`}
+            >
+              <span className="shrink-0 text-[12px] font-medium text-fg">@{m.handle}</span>
+              {m.status && <span className="min-w-0 truncate text-[11px] text-muted">{m.status}</span>}
+              {m.done && <span className="petite-caps ml-auto shrink-0 text-[10px] text-muted-70">done</span>}
             </button>
           ))}
         </div>
@@ -638,7 +708,12 @@ export function Composer({
           value={prose}
           autoFocus={autoFocus}
           disabled={busy}
-          onChange={(e) => setProse(e.target.value)}
+          onChange={(e) => {
+            setProse(e.target.value)
+            trackCaret(e.target)
+          }}
+          onSelect={mentionCandidates ? (e) => trackCaret(e.currentTarget) : undefined}
+          onBlur={mentionCandidates ? () => setCaret(null) : undefined}
           onKeyDown={onKeyDown}
           onPaste={(e) => {
             // Any file item claims the whole paste (preventDefault) — deliberately. An image paste

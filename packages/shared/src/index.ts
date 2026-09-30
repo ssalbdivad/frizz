@@ -1772,6 +1772,63 @@ export function parseTimerWake(text: string): TimerWake | null {
   return prompt ? { prompt, at: m[1] } : null
 }
 
+/** The request a PARENT's worker receives when the human spins a new thread off one of its messages
+ *  (SpinOffInput). It is a message from the human — delivered like a follow-up, not a wake — so the
+ *  worker reads it at once; the envelope is what lets the chat draw it as a card (parseSpinOffRequest)
+ *  instead of printing the brief at the operator.
+ *
+ *  The brief asks the worker to do the one thing only it can: turn this conversation into a cold start
+ *  for someone who has not read it. The human's own words reach the child verbatim regardless — the
+ *  dispatch prefixes them (spinOffChildPrompt) — so a paraphrase here cannot lose them. */
+export function spinOffRequestMessage(input: { id: string; instructions: string; excerpt: string }): string {
+  return [
+    `<spin-off-request id="${input.id}">`,
+    "The human selected one message in this conversation and asked for a NEW thread spun off from it.",
+    "",
+    "Their instructions for the new thread:",
+    "<instructions>",
+    input.instructions.trim(),
+    "</instructions>",
+    "",
+    "The message they selected:",
+    "<selected-message>",
+    input.excerpt.trim() || "(no text)",
+    "</selected-message>",
+    "",
+    "Do this now, before anything else:",
+    "1. Gather what the new thread needs to start cold — the relevant facts, decisions, file paths, commands, errors and open questions from this conversation, and whatever in the code is worth pointing at. Brief it; do not do its work.",
+    `2. Call \`mcp__frizz__spawn_thread\` with \`spinoff: "${input.id}"\`, a self-contained \`prompt\` (the new thread sees none of this conversation; frizz adds the human's instructions and a link back here itself), and a \`model\` and \`effort\` fit for the task. This is the human's explicit request, so the tool's last-resort caution does not apply.`,
+    "3. Say in one line which thread you started (the link the tool returns), then carry on with whatever you were doing before this message. Do not wait on the new thread.",
+    "</spin-off-request>",
+  ].join("\n")
+}
+
+const SPIN_OFF_REQUEST = /^<spin-off-request id="(spn_[0-9a-f]{16})">\n[\s\S]*?\n<instructions>\n([\s\S]*?)\n<\/instructions>\n[\s\S]*?\n<selected-message>\n([\s\S]*?)\n<\/selected-message>\n[\s\S]*\n<\/spin-off-request>/
+
+/** The spin-off request inside a delivered user turn, or null. Anchored at the START so a human who
+ *  pastes the envelope mid-message is still just talking. */
+export function parseSpinOffRequest(text: string): { id: string; instructions: string; excerpt: string } | null {
+  const m = SPIN_OFF_REQUEST.exec(text.trimStart())
+  if (!m) return null
+  return { id: m[1], instructions: m[2], excerpt: m[3] === "(no text)" ? "" : m[3] }
+}
+
+/** The new thread's first prompt: the human's words and where they came from, then the parent's brief.
+ *  Written by the SERVER, so the human's instructions reach the child verbatim whatever the parent
+ *  wrote, and the child can find its way back. */
+export function spinOffChildPrompt(input: { parentSlug: string; parentTitle: string; instructions: string; brief: string }): string {
+  const quoted = input.instructions.trim().split("\n").map((line) => `> ${line}`).join("\n")
+  return [
+    `Spun off from [${input.parentTitle.replace(/[\[\]]/g, "")}](/thread/${input.parentSlug}) at the human's request. Their instructions:`,
+    "",
+    quoted,
+    "",
+    "The context that thread gathered for you:",
+    "",
+    input.brief.trim(),
+  ].join("\n")
+}
+
 /** The message a worker receives when the usage window that cut it off has rolled over.
  *
  *  MOVED HERE FROM THE SCHEDULER on 2026-08-19, when this became the last frizz-composed wake still
@@ -2894,6 +2951,18 @@ export const ThreadWorkingDir = z.object({
 }).strict()
 export type ThreadWorkingDir = z.infer<typeof ThreadWorkingDir>
 
+/** One spin-off edge as a thread sees it — either end. `childSlug` is null while the parent has not yet
+ *  dispatched it. */
+export const SpinOffView = z.object({
+  id: z.string(),
+  parentSlug: ThreadSlug,
+  childSlug: ThreadSlug.nullable(),
+  sourceId: z.string(),
+  instructions: z.string(),
+  createdAt: z.number(),
+}).strict()
+export type SpinOffView = z.infer<typeof SpinOffView>
+
 // One sidebar row: frizz board thread + runtime overlay.
 export const ThreadView = z.object({
   id: ThreadSlug, // slug; filename is <slug>.md
@@ -2945,6 +3014,9 @@ export const ThreadView = z.object({
   // legacy .frizz-file lifecycle field, synthesized and unused for session rows; the registry column is
   // `session.status`.
   statusLine: z.string().optional(),
+  // When `statusLine` last CHANGED (ISO) — the start of the task it names. While the thread is working
+  // the status wears "for how long" off this (server live-status.ts); a write that keeps the text keeps it.
+  statusSince: z.string().optional(),
   // True when `title` is a machine-guessed dispatch slug (title_auto=1), NOT a real name — the display
   // then shows a "Spinning up a thread…" placeholder instead of the guess until aiTitle lands. Optional
   // (absent ⇒ legacy/slim row) so old snapshots parse; absent is treated as "not provisional".
@@ -2965,6 +3037,9 @@ export const ThreadView = z.object({
   bgShells: z.array(BgShellView).default([]),
   // Optional for snapshots from a server that predates link registration.
   links: z.array(ThreadLinkView).optional(),
+  // SPIN-OFFS touching this thread, at either end: the ones it was asked for (parentSlug = this thread)
+  // and the one it came from (childSlug = this thread). Optional for an older server.
+  spinOffs: z.array(SpinOffView).optional(),
   // The thread's ARMED WATCHERS — registry-derived, not folded from the transcript, which is what makes
   // them survive the worker saying one more sentence. Same default-[] discipline as the two above.
   //
@@ -3817,6 +3892,9 @@ function requireEffortOutsideAcp(profile: { backend: Backend; effort?: string },
 
 // ---- RPC inputs ----
 
+/** A spin-off request's id: `spn_` and 16 hex digits, minted by the server. */
+export const SPIN_OFF_ID_RE = /^spn_[0-9a-f]{16}$/
+
 export const DispatchInput = z.object({
   // Optional: when omitted, dispatch derives a fallback title from the prompt (Claude later renames
   // the session via ai-title, which the UI prefers for display). The thread FILE always gets a
@@ -3834,8 +3912,38 @@ export const DispatchInput = z.object({
   // `dispatch(input, { backend })`; the model picker sets it from the chosen model's family.
   backend: Backend.optional(),
   effort: Settings.shape.effort,
+  // A SPIN-OFF this dispatch fulfils (SpinOffInput below): the parent's worker names the request it was
+  // handed, and the dispatch records the new thread as that request's child. `spinOffFrom` is the calling
+  // thread, which must be the request's parent — `spawn_thread` fills it from its own identity, never
+  // from the model's arguments.
+  spinOff: z.string().regex(SPIN_OFF_ID_RE).optional(),
+  spinOffFrom: ThreadSlug.optional(),
 })
 export type DispatchInput = z.infer<typeof DispatchInput>
+
+// ---- SPIN-OFFS (2026-09-29) ----------------------------------------------------------------------
+// A new thread the HUMAN asks for from one message of an existing thread — "fix this", "investigate
+// perf" — with the current thread supplying the context. It is not a sub-agent (nothing returns to the
+// parent) and not a bare dispatch (the new thread does not start cold): the request is delivered to the
+// PARENT's worker, which gathers what the new thread needs and dispatches it through `spawn_thread`
+// naming the request's id. Both threads then carry the edge: the parent's timeline shows the request as a
+// card linking forward, and the child's header links back.
+export const SPIN_OFF_INSTRUCTIONS_MAX = 4_000
+export const SPIN_OFF_EXCERPT_MAX = 2_000
+export const SpinOffInput = z.object({
+  slug: ThreadSlug,
+  // Bound to the session the tab is looking at, exactly like FollowUpInput: the request is a message.
+  sessionId: z.string().min(1),
+  // The selected message's chat handle (TranscriptMessage.sourceId).
+  sourceId: z.string().min(1).max(400),
+  // The selected message's text as the human saw it — cut to SPIN_OFF_EXCERPT_MAX by the client.
+  excerpt: z.string().max(SPIN_OFF_EXCERPT_MAX),
+  instructions: z.string().trim().min(1).max(SPIN_OFF_INSTRUCTIONS_MAX),
+}).strict()
+export type SpinOffInput = z.infer<typeof SpinOffInput>
+export const SpinOffResult = z.object({ id: z.string() }).strict()
+export type SpinOffResult = z.infer<typeof SpinOffResult>
+
 
 export const ADOPT_THREAD_MESSAGE_MAX_CHARS = 64 * 1024
 export const AdoptThreadInput = z.object({
@@ -4232,6 +4340,60 @@ export type SetOwnThreadTitleInput = z.infer<typeof SetOwnThreadTitleInput>
 // explain rather than a throw the model will retry. `refusal` says why in words the worker can act on:
 // another open thread already holds the name (named, so it can pick a different subject), the name is
 // longer than two words, or the worker already spent its one rename (thread-names.ts).
+// ONE THREAD READING OR MESSAGING ANOTHER, BY HANDLE (thread-handle.ts). `slug` is the CALLER, stamped
+// into the worker's MCP env exactly as for `title`; `handle` is the other thread's camelCase name as the
+// board shows it — `shellBudgets`, with or without the `@`, in any casing.
+export const ReadThreadInput = z.object({
+  slug: ThreadSlug,
+  handle: z.string().trim().min(1).max(200),
+}).strict()
+export type ReadThreadInput = z.infer<typeof ReadThreadInput>
+
+// Either the thread, or — when the handle names none — the handles that DO exist, so the worker can
+// correct a typo without a second lookup.
+export const ReadThreadResult = z.object({
+  found: z.boolean(),
+  handle: z.string().optional(),
+  slug: z.string().optional(),
+  state: z.enum(["running", "resting", "done"]).optional(),
+  status: z.string().optional(),
+  request: z.string().optional(),
+  latest: z.string().optional(),
+  latestAt: z.string().optional(),
+  /** Up to three assistant messages BEFORE the newest, oldest first — the thread's approach and progress,
+   *  which the newest message alone (often a terse handoff) does not carry. */
+  earlier: z.array(z.string()).optional(),
+  editedFiles: z.array(z.string()).optional(),
+  known: z.array(z.string()).optional(),
+}).strict()
+export type ReadThreadResult = z.infer<typeof ReadThreadResult>
+
+export const MessageThreadInput = z.object({
+  slug: ThreadSlug,
+  handle: z.string().trim().min(1).max(200),
+  message: z.string().trim().min(1).max(20_000),
+  /** Park the SENDER until the other thread answers. The wait is a one-off TIMER on the sender (so it parks
+   *  the thread, blocks `done` and shows on the card like any timer) that the ANSWER cancels; if it fires
+   *  first, the sender is woken to re-decide. `for` is how long to wait (a duration, default 1h, max 24h). */
+  awaitReply: z.boolean().optional(),
+  for: z.string().trim().min(1).max(16).optional(),
+}).strict()
+export type MessageThreadInput = z.infer<typeof MessageThreadInput>
+
+export const MessageThreadResult = z.object({
+  sent: z.boolean(),
+  handle: z.string().optional(),
+  from: z.string().optional(),
+  /** The `tmr_…` id of the reply wait, when `awaitReply` armed one, and when it runs out. */
+  timerId: z.string().optional(),
+  waitUntil: z.string().optional(),
+  /** A reply wait on the RECIPIENT's side that this message answered, now settled. */
+  answered: z.boolean().optional(),
+  refusal: z.string().optional(),
+  known: z.array(z.string()).optional(),
+}).strict()
+export type MessageThreadResult = z.infer<typeof MessageThreadResult>
+
 export const SetOwnThreadTitleResult = z.object({
   accepted: z.boolean(),
   title: z.string(),
@@ -5182,6 +5344,7 @@ export * from "./interactions.ts"
 export * from "./receipt-bus.ts"
 export * from "./relay-protocol.ts"
 export * from "./shell-writes.ts"
+export * from "./thread-handle.ts"
 export * from "./thread-slug.ts"
 
 // ---- Rendered conversation (parsed mechanically from the session JSONL — no AI) ----
@@ -5522,6 +5685,11 @@ export const TranscriptMessage = z.object({
   //
   // Additive + optional: an old client ignores it and renders the fence as it did before.
   fenceRefused: z.literal(true).optional(),
+  // A SPIN-OFF REQUEST: the human asked for a new thread from one message here, and this user turn is the
+  // request frizz delivered to the worker (spinOffRequestMessage). The chat draws it as a spin-off card —
+  // the human's instructions and a link to the new thread — rather than the agent-facing brief.
+  // Parsed server-side for the same version-skew reason as `wakeSteer`. Additive + optional.
+  spinOff: z.object({ id: z.string(), instructions: z.string(), excerpt: z.string() }).optional(),
 })
 export type TranscriptMessage = z.infer<typeof TranscriptMessage>
 

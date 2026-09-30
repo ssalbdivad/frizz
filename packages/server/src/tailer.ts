@@ -2495,6 +2495,9 @@ export interface TailerDeps {
   // at prime, which is a fact about the past rather than a turn that just ended. The periodic status
   // (periodic-status.ts) rides it. Optional: unset = nothing extra happens at a rest.
   onTurnDone?: (row: SessionRow) => void
+  // A tick folded new transcript bytes of an IN-FLIGHT turn — the working status's trigger
+  // (live-status.ts). Called after the turn transition, so a turn that just rested never reaches it.
+  onTurnActivity?: (row: SessionRow) => void
   // Hold a Codex first-output title to the project's name-uniqueness rule before it persists: the title
   // itself when no other open thread is called that, else a distinguishing variant (thread-names.ts).
   // `source` is the thread's opening request, for the distinguishing word. Optional: unset = persisted
@@ -4979,6 +4982,7 @@ export function createTailer(deps: TailerDeps): Tailer {
         }
         state.turn = nextTurn
       }
+      if (nextTurn === "in-flight" && state.offset !== prevOffset) deps.onTurnActivity?.(row)
 
       // interactive permission prompt: no jsonl signal, so read the worker's permission marker on a
       // quiet in-flight turn. Cleared automatically once jsonl activity resumes (turn no longer quiet)

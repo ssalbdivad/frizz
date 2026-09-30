@@ -21,6 +21,7 @@ import { readQuota } from "./quota.ts"
 import { refreshClaudeQuotaInBackground } from "./backend/claude-quota.ts"
 import { createBoard, type BoardManager } from "./board.ts"
 import { createPeriodicStatus } from "./periodic-status.ts"
+import { createLiveStatus } from "./live-status.ts"
 import { createThreadNamer, type ThreadNamer } from "./thread-names.ts"
 import { createClaudeOneShot } from "./backend/claude-oneshot.ts"
 import { readTranscript } from "./transcript.ts"
@@ -922,13 +923,29 @@ function createContextUnchecked(opts: ContextOptions, resources: PartialContextR
     onError: (slug, error) => process.stderr.write(`[frizz] status of ${slug} failed: ${error instanceof Error ? error.message : String(error)}\n`),
     every: Number.isInteger(statusEvery) && statusEvery > 0 ? statusEvery : undefined,
   })
+  // While a turn runs, keep the status on the TASK the thread is working on, with its own clock
+  // (live-status.ts). Its own completer, so a dispatch's name mint never queues behind a fleet's checks.
+  // FRIZZ_LIVE_STATUS=0 switches it off; FRIZZ_LIVE_STATUS_MS shortens the cadence for a verification run.
+  const liveStatusMs = Number(process.env.FRIZZ_LIVE_STATUS_MS)
+  const liveStatus = createLiveStatus({
+    storage,
+    complete: threadNamer.available && process.env.FRIZZ_LIVE_STATUS !== "0"
+      ? createClaudeOneShot({ claudeBin: opts.claudeBin, cwd: workDirOf(project) })
+      : undefined,
+    readMessages: (sessionId) => readTranscript(project, sessionId),
+    onStatus: () => board.refresh(),
+    onError: (slug, error) => process.stderr.write(`[frizz] working status of ${slug} failed: ${error instanceof Error ? error.message : String(error)}\n`),
+    ...(Number.isInteger(liveStatusMs) && liveStatusMs > 0 ? { intervalMs: liveStatusMs, firstMs: Math.min(liveStatusMs, 20_000) } : {}),
+  })
   const tailer = createTailer({
     project,
     storage,
     bus,
     backendFor,
     onChange: () => board.refresh(),
-    onTurnDone: (row) => periodicStatus.onTurnDone(row),
+    // A turn that wore a working status gets a rest status at once, off the 5-message cadence.
+    onTurnDone: (row) => periodicStatus.onTurnDone(row, { force: liveStatus.onTurnDone(row) }),
+    onTurnActivity: (row) => liveStatus.onActivity(row),
     // The Codex first-output marker is a dispatch-time name like any other: held to the project's
     // uniqueness rule before it persists (thread-names.ts).
     distinctTitle: (slug, title, source) => threadNamer.distinct(title, source ?? "", slug),

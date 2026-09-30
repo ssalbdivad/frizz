@@ -27,7 +27,8 @@ function render(extra: Partial<ThreadView>): string {
 
 test("an owned session thread's name is a click-to-edit button, with the Claude refresh mark beside it", () => {
   const html = render({})
-  assert.match(html, /<button[^>]*aria-label="Edit thread title: A worker"/)
+  // The name shows as its handle; the editor it opens is seeded with the stored words (groups.ts displayName).
+  assert.match(html, /<button[^>]*aria-label="Edit thread title: aWorker"/)
   assert.match(html, /data-ai-rename/)
   assert.match(html, /focus-visible:ring-focus-ink-60/)
   assert.doesNotMatch(html, /focus-visible:ring-fg\/60/)
@@ -35,7 +36,7 @@ test("an owned session thread's name is a click-to-edit button, with the Claude 
 
 test("a Codex thread keeps the manual editor and gets no Claude refresh mark", () => {
   const html = render({ backend: "codex" })
-  assert.match(html, /aria-label="Edit thread title: A worker"/)
+  assert.match(html, /aria-label="Edit thread title: aWorker"/)
   assert.doesNotMatch(html, /data-ai-rename/)
 })
 

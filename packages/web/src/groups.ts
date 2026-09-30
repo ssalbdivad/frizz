@@ -12,6 +12,7 @@ import {
   prChecksRunning,
   queuedThread,
   sectionOf,
+  threadHandle,
   type AwaitingHint,
   type SectionKey,
   type ThreadView,
@@ -25,10 +26,43 @@ import { canRetry } from "./lib/status.ts"
 // Shared listing logic: the queue definition (needsAction), the sidebar's status-keyed sections
 // (sectionThreads), and the interaction-recency ordering both surfaces use.
 
-// The title to SHOW for a thread: prefer trustworthy backend title telemetry once it exists, else the
-// provenance-aware stored title. One place so every render site (sidebar, palette, header) agrees.
-// The narrow Pick accepts a valtio readonly snapshot as readily as a plain ThreadView.
-export function displayTitle(t: Pick<ThreadView, "title" | "aiTitle" | "id" | "titleAuto" | "titleLocked" | "spawnedAt" | "backend" | "runtime" | "foreign">): string {
+type TitleFields = Pick<ThreadView, "title" | "aiTitle" | "id" | "titleAuto" | "titleLocked" | "spawnedAt" | "backend" | "runtime" | "foreign">
+
+// The title to SHOW for a thread: its HANDLE. A real name ("Shell budgets") renders as the camelCase
+// handle it makes (`shellBudgets`, @frizz/shared thread-handle.ts), so what the operator reads on the
+// board is exactly what they type after `@` to point one thread at another (maintainer 2026-09-29: "I
+// want the displayed names to also be camelCase so its obvious how to refer to them and that they
+// represent ids"). Everything that is NOT a name renders as it always did: the "Spinning up…" and
+// "Untitled thread" placeholders, a legacy row's bare id, an external terminal session's resolved
+// title (Frizz holds no registry name for it, so there is nothing to address), and a name too long to
+// be a handle (a legacy sentence-length title — threadHandle declines past five words).
+//
+// One place so every render site (sidebar, palette, header, drawer, tab title) agrees. The narrow Pick
+// accepts a valtio readonly snapshot as readily as a plain ThreadView.
+export function displayTitle(t: TitleFields): string {
+  const source = titleSource(t)
+  return source.name ? threadHandle(source.text) ?? source.text : source.text
+}
+
+// The thread's name in the WORDS it is stored as ("Shell budgets") — what a rename edits, since a human
+// rename writes words and the handle is derived from them. Same provenance rules as displayTitle; only
+// the final camelCase step is skipped. Also what a search should match alongside the handle, so typing
+// "shell bud" still finds `shellBudgets`.
+export function displayName(t: TitleFields): string {
+  return titleSource(t).text
+}
+
+// The `@` handle a thread can be addressed by, or undefined when what it shows is not a name (a
+// placeholder, an id, an external row) or is too long to be one. The mention typeahead offers exactly
+// the threads this returns a handle for.
+export function threadHandleOf(t: TitleFields): string | undefined {
+  const source = titleSource(t)
+  return source.name ? threadHandle(source.text) : undefined
+}
+
+// Where the shown title comes from, and whether it is a real NAME (which displays as its handle) or a
+// stand-in for one (a placeholder, an id, an external row's resolved title), which displays verbatim.
+function titleSource(t: TitleFields): { text: string; name: boolean } {
   // An EXTERNAL row is already named. The server resolves it in foreignThreadView — the harness's own
   // name, else a chop of the opening human turn, else a short id — which is the order both agents'
   // resume pickers use, and it stores the result in `title`. Every rule below is about a row frizz
@@ -36,32 +70,32 @@ export function displayTitle(t: Pick<ThreadView, "title" | "aiTitle" | "id" | "t
   // show. Neither describes a terminal session, and the codex rule in particular replaced every
   // external codex row's resolved name with "Untitled thread" the day the server learned to name them
   // (maintainer 2026-08-24: "for my externals all the codexes show up as 'untitled thread'").
-  if (t.foreign === true && t.title.trim()) return t.title.trim()
+  if (t.foreign === true && t.title.trim()) return { text: t.title.trim(), name: false }
   // A machine-guessed dispatch title (titleAuto) with no aiTitle yet is NOT a real name — show the
   // "Spinning up…" placeholder while the session is genuinely just spinning up (maintainer 2026-07-10:
   // "do not try to guess at the thread title"). But that's BOUNDED (see titleIsProvisional): a session
   // Claude that never yields an aiTitle falls back after its bounded window; Codex gets a shorter
   // grace and then the neutral fallback below.
-  if (titleIsProvisional(t)) return SPINNING_UP_TITLE
+  if (titleIsProvisional(t)) return { text: SPINNING_UP_TITLE, name: false }
   // The worker's OWN name for its task wins over whatever the row was seeded with — unless a human has
   // claimed the name, in which case a stale/slug-shaped backend record must never displace it.
-  if (t.aiTitle?.trim() && !titleIsHumanOwned(t)) return readableMachineTitle(t.aiTitle)
+  if (t.aiTitle?.trim() && !titleIsHumanOwned(t)) return { text: readableMachineTitle(t.aiTitle), name: true }
   // Codex's TUI has no native automatic naming event. Frizz asks the first finalized response for a
   // hidden title signal; omission or malformed syntax must stay neutral rather than exposing either
   // the stored legacy prompt heuristic or a provider-recorded raw initial prompt.
-  if (t.backend === "codex" && t.titleAuto === true && !t.aiTitle?.trim()) return UNTITLED_THREAD_TITLE
+  if (t.backend === "codex" && t.titleAuto === true && !t.aiTitle?.trim()) return { text: UNTITLED_THREAD_TITLE, name: false }
   // `titleAuto === false` means the stored title is a real name, not the prompt chop — a human rename,
   // or a caller's dispatch title standing in until the worker names the thread itself. Unknown legacy
   // rows retain the historical aiTitle-first fallback because their provenance is unavailable.
-  if (t.titleAuto === false && t.title.trim()) return t.title
+  if (t.titleAuto === false && t.title.trim()) return { text: t.title.trim(), name: true }
   // For machine-titled rows, an internal slug is not a display title. This is especially important
   // around native `/rename`: if Claude fails to emit a custom title, the header must keep a neutral
   // name rather than presenting the session identifier as though rename succeeded. Legacy rows
   // (unknown titleAuto) retain the historical id fallback.
   if (t.title.trim() && !(t.titleAuto === true && t.title.trim() === t.id)) {
-    return t.titleAuto === true ? readableMachineTitle(t.title) : t.title.trim()
+    return { text: t.titleAuto === true ? readableMachineTitle(t.title) : t.title.trim(), name: true }
   }
-  return t.titleAuto === true ? UNTITLED_THREAD_TITLE : t.id
+  return { text: t.titleAuto === true ? UNTITLED_THREAD_TITLE : t.id, name: false }
 }
 
 // Has a HUMAN claimed this thread's name? Only then does the stored title outrank the backend's own

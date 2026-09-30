@@ -38,7 +38,7 @@ export async function checkSurfaceStates({ page, url, font, palette, out, check,
     await page.waitForSelector("[data-xq-project-row]")
     // Each quiet band opens by its own count — on the project's row while it lists nothing, under its
     // threads (the footer) while it does.
-    await page.$$eval('[data-xq-project-row] button[aria-expanded="false"], [data-xq-quiet-footer] button[aria-expanded="false"]', buttons => buttons.forEach(button => button.click()))
+    await page.$$eval('[data-xq-project-row] button[aria-expanded="false"]', buttons => buttons.forEach(button => button.click()))
     await page.waitForSelector('[data-xq-drill-band="snoozed"] [data-sidebar-item="theme-snoozed"]')
     await page.waitForSelector('[data-xq-drill-band="done"] [data-sidebar-item="theme-done"]')
   }
