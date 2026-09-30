@@ -1,7 +1,21 @@
 import { test } from "node:test"
 import assert from "node:assert/strict"
-import type { ThreadView } from "@frizz/shared"
-import { foldHandle, insertMention, matchMentions, mentionCandidates, mentionQueryAt, mentionSegments, resolveMention } from "./threadMentions.ts"
+import type { SubAgentDirectory, ThreadView } from "@frizz/shared"
+import {
+  foldAddress,
+  foldHandle,
+  humpStarts,
+  insertMention,
+  matchMentions,
+  mentionCandidates,
+  mentionQueryAt,
+  mentionSegments,
+  resolveMention,
+  resolveSubAgentMention,
+  splitMentionQuery,
+  subAgentMentionCandidates,
+  subAgentMentionStatus,
+} from "./threadMentions.ts"
 
 function thread(over: Partial<ThreadView>): ThreadView {
   return {
@@ -69,4 +83,131 @@ test("mentionSegments: a mention that names a thread becomes a link run; anythin
   assert.equal(segs.map((s) => s.text).join(""), text, "byte-for-byte")
   assert.deepEqual(segs.filter((s) => s.kind === "mention").map((s) => [s.text, s.kind === "mention" && s.slug]), [["@shellBudgets", "a"]])
   assert.deepEqual(mentionSegments("@focus-mode!", all).map((s) => s.kind), ["mention", "text"])
+  // A mention cut short by `/` or `@` is a package or a path, never its first letters (`@shell`).
+  assert.deepEqual(mentionSegments("npm i @shellBudgets/core and @shellBudgets@2", all).map((s) => s.kind), ["text"])
+})
+
+// ── SUB-AGENTS AFTER THE DOT ─────────────────────────────────────────────────────────────────────────
+
+const NOW = Date.parse("2026-09-30T12:00:00Z")
+// The server's order: live first, then the returned ones newest first. One child has no address (its
+// name is a sentence) and one sits under a Workflow.
+const directory: SubAgentDirectory = {
+  threadHandle: "shellBudgets",
+  agents: [
+    { id: "t1", label: "Cache keys", address: "shellBudgets.cacheKeys", depth: 1, state: "running", startedAt: "2026-09-30T11:48:00Z" },
+    { id: "w1", label: "wave2", address: "shellBudgets.wave2", depth: 1, state: "running", workflow: true, startedAt: "2026-09-30T11:30:00Z" },
+    { id: "w1a", label: "impl:W3", address: "shellBudgets.wave2.implW3", parentId: "w1", depth: 2, state: "stale", startedAt: "2026-09-30T11:20:00Z" },
+    { id: "t2", label: "Look at every call site of the cap and report back", depth: 1, state: "running" },
+    { id: "t3", label: "Cap audit", address: "shellBudgets.capAudit", depth: 1, state: "done", outcome: "completed", finishedAt: "2026-09-30T09:00:00Z" },
+    { id: "t4", label: "Cache sweep", address: "shellBudgets.cacheSweep", depth: 1, state: "done", outcome: "failed", finishedAt: "2026-09-28T12:00:00Z" },
+  ],
+}
+
+test("mentionQueryAt: the query runs on through dots, but a mention never starts with one", () => {
+  assert.deepEqual(mentionQueryAt("ask @shellBudgets.", 18), { start: 4, query: "shellBudgets." })
+  assert.deepEqual(mentionQueryAt("ask @shellBudgets.ca", 20), { start: 4, query: "shellBudgets.ca" })
+  assert.deepEqual(mentionQueryAt("@a.wave2.im", 11), { start: 0, query: "a.wave2.im" })
+  assert.equal(mentionQueryAt("ask @.", 6), undefined, "a leading dot is not a mention")
+  assert.equal(mentionQueryAt("ask @.ca", 8), undefined)
+  assert.equal(mentionQueryAt("see me.@x", 9), undefined, "an @ right after a dot is not at a word boundary")
+})
+
+test("splitMentionQuery: a plain query is untouched; a dotted one splits at its first dot", () => {
+  assert.equal(splitMentionQuery("shellBud"), undefined)
+  assert.deepEqual(splitMentionQuery("shellBudgets."), { head: "shellBudgets", rest: "" })
+  assert.deepEqual(splitMentionQuery("shellBudgets.wave2.im"), { head: "shellBudgets", rest: "wave2.im" })
+})
+
+test("humpStarts: the segment after a dot starts a word, whatever its case", () => {
+  assert.deepEqual(humpStarts("shellBudgets"), [0, 5])
+  assert.deepEqual(humpStarts("portTheParser.cacheKeys"), [0, 4, 7, 14, 19])
+  assert.deepEqual(humpStarts("a.B"), [0, 2], "an uppercase segment start is counted once")
+})
+
+test("subAgentMentionCandidates: every addressed child, live before returned, each dimmed with how it stands", () => {
+  const subs = subAgentMentionCandidates("a", directory, NOW)
+  assert.deepEqual(subs.map((c) => c.handle), ["shellBudgets.cacheKeys", "shellBudgets.wave2", "shellBudgets.wave2.implW3", "shellBudgets.capAudit", "shellBudgets.cacheSweep"], "the sentence-named child has no address and is not offered")
+  assert.deepEqual(subs.map((c) => c.done), [false, false, false, true, true])
+  assert.deepEqual(subs.map((c) => c.subAgentId), ["t1", "w1", "w1a", "t3", "t4"])
+  assert.ok(subs.every((c) => c.slug === "a"), "a sub-agent candidate names its thread's slug")
+  assert.deepEqual(subs.map((c) => c.status), ["running 12m", "running 30m", "stale 40m", "returned 3h ago", "failed 2d ago"])
+  // The server's order is not trusted blindly: a returned child listed early still lands after the live.
+  const shuffled = { ...directory, agents: [directory.agents[4]!, ...directory.agents.slice(0, 4)] }
+  assert.deepEqual(subAgentMentionCandidates("a", shuffled, NOW).map((c) => c.done), [false, false, false, true])
+})
+
+test("subAgentMentionStatus: the house duration grammar, and the child-op row's words for how it ended", () => {
+  assert.equal(subAgentMentionStatus({ state: "running", startedAt: "2026-09-30T11:59:22Z" }, NOW), "running 38s")
+  assert.equal(subAgentMentionStatus({ state: "rested", startedAt: "2026-09-30T11:00:00Z" }, NOW), "rested")
+  assert.equal(subAgentMentionStatus({ state: "done", outcome: "killed", finishedAt: "2026-09-30T11:20:00Z" }, NOW), "stopped 40m ago")
+  assert.equal(subAgentMentionStatus({ state: "done", outcome: "completed" }, NOW), "returned", "no instant, no age")
+  assert.equal(subAgentMentionStatus({ state: "running" }, NOW), "running")
+})
+
+test("matchMentions over sub-agents: ranked on the address below the thread, dots kept", () => {
+  const subs = subAgentMentionCandidates("a", directory, NOW)
+  const handles = (rest: string) => matchMentions(subs, rest).map((c) => c.handle)
+  assert.deepEqual(handles(""), subs.map((c) => c.handle), "`@shellBudgets.` offers every child, live first")
+  assert.deepEqual(handles("ca"), ["shellBudgets.cacheKeys", "shellBudgets.capAudit", "shellBudgets.cacheSweep"], "a prefix of the child, live before returned")
+  assert.deepEqual(handles("cache"), ["shellBudgets.cacheKeys", "shellBudgets.cacheSweep"])
+  assert.deepEqual(handles("keys"), ["shellBudgets.cacheKeys"], "a word inside the child's handle")
+  assert.deepEqual(handles("wave2.im"), ["shellBudgets.wave2.implW3"], "a dot typed below the thread separates the same segments")
+  assert.deepEqual(handles("impl"), ["shellBudgets.wave2.implW3"], "the segment after a dot is a word start")
+  assert.deepEqual(handles("shell"), [], "the head was already typed; it is not matched again")
+})
+
+test("matchMentions over threads: a query with no dot behaves exactly as before", () => {
+  const all = mentionCandidates(board)
+  assert.deepEqual(matchMentions(all, "bud").map((c) => c.handle), ["budgetReport", "shellBudgets"])
+  assert.deepEqual(matchMentions(all, "shell-budgets").map((c) => c.handle), ["shellBudgets"], "punctuation still folds away")
+})
+
+test("a dotted query's head resolves to a thread by the same fold a plain mention uses", () => {
+  const all = mentionCandidates(board)
+  const head = (query: string) => {
+    const split = splitMentionQuery(query)
+    return split && resolveMention(all, split.head)?.slug
+  }
+  assert.equal(head("shellBudgets.ca"), "a")
+  assert.equal(head("ShellBudget.ca"), "a", "case and a plural fold away")
+  assert.equal(head("shellBud.ca"), undefined, "a partial head names no thread — the menu stays closed")
+  assert.equal(head("focusMode."), "b")
+})
+
+test("insertMention: a partly typed dotted token is replaced whole; a sentence's full stop is kept", () => {
+  const address = "shellBudgets.cacheKeys"
+  assert.deepEqual(insertMention("ask @shellBudgets.ca", 4, 20, address), { prose: "ask @shellBudgets.cacheKeys ", caret: 28 })
+  // Caret mid-token, the rest of the dotted token after it replaced too.
+  assert.deepEqual(insertMention("ask @shellBudgets.caXX about", 4, 20, address), { prose: "ask @shellBudgets.cacheKeys about", caret: 28 })
+  assert.deepEqual(insertMention("ask @shell|Budgets.cacheKeys now".replace("|", ""), 4, 10, address), { prose: "ask @shellBudgets.cacheKeys now", caret: 28 })
+  // A full stop right after the caret ends the sentence; it is not part of the token.
+  assert.deepEqual(insertMention("ask @shellBud. Then", 4, 13, "shellBudgets"), { prose: "ask @shellBudgets . Then", caret: 18 })
+  assert.deepEqual(insertMention("ask @shellBud.", 4, 13, "shellBudgets"), { prose: "ask @shellBudgets .", caret: 18 })
+})
+
+test("mentionSegments: a dotted mention links when its thread resolves, and carries its address", () => {
+  const all = mentionCandidates(board)
+  const text = "ask @shellBudgets.cacheKeys about @shellBudgets. Then @nobody.child and @focusMode.wave2.implW3."
+  const segs = mentionSegments(text, all)
+  assert.equal(segs.map((s) => s.text).join(""), text, "byte-for-byte")
+  const mentions = segs.flatMap((s) => (s.kind === "mention" ? [[s.text, s.slug, s.address ?? null]] : []))
+  assert.deepEqual(mentions, [
+    ["@shellBudgets.cacheKeys", "a", "shellBudgets.cacheKeys"],
+    ["@shellBudgets", "a", null],
+    ["@focusMode.wave2.implW3", "b", "focusMode.wave2.implW3"],
+  ], "a trailing full stop is never part of a mention; an unknown thread's child stays text")
+  // A plain mention still carries its thread's status; a sub-agent's is the directory's to say.
+  const plain = segs.find((s) => s.kind === "mention" && s.address === undefined)
+  assert.equal(plain?.kind === "mention" && plain.status, "Tuning the cap")
+})
+
+test("resolveSubAgentMention / foldAddress: a mention finds its directory entry by the folded address", () => {
+  assert.equal(foldAddress("@PortTheParser.CacheKeys"), "porttheparser.cachekey")
+  assert.equal(resolveSubAgentMention(directory, "shellBudgets.cacheKeys")?.id, "t1")
+  assert.equal(resolveSubAgentMention(directory, "ShellBudget.cache-key")?.id, "t1", "case, punctuation and a plural fold away per segment")
+  assert.equal(resolveSubAgentMention(directory, "shellBudgets.wave2.implW3")?.id, "w1a")
+  assert.equal(resolveSubAgentMention(directory, "shellBudgets.capAudit")?.id, "t3", "a returned child still resolves")
+  assert.equal(resolveSubAgentMention(directory, "shellBudgets.implW3"), undefined, "an address skipping its Workflow names nothing")
+  assert.equal(resolveSubAgentMention(directory, "shellBudgets.nothing"), undefined)
 })

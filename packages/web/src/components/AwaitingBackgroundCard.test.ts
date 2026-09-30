@@ -261,7 +261,7 @@ test("sub-agent rows are DIRECT and RUNNING only", () => {
   const t = thread([agent("running"), agent("stale"), nested(2)], [])
   const html = render(t)
   assert.equal(html.match(/data-wait-kind="agent"/g)?.length, 1)
-  assert.doesNotMatch(text(t), /Trace the cache key/, "a grandchild was dispatched by the child, not by this thread")
+  assert.doesNotMatch(text(t), /traceTheCacheKey|Trace the cache key/, "a grandchild was dispatched by the child, not by this thread")
 })
 
 // ---- WHAT THE ROW SAYS ---------------------------------------------------------------------------
@@ -273,7 +273,7 @@ test("a row with nothing to open is non-interactive — no chevron, never a disa
   const idlessRows = renderToStaticMarkup(createElement(AwaitingWaitTable, { thread: idless, divider: false }))
   assert.doesNotMatch(idlessRows, /lucide-chevron-right/)
   assert.doesNotMatch(idlessRows, /disabled/)
-  assert.match(text(idless), /Audit the parser/, "…and the row is still there")
+  assert.match(text(idless), /auditTheParser/, "…and the row is still there, named by its handle")
 })
 
 test("the sub-agent row says its profile without the dispatch namespace", () => {

@@ -12,6 +12,9 @@ import {
   prChecksRunning,
   queuedThread,
   sectionOf,
+  subAgentAddress,
+  subAgentChain,
+  subAgentHandle,
   threadHandle,
   type AwaitingHint,
   type SectionKey,
@@ -58,6 +61,47 @@ export function displayName(t: TitleFields): string {
 export function threadHandleOf(t: TitleFields): string | undefined {
   const source = titleSource(t)
   return source.name ? threadHandle(source.text) : undefined
+}
+
+// A SUB-AGENT'S NAME, SHOWN AS ITS HANDLE — the same rule as a thread's (maintainer 2026-09-30:
+// "subagents accessible as `topLevel.subagent` and given name ids with the same prompting as the
+// top-level threads"). Its dispatch name ("Cache keys") reads as `cacheKeys` on every row that shows a
+// child as ITSELF — the rail, the queue card, the ops strip, the wait rail, a Workflow's tree, the
+// transcript's dividers — so what the operator reads under a thread is the segment they type after
+// `@thread.`. A sentence-length name (a worker that ignored the prompt, or one dispatched before it
+// existed) has no handle and shows as written, exactly as a sentence-length thread title does.
+export function subAgentName(label: string): string {
+  return subAgentHandle(label) ?? label
+}
+
+// The full `thread.child` address of one of a thread's LIVE sub-agents, from the board alone
+// (`portTheParser.wave2.implW3`), or undefined when the thread has no handle or a link in the chain has
+// none or has already returned. The drawer header's first choice; a finished child's address comes from
+// the server's `subAgentDirectory` instead, which still has the whole tree on disk.
+export function subAgentAddressOf(t: TitleFields & Pick<ThreadView, "subAgents">, subId: string): string | undefined {
+  const head = threadHandleOf(t)
+  if (!head) return undefined
+  const chain = subAgentChain(t.subAgents ?? [], subId)
+  return chain ? subAgentAddress(head, chain) : undefined
+}
+
+// The title a drawer passes for a child it cannot name (a report whose sender's description had not
+// resolved, ChatView SubAgentReportLine). A stand-in, not a name, so it never camelCases into `subAgent`.
+export const UNNAMED_SUB_AGENT_LABEL = "Sub-agent"
+
+// The SUB-AGENT DRAWER'S HEADER: the child's whole address (`portTheParser.cacheKeys`) — what the
+// operator types to point another thread at it — when the live board resolves it; else one the
+// directory already told this page (`known`, a returned child opened from a `@` mention); else its
+// handle alone; else its label as written.
+export function subAgentTitle(
+  t: (TitleFields & Pick<ThreadView, "subAgents">) | undefined,
+  subId: string,
+  label: string,
+  known?: readonly { readonly id: string; readonly address?: string }[],
+): string {
+  const address = (t && subAgentAddressOf(t, subId)) ?? known?.find((entry) => entry.id === subId)?.address
+  if (address) return address
+  return label === UNNAMED_SUB_AGENT_LABEL ? label : subAgentName(label)
 }
 
 // Where the shown title comes from, and whether it is a real NAME (which displays as its handle) or a

@@ -1,6 +1,7 @@
 import type { ReactElement } from "react"
 import { Check, X } from "lucide-react"
 import type { WorkflowAgentView } from "@frizz/shared"
+import { subAgentName } from "../groups.ts"
 import { pushSubAgentDrawer } from "../store.ts"
 import { compactElapsedSince } from "../lib/durationLabels.ts"
 import { useNowMs } from "../lib/liveClock.ts"
@@ -75,7 +76,7 @@ function WorkflowAgentRow({ slug, agent, now }: { slug: string; agent: WorkflowA
       className="group -mx-2 flex min-w-0 items-center gap-1 rounded-md px-2 py-1 text-left text-[13px] outline-none transition-colors hover:bg-panel-2/60 focus-visible:ring-1 focus-visible:ring-inset focus-visible:ring-focus-ink-60"
     >
       <span className="flex w-3 shrink-0 items-center justify-center">{mark}</span>
-      <span className={`min-w-0 truncate ${live ? "text-fg/85" : "text-muted-70"} group-hover:text-fg group-hover:underline`}>{agent.label}</span>
+      <span className={`min-w-0 truncate ${live ? "text-fg/85" : "text-muted-70"} group-hover:text-fg group-hover:underline`}>{subAgentName(agent.label)}</span>
       {elapsed && <span className="ml-auto shrink-0 pl-2 text-[12px] text-muted-40" title={`Working for ${elapsed}`}>{elapsed}</span>}
     </button>
   )
