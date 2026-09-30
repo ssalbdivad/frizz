@@ -1256,12 +1256,12 @@ function createContextUnchecked(opts: ContextOptions, resources: PartialContextR
 function startThreadRetention(ctx: AppContext, unsubscribers: (() => void)[]): void {
   let stopped = false
   const sweep = async () => {
-    const days = ctx.getSettings().deleteDoneThreadsAfterDays ?? 0
+    const days = ctx.getSettings().deleteDoneThreadsUntouchedDays ?? 0
     if (stopped || !(days > 0)) return
     const { deleteExpiredDoneThreads } = await import("./router.ts")
     if (stopped) return
     const deleted = await deleteExpiredDoneThreads(ctx, days)
-    if (deleted) frizzLog.info("thread-retention", `${ctx.project.name}: deleted ${deleted} done thread${deleted === 1 ? "" : "s"} idle over ${days}d`)
+    if (deleted) frizzLog.info("thread-retention", `${ctx.project.name}: deleted ${deleted} done thread${deleted === 1 ? "" : "s"} untouched for ${days}d`)
   }
   const run = () => void sweep().catch((error) => frizzLog.warn("thread-retention", `${ctx.project.name}: sweep failed: ${String(error)}`))
   const first = setTimeout(run, RETENTION_FIRST_SWEEP_MS)

@@ -190,6 +190,10 @@ export interface SessionRow {
   recurring_stopped_at?: string | null
   meta: string | null // JSON blob for future annotations (unparsed here)
   seen_at: string | null // ISO8601 — interaction clearance: recorded when the human opens the thread
+  // ISO8601 — when the HUMAN last acted on this thread: opened it, replied, marked it done, snoozed it,
+  // answered it (router.ts HUMAN_THREAD_ACTS). Worker calls never stamp it. What "Delete done threads"
+  // counts from (thread-retention.ts). Optional: older rows and test fixtures predate it.
+  interacted_at?: string | null
   // Which agent backend serves this session (Codex-support epic). Optional in the TS shape (older rows
   // + the many test-fixture literals predate it); the SQLite column carries a "claude" DEFAULT so every
   // existing row and all current behavior are unchanged. Phase 1 only ever writes "claude".
@@ -731,6 +735,7 @@ export interface Storage {
   setRestedAt(slug: string, at: string): void
   setRestedAtIfCurrent(slug: string, sessionId: string, generation: number, at: string): boolean
   setSeenAt(slug: string, at: string): void
+  setInteractedAt(slug: string, at: string): void
   // Cache/clear the discovered transcript filename stem (the read-side discovery fallback's result).
   setTranscriptId(slug: string, transcriptId: string | null): void
   setTranscriptIdIfCurrent(
@@ -1229,6 +1234,8 @@ export const STORAGE_SCHEMA = `
       status TEXT,
       -- When the status last changed (live-status.ts); also in the ALTER list below.
       status_at TEXT,
+      -- When the human last acted on the thread (SessionRow); also in the ALTER list below.
+      interacted_at TEXT,
       PRIMARY KEY (project_id, slug)
     );
     CREATE INDEX IF NOT EXISTS session_snoozed_until_idx ON session(project_id, snoozed_until);
@@ -1568,6 +1575,8 @@ export function ensureStorageSchema(db: Database): void {
     "status_at TEXT",
     // 2026-09-30: the names a thread carried before its current one (session_former_titles below).
     "former_titles TEXT",
+    // 2026-09-30: when the human last acted on the thread — what deleting old threads counts from.
+    "interacted_at TEXT",
   ]) {
     try {
       db.exec(`ALTER TABLE session ADD COLUMN ${column}`)
@@ -1942,6 +1951,7 @@ export function createStorage(source: string | Database, projectId: string): Sto
     WHERE project_id = @project_id AND slug = ? AND session_id = ? AND runtime_generation = ?
   `)
   const seenStmt = scope.prepare("UPDATE session SET seen_at = ? WHERE project_id = @project_id AND slug = ?")
+  const interactedStmt = scope.prepare("UPDATE session SET interacted_at = ? WHERE project_id = @project_id AND slug = ?")
   const transcriptIdStmt = scope.prepare("UPDATE session SET transcript_id = ? WHERE project_id = @project_id AND slug = ?")
   const transcriptIdIfCurrentStmt = scope.prepare(`
     UPDATE session SET transcript_id = ?
@@ -3077,6 +3087,7 @@ export function createStorage(source: string | Database, projectId: string): Sto
     setRestedAtIfCurrent: (slug, sessionId, generation, at) =>
       restedIfCurrentStmt.run(at, slug, sessionId, generation).changes === 1,
     setSeenAt: (slug, at) => void seenStmt.run(at, slug),
+    setInteractedAt: (slug, at) => void interactedStmt.run(at, slug),
     setTranscriptId: (slug, transcriptId) => void transcriptIdStmt.run(transcriptId, slug),
     setTranscriptIdIfCurrent: (slug, sessionId, generation, transcriptId) =>
       transcriptIdIfCurrentStmt.run(transcriptId, slug, sessionId, generation).changes === 1,

@@ -144,18 +144,18 @@ export function SettingsDrawer() {
               />
             </SettingsField>
 
-            <SettingsField label="Delete done threads" help={SETTINGS_HELP.deleteDoneThreadsAfterDays}>
+            <SettingsField label="Delete done threads" help={SETTINGS_HELP.deleteDoneThreadsUntouchedDays}>
               <Select
                 variant="bordered"
-                value={String(draft.deleteDoneThreadsAfterDays ?? 0)}
-                onValueChange={(v) => update({ ...draft, deleteDoneThreadsAfterDays: Number(v) })}
-                options={[{ value: "0", label: "Never" }, ...RETENTION_DAYS.map((days) => ({ value: String(days), label: `After ${days}d` }))]}
+                value={String(draft.deleteDoneThreadsUntouchedDays ?? 0)}
+                onValueChange={(v) => update({ ...draft, deleteDoneThreadsUntouchedDays: Number(v) })}
+                options={[{ value: "0", label: "Never" }, ...RETENTION_DAYS.map((days) => ({ value: String(days), label: `Untouched for ${days}d` }))]}
                 indicatorPosition="right"
                 ariaLabel="Delete done threads automatically"
               />
             </SettingsField>
 
-            <SettingsField label="Delete old threads now" help={SETTINGS_HELP.deleteOldThreads}>
+            <SettingsField label="Delete untouched threads now" help={SETTINGS_HELP.deleteOldThreads}>
               <DeleteOldThreads />
             </SettingsField>
 

@@ -10,7 +10,7 @@ import { Select } from "./ui/Select.tsx"
 export const RETENTION_DAYS = [1, 7, 30, 90] as const
 
 /**
- * Settings → Delete old threads now: the automatic period's one-off twin (server thread-retention.ts
+ * Settings → Delete untouched threads now: the automatic period's one-off twin (server thread-retention.ts
  * picks the same set). The button COUNTS first — a dry run — and the dialog names the number, so nobody
  * deletes "some threads" blind; nothing to delete says so instead of opening a dialog.
  */
@@ -19,14 +19,14 @@ export function DeleteOldThreads() {
   const [pending, setPending] = useState<number | null>(null)
   const queryClient = useQueryClient()
   const count = useMutation({
-    mutationFn: () => rpc.deleteDoneThreads({ olderThanDays: days, dryRun: true }),
+    mutationFn: () => rpc.deleteDoneThreads({ untouchedDays: days, dryRun: true }),
     onSuccess: ({ count }) => {
-      if (count === 0) showToast(`No done threads older than ${days}d`)
+      if (count === 0) showToast(`No done threads untouched for ${days}d`)
       else setPending(count)
     },
   })
   const remove = useMutation({
-    mutationFn: () => rpc.deleteDoneThreads({ olderThanDays: days }),
+    mutationFn: () => rpc.deleteDoneThreads({ untouchedDays: days }),
     onSuccess: ({ count }) => {
       setPending(null)
       showToast(`Deleted ${count} done ${count === 1 ? "thread" : "threads"}`)
@@ -42,9 +42,9 @@ export function DeleteOldThreads() {
           variant="bordered"
           value={String(days)}
           onValueChange={(v) => setDays(Number(v))}
-          options={RETENTION_DAYS.map((d) => ({ value: String(d), label: `Older than ${d}d` }))}
+          options={RETENTION_DAYS.map((d) => ({ value: String(d), label: `Untouched for ${d}d` }))}
           indicatorPosition="right"
-          ariaLabel="Delete done threads older than"
+          ariaLabel="Delete done threads untouched for"
         />
       </div>
       <button
@@ -86,7 +86,7 @@ export function DeleteOldThreads() {
         >
           <div className="flex flex-col gap-3 p-4 text-[12.5px] leading-relaxed text-muted">
             <p>
-              Every done thread with no activity in the last {days}d, in every open project, is removed from Frizz with
+              Every done thread you have not opened or acted on in the last {days}d, in every open project, is removed from Frizz with
               its notes. Pinned threads are kept. This cannot be undone.
             </p>
             {error ? <p className="text-[11.5px] text-danger">{error}</p> : null}

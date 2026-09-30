@@ -1,6 +1,6 @@
 // Drive THREAD DELETION in a real headless browser against an adhoc stack seeded by
 // seed-old-threads.ts: the ⋯ menu's Delete on an open thread with its drawer open, then Settings'
-// "Delete old threads now" at 30d (must take shell-budgets only), with the board read back over RPC
+// "Delete untouched threads now" at 30d (must take shell-budgets only), with the board read back over RPC
 // after each step. Screenshots land in --out.
 // Usage: nub scripts/verify-thread-delete.ts --port=NNNN --slug=<project slug> --out=/abs/dir
 import { mkdirSync } from "node:fs"
@@ -51,7 +51,7 @@ try {
   await page.screenshot({ path: join(out, "after-one.png") })
   console.log("after ⋯ delete:", await slugs(), "url:", page.url())
 
-  // 2. Settings → Delete old threads now, 30d (the default).
+  // 2. Settings → Delete untouched threads now, 30d (the default).
   await page.goto(`${origin}/`, { waitUntil: "networkidle2" })
   await wait(2000)
   await page.keyboard.press("Escape")

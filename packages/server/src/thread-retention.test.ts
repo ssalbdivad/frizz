@@ -3,7 +3,8 @@
 // What a delete has to buy is the reason it exists: the slug is free again (the next "Shell budgets"
 // is `shell-budgets`, not `shell-budgets-2`), the `@handle` no longer resolves, and nothing Frizz keeps
 // for the thread survives it. The bulk and automatic doors must take exactly the done threads the
-// predicate names, and nothing open, recent or pinned.
+// predicate names — counted from when the HUMAN last touched them, never the agent's own activity — and
+// nothing open, recently touched or pinned.
 import { test } from "node:test"
 import assert from "node:assert/strict"
 import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs"
@@ -68,9 +69,9 @@ function row(slug: string, over: Partial<SessionRow> = {}): SessionRow {
 const done = (slug: string, over: Partial<SessionRow> = {}) => row(slug, { state: "archived", archived: 1, ...over })
 
 /** The upsert writes a dispatch's columns only; rest time and state have writers of their own. */
-function seed(storage: ReturnType<typeof createStorage>, slug: string, opts: { done?: boolean; restedAt?: string; title?: string } = {}) {
+function seed(storage: ReturnType<typeof createStorage>, slug: string, opts: { done?: boolean; interactedAt?: string; title?: string } = {}) {
   storage.upsertSession(row(slug, opts.title ? { title: opts.title, title_locked: 1 } : {}))
-  if (opts.restedAt) storage.setRestedAt(slug, opts.restedAt)
+  if (opts.interactedAt) storage.setInteractedAt(slug, opts.interactedAt)
   if (opts.done) storage.setState(slug, "archived")
 }
 
@@ -115,32 +116,37 @@ test("an open thread can be deleted too — the old exited-only gate is gone", a
   } finally { h.close() }
 })
 
-test("only done, unpinned threads idle past the cutoff expire", () => {
+test("only done, unpinned threads the human has not touched past the cutoff expire", () => {
   const rows = [
-    done("old-done", { rested_at: daysAgo(40) }),
-    done("old-done-never-rested", { spawned_at: daysAgo(40) }),
-    done("recent-done", { rested_at: daysAgo(2) }),
-    done("old-pinned", { rested_at: daysAgo(40), pinned_at: daysAgo(40) }),
-    row("old-open", { rested_at: daysAgo(40) }),
+    // The agent rested yesterday, but nobody has touched it in 40 days: the agent's activity is not an interaction.
+    done("untouched-busy-agent", { interacted_at: daysAgo(40), rested_at: daysAgo(1) }),
+    // Dispatched and never touched again: the dispatch is the last touch.
+    done("never-touched", { spawned_at: daysAgo(40) }),
+    done("acted-on-recently", { interacted_at: daysAgo(2) }),
+    // Rows older than `interacted_at` carry their history in the open and read stamps.
+    done("opened-recently", { seen_at: daysAgo(2) }),
+    done("read-recently", { last_read_at: daysAgo(2) }),
+    done("old-pinned", { interacted_at: daysAgo(40), pinned_at: daysAgo(40) }),
+    row("old-open", { interacted_at: daysAgo(40) }),
   ]
-  assert.deepEqual(expiredDoneThreads(rows, 30, NOW).map((r) => r.slug), ["old-done", "old-done-never-rested"])
+  assert.deepEqual(expiredDoneThreads(rows, 30, NOW).map((r) => r.slug), ["untouched-busy-agent", "never-touched"])
   assert.deepEqual(expiredDoneThreads(rows, 0, NOW), [], "0 days is never")
 })
 
 test("deleteDoneThreads counts on a dry run, then deletes exactly that set", async () => {
   const h = harness()
   try {
-    // spawned_at is 60 days back for every row, so the rest time decides.
+    // spawned_at is 60 days back for every row, so the last interaction decides.
     const ago = (days: number) => new Date(Date.now() - days * DAY_MS).toISOString()
-    seed(h.storage, "old-done", { done: true, restedAt: ago(40) })
-    seed(h.storage, "recent-done", { done: true, restedAt: ago(1) })
-    seed(h.storage, "old-open", { restedAt: ago(40) })
+    seed(h.storage, "old-done", { done: true, interactedAt: ago(40) })
+    seed(h.storage, "recent-done", { done: true, interactedAt: ago(1) })
+    seed(h.storage, "old-open", { interactedAt: ago(40) })
 
-    assert.deepEqual(await h.router.deleteDoneThreads.handler({ input: { olderThanDays: 30, dryRun: true } }), { count: 1 })
+    assert.deepEqual(await h.router.deleteDoneThreads.handler({ input: { untouchedDays: 30, dryRun: true } }), { count: 1 })
     assert.equal(h.storage.allSessions().length, 3, "a dry run deletes nothing")
     assert.equal(h.refreshes(), 0)
 
-    assert.deepEqual(await h.router.deleteDoneThreads.handler({ input: { olderThanDays: 30 } }), { count: 1 })
+    assert.deepEqual(await h.router.deleteDoneThreads.handler({ input: { untouchedDays: 30 } }), { count: 1 })
     assert.deepEqual(h.storage.allSessions().map((r) => r.slug).sort(), ["old-open", "recent-done"])
     assert.equal(h.refreshes(), 1, "one rebuild for the whole batch")
   } finally { h.close() }
@@ -149,10 +155,25 @@ test("deleteDoneThreads counts on a dry run, then deletes exactly that set", asy
 test("the retention sweep's delete takes the same set, and does nothing at 0", async () => {
   const h = harness()
   try {
-    seed(h.storage, "old-done", { done: true, restedAt: daysAgo(10) })
+    seed(h.storage, "old-done", { done: true, interactedAt: daysAgo(10) })
     assert.equal(await deleteExpiredDoneThreads(h.ctx, 0, NOW), 0)
     assert.equal(await deleteExpiredDoneThreads(h.ctx, 30, NOW), 0)
     assert.equal(await deleteExpiredDoneThreads(h.ctx, 7, NOW), 1)
     assert.equal(h.storage.getSession("old-done"), undefined)
+  } finally { h.close() }
+})
+
+test("a human verb stamps the interaction clock; a worker's own verb does not", async () => {
+  const h = harness()
+  try {
+    h.storage.upsertSession(row("t"))
+    assert.equal(h.storage.getSession("t")?.interacted_at ?? null, null)
+    // The worker tidying its own links is the agent at work, not the human.
+    await h.router.dropOwnLink.handler({ input: { slug: "t", id: "lnk_missing" } })
+    assert.equal(h.storage.getSession("t")?.interacted_at ?? null, null)
+    const before = Date.now()
+    await h.router.threadSeen.handler({ input: { slug: "t" } })
+    const at = Date.parse(h.storage.getSession("t")?.interacted_at ?? "")
+    assert.ok(at >= before, "opening the thread is the human touching it")
   } finally { h.close() }
 })

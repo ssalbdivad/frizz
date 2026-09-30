@@ -95,7 +95,7 @@ export const defaultSettings = (): Settings => ({
   worktreeDir: ".frizz/worktrees",
   removeWorktreesOnDone: true,
   // Never — see the schema.
-  deleteDoneThreadsAfterDays: 0,
+  deleteDoneThreadsUntouchedDays: 0,
 })
 
 // Settings persist as one JSON blob under settings['settings']. Read merges over defaults

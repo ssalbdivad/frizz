@@ -731,7 +731,7 @@ export async function deleteOwnedThread(
   return true
 }
 
-/** Delete every done thread in one project idle for more than `days` days (thread-retention.ts picks
+/** Delete every done thread in one project nobody has interacted with for more than `days` days (thread-retention.ts picks
  *  them). Per-thread and forgiving: one that will not stop must not strand the rest. Returns how many went. */
 export async function deleteExpiredDoneThreads(
   ctx: Pick<AppContext, "storage" | "tailer" | "terminalRunner" | "project" | "codexAppServer" | "claudeBroker" | "acpBridge" | "board">,
@@ -3953,11 +3953,11 @@ export function createRouter(ctx: AppContext) {
       },
     }),
 
-    // Settings → "Delete done threads older than": the same set the retention sweep takes
+    // Settings → "Delete untouched threads now": the same set the retention sweep takes
     // (thread-retention.ts), across every OPEN project — the drawer is machine-wide, and so is the
     // automatic setting beside it. `dryRun` is the count the confirmation shows.
     deleteDoneThreads: mutation({
-      input: z.object({ olderThanDays: z.number().int().min(1).max(3650), dryRun: z.boolean().optional() }).strict(),
+      input: z.object({ untouchedDays: z.number().int().min(1).max(3650), dryRun: z.boolean().optional() }).strict(),
       output: z.object({ count: z.number().int().nonnegative() }),
       handler: async ({ input }) => {
         const now = Date.now()
@@ -3965,8 +3965,8 @@ export function createRouter(ctx: AppContext) {
         for (const { ctx: tenant } of ctx.activeTenants?.() ?? [{ ctx }]) {
           if (!tenant) continue
           count += input.dryRun
-            ? expiredDoneThreads(tenant.storage.allSessions(), input.olderThanDays, now).length
-            : await deleteExpiredDoneThreads(tenant, input.olderThanDays, now)
+            ? expiredDoneThreads(tenant.storage.allSessions(), input.untouchedDays, now).length
+            : await deleteExpiredDoneThreads(tenant, input.untouchedDays, now)
         }
         return { count }
       },
@@ -5077,8 +5077,31 @@ export function createRouter(ctx: AppContext) {
       },
     }),
   }
+  // Every verb the HUMAN performs on a thread stamps `interacted_at` before it runs — what deleting old
+  // threads counts from (thread-retention.ts). One wrapper over a named list rather than a line in each
+  // handler, so a new human verb is one word here; worker verbs (`*Own*`, ask, markOwnDone,
+  // messageThread) are left off, because an agent keeping itself busy is not the human touching it.
+  for (const name of HUMAN_THREAD_ACTS) {
+    const proc = router[name] as { handler: (args: { input: unknown }) => Promise<unknown> }
+    const inner = proc.handler
+    proc.handler = (args) => {
+      const slug = (args.input as { slug?: unknown } | null)?.slug
+      if (typeof slug === "string" && ctx.storage.getSession(slug)) ctx.storage.setInteractedAt(slug, new Date().toISOString())
+      return inner(args)
+    }
+  }
   routersByContext.set(ctx, router)
   return router
 }
+
+/** The thread verbs only the human's own surfaces call (see the wrapper at the end of createRouter). */
+const HUMAN_THREAD_ACTS = [
+  "followUp", "unqueueFollowUp", "deliverQueuedNow", "setThreadPermission", "setThreadProfile", "upgradeThreadModel",
+  "archiveThread", "markRead", "threadSeen", "setThreadState", "completeThread", "markComplete", "setThreadStatus",
+  "dismissThread", "setThreadSnooze", "setThreadPinned", "setThreadRecurringPrompt", "setThreadHeartbeat",
+  "snoozeAwaitingBackground", "snoozeUntilSubAgentsReturn", "answerQuestions", "dismissQuestions", "renameThread",
+  "aiRenameThread", "killAgent", "subAgentSteer", "subAgentStop", "stopBackgroundOp", "interactionResolve",
+  "interactionCancel", "terminalStart", "terminalRun", "openThreadFolder",
+] as const satisfies readonly (keyof ReturnType<typeof createRouter>)[]
 
 export type AppRouter = ReturnType<typeof createRouter>
