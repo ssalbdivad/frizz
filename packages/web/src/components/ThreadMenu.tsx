@@ -91,11 +91,15 @@ export function ThreadTerminalButton({ slug }: { slug: string }) {
 // THE HEADER'S ⋯ MENU: the rarer verbs. It carried "Open fullscreen" and owned `f` until 2026-09-29, when
 // the ⤢ beside it came back as an icon (ExpandThreadLink) and took the key: one door, not two. Spinoff
 // led it for an evening, until the maintainer wanted it one press away on every card and header
-// (SpinoffButton, Spinoff.tsx).
-export function ThreadMenu({ thread, onDoc }: { thread: ThreadView; onDoc?: () => void }) {
+// (SpinoffButton, Spinoff.tsx). The queue card carries it too (AllQueuesCard.tsx), inside the card's
+// ThreadProjectScope, with `restart={false}`: Restart worker sends through the eager follow-up path,
+// which always addresses the PAGE's project, so on another project's card it would restart the wrong
+// thread. Every other item resolves through the scoped client.
+export function ThreadMenu({ thread, onDoc, restart = true, className = HEADER_ICON_CLASS }: { thread: ThreadView; onDoc?: () => void; restart?: boolean; className?: string }) {
   const slug = thread.id
   const trigger = useRef<HTMLButtonElement>(null)
   const queryClient = useQueryClient()
+  const api = useThreadApi()
   const devBuild = useDevFrizzBuild()
   const ownSession = thread.kind === "session" && thread.foreign !== true
   const terminalCommand = useTerminalCommandMenuItem(slug)
@@ -111,7 +115,7 @@ export function ThreadMenu({ thread, onDoc }: { thread: ThreadView; onDoc?: () =
           // The strip's shared focus behaviour: a click here must not take the keyboard away from the
           // composer below it.
           onMouseDown={(event) => event.preventDefault()}
-          className={HEADER_ICON_CLASS}
+          className={className}
         >
           <Ellipsis size={15} aria-hidden />
         </button>
@@ -128,11 +132,11 @@ export function ThreadMenu({ thread, onDoc }: { thread: ThreadView; onDoc?: () =
           </MenuItem>
         )}
         {offersReloadPlugins(thread) && (
-          <MenuItem value="reload-plugins" onSelect={() => void reloadThreadPlugins(thread)} icon={<Plug size={12} aria-hidden />}>
+          <MenuItem value="reload-plugins" onSelect={() => void reloadThreadPlugins(api, thread)} icon={<Plug size={12} aria-hidden />}>
             Reload plugins
           </MenuItem>
         )}
-        {offersRestartWorker(thread, devBuild) && (
+        {restart && offersRestartWorker(thread, devBuild) && (
           <MenuItem value="restart-worker" onSelect={() => void restartWorker(queryClient, slug)} icon={<RefreshCw size={12} aria-hidden />}>
             Restart worker
           </MenuItem>

@@ -24,6 +24,7 @@ import { useLocation, useNavigate } from "react-router"
 import { questionsOwed, type AccountBackend, type ThreadView } from "@frizz/shared"
 import { projectApiBase, projectRpc } from "../api/rpc.ts"
 import { ThreadProjectScope } from "../api/threadApi.tsx"
+import { ThreadMenu, ThreadTerminalButton } from "./ThreadMenu.tsx"
 import { displayTitle, offersRetry, queueLabelAt, queueLabelWord } from "../groups.ts"
 import { useMentionCandidates, useOwnMention } from "../hooks/useMentionCandidates.ts"
 import { handoffParts, projectMarkdownScope, sameProjectAddress, squareCard, threadKey, type QueuesProject } from "../lib/allQueues.ts"
@@ -337,23 +338,30 @@ export const AllQueuesCard = memo(function AllQueuesCard({
                   work. In the card's OWN project scope: the header sits outside the body's, and the
                   page's api names the focused project. */}
               <ThreadProjectScope projectId={project.id} projectDir={project.projectDir}>
+                {/* The drawer header's strip, in its order (ChatView ThreadHeader): terminal, spinoff,
+                    fullscreen, ⋯. The terminal carries `t` on the card as it does in the drawer. */}
+                <ThreadTerminalButton slug={thread.id} />
                 <SpinoffButton thread={thread} className={HEADER_ICON_CLASS} />
               </ThreadProjectScope>
               {/* THE FULLSCREEN DOOR (ExpandThreadLink), before Retry as on Colin's card (TodosView
                   QueueCard @ 7a20f425). Its address carries the CARD's project — the page's own would
                   name the focused project's thread of the same slug — and it owns `f` on this card.
-                  AS THE HEADER'S LAST MARK it takes `-mr-2`: its ink sits ~1.2px inside a 14px box
-                  centred in a 28px square, so untrimmed it drew ~29px in from the card's right border
-                  against the project mark's 20.75px on the left; trimmed, 21.0px (measured 2026-09-29,
-                  ink-gaps.mjs dsf 4, sans). Beside Retry it keeps its box and Retry, an icon of the same
-                  square since 2026-09-29, takes the trim as the last mark instead. */}
+                  The header's LAST mark is the ⋯ menu below, which takes the `-mr-2` trim: a glyph's ink
+                  sits well inside a 14px box centred in a 28px square, so untrimmed the last mark drew
+                  ~29px in from the card's right border against the project mark's 20.75px on the left
+                  (the ⤢ measured 21.0px trimmed, 2026-09-29, ink-gaps.mjs dsf 4, sans). */}
               <ExpandThreadLink
                 slug={thread.id}
                 href={`${placeHref}/full`}
                 command
-                className={`${HEADER_ICON_CLASS}${offersRetry(thread) ? "" : " -mr-2"}`}
+                className={HEADER_ICON_CLASS}
               />
               {offersRetry(thread) && <RetryButton project={project} thread={thread} onSent={onLeave} onFailed={onReturn} />}
+              {/* The ⋯ menu, as the drawer's (ThreadMenu.tsx) minus Restart worker, which only sends to the
+                  page's project. */}
+              <ThreadProjectScope projectId={project.id} projectDir={project.projectDir}>
+                <ThreadMenu thread={thread} restart={false} className={`${HEADER_ICON_CLASS} -mr-2`} />
+              </ThreadProjectScope>
             </div>
           </header>
 
@@ -533,8 +541,7 @@ function RetryButton({ project, thread, onSent, onFailed }: { project: QueuesPro
         // (HeaderActions.tsx). It was a labelled accent pill until 2026-09-29, and one worded pill beside
         // the bare ⤢ read as a stray (maintainer: "having a retry button labeled with other non labeled
         // icons looks awful").
-        // `-mr-2` as the header's last mark, the ⤢'s trim (see the strip above).
-        className={`${HEADER_ICON_CLASS} -mr-2`}
+        className={HEADER_ICON_CLASS}
       >
         <RotateCcw size={14} strokeWidth={2} />
       </button>

@@ -1,5 +1,5 @@
 import type { ThreadView } from "@frizz/shared"
-import { rpc } from "../api/rpc.ts"
+import type { Api } from "../api/rpc.ts"
 import { showToast } from "../store.ts"
 
 // The two live-process MAINTENANCE verbs — Reload plugins and Restart worker — as the thread menu offers
@@ -31,9 +31,11 @@ export function offersRestartWorker(thread: ThreadView, devBuild: boolean): bool
   return thread.runtime !== "exited"
 }
 
-export async function reloadThreadPlugins(thread: ThreadView): Promise<void> {
+// `api` is the thread's own project's client (useThreadApi): a queue card of another project must not
+// ask the page's project to reload a session it has never heard of.
+export async function reloadThreadPlugins(api: Api, thread: ThreadView): Promise<void> {
   try {
-    const r = await rpc.reloadThreadPlugins({ slug: thread.id, sessionId: thread.sessionId ?? "" })
+    const r = await api.reloadThreadPlugins({ slug: thread.id, sessionId: thread.sessionId ?? "" })
     // Report what CHANGED, not "done": the operator's question is "did my edit land?", and a bare
     // success toast answers it no better than silence.
     const parts = [`${r.plugins} plugin${r.plugins === 1 ? "" : "s"}`, `${r.commands} skill${r.commands === 1 ? "" : "s"}`, `${r.agents} agent${r.agents === 1 ? "" : "s"}`]
