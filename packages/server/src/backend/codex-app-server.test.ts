@@ -2718,8 +2718,10 @@ test("two projects on one connection never see each other's bindings, even for t
 })
 
 // A BACKGROUND EXEC'S FOLDER. The item's own `cwd` is an inference from the approval request (which carries
-// one); codex-cli was not on the box this was written on, so the fallback is the half that is certain.
-test("a background exec carries the folder its item names, else the session's", async () => {
+// one); codex-cli was not on the box this was written on. An item that names none claims none: the exec ran
+// in its tool call's `workdir` when it had one, which this level cannot see, and the session's folder
+// guessed in its place made a worktree exec read as running in the project root.
+test("a background exec carries the folder its item names, and no guessed one", async () => {
   const h = harness()
   try {
     const binding = await h.bridge.startDisposableSession({ threadSlug: "bg-cwd", sessionId: "bg-cwd-sid", cwd: h.dir, ephemeral: false })
@@ -2736,7 +2738,7 @@ test("a background exec carries the folder its item names, else the session's", 
     await waitFor(() => h.bridge.backgroundExecs("bg-cwd", "bg-cwd-sid").length === 2, "both execs folded")
     const byId = new Map(h.bridge.backgroundExecs("bg-cwd", "bg-cwd-sid").map((e) => [e.processId, e.cwd]))
     assert.equal(byId.get("p-named"), "/elsewhere/worktree")
-    assert.equal(byId.get("p-bare"), h.dir, "no folder on the item ⇒ the session's")
+    assert.equal(byId.get("p-bare"), undefined, "no folder on the item ⇒ none, not the session's")
     assert.deepEqual(h.bridge.backgroundExecs("bg-cwd", "another-session"), [], "scoped to the thread's own binding")
   } finally {
     h.close()

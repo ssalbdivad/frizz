@@ -38,7 +38,7 @@ import { log as frizzLog } from "./logging.ts"
 import { frizzTempDir } from "./frizz-paths.ts"
 import { declaredShellBudgetMs } from "./shell-budget.ts"
 import { vetHarnessOutputPath } from "./background-shell-output.ts"
-import { liftCheckout, liftWorkingDir } from "./thread-cwd.ts"
+import { liftWorkingDir } from "./thread-cwd.ts"
 // A cycle (transcript.ts imports this module's fence parser), safe because neither reads the other at
 // module load: codexToolWorkdir is only ever called from inside a fold.
 import { codexToolWorkdir } from "./transcript.ts"
@@ -487,8 +487,9 @@ interface SubAgentEntry {
   // Shell only: the absolute folder it runs in. Folded from the launch record's `cwd`, or where a leading
   // `cd <path> &&` moved it (leadingCd). That reading can be a whole turn late — the harness stamps `cwd`
   // when it writes a batch, not when the command ran — so while the shell runs, the OS's answer
-  // (shell-cwd-probe.ts) replaces it here, and the retired ring and the drawer's lookup inherit it.
-  // What its row's "Runs in" and folder hint read.
+  // (shell-cwd-probe.ts) is preferred over it wherever it is read (observedShellCwd), but kept BESIDE the
+  // fold, never written here: this field is the transcript's reading and nothing else, because the tail
+  // cache persists it. What its row's "Runs in" and folder hint read when the OS has not answered.
   cwd?: string
   subagentType?: string // the dispatch's input.subagent_type verbatim (agents only; may be absent)
   outputFile?: string // the child/shell's output path (from the launch tool_result); its mtime = liveness
@@ -556,10 +557,11 @@ export interface BgShellView {
    *  `watch` holding it later (shell-budget.ts resolveShellBudget). Stamped by the BOARD, which holds the
    *  durable rows; the tailer never sets it. Absent ⇒ unbudgeted. */
   budgetEndsAt?: string
-  /** The absolute folder it started in, and that folder's checkout when it is off the project root.
-   *  Full contract on the shared schema. */
+  /** The absolute folder it runs in; that folder's checkout when it is off the project root, or `atRoot`
+   *  when it was read and is in it — neither when there is no reading. Full contract on the shared schema. */
   cwd?: string
   checkout?: WorkCheckout
+  atRoot?: true
 }
 
 /** One background shell as its drawer and its line counter read it (Tailer.backgroundShell). */
@@ -791,6 +793,11 @@ export interface TailState extends FoldState {
   // writes `<taskId>.output` into the same directory, so this is how its drawer finds its log. Absent
   // until a Bash ack has been seen in this session, which is why a Monitor's log is opportunistic.
   tasksDir?: string
+  // The same folder as named by an EXPLICIT launch's ack only — harness text no command can print — and so
+  // the only one that may vouch for another ack's path by name (ackPathTrusted). `tasksDir` can also be
+  // taught by an auto-background ack, which is a command's own output: vouched for by its session-id NAME,
+  // it once vouched in turn for a folder symlinked there from another session's (2026-09-29).
+  launchTasksDir?: string
   // MONOTONIC high-water mark over every timestamped record folded so far. `lastActivityAt` cannot
   // serve this purpose: it tracks the LATEST record folded and therefore moves BACKWARD whenever a
   // transcript replays history (which Claude's do — see trackResumes). This only ever advances, and it
@@ -1596,17 +1603,36 @@ function readDescendantSidecars(sessionDir: string, mtimeMs: (path: string) => n
 // of a transcript, a `cat` of a log — being taken for this session's handoff and pointing the drawer at a
 // file nobody meant it to read. It is not a boundary against a hostile agent: one that wanted another
 // log shown could `cat` it into its own genuine background shell, whose log is shown by design.
-function ackPathTrusted(path: string, tasksDir: string | undefined, sessionId: string | undefined): boolean {
-  const dir = dirname(realpathOr(path))
-  return ackFolderVouched(dir, tasksDir, sessionId) || (tasksDir !== undefined && basename(dir) === "tasks" && dir === realpathOr(tasksDir))
+//
+// TWO HALVES, BOTH REQUIRED. The NAMED folder must be vouched for (ackFolderVouched), and the folder the
+// file REALLY resolves into must still be that same `<session>/tasks` (taskFolderIsReal). Either alone
+// leaked: the name alone followed a symlinked FILE into another session's log; the real folder compared
+// against a `tasksDir` a forged ack had itself taught (by its vouched name) passed a symlinked FOLDER —
+// `/x/<this sid>/tasks` pointing at another session's `tasks/` resolved to the very folder it was compared
+// with (a verifier read another session's log back that way on 2026-09-29). Only an explicit launch's
+// folder (`launchTasksDir`) vouches by name now, and the real folder is judged by its own session name.
+function ackPathTrusted(path: string, launchTasksDir: string | undefined, sessionId: string | undefined): boolean {
+  return ackFolderVouched(dirname(path), launchTasksDir, sessionId) && taskFolderIsReal(path)
 }
 
 // The NAME-level half of ackPathTrusted: the folder is `tasks/`, and it is either the one an explicit launch
 // named or the one under the record's own session id. Pure, so the fold may use it (to learn tasksDir).
-function ackFolderVouched(dir: string, tasksDir: string | undefined, sessionId: string | undefined): boolean {
+function ackFolderVouched(dir: string, launchTasksDir: string | undefined, sessionId: string | undefined): boolean {
   if (basename(dir) !== "tasks") return false
-  if (tasksDir !== undefined && dir === tasksDir) return true
+  if (launchTasksDir !== undefined && dir === launchTasksDir) return true
   return sessionId !== undefined && sessionId !== "" && basename(dirname(dir)) === sessionId
+}
+
+// The DISK half: wherever links lead, the file lands in a `tasks/` folder under the same session folder its
+// path names. A task log lives at `<session>/tasks/<id>.output`, and no other session's folder has this one's
+// name (session ids are UUIDs), so a link into another session's folder — on the file or on any folder above
+// it — fails here. macOS's `/tmp` → `/private/tmp` moves only the prefix, which this does not read. A path
+// with nothing behind it yet is its own name, so it passes on the name-level half alone: there is nothing to
+// read, and every read is vetted again (vetHarnessOutputPath).
+function taskFolderIsReal(path: string): boolean {
+  const real = dirname(realpathOr(path))
+  const named = dirname(path)
+  return basename(real) === "tasks" && basename(dirname(real)) === basename(dirname(named))
 }
 
 function realpathOr(path: string): string {
@@ -1671,9 +1697,11 @@ function trackLaunchResults(state: TailState, rec: Record): void {
       // path shaped like the harness's own (`tasks/<its task id>.output`) and, for a promoted ack, one whose
       // folder its NAME vouches for (ackFolderVouched — the fold stays pure): this must not become a way to
       // point a Monitor's reads elsewhere. Every read of the candidate is vetted again where it really is.
+      // Only an EXPLICIT launch's folder becomes `launchTasksDir`, the one that vouches for other paths.
       if (entry.kind === "shell" && !entry.monitor && entry.outputFile && entry.taskId && basename(entry.outputFile) === `${entry.taskId}.output` && basename(dirname(entry.outputFile)) === "tasks"
-        && (!entry.promotedAck || ackFolderVouched(dirname(entry.outputFile), state.tasksDir, entry.promotedAck.sessionId))) {
+        && (!entry.promotedAck || ackFolderVouched(dirname(entry.outputFile), state.launchTasksDir, entry.promotedAck.sessionId))) {
         state.tasksDir = dirname(entry.outputFile)
+        if (!entry.promotedAck) state.launchTasksDir = state.tasksDir
       }
     }
     if (LAUNCH_ACK_RE.test(text)) continue // background launch ack — the child/shell is alive, keep tracking
@@ -3402,6 +3430,14 @@ export function createTailer(deps: TailerDeps): Tailer {
     return liftWorkingDir(base === undefined ? raw : resolve(base, raw), projectWorkDir, now())
   }
 
+  /** A shell row's place (BgShellView.checkout / atRoot): its folder's checkout off the root, `atRoot` in it,
+   *  and nothing at all without a reading — no folder, or one that no longer exists. */
+  function shellPlace(cwd: string | undefined): Pick<BgShellView, "checkout" | "atRoot"> {
+    const where = liftWorkingDir(cwd, projectWorkDir, now())
+    if (!where) return {}
+    return where.checkout ? { checkout: where.checkout } : { atRoot: true }
+  }
+
   function workingDirTelemetry(state: TailState): Pick<SessionTelemetry, "workingDir" | "checkout"> {
     const reading = threadWorkingDir(state)
     if (!reading) return {}
@@ -3454,9 +3490,8 @@ export function createTailer(deps: TailerDeps): Tailer {
       const budget = e.monitor ? { monitor: true } : declared !== undefined ? { budgetMs: declared } : {}
       // Where it runs — the OS's answer once it has one (shellCwd) — and, only when that is off the
       // project root, the checkout it runs in.
-      const cwd = shellState === "running" ? shellCwd(state, e) : e.cwd
-      const checkout = liftCheckout(cwd, projectWorkDir, now())
-      out.push({ label: e.label, startedAt: e.startedAt, state: shellState, id: e.toolUseId, ...(e.taskId ? { stoppable: true, taskId: e.taskId } : {}), ...(lastActivityAt ? { lastActivityAt } : {}), ...budget, ...(cwd ? { cwd } : {}), ...(checkout ? { checkout } : {}) })
+      const cwd = shellState === "running" ? shellCwd(state, e) : observedShellCwd(state, e)
+      out.push({ label: e.label, startedAt: e.startedAt, state: shellState, id: e.toolUseId, ...(e.taskId ? { stoppable: true, taskId: e.taskId } : {}), ...(lastActivityAt ? { lastActivityAt } : {}), ...budget, ...(cwd ? { cwd } : {}), ...shellPlace(cwd) })
     }
     return out
   }
@@ -3500,7 +3535,6 @@ export function createTailer(deps: TailerDeps): Tailer {
     if (!deps.codexBackgroundExecs || state.foreign || state.paneDead) return []
     const execs = deps.codexBackgroundExecs(state.slug, state.sessionId)
     return execs.map((exec) => {
-      const checkout = liftCheckout(exec.cwd, projectWorkDir, now())
       return {
       label: unwrapShellCommand(exec.command) ?? "Background command",
       // Carried SEPARATELY from the label even though they are the same string here: it is the client's
@@ -3517,9 +3551,12 @@ export function createTailer(deps: TailerDeps): Tailer {
       // for frizz to tail. The row still opens its drawer — its command, its folder and its Stop are all
       // real — and the drawer says plainly that the output stays with Codex.
       outputUnavailable: true,
-      // The item's own folder when codex names one, else the session's (codex-app-server backgroundExecs).
+      // The item's own folder when codex names one, and then only (codex-app-server backgroundExecs). One it
+      // does not name claims no place: the exec ran in the tool call's `workdir` when it had one, which the
+      // client backfills from the transcript for the tooltip, and a guess of the session's folder read
+      // `root` on a row running in the agent's worktree.
       ...(exec.cwd ? { cwd: exec.cwd } : {}),
-      ...(checkout ? { checkout } : {}),
+      ...shellPlace(exec.cwd),
       }
     })
   }
@@ -3849,8 +3886,14 @@ export function createTailer(deps: TailerDeps): Tailer {
     const live = state.subAgents.get(id)
     // A background SHELL shares this map (see backgroundShellLookup) and is emphatically not an agent:
     // there is nobody in there to read a steer. Only kind "agent" is ever `direct`.
+    //
+    // NOR IS ITS LOG A TRANSCRIPT, so a shell names no `outputFile` here. A shell's path is its ack's, and
+    // a promoted ack's is a command's own output: every reader of a shell's log goes through the trust
+    // check and the shape vet (backgroundShellLookup). This lookup handed that path over raw, and the
+    // sub-agent transcript RPC parsed whatever JSONL it named — another project's session, read back on
+    // 2026-09-29 through a forged ack whose `backgroundShellOutput` rightly answered `missing`.
     if (live) return {
-      outputFile: live.outputFile,
+      ...(live.kind === "shell" ? {} : { outputFile: live.outputFile }),
       ...(live.outputFormat ? { outputFormat: live.outputFormat } : {}),
       state: entryStale(state, live, now()) ? "stale" : "running",
       // A workflow is not a conversation: a steer addressed to its tool_use id reaches nobody.
@@ -3984,7 +4027,7 @@ export function createTailer(deps: TailerDeps): Tailer {
   // time). One realpath per promoted shell per read; promoted shells are rare (64 in the whole corpus).
   function shellOutputFile(state: TailState, e: { outputFile?: string; promotedAck?: PromotedAck }): string | undefined {
     if (!e.outputFile || !e.promotedAck) return e.outputFile
-    return ackPathTrusted(e.outputFile, state.tasksDir, e.promotedAck.sessionId) ? e.outputFile : undefined
+    return ackPathTrusted(e.outputFile, state.launchTasksDir, e.promotedAck.sessionId) ? e.outputFile : undefined
   }
 
   function shellIsGone(state: TailState, e: { outputFile?: string; promotedAck?: PromotedAck; startedAt: string }): boolean {
@@ -4020,8 +4063,11 @@ export function createTailer(deps: TailerDeps): Tailer {
   // WHERE EACH RUNNING SHELL REALLY IS (shell-cwd-probe.ts). The fold's reading comes off the launch
   // record's `cwd`, which the harness stamps when it writes a turn's batch — so a shell started in the
   // root just before the agent moved into a worktree folds as the worktree's. The OS names the folder
-  // its process is in; that answer is written back onto the entry, so the retired ring and the drawer's
-  // lookup carry it too. Asked a few times per shell at most, never on the event loop, batched like the
+  // its process is in, and every reader takes it from here (observedShellCwd) — the live row, the drawer's
+  // lookup, a retired shell's subtitle. It is NOT written onto the entry: the fold is persisted by the tail
+  // cache as a pure function of the transcript's bytes (tail-cache.ts), and an OS answer on the entry rode
+  // into the retired ring and the cache, so a cached boot and a cold one gave one retired shell two
+  // folders. Asked a few times per shell at most, never on the event loop, batched like the
   // liveness probe, and only about a VETTED path (a forged ack could name another process's file).
   // Both maps are keyed by output path, one entry per background shell ever seen, so both are bounded
   // the way the line counter's scan cache is: insertion order, oldest out (a shell that finished long ago
@@ -4050,24 +4096,25 @@ export function createTailer(deps: TailerDeps): Tailer {
     }, 0)
     shellCwdArmed.unref?.()
   }
+  /** Where a shell runs, as far as anything knows: the OS's last answer for its log (a live or a retired
+   *  shell), else the transcript's start folder (SubAgentEntry.cwd). Asks nothing. */
+  function observedShellCwd(state: TailState, e: { cwd?: string; outputFile?: string; promotedAck?: PromotedAck }): string | undefined {
+    const file = shellOutputFile(state, e)
+    return (file ? shellCwdReadings.get(file) : undefined) ?? e.cwd
+  }
   function shellCwd(state: TailState, e: SubAgentEntry): string | undefined {
     const file = shellOutputFile(state, e)
     if (!file) return e.cwd
     const reading = shellCwdReadings.get(file)
-    if (reading !== undefined) {
-      e.cwd = reading
-      return reading
-    }
+    if (reading !== undefined) return reading
     const asked = shellCwdAsks.get(file) ?? 0
     if (asked >= SHELL_CWD_ATTEMPTS || shellCwdWanted.has(file)) return e.cwd
     remember(shellCwdAsks, file, asked + 1)
     if (deps.shellCwd) {
       const answer = deps.shellCwd(file)
-      if (answer) {
-        remember(shellCwdReadings, file, answer)
-        e.cwd = answer
-      }
-      return e.cwd
+      if (!answer) return e.cwd
+      remember(shellCwdReadings, file, answer)
+      return answer
     }
     const vetted = vetHarnessOutputPath(file, e.taskId)
     if (!vetted) {
@@ -4092,7 +4139,7 @@ export function createTailer(deps: TailerDeps): Tailer {
           if (shellCwdReadings.get(file) !== dir) changed = true
           remember(shellCwdReadings, file, dir)
         }
-        // The next assembly writes the answer onto the entry and into the board signature.
+        // The next assembly reads the answer (observedShellCwd) into the row and the board signature.
         if (changed) deps.onChange()
       })
       .catch(() => {}) // no reading: the transcript's stays
@@ -4120,14 +4167,20 @@ export function createTailer(deps: TailerDeps): Tailer {
     // A MONITOR's ack names no path, but it writes `<taskId>.output` beside this session's Bash logs
     // (TailState.tasksDir). Only a candidate: it must still pass the vet and exist, and it is not NAMED —
     // a Monitor that has printed nothing may simply not have written its file yet, which is "waiting",
-    // not "gone". Not used for the row's liveness probe, which keys on the ack-named path alone.
+    // not "gone". Not used for the row's liveness probe, which keys on the ack-named path alone. `tasksDir`
+    // may have been taught by an auto-background ack, a command's own output, so the candidate must also
+    // really sit in the session folder it names (taskFolderIsReal), as a promoted ack's own path must.
     const output = (e: { monitor?: true; outputFile?: string; promotedAck?: PromotedAck; taskId?: string }) => {
       const named = shellOutputFile(state, e)
-      const candidate = e.outputFile ? named : e.monitor && e.taskId && state.tasksDir ? join(state.tasksDir, `${e.taskId}.output`) : undefined
+      const monitorLog = e.monitor && e.taskId && state.tasksDir ? join(state.tasksDir, `${e.taskId}.output`) : undefined
+      const candidate = e.outputFile ? named : monitorLog && taskFolderIsReal(monitorLog) ? monitorLog : undefined
       const outputFile = candidate ? vetHarnessOutputPath(candidate, e.taskId) : undefined
       return { ...(outputFile ? { outputFile } : {}), ...(e.outputFile ? { outputNamed: true } : {}) }
     }
-    const extra = (e: { cwd?: string; monitor?: true }) => ({ ...(e.cwd ? { cwd: e.cwd } : {}), ...(e.monitor ? { monitor: true } : {}) })
+    const extra = (e: { cwd?: string; outputFile?: string; promotedAck?: PromotedAck; monitor?: true }) => {
+      const cwd = observedShellCwd(state, e)
+      return { ...(cwd ? { cwd } : {}), ...(e.monitor ? { monitor: true } : {}) }
+    }
     if (live?.kind === "shell") {
       return { command: live.command, ...output(live), state: state.paneDead ? "done" : "running", ...extra(live) }
     }

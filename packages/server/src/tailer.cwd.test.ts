@@ -257,6 +257,33 @@ test("the OS outranks the transcript on where a running shell is — the batch-s
   }
 })
 
+// THE FOLD STAYS THE TRANSCRIPT'S. The tail cache persists folded states as a pure function of the
+// transcript's bytes, and a retired shell is never probed again — so an OS answer written onto the entry
+// rode into the retired ring and the cache, and a cached boot then told a different folder from a cold one.
+test("the OS's answer is read beside the fold, and never persisted as part of it", () => {
+  const puts: { state: string }[] = []
+  const tailCache = { load: () => new Map(), put: (entries: { state: string }[]) => void puts.push(...entries), prune: () => {} }
+  let os: string | undefined
+  const w = world({ shellCwd: () => os, deps: { tailCache: tailCache as never } })
+  os = w.project
+  try {
+    w.append(user(w.project), bash("toolu_main", "npm run dev", w.worktree), result("toolu_main", bgAck("bm", "/nowhere/tasks/bm.output"), w.worktree))
+    w.tailer.tick()
+    assert.equal(w.tailer.get("t")!.bgShells[0]?.cwd, w.project, "the row reads the OS")
+    w.append({ type: "queue-operation", operation: "enqueue", timestamp: at(), content: "<task-notification>\n<task-id>bm</task-id>\n<tool-use-id>toolu_main</tool-use-id>\n<status>completed</status>\n<summary>done</summary>\n</task-notification>" })
+    w.tailer.tick()
+    assert.equal(w.tailer.backgroundShell?.("t", "toolu_main")?.cwd, w.project, "so does the retired shell's drawer, in this process")
+    w.tailer.stop()
+    const cached = puts.at(-1)?.state ?? ""
+    assert.ok(cached.includes('"toolu_main"'), "the retired shell was persisted")
+    assert.ok(cached.includes(`"cwd":${JSON.stringify(w.worktree)}`), "with the transcript's own reading")
+    const retired = /"retiredShells":\{"__map":\[\["toolu_main",(\{[^}]*\})/.exec(cached)?.[1] ?? ""
+    assert.match(retired, new RegExp(`"cwd":${JSON.stringify(w.worktree).replace(/[.*+?^${}()|[\]\\/]/g, "\\$&")}`), "the ring keeps the transcript's folder")
+  } finally {
+    w.cleanup()
+  }
+})
+
 // THE BATCHED PROBE, which the inline `shellCwd` seam above skips. A shell that asks while a probe is in
 // flight lands in the wanted set, its own flush returns into the in-flight guard, and every later ask sees
 // it already wanted — so nothing asked for it again until some unrelated shell arrived. The probe's own

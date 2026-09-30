@@ -1038,10 +1038,13 @@ test("applyRecord: a promoted ack keeps who named its path, and only a vouched-f
   assert.equal(s.subAgents.get("toolu_bg")?.outputFile, "/tmp/claude-1000/-x/moved/tasks/bz.output")
   assert.equal(s.subAgents.get("toolu_bg")?.promotedAck, undefined)
   assert.equal(s.tasksDir, "/tmp/claude-1000/-x/moved/tasks")
-  // A promoted ack under the record's own session folder is vouched for by name, so it teaches tasksDir.
+  assert.equal(s.launchTasksDir, "/tmp/claude-1000/-x/moved/tasks", "and it is the folder that vouches for others")
+  // A promoted ack under the record's own session folder is vouched for by name, so it teaches tasksDir —
+  // for a Monitor's log — but never the vouching folder: that one is harness text alone.
   applyRecord(s, bashFg("toolu_own", "nub test", "nub test"))
   applyRecord(s, resultText("toolu_own", autoBackgroundAck("bv", 5, "/tmp/claude-1000/-x/sid/tasks"), "sid"))
   assert.equal(s.tasksDir, "/tmp/claude-1000/-x/sid/tasks")
+  assert.equal(s.launchTasksDir, "/tmp/claude-1000/-x/moved/tasks")
 })
 
 test("applyRecord: an auto-backgrounded shell retires on its own <task-notification>", () => {
@@ -3609,7 +3612,8 @@ function pinCodexRow(h: Harness, codexId: string) {
 }
 
 // CODEX: where the agent works comes off its tool calls' `workdir`, and each background exec carries the
-// folder the app-server reports for it — or, when the item names none, the session's own.
+// folder the app-server reports for it — and, when the item names none, no place at all (no `checkout`, no
+// `atRoot`), because the exec ran in its tool call's `workdir` if it had one, which that level cannot see.
 test("tailer: codex — a tool call's workdir moves the thread's checkout, and each exec row carries its folder", () => {
   const h = harness()
   const codexHome = tmp("frizz-codexhome-")
@@ -3625,6 +3629,7 @@ test("tailer: codex — a tool call's workdir moves the thread's checkout, and e
   const execs = [
     { processId: "p-root", command: "/bin/zsh -lc 'npm run dev'", startedAtMs: Date.parse("2026-07-10T21:58:44.000Z"), cwd: project },
     { processId: "p-wt", command: "/bin/zsh -lc 'nub test --watch'", startedAtMs: Date.parse("2026-07-10T21:58:45.000Z"), cwd: worktree },
+    { processId: "p-bare", command: "/bin/zsh -lc 'cargo watch'", startedAtMs: Date.parse("2026-07-10T21:58:45.500Z") },
   ]
   const codexBackend = createCodexBackend({ codexHome })
   const claudeBackend = createClaudeBackend({ logDir: h.logDir })
@@ -3646,7 +3651,11 @@ test("tailer: codex — a tool call's workdir moves the thread's checkout, and e
   let tele = t.get("t")!
   assert.equal(tele.workingDir, project)
   assert.equal(tele.checkout, undefined)
-  assert.deepEqual(tele.bgShells.map((s) => [s.id, s.cwd, s.checkout]), [["p-root", project, undefined], ["p-wt", worktree, { dir: worktree, kind: "worktree" }]])
+  assert.deepEqual(tele.bgShells.map((s) => [s.id, s.cwd, s.checkout, s.atRoot]), [
+    ["p-root", project, undefined, true],
+    ["p-wt", worktree, { dir: worktree, kind: "worktree" }, undefined],
+    ["p-bare", undefined, undefined, undefined],
+  ], "the root is claimed only for a folder that was read; a bare exec claims nothing")
 
   // The next command runs in the worktree: that is now where the agent is.
   appendFileSync(path, call("c2", ".frizz/worktrees/cx") + "\n")

@@ -28,9 +28,10 @@ export interface ThreadProcess {
   cwd?: string
   /** That folder's checkout, only when it is off the project root (server liftCheckout). */
   checkout?: WorkCheckout
-  /** The SERVER placed this row: it read the row's folder and lifted it, so an absent `checkout` means the
-   *  project root rather than "unknown". False for a transcript-only row (a sub-agent's shell, a Codex
-   *  tool call's raw `workdir`), which claims no place at all. */
+  /** The SERVER placed this row: it read the row's folder and lifted it (`checkout` off the root, `atRoot`
+   *  in it), so an absent `checkout` means the project root rather than "unknown". False when it had no
+   *  reading — a folder since removed, a Codex exec whose item named none, a transcript-only row (a
+   *  sub-agent's shell, a tool call's own `workdir`) — and such a row claims no place at all. */
   placed: boolean
   /** The agent's only — what is left of the runtime budget it declared. */
   budget?: ShellBudgetReading
@@ -54,9 +55,10 @@ function agentProcess(shell: AgentShell, now: number): ThreadProcess {
     startedAt: shell.startedAt,
     ...(shell.cwd ? { cwd: shell.cwd } : {}),
     ...(shell.checkout ? { checkout: shell.checkout } : {}),
-    // A board row (it has an id) whose folder the server reported — bgShellViews/codexBgShellViews lift
-    // every folder they emit. A transcript-only row has no id; its folder is the tool call's own words.
-    placed: Boolean(shell.id && shell.cwd),
+    // The server's own reading (bgShellViews/codexBgShellViews), never the folder a transcript copy filled
+    // in (mergeBackgroundShells): that one is the tool call's own words, and nothing lifted it. A cwd with
+    // neither field is a folder the server could not read — gone, or never named.
+    placed: Boolean(shell.checkout || shell.atRoot),
     ...(budget ? { budget } : {}),
     ...(shell.monitor ? { monitor: true } : {}),
     ...(shell.outputUnavailable ? { outputUnavailable: true } : {}),
@@ -79,8 +81,9 @@ export function humanProcess(terminal: ThreadTerminal): ThreadProcess {
     startedAt: terminal.startedAt,
     cwd: terminal.cwd,
     ...(terminal.checkout ? { checkout: terminal.checkout } : {}),
-    // The board lifts every terminal's folder (board.ts withThreadTerminals).
-    placed: Boolean(terminal.cwd),
+    // The board lifts every terminal's folder (board.ts withThreadTerminals); a folder since removed has
+    // neither field, and claims nothing.
+    placed: Boolean(terminal.checkout || terminal.atRoot),
     terminal,
   }
 }

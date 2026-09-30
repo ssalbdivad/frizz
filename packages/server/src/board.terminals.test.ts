@@ -91,9 +91,15 @@ test("the board stamps each terminal's checkout, and carries the agent's own, on
   mkdirSync(worktree, { recursive: true })
   writeFileSync(join(worktree, ".git"), "gitdir: x\n")
   resetCheckoutMemo()
-  // Pure: the lift decides, per terminal.
-  const stamped = withThreadTerminals(view(), [terminal({ id: "t-root", cwd: join(dir, "packages", "web") }), terminal({ id: "t-wt", cwd: worktree })], dir)
-  assert.deepEqual(stamped.terminals?.map((t) => [t.id, t.checkout]), [["t-root", undefined], ["t-wt", { dir: worktree, kind: "worktree" }]])
+  // Pure: the lift decides, per terminal — the root is CLAIMED (`atRoot`) only for a folder that was read,
+  // so a terminal left in a worktree removed since claims no place, rather than the root.
+  const gone = join(dir, ".frizz", "worktrees", "removed")
+  const stamped = withThreadTerminals(view(), [terminal({ id: "t-root", cwd: join(dir, "packages", "web") }), terminal({ id: "t-wt", cwd: worktree }), terminal({ id: "t-gone", cwd: gone })], dir)
+  assert.deepEqual(stamped.terminals?.map((t) => [t.id, t.checkout, t.atRoot]), [
+    ["t-root", undefined, true],
+    ["t-wt", { dir: worktree, kind: "worktree" }, undefined],
+    ["t-gone", undefined, undefined],
+  ])
 
   const project: Project = { dir, id: "project-checkout", name: "fixture", label: "fixture", stateDir: dir, cwdSlug: "fixture" }
   const telemetry: SessionTelemetry = { turn: "idle", permPrompt: false, subAgents: [], bgShells: [], pendingQuestion: false, lastAssistantAt: at("09:00"), workingDir: worktree, checkout: { dir: worktree, kind: "worktree" } }

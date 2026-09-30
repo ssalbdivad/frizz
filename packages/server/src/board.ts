@@ -12,7 +12,7 @@ import type { BoardSnapshot, ClaudeModel, ThreadTerminal, ThreadView, RuntimeSta
 import { AskedQuestionSchema, BoardDiffer, PermissionMode, SnoozeUntil, ThreadSlug, isDirectSubAgent, questionAnswerMessage, questionRepliedPast, questionsCancelledWakeMessage, type AskedQuestion, type PermissionMode as PermissionModeValue, type QuestionAnswer, type QuestionDismissal } from "@frizz/shared"
 import type { Bus } from "./bus.ts"
 import { workDirOf, type Project } from "./project.ts"
-import { liftCheckout } from "./thread-cwd.ts"
+import { liftWorkingDir } from "./thread-cwd.ts"
 import { isHeadlessRow, isBrokerClaudeRow, sessionTitleLocked, type ThreadQuestionRow } from "./storage.ts"
 import type { Storage, SessionRow, PrWatchRow, ThreadTimerRow, ThreadWatchRow, ThreadLinkRow, ShellBudgetRow, ThreadSpinOffRow } from "./storage.ts"
 import { resolveShellBudget, shellBudgetRecordOf } from "./shell-budget.ts"
@@ -2111,13 +2111,15 @@ export interface BoardManagerDeps {
  * silent turn.
  */
 // `projectDir` classifies each terminal's folder by the same rule an agent's shell row uses (thread-cwd.ts
-// liftCheckout): a checkout hint only when it is off the project root. Absent ⇒ no hint is stamped.
+// liftWorkingDir): `checkout` when it is off the project root, `atRoot` when it is in it, and neither when
+// there is no reading (the folder is gone) — so a terminal left in a removed worktree claims no place.
 export function withThreadTerminals(t: ThreadView, terminals: readonly ThreadTerminal[] | undefined, projectDir?: string): ThreadView {
   if (!terminals || terminals.length === 0) return t
   const prompting = t.state !== "archived" && t.snoozedUntil === undefined && terminals.some((terminal) => terminal.awaitingInput === true)
   const stamped = terminals.map((terminal) => {
-    const checkout = liftCheckout(terminal.cwd, projectDir)
-    return checkout ? { ...terminal, checkout } : terminal
+    const where = liftWorkingDir(terminal.cwd, projectDir)
+    if (!where) return terminal
+    return where.checkout ? { ...terminal, checkout: where.checkout } : { ...terminal, atRoot: true as const }
   })
   return { ...t, terminals: stamped, ...(prompting ? { needsYou: true } : {}) }
 }

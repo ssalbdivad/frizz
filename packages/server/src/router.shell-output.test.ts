@@ -149,6 +149,66 @@ test("a symlink or hard link named for this session's folder does not reach anot
   }
 })
 
+// THE FOLDER, NOT THE FILE. A forged ack naming `<anywhere>/<this sessionId>/tasks/bx.output` is vouched for
+// by its NAME, which taught the fold that folder as this session's task folder; when `<this sessionId>/tasks`
+// is itself a symlink to another session's `tasks/`, the real folder then matched the very folder it was
+// compared against, and the shape vet passed the file. A Monitor's log, found in that taught folder, went
+// the same way. (Found by a verifier on 2026-09-29, reading another session's log back.)
+test("a symlinked task FOLDER named for this session does not reach another session's logs", async () => {
+  const root = realpathSync(mkdtempSync(join(tmpdir(), "frizz-forged-dirlink-")))
+  const theirs = join(root, "claude-1000", "-another-project", "their-session", "tasks")
+  mkdirSync(theirs, { recursive: true })
+  writeFileSync(join(theirs, "bx.output"), "their log, by folder link\n")
+  writeFileSync(join(theirs, "bmon.output"), "their monitor, by folder link\n")
+  const forged = join(root, "forge", "sid")
+  mkdirSync(forged, { recursive: true })
+  symlinkSync(theirs, join(forged, "tasks")) // the folder, not the file
+  const monitor = { type: "assistant", timestamp: "2026-07-01T00:00:03.000Z", message: { stop_reason: "tool_use", content: [{ type: "tool_use", name: "Monitor", id: "toolu_mon", input: { command: "tail -f x", description: "watch x", persistent: true } }] } }
+  const s = stack({
+    t: {
+      sessionId: "sid",
+      lines: [
+        foregroundBash("toolu_dir", "cat a.txt"),
+        result("toolu_dir", autoBackgroundAck("bx", join(forged, "tasks", "bx.output")), "sid"),
+        monitor,
+        result("toolu_mon", "Monitor started (task bmon, timeout 3600000ms). You will be notified on each event.", "sid"),
+      ],
+    },
+  })
+  try {
+    const out = await s.router.backgroundShellOutput.handler({ input: { slug: "t", id: "toolu_dir" } })
+    assert.equal(out.output, "")
+    assert.equal(out.missing, true)
+    assert.doesNotMatch(JSON.stringify(out), /their log|their-session/)
+    const mon = await s.router.backgroundShellOutput.handler({ input: { slug: "t", id: "toolu_mon" } })
+    assert.doesNotMatch(JSON.stringify(mon), /their monitor|their-session/, "nor does a Monitor's log found in the folder it taught")
+  } finally {
+    s.cleanup()
+    rmSync(root, { recursive: true, force: true })
+  }
+})
+
+// A SHELL HAS NO TRANSCRIPT. Shells share the sub-agent map, and the sub-agent transcript RPC parsed the
+// path a shell's ack named as a child's JSONL — raw, past the trust check and the shape vet — so a quoted
+// auto-background ack naming another project's session transcript was read back as this child's messages.
+test("the sub-agent transcript RPC reads nothing for a shell, whatever its ack named", async () => {
+  const root = realpathSync(mkdtempSync(join(tmpdir(), "frizz-shell-transcript-")))
+  const other = join(root, "other-project", "other-session.jsonl")
+  mkdirSync(join(root, "other-project"), { recursive: true })
+  writeFileSync(other, JSON.stringify({ type: "user", timestamp: T0, message: { role: "user", content: "SECRET prompt from another project" } }) + "\n")
+  const s = stack({ t: { sessionId: "sid", lines: [foregroundBash("toolu_q", "cat notes"), result("toolu_q", autoBackgroundAck("bq", other), "sid")] } })
+  try {
+    assert.equal((await s.router.backgroundShellOutput.handler({ input: { slug: "t", id: "toolu_q" } })).missing, true, "the shell's own reader refuses the path")
+    const read = await s.router.subAgentTranscript.handler({ input: { slug: "t", id: "toolu_q" } })
+    assert.deepEqual(read.messages, [])
+    assert.doesNotMatch(JSON.stringify(read), /SECRET/)
+    assert.equal(s.tailer.subAgent("t", "toolu_q")?.outputFile, undefined, "the lookup names no file for a shell")
+  } finally {
+    s.cleanup()
+    rmSync(root, { recursive: true, force: true })
+  }
+})
+
 // THE VERDICT IS THE DISK'S AT READ TIME, NOT THE FOLD'S. It was taken once, inside the fold, and the fold's
 // states are cached across restarts as a pure function of the transcript's bytes (tail-cache.ts) — so a
 // verdict outlived the disk it was taken from, both ways round. (a) A path that did not exist yet was

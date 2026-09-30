@@ -426,8 +426,13 @@ export const BgShellView = z.object({
   // last of these it had.
   cwd: z.string().optional(),
   // That folder lifted to its checkout, present only when that checkout is NOT the project root — the
-  // row's quiet folder hint. Absent ⇒ the root (see WorkCheckout).
+  // row's quiet folder hint. Absent ⇒ the root (see WorkCheckout), or no reading: see `atRoot`.
   checkout: WorkCheckout.optional(),
+  // The server READ this row's folder and it is in the project's own checkout. `checkout` alone could not
+  // say that: absent, it is the root and also "no reading" — a folder since deleted, a Codex exec whose
+  // item named none — and a row that claimed the root on no reading said `root` beside a shell running in
+  // a worktree. With neither field set, no surface claims a place for the row.
+  atRoot: z.literal(true).optional(),
 })
 export type BgShellView = z.infer<typeof BgShellView>
 
@@ -2988,6 +2993,9 @@ export const ThreadTerminal = z.object({
   // `cwd` lifted to its checkout, present only when that is not the project root (WorkCheckout) — the
   // same rule an agent's shell row follows, so the two kinds carry the folder hint on one condition.
   checkout: WorkCheckout.optional(),
+  // `cwd` was read and is in the project's own checkout (BgShellView.atRoot): a terminal left in a
+  // worktree that has since been removed has neither, and claims no place.
+  atRoot: z.literal(true).optional(),
 })
 export type ThreadTerminal = z.infer<typeof ThreadTerminal>
 

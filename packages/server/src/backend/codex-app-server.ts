@@ -425,8 +425,8 @@ const CommandExecutionItem = z.object({
   exitCode: z.number().nullish(),
   // The folder the exec runs in. AN INFERENCE, not a measurement: the approval request for the same exec
   // carries `cwd` (codex-app-server.test.ts), and codex-cli is not installed on the box this was written
-  // on, so the item's own field is unverified. Absent ⇒ undefined, and the row falls back to the
-  // session's folder (backgroundExecs).
+  // on, so the item's own field is unverified. Absent ⇒ undefined, and the row claims no folder of its own
+  // (backgroundExecs).
   cwd: z.string().max(8_192).nullish(),
 })
 /** One live codex background exec — what the ops-strip row is built from, and what its × addresses. */
@@ -435,7 +435,7 @@ export interface LiveBackgroundExec {
   processId: string
   command?: string
   startedAtMs: number
-  /** Where it runs: the item's own `cwd` when codex reports one, else the session's folder. */
+  /** Where it runs: the item's own `cwd` when codex reports one. Never guessed (see backgroundExecs). */
   cwd?: string
 }
 const ItemStartedNotification = z.object({
@@ -3277,8 +3277,11 @@ export class CodexAppServerBridge {
     const binding = this.bindingForScope(threadSlug, sessionId)
     if (!binding) return []
     const byProcess = this.liveExecs.get(binding.codex_thread_id)
-    // An exec whose item named no folder ran where the session runs.
-    return byProcess ? [...byProcess.values()].map((exec) => (exec.cwd || !binding.cwd ? exec : { ...exec, cwd: binding.cwd })) : []
+    // An exec whose item named no folder carries none. It ran in its tool call's `workdir` when the model
+    // passed one, else where the session runs — and this level cannot tell which: filling in the session's
+    // folder here labelled an exec running in the agent's worktree as running in the project root, and hid
+    // the transcript's own `workdir`, which the client fills in when the board has no folder.
+    return byProcess ? [...byProcess.values()] : []
   }
 
   /**
