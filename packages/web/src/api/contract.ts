@@ -32,6 +32,8 @@ import type {
   AdoptThreadInput,
   AdoptThreadResult,
   FollowUpInput,
+  SpinOffInput,
+  SpinOffResult,
   UnqueueFollowUpInput,
   UnqueueFollowUpResult,
   DeliverQueuedNowInput,
@@ -180,6 +182,7 @@ export interface Api {
   // indefinitely by a server-side wait, and it runs inside a per-slug FIFO — see
   // lib/eagerComposerSubmission.ts DELIVERY_SEND_TIMEOUT_MS for what that costs without one.
   followUp(input: FollowUpInput, opts?: RpcCallOpts): Promise<void>
+  spinOff(input: SpinOffInput): Promise<SpinOffResult>
   unqueueFollowUp(input: UnqueueFollowUpInput): Promise<UnqueueFollowUpResult>
   // The ↑ on a queued bubble: stop waiting and make the worker read what is already queued. No message
   // payload — see DeliverQueuedNowInput.
@@ -426,6 +429,7 @@ export const PROCEDURES = {
   dispatch: "mutation",
   adoptThread: "mutation",
   followUp: "mutation",
+  spinOff: "mutation",
   unqueueFollowUp: "mutation",
   deliverQueuedNow: "mutation",
   setThreadPermission: "mutation",
