@@ -630,8 +630,7 @@ the human points you at another thread with it: "ask @shellBudgets about this", 
 
 - **\`mcp__frizz__read_thread\`** — its request, status, last few messages (its approach and its handoff)
   and edited files. It wakes nobody, so it is ALWAYS the first move, and it often answers the question.
-  A thread's SUB-AGENTS read the same way under its handle, \`@portTheParser.cacheKeys\` — running or
-  long since returned; only their own thread can message them.
+  A sub-agent reads the same way at its address, \`@portTheParser.cacheKeys\`, even after it returns.
 - **\`mcp__frizz__message_thread\`** — a message into its conversation, signed with your handle. To ASK
   and wait for the answer, pass \`await_reply: true\` and rest: you are parked until it answers (or the
   wait runs out and wakes you), with nothing else to sign off. To TELL — your approach, a file you are
@@ -641,12 +640,8 @@ A message from another thread arrives headed with its handle and never reached t
 something, answer with \`message_thread\` — promptly when it says the sender is waiting on you, even if only
 to say you cannot help. Never reply just to acknowledge.
 
-**NAME EVERY AGENT BY ITS ADDRESS, NEVER BY A DESCRIPTION.** Whenever anything the human reads mentions
-another thread, a sub-agent of yours, or someone else's — a handoff, a card, a question, a message —
-write its \`@\` address: \`@shellBudgets\`, \`@portTheParser.cacheKeys\`. Never "another thread", "a
-sub-agent", "the reviewer" or "the helper": the board turns every address into a link that opens that
-agent, and a description opens nothing — nor does its name in bold. \`mcp__frizz__activity\` prints your
-own handle and the address of every sub-agent you have running; a finished one keeps the address it had.`
+Wherever the human reads about another thread or a sub-agent, write its \`@\` address
+(\`@shellBudgets\`, \`@portTheParser.cacheKeys\`): the board links it, and a description or bold name opens nothing.`
 
 // LEGACY NAME, current behaviour. This block and `scratchpadOrientation` still say "scratchpad"; both
 // describe the scratch DIRECTORY. (`ThreadView.scratchpadPath` and the `threadScratchpad` RPC went with
@@ -721,17 +716,10 @@ result you COLLECT — a review, a verification pass, a research prong, a critic
 result before you rest; if you cannot collect one, say so rather than dropping it silently. Keep
 fan-out shallow: a rested sub-agent is not reliably re-woken by grandchildren.
 
-**NAME EVERY SUB-AGENT THE WAY A THREAD IS NAMED.** The Agent tool's \`description\` is the child's NAME,
-and the board shows it as a camelCase handle under your thread's: \`description: "Cache keys"\` on a thread
-named \`portTheParser\` is \`@portTheParser.cacheKeys\` — what the human types to point at it and what
-\`read_thread\` resolves, while it runs and after it returns. So: ONE or TWO words naming its SUBJECT, not
-the action and not a script label (\`Cache keys\`, never \`fix:r1\`, \`Audit the resolver cache keys\` or
-\`README spelling check\` — that one is \`README\` or \`Spelling\`), different from every other sub-agent
-this thread has dispatched, and short enough that its handle stays within ${THREAD_HANDLE_MAX_CHARS}
-characters. The tool's own schema asks for "a short (3-5 word) description"; here this rule wins, and
-the task itself belongs in the \`prompt\`. A Workflow takes the same rule: each agent's \`label\` is its
-name, one segment under the run's (\`@portTheParser.wave2.implW3\`). Each dispatch is answered with the
-address its child answers to; that exact address is how your handoff names it.
+**NAME A SUB-AGENT LIKE A THREAD.** Its Agent \`description\` (a Workflow agent's \`label\`) is its name
+and its address under yours — \`"Cache keys"\` on \`portTheParser\` is \`@portTheParser.cacheKeys\` — so:
+one or two words naming its subject, unique in this thread, handle within ${THREAD_HANDLE_MAX_CHARS} characters.
+This outranks the tool's "3-5 word" hint and the \`-ing\` caption rule; the task goes in the \`prompt\`.
 
 Every dispatch prompt must be fully self-contained. A child inherits the SKILL list and the project +
 user \`CLAUDE.md\`, so it is not blank on repo conventions — but it gets NOTHING about frizz or this
