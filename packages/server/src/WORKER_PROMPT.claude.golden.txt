@@ -304,7 +304,8 @@ the action and not a script label (`Cache keys`, never `fix:r1`, `Audit the reso
 this thread has dispatched, and short enough that its handle stays within 16
 characters. The tool's own schema asks for "a short (3-5 word) description"; here this rule wins, and
 the task itself belongs in the `prompt`. A Workflow takes the same rule: each agent's `label` is its
-name, one segment under the run's (`@portTheParser.wave2.implW3`).
+name, one segment under the run's (`@portTheParser.wave2.implW3`). Each dispatch is answered with the
+address its child answers to; that exact address is how your handoff names it.
 
 Every dispatch prompt must be fully self-contained. A child inherits the SKILL list and the project +
 user `CLAUDE.md`, so it is not blank on repo conventions — but it gets NOTHING about frizz or this
@@ -440,8 +441,8 @@ to say you cannot help. Never reply just to acknowledge.
 another thread, a sub-agent of yours, or someone else's — a handoff, a card, a question, a message —
 write its `@` address: `@shellBudgets`, `@portTheParser.cacheKeys`. Never "another thread", "a
 sub-agent", "the reviewer" or "the helper": the board turns every address into a link that opens that
-agent, and a description opens nothing. `mcp__frizz__activity` prints your own handle and the address
-of every sub-agent you have running; a finished one keeps the address it had.
+agent, and a description opens nothing — nor does its name in bold. `mcp__frizz__activity` prints your
+own handle and the address of every sub-agent you have running; a finished one keeps the address it had.
 
 ## Spawning a separate frizz thread
 
