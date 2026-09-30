@@ -2166,9 +2166,9 @@ export function createBoard(
   // Per-slug "was this SESSION thread in the needs-you queue last build?" — drives the needs-decision
   // notify dedupe: we fire only on a false→true edge, and a thread leaving the queue re-arms it.
   const needsYouPrev = new Map<string, boolean>()
-  // Per-slug place (`queuedAt`) and rest (`lastAssistantAt`) each session thread last held IN the queue —
-  // see notifyNeedsYou for the one entry this lets through silently.
-  const lastInQueue = new Map<string, { queuedAt?: string; rest?: string }>()
+  // Per-slug place (`queuedAt`), rest (`lastAssistantAt`) and urgent reasons (urgencyOf) each session
+  // thread last held IN the queue — see notifyNeedsYou for the one entry this lets through silently.
+  const lastInQueue = new Map<string, { queuedAt?: string; rest?: string; urgency: string }>()
   // PRIME GUARD: the first assemble after boot records the baseline WITHOUT notifying, so a post-bounce
   // server doesn't fire a storm for every historical resting thread already in the queue.
   let notifyPrimed = false
@@ -2210,6 +2210,26 @@ export function createBoard(
     return capLine(t.lastAssistant)
   }
 
+  // THE REASONS A THREAD MUST BE SEEN AT ONCE, as one comparable string ("" when there are none) —
+  // deriveNeedsYou's hard gates: a request the human must answer, a question, a crash, a limit pause. A
+  // terminal at a prompt is one too: only a person can type the answer, whatever the thread's park. The
+  // queue clock reads it as a yes/no (never withhold an urgent entry); notifyNeedsYou reads the whole
+  // string, so a thread that comes back to its old place with a reason it did not leave with is news.
+  // Registered questions by id, because a Codex worker can register one without moving its rest.
+  function urgencyOf(t: ThreadView): string {
+    const reasons: string[] = []
+    if (promptingTerminal(t) !== undefined) reasons.push("terminal")
+    if (t.actionableInteraction === true) reasons.push("interaction")
+    if (t.runtime === "perm-prompt") reasons.push("perm-prompt")
+    if (t.pendingAsk !== undefined) reasons.push("ask")
+    if (t.pendingQuestion === true) reasons.push("question")
+    for (const q of t.questions ?? []) reasons.push(`q:${q.id}`)
+    if (t.crashed === true) reasons.push("crashed")
+    if (t.limitPause !== undefined) reasons.push("limit")
+    if (t.providerError !== undefined && t.providerError.retrying !== true) reasons.push("provider-error")
+    return reasons.join(" ")
+  }
+
   // Fire a needs-decision notify for every registered session that newly enters the queue.
   // Edge-triggered + deduped; primed on the first build.
   //
@@ -2221,6 +2241,16 @@ export function createBoard(
   // the queued parent out of the queue, and the rest it comes back to is the one it left with, put back
   // by the tailer (spinoff-side-turn.ts). A departure that came back with anything new — another
   // message, or a fresh stamp because the human acted — still notifies.
+  //
+  // "Anything new" INCLUDES A NEW REASON TO BE QUEUED, not only a new message (review, same day). The
+  // same place and the same rest are not enough on their own: the queue clock hands an unbroken claim its
+  // old place back whatever the thread comes back WITH (queue-clock.ts), and a Codex or ACP worker's
+  // `lastAssistantAt` moves only on a final answer or a turn's end — so a thread a timer or a PR watcher
+  // woke, that then stopped on an approval (or died before saying anything), came back with the place and
+  // the rest it left with and was let through in silence, blocked on a request nobody was told about. So
+  // the reasons are part of the identity too (urgencyOf): the same card is the same place, the same rest
+  // and the same reasons. Not "never while urgent" — a rest that asks a question is urgent, and it must
+  // stay quiet through its own spinoff exactly as a plain handoff does.
   function notifyNeedsYou(sessionThreads: ThreadView[]): void {
     const seen = new Set<string>()
     for (const t of sessionThreads) {
@@ -2228,12 +2258,13 @@ export function createBoard(
       const now = t.needsYou ?? false
       const was = needsYouPrev.get(t.id) ?? false
       const left = lastInQueue.get(t.id)
+      const urgency = now ? urgencyOf(t) : ""
       const resumed = left !== undefined && t.queuedAt !== undefined && left.queuedAt === t.queuedAt &&
-        t.lastAssistantAt !== undefined && left.rest === t.lastAssistantAt
+        t.lastAssistantAt !== undefined && left.rest === t.lastAssistantAt && left.urgency === urgency
       if (notifyPrimed && now && !was && !resumed) {
         bus.publish({ type: "notify", slug: t.id, kind: "needs-decision", title: t.aiTitle || t.title || t.id, body: needsYouBody(t) })
       }
-      if (now) lastInQueue.set(t.id, { queuedAt: t.queuedAt, rest: t.lastAssistantAt })
+      if (now) lastInQueue.set(t.id, { queuedAt: t.queuedAt, rest: t.lastAssistantAt, urgency })
       needsYouPrev.set(t.id, now)
     }
     // forget threads that vanished so a reappearance re-notifies
@@ -2400,11 +2431,7 @@ export function createBoard(
         (t.snoozedUntil === undefined || t.snoozePrompt !== undefined) && !heldByDelivery.has(t.id),
       // deriveNeedsYou's hard gates: a request the human must answer, a question, a crash, a limit pause.
       // A terminal at a prompt is one too: only a person can type the answer, whatever the thread's park.
-      urgent: (t) =>
-        promptingTerminal(t) !== undefined ||
-        t.actionableInteraction === true || t.runtime === "perm-prompt" || t.pendingAsk !== undefined ||
-        t.pendingQuestion === true || (t.questions?.length ?? 0) > 0 || t.crashed === true ||
-        t.limitPause !== undefined || (t.providerError !== undefined && t.providerError.retrying !== true),
+      urgent: (t) => urgencyOf(t) !== "",
       // What a person did, for a queued thread's place in line (queue-clock.ts: a thread only loses it
       // when someone acts on it). Every follow-up reaches the delivery ledger, and each router path that
       // writes one re-assembles the board before it returns, so one reading always sees it.
