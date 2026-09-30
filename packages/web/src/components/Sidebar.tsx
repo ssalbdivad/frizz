@@ -15,7 +15,6 @@ import { subAgentFold, toggleSubAgentFold, useSubAgentFoldOpen } from "../lib/su
 import { childOpDismisser } from "../lib/dismissChildOp.ts"
 import { Tooltip } from "./Tooltip.tsx"
 import { ProviderMark } from "./ProviderMark.tsx"
-import { ThreadTerminalMark } from "./ThreadTerminals.tsx"
 import { STALLED_RETRY_MESSAGE, retrySession } from "../lib/retrySession.ts"
 import { deliverProjectFollowUp } from "../lib/projectFollowUp.ts"
 import { useThreadApi, useThreadIsForeignToPage, useThreadProjectDir, useThreadProjectId } from "../api/threadApi.tsx"
@@ -100,7 +99,8 @@ export interface RowScope {
 }
 
 // One row of a band: the thread, then its live sub-agents as rows of their own. A thread's TERMINALS get
-// no row (ThreadTerminals.tsx): one small mark after its title says one is running.
+// no row and no mark (ThreadTerminals.tsx): the status dot, the queue and the thread's own strip already
+// say everything one could (a title-trailing terminal glyph was dropped 2026-09-30 as noise).
 export function RailRow({ t, active, open = false, restedAge = false, scope, cardKey, band }: { t: ThreadView; active: boolean; open?: boolean; restedAge?: boolean; scope: RowScope; cardKey?: string; band?: BandKey }) {
   return (
     <>
@@ -141,9 +141,8 @@ export function SectionHeader({ band, count, collapsed, onToggle }: { band: Band
   )
 }
 
-// The title's trailing adornments — the provider mark, and a running terminal's mark after it (ThreadTerminals.tsx) —
-// are ATOMIC inline boxes, and the line breaker is free to break right BEFORE one even though no
-// whitespace separates it from the title. On a wrapping title that regularly stranded the provider
+// The title's trailing adornment, the provider mark, is an ATOMIC inline box, and the line breaker is
+// free to break right BEFORE it even though no whitespace separates it from the title. On a wrapping title that regularly stranded the provider
 // mark ALONE on a second line, with the whole title above it (maintainer 2026-07-31: "often the only
 // thing that breaks onto the new line is the agent icon"). Glue them to the title's LAST WORD in a
 // nowrap group so the pair wraps together instead.
@@ -317,7 +316,6 @@ export const ThreadRow = memo(function ThreadRow({
               <span className={`min-w-0 break-words text-[13px] leading-[19px] ${working ? "max-w-full shrink-0" : "flex-1"} ${dimLabel ? "text-provisional" : dim ? "text-fg/75" : "text-fg/90"}`}>
                 <TitleWithTrailers title={displayTitle(t)}>
                   <ProviderMark backend={t.backend} model={t.model} className="ml-1" />
-                  <ThreadTerminalMark thread={t} />
                 </TitleWithTrailers>
               </span>
               {working && (

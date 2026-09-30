@@ -73,7 +73,7 @@ export function completionArchivesImmediately(thread: ThreadView): boolean {
 //
 // THE AGENT'S TERMINALS AND YOURS ARE ONE GROUP, "3 terminals", each item marked with its owner — the one
 // place every process on the thread is listed together, and every other surface (the strip, the rail's
-// "Terminals", the sidebar mark) already calls both terminals. It split them into "1 background shell"
+// "Terminals") already calls both terminals. It split them into "1 background shell"
 // and "2 terminals" until 2026-09-29, the last surface still to.
 export interface CompletionHoldGroup {
   kind: "agent" | "terminal"

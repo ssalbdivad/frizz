@@ -1,7 +1,7 @@
 import { createRoot } from "react-dom/client"
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query"
 import type { BgShellView, EndedShellView, ThreadTerminal, ThreadView } from "@frizz/shared"
-import { FolderHintToken, ProcessRow, ThreadProcessStrip, ThreadTerminalMark, folderHintTitle, processFolderHint } from "./components/ThreadTerminals.tsx"
+import { FolderHintToken, ProcessRow, ThreadProcessStrip, folderHintTitle, processFolderHint } from "./components/ThreadTerminals.tsx"
 import { BgShellRow, TermWaitRow, WaitGrid } from "./components/AwaitingBackgroundCard.tsx"
 import { RAIL_WIDTH } from "./components/FocusRail.tsx"
 import { humanProcess, threadProcesses } from "./lib/threadProcesses.ts"
@@ -133,12 +133,6 @@ createRoot(document.getElementById("root")!).render(
                   }),
                 }]}
               />
-            </div>
-            {/* The rail mark's three tones: yours at a prompt, yours running, only the agent's running. */}
-            <div data-fixture-marks className="flex flex-col gap-2 text-[13px]">
-              <span className="flex items-center">Fix the login flow<ThreadTerminalMark thread={{ terminals: [terminals[0]!], bgShells: [] }} /></span>
-              <span className="flex items-center">Rail bands<ThreadTerminalMark thread={{ terminals: [terminals[1]!], bgShells: [bgShells[0]!] }} /></span>
-              <span className="flex items-center">Dev server<ThreadTerminalMark thread={{ terminals: [], bgShells: [bgShells[0]!] }} /></span>
             </div>
           </div>
         )}

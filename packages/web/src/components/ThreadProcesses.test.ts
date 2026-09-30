@@ -4,7 +4,7 @@ import { createElement } from "react"
 import { renderToStaticMarkup } from "react-dom/server"
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query"
 import type { BgShellView, ThreadTerminal, ThreadView } from "@frizz/shared"
-import { ROOT_CHECKOUT_WORD, ProcessRow, QUIET_TITLE, TerminalPromptPane, ThreadProcessStrip, ThreadTerminalMark, cardProcesses, folderHintTitle, processFolderHint, processTitle } from "./ThreadTerminals.tsx"
+import { ROOT_CHECKOUT_WORD, ProcessRow, QUIET_TITLE, TerminalPromptPane, ThreadProcessStrip, cardProcesses, folderHintTitle, processFolderHint, processTitle } from "./ThreadTerminals.tsx"
 import { threadProcesses, type ThreadProcess } from "../lib/threadProcesses.ts"
 import { AGENT_GLYPH_STROKE, CHILD_MARK_SLOT_CLASS } from "../lib/childOps.ts"
 import { BgShellRow, TermWaitRow } from "./AwaitingBackgroundCard.tsx"
@@ -287,31 +287,6 @@ test("a row that has just started reads its age at once, and never in seconds", 
   const justNow = new Date(Date.now() + 5_000).toISOString()
   assert.match(row(processes({ bgShells: [shell({ startedAt: justNow, budgetEndsAt: new Date(Date.now() + 15 * 60_000).toISOString() })] })[0]!), /title="Running for &lt;1m">&lt;1m</)
   assert.match(row(processes({ terminals: [term({ startedAt: new Date(Date.now() - 24_000).toISOString() })] })[0]!), />&lt;1m</)
-})
-
-test("the sidebar mark counts both owners, and its tone says whose is running", () => {
-  const mark = (thread: Pick<ThreadView, "terminals" | "bgShells">) => renderToStaticMarkup(createElement(ThreadTerminalMark, { thread }))
-  assert.equal(mark({ bgShells: [] }), "", "nothing running, nothing drawn")
-  const agentOnly = mark({ bgShells: [shell(), shell({ id: "b", label: "CI watch" })] })
-  assert.match(agentOnly, /data-thread-terminal-mark="agent"/)
-  // Running reads azure on every surface; dimmed, it is not yours. Grey was a finished terminal's tone.
-  assert.match(agentOnly, /text-shell\/55/)
-  assert.doesNotMatch(agentOnly, /text-muted/)
-  assert.match(agentOnly, /title="2 agent terminals running: vite dev server, CI watch"/)
-  // One grammar per owner — "Your terminal" / "N of your terminals", "Agent terminal" / "N agent terminals".
-  const mine = mark({ terminals: [term()], bgShells: [shell()] })
-  assert.match(mine, /data-thread-terminal-mark="running"/)
-  assert.match(mine, /text-shell/)
-  assert.match(mine, /title="Your terminal running: npm run dev · Agent terminal running: vite dev server"/)
-  const asking = mark({ terminals: [term({ awaitingInput: true, command: "npm login" })], bgShells: [] })
-  assert.match(asking, /data-thread-terminal-mark="prompt"/)
-  assert.match(asking, /text-attention/)
-  assert.match(asking, /title="Your terminal waiting for input: npm login"/)
-  // A prompt does not hide the rest of yours that are still running.
-  const both = mark({ terminals: [term({ awaitingInput: true, command: "npm login" }), term({ id: "t2", command: "sleep 600" }), term({ id: "t3", command: "nub dev" })], bgShells: [] })
-  assert.match(both, /title="Your terminal waiting for input: npm login · 2 of your terminals running: sleep 600, nub dev"/)
-  // A shell the OS says nobody holds is not counted as running.
-  assert.equal(mark({ bgShells: [shell({ state: "stale" })] }), "")
 })
 
 test("the queue card draws the same strip under its reply box, and only the prompting screen above it", async () => {

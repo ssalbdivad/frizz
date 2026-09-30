@@ -11,7 +11,7 @@ import { endedShellStateLabel, humanProcess, processIsLive, threadProcesses, typ
 import { liveAgeSince } from "../lib/durationLabels.ts"
 import { useNowMs } from "../lib/liveClock.ts"
 import { abbreviateHome } from "../lib/paths.ts"
-import { promptingTerminal, runningTerminals, terminalStateLabel } from "../lib/threadTerminals.ts"
+import { promptingTerminal, terminalStateLabel } from "../lib/threadTerminals.ts"
 import { projectSlug } from "../lib/base-path.ts"
 import { pushBackgroundShellDrawer, pushTerminalDrawer, showToast, store } from "../store.ts"
 
@@ -584,60 +584,6 @@ export function TerminalPromptPane({ thread, base, onOpen }: {
     </div>
   )
 }
-
-// ── the row's mark ────────────────────────────────────────────────────────────────────────────────────
-
-// ONE small glyph after a thread's title in the rail, while any terminal on it is running — yours or the
-// agent's — the whole of a terminal's presence in the sidebar (a row is its title, and nothing else, bar
-// trailers like the provider mark this sits beside). The same place for both owners, told apart by TONE:
-//   · attention-yellow while one of yours waits at a prompt, which is also what put the thread in the queue;
-//   · the shell's azure while one of YOURS runs;
-//   · the same azure, dimmed, while only the AGENT's run — a dev server it left up is worth a glance, and
-//     nothing more. It was grey for one round, and the strip one pane over draws a FINISHED terminal of yours
-//     in that very grey (muted-45 and muted-50 are one #636363 in light mode): one grey square meant "agent
-//     terminals running" here and "your run ended" there. Azure is what running means on every surface
-//     (the strip's liveness hue); the dimming is what says "not yours".
-// Still the terminal glyph for all three: a 10px bot beside a title would read "this is an agent", which
-// every thread is. Absent when nothing runs: a finished terminal is history, read in the thread's strip.
-//
-// GEOMETRY, measured (visual-review cap-band probe, 13px sans title, dsf 6): see TERMINAL_MARK_CLASS.
-export function ThreadTerminalMark({ thread }: { thread: Pick<ThreadView, "terminals" | "bgShells"> }) {
-  const running = runningTerminals(thread)
-  const agents = (thread.bgShells ?? []).filter((shell) => shell.state === "running")
-  if (running.length === 0 && agents.length === 0) return null
-  // THE TOOLTIP names every live terminal, in one grammar per owner — "Your terminal …" / "N of your
-  // terminals …", "Agent terminal …" / "N agent terminals …" — and a prompt does not hide the rest: the
-  // terminals of yours still running beside the one that is asking are listed after it.
-  const asking = running.filter((terminal) => terminal.awaitingInput)
-  const busy = running.filter((terminal) => !terminal.awaitingInput)
-  const yours = (n: number) => (n === 1 ? "Your terminal" : `${n} of your terminals`)
-  const parts: string[] = []
-  if (asking.length > 0) parts.push(`${yours(asking.length)} waiting for input: ${asking.map((terminal) => terminal.command).join(", ")}`)
-  if (busy.length > 0) parts.push(`${yours(busy.length)} running: ${busy.map((terminal) => terminal.command).join(", ")}`)
-  if (agents.length > 0) parts.push(`${agents.length === 1 ? "Agent terminal" : `${agents.length} agent terminals`} running: ${agents.map((shell) => shell.label).join(", ")}`)
-  const label = parts.join(" · ")
-  const tone = asking.length > 0 ? "prompt" : running.length > 0 ? "running" : "agent"
-  return (
-    <span
-      role="img"
-      aria-label={label}
-      title={label}
-      data-thread-terminal-mark={tone}
-      className={`${TERMINAL_MARK_CLASS} ${tone === "prompt" ? "text-attention" : tone === "running" ? "text-shell" : AGENT_ONLY_MARK_TONE}`}
-    >
-      <SquareTerminal aria-hidden="true" focusable="false" className="size-full" strokeWidth={2.25} viewBox="2 2 20 20" />
-    </span>
-  )
-}
-
-// Only the agent's terminals run: the running hue at half strength, so it reads as running and as quieter
-// than one of yours. Checked against both themes' panels (the dark one was barely visible in grey).
-export const AGENT_ONLY_MARK_TONE = "text-shell/55"
-
-// The glyph is lucide's square-terminal CROPPED to its ink (viewBox 2 2 20 20: the 18-unit rounded square
-// plus its stroke), so the box IS the ink and `ml-1` is 4px of ink gap, as it is for the provider marks.
-// 10px of ink, the codex/ACP marks' size, so the two trailers read as one family.
-export const TERMINAL_MARK_CLASS = "ml-1 inline-flex size-[10px] shrink-0"
 
 // ── opening one ───────────────────────────────────────────────────────────────────────────────────────
 
