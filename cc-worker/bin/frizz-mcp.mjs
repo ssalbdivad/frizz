@@ -811,6 +811,49 @@ const TITLE = {
   },
 }
 
+const READ_THREAD = {
+  name: "read_thread",
+  description:
+    "READ ANOTHER THREAD in this project by its handle — the camelCase name the board shows it under " +
+    "(`shellBudgets`, `focusMode`). The human writes these as `@shellBudgets`: \"ask @shellBudgets about " +
+    "this\", \"reconcile with @focusMode\". Returns that thread's original request, its status line, " +
+    "whether it is running, resting or done, its newest message (its handoff, when it is resting) and the " +
+    "files it edited.\n\n" +
+    "Read FIRST, message second: this wakes nobody and costs the other thread nothing, and it usually " +
+    "answers \"what is @x doing / what did @x change\" on its own. For the diff itself, read the files it " +
+    "lists or `git log` its commits. A handle that names nothing is answered with the handles that exist.",
+  inputSchema: {
+    type: "object",
+    properties: {
+      handle: { type: "string", description: "The other thread's handle, with or without the `@` — any casing." },
+    },
+    required: ["handle"],
+  },
+}
+
+const MESSAGE_THREAD = {
+  name: "message_thread",
+  description:
+    "SEND A MESSAGE TO ANOTHER RUNNING THREAD in this project, by handle (`@shellBudgets`). It arrives in " +
+    "that thread's conversation labelled with THIS thread's handle — joining its current turn if it is " +
+    "working, waking it if it is resting — and its answer comes back to you the same way, as a message of " +
+    "its own. Nothing reaches the human.\n\n" +
+    "USE IT when the other thread holds context you cannot read off its transcript (`read_thread` first), " +
+    "or when the two of you must coordinate — who changes a shared file, what an interface should be. " +
+    "Write the message to stand alone: the other thread has none of your context. Keep working on " +
+    "whatever does not depend on the answer.\n\n" +
+    "DO NOT reply just to acknowledge, and do not message a thread that is done (read it instead; only " +
+    "the human reopens one). Exchanges between two threads are capped per hour.",
+  inputSchema: {
+    type: "object",
+    properties: {
+      handle: { type: "string", description: "The other thread's handle, with or without the `@` — any casing." },
+      message: { type: "string", description: "What to tell or ask it, self-contained." },
+    },
+    required: ["handle", "message"],
+  },
+}
+
 // The unified server's tool registry: `tools/list` returns these and `tools/call` routes by name.
 // Adding a worker-facing frizz tool = one entry here + one handler in `HANDLERS` — never a second
 // MCP server, so every frizz tool stays under the same `mcp__frizz__*` namespace and the same
@@ -866,7 +909,7 @@ const UNLINK = {
 // WATCH_ISSUE rides at the END (2026-09-14): the tool list is read by position in frizz-mcp.test.ts, and a
 // worker's runtime reads it by name, so the order costs nothing and appending breaks nothing.
 // EXTEND_SHELL is appended after it for the same reason (2026-09-29).
-const TOOLS = [SPAWN_THREAD, GOAL, TIMER, WATCH_PR, WATCH, UNWATCH, ASK, UNASK, DONE, TITLE, ACTIVITY, LINK, UNLINK, WATCH_ISSUE, EXTEND_SHELL]
+const TOOLS = [SPAWN_THREAD, GOAL, TIMER, WATCH_PR, WATCH, UNWATCH, ASK, UNASK, DONE, TITLE, ACTIVITY, LINK, UNLINK, WATCH_ISSUE, EXTEND_SHELL, READ_THREAD, MESSAGE_THREAD]
 
 /** @type {Record<string, (args: Record<string, unknown>) => Promise<string>>} */
 const HANDLERS = {
@@ -885,6 +928,44 @@ const HANDLERS = {
   [LINK.name]: link,
   [UNLINK.name]: unlink,
   [EXTEND_SHELL.name]: extendShell,
+  [READ_THREAD.name]: readThread,
+  [MESSAGE_THREAD.name]: messageThread,
+}
+
+/** The `read_thread` handler: another thread's request, status and newest message, by handle.
+ * @param {Record<string, unknown>} args @returns {Promise<string>} */
+async function readThread(args) {
+  const handle = typeof args.handle === "string" ? args.handle.trim() : ""
+  if (!handle) throw new Error("`handle` is required — the other thread's camelCase name, e.g. `shellBudgets`")
+  const r = (await callRpc("readThread", { slug: threadSlug(), handle }))?.result
+  if (!r?.found) return `No thread is called ${handle}.${knownLine(r?.known)}`
+  const state = r.state === "done" ? "done" : r.state === "resting" ? "resting (not working right now)" : "running (mid-turn)"
+  return [
+    `@${r.handle} — ${state}${r.status ? `\nStatus: ${r.status}` : ""}`,
+    r.request ? `\n## Its request\n\n${r.request}` : "",
+    r.latest ? `\n## Its newest message${r.latestAt ? ` (${r.latestAt})` : ""}\n\n${r.latest}` : "\nIt has not said anything yet.",
+    r.editedFiles?.length ? `\n## Files it edited\n\n${r.editedFiles.map((f) => `- ${f}`).join("\n")}` : "",
+  ].filter(Boolean).join("\n")
+}
+
+/** The `message_thread` handler: deliver a message into another open thread's conversation.
+ * @param {Record<string, unknown>} args @returns {Promise<string>} */
+async function messageThread(args) {
+  const handle = typeof args.handle === "string" ? args.handle.trim() : ""
+  const message = typeof args.message === "string" ? args.message.trim() : ""
+  if (!handle) throw new Error("`handle` is required — the other thread's camelCase name, e.g. `shellBudgets`")
+  if (!message) throw new Error("`message` is required")
+  const r = (await callRpc("messageThread", { slug: threadSlug(), handle, message }))?.result
+  if (!r?.sent) return `Not sent — ${r?.refusal ?? "Frizz did not accept it."}${knownLine(r?.known)}`
+  return (
+    `Sent to @${r.handle}, signed @${r.from}. Its answer, if it has one, arrives as a message of its own — ` +
+    "keep working on whatever does not depend on it."
+  )
+}
+
+/** @param {unknown} known @returns {string} */
+function knownLine(known) {
+  return Array.isArray(known) && known.length ? `\n\nThreads in this project: ${known.join(", ")}` : ""
 }
 
 /** The `extend_shell` handler: move one background shell's runtime budget to `for` from now.

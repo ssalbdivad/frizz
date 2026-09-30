@@ -616,7 +616,17 @@ Once, and not on arrival. A name you register before you understand the task is 
 replacing, and after your one rename the name is stable. It must differ from every other open thread's
 name: Frizz refuses a duplicate and names the thread holding it, so pick another subject. A human rename
 outranks yours, and Frizz reports that rather than failing. What is happening NOW is not the name —
-Frizz keeps a separate status line for that.`
+Frizz keeps a separate status line for that.
+
+## Other threads, by handle
+
+The board shows every thread's name as a camelCase HANDLE (\`Shell budgets\` shows as
+\`shellBudgets\`), and the human points you at another thread with it: "ask @shellBudgets about this",
+"reconcile with @focusMode". Resolve one with \`mcp__frizz__read_thread\` — its request, status, newest
+message and edited files, waking nobody — and only when that is not enough, \`mcp__frizz__message_thread\`,
+whose answer comes back to you as a message of its own. A message from another thread arrives headed
+with its handle and never reached the human. Answer it with \`message_thread\` when it asks something,
+never just to acknowledge.`
 
 // LEGACY NAME, current behaviour. This block and `scratchpadOrientation` still say "scratchpad"; both
 // describe the scratch DIRECTORY. (`ThreadView.scratchpadPath` and the `threadScratchpad` RPC went with

@@ -5,7 +5,7 @@ import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { wakeDeliveryToken } from "@frizz/shared"
 import { createStorage, type Storage, type SessionRow } from "./storage.ts"
-import { createScheduler, enqueueInterruptEndedWake, parsePrRef, ghPrViewArgs, evalRollup, parseGithubReviewActivities, isBotGithubActor, MID_TURN_HOLD_MAX_MS, type GithubReviewActivity, type PrRef, type PrStatus } from "./scheduler.ts"
+import { createScheduler, enqueueInterruptEndedWake, enqueueThreadMessageWake, parsePrRef, ghPrViewArgs, evalRollup, parseGithubReviewActivities, isBotGithubActor, MID_TURN_HOLD_MAX_MS, type GithubReviewActivity, type PrRef, type PrStatus } from "./scheduler.ts"
 import { createGithubReviewFetcher, type GithubReviewFetchResult } from "./github-review.ts"
 import { createWakeDeliveryStore, WAKE_QUIET_WINDOW_MS } from "./wake-store.ts"
 import type { Tailer, SessionTelemetry, FenceView, TurnState, BgShellView } from "./tailer.ts"
@@ -2857,5 +2857,28 @@ test("interrupt note: delivered into the busy turn on the next tick, never held"
   await s.tick()
   assert.equal(h.resumes.length, 1, "and exactly once")
   assert.equal(createWakeDeliveryStore(h.storage.scope).list()[0]?.state, "delivered")
+  h.storage.close()
+})
+
+// A message from another thread (`message_thread`) is a new wake source, and a source with no routing
+// branch in deliveryContext is superseded silently at zero attempts — so this asserts `resume` RAN, both
+// into a busy turn and past a wake handed over moments earlier (the quiet window does not hold it).
+test("thread message: delivered into a busy turn, not held by the quiet window, exactly once", async () => {
+  const h = harness()
+  h.storage.upsertSession(row("m"))
+  h.tele.set("m", tele(undefined, "in-flight"))
+  enqueueThreadMessageWake(h.storage, { slug: "m", sessionId: "sid-m", fromSlug: "other", message: "Message from @other: which file owns the cap?", nowMs: h.clock.ms })
+  const s = h.make()
+  await s.tick()
+  assert.equal(h.resumes.length, 1, "handed over while the thread is mid-turn")
+  assert.match(h.resumes[0].message, /Message from @other: which file owns the cap\?/)
+  h.tele.set("m", { ...tele(undefined, "in-flight"), lastUserText: h.resumes[0].message })
+  enqueueThreadMessageWake(h.storage, { slug: "m", sessionId: "sid-m", fromSlug: "other", message: "Message from @other: and the test?", nowMs: h.clock.ms })
+  await s.tick()
+  assert.equal(h.resumes.length, 2, "the second message is not held behind the first one's quiet window")
+  assert.match(h.resumes[1].message, /and the test\?/)
+  h.tele.set("m", { ...tele(undefined, "in-flight"), lastUserText: h.resumes[1].message })
+  await s.tick()
+  assert.equal(h.resumes.length, 2, "and each exactly once")
   h.storage.close()
 })
