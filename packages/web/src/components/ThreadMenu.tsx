@@ -19,7 +19,7 @@ import { Tooltip } from "./Tooltip.tsx"
 import { useTerminalCommandMenuItem } from "./ExternalTerminalCommand.tsx"
 import { useDevFrizzBuild } from "../lib/devBuild.ts"
 import { restartWorker } from "../lib/restartWorker.ts"
-import { showToast } from "../store.ts"
+import { closeDrawersById, showToast, store } from "../store.ts"
 import { offersReloadPlugins, offersRestartWorker, reloadThreadPlugins } from "../lib/workerMaintenance.ts"
 
 // openFullscreen, the one navigation into a thread's /full page, shared by the ⤢ door (ExpandThreadLink.tsx)
@@ -194,6 +194,9 @@ function DeleteThreadDialog({ thread, onClose }: { thread: ThreadView; onClose: 
     onSuccess: () => {
       showToast(`Deleted ${name}`)
       onClose()
+      // Its drawers (the thread, its sub-agents, shells and terminals) have nothing left to show; slide
+      // them out rather than leave "Thread unavailable" where the thread was.
+      closeDrawersById(store.drawers.filter((d) => d.slug === thread.id && !d.closing).map((d) => d.id))
     },
   })
   const error = remove.error instanceof Error ? remove.error.message : remove.error ? String(remove.error) : null
