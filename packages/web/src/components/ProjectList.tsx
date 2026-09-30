@@ -105,6 +105,7 @@ export function ProjectList({
 }) {
   const collapsed = useCollapsedProjects()
   const openBands = useOpenBands()
+  const view = usePageView()
   useReadAhead(projects)
   const steeredAt = useSteeredAt()
   const archivingAt = useArchivingAt()
@@ -125,7 +126,10 @@ export function ProjectList({
       project={entry.project}
       grip={grip(entry.project.id)}
       loud={entry.bands}
-      collapsed={collapsed.has(entry.project.id)}
+      // A FOCUSED project never folds, whatever the list remembers: its row there has no fold button
+      // (ProjectRow), so a fold set from All projects hid every thread on the project's own page with
+      // nothing to bring them back but the yellow count (maintainer 2026-09-30).
+      collapsed={collapsed.has(entry.project.id) && !(view.kind === "project" && view.slug === entry.project.slug)}
       open={openBands}
       spaced={spaced}
       home={home}
