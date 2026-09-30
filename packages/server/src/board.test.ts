@@ -2657,6 +2657,9 @@ test("quietTurnSince: a long-silent turn is flagged; recent activity or a workin
   assert.equal(quietTurnSince("running", tele({ turn: "in-flight", lastActivityAt: stale, subAgents: [child(fresh)] }), now), undefined)
   assert.equal(quietTurnSince("running", tele({ turn: "in-flight", lastActivityAt: stale, subAgents: [child()] }), now), undefined)
   assert.equal(quietTurnSince("running", tele({ turn: "in-flight", lastActivityAt: stale, subAgents: [child(stale)] }), now), stale)
+  // Silence is AWAKE time: a turn quiet for 16 wall minutes, 10 of them with the laptop asleep, is not.
+  const slept = (from: number, to: number) => to - from - 10 * 60_000
+  assert.equal(quietTurnSince("running", tele({ turn: "in-flight", lastActivityAt: stale }), now, slept), undefined)
 })
 
 test("board: a silent in-flight turn queues while still running, and a snooze or fresh activity takes it out", async () => {

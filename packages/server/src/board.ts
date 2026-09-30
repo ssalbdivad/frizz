@@ -4,6 +4,7 @@ import {
   watch as fsWatch,
   type FSWatcher,
 } from "node:fs"
+import { processAwakeClock } from "./awake-clock.ts"
 import { homedir } from "node:os"
 import { dirname, join } from "node:path"
 import watcher from "@parcel/watcher"
@@ -100,6 +101,7 @@ export function quietTurnSince(
   runtime: RuntimeState,
   tele: Pick<SessionTelemetry, "turn" | "lastActivityAt" | "subAgents"> | undefined,
   nowMs: number,
+  awakeBetween: (fromMs: number, toMs: number) => number = processAwakeClock.awakeBetween,
 ): string | undefined {
   if (runtime !== "running" || tele?.turn !== "in-flight" || !tele.lastActivityAt) return undefined
   let latest = Date.parse(tele.lastActivityAt)
@@ -112,7 +114,9 @@ export function quietTurnSince(
     if (!Number.isFinite(at)) return undefined
     latest = Math.max(latest, at)
   }
-  return nowMs - latest >= QUIET_TURN_MS ? new Date(latest).toISOString() : undefined
+  // AWAKE time (awake-clock.ts): a laptop that slept through a turn is not a turn that went silent, and
+  // every in-flight thread would otherwise queue on waking.
+  return awakeBetween(latest, nowMs) >= QUIET_TURN_MS ? new Date(latest).toISOString() : undefined
 }
 
 // Runtime derivation: no session row → never spawned (none); a row whose worker is dead/absent →
