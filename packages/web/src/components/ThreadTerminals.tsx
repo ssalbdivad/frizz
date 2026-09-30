@@ -311,7 +311,9 @@ export function ProcessRow({ process: p, slug, here, lines, watched, onOpen }: {
       )}
       {readings.length > 0 && (
         // The readings are the row's sans, on the same line as the label (see LABEL), so they need no lift.
-        <span className={`flex shrink-0 items-center gap-1 text-muted-40 ${hint ? "pl-1" : "ml-auto pl-1.5"}`}>
+        // After a hint, the row's own 6px gap is what separates them; `-ml-0.5` brings that to the 4px the
+        // readings keep between themselves, so the hint's `·` sits evenly between its neighbours.
+        <span className={`flex shrink-0 items-center gap-1 text-muted-40 ${hint ? "-ml-0.5" : "ml-auto pl-1.5"}`}>
           {readings.flatMap((node, i) => (i === 0 ? [node] : [<span key={`sep${i}`} aria-hidden className="text-muted-25">·</span>, node]))}
         </span>
       )}
@@ -412,7 +414,11 @@ export function TerminalPromptPane({ thread, base, onOpen }: {
   const open = onOpen ?? ((p: ThreadProcess) => openProcessDrawer(thread.id, p))
   return (
     <div data-terminal-prompt={prompting.id} className="flex min-w-0 flex-col">
-      <ProcessRow process={process} slug={thread.id} here={thread.checkout} onOpen={() => open(process)} />
+      {/* `px-1`: the strip's own inset (AllQueuesCard), so this row's arrow and label sit in the one column
+          the rows under the reply box use, and its screen's border is the box edge, as the reply box is theirs. */}
+      <div className="px-1">
+        <ProcessRow process={process} slug={thread.id} here={thread.checkout} onOpen={() => open(process)} />
+      </div>
       <div data-terminal-prompt-pane={prompting.id} className="mt-1.5 flex h-[168px] min-w-0 overflow-hidden rounded-md border border-attention/40">
         <Suspense fallback={<div className="flex-1 bg-bg" />}>
           <TerminalPane key={`${prompting.id}:${prompting.runId}`} id={prompting.id} base={base ?? fallback} focusOnMount={false} exitedStatus={() => null} />
