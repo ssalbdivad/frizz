@@ -142,11 +142,13 @@ try {
   })
 
   // ── the list's bands ───────────────────────────────────────────────────────────────────────────────
-  await step("of the loud bands only Pinned is named, and only where it has rows", async () => {
+  await step("the loud bands carry no names, and their rows stand in order", async () => {
     const bands = await page.$$eval(`[data-xq-rail-project="${A.id}"] > [data-xq-band-label]`, (els) => els.map((el) => el.getAttribute("data-xq-band-label")))
-    check("Ready and Working carry no name", bands.every((b) => b === "pinned"), bands.join(", ") || "(none)")
+    check("Pinned, Ready and Working carry no name", bands.length === 0, bands.join(", ") || "(none)")
     const rows = await page.$$eval(`[data-xq-rail-project="${A.id}"] > [data-xq-band]`, (els) => [...new Set(els.map((el) => el.getAttribute("data-xq-band")))])
-    check("…and their rows still stand in order", rows.join() === ["pinned", "ready", "working"].filter((b) => rows.includes(b)).join() && rows.includes("ready") && rows.includes("working"), rows.join(", "))
+    check("…and their rows still stand in order", rows.join() === ["pinned", "ready", "working"].filter((b) => rows.includes(b)).join() && rows.includes("pinned") && rows.includes("ready") && rows.includes("working"), rows.join(", "))
+    const marked = await page.$$eval(`[data-xq-rail-project="${A.id}"] > [data-xq-band="pinned"]`, (els) => els.every((el) => el.querySelector("[data-rail-pin-mark]")))
+    check("…and every pinned row wears its pin", marked)
     const empty = await page.$$eval(`[data-xq-rail-project] > [data-xq-band-label]`, (labels) => labels.filter((label) => !label.nextElementSibling?.matches("[data-xq-thread-row]")).map((l) => l.getAttribute("data-xq-band-label")))
     check("…and no name stands over an empty band", empty.length === 0, empty.join(", "))
   })

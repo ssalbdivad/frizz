@@ -9,11 +9,10 @@
 // functionality must still be available without a project-specific view"). So every band that rail had is
 // here, for each project, at two volumes:
 //
-//   LOUD  — Pinned, Ready and Working: the work in flight, listed under its project unless it is folded.
-//           Only Pinned is named, and only while it has rows. Colin's sidebar named all three ("sidebar
-//           labels for pinned, queue, and running … should not be collapsible"); here Ready and Working
-//           rows say their band themselves — a rest time, a spinner — so their names were dropped
-//           (maintainer 2026-09-29).
+//   LOUD  — Pinned, Ready and Working: the work in flight, listed under its project unless it is folded,
+//           with no name over any of them. Colin's sidebar named all three ("sidebar labels for pinned,
+//           queue, and running … should not be collapsible"); here each row says its band itself — a pin,
+//           a rest time, a spinner — so the names were dropped (maintainer 2026-09-29).
 //   QUIET — Snoozed, Done and External: a muted count per band under the work in flight, in the band's own
 //           glyph (the rail's legend, BandLabel.tsx), never louder than the names. Each count is its own
 //           toggle, collapsed to start (Colin's sidebar had the same three as separate collapsible
@@ -390,8 +389,7 @@ function useReadAhead(projects: QueuesProject[]) {
  *   a band's name, per band    15px  (BAND_LABEL — Colin's was a 23.7px header under a 25px rule)
  *   the space before the next   6px  (12)
  *
- * so a busy project with Ready and Working rows costs 23 + 6 = 29px beyond its rows now that neither band
- * is named (59 while both were, 80 while the quiet counts sat on a 21px line of their own under the
+ * so a busy project costs 23 + 6 = 29px beyond its rows now that no loud band is named (59 while both were, 80 while the quiet counts sat on a 21px line of their own under the
  * threads, 2026-09-29 only), against 66px before its bands had names — and the same project in Colin's sidebar, one project per page, cost
  * 267px for its six headers and five rules.
  *
@@ -480,12 +478,10 @@ function ProjectGroup({
       />
       {!collapsed && (
         <ThreadProjectScope projectId={project.id} projectDir={project.projectDir}>
-          {/* The loud bands, as SIBLINGS of the rows rather than wrappers round them: the cord strings the
-              project's square, Pinned's name glyph and each row's indicator, in the order they stand
-              (ThreadConnector readRail), and a wrapper would cut it. Only Pinned is named: a Ready row
-              wears its rest time and a Working row its spinner, so a name over either said what the rows
-              already did (maintainer 2026-09-29: "let the icons show what is working", and Ready with it). */}
-          {pinned.length > 0 && <BandName band="pinned" count={pinned.length} />}
+          {/* The loud bands, UNNAMED: a pinned row wears its pin, a Ready row its rest time and a Working
+              row its spinner, so a name over any of them said what the rows already did (maintainer
+              2026-09-29: "let the icons show what is working", then Ready, then "just a pin icon next to
+              the threads that are pinned"). */}
           {pinned.map(row(false, "pinned"))}
           {loud.ready.map(row(true, "ready"))}
           {loud.working.map(row(false, "working"))}
@@ -500,14 +496,12 @@ function ProjectGroup({
 const QUIET_BANDS: readonly QuietBandKey[] = ["snoozed", "done", "external"]
 
 /**
- * A BAND'S NAME, over its rows — the rail's legend (BandLabel.tsx BANDS), in the rail header's own face.
- * Its glyph stands in the INDICATOR column, where each row's state glyph stands, so the project's cord
- * strings it like a row (ThreadConnector) and the name starts on the titles' column.
- *
- * Drawn only over a band that has rows — "an empty band draws no label" was Colin's rule too. A quiet band
- * that is open names itself the same way, and its name is the band's collapse (`onToggle`).
+ * AN OPEN QUIET BAND'S NAME, over its rows — the rail's legend (BandLabel.tsx BANDS), in the rail header's
+ * own face, and the band's collapse (`onToggle`). Its glyph stands in the INDICATOR column, where each
+ * row's state glyph stands, so the project's cord strings it like a row (ThreadConnector) and the name
+ * starts on the titles' column. The loud bands carry no name (ProjectGroup).
  */
-function BandName({ band, count, onToggle }: { band: BandKey; count: number; onToggle?: () => void }) {
+function BandName({ band, count, onToggle }: { band: QuietBandKey; count: number; onToggle: () => void }) {
   const { Icon, label } = BANDS[band]
   const body = (
     <>
@@ -522,13 +516,6 @@ function BandName({ band, count, onToggle }: { band: BandKey; count: number; onT
     </>
   )
   const className = `${BAND_LABEL} ${BAND_LABEL_TYPE}`
-  if (!onToggle) {
-    return (
-      <div data-xq-band-label={band} className={className}>
-        {body}
-      </div>
-    )
-  }
   return (
     <button
       type="button"
