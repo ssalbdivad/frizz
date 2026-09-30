@@ -614,31 +614,12 @@ body is one line ("Answered inline — conversational prompt, nothing to ship.")
 needs a reply, register it with \`mcp__frizz__ask\` instead. Do not manufacture scope, restate the "task", or ask
 clarifying questions to seem busy.`
 
-// WHY THIS EARNS ITS TOKENS (the SIZING bar above): every thread is named automatically at spawn from the
-// raw prompt — Frizz's own namer (thread-names.ts), Codex's first-line marker, Claude's own titler until
-// the first of those lands — so nothing has read a line of the repo when the work is named. The
-// failure is not hypothetical: a zod thread went onto the board as "Zon4.5 features and z.properties
-// documentation audit" because the operator's prompt said "Zon4.5" (maintainer 2026-08-31: "it just
-// registers a clearly incorrect name"). Only the worker can fix that, and only after it has oriented —
-// so the rule a worker gets wrong without this is WHEN, not how. Everything else lives in the tool
-// description.
-const THREAD_NAME = `## Name your thread once you know what the work is
-
-Your thread reaches the board wearing a name Frizz minted from the raw prompt before you had read
-anything, so it carries the operator's shorthand and their typos. Once you have oriented — read the
-issue, opened the code, found the bug — call \`mcp__frizz__title\` with the thread's real name: ONE or
-TWO words naming its SUBJECT, not the action (\`Shell budgets\`, never \`Fix the shell budget default\`),
-sentence case, spelled the way the PROJECT spells it rather than the way the prompt did. Keep it SHORT:
-the human types it as a kebab-case handle (\`@shell-budgets\`), and Frizz refuses one past
-${THREAD_HANDLE_MAX_CHARS} characters.
-
-Once, and not on arrival. A name you register before you understand the task is the same guess you are
-replacing, and after your one rename the name is stable. It must differ from every other open thread's
-name: Frizz refuses a duplicate and names the thread holding it, so pick another subject. A human rename
-outranks yours, and Frizz reports that rather than failing. What is happening NOW is not the name —
-Frizz keeps a separate status line for that.
-
-## Other threads, by handle
+// A THREAD'S NAME IS NOT THE WORKER'S TO CHANGE (maintainer 2026-09-30: "once someone sees the id, it
+// cannot change"). This section used to tell the worker to rename its thread once it had oriented; the
+// name it replaced was already on the board as an `@handle`, so every rename moved an id the operator
+// had seen. Frizz names the thread at dispatch and that name stands (thread-names.ts), so what is left to
+// teach here is how to point at OTHER threads.
+const THREAD_HANDLES = `## Other threads, by handle
 
 The board shows every thread under a kebab-case HANDLE (\`Shell budgets\` shows as \`shell-budgets\`), and
 the human points you at another thread with it: "ask @shell-budgets about this", "reconcile with
@@ -893,8 +874,8 @@ never again on later turns. Frizz strips this comment from visible chat and uses
 quoted title while the thread still has an automatic title; a human rename always wins. Never use an H1
 for the title signal: H1 parsing exists only for compatibility with old transcripts.
 
-That marker is only the PROVISIONAL name — it is minted before you have read anything, so it can only
-paraphrase the prompt. Correct it with \`mcp__frizz__title\` once you know what the work is (below).
+Whichever name reaches the thread first — this marker or Frizz's own — is its name for good: the board
+shows it as the thread's \`@handle\`, and a handle never changes once shown, so there is no renaming later.
 
 ## Bounded native delegation
 
@@ -1176,7 +1157,7 @@ export function buildWorkerPrompt(kind: BackendKind = "claude", opts: { monitors
     SIGNALS,
     SCRATCHPAD[kind],
     BACKEND[kind],
-    THREAD_NAME,
+    THREAD_HANDLES,
     SPAWN_THREAD,
     lean ? null : THREAD_EXECUTION[kind],
     AGENT_COMPLETION,

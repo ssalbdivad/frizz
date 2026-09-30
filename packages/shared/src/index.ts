@@ -3202,6 +3202,12 @@ export const ThreadView = z.object({
   // treating any non-guessed title as the human's. The server enforces this too by withholding aiTitle
   // from a locked row; the client keeps its own copy so a stale record can never win on either side.
   titleLocked: z.boolean().optional(),
+  // True when the row carries a persisted NAME — a human's, a caller's dispatch title, or a machine name
+  // that landed (server thread-names.ts `rowThreadName`). Only a name is shown as an `@handle`, and a
+  // name never changes once shown (maintainer 2026-09-30: "once someone sees the id, it cannot
+  // change"), so while this is false `aiTitle` is the live session title and displays as plain text.
+  // Optional (absent ⇒ legacy/slim row): the display then keeps the pre-2026-09-30 aiTitle-is-a-name rule.
+  titleNamed: z.boolean().optional(),
   // The NAMES this thread has carried before its current one, oldest first (storage.ts
   // session_former_titles trigger). Prose written under an old name keeps linking: a worker told its
   // sub-agent is `@donePersistence.doneRepro` a second before it renamed the thread "Done reappears"
@@ -4546,7 +4552,9 @@ export type AiRenameThreadResult = z.infer<typeof AiRenameThreadResult>
 // named "Zon4.5 features and z.properties documentation audit": the titler copied the operator's typo
 // verbatim, because at that instant nothing in the session knew the product is called Zod.
 //
-// This is the SECOND, considered pass: the worker registers a real name once it understands the task.
+// It used to be a SECOND, considered pass — the worker renamed its thread once it understood the task.
+// Since 2026-09-30 it only NAMES a thread that has no name yet: a name is the thread's `@handle`, and a
+// handle never changes once the board has shown it (server thread-names.ts).
 //
 // Unlike RenameThreadInput it never LOCKS the row — the name is machine-authored, so a human rename
 // still outranks it. Unguarded on session/generation for `SetOwnThreadRecurringPromptInput`'s reasons:
@@ -4562,7 +4570,7 @@ export type SetOwnThreadTitleInput = z.infer<typeof SetOwnThreadTitleInput>
 // an error — a human who has renamed the thread owns its name — so it comes back as a flag the tool can
 // explain rather than a throw the model will retry. `refusal` says why in words the worker can act on:
 // another open thread already holds the name (named, so it can pick a different subject), the name is
-// longer than two words, or the worker already spent its one rename (thread-names.ts).
+// longer than two words, or the thread already has a name (thread-names.ts).
 // ONE THREAD READING OR MESSAGING ANOTHER, BY HANDLE (thread-handle.ts). `slug` is the CALLER, stamped
 // into the worker's MCP env exactly as for `title`; `handle` is the other thread's kebab-case name as the
 // board shows it — `shell-budgets`, with or without the `@`, in any casing.

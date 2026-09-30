@@ -444,7 +444,6 @@ test("aiRenameThread RPC: the title request carries the opening task, not the la
     ;(h.ctx as { claudeBroker?: unknown }).claudeBroker = {}
     ;(h.ctx as { threadNamer?: unknown }).threadNamer = createThreadNamer({
       storage: h.storage,
-      aiTitleOf: () => undefined,
       complete: async ({ prompt }) => {
         described.push(prompt)
         return "Resume flake"
@@ -492,7 +491,6 @@ test("aiRenameThread RPC: a spinoff child is named from its instructions and the
     ;(h.ctx as { claudeBroker?: unknown }).claudeBroker = {}
     ;(h.ctx as { threadNamer?: unknown }).threadNamer = createThreadNamer({
       storage: h.storage,
-      aiTitleOf: () => undefined,
       complete: async ({ prompt }) => {
         described.push(prompt)
         return described.length === 1 ? "Budget ceiling" : "Budget settings"
@@ -533,7 +531,7 @@ test("renameThread RPC: a human rename that duplicates an open thread's name is 
   h.storage.close()
 })
 
-test("setOwnThreadTitle RPC: a duplicate is refused NAMING its holder, a distinct one lands once, and a second rename is refused", async () => {
+test("setOwnThreadTitle RPC: a duplicate is refused NAMING its holder, a distinct one names an unnamed thread, and a named thread is never renamed", async () => {
   const h = harness()
   h.storage.upsertSession(row("holder"))
   h.storage.setTitle("holder", "Focus mode")
@@ -560,8 +558,20 @@ test("setOwnThreadTitle RPC: a duplicate is refused NAMING its holder, a distinc
 
   const again = await call("Rail focus")
   assert.equal(again.accepted, false)
-  assert.match(again.refusal ?? "", /already renamed this thread once/)
-  assert.equal(h.storage.getSession("worker")?.title, "Focus rail", "the name is stable after the one rename")
+  assert.match(again.refusal ?? "", /already named "Focus rail", and a name never changes once the board has shown it .* @focus-rail/)
+  assert.equal(h.storage.getSession("worker")?.title, "Focus rail", "a name is final once it exists")
+
+  // A minted name and a caller's dispatch title are names too: the worker never renames either.
+  h.storage.upsertSession({ ...row("minted"), title_auto: 1, title_locked: 0, title: "chop…" })
+  h.storage.setMintedTitle("minted", row("minted").session_id, "Perf review")
+  h.storage.upsertSession({ ...row("spun"), title_auto: 0, title_locked: 0, title: "Cache review" })
+  for (const slug of ["minted", "spun"]) {
+    const refused = await h.router.setOwnThreadTitle.handler({ input: { slug, title: "Perf bench" } })
+    assert.equal(refused.accepted, false, slug)
+    assert.match(refused.refusal ?? "", /already named/)
+  }
+  assert.equal(h.storage.getSession("minted")?.title, "Perf review")
+  assert.equal(h.storage.getSession("spun")?.title, "Cache review")
   h.storage.close()
 })
 
@@ -585,7 +595,6 @@ test("aiRenameThread RPC: a collision is retried once naming it, then falls back
     ;(h.ctx as { claudeBroker?: unknown }).claudeBroker = {}
     ;(h.ctx as { threadNamer?: unknown }).threadNamer = createThreadNamer({
       storage: h.storage,
-      aiTitleOf: () => undefined,
       complete: async ({ prompt }) => { prompts.push(prompt); return "Shell budgets" },
     })
     const result = await h.router.aiRenameThread.handler({ input: { slug: "dupe-src" } })

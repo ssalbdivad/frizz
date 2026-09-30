@@ -911,7 +911,6 @@ function createContextUnchecked(opts: ContextOptions, resources: PartialContextR
   // every writer without it, because that check reads the registry, not a model.
   const threadNamer: ThreadNamer = createThreadNamer({
     storage,
-    aiTitleOf: (slug) => tailer.get(slug)?.aiTitle,
     complete: process.env.FRIZZ_THREAD_NAMER === "0"
       ? undefined
       : createClaudeOneShot({ claudeBin: opts.claudeBin, cwd: workDirOf(project) }),
@@ -924,7 +923,7 @@ function createContextUnchecked(opts: ContextOptions, resources: PartialContextR
   const periodicStatus = createPeriodicStatus({
     storage,
     writeStatus: threadNamer.available ? (input) => threadNamer.status(input) : undefined,
-    nameOf: (row) => threadNamer.threads().find((t) => t.slug === row.slug)?.name,
+    nameOf: (row) => threadNamer.threads().find((t) => t.slug === row.slug)?.name || undefined,
     readMessages: (sessionId) => readTranscript(project, sessionId),
     onStatus: () => board.refresh(),
     onError: (slug, error) => process.stderr.write(`[frizz] status of ${slug} failed: ${error instanceof Error ? error.message : String(error)}\n`),

@@ -216,31 +216,32 @@ test("resolveSessionPermission: an eager operator sandbox change shows immediate
 test("resolveSessionTitle: a human title suppresses stale transcript names; generated fallbacks may use them", () => {
   assert.deepEqual(
     resolveSessionTitle(row({ title: "Human-readable thread title", title_auto: 0, title_locked: 1 }), tele({ aiTitle: "generated-slug" })),
-    { title: "Human-readable thread title", titleAuto: false, titleLocked: true, aiTitle: undefined },
+    { title: "Human-readable thread title", titleAuto: false, titleLocked: true, aiTitle: undefined, titleNamed: true },
   )
   assert.deepEqual(
     resolveSessionTitle(row({ title: "generated-slug", title_auto: 1 }), tele({ aiTitle: "Useful backend title" })),
-    { title: "generated-slug", titleAuto: true, titleLocked: false, aiTitle: "Useful backend title" },
+    { title: "generated-slug", titleAuto: true, titleLocked: false, aiTitle: "Useful backend title", titleNamed: false },
   )
   assert.deepEqual(
     resolveSessionTitle(
       row({ title: "Original fallback", title_auto: 1 }),
       tele({ customTitle: "rejected-native-slug", customTitleRevision: 1 }),
     ),
-    { title: "Original fallback", titleAuto: true, titleLocked: false, aiTitle: undefined },
+    { title: "Original fallback", titleAuto: true, titleLocked: false, aiTitle: undefined, titleNamed: false },
     "an unconfirmed custom-title cannot reach board display/notification or paired-file sync",
   )
-  // The point of the split: a title a dispatch CALLER hard-coded reads as a real name (titleAuto false,
-  // so no "Spinning up…"/"Untitled" placeholder) yet still carries the worker's aiTitle on the wire.
+  // A title a dispatch CALLER hard-coded (a spinoff's, a spawn_thread title) is a NAME: the live session
+  // title never outranks it. It used to ride the wire and win, and a spinoff dispatched as "Cache review"
+  // read `@pluggable-cache-store-changes-evaluation` from then on (thread-names.ts).
   assert.deepEqual(
     resolveSessionTitle(row({ title: "Investigate acme/app#391", title_auto: 0, title_locked: 0 }), tele({ aiTitle: "Cache key collides on normalized ids" })),
-    { title: "Investigate acme/app#391", titleAuto: false, titleLocked: false, aiTitle: "Cache key collides on normalized ids" },
+    { title: "Investigate acme/app#391", titleAuto: false, titleLocked: false, aiTitle: undefined, titleNamed: true },
   )
   // A row written before the split has no title_locked at all. Its non-guessed title must keep reading
   // as the human's, or every legacy rename would silently reopen to backend telemetry.
   assert.deepEqual(
     resolveSessionTitle(row({ title: "Legacy renamed thread", title_auto: 0 }), tele({ aiTitle: "generated-slug" })),
-    { title: "Legacy renamed thread", titleAuto: false, titleLocked: true, aiTitle: undefined },
+    { title: "Legacy renamed thread", titleAuto: false, titleLocked: true, aiTitle: undefined, titleNamed: true },
   )
 })
 
@@ -251,12 +252,12 @@ test("resolveSessionTitle: a PERSISTED worker title survives the loss of its tel
   // thread" for every one of them (maintainer 2026-08-07).
   assert.deepEqual(
     resolveSessionTitle(row({ title: "Build minimal tool renderer", title_auto: 1, title_locked: 0, title_agent: 1 }), undefined),
-    { title: "Build minimal tool renderer", titleAuto: true, titleLocked: false, aiTitle: "Build minimal tool renderer" },
+    { title: "Build minimal tool renderer", titleAuto: true, titleLocked: false, aiTitle: "Build minimal tool renderer", titleNamed: true },
   )
   // Without the flag the same row IS just its chop, and must stay unnamed rather than exposing it.
   assert.deepEqual(
     resolveSessionTitle(row({ title: "i want to start working", title_auto: 1, title_locked: 0, title_agent: 0 }), undefined),
-    { title: "i want to start working", titleAuto: true, titleLocked: false, aiTitle: undefined },
+    { title: "i want to start working", titleAuto: true, titleLocked: false, aiTitle: undefined, titleNamed: false },
   )
   // THE REGISTRY COPY OUTRANKS TELEMETRY. This assertion read the other way ("live telemetry is the
   // FRESHER of the two") until `mcp__frizz__title` existed, and freshness was the right tiebreak only
@@ -266,17 +267,18 @@ test("resolveSessionTitle: a PERSISTED worker title survives the loss of its tel
   // spawn-time guess it is correcting, which must not win.
   assert.deepEqual(
     resolveSessionTitle(row({ title: "Named after reading the issue", title_auto: 1, title_locked: 0, title_agent: 1 }), tele({ aiTitle: "Spawn-time guess" })),
-    { title: "Named after reading the issue", titleAuto: true, titleLocked: false, aiTitle: "Named after reading the issue" },
+    { title: "Named after reading the issue", titleAuto: true, titleLocked: false, aiTitle: "Named after reading the issue", titleNamed: true },
   )
-  // Telemetry still covers the row the CAS never reached: no flag, so nothing persisted to prefer.
+  // Telemetry still rides for the row nothing has named yet — flagged NOT a name, so the display shows it
+  // as text and never as a handle, which would change the moment the mint lands.
   assert.deepEqual(
     resolveSessionTitle(row({ title: "i want to start working", title_auto: 1, title_locked: 0, title_agent: 0 }), tele({ aiTitle: "Live worker name" })),
-    { title: "i want to start working", titleAuto: true, titleLocked: false, aiTitle: "Live worker name" },
+    { title: "i want to start working", titleAuto: true, titleLocked: false, aiTitle: "Live worker name", titleNamed: false },
   )
   // A human's name still outranks both, exactly as it does the live one.
   assert.deepEqual(
     resolveSessionTitle(row({ title: "Named by hand", title_auto: 0, title_locked: 1, title_agent: 1 }), undefined),
-    { title: "Named by hand", titleAuto: false, titleLocked: true, aiTitle: undefined },
+    { title: "Named by hand", titleAuto: false, titleLocked: true, aiTitle: undefined, titleNamed: true },
   )
 })
 
@@ -286,15 +288,15 @@ test("resolveSessionTitle: rows written before the name/status split resolve exa
   // no lock column — each resolves to its stored text, and a new row's status never enters the title.
   assert.deepEqual(
     resolveSessionTitle(row({ title: "Investigate the flaky resolver test on CI", title_auto: 1, title_locked: 0, title_agent: 1 }), tele({ aiTitle: "Flaky resolver" })),
-    { title: "Investigate the flaky resolver test on CI", titleAuto: true, titleLocked: false, aiTitle: "Investigate the flaky resolver test on CI" },
+    { title: "Investigate the flaky resolver test on CI", titleAuto: true, titleLocked: false, aiTitle: "Investigate the flaky resolver test on CI", titleNamed: true },
   )
   assert.deepEqual(
     resolveSessionTitle(row({ title: "Periodic retitle from last week", title_auto: 1, title_locked: 0, title_agent: 2 }), undefined),
-    { title: "Periodic retitle from last week", titleAuto: true, titleLocked: false, aiTitle: "Periodic retitle from last week" },
+    { title: "Periodic retitle from last week", titleAuto: true, titleLocked: false, aiTitle: "Periodic retitle from last week", titleNamed: true },
   )
   assert.deepEqual(
     resolveSessionTitle(row({ title: "Legacy human name", title_auto: 0, title_locked: undefined, title_agent: 0, status: "Waiting on CI" }), tele({ aiTitle: "guess" })),
-    { title: "Legacy human name", titleAuto: false, titleLocked: true, aiTitle: undefined },
+    { title: "Legacy human name", titleAuto: false, titleLocked: true, aiTitle: undefined, titleNamed: true },
   )
 })
 

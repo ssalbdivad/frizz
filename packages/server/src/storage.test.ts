@@ -678,7 +678,9 @@ test("a rename keeps the names the thread carried before; a dispatch guess and a
   s.upsertSession(row({ slug: "renamed", session_id: "sid", title: "i keep marking threads as done…", title_auto: 1 }))
   assert.equal(s.setMintedTitle("renamed", "sid", "Done persistence"), true)
   assert.equal(s.getSession("renamed")?.former_titles ?? null, null, "the prompt chop was a guess, not a name anyone used")
-  assert.equal(s.setAgentTitle("renamed", "Done reappears"), true)
+  assert.equal(s.setAgentTitle("renamed", "Done reappears"), false, "a named thread is never renamed by its worker")
+  assert.equal(s.getSession("renamed")?.former_titles ?? null, null)
+  s.setTitle("renamed", "Done reappears")
   assert.deepEqual(JSON.parse(s.getSession("renamed")!.former_titles!), ["Done persistence"])
   s.setTitle("renamed", "Done reappears")
   assert.deepEqual(JSON.parse(s.getSession("renamed")!.former_titles!), ["Done persistence"], "rewriting the same text is no rename")
@@ -743,7 +745,7 @@ test("automatic title CAS persists provenance and rejects manual, native-session
   s.close()
 })
 
-test("a dispatch title a CALLER hard-coded is displayable but replaceable; only a human's locks", () => {
+test("a dispatch title a CALLER hard-coded is a final name no machine title replaces; only a human's locks", () => {
   const s = store()
   // What the GitHub batch and `mcp__frizz__spawn_thread` write: a real-looking name (title_auto 0, so the
   // UI never hides it behind a placeholder) that no human chose (title_locked 0).
@@ -759,10 +761,12 @@ test("a dispatch title a CALLER hard-coded is displayable but replaceable; only 
   s.setAgentSession("gh-thread", "codex-native")
   const expected = { sessionId: "frizz-session", nativeSessionId: "codex-native", runtimeGeneration: 0 }
 
-  assert.equal(s.setAutoTitleIfCurrent("gh-thread", "Cache key collides on normalized ids", expected), true)
-  assert.equal(s.getSession("gh-thread")?.title, "Cache key collides on normalized ids")
-  assert.equal(s.getSession("gh-thread")?.title_auto, 0, "the row still holds a real name, not a guess")
-  assert.equal(s.getSession("gh-thread")?.title_locked, 0, "and stays open to a better native title")
+  // It is the thread's name — its `@handle` on the board — so no machine title lands over it
+  // (thread-names.ts: a name never changes once shown).
+  assert.equal(s.setAutoTitleIfCurrent("gh-thread", "Cache key collides on normalized ids", expected), false)
+  assert.equal(s.setAgentTitle("gh-thread", "Cache keys"), false)
+  assert.equal(s.getSession("gh-thread")?.title, "Investigate acme/app#391")
+  assert.equal(s.getSession("gh-thread")?.title_locked, 0, "unlocked: no human chose it")
 
   // The human renaming it is the ONLY thing that locks — and it locks against every later signal.
   s.setTitle("gh-thread", "Resolver cache bug")
@@ -1419,23 +1423,32 @@ test("pr_watch.kind: an issue watcher stores its kind, an older caller means pul
   }
 })
 
-test("the dispatch-time mint lands once, on its own session, never over a human's or a worker's name", () => {
+test("the dispatch-time mint lands once, on its own session, never over a human's, a caller's or a worker's name", () => {
   const s = store()
   s.upsertSession(row({ slug: "minted", session_id: "sid", title: "fix the shell budget default so…", title_auto: 1 }))
   assert.equal(s.setMintedTitle("minted", "other-session", "Shell budgets"), false, "a mint read from a replaced session never lands")
   assert.equal(s.setMintedTitle("minted", "sid", "Shell budgets"), true)
   assert.equal(s.getSession("minted")?.title, "Shell budgets")
   assert.equal(s.getSession("minted")?.title_agent, 1, "persisted, so it outranks the transcript's live title")
-  assert.equal(s.getSession("minted")?.title_worker_renamed, 0, "a mint does not spend the worker's rename")
   assert.equal(s.setMintedTitle("minted", "sid", "Budget defaults"), false, "the first name to land stands")
-  // The worker's one rename still lands over the mint…
-  assert.equal(s.setAgentTitle("minted", "Shell budget"), true)
+  // A name is final once it exists: the worker cannot rename over the mint…
+  assert.equal(s.setAgentTitle("minted", "Shell budget"), false)
+  assert.equal(s.getSession("minted")?.title, "Shell budgets")
+  // …nor over a caller's dispatch title, and neither can a mint or the Codex marker…
+  s.upsertSession(row({ slug: "spun", session_id: "sid-spun", title: "Cache review", title_auto: 0, title_locked: 0 }))
+  assert.equal(s.setAgentTitle("spun", "Cache stores"), false)
+  assert.equal(s.setMintedTitle("spun", "sid-spun", "Cache stores"), false)
+  assert.equal(s.getSession("spun")?.title, "Cache review")
+  // …while a thread nothing named yet takes the worker's name…
+  s.upsertSession(row({ slug: "bare", session_id: "sid-bare", title: "chop…", title_auto: 1 }))
+  assert.equal(s.setAgentTitle("bare", "Bare name"), true)
+  assert.equal(s.setMintedTitle("bare", "sid-bare", "Late mint"), false, "and a late mint never renames it")
   // …and a human's rename locks against everything after it.
   s.setTitle("minted", "Budgets")
   assert.equal(sessionTitleLocked(s.getSession("minted")!), true)
   s.upsertSession(row({ slug: "minted", session_id: "sid2", title: "chop", title_auto: 1 }))
   const fresh = s.getSession("minted")!
-  assert.equal(fresh.title_worker_renamed, 0, "a re-dispatch gets its own rename")
+  assert.equal(fresh.title_worker_renamed, 0, "a re-dispatch is unnamed again")
   assert.equal(fresh.status ?? null, null, "and no inherited status")
   s.close()
 })

@@ -29,7 +29,7 @@ import { canRetry } from "./lib/status.ts"
 // Shared listing logic: the queue definition (needsAction), the sidebar's status-keyed sections
 // (sectionThreads), and the interaction-recency ordering both surfaces use.
 
-type TitleFields = Pick<ThreadView, "title" | "aiTitle" | "id" | "titleAuto" | "titleLocked" | "spawnedAt" | "backend" | "runtime" | "foreign">
+type TitleFields = Pick<ThreadView, "title" | "aiTitle" | "id" | "titleAuto" | "titleLocked" | "titleNamed" | "spawnedAt" | "backend" | "runtime" | "foreign">
 
 // The title to SHOW for a thread: its HANDLE. A real name ("Shell budgets") renders as the kebab-case
 // handle it makes (`shell-budgets`, @frizz/shared thread-handle.ts), so what the operator reads on the
@@ -123,7 +123,9 @@ function titleSource(t: TitleFields): { text: string; name: boolean } {
   if (titleIsProvisional(t)) return { text: SPINNING_UP_TITLE, name: false }
   // The worker's OWN name for its task wins over whatever the row was seeded with — unless a human has
   // claimed the name, in which case a stale/slug-shaped backend record must never displace it.
-  if (t.aiTitle?.trim() && !titleIsHumanOwned(t)) return { text: readableMachineTitle(t.aiTitle), name: true }
+  // Only a persisted name is a NAME (shown as a handle): with `titleNamed` false, aiTitle is Claude's live
+  // session title, which moves — and a handle never changes once shown — so it reads as plain text.
+  if (t.aiTitle?.trim() && !titleIsHumanOwned(t)) return { text: readableMachineTitle(t.aiTitle), name: t.titleNamed !== false }
   // Codex's TUI has no native automatic naming event. Frizz asks the first finalized response for a
   // hidden title signal; omission or malformed syntax must stay neutral rather than exposing either
   // the stored legacy prompt heuristic or a provider-recorded raw initial prompt.
@@ -137,13 +139,13 @@ function titleSource(t: TitleFields): { text: string; name: boolean } {
   // name rather than presenting the session identifier as though rename succeeded. Legacy rows
   // (unknown titleAuto) retain the historical id fallback.
   if (t.title.trim() && !(t.titleAuto === true && t.title.trim() === t.id)) {
-    return { text: t.titleAuto === true ? readableMachineTitle(t.title) : t.title.trim(), name: true }
+    return { text: t.titleAuto === true ? readableMachineTitle(t.title) : t.title.trim(), name: t.titleNamed !== false }
   }
   return { text: t.titleAuto === true ? UNTITLED_THREAD_TITLE : t.id, name: false }
 }
 
-// Has a HUMAN claimed this thread's name? Only then does the stored title outrank the backend's own
-// aiTitle. Mirrors the server's `sessionTitleLocked` exactly, including its fallback: a row with no
+// Has a HUMAN claimed this thread's name? The server withholds aiTitle from any NAMED row (titleNamed),
+// so this now only guards a legacy/slim row that carries no `titleNamed`. Mirrors the server's `sessionTitleLocked` exactly, including its fallback: a row with no
 // `titleLocked` predates the split, so any non-guessed title there is read as the human's. That
 // fallback is what keeps a legacy rename safe, and what makes `titleLocked: false` — written only by a
 // dispatch whose title a CALLER hard-coded — the sole way a real-looking title stays replaceable.
@@ -182,8 +184,10 @@ const CODEX_TITLE_SIGNAL_GRACE_MS = 15_000
 // pinned id) loses the transcript and never sees an aiTitle — without the bound the row would stick on
 // "Spinning up…" forever (maintainer 2026-07-10). After the window it falls back to the dispatch title.
 // Root cause of the lost transcript is tracked separately ([[session-transcript-drift]]).
-export function titleIsProvisional(t: Pick<ThreadView, "aiTitle" | "titleAuto" | "spawnedAt" | "backend" | "runtime">): boolean {
-  if (!t.titleAuto || t.aiTitle) return false
+export function titleIsProvisional(t: Pick<ThreadView, "aiTitle" | "titleAuto" | "titleNamed" | "spawnedAt" | "backend" | "runtime">): boolean {
+  // A live session title that is not a name yet does not end the placeholder: the minted name is seconds
+  // behind it, and showing the session title first would put one text on the card and then another.
+  if (!t.titleAuto || (t.titleNamed ?? Boolean(t.aiTitle))) return false
   // Codex now emits its title in the first assistant commentary, normally a couple seconds after the
   // rollout starts. Keep the neutral startup label through that short, bounded title-signal grace so
   // the row never flashes "Untitled thread" between task_started and the comment. A noncompliant or

@@ -35,6 +35,7 @@ import { createQueueClock } from "./queue-clock.ts"
 import { adoptionRuntimeBinding } from "./adoption-recovery.ts"
 import { limitPauseIsStale, textResetInstant } from "./backend/usage-limit.ts"
 import { getSettings } from "./settings.ts"
+import { rowThreadName } from "./thread-names.ts"
 
 // The read model is provenance-bound to the durable session registry. A session row exists only after
 // Frizz dispatches or explicitly adopts a thread, so unrelated legacy `.frizz/*.md` files and raw
@@ -1582,18 +1583,25 @@ export function resolveLimitPause(
 export function resolveSessionTitle(
   row: Pick<SessionRow, "title" | "title_auto" | "title_locked" | "title_agent">,
   tele: Pick<SessionTelemetry, "aiTitle"> | undefined,
-): Pick<ThreadView, "title" | "titleAuto" | "titleLocked" | "aiTitle"> {
+): Pick<ThreadView, "title" | "titleAuto" | "titleLocked" | "aiTitle" | "titleNamed"> {
   const locked = sessionTitleLocked(row)
   // Any non-zero value: rows written between 2026-09-29 14:0x and this line's revert carry
   // `title_agent = 2` (the retired setPeriodicTitle), and their titles are still the persisted ones. The
   // name Frizz MINTS at dispatch (thread-names.ts) persists the same way, so it too outranks the
   // transcript's live title the moment it lands.
   const persisted = row.title_agent ? row.title?.trim() || undefined : undefined
+  // A CALLER's dispatch title (a spinoff's, a `spawn_thread` title: title_auto 0, unlocked) is a name too,
+  // and the live title never outranks a name — it used to, and a spinoff dispatched as "Cache review"
+  // then read `@pluggable-cache-store-changes-evaluation` for the rest of its life (thread-names.ts).
+  const named = rowThreadName(row) !== undefined
   return {
     title: row.title ?? "",
     titleAuto: row.title_auto === 1,
     titleLocked: locked,
-    aiTitle: locked ? undefined : (persisted ?? tele?.aiTitle),
+    // With `titleNamed` false this is the live session title, which the display shows as TEXT, never as
+    // a handle: it moves, and a handle may not.
+    aiTitle: locked ? undefined : (persisted ?? (named ? undefined : tele?.aiTitle)),
+    titleNamed: named,
   }
 }
 

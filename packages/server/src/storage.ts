@@ -40,8 +40,8 @@ export interface SessionRow {
   // 0 | 1 — a HUMAN named this thread (explicit rename, native /rename, or an adopted `.frizz/<slug>.md`
   // heading), so no backend auto-title may ever replace it. A title HARD-CODED by a dispatch CALLER is
   // NOT this: `Investigate acme/app#391` from the GitHub batch, or a parent agent's guess through
-  // `mcp__frizz__spawn_thread`, is shown as a real name (title_auto = 0) yet stays replaceable, because
-  // the worker's own title for the task is nearly always the more informative one. The human-facing
+  // `mcp__frizz__spawn_thread`, is shown as a real name (title_auto = 0) and is FINAL like any other name
+  // (thread-names.ts) — unlocked only in that a human rename still records as the human's. The human-facing
   // new-thread composer has no title field at all, so a dispatch title never means "a human typed this".
   // INVARIANT, relied on by the idempotent boot repair: title_locked = 1 ⇒ title_auto = 0.
   // Optional in the TS shape so the many pre-existing row literals keep their old semantics — absent
@@ -60,9 +60,10 @@ export interface SessionRow {
   // is a persisted machine name that outranks the transcript's live title, and the dispatch-time writers
   // (the mint, the Codex marker CAS) land only while it is still 0 — the first name to land stands.
   title_agent?: number
-  // 0 | 1 — the worker has spent its ONE rename (`mcp__frizz__title`). A name is stable (maintainer
-  // 2026-09-29): minted at dispatch, corrected once by the worker after orienting, and after that nothing
-  // automatic changes it — so a second call is refused, and a re-dispatch over the slug clears this.
+  // 0 | 1 — the worker has named its thread (`mcp__frizz__title`). Since 2026-09-30 it can only do that
+  // for a thread that has NO name yet (a mint that failed, no model wired): a name is its `@handle`, and
+  // once the board has shown one it never changes except by a human rename (thread-names.ts). A
+  // re-dispatch over the slug clears this.
   title_worker_renamed?: number
   // JSON array of the names `title` held before its current one, oldest first — appended by the
   // session_former_titles trigger (ensureStorageSchema), never written by hand. NULL until a rename.
@@ -996,7 +997,7 @@ export interface Storage {
   // claimed the name, because that is a legitimate answer the worker should be told rather than an
   // error it will retry. Never touches `title_auto`: which machine wrote the current text does not
   // change the row's display provenance, and leaving it set is what keeps a human rename outranking.
-  // ONCE: it stamps `title_worker_renamed`, and a second call is refused the same way.
+  // Refused the same way when the thread already has a name: this only names a thread nothing else could.
   setAgentTitle(slug: string, title: string): boolean
   // Persist the name Frizz MINTED at dispatch (thread-names.ts). Lands only on the same session, only
   // while no human has claimed the name and no machine name is persisted yet — the first name stands.
@@ -1222,7 +1223,7 @@ export const STORAGE_SCHEMA = `
       -- Title provenance for the CURRENT text: non-zero = a persisted machine name (the dispatch mint,
       -- the Codex marker, the worker's own title call).
       title_agent INTEGER NOT NULL DEFAULT 0,
-      -- 1 once the worker has spent its one rename; also in the ALTER list below.
+      -- 1 once the worker has named its (unnamed) thread; also in the ALTER list below.
       title_worker_renamed INTEGER NOT NULL DEFAULT 0,
       -- The live status line (periodic-status.ts), never the name; also in the ALTER list below.
       status TEXT,
@@ -1753,7 +1754,7 @@ export function createStorage(source: string | Database, projectId: string): Sto
       -- re-dispatch over a slug whose worker had already named itself would otherwise keep reading as
       -- agent-written while displaying the fresh dispatch chop. The next title signal sets it again.
       title_agent = 0,
-      -- Same reasoning: a fresh session gets its own one rename and has no status yet.
+      -- Same reasoning: a fresh session is unnamed again and has no status yet.
       title_worker_renamed = 0,
       former_titles = NULL,
       status = NULL,
@@ -2429,9 +2430,10 @@ export function createStorage(source: string | Database, projectId: string): Sto
   const titleCasStmt = scope.prepare(
     "UPDATE session SET title = ?, title_auto = 0, title_locked = 1, title_agent = 0 WHERE project_id = @project_id AND slug = ? AND session_id = ? AND title IS ? AND title_auto = ?",
   )
-  // Gated on the LOCK, not on title_auto: a caller-supplied dispatch title (`Investigate acme/app#391`,
-  // a parent agent's guess) is unlocked, so the worker's own title supersedes it. title_auto is left
-  // alone — the row's DISPLAY provenance is unchanged by which machine produced the current text.
+  // Gated on `title_auto = 1` as well as the lock: a caller-supplied dispatch title (a spinoff's name, a
+  // parent's `spawn_thread` title) is already a NAME the board shows as a handle, and a handle never
+  // changes once shown (maintainer 2026-09-30: "once someone sees the id, it cannot change"). title_auto
+  // is left alone — the row's DISPLAY provenance is unchanged by which machine produced the current text.
   // `title_agent` IS moved, because it describes the text this statement is writing: the worker's own
   // name. It is what lets the display trust a persisted codex title once the live telemetry is gone.
   //
@@ -2441,14 +2443,14 @@ export function createStorage(source: string | Database, projectId: string): Sto
   const autoTitleCasStmt = scope.prepare(`
     UPDATE session SET title = ?, title_agent = 1
     WHERE project_id = @project_id AND slug = ? AND session_id = ? AND agent_session_id IS ?
-      AND runtime_generation = ? AND title_locked = 0 AND title_agent = 0 AND title_worker_renamed = 0
+      AND runtime_generation = ? AND title_locked = 0 AND title_auto = 1 AND title_agent = 0 AND title_worker_renamed = 0
   `)
   // Frizz's dispatch-time NAME (thread-names.ts mint). Same gate as the marker CAS above, keyed on the
   // session id so a mint that finishes after a re-dispatch over the slug cannot name the new session.
   const mintedTitleStmt = scope.prepare(`
     UPDATE session SET title = ?, title_agent = 1
     WHERE project_id = @project_id AND slug = ? AND session_id = ?
-      AND title_locked = 0 AND title_agent = 0 AND title_worker_renamed = 0
+      AND title_locked = 0 AND title_auto = 1 AND title_agent = 0 AND title_worker_renamed = 0
   `)
   // The live status line (periodic-status.ts). Independent of every title flag: a human-locked name
   // still gets a status, because the status is not the name.
@@ -2462,11 +2464,12 @@ export function createStorage(source: string | Database, projectId: string): Sto
   // knows the slug frizz stamped into its env and nothing about the session id underneath it; that env
   // survives every resume, while the session id does not.
   //
-  // ONCE per session: it sets `title_worker_renamed`, and a row that already has it is refused, because
-  // after the worker's one correction the name is stable (thread-names.ts).
+  // Only for a thread with NO name yet — the same gate as the mint and the marker CAS: a row that already
+  // carries one (minted, a caller's, the worker's own) is refused, because that name has been on the board
+  // as the thread's `@handle` and a handle never changes once shown (thread-names.ts).
   const agentTitleStmt = scope.prepare(`
     UPDATE session SET title = ?, title_agent = 1, title_worker_renamed = 1
-    WHERE project_id = @project_id AND slug = ? AND title_locked = 0 AND title_worker_renamed = 0
+    WHERE project_id = @project_id AND slug = ? AND title_locked = 0 AND title_auto = 1 AND title_agent = 0 AND title_worker_renamed = 0
   `)
   const delSession = scope.prepare("DELETE FROM session WHERE project_id = @project_id AND slug = ?")
   const putRetiredOp = scope.prepare("INSERT OR IGNORE INTO retired_op (project_id, slug, session_id, op_id, retired_at) VALUES (@project_id, ?, ?, ?, ?)")

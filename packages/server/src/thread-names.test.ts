@@ -11,6 +11,7 @@ import {
   createThreadNamer,
   distinguishingName,
   foldThreadName,
+  nameHolder,
   namesForPrompt,
   namingRequest,
   projectThreadNames,
@@ -38,11 +39,10 @@ function named(s: Storage, slug: string, title: string, over: Partial<SessionRow
 }
 
 /** A namer whose model is a script: each call records its request and answers the next line. */
-function scripted(storage: Storage, answers: string[], aiTitles: Record<string, string> = {}) {
+function scripted(storage: Storage, answers: string[]) {
   const asked: ClaudeOneShotRequest[] = []
   const namer = createThreadNamer({
     storage,
-    aiTitleOf: (slug) => aiTitles[slug],
     complete: async (request) => {
       asked.push(request)
       const next = answers.shift()
@@ -63,12 +63,17 @@ test("names compare with case, punctuation and spacing folded away", () => {
   assert.equal(foldThreadName("—"), "", "a name with no letters or digits is no name")
 })
 
-test("a row's name is what the board shows it under — never the dispatch chop", () => {
-  assert.equal(rowThreadName(row("a"), undefined), undefined, "a bare chop is a placeholder, not a name")
-  assert.equal(rowThreadName(row("a"), "Claude's own title"), "Claude's own title")
-  assert.equal(rowThreadName(row("a", { title: "Shell budgets", title_agent: 1 }), "Claude's own title"), "Shell budgets", "a persisted name outranks the live title")
-  assert.equal(rowThreadName(row("a", { title: "Named by hand", title_auto: 0, title_locked: 1 }), "Claude's"), "Named by hand")
-  assert.equal(rowThreadName(row("a", { title: "Investigate acme/app#391", title_auto: 0 }), undefined), "Investigate acme/app#391")
+test("a row's name is its PERSISTED name — never the dispatch chop, never the live session title", () => {
+  assert.equal(rowThreadName(row("a")), undefined, "a bare chop is a placeholder, not a name")
+  assert.equal(rowThreadName(row("a", { title: "Shell budgets", title_agent: 1 })), "Shell budgets")
+  assert.equal(rowThreadName(row("a", { title: "Named by hand", title_auto: 0, title_locked: 1 })), "Named by hand")
+  assert.equal(rowThreadName(row("a", { title: "Cache review", title_auto: 0 })), "Cache review", "a caller's dispatch title is a name")
+})
+
+test("an unnamed row is still listed, holding no name, so its slug addresses it", () => {
+  const threads = projectThreadNames([row("unnamed"), row("named", { title: "Shell budgets", title_agent: 1 })])
+  assert.deepEqual(threads.map((t) => [t.slug, t.name]), [["unnamed", ""], ["named", "Shell budgets"]])
+  assert.equal(nameHolder("", threads), undefined)
 })
 
 test("the prompt lists the open names first, then recently done ones, capped and deduplicated", () => {
@@ -78,7 +83,7 @@ test("the prompt lists the open names first, then recently done ones, capped and
     row("done", { title: "Done one", title_agent: 1, state: "archived" }),
     row("dupe", { title: "new-open", title_agent: 1, spawned_at: "2026-09-02T00:00:00Z" }),
     row("self", { title: "Myself", title_agent: 1 }),
-  ], () => undefined)
+  ])
   assert.deepEqual(namesForPrompt(threads, "self"), ["New open", "Old open", "Done one"])
 })
 
@@ -199,7 +204,6 @@ test("a mint that collides at the WRITE falls back rather than duplicating, and 
   const gate = new Promise<void>((resolve) => (release = resolve))
   const namer = createThreadNamer({
     storage: s,
-    aiTitleOf: () => undefined,
     complete: async () => { await gate; return "Shell budgets" },
   })
   const pending = namer.mint("racer", "sid-racer", "fix the shell budget default")
