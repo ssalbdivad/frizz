@@ -187,7 +187,7 @@ import {
 } from "./transcript.ts"
 import { liftCheckout, resolveThreadWorkingDir, terminalFolder } from "./thread-cwd.ts"
 import { openExternalUrl } from "./open-external.ts"
-import { openLocalFile, readLocalMarkdown, resolveOpenableFile, readLocalTextFile } from "./local-file.ts"
+import { openLocalFile, openLocalFolder, readLocalMarkdown, resolveOpenableFile, readLocalTextFile } from "./local-file.ts"
 import { openableFileRoots, workDirOf } from "./project.ts"
 import { resolveThreadLink, threadLinkView } from "./thread-links.ts"
 import { ghInstalled, ghAuthed, ghRepo, gitGithubRemote, listItems, hydrateIssue, hydratePr, renderGithubPrompt, effectiveTemplate, DEFAULT_GITHUB_PROMPT } from "./github.ts"
@@ -3987,6 +3987,18 @@ export function createRouter(ctx: AppContext) {
       handler: async ({ input }) => readLocalTextFile(input.path, openRoots),
     }),
 
+    }),
+
+    // "Open in editor": the thread's working folder, in the External app when that is an editor and
+    // `$EDITOR` otherwise. The folder is the one a terminal on the thread starts in, resolved here —
+    // the page names only the thread, so this can open no path the server did not choose.
+    openThreadFolder: mutation({
+      input: SlugInput,
+      output: z.object({ path: z.string() }),
+      handler: async ({ input }) => {
+        if (!ctx.storage.getSession(input.slug)) throw new Error(`no session registered for ${input.slug}`)
+        return openLocalFolder(threadWorkingDir(input.slug).dir, ctx.getSettings().localFileOpener ?? "system")
+      },
     // Batch-classify path REFERENCES (as they appear in inline code) → their canonical openable path, or
     // null when a candidate doesn't resolve to a real file under the openable roots. The client renders
     // resolved ones as clickable inline code (opened via openLocalFile). Pure read: it only realpath-

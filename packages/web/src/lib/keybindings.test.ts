@@ -31,6 +31,7 @@ test("the default keys are the ones the sheet promises", () => {
     [key({ key: "r", code: "KeyR" }), "thread.reply"],
     [key({ key: "c", code: "KeyC" }), "app.newThread"],
     [key({ key: "t", code: "KeyT" }), "thread.terminal"],
+    [key({ key: "e", code: "KeyE" }), "thread.editor"],
     [key({ key: "n", code: "KeyN" }), "app.newProject"],
     [key({ key: "o", code: "KeyO" }), "thread.open"],
     [key({ key: "f", code: "KeyF" }), "thread.fullscreen"],

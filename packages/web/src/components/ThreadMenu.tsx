@@ -1,7 +1,8 @@
 import { useRef } from "react"
 import { useQueryClient } from "@tanstack/react-query"
-import { Copy, Ellipsis, FileText, Plug, RefreshCw, SquareTerminal } from "lucide-react"
+import { Code, Copy, Ellipsis, FileText, Plug, RefreshCw, SquareTerminal } from "lucide-react"
 import type { ThreadView } from "@frizz/shared"
+import type { Api } from "../api/contract.ts"
 import { captureFullscreenEnterAnchor, rememberFullscreenOrigin } from "../lib/fullscreenHandoff.ts"
 import { armFullscreenMorph } from "../lib/fullscreenMorph.ts"
 import { spaNavigate } from "../lib/router.ts"
@@ -16,6 +17,7 @@ import { Tooltip } from "./Tooltip.tsx"
 import { useTerminalCommandMenuItem } from "./ExternalTerminalCommand.tsx"
 import { useDevFrizzBuild } from "../lib/devBuild.ts"
 import { restartWorker } from "../lib/restartWorker.ts"
+import { showToast } from "../store.ts"
 import { offersReloadPlugins, offersRestartWorker, reloadThreadPlugins } from "../lib/workerMaintenance.ts"
 
 // openFullscreen, the one navigation into a thread's /full page, shared by the ⤢ door (ExpandThreadLink.tsx)
@@ -88,6 +90,14 @@ export function ThreadTerminalButton({ slug }: { slug: string }) {
   )
 }
 
+/** Open the thread's working folder in the External app (or `$EDITOR`) — the step `t` then `code .` took.
+ *  The server resolves the folder, the same one a terminal on the thread starts in. */
+function openInEditor(api: Api, slug: string): void {
+  api.openThreadFolder({ slug }).catch((error: unknown) => {
+    showToast(`Could not open an editor: ${(error instanceof Error ? error.message : String(error)).slice(0, 80)}`)
+  })
+}
+
 // THE HEADER'S ⋯ MENU: the rarer verbs. It carried "Open fullscreen" and owned `f` until 2026-09-29, when
 // the ⤢ beside it came back as an icon (ExpandThreadLink) and took the key: one door, not two. Spinoff
 // led it for an evening, until the maintainer wanted it one press away on every card and header
@@ -103,6 +113,9 @@ export function ThreadMenu({ thread, onDoc, restart = true, className = HEADER_I
   const devBuild = useDevFrizzBuild()
   const ownSession = thread.kind === "session" && thread.foreign !== true
   const terminalCommand = useTerminalCommandMenuItem(slug)
+  // `e` opens the editor without opening this menu: the trigger is the surface's one always-rendered
+  // anchor for it (an item exists only while the menu is open), so it carries the command.
+  useCommandHandler(trigger, () => { if (ownSession) openInEditor(api, slug) })
   return (
     <Menu onOpenChange={(open) => { if (open && ownSession) terminalCommand.prefetch() }}>
       <MenuTrigger asChild>
@@ -112,6 +125,7 @@ export function ThreadMenu({ thread, onDoc, restart = true, className = HEADER_I
           aria-label="More"
           title="More"
           data-thread-menu={slug}
+          data-command="editor"
           // The strip's shared focus behaviour: a click here must not take the keyboard away from the
           // composer below it.
           onMouseDown={(event) => event.preventDefault()}
@@ -124,6 +138,11 @@ export function ThreadMenu({ thread, onDoc, restart = true, className = HEADER_I
         {onDoc && (
           <MenuItem value="doc" onSelect={onDoc} icon={<FileText size={12} aria-hidden />}>
             Frizz document
+          </MenuItem>
+        )}
+        {ownSession && (
+          <MenuItem value="open-in-editor" onSelect={() => openInEditor(api, slug)} icon={<Code size={12} aria-hidden />}>
+            Open in editor
           </MenuItem>
         )}
         {ownSession && (

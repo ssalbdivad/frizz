@@ -313,3 +313,42 @@ export async function openLocalFile(
   await awaitOpenerStart(child, spec.command)
   return { action: "opened", path }
 }
+
+/**
+ * Which editor a FOLDER opens in — a thread's working directory, the "Open in editor" action. The
+ * External app setting when it names an editor; otherwise `$VISUAL`/`$EDITOR`, because the other
+ * settings mean nothing for a folder (the system opener and Reveal hand it to a file manager, Copy
+ * path is not an editor). Throws a reason for the toast when neither gives an editor.
+ */
+export function folderEditor(opener: LocalFileOpener, env: NodeJS.ProcessEnv): "cursor" | "vscode" | "editor" {
+  if (opener === "cursor" || opener === "vscode" || opener === "editor") return opener
+  try {
+    envEditorCommand(env)
+    return "editor"
+  } catch {
+    throw new Error("Set External app to an editor in Settings")
+  }
+}
+
+/**
+ * Open a directory the SERVER resolved (never a path from the page) in an editor. Every editor
+ * `localFileOpenCommand` knows takes a folder as its argument — `code <dir>`, `cursor <dir>`,
+ * `open -a … <dir>`, `subl <dir>`, `zed <dir>` — so the argv is the file one with the folder in its
+ * place.
+ */
+export async function openLocalFolder(
+  dir: string,
+  opener: LocalFileOpener,
+  options: { spawn?: LocalFileSpawn } & OpenerCommandOptions = {},
+): Promise<{ path: string }> {
+  let isDir = false
+  try { isDir = statSync(dir).isDirectory() } catch {}
+  if (!isDir) throw new Error(`${dir} is not a folder`)
+  const spec = localFileOpenCommand(dir, folderEditor(opener, options.env ?? process.env), options)
+  const child = (options.spawn ?? defaultSpawn)(spec.command, spec.args, {
+    detached: true, stdio: "ignore", shell: false, windowsHide: true,
+    ...(spec.verbatim ? { windowsVerbatimArguments: true } : {}),
+  })
+  await awaitOpenerStart(child, spec.command)
+  return { path: dir }
+}

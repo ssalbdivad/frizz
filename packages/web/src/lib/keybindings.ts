@@ -51,6 +51,7 @@ export type ActionId =
   | "thread.fullscreen"
   | "thread.open"
   | "thread.terminal"
+  | "thread.editor"
   | "thread.spinoff"
   | "app.newThread"
   | "app.newProject"
@@ -83,6 +84,8 @@ export const ACTIONS: readonly ActionDef[] = [
   // A terminal belongs to a thread (ThreadTerminals.tsx), so `t` opens one on the thread being read. It
   // was "New terminal thread", from anywhere, until the Terminal tab went on 2026-09-29.
   { id: "thread.terminal", label: "Open terminal", group: "queue", defaultChord: "t" },
+  // The same folder in the External app — the step `t` then `code .` took (ThreadMenu.tsx openInEditor).
+  { id: "thread.editor", label: "Open in editor", group: "queue", defaultChord: "e" },
   // → sends the thread off to the side, the way its dialog's footer reads "from → into". Not `s`, which
   // is Snooze, and not ⇧S, which the rule below would have given it (maintainer 2026-09-30: "i dont like
   // shift"). Free on a card: ↑/↓ scroll it, and the browser claims → only with a modifier held.

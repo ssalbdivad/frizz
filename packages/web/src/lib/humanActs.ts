@@ -14,7 +14,7 @@
 const ACT_MS = 30_000
 
 // Calls that change nothing the queue reads: a card read, a link opened.
-const PASSIVE = new Set(["markRead", "threadSeen", "openExternal", "openLocalFile"])
+const PASSIVE = new Set(["markRead", "threadSeen", "openExternal", "openLocalFile", "openThreadFolder"])
 
 const acted = new Map<string, number>()
 

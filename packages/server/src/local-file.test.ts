@@ -11,6 +11,7 @@ import {
   MARKDOWN_READ_LIMIT,
   localFileOpenCommand,
   openLocalFile,
+  openLocalFolder,
   type LocalFileSpawn,
   readLocalMarkdown,
   readLocalTextFile,
@@ -143,6 +144,24 @@ test("an opener that cannot start is the RPC's error, not an unhandled `error` e
     openLocalFile(file, "cursor", [root], { platform: "linux", spawn: fakeSpawn([], eacces) }),
     /^Error: could not start cursor: spawn cursor EACCES$/u,
   )
+})
+
+test("Open in editor: a folder opens in the External app's editor, else $EDITOR, else a reason", async (t) => {
+  const dir = realpathSync(mkdtempSync(join(tmpdir(), "frizz-local-folder-")))
+  t.after(() => rmSync(dir, { recursive: true, force: true }))
+  const open = async (opener: LocalFileOpener, env: NodeJS.ProcessEnv) => {
+    const calls: SpawnCall[] = []
+    await openLocalFolder(dir, opener, { platform: "linux", env, spawn: fakeSpawn(calls) })
+    return [calls[0]!.command, ...calls[0]!.args]
+  }
+  assert.deepEqual(await open("vscode", {}), ["code", dir])
+  assert.deepEqual(await open("cursor", { EDITOR: "zed" }), ["cursor", dir], "the setting outranks $EDITOR")
+  // System default, Reveal and Copy path would hand a folder to a file manager or to nothing.
+  for (const opener of ["system", "finder", "copy"] as const) {
+    assert.deepEqual(await open(opener, { VISUAL: "nvim", EDITOR: "subl -n" }), ["subl", "-n", dir], opener)
+    await assert.rejects(open(opener, { EDITOR: "vim" }), /^Error: Set External app to an editor in Settings$/u)
+  }
+  await assert.rejects(open("vscode", {}).then(() => openLocalFolder(join(dir, "gone"), "vscode", { spawn: fakeSpawn([]) })), /is not a folder/)
 })
 
 test("windows: explorer opens and reveals, an installed editor runs its exe, a missing one runs its shim through cmd.exe", () => {
