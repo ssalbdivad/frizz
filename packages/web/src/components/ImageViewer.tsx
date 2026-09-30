@@ -206,10 +206,10 @@ function ViewerContent({ path, index, count, project }: { path: string; index: n
       <SheetHeader
         title={name}
         subtitle={path}
-        // The file's name is what a phone's header has room for; its pixels are a desktop's detail.
-        // SheetHeader centres its title row, which put this 11px run's baseline 0.50px above the 13px
-        // name's (measured 2026-09-28, sans); 0.045em lowers it onto the name's baseline.
-        meta={readout ? <span className="shrink-0 translate-y-[0.045em] text-[11px] tabular-nums text-muted-60 max-sm:hidden">{readout}</span> : undefined}
+        // The file's name is what a phone's header has room for; its pixels are a desktop's detail. It sits
+        // on the name's baseline (SheetHeader aligns its runs by baseline; it centred them until 2026-09-30,
+        // when this run needed a measured 0.045em nudge to get there).
+        meta={readout ? <span className="shrink-0 text-[11px] tabular-nums text-muted-60 max-sm:hidden">{readout}</span> : undefined}
         actions={
           <>
             {count > 1 && <span className="shrink-0 text-[12px] tabular-nums text-muted">{index + 1} / {count}</span>}

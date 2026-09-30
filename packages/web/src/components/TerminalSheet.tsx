@@ -91,20 +91,34 @@ function NarrowGlyph({ icon: Icon, text }: { icon: typeof Copy; text: string }) 
 
 /** A terminal's state, its age while it runs, and (the agent's) what is left of its budget — the same
  *  reading in both drawers' headers, joined the way every reading in the app is. */
-export function StateReading({ state, age, budget, tone, attr }: { state: string; age?: string; budget?: string; tone?: "attention" | "danger"; attr: Record<string, string | undefined> }) {
+export function StateReading({ state, age, budget, tone, stopShown, attr }: {
+  state: string
+  age?: string
+  budget?: string
+  tone?: "attention" | "danger"
+  /** The header shows a Stop — which already says the terminal is running, so a narrow header drops the
+   *  word `running` and keeps the numbers. */
+  stopShown?: boolean
+  attr: Record<string, string | undefined>
+}) {
+  // THE READING NEVER BREAKS MID-WORD. It truncated as one run, so a narrow header drew `running · 34m left
+  // · 2…` — `2…` is not a duration — and `waiting for input…` with its age cut off. It is now a line of whole
+  // parts, one line tall and clipped (SheetHeader gives it up to 70% of its line): a part that does not fit
+  // wraps away WHOLE, the last first — the age, then the budget — and only the state word, alone, can end in
+  // an ellipsis. Under 28rem `running` goes when a Stop stands beside it (`stopShown`), as it said nothing the
+  // button did not, and the title had given its width to it.
+  const quietState = stopShown && state === "running"
+  const parts = [budget, age].filter((part): part is string => Boolean(part))
   return (
-    // THE READING KEEPS ITS WORDS; THE TITLE GIVES WAY. The reading is what the drawer was opened to learn
-    // — `exit 2`, `running · 31m left · 28m` — and the title is the row the human just clicked. When this
-    // gave way first (`shrink-[2]`), 420px drew `ex…` and `running ·…`, losing the one reading with a
-    // deadline. `shrink-0` alone is not safe either — it once left the title 0px wide beside two worded
-    // buttons — so the reading is capped at 70% of the line and truncates only past that; the header's
-    // actions fold to glyphs under 28rem, which is what leaves the title its 30% there. At 420px the agent
-    // line is 226px: `running · 42m left · 17m` needs 140 (60% clipped it by 5px), the title keeps 78.
-    <span {...attr} className="min-w-0 max-w-[70%] shrink-0 truncate whitespace-nowrap text-[11.5px] text-muted-60">
-      <span className={tone === "attention" ? "text-attention" : tone === "danger" ? "text-danger-soft" : undefined}>{state}</span>
+    <span {...attr} className="flex h-[1lh] min-w-0 flex-wrap items-baseline overflow-hidden whitespace-nowrap text-[11.5px] text-muted-60">
+      <span className={`min-w-0 truncate ${quietState ? "@max-[28rem]:hidden" : ""} ${tone === "attention" ? "text-attention" : tone === "danger" ? "text-danger-soft" : ""}`}>{state}</span>
       {/* The budget before the age, as the strip and the rail read the same shell: one order everywhere. */}
-      {budget ? ` · ${budget}` : ""}
-      {age ? ` · ${age}` : ""}
+      {parts.map((part, i) => (
+        <span key={i} data-reading-part className="shrink-0">
+          <span className={i === 0 && quietState ? "@max-[28rem]:hidden" : undefined}>{" · "}</span>
+          {part}
+        </span>
+      ))}
     </span>
   )
 }
@@ -196,7 +210,7 @@ function TerminalStateMeta({ terminal }: { terminal: ThreadTerminal }) {
   const now = useNowMs()
   const tone = terminal.awaitingInput ? "attention" : terminalFailed(terminal) ? "danger" : undefined
   const age = terminal.state === "running" ? liveAgeSince(terminal.startedAt, now) : undefined
-  return <StateReading state={terminalStateLabel(terminal)} age={age} tone={tone} attr={{ "data-terminal-state-reading": terminal.state }} />
+  return <StateReading state={terminalStateLabel(terminal)} age={age} tone={tone} stopShown={terminal.state === "running"} attr={{ "data-terminal-state-reading": terminal.state }} />
 }
 
 /**
@@ -303,6 +317,7 @@ function AgentTerminalSheet({ id, slug, shellId, label, startedAt, depth, widthD
                   state={stateWord}
                   age={running ? liveAgeSince(startedAt ?? row?.startedAt, now) : undefined}
                   budget={running ? shellBudgetLabel(row?.budgetEndsAt, now) : undefined}
+                  stopShown={running && meta?.stoppable === true}
                   attr={{ "data-agent-terminal-state": state }}
                 />
               ) : undefined}
