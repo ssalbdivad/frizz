@@ -28,6 +28,7 @@ import { decodeTailState, encodeTailState } from "./tail-cache.ts"
 import { createTranscriptFold, parseCodexTranscript, parseTranscript } from "./transcript.ts"
 import { resolveFrizzMcp } from "./dispatch.ts"
 import { projectAcpTranscript } from "./backend/acp-transcript.ts"
+import { handoffOf } from "./router.ts"
 
 // THE SPINOFF SIDE TURN (spinoff-side-turn.ts): a spinoff request that finds the worker at rest, answered
 // with exactly one spawn_thread and nothing after it, is kept out of the thread — the chat drops the
@@ -548,6 +549,11 @@ test("chat (ACP): the drawer drops the side turn its tailer fold hides", () => {
   const baseline = shape(acp(cxRested))
   // ACP's order: the words, then the bracket.
   const side = [cx.user(REQ), cx.start(), cx.spawn(), cx.started(), { kind: "assistant-text", at: ts(13), text: "Started.", final: true } as NormalizedEvent, cx.end()]
-  assert.deepEqual(shape(acp([...cxRested, ...side])), [...baseline, `user: ${REQ}`], "the request stays; the worker's side goes")
+  assert.deepEqual(shape(acp([...cxRested, ...side])), [...baseline, "user(spinoff): x"], "the request stays, as the spinoff card; the worker's side goes")
   assert.ok(shape(acp([...cxRested, ...side.slice(0, -1), cx.end({})])).some((s) => s.includes("Started.")), "a stopped one stays")
+  // Stamped like the Claude/Codex projection's request, so "the human's latest turn" steps over it: the
+  // handoff is still the one the thread rested on, not the raw request with an empty reply under it.
+  const handoff = handoffOf(acp([...cxRested, ...side]))
+  assert.equal(handoff.asked, "go")
+  assert.equal(handoff.text, "Done.")
 })

@@ -1,6 +1,6 @@
 import { appendFileSync, existsSync, mkdirSync, readFileSync } from "node:fs"
 import { dirname, join } from "node:path"
-import { parseSpinoffChildPrompt, spinoffIdOfSpawnCall, type TranscriptMessage, type TranscriptToolCall } from "@frizz/shared"
+import { parseSpinoffChildPrompt, parseSpinoffRequest, spinoffIdOfSpawnCall, type TranscriptMessage, type TranscriptToolCall } from "@frizz/shared"
 import type { AgentBackend, BuiltCommand, FoldState, NormalizedEvent, ResumeOpts, SpawnOpts } from "./types.ts"
 import { applyEvent } from "../tailer.ts"
 import { createSideTurnProjection, normalizedSideTurnSteps } from "../spinoff-side-turn.ts"
@@ -207,8 +207,14 @@ export function projectAcpTranscript(raw: string, identityPrefix = "acp"): Trans
         // projection does it (transcript.ts userProjection). The bridge records the human-side prompt
         // with no dispatch envelope, so the first user record IS the composed spinoffChildPrompt.
         const origin = !sawUser && !rec.synthetic ? parseSpinoffChildPrompt(text) : null
+        // …and a SPINOFF REQUEST is stamped the same way too (2026-09-30). Without the stamp the request
+        // read as the human's own latest turn to every reader that skips `m.spinoff` to find one —
+        // handoffOf anchored the All-queues card on the raw `<spinoff-request>` text with no reply after
+        // it (the side turn's reply is hidden), and operatorMessages described the thread by the spinoff.
+        const spinoff = !rec.synthetic ? parseSpinoffRequest(text) : null
         sawUser = true
-        out.push({ sourceId: `${identityPrefix}:${i}`, role: "user", text, ...(origin ? { displayText: origin.instructions, spinoffOrigin: origin } : {}), tools: [], parts: [], ...(rec.at ? { at: rec.at } : {}), ...(rec.synthetic ? { wake: true } : {}) })
+        const projected = spinoff ? { displayText: spinoff.instructions, spinoff } : origin ? { displayText: origin.instructions, spinoffOrigin: origin } : {}
+        out.push({ sourceId: `${identityPrefix}:${i}`, role: "user", text, ...projected, tools: [], parts: [], ...(rec.at ? { at: rec.at } : {}), ...(rec.synthetic ? { wake: true } : {}) })
         break
       }
       case "turn-start":
