@@ -11,6 +11,7 @@ import type { BoardManager } from "./board.ts"
 import type { ClaudeAgentBrokerBridge } from "./backend/claude-agent-broker-bridge.ts"
 import type { CodexAppServerBridge } from "./backend/codex-app-server.ts"
 import type { PaneIdentity } from "./adoption-recovery.ts"
+import type { ThreadNamer } from "./thread-names.ts"
 
 // TITLE PROVENANCE ACROSS EVERY TRANSPORT.
 //
@@ -27,7 +28,7 @@ import type { PaneIdentity } from "./adoption-recovery.ts"
 // So this asserts the invariant TRANSPORT BY TRANSPORT rather than through whichever one happens to
 // be the default — a fourth transport has to answer the same question before it can ship.
 
-function harness() {
+function harness(threadNamer?: Pick<ThreadNamer, "distinct" | "mint">) {
   const dir = mkdtempSync(join(tmpdir(), "frizz-title-lock-"))
   const storage = createStorage(join(dir, "ui.db"), "p")
   const project: Project = { dir, id: "title-lock", name: "t", label: "o/t", stateDir: dir, cwdSlug: cwdSlug(dir) }
@@ -56,6 +57,7 @@ function harness() {
     getSettings: () => ({ ...defaultSettings(), model: "sonnet", effort: "high" }),
     claudeBroker,
     codexAppServer,
+    ...(threadNamer ? { threadNamer: threadNamer as ThreadNamer } : {}),
   })
   return { dir, storage, dispatcher }
 }
@@ -100,4 +102,24 @@ test("a dispatch with NO caller title stores a guess that is likewise replaceabl
   const row = storage.getSession(slug)
   assert.equal(row?.title_auto, 1, "the prompt chop is a machine guess the UI must not present as a name")
   assert.equal(row?.title_locked, 0)
+})
+
+// A SPINOFF's prompt opens with Frizz's own "A spinoff of @parent…" line, so naming the child from the
+// prompt minted `a-spinoff-of-shell-budgets-thread-…` whenever the parent's worker gave no title or one
+// too long to type as a handle (2026-09-30). The router names it from the human's instructions and the
+// brief instead (`nameSource`), which feeds the fallback title, the slug, and the async mint alike.
+test("a dispatch NAMED from another text takes its fallback title, slug and mint from that text, not the prompt", async () => {
+  const minted: string[] = []
+  const { storage, dispatcher } = harness({
+    distinct: (name: string) => name,
+    mint: async (_slug: string, _sessionId: string, source: string) => void minted.push(source),
+  })
+  const nameSource = "investigate perf\n\nBrief: the N+1 in loadUsers"
+  const { slug } = await dispatcher.dispatch(
+    { prompt: "A spinoff of @shellBudgets, at the human's request. Their instructions:\n\n> investigate perf\n\nThe context @shellBudgets gathered for you:\n\nBrief: the N+1 in loadUsers", title: "Sub-agent addresses" },
+    { nameSource },
+  )
+  assert.equal(slug, "investigate-perf")
+  assert.equal(storage.getSession(slug)?.title, "investigate perf")
+  assert.deepEqual(minted, [nameSource])
 })

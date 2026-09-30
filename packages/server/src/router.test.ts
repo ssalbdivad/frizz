@@ -2273,15 +2273,21 @@ test("a repeat of a deliveryId already delivered is a no-op even after the ledge
 // A SPINOFF is fulfilled by the parent's own `spawn_thread` naming the request: the dispatch writes the
 // human's words and a link back above the parent's brief, stamps the child once, and refuses a second
 // spawn or a caller that is not the parent.
+//
+// The parent is named by the handle the board shows (its name, not its slug), and the child is NAMED from
+// the human's instructions and the brief — the dispatcher's `nameSource` — never from the prompt's
+// "A spinoff of @parent…" opening, which once minted `a-spinoff-of-shell-budgets-thread-…`.
 test("dispatch fulfils a spinoff once, from its parent only, with the human's words above the brief", async () => {
   const h = harness()
   try {
-    h.storage.upsertSession(row("parent"))
+    h.storage.upsertSession({ ...row("parent"), title: "Shell budgets" })
     const id = "spn_00000000000000aa"
     h.storage.insertSpinoff({ id, parentSlug: "parent", instructions: "investigate perf", createdAtMs: 1 })
     const calls: { prompt: string; model?: string }[] = []
-    ;(h.ctx.dispatcher as { dispatch: unknown }).dispatch = async (input: { prompt: string; model?: string }) => {
+    const opts: unknown[] = []
+    ;(h.ctx.dispatcher as { dispatch: unknown }).dispatch = async (input: { prompt: string; model?: string }, o: unknown) => {
       calls.push(input)
+      opts.push(o)
       return { slug: "child", sessionId: "sid-child" }
     }
     const dispatch = (from: string) =>
@@ -2292,9 +2298,10 @@ test("dispatch fulfils a spinoff once, from its parent only, with the human's wo
 
     assert.deepEqual(await dispatch("parent"), { slug: "child", sessionId: "sid-child" })
     assert.equal(calls.length, 1)
-    assert.match(calls[0].prompt, /^A spinoff of \[parent\]\(\/thread\/parent\), at the human's request\. Their instructions:\n\n> investigate perf\n/)
+    assert.match(calls[0].prompt, /^A spinoff of @shellBudgets, at the human's request\. Their instructions:\n\n> investigate perf\n\nThe context @shellBudgets gathered for you:/)
     assert.ok(calls[0].prompt.endsWith("Brief: the N+1 in loadUsers"))
     assert.equal("spinoff" in calls[0], false)
+    assert.deepEqual(opts, [{ backend: undefined, nameSource: "investigate perf\n\nBrief: the N+1 in loadUsers" }])
     assert.equal(h.storage.getSpinoff(id)?.child_slug, "child")
 
     await assert.rejects(dispatch("parent"), /already started thread child/)

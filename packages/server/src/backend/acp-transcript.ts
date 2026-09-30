@@ -1,6 +1,6 @@
 import { appendFileSync, existsSync, mkdirSync, readFileSync } from "node:fs"
 import { dirname, join } from "node:path"
-import type { TranscriptMessage, TranscriptToolCall } from "@frizz/shared"
+import { parseSpinoffChildPrompt, spinoffIdOfSpawnCall, type TranscriptMessage, type TranscriptToolCall } from "@frizz/shared"
 import type { AgentBackend, BuiltCommand, FoldState, NormalizedEvent, ResumeOpts, SpawnOpts } from "./types.ts"
 import { applyEvent } from "../tailer.ts"
 import { createSideTurnProjection, normalizedSideTurnSteps } from "../spinoff-side-turn.ts"
@@ -125,12 +125,26 @@ function toolCallFor(ev: Extract<NormalizedEvent, { kind: "tool-call" }>, acp: A
   if (detail) call.detail = clip(detail, 500)
   if (command) call.command = command
   else if (input && Object.keys(input).length) call.input = clip(JSON.stringify(input, null, 2), TOOL_TEXT_MAX)
+  stampSpinoff(call, ev.name, ev.input)
   return call
+}
+
+// The spinoff a `spawn_thread` call fulfils (TranscriptToolCall.spinoff), so the parent's chat draws the
+// spinoff card instead of this tool line. An ACP call's name is whatever TITLE the agent gave it, and
+// opencode titles an MCP tool `<server>_<tool>` — `frizz_spawn_thread`, a separator the shared
+// classifier (which knows Claude's `__` and the bare name) does not take — so a title ending in
+// `_spawn_thread` is read as the bare tool. Its input can also arrive late, on the completing update
+// (upgradeToolTarget), so this runs at both points and only ever ADDS the id.
+function stampSpinoff(call: TranscriptToolCall, name: string, input: unknown): void {
+  if (call.spinoff) return
+  const spinoff = spinoffIdOfSpawnCall(/(?:^|[_.\/])spawn_thread$/.test(name) ? "spawn_thread" : name, input)
+  if (spinoff) call.spinoff = spinoff
 }
 
 /** A result that learned the target the call did not know (opencode reports `locations`/`rawInput`
  *  only on the completing update) upgrades the call's detail from the tool's title to its target. */
 function upgradeToolTarget(call: TranscriptToolCall, acp: AcpToolMeta | undefined): void {
+  if (acp?.input !== undefined) stampSpinoff(call, call.name, acp.input)
   if (!acp || call.command || (call.detail && call.detail !== call.name)) return
   const { command, path, input } = toolTarget(acp.input, acp)
   const detail = command ?? path
@@ -146,6 +160,7 @@ export function projectAcpTranscript(raw: string, identityPrefix = "acp"): Trans
   let current: TranscriptMessage | undefined // the open assistant message
   let currentMessageId: string | undefined
   const openTools = new Map<string, TranscriptToolCall>()
+  let sawUser = false
   const lines = raw.split("\n")
   // Spinoff side turns: the tailer folds this file through applyEvent, which reads them, so the drawer
   // drops the same ones (spinoff-side-turn.ts).
@@ -188,7 +203,12 @@ export function projectAcpTranscript(raw: string, identityPrefix = "acp"): Trans
       case "user-message": {
         close()
         const text = rec.text ?? ""
-        out.push({ sourceId: `${identityPrefix}:${i}`, role: "user", text, tools: [], parts: [], ...(rec.at ? { at: rec.at } : {}), ...(rec.synthetic ? { wake: true } : {}) })
+        // A spinoff child's opening prompt projects into its spinoff header, exactly as the Claude/Codex
+        // projection does it (transcript.ts userProjection). The bridge records the human-side prompt
+        // with no dispatch envelope, so the first user record IS the composed spinoffChildPrompt.
+        const origin = !sawUser && !rec.synthetic ? parseSpinoffChildPrompt(text) : null
+        sawUser = true
+        out.push({ sourceId: `${identityPrefix}:${i}`, role: "user", text, ...(origin ? { displayText: origin.instructions, spinoffOrigin: origin } : {}), tools: [], parts: [], ...(rec.at ? { at: rec.at } : {}), ...(rec.synthetic ? { wake: true } : {}) })
         break
       }
       case "turn-start":

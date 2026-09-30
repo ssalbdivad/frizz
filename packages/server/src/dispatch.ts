@@ -763,7 +763,15 @@ export interface Dispatcher {
   // "claude" is the default, so the RPC path (which passes no opts until the Phase-3 UI picker wires
   // DispatchInput.backend through) is byte-identical to before. A codex dispatch pre-arms the cwd trust
   // gate, spawns the codex TUI, then sentinel-discovers + pins the rollout id on the row.
-  dispatch(input: DispatchInput, opts?: { backend?: BackendKind }): Promise<{ slug: string; sessionId: string }>
+  //
+  // `opts.nameSource` is the text the thread is NAMED from — the fallback title (and so the slug), a
+  // caller title's disambiguating word, and the async mint — when that is not the prompt itself. Only
+  // the server sets it: a spinoff's prompt opens with Frizz's own "A spinoff of @parent…" boilerplate,
+  // and naming from that produced slugs like `a-spinoff-of-shell-budgets-thread-…` (2026-09-30), so
+  // fulfilSpinoff names the child from the human's instructions and the brief instead. Deliberately
+  // not a DispatchInput field: the RPC is callable by any worker and the web, and what a thread is
+  // named from is not theirs to decouple from what it was asked.
+  dispatch(input: DispatchInput, opts?: { backend?: BackendKind; nameSource?: string }): Promise<{ slug: string; sessionId: string }>
   // Cold-adopt an EXISTING thread frizz didn't originate (e.g. a repo with a pre-existing .frizz
   // board): spawn a fresh worker pointed at the thread file. Frizz's contract makes this sound —
   // the doc, not the conversation, is the durable context; the worker reads it and continues.
@@ -911,10 +919,11 @@ export function createDispatcher(deps: DispatchDeps): Dispatcher {
       // So is its length: a caller's name too long to type as a handle is dropped, and the thread is minted
       // a name like any other — a spawn_thread title is where `@spinoffFeatureScopeAndUi` came from.
       const callerTitle = input.title?.trim() && !threadNameProblem(input.title.trim()) ? input.title.trim() : undefined
-      const title = (callerTitle && deps.threadNamer ? deps.threadNamer.distinct(callerTitle, input.prompt, input.slug) : callerTitle) ||
-        fallbackTitle(input.prompt)
+      const nameSource = opts?.nameSource?.trim() || input.prompt
+      const title = (callerTitle && deps.threadNamer ? deps.threadNamer.distinct(callerTitle, nameSource, input.slug) : callerTitle) ||
+        fallbackTitle(nameSource)
       const mintName = (slug: string, sessionId: string) => {
-        if (!callerTitle) void deps.threadNamer?.mint(slug, sessionId, input.prompt)
+        if (!callerTitle) void deps.threadNamer?.mint(slug, sessionId, nameSource)
       }
       const base = input.slug ?? slugify(title)
       const slug = resolveSlug(frizzDir, base, (s) => deps.storage.getSession(s) !== undefined)
