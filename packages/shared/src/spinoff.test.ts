@@ -2,7 +2,7 @@
 // the server formats it, the transcript projection parses it — so the two are pinned together here.
 import { test } from "node:test"
 import assert from "node:assert/strict"
-import { DispatchInput, isInjectedNoise, SPINOFF_ID_RE, SpinoffInput, parseSpinoffRequest, spinoffChildPrompt, spinoffRequestMessage } from "./index.ts"
+import { DispatchInput, isInjectedNoise, SPINOFF_ID_RE, SpinoffInput, parseSpinoffChildPrompt, parseSpinoffRequest, spinoffChildPrompt, spinoffIdOfSpawnCall, spinoffRequestMessage } from "./index.ts"
 
 const id = "spn_0123456789abcdef"
 
@@ -16,6 +16,10 @@ test("a spinoff request round-trips through the chat's parser, multi-line text i
   // It tells the worker exactly which id to hand back, and what the instructions are about.
   assert.match(message, /spawn_thread` with `spinoff: "spn_0123456789abcdef"`/)
   assert.match(message, /most recent part of the conversation/)
+  // A side request: the worker announces nothing and does not sign off again (the chat's card says it all).
+  assert.match(message, /Write nothing about the spinoff afterwards/)
+  assert.match(message, /do not sign off again/)
+  assert.doesNotMatch(message, /Say in one line/)
 })
 
 test("a mid-message envelope is just the human talking", () => {
@@ -52,6 +56,35 @@ test("the child's prompt carries the human's words verbatim and a link back, abo
   assert.equal(prompt.split("\n")[0], "A spinoff of [Cache bug](/thread/cache-bug), at the human's request. Their instructions:")
   assert.match(prompt, /\n> fix this\n> soon\n/)
   assert.ok(prompt.endsWith("The resolver keys on…"))
+})
+
+test("a parent with a handle is named by it, which the child's prose and read_thread both resolve", () => {
+  const prompt = spinoffChildPrompt({ parentSlug: "cache-bug", parentTitle: "Cache bug", parentHandle: "cacheBug", instructions: "fix this", brief: "The resolver keys on…" })
+  assert.equal(prompt.split("\n")[0], "A spinoff of @cacheBug, at the human's request. Their instructions:")
+  assert.match(prompt, /\nThe context @cacheBug gathered for you:\n/)
+})
+
+test("the child's first prompt reads back into the human's instructions and the parent's brief", () => {
+  const brief = "The resolver keys on the raw id.\n\n> a quoted line in the brief stays in the brief\n\n- src/resolver.ts"
+  for (const parentHandle of ["cacheBug", undefined]) {
+    const prompt = spinoffChildPrompt({ parentSlug: "cache-bug", parentTitle: "Cache bug", parentHandle, instructions: "fix this\n\nand add a test", brief })
+    assert.deepEqual(parseSpinoffChildPrompt(prompt), { instructions: "fix this\n\nand add a test", brief })
+    // The dispatch envelope is stripped before this runs, but trailing/leading whitespace is not a reason to miss.
+    assert.deepEqual(parseSpinoffChildPrompt(`\n${prompt}\n`), { instructions: "fix this\n\nand add a test", brief })
+  }
+  // Anything else is just a prompt: a brief a worker wrote itself, a human quoting the header mid-message.
+  assert.equal(parseSpinoffChildPrompt("Evaluate whether the feature is a good idea."), null)
+  assert.equal(parseSpinoffChildPrompt("see: A spinoff of @cacheBug, at the human's request. Their instructions:\n\n> x\n\nThe context @cacheBug gathered for you:\n\ny"), null)
+})
+
+test("a spawn_thread call names the spinoff it fulfils, under any prefix and either spelling", () => {
+  assert.equal(spinoffIdOfSpawnCall("mcp__frizz__spawn_thread", { prompt: "p", spinoff: ` ${id} ` }), id)
+  assert.equal(spinoffIdOfSpawnCall("spawn_thread", { spinOff: id }), id)
+  assert.equal(spinoffIdOfSpawnCall("frizz.spawn_thread", { spinoff: id }), id)
+  assert.equal(spinoffIdOfSpawnCall("mcp__frizz__spawn_thread", { prompt: "p" }), undefined)
+  assert.equal(spinoffIdOfSpawnCall("mcp__frizz__spawn_thread", { spinoff: "spn_nothex" }), undefined)
+  assert.equal(spinoffIdOfSpawnCall("mcp__frizz__message_thread", { spinoff: id }), undefined)
+  assert.equal(spinoffIdOfSpawnCall("mcp__frizz__spawn_thread", "not an object"), undefined)
 })
 
 test("ids and inputs are validated at the schema", () => {
