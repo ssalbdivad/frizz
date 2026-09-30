@@ -108,6 +108,24 @@ test("side turn: work after the spawn, or a write before it, makes it a real tur
     [{ id: SPN, hidden: false }],
     "an edit made on the side would vanish from the chat with the turn",
   )
+  // A SHELL write is a write (2026-09-30): Claude Code's auto mode tells the worker to edit with heredocs
+  // and sed, and the edited-files rail reads them — so the side turn has to, or the write vanishes from both.
+  const before = (command: unknown, name = "Bash") =>
+    sideTurnsOf([...RESTED, request(10), call(11, "toolu_sh", name, { command }), result(12, "toolu_sh", ""), spawnCall(13), started(14, 13), say(15, "")])
+  for (const command of ["cat > .frizz/brief.md <<'EOF'\nthe > brief\nEOF", "sed -i 's/a/b/' src/a.ts", "echo x | tee notes.md", "cd packages/web && printf x > a.ts"]) {
+    assert.deepEqual(before(command), [{ id: SPN, hidden: false }], command)
+  }
+  // Codex's shell tools, by their input's shape: `cmd`, and an argv `command`.
+  assert.deepEqual(
+    sideTurnsOf([...RESTED, request(10), call(11, "toolu_sh", "exec_command", { cmd: "cat > a.md <<EOF\nx\nEOF" }), result(12, "toolu_sh", ""), spawnCall(13), started(14, 13), say(15, "")]),
+    [{ id: SPN, hidden: false }],
+  )
+  assert.deepEqual(before(["bash", "-lc", "echo x > a.md"], "shell"), [{ id: SPN, hidden: false }])
+  // …but READING through the shell is how a brief is gathered, and it stays hidden — including output
+  // thrown away or captured to scratch the rail never lists either.
+  for (const command of ["git log --oneline -20", "grep -rn cache src 2>&1 | head", "ls > /dev/null 2>&1", "git diff > /tmp/brief.diff", "cat src/a.ts"]) {
+    assert.deepEqual(before(command), [{ id: SPN, hidden: true }], command)
+  }
   // A second spawn_thread — even for the same request — is more than was asked.
   assert.deepEqual(sideTurnsOf([...RESTED, request(10), spawnCall(11), started(12, 11), spawnCall(13), started(14, 13), say(15, "")]), [{ id: SPN, hidden: false }])
 })

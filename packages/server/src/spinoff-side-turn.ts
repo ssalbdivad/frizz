@@ -1,4 +1,4 @@
-import { parseSpinoffRequest, spinoffIdOfSpawnCall, stripFollowUpRiders } from "@frizz/shared"
+import { parseSpinoffRequest, shellWriteTargets, spinoffIdOfSpawnCall, stripFollowUpRiders } from "@frizz/shared"
 import type { FoldState, NormalizedEvent } from "./backend/types.ts"
 
 // THE SPINOFF SIDE TURN (2026-09-30).
@@ -30,7 +30,8 @@ import type { FoldState, NormalizedEvent } from "./backend/types.ts"
 //       report, another spinoff request. Whatever arrived shares the turn, so the turn is not the side
 //       request's alone.
 // Calls BEFORE the spawn are the brief being gathered (reading the code the new thread will need), and
-// they are allowed — except a call that WRITES files, which is the new thread's work being done here and
+// they are allowed — except a call that WRITES files (an Edit, or a shell command that writes: see
+// writesFiles), which is the new thread's work being done here and
 // would otherwise vanish from the chat and the edited-files rail with the turn. Anything this module cannot
 // classify errs toward showing the turn: an unclean side turn behaves exactly as every turn did before.
 //
@@ -85,7 +86,50 @@ export function spawnStarted(text: string, isError = false): boolean {
 const WRITE_TOOLS: ReadonlySet<string> = new Set(["Edit", "MultiEdit", "Write", "NotebookEdit", "apply_patch"])
 function writesFiles(name: string, input: unknown): boolean {
   if (WRITE_TOOLS.has(name)) return true
-  return name === "exec" && typeof input === "string" && /\btools\.apply_patch\s*\(/.test(input)
+  if (name === "exec" && typeof input === "string") return /\btools\.apply_patch\s*\(/.test(input)
+  const command = shellCommandOf(name, input)
+  return command !== undefined && shellWritesFiles(command)
+}
+
+// A SHELL WRITE IS A WRITE (2026-09-30, review of the side turn). The edited-files rail has read Bash
+// since 2026-09-04 (edited-files.ts), because Claude Code's `auto` permission mode TELLS the worker to
+// edit "with sed, heredocs, or short scripts" rather than the Edit tool — on the maintainer's own threads
+// a shell write is the ordinary write, not an exotic one. So `cat > notes.md <<EOF` before the spawn hid
+// exactly what the header says must not vanish: the rail runs over the projection AFTER the side turn's
+// messages are dropped, so the write left no trace in the chat or the rail, and the rest the tailer put
+// back said the tree had not moved.
+//
+// Only a command that WRITES counts, read by the rail's own parser (shared shellWriteTargets) — never
+// "any Bash call". Read-only shell (`git log`, `grep`, `cat`, `ls`) is how a worker gathers a brief, and
+// treating it as work would make nearly every spinoff a real turn, which is the thing this module exists
+// to stop. The parser already drops fd duplications (`2>&1`) and anything the shell would have to
+// expand; what is left out here is scratch the rail never lists either — a device and the system temp
+// dir. A worker's own `.frizz/threads/…` scratch is in the project, is on the rail, and so counts.
+//
+// NOT READ (and so allowed, as before): a `git commit`/`git stash`, a `rm`/`mv`, and a shell write made
+// from inside Codex's `exec` script wrapper, whose source this does not parse (transcript.ts decodes it
+// for the card; importing that here would make the fold depend on the projection).
+function shellCommandOf(name: string, input: unknown): string | undefined {
+  if (!input || typeof input !== "object" || Array.isArray(input)) return undefined
+  const obj = input as { command?: unknown; cmd?: unknown }
+  // Claude's Bash carries `command`. Codex's shell tools carry `cmd` (exec_command) or `command` as a
+  // string or an argv (shell, local_shell — often ["bash","-lc","<script>"]), under whatever name the
+  // build gives them, which is why the transcript projection keys on the input's shape and not the
+  // name (transcript.ts codexToolCall); an ACP agent's command tool is read the same way.
+  if (name !== "Bash" && name.startsWith("mcp__")) return undefined
+  if (typeof obj.cmd === "string") return obj.cmd
+  if (typeof obj.command === "string") return obj.command
+  if (Array.isArray(obj.command)) {
+    const parts = obj.command.filter((c): c is string => typeof c === "string")
+    const flag = parts.findIndex((c) => c === "-c" || c === "-lc" || c === "-lic")
+    return flag !== -1 && parts[flag + 1] !== undefined ? parts[flag + 1] : parts.join(" ")
+  }
+  return undefined
+}
+
+const SCRATCH_TARGET = /^\/(?:dev|tmp)(?:\/|$)/
+function shellWritesFiles(command: string): boolean {
+  return shellWriteTargets(command).some((target) => !SCRATCH_TARGET.test(target.path))
 }
 
 /** One thing a fold saw, in the terms the side turn is defined in. Each fold maps its own records onto
