@@ -10,7 +10,7 @@ import { toggleSubAgentFold } from "../lib/subAgentFold.ts"
 
 // The rail folds a thread's live children behind one "N sub-agents" line (lib/subAgentFold.ts). These pin
 // the ROW: folded it shows the count and none of the names; open, it lists every child one indent step
-// under the fold line. A child's row shows its HANDLE (`fixR1` for "fix:r1", groups.ts subAgentName) —
+// under the fold line. A child's row shows its HANDLE (`fix-r1` for "fix:r1", groups.ts subAgentName) —
 // the segment typed after `@thread.` — while the fold line is a count and keeps its words.
 
 const ROW_SCOPE: RowScope = { open: () => {}, page: true }
@@ -46,9 +46,9 @@ const CHILDREN: Partial<SubAgentView>[] = [
 test("folded, a thread's children are one line naming how many, and none of their names", () => {
   const html = rail("fold-closed", CHILDREN)
   assert.match(html, /aria-label="2 sub-agents, 1 workflow" aria-expanded="false"/)
-  assert.match(html, /title="fixR1, fixR2, implFlow"/, "the names ride the tooltip, as the handles the rows show")
+  assert.match(html, /title="fix-r1, fix-r2, impl-flow"/, "the names ride the tooltip, as the handles the rows show")
   assert.match(html, />2 sub-agents, 1 workflow</, "the fold line is a count in words, never camelCased")
-  for (const name of [">fixR1<", ">fixR2<", ">implW3<"]) assert.ok(!html.includes(name), `${name} stays folded`)
+  for (const name of [">fix-r1<", ">fix-r2<", ">impl-w3<"]) assert.ok(!html.includes(name), `${name} stays folded`)
   assert.match(html, /data-rail-subagents="fold-closed"/)
   // A running child spins the fold, so live work never leaves the rail.
   assert.match(html, /data-rail-subagents="fold-closed"[\s\S]*viewBox="0 0 15 15"/)
@@ -60,14 +60,14 @@ test("open, every child is listed one indent step under the fold line", () => {
   toggleSubAgentFold("fold-open")
   const html = rail("fold-open", CHILDREN)
   assert.match(html, /aria-label="2 sub-agents, 1 workflow" aria-expanded="true"/)
-  for (const name of ["fixR1", "fixR2", "implFlow", "implW3"]) assert.ok(html.includes(`>${name}<`), `${name} is listed by its handle`)
+  for (const name of ["fix-r1", "fix-r2", "impl-flow", "impl-w3"]) assert.ok(html.includes(`>${name}<`), `${name} is listed by its handle`)
   for (const name of ["fix:r1", "impl:W3"]) assert.ok(!html.includes(`>${name}<`), `${name} is not drawn as written`)
   // The dispatch name as written stays on the row's hover.
   assert.match(html, /title="\[workflow\] impl-flow"/)
   assert.match(html, />2 sub-agents, 1 workflow</, "the fold line keeps its words while open too")
   // 26px clears the parent row's indicator column; each level under the fold steps 13px further.
-  assert.match(html, /padding-left:39px[^>]*>[\s\S]*?>fixR1</, "a direct child sits one step under the fold")
-  assert.match(html, /padding-left:52px[^>]*>[\s\S]*?>implW3</, "a workflow's agent sits one step under its workflow")
+  assert.match(html, /padding-left:39px[^>]*>[\s\S]*?>fix-r1</, "a direct child sits one step under the fold")
+  assert.match(html, /padding-left:52px[^>]*>[\s\S]*?>impl-w3</, "a workflow's agent sits one step under its workflow")
   toggleSubAgentFold("fold-open")
 })
 

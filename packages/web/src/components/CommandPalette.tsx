@@ -105,7 +105,7 @@ export function CommandPalette() {
             // say whose, since in All projects the page around it shows every project's.
             <Command.Group heading={isCrossProjectPath() ? `Threads in ${board?.projectName ?? board?.projectLabel ?? "this project"}` : "Threads"} className="cmdk-group">
               {threads.map((t) => (
-                // The handle AND the stored words, so "shell bud" finds `shellBudgets` as readily as "shellB".
+                // The handle AND the stored words, so "shell bud" finds `shell-budgets` as readily as "shell-b".
                 <Item key={t.id} value={`${displayTitle(t)} ${displayName(t)} ${t.id}`} onSelect={() => run(() => jump(t.id))}>
                   <span className="truncate">{displayTitle(t)}</span>
                   <span className="ml-auto shrink-0 text-[11px] text-muted-70">{t.id}</span>

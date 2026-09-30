@@ -53,9 +53,9 @@ export function ThreadTitle({ thread, className = "" }: { thread: ThreadView; cl
   // Manual rename is registry metadata for either backend; the AI rename is Claude-only and gated
   // inside AiRenameButton.
   const canRename = thread.kind === "session" && thread.foreign !== true
-  // The name SHOWS as its `@` handle (`shellBudgets`) but is stored as the words it was minted as
+  // The name SHOWS as its `@` handle (`shell-budgets`) but is stored as the words it was minted as
   // ("Shell budgets"), and a rename writes words — so the editor opens on the words, and "unchanged" is
-  // judged against them. Seeding the handle would have every rename store a camelCase run.
+  // judged against them. Seeding the handle would have every rename store a hyphenated run.
   const shown = displayTitle(thread)
   const stored = displayName(thread)
   function cancel(): void {

@@ -31,11 +31,11 @@ import { canRetry } from "./lib/status.ts"
 
 type TitleFields = Pick<ThreadView, "title" | "aiTitle" | "id" | "titleAuto" | "titleLocked" | "spawnedAt" | "backend" | "runtime" | "foreign">
 
-// The title to SHOW for a thread: its HANDLE. A real name ("Shell budgets") renders as the camelCase
-// handle it makes (`shellBudgets`, @frizz/shared thread-handle.ts), so what the operator reads on the
+// The title to SHOW for a thread: its HANDLE. A real name ("Shell budgets") renders as the kebab-case
+// handle it makes (`shell-budgets`, @frizz/shared thread-handle.ts), so what the operator reads on the
 // board is exactly what they type after `@` to point one thread at another (maintainer 2026-09-29: "I
 // want the displayed names to also be camelCase so its obvious how to refer to them and that they
-// represent ids"). Everything that is NOT a name renders as it always did: the "Spinning up…" and
+// represent ids"; kebab-case since 2026-09-30). Everything that is NOT a name renders as it always did: the "Spinning up…" and
 // "Untitled thread" placeholders, a legacy row's bare id, an external terminal session's resolved
 // title (Frizz holds no registry name for it, so there is nothing to address), and a name too long to
 // be a handle (a legacy sentence-length title — threadHandle declines past five words).
@@ -49,8 +49,8 @@ export function displayTitle(t: TitleFields): string {
 
 // The thread's name in the WORDS it is stored as ("Shell budgets") — what a rename edits, since a human
 // rename writes words and the handle is derived from them. Same provenance rules as displayTitle; only
-// the final camelCase step is skipped. Also what a search should match alongside the handle, so typing
-// "shell bud" still finds `shellBudgets`.
+// the final kebab-case step is skipped. Also what a search should match alongside the handle, so typing
+// "shell bud" still finds `shell-budgets`.
 export function displayName(t: TitleFields): string {
   return titleSource(t).text
 }
@@ -65,7 +65,7 @@ export function threadHandleOf(t: TitleFields): string | undefined {
 
 // A SUB-AGENT'S NAME, SHOWN AS ITS HANDLE — the same rule as a thread's (maintainer 2026-09-30:
 // "subagents accessible as `topLevel.subagent` and given name ids with the same prompting as the
-// top-level threads"). Its dispatch name ("Cache keys") reads as `cacheKeys` on every row that shows a
+// top-level threads"). Its dispatch name ("Cache keys") reads as `cache-keys` on every row that shows a
 // child as ITSELF — the rail, the queue card, the ops strip, the wait rail, a Workflow's tree, the
 // transcript's dividers — so what the operator reads under a thread is the segment they type after
 // `@thread.`. A sentence-length name (a worker that ignored the prompt, or one dispatched before it
@@ -75,7 +75,7 @@ export function subAgentName(label: string): string {
 }
 
 // The full `thread.child` address of one of a thread's LIVE sub-agents, from the board alone
-// (`portTheParser.wave2.implW3`), or undefined when the thread has no handle or a link in the chain has
+// (`port-the-parser.wave-2.impl-w3`), or undefined when the thread has no handle or a link in the chain has
 // none or has already returned. The drawer header's first choice; a finished child's address comes from
 // the server's `subAgentDirectory` instead, which still has the whole tree on disk.
 export function subAgentAddressOf(t: TitleFields & Pick<ThreadView, "subAgents">, subId: string): string | undefined {
@@ -86,10 +86,10 @@ export function subAgentAddressOf(t: TitleFields & Pick<ThreadView, "subAgents">
 }
 
 // The title a drawer passes for a child it cannot name (a report whose sender's description had not
-// resolved, ChatView SubAgentReportLine). A stand-in, not a name, so it never camelCases into `subAgent`.
+// resolved, ChatView SubAgentReportLine). A stand-in, not a name, so it never becomes the handle `sub-agent`.
 export const UNNAMED_SUB_AGENT_LABEL = "Sub-agent"
 
-// The SUB-AGENT DRAWER'S HEADER: the child's whole address (`portTheParser.cacheKeys`) — what the
+// The SUB-AGENT DRAWER'S HEADER: the child's whole address (`port-the-parser.cache-keys`) — what the
 // operator types to point another thread at it — when the live board resolves it; else one the
 // directory already told this page (`known`, a returned child opened from a `@` mention); else its
 // handle alone; else its label as written.

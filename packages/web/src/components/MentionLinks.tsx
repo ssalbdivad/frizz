@@ -86,17 +86,19 @@ function ThreadMentionLink({ segment, href, onOpen, title, className = "underlin
 // hold. `thread` resolves it on a surface whose threads are not the page's board — a queue card of
 // another project passes its own row (or null when it has none, so the page's board is never asked about
 // another project's slug), address and opener.
-export function ThreadHandleLink({ slug, thread, href, onOpen, className }: {
+export function ThreadHandleLink({ slug, thread, href, onOpen, className, fallback }: {
   slug: string
   thread?: ThreadView | null
   href?: string
   onOpen?: () => void
   className?: string
+  /** What to call a thread nothing here can name, in place of its bare slug. */
+  fallback?: string
 }) {
   const board = useBoard()
   const t = thread === undefined ? threadBySlug(board, slug) : thread ?? undefined
   const handle = t ? threadHandleOf(t) : undefined
-  const text = handle ? `@${handle}` : t ? displayTitle(t) : slug
+  const text = handle ? `@${handle}` : t ? displayTitle(t) : fallback ?? slug
   // The tooltip says what the handle cannot: the thread's name in words, and what it is doing now.
   const status = t?.statusLine?.trim()
   const title = t ? [displayName(t), status].filter(Boolean).join(" · ") : "Open thread"

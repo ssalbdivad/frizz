@@ -63,8 +63,8 @@ test("a single-word title still glues the mark to it", () => {
 })
 
 test("a handle wraps between its words, and the mark glues to its last one", () => {
-  // "Ship the resolver fix" shows as `shipTheResolverFix`: one token, so its humps are its words.
+  // "Ship the resolver fix" shows as `ship-the-resolver-fix`: one token, so its word starts are its words.
   const html = row("Ship the resolver fix")
 
-  assert.match(html, />ship<wbr\/>The<wbr\/>Resolver<span class="whitespace-nowrap">Fix<span role="img"/)
+  assert.match(html, />ship-<wbr\/>the-<wbr\/>resolver-<span class="whitespace-nowrap">fix<span role="img"/)
 })

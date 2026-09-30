@@ -1,10 +1,10 @@
-import { addressSegments, SUB_AGENT_SEPARATOR, sectionOf, threadHandle, type ProjectQueue, type SubAgentDirectory, type SubAgentDirectoryEntry, type ThreadView } from "@frizz/shared"
+import { addressSegments, HANDLE_SEGMENT, SUB_AGENT_SEPARATOR, sectionOf, threadHandle, type ProjectQueue, type SubAgentDirectory, type SubAgentDirectoryEntry, type ThreadView } from "@frizz/shared"
 import { orderByInteraction, threadHandleOf } from "../groups.ts"
 import { compactAge } from "./activityTime.ts"
 import { formatCompactElapsed } from "./durationLabels.ts"
 
-// `@handle` MENTIONS IN THE PROMPT BOX — pointing one thread at another ("ask @shellBudgets about this").
-// A thread's name shows as its camelCase handle (groups.ts displayTitle), so the typeahead offers those
+// `@handle` MENTIONS IN THE PROMPT BOX — pointing one thread at another ("ask @shell-budgets about this").
+// A thread's name shows as its kebab-case handle (groups.ts displayTitle), so the typeahead offers those
 // same handles and inserts one as plain text; the worker reading the message resolves it itself. The
 // candidate list is the board the client already holds — no server round trip per keystroke.
 
@@ -86,7 +86,7 @@ export function crossProjectMentionCandidates(queues: readonly ProjectQueue[], h
 
 // The characters a handle runs over, and what may sit right before its `@` — mirrors @frizz/shared
 // threadMentions, so what the typeahead completes is exactly what the server reads back as a mention.
-// The query may run on through `.` (`@portTheParser.ca`, a sub-agent under its thread) but never START
+// The query may run on through `.` (`@port-the-parser.ca`, a sub-agent under its thread) but never START
 // with one: `@.` is not a mention of anything.
 const HANDLE_CHAR = /[\p{L}\p{N}_-]/u
 const MENTION_BEFORE_CARET = /(?:^|[^\p{L}\p{N}_@./])@((?:[\p{L}\p{N}_-][\p{L}\p{N}_.-]*)?)$/u
@@ -101,7 +101,7 @@ export function mentionQueryAt(prose: string, caret: number | null): { start: nu
 }
 
 /** A dotted query split at its FIRST dot: the thread it names (`head`) and what was typed of the
- *  sub-agent's address below it (`rest`, possibly empty — `@portTheParser.` offers every child).
+ *  sub-agent's address below it (`rest`, possibly empty — `@port-the-parser.` offers every child).
  *  Undefined for a plain thread query, which the typeahead treats exactly as it always did. */
 export function splitMentionQuery(query: string): { head: string; rest: string } | undefined {
   const dot = query.indexOf(SUB_AGENT_SEPARATOR)
@@ -110,23 +110,23 @@ export function splitMentionQuery(query: string): { head: string; rest: string }
 }
 
 /** Case, punctuation and a trailing plural folded away — the server's `foldThreadName` key, applied to
- *  a single token, so `@ShellBudget`, `@shell-budgets` and `@shellBudgets` all name one thread. */
+ *  a single token, so `@ShellBudget`, `@shell-budgets` and a legacy `@shellBudgets` all name one thread. */
 export function foldHandle(text: string): string {
   const key = text.normalize("NFKD").replace(/\p{M}+/gu, "").toLowerCase().replace(/[^\p{L}\p{N}]+/gu, "")
   return key.length > 3 && key.endsWith("s") && !key.endsWith("ss") ? key.slice(0, -1) : key
 }
 
-/** Where each hump of a camelCase handle starts (`shellBudgets` → 0, 5): its words, for matching "bud"
- *  and for where a handle too long for its line may wrap (Sidebar.tsx TitleWithTrailers). The segment
- *  after a `.` starts a word too, whatever its case — `cacheKeys` in `portTheParser.cacheKeys` begins
- *  lowercase, and "cache" has to find it. */
+/** Where each word of a handle starts (`shell-budgets` → 0, 6): for matching "bud" and for where a
+ *  handle too long for its line may wrap (Sidebar.tsx TitleWithTrailers). A word starts after a `-`, a
+ *  `_` or a `.` (the sub-agent segment: "cache" has to find `cache-keys` in `port-the-parser.cache-keys`),
+ *  and at a camelCase hump, which a handle written before the kebab switch still carries. */
 export function humpStarts(handle: string): number[] {
   const starts = [0]
   for (let i = 1; i < handle.length; i++) {
     const c = handle[i]!
     const prev = handle[i - 1]!
-    if (prev === SUB_AGENT_SEPARATOR) {
-      if (c !== SUB_AGENT_SEPARATOR) starts.push(i)
+    if (prev === SUB_AGENT_SEPARATOR || prev === "-" || prev === "_") {
+      if (/[\p{L}\p{N}]/u.test(c)) starts.push(i)
     } else if (c !== c.toLowerCase() && prev === prev.toLowerCase()) starts.push(i)
   }
   return starts
@@ -139,7 +139,7 @@ function isSubsequence(query: string, text: string): boolean {
 }
 
 /** What a candidate is RANKED on: a thread's handle, or a sub-agent's address below its thread
- *  (`wave2.implW3` of `portTheParser.wave2.implW3`) — the head was already typed and resolved, so
+ *  (`wave-2.impl-w3` of `port-the-parser.wave-2.impl-w3`) — the head was already typed and resolved, so
  *  matching it again would rank every sibling the same. */
 function matchKey(c: MentionCandidate): string {
   if (!c.subAgentId) return c.handle
@@ -148,20 +148,24 @@ function matchKey(c: MentionCandidate): string {
 }
 
 /** Rank the candidates for what was typed after `@`: a prefix of the handle, then a prefix of any of its
- *  words (`bud` → `shellBudgets`), then anywhere inside it, then its letters in order (`shb`). Within a
+ *  words (`bud` → `shell-budgets`), then anywhere inside it, then its letters in order (`shb`). Within a
  *  rank the candidate order holds, so open threads lead done ones. An empty query offers everything.
  *  Sub-agent candidates rank on their address below the thread, against what was typed after its dot
- *  (splitMentionQuery `rest`); a dot typed inside that (`wave2.im`) is kept, since it separates the same
+ *  (splitMentionQuery `rest`); a dot typed inside that (`wave-2.im`) is kept, since it separates the same
  *  segments in the key. */
 export function matchMentions(candidates: readonly MentionCandidate[], query: string, limit = 50): MentionCandidate[] {
-  const q = query.toLowerCase().replace(/[^\p{L}\p{N}.]+/gu, "")
+  // Compared with the word joints squeezed out of BOTH sides: a kebab handle's hyphens are what the
+  // operator types (`shell-bu`) and a legacy camelCase habit leaves them out (`shellbu`), and either
+  // has to rank `shell-budgets` as a prefix hit rather than letters-in-order.
+  const squeeze = (text: string) => text.toLowerCase().replace(/[^\p{L}\p{N}.]+/gu, "")
+  const q = squeeze(query)
   if (!q) return candidates.slice(0, limit)
   const ranked: MentionCandidate[][] = [[], [], [], []]
   for (const c of candidates) {
     const key = matchKey(c)
-    const lower = key.toLowerCase()
+    const lower = squeeze(key)
     if (lower.startsWith(q)) ranked[0]!.push(c)
-    else if (humpStarts(key).some((i) => lower.startsWith(q, i))) ranked[1]!.push(c)
+    else if (humpStarts(key).some((i) => squeeze(key.slice(i)).startsWith(q))) ranked[1]!.push(c)
     else if (lower.includes(q)) ranked[2]!.push(c)
     else if (isSubsequence(q, lower)) ranked[3]!.push(c)
   }
@@ -169,7 +173,7 @@ export function matchMentions(candidates: readonly MentionCandidate[], query: st
 }
 
 // SUB-AGENTS AFTER THE DOT (maintainer 2026-09-30: "autocomplete should still work for subagents after
-// ."). `@portTheParser.` resolves its head to a thread by the same fold a plain mention uses, and the
+// ."). `@port-the-parser.` resolves its head to a thread by the same fold a plain mention uses, and the
 // menu turns into that thread's sub-agents, read from the server's directory of every child it ever
 // dispatched — "some subagents are transient so probably we want to maintain some history of completed
 // subagents so we can reference the thread if needed". Only a child with an ADDRESS is offered: one
@@ -206,7 +210,7 @@ export function subAgentMentionStatus(entry: Pick<SubAgentDirectoryEntry, "state
 }
 
 /** An address folded segment by segment, the way a handle is (`foldHandle`), so `@PortTheParser.CacheKey`
- *  finds `portTheParser.cacheKeys`. */
+ *  (a legacy camelCase spelling) finds `port-the-parser.cache-keys`. */
 export function foldAddress(address: string): string {
   return addressSegments(address).map(foldHandle).join(SUB_AGENT_SEPARATOR)
 }
@@ -223,7 +227,7 @@ export function resolveSubAgentMention(directory: SubAgentDirectory, mention: st
 
 /** Complete the mention at `start` to `@handle`, replacing what was typed of it (including any part of
  *  the token after the caret) and leaving the caret after one separating space. A `.` after the caret
- *  is part of the token only when another handle character follows it (`@port|TheParser.cacheKeys`):
+ *  is part of the token only when another handle character follows it (`@port-the|-parser.cache-keys`):
  *  a sentence's full stop right after the caret stays where it was. */
 export function insertMention(prose: string, start: number, caret: number, handle: string): { prose: string; caret: number } {
   let end = caret
@@ -251,7 +255,7 @@ export type MentionSegment = { kind: "text"; text: string } | { kind: "mention";
 // guard is this side's own, because here a mention becomes a LINK and a wrong one is worse than none:
 // a mention cut short by a `/` or an `@` is a package or a path (`@types/node`, `@scope/pkg@2`), and
 // without the guard the engine would back off one letter at a time until something linked (`@type`).
-const MENTION = /(^|[^\p{L}\p{N}_@./])(@([\p{L}\p{N}][\p{L}\p{N}_-]*(?:\.[\p{L}\p{N}][\p{L}\p{N}_-]*)*))(?![\p{L}\p{N}_/@-]|\.[\p{L}\p{N}])/gu
+const MENTION = new RegExp(String.raw`(^|[^\p{L}\p{N}_@./])(@(${HANDLE_SEGMENT}(?:\.${HANDLE_SEGMENT})*))(?![\p{L}\p{N}_/@]|[-_.][\p{L}\p{N}])`, "gu")
 
 /** One mention found in a plain string that names a thread in `candidates`: where it sits, its text
  *  with the `@`, the thread's slug, and for a dotted `@thread.child` the whole address. */

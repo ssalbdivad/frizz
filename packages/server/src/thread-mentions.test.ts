@@ -21,24 +21,36 @@ const named = (slug: string, name: string, open = true, at = 0): NamedThread => 
 
 test("a handle resolves in any spelling, including one whose last word is short", () => {
   const threads = [named("a", "Shell budgets"), named("b", "Dev ops"), named("c", "ArkType perf")]
-  for (const h of ["shellBudgets", "@shellBudgets", "@shellbudgets", "shell-budgets", "ShellBudget"]) {
+  for (const h of ["shell-budgets", "@shell-budgets", "@shellbudgets", "shell_budgets", "ShellBudget"]) {
     assert.equal(resolveThreadHandle(h, threads)?.slug, "a", h)
   }
-  // "Dev ops" folds as two words and `devOps` as one — folding both from the handle keeps them equal.
-  assert.equal(resolveThreadHandle("@devOps", threads)?.slug, "b")
-  assert.equal(resolveThreadHandle("arkTypePerf", threads)?.slug, "c")
+  assert.equal(resolveThreadHandle("arktype-perf", threads)?.slug, "c")
   assert.equal(resolveThreadHandle("c", threads)?.slug, "c", "a raw slug resolves too")
-  // …and so does the slug's own camelCase, for a thread whose shown name drifted from its dispatch title.
-  assert.equal(resolveThreadHandle("@teaRecipes", [named("tea-recipes", "Test fixture with secret word")])?.slug, "tea-recipes")
+  // …and so does the slug folded, for a thread whose shown name drifted from its dispatch title.
+  assert.equal(resolveThreadHandle("@tea-recipe", [named("tea-recipes", "Test fixture with secret word")])?.slug, "tea-recipes")
   // A name always outranks another thread's slug.
-  assert.equal(resolveThreadHandle("@focusMode", [named("focus-mode", "Old thing"), named("x", "Focus mode")])?.slug, "x")
+  assert.equal(resolveThreadHandle("@focus-mode", [named("focus-mode", "Old thing"), named("x", "Focus mode")])?.slug, "x")
   assert.equal(resolveThreadHandle("@nothing", threads), undefined)
+})
+
+test("a camelCase handle written before the kebab switch still resolves", () => {
+  const threads = [named("a", "Shell budgets"), named("c", "ArkType perf")]
+  assert.equal(resolveThreadHandle("@shellBudgets", threads)?.slug, "a")
+  assert.equal(resolveThreadHandle("arkTypePerf", threads)?.slug, "c")
+  assert.equal(resolveThreadHandle("@teaRecipes", [named("tea-recipes", "Test fixture with secret word")])?.slug, "tea-recipes")
+})
+
+test("a short last word folds the same with or without its hyphen: dev-ops, devOps and devops agree", () => {
+  // "Dev ops" is two words whose last is too short to lose its plural, while `devops` is one that does;
+  // folding every spelling from the handle with its punctuation squeezed out keeps them one key.
+  const threads = [named("b", "Dev ops")]
+  for (const h of ["@dev-ops", "@devOps", "@devops", "dev-op"]) assert.equal(resolveThreadHandle(h, threads)?.slug, "b", h)
 })
 
 test("an open thread outranks a finished one carrying the same name", () => {
   const threads = [named("old", "Focus mode", false, 5), named("new", "Focus mode", true, 1)]
-  assert.equal(resolveThreadHandle("focusMode", threads)?.slug, "new")
-  assert.deepEqual(knownHandles(threads), ["@focusMode", "@focusMode (done)"])
+  assert.equal(resolveThreadHandle("focus-mode", threads)?.slug, "new")
+  assert.deepEqual(knownHandles(threads), ["@focus-mode", "@focus-mode (done)"])
 })
 
 function harness(tailerOver: Partial<Tailer> = {}, id = "m", name = "test") {
@@ -81,14 +93,14 @@ test("readThread answers by handle, and a miss lists the handles that exist", as
     h.storage.upsertSession(row("me", "Mentions"))
     h.storage.upsertSession(row("sb", "Shell budgets"))
     h.storage.setStatus("sb", "sid-sb", "Moving the cap into one module")
-    const hit = await h.router.readThread.handler({ input: { slug: "me", handle: "@shellBudgets" } })
+    const hit = await h.router.readThread.handler({ input: { slug: "me", handle: "@shell-budgets" } })
     assert.equal(hit.found, true)
-    assert.equal(hit.handle, "shellBudgets")
+    assert.equal(hit.handle, "shell-budgets")
     assert.equal(hit.slug, "sb")
     assert.equal(hit.status, "Moving the cap into one module")
-    const miss = await h.router.readThread.handler({ input: { slug: "me", handle: "@shelBudget" } })
+    const miss = await h.router.readThread.handler({ input: { slug: "me", handle: "@shel-budget" } })
     assert.equal(miss.found, false)
-    assert.deepEqual(miss.known, ["@shellBudgets"], "the caller is not offered to itself")
+    assert.deepEqual(miss.known, ["@shell-budgets"], "the caller is not offered to itself")
   } finally { h.close() }
 })
 
@@ -98,8 +110,8 @@ test("messageThread queues a signed message for the other thread, and refuses se
     h.storage.upsertSession(row("me", "Mentions"))
     h.storage.upsertSession(row("sb", "Shell budgets"))
     h.storage.upsertSession(row("fm", "Focus mode", { state: "archived", archived: 1 }))
-    const sent = await h.router.messageThread.handler({ input: { slug: "me", handle: "shellBudgets", message: "Which file owns the cap?" } })
-    assert.deepEqual(sent, { sent: true, handle: "shellBudgets", from: "mentions" })
+    const sent = await h.router.messageThread.handler({ input: { slug: "me", handle: "shell-budgets", message: "Which file owns the cap?" } })
+    assert.deepEqual(sent, { sent: true, handle: "shell-budgets", from: "mentions" })
     assert.equal(h.kicks(), 1, "the scheduler is kicked so it goes out now, not on the next poll")
     const queued = createWakeDeliveryStore(h.storage.scope).list()
     assert.equal(queued.length, 1)
@@ -110,7 +122,7 @@ test("messageThread queues a signed message for the other thread, and refuses se
 
     const self = await h.router.messageThread.handler({ input: { slug: "me", handle: "@mentions", message: "hi" } })
     assert.equal(self.sent, false)
-    const done = await h.router.messageThread.handler({ input: { slug: "me", handle: "focusMode", message: "hi" } })
+    const done = await h.router.messageThread.handler({ input: { slug: "me", handle: "focus-mode", message: "hi" } })
     assert.equal(done.sent, false)
     assert.match(done.refusal ?? "", /is done/)
 
@@ -129,12 +141,12 @@ test("await_reply parks the asker on a timer that the ANSWER cancels, and the an
   try {
     h.storage.upsertSession(row("me", "Mentions"))
     h.storage.upsertSession(row("sb", "Shell budgets"))
-    const asked = await h.router.messageThread.handler({ input: { slug: "me", handle: "shellBudgets", message: "Which file owns the cap?", awaitReply: true, for: "30m" } })
+    const asked = await h.router.messageThread.handler({ input: { slug: "me", handle: "shell-budgets", message: "Which file owns the cap?", awaitReply: true, for: "30m" } })
     assert.equal(asked.sent, true)
     assert.match(asked.timerId ?? "", /^tmr_/)
     const waits = h.storage.listThreadTimers("me", { armedOnly: true })
     assert.equal(waits.length, 1, "the asker holds one armed wait")
-    assert.match(waits[0]!.prompt, /^Waiting on @shellBudgets to reply \(thread `sb`\)/)
+    assert.match(waits[0]!.prompt, /^Waiting on @shell-budgets to reply \(thread `sb`\)/)
     assert.ok(Math.abs(waits[0]!.fire_at - Date.now() - 30 * 60_000) < 5_000)
     assert.match(createWakeDeliveryStore(h.storage.scope).list()[0]!.message, /@mentions is WAITING on your answer/)
 
@@ -180,14 +192,14 @@ test("readThread reaches another open project's thread, says whose it is, and pr
     a.storage.upsertSession(row("me", "Mentions"))
     b.storage.upsertSession(row("sb", "Shell budgets"))
     b.storage.setStatus("sb", "sid-sb", "Moving the cap")
-    const hit = await a.router.readThread.handler({ input: { slug: "me", handle: "@shellBudgets" } })
+    const hit = await a.router.readThread.handler({ input: { slug: "me", handle: "@shell-budgets" } })
     assert.equal(hit.found, true)
     assert.equal(hit.slug, "sb")
     assert.equal(hit.status, "Moving the cap")
     assert.equal(hit.project, "beta")
 
     a.storage.upsertSession(row("mine", "Shell budgets"))
-    const own = await a.router.readThread.handler({ input: { slug: "me", handle: "@shellBudgets" } })
+    const own = await a.router.readThread.handler({ input: { slug: "me", handle: "@shell-budgets" } })
     assert.equal(own.slug, "mine")
     assert.equal(own.project, undefined, "the caller's own project wins a handle both carry")
 
@@ -203,7 +215,7 @@ test("messageThread delivers into another project's thread, and its answer settl
     b.storage.upsertSession(row("sb", "Shell budgets"))
     // The same slug in the SENDER's project: a message from it must not settle the cross-project wait.
     a.storage.upsertSession(row("sb", "Other thing"))
-    const asked = await a.router.messageThread.handler({ input: { slug: "me", handle: "shellBudgets", message: "Which file?", awaitReply: true } })
+    const asked = await a.router.messageThread.handler({ input: { slug: "me", handle: "shell-budgets", message: "Which file?", awaitReply: true } })
     assert.equal(asked.sent, true)
     assert.equal(asked.project, "beta")
     assert.equal(createWakeDeliveryStore(a.storage.scope).list().length, 0, "nothing lands in the sender's project")
@@ -213,7 +225,7 @@ test("messageThread delivers into another project's thread, and its answer settl
     assert.match(delivered[0]!.message, /^Message from @mentions, another Frizz thread in the alpha project/)
     assert.equal(b.kicks(), 1, "the recipient's scheduler is kicked")
     const waits = a.storage.listThreadTimers("me", { armedOnly: true })
-    assert.match(waits[0]!.prompt, /^Waiting on @shellBudgets to reply \(thread `sb` in beta\)/)
+    assert.match(waits[0]!.prompt, /^Waiting on @shell-budgets to reply \(thread `sb` in beta\)/)
 
     assert.equal((await a.router.messageThread.handler({ input: { slug: "sb", handle: "mentions", message: "hi" } })).answered, undefined)
     assert.equal(a.storage.listThreadTimers("me", { armedOnly: true }).length, 1, "a same-slug thread here is not the one waited on")
@@ -225,7 +237,7 @@ test("messageThread delivers into another project's thread, and its answer settl
   } finally { close() }
 })
 
-// A THREAD'S SUB-AGENTS BY ADDRESS — `portTheParser.cacheKeys`, resolved against the thread's directory
+// A THREAD'S SUB-AGENTS BY ADDRESS — `port-the-parser.cache-keys`, resolved against the thread's directory
 // (live first, then finished newest first; tailer subAgentDirectory).
 const DIRECTORY = [
   { id: "toolu_keys", label: "Cache keys", state: "stale" },
@@ -238,26 +250,26 @@ const DIRECTORY = [
 ]
 
 test("a sub-agent address walks the thread's directory, one segment per level", () => {
-  assert.equal(resolveSubAgent(["wave2", "implW3"], DIRECTORY)?.id, "aW3")
-  assert.equal(resolveSubAgent(["implW3"], DIRECTORY), undefined, "a workflow's agent is not the thread's own child")
+  assert.equal(resolveSubAgent(["wave-2", "impl-w3"], DIRECTORY)?.id, "aW3")
+  assert.equal(resolveSubAgent(["impl-w3"], DIRECTORY), undefined, "a workflow's agent is not the thread's own child")
   assert.equal(resolveSubAgent(["nothing"], DIRECTORY), undefined)
 })
 
 test("a reused name means the running child, else the newest finished one; the id always names one", () => {
-  assert.equal(resolveSubAgent(["cacheKeys"], DIRECTORY)?.id, "toolu_keys2", "running beats a quiet live sibling")
+  assert.equal(resolveSubAgent(["cache-keys"], DIRECTORY)?.id, "toolu_keys2", "running beats a quiet live sibling")
   assert.equal(resolveSubAgent(["review"], DIRECTORY)?.id, "toolu_review", "directory order puts the newest first")
   assert.equal(resolveSubAgent(["toolu_old_review"], DIRECTORY)?.id, "toolu_old_review")
   assert.equal(resolveSubAgent(["toolu_essay"], DIRECTORY)?.id, "toolu_essay", "a child with no handle is still reachable by id")
 })
 
 test("a miss is answered with the addresses that exist, finished ones tagged, sentences left out", () => {
-  assert.deepEqual(subAgentAddresses("portTheParser", DIRECTORY), [
-    "@portTheParser.cacheKeys",
-    "@portTheParser.cacheKeys",
-    "@portTheParser.wave2",
-    "@portTheParser.wave2.implW3",
-    "@portTheParser.review (done)",
-    "@portTheParser.review (done)",
+  assert.deepEqual(subAgentAddresses("port-the-parser", DIRECTORY), [
+    "@port-the-parser.cache-keys",
+    "@port-the-parser.cache-keys",
+    "@port-the-parser.wave-2",
+    "@port-the-parser.wave-2.impl-w3",
+    "@port-the-parser.review (done)",
+    "@port-the-parser.review (done)",
   ])
 })
 
@@ -278,10 +290,10 @@ test("readThread on a thread.subAgent address answers from the child's own trans
   try {
     h.storage.upsertSession(row("me", "Mentions"))
     h.storage.upsertSession(row("pp", "Port the parser"))
-    const hit = await h.router.readThread.handler({ input: { slug: "me", handle: "@portTheParser.review" } })
+    const hit = await h.router.readThread.handler({ input: { slug: "me", handle: "@port-the-parser.review" } })
     assert.equal(hit.found, true)
-    assert.equal(hit.handle, "portTheParser.review")
-    assert.equal(hit.subAgentOf, "portTheParser")
+    assert.equal(hit.handle, "port-the-parser.review")
+    assert.equal(hit.subAgentOf, "port-the-parser")
     assert.equal(hit.slug, "pp")
     assert.equal(hit.state, "done")
     assert.equal(hit.outcome, "completed")
@@ -291,14 +303,14 @@ test("readThread on a thread.subAgent address answers from the child's own trans
     assert.equal(drawer.messages[0]!.displayText, "Review the parser port.", "the child's drawer opens on the same task, not on Frizz's rules for helpers")
     assert.match(drawer.messages[0]!.text, /ORCHESTRATION EPILOGUE/, "the raw prompt the child received is kept")
 
-    const miss = await h.router.readThread.handler({ input: { slug: "me", handle: "portTheParser.nothing" } })
+    const miss = await h.router.readThread.handler({ input: { slug: "me", handle: "port-the-parser.nothing" } })
     assert.equal(miss.found, false)
-    assert.equal(miss.subAgentOf, "portTheParser")
-    assert.deepEqual(miss.known, ["@portTheParser.cacheKeys", "@portTheParser.review (done)"])
+    assert.equal(miss.subAgentOf, "port-the-parser")
+    assert.deepEqual(miss.known, ["@port-the-parser.cache-keys", "@port-the-parser.review (done)"])
 
     const directory = await h.router.subAgentDirectory.handler({ input: { slug: "pp" } })
-    assert.equal(directory.threadHandle, "portTheParser")
-    assert.deepEqual(directory.agents.map((a) => a.address), ["portTheParser.cacheKeys", "portTheParser.review"])
+    assert.equal(directory.threadHandle, "port-the-parser")
+    assert.deepEqual(directory.agents.map((a) => a.address), ["port-the-parser.cache-keys", "port-the-parser.review"])
   } finally {
     h.close()
     rmSync(dir, { recursive: true, force: true })
@@ -310,9 +322,9 @@ test("messageThread refuses a sub-agent address and names the thread that can re
   try {
     h.storage.upsertSession(row("me", "Mentions"))
     h.storage.upsertSession(row("pp", "Port the parser"))
-    const refused = await h.router.messageThread.handler({ input: { slug: "me", handle: "@portTheParser.cacheKeys", message: "hi" } })
+    const refused = await h.router.messageThread.handler({ input: { slug: "me", handle: "@port-the-parser.cache-keys", message: "hi" } })
     assert.equal(refused.sent, false)
-    assert.match(refused.refusal ?? "", /sub-agent of @portTheParser.*message @portTheParser/)
+    assert.match(refused.refusal ?? "", /sub-agent of @port-the-parser.*message @port-the-parser/)
     assert.equal(createWakeDeliveryStore(h.storage.scope).list().length, 0, "nothing was queued anywhere")
   } finally { h.close() }
 })
@@ -325,8 +337,8 @@ test("activity names the thread by its handle and each running sub-agent by its 
   try {
     h.storage.upsertSession(row("pp", "Port the parser"))
     const read = await h.router.listOwnThreadActivity.handler({ input: { slug: "pp" } })
-    assert.equal(read.handle, "portTheParser")
-    assert.deepEqual(read.activity.map((i) => [i.kind, i.id, i.address]), [["agent", "aKeys", "portTheParser.cacheKeys"]])
+    assert.equal(read.handle, "port-the-parser")
+    assert.deepEqual(read.activity.map((i) => [i.kind, i.id, i.address]), [["agent", "aKeys", "port-the-parser.cache-keys"]])
   } finally { h.close() }
 })
 
@@ -334,7 +346,7 @@ test("subAgentAddressFor names a child the thread is dispatching, by the one nam
   const h = harness()
   try {
     h.storage.upsertSession(row("pp", "Port the parser"))
-    assert.deepEqual(await h.router.subAgentAddressFor.handler({ input: { slug: "pp", label: "Cache keys" } }), { address: "portTheParser.cacheKeys" })
+    assert.deepEqual(await h.router.subAgentAddressFor.handler({ input: { slug: "pp", label: "Cache keys" } }), { address: "port-the-parser.cache-keys" })
     assert.deepEqual(await h.router.subAgentAddressFor.handler({ input: { slug: "pp", label: "Fresh-context review of the whole effort diff" } }), {}, "a sentence has no handle")
     assert.deepEqual(await h.router.subAgentAddressFor.handler({ input: { slug: "nope", label: "Cache keys" } }), {})
   } finally { h.close() }

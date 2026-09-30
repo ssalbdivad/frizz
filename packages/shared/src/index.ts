@@ -1882,7 +1882,13 @@ export function parseTimerWake(text: string): TimerWake | null {
  *  the thread's previous handoff, state and queue place as if it never happened (server
  *  spinoff-side-turn.ts). It still ends that turn with two words rather than none: asked for silence, a
  *  worker complied and Claude Code re-prompted it for visible output — an extra model call per spinoff. */
-export function spinoffRequestMessage(input: { id: string; instructions: string }): string {
+export function spinoffRequestMessage(input: { id: string; instructions: string; project?: { name: string; dir: string } }): string {
+  // A CROSS-PROJECT spinoff (2026-09-30): the human chose another project for the new thread. The worker
+  // still calls spawn_thread as always — Frizz routes the dispatch — but its brief has to be written for a
+  // thread whose working directory is a different checkout, so it is told which.
+  const elsewhere = input.project
+    ? ` The new thread starts in the ${input.project.name} project (\`${input.project.dir}\`), not this one: its working directory is that checkout, so give absolute paths for anything it should read here, and do not assume it shares this project's files.`
+    : ""
   return [
     `<spinoff-request id="${input.id}">`,
     "The human asked to spinoff a NEW thread from this conversation. Their instructions for it:",
@@ -1891,7 +1897,7 @@ export function spinoffRequestMessage(input: { id: string; instructions: string 
     "</instructions>",
     "",
     "Do this now, before anything else:",
-    "1. Gather what the new thread needs to start cold — the relevant facts, decisions, file paths, commands, errors and open questions from this conversation, and whatever in the code is worth pointing at. Unless the instructions point elsewhere, they are about the most recent part of the conversation. Brief it; do not do its work.",
+    `1. Gather what the new thread needs to start cold — the relevant facts, decisions, file paths, commands, errors and open questions from this conversation, and whatever in the code is worth pointing at. Unless the instructions point elsewhere, they are about the most recent part of the conversation. Brief it; do not do its work.${elsewhere}`,
     `2. Call \`mcp__frizz__spawn_thread\` with \`spinoff: "${input.id}"\`, a self-contained \`prompt\` (the new thread sees none of this conversation; Frizz adds the human's instructions and a link back here itself), and a \`model\` and \`effort\` fit for the task. This is the human's explicit request, so the tool's last-resort caution does not apply.`,
     "3. Do not announce the new thread, link it or summarize your brief: the human's chat already shows the spinoff, linked to it. If you were in the middle of work when this arrived, carry on with it. If you had come to rest, end your turn right after the tool call with the two words `Spun off.` and nothing else — this is a side request, and Frizz keeps your previous handoff and this thread's state exactly as they were, so do not sign off again. Do not wait on the new thread.",
     "</spinoff-request>",
@@ -3109,6 +3115,10 @@ export const SpinoffView = z.object({
   childSlug: ThreadSlug.nullable(),
   instructions: z.string(),
   createdAt: z.number(),
+  // A CROSS-PROJECT spinoff (2026-09-30) names the project of whichever end is NOT the board's own, so a
+  // link to it can go there. Absent for an end in this project — every same-project spinoff.
+  parentProjectId: z.string().optional(),
+  childProjectId: z.string().optional(),
 }).strict()
 export type SpinoffView = z.infer<typeof SpinoffView>
 
@@ -4129,6 +4139,10 @@ export const SpinoffInput = z.object({
   // Bound to the session the tab is looking at, exactly like FollowUpInput: the request is a message.
   sessionId: z.string().min(1),
   instructions: z.string().trim().min(1).max(SPINOFF_INSTRUCTIONS_MAX),
+  // The project the new thread starts in (its id), when that is not this thread's own (2026-09-30). It
+  // must be open on this server: the parent's worker still dispatches through its own project, and Frizz
+  // routes that dispatch to this one (router fulfilSpinoff).
+  project: z.string().min(1).optional(),
 }).strict()
 export type SpinoffInput = z.infer<typeof SpinoffInput>
 export const SpinoffResult = z.object({ id: z.string() }).strict()
@@ -4536,8 +4550,8 @@ export type SetOwnThreadTitleInput = z.infer<typeof SetOwnThreadTitleInput>
 // another open thread already holds the name (named, so it can pick a different subject), the name is
 // longer than two words, or the worker already spent its one rename (thread-names.ts).
 // ONE THREAD READING OR MESSAGING ANOTHER, BY HANDLE (thread-handle.ts). `slug` is the CALLER, stamped
-// into the worker's MCP env exactly as for `title`; `handle` is the other thread's camelCase name as the
-// board shows it — `shellBudgets`, with or without the `@`, in any casing.
+// into the worker's MCP env exactly as for `title`; `handle` is the other thread's kebab-case name as the
+// board shows it — `shell-budgets`, with or without the `@`, in any casing.
 export const ReadThreadInput = z.object({
   slug: ThreadSlug,
   handle: z.string().trim().min(1).max(200),

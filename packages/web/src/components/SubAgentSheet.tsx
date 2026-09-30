@@ -50,7 +50,7 @@ import { SheetHeader } from "./ui/SheetHeader.tsx"
 // INSTANT OPEN: the frame + header + spinner mount and paint IMMEDIATELY; the heavy transcript body is
 // deferred one frame (bodyReady) so the click→sheet-visible latency isn't gated on parsing/rendering a
 // large transcript. The spinner covers the gap.
-// The header NAMES the child by its address (`portTheParser.cacheKeys`, groups.ts subAgentTitle) — the
+// The header NAMES the child by its address (`port-the-parser.cache-keys`, groups.ts subAgentTitle) — the
 // thing to type after `@` to point another thread at it. Its own component because it reads the BOARD,
 // which is rewritten many times a minute; subscribed here, a board push re-renders one line of header
 // rather than the whole transcript beneath it. A returned child has left the board's live list, so the

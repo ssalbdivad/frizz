@@ -21,8 +21,8 @@ import { spaNavigate } from "./router.ts"
 // that thread's drawer address through the router, which opens it in place (the focus moves), where
 // leaving it to the browser reloaded the whole page.
 //
-// A SUB-AGENT MENTION in agent prose (`@portTheParser.cacheKeys`, lib/mentionAutolink.ts) is the same
-// link with the child's address in the fragment — `/thread/<slug>#portTheParser.cacheKeys` — so a
+// A SUB-AGENT MENTION in agent prose (`@port-the-parser.cache-keys`, lib/mentionAutolink.ts) is the same
+// link with the child's address in the fragment — `/thread/<slug>#port-the-parser.cache-keys` — so a
 // modified click still lands on the thread, and a plain one here resolves the address against the
 // thread's sub-agent directory and opens the child (openSubAgentMention, the path a human's mention
 // takes too). Across projects the fragment is dropped: the directory is asked of the page's project.

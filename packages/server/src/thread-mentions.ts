@@ -1,35 +1,40 @@
 import { subAgentAddress, subAgentChain, subAgentHandle, threadHandle } from "@frizz/shared"
 import { foldThreadName, type NamedThread } from "./thread-names.ts"
 
-// ONE THREAD POINTING AT ANOTHER BY HANDLE — "ask @shellBudgets about this", "reconcile with @focusMode"
-// (maintainer 2026-09-29). The handle is the camelCase form of the thread's name (shared thread-handle.ts),
-// which is what the board SHOWS, so the operator and the worker type the same thing.
+// ONE THREAD POINTING AT ANOTHER BY HANDLE — "ask @shell-budgets about this", "reconcile with
+// @focus-mode" (maintainer 2026-09-29). The handle is the kebab-case form of the thread's name (shared
+// thread-handle.ts), which is what the board SHOWS, so the operator and the worker type the same thing.
 //
-// Both sides are folded from the HANDLE, never from the stored words: `foldThreadName` strips a plural on
-// the LAST word, and "Dev ops" is two words ("dev" + "ops", too short to strip) while `devOps` is one
-// ("devops" → "devop"). Folding the handle on both sides makes every spelling of it agree.
+// Both sides are folded from the HANDLE with its punctuation squeezed out first, never from the stored
+// words: `foldThreadName` strips a plural on the LAST word, and "Dev ops" is two words ("dev" + "ops",
+// too short to strip) while `dev-ops` squeezed is one ("devops" → "devop"). Squeezing first makes
+// `dev-ops`, `devOps` and `devops` agree — the web's `foldHandle` is the same key.
 
-/** The handle a named thread is addressed by — its camelCase name, or, for a name too long to have one
- *  (a legacy sentence title, a long session title), its SLUG in camelCase, which resolves the same way —
- *  so every thread is addressable, and always by something shaped like a handle. */
+/** The handle a named thread is addressed by — its kebab-case name, or, for a name too long to have one
+ *  (a legacy sentence title, a long session title), its SLUG, which is already kebab-case and resolves
+ *  the same way — so every thread is addressable, and always by something shaped like a handle. */
 export function handleOf(t: Pick<NamedThread, "name" | "slug">): string {
-  return threadHandle(t.name) ?? threadHandle(t.slug.replace(/-/g, " ")) ?? t.slug
+  return threadHandle(t.name) ?? t.slug
 }
 
 function key(handle: string): string {
-  return foldThreadName(handle.replace(/^@/, ""))
+  return foldThreadName(handle.replace(/^@/, "").replace(/[^\p{L}\p{N}]+/gu, ""))
 }
 
 /** The thread `handle` names: an OPEN thread first (names are unique among those), else the most recent
  *  finished one that carried it. The SLUG resolves too, folded the same way: it is minted from the
- *  dispatch title, so `@teaRecipes` still finds a thread dispatched as "Tea recipes" whose shown name has
+ *  dispatch title, so `@tea-recipes` still finds a thread dispatched as "Tea recipes" whose shown name has
  *  since become Claude's own session title (seen on a real run, 2026-09-29). */
 export function resolveThreadHandle(handle: string, threads: readonly NamedThread[]): NamedThread | undefined {
   const bare = handle.trim().replace(/^@/, "")
   const want = key(bare)
   if (!want) return undefined
-  const named = threads.filter((t) => key(handleOf(t)) === want || t.slug === bare)
-  const hits = named.length ? named : threads.filter((t) => key(t.slug) === want)
+  // A name outranks a slug, an exact slug a folded one. Kebab handles made this ordering load-bearing: a
+  // handle and a slug are now spelled alike, so `@focus-mode` literally equals the slug of an older
+  // thread dispatched as "Focus mode" and since renamed, while another thread is NAMED that now.
+  const named = threads.filter((t) => key(handleOf(t)) === want)
+  const exact = named.length ? named : threads.filter((t) => t.slug === bare)
+  const hits = exact.length ? exact : threads.filter((t) => key(t.slug) === want)
   return hits.find((t) => t.open) ?? [...hits].sort((a, b) => b.at - a.at)[0]
 }
 
@@ -42,7 +47,7 @@ export function knownHandles(threads: readonly NamedThread[], exceptSlug?: strin
     .map((t) => `@${handleOf(t)}${t.open ? "" : " (done)"}`)
 }
 
-// A THREAD'S SUB-AGENTS, BY ADDRESS — `portTheParser.cacheKeys` (shared thread-handle.ts), resolved against
+// A THREAD'S SUB-AGENTS, BY ADDRESS — `port-the-parser.cache-keys` (shared thread-handle.ts), resolved against
 // the thread's sub-agent DIRECTORY: every child it ever dispatched, live first, then finished ones newest
 // first (tailer subAgentDirectory). A name reused over a thread's life — a second "Review" an hour after the
 // first — therefore means the one still running, else the latest, the way a thread handle means the open

@@ -306,7 +306,7 @@ test("an answered question ON ITS WAY to the worker is a sign-off too, until the
 test("a rest on a wait for another thread's answer is not nudged", async () => {
   const h = nudger({})
   try {
-    h.storage.armThreadTimer({ id: "tmr_reply", slug: h.slug, prompt: replyWaitPrompt("shellBudgets", "sb"), fireAtMs: Date.now() + 3_600_000, createdAtMs: Date.now() })
+    h.storage.armThreadTimer({ id: "tmr_reply", slug: h.slug, prompt: replyWaitPrompt("shell-budgets", "sb"), fireAtMs: Date.now() + 3_600_000, createdAtMs: Date.now() })
     await h.s.tick()
     assert.deepEqual(h.nudges(), [])
   } finally { h.close() }
@@ -318,7 +318,7 @@ test("a rest on a wait for another thread's answer is not nudged", async () => {
 test("the answer ON ITS WAY from the other thread is a sign-off too", async () => {
   const h = nudger({})
   try {
-    enqueueThreadMessageWake(h.storage, { slug: h.slug, sessionId: "sid", fromSlug: "sb", message: "Message from @shellBudgets: 742", nowMs: Date.now() + 3_600_000 })
+    enqueueThreadMessageWake(h.storage, { slug: h.slug, sessionId: "sid", fromSlug: "sb", message: "Message from @shell-budgets: 742", nowMs: Date.now() + 3_600_000 })
     await h.s.tick()
     const minted = h.storage.db.prepare("SELECT id FROM wake_delivery WHERE thread_slug = ? AND fence_id LIKE 'signoff:%'").all(h.slug)
     assert.deepEqual(minted, [])

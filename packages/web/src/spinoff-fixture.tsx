@@ -65,11 +65,11 @@ const F = edge("spn_f000000000000006", "docs-pass", null, "Draft the release not
 
 const BRIEF = `## Where this came from
 
-The parent thread was chasing why **live sub-agents read as not running** in the rail. Along the way it added *sub-agent addresses*: every child a worker dispatches gets a \`thread.child\` handle (\`@subAgentLiveness.cacheKeys\`), so the human can point a message at one directly.
+The parent thread was chasing why **live sub-agents read as not running** in the rail. Along the way it added *sub-agent addresses*: every child a worker dispatches gets a \`thread.child\` handle (\`@sub-agent-liveness.cache-keys\`), so the human can point a message at one directly.
 
 ## What exists today
 
-- \`packages/shared/src/thread-handle.ts\` — \`subAgentHandle(label)\` camelCases a dispatch name (≤ 5 words) the same way a thread's title becomes its handle.
+- \`packages/shared/src/thread-handle.ts\` — \`subAgentHandle(label)\` kebab-cases a dispatch name (≤ 5 words) the same way a thread's title becomes its handle.
 - \`packages/web/src/groups.ts\` — \`subAgentName\`, \`subAgentAddressOf\` and \`subAgentTitle\` render the address in the rail, the queue card and the drawer header.
 - \`packages/server/src/router.ts\` — \`subAgentDirectory\` serves every child a thread ever dispatched, live or returned, so a mention of a finished child still resolves.
 - The composer's \`@\` typeahead completes \`@thread.\` into that thread's children (\`lib/threadMentions.ts\` \`splitMentionQuery\`).
@@ -142,7 +142,7 @@ const TRANSCRIPTS: Record<string, TranscriptMessage[]> = {
     user("delivery:spinoff-spn_f", spinoffRequestMessage({ id: F.id, instructions: F.instructions }), 3, { queued: true, deliveryId: `spinoff-${F.id}`, deliveryState: "unconfirmed" } as Partial<TranscriptMessage>),
   ],
   [CHILD.id]: [
-    user("c-u0", spinoffChildPrompt({ parentSlug: PARENT.id, parentTitle: PARENT.title, parentHandle: "subAgentLiveness", instructions: A.instructions, brief: BRIEF }), 18, {
+    user("c-u0", spinoffChildPrompt({ parentSlug: PARENT.id, parentTitle: PARENT.title, parentHandle: "sub-agent-liveness", instructions: A.instructions, brief: BRIEF }), 18, {
       displayText: A.instructions,
       spinoffOrigin: { instructions: A.instructions, brief: BRIEF },
     }),

@@ -626,7 +626,7 @@ anything, so it carries the operator's shorthand and their typos. Once you have 
 issue, opened the code, found the bug — call \`mcp__frizz__title\` with the thread's real name: ONE or
 TWO words naming its SUBJECT, not the action (\`Shell budgets\`, never \`Fix the shell budget default\`),
 sentence case, spelled the way the PROJECT spells it rather than the way the prompt did. Keep it SHORT:
-the human types it as a camelCase handle (\`@shellBudgets\`), and Frizz refuses one past
+the human types it as a kebab-case handle (\`@shell-budgets\`), and Frizz refuses one past
 ${THREAD_HANDLE_MAX_CHARS} characters.
 
 Once, and not on arrival. A name you register before you understand the task is the same guess you are
@@ -637,13 +637,13 @@ Frizz keeps a separate status line for that.
 
 ## Other threads, by handle
 
-The board shows every thread under a camelCase HANDLE (\`Shell budgets\` shows as \`shellBudgets\`), and
-the human points you at another thread with it: "ask @shellBudgets about this", "reconcile with
-@focusMode". Threads talk to each other through two tools, and only these two:
+The board shows every thread under a kebab-case HANDLE (\`Shell budgets\` shows as \`shell-budgets\`), and
+the human points you at another thread with it: "ask @shell-budgets about this", "reconcile with
+@focus-mode". Threads talk to each other through two tools, and only these two:
 
 - **\`mcp__frizz__read_thread\`** — its request, status, last few messages (its approach and its handoff)
   and edited files. It wakes nobody, so it is ALWAYS the first move, and it often answers the question.
-  A sub-agent reads the same way at its address, \`@portTheParser.cacheKeys\`, even after it returns.
+  A sub-agent reads the same way at its address, \`@port-the-parser.cache-keys\`, even after it returns.
 - **\`mcp__frizz__message_thread\`** — a message into its conversation, signed with your handle. To ASK
   and wait for the answer, pass \`await_reply: true\` and rest: you are parked until it answers (or the
   wait runs out and wakes you), with nothing else to sign off. To TELL — your approach, a file you are
@@ -654,7 +654,7 @@ something, answer with \`message_thread\` — promptly when it says the sender i
 to say you cannot help. Never reply just to acknowledge.
 
 Wherever the human reads about another thread or a sub-agent, write its \`@\` address
-(\`@shellBudgets\`, \`@portTheParser.cacheKeys\`): the board links it, and a description or bold name opens nothing.`
+(\`@shell-budgets\`, \`@port-the-parser.cache-keys\`): the board links it, and a description or bold name opens nothing.`
 
 // LEGACY NAME, current behaviour. This block and `scratchpadOrientation` still say "scratchpad"; both
 // describe the scratch DIRECTORY. (`ThreadView.scratchpadPath` and the `threadScratchpad` RPC went with
@@ -730,7 +730,7 @@ result before you rest; if you cannot collect one, say so rather than dropping i
 fan-out shallow: a rested sub-agent is not reliably re-woken by grandchildren.
 
 **NAME A SUB-AGENT LIKE A THREAD.** Its Agent \`description\` (a Workflow agent's \`label\`) is its name
-and its address under yours — \`"Cache keys"\` on \`portTheParser\` is \`@portTheParser.cacheKeys\` — so:
+and its address under yours — \`"Cache keys"\` on \`port-the-parser\` is \`@port-the-parser.cache-keys\` — so:
 one or two words naming its subject, unique in this thread, handle within ${THREAD_HANDLE_MAX_CHARS} characters.
 This outranks the tool's "3-5 word" hint and the \`-ing\` caption rule; the task goes in the \`prompt\`.
 
@@ -882,8 +882,8 @@ first-line comment in this form:
 \`<!-- frizz title="Queue focus" -->\`
 
 Replace the example with the thread's name: ONE or TWO words naming the SUBJECT of the task, not the
-action (\`Queue focus\`, not \`Fix queue focus\`), short enough that its camelCase handle
-(\`queueFocus\`) is at most ${THREAD_HANDLE_MAX_CHARS} characters, and different from every name your
+action (\`Queue focus\`, not \`Fix queue focus\`), short enough that its kebab-case handle
+(\`queue-focus\`) is at most ${THREAD_HANDLE_MAX_CHARS} characters, and different from every name your
 developer instruction lists as taken. Use SENTENCE case — capitalize only the first word and any proper nouns; never
 Title-Case Every Word. Put the comment on its own first line with nothing before it. Continue the message normally after it. Emit it exactly once and
 never again on later turns. Frizz strips this comment from visible chat and uses only its

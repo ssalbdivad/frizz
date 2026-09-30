@@ -26,7 +26,7 @@ test("queue cards show BOTH running and stale child work, and no model+effort ta
 
   assert.match(html, /data-queue-subagents/)
   // Each child by its handle — what `@thread.` completes to (groups.ts subAgentName).
-  assert.match(html, />completeGVSFixDifferentialRepro</)
+  assert.match(html, />complete-gvs-fix-differential-repro</)
   assert.match(html, /data-running-indicator="queue-subagent"/)
   // The model+effort tag was DELETED from these lines on 2026-07-27 (maintainer): the profile belongs
   // to the prompt box's own control one line above, not repeated on every child line beneath it.
@@ -36,7 +36,7 @@ test("queue cards show BOTH running and stale child work, and no model+effort ta
   // A STALE child now renders on the card too (maintainer ruling 2026-07-24): a stale child is
   // unresolved work, not gone, and hiding it made the card claim "done underneath" while the rail
   // still showed it. It gets the flat stale dot, not the pulsing running indicator.
-  assert.match(html, />oldDifferentialRepro</)
+  assert.match(html, />old-differential-repro</)
   assert.match(html, /stale — no recent output/)
 })
 
@@ -51,7 +51,7 @@ test("a queued parent's batch draws its RETURNED children after the live ones, e
     ],
   }))
   // Live first: it is what the card is still waiting on.
-  assert.ok(html.indexOf(">auditTheResolver<") < html.indexOf(">traceTheCacheCollision<"))
+  assert.ok(html.indexOf(">audit-the-resolver<") < html.indexOf(">trace-the-cache-collision<"))
   assert.match(html, /data-returned-mark="completed"/)
   assert.match(html, /data-returned-mark="failed"/)
   // The reading says how long AGO it came back, in the house grammar — never how long it worked. (Half a

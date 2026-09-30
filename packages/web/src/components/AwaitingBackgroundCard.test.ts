@@ -273,7 +273,7 @@ test("a row with nothing to open is non-interactive — no chevron, never a disa
   const idlessRows = renderToStaticMarkup(createElement(AwaitingWaitTable, { thread: idless, divider: false }))
   assert.doesNotMatch(idlessRows, /lucide-chevron-right/)
   assert.doesNotMatch(idlessRows, /disabled/)
-  assert.match(text(idless), /auditTheParser/, "…and the row is still there, named by its handle")
+  assert.match(text(idless), /audit-the-parser/, "…and the row is still there, named by its handle")
 })
 
 test("the sub-agent row says its profile without the dispatch namespace", () => {

@@ -59,15 +59,15 @@ test("the rail shows names as handles, and `@` offers them — open first, done 
 }, async () => {
   await open()
   const rail = await page!.$$eval("[data-sidebar-rail] [data-xq-thread-row]", (rows) => rows.map((r) => r.textContent))
-  assert.ok(rail.includes("shellBudgets") && rail.includes("arkTypePerf"), `handles in the rail: ${rail.join(", ")}`)
+  assert.ok(rail.includes("shell-budgets") && rail.includes("arktype-perf"), `handles in the rail: ${rail.join(", ")}`)
   await page!.type(BOX, "ask @")
   await page!.waitForSelector(MENU)
   const rows = await menuRows()
-  assert.ok(!rows.includes("@focusMode"), "the thread being written into is not offered")
-  assert.equal(rows.at(-1), "@billingWebhooks", "a done thread comes after every open one")
+  assert.ok(!rows.includes("@focus-mode"), "the thread being written into is not offered")
+  assert.equal(rows.at(-1), "@billing-webhooks", "a done thread comes after every open one")
   assert.ok(!rows.some((r) => r.startsWith("@rework")), "a sentence-length title has no handle")
   await page!.type(BOX, "bud")
-  assert.deepEqual(await menuRows(), ["@budgetReport", "@shellBudgets"], "a handle prefix, then a word inside one")
+  assert.deepEqual(await menuRows(), ["@budget-report", "@shell-budgets"], "a handle prefix, then a word inside one")
   assert.deepEqual(errors, [], `no page errors: ${errors.join(" | ")}`)
 })
 
@@ -80,15 +80,15 @@ test("ArrowDown+Enter completes mid-draft, Tab completes, and Escape closes with
   await page!.waitForSelector(MENU)
   await page!.keyboard.press("ArrowDown")
   await page!.keyboard.press("Enter")
-  assert.equal(await boxValue(), "ask @shellBudgets ", "the highlighted row, inserted as text — no newline, no send")
-  await waitForCaretAt("ask @shellBudgets ".length)
+  assert.equal(await boxValue(), "ask @shell-budgets ", "the highlighted row, inserted as text — no newline, no send")
+  await waitForCaretAt("ask @shell-budgets ".length)
   assert.equal(await menuVisible(), false)
 
   await page!.type(BOX, "and @ark")
   await page!.waitForSelector(MENU)
   await page!.keyboard.press("Tab")
-  assert.equal(await boxValue(), "ask @shellBudgets and @arkTypePerf ")
-  await waitForCaretAt("ask @shellBudgets and @arkTypePerf ".length)
+  assert.equal(await boxValue(), "ask @shell-budgets and @arktype-perf ")
+  await waitForCaretAt("ask @shell-budgets and @arktype-perf ".length)
 
   await page!.type(BOX, "@b")
   await page!.waitForSelector(MENU)
@@ -104,7 +104,7 @@ test("a sent @handle opens the thread it names; an unknown one stays text", {
 }, async () => {
   await open()
   const links = await page!.$$eval("[data-mention-bubble] a[data-thread-mention]", (as) => as.map((a) => [a.textContent, a.getAttribute("data-thread-mention")]))
-  assert.deepEqual(links, [["@shellBudgets", "shell-budgets"], ["@focusMode", "focus-mode"]])
+  assert.deepEqual(links, [["@shell-budgets", "shell-budgets"], ["@focus-mode", "focus-mode"]])
   await page!.click('[data-mention-bubble] a[data-thread-mention="shell-budgets"]')
   const drawers = await page!.evaluate(() => (window as unknown as { __drawers: () => string[] }).__drawers())
   assert.deepEqual(drawers, ["thread:shell-budgets"], "a plain click opens the thread's drawer")
@@ -122,33 +122,33 @@ test("`@thread.` offers that thread's sub-agents, live before returned, and narr
   timeout: 150_000,
 }, async () => {
   await open()
-  await page!.type(BOX, "ask @shellBudgets")
+  await page!.type(BOX, "ask @shell-budgets")
   await page!.waitForSelector(MENU)
-  assert.deepEqual(await menuRows(), ["@shellBudgets"], "no dot: threads only, exactly as before")
+  assert.deepEqual(await menuRows(), ["@shell-budgets"], "no dot: threads only, exactly as before")
   await page!.type(BOX, ".")
   await page!.waitForFunction((sel) => document.querySelector(sel)?.getAttribute("aria-label") === "Sub-agents", {}, MENU)
   assert.deepEqual(await menuRows(), [
-    "@shellBudgets.cacheKeys",
-    "@shellBudgets.wave2",
-    "@shellBudgets.wave2.implW3",
-    "@shellBudgets.capAudit",
-    "@shellBudgets.cacheSweep",
+    "@shell-budgets.cache-keys",
+    "@shell-budgets.wave-2",
+    "@shell-budgets.wave-2.impl-w3",
+    "@shell-budgets.cap-audit",
+    "@shell-budgets.cache-sweep",
   ], "every addressed child, live first; the sentence-named one has no address and is not offered")
   const rows = await menuRowText()
-  assert.match(rows[0]!, /^@shellBudgets\.cacheKeys \| running 1[12]m$/)
-  assert.match(rows[3]!, /^@shellBudgets\.capAudit \| returned 3h ago \| done$/, "a returned child is tagged done")
-  assert.match(rows[4]!, /^@shellBudgets\.cacheSweep \| failed 2d ago \| done$/)
+  assert.match(rows[0]!, /^@shell-budgets\.cache-keys \| running 1[12]m$/)
+  assert.match(rows[3]!, /^@shell-budgets\.cap-audit \| returned 3h ago \| done$/, "a returned child is tagged done")
+  assert.match(rows[4]!, /^@shell-budgets\.cache-sweep \| failed 2d ago \| done$/)
   await page!.type(BOX, "ca")
   await page!.waitForFunction((sel) => document.querySelectorAll(`${sel} button`).length === 3, {}, MENU)
-  assert.deepEqual(await menuRows(), ["@shellBudgets.cacheKeys", "@shellBudgets.capAudit", "@shellBudgets.cacheSweep"])
+  assert.deepEqual(await menuRows(), ["@shell-budgets.cache-keys", "@shell-budgets.cap-audit", "@shell-budgets.cache-sweep"])
   await page!.type(BOX, "che")
   await page!.waitForFunction((sel) => document.querySelectorAll(`${sel} button`).length === 2, {}, MENU)
   assert.deepEqual(await directoryRequests(), ["shell-budgets"], "typing on reads the one answer the dot fetched")
   await page!.keyboard.press("Enter")
-  assert.equal(await boxValue(), "ask @shellBudgets.cacheKeys ", "completes to the whole address, then one space")
-  await waitForCaretAt("ask @shellBudgets.cacheKeys ".length)
+  assert.equal(await boxValue(), "ask @shell-budgets.cache-keys ", "completes to the whole address, then one space")
+  await waitForCaretAt("ask @shell-budgets.cache-keys ".length)
   // A thread with no directory entries: the dot closes the menu rather than offering nothing.
-  await page!.type(BOX, "and @arkTypePerf.")
+  await page!.type(BOX, "and @arktype-perf.")
   await page!.waitForFunction(() => (window as unknown as { __directoryRequests: string[] }).__directoryRequests.includes("arktype-perf"))
   assert.equal(await menuVisible(), false)
   assert.deepEqual(errors, [], `no page errors: ${errors.join(" | ")}`)
@@ -161,10 +161,10 @@ test("a sent @thread.child opens that sub-agent's drawer; an unknown child opens
   await open()
   const links = await page!.$$eval("[data-mention-bubble-sub] a[data-thread-mention]", (as) => as.map((a) => [a.textContent, a.getAttribute("data-subagent-mention")]))
   assert.deepEqual(links, [
-    ["@shellBudgets.cacheKeys", "shellBudgets.cacheKeys"],
+    ["@shell-budgets.cache-keys", "shell-budgets.cache-keys"],
     ["@ShellBudget.capAudit", "ShellBudget.capAudit"],
-    ["@shellBudgets.nothing", "shellBudgets.nothing"],
-  ], "the sentence's full stop after capAudit is not part of the link")
+    ["@shell-budgets.nothing", "shell-budgets.nothing"],
+  ], "the sentence's full stop after cap-audit is not part of the link")
   // The fixture mounts no drawer stack, so each open replaces the top layer; read the top one.
   const openedBy = async (mention: string): Promise<string | undefined> => {
     // The click fetches the directory before it opens anything, so wait for the stack to move — read
@@ -174,9 +174,9 @@ test("a sent @thread.child opens that sub-agent's drawer; an unknown child opens
     await page!.waitForFunction((was) => JSON.stringify((window as unknown as { __drawers: () => string[] }).__drawers()) !== was, {}, before)
     return page!.evaluate(() => (window as unknown as { __drawers: () => string[] }).__drawers().at(-1))
   }
-  assert.equal(await openedBy("shellBudgets.cacheKeys"), "subagent:shell-budgets:toolu_keys")
+  assert.equal(await openedBy("shell-budgets.cache-keys"), "subagent:shell-budgets:toolu_keys")
   assert.equal(await openedBy("ShellBudget.capAudit"), "subagent:shell-budgets:toolu_audit", "a returned child, found by its folded address")
-  assert.equal(await openedBy("shellBudgets.nothing"), "thread:shell-budgets", "no such child: its thread opens instead")
+  assert.equal(await openedBy("shell-budgets.nothing"), "thread:shell-budgets", "no such child: its thread opens instead")
   assert.deepEqual(await directoryRequests(), ["shell-budgets"], "three clicks, one fetch")
   assert.deepEqual(errors, [], `no page errors: ${errors.join(" | ")}`)
 })
@@ -191,13 +191,13 @@ test("an agent's @thread and @thread.child in rendered markdown are links that o
   await open()
   const links = await page!.$$eval("[data-agent-prose] a", (as) => as.map((a) => [a.textContent, a.getAttribute("href"), a.getAttribute("target")]))
   assert.deepEqual(links, [
-    ["@shellBudgets", "/thread/shell-budgets", "_blank"],
-    ["@shellBudgets.cacheKeys", "/thread/shell-budgets#shellBudgets.cacheKeys", "_blank"],
+    ["@shell-budgets", "/thread/shell-budgets", "_blank"],
+    ["@shell-budgets.cache-keys", "/thread/shell-budgets#shell-budgets.cache-keys", "_blank"],
     ["@ShellBudget.capAudit", "/thread/shell-budgets#ShellBudget.capAudit", "_blank"],
-    ["@shellBudgets", "https://example.com", "_blank"],
+    ["@shell-budgets", "https://example.com", "_blank"],
   ], "code, a package, an author's own link and an unknown thread are untouched")
   const code = await page!.$$eval("[data-agent-prose] code", (cs) => cs.map((c) => c.textContent))
-  assert.deepEqual(code, ["@shellBudgets"])
+  assert.deepEqual(code, ["@shell-budgets"])
   const top = () => page!.evaluate(() => (window as unknown as { __drawers: () => string[] }).__drawers().at(-1))
   const click = async (selector: string) => {
     const before = await page!.evaluate(() => JSON.stringify((window as unknown as { __drawers: () => string[] }).__drawers()))
@@ -205,7 +205,7 @@ test("an agent's @thread and @thread.child in rendered markdown are links that o
     await page!.waitForFunction((was) => JSON.stringify((window as unknown as { __drawers: () => string[] }).__drawers()) !== was, {}, before)
     return top()
   }
-  assert.equal(await click('[data-agent-prose] a[href="/thread/shell-budgets#shellBudgets.cacheKeys"]'), "subagent:shell-budgets:toolu_keys")
+  assert.equal(await click('[data-agent-prose] a[href="/thread/shell-budgets#shell-budgets.cache-keys"]'), "subagent:shell-budgets:toolu_keys")
   assert.equal(await click('[data-agent-prose] a[href="/thread/shell-budgets#ShellBudget.capAudit"]'), "subagent:shell-budgets:toolu_audit")
   assert.equal(await click('[data-agent-prose] a[href="/thread/shell-budgets"]'), "thread:shell-budgets")
   assert.equal(page!.url().endsWith("/thread-mentions-fixture.html"), true, "a plain click never navigated")
@@ -228,8 +228,8 @@ test("a typed @handle that names a thread is highlighted in the box; a partial o
   }), BOX)
   await page!.keyboard.type("ask @she")
   assert.deepEqual(await state(), { marks: [], textHidden: false }, "a half-typed mention is plain text")
-  await page!.keyboard.type("llBudgets and @nobody and @shellBudgets.cacheKeys ")
-  assert.deepEqual(await state(), { marks: ["@shellBudgets", "@shellBudgets.cacheKeys"], textHidden: true })
+  await page!.keyboard.type("ll-budgets and @nobody and @shell-budgets.cache-keys ")
+  assert.deepEqual(await state(), { marks: ["@shell-budgets", "@shell-budgets.cache-keys"], textHidden: true })
   await page!.keyboard.down("Control")
   await page!.keyboard.press("a")
   await page!.keyboard.up("Control")

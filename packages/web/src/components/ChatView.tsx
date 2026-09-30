@@ -4213,7 +4213,7 @@ export function PendingAskCard({ ask, onTerminal }: { ask: PendingAsk; onTermina
 function AgentCompletionLine({ call, sourceId, at }: { call: TranscriptToolCall; sourceId?: string; at?: string }) {
   const slug = useChildDrillSlug()
   const title = call.detail ?? "sub-agent"
-  // The quoted slot shows the child's HANDLE (`cacheKeys`), as every row that names a child does
+  // The quoted slot shows the child's HANDLE (`cache-keys`), as every row that names a child does
   // (groups.ts subAgentName); the dispatch's own words stay on the hover and go to the drawer.
   const name = call.detail ? subAgentName(call.detail) : title
   const { tail } = subAgentCompletionOutcome(call)

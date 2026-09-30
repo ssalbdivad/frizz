@@ -32,56 +32,57 @@ after(() => setMentionIndex(null, null))
 
 test("a mention whose thread resolves becomes an in-app link to it; one that names nothing stays text", () => {
   assert.equal(
-    render("ask @shellBudgets about it"),
-    'ask <a href="/thread/shell-budgets" title="Open thread">@shellBudgets</a> about it',
+    render("ask @shell-budgets about it"),
+    'ask <a href="/thread/shell-budgets" title="Open thread">@shell-budgets</a> about it',
   )
-  assert.equal(render("then @ShellBudget and @shell-budgets"), 'then <a href="/thread/shell-budgets" title="Open thread">@ShellBudget</a> and <a href="/thread/shell-budgets" title="Open thread">@shell-budgets</a>', "the resolveMention fold")
-  assert.equal(render("filed as @oldOne"), 'filed as <a href="/thread/old-one" title="Open thread">@oldOne</a>', "a done thread of any age")
+  assert.equal(render("then @ShellBudget and @shellBudgets"), 'then <a href="/thread/shell-budgets" title="Open thread">@ShellBudget</a> and <a href="/thread/shell-budgets" title="Open thread">@shellBudgets</a>', "the resolveMention fold, and a camelCase handle from before the kebab switch")
+  assert.equal(render("see @shell-budgets—ok"), 'see <a href="/thread/shell-budgets" title="Open thread">@shell-budgets</a>—ok', "a dash after a mention is punctuation")
+  assert.equal(render("filed as @old-one"), 'filed as <a href="/thread/old-one" title="Open thread">@old-one</a>', "a done thread of any age")
   assert.equal(render("ask @nobody or @external"), "ask @nobody or @external", "no such handle; an external row has none")
 })
 
 test("a dotted mention links to its thread with the child's address in the fragment", () => {
   assert.equal(
-    render("see @portTheParser.cacheKeys."),
-    'see <a href="/thread/port-parser#portTheParser.cacheKeys" title="Open sub-agent">@portTheParser.cacheKeys</a>.',
+    render("see @port-the-parser.cache-keys."),
+    'see <a href="/thread/port-parser#port-the-parser.cache-keys" title="Open sub-agent">@port-the-parser.cache-keys</a>.',
     "a sentence's full stop is never part of the mention",
   )
   assert.equal(
-    render("@portTheParser.wave2.implW3 failed"),
-    '<a href="/thread/port-parser#portTheParser.wave2.implW3" title="Open sub-agent">@portTheParser.wave2.implW3</a> failed',
+    render("@port-the-parser.wave-2.impl-w3 failed"),
+    '<a href="/thread/port-parser#port-the-parser.wave-2.impl-w3" title="Open sub-agent">@port-the-parser.wave-2.impl-w3</a> failed',
   )
-  assert.equal(render("@nobody.cacheKeys"), "@nobody.cacheKeys", "the HEAD must resolve")
+  assert.equal(render("@nobody.cache-keys"), "@nobody.cache-keys", "the HEAD must resolve")
 })
 
 test("code, existing links, emails, packages and decorators are left alone", () => {
-  assert.equal(render("`@shellBudgets`"), "<code>@shellBudgets</code>")
-  const block = renderBlock("```\n@shellBudgets\n```")
-  assert.match(block, /<code[^>]*>@shellBudgets\n<\/code>/)
+  assert.equal(render("`@shell-budgets`"), "<code>@shell-budgets</code>")
+  const block = renderBlock("```\n@shell-budgets\n```")
+  assert.match(block, /<code[^>]*>@shell-budgets\n<\/code>/)
   assert.doesNotMatch(block, /href=/, "a fenced block is literal")
-  assert.equal(render("[@shellBudgets](https://example.com)"), '<a href="https://example.com">@shellBudgets</a>')
-  assert.equal(render('<a href="https://example.com">@shellBudgets</a>'), '<a href="https://example.com">@shellBudgets</a>', "a hand-written anchor")
-  assert.match(render("mail shell@shellBudgets.dev"), /^mail <a href="mailto:shell@shellBudgets\.dev">/, "an email is marked's own link")
-  assert.equal(render("install @shellBudgets/core"), "install @shellBudgets/core", "a scoped package, never its first letters")
-  assert.equal(render("x@shellBudgets"), "x@shellBudgets", "not at a word boundary")
+  assert.equal(render("[@shell-budgets](https://example.com)"), '<a href="https://example.com">@shell-budgets</a>')
+  assert.equal(render('<a href="https://example.com">@shell-budgets</a>'), '<a href="https://example.com">@shell-budgets</a>', "a hand-written anchor")
+  assert.match(render("mail shell@shell-budgets.dev"), /^mail <a href="mailto:shell@shell-budgets\.dev">/, "an email is marked's own link")
+  assert.equal(render("install @shell-budgets/core"), "install @shell-budgets/core", "a scoped package, never its first letters")
+  assert.equal(render("x@shell-budgets"), "x@shell-budgets", "not at a word boundary")
 })
 
 test("mentions link inside lists, emphasis and tables, beside GitHub refs", () => {
   setGithubRepo("colinhacks/frizz")
   try {
     assert.equal(
-      renderBlock("- **@shellBudgets** fixed #12"),
-      '<ul>\n<li><strong><a href="/thread/shell-budgets" title="Open thread">@shellBudgets</a></strong> fixed <a href="https://github.com/colinhacks/frizz/issues/12" title="colinhacks/frizz#12">#12</a></li>\n</ul>',
+      renderBlock("- **@shell-budgets** fixed #12"),
+      '<ul>\n<li><strong><a href="/thread/shell-budgets" title="Open thread">@shell-budgets</a></strong> fixed <a href="https://github.com/colinhacks/frizz/issues/12" title="colinhacks/frizz#12">#12</a></li>\n</ul>',
     )
-    assert.match(renderBlock("| who |\n| --- |\n| @portTheParser.cacheKeys |"), /<td><a href="\/thread\/port-parser#portTheParser\.cacheKeys" title="Open sub-agent">@portTheParser\.cacheKeys<\/a><\/td>/)
+    assert.match(renderBlock("| who |\n| --- |\n| @port-the-parser.cache-keys |"), /<td><a href="\/thread\/port-parser#port-the-parser\.cache-keys" title="Open sub-agent">@port-the-parser\.cache-keys<\/a><\/td>/)
   } finally {
     setGithubRepo(null)
   }
 })
 
 test("another project's prose resolves nothing against this page's board", () => {
-  assert.equal(withMentionProject("other", () => render("ask @shellBudgets")), "ask @shellBudgets")
-  assert.match(withMentionProject("frizz", () => render("ask @shellBudgets")), /href="\/thread\/shell-budgets"/, "its own project's prose still links")
-  assert.match(render("ask @shellBudgets"), /href=/, "…and the index is back after the override")
+  assert.equal(withMentionProject("other", () => render("ask @shell-budgets")), "ask @shell-budgets")
+  assert.match(withMentionProject("frizz", () => render("ask @shell-budgets")), /href="\/thread\/shell-budgets"/, "its own project's prose still links")
+  assert.match(render("ask @shell-budgets"), /href=/, "…and the index is back after the override")
 })
 
 const queue = (projectSlug: string, threads: ThreadView[]) =>
@@ -93,16 +94,16 @@ test("showing All projects, another project's thread links to it there, and this
     queue("nub", [thread("focus-mode", "Focus mode"), thread("sb-nub", "Shell budgets")]),
   ])
   try {
-    assert.equal(render("ask @focusMode"), 'ask <a href="/all/nub/thread/focus-mode" title="Open thread">@focusMode</a>')
-    assert.match(render("ask @shellBudgets"), /href="\/thread\/shell-budgets"/, "the page's own thread, not nub's")
+    assert.equal(render("ask @focus-mode"), 'ask <a href="/all/nub/thread/focus-mode" title="Open thread">@focus-mode</a>')
+    assert.match(render("ask @shell-budgets"), /href="\/thread\/shell-budgets"/, "the page's own thread, not nub's")
     // A card of ANOTHER project: its own threads first, and every link names its project.
-    assert.match(withMentionProject("nub", () => render("ask @shellBudgets")), /href="\/all\/nub\/thread\/sb-nub"/)
-    assert.match(withMentionProject("nub", () => render("ask @portTheParser")), /href="\/all\/frizz\/thread\/port-parser"/)
-    assert.equal(withMentionProject("gone", () => render("ask @focusMode")), "ask @focusMode", "a project the poll does not carry")
+    assert.match(withMentionProject("nub", () => render("ask @shell-budgets")), /href="\/all\/nub\/thread\/sb-nub"/)
+    assert.match(withMentionProject("nub", () => render("ask @port-the-parser")), /href="\/all\/frizz\/thread\/port-parser"/)
+    assert.equal(withMentionProject("gone", () => render("ask @focus-mode")), "ask @focus-mode", "a project the poll does not carry")
   } finally {
     setCrossProjectMentions(null)
   }
-  assert.equal(render("ask @focusMode"), "ask @focusMode", "a project's own page resolves its own threads alone")
+  assert.equal(render("ask @focus-mode"), "ask @focus-mode", "a project's own page resolves its own threads alone")
 })
 
 test("the index notifies only when a handle changes, not on every board push", () => {
@@ -115,7 +116,7 @@ test("the index notifies only when a handle changes, not on every board push", (
     setMentionIndex("frizz", [...BOARD, thread("fresh", "Fresh idea")])
     assert.equal(notified, 1)
     assert.ok(mentionIndexVersion() > before)
-    assert.match(render("@freshIdea"), /href="\/thread\/fresh"/)
+    assert.match(render("@fresh-idea"), /href="\/thread\/fresh"/)
   } finally {
     setMentionIndex("frizz", BOARD)
     unsubscribe()
@@ -125,7 +126,7 @@ test("the index notifies only when a handle changes, not on every board push", (
 test("threadLinkTarget: the thread an in-app href opens, and a sub-agent address in its fragment", () => {
   assert.deepEqual(threadLinkTarget("/thread/port-parser"), { slug: "port-parser" })
   assert.deepEqual(threadLinkTarget("/thread/port-parser/"), { slug: "port-parser" })
-  assert.deepEqual(threadLinkTarget(mentionHref("port-parser", "portTheParser.wave2.implW3")), { slug: "port-parser", address: "portTheParser.wave2.implW3" })
+  assert.deepEqual(threadLinkTarget(mentionHref("port-parser", "port-the-parser.wave-2.impl-w3")), { slug: "port-parser", address: "port-the-parser.wave-2.impl-w3" })
   assert.equal(threadLinkTarget("/thread/port-parser/full"), null)
   assert.equal(threadLinkTarget("/thread/port-parser#<script>"), null)
 })

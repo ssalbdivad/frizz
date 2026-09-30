@@ -61,14 +61,14 @@ test("the child's prompt carries the human's words verbatim and a link back, abo
 })
 
 test("a parent with a handle is named by it, which the child's prose and read_thread both resolve", () => {
-  const prompt = spinoffChildPrompt({ parentSlug: "cache-bug", parentTitle: "Cache bug", parentHandle: "cacheBug", instructions: "fix this", brief: "The resolver keys on…" })
-  assert.equal(prompt.split("\n")[0], "A spinoff of @cacheBug, at the human's request. Their instructions:")
-  assert.match(prompt, /\nThe context @cacheBug gathered for you:\n/)
+  const prompt = spinoffChildPrompt({ parentSlug: "cache-bug", parentTitle: "Cache bug", parentHandle: "cache-bug", instructions: "fix this", brief: "The resolver keys on…" })
+  assert.equal(prompt.split("\n")[0], "A spinoff of @cache-bug, at the human's request. Their instructions:")
+  assert.match(prompt, /\nThe context @cache-bug gathered for you:\n/)
 })
 
 test("the child's first prompt reads back into the human's instructions and the parent's brief", () => {
   const brief = "The resolver keys on the raw id.\n\n> a quoted line in the brief stays in the brief\n\n- src/resolver.ts"
-  for (const parentHandle of ["cacheBug", undefined]) {
+  for (const parentHandle of ["cache-bug", undefined]) {
     const prompt = spinoffChildPrompt({ parentSlug: "cache-bug", parentTitle: "Cache bug", parentHandle, instructions: "fix this\n\nand add a test", brief })
     assert.deepEqual(parseSpinoffChildPrompt(prompt), { instructions: "fix this\n\nand add a test", brief })
     // The dispatch envelope is stripped before this runs, but trailing/leading whitespace is not a reason to miss.
@@ -76,7 +76,7 @@ test("the child's first prompt reads back into the human's instructions and the 
   }
   // Anything else is just a prompt: a brief a worker wrote itself, a human quoting the header mid-message.
   assert.equal(parseSpinoffChildPrompt("Evaluate whether the feature is a good idea."), null)
-  assert.equal(parseSpinoffChildPrompt("see: A spinoff of @cacheBug, at the human's request. Their instructions:\n\n> x\n\nThe context @cacheBug gathered for you:\n\ny"), null)
+  assert.equal(parseSpinoffChildPrompt("see: A spinoff of @cache-bug, at the human's request. Their instructions:\n\n> x\n\nThe context @cache-bug gathered for you:\n\ny"), null)
 })
 
 test("a spawn_thread call names the spinoff it fulfils, under any prefix and either spelling", () => {

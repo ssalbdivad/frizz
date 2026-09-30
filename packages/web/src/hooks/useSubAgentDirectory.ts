@@ -15,7 +15,7 @@ import { openThread, pushSubAgentDrawer } from "../store.ts"
 // another project's card is offered none (useMentionCandidates). The project rides the key so two
 // projects' same-slug threads never share a cache entry.
 //
-// STALE TIME is what keeps typing cheap: `@portTheParser.c`, `.ca`, `.cac` all read the one answer the
+// STALE TIME is what keeps typing cheap: `@port-the-parser.c`, `.ca`, `.cac` all read the one answer the
 // dot fetched. Ten seconds is long enough to cover a word and short enough that a child dispatched a
 // moment ago shows up by the next time the dot is typed.
 export const SUB_AGENT_DIRECTORY_STALE_MS = 10_000

@@ -139,8 +139,8 @@ export function Composer({
   // written into); omitted, the affordance is inert.
   mentionCandidates?: readonly MentionCandidate[]
   // The thread this box writes INTO, as a candidate for the head of a DOTTED mention only. A thread has no
-  // use for `@itself`, so the flat list leaves it out — but `@itself.cacheKeys` is how the human points
-  // the worker at one of its OWN sub-agents ("what did @portTheParser.cacheKeys find?"), which is the
+  // use for `@itself`, so the flat list leaves it out — but `@itself.cache-keys` is how the human points
+  // the worker at one of its OWN sub-agents ("what did @port-the-parser.cache-keys find?"), which is the
   // commonest sub-agent mention there is. Absent on a box that writes into no thread (the dispatch box).
   ownMention?: MentionCandidate
   // INTERRUPT AND SEND — what the FORCED chord (⌘/Ctrl-Enter) does while the thread's worker is
@@ -463,7 +463,7 @@ export function Composer({
   const trackCaret = (el: HTMLTextAreaElement) => setCaret(el.selectionStart === el.selectionEnd ? el.selectionStart : null)
   const mentionable = (mentionCandidates?.length ?? 0) > 0 || ownMention !== undefined
   const mention = mentionable && !suggestOpen ? mentionQueryAt(prose, caret) : undefined
-  // AFTER THE DOT the menu is the named thread's SUB-AGENTS (`@portTheParser.ca`): the head resolves to
+  // AFTER THE DOT the menu is the named thread's SUB-AGENTS (`@port-the-parser.ca`): the head resolves to
   // one of the candidates by the same fold a plain mention does, and its children arrive from the
   // server's directory through SubAgentMentionSource below — mounted only while such a query is open, so
   // a box nobody types a dot into never asks, and a surface with no query client never needs one.

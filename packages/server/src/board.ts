@@ -1926,10 +1926,16 @@ function sessionThreadView(
     // header's and the card's quiet checkout token. Each shell above already carries its own.
     ...(tele?.checkout ? { checkout: tele.checkout } : {}),
     links: (registries.links.get(row.slug) ?? []).map(threadLinkView),
-    spinoffs: (registries.spinoffs.get(row.slug) ?? []).map((o) => ({
-      id: o.id, parentSlug: o.parent_slug, childSlug: o.child_slug,
-      instructions: o.instructions, createdAt: o.created_at,
-    })),
+    spinoffs: (registries.spinoffs.get(row.slug) ?? []).map((o) => {
+      // The end in ANOTHER project, named by its project (a cross-project spinoff).
+      const childProject = o.child_project_id ?? o.project_id
+      return {
+        id: o.id, parentSlug: o.parent_slug, childSlug: o.child_slug,
+        instructions: o.instructions, createdAt: o.created_at,
+        ...(o.project_id !== storage.projectId ? { parentProjectId: o.project_id } : {}),
+        ...(childProject !== storage.projectId ? { childProjectId: childProject } : {}),
+      }
+    }),
     // ONE SOURCE: the FENCE. Both kinds are derived from what the worker wrote — `prs:` entries
     // become the github rows, `watch:` lines the shell rows — so this strip lists exactly what will
     // actually wake the thread, and the two cannot drift into claiming different things. There is no

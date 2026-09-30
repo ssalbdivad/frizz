@@ -45,12 +45,12 @@ const dispatch = (over: Record<string, unknown> = {}) => ({ hook_event_name: "Po
 test("a thread's own dispatch is told the address its sub-agent answers to", async () => {
   const root = await frizzRoot((url) => {
     const input = JSON.parse(url.searchParams.get("input")!)
-    return input.slug === "parser-port" && input.label === "Spelling" ? { address: "parserPort.spelling" } : {}
+    return input.slug === "parser-port" && input.label === "Spelling" ? { address: "parser-port.spelling" } : {}
   })
   try {
     const out = JSON.parse(await runHook(dispatch(), { FRIZZ_THREAD: "parser-port", FRIZZ_PERM_DIR: root.permDir }))
     assert.equal(out.hookSpecificOutput.hookEventName, "PostToolUse")
-    assert.match(out.hookSpecificOutput.additionalContext, /^This sub-agent is @parserPort\.spelling\./)
+    assert.match(out.hookSpecificOutput.additionalContext, /^This sub-agent is @parser-port\.spelling\./)
     assert.equal(root.seen[0]!.url!.split("?")[0], `/_frizz/${PROJECT}/rpc/subAgentAddressFor`, "addressed to this worker's own project")
     assert.equal(root.seen[0]!.headers["sec-fetch-site"], "same-origin")
   } finally { await root.close() }

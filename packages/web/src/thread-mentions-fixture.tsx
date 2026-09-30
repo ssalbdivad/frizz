@@ -14,16 +14,16 @@ import { installThreadLinkInterceptor } from "./lib/thread-links.ts"
 import { store } from "./store.ts"
 import "./styles.css"
 
-// Browser QA for THREAD HANDLES (2026-09-29): a thread's name shows as its camelCase handle in the rail,
+// Browser QA for THREAD HANDLES (2026-09-29): a thread's name shows as its kebab-case handle in the rail,
 // the prompt box offers those handles after `@`, and a sent `@handle` links to its thread. Everything
 // here is the real component on a stubbed board.
 //
 //   /thread-mentions-fixture.html?draft=ask%20%40b   — types the draft into the box, caret at its end
-//   /thread-mentions-fixture.html?draft=%40shellBudgets.   — the thread's SUB-AGENTS after the dot
+//   /thread-mentions-fixture.html?draft=%40shell-budgets.   — the thread's SUB-AGENTS after the dot
 //
 // `shell-budgets` has a stubbed `subAgentDirectory` (every child it ever dispatched: two live, one under
-// a Workflow, one sentence-named and so unaddressable, two returned), so `@shellBudgets.` completes its
-// children and `@shellBudgets.cacheKeys` in a message opens one. `window.__directoryRequests` counts the
+// a Workflow, one sentence-named and so unaddressable, two returned), so `@shell-budgets.` completes its
+// children and `@shell-budgets.cache-keys` in a message opens one. `window.__directoryRequests` counts the
 // fetches, so a test can prove typing on does not refetch per keystroke.
 //
 // `[data-agent-prose]` is AGENT markdown through the real pipeline (useMarkdownHtml → marked → the
@@ -56,14 +56,14 @@ setMentionIndex("frizz", threads)
 
 const minutesAgo = (m: number) => new Date(Date.now() - m * 60_000).toISOString()
 const DIRECTORY = {
-  threadHandle: "shellBudgets",
+  threadHandle: "shell-budgets",
   agents: [
-    { id: "toolu_keys", label: "Cache keys", address: "shellBudgets.cacheKeys", depth: 1, state: "running", startedAt: minutesAgo(12), subagentType: "frizz:opus-high" },
-    { id: "toolu_wave", label: "wave2", address: "shellBudgets.wave2", depth: 1, state: "running", workflow: true, startedAt: minutesAgo(30) },
-    { id: "wave2:impl-w3", label: "impl:W3", address: "shellBudgets.wave2.implW3", parentId: "toolu_wave", depth: 2, state: "stale", startedAt: minutesAgo(40) },
+    { id: "toolu_keys", label: "Cache keys", address: "shell-budgets.cache-keys", depth: 1, state: "running", startedAt: minutesAgo(12), subagentType: "frizz:opus-high" },
+    { id: "toolu_wave", label: "Wave 2", address: "shell-budgets.wave-2", depth: 1, state: "running", workflow: true, startedAt: minutesAgo(30) },
+    { id: "wave2:impl-w3", label: "impl:W3", address: "shell-budgets.wave-2.impl-w3", parentId: "toolu_wave", depth: 2, state: "stale", startedAt: minutesAgo(40) },
     { id: "toolu_sentence", label: "Look at every call site of the cap and report back", depth: 1, state: "running", startedAt: minutesAgo(5) },
-    { id: "toolu_audit", label: "Cap audit", address: "shellBudgets.capAudit", depth: 1, state: "done", outcome: "completed", startedAt: minutesAgo(300), finishedAt: minutesAgo(180) },
-    { id: "toolu_sweep", label: "Cache sweep", address: "shellBudgets.cacheSweep", depth: 1, state: "done", outcome: "failed", startedAt: minutesAgo(3000), finishedAt: minutesAgo(2880) },
+    { id: "toolu_audit", label: "Cap audit", address: "shell-budgets.cap-audit", depth: 1, state: "done", outcome: "completed", startedAt: minutesAgo(300), finishedAt: minutesAgo(180) },
+    { id: "toolu_sweep", label: "Cache sweep", address: "shell-budgets.cache-sweep", depth: 1, state: "done", outcome: "failed", startedAt: minutesAgo(3000), finishedAt: minutesAgo(2880) },
   ],
 }
 const directoryRequests: string[] = []
@@ -115,10 +115,10 @@ function Box() {
 }
 
 const AGENT_PROSE = [
-  "Handed the cap to @shellBudgets; @shellBudgets.cacheKeys has the key table, and @ShellBudget.capAudit.",
+  "Handed the cap to @shell-budgets; @shell-budgets.cache-keys has the key table, and @ShellBudget.capAudit.",
   "",
-  "- `@shellBudgets` in code stays code, and so does @types/node.",
-  "- [@shellBudgets](https://example.com) is the author's own link. @nobody.cacheKeys stays text.",
+  "- `@shell-budgets` in code stays code, and so does @types/node.",
+  "- [@shell-budgets](https://example.com) is the author's own link. @nobody.cache-keys stays text.",
 ].join("\n")
 
 function AgentProse() {
@@ -141,10 +141,10 @@ createRoot(document.getElementById("root")!).render(
         <div className="flex min-w-0 flex-1 flex-col justify-between gap-10">
           <MentionIndexProvider>
             <div data-mention-bubble className="ml-auto max-w-[420px] rounded-2xl rounded-br-sm bg-user-bubble px-3.5 py-3 text-[14px] whitespace-pre-wrap text-user-bubble-fg">
-              <LinkifiedText text={"Ask @shellBudgets about this, and reconcile with @focusMode. @nobody stays text."} />
+              <LinkifiedText text={"Ask @shell-budgets about this, and reconcile with @focus-mode. @nobody stays text."} />
             </div>
             <div data-mention-bubble-sub className="ml-auto mt-3 max-w-[420px] rounded-2xl rounded-br-sm bg-user-bubble px-3.5 py-3 text-[14px] whitespace-pre-wrap text-user-bubble-fg">
-              <LinkifiedText text={"Compare @shellBudgets.cacheKeys with @ShellBudget.capAudit. @shellBudgets.nothing opens the thread."} />
+              <LinkifiedText text={"Compare @shell-budgets.cache-keys with @ShellBudget.capAudit. @shell-budgets.nothing opens the thread."} />
             </div>
           </MentionIndexProvider>
           <AgentProse />

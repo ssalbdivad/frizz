@@ -1693,6 +1693,16 @@ export function createRouter(ctx: AppContext) {
   // racing `spawn_thread` calls for the same id would both pass the pending check; this set closes that.
   const spinoffsInFlight = new Set<string>()
 
+  // WHERE A SPINOFF'S THREAD STARTS (2026-09-30): this project, or another one this server has OPEN. Never
+  // by opening one — the same rule `resolveElsewhere` keeps — so a project the human could not see in the
+  // picker is not one a request can name. `undefined` is this project; a project that is not open throws.
+  function spinoffTarget(projectId: string | null | undefined): AppContext | undefined {
+    if (!projectId || projectId === ctx.project.id) return undefined
+    const open = (ctx.activeTenants?.() ?? []).find((t) => t.project.id === projectId)?.ctx
+    if (!open) throw new Error("That project is not open in Frizz right now, so a thread cannot start there")
+    return open
+  }
+
   // A `spawn_thread` that names a spinoff: check it is a pending request of the CALLING thread, write the
   // human's instructions and a link back above the parent's brief (spinoffChildPrompt), dispatch, and
   // stamp the child. Refusals are errors the parent's worker reads, so each says what went wrong.
@@ -1704,6 +1714,9 @@ export function createRouter(ctx: AppContext) {
     }
     if (request.child_slug) throw new Error(`Spinoff ${id} already started thread ${request.child_slug}; do not spawn it twice`)
     if (spinoffsInFlight.has(id)) throw new Error(`Spinoff ${id} is already being dispatched`)
+    // Resolved before the claim: a target project closed since the request is a refusal the worker can
+    // read, not a thread started somewhere the human did not choose.
+    const target = spinoffTarget(request.child_project_id)
     spinoffsInFlight.add(id)
     try {
       const parent = ctx.storage.getSession(request.parent_slug)
@@ -1722,9 +1735,12 @@ export function createRouter(ctx: AppContext) {
       // "A spinoff of @parent…" line — see Dispatcher.dispatch's `nameSource`, and aiRenameThread, which
       // names a spinoff child from the same text.
       const nameSource = spinoffNameSource({ instructions: request.instructions, brief: input.prompt })
-      const result = await ctx.dispatcher.dispatch({ ...input, prompt }, { backend: input.backend, nameSource })
+      // A cross-project request dispatches through the TARGET's own dispatcher, so the thread is that
+      // project's in every respect — its board, its checkout, its names. The edge stays filed here.
+      const result = await (target ?? ctx).dispatcher.dispatch({ ...input, prompt }, { backend: input.backend, nameSource })
       ctx.storage.completeSpinoff(id, result.slug, Date.now())
       ctx.board.refresh()
+      target?.board.refresh()
       return result
     } finally {
       spinoffsInFlight.delete(id)
@@ -1891,7 +1907,7 @@ export function createRouter(ctx: AppContext) {
       handler: async ({ input }) => subAgentDirectoryOf(input.slug),
     }),
 
-    // The address a sub-agent this thread is dispatching will answer to — `portTheParser.spelling` for
+    // The address a sub-agent this thread is dispatching will answer to — `port-the-parser.spelling` for
     // `description: "Spelling"` — for the worker's post-dispatch hook (cc-worker/hooks/agent-address.mjs),
     // which puts it in front of the worker the moment the child starts, so the handoff names it by the
     // address the board links rather than as "a sub-agent" (maintainer 2026-09-30). Computed HERE so the
@@ -2196,8 +2212,12 @@ export function createRouter(ctx: AppContext) {
       output: SpinoffResult,
       handler: async ({ input }) => {
         currentOwnedSession(input.slug, input.sessionId)
+        const target = spinoffTarget(input.project)
         const id = `spn_${randomBytes(8).toString("hex")}`
-        ctx.storage.insertSpinoff({ id, parentSlug: input.slug, instructions: input.instructions, createdAtMs: Date.now() })
+        ctx.storage.insertSpinoff({
+          id, parentSlug: input.slug, instructions: input.instructions, createdAtMs: Date.now(),
+          ...(target ? { childProjectId: target.project.id } : {}),
+        })
         // BEFORE the delivery, so the edge recovery's read of this parent starts where its transcript
         // stands now — the request's answer can only come after it (spinoff-edge-recovery.ts).
         ctx.spinoffEdges?.noteRequest(input.slug, id)
@@ -2205,7 +2225,10 @@ export function createRouter(ctx: AppContext) {
           await deliverFollowUp!({ input: {
             slug: input.slug,
             sessionId: input.sessionId,
-            message: spinoffRequestMessage({ id, instructions: input.instructions }),
+            message: spinoffRequestMessage({
+              id, instructions: input.instructions,
+              ...(target ? { project: { name: target.project.name, dir: workDirOf(target.project) } } : {}),
+            }),
             deliveryId: `${SPINOFF_DELIVERY_PREFIX}${id}`,
           } }, { sideRequest: true })
         } catch (err) {
@@ -4048,7 +4071,7 @@ export function createRouter(ctx: AppContext) {
       output: ReadThreadResult,
       handler: async ({ input }) => {
         const threads = threadNamer().threads()
-        // `portTheParser.cacheKeys` names a SUB-AGENT of `portTheParser` (shared thread-handle.ts): the
+        // `port-the-parser.cache-keys` names a SUB-AGENT of `port-the-parser` (shared thread-handle.ts): the
         // thread resolves first, then the rest of the address down its live children.
         const [threadPart = input.handle, ...childPath] = addressSegments(input.handle)
         const hit = resolveThreadHandle(threadPart, threads)

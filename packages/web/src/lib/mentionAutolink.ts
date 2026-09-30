@@ -93,7 +93,7 @@ export function subscribeMentionIndex(listener: () => void): () => void {
 /**
  * Run a SYNCHRONOUS render for prose of the project `projectSlug`: with the page's index when that is
  * the page's project, and with none at all otherwise — the All queues page draws every project's cards
- * on a page bound to one, and a `@fixAuth` in project B's handoff must not open project A's `fixAuth`.
+ * on a page bound to one, and a `@fix-auth` in project B's handoff must not open project A's `fix-auth`.
  * Absent means the page's own prose. Marked parses synchronously, so the override cannot leak.
  */
 export function withMentionProject<T>(projectSlug: string | undefined, run: () => T): T {

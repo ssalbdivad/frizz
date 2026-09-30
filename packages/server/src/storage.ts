@@ -519,6 +519,10 @@ export interface ThreadSpinoffRow {
   child_slug: string | null
   created_at: number
   spawned_at: number | null
+  /** The project the row is filed under — always the PARENT's. */
+  project_id: string
+  /** Where the child starts when that is ANOTHER project (a cross-project spinoff); null for this one. */
+  child_project_id: string | null
 }
 
 /** A saved destination, independent of running work and completion. */
@@ -830,17 +834,22 @@ export interface Storage {
   // dropped the row cannot resurrect it.
   setPrWatchCursor(id: string, cursor: string): boolean
   // A label is a stable slot: re-registering it updates the destination without moving the row.
-  insertSpinoff(row: { id: string; parentSlug: string; instructions: string; createdAtMs: number }): void
+  /** `childProjectId` names the project the child is to start in when that is not this one. */
+  insertSpinoff(row: { id: string; parentSlug: string; instructions: string; createdAtMs: number; childProjectId?: string }): void
   getSpinoff(id: string): ThreadSpinoffRow | undefined
   dropSpinoff(id: string): boolean
   /** Stamp the dispatched child onto a PENDING spinoff. False when it is unknown or already spawned, so
    *  one request can never produce two threads. */
   completeSpinoff(id: string, childSlug: string, atMs: number): boolean
-  /** Every spinoff, keyed by BOTH ends: a parent sees the ones it was asked for, a child the one it came from. */
+  /** Every spinoff, keyed by BOTH ends: a parent sees the ones it was asked for, a child the one it came
+   *  from — including a child of THIS project whose parent is in another (its row is filed under the
+   *  parent's project; `project_id` says which). */
   spinoffsBySlug(): Map<string, ThreadSpinoffRow[]>
-  /** The spinoff `childSlug` came from, if it is a spinoff child. */
+  /** The spinoff `childSlug` (a thread of THIS project) came from, if it is a spinoff child — wherever
+   *  its parent is. */
   spinoffOfChild(childSlug: string): ThreadSpinoffRow | undefined
-  /** Every spinoff still waiting for its thread (no child yet), oldest first. */
+  /** Every spinoff still waiting for its thread (no child yet) that is to start in THIS project, oldest
+   *  first. A cross-project request is left out: the edge recovery that reads this looks its child up here. */
   pendingSpinoffs(): ThreadSpinoffRow[]
   upsertThreadLink(link: { id: string; slug: string; kind: "link" | "file"; label: string; target: string; createdAtMs: number }): ThreadLinkRow
   listThreadLinks(slug: string): ThreadLinkRow[]
@@ -1572,6 +1581,9 @@ export function ensureStorageSchema(db: Database): void {
     ["command_thread", "parent_slug TEXT"],
     ["command_thread", "cwd TEXT"],
     ["command_thread", "shell INTEGER NOT NULL DEFAULT 0"],
+    // `thread_spinoff.child_project_id` (2026-09-30): a spinoff can start its thread in another project.
+    // The row stays filed under the parent's project; this names the child's when it is not that one.
+    ["thread_spinoff", "child_project_id TEXT"],
   ] as const) {
     try {
       db.exec(`ALTER TABLE ${table} ADD COLUMN ${column}`)
@@ -1611,7 +1623,8 @@ export function ensureStorageSchema(db: Database): void {
   // has written the child's, so nothing live matches. Idempotent — it matches nothing once swept.
   db.exec(`
     DELETE FROM thread_spinoff WHERE child_slug IS NOT NULL AND NOT EXISTS (
-      SELECT 1 FROM session WHERE session.project_id = thread_spinoff.project_id AND session.slug = thread_spinoff.child_slug
+      SELECT 1 FROM session WHERE session.project_id = coalesce(thread_spinoff.child_project_id, thread_spinoff.project_id)
+        AND session.slug = thread_spinoff.child_slug
     )
   `)
 }
@@ -2199,21 +2212,25 @@ export function createStorage(source: string | Database, projectId: string): Sto
   const delPrWatches = scope.prepare("DELETE FROM pr_watch WHERE project_id = @project_id AND thread_slug = ?")
   // SOURCE_ID and EXCERPT are the table's two first-day columns, written empty and never read (see it).
   const insertSpinoffStmt = scope.prepare(`
-    INSERT INTO thread_spinoff (project_id, id, parent_slug, source_id, excerpt, instructions, created_at)
-    VALUES (@project_id, @id, @parentSlug, '', '', @instructions, @createdAtMs)
+    INSERT INTO thread_spinoff (project_id, id, parent_slug, source_id, excerpt, instructions, created_at, child_project_id)
+    VALUES (@project_id, @id, @parentSlug, '', '', @instructions, @createdAtMs, @childProjectId)
   `)
-  const SPINOFF_COLUMNS = "id, parent_slug, instructions, child_slug, created_at, spawned_at"
+  const SPINOFF_COLUMNS = "id, parent_slug, instructions, child_slug, created_at, spawned_at, project_id, child_project_id"
+  // A CROSS-PROJECT SPINOFF (2026-09-30) is one row with an end in each project, filed under the parent's.
+  // So "this project's child end" is either a row of this project whose child stays here, or a row of
+  // another project whose child was started here. A same-project row always writes NULL, never this id.
+  const CHILD_HERE = "((project_id = @project_id AND child_project_id IS NULL) OR child_project_id = @project_id)"
   const getSpinoffStmt = scope.prepare<[string], ThreadSpinoffRow>(`SELECT ${SPINOFF_COLUMNS} FROM thread_spinoff WHERE project_id = @project_id AND id = ?`)
   const completeSpinoffStmt = scope.prepare(
     "UPDATE thread_spinoff SET child_slug = ?, spawned_at = ? WHERE project_id = @project_id AND id = ? AND child_slug IS NULL",
   )
-  const spinoffsStmt = scope.prepare<[], ThreadSpinoffRow>(`SELECT ${SPINOFF_COLUMNS} FROM thread_spinoff WHERE project_id = @project_id ORDER BY created_at, rowid`)
+  const spinoffsStmt = scope.prepare<[], ThreadSpinoffRow>(`SELECT ${SPINOFF_COLUMNS} FROM thread_spinoff WHERE project_id = @project_id OR child_project_id = @project_id ORDER BY created_at, rowid`)
   const dropSpinoffStmt = scope.prepare("DELETE FROM thread_spinoff WHERE project_id = @project_id AND id = ?")
-  const spinoffOfChildStmt = scope.prepare<[string], ThreadSpinoffRow>(`SELECT ${SPINOFF_COLUMNS} FROM thread_spinoff WHERE project_id = @project_id AND child_slug = ? ORDER BY created_at, rowid LIMIT 1`)
-  const pendingSpinoffsStmt = scope.prepare<[], ThreadSpinoffRow>(`SELECT ${SPINOFF_COLUMNS} FROM thread_spinoff WHERE project_id = @project_id AND child_slug IS NULL ORDER BY created_at, rowid`)
+  const spinoffOfChildStmt = scope.prepare<[string], ThreadSpinoffRow>(`SELECT ${SPINOFF_COLUMNS} FROM thread_spinoff WHERE ${CHILD_HERE} AND child_slug = ? ORDER BY created_at, rowid LIMIT 1`)
+  const pendingSpinoffsStmt = scope.prepare<[], ThreadSpinoffRow>(`SELECT ${SPINOFF_COLUMNS} FROM thread_spinoff WHERE project_id = @project_id AND child_project_id IS NULL AND child_slug IS NULL ORDER BY created_at, rowid`)
   const delSpinoffs = scope.prepare("DELETE FROM thread_spinoff WHERE project_id = @project_id AND parent_slug = ?")
   // The CHILD end of a forgotten thread's edges — see forgetOwnedRow.
-  const delChildSpinoffs = scope.prepare("DELETE FROM thread_spinoff WHERE project_id = @project_id AND child_slug = ?")
+  const delChildSpinoffs = scope.prepare(`DELETE FROM thread_spinoff WHERE ${CHILD_HERE} AND child_slug = ?`)
   const upsertThreadLinkStmt = scope.prepare<{
     id: string; slug: string; kind: "link" | "file"; label: string; target: string; createdAtMs: number
   }, ThreadLinkRow>(`
@@ -3098,7 +3115,7 @@ export function createStorage(source: string | Database, projectId: string): Sto
     dropPrWatch: (slug, id, settledAtMs) => dropPrWatchStmt.run(settledAtMs, id, slug).changes === 1,
     settlePrWatch: (id, settledAtMs) => settlePrWatchStmt.run(settledAtMs, id).changes === 1,
     setPrWatchCursor: (id, cursor) => prWatchCursorStmt.run(cursor, id).changes === 1,
-    insertSpinoff: (row) => { insertSpinoffStmt.run(row) },
+    insertSpinoff: (row) => { insertSpinoffStmt.run({ ...row, childProjectId: row.childProjectId ?? null }) },
     getSpinoff: (id) => getSpinoffStmt.get(id),
     dropSpinoff: (id) => dropSpinoffStmt.run(id).changes === 1,
     completeSpinoff: (id, childSlug, atMs) => completeSpinoffStmt.run(childSlug, atMs, id).changes === 1,
@@ -3110,8 +3127,12 @@ export function createStorage(source: string | Database, projectId: string): Sto
         else bySlug.set(slug, [row])
       }
       for (const row of spinoffsStmt.all()) {
-        add(row.parent_slug, row)
-        if (row.child_slug && row.child_slug !== row.parent_slug) add(row.child_slug, row)
+        // Each end only where its thread is: a cross-project row lists its parent in the parent's project
+        // and its child in the child's, never a slug of one project under the other's threads.
+        const parentHere = row.project_id === projectId
+        const childHere = (row.child_project_id ?? row.project_id) === projectId
+        if (parentHere) add(row.parent_slug, row)
+        if (row.child_slug && childHere && !(parentHere && row.child_slug === row.parent_slug)) add(row.child_slug, row)
       }
       return bySlug
     },

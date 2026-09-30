@@ -153,10 +153,12 @@ export function SectionHeader({ band, count, collapsed, onToggle }: { band: Band
 // its own, so the head still breaks exactly where `break-words` would have broken it, and the mark
 // keeps a dozen characters of company either way.
 //
-// A HANDLE is one token with its words run together (`shipTheResolverFix`, groups.ts displayTitle), so
-// its humps stand in for the spaces: the last hump is the word the mark glues to, and a `<wbr>` before
-// every other hump lets a handle wider than the rail wrap BETWEEN its words rather than wherever
-// `break-words` runs out of room mid-word ("shipTh / eResolverFix").
+// A HANDLE is one token with its words joined by hyphens (`ship-the-resolver-fix`, groups.ts
+// displayTitle), so its word starts (humpStarts) stand in for the spaces: the last is the word the mark
+// glues to, and a `<wbr>` before every other one lets a handle wider than the rail wrap BETWEEN its
+// words rather than wherever `break-words` runs out of room mid-word. A browser already breaks after a
+// hyphen, so for a kebab handle the `<wbr>` restates that; it was load-bearing while handles were
+// camelCase (until 2026-09-30), when one wrapped as "shipTh / eResolverFix".
 const MAX_GLUED_TITLE_WORD = 16
 const GLUED_TITLE_TAIL = 12
 export function TitleWithTrailers({ title, children }: { title: string; children: ReactNode }) {
@@ -650,7 +652,7 @@ function SubAgentRows({ t, scope }: { t: ThreadView; scope: RowScope }) {
         <ChildOpRow
           key={s.id}
           kind={s.workflow ? "WORKFLOW" : "AGENT"}
-          // The child's HANDLE (`cacheKeys`), the segment typed after `@thread.`; the fold line above
+          // The child's HANDLE (`cache-keys`), the segment typed after `@thread.`; the fold line above
           // is a count, not a name, and keeps its words.
           label={subAgentName(s.label)}
           state={s.state}

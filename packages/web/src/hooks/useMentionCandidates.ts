@@ -37,7 +37,7 @@ export function useMentionCandidates(excludeSlug?: string, project?: string): Me
   }, [threads, excludeSlug, queues, home])
 }
 
-/** The thread `slug` itself as a mention candidate — the head a dotted `@thisThread.child` resolves
+/** The thread `slug` itself as a mention candidate — the head a dotted `@this-thread.child` resolves
  *  against in its OWN prompt box (Composer `ownMention`). From the page's board only, when that is the
  *  box's project. */
 export function useOwnMention(slug: string, project?: string): MentionCandidate | undefined {

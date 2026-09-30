@@ -893,12 +893,12 @@ test("sectionThreads: only human/future-timer waits partition into Snoozed; live
 test("displayTitle: an explicit human title wins over stale backend AI-title and slug fallbacks", () => {
   assert.equal(
     displayTitle(thread({ id: "generated-slug", title: "Human-readable thread title", titleAuto: false, titleLocked: true, aiTitle: "generated-slug" })),
-    "humanReadableThreadTitle",
+    "human-readable-thread-title",
   )
   // A pre-split row carries no titleLocked; its real-looking title must still read as the human's.
   assert.equal(
     displayTitle(thread({ id: "generated-slug", title: "Human-readable thread title", titleAuto: false, aiTitle: "generated-slug" })),
-    "humanReadableThreadTitle",
+    "human-readable-thread-title",
   )
 })
 
@@ -907,7 +907,7 @@ test("displayTitle: a title a dispatch CALLER hard-coded shows until the worker 
   // "Spinning up…" placeholder, but nobody human chose it.
   const hardCoded = { id: "investigate-acme-app-391", title: "Investigate acme/app#391", titleAuto: false, titleLocked: false }
   assert.equal(titleIsProvisional(thread({ ...hardCoded, spawnedAt: new Date().toISOString() })), false)
-  assert.equal(displayTitle(thread(hardCoded)), "investigateAcmeApp391")
+  assert.equal(displayTitle(thread(hardCoded)), "investigate-acme-app-391")
   // …and the moment the worker reports what the task actually is, that wins.
   assert.equal(
     displayTitle(thread({ ...hardCoded, aiTitle: "Cache key collides on normalized ids" })),
@@ -916,7 +916,7 @@ test("displayTitle: a title a dispatch CALLER hard-coded shows until the worker 
   // Renaming it locks it again — a later/stale backend record can no longer displace the human's choice.
   assert.equal(
     displayTitle(thread({ ...hardCoded, title: "Resolver cache bug", titleLocked: true, aiTitle: "generated-slug" })),
-    "resolverCacheBug",
+    "resolver-cache-bug",
   )
 })
 
@@ -933,25 +933,25 @@ test("displayTitle: a machine-generated session slug is never presented as a suc
   // …and, being a real name of three words, it SHOWS as its handle.
   assert.equal(
     displayTitle(thread({ id: "internal-id", title: "internal-id", titleAuto: true, aiTitle: "conversation-summary-task" })),
-    "conversationSummaryTask",
+    "conversation-summary-task",
   )
 })
 
 // A THREAD'S NAME SHOWS AS ITS HANDLE (maintainer 2026-09-29): the words a name is stored as render as
-// the camelCase handle an operator types after `@`, and everything that is not a name renders as before.
-test("displayTitle: a real name shows as its camelCase handle; placeholders, ids and external rows do not", () => {
+// the kebab-case handle an operator types after `@`, and everything that is not a name renders as before.
+test("displayTitle: a real name shows as its kebab-case handle; placeholders, ids and external rows do not", () => {
   const named = thread({ titleAuto: false, title: "Shell budgets" })
-  assert.equal(displayTitle(named), "shellBudgets")
+  assert.equal(displayTitle(named), "shell-budgets")
   assert.equal(displayName(named), "Shell budgets", "a rename edits the stored words, not the handle")
-  assert.equal(threadHandleOf(named), "shellBudgets")
-  // A proper noun keeps its casing behind the capital; a leading acronym lowercases whole.
-  assert.equal(displayTitle(thread({ titleAuto: false, title: "ArkType perf" })), "arkTypePerf")
-  assert.equal(displayTitle(thread({ titleAuto: false, title: "API keys" })), "apiKeys")
+  assert.equal(threadHandleOf(named), "shell-budgets")
+  // Every word lowercases whole, a proper noun and an acronym alike, and none is split at its capitals.
+  assert.equal(displayTitle(thread({ titleAuto: false, title: "ArkType perf" })), "arktype-perf")
+  assert.equal(displayTitle(thread({ titleAuto: false, title: "API keys" })), "api-keys")
   // Past five words it is a sentence, not a name: shown as written, and not addressable.
   const sentence = thread({ titleAuto: false, title: "Fix the flaky parser test on CI" })
   assert.equal(displayTitle(sentence), "Fix the flaky parser test on CI")
   assert.equal(threadHandleOf(sentence), undefined)
-  // Placeholders and a legacy row's bare id are never camelCased or offered as a handle.
+  // Placeholders and a legacy row's bare id are never shown or offered as a handle.
   const spinning = thread({ titleAuto: true, title: "fix it", spawnedAt: new Date().toISOString() })
   assert.equal(displayTitle(spinning), SPINNING_UP_TITLE)
   assert.equal(threadHandleOf(spinning), undefined)
@@ -986,14 +986,14 @@ test("titleIsProvisional / displayTitle: 'Spinning up' shows briefly, then falls
   assert.equal(displayTitle(thread({ titleAuto: true, title: "fix the parser bug", spawnedAt: fresh })), SPINNING_UP_TITLE)
   // aiTitle landed → not provisional; the real name wins.
   assert.equal(titleIsProvisional(thread({ titleAuto: true, aiTitle: "Parser fix", spawnedAt: fresh })), false)
-  assert.equal(displayTitle(thread({ titleAuto: true, aiTitle: "Parser fix", spawnedAt: fresh })), "parserFix")
+  assert.equal(displayTitle(thread({ titleAuto: true, aiTitle: "Parser fix", spawnedAt: fresh })), "parser-fix")
   // STALE spawn, still no aiTitle (e.g. a compacted session whose transcript frizz lost track of) → NOT
   // provisional: fall back to the dispatch title, never stick on "Spinning up…" forever.
   assert.equal(titleIsProvisional(thread({ titleAuto: true, title: "fix the parser bug", spawnedAt: "2026-07-08T00:00:00.000Z" })), false)
-  assert.equal(displayTitle(thread({ titleAuto: true, title: "fix the parser bug", spawnedAt: "2026-07-08T00:00:00.000Z" })), "fixTheParserBug")
+  assert.equal(displayTitle(thread({ titleAuto: true, title: "fix the parser bug", spawnedAt: "2026-07-08T00:00:00.000Z" })), "fix-the-parser-bug")
   // A user-supplied title (titleAuto false) is real — shown as-is, never provisional.
   assert.equal(titleIsProvisional(thread({ titleAuto: false, title: "My thread", spawnedAt: fresh })), false)
-  assert.equal(displayTitle(thread({ titleAuto: false, title: "My thread" })), "myThread")
+  assert.equal(displayTitle(thread({ titleAuto: false, title: "My thread" })), "my-thread")
   // Absent titleAuto (legacy/slim/foreign row) ⇒ never provisional.
   assert.equal(titleIsProvisional(thread({ title: "legacy" })), false)
 })
@@ -1038,11 +1038,11 @@ test("Codex automatic titles follow runtime and never expose the raw initial-pro
 
   assert.equal(
     displayTitle(thread({ backend: "codex", runtime: "turn-idle", titleAuto: true, title: "slug", aiTitle: "Fix queue focus" })),
-    "fixQueueFocus",
+    "fix-queue-focus",
   )
   assert.equal(
     displayTitle(thread({ backend: "codex", runtime: "turn-idle", titleAuto: false, title: "Human rename" })),
-    "humanRename",
+    "human-rename",
   )
 })
 
@@ -1310,12 +1310,12 @@ test("bandOf: a pin moves the row, never the band — a pinned thread still says
 })
 
 // A SUB-AGENT IS NAMED BY ITS HANDLE UNDER ITS THREAD (maintainer 2026-09-30: "subagents accessible as
-// `topLevel.subagent`"): the dispatch name camelCases by the thread rule, and the drawer header reads the
+// `topLevel.subagent`"): the dispatch name becomes a handle by the thread rule, and the drawer header reads the
 // whole address down the live dispatch tree.
 test("subAgentName: a dispatch name shows as its handle; a sentence shows as written", () => {
-  assert.equal(subAgentName("Cache keys"), "cacheKeys")
-  assert.equal(subAgentName("impl:W3"), "implW3")
-  assert.equal(subAgentName("fix:r1"), "fixR1")
+  assert.equal(subAgentName("Cache keys"), "cache-keys")
+  assert.equal(subAgentName("impl:W3"), "impl-w3")
+  assert.equal(subAgentName("fix:r1"), "fix-r1")
   assert.equal(subAgentName("Verify goal caps on a real stack"), "Verify goal caps on a real stack", "six words is a sentence")
 })
 
@@ -1325,21 +1325,21 @@ test("subAgentAddressOf / subAgentTitle: the full address when the board resolve
     title: "Port the parser",
     subAgents: [
       { id: "k", label: "Cache keys", startedAt: "2026-09-30T11:00:00Z", state: "running" },
-      { id: "wf", label: "wave2", startedAt: "2026-09-30T11:00:00Z", state: "running", workflow: true },
+      { id: "wf", label: "Wave 2", startedAt: "2026-09-30T11:00:00Z", state: "running", workflow: true },
       { id: "w3", label: "impl:W3", startedAt: "2026-09-30T11:00:00Z", state: "running", parentId: "wf", depth: 2 },
       { id: "orphan", label: "Deep one", startedAt: "2026-09-30T11:00:00Z", state: "running", parentId: "gone", depth: 3 },
       { id: "long", label: "Look at every call site of the cap", startedAt: "2026-09-30T11:00:00Z", state: "running" },
     ],
   })
-  assert.equal(subAgentAddressOf(t, "k"), "portTheParser.cacheKeys")
-  assert.equal(subAgentAddressOf(t, "w3"), "portTheParser.wave2.implW3", "a Workflow's agent sits one segment further down")
+  assert.equal(subAgentAddressOf(t, "k"), "port-the-parser.cache-keys")
+  assert.equal(subAgentAddressOf(t, "w3"), "port-the-parser.wave-2.impl-w3", "a Workflow's agent sits one segment further down")
   assert.equal(subAgentAddressOf(t, "orphan"), undefined, "a parent that has left the board leaves a hole in the address")
   assert.equal(subAgentAddressOf(t, "long"), undefined, "a sentence has no handle")
   assert.equal(subAgentAddressOf(thread({ titleAuto: false, title: "Fix the flaky parser test on CI", subAgents: t.subAgents }), "k"), undefined, "no thread handle, no address")
 
-  assert.equal(subAgentTitle(t, "w3", "impl:W3"), "portTheParser.wave2.implW3")
-  assert.equal(subAgentTitle(t, "orphan", "Deep one"), "deepOne", "falls back to the child's own handle")
+  assert.equal(subAgentTitle(t, "w3", "impl:W3"), "port-the-parser.wave-2.impl-w3")
+  assert.equal(subAgentTitle(t, "orphan", "Deep one"), "deep-one", "falls back to the child's own handle")
   assert.equal(subAgentTitle(t, "long", "Look at every call site of the cap"), "Look at every call site of the cap", "then to the label as written")
-  assert.equal(subAgentTitle(undefined, "gone", "Cap audit", [{ id: "gone", address: "portTheParser.capAudit" }]), "portTheParser.capAudit", "a returned child's address from the directory")
-  assert.equal(subAgentTitle(undefined, "x", UNNAMED_SUB_AGENT_LABEL), UNNAMED_SUB_AGENT_LABEL, "the unnamed stand-in is not camelCased")
+  assert.equal(subAgentTitle(undefined, "gone", "Cap audit", [{ id: "gone", address: "port-the-parser.cap-audit" }]), "port-the-parser.cap-audit", "a returned child's address from the directory")
+  assert.equal(subAgentTitle(undefined, "x", UNNAMED_SUB_AGENT_LABEL), UNNAMED_SUB_AGENT_LABEL, "the unnamed stand-in is not made a handle")
 })

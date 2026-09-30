@@ -787,7 +787,7 @@ export function AgentRow({ agent, slug, now }: { agent: ThreadView["subAgents"][
       // so it is always the spinner, never a static mark. Accent-yellow rather than the checks' amber,
       // matching the rail's one-hue-per-runtime-concern (a sub-agent pulses accent, a shell pulses blue).
       mark={<Spinner tone="border-accent" />}
-      // Its handle (`cacheKeys`), as on every row that shows a child as itself (groups.ts subAgentName).
+      // Its handle (`cache-keys`), as on every row that shows a child as itself (groups.ts subAgentName).
       name={subAgentName(agent.label)}
       onOpen={agent.id ? () => pushSubAgentDrawer(slug, agent.id!, { label: agent.label, subagentType: agent.subagentType, startedAt: agent.startedAt }) : undefined}
       title={agent.id ? `Open this sub-agent — working for ${elapsed}` : agent.label}

@@ -46,7 +46,7 @@ import type { ChatMessage } from "../hooks.ts"
 export function startedSpinoffsKey(thread: Pick<ThreadView, "id" | "spinoffs"> | undefined): string {
   if (!thread?.spinoffs?.length) return ""
   return thread.spinoffs
-    .filter((edge: SpinoffView) => edge.parentSlug === thread.id && edge.childSlug)
+    .filter((edge: SpinoffView) => edge.parentSlug === thread.id && !edge.parentProjectId && edge.childSlug)
     .map((edge) => edge.id)
     .sort()
     .join(",")

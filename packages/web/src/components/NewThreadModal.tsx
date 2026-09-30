@@ -84,7 +84,7 @@ function PromptForm({
   // Gate the leftAction slot itself, not just the icon: Composer reserves rail space whenever the
   // prop is set, so a hidden GithubTrigger must mean NO prop — not a null-rendering element.
   const githubTriggerVisible = useGithubTriggerVisible()
-  // A new thread can be pointed at any thread on the board it is dispatched into (`@shellBudgets`).
+  // A new thread can be pointed at any thread on the board it is dispatched into (`@shell-budgets`).
   const mentions = useMentionCandidates()
   const boardDir = useProjectDir()
   const projectDir = dirs ? dirs.projectDir : boardDir

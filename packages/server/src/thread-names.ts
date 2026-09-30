@@ -135,7 +135,7 @@ export function namingRequest(
     "",
     "Rules:",
     "- ONE or TWO words. Never more.",
-    `- SHORT: the name is typed as a camelCase @handle ("Shell budgets" → @shellBudgets), which must be at most ${THREAD_HANDLE_MAX_CHARS} characters. Prefer short, plain words.`,
+    `- SHORT: the name is typed as a kebab-case @handle ("Shell budgets" → @shell-budgets), which must be at most ${THREAD_HANDLE_MAX_CHARS} characters. Prefer short, plain words.`,
     "- Name the SUBJECT or intent of the request, not the action taken: \"Shell budgets\", \"Focus mode\", \"ArkType perf\" — never \"Fix the shell budget default\".",
     "- No request verbs: fix, add, update, investigate, implement, check, refactor.",
     "- Sentence case: capitalize the first word only, plus proper nouns. Spell product names and identifiers exactly as the request spells them.",

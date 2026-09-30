@@ -43,8 +43,8 @@ test("the parent draws each request as its card, and never the spawn_thread call
       text: document.body.innerText,
     }))
     assert.deepEqual(read.cards, [
-      { state: "started", link: "@evaluateSubAgentAddresses", header: "Spinoff@evaluateSubAgentAddresses" },
-      { state: "started", link: "@auditEveryTranscriptProjectionPath", header: "Spinoff@auditEveryTranscriptProjectionPath" },
+      { state: "started", link: "@evaluate-sub-agent-addresses", header: "Spinoff@evaluate-sub-agent-addresses" },
+      { state: "started", link: "@audit-every-transcript-projection-path", header: "Spinoff@audit-every-transcript-projection-path" },
       { state: "unstarted", link: null, header: "Spinoffdidn't start" },
     ])
     // The two ordinary runs keep their digests; the two spawn calls add none (a spawn-only message would
@@ -174,9 +174,9 @@ test("the child heads itself with the spinoff card, its brief folded until asked
       bubbles: document.querySelectorAll(".bg-user-bubble").length,
       text: document.body.innerText,
     }))
-    assert.equal(collapsed.header, "Spinoff of @subAgentLiveness", "the drawer header names the parent by handle")
-    assert.equal(collapsed.card, "Spinoff of@subAgentLiveness")
-    assert.equal(collapsed.toggle, "Context from @subAgentLiveness")
+    assert.equal(collapsed.header, "Spinoff of @sub-agent-liveness", "the drawer header names the parent by handle")
+    assert.equal(collapsed.card, "Spinoff of@sub-agent-liveness")
+    assert.equal(collapsed.toggle, "Context from @sub-agent-liveness")
     assert.equal(collapsed.expanded, "false")
     assert.equal(collapsed.context, false)
     assert.equal(collapsed.bubbles, 0, "the first turn is not a user bubble")
@@ -214,8 +214,8 @@ test("a spinoff child's queue card names its parent in the card's own project", 
     await page.waitForSelector("[data-xq-card-root] [data-spinoff-of]")
     const read = await page.evaluate(() => [...document.querySelectorAll("[data-xq-card-root] [data-spinoff-of] a")].map((a) => ({ text: a.textContent, href: a.getAttribute("href") })))
     assert.deepEqual(read, [
-      { text: "@subAgentLiveness", href: "/all/frizz/thread/sub-agent-liveness" },
-      { text: "@subAgentLiveness", href: "/all/frizz/thread/sub-agent-liveness" },
+      { text: "@sub-agent-liveness", href: "/all/frizz/thread/sub-agent-liveness" },
+      { text: "@sub-agent-liveness", href: "/all/frizz/thread/sub-agent-liveness" },
     ])
     assert.deepEqual(errors, [])
   } finally {

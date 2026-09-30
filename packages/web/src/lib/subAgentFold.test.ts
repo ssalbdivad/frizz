@@ -28,9 +28,9 @@ test("the fold spins while anything under it runs, at any depth", () => {
 })
 
 test("the fold's tooltip names the direct children it hides, by the handles their rows show", () => {
-  assert.equal(subAgentFold([child("fix:r1"), child("fix:r2"), child("nested", { depth: 2 })]).names, "fixR1, fixR2")
+  assert.equal(subAgentFold([child("fix:r1"), child("fix:r2"), child("nested", { depth: 2 })]).names, "fix-r1, fix-r2")
   // A sentence has no handle, so it is named as written — the same fallback its own row takes.
-  assert.equal(subAgentFold([child("Cache keys"), child("Verify goal caps on a real stack")]).names, "cacheKeys, Verify goal caps on a real stack")
+  assert.equal(subAgentFold([child("Cache keys"), child("Verify goal caps on a real stack")]).names, "cache-keys, Verify goal caps on a real stack")
 })
 
 test("descendants with no direct child listed still count as themselves", () => {

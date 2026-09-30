@@ -1,7 +1,11 @@
 import { useContext, useEffect, useId, useRef, useState, type KeyboardEvent as ReactKeyboardEvent, type MouseEvent as ReactMouseEvent, type ReactNode } from "react"
-import { ChevronRight, Loader2, Split } from "lucide-react"
-import { SPINOFF_INSTRUCTIONS_MAX, type SpinoffView, type ThreadView } from "@frizz/shared"
+import { Check, ChevronDown, ChevronRight, Loader2, Split } from "lucide-react"
+import { useQuery } from "@tanstack/react-query"
+import { SPINOFF_INSTRUCTIONS_MAX, type ProjectCard, type SpinoffView, type ThreadView } from "@frizz/shared"
+import { rpc } from "../api/rpc.ts"
 import { useThreadApi, useThreadProjectDir } from "../api/threadApi.tsx"
+import { mentionHref } from "../lib/mentionAutolink.ts"
+import { spaNavigate } from "../lib/router.ts"
 import { displayTitle, threadHandleOf } from "../groups.ts"
 import { useBoard } from "../hooks.ts"
 import { draftKey, draftStore, useDraft } from "../lib/drafts.ts"
@@ -10,7 +14,9 @@ import { transcriptMetaChevronClass } from "../lib/transcriptMetaLabels.ts"
 import { showToast, threadBySlug } from "../store.ts"
 import { ThreadHandleLink } from "./MentionLinks.tsx"
 import { ThreadSlugContext } from "./threadSlugContext.ts"
+import { ProjectSquare } from "./ProjectRail.tsx"
 import { Dialog } from "./ui/Dialog.tsx"
+import { Menu, MenuContent, MenuItem, MenuTrigger } from "./ui/Menu.tsx"
 import { Tooltip } from "./Tooltip.tsx"
 import { BLOCK_RADIUS } from "./TranscriptCard.tsx"
 
@@ -84,8 +90,17 @@ function SpinoffDialog({ thread, open, onOpenChange }: { thread: ThreadView & { 
   const [pending, setPending] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const fieldRef = useRef<HTMLTextAreaElement>(null)
+  // WHERE THE NEW THREAD STARTS (2026-09-30: "spinoff threads should be able to be created cross
+  // project"). This thread's project unless the human picks another open one; undefined is "here".
+  const projects = useOpenProjects(open)
+  const home = projects.find((p) => p.dir === projectDir)
+  const [targetId, setTargetId] = useState<string | undefined>(undefined)
+  const target = targetId && targetId !== home?.id ? projects.find((p) => p.id === targetId) : undefined
   useEffect(() => {
-    if (!open) setError(null)
+    if (!open) {
+      setError(null)
+      setTargetId(undefined)
+    }
   }, [open])
 
   function submit() {
@@ -93,7 +108,7 @@ function SpinoffDialog({ thread, open, onOpenChange }: { thread: ThreadView & { 
     if (!text || pending) return
     setPending(true)
     setError(null)
-    api.spinoff({ slug: thread.id, sessionId: thread.sessionId, instructions: text })
+    api.spinoff({ slug: thread.id, sessionId: thread.sessionId, instructions: text, ...(target ? { project: target.id } : {}) })
       .then(() => {
         clearInstructions()
         onOpenChange(false)
@@ -114,6 +129,10 @@ function SpinoffDialog({ thread, open, onOpenChange }: { thread: ThreadView & { 
       }}
       footer={
         <>
+          {/* Only where there is somewhere else to start: one open project has nothing to choose. */}
+          {home && projects.length > 1 && (
+            <SpinoffProjectPicker projects={projects} current={target ?? home} disabled={pending} onPick={(p) => setTargetId(p.id)} />
+          )}
           <button
             type="button"
             disabled={pending}
@@ -156,10 +175,110 @@ function SpinoffDialog({ thread, open, onOpenChange }: { thread: ThreadView & { 
         />
         {error
           ? <p role="alert" className="text-[11px] leading-4 text-danger">{error}</p>
-          : <p className="text-[11px] leading-4 text-muted-60">It starts with this thread's context.</p>}
+          : <p className="text-[11px] leading-4 text-muted-60">{target ? `It starts in ${target.name}, with this thread's context.` : "It starts with this thread's context."}</p>}
       </div>
     </Dialog>
   )
+}
+
+/** A project this server has OPEN — the only kind a spinoff can start in (the server refuses the rest). */
+interface OpenProject { id: string; slug: string; name: string; dir: string; card: ProjectCard; threads: readonly ThreadView[] }
+
+/** Every open project, from the machine-wide polls the All projects page already runs (same keys, so
+ *  one fetch serves both). Joined with the project list for each one's icon; the Home workspace last. */
+function useOpenProjects(enabled: boolean): OpenProject[] {
+  const queues = useQuery({ queryKey: ["projectsQueues"], queryFn: () => rpc.projectsQueues(), enabled, staleTime: 5_000 })
+  const cards = useQuery({ queryKey: ["projectsList"], queryFn: () => rpc.projectsList(), enabled })
+  const out: OpenProject[] = []
+  for (const q of queues.data ?? []) {
+    const card = cards.data?.find((c) => c.id === q.projectId)
+    if (card?.stale) continue
+    out.push({
+      id: q.projectId, slug: q.projectSlug, name: card?.name ?? q.projectName, dir: q.projectDir, threads: q.threads,
+      card: card ?? { id: q.projectId, slug: q.projectSlug, name: q.projectName, path: q.projectDir, lastOpenedAt: "", stale: false, iconStatus: "unknown" },
+    })
+  }
+  return [...out.filter((p) => !p.card.home), ...out.filter((p) => p.card.home)]
+}
+
+/** The dialog's "start in" pill: the footer's left end, in the footer buttons' own chrome and size, so it
+ *  reads as a setting of the request rather than a third action. */
+function SpinoffProjectPicker({ projects, current, disabled, onPick }: {
+  projects: OpenProject[]
+  current: OpenProject
+  disabled: boolean
+  onPick: (project: OpenProject) => void
+}) {
+  return (
+    <Menu>
+      <MenuTrigger asChild>
+        <button
+          type="button"
+          disabled={disabled}
+          data-spinoff-project={current.slug}
+          aria-label={`The new thread starts in ${current.name}. Choose a project`}
+          className="button-outline mr-auto flex min-w-0 max-w-[60%] items-center gap-1.5 rounded-md px-2.5 py-1.5 text-[12px] text-muted outline-none transition-colors hover:bg-panel-2 hover:text-fg disabled:opacity-45 data-[state=open]:bg-panel-2 data-[state=open]:text-fg"
+        >
+          <ProjectSquare project={current.card} size={12} />
+          <span className="min-w-0 truncate">{current.name}</span>
+          <ChevronDown size={12} aria-hidden className="-ml-[3px] shrink-0 text-fg/65" />
+        </button>
+      </MenuTrigger>
+      <MenuContent align="start">
+        <div className="px-2.5 pb-1 pt-1.5 text-[10.5px] font-medium text-muted-55">Start in</div>
+        <div className="max-h-[min(60vh,420px)] overflow-y-auto">
+          {projects.map((project) => (
+            <MenuItem key={project.id} value={project.slug} onSelect={() => onPick(project)} icon={<ProjectSquare project={project.card} size={14} />}>
+              <span className={`min-w-0 flex-1 truncate ${project.id === current.id ? "text-fg" : ""}`}>{project.name}</span>
+              {project.id === current.id && <Check size={12} aria-label="Current" className="shrink-0 text-fg" />}
+            </MenuItem>
+          ))}
+        </div>
+      </MenuContent>
+    </Menu>
+  )
+}
+
+type FarEnd = NonNullable<ReturnType<typeof useFarEnd>>
+
+/** What a far end is called when its thread is not among the open threads the poll carries (it is done,
+ *  or the poll has not landed yet). */
+function farFallback(far: FarEnd): string {
+  return far.projectName ? `a thread in ${far.projectName}` : "a thread in another project"
+}
+
+/** A spinoff's other thread: the board's own link for an end in this project (`projectId` undefined); for
+ *  one in another, that project's thread and address (CrossProjectEnd). */
+function SpinoffEndLink({ slug, projectId, className = HEADER_LINK, named = true }: { slug: string; projectId: string | undefined; className?: string; named?: boolean }) {
+  return projectId
+    ? <CrossProjectEnd slug={slug} projectId={projectId} className={className} named={named} />
+    : <ThreadHandleLink slug={slug} className={className} />
+}
+
+/** Its own component so the machine-wide lookup mounts only for a cross-project edge — a surface drawing a
+ *  same-project one may have no query client. The project is named after a resolved handle, since the
+ *  handle alone could be a thread of this one; a project not open here has no address, so it is text. */
+function CrossProjectEnd({ slug, projectId, className, named }: { slug: string; projectId: string; className: string; named: boolean }) {
+  const far = useFarEnd(projectId, slug)!
+  if (!far.href) return <span className="min-w-0 truncate">{farFallback(far)}</span>
+  return (
+    <>
+      <ThreadHandleLink slug={slug} thread={far.thread} href={far.href} onOpen={far.onOpen} fallback={farFallback(far)} className={className} />
+      {named && far.thread && <span className="min-w-0 shrink truncate">in {far.projectName}</span>}
+    </>
+  )
+}
+
+/** The link to a spinoff's far end when it is in ANOTHER project (SpinoffView.parentProjectId /
+ *  childProjectId): that project's thread off the machine-wide poll, and its address there, opened in
+ *  place as a cross-project mention is. Undefined for an end in this project. */
+function useFarEnd(projectId: string | undefined, slug: string | null | undefined) {
+  const projects = useOpenProjects(projectId !== undefined)
+  if (!projectId || !slug) return undefined
+  const project = projects.find((p) => p.id === projectId)
+  if (!project) return { thread: null, projectName: undefined, href: undefined, onOpen: undefined }
+  const href = mentionHref(slug, undefined, project.slug)
+  return { thread: project.threads.find((t) => t.id === slug) ?? null, projectName: project.name, href, onOpen: () => spaNavigate(href) }
 }
 
 // ── The two ends of a spinoff, as cards ────────────────────────────────────────────────────────────
@@ -365,7 +484,7 @@ export function SpinoffCard({ id, instructions, at, queued, deliveryState, deliv
             : <SpinoffMark size={14} className={HEADER_GLYPH} />}
           <span className="shrink-0">Spinoff</span>
           {state === "started" ? (
-            <ThreadHandleLink slug={edge!.childSlug!} className={HEADER_LINK} />
+            <SpinoffEndLink slug={edge!.childSlug!} projectId={edge!.childProjectId} />
           ) : state === "detached" ? null : (
             // Unconfirmed wears the attention tone the bubble's own "Delivery unconfirmed" line does: it is
             // the one state the human may need to act on (send it again), and the only one that is a warning.
@@ -397,13 +516,14 @@ function spinoffButtonNear(from: HTMLElement, slug: string): HTMLButtonElement |
  *  (the transcript's markdown renderer, which lives in ChatView). */
 export function SpinoffOriginCard({ instructions, context, sourceId }: { instructions: string; context: ReactNode; sourceId?: string }) {
   const thread = useTranscriptThread()
-  const edge = thread?.spinoffs?.find((o) => o.childSlug === thread.id)
+  const edge = thread?.spinoffs?.find((o) => o.childSlug === thread.id && !o.childProjectId)
   const board = useBoard()
-  const parent = edge ? threadBySlug(board, edge.parentSlug) : undefined
+  const parent = edge && !edge.parentProjectId ? threadBySlug(board, edge.parentSlug) : undefined
   const parentHandle = parent ? threadHandleOf(parent) : undefined
   // The disclosure names the parent as TEXT: a link inside the toggle would be a control inside a control,
-  // and the header right above it already links the thread.
-  const parentName = parentHandle ? `@${parentHandle}` : parent ? displayTitle(parent) : edge ? edge.parentSlug : undefined
+  // and the header right above it already links the thread. A parent in another project is named by the
+  // header alone.
+  const parentName = parentHandle ? `@${parentHandle}` : parent ? displayTitle(parent) : edge && !edge.parentProjectId ? edge.parentSlug : undefined
   const [open, setOpen] = useState(false)
   const contextId = useId()
   return (
@@ -414,7 +534,7 @@ export function SpinoffOriginCard({ instructions, context, sourceId }: { instruc
           {edge ? (
             <>
               <span className="shrink-0">Spinoff of</span>
-              <ThreadHandleLink slug={edge.parentSlug} className={HEADER_LINK} />
+              <SpinoffEndLink slug={edge.parentSlug} projectId={edge.parentProjectId} />
             </>
           ) : (
             <span className="shrink-0">Spinoff</span>
@@ -464,16 +584,19 @@ export function SpinoffOf({ thread, lead, resolve, href, onOpen, compact = false
   onOpen?: (slug: string) => void
   compact?: boolean
 }) {
-  const edge = thread.spinoffs?.find((o) => o.childSlug === thread.id)
+  const edge = thread.spinoffs?.find((o) => o.childSlug === thread.id && !o.childProjectId)
   if (!edge) return null
   const parentSlug = edge.parentSlug
-  const link = (
+  const linkClass = `${compact ? "min-w-0 truncate " : ""}rounded-sm underline decoration-muted/30 underline-offset-2 outline-none hover:text-fg hover:decoration-fg/60 focus-visible:ring-1 focus-visible:ring-focus-ink-60`
+  // A parent in ANOTHER project is that project's thread wherever this line is drawn, whichever board
+  // `resolve` reads.
+  const link = edge.parentProjectId ? <SpinoffEndLink slug={parentSlug} projectId={edge.parentProjectId} className={linkClass} named={!compact} /> : (
     <ThreadHandleLink
       slug={parentSlug}
       thread={resolve ? resolve(parentSlug) ?? null : undefined}
       href={href?.(parentSlug)}
       onOpen={onOpen ? () => onOpen(parentSlug) : undefined}
-      className={`${compact ? "min-w-0 truncate " : ""}rounded-sm underline decoration-muted/30 underline-offset-2 outline-none hover:text-fg hover:decoration-fg/60 focus-visible:ring-1 focus-visible:ring-focus-ink-60`}
+      className={linkClass}
     />
   )
   return (

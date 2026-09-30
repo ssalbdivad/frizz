@@ -106,7 +106,7 @@ test("the parent's card names the child by @handle, links it, and is outlined ra
   assert.match(html, /data-frizz-msg="u1"/)
   assert.match(html, /data-spinoff-state="started"/)
   assert.match(html, />Spinoff</)
-  assert.match(html, /<a href="\/thread\/evaluate-addresses" title="Evaluate addresses · Reading the router" data-thread-mention="evaluate-addresses"[^>]*>@evaluateAddresses<\/a>/)
+  assert.match(html, /<a href="\/thread\/evaluate-addresses" title="Evaluate addresses · Reading the router" data-thread-mention="evaluate-addresses"[^>]*>@evaluate-addresses<\/a>/)
   assert.match(html, /Is it worth keeping\?\nBe blunt\./, "the instructions verbatim, breaks intact")
   assert.match(html, /\bborder\b/)
   assert.doesNotMatch(html, /bg-user-bubble/, "an action, not a message: no bubble fill")
@@ -175,10 +175,10 @@ test("the child's card heads it as a spinoff of its parent, with the brief folde
     sourceId: "u0",
   }))
   assert.match(html, /data-spinoff-card="origin"/)
-  assert.match(html, /Spinoff of<\/span><a href="\/thread\/live-sub-agents"[^>]*>@liveSubAgents<\/a>/)
+  assert.match(html, /Spinoff of<\/span><a href="\/thread\/live-sub-agents"[^>]*>@live-sub-agents<\/a>/)
   assert.match(html, /Is it worth keeping\?/)
   assert.match(html, /aria-expanded="false"/)
-  assert.match(html, /Context from @liveSubAgents/)
+  assert.match(html, /Context from @live-sub-agents/)
   assert.doesNotMatch(html, /BRIEF-BODY/, "collapsed by default: one quiet line, not the brief")
   assert.doesNotMatch(html, /bg-user-bubble/)
 })
@@ -199,7 +199,7 @@ test("a thread link reads @handle, else the title the board shows, else the slug
     thread({ id: "named", title: "Shell budgets" }),
     thread({ id: "sentence", title: "Rework the session-limit banner so the countdown reads in the house grammar" }),
   ])
-  assert.match(renderToStaticMarkup(createElement(ThreadHandleLink, { slug: "named" })), />@shellBudgets</)
+  assert.match(renderToStaticMarkup(createElement(ThreadHandleLink, { slug: "named" })), />@shell-budgets</)
   assert.match(renderToStaticMarkup(createElement(ThreadHandleLink, { slug: "sentence" })), />Rework the session-limit banner so the countdown reads in the house grammar</)
   const gone = renderToStaticMarkup(createElement(ThreadHandleLink, { slug: "not-on-board" }))
   assert.match(gone, />not-on-board</)
@@ -212,13 +212,13 @@ test("a thread link reads @handle, else the title the board shows, else the slug
 test("the child's header line is a spinoff of its parent by @handle, and a queue card can point it at its own project", () => {
   const child = thread({ id: "evaluate-addresses", title: "Evaluate addresses", spinoffs: [edge()] })
   board([thread({ id: "live-sub-agents", title: "Live sub agents" }), child])
-  assert.match(renderToStaticMarkup(createElement(SpinoffOf, { thread: child })), /Spinoff of <a href="\/thread\/live-sub-agents"[^>]*>@liveSubAgents<\/a>/)
+  assert.match(renderToStaticMarkup(createElement(SpinoffOf, { thread: child })), /Spinoff of <a href="\/thread\/live-sub-agents"[^>]*>@live-sub-agents<\/a>/)
   const elsewhere = renderToStaticMarkup(createElement(SpinoffOf, {
     thread: child,
     resolve: (slug: string) => (slug === "live-sub-agents" ? thread({ id: slug, title: "Other project parent" }) : undefined),
     href: (slug: string) => `/all/nub/thread/${slug}`,
   }))
-  assert.match(elsewhere, /href="\/all\/nub\/thread\/live-sub-agents"[^>]*>@otherProjectParent</)
+  assert.match(elsewhere, /href="\/all\/nub\/thread\/live-sub-agents"[^>]*>@other-project-parent</)
   // The PARENT has no header line of this kind — its spinoffs are cards in its chat.
   assert.equal(renderToStaticMarkup(createElement(SpinoffOf, { thread: thread({ id: "live-sub-agents", title: "Live sub agents", spinoffs: [edge()] }) })), "")
 })
