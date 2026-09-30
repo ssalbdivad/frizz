@@ -1,14 +1,12 @@
 import { useState, type ComponentType } from "react"
 import { useQueryClient } from "@tanstack/react-query"
-import { ChevronsDownUp, ChevronsUpDown, FileText, Loader2, RotateCcw } from "lucide-react"
+import { ChevronsDownUp, ChevronsUpDown, Loader2, RotateCcw } from "lucide-react"
 import type { ThreadView } from "@frizz/shared"
 import { Tooltip } from "./Tooltip.tsx"
 import { MarkAsButton } from "./MarkAsButton.tsx"
 import { offersRetry } from "../groups.ts"
 import { retrySession } from "../lib/retrySession.ts"
 import { HEADER_ICON_CLASS } from "../lib/headerIcon.ts"
-import { ReloadPluginsButton } from "./ReloadPluginsButton.tsx"
-import { RestartWorkerButton } from "./RestartWorkerButton.tsx"
 import { CollapseThreadLink } from "./CollapseThreadLink.tsx"
 import { ExpandThreadLink } from "./ExpandThreadLink.tsx"
 
@@ -19,16 +17,13 @@ export { STALLED_RETRY_MESSAGE } from "../lib/retrySession.ts"
 // THE shared whole-thread action icons, rendered IDENTICALLY by the queue card header and the thread
 // header so the two can never drift. Order left→right runs least→most important, so the primary verb
 // sits at the far RIGHT. The verbs SPLIT on kind:
-//   • SESSION (non-foreign): doc/open navigation, plus Retry on exactly the threads `offersRetry`
+//   • SESSION (non-foreign): the fullscreen door, plus Retry on exactly the threads `offersRetry`
 //     picks — the STALLED ones (the rail's yellow [!]) and the ones KILLED by a usage limit frizz will
 //     auto-resume (the yellow hourglass, offered the same one-click continue). Every surface that renders this
 //     component reads that same derivation, so the verb can never disagree between the card, the header
-//     and the rail. It also carries the two live-process MAINTENANCE verbs — Reload plugins and Restart
-//     worker — which sat in the lifecycle footer until 2026-08-26 (maintainer: "the restart worker
-//     button should be at the top. I just realized it shouldn't be along the bottom"). They travel
-//     TOGETHER: the plug glyph was chosen only because it sits beside the restart refresh and must not
-//     share its vocabulary, so splitting them would orphan it. Each still gates itself (dev build,
-//     broker-backed Claude, live process), so both render nothing on most rows.
+//     and the rail. The live-process maintenance verbs (Reload plugins, Restart worker), the copy
+//     terminal command and the Frizz document sat here until 2026-09-29; they are the drawer's ⋯ menu
+//     items now (ThreadMenu.tsx).
 //     Other lifecycle verbs (Mark as done / Snooze) live in ThreadLifecycleFooter; the AI rename
 //     refresh is revealed by the title's own hover, in both this component's surfaces.
 //   • SESSION (foreign): read-only. Only the doc/open NAVIGATION affordances — no kill/archive.
@@ -37,7 +32,6 @@ export function HeaderActions({
   thread,
   expand,
   collapse,
-  onDoc,
   onDone,
   onCollapse,
   collapsed,
@@ -49,7 +43,6 @@ export function HeaderActions({
   thread: ThreadView
   expand?: boolean // the drawer → the fullscreen door (ExpandThreadLink)
   collapse?: boolean // the /full page → the same door, closing (CollapseThreadLink). Never both.
-  onDoc?: () => void // present only on the thread header → shows the frizz-document icon
   onDone: () => void // legacy Mark-as "done" path (parent-owned mutation)
   onCollapse?: () => void // queue cards → collapse/expand the card body to just its header
   collapsed?: boolean
@@ -72,11 +65,6 @@ export function HeaderActions({
           onClick={onCollapse}
         />
       )}
-      {/* Maintenance FIRST, because the strip runs least→most important left→right and these are the
-          two verbs you reach for about the worker rather than about the thread. */}
-      <ReloadPluginsButton thread={thread} />
-      <RestartWorkerButton thread={thread} />
-      {onDoc && <IconBtn label="Frizz document" icon={FileText} size={14} onClick={onDoc} />}
       {/* THE FULLSCREEN DOOR, one slot, both directions — a real anchor that navigates IN PLACE on a
           plain click and leaves ⌘/middle/right-click to the browser. A surface only ever offers ONE of
           these: the drawer can be expanded, the /full page can be collapsed, and holding both halves in
@@ -126,10 +114,13 @@ function RetryButton({ slug }: { slug: string }) {
         disabled={busy}
         aria-label="Retry exited session"
         onMouseDown={(e) => e.preventDefault()}
-        className="ml-1 flex items-center gap-1.5 rounded-md border border-accent/45 bg-accent/10 px-2.5 py-1 text-[12px] font-medium text-accent outline-none transition-colors hover:border-accent/70 hover:bg-accent/15 disabled:opacity-50"
+        // AN ICON, in the strip's own chrome. It was a labelled accent pill until 2026-09-29, and one
+        // worded pill among bare glyphs read as a stray (maintainer: "having a retry button labeled with
+        // other non labeled icons looks awful"). The stall itself is already marked on the rail row and
+        // the band stamp, so the strip need not shout it.
+        className={HEADER_ICON_CLASS}
       >
-        {busy ? <Loader2 size={12} className="animate-spin" /> : <RotateCcw size={12} />}
-        Retry
+        {busy ? <Loader2 size={14} strokeWidth={2} className="animate-spin" /> : <RotateCcw size={14} strokeWidth={2} />}
       </button>
     </Tooltip>
   )

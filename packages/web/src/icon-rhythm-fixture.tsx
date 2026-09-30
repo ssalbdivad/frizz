@@ -123,7 +123,7 @@ function Fixture() {
                     thread={thread}
                     collapsed={false}
                     onCollapse={() => {}}
-                    onDoc={() => {}}
+                    expand
                     onDone={() => {}}
                   />
                 </div>

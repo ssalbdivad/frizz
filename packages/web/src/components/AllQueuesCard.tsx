@@ -303,9 +303,9 @@ export const AllQueuesCard = memo(function AllQueuesCard({
                   name the focused project's thread of the same slug — and it owns `f` on this card.
                   AS THE HEADER'S LAST MARK it takes `-mr-2`: its ink sits ~1.2px inside a 14px box
                   centred in a 28px square, so untrimmed it drew ~29px in from the card's right border
-                  against the project mark's 20.75px on the left; trimmed, 21.0px — the inset Retry keeps
-                  when it is last (measured 2026-09-29, ink-gaps.mjs dsf 4, sans). Beside Retry it keeps
-                  its box: ⤢ → Retry measured 10px of ink, the gap-0.5 pairing Colin's card had. */}
+                  against the project mark's 20.75px on the left; trimmed, 21.0px (measured 2026-09-29,
+                  ink-gaps.mjs dsf 4, sans). Beside Retry it keeps its box and Retry, an icon of the same
+                  square since 2026-09-29, takes the trim as the last mark instead. */}
               <ExpandThreadLink
                 slug={thread.id}
                 href={`${placeHref}/full`}
@@ -481,16 +481,14 @@ function RetryButton({ project, thread, onSent, onFailed }: { project: QueuesPro
         disabled={retry.isPending || !thread.sessionId}
         aria-label="Retry exited session"
         onMouseDown={(event) => event.preventDefault()}
-        // No margin: Retry is the header's last mark, so the header's own padding insets it — 21px from the
-        // card's border box, the title's inset on the left. It carried `mr-[9px]` until 2026-09-28 to sit at
-        // the rhythm of the ↗ and ⤢ doors beside it (MEASURED 2026-09-23, ink-gaps.mjs, dsf 4, sans: Retry →
-        // ↗ 20.43px); with the doors gone that margin left it 30px in against the title's 21 (measured
-        // 2026-09-28, composer-alias-fixture ?surface=card&runtime=exited, dsf 4, sans). The ⤢ came back
-        // BEFORE it on 2026-09-29 (ExpandThreadLink), so Retry is still last and still wants no margin.
-        className="flex items-center gap-1.5 rounded-md border border-accent/45 bg-accent/10 px-2.5 py-1 text-[12px] font-medium text-accent outline-none transition-colors hover:border-accent/70 hover:bg-accent/15 disabled:opacity-50"
+        // AN ICON in the header strip's chrome — the same mark as the drawer's Retry
+        // (HeaderActions.tsx). It was a labelled accent pill until 2026-09-29, and one worded pill beside
+        // the bare ⤢ read as a stray (maintainer: "having a retry button labeled with other non labeled
+        // icons looks awful").
+        // `-mr-2` as the header's last mark, the ⤢'s trim (see the strip above).
+        className={`${HEADER_ICON_CLASS} -mr-2`}
       >
-        <RotateCcw size={12} />
-        Retry
+        <RotateCcw size={14} strokeWidth={2} />
       </button>
     </Tooltip>
   )
