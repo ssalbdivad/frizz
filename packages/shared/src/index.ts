@@ -357,9 +357,9 @@ export type WorkCheckout = z.infer<typeof WorkCheckout>
 // the turn in-flight, so the spinner already covers them; this is for ops that PERSIST across a rest
 // (a CI watcher, a long build). New servers include the stable tool-use id so the row can open its
 // read-only output drawer; it stays optional for old snapshots. The raw command remains behind that
-// drawer's scoped RPC rather than inflating or exposing it in every board snapshot. Its START FOLDER
-// (`cwd`) does ride the board: a folder is not the command, and it is what tells a shell running in the
-// agent's worktree from one running in the project root.
+// drawer's scoped RPC rather than inflating or exposing it in every board snapshot. Its FOLDER (`cwd`)
+// does ride the board: a folder is not the command, and it is what tells a shell running in the agent's
+// worktree from one running in the project root.
 export const BgShellView = z.object({
   label: z.string(), // the command's `description`, else its first-line summary
   startedAt: z.string(), // ISO8601 of the launch record
@@ -418,9 +418,12 @@ export const BgShellView = z.object({
   // the card's "2h left" reads. Past it the worker is warned once and, unextended, the shell is stopped
   // ten minutes later. Absent ⇒ unbudgeted.
   budgetEndsAt: z.string().optional(),
-  // The absolute folder the shell STARTED in — the session's `cwd` on its launch record, or the folder a
-  // leading `cd <path> &&` moved it to (server tailer.ts leadingCd). The effective start folder, NOT
-  // lifted to its checkout: it is what the row's tooltip and the drawer's subtitle say ("Started in").
+  // The absolute folder the shell RUNS in, NOT lifted to its checkout: what the row's tooltip ("Runs in")
+  // and the drawer's subtitle say. While the shell runs it is the OS's answer — the folder the process
+  // holding its log is in (server shell-cwd-probe.ts), which is where it is NOW. Until the OS has answered,
+  // and for a Codex exec, it is the start folder the transcript names: the session's `cwd` on the launch
+  // record, or where a leading `cd <path> &&` moved it (tailer.ts leadingCd). A retired shell keeps the
+  // last of these it had.
   cwd: z.string().optional(),
   // That folder lifted to its checkout, present only when that checkout is NOT the project root — the
   // row's quiet folder hint. Absent ⇒ the root (see WorkCheckout).
@@ -462,7 +465,7 @@ export const BackgroundShellOutputResult = z.object({
   // A CODEX background exec: Codex keeps its output inside its own session and hands it to the model when
   // it polls, so Frizz holds no file to read. The command, the folder and Stop still work.
   outputUnavailable: z.boolean().optional(),
-  // Where it started (BgShellView.cwd) and that folder's checkout when it is off the project root — kept
+  // Where it runs (BgShellView.cwd) and that folder's checkout when it is off the project root — kept
   // with the retired shell, so an open drawer keeps its subtitle after the shell ends.
   cwd: z.string().nullable().optional(),
   checkout: WorkCheckout.nullable().optional(),

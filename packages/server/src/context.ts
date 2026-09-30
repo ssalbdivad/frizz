@@ -949,6 +949,8 @@ function createContextUnchecked(opts: ContextOptions, resources: PartialContextR
     // for the other provider — and the only source there is, since a codex exec's `processId` (the id
     // its × addresses) never reaches the rollout the tailer folds.
     codexBackgroundExecs: codexAppServer ? (slug, sessionId) => codexAppServer.backgroundExecs(slug, sessionId) : undefined,
+    // Where a codex session runs, so a relative `workdir` resolves where Codex resolved it.
+    codexSessionCwd: codexAppServer ? (slug, sessionId) => codexAppServer.binding(slug, sessionId)?.cwd : undefined,
   })
   resources.tailer = tailer
   opts.startup?.afterPhase?.("tailer")

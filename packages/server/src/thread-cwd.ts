@@ -132,7 +132,7 @@ export function checkoutOf(dir: string, projectDir: string): string {
 
 // ── ONE CHECKOUT READING, shared by every surface ─────────────────────────────────────────────────────
 //
-// The agent's own folder (the tailer's fold), each background shell's start folder, a human terminal's
+// The agent's own folder (the tailer's fold), each background shell's folder, a human terminal's
 // folder and the terminal dialog's prefill all go through `liftCheckout`, so the drawer header, the card,
 // a shell row and the dialog can never classify one folder two ways. Nothing else classifies a checkout.
 //

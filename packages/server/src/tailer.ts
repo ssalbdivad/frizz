@@ -476,7 +476,7 @@ interface SubAgentEntry {
   // `cd <path> &&` moved it (leadingCd). That reading can be a whole turn late — the harness stamps `cwd`
   // when it writes a batch, not when the command ran — so while the shell runs, the OS's answer
   // (shell-cwd-probe.ts) replaces it here, and the retired ring and the drawer's lookup inherit it.
-  // What its row's "Started in" and folder hint read.
+  // What its row's "Runs in" and folder hint read.
   cwd?: string
   subagentType?: string // the dispatch's input.subagent_type verbatim (agents only; may be absent)
   outputFile?: string // the child/shell's output path (from the launch tool_result); its mtime = liveness
@@ -556,7 +556,7 @@ export interface BackgroundShellLookup {
    *  beside it, the drawer says the output is missing rather than that nothing was printed. */
   outputNamed?: boolean
   state: "running" | "done"
-  /** Where it started (SubAgentEntry.cwd) — kept after it retires, so an open drawer keeps its subtitle. */
+  /** Where it runs (SubAgentEntry.cwd) — kept after it retires, so an open drawer keeps its subtitle. */
   cwd?: string
   monitor?: boolean
 }
@@ -1124,7 +1124,7 @@ function shellSummary(command: unknown): string {
 // literal path, then `&&` or `;`. A bare token with no `$`, backtick, glob or subshell character, or the
 // same wrapped in plain quotes; `~` is the home folder and a relative path resolves against `base`.
 // Anything cleverer (`cd "$D"`, `pushd`, a `cd` mid-command, a subshell) answers undefined and the shell
-// keeps the session's folder — which the row words as "Started in", true either way.
+// keeps the session's folder until the OS names the one its process is really in (shell-cwd-probe.ts).
 const LEADING_CD_RE = /^\s*cd\s+(?:"([^"$`*?(\\]+)"|'([^'$`*?(]+)'|([^\s"'$`*?(;&|<>\\]+))\s*(?:&&|;)/
 
 export function leadingCd(command: unknown, base: string | undefined): string | undefined {
@@ -2391,7 +2391,7 @@ export function applyEvent(state: FoldState, ev: NormalizedEvent): void {
       if (ev.kind === "tool-call") openCallIssued(state, ev.id, openCallFrom(ev.name, ev.input, ev.at))
       // A CODEX tool call names the folder it runs in (`workdir`), which is the agent's own latest word on
       // where it is working — the reading newestToolWorkdir takes by rescanning, folded here instead. Kept
-      // raw: a relative one is resolved against the project's folder by the tailer, which knows it.
+      // raw: a relative one is resolved against the session's folder by the tailer, which knows it.
       if (ev.kind === "tool-call") {
         const dir = toolCallFolder(ev.input)
         if (dir) state.cwd = dir
@@ -2691,6 +2691,11 @@ export interface TailerDeps {
   // produced a shell entry for a codex thread. Absent (claude rows, tests, a bridge-less server) ⇒ no
   // codex shell rows, exactly as before.
   codexBackgroundExecs?: (threadSlug: string, sessionId: string) => readonly { processId: string; command?: string; startedAtMs: number; cwd?: string }[]
+  // The folder a CODEX session runs in (its app-server binding's `cwd`) — what a RELATIVE tool `workdir`
+  // is relative to, since Codex resolves it against the turn's own folder. The router's fallback reading
+  // (thread-cwd.ts resolveThreadWorkingDir) resolves against the same folder, so the two cannot name
+  // different places for one `workdir`. Absent ⇒ the project root, which is where Frizz starts a session.
+  codexSessionCwd?: (threadSlug: string, sessionId: string) => string | undefined
   // The model's context SIZE for a broker Claude session, as the SDK reported it on that session's
   // `result` message (backend/claude-runtime-ingest.ts). It is the only place Claude names the number:
   // the JSONL carries per-request usage (the numerator) and nothing at all about the window. Absent
@@ -3334,7 +3339,10 @@ export function createTailer(deps: TailerDeps): Tailer {
   function threadWorkingDir(state: TailState): { dir: string; checkout?: WorkCheckout } | undefined {
     const raw = state.cwd
     if (!raw || !projectWorkDir) return undefined
-    return liftWorkingDir(isAbsolute(raw) ? raw : resolve(projectWorkDir, raw), projectWorkDir, now())
+    // Only a Codex/ACP tool call's `workdir` can be relative (a Claude record's `cwd` is taken absolute or
+    // not at all), and Codex reads it against its session's folder — see TailerDeps.codexSessionCwd.
+    const base = isAbsolute(raw) ? undefined : deps.codexSessionCwd?.(state.slug, state.sessionId) ?? projectWorkDir
+    return liftWorkingDir(base === undefined ? raw : resolve(base, raw), projectWorkDir, now())
   }
 
   function workingDirTelemetry(state: TailState): Pick<SessionTelemetry, "workingDir" | "checkout"> {

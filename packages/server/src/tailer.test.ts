@@ -3634,7 +3634,9 @@ test("tailer: codex — a tool call's workdir moves the thread's checkout, and e
     sessionLogDir: h.logDir,
     backendFor: (kind?: string): AgentBackend => (kind === "codex" ? codexBackend : claudeBackend),
     codexBackgroundExecs: () => execs,
+    codexSessionCwd: () => sessionCwd,
   })
+  let sessionCwd: string | undefined
   h.clock.ms = Date.parse("2026-07-10T21:58:46.000Z")
   t.tick()
   let tele = t.get("t")!
@@ -3648,6 +3650,15 @@ test("tailer: codex — a tool call's workdir moves the thread's checkout, and e
   t.tick()
   tele = t.get("t")!
   assert.deepEqual(tele.checkout, { dir: worktree, kind: "worktree" }, "a relative workdir resolves against the project")
+
+  // …against the SESSION's folder when Codex runs somewhere else, as Codex itself resolves it — and as the
+  // router's fallback reading (thread-cwd.ts resolveThreadWorkingDir) does, so the two agree. Against the
+  // project, `.` would read the root here.
+  sessionCwd = worktree
+  appendFileSync(path, call("c3", ".") + "\n")
+  h.clock.ms = Date.parse("2026-07-10T21:58:52.000Z")
+  t.tick()
+  assert.deepEqual(t.get("t")!.checkout, { dir: worktree, kind: "worktree" }, "`.` is the session's folder, not the project root")
 })
 
 test("tailer: a codex rollout primes to in-flight, then transitions to idle+fence THROUGH the tick", () => {
