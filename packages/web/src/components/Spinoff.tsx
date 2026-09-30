@@ -202,7 +202,9 @@ function useOpenProjects(enabled: boolean): OpenProject[] {
 }
 
 /** The dialog's "start in" pill: the footer's left end, in the footer buttons' own chrome and size, so it
- *  reads as a setting of the request rather than a third action. */
+ *  reads as a setting of the request rather than a third action. Ink gaps (sans 12px, scripts/ink-gaps.mjs,
+ *  2026-09-30): square→name at `gap-[5px]` to match the prompt box's project picker (it drew 6.50px at
+ *  `gap-1.5`); name→chevron 6.31px against that picker's 6.00px, left alone. */
 function SpinoffProjectPicker({ projects, current, disabled, onPick }: {
   projects: OpenProject[]
   current: OpenProject
@@ -217,14 +219,14 @@ function SpinoffProjectPicker({ projects, current, disabled, onPick }: {
           disabled={disabled}
           data-spinoff-project={current.slug}
           aria-label={`The new thread starts in ${current.name}. Choose a project`}
-          className="button-outline mr-auto flex min-w-0 max-w-[60%] items-center gap-1.5 rounded-md px-2.5 py-1.5 text-[12px] text-muted outline-none transition-colors hover:bg-panel-2 hover:text-fg disabled:opacity-45 data-[state=open]:bg-panel-2 data-[state=open]:text-fg"
+          className="button-outline mr-auto flex min-w-0 max-w-[60%] items-center gap-[5px] rounded-md px-2.5 py-1.5 text-[12px] text-muted outline-none transition-colors hover:bg-panel-2 hover:text-fg disabled:opacity-45 data-[state=open]:bg-panel-2 data-[state=open]:text-fg"
         >
           <ProjectSquare project={current.card} size={12} />
           <span className="min-w-0 truncate">{current.name}</span>
           <ChevronDown size={12} aria-hidden className="-ml-[3px] shrink-0 text-fg/65" />
         </button>
       </MenuTrigger>
-      <MenuContent align="start">
+      <MenuContent align="start" aboveDialog>
         <div className="px-2.5 pb-1 pt-1.5 text-[10.5px] font-medium text-muted-55">Start in</div>
         <div className="max-h-[min(60vh,420px)] overflow-y-auto">
           {projects.map((project) => (
@@ -264,7 +266,9 @@ function CrossProjectEnd({ slug, projectId, className, named }: { slug: string; 
   return (
     <>
       <ThreadHandleLink slug={slug} thread={far.thread} href={far.href} onOpen={far.onOpen} fallback={farFallback(far)} className={className} />
-      {named && far.thread && <span className="min-w-0 shrink truncate">in {far.projectName}</span>}
+      {/* The underlined link's ink runs to its box edge, so the row's gap drew 6.98px of ink before "in"
+          where the row's other word spaces draw ~5.4px; the margin takes the difference back. */}
+      {named && far.thread && <span className="-ml-[0.115em] min-w-0 shrink truncate">in {far.projectName}</span>}
     </>
   )
 }
