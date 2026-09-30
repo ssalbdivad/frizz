@@ -20,8 +20,7 @@ import { useQuery } from "@tanstack/react-query"
 /**
  * THE WHOLE GEOMETRY OF /full, as three lengths that depend on the PAGE WIDTH AND NOTHING ELSE — not
  * on whether a file is open, which is the point (see the layout comment below). Percentages resolve
- * against the row, which is the whole page, so a `vw` here would be wrong on a
- * board that shows one.
+ * against the row, not the viewport.
  *
  *   thread = half the page, capped at the drawer's width
  *   pane   = everything the thread does not take
