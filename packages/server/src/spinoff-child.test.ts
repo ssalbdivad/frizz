@@ -282,3 +282,63 @@ test("a restarted server repairs a historical row across budgeted sweeps", () =>
     h.done()
   }
 })
+
+// ---- a forgotten child ------------------------------------------------------------------------------
+
+// A FORGOTTEN CHILD TAKES ITS EDGE WITH IT (2026-09-30). forgetThread frees the slug, and the next thread
+// slugified to it — the human re-dispatching the task by hand — used to inherit the dead child's edge:
+// its opening turn was rewritten to the OLD request, with the human's own prompt folded away as context.
+test("forgetting a spinoff child drops its edge, so the next thread under its slug is nobody's spinoff", () => {
+  const h = recoveryHarness()
+  try {
+    h.storage.upsertSession(sessionRow("parent"))
+    h.storage.upsertSession(sessionRow("investigate-perf"))
+    h.storage.insertSpinoff({ id: "spn_00000000000000f1", parentSlug: "parent", instructions: "OLD INSTRUCTIONS", createdAtMs: REQUEST_AT })
+    h.storage.completeSpinoff("spn_00000000000000f1", "investigate-perf", REQUEST_AT + 1)
+    h.storage.forgetSession("investigate-perf")
+    assert.equal(h.storage.spinoffOfChild("investigate-perf"), undefined)
+    assert.equal(h.storage.getSpinoff("spn_00000000000000f1"), undefined, "deleted, not left pending for a re-stamp")
+    assert.equal(h.storage.spinoffsBySlug().get("parent"), undefined)
+
+    // The human dispatches the same task by hand; it slugifies to the freed slug.
+    h.storage.upsertSession(sessionRow("investigate-perf", { session_id: "sid-new", spawned_at: "2026-09-30T05:00:00.000Z" }))
+    const mine = parseTranscript([userRecord(envelope("My brand new unrelated request")), assistantText("ok")].join("\n"))
+    assert.equal(withSpinoffChildOrigin(mine, h.storage, "investigate-perf", true), mine, "the human's own request stays theirs")
+
+    // …and a GENUINE new spinoff under the reused slug is recovered, not refused as another spinoff's child.
+    h.storage.insertSpinoff({ id: "spn_00000000000000f2", parentSlug: "parent", instructions: "new", createdAtMs: Date.parse("2026-09-30T04:59:00.000Z") })
+    h.transcript("parent", [spawnCall("t1", { prompt: "p", spinoff: "spn_00000000000000f2" }), spawnResult("t1", "investigate-perf")])
+    h.recovery.sweep()
+    assert.equal(h.storage.getSpinoff("spn_00000000000000f2")?.child_slug, "investigate-perf")
+  } finally {
+    h.done()
+  }
+})
+
+// …and the edge a forget left behind BEFORE that fix is swept the next time the database is opened; a
+// live child's edge, and a still-pending request, are left exactly as they are.
+test("opening storage drops a spinoff edge whose child was already forgotten", () => {
+  const dir = mkdtempSync(join(tmpdir(), "frizz-spinoff-child-"))
+  try {
+    const first = createStorage(join(dir, "ui.db"), "p")
+    first.upsertSession(sessionRow("parent"))
+    first.upsertSession(sessionRow("alive"))
+    first.insertSpinoff({ id: "spn_00000000000000f3", parentSlug: "parent", instructions: "a", createdAtMs: REQUEST_AT })
+    first.completeSpinoff("spn_00000000000000f3", "ghost", REQUEST_AT + 1) // a child with no row: forgotten
+    first.insertSpinoff({ id: "spn_00000000000000f4", parentSlug: "parent", instructions: "b", createdAtMs: REQUEST_AT })
+    first.completeSpinoff("spn_00000000000000f4", "alive", REQUEST_AT + 1)
+    first.insertSpinoff({ id: "spn_00000000000000f5", parentSlug: "parent", instructions: "c", createdAtMs: REQUEST_AT })
+    first.close()
+    const reopened = createStorage(join(dir, "ui.db"), "p")
+    try {
+      assert.equal(reopened.getSpinoff("spn_00000000000000f3"), undefined)
+      assert.equal(reopened.spinoffOfChild("ghost"), undefined)
+      assert.equal(reopened.getSpinoff("spn_00000000000000f4")?.child_slug, "alive")
+      assert.equal(reopened.getSpinoff("spn_00000000000000f5")?.child_slug, null)
+    } finally {
+      reopened.close()
+    }
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
+})

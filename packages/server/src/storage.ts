@@ -1580,6 +1580,16 @@ export function ensureStorageSchema(db: Database): void {
   // it is the record of a command someone ran. Idempotent: it matches nothing once they are archived,
   // and every row written since carries a parent.
   db.exec("UPDATE command_thread SET state = 'archived' WHERE parent_slug IS NULL AND state <> 'archived'")
+  // THE 2026-09-30 SPINOFF-CHILD SWEEP. Until then forgetting a thread left the spinoff edge naming it as
+  // a CHILD (forgetOwnedRow now drops it), and that edge would be inherited by the next thread dispatched
+  // under the freed slug. Drop any such edge a forget already left behind: a stamped child with no
+  // session row. Only a forget ever deletes a session row, and the in-band stamp runs after the dispatch
+  // has written the child's, so nothing live matches. Idempotent — it matches nothing once swept.
+  db.exec(`
+    DELETE FROM thread_spinoff WHERE child_slug IS NOT NULL AND NOT EXISTS (
+      SELECT 1 FROM session WHERE session.project_id = thread_spinoff.project_id AND session.slug = thread_spinoff.child_slug
+    )
+  `)
 }
 
 /**
@@ -2177,6 +2187,8 @@ export function createStorage(source: string | Database, projectId: string): Sto
   const spinoffOfChildStmt = scope.prepare<[string], ThreadSpinoffRow>(`SELECT ${SPINOFF_COLUMNS} FROM thread_spinoff WHERE project_id = @project_id AND child_slug = ? ORDER BY created_at, rowid LIMIT 1`)
   const pendingSpinoffsStmt = scope.prepare<[], ThreadSpinoffRow>(`SELECT ${SPINOFF_COLUMNS} FROM thread_spinoff WHERE project_id = @project_id AND child_slug IS NULL ORDER BY created_at, rowid`)
   const delSpinoffs = scope.prepare("DELETE FROM thread_spinoff WHERE project_id = @project_id AND parent_slug = ?")
+  // The CHILD end of a forgotten thread's edges — see forgetOwnedRow.
+  const delChildSpinoffs = scope.prepare("DELETE FROM thread_spinoff WHERE project_id = @project_id AND child_slug = ?")
   const upsertThreadLinkStmt = scope.prepare<{
     id: string; slug: string; kind: "link" | "file"; label: string; target: string; createdAtMs: number
   }, ThreadLinkRow>(`
@@ -2447,6 +2459,20 @@ export function createStorage(source: string | Database, projectId: string): Sto
     delShellBudgets.run(existing.slug)
     delThreadLinks.run(existing.slug)
     delSpinoffs.run(existing.slug)
+    // …and the edge that makes it a spinoff CHILD (2026-09-30). The line above only ever dropped the
+    // requests this thread made as a PARENT, which left a forgotten child's `child_slug` behind — and a
+    // forgotten slug is free again (resolveSlug checks only live rows and legacy files). The next thread
+    // dispatched under it then inherited the dead one's edge: `spinoffOfChild` named it a spinoff child,
+    // withSpinoffChildOrigin replaced its opening turn with the OLD request's instructions and folded the
+    // human's real prompt away as "context", the board linked it back to a parent it never came from,
+    // and the edge recovery refused a genuine new child under the slug as "already another spinoff's
+    // child". A dismissed stalled child is exactly what forgetThread exists for, so this was reachable.
+    //
+    // Deleted rather than un-stamped: a row with `child_slug` NULL is a PENDING request, which the
+    // recovery would stamp again onto whatever thread next holds the slug, and which fulfilSpinoff would
+    // let the parent's worker spawn a second time. With the row gone the parent's card reads as a request
+    // with no thread, which is what it now is.
+    delChildSpinoffs.run(existing.slug)
     delThreadQuestions.run(existing.slug)
     delThreadDone.run(existing.slug)
     delSubAgentSteers.run(existing.slug)
