@@ -927,11 +927,11 @@ function sessionStateIndicatorFor(t: ThreadView): { node: ReactElement; tip: str
   // spinner), shared with the parked arm below; see its note for why one mark serves both.
   if (kind === "background") {
     // The fence, when there is one, names the shell itself (and any PR riding beside it), so the lead
-    // drops to a bare "At rest" rather than saying "a background shell" twice in one sentence.
+    // drops to a bare "At rest" rather than saying "an agent terminal" twice in one sentence.
     const fenced = t.lastFence?.kind === "awaiting" && awaitingWaitClause(t.lastFence.hints) !== null
     return {
       node: shellDot,
-      tip: popover(t, fenced ? "At rest" : "At rest — a background shell is still running"),
+      tip: popover(t, fenced ? "At rest" : "At rest — an agent terminal is still running"),
     }
   }
   if (kind === "done") return { node: <StatusBox><Check size={10} strokeWidth={3} className="text-muted-75" /></StatusBox>, tip: "Done" }

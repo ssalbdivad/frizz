@@ -154,7 +154,7 @@ export function awaitingWaitClause(hints: readonly AwaitingHint[]): string | nul
   const count = (kind: AwaitingHint["kind"]) => hints.filter((h) => h.kind === kind && h.value.trim()).length
   const parts = [
     ...prWatchRefs(hints).map((pr) => pr.ref),
-    plural(count("shell"), "background shell", "background shells"),
+    plural(count("shell"), "agent terminal", "agent terminals"), // the strip's own noun for the same row
     plural(count("agent"), "sub-agent", "sub-agents"),
     plural(count("timer"), "timer", "timers"),
   ].filter((part): part is string => part !== null)
@@ -164,7 +164,7 @@ export function awaitingWaitClause(hints: readonly AwaitingHint[]): string | nul
 /** "a timer" / "2 timers" / nothing at all — the counted form, because the ids themselves are noise. */
 function plural(n: number, one: string, many: string): string | null {
   if (n <= 0) return null
-  return n === 1 ? `a ${one}` : `${n} ${many}`
+  return n === 1 ? `${/^[aeiou]/i.test(one) ? "an" : "a"} ${one}` : `${n} ${many}`
 }
 
 /** "a", "a and b", "a, b and c" — the Oxford comma is deliberately absent; this is one short spoken

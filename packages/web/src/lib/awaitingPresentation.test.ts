@@ -93,7 +93,7 @@ test("the fence becomes one clause: the PR it watches, then what it counts", () 
     { kind: "shell" as const, value: "bvg44v4ij" },
     { kind: "shell" as const, value: "k92hs01x2" },
   ]
-  assert.equal(awaitingWaitClause(hints), "waiting on acme/app#391, 2 background shells and a sub-agent")
+  assert.equal(awaitingWaitClause(hints), "waiting on acme/app#391, 2 agent terminals and a sub-agent")
   // The order the worker wrote them in must not change a word of it — the clause keys on KIND.
   assert.equal(awaitingWaitClause([...hints].reverse()), awaitingWaitClause(hints))
   // The clause is DERIVED from the items and nothing else — the worker's own prose never joins it, and
@@ -104,7 +104,7 @@ test("the fence becomes one clause: the PR it watches, then what it counts", () 
 })
 
 test("a runtime id never reaches the popover — it is counted, not listed", () => {
-  assert.equal(awaitingWaitClause([{ kind: "shell", value: "bvg44v4ij" }]), "waiting on a background shell")
+  assert.equal(awaitingWaitClause([{ kind: "shell", value: "bvg44v4ij" }]), "waiting on an agent terminal")
   assert.equal(awaitingWaitClause([{ kind: "timer", value: "tmr_a1b2c3" }]), "waiting on a timer")
   assert.equal(
     awaitingWaitClause([

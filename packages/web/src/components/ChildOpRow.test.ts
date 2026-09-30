@@ -77,7 +77,7 @@ test("a child with a drill-in is a real button carrying the open title and label
     assert.match(html, /<button/)
     assert.match(html, /aria-label="Open sub-agent transcript: Audit the drawer ops strip"/)
   }
-  assert.match(render({ density: "sheet", kind: "SHELL", onOpen: () => {} }), /aria-label="Open background shell output: Audit the drawer ops strip"/)
+  assert.match(render({ density: "sheet", kind: "SHELL", onOpen: () => {} }), /aria-label="Open agent terminal output: Audit the drawer ops strip"/)
 })
 
 test("the rail keeps its checkbox spinner, its indent and its tooltip override", () => {
@@ -191,7 +191,7 @@ test("the dismiss × exists only when onDismiss is supplied, and sits directly a
   assert.match(settled, /aria-label="Clear sub-agent: Audit the drawer ops strip"/)
   assert.match(settled, /title="Clear — stop tracking this finished operation"/)
   const shell = render({ density: "sheet", kind: "SHELL", state: "stale", onDismiss: () => {} })
-  assert.match(shell, /aria-label="Clear background shell: Audit the drawer ops strip"/)
+  assert.match(shell, /aria-label="Clear agent terminal: Audit the drawer ops strip"/)
   // ORDER is the point of the 2026-07-27 move: title → × → reading. At the far right, past the
   // reading, the × read as too subtle to find.
   const order = ["Audit the drawer ops strip", "Stop sub-agent", "Working for 12m"].map((needle) => withX.indexOf(needle))

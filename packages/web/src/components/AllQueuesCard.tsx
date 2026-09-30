@@ -419,9 +419,9 @@ export const AllQueuesCard = memo(function AllQueuesCard({
             {/* EVERYTHING IT HAS RUNNING, in the drawer's one column (QueueChildOps): its sub-agents and
                 Workflows as AGENT / FLOW rows — the awaiting card's to list while it is drawn — then every
                 terminal on the thread, yours and the agent's, as the drawer's TERM strip (ThreadTerminals.tsx),
-                on one label column. QueueChildOps' own SHELL rows are off here: the strip owns every process
-                row, so a shell is drawn once. A shell with no budget runs until someone stops it, so the card
-                it rests on is where it must be seen. A TERM row opens the thread, then its terminal over it
+                on one label column. The strip owns every process row, so a shell is drawn once. A shell with
+                no budget runs until someone stops it, so the card it rests on is where it must be seen.
+                A TERM row opens the thread, then its terminal over it
                 when the thread's project is the one in focus (the drawer stack is that project's). The strip
                 is gated on the rows it will draw, so a card whose only shell has finished — or whose only
                 terminal is the prompt shown above with its own row — draws no empty inset. */}
@@ -430,7 +430,6 @@ export const AllQueuesCard = memo(function AllQueuesCard({
               thread={thread}
               api={api}
               agents={!drawsSubAgentWait}
-              shells={false}
               onOpenThread={() => openInPlace(project, thread.id)}
               after={cardProcesses(thread, Date.now()).length > 0 ? (
                 <div data-queue-processes={thread.id} className="min-w-0">
