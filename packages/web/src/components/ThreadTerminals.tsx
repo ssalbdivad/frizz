@@ -215,26 +215,24 @@ const RAIL_HINT_LIFT: Record<ProcessFolderHint["kind"], string> = {
 /** A folder hint on a BASELINE line — the rows of the fullscreen rail and the resting card (WaitRow), where
  *  it sits between the name and the status, leading the status as it leads the strip's readings. It gives
  *  way as the strip's does (WHO GIVES WAY, below): a box sized from zero that grows into what the NAME
- *  leaves, holding the hint as ONE item — glyph, word and the `·` before the status — which shows whole or
- *  wraps away whole (the box is one line tall and clips) before the name loses a pixel.
+ *  leaves, so the word wraps away (the box is one line tall and clips) before the name loses a pixel — and
+ *  the GLYPH, the box's first item, never does: `min-w-[1em]` is its width, so a row whose word cannot fit
+ *  still says, and its tooltip names, that it runs somewhere other than the header says. The `·` before the
+ *  status sits after the box, so it stays with the glyph.
  *
  *  The glyph takes the header token's geometry (ThreadCheckoutToken): its box stands on the baseline and
- *  `1cap` lifts its centre onto the cap band, in any font. The box leads with a zero-width TEXT strut: a
- *  flex line always keeps its first item, so the strut is what lets the hint be the one that wraps, and it
- *  gives the box a baseline with the hint gone. `ml-3` is the name→status floor the plain row's status keeps. */
+ *  `1cap` lifts its centre onto the cap band, in any font — and, as the box's first baseline item, it is what
+ *  gives the box its baseline. `ml-3` is the name→status floor the plain row keeps. */
 export function FolderHintToken({ hint, title }: { hint: ProcessFolderHint; title: string }) {
   const Glyph = HINT_GLYPH[hint.kind]
   return (
-    <span data-process-give className="ml-3 flex h-[1lh] w-0 min-w-0 flex-1 basis-0 flex-wrap content-start items-baseline justify-end overflow-hidden">
-      <span aria-hidden className="w-0">{"\u200b"}</span>
-      <span data-process-checkout={hint.kind} title={title} className="mr-1 flex shrink-0 items-baseline gap-1 whitespace-nowrap">
-        <span className={HINT_TONE}>
-          <Glyph aria-hidden className={`inline h-[1em] w-[1em] align-baseline ${RAIL_HINT_LIFT[hint.kind]}`} />
-          <span data-process-checkout-word className="ml-[0.25em]">{hint.text}</span>
-        </span>
-        <span aria-hidden className="text-muted-25">·</span>
+    <>
+      <span data-process-give data-process-checkout={hint.kind} title={title} className={`ml-3 flex h-[1lh] w-0 min-w-[1em] flex-1 basis-0 flex-wrap content-start items-baseline justify-end overflow-hidden ${HINT_TONE}`}>
+        <Glyph aria-hidden className={`h-[1em] w-[1em] shrink-0 ${RAIL_HINT_LIFT[hint.kind]}`} />
+        <span data-process-checkout-word className="ml-[0.25em] shrink-0 whitespace-nowrap">{hint.text}</span>
       </span>
-    </span>
+      <span aria-hidden className="mx-1 shrink-0 text-muted-25">·</span>
+    </>
   )
 }
 
@@ -250,29 +248,33 @@ export function useShellFolderHint(shell: Pick<BgShellView, "checkout" | "atRoot
 // WHO GIVES WAY at a narrow width, first to last (the maintainer's rule: the label keeps priority over the
 // hint, and the hint truncates or drops first):
 //   1. the line counter — the least identifying reading, and one a card never shows at all;
-//   2. the folder hint, WHOLE — its glyph, its word and its `·` together;
+//   2. the folder hint's WORD;
 //   3. the label, by truncating.
-// Never: the arrow, the owner mark, the tag, the ×, or the budget / state / age.
+// Never: the arrow, the owner mark, the tag, the ×, the budget / state / age — or the hint's GLYPH.
 //
-// THE HINT IS ONE PIECE. It gave way word-first for one round, keeping its glyph so that an absent hint could
-// not claim "runs where the header says" — and the glyph then outranked the label: at 390px `Running root
-// tick l…` sat beside a bare folder and its `·`, 20px that would have fitted the label whole, and the bare
-// glyph named nothing (a plain folder is also the header's "another folder", on a row that was at the root),
-// while the next row read `📁 root` for the same place. So a hint shows as glyph AND word or not at all. Where
-// it cannot sit beside the whole label the row says nothing about its place, and its tooltip and drawer
-// header still do: at a width that cannot hold both, the row's own name comes first.
+// THE GLYPH NEVER GOES, because a row with no hint CLAIMS the header's checkout: the hint exists only where a
+// row runs somewhere else, so a `root` row whose hint had wrapped away read as running in the agent's
+// worktree — false, and silently so (1400px rail, 390px strip, 2026-09-30). So where the word cannot sit beside
+// the whole label, the glyph stays alone, its tooltip naming the folder: 1em of the label's width buys a row
+// that never lies about where it runs. (One round before this kept the glyph too, but ahead of a label that
+// still fitted — `Running root tick l…` beside a bare folder AND its word's `·`, 20px that fitted the label
+// whole. The glyph now stays only once its word is gone, and costs the label its own 1em and no more.)
 //
 // HOW, in plain flexbox and with nothing measured: the hint and the counter sit in one box, GIVE, sized from
-// ZERO (`flex: 1 1 0`, `w-0`), so it grows only into what the row has left AFTER the label has its full width
-// and can never take a pixel from it. GIVE leads with a zero-width strut, because a flex line always keeps
-// its first item: after it, each item wraps onto a hidden second line (the box is one line tall and clips)
-// the moment it no longer fits, the LAST one first — the counter, then the hint — and each carries its own
-// trailing `·`, so nothing is left dangling when the one after it goes. The readings after GIVE are
-// `shrink-0`, so it is the label that truncates before them.
+// ZERO (`flex: 1 1 0`, `w-0`), so it grows only into what the row has left AFTER the label has its full width.
+// Its first item is kept on a flex line whatever its width, and every item after it wraps onto a hidden second
+// line (the box is one line tall and clips) the moment it no longer fits, the LAST one first. Without a hint
+// that first item is a zero-width strut, and every item carries its own trailing `·`. With one it is the
+// hint's GLYPH, and GIVE's `min-w-[1em]` is that glyph's width, the one thing it takes from the label; the
+// word, then any item after it, each LEAD with their `·`, and so do the fixed readings, so nothing is left
+// dangling whichever of them goes. The readings after GIVE are `shrink-0`, so it is the label that truncates.
 //
 // SPACING, in the readings' own rhythm (4px · 4px): GIVE's `-mr-0.5` takes the row's 6px gap to FIXED down
 // to the 4px the readings keep between themselves, and `gap-x-1` is the same 4px between GIVE's own items.
 const GIVE = "flex h-[1lh] w-0 min-w-0 flex-1 basis-0 flex-wrap content-start items-center justify-end gap-x-1 overflow-hidden -mr-0.5"
+// A hinted row's: the glyph's own width reserved, and each item spaced by its own margin (the glyph→word
+// distance is the header token's, not the 4px between readings).
+const GIVE_HINTED = "flex h-[1lh] w-0 min-w-[1em] flex-1 basis-0 flex-wrap content-start items-center justify-end overflow-hidden -mr-0.5"
 const GIVE_ITEM = "flex h-[1lh] shrink-0 items-center gap-1 whitespace-nowrap"
 const FIXED = "flex shrink-0 items-center gap-1 whitespace-nowrap text-muted-40"
 const SEP = <span aria-hidden className="text-muted-25">·</span>
@@ -365,9 +367,9 @@ export function ProcessRow({ process: p, slug, here, lines, watched, caption, on
   ].filter((node) => node !== null)
   const hintTitle = hint ? folderHintTitle(hint, projectDir ?? board?.projectDir, board?.homeDir) : undefined
   const HintGlyph = hint ? HINT_GLYPH[hint.kind] : undefined
-  // GIVE's items, in reading order; each carries the `·` to whatever follows it on the row, and so goes with it.
+  // GIVE's items, in reading order. Without a hint each carries the `·` to whatever follows it on the row, and
+  // so goes with it; with one, each leads with its own (see WHO GIVES WAY).
   const givingState = caption ? stateNode : null
-  const hintSep = Boolean(givingState || counter || fixed.length > 0)
   const stateSep = Boolean(counter || fixed.length > 0)
   const counterSep = fixed.length > 0
 
@@ -409,36 +411,48 @@ export function ProcessRow({ process: p, slug, here, lines, watched, caption, on
           {busy ? <Loader2 size={11} className={`animate-spin ${MARK_LIFT}`} /> : <X size={11} className={MARK_LIFT} />}
         </button>
       )}
-      <span data-process-give className={GIVE}>
-        {/* The strut: GIVE's first item, which a flex line always keeps, so that everything after it can wrap. */}
-        <span aria-hidden className="h-[1lh] w-0" />
-        {hint && HintGlyph && (
-          <span data-process-checkout={hint.kind} title={hintTitle} className={GIVE_ITEM}>
-            {/* `ml-[0.2em]`: 4.0px of ink from the folder to its name at 11.5px, the header token's own 3.9px at
-                11px (ink-gaps, dsf 6); its 0.25em drew 4.55 here, the glyph's 1px of dead box on each side. */}
-            <span className={`flex items-center ${HINT_TONE}`}>
-              <HintGlyph aria-hidden className={HINT_ICON[hint.kind]} />
-              <span data-process-checkout-word className="ml-[0.2em] max-w-[12ch] truncate">{hint.text}</span>
+      {hint && HintGlyph ? (
+        <span data-process-give className={GIVE_HINTED}>
+          {/* The glyph: GIVE's first item, which a flex line always keeps — the hint never leaves the row. */}
+          <span data-process-checkout={hint.kind} title={hintTitle} className={`${GIVE_ITEM} ${HINT_TONE}`}>
+            <HintGlyph aria-hidden className={HINT_ICON[hint.kind]} />
+          </span>
+          {/* `ml-[0.2em]`: 4.0px of ink from the folder to its name at 11.5px, the header token's own 3.9px at
+              11px (ink-gaps, dsf 6); its 0.25em drew 4.55 here, the glyph's 1px of dead box on each side. */}
+          <span data-process-checkout-word title={hintTitle} className={`${GIVE_ITEM} ml-[0.2em] ${HINT_TONE}`}>
+            <span className="max-w-[12ch] truncate">{hint.text}</span>
+          </span>
+          {givingState && <span className={`${GIVE_ITEM} ml-1`}>{SEP}{givingState}</span>}
+          {counter && (
+            <span className={`${GIVE_ITEM} ml-1 text-muted-40`}>
+              {SEP}
+              <span data-child-op-counter title="Lines of output so far — open the row to read them">{counter}</span>
             </span>
-            {hintSep ? SEP : null}
-          </span>
-        )}
-        {givingState && (
-          <span className={GIVE_ITEM}>
-            {givingState}
-            {stateSep ? SEP : null}
-          </span>
-        )}
-        {counter && (
-          <span className={`${GIVE_ITEM} text-muted-40`}>
-            <span data-child-op-counter title="Lines of output so far — open the row to read them">{counter}</span>
-            {counterSep ? SEP : null}
-          </span>
-        )}
-      </span>
+          )}
+        </span>
+      ) : (
+        <span data-process-give className={GIVE}>
+          {/* The strut: GIVE's first item, which a flex line always keeps, so that everything after it can wrap. */}
+          <span aria-hidden className="h-[1lh] w-0" />
+          {givingState && (
+            <span className={GIVE_ITEM}>
+              {givingState}
+              {stateSep ? SEP : null}
+            </span>
+          )}
+          {counter && (
+            <span className={`${GIVE_ITEM} text-muted-40`}>
+              <span data-child-op-counter title="Lines of output so far — open the row to read them">{counter}</span>
+              {counterSep ? SEP : null}
+            </span>
+          )}
+        </span>
+      )}
       {fixed.length > 0 && (
-        // The readings are the row's sans, on the same line as the label (see LABEL), so they need no lift.
+        // The readings are the row's sans, on the same line as the label (see LABEL), so they need no lift. After
+        // a hint they lead with their own `·`: the glyph before them stays whatever else gives way.
         <span className={FIXED}>
+          {hint ? <span aria-hidden className="text-muted-25">·</span> : null}
           {fixed.flatMap((node, i) => (i === 0 ? [node] : [<span key={`sep${i}`} aria-hidden className="text-muted-25">·</span>, node]))}
         </span>
       )}

@@ -12,19 +12,24 @@ const baseUrl = process.env.FRIZZ_TERMINAL_GIVE_WAY_E2E_URL
 //   · 390px, round 3: the hint's WORD gave way but its glyph and `·` were kept, so `Running root tick l…` sat
 //     beside a bare folder (20px that would have fitted the label), and the bare glyph named nothing; on the
 //     1400px rail, 4 of 5 `root` hints were a bare glyph ~120px left of their row's status.
+//   · round 4 (2026-09-30): the hint went WHOLE, and a row whose hint had gone claimed the header's checkout —
+//     a `root` row read as running in the worktree (1400px rail, 390px strip). And a rail row without a hint
+//     stopped its name where the grid's widest status began, ~50px short of a hinted row's.
 //
 // So, on the terminals fixture (terminals-unified-fixture.html — the agent in `probe`, rows left at the root),
 // at a desktop, a narrow and a phone width, on every surface that draws a terminal row — the drawer's strip,
 // the card's strip, the card's prompt caption, the fullscreen rail:
-//   1. no row shows any part of its hint while its label is cut;
-//   2. a hint is never partial: its glyph shows exactly when its word does;
-//   3. on the rail, a shown hint sits right against its status (it leads it, as the strip's leads its readings);
-//   4. the agent drawer's header never cuts a number, and its title keeps a real width.
+//   1. a row with a hint ALWAYS shows its glyph — no row claims a checkout it is not in;
+//   2. its WORD shows only beside a whole label: the label outranks the word;
+//   3. on the rail, a shown hint sits right against its status (it leads it, as the strip's leads its readings),
+//      and a cut name stops against what follows it, never ~50px short;
+//   4. the agent drawer's header never cuts a number, and its title keeps a real width;
+//   5. your terminal's drawer header, waiting for input in a worktree, keeps `…/probe · worktree` whole.
 //
 // Run it against a plain vite over packages/web:
 //   nubx vite --port 5391 --strictPort --host 127.0.0.1
 //   FRIZZ_TERMINAL_GIVE_WAY_E2E_URL=http://127.0.0.1:5391 nub --test packages/web/src/components/terminalGiveWay.e2e.test.ts
-test("a terminal row's label outranks its folder hint, which shows whole or not at all, at every width", {
+test("a terminal row's label outranks its folder hint's word, its glyph never leaves, and your drawer header keeps its folder, at every width", {
   skip: !baseUrl,
   timeout: 120_000,
 }, async () => {
@@ -47,29 +52,43 @@ test("a terminal row's label outranks its folder hint, which shows whole or not 
         const label = (row.querySelector("[data-process-label]") ?? row.querySelector("button")) as HTMLElement
         const give = row.querySelector("[data-process-give]")?.getBoundingClientRect()
         const hint = row.querySelector("[data-process-checkout]")
+        const word = row.querySelector("[data-process-checkout-word]")
         const status = row.querySelector("[data-wait-status]")
+        const wordShown = shownIn(word, give)
+        // The status's TEXT, not its box: a status box can fill a whole grid track while its words sit right.
+        const statusText = (() => {
+          if (!status) return null
+          const range = document.createRange()
+          range.selectNodeContents(status)
+          return range.getBoundingClientRect()
+        })()
         return {
           surface: row.closest("[data-fixture-rail]") ? "rail" : row.closest("[data-fixture-caption]") ? "caption" : row.closest("[data-fixture-strip]")!.getAttribute("data-fixture-strip"),
           text: (row as HTMLElement).innerText.replace(/\s+/g, " ").trim(),
           cut: label.scrollWidth > label.clientWidth + 0.5,
           hasHint: Boolean(hint),
           glyph: shownIn(hint?.querySelector("svg") ?? null, give),
-          word: shownIn(hint?.querySelector("[data-process-checkout-word]") ?? null, give),
-          toStatus: hint && status ? status.getBoundingClientRect().left - hint.getBoundingClientRect().right : null,
+          word: wordShown,
+          // The hint's right edge — its word's when shown, else its glyph's — to its status.
+          toStatus: hint && statusText ? statusText.left - ((wordShown ? word : hint.querySelector("svg"))!.getBoundingClientRect().right) : null,
+          // From the name's end to the status's words: the room a cut name was denied.
+          nameToStatus: statusText ? statusText.left - label.getBoundingClientRect().right : null,
         }
       }))
       const at = (r: { surface: string | null; text: string }) => `${width}px ${r.surface}: ${r.text}`
       assert.ok(rows.length >= 25, `${width}px: every surface drew its rows (${rows.length})`)
       assert.ok(rows.some((r) => r.hasHint), `${width}px: the fixture has hinted rows`)
       for (const r of rows) {
-        assert.equal(r.glyph, r.word, `${at(r)} — a hint's glyph shows exactly when its word does`)
-        assert.ok(!(r.cut && r.glyph), `${at(r)} — the label is cut while the hint still shows`)
-        if (r.surface === "rail" && r.glyph) assert.ok(r.toStatus !== null && r.toStatus <= 8, `${at(r)} — the hint leads its status (${r.toStatus}px away)`)
+        assert.equal(r.glyph, r.hasHint, `${at(r)} — a hinted row always shows its glyph, and an unhinted one none`)
+        assert.ok(!(r.cut && r.word), `${at(r)} — the label is cut while the hint's word still shows`)
+        if (r.surface === "rail" && r.glyph) assert.ok(r.toStatus !== null && r.toStatus <= 14, `${at(r)} — the hint leads its status (${r.toStatus}px away)`)
+        // A cut name runs up to what follows it: the 12px floor, plus a lone glyph and its `·` when hinted.
+        if (r.surface === "rail" && r.cut) assert.ok(r.nameToStatus !== null && r.nameToStatus <= (r.glyph ? 40 : 14), `${at(r)} — a cut name stops ${r.nameToStatus}px short of its status`)
       }
-      // The widest desktop shows every hint the rows have room for: a row whose label fits whole and whose
-      // hint is still hidden would mean the hint gives way for nothing.
+      // The widest desktop shows every hint's word the rows have room for: a row whose label fits whole and
+      // whose word is still hidden would mean it gives way for nothing.
       if (width === 1400) {
-        for (const r of rows.filter((x) => x.hasHint && x.surface !== "rail")) assert.ok(r.glyph, `${at(r)} — room enough, and no hint`)
+        for (const r of rows.filter((x) => x.hasHint && x.surface !== "rail")) assert.ok(r.word, `${at(r)} — room enough, and no word`)
       }
     }
 

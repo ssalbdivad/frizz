@@ -400,17 +400,17 @@ const ROW = "group relative col-span-4 grid grid-cols-subgrid items-baseline rou
 // The same row laid out by FLEX, for a row that INDENTS (the rail's edited-files tree). Subgrid could
 // not do it: a subgrid item's padding is folded into the shared edge track, so one deep row would
 // have widened the mark column for every row and none of the names would have moved. In flex the
-// name is the `1fr` (flex-1), the status keeps its own width, and the chevron sits at the end —
+// name/status cell is the `1fr` (flex-1), the status keeps its own width, and the chevron sits at the end —
 // the same four marks in the same order, at the same right edge.
 const ROW_FLEX = "group relative col-span-4 flex items-baseline rounded-sm text-[12px] leading-5"
 // ml-1.5 → 6.5px of ink between the mark and the name, which is the figure the old single-row layout was
 // measured and left at (a -1px "safety" trim made it worse). A lucide circle at 12 inks ~10 of its box,
 // so it behaves like a text run and needs no trim of its own.
 const NAME = "ml-1.5 min-w-0 truncate font-medium text-fg/90"
-/** The light-gray status column. `text-right` right-justifies it inside its own track; the name's `1fr`
- *  eats the slack, so the status lands against the chevron at the card's right edge. `ml-3` is only a
- *  floor — the distance the reader actually sees is whatever the truncating name leaves. */
-const STATUS = "ml-3 min-w-0 truncate text-right text-muted-70"
+/** The light-gray status, at the end of its row's one flex cell (see WaitRow's body), so it lands against the
+ *  chevron at the card's right edge on every row. Whole up to half the row; the name gives way first. The
+ *  name→status floor is the `ml-3` of whatever sits between them (the hint's box, or the spacer). */
+const STATUS = "max-w-[50%] shrink-0 truncate text-right text-muted-70"
 
 /** The whole row is the target, so the name's link stretches over it (`after:inset-0` against the row's
  *  `relative`). A real <a>/<button> rather than a click handler on the div: right-click, middle-click and
@@ -478,7 +478,7 @@ export function WaitRow({ mark, name, mono, hint, status, onOpen, onPrewarm, hre
   testId: string
 }) {
   const tree = indent !== undefined
-  const nameClass = tree ? `${NAME} flex-1` : NAME
+  const nameClass = NAME
   const label = mono ? <span className="font-mono-keep text-[11.5px] font-normal">{name}</span> : name
   const open = href
     ? (
@@ -510,19 +510,18 @@ export function WaitRow({ mark, name, mono, hint, status, onOpen, onPrewarm, hre
     )
     : <span className={nameClass} title={title}>{label}</span>
   const interactive = !!(href || onOpen)
-  // With a hint: the name and the status tracks as one flex line — the name at its natural width (it still
-  // truncates, last), the hint's zero-based box growing into what is left, the status at the grid's right edge.
-  const body = hint ? (
+  // EVERY ROW, hint or not: the name and the status tracks as ONE flex line — the name at its natural width (it
+  // truncates, last), then the hint's zero-based box or a plain spacer growing into what is left, then the
+  // status at the grid's right edge. A row without a hint kept the two subgrid tracks for one round, so its
+  // name ended where the WIDEST status in the grid began while a hinted row's ran to its own status: two
+  // layouts in one group, label widths differing row to row by ~50px of dead space (1400px rail, 2026-09-30).
+  // The statuses still share one right edge — the grid's — which is what the subgrid was for.
+  const body = (
     <span className={`${tree ? "flex-1" : "col-span-2"} flex min-w-0 items-baseline`}>
       {open}
-      {hint}
-      <span data-wait-status className="max-w-[50%] shrink-0 truncate text-right text-muted-70">{status}</span>
-    </span>
-  ) : (
-    <>
-      {open}
+      {hint ?? <span aria-hidden className="ml-3 flex-1" />}
       <span data-wait-status className={STATUS}>{status}</span>
-    </>
+    </span>
   )
   return (
     <div

@@ -76,6 +76,9 @@ const bgShells: BgShellView[] = [
   { id: "s-wt", label: "Test watch in the probe worktree", startedAt: ago(12), state: "running", stoppable: true, taskId: "b2", budgetEndsAt: ahead(33), cwd: WT.dir, checkout: WT },
   { id: "s-over", label: "Watch the CI run for the strip branch", startedAt: ago(61), state: "running", stoppable: true, taskId: "b3", budgetEndsAt: ago(1), cwd: ROOT, atRoot: true },
   { id: "s-quiet", label: "tail the deploy log", startedAt: ago(20), state: "stale", taskId: "b4", monitor: true },
+  // A long name beside a short status, where the agent is: a rail row with no hint, whose name must run up to
+  // its own status rather than stop where the group's widest status begins.
+  { id: "s-docs", label: "Serve the docs site with live reload for the review", startedAt: ago(5), state: "running", stoppable: true, taskId: "b5", cwd: WT.dir, checkout: WT },
   // A Codex exec whose item named no folder: no place claimed.
   { id: "s-codex", label: "cargo watch -x test", command: "cargo watch -x test", startedAt: ago(3), state: "running", stoppable: true, outputUnavailable: true },
 ]

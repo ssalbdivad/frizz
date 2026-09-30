@@ -107,8 +107,8 @@ test("the folder hint names a row's checkout only when it is NOT where the heade
   // …a row in the project's own checkout says `root`, one word, for both owners…
   assert.deepEqual(processFolderHint(atRoot, probe), { text: ROOT_CHECKOUT_WORD, kind: "root" })
   assert.deepEqual(processFolderHint(humanAtRoot, probe), { text: "root", kind: "root" })
-  assert.match(row(atRoot, { here: probe }), /data-process-checkout="root" title="Runs in the project root[^"]*"[^>]*><span[^>]*><svg[^>]*lucide-folder /)
-  assert.match(row(atRoot, { here: probe }), /data-process-checkout-word="true"[^>]*>root</)
+  assert.match(row(atRoot, { here: probe }), /data-process-checkout="root" title="Runs in the project root[^"]*"[^>]*><svg[^>]*lucide-folder /)
+  assert.match(row(atRoot, { here: probe }), /data-process-checkout-word="true"[^>]*><span[^>]*>root</)
   // …and a row in a third checkout names it.
   assert.deepEqual(processFolderHint(inOther, probe), { text: "other", kind: "worktree", dir: other.dir })
   // A row the server did not place (transcript-only) claims nothing, wherever the agent is.
@@ -156,40 +156,38 @@ test("a strip whose rows all run where the agent is shows no hints — the heade
   assert.match(mixed, /data-process-checkout="root"/)
 })
 
-// WHO GIVES WAY (ThreadTerminals.tsx): the counter, then the hint WHOLE, then the label. The hint's glyph
-// once stayed when its word went, and outranked the label at 390px while naming nothing.
-test("at a narrow width the counter and then the whole hint give way before the label", () => {
+// WHO GIVES WAY (ThreadTerminals.tsx): the counter, then the hint's WORD, then the label — and never the hint's
+// GLYPH. A row with no hint claims the header's checkout, so a `root` row whose whole hint wrapped away read as
+// running in the agent's worktree (1400px rail, 390px strip, 2026-09-30). The glyph is GIVE's first item (which
+// a flex line always keeps) and GIVE reserves exactly its 1em; the word and everything after it lead with
+// their own `·`, so the glyph stands alone with nothing dangling.
+test("at a narrow width the counter and then the hint's word give way before the label, and its glyph never does", () => {
   const probe = { dir: "/repo/.frizz/worktrees/probe", kind: "worktree" as const }
   const html = row(processes({ bgShells: [shell({ label: "Test watch in the probe worktree", budgetEndsAt: at("45") })] })[0]!, { here: probe, lines: 54 })
   const classOf = (marker: string) => new RegExp(`<span ${marker}[^>]*class="([^"]*)"`).exec(html)?.[1]?.split(" ") ?? []
   // The label's box has no width cap: it truncates only when the row cannot hold it.
   const identity = /<button[^>]*class="([^"]*)"/.exec(html)?.[1]?.split(" ") ?? []
   assert.ok(!identity.some((cls) => cls.startsWith("max-w-")), `identity: ${identity.join(" ")}`)
-  // GIVE is sized from zero and grows only into what is left, one line tall and clipped, wrapping its items off
-  // — and it reserves NOTHING: no minimum for a glyph that would outrank the label.
+  // GIVE is sized from zero and grows only into what is left, one line tall and clipped — reserving the glyph.
   const give = classOf("data-process-give")
-  for (const cls of ["flex-1", "basis-0", "w-0", "min-w-0", "flex-wrap", "overflow-hidden", "h-[1lh]", "justify-end"]) assert.ok(give.includes(cls), `give: ${cls}`)
-  assert.ok(!give.some((cls) => cls.startsWith("min-w-[")), `give reserves no width: ${give.join(" ")}`)
-  // Its FIRST item is a zero-width strut (a flex line always keeps its first item), so the hint can wrap away.
+  for (const cls of ["flex-1", "basis-0", "w-0", "min-w-[1em]", "flex-wrap", "overflow-hidden", "h-[1lh]", "justify-end"]) assert.ok(give.includes(cls), `give: ${cls}`)
+  // Its FIRST item is the glyph, which carries the tooltip naming the folder; then the word; then the counter.
   const inGive = html.slice(html.indexOf("data-process-give"))
-  assert.match(inGive, /^data-process-give="true" class="[^"]*"><span aria-hidden="true" class="h-\[1lh\] w-0"><\/span><span data-process-checkout="root"/)
-  // The hint is ONE unbreakable item — glyph, word, and the `·` to what follows — so it shows whole or not at all.
-  const hintItem = /<span data-process-checkout="root" title="[^"]*" class="([^"]*)">([\s\S]*?)<\/span><span class="[^"]*text-muted-40"><span data-child-op-counter/.exec(inGive)
-  assert.ok(hintItem, "the hint item, then the counter item")
-  for (const cls of ["shrink-0", "whitespace-nowrap"]) assert.ok(hintItem![1]!.split(" ").includes(cls), `hint item: ${cls}`)
-  assert.match(hintItem![2]!, /lucide-folder[\s\S]*>root<\/span><\/span><span aria-hidden="true" class="text-muted-25">·<\/span>$/)
-  // The counter carries its own `·`; the budget and the age after it never give way, budget first.
-  assert.match(inGive, /data-child-op-counter[^>]*>54 lines<\/span><span aria-hidden="true" class="text-muted-25">·<\/span><\/span><\/span>/)
+  assert.match(inGive, /^data-process-give="true" class="[^"]*"><span data-process-checkout="root" title="Runs in the project root[^"]*" class="[^"]*"><svg[^>]*lucide-folder[\s\S]*?<\/svg><\/span><span data-process-checkout-word="true" title="Runs in the project root[^"]*" class="[^"]*"><span class="max-w-\[12ch\] truncate">root<\/span><\/span><span class="[^"]*text-muted-40"><span aria-hidden="true" class="text-muted-25">·<\/span><span data-child-op-counter[^>]*>54 lines<\/span><\/span><\/span>/)
+  for (const cls of ["shrink-0", "whitespace-nowrap"]) assert.ok(classOf("data-process-checkout-word").includes(cls), `word item: ${cls}`)
+  // The fixed readings lead with their own `·` after a hint, and never give way: the budget, then the age.
   const fixed = html.slice(html.lastIndexOf('<span class="flex shrink-0 items-center gap-1 whitespace-nowrap text-muted-40">'))
   assert.ok(fixed.indexOf("data-child-op-budget") > 0 && fixed.indexOf("data-child-op-budget") < fixed.indexOf("Running for"), "budget, then age")
-  assert.match(fixed, /^<span class="[^"]*"><span data-child-op-budget/, "no separator of its own to strand")
-  // A row with no hint: the strut, then the counter.
+  assert.match(fixed, /^<span class="[^"]*"><span aria-hidden="true" class="text-muted-25">·<\/span><span data-child-op-budget/)
+  // A row with no hint: the zero-width strut, then the counter with its trailing `·`; the readings lead with none.
   const plain = row(processes({ bgShells: [shell({ label: "Test watch", budgetEndsAt: at("45") })] })[0]!, { lines: 54 })
   assert.doesNotMatch(plain, /data-process-checkout/)
-  assert.match(plain, /data-process-give[^>]*class="[^"]*"><span aria-hidden="true" class="h-\[1lh\] w-0"><\/span><span class="[^"]*text-muted-40"><span data-child-op-counter/)
+  assert.match(plain, /data-process-give[^>]*class="[^"]*"><span aria-hidden="true" class="h-\[1lh\] w-0"><\/span><span class="[^"]*text-muted-40"><span data-child-op-counter[^>]*>54 lines<\/span><span aria-hidden="true" class="text-muted-25">·<\/span><\/span><\/span>/)
+  assert.ok(!(/<span data-process-give[^>]*class="([^"]*)"/.exec(plain)?.[1] ?? "").includes("min-w-[1em]"), "no hint, nothing reserved")
+  assert.match(plain.slice(plain.lastIndexOf('whitespace-nowrap text-muted-40">')), /^whitespace-nowrap text-muted-40"><span data-child-op-budget/)
   // Nothing after the hint (no counter, no reading): no `·` to strand.
   const bare = row({ ...processes({ bgShells: [shell({ startedAt: undefined as unknown as string })] })[0]!, startedAt: undefined }, { here: probe })
-  assert.match(bare, />root<\/span><\/span><\/span><\/span><\/div>$/)
+  assert.match(bare, />root<\/span><\/span><\/span><\/div>$/)
 })
 
 // THE CAPTION'S OWN RULE: the prompting terminal's row over its screen (TerminalPromptPane) is there to say WHICH
@@ -349,27 +347,25 @@ test("the rail's terminal rows read the strip's order, and its folder hint", () 
   assert.doesNotMatch(renderToStaticMarkup(createElement(BgShellRow, { shell: agent.shell!, slug: "t", now: Date.now() })), /data-process-checkout/)
 })
 
-// THE RAIL'S HINT LEADS THE STATUS, as the strip's leads its readings. It was set in the shared status track
-// (it narrowed every label in the group), then at the end of the name's track — which ends where the grid's
-// widest status begins, so it floated ~120px left of its row's `49m` and still clipped the name beside a bare
-// folder. The row now takes both tracks as one cell: name, the hint's zero-based box, status; the status keeps
-// the grid's right edge, and the hint shows whole — glyph, word, `·` — or wraps away whole.
-test("the rail's folder hint sits between the name and the status, and goes whole before the name gives way", () => {
+// THE RAIL'S HINT LEADS THE STATUS, as the strip's leads its readings, and every rail row is ONE layout: the
+// name, then the hint's zero-based box (or a plain spacer), then the status, in one cell over the name and
+// status tracks. A row without a hint kept the two subgrid tracks for one round, so its name stopped where the
+// widest status in the grid began — two layouts in one group, ~50px of dead space (1400px rail, 2026-09-30).
+// And the hint's glyph never wraps away: its box reserves the glyph's 1em, so a `root` row whose word cannot
+// fit still says it is not where the header says.
+test("every rail row is one layout, and a rail hint's word gives way before the name while its glyph never does", () => {
   const where = processFolderHint(processes({ bgShells: [shell()] })[0]!, { dir: "/repo/.frizz/worktrees/probe", kind: "worktree" })!
   const hint = createElement(FolderHintToken, { hint: where, title: "t" })
   const html = renderToStaticMarkup(createElement(TermWaitRow, { terminal: term({ awaitingInput: true }), slug: "t", now: Date.now(), hint }))
-  // One cell over the name and status tracks: the name, the hint's box, the status.
-  assert.match(html, /<span class="col-span-2 flex min-w-0 items-baseline"><button[\s\S]*?<\/button><span data-process-give="true" class="[^"]*">[\s\S]*?<\/span><span data-wait-status="true" class="[^"]*"><span class="text-attention">waiting for input<\/span><\/span><\/span>/)
-  const box = /<span data-process-give="true" class="([^"]*)"/.exec(html)?.[1]?.split(" ") ?? []
-  for (const cls of ["w-0", "min-w-0", "flex-1", "basis-0", "flex-wrap", "h-[1lh]", "overflow-hidden", "justify-end", "items-baseline"]) assert.ok(box.includes(cls), `hint box: ${cls}`)
-  assert.ok(!box.some((cls) => cls.startsWith("min-w-[")), "it reserves nothing for a glyph")
-  // A zero-width text strut first (the line's keeper and its baseline), then the hint as ONE nowrap item.
-  assert.match(html, /data-process-give="true" class="[^"]*"><span aria-hidden="true" class="w-0">\u200b<\/span><span data-process-checkout="root" title="t" class="([^"]*)"><span class="text-muted-60"><svg[^>]*class="[^"]*inline[^"]*align-baseline[^"]*"[\s\S]*?<\/svg><span data-process-checkout-word="true" class="[^"]*">root<\/span><\/span><span aria-hidden="true" class="text-muted-25">·<\/span><\/span><\/span>/)
-  const item = /<span data-process-checkout="root" title="t" class="([^"]*)"/.exec(html)?.[1]?.split(" ") ?? []
-  for (const cls of ["shrink-0", "whitespace-nowrap"]) assert.ok(item.includes(cls), `hint item: ${cls}`)
-  // The status stays whole beside it; a row without a hint keeps the grid's own status track.
+  // One cell over the name and status tracks: the name, the hint's box and its `·`, the status.
+  assert.match(html, /<span class="col-span-2 flex min-w-0 items-baseline"><button[\s\S]*?<\/button><span data-process-give="true" data-process-checkout="root" title="t" class="[^"]*"><svg[\s\S]*?<\/svg><span data-process-checkout-word="true" class="[^"]*">root<\/span><\/span><span aria-hidden="true" class="mx-1 shrink-0 text-muted-25">·<\/span><span data-wait-status="true" class="[^"]*"><span class="text-attention">waiting for input<\/span><\/span><\/span>/)
+  const box = /<span data-process-give="true"[^>]*class="([^"]*)"/.exec(html)?.[1]?.split(" ") ?? []
+  for (const cls of ["w-0", "min-w-[1em]", "flex-1", "basis-0", "flex-wrap", "h-[1lh]", "overflow-hidden", "justify-end", "items-baseline"]) assert.ok(box.includes(cls), `hint box: ${cls}`)
   const status = /<span data-wait-status="true" class="([^"]*)"/.exec(html)?.[1]?.split(" ") ?? []
   assert.ok(status.includes("shrink-0"))
+  // A row without a hint takes the SAME cell, a spacer where the hint would be — never the subgrid's two tracks.
   const plain = renderToStaticMarkup(createElement(TermWaitRow, { terminal: term(), slug: "t", now: Date.now() }))
-  assert.doesNotMatch(plain, /col-span-2|data-process-give/)
+  assert.match(plain, /<span class="col-span-2 flex min-w-0 items-baseline"><button[\s\S]*?<\/button><span aria-hidden="true" class="ml-3 flex-1"><\/span><span data-wait-status="true" class="([^"]*)">/)
+  assert.equal(/<span data-wait-status="true" class="([^"]*)"/.exec(plain)?.[1], /<span data-wait-status="true" class="([^"]*)"/.exec(html)?.[1], "one status box on both")
+  assert.doesNotMatch(plain, /data-process-give/)
 })
