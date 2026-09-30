@@ -12,6 +12,8 @@ import test, { after, before } from "node:test"
 //        back. Port of queueOptimisticDone.e2e.test.ts (7a20f425).
 //   4    a reply that steers the card away dissolves it, and its neighbour survives the thread then dropping
 //        out of the queue — what queueSteerDissolve.e2e.test.ts pinned on the board's queue until 098de26d.
+//   4b   a reply still on the wire past REAPPEAR_MS keeps its card gone: the card came back without the
+//        reply, then left again once the worker picked it up (maintainer 2026-09-30).
 //   5-6  a done the worker REGISTERED (`mcp__frizz__done`) draws its Done card on the queue card, and one
 //        both fenced and registered draws exactly one (B1, restored 2026-09-29).
 //   7-9  the terminal net: a frozen native ask and a bare permission prompt — two states the server queues a
@@ -173,6 +175,27 @@ test("a steered card dissolves without taking its neighbour down", { skip: !base
   assert.equal(await leavingOf(FIRST), "unmounted")
   assert.equal(await leavingOf(NEIGHBOUR), "false", "the neighbour survives the dissolve")
   assert.ok((await rpcLog()).calls.some((c) => c.path === "/_frizz/fixture-card/rpc/followUp"), "the reply went to the card's project")
+  assert.deepEqual(errors, [])
+})
+
+test("a reply still being delivered past the reappear deadline keeps its card gone", { skip: !baseUrl, timeout: 60_000 }, async () => {
+  // 9s: past REAPPEAR_MS (8s) measured from the click, which is where the card used to come back.
+  await open("case=exit&replyDelay=9000")
+  const box = `${FIRST} textarea[data-surface="queueComposer"]`
+  await page!.click(box)
+  await page!.type(box, "Ship it.")
+  await page!.keyboard.down("Meta")
+  await page!.keyboard.press("Enter")
+  await page!.keyboard.up("Meta")
+  await page!.waitForFunction((sel) => !document.querySelector(sel), { timeout: 2_000 }, FIRST)
+  // Sampled IN THE PAGE across the whole wait, so a reappearance between two looks from here still counts.
+  const reappeared = await page!.evaluate((sel) => new Promise<boolean>((resolve) => {
+    let seen = false
+    const timer = setInterval(() => { if (document.querySelector(sel)) seen = true }, 50)
+    setTimeout(() => { clearInterval(timer); resolve(seen) }, 9_800)
+  }), FIRST)
+  assert.equal(reappeared, false, "the card stayed gone while its reply was on the wire and the poll then dropped it")
+  assert.equal(await leavingOf(NEIGHBOUR), "false")
   assert.deepEqual(errors, [])
 })
 

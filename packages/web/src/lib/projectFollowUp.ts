@@ -30,7 +30,7 @@ export function deliverProjectFollowUp(
     } finally {
       clearTimeout(timer)
     }
-  }, () => {}))
+  }, () => markSteeredIn(target.projectId, target.slug)))
   sent.catch(() => clearSteeredIn(target.projectId, target.slug))
   return sent
 }

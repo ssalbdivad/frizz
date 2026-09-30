@@ -23,6 +23,7 @@ import "./styles.css"
 //     &fail=1                  …the RPC fails.
 //                              A reply sent from the first card's box steers it: the "poll" drops the
 //                              thread 400ms later, once the fade is over.
+//     &replyDelay=<ms>         …the reply's followUp answers only after that long (a cold resume, a retry).
 //   ?case=registered-done      the thread signed off with `mcp__frizz__done`: no fence in the handoff text,
 //                              a registered `lastFence` on the thread (B1).
 //   ?case=fenced-and-registered  both: the fence in the text AND the registration — one card, not two.
@@ -39,6 +40,7 @@ const CASE = params.get("case") ?? "exit"
 const DELAY = Number(params.get("delay") ?? 1500)
 const DECLINE = params.get("needsConfirmation") === "1"
 const FAIL = params.get("fail") === "1"
+const REPLY_DELAY = Number(params.get("replyDelay") ?? 0)
 
 const now = new Date().toISOString()
 function thread(id: string, title: string, extra: Partial<ThreadViewModel> = {}): ThreadViewModel {
@@ -156,6 +158,7 @@ window.fetch = async (input, init) => {
   // stableQueue `keep`), which this fixture does not reproduce — dropping it sooner here would unmount the
   // card mid-fade, which the page never does.
   if (rpc === "followUp") {
+    if (REPLY_DELAY) await new Promise((resolve) => setTimeout(resolve, REPLY_DELAY))
     setTimeout(() => dropThread(body.slug ?? ""), 400)
     return json({})
   }
@@ -210,7 +213,7 @@ function Queue() {
       {queued.filter((t) => !leaving.hidden(threadKey(project.id, t.id))).map((t) => {
         const key = threadKey(project.id, t.id)
         return (
-          <AllQueuesCard key={key} project={project} thread={t} leaving={leaving.isLeaving(key)} onLeave={leaving.leave(key)} onReturn={leaving.restore(key)} />
+          <AllQueuesCard key={key} project={project} thread={t} leaving={leaving.isLeaving(key)} onLeave={leaving.leave(key)} onReturn={leaving.restore(key)} onSent={leaving.sent(key)} onLanded={leaving.landed(key)} />
         )
       })}
     </div>

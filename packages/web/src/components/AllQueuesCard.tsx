@@ -186,6 +186,8 @@ function deliverFollowUp(project: QueuesProject, thread: ThreadView, message: st
   return deliverProjectFollowUp({ projectId: project.id, projectDir: project.projectDir, slug: thread.id, sessionId: thread.sessionId }, message)
 }
 
+const noop = () => {}
+
 /** The collapsed body's height: enough for a verdict line and the paragraph under it, never a wall. */
 const CLAMP_PX = 188
 
@@ -211,6 +213,11 @@ interface AllQueuesCardProps {
   onLeave: () => void
   /** The action failed after the card had already faded: put it back. */
   onReturn: () => void
+  /** A reply or Retry went out: the card leaves, and stays gone while the send is on the wire. `onLeave`
+   *  when absent. */
+  onSent?: () => void
+  /** That send landed, so the wait for its thread to leave the queue starts now (AllQueues useLeavingCards). */
+  onLanded?: () => void
   /** A question on the card was answered and the worker went to work on it, while the card still asks
    *  more: keep it where it is, live, although its thread leaves the queue (AllQueues useLeavingCards). */
   onHold?: () => void
@@ -228,6 +235,8 @@ export const AllQueuesCard = memo(function AllQueuesCard({
   leaving,
   onLeave,
   onReturn,
+  onSent = onLeave,
+  onLanded = noop,
   onHold,
   chip = false,
   onChoose,
@@ -356,7 +365,7 @@ export const AllQueuesCard = memo(function AllQueuesCard({
                 command
                 className={HEADER_ICON_CLASS}
               />
-              {offersRetry(thread) && <RetryButton project={project} thread={thread} onSent={onLeave} onFailed={onReturn} />}
+              {offersRetry(thread) && <RetryButton project={project} thread={thread} onSent={onSent} onLanded={onLanded} onFailed={onReturn} />}
               {/* The ⋯ menu, as the drawer's (ThreadMenu.tsx) minus Restart worker, which only sends to the
                   page's project. */}
               <ThreadProjectScope projectId={project.id} projectDir={project.projectDir}>
@@ -451,7 +460,7 @@ export const AllQueuesCard = memo(function AllQueuesCard({
           </ProjectLinkScope>
 
           <ThreadProjectScope projectId={project.id} projectDir={project.projectDir}>
-            <ReplyBox project={project} thread={thread} onSent={onLeave} onFailed={onReturn} />
+            <ReplyBox project={project} thread={thread} onSent={onSent} onLanded={onLanded} onFailed={onReturn} />
             {/* EVERYTHING IT HAS RUNNING, in the drawer's one column (QueueChildOps): its sub-agents and
                 Workflows as AGENT / FLOW rows — the awaiting card's to list while it is drawn — then every
                 terminal on the thread, yours and the agent's, as the drawer's TERM strip (ThreadTerminals.tsx),
@@ -500,6 +509,8 @@ function sameCard(a: AllQueuesCardProps, b: AllQueuesCardProps): boolean {
     a.thread === b.thread &&
     a.leaving === b.leaving &&
     a.onLeave === b.onLeave &&
+    a.onSent === b.onSent &&
+    a.onLanded === b.onLanded &&
     a.onReturn === b.onReturn &&
     a.onHold === b.onHold &&
     a.chip === b.chip &&
@@ -515,12 +526,13 @@ function sameCard(a: AllQueuesCardProps, b: AllQueuesCardProps): boolean {
  * The thread header's stall recovery (HeaderActions.tsx RetryButton): the same message through the same
  * follow-up, sent to the thread's own project. The thread goes back to work, so the card leaves.
  */
-function RetryButton({ project, thread, onSent, onFailed }: { project: QueuesProject; thread: ThreadView; onSent: () => void; onFailed: () => void }) {
+function RetryButton({ project, thread, onSent, onLanded, onFailed }: { project: QueuesProject; thread: ThreadView; onSent: () => void; onLanded: () => void; onFailed: () => void }) {
   const queryClient = useQueryClient()
   const retry = useMutation({
     mutationFn: () => deliverFollowUp(project, thread, STALLED_RETRY_MESSAGE),
     onMutate: onSent,
     onSuccess: () => {
+      onLanded()
       showToast("Retrying…")
       void queryClient.invalidateQueries({ queryKey: ["projectsQueues"] })
     },
@@ -746,7 +758,7 @@ function ClampedBody({ resetKey, children }: { resetKey: string; children: React
  * the other way round. An attachment uploads to the THREAD's project (`attachBase`), not the page's,
  * which on this page is the focused project.
  */
-function ReplyBox({ project, thread, onSent, onFailed }: { project: QueuesProject; thread: ThreadView; onSent: () => void; onFailed: () => void }) {
+function ReplyBox({ project, thread, onSent, onLanded, onFailed }: { project: QueuesProject; thread: ThreadView; onSent: () => void; onLanded: () => void; onFailed: () => void }) {
   const queryClient = useQueryClient()
   const key = draftKey.followUp(project.projectDir, thread.id, thread.sessionId)
   const text = useDraftValues([key]).get(key) ?? ""
@@ -760,7 +772,10 @@ function ReplyBox({ project, thread, onSent, onFailed }: { project: QueuesProjec
   const ownMention = useOwnMention(thread.id, project.slug)
   const send = useMutation({
     mutationFn: (message: string) => deliverFollowUp(project, thread, message),
-    onSuccess: () => void queryClient.invalidateQueries({ queryKey: ["projectsQueues"] }),
+    onSuccess: () => {
+      onLanded()
+      void queryClient.invalidateQueries({ queryKey: ["projectsQueues"] })
+    },
     onError: (cause, message) => {
       // A reload aborting the send: the next page replays it (lib/pendingSends.ts), so no rollback.
       if (pageUnloading()) return
