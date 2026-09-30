@@ -86,6 +86,8 @@ function Fixture() {
               value={draft}
               onChange={setDraft}
               onSubmit={() => {}}
+              // The thread above is mid-turn, so the forced chord would interrupt — renders the hint.
+              onInterruptSubmit={() => {}}
               placeholder="Follow up…"
               footer={(
                 <div className="flex min-w-0 flex-1 flex-wrap items-center gap-1">
