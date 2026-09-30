@@ -71,6 +71,7 @@ import { Menu, MenuContent, MenuItem, MenuSeparator, MenuTrigger } from "./ui/Me
 import { ProjectSwitcher, type SwitcherProject } from "./ProjectSwitcher.tsx"
 import { AddProjectRow, ProjectList } from "./ProjectList.tsx"
 import { setCrossProjectMentions } from "../lib/mentionAutolink.ts"
+import { readingLine } from "../lib/readingLine.ts"
 
 /** How often the page re-reads every project. The rail's badges poll at 5s; this is the page the
  *  operator is looking AT, so it runs a little faster — the read is the servers' cached snapshots. */
@@ -1006,8 +1007,8 @@ function useQueueKeys(activeKey: string | null, scrollToCard: (key: string) => n
 }
 
 /**
- * Which card is being read — the one crossing the reading line a third of the way down the window — so
- * its row in the list wears the scroll marker (Sidebar.tsx ThreadRow `active`).
+ * Which card is being read — the one crossing the reading line (lib/readingLine.ts: a third of the way
+ * down the window, sliding to its bottom as the page bottoms out) — so its row in the list wears the scroll marker (Sidebar.tsx ThreadRow `active`).
  */
 function useScrollspy(cards: readonly { key: string; ghost: boolean }[]): string | null {
   const [active, setActive] = useState<string | null>(null)
@@ -1018,7 +1019,7 @@ function useScrollspy(cards: readonly { key: string; ghost: boolean }[]): string
     const sync = () => {
       cancelAnimationFrame(frame)
       frame = requestAnimationFrame(() => {
-        const line = window.innerHeight / 3
+        const line = readingLine(window.innerHeight, window.scrollY, document.documentElement.scrollHeight)
         let found: string | null = null
         // Never a ghost's empty gap (lib/stableQueue.ts): there is nothing there to read.
         for (const slot of document.querySelectorAll<HTMLElement>("[data-xq-card]:not([data-queue-ghost])")) {
