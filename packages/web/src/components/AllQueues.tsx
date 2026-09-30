@@ -255,8 +255,9 @@ export function AllQueuesPage() {
   const ready = queue.filter((slot) => !slot.ghost && !leaving.isLeaving(slot.key)).length
   // THE TAB NAMES ITS VIEW. Someone who keeps one tab per project (Colin McDonnell's way of working, and
   // how his one-project-per-page Frizz titled its tabs) tells them apart by title and favicon alone, so a
-  // focused tab reads "<project> — Frizz" and wears the rest dot (lib/faviconBadge.ts) while that
-  // project's queue holds a card; All projects reads so, dotted for any card at all. Set here, not in
+  // focused tab reads "<project> — Frizz" and its favicon counts that project's queue (lib/faviconBadge.ts);
+  // All projects reads so, counting every project's. A count, not a dot, so a background tab says how
+  // much is waiting rather than only that something is. Set here, not in
   // <App/>, because only this page knows its view — and an effect in App would run AFTER this child's on
   // mount and overwrite it. Cleared back to the bare mark when the page goes (the welcome page, `/full`).
   const tabName = focused ? viewed?.name : "All projects"
@@ -265,7 +266,7 @@ export function AllQueuesPage() {
   }, [tabName])
   useEffect(() => () => { document.title = "Frizz" }, [])
   useEffect(() => {
-    setFaviconBadge(ready > 0)
+    setFaviconBadge(ready)
     return () => setFaviconBadge(false)
   }, [ready])
   const scrollToCard = useScrollToCard()
