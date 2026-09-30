@@ -4,6 +4,8 @@ import { useQuery } from "@tanstack/react-query"
 import { SPINOFF_INSTRUCTIONS_MAX, type ProjectCard, type SpinoffView, type ThreadView } from "@frizz/shared"
 import { rpc } from "../api/rpc.ts"
 import { useThreadApi, useThreadProjectDir } from "../api/threadApi.tsx"
+import { stepPick } from "../lib/crossProject.ts"
+import { PROJECT_STEP_CHORDS, detectPlatform, formatChord, parseChord } from "../lib/keybindings.ts"
 import { mentionHref } from "../lib/mentionAutolink.ts"
 import { spaNavigate } from "../lib/router.ts"
 import { displayTitle, threadHandleOf } from "../groups.ts"
@@ -165,7 +167,17 @@ function SpinoffDialog({ thread, open, onOpenChange }: { thread: ThreadView & { 
             if (e.key === "Enter" && !e.shiftKey && !e.nativeEvent.isComposing) {
               e.preventDefault()
               submit()
+              return
             }
+            // ⌥↓ / ⌥↑ — the next or previous project, as in the new-thread box (AllQueues.tsx
+            // onColumnKeyDown): the same list order, wrapping at either end, and the key stays the
+            // browser's when there is nowhere else to go.
+            const step = projectStep(e)
+            if (!step || !home || pending) return
+            const next = stepPick(projects.map((p) => ({ ...p, open: true, stale: false })), (target ?? home).slug, step)
+            if (!next) return
+            e.preventDefault()
+            setTargetId(next.id)
           }}
           rows={3}
           placeholder="What should the new thread do?"
@@ -179,6 +191,15 @@ function SpinoffDialog({ thread, open, onOpenChange }: { thread: ThreadView & { 
       </div>
     </Dialog>
   )
+}
+
+const PROJECT_STEP_KEYS = [PROJECT_STEP_CHORDS.previous, PROJECT_STEP_CHORDS.next].map((chord) => formatChord(parseChord(chord)!, detectPlatform())).join("/")
+
+/** ⌥↓ is a step down the project menu, ⌥↑ one up; 0 for any other key. The new-thread box's own reading
+ *  of the chord (AllQueues.tsx projectStep). */
+function projectStep(event: ReactKeyboardEvent): 1 | -1 | 0 {
+  if (!event.altKey || event.ctrlKey || event.metaKey || event.shiftKey || event.nativeEvent.isComposing || event.defaultPrevented) return 0
+  return event.key === "ArrowDown" ? 1 : event.key === "ArrowUp" ? -1 : 0
 }
 
 /** A project this server has OPEN — the only kind a spinoff can start in (the server refuses the rest). */
@@ -198,6 +219,9 @@ function useOpenProjects(enabled: boolean): OpenProject[] {
       card: card ?? { id: q.projectId, slug: q.projectSlug, name: q.projectName, path: q.projectDir, lastOpenedAt: "", stale: false, iconStatus: "unknown" },
     })
   }
+  // The project list's own order — the prompt box's picker and its ⌥↑/⌥↓ walk the same one.
+  const rank = (p: OpenProject) => { const i = cards.data?.findIndex((c) => c.id === p.id) ?? -1; return i === -1 ? Infinity : i }
+  out.sort((a, b) => rank(a) - rank(b))
   return [...out.filter((p) => !p.card.home), ...out.filter((p) => p.card.home)]
 }
 
@@ -219,6 +243,7 @@ function SpinoffProjectPicker({ projects, current, disabled, onPick }: {
           disabled={disabled}
           data-spinoff-project={current.slug}
           aria-label={`The new thread starts in ${current.name}. Choose a project`}
+          title={`The new thread starts in ${current.name} (${PROJECT_STEP_KEYS} in the field)`}
           className="button-outline mr-auto flex min-w-0 max-w-[60%] items-center gap-[5px] rounded-md px-2.5 py-1.5 text-[12px] text-muted outline-none transition-colors hover:bg-panel-2 hover:text-fg disabled:opacity-45 data-[state=open]:bg-panel-2 data-[state=open]:text-fg"
         >
           <ProjectSquare project={current.card} size={12} />

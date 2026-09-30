@@ -127,7 +127,7 @@ export const FIXED_SHORTCUTS: readonly { heading: string; keys: readonly { label
     ],
   },
   {
-    heading: "In the new-thread box",
+    heading: "In the new-thread box, or the Spinoff dialog",
     keys: [
       { label: "Start in the next project", chord: PROJECT_STEP_CHORDS.next },
       { label: "Start in the previous project", chord: PROJECT_STEP_CHORDS.previous },
