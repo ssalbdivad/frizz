@@ -64,7 +64,7 @@ import { FOREGROUND_MARK_AFTER_MS, foregroundToolIsRunning, hasRunningToolIndica
 import { formatRuntimeElapsed, formatToolDuration } from "../lib/durationLabels.ts"
 import { githubRefUrl } from "../lib/githubRef.ts"
 import { useNowMs } from "../lib/liveClock.ts"
-import { CHILD_OPEN_TITLE, CHILD_QUIET_SHELL_TITLE, CHILD_RESTED_DOT_CLASS, CHILD_RESTED_TITLE, CHILD_STALE_DOT_CLASS, CHILD_STALE_TITLE, checksCounterLabel, childOpSubtree, issueCounterLabel, visibleChildOps, type TranscriptShellRecord } from "../lib/childOps.ts"
+import { CHILD_OPEN_TITLE, CHILD_QUIET_SHELL_TITLE, CHILD_RESTED_DOT_CLASS, CHILD_RESTED_TITLE, CHILD_STALE_DOT_CLASS, CHILD_STALE_TITLE, checksCounterLabel, childOpSubtree, issueCounterLabel, transcriptBackgroundShells, visibleChildOps, type TranscriptShellRecord } from "../lib/childOps.ts"
 import { childOpDismisser } from "../lib/dismissChildOp.ts"
 import { agentCompletionCall, subAgentCompletionOutcome } from "../lib/subAgentCompletion.ts"
 import { agentReading } from "../lib/agentReading.ts"
@@ -159,35 +159,8 @@ function isLiveTranscriptBackgroundTool(tool: TranscriptToolCall): boolean {
   return tool.status === "pending" && tool.backgroundState === "background"
 }
 
-// Codex's deliberate `yield_control()` shell lifecycle is transcript-native, while the older board
-// telemetry still reports bgShells:[]. Present those calls through the EXISTING anchored ops strip and
-// remove only their live copy from the conversation. Once a shell resolves, its completed historical
-// card returns at its canonical transcript position.
-export function transcriptBackgroundShells(messages: readonly ChatMessage[]): (BgShellView & TranscriptShellRecord)[] {
-  const shells: (BgShellView & TranscriptShellRecord)[] = []
-  for (const message of messages) {
-    for (const tool of message.tools) {
-      if (!isLiveTranscriptBackgroundTool(tool)) continue
-      if (!message.at) continue
-      shells.push({
-        label: tool.desc ?? tool.detail ?? tool.command ?? "Background command",
-        // The projected MESSAGE's instant, which is the only one this side has — and is NOT the launch
-        // record's, so it can never be reconciled against the board's row. `launchId` is what does that.
-        startedAt: message.at,
-        state: "running",
-        ...(tool.shellId ? { launchId: tool.shellId } : {}),
-        // The reconciliation key for a CODEX shell, whose board row and transcript row share nothing
-        // else (see mergeBackgroundShells). Carried separately from `label`, which for a codex row is
-        // the model's description of the step rather than the command it ran.
-        ...(tool.command ? { command: tool.command } : {}),
-        // The folder the tool call named (Codex `workdir`) — backfilled onto the board's copy of the same
-        // shell when that one has none (mergeBackgroundShells).
-        ...(tool.cwd ? { cwd: tool.cwd } : {}),
-      })
-    }
-  }
-  return shells
-}
+// The transcript's live Codex shells, for the strip (lib/childOps.ts, where it is pure and tested).
+export { transcriptBackgroundShells }
 
 export function withoutLiveTranscriptBackgroundTools(messages: readonly ChatMessage[]): ChatMessage[] {
   return messages.map((message) => {

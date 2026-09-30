@@ -1,3 +1,5 @@
+import type { BgShellView, TranscriptMessage, TranscriptToolCall } from "@frizz/shared"
+
 // ── THE CHILD-OPERATION ROW VOCABULARY ───────────────────────────────────────────────────────────
 //
 // Four surfaces list a thread's CHILD operations — the sidebar rail's sub-agent rows, a queue card's
@@ -322,4 +324,47 @@ export function mergeBackgroundShells<T extends ShellRecord>(board: readonly T[]
     if (!kept.cwd && shell.cwd) out[match] = { ...kept, cwd: shell.cwd }
   }
   return out
+}
+
+// A live background call in the transcript: launched, not yet settled (ChatView's own copy of this test decides
+// which cards leave the conversation for the strip, so the two agree).
+function isLiveTranscriptShell(tool: TranscriptToolCall): boolean {
+  return tool.status === "pending" && tool.backgroundState === "background"
+}
+
+// POSIX `/…`, or a Windows drive or UNC path.
+function isAbsoluteFolder(path: string): boolean {
+  return /^(?:\/|[A-Za-z]:[\\/]|\\\\)/.test(path)
+}
+
+// Codex's deliberate `yield_control()` shell lifecycle is transcript-native, while the older board
+// telemetry still reports bgShells:[]. Present those calls through the EXISTING anchored ops strip and
+// remove only their live copy from the conversation. Once a shell resolves, its completed historical
+// card returns at its canonical transcript position.
+export function transcriptBackgroundShells(messages: readonly Pick<TranscriptMessage, "tools" | "at">[]): (BgShellView & TranscriptShellRecord)[] {
+  const shells: (BgShellView & TranscriptShellRecord)[] = []
+  for (const message of messages) {
+    for (const tool of message.tools) {
+      if (!isLiveTranscriptShell(tool)) continue
+      if (!message.at) continue
+      shells.push({
+        label: tool.desc ?? tool.detail ?? tool.command ?? "Background command",
+        // The projected MESSAGE's instant, which is the only one this side has — and is NOT the launch
+        // record's, so it can never be reconciled against the board's row. `launchId` is what does that.
+        startedAt: message.at,
+        state: "running",
+        ...(tool.shellId ? { launchId: tool.shellId } : {}),
+        // The reconciliation key for a CODEX shell, whose board row and transcript row share nothing
+        // else (see mergeBackgroundShells). Carried separately from `label`, which for a codex row is
+        // the model's description of the step rather than the command it ran.
+        ...(tool.command ? { command: tool.command } : {}),
+        // The folder the tool call named (Codex `workdir`) — backfilled onto the board's copy of the same
+        // shell when that one has none (mergeBackgroundShells), for the row's tooltip. Only an ABSOLUTE one:
+        // Codex reads a relative `workdir` against its session's folder, which this side does not know, and
+        // `Runs in packages/web` named no place (the server resolves them — tailer.ts threadWorkingDir).
+        ...(tool.cwd && isAbsoluteFolder(tool.cwd) ? { cwd: tool.cwd } : {}),
+      })
+    }
+  }
+  return shells
 }
