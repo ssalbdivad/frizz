@@ -10,6 +10,7 @@ import type { LimitFault } from "./backend/types.ts"
 import { limitFaultResetKey, limitPauseIsStale, mayHaveLiveBackgroundWork, quotaWindowKeyFor, quotaWindowRecovered, scopedQuotaWindow, scopedQuotaWindowRecovered, textResetInstant } from "./backend/usage-limit.ts"
 import { claudeFallbackModel, claudeModelFromLimitName, claudeProfile, normalizeObservedThreadModel } from "./backend/thread-profiles.ts"
 import { createWakeDeliveryStore, WAKE_QUIET_WINDOW_MS, type WakeDelivery } from "./wake-store.ts"
+import { isReplyWait } from "./thread-mentions.ts"
 // The board owns the registered-done lifetime rule, and the waker must read it by exactly the same rule
 // or the two disagree about whether a thread is finished.
 import { answersInFlight, registeredDoneFence, safeQuestionAnswer, safeQuestionSpec } from "./board.ts"
@@ -1005,6 +1006,34 @@ export function enqueueInterruptEndedWake(
   }, input.nowMs ?? Date.now())
 }
 
+/** A message from ANOTHER THREAD (`mcp__frizz__message_thread`, thread-mentions.ts). Keyed on a fresh id
+ *  per message, because every message is news of its own. Bound to a FACT — the other thread said it —
+ *  so nothing this thread writes supersedes it, and deliverable INTO a busy turn exactly like a human's
+ *  steer: the sender is often waiting on the answer, and the recipient's own work is not interrupted,
+ *  only joined at its next sampling boundary. Exempt from the quiet window for the same reason. */
+const THREAD_MESSAGE_FENCE_PREFIX = "thread-message"
+function isThreadMessageFenceId(fenceId: string): boolean {
+  return fenceId.startsWith(`${THREAD_MESSAGE_FENCE_PREFIX}:`)
+}
+
+export function enqueueThreadMessageWake(
+  storage: Storage,
+  input: { slug: string; sessionId: string; fromSlug: string; message: string; nowMs?: number },
+): string {
+  const fenceId = `${THREAD_MESSAGE_FENCE_PREFIX}:${randomUUID()}`
+  const id = wakeDeliveryId(input.slug, input.sessionId, fenceId)
+  createWakeDeliveryStore(storage.scope).enqueue({
+    id,
+    slug: input.slug,
+    sessionId: input.sessionId,
+    fenceId,
+    hintKey: fenceId,
+    message: input.message,
+    reason: `a message from thread ${input.fromSlug}`,
+  }, input.nowMs ?? Date.now())
+  return id
+}
+
 /** A registered PR watcher's delivery namespace. The id plus a monotonically-increasing REPORT number,
  *  because this watcher fires many times over one PR's life — the id alone would dedupe every wake after
  *  the first, which is exactly the bug a one-shot namespace would hide. */
@@ -1479,6 +1508,10 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
     if (isInterruptEndedFenceId(item.fenceId)) {
       return tele.turn === "idle" ? "current-idle" : "current-busy"
     }
+    // So is a message from another thread: it was said, whatever this thread says next.
+    if (isThreadMessageFenceId(item.fenceId)) {
+      return tele.turn === "idle" ? "current-idle" : "current-busy"
+    }
     // An over-budget warning is bound to its shell STILL RUNNING under the SAME deadline. The worker
     // stopping the shell, or extending it, between enqueue and delivery each make the warning untrue —
     // and nothing the thread SAYS does. Without this branch it would fall to the fence logic below and
@@ -1666,6 +1699,9 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
     // The interrupt note too: the worker is BUSY precisely because the interrupt just opened a turn on
     // the human's follow-up, and that turn is where it decides to wait on the child that no longer exists.
     if (isInterruptEndedFenceId(item.fenceId)) return true
+    // Another thread's message joins a running turn the way a human's typed steer does — see
+    // THREAD_MESSAGE_FENCE_PREFIX.
+    if (isThreadMessageFenceId(item.fenceId)) return true
     // The budget warning is "in the moment" by definition: its grace clock is already running, and a
     // worker mid-turn is the one most likely to still be using the shell — it has ten minutes to say so.
     if (isShellBudgetFenceId(item.fenceId)) return true
@@ -2126,7 +2162,14 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
         // dismissed or withdrawn (shared questionRepliedPast — information since 2026-09-29, not a release).
         questionRows.some((q) => q.state === "open") ||
         answersInFlight(questionRows, tele.lastUserAt, row.recurring_on_rest === 1 && Boolean(row.recurring_prompt?.trim())) !== undefined ||
-        deps.storage.listThreadWatches(row.slug, { armedOnly: true }).length > 0
+        deps.storage.listThreadWatches(row.slug, { armedOnly: true }).length > 0 ||
+        // A wait on ANOTHER THREAD's answer (`message_thread` with `await_reply`) is a registration like a
+        // watch: the tool tells the worker to rest on it with nothing else, so it must count here too…
+        deps.storage.listThreadTimers(row.slug, { armedOnly: true }).some((t) => isReplyWait(t.prompt)) ||
+        // …and so does a thread's message ON ITS WAY, the twin of the answer-in-flight case above: the
+        // answer CANCELS the wait the instant it is sent, so until it is delivered the rest reads bare.
+        // Seen on a real run (2026-09-29): the nudge was merged into the very delivery carrying the answer.
+        outbox.pendingFor(row.slug, row.session_id).some((d) => isThreadMessageFenceId(d.fenceId))
       ) {
         if ((row.signoff_nudges ?? 0) > 0) deps.storage.resetSignoffNudges(row.slug)
         continue
@@ -2382,6 +2425,17 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
       )
       const finishedItem = (i: { kind: string; value: string }) =>
         finishedHandles.has(i.value) || (i.kind === "timer" && firedTimers.has(i.value))
+      // SILENT IS NOT MISSING EITHER. A sub-agent that has written nothing for longer than its allowance —
+      // 15 minutes of awake time, or what its pending call declared (pending-call.ts) — reads `stale`. The
+      // id is right and the child may well be alive; what frizz knows is that it has gone quiet past what it
+      // said it would. Saying "nothing by that name" sent the parent hunting for a typo. This wake IS the
+      // regular-update expectation on a child: nothing is stopped, the parent is told, and it decides.
+      const silentSince = new Map<string, string | undefined>()
+      for (const a of tele.subAgents ?? []) {
+        if (a.state !== "stale") continue
+        for (const h of [a.taskId, a.id, a.label]) if (h) silentSince.set(h, a.lastActivityAt)
+      }
+      const silentItem = (i: { kind: string; value: string }) => i.kind === "agent" && silentSince.has(i.value)
       const status = park.items.map((i) => {
         const gone = dead.some((d) => d.kind === i.kind && d.value === i.value)
         // AN UNREGISTERED PR GETS ITS OWN NOTE, because "nothing by that name" is true but useless for
@@ -2399,6 +2453,8 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
           ? "already FIRED — its wake was delivered; there is nothing left to wait on"
           : finishedItem(i)
           ? "FINISHED — its result is waiting for you"
+          : silentItem(i)
+          ? `SILENT — nothing from it since ${silentSince.get(i.value) ?? "it started"}, longer than any call it has pending declared. It may be hung; frizz stopped nothing. Read its transcript, then wait on it again or \`TaskStop\` it`
           : i.kind === "pr"
           ? "NOT REGISTERED — register it with `mcp__frizz__watch_pr` first, then name it here"
           : i.kind === "issue"
@@ -2470,6 +2526,15 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
         ? parkExpiredWakeMessage(status)
         : allFinished
         ? parkFinishedWakeMessage(status, dead.length !== 1)
+        : dead.every(silentItem)
+        ? [
+          `${PARK_CORRECTION_NAMES_LEAD}${dead.length === 1 ? "a sub-agent that has" : "sub-agents that have"} gone silent past what ${dead.length === 1 ? "it" : "they"} declared, so frizz woke you instead of holding the park.`,
+          "",
+          ...status,
+          "",
+          "A child blocked in a long foreground call is judged against that call's own `timeout`; this one has",
+          "outlived it. Check it before waiting again: a re-park naming it wakes you the same way while it stays silent.",
+        ].join("\n")
         : [
           `${PARK_CORRECTION_NAMES_LEAD}${dead.length === 1 ? "something that is" : "things that are"} not running, so it is not a park and your thread stayed in the queue.`,
           "",

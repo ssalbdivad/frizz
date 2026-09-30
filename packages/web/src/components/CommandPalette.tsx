@@ -4,7 +4,7 @@ import { Command } from "cmdk"
 import { store, openThread, openNewThread, pushDrawer, topThreadSlug, closeDrawersById } from "../store.ts"
 import { rpc } from "../api/rpc.ts"
 import { useBoard, asThreads } from "../hooks.ts"
-import { sortThreads, displayTitle } from "../groups.ts"
+import { sortThreads, displayName, displayTitle } from "../groups.ts"
 import { isCrossProjectPath } from "../lib/base-path.ts"
 
 // Cmd+K palette: fuzzy-jump to any thread (over title + slug, grouped like the sidebar) plus the
@@ -105,7 +105,8 @@ export function CommandPalette() {
             // say whose, since in All projects the page around it shows every project's.
             <Command.Group heading={isCrossProjectPath() ? `Threads in ${board?.projectName ?? board?.projectLabel ?? "this project"}` : "Threads"} className="cmdk-group">
               {threads.map((t) => (
-                <Item key={t.id} value={`${displayTitle(t)} ${t.id}`} onSelect={() => run(() => jump(t.id))}>
+                // The handle AND the stored words, so "shell bud" finds `shellBudgets` as readily as "shellB".
+                <Item key={t.id} value={`${displayTitle(t)} ${displayName(t)} ${t.id}`} onSelect={() => run(() => jump(t.id))}>
                   <span className="truncate">{displayTitle(t)}</span>
                   <span className="ml-auto shrink-0 text-[11px] text-muted-70">{t.id}</span>
                 </Item>

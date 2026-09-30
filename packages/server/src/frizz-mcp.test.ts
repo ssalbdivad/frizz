@@ -64,7 +64,7 @@ test("the frizz MCP server identifies as `frizz` and exposes its worker tools", 
     rpc.send({ jsonrpc: "2.0", method: "notifications/initialized" })
     rpc.send({ jsonrpc: "2.0", id: 2, method: "tools/list" })
     const list = await rpc.next(2)
-    assert.deepEqual(list.result.tools.map((t: { name: string }) => t.name), ["spawn_thread", "goal", "timer", "watch_pr", "watch", "unwatch", "ask", "unask", "done", "title", "activity", "link", "unlink", "watch_issue", "extend_shell"])
+    assert.deepEqual(list.result.tools.map((t: { name: string }) => t.name), ["spawn_thread", "goal", "timer", "watch_pr", "watch", "unwatch", "ask", "unask", "done", "title", "activity", "link", "unlink", "watch_issue", "extend_shell", "read_thread", "message_thread"])
     assert.deepEqual(list.result.tools.find((t: { name: string }) => t.name === "link").inputSchema.required, ["label", "target"])
     assert.deepEqual(list.result.tools.find((t: { name: string }) => t.name === "unlink").inputSchema.required, ["id"])
     for (const required of ["prompt", "model", "effort"]) {
@@ -154,7 +154,11 @@ test("the frizz MCP server identifies as `frizz` and exposes its worker tools", 
     // `wch_…` id of any watch holding one. It takes NOTHING: there is no thread parameter and no filter,
     // because the only correct answer is "everything you have running", and a worker that has lost its
     // ids cannot be trusted to name them.
-    assert.equal(list.result.tools.length, 15)
+    assert.equal(list.result.tools.length, 17)
+    // `read_thread` / `message_thread` name the OTHER thread by handle; the CALLER still comes from the
+    // env, so a message is always signed by the thread that really sent it.
+    assert.deepEqual(list.result.tools[15].inputSchema.required, ["handle"])
+    assert.deepEqual(list.result.tools[16].inputSchema.required, ["handle", "message"])
     assert.deepEqual(list.result.tools[10].inputSchema.required, [])
     assert.deepEqual(Object.keys(list.result.tools[10].inputSchema.properties), [])
     // `watch_issue` — the issue twin of `watch_pr`, same shape: `action` alone is required, and NO thread
@@ -1611,6 +1615,42 @@ test("`watch_issue` registers, lists and drops against the CALLING thread, and l
     assert.equal(noFor.result.isError, true)
     assert.match(noFor.result.content[0].text, /`for` is required/)
     assert.equal(seen.length, before)
+  } finally {
+    rpc.kill()
+    http.close()
+  }
+})
+
+// A SPIN-OFF names its request AND its caller — the caller from the server's own identity, never from the
+// model's arguments — so the dispatch can refuse a request that belongs to another thread.
+test("spawn_thread with a spinoff forwards the request id and the calling thread", async () => {
+  const seen: unknown[] = []
+  const http = createServer((req, res) => {
+    let body = ""
+    req.on("data", (c) => (body += c))
+    req.on("end", () => {
+      seen.push(JSON.parse(body))
+      res.writeHead(200, { "content-type": "application/json" })
+      res.end(JSON.stringify({ result: { slug: "spawned-child" } }))
+    })
+  })
+  await new Promise<void>((resolve) => http.listen(0, "127.0.0.1", resolve))
+  const port = (http.address() as { port: number }).port
+  const stateDir = mkdtempSync(join(tmpdir(), "frizz-mcp-"))
+  writeFileSync(join(stateDir, "server.lock"), JSON.stringify({ port }))
+  const rpc = startServer({ FRIZZ_STATE_DIR: stateDir, FRIZZ_THREAD_SLUG: "the-parent" })
+  try {
+    rpc.send({ jsonrpc: "2.0", id: 1, method: "initialize", params: {} })
+    await rpc.next(1)
+    rpc.send({
+      jsonrpc: "2.0",
+      id: 2,
+      method: "tools/call",
+      params: { name: "spawn_thread", arguments: { prompt: "brief", model: "opus", effort: "high", spinoff: " spn_0123456789abcdef " } },
+    })
+    const call = await rpc.next(2)
+    assert.equal(call.result.isError, undefined)
+    assert.deepEqual(seen, [{ prompt: "brief", model: "opus", effort: "high", spinOff: "spn_0123456789abcdef", spinOffFrom: "the-parent" }])
   } finally {
     rpc.kill()
     http.close()

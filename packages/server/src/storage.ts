@@ -68,6 +68,9 @@ export interface SessionRow {
   // message by periodic-status.ts. Never the name — the name is `title`, and stays put. NULL until the
   // first status lands; a re-dispatch clears it.
   status?: string | null
+  // When `status` was last CHANGED (ISO) — the start of the task it names, which the board reads as
+  // "working on this for 4m" (live-status.ts). A write that keeps the same text keeps this instant.
+  status_at?: string | null
   // ---- session-first columns (2026-07-09; all nullable — additive migration under a live server) ----
   title: string | null // dispatch title (new dispatches have no thread FILE to hold it); display prefers aiTitle
   // The filename stem of the DISCOVERED transcript when it drifted off the pinned `<session_id>.jsonl`
@@ -504,6 +507,19 @@ export interface CommandThreadRow {
   queued_at?: string | null
 }
 
+/** A SPIN-OFF: a new thread the human asked for from one message of `parent_slug` — see the table. */
+export interface ThreadSpinOffRow {
+  id: string
+  parent_slug: string
+  source_id: string
+  excerpt: string
+  instructions: string
+  /** Null until the parent's worker has dispatched it. */
+  child_slug: string | null
+  created_at: number
+  spawned_at: number | null
+}
+
 /** A saved destination, independent of running work and completion. */
 export interface ThreadLinkRow {
   id: string
@@ -813,6 +829,14 @@ export interface Storage {
   // dropped the row cannot resurrect it.
   setPrWatchCursor(id: string, cursor: string): boolean
   // A label is a stable slot: re-registering it updates the destination without moving the row.
+  insertSpinOff(row: { id: string; parentSlug: string; sourceId: string; excerpt: string; instructions: string; createdAtMs: number }): void
+  getSpinOff(id: string): ThreadSpinOffRow | undefined
+  dropSpinOff(id: string): boolean
+  /** Stamp the dispatched child onto a PENDING spin-off. False when it is unknown or already spawned, so
+   *  one request can never produce two threads. */
+  completeSpinOff(id: string, childSlug: string, atMs: number): boolean
+  /** Every spin-off, keyed by BOTH ends: a parent sees the ones it was asked for, a child the one it came from. */
+  spinOffsBySlug(): Map<string, ThreadSpinOffRow[]>
   upsertThreadLink(link: { id: string; slug: string; kind: "link" | "file"; label: string; target: string; createdAtMs: number }): ThreadLinkRow
   listThreadLinks(slug: string): ThreadLinkRow[]
   threadLinksBySlug(): Map<string, ThreadLinkRow[]>
@@ -958,8 +982,10 @@ export interface Storage {
   // Persist the name Frizz MINTED at dispatch (thread-names.ts). Lands only on the same session, only
   // while no human has claimed the name and no machine name is persisted yet — the first name stands.
   setMintedTitle(slug: string, sessionId: string, title: string): boolean
-  // Write the thread's live status line (periodic-status.ts), keyed on the session it was read from.
-  setStatus(slug: string, sessionId: string, status: string): boolean
+  // Write the thread's live status line (periodic-status.ts, live-status.ts), keyed on the session it was
+  // read from. `at` stamps `status_at` only when the text actually changes, so re-writing the same
+  // status never restarts its clock.
+  setStatus(slug: string, sessionId: string, status: string, at?: string): boolean
   // AI rename is asynchronous. Commit only if this is still the same session with the same title
   // provenance captured at start, so a later manual rename/re-dispatch always wins.
   setTitleIfCurrent(
@@ -1181,6 +1207,8 @@ export const STORAGE_SCHEMA = `
       title_worker_renamed INTEGER NOT NULL DEFAULT 0,
       -- The live status line (periodic-status.ts), never the name; also in the ALTER list below.
       status TEXT,
+      -- When the status last changed (live-status.ts); also in the ALTER list below.
+      status_at TEXT,
       PRIMARY KEY (project_id, slug)
     );
     CREATE INDEX IF NOT EXISTS session_snoozed_until_idx ON session(project_id, snoozed_until);
@@ -1312,6 +1340,27 @@ export const STORAGE_SCHEMA = `
     CREATE INDEX IF NOT EXISTS pr_watch_slug
       ON pr_watch(project_id, thread_slug, state, created_at);
     -- Saved destinations have no liveness or expiry. The label is a stable slot within one thread.
+    -- A SPIN-OFF (2026-09-29): the human picked one message in a thread and asked for a NEW thread from it
+    -- ("fix this", "investigate perf"). The row is the request, and the link it becomes. It is created when
+    -- the human asks and delivered to the PARENT's worker, which gathers the context the new thread needs
+    -- and dispatches it through spawn_thread naming this id; the dispatch then stamps CHILD_SLUG. So a
+    -- row with no child is a request the parent has not acted on yet, and one with a child is the edge
+    -- both threads render (the parent's card links forward, the child's header links back).
+    --
+    -- SOURCE_ID is the chat's handle on the selected message (TranscriptMessage.sourceId) and EXCERPT the
+    -- text the human saw, kept because a transcript can page or compact the message out of reach.
+    CREATE TABLE IF NOT EXISTS thread_spinoff (
+      id           TEXT PRIMARY KEY,
+      project_id   TEXT NOT NULL,
+      parent_slug  TEXT NOT NULL,
+      source_id    TEXT NOT NULL,
+      excerpt      TEXT NOT NULL,
+      instructions TEXT NOT NULL,
+      child_slug   TEXT,
+      created_at   INTEGER NOT NULL,
+      spawned_at   INTEGER
+    );
+    CREATE INDEX IF NOT EXISTS thread_spinoff_parent_idx ON thread_spinoff(project_id, parent_slug);
     CREATE TABLE IF NOT EXISTS thread_link (
       id          TEXT PRIMARY KEY,
       project_id  TEXT NOT NULL,
@@ -1473,7 +1522,7 @@ export const STORAGE_SCHEMA = `
 export const STORAGE_TABLES = [
   "session", "settings", "tombstone", "adoption_claim", "adoption_retired_attempt", "retired_op",
   "thread_timer", "pr_watch", "thread_watch", "thread_question", "thread_done", "subagent_steer", "thread_link",
-  "command_thread", "shell_budget",
+  "command_thread", "shell_budget", "thread_spinoff",
 ] as const
 
 /** Idempotent; run by every createStorage and by frizz-db.ts before an import. */
@@ -1491,6 +1540,8 @@ export function ensureStorageSchema(db: Database): void {
     "recurring_max_runs INTEGER", "recurring_for_ms INTEGER", "recurring_until_at TEXT",
     "recurring_runs INTEGER NOT NULL DEFAULT 0", "recurring_run_anchor TEXT",
     "recurring_stop_reason TEXT", "recurring_stopped_at TEXT",
+    // When the live status last changed — its elapsed clock (live-status.ts).
+    "status_at TEXT",
   ]) {
     try {
       db.exec(`ALTER TABLE session ADD COLUMN ${column}`)
@@ -1644,6 +1695,7 @@ export function createStorage(source: string | Database, projectId: string): Sto
       -- Same reasoning: a fresh session gets its own one rename and has no status yet.
       title_worker_renamed = 0,
       status = NULL,
+      status_at = NULL,
       snoozed_until = excluded.snoozed_until,
       -- Always moves WITH the instant: a spread row carries both, a re-dispatch clears both. An armed
       -- prompt outliving its deadline would be a wake nothing can ever fire.
@@ -2107,6 +2159,17 @@ export function createStorage(source: string | Database, projectId: string): Sto
   `)
   const prWatchCursorStmt = scope.prepare("UPDATE pr_watch SET cursor = ? WHERE project_id = @project_id AND id = ? AND state = 'armed'")
   const delPrWatches = scope.prepare("DELETE FROM pr_watch WHERE project_id = @project_id AND thread_slug = ?")
+  const insertSpinOffStmt = scope.prepare(`
+    INSERT INTO thread_spinoff (project_id, id, parent_slug, source_id, excerpt, instructions, created_at)
+    VALUES (@project_id, @id, @parentSlug, @sourceId, @excerpt, @instructions, @createdAtMs)
+  `)
+  const getSpinOffStmt = scope.prepare<[string], ThreadSpinOffRow>("SELECT * FROM thread_spinoff WHERE project_id = @project_id AND id = ?")
+  const completeSpinOffStmt = scope.prepare(
+    "UPDATE thread_spinoff SET child_slug = ?, spawned_at = ? WHERE project_id = @project_id AND id = ? AND child_slug IS NULL",
+  )
+  const spinOffsStmt = scope.prepare<[], ThreadSpinOffRow>("SELECT * FROM thread_spinoff WHERE project_id = @project_id ORDER BY created_at, rowid")
+  const dropSpinOffStmt = scope.prepare("DELETE FROM thread_spinoff WHERE project_id = @project_id AND id = ?")
+  const delSpinOffs = scope.prepare("DELETE FROM thread_spinoff WHERE project_id = @project_id AND parent_slug = ?")
   const upsertThreadLinkStmt = scope.prepare<{
     id: string; slug: string; kind: "link" | "file"; label: string; target: string; createdAtMs: number
   }, ThreadLinkRow>(`
@@ -2313,7 +2376,10 @@ export function createStorage(source: string | Database, projectId: string): Sto
   `)
   // The live status line (periodic-status.ts). Independent of every title flag: a human-locked name
   // still gets a status, because the status is not the name.
-  const statusStmt = scope.prepare("UPDATE session SET status = ? WHERE project_id = @project_id AND slug = ? AND session_id = ?")
+  const statusStmt = scope.prepare(`
+    UPDATE session SET status_at = CASE WHEN status IS ? THEN status_at ELSE ? END, status = ?
+    WHERE project_id = @project_id AND slug = ? AND session_id = ?
+  `)
   // The WORKER's own considered name for its thread, from `mcp__frizz__title`. Writes exactly what the
   // auto-title CAS writes — the text plus `title_agent = 1`, gated on the LOCK so a human rename always
   // outranks it — but keyed on the SLUG alone. The caller is the live worker's own MCP server, which
@@ -2373,6 +2439,7 @@ export function createStorage(source: string | Database, projectId: string): Sto
     delThreadWatches.run(existing.slug)
     delShellBudgets.run(existing.slug)
     delThreadLinks.run(existing.slug)
+    delSpinOffs.run(existing.slug)
     delThreadQuestions.run(existing.slug)
     delThreadDone.run(existing.slug)
     delSubAgentSteers.run(existing.slug)
@@ -2973,6 +3040,23 @@ export function createStorage(source: string | Database, projectId: string): Sto
     dropPrWatch: (slug, id, settledAtMs) => dropPrWatchStmt.run(settledAtMs, id, slug).changes === 1,
     settlePrWatch: (id, settledAtMs) => settlePrWatchStmt.run(settledAtMs, id).changes === 1,
     setPrWatchCursor: (id, cursor) => prWatchCursorStmt.run(cursor, id).changes === 1,
+    insertSpinOff: (row) => { insertSpinOffStmt.run(row) },
+    getSpinOff: (id) => getSpinOffStmt.get(id),
+    dropSpinOff: (id) => dropSpinOffStmt.run(id).changes === 1,
+    completeSpinOff: (id, childSlug, atMs) => completeSpinOffStmt.run(childSlug, atMs, id).changes === 1,
+    spinOffsBySlug: () => {
+      const bySlug = new Map<string, ThreadSpinOffRow[]>()
+      const add = (slug: string, row: ThreadSpinOffRow) => {
+        const bucket = bySlug.get(slug)
+        if (bucket) bucket.push(row)
+        else bySlug.set(slug, [row])
+      }
+      for (const row of spinOffsStmt.all()) {
+        add(row.parent_slug, row)
+        if (row.child_slug && row.child_slug !== row.parent_slug) add(row.child_slug, row)
+      }
+      return bySlug
+    },
     upsertThreadLink: (link) => upsertThreadLinkStmt.get(link)!,
     listThreadLinks: (slug) => threadLinksBySlugStmt.all(slug),
     threadLinksBySlug: () => groupBySlug(threadLinksStmt.all()),
@@ -3071,7 +3155,8 @@ export function createStorage(source: string | Database, projectId: string): Sto
     setTitle: (slug, title) => void titleStmt.run(title, slug),
     setAgentTitle: (slug, title) => agentTitleStmt.run(title, slug).changes === 1,
     setMintedTitle: (slug, sessionId, title) => mintedTitleStmt.run(title, slug, sessionId).changes === 1,
-    setStatus: (slug, sessionId, status) => statusStmt.run(status, slug, sessionId).changes === 1,
+    setStatus: (slug, sessionId, status, at = new Date().toISOString()) =>
+      statusStmt.run(status, at, status, slug, sessionId).changes === 1,
     setTitleIfCurrent: (slug, title, expected) =>
       titleCasStmt.run(title, slug, expected.sessionId, expected.title, expected.titleAuto).changes === 1,
     setAutoTitleIfCurrent: (slug, title, expected) =>

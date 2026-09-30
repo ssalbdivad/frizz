@@ -136,7 +136,7 @@ test("the hint gives way before the label: it shrinks first, and drops whole rat
   // …with a zero-width strut holding the first line, so a hint that does not fit wraps off it whole.
   assert.match(html, /data-process-checkout="main"[^>]*><span aria-hidden="true" class="h-\[1lh\] w-0"><\/span>/)
   // The readings never shrink: the budget and the age are the row's live state.
-  assert.match(html, /<span class="flex shrink-0 items-center gap-1 text-muted-40 pl-1">/)
+  assert.match(html, /<span class="flex shrink-0 items-center gap-1 text-muted-40 -ml-0\.5">/)
   // The label is the only other thing that may give, and only by truncating.
   assert.match(html, /<span data-process-label="true" class="min-w-0 truncate text-muted-70">/)
 })
@@ -226,12 +226,13 @@ test("the sidebar mark counts both owners, and its tone says whose is running", 
 test("the queue card draws the same strip under its reply box, and only the prompting screen above it", async () => {
   const { readFileSync } = await import("node:fs")
   const card = readFileSync(new URL("./AllQueuesCard.tsx", import.meta.url), "utf8")
-  assert.match(card, /data-queue-processes=\{thread\.id\}[\s\S]{0,200}<ThreadProcessStrip[\s\S]{0,80}surface="card"/)
+  // In QueueChildOps' column, after its AGENT / FLOW rows, with its own SHELL rows off (one row per shell).
+  assert.match(card, /<QueueChildOps[\s\S]{0,200}shells=\{false\}[\s\S]{0,200}after=\{[\s\S]{0,120}data-queue-processes=\{thread\.id\}[\s\S]{0,120}<ThreadProcessStrip thread=\{thread\} surface="card"/)
   assert.match(card, /<TerminalPromptPane thread=\{thread\} onOpen=\{openProcess\} \/>/)
   assert.doesNotMatch(card, /QueueShellStrip|ThreadTerminalsStrip/, "no second strip for either owner")
   // A row opens the drawer only where the drawer stack is the card's own project's.
   assert.match(card, /const openProcess = \(process: ThreadProcess\) => \{\s+const here = focusedProject\(project\.slug\)\s+openInPlace\(project, thread\.id\)\s+if \(here\) openProcessDrawer\(thread\.id, process\)/)
-  assert.match(card, /<ThreadProcessStrip[\s\S]{0,200}onOpen=\{openProcess\}/)
+  assert.match(card, /<ThreadProcessStrip[^>]*onOpen=\{openProcess\}/)
   // The meta line carries the checkout token between the time and the status, as the drawer header does.
   const meta = card.slice(card.indexOf("<LastActive"), card.indexOf("<ThreadStatusLine"))
   assert.match(meta, /<ThreadCheckoutToken checkout=\{thread\.checkout\} homeDir=\{project\.homeDir\}/)

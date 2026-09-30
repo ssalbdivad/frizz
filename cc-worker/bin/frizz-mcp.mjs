@@ -104,7 +104,15 @@ const SPAWN_THREAD = {
         enum: ["claude", "codex"],
         description: "Optional agent backend (default `claude`). If `codex`, `model` must be a codex model id.",
       },
-      title: { type: "string", description: "Optional name for the new thread: one or two words naming its subject, distinct from the project's other open threads (else frizz names it from the prompt)." },
+      title: { type: "string", description: "Optional name for the new thread: one or two SHORT words naming its subject — its camelCase handle (\"Shell budgets\" → @shellBudgets) at most 16 characters — distinct from the project's other open threads. A longer one is ignored and frizz names the thread from the prompt instead." },
+      spinoff: {
+        type: "string",
+        description:
+          "Set ONLY when fulfilling a spin-off request — a message from frizz wrapped in `<spin-off-request id=\"spn_…\">` " +
+          "asking for a new thread from one message of your conversation. Pass that id verbatim. Frizz then puts the " +
+          "human's own instructions and a link back to your thread above your `prompt`, and links the two threads on " +
+          "the board. A spin-off is the human's explicit request, so the last-resort caution above does not apply to it.",
+      },
     },
     required: ["prompt", "model", "effort"],
   },
@@ -782,6 +790,8 @@ const TITLE = {
     "separate status line for that.\n\n" +
     "NAME THE SUBJECT, NOT THE ACTION. One or two words a reader picking one card out of thirty needs: " +
     "\"Shell budgets\", \"Focus mode\", \"ArkType perf\" — never \"Fix the shell budget default\".\n\n" +
+    "KEEP IT SHORT. The human refers to the thread by its camelCase handle (\"Shell budgets\" is typed " +
+    "@shellBudgets), so Frizz refuses a name whose handle runs past 16 characters. Short, plain words.\n\n" +
     "IT MUST BE DISTINCT. No two open threads in the project share a name (compared ignoring case and " +
     "punctuation). Frizz refuses a duplicate and names the thread that holds it; pick a different 1-2 " +
     "word subject that sets THIS thread apart and call again — a refusal does not spend your rename.\n\n" +
@@ -793,13 +803,77 @@ const TITLE = {
       title: {
         type: "string",
         description:
-          "The thread's name: ONE or TWO words naming its subject, SENTENCE case (capitalize only the " +
+          "The thread's name: ONE or TWO short words naming its subject (camelCase handle at most 16 characters), SENTENCE case (capitalize only the " +
           "first word and proper nouns — \"Queue focus\", never \"Queue Focus\"), distinct from every " +
           "other open thread's name. No trailing period, no ticks, no issue-body quoting. Spell every " +
           "product, file and identifier the way the PROJECT spells it, not the way the prompt did.",
       },
     },
     required: ["title"],
+  },
+}
+
+// THREAD-TO-THREAD, BY HANDLE. The board shows every thread under a camelCase handle (`shellBudgets`), and
+// the human points one thread at another with it: "ask @shellBudgets", "reconcile with @focusMode". Two
+// tools, one protocol: READ first (free, wakes nobody); MESSAGE when reading is not enough, with
+// `await_reply` when you need the answer before you can go on — that parks you until it comes.
+const READ_THREAD = {
+  name: "read_thread",
+  description:
+    "READ ANOTHER THREAD in this project by its handle — the camelCase name the board shows it under " +
+    "(`shellBudgets`, `focusMode`). The human writes these as `@shellBudgets`: \"ask @shellBudgets about " +
+    "this\", \"reconcile with @focusMode\". Returns that thread's original request, its status line, " +
+    "whether it is running, resting or done, its last few messages (its approach, and its handoff when it " +
+    "is resting) and the files it edited.\n\n" +
+    "ALWAYS READ BEFORE YOU MESSAGE: this wakes nobody and costs the other thread nothing, and it usually " +
+    "answers \"what is @x doing, how, and what did it change\" on its own. For the diff itself, read the " +
+    "files it lists or `git log`. It reaches finished threads too. A handle that names nothing is answered " +
+    "with the handles that exist.",
+  inputSchema: {
+    type: "object",
+    properties: {
+      handle: { type: "string", description: "The other thread's handle, with or without the `@` — any casing." },
+    },
+    required: ["handle"],
+  },
+}
+
+const MESSAGE_THREAD = {
+  name: "message_thread",
+  description:
+    "SEND A MESSAGE TO ANOTHER OPEN THREAD in this project, by handle (`@shellBudgets`) — to ask it a " +
+    "question, to tell it what you are doing and how, or to agree who changes what. It arrives in that " +
+    "thread's conversation signed with THIS thread's handle, joining its current turn if it is working and " +
+    "waking it if it is resting. Nothing reaches the human.\n\n" +
+    "THE PROTOCOL:\n" +
+    "- ASKING, and you need the answer before you can go on → `await_reply: true`. You are PARKED until " +
+    "that thread messages you back (or `for` runs out, default 1h), so rest right after, with nothing " +
+    "else to sign off: the wait is registered like a timer and shows in `activity`. Its answer arrives as " +
+    "a message of its own and ends the wait.\n" +
+    "- ASKING, but you have other work → leave `await_reply` off and keep working; the answer still " +
+    "arrives as a message.\n" +
+    "- TELLING (context, your approach, a heads-up that you are changing a shared file) → no " +
+    "`await_reply`. The other thread answers only if it has something to say.\n" +
+    "- ANSWERING a message you received → message its sender back. When the sender is waiting on you, " +
+    "its message says so; answer it promptly, even if only to say you cannot help.\n\n" +
+    "`read_thread` FIRST — often it already answers the question. Write each message to stand alone: " +
+    "the other thread has none of your context. Never reply just to acknowledge. A finished thread cannot " +
+    "be messaged (read it instead). Messages between two threads are capped per hour.",
+  inputSchema: {
+    type: "object",
+    properties: {
+      handle: { type: "string", description: "The other thread's handle, with or without the `@` — any casing." },
+      message: { type: "string", description: "What to tell or ask it, self-contained." },
+      await_reply: {
+        type: "boolean",
+        description: "Park this thread until that thread answers. Use when you need the answer before you can go on.",
+      },
+      for: {
+        type: "string",
+        description: "With `await_reply`: how long to wait for the answer, as a duration — `30m`, `2h` (default 1h, max 24h). If it runs out you are woken to decide what to do without it.",
+      },
+    },
+    required: ["handle", "message"],
   },
 }
 
@@ -858,7 +932,7 @@ const UNLINK = {
 // WATCH_ISSUE rides at the END (2026-09-14): the tool list is read by position in frizz-mcp.test.ts, and a
 // worker's runtime reads it by name, so the order costs nothing and appending breaks nothing.
 // EXTEND_SHELL is appended after it for the same reason (2026-09-29).
-const TOOLS = [SPAWN_THREAD, GOAL, TIMER, WATCH_PR, WATCH, UNWATCH, ASK, UNASK, DONE, TITLE, ACTIVITY, LINK, UNLINK, WATCH_ISSUE, EXTEND_SHELL]
+const TOOLS = [SPAWN_THREAD, GOAL, TIMER, WATCH_PR, WATCH, UNWATCH, ASK, UNASK, DONE, TITLE, ACTIVITY, LINK, UNLINK, WATCH_ISSUE, EXTEND_SHELL, READ_THREAD, MESSAGE_THREAD]
 
 /** @type {Record<string, (args: Record<string, unknown>) => Promise<string>>} */
 const HANDLERS = {
@@ -877,6 +951,58 @@ const HANDLERS = {
   [LINK.name]: link,
   [UNLINK.name]: unlink,
   [EXTEND_SHELL.name]: extendShell,
+  [READ_THREAD.name]: readThread,
+  [MESSAGE_THREAD.name]: messageThread,
+}
+
+/** The `read_thread` handler: another thread's request, status, approach and newest message, by handle.
+ * @param {Record<string, unknown>} args @returns {Promise<string>} */
+async function readThread(args) {
+  // `to` is accepted too: it is the name a worker reaches for first (seen on a real worker, 2026-09-29).
+  const handle = typeof args.handle === "string" ? args.handle.trim() : typeof args.to === "string" ? args.to.trim() : ""
+  if (!handle) throw new Error("`handle` is required — the other thread's camelCase name, e.g. `shellBudgets`")
+  const r = (await callRpc("readThread", { slug: threadSlug(), handle }))?.result
+  if (!r?.found) return `No thread is called ${handle}.${knownLine(r?.known)}`
+  const state = r.state === "done" ? "done" : r.state === "resting" ? "resting (not working right now)" : "running (mid-turn)"
+  return [
+    `@${r.handle} — ${state}${r.status ? `\nStatus: ${r.status}` : ""}`,
+    r.request ? `\n## Its request\n\n${r.request}` : "",
+    r.earlier?.length ? `\n## Its earlier messages, oldest first\n\n${r.earlier.join("\n\n---\n\n")}` : "",
+    r.latest ? `\n## Its newest message${r.latestAt ? ` (${r.latestAt})` : ""}\n\n${r.latest}` : "\nIt has not said anything yet.",
+    r.editedFiles?.length ? `\n## Files it edited\n\n${r.editedFiles.map((f) => `- ${f}`).join("\n")}` : "",
+  ].filter(Boolean).join("\n")
+}
+
+/** The `message_thread` handler: deliver a message into another open thread's conversation, optionally
+ * parking this one until it answers.
+ * @param {Record<string, unknown>} args @returns {Promise<string>} */
+async function messageThread(args) {
+  const handle = typeof args.handle === "string" ? args.handle.trim() : typeof args.to === "string" ? args.to.trim() : ""
+  const message = typeof args.message === "string" ? args.message.trim() : ""
+  if (!handle) throw new Error("`handle` is required — the other thread's camelCase name, e.g. `shellBudgets`")
+  if (!message) throw new Error("`message` is required")
+  const awaitReply = args.await_reply === true || args.await_reply === "true"
+  const body = { slug: threadSlug(), handle, message, ...(awaitReply ? { awaitReply: true } : {}), ...(awaitReply && typeof args.for === "string" && args.for.trim() ? { for: args.for.trim() } : {}) }
+  const r = (await callRpc("messageThread", body))?.result
+  if (!r?.sent) return `Not sent — ${r?.refusal ?? "Frizz did not accept it."}${knownLine(r?.known)}`
+  const answered = r.answered ? ` It answers the message @${r.handle} was waiting on, so that thread is no longer parked on you.` : ""
+  if (r.timerId) {
+    return (
+      `Sent to @${r.handle}, signed @${r.from}, and you are now WAITING on its answer (${r.timerId}, until ` +
+      `${r.waitUntil}).${answered} Rest now unless you have other work — the wait holds your thread and needs ` +
+      "no fence, and the answer arrives as a message of its own and ends the wait. If none comes in time, " +
+      `that timer wakes you to decide. \`timer\` with \`action: "cancel"\` and \`id: "${r.timerId}"\` stops waiting.`
+    )
+  }
+  return (
+    `Sent to @${r.handle}, signed @${r.from}.${answered} Any answer arrives as a message of its own — keep ` +
+    "working. (If you need the answer before you can go on, send with `await_reply: true` instead.)"
+  )
+}
+
+/** @param {unknown} known @returns {string} */
+function knownLine(known) {
+  return Array.isArray(known) && known.length ? `\n\nThreads in this project: ${known.join(", ")}` : ""
 }
 
 /** The `extend_shell` handler: move one background shell's runtime budget to `for` from now.
@@ -1201,6 +1327,12 @@ async function spawnThread(args) {
   const body = { prompt, model, effort }
   if (typeof args.title === "string" && args.title.trim()) body.title = args.title.trim()
   if (args.backend === "claude" || args.backend === "codex") body.backend = args.backend
+  // A spin-off names the request it fulfils, and the CALLER — read from our own identity, never from the
+  // arguments — so the server can refuse a request that belongs to another thread.
+  if (typeof args.spinoff === "string" && args.spinoff.trim()) {
+    body.spinOff = args.spinoff.trim()
+    body.spinOffFrom = threadSlug()
+  }
 
   const port = serverLockPort()
   const controller = new AbortController()

@@ -13,6 +13,8 @@
 //   - DO NOT re-add a paragraph explaining WHY a rule exists. Put the why in a comment here.
 //   - DO NOT restate a rule a hook, tool description, or agent profile already enforces.
 //   - A new rule earns its tokens only if a worker measurably gets it wrong without it.
+import { THREAD_HANDLE_MAX_CHARS } from "@frizz/shared"
+
 export type BackendKind = "claude" | "codex" | "acp"
 
 const INLINE: Record<BackendKind, Record<"SESSION_KIND" | "RESUME_CMD", string>> = {
@@ -610,13 +612,32 @@ Your thread reaches the board wearing a name Frizz minted from the raw prompt be
 anything, so it carries the operator's shorthand and their typos. Once you have oriented — read the
 issue, opened the code, found the bug — call \`mcp__frizz__title\` with the thread's real name: ONE or
 TWO words naming its SUBJECT, not the action (\`Shell budgets\`, never \`Fix the shell budget default\`),
-sentence case, spelled the way the PROJECT spells it rather than the way the prompt did.
+sentence case, spelled the way the PROJECT spells it rather than the way the prompt did. Keep it SHORT:
+the human types it as a camelCase handle (\`@shellBudgets\`), and Frizz refuses one past
+${THREAD_HANDLE_MAX_CHARS} characters.
 
 Once, and not on arrival. A name you register before you understand the task is the same guess you are
 replacing, and after your one rename the name is stable. It must differ from every other open thread's
 name: Frizz refuses a duplicate and names the thread holding it, so pick another subject. A human rename
 outranks yours, and Frizz reports that rather than failing. What is happening NOW is not the name —
-Frizz keeps a separate status line for that.`
+Frizz keeps a separate status line for that.
+
+## Other threads, by handle
+
+The board shows every thread under a camelCase HANDLE (\`Shell budgets\` shows as \`shellBudgets\`), and
+the human points you at another thread with it: "ask @shellBudgets about this", "reconcile with
+@focusMode". Threads talk to each other through two tools, and only these two:
+
+- **\`mcp__frizz__read_thread\`** — its request, status, last few messages (its approach and its handoff)
+  and edited files. It wakes nobody, so it is ALWAYS the first move, and it often answers the question.
+- **\`mcp__frizz__message_thread\`** — a message into its conversation, signed with your handle. To ASK
+  and wait for the answer, pass \`await_reply: true\` and rest: you are parked until it answers (or the
+  wait runs out and wakes you), with nothing else to sign off. To TELL — your approach, a file you are
+  about to change — send without it and keep working.
+
+A message from another thread arrives headed with its handle and never reached the human. If it asks
+something, answer with \`message_thread\` — promptly when it says the sender is waiting on you, even if only
+to say you cannot help. Never reply just to acknowledge.`
 
 // LEGACY NAME, current behaviour. This block and `scratchpadOrientation` still say "scratchpad"; both
 // describe the scratch DIRECTORY. (`ThreadView.scratchpadPath` and the `threadScratchpad` RPC went with
@@ -839,8 +860,9 @@ first-line comment in this form:
 \`<!-- frizz title="Queue focus" -->\`
 
 Replace the example with the thread's name: ONE or TWO words naming the SUBJECT of the task, not the
-action (\`Queue focus\`, not \`Fix queue focus\`), different from every name your developer instruction
-lists as taken. Use SENTENCE case — capitalize only the first word and any proper nouns; never
+action (\`Queue focus\`, not \`Fix queue focus\`), short enough that its camelCase handle
+(\`queueFocus\`) is at most ${THREAD_HANDLE_MAX_CHARS} characters, and different from every name your
+developer instruction lists as taken. Use SENTENCE case — capitalize only the first word and any proper nouns; never
 Title-Case Every Word. Put the comment on its own first line with nothing before it. Continue the message normally after it. Emit it exactly once and
 never again on later turns. Frizz strips this comment from visible chat and uses only its
 quoted title while the thread still has an automatic title; a human rename always wins. Never use an H1

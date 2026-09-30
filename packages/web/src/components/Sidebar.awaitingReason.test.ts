@@ -78,7 +78,7 @@ test("a fence frizz did not park on swaps the state word and nothing else", () =
 
 test("…and NONE of it reaches the row, which is a title and nothing else", () => {
   const html = markup(thread([{ kind: "pr", value: "acme/app#391" }, ...WAIT], {}, REASON))
-  assert.match(html, /Ship the resolver/, "the title is what a row is")
+  assert.match(html, /Resolver/, "the title (shown as its handle, `shipTheResolverFix`) is what a row is")
   assert.doesNotMatch(html, new RegExp(REASON.slice(0, 30)), "no reason under it")
   assert.doesNotMatch(html, /acme\/app#391/, "no PR ref under it either — the popover has that now")
 })

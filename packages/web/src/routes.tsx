@@ -1,5 +1,5 @@
-import { useEffect, useLayoutEffect, useState } from "react"
-import { Navigate, Outlet, createBrowserRouter, useLocation, useNavigate, useParams } from "react-router"
+import { useContext, useEffect, useLayoutEffect, useState } from "react"
+import { Navigate, Outlet, UNSAFE_ViewTransitionContext, createBrowserRouter, useLocation, useNavigate, useParams } from "react-router"
 import { useQuery } from "@tanstack/react-query"
 import { App } from "./App.tsx"
 import { ProjectRail, RAIL_INSET_CLASS } from "./components/ProjectRail.tsx"
@@ -9,14 +9,14 @@ import { TooltipProvider } from "./components/Tooltip.tsx"
 import { GithubHovercards } from "./components/GithubHovercards.tsx"
 import { Toaster } from "./components/Toaster.tsx"
 import { KeyboardLayer } from "./components/KeyboardShortcuts.tsx"
-import { applyLocation, registerNavigate } from "./lib/router.ts"
+import { applyLocation, noteRouterTransition, primeReturnFromFullscreen, registerNavigate } from "./lib/router.ts"
 import { setHomeFocus } from "./lib/base-path.ts"
 import { defaultCrossProjectFocus, useCrossProjectPick } from "./lib/crossProject.ts"
 import { lastFocusedProject, rememberLastFocusedProject, rememberTabView, resolveView, retiredProjectHref, tabView, viewAt, viewInSearch, viewSearch, type PageView } from "./lib/pageView.ts"
 import type { ProjectCard } from "@frizz/shared"
 import { rpc } from "./api/rpc.ts"
 import { feedIsBoundTo, rebindProject } from "./api/socket.ts"
-import { noteStandaloneThreadRender, primeFullscreenReturn, resetProjectState, showToast, store } from "./store.ts"
+import { noteStandaloneThreadRender, resetProjectState, showToast, store } from "./store.ts"
 import { useProjectRailVisible } from "./lib/projectRail.ts"
 
 // THE ROUTE TREE — and, more to the point, the LAYOUT that outlives a navigation.
@@ -144,7 +144,8 @@ function CrossProjectPage() {
   if (drawerSlug === undefined) setHomeFocus(slug)
   useProjectBinding(slug)
   useRouteToStore()
-  useState(() => primeFullscreenReturn(thread))
+  useRouterTransition()
+  useState(() => primeReturnFromFullscreen(thread))
   if (drawerSlug === undefined && home.kind === "error") {
     return (
       <div className="flex min-h-screen items-center justify-center bg-bg px-6 text-center text-[13px] text-muted">
@@ -264,6 +265,16 @@ function useRouteToStore() {
   }, [location.pathname])
 }
 
+// Tells lib/router's store → URL writer when react-router's view transition starts and finishes, so it
+// holds its write until the transition is over (router.ts `routerTransitioning`). A LAYOUT effect: the
+// way back from /full runs its page's passive effects a second or more after the page is on screen, and
+// the writer has to know before that. Both shells report it — the transition starts on the page being
+// left, which on the way back is /full.
+function useRouterTransition(): void {
+  const { isTransitioning } = useContext(UNSAFE_ViewTransitionContext)
+  useLayoutEffect(() => noteRouterTransition(isTransitioning), [isTransitioning])
+}
+
 // Hands react-router's navigate to lib/router's module-level `spaNavigate`, for the leaves that must
 // change the URL without router context (see registerNavigate). Both shells call it: each is the root
 // of its own tree, and the fullscreen page has no RootLayout above it.
@@ -279,6 +290,7 @@ function useRegisterNavigate(): void {
 function StandaloneRoute() {
   const { thread, slug } = useParams()
   useRegisterNavigate()
+  useRouterTransition()
   useProjectBinding(slug)
   // Any drawer stack left by the page we came from is cleared HERE, on this route's first render —
   // deliberately NOT in the fullscreen door's click handler, and deliberately not in an effect. The

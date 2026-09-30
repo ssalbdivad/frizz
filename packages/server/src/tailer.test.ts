@@ -3769,7 +3769,7 @@ test("tailer: a real-shaped first Codex title comment persists its title and rep
   const h = harness()
   const codexHome = tmp("frizz-codexhome-")
   const codexId = "019f4e0c-1111-2222-3333-444455556666"
-  const final = '<!-- frizz title="Fix queue focus" -->\nVisible answer'
+  const final = '<!-- frizz title="Queue focus" -->\nVisible answer'
   writeCodexRollout(codexHome, codexId, [
     cxMeta(codexId, "/x"),
     cxTaskStarted,
@@ -3786,16 +3786,16 @@ test("tailer: a real-shaped first Codex title comment persists its title and rep
 
   const first = codexTailer(h, codexHome)
   first.tick()
-  assert.equal(first.get("t")?.aiTitle, "Fix queue focus")
+  assert.equal(first.get("t")?.aiTitle, "Queue focus")
   assert.equal(first.get("t")?.lastAssistant, "Visible answer")
-  assert.equal(h.storage.getSession("t")?.title, "Fix queue focus", "prime persists the transcript-backed title")
+  assert.equal(h.storage.getSession("t")?.title, "Queue focus", "prime persists the transcript-backed title")
   assert.equal(h.storage.getSession("t")?.title_auto, 1, "automatic provenance remains distinct from a human rename")
 
   const restarted = codexTailer(h, codexHome)
   restarted.tick()
-  assert.equal(restarted.get("t")?.aiTitle, "Fix queue focus")
+  assert.equal(restarted.get("t")?.aiTitle, "Queue focus")
   assert.equal(restarted.get("t")?.lastAssistant, "Visible answer", "full replay keeps the transport line hidden")
-  assert.equal(h.storage.getSession("t")?.title, "Fix queue focus")
+  assert.equal(h.storage.getSession("t")?.title, "Queue focus")
 })
 
 test("tailer: an omitted real-shaped Codex final retains the bounded dispatch fallback rather than an internal slug", () => {

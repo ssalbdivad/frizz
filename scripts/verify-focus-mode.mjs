@@ -142,9 +142,13 @@ try {
   })
 
   // ── the list's bands ───────────────────────────────────────────────────────────────────────────────
-  await step("the list names its loud bands, only where they have rows", async () => {
+  await step("the loud bands carry no names, and their rows stand in order", async () => {
     const bands = await page.$$eval(`[data-xq-rail-project="${A.id}"] > [data-xq-band-label]`, (els) => els.map((el) => el.getAttribute("data-xq-band-label")))
-    check("the focused project's bands are named in order", bands.join() === ["pinned", "ready", "working"].filter((b) => bands.includes(b)).join() && bands.includes("ready"), bands.join(", "))
+    check("Pinned, Ready and Working carry no name", bands.length === 0, bands.join(", ") || "(none)")
+    const rows = await page.$$eval(`[data-xq-rail-project="${A.id}"] > [data-xq-band]`, (els) => [...new Set(els.map((el) => el.getAttribute("data-xq-band")))])
+    check("…and their rows still stand in order", rows.join() === ["pinned", "ready", "working"].filter((b) => rows.includes(b)).join() && rows.includes("pinned") && rows.includes("ready") && rows.includes("working"), rows.join(", "))
+    const marked = await page.$$eval(`[data-xq-rail-project="${A.id}"] > [data-xq-band="pinned"]`, (els) => els.every((el) => el.querySelector("[data-rail-pin-mark]")))
+    check("…and every pinned row wears its pin", marked)
     const empty = await page.$$eval(`[data-xq-rail-project] > [data-xq-band-label]`, (labels) => labels.filter((label) => !label.nextElementSibling?.matches("[data-xq-thread-row]")).map((l) => l.getAttribute("data-xq-band-label")))
     check("…and no name stands over an empty band", empty.length === 0, empty.join(", "))
   })
@@ -152,7 +156,7 @@ try {
     const group = `[data-xq-rail-project="${A.id}"]`
     const opened = () => page.$$eval(`${group} [data-xq-drill-band]`, (els) => els.map((el) => el.getAttribute("data-xq-drill-band")))
     check("every quiet band starts collapsed", (await opened()).length === 0, (await opened()).join(", "))
-    const toggles = await page.$$eval(`${group} [data-xq-quiet-footer] [data-xq-quiet-count]`, (els) => els.map((el) => el.getAttribute("data-xq-quiet-count")))
+    const toggles = await page.$$eval(`[data-xq-project-row="${A.id}"] [data-xq-quiet-count]`, (els) => els.map((el) => el.getAttribute("data-xq-quiet-count")))
     if (!toggles.includes("done") || !toggles.includes("snoozed")) throw new Error(`the seed needs Snoozed and Done here; counts: ${toggles.join(", ")}`)
     await clickSettled(page, `${group} [data-xq-quiet-count="done"]`)
     await page.waitForSelector(`${group} [data-xq-drill-band="done"] [data-sidebar-item]`, { timeout: 8000 })
@@ -172,7 +176,7 @@ try {
   })
 
   // ── the cord strings the names ─────────────────────────────────────────────────────────────────────
-  await step("the project's cord runs unbroken through its band names", async () => {
+  await step("the project's cord runs unbroken through its rows", async () => {
     // ThreadConnector's own rule (readRail): the square, each band name and each row are strung while they
     // TOUCH and each holds an icon. A name that broke the run, or held no glyph, would cut the cord there.
     const run = await page.$eval(`[data-xq-rail-project="${A.id}"]`, (group) => {
@@ -187,7 +191,7 @@ try {
       }
       return { strung, links: links.length, names: group.querySelectorAll(":scope > [data-xq-band-label]").length }
     })
-    check("the cord strings the square, every band name and every row", run.names > 0 && run.strung === run.links, `${run.strung} of ${run.links} strung, ${run.names} names`)
+    check("the cord strings the square, any band name and every row", run.links > 1 && run.strung === run.links, `${run.strung} of ${run.links} strung, ${run.names} names`)
     // And the connector drew it: its strands reach from the square to the last row.
     const span = await page.evaluate((id) => {
       const d = document.querySelector("[data-thread-cords] path")?.getAttribute("d") ?? ""
@@ -201,7 +205,7 @@ try {
 
   // ── drawers go home to the tab's view ──────────────────────────────────────────────────────────────
   await step("a thread drawer closes back to the focused view", async () => {
-    const row = `[data-xq-rail-project="${A.id}"] > [data-xq-band-label="working"] ~ [data-sidebar-item] button`
+    const row = `[data-xq-rail-project="${A.id}"] > [data-xq-band="working"] button`
     if (!(await page.$(row))) throw new Error("no Working row to open (reseed, or respin the seeded workers)")
     await clickSettled(page, row)
     await page.waitForFunction(() => /^\/all\/[^/]+\/thread\/[^/]+$/.test(location.pathname), { timeout: 8000 })

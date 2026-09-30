@@ -8,6 +8,7 @@ import { copyTextToClipboard } from "../lib/clipboard.ts"
 import { dismissChildOp } from "../lib/dismissChildOp.ts"
 import { liveAgeSince } from "../lib/durationLabels.ts"
 import { useNowMs } from "../lib/liveClock.ts"
+import { displayTitle } from "../groups.ts"
 import { abbreviateHome } from "../lib/paths.ts"
 import { shellBudgetLabel } from "../lib/shellBudget.ts"
 import { terminalFailed, terminalOf, terminalStateLabel } from "../lib/threadTerminals.ts"
@@ -139,7 +140,7 @@ function HumanTerminalSheet({ id, slug, terminalId, depth, widthDepth }: { id: n
           <div className="@container shrink-0">
             <SheetHeader
               title={terminal?.command ?? "Terminal"}
-              subtitle={terminal?.cwd ? <TerminalSubtitle cwd={terminal.cwd} checkout={terminal.checkout} homeDir={board?.homeDir} /> : thread?.title}
+              subtitle={terminal?.cwd ? <TerminalSubtitle cwd={terminal.cwd} checkout={terminal.checkout} homeDir={board?.homeDir} /> : thread ? displayTitle(thread) : undefined}
               icon={<SquareTerminal aria-hidden size={14} className="shrink-0 text-muted-60" data-terminal-owner="human" />}
               meta={terminal ? <TerminalStateMeta terminal={terminal} /> : undefined}
               actions={terminal ? (

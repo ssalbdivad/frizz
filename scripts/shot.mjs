@@ -11,6 +11,7 @@
 //   --hover:  park the pointer on that element (after --before, before the shot), so a surface that
 //             reveals on CSS :hover — a rail row's action strip — is photographed as the eye sees it.
 //             No in-page expression can enter that state; only a real pointer can. Implies --mouse.
+//   --hover-wait=<ms>: rest the pointer this long after --hover before shooting, for a delayed tooltip.
 //   --mouse:  render as a desktop with a mouse — `(hover: hover)`, fine pointer — instead of headless
 //             Chrome's touch screen (lib/mouse-pointer.mjs). Without it every Tailwind hover: style is
 //             dead and the app's `(hover: none)` touch rules apply.
@@ -63,6 +64,8 @@ try {
     await page.evaluate(expr)
   }
   if (flags.hover) await page.hover(flags.hover)
+  // A tip that opens on a hover DELAY (the rail row's status) needs the pointer to rest before the shot.
+  if (flags.hover && flags["hover-wait"]) await new Promise((r) => setTimeout(r, Number(flags["hover-wait"])))
   if (out) {
     const clip = flags.clip
       ? await page.evaluate((sel, pad) => {

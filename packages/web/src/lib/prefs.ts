@@ -40,6 +40,7 @@ function coerceQueueOrder(v: unknown, fallback: QueueDirection): QueueDirection 
 // toggle that browser just made.
 interface RedefaultMarkers {
   diffsRedefaulted?: boolean
+  snoozeRedefaulted?: boolean
 }
 
 export function parseStoredPrefs(raw: string | null): Prefs {
@@ -51,6 +52,7 @@ export function parseStoredPrefs(raw: string | null): Prefs {
     railFilesCollapsed: false,
     keybindings: {},
     diffsRedefaulted: true,
+    snoozeRedefaulted: true,
   }
   try {
     if (!raw) return fallback
@@ -62,6 +64,13 @@ export function parseStoredPrefs(raw: string | null): Prefs {
     if (!stored.diffsRedefaulted) {
       stored.compactDiffs = true
       stored.diffsRedefaulted = true
+    }
+    // ONE-TIME migration (2026-09-29): the default moved from "1d" to "until tomorrow". Every pref
+    // write persists the whole blob, so a stored "1d" is almost always the old default riding along
+    // with some other toggle rather than a pick — re-default it once. A later deliberate "1d" sticks.
+    if (!stored.snoozeRedefaulted) {
+      if (stored.snoozePreset === "1d") stored.snoozePreset = "tomorrow"
+      stored.snoozeRedefaulted = true
     }
     return {
       ...fallback,

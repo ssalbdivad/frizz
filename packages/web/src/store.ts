@@ -332,7 +332,9 @@ export function noteStandaloneThreadRender(slug: string): void {
   lastStandaloneSlug = slug
 }
 
-export function primeFullscreenReturn(routedSlug: string | undefined): void {
+/** Whether the page now opens on the drawer the address names — the router takes that address as absorbed
+ *  (lib/router.ts primeReturnFromFullscreen). */
+export function primeFullscreenReturn(routedSlug: string | undefined): boolean {
   // The forward door started its morph from the visible part of the drawer; this render is inside the
   // REVERSE transition's update callback, so dropping that here — before the browser builds the reverse
   // leg's pseudo-elements — is what hands the return morph back to the browser's own keyframes.
@@ -340,7 +342,7 @@ export function primeFullscreenReturn(routedSlug: string | undefined): void {
   disarmFullscreenMorph()
   const slug = lastStandaloneSlug
   lastStandaloneSlug = null
-  if (!slug) return
+  if (!slug) return false
   // Name the drawer this slug renders as — ThreadSheet checks this.
   // Cleared well past the 200ms animation: clearing in an effect could beat the new-state capture
   // and un-name the element mid-transition.
@@ -356,11 +358,12 @@ export function primeFullscreenReturn(routedSlug: string | undefined): void {
   // QUEUED thread returns to its drawer too. It was skipped until 2026-09-28, for the project board,
   // where a queued thread's surface was its card; on the one page the card is a summary and the drawer
   // the thread, so the skip only sent the return one effect late, after the morph had nothing to land on.
-  if (routedSlug !== slug || !store.board) return
+  if (routedSlug !== slug || !store.board) return false
   const route = resolveThreadRoute(store.board, slug)
-  if (route.kind !== "found") return
-  if (store.drawers.some((d) => d.kind === "thread" && d.slug === slug && !d.closing)) return
+  if (route.kind !== "found") return false
+  if (store.drawers.some((d) => d.kind === "thread" && d.slug === slug && !d.closing)) return true
   pushDrawer("thread", slug, { routed: true })
+  return true
 }
 
 // Open a file that lives on disk in Frizz's OWN reader — a `.md` rendered, anything else as source —

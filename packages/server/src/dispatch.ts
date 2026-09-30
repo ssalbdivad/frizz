@@ -28,7 +28,7 @@ export { WORKER_MAX_WEB_SEARCHES, WORKER_MAX_SUBAGENTS, WORKER_MAX_CONCURRENT_SU
 import { resolveWorkerPluginDir } from "./worker-plugin-dir.ts"
 import { buildWorkerPrompt } from "./workerPrompt.ts"
 import { codexSandbox, codexFirstOutputTitleInstructions } from "./backend/codex.ts"
-import type { ThreadNamer } from "./thread-names.ts"
+import { threadNameProblem, type ThreadNamer } from "./thread-names.ts"
 import type { CodexAppServerBridge } from "./backend/codex-app-server.ts"
 import type { AcpBridge } from "./backend/acp-bridge.ts"
 import { acpAgentIdFromModel } from "./backend/acp-agents.ts"
@@ -908,7 +908,9 @@ export function createDispatcher(deps: DispatchDeps): Dispatcher {
       // is an SDK stream-json session, the mode every broker worker runs in.)
       // A CALLER's title (a parent's `spawn_thread`, the GitHub batch) is a name like any other, so it is
       // held to the project's uniqueness rule here.
-      const callerTitle = input.title?.trim()
+      // So is its length: a caller's name too long to type as a handle is dropped, and the thread is minted
+      // a name like any other — a spawn_thread title is where `@spinoffFeatureScopeAndUi` came from.
+      const callerTitle = input.title?.trim() && !threadNameProblem(input.title.trim()) ? input.title.trim() : undefined
       const title = (callerTitle && deps.threadNamer ? deps.threadNamer.distinct(callerTitle, input.prompt, input.slug) : callerTitle) ||
         fallbackTitle(input.prompt)
       const mintName = (slug: string, sessionId: string) => {
@@ -979,7 +981,7 @@ export function createDispatcher(deps: DispatchDeps): Dispatcher {
             exited: 0,
             archived: 0,
             rested_at: null,
-            title_auto: input.title?.trim() ? 0 : 1,
+            title_auto: callerTitle ? 0 : 1,
             title_locked: 0, // a caller's hard-coded title is not a human's — the worker may rename it
             title: registryTitle,
             state: "open",
@@ -1040,7 +1042,7 @@ export function createDispatcher(deps: DispatchDeps): Dispatcher {
             exited: 0,
             archived: 0,
             rested_at: null,
-            title_auto: input.title?.trim() ? 0 : 1,
+            title_auto: callerTitle ? 0 : 1,
             title_locked: 0,
             title: registryTitle,
             state: "open",
@@ -1106,7 +1108,7 @@ export function createDispatcher(deps: DispatchDeps): Dispatcher {
             exited: 0,
             archived: 0,
             rested_at: null,
-            title_auto: input.title?.trim() ? 0 : 1,
+            title_auto: callerTitle ? 0 : 1,
             title_locked: 0, // a caller's hard-coded title is not a human's — the worker may rename it
             title: registryTitle,
             state: "open",

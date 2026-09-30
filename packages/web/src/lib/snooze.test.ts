@@ -16,11 +16,11 @@ import {
   snoozePresetLabel,
 } from "./snooze.ts"
 
-test("snooze preset metadata has a stable one-day default and sentence-case labels", () => {
-  assert.equal(DEFAULT_SNOOZE_PRESET, "1d")
+test("snooze preset metadata defaults to tomorrow and keeps sentence-case labels", () => {
+  assert.equal(DEFAULT_SNOOZE_PRESET, "tomorrow")
   // The DURATION labels are the house duration grammar (`1d`, not "1 day") — the maintainer collapsed
   // every duration reading in the app onto one spelling on 2026-08-31.
-  assert.equal(snoozePresetLabel(DEFAULT_SNOOZE_PRESET), "1d")
+  assert.equal(snoozePresetLabel("1d"), "1d")
   // The calendar preset is not a duration, so it keeps its word — and its sentence case, because
   // "Tomorrow" was the only capitalized entry in the menu and it capitalized mid-phrase in the button.
   assert.equal(snoozePresetLabel("tomorrow"), "tomorrow")
@@ -47,6 +47,21 @@ test("snooze presets distinguish exact duration from tomorrow's local wall clock
     [tomorrow.getFullYear(), tomorrow.getMonth(), tomorrow.getDate(), tomorrow.getHours(), tomorrow.getMinutes()],
     [2027, 0, 1, 9, 0],
   )
+})
+
+// Before the 5am rollover the operator is still in last night, so "tomorrow" is the day about to start.
+test("tomorrow before the 5am rollover means this morning, and the next day from 5am on", () => {
+  const wake = (h: number, m = 0) => {
+    const d = new Date(snoozePresetInstant("tomorrow", new Date(2026, 8, 30, h, m).getTime()))
+    return [d.getDate(), d.getHours(), d.getMinutes()]
+  }
+  assert.deepEqual(wake(0, 0), [30, 9, 0])
+  assert.deepEqual(wake(2, 30), [30, 9, 0])
+  assert.deepEqual(wake(4, 59), [30, 9, 0])
+  // Sep 30 + 1 is Oct 1.
+  assert.deepEqual(wake(5, 0), [1, 9, 0])
+  assert.deepEqual(wake(8, 0), [1, 9, 0])
+  assert.deepEqual(wake(23, 59), [1, 9, 0])
 })
 
 test("calendar tomorrow stays at 9 AM while exact-day snooze crosses a DST boundary", () => {

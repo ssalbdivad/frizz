@@ -361,7 +361,11 @@ try {
     await page.waitForSelector("[data-drawer-layer]", { timeout: 8000 })
     await sleep(600)
     await closeDrawer()
-    await page.waitForFunction(() => location.pathname === "/", { timeout: 8000 })
+    // The way back from /full is a view transition, and the close is written to the address only once it
+    // has finished (lib/router.ts `routerTransitioning`) — seconds at a load average of 30+. Before that
+    // fix an Escape inside the transition was undone outright: the drawer re-opened and this wait timed
+    // out, 2 of 3 loaded runs (~37, 2026-09-29), taking the next step down with it.
+    await page.waitForFunction(() => location.pathname === "/", { timeout: 20_000 })
     await page.waitForSelector("[data-xq-card]")
     check("fullscreen's way out leads back to the drawer it came from, and the drawer's to the page", back === drawer, `/full's way out → ${back}`)
   })

@@ -34,6 +34,8 @@ import type {
   AdoptThreadInput,
   AdoptThreadResult,
   FollowUpInput,
+  SpinOffInput,
+  SpinOffResult,
   UnqueueFollowUpInput,
   UnqueueFollowUpResult,
   DeliverQueuedNowInput,
@@ -55,6 +57,10 @@ import type {
   SetOwnThreadRecurringPromptResult,
   SetOwnThreadTitleInput,
   SetOwnThreadTitleResult,
+  ReadThreadInput,
+  ReadThreadResult,
+  MessageThreadInput,
+  MessageThreadResult,
   GetOwnThreadRecurringPromptInput,
   OwnThreadRecurringPromptResult,
   SetOwnThreadStopHookInput,
@@ -182,6 +188,7 @@ export interface Api {
   // indefinitely by a server-side wait, and it runs inside a per-slug FIFO — see
   // lib/eagerComposerSubmission.ts DELIVERY_SEND_TIMEOUT_MS for what that costs without one.
   followUp(input: FollowUpInput, opts?: RpcCallOpts): Promise<void>
+  spinOff(input: SpinOffInput): Promise<SpinOffResult>
   unqueueFollowUp(input: UnqueueFollowUpInput): Promise<UnqueueFollowUpResult>
   // The ↑ on a queued bubble: stop waiting and make the worker read what is already queued. No message
   // payload — see DeliverQueuedNowInput.
@@ -221,6 +228,8 @@ export interface Api {
   // THE WORKER NAMING ITS OWN THREAD, called by `mcp__frizz__title`. Declared here for the drift gate
   // alone — the browser's rename verbs are `renameThread` / `aiRenameThread`, which lock the name.
   setOwnThreadTitle(input: SetOwnThreadTitleInput): Promise<SetOwnThreadTitleResult>
+  readThread(input: ReadThreadInput): Promise<ReadThreadResult>
+  messageThread(input: MessageThreadInput): Promise<MessageThreadResult>
   // THE PR WATCHER REGISTRY, called by `mcp__frizz__watch_pr` rather than by this client. Declared here
   // for the same reason as its neighbours: rpc-contract.ts proves the two procedure NAME SETS are equal,
   // so an RPC the client cannot name is one nothing checks the shape of. No browser call site uses these.
@@ -428,6 +437,7 @@ export const PROCEDURES = {
   dispatch: "mutation",
   adoptThread: "mutation",
   followUp: "mutation",
+  spinOff: "mutation",
   unqueueFollowUp: "mutation",
   deliverQueuedNow: "mutation",
   setThreadPermission: "mutation",
@@ -444,6 +454,8 @@ export const PROCEDURES = {
   setThreadRecurringPrompt: "mutation",
   setOwnThreadRecurringPrompt: "mutation",
   setOwnThreadTitle: "mutation",
+  readThread: "mutation",
+  messageThread: "mutation",
   addOwnPrWatch: "mutation",
   dropOwnPrWatch: "mutation",
   listOwnPrWatches: "mutation",

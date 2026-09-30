@@ -1,5 +1,5 @@
-// ONE QUEUE CARD ON THE CROSS-PROJECT PAGE — a thread of ANY project, whichever project the page is
-// focused on.
+// ONE QUEUE CARD ON THE CROSS-PROJECT PAGE — a thread of ANY project, in either of the page's views:
+// focused on one project, or All projects, where the cards of every project share one queue.
 //
 // It wears the queue card a project's own board drew until 2026-09-28 (TodosView QueueCard): the same
 // bordered, shadowed shell, the same header with the title and its rest time, the human's last message
@@ -17,7 +17,7 @@
 // card's own project explicitly (see the provider stack at the bottom). The board's queue card could not
 // be reused here for exactly that reason: it read its project from the address bar, the store and the
 // page's socket, and on this page all three name the FOCUSED project, which is usually not the card's.
-import { memo, useCallback, useContext, useLayoutEffect, useMemo, useRef, useState, type MouseEvent as ReactMouseEvent, type ReactNode } from "react"
+import { memo, useCallback, useContext, useLayoutEffect, useMemo, useRef, useState, type KeyboardEvent as ReactKeyboardEvent, type MouseEvent as ReactMouseEvent, type ReactNode } from "react"
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import { Check, ChevronRight, Hourglass, RotateCcw } from "lucide-react"
 import { useLocation, useNavigate } from "react-router"
@@ -25,6 +25,7 @@ import { questionsOwed, type AccountBackend, type ThreadView } from "@frizz/shar
 import { projectApiBase, projectRpc } from "../api/rpc.ts"
 import { ThreadProjectScope } from "../api/threadApi.tsx"
 import { displayTitle, offersRetry, queueLabelAt, queueLabelWord } from "../groups.ts"
+import { useMentionCandidates } from "../hooks/useMentionCandidates.ts"
 import { handoffParts, projectMarkdownScope, sameProjectAddress, squareCard, threadKey, type QueuesProject } from "../lib/allQueues.ts"
 import { draftKey, draftStore, useDraftValues } from "../lib/drafts.ts"
 import { rememberFullscreenOrigin } from "../lib/fullscreenHandoff.ts"
@@ -45,7 +46,7 @@ import { ThreadStatusLine } from "./ThreadStatusLine.tsx"
 import { Composer } from "./Composer.tsx"
 import { InteractionStack } from "./InteractionCards.tsx"
 import { AwaitingSubAgentsCard, SubAgentWaitSnoozeItems } from "./AwaitingSubAgentsCard.tsx"
-import { showsSubAgentWait } from "../lib/subAgentWait.ts"
+import { drawsSubAgentWaitCard, showsSubAgentWait } from "../lib/subAgentWait.ts"
 import { useThreadComposerControls } from "../hooks/useThreadComposerControls.tsx"
 import { ExpandThreadLink } from "./ExpandThreadLink.tsx"
 import { HEADER_ICON_CLASS } from "../lib/headerIcon.ts"
@@ -57,6 +58,7 @@ import { RegisteredAnsweringContext, RegisteredAnsweringProvider, RegisteredQues
 import { RestedCard, showsRestedCard } from "./RestedCard.tsx"
 import { LogoutConfirmModal, SignInModal } from "./SignInModal.tsx"
 import { QuietTurnCard, showsQuietTurnCard } from "./QuietTurnCard.tsx"
+import { QueueChildOps } from "./QueueChildOps.tsx"
 import { SnoozeButton } from "./SnoozeButton.tsx"
 import { StateButton } from "./ThreadLifecycleFooter.tsx"
 import { cardProcesses, focusedProject, openProcessDrawer, TerminalPromptPane, ThreadProcessStrip } from "./ThreadTerminals.tsx"
@@ -66,10 +68,13 @@ import { Tooltip } from "./Tooltip.tsx"
 import { BLOCK_RADIUS, BLOCK_RADIUS_INNER_BOTTOM, QUEUE_WRAP, TranscriptCard } from "./TranscriptCard.tsx"
 
 /**
- * WHOSE CARD THIS IS, on its meta line — the page's one queue holds every project's threads, and the lanes
- * that used to say whose they were are gone (lib/allQueues.ts mergedQueue). Given `onChoose` it is a button
- * that filters the queue to the project (the READY header's filter, lib/crossProject.ts setQueueFilter);
- * without it, plain text, for a line that already sits inside a control (the command card's open button).
+ * WHOSE CARD THIS IS, on its meta line — in All projects the page's one queue holds every project's
+ * threads, and the lanes that used to say whose they were are gone (lib/allQueues.ts mergedQueue). A
+ * focused view shows one project's cards, so it draws no chip (AllQueues.tsx passes `chip={!focused}`).
+ * Given `onChoose` it is a button that focuses the page on the project — navigates to its
+ * `/?project=<slug>` view (lib/pageView.ts projectViewHref), the same place the READY header's switcher
+ * goes; it filtered the queue in place until focus mode retired the queue filter on 2026-09-29.
+ * Without it, plain text, for a line that already sits inside a control (the command card's open button).
  * `square: false` drops its 12px square, for a card that already leads with the project's ProjectMark.
  */
 export function ProjectChip({ project, onChoose, square = true }: { project: QueuesProject; onChoose?: (project: QueuesProject) => void; square?: boolean }) {
@@ -108,7 +113,7 @@ export function ProjectChip({ project, onChoose, square = true }: { project: Que
  * the meta line said whose a card was only to someone reading that line; a column of cards is scanned
  * down its left edge, so that is where the mark sits, big enough to pick one project's cards out of a
  * page of them without reading a word (maintainer 2026-09-29: "a more visible indicator of the project
- * name/logo … so users can easily visually filter through"). Given `onChoose` it filters the queue to the
+ * name/logo … so users can easily visually filter through"). Given `onChoose` it focuses the page on the
  * project, as the chip beside it does; it is out of the tab order because that chip is the same control.
  */
 export function ProjectMark({ project, onChoose }: { project: QueuesProject; onChoose?: (project: QueuesProject) => void }) {
@@ -201,7 +206,7 @@ interface AllQueuesCardProps {
    *  (ProjectChip) — a flag and a stable chooser rather than the element, which would be a new object on
    *  every render of the queue and so re-render the card every time (sameCard). */
   chip?: boolean
-  /** What choosing the chip does: filter the queue to the card's project. */
+  /** What choosing the chip does: focus the page on the card's project (its `/?project=<slug>` view). */
   onChoose?: (project: QueuesProject) => void
 }
 
@@ -233,6 +238,8 @@ export const AllQueuesCard = memo(function AllQueuesCard({
   })
   const text = handoff.data?.text
   const parts = useMemo(() => (text ? handoffParts(text, thread.questions) : null), [text, thread.questions])
+  // Does the awaiting card list the children, or the ops column under the reply box (QueueChildOps)?
+  const drawsSubAgentWait = drawsSubAgentWaitCard(thread, parts?.fences)
   // THIS CARD IS THE NEWEST HANDOFF, and every open question rides to the bottom of the newest handoff
   // (lib/questionAnchor, 2026-09-29): a typed message no longer sets one aside — the worker `unask`s what
   // it made moot — so every question still open is still this handoff's ask.
@@ -300,7 +307,7 @@ export const AllQueuesCard = memo(function AllQueuesCard({
                 {/* Where the agent is working, only when that is off the project root (a worktree, or another folder). */}
                 <ThreadCheckoutToken checkout={thread.checkout} homeDir={project.homeDir} lead={<span aria-hidden>·</span>} />
                 {/* What the thread is doing NOW, beside the name that stays put (ThreadStatusLine). */}
-                <ThreadStatusLine status={thread.statusLine} lead={<span aria-hidden>·</span>} />
+                <ThreadStatusLine thread={thread} lead={<span aria-hidden>·</span>} />
               </div>
             </div>
             <div className="flex shrink-0 items-center gap-0.5">
@@ -362,7 +369,7 @@ export const AllQueuesCard = memo(function AllQueuesCard({
                 <QuestionBlockCard key={index} raw={question.raw} questionKind={question.questionKind} danger={question.danger} />
               ))}
               {/* A parent resting on its sub-agents states the batch in place of its fence (AwaitingSubAgentsCard). */}
-              {parts?.fences.map((fence, index) => fence.kind === "awaiting" && showsSubAgentWait(thread)
+              {parts?.fences.map((fence, index) => fence.kind === "awaiting" && drawsSubAgentWait
                 ? <AwaitingSubAgentsCard key={index} project={project} thread={thread} body={fence.body} openThread={() => openInPlace(project, thread.id)} onSnoozed={onLeave} onUndone={onUnsnoozed} />
                 : <FenceBody key={index} kind={fence.kind} body={fence.body} />)}
               {/* A DONE THE WORKER REGISTERED (`mcp__frizz__done`) rather than fenced — the sign-off the worker
@@ -409,27 +416,28 @@ export const AllQueuesCard = memo(function AllQueuesCard({
 
           <ThreadProjectScope projectId={project.id} projectDir={project.projectDir}>
             <ReplyBox project={project} thread={thread} onSent={onLeave} onFailed={onReturn} />
-            {/* EVERY TERMINAL ON THE THREAD, yours and the agent's, in the drawer's one strip
-                (ThreadTerminals.tsx) — a shell with no budget runs until someone stops it, so the card it
-                rests on is where it must be seen. The drawer's geometry: the reply box above ends in
-                `pb-3`, which `-mt-3` hands back so the strip hangs `pt-1.5` off the prompt box, and
-                `.ops-column-optical-inset` puts the last row's baseline 12px off the footer's hairline.
-                A row opens the thread, then its terminal over it when the thread's project is the one in
-                focus (the drawer stack is that project's); otherwise the thread's drawer carries it. */}
-            {/* Gated on the rows the strip will draw, not on the arrays: the inset's negative margin would
-                otherwise pull the footer up 4.25px under a card whose only shell has finished. */}
-            {cardProcesses(thread, Date.now()).length > 0 && (
-              <div className="-mt-3 shrink-0 px-5 pb-3" data-queue-processes={thread.id}>
-                <div className="ops-column-optical-inset">
-                  <ThreadProcessStrip
-                    thread={thread}
-                    surface="card"
-                    className="px-1 pt-1.5"
-                    onOpen={openProcess}
-                  />
+            {/* EVERYTHING IT HAS RUNNING, in the drawer's one column (QueueChildOps): its sub-agents and
+                Workflows as AGENT / FLOW rows — the awaiting card's to list while it is drawn — then every
+                terminal on the thread, yours and the agent's, as the drawer's TERM strip (ThreadTerminals.tsx),
+                on one label column. QueueChildOps' own SHELL rows are off here: the strip owns every process
+                row, so a shell is drawn once. A shell with no budget runs until someone stops it, so the card
+                it rests on is where it must be seen. A TERM row opens the thread, then its terminal over it
+                when the thread's project is the one in focus (the drawer stack is that project's). The strip
+                is gated on the rows it will draw, so a card whose only shell has finished — or whose only
+                terminal is the prompt shown above with its own row — draws no empty inset. */}
+            <QueueChildOps
+              project={project}
+              thread={thread}
+              api={api}
+              agents={!drawsSubAgentWait}
+              shells={false}
+              onOpenThread={() => openInPlace(project, thread.id)}
+              after={cardProcesses(thread, Date.now()).length > 0 ? (
+                <div data-queue-processes={thread.id} className="min-w-0">
+                  <ThreadProcessStrip thread={thread} surface="card" onOpen={openProcess} />
                 </div>
-              </div>
-            )}
+              ) : null}
+            />
           </ThreadProjectScope>
           </RegisteredAnsweringProvider>
           </QueueDismissContext.Provider>
@@ -577,18 +585,46 @@ function CardTerminalNet({ thread }: { thread: ThreadView }) {
 /** The human's last message, as the transcript draws it — their own bubble — clipped to a few lines. */
 function AskedBubble({ text }: { text: string }) {
   const [open, setOpen] = useState(false)
+  const [clamps, setClamps] = useState(false)
+  const words = useRef<HTMLSpanElement>(null)
+  // Only a message the clamp actually cut is a toggle; a short one is plain, selectable text.
+  useLayoutEffect(() => {
+    const el = words.current
+    if (!el || open) return
+    const measure = () => setClamps(el.scrollHeight > el.clientHeight + 1)
+    measure()
+    const observer = new ResizeObserver(measure)
+    observer.observe(el)
+    return () => observer.disconnect()
+  }, [open, text])
+  const toggle = () => setOpen((value) => !value)
   return (
     <div className="flex max-w-[85%] flex-col items-end gap-0.5 self-end">
-      <button
-        type="button"
-        onClick={() => setOpen((value) => !value)}
-        title={open ? "Show less" : "Show the whole message"}
-        className={`${BLOCK_RADIUS} rounded-br-sm bg-user-bubble px-3.5 py-2.5 text-left text-[13px] leading-5 whitespace-pre-wrap [overflow-wrap:anywhere] text-user-bubble-fg outline-none focus-visible:ring-2 focus-visible:ring-accent focus-visible:ring-offset-2 focus-visible:ring-offset-bg`}
+      {/* A div with role=button, NOT a <button>: browsers refuse to start a text selection inside a
+          <button>, so the human could not copy a word of their own message. The click is ignored while
+          a selection is live, because a drag across the words ends in a click on this same node. */}
+      <div
+        {...(clamps || open ? {
+          role: "button",
+          tabIndex: 0,
+          "aria-expanded": open,
+          title: open ? "Show less" : "Show the whole message",
+          onClick: () => {
+            if (window.getSelection()?.toString()) return
+            toggle()
+          },
+          onKeyDown: (e: ReactKeyboardEvent<HTMLDivElement>) => {
+            if (e.key !== "Enter" && e.key !== " ") return
+            e.preventDefault()
+            toggle()
+          },
+        } : {})}
+        className={`${BLOCK_RADIUS} rounded-br-sm bg-user-bubble px-3.5 py-2.5 text-left text-[13px] leading-5 whitespace-pre-wrap [overflow-wrap:anywhere] text-user-bubble-fg outline-none focus-visible:ring-2 focus-visible:ring-accent focus-visible:ring-offset-2 focus-visible:ring-offset-bg${clamps || open ? " cursor-pointer" : ""}`}
       >
-        {/* The clamp sits INSIDE the padding. On the button itself, its overflow clip ran to the padding
+        {/* The clamp sits INSIDE the padding. On the bubble itself, its overflow clip ran to the padding
             edge, so the fourth line showed half its height in the bubble's bottom padding. */}
-        <span className={open ? "" : "line-clamp-3"}>{text}</span>
-      </button>
+        <span ref={words} className={open ? "" : "line-clamp-3"}>{text}</span>
+      </div>
     </div>
   )
 }
@@ -687,6 +723,8 @@ function ReplyBox({ project, thread, onSent, onFailed }: { project: QueuesProjec
   const [signInFor, setSignInFor] = useState<AccountBackend | null>(null)
   const [logoutFor, setLogoutFor] = useState<AccountBackend | null>(null)
   const answering = useContext(RegisteredAnsweringContext)
+  // `@` mentions of this card's project's threads — offered only when the page's board IS that project.
+  const mentions = useMentionCandidates(thread.id, project.slug)
   const send = useMutation({
     mutationFn: (message: string) => deliverFollowUp(project, thread, message),
     onSuccess: () => void queryClient.invalidateQueries({ queryKey: ["projectsQueues"] }),
@@ -748,6 +786,7 @@ function ReplyBox({ project, thread, onSent, onFailed }: { project: QueuesProjec
         onSubmit={submit}
         placeholder={answering?.staged ? "Add a note to your answers…" : questionsOwed(thread.questions).length > 0 ? "Or reply — the questions stay open…" : "Reply to the agent…"}
         attachBase={projectApiBase(project.id)}
+        mentionCandidates={mentions}
         busy={controls.busy}
         footer={controls.footer}
       />

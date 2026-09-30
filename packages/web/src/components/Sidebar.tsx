@@ -1,4 +1,4 @@
-import { memo, useCallback, useState } from "react"
+import { Fragment, memo, useCallback, useState } from "react"
 import { useQueryClient } from "@tanstack/react-query"
 import { AlarmClock, Check, ChevronRight, Ellipsis, Github, Hourglass, Loader2, Pin, PinOff, RotateCcw } from "lucide-react"
 import { questionsOwed, type ThreadView } from "@frizz/shared"
@@ -6,6 +6,7 @@ import { pushSubAgentDrawer, showToast } from "../store.ts"
 import { displayTitle, titleIsProvisional, isPinned, isSnoozed, sessionIndicatorKind, offersRetry, futureSnoozedUntil, queueLabelAt, waitNamesPr, prChecksRunning, restingOnSubAgents } from "../groups.ts"
 import { ageSpan, relativeAge, limitResumeClock } from "../lib/activityTime.ts"
 import { useNowMs } from "../lib/liveClock.ts"
+import { humpStarts } from "../lib/threadMentions.ts"
 import { BANDS, BAND_LABEL_TYPE, BandCount, BandGlyph, type BandKey } from "./BandLabel.tsx"
 import { BoxSpinner, STATUS_BOX } from "./BoxSpinner.tsx"
 import { ChildOpRow } from "./ChildOpRow.tsx"
@@ -20,6 +21,7 @@ import { useThreadApi, useThreadIsForeignToPage, useThreadProjectDir, useThreadP
 import { formatAutoSnoozedUntil, formatUserSnooze } from "../lib/snooze.ts"
 import { SUBAGENTS_SNOOZE_TOAST } from "../lib/subAgentWait.ts"
 import { formatCompactElapsed } from "../lib/durationLabels.ts"
+import { statusElapsed } from "./ThreadStatusLine.tsx"
 import { awaitingProse, awaitingWaitClause } from "../lib/awaitingPresentation.ts"
 import { clearArchived } from "../lib/optimisticArchive.ts"
 import type { ReactElement, ReactNode } from "react"
@@ -98,10 +100,10 @@ export interface RowScope {
 
 // One row of a band: the thread, then its live sub-agents as rows of their own. A thread's TERMINALS get
 // no row (ThreadTerminals.tsx): one small mark after its title says one is running.
-export function RailRow({ t, active, open = false, restedAge = false, scope, cardKey }: { t: ThreadView; active: boolean; open?: boolean; restedAge?: boolean; scope: RowScope; cardKey?: string }) {
+export function RailRow({ t, active, open = false, restedAge = false, scope, cardKey, band }: { t: ThreadView; active: boolean; open?: boolean; restedAge?: boolean; scope: RowScope; cardKey?: string; band?: BandKey }) {
   return (
     <>
-      <ThreadRow t={t} active={active} open={open} restedAge={restedAge} scope={scope} cardKey={cardKey} />
+      <ThreadRow t={t} active={active} open={open} restedAge={restedAge} scope={scope} cardKey={cardKey} band={band} />
       <SubAgentRows t={t} scope={scope} />
     </>
   )
@@ -150,16 +152,31 @@ export function SectionHeader({ band, count, collapsed, onToggle }: { band: Band
 // wrapping. Cutting a long token is safe: an element boundary mid-word adds no break opportunity of
 // its own, so the head still breaks exactly where `break-words` would have broken it, and the mark
 // keeps a dozen characters of company either way.
+//
+// A HANDLE is one token with its words run together (`shipTheResolverFix`, groups.ts displayTitle), so
+// its humps stand in for the spaces: the last hump is the word the mark glues to, and a `<wbr>` before
+// every other hump lets a handle wider than the rail wrap BETWEEN its words rather than wherever
+// `break-words` runs out of room mid-word ("shipTh / eResolverFix").
 const MAX_GLUED_TITLE_WORD = 16
 const GLUED_TITLE_TAIL = 12
 export function TitleWithTrailers({ title, children }: { title: string; children: ReactNode }) {
   const text = title.trimEnd()
-  const wordStart = text.lastIndexOf(" ") + 1
+  const humps = text.includes(" ") ? [] : humpStarts(text).slice(1)
+  const wordStart = humps.length > 0 ? humps.at(-1)! : text.lastIndexOf(" ") + 1
   const cut = text.length - wordStart <= MAX_GLUED_TITLE_WORD ? wordStart : text.length - GLUED_TITLE_TAIL
   if (cut >= text.length) return <>{title}{children}</>
+  const breaks = humps.filter((i) => i < cut)
+  const head = text.slice(0, cut)
   return (
     <>
-      {text.slice(0, cut)}
+      {breaks.length === 0
+        ? head
+        : [0, ...breaks].map((start, i) => (
+            <Fragment key={start}>
+              {i > 0 && <wbr />}
+              {head.slice(start, breaks[i] ?? cut)}
+            </Fragment>
+          ))}
       <span className="whitespace-nowrap">{text.slice(cut)}{children}</span>
     </>
   )
@@ -179,6 +196,7 @@ export const ThreadRow = memo(function ThreadRow({
   restedAge = false,
   scope,
   cardKey,
+  band,
 }: {
   t: ThreadView
   active?: boolean
@@ -191,6 +209,9 @@ export const ThreadRow = memo(function ThreadRow({
   /** A Ready row's card on Everything (`threadKey`) — what the thread across the gutter ties it to
    *  (ThreadConnector). */
   cardKey?: string
+  /** The band the list drew this row in, as `data-xq-band` — Ready and Working carry no name over their
+   *  rows (ProjectList.tsx), so this is how a script tells them apart. */
+  band?: BandKey
 }) {
   const foreign = t.foreign === true
   // Snoozed rows are uniformly grayed as a whole; provisional titles retain their local dim treatment.
@@ -209,6 +230,11 @@ export const ThreadRow = memo(function ThreadRow({
   // row is read-only (the server has no session to write), so its check stays a plain mark.
   const uncheckable = done && !foreign
   const dimLabel = titleIsProvisional(t)
+  // A WORKING thread's status, inline in grey after its name, and its task clock in the right-edge
+  // column a rested row gives its rest time (ThreadStatusLine.tsx statusElapsed).
+  const nowMs = useNowMs()
+  const elapsed = statusElapsed(t, nowMs)
+  const working = elapsed && t.statusLine ? { status: t.statusLine.trim(), elapsed } : undefined
   // The rows with an obvious single next action carry that verb INLINE, instead of making you open the
   // thread to find it. offersRetry (groups.ts) picks them: a STALLED row (the [!] mark — process
   // exited) AND a row KILLED by a usage limit frizz will auto-resume (the yellow hourglass — a faster
@@ -227,6 +253,11 @@ export const ThreadRow = memo(function ThreadRow({
   // state: not the fence's PR ref, not a snooze, not the legacy `.frizz` activity gloss, not a sub-agent
   // count. Every one of them was a second, competing status beside the row's own — the rail is a column
   // of NAMES you scan, and each caption added there made the next one harder to find.
+  //
+  // ONE EXCEPTION, ON THE SAME LINE: a WORKING thread's status, in grey after its name, with its task clock
+  // at the right edge (maintainer 2026-09-29: "it shouldn't show on hover — it should display in grey text
+  // next to the name of the thread inline", short enough to fit). It costs no line, only rows that are
+  // spinning carry it, and it truncates before the name gives up a character.
   //
   // What frizz knows about the row still exists, one hover away: the indicator's popover composes it
   // from the AWAITING BLOCK deterministically (awaitingWaitClause) plus the worker's own handoff prose, so
@@ -247,6 +278,7 @@ export const ThreadRow = memo(function ThreadRow({
       // Strung on its project's cord at its indicator, card or none (ThreadConnector).
       data-xq-thread-row
       data-xq-rail-row={cardKey}
+      data-xq-band={band}
       className={`group relative flex min-w-0 items-start rounded-md transition-[color,opacity] ${rowWashClass(open)} ${dim ? "sidebar-row-dim" : ""}`}
     >
       {/* The reading position owns a real, in-row rail rather than borrowing the status-icon column.
@@ -278,12 +310,22 @@ export const ThreadRow = memo(function ThreadRow({
               8px is ~2 word spaces at 13px, which reads as the title running into its own timestamp.
               12px is a gutter, and it costs the title 4px it does not miss. */}
           <span className="flex min-w-0 items-baseline gap-3">
-            <span className={`min-w-0 flex-1 break-words text-[13px] leading-[19px] ${dimLabel ? "text-provisional" : dim ? "text-fg/75" : "text-fg/90"}`}>
-              <TitleWithTrailers title={displayTitle(t)}>
-                <ProviderMark backend={t.backend} model={t.model} className="ml-1" />
-                <ThreadTerminalMark thread={t} />
-              </TitleWithTrailers>
+            <span className="flex min-w-0 flex-1 items-baseline gap-1.5">
+              {/* With a working status beside it the title keeps its whole width (and wraps if it must)
+                  and the status truncates into what is left; without one the title fills the line. */}
+              <span className={`min-w-0 break-words text-[13px] leading-[19px] ${working ? "max-w-full shrink-0" : "flex-1"} ${dimLabel ? "text-provisional" : dim ? "text-fg/75" : "text-fg/90"}`}>
+                <TitleWithTrailers title={displayTitle(t)}>
+                  <ProviderMark backend={t.backend} model={t.model} className="ml-1" />
+                  <ThreadTerminalMark thread={t} />
+                </TitleWithTrailers>
+              </span>
+              {working && (
+                <span data-rail-status className="min-w-0 flex-1 truncate text-[12px] leading-[19px] text-muted-70" title={working.status}>
+                  {working.status}
+                </span>
+              )}
             </span>
+            {working && <WorkingAge elapsed={working.elapsed} yieldsToRetry={hoverActions} />}
             {/* The Retry verb is an OVERLAY pinned to this same right edge, so on the rows that offer
                 it the two would collide — a 19px opaque button landing halfway across "20 seconds",
                 which reads as a rendering fault rather than an affordance. The label gives way to it
@@ -292,7 +334,7 @@ export const ThreadRow = memo(function ThreadRow({
             {/* A pinned row wears the small solid pin in this same right-edge column (the cue's
                 rest-time spot — the approved mockup's variant A), and yields to the hover actions the
                 same way the rest time does. Never both: the pinned band passes no restedAge. */}
-            {pinned && !restedAge && <PinnedMark />}
+            {pinned && !restedAge && !working && <PinnedMark />}
           </span>
         </span>
       </button>
@@ -641,6 +683,24 @@ export function awaitingReason(t: Pick<ThreadView, "lastFence">): string | null 
   return awaitingProse(t.lastFence)
 }
 
+// ── the working clock (one per working row) ──────────────────────────────────────────────────────
+
+// How long a working thread has been on the task its inline status names — the rested row's rest-time
+// column and type, so a rail's right edge always reads as "time", whichever band the row is in.
+function WorkingAge({ elapsed, yieldsToRetry }: { elapsed: string; yieldsToRetry?: boolean }) {
+  return (
+    <span
+      data-rail-working-age
+      aria-label={`On this task for ${elapsed}`}
+      className={`shrink-0 tabular-nums text-[10.5px] leading-[19px] text-muted-55 ${
+        yieldsToRetry ? "transition-opacity group-hover:opacity-0 group-focus-within:opacity-0" : ""
+      }`}
+    >
+      {elapsed}
+    </span>
+  )
+}
+
 // ── the indicator (one per row) ──────────────────────────────────────────────────────────────────
 
 // Each indicator carries a terse hover tooltip naming the state it signals. A plain wrapper <span> is
@@ -652,10 +712,8 @@ export function ThreadIndicator({ t }: { t: ThreadView }) {
   // hook consulted the steer hint on its own, the glyph and the placement were two rules and drifted apart
   // on every steer.
   const { node, tip: stateTip } = sessionIndicatorFor(t)
-  // The thread's live STATUS rides this tooltip, under the state — the rail's one hover of detail, never
-  // a second line on the row (see "A ROW IS ITS TITLE" above, and ThreadStatusLine.tsx).
-  const status = t.statusLine?.trim()
-  const tip = status ? (stateTip ? `${stateTip}\n${status}` : status) : stateTip
+  // The thread's STATUS is not here: a working row shows it inline after its name (ThreadRow).
+  const tip = stateTip
   // The resolved kind, on the shipped markup. Cheap, and it is what lets the rail's own glyphs be
   // measured where they actually render (scripts/verify-rail-status-glyphs.mjs holds the family to one
   // weight band) instead of against a reconstruction that can drift from the real thing.

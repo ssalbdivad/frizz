@@ -62,8 +62,10 @@ export interface PeriodicStatusDeps {
 }
 
 export interface PeriodicStatus {
-  /** Call at every live rest. Fire-and-forget: a status never delays anything. */
-  onTurnDone(row: SessionRow): void
+  /** Call at every live rest. Fire-and-forget: a status never delays anything. `force` writes one off
+   *  the cadence — live-status.ts asks for it when the turn that just ended wore a WORKING status, which
+   *  would otherwise sit on the rested card still saying "Running the tests". */
+  onTurnDone(row: SessionRow, options?: { force?: boolean }): void
 }
 
 export function createPeriodicStatus(deps: PeriodicStatusDeps): PeriodicStatus {
@@ -75,7 +77,7 @@ export function createPeriodicStatus(deps: PeriodicStatusDeps): PeriodicStatus {
   const doneAt = new Map<string, number>()
   const inFlight = new Set<string>()
   return {
-    onTurnDone(row) {
+    onTurnDone(row, options) {
       // Broker Claude rows only: `readMessages` reads a Claude transcript.
       if (!deps.writeStatus || !isBrokerClaudeRow(row)) return
       const key = `${row.slug}\0${row.session_id}`
@@ -84,7 +86,7 @@ export function createPeriodicStatus(deps: PeriodicStatusDeps): PeriodicStatus {
       const bucket = Math.floor(operatorMessages(messages).length / every)
       const prev = doneAt.get(key)
       doneAt.set(key, Math.max(bucket, prev ?? 0))
-      if (prev === undefined || bucket <= prev || bucket === 0) return
+      if (!options?.force && (prev === undefined || bucket <= prev || bucket === 0)) return
       const conversation = recentConversation(messages, every)
       if (!conversation) return
       inFlight.add(key)

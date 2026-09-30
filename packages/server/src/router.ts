@@ -1,7 +1,7 @@
 import { readFileSync, realpathSync, statSync, type Stats } from "node:fs"
 
 import { join, resolve } from "node:path"
-import { randomUUID } from "node:crypto"
+import { randomBytes, randomUUID } from "node:crypto"
 import { z } from "zod"
 import { query, mutation } from "@frizz/rpc/server"
 import {
@@ -137,16 +137,27 @@ import {
   openQuestionsNote,
   SetOwnThreadTitleInput,
   SetOwnThreadTitleResult,
+  ReadThreadInput,
+  ReadThreadResult,
+  MessageThreadInput,
+  MessageThreadResult,
   AcpAgent,
   acpAgentIdFromModel,
   acpModelIdFromModel,
   AcpAgentModels,
   AcpAgentModelsInput,
+  SpinOffInput,
+  SpinOffResult,
+  spinOffChildPrompt,
+  spinOffRequestMessage,
 } from "@frizz/shared"
 import { type AppContext } from "./context.ts"
 import { listAcpAgents } from "./backend/acp-agents.ts"
 import { sessionTitleLocked } from "./storage.ts"
-import { createThreadNamer, THREAD_NAME_MAX_WORDS, type ThreadNamer } from "./thread-names.ts"
+import { createThreadNamer, threadNameProblem, type ThreadNamer } from "./thread-names.ts"
+import { handleOf, isReplyWaitFor, knownHandles, replyWaitPrompt, resolveThreadHandle, THREAD_MESSAGE_HOURLY_CAP, threadMessageBody } from "./thread-mentions.ts"
+import { enqueueThreadMessageWake } from "./scheduler.ts"
+import { editedFilesOf } from "./edited-files.ts"
 import { mayHaveLiveBackgroundWork, needsFreshProcessForLimit } from "./backend/usage-limit.ts"
 import { appServerTurnStalled, resolveLiveWatchTarget, resolveRecurringPrompt } from "./board.ts"
 import { runThreadUpdate } from "./frizz.ts"
@@ -160,6 +171,7 @@ import {
   readTranscript,
   readTranscriptFile,
   readCodexTranscriptFile,
+  readThreadTranscript,
   projectTranscriptPageAgentLifecycles,
   threadTranscriptSource,
 } from "./transcript.ts"
@@ -937,6 +949,9 @@ export function createRouter(ctx: AppContext) {
   // mint and the AI rename need the model.
   const fallbackNamer = createThreadNamer({ storage: ctx.storage, aiTitleOf: (slug) => ctx.tailer?.get(slug)?.aiTitle })
   const threadNamer = (): ThreadNamer => ctx.threadNamer ?? fallbackNamer
+  // Messages one thread sent another, by ordered (from, to) pair — the hourly cap on `messageThread`.
+  // In memory: a restart forgets it, which only ever loosens a cap that exists to stop a runaway loop.
+  const threadMessageLog = new Map<string, number[]>()
   // ONE DELIVERY PER deliveryId. The ledger guard inside `followUp` (`hasDelivery`) is not enough for a
   // broker thread, on two counts, both measured 2026-09-24 against a real broker worker with the
   // page-reload replay (web lib/pendingSends.ts) as the repeat:
@@ -1556,6 +1571,43 @@ export function createRouter(ctx: AppContext) {
     return await gitGithubRemote(ctx.project.dir)
   }
 
+  // The followUp procedure, captured where it is defined below so `spinOff` delivers through the SAME
+  // handler rather than a copy of its ~350 lines of runtime routing.
+  let followUpProcedure: { handler: (args: { input: z.infer<typeof FollowUpInput> }) => Promise<void> } | undefined
+
+  // One request can become one thread. The check-then-stamp below spans an await (the dispatch), so two
+  // racing `spawn_thread` calls for the same id would both pass the pending check; this set closes that.
+  const spinOffsInFlight = new Set<string>()
+
+  // A `spawn_thread` that names a spin-off: check it is a pending request of the CALLING thread, write the
+  // human's instructions and a link back above the parent's brief (spinOffChildPrompt), dispatch, and
+  // stamp the child. Refusals are errors the parent's worker reads, so each says what went wrong.
+  async function fulfilSpinOff(id: string, from: string | undefined, input: Omit<DispatchInput, "spinOff" | "spinOffFrom">) {
+    const request = ctx.storage.getSpinOff(id)
+    if (!request) throw new Error(`No spin-off request ${id} exists in this project`)
+    if (from !== undefined && from !== request.parent_slug) {
+      throw new Error(`Spin-off ${id} was requested from another thread, so this thread cannot fulfil it`)
+    }
+    if (request.child_slug) throw new Error(`Spin-off ${id} already started thread ${request.child_slug}; do not spawn it twice`)
+    if (spinOffsInFlight.has(id)) throw new Error(`Spin-off ${id} is already being dispatched`)
+    spinOffsInFlight.add(id)
+    try {
+      const parent = ctx.storage.getSession(request.parent_slug)
+      const prompt = spinOffChildPrompt({
+        parentSlug: request.parent_slug,
+        parentTitle: parent?.title || request.parent_slug,
+        instructions: request.instructions,
+        brief: input.prompt,
+      })
+      const result = await ctx.dispatcher.dispatch({ ...input, prompt }, { backend: input.backend })
+      ctx.storage.completeSpinOff(id, result.slug, Date.now())
+      ctx.board.refresh()
+      return result
+    } finally {
+      spinOffsInFlight.delete(id)
+    }
+  }
+
   return {
     board: query({
       output: BoardSnapshot,
@@ -1974,7 +2026,43 @@ export function createRouter(ctx: AppContext) {
       // Omitted ⇒ the dispatcher defaults to "claude", so an old client (no backend field) is
       // byte-identical. The resume path needs NO analog — resume reads the backend from the row's
       // `backend` column (backendFor(row.backend)), which dispatch already stamped for a codex thread.
-      handler: ({ input }) => ctx.dispatcher.dispatch(input, { backend: input.backend }),
+      handler: async ({ input }) => {
+        const { spinOff, spinOffFrom, ...rest } = input
+        if (!spinOff) return ctx.dispatcher.dispatch(rest, { backend: input.backend })
+        return fulfilSpinOff(spinOff, spinOffFrom, rest)
+      },
+    }),
+
+    // SPIN OFF a new thread from one message of this one (SpinOffInput). Records the request, then hands
+    // it to THIS thread's worker as a message — through the very path a typed follow-up takes, so it wakes
+    // a rested thread, queues behind a running turn, and reopens a done one exactly as the human's own
+    // words would. The worker answers by dispatching through `spawn_thread` with the request's id, which
+    // lands in `fulfilSpinOff` above. A delivery that fails drops the row: a request the worker never
+    // received must not sit on the thread as one it is ignoring.
+    spinOff: mutation({
+      input: SpinOffInput,
+      output: SpinOffResult,
+      handler: async ({ input }) => {
+        currentOwnedSession(input.slug, input.sessionId)
+        const id = `spn_${randomBytes(8).toString("hex")}`
+        ctx.storage.insertSpinOff({
+          id, parentSlug: input.slug, sourceId: input.sourceId, excerpt: input.excerpt,
+          instructions: input.instructions, createdAtMs: Date.now(),
+        })
+        try {
+          await followUpProcedure!.handler({ input: {
+            slug: input.slug,
+            sessionId: input.sessionId,
+            message: spinOffRequestMessage({ id, instructions: input.instructions, excerpt: input.excerpt }),
+            deliveryId: `spinoff-${id}`,
+          } })
+        } catch (err) {
+          ctx.storage.dropSpinOff(id)
+          throw err
+        }
+        ctx.board.refresh()
+        return { id }
+      },
     }),
 
     // Cold-adopt a pre-existing thread (no session row): spawn a fresh worker on its file.
@@ -1984,7 +2072,7 @@ export function createRouter(ctx: AppContext) {
       handler: ({ input }) => ctx.dispatcher.adopt(input.slug, input.message),
     }),
 
-    followUp: mutation({
+    followUp: followUpProcedure = mutation({
       input: FollowUpInput,
       handler: ({ input }) => joinInflightFollowUp(input.slug, input.deliveryId, async () => {
         // Every follow-up crosses a TYPED CONTROL CHANNEL now, never a terminal: a codex row goes to the
@@ -3755,14 +3843,15 @@ export function createRouter(ctx: AppContext) {
         // throw: the worker did nothing wrong, and an error is the one answer it would retry.
         const lockedByHuman = sessionTitleLocked(row)
         if (lockedByHuman) return { accepted: false, title: current(), lockedByHuman }
-        // The worker gets ONE rename, and a name is one or two words that no other open thread carries
+        // The worker gets ONE rename, and a name is one or two short words that no other open thread carries
         // (thread-names.ts). Each refusal says what to do next; only the spent rename says "stop".
         const refuse = (refusal: string) => ({ accepted: false, title: current(), lockedByHuman: false, refusal })
         if (row.title_worker_renamed) {
           return refuse(`you already renamed this thread once, and a name is stable after that. It stays "${current()}"; do not call this again.`)
         }
-        if (input.title.split(/\s+/).length > THREAD_NAME_MAX_WORDS) {
-          return refuse(`"${input.title}" is longer than two words. A name is one or two words naming the subject (e.g. "Shell budgets"); call again with one.`)
+        const problem = threadNameProblem(input.title)
+        if (problem) {
+          return refuse(`"${input.title}" ${problem}. A name is one or two short words naming the subject (e.g. "Shell budgets", typed as @shellBudgets); call again with one.`)
         }
         const holder = namer.holder(input.title, input.slug)
         if (holder) {
@@ -3773,6 +3862,114 @@ export function createRouter(ctx: AppContext) {
         return accepted
           ? { accepted, title: input.title, lockedByHuman: false }
           : { accepted, title: current(), lockedByHuman: sessionTitleLocked(ctx.storage.getSession(input.slug) ?? row) }
+      },
+    }),
+
+    // ONE THREAD READING ANOTHER BY HANDLE (`mcp__frizz__read_thread`, thread-mentions.ts): its opening
+    // request, its status line and its newest handoff — what "ask @x for context" or "reconcile with @x"
+    // needs first, without waking @x at all. Read-only, so it reaches finished threads too.
+    readThread: mutation({
+      input: ReadThreadInput,
+      output: ReadThreadResult,
+      handler: async ({ input }) => {
+        const threads = threadNamer().threads()
+        const hit = resolveThreadHandle(input.handle, threads)
+        const row = hit ? ctx.storage.getSession(hit.slug) : undefined
+        if (!hit || !row) return { found: false, known: knownHandles(threads, input.slug) }
+        const messages = readThreadTranscript(ctx.project, ctx.storage, hit.slug, ctx.backendFor)
+        const said = (m: (typeof messages)[number]) => (m.displayText ?? m.text).trim()
+        const opening = messages.find((m) => m.role === "user" && !m.kind && said(m))
+        const clip = (text: string, max: number) => (text.length > max ? `${text.slice(0, max)}\n…[truncated]` : text)
+        // The newest assistant words: the handoff when it is resting, the latest narration when it is not —
+        // and the three before them, which is where the APPROACH lives when the newest is a terse handoff.
+        const spoken = messages.filter((m) => m.role === "assistant" && !m.kind && said(m))
+        const latest = spoken.at(-1)
+        const earlier = spoken.slice(-4, -1).map((m) => clip(said(m), 2_000))
+        const archived = row.state === "archived" || row.archived === 1
+        const state = archived ? "done" as const : ctx.tailer.get(hit.slug)?.turn === "idle" ? "resting" as const : "running" as const
+        const editedFiles = editedFilesOf(messages, workDir).map((f) => f.path).slice(0, 40)
+        return {
+          found: true,
+          handle: handleOf(hit),
+          slug: hit.slug,
+          state,
+          ...(row.status?.trim() ? { status: row.status.trim() } : {}),
+          ...(opening ? { request: clip(said(opening), 4_000) } : {}),
+          ...(earlier.length ? { earlier } : {}),
+          ...(latest ? { latest: clip(said(latest), 8_000), ...(latest.at ? { latestAt: latest.at } : {}) } : {}),
+          ...(editedFiles.length ? { editedFiles } : {}),
+        }
+      },
+    }),
+
+    // ONE THREAD MESSAGING ANOTHER (`mcp__frizz__message_thread`). Delivered through the wake outbox, so
+    // it survives a restart and a busy recipient exactly as a timer does, and joins a running turn the
+    // way a typed steer does (scheduler THREAD_MESSAGE_FENCE_PREFIX). Refusals are answers, not throws:
+    // a worker told "error" retries, and every refusal here says what to do instead.
+    messageThread: mutation({
+      input: MessageThreadInput,
+      output: MessageThreadResult,
+      handler: async ({ input }) => {
+        const threads = threadNamer().threads()
+        const hit = resolveThreadHandle(input.handle, threads)
+        const target = hit ? ctx.storage.getSession(hit.slug) : undefined
+        if (!hit || !target) {
+          return { sent: false, refusal: `no thread is called ${input.handle}.`, known: knownHandles(threads, input.slug) }
+        }
+        const handle = handleOf(hit)
+        if (hit.slug === input.slug) return { sent: false, handle, refusal: "that is this thread." }
+        if (target.state === "archived" || target.archived === 1) {
+          return { sent: false, handle, refusal: `@${handle} is done, and a message would reopen it. Read it with read_thread instead; only the human reopens a finished thread.` }
+        }
+        const nowMs = Date.now()
+        const pair = `${input.slug}\u0000${hit.slug}`
+        const recent = (threadMessageLog.get(pair) ?? []).filter((at) => nowMs - at < 3_600_000)
+        if (recent.length >= THREAD_MESSAGE_HOURLY_CAP) {
+          return { sent: false, handle, refusal: `this thread has sent @${handle} ${recent.length} messages in the last hour, which is the cap. Stop the exchange here, or ask the human.` }
+        }
+        const self = threads.find((t) => t.slug === input.slug)
+        const from = self ? handleOf(self) : input.slug
+        // THE WAIT FOR THE ANSWER is a one-off TIMER on the sender: an armed timer already parks a thread,
+        // blocks `done`, shows on its card and in `activity`, and wakes it when it fires — which here means
+        // "no answer in time". The answer CANCELS it (below, on the other side of the same exchange), so
+        // the only wake the sender gets is the answer itself. Checked before anything is sent, so a refusal
+        // never leaves a message out that nothing is waiting for.
+        let wait: { id: string; fireAtMs: number } | undefined
+        if (input.awaitReply) {
+          const asked = input.for === undefined ? 3_600_000 : parseAwaitingDurationRaw(input.for)
+          if (asked === null) {
+            return { sent: false, handle, refusal: `\`for: ${input.for}\` is not a duration — give one like \`30m\` or \`2h\` (max 24h).` }
+          }
+          if (ctx.storage.listThreadTimers(input.slug, { armedOnly: true }).length >= TIMER_MAX_ARMED) {
+            return { sent: false, handle, refusal: `this thread already has ${TIMER_MAX_ARMED} armed timers, and a reply wait is one — cancel one first.` }
+          }
+          wait = { id: `tmr_${randomUUID().replace(/-/g, "").slice(0, 12)}`, fireAtMs: nowMs + Math.min(asked, AWAITING_FOR_MAX_MS) }
+        }
+        // …AND THIS MESSAGE MAY BE THE ANSWER to a wait on the recipient's side: every reply wait it holds
+        // on THIS thread is settled by it, whatever the message says — the recipient reads it and decides.
+        const answered = ctx.storage.listThreadTimers(hit.slug, { armedOnly: true })
+          .filter((t) => isReplyWaitFor(t.prompt, input.slug))
+          .map((t) => ctx.storage.cancelThreadTimer(hit.slug, t.id, nowMs))
+          .some(Boolean)
+        enqueueThreadMessageWake(ctx.storage, {
+          slug: hit.slug,
+          sessionId: target.session_id,
+          fromSlug: input.slug,
+          message: threadMessageBody({ fromHandle: from, message: input.message, awaitsReply: Boolean(wait), answersWait: answered }),
+          nowMs,
+        })
+        threadMessageLog.set(pair, [...recent, nowMs])
+        if (wait) {
+          ctx.storage.clearThreadDone(input.slug)
+          ctx.storage.armThreadTimer({ id: wait.id, slug: input.slug, prompt: replyWaitPrompt(handle, hit.slug), fireAtMs: wait.fireAtMs, createdAtMs: nowMs })
+        }
+        ctx.board.refresh()
+        ctx.scheduler?.kick?.()
+        return {
+          sent: true, handle, from,
+          ...(wait ? { timerId: wait.id, waitUntil: new Date(wait.fireAtMs).toISOString() } : {}),
+          ...(answered ? { answered } : {}),
+        }
       },
     }),
 

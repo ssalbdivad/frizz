@@ -7,6 +7,7 @@ import { buildMessageWithContext, hasToken } from "../lib/composerContext.ts"
 import { splitComposerValue } from "../lib/imagePaths.ts"
 import { useThreadComposerControls } from "../hooks/useThreadComposerControls.tsx"
 import { Composer } from "./Composer.tsx"
+import { useMentionCandidates } from "../hooks/useMentionCandidates.ts"
 import { LogoutConfirmModal, SignInModal } from "./SignInModal.tsx"
 import { draftKey, draftStore, useDraft, useProjectDir } from "../lib/drafts.ts"
 import { parseAccountAlias } from "../lib/signIn.ts"
@@ -90,6 +91,8 @@ export function ThreadComposerBox({
   const followUp = useEagerFollowUp(slug)
   const [signInFor, setSignInFor] = useState<AccountBackend | null>(null)
   const slashSuggest = useMemo(() => () => fetchThreadSkills(slug), [slug])
+  // `@` mentions offer every OTHER thread on the board — this one cannot usefully point at itself.
+  const mentions = useMentionCandidates(slug)
   const [logoutFor, setLogoutFor] = useState<AccountBackend | null>(null)
   // The thread's registered-question state, when this box sits under the surface that draws the cards.
   const answering = useContext(RegisteredAnsweringContext)
@@ -187,6 +190,7 @@ export function ThreadComposerBox({
         onSubmit={() => send()}
         onInterruptSubmit={canInterrupt ? () => send(true) : undefined}
         slashSuggest={slashSuggest}
+        mentionCandidates={mentions}
         placeholder={answering?.slug === slug && answering.staged > 0 ? "Add a note to your answers…" : placeholder}
         // NOT `|| followUp.pending`. The send is already committed locally (draft cleared, bubble
         // appended, and in the queue the card has already begun dissolving), so gating the textarea on

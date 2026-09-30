@@ -1,3 +1,4 @@
+import { THREAD_HANDLE_MAX_CHARS, threadHandle } from "@frizz/shared"
 import { sessionTitleLocked, type SessionRow, type Storage } from "./storage.ts"
 import type { ClaudeOneShot, ClaudeOneShotRequest } from "./backend/claude-oneshot.ts"
 
@@ -134,6 +135,7 @@ export function namingRequest(
     "",
     "Rules:",
     "- ONE or TWO words. Never more.",
+    `- SHORT: the name is typed as a camelCase @handle ("Shell budgets" → @shellBudgets), which must be at most ${THREAD_HANDLE_MAX_CHARS} characters. Prefer short, plain words.`,
     "- Name the SUBJECT or intent of the request, not the action taken: \"Shell budgets\", \"Focus mode\", \"ArkType perf\" — never \"Fix the shell budget default\".",
     "- No request verbs: fix, add, update, investigate, implement, check, refactor.",
     "- Sentence case: capitalize the first word only, plus proper nouns. Spell product names and identifiers exactly as the request spells them.",
@@ -227,11 +229,23 @@ export function sentenceCaseName(name: string, source: string): string {
   }).join(" ")
 }
 
-/** A model's answer as a name, or undefined when it is not one (empty, or more than two words). */
+/** Why `name` cannot be a thread name — "is longer than two words", or a handle too long to type — or
+ *  undefined when it can. Every writer but a human rename holds a name to this. */
+export function threadNameProblem(name: string): string | undefined {
+  if (name.trim().split(/\s+/).length > THREAD_NAME_MAX_WORDS) return "is longer than two words"
+  const handle = threadHandle(name)
+  if (handle && handle.length > THREAD_HANDLE_MAX_CHARS) {
+    return `is too long to type: its handle @${handle} is ${handle.length} characters, past the limit of ${THREAD_HANDLE_MAX_CHARS}`
+  }
+  return undefined
+}
+
+/** A model's answer as a name, or undefined when it is not one (empty, more than two words, or a handle
+ *  past THREAD_HANDLE_MAX_CHARS). */
 export function cleanThreadName(raw: string, source = ""): string | undefined {
   const name = stripDecoration(firstLine(raw))
   if (!name || !foldThreadName(name)) return undefined
-  if (name.split(" ").length > THREAD_NAME_MAX_WORDS) return undefined
+  if (threadNameProblem(name)) return undefined
   return sentenceCaseName(name, source)
 }
 
@@ -271,7 +285,7 @@ export function distinguishingName(name: string, source: string, isTaken: (candi
   for (const word of significantWords(source)) {
     if (used.has(foldThreadName(word))) continue
     const candidate = sentenceCaseName(`${head} ${word}`, source)
-    if (!isTaken(candidate)) return candidate
+    if (!threadNameProblem(candidate) && !isTaken(candidate)) return candidate
   }
   for (let n = 2; ; n++) {
     const candidate = `${clean} ${n}`
@@ -281,7 +295,11 @@ export function distinguishingName(name: string, source: string, isTaken: (candi
 
 /** A name from the request alone, for when the model returned nothing usable twice. */
 function nameFromSource(source: string): string {
-  const words = significantWords(source).slice(0, THREAD_NAME_MAX_WORDS)
+  const words: string[] = []
+  for (const word of significantWords(source)) {
+    if (words.length === THREAD_NAME_MAX_WORDS) break
+    if (!threadNameProblem([...words, word].join(" "))) words.push(word)
+  }
   return words.length ? sentenceCaseName(words.join(" "), source) : "Thread"
 }
 
@@ -336,7 +354,7 @@ export function createThreadNamer(deps: ThreadNamerDeps): ThreadNamer {
       const raw = await complete(namingRequest(source, taken, rejected))
       const candidate = cleanThreadName(raw, source)
       if (!candidate) {
-        rejected = { name: firstLine(raw).slice(0, 80), reason: "is not a name of one or two words" }
+        rejected = { name: firstLine(raw).slice(0, 80), reason: threadNameProblem(stripDecoration(firstLine(raw))) ?? "is not a name" }
         continue
       }
       const taker = holder(candidate, exceptSlug)

@@ -1,8 +1,25 @@
 export type SnoozePreset = "1h" | "tomorrow" | "1d" | "3d" | "1w"
-export const DEFAULT_SNOOZE_PRESET: SnoozePreset = "1d"
+// "Until tomorrow" is the default because it is what a human deferring a card almost always means: pick it
+// up at the start of the next working day. "1d" re-surfaces at this same hour tomorrow, so a card snoozed
+// at 11pm comes back at 11pm (maintainer 2026-09-29).
+export const DEFAULT_SNOOZE_PRESET: SnoozePreset = "tomorrow"
 
 const HOUR = 60 * 60 * 1000
 const DAY = 24 * HOUR
+
+/** The local hour "tomorrow" wakes at. */
+const TOMORROW_WAKE_HOUR = 9
+
+/** Before this local hour, "tomorrow" means the day that is about to START, not the calendar date after
+ *  it: someone snoozing at 2am is still in last night, and "tomorrow at 9am" means seven hours from now,
+ *  not thirty-one. The cutoff guesses whether the operator went to bed late or woke up early.
+ *
+ *  5am rather than the usual 4am (Anki's day rollover): population sleep midpoints sit around 3–4:30am
+ *  (Roenneberg's chronotype data), so someone active at 4:30 is about as likely to be a night owl as an
+ *  early riser — and the two wrong guesses do not cost the same. Guessing "late night" for an early riser
+ *  re-surfaces the card a few hours early, which a second snooze fixes; guessing "early morning" for a
+ *  night owl hides the card through their whole next day. Before 5am, the late-night reading wins. */
+const DAY_ROLLOVER_HOUR = 5
 
 /** DURATION presets park for a span ("1d"); CALENDAR ones park until a named instant ("tomorrow").
  *  The split is already real in `snoozePresetInstant` — a calendar preset does calendar arithmetic and
@@ -36,7 +53,10 @@ export function snoozePresetLabel(preset: SnoozePreset): string {
 }
 
 function snoozePresetEntry(preset: SnoozePreset) {
-  return SNOOZE_PRESETS.find((candidate) => candidate.value === preset) ?? SNOOZE_PRESETS[2]
+  return (
+    SNOOZE_PRESETS.find((candidate) => candidate.value === preset) ??
+    SNOOZE_PRESETS.find((candidate) => candidate.value === DEFAULT_SNOOZE_PRESET)!
+  )
 }
 
 /** The snooze button's own words. "Snooze 1d" parks FOR a span; "Snooze until tomorrow" parks UNTIL
@@ -55,7 +75,8 @@ export function snoozePresetInstant(preset: SnoozePreset, nowMs = Date.now()): s
     const now = new Date(nowMs)
     // Calendar arithmetic is intentional: tomorrow 09:00 remains 09:00 across a DST transition,
     // while 1d below means an exact 24-hour delay. The two useful semantics stay distinct.
-    const tomorrow = new Date(now.getFullYear(), now.getMonth(), now.getDate() + 1, 9, 0, 0, 0)
+    const dayOffset = now.getHours() < DAY_ROLLOVER_HOUR ? 0 : 1
+    const tomorrow = new Date(now.getFullYear(), now.getMonth(), now.getDate() + dayOffset, TOMORROW_WAKE_HOUR, 0, 0, 0)
     return tomorrow.toISOString()
   }
   const delta = preset === "1h" ? HOUR : preset === "1d" ? DAY : preset === "3d" ? 3 * DAY : 7 * DAY
