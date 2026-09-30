@@ -98,7 +98,9 @@ export class RetryableDeliveryError extends Error {
  * human bump, never auto-resurrects a deliberately-shelved one.)
  */
 export function reopenArchivedThreadForFollowUp(
-  deps: { storage: Pick<Storage, "setStateIfCurrent">; board: Pick<BoardManager, "refresh"> },
+  // `refresh` is only ever CALLED (never read), so the board can hand its own deferred refresh when it
+  // reopens a row from inside a build (board.ts surfaceSideTurn).
+  deps: { storage: Pick<Storage, "setStateIfCurrent">; board: { refresh(): unknown } },
   row: Pick<SessionRow, "slug" | "session_id" | "runtime_generation" | "state" | "archived">,
 ): void {
   if (row.state !== "archived" && row.archived !== 1) return
@@ -134,7 +136,7 @@ export function reopenArchivedThreadForFollowUp(
  * on the fence id it armed — see scheduler.ts SOURCE 3).
  */
 export function wakeParkedThreadForFollowUp(
-  deps: { storage: Pick<Storage, "setSnoozedUntil">; board: Pick<BoardManager, "refresh"> },
+  deps: { storage: Pick<Storage, "setSnoozedUntil">; board: { refresh(): unknown } },
   row: Pick<SessionRow, "slug" | "snoozed_until" | "snooze_prompt">,
 ): void {
   // Touch the row only when something is actually parked, so an ordinary steer emits no needless delta.

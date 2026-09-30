@@ -27,6 +27,7 @@ import { findByPath } from "./project-registry.ts"
 import { homeWorkspaceSlug, isHomeWorkspace } from "./home-workspace.ts"
 import { parseDeliveryLedger } from "./delivery-ledger.ts"
 import { spinoffIdOfDelivery } from "./spinoff-side-turn.ts"
+import { reopenArchivedThreadForFollowUp, wakeParkedThreadForFollowUp } from "./resume.ts"
 import { effectivePermissionMode, fallbackTitle, resolveLegacyThreadFile } from "./dispatch.ts"
 import { ProducerStoppedError } from "./shutdown.ts"
 import { createQueueClock } from "./queue-clock.ts"
@@ -2230,6 +2231,50 @@ export function createBoard(
     return reasons.join(" ")
   }
 
+  // AN ARCHIVED OR SNOOZED PARENT'S SIDE TURN THAT STOPS BEING QUIET (review, 2026-09-30). A spinoff
+  // request's delivery leaves the row where it is — no reopen, no unsnooze (router.ts FollowUpDelivery) —
+  // because a side turn that only starts the new thread is not the thread's news, and a thread the human
+  // marked done or put away until Friday should stay there through it. That is right only while the side
+  // turn IS quiet. Otherwise the parent is stuck exactly where nobody looks: an archived row's needsYou is
+  // forced false and a future snooze returns before every hard gate in deriveNeedsYou, so a permission
+  // prompt the brief-gathering `git log` raised, an approval, a worker that refused the spawn and said
+  // why, or one that went on to do real work, reached neither the queue nor a notification — and the
+  // request the human just made sat blocked on them without a sign.
+  //
+  // So once the side turn surfaces, the row is taken out of Done/Snoozed through the SAME helpers an
+  // ordinary follow-up uses, which is what the delivery would have done had it known: the thread is then
+  // an ordinary open thread, and the queue, its notification and every card follow with no special case
+  // downstream. It surfaces when
+  //   • it went UNCLEAN — the turn is real (spinoff-side-turn.ts), whether it has ended or not; or
+  //   • it is still running and BLOCKED on the human (an approval, a permission prompt, a native ask) or
+  //     died (crashed). Clean so far, and it may yet finish clean — but not without the human.
+  // EDGE-TRIGGERED per side turn: done once when it surfaces, so a human who puts the thread back after
+  // seeing it is not overruled on the next build. A restart re-primes silently, like the notify, except
+  // a side turn that is blocked RIGHT NOW: that one still waits on the human, and a boot that swallowed it
+  // would strand it again.
+  const sideTurnSeen = new Map<string, string | undefined>()
+  function surfaceSideTurn(row: SessionRow, tele: SessionTelemetry | undefined, view: ThreadView, nowMs: number): void {
+    if (!tele || tele.primed === false) return
+    const turn = tele.sideTurn
+    const blocked = turn !== undefined && !turn.ended &&
+      (view.actionableInteraction === true || view.runtime === "perm-prompt" || view.pendingAsk !== undefined || view.crashed === true)
+    const reason = turn === undefined ? undefined : !turn.clean ? "unclean" : blocked ? "blocked" : undefined
+    const key = reason === undefined ? undefined : `${turn!.id} ${reason}`
+    const first = !sideTurnSeen.has(row.slug)
+    const prev = sideTurnSeen.get(row.slug)
+    sideTurnSeen.set(row.slug, key)
+    if (key === undefined || key === prev || (first && reason !== "blocked")) return
+    if (view.archived !== true && futureSnooze(row, nowMs) === undefined) return
+    const deps = { storage, board: { refresh: queueSnoozeRefresh } }
+    try {
+      reopenArchivedThreadForFollowUp(deps, row)
+    } catch {
+      // A CAS miss: the row was re-dispatched under this build. Its new session is not this side turn's.
+      return
+    }
+    wakeParkedThreadForFollowUp(deps, row)
+  }
+
   // Fire a needs-decision notify for every registered session that newly enters the queue.
   // Edge-triggered + deduped; primed on the first build.
   //
@@ -2328,11 +2373,12 @@ export function createBoard(
         }
         pendingInteractionCache.set(key, interactionPresence)
       }
-      out.push(sessionThreadView(
+      const tele = tailer.get(row.slug)
+      const view = sessionThreadView(
         project.dir,
         storage,
         row,
-        tailer.get(row.slug),
+        tele,
         legacyTerminalCache.has(row.slug),
         interactionPresence,
         nowMs,
@@ -2342,8 +2388,11 @@ export function createBoard(
         github,
         issueBook,
         claudeModels(),
-      ))
+      )
+      out.push(view)
+      surfaceSideTurn(row, tele, view, nowMs)
     }
+    for (const slug of [...sideTurnSeen.keys()]) if (!rows.some((row) => row.slug === slug)) sideTurnSeen.delete(slug)
     for (const key of pendingInteractionCache.keys()) {
       if (!currentInteractionKeys.has(key)) pendingInteractionCache.delete(key)
     }

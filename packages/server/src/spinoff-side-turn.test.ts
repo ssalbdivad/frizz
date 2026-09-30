@@ -349,6 +349,7 @@ test("tailer: a clean side turn leaves the thread's rest exactly as the request 
   h.clock.ms = Date.parse(ts(11)) + 500
   t.tick()
   assert.equal(t.get("t")?.turn, "in-flight", "while it runs, the thread IS running")
+  assert.deepEqual(t.get("t")?.sideTurn, { id: SPN, spawned: false, ended: false, clean: true }, "a side turn, clean so far")
   assert.equal(activity, 0, "…but a side turn gathering its brief starts no working status")
 
   // …spawns, and ends.
@@ -426,6 +427,9 @@ test("tailer: an unclean side turn is an ordinary turn — its rest, its badge, 
   assert.equal(h.storage.getSession("t")?.unread, 1)
   assert.equal(h.events.filter((e) => e.type === "notify").length, 1)
   assert.equal(turnDone, 1)
+  // …and the raw side turn rides the telemetry, so the board can take an archived or snoozed parent out
+  // of where the request left it (board.ts surfaceSideTurn).
+  assert.deepEqual(after?.sideTurn, { id: SPN, call: "toolu_spawn_11", spawned: true, ended: true, clean: false })
 })
 
 test("tailer: a restart after a clean side turn primes the rest it put back, and re-priming is idempotent", () => {

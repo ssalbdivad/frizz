@@ -41,7 +41,7 @@ import { threadNameProblem } from "./thread-names.ts"
 import { readWorkflowRun, workflowAgentState as sharedWorkflowAgentState, workflowAckRunDir, workflowAckTaskId, workflowLabel, type WorkflowAgent } from "./workflow-runs.ts"
 import { transcriptQuietPast } from "./pending-call.ts"
 import { processAwakeClock, wallSpan } from "./awake-clock.ts"
-import { claudeSideTurnSteps, foldSideTurn, hiddenSideTurnRest, normalizedSideTurnSteps, sideTurnRunning } from "./spinoff-side-turn.ts"
+import { claudeSideTurnSteps, foldSideTurn, hiddenSideTurnRest, normalizedSideTurnSteps, sideTurnRunning, type SideTurn } from "./spinoff-side-turn.ts"
 
 // The JSONL tailer: incrementally reads each registered session's Claude Code transcript
 // (~/.claude/projects/<cwdSlug>/<session_id>.jsonl) to derive liveness telemetry — last activity
@@ -456,6 +456,11 @@ export interface SessionTelemetry extends NormalizedTail {
   noTranscript?: boolean
   contextTokens?: number // tokens the model's last request carried (see FoldState.contextTokens)
   contextWindow?: number // the context size this session RUNS IN (see FoldState.contextWindow)
+  // The spinoff side turn in progress, or the one that ended last until the next turn closes it — the
+  // RAW reading, hidden or not (spinoff-side-turn.ts). Server-internal: the board reads it to take an
+  // archived or snoozed parent out of Done/Snoozed once its side turn stops being quietly clean
+  // (board.ts surfaceSideTurn), because the request's delivery deliberately left the row where it was.
+  sideTurn?: SideTurn
 }
 
 // One tracked live background sub-agent, keyed in TailState by its dispatch tool_use id (the
@@ -5518,7 +5523,7 @@ export function createTailer(deps: TailerDeps): Tailer {
       const rest = (s.turn === "idle" ? hiddenSideTurnRest(s) : undefined) ?? s
       const pendingQuestion = rest.lastAssistantHasQuestion && questionFencesLive(row?.spawned_at)
       const nowMs = now()
-      return { primed: s.primed, turn: s.turn, permPrompt: s.permPrompt, permPolicy: s.permPolicy, permDenies: s.permDenies, model: s.model, effort: s.effort, profileAt: s.profileAt, profileRevision: s.profileRevision, permissionMode: s.permissionMode, permissionModeAt: s.permissionModeAt, permissionModeRevision: s.permissionModeRevision, lastActivityAt: s.lastActivityAt, lastAssistantAt: rest.lastAssistantAt, lastAssistant: rest.lastAssistant, aiTitle: s.aiTitle, customTitle: s.customTitle, customTitleRevision: s.customTitleRevision, subAgents: subAgentViews(s, nowMs), droppedReports: [...s.queuedReports.values()], bgShells: [...bgShellViews(s), ...codexBgShellViews(s)], retiredShells: retiredShellViews(s), retiredSubAgents: retiredSubAgentViews(s), pendingAsk: s.pendingAsk, pendingQuestion, lastAssistantAllDone: rest.lastAssistantAllDone, lastUserAt: rest.lastUserAt, lastHumanAt: rest.lastHumanAt, lastToolCallAt: rest.lastToolCallAt, openCall: newestOpenCall(s), lastUserText: rest.lastUserText, firstUserText: s.firstUserText, lastFence: rest.lastFence, noTranscript: s.noTranscript, authFault: s.authFault, apiFault: s.apiFault, providerError: s.providerError, limitFault: s.limitFault, contextTokens: s.contextTokens, contextWindow: s.contextWindow, lastCompactionAt: s.lastCompactionAt }
+      return { primed: s.primed, turn: s.turn, permPrompt: s.permPrompt, permPolicy: s.permPolicy, permDenies: s.permDenies, model: s.model, effort: s.effort, profileAt: s.profileAt, profileRevision: s.profileRevision, permissionMode: s.permissionMode, permissionModeAt: s.permissionModeAt, permissionModeRevision: s.permissionModeRevision, lastActivityAt: s.lastActivityAt, lastAssistantAt: rest.lastAssistantAt, lastAssistant: rest.lastAssistant, aiTitle: s.aiTitle, customTitle: s.customTitle, customTitleRevision: s.customTitleRevision, subAgents: subAgentViews(s, nowMs), droppedReports: [...s.queuedReports.values()], bgShells: [...bgShellViews(s), ...codexBgShellViews(s)], retiredShells: retiredShellViews(s), retiredSubAgents: retiredSubAgentViews(s), pendingAsk: s.pendingAsk, pendingQuestion, lastAssistantAllDone: rest.lastAssistantAllDone, lastUserAt: rest.lastUserAt, lastHumanAt: rest.lastHumanAt, lastToolCallAt: rest.lastToolCallAt, openCall: newestOpenCall(s), lastUserText: rest.lastUserText, firstUserText: s.firstUserText, lastFence: rest.lastFence, noTranscript: s.noTranscript, authFault: s.authFault, apiFault: s.apiFault, providerError: s.providerError, limitFault: s.limitFault, contextTokens: s.contextTokens, contextWindow: s.contextWindow, lastCompactionAt: s.lastCompactionAt, ...(s.sideTurn?.current ? { sideTurn: { ...s.sideTurn.current } } : {}) }
     },
     // The CURRENT fresh foreign session ids (mtime within FOREIGN_FRESH_MS, capped), mtime-desc. Kept
     // as the last scan's result — recomputed at most every FOREIGN_SCAN_EVERY ticks.

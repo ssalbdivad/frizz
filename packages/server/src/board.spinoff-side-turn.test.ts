@@ -132,3 +132,90 @@ test("a queued thread woken without a person, that comes back blocked on an appr
     rmSync(dir, { recursive: true, force: true })
   }
 })
+
+// AN ARCHIVED OR SNOOZED PARENT'S SIDE TURN THAT STOPS BEING QUIET COMES OUT (board.ts surfaceSideTurn,
+// review 2026-09-30). The request's delivery leaves Done and Snoozed alone, which is right only while the
+// side turn stays clean: blocked on an approval, or gone unclean, the parent is taken out through the same
+// helpers a follow-up uses — once per side turn, so a human who puts it back is not overruled — and a
+// clean one leaves the row exactly where it was.
+test("an archived or snoozed parent comes out when its side turn blocks on the human or goes unclean, and only then", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "frizz-spinoff-surface-"))
+  const project: Project = { dir, id: "project-spinoff-surface", name: "fixture", label: "fixture", stateDir: dir, cwdSlug: "fixture" }
+  const SPN = "spn_0123456789abcdef"
+  const tele = (turn: "idle" | "in-flight", over: Partial<SessionTelemetry> = {}): SessionTelemetry =>
+    ({ turn, permPrompt: false, subAgents: [], bgShells: [], pendingQuestion: false, lastAssistantAt: iso("09:30:00"), ...over })
+  const side = (over: Partial<NonNullable<SessionTelemetry["sideTurn"]>>): NonNullable<SessionTelemetry["sideTurn"]> =>
+    ({ id: SPN, spawned: false, ended: false, clean: true, ...over })
+  const FRIDAY = "2026-10-02T09:00:00.000Z"
+  const telemetry = new Map<string, SessionTelemetry>([
+    ["done-blocked", tele("idle")],
+    ["done-clean", tele("idle")],
+    ["snoozed-unclean", tele("idle")],
+  ])
+  const tailer = {
+    get: (slug: string) => telemetry.get(slug),
+    foreignIds: () => [], subAgent: () => undefined, forget: () => {}, start: () => {}, stop: () => {}, tick: () => {},
+  } satisfies Tailer
+  let nowMs = Date.parse(iso("10:00:00"))
+  const storage = createStorage(join(dir, "ui.db"), "p")
+  storage.upsertSession(row("done-blocked", { state: "archived" }))
+  storage.upsertSession(row("done-clean", { state: "archived" }))
+  storage.upsertSession(row("snoozed-unclean"))
+  storage.setSnoozedUntil("snoozed-unclean", FRIDAY, null)
+  for (const slug of telemetry.keys()) storage.setClaudeRuntime(slug, "broker")
+  const bus = new Bus()
+  const notified: string[] = []
+  bus.subscribe((event) => { if (event.type === "notify" && event.kind === "needs-decision") notified.push(event.slug) })
+  const board = createBoard(project, storage, bus, tailer, "spinoff-surface", { now: () => nowMs })
+  const where = () => Object.fromEntries([...telemetry.keys()].map((slug) => {
+    const r = storage.getSession(slug)!
+    return [slug, r.state === "archived" ? "done" : r.snoozed_until ? "snoozed" : "open"]
+  }))
+  // A build, then the refresh a surfaced row queues for itself (a microtask), then what the queue reads.
+  const read = async (time: string) => {
+    nowMs = Date.parse(iso(time))
+    board.refresh()
+    await new Promise<void>((resolve) => setImmediate(resolve))
+    return Object.fromEntries(board.refresh().threads.map((t) => [t.id, t.needsYou ?? false]))
+  }
+
+  try {
+    await read("10:00:00")
+    assert.deepEqual(where(), { "done-blocked": "done", "done-clean": "done", "snoozed-unclean": "snoozed" })
+    // A spinoff request reaches all three; each worker starts gathering its brief. Nothing surfaces.
+    for (const slug of telemetry.keys()) telemetry.set(slug, tele("in-flight", { sideTurn: side({}) }))
+    await read("10:00:05")
+    assert.deepEqual(where(), { "done-blocked": "done", "done-clean": "done", "snoozed-unclean": "snoozed" }, "a side turn still clean moves nothing")
+    // `done-blocked`'s `git log` raises a permission prompt. `done-clean` spawns and ends clean.
+    // `snoozed-unclean` writes a file before its spawn: a real turn, which then ends.
+    telemetry.set("done-blocked", tele("in-flight", { permPrompt: true, sideTurn: side({}) }))
+    telemetry.set("done-clean", tele("idle", { sideTurn: side({ spawned: true, ended: true }) }))
+    telemetry.set("snoozed-unclean", tele("idle", { lastAssistantAt: iso("10:00:09"), sideTurn: side({ spawned: true, ended: true, clean: false }) }))
+    const queue = await read("10:00:10")
+    assert.deepEqual(where(), { "done-blocked": "open", "done-clean": "done", "snoozed-unclean": "open" })
+    assert.deepEqual(queue, { "done-blocked": true, "done-clean": false, "snoozed-unclean": true }, "both surfaced parents reach the queue")
+    assert.deepEqual(notified.sort(), ["done-blocked", "snoozed-unclean"], "and are announced")
+
+    // The human looks, and puts `done-blocked` back in Done while it still waits: once per side turn.
+    storage.setStateIfCurrent("done-blocked", "done-blocked-session", 0, "archived")
+    await read("10:00:30")
+    assert.equal(where()["done-blocked"], "done", "a parent put back by the human stays put")
+
+    // A RESTART re-primes: a side turn that went unclean before it is history, but one blocked on the
+    // human right now still surfaces.
+    await board.stop()
+    storage.setSnoozedUntil("snoozed-unclean", FRIDAY, null)
+    const rebooted = createBoard(project, storage, bus, tailer, "spinoff-surface", { now: () => nowMs })
+    try {
+      rebooted.refresh()
+      await new Promise<void>((resolve) => setImmediate(resolve))
+      assert.deepEqual(where(), { "done-blocked": "open", "done-clean": "done", "snoozed-unclean": "snoozed" })
+    } finally {
+      await rebooted.stop()
+    }
+  } finally {
+    await board.stop()
+    storage.close()
+    rmSync(dir, { recursive: true, force: true })
+  }
+})

@@ -2209,7 +2209,9 @@ export function createRouter(ctx: AppContext) {
         if (row && !side) reopenArchivedThreadForFollowUp(ctx, row)
         // Un-park HERE, above the runtime branches, for the same reason the reopen is here: a broker
         // Claude row and an app-server Codex row both return from their own branch below, so anything
-        // that must hold for every runtime has to run before the split. A side request does neither.
+        // that must hold for every runtime has to run before the split. A side request does neither — until
+        // its side turn stops being quiet (it goes unclean, or blocks on the human), when the board runs
+        // these same two helpers for it (board.ts surfaceSideTurn).
         if (row && !side) wakeParkedThreadForFollowUp(ctx, row)
         // Every Codex follow-up flows through the app-server bridge — no terminal composer, no queue, no
         // stale-draft class. The bridge owns the steer-vs-start decision atomically and dedups on
