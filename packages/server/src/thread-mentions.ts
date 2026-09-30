@@ -71,9 +71,11 @@ export function threadMessageBody(input: { fromHandle: string; message: string; 
 // the answer is matched by (the handle can change with a rename, the slug cannot).
 export function replyWaitPrompt(handle: string, slug: string): string {
   return (
-    `Waiting on @${handle} to reply (thread \`${slug}\`) — it has not answered in time. Read where it is with ` +
-    "`mcp__frizz__read_thread`, then ask again with `mcp__frizz__message_thread` (`await_reply: true`) if the " +
-    "answer still matters, or go on without it."
+    // Read in two places: as the wait's name on the card while it stands, and as the wake if it fires —
+    // so the first sentence is the wait and the rest is conditional on it having run out.
+    `Waiting on @${handle} to reply (thread \`${slug}\`). If this fires, no answer came in time: read where it is ` +
+    "with `mcp__frizz__read_thread`, then ask again with `mcp__frizz__message_thread` (`await_reply: true`) if " +
+    "the answer still matters, or go on without it."
   )
 }
 
