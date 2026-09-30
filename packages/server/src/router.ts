@@ -221,7 +221,7 @@ import { HOME_WORKSPACE_NAME, isHomeWorkspace, listWorkspaces } from "./home-wor
 import { expandHomeFolder, homeFolderProblem } from "./home-folder.ts"
 import { basename, dirname, isAbsolute, relative } from "node:path"
 import { existsSync, mkdirSync, rmSync, writeFileSync } from "node:fs"
-import { questionRepliedPast, ProjectCard, ProjectQueue, ProjectRailCounts, PROJECT_ICON_EXTENSIONS, PROJECT_ICON_MAX_BASE64_CHARS, queuedThread, ThreadHandoff, BURIED_ANSWERS_HEADER, workingThread } from "@frizz/shared"
+import { questionRepliedPast, ProjectCard, ProjectQueue, PROJECT_ICON_EXTENSIONS, PROJECT_ICON_MAX_BASE64_CHARS, queuedThread, ThreadHandoff, BURIED_ANSWERS_HEADER, workingThread } from "@frizz/shared"
 import { imageDimensions } from "./image-header.ts"
 import { homedir } from "node:os"
 import { chosenProjectRoot, ensureProjectIdFile, existingProjectId, isHomeDirectory, writeProjectIdFile } from "./project-root.ts"
@@ -4568,56 +4568,9 @@ export function createRouter(ctx: AppContext) {
     }),
 
     /**
-     * Each project's queue size and Active-band size, keyed by project id — the rail's badges.
-     *
-     * The rail draws ONE yellow badge per project whose number is the SUM, with a spinner lapping it
-     * while `running` is non-zero, and its tooltip splits the two (issue #41: which projects still
-     * have work in flight, at a glance). `running` is `workingThread` — the Active band's rows, plus
-     * any Done row whose session is still moving (shared doneButRunning), each of which wears a spinner
-     * in the list beside it — so the rail and the list count with one rule.
-     *
-     * MACHINE-WIDE, answered from the boards this process has OPEN. A queue count is a board fact:
-     * `needsYou` is derived from the tailer's live view of each session, so a project with no board
-     * here has no honest count, and it is left out rather than guessed at. Absent ⇒ no badge; the
-     * project the operator is looking at is always present, and the client draws THAT one from its own
-     * live board anyway.
-     *
-     * Every registered project IS opened, so absent is the exception rather than the rule: the server
-     * primes the ones the operator has not visited within about a second of boot (tenant-prime.ts), which is
-     * what stopped the badges from appearing only after you clicked into each square. What stays absent
-     * is a project another live Frizz is serving, one whose directory is gone, and one that would not
-     * open — plus every project for the first seconds of a boot, before the pass reaches it.
-     *
-     * Kept OFF `projectsList` on purpose: that list is one registry-file read, cheap enough to be the
-     * home page with forty projects, and this is a walk over live boards. The cached snapshot makes
-     * it cheap too — but cheap-and-polled is a different budget from cheap-and-once.
-     */
-    projectsRailCounts: query({
-      output: z.record(z.string(), ProjectRailCounts),
-      handler: async () => {
-        const counts: Record<string, ProjectRailCounts> = {}
-        const open = ctx.activeTenants?.() ?? [{ project: ctx.project, board: ctx.board }]
-        for (const { project, board } of open) {
-          try {
-            const { threads } = await board.snapshot()
-            counts[project.id] = {
-              queued: threads.filter(queuedThread).length,
-              running: threads.filter(workingThread).length,
-            }
-          } catch {
-            // A board that is stopping mid-walk (its project is being deactivated) is a project with
-            // no count this round, not a failed request for every other project.
-          }
-        }
-        return counts
-      },
-    }),
-
-    /**
-     * Every open project's threads, for the All queues page — the machine-wide sibling of
-     * `projectsRailCounts`, and answered the same way: from the boards this process has OPEN, never by
-     * opening one. A project with no board here has no honest queue, so it is absent rather than empty;
-     * the client joins this with `projectsList` and says so.
+     * Every open project's threads, for the All queues page — answered from the boards this process has
+     * OPEN, never by opening one. A project with no board here has no honest queue, so it is absent
+     * rather than empty; the client joins this with `projectsList` and says so.
      *
      * OPEN THREADS, NOT JUST QUEUED ONES. The page draws each project's Running and Snoozed rows beside
      * its queue, the way the project's own rail does, so it needs them — and banding is the client's
@@ -4660,7 +4613,7 @@ export function createRouter(ctx: AppContext) {
             })
           } catch {
             // A board stopping mid-walk is a project missing from this round, not a failed request for
-            // every other project — the same rule `projectsRailCounts` keeps.
+            // every other project.
           }
         }
         return out

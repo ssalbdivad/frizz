@@ -13,7 +13,7 @@ import { readMachineSettings } from "./settings.ts"
 // folders, so that work was filed under whichever project happened to be open. Home is the prompt box's
 // other target: agents run in the operator's home folder (or the folder Settings → Home folder names),
 // and its threads get a board of their own that behaves like any project's — its entry in Everything's
-// project list, its lane in the queue, its rail square.
+// project list, its lane in the queue, its square in the switcher.
 //
 // IT IS NOT A REGISTERED PROJECT, and cannot be one. A project's board is `<folder>/.frizz/`, and
 // `~/.frizz` is not a free name: it is Frizz's own data root on every install that predates the XDG

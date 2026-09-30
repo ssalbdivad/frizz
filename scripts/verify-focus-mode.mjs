@@ -10,7 +10,6 @@
 //   · a thread drawer closes back to the tab's view, not to a guess;
 //   · a retired `/project/<slug>` lands focused on it; an unknown `?project=` says so;
 //   · the list names its loud bands, and opens Snoozed, Done and External one at a time;
-//   · a rail square focuses its project;
 //   · at a phone's width nothing overflows sideways, in either view.
 //
 // Usage:
@@ -21,7 +20,6 @@
 import { mkdirSync, readFileSync } from "node:fs"
 import { join } from "node:path"
 import puppeteer from "puppeteer"
-import { createRpcClient } from "./lib/rpc-client.mjs"
 
 const flags = Object.fromEntries(
   process.argv.slice(2).filter((a) => a.startsWith("--")).map((a) => { const s = a.slice(2); const i = s.indexOf("="); return i < 0 ? [s, true] : [s.slice(0, i), s.slice(i + 1)] }),
@@ -71,7 +69,7 @@ async function open(context, url, { width = 1440, height = 1000 } = {}) {
   page.on("pageerror", (error) => errors.push(`pageerror: ${error}`))
   page.on("console", (message) => { if (message.type() === "error" && !message.text().startsWith("Failed to load resource")) errors.push(`console: ${message.text()}`) })
   // A disposable stack runs no supervisor, so its control endpoint 404s on every page, and a project with no
-  // icon answers its rail square's request with a 404 (the square falls back to its monogram); nothing else may.
+  // icon answers its square's request with a 404 (the square falls back to its monogram); nothing else may.
   page.on("response", (response) => { if (response.status() >= 400 && !/\/_frizz\/control\/status$|\/_frizz\/project-icon\?/.test(response.url())) errors.push(`${response.status()} ${response.url()}`) })
   page.on("request", (request) => { const path = new URL(request.url()).pathname; if (path.endsWith("/rpc/board")) boardReads.push(path) })
   if (url) await page.goto(url, { waitUntil: "networkidle2" })
@@ -326,30 +324,6 @@ try {
     const toast = await page.waitForFunction(() => [...document.querySelectorAll("[data-sonner-toast], [role='status'], [data-toast]")].map((t) => t.textContent).find((t) => t?.includes("No project named no-such-project")) ?? null, { timeout: 6000 }).then(() => true, () => false)
     const now = await address(page)
     check("an unknown ?project= is reported and replaced", toast && now !== "/?project=no-such-project", now)
-  })
-
-  // ── the rail ───────────────────────────────────────────────────────────────────────────────────────
-  await step("a rail square focuses the page on its project", async () => {
-    const api = createRpcClient(`${origin}/`)
-    const settings = await api.query("settingsGet")
-    await api.mutate("settingsSet", { ...settings, projectRail: true })
-    try {
-      await page.goto(`${origin}/?project=${A.slug}`, { waitUntil: "networkidle2" })
-      await page.waitForSelector('nav[aria-label="Projects"] a[aria-current="page"]', { timeout: 10_000 })
-      const pill = await page.$eval('nav[aria-label="Projects"] a[aria-current="page"]', (a) => a.getAttribute("href"))
-      check("the focused project's square wears the pill", pill === `/?project=${A.slug}`, pill)
-      await page.bringToFront()
-      const square = `nav[aria-label="Projects"] a[href="/?project=${B.slug}"]`
-      await page.waitForSelector(square, { visible: true })
-      await sleep(400)
-      await page.click(square)
-      await waitAddress(page, `/?project=${B.slug}`)
-      await showing(page, B)
-      check("a square focuses the page on its project", (await listed(page)).join() === B.id)
-      await page.screenshot({ path: join(shots, "focus-mode-rail.png") })
-    } finally {
-      await api.mutate("settingsSet", { ...settings, projectRail: false })
-    }
   })
 
   // ── a phone's width ────────────────────────────────────────────────────────────────────────────────

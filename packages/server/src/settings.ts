@@ -11,9 +11,8 @@ const SETTINGS_KEY = "settings"
 /**
  * The settings that describe the MACHINE rather than a project.
  *
- * `notifications` tracks an OS permission, `localFileOpener` names which editor is installed,
- * `projectRail` is which chrome the person wants and `homeFolder` is where their projectless prompts
- * run (home-workspace.ts); none was ever a property of a repository. The
+ * `notifications` tracks an OS permission, `localFileOpener` names which editor is installed, and
+ * `homeFolder` is where their projectless prompts run (home-workspace.ts); none was ever a property of a repository. The
  * record was created for `font` (2026-08-25), which was inconsistent before one server served every
  * project — stored per project, mirrored per ORIGIN for a pre-paint guard — and that key is gone
  * since 2026-09-19: the interface is sans everywhere and offers no choice.
@@ -89,8 +88,6 @@ export const defaultSettings = (): Settings => ({
   // Unset = codex's own window for the model (272K on GPT-5.6). The schema and codexContextWindowConfig
   // explain the 872K ceiling a larger value is clamped to.
   codexContextWindow: undefined,
-  // Hidden until asked for — see the schema for why.
-  projectRail: false,
   // Inside the project, never beside it — see the schema and cc-worker/hooks/worktree.mjs.
   worktreeDir: ".frizz/worktrees",
   removeWorktreesOnDone: true,

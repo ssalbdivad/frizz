@@ -18,8 +18,8 @@
     <link rel="apple-touch-icon" href="/apple-touch-icon.png?v=6" />
     <link rel="manifest" href="/manifest.webmanifest" />
     <meta name="theme-color" content="#0d0e10" />
-    <!-- FLASH GUARD, and it is about NAVIGATION rather than first run. Switching projects from the
-         rail is a real document load (each board binds its own socket, board store and API base to
+    <!-- FLASH GUARD, and it is about NAVIGATION rather than first run. Switching projects was once
+         a real document load (each board binds its own socket, board store and API base to
          one project, so a full load is how all three get re-bound in one step) — and the browser
          paints its default canvas for the frame before the module CSS arrives. That default is WHITE,
          so every project switch strobed. Resolve this browser's appearance before paint; the inline

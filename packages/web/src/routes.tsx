@@ -2,7 +2,6 @@ import { useContext, useEffect, useLayoutEffect, useState } from "react"
 import { Navigate, Outlet, UNSAFE_ViewTransitionContext, createBrowserRouter, useLocation, useNavigate, useParams } from "react-router"
 import { useQuery } from "@tanstack/react-query"
 import { App } from "./App.tsx"
-import { ProjectRail, RAIL_INSET_CLASS } from "./components/ProjectRail.tsx"
 import { StandaloneThreadPage } from "./components/StandaloneThreadPage.tsx"
 import { AddProjectHost, Welcome } from "./components/ProjectActions.tsx"
 import { TooltipProvider } from "./components/Tooltip.tsx"
@@ -17,23 +16,21 @@ import type { ProjectCard } from "@frizz/shared"
 import { rpc } from "./api/rpc.ts"
 import { feedIsBoundTo, rebindProject } from "./api/socket.ts"
 import { noteStandaloneThreadRender, resetProjectState, showToast, store } from "./store.ts"
-import { useProjectRailVisible } from "./lib/projectRail.ts"
 
 // THE ROUTE TREE — and, more to the point, the LAYOUT that outlives a navigation.
 //
-// The rail is chrome: it draws every project on the machine and is identical on every page, so it
-// must not be torn down and rebuilt when you use it. Before this it was mounted twice — once inside
-// <App/> and once inside <ProjectGrid/> — because `main.tsx` chose ONE of three root shells from
-// `location.pathname` at module load, which made every project switch a full document load. A layout
-// route is the direct expression of "this part does not change": <RootLayout/> holds the rail and the
-// tooltip provider, and the <Outlet/> below it holds the one page — Everything — or a redirect into it.
+// The layout's hosts (tooltips, toasts, the add-project dialog, hovercards, keys) must not be torn down
+// and rebuilt on a navigation. `main.tsx` once chose ONE of three root shells from `location.pathname`
+// at module load, which made every project switch a full document load. A layout route is the direct
+// expression of "this part does not change": <RootLayout/> holds them, and the <Outlet/> below it holds
+// the one page — Everything — or a redirect into it.
 //
 // WHAT A PROJECT SWITCH ACTUALLY COSTS, and why the router alone was never the whole job. Four things
 // are bound to one project, and only the first two are this hook's business:
 //   · the live feed — one socket per project (api/socket.ts rebindProject)
 //   · the board store, the drawer stack and the current view (store.resetProjectState)
 //   · the react-query cache, which now needs NOTHING here. It used to be swept on every switch,
-//     exempting the project list so the rail would not blank mid-navigation; the cache is scoped by
+//     exempting the project list so it would not blank mid-navigation; the cache is scoped by
 //     project at the hash instead (lib/queryKeyScope.ts), so one project's entries are invisible to
 //     another rather than deleted in front of it. Switching back finds a warm cache, and a response
 //     that arrives late has nowhere wrong to land.
@@ -41,8 +38,7 @@ import { useProjectRailVisible } from "./lib/projectRail.ts"
 //     and the router keeps `location` synchronous with navigation.
 //
 // A project switch on the page never remounts it: the page is keyed by a constant (CrossProjectPage), and
-// what is per-project — the store's board and drawer stack — is reset by the binding instead. The rail
-// above it is not keyed either, so it persists.
+// what is per-project — the store's board and drawer stack — is reset by the binding instead.
 
 /** The one place that knows the URL shapes, so a route and a link cannot disagree. */
 /** A thread drawer's prefix on the cross-project page (base-path.ts `crossProjectHref`); the page is `/`. */
@@ -50,21 +46,9 @@ export const CROSS_PROJECT_PATH = "/all/:slug"
 
 function RootLayout() {
   useRegisterNavigate()
-  // ONE decision drives the column AND the space reserved for it. They were separate — the rail was
-  // conditional while every page kept an unconditional `pl-[57px]` — so turning the rail off left a
-  // 57px lane of nothing down the left of every board. A hidden rail has to be gone from the layout,
-  // not merely invisible in it.
-  const railVisible = useProjectRailVisible()
   return (
     <TooltipProvider>
-      {/* Outside the <Outlet/> on purpose: this is the element that must survive the navigation.
-          OPT-IN: a permanent column of every project is a standing invitation to leave the project
-          you are in, so it is off unless asked for. Hidden, the READY header's project switcher is the
-          way to another project (AllQueues.tsx Switcher), a click away exactly when you meant to switch. */}
-      {railVisible ? <ProjectRail /> : null}
-      <div className={railVisible ? RAIL_INSET_CLASS : undefined}>
-        <Outlet />
-      </div>
+      <Outlet />
       {/* HOSTED BY THE LAYOUT, not by the board. It lived inside <App/>, so `showToast` from anywhere
           else raised a toast with nowhere to render — silently, since the store field is set either
           way. The home page needs one (a bad project URL lands there, and says so), and it was exactly
@@ -280,7 +264,7 @@ function useRegisterNavigate(): void {
   }, [navigate])
 }
 
-/** The focused single-thread page. Deliberately OUTSIDE the layout: it has no rail, and should not. */
+/** The focused single-thread page. Deliberately OUTSIDE the layout. */
 function StandaloneRoute() {
   const { thread, slug } = useParams()
   useRegisterNavigate()
@@ -304,7 +288,7 @@ function StandaloneRoute() {
       <StandaloneThreadPage slug={thread!} />
       {/* Its own, since it is outside the layout. This page renders a full transcript, so it has the
           copy-a-code-block control — whose only feedback is a toast, which until now had nowhere to
-          go here. Skipping the rail does not mean skipping the feedback. */}
+          go here. Skipping the layout does not mean skipping the feedback. */}
       <Toaster />
       {/* Its own for the same reason: `e`, `h`, `r` and `f` (which leaves) work on this thread too. */}
       <KeyboardLayer />
@@ -313,7 +297,7 @@ function StandaloneRoute() {
 }
 
 export const router = createBrowserRouter([
-  // The focused single-thread pages sit OUTSIDE the layout — they have no rail, and should not.
+  // The focused single-thread pages sit OUTSIDE the layout.
   { path: "/thread/:thread/full", element: <StandaloneRoute /> },
   { path: `${CROSS_PROJECT_PATH}/thread/:thread/full`, element: <StandaloneRoute /> },
   {

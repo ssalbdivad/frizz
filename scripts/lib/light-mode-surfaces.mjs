@@ -255,7 +255,7 @@ export async function checkSurfaceStates({ page, url, font, palette, out, check,
   for (const choice of ['Off', 'On']) {
     const saved = page.waitForResponse(response => response.url().includes('/rpc/settingsSet') && response.ok())
     await page.evaluate(choice => {
-      const field = document.querySelector('button[aria-label="About Project sidebar"]').closest('div.flex-col')
+      const field = document.querySelector('button[aria-label="About Remove worktrees when done"]').closest('div.flex-col')
       ;[...field.querySelectorAll('button')].find(el => el.textContent.trim() === choice).click()
     }, choice)
     await saved

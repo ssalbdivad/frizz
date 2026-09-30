@@ -33,9 +33,9 @@
 //
 // AND THE PROJECTS DRAG. A project's row is its grip: press, travel a few pixels, and the whole group —
 // row and threads — lifts and follows the pointer while the groups it passes slide aside; drop it and the
-// machine-wide order the rail shows is rewritten (`projectsReorder`), so the rail and the list move as
-// one. A drag stays inside its run — the busy projects, or the quiet ones under them — because busy-ness,
-// not the order, decides which run a project is in: a busy project dropped among the quiet ones would
+// machine-wide order is rewritten (`projectsReorder`), so every surface that reads it moves as one.
+// A drag stays inside its run — the busy projects, or the quiet ones under them — because busy-ness, not
+// the order, decides which run a project is in: a busy project dropped among the quiet ones would
 // only jump back. Alt+Arrow on a focused row moves it one place, for anyone not using a mouse.
 import { useCallback, useEffect, useMemo, useRef, useState, type KeyboardEvent as KeyboardEvent_, type PointerEvent as PointerEvent_, type ReactNode } from "react"
 import { useMutation, useQueryClient } from "@tanstack/react-query"
@@ -61,7 +61,7 @@ import { useOpenThreadInPlace } from "./AllQueuesCard.tsx"
 import { BAND_LABEL_TYPE, BANDS, BandCount, type BandKey } from "./BandLabel.tsx"
 import { ProjectMenu, useAddProject } from "./ProjectActions.tsx"
 import { QueueBadge } from "./ProjectSwitcher.tsx"
-import { ProjectSquare } from "./ProjectRail.tsx"
+import { ProjectSquare } from "./ProjectSquare.tsx"
 import { ROW_ACTION_CLASS, RailRow, type RowScope } from "./Sidebar.tsx"
 import { glideTo } from "../lib/viewportLock.ts"
 
@@ -85,7 +85,7 @@ const PREFETCH_IDLE_MS = 1_500
 /**
  * Every project on the machine — the page's navigator, and the only place a project is managed from.
  *
- * Projects with work in flight come first, in the rail's order, each followed by its threads; every other
+ * Projects with work in flight come first, in the machine-wide order, each followed by its threads; every other
  * project is one line under them. They are separated by space, not rules: the project's own square already
  * starts each group, and a rule would say it twice.
  */
@@ -175,10 +175,13 @@ interface ListDrag {
   pitch: number
 }
 
-/** The rail's threshold (ProjectRail.tsx): the row is a fold first, so a drag starts only past a press. */
+/** The row is a fold first, so a drag starts only past a press. */
 const DRAG_THRESHOLD_PX = 4
 
-/** The click a drag ends with is swallowed, and nothing later — the rail's module stamp, for the same reason. */
+/**
+ * The click a drag ends with is swallowed, and nothing later — a module-scoped stamp rather than state,
+ * so it survives the re-render the drop causes without adding one of its own.
+ */
 let lastDragEndedAt = 0
 function justDragged(): boolean {
   return Date.now() - lastDragEndedAt < 250
@@ -190,12 +193,12 @@ function orderable(project: QueuesProject): boolean {
 }
 
 /**
- * The list's drag and keyboard reorder, writing the order the rail reads.
+ * The list's drag and keyboard reorder, writing the machine-wide order.
  *
  * TWO COPIES OF THE NEW ORDER, for two readers. The list holds its own (`pending`) from the drop until
  * the projects it is handed agree with it: it is set in the same React batch that lets go of the drag,
  * so the group lands where it was dropped with no frame back in its old slot. And the `projectsList`
- * cache is rewritten at once, so the rail moves with it before the server answers; the server's answer
+ * cache is rewritten at once, so every reader moves with it before the server answers; the server's answer
  * replaces that, and a failure puts back what was there.
  */
 function useListReorder(projects: readonly QueuesProject[]) {
@@ -866,8 +869,7 @@ function QuietBands({ project, quiet, opened, row }: { project: QueuesProject; q
 }
 
 /**
- * The last row of the list: a project the machine does not have yet. The rail's own add slot — a dotted
- * squircle, "nothing here yet" — at the row's scale, so it reads as an empty place in the same list rather
+ * The last row of the list: a project the machine does not have yet. A dotted squircle, "nothing here yet" — at the row's scale, so it reads as an empty place in the same list rather
  * than a button bolted under it. Muted, and never accent: accent means only "this many want you".
  */
 export function AddProjectRow() {

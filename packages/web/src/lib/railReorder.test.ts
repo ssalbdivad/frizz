@@ -1,6 +1,8 @@
 import assert from "node:assert/strict"
 import { test } from "node:test"
-import { dropIndex, edgeScrollVelocity, listDropIndex, listPitch, moveItem, placeAmong, RAIL_STEP_PX, shiftFor } from "./railReorder.ts"
+import { edgeScrollVelocity, listDropIndex, listPitch, moveItem, placeAmong, shiftFor } from "./railReorder.ts"
+
+const STEP = 48
 
 test("moveItem moves in both directions, and `to` is read against the post-removal list", () => {
   const list = ["a", "b", "c", "d"]
@@ -14,35 +16,22 @@ test("moveItem moves in both directions, and `to` is read against the post-remov
   assert.deepEqual(list, ["a", "b", "c", "d"], "the input is not mutated")
 })
 
-test("the drop swaps at the HALFWAY point, not when a square fully clears its neighbour", () => {
-  // Just under half a step is still the original slot; just over it has taken the next one.
-  assert.equal(dropIndex(2, RAIL_STEP_PX * 0.49, 6), 2)
-  assert.equal(dropIndex(2, RAIL_STEP_PX * 0.51, 6), 3)
-  assert.equal(dropIndex(2, -RAIL_STEP_PX * 0.51, 6), 1)
-  assert.equal(dropIndex(2, RAIL_STEP_PX * 2, 6), 4)
-})
-
-test("a drag past either end lands at the end rather than off the list", () => {
-  assert.equal(dropIndex(1, -RAIL_STEP_PX * 40, 6), 0)
-  assert.equal(dropIndex(1, RAIL_STEP_PX * 40, 6), 5)
-})
-
 test("only the squares between the two slots move, and they move exactly one step", () => {
   // Dragging index 1 down to 3: 2 and 3 slide UP into the gap, 0 and 4 do not move at all.
-  assert.equal(shiftFor(0, 1, 3), 0)
-  assert.equal(shiftFor(1, 1, 3), 0, "the held square is positioned by its own delta, not shifted")
-  assert.equal(shiftFor(2, 1, 3), -RAIL_STEP_PX)
-  assert.equal(shiftFor(3, 1, 3), -RAIL_STEP_PX)
-  assert.equal(shiftFor(4, 1, 3), 0)
+  assert.equal(shiftFor(0, 1, 3, STEP), 0)
+  assert.equal(shiftFor(1, 1, 3, STEP), 0, "the held square is positioned by its own delta, not shifted")
+  assert.equal(shiftFor(2, 1, 3, STEP), -STEP)
+  assert.equal(shiftFor(3, 1, 3, STEP), -STEP)
+  assert.equal(shiftFor(4, 1, 3, STEP), 0)
 
   // Dragging 3 up to 1: 1 and 2 slide DOWN.
-  assert.equal(shiftFor(0, 3, 1), 0)
-  assert.equal(shiftFor(1, 3, 1), RAIL_STEP_PX)
-  assert.equal(shiftFor(2, 3, 1), RAIL_STEP_PX)
-  assert.equal(shiftFor(3, 3, 1), 0)
+  assert.equal(shiftFor(0, 3, 1, STEP), 0)
+  assert.equal(shiftFor(1, 3, 1, STEP), STEP)
+  assert.equal(shiftFor(2, 3, 1, STEP), STEP)
+  assert.equal(shiftFor(3, 3, 1, STEP), 0)
 
   // A drag that has not changed slots moves nothing.
-  for (const i of [0, 1, 2, 3]) assert.equal(shiftFor(i, 2, 2), 0)
+  for (const i of [0, 1, 2, 3]) assert.equal(shiftFor(i, 2, 2, STEP), 0)
 })
 
 test("edge auto-scroll engages only inside the zone, ramps with depth, and is signed", () => {

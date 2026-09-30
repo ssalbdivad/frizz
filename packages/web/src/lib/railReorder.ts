@@ -1,12 +1,8 @@
-// THE ARITHMETIC OF DRAGGING A RAIL SQUARE, with no DOM in it.
+// THE ARITHMETIC OF DRAG-REORDERING A LIST, with no DOM in it.
 //
-// The rail's drag is a uniform vertical list: every square is the same height and every gap is the
-// same, which collapses "where would this land" from a hit-test against N boxes into one division.
-// Keeping that arithmetic here — pure, and tested — is what lets the component own only the parts
-// that genuinely need a browser: pointer capture, transforms, and the edge auto-scroll.
-
-/** One square plus the gap below it: the distance the list shifts by when an item moves one slot. */
-export const RAIL_STEP_PX = 48
+// Pure and tested, so the component (ProjectList.tsx) owns only the parts that genuinely need a
+// browser: pointer capture, transforms, and the edge auto-scroll. (The name is from the project rail,
+// the first list dragged this way; the rail was removed on 2026-09-30.)
 
 /**
  * `list` with the item at `from` moved to `to`.
@@ -24,26 +20,13 @@ export function moveItem<T>(list: readonly T[], from: number, to: number): T[] {
 }
 
 /**
- * Which slot the dragged square is currently over.
- *
- * From its own displacement rather than the pointer's: the square is what the eye tracks, and keying
- * on the pointer makes the drop depend on where inside the square you happened to grab it. Rounding
- * (not flooring) is what makes the swap happen at the HALFWAY point, so a square that has visibly
- * passed its neighbour has already taken its slot.
- */
-export function dropIndex(fromIndex: number, deltaY: number, count: number, step = RAIL_STEP_PX): number {
-  const moved = Math.round(deltaY / step)
-  return Math.max(0, Math.min(count - 1, fromIndex + moved))
-}
-
-/**
  * How far square `index` must slide to make room, in px.
  *
  * Everything between the square's old slot and its new one shifts by exactly one step, towards the
  * gap the dragged square left behind. Squares outside that span do not move at all — which is what
- * makes a drag across a long rail read as a local insertion rather than the whole list sliding.
+ * makes a drag across a long list read as a local insertion rather than the whole list sliding.
  */
-export function shiftFor(index: number, fromIndex: number, toIndex: number, step = RAIL_STEP_PX): number {
+export function shiftFor(index: number, fromIndex: number, toIndex: number, step: number): number {
   if (index === fromIndex) return 0
   if (toIndex > fromIndex && index > fromIndex && index <= toIndex) return -step
   if (toIndex < fromIndex && index >= toIndex && index < fromIndex) return step
@@ -53,7 +36,7 @@ export function shiftFor(index: number, fromIndex: number, toIndex: number, step
 /**
  * How fast to scroll the band when the pointer nears its edge, in px per frame.
  *
- * Without this the rail is reorderable only within one screen of itself, which on a machine with
+ * Without this a list is reorderable only within one screen of itself, which on a machine with
  * forty projects is not reorderable at all — the square you want to move to the top is usually not
  * on screen at the same time as the top. Ramps with depth into the zone so a small overshoot nudges
  * and a deliberate hold at the edge moves properly.
@@ -83,7 +66,7 @@ export interface ListBox {
 }
 
 /**
- * Which slot the held group is over, from its own displacement (as `dropIndex`, for the same reason).
+ * Which slot the held group is over, from its own displacement (rather than the pointer's, so the drop does not depend on where inside the group you grabbed it).
  *
  * By the held group's LEADING EDGE against each neighbour's midpoint — its bottom edge going down, its
  * top going up. Its centre would be the uniform rule, but a project with twenty threads under it would
@@ -122,7 +105,7 @@ export function listPitch(boxes: readonly ListBox[], fromIndex: number): number 
 /**
  * The machine-wide order, with `id` moved to sit where the operator dropped it among `section` — the
  * run of projects they could SEE, which is only part of the whole (the list splits busy projects from
- * quiet ones, each run in the rail's order).
+ * quiet ones, each run in the machine-wide order).
  *
  * Placed by NEIGHBOUR, not by index: the id lands just before the section project it was dropped above,
  * or just after the one it was dropped below when it went to the end. Every project outside the section

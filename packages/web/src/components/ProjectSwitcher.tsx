@@ -1,7 +1,7 @@
 import type { CSSProperties, ReactNode } from "react"
 import { Check, ChevronDown, Layers, Plus } from "lucide-react"
 import type { ProjectCard } from "@frizz/shared"
-import { ProjectSquare } from "./ProjectRail.tsx"
+import { ProjectSquare } from "./ProjectSquare.tsx"
 import { Menu, MenuContent, MenuItem, MenuSeparator, MenuTrigger } from "./ui/Menu.tsx"
 
 // THE PROJECT SWITCHER — the page's TITLE, at the left end of the status row over the prompt box
@@ -18,7 +18,7 @@ import { Menu, MenuContent, MenuItem, MenuSeparator, MenuTrigger } from "./ui/Me
 //
 // The menu lists every project in the list's order, then the Home workspace under a rule with the folder
 // its agents run in (as the prompt box's picker lists it), with All projects above them all as the one
-// view that is not a project. Each wears its Ready count, the rail's accent badge. Choosing one is a
+// view that is not a project. Each wears its Ready count, the accent badge. Choosing one is a
 // NAVIGATION (`/?project=<slug>`, `/`), so Back returns to the view before.
 //
 // It must not read like the prompt box's project picker (AllQueues.tsx ProjectPicker), which All projects
@@ -30,13 +30,13 @@ export interface SwitcherProject {
   slug: string
   name: string
   card: ProjectCard
-  /** Ready threads — the accent badge, as on the rail. */
+  /** Ready threads — the accent badge. */
   ready: number
   /** Why it cannot be chosen as a place to work — its directory is gone, or this server has not opened it. */
   note?: string
 }
 
-/** The accent count the rail and the project list wear. */
+/** The accent count the switcher and the project list wear. */
 export function QueueBadge({ count }: { count: number }) {
   return (
     <span
@@ -44,7 +44,8 @@ export function QueueBadge({ count }: { count: number }) {
       data-xq-queue-count={count}
       className="flex h-[16px] min-w-[16px] shrink-0 items-center justify-center rounded-full bg-accent-fill px-[4px] text-[10px] font-semibold leading-none proportional-nums text-on-accent"
     >
-      {/* The cap band, not the line box — the rail badge's own fix (ProjectRail.tsx). */}
+      {/* The cap band, not the line box: `items-center` centres the digits' line box, and their ink rode
+          ~0.5px low in the sans UI font. Trimming to baseline→cap height makes the box the ink. */}
       <span style={{ textBox: "trim-both cap alphabetic" } as CSSProperties}>{count}</span>
     </span>
   )

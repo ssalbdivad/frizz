@@ -90,7 +90,7 @@ try {
   page.on("pageerror", (error) => errors.push(`pageerror: ${error}`))
   page.on("console", (message) => { if (message.type() === "error" && !message.text().startsWith("Failed to load resource")) errors.push(`console: ${message.text()}`) })
   // A disposable stack runs no supervisor, so its control endpoint 404s on every page, and a project with
-  // no icon answers its rail square's request with a 404 (the square falls back to its monogram); nothing
+  // no icon answers its square's request with a 404 (the square falls back to its monogram); nothing
   // else may.
   page.on("response", (response) => { if (response.status() >= 400 && !/\/_frizz\/control\/status$|\/_frizz\/project-icon\?/.test(response.url())) errors.push(`${response.status()} ${response.url()}`) })
   const posts = []

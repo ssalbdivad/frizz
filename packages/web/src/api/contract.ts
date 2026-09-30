@@ -106,7 +106,6 @@ import type {
   CancelInteractionResult,
   CompletionHold,
   ProjectCard,
-  ProjectRailCounts,
   ThreadLocation,
   DirectoryPickResult,
   ProjectAddResult,
@@ -375,11 +374,6 @@ export interface Api {
   // board; with it, the project's live workers are stopped and everything Frizz holds for it is
   // removed. The project Frizz is RUNNING from is refused — see the router.
   projectRemove(input: { id: string; deleteData?: boolean }): Promise<{ removed: boolean; deletedData: boolean; stoppedWorkers: number }>
-  // Queue size per OPEN project, keyed by project id — the rail's badges. A project with no board on
-  // this server is absent (no honest count without one), which the rail draws as no badge rather than
-  // as zero. The server opens every registered project within about a second of boot, so that is a transient
-  // state and not the "you have not clicked into it yet" it used to be — see server/tenant-prime.ts.
-  projectsRailCounts(): Promise<Record<string, ProjectRailCounts>>
   // Every OPEN project's open threads (Queue, Running, Snoozed, Pinned) plus its Done count — the All
   // queues page. Machine-scoped like the counts above, and answered from the same open boards: a
   // project with no board here is absent. Each entry names its project, which is what every action
@@ -535,7 +529,6 @@ export const PROCEDURES = {
   homeFolderCheck: "query",
   projectsReorder: "mutation",
   projectRemove: "mutation",
-  projectsRailCounts: "query",
   projectsQueues: "query",
   projectIconPick: "mutation",
   projectIconSet: "mutation",

@@ -53,7 +53,7 @@ import { ExpandThreadLink } from "./ExpandThreadLink.tsx"
 import { SpinoffButton, SpinoffOf } from "./Spinoff.tsx"
 import { HEADER_ICON_CLASS } from "../lib/headerIcon.ts"
 import { LastActive } from "./LastActive.tsx"
-import { ProjectSquare } from "./ProjectRail.tsx"
+import { ProjectSquare } from "./ProjectSquare.tsx"
 import { LinkedHtml } from "./LinkedHtml.tsx"
 import { QuestionBlockCard } from "./QuestionBlockCard.tsx"
 import { RegisteredAnsweringContext, RegisteredAnsweringProvider, RegisteredQuestionStack } from "./RegisteredQuestionCards.tsx"
@@ -111,7 +111,7 @@ export function ProjectChip({ project, onChoose, square = true }: { project: Que
 
 /**
  * THE PROJECT'S LOGO, leading a card's header on a queue that holds several projects — its icon, or its
- * monogram tile, at the size the rail draws it small (ProjectRail.tsx ProjectSquare). The 12px square on
+ * monogram tile, small (ProjectSquare.tsx). The 12px square on
  * the meta line said whose a card was only to someone reading that line; a column of cards is scanned
  * down its left edge, so that is where the mark sits, big enough to pick one project's cards out of a
  * page of them without reading a word (maintainer 2026-09-29: "a more visible indicator of the project

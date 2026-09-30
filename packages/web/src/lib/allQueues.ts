@@ -90,7 +90,7 @@ export function queuesProjects(
     return {
       id: card?.id ?? queue!.projectId,
       // The CARD's slug and name when there is one: the registry is what every other link on the machine
-      // was minted from, so a project renamed a moment ago agrees with its own rail square.
+      // was minted from, so a project renamed a moment ago agrees with itself everywhere it is drawn.
       slug: card?.slug ?? queue!.projectSlug,
       name: card?.name ?? queue!.projectName,
       card,

@@ -539,7 +539,7 @@ try {
 
   // Leaving All projects for ONE project is a change of view, by address (lib/pageView.ts): `/?project=`.
   // It was a filter on the queue column, held per tab at `/`, from 2026-09-28 until focus mode; before
-  // that, each of these doors navigated to `/project/<slug>`. The doors are a rail square, a card's
+  // that, each of these doors navigated to `/project/<slug>`. The doors are a card's
   // project chip (All projects draws one on every card), the READY header's switcher, and a project row's
   // ⋯ (verify-one-view.mjs). What each check reads is the address and whose cards the queue shows:
   // focused, exactly the one project's.
@@ -561,38 +561,6 @@ try {
     await clickSettled("[data-status-row] [data-xq-switcher]")
     await clickSettled(`[role="menuitem"][data-value="${value}"]`)
   }
-
-  await step("a rail square focuses the page on its project, and the switcher's All projects comes back to it", async () => {
-    const settings = await api("acme-api").query("settingsGet")
-    await api("acme-api").mutate("settingsSet", { ...settings, projectRail: true })
-    try {
-      await allFrom("acme-api")
-      await page.waitForSelector("[data-xq-card]")
-      const everything = await cardProjects()
-      // The rail's scrolling band draws the registry's order, one square per project, each a plain link to
-      // its focused page; the Home workspace's square is pinned below the band, outside that order
-      // (ProjectRail.tsx).
-      const index = (await api("acme-api").query("projectsList")).filter((p) => !p.home).map((p) => p.slug).indexOf("marketing-site")
-      const band = 'nav[aria-label="Projects"] .frizz-rail-scroll a[href^="/?project="]'
-      await page.waitForSelector(band, { timeout: 10_000 })
-      const squares = await page.$$(band)
-      if (squares.length !== Object.keys(ids).length) throw new Error(`${squares.length} rail squares for ${Object.keys(ids).length} projects`)
-      await squares[index].click()
-      const focused = await focusedTo("marketing-site")
-      const current = await page.$eval('nav[aria-label="Projects"] a[href="/?project=marketing-site"]', (el) => el.getAttribute("aria-current"))
-      await switchTo("all-projects")
-      const back = await backToAll(everything.length)
-      // The project just left is All projects' pick now, as the switcher promised.
-      const says = await pickerSays("marketing-site")
-      check(
-        "a rail square focuses the page on its project, and the switcher's All projects comes back to it",
-        only(focused, "marketing-site") && current === "page" && same(back, everything) && says,
-        `square → ${focused.projects.length} project(s) at ${focused.path}, marked ${current}; All → ${back.length}/${everything.length} projects; picker "${await picker()}"`,
-      )
-    } finally {
-      await api("acme-api").mutate("settingsSet", settings)
-    }
-  })
 
   await step("a card's project chip and the switcher each focus the page on it; Back and All projects come back", async () => {
     await allFrom("billing-worker")

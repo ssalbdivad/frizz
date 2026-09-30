@@ -21,7 +21,7 @@ import { rememberCrossProjectFocus } from "../lib/crossProject.ts"
 import { ALL_PROJECTS, homeHref, projectViewHref, tabView, viewHref } from "../lib/pageView.ts"
 import { useShortcut } from "../lib/keyboardRuntime.ts"
 import { Dialog } from "./ui/Dialog.tsx"
-import { ProjectSquare } from "./ProjectRail.tsx"
+import { ProjectSquare } from "./ProjectSquare.tsx"
 import { ROW_ACTION_CLASS } from "./Sidebar.tsx"
 
 /** `/Users/me/code/nub` → `~/code/nub`. The home prefix is noise on every row. */
@@ -359,8 +359,8 @@ function DeleteProjectDialog({
   const remove = useMutation({
     mutationFn: () => rpc.projectRemove({ id: project.id, deleteData }),
     onSuccess: (result) => {
-      // Every machine-wide read that still names it, so its row, its lane and its rail badge go at once.
-      for (const queryKey of [["projectsList"], ["projectsQueues"], ["projectsRailCounts"]]) void queryClient.invalidateQueries({ queryKey })
+      // Every machine-wide read that still names it, so its row and its lane go at once.
+      for (const queryKey of [["projectsList"], ["projectsQueues"]]) void queryClient.invalidateQueries({ queryKey })
       // The worker count is the part the operator could not have known they were asking for, so it is
       // reported rather than folded into a generic success.
       showToast(
@@ -728,7 +728,7 @@ function PathField({
 /**
  * Adding a project: the native folder picker first, the typed-path dialog as the FALLBACK — it opens
  * only when the machine has no picker, or the picker failed to open and said why. Every door that adds a
- * project (the list's last row, the rail's +, the empty machine's box) calls this, and the fallback is
+ * project (the list's last row, the empty machine's box) calls this, and the fallback is
  * the ONE dialog the layout hosts (AddProjectHost), so none of them grows a copy of it.
  */
 export function useAddProject(): { start: () => void; pending: boolean } {
@@ -756,7 +756,7 @@ export function useAddProject(): { start: () => void; pending: boolean } {
 /**
  * Adding a project is only ever a step towards working in it, so it lands there: the page focused on it
  * (`?project=`, lib/pageView.ts), from the page or from the welcome page of a machine with nothing on it.
- * `navigate`, not location.assign: the rail must not be torn down on the way.
+ * `navigate`, not location.assign: the page must not be torn down on the way.
  */
 function useOpenAddedProject(): (project: { id: string; slug: string }) => void {
   const navigate = useNavigate()
@@ -770,7 +770,7 @@ function useOpenAddedProject(): (project: { id: string; slug: string }) => void 
 /**
  * The typed-path dialog, whenever something asked for it (`store.addProject`). Mounted once, by the layout
  * — which is also why `n` (New project) is registered here: every page under the layout has this host,
- * and the key opens the same folder picker the rail's + does.
+ * and the key opens the same folder picker the list's add row does.
  */
 export function AddProjectHost() {
   const request = useSnapshot(store).addProject

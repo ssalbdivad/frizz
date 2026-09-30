@@ -75,8 +75,6 @@ Every directory you run `npx frizz` in becomes a project, all served by the one 
   <img src="assets/projects.png" alt="Frizz's one page: a prompt box above a list of projects — marketing-site, acme-api, billing-worker — each with its threads beneath it, and beside the list every project's ready cards in one column, the first asking a question with lettered options." width="100%">
 </p>
 
-The project rail shows every project's icon down the edge of the window, with each queue's count on it; click an icon to filter the queue to that project, and again to clear the filter. It is off by default; switch it on under **Settings → Project sidebar**.
-
 Work that belongs to no project yet — cloning a repository, a question about your machine — starts in **Home**, the last choice in the prompt box's project picker. Its agents run in your home folder, or in the folder you set under **Settings → Home folder**, and its threads are listed under Home in the project list like any project's.
 
 ### The queue

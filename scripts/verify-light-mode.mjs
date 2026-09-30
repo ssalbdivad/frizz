@@ -61,7 +61,6 @@ try {
   const api = createRpcClient(stack.gridUrl)
   await seedLightModeFixture(stack, api)
   const settings = await api.query("settingsGet")
-  await api.mutate("settingsSet", { ...settings, projectRail: true })
   browser = await puppeteer.launch({ headless: true, executablePath: process.env.CHROME_PATH ?? "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome", args: ["--no-sandbox", "--force-color-profile=srgb"], protocolTimeout: 120_000 })
   console.log("BROWSER", browser.process().pid)
   page = await browser.newPage()
@@ -97,7 +96,7 @@ try {
   }
   const palettes = baseline ? ["dark"] : ["dark", "light"]
   for (const font of process.argv.includes("--behavior-only") ? [] : ["sans"]) {
-    await api.mutate("settingsSet", { ...settings, projectRail: true })
+    await api.mutate("settingsSet", settings)
     await page.reload({ waitUntil: "networkidle2" })
     for (const palette of palettes) {
       if (!baseline) await setTheme(palette)

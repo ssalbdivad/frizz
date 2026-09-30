@@ -5,11 +5,11 @@ import { log as frizzLog } from "./logging.ts"
 //
 // Tenants activate LAZILY: `routeToTenant` opens a project the first time a request addresses it, so
 // a project nobody has visited since boot has no board. That is cheap and it was the right default —
-// but the rail's badge is a BOARD FACT (`projectsRailCounts` counts `queuedThread` and `activeBandThread` rows off each open
+// but a project's queue is a BOARD FACT (All projects, `projectsQueues`, reads it off each open
 // project's snapshot), so the consequence the operator actually experienced was having to click into
-// every square before any of them would tell them how many threads were waiting (2026-08-26: "I
-// currently need to click into every project before the badge shows up with the number of rested
-// threads!"). A cue you have to visit each project to see is not a cue.
+// every project before it would say how many threads were waiting (2026-08-26: "I currently need to
+// click into every project before the badge shows up with the number of rested threads!"). A cue you
+// have to visit each project to see is not a cue.
 //
 // So the server opens the rest of them itself, once, shortly after it starts serving. Three facts make
 // that affordable rather than reckless, and they are the whole argument for doing it this way:
@@ -27,7 +27,7 @@ import { log as frizzLog } from "./logging.ts"
 //     go quiet for a project you are not looking at. Lazy activation left them dead until you opened it.
 //
 // The pass is SERIAL, and the pacing is MEASURED rather than guessed. It shipped with a flat 3s head
-// start and a flat 1.5s between projects, which put the last square of an 11-project rail 18 seconds
+// start and a flat 1.5s between projects, which put the last project of 11 on screen 18 seconds
 // after boot — and the maintainer rightly asked what the holdup was. Measured on an 11-project stack
 // (seven empty, two ~30-thread boards, one 800-thread board with 9.4MB of transcripts), cold tail
 // cache:
@@ -37,7 +37,7 @@ import { log as frizzLog } from "./logging.ts"
 // The whole pass was 390ms of work behind 16,500ms of waiting. So the delays below are what it costs to
 // stay POLITE, and nothing else: one activation is the atomic block (11-220ms, the top end being
 // tailer.start's PRIME_BUDGET_MS ceiling), and the pause after it hands the loop back so a request that
-// arrived mid-pass is served now rather than after the remaining squares.
+// arrived mid-pass is served now rather than after the remaining projects.
 //
 // The gap TRACKS THE LAST ACTIVATION, the way the tailer's own scheduleTick tracks its last tick: an
 // empty project costs a 25ms pause, a big one earns a breather its own size, and nothing pathological
@@ -65,7 +65,7 @@ const PRIME_START_DELAY_MS = 250
 /** Floor on the pause between projects: even a 13ms activation yields the loop for a beat. */
 const PRIME_MIN_GAP_MS = 25
 /**
- * …and the ceiling, so one slow activation cannot pace the whole rail.
+ * …and the ceiling, so one slow activation cannot pace the whole pass.
  *
  * IT WAS 250ms, AND THAT SILENTLY STOPPED MEANING A 50% DUTY CYCLE. The figure was chosen against the
  * 11-220ms activations measured above, where clamping at 250 never bound anything. Activations are no
@@ -74,7 +74,7 @@ const PRIME_MIN_GAP_MS = 25
  * a 250ms breather — an 80% duty cycle, not 50% — and the loop stayed saturated for the whole pass. The
  * board RPC measured a 1.19s mean and a 5.60s max while priming ran, against 10ms and 427ms with it off.
  * That is the "long time to load initially": the page the operator is staring at waits behind the
- * squares they are not looking at.
+ * projects they are not looking at.
  *
  * 1500ms clears the slowest activation on that log with headroom, so the ratio below is honoured for
  * every project actually observed, while still bounding a pathological one. The pass takes longer in
@@ -88,7 +88,7 @@ function gapAfter(tookMs: number): number {
   return Math.min(PRIME_MAX_GAP_MS, Math.max(PRIME_MIN_GAP_MS, tookMs))
 }
 
-/** The registry shape this needs — `listProjects()` entries, rail order. */
+/** The registry shape this needs — `listProjects()` entries, in registry order. */
 export interface PrimeCandidate {
   id: string
   path: string
@@ -97,7 +97,7 @@ export interface PrimeCandidate {
 }
 
 export interface TenantPrimeDeps {
-  /** Every registered project, in the order the rail draws them. */
+  /** Every registered project, in the registry's order. */
   list: () => readonly PrimeCandidate[]
   /** Already open here — the launching project, and anything a request has opened since. */
   isOpen: (projectId: string) => boolean

@@ -24,11 +24,10 @@ import { projectSlug } from "./base-path.ts"
 /**
  * Keys that name the MACHINE rather than one project, and must stay shared.
  *
- * `projectsList` is the rail's own data — scoping it would refetch the whole list on every switch and
- * blank the rail mid-navigation, which is the flicker the client-side router exists to remove.
+ * `projectsList` is every project on the machine — scoping it would refetch the whole list on every
+ * switch and blank the project list and switcher mid-navigation, which is the flicker the client-side router exists to remove.
  * `threadLocate` deliberately searches every registered project server-side, so a per-project copy
- * would be several caches of one answer. `projectsRailCounts` is the rail's badges — one answer for
- * every project, read by a rail that outlives every switch. `dispatchPreferencesGet` is the prompt
+ * would be several caches of one answer. `dispatchPreferencesGet` is the prompt
  * box's model + effort profile, which the server keeps in one machine-level file
  * (server/dispatch-preferences.ts): scoping it would let a switch briefly paint the profile this
  * project last saw instead of the one just chosen in another.
@@ -46,7 +45,7 @@ import { projectSlug } from "./base-path.ts"
  * binary and the machine's credentials, whichever project asks. Scoped, the status row's quota chips
  * started empty every time the cross-project page's focus moved to a project not yet asked.
  */
-const MACHINE_WIDE = new Set(["projectsList", "projectsRailCounts", "projectsQueues", "ofProject", "threadLocate", "dispatchPreferencesGet", "codexModels", "supervisorStatus", "quota", "authStatus"])
+const MACHINE_WIDE = new Set(["projectsList", "projectsQueues", "ofProject", "threadLocate", "dispatchPreferencesGet", "codexModels", "supervisorStatus", "quota", "authStatus"])
 
 /** The `queryKeyHashFn` for this app's QueryClient. Nothing else should need to call it. */
 export function projectScopedQueryKeyHash(key: readonly unknown[]): string {

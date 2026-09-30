@@ -3958,17 +3958,10 @@ export const Settings = z.object({
   // presents it; resolveClaudeEffort (server/backend/claude-effort.ts) translates it at the spawn edge.
   effort: z.enum(["low", "medium", "high", "xhigh", "max", "ultra", "ultracode"]).optional(),
   notifications: z.boolean(),
-  /**
-   * The permanent column of project icons. OFF by default, on purpose.
-   *
-   * A rail of every project on the machine is a standing invitation to leave the thread you are in —
-   * "just too tempting" (maintainer 2026-08-06). Frizz's home is one board; the grid is a page you go
-   * to, not furniture you sit beside. Hidden, the way back is a breadcrumb in the status bar, which
-   * costs a click exactly when you meant to switch and nothing when you did not.
-   *
-   * Machine-level: which chrome you want is a property of the person, not the repo.
-   */
-  projectRail: z.boolean(),
+  // There is no `projectRail` key any more. It toggled a permanent column of project icons down the
+  // left edge until 2026-09-30, when the All projects view and per-tab notifications superseded it.
+  // Settings is a non-strict object, so a stored `projectRail` is stripped the moment an old blob
+  // parses — no migration (server/settings.test.ts pins that).
   /**
    * Where a prompt that belongs to NO project runs — the prompt box's "Home" target, for work like
    * cloning a repository that has no project yet. A folder path as the operator typed it (`~` and
@@ -4065,7 +4058,7 @@ export type Settings = z.infer<typeof Settings>
  * because the query cache keeps one `settingsGet` entry per project and a machine setting changed in
  * one is changed in all.
  */
-export const MACHINE_SETTING_KEYS = ["notifications", "localFileOpener", "projectRail", "homeFolder", "worktreeDir", "removeWorktreesOnDone", "deleteDoneThreadsUntouchedDays"] as const satisfies readonly (keyof Settings)[]
+export const MACHINE_SETTING_KEYS = ["notifications", "localFileOpener", "homeFolder", "worktreeDir", "removeWorktreesOnDone", "deleteDoneThreadsUntouchedDays"] as const satisfies readonly (keyof Settings)[]
 
 // The new-thread composer's durable choices — MACHINE-wide, one record for every project the server
 // serves (server/dispatch-preferences.ts), because the profile belongs to the operator, not to a
@@ -6174,19 +6167,6 @@ export const ProjectCard = z.object({
   home: z.literal(true).optional(),
 })
 export type ProjectCard = z.infer<typeof ProjectCard>
-
-/**
- * One project's rail badge: its queue (`queuedThread`) and its working rows (`workingThread` — the Active
- * band plus any Done row still running).
- *
- * Two numbers rather than their sum because the tooltip splits them, and the spinner reads `running`
- * alone. A project absent from the map has no board open on this server — no badge, not a zero.
- */
-export const ProjectRailCounts = z.object({
-  queued: z.number().int().nonnegative(),
-  running: z.number().int().nonnegative(),
-})
-export type ProjectRailCounts = z.infer<typeof ProjectRailCounts>
 
 /** Formats the icon route will serve — a browser renders each of these in an `<img>`. */
 export const PROJECT_ICON_EXTENSIONS = ["png", "svg", "ico", "webp", "jpg", "jpeg", "gif"] as const
