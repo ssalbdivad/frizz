@@ -247,7 +247,7 @@ function QuestionsCancelledDivider({ count, sourceId, at }: { count: number; sou
 function ParkDivider({ wake, sourceId, at }: { wake: ParkWake; sourceId?: string; at?: string }) {
   const [open, setOpen] = useState(false)
   const bodyId = useId()
-  // Terse, because every sibling on this rule is ("PR merged on …", "Background task «…» finished"). The
+  // Terse, because every sibling on this rule is ("PR merged on …", "Agent terminal «…» finished"). The
   // first draft read "The declared wait is over — its work finished" and was the longest line on the
   // page by half again.
   const label = wake.kind === "expired" ? "Wait expired — nothing resolved" : "Wait over — its work finished"
@@ -349,7 +349,9 @@ function ShellDoneDivider({ wake, sourceId, at }: { wake: ShellDoneWake; sourceI
   // The server truncates its own label at 64 chars for the same reason: a divider is a hairline, and a
   // 400-character shell description wraps it into a paragraph.
   const desc = wake.label.length > 64 ? `${wake.label.slice(0, 63)}…` : wake.label
-  const label = `Background task «${desc}» ${wake.outcome}`
+  // The runtime's own divider names a shell by the strip's noun (server transcript.ts shellWakeNoun), and so does
+  // this one. The delivery does not say whether it was a Monitor, so it takes the common noun.
+  const label = `Agent terminal «${desc}» ${wake.outcome}`
   return (
     <WakeDivider icon={TerminalSquare} sourceId={sourceId} marker="event" ariaLabel={label} at={at}>
       <span className="min-w-0 truncate">{label}</span>

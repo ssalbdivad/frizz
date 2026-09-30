@@ -279,7 +279,7 @@ test("a coalesced user record splits back into the deliveries the scheduler actu
   // The relay does not merely vanish: it gets the same wake divider it would have drawn arriving alone.
   // `relayNotificationBlock` anchors to the start of the text, so a relay merged UNDER another delivery
   // used to match nothing at all — it lost its divider AND showed up as prose in the card above it.
-  assert.match(msgs.map((m) => m.text).join("\n"), /Background task «Trace the packages» finished \(completion relayed\)/)
+  assert.match(msgs.map((m) => m.text).join("\n"), /Agent terminal «Trace the packages» finished \(completion relayed\)/)
 
   // ORDER REVERSED — the relay arrives first. The whole-record noise gate used to answer this with a
   // prefix test, so a plumbing lead swallowed the real delivery underneath it and the prompt vanished
@@ -294,7 +294,7 @@ test("a coalesced user record splits back into the deliveries the scheduler actu
   assert.equal(ledWakes.length, 1, "the delivery under the plumbing still renders")
   assert.equal(ledWakes[0].displayText, rest)
   assert.doesNotMatch(led.map((m) => m.displayText ?? m.text).join("\n"), /frizz-wake|frizz-relay/)
-  assert.match(led.map((m) => m.text).join("\n"), /Background task «Trace the packages» finished \(completion relayed\)/)
+  assert.match(led.map((m) => m.text).join("\n"), /Agent terminal «Trace the packages» finished \(completion relayed\)/)
 
   // …and every one of those messages needs its OWN sourceId. One record now yields a divider AND a
   // delivery, and both used to take the record's bare id — silent on this side, a React duplicate-key
@@ -703,7 +703,7 @@ test("a background shell completion emits a labeled turn-boundary event that bre
   const boundary = msgs[1]
   assert.equal(boundary.kind, "event")
   assert.equal(boundary.boundary, "wake") // a background shell returning — the kind is what puts the terminal glyph on the divider
-  assert.equal(boundary.text, "Background task «Start vite from web package dir» exited 143")
+  assert.equal(boundary.text, "Agent terminal «Start vite from web package dir» exited 143")
   // …and the post-wake turn is its OWN message (the merge chain was broken), not merged into the launch.
   assert.equal(msgs.length, 3)
   assert.equal(msgs[2].text, "That's the vite server I just killed.")
@@ -718,7 +718,7 @@ test("boundary wake label reads 'finished' on a clean exit and 'stopped' when ki
   })
   const done = parseTranscript([launch("s1"), taskNotification("s1", "completed", "2026-07-01T00:00:02.000Z")].join("\n"))[1]
   assert.match(done.text, /» finished$/)
-  assert.equal(done.text, "Background task «sleep 1» finished") // desc falls back to the command summary
+  assert.equal(done.text, "Agent terminal «sleep 1» finished") // desc falls back to the command summary
   const killed = parseTranscript([launch("s2"), taskNotification("s2", "killed", "2026-07-01T00:00:02.000Z")].join("\n"))[1]
   assert.match(killed.text, /» stopped$/)
 })
@@ -759,7 +759,7 @@ test("a RELAYED completion projects exactly like a delivered one, and says it wa
   // …a divider rides the wake point, naming the cause AND that frizz was the one carrying it…
   assert.equal(msgs[1].kind, "event")
   assert.equal(msgs[1].boundary, "wake")
-  assert.equal(msgs[1].text, "Background task «Poll VM SSH until reachable» finished (completion relayed)")
+  assert.equal(msgs[1].text, "Agent terminal «Poll VM SSH until reachable» finished (completion relayed)")
   // …and the post-wake turn stays its OWN message instead of folding into the launch bubble.
   assert.equal(msgs.length, 3)
   assert.equal(msgs[2].text, "Picking the build back up.")
@@ -769,7 +769,7 @@ test("a relayed completion reads a NON-ZERO exit rather than assuming success", 
   const summary = 'Background command "Poll VM SSH until reachable" failed with exit code 143'
   const msgs = parseTranscript([bgLaunch, bgAck, relayRecord(summary), bgAfterWake].join("\n"))
   assert.equal(msgs[0].tools[0].status, "failed")
-  assert.equal(msgs[1].text, "Background task «Poll VM SSH until reachable» exited 143 (completion relayed)")
+  assert.equal(msgs[1].text, "Agent terminal «Poll VM SSH until reachable» exited 143 (completion relayed)")
 })
 
 test("a relay that correlates to NO card still draws its divider", () => {
@@ -780,7 +780,7 @@ test("a relay that correlates to NO card still draws its divider", () => {
   const msgs = parseTranscript([relayRecord(summary), bgAfterWake].join("\n"))
   const divider = msgs.find((m) => m.boundary === "wake")
   assert.ok(divider, "an uncorrelated relay must still explain why the agent moved")
-  assert.equal(divider.text, "Background task «Poll VM SSH until reachable» finished (completion relayed)")
+  assert.equal(divider.text, "Agent terminal «Poll VM SSH until reachable» finished (completion relayed)")
 })
 
 test("frizz writes each repair as TWO carriers — the divider is drawn exactly once", () => {
@@ -888,14 +888,14 @@ test("a Monitor card stays pending through launch ack + progress event; the time
   assert.equal(msgs[0].tools[0].durationMs, 5 * 60_000) // launch (00:00) → timeout record (05:00)
   const boundary = msgs[1]
   assert.equal(boundary.kind, "event")
-  assert.equal(boundary.text, "Background task «wait for agent sweep» timed out")
+  assert.equal(boundary.text, "Agent monitor «wait for agent sweep» timed out")
   // Today's wording (all 57 in ~/.claude/projects, 2026-09-29). It left the card pending, so the drawer's
   // strip kept an expired Monitor as a live terminal the card and the rail had already dropped.
   const expired = parseTranscript(
     [launch, acked, monitorEvent("[Monitor expired after 5m with no events delivered. Re-arm it if you still need the watch — and widen the filter if silence was unexpected.]", "2026-07-01T00:05:00.000Z")].join("\n"),
   )
   assert.equal(expired[0].tools[0].status, "cancelled")
-  assert.equal(expired[1].text, "Background task «wait for agent sweep» expired")
+  assert.equal(expired[1].text, "Agent monitor «wait for agent sweep» expired")
 })
 
 test("a manual TaskStop result marks the stopped Monitor's card cancelled (no dangling pending card)", () => {
@@ -2988,7 +2988,7 @@ test("a completion re-delivered ACROSS a rest draws the wake that explains the r
   )
   // The resumed work is not left unexplained: the divider directly above it names what came back.
   const restIdx = kinds.indexOf("rest")
-  assert.equal(msgs[restIdx + 1].text, "Background task «Running the site gate» finished")
+  assert.equal(msgs[restIdx + 1].text, "Agent terminal «Running the site gate» finished")
   assert.equal(msgs[restIdx + 2].text, "Gate is green.")
 })
 

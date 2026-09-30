@@ -198,7 +198,7 @@ const seaOfTools: TranscriptMessage = {
 }
 
 const shellLaunch: TranscriptMessage = tool({ name: "Bash", detail: "vite dev --host", command: "pnpm --filter web dev --host", desc: "Start vite from web package dir", backgroundState: "background", status: "cancelled", durationMs: 1_260_000 })
-const shellWake: TranscriptMessage = { sourceId: "shell-wake", role: "assistant", kind: "event", boundary: "wake", text: "Background task «Start vite from web package dir» exited 143", tools: [], parts: [] }
+const shellWake: TranscriptMessage = { sourceId: "shell-wake", role: "assistant", kind: "event", boundary: "wake", text: "Agent terminal «Start vite from web package dir» exited 143", tools: [], parts: [] }
 
 const afterMessages: TranscriptMessage[] = [
   { sourceId: "u1", role: "user", text: "Refactor the pricing parser and verify it end-to-end.", tools: [], parts: [{ kind: "text", text: "Refactor the pricing parser and verify it end-to-end." }] },

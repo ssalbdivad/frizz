@@ -47,7 +47,9 @@ export function backgroundOpStoppable(deps: ShellStopDeps, slug: string, id: str
   const info = deps.tailer.subAgent(slug, id)
   if (!info) return blocked(null)
   const shell = deps.tailer.backgroundShell?.(slug, id)
-  const noun = shell ? "background shell" : "sub-agent"
+  // The UI's noun: every refusal here reaches the operator (the agent terminal drawer's footer, the ×'s toast),
+  // beside rows and a drawer that call the process an agent terminal. It said "background shell" there.
+  const noun = shell ? "agent terminal" : "sub-agent"
   // A shell has NO staleness ceiling — its entry clears on a terminal notification, so a watcher that
   // has printed nothing for a day is still `running`, not `stale`. Read the shell's own state, which
   // says exactly that; `info.state` runs it through the sub-agent staleness rule and would report
@@ -57,7 +59,7 @@ export function backgroundOpStoppable(deps: ShellStopDeps, slug: string, id: str
   if (!row) return blocked(null)
   if (row.backend === "codex") {
     return blocked(shell
-      ? "Codex runs its background commands inside its own process and exposes no way to end one, so this shell can't be stopped from here."
+      ? "Codex runs its background commands inside its own process and exposes no way to end one, so this terminal can't be stopped from here."
       : "Codex does not expose per-sub-agent interruption to Frizz, so this child can't be stopped from here.")
   }
   if (row.claude_runtime !== "broker" || !deps.claudeBroker) {
@@ -174,7 +176,7 @@ export async function stopBackgroundShell(
   const target = backgroundOpStoppable(deps, slug, id)
   if (target.sessionId === null) return { stopped: false, dismissed: false, note: target.note, refused: true }
   const bridge = deps.claudeBroker
-  if (!bridge) throw new Error("Claude session broker is unavailable; cannot stop this background shell")
+  if (!bridge) throw new Error("Claude session broker is unavailable; cannot stop this agent terminal")
   const label = claudeShellLabel(deps, slug, id)
   await bridge.stopSubAgent({ threadSlug: slug, sessionId: target.sessionId, taskId: target.taskId })
   // AFTER the kill, never before: the notice states the shell is already dead, and a stop that throws

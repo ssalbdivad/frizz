@@ -1518,7 +1518,7 @@ export function shellDoneMessage(shell: { taskId?: string; label: string; status
  *
  *  IT EXISTS TO MAKE ONE EVENT READ AS ONE EVENT. A background shell finishing while the worker is
  *  RUNNING is reported by the runtime, and the transcript has always drawn that as a wake divider
- *  (`backgroundWakeLabel` — "Background task «…» finished"). The very same shell finishing while the
+ *  (`backgroundWakeLabel` — "Agent terminal «…» finished"). The very same shell finishing while the
  *  worker RESTS is reported by frizz instead, because the runtime's notification only ever reaches a
  *  running turn — and that one arrived as a full-width card. So whether a shell's completion was a
  *  hairline or a panel came down to whether anyone happened to be awake, which is not a distinction the

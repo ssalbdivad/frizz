@@ -80,7 +80,7 @@ ${PR_WATCH_ARMED_TRAILER}`),
   // ChatView's own EventLine from the server's `backgroundWakeLabel`. The two must be pixel-identical.
   // Asserting that in a comment is how it silently stops being true; rendering them adjacent is how a
   // reader catches it.
-  { sourceId: "ctl", role: "assistant", kind: "event", boundary: "wake", text: "Background task «the churn suite» finished", tools: [], parts: [], at: new Date(Date.now() - 119 * 60_000).toISOString() },
+  { sourceId: "ctl", role: "assistant", kind: "event", boundary: "wake", text: "Agent terminal «the churn suite» finished", tools: [], parts: [], at: new Date(Date.now() - 119 * 60_000).toISOString() },
   wake("w9", shellDoneMessage({ taskId: "bzvtnt3ig", label: "the churn suite", status: "completed" })),
   wake("w10", shellDoneMessage({ taskId: "b52kqwc13", label: "vite --port 5199 --strictPort", status: "failed" })),
   wake("w11", shellDoneMessage({ label: "Running the focused tests", status: "killed" })),

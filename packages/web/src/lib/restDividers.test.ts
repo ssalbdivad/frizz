@@ -28,7 +28,7 @@ test("a rest at the tail is dropped — the runtime-status slot beneath it alrea
 })
 
 test("a rest above another divider is dropped — nothing wakes an agent that had not rested", () => {
-  const wake = msg({ sourceId: "w", kind: "event", boundary: "wake", text: "Background task «vite» exited 143" })
+  const wake = msg({ sourceId: "w", kind: "event", boundary: "wake", text: "Agent terminal «vite» exited 143" })
   assert.deepEqual(kept([prose(), rest(), wake]), ["a", "w"])
 })
 

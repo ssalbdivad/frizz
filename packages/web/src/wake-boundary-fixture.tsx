@@ -36,7 +36,7 @@ const messages: ChatMessage[] = [
     role: "assistant",
     kind: "event",
     boundary: "wake",
-    text: "Background task «Start vite from web package dir» exited 143",
+    text: "Agent terminal «Start vite from web package dir» exited 143",
     tools: [],
     parts: [],
   },

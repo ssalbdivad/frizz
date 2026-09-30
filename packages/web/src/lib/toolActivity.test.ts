@@ -750,7 +750,7 @@ test("a quiet event line still ends the run it follows", () => {
 test("a wake divider is not thinking and still ends the run", () => {
   const boundary: ChatMessage = {
     sourceId: "wake", role: "assistant", kind: "event", boundary: true,
-    text: "Background task «boot» finished", tools: [], parts: [],
+    text: "Agent terminal «boot» finished", tools: [], parts: [],
   }
   const compact = coalesceToolActivityMessages([
     toolMessage("a", [tool("Bash")]),

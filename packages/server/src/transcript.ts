@@ -2013,15 +2013,21 @@ function toolDetail(input: any): string | undefined {
 }
 
 // A concise cause label for the turn-boundary line emitted when a background-shell completion wakes
-// the agent: "Background task «<desc>» exited N" (failed, exit code parsed from the notification
-// <summary>), "… finished" (completed), "… stopped" (killed), or "… timed out" (a Monitor that hit
-// its timeout_ms — detected by the sentinel, since that record carries no status). `desc` prefers the Bash
-// `description`, falling back to the command summary; kept short so the divider label stays tidy.
+// the agent: "Agent terminal «<desc>» exited N" (failed, exit code parsed from the notification
+// <summary>), "… finished" (completed), "… stopped" (killed), or "Agent monitor «…» timed out" (a Monitor
+// that hit its timeout_ms — detected by the sentinel, since that record carries no status). `desc` prefers
+// the Bash `description`, falling back to the command summary; kept short so the divider label stays tidy.
 // The subject is the TASK, not the wake — the passive "Woken by …" spent the label's opening on the
-// one fact the divider's own position already conveys. "Background task" is deliberate, and NOT
-// "Agent": only a background SHELL reaches this label (an Agent completion carries its own divider
-// text, built client-side from the `agentCompletion` call — see ChatView's AgentCompletionLine), so
-// borrowing the Agent card's noun would mislabel every line it prints.
+// one fact the divider's own position already conveys. Only a background SHELL or MONITOR reaches this
+// label (an Agent completion carries its own divider text, built client-side from the `agentCompletion`
+// call — see ChatView's AgentCompletionLine).
+//
+// THE NOUN IS THE ROW'S (2026-09-30): "Agent terminal", "Agent monitor" — what the TERM strip's tooltip, the
+// drawer's title and the stop toast call the same process. It was "Background task", so one drawer named
+// one process three ways: this divider, the row, and the toast its × raised.
+export function shellWakeNoun(toolName: string | undefined): string {
+  return toolName === "Monitor" ? "Agent monitor" : "Agent terminal"
+}
 function backgroundWakeLabel(call: TranscriptToolCall, status: string, raw: string): string {
   const rawDesc = (call.desc ?? call.detail ?? "background command").trim()
   const desc = rawDesc.length > 64 ? `${rawDesc.slice(0, 63)}…` : rawDesc
@@ -2038,7 +2044,7 @@ function backgroundWakeLabel(call: TranscriptToolCall, status: string, raw: stri
   // is the tell that the runtime dropped a notification (upstream anthropics/claude-code#20754) — and it
   // is the difference between a reader trusting the timeline and hunting a log for why the agent moved.
   const relayed = raw.includes(RELAYED_MARKER) ? " (completion relayed)" : ""
-  return `Background task «${desc}» ${outcome}${relayed}`
+  return `${shellWakeNoun(call.name)} «${desc}» ${outcome}${relayed}`
 }
 
 // The same label for a wake with NO card to correlate to, built from the notification's own summary.
@@ -2056,7 +2062,7 @@ function uncorrelatedWakeLabel(rawDesc: string, status: string, raw: string): st
     outcome = code ? `exited ${code}` : "failed"
   }
   const relayed = raw.includes(RELAYED_MARKER) ? " (completion relayed)" : ""
-  return `Background task «${desc}» ${outcome}${relayed}`
+  return `${shellWakeNoun(monitorEnd ? "Monitor" : undefined)} «${desc}» ${outcome}${relayed}`
 }
 
 // The text carrier of a completion <task-notification>, mirroring the tailer's notificationText:
@@ -2199,7 +2205,7 @@ function completionEvents(
         // The shell's disclosure card already carries the terminal status above; but this notification
         // also RE-INVOKES the agent, opening a fresh turn with no boundary from the prior one — two turns
         // paint as one bubble. Emit a `boundary` event line at the wake point so the timeline shows a
-        // divider carrying the cause ("Background task «…» exited N"). The caller resets lastAssistantId,
+        // divider carrying the cause ("Agent terminal «…» exited N"). The caller resets lastAssistantId,
         // so this also breaks the assistant-record merge chain across the wake.
         out.push({ role: "assistant", kind: "event", boundary: "wake", text: backgroundWakeLabel(shell.call, status, block), tools: [], parts: [], at })
         continue
