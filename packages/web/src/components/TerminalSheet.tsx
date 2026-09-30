@@ -91,19 +91,20 @@ function NarrowGlyph({ icon: Icon, text }: { icon: typeof Copy; text: string }) 
 
 /** A terminal's state, its age while it runs, and (the agent's) what is left of its budget — the same
  *  reading in both drawers' headers, joined the way every reading in the app is. */
-function StateReading({ state, age, budget, tone, attr }: { state: string; age?: string; budget?: string; tone?: "attention" | "danger"; attr: Record<string, string | undefined> }) {
+export function StateReading({ state, age, budget, tone, attr }: { state: string; age?: string; budget?: string; tone?: "attention" | "danger"; attr: Record<string, string | undefined> }) {
   return (
     // THE READING KEEPS ITS WORDS; THE TITLE GIVES WAY. The reading is what the drawer was opened to learn
-    // — `exit 2`, `running · 28m · 31m left` — and the title is the row the human just clicked. When this
+    // — `exit 2`, `running · 31m left · 28m` — and the title is the row the human just clicked. When this
     // gave way first (`shrink-[2]`), 420px drew `ex…` and `running ·…`, losing the one reading with a
     // deadline. `shrink-0` alone is not safe either — it once left the title 0px wide beside two worded
     // buttons — so the reading is capped at 70% of the line and truncates only past that; the header's
     // actions fold to glyphs under 28rem, which is what leaves the title its 30% there. At 420px the agent
-    // line is 226px: `running · 17m · 42m left` needs 140 (60% clipped it by 5px), the title keeps 78.
+    // line is 226px: `running · 42m left · 17m` needs 140 (60% clipped it by 5px), the title keeps 78.
     <span {...attr} className="min-w-0 max-w-[70%] shrink-0 truncate whitespace-nowrap text-[11.5px] text-muted-60">
       <span className={tone === "attention" ? "text-attention" : tone === "danger" ? "text-danger-soft" : undefined}>{state}</span>
-      {age ? ` · ${age}` : ""}
+      {/* The budget before the age, as the strip and the rail read the same shell: one order everywhere. */}
       {budget ? ` · ${budget}` : ""}
+      {age ? ` · ${age}` : ""}
     </span>
   )
 }
@@ -140,6 +141,9 @@ function HumanTerminalSheet({ id, slug, terminalId, depth, widthDepth }: { id: n
           <div className="@container shrink-0">
             <SheetHeader
               title={terminal?.command ?? "Terminal"}
+              // A command is set in mono wherever it appears (ThreadTerminals ProcessRow): the row you
+              // click and the drawer it opens name one thing in one typeface.
+              titleMono={Boolean(terminal)}
               subtitle={terminal?.cwd ? <TerminalSubtitle cwd={terminal.cwd} checkout={terminal.checkout} homeDir={board?.homeDir} /> : thread ? displayTitle(thread) : undefined}
               icon={<SquareTerminal aria-hidden size={14} className="shrink-0 text-muted-60" data-terminal-owner="human" />}
               meta={terminal ? <TerminalStateMeta terminal={terminal} /> : undefined}
@@ -289,6 +293,8 @@ function AgentTerminalSheet({ id, slug, shellId, label, startedAt, depth, widthD
           <div className="@container shrink-0">
             <SheetHeader
               title={row?.label ?? label ?? noun}
+              // A Codex exec with no description is labelled by its command, and its row sets it in mono.
+              titleMono={row?.command !== undefined && row.command === row.label}
               subtitle={cwd ? <TerminalSubtitle cwd={cwd} checkout={checkout} homeDir={board?.homeDir} /> : undefined}
               // 15px against your terminal's 14: the same weight match as the strip's owner glyphs (ThreadTerminals OWNER_ICON).
               icon={<Bot aria-hidden size={15} className="shrink-0 text-muted-60" data-terminal-owner="agent" />}

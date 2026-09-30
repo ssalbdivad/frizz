@@ -18,6 +18,7 @@ export function SheetHeader({
   actions,
   onClose,
   initialFocus,
+  titleMono,
 }: {
   title: string
   /** A string, or a node for a subtitle that must truncate somewhere other than its end (a path whose
@@ -28,13 +29,18 @@ export function SheetHeader({
   actions?: ReactNode
   onClose: () => void
   initialFocus?: boolean
+  /** The title is a COMMAND LINE (a terminal's), set in mono as every surface sets a command: a step
+   *  smaller than the sans title (the strip's own 11-in-11.5 ratio), so mono's wider face reads at its size,
+   *  and at the regular weight the strip and the rail set a command in — mono at the sans title's
+   *  `font-medium` reads visibly bolder (the rail's finding, AwaitingBackgroundCard WaitRow `mono`). */
+  titleMono?: boolean
 }): ReactElement {
   return (
     <header className={`flex ${PANE_HEADER_HEIGHT_CLASS} shrink-0 items-center gap-2.5 border-b border-border bg-panel px-4`}>
       {icon}
       <div className="flex min-w-0 flex-1 flex-col justify-center">
         <div className="flex min-w-0 items-center gap-2">
-          <span className="min-w-0 truncate text-[13px] font-medium" title={title}>
+          <span className={`min-w-0 truncate ${titleMono ? "font-mono-keep text-[12.5px] font-normal" : "text-[13px] font-medium"}`} title={title}>
             {title}
           </span>
           {meta}
