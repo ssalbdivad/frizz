@@ -6,7 +6,7 @@ import { homedir, tmpdir } from "node:os"
 import { join } from "node:path"
 import { Hono } from "hono"
 import { mountRouter } from "@frizz/rpc/server"
-import { DISPATCH_TASK_BANNER_MARKER, openQuestionsNote, stripFollowUpRiders, type BoardSnapshot, type Settings, type ThreadView, type TranscriptMessage } from "@frizz/shared"
+import { DISPATCH_TASK_BANNER_MARKER, openQuestionsNote, spinoffChildPrompt, stripFollowUpRiders, type BoardSnapshot, type Settings, type ThreadView, type TranscriptMessage } from "@frizz/shared"
 import type { BoardManager } from "./board.ts"
 import { appendDelivery, parseDeliveryLedger, projectDeliveryLedger } from "./delivery-ledger.ts"
 import { createWakeDeliveryStore } from "./wake-store.ts"
@@ -456,6 +456,55 @@ test("aiRenameThread RPC: the title request carries the opening task, not the la
     assert.match(described[0]!, new RegExp(`<request>\\n${task}\\n</request>`))
     assert.doesNotMatch(described[0]!, /orientation the operator never wrote|all green/)
     assert.equal(h.storage.getSession("rename-src")?.title, "Resume flake")
+    h.storage.close()
+  } finally {
+    rmSync(logDir, { recursive: true, force: true })
+  }
+})
+
+// A SPINOFF CHILD is renamed from the instructions AND the brief (2026-09-30) — the text its dispatch
+// minted its name from. Its opening turn's `displayText` is the human's bare instructions, and those are
+// often subject-less: naming from them alone gave the titler "evaluate whether this is a good idea" and
+// nothing about WHAT. Both shapes: a framed child, and a legacy one whose prompt predates the framing and
+// takes its instructions from the spinoff row.
+test("aiRenameThread RPC: a spinoff child is named from its instructions and the brief, framed or legacy", async () => {
+  const cwdSlug = `-tmp-frizz-rename-spinoff-${process.pid}-${Math.random().toString(36).slice(2, 8)}`
+  const logDir = join(homedir(), ".claude", "projects", cwdSlug)
+  mkdirSync(logDir, { recursive: true })
+  const h = harness()
+  try {
+    ;(h.ctx.project as { cwdSlug: string }).cwdSlug = cwdSlug
+    const instructions = "evaluate whether this is a good idea"
+    const brief = "The subject: moving the shell budget ceiling into settings.ts."
+    const opening = (task: string) =>
+      JSON.stringify({ type: "user", timestamp: "2026-09-30T00:00:00.000Z", message: { role: "user", content: `orientation${DISPATCH_TASK_BANNER_MARKER}${task}` } }) + "\n"
+    for (const slug of ["framed-child", "legacy-child"]) {
+      h.storage.upsertSession({ ...row(slug), exited: 0, title_auto: 1, title_locked: 0 })
+      h.storage.setBackend(slug, "claude")
+      h.storage.setClaudeRuntime(slug, "broker")
+    }
+    writeFileSync(join(logDir, "sid-framed-child.jsonl"), opening(spinoffChildPrompt({ parentSlug: "parent", parentTitle: "Parent", parentHandle: "parent", instructions, brief })))
+    // Legacy: the child opened on the parent worker's raw brief; the instructions live on the edge.
+    writeFileSync(join(logDir, "sid-legacy-child.jsonl"), opening(brief))
+    h.storage.insertSpinoff({ id: "spn_0000000000000001", parentSlug: "parent", instructions, createdAtMs: 1 })
+    h.storage.completeSpinoff("spn_0000000000000001", "legacy-child", 2)
+    const described: string[] = []
+    ;(h.ctx as { claudeBroker?: unknown }).claudeBroker = {}
+    ;(h.ctx as { threadNamer?: unknown }).threadNamer = createThreadNamer({
+      storage: h.storage,
+      aiTitleOf: () => undefined,
+      complete: async ({ prompt }) => {
+        described.push(prompt)
+        return described.length === 1 ? "Budget ceiling" : "Budget settings"
+      },
+    })
+    await h.router.aiRenameThread.handler({ input: { slug: "framed-child" } })
+    await h.router.aiRenameThread.handler({ input: { slug: "legacy-child" } })
+    assert.equal(described.length, 2)
+    for (const prompt of described) {
+      assert.match(prompt, new RegExp(`<request>\\n${instructions}\\n\\n${brief.replace(/\./g, "\\.")}\\n</request>`))
+      assert.doesNotMatch(prompt, /A spinoff of|orientation/)
+    }
     h.storage.close()
   } finally {
     rmSync(logDir, { recursive: true, force: true })

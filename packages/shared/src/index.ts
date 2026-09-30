@@ -1847,6 +1847,15 @@ export function spinoffChildPrompt(input: { parentSlug: string; parentTitle: str
   ].join("\n")
 }
 
+/** What a spinoff child is NAMED from: the human's instructions, then the brief under them. The
+ *  instructions alone are often subject-less ("evaluate whether this is a good idea") — the brief is
+ *  where the subject lives — and the composed prompt's opening "A spinoff of @parent…" line would name
+ *  every child after its parent. One definition for the dispatch's mint (fulfilSpinoff) and the later
+ *  "Rename with Claude" (aiRenameThread), so the two cannot name one thread from different text. */
+export function spinoffNameSource(origin: { instructions: string; brief: string }): string {
+  return [origin.instructions.trim(), origin.brief.trim()].filter(Boolean).join("\n\n")
+}
+
 // Both spellings of the parent — `@handle`, or the first day's `[Title](/thread/slug)` — and both of the
 // context line's. Anchored at the START of the (envelope-stripped) first turn, like the request's parser.
 const SPINOFF_CHILD_PROMPT = /^A spinoff of (?:@[\p{L}\p{N}_.-]+|\[[^\]\n]*\]\(\/thread\/[^)\s]+\)), at the human's request\. Their instructions:\n\n((?:>[^\n]*(?:\n|$))+)\nThe context (?:@[\p{L}\p{N}_.-]+|that thread) gathered for you:\n\n([\s\S]*)$/u
