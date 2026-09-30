@@ -382,9 +382,11 @@ test("every rail row is one layout, and a rail hint's word gives way before the 
   const hint = createElement(FolderHintToken, { hint: where, title: "t" })
   const html = renderToStaticMarkup(createElement(TermWaitRow, { terminal: term({ awaitingInput: true }), slug: "t", now: Date.now(), hint }))
   // One cell over the name and status tracks: the name, the hint's box and its `·`, the status.
-  assert.match(html, /<span class="col-span-2 flex min-w-0 items-baseline"><button[\s\S]*?<\/button><span data-process-give="true" data-process-checkout="root" title="t" class="[^"]*"><svg[\s\S]*?<\/svg><span data-process-checkout-word="true" class="[^"]*">root<\/span><\/span><span aria-hidden="true" class="mx-1 shrink-0 text-muted-25">·<\/span><span data-wait-status="true" class="[^"]*"><span class="text-attention">waiting for input<\/span><\/span><\/span>/)
+  assert.match(html, /<span class="col-span-2 flex min-w-0 items-baseline"><button[\s\S]*?<\/button><span data-process-give="true" data-process-checkout="root" title="t" class="[^"]*"><span class="shrink-0 whitespace-nowrap"><svg[^>]*class="[^"]*inline[^"]*align-baseline[^"]*"[\s\S]*?<\/svg><\/span><span data-process-checkout-word="true" class="[^"]*">root<\/span><\/span><span aria-hidden="true" class="mx-1 shrink-0 text-muted-25">·<\/span><span data-wait-status="true" class="[^"]*"><span class="text-attention">waiting for input<\/span><\/span><\/span>/)
   const box = /<span data-process-give="true"[^>]*class="([^"]*)"/.exec(html)?.[1]?.split(" ") ?? []
   for (const cls of ["w-0", "min-w-[1em]", "flex-1", "basis-0", "flex-wrap", "h-[1lh]", "overflow-hidden", "justify-end", "items-baseline"]) assert.ok(box.includes(cls), `hint box: ${cls}`)
+  // The glyph is an INLINE run in its own box — which carries the line's strut, so its line is a full line tall
+  // alone, and the word it pushed to the clipped second line cannot show its top under the row.
   const status = /<span data-wait-status="true" class="([^"]*)"/.exec(html)?.[1]?.split(" ") ?? []
   assert.ok(status.includes("shrink-0"))
   // A row without a hint takes the SAME cell, a spacer where the hint would be — never the subgrid's two tracks.

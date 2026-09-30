@@ -61,13 +61,15 @@ export function terminalSubtitle(cwd: string | undefined, checkout: WorkCheckout
   return `${abbreviateHome(cwd, homeDir)}${checkout?.kind === "worktree" ? " · worktree" : ""}`
 }
 
-/** A folder split for the header: everything up to the last separator (the part that may be cut) and the
- *  last segment with its separator (the part that names the place, and stays). */
+/** A folder split for the header: everything up to and including the last separator (the part that may be
+ *  cut) and the last segment (the part that names the place, and stays). The separator rides the HEAD
+ *  because Chrome's start-side ellipsis always keeps the one character nearest the cut: with the slash
+ *  there, the least the head shows is `…/`, where with a letter there it drew `…s/probe` (390px, dsf 6). */
 export function splitFolder(path: string): { head: string; tail: string } {
   const trimmed = path.length > 1 ? path.replace(/[\\/]+$/, "") : path
   const at = Math.max(trimmed.lastIndexOf("/"), trimmed.lastIndexOf("\\"))
   // A head of a character or two (`~`) is shorter than the ellipsis it would shrink to, so it is kept whole.
-  return at <= 2 ? { head: "", tail: trimmed } : { head: trimmed.slice(0, at), tail: trimmed.slice(at) }
+  return at <= 2 ? { head: "", tail: trimmed } : { head: trimmed.slice(0, at + 1), tail: trimmed.slice(at + 1) }
 }
 
 // THE SAME LINE, laid out so a narrow drawer loses the right part of it — and never the part that says where.
@@ -75,18 +77,19 @@ export function splitFolder(path: string): { head: string; tail: string } {
 // (`/tmp/tu-v-repo/.frizz/worktr…`). So the path truncates at its START, by the right-to-left overflow idiom
 // around an isolated left-to-right run (so the slashes stay where they are).
 //
-// AND ITS LAST SEGMENT IS KEPT, with the kind: the head shrinks to its ellipsis and no further, and the tail
-// (`/probe`, 16ch at most, ellipsized past that) and ` · worktree` never shrink. With the head alone truncating,
+// AND ITS LAST SEGMENT IS KEPT, with the kind: the head shrinks to `…/` and no further, and the tail
+// (`probe`, 16ch at most, ellipsized past that) and ` · worktree` never shrink. With the head alone truncating,
 // a narrow header whose second line also carries `waiting for input · 4m` shrank the WHOLE path to 0px and
 // left ` · worktree` orphaned, clipped mid-word at 390px (2026-09-30). The head's `w-0` makes it count
-// nothing toward this line's minimum (bar its 1em ellipsis), so the minimum SheetHeader keeps
+// nothing toward this line's minimum bar its 1.5em floor — `…/`, the ellipsis and the slash Chrome keeps
+// beside it — so the minimum SheetHeader keeps
 // (its `subtitleKeeps`) is exactly `…/probe · worktree`; `grow` and `max-w-max` give the head back up to its
 // whole width whenever the line has room.
 export function TerminalSubtitle({ cwd, checkout, homeDir }: { cwd: string; checkout: WorkCheckout | null | undefined; homeDir: string | undefined }): ReactNode {
   const { head, tail } = splitFolder(abbreviateHome(cwd, homeDir))
   return (
     <span data-terminal-subtitle className="flex min-w-0" title={terminalSubtitle(cwd, checkout, homeDir)}>
-      {head ? <span data-terminal-subtitle-head dir="rtl" className="w-0 min-w-[1em] max-w-max grow truncate text-left"><bdi>{head}</bdi></span> : null}
+      {head ? <span data-terminal-subtitle-head dir="rtl" className="w-0 min-w-[1.5em] max-w-max grow truncate text-left"><bdi>{head}</bdi></span> : null}
       <span data-terminal-subtitle-tail className="max-w-[16ch] shrink-0 truncate">{tail}</span>
       {checkout?.kind === "worktree" ? <span data-terminal-subtitle-kind className="shrink-0 whitespace-pre"> · worktree</span> : null}
     </span>

@@ -49,6 +49,12 @@ test("a terminal row's label outranks its folder hint's word, its glyph never le
           const b = el.getBoundingClientRect()
           return b.width > 0 && b.top < box.bottom - 1 && b.bottom > box.top + 1 && b.left >= box.left - 1 && b.right <= box.right + 1
         }
+        // Half in the clipped box: a wrapped-away item whose top still shows under the row.
+        const partial = (el: Element | null, box: DOMRect | undefined) => {
+          if (!el || !box) return false
+          const b = el.getBoundingClientRect()
+          return b.width > 0 && b.top < box.bottom - 1 && b.bottom > box.bottom + 1
+        }
         const label = (row.querySelector("[data-process-label]") ?? row.querySelector("button")) as HTMLElement
         const give = row.querySelector("[data-process-give]")?.getBoundingClientRect()
         const hint = row.querySelector("[data-process-checkout]")
@@ -69,6 +75,7 @@ test("a terminal row's label outranks its folder hint's word, its glyph never le
           hasHint: Boolean(hint),
           glyph: shownIn(hint?.querySelector("svg") ?? null, give),
           word: wordShown,
+          wordPartial: partial(word, give),
           // The hint's right edge — its word's when shown, else its glyph's — to its status.
           toStatus: hint && statusText ? statusText.left - ((wordShown ? word : hint.querySelector("svg"))!.getBoundingClientRect().right) : null,
           // From the name's end to the status's words: the room a cut name was denied.
@@ -81,6 +88,7 @@ test("a terminal row's label outranks its folder hint's word, its glyph never le
       for (const r of rows) {
         assert.equal(r.glyph, r.hasHint, `${at(r)} — a hinted row always shows its glyph, and an unhinted one none`)
         assert.ok(!(r.cut && r.word), `${at(r)} — the label is cut while the hint's word still shows`)
+        assert.ok(!r.wordPartial, `${at(r)} — the hint's word shows half, clipped`)
         if (r.surface === "rail" && r.glyph) assert.ok(r.toStatus !== null && r.toStatus <= 14, `${at(r)} — the hint leads its status (${r.toStatus}px away)`)
         // A cut name runs up to what follows it: the 12px floor, plus a lone glyph and its `·` when hinted.
         if (r.surface === "rail" && r.cut) assert.ok(r.nameToStatus !== null && r.nameToStatus <= (r.glyph ? 40 : 14), `${at(r)} — a cut name stops ${r.nameToStatus}px short of its status`)
@@ -153,7 +161,7 @@ test("a terminal row's label outranks its folder hint's word, its glyph never le
       const [l, r] = hdr.item
       assert.ok((hdr.tail[0] as number) >= l - 0.5 && (hdr.tail[1] as number) <= r + 0.5 && hdr.tail[2], `${width}px: the folder's last segment is whole (${JSON.stringify(hdr)})`)
       assert.ok(hdr.kind[0]! >= l - 0.5 && hdr.kind[1]! <= r + 0.5, `${width}px: \` · worktree\` is whole (${JSON.stringify(hdr)})`)
-      assert.ok(hdr.head >= 8, `${width}px: the path's head keeps room for its ellipsis (${hdr.head}px)`)
+      assert.ok(hdr.head >= 14, `${width}px: the path's head keeps room for its \`…/\` (${hdr.head}px)`)
       for (const p of hdr.parts) assert.ok(!p.shown || p.whole, `${width}px: a reading part is cut`)
     }
     assert.deepEqual(errors, [])

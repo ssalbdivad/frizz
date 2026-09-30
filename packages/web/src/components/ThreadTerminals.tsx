@@ -228,7 +228,12 @@ export function FolderHintToken({ hint, title }: { hint: ProcessFolderHint; titl
   return (
     <>
       <span data-process-give data-process-checkout={hint.kind} title={title} className={`ml-3 flex h-[1lh] w-0 min-w-[1em] flex-1 basis-0 flex-wrap content-start items-baseline justify-end overflow-hidden ${HINT_TONE}`}>
-        <Glyph aria-hidden className={`h-[1em] w-[1em] shrink-0 ${RAIL_HINT_LIFT[hint.kind]}`} />
+        {/* INLINE in its own box, not a bare flex item: an inline run carries the line's strut, so this first
+            line is a full line tall even when it holds the glyph alone — a bare 1em SVG made it 12px, and the
+            word that had wrapped to the "hidden" second line showed its top 8px under the row. */}
+        <span className="shrink-0 whitespace-nowrap">
+          <Glyph aria-hidden className={`inline h-[1em] w-[1em] align-baseline ${RAIL_HINT_LIFT[hint.kind]}`} />
+        </span>
         <span data-process-checkout-word className="ml-[0.25em] shrink-0 whitespace-nowrap">{hint.text}</span>
       </span>
       <span aria-hidden className="mx-1 shrink-0 text-muted-25">·</span>

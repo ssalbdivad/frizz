@@ -108,14 +108,14 @@ test("a narrow header's second line keeps the folder's last segment and kind, an
   assert.ok(sub.includes("@max-[28rem]:min-w-min"), "the folder keeps its minimum")
   // The path splits into a head that shrinks to its ellipsis and a tail that never shrinks, then the kind.
   const head = classOf(/<span data-terminal-subtitle-head="true" dir="rtl" class="([^"]*)"/)
-  for (const cls of ["w-0", "min-w-[1em]", "max-w-max", "grow", "truncate"]) assert.ok(head.includes(cls), `head: ${cls}`)
+  for (const cls of ["w-0", "min-w-[1.5em]", "max-w-max", "grow", "truncate"]) assert.ok(head.includes(cls), `head: ${cls}`)
   const tail = classOf(/<span data-terminal-subtitle-tail="true" class="([^"]*)"/)
   for (const cls of ["shrink-0", "truncate", "max-w-[16ch]"]) assert.ok(tail.includes(cls), `tail: ${cls}`)
-  assert.match(html, /<bdi>\/tmp\/tu-r3-v-repo\/\.frizz\/worktrees<\/bdi><\/span><span data-terminal-subtitle-tail="true" class="[^"]*">\/probe<\/span><span data-terminal-subtitle-kind="true" class="shrink-0 whitespace-pre"> · worktree<\/span>/)
+  assert.match(html, /<bdi>\/tmp\/tu-r3-v-repo\/\.frizz\/worktrees\/<\/bdi><\/span><span data-terminal-subtitle-tail="true" class="[^"]*">probe<\/span><span data-terminal-subtitle-kind="true" class="shrink-0 whitespace-pre"> · worktree<\/span>/)
   // A plain-string subtitle (a thread title) keeps no minimum: it is not a place.
   const plain = renderToStaticMarkup(createElement(SheetHeader, { title: "x", subtitle: "Fix the login flow", meta: createElement("span", null, "exit 2"), onClose: () => {} }))
   assert.doesNotMatch(plain, /min-w-min/)
-  assert.deepEqual(splitFolder("~/frizz/.frizz/worktrees/probe/"), { head: "~/frizz/.frizz/worktrees", tail: "/probe" })
+  assert.deepEqual(splitFolder("~/frizz/.frizz/worktrees/probe/"), { head: "~/frizz/.frizz/worktrees/", tail: "probe" }, "the slash rides the head, so its least is `…/`")
   assert.deepEqual(splitFolder("~/probe"), { head: "", tail: "~/probe" }, "a head shorter than its ellipsis stays whole")
-  assert.deepEqual(splitFolder("C:\\work\\repo"), { head: "C:\\work", tail: "\\repo" })
+  assert.deepEqual(splitFolder("C:\\work\\repo"), { head: "C:\\work\\", tail: "repo" })
 })
