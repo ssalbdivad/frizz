@@ -153,4 +153,6 @@ test("an answer parses as SAME, a cleaned status, or nothing", () => {
   assert.deepEqual(parseLiveStatus("same."), { same: true })
   assert.deepEqual(parseLiveStatus("\"Running the full suite.\""), { status: "Running the full suite" })
   assert.equal(parseLiveStatus("  "), undefined)
+  assert.equal(parseLiveStatus("The agent has retired the project board"), undefined, "narration is not a status")
+  assert.equal(parseLiveStatus("Reviewing the agent's activity"), undefined)
 })

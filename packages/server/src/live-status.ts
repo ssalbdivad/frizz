@@ -15,9 +15,14 @@ import { cleanThreadStatus, THREAD_STATUS_TARGET_CHARS } from "./thread-names.ts
 // turn runs, and hands back at the rest: `onTurnDone` reports whether the turn wore a working status, and
 // the caller then forces one rest write so a rested card does not go on saying "Running the tests".
 //
-// COST, which is what the maintainer asked about first. One Haiku one-shot per running thread at most
+// COST, which is what the maintainer asked about first. One Sonnet one-shot per running thread at most
 // every INTERVAL, and only when its transcript has actually moved (the tailer calls `onActivity` on a
 // tick that folded new bytes of an in-flight turn) — a thread blocked in one long command costs nothing.
+// Sonnet, not Haiku, and measured (2026-09-29, 22 checkpoints over two real worker transcripts): Haiku
+// answered SAME 4 times in 22 and reworded a still-true status at almost every other check, which resets
+// the clock the status exists to carry; it also narrated ("The agent has…") about one check in ten.
+// Sonnet held the task through screenshot and typecheck steps and moved exactly when the developer's
+// follow-up or a landing did. FRIZZ_LIVE_STATUS_MODEL overrides it.
 // The model is asked a yes/no-shaped question ("still on this task? reply SAME") over a bounded window,
 // so a check is a few thousand input tokens and a handful out. The first check waits FIRST_MS into the
 // turn, so a quick answer that rests in seconds never pays for one. The one-shot spawns a throwaway CLI
@@ -63,7 +68,7 @@ export function liveActivity(messages: readonly TranscriptMessage[]): { request:
   return { request: last ? clip(last.displayText ?? last.text, REQUEST_CHARS) : "", activity }
 }
 
-const LIVE_SYSTEM = "You keep the one-line status of a coding agent that is working right now, shown on a developer's dashboard. You reply with the status alone, or with the single word SAME."
+const LIVE_SYSTEM = "You keep the one-line status of a coding agent that is working right now, shown on a developer's dashboard with a clock of how long the agent has been on that task. You reply with the status alone, or with the single word SAME."
 
 export function liveStatusRequest(input: { request: string; activity: string; current?: string }): ClaudeOneShotRequest {
   const lines = [
@@ -76,19 +81,19 @@ export function liveStatusRequest(input: { request: string; activity: string; cu
     input.current ? `The status currently shown: "${input.current}"` : "No status is shown yet.",
     "",
     "Rules:",
-    "- The status names the TASK the agent is on, not its latest command: \"Tracing the cache miss in resolver.ts\", \"Writing the regression test for the rail fix\", \"Running the full test suite\", \"Merging the fix into main\".",
+    "- The status names the TASK the agent is on — the goal a developer would recognize, at the level of their request — never the step or command it is on right now. Good: \"Fixing the cache miss in resolver.ts\", \"Adding a regression test for the rail fix\", \"Running the full test suite before landing\", \"Reviewing PR #391\". Too narrow: \"Capturing screenshots of the variants\", \"Reading Sidebar.tsx\", \"Typechecking the connector\".",
     ...(input.current
       ? [
-        "- If the agent is still on the task the current status names — even through many different commands — reply SAME.",
-        "- Write a new status only when the work has fundamentally moved: onto a different problem, or into a different phase (investigating → implementing → testing → landing).",
+        "- Reply SAME when the agent is still pursuing the goal the current status names, however many different commands, files, screenshots or iterations that involves. Rewording a status that is still true is wrong: its clock resets. Most checks should answer SAME.",
+        "- Write a new status only when the work has fundamentally moved: the developer asked for something else, the agent moved onto a different problem, or it clearly finished one phase and started another (for example it finished the fix and is now landing it, or finished investigating and is now implementing).",
       ]
       : []),
-    `- A status starts with an -ing verb, is at most ${THREAD_STATUS_TARGET_CHARS} characters, names the specific thing (file, test, bug, feature), and is in sentence case with no trailing period and no quotes.`,
+    `- A status starts with an -ing verb and is at most 8 words (${THREAD_STATUS_TARGET_CHARS} characters): name the one specific thing and stop. Sentence case, no trailing period, no quotes.`,
     "- Never generic (\"Working on it\", \"Continuing the task\"), and never \"the user\".",
     "",
     input.current ? "Reply with SAME or the new status, and nothing else." : "Reply with the status alone.",
   ]
-  return { system: LIVE_SYSTEM, prompt: lines.join("\n"), model: "haiku" }
+  return { system: LIVE_SYSTEM, prompt: lines.join("\n"), model: process.env.FRIZZ_LIVE_STATUS_MODEL ?? "sonnet" }
 }
 
 /** A model's answer: `same` to keep the current status, a cleaned status, or undefined for neither. */
@@ -96,7 +101,11 @@ export function parseLiveStatus(raw: string): { same: true } | { status: string 
   const first = raw.split("\n").map((line) => line.trim()).find(Boolean) ?? ""
   if (/^["'`*]*same\b/i.test(first)) return { same: true }
   const status = cleanThreadStatus(first)
-  return status ? { status } : undefined
+  // A status opens on an -ing verb. Anything else is the model narrating ("The agent has…", "Reviewing
+  // the agent's activity" aside) — measured on real transcripts, the smaller model does it about one
+  // check in ten — and is dropped rather than shown; the current status stands.
+  if (!status || !/^\p{L}+ing\b/u.test(status) || /\b(the agent|the developer|the user)\b/i.test(status)) return undefined
+  return { status }
 }
 
 export interface LiveStatusDeps {
