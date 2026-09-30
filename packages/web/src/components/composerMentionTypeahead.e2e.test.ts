@@ -212,3 +212,28 @@ test("an agent's @thread and @thread.child in rendered markdown are links that o
   assert.equal((await browser!.pages()).length, 2, "…nor opened a tab")
   assert.deepEqual(errors, [], `no page errors: ${errors.join(" | ")}`)
 })
+
+// A FINISHED mention is tinted in the box, so it reads as a reference once typed: the mirror behind the
+// textarea colours each `@handle` that names a thread (and a `@thread.child` whose thread resolves),
+// while a half-typed or unknown `@` stays plain. The textarea's own glyphs go transparent only while a
+// mention is on screen — otherwise it draws its text as ever.
+test("a typed @handle that names a thread is highlighted in the box; a partial or unknown one is not", {
+  skip: !baseUrl,
+  timeout: 150_000,
+}, async () => {
+  await open()
+  const state = () => page!.evaluate((sel) => ({
+    marks: [...document.querySelectorAll("[data-composer-mention]")].map((m) => m.textContent),
+    textHidden: getComputedStyle(document.querySelector(sel)!).color === "rgba(0, 0, 0, 0)",
+  }), BOX)
+  await page!.keyboard.type("ask @she")
+  assert.deepEqual(await state(), { marks: [], textHidden: false }, "a half-typed mention is plain text")
+  await page!.keyboard.type("llBudgets and @nobody and @shellBudgets.cacheKeys ")
+  assert.deepEqual(await state(), { marks: ["@shellBudgets", "@shellBudgets.cacheKeys"], textHidden: true })
+  await page!.keyboard.down("Control")
+  await page!.keyboard.press("a")
+  await page!.keyboard.up("Control")
+  await page!.keyboard.type("plain again")
+  assert.deepEqual(await state(), { marks: [], textHidden: false }, "the textarea draws its own text once no mention remains")
+  assert.deepEqual(errors, [], `no page errors: ${errors.join(" | ")}`)
+})

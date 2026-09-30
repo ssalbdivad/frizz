@@ -10,7 +10,7 @@ import { RAIL_ACTION_OFFSET, RAIL_PAPERCLIP_OFFSET, RAIL_PAPERCLIP_PLAIN_OFFSET,
 import { apiBase } from "../lib/base-path.ts"
 import { localImageUrl } from "../lib/markdownTargets.ts"
 import { basename } from "../lib/paths.ts"
-import { insertMention, matchMentions, mentionQueryAt, resolveMention, splitMentionQuery, subAgentMentionCandidates, type MentionCandidate } from "../lib/threadMentions.ts"
+import { insertMention, matchMentions, mentionQueryAt, mentionSegments, resolveMention, splitMentionQuery, subAgentMentionCandidates, type MentionCandidate } from "../lib/threadMentions.ts"
 import { useSubAgentDirectory } from "../hooks/useSubAgentDirectory.ts"
 
 // The shared prompt composer (the pattern the user called "perfect"): ONE rounded bordered box
@@ -306,30 +306,56 @@ export function Composer({
   }, [value, maxHeight, Boolean(footer)])
 
   // THE TOKEN BACKDROP: a metrics-identical mirror of the prose, absolutely positioned behind the
-  // (transparent-backgrounded) textarea, in which everything renders as TRANSPARENT text except that
-  // each staged `@` token gets a pill background. Because the mirror carries the same font,
-  // padding, line height and wrapping as the textarea, the pill lands exactly under the token
-  // wherever it sits — any line, any wrap — which is the whole trick: the pill is paint, the token is
-  // text, and the textarea keeps owning editing, caret and selection. The pill decorations are
-  // strictly zero-layout (background, box-shadow ring, and `-mx`/`px` pairs that cancel) so the
-  // mirror's advance widths can never drift from the textarea's.
+  // (transparent-backgrounded) textarea. Because the mirror carries the same font, padding, line
+  // height and wrapping as the textarea, anything painted on a run lands exactly under that run
+  // wherever it sits — any line, any wrap — which is the whole trick: the decoration is paint, the
+  // token is text, and the textarea keeps owning editing, caret and selection. Decorations are
+  // strictly zero-layout (colour, background, box-shadow ring, and `-mx`/`px` pairs that cancel — never
+  // a weight or a size) so the mirror's advance widths can never drift from the textarea's.
+  //
+  // Two kinds of run get painted. A staged ⌘I context token gets a pill behind it. A `@handle` that
+  // NAMES a thread (the same resolver the transcript links with, lib/threadMentions.ts scanMentions)
+  // is TINTED, so a finished mention reads as one once typed rather than as prose — a half-typed or
+  // unknown `@` stays plain, which is the signal it resolved. A <textarea> cannot colour part of its
+  // own text, so while a mention is on screen the MIRROR draws every glyph and the textarea's go
+  // transparent (its caret keeps the fg colour); with only pills, the textarea draws the text as ever.
   const stagedTokens = useMemo(() => contextTokens ?? [], [contextTokens])
-  const backdropSegments = useMemo(() => {
-    if (stagedTokens.length === 0) return null
-    const runs = splitProseByTokens(prose, stagedTokens)
-    if (!runs.some((run) => run.token)) return null
-    return runs.map((run, i) =>
-      run.token ? (
+  const highlightCandidates = useMemo(
+    () => (ownMention ? [...(mentionCandidates ?? []), ownMention] : mentionCandidates ?? []),
+    [mentionCandidates, ownMention],
+  )
+  const backdrop = useMemo(() => {
+    let hasMention = false
+    let hasToken = false
+    const out: React.ReactNode[] = []
+    for (const run of splitProseByTokens(prose, stagedTokens)) {
+      if (run.token) {
+        hasToken = true
         // The vertical pad is free (vertical padding on an inline box never moves layout); the
         // horizontal pad is bought back by the negative margin so the advance width is untouched.
-        <span key={i} className="rounded bg-panel-2 py-0.5 -mx-0.5 px-0.5 ring-1 ring-inset ring-border">
-          {run.text}
-        </span>
-      ) : (
-        run.text
-      ),
-    )
-  }, [prose, stagedTokens])
+        out.push(
+          <span key={out.length} className="rounded bg-panel-2 py-0.5 -mx-0.5 px-0.5 ring-1 ring-inset ring-border">
+            {run.text}
+          </span>,
+        )
+        continue
+      }
+      for (const seg of mentionSegments(run.text, highlightCandidates)) {
+        if (seg.kind === "text") {
+          out.push(seg.text)
+          continue
+        }
+        hasMention = true
+        out.push(
+          <span key={out.length} data-composer-mention className="rounded-[3px] bg-accent/10 py-px -mx-px px-px text-accent">
+            {seg.text}
+          </span>,
+        )
+      }
+    }
+    return hasMention || hasToken ? { segments: out, paintsText: hasMention } : null
+  }, [prose, stagedTokens, highlightCandidates])
+  const backdropSegments = backdrop?.segments
 
   // The mirror rides the textarea's own scroll position (a textarea at maxHeight scrolls its
   // content; the backdrop must pan with it or the pills detach from their tokens).
@@ -708,7 +734,7 @@ export function Composer({
             ref={contextRef}
             aria-hidden
             data-composer-context-backdrop
-            className={`pointer-events-none absolute inset-0 select-none overflow-hidden whitespace-pre-wrap [overflow-wrap:break-word] px-3.5 ${footer ? "py-2.5 pb-3" : `py-2.5 ${railAction ? RAIL_RESERVE_WITH_ACTION : RAIL_RESERVE_PLAIN}`} text-[13px] leading-relaxed text-transparent`}
+            className={`pointer-events-none absolute inset-0 select-none overflow-hidden whitespace-pre-wrap [overflow-wrap:break-word] px-3.5 ${footer ? "py-2.5 pb-3" : `py-2.5 ${railAction ? RAIL_RESERVE_WITH_ACTION : RAIL_RESERVE_PLAIN}`} text-[13px] leading-relaxed ${backdrop?.paintsText ? `text-fg ${busy ? "opacity-60" : ""}` : "text-transparent"}`}
           >
             {backdropSegments}
           </div>
@@ -754,7 +780,7 @@ export function Composer({
           // out of every line). Without a footer the box is a single compact row and the right padding is
           // what keeps text from sliding under the floating paperclip/send buttons. `relative` keeps the
           // caret and text painting above the marker backdrop behind it.
-          className={`relative block w-full resize-none bg-transparent px-3.5 ${footer ? "py-2.5 pb-3" : `py-2.5 ${railAction ? RAIL_RESERVE_WITH_ACTION : RAIL_RESERVE_PLAIN}`} text-[13px] leading-relaxed text-fg outline-none placeholder:text-muted scrollbar-none disabled:opacity-60`}
+          className={`relative block w-full resize-none bg-transparent px-3.5 ${footer ? "py-2.5 pb-3" : `py-2.5 ${railAction ? RAIL_RESERVE_WITH_ACTION : RAIL_RESERVE_PLAIN}`} text-[13px] leading-relaxed ${backdrop?.paintsText ? "text-transparent caret-fg" : "text-fg"} outline-none placeholder:text-muted scrollbar-none disabled:opacity-60`}
         />
       </div>
       {/* Attachment chips along the bottom row — one square tile per attached file (image thumbnail or
