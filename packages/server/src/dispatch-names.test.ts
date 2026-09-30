@@ -45,7 +45,6 @@ function harness(answers: string[]) {
   const prompts: string[] = []
   const inner = createThreadNamer({
     storage,
-    aiTitleOf: () => undefined,
     complete: async ({ prompt }) => {
       prompts.push(prompt)
       const next = answers.shift()
@@ -96,7 +95,7 @@ test("a dispatch with no caller title is MINTED a name, and the namer is told th
   const row = storage.getSession(slug)!
   assert.equal(row.title, "Budget defaults")
   assert.equal(row.title_agent, 1, "persisted, so it outranks Claude's own transcript title on the board")
-  assert.equal(row.title_locked, 0, "the worker may still correct it once")
+  assert.equal(row.title_locked, 0, "a human rename still records as the human's")
 })
 
 test("a caller's title that duplicates an open thread's name is given a distinguishing word; a distinct one is kept", async () => {

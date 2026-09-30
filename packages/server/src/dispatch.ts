@@ -909,7 +909,7 @@ export function createDispatcher(deps: DispatchDeps): Dispatcher {
       // Title: a caller's title, else the heuristic chop, which is only ever the SLUG and a placeholder.
       // A thread with no caller title is minted its real NAME — one or two words, unique in the project —
       // once its row exists (`mintName`, thread-names.ts), through a short Claude completion off the
-      // dispatch path; Claude's own ai-title shows in the seconds before it lands. (A headless `claude -p`
+      // dispatch path; the card shows a placeholder in the seconds before it lands, never Claude's own ai-title. (A headless `claude -p`
       // titling pass was tried and REMOVED — print mode is going away for Max subscription auth. The mint
       // is an SDK stream-json session, the mode every broker worker runs in.)
       // A CALLER's title (a parent's `spawn_thread`, the GitHub batch) is a name like any other, so it is
@@ -1206,8 +1206,8 @@ export function createDispatcher(deps: DispatchDeps): Dispatcher {
         archived: 0,
         rested_at: new Date().toISOString(),
         // The name came from the session's OWN title (Claude's ai-title) or a short id — a real name
-        // either way, not the dispatch chop, so it is not marked provisional. It stays replaceable:
-        // the worker's own later title for the task is nearly always the more informative one.
+        // either way, not the dispatch chop, so it is not marked provisional — and, like every name, it is
+        // final from here (thread-names.ts).
         title_auto: 0,
         title: displayTitle,
         transcript_id: null,

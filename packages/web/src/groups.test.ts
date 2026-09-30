@@ -904,22 +904,35 @@ test("displayTitle: an explicit human title wins over stale backend AI-title and
   )
 })
 
-test("displayTitle: a title a dispatch CALLER hard-coded shows until the worker names the thread itself", () => {
-  // `Investigate acme/app#391` (GitHub batch) / a parent agent's spawn_thread guess: a real name, so no
-  // "Spinning up…" placeholder, but nobody human chose it.
-  const hardCoded = { id: "investigate-acme-app-391", title: "Investigate acme/app#391", titleAuto: false, titleLocked: false }
+test("displayTitle: a title a dispatch CALLER hard-coded is the thread's name, shown as its handle", () => {
+  // `Investigate acme/app#391` (GitHub batch) / a spinoff's or spawn_thread's name: a real name, so no
+  // "Spinning up…" placeholder — and a FINAL one: the server withholds the live session title from it.
+  const hardCoded = { id: "investigate-acme-app-391", title: "Investigate acme/app#391", titleAuto: false, titleLocked: false, titleNamed: true }
   assert.equal(titleIsProvisional(thread({ ...hardCoded, spawnedAt: new Date().toISOString() })), false)
   assert.equal(displayTitle(thread(hardCoded)), "investigate-acme-app-391")
-  // …and the moment the worker reports what the task actually is, that wins.
-  assert.equal(
-    displayTitle(thread({ ...hardCoded, aiTitle: "Cache key collides on normalized ids" })),
-    "Cache key collides on normalized ids",
-  )
-  // Renaming it locks it again — a later/stale backend record can no longer displace the human's choice.
+  // Renaming it locks it — a later/stale backend record can no longer displace the human's choice.
   assert.equal(
     displayTitle(thread({ ...hardCoded, title: "Resolver cache bug", titleLocked: true, aiTitle: "generated-slug" })),
     "resolver-cache-bug",
   )
+})
+
+test("displayTitle: a live session title that is not a NAME never shows as a handle", () => {
+  // Maintainer 2026-09-30: "once someone sees the id, it cannot change". Claude's own session title moves
+  // and the minted name lands seconds later, so before the mint the card keeps its placeholder…
+  const unnamed = { id: "cache-review", title: "evaluate the changes…", titleAuto: true, titleLocked: false, titleNamed: false, aiTitle: "Pluggable cache store changes evaluation" }
+  const fresh = thread({ ...unnamed, spawnedAt: new Date().toISOString() })
+  assert.equal(titleIsProvisional(fresh), true)
+  assert.equal(displayTitle(fresh), SPINNING_UP_TITLE)
+  assert.equal(threadHandleOf(fresh), undefined)
+  // …and past the spin-up window with still no name, the session title reads as TEXT, with no handle.
+  const stale = thread({ ...unnamed, spawnedAt: "2026-07-01T00:00:00.000Z" })
+  assert.equal(displayTitle(stale), "Pluggable cache store changes evaluation")
+  assert.equal(threadHandleOf(stale), undefined)
+  // Once the name persists it is the handle, and nothing but a human rename moves it.
+  const minted = thread({ ...unnamed, title: "Cache review", aiTitle: "Cache review", titleNamed: true, spawnedAt: "2026-07-01T00:00:00.000Z" })
+  assert.equal(displayTitle(minted), "cache-review")
+  assert.equal(threadHandleOf(minted), "cache-review")
 })
 
 test("displayTitle: a machine-generated session slug is never presented as a successful title", () => {

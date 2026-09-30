@@ -7,10 +7,17 @@ import type { ClaudeOneShot, ClaudeOneShotRequest } from "./backend/claude-onesh
 // The NAME is one or two words: the SUBJECT of the thread — "Shell budgets", "Focus mode", "ArkType
 // perf" — never the action taken ("Fix the shell budget default"). In his words: "choose ideal two words
 // to differentiate not necessarily based on prompt but best 1 or 2 word summary of intent - the sort of
-// subject of the prompt rather than exactly what was done". It is minted once at dispatch, the worker may
-// correct it ONCE after orienting (`mcp__frizz__title`), a human rename locks it, and nothing automatic
-// touches it after that. A name that keeps moving is not a name; it is how the reader lost track of which
-// card was which.
+// subject of the prompt rather than exactly what was done".
+//
+// A NAME IS THE THREAD'S ID, SO IT IS FINAL THE MOMENT IT EXISTS (maintainer 2026-09-30: "once someone
+// sees the id, it cannot change"). The board shows a name as its `@handle`, and the operator types that
+// handle into other threads' prompts, so a name that moves strands every mention of it. The first name to
+// land stands: a caller's title (a spinoff, `spawn_thread`), else Frizz's mint, else the Codex marker,
+// else — only for a thread none of those could name — the worker's own `mcp__frizz__title`. Only a human
+// rename changes it after that. Two things used to move it and no longer can: Claude's own session title,
+// which showed as the name until the mint landed (and outranked a spinoff's name for good — a thread
+// dispatched as "Cache review" read `@pluggable-cache-store-changes-evaluation`), and the worker's
+// "correct it once after orienting" rename (`perf-review` became a sentence and then `perf-bench`).
 //
 // The STATUS is the part that is allowed to move: a short phrase of what is happening NOW, rewritten every
 // 5th operator message (periodic-status.ts). It used to be the name itself being rewritten, and that is
@@ -61,27 +68,22 @@ export interface NamedThread {
   at: number
 }
 
-/** The name a row is SHOWN under, mirroring the web's `displayTitle` minus its placeholders: a human's
- *  or a persisted machine name first, else the transcript's live title, else a caller's dispatch title.
- *  Undefined for a row whose only text is the dispatch chop — that is a placeholder, not a name. */
-export function rowThreadName(
-  row: Pick<SessionRow, "title" | "title_auto" | "title_locked" | "title_agent">,
-  aiTitle: string | undefined,
-): string | undefined {
-  const stored = row.title?.trim() || undefined
-  if (sessionTitleLocked(row) || row.title_agent) return stored
-  if (aiTitle?.trim()) return aiTitle.trim()
-  return row.title_auto === 1 ? undefined : stored
+/** The row's persisted NAME — a human's, a caller's dispatch title, or a machine name that landed (the
+ *  mint, the Codex marker, the worker's own) — mirroring the web's `titleSource`. Undefined while the row
+ *  has none: its stored text is then the dispatch chop, a placeholder. The transcript's live session
+ *  title is never a name — it moves, and a name may not (see the header). */
+export function rowThreadName(row: Pick<SessionRow, "title" | "title_auto" | "title_locked" | "title_agent">): string | undefined {
+  if (!sessionTitleLocked(row) && !row.title_agent && row.title_auto === 1) return undefined
+  return row.title?.trim() || undefined
 }
 
-export function projectThreadNames(
-  rows: readonly SessionRow[],
-  aiTitleOf: (slug: string) => string | undefined,
-): NamedThread[] {
+/** Every row as a NamedThread. A row with no name yet carries the empty name, which holds nothing in the
+ *  uniqueness check and is addressed by its slug (thread-mentions.ts `handleOf`) — the one id it has that
+ *  cannot change. */
+export function projectThreadNames(rows: readonly SessionRow[]): NamedThread[] {
   const out: NamedThread[] = []
   for (const row of rows) {
-    const name = rowThreadName(row, aiTitleOf(row.slug))
-    if (!name) continue
+    const name = rowThreadName(row) ?? ""
     const at = Date.parse(row.rested_at ?? row.spawned_at)
     out.push({
       slug: row.slug,
@@ -305,9 +307,6 @@ function nameFromSource(source: string): string {
 
 export interface ThreadNamerDeps {
   storage: Pick<Storage, "allSessions" | "setMintedTitle">
-  /** The live transcript title for a slug (tailer telemetry), which is a row's shown name until a
-   *  machine name is persisted. Late-bound in context.ts: the tailer is built after the namer. */
-  aiTitleOf: (slug: string) => string | undefined
   /** The model. Absent ⇒ uniqueness still holds for every writer, but nothing is minted. */
   complete?: ClaudeOneShot
   /** A persisted name changed; refresh the board. */
@@ -338,7 +337,7 @@ export interface ThreadNamer {
 }
 
 export function createThreadNamer(deps: ThreadNamerDeps): ThreadNamer {
-  const threads = () => projectThreadNames(deps.storage.allSessions(), deps.aiTitleOf)
+  const threads = () => projectThreadNames(deps.storage.allSessions())
   const holder = (name: string, exceptSlug?: string) => nameHolder(name, threads(), exceptSlug)
   const distinct = (name: string, source: string, exceptSlug?: string) =>
     distinguishingName(name, source, (candidate) => holder(candidate, exceptSlug) !== undefined)

@@ -802,34 +802,21 @@ const DONE = {
 const TITLE = {
   name: "title",
   description:
-    "NAME THIS THREAD on the human's board, once you actually know what the work is.\n\n" +
-    "WHY IT EXISTS: the name your thread is wearing right now was minted the instant you were " +
-    "dispatched, from the raw text of the prompt, before you had read a single file. It can only ever " +
-    "paraphrase what the operator typed — so it inherits their shorthand, their ambiguity and their " +
-    "typos. One zod thread went onto the board as \"Zon4.5 features and z.properties documentation " +
-    "audit\" because the operator typed \"Zon4.5\" and nothing in the session yet knew the product is " +
-    "called Zod. You know. That is the entire point of this tool.\n\n" +
-    "WHEN TO CALL IT: after you have oriented — read the issue, opened the code, found the bug — and " +
-    "can name the actual work in your own words. Not on arrival: a name you register before you " +
-    "understand the task is the same guess the board already has. ONCE: after your rename the name is " +
-    "stable, and Frizz refuses a second one. What the thread is doing NOW is not its name — Frizz keeps a " +
-    "separate status line for that.\n\n" +
-    "NAME THE SUBJECT, NOT THE ACTION. One or two words a reader picking one card out of thirty needs: " +
-    "\"Shell budgets\", \"Focus mode\", \"ArkType perf\" — never \"Fix the shell budget default\".\n\n" +
-    "KEEP IT SHORT. The human refers to the thread by its camelCase handle (\"Shell budgets\" is typed " +
-    "@shellBudgets), so Frizz refuses a name whose handle runs past 16 characters. Short, plain words.\n\n" +
-    "IT MUST BE DISTINCT. No two open threads in the project share a name (compared ignoring case and " +
-    "punctuation). Frizz refuses a duplicate and names the thread that holds it; pick a different 1-2 " +
-    "word subject that sets THIS thread apart and call again — a refusal does not spend your rename.\n\n" +
-    "A HUMAN RENAME OUTRANKS YOU, always. If the human has already named this thread, frizz refuses " +
-    "this and tells you so — that is a correct answer, not a failure, and you should not retry it.",
+    "NAME THIS THREAD on the human's board — only if it has no name yet. Frizz names every thread at " +
+    "dispatch, and that name is the thread's @handle: the human reads it on the board and types it to " +
+    "point other threads at this one, so it NEVER changes once shown. Frizz refuses this call on a " +
+    "thread that already has a name and tells you the name; that is the normal answer, not a failure — " +
+    "do not retry it. It only lands on a thread Frizz could not name.\n\n" +
+    "NAME THE SUBJECT, NOT THE ACTION: one or two words — \"Shell budgets\", \"Focus mode\", \"ArkType " +
+    "perf\" — never \"Fix the shell budget default\". Its kebab-case handle (\"Shell budgets\" is typed " +
+    "@shell-budgets) must be at most 20 characters, and no other open thread may carry the same name.",
   inputSchema: {
     type: "object",
     properties: {
       title: {
         type: "string",
         description:
-          "The thread's name: ONE or TWO short words naming its subject (camelCase handle at most 16 characters), SENTENCE case (capitalize only the " +
+          "The thread's name: ONE or TWO short words naming its subject (kebab-case handle at most 20 characters), SENTENCE case (capitalize only the " +
           "first word and proper nouns — \"Queue focus\", never \"Queue Focus\"), distinct from every " +
           "other open thread's name. No trailing period, no ticks, no issue-body quoting. Spell every " +
           "product, file and identifier the way the PROJECT spells it, not the way the prompt did.",

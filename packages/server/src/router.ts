@@ -162,7 +162,7 @@ import {
 import { type AppContext } from "./context.ts"
 import { listAcpAgents } from "./backend/acp-agents.ts"
 import { sessionTitleLocked } from "./storage.ts"
-import { createThreadNamer, threadNameProblem, type NamedThread, type ThreadNamer } from "./thread-names.ts"
+import { createThreadNamer, rowThreadName, threadNameProblem, type NamedThread, type ThreadNamer } from "./thread-names.ts"
 import { handleOf, isReplyWaitFor, knownHandles, replyWaitPrompt, resolveSubAgent, resolveThreadHandle, subAgentAddresses, THREAD_MESSAGE_HOURLY_CAP, threadMessageBody } from "./thread-mentions.ts"
 import { enqueueThreadMessageWake } from "./scheduler.ts"
 import { editedFilesOf } from "./edited-files.ts"
@@ -985,7 +985,7 @@ export function createRouter(ctx: AppContext) {
   // The name registry every title writer checks (thread-names.ts). A hand-built test context may carry
   // none; uniqueness then reads storage and the tailer directly, which is all it ever needs — only the
   // mint and the AI rename need the model.
-  const fallbackNamer = createThreadNamer({ storage: ctx.storage, aiTitleOf: (slug) => ctx.tailer?.get(slug)?.aiTitle })
+  const fallbackNamer = createThreadNamer({ storage: ctx.storage })
   const threadNamer = (): ThreadNamer => ctx.threadNamer ?? fallbackNamer
   // A THREAD'S SUB-AGENTS BY ADDRESS (shared thread-handle.ts): the tailer's directory — every child the
   // thread ever dispatched, live first — with each row's `thread.subAgent` address filled in from the
@@ -1050,7 +1050,7 @@ export function createRouter(ctx: AppContext) {
     let best: { tenant: AppContext; hit: NamedThread } | undefined
     for (const { project, ctx: tenant } of ctx.activeTenants?.() ?? []) {
       if (!tenant || project.id === ctx.project.id) continue
-      const namer = tenant.threadNamer ?? createThreadNamer({ storage: tenant.storage, aiTitleOf: (slug) => tenant.tailer?.get(slug)?.aiTitle })
+      const namer = tenant.threadNamer ?? createThreadNamer({ storage: tenant.storage })
       const hit = resolveThreadHandle(handle, namer.threads())
       if (hit && (!best || (hit.open !== best.hit.open ? hit.open : hit.at > best.hit.at))) best = { tenant, hit }
     }
@@ -4082,7 +4082,9 @@ export function createRouter(ctx: AppContext) {
 
     // The WORKER naming its own thread, from `mcp__frizz__title`. Same row `renameThread` writes;
     // different caller, and therefore a weaker claim: this name is machine-authored, so it does NOT
-    // lock, and a human rename outranks it both before and after.
+    // lock, and a human rename outranks it both before and after. It only NAMES a thread that has no
+    // name yet — never renames one, because a name is the `@handle` the board has already shown and a
+    // handle never changes once shown (thread-names.ts).
     //
     // Unguarded on session/generation ON PURPOSE, exactly as `setOwnThreadRecurringPrompt` is: the MCP
     // server knows only the slug frizz stamped into its env, and a model may choose the TEXT but never
@@ -4094,16 +4096,16 @@ export function createRouter(ctx: AppContext) {
         const row = ctx.storage.getSession(input.slug)
         if (!row) throw new Error(`thread ${input.slug} is not registered`)
         const namer = threadNamer()
-        const current = () => namer.threads().find((t) => t.slug === input.slug)?.name ?? (ctx.storage.getSession(input.slug)?.title?.trim() || input.slug)
+        const current = () => namer.threads().find((t) => t.slug === input.slug)?.name || (ctx.storage.getSession(input.slug)?.title?.trim() || input.slug)
         // A human who has renamed the thread owns its name. Report that as a REFUSAL rather than a
         // throw: the worker did nothing wrong, and an error is the one answer it would retry.
         const lockedByHuman = sessionTitleLocked(row)
         if (lockedByHuman) return { accepted: false, title: current(), lockedByHuman }
-        // The worker gets ONE rename, and a name is one or two short words that no other open thread carries
-        // (thread-names.ts). Each refusal says what to do next; only the spent rename says "stop".
+        // A name is one or two short words that no other open thread carries (thread-names.ts). Each
+        // refusal says what to do next; a thread that is already named says "stop".
         const refuse = (refusal: string) => ({ accepted: false, title: current(), lockedByHuman: false, refusal })
-        if (row.title_worker_renamed) {
-          return refuse(`you already renamed this thread once, and a name is stable after that. It stays "${current()}"; do not call this again.`)
+        if (rowThreadName(row) !== undefined) {
+          return refuse(`this thread is already named "${current()}", and a name never changes once the board has shown it — the human may already be typing it as @${handleOf({ name: current(), slug: row.slug })}. Leave it; do not call this again.`)
         }
         const problem = threadNameProblem(input.title)
         if (problem) {
