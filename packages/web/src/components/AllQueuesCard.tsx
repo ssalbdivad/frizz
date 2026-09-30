@@ -45,7 +45,7 @@ import { ThreadStatusLine } from "./ThreadStatusLine.tsx"
 import { Composer } from "./Composer.tsx"
 import { InteractionStack } from "./InteractionCards.tsx"
 import { AwaitingSubAgentsCard, SubAgentWaitSnoozeItems } from "./AwaitingSubAgentsCard.tsx"
-import { showsSubAgentWait } from "../lib/subAgentWait.ts"
+import { drawsSubAgentWaitCard, showsSubAgentWait } from "../lib/subAgentWait.ts"
 import { useThreadComposerControls } from "../hooks/useThreadComposerControls.tsx"
 import { ExpandThreadLink } from "./ExpandThreadLink.tsx"
 import { HEADER_ICON_CLASS } from "../lib/headerIcon.ts"
@@ -57,7 +57,7 @@ import { RegisteredAnsweringContext, RegisteredAnsweringProvider, RegisteredQues
 import { RestedCard, showsRestedCard } from "./RestedCard.tsx"
 import { LogoutConfirmModal, SignInModal } from "./SignInModal.tsx"
 import { QuietTurnCard, showsQuietTurnCard } from "./QuietTurnCard.tsx"
-import { QueueShellStrip } from "./QueueShellStrip.tsx"
+import { QueueChildOps } from "./QueueChildOps.tsx"
 import { SnoozeButton } from "./SnoozeButton.tsx"
 import { StateButton } from "./ThreadLifecycleFooter.tsx"
 import { focusedProject, ThreadTerminalsStrip } from "./ThreadTerminals.tsx"
@@ -235,6 +235,8 @@ export const AllQueuesCard = memo(function AllQueuesCard({
   })
   const text = handoff.data?.text
   const parts = useMemo(() => (text ? handoffParts(text, thread.questions) : null), [text, thread.questions])
+  // Does the awaiting card list the children, or the ops column under the reply box (QueueChildOps)?
+  const drawsSubAgentWait = drawsSubAgentWaitCard(thread, parts?.fences)
   // THIS CARD IS THE NEWEST HANDOFF, and every open question rides to the bottom of the newest handoff
   // (lib/questionAnchor, 2026-09-29): a typed message no longer sets one aside — the worker `unask`s what
   // it made moot — so every question still open is still this handoff's ask.
@@ -353,7 +355,7 @@ export const AllQueuesCard = memo(function AllQueuesCard({
                 <QuestionBlockCard key={index} raw={question.raw} questionKind={question.questionKind} danger={question.danger} />
               ))}
               {/* A parent resting on its sub-agents states the batch in place of its fence (AwaitingSubAgentsCard). */}
-              {parts?.fences.map((fence, index) => fence.kind === "awaiting" && showsSubAgentWait(thread)
+              {parts?.fences.map((fence, index) => fence.kind === "awaiting" && drawsSubAgentWait
                 ? <AwaitingSubAgentsCard key={index} project={project} thread={thread} body={fence.body} openThread={() => openInPlace(project, thread.id)} onSnoozed={onLeave} onUndone={onUnsnoozed} />
                 : <FenceBody key={index} kind={fence.kind} body={fence.body} />)}
               {/* A DONE THE WORKER REGISTERED (`mcp__frizz__done`) rather than fenced — the sign-off the worker
@@ -411,8 +413,9 @@ export const AllQueuesCard = memo(function AllQueuesCard({
 
           <ThreadProjectScope projectId={project.id} projectDir={project.projectDir}>
             <ReplyBox project={project} thread={thread} onSent={onLeave} onFailed={onReturn} />
-            {/* The shells it left running — a shell with no budget runs until someone stops it. */}
-            <QueueShellStrip thread={thread} api={api} onOpen={() => openInPlace(project, thread.id)} />
+            {/* EVERYTHING IT HAS RUNNING — sub-agents, Workflows, shells — whatever the worker is doing
+                (QueueChildOps). The children are the awaiting card's to list while it is drawn. */}
+            <QueueChildOps project={project} thread={thread} api={api} agents={!drawsSubAgentWait} onOpenThread={() => openInPlace(project, thread.id)} />
           </ThreadProjectScope>
           </RegisteredAnsweringProvider>
           </QueueDismissContext.Provider>
