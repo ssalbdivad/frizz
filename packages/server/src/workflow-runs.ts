@@ -1,5 +1,7 @@
 import { readFileSync, statSync } from "node:fs"
 import { join } from "node:path"
+import { transcriptQuietPast } from "./pending-call.ts"
+import { processAwakeClock } from "./awake-clock.ts"
 
 // ── CLAUDE CODE WORKFLOW RUNS, read off disk ─────────────────────────────────────────────────────────
 //
@@ -162,19 +164,21 @@ function str(value: unknown): string | undefined {
 }
 
 // One agent's liveness. "running" only while the RUN is live: a run that died with its process leaves
-// agents journalled as started forever. Quiet past `staleMs` reads "stale", the rule every tracked child
-// follows. `mtimeMs` is injected so the tailer can use its own (test-controllable) clock and stat.
+// agents journalled as started forever. Quiet past `staleMs` of awake time — and past whatever its pending
+// call declared (pending-call.ts) — reads "stale", the rule every tracked child follows. `mtimeMs` and
+// `awakeBetween` are injected so the tailer can use its own (test-controllable) clock and stat.
 export function workflowAgentState(
   agent: WorkflowAgent,
   runLive: boolean,
   nowMs: number,
   staleMs: number,
   mtimeMs: (path: string) => number | undefined = statMtime,
+  awakeBetween: (fromMs: number, toMs: number) => number = processAwakeClock.awakeBetween,
 ): "running" | "stale" | "done" | "failed" {
   if (agent.status !== "running") return agent.status
   if (!runLive) return "done"
   const m = mtimeMs(agent.transcript) ?? agent.startedAtMs
-  return m === undefined || nowMs - m > staleMs ? "stale" : "running"
+  return m === undefined || transcriptQuietPast(agent.transcript, m, nowMs, staleMs, awakeBetween) ? "stale" : "running"
 }
 
 // The drawer's listing of a run: every agent it started, finished ones included.
