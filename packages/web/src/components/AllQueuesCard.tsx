@@ -49,7 +49,7 @@ import { AwaitingSubAgentsCard, SubAgentWaitSnoozeItems } from "./AwaitingSubAge
 import { drawsSubAgentWaitCard, showsSubAgentWait } from "../lib/subAgentWait.ts"
 import { useThreadComposerControls } from "../hooks/useThreadComposerControls.tsx"
 import { ExpandThreadLink } from "./ExpandThreadLink.tsx"
-import { SpinoffButton } from "./Spinoff.tsx"
+import { SpinoffButton, SpinoffOf } from "./Spinoff.tsx"
 import { HEADER_ICON_CLASS } from "../lib/headerIcon.ts"
 import { LastActive } from "./LastActive.tsx"
 import { ProjectSquare } from "./ProjectRail.tsx"
@@ -166,6 +166,16 @@ export function useOpenThreadInPlace(): (project: Pick<QueuesProject, "slug">, s
     },
     [navigate],
   )
+}
+
+/** A thread of a queue card's project by slug, for a line that names another thread of it (SpinoffOf): the
+ *  project's own open rows, then the page's board when the page is showing that project (a done thread is
+ *  on the board and in no queue). Never another project's board — a same-named slug there is not this. */
+function queueThread(project: QueuesProject, slug: string): ThreadView | undefined {
+  return project.queued.find((t) => t.id === slug)
+    ?? project.running.find((t) => t.id === slug)
+    ?? project.snoozed.find((t) => t.id === slug)
+    ?? (store.board?.projectSlug === project.slug ? store.board.threads.find((t) => t.id === slug) : undefined)
 }
 
 /** A follow-up into another project's thread (lib/projectFollowUp.ts, which the project list's Retry shares). */
@@ -294,6 +304,17 @@ export const AllQueuesCard = memo(function AllQueuesCard({
                     className="min-w-0 truncate"
                   />
                 )}
+                {/* A SPINOFF CHILD says whose, as its drawer header does — ahead of the status line, which
+                    takes the rest of the row. Resolved, addressed and opened in the CARD's project: the
+                    page's board names the focused one. */}
+                <SpinoffOf
+                  compact
+                  thread={thread}
+                  lead={<span aria-hidden>·</span>}
+                  resolve={(slug) => queueThread(project, slug)}
+                  href={(slug) => crossProjectThreadHref(project, slug)}
+                  onOpen={(slug) => openInPlace(project, slug)}
+                />
                 {/* What the thread is doing NOW, beside the name that stays put (ThreadStatusLine). */}
                 <ThreadStatusLine thread={thread} lead={<span aria-hidden>·</span>} />
               </div>

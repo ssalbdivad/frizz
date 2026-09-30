@@ -1,11 +1,14 @@
-import { useEffect, useRef, useState, type ReactNode } from "react"
-import { Loader2, Split } from "lucide-react"
+import { useContext, useEffect, useId, useRef, useState, type ReactNode } from "react"
+import { ChevronRight, Loader2, Split } from "lucide-react"
 import { SPINOFF_INSTRUCTIONS_MAX, type SpinoffView, type ThreadView } from "@frizz/shared"
 import { useThreadApi, useThreadProjectDir } from "../api/threadApi.tsx"
-import { displayTitle } from "../groups.ts"
+import { displayTitle, threadHandleOf } from "../groups.ts"
 import { useBoard } from "../hooks.ts"
 import { draftKey, useDraft } from "../lib/drafts.ts"
-import { openThread, threadBySlug } from "../store.ts"
+import { transcriptMetaChevronClass } from "../lib/transcriptMetaLabels.ts"
+import { threadBySlug } from "../store.ts"
+import { ThreadHandleLink } from "./MentionLinks.tsx"
+import { ThreadSlugContext } from "./threadSlugContext.ts"
 import { Dialog } from "./ui/Dialog.tsx"
 import { Tooltip } from "./Tooltip.tsx"
 import { BLOCK_RADIUS } from "./TranscriptCard.tsx"
@@ -16,9 +19,11 @@ import { BLOCK_RADIUS } from "./TranscriptCard.tsx"
 //   · SpinoffButton — the icon in every thread header: each queue card's, and the drawer's and /full's.
 //     It opens the one-field dialog, and the request goes to this thread's worker (the `spinoff` RPC),
 //     which briefs and dispatches the new one.
-//   · SpinoffBubble — the request, in this thread's timeline where the human sent it, and the link to the
-//     thread it became once the worker has started it.
-//   · SpinoffOf — the child's way back, on its header's second line.
+//   · SpinoffCard — the request, in this thread's timeline where the human sent it: the human's
+//     instructions under the `@handle` of the thread it became.
+//   · SpinoffOriginCard — the same card at the other end, heading the new thread: whose spinoff it is,
+//     the human's instructions, and the context the parent's worker wrote folded beneath them.
+//   · SpinoffOf — the child's way back, on its header's second line (and its queue card's meta line).
 //
 // A spinoff belongs to the THREAD. On its first day (2026-09-29) it was a hover action on every message,
 // quoting the one it was clicked from; the maintainer moved it to the thread that evening. The human
@@ -156,66 +161,203 @@ function SpinoffDialog({ thread, open, onOpenChange }: { thread: ThreadView & { 
   )
 }
 
-/** The request as it sits in the parent's timeline: the human's instructions, right-aligned like
- *  anything else they sent, with the thread it became beneath. */
-export function SpinoffBubble({ id, instructions, spinoffs, sourceId }: { id: string; instructions: string; spinoffs: readonly SpinoffView[] | undefined; sourceId?: string }) {
+// ── The two ends of a spinoff, as cards ────────────────────────────────────────────────────────────
+//
+// A DEDICATED CARD, NOT THE HUMAN'S BUBBLE (maintainer 2026-09-30, on both ends at once: "there needs to
+// be a special UI affordance for referencing spinoff context … Make a dedicated spinoff header UI", and
+// of the parent, "dedicated UI and link to the spinoff, much cleaner"). The request drew as the human's
+// filled bubble with a small caption under it, and the child's first turn as one giant bubble holding
+// the whole brief — the parent worker's words wearing the human's voice.
+//
+// So both ends wear one card, and it borrows exactly half of the bubble: its PLACE (right-aligned, 85%,
+// the tail corner — the human asked for this) and its type size, but an OUTLINE where the bubble has a
+// fill, so it reads as an action taken rather than a thing said. The two ends share the shell and the
+// header row, so a reader who has seen one recognises the other as the same feature.
+
+/** The card shell both ends share. `data-spinoff-card` names which end. */
+const CARD_SHELL = `${BLOCK_RADIUS} rounded-br-sm border border-border-strong px-3.5 py-3 text-[14px] text-fg`
+
+// THE HEADER ROW: the mark, the word, the other thread. 13px — one step under the instructions it heads
+// (14px, the bubble's own size), so the human's words stay the body and the row reads as their label.
+//
+// `items-baseline` + the glyph's `self-baseline translate-y-[calc(0.5em_-_0.5cap)]` puts a symmetric 1em
+// glyph's ink on the text's cap band in whatever font resolved (lib/transcriptMetaLabels.ts carries the
+// derivation); the negative top margin stops the 1em box, which reaches above the text's ascent, from
+// growing the row. The same rule every mark-beside-text in the transcript uses. Measured ink-to-cap-band
+// residual, sans at 13px: -0.26px for the Split mark, the spinner and the disclosure chevron alike —
+// under the device grid, so left alone.
+//
+// HORIZONTAL: `gap-1.5` is a BOX distance. Between "Spinoff" and the handle it draws 5.3–5.5px of ink (a
+// word space, which is what it should read as), but between the mark and "Spinoff" it drew 8.25px — the
+// glyph's own 1px of dead box on its right plus the S's side bearing — so the mark floated off the word
+// it labels. `-mr-[0.2em]` takes the difference back, putting the three marks of the row on one even
+// rhythm (scripts/ink-gaps.mjs, dsf 4, sans, 2026-09-30; the spinner in the same slot measured the same).
+const HEADER_ROW = "flex min-w-0 items-baseline gap-1.5 text-[13px] leading-5 text-muted"
+const HEADER_GLYPH = "size-[1em] shrink-0 self-baseline -mt-[calc(1em_-_1cap)] -mr-[0.2em] translate-y-[calc(0.5em_-_0.5cap)]"
+// The other thread is the row's prominent element — the thing the card exists to point at.
+const HEADER_LINK = "min-w-0 truncate rounded-sm font-medium text-fg underline decoration-muted/40 underline-offset-2 outline-none hover:decoration-fg/70 focus-visible:ring-1 focus-visible:ring-focus-ink-60"
+// The instructions: verbatim, so their line breaks survive, and never allowed to push the card wide.
+const BODY = "mt-1.5 whitespace-pre-wrap [overflow-wrap:anywhere]"
+
+/** Where a spinoff request stands, as its card shows it. */
+export type SpinoffCardState = "started" | "starting" | "unstarted"
+
+/** A request with a child has started. One without is STARTING while it can still become one — its
+ *  delivery is still queued, or the worker is at work (on it, or on whatever it was doing first) — and
+ *  UNSTARTED once the worker has come to rest without starting it: nothing will now, and the worker's own
+ *  words about why sit in the chat under the card. */
+export function spinoffCardState(edge: SpinoffView | undefined, opts: { queued?: boolean; working?: boolean }): SpinoffCardState {
+  if (edge?.childSlug) return "started"
+  return opts.queued || opts.working ? "starting" : "unstarted"
+}
+
+/** The thread a transcript belongs to, off the board — the card's own read of the edge and of whether the
+ *  worker is at work, so Message passes nothing through for it and its memo holds on every board tick. */
+function useTranscriptThread(): ThreadView | undefined {
   const board = useBoard()
-  const edge = spinoffs?.find((o) => o.id === id)
-  const child = edge?.childSlug ? threadBySlug(board, edge.childSlug) : undefined
-  const childLabel = child ? displayTitle(child) : edge?.childSlug
+  return threadBySlug(board, useContext(ThreadSlugContext))
+}
+
+/** The request as it sits in the parent's timeline where the human sent it: the thread it became, and
+ *  the human's instructions under it. `queued` is a delivery the worker has not read yet (the ledger's
+ *  echo of the send, before the transcript has it). */
+export function SpinoffCard({ id, instructions, queued, sourceId }: { id: string; instructions: string; queued?: boolean; sourceId?: string }) {
+  const thread = useTranscriptThread()
+  const edge = thread?.spinoffs?.find((o) => o.id === id)
+  const state = spinoffCardState(edge, { queued, working: thread?.runtime === "running" || thread?.runtime === "spawning" })
   return (
-    <div data-frizz-msg={sourceId} data-spinoff={id} className="self-end flex max-w-[85%] flex-col items-end gap-1">
-      <div className={`${BLOCK_RADIUS} rounded-br-sm bg-user-bubble px-3.5 py-3 text-[14px] text-user-bubble-fg`}>
-        <p className="whitespace-pre-wrap [overflow-wrap:anywhere]">{instructions}</p>
+    <div data-frizz-msg={sourceId} data-spinoff={id} data-spinoff-card="request" data-spinoff-state={state} className="self-end flex min-w-0 max-w-[85%] flex-col">
+      <div className={CARD_SHELL}>
+        <div className={HEADER_ROW}>
+          {/* STARTING, the mark's own slot spins — one glyph that changes, rather than a spinner added
+              beside the mark that then has to be spaced and aligned against it. */}
+          {state === "starting"
+            ? <Loader2 aria-hidden className={`${HEADER_GLYPH} animate-spin`} />
+            : <SpinoffMark size={14} className={HEADER_GLYPH} />}
+          <span className="shrink-0">Spinoff</span>
+          {state === "started" ? (
+            <ThreadHandleLink slug={edge!.childSlug!} className={HEADER_LINK} />
+          ) : (
+            <span data-spinoff-pending className="min-w-0 truncate text-muted-70">{state === "starting" ? "starting…" : "didn't start"}</span>
+          )}
+        </div>
+        <p className={BODY}>{instructions}</p>
       </div>
-      <div className="flex min-w-0 max-w-full items-baseline gap-1 text-[11px] leading-4 text-muted-75">
-        <SpinoffMark size={11} className="translate-y-[calc(0.5em_-_0.5cap)] self-baseline" />
-        {edge?.childSlug ? (
-          <>
+    </div>
+  )
+}
+
+/** The head of a spinoff child's transcript: whose spinoff it is, what the human asked for, and — folded,
+ *  one click away — the context the parent's worker gathered. `context` is that brief already rendered
+ *  (the transcript's markdown renderer, which lives in ChatView). */
+export function SpinoffOriginCard({ instructions, context, sourceId }: { instructions: string; context: ReactNode; sourceId?: string }) {
+  const thread = useTranscriptThread()
+  const edge = thread?.spinoffs?.find((o) => o.childSlug === thread.id)
+  const board = useBoard()
+  const parent = edge ? threadBySlug(board, edge.parentSlug) : undefined
+  const parentHandle = parent ? threadHandleOf(parent) : undefined
+  // The disclosure names the parent as TEXT: a link inside the toggle would be a control inside a control,
+  // and the header right above it already links the thread.
+  const parentName = parentHandle ? `@${parentHandle}` : parent ? displayTitle(parent) : edge ? edge.parentSlug : undefined
+  const [open, setOpen] = useState(false)
+  const contextId = useId()
+  return (
+    <div data-frizz-msg={sourceId} data-spinoff-card="origin" className="self-end flex min-w-0 max-w-[85%] flex-col">
+      <div className={CARD_SHELL}>
+        <div className={HEADER_ROW}>
+          <SpinoffMark size={14} className={HEADER_GLYPH} />
+          {edge ? (
+            <>
+              <span className="shrink-0">Spinoff of</span>
+              <ThreadHandleLink slug={edge.parentSlug} className={HEADER_LINK} />
+            </>
+          ) : (
             <span className="shrink-0">Spinoff</span>
-            <a
-              href={`/thread/${edge.childSlug}`}
-              onClick={(e) => {
-                if (e.button !== 0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return
-                e.preventDefault()
-                openThread(edge.childSlug!)
-              }}
-              className="min-w-0 truncate rounded-sm text-fg/85 underline decoration-muted/30 underline-offset-2 outline-none hover:decoration-fg/60 focus-visible:ring-1 focus-visible:ring-focus-ink-60"
-            >
-              {childLabel}
-            </a>
-          </>
-        ) : (
-          <span>{edge ? "Spinoff starting…" : "Spinoff"}</span>
+          )}
+        </div>
+        <p className={BODY}>{instructions}</p>
+        {/* THE BRIEF, FOLDED. It is the parent worker's cold start for this thread — often thousands of
+            characters — and the human already knows what it says, having been in that conversation; the
+            instructions above are the part they wrote. Collapsed it is one quiet line, the transcript's
+            own disclosure (label, then the chevron, as `Ran N tool calls ›` reads); open, the ruled muted
+            aside another agent's words wear everywhere else in the chat (PeerSessionMessageLine). A child
+            whose parent wrote no brief has nothing to fold, and no disclosure. */}
+        {context != null && (
+        <div className="mt-2.5 border-t border-border/60 pt-2">
+          <button
+            type="button"
+            data-spinoff-context-toggle
+            aria-expanded={open}
+            aria-controls={contextId}
+            onMouseDown={(e) => e.preventDefault()}
+            onClick={() => setOpen((v) => !v)}
+            className="group flex max-w-full min-w-0 items-baseline gap-1.5 rounded-sm text-left text-[13px] leading-5 text-muted outline-none transition-colors hover:text-fg focus-visible:ring-1 focus-visible:ring-focus-ink-60"
+          >
+            <span className="min-w-0 truncate">{parentName ? `Context from ${parentName}` : "Context"}</span>
+            <ChevronRight aria-hidden size={13} className={transcriptMetaChevronClass(open)} />
+          </button>
+          {open ? (
+            <div id={contextId} data-spinoff-context className="card-md mt-2 border-l border-border/70 pl-3 text-muted">
+              {context}
+            </div>
+          ) : <div id={contextId} hidden />}
+        </div>
         )}
       </div>
     </div>
   )
 }
 
-/** The child's header line back to the thread it came from, or nothing. */
-export function SpinoffOf({ thread, lead }: { thread: ThreadView; lead?: ReactNode }) {
-  const board = useBoard()
+/** The child's header line back to the thread it came from, or nothing. On a queue card of another
+ *  project the card passes its own `resolve`, `href` and `onOpen`: the page's board is not that
+ *  project's. `compact` is the queue card's form — see below. */
+export function SpinoffOf({ thread, lead, resolve, href, onOpen, compact = false }: {
+  thread: ThreadView
+  lead?: ReactNode
+  resolve?: (slug: string) => ThreadView | undefined
+  href?: (slug: string) => string
+  onOpen?: (slug: string) => void
+  compact?: boolean
+}) {
   const edge = thread.spinoffs?.find((o) => o.childSlug === thread.id)
   if (!edge) return null
-  const parent = threadBySlug(board, edge.parentSlug)
+  const parentSlug = edge.parentSlug
+  const link = (
+    <ThreadHandleLink
+      slug={parentSlug}
+      thread={resolve ? resolve(parentSlug) ?? null : undefined}
+      href={href?.(parentSlug)}
+      onOpen={onOpen ? () => onOpen(parentSlug) : undefined}
+      className={`${compact ? "min-w-0 truncate " : ""}rounded-sm underline decoration-muted/30 underline-offset-2 outline-none hover:text-fg hover:decoration-fg/60 focus-visible:ring-1 focus-visible:ring-focus-ink-60`}
+    />
+  )
   return (
     <>
       {lead}
-      <span className="min-w-0 truncate">
-        Spinoff of{" "}
-        <a
-          href={`/thread/${edge.parentSlug}`}
-          onClick={(e) => {
-            if (e.button !== 0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return
-            e.preventDefault()
-            openThread(edge.parentSlug)
-          }}
-          className="rounded-sm underline decoration-muted/30 underline-offset-2 outline-none hover:text-fg hover:decoration-fg/60 focus-visible:ring-1 focus-visible:ring-focus-ink-60"
-        >
-          {parent ? displayTitle(parent) : edge.parentSlug}
-        </a>
-      </span>
+      {/* BEFORE the status line, never after it: that line is `flex-1` so it can take whatever the row
+          has left, and anything placed after it was pushed to the far end of the row with a hole in
+          front of it. Capped so a long handle truncates before the live status does. */}
+      {compact ? (
+        // THE QUEUE CARD'S FORM: the mark stands for the words. The card's meta line already carries the
+        // ready time and the live status, and at a phone's 420px the full "Spinoff of @handle" left the
+        // status one letter and an ellipsis (screenshot 2026-09-30). The mark is the one every spinoff
+        // surface wears — the same glyph as the Spinoff button at the other end of this card's header —
+        // and the words stay for a screen reader and on hover. The row is `items-baseline`, so the
+        // glyph takes the cap-band rule every mark-beside-text uses. Horizontally it keeps MORE room than
+        // the cards' header glyph: the handle beside it is underlined from its first pixel, and at the
+        // cards' 0.2em trim (3.2px of ink to the `@`) the underline read as touching the mark's arrow.
+        // At 0.1em: 4.3px, measured by geometry (the glyph's path boxes against the text's canvas ink),
+        // sans 11px, 2026-09-30.
+        <span data-spinoff-of={parentSlug} title="Spinoff of" className="flex min-w-0 max-w-[40%] shrink-0 items-baseline gap-1">
+          <SpinoffMark size={11} className="size-[1em] self-baseline -mr-[0.1em] translate-y-[calc(0.5em_-_0.5cap)]" />
+          <span className="sr-only">Spinoff of </span>
+          {link}
+        </span>
+      ) : (
+        <span data-spinoff-of={parentSlug} className="min-w-0 max-w-[50%] shrink-0 truncate">
+          Spinoff of {link}
+        </span>
+      )}
     </>
   )
 }
