@@ -20,12 +20,13 @@ root.style.cssText = "display:flex;flex-direction:column;gap:8px;padding:16px;fo
 
 const base = new Image()
 base.onload = () => {
-  const badged = drawBadgedIcon(base)
+  // The rest dot, then the counts a queue actually reaches: one digit, the widest digit, and the cap.
+  const badges = ["dot", "1", "3", "8", "12"].map((n) => drawBadgedIcon(base, n === "12" ? "9+" : n))
   for (const [label, background, color] of STRIPS) {
     const row = document.createElement("div")
     row.dataset.strip = label
     row.style.cssText = `display:flex;align-items:center;gap:12px;padding:8px 12px;background:${background};color:${color}`
-    for (const [src, px] of [["/favicon.svg?v=6", 16], [badged, 16], ["/favicon.svg?v=6", 32], [badged, 32]] as const) {
+    for (const [src, px] of [16, 32].flatMap((px) => ["/favicon.svg?v=6", ...badges].map((src): [string, number] => [src, px]))) {
       const img = document.createElement("img")
       img.src = src
       img.width = img.height = px

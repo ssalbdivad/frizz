@@ -22,7 +22,7 @@ const readLinks = () => [...document.querySelectorAll('link[rel~="icon"]')].map(
   sizes: link.getAttribute("sizes"),
 }))
 
-test("the rest dot repoints every icon link at a badged raster, and clearing it restores them", {
+test("the rest dot or a count repoints every icon link at a badged raster, and clearing it restores them", {
   skip: !baseUrl,
   timeout: 60_000,
 }, async () => {
@@ -74,6 +74,38 @@ test("the rest dot repoints every icon link at a badged raster, and clearing it 
     assert.notDeepEqual(pixels.oldCorner, pixels.dot)
 
     await page.evaluate(() => window.setFaviconBadge(false))
+    assert.deepEqual(await page.evaluate(readLinks), ORIGINAL)
+
+    // A COUNT: the page's tab says how many cards wait, not only that some do. Each count is its own
+    // raster, a count that moves inside the raster window lands the LATEST one, and 0 is no badge.
+    const hrefFor = async (count: number) => {
+      await page.evaluate((n) => window.setFaviconBadge(n), count)
+      await page.waitForFunction(() => document.querySelector('link[rel~="icon"]')!.getAttribute("href")!.startsWith("data:image/png"))
+      return (await page.evaluate(readLinks))[0]!.href!
+    }
+    const three = await hrefFor(3)
+    const four = await hrefFor(4)
+    assert.notEqual(three, four)
+    assert.notEqual(three, badged[0]!.href)
+    await page.evaluate(() => { window.setFaviconBadge(5); window.setFaviconBadge(3) })
+    await new Promise((r) => setTimeout(r, 300))
+    assert.equal((await page.evaluate(readLinks))[0]!.href, three)
+    const pill = await page.evaluate(async (url) => {
+      const img = new Image()
+      img.src = url
+      await img.decode()
+      const canvas = document.createElement("canvas")
+      canvas.width = canvas.height = 64
+      const ctx = canvas.getContext("2d")!
+      ctx.drawImage(img, 0, 0)
+      const at = (x: number, y: number) => [...ctx.getImageData(x, y, 1, 1).data]
+      // Inside the pill, clear of the numeral; and the punched ring just below the pill.
+      return { body: at(56, 26), ring: at(38, 50), tile: at(8, 56) }
+    }, three)
+    assert.deepEqual(pill.body, [0x1f, 0x6f, 0xd1, 255])
+    assert.equal(pill.ring[3], 0)
+    assert.equal(pill.tile[3], 255)
+    await page.evaluate(() => window.setFaviconBadge(0))
     assert.deepEqual(await page.evaluate(readLinks), ORIGINAL)
     assert.deepEqual(pageErrors, [])
   } finally {

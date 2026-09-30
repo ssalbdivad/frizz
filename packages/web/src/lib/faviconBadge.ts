@@ -1,8 +1,11 @@
 // THE TAB'S OWN REST MARK: a dot on the favicon of a /full tab whose thread is in the queue (maintainer
 // 2026-09-19: "a little indicator should pop up in the favicon when a full-screen view tab is at
-// rest"). Several /full tabs are usually open on one repo at once and a tab strip shows a favicon and
-// a few characters of title, so the favicon is the only place a background tab can say "this one is
-// waiting on you" without being opened.
+// rest"), and a COUNT on the page's tab — how many cards its queue holds, in one project's view or
+// All projects alike (maintainer 2026-09-30: "more detailed favicon changes e.g. for the number of
+// waiting threads instead of just a binary"). The count is what the retired project sidebar's badges
+// said per project; with one tab per project, the tab strip is that sidebar. Several tabs are usually
+// open at once and a tab strip shows a favicon and a few characters of title, so the favicon is the
+// only place a background tab can say "this many are waiting on you" without being opened.
 //
 // DRAWN, NOT SHIPPED. The badged icon is the real favicon rasterized onto a canvas with the dot
 // composited over it, so there is no second copy of the art to regenerate when the logo changes (the
@@ -32,15 +35,34 @@ const DOT_Y = DOT_RADIUS + RING
 // its hue alone — a canvas cannot resolve a CSS variable, and a tab strip has no shell vocabulary.
 const DOT_COLOR = "#4a9eff"
 
+// THE COUNT'S PILL, in the same 64px space. It has to carry a digit legible at 16px, so it is far bigger
+// than the dot: 44px tall is 11 tab px, and a bold digit inside it inks ~7px — the smallest a tab strip
+// renders a numeral that still reads without squinting. It sits in the same top-right corner, its outer
+// ring flush with the canvas edges. Past MAX_COUNT it reads "9+", a pill across the tile's top in a
+// smaller face — a two-digit count at full size would be wider than the tile itself.
+const PILL_HEIGHT = 44
+const PILL_RING = 4
+const MAX_COUNT = 9
+// Azure is too light for white type (2.9:1), and the dot's own hue is what says "badge" here; this is the
+// same azure darkened until white on it clears 4.5:1, so the numeral is the pill's contrast, not its ring.
+const PILL_COLOR = "#1f6fd1"
+const DIGIT_PX = 38
+const digitFont = (px: number) => `700 ${px}px ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif`
+
+/** What the tab shows: nothing, the bare rest dot, or a count of waiting cards. */
+export type FaviconBadge = boolean | number
+
 type IconLink = { link: HTMLLinkElement; href: string; type: string | null; sizes: string | null }
 
 // The document's own icon links as index.html declared them, captured once — restoring means putting
 // these exact attributes back, including the `?v=` cache-buster.
 let originals: IconLink[] | undefined
-let badged: Promise<string> | undefined
-// What the caller last asked for. The raster is async, so a rest→working flip inside that window must
-// not be overwritten by the late-arriving badge.
-let wanted = false
+let base: Promise<HTMLImageElement> | undefined
+// One raster per label ("dot", "3", "9+"): a count that climbs and falls redraws nothing it has drawn.
+const rasters = new Map<string, string>()
+// What the caller last asked for. The raster is async, so a rest→working flip (or a count that moved)
+// inside that window must not be overwritten by the late-arriving badge.
+let wanted: string | undefined
 
 function iconLinks(): IconLink[] {
   // `~=` matches the `icon` TOKEN, so `apple-touch-icon` (a different token) is left alone: it is the
@@ -54,46 +76,97 @@ function iconLinks(): IconLink[] {
   return originals
 }
 
-export function drawBadgedIcon(base: CanvasImageSource): string {
+/** The label a badge draws, or undefined for none. A count of 0 is no badge, not a "0". */
+export function badgeLabel(badge: FaviconBadge): string | undefined {
+  if (badge === true) return "dot"
+  if (badge === false || !Number.isFinite(badge) || badge < 1) return undefined
+  return badge > MAX_COUNT ? `${MAX_COUNT}+` : String(Math.floor(badge))
+}
+
+function punch(ctx: CanvasRenderingContext2D, draw: () => void) {
+  ctx.globalCompositeOperation = "destination-out"
+  ctx.beginPath()
+  draw()
+  ctx.fill()
+  ctx.globalCompositeOperation = "source-over"
+}
+
+function pill(ctx: CanvasRenderingContext2D, right: number, top: number, width: number, height: number) {
+  ctx.roundRect(right - width, top, width, height, height / 2)
+}
+
+/** The favicon with `label` composited over its top-right corner: "dot" for the rest dot, else a count. */
+export function drawBadgedIcon(base: CanvasImageSource, label = "dot"): string {
   const canvas = document.createElement("canvas")
   canvas.width = canvas.height = SIZE
   const ctx = canvas.getContext("2d")!
   ctx.drawImage(base, 0, 0, SIZE, SIZE)
-  ctx.globalCompositeOperation = "destination-out"
+  if (label === "dot") {
+    punch(ctx, () => ctx.arc(DOT_X, DOT_Y, DOT_RADIUS + RING, 0, Math.PI * 2))
+    ctx.fillStyle = DOT_COLOR
+    ctx.beginPath()
+    ctx.arc(DOT_X, DOT_Y, DOT_RADIUS, 0, Math.PI * 2)
+    ctx.fill()
+    return canvas.toDataURL("image/png")
+  }
+  // The widest the pill can be with its ring still inside the canvas, and the ink that leaves room for.
+  const maxWidth = SIZE - PILL_RING * 2
+  const sideBearing = 8
+  let fontPx = DIGIT_PX
+  ctx.font = digitFont(fontPx)
+  let ink = ctx.measureText(label)
+  // "9+" at the single digit's size is wider than the tile, so a wider label SHRINKS to fit rather than
+  // hanging off the left edge; a single digit never needs to.
+  const measured = ink.actualBoundingBoxLeft + ink.actualBoundingBoxRight
+  if (measured > maxWidth - sideBearing * 2) {
+    fontPx = Math.floor(fontPx * (maxWidth - sideBearing * 2) / measured)
+    ctx.font = digitFont(fontPx)
+    ink = ctx.measureText(label)
+  }
+  const inkWidth = ink.actualBoundingBoxLeft + ink.actualBoundingBoxRight
+  // A single digit gets a circle; more get a pill as wide as its ink plus the side bearing.
+  const width = Math.min(maxWidth, Math.max(PILL_HEIGHT, inkWidth + sideBearing * 2))
+  const right = SIZE - PILL_RING
+  const top = PILL_RING
+  punch(ctx, () => pill(ctx, right + PILL_RING, top - PILL_RING, width + PILL_RING * 2, PILL_HEIGHT + PILL_RING * 2))
+  ctx.fillStyle = PILL_COLOR
   ctx.beginPath()
-  ctx.arc(DOT_X, DOT_Y, DOT_RADIUS + RING, 0, Math.PI * 2)
+  pill(ctx, right, top, width, PILL_HEIGHT)
   ctx.fill()
-  ctx.globalCompositeOperation = "source-over"
-  ctx.fillStyle = DOT_COLOR
-  ctx.beginPath()
-  ctx.arc(DOT_X, DOT_Y, DOT_RADIUS, 0, Math.PI * 2)
-  ctx.fill()
+  // Centred by INK, not by the em box: a digit has no descender, so the box's centre sits below the
+  // numeral's and a box-centred digit rides visibly high in an 11px pill.
+  const inkHeight = ink.actualBoundingBoxAscent + ink.actualBoundingBoxDescent
+  const x = right - width / 2 - inkWidth / 2 + ink.actualBoundingBoxLeft
+  const y = top + PILL_HEIGHT / 2 + inkHeight / 2 - ink.actualBoundingBoxDescent
+  ctx.fillStyle = "#ffffff"
+  ctx.fillText(label, x, y)
   return canvas.toDataURL("image/png")
 }
 
-function badgedIcon(links: readonly IconLink[]): Promise<string> {
-  badged ??= new Promise<string>((resolve, reject) => {
+function baseIcon(links: readonly IconLink[]): Promise<HTMLImageElement> {
+  base ??= new Promise<HTMLImageElement>((resolve, reject) => {
     // The SVG is the sharpest source at any raster size; the PNG fallbacks are 16/32px.
     const source = links.find((l) => l.type === "image/svg+xml") ?? links[0]
     if (!source) return reject(new Error("no favicon link"))
     const img = new Image()
-    img.onload = () => resolve(drawBadgedIcon(img))
+    img.onload = () => resolve(img)
     img.onerror = () => reject(new Error("favicon did not load"))
     img.src = source.href
   })
-  return badged
+  return base
 }
 
 /**
- * Show or clear the rest dot on this tab's favicon. Idempotent, and safe to call before the icon has
- * loaded. EVERY icon link is repointed rather than just the preferred one: a browser picks among
- * several `rel="icon"` candidates by its own rules, and leaving the unbadged PNGs declared lets it
- * pick one of those.
+ * Show a badge on this tab's favicon — `true` for the rest dot, a number for a count — or clear it with
+ * `false` / `0`. Idempotent, and safe to call before the icon has loaded. EVERY icon link is repointed
+ * rather than just the preferred one: a browser picks among several `rel="icon"` candidates by its own
+ * rules, and leaving the unbadged PNGs declared lets it pick one of those.
  */
-export function setFaviconBadge(on: boolean): void {
-  wanted = on
+export function setFaviconBadge(badge: FaviconBadge): void {
+  const label = badgeLabel(badge)
+  wanted = label
   const links = iconLinks()
-  if (!on) {
+  if (label === undefined) {
     for (const { link, href, type, sizes } of links) {
       link.href = href
       if (type === null) link.removeAttribute("type"); else link.type = type
@@ -101,8 +174,10 @@ export function setFaviconBadge(on: boolean): void {
     }
     return
   }
-  badgedIcon(links).then((url) => {
-    if (!wanted) return
+  baseIcon(links).then((img) => {
+    if (wanted !== label) return
+    let url = rasters.get(label)
+    if (!url) rasters.set(label, url = drawBadgedIcon(img, label))
     for (const { link } of links) {
       link.type = "image/png"
       link.removeAttribute("sizes")
@@ -110,6 +185,6 @@ export function setFaviconBadge(on: boolean): void {
     }
   }).catch(() => {
     // No icon to draw on (a bare fixture page, a blocked image): the tab keeps its plain favicon.
-    badged = undefined
+    base = undefined
   })
 }
