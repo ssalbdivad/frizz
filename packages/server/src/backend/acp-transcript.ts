@@ -3,6 +3,7 @@ import { dirname, join } from "node:path"
 import type { TranscriptMessage, TranscriptToolCall } from "@frizz/shared"
 import type { AgentBackend, BuiltCommand, FoldState, NormalizedEvent, ResumeOpts, SpawnOpts } from "./types.ts"
 import { applyEvent } from "../tailer.ts"
+import { createSideTurnProjection, normalizedSideTurnSteps } from "../spinoff-side-turn.ts"
 
 // The ACP backend's transcript: a JSONL file FRIZZ writes, one per thread, at
 // `<stateDir>/acp/<frizzSessionId>.jsonl`.
@@ -146,12 +147,15 @@ export function projectAcpTranscript(raw: string, identityPrefix = "acp"): Trans
   let currentMessageId: string | undefined
   const openTools = new Map<string, TranscriptToolCall>()
   const lines = raw.split("\n")
+  // Spinoff side turns: the tailer folds this file through applyEvent, which reads them, so the drawer
+  // drops the same ones (spinoff-side-turn.ts).
+  const sideTurns = createSideTurnProjection()
 
   const close = () => { current = undefined; currentMessageId = undefined }
   const openAssistant = (i: number, at: string | undefined): TranscriptMessage => {
     if (!current) {
       current = { sourceId: `${identityPrefix}:${i}`, role: "assistant", text: "", tools: [], parts: [], ...(at ? { at } : {}) }
-      out.push(current)
+      out.push(sideTurns.own(current, sideTurns.current()))
     }
     return current
   }
@@ -171,6 +175,7 @@ export function projectAcpTranscript(raw: string, identityPrefix = "acp"): Trans
   for (let i = 0; i < lines.length; i++) {
     const rec = parseAcpRecord(lines[i]!)
     if (!rec) continue
+    if (rec.kind !== "acp-session" && rec.kind !== "acp-note") sideTurns.step(normalizedSideTurnSteps(rec))
     switch (rec.kind) {
       case "acp-session":
       case "acp-note":
@@ -193,7 +198,7 @@ export function projectAcpTranscript(raw: string, identityPrefix = "acp"): Trans
         break
       case "reasoning": {
         close()
-        out.push({ sourceId: `${identityPrefix}:${i}`, role: "assistant", kind: "reasoning", text: rec.text, tools: [], parts: [], ...(rec.at ? { at: rec.at } : {}) })
+        out.push(sideTurns.own({ sourceId: `${identityPrefix}:${i}`, role: "assistant", kind: "reasoning", text: rec.text, tools: [], parts: [], ...(rec.at ? { at: rec.at } : {}) }, sideTurns.current()))
         break
       }
       case "assistant-text": {
@@ -235,7 +240,7 @@ export function projectAcpTranscript(raw: string, identityPrefix = "acp"): Trans
       }
     }
   }
-  return out
+  return sideTurns.visible(out)
 }
 
 export function readAcpTranscriptFile(absPath: string, nativeId = absPath): TranscriptMessage[] {

@@ -47,6 +47,7 @@ import { redactCredentialStructure, redactCredentialSyntax } from "./credential-
 import { hasEscapingBackgroundJob } from "../../../cc-worker/hooks/bash-background.mjs"
 import { frizzTempDir, isPromptAttachmentPath } from "./frizz-paths.ts"
 import { dispatchProfileCell } from "./subagent-profile.ts"
+import { claudeSideTurnSteps, createSideTurnProjection, normalizedSideTurnSteps, type SideTurn, type SideTurnProjection } from "./spinoff-side-turn.ts"
 
 // Parse a session JSONL into a renderable conversation — mechanically, no AI. Same defensive
 // posture as the tailer: bad line → skip, unknown type → ignore, never throw. Assistant messages
@@ -301,13 +302,13 @@ function pushUserRecord(out: TranscriptMessage[], sourceId: string, text: string
 // already replied (measured p50 20.9s, max 9.6min), so a second walk from there would reach past the
 // refused fence and mark the worker's re-fence, which is the good one.
 type CorrectionSink = (text: string) => boolean
-function createCorrectionSink(out: TranscriptMessage[]): CorrectionSink {
+function createCorrectionSink(out: TranscriptMessage[], sideTurns: SideTurnProjection): CorrectionSink {
   const marked = new Set<string>()
   return (text: string) => {
     if (!isParkCorrection(text)) return false
     if (!marked.has(text)) {
       marked.add(text)
-      markFenceRefused(out)
+      markFenceRefused(out, sideTurns)
     }
     return true
   }
@@ -321,9 +322,14 @@ function createCorrectionSink(out: TranscriptMessage[]): CorrectionSink {
 //
 // A fence that does not parse as `awaiting` leaves the message untouched rather than falling through to
 // an older one. The correction is about THIS rest; if its fence cannot be read, nothing is refused.
-function markFenceRefused(out: TranscriptMessage[]): void {
+//
+// A HIDDEN SPINOFF SIDE TURN is stepped over whole, request included (spinoff-side-turn.ts): the rest the
+// correction answers is the one the request found, which the tailer presents again once the side turn is
+// done — so the fence to mark sits above it.
+function markFenceRefused(out: TranscriptMessage[], sideTurns: SideTurnProjection): void {
   for (let i = out.length - 1; i >= 0; i--) {
     const m = out[i]
+    if (sideTurns.hides(m) || sideTurns.opensHidden(m)) continue
     if (m.role === "user") return
     if (m.kind || !m.text.trim()) continue
     if (parseSignalFence(m.text)?.kind === "awaiting") m.fenceRefused = true
@@ -548,7 +554,12 @@ export interface TranscriptFold {
 
 export function createTranscriptFold(identityPrefix = "claude"): TranscriptFold {
   const out: TranscriptMessage[] = []
-  const dropCorrection = createCorrectionSink(out)
+  // SPINOFF SIDE TURNS (spinoff-side-turn.ts): the reading the tailer takes of the same records, so the
+  // chat drops exactly the turns whose effects the board undoes. The worker's messages are tagged with
+  // the side turn they were written in and filtered at the projection — never spliced — because a side
+  // turn's verdict is only known when it ends, and one that turns out unclean must render as it always did.
+  const sideTurns = createSideTurnProjection()
+  const dropCorrection = createCorrectionSink(out, sideTurns)
   let lastAssistantId: string | null = null
   // Tool calls awaiting their tool_result, keyed by tool_use id. Claude records every result as a
   // later synthetic `user` record, so the call card starts pending and is back-filled in place with
@@ -623,13 +634,14 @@ export function createTranscriptFold(identityPrefix = "claude"): TranscriptFold 
   // fails the merge check below, so the message's remaining blocks would land in a SECOND bubble
   // underneath it. Holding it until a record arrives that is not a continuation of `msgId` keeps one
   // divider, in the right place, under one bubble.
-  let pendingRest: { sourceId: string; at?: string; msgId: string | null } | null = null
+  // `side` is the spinoff side turn whose end armed it, so a hidden side turn takes its divider with it.
+  let pendingRest: { sourceId: string; at?: string; msgId: string | null; side: SideTurn | undefined } | null = null
   // How many times the agent has come to REST so far. It is what tells a re-notify that merely repeats a
   // completion already drawn from the one that RE-INVOKED the agent across a rest — see `consumedShells`.
   const restEpoch = { n: 0 }
   function flushRest(): void {
     if (!pendingRest) return
-    out.push(restMessage(pendingRest.sourceId, pendingRest.at))
+    out.push(sideTurns.own(restMessage(pendingRest.sourceId, pendingRest.at), pendingRest.side))
     restEpoch.n++
     pendingRest = null
     lastAssistantId = null // the divider breaks the assistant-record merge chain, like every other event
@@ -718,6 +730,9 @@ export function createTranscriptFold(identityPrefix = "claude"): TranscriptFold 
     } catch {
       return
     }
+    // Every record, before any branch below can return early — the reading has to see what the tailer's
+    // does, in the same order.
+    sideTurns.step(claudeSideTurnSteps(rec))
 
     // A held-back rest divider lands HERE — ahead of whatever record follows the turn that ended, so it
     // sits between the two turns. The one record that must not flush it is another chunk of the SAME
@@ -1147,7 +1162,7 @@ export function createTranscriptFold(identityPrefix = "claude"): TranscriptFold 
         // thinking blocks are deliberately not rendered
       }
       const rendered = Boolean(m.text) || m.tools.length > 0
-      if (!target && rendered) out.push(m)
+      if (!target && rendered) out.push(sideTurns.own(m, sideTurns.current()))
       // Only claim the merge anchor when this record actually became — or extended — out's tail. A
       // record that rendered NOTHING (a thinking-only record, ubiquitous with extended thinking) must
       // NOT advance the anchor to its own id: out's tail is still the PREVIOUS turn, so the next
@@ -1161,7 +1176,7 @@ export function createTranscriptFold(identityPrefix = "claude"): TranscriptFold 
       // reader can't see happening. `stop_sequence` and friends are deliberately NOT rest — they are the
       // usage-limit/synthetic stops (see backend/usage-limit.ts), which the board reports its own way.
       if (msg.stop_reason === "end_turn" && (target || rendered)) {
-        pendingRest = { sourceId: `${sourceId}#rest`, at: rec.timestamp, msgId: id }
+        pendingRest = { sourceId: `${sourceId}#rest`, at: rec.timestamp, msgId: id, side: sideTurns.current() }
       }
       return
     }
@@ -1238,8 +1253,11 @@ export function createTranscriptFold(identityPrefix = "claude"): TranscriptFold 
   // that matters most, since it is the CURRENT one: the agent has stopped and it is the reader's move.
   // Reading it through the accessor also keeps the incremental fold and a one-shot re-parse projecting
   // the identical array, which is exactly what verifyIncrementalParse asserts.
+  //
+  // The spinoff side-turn filter sits here for the same reason: every projection this fold hands out —
+  // the chat's window and the full one alike — drops a hidden side turn, divider included.
   function projected(): TranscriptMessage[] {
-    return pendingRest ? [...out, restMessage(pendingRest.sourceId, pendingRest.at)] : out
+    return sideTurns.visible(pendingRest ? [...out, sideTurns.own(restMessage(pendingRest.sourceId, pendingRest.at), pendingRest.side)] : out)
   }
   return {
     ingest,
@@ -2458,7 +2476,9 @@ function resolveTranscriptPath(project: Project, sessionId: string): string {
 // Same defensive posture as parseTranscript: a bad line → parseCodexLine [] → skipped, never throws.
 export function projectCodexTranscript(raw: string, identityPrefix = "codex"): TranscriptMessage[] {
   const out: TranscriptMessage[] = []
-  const dropCorrection = createCorrectionSink(out)
+  // Spinoff side turns, read from the same events the tailer's applyEvent folds (see the Claude fold).
+  const sideTurns = createSideTurnProjection()
+  const dropCorrection = createCorrectionSink(out, sideTurns)
   // The open assistant message the current turn's text/tool events append to. A user turn closes it
   // (→ null) so the next assistant content starts a fresh message.
   let cur: TranscriptMessage | null = null
@@ -2539,7 +2559,7 @@ export function projectCodexTranscript(raw: string, identityPrefix = "codex"): T
     if (prose && cur?.text) cur = null
     if (cur) return cur
     cur = { sourceId, role: "assistant", text: "", tools: [], parts: [], at }
-    out.push(cur)
+    out.push(sideTurns.own(cur, sideTurns.current()))
     return cur
   }
 
@@ -2551,6 +2571,7 @@ export function projectCodexTranscript(raw: string, identityPrefix = "codex"): T
     let eventOrdinal = 0
     for (const ev of parseCodexLine(line)) {
       const sourceId = `${identityPrefix}:${lineOffset}:${eventOrdinal++}`
+      sideTurns.step(normalizedSideTurnSteps(ev))
       switch (ev.kind) {
         case "provider-error": {
           const fingerprint = JSON.stringify({ ...ev.error, at: undefined })
@@ -2566,7 +2587,7 @@ export function projectCodexTranscript(raw: string, identityPrefix = "codex"): T
           turnReasoning = null
           const message: TranscriptMessage = { sourceId, role: "assistant", kind: "event", text: ev.error.message, providerError: ev.error, tools: [], parts: [], at: ev.at }
           lastProviderError = { fingerprint, message }
-          out.push(message)
+          out.push(sideTurns.own(message, sideTurns.current()))
           break
         }
         case "assistant-text": {
@@ -2750,7 +2771,7 @@ export function projectCodexTranscript(raw: string, identityPrefix = "codex"): T
               // the case the comment above was ever describing.
             } else {
               turnReasoning = { sourceId, role: "assistant", kind: "reasoning", text, tools: [], parts: [], at: ev.at, ...(stepMs ? { durationMs: stepMs } : {}) }
-              out.push(turnReasoning)
+              out.push(sideTurns.own(turnReasoning, sideTurns.current()))
               cur = null
             }
             pendingCaption = codexReasoningCaption(text) ?? pendingCaption
@@ -2894,7 +2915,7 @@ export function projectCodexTranscript(raw: string, identityPrefix = "codex"): T
           // already marked (turn_aborted can follow task_complete), must not stack rules on rules.
           const prev = out.length > 0 ? out[out.length - 1] : undefined
           if (prev && prev.boundary !== "rest") {
-            out.push(restMessage(`${sourceId}#rest`, ev.at))
+            out.push(sideTurns.own(restMessage(`${sourceId}#rest`, ev.at), sideTurns.current()))
             cur = null
           }
           break
@@ -2911,7 +2932,7 @@ export function projectCodexTranscript(raw: string, identityPrefix = "codex"): T
     }
   }
 
-  return out
+  return sideTurns.visible(out)
 }
 
 export function parseCodexTranscript(raw: string, identityPrefix = "codex"): TranscriptMessage[] {
@@ -2971,7 +2992,8 @@ function countBoundedStart(messages: readonly TranscriptMessage[]): number {
   let boundary = -1
   for (let i = tail - 1; i >= 0; i--) {
     const m = messages[i]
-    if (m.role === "user" && !m.wake && !m.queued && !m.agentInstruction) {
+    // A spinoff request is the human asking for ANOTHER thread, not what this one's handoff answers.
+    if (m.role === "user" && !m.wake && !m.queued && !m.agentInstruction && !m.spinoff) {
       boundary = i
       break
     }
@@ -4391,11 +4413,12 @@ export function pageProjectedTranscript(
   //
   // A queued send is skipped for a different reason: it has not been delivered, so it is not yet part of
   // the exchange being summarised. An `agentInstruction` is also user-side but belongs to a CHILD's
-  // coordinator/peer conversation, never the operator's turn.
+  // coordinator/peer conversation, never the operator's turn. A spinoff request asks for another thread,
+  // so the exchange the reader needs goes back past it too.
   let boundary = 0
   for (let i = anchor - 1; i >= 0; i--) {
     const m = messages[i]
-    if (m.role === "user" && !m.wake && !m.queued && !m.agentInstruction) {
+    if (m.role === "user" && !m.wake && !m.queued && !m.agentInstruction && !m.spinoff) {
       boundary = i
       break
     }
