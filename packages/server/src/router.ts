@@ -1605,13 +1605,21 @@ export function createRouter(ctx: AppContext) {
     spinoffsInFlight.add(id)
     try {
       const parent = ctx.storage.getSession(request.parent_slug)
+      // The parent by the handle the board SHOWS (handleOf over the name registry — the same name the
+      // rail, `read_thread` and the child's own autolinks resolve), so the child's prompt says
+      // `@liveSubAgents` rather than a link titled with the parent's stored dispatch words.
+      const named = threadNamer().threads().find((t) => t.slug === request.parent_slug)
       const prompt = spinoffChildPrompt({
         parentSlug: request.parent_slug,
         parentTitle: parent?.title || request.parent_slug,
+        ...(named ? { parentHandle: handleOf(named) } : {}),
         instructions: request.instructions,
         brief: input.prompt,
       })
-      const result = await ctx.dispatcher.dispatch({ ...input, prompt }, { backend: input.backend })
+      // Named from what the human asked (and the brief under it), never from the prompt's opening
+      // "A spinoff of @parent…" line — see Dispatcher.dispatch's `nameSource`.
+      const nameSource = `${request.instructions.trim()}\n\n${input.prompt.trim()}`
+      const result = await ctx.dispatcher.dispatch({ ...input, prompt }, { backend: input.backend, nameSource })
       ctx.storage.completeSpinoff(id, result.slug, Date.now())
       ctx.board.refresh()
       return result
