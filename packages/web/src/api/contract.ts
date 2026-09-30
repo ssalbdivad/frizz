@@ -159,6 +159,8 @@ export interface Api {
   // each one's `thread.child` address. What `@thread.` completes against in the prompt box and what a
   // `@thread.child` mention opens; the board's `subAgents` is the live list only.
   subAgentDirectory(input: { slug: string }): Promise<SubAgentDirectory>
+  // Worker-side only (the post-dispatch hook); declared so the contract covers every procedure.
+  subAgentAddressFor(input: { slug: string; label: string }): Promise<{ address?: string }>
   // Deliver a steer INTO one running sub-agent's own conversation (not the thread's main turn).
   // Throws when the child settled first — see the router's subAgentSteer for why that must fail loudly.
   subAgentSteer(input: { slug: string; id: string; message: string; deliveryId?: string }): Promise<{ delivered: boolean }>
@@ -429,6 +431,7 @@ export const PROCEDURES = {
   threadTranscriptEarlier: "query",
   subAgentTranscript: "query",
   subAgentDirectory: "query",
+  subAgentAddressFor: "query",
   subAgentSteer: "mutation",
   subAgentStop: "mutation",
   backgroundShellOutput: "query",

@@ -1784,6 +1784,21 @@ export function createRouter(ctx: AppContext) {
       handler: async ({ input }) => subAgentDirectoryOf(input.slug),
     }),
 
+    // The address a sub-agent this thread is dispatching will answer to — `portTheParser.spelling` for
+    // `description: "Spelling"` — for the worker's post-dispatch hook (cc-worker/hooks/agent-address.mjs),
+    // which puts it in front of the worker the moment the child starts, so the handoff names it by the
+    // address the board links rather than as "a sub-agent" (maintainer 2026-09-30). Computed HERE so the
+    // one naming rule (shared thread-handle.ts) has one implementation; the hook knows only the words.
+    subAgentAddressFor: query({
+      input: z.object({ slug: ThreadSlug, label: z.string().trim().min(1).max(500) }).strict(),
+      output: z.object({ address: z.string().optional() }).strict(),
+      handler: async ({ input }) => {
+        const named = threadNamer().threads().find((t) => t.slug === input.slug)
+        const child = subAgentHandle(input.label)
+        return named && child ? { address: subAgentAddress(handleOf(named), [child]) } : {}
+      },
+    }),
+
     // A live/stale background sub-agent's OWN transcript, for the drill-in drawer that overlays the
     // thread. Resolves the tracked child (thread slug + dispatch tool_use id) to its output JSONL, then
     // parses it with the same mechanical extractor. Never throws: an unknown/dropped id (completed

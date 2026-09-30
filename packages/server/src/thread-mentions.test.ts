@@ -264,3 +264,13 @@ test("activity names the thread by its handle and each running sub-agent by its 
     assert.deepEqual(read.activity.map((i) => [i.kind, i.id, i.address]), [["agent", "aKeys", "portTheParser.cacheKeys"]])
   } finally { h.close() }
 })
+
+test("subAgentAddressFor names a child the thread is dispatching, by the one naming rule", async () => {
+  const h = harness()
+  try {
+    h.storage.upsertSession(row("pp", "Port the parser"))
+    assert.deepEqual(await h.router.subAgentAddressFor.handler({ input: { slug: "pp", label: "Cache keys" } }), { address: "portTheParser.cacheKeys" })
+    assert.deepEqual(await h.router.subAgentAddressFor.handler({ input: { slug: "pp", label: "Fresh-context review of the whole effort diff" } }), {}, "a sentence has no handle")
+    assert.deepEqual(await h.router.subAgentAddressFor.handler({ input: { slug: "nope", label: "Cache keys" } }), {})
+  } finally { h.close() }
+})
