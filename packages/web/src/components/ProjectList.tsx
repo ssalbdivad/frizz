@@ -9,9 +9,11 @@
 // functionality must still be available without a project-specific view"). So every band that rail had is
 // here, for each project, at two volumes:
 //
-//   LOUD  — Pinned, Ready and Working: the work in flight, listed under its project unless it is folded,
-//           each band under its NAME (Colin's labels, which he made permanent: "sidebar labels for pinned,
-//           queue, and running … should not be collapsible"), and only while it has rows.
+//   LOUD  — Pinned, Ready and Working: the work in flight, listed under its project unless it is folded.
+//           Only Pinned is named, and only while it has rows. Colin's sidebar named all three ("sidebar
+//           labels for pinned, queue, and running … should not be collapsible"); here Ready and Working
+//           rows say their band themselves — a rest time, a spinner — so their names were dropped
+//           (maintainer 2026-09-29).
 //   QUIET — Snoozed, Done and External: a muted count per band under the work in flight, in the band's own
 //           glyph (the rail's legend, BandLabel.tsx), never louder than the names. Each count is its own
 //           toggle, collapsed to start (Colin's sidebar had the same three as separate collapsible
@@ -388,9 +390,9 @@ function useReadAhead(projects: QueuesProject[]) {
  *   a band's name, per band    15px  (BAND_LABEL — Colin's was a 23.7px header under a 25px rule)
  *   the space before the next   6px  (12)
  *
- * so a busy project with Ready and Working rows costs 23 + 30 + 6 = 59px beyond its rows (80, while the
- * quiet counts sat on a 21px line of their own under the threads, 2026-09-29 only), against
- * 66px before its bands had names — and the same project in Colin's sidebar, one project per page, cost
+ * so a busy project with Ready and Working rows costs 23 + 6 = 29px beyond its rows now that neither band
+ * is named (59 while both were, 80 while the quiet counts sat on a 21px line of their own under the
+ * threads, 2026-09-29 only), against 66px before its bands had names — and the same project in Colin's sidebar, one project per page, cost
  * 267px for its six headers and five rules.
  *
  * Its FOCUS project (the page project, whose board is live in the store) reads the rest from that board;
@@ -431,7 +433,7 @@ function ProjectGroup({
   const scope = useRowScope(project, onPage, onQueuedRow)
   const queryClient = useQueryClient()
   const carded = loud.carded
-  const row = (restedAge: boolean) => (t: ThreadView) => (
+  const row = (restedAge: boolean, band?: BandKey) => (t: ThreadView) => (
     <RailRow
       key={t.id}
       t={t}
@@ -440,6 +442,7 @@ function ProjectGroup({
       restedAge={restedAge}
       scope={scope}
       cardKey={carded.has(t.id) ? threadKey(project.id, t.id) : undefined}
+      band={band}
     />
   )
   const pinned = [...loud.pinned, ...quiet.pinnedDone]
@@ -477,15 +480,15 @@ function ProjectGroup({
       />
       {!collapsed && (
         <ThreadProjectScope projectId={project.id} projectDir={project.projectDir}>
-          {/* The loud bands, each under its name, as SIBLINGS of the rows rather than wrappers round them:
-              the cord strings the project's square, each name's glyph and each row's indicator, in the
-              order they stand (ThreadConnector readRail), and a wrapper would cut it. */}
+          {/* The loud bands, as SIBLINGS of the rows rather than wrappers round them: the cord strings the
+              project's square, Pinned's name glyph and each row's indicator, in the order they stand
+              (ThreadConnector readRail), and a wrapper would cut it. Only Pinned is named: a Ready row
+              wears its rest time and a Working row its spinner, so a name over either said what the rows
+              already did (maintainer 2026-09-29: "let the icons show what is working", and Ready with it). */}
           {pinned.length > 0 && <BandName band="pinned" count={pinned.length} />}
-          {pinned.map(row(false))}
-          {loud.ready.length > 0 && <BandName band="ready" count={loud.ready.length} />}
-          {loud.ready.map(row(true))}
-          {loud.working.length > 0 && <BandName band="working" count={loud.working.length} />}
-          {loud.working.map(row(false))}
+          {pinned.map(row(false, "pinned"))}
+          {loud.ready.map(row(true, "ready"))}
+          {loud.working.map(row(false, "working"))}
           {opened.length > 0 && <QuietBands project={project} quiet={quiet} opened={opened} row={row} />}
         </ThreadProjectScope>
       )}
