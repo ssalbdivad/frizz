@@ -297,7 +297,7 @@ export function runClaudeBroker(config: ClaudeBrokerConfig): RunningBroker {
   // "close" handler lands here. Unguarded, that re-armed a fresh 6h timer on a dead broker — invisible
   // in the standalone daemon (process.exit follows) but it held an in-process host's event loop open
   // for 6h, which is how `claude-agent-broker.test.ts` hung a `nub --test` run for hours.
-  const armIdle = () => { if (client) return; clearTimeout(idleTimer); idleTimer = setTimeout(() => shutdown(0, "idle-timeout"), IDLE_EXIT_MS) }
+  const armIdle = () => { if (client || closed) return; clearTimeout(idleTimer); idleTimer = setTimeout(() => shutdown(0, "idle-timeout"), IDLE_EXIT_MS) }
 
   const server = net.createServer((sock) => {
     client = sock; clearTimeout(idleTimer)
