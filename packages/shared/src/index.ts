@@ -5182,6 +5182,7 @@ export * from "./interactions.ts"
 export * from "./receipt-bus.ts"
 export * from "./relay-protocol.ts"
 export * from "./shell-writes.ts"
+export * from "./thread-handle.ts"
 export * from "./thread-slug.ts"
 
 // ---- Rendered conversation (parsed mechanically from the session JSONL — no AI) ----
