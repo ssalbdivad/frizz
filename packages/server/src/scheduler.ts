@@ -2164,8 +2164,12 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
         answersInFlight(questionRows, tele.lastUserAt, row.recurring_on_rest === 1 && Boolean(row.recurring_prompt?.trim())) !== undefined ||
         deps.storage.listThreadWatches(row.slug, { armedOnly: true }).length > 0 ||
         // A wait on ANOTHER THREAD's answer (`message_thread` with `await_reply`) is a registration like a
-        // watch: the tool tells the worker to rest on it with nothing else, so it must count here too.
-        deps.storage.listThreadTimers(row.slug, { armedOnly: true }).some((t) => isReplyWait(t.prompt))
+        // watch: the tool tells the worker to rest on it with nothing else, so it must count here too…
+        deps.storage.listThreadTimers(row.slug, { armedOnly: true }).some((t) => isReplyWait(t.prompt)) ||
+        // …and so does a thread's message ON ITS WAY, the twin of the answer-in-flight case above: the
+        // answer CANCELS the wait the instant it is sent, so until it is delivered the rest reads bare.
+        // Seen on a real run (2026-09-29): the nudge was merged into the very delivery carrying the answer.
+        outbox.pendingFor(row.slug, row.session_id).some((d) => isThreadMessageFenceId(d.fenceId))
       ) {
         if ((row.signoff_nudges ?? 0) > 0) deps.storage.resetSignoffNudges(row.slug)
         continue
@@ -2421,6 +2425,17 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
       )
       const finishedItem = (i: { kind: string; value: string }) =>
         finishedHandles.has(i.value) || (i.kind === "timer" && firedTimers.has(i.value))
+      // SILENT IS NOT MISSING EITHER. A sub-agent that has written nothing for longer than its allowance —
+      // 15 minutes of awake time, or what its pending call declared (pending-call.ts) — reads `stale`. The
+      // id is right and the child may well be alive; what frizz knows is that it has gone quiet past what it
+      // said it would. Saying "nothing by that name" sent the parent hunting for a typo. This wake IS the
+      // regular-update expectation on a child: nothing is stopped, the parent is told, and it decides.
+      const silentSince = new Map<string, string | undefined>()
+      for (const a of tele.subAgents ?? []) {
+        if (a.state !== "stale") continue
+        for (const h of [a.taskId, a.id, a.label]) if (h) silentSince.set(h, a.lastActivityAt)
+      }
+      const silentItem = (i: { kind: string; value: string }) => i.kind === "agent" && silentSince.has(i.value)
       const status = park.items.map((i) => {
         const gone = dead.some((d) => d.kind === i.kind && d.value === i.value)
         // AN UNREGISTERED PR GETS ITS OWN NOTE, because "nothing by that name" is true but useless for
@@ -2438,6 +2453,8 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
           ? "already FIRED — its wake was delivered; there is nothing left to wait on"
           : finishedItem(i)
           ? "FINISHED — its result is waiting for you"
+          : silentItem(i)
+          ? `SILENT — nothing from it since ${silentSince.get(i.value) ?? "it started"}, longer than any call it has pending declared. It may be hung; frizz stopped nothing. Read its transcript, then wait on it again or \`TaskStop\` it`
           : i.kind === "pr"
           ? "NOT REGISTERED — register it with `mcp__frizz__watch_pr` first, then name it here"
           : i.kind === "issue"
@@ -2509,6 +2526,15 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
         ? parkExpiredWakeMessage(status)
         : allFinished
         ? parkFinishedWakeMessage(status, dead.length !== 1)
+        : dead.every(silentItem)
+        ? [
+          `${PARK_CORRECTION_NAMES_LEAD}${dead.length === 1 ? "a sub-agent that has" : "sub-agents that have"} gone silent past what ${dead.length === 1 ? "it" : "they"} declared, so frizz woke you instead of holding the park.`,
+          "",
+          ...status,
+          "",
+          "A child blocked in a long foreground call is judged against that call's own `timeout`; this one has",
+          "outlived it. Check it before waiting again: a re-park naming it wakes you the same way while it stays silent.",
+        ].join("\n")
         : [
           `${PARK_CORRECTION_NAMES_LEAD}${dead.length === 1 ? "something that is" : "things that are"} not running, so it is not a park and your thread stayed in the queue.`,
           "",

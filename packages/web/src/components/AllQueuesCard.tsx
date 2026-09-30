@@ -46,7 +46,7 @@ import { ThreadStatusLine } from "./ThreadStatusLine.tsx"
 import { Composer } from "./Composer.tsx"
 import { InteractionStack } from "./InteractionCards.tsx"
 import { AwaitingSubAgentsCard, SubAgentWaitSnoozeItems } from "./AwaitingSubAgentsCard.tsx"
-import { showsSubAgentWait } from "../lib/subAgentWait.ts"
+import { drawsSubAgentWaitCard, showsSubAgentWait } from "../lib/subAgentWait.ts"
 import { useThreadComposerControls } from "../hooks/useThreadComposerControls.tsx"
 import { ExpandThreadLink } from "./ExpandThreadLink.tsx"
 import { HEADER_ICON_CLASS } from "../lib/headerIcon.ts"
@@ -58,7 +58,7 @@ import { RegisteredAnsweringContext, RegisteredAnsweringProvider, RegisteredQues
 import { RestedCard, showsRestedCard } from "./RestedCard.tsx"
 import { LogoutConfirmModal, SignInModal } from "./SignInModal.tsx"
 import { QuietTurnCard, showsQuietTurnCard } from "./QuietTurnCard.tsx"
-import { QueueShellStrip } from "./QueueShellStrip.tsx"
+import { QueueChildOps } from "./QueueChildOps.tsx"
 import { SnoozeButton } from "./SnoozeButton.tsx"
 import { StateButton } from "./ThreadLifecycleFooter.tsx"
 import { focusedProject, ThreadTerminalsStrip } from "./ThreadTerminals.tsx"
@@ -236,6 +236,8 @@ export const AllQueuesCard = memo(function AllQueuesCard({
   })
   const text = handoff.data?.text
   const parts = useMemo(() => (text ? handoffParts(text, thread.questions) : null), [text, thread.questions])
+  // Does the awaiting card list the children, or the ops column under the reply box (QueueChildOps)?
+  const drawsSubAgentWait = drawsSubAgentWaitCard(thread, parts?.fences)
   // THIS CARD IS THE NEWEST HANDOFF, and every open question rides to the bottom of the newest handoff
   // (lib/questionAnchor, 2026-09-29): a typed message no longer sets one aside — the worker `unask`s what
   // it made moot — so every question still open is still this handoff's ask.
@@ -301,9 +303,9 @@ export const AllQueuesCard = memo(function AllQueuesCard({
                   name the focused project's thread of the same slug — and it owns `f` on this card.
                   AS THE HEADER'S LAST MARK it takes `-mr-2`: its ink sits ~1.2px inside a 14px box
                   centred in a 28px square, so untrimmed it drew ~29px in from the card's right border
-                  against the project mark's 20.75px on the left; trimmed, 21.0px — the inset Retry keeps
-                  when it is last (measured 2026-09-29, ink-gaps.mjs dsf 4, sans). Beside Retry it keeps
-                  its box: ⤢ → Retry measured 10px of ink, the gap-0.5 pairing Colin's card had. */}
+                  against the project mark's 20.75px on the left; trimmed, 21.0px (measured 2026-09-29,
+                  ink-gaps.mjs dsf 4, sans). Beside Retry it keeps its box and Retry, an icon of the same
+                  square since 2026-09-29, takes the trim as the last mark instead. */}
               <ExpandThreadLink
                 slug={thread.id}
                 href={`${placeHref}/full`}
@@ -354,7 +356,7 @@ export const AllQueuesCard = memo(function AllQueuesCard({
                 <QuestionBlockCard key={index} raw={question.raw} questionKind={question.questionKind} danger={question.danger} />
               ))}
               {/* A parent resting on its sub-agents states the batch in place of its fence (AwaitingSubAgentsCard). */}
-              {parts?.fences.map((fence, index) => fence.kind === "awaiting" && showsSubAgentWait(thread)
+              {parts?.fences.map((fence, index) => fence.kind === "awaiting" && drawsSubAgentWait
                 ? <AwaitingSubAgentsCard key={index} project={project} thread={thread} body={fence.body} openThread={() => openInPlace(project, thread.id)} onSnoozed={onLeave} onUndone={onUnsnoozed} />
                 : <FenceBody key={index} kind={fence.kind} body={fence.body} />)}
               {/* A DONE THE WORKER REGISTERED (`mcp__frizz__done`) rather than fenced — the sign-off the worker
@@ -412,8 +414,9 @@ export const AllQueuesCard = memo(function AllQueuesCard({
 
           <ThreadProjectScope projectId={project.id} projectDir={project.projectDir}>
             <ReplyBox project={project} thread={thread} onSent={onLeave} onFailed={onReturn} />
-            {/* The shells it left running — a shell with no budget runs until someone stops it. */}
-            <QueueShellStrip thread={thread} api={api} onOpen={() => openInPlace(project, thread.id)} />
+            {/* EVERYTHING IT HAS RUNNING — sub-agents, Workflows, shells — whatever the worker is doing
+                (QueueChildOps). The children are the awaiting card's to list while it is drawn. */}
+            <QueueChildOps project={project} thread={thread} api={api} agents={!drawsSubAgentWait} onOpenThread={() => openInPlace(project, thread.id)} />
           </ThreadProjectScope>
           </RegisteredAnsweringProvider>
           </QueueDismissContext.Provider>
@@ -478,16 +481,14 @@ function RetryButton({ project, thread, onSent, onFailed }: { project: QueuesPro
         disabled={retry.isPending || !thread.sessionId}
         aria-label="Retry exited session"
         onMouseDown={(event) => event.preventDefault()}
-        // No margin: Retry is the header's last mark, so the header's own padding insets it — 21px from the
-        // card's border box, the title's inset on the left. It carried `mr-[9px]` until 2026-09-28 to sit at
-        // the rhythm of the ↗ and ⤢ doors beside it (MEASURED 2026-09-23, ink-gaps.mjs, dsf 4, sans: Retry →
-        // ↗ 20.43px); with the doors gone that margin left it 30px in against the title's 21 (measured
-        // 2026-09-28, composer-alias-fixture ?surface=card&runtime=exited, dsf 4, sans). The ⤢ came back
-        // BEFORE it on 2026-09-29 (ExpandThreadLink), so Retry is still last and still wants no margin.
-        className="flex items-center gap-1.5 rounded-md border border-accent/45 bg-accent/10 px-2.5 py-1 text-[12px] font-medium text-accent outline-none transition-colors hover:border-accent/70 hover:bg-accent/15 disabled:opacity-50"
+        // AN ICON in the header strip's chrome — the same mark as the drawer's Retry
+        // (HeaderActions.tsx). It was a labelled accent pill until 2026-09-29, and one worded pill beside
+        // the bare ⤢ read as a stray (maintainer: "having a retry button labeled with other non labeled
+        // icons looks awful").
+        // `-mr-2` as the header's last mark, the ⤢'s trim (see the strip above).
+        className={`${HEADER_ICON_CLASS} -mr-2`}
       >
-        <RotateCcw size={12} />
-        Retry
+        <RotateCcw size={14} strokeWidth={2} />
       </button>
     </Tooltip>
   )

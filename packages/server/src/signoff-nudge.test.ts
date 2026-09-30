@@ -15,7 +15,8 @@ import { QUESTION_FENCE_RETIRED_AT } from "@frizz/shared"
 import { Bus } from "./bus.ts"
 import type { Project } from "./project.ts"
 import { applyRecord, createTailer, newTailState, type SessionTelemetry, type Tailer } from "./tailer.ts"
-import { createScheduler } from "./scheduler.ts"
+import { createScheduler, enqueueThreadMessageWake } from "./scheduler.ts"
+import { replyWaitPrompt } from "./thread-mentions.ts"
 import { createCodexBackend } from "./backend/codex.ts"
 import { createWakeDeliveryStore } from "./wake-store.ts"
 
@@ -297,6 +298,30 @@ test("an answered question ON ITS WAY to the worker is a sign-off too, until the
     h.storage.answerThreadQuestion("qst_x", JSON.stringify({ questionId: "qst_x", question: "Which store?", chosen: ["SQLite"] }), Date.now())
     await h.s.tick()
     assert.deepEqual(h.nudges(), [], "answered, not yet delivered — the worker is about to be woken with it")
+  } finally { h.close() }
+})
+
+// A THREAD WAITING ON ANOTHER THREAD'S ANSWER (`message_thread` with `await_reply`) rests on that wait
+// and nothing else — the tool tells it to — so the wait is its sign-off, exactly as a watch is.
+test("a rest on a wait for another thread's answer is not nudged", async () => {
+  const h = nudger({})
+  try {
+    h.storage.armThreadTimer({ id: "tmr_reply", slug: h.slug, prompt: replyWaitPrompt("shellBudgets", "sb"), fireAtMs: Date.now() + 3_600_000, createdAtMs: Date.now() })
+    await h.s.tick()
+    assert.deepEqual(h.nudges(), [])
+  } finally { h.close() }
+})
+
+// …and the answer CANCELS that wait the instant it is sent, so until it is delivered the rest reads bare.
+// Seen on a real run (2026-09-29): the nudge rode in the same delivery as the answer. Enqueued an hour
+// out so it is still in flight when the tick runs.
+test("the answer ON ITS WAY from the other thread is a sign-off too", async () => {
+  const h = nudger({})
+  try {
+    enqueueThreadMessageWake(h.storage, { slug: h.slug, sessionId: "sid", fromSlug: "sb", message: "Message from @shellBudgets: 742", nowMs: Date.now() + 3_600_000 })
+    await h.s.tick()
+    const minted = h.storage.db.prepare("SELECT id FROM wake_delivery WHERE thread_slug = ? AND fence_id LIKE 'signoff:%'").all(h.slug)
+    assert.deepEqual(minted, [])
   } finally { h.close() }
 })
 

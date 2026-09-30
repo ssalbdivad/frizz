@@ -268,11 +268,9 @@ export function App() {
   // parked slug AND a board.)
   useEffect(() => { resolveRoutedThread() }, [board, snap.routeThreadSlug])
 
-  // The window title is the app's: there is one page, so there is no page name to put before it.
-  // StandaloneThreadPage names its thread instead, with "— Frizz" as the trailing mark.
-  useEffect(() => {
-    document.title = "Frizz"
-  }, [])
+  // The window title is set by what is showing: the page names its view (AllQueues.tsx), StandaloneThreadPage
+  // its thread, and index.html's "Frizz" stands elsewhere. No effect here — it would run after the page's on
+  // mount and overwrite it.
 
   return (
     <>

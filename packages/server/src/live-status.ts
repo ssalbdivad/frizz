@@ -2,7 +2,7 @@ import type { TranscriptMessage } from "@frizz/shared"
 import type { ClaudeOneShot, ClaudeOneShotRequest } from "./backend/claude-oneshot.ts"
 import { operatorMessages } from "./periodic-status.ts"
 import { isBrokerClaudeRow, type SessionRow, type Storage } from "./storage.ts"
-import { cleanThreadStatus, THREAD_STATUS_TARGET_CHARS } from "./thread-names.ts"
+import { cleanThreadStatus } from "./thread-names.ts"
 
 // THE WORKING STATUS: while a thread's turn runs, keep its status line naming the TASK it is on, and
 // change it only when the work fundamentally moves (maintainer 2026-09-29: "have each thread always
@@ -34,6 +34,11 @@ export const LIVE_STATUS_FIRST_MS = 20_000
 // the last rest. A wake a minute later is the same stretch of work; a message the next morning is not,
 // and "working on this for 14h" would count the night.
 const RESUME_GAP_MS = 15 * 60_000
+// The status sits inline after a one- or two-word name in the rail (Sidebar.tsx ThreadRow), where about
+// 30 characters of 12px grey fit beside a typical name. The rail truncates anything longer, so this is a
+// target for the model, not a clamp.
+const LIVE_STATUS_MAX_WORDS = 4
+const LIVE_STATUS_TARGET_CHARS = 30
 const REQUEST_CHARS = 1_500
 const ACTIVITY_LINES = 40
 const ACTIVITY_LINE_CHARS = 300
@@ -81,14 +86,14 @@ export function liveStatusRequest(input: { request: string; activity: string; cu
     input.current ? `The status currently shown: "${input.current}"` : "No status is shown yet.",
     "",
     "Rules:",
-    "- The status names the TASK the agent is on — the goal a developer would recognize, at the level of their request — never the step or command it is on right now. Good: \"Fixing the cache miss in resolver.ts\", \"Adding a regression test for the rail fix\", \"Running the full test suite before landing\", \"Reviewing PR #391\". Too narrow: \"Capturing screenshots of the variants\", \"Reading Sidebar.tsx\", \"Typechecking the connector\".",
+    "- The status names the TASK the agent is on — the goal a developer would recognize, at the level of their request — never the step or command it is on right now. Good: \"Fixing the resolver cache miss\", \"Testing the rail fix\", \"Landing the fix on main\", \"Reviewing PR #391\". Too narrow: \"Capturing screenshots of the variants\", \"Reading Sidebar.tsx\", \"Typechecking the connector\".",
     ...(input.current
       ? [
         "- Reply SAME when the agent is still pursuing the goal the current status names, however many different commands, files, screenshots or iterations that involves. Rewording a status that is still true is wrong: its clock resets. Most checks should answer SAME.",
         "- Write a new status only when the work has fundamentally moved: the developer asked for something else, the agent moved onto a different problem, or it clearly finished one phase and started another (for example it finished the fix and is now landing it, or finished investigating and is now implementing).",
       ]
       : []),
-    `- A status starts with an -ing verb and is at most 8 words (${THREAD_STATUS_TARGET_CHARS} characters): name the one specific thing and stop. Sentence case, no trailing period, no quotes.`,
+    `- A status starts with an -ing verb and is at most ${LIVE_STATUS_MAX_WORDS} words (about ${LIVE_STATUS_TARGET_CHARS} characters) — it sits beside the thread's name in a narrow sidebar and is read at a glance. Say the high-level what, not the detail. Sentence case, no trailing period, no quotes.`,
     "- Never generic (\"Working on it\", \"Continuing the task\"), and never \"the user\".",
     "",
     input.current ? "Reply with SAME or the new status, and nothing else." : "Reply with the status alone.",

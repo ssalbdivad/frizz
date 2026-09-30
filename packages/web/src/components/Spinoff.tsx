@@ -113,6 +113,7 @@ export function SpinoffDialog({ thread, open, onOpenChange }: { thread: ThreadVi
           rows={3}
           placeholder="What should the new thread do?"
           aria-label="What the new thread should do"
+          data-1p-ignore
           className={`w-full resize-none ${BLOCK_RADIUS} border border-border bg-bg px-3 py-2 text-[13px] leading-5 text-fg outline-none transition-colors placeholder:text-muted focus:border-accent`}
         />
         {error

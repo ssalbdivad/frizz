@@ -152,7 +152,7 @@ import {
 import { type AppContext } from "./context.ts"
 import { listAcpAgents } from "./backend/acp-agents.ts"
 import { sessionTitleLocked } from "./storage.ts"
-import { createThreadNamer, THREAD_NAME_MAX_WORDS, type ThreadNamer } from "./thread-names.ts"
+import { createThreadNamer, threadNameProblem, type ThreadNamer } from "./thread-names.ts"
 import { handleOf, isReplyWaitFor, knownHandles, replyWaitPrompt, resolveThreadHandle, THREAD_MESSAGE_HOURLY_CAP, threadMessageBody } from "./thread-mentions.ts"
 import { enqueueThreadMessageWake } from "./scheduler.ts"
 import { editedFilesOf } from "./edited-files.ts"
@@ -3780,14 +3780,15 @@ export function createRouter(ctx: AppContext) {
         // throw: the worker did nothing wrong, and an error is the one answer it would retry.
         const lockedByHuman = sessionTitleLocked(row)
         if (lockedByHuman) return { accepted: false, title: current(), lockedByHuman }
-        // The worker gets ONE rename, and a name is one or two words that no other open thread carries
+        // The worker gets ONE rename, and a name is one or two short words that no other open thread carries
         // (thread-names.ts). Each refusal says what to do next; only the spent rename says "stop".
         const refuse = (refusal: string) => ({ accepted: false, title: current(), lockedByHuman: false, refusal })
         if (row.title_worker_renamed) {
           return refuse(`you already renamed this thread once, and a name is stable after that. It stays "${current()}"; do not call this again.`)
         }
-        if (input.title.split(/\s+/).length > THREAD_NAME_MAX_WORDS) {
-          return refuse(`"${input.title}" is longer than two words. A name is one or two words naming the subject (e.g. "Shell budgets"); call again with one.`)
+        const problem = threadNameProblem(input.title)
+        if (problem) {
+          return refuse(`"${input.title}" ${problem}. A name is one or two short words naming the subject (e.g. "Shell budgets", typed as @shellBudgets); call again with one.`)
         }
         const holder = namer.holder(input.title, input.slug)
         if (holder) {

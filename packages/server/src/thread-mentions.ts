@@ -9,10 +9,11 @@ import { foldThreadName, type NamedThread } from "./thread-names.ts"
 // the LAST word, and "Dev ops" is two words ("dev" + "ops", too short to strip) while `devOps` is one
 // ("devops" → "devop"). Folding the handle on both sides makes every spelling of it agree.
 
-/** The handle a named thread is addressed by — its camelCase name, or the slug for a name too long to
- *  have one (a legacy sentence title), so every thread stays addressable by SOMETHING. */
+/** The handle a named thread is addressed by — its camelCase name, or, for a name too long to have one
+ *  (a legacy sentence title, a long session title), its SLUG in camelCase, which resolves the same way —
+ *  so every thread is addressable, and always by something shaped like a handle. */
 export function handleOf(t: Pick<NamedThread, "name" | "slug">): string {
-  return threadHandle(t.name) ?? t.slug
+  return threadHandle(t.name) ?? threadHandle(t.slug.replace(/-/g, " ")) ?? t.slug
 }
 
 function key(handle: string): string {
@@ -70,9 +71,11 @@ export function threadMessageBody(input: { fromHandle: string; message: string; 
 // the answer is matched by (the handle can change with a rename, the slug cannot).
 export function replyWaitPrompt(handle: string, slug: string): string {
   return (
-    `Waiting on @${handle} to reply (thread \`${slug}\`) — it has not answered in time. Read where it is with ` +
-    "`mcp__frizz__read_thread`, then ask again with `mcp__frizz__message_thread` (`await_reply: true`) if the " +
-    "answer still matters, or go on without it."
+    // Read in two places: as the wait's name on the card while it stands, and as the wake if it fires —
+    // so the first sentence is the wait and the rest is conditional on it having run out.
+    `Waiting on @${handle} to reply (thread \`${slug}\`). If this fires, no answer came in time: read where it is ` +
+    "with `mcp__frizz__read_thread`, then ask again with `mcp__frizz__message_thread` (`await_reply: true`) if " +
+    "the answer still matters, or go on without it."
   )
 }
 

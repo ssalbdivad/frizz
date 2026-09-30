@@ -57,3 +57,15 @@ export function showsSubAgentWait(
   if (thread.pendingAsk || thread.pendingQuestion || questionsOwed(thread.questions).length > 0) return false
   return subAgentWait(thread) !== undefined
 }
+
+/** Is the awaiting card what lists this card's children? `fences` are the handoff's own, once it is read;
+ *  until then the thread's last fence stands in, so the rows do not start under the reply box and then
+ *  jump into the card. Everywhere else — mid-turn after a reply, a question or a done beside live work —
+ *  the card's ops column lists them (QueueChildOps), so live work is never off the card. */
+export function drawsSubAgentWaitCard(
+  thread: Parameters<typeof showsSubAgentWait>[0],
+  fences: readonly { kind: string }[] | undefined,
+): boolean {
+  if (!showsSubAgentWait(thread)) return false
+  return fences ? fences.some((fence) => fence.kind === "awaiting") : thread.lastFence?.kind === "awaiting"
+}

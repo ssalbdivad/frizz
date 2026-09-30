@@ -37,7 +37,10 @@ import {
 import { log as frizzLog } from "./logging.ts"
 import { frizzTempDir } from "./frizz-paths.ts"
 import { declaredShellBudgetMs } from "./shell-budget.ts"
+import { threadNameProblem } from "./thread-names.ts"
 import { readWorkflowRun, workflowAgentState as sharedWorkflowAgentState, workflowAckRunDir, workflowAckTaskId, workflowLabel, type WorkflowAgent } from "./workflow-runs.ts"
+import { transcriptQuietPast } from "./pending-call.ts"
+import { processAwakeClock, wallSpan } from "./awake-clock.ts"
 
 // The JSONL tailer: incrementally reads each registered session's Claude Code transcript
 // (~/.claude/projects/<cwdSlug>/<session_id>.jsonl) to derive liveness telemetry — last activity
@@ -121,6 +124,12 @@ const MAX_POLL_MS = 10_000
 // board 2026-07-22. 15 minutes clears the ceiling with headroom and still clears a genuinely dead
 // child promptly; across 1366 real child transcripts (176k inter-record gaps) only 0.04% exceed it,
 // while the p99 gap is 95s.
+//
+// THAT CEILING IS GONE. Frizz lifted it to 24 hours on 2026-08-11 (backend/types.ts BASH_MAX_TIMEOUT_MS),
+// so this window is now the floor of a child's allowance, not the whole of it: a child whose latest call
+// is still pending is judged against that call's own declared bound (pending-call.ts), and silence is
+// measured in awake time (awake-clock.ts). Re-measured 2026-09-29 over 1944 child transcripts since the
+// lift (486,680 gaps): 23 exceeded 15 minutes, 15 of them inside a pending Bash call declaring ≥ 15m.
 //
 // AGENTS ONLY: a child appends on every step, so silence there is a real (if coarse) liveness signal.
 // A background SHELL has no such property and is not judged this way at all — see bgShellViews.
@@ -2458,6 +2467,10 @@ export interface TailerDeps {
   sessionLogDir?: string // injectable transcript dir (tests); defaults to the Claude Code path
   codexHome?: string // injectable $CODEX_HOME (tests); where a codex sub-agent's child rollout is located
   mtimeMs?: (path: string) => number | undefined // injectable file mtime (tests); a sub-agent transcript's staleness clock
+  // Awake milliseconds between two wall instants (awake-clock.ts): what a child's silence is measured in,
+  // so a host that slept is not a child that died. Defaults to the process's own clock — unless `now` is
+  // injected, when it is plain wall time, because a test's clock jumping is not the host sleeping.
+  awakeBetween?: (fromMs: number, toMs: number) => number
   /** Is a background shell still alive? EXACT, not a heuristic: a shell's stdout is redirected to its
    *  `<taskId>.output`, so whichever process holds that file open IS the shell. Returns undefined when
    *  liveness cannot be established (probe unavailable, path unknown) — never a guess. Injectable for
@@ -2742,6 +2755,7 @@ export function createTailer(deps: TailerDeps): Tailer {
   // unique across projects (and, in a shared /tmp, not across OS users either).
   const stallLogDir = frizzTempDir("frizz-worker-logs", deps.project.stateDir)
   const mtimeMs = deps.mtimeMs ?? defaultMtimeMs
+  const awakeBetween = deps.awakeBetween ?? (deps.now ? wallSpan : processAwakeClock.awakeBetween)
   const readPermMarker = deps.readPermMarker ?? defaultReadPermMarker(deps.project)
   // The durable prime cache. `undefined` dep ⇒ open the default table in the project DB; `null` ⇒
   // explicitly disabled. A storage stub with no `db` degrades to disabled rather than throwing.
@@ -2946,6 +2960,9 @@ export function createTailer(deps: TailerDeps): Tailer {
     // A persisted name already stands (the dispatch mint, or this marker on an earlier fold): the CAS
     // would refuse anyway, so skip the uniqueness scan it would have paid for.
     if (row.title_agent || row.title_worker_renamed) return false
+    // A marker that is not a name (too many words, a handle too long to type) never persists; the
+    // dispatch mint names the thread instead.
+    if (threadNameProblem(state.aiTitle.trim())) return false
     try {
       const title = deps.distinctTitle?.(row.slug, state.aiTitle.trim(), state.firstUserText) ?? state.aiTitle.trim()
       return deps.storage.setAutoTitleIfCurrent(row.slug, title, {
@@ -2993,16 +3010,37 @@ export function createTailer(deps: TailerDeps): Tailer {
     return meta ? descendantTranscript(state, meta) : undefined
   }
 
+  // A CHILD BLOCKED IN ONE LONG FOREGROUND CALL IS NOT A DEAD ONE (pending-call.ts). Its transcript takes
+  // the tool_use and then nothing until the call returns, and since 2026-08-11 a call may declare up to 24
+  // hours — so silence is judged against what the child's pending call declared, not a flat 15 minutes,
+  // and in awake time. Three children were read dead this way on 2026-09-29 with their processes alive.
   function entryStale(state: TailState, e: SubAgentEntry, nowMs: number): boolean {
     if (e.workflow) {
       if (!e.workflow.runDir) return false // before its ack: nothing to measure, so never stale
-      const m = workflowActivityMs(e.workflow.runDir)
-      return m === undefined || nowMs - m > SUBAGENT_STALE_MS
+      return workflowStale(e.workflow.runDir, nowMs)
     }
     const path = entryTranscript(state, e)
     if (!path) return false
-    const m = mtimeMs(path)
-    return m === undefined || nowMs - m > SUBAGENT_STALE_MS
+    return quietPast(path, nowMs)
+  }
+
+  // The one staleness rule every tracked transcript answers to: gone quiet past SUBAGENT_STALE_MS of awake
+  // time, and past whatever its pending call declared. A file that no longer stats is stale.
+  function quietPast(path: string, nowMs: number, lastWriteMs = mtimeMs(path)): boolean {
+    return lastWriteMs === undefined || transcriptQuietPast(path, lastWriteMs, nowMs, SUBAGENT_STALE_MS, awakeBetween)
+  }
+
+  // A WORKFLOW is live while its journal moved recently or ANY running agent is live by its own reading —
+  // the same rule each agent's row uses, so a run cannot read stale while a row under it reads running.
+  function workflowStale(runDir: string, nowMs: number): boolean {
+    const journal = mtimeMs(join(runDir, "journal.jsonl"))
+    if (journal !== undefined && awakeBetween(journal, nowMs) <= SUBAGENT_STALE_MS) return false
+    for (const agent of readWorkflowRun(runDir)) {
+      if (agent.status !== "running") continue
+      const m = mtimeMs(agent.transcript)
+      if (m !== undefined && !quietPast(agent.transcript, nowMs, m)) return false
+    }
+    return true
   }
 
   // A WORKFLOW's last sign of life. Its journal only moves when an agent starts or finishes, so a run
@@ -3019,7 +3057,7 @@ export function createTailer(deps: TailerDeps): Tailer {
   }
 
   function workflowAgentState(agent: WorkflowAgent, runLive: boolean, nowMs: number): "running" | "stale" | "done" | "failed" {
-    return sharedWorkflowAgentState(agent, runLive, nowMs, SUBAGENT_STALE_MS, mtimeMs)
+    return sharedWorkflowAgentState(agent, runLive, nowMs, SUBAGENT_STALE_MS, mtimeMs, awakeBetween)
   }
 
   // The workflow run a tracked or retained entry names, live runs first. Used to resolve a workflow
@@ -3363,7 +3401,7 @@ export function createTailer(deps: TailerDeps): Tailer {
   //  2. This thread's own transcript: the descendant's terminal <task-notification>, folded by
   //     trackCompletions into `descendantTerminals`. Available on EVERY backend, because it rides the
   //     file the tailer already reads. See recordDescendantTerminal for why it exists.
-  //  3. Silence, the coarse fallback — the same mtime rule every tracked child uses.
+  //  3. Silence, the coarse fallback — the same rule every tracked child uses (quietPast).
   //
   // (2) is measured against the transcript rather than trusted outright, because the same task-id
   // notifies again each time a resumable descendant stops: a transcript still advancing WELL past its
@@ -3375,10 +3413,11 @@ export function createTailer(deps: TailerDeps): Tailer {
   function descendantState(state: TailState, meta: DescendantSidecar): "running" | "stale" | "done" {
     const task = deps.runtimeTasks?.(state.sessionId).find((entry) => entry.taskId === meta.agentId)
     if (task?.terminal) return "done"
-    const at = mtimeMs(descendantTranscript(state, meta))
+    const path = descendantTranscript(state, meta)
+    const at = mtimeMs(path)
     const notified = state.descendantTerminals?.get(meta.agentId)
     if (notified !== undefined && (at === undefined || at <= notified + DESCENDANT_NOTIFY_GRACE_MS)) return "done"
-    return at === undefined || now() - at > SUBAGENT_STALE_MS ? "stale" : "running"
+    return quietPast(path, now(), at) ? "stale" : "running"
   }
 
   // How deep the surfaced tree goes. A bound, not an opinion: `parentAgentId` comes off an unvalidated
@@ -4671,6 +4710,8 @@ export function createTailer(deps: TailerDeps): Tailer {
     // /ws transcript producer at the end so it pushes only for genuinely-changed threads.
     const transcriptDirty: string[] = []
     const nowMs = now()
+    // Every tick, so a host suspension is placed within one tick of where it really fell (awake-clock.ts).
+    processAwakeClock.sample()
     adoptionBindings = new Map()
     const rows = deps.storage.allSessions()
     // ARCHIVED ROWS PRIME LAST. Priming is bounded per tick, so on a cold board the registry's order

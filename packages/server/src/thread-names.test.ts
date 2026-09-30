@@ -16,6 +16,7 @@ import {
   projectThreadNames,
   rowThreadName,
   statusRequest,
+  threadNameProblem,
 } from "./thread-names.ts"
 
 function store(): Storage {
@@ -85,6 +86,7 @@ test("THE NAMING PROMPT carries the taken names, the subject rule, and a rejecte
   const { system, prompt } = namingRequest("fix the shell budget default", ["Shell budgets", "Focus mode"])
   assert.match(system, /name threads/)
   assert.match(prompt, /ONE or TWO words/)
+  assert.match(prompt, /@handle .* at most 16 characters/)
   assert.match(prompt, /SUBJECT or intent of the request, not the action taken/)
   assert.match(prompt, /Names already taken in this project:\n- Shell budgets\n- Focus mode\n/)
   assert.match(prompt, /<request>\nfix the shell budget default\n<\/request>/)
@@ -102,6 +104,17 @@ test("a model's answer becomes a name only when it is one or two words, in sente
   assert.equal(cleanThreadName("z.properties docs"), "z.properties docs", "an identifier keeps its spelling")
   assert.equal(cleanThreadName("Fix the shell budget default"), undefined)
   assert.equal(cleanThreadName("  \n"), undefined)
+})
+
+test("a name is short enough to TYPE: its camelCase handle is at most 16 characters", () => {
+  assert.equal(threadNameProblem("Shell budgets"), undefined)
+  assert.equal(threadNameProblem("Background shells"), undefined, "@backgroundShells is exactly 16")
+  assert.match(threadNameProblem("Spinoff feature scope and UI") ?? "", /longer than two words/)
+  assert.match(threadNameProblem("Visualization distinctions") ?? "", /@visualizationDistinctions is 25 characters, past the limit of 16/)
+  assert.match(threadNameProblem("Internationalization") ?? "", /too long to type/, "one word can be too long too")
+  assert.equal(cleanThreadName("Visualization distinctions"), undefined)
+  // The fallbacks hold the same bound: they skip a request word that would push the handle past it.
+  assert.equal(distinguishingName("Shell budgets", "shell internationalization defaults", (name) => name === "Shell budgets"), "Shell defaults")
 })
 
 test("the status line is one clamped line", () => {

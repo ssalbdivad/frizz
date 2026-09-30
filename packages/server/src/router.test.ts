@@ -501,6 +501,9 @@ test("setOwnThreadTitle RPC: a duplicate is refused NAMING its holder, a distinc
   const long = await call("Fix the focus mode rail")
   assert.equal(long.accepted, false)
   assert.match(long.refusal ?? "", /longer than two words/)
+  const untypable = await call("Visualization distinctions")
+  assert.equal(untypable.accepted, false)
+  assert.match(untypable.refusal ?? "", /@visualizationDistinctions is 25 characters, past the limit of 16/)
 
   const ok = await call("Focus rail")
   assert.deepEqual(ok, { accepted: true, title: "Focus rail", lockedByHuman: false })

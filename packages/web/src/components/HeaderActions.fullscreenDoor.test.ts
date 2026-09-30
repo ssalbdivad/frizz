@@ -14,8 +14,8 @@ import { clearFullscreenOrigin, rememberFullscreenOrigin } from "../lib/fullscre
 // The /full page's header carries the door CLOSING (CollapseThreadLink, ⤡) in the thread's action strip,
 // and the drawer's strip carries the door OPENING (ExpandThreadLink, ⤢) in the same slot (maintainer
 // 2026-09-02: a collapse icon "in the same place where the expand icon is"). The ⤢ left every surface for
-// the drawer's ⋯ menu on 2026-09-28 and came back on 2026-09-29, restoring 7a20f425; the menu entry and
-// its `f` key stay.
+// the drawer's ⋯ menu on 2026-09-28 and came back on 2026-09-29, restoring 7a20f425; the same day the
+// menu's duplicate entry went, and the ⤢ took its `f` key.
 //
 // Before 2026-09-02, /full's way out was an ArrowLeft sitting BEFORE THE TITLE, at the header's far
 // left: a second, unrelated place to look for a whole-thread verb, and a "previous page" glyph on a
@@ -37,7 +37,7 @@ function strip(props: { expand?: boolean; collapse?: boolean }): string {
     createElement(
       QueryClientProvider,
       { client: new QueryClient({ defaultOptions: { queries: { retry: false } } }) },
-      createElement(TooltipProvider, null, createElement(HeaderActions, { thread: t, onDone: () => {}, onCollapse: () => {}, onDoc: () => {}, ...props })),
+      createElement(TooltipProvider, null, createElement(HeaderActions, { thread: t, onDone: () => {}, onCollapse: () => {}, ...props })),
     ),
   )
 }
@@ -57,8 +57,8 @@ test("the drawer strip opens /full and the /full strip leaves it, from the same 
   assert.ok(opening.includes("Open fullscreen"), `the drawer strip carries the door opening: ${opening.join(" · ")}`)
   // THE SAME SLOT: each half sits at the same index among the same neighbours.
   assert.equal(opening.indexOf("Open fullscreen"), closing.indexOf("Exit fullscreen"), `one position, both directions: ${opening.join(" · ")} / ${closing.join(" · ")}`)
-  // The drawer's ⋯ trigger owns `f` there; the strip's ⤢ must not be a second target for it.
-  assert.doesNotMatch(strip({ expand: true }), /data-expand-thread="t"[^>]*data-command|data-command="fullscreen"[^>]*data-expand-thread/)
+  // The ⤢ owns `f` in the drawer — the ⋯ menu no longer offers fullscreen, so the door is the key's one target.
+  assert.match(strip({ expand: true }), /data-expand-thread="t"[^>]*data-command="fullscreen"/)
 
   // Negative control: a strip asked for neither carries neither.
   const plain = controls(strip({}))

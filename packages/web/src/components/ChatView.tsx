@@ -95,10 +95,10 @@ export { CARD_BODY, CARD_PRIMARY_BUTTON, CardActions, TranscriptCard } from "./T
 export { QuestionBlockCard } from "./QuestionBlockCard.tsx"
 import { LastActive } from "./LastActive.tsx"
 import { ThreadBandStamp } from "./BandLabel.tsx"
-import { CopyTerminalCommandButton, useCopyTerminalCommand } from "./ExternalTerminalCommand.tsx"
+import { useCopyTerminalCommand } from "./ExternalTerminalCommand.tsx"
 import { SignInModal } from "./SignInModal.tsx"
 import { PROVIDER_LABEL } from "../lib/signIn.ts"
-import { ThreadMenu } from "./ThreadMenu.tsx"
+import { ThreadMenu, ThreadTerminalButton } from "./ThreadMenu.tsx"
 import { ThreadTerminalsStrip } from "./ThreadTerminals.tsx"
 import { takeFullscreenEnterAnchor } from "../lib/fullscreenHandoff.ts"
 import { prependEarlierPage } from "../lib/transcriptPagination.ts"
@@ -1590,7 +1590,6 @@ export function ThreadHeader({ slug, onStatusApplied, onClose, showReturnToQueue
   const docQ = useQuery({ queryKey: ["threadBody", slug], queryFn: () => rpc.threadBody({ slug }) })
   const hasDoc = stripFrontmatter(docQ.data?.markdown ?? "").trim().length > 0
   if (!thread) return null
-  const showTerminalCommand = thread.kind === "session" && thread.foreign !== true
   return (
     <header
       data-thread-header
@@ -1627,11 +1626,10 @@ export function ThreadHeader({ slug, onStatusApplied, onClose, showReturnToQueue
           clickable title and its activity stamp readable instead of competing with fixed-width
           tabs/actions, while the control row itself remains a single unbroken cluster. */}
       <div className={THREAD_HEADER_CONTROLS_CLASS}>
-        {/* `gap-0.5` — the action strip's own distance, so the copy button and HeaderActions' icons
-            read as one row. With no gap at all this button sat 17.75px of ink from its neighbour where
-            the rest of the strip kept 20.25 and 21.5 (`scripts/ink-gaps.mjs` --dsf=4, real drawer). */}
+        {/* `gap-0.5` — the action strip's own distance, so HeaderActions' icons and the menu's read as
+            one row. */}
         <div className="flex shrink-0 items-center gap-0.5">
-          {showTerminalCommand && <CopyTerminalCommandButton slug={slug} />}
+          <ThreadTerminalButton slug={slug} />
           <HeaderActions
             thread={thread}
             // The /full page is the one surface with a fullscreen to LEAVE, and it leaves through the
@@ -1639,14 +1637,15 @@ export function ThreadHeader({ slug, onStatusApplied, onClose, showReturnToQueue
             collapse={showReturnToQueue}
             // …and the drawer, the one surface with a fullscreen to ENTER, through that same slot.
             expand={Boolean(onClose)}
-            onDoc={hasDoc ? () => pushDrawer("doc", thread.id) : undefined}
             onDone={() => markComplete.mutate(undefined, { onSuccess: onStatusApplied })}
             doneBusy={markComplete.isPending}
             onStatusApplied={onStatusApplied}
           />
-          {/* The drawer's own menu, and in it the one way to /full (ThreadMenu.tsx). Only where there is
-              a drawer to leave: the /full page is already there, and leaves by HeaderActions `collapse`. */}
-          {onClose && <ThreadMenu slug={slug} />}
+          {/* The ⋯ menu (ThreadMenu.tsx), which holds the rarer verbs. */}
+          <ThreadMenu
+            thread={thread}
+            onDoc={hasDoc ? () => pushDrawer("doc", thread.id) : undefined}
+          />
         </div>
         {/* Close-X for the DRAWER context (onClose passed by ThreadSheet) — parity with the Settings,
             sub-agent, and Doc drawers, all of which carry a corner "Close". Wired to the SAME animated

@@ -731,6 +731,26 @@ test("a park on a RETURNED sub-agent named by its runtime agentId reads as finis
   } finally { h.close() }
 })
 
+// SILENT IS NOT MISSING (2026-09-29). A sub-agent past its allowance reads `stale`: frizz knows the id, and
+// what it knows about the child is that it has written nothing for longer than its pending call declared.
+// "NOT RUNNING (nothing by that name)" sent a parent hunting for a typo while the child's processes were
+// alive (thread think-hard-about-this-conversation-between, three times in one evening). The wake stays —
+// it is how a parent hears that a child went quiet past its word — but it says what is true.
+test("a park naming a SILENT sub-agent wakes the parent with what frizz saw, not 'nothing by that name'", async () => {
+  const h = parkHarness([{ kind: "agent", value: "a2d303d9459d3b0fe" }, { kind: "for", value: "2h" }], {
+    agents: [{ id: "toolu_S", taskId: "a2d303d9459d3b0fe", label: "sweep agent", startedAt: AT, state: "stale", lastActivityAt: "2026-09-29T23:11:46.530Z" }],
+  })
+  try {
+    await h.s.tick()
+    const msg = h.queued()[0].message
+    assert.match(msg, /gone silent past what it declared/)
+    assert.match(msg, /a2d303d9459d3b0fe.*SILENT — nothing from it since 2026-09-29T23:11:46\.530Z/s)
+    assert.match(msg, /frizz stopped nothing/)
+    assert.doesNotMatch(msg, /nothing by that name/)
+    assert.equal(isParkCorrection(msg), true, "still a correction the transcript folds away")
+  } finally { h.close() }
+})
+
 // …and the correction's own listing prints THAT id, so what frizz tells a worker to copy is the string it
 // already recognises from its ack — not a second id it has never seen, which is what produced "why are
 // there 2 ids?". The tool_use id remains accepted, since the listing printed it for two weeks.

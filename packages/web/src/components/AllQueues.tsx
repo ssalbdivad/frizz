@@ -45,6 +45,7 @@ import { rpc } from "../api/rpc.ts"
 import { isBusy, liveQueue, mergedQueue, overlayQueues, projectMarkdownScope, queuesProjects, threadKey, type QueueEntry, type QueuesProject } from "../lib/allQueues.ts"
 import { innerPath, projectSlug } from "../lib/base-path.ts"
 import { rememberCrossProjectFocus, stepPick } from "../lib/crossProject.ts"
+import { setFaviconBadge } from "../lib/faviconBadge.ts"
 import { ALL_PROJECTS, homeHref, projectViewHref, usePageView, viewHref, viewKey } from "../lib/pageView.ts"
 import { draftKey, draftStore } from "../lib/drafts.ts"
 import { QUEUE_CARD_VIEWPORT_TOP, slugsInThreadDrawers, store } from "../store.ts"
@@ -246,6 +247,21 @@ export function AllQueuesPage() {
   // and a header still counting it read "1 in the queue" over an empty page until the next poll. A ghost
   // is not waiting on anyone. A card whose drawer is open still is, and still counts.
   const ready = queue.filter((slot) => !slot.ghost && !leaving.isLeaving(slot.key)).length
+  // THE TAB NAMES ITS VIEW. Someone who keeps one tab per project (Colin McDonnell's way of working, and
+  // how his one-project-per-page Frizz titled its tabs) tells them apart by title and favicon alone, so a
+  // focused tab reads "<project> — Frizz" and wears the rest dot (lib/faviconBadge.ts) while that
+  // project's queue holds a card; All projects reads so, dotted for any card at all. Set here, not in
+  // <App/>, because only this page knows its view — and an effect in App would run AFTER this child's on
+  // mount and overwrite it. Cleared back to the bare mark when the page goes (the welcome page, `/full`).
+  const tabName = focused ? viewed?.name : "All projects"
+  useEffect(() => {
+    document.title = tabName ? `${tabName} — Frizz` : "Frizz"
+  }, [tabName])
+  useEffect(() => () => { document.title = "Frizz" }, [])
+  useEffect(() => {
+    setFaviconBadge(ready > 0)
+    return () => setFaviconBadge(false)
+  }, [ready])
   const scrollToCard = useScrollToCard()
   const { active: activeKey, land } = useQueueKeys(useScrollspy(queue), scrollToCard)
   const loading = (cards.isPending || queues.isPending) && !queues.data
