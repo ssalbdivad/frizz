@@ -5,9 +5,9 @@ import { useThreadApi, useThreadApiBase, useThreadProjectDir } from "../api/thre
 import type { Api } from "../api/rpc.ts"
 import { useBackgroundShellLines, useBoard } from "../hooks.ts"
 import { AGENT_GLYPH_STROKE, CHILD_ARROW, CHILD_ARROW_CLASS, CHILD_DISMISS_TITLE, CHILD_KIND_TAG_CLASS, CHILD_MARK_SLOT_CLASS, shellLinesLabel, type TranscriptShellRecord } from "../lib/childOps.ts"
-import { childOpDismisser } from "../lib/dismissChildOp.ts"
+import { childOpDismisser, dismissChildOp } from "../lib/dismissChildOp.ts"
 import { PRIMER } from "../lib/primer.ts"
-import { humanProcess, processIsLive, threadProcesses, type ProcessState, type ThreadProcess } from "../lib/threadProcesses.ts"
+import { endedShellStateLabel, humanProcess, processIsLive, threadProcesses, type ProcessState, type ThreadProcess } from "../lib/threadProcesses.ts"
 import { liveAgeSince } from "../lib/durationLabels.ts"
 import { useNowMs } from "../lib/liveClock.ts"
 import { abbreviateHome } from "../lib/paths.ts"
@@ -126,7 +126,7 @@ export function processTitle(p: ThreadProcess, homeDir: string | undefined, watc
   const lines = [
     head,
     ...(p.state === "quiet" ? [QUIET_TITLE] : []),
-    ...(where ? [`${p.state === "quiet" ? "Ran" : "Runs"} in ${where}`] : []),
+    ...(where ? [`${p.state === "running" ? "Runs" : "Ran"} in ${where}`] : []),
     ...(watched ? ["Watched — this thread wakes when it finishes"] : []),
   ]
   return lines.join("\n")
@@ -314,7 +314,8 @@ export function ProcessRow({ process: p, slug, here, lines, watched, caption, on
   // A live row shows its age whoever owns it — a terminal of yours waiting at a prompt included: it is
   // running, and its own drawer reads `waiting for input · 6m`.
   const age = processIsLive(p) ? liveAgeSince(p.startedAt, now) : undefined
-  const stateText = human && p.state !== "running" && terminal ? terminalStateLabel(terminal) : undefined
+  // Not live ⇒ how it ended, in one vocabulary for both owners: `finished`, `stopped`, `exit N` / `failed`.
+  const stateText = human && p.state !== "running" && terminal ? terminalStateLabel(terminal) : p.ended ? endedShellStateLabel(p.ended) : undefined
   const counter = !human && p.shell?.id && !p.outputUnavailable ? shellLinesLabel(lines) : undefined
   const hint = processFolderHint(p, here)
   // A COMMAND is set in mono, whoever ran it: yours always is one, and so is an agent row whose label IS
@@ -328,6 +329,14 @@ export function ProcessRow({ process: p, slug, here, lines, watched, caption, on
   // × (childOpDismisser): offered only when the server says the shell can really be stopped. Its tooltip
   // names the thing by the row's own noun — "operation" was the sub-agent row's word.
   const agentDismiss = !human && p.shell ? childOpDismisser(slug, p.shell, p.monitor ? "MONITOR" : "SHELL", api) : undefined
+  // A FINISHED agent terminal's × is Clear, as a finished terminal of yours has Remove: the server forgets
+  // the row (FoldState.dismissedOps) and its drawer still resolves from the retired ring.
+  const endedId = p.ended?.id
+  const endedDismiss = endedId ? () => {
+    if (busy) return
+    setBusy(true)
+    void dismissChildOp(slug, endedId, p.monitor ? "MONITOR" : "SHELL", api).finally(() => setBusy(false))
+  } : undefined
   const humanDismiss = human && terminal ? () => {
     if (busy) return
     setBusy(true)
@@ -337,9 +346,10 @@ export function ProcessRow({ process: p, slug, here, lines, watched, caption, on
       .catch((error: unknown) => showToast(error instanceof Error ? error.message : `Could not ${running ? "stop" : "remove"} this terminal`))
       .finally(() => setBusy(false))
   } : undefined
-  const dismiss = humanDismiss ?? agentDismiss
+  const dismiss = humanDismiss ?? endedDismiss ?? agentDismiss
   const dismissTitle = human
     ? terminal?.state === "running" ? "Stop — end this terminal" : "Remove — forget this finished terminal"
+    : p.ended ? `Clear — forget this finished ${noun}`
     : p.state === "running" ? `Stop — end this ${noun}` : `Clear — stop tracking this ${noun}`
   const dismissVerb = human ? (terminal?.state === "running" ? "Stop" : "Remove") : p.state === "running" ? "Stop" : "Clear"
 
@@ -463,12 +473,16 @@ export function ProcessRow({ process: p, slug, here, lines, watched, caption, on
 /** Open a process's drawer over its thread's: the pty for yours, the log for the agent's. */
 export function openProcessDrawer(slug: string, p: ThreadProcess): void {
   if (p.terminal) pushTerminalDrawer(slug, p.terminal.id, { label: p.terminal.command })
-  else if (p.shell?.id) pushBackgroundShellDrawer(slug, p.shell.id, { label: p.label, startedAt: p.startedAt })
+  else {
+    const id = p.shell?.id ?? p.ended?.id
+    if (id) pushBackgroundShellDrawer(slug, id, { label: p.label, startedAt: p.startedAt })
+  }
 }
 
-/** Whether a row has anything to open: every terminal of yours, and every agent shell the board tracks. */
+/** Whether a row has anything to open: every terminal of yours, and every agent shell the board tracks —
+ *  running or finished. */
 export function processOpenable(p: ThreadProcess): boolean {
-  return Boolean(p.terminal || p.shell?.id)
+  return Boolean(p.terminal || p.shell?.id || p.ended)
 }
 
 /**
@@ -476,10 +490,9 @@ export function processOpenable(p: ThreadProcess): boolean {
  * row shape, one label column, one drawer. `surface="drawer"` polls the agent rows' line counters (the
  * page's own project, which a drawer always is); a card's rows carry their age and budget alone.
  *
- * A CARD LISTS ONLY WHAT IS LIVE (cardProcesses). Your finished terminals stay in the drawer's strip until
- * removed, where their exit is worth a line; on a card they only grew it — ten rows and a 959px card at
- * 420px in one verifier's session (2026-09-29), three of them runs long over. The agent's finished shells
- * already left every surface, so on the card the two owners now follow one rule.
+ * A CARD LISTS ONLY WHAT IS LIVE (cardProcesses). Finished terminals — yours and the agent's — stay in the
+ * drawer's strip until removed or cleared, where their exit is worth a line; on a card they only grew it —
+ * ten rows and a 959px card at 420px in one verifier's session (2026-09-29), three of them runs long over.
  */
 export function ThreadProcessStrip({
   thread,
@@ -489,7 +502,7 @@ export function ThreadProcessStrip({
   onOpen,
   className,
 }: {
-  thread: Pick<ThreadView, "id" | "terminals" | "bgShells" | "watches" | "checkout">
+  thread: Pick<ThreadView, "id" | "terminals" | "bgShells" | "watches" | "checkout"> & Partial<Pick<ThreadView, "endedShells">>
   surface: "drawer" | "card"
   /** The transcript's copy of the agent's shells (Codex's live execs, a sub-agent's own shells). */
   transcriptShells?: readonly (BgShellView & TranscriptShellRecord)[]

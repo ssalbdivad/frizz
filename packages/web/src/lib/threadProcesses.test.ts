@@ -30,11 +30,29 @@ test("a prompt leads; the live rows of both owners interleave oldest first; your
   ])
 })
 
-test("a finished agent shell is not listed — it leaves the board, and its drawer resolves from the server", () => {
-  // The board never sends a finished shell; only running and stale ones exist on the wire.
-  const list = threadProcesses({ bgShells: [shell({ id: "a" })] }, [], { now: NOW })
-  assert.deepEqual(list.map((p) => p.key), ["s:a"])
-  assert.equal(list.some((p) => p.owner === "agent" && (p.state === "finished" || p.state === "failed")), false)
+// A FINISHED AGENT TERMINAL STAYS, as a finished one of yours does (2026-09-30: a 10-second shell left the
+// strip before anyone could open it, while a finished terminal of yours sat there with Open). Both owners'
+// finished rows trail the live ones, newest end first; a surface that lists only live work filters them out.
+test("a finished agent terminal stays in the list with your finished ones, newest end first, and never twice", () => {
+  const list = threadProcesses({
+    terminals: [term({ id: "done-mine", state: "exited", exitCode: 0, startedAt: at("01"), exitedAt: at("06") })],
+    bgShells: [shell({ id: "a" })],
+    endedShells: [
+      { id: "e-new", label: "quick build", status: "completed", startedAt: at("07"), finishedAt: at("08") },
+      { id: "e-fail", label: "lint", status: "failed", startedAt: at("02"), finishedAt: at("04") },
+      // Still on the board as live for a frame: the live row is the one listed.
+      { id: "a", label: "vite dev server", status: "completed", finishedAt: at("09") },
+    ],
+  }, [], { now: NOW })
+  assert.deepEqual(list.map((p) => [p.key, p.owner, p.state]), [
+    ["s:a", "agent", "running"],
+    ["s:e-new", "agent", "finished"],
+    ["t:done-mine", "human", "finished"],
+    ["s:e-fail", "agent", "failed"],
+  ])
+  assert.equal(list[1]!.ended?.id, "e-new", "a finished row carries what its drawer is addressed by")
+  // A sub-agent's strip does not list the thread's finished shells either.
+  assert.deepEqual(threadProcesses({ bgShells: [], endedShells: [{ id: "e", label: "x", status: "completed" }] }, [], { now: NOW, scopedToSubAgent: true }), [])
 })
 
 test("a Codex exec's board row and its transcript copy are ONE row, and the copy's folder fills in", () => {

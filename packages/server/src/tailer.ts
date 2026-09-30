@@ -441,9 +441,10 @@ export interface SessionTelemetry extends NormalizedTail {
   // fixture valid — this is an additive observation, not a new required fact about a session.
   droppedReports?: QueuedReport[]
   bgShells: BgShellView[] // live background shells this session launched (empty when none)
-  // Background shells that have FINISHED, newest-wins ring (RETAINED_SHELLS_MAX). Server-internal —
-  // deliberately not on the board's wire, because no surface draws a finished shell; the scheduler's
-  // watcher pass is the only consumer. See retiredShellViews for what it is for.
+  // Background shells that have FINISHED, newest-wins ring (RETAINED_SHELLS_MAX). The scheduler's watcher
+  // pass matches against it (see retiredShellViews), and since 2026-09-30 the board also carries it to the
+  // drawer's TERM strip as ThreadView.endedShells, so a finished agent terminal stays openable the way a
+  // finished terminal of yours does — minus the ones the operator cleared (`dismissed`).
   retiredShells?: RetiredShellView[]
   // Sub-agents that have ENDED, same ring. Off the wire as a whole: interrupt-ended.ts reads it to name a
   // child the interrupt KILLED and never one that simply finished in the same 30s — so the outcome rides
@@ -584,8 +585,9 @@ export interface BackgroundShellLookup {
   monitor?: boolean
 }
 
-/** A background shell that has FINISHED, in the shape the scheduler's watcher pass matches against.
- *  Carries the three handles a watcher target can name and nothing else — this never reaches a client. */
+/** A background shell that has FINISHED: the three handles a watcher target can name (the scheduler's
+ *  watcher pass), plus what the drawer's strip draws for its finished row (board.ts endedShellViews) —
+ *  never its command or log path, which stay behind the drawer's scoped RPC as a live shell's do. */
 export interface RetiredShellView {
   id: string // the launch tool_use id
   taskId?: string // the runtime handle the worker was given
@@ -594,6 +596,15 @@ export interface RetiredShellView {
   /** When its terminal record landed. Absent on an older tail state, which reads as "cannot tell" and
    *  therefore never fires a wake — the safe direction. */
   finishedAt?: string
+  startedAt?: string
+  monitor?: true
+  /** Where it last ran, and that folder's checkout / root reading — BgShellView's own three fields. */
+  cwd?: string
+  checkout?: WorkCheckout
+  atRoot?: true
+  /** The operator cleared it (its row's ×, FoldState.dismissedOps): the strip drops it. A watcher still
+   *  matches it — a clear hides a row, it does not un-finish a shell. */
+  dismissed?: true
 }
 
 export interface RetiredSubAgentView {
@@ -649,6 +660,8 @@ interface RetiredShell {
   promotedAck?: PromotedAck // see SubAgentEntry.promotedAck
   cwd?: string // see SubAgentEntry.cwd — so an open drawer keeps its subtitle after the shell ends
   monitor?: true
+  // When it was launched, so its finished row in the strip sorts and its drawer reads like a live one's.
+  startedAt?: string
   status: "completed" | "failed" | "killed"
   // The handles a fence may NAME this shell by, kept so the board can check a declaration against a
   // shell that has already finished as well as one still running.
@@ -1418,7 +1431,7 @@ function retireLive(state: TailState, entry: SubAgentEntry, finishedAt: string |
   state.subAgents.delete(entry.toolUseId)
   if (entry.kind === "shell") {
     state.retiredShells.delete(entry.toolUseId)
-    state.retiredShells.set(entry.toolUseId, { toolUseId: entry.toolUseId, command: entry.command, outputFile: entry.outputFile, status, taskId: entry.taskId, label: entry.label, finishedAt, ...(entry.cwd ? { cwd: entry.cwd } : {}), ...(entry.monitor ? { monitor: true as const } : {}), ...(entry.promotedAck ? { promotedAck: entry.promotedAck } : {}) })
+    state.retiredShells.set(entry.toolUseId, { toolUseId: entry.toolUseId, command: entry.command, outputFile: entry.outputFile, status, taskId: entry.taskId, label: entry.label, finishedAt, ...(entry.startedAt ? { startedAt: entry.startedAt } : {}), ...(entry.cwd ? { cwd: entry.cwd } : {}), ...(entry.monitor ? { monitor: true as const } : {}), ...(entry.promotedAck ? { promotedAck: entry.promotedAck } : {}) })
     while (state.retiredShells.size > RETAINED_SHELLS_MAX) {
       const oldest = state.retiredShells.keys().next().value
       if (oldest === undefined) break
@@ -3544,7 +3557,18 @@ export function createTailer(deps: TailerDeps): Tailer {
 
   function retiredShellViews(state: TailState): RetiredShellView[] {
     const out: RetiredShellView[] = []
-    for (const r of state.retiredShells.values()) out.push({ id: r.toolUseId, taskId: r.taskId, label: r.label, status: r.status, finishedAt: r.finishedAt })
+    for (const r of state.retiredShells.values()) {
+      // The folder it was last seen in — the OS's last answer while it ran, else where it started — as the
+      // live row read it, so a finished row claims the same place its running row did.
+      const cwd = observedShellCwd(state, r)
+      out.push({
+        id: r.toolUseId, taskId: r.taskId, label: r.label, status: r.status, finishedAt: r.finishedAt,
+        ...(r.startedAt ? { startedAt: r.startedAt } : {}),
+        ...(r.monitor ? { monitor: true as const } : {}),
+        ...(cwd ? { cwd } : {}), ...shellPlace(cwd),
+        ...(state.dismissedOps.has(r.toolUseId) ? { dismissed: true as const } : {}),
+      })
+    }
     return out
   }
 
@@ -3606,11 +3630,13 @@ export function createTailer(deps: TailerDeps): Tailer {
     // so an exec starting or ending changes NOTHING on disk and would otherwise wait for the next
     // reconcile to reach the board.
     const shells = [...bgShellViews(state), ...codexBgShellViews(state)].map((v) => `S:${v.label}|${v.state}|${v.startedAt}|${activityMinute(v.lastActivityAt)}|${v.cwd ?? ""}`).join("")
+    // The finished shells the strip still lists: one ending or being cleared is a board delta too.
+    const ended = [...state.retiredShells.keys()].filter((id) => !state.dismissedOps.has(id)).map((id) => `E:${id}`).join("")
     const ask = state.pendingAsk ? `Q:${state.pendingAsk.id}:${state.pendingAsk.questions.length}` : ""
     // The agent's CHECKOUT, not its raw folder: moving into a worktree pushes exactly one board delta,
     // and a `cd packages/web` — which lifts to the same checkout — pushes none.
     const checkout = `C:${threadWorkingDir(state)?.checkout?.dir ?? ""}`
-    return `${agents}\n${shells}\n${ask}\n${checkout}`
+    return `${agents}\n${shells}\n${ended}\n${ask}\n${checkout}`
   }
 
   // ---- descendant resolution (see the DescendantSidecar note above) ------------------------------
@@ -4365,6 +4391,12 @@ export function createTailer(deps: TailerDeps): Tailer {
     // off it. The × on that row means the same thing it means anywhere else — stop showing me this — so
     // re-stamp it `killed`, the one status that stops anchoring. The row keeps its place in the ring, so
     // its drawer still resolves; the branch leaves every live surface on the next frame.
+    // A FINISHED SHELL's × is Clear: it leaves the strip's finished rows (retiredShellViews `dismissed`),
+    // and its drawer still resolves. Nothing was live, so the answer stays false — but the board moves.
+    if (state.retiredShells.has(id)) {
+      deps.onChange()
+      return false
+    }
     const dead = state.retiredSubAgents.get(id)
     if (!dead || dead.status === "killed") return false
     dead.status = "killed"

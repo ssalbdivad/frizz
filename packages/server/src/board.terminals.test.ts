@@ -4,7 +4,7 @@ import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "nod
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import type { ThreadTerminal, ThreadView } from "@frizz/shared"
-import { createBoard, withThreadTerminals } from "./board.ts"
+import { createBoard, endedShellViews, withThreadTerminals } from "./board.ts"
 import { Bus } from "./bus.ts"
 import { createStorage, type SessionRow } from "./storage.ts"
 import type { Project } from "./project.ts"
@@ -125,4 +125,19 @@ test("the board stamps each terminal's checkout, and carries the agent's own, on
     resetCheckoutMemo()
     rmSync(dir, { recursive: true, force: true })
   }
+})
+
+// A FINISHED AGENT TERMINAL ON THE BOARD: the tailer's retired ring, newest first, minus the ones the operator
+// cleared — the drawer's strip lists them as it lists your finished terminals, and nothing it does not draw
+// (the command, the log path) rides along.
+test("endedShellViews: the retired ring, newest first, without the cleared ones", () => {
+  const ended = endedShellViews([
+    { id: "old", label: "lint", status: "failed", startedAt: at("09:00"), finishedAt: at("09:01"), cwd: "/repo", atRoot: true },
+    { id: "gone", label: "watcher", status: "killed", finishedAt: at("09:02"), dismissed: true },
+    { id: "new", label: "quick build", status: "completed", taskId: "b1", monitor: true, finishedAt: at("09:03"), cwd: "/repo/.frizz/worktrees/p", checkout: { dir: "/repo/.frizz/worktrees/p", kind: "worktree" } },
+  ])
+  assert.deepEqual(ended.map((e) => e.id), ["new", "old"])
+  assert.deepEqual(ended[0], { id: "new", label: "quick build", status: "completed", finishedAt: at("09:03"), taskId: "b1", monitor: true, cwd: "/repo/.frizz/worktrees/p", checkout: { dir: "/repo/.frizz/worktrees/p", kind: "worktree" } })
+  assert.equal(ended[1]!.atRoot, true)
+  assert.deepEqual(endedShellViews(undefined), [])
 })

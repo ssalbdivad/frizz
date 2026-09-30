@@ -289,17 +289,22 @@ function AgentTerminalSheet({ id, slug, shellId, label, startedAt, depth, widthD
   widthDepth: number
 }) {
   const board = useBoard()
-  const row = threadBySlug(board, slug)?.bgShells?.find((shell) => shell.id === shellId)
+  const thread = threadBySlug(board, slug)
+  const row = thread?.bgShells?.find((shell) => shell.id === shellId)
+  // A FINISHED one's row (ThreadView.endedShells) — how it ended, and its name and folder before the first
+  // read answers — for a drawer opened from the strip's finished row or a transcript wake line.
+  const ended = row ? undefined : thread?.endedShells?.find((shell) => shell.id === shellId)
   const { stream, meta, error, refresh } = useShellLog(slug, shellId)
   const now = useNowMs()
   const [stopping, setStopping] = useState(false)
   const [stopped, setStopped] = useState(false)
   const state = meta?.state
   const running = state === "running"
-  const cwd = meta?.cwd ?? row?.cwd
-  const checkout = meta ? meta.checkout : row?.checkout
-  const monitor = meta?.monitor ?? row?.monitor
-  const stateWord = state === "running" ? "running" : state === "done" ? (stopped ? "stopped" : "finished") : state === "gone" ? (stopped ? "stopped" : "unavailable") : undefined
+  const cwd = meta?.cwd ?? row?.cwd ?? ended?.cwd
+  const checkout = meta ? meta.checkout : row?.checkout ?? ended?.checkout
+  const monitor = meta?.monitor ?? row?.monitor ?? ended?.monitor
+  const doneWord = stopped || ended?.status === "killed" ? "stopped" : ended?.status === "failed" ? "failed" : "finished"
+  const stateWord = state === "running" ? "running" : state === "done" ? doneWord : state === "gone" ? (stopped ? "stopped" : "unavailable") : undefined
   const noun = monitor ? "Agent monitor" : "Agent terminal"
 
   // STOP FROM THE DRAWER — where a wedged watcher is actually diagnosed: you only know a shell is stuck
@@ -350,7 +355,7 @@ function AgentTerminalSheet({ id, slug, shellId, label, startedAt, depth, widthD
           {/* A size container, so the header's secondary actions fold to glyphs when the drawer is narrow. */}
           <div className="@container shrink-0">
             <SheetHeader
-              title={row?.label ?? label ?? noun}
+              title={row?.label ?? ended?.label ?? label ?? noun}
               // A Codex exec with no description is labelled by its command, and its row sets it in mono.
               titleMono={row?.command !== undefined && row.command === row.label}
               subtitle={cwd ? <TerminalSubtitle cwd={cwd} checkout={checkout} homeDir={board?.homeDir} /> : undefined}
@@ -363,6 +368,7 @@ function AgentTerminalSheet({ id, slug, shellId, label, startedAt, depth, widthD
                   age={running ? liveAgeSince(startedAt ?? row?.startedAt, now) : undefined}
                   budget={running ? shellBudgetLabel(row?.budgetEndsAt, now) : undefined}
                   stopShown={running && meta?.stoppable === true}
+                  tone={stateWord === "failed" ? "danger" : undefined}
                   attr={{ "data-agent-terminal-state": state }}
                 />
               ) : undefined}

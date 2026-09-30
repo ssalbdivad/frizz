@@ -54,6 +54,30 @@ test("every row has exactly one TERM tag and nothing extra before its label — 
   }
 })
 
+// A FINISHED AGENT TERMINAL'S ROW reads like a finished one of yours: muted mark, how it ended, no age, and an
+// × that CLEARS it (Remove on yours); its drawer opens as a live one's does, from the retired ring.
+test("a finished agent terminal's row says how it ended, opens its drawer, and clears with its ×", () => {
+  const [ok, failed, stopped] = threadProcesses({ bgShells: [], endedShells: [
+    { id: "e-ok", label: "quick build", status: "completed", startedAt: at("01"), finishedAt: at("09"), cwd: "/repo", atRoot: true },
+    { id: "e-fail", label: "lint", status: "failed", startedAt: at("01"), finishedAt: at("08") },
+    { id: "e-stop", label: "watcher", status: "killed", startedAt: at("01"), finishedAt: at("07"), monitor: true },
+  ] }, [], { now: NOW })
+  const html = row(ok!, { onOpen: () => {} })
+  assert.match(html, /data-process-state="finished"/)
+  assert.match(html, /data-process-state-text="true">finished</)
+  assert.match(html, /aria-label="Open agent terminal: quick build"/)
+  assert.match(html, /title="Clear — forget this finished agent terminal" aria-label="Clear agent terminal: quick build"/)
+  assert.doesNotMatch(html, /Running for|data-running-indicator/, "no age and no liveness once it has ended")
+  assert.match(processTitle(ok!, "/home/u"), /^Agent terminal — quick build\nRan in \/repo$/)
+  assert.match(row(failed!), /data-process-state-text="true" class="text-\[color:var\(--gh-fg-danger\)\]">failed</)
+  assert.match(row(stopped!), /data-process-state-text="true">stopped</)
+  assert.match(row(stopped!), /Clear agent monitor: watcher/)
+  // The drawer's strip lists it; a card lists only what is live.
+  const thread = { id: "t", watches: [], terminals: [], bgShells: [], endedShells: [{ id: "e-ok", label: "quick build", status: "completed" as const }] } as unknown as ThreadView
+  assert.match(withQuery(createElement(ThreadProcessStrip, { thread, surface: "drawer" })), /data-process-row="s:e-ok"/)
+  assert.equal(withQuery(createElement(ThreadProcessStrip, { thread, surface: "card" })), "")
+})
+
 test("a Codex exec whose label IS its command is set as a command, in mono, like yours", () => {
   const [codex] = processes({ bgShells: [shell({ id: "p1", label: "cargo watch -x test", command: "cargo watch -x test", outputUnavailable: true })] })
   assert.match(row(codex!), /<span data-process-label="true" class="min-w-0 truncate text-muted-70"><span class="font-mono-keep text-\[11px\] leading-none">cargo watch -x test<\/span><\/span>/)

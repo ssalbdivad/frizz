@@ -5,7 +5,7 @@ import { useVirtualizer } from "@tanstack/react-virtual"
 import { AlertTriangle, ArrowDown, ArrowUp, Bot, Check, ChevronRight, FileText, HelpCircle, Hourglass, KeyRound, Loader2, TerminalSquare, X } from "lucide-react"
 import { parseRecurringPrompt, parseSpinoffRequest, questionFencesLive } from "@frizz/shared"
 import type { AskQuestion, AwaitingHint, BgShellView, PendingAsk, RegisteredQuestionView, SubAgentView, ThreadView as ThreadViewData, TranscriptEdit, TranscriptMessage, TranscriptPart, TranscriptTodo, TranscriptToolCall } from "@frizz/shared"
-import { store, threadBySlug, pushDrawer, pushSubAgentDrawer, showToast } from "../store.ts"
+import { store, threadBySlug, pushDrawer, pushSubAgentDrawer, pushBackgroundShellDrawer, showToast } from "../store.ts"
 import { useBoard, useProjectDir, useTranscript, type ChatMessage, type TranscriptData } from "../hooks.ts"
 import { rpc } from "../api/rpc.ts"
 import { UNNAMED_SUB_AGENT_LABEL, lastActiveLabelAt, subAgentName } from "../groups.ts"
@@ -28,7 +28,7 @@ import { ProviderErrorCard, providerErrorVisible } from "./ProviderErrorCard.tsx
 import { answersForDisplay, parseAnswersCard, pairAllAnswers, settledAnswerKeys, unrenderedAnswers, withoutSettledAnswers, type PairedAnswer } from "../lib/answersMessage.ts"
 import { fenceStandsFor, registeredStandingAt, questionStacks } from "../lib/questionShadow.ts"
 import { settledQuestionPositions } from "../lib/settledQuestions.ts"
-import { FrizzWake } from "./FrizzWake.tsx"
+import { FrizzWake, ShellWakeText } from "./FrizzWake.tsx"
 import { RecurringPromptLine } from "./RecurringPromptLine.tsx"
 import { LinkifiedText } from "./LinkifiedText.tsx"
 import { parseSentContext, splitProseByTokens, tokenLabel, type SentContextItem } from "../lib/composerContext.ts"
@@ -3293,7 +3293,7 @@ export const Message = memo(function Message({ m, answering, dense, paired, show
   // An event line (a sub-agent completion) is transcript PUNCTUATION — a quiet full-width line, not a
   // bubble or a tool band. Rendered before the role branches (its role field is nominal).
   if (m.providerError) return <ProviderErrorCard error={m.providerError} />
-  if (m.kind === "event") return <EventLine text={m.text} boundary={m.boundary} sourceId={m.sourceId} at={m.at} />
+  if (m.kind === "event") return <EventLine text={m.text} boundary={m.boundary} wakeShellId={m.wakeShellId} sourceId={m.sourceId} at={m.at} />
   // A model-reasoning summary (Codex) — quiet punctuation like an event line, but CLICKABLE to expand
   // the full reasoning. Rendered before the role branches (its role field is nominal, like an event).
   if (m.kind === "reasoning") return <ReasoningBlock text={m.text} sourceId={m.sourceId} />
@@ -4463,7 +4463,14 @@ function SendMessageLine({ to, type, dispatchId, targetLabel, sourceId, at }: { 
 // A quiet transcript annotation (a context-compaction note, an "Agent … finished" line), or — with
 // `boundary` — the wake divider a background task/shell completion emits. Muted, no bubble, no icon
 // chrome, sitting at the same message rhythm as everything around it.
-function EventLine({ text, boundary, sourceId, at }: { text: string; boundary?: TranscriptMessage["boundary"]; sourceId?: string; at?: string }) {
+function EventLine({ text, boundary, wakeShellId, sourceId, at }: { text: string; boundary?: TranscriptMessage["boundary"]; wakeShellId?: string; sourceId?: string; at?: string }) {
+  // AN AGENT TERMINAL'S WAKE LINE OPENS THAT TERMINAL (`wakeShellId`, its launch id), as its strip row does —
+  // finished or not, its drawer reads the log from the server's retired ring. Only on the thread's own
+  // transcript: a sub-agent drawer's shells are that child's, which the thread's tail does not hold.
+  const threadSlug = useContext(ThreadSlugContext)
+  const openShell = boundary === "wake" && wakeShellId && threadSlug
+    ? () => pushBackgroundShellDrawer(threadSlug, wakeShellId, { label: /«(.*)»/.exec(text)?.[1] ?? "Agent terminal" })
+    : undefined
   // A turn BOUNDARY: a centered divider rule carrying the cause label ON it, so two consecutive
   // assistant turns don't read as one bubble. This IS the section break the plain event line
   // deliberately avoids.
@@ -4484,7 +4491,7 @@ function EventLine({ text, boundary, sourceId, at }: { text: string; boundary?: 
         icon={boundary === "wake" ? TerminalSquare : undefined}
         sourceId={sourceId}
         marker={boundary === "rest" ? "rest" : "event"}
-        ariaLabel={text}
+        ariaLabel={openShell ? undefined : text}
         // The rest divider takes the age too, glyph-less as it is: the rests that survive
         // lib/restDividers.ts sit above a human reply, and "how long did it sit there before they
         // answered" is the one thing the bare rule could not say.
@@ -4494,7 +4501,7 @@ function EventLine({ text, boundary, sourceId, at }: { text: string; boundary?: 
             once the age joined it the runtime-reported shell line broke onto two lines at 420px while
             the frizz-reported twin beside it (ShellDoneDivider) clipped to one — the pair that must be
             pixel-identical. The age stays outside this span so it survives the clip. */}
-        <span className="min-w-0 truncate">{text}</span>
+        <ShellWakeText text={text} onOpen={openShell} />
       </WakeDivider>
     )
   }

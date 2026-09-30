@@ -739,7 +739,8 @@ test("applyRecord: a shell leaves the live view on completion and retains bounde
   // last word to decide whether the runtime already reported this shell (mid-turn) or nobody did (at
   // rest). `taskId` is undefined because this fixture retires the shell without a launch ack; the ack
   // path is covered by the auto-background case below, which asserts the id is captured.
-  assert.deepEqual(s.retiredShells.get("toolu_sh"), { toolUseId: "toolu_sh", command: "gh run watch", outputFile: undefined, status: "completed", label: "Watch CI", taskId: undefined, finishedAt: "2026-07-01T00:00:09.000Z" })
+  // `startedAt` is here for the drawer's strip, which lists a finished shell as a finished terminal (endedShells).
+  assert.deepEqual(s.retiredShells.get("toolu_sh"), { toolUseId: "toolu_sh", command: "gh run watch", outputFile: undefined, status: "completed", label: "Watch CI", taskId: undefined, finishedAt: "2026-07-01T00:00:09.000Z", startedAt: "2026-07-01T00:00:01.000Z" })
 })
 
 // The pairing that matters for the watcher: a shell retired AFTER its launch ack keeps the runtime
@@ -1296,6 +1297,37 @@ test("tailer: dismissOp retires a live sub-agent AND a live shell by id, immedia
   assert.equal(t.dismissOp?.("t", "toolu_sh"), true, "dismissing the live shell reports success")
   assert.deepEqual(t.get("t")?.bgShells, [], "the shell leaves the live view too")
   assert.equal(t.dismissOp?.("t", "toolu_ag"), false, "a second dismiss of an already-retired op is a no-op")
+})
+
+// A FINISHED AGENT TERMINAL STAYS OPENABLE (2026-09-30): the retired ring rides the telemetry with what the
+// drawer's strip draws for its row — when it started, where it ran — and the row's × (Clear) marks it
+// `dismissed` so the board drops it, while the ring keeps it for its drawer and for a watcher.
+test("tailer: a finished shell rides the telemetry with its start and place, and its × clears it from the strip", () => {
+  const h = harness()
+  h.storage.upsertSession(row())
+  fixture(h.logDir, "sid", [
+    IN_FLIGHT,
+    JSON.stringify(bashBg("toolu_sh", "quick build", "sleep 1")),
+    JSON.stringify(taskNotification("toolu_sh", "completed")),
+  ])
+  const t = createTailer({
+    project: { cwdSlug: "x" } as Project,
+    storage: h.storage, bus: h.bus, onChange: () => h.changes.n++,
+    now: () => h.clock.ms, paneDead: () => h.dead.v,
+    sessionLogDir: h.logDir, mtimeMs: () => Date.parse("2026-07-01T00:00:02.000Z"),
+  })
+  h.clock.ms = Date.parse("2026-07-01T00:01:00.000Z")
+  t.tick()
+  const [ended] = t.get("t")?.retiredShells ?? []
+  assert.equal(ended?.id, "toolu_sh")
+  assert.equal(ended?.status, "completed")
+  assert.ok(ended?.startedAt, "its start, so the strip can sort and the drawer can read it")
+  assert.equal(ended?.dismissed, undefined)
+  const before = h.changes.n
+  assert.equal(t.dismissOp?.("t", "toolu_sh"), false, "nothing live was retired")
+  assert.ok(h.changes.n > before, "but the board moves at once")
+  assert.equal(t.get("t")?.retiredShells?.[0]?.dismissed, true, "cleared: the strip drops it")
+  assert.equal(t.backgroundShell?.("t", "toolu_sh")?.state, "done", "its drawer still resolves")
 })
 
 test("tailer: a shell whose task id has not arrived yet is NOT marked stoppable", () => {

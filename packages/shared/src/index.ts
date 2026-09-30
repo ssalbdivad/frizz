@@ -436,6 +436,25 @@ export const BgShellView = z.object({
 })
 export type BgShellView = z.infer<typeof BgShellView>
 
+// A background shell that has FINISHED, still listed in the drawer's TERM strip the way a finished terminal
+// of yours is: openable (its drawer reads its log from the server's retired ring), cleared with its ×.
+// Bounded by that ring (the tailer keeps the newest 20 per thread), newest first. Until 2026-09-30 a
+// finished agent terminal left every surface the moment it ended, so a 10-second shell could not be opened
+// from anywhere — while a finished terminal of yours stayed in the strip with its exit code.
+export const EndedShellView = z.object({
+  id: z.string(), // the launch tool_use id, as BgShellView.id — what its drawer is addressed by
+  label: z.string(),
+  status: z.enum(["completed", "failed", "killed"]),
+  startedAt: z.string().optional(),
+  finishedAt: z.string().optional(),
+  taskId: z.string().optional(), // see BgShellView.taskId — what a frizz-relayed completion names it by
+  monitor: z.boolean().optional(),
+  cwd: z.string().optional(),
+  checkout: WorkCheckout.optional(),
+  atRoot: z.literal(true).optional(),
+})
+export type EndedShellView = z.infer<typeof EndedShellView>
+
 // ONE AGENT TERMINAL'S LOG — the drawer's read of a background shell (server router backgroundShellOutput).
 //
 // Only `slug` and `id` name what is read: the path is the one the harness's own ack named, looked up in
@@ -3165,6 +3184,8 @@ export const ThreadView = z.object({
   // Live background SHELLS the worker launched (tailer-derived). Same default-[] discipline. Rendered
   // in the anchored background-ops strip alongside sub-agents; ids make current rows drillable.
   bgShells: z.array(BgShellView).default([]),
+  // FINISHED agent terminals the strip still lists (EndedShellView). Optional for an older server.
+  endedShells: z.array(EndedShellView).optional(),
   // WHERE THE AGENT IS WORKING, when that is not the project root: the newest folder its own transcript
   // names (a Claude record's `cwd`, a Codex tool call's `workdir`), lifted to its checkout. It flips the
   // moment an agent moves into a worktree, and it is where a terminal opened on the thread starts. Absent
@@ -5787,6 +5808,10 @@ export const TranscriptMessage = z.object({
   // surviving `if (boundary)` reads exactly as it did — including on a client that predates `rest`,
   // which draws it as an iconless divider rather than dropping it.
   boundary: z.enum(["wake", "compaction", "rest"]).optional(),
+  // On a `wake` line for an agent terminal's completion ("Agent terminal «…» finished"): that terminal's
+  // launch tool_use id, so the line opens its drawer as the strip's row does. Absent for a completion the
+  // server could not tie to its launch.
+  wakeShellId: z.string().optional(),
   // Block-ordered content for an assistant turn (see TranscriptPart). Defaults to [] so a pre-restart
   // server (which ships only text/tools) parses; the client renders `parts` when non-empty and falls
   // back to the legacy tools-then-text layout when it's empty. `text`/`tools` stay populated for that

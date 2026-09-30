@@ -353,6 +353,27 @@ function stampStoppable(agents: ThreadView["subAgents"], row: SessionRow): Threa
 //   codex app-server → `thread/backgroundTerminals/terminate`       (backend/_live_codex_bgterm.mts)
 // so the predicate is "headless", not "broker Claude" — and a codex row's shells, which only exist at
 // all because the app-server stream reported them, are never stripped here.
+/** The FINISHED agent terminals the drawer's strip lists (ThreadView.endedShells): the tailer's retired
+ *  ring, newest first, minus the ones the operator cleared. Only the fields a row and its drawer read. */
+export function endedShellViews(retired: SessionTelemetry["retiredShells"]): NonNullable<ThreadView["endedShells"]> {
+  const out: NonNullable<ThreadView["endedShells"]> = []
+  for (const r of retired ?? []) {
+    if (r.dismissed) continue
+    out.push({
+      id: r.id, label: r.label, status: r.status,
+      ...(r.startedAt ? { startedAt: r.startedAt } : {}),
+      ...(r.finishedAt ? { finishedAt: r.finishedAt } : {}),
+      ...(r.taskId ? { taskId: r.taskId } : {}),
+      ...(r.monitor ? { monitor: true } : {}),
+      ...(r.cwd ? { cwd: r.cwd } : {}),
+      ...(r.checkout ? { checkout: r.checkout } : {}),
+      ...(r.atRoot ? { atRoot: true as const } : {}),
+    })
+  }
+  // The ring is insertion-ordered, oldest first.
+  return out.reverse()
+}
+
 function stampStoppableShells(shells: ThreadView["bgShells"], row: SessionRow): ThreadView["bgShells"] {
   if (isHeadlessRow(row)) return shells
   return shells.map((shell) => (shell.stoppable ? { ...shell, stoppable: false } : shell))
@@ -1886,6 +1907,7 @@ function sessionThreadView(
     lastAssistantAt: tele?.lastAssistantAt,
     subAgents: stampStoppable(tele?.subAgents ?? [], row),
     bgShells: stampShellBudgets(stampStoppableShells(tele?.bgShells ?? [], row), registries.shellBudgets.get(row.slug), registries.watches.get(row.slug)),
+    endedShells: endedShellViews(tele?.retiredShells),
     // Where the agent is working when that is off the project root (tailer workingDirTelemetry) — the
     // header's and the card's quiet checkout token. Each shell above already carries its own.
     ...(tele?.checkout ? { checkout: tele.checkout } : {}),

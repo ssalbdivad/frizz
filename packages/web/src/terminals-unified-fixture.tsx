@@ -1,6 +1,6 @@
 import { createRoot } from "react-dom/client"
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query"
-import type { BgShellView, ThreadTerminal, ThreadView } from "@frizz/shared"
+import type { BgShellView, EndedShellView, ThreadTerminal, ThreadView } from "@frizz/shared"
 import { FolderHintToken, ProcessRow, ThreadProcessStrip, ThreadTerminalMark, folderHintTitle, processFolderHint } from "./components/ThreadTerminals.tsx"
 import { BgShellRow, TermWaitRow, WaitGrid } from "./components/AwaitingBackgroundCard.tsx"
 import { RAIL_WIDTH } from "./components/FocusRail.tsx"
@@ -82,7 +82,12 @@ const bgShells: BgShellView[] = [
   // A Codex exec whose item named no folder: no place claimed.
   { id: "s-codex", label: "cargo watch -x test", command: "cargo watch -x test", startedAt: ago(3), state: "running", stoppable: true, outputUnavailable: true },
 ]
-const thread = { id: "fixture", terminals, bgShells, watches: [], ...(here ? { checkout: here } : {}) } as Pick<ThreadView, "id" | "terminals" | "bgShells" | "watches" | "checkout">
+// Finished agent terminals, listed as your finished ones are (the drawer's strip only — a card lists what is live).
+const endedShells: EndedShellView[] = [
+  { id: "e-quick", label: "Quick build at the root", status: "completed", startedAt: ago(8), finishedAt: ago(7), cwd: ROOT, atRoot: true },
+  { id: "e-lint", label: "Lint the probe worktree", status: "failed", startedAt: ago(15), finishedAt: ago(14), cwd: WT.dir, checkout: WT },
+]
+const thread = { id: "fixture", terminals, bgShells, endedShells, watches: [], ...(here ? { checkout: here } : {}) } as Pick<ThreadView, "id" | "terminals" | "bgShells" | "endedShells" | "watches" | "checkout">
 
 createRoot(document.getElementById("root")!).render(
   <QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}>

@@ -704,6 +704,8 @@ test("a background shell completion emits a labeled turn-boundary event that bre
   assert.equal(boundary.kind, "event")
   assert.equal(boundary.boundary, "wake") // a background shell returning — the kind is what puts the terminal glyph on the divider
   assert.equal(boundary.text, "Agent terminal «Start vite from web package dir» exited 143")
+  // …naming the terminal it is about by its launch id, so the line opens that terminal's drawer.
+  assert.equal(boundary.wakeShellId, "bash-bg")
   // …and the post-wake turn is its OWN message (the merge chain was broken), not merged into the launch.
   assert.equal(msgs.length, 3)
   assert.equal(msgs[2].text, "That's the vite server I just killed.")
@@ -718,6 +720,7 @@ test("boundary wake label reads 'finished' on a clean exit and 'stopped' when ki
   })
   const done = parseTranscript([launch("s1"), taskNotification("s1", "completed", "2026-07-01T00:00:02.000Z")].join("\n"))[1]
   assert.match(done.text, /» finished$/)
+  assert.equal(done.wakeShellId, "s1", "the line names the terminal it opens")
   assert.equal(done.text, "Agent terminal «sleep 1» finished") // desc falls back to the command summary
   const killed = parseTranscript([launch("s2"), taskNotification("s2", "killed", "2026-07-01T00:00:02.000Z")].join("\n"))[1]
   assert.match(killed.text, /» stopped$/)

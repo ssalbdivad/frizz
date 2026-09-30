@@ -2239,7 +2239,7 @@ function completionEvents(
           const drawn = consumedShells.get(id)
           if (drawn && restEpoch.n > drawn.epoch) {
             consumedShells.set(id, { epoch: restEpoch.n, call: drawn.call })
-            out.push({ role: "assistant", kind: "event", boundary: "wake", text: backgroundWakeLabel(drawn.call, status, block), tools: [], parts: [], at })
+            out.push({ role: "assistant", kind: "event", boundary: "wake", text: backgroundWakeLabel(drawn.call, status, block), wakeShellId: id, tools: [], parts: [], at })
             continue
           }
           relayedFallback()
@@ -2255,7 +2255,8 @@ function completionEvents(
         // paint as one bubble. Emit a `boundary` event line at the wake point so the timeline shows a
         // divider carrying the cause ("Agent terminal «…» exited N"). The caller resets lastAssistantId,
         // so this also breaks the assistant-record merge chain across the wake.
-        out.push({ role: "assistant", kind: "event", boundary: "wake", text: backgroundWakeLabel(shell.call, status, block), tools: [], parts: [], at })
+        // `wakeShellId`: the line opens this terminal's drawer, as its row in the strip does.
+        out.push({ role: "assistant", kind: "event", boundary: "wake", text: backgroundWakeLabel(shell.call, status, block), wakeShellId: id, tools: [], parts: [], at })
         continue
       }
       dispatches.delete(id)

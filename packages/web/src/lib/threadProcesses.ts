@@ -1,4 +1,4 @@
-import type { BgShellView, ThreadTerminal, ThreadView, WorkCheckout } from "@frizz/shared"
+import type { BgShellView, EndedShellView, ThreadTerminal, ThreadView, WorkCheckout } from "@frizz/shared"
 import { mergeBackgroundShells, visibleChildOps, type TranscriptShellRecord } from "./childOps.ts"
 import { shellBudgetReading } from "./shellBudget.ts"
 import { terminalFailed, terminalLive } from "./threadTerminals.ts"
@@ -40,6 +40,8 @@ export interface ThreadProcess {
   outputUnavailable?: boolean
   terminal?: ThreadTerminal
   shell?: BgShellView & TranscriptShellRecord
+  /** A FINISHED agent terminal's row (ThreadView.endedShells): its drawer reads the retired log. */
+  ended?: EndedShellView
 }
 
 type AgentShell = BgShellView & TranscriptShellRecord
@@ -64,6 +66,28 @@ function agentProcess(shell: AgentShell, now: number): ThreadProcess {
     ...(shell.outputUnavailable ? { outputUnavailable: true } : {}),
     shell,
   }
+}
+
+// A FINISHED agent terminal, listed as a finished terminal of yours is — `failed` when it failed on its
+// own, `finished` when it completed or was stopped (its row's state word tells those two apart).
+function endedProcess(shell: EndedShellView): ThreadProcess {
+  return {
+    key: `s:${shell.id}`,
+    owner: "agent",
+    label: shell.label,
+    state: shell.status === "failed" ? "failed" : "finished",
+    ...(shell.startedAt ? { startedAt: shell.startedAt } : {}),
+    ...(shell.cwd ? { cwd: shell.cwd } : {}),
+    ...(shell.checkout ? { checkout: shell.checkout } : {}),
+    placed: Boolean(shell.checkout || shell.atRoot),
+    ...(shell.monitor ? { monitor: true } : {}),
+    ended: shell,
+  }
+}
+
+/** A finished agent terminal's state word, in your terminal's vocabulary (lib/threadTerminals.ts). */
+export function endedShellStateLabel(shell: Pick<EndedShellView, "status">): string {
+  return shell.status === "failed" ? "failed" : shell.status === "killed" ? "stopped" : "finished"
 }
 
 function humanState(terminal: ThreadTerminal): ProcessState {
@@ -97,13 +121,16 @@ const time = (iso: string | undefined) => {
  * The thread's processes in the order every surface lists them:
  *   1. a terminal of yours waiting at a prompt — the reason a card is in the queue;
  *   2. everything running or quiet, BOTH owners mixed, oldest first — one list, not two;
- *   3. your finished terminals, newest first, until removed (their exit is why you opened them).
- * A finished AGENT shell leaves the list, as it always has; its drawer still resolves from the server's
- * retired ring. `scopedToSubAgent` is a sub-agent drawer's strip: only that child's own transcript shells,
- * and none of yours — nobody opens a terminal on a sub-agent.
+ *   3. every finished terminal, BOTH owners, newest end first, until cleared — its exit is why you open it.
+ * A finished AGENT terminal left the list the moment it ended until 2026-09-30, so a 10-second shell could
+ * not be opened from anywhere while a finished one of yours sat here with Open. It now stays as yours do,
+ * bounded by the server's retired ring (ThreadView.endedShells). A surface that lists only live work (the
+ * queue card, the rail, the sidebar mark) filters with processIsLive, as it always did for yours.
+ * `scopedToSubAgent` is a sub-agent drawer's strip: only that child's own transcript shells, and none of
+ * yours — nobody opens a terminal on a sub-agent.
  */
 export function threadProcesses(
-  thread: Pick<ThreadView, "terminals" | "bgShells">,
+  thread: Pick<ThreadView, "terminals" | "bgShells"> & Partial<Pick<ThreadView, "endedShells">>,
   transcriptShells: readonly AgentShell[],
   opts: { scopedToSubAgent?: boolean; now: number },
 ): ThreadProcess[] {
@@ -116,9 +143,12 @@ export function threadProcesses(
     .map((p, i) => ({ p, i }))
     .sort((a, b) => time(a.p.startedAt) - time(b.p.startedAt) || a.i - b.i)
     .map(({ p }) => p)
-  const ended = (p: ThreadProcess) => time(p.terminal?.exitedAt ?? p.startedAt)
-  const finished = humans
-    .filter((p) => p.state === "finished" || p.state === "failed")
+  // A finished agent row whose shell is still on the board as live (the two arrive a frame apart) is the
+  // live row's; it never lists twice.
+  const liveKeys = new Set(agents.map((p) => p.key))
+  const endedAgents = opts.scopedToSubAgent ? [] : (thread.endedShells ?? []).map(endedProcess).filter((p) => !liveKeys.has(p.key))
+  const ended = (p: ThreadProcess) => time(p.terminal?.exitedAt ?? p.ended?.finishedAt ?? p.startedAt)
+  const finished = [...humans.filter((p) => p.state === "finished" || p.state === "failed"), ...endedAgents]
     .map((p, i) => ({ p, i }))
     .sort((a, b) => ended(b.p) - ended(a.p) || a.i - b.i)
     .map(({ p }) => p)

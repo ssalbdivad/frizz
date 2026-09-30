@@ -28,12 +28,15 @@
 // and a right-pinned ref; a p-4 inset wrapped around a SINGLE 20px line, when every other card in that
 // shell has a body; and three marks on one row that all looked clickable (an underlined title, an
 // accent ref, the corner glyph) with no hierarchy between them.
-import { useId, useState } from "react"
+import { useContext, useId, useState } from "react"
 import { AlarmClock, Bell, Github, Hourglass, MessageCircleOff, TerminalSquare } from "lucide-react"
 import { isGithubWakeBacklog, parseGithubWakeSteer, parseLimitModelSwitchWake, parseLimitResumeWake, parseParkWake, parsePrWatchExpiredWake, parsePrWatchStateWake, parsePrWatchWake, parseQuestionsCancelledWake, parseShellDoneWake, parseTimerWake, stripWakeTrailer, type GithubWakeSteer, type LimitWindow, type ParkWake, type PrWatchStateWake, type PrWatchWake, type ShellDoneWake, type TimerWake } from "@frizz/shared"
 import { QUEUE_WRAP, TranscriptCard } from "./TranscriptCard.tsx"
 import { VSpace } from "./rhythm.tsx"
 import { WakeDivider } from "./WakeDivider.tsx"
+import { ThreadSlugContext } from "./threadSlugContext.ts"
+import { useBoard } from "../hooks.ts"
+import { pushBackgroundShellDrawer, threadBySlug } from "../store.ts"
 import { githubRefUrl } from "../lib/githubRef.ts"
 import { wakeCardTitle } from "../lib/githubWakeCard.ts"
 import { useMarkdownHtml } from "../lib/useMarkdown.ts"
@@ -352,10 +355,42 @@ function ShellDoneDivider({ wake, sourceId, at }: { wake: ShellDoneWake; sourceI
   // The runtime's own divider names a shell by the strip's noun (server transcript.ts shellWakeNoun), and so does
   // this one. The delivery does not say whether it was a Monitor, so it takes the common noun.
   const label = `Agent terminal «${desc}» ${wake.outcome}`
+  // THE TASK ID IS THE HANDLE BACK TO IT: the thread's shells (finished ones included — the strip's
+  // endedShells) name the same id, so this line opens that terminal's drawer as the runtime's twin does.
+  const slug = useContext(ThreadSlugContext)
+  const board = useBoard()
+  const thread = slug && wake.taskId ? threadBySlug(board, slug) : undefined
+  const shell = thread ? [...(thread.endedShells ?? []), ...(thread.bgShells ?? [])].find((s) => s.taskId === wake.taskId && s.id) : undefined
+  const open = slug && shell?.id ? () => pushBackgroundShellDrawer(slug, shell.id!, { label: shell.label, ...(shell.startedAt ? { startedAt: shell.startedAt } : {}) }) : undefined
   return (
-    <WakeDivider icon={TerminalSquare} sourceId={sourceId} marker="event" ariaLabel={label} at={at}>
-      <span className="min-w-0 truncate">{label}</span>
+    <WakeDivider icon={TerminalSquare} sourceId={sourceId} marker="event" ariaLabel={open ? undefined : label} at={at}>
+      <ShellWakeText text={label} onOpen={open} />
     </WakeDivider>
+  )
+}
+
+/** An agent terminal's wake line — `Agent terminal «…» finished` — with its «name» the link that opens the
+ *  terminal's drawer, as the sub-agent completion line's name opens the child's. Only the name truncates,
+ *  so the outcome survives a narrow pane. Plain text when there is nothing to open. */
+export function ShellWakeText({ text, onOpen }: { text: string; onOpen?: () => void }) {
+  const parts = /^(.*?«)(.*)(».*)$/.exec(text)
+  if (!onOpen || !parts) return <span className="min-w-0 truncate">{text}</span>
+  return (
+    <span className="flex min-w-0 items-center">
+      <span className="shrink-0 whitespace-pre">{parts[1]}</span>
+      <button
+        type="button"
+        data-shell-wake-open
+        onClick={onOpen}
+        onMouseDown={(e) => e.preventDefault()}
+        title="Open agent terminal"
+        aria-label={`Open agent terminal: ${parts[2]}`}
+        className={`min-w-0 truncate ${DIVIDER_LINK}`}
+      >
+        {parts[2]}
+      </button>
+      <span className="shrink-0 whitespace-pre">{parts[3]}</span>
+    </span>
   )
 }
 
