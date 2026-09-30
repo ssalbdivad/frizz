@@ -1782,7 +1782,7 @@ export function parseTimerWake(text: string): TimerWake | null {
  *  dispatch prefixes them (spinOffChildPrompt) — so a paraphrase here cannot lose them. */
 export function spinOffRequestMessage(input: { id: string; instructions: string; excerpt: string }): string {
   return [
-    `<frizz-spin-off id="${input.id}">`,
+    `<spin-off-request id="${input.id}">`,
     "The human selected one message in this conversation and asked for a NEW thread spun off from it.",
     "",
     "Their instructions for the new thread:",
@@ -1799,11 +1799,11 @@ export function spinOffRequestMessage(input: { id: string; instructions: string;
     "1. Gather what the new thread needs to start cold — the relevant facts, decisions, file paths, commands, errors and open questions from this conversation, and whatever in the code is worth pointing at. Brief it; do not do its work.",
     `2. Call \`mcp__frizz__spawn_thread\` with \`spinoff: "${input.id}"\`, a self-contained \`prompt\` (the new thread sees none of this conversation; frizz adds the human's instructions and a link back here itself), and a \`model\` and \`effort\` fit for the task. This is the human's explicit request, so the tool's last-resort caution does not apply.`,
     "3. Say in one line which thread you started (the link the tool returns), then carry on with whatever you were doing before this message. Do not wait on the new thread.",
-    "</frizz-spin-off>",
+    "</spin-off-request>",
   ].join("\n")
 }
 
-const SPIN_OFF_REQUEST = /^<frizz-spin-off id="(spn_[0-9a-f]{16})">\n[\s\S]*?\n<instructions>\n([\s\S]*?)\n<\/instructions>\n[\s\S]*?\n<selected-message>\n([\s\S]*?)\n<\/selected-message>\n[\s\S]*\n<\/frizz-spin-off>/
+const SPIN_OFF_REQUEST = /^<spin-off-request id="(spn_[0-9a-f]{16})">\n[\s\S]*?\n<instructions>\n([\s\S]*?)\n<\/instructions>\n[\s\S]*?\n<selected-message>\n([\s\S]*?)\n<\/selected-message>\n[\s\S]*\n<\/spin-off-request>/
 
 /** The spin-off request inside a delivered user turn, or null. Anchored at the START so a human who
  *  pastes the envelope mid-message is still just talking. */

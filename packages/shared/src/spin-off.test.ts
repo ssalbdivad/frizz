@@ -2,7 +2,7 @@
 // the server formats it, the transcript projection parses it — so the two are pinned together here.
 import { test } from "node:test"
 import assert from "node:assert/strict"
-import { DispatchInput, SPIN_OFF_ID_RE, SpinOffInput, parseSpinOffRequest, spinOffChildPrompt, spinOffRequestMessage } from "./index.ts"
+import { DispatchInput, isInjectedNoise, SPIN_OFF_ID_RE, SpinOffInput, parseSpinOffRequest, spinOffChildPrompt, spinOffRequestMessage } from "./index.ts"
 
 const id = "spn_0123456789abcdef"
 
@@ -11,6 +11,9 @@ test("a spin-off request round-trips through the chat's parser, multi-line text 
   const excerpt = "The cache keys on the raw id.\n\n```ts\nconst k = id\n```"
   const message = spinOffRequestMessage({ id, instructions, excerpt })
   assert.deepEqual(parseSpinOffRequest(message), { id, instructions, excerpt })
+  // The transcript drops "plumbing" by prefix; the request is the human's and must survive that filter
+  // (a `<frizz-…>` tag did not, and the request vanished from the parent's timeline).
+  assert.equal(isInjectedNoise(message), false)
   // It tells the worker exactly which id to hand back.
   assert.match(message, /spawn_thread` with `spinoff: "spn_0123456789abcdef"`/)
 })

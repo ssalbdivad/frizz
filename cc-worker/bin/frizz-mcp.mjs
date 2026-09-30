@@ -108,7 +108,7 @@ const SPAWN_THREAD = {
       spinoff: {
         type: "string",
         description:
-          "Set ONLY when fulfilling a spin-off request — a message from frizz wrapped in `<frizz-spin-off id=\"spn_…\">` " +
+          "Set ONLY when fulfilling a spin-off request — a message from frizz wrapped in `<spin-off-request id=\"spn_…\">` " +
           "asking for a new thread from one message of your conversation. Pass that id verbatim. Frizz then puts the " +
           "human's own instructions and a link back to your thread above your `prompt`, and links the two threads on " +
           "the board. A spin-off is the human's explicit request, so the last-resort caution above does not apply to it.",
