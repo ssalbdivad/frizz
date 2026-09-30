@@ -5,6 +5,7 @@ import { SPINOFF_INSTRUCTIONS_MAX, type ProjectCard, type SpinoffView, type Thre
 import { rpc } from "../api/rpc.ts"
 import { useThreadApi, useThreadProjectDir } from "../api/threadApi.tsx"
 import { stepPick } from "../lib/crossProject.ts"
+import { useShortcutLabel, withShortcut } from "../lib/keyboardRuntime.ts"
 import { PROJECT_STEP_CHORDS, detectPlatform, formatChord, parseChord } from "../lib/keybindings.ts"
 import { mentionHref } from "../lib/mentionAutolink.ts"
 import { spaNavigate } from "../lib/router.ts"
@@ -61,15 +62,18 @@ function canSpinoff(thread: ThreadView | undefined): thread is ThreadView & { se
  *  request would go to the focused project's thread of the same slug. */
 export function SpinoffButton({ thread, className }: { thread: ThreadView; className: string }) {
   const [open, setOpen] = useState(false)
+  const keys = useShortcutLabel("thread.spinoff")
   if (!canSpinoff(thread)) return null
   return (
     <>
       <SpinoffDialog thread={thread} open={open} onOpenChange={setOpen} />
-      <Tooltip label="Spinoff a new thread from this one">
+      <Tooltip label={withShortcut("Spinoff a new thread from this one", keys)}>
         <button
           type="button"
           aria-label="Spinoff"
           data-spinoff-button={thread.id}
+          // `→` on this surface presses it (lib/keyboardRuntime.ts).
+          data-command="spinoff"
           // The strip's shared focus behaviour: a click here must not take the keyboard away from the
           // prompt box below it.
           onMouseDown={(event) => event.preventDefault()}

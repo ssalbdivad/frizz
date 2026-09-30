@@ -12,7 +12,7 @@
 // the few who arrive with those tools in their fingers (Gmail ships its shortcuts switched off, and
 // its own snooze is `b`), and neither letter says what it does.
 //
-// Three keys break the rule, each for a reason the rule cannot beat:
+// Four keys break the rule, each for a reason the rule cannot beat:
 //
 //   j / k   next / previous        MOVEMENT is placed by position, not by name, like arrows, WASD and
 //                                  vi's hjkl: it is pressed fast and by feel, so the pair sits side by
@@ -22,6 +22,7 @@
 //   c       new thread             Gmail's compose, and create in GitHub, Linear and Jira: kept over
 //                                  `n` by the maintainer's call
 //   ?       this sheet             a symbol, not a letter: Gmail, GitHub, Linear, X, YouTube
+//   →       spinoff                a direction, not a letter: the thread branches off to the side
 //
 // ⌘/Ctrl CHORDS CANNOT FOLLOW IT. The browser owns ⌘ plus most initials (⌘D bookmarks, ⌘S saves, ⌘J
 // opens downloads: BROWSER_CHORDS below), so a chord keeps its platform's convention instead:
@@ -50,6 +51,7 @@ export type ActionId =
   | "thread.fullscreen"
   | "thread.open"
   | "thread.terminal"
+  | "thread.spinoff"
   | "app.newThread"
   | "app.newProject"
   | "app.palette"
@@ -81,6 +83,10 @@ export const ACTIONS: readonly ActionDef[] = [
   // A terminal belongs to a thread (ThreadTerminals.tsx), so `t` opens one on the thread being read. It
   // was "New terminal thread", from anywhere, until the Terminal tab went on 2026-09-29.
   { id: "thread.terminal", label: "Open terminal", group: "queue", defaultChord: "t" },
+  // → sends the thread off to the side, the way its dialog's footer reads "from → into". Not `s`, which
+  // is Snooze, and not ⇧S, which the rule below would have given it (maintainer 2026-09-30: "i dont like
+  // shift"). Free on a card: ↑/↓ scroll it, and the browser claims → only with a modifier held.
+  { id: "thread.spinoff", label: "Spinoff", group: "queue", defaultChord: "arrowright" },
   { id: "app.newThread", label: "New thread", group: "anywhere", defaultChord: "c" },
   { id: "app.newProject", label: "New project", group: "anywhere", defaultChord: "n" },
   { id: "app.palette", label: "Jump to a thread", group: "anywhere", defaultChord: "mod+k" },
