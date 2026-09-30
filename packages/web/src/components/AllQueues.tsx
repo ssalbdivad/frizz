@@ -90,6 +90,14 @@ const COMPOSER_WAIT_MS = 6_000
 const entryKey = ({ project, thread }: QueueEntry): string => threadKey(project.id, thread.id)
 const xqCardKey = (slot: HTMLElement): string | undefined => slot.dataset.xqCard
 
+/** The key of the card whose text box has the keyboard, if one does. */
+function typingInCard(): string | undefined {
+  const focused = document.activeElement
+  if (!(focused instanceof HTMLTextAreaElement || focused instanceof HTMLInputElement || (focused instanceof HTMLElement && focused.isContentEditable))) return undefined
+  const slot = focused.closest<HTMLElement>("[data-xq-card]")
+  return slot ? xqCardKey(slot) : undefined
+}
+
 /** A HELD card (useLeavingCards `hold`) as it draws: frozen as it was last queued — the handoff the human
  *  is reading does not change under them while the worker streams — except for its questions, which are
  *  the live thread's, so one answered from the drawer or another tab leaves it and one the worker asks
@@ -211,6 +219,14 @@ export function AllQueuesPage() {
     orderedAs.current = `${direction}|${viewKey(view)}`
     prevSlots.current = []
   }
+  // THE CARD BEING TYPED IN STAYS A CARD. Its thread can leave the queue on its own while the human is
+  // mid-sentence (a shell finishing, a child returning), and as a ghost the card is an empty gap: the
+  // focused box unmounted under the caret, and every key after it fell through to the page's shortcuts —
+  // `j`/`k` gliding between cards, others opening drawers — so the page jumped around while they typed
+  // (maintainer 2026-09-30: "scrolling jumps around and makes it hard to read/type"). Drawn as it was
+  // while the focus stays in it; the draft is the thread's either way, and a reply still reaches it. Read
+  // off the DOM at render, which is when the thread's leaving is drawn.
+  const typingKey = typingInCard()
   // Gaps the human's last move closed (below).
   const [closed, setClosed] = useState<ReadonlySet<string>>(() => new Set())
   const mayGhost = (key: string): boolean => {
@@ -224,7 +240,7 @@ export function AllQueuesPage() {
     keyOf: entryKey,
     onScreen: lock.onScreen.current,
     mayGhost,
-    keep: new Set(prevSlots.current.map((slot) => slot.key).filter((key) => (leaving.isLeaving(key) && !leaving.hidden(key)) || leaving.isHeld(key))),
+    keep: new Set(prevSlots.current.map((slot) => slot.key).filter((key) => (leaving.isLeaving(key) && !leaving.hidden(key)) || leaving.isHeld(key) || key === typingKey)),
   })
   prevSlots.current = queue
   // A GHOST IS AN EMPTY GAP, and the human's next move closes it (maintainer 2026-09-29, of the quiet card
@@ -732,6 +748,8 @@ function QueueCardOf({ entry, ghost, status, concealed, leaving, chip }: { entry
         leaving={leaving.isLeaving(key)}
         onLeave={leaving.leave(key)}
         onReturn={leaving.restore(key)}
+        onSent={leaving.sent(key)}
+        onLanded={leaving.landed(key)}
         onHold={leaving.hold(key)}
         chip={chip}
         onChoose={choose}
@@ -765,6 +783,10 @@ interface LeavingCards {
   hidden: (key: string) => boolean
   leave: (key: string) => () => void
   restore: (key: string) => () => void
+  /** A reply or Retry was sent: the card leaves, and stays gone for as long as the send is on the wire. */
+  sent: (key: string) => () => void
+  /** The send landed: the reappear clock starts NOW, not when the button was pressed — see `sent` below. */
+  landed: (key: string) => () => void
   /** The card HOLDS: it stays where it is, live, after its thread leaves the queue — see `hold` below. */
   isHeld: (key: string) => boolean
   hold: (key: string) => () => void
@@ -775,13 +797,33 @@ interface LeavingCards {
  * (answer, reply, snooze, done), is gone once the fade ends, and stays gone until the server's next read
  * agrees — or comes back, if REAPPEAR_MS pass and the thread is still in its queue.
  *
+ * A SEND'S CLOCK STARTS WHEN IT LANDS. A reply is not in when it is typed: a cold session resume, a
+ * contention retry (lib/eagerComposerSubmission.ts withDeliveryRetry, ~6s of backoff on its own) or a
+ * slow provider can hold the request for longer than REAPPEAR_MS, and a clock started at the click then
+ * brought the card back — the handoff, with no sign of the reply — while the message was still on its
+ * way, only for it to leave again seconds later once the worker picked it up (maintainer 2026-09-30: "I
+ * see the same card reappear without the response, then it goes away again a few seconds later and
+ * starts working"). So a sent card stays gone while its request is open, and the reappear window opens
+ * when it lands: from there, the thread still resting after REAPPEAR_MS is real news. A failed send
+ * brings the card back at once (`restore`), with the text in its box.
+ *
  * Keyed by `threadKey` (project + slug), never by slug: this page holds several projects' threads, and
  * a slug is unique only within one.
  */
 export function useLeavingCards(projects: QueuesProject[]): LeavingCards {
   const [since, setSince] = useState<ReadonlyMap<string, number>>(() => new Map())
   const [, tick] = useState(0)
-  const callbacks = useRef(new Map<string, { leave: () => void; restore: () => void; hold: () => void }>())
+  const callbacks = useRef(new Map<string, { leave: () => void; restore: () => void; sent: () => void; landed: () => void; hold: () => void }>())
+  // Cards whose send is still on the wire: gone whatever their age (see the header).
+  const [inFlight, setInFlight] = useState<ReadonlySet<string>>(() => new Set())
+  const setFlying = (key: string, flying: boolean) =>
+    setInFlight((prev) => {
+      if (prev.has(key) === flying) return prev
+      const next = new Set(prev)
+      if (flying) next.add(key)
+      else next.delete(key)
+      return next
+    })
 
   // A card whose thread has left its queue on the server needs no guard any more.
   const stillQueued = useMemo(() => new Set(projects.flatMap((p) => p.queued.map((t) => threadKey(p.id, t.id)))), [projects])
@@ -817,21 +859,35 @@ export function useLeavingCards(projects: QueuesProject[]): LeavingCards {
   const handles = (key: string) => {
     let entry = callbacks.current.get(key)
     if (!entry) {
+      const leave = () => {
+        held.current.delete(key)
+        setSince((prev) => new Map(prev).set(key, Date.now()))
+        // Re-render at the end of the fade (to unmount) and at the reappear deadline (to restore).
+        window.setTimeout(() => tick((n) => n + 1), EXIT_MS + 20)
+        window.setTimeout(() => tick((n) => n + 1), REAPPEAR_MS + 20)
+      }
       entry = {
-        leave: () => {
-          held.current.delete(key)
-          setSince((prev) => new Map(prev).set(key, Date.now()))
-          // Re-render at the end of the fade (to unmount) and at the reappear deadline (to restore).
-          window.setTimeout(() => tick((n) => n + 1), EXIT_MS + 20)
-          window.setTimeout(() => tick((n) => n + 1), REAPPEAR_MS + 20)
-        },
-        restore: () =>
+        leave,
+        restore: () => {
+          setFlying(key, false)
           setSince((prev) => {
             if (!prev.has(key)) return prev
             const next = new Map(prev)
             next.delete(key)
             return next
-          }),
+          })
+        },
+        sent: () => {
+          setFlying(key, true)
+          leave()
+        },
+        landed: () => {
+          setFlying(key, false)
+          // Re-anchored as though the fade had just ended, so the card stays gone rather than fading in
+          // again, and a thread that has already left its queue is not given a guard it no longer needs.
+          setSince((prev) => (prev.has(key) ? new Map(prev).set(key, Date.now() - EXIT_MS) : prev))
+          window.setTimeout(() => tick((n) => n + 1), REAPPEAR_MS - EXIT_MS + 20)
+        },
         hold: () => { held.current.add(key) },
       }
       callbacks.current.set(key, entry)
@@ -845,14 +901,16 @@ export function useLeavingCards(projects: QueuesProject[]): LeavingCards {
   return {
     isLeaving: (key) => {
       const elapsed = age(key)
-      return elapsed !== undefined && elapsed < REAPPEAR_MS
+      return elapsed !== undefined && (elapsed < REAPPEAR_MS || inFlight.has(key))
     },
     hidden: (key) => {
       const elapsed = age(key)
-      return elapsed !== undefined && elapsed >= EXIT_MS && elapsed < REAPPEAR_MS
+      return elapsed !== undefined && elapsed >= EXIT_MS && (elapsed < REAPPEAR_MS || inFlight.has(key))
     },
     leave: (key) => handles(key).leave,
     restore: (key) => handles(key).restore,
+    sent: (key) => handles(key).sent,
+    landed: (key) => handles(key).landed,
     isHeld: (key) => held.current.has(key) && asking.has(key),
     hold: (key) => handles(key).hold,
   }
