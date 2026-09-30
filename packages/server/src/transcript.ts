@@ -3033,10 +3033,7 @@ function codexToolCall(name: string, input: unknown, callId?: string): Transcrip
   const direct = codexDirectToolCall(name, obj, callId)
   if (direct) return direct
   const cmd = extractShellCommand(obj)
-  if (cmd) {
-    const cwd = strField(obj.workdir) ?? strField(obj.cwd)
-    return { name: "Bash", detail: bashSummary(cmd), command: capCommand(cmd), cwd }
-  }
+  if (cmd) return { name: "Bash", detail: bashSummary(cmd), command: capCommand(cmd), cwd: shellCallFolder(obj) }
   const patch = name === "apply_patch" || name === "patch" ? extractPatch(input, obj) : undefined
   if (patch) {
     const edit = parseApplyPatch(patch)
@@ -3311,11 +3308,8 @@ function codexExecWrapperCall(source: string, callId?: string, calls = wrappedIn
 }
 
 function wrappedSingleCall(call: WrappedInvocation, source: string, callId?: string): TranscriptToolCall {
-  if (call.name === "exec_command") {
-    const cmd = wrappedStringProperty(source, call.args, "cmd") ?? wrappedStringProperty(source, call.args, "command")
-    const cwd = wrappedStringProperty(source, call.args, "workdir") ?? wrappedStringProperty(source, call.args, "cwd")
-    if (cmd) return { name: "Bash", detail: bashSummary(cmd), command: capCommand(cmd), cwd }
-  }
+  const exec = wrappedExecCommand(source, call)
+  if (exec) return { name: "Bash", detail: bashSummary(exec.cmd), command: capCommand(exec.cmd), cwd: exec.cwd }
 
   if (call.name === "apply_patch") {
     const patch = wrappedPatch(source, call.args)
@@ -3360,6 +3354,46 @@ function wrappedSingleCall(call: WrappedInvocation, source: string, callId?: str
     detail: wrappedArgumentDetail(call.args),
     input: capToolInput(call.args || source.trim()),
   }
+}
+
+// A wrapped `tools.exec_command({cmd, workdir})`: the command and the folder it names. Undefined for any
+// other call, or an exec_command with no command — which projects as a generic card with no folder.
+function wrappedExecCommand(source: string, call: WrappedInvocation): { cmd: string; cwd?: string } | undefined {
+  if (call.name !== "exec_command") return undefined
+  const cmd = wrappedStringProperty(source, call.args, "cmd") ?? wrappedStringProperty(source, call.args, "command")
+  if (!cmd) return undefined
+  const cwd = wrappedStringProperty(source, call.args, "workdir") ?? wrappedStringProperty(source, call.args, "cwd")
+  return { cmd, ...(cwd !== undefined ? { cwd } : {}) }
+}
+
+// The folder a direct (function_call) shell command names. Read ONLY off a call that carries a command,
+// so an MCP tool that merely takes a `cwd` argument never names where the agent is working.
+function shellCallFolder(obj: Record<string, unknown>): string | undefined {
+  return strField(obj.workdir) ?? strField(obj.cwd)
+}
+
+/**
+ * WHERE A CODEX TOOL CALL RAN — the folder its projected Bash card carries (`TranscriptToolCall.cwd`), read
+ * without projecting the card. Both of Codex's tool protocols: a direct `exec_command`/`shell` function
+ * call's object input, and the unified exec wrapper's raw JavaScript, whose lone remaining `exec_command`
+ * (View image calls split off, codexExecWrapperCards) is the one a folder is read from. Undefined for
+ * anything that is not a shell command — an MCP tool with a `cwd` argument included — exactly where the
+ * projection names none.
+ *
+ * The tailer's fold (applyEvent) reads the agent's folder through this, and the terminal dialog's fallback
+ * rescan (thread-cwd.ts newestToolWorkdir) reads the projected cards; this is the projection's own reading
+ * with its side effects left out (a View image card copies its picture into the screenshot cache, which a
+ * fold must never do), and transcript.codex.test.ts pins the two against every call in the real rollouts.
+ * Raw: a relative folder is resolved by the reader, against the session's own folder.
+ */
+export function codexToolWorkdir(name: string, input: unknown): string | undefined {
+  if (name === "exec" && typeof input === "string") {
+    const rest = wrappedInvocations(input).filter((call) => call.name !== "view_image")
+    return rest.length === 1 ? wrappedExecCommand(input, rest[0]!)?.cwd : undefined
+  }
+  if (!input || typeof input !== "object" || Array.isArray(input)) return undefined
+  const obj = input as Record<string, unknown>
+  return extractShellCommand(obj) ? shellCallFolder(obj) : undefined
 }
 
 // Find direct tools.name(...) invocations while respecting strings, comments, and balanced parens.

@@ -1014,30 +1014,34 @@ test("applyRecord: a FOREGROUND Bash auto-backgrounded on timeout becomes a trac
   assert.equal(s.pendingShells?.size ?? 0, 0, "the park is consumed by the result that promoted it")
 })
 
-test("applyRecord: a promoted ack's path is taken only from this session's own task folder", () => {
+test("applyRecord: a promoted ack keeps who named its path, and only a vouched-for folder teaches tasksDir", () => {
   // The result of a FOREGROUND Bash is whatever it printed, so a command can print the handoff sentence
   // and name any file. Another session's real task log is the right SHAPE; only its folder gives it away.
+  // That verdict is taken at every READ, where the file really is (router.shell-output.test.ts) — never
+  // here: the fold must stay a pure function of the transcript's bytes, which the tail cache relies on.
   const s = newTailState("t", "s", "/x")
   applyRecord(s, bashFg("toolu_forged", "cat notes.txt", "cat notes.txt"))
   applyRecord(s, resultText("toolu_forged", autoBackgroundAck("bx", 5, "/tmp/claude-1000/-other/their-session/tasks"), "sid"))
   const forged = s.subAgents.get("toolu_forged")
-  assert.equal(forged?.kind, "shell", "still promoted: the refusal is of the path")
-  assert.equal(forged?.outputFile, undefined, "another session's log is never this shell's output")
-  assert.equal(forged?.outputRefused, true, "and the drawer is told the named output is missing")
-  assert.equal(s.tasksDir, undefined, "a refused path teaches the fold nothing")
+  assert.equal(forged?.kind, "shell", "still promoted: any refusal is of the path")
+  assert.equal(forged?.outputFile, "/tmp/claude-1000/-other/their-session/tasks/bx.output", "the named path is kept, as named")
+  assert.deepEqual(forged?.promotedAck, { sessionId: "sid" }, "with the session whose folder alone may vouch for it")
+  assert.equal(s.tasksDir, undefined, "a path its name does not vouch for teaches the fold nothing")
   // A record with no session id (none is ever written without one) cannot vouch for any folder either.
   applyRecord(s, bashFg("toolu_bare", "nub test", "nub test"))
   applyRecord(s, { ...resultText("toolu_bare", autoBackgroundAck("by")), sessionId: undefined })
-  assert.equal(s.subAgents.get("toolu_bare")?.outputFile, undefined)
+  assert.deepEqual(s.subAgents.get("toolu_bare")?.promotedAck, {})
+  assert.equal(s.tasksDir, undefined)
   // An EXPLICIT launch's ack is harness text a command cannot write, and is taken as named.
   applyRecord(s, bashBg("toolu_bg", "Dev server", "npm run dev"))
   applyRecord(s, resultText("toolu_bg", "Command running in background with ID: bz. Output is being written to: /tmp/claude-1000/-x/moved/tasks/bz.output.", "sid"))
   assert.equal(s.subAgents.get("toolu_bg")?.outputFile, "/tmp/claude-1000/-x/moved/tasks/bz.output")
+  assert.equal(s.subAgents.get("toolu_bg")?.promotedAck, undefined)
   assert.equal(s.tasksDir, "/tmp/claude-1000/-x/moved/tasks")
-  // …and the folder it named vouches for a promoted ack in it.
-  applyRecord(s, bashFg("toolu_after", "nub test", "nub test"))
-  applyRecord(s, resultText("toolu_after", autoBackgroundAck("bw", 5, "/tmp/claude-1000/-x/moved/tasks"), "sid"))
-  assert.equal(s.subAgents.get("toolu_after")?.outputFile, "/tmp/claude-1000/-x/moved/tasks/bw.output")
+  // A promoted ack under the record's own session folder is vouched for by name, so it teaches tasksDir.
+  applyRecord(s, bashFg("toolu_own", "nub test", "nub test"))
+  applyRecord(s, resultText("toolu_own", autoBackgroundAck("bv", 5, "/tmp/claude-1000/-x/sid/tasks"), "sid"))
+  assert.equal(s.tasksDir, "/tmp/claude-1000/-x/sid/tasks")
 })
 
 test("applyRecord: an auto-backgrounded shell retires on its own <task-notification>", () => {
@@ -3659,6 +3663,64 @@ test("tailer: codex — a tool call's workdir moves the thread's checkout, and e
   h.clock.ms = Date.parse("2026-07-10T21:58:52.000Z")
   t.tick()
   assert.deepEqual(t.get("t")!.checkout, { dir: worktree, kind: "worktree" }, "`.` is the session's folder, not the project root")
+})
+
+// THE UNIFIED EXEC WRAPPER. Current Codex sends a shell command as a `custom_tool_call` named `exec` whose
+// input is raw JavaScript (`tools.exec_command({cmd, workdir})`), not a function call's JSON object — and the
+// fold read only the object form, so a wrapper-protocol thread's header token and card stayed blank while
+// the terminal dialog, which rescans the projected cards, opened in the worktree. The records below are the
+// REAL captured wrapper calls (backend/codex.fixtures/exec-wrapper-common-tools.jsonl), with their folder
+// moved into a worktree that exists here.
+test("tailer: codex — the exec wrapper's workdir moves the thread's checkout, and only a shell command's does", () => {
+  const h = harness()
+  const codexHome = tmp("frizz-codexhome-")
+  const codexId = "019f4e0d-1111-2222-3333-444455556677"
+  const project = realpathSync(tmp("frizz-codex-proj-"))
+  mkdirSync(join(project, ".git"))
+  const worktree = join(project, ".frizz", "worktrees", "wrap")
+  mkdirSync(worktree, { recursive: true })
+  writeFileSync(join(worktree, ".git"), "gitdir: elsewhere\n")
+  const fixture = readFileSync(join(import.meta.dirname, "backend", "codex.fixtures", "exec-wrapper-common-tools.jsonl"), "utf8")
+  const wrapperCalls = fixture.split("\n").filter((line) => line.includes('"custom_tool_call"') && line.includes('"name":"exec"') && line.includes("workdir"))
+  assert.ok(wrapperCalls.length >= 3, "the fixture carries real wrapper calls")
+  const inWorktree = wrapperCalls[0]!.replaceAll("/tmp/frizz-tool-sample", worktree)
+  assert.notEqual(inWorktree, wrapperCalls[0], "the real call names a folder")
+  const path = writeCodexRollout(codexHome, codexId, [cxMeta(codexId, project), cxTaskStarted])
+  pinCodexRow(h, codexId)
+  const codexBackend = createCodexBackend({ codexHome })
+  const claudeBackend = createClaudeBackend({ logDir: h.logDir })
+  const t = createTailer({
+    project: { cwdSlug: "x", dir: project } as Project,
+    storage: h.storage,
+    bus: h.bus,
+    onChange: () => h.changes.n++,
+    now: () => h.clock.ms,
+    paneDead: () => false,
+    sessionLogDir: h.logDir,
+    backendFor: (kind?: string): AgentBackend => (kind === "codex" ? codexBackend : claudeBackend),
+  })
+  h.clock.ms = Date.parse("2026-07-12T17:43:00.000Z")
+  t.tick()
+  assert.equal(t.get("t")!.checkout, undefined, "no command yet: the project root")
+
+  appendFileSync(path, inWorktree + "\n")
+  h.clock.ms = Date.parse("2026-07-12T17:43:08.000Z")
+  t.tick()
+  assert.deepEqual(t.get("t")!.checkout, { dir: worktree, kind: "worktree" }, "the wrapper's exec_command workdir is where the agent now works")
+
+  // An MCP tool taking a `cwd` argument runs no command there: the transcript's projection names no folder
+  // for it, so neither does the fold — the token must not jump back to the root on it.
+  const mcp = JSON.stringify({ timestamp: "2026-07-12T17:43:09.000Z", type: "response_item", payload: { type: "function_call", name: "mcp__files__list", call_id: "c-mcp", arguments: JSON.stringify({ cwd: project }) } })
+  appendFileSync(path, mcp + "\n")
+  h.clock.ms = Date.parse("2026-07-12T17:43:10.000Z")
+  t.tick()
+  assert.deepEqual(t.get("t")!.checkout, { dir: worktree, kind: "worktree" }, "a non-shell tool's cwd argument moves nothing")
+
+  // Back at the root through the wrapper again.
+  appendFileSync(path, wrapperCalls[1]!.replaceAll("/tmp/frizz-tool-sample", project) + "\n")
+  h.clock.ms = Date.parse("2026-07-12T17:43:12.000Z")
+  t.tick()
+  assert.equal(t.get("t")!.checkout, undefined, "a wrapper command at the root clears the token")
 })
 
 test("tailer: a codex rollout primes to in-flight, then transitions to idle+fence THROUGH the tick", () => {

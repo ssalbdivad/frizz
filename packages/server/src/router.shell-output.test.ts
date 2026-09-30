@@ -7,6 +7,7 @@ import { Bus } from "./bus.ts"
 import { createRouter } from "./router.ts"
 import { createStorage, type SessionRow } from "./storage.ts"
 import { createTailer } from "./tailer.ts"
+import type { ClaudeRuntimeTask } from "./backend/claude-runtime-ingest.ts"
 import type { AppContext } from "./context.ts"
 import type { Project } from "./project.ts"
 
@@ -148,6 +149,49 @@ test("a symlink or hard link named for this session's folder does not reach anot
   }
 })
 
+// THE VERDICT IS THE DISK'S AT READ TIME, NOT THE FOLD'S. It was taken once, inside the fold, and the fold's
+// states are cached across restarts as a pure function of the transcript's bytes (tail-cache.ts) — so a
+// verdict outlived the disk it was taken from, both ways round. (a) A path that did not exist yet was
+// vouched for by its name, and a link placed there LATER led every read to another session's log: the
+// read-time vet follows links and checks only the shape, which another session's `tasks/<id>.output` has.
+// (b) A path refused because it was a link stayed refused after the harness's own file replaced it.
+test("a promoted ack's path is judged where it is at each read, not where it was when folded", async () => {
+  const root = realpathSync(mkdtempSync(join(tmpdir(), "frizz-forged-late-")))
+  const theirs = join(root, "claude-1000", "-another-project", "their-session", "tasks")
+  mkdirSync(theirs, { recursive: true })
+  writeFileSync(join(theirs, "blate.output"), "their log, linked in after the fold\n")
+  writeFileSync(join(theirs, "bfixed.output"), "their log\n")
+  const mine = join(root, "claude-1000", "-a-project", "sid", "tasks")
+  mkdirSync(mine, { recursive: true })
+  symlinkSync(join(theirs, "bfixed.output"), join(mine, "bfixed.output")) // a link AT FOLD TIME
+  const s = stack({
+    t: {
+      sessionId: "sid",
+      lines: [
+        foregroundBash("toolu_late", "cat a.txt"),
+        result("toolu_late", autoBackgroundAck("blate", join(mine, "blate.output")), "sid"), // nothing there yet
+        foregroundBash("toolu_fixed", "cat b.txt"),
+        result("toolu_fixed", autoBackgroundAck("bfixed", join(mine, "bfixed.output")), "sid"),
+      ],
+    },
+  })
+  try {
+    // (a) The link arrives after the fold.
+    symlinkSync(join(theirs, "blate.output"), join(mine, "blate.output"))
+    const late = await s.router.backgroundShellOutput.handler({ input: { slug: "t", id: "toolu_late" } })
+    assert.equal(late.output, "", "a link placed after the fold does not reach another session's log")
+    assert.equal(late.missing, true)
+    assert.doesNotMatch(JSON.stringify(late), /their log|their-session/)
+    // (b) The link is replaced by this session's own log.
+    rmSync(join(mine, "bfixed.output"))
+    writeFileSync(join(mine, "bfixed.output"), "mine after all\n")
+    assert.equal((await s.router.backgroundShellOutput.handler({ input: { slug: "t", id: "toolu_fixed" } })).output, "mine after all\n", "a verdict is not kept past the disk it was taken from")
+  } finally {
+    s.cleanup()
+    rmSync(root, { recursive: true, force: true })
+  }
+})
+
 // NEGATIVE CONTROL for the link test: the same folder layout, with a plain file of its own, is read.
 test("a promoted ack naming a plain file in this session's own folder is read", async () => {
   const root = realpathSync(mkdtempSync(join(tmpdir(), "frizz-own-folder-")))
@@ -281,6 +325,55 @@ test("no readable log yet: the reply carries no cursor, so the next read is a fi
     assert.ok(first.output.length <= 512 * 1024)
   } finally {
     s.cleanup()
+    rmSync(root, { recursive: true, force: true })
+  }
+})
+
+// A SHELL THAT FINISHES BEFORE ITS ACK IS ON DISK. On a broker row the SDK's task stream runs ahead of the
+// transcript, so a background Bash that exits at once is retired by its terminal task event between its
+// tool_use record and the tool_result carrying its launch ack. The ack then found no live entry and was
+// dropped, and the drawer said "No output was captured." while the log held the output — reproduced twice
+// on the live stack (2026-09-29, `echo quick-done; echo line2`). Shaped from those runs.
+test("a shell the task stream retires before its ack is folded still reads its log", async () => {
+  const root = realpathSync(mkdtempSync(join(tmpdir(), "frizz-instant-shell-")))
+  const logDir = join(root, "projects", "-a-project")
+  mkdirSync(logDir, { recursive: true })
+  const tasks = join(root, "claude-1000", "-a-project", "sid", "tasks")
+  mkdirSync(tasks, { recursive: true })
+  writeFileSync(join(tasks, "bquick.output"), "quick-done\nline2\n\n[exited with code 0]\n")
+  const storage = createStorage(join(root, "ui.db"), "p")
+  storage.upsertSession(row("t", "sid"))
+  storage.setBackend("t", "claude")
+  storage.setClaudeRuntime("t", "broker")
+  const transcript = join(logDir, "sid.jsonl")
+  writeFileSync(transcript, [{ type: "user", timestamp: T0, message: { role: "user", content: "go" } }, backgroundBash("toolu_q", "echo quick-done; echo line2")].map((l) => JSON.stringify(l) + "\n").join(""))
+  const runtime: ClaudeRuntimeTask[] = []
+  const tailer = createTailer({
+    project: { cwdSlug: "x" } as Project,
+    storage,
+    bus: new Bus(),
+    onChange: () => {},
+    now: () => Date.parse("2026-07-01T00:01:00.000Z"),
+    paneDead: () => false,
+    sessionLogDir: logDir,
+    runtimeTasks: () => runtime,
+  })
+  const router = createRouter({ project: { dir: root, stateDir: root }, storage, board: { refresh: () => {} }, tailer } as unknown as AppContext)
+  try {
+    tailer.tick()
+    assert.deepEqual(tailer.get("t")!.bgShells.map((shell) => shell.id), ["toolu_q"], "launched")
+    // The task stream reports it finished before the ack reaches the transcript.
+    runtime.push({ taskId: "bquick", toolUseId: "toolu_q", terminal: true, outcome: "completed", seenInLevel: false, updatedAt: Date.parse("2026-07-01T00:00:02.000Z") })
+    tailer.tick()
+    assert.deepEqual(tailer.get("t")!.bgShells, [], "retired off the stream")
+    appendFileSync(transcript, JSON.stringify(result("toolu_q", `Command running in background with ID: bquick. Output is being written to: ${join(tasks, "bquick.output")}. You will be notified when it completes.`)) + "\n")
+    tailer.tick()
+    const out = await router.backgroundShellOutput.handler({ input: { slug: "t", id: "toolu_q" } })
+    assert.equal(out.state, "done")
+    assert.equal(out.output, "quick-done\nline2\n\n[exited with code 0]\n", "the late ack still names its log")
+  } finally {
+    tailer.stop()
+    storage.close()
     rmSync(root, { recursive: true, force: true })
   }
 })

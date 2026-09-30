@@ -1,12 +1,13 @@
 import { test } from "node:test"
 import assert from "node:assert/strict"
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs"
+import { mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { GITHUB_DISPATCH_UI_BOUNDARY, wakeDeliveryToken } from "@frizz/shared"
-import { pageProjectedTranscript, parseCodexTranscript, projectCodexTranscript } from "./transcript.ts"
+import { codexToolWorkdir, pageProjectedTranscript, parseCodexTranscript, projectCodexTranscript } from "./transcript.ts"
+import { newestToolWorkdir } from "./thread-cwd.ts"
 import { projectStateDir, resetFrizzRoots } from "./frizz-paths.ts"
-import { CODEX_FIRST_FINAL_TITLE_TRANSPORT, CODEX_LEGACY_FIRST_FINAL_TITLE_TRANSPORT } from "./backend/codex.ts"
+import { CODEX_FIRST_FINAL_TITLE_TRANSPORT, CODEX_LEGACY_FIRST_FINAL_TITLE_TRANSPORT, parseCodexLine } from "./backend/codex.ts"
 
 // ---- codex rollout → TranscriptMessage[] (the chat-drawer render path) ----
 // Grounded in REAL captured rollouts (codex-cli 0.144.1) — the SAME fixtures backend/codex.test.ts folds
@@ -1627,4 +1628,46 @@ test("codex: a turn's tool calls collapse into ONE group even though a reasoning
   assert.equal(groups[0].kind === "tools" ? groups[0].tools.length : 0, 6)
   // …and the group still sits BELOW the reasoning block the turn opened with.
   assert.ok(msgs.indexOf(reasoning[0]) < msgs.findIndex((m) => m.parts.some((p) => p.kind === "tools")))
+})
+
+// ONE READING OF WHERE A CODEX COMMAND RAN. The board's fold (tailer applyEvent) reads a tool call's folder
+// through codexToolWorkdir; the terminal dialog's fallback reads the projected cards (thread-cwd.ts
+// newestToolWorkdir). If they disagree, the header token and the dialog name two places for one thread —
+// which is what happened while the fold read only the function-call protocol. Pinned against EVERY tool
+// call in every real captured rollout, both protocols, plus the shapes those rollouts lack.
+test("codexToolWorkdir agrees with the projected card's folder on every real Codex tool call", () => {
+  let calls = 0
+  let named = 0
+  for (const name of readdirSync(FIX).filter((f) => f.endsWith(".jsonl"))) {
+    for (const line of readFileSync(join(FIX, name), "utf8").split("\n")) {
+      for (const ev of parseCodexLine(line)) {
+        if (ev.kind !== "tool-call") continue
+        calls++
+        const folded = codexToolWorkdir(ev.name, ev.input)
+        if (folded) named++
+        assert.equal(folded, newestToolWorkdir(parseCodexTranscript(line), "/base"), `${name}: ${ev.name} ${ev.id}`)
+      }
+    }
+  }
+  assert.ok(calls >= 20 && named >= 10, `the fixtures exercise both answers (${calls} calls, ${named} with a folder)`)
+  const call = (payload: Record<string, unknown>) => JSON.stringify({ timestamp: "2026-07-12T17:43:07.000Z", type: "response_item", payload })
+  const shapes = [
+    // An MCP tool's `cwd` argument: no command, no folder.
+    call({ type: "function_call", name: "mcp__files__list", call_id: "a", arguments: JSON.stringify({ cwd: "/elsewhere" }) }),
+    // The argv `shell` tool.
+    call({ type: "function_call", name: "shell", call_id: "b", arguments: JSON.stringify({ command: ["bash", "-lc", "ls"], workdir: "/wt" }) }),
+    // A wrapper that views a picture beside one command: the command's card keeps its folder.
+    call({ type: "custom_tool_call", name: "exec", call_id: "c", input: 'image((await tools.view_image({path:"/nope.png"})).image_url);\ntext(await tools.exec_command({cmd:"ls", workdir:"/wt"}));' }),
+    // Two commands in one wrapper: one generic card, no single folder.
+    call({ type: "custom_tool_call", name: "exec", call_id: "d", input: 'await tools.exec_command({cmd:"ls", workdir:"/a"});\nawait tools.exec_command({cmd:"pwd", workdir:"/b"});' }),
+    // A folder bound to a const and interpolated.
+    call({ type: "custom_tool_call", name: "exec", call_id: "e", input: 'const d = "/wt";\ntext(await tools.exec_command({cmd:"ls", workdir:`${d}/packages/web`}));' }),
+  ]
+  const expected = [undefined, "/wt", "/wt", undefined, "/wt/packages/web"]
+  shapes.forEach((line, i) => {
+    const ev = parseCodexLine(line).find((e) => e.kind === "tool-call")!
+    assert.ok(ev && ev.kind === "tool-call")
+    assert.equal(codexToolWorkdir(ev.name, ev.input), expected[i], `shape ${i}`)
+    assert.equal(newestToolWorkdir(parseCodexTranscript(line), "/base"), expected[i], `shape ${i}, projected`)
+  })
 })

@@ -39,6 +39,9 @@ import { frizzTempDir } from "./frizz-paths.ts"
 import { declaredShellBudgetMs } from "./shell-budget.ts"
 import { vetHarnessOutputPath } from "./background-shell-output.ts"
 import { liftCheckout, liftWorkingDir } from "./thread-cwd.ts"
+// A cycle (transcript.ts imports this module's fence parser), safe because neither reads the other at
+// module load: codexToolWorkdir is only ever called from inside a fold.
+import { codexToolWorkdir } from "./transcript.ts"
 import { probeShellCwds } from "./shell-cwd-probe.ts"
 import { readWorkflowRun, workflowAgentState as sharedWorkflowAgentState, workflowAckRunDir, workflowAckTaskId, workflowLabel, type WorkflowAgent } from "./workflow-runs.ts"
 
@@ -480,9 +483,12 @@ interface SubAgentEntry {
   cwd?: string
   subagentType?: string // the dispatch's input.subagent_type verbatim (agents only; may be absent)
   outputFile?: string // the child/shell's output path (from the launch tool_result); its mtime = liveness
-  // A shell whose ack NAMED a path this fold would not take (see ackPathTrusted): the drawer reports its
-  // output missing rather than waiting for a file that will never be read.
-  outputRefused?: true
+  // Shell only: this shell was PROMOTED out of a foreground Bash, so its ack — and the path in it — was
+  // that command's own output. Such a path is this shell's only while it really sits in this session's
+  // task folder (ackPathTrusted), which is judged at READ time (shellOutputFile), never folded: the fold
+  // is a pure function of the transcript's bytes, and the tail cache hands its states back on that promise.
+  // `sessionId` is the ack record's own (harness-written) session id, the one fact the check needs from it.
+  promotedAck?: PromotedAck
   // Transcript SCHEMA of `outputFile` when it isn't Claude's own JSONL. A codex sub-agent's output file
   // is the CHILD's codex rollout, which the drill-in drawer must parse with the codex reader instead.
   outputFormat?: "codex"
@@ -623,7 +629,7 @@ interface RetiredShell {
   toolUseId: string
   command?: string
   outputFile?: string
-  outputRefused?: true // see SubAgentEntry.outputRefused
+  promotedAck?: PromotedAck // see SubAgentEntry.promotedAck
   cwd?: string // see SubAgentEntry.cwd — so an open drawer keeps its subtitle after the shell ends
   monitor?: true
   status: "completed" | "failed" | "killed"
@@ -635,6 +641,9 @@ interface RetiredShell {
   // was told: the runtime delivers a shell's completion only to a RUNNING turn, so a shell that
   // finished after the agent's last word was never reported to anyone. See the shell-completion wake.
   finishedAt?: string
+}
+interface PromotedAck {
+  sessionId?: string
 }
 // How many terminal sub-agents to retain per thread for drawer review (newest-wins ring).
 const RETAINED_SUBAGENTS_MAX = 20
@@ -1387,7 +1396,7 @@ function retireLive(state: TailState, entry: SubAgentEntry, finishedAt: string |
   state.subAgents.delete(entry.toolUseId)
   if (entry.kind === "shell") {
     state.retiredShells.delete(entry.toolUseId)
-    state.retiredShells.set(entry.toolUseId, { toolUseId: entry.toolUseId, command: entry.command, outputFile: entry.outputFile, status, taskId: entry.taskId, label: entry.label, finishedAt, ...(entry.cwd ? { cwd: entry.cwd } : {}), ...(entry.monitor ? { monitor: true as const } : {}), ...(entry.outputRefused ? { outputRefused: true as const } : {}) })
+    state.retiredShells.set(entry.toolUseId, { toolUseId: entry.toolUseId, command: entry.command, outputFile: entry.outputFile, status, taskId: entry.taskId, label: entry.label, finishedAt, ...(entry.cwd ? { cwd: entry.cwd } : {}), ...(entry.monitor ? { monitor: true as const } : {}), ...(entry.promotedAck ? { promotedAck: entry.promotedAck } : {}) })
     while (state.retiredShells.size > RETAINED_SHELLS_MAX) {
       const oldest = state.retiredShells.keys().next().value
       if (oldest === undefined) break
@@ -1565,16 +1574,30 @@ function readDescendantSidecars(sessionDir: string, mtimeMs: (path: string) => n
 // nothing behind it to read, and the vet refuses whatever appears there later unless it is a regular,
 // singly-linked `tasks/<id>.output`.
 //
+// JUDGED AT EVERY READ, NOT AT FOLD TIME (2026-09-29). It ran once, inside the fold, which made the fold's
+// result depend on what was on disk the moment a line was folded — while the tail cache persists folded
+// states on the promise that they are a pure function of the transcript's bytes (tail-cache.ts). A cached
+// verdict then outlived the disk it was taken from: a path that did not exist yet when folded was vouched
+// for by its name, and a symlink placed there afterwards led every later read to another session's log
+// (the vet follows links and checks only the shape); a path refused because of a link stayed refused after
+// the link was replaced by the harness's own file. So the fold keeps the named path and who named it
+// (SubAgentEntry.promotedAck), and every reader asks here, of the file as it is now (shellOutputFile).
+//
 // WHAT THIS GUARDS, honestly: an ack that turned up QUOTED at the head of some command's output — a grep
 // of a transcript, a `cat` of a log — being taken for this session's handoff and pointing the drawer at a
 // file nobody meant it to read. It is not a boundary against a hostile agent: one that wanted another
-// log shown could `cat` it into its own genuine background shell, whose log is shown by design, and a
-// deliberate swap after this check (the check runs once, at fold time) is that same agent.
-function ackPathTrusted(state: TailState, rec: Record, path: string): boolean {
+// log shown could `cat` it into its own genuine background shell, whose log is shown by design.
+function ackPathTrusted(path: string, tasksDir: string | undefined, sessionId: string | undefined): boolean {
   const dir = dirname(realpathOr(path))
+  return ackFolderVouched(dir, tasksDir, sessionId) || (tasksDir !== undefined && basename(dir) === "tasks" && dir === realpathOr(tasksDir))
+}
+
+// The NAME-level half of ackPathTrusted: the folder is `tasks/`, and it is either the one an explicit launch
+// named or the one under the record's own session id. Pure, so the fold may use it (to learn tasksDir).
+function ackFolderVouched(dir: string, tasksDir: string | undefined, sessionId: string | undefined): boolean {
   if (basename(dir) !== "tasks") return false
-  if (state.tasksDir !== undefined && (dir === state.tasksDir || dir === realpathOr(state.tasksDir))) return true
-  return typeof rec.sessionId === "string" && rec.sessionId !== "" && basename(dirname(dir)) === rec.sessionId
+  if (tasksDir !== undefined && dir === tasksDir) return true
+  return sessionId !== undefined && sessionId !== "" && basename(dirname(dir)) === sessionId
 }
 
 function realpathOr(path: string): string {
@@ -1597,7 +1620,7 @@ function realpathOr(path: string): string {
 // announces the auto-background handoff, so an id nothing registered can still promote here out of
 // `pendingShells`. See AUTO_BACKGROUND_ACK_RE.
 function trackLaunchResults(state: TailState, rec: Record): void {
-  if (state.subAgents.size === 0 && !state.pendingShells?.size) return
+  if (state.subAgents.size === 0 && !state.pendingShells?.size && state.retiredShells.size === 0) return
   const content = rec.message?.content
   if (!Array.isArray(content)) return
   for (const block of content) {
@@ -1606,24 +1629,25 @@ function trackLaunchResults(state: TailState, rec: Record): void {
     if (b.type !== "tool_result") continue
     const id = typeof b.tool_use_id === "string" ? b.tool_use_id : undefined
     if (!id) continue
-    const text = toolResultText(b.content)
     let entry = state.subAgents.get(id)
-    // Whether this result is a FOREGROUND command's output that the fold is reading as an ack — see
-    // ackPathTrusted, which is why the distinction matters.
-    let promoted = false
+    // Only a result some tracked op is waiting on is read at all — its text can be a whole command's output.
+    if (!entry && !state.pendingShells?.has(id) && !state.retiredShells.has(id)) continue
+    const text = toolResultText(b.content)
     if (!entry) {
       // A parked FOREGROUND shell's result. Either it was auto-backgrounded — promote it to a live
       // tracked shell, from this instant indistinguishable from one launched with run_in_background —
       // or it simply finished, and the park is over either way. `is_error` guards the (unobserved but
       // cheap to exclude) case of the harness reporting the handoff as a failure.
       const parked = state.pendingShells?.get(id)
-      if (!parked) continue
+      if (!parked) {
+        backfillRetiredAck(state, id, text)
+        continue
+      }
       state.pendingShells?.delete(id)
       if (state.dismissedOps.has(id)) continue // retired by the operator — see FoldState.dismissedOps
       if (b.is_error === true || !AUTO_BACKGROUND_ACK_RE.test(text)) continue
-      entry = { kind: "shell", toolUseId: id, label: parked.label, startedAt: parked.startedAt, command: parked.command, ...(parked.cwd ? { cwd: parked.cwd } : {}) }
+      entry = { kind: "shell", toolUseId: id, label: parked.label, startedAt: parked.startedAt, command: parked.command, ...(parked.cwd ? { cwd: parked.cwd } : {}), promotedAck: typeof rec.sessionId === "string" && rec.sessionId !== "" ? { sessionId: rec.sessionId } : {} }
       state.subAgents.set(id, entry)
-      promoted = true
     }
     if (entry.workflow) {
       // A workflow's ack names a run DIRECTORY, not a transcript — never let the agent-shaped parsers
@@ -1632,15 +1656,14 @@ function trackLaunchResults(state: TailState, rec: Record): void {
       entry.taskId ??= workflowAckTaskId(text)
     } else {
       if (!entry.taskId) entry.taskId = launchTaskId(text)
-      if (!entry.outputFile && !entry.outputRefused) {
-        const named = launchOutputFile(state, text)
-        if (named && entry.kind === "shell" && promoted && !ackPathTrusted(state, rec, named)) entry.outputRefused = true
-        else entry.outputFile = named
-      }
+      // Taken as named. A PROMOTED shell's path is judged where it really is at every read (ackPathTrusted).
+      if (!entry.outputFile) entry.outputFile = launchOutputFile(state, text)
       // Learn where this session's task logs live, for the Monitors whose acks name no path. Only off a
-      // path this fold took (a promoted ack's is checked above) and shaped like the harness's own
-      // (`tasks/<its task id>.output`): this must not become a way to point a Monitor's reads elsewhere.
-      if (entry.kind === "shell" && !entry.monitor && entry.outputFile && entry.taskId && basename(entry.outputFile) === `${entry.taskId}.output` && basename(dirname(entry.outputFile)) === "tasks") {
+      // path shaped like the harness's own (`tasks/<its task id>.output`) and, for a promoted ack, one whose
+      // folder its NAME vouches for (ackFolderVouched — the fold stays pure): this must not become a way to
+      // point a Monitor's reads elsewhere. Every read of the candidate is vetted again where it really is.
+      if (entry.kind === "shell" && !entry.monitor && entry.outputFile && entry.taskId && basename(entry.outputFile) === `${entry.taskId}.output` && basename(dirname(entry.outputFile)) === "tasks"
+        && (!entry.promotedAck || ackFolderVouched(dirname(entry.outputFile), state.tasksDir, entry.promotedAck.sessionId))) {
         state.tasksDir = dirname(entry.outputFile)
       }
     }
@@ -1653,6 +1676,22 @@ function trackLaunchResults(state: TailState, rec: Record): void {
     state.subAgents.delete(id)
     retireToRing(state, entry, typeof rec.timestamp === "string" ? rec.timestamp : undefined, "completed")
   }
+}
+
+// A SHELL THAT ENDED BEFORE ITS OWN ACK WAS FOLDED. On a broker row the SDK's task stream runs ahead of the
+// transcript on disk, so a background Bash that exits at once (`echo quick-done; echo line2`) is retired
+// by its terminal task event (applyRuntimeTasks) between its tool_use record and the tool_result carrying
+// its launch ack — and that ack then found no live entry and was dropped, so the retired shell never
+// learned its log: its drawer said "No output was captured." while `tasks/<id>.output` held both lines.
+// Twice on the live stack, 2026-09-29; the same bytes folded in one tick (no task stream) were fine. So an
+// explicit launch ack for a retired shell still fills in what it names. Only an explicit ack, onto an
+// entry that was a registered launch — a promoted (foreground) shell is never in the ring before its ack.
+function backfillRetiredAck(state: TailState, id: string, text: string): void {
+  const dead = state.retiredShells.get(id)
+  if (!dead || dead.promotedAck || dead.outputFile || !LAUNCH_ACK_RE.test(text) || AUTO_BACKGROUND_ACK_RE.test(text)) return
+  dead.taskId ??= launchTaskId(text)
+  const named = launchOutputFile(state, text)
+  if (named) dead.outputFile = named
 }
 
 // A `SendMessage` aimed at a child that has ALREADY STOPPED does not just deliver a message — it
@@ -2287,13 +2326,6 @@ function applyFinalText(state: FoldState, text: string): void {
 // applyRecord does, so the tailer/board consume either identically. Claude does NOT use this path —
 // its 3-way stop_reason + 5s backstop turn signal can't round-trip through the union without loss
 // (see the NOTE on NormalizedEvent in backend/types.ts).
-function toolCallFolder(input: unknown): string | undefined {
-  if (!input || typeof input !== "object" || Array.isArray(input)) return undefined
-  const { workdir, cwd } = input as { workdir?: unknown; cwd?: unknown }
-  const dir = typeof workdir === "string" ? workdir : typeof cwd === "string" ? cwd : undefined
-  return dir?.trim() || undefined
-}
-
 export function applyEvent(state: FoldState, ev: NormalizedEvent): void {
   // Every timestamped event advances the activity clock (events map 1:1 to substantive lines; only the
   // untimestamped `title` lacks an `at`). Folded in file order, so the latest `at` wins. `context-usage`
@@ -2389,11 +2421,16 @@ export function applyEvent(state: FoldState, ev: NormalizedEvent): void {
       state.sawRecords = true
       if (ev.kind === "tool-call" && typeof ev.at === "string") state.lastToolCallAt = ev.at
       if (ev.kind === "tool-call") openCallIssued(state, ev.id, openCallFrom(ev.name, ev.input, ev.at))
-      // A CODEX tool call names the folder it runs in (`workdir`), which is the agent's own latest word on
-      // where it is working — the reading newestToolWorkdir takes by rescanning, folded here instead. Kept
-      // raw: a relative one is resolved against the session's folder by the tailer, which knows it.
+      // A CODEX shell command names the folder it runs in (`workdir`), which is the agent's own latest word
+      // on where it is working — the reading newestToolWorkdir takes by rescanning, folded here instead.
+      // Read through the transcript projection's own reader (codexToolWorkdir), so BOTH tool protocols count
+      // — the unified exec wrapper's raw-JavaScript input as well as a direct function call's object — and
+      // only a shell command does: an MCP tool's `cwd` argument is not where the agent is. Reading only the
+      // object form left a wrapper-protocol thread's header token blank while the terminal dialog, which
+      // rescans, opened in its worktree. Kept raw: a relative one is resolved against the session's folder
+      // by the tailer, which knows it.
       if (ev.kind === "tool-call") {
-        const dir = toolCallFolder(ev.input)
+        const dir = codexToolWorkdir(ev.name, ev.input)?.trim()
         if (dir) state.cwd = dir
       }
       else state.openCalls?.delete(ev.id)
@@ -3161,8 +3198,8 @@ export function createTailer(deps: TailerDeps): Tailer {
   // Still biased to "running": a child whose path resolves nowhere at all keeps the old behaviour and
   // is never called stale on a guess. This only ever ADDS a clock where there was none.
   function entryTranscript(state: TailState, e: SubAgentEntry): string | undefined {
+    if (e.kind === "shell") return shellOutputFile(state, e) // never a sidecar transcript
     if (e.outputFile) return e.outputFile
-    if (e.kind !== "agent") return undefined // a shell's output path is not a sidecar transcript
     const meta = descendantSidecar(state, e.toolUseId)
     return meta ? descendantTranscript(state, meta) : undefined
   }
@@ -3312,6 +3349,24 @@ export function createTailer(deps: TailerDeps): Tailer {
     return out
   }
 
+  // WHERE THE THREAD'S AGENT IS WORKING (FoldState.cwd), lifted to its checkout. `dir` is present whenever
+  // the fold has a reading of a folder that exists — the project root included — and `checkout` only when
+  // that is somewhere else. Memoized in thread-cwd.ts, so asking per tick costs a map lookup.
+  function threadWorkingDir(state: TailState): { dir: string; checkout?: WorkCheckout } | undefined {
+    const raw = state.cwd
+    if (!raw || !projectWorkDir) return undefined
+    // Only a Codex/ACP tool call's `workdir` can be relative (a Claude record's `cwd` is taken absolute or
+    // not at all), and Codex reads it against its session's folder — see TailerDeps.codexSessionCwd.
+    const base = isAbsolute(raw) ? undefined : deps.codexSessionCwd?.(state.slug, state.sessionId) ?? projectWorkDir
+    return liftWorkingDir(base === undefined ? raw : resolve(base, raw), projectWorkDir, now())
+  }
+
+  function workingDirTelemetry(state: TailState): Pick<SessionTelemetry, "workingDir" | "checkout"> {
+    const reading = threadWorkingDir(state)
+    if (!reading) return {}
+    return { workingDir: reading.dir, ...(reading.checkout ? { checkout: reading.checkout } : {}) }
+  }
+
   // Derive the surfaced view of a session's live background SHELLS (kind "shell"; DISPLAY-ONLY — the
   // "background running" chip on the launch record, nothing more). A background Bash/Monitor is a CHILD
   // of the agent process running this session — it cannot outlive it. So the death of that process (it
@@ -3333,24 +3388,6 @@ export function createTailer(deps: TailerDeps): Tailer {
   // (board.deriveNeedsYou reads hasLiveBackgroundWork, which is sub-agent-only), so the worst a
   // never-clearing entry can do is leave a card saying a shell is running — the thread is queued and in
   // front of the operator either way. It clears on the shell's real terminal signal or on owner death.
-  // WHERE THE THREAD'S AGENT IS WORKING (FoldState.cwd), lifted to its checkout. `dir` is present whenever
-  // the fold has a reading of a folder that exists — the project root included — and `checkout` only when
-  // that is somewhere else. Memoized in thread-cwd.ts, so asking per tick costs a map lookup.
-  function threadWorkingDir(state: TailState): { dir: string; checkout?: WorkCheckout } | undefined {
-    const raw = state.cwd
-    if (!raw || !projectWorkDir) return undefined
-    // Only a Codex/ACP tool call's `workdir` can be relative (a Claude record's `cwd` is taken absolute or
-    // not at all), and Codex reads it against its session's folder — see TailerDeps.codexSessionCwd.
-    const base = isAbsolute(raw) ? undefined : deps.codexSessionCwd?.(state.slug, state.sessionId) ?? projectWorkDir
-    return liftWorkingDir(base === undefined ? raw : resolve(base, raw), projectWorkDir, now())
-  }
-
-  function workingDirTelemetry(state: TailState): Pick<SessionTelemetry, "workingDir" | "checkout"> {
-    const reading = threadWorkingDir(state)
-    if (!reading) return {}
-    return { workingDir: reading.dir, ...(reading.checkout ? { checkout: reading.checkout } : {}) }
-  }
-
   function bgShellViews(state: TailState): BgShellView[] {
     if (state.subAgents.size === 0 || state.paneDead) return []
     const out: BgShellView[] = []
@@ -3367,7 +3404,7 @@ export function createTailer(deps: TailerDeps): Tailer {
       // one we cannot establish an answer for, stays "running": this only ever DEMOTES a shell we have
       // positively confirmed nobody is running. `ToolStatusMeta` and the drawer have rendered a "stale"
       // shell all along; nothing ever produced one, because this was a literal "running".
-      const shellState = shellIsGone(e) ? "stale" as const : "running" as const
+      const shellState = shellIsGone(state, e) ? "stale" as const : "running" as const
       // The budget is resolved HERE, off the raw launch `timeout`, rather than folded — see
       // SubAgentEntry.timeoutMs. None declared ⇒ none at all (no default since 2026-09-29, shell-budget.ts).
       // An auto-backgrounded foreground Bash carries none: its `timeout` was the foreground wait it
@@ -3376,7 +3413,7 @@ export function createTailer(deps: TailerDeps): Tailer {
       const budget = e.monitor ? { monitor: true } : declared !== undefined ? { budgetMs: declared } : {}
       // Where it runs — the OS's answer once it has one (shellCwd) — and, only when that is off the
       // project root, the checkout it runs in.
-      const cwd = shellState === "running" ? shellCwd(e) : e.cwd
+      const cwd = shellState === "running" ? shellCwd(state, e) : e.cwd
       const checkout = liftCheckout(cwd, projectWorkDir, now())
       out.push({ label: e.label, startedAt: e.startedAt, state: shellState, id: e.toolUseId, ...(e.taskId ? { stoppable: true, taskId: e.taskId } : {}), ...(lastActivityAt ? { lastActivityAt } : {}), ...budget, ...(cwd ? { cwd } : {}), ...(checkout ? { checkout } : {}) })
     }
@@ -3899,31 +3936,41 @@ export function createTailer(deps: TailerDeps): Tailer {
         shellProbeInFlight = false
       })
   }
-  function shellIsGone(e: { outputFile?: string; outputRefused?: true; startedAt: string }): boolean {
-    // A promoted ack whose path the fold refused (ackPathTrusted) has no file to ask the OS about, so the
-    // probe below never ran and the row pulsed "running" for good. Refused means the ack was, almost
-    // surely, a command's own output quoting one — that command has already finished (all 64 real
-    // auto-background acks on 2026-09-29 passed) — so it reads as gone: a quiet row whose × clears it,
-    // counted by no running mark and no "Terminals" rail group. A genuine handoff refused by some folder
-    // layout not yet seen would read quiet while it runs, the under-report this function prefers.
-    if (e.outputRefused) return true
-    if (!e.outputFile) return false
+  // A SHELL'S OUTPUT FILE, as every reader of it takes it — the drawer, the line counter, the liveness and
+  // folder probes, the activity clock: the path its ack named, and for a PROMOTED ack only while that path
+  // really sits in this session's task folder (ackPathTrusted, asked now — see there for why not at fold
+  // time). One realpath per promoted shell per read; promoted shells are rare (64 in the whole corpus).
+  function shellOutputFile(state: TailState, e: { outputFile?: string; promotedAck?: PromotedAck }): string | undefined {
+    if (!e.outputFile || !e.promotedAck) return e.outputFile
+    return ackPathTrusted(e.outputFile, state.tasksDir, e.promotedAck.sessionId) ? e.outputFile : undefined
+  }
+
+  function shellIsGone(state: TailState, e: { outputFile?: string; promotedAck?: PromotedAck; startedAt: string }): boolean {
+    const file = shellOutputFile(state, e)
+    // A promoted ack whose path is refused (ackPathTrusted) has no file to ask the OS about, so the probe
+    // below never ran and the row pulsed "running" for good. Refused means the ack was, almost surely, a
+    // command's own output quoting one — that command has already finished (all 64 real auto-background
+    // acks on 2026-09-29 passed) — so it reads as gone: a quiet row whose × clears it, counted by no
+    // running mark and no "Terminals" rail group. A genuine handoff refused by some folder layout not yet
+    // seen would read quiet while it runs, the under-report this function prefers.
+    if (e.outputFile && !file) return true
+    if (!file) return false
     const started = Date.parse(e.startedAt)
     if (!Number.isFinite(started) || now() - started < SHELL_PROBE_GRACE_MS) return false
-    const cached = shellAliveCache.get(e.outputFile)
+    const cached = shellAliveCache.get(file)
     // A DEAD verdict is terminal — a process cannot come back — so it is never re-probed.
     if (cached && (cached.alive === false || now() - cached.at < SHELL_PROBE_TTL_MS)) return !cached.alive
     // An INJECTED probe is answered inline. It is the test seam, and a caller who supplies one is
     // saying the answer is cheap; the batching below exists solely because the real one is not.
     if (deps.shellAlive) {
-      const alive = deps.shellAlive(e.outputFile)
+      const alive = deps.shellAlive(file)
       if (alive === undefined) return false // cannot tell ⇒ unchanged
-      shellAliveCache.set(e.outputFile, { at: now(), alive })
+      shellAliveCache.set(file, { at: now(), alive })
       return !alive
     }
     // The real probe costs ~300ms of blocked event loop, so it does NOT happen here. Queue it and
     // report the shell unchanged; the verdict lands in the cache and this reads it next tick.
-    shellProbeWanted.add(e.outputFile)
+    shellProbeWanted.add(file)
     armShellProbeFlush()
     return false
   }
@@ -3961,8 +4008,8 @@ export function createTailer(deps: TailerDeps): Tailer {
     }, 0)
     shellCwdArmed.unref?.()
   }
-  function shellCwd(e: SubAgentEntry): string | undefined {
-    const file = e.outputFile
+  function shellCwd(state: TailState, e: SubAgentEntry): string | undefined {
+    const file = shellOutputFile(state, e)
     if (!file) return e.cwd
     const reading = shellCwdReadings.get(file)
     if (reading !== undefined) {
@@ -4032,10 +4079,11 @@ export function createTailer(deps: TailerDeps): Tailer {
     // (TailState.tasksDir). Only a candidate: it must still pass the vet and exist, and it is not NAMED —
     // a Monitor that has printed nothing may simply not have written its file yet, which is "waiting",
     // not "gone". Not used for the row's liveness probe, which keys on the ack-named path alone.
-    const output = (e: { monitor?: true; outputFile?: string; outputRefused?: true; taskId?: string }) => {
-      const candidate = e.outputFile ?? (e.monitor && e.taskId && state.tasksDir ? join(state.tasksDir, `${e.taskId}.output`) : undefined)
+    const output = (e: { monitor?: true; outputFile?: string; promotedAck?: PromotedAck; taskId?: string }) => {
+      const named = shellOutputFile(state, e)
+      const candidate = e.outputFile ? named : e.monitor && e.taskId && state.tasksDir ? join(state.tasksDir, `${e.taskId}.output`) : undefined
       const outputFile = candidate ? vetHarnessOutputPath(candidate, e.taskId) : undefined
-      return { ...(outputFile ? { outputFile } : {}), ...(e.outputFile || e.outputRefused ? { outputNamed: true } : {}) }
+      return { ...(outputFile ? { outputFile } : {}), ...(e.outputFile ? { outputNamed: true } : {}) }
     }
     const extra = (e: { cwd?: string; monitor?: true }) => ({ ...(e.cwd ? { cwd: e.cwd } : {}), ...(e.monitor ? { monitor: true } : {}) })
     if (live?.kind === "shell") {
