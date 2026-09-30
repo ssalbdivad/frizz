@@ -935,7 +935,8 @@ const HANDLERS = {
 /** The `read_thread` handler: another thread's request, status and newest message, by handle.
  * @param {Record<string, unknown>} args @returns {Promise<string>} */
 async function readThread(args) {
-  const handle = typeof args.handle === "string" ? args.handle.trim() : ""
+  // \`to\` is accepted too: it is the name a worker reaches for first (seen on a real worker, 2026-09-29).
+  const handle = typeof args.handle === "string" ? args.handle.trim() : typeof args.to === "string" ? args.to.trim() : ""
   if (!handle) throw new Error("`handle` is required — the other thread's camelCase name, e.g. `shellBudgets`")
   const r = (await callRpc("readThread", { slug: threadSlug(), handle }))?.result
   if (!r?.found) return `No thread is called ${handle}.${knownLine(r?.known)}`
@@ -951,7 +952,8 @@ async function readThread(args) {
 /** The `message_thread` handler: deliver a message into another open thread's conversation.
  * @param {Record<string, unknown>} args @returns {Promise<string>} */
 async function messageThread(args) {
-  const handle = typeof args.handle === "string" ? args.handle.trim() : ""
+  // \`to\` is accepted too: it is the name a worker reaches for first (seen on a real worker, 2026-09-29).
+  const handle = typeof args.handle === "string" ? args.handle.trim() : typeof args.to === "string" ? args.to.trim() : ""
   const message = typeof args.message === "string" ? args.message.trim() : ""
   if (!handle) throw new Error("`handle` is required — the other thread's camelCase name, e.g. `shellBudgets`")
   if (!message) throw new Error("`message` is required")

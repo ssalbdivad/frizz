@@ -16,8 +16,9 @@ test("a name shows as the camelCase handle it is addressed by", () => {
   assert.equal(threadHandle("shellBudgets"), "shellBudgets")
 })
 
-test("a sentence is not a name and gets no handle", () => {
-  assert.equal(threadHandle("Fix the shell budget default"), undefined)
+test("a session title of up to five words gets a handle; a sentence does not", () => {
+  assert.equal(threadHandle("Test fixture secret word"), "testFixtureSecretWord")
+  assert.equal(threadHandle("Zon4.5 features and z.properties documentation audit"), undefined)
   assert.equal(threadHandle("  "), undefined)
 })
 

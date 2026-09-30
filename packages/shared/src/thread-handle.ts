@@ -9,13 +9,15 @@
 //
 // Resolution never depends on the casing: a handle is matched by folding case, punctuation and spacing
 // away (the server's `foldThreadName`), so `@shellbudgets`, `@shell-budgets` and `@ShellBudgets` all name
-// the same thread, and a handle always folds to the same key as the words it came from. That is also why
-// uniqueness needs no second rule — names are already unique under that fold.
+// the same thread. Both sides fold from the HANDLE, never from the stored words: the fold strips a plural
+// on the last word, and "Dev ops" is two short words where `devOps` is one (server thread-mentions.ts).
 
 /** Past this many words a stored title is not a name but a sentence (a legacy row, a long human rename),
- *  and a camelCase run of it would be unreadable; it stays as written and has no handle. Names minted
- *  since 2026-09-29 are one or two words, so three leaves room for a proper noun spelled as two. */
-const HANDLE_MAX_WORDS = 3
+ *  and a camelCase run of it would be unreadable; it stays as written and has no handle. Frizz mints one
+ *  or two words, but the name SHOWN can be Claude's own session title until then, and that runs to four
+ *  or five ("Test fixture secret word" — seen on a real dispatch, 2026-09-29); those still need a handle
+ *  that matches what the board shows. */
+const HANDLE_MAX_WORDS = 5
 
 function words(name: string): string[] {
   return name.normalize("NFKD").replace(/\p{M}+/gu, "").split(/[^\p{L}\p{N}]+/u).filter(Boolean)
