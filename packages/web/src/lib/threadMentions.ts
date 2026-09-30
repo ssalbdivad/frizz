@@ -63,25 +63,27 @@ export function mentionCandidates(threads: readonly ThreadView[], excludeSlug?: 
 // own: the worker resolves a handle its own project does not carry in the other projects Frizz has open
 // (server router resolveElsewhere). Its OWN project still wins there — names are unique only within a
 // project — so another project's thread whose handle folds to one this project already has is not
-// offered: inserted, it would name this project's thread instead. Open threads only, because that is
-// what the machine-wide poll carries; the worker still resolves a finished one by name.
+// offered: inserted, it would name this project's thread instead. Finished threads too (2026-09-30: "can
+// i not reference completed threads with @?") — the poll carries each project's most recent Done rows
+// (`recentDone`), offered after every project's open ones, the way a project's own box orders them.
 
 /** Every other open project's threads as candidates, each tagged with its project, in the poll's project
  *  order; `home` is the project the box writes into, and `taken` the candidates it already has. */
 export function crossProjectMentionCandidates(queues: readonly ProjectQueue[], home: string | undefined, taken: readonly MentionCandidate[]): MentionCandidate[] {
   const seen = new Set(taken.map((c) => foldHandle(c.handle)))
-  const out: MentionCandidate[] = []
+  const open: MentionCandidate[] = []
+  const done: MentionCandidate[] = []
   for (const queue of queues) {
     if (queue.projectSlug === home) continue
     const project = { slug: queue.projectSlug, name: queue.projectName }
-    for (const candidate of mentionCandidates(queue.threads)) {
+    for (const candidate of mentionCandidates([...queue.threads, ...(queue.recentDone ?? [])])) {
       const key = foldHandle(candidate.handle)
       if (seen.has(key)) continue
       seen.add(key)
-      out.push({ ...candidate, project })
+      ;(candidate.done ? done : open).push({ ...candidate, project })
     }
   }
-  return out
+  return [...open, ...done]
 }
 
 // The characters a handle runs over, and what may sit right before its `@` — mirrors @frizz/shared

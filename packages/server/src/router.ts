@@ -964,6 +964,17 @@ function isHumanTurn(m: TranscriptMessage): boolean {
   return !m.wake || said.startsWith(BURIED_ANSWERS_HEADER)
 }
 
+/** How many Done threads per project the machine-wide poll carries: the recent ones an `@` mention from
+ *  another project plausibly means — the typeahead's own bound (web threadMentions.ts DONE_CANDIDATES). */
+const RECENT_DONE_THREADS = 20
+
+/** The newest-rested Done threads, capped. Keyed on the rest instant, the at-rest listing key the web
+ *  orders a finished row by (groups.ts lastActiveAt); an ISO string sorts as its instant. */
+function recentDoneThreads(done: readonly ThreadView[]): ThreadView[] {
+  const at = (t: ThreadView) => t.lastAssistantAt ?? t.lastActivityAt ?? t.spawnedAt ?? ""
+  return [...done].sort((a, b) => at(b).localeCompare(at(a))).slice(0, RECENT_DONE_THREADS)
+}
+
 // Each project's router, by its context — so a handle another project answers (resolveElsewhere) is read
 // by THAT project's own `readThread`, over its own transcripts, tailer and sub-agent directory.
 // Typed by the one procedure read through it: the whole router's type is inferred from this function's
@@ -4528,17 +4539,18 @@ export function createRouter(ctx: AppContext) {
         for (const { project, board } of open) {
           try {
             const snapshot = await board.snapshot()
-            let doneCount = 0
+            const done: ThreadView[] = []
             const threads = snapshot.threads.filter((thread) => {
               // A thread's terminals ride its row (`terminals`), so the session rows are the whole list.
               if (thread.kind !== "session" || thread.foreign) return false
               // Archived is Done, running or not — only the human reopens it (web groups.ts `sectionOf`).
               if (thread.state === "archived") {
-                doneCount++
+                done.push(thread)
                 return false
               }
               return true
             })
+            const doneCount = done.length
             out.push({
               projectId: project.id,
               projectSlug: snapshot.projectSlug ?? project.id,
@@ -4548,6 +4560,7 @@ export function createRouter(ctx: AppContext) {
               githubRepo: snapshot.githubRepo,
               threads,
               doneCount,
+              recentDone: recentDoneThreads(done),
             })
           } catch {
             // A board stopping mid-walk is a project missing from this round, not a failed request for

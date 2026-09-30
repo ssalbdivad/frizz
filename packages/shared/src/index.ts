@@ -6239,6 +6239,10 @@ export const ProjectQueue = z.object({
   githubRepo: z.string().optional(),
   threads: z.array(ThreadView),
   doneCount: z.number().int().nonnegative(),
+  /** The most recently rested Done threads, newest first, capped (`RECENT_DONE_THREADS`) — what the
+   *  All projects `@` typeahead offers after the open ones (web lib/threadMentions.ts). Never drawn as
+   *  rows: this page's Done band is still `doneCount`. */
+  recentDone: z.array(ThreadView).optional(),
 })
 export type ProjectQueue = z.infer<typeof ProjectQueue>
 

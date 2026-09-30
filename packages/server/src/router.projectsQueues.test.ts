@@ -64,11 +64,20 @@ test("answers every open project with its open threads, its Done count and the i
   )
   assert.deepEqual(alpha!.threads.map((t) => t.id), ["queued", "running", "snoozed", "publishing"])
   assert.equal(alpha!.doneCount, 5)
+  assert.deepEqual(alpha!.recentDone?.map((t) => t.id).sort(), ["finished", "finished-2", "sub-agent-back", "sub-agent-out", "wrapping-up"])
   assert.deepEqual(alpha!.threads.find((t) => t.id === "publishing")?.terminals?.map((t) => t.id), ["term-otp"])
   assert.deepEqual(
     { projectSlug: beta!.projectSlug, projectName: beta!.projectName, projectDir: beta!.projectDir, threads: beta!.threads, doneCount: beta!.doneCount },
     { projectSlug: "b", projectName: "b", projectDir: "/work/b", threads: [], doneCount: 0 },
   )
+})
+
+test("carries each project's most recently rested Done threads, newest first and capped, for the `@` typeahead", async () => {
+  const rested = (i: number) => session(`done-${i}`, { state: "archived", lastAssistantAt: new Date(Date.UTC(2026, 8, 1, 0, i)).toISOString() })
+  const router = harness(() => [{ project: project("a"), board: board(Array.from({ length: 25 }, (_, i) => rested(i))) }])
+  const [alpha] = await router.projectsQueues.handler({ input: undefined })
+  assert.equal(alpha!.doneCount, 25)
+  assert.deepEqual(alpha!.recentDone?.map((t) => t.id), Array.from({ length: 20 }, (_, i) => `done-${24 - i}`))
 })
 
 test("without a tenant map (a test context, a one-project server) it answers for its own project alone", async () => {

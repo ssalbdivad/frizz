@@ -278,3 +278,19 @@ test("crossProjectMentionCandidates: other projects' threads, tagged, minus the 
   assert.equal(typed[0]?.slug, "p2")
   assert.deepEqual(mentionSegments("ask @billing", [...own, ...cross]).at(-1), { kind: "mention", text: "@billing", slug: "p2", status: undefined, project: "app" })
 })
+
+test("crossProjectMentionCandidates: another project's recent done threads, after every project's open ones", () => {
+  const queues = [
+    { projectId: "home", projectSlug: "home", projectName: "Home", projectDir: "/", doneCount: 1,
+      threads: [thread({ id: "h1", title: "Tea recipes" })],
+      recentDone: [thread({ id: "h2", title: "Standup notes", state: "archived" })] },
+    { projectId: "nub", projectSlug: "nub", projectName: "nub", projectDir: "/", doneCount: 0, threads: [thread({ id: "n1", title: "Parser port" })] },
+  ] as ProjectQueue[]
+  const cross = crossProjectMentionCandidates(queues, "frizz", [])
+  assert.deepEqual(cross.map((c) => [c.handle, c.done, c.project?.slug]), [
+    ["tea-recipes", false, "home"],
+    ["parser-port", false, "nub"],
+    ["standup-notes", true, "home"],
+  ])
+  assert.equal(matchMentions(cross, "standup")[0]?.slug, "h2")
+})
