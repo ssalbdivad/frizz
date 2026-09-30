@@ -200,6 +200,15 @@ test("an archived or snoozed parent comes out when its side turn blocks on the h
     storage.setStateIfCurrent("done-blocked", "done-blocked-session", 0, "archived")
     await read("10:00:30")
     assert.equal(where()["done-blocked"], "done", "a parent put back by the human stays put")
+    // …even when the SAME side turn then goes on to a second reason: the human denied the prompt and the
+    // worker ended without spawning. It surfaced once already; the human's call stands.
+    telemetry.set("done-blocked", tele("idle", { lastAssistantAt: iso("10:00:40"), sideTurn: side({ ended: true, clean: false }) }))
+    await read("10:00:45")
+    assert.equal(where()["done-blocked"], "done", "once per side turn, not once per reason")
+    // (Back to blocked for the restart below, which must still surface a side turn waiting on the human.)
+    telemetry.set("done-blocked", tele("in-flight", { permPrompt: true, sideTurn: side({}) }))
+    await read("10:00:50")
+    assert.equal(where()["done-blocked"], "done", "and flipping back to blocked is still the same side turn")
 
     // A RESTART re-primes: a side turn that went unclean before it is history, but one blocked on the
     // human right now still surfaces.

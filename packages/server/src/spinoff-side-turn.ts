@@ -86,9 +86,23 @@ export function spawnStarted(text: string, isError = false): boolean {
 const WRITE_TOOLS: ReadonlySet<string> = new Set(["Edit", "MultiEdit", "Write", "NotebookEdit", "apply_patch"])
 function writesFiles(name: string, input: unknown): boolean {
   if (WRITE_TOOLS.has(name)) return true
+  if (engagesHuman(name)) return true
   if (name === "exec" && typeof input === "string") return /\btools\.apply_patch\s*\(/.test(input)
   const command = shellCommandOf(name, input)
   return command !== undefined && shellWritesFiles(command)
+}
+
+// A CALL THAT CHANGES WHAT THE HUMAN IS OWED IS WORK TOO (2026-09-30, review of the side turn). A worker
+// that `ask`s the human while gathering its brief, then spawns and ends clean, had its question hidden
+// with the turn — and on an archived or snoozed parent nothing surfaced it, since the side turn looked
+// quiet. The same goes for the rest of the thread's own registrations (a `done`, a watch, a timer, a
+// message to another thread): each moves the thread's state, which is exactly what a side turn promises
+// not to do. The Frizz tools that only READ (`read_thread`, `activity`) stay allowed; `spawn_thread` is
+// the side turn's own call and is judged by `call` below. Matched under any MCP prefix, like
+// spinoffIdOfSpawnCall, and Claude's native AskUserQuestion with them.
+const HUMAN_FACING = /(?:^|__|\.|\/)(?:ask|unask|done|watch|watch_pr|watch_issue|unwatch|timer|goal|message_thread|link|unlink|title|extend_shell)$/
+function engagesHuman(name: string): boolean {
+  return name === "AskUserQuestion" || HUMAN_FACING.test(name)
 }
 
 // A SHELL WRITE IS A WRITE (2026-09-30, review of the side turn). The edited-files rail has read Bash

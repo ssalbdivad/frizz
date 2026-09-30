@@ -2248,22 +2248,26 @@ export function createBoard(
   //   • it went UNCLEAN — the turn is real (spinoff-side-turn.ts), whether it has ended or not; or
   //   • it is still running and BLOCKED on the human (an approval, a permission prompt, a native ask) or
   //     died (crashed). Clean so far, and it may yet finish clean — but not without the human.
-  // EDGE-TRIGGERED per side turn: done once when it surfaces, so a human who puts the thread back after
-  // seeing it is not overruled on the next build. A restart re-primes silently, like the notify, except
-  // a side turn that is blocked RIGHT NOW: that one still waits on the human, and a boot that swallowed it
-  // would strand it again.
-  const sideTurnSeen = new Map<string, string | undefined>()
+  // EDGE-TRIGGERED per side turn: done ONCE when it first surfaces, whichever reason that was, so a human
+  // who puts the thread back after seeing it is not overruled on a later build — not when the same side
+  // turn goes on from blocked to unclean either (review: keyed on id AND reason, a parent reopened for a
+  // permission prompt, re-archived by the human, was reopened again when the worker then declined the
+  // spawn). A restart re-primes silently, like the notify, except a side turn that is blocked RIGHT NOW:
+  // that one still waits on the human, and a boot that swallowed it would strand it again.
+  const sideTurnPrimed = new Set<string>()
+  const sideTurnSurfaced = new Map<string, string>() // slug → the side turn already surfaced (or primed past)
   function surfaceSideTurn(row: SessionRow, tele: SessionTelemetry | undefined, view: ThreadView, nowMs: number): void {
     if (!tele || tele.primed === false) return
+    const first = !sideTurnPrimed.has(row.slug)
+    sideTurnPrimed.add(row.slug)
     const turn = tele.sideTurn
-    const blocked = turn !== undefined && !turn.ended &&
+    if (turn === undefined) return
+    const blocked = !turn.ended &&
       (view.actionableInteraction === true || view.runtime === "perm-prompt" || view.pendingAsk !== undefined || view.crashed === true)
-    const reason = turn === undefined ? undefined : !turn.clean ? "unclean" : blocked ? "blocked" : undefined
-    const key = reason === undefined ? undefined : `${turn!.id} ${reason}`
-    const first = !sideTurnSeen.has(row.slug)
-    const prev = sideTurnSeen.get(row.slug)
-    sideTurnSeen.set(row.slug, key)
-    if (key === undefined || key === prev || (first && reason !== "blocked")) return
+    const reason = !turn.clean ? "unclean" : blocked ? "blocked" : undefined
+    if (reason === undefined || sideTurnSurfaced.get(row.slug) === turn.id) return
+    sideTurnSurfaced.set(row.slug, turn.id)
+    if (first && reason !== "blocked") return
     if (view.archived !== true && futureSnooze(row, nowMs) === undefined) return
     const deps = { storage, board: { refresh: queueSnoozeRefresh } }
     try {
@@ -2392,7 +2396,9 @@ export function createBoard(
       out.push(view)
       surfaceSideTurn(row, tele, view, nowMs)
     }
-    for (const slug of [...sideTurnSeen.keys()]) if (!rows.some((row) => row.slug === slug)) sideTurnSeen.delete(slug)
+    const live = new Set(rows.map((row) => row.slug))
+    for (const slug of sideTurnPrimed) if (!live.has(slug)) sideTurnPrimed.delete(slug)
+    for (const slug of sideTurnSurfaced.keys()) if (!live.has(slug)) sideTurnSurfaced.delete(slug)
     for (const key of pendingInteractionCache.keys()) {
       if (!currentInteractionKeys.has(key)) pendingInteractionCache.delete(key)
     }

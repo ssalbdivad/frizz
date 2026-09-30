@@ -99,6 +99,18 @@ test("side turn: a spawn that failed is never hidden — by its error flag or by
   assert.deepEqual(sideTurnsOf([...RESTED, request(10), say(11, "I would rather not.")]), [{ id: SPN, hidden: false }])
 })
 
+test("side turn: asking the human, or registering anything, before the spawn makes it a real turn", () => {
+  const before = (name: string) =>
+    sideTurnsOf([...RESTED, request(10), call(11, "toolu_x", name, { questions: [] }), result(12, "toolu_x", "ok"), spawnCall(13), started(14, 13), say(15, "Spun off.")])
+  for (const name of ["mcp__frizz__ask", "AskUserQuestion", "mcp__frizz__done", "mcp__frizz__watch_pr", "mcp__frizz__timer", "mcp__frizz__message_thread", "frizz.ask"]) {
+    assert.deepEqual(before(name), [{ id: SPN, hidden: false }], name)
+  }
+  // Frizz's READ tools are the brief being gathered, like any read.
+  for (const name of ["mcp__frizz__read_thread", "mcp__frizz__activity", "ToolSearch"]) {
+    assert.deepEqual(before(name), [{ id: SPN, hidden: true }], name)
+  }
+})
+
 test("side turn: work after the spawn, or a write before it, makes it a real turn", () => {
   assert.deepEqual(
     sideTurnsOf([...RESTED, request(10), spawnCall(11), started(12, 11), call(13, "toolu_ls", "Bash", { command: "ls" }), result(14, "toolu_ls", "a.ts"), say(15, "Also looked around.")]),
