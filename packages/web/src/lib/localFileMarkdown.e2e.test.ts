@@ -67,7 +67,7 @@ test("Markdown local image syntax uses the gated image proxy and local files rem
         "/fixture/.frizz/threads/6d56ea2f/HANDOFF.md",
         "/fixture/home/.claude/CLAUDE.md",
         // The editor deep links: a `cursor://file/…` anchor used to be handed to the OS, which opened
-        // Cursor no matter what "Local file links" said. Both slash forms arrive as the path they name.
+        // Cursor no matter what "External app" said. Both slash forms arrive as the path they name.
         "/fixture/plan.md",
         "/fixture/trace.json",
         // Windows destinations carry a path too. The file URL's leading slash stays until the
@@ -139,7 +139,7 @@ test("Markdown local image syntax uses the gated image proxy and local files rem
 
     // A tool card's header path (PathLink) is the OTHER producer of a local-file link, and it used to
     // be an `<a href="cursor://file/…">` handed straight to the OS — which meant it opened Cursor no
-    // matter what "Local file links" said. Nothing on this page may carry an editor-scheme href.
+    // matter what "External app" said. Nothing on this page may carry an editor-scheme href.
     assert.deepEqual(await page.$$eval('a[href]', (nodes) => nodes.map((n) => n.getAttribute("href"))), [])
 
     // It routes by the same rules as the markdown links, and — because the header it sits in is also

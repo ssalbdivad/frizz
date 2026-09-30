@@ -1,6 +1,7 @@
 import { projectRpc, rpc } from "../api/rpc.ts"
 import { openImageViewer, pushFileReader, showToast } from "../store.ts"
 import { copyTextToClipboard } from "./clipboard.ts"
+import { prefs } from "./prefs.ts"
 import { localViewerFor } from "./localViewer.ts"
 import type { MarkdownScope } from "./useMarkdown.ts"
 
@@ -82,6 +83,12 @@ export function openLocalPath(path: string, from?: Element | null, scope?: Markd
     openImageViewer(path, from ? imageGalleryFor(from) : [], scope?.projectId)
     return
   }
+  // A code file goes straight to the external app when this browser asked for that (prefs.codeFiles),
+  // and lands in the reader anyway when the app cannot start — the reader is the one that always works.
+  if (viewer === "text" && prefs.codeFiles === "editor") {
+    void openExternally(path, scope?.projectId, () => pushFileReader(path, scope))
+    return
+  }
   if (viewer) {
     pushFileReader(path, scope)
     return
@@ -110,7 +117,7 @@ export function imageGalleryFor(from: Element): string[] {
   return paths
 }
 
-async function openExternally(path: string, project?: string) {
+async function openExternally(path: string, project?: string, fallback?: () => void) {
   try {
     const result = await (project ? projectRpc(project) : rpc).openLocalFile({ path })
     if (result.action === "copy") {
@@ -118,6 +125,7 @@ async function openExternally(path: string, project?: string) {
       showToast("Copied local path")
     }
   } catch (error) {
+    fallback?.()
     showToast(`Could not open local file: ${(error as Error).message.slice(0, 100)}`)
   }
 }

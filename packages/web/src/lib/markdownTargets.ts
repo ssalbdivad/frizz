@@ -22,7 +22,7 @@ const WINDOWS_ABSOLUTE_PATH = /^[a-zA-Z]:[\\/](?![\\/])/
 // Editor deep-link schemes that all share VS Code's URL grammar: `<scheme>://file/<path>[:line[:col]]`.
 // Agents under user-level "link every file" instructions write these (`[plan.md](cursor://file/<abs>)`)
 // because in a terminal that is the only clickable form. Left as an anchor, the OS resolves the scheme
-// and the named editor opens no matter what the "Local file links" setting says — and a `.md` file
+// and the named editor opens no matter what the "External app" setting says — and a `.md` file
 // never reaches Frizz's own reader. Classify the path the link names instead, so it routes exactly
 // like a plain path link. The path may carry its own leading slash (`cursor://file//Users/…`) or lean
 // on the route's (`cursor://file/Users/…`); both forms occur in the wild and both editors accept both.
@@ -130,7 +130,7 @@ export function localImageUrlForTarget(target: LocalMarkdownTarget): string | nu
 // doc is Markdown prose first (its imports and JSX render as inert text), and until 2026-08-25 it was
 // the one Markdown flavour that slipped past the reader to the OS opener — which on a Mac whose
 // Markdown handler is Cursor meant a blog post in `content/blog/*.mdx` opened an editor, whatever
-// the "Local file links" setting said.
+// the "External app" setting said.
 const MARKDOWN_FILE_PATH = /\.(?:md|mdx|markdown)$/i
 
 export function isLocalMarkdownFile(path: string): boolean {

@@ -132,9 +132,15 @@ export function SettingsDrawer() {
               />
             </SettingsField>
 
-            {/* LAST, on purpose: which editor a vetted local path opens in is the one power-user
-                knob in the drawer, so it sits below everything an ordinary operator adjusts. */}
-            <SettingsField label="Local file links" help={SETTINGS_HELP.localFileOpener}>
+            {/* LAST, on purpose: where a vetted local path opens is the one power-user pair in the
+                drawer, so it sits below everything an ordinary operator adjusts. */}
+            {/* Client-only (prefs): where a click on a code file goes, in this browser. The app it
+                goes to is the machine-wide select just below, which it reads as a pair with. */}
+            <SettingsField label="Open code files" help={SETTINGS_HELP.codeFiles}>
+              <CodeFilesControl />
+            </SettingsField>
+
+            <SettingsField label="External app" help={SETTINGS_HELP.localFileOpener}>
               <Select
                 variant="bordered"
                 value={draft.localFileOpener ?? "system"}
@@ -292,6 +298,30 @@ function DensityToggle() {
 
 // Queue/rested-band direction: client-only (localStorage prefs proxy), applies live to the Needs-you
 // queue and the sidebar's rested rows the instant it flips. FIFO by default (longest in the queue first).
+function CodeFilesControl() {
+  const { codeFiles } = useSnapshot(prefs)
+  const opts: { v: "frizz" | "editor"; label: string }[] = [
+    { v: "frizz", label: "In Frizz" },
+    { v: "editor", label: "In external app" },
+  ]
+  return (
+    <div className="inline-flex w-fit rounded-md border border-border bg-bg p-0.5">
+      {opts.map((o) => (
+        <button
+          key={o.v}
+          onClick={() => (prefs.codeFiles = o.v)}
+          aria-pressed={codeFiles === o.v}
+          className={`rounded px-3 py-1 text-[12px] transition-colors ${
+            codeFiles === o.v ? "bg-fg text-bg" : "text-muted hover:text-fg"
+          }`}
+        >
+          {o.label}
+        </button>
+      ))}
+    </div>
+  )
+}
+
 function QueueOrderControl() {
   const { queueOrder } = useSnapshot(prefs)
   const opts: { v: "fifo" | "lifo"; label: string }[] = [

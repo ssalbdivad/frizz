@@ -28,6 +28,12 @@ export interface Prefs {
   // map: an action still on its default has no entry, so a default that changes in a later release
   // reaches everyone who never touched it. Per browser on purpose — a keyboard belongs to a machine.
   keybindings: Overrides
+  // Where a click on a CODE file (anything the reader shows as source — not Markdown, not a picture)
+  // goes. "frizz" is the default because it always works: the reader needs no app installed and no
+  // desktop on the far end. "editor" hands it straight to the external app the machine-wide
+  // `localFileOpener` setting names, and falls back to the reader when that app cannot start. Per
+  // browser on purpose: a phone reaching this Frizz over a tunnel should not launch Cursor on the desk.
+  codeFiles: "frizz" | "editor"
 }
 
 function coerceQueueOrder(v: unknown, fallback: QueueDirection): QueueDirection {
@@ -51,6 +57,7 @@ export function parseStoredPrefs(raw: string | null): Prefs {
     queueOrder: "fifo",
     railFilesCollapsed: false,
     keybindings: {},
+    codeFiles: "frizz",
     diffsRedefaulted: true,
     snoozeRedefaulted: true,
   }
@@ -79,6 +86,7 @@ export function parseStoredPrefs(raw: string | null): Prefs {
       queueOrder: coerceQueueOrder(stored.queueOrder, fallback.queueOrder),
       railFilesCollapsed: typeof stored.railFilesCollapsed === "boolean" ? stored.railFilesCollapsed : fallback.railFilesCollapsed,
       keybindings: sanitizeOverrides(stored.keybindings),
+      codeFiles: stored.codeFiles === "editor" ? "editor" : "frizz",
     }
   } catch {
     return fallback
