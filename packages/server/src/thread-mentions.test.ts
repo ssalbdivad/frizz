@@ -225,6 +225,9 @@ test("readThread on a thread.subAgent address answers from the child's own trans
     assert.equal(hit.outcome, "completed")
     assert.equal(hit.request, "Review the parser port.", "Frizz's helper epilogue is not part of what the child was asked")
     assert.equal(hit.latest, "The port is sound; one cache key collides.")
+    const drawer = await h.router.subAgentTranscript.handler({ input: { slug: "pp", id: "toolu_review" } })
+    assert.equal(drawer.messages[0]!.displayText, "Review the parser port.", "the child's drawer opens on the same task, not on Frizz's rules for helpers")
+    assert.match(drawer.messages[0]!.text, /ORCHESTRATION EPILOGUE/, "the raw prompt the child received is kept")
 
     const miss = await h.router.readThread.handler({ input: { slug: "me", handle: "portTheParser.nothing" } })
     assert.equal(miss.found, false)

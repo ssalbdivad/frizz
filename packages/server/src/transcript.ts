@@ -184,6 +184,18 @@ export function frizzDispatchDisplayText(text: string): string | undefined {
   return below.trim()
 }
 
+// Where cc-worker/hooks/agent-dispatch.mjs's auto-appended helper epilogue begins in a SUB-AGENT's
+// dispatch prompt. The hook adds it to every Agent call a worker makes, so the child's first turn is the
+// worker's task and then two paragraphs of Frizz's rules for helpers. A reader opening the child — its
+// drawer, `read_thread thread.child` — wants what it was sent to do; the rules are the same every time.
+const SUBAGENT_EPILOGUE_MARK = "\n---\n[ORCHESTRATION EPILOGUE"
+
+/** The first turn of a sub-agent without Frizz's helper epilogue, or undefined when it carries none. */
+export function subAgentDispatchDisplayText(text: string): string | undefined {
+  const cut = text.indexOf(SUBAGENT_EPILOGUE_MARK)
+  return cut === -1 ? undefined : text.slice(0, cut).trimEnd()
+}
+
 // The display projection for ONE user turn — undefined when the stored text is already what to show.
 // Three independent reasons a user record can carry machine-facing text, composed in order:
 //   • frizz's own dispatch envelope (FIRST turn only — orientation + instructions above the banner);
@@ -203,6 +215,7 @@ function userDisplayText(text: string, first: boolean): string | undefined {
   if (first) {
     projected = frizzDispatchDisplayText(projected) ?? projected
     projected = githubDispatchDisplayText(projected) ?? projected
+    projected = subAgentDispatchDisplayText(projected) ?? projected
   }
   projected = stripWakeDeliveryToken(projected)
   // The token comes off FIRST and the clock second, because that is the order they were appended in

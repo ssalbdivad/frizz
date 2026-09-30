@@ -946,9 +946,6 @@ function isHumanTurn(m: TranscriptMessage): boolean {
   return !m.wake || said.startsWith(BURIED_ANSWERS_HEADER)
 }
 
-// Where cc-worker/hooks/agent-dispatch.mjs's auto-appended helper epilogue begins in a sub-agent's prompt.
-const SUBAGENT_EPILOGUE_MARK = "\n---\n[ORCHESTRATION EPILOGUE"
-
 export function createRouter(ctx: AppContext) {
   // The name registry every title writer checks (thread-names.ts). A hand-built test context may carry
   // none; uniqueness then reads storage and the tailer directly, which is all it ever needs — only the
@@ -994,10 +991,9 @@ export function createRouter(ctx: AppContext) {
     const messages = info?.outputFile ? read(info.outputFile) : []
     const said = (m: (typeof messages)[number]) => (m.displayText ?? m.text).trim()
     const opening = messages.find((m) => m.role === "user" && !m.kind && said(m))
-    // The dispatch prompt as the WORKER wrote it: Frizz's dispatch hook appends its helper epilogue to
-    // every Agent prompt (cc-worker/hooks/agent-dispatch.mjs), and a reader asking what the child was sent
-    // to do wants the task, not two paragraphs of Frizz's rules for helpers — seen on the first real read.
-    const request = opening ? said(opening).split(SUBAGENT_EPILOGUE_MARK)[0]!.trimEnd() : ""
+    // The dispatch prompt as the WORKER wrote it: the transcript projection already cut Frizz's helper
+    // epilogue off it (transcript.ts subAgentDispatchDisplayText), the same cut the drawer reads.
+    const request = opening ? said(opening) : ""
     const spoken = messages.filter((m) => m.role === "assistant" && !m.kind && said(m))
     const latest = spoken.at(-1)
     const earlier = spoken.slice(-4, -1).map((m) => clip(said(m), 2_000))
