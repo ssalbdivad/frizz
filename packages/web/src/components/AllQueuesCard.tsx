@@ -17,7 +17,7 @@
 // card's own project explicitly (see the provider stack at the bottom). The board's queue card could not
 // be reused here for exactly that reason: it read its project from the address bar, the store and the
 // page's socket, and on this page all three name the FOCUSED project, which is usually not the card's.
-import { memo, useCallback, useContext, useLayoutEffect, useMemo, useRef, useState, type MouseEvent as ReactMouseEvent, type ReactNode } from "react"
+import { memo, useCallback, useContext, useLayoutEffect, useMemo, useRef, useState, type KeyboardEvent as ReactKeyboardEvent, type MouseEvent as ReactMouseEvent, type ReactNode } from "react"
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import { Check, ChevronRight, Hourglass, RotateCcw } from "lucide-react"
 import { useLocation, useNavigate } from "react-router"
@@ -561,18 +561,46 @@ function CardTerminalNet({ thread }: { thread: ThreadView }) {
 /** The human's last message, as the transcript draws it — their own bubble — clipped to a few lines. */
 function AskedBubble({ text }: { text: string }) {
   const [open, setOpen] = useState(false)
+  const [clamps, setClamps] = useState(false)
+  const words = useRef<HTMLSpanElement>(null)
+  // Only a message the clamp actually cut is a toggle; a short one is plain, selectable text.
+  useLayoutEffect(() => {
+    const el = words.current
+    if (!el || open) return
+    const measure = () => setClamps(el.scrollHeight > el.clientHeight + 1)
+    measure()
+    const observer = new ResizeObserver(measure)
+    observer.observe(el)
+    return () => observer.disconnect()
+  }, [open, text])
+  const toggle = () => setOpen((value) => !value)
   return (
     <div className="flex max-w-[85%] flex-col items-end gap-0.5 self-end">
-      <button
-        type="button"
-        onClick={() => setOpen((value) => !value)}
-        title={open ? "Show less" : "Show the whole message"}
-        className={`${BLOCK_RADIUS} rounded-br-sm bg-user-bubble px-3.5 py-2.5 text-left text-[13px] leading-5 whitespace-pre-wrap [overflow-wrap:anywhere] text-user-bubble-fg outline-none focus-visible:ring-2 focus-visible:ring-accent focus-visible:ring-offset-2 focus-visible:ring-offset-bg`}
+      {/* A div with role=button, NOT a <button>: browsers refuse to start a text selection inside a
+          <button>, so the human could not copy a word of their own message. The click is ignored while
+          a selection is live, because a drag across the words ends in a click on this same node. */}
+      <div
+        {...(clamps || open ? {
+          role: "button",
+          tabIndex: 0,
+          "aria-expanded": open,
+          title: open ? "Show less" : "Show the whole message",
+          onClick: () => {
+            if (window.getSelection()?.toString()) return
+            toggle()
+          },
+          onKeyDown: (e: ReactKeyboardEvent<HTMLDivElement>) => {
+            if (e.key !== "Enter" && e.key !== " ") return
+            e.preventDefault()
+            toggle()
+          },
+        } : {})}
+        className={`${BLOCK_RADIUS} rounded-br-sm bg-user-bubble px-3.5 py-2.5 text-left text-[13px] leading-5 whitespace-pre-wrap [overflow-wrap:anywhere] text-user-bubble-fg outline-none focus-visible:ring-2 focus-visible:ring-accent focus-visible:ring-offset-2 focus-visible:ring-offset-bg${clamps || open ? " cursor-pointer" : ""}`}
       >
-        {/* The clamp sits INSIDE the padding. On the button itself, its overflow clip ran to the padding
+        {/* The clamp sits INSIDE the padding. On the bubble itself, its overflow clip ran to the padding
             edge, so the fourth line showed half its height in the bubble's bottom padding. */}
-        <span className={open ? "" : "line-clamp-3"}>{text}</span>
-      </button>
+        <span ref={words} className={open ? "" : "line-clamp-3"}>{text}</span>
+      </div>
     </div>
   )
 }
