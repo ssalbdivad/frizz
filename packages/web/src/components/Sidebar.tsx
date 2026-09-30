@@ -230,6 +230,11 @@ export const ThreadRow = memo(function ThreadRow({
   // row is read-only (the server has no session to write), so its check stays a plain mark.
   const uncheckable = done && !foreign
   const dimLabel = titleIsProvisional(t)
+  // A WORKING thread's status, inline in grey after its name, and its task clock in the right-edge
+  // column a rested row gives its rest time (ThreadStatusLine.tsx statusElapsed).
+  const nowMs = useNowMs()
+  const elapsed = statusElapsed(t, nowMs)
+  const working = elapsed && t.statusLine ? { status: t.statusLine.trim(), elapsed } : undefined
   // The rows with an obvious single next action carry that verb INLINE, instead of making you open the
   // thread to find it. offersRetry (groups.ts) picks them: a STALLED row (the [!] mark — process
   // exited) AND a row KILLED by a usage limit frizz will auto-resume (the yellow hourglass — a faster
@@ -248,6 +253,11 @@ export const ThreadRow = memo(function ThreadRow({
   // state: not the fence's PR ref, not a snooze, not the legacy `.frizz` activity gloss, not a sub-agent
   // count. Every one of them was a second, competing status beside the row's own — the rail is a column
   // of NAMES you scan, and each caption added there made the next one harder to find.
+  //
+  // ONE EXCEPTION, ON THE SAME LINE: a WORKING thread's status, in grey after its name, with its task clock
+  // at the right edge (maintainer 2026-09-29: "it shouldn't show on hover — it should display in grey text
+  // next to the name of the thread inline", short enough to fit). It costs no line, only rows that are
+  // spinning carry it, and it truncates before the name gives up a character.
   //
   // What frizz knows about the row still exists, one hover away: the indicator's popover composes it
   // from the AWAITING BLOCK deterministically (awaitingWaitClause) plus the worker's own handoff prose, so
@@ -300,14 +310,22 @@ export const ThreadRow = memo(function ThreadRow({
               8px is ~2 word spaces at 13px, which reads as the title running into its own timestamp.
               12px is a gutter, and it costs the title 4px it does not miss. */}
           <span className="flex min-w-0 items-baseline gap-3">
-            <RowStatusTip t={t}>
-              <span className={`min-w-0 flex-1 break-words text-[13px] leading-[19px] ${dimLabel ? "text-provisional" : dim ? "text-fg/75" : "text-fg/90"}`}>
+            <span className="flex min-w-0 flex-1 items-baseline gap-1.5">
+              {/* With a working status beside it the title keeps its whole width (and wraps if it must)
+                  and the status truncates into what is left; without one the title fills the line. */}
+              <span className={`min-w-0 break-words text-[13px] leading-[19px] ${working ? "max-w-full shrink-0" : "flex-1"} ${dimLabel ? "text-provisional" : dim ? "text-fg/75" : "text-fg/90"}`}>
                 <TitleWithTrailers title={displayTitle(t)}>
                   <ProviderMark backend={t.backend} model={t.model} className="ml-1" />
                   <ThreadTerminalMark thread={t} />
                 </TitleWithTrailers>
               </span>
-            </RowStatusTip>
+              {working && (
+                <span data-rail-status className="min-w-0 flex-1 truncate text-[12px] leading-[19px] text-muted-70" title={working.status}>
+                  {working.status}
+                </span>
+              )}
+            </span>
+            {working && <WorkingAge elapsed={working.elapsed} yieldsToRetry={hoverActions} />}
             {/* The Retry verb is an OVERLAY pinned to this same right edge, so on the rows that offer
                 it the two would collide — a 19px opaque button landing halfway across "20 seconds",
                 which reads as a rendering fault rather than an affordance. The label gives way to it
@@ -316,7 +334,7 @@ export const ThreadRow = memo(function ThreadRow({
             {/* A pinned row wears the small solid pin in this same right-edge column (the cue's
                 rest-time spot — the approved mockup's variant A), and yields to the hover actions the
                 same way the rest time does. Never both: the pinned band passes no restedAge. */}
-            {pinned && !restedAge && <PinnedMark />}
+            {pinned && !restedAge && !working && <PinnedMark />}
           </span>
         </span>
       </button>
@@ -665,26 +683,21 @@ export function awaitingReason(t: Pick<ThreadView, "lastFence">): string | null 
   return awaitingProse(t.lastFence)
 }
 
-// ── the status hover (one per row) ───────────────────────────────────────────────────────────────
+// ── the working clock (one per working row) ──────────────────────────────────────────────────────
 
-// THE ROW'S STATUS, ON HOVER. A row is its title and nothing else ("A ROW IS ITS TITLE" above), so the
-// status a working thread carries (ThreadStatusLine.tsx) cannot be a second line here — every running
-// thread's status at once would be the overwhelming rail that rule exists to prevent (maintainer
-// 2026-09-29: "if displaying the statuses for all running threads would be visually overwhelming, maybe on
-// hover it should show status"). Pointing at the title shows it, with the task's clock while the thread
-// works: "Tracing the cache miss · 4m". It sat on the 16px state glyph's tooltip before, which almost
-// nobody found. The delay keeps a pointer sweeping down the rail from flashing a tip per row it crosses.
-const ROW_STATUS_TIP_DELAY_MS = 350
-
-function RowStatusTip({ t, children }: { t: ThreadView; children: ReactElement }) {
-  const nowMs = useNowMs()
-  const status = t.statusLine?.trim()
-  if (!status) return children
-  const elapsed = statusElapsed(t, nowMs)
+// How long a working thread has been on the task its inline status names — the rested row's rest-time
+// column and type, so a rail's right edge always reads as "time", whichever band the row is in.
+function WorkingAge({ elapsed, yieldsToRetry }: { elapsed: string; yieldsToRetry?: boolean }) {
   return (
-    <Tooltip label={elapsed ? `${status} · ${elapsed}` : status} side="right" delay={ROW_STATUS_TIP_DELAY_MS}>
-      {children}
-    </Tooltip>
+    <span
+      data-rail-working-age
+      aria-label={`On this task for ${elapsed}`}
+      className={`shrink-0 tabular-nums text-[10.5px] leading-[19px] text-muted-55 ${
+        yieldsToRetry ? "transition-opacity group-hover:opacity-0 group-focus-within:opacity-0" : ""
+      }`}
+    >
+      {elapsed}
+    </span>
   )
 }
 
@@ -699,8 +712,7 @@ export function ThreadIndicator({ t }: { t: ThreadView }) {
   // hook consulted the steer hint on its own, the glyph and the placement were two rules and drifted apart
   // on every steer.
   const { node, tip: stateTip } = sessionIndicatorFor(t)
-  // The thread's STATUS is not here: it is the TITLE's hover (RowStatusTip), a target the size of the
-  // row rather than of this 16px glyph, so the glyph says the state and nothing else.
+  // The thread's STATUS is not here: a working row shows it inline after its name (ThreadRow).
   const tip = stateTip
   // The resolved kind, on the shipped markup. Cheap, and it is what lets the rail's own glyphs be
   // measured where they actually render (scripts/verify-rail-status-glyphs.mjs holds the family to one
