@@ -239,17 +239,8 @@ try {
       return bare.textContent
     })
     const badgeBefore = await badge()
-    // Its Working rows: the ones under its Working band's name (a pinned row is neither Ready nor Working).
-    const workingBefore = await page.$eval(`[data-xq-rail-project="${busy}"]`, (g) => {
-      let band = null
-      let n = 0
-      for (const el of g.querySelectorAll("[data-xq-band-label], [data-sidebar-item]")) {
-        if (el.closest("[data-xq-drill]")) continue
-        if (el.hasAttribute("data-xq-band-label")) band = el.getAttribute("data-xq-band-label")
-        else if (band === "working") n++
-      }
-      return n
-    })
+    // Its Working rows (a pinned row is neither Ready nor Working).
+    const workingBefore = await page.$$eval(`[data-xq-rail-project="${busy}"] > [data-xq-band="working"]`, (rows) => rows.length)
     await clickSettled(`[data-xq-project-row="${busy}"] [data-xq-project-fold]`)
     await sleep(300)
     const after = await rowsOf(busy)
@@ -257,7 +248,7 @@ try {
     check("…its row still carries its Ready count", (await badge()) === badgeBefore, badgeBefore)
     const workingAfter = await page.$eval(`[data-xq-project-row="${busy}"]`, (row) => Number(row.querySelector('[data-xq-quiet-count="working"]')?.textContent ?? 0))
     check("…and counts the Working rows it folded away", workingAfter === workingBefore, `${workingAfter} of ${workingBefore}`)
-    check("…and its quiet counts stay on its row", countsBefore !== "" && (await counts("[data-xq-project-row]")) === countsBefore, countsBefore || "(none)")
+    check("…and its quiet counts stay on its row", (await counts("[data-xq-project-row]")) === countsBefore, countsBefore || "(none)")
     check("…and the queue on the right is untouched", (await page.$$eval("[data-xq-card]", (c) => c.length)) === cards)
     await page.screenshot({ path: join(shots, "one-view-folded.png") })
     await page.reload({ waitUntil: "networkidle2" })
