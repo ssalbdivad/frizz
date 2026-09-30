@@ -4,12 +4,16 @@ import type { ProjectCard } from "@frizz/shared"
 import { ProjectSquare } from "./ProjectRail.tsx"
 import { Menu, MenuContent, MenuItem, MenuSeparator, MenuTrigger } from "./ui/Menu.tsx"
 
-// THE PROJECT SWITCHER — the READY header's right end: which project the page is focused on, or All
-// projects (lib/pageView.ts). It was the queue's FILTER until 2026-09-29, scoping the cards and nothing
-// else while the list kept every project; focus mode made one project the page's default view, and the
-// control that chose one project's cards became the control that chooses the page's project.
+// THE PROJECT SWITCHER — the page's TITLE, at the left end of the status row over the prompt box
+// (StatusRow.tsx): which project the page is focused on, or All projects (lib/pageView.ts). It was the
+// queue's FILTER until 2026-09-29, scoping the cards and nothing else while the list kept every project;
+// focus mode made one project the page's default view, and the control that chose one project's cards
+// became the control that chooses the page's project. It sat at the right end of the READY header until
+// later that day, muted — which read as a filter on the queue, not the scope of the whole page, while the
+// list's project header named the project a second time. Now it is the one place the focused project's
+// name is drawn, and it is drawn as a title: full weight, in the list's project-name type.
 //
-//   focused:        ▣ acme-api ▾        — the page's project, named where the queue it heads begins
+//   focused:        ▣ acme-api ▾        — the page's project: its list, its queue, where a new thread goes
 //   All projects:   ◫ All projects ▾
 //
 // The menu lists every project in the list's order, then the Home workspace under a rule with the folder
@@ -18,8 +22,8 @@ import { Menu, MenuContent, MenuItem, MenuSeparator, MenuTrigger } from "./ui/Me
 // NAVIGATION (`/?project=<slug>`, `/?all`), so Back returns to the view before.
 //
 // It must not read like the prompt box's project picker (AllQueues.tsx ProjectPicker), which All projects
-// still has: that one says where a new thread GOES, this one what the page SHOWS. So this one sits over the
-// queue, in the READY header's type, and that one inside the box's bottom strip beside the model.
+// still has: that one says where a new thread GOES, this one what the page SHOWS. So this one is the
+// page's title, above the box, and that one a pill inside the box's bottom strip beside the model.
 
 export interface SwitcherProject {
   id: string
@@ -89,26 +93,30 @@ export function ProjectSwitcher({
           data-xq-switcher={current ? "project" : "all"}
           title={current ? `Showing ${current.name}. Switch project` : "Showing every project. Switch project"}
           aria-label={`Showing ${current ? current.name : "every project"}. Switch project`}
-          // Muted like the READY label beside it until pointed at: it names the page's project, which the
-          // list under the prompt box already heads, so it need not shout it a second time.
-          className="-mr-1.5 flex min-w-0 items-baseline gap-1.5 rounded-md px-1.5 py-0.5 font-medium text-muted-80 outline-none transition-colors hover:bg-hover hover:text-fg focus-visible:ring-1 focus-visible:ring-focus-ink-60 data-[state=open]:bg-hover data-[state=open]:text-fg"
+          // The list's project-name type (ProjectList.tsx ProjectRow), since it IS the project's name now.
+          // `-ml-1.5` hangs the hover wash past the square, so the square's ink stands on the column's
+          // left edge, flush with the prompt box's border below it.
+          className="-ml-1.5 flex min-w-0 items-baseline gap-1.5 rounded-md px-1.5 py-0.5 text-[13px] font-semibold text-fg outline-none transition-colors hover:bg-hover hover:text-fg focus-visible:ring-1 focus-visible:ring-focus-ink-60 data-[state=open]:bg-hover data-[state=open]:text-fg"
         >
           {/* Both marks on the NAME's cap band, computed by the browser from the resolved font: the square
               has no baseline of its own, so it sits ON the name's and is lowered by half its height less
               half a cap; the 1em glyphs by half an em less half a cap (lucide's layers and chevron are
               symmetric in their boxes, so the box centre is the ink centre). */}
           {current ? (
-            <span className="flex shrink-0 self-baseline translate-y-[calc(7px_-_0.5cap)]">
-              <ProjectSquare project={current.card} size={14} />
+            <span className="flex shrink-0 self-baseline translate-y-[calc(8px_-_0.5cap)]">
+              <ProjectSquare project={current.card} size={16} />
             </span>
           ) : (
-            <Layers size={12} aria-hidden data-xq-switcher-glyph className="shrink-0 self-baseline translate-y-[calc(0.5em_-_0.5cap)] text-muted" />
+            <Layers size={14} aria-hidden data-xq-switcher-glyph className="shrink-0 self-baseline translate-y-[calc(0.5em_-_0.5cap)] text-muted" />
           )}
           <span data-xq-switcher-label className="min-w-0 truncate">{name}</span>
-          <ChevronDown size={12} aria-hidden data-xq-switcher-chevron className="-ml-[3.5px] shrink-0 self-baseline translate-y-[calc(0.5em_-_0.5cap)] text-muted" />
+          {/* Its ink 4px off the name's, closer than the square's 6px, so it reads as the name's handle rather
+              than floating between the two (at `-ml-[3.5px]` both gaps measured 6.1px; scripts/ink-gaps.mjs,
+              sans 13px semibold, 2026-09-29). */}
+          <ChevronDown size={12} aria-hidden data-xq-switcher-chevron className="-ml-[5.5px] shrink-0 self-baseline translate-y-[calc(0.5em_-_0.5cap)] text-muted" />
         </button>
       </MenuTrigger>
-      <MenuContent align="end">
+      <MenuContent align="start">
         <div className="px-2.5 pb-1 pt-1.5 text-[10.5px] font-medium text-muted-55">Show</div>
         {/* Every item outside the scrolling list is inset by the gutter that list reserves (styles.css
             `scrollbar-gutter: stable`), so the badges and check marks stand in one column. */}

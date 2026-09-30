@@ -1,3 +1,4 @@
+import type { ReactNode } from "react"
 import { Settings as SettingsIcon } from "lucide-react"
 import { store } from "../store.ts"
 import { STATUS_ROW_ACTION, STATUS_ROW_ICON } from "../lib/statusRow.ts"
@@ -6,10 +7,15 @@ import { RestartFrizzButton } from "./RestartFrizzButton.tsx"
 import { KeyboardShortcutsButton } from "./KeyboardShortcuts.tsx"
 import { useShortcutLabel, withShortcut } from "../lib/keyboardRuntime.ts"
 
-// THE STATUS ROW — one loose line along the TOP OF THE PROMPT BOX, the app's controls and then its
-// readouts:
+// THE STATUS ROW — one loose line along the TOP OF THE PROMPT BOX: the page's title at the left, then,
+// pushed to the right end, the app's controls and its readouts:
 //
-//   settings · shortcuts · reload │ Claude 83% · Codex 59%
+//   ▣ acme-api ▾                settings · shortcuts · reload │ Claude 83% · Codex 59%
+//
+// THE TITLE is the project switcher (ProjectSwitcher.tsx), handed in as `title` — the page's one name for
+// what it shows, where a workspace switcher sits in Linear, Slack or Vercel (maintainer 2026-09-29). It
+// sat over the queue until then, muted, and read as a filter on the cards rather than the scope of the
+// whole page; the list's own project header repeated the name 180px away.
 //
 // It rides the page's prompt box, at the top of its left column (AllQueues.tsx).
 //
@@ -21,7 +27,7 @@ import { useShortcutLabel, withShortcut } from "../lib/keyboardRuntime.ts"
 // border, no shadow, no z-index. Its two ends land on the composer's own border, which is what makes a
 // borderless strip read as belonging to the box below it.
 //
-// NO DOOR AND NO NAME (maintainer 2026-09-28: "there should no longer be an everything or an infinity
+// NO DOOR (maintainer 2026-09-28: "there should no longer be an everything or an infinity
 // button on the threads view on the left"). The row led with ∞, the door to Everything, and ended on the
 // page's name — and before that, atop a project's board, on the project's owner/repo linking to its repo.
 // With one page there is nowhere for a door to go and nothing for a name to tell apart. A project's repo
@@ -43,8 +49,8 @@ function Divider() {
   return <span aria-hidden="true" className="h-3 w-px shrink-0 bg-border" />
 }
 
-/** Takes no props, and reads its live values itself. */
-export function StatusRow() {
+/** Reads its live values itself; `title` is the page's name, drawn first. */
+export function StatusRow({ title }: { title?: ReactNode } = {}) {
   // Whether there is a quota group behind the second divider at all. Every chip hides itself when it
   // has no reading, so without this a row with neither provider reporting draws a trailing hairline
   // with nothing after it.
@@ -59,6 +65,8 @@ export function StatusRow() {
       // block rather than a strip parked above a box.
       className="mb-2.5 flex min-w-0 items-center gap-3 text-[12px]"
     >
+      {/* Takes the row's slack, so the controls after it stand at the right end. */}
+      {title && <div data-status-title className="flex min-w-0 flex-1">{title}</div>}
       <button
         type="button"
         aria-label="Settings"

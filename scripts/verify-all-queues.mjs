@@ -161,8 +161,8 @@ try {
   // switcher, whose All projects keeps that project as the prompt box's pick (AllQueues.tsx Switcher).
   const allFrom = async (slug) => {
     await page.goto(`${origin}/?project=${slug}`, { waitUntil: "networkidle2" })
-    await page.waitForSelector('[data-inbox-header] [data-xq-switcher="project"]', { timeout: 30_000 })
-    await clickSettled("[data-inbox-header] [data-xq-switcher]")
+    await page.waitForSelector('[data-status-row] [data-xq-switcher="project"]', { timeout: 30_000 })
+    await clickSettled("[data-status-row] [data-xq-switcher]")
     await clickSettled('[role="menuitem"][data-value="all-projects"]')
     await page.waitForFunction(() => location.search === "?all", { timeout: 15_000 })
     await page.evaluate(() => { document.documentElement.dataset.theme = "dark" })
@@ -558,7 +558,7 @@ try {
     return cardProjects()
   }
   const switchTo = async (value) => {
-    await clickSettled("[data-inbox-header] [data-xq-switcher]")
+    await clickSettled("[data-status-row] [data-xq-switcher]")
     await clickSettled(`[role="menuitem"][data-value="${value}"]`)
   }
 
