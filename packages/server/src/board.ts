@@ -26,6 +26,7 @@ import { githubStatusKey, parkExpiresAt, parkIsHonoured, parseIssueRef, parsePrR
 import { findByPath } from "./project-registry.ts"
 import { homeWorkspaceSlug, isHomeWorkspace } from "./home-workspace.ts"
 import { parseDeliveryLedger } from "./delivery-ledger.ts"
+import { spinoffIdOfDelivery } from "./spinoff-side-turn.ts"
 import { effectivePermissionMode, fallbackTitle, resolveLegacyThreadFile } from "./dispatch.ts"
 import { ProducerStoppedError } from "./shutdown.ts"
 import { createQueueClock } from "./queue-clock.ts"
@@ -1059,9 +1060,23 @@ export function fenceWatchViews(
 // from under it). The thread's ```done card was already sitting in the queue; this excusal took it
 // out, and nothing put it back. Neither queued nor carded: invisible — the delivery twin of the
 // sub-agent phantom deriveRuntime's `headlessLostWork` fixed, and the same lesson.
+//
+// A SPINOFF REQUEST is not one (2026-09-30). It rides the ledger like any send (router.ts `spinoff`), but
+// it answers nothing on the card: the human asked for ANOTHER thread, and this one's handoff is exactly as
+// unanswered as it was. Counting it does two wrong things at once. It pulls the card out of the queue the
+// moment the request is sent, before the worker has even read it — and now that the request's side turn
+// leaves the rest untouched (spinoff-side-turn.ts), the card would come back with nothing new on it. And it
+// reads as the human acting on the thread (the queue clock's `humanOut`, built off this through
+// `heldByDelivery`), which breaks the thread's claim on its place, so the card would come back at the
+// BOTTOM of the queue. Without it, the thread stays queued until its worker actually starts the side turn, leaves
+// for the turn's few seconds as any running thread does, and takes its old place back when it rests —
+// the claim a departure the human did not cause leaves (queue-clock.ts). A side turn that turns into real
+// work keeps that place too, with its new handoff on the card: it never took a person's action to get
+// there, which is the only thing that costs a place.
 function hasFreshDelivery(row: SessionRow, processGone: boolean): boolean {
   if (processGone) return false
-  return parseDeliveryLedger(row.delivery_ledger).some((d) => d.state === "pending" || d.state === "enqueued" || d.state === "delivered")
+  return parseDeliveryLedger(row.delivery_ledger).some((d) =>
+    (d.state === "pending" || d.state === "enqueued" || d.state === "delivered") && spinoffIdOfDelivery(d.id) === undefined)
 }
 
 export function deriveNeedsYou(
@@ -2151,6 +2166,9 @@ export function createBoard(
   // Per-slug "was this SESSION thread in the needs-you queue last build?" — drives the needs-decision
   // notify dedupe: we fire only on a false→true edge, and a thread leaving the queue re-arms it.
   const needsYouPrev = new Map<string, boolean>()
+  // Per-slug place (`queuedAt`) and rest (`lastAssistantAt`) each session thread last held IN the queue —
+  // see notifyNeedsYou for the one entry this lets through silently.
+  const lastInQueue = new Map<string, { queuedAt?: string; rest?: string }>()
   // PRIME GUARD: the first assemble after boot records the baseline WITHOUT notifying, so a post-bounce
   // server doesn't fire a storm for every historical resting thread already in the queue.
   let notifyPrimed = false
@@ -2194,19 +2212,33 @@ export function createBoard(
 
   // Fire a needs-decision notify for every registered session that newly enters the queue.
   // Edge-triggered + deduped; primed on the first build.
+  //
+  // EXCEPT ONE THAT COMES BACK TO THE PLACE IT LEFT WITH THE REST IT LEFT WITH (2026-09-30). That is not a
+  // new entry: nobody acted on the thread (the queue clock gave it its old place back, which only an
+  // unbroken claim does) and its worker said nothing new (the same rest), so the notification would
+  // announce the card the human was already told about. The case that made it matter is a spinoff
+  // request's side turn: the worker runs for the seconds it takes to start the new thread, which takes
+  // the queued parent out of the queue, and the rest it comes back to is the one it left with, put back
+  // by the tailer (spinoff-side-turn.ts). A departure that came back with anything new — another
+  // message, or a fresh stamp because the human acted — still notifies.
   function notifyNeedsYou(sessionThreads: ThreadView[]): void {
     const seen = new Set<string>()
     for (const t of sessionThreads) {
       seen.add(t.id)
       const now = t.needsYou ?? false
       const was = needsYouPrev.get(t.id) ?? false
-      if (notifyPrimed && now && !was) {
+      const left = lastInQueue.get(t.id)
+      const resumed = left !== undefined && t.queuedAt !== undefined && left.queuedAt === t.queuedAt &&
+        t.lastAssistantAt !== undefined && left.rest === t.lastAssistantAt
+      if (notifyPrimed && now && !was && !resumed) {
         bus.publish({ type: "notify", slug: t.id, kind: "needs-decision", title: t.aiTitle || t.title || t.id, body: needsYouBody(t) })
       }
+      if (now) lastInQueue.set(t.id, { queuedAt: t.queuedAt, rest: t.lastAssistantAt })
       needsYouPrev.set(t.id, now)
     }
     // forget threads that vanished so a reappearance re-notifies
     for (const id of [...needsYouPrev.keys()]) if (!seen.has(id)) needsYouPrev.delete(id)
+    for (const id of [...lastInQueue.keys()]) if (!seen.has(id)) lastInQueue.delete(id)
     notifyPrimed = true
   }
 
