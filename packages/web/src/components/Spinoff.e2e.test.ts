@@ -7,7 +7,7 @@ import test from "node:test"
 // `nub run test:e2e`, which does both).
 //
 // What only a browser settles: that the whole pipeline (not the card alone) hides the `spawn_thread` call
-// a spinoff card stands for; that the delivery ledger's raw envelope never reaches the screen; that the
+// a spinoff card stands for — and only that one, never a call that failed; that the delivery ledger's raw envelope never reaches the screen; that the
 // brief stays folded until asked for and then renders as markdown; and the thread link's click contract —
 // a plain click opens the drawer in place, a modified click is left to the browser.
 const baseUrl = process.env.FRIZZ_SPINOFF_E2E_URL
@@ -27,7 +27,7 @@ async function launch() {
 
 const fixtureUrl = (query: string) => new URL(`/spinoff-fixture.html${query}`, baseUrl).href
 
-test("the parent draws each request as its card, and never the spawn_thread call behind one", { skip: !baseUrl, timeout: 60_000 }, async () => {
+test("the parent draws each request as its card, and never the spawn_thread call that started one", { skip: !baseUrl, timeout: 60_000 }, async () => {
   const { browser, page, errors } = await launch()
   try {
     await page.goto(fixtureUrl("?panel=parent"), { waitUntil: "domcontentloaded" })
@@ -49,7 +49,19 @@ test("the parent draws each request as its card, and never the spawn_thread call
     ])
     // The two ordinary runs keep their digests; the two spawn calls add none (a spawn-only message would
     // have drawn `Ran 1 tool call`, and the mid-work one would have been folded into the run after it).
-    assert.deepEqual(read.digests, ["Expand 2 tool calls: Ran 2 tool calls", "Expand 2 tool calls: Ran 2 tool calls, edited 1 file"])
+    // …but the call behind the request that did NOT start is drawn, because it failed: its error is the one
+    // record of why (review 2026-09-30).
+    assert.deepEqual(read.digests, ["Expand 2 tool calls: Ran 2 tool calls", "Expand 2 tool calls: Ran 2 tool calls, edited 1 file", "Expand 1 tool call: Ran 1 tool call"])
+    const refusal = await page.evaluate(async () => {
+      const digest = [...document.querySelectorAll<HTMLElement>("[data-tool-activity]")].at(-1)!
+      digest.querySelector<HTMLButtonElement>("button")!.click()
+      await new Promise((r) => setTimeout(r, 200))
+      const calls = digest.querySelectorAll<HTMLButtonElement>("button")
+      calls[calls.length - 1].click()
+      await new Promise((r) => setTimeout(r, 200))
+      return digest.innerText
+    })
+    assert.match(refusal, /spawn_thread[\s\S]*failed[\s\S]*model "opus-9" is not available here/, "the refused call and its error are one click away")
     assert.deepEqual(read.bubbles, ["Why do live sub-agents read as not running in the rail?"], "a request is not the human's bubble")
     assert.doesNotMatch(read.text, /spinoff-request|spawn_thread|Do this now/, "neither the envelope nor the brief to the worker reaches the screen")
 
@@ -102,6 +114,46 @@ test("a request still in the delivery ledger draws as the starting card, not its
     assert.equal(read.spinner, true)
     assert.equal(read.body, "Profile the cold-start path while I keep going on the cache.")
     assert.doesNotMatch(read.text, /spinoff-request|<instructions>|Do this now/)
+
+    // TAKE IT BACK (review 2026-09-30): the queued card is the queued bubble's control — click, the provider
+    // confirms (stubbed), the card leaves, and the words go back into the Spinoff dialog, not the prompt box.
+    const card = await page.$("[data-spinoff-card=request] [data-unqueue]")
+    assert.ok(card, "a queued request offers the take-back")
+    assert.equal(await card.evaluate((el) => el.getAttribute("aria-label")), "Take back this spinoff request")
+    await card.click()
+    await page.waitForSelector("[data-spinoff-dialog]", { timeout: 5_000 })
+    const after = await page.evaluate(() => ({
+      unqueued: (window as unknown as { __unqueued?: string[] }).__unqueued ?? [],
+      card: Boolean(document.querySelector("[data-spinoff-card=request]")),
+      field: document.querySelector<HTMLTextAreaElement>("[data-spinoff-instructions]")?.value,
+      focused: document.activeElement?.hasAttribute("data-spinoff-instructions") ?? false,
+      composer: document.querySelector<HTMLTextAreaElement>("[data-thread-composer-box] textarea")?.value ?? "",
+    }))
+    assert.deepEqual(after.unqueued, ["spinoff-spn_d000000000000004"], "unqueued by the request's own delivery id")
+    assert.equal(after.card, false, "the card leaves once the provider confirms")
+    assert.equal(after.field, "Profile the cold-start path while I keep going on the cache.", "the dialog reopens on the instructions")
+    assert.equal(after.focused, true)
+    assert.equal(after.composer, "", "never into the prompt box, where they would be sent to this thread")
+    assert.deepEqual(errors, [])
+  } finally {
+    await browser.close()
+  }
+})
+
+test("a request with no child says why it is not moving: a turn paused on the human, or a send with no receipt", { skip: !baseUrl, timeout: 60_000 }, async () => {
+  const { browser, page, errors } = await launch()
+  try {
+    await page.goto(fixtureUrl("?panel=states"), { waitUntil: "domcontentloaded" })
+    await page.waitForSelector("[data-fixture-panel=docs-pass] [data-spinoff-card=request]")
+    await page.waitForSelector("[data-fixture-panel=flaky-e2e] [data-spinoff-card=request]")
+    const read = await page.evaluate(() => Object.fromEntries(["flaky-e2e", "docs-pass"].map((slug) => {
+      const card = document.querySelector<HTMLElement>(`[data-fixture-panel=${slug}] [data-spinoff-card=request]`)!
+      return [slug, { state: card.dataset.spinoffState, label: card.querySelector("[data-spinoff-pending]")?.textContent, spinner: Boolean(card.querySelector(".animate-spin")) }]
+    })))
+    assert.deepEqual(read, {
+      "flaky-e2e": { state: "waiting", label: "waiting on you", spinner: false },
+      "docs-pass": { state: "unconfirmed", label: "delivery unconfirmed", spinner: false },
+    })
     assert.deepEqual(errors, [])
   } finally {
     await browser.close()
