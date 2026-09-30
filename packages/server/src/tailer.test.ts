@@ -2,6 +2,7 @@ import { test } from "node:test"
 import assert from "node:assert/strict"
 import { mkdtempSync, writeFileSync, appendFileSync, utimesSync, readFileSync, rmSync, openSync, closeSync, statSync, realpathSync } from "node:fs"
 import { tmpdir } from "node:os"
+import { execFileSync } from "node:child_process"
 import { dirname, join } from "node:path"
 import { createStorage, type Storage, type SessionRow } from "./storage.ts"
 import { Bus } from "./bus.ts"
@@ -3704,6 +3705,47 @@ test("tailer: codex — a tool call's workdir moves the thread's checkout, and e
   h.clock.ms = Date.parse("2026-07-10T21:58:52.000Z")
   t.tick()
   assert.deepEqual(t.get("t")!.checkout, { dir: worktree, kind: "worktree" }, "`.` is the session's folder, not the project root")
+})
+
+// A SIBLING WORKTREE. `git worktree add ../proj-perf` puts a checkout BESIDE the project, and Claude Code
+// resets a `cd` out of the project, so every record's `cwd` reads the root while every edit lands in the
+// sibling (measured 2026-09-30: a thread in `~/yes-perf` recorded `cwd: ~/yes` on all 213 records, and
+// Open in editor opened `~/yes`). Its tools are the only trace — trusted only for the project's own repo.
+test("tailer: claude — tools working in a sibling worktree of the project's repo move its checkout; other folders do not", () => {
+  const h = harness()
+  const root = realpathSync(tmp("frizz-sibling-"))
+  const project = join(root, "proj")
+  const sibling = join(root, "proj-perf")
+  const other = join(root, "other")
+  const git = (cwd: string, ...args: string[]) => execFileSync("git", ["-c", "user.name=t", "-c", "user.email=t@t", ...args], { cwd, stdio: "ignore" })
+  for (const dir of [project, other]) {
+    mkdirSync(dir)
+    git(dir, "init", "-q")
+    git(dir, "commit", "-q", "--allow-empty", "-m", "init")
+  }
+  git(project, "worktree", "add", "-q", sibling)
+  git(other, "worktree", "add", "-q", join(root, "other-wt"))
+  let at = 0
+  const rec = (type: string, content: unknown) => JSON.stringify({ type, cwd: project, timestamp: `2026-07-01T00:00:${String(at++).padStart(2, "0")}.000Z`, message: { role: type, content } })
+  const tool = (name: string, input: unknown) => rec("assistant", [{ type: "tool_use", id: `tu${at}`, name, input }])
+  fixture(h.logDir, "sid", [rec("user", "go"), tool("Bash", { command: "git status" })])
+  h.storage.upsertSession(row())
+  const t = makeTailer(h, { project: { cwdSlug: "x", dir: project } as Project })
+  const step = (line?: string) => {
+    if (line) appendFileSync(join(h.logDir, "sid.jsonl"), line + "\n")
+    h.clock.ms += 1000
+    t.tick()
+    return t.get("t")!
+  }
+  h.clock.ms = PAST_GRACE
+  assert.equal(step().workingDir, project, "no tool has left the root")
+  assert.deepEqual(step(tool("Edit", { file_path: join(sibling, "bench", "README.md") })).checkout, { dir: sibling, kind: "worktree" }, "an edit in the sibling")
+  assert.equal(step(tool("Read", { file_path: join(project, "a.ts") })).workingDir, sibling, "a read of the root is not a move")
+  assert.equal(step(tool("Bash", { command: "ls" })).workingDir, sibling, "nor is a command with no cd")
+  assert.equal(step(tool("Write", { file_path: join(project, "a.ts") })).workingDir, project, "an edit back in the root moves it home")
+  assert.equal(step(tool("Bash", { command: `cd ${sibling} && node bench.ts` })).workingDir, sibling, "a leading cd into the sibling")
+  assert.equal(step(tool("Edit", { file_path: join(root, "other-wt", "x.ts") })).workingDir, project, "another repo's worktree is not this thread's checkout")
+  assert.equal(step(tool("Edit", { file_path: join(root, "notes", "x.md") })).workingDir, project, "nor is a folder outside any repo")
 })
 
 // THE UNIFIED EXEC WRAPPER. Current Codex sends a shell command as a `custom_tool_call` named `exec` whose

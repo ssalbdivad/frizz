@@ -38,7 +38,7 @@ import { log as frizzLog } from "./logging.ts"
 import { frizzTempDir } from "./frizz-paths.ts"
 import { declaredShellBudgetMs } from "./shell-budget.ts"
 import { vetHarnessOutputPath } from "./background-shell-output.ts"
-import { liftWorkingDir } from "./thread-cwd.ts"
+import { liftRepoWorktree, liftWorkingDir } from "./thread-cwd.ts"
 // A cycle (transcript.ts imports this module's fence parser), safe because neither reads the other at
 // module load: codexToolWorkdir is only ever called from inside a fold.
 import { codexToolWorkdir } from "./transcript.ts"
@@ -1237,6 +1237,24 @@ function trackOpenCalls(state: TailState, rec: Record): void {
   }
 }
 
+// Claude: the folder a tool call works in (FoldState.toolCwd) — a Bash command's leading `cd` or the
+// folder of a file it edits. Reads and bare commands leave it alone: a Read of a neighbouring checkout
+// for reference is not a move, and a command with no `cd` runs wherever the session is.
+const FILE_EDIT_TOOLS = new Set(["Edit", "MultiEdit", "Write", "NotebookEdit"])
+function trackToolCwd(state: TailState, rec: Record): void {
+  const content = rec.message?.content
+  if (rec.isSidechain === true || !Array.isArray(content)) return
+  for (const block of content) {
+    const b = block as { type?: string; name?: unknown; input?: { command?: unknown; file_path?: unknown; notebook_path?: unknown } } | null
+    if (b?.type !== "tool_use" || typeof b.name !== "string") continue
+    const file = b.input?.file_path ?? b.input?.notebook_path
+    const dir = b.name === "Bash" ? leadingCd(b.input?.command, state.cwd)
+      : FILE_EDIT_TOOLS.has(b.name) && typeof file === "string" && isAbsolute(file) ? dirname(file)
+      : undefined
+    if (dir) state.toolCwd = dir
+  }
+}
+
 function settleOpenCalls(state: TailState, rec: Record): void {
   const content = rec.message?.content
   const results = Array.isArray(content)
@@ -2284,6 +2302,7 @@ export function applyRecord(state: TailState, rec: Record): void {
     }
     trackDispatches(state, rec) // register any background Agent dispatches + background shells
     trackOpenCalls(state, rec) // what a silent turn is blocked on
+    trackToolCwd(state, rec) // where its tools work, when the session's own `cwd` cannot say
     trackAsk(state, rec) // capture a pending native AskUserQuestion (frozen at a TUI dialog)
   } else if (type === "user" && !metaUserRec) {
     state.sawRecords = true
@@ -3466,7 +3485,11 @@ export function createTailer(deps: TailerDeps): Tailer {
     // Only a Codex/ACP tool call's `workdir` can be relative (a Claude record's `cwd` is taken absolute or
     // not at all), and Codex reads it against its session's folder — see TailerDeps.codexSessionCwd.
     const base = isAbsolute(raw) ? undefined : deps.codexSessionCwd?.(state.slug, state.sessionId) ?? projectWorkDir
-    return liftWorkingDir(base === undefined ? raw : resolve(base, raw), projectWorkDir, now())
+    const reading = liftWorkingDir(base === undefined ? raw : resolve(base, raw), projectWorkDir, now())
+    // At the root by its `cwd`, but its tools working in another checkout of this repository — a
+    // sibling worktree Claude Code will not let the session `cd` into (FoldState.toolCwd).
+    if (reading && !reading.checkout && state.toolCwd) return liftRepoWorktree(state.toolCwd, projectWorkDir, now()) ?? reading
+    return reading
   }
 
   /** A shell row's place (BgShellView.checkout / atRoot): its folder's checkout off the root, `atRoot` in it,

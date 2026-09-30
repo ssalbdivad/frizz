@@ -264,6 +264,12 @@ export interface FoldState {
   // call's `workdir`. May be RELATIVE on codex (a `workdir: "packages/web"`), in which case the tailer
   // resolves it against the project's working folder. A sub-agent's records never set it.
   cwd?: string
+  // The folder the agent's newest Claude tool call WORKED in — a Bash command's leading `cd`, an
+  // Edit/Write's file — when that says more than `cwd` can. Claude Code snaps a `cd` outside the project
+  // back to the project, so an agent working in a sibling worktree (`~/repo-perf` beside `~/repo`)
+  // records `cwd: ~/repo` on every line while every edit lands in `~/repo-perf`. The tailer takes it
+  // only when `cwd` reads the project root and this names a worktree of the project's own repository.
+  toolCwd?: string
   // The spinoff SIDE TURN reading (spinoff-side-turn.ts): whether the worker is at rest in its terms, the
   // side turn in progress, and the rest its request found — which the tailer's view presents while a
   // hidden side turn stands. Absent until the first record that means anything to it.

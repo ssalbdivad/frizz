@@ -18,6 +18,7 @@ import { useTerminalCommandMenuItem } from "./ExternalTerminalCommand.tsx"
 import { useDevFrizzBuild } from "../lib/devBuild.ts"
 import { restartWorker } from "../lib/restartWorker.ts"
 import { showToast } from "../store.ts"
+import { baseName, runExternalOpen } from "../lib/externalOpen.ts"
 import { offersReloadPlugins, offersRestartWorker, reloadThreadPlugins } from "../lib/workerMaintenance.ts"
 
 // openFullscreen, the one navigation into a thread's /full page, shared by the ⤢ door (ExpandThreadLink.tsx)
@@ -93,9 +94,13 @@ export function ThreadTerminalButton({ slug }: { slug: string }) {
 /** Open the thread's working folder in the External app (or `$EDITOR`) — the step `t` then `code .` took.
  *  The server resolves the folder, the same one a terminal on the thread starts in. */
 function openInEditor(api: Api, slug: string): void {
-  api.openThreadFolder({ slug }).catch((error: unknown) => {
-    showToast(`Could not open an editor: ${(error instanceof Error ? error.message : String(error)).slice(0, 80)}`)
-  })
+  void runExternalOpen(
+    `editor:${slug}`,
+    "Opening editor…",
+    () => api.openThreadFolder({ slug }),
+    ({ path }) => showToast(`Opened ${baseName(path)} in editor`, { detail: path }),
+    (message) => `Could not open an editor: ${message}`,
+  )
 }
 
 // THE HEADER'S ⋯ MENU: the rarer verbs. It carried "Open fullscreen" and owned `f` until 2026-09-29, when

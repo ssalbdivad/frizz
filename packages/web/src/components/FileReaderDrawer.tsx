@@ -1,12 +1,11 @@
 import { useContext, useMemo, useRef, type MouseEvent as ReactMouseEvent, type Ref } from "react"
 import { useQuery } from "@tanstack/react-query"
 import { ExternalLink } from "lucide-react"
-import { showToast } from "../store.ts"
 import { projectRpc, rpc } from "../api/rpc.ts"
 import { useLiveLocalFile } from "../hooks.ts"
-import { copyTextToClipboard } from "../lib/clipboard.ts"
 import { useInnerHtml } from "../lib/innerHtml.ts"
-import { openLocalPath } from "../lib/local-file-links.ts"
+import { openLocalPath, settleLocalFileOpen } from "../lib/local-file-links.ts"
+import { baseName, runExternalOpen } from "../lib/externalOpen.ts"
 import { LOCAL_FILE_POLL_MS, highlightedSource, localFileQuery } from "../lib/localFileQuery.ts"
 import { useLocalFileCodeLinks } from "../lib/localFileCode.ts"
 import { MarkdownScopeContext, useMarkdownHtml, type MarkdownScope } from "../lib/useMarkdown.ts"
@@ -43,14 +42,13 @@ export const FOOTER_STYLE = { paddingBottom: "max(0.75rem, env(safe-area-inset-b
 export function OpenAction({ path, image, project, onOpen, className = "" }: { path: string; image?: boolean; project?: string; onOpen?: () => void; className?: string }) {
   const open = () => {
     onOpen?.()
-    ;(project ? projectRpc(project) : rpc)
-      .openLocalFile({ path, ...(image ? { image: true } : {}) })
-      .then(async (result) => {
-        if (result.action !== "copy") return
-        await copyTextToClipboard(result.path)
-        showToast("Copied local path")
-      })
-      .catch((error) => showToast(`Could not open local file: ${(error as Error).message.slice(0, 100)}`))
+    void runExternalOpen(
+      `file:${path}`,
+      `Opening ${baseName(path)}…`,
+      () => (project ? projectRpc(project) : rpc).openLocalFile({ path, ...(image ? { image: true } : {}) }),
+      settleLocalFileOpen,
+      (message) => `Could not open local file: ${message}`,
+    )
   }
   return (
     <button

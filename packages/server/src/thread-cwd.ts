@@ -1,4 +1,4 @@
-import { closeSync, existsSync, openSync, readSync, realpathSync, statSync } from "node:fs"
+import { closeSync, existsSync, openSync, readFileSync, readSync, realpathSync, statSync } from "node:fs"
 import { homedir } from "node:os"
 import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path"
 import type { ThreadWorkingDir, TranscriptMessage, WorkCheckout } from "@frizz/shared"
@@ -197,9 +197,73 @@ export function liftCheckout(dir: string | undefined, projectDir: string | undef
   return liftWorkingDir(dir, projectDir, nowMs)?.checkout
 }
 
+// A SIBLING WORKTREE — `~/repo-perf` made with `git worktree add ../repo-perf` beside the project at
+// `~/repo`. The session's `cwd` never reaches it (Claude Code resets a `cd` out of the project), so its
+// only trace is where the agent's tools work (FoldState.toolCwd), and that reading is trusted only when
+// the checkout it lifts to shares the project's git directory: an edit to `~/.claude/…` memory or to an
+// unrelated repository is not the thread moving.
+
+/** The git directory shared by every worktree of `checkout`'s repository (`git rev-parse
+ *  --git-common-dir`), real-pathed; undefined when `checkout` holds no `.git`. */
+function gitCommonDir(checkout: string): string | undefined {
+  const dotGit = join(checkout, ".git")
+  try {
+    if (statSync(dotGit).isDirectory()) return realpathSync(dotGit)
+    const gitdir = /^gitdir:\s*(.+?)\s*$/mu.exec(readFileSync(dotGit, "utf8"))?.[1]
+    if (!gitdir) return undefined
+    const own = resolve(checkout, gitdir)
+    let common = own
+    try {
+      common = resolve(own, readFileSync(join(own, "commondir"), "utf8").trim())
+    } catch {
+      // No `commondir`: a main checkout's gitdir is its own common dir.
+    }
+    return realpathSync(common)
+  } catch {
+    return undefined
+  }
+}
+
+/** The nearest ancestor of `dir` (itself included) holding a `.git`. */
+function enclosingCheckout(dir: string): string | undefined {
+  for (let at = dir; ; at = dirname(at)) {
+    if (existsSync(join(at, ".git"))) return at
+    if (dirname(at) === at) return undefined
+  }
+}
+
+const repoMemo = new Map<string, { at: number; value: string | undefined }>()
+function repoOf(dir: string, nowMs: number): string | undefined {
+  const hit = repoMemo.get(dir)
+  if (hit && nowMs - hit.at < LIFT_TTL_MS) return hit.value
+  const checkout = enclosingCheckout(realpathOr(dir))
+  const value = checkout ? gitCommonDir(checkout) : undefined
+  repoMemo.delete(dir)
+  repoMemo.set(dir, { at: nowMs, value })
+  while (repoMemo.size > LIFT_MAX) {
+    const oldest = repoMemo.keys().next().value
+    if (oldest === undefined) break
+    repoMemo.delete(oldest)
+  }
+  return value
+}
+
+/** `dir` lifted to its checkout, only when that checkout is a WORKTREE of the project's own repository
+ *  other than the project root; undefined otherwise. */
+export function liftRepoWorktree(dir: string, projectDir: string, nowMs = Date.now()): LiftReading | undefined {
+  // A Write can name a folder it is about to create; its nearest existing ancestor is where it lands.
+  let at = dir
+  while (!isDirectory(at) && dirname(at) !== at) at = dirname(at)
+  const reading = liftWorkingDir(at, projectDir, nowMs)
+  if (reading?.checkout?.kind !== "worktree") return undefined
+  const repo = repoOf(projectDir, nowMs)
+  return repo !== undefined && repoOf(reading.checkout.dir, nowMs) === repo ? reading : undefined
+}
+
 /** Test seam: the memo is process-lifetime state keyed by path. */
 export function resetCheckoutMemo(): void {
   liftMemo.clear()
+  repoMemo.clear()
 }
 
 function isFile(path: string): boolean {

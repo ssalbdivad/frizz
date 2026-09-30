@@ -1,6 +1,7 @@
 import { projectRpc, rpc } from "../api/rpc.ts"
 import { openImageViewer, pushFileReader, showToast } from "../store.ts"
 import { copyTextToClipboard } from "./clipboard.ts"
+import { baseName, runExternalOpen } from "./externalOpen.ts"
 import { prefs } from "./prefs.ts"
 import { localViewerFor } from "./localViewer.ts"
 import type { MarkdownScope } from "./useMarkdown.ts"
@@ -118,14 +119,22 @@ export function imageGalleryFor(from: Element): string[] {
 }
 
 async function openExternally(path: string, project?: string, fallback?: () => void) {
-  try {
-    const result = await (project ? projectRpc(project) : rpc).openLocalFile({ path })
-    if (result.action === "copy") {
-      await copyTextToClipboard(result.path)
-      showToast("Copied local path")
-    }
-  } catch (error) {
-    fallback?.()
-    showToast(`Could not open local file: ${(error as Error).message.slice(0, 100)}`)
-  }
+  await runExternalOpen(
+    `file:${path}`,
+    `Opening ${baseName(path)}…`,
+    () => (project ? projectRpc(project) : rpc).openLocalFile({ path }),
+    (result) => settleLocalFileOpen(result),
+    (message) => {
+      fallback?.()
+      return `Could not open local file: ${message}`
+    },
+  )
+}
+
+/** The toast a finished local-file open leaves: the copied path, or which file went out. */
+export async function settleLocalFileOpen(result: { action: string; path: string }): Promise<void> {
+  if (result.action === "copy") {
+    await copyTextToClipboard(result.path)
+    showToast("Copied local path")
+  } else showToast(`Opened ${baseName(result.path)}`)
 }
