@@ -331,6 +331,9 @@ export function useShellLog(slug: string, shellId: string): { stream: ShellLogSt
     let inflight = false
     let again = false
     let timer: ReturnType<typeof setTimeout> | undefined
+    // `gone` replies in a row since the shell was last seen running (nextShellLogDelay rechecks those).
+    let seenRunning = false
+    let gones = 0
     const read = async (): Promise<void> => {
       if (stopped) return
       if (inflight) {
@@ -347,7 +350,9 @@ export function useShellLog(slug: string, shellId: string): { stream: ShellLogSt
         // folder (the subtitle) — and changes only the state, as the log itself stays (ShellLogStream.apply).
         setMeta((prev) => (reply.state === "gone" && stream.received > 0 && prev ? { ...prev, state: "gone", stoppable: false } : { ...reply, output: "" }))
         setError(false)
-        const delay = nextShellLogDelay(reply)
+        if (reply.state === "running") seenRunning = true
+        gones = reply.state === "gone" && seenRunning ? gones + 1 : 0
+        const delay = nextShellLogDelay(reply, gones)
         if (delay !== undefined) timer = setTimeout(() => void read(), delay)
       } catch {
         if (stopped) return

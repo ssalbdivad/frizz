@@ -1,7 +1,7 @@
 import assert from "node:assert/strict"
 import test from "node:test"
 import type { BackgroundShellOutputResult } from "@frizz/shared"
-import { ShellLogStream, nextShellLogDelay, shellLogHead, type ShellLogEvent } from "./shellLog.ts"
+import { GONE_RECHECKS, ShellLogStream, nextShellLogDelay, shellLogHead, type ShellLogEvent } from "./shellLog.ts"
 
 // The agent-terminal drawer's stream: what a poll reply becomes on the read-only xterm. The rules a browser
 // would only show by accident — a resume appends, a shrink starts over, a pane that mounts late still sees
@@ -98,6 +98,15 @@ test("the poll asks again at once when more is waiting, on a beat while running,
   // A shell that wrote past one delta read in its last poll window and then EXITED: the rest — usually the
   // summary a test runner prints last — is still on disk, so the poll drains it before it stops.
   assert.equal(nextShellLogDelay({ state: "done", more: true }), 0)
+})
+
+// A `gone` can be transient — a session re-register hides a shell for a tick — and stopping on the first
+// one froze a still-running shell's drawer as "unavailable" until it was reopened.
+test("a gone after the shell was running is asked about again, a bounded number of times", () => {
+  assert.equal(nextShellLogDelay({ state: "gone" }, 0), undefined, "gone from the first reply: nothing to wait for")
+  assert.equal(nextShellLogDelay({ state: "gone" }, 1), 5_000)
+  assert.equal(nextShellLogDelay({ state: "gone" }, GONE_RECHECKS), 5_000)
+  assert.equal(nextShellLogDelay({ state: "gone" }, GONE_RECHECKS + 1), undefined, "then it is believed")
 })
 
 test("a gone reply after output leaves the log on screen", () => {

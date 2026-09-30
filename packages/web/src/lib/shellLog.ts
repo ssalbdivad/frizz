@@ -73,6 +73,10 @@ export class ShellLogStream {
   }
 }
 
+/** How many `gone` replies in a row, after a running one, are asked about again (nextShellLogDelay). */
+export const GONE_RECHECKS = 12
+const GONE_RECHECK_MS = 5_000
+
 /** When to ask again after a reply: at once when more is already waiting — whether or not the shell is
  *  still running — on the poll while it runs, and never once it has ended with nothing left to read.
  *
@@ -80,8 +84,14 @@ export class ShellLogStream {
  *  exits — a test runner dumping its failures — answers `{ state: "done", more: true }`, and stopping on
  *  "done" there left its newest output, usually the summary, unread in a pane that said nothing was
  *  missing. */
-export function nextShellLogDelay(reply: Pick<BackgroundShellOutputResult, "more" | "state" | "outputUnavailable">): number | undefined {
+export function nextShellLogDelay(reply: Pick<BackgroundShellOutputResult, "more" | "state" | "outputUnavailable">, gonesAfterRunning = 0): number | undefined {
   if (reply.more) return 0
+  // A `gone` can be TRANSIENT (see ShellLogStream.apply: a session re-register hides a shell for a tick),
+  // and stopping on the first one froze a still-running shell's drawer as "unavailable" until it was
+  // reopened. So a gone that follows a running reply is asked about again, slowly and a bounded number of
+  // times — a real retirement ends in `done`, not `gone`, so this is about a minute of one cheap read at
+  // most. A gone with no running before it is the shell's answer from the start: nothing to wait for.
+  if (reply.state === "gone") return gonesAfterRunning > 0 && gonesAfterRunning <= GONE_RECHECKS ? GONE_RECHECK_MS : undefined
   if (reply.state !== "running") return undefined
   if (reply.outputUnavailable) return 5_000 // nothing to read — only the state can change
   return 1_500
