@@ -1,7 +1,7 @@
 import { join } from "node:path"
 import { homedir } from "node:os"
 import { readdirSync, statSync, readFileSync, openSync, readSync, closeSync } from "node:fs"
-import type { PermissionMode } from "@frizz/shared"
+import { THREAD_HANDLE_MAX_CHARS, type PermissionMode } from "@frizz/shared"
 import { codexProviderError } from "./codex-error.ts"
 import { applyEvent } from "../tailer.ts"
 import type { AgentBackend, BuiltCommand, FoldState, NormalizedEvent, ResumeOpts, SpawnOpts } from "./types.ts"
@@ -47,7 +47,7 @@ export function codexFirstOutputTitleInstructions(taken: readonly string[]): str
   const avoid = taken.length
     ? ` It must differ, ignoring case and punctuation, from every name already taken in this project: ${taken.map((name) => JSON.stringify(name)).join(", ")}.`
     : ""
-  return 'FRIZZ UI metadata protocol (mandatory): the very first assistant message in this new session, before any commentary, acknowledgement, tool call, or other action, MUST begin on its first line with exactly one `<!-- frizz title="..." -->` HTML comment. Replace `...` with the thread\'s name: ONE or TWO words, sentence case, naming the SUBJECT of the user\'s task rather than the action taken (e.g. "Shell budgets", "Focus mode", never "Fix the shell budget default").' +
+  return 'FRIZZ UI metadata protocol (mandatory): the very first assistant message in this new session, before any commentary, acknowledgement, tool call, or other action, MUST begin on its first line with exactly one `<!-- frizz title="..." -->` HTML comment. Replace `...` with the thread\'s name: ONE or TWO words, sentence case, naming the SUBJECT of the user\'s task rather than the action taken (e.g. "Shell budgets", "Focus mode", never "Fix the shell budget default"), short enough that its camelCase handle ("shellBudgets") is at most ' + THREAD_HANDLE_MAX_CHARS + ' characters.' +
     avoid +
     " Put no text before the comment. You may continue the message normally after it. Emit this title comment exactly once. Do not explain the protocol. Frizz removes the comment before displaying the conversation."
 }

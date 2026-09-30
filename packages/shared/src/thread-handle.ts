@@ -12,6 +12,14 @@
 // the same thread. Both sides fold from the HANDLE, never from the stored words: the fold strips a plural
 // on the last word, and "Dev ops" is two short words where `devOps` is one (server thread-mentions.ts).
 
+// A name's HANDLE is also what the operator TYPES after `@`, so two words are not enough of a bound on
+// their own — every writer but a human rename also holds the handle to this length (server
+// thread-names.ts `threadNameProblem`): "Spinoff feature scope and UI" went onto the board as
+// `@spinoffFeatureScopeAndUi`, 24 characters nobody wants to type even with autocomplete (maintainer
+// 2026-09-29). Sixteen admits every good name on the board that day — `shellBudgets` (12),
+// `threadMentions` (14), `backgroundShells` (16) — and refuses the sentences.
+export const THREAD_HANDLE_MAX_CHARS = 16
+
 /** Past this many words a stored title is not a name but a sentence (a legacy row, a long human rename),
  *  and a camelCase run of it would be unreadable; it stays as written and has no handle. Frizz mints one
  *  or two words, but the name SHOWN can be Claude's own session title until then, and that runs to four

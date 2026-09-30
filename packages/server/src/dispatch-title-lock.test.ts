@@ -60,7 +60,7 @@ function harness() {
   return { dir, storage, dispatcher }
 }
 
-const CALLER_TITLE = "Investigate acme/app#391"
+const CALLER_TITLE = "Acme issue"
 
 for (const transport of ["claude-broker", "claude-cli", "codex"] as const) {
   test(`${transport}: a caller's dispatch title is shown as a name but never locked against the worker's own`, async (t) => {
@@ -85,6 +85,14 @@ for (const transport of ["claude-broker", "claude-cli", "codex"] as const) {
     assert.equal(row?.title_locked, 0, "…and no human authored it, so the worker's own aiTitle must still win")
   })
 }
+
+test("a caller's title too long to TYPE as a handle is dropped for the prompt chop, and the thread is minted instead", async () => {
+  const { storage, dispatcher } = harness()
+  const { slug } = await dispatcher.dispatch({ prompt: "scope the spinoff feature", title: "Spinoff feature scope and UI" })
+  const row = storage.getSession(slug)
+  assert.notEqual(row?.title, "Spinoff feature scope and UI")
+  assert.equal(row?.title_auto, 1, "it falls back exactly as a dispatch with no caller title does")
+})
 
 test("a dispatch with NO caller title stores a guess that is likewise replaceable", async () => {
   const { storage, dispatcher } = harness()

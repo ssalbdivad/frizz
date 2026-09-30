@@ -37,6 +37,7 @@ import {
 import { log as frizzLog } from "./logging.ts"
 import { frizzTempDir } from "./frizz-paths.ts"
 import { declaredShellBudgetMs } from "./shell-budget.ts"
+import { threadNameProblem } from "./thread-names.ts"
 import { readWorkflowRun, workflowAgentState as sharedWorkflowAgentState, workflowAckRunDir, workflowAckTaskId, workflowLabel, type WorkflowAgent } from "./workflow-runs.ts"
 
 // The JSONL tailer: incrementally reads each registered session's Claude Code transcript
@@ -2946,6 +2947,9 @@ export function createTailer(deps: TailerDeps): Tailer {
     // A persisted name already stands (the dispatch mint, or this marker on an earlier fold): the CAS
     // would refuse anyway, so skip the uniqueness scan it would have paid for.
     if (row.title_agent || row.title_worker_renamed) return false
+    // A marker that is not a name (too many words, a handle too long to type) never persists; the
+    // dispatch mint names the thread instead.
+    if (threadNameProblem(state.aiTitle.trim())) return false
     try {
       const title = deps.distinctTitle?.(row.slug, state.aiTitle.trim(), state.firstUserText) ?? state.aiTitle.trim()
       return deps.storage.setAutoTitleIfCurrent(row.slug, title, {
