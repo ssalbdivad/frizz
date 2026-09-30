@@ -1,7 +1,10 @@
 import { createRoot } from "react-dom/client"
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query"
 import type { BgShellView, ThreadTerminal, ThreadView } from "@frizz/shared"
-import { ThreadProcessStrip, ThreadTerminalMark } from "./components/ThreadTerminals.tsx"
+import { FolderHintToken, ProcessRow, ThreadProcessStrip, ThreadTerminalMark, folderHintTitle, processFolderHint } from "./components/ThreadTerminals.tsx"
+import { BgShellRow, TermWaitRow, WaitGrid } from "./components/AwaitingBackgroundCard.tsx"
+import { RAIL_WIDTH } from "./components/FocusRail.tsx"
+import { humanProcess, threadProcesses } from "./lib/threadProcesses.ts"
 import { ThreadCheckoutToken } from "./components/ThreadCheckoutToken.tsx"
 import { TerminalSheet } from "./components/TerminalSheet.tsx"
 import { TooltipProvider } from "./components/Tooltip.tsx"
@@ -98,7 +101,29 @@ createRoot(document.getElementById("root")!).render(
               <ThreadProcessStrip thread={thread} surface="drawer" onOpen={() => {}} />
             </div>
             <div data-fixture-strip="card" className="rounded-md border border-border bg-panel px-4 py-3">
+              {/* The prompting terminal's own row, as a queue card captions its live screen with it
+                  (TerminalPromptPane) — the screen itself needs a pty, so it is a box here. */}
+              <div data-fixture-caption className="px-1">
+                <ProcessRow process={humanProcess(terminals[0]!)} slug="fixture" here={here} caption onOpen={() => {}} />
+              </div>
+              <div className="mt-1.5 mb-3 h-10 rounded-md border border-attention/40" />
               <ThreadProcessStrip thread={thread} surface="card" onOpen={() => {}} />
+            </div>
+            {/* The fullscreen rail's Terminals group (FocusRail), at the rail's own width. */}
+            <div data-fixture-rail className="rounded-md border border-border bg-bg px-4 py-3" style={{ width: RAIL_WIDTH }}>
+              <WaitGrid
+                divider={false}
+                groups={[{
+                  head: "Terminals",
+                  rows: threadProcesses(thread, [], { now: Date.now() }).filter((p) => p.state === "prompt" || p.state === "running").map((p) => {
+                    const where = processFolderHint(p, here)
+                    const hint = where ? <FolderHintToken hint={where} title={folderHintTitle(where, ROOT, "/home/u")} /> : undefined
+                    return p.terminal
+                      ? <TermWaitRow key={p.key} terminal={p.terminal} slug="fixture" now={Date.now()} hint={hint} />
+                      : <BgShellRow key={p.key} shell={p.shell!} slug="fixture" now={Date.now()} hint={hint} />
+                  }),
+                }]}
+              />
             </div>
             {/* The rail mark's three tones: yours at a prompt, yours running, only the agent's running. */}
             <div data-fixture-marks className="flex flex-col gap-2 text-[13px]">

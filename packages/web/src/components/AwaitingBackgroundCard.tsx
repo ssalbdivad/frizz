@@ -45,6 +45,7 @@ import { threadLifecycleAvailability } from "../lib/threadLifecycle.ts"
 import { ICON_LABEL_NUDGE } from "../lib/iconAlign.ts"
 import { PRIMER, PRIMER_DANGER_LINK } from "../lib/primer.ts"
 import { LinkedHtml } from "./LinkedHtml.tsx"
+import { useShellFolderHint } from "./ThreadTerminals.tsx"
 import { BLOCK_RADIUS_INNER_BOTTOM, CARD_ACTION_EXPLAINER, CARD_ACTION_RADIUS, CARD_BODY, CARD_LINK, CARD_PRIMARY_ACTION, QUEUE_WRAP, TranscriptCard } from "./TranscriptCard.tsx"
 
 // Name what the thread is ACTUALLY waiting on. Three real cases, and the sentence has to be true in all
@@ -440,13 +441,16 @@ function Chevron() {
 export function WaitRow({ mark, name, mono, hint, status, onOpen, onPrewarm, href, ghRef, title, testKind, testId, indent }: {
   mark: ReactNode
   name: string
-  /** A terminal row's folder hint (ThreadTerminals' FolderHintToken), set in the NAME's cell, right-justified
-   *  in whatever the name leaves of it — never in the status cell. The status column is one `fit-content`
-   *  track shared by every row in the grid, sized before the `1fr` name gets anything, so a hint counted into
-   *  it narrowed every label in the group and clipped a prompting row's own reading (`📁 root · waiting for
-   *  i…`, 2026-09-30), while a hint sized from zero inside it showed its word only where some other row had
-   *  widened the track. In the name's cell it is the strip's GIVE again: the name takes its full width first,
-   *  the word shows in the slack and wraps away before the name loses a pixel, and the glyph stays. */
+  /** A terminal row's folder hint (ThreadTerminals' FolderHintToken). It leads the STATUS, as the strip's
+   *  hint leads its readings — so the row takes the name and status tracks as ONE flex cell: name, hint,
+   *  status. Not inside the shared status track: that track is one `fit-content` column for the whole grid,
+   *  sized before the `1fr` name gets anything, so a hint counted into it narrowed every label in the group
+   *  and clipped a prompting row's own reading (`📁 root · waiting for i…`, 2026-09-30). Not at the end of the
+   *  name's track either (the round after): that track ends where the widest status in the grid begins, so the
+   *  hint floated ~120px left of its row's `49m` and still clipped the name (`tail -f /dev/…` beside a bare
+   *  folder, with 126px free past it). In one cell, the status keeps its right edge — the grid's, where every
+   *  other row's status ends — the name takes everything else first, and the hint shows whole in what is left
+   *  or not at all. */
   hint?: ReactNode
   /** The name is a COMMAND LINE (a terminal of yours), set in mono as the strip sets the same command —
    *  one process, one typeface, on every surface. An inline run on the row's baseline, a step smaller so
@@ -504,13 +508,21 @@ export function WaitRow({ mark, name, mono, hint, status, onOpen, onPrewarm, hre
       </button>
     )
     : <span className={nameClass} title={title}>{label}</span>
-  // With a hint, the name's cell is a flex line: the name at its natural width (it still truncates, last), then
-  // the hint's zero-based box growing into what is left. The cell keeps the name's `min-w-0` so the 1fr track
-  // can squeeze it.
-  const nameCell = hint
-    ? <span className={`flex min-w-0 items-baseline ${tree ? "flex-1" : ""}`}>{open}{hint}</span>
-    : open
   const interactive = !!(href || onOpen)
+  // With a hint: the name and the status tracks as one flex line — the name at its natural width (it still
+  // truncates, last), the hint's zero-based box growing into what is left, the status at the grid's right edge.
+  const body = hint ? (
+    <span className={`${tree ? "flex-1" : "col-span-2"} flex min-w-0 items-baseline`}>
+      {open}
+      {hint}
+      <span data-wait-status className="max-w-[50%] shrink-0 truncate text-right text-muted-70">{status}</span>
+    </span>
+  ) : (
+    <>
+      {open}
+      <span data-wait-status className={STATUS}>{status}</span>
+    </>
+  )
   return (
     <div
       data-wait-row={testId}
@@ -521,8 +533,7 @@ export function WaitRow({ mark, name, mono, hint, status, onOpen, onPrewarm, hre
       className={`${tree ? ROW_FLEX : ROW} ${interactive ? "cursor-pointer transition-colors hover:bg-fg/[0.045]" : ""}`}
     >
       <span className="flex shrink-0">{mark}</span>
-      {nameCell}
-      <span data-wait-status className={STATUS}>{status}</span>
+      {body}
       {interactive ? <Chevron /> : <span />}
     </div>
   )
@@ -649,12 +660,15 @@ function declaredShellWatches(thread: Pick<ThreadView, "watches">): ThreadWatchV
 
 function ShellWatchRow({ watch, thread, slug, now }: {
   watch: ThreadWatchView
-  thread: Pick<ThreadView, "bgShells">
+  thread: Pick<ThreadView, "bgShells" | "checkout">
   slug: string
   now: number
 }) {
   const shell = resolveShell(thread, watch.target)
-  if (shell) return <BgShellRow shell={shell} slug={slug} now={now} testId={watch.target} />
+  // The strip's folder hint on the strip's rule (ThreadTerminals processFolderHint), so one shell reads one
+  // way here and in the strip under the prompt box — it said `root` there and nothing here.
+  const hint = useShellFolderHint(shell, thread.checkout)
+  if (shell) return <BgShellRow shell={shell} slug={slug} now={now} testId={watch.target} hint={hint} />
   const elapsed = compactElapsedSince(watch.createdAt, now)
   return (
     <WaitRow
@@ -847,7 +861,7 @@ export function hasAwaitingWaitRows(thread: Pick<ThreadView, "id" | "subAgents" 
   return items.prs.length + items.issues.length + items.shells.length + items.agents.length + items.timers.length > 0
 }
 
-function awaitingWaitGroups(thread: Pick<ThreadView, "id" | "subAgents" | "bgShells" | "watches">, now: number, opts: AwaitingWaitOptions = {}): Array<{ head: string; rows: ReactNode[] }> {
+function awaitingWaitGroups(thread: Pick<ThreadView, "id" | "subAgents" | "bgShells" | "watches" | "checkout">, now: number, opts: AwaitingWaitOptions = {}): Array<{ head: string; rows: ReactNode[] }> {
   const { prs, issues, shells, agents, timers } = awaitingWaitItems(thread, opts)
   // GROUPED BY KIND (maintainer 2026-08-15: "Definitely group them by kind"), and the order is the one
   // the ops strip already settled, for the same reason: a sub-agent and a shell are running RIGHT NOW,
@@ -946,7 +960,7 @@ export function WaitGrid({ groups, divider }: { groups: ReadonlyArray<WaitGroup>
  *  ids the fence was written in. `divider` says whether there is prose above for the rule to separate.
  *  `hints` are the fence's own, so its `shells:` row whether or not the board still lists them. */
 export function AwaitingWaitTable({ thread, divider, hints }: {
-  thread: Pick<ThreadView, "id" | "subAgents" | "bgShells" | "watches">
+  thread: Pick<ThreadView, "id" | "subAgents" | "bgShells" | "watches" | "checkout">
   divider: boolean
   hints?: readonly AwaitingHint[]
 }) {
@@ -1117,7 +1131,8 @@ export function AwaitingBackgroundCard({ thread, fence }: {
   //
   // OPTIONAL since 2026-09-04: a fence card in a SUB-AGENT's own transcript has no owning thread, so it
   // has no rows and no verb — but it is still this card, at this heading, with this prose.
-  thread?: Pick<ThreadView, "id" | "sessionId" | "kind" | "foreign" | "state" | "archived" | "awaitingBackground" | "runtime" | "bgSnoozed" | "subAgents" | "bgShells" | "watches" | "lastFence">
+  // `checkout` joined on 2026-09-30: an agent terminal's row names its folder where the strip would.
+  thread?: Pick<ThreadView, "id" | "sessionId" | "kind" | "foreign" | "state" | "archived" | "awaitingBackground" | "runtime" | "bgSnoozed" | "subAgents" | "bgShells" | "watches" | "lastFence" | "checkout">
   /** The fence this card STATES, when it is not the one the board is holding. Defaults to the thread's
    *  own `lastFence` — which is the at-rest case, and the only one until 2026-09-04.
    *

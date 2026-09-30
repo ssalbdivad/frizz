@@ -1,4 +1,4 @@
-import { lazy, Suspense, useEffect, useRef, useState } from "react"
+import { lazy, Suspense, useEffect, useRef, useState, type ReactNode } from "react"
 import { useQuery } from "@tanstack/react-query"
 import { Bot, Folder, FolderGit2, Loader2, SquareTerminal, X } from "lucide-react"
 import type { BgShellView, ThreadView, ThreadWorkingDir, WorkCheckout } from "@frizz/shared"
@@ -187,7 +187,8 @@ export function folderHintTitle(hint: ProcessFolderHint, projectDir: string | un
 // THE HINT'S MARK, the header token's own glyph for the same kind of place (ThreadCheckoutToken): a git
 // folder for a worktree, a plain one for the root or any other folder. It is what tells a hint from the
 // readings beside it — the bare word, in the readings' own tone, read as one more reading (`main · 52 lines
-// · 40m`) — and it is the part of the hint that never gives way (WHO GIVES WAY).
+// · 40m`). It never stands without its word (WHO GIVES WAY): alone, a plain folder named nothing, and read
+// as "another folder" — the header token's vocabulary — on a row that was in fact at the root.
 const HINT_GLYPH = { worktree: FolderGit2, folder: Folder, root: Folder } as const
 // One step louder than the readings (muted-40) and one quieter than the label (muted-70) — the header
 // token's own muted-60 — so a place reads as a fact about the row, not as a count or a clock.
@@ -214,56 +215,68 @@ const RAIL_HINT_LIFT: Record<ProcessFolderHint["kind"], string> = {
   root: "translate-y-[calc(0.5em_-_0.5cap)]",
 }
 
-/** A folder hint on a BASELINE line — the fullscreen rail's rows — giving way as the strip's does (WHO GIVES
- *  WAY, below): a box sized from zero that grows into what the row's NAME leaves (WaitRow sets it in the
- *  name's cell, right-justified), so the word shows wherever the name has room for it and wraps away (the box
- *  is one line tall and clips) before the name loses a pixel, and the glyph — its first item — never does.
+/** A folder hint on a BASELINE line — the rows of the fullscreen rail and the resting card (WaitRow), where
+ *  it sits between the name and the status, leading the status as it leads the strip's readings. It gives
+ *  way as the strip's does (WHO GIVES WAY, below): a box sized from zero that grows into what the NAME
+ *  leaves, holding the hint as ONE item — glyph, word and the `·` before the status — which shows whole or
+ *  wraps away whole (the box is one line tall and clips) before the name loses a pixel.
  *
  *  The glyph takes the header token's geometry (ThreadCheckoutToken): its box stands on the baseline and
- *  `1cap` lifts its centre onto the cap band, in any font. The zero-width space beside it gives the first
- *  line a TEXT baseline, so the glyph holds its place with the word wrapped away — a flex line holding only
- *  an SVG has no baseline of its own. The strip lays its hint out itself (ProcessRow), on a centred line. */
+ *  `1cap` lifts its centre onto the cap band, in any font. The box leads with a zero-width TEXT strut: a
+ *  flex line always keeps its first item, so the strut is what lets the hint be the one that wraps, and it
+ *  gives the box a baseline with the hint gone. `ml-3` is the name→status floor the plain row's status keeps. */
 export function FolderHintToken({ hint, title }: { hint: ProcessFolderHint; title: string }) {
   const Glyph = HINT_GLYPH[hint.kind]
   return (
-    <span
-      data-process-checkout={hint.kind}
-      title={title}
-      className={`ml-2 flex h-[1lh] w-0 min-w-[1em] flex-1 basis-0 flex-wrap content-start items-baseline justify-end overflow-hidden ${HINT_TONE}`}
-    >
-      <span className="shrink-0">
-        {"\u200b"}
-        <Glyph aria-hidden className={`inline h-[1em] w-[1em] align-baseline ${RAIL_HINT_LIFT[hint.kind]}`} />
+    <span data-process-give className="ml-3 flex h-[1lh] w-0 min-w-0 flex-1 basis-0 flex-wrap content-start items-baseline justify-end overflow-hidden">
+      <span aria-hidden className="w-0">{"\u200b"}</span>
+      <span data-process-checkout={hint.kind} title={title} className="mr-1 flex shrink-0 items-baseline gap-1 whitespace-nowrap">
+        <span className={HINT_TONE}>
+          <Glyph aria-hidden className={`inline h-[1em] w-[1em] align-baseline ${RAIL_HINT_LIFT[hint.kind]}`} />
+          <span data-process-checkout-word className="ml-[0.25em]">{hint.text}</span>
+        </span>
+        <span aria-hidden className="text-muted-25">·</span>
       </span>
-      <span data-process-checkout-word className="ml-[0.25em] max-w-[12ch] shrink-0 truncate">{hint.text}</span>
     </span>
   )
+}
+
+/** An agent terminal's folder hint for a WaitRow (the resting card's rows), on the strip's rule. A hook for
+ *  the board's folders; call it unconditionally, with the shell when it resolved. */
+export function useShellFolderHint(shell: Pick<BgShellView, "checkout" | "atRoot"> | undefined, here: WorkCheckout | null | undefined): ReactNode {
+  const board = useBoard()
+  const projectDir = useThreadProjectDir()
+  const hint = shell ? processFolderHint({ placed: Boolean(shell.checkout || shell.atRoot), ...(shell.checkout ? { checkout: shell.checkout } : {}) }, here) : undefined
+  return hint ? <FolderHintToken hint={hint} title={folderHintTitle(hint, projectDir ?? board?.projectDir, board?.homeDir)} /> : undefined
 }
 
 // WHO GIVES WAY at a narrow width, first to last (the maintainer's rule: the label keeps priority over the
 // hint, and the hint truncates or drops first):
 //   1. the line counter — the least identifying reading, and one a card never shows at all;
-//   2. the hint's WORD (`root`, `probe`) — its glyph stays;
+//   2. the folder hint, WHOLE — its glyph, its word and its `·` together;
 //   3. the label, by truncating.
-// Never: the arrow, the owner mark, the tag, the ×, the hint's GLYPH, or the budget / state / age.
+// Never: the arrow, the owner mark, the tag, the ×, or the budget / state / age.
 //
-// The glyph is the one piece of a hint that never goes, because an ABSENT hint is a claim too: it says "runs
-// where the header says". Dropping the whole hint at 390px made a row running in the root read as running
-// in `probe`, directly under a sibling that still said `root`. So a hint's minimum is its folder mark, 1em
-// wide, with the place in its tooltip.
+// THE HINT IS ONE PIECE. It gave way word-first for one round, keeping its glyph so that an absent hint could
+// not claim "runs where the header says" — and the glyph then outranked the label: at 390px `Running root
+// tick l…` sat beside a bare folder and its `·`, 20px that would have fitted the label whole, and the bare
+// glyph named nothing (a plain folder is also the header's "another folder", on a row that was at the root),
+// while the next row read `📁 root` for the same place. So a hint shows as glyph AND word or not at all. Where
+// it cannot sit beside the whole label the row says nothing about its place, and its tooltip and drawer
+// header still do: at a width that cannot hold both, the row's own name comes first.
 //
-// HOW, in plain flexbox and with nothing measured: the counter and the word sit in one box, GIVE, sized from
+// HOW, in plain flexbox and with nothing measured: the hint and the counter sit in one box, GIVE, sized from
 // ZERO (`flex: 1 1 0`, `w-0`), so it grows only into what the row has left AFTER the label has its full width
-// and can never take a pixel from it. Inside, its items wrap onto a hidden second line (the box is one line
-// tall and clips) the moment they no longer fit, the LAST one first — the counter, then the word. The glyph
-// is GIVE's first item, and a flex line always keeps its first item, so it never wraps; `min-w-[1em]` keeps
-// room for it. A row with no hint leads with a zero-width strut instead, which holds line one and lets the
-// counter wrap. The readings after GIVE are `shrink-0`, so it is the label that truncates before them.
+// and can never take a pixel from it. GIVE leads with a zero-width strut, because a flex line always keeps
+// its first item: after it, each item wraps onto a hidden second line (the box is one line tall and clips)
+// the moment it no longer fits, the LAST one first — the counter, then the hint — and each carries its own
+// trailing `·`, so nothing is left dangling when the one after it goes. The readings after GIVE are
+// `shrink-0`, so it is the label that truncates before them.
 //
 // SPACING, in the readings' own rhythm (4px · 4px): GIVE's `-mr-0.5` takes the row's 6px gap to FIXED down
-// to the 4px the readings keep between themselves. A row with a hint always shows its glyph, so FIXED opens
-// with a `·` and the counter carries one before it; without a hint the counter carries one after it.
-const GIVE = "flex h-[1lh] w-0 min-w-0 flex-1 basis-0 flex-wrap content-start items-center justify-end overflow-hidden -mr-0.5"
+// to the 4px the readings keep between themselves, and `gap-x-1` is the same 4px between GIVE's own items.
+const GIVE = "flex h-[1lh] w-0 min-w-0 flex-1 basis-0 flex-wrap content-start items-center justify-end gap-x-1 overflow-hidden -mr-0.5"
+const GIVE_ITEM = "flex h-[1lh] shrink-0 items-center gap-1 whitespace-nowrap"
 const FIXED = "flex shrink-0 items-center gap-1 whitespace-nowrap text-muted-40"
 const SEP = <span aria-hidden className="text-muted-25">·</span>
 
@@ -276,7 +289,7 @@ const SEP = <span aria-hidden className="text-muted-25">·</span>
  * this is — a terminal, whether its output streams from a pty (yours) or from the file the harness writes
  * (the agent's). Every row opens the same drawer.
  */
-export function ProcessRow({ process: p, slug, here, lines, watched, onOpen }: {
+export function ProcessRow({ process: p, slug, here, lines, watched, caption, onOpen }: {
   process: ThreadProcess
   slug: string
   /** Where the header says the thread's agent is working (thread.checkout) — the folder hint's reference. */
@@ -284,6 +297,10 @@ export function ProcessRow({ process: p, slug, here, lines, watched, onOpen }: {
   /** The agent row's live line count, when the surface polls for one (the drawer does, a card does not). */
   lines?: number
   watched?: boolean
+  /** The row is a CAPTION — the prompting terminal's own row over its live screen on a queue card
+   *  (TerminalPromptPane). Its `waiting for input` gives way with the hint, before the label: the attention-
+   *  bordered screen directly under it already says so, and the row is there to say WHICH terminal asks. */
+  caption?: boolean
   /** Absent ⇒ a non-interactive row (a transcript-only shell with nothing to open). */
   onOpen?: () => void
 }) {
@@ -295,9 +312,10 @@ export function ProcessRow({ process: p, slug, here, lines, watched, onOpen }: {
   const Glyph = OWNER_GLYPH[p.owner]
   const terminal = p.terminal
   const human = p.owner === "human"
-  const live = p.state === "running" || p.state === "quiet"
-  const age = live ? liveAgeSince(p.startedAt, now) : undefined
-  const stateText = human && !live && terminal ? terminalStateLabel(terminal) : undefined
+  // A live row shows its age whoever owns it — a terminal of yours waiting at a prompt included: it is
+  // running, and its own drawer reads `waiting for input · 6m`.
+  const age = processIsLive(p) ? liveAgeSince(p.startedAt, now) : undefined
+  const stateText = human && p.state !== "running" && terminal ? terminalStateLabel(terminal) : undefined
   const counter = !human && p.shell?.id && !p.outputUnavailable ? shellLinesLabel(lines) : undefined
   const hint = processFolderHint(p, here)
   // A COMMAND is set in mono, whoever ran it: yours always is one, and so is an agent row whose label IS
@@ -308,7 +326,8 @@ export function ProcessRow({ process: p, slug, here, lines, watched, onOpen }: {
   const noun = human ? "your terminal" : p.monitor ? "agent monitor" : "agent terminal"
 
   // The × is Stop while yours runs and Remove once it has ended; on the agent's it is the ops strip's own
-  // × (childOpDismisser): offered only when the server says the shell can really be stopped.
+  // × (childOpDismisser): offered only when the server says the shell can really be stopped. Its tooltip
+  // names the thing by the row's own noun — "operation" was the sub-agent row's word.
   const agentDismiss = !human && p.shell ? childOpDismisser(slug, p.shell, p.monitor ? "MONITOR" : "SHELL", api) : undefined
   const humanDismiss = human && terminal ? () => {
     if (busy) return
@@ -321,8 +340,8 @@ export function ProcessRow({ process: p, slug, here, lines, watched, onOpen }: {
   } : undefined
   const dismiss = humanDismiss ?? agentDismiss
   const dismissTitle = human
-    ? terminal?.state === "running" ? "Stop — end this terminal's process" : "Remove — forget this finished terminal"
-    : CHILD_DISMISS_TITLE[p.state === "running" ? "running" : "settled"]
+    ? terminal?.state === "running" ? "Stop — end this terminal" : "Remove — forget this finished terminal"
+    : p.state === "running" ? `Stop — end this ${noun}` : `Clear — stop tracking this ${noun}`
   const dismissVerb = human ? (terminal?.state === "running" ? "Stop" : "Remove") : p.state === "running" ? "Stop" : "Clear"
 
   const identity = (
@@ -337,15 +356,23 @@ export function ProcessRow({ process: p, slug, here, lines, watched, onOpen }: {
       </span>
     </>
   )
+  const stateNode = stateText
+    ? <span key="state" data-process-state-text className={p.state === "prompt" ? "text-attention" : p.state === "failed" ? DANGER : undefined}>{stateText}</span>
+    : null
   // The readings that never give way, in the one order every surface reads them: the budget or the state,
   // then the age, rightmost — the column a stack of rows is read down (ChildOpRow's rule).
   const fixed = [
     p.budget ? <span key="budget" data-child-op-budget title={p.budget.title} style={p.budget.tone === "danger" ? { color: PRIMER.fgDanger } : undefined}>{p.budget.text}</span> : null,
-    stateText ? <span key="state" className={p.state === "prompt" ? "text-attention" : p.state === "failed" ? DANGER : undefined}>{stateText}</span> : null,
+    caption ? null : stateNode,
     age ? <span key="age" title={`Running for ${age}`}>{age}</span> : null,
   ].filter((node) => node !== null)
   const hintTitle = hint ? folderHintTitle(hint, projectDir ?? board?.projectDir, board?.homeDir) : undefined
   const HintGlyph = hint ? HINT_GLYPH[hint.kind] : undefined
+  // GIVE's items, in reading order; each carries the `·` to whatever follows it on the row, and so goes with it.
+  const givingState = caption ? stateNode : null
+  const hintSep = Boolean(givingState || counter || fixed.length > 0)
+  const stateSep = Boolean(counter || fixed.length > 0)
+  const counterSep = fixed.length > 0
 
   return (
     <div
@@ -385,32 +412,36 @@ export function ProcessRow({ process: p, slug, here, lines, watched, onOpen }: {
           {busy ? <Loader2 size={11} className={`animate-spin ${MARK_LIFT}`} /> : <X size={11} className={MARK_LIFT} />}
         </button>
       )}
-      <span data-process-give className={`${GIVE} ${hint ? "min-w-[1em]" : ""}`}>
-        {hint && HintGlyph ? (
-          // A full line tall, like the strut it stands in for: GIVE's first LINE is as tall as its tallest item,
-          // and a 1em glyph alone made it 11.5px — riding 2.5px high, with the wrapped word's top peeking in
-          // under it.
-          <span data-process-checkout={hint.kind} title={hintTitle} className={`flex h-[1lh] shrink-0 items-center ${HINT_TONE}`}>
-            <HintGlyph aria-hidden className={HINT_ICON[hint.kind]} />
+      <span data-process-give className={GIVE}>
+        {/* The strut: GIVE's first item, which a flex line always keeps, so that everything after it can wrap. */}
+        <span aria-hidden className="h-[1lh] w-0" />
+        {hint && HintGlyph && (
+          <span data-process-checkout={hint.kind} title={hintTitle} className={GIVE_ITEM}>
+            {/* `ml-[0.2em]`: 4.0px of ink from the folder to its name at 11.5px, the header token's own 3.9px at
+                11px (ink-gaps, dsf 6); its 0.25em drew 4.55 here, the glyph's 1px of dead box on each side. */}
+            <span className={`flex items-center ${HINT_TONE}`}>
+              <HintGlyph aria-hidden className={HINT_ICON[hint.kind]} />
+              <span data-process-checkout-word className="ml-[0.2em] max-w-[12ch] truncate">{hint.text}</span>
+            </span>
+            {hintSep ? SEP : null}
           </span>
-        ) : (
-          <span aria-hidden className="h-[1lh] w-0" />
         )}
-        {/* `ml-[0.2em]`: 4.0px of ink from the folder to its name at 11.5px, the header token's own 3.9px at
-            11px (ink-gaps, dsf 6); its 0.25em drew 4.55 here, the glyph's 1px of dead box on each side. */}
-        {hint && <span data-process-checkout-word title={hintTitle} className={`ml-[0.2em] max-w-[12ch] shrink-0 truncate ${HINT_TONE}`}>{hint.text}</span>}
+        {givingState && (
+          <span className={GIVE_ITEM}>
+            {givingState}
+            {stateSep ? SEP : null}
+          </span>
+        )}
         {counter && (
-          <span className="flex shrink-0 items-center gap-1 text-muted-40">
-            {hint ? <span className="ml-1 text-muted-25" aria-hidden>·</span> : null}
+          <span className={`${GIVE_ITEM} text-muted-40`}>
             <span data-child-op-counter title="Lines of output so far — open the row to read them">{counter}</span>
-            {!hint && fixed.length > 0 ? SEP : null}
+            {counterSep ? SEP : null}
           </span>
         )}
       </span>
       {fixed.length > 0 && (
         // The readings are the row's sans, on the same line as the label (see LABEL), so they need no lift.
         <span className={FIXED}>
-          {hint ? SEP : null}
           {fixed.flatMap((node, i) => (i === 0 ? [node] : [<span key={`sep${i}`} aria-hidden className="text-muted-25">·</span>, node]))}
         </span>
       )}
@@ -514,7 +545,7 @@ export function TerminalPromptPane({ thread, base, onOpen }: {
       {/* `px-1`: the strip's own inset (AllQueuesCard), so this row's arrow and label sit in the one column
           the rows under the reply box use, and its screen's border is the box edge, as the reply box is theirs. */}
       <div className="px-1">
-        <ProcessRow process={process} slug={thread.id} here={thread.checkout} onOpen={() => open(process)} />
+        <ProcessRow process={process} slug={thread.id} here={thread.checkout} caption onOpen={() => open(process)} />
       </div>
       <div data-terminal-prompt-pane={prompting.id} className="mt-1.5 flex h-[168px] min-w-0 overflow-hidden rounded-md border border-attention/40">
         <Suspense fallback={<div className="flex-1 bg-bg" />}>
@@ -532,7 +563,11 @@ export function TerminalPromptPane({ thread, base, onOpen }: {
 // trailers like the provider mark this sits beside). The same place for both owners, told apart by TONE:
 //   · attention-yellow while one of yours waits at a prompt, which is also what put the thread in the queue;
 //   · the shell's azure while one of YOURS runs;
-//   · muted while only the AGENT's run — a dev server it left up is worth a glance, and nothing more.
+//   · the same azure, dimmed, while only the AGENT's run — a dev server it left up is worth a glance, and
+//     nothing more. It was grey for one round, and the strip one pane over draws a FINISHED terminal of yours
+//     in that very grey (muted-45 and muted-50 are one #636363 in light mode): one grey square meant "agent
+//     terminals running" here and "your run ended" there. Azure is what running means on every surface
+//     (the strip's liveness hue); the dimming is what says "not yours".
 // Still the terminal glyph for all three: a 10px bot beside a title would read "this is an agent", which
 // every thread is. Absent when nothing runs: a finished terminal is history, read in the thread's strip.
 //
@@ -559,12 +594,16 @@ export function ThreadTerminalMark({ thread }: { thread: Pick<ThreadView, "termi
       aria-label={label}
       title={label}
       data-thread-terminal-mark={tone}
-      className={`${TERMINAL_MARK_CLASS} ${tone === "prompt" ? "text-attention" : tone === "running" ? "text-shell" : "text-muted-50"}`}
+      className={`${TERMINAL_MARK_CLASS} ${tone === "prompt" ? "text-attention" : tone === "running" ? "text-shell" : AGENT_ONLY_MARK_TONE}`}
     >
       <SquareTerminal aria-hidden="true" focusable="false" className="size-full" strokeWidth={2.25} viewBox="2 2 20 20" />
     </span>
   )
 }
+
+// Only the agent's terminals run: the running hue at half strength, so it reads as running and as quieter
+// than one of yours. Checked against both themes' panels (the dark one was barely visible in grey).
+export const AGENT_ONLY_MARK_TONE = "text-shell/55"
 
 // The glyph is lucide's square-terminal CROPPED to its ink (viewBox 2 2 20 20: the 18-unit rounded square
 // plus its stroke), so the box IS the ink and `ml-1` is 4px of ink gap, as it is for the provider marks.
