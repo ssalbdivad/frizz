@@ -23,6 +23,7 @@ import { TodoBlock } from "./TodoBlock.tsx"
 import { splitQuestionBlocks, type QuestionKind, type BlockAnswer, type MessageAnswering } from "../lib/questionBlocks.ts"
 import { splitFenceBlocks, type FenceKind } from "../lib/fenceBlocks.ts"
 import { showsRegisteredDoneCard } from "../lib/registeredDone.ts"
+import { optimisticallySteered, useSteeredAt } from "../lib/steering.ts"
 import { RestedCard, showsRestedCard } from "./RestedCard.tsx"
 import { ProviderErrorCard, providerErrorVisible } from "./ProviderErrorCard.tsx"
 import { answersForDisplay, parseAnswersCard, pairAllAnswers, settledAnswerKeys, unrenderedAnswers, withoutSettledAnswers, type PairedAnswer } from "../lib/answersMessage.ts"
@@ -212,7 +213,12 @@ export function ThreadView({ slug, onStatusApplied, onClose, virtualized = false
 
 function ChatView({ slug, virtualized }: { slug: string; virtualized: boolean }) {
   const board = useBoard()
-  const thread = threadBySlug(board, slug)
+  // The same just-sent overlay the rail rows wear (lib/steering.ts): a reply sets the thread to work the
+  // instant it is committed, so the tail's rest card (a registered done, the rested card, a resting
+  // card) gives way to Working… at once rather than ~1s later when the server first reports the turn.
+  const steeredAt = useSteeredAt()
+  const serverThread = threadBySlug(board, slug)
+  const thread = serverThread && optimisticallySteered(serverThread, steeredAt[slug])
   // ANSWERED registered questions stay in the transcript, greyed, where their open card stood (see
   // lib/settledQuestions). The open cards skip any id the settled list holds, so a question just sent
   // never draws as both.

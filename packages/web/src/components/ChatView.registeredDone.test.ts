@@ -42,3 +42,10 @@ test("every gate is the ladder's own answer, so the slot opens exactly when a ru
   // Nothing may re-derive the ladder by hand beside it. Three calls decide it, and no fourth spelling.
   assert.equal(chat.match(/showsSnoozeCard\(thread\)/g)?.length, 1, "the ladder is the only place a rung is tested")
 })
+
+// The tail card is a REST card, and a reply ends the rest the instant it is committed. The server only
+// reports the turn once the worker starts it (~1s on 2026-09-30), so without the rail's just-sent
+// overlay the done card stood under the human's own new message for that long.
+test("the thread view wears the just-sent overlay, so a reply retires the rest card at once", () => {
+  assert.match(chat, /const thread = serverThread && optimisticallySteered\(serverThread, steeredAt\[slug\]\)/)
+})
