@@ -2647,38 +2647,39 @@ export const RegisteredQuestionView = z.object({
   id: z.string(),
   spec: AskedQuestionSchema,
   askedAt: z.string(),
-  /** The human has TYPED to the worker since this was asked, without answering it (questionRepliedPast).
-   *  INFORMATIONAL ONLY since 2026-09-29: the question is still owed exactly like any other — it blocks
-   *  `done`, refuses a park, is the rest's sign-off and queues the thread — because a timestamp cannot
-   *  tell a pivot from a side question, and the worker, which reads the message, decides (it `unask`s
-   *  the ones the message made moot). The worker's `activity` readout names it. Absent means the human
-   *  has not typed since. */
+  /** When the worker last KEPT this question current (`keep`), re-anchoring it to its newest handoff —
+   *  optionally with new wording. Absent on a question never kept. */
+  keptAt: z.string().optional(),
+  /** SET ASIDE: the human has TYPED to the worker since this was asked (or last kept), without answering
+   *  it (questionRepliedPast). A set-aside question is still OPEN — its card stays answerable where it
+   *  was, in the thread's history — but it no longer holds the thread: it does not block `done`, refuse a
+   *  park, sign off a rest or queue the thread, and its card stops riding to the newest handoff. The
+   *  worker opts one back in with `keep`. Absent means it is current. */
   repliedPast: z.literal(true).optional(),
 }).strict()
 export type RegisteredQuestionView = z.infer<typeof RegisteredQuestionView>
 
-/** HAS THE HUMAN TYPED TO THE WORKER SINCE THIS WAS ASKED? True when their newest TYPED turn landed after
- *  it was asked (`lastHumanAt` is the tailer's clock for exactly that; frizz's own wakes never move it, and
- *  neither does a delivery of answers). An unknown clock reads as "no".
+/** HAS THE HUMAN TYPED TO THE WORKER SINCE THIS WAS ASKED — OR, IF THE WORKER KEPT IT, SINCE IT WAS LAST
+ *  KEPT? True when their newest TYPED turn landed after that (`lastHumanAt` is the tailer's clock for
+ *  exactly that; frizz's own wakes never move it, and neither does a delivery of answers). An unknown
+ *  clock reads as "no". True SETS THE QUESTION ASIDE (see RegisteredQuestionView.repliedPast).
  *
- *  IT GATES NOTHING (2026-09-29). From 2026-09-28 a typed turn past an open card was read as a pivot and
- *  RELEASED the question: it stopped blocking `done`, stopped being the sign-off, left the queue card, and
- *  could not be asked again. On this machine the next day the human, seven questions open, typed a SIDE
- *  question ("should we use this thread or the other one?") and lost all seven — they still meant to
- *  answer them and had to ask for them back. A server that sees a timestamp cannot tell a side question
- *  or a clarification from a pivot; the worker, which reads the message, can. So every open question
- *  stays owed until the human answers or dismisses it or the worker withdraws it (plans/rest-by-
- *  registration.md Fork 2A), the typed message reaches the worker with a note asking it to `unask` the
- *  ones it made moot (openQuestionsNote), and this survives only as information: the `activity` readout
- *  names the questions the human has written past.
+ *  OPT-IN SINCE 2026-09-30, after two reversals. 2026-09-28 released a typed-past question AND dropped it
+ *  from the queue card, so a side question lost seven the human still meant to answer. 2026-09-29 made
+ *  every open question stay owed and ride to the newest handoff until the worker `unask`ed it — and the
+ *  card then sat under handoffs about something else, asking a question the conversation had moved past
+ *  (maintainer 2026-09-30: "it often leads to weird scenarios like this where the questions feel out of
+ *  date"). Now the default is to leave the card where it was asked, still answerable, and let the worker
+ *  opt a question back in — `keep`, with new wording when the direction changed — when the message did
+ *  not move past it (openQuestionsNote tells it which are open).
  *
- *  A DANGER QUESTION NEVER READS AS WRITTEN PAST — unchanged from when this was a release: `danger` is
- *  the irreversible call that must stay the human's, and nothing about the human typing makes it less
- *  so. */
-export function questionRepliedPast(q: { asked_at: number; spec: string }, lastHumanAt: string | undefined): boolean {
+ *  A DANGER QUESTION NEVER READS AS WRITTEN PAST: `danger` is the irreversible call that must stay the
+ *  human's, and nothing about the human typing makes it less so. */
+export function questionRepliedPast(q: { asked_at: number; kept_at?: number | null; spec: string }, lastHumanAt: string | undefined): boolean {
   if (!lastHumanAt) return false
   const human = Date.parse(lastHumanAt)
-  if (!(Number.isFinite(human) && Number.isFinite(q.asked_at) && human > q.asked_at)) return false
+  const current = Math.max(q.asked_at, q.kept_at ?? -Infinity)
+  if (!(Number.isFinite(human) && Number.isFinite(current) && human > current)) return false
   return !questionSpecIsDanger(q.spec)
 }
 
@@ -2692,13 +2693,26 @@ function questionSpecIsDanger(spec: string): boolean {
   }
 }
 
-/** The open questions still HOLDING their thread — which, since 2026-09-29, is every open one:
- *  `repliedPast` is information, not a release (see questionRepliedPast). Kept as the one name every "is
- *  this thread asking?" reading goes through, so a future rule about which questions hold has one place
- *  to live rather than a dozen `questions.length` checks to find. */
+/** The open questions still HOLDING their thread: every open one the human has not typed past (see
+ *  questionRepliedPast). The one name every "is this thread asking?" reading goes through. */
 export function questionsOwed<Q extends { repliedPast?: true }>(questions: readonly Q[] | undefined): Q[] {
-  return questions ? [...questions] : []
+  return questions ? questions.filter((q) => !q.repliedPast) : []
 }
+
+export const KeepQuestionInput = z.object({
+  slug: ThreadSlug,
+  id: z.string().min(1).max(64),
+  /** New wording for the question, replacing the stored one — for when the conversation moved and the
+   *  ask should move with it. Omitted keeps the question as asked. */
+  question: AskedQuestionSchema.optional(),
+}).strict()
+export type KeepQuestionInput = z.infer<typeof KeepQuestionInput>
+
+export const KeepQuestionResult = z.object({
+  kept: z.boolean(),
+  open: z.array(RegisteredQuestionView),
+}).strict()
+export type KeepQuestionResult = z.infer<typeof KeepQuestionResult>
 
 export const AskResult = z.object({
   registered: z.array(RegisteredQuestionView),
@@ -4891,19 +4905,17 @@ export function stripHumanGapNote(text: string): string {
   return text.replace(HUMAN_GAP_NOTE_TAIL, "")
 }
 
-/** A TYPED MESSAGE REACHING A WORKER THAT HAS QUESTIONS OPEN, with frizz's note on what to do with them
- *  — appended to the copy handed to the worker, exactly as humanGapNote is, and to that copy ONLY.
+/** A TYPED MESSAGE REACHING A WORKER THAT HAS QUESTIONS OPEN, with frizz's note on what just happened to
+ *  them — appended to the copy handed to the worker, exactly as humanGapNote is, and to that copy ONLY.
  *
- *  THE WORKER DECIDES THE PIVOT (2026-09-29). A typed reply past open cards used to release them by
- *  timestamp (questionRepliedPast), and it released seven the human still meant to answer when they
- *  typed a side question. Frizz cannot tell a pivot from a side question; the worker reading the message
- *  can. So the questions stay owed, and this is where the worker is told, at the moment it reads the
- *  message, which ones are open and what the message might have done to them: `unask` exactly the ones
- *  it made moot, leave the rest — the human can still answer those, one at a time.
+ *  THE MESSAGE SETS THEM ASIDE, AND THE WORKER OPTS BACK IN (2026-09-30, see questionRepliedPast). The
+ *  cards stay answerable where they were asked; the worker reading the message decides whether any is
+ *  still what the conversation needs, and `keep`s exactly those — reworded if the message changed the
+ *  options. Frizz cannot tell a pivot from a side question; the worker can.
  *
- *  Each question is named by its text AND its id, because `unask` takes the id and the worker never
+ *  Each question is named by its text AND its id, because `keep` takes the id and the worker never
  *  chose one. Folded to one line and clipped, so the note stays ONE line and its stripper can anchor on
- *  it. Undefined with nothing open. */
+ *  it. Undefined with nothing current. */
 export function openQuestionsNote(open: readonly { id: string; question: string }[]): string | undefined {
   if (open.length === 0) return undefined
   const named = open.map((q) => {
@@ -4911,18 +4923,26 @@ export function openQuestionsNote(open: readonly { id: string; question: string 
     return `“${text.length > 100 ? `${text.slice(0, 99)}…` : text}” (${q.id})`
   })
   const count = open.length === 1 ? "1 question you registered is" : `${open.length} questions you registered are`
-  return `❓ Frizz: ${count} still open: ${named.join(", ")}.${OPEN_QUESTIONS_NOTE_TAIL}`
+  return `❓ Frizz: ${count} now set aside by this message: ${named.join(", ")}.${OPEN_QUESTIONS_NOTE_TAIL}`
 }
 
 const OPEN_QUESTIONS_NOTE_TAIL =
+  " Their cards stay answerable where they were asked, but no longer hold this thread. If the message " +
+  "above did not move past one, `keep` it — reworded with `question` if the direction changed — and it " +
+  "rides to the bottom of your next handoff; otherwise leave it."
+
+// The note's tail before 2026-09-30, when a typed message left every question open. Still stripped, so a
+// transcript written then does not start showing it in the human's bubble.
+const OPEN_QUESTIONS_NOTE_TAIL_2026_09_29 =
   " If the message above made any of them moot, `unask` exactly those and say so; leave the rest open — " +
   "they are still the human's to answer, and still your sign-off."
 
 // The stripper, for humanGapNote's reason exactly: the note rides the HUMAN'S message, and the chat reads
 // the worker's transcript, where it is simply part of their bubble. Anchored to end-of-text on a line of
 // its own and to the note's fixed opening AND closing words, so a message that quotes one keeps it.
+const escapeRegExp = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")
 const OPEN_QUESTIONS_NOTE_LINE = new RegExp(
-  `\\n+❓ Frizz: (?:1 question you registered is|\\d+ questions you registered are) still open: [^\\n]*${OPEN_QUESTIONS_NOTE_TAIL.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}[ \\t]*$`,
+  `\\n+❓ Frizz: (?:1 question you registered is|\\d+ questions you registered are) (?:still open|now set aside by this message): [^\\n]*(?:${escapeRegExp(OPEN_QUESTIONS_NOTE_TAIL)}|${escapeRegExp(OPEN_QUESTIONS_NOTE_TAIL_2026_09_29)})[ \\t]*$`,
 )
 
 /** Display projection: the human's message without the open-questions note frizz appended for the

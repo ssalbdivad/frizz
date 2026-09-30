@@ -762,11 +762,10 @@ test("followUp wakes a snoozed thread and disarms the bump it owed", async () =>
   assert.equal(h.storage.getSession(slug)?.snooze_prompt, null, "and so is the bump it owed at that deadline")
   h.storage.close()
 })
-// THE WORKER DECIDES THE PIVOT (2026-09-29). A typed message no longer releases the open questions by
-// timestamp — it released seven the human still meant to answer when they typed a side question — so the
-// message reaches the worker with frizz's note naming every question still open, by the id `unask`
-// takes. The bubble keeps the human's bare words; only the worker's copy carries the note.
-test("a typed follow-up to a thread with questions open tells the worker which, by id, and to unask the moot ones", async () => {
+// A TYPED MESSAGE SETS THE OPEN QUESTIONS ASIDE (2026-09-30), and the message reaches the worker with
+// frizz's note naming each, by the id `keep` takes, so it can opt back in to the ones still relevant. The
+// bubble keeps the human's bare words; only the worker's copy carries the note.
+test("a typed follow-up to a thread with questions open names the ones it sets aside, by id, and how to keep them", async () => {
   const h = harness()
   const slug = "asking-followup"
   h.storage.upsertSession(row(slug))
@@ -789,7 +788,7 @@ test("a typed follow-up to a thread with questions open tells the worker which, 
   await h.router.followUp.handler({ input: { slug, sessionId: `sid-${slug}`, message: "should we use this thread or the other one?" } })
   const [, noted] = sent
   assert.equal(noted, `should we use this thread or the other one?\n\n${openQuestionsNote([{ id: "qst_open0000001", question: "SQLite or a JSON file?" }])}`)
-  assert.match(noted, /`unask` exactly those/)
+  assert.match(noted, /now set aside by this message: .*`keep` it/)
   assert.doesNotMatch(noted, /qst_answered001/, "an answered question is not open")
   // The human's own bubble, once the transcript reads it back, is their words and nothing else.
   assert.equal(stripFollowUpRiders(noted), "should we use this thread or the other one?")

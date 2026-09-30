@@ -45,6 +45,36 @@ test("once the worker rests again, the card rides to the bottom of the newest ha
   }
 })
 
+// THE 2026-09-30 CHANGE. A typed message SETS the question aside (the server's `repliedPast`): the card
+// stays at the bottom of the last rest before that message — still answerable — however many rests
+// follow, and rides forward again only once the worker `keep`s it, from where it was kept.
+test("a question the human typed past stays at the rest before their message", () => {
+  const messages = [msg("user", 0), msg("assistant", 1), rest(2), msg("user", 3), msg("assistant", 4), rest(4), msg("user", 5), msg("assistant", 6), rest(6)]
+  assert.equal(questionAnchorIndex(messages, { askedAt: at(2), repliedPast: true }), 2)
+  // Negative control: the same question, not set aside, rides to the newest rest.
+  assert.equal(questionAnchorIndex(messages, { askedAt: at(2) }), 8)
+  // An answer delivery is not the human typing: set aside by the typed message at 5, not the answers at 3.
+  const answered = [msg("assistant", 1), rest(2), answers(3), msg("assistant", 4), rest(4), msg("user", 5), msg("assistant", 6), rest(6)]
+  assert.equal(questionAnchorIndex(answered, { askedAt: at(2), repliedPast: true }), 4)
+})
+
+test("a question asked mid-turn and typed past before any rest sits just above the human's message", () => {
+  const messages = [msg("user", 0), msg("assistant", 1), msg("user", 3), msg("assistant", 4), rest(4)]
+  assert.equal(questionAnchorIndex(messages, { askedAt: at(2), repliedPast: true }), 1)
+})
+
+test("a KEPT question reads from when it was kept: it rides to the newest rest after that", () => {
+  const messages = [msg("assistant", 1), rest(2), msg("user", 3), msg("assistant", 4), rest(4), msg("user", 5), msg("assistant", 6), rest(6)]
+  assert.equal(questionAnchorIndex(messages, { askedAt: at(2), keptAt: at(4) }), 7, "kept at 4, current: the newest rest")
+  // …and a message after the keep sets it aside again, at the rest before THAT message.
+  assert.equal(questionAnchorIndex(messages, { askedAt: at(2), keptAt: at(4), repliedPast: true }), 4)
+})
+
+test("a set-aside flag with the human's message not in the window falls back to the newest rest", () => {
+  const messages = [msg("assistant", 1), rest(2)]
+  assert.equal(questionAnchorIndex(messages, { askedAt: at(2), repliedPast: true }), 1)
+})
+
 test("…through any number of rests", () => {
   const messages = [msg("assistant", 1), rest(1), msg("user", 2), msg("assistant", 3), rest(3), answers(4), msg("assistant", 5), rest(5), msg("user", 6)]
   assert.equal(questionAnchorIndex(messages, at(1)), 7, "mid-turn after the third rest: the third rest")

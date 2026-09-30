@@ -9,7 +9,7 @@ import { homedir } from "node:os"
 import { dirname, join } from "node:path"
 import watcher from "@parcel/watcher"
 import type { BoardSnapshot, ClaudeModel, ThreadTerminal, ThreadView, RuntimeState, ThreadRecurringPrompt, ProviderError } from "@frizz/shared"
-import { AskedQuestionSchema, BoardDiffer, PermissionMode, SnoozeUntil, ThreadSlug, isDirectSubAgent, queueUrgency, questionAnswerMessage, questionRepliedPast, questionsCancelledWakeMessage, type AskedQuestion, type PermissionMode as PermissionModeValue, type QuestionAnswer, type QuestionDismissal } from "@frizz/shared"
+import { AskedQuestionSchema, BoardDiffer, PermissionMode, SnoozeUntil, ThreadSlug, isDirectSubAgent, queueUrgency, questionAnswerMessage, questionRepliedPast, questionsOwed, questionsCancelledWakeMessage, type AskedQuestion, type PermissionMode as PermissionModeValue, type QuestionAnswer, type QuestionDismissal } from "@frizz/shared"
 import type { Bus } from "./bus.ts"
 import { workDirOf, type Project } from "./project.ts"
 import { liftWorkingDir } from "./thread-cwd.ts"
@@ -1771,12 +1771,20 @@ function sessionThreadView(
   for (const q of questionRows) {
     if (q.state !== "open") continue
     const spec = safeQuestionSpec(q.spec)
-    if (spec) questions.push({ id: q.id, spec, askedAt: new Date(q.asked_at).toISOString(), ...(questionRepliedPast(q, rawTele?.lastHumanAt) ? { repliedPast: true as const } : {}) })
+    if (spec) {
+      questions.push({
+        id: q.id,
+        spec,
+        askedAt: new Date(q.asked_at).toISOString(),
+        ...(q.kept_at != null ? { keptAt: new Date(q.kept_at).toISOString() } : {}),
+        ...(questionRepliedPast(q, rawTele?.lastHumanAt) ? { repliedPast: true as const } : {}),
+      })
+    }
   }
-  // The ones HOLDING the thread — every open one. `repliedPast` is information since 2026-09-29, not a
-  // release: a question the human typed past still queues, supersedes a done and is the rest's sign-off
-  // until it is answered, dismissed or withdrawn (see questionRepliedPast).
-  const currentQuestionCount = questions.length
+  // The ones HOLDING the thread: every open one the human has not typed past. A set-aside question stays
+  // on the view — its card is still answerable where it was asked — but it no longer queues the thread,
+  // supersedes a done or signs off a rest, until the worker `keep`s it (see questionRepliedPast).
+  const currentQuestionCount = questionsOwed(questions).length
   // The dismissal-only case counts as in flight EXACTLY when a cancellation wake is coming — an armed
   // rest Goal with text, the same gate the scheduler's evalQuestionAnswers wakes on. Anything looser
   // would also cover the human's own ×, which deliberately wakes nobody and has no arrival to bridge to.

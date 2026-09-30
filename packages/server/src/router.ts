@@ -118,6 +118,8 @@ import {
   AskResult,
   UnaskInput,
   UnaskResult,
+  KeepQuestionInput,
+  KeepQuestionResult,
   AnswerQuestionsInput,
   AnswerQuestionsResult,
   DismissQuestionsInput,
@@ -1289,18 +1291,36 @@ export function createRouter(ctx: AppContext) {
   }
 
   // This thread's OPEN questions, in the shape the worker's read-back, the board and the card all use.
-  // Each carries `repliedPast` exactly as the board's does — information only since 2026-09-29: the
-  // worker reading its questions back learns which ones the human has typed past, and decides for itself
-  // whether that message made any of them moot (shared questionRepliedPast).
+  // Each carries `repliedPast` exactly as the board's does: the human has typed past it, so it is set
+  // aside — still answerable where it was asked, holding nothing — until the worker `keep`s it
+  // (shared questionRepliedPast).
   function openQuestionViews(slug: string): RegisteredQuestionView[] {
     const out: RegisteredQuestionView[] = []
     const lastHumanAt = ctx.tailer.get(slug)?.lastHumanAt
     for (const q of ctx.storage.listThreadQuestions(slug, { openOnly: true })) {
       const spec = parseQuestionSpec(q.spec)
       if (!spec) continue
-      out.push({ id: q.id, spec, askedAt: new Date(q.asked_at).toISOString(), ...(questionRepliedPast(q, lastHumanAt) ? { repliedPast: true as const } : {}) })
+      out.push({
+        id: q.id,
+        spec,
+        askedAt: new Date(q.asked_at).toISOString(),
+        ...(q.kept_at != null ? { keptAt: new Date(q.kept_at).toISOString() } : {}),
+        ...(questionRepliedPast(q, lastHumanAt) ? { repliedPast: true as const } : {}),
+      })
     }
     return out
+  }
+
+  /** The open questions still HOLDING this thread — the ones the human has not typed past since they
+   *  were asked or kept (shared questionRepliedPast). What `done` refuses on and what a typed message
+   *  sets aside. */
+  function heldQuestions(slug: string): { id: string; question: string }[] {
+    const lastHumanAt = ctx.tailer.get(slug)?.lastHumanAt
+    return ctx.storage.listThreadQuestions(slug, { openOnly: true }).flatMap((q) => {
+      if (questionRepliedPast(q, lastHumanAt)) return []
+      const spec = parseQuestionSpec(q.spec)
+      return spec ? [{ id: q.id, question: spec.question }] : []
+    })
   }
 
   /** The question on this thread that `q` would re-ask after a PIVOT, if any, matched on its question
@@ -2314,16 +2334,14 @@ export function createRouter(ctx: AppContext) {
         // not frizz's.
         // Neither rider rides a side request (FollowUpDelivery): both speak to the thread's own work.
         const gapNote = side ? undefined : humanGapNote(Date.now(), ctx.tailer.get(input.slug)?.lastAssistantAt)
-        // …AND THE QUESTIONS STILL OPEN, the same way and for the same reader. A typed message no longer
-        // releases open questions by timestamp (shared questionRepliedPast, 2026-09-29): it released seven
-        // the human still meant to answer when they typed a side question. The worker reads the message
-        // and decides which ones it made moot — so it is told, here, at the moment it reads it, which ones
-        // are open and by what id `unask` takes them. Appended AFTER the gap note, so that note's "the
-        // message above" still means the human's words.
-        const questionsNote = side ? undefined : openQuestionsNote(ctx.storage.listThreadQuestions(input.slug, { openOnly: true }).flatMap((q) => {
-          const spec = parseQuestionSpec(q.spec)
-          return spec ? [{ id: q.id, question: spec.question }] : []
-        }))
+        // …AND THE QUESTIONS THIS MESSAGE SETS ASIDE, the same way and for the same reader. A typed
+        // message sets every current question aside (shared questionRepliedPast, 2026-09-30): its card
+        // stays answerable where it was asked, and the worker — which reads the message, as frizz cannot
+        // — opts back in with `keep` the ones the conversation still needs. So it is told, here, which
+        // ones and by what id. Read BEFORE the message moves `lastHumanAt`, so this names the questions
+        // that were current up to now, not ones an earlier message already set aside. Appended AFTER the
+        // gap note, so that note's "the message above" still means the human's words.
+        const questionsNote = side ? undefined : openQuestionsNote(heldQuestions(input.slug))
         const riders = [gapNote, questionsNote].filter((note): note is string => note !== undefined)
         const messageForWorker = riders.length > 0 ? `${input.message}\n\n${riders.join("\n\n")}` : input.message
         if (row && !side) reopenArchivedThreadForFollowUp(ctx, row)
@@ -3584,6 +3602,18 @@ export function createRouter(ctx: AppContext) {
             "your write-up.",
           )
         }
+        // A QUESTION THE HUMAN TYPED PAST IS STILL OPEN, so asking it again would put two cards up for one
+        // decision. `keep` is the verb that brings it forward (and rewords it).
+        const lastHumanAt = ctx.tailer.get(input.slug)?.lastHumanAt
+        const fold = (text: string) => text.toLowerCase().replace(/[^\p{L}\p{N}]+/gu, " ").trim()
+        const setAside = ctx.storage.listThreadQuestions(input.slug, { openOnly: true }).filter((row) => questionRepliedPast(row, lastHumanAt))
+        const duplicates = input.questions.flatMap((q) => {
+          const twin = setAside.find((row) => fold(parseQuestionSpec(row.spec)?.question ?? "") === fold(q.question))
+          return twin ? [`"${q.question.slice(0, 120)}" is still open as ${twin.id}, set aside by the human's newest message.`] : []
+        })
+        if (duplicates.length > 0) {
+          throw new Error(`${duplicates.join("\n")}\n\nTo bring it forward, \`keep\` it by id — with \`question\` to reword it.`)
+        }
         // NO CAP ON THE OPEN SET. Twelve was refused here until 2026-09-03 ("a worker holding more than
         // this is refusing to decide"); the maintainer had it removed with the tool's other count caps.
         const now = Date.now()
@@ -3607,6 +3637,27 @@ export function createRouter(ctx: AppContext) {
         const withdrawn = ctx.storage.withdrawThreadQuestion(input.slug, input.id, Date.now())
         if (withdrawn) ctx.board.refresh()
         return { withdrawn, open: openQuestionViews(input.slug) }
+      },
+    }),
+
+    // THE WORKER OPTS A QUESTION BACK IN. A typed message sets every open question aside (shared
+    // questionRepliedPast); `keep` stamps `kept_at`, so the human's message no longer postdates it, and
+    // the card rides to the bottom of the worker's next handoff again — reworded when `question` is given.
+    keepQuestion: mutation({
+      input: KeepQuestionInput,
+      output: KeepQuestionResult,
+      handler: async ({ input }) => {
+        if (input.question) {
+          const faults = askedQuestionFaults(input.question)
+          if (faults.length > 0) throw new Error(faults.join("\n"))
+        }
+        const kept = ctx.storage.keepThreadQuestion(input.slug, input.id, input.question ? JSON.stringify(input.question) : undefined, Date.now())
+        if (kept) {
+          // A question trumps a done — see `ask`.
+          ctx.storage.clearThreadDone(input.slug)
+          ctx.board.refresh()
+        }
+        return { kept, open: openQuestionViews(input.slug) }
       },
     }),
 
@@ -3682,13 +3733,9 @@ export function createRouter(ctx: AppContext) {
         // can, and the registration IS that judgement. Gating on raw liveness would make `done`
         // unreachable for any thread that left a log tail running.
         //
-        // EVERY OPEN QUESTION BLOCKS, including one the human has typed past (2026-09-29, shared
-        // questionRepliedPast): whether that message made it moot is the worker's call, and `unask` is how
-        // it makes it — so a question it means to leave behind is one it withdraws, by name, first.
-        const blockingQuestions = ctx.storage.listThreadQuestions(input.slug, { openOnly: true }).flatMap((q) => {
-          const spec = parseQuestionSpec(q.spec)
-          return spec ? [{ id: q.id, question: spec.question }] : []
-        })
+        // A QUESTION THE HUMAN TYPED PAST DOES NOT BLOCK (2026-09-30, shared questionRepliedPast): it is
+        // set aside — its card stays answerable in the thread's history — unless the worker `keep`s it.
+        const blockingQuestions = heldQuestions(input.slug)
         const blockingWatches = [
           ...armedOwnWatchViews(input.slug).map((w) => ({
             id: w.id,

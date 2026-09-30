@@ -123,6 +123,8 @@ import type {
   MarkOwnDoneInput,
   MarkOwnDoneResult,
   UnaskInput,
+  KeepQuestionInput,
+  KeepQuestionResult,
   UnaskResult,
   AnswerQuestionsInput,
   AnswerQuestionsResult,
@@ -255,6 +257,7 @@ export interface Api {
   // drift gate alone; the two below ARE called from the browser — they are what the question card does.
   ask(input: AskInput): Promise<AskResult>
   unask(input: UnaskInput): Promise<UnaskResult>
+  keepQuestion(input: KeepQuestionInput): Promise<KeepQuestionResult>
   // The worker's gated completion verb. Declared here for the drift gate's sake — the browser never
   // calls it, exactly as it never calls `ask`.
   markOwnDone(input: MarkOwnDoneInput): Promise<MarkOwnDoneResult>
@@ -475,6 +478,7 @@ export const PROCEDURES = {
   dropOwnWatch: "mutation",
   ask: "mutation",
   unask: "mutation",
+  keepQuestion: "mutation",
   markOwnDone: "mutation",
   answerQuestions: "mutation",
   dismissQuestions: "mutation",

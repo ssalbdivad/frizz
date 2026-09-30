@@ -806,15 +806,25 @@ test("an ANSWERED question no longer refuses the park", async () => {
   } finally { h.close() }
 })
 
-// …and one the human TYPED PAST still does (2026-09-29): a typed message releases nothing by timestamp —
-// it released questions the human still meant to answer — so the question stands until the worker
-// `unask`s it, and a park beside it is refused exactly like one beside any open question.
-test("a question the human typed past still refuses the park", async () => {
+// …and neither does one the human TYPED PAST (2026-09-30): their message set it aside — its card stays
+// answerable in the history, but it holds nothing — so the park beside it takes. Until the worker `keep`s
+// it, when it stands again and refuses the park exactly like any open question.
+test("a question the human typed past no longer refuses the park, until the worker keeps it", async () => {
   const h = parkHarness([{ kind: "shell", value: "bzvtnt3ig" }, { kind: "for", value: "1h" }], { shells: [LIVE_SHELL], lastHumanAt: new Date(Date.now() - 30 * 60_000).toISOString() })
   try {
     h.storage.askThreadQuestion({ id: "qst_repliedpast1", slug: "parked", askedAtMs: Date.now() - 90 * 60_000, spec: JSON.stringify({ question: "Which store — SQLite or a JSON file?", kind: "question" }) })
     await h.s.tick()
-    assert.equal(h.queued().length, 1, "refused: the question still stands")
+    assert.deepEqual(h.queued().filter((r) => isParkCorrection(r.message)), [], "set aside: the park takes")
+  } finally { h.close() }
+})
+
+test("a question KEPT after the human typed past it refuses the park again", async () => {
+  const h = parkHarness([{ kind: "shell", value: "bzvtnt3ig" }, { kind: "for", value: "1h" }], { shells: [LIVE_SHELL], lastHumanAt: new Date(Date.now() - 30 * 60_000).toISOString() })
+  try {
+    h.storage.askThreadQuestion({ id: "qst_keptagain01", slug: "parked", askedAtMs: Date.now() - 90 * 60_000, spec: JSON.stringify({ question: "Which store — SQLite or a JSON file?", kind: "question" }) })
+    h.storage.keepThreadQuestion("parked", "qst_keptagain01", undefined, Date.now() - 10 * 60_000)
+    await h.s.tick()
+    assert.equal(h.queued().length, 1, "refused: the kept question stands")
     assert.equal(isParkCorrection(h.queued()[0].message), true)
   } finally { h.close() }
 })

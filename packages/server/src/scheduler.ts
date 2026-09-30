@@ -1,7 +1,7 @@
 import { execFile } from "node:child_process"
 import { promisify } from "node:util"
 import { createHash, randomUUID } from "node:crypto"
-import { PARK_CORRECTION_NAMES_LEAD, PARK_CORRECTION_QUESTION_LEAD, PARK_CORRECTION_RETIRED_LEAD, interruptEndedSubAgentsMessage, type InterruptEndedSubAgent, parkExpiredWakeMessage, parkFinishedWakeMessage, prWatchExpiredWakeMessage, ownWatchExpiredWakeMessage, mergeAnswerMessages, questionAnswerMessage, questionsCancelledWakeMessage, type QuestionAnswer, type QuestionDismissal, RETIRED_AWAITING_REPLACEMENT, retiredAwaitingKindsIn, compactionPromptMessage, goalLimitMessage, limitResumeSteer, limitModelSwitchSteer, formatGithubWakeSteer, GithubWakeItem, type GithubWatchStatus, type GithubIssueStatus, prWatchWakeMessage, issueWatchWakeMessage, shellDoneMessage, restPromptMessage, schedulePromptMessage, timerPromptMessage, signoffNudgeMessage, strayShellsMessage, liveOpsLines, wakeDeliveryToken, wakeTimeHeader, stripWakeTimeHeader, type QuotaSnapshot } from "@frizz/shared"
+import { PARK_CORRECTION_NAMES_LEAD, PARK_CORRECTION_QUESTION_LEAD, PARK_CORRECTION_RETIRED_LEAD, interruptEndedSubAgentsMessage, type InterruptEndedSubAgent, parkExpiredWakeMessage, parkFinishedWakeMessage, prWatchExpiredWakeMessage, ownWatchExpiredWakeMessage, mergeAnswerMessages, questionAnswerMessage, questionRepliedPast, questionsCancelledWakeMessage, type QuestionAnswer, type QuestionDismissal, RETIRED_AWAITING_REPLACEMENT, retiredAwaitingKindsIn, compactionPromptMessage, goalLimitMessage, limitResumeSteer, limitModelSwitchSteer, formatGithubWakeSteer, GithubWakeItem, type GithubWatchStatus, type GithubIssueStatus, prWatchWakeMessage, issueWatchWakeMessage, shellDoneMessage, restPromptMessage, schedulePromptMessage, timerPromptMessage, signoffNudgeMessage, strayShellsMessage, liveOpsLines, wakeDeliveryToken, wakeTimeHeader, stripWakeTimeHeader, type QuotaSnapshot } from "@frizz/shared"
 import { GITHUB_ISSUE_STATUS_SETTING, GITHUB_STATUS_SETTING, parkExpiresAt, parkIsHonoured, readAwaitingPark, unaccountedItems, type LiveActivity } from "./awaiting.ts"
 import type { PrWatchRow, SessionRow, Storage, ThreadQuestionRow } from "./storage.ts"
 import type { Tailer } from "./tailer.ts"
@@ -2158,9 +2158,10 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
         tele.lastFence ||
         tele.pendingQuestion ||
         registeredDoneFence(deps.storage.getThreadDone(row.slug), tele.lastUserAt, tele.lastToolCallAt, tele) !== undefined ||
-        // …any open one, including one the human has typed past: it is still owed until answered,
-        // dismissed or withdrawn (shared questionRepliedPast — information since 2026-09-29, not a release).
-        questionRows.some((q) => q.state === "open") ||
+        // …any open one the human has not typed past. One they have is set aside — answerable where it was
+        // asked, but no sign-off for a rest after their message unless the worker `keep`s it (shared
+        // questionRepliedPast, 2026-09-30).
+        questionRows.some((q) => q.state === "open" && !questionRepliedPast(q, tele.lastHumanAt)) ||
         answersInFlight(questionRows, tele.lastUserAt, row.recurring_on_rest === 1 && Boolean(row.recurring_prompt?.trim())) !== undefined ||
         deps.storage.listThreadWatches(row.slug, { armedOnly: true }).length > 0 ||
         // A wait on ANOTHER THREAD's answer (`message_thread` with `await_reply`) is a registration like a
@@ -2265,7 +2266,7 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
       // stands), and its correction already sends the worker back to rewrite this sign-off.
       if (tele.lastFence) continue
       const onQuestion = Boolean(tele.pendingQuestion) || deps.storage.listThreadQuestions(row.slug)
-        .some((q) => q.state === "open")
+        .some((q) => q.state === "open" && !questionRepliedPast(q, tele.lastHumanAt))
       if (!onQuestion) continue
       const watched = deps.storage.listThreadWatches(row.slug, { armedOnly: true }).filter((w) => w.kind === "shell").map((w) => w.target)
       const stray = (tele.bgShells ?? []).filter((sh) => sh.state === "running" && ![sh.id, sh.taskId, sh.label].some((h) => h !== undefined && watched.includes(h)))
@@ -2338,8 +2339,9 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
       // corrections, because a worker whose contract froze before this rule cannot learn it, and keyed
       // on the rest so one fence draws one bump. Checked BEFORE the honoured-park reset below on
       // purpose: live names do not make this park honoured.
-      // Every open question, one the human has typed past included — it is still owed (2026-09-29).
-      const openQuestions = deps.storage.listThreadQuestions(row.slug).filter((q) => q.state === "open")
+      // Every open question the human has not typed past — one they have is set aside and holds nothing
+      // (shared questionRepliedPast, 2026-09-30).
+      const openQuestions = deps.storage.listThreadQuestions(row.slug).filter((q) => q.state === "open" && !questionRepliedPast(q, tele.lastHumanAt))
       if (openQuestions.length > 0) {
         if ((row.park_bumps ?? 0) >= PARK_BUMP_MAX) continue
         const fenceId = parkFenceId("question", spokeAt)

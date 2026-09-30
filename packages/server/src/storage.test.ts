@@ -1114,6 +1114,25 @@ test("a batch of answers is delivered in ASKED order, not shuffled by id", () =>
   }
 })
 
+test("keep stamps kept_at and optionally rewords, on its own thread's open question only", () => {
+  const s = store()
+  try {
+    const at = 1_700_000_000_000
+    s.askThreadQuestion({ id: "q_k", slug: "t", spec: '{"question":"old"}', askedAtMs: at })
+    assert.equal(s.getThreadQuestion("q_k")?.kept_at, null)
+    assert.equal(s.keepThreadQuestion("other", "q_k", undefined, at + 1), false, "thread-scoped")
+    assert.equal(s.keepThreadQuestion("t", "q_k", undefined, at + 2), true)
+    assert.equal(s.getThreadQuestion("q_k")?.kept_at, at + 2)
+    assert.equal(s.getThreadQuestion("q_k")?.spec, '{"question":"old"}', "no spec keeps the wording")
+    assert.equal(s.keepThreadQuestion("t", "q_k", '{"question":"new"}', at + 3), true)
+    assert.equal(s.getThreadQuestion("q_k")?.spec, '{"question":"new"}')
+    s.withdrawThreadQuestion("t", "q_k", at + 4)
+    assert.equal(s.keepThreadQuestion("t", "q_k", undefined, at + 5), false, "a settled question cannot be kept")
+  } finally {
+    s.close()
+  }
+})
+
 test("withdrawn and dismissed are DIFFERENT settlements, and neither is deliverable", () => {
   const s = store()
   try {

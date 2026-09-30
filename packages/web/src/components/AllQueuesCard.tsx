@@ -251,9 +251,9 @@ export const AllQueuesCard = memo(function AllQueuesCard({
   const parts = useMemo(() => (text ? handoffParts(text, thread.questions) : null), [text, thread.questions])
   // Does the awaiting card list the children, or the ops column under the reply box (QueueChildOps)?
   const drawsSubAgentWait = drawsSubAgentWaitCard(thread, parts?.fences)
-  // THIS CARD IS THE NEWEST HANDOFF, and every open question rides to the bottom of the newest handoff
-  // (lib/questionAnchor, 2026-09-29): a typed message no longer sets one aside — the worker `unask`s what
-  // it made moot — so every question still open is still this handoff's ask.
+  // THIS CARD IS THE NEWEST HANDOFF, and every CURRENT question rides to the bottom of the newest handoff
+  // (lib/questionAnchor). One the human typed past is set aside — it stays in the thread's history until
+  // the worker `keep`s it — so it is not this handoff's ask.
   const owedQuestions = useMemo(() => questionsOwed(thread.questions), [thread.questions])
   const placeHref = crossProjectThreadHref(project, thread.id)
   const dismiss = useMemo(() => ({ dismiss: onLeave, cancel: onReturn, hold: onHold }), [onLeave, onReturn, onHold])
@@ -810,7 +810,7 @@ function ReplyBox({ project, thread, onSent, onFailed }: { project: QueuesProjec
         value={text}
         onChange={(value) => draftStore.set(key, value)}
         onSubmit={submit}
-        placeholder={answering?.staged ? "Add a note to your answers…" : questionsOwed(thread.questions).length > 0 ? "Or reply — the questions stay open…" : "Reply to the agent…"}
+        placeholder={answering?.staged ? "Add a note to your answers…" : questionsOwed(thread.questions).length > 0 ? "Or reply…" : "Reply to the agent…"}
         attachBase={projectApiBase(project.id)}
         mentionCandidates={mentions}
         ownMention={ownMention}

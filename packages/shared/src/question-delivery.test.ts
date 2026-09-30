@@ -48,9 +48,9 @@ test("the open-questions note names each question by text and id, and comes back
     { id: "qst_bbbbbbbbbbbb", question: "x".repeat(140) },
   ])!
   assert.doesNotMatch(note, /\n/, "one line, so the stripper can anchor on it")
-  assert.match(note, /^❓ Frizz: 2 questions you registered are still open: “Should the settings store use SQLite or a JSON file\?” \(qst_aaaaaaaaaaaa\), “x{99}…” \(qst_bbbbbbbbbbbb\)\./)
-  assert.match(note, /`unask` exactly those and say so; leave the rest open/)
-  assert.match(openQuestionsNote([{ id: "qst_1", question: "Merge it?" }])!, /^❓ Frizz: 1 question you registered is still open: “Merge it\?” \(qst_1\)\./)
+  assert.match(note, /^❓ Frizz: 2 questions you registered are now set aside by this message: “Should the settings store use SQLite or a JSON file\?” \(qst_aaaaaaaaaaaa\), “x{99}…” \(qst_bbbbbbbbbbbb\)\./)
+  assert.match(note, /If the message above did not move past one, `keep` it — reworded with `question`/)
+  assert.match(openQuestionsNote([{ id: "qst_1", question: "Merge it?" }])!, /^❓ Frizz: 1 question you registered is now set aside by this message: “Merge it\?” \(qst_1\)\./)
 
   // ROUND TRIP, as the router appends it — after the gap note, so "the message above" stays the human's.
   const gap = humanGapNote(Date.parse("2026-09-29T15:00:00.000Z"), "2026-09-29T11:00:00.000Z")!
@@ -60,4 +60,7 @@ test("the open-questions note names each question by text and id, and comes back
   const quoting = `why does "${note}" show up here?`
   assert.equal(stripOpenQuestionsNote(quoting), quoting)
   assert.equal(stripOpenQuestionsNote("ship it"), "ship it")
+  // A transcript written under the 2026-09-29 wording keeps coming back off the bubble too.
+  const older = "❓ Frizz: 1 question you registered is still open: “Merge it?” (qst_1). If the message above made any of them moot, `unask` exactly those and say so; leave the rest open — they are still the human's to answer, and still your sign-off."
+  assert.equal(stripOpenQuestionsNote(`ship it\n\n${older}`), "ship it")
 })

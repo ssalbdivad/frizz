@@ -678,12 +678,14 @@ const ASK = {
     "EXPLANATION BEFORE IT: what you found, what the choice turns on, what each answer would set in " +
     "motion. Never write the question itself into your handoff (one question, one card). There is no " +
     "placement marker: an empty ```question qst_… fence draws nothing.\n\n" +
-    "A QUESTION STAYS OPEN UNTIL IT IS ANSWERED, DISMISSED OR WITHDRAWN — the human typing to you does " +
-    "not close it. When they write instead of answering, the message comes with a note listing what is " +
-    "still open: YOU decide whether it made any of those moot (a pivot) or was a side question. `unask` " +
-    "exactly the ones it made moot and say so; the rest stay open, stay your sign-off, and ride to the " +
-    "bottom of your next handoff. Never ask again a question the human dismissed, or one you withdrew " +
-    "after their newest message — `ask` refuses both; decide it yourself and say which way you went.\n\n" +
+    "WHEN THE HUMAN WRITES INSTEAD OF ANSWERING, THE MESSAGE SETS YOUR OPEN QUESTIONS ASIDE. Each card " +
+    "stays answerable where it was asked, but no longer holds your thread: it is not your sign-off, does " +
+    "not block `done`, and does not follow you to your next handoff. The message comes with a note naming " +
+    "them. If it was a side question, or the conversation still needs one, `keep` it — reworded if the " +
+    "direction changed, above all to name an option the conversation has since raised — and it rides to " +
+    "the bottom of your next handoff again. Otherwise leave it where it is. Never ask again a question the " +
+    "human dismissed, or one you withdrew after their newest message — `ask` refuses both; decide it " +
+    "yourself and say which way you went.\n\n" +
     "SEVERAL AT ONCE IS ONE CALL — register them together, so they render as one stack. Each must stand " +
     "alone (a question that only makes sense after another's answer is that option's `followUps`), " +
     "because ANSWERS ARRIVE ONE AT A TIME: each card is sent the moment the human completes it, so you " +
@@ -730,6 +732,29 @@ const UNASK = {
     type: "object",
     properties: {
       id: { type: "string", description: "The question id `ask` returned, or that `activity` lists. Only your own thread's." },
+    },
+    required: ["id"],
+  },
+}
+
+const KEEP = {
+  name: "keep",
+  description:
+    "KEEP A QUESTION CURRENT after the human wrote to you without answering it. Their message set it " +
+    "aside: its card stays answerable where it was asked, but it no longer holds your thread or follows " +
+    "you to your next handoff. `keep` opts it back in — it is your sign-off again, blocks `done` again, " +
+    "and its card rides to the bottom of your next handoff.\n\n" +
+    "Keep only what the conversation STILL needs from the human. A side question or a clarification " +
+    "usually leaves an ask standing; a new direction usually does not. If the direction shifted the " +
+    "choice — a new option came up, one is gone, the recommendation changed — pass `question` with the " +
+    "full reworded question, which replaces the card's wording. A card still reading as it did before " +
+    "the human's message is the stale ask this exists to avoid.\n\n" +
+    "Also rewords a question that is still current, if the work moved under it.",
+  inputSchema: {
+    type: "object",
+    properties: {
+      id: { type: "string", description: "The question id `ask` returned, or that `activity` lists. Only your own thread's." },
+      question: { ...questionSchema(1), description: "The question's new wording, whole — it replaces the old one. Omit to keep it as asked." },
     },
     required: ["id"],
   },
@@ -940,7 +965,7 @@ const UNLINK = {
 // WATCH_ISSUE rides at the END (2026-09-14): the tool list is read by position in frizz-mcp.test.ts, and a
 // worker's runtime reads it by name, so the order costs nothing and appending breaks nothing.
 // EXTEND_SHELL is appended after it for the same reason (2026-09-29).
-const TOOLS = [SPAWN_THREAD, GOAL, TIMER, WATCH_PR, WATCH, UNWATCH, ASK, UNASK, DONE, TITLE, ACTIVITY, LINK, UNLINK, WATCH_ISSUE, EXTEND_SHELL, READ_THREAD, MESSAGE_THREAD]
+const TOOLS = [SPAWN_THREAD, GOAL, TIMER, WATCH_PR, WATCH, UNWATCH, ASK, UNASK, DONE, TITLE, ACTIVITY, LINK, UNLINK, WATCH_ISSUE, EXTEND_SHELL, READ_THREAD, MESSAGE_THREAD, KEEP]
 
 /** @type {Record<string, (args: Record<string, unknown>) => Promise<string>>} */
 const HANDLERS = {
@@ -952,6 +977,7 @@ const HANDLERS = {
   [WATCH.name]: watch,
   [ASK.name]: ask,
   [UNASK.name]: unask,
+  [KEEP.name]: keep,
   [DONE.name]: done,
   [TITLE.name]: title,
   [UNWATCH.name]: unwatch,
@@ -1098,15 +1124,13 @@ async function activity() {
   // THE QUESTIONS ARE NOT PART OF THE FENCE, so they are printed in their own section and never fed to
   // the fence builder below. A question waits on a person; there is no `questions:` key to write it into.
   //
-  // EVERY OPEN QUESTION IS OWED (2026-09-29). From 2026-09-28 a question the human TYPED past was listed
-  // apart as "set aside": it blocked nothing and was never to be asked again, on the strength of a
-  // timestamp — which released seven questions the human still meant to answer when they typed a side
-  // question. The worker decides now; the readout only says which ones the human has written past, so
-  // the worker knows to weigh that message against them.
+  // OWED vs SET ASIDE (2026-09-30). A typed message sets every open question aside: its card stays
+  // answerable where it was asked, but it holds nothing until the worker `keep`s it. The readout lists
+  // the two apart so the worker knows which ones are still its sign-off.
   const questionLine = (q) =>
-    `  question: ${q.id}${q?.repliedPast ? "  (the human has written to you since)" : ""}\n` +
+    `  question: ${q.id}\n` +
     `    ${String(q?.spec?.question ?? "").replace(/\s+/g, " ").slice(0, 160)}`
-  const owed = questions
+  const owed = questions.filter((q) => !q?.repliedPast)
   const passed = questions.filter((q) => q?.repliedPast)
   const owedBlock = owed.length === 0 ? "" : (
     `\n\n${owed.length} question${owed.length === 1 ? "" : "s"} still owed an answer:\n\n` +
@@ -1117,10 +1141,12 @@ async function activity() {
     "ones since decided. A question is never named in an ```awaiting fence."
   )
   const passedBlock = passed.length === 0 ? "" : (
-    `\n\nThe human has written to you since ${passed.length === 1 ? "one of these was" : `${passed.length} of these were`} ` +
-    "asked, without answering. That message may have made some moot, or it may have been a side question: " +
-    "you decide. `unask` exactly the ones it made moot and say so; leave the rest open. A question you " +
-    "withdraw after their message, or one they dismiss, cannot be asked again."
+    `\n\n${passed.length} question${passed.length === 1 ? "" : "s"} set aside — the human wrote to you since, without answering:\n\n` +
+    passed.map(questionLine).join("\n") +
+    "\n\nTheir cards stay answerable where they were asked, but hold nothing: not your sign-off, not a " +
+    "block on `done`. If the conversation still needs one, `keep` it — reworded with `question` if the " +
+    "direction changed — and it is owed again. A question you withdraw after their message, or one they " +
+    "dismiss, cannot be asked again."
   )
   const askedBlock = owedBlock + passedBlock
   if (!items.length) {
@@ -1872,7 +1898,7 @@ async function unwatch(args) {
 function openQuestionList(result) {
   const open = Array.isArray(result?.open) ? result.open : []
   if (!open.length) return "Nothing else is open on this thread — the human owes you no answer."
-  const lines = open.map((q) => `  ${q.id}  ${(q.spec?.question ?? "").split("\n")[0]}`)
+  const lines = open.map((q) => `  ${q.id}  ${(q.spec?.question ?? "").split("\n")[0]}${q.repliedPast ? "  (set aside — `keep` to bring it forward)" : ""}`)
   return `Open on this thread now:\n${lines.join("\n")}`
 }
 
@@ -1915,6 +1941,20 @@ async function unask(args) {
   const head = result?.withdrawn
     ? `Question ${id} withdrawn. Its card is gone and the human will not be asked.`
     : `No OPEN question ${id} on this thread — it was already answered or dismissed, or the id is not one of yours.`
+  return `${head}\n\n${openQuestionList(result)}`
+}
+
+/** The `keep` handler: opt a set-aside question back in, optionally reworded.
+ * @param {Record<string, unknown>} args @returns {Promise<string>} */
+async function keep(args) {
+  const slug = threadSlug()
+  const id = typeof args.id === "string" ? args.id.trim() : ""
+  if (!id) throw new Error("`id` is required — take it from `ask` or `activity`")
+  const question = args.question && typeof args.question === "object" ? args.question : undefined
+  const result = (await callRpc("keepQuestion", { slug, id, ...(question ? { question } : {}) }))?.result
+  const head = result?.kept
+    ? `Question ${id} kept${question ? ", reworded" : ""}. It holds your thread again, and its card renders at the bottom of your next handoff.`
+    : `No OPEN question ${id} on this thread — it was already answered, dismissed or withdrawn, or the id is not one of yours.`
   return `${head}\n\n${openQuestionList(result)}`
 }
 
