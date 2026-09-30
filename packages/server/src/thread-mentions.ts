@@ -9,10 +9,11 @@ import { foldThreadName, type NamedThread } from "./thread-names.ts"
 // the LAST word, and "Dev ops" is two words ("dev" + "ops", too short to strip) while `devOps` is one
 // ("devops" → "devop"). Folding the handle on both sides makes every spelling of it agree.
 
-/** The handle a named thread is addressed by — its camelCase name, or the slug for a name too long to
- *  have one (a legacy sentence title), so every thread stays addressable by SOMETHING. */
+/** The handle a named thread is addressed by — its camelCase name, or, for a name too long to have one
+ *  (a legacy sentence title, a long session title), its SLUG in camelCase, which resolves the same way —
+ *  so every thread is addressable, and always by something shaped like a handle. */
 export function handleOf(t: Pick<NamedThread, "name" | "slug">): string {
-  return threadHandle(t.name) ?? t.slug
+  return threadHandle(t.name) ?? threadHandle(t.slug.replace(/-/g, " ")) ?? t.slug
 }
 
 function key(handle: string): string {
