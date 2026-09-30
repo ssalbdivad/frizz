@@ -92,6 +92,11 @@ const NUB_NODE_SHIM_PATH_SEGMENT = /(?:^|[\\/])nub-node-shim-[^\\/]+$/
 export type ClaudeSessionSelection =
   | { kind: "new"; sessionId: string }
   | { kind: "resume"; sessionId: string }
+  // A FORK (2026-09-30, the spinoff route): a NEW session `sessionId` that starts as a copy of `from`'s
+  // conversation. The SDK's `resume: from, forkSession: true` plus a pinned `sessionId` — measured on CLI
+  // 2.1.284: the pinned id sticks (the child is `<sessionId>.jsonl`), the parent's file is not touched,
+  // and a fork taken while the parent is mid-turn answers without disturbing the parent's running turn.
+  | { kind: "fork"; sessionId: string; from: string }
 
 export interface ClaudeQueryStartOptions {
   cwd: string
@@ -873,6 +878,8 @@ class RealClaudeQueryHandle implements ClaudeQueryHandle {
 function startClaudeQuery(executablePath: string, options: ClaudeQueryStartOptions): ClaudeQueryHandle {
   const cwd = validateAbsolutePath(options.cwd, "cwd")
   const sessionId = validateSessionId(options.session.sessionId)
+  const forkFrom = options.session.kind === "fork" ? validateSessionId(options.session.from) : undefined
+  if (forkFrom === sessionId) throw new ClaudeAgentSdkProtocolError("a fork needs a session id of its own")
   const environment = buildEnvironment(options.env)
   const redact = createClaudeDiagnosticRedactor(environment)
   const diagnostic = guardDiagnosticCallback(options.onDiagnostic)
@@ -962,7 +969,11 @@ function startClaudeQuery(executablePath: string, options: ClaudeQueryStartOptio
       pathToClaudeCodeExecutable: executablePath,
       permissionMode,
       ...(permissionMode === "bypassPermissions" ? { allowDangerouslySkipPermissions: true } : {}),
-      ...(options.session.kind === "new" ? { sessionId } : { resume: sessionId }),
+      ...(options.session.kind === "new"
+        ? { sessionId }
+        : options.session.kind === "fork"
+          ? { resume: forkFrom, forkSession: true, sessionId }
+          : { resume: sessionId }),
       canUseTool,
       onElicitation,
       // EVERY scope by default — see ClaudeQueryStartOptions.settingSources. `[]` was correct while this

@@ -1940,6 +1940,31 @@ export function spinoffChildPrompt(input: { parentSlug: string; parentTitle: str
   ].join("\n")
 }
 
+/** A FORKED spinoff child's first prompt (2026-09-30). On a Claude thread Spinoff forks the parent's
+ *  session (server router.ts forkSpinoff): the child continues the parent's whole conversation, so there
+ *  is no brief to write, and what the child needs instead is to be told, unmistakably, that the
+ *  conversation above it is not its own. Measured over 18 graded handoffs, a plain fork matched the
+ *  brief route on correctness and scope, cost the same, and was up to twice as fast — but only because
+ *  the fork does the instructions and nothing else. A fork left to read its inherited history as its own
+ *  would carry on the parent's work, answer the parent's questions and sign off for it.
+ *
+ *  Opens exactly as spinoffChildPrompt does, so the chat projects it into the same spinoff header
+ *  (parseSpinoffChildPrompt, with no brief to fold beneath it), and the human's words stay verbatim. */
+export function spinoffForkPrompt(input: { parentSlug: string; parentTitle: string; parentHandle?: string; instructions: string }): string {
+  const quoted = input.instructions.trim().split("\n").map((line) => `> ${line}`).join("\n")
+  const parent = input.parentHandle ? `@${input.parentHandle}` : `[${input.parentTitle.replace(/[\[\]]/g, "")}](/thread/${input.parentSlug})`
+  return [
+    `A spinoff of ${parent}, at the human's request. Their instructions:`,
+    "",
+    quoted,
+    "",
+    `${SPINOFF_FORK_ORIENTATION} Everything above this message is ${parent}'s conversation, copied so you start with all of its context. It is not yours to continue. You are a NEW thread, with your own handle, your own scratch directory and your own sign-off, and your task is the instructions above and nothing else. So do not carry on ${parent}'s work, write to its scratch directory, or act on its open questions, watches, timers, goals, sub-agents, background shells or sign-offs: none of them belong to you, and none of their results will reach you. Do not message ${parent} unless the instructions ask you to. When you are done, sign off for this thread alone.`,
+  ].join("\n")
+}
+
+// The fork prompt's orientation opens on this, and the parser keys on it: the two cannot drift apart.
+const SPINOFF_FORK_ORIENTATION = "This thread was FORKED from that one."
+
 /** What a spinoff child is NAMED from: the human's instructions, then the brief under them. The
  *  instructions alone are often subject-less ("evaluate whether this is a good idea") — the brief is
  *  where the subject lives — and the composed prompt's opening "A spinoff of @parent…" line would name
@@ -1953,8 +1978,22 @@ export function spinoffNameSource(origin: { instructions: string; brief: string 
 // context line's. Anchored at the START of the (envelope-stripped) first turn, like the request's parser.
 const SPINOFF_CHILD_PROMPT = /^A spinoff of (?:@[\p{L}\p{N}_.-]+|\[[^\]\n]*\]\(\/thread\/[^)\s]+\)), at the human's request\. Their instructions:\n\n((?:>[^\n]*(?:\n|$))+)\nThe context (?:@[\p{L}\p{N}_.-]+|that thread) gathered for you:\n\n([\s\S]*)$/u
 
-/** A spinoff child's first prompt read back into its parts, or null for any other text. */
+// A FORKED child's prompt (spinoffForkPrompt): the same opening and quote, then Frizz's orientation —
+// which is not a brief, so it projects as none.
+const SPINOFF_FORK_PROMPT = new RegExp(
+  String.raw`^A spinoff of (?:@[\p{L}\p{N}_.-]+|\[[^\]\n]*\]\(\/thread\/[^)\s]+\)), at the human's request\. Their instructions:\n\n((?:>[^\n]*(?:\n|$))+)\n` +
+    SPINOFF_FORK_ORIENTATION.replace(/[.*+?^${}()|[\]\\]/g, "\\$&") + String.raw`[\s\S]*$`,
+  "u",
+)
+
+/** A spinoff child's first prompt read back into its parts, or null for any other text. A FORKED
+ *  child's has no brief: the context it started with is the parent's conversation itself. */
 export function parseSpinoffChildPrompt(text: string): { instructions: string; brief: string } | null {
+  const fork = SPINOFF_FORK_PROMPT.exec(text.trim())
+  if (fork) {
+    const instructions = fork[1].replace(/\n$/, "").split("\n").map((line) => line.replace(/^> ?/, "")).join("\n").trim()
+    return instructions ? { instructions, brief: "" } : null
+  }
   const m = SPINOFF_CHILD_PROMPT.exec(text.trim())
   if (!m) return null
   const instructions = m[1].replace(/\n$/, "").split("\n").map((line) => line.replace(/^> ?/, "")).join("\n").trim()

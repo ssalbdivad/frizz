@@ -47,6 +47,7 @@ import { threadNameProblem } from "./thread-names.ts"
 import { readWorkflowRun, workflowAgentState as sharedWorkflowAgentState, workflowAckRunDir, workflowAckTaskId, workflowLabel, type WorkflowAgent } from "./workflow-runs.ts"
 import { transcriptQuietPast } from "./pending-call.ts"
 import { processAwakeClock, wallSpan } from "./awake-clock.ts"
+import { forkPointOf, isInheritedSessionMetadata } from "./fork-point.ts"
 import { claudeSideTurnSteps, foldSideTurn, hiddenSideTurnRest, normalizedSideTurnSteps, sideTurnRunning, type SideTurn } from "./spinoff-side-turn.ts"
 
 // The JSONL tailer: incrementally reads each registered session's Claude Code transcript
@@ -718,6 +719,10 @@ export interface TailState extends FoldState {
   foreign: boolean
   offset: number
   partial: string
+  // A FORKED thread's anchor (SessionRow.fork_anchor): `consume` folds nothing until the record carrying
+  // it has landed, then starts there — the copied parent conversation above it is never this thread's
+  // state. See fork-point.ts. Identity, like `sessionId`: set from the row, never restored from cache.
+  forkAnchor?: string
   // Claude's turn model: the kind of the last substantive record + (for assistant) its stop_reason.
   // NOT in the neutral FoldState — codex brackets turns explicitly (applyEvent sets `turn` directly);
   // only Claude's computeTurn reads these two (+ the 5s unknown-stop-reason backstop).
@@ -2996,7 +3001,7 @@ type TailBackend = Pick<AgentBackend, "transcriptPath" | "foldLine">
 // restored BY DEFAULT and only an entry here stops it. That default is what made the chase bookkeeping
 // below a live bug, so the set is now a tested contract rather than a private detail.
 export const UNRESTORED_TAIL_FIELDS: ReadonlySet<string> = new Set([
-  "slug", "sessionId", "nativeSessionId", "runtimeGeneration", "path", "foreign",
+  "slug", "sessionId", "nativeSessionId", "runtimeGeneration", "path", "foreign", "forkAnchor",
   "primed", "permPrompt", "paneDead", "subAgentsSig",
   // Marker-DERIVED, exactly like permPrompt above: this cache exists to skip re-folding the
   // TRANSCRIPT, and none of these three come from it. Re-derived from the on-disk
@@ -5005,6 +5010,19 @@ export function createTailer(deps: TailerDeps): Tailer {
       state.offset = 0
       state.partial = ""
     }
+    // A FORKED thread's derivation starts at its fork point, never at byte 0: everything above it is
+    // the parent's conversation, copied (fork-point.ts). Until the thread's own first record has landed
+    // there is nothing of its own to fold, and folding the copy instead would show the parent's rest,
+    // fence and shells as the child's for the second it takes to land. Every reset of `offset` to 0 —
+    // truncation above, the relocation/discovery re-binds in resolveTranscript — comes back through here.
+    const fork = state.forkAnchor ? forkPointOf(state.path, state.forkAnchor) : undefined
+    if (state.forkAnchor) {
+      if (!fork) return
+      if (state.offset < fork.offset) {
+        state.offset = fork.offset
+        state.partial = ""
+      }
+    }
     if (size <= state.offset) return
     // SPLIT ON THE BUFFER; only a single LINE is ever turned into a string.
     //
@@ -5036,8 +5054,11 @@ export function createTailer(deps: TailerDeps): Tailer {
             const nl = view.indexOf(0x0a, start)
             if (nl === -1) break
             const line = view.toString("utf8", start, nl)
-            backend.foldLine(state, line)
-            onLine?.(line)
+            // The CLI re-appends the parent's title below the fork point; it is not this thread's.
+            if (!fork || !isInheritedSessionMetadata(line, fork)) {
+              backend.foldLine(state, line)
+              onLine?.(line)
+            }
             start = nl + 1
           }
           carry = start < view.length ? Buffer.from(view.subarray(start)) : EMPTY_BUFFER
@@ -5398,7 +5419,8 @@ export function createTailer(deps: TailerDeps): Tailer {
       const keepable = known !== undefined &&
         known.sessionId === row.session_id &&
         known.nativeSessionId === nativeId &&
-        known.runtimeGeneration === runtimeGeneration
+        known.runtimeGeneration === runtimeGeneration &&
+        (known.forkAnchor ?? null) === (row.fork_anchor ?? null)
       let state = keepable ? known : undefined
       // THE BOUND IS ASKED BEFORE THE SETUP, NOT ONLY BEFORE THE FOLD (2026-09-04).
       //
@@ -5428,6 +5450,7 @@ export function createTailer(deps: TailerDeps): Tailer {
         // placeholder until discovery pins it).
         const path = backend.transcriptPath(nativeId) ?? join(logDir, `${nativeId}.jsonl`)
         state = newTailState(row.slug, row.session_id, path, false, nativeId, runtimeGeneration)
+        if (row.fork_anchor && row.backend !== "codex" && row.backend !== "acp") state.forkAnchor = row.fork_anchor
         // BEFORE any fold. This is the durable memory of the operator's × (storage `retired_op`), and
         // the fold consults it as it reads dispatch records — so it has to be populated while the state
         // is still empty, not after. Without it a killed shell is re-minted from a dispatch record that

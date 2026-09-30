@@ -25,6 +25,7 @@ import { createLiveStatus } from "./live-status.ts"
 import { createThreadNamer, type ThreadNamer } from "./thread-names.ts"
 import { createClaudeOneShot } from "./backend/claude-oneshot.ts"
 import { readTranscript, sourceForThread } from "./transcript.ts"
+import { forkPointOf } from "./fork-point.ts"
 import { createSpinoffEdgeRecovery, type SpinoffEdgeRecovery } from "./spinoff-edge-recovery.ts"
 import { createTailer, defaultLogDir, type Tailer } from "./tailer.ts"
 import { backgroundShellStoppable, stopBackgroundShell } from "./shell-stop.ts"
@@ -925,7 +926,7 @@ function createContextUnchecked(opts: ContextOptions, resources: PartialContextR
     storage,
     writeStatus: threadNamer.available ? (input) => threadNamer.status(input) : undefined,
     nameOf: (row) => threadNamer.threads().find((t) => t.slug === row.slug)?.name || undefined,
-    readMessages: (sessionId) => readTranscript(project, sessionId),
+    readMessages: (sessionId, forkAnchor) => readTranscript(project, sessionId, forkAnchor),
     onStatus: () => board.refresh(),
     onError: (slug, error) => process.stderr.write(`[frizz] status of ${slug} failed: ${error instanceof Error ? error.message : String(error)}\n`),
     every: Number.isInteger(statusEvery) && statusEvery > 0 ? statusEvery : undefined,
@@ -939,7 +940,7 @@ function createContextUnchecked(opts: ContextOptions, resources: PartialContextR
     complete: threadNamer.available && process.env.FRIZZ_LIVE_STATUS !== "0"
       ? createClaudeOneShot({ claudeBin: opts.claudeBin, cwd: workDirOf(project) })
       : undefined,
-    readMessages: (sessionId) => readTranscript(project, sessionId),
+    readMessages: (sessionId, forkAnchor) => readTranscript(project, sessionId, forkAnchor),
     onStatus: () => board.refresh(),
     onError: (slug, error) => process.stderr.write(`[frizz] working status of ${slug} failed: ${error instanceof Error ? error.message : String(error)}\n`),
     ...(Number.isInteger(liveStatusMs) && liveStatusMs > 0 ? { intervalMs: liveStatusMs, firstMs: Math.min(liveStatusMs, 20_000) } : {}),
@@ -1011,7 +1012,12 @@ function createContextUnchecked(opts: ContextOptions, resources: PartialContextR
     storage,
     transcriptOf: (slug) => {
       const source = sourceForThread(project, storage, slug, backendFor)
-      return source ? { path: source.path, parseLine: (line) => backendFor(source.backend).parseLine(line) } : undefined
+      if (!source) return undefined
+      // A FORKED thread's history above its fork point is its parent's, spinoff calls included — never
+      // evidence about this thread's own requests (fork-point.ts). Nothing to read until it lands.
+      const fork = source.forkAnchor ? forkPointOf(source.path, source.forkAnchor) : undefined
+      if (source.forkAnchor && !fork) return undefined
+      return { path: source.path, start: fork?.offset ?? 0, parseLine: (line) => backendFor(source.backend).parseLine(line) }
     },
     onRepaired: (row, childSlug) => {
       frizzLog.info("server", `spinoff ${row.id}: recovered its thread ${childSlug} from ${row.parent_slug}'s transcript`)

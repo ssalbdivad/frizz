@@ -771,7 +771,13 @@ export interface Dispatcher {
   // fulfilSpinoff names the child from the human's instructions and the brief instead. Deliberately
   // not a DispatchInput field: the RPC is callable by any worker and the web, and what a thread is
   // named from is not theirs to decouple from what it was asked.
-  dispatch(input: DispatchInput, opts?: { backend?: BackendKind; nameSource?: string }): Promise<{ slug: string; sessionId: string }>
+  //
+  // `opts.fork` starts the thread as a FORK of an existing Claude session (the spinoff route, router.ts
+  // forkSpinoff): the new session opens on a copy of that one's conversation, and the row is stamped with
+  // the anchor every reader of its transcript starts at (SessionRow.fork_anchor, fork-point.ts). Claude
+  // only — a fork of any other backend's session is refused, never approximated. Server-only, for the
+  // same reason as `nameSource`: what a thread starts from is not a caller's to choose over the RPC.
+  dispatch(input: DispatchInput, opts?: { backend?: BackendKind; nameSource?: string; fork?: { sessionId: string } }): Promise<{ slug: string; sessionId: string }>
   // Cold-adopt an EXISTING thread frizz didn't originate (e.g. a repo with a pre-existing .frizz
   // board): spawn a fresh worker pointed at the thread file. Frizz's contract makes this sound —
   // the doc, not the conversation, is the durable context; the worker reads it and continues.
@@ -891,6 +897,7 @@ export function createDispatcher(deps: DispatchDeps): Dispatcher {
       input = DispatchInput.parse(input)
       const settings = deps.getSettings()
       const kind: BackendKind = opts?.backend ?? "claude"
+      if (opts?.fork && kind !== "claude") throw new Error("only a Claude thread can be forked")
       // Auth preflight (Slice A): block ONLY on a positive "signed-out" — "unknown" (flaky read,
       // missing binary, timeout) fails OPEN so a network blip never traps a logged-in user. Runs
       // before the scratchpad/spawn/registry so a rejected dispatch leaves zero trace; the browser
@@ -1096,6 +1103,9 @@ export function createDispatcher(deps: DispatchDeps): Dispatcher {
           scratchpadOrientation(sessionId, kind, scratchPath),
           frizzConfigBlock(deps.project.dir),
         ].filter(Boolean).join("\n\n")
+        // A FORK's opening prompt is sent under a uuid minted here, so the record the CLI writes for it —
+        // the first record of this thread's own, below the copied conversation — can be found again.
+        const forkAnchor = opts?.fork ? randomUUID() : undefined
         try {
           await bridge.spawnDispatch({
             threadSlug: slug,
@@ -1106,6 +1116,7 @@ export function createDispatcher(deps: DispatchDeps): Dispatcher {
             appendSystemPrompt,
             model,
             effort,
+            ...(opts?.fork ? { forkFrom: opts.fork.sessionId, inputId: forkAnchor } : {}),
           })
           deps.storage.upsertSession({
             slug,
@@ -1134,6 +1145,9 @@ export function createDispatcher(deps: DispatchDeps): Dispatcher {
           // states and lists the thread's live work with the ids a fence needs — so arming a Goal as well is the
           // same nudge twice, and the maintainer called it redundant. Arming one is the FOOTER PANEL's job now,
           // and that panel prefills the default text without switching any trigger on.
+          // In the same synchronous run as the row itself, so no tailer tick can ever see this row
+          // without its anchor and fold the copied conversation as the thread's own.
+          if (forkAnchor) deps.storage.setForkAnchor(slug, sessionId, forkAnchor)
           deps.storage.setBackend(slug, "claude")
           deps.storage.setClaudeRuntime(slug, "broker")
           mintName(slug, sessionId)

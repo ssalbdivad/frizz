@@ -57,7 +57,8 @@ export interface PeriodicStatusDeps {
   writeStatus?: (input: { name?: string; conversation: string }) => Promise<string | undefined>
   /** The thread's current NAME, handed to the writer only so the status does not repeat it. */
   nameOf?: (row: SessionRow) => string | undefined
-  readMessages: (sessionId: string) => TranscriptMessage[]
+  /** `forkAnchor` is the row's SessionRow.fork_anchor — a forked thread is read from its fork point. */
+  readMessages: (sessionId: string, forkAnchor?: string | null) => TranscriptMessage[]
   onStatus: () => void
   onError?: (slug: string, error: unknown) => void
   every?: number
@@ -84,7 +85,7 @@ export function createPeriodicStatus(deps: PeriodicStatusDeps): PeriodicStatus {
       if (!deps.writeStatus || !isBrokerClaudeRow(row)) return
       const key = `${row.slug}\0${row.session_id}`
       if (inFlight.has(key)) return
-      const messages = deps.readMessages(row.session_id)
+      const messages = deps.readMessages(row.session_id, row.fork_anchor)
       const bucket = Math.floor(operatorMessages(messages).length / every)
       const prev = doneAt.get(key)
       doneAt.set(key, Math.max(bucket, prev ?? 0))

@@ -262,6 +262,14 @@ export interface SessionRow {
   // Which ACP agent (backend/acp-agents.ts catalogue id — "opencode", "gemini" …) an `acp` row runs on.
   // The ACP session id lives in `agent_session_id` like codex's. NULL on every other backend.
   acp_agent?: string | null
+  // A FORKED thread's anchor (2026-09-30, the Claude spinoff route): the uuid of its own first record.
+  // A fork's transcript opens on a COPY of its parent's conversation — every record rewritten under the
+  // child's session id, nothing marking it inherited — so a reader that folded the file from byte 0 would
+  // hand the child its parent's fence, done card, shells, sub-agents and title. Every Claude JSONL reader
+  // of such a row starts at the record carrying this uuid instead (fork-point.ts), and reads nothing
+  // until it has landed. The uuid is the one the opening prompt was SENT under, which the CLI echoes onto
+  // the record; minted at dispatch, so no copied record can carry it. NULL on every other row.
+  fork_anchor?: string | null
 }
 
 /**
@@ -528,6 +536,10 @@ export interface ThreadSpinoffRow {
   project_id: string
   /** Where the child starts when that is ANOTHER project (a cross-project spinoff); null for this one. */
   child_project_id: string | null
+  /** 1 when the child is a FORK of the parent's session (the Claude route, router.ts forkSpinoff), 0 when
+   *  the parent's worker briefed it. A forked request leaves nothing in the parent's transcript, so the
+   *  parent's chat draws its card from this row (transcript.ts withForkedSpinoffRequests). */
+  forked: number
 }
 
 /** A saved destination, independent of running work and completion. */
@@ -843,7 +855,7 @@ export interface Storage {
   setPrWatchCursor(id: string, cursor: string): boolean
   // A label is a stable slot: re-registering it updates the destination without moving the row.
   /** `childProjectId` names the project the child is to start in when that is not this one. */
-  insertSpinoff(row: { id: string; parentSlug: string; instructions: string; createdAtMs: number; childProjectId?: string }): void
+  insertSpinoff(row: { id: string; parentSlug: string; instructions: string; createdAtMs: number; childProjectId?: string; forked?: boolean }): void
   getSpinoff(id: string): ThreadSpinoffRow | undefined
   dropSpinoff(id: string): boolean
   /** Stamp the dispatched child onto a PENDING spinoff. False when it is unknown or already spawned, so
@@ -859,6 +871,9 @@ export interface Storage {
   /** Every spinoff still waiting for its thread (no child yet) that is to start in THIS project, oldest
    *  first. A cross-project request is left out: the edge recovery that reads this looks its child up here. */
   pendingSpinoffs(): ThreadSpinoffRow[]
+  /** The FORKED spinoffs `parentSlug` (a thread of this project) was asked for, oldest first — the ones
+   *  whose request left no record in its transcript (ThreadSpinoffRow.forked). */
+  forkedSpinoffsOf(parentSlug: string): ThreadSpinoffRow[]
   upsertThreadLink(link: { id: string; slug: string; kind: "link" | "file"; label: string; target: string; createdAtMs: number }): ThreadLinkRow
   listThreadLinks(slug: string): ThreadLinkRow[]
   threadLinksBySlug(): Map<string, ThreadLinkRow[]>
@@ -1067,6 +1082,9 @@ export interface Storage {
   setAgentSession(slug: string, agentSessionId: string): void
   setCodexRuntime(slug: string, runtime: string): void
   setClaudeRuntime(slug: string, runtime: string): void
+  /** Record a forked thread's anchor (SessionRow.fork_anchor). Guarded on the session id, so a slug
+   *  re-dispatched since cannot inherit another session's anchor. */
+  setForkAnchor(slug: string, sessionId: string, anchor: string): boolean
   setAcpAgent(slug: string, agentId: string): void
   setProfile(slug: string, model: string, effort: string): void
   setPermissionMode(slug: string, permissionMode: string): void
@@ -1577,6 +1595,8 @@ export function ensureStorageSchema(db: Database): void {
     "former_titles TEXT",
     // 2026-09-30: when the human last acted on the thread — what deleting old threads counts from.
     "interacted_at TEXT",
+    // 2026-09-30: a forked thread's own first record (SessionRow.fork_anchor).
+    "fork_anchor TEXT",
   ]) {
     try {
       db.exec(`ALTER TABLE session ADD COLUMN ${column}`)
@@ -1602,6 +1622,8 @@ export function ensureStorageSchema(db: Database): void {
     // `thread_spinoff.child_project_id` (2026-09-30): a spinoff can start its thread in another project.
     // The row stays filed under the parent's project; this names the child's when it is not that one.
     ["thread_spinoff", "child_project_id TEXT"],
+    // `thread_spinoff.forked` (2026-09-30): the child is a fork of the parent's session (ThreadSpinoffRow).
+    ["thread_spinoff", "forked INTEGER NOT NULL DEFAULT 0"],
     // `thread_question.kept_at` (2026-09-30): a typed message sets open questions aside, and the worker
     // opts one back in with `keep`, which stamps this.
     ["thread_question", "kept_at INTEGER"],
@@ -1790,6 +1812,9 @@ export function createStorage(source: string | Database, projectId: string): Sto
       -- A re-dispatch/adopt carries a FRESH session_id, so the old discovered path is stale → adopt the
       -- incoming value (NULL for a fresh spawn); a resume spreads the existing row, preserving its cache.
       transcript_id = excluded.transcript_id,
+      -- A forked thread's anchor names a record in ITS session's transcript: kept across a resume (the
+      -- same session spread back), dropped by a re-dispatch or adopt, whose fresh session holds no copy.
+      fork_anchor = CASE WHEN session.session_id = excluded.session_id THEN session.fork_anchor ELSE NULL END,
       archived = 0,
       state = 'open'
   `)
@@ -2234,10 +2259,10 @@ export function createStorage(source: string | Database, projectId: string): Sto
   const delPrWatches = scope.prepare("DELETE FROM pr_watch WHERE project_id = @project_id AND thread_slug = ?")
   // SOURCE_ID and EXCERPT are the table's two first-day columns, written empty and never read (see it).
   const insertSpinoffStmt = scope.prepare(`
-    INSERT INTO thread_spinoff (project_id, id, parent_slug, source_id, excerpt, instructions, created_at, child_project_id)
-    VALUES (@project_id, @id, @parentSlug, '', '', @instructions, @createdAtMs, @childProjectId)
+    INSERT INTO thread_spinoff (project_id, id, parent_slug, source_id, excerpt, instructions, created_at, child_project_id, forked)
+    VALUES (@project_id, @id, @parentSlug, '', '', @instructions, @createdAtMs, @childProjectId, @forked)
   `)
-  const SPINOFF_COLUMNS = "id, parent_slug, instructions, child_slug, created_at, spawned_at, project_id, child_project_id"
+  const SPINOFF_COLUMNS = "id, parent_slug, instructions, child_slug, created_at, spawned_at, project_id, child_project_id, forked"
   // A CROSS-PROJECT SPINOFF (2026-09-30) is one row with an end in each project, filed under the parent's.
   // So "this project's child end" is either a row of this project whose child stays here, or a row of
   // another project whose child was started here. A same-project row always writes NULL, never this id.
@@ -2250,6 +2275,7 @@ export function createStorage(source: string | Database, projectId: string): Sto
   const dropSpinoffStmt = scope.prepare("DELETE FROM thread_spinoff WHERE project_id = @project_id AND id = ?")
   const spinoffOfChildStmt = scope.prepare<[string], ThreadSpinoffRow>(`SELECT ${SPINOFF_COLUMNS} FROM thread_spinoff WHERE ${CHILD_HERE} AND child_slug = ? ORDER BY created_at, rowid LIMIT 1`)
   const pendingSpinoffsStmt = scope.prepare<[], ThreadSpinoffRow>(`SELECT ${SPINOFF_COLUMNS} FROM thread_spinoff WHERE project_id = @project_id AND child_project_id IS NULL AND child_slug IS NULL ORDER BY created_at, rowid`)
+  const forkedSpinoffsStmt = scope.prepare<[string], ThreadSpinoffRow>(`SELECT ${SPINOFF_COLUMNS} FROM thread_spinoff WHERE project_id = @project_id AND parent_slug = ? AND forked = 1 AND child_project_id IS NULL ORDER BY created_at, rowid`)
   const delSpinoffs = scope.prepare("DELETE FROM thread_spinoff WHERE project_id = @project_id AND parent_slug = ?")
   // The CHILD end of a forgotten thread's edges — see forgetOwnedRow.
   const delChildSpinoffs = scope.prepare(`DELETE FROM thread_spinoff WHERE ${CHILD_HERE} AND child_slug = ?`)
@@ -2581,6 +2607,7 @@ export function createStorage(source: string | Database, projectId: string): Sto
   const agentSessionStmt = scope.prepare("UPDATE session SET agent_session_id = ? WHERE project_id = @project_id AND slug = ?")
   const codexRuntimeStmt = scope.prepare("UPDATE session SET codex_runtime = ? WHERE project_id = @project_id AND slug = ?")
   const claudeRuntimeStmt = scope.prepare("UPDATE session SET claude_runtime = ? WHERE project_id = @project_id AND slug = ?")
+  const forkAnchorStmt = scope.prepare("UPDATE session SET fork_anchor = ? WHERE project_id = @project_id AND slug = ? AND session_id = ?")
   const acpAgentStmt = scope.prepare("UPDATE session SET acp_agent = ? WHERE project_id = @project_id AND slug = ?")
   // Stamps profile_set_at alongside model/effort: the OPERATOR's set-time. Both backends' setThreadProfile
   // paths write through here, and the stamp is what marks the pair as CHOSEN rather than observed — the
@@ -2747,6 +2774,7 @@ export function createStorage(source: string | Database, projectId: string): Sto
     codex_runtime: row.codex_runtime ?? null,
     claude_runtime: row.claude_runtime ?? null,
     acp_agent: row.acp_agent ?? null,
+    fork_anchor: row.fork_anchor ?? null,
   })
 
   const getAdoptionRuntimeSnapshot = db.transaction((slug: string) => ({
@@ -3144,7 +3172,7 @@ export function createStorage(source: string | Database, projectId: string): Sto
     dropPrWatch: (slug, id, settledAtMs) => dropPrWatchStmt.run(settledAtMs, id, slug).changes === 1,
     settlePrWatch: (id, settledAtMs) => settlePrWatchStmt.run(settledAtMs, id).changes === 1,
     setPrWatchCursor: (id, cursor) => prWatchCursorStmt.run(cursor, id).changes === 1,
-    insertSpinoff: (row) => { insertSpinoffStmt.run({ ...row, childProjectId: row.childProjectId ?? null }) },
+    insertSpinoff: (row) => { insertSpinoffStmt.run({ id: row.id, parentSlug: row.parentSlug, instructions: row.instructions, createdAtMs: row.createdAtMs, childProjectId: row.childProjectId ?? null, forked: row.forked ? 1 : 0 }) },
     getSpinoff: (id) => getSpinoffStmt.get(id),
     dropSpinoff: (id) => dropSpinoffStmt.run(id).changes === 1,
     completeSpinoff: (id, childSlug, atMs) => completeSpinoffStmt.run(childSlug, atMs, id).changes === 1,
@@ -3167,6 +3195,7 @@ export function createStorage(source: string | Database, projectId: string): Sto
     },
     spinoffOfChild: (childSlug) => spinoffOfChildStmt.get(childSlug),
     pendingSpinoffs: () => pendingSpinoffsStmt.all(),
+    forkedSpinoffsOf: (parentSlug) => forkedSpinoffsStmt.all(parentSlug),
     upsertThreadLink: (link) => upsertThreadLinkStmt.get(link)!,
     listThreadLinks: (slug) => threadLinksBySlugStmt.all(slug),
     threadLinksBySlug: () => groupBySlug(threadLinksStmt.all()),
@@ -3290,6 +3319,7 @@ export function createStorage(source: string | Database, projectId: string): Sto
     setAgentSession: (slug, agentSessionId) => void agentSessionStmt.run(agentSessionId, slug),
     setCodexRuntime: (slug, runtime) => void codexRuntimeStmt.run(runtime, slug),
     setClaudeRuntime: (slug, runtime) => void claudeRuntimeStmt.run(runtime, slug),
+    setForkAnchor: (slug, sessionId, anchor) => forkAnchorStmt.run(anchor, slug, sessionId).changes === 1,
     setAcpAgent: (slug, agentId) => void acpAgentStmt.run(agentId, slug),
     setProfile: (slug, model, effort) => void profileStmt.run(model, effort, new Date().toISOString(), slug),
     setPermissionMode: (slug, permissionMode) => void permissionModeStmt.run(permissionMode, new Date().toISOString(), slug),

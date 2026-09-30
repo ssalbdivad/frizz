@@ -49,6 +49,7 @@ import { redactCredentialStructure, redactCredentialSyntax } from "./credential-
 import { hasEscapingBackgroundJob } from "../../../cc-worker/hooks/bash-background.mjs"
 import { frizzTempDir, isPromptAttachmentPath } from "./frizz-paths.ts"
 import { dispatchProfileCell } from "./subagent-profile.ts"
+import { forkPointOf } from "./fork-point.ts"
 import { claudeSideTurnSteps, createSideTurnProjection, normalizedSideTurnSteps, type SideTurn, type SideTurnProjection } from "./spinoff-side-turn.ts"
 
 // Parse a session JSONL into a renderable conversation — mechanically, no AI. Same defensive
@@ -2288,6 +2289,9 @@ function completionEvents(
 // at 16 files. A file that shrank/rotated or whose identityPrefix changed drops its entry → full re-fold.
 interface TranscriptCacheEntry {
   identityPrefix: string
+  // The byte the fold STARTED at: 0, or a forked thread's fork point (fork-point.ts), below which the
+  // file is the parent's conversation and none of this thread's transcript. Part of the entry's identity.
+  start: number
   fold: TranscriptFold
   // File bytes handed to the decoder so far (the read cursor). Decoupled from fold.consumedBytes():
   // the StringDecoder may retain a torn trailing multibyte sequence across reads, so the fold can lag
@@ -2359,17 +2363,17 @@ function readAppendedBytes(fd: number, from: number, to: number): Buffer {
 // (`claude:${id}` ↔ `.../${id}.jsonl`), so identityPrefix is a function of the path and one path-keyed
 // entry serves both. Before this they kept SEPARATE caches and folded the same 30 MB twice on a cold
 // drawer open — once for the RPC, once for the socket push — and retained two copies forever after.
-function retainedFoldEntry(path: string, identityPrefix: string, fileId: string, size: number): { entry: TranscriptCacheEntry; hit: boolean } {
+function retainedFoldEntry(path: string, identityPrefix: string, fileId: string, size: number, start = 0): { entry: TranscriptCacheEntry; hit: boolean } {
   let entry = transcriptCache.get(path)
   // Drop a stale entry: the file shrank (truncation), rotated (new inode), or is being parsed under a
   // different identity. Any of these means the retained fold no longer describes byte 0..size.
-  if (entry && (entry.identityPrefix !== identityPrefix || entry.fileId !== fileId || size < entry.bytesRead)) {
+  if (entry && (entry.identityPrefix !== identityPrefix || entry.fileId !== fileId || size < entry.bytesRead || entry.start !== start)) {
     transcriptCache.delete(path)
     entry = undefined
   }
   const hit = entry !== undefined
   if (!entry) {
-    entry = { identityPrefix, fold: createTranscriptFold(identityPrefix), bytesRead: 0, decoder: new StringDecoder("utf8"), fileId }
+    entry = { identityPrefix, start, fold: createTranscriptFold(identityPrefix), bytesRead: start, decoder: new StringDecoder("utf8"), fileId }
   } else {
     transcriptCache.delete(path) // LRU touch — re-insert to move to the most-recently-used end.
   }
@@ -2383,24 +2387,29 @@ function retainedFoldEntry(path: string, identityPrefix: string, fileId: string,
   return { entry, hit }
 }
 
-export function readTranscript(project: Project, sessionId: string): TranscriptMessage[] {
+// `forkAnchor` is the row's SessionRow.fork_anchor: a FORKED thread's transcript is read from its fork
+// point (fork-point.ts), and reads as empty until that record has landed — the copied parent
+// conversation above it is never shown as this thread's. Every caller that has the row passes it.
+export function readTranscript(project: Project, sessionId: string, forkAnchor?: string | null): TranscriptMessage[] {
   const path = resolveTranscriptPath(project, sessionId)
   const identityPrefix = `claude:${sessionId}`
   let fd: number | undefined
   try {
+    const fork = forkAnchor ? forkPointOf(path, forkAnchor) : undefined
+    if (forkAnchor && !fork) return []
     fd = openSync(path, "r")
     const st = fstatSync(fd)
     const size = st.size
     const fileId = `${st.dev}:${st.ino}:${Math.trunc(st.birthtimeMs)}`
 
-    const { entry, hit } = retainedFoldEntry(path, identityPrefix, fileId, size)
+    const { entry, hit } = retainedFoldEntry(path, identityPrefix, fileId, size, fork?.offset ?? 0)
 
     ingestBounded(entry, size, (from, length) => readAppendedBytes(fd!, from, from + length))
     // size == bytesRead → no read, no ingest; the retained projection is already current.
 
     const messages = entry.fold.messages()
     if (hit && process.env.FRIZZ_TRANSCRIPT_PARSE_VERIFY === "1" && Math.random() < PARSE_VERIFY_SAMPLE) {
-      verifyIncrementalParse(path, identityPrefix, messages)
+      verifyIncrementalParse(path, identityPrefix, messages, entry.start)
     }
     // Defensive shallow slice: keeps per-message identity (all that matters downstream) while protecting
     // the RETAINED array from callers that append synthetic tail rows — projectDeliveryLedger pushes
@@ -2417,9 +2426,9 @@ export function readTranscript(project: Project, sessionId: string): TranscriptM
 // Correctness net for the retained fold: re-parse the whole file from scratch and deep-compare (by JSON
 // stringification) against the incremental result. Logs a loud structured line on divergence; NEVER
 // throws — a false alarm from a mid-write torn read must not break the read path.
-function verifyIncrementalParse(path: string, identityPrefix: string, incremental: TranscriptMessage[]): void {
+function verifyIncrementalParse(path: string, identityPrefix: string, incremental: TranscriptMessage[], start = 0): void {
   try {
-    const fresh = parseTranscript(readFileSync(path, "utf8"), identityPrefix)
+    const fresh = parseTranscript(readFileSync(path).subarray(start).toString("utf8"), identityPrefix)
     const a = JSON.stringify(incremental)
     const b = JSON.stringify(fresh)
     if (a !== b) {
@@ -4149,6 +4158,8 @@ interface TranscriptSourceBinding {
   backend: "claude" | "codex" | "acp"
   runtimeGeneration: number
   path: string
+  // A forked Claude thread's anchor (SessionRow.fork_anchor): its projection starts at the fork point.
+  forkAnchor?: string
 }
 
 interface FixedTranscriptSnapshot extends TranscriptSourceBinding {
@@ -4217,6 +4228,7 @@ export function sourceForThread(
       backend,
       runtimeGeneration: row.runtime_generation ?? 0,
       path,
+      ...(backend === "claude" && row.fork_anchor ? { forkAnchor: row.fork_anchor } : {}),
     }
   }
   if (!FOREIGN_SESSION_ID_RE.test(slug)) return undefined
@@ -4267,6 +4279,7 @@ function discoveredClaudeSource(
     // same path either way. Routed through it anyway: one rule with no exception to remember beats
     // three call sites where two must resolve and the third happens not to need to.
     path: resolveTranscriptPath(project, nativeId),
+    ...(row.fork_anchor ? { forkAnchor: row.fork_anchor } : {}),
   }
 }
 
@@ -4364,7 +4377,10 @@ function projectSnapshot(snapshot: FixedTranscriptSnapshot): TranscriptMessage[]
   // already NormalizedEvents (acp-transcript.ts), so there is no claude fold to retain.
   if (snapshot.backend === "acp") return retireStaleQueuedBubbles(projectAcpTranscript(snapshot.raw, prefix))
 
-  const { entry } = retainedFoldEntry(snapshot.path, prefix, snapshot.fileKey, snapshot.size)
+  // A forked thread projects from its fork point, and as nothing until that record has landed.
+  const fork = snapshot.forkAnchor ? forkPointOf(snapshot.path, snapshot.forkAnchor) : undefined
+  if (snapshot.forkAnchor && !fork) return []
+  const { entry } = retainedFoldEntry(snapshot.path, prefix, snapshot.fileKey, snapshot.size, fork?.offset ?? 0)
   // Reads ONLY the appended delta — the reason the whole-file buffer is no longer materialised.
   ingestBounded(entry, snapshot.size, (from, length) => snapshot.readRange(from, length))
   // Deliberately NO finalize(): it is the one-shot path's trailing-partial flush and advances the fold
@@ -4560,6 +4576,57 @@ export function withSpinoffChildOrigin(
   return out
 }
 
+// A FORKED SPINOFF'S REQUEST, IN THE PARENT'S CHAT (2026-09-30). On the brief route the request is a
+// message delivered to the parent's worker, so its card is that record's projection. A forked spinoff
+// (router.ts forkSpinoff) sends the parent NOTHING — that is the point of it — so its transcript holds no
+// trace of the request, and the card the human expects where they asked would simply be missing. It is
+// drawn from the spinoff row instead: the same `spinoff` message the brief route's record projects to,
+// placed at the instant the human asked, so SpinoffCard renders it identically (started, linked forward).
+//
+// `whole` says the array is the entire projection; a latest WINDOW gets only the requests made since its
+// first message, since an earlier one belongs to a page the window does not hold. Applied by every reader
+// that serves a Claude thread's transcript, BEFORE any windowing or paging, like withSpinoffChildOrigin —
+// so a card's sourceId (`spinoff:<id>`) is the same on every page and can anchor a cursor. Never mutates.
+export function withForkedSpinoffRequests(
+  messages: TranscriptMessage[],
+  storage: Pick<Storage, "forkedSpinoffsOf">,
+  slug: string,
+  whole: boolean,
+): TranscriptMessage[] {
+  const rows = storage.forkedSpinoffsOf(slug)
+  if (!rows.length) return messages
+  const floor = whole ? undefined : messages.find((m) => m.at)?.at
+  const cards: TranscriptMessage[] = []
+  for (const row of rows) {
+    const at = new Date(row.created_at).toISOString()
+    if (floor !== undefined && at < floor) continue
+    cards.push({
+      sourceId: `spinoff:${row.id}`,
+      role: "user",
+      text: row.instructions,
+      displayText: row.instructions,
+      tools: [],
+      parts: [],
+      at,
+      spinoff: { id: row.id, instructions: row.instructions },
+    })
+  }
+  if (!cards.length) return messages
+  // Each card goes after the last message at or before its instant (ISO instants compare as strings).
+  // A message with no instant keeps its place relative to its neighbours, as a queued bubble at the tail.
+  const out: TranscriptMessage[] = []
+  let next = 0
+  for (const m of messages) {
+    while (next < cards.length && m.at !== undefined && cards[next].at! < m.at) out.push(cards[next++])
+    out.push(m)
+  }
+  // A card after every timed message lands before a trailing run of untimed ones (queued sends).
+  let tail = out.length
+  while (tail > 0 && out[tail - 1].at === undefined && out[tail - 1].queued) tail--
+  out.splice(tail, 0, ...cards.slice(next))
+  return out
+}
+
 export function readLatestThreadTranscriptPage(
   project: Project,
   storage: Storage,
@@ -4594,7 +4661,7 @@ export function readLatestThreadTranscriptPage(
       projected = projectSnapshot(snapshot)
     }
   }
-  projected = withSpinoffChildOrigin(projected, storage, slug, true)
+  projected = withForkedSpinoffRequests(withSpinoffChildOrigin(projected, storage, slug, true), storage, slug, true)
   const latest = latestTranscriptWindow(projected)
   // The cursor has to name the window's REAL head, not the raw MAX_MESSAGES cut: once the window reaches
   // back for the human's ask, a cursor anchored at the cut sits INSIDE what was already sent, and the
@@ -4654,7 +4721,7 @@ export function readEarlierThreadTranscriptPage(
   if (digestPrefix(snapshot.readRange(0, payload.snapshotBytes)) !== payload.prefixDigest) {
     throw new Error("transcript cursor is stale because prior transcript bytes changed")
   }
-  const projected = withSpinoffChildOrigin(projectSnapshot(snapshot), storage, slug, true)
+  const projected = withForkedSpinoffRequests(withSpinoffChildOrigin(projectSnapshot(snapshot), storage, slug, true), storage, slug, true)
   const anchor = projected.findIndex((message) => message.sourceId === payload.anchorSourceId)
   if (anchor < 0) throw new Error("transcript cursor boundary is no longer present")
   const page = pageProjectedTranscript(projected, anchor)
@@ -4698,7 +4765,8 @@ export function readThreadTranscript(
   backendFor?: (kind?: string) => AgentBackend,
 ): TranscriptMessage[] {
   // Only an ACP read is the WHOLE projection; Claude's and Codex's are the latest window.
-  return withSpinoffChildOrigin(readThreadTranscriptMessages(project, storage, slug, backendFor), storage, slug, storage.getSession(slug)?.backend === "acp")
+  const whole = storage.getSession(slug)?.backend === "acp"
+  return withForkedSpinoffRequests(withSpinoffChildOrigin(readThreadTranscriptMessages(project, storage, slug, backendFor), storage, slug, whole), storage, slug, whole)
 }
 
 function readThreadTranscriptMessages(
@@ -4737,7 +4805,7 @@ function readThreadTranscriptMessages(
     // Applied at each return AFTER the discovery gates below, which must judge the RAW parse — a
     // projected bubble on an otherwise-empty transcript must not suppress discovery.
     const ledger = parseDeliveryLedger(row.delivery_ledger)
-    const msgs = readTranscript(project, row.transcript_id ?? row.session_id)
+    const msgs = readTranscript(project, row.transcript_id ?? row.session_id, row.fork_anchor)
     if (msgs.length || row.transcript_id) return projectDeliveryLedger(msgs, ledger)
     // The pinned transcript rendered empty and nothing's cached. GATE the fallback on the spin-up grace:
     // a fresh dispatch renders empty simply because its file isn't written yet, and this path runs on
@@ -4752,7 +4820,7 @@ function readThreadTranscriptMessages(
       if (r.transcript_id) exclude.add(r.transcript_id)
     }
     const found = discoverTranscriptId(logDirOf(project), row.session_id, { exclude })
-    return projectDeliveryLedger(found ? readTranscript(project, found) : msgs, ledger)
+    return projectDeliveryLedger(found ? readTranscript(project, found, row.fork_anchor) : msgs, ledger)
   }
   // A FOREIGN slug binds the same way the paged reader binds it (sourceForThread): the Claude log dir
   // if the file is there, else the codex rollout tree. This producer feeds the /ws push, and until
