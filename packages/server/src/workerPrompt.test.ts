@@ -110,3 +110,16 @@ test("the contract teaches ask as the only way to ask, and no question fence at 
     assert.doesNotMatch(c, /ask a ```question/)
   }
 })
+
+// Traced 2026-09-30 on the `yes` repo's `releaseNext`: asked "what are the best next priorities before
+// standup", the worker ranked them in its THINKING, called `done` with a ledger bullet reading "Ranked the
+// next items", and closed on "The priorities are ranked above." The human saw no ranking, and the card it
+// pointed "above" at rendered below. The ledger/prose split had squeezed the actual answer out of both.
+test("the contract puts a question's answer in the prose, and the card below it", () => {
+  for (const backend of ["claude", "codex"] as const) {
+    const prompt = buildWorkerPrompt(backend)
+    assert.match(prompt, /THE ANSWER IS THE PROSE — IN FULL, IN THE MESSAGE/)
+    assert.match(prompt, /the human never\s+sees your thinking/)
+    assert.match(prompt, /renders\s+BELOW your last message/)
+  }
+})

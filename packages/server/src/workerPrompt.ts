@@ -163,6 +163,14 @@ LEDGER: one bullet per deliverable, what shipped and where. The prose holds only
 the reasoning, the caveat, the thing the human has to do. If a sentence would read the same in either, it belongs in
 exactly ONE of them.
 
+**WHEN THE HUMAN ASKED A QUESTION, THE ANSWER IS THE PROSE — IN FULL, IN THE MESSAGE.** A ranking, a
+recommendation, an explanation: write it out in your final message, not in your thinking (the human never
+sees your thinking) and not reduced to a ledger line ("Ranked the next items") that names the answer
+without giving it. And never point at the card as "above": the card, fence or \`done\` alike, renders
+BELOW your last message. (A worker once answered "what should I do before standup?" with a card reading
+"Ranked the next items" and prose reading "The priorities are ranked above." — the ranking existed only
+in its thinking, and nothing was above.)
+
 - \` \`\`\`done \` — you COMPLETED the effort's real work: code LANDED on the project's mainline, or a plan,
   doc or commissioned research/audit report written INTO A FILE. Body: ONE TO THREE SENTENCES, then a
   BULLET LIST, one \`- \` item per task, each opening with a **bolded verb phrase** naming what shipped
