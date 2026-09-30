@@ -110,3 +110,73 @@ test("a sent @handle opens the thread it names; an unknown one stays text", {
   assert.deepEqual(drawers, ["thread:shell-budgets"], "a plain click opens the thread's drawer")
   assert.deepEqual(errors, [], `no page errors: ${errors.join(" | ")}`)
 })
+
+// ── SUB-AGENTS AFTER THE DOT (maintainer 2026-09-30: "autocomplete should still work for subagents
+// after .") — the fixture stubs `shell-budgets`'s subAgentDirectory.
+const menuRowText = (): Promise<string[]> => page!.evaluate((sel) =>
+  [...document.querySelectorAll(`${sel} button`)].map((row) => [...row.querySelectorAll("span")].map((s) => s.textContent).join(" | ")), MENU)
+const directoryRequests = (): Promise<string[]> => page!.evaluate(() => [...(window as unknown as { __directoryRequests: string[] }).__directoryRequests])
+
+test("`@thread.` offers that thread's sub-agents, live before returned, and narrows as you type", {
+  skip: !baseUrl,
+  timeout: 150_000,
+}, async () => {
+  await open()
+  await page!.type(BOX, "ask @shellBudgets")
+  await page!.waitForSelector(MENU)
+  assert.deepEqual(await menuRows(), ["@shellBudgets"], "no dot: threads only, exactly as before")
+  await page!.type(BOX, ".")
+  await page!.waitForFunction((sel) => document.querySelector(sel)?.getAttribute("aria-label") === "Sub-agents", {}, MENU)
+  assert.deepEqual(await menuRows(), [
+    "@shellBudgets.cacheKeys",
+    "@shellBudgets.wave2",
+    "@shellBudgets.wave2.implW3",
+    "@shellBudgets.capAudit",
+    "@shellBudgets.cacheSweep",
+  ], "every addressed child, live first; the sentence-named one has no address and is not offered")
+  const rows = await menuRowText()
+  assert.match(rows[0]!, /^@shellBudgets\.cacheKeys \| running 1[12]m$/)
+  assert.match(rows[3]!, /^@shellBudgets\.capAudit \| returned 3h ago \| done$/, "a returned child is tagged done")
+  assert.match(rows[4]!, /^@shellBudgets\.cacheSweep \| failed 2d ago \| done$/)
+  await page!.type(BOX, "ca")
+  await page!.waitForFunction((sel) => document.querySelectorAll(`${sel} button`).length === 3, {}, MENU)
+  assert.deepEqual(await menuRows(), ["@shellBudgets.cacheKeys", "@shellBudgets.capAudit", "@shellBudgets.cacheSweep"])
+  await page!.type(BOX, "che")
+  await page!.waitForFunction((sel) => document.querySelectorAll(`${sel} button`).length === 2, {}, MENU)
+  assert.deepEqual(await directoryRequests(), ["shell-budgets"], "typing on reads the one answer the dot fetched")
+  await page!.keyboard.press("Enter")
+  assert.equal(await boxValue(), "ask @shellBudgets.cacheKeys ", "completes to the whole address, then one space")
+  await waitForCaretAt("ask @shellBudgets.cacheKeys ".length)
+  // A thread with no directory entries: the dot closes the menu rather than offering nothing.
+  await page!.type(BOX, "and @arkTypePerf.")
+  await page!.waitForFunction(() => (window as unknown as { __directoryRequests: string[] }).__directoryRequests.includes("arktype-perf"))
+  assert.equal(await menuVisible(), false)
+  assert.deepEqual(errors, [], `no page errors: ${errors.join(" | ")}`)
+})
+
+test("a sent @thread.child opens that sub-agent's drawer; an unknown child opens its thread", {
+  skip: !baseUrl,
+  timeout: 150_000,
+}, async () => {
+  await open()
+  const links = await page!.$$eval("[data-mention-bubble-sub] a[data-thread-mention]", (as) => as.map((a) => [a.textContent, a.getAttribute("data-subagent-mention")]))
+  assert.deepEqual(links, [
+    ["@shellBudgets.cacheKeys", "shellBudgets.cacheKeys"],
+    ["@ShellBudget.capAudit", "ShellBudget.capAudit"],
+    ["@shellBudgets.nothing", "shellBudgets.nothing"],
+  ], "the sentence's full stop after capAudit is not part of the link")
+  // The fixture mounts no drawer stack, so each open replaces the top layer; read the top one.
+  const openedBy = async (mention: string): Promise<string | undefined> => {
+    // The click fetches the directory before it opens anything, so wait for the stack to move — read
+    // BEFORE the click, since a cached answer can open the drawer before the next line runs.
+    const before = await page!.evaluate(() => JSON.stringify((window as unknown as { __drawers: () => string[] }).__drawers()))
+    await page!.click(`[data-mention-bubble-sub] a[data-subagent-mention="${mention}"]`)
+    await page!.waitForFunction((was) => JSON.stringify((window as unknown as { __drawers: () => string[] }).__drawers()) !== was, {}, before)
+    return page!.evaluate(() => (window as unknown as { __drawers: () => string[] }).__drawers().at(-1))
+  }
+  assert.equal(await openedBy("shellBudgets.cacheKeys"), "subagent:shell-budgets:toolu_keys")
+  assert.equal(await openedBy("ShellBudget.capAudit"), "subagent:shell-budgets:toolu_audit", "a returned child, found by its folded address")
+  assert.equal(await openedBy("shellBudgets.nothing"), "thread:shell-budgets", "no such child: its thread opens instead")
+  assert.deepEqual(await directoryRequests(), ["shell-budgets"], "three clicks, one fetch")
+  assert.deepEqual(errors, [], `no page errors: ${errors.join(" | ")}`)
+})

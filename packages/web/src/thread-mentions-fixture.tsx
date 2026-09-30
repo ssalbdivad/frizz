@@ -16,6 +16,12 @@ import "./styles.css"
 // here is the real component on a stubbed board.
 //
 //   /thread-mentions-fixture.html?draft=ask%20%40b   — types the draft into the box, caret at its end
+//   /thread-mentions-fixture.html?draft=%40shellBudgets.   — the thread's SUB-AGENTS after the dot
+//
+// `shell-budgets` has a stubbed `subAgentDirectory` (every child it ever dispatched: two live, one under
+// a Workflow, one sentence-named and so unaddressable, two returned), so `@shellBudgets.` completes its
+// children and `@shellBudgets.cacheKeys` in a message opens one. `window.__directoryRequests` counts the
+// fetches, so a test can prove typing on does not refetch per keystroke.
 //
 // Sans only: `data-font="sans"` is on <html>, the one font the product renders.
 document.documentElement.dataset.font = "sans"
@@ -39,10 +45,36 @@ const threads = [
 ]
 store.board = { threads, projectSlug: "frizz" } as unknown as BoardSnapshot
 
+const minutesAgo = (m: number) => new Date(Date.now() - m * 60_000).toISOString()
+const DIRECTORY = {
+  threadHandle: "shellBudgets",
+  agents: [
+    { id: "toolu_keys", label: "Cache keys", address: "shellBudgets.cacheKeys", depth: 1, state: "running", startedAt: minutesAgo(12), subagentType: "frizz:opus-high" },
+    { id: "toolu_wave", label: "wave2", address: "shellBudgets.wave2", depth: 1, state: "running", workflow: true, startedAt: minutesAgo(30) },
+    { id: "wave2:impl-w3", label: "impl:W3", address: "shellBudgets.wave2.implW3", parentId: "toolu_wave", depth: 2, state: "stale", startedAt: minutesAgo(40) },
+    { id: "toolu_sentence", label: "Look at every call site of the cap and report back", depth: 1, state: "running", startedAt: minutesAgo(5) },
+    { id: "toolu_audit", label: "Cap audit", address: "shellBudgets.capAudit", depth: 1, state: "done", outcome: "completed", startedAt: minutesAgo(300), finishedAt: minutesAgo(180) },
+    { id: "toolu_sweep", label: "Cache sweep", address: "shellBudgets.cacheSweep", depth: 1, state: "done", outcome: "failed", startedAt: minutesAgo(3000), finishedAt: minutesAgo(2880) },
+  ],
+}
+const directoryRequests: string[] = []
+;(window as unknown as { __directoryRequests: string[] }).__directoryRequests = directoryRequests
+const nativeFetch = window.fetch.bind(window)
+window.fetch = async (input, init) => {
+  const url = new URL(typeof input === "string" ? input : input instanceof Request ? input.url : input.toString(), window.location.origin)
+  if (url.pathname.endsWith("/rpc/subAgentDirectory")) {
+    const slug = (JSON.parse(url.searchParams.get("input") ?? "{}") as { slug?: string }).slug ?? ""
+    directoryRequests.push(slug)
+    const result = slug === "shell-budgets" ? DIRECTORY : { threadHandle: undefined, agents: [] }
+    return new Response(JSON.stringify({ result }), { status: 200, headers: { "content-type": "application/json" } })
+  }
+  return nativeFetch(input, init)
+}
+
 const hooks = { submitted: [] as string[], value: "" }
 ;(window as unknown as { __mentions: typeof hooks }).__mentions = hooks
-// The drawer stack a mention click pushes, for the e2e to read.
-;(window as unknown as { __drawers: () => string[] }).__drawers = () => store.drawers.map((d) => `${d.kind}:${d.slug}`)
+// The drawer stack a mention click pushes, for the e2e to read (a sub-agent layer adds its child's id).
+;(window as unknown as { __drawers: () => string[] }).__drawers = () => store.drawers.map((d) => (d.subId ? `${d.kind}:${d.slug}:${d.subId}` : `${d.kind}:${d.slug}`))
 
 function Box() {
   const [value, setValue] = useState("")
@@ -86,6 +118,9 @@ createRoot(document.getElementById("root")!).render(
           <MentionIndexProvider>
             <div data-mention-bubble className="ml-auto max-w-[420px] rounded-2xl rounded-br-sm bg-user-bubble px-3.5 py-3 text-[14px] whitespace-pre-wrap text-user-bubble-fg">
               <LinkifiedText text={"Ask @shellBudgets about this, and reconcile with @focusMode. @nobody stays text."} />
+            </div>
+            <div data-mention-bubble-sub className="ml-auto mt-3 max-w-[420px] rounded-2xl rounded-br-sm bg-user-bubble px-3.5 py-3 text-[14px] whitespace-pre-wrap text-user-bubble-fg">
+              <LinkifiedText text={"Compare @shellBudgets.cacheKeys with @ShellBudget.capAudit. @shellBudgets.nothing opens the thread."} />
             </div>
           </MentionIndexProvider>
           <Box />
