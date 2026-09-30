@@ -237,10 +237,13 @@ export function ChildOpRow({
     </>
   )
 
-  // SHRINK PRIORITY on the two prompt-box densities: the label is the child's IDENTITY (and the
-  // drill-in target), so it keeps its natural width up to 60% of the row and the current step absorbs
-  // whatever is left. Letting both shrink proportionally crushed the label to "Inspe…" the moment a
-  // step arrived, which inverted the reading — you could see what some child was doing but not which.
+  // SHRINK PRIORITY on the two prompt-box densities: the label is the child's IDENTITY (and the drill-in
+  // target), so it keeps its natural width and truncates only when the row cannot hold it; the readings
+  // are `shrink-0`. It was capped at 60% of the row while a current STEP shared the line and absorbed the
+  // rest — letting both shrink proportionally crushed the label to "Inspe…" the moment a step arrived.
+  // The step has since left the row, and the cap outlived it: at 390px it cut `Audit the ops strip…` with
+  // ~88px blank before its age, directly above TERM rows that use the full width in the same label column
+  // (ThreadTerminals ProcessRow, whose own 70% cap went the same way).
   const rowClass = rail
     // The rail's 26px INDENT stays on the identity element, not on the row wrapper: it is the gutter
     // that clears the parent thread row's indicator column, and it has always been part of the click
@@ -250,7 +253,7 @@ export function ChildOpRow({
     // `overflow-hidden` is load-bearing at a narrow width: the arrow/dot/kind tag inside are shrink-0,
     // so once the row runs out of room the button's own content used to SPILL and the × landed on top
     // of the "AGENT" tag. Clipping keeps the collapse graceful. The ring goes inset to survive it.
-    : `group flex min-w-0 max-w-[60%] items-center gap-1.5 overflow-hidden text-left text-[11.5px] ${clickable ? "cursor-pointer rounded-sm outline-none transition-colors focus-visible:ring-1 focus-visible:ring-inset focus-visible:ring-focus-ink-60" : ""}`
+    : `group flex min-w-0 items-center gap-1.5 overflow-hidden text-left text-[11.5px] ${clickable ? "cursor-pointer rounded-sm outline-none transition-colors focus-visible:ring-1 focus-visible:ring-inset focus-visible:ring-focus-ink-60" : ""}`
 
   // The rail indents with PADDING, not margin: a margin would carve the row wrapper's full-width hover
   // highlight back on every nested row. The two prompt-box densities have no such highlight, so they
