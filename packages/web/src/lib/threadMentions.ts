@@ -1,4 +1,4 @@
-import { addressSegments, SUB_AGENT_SEPARATOR, sectionOf, type ProjectQueue, type SubAgentDirectory, type SubAgentDirectoryEntry, type ThreadView } from "@frizz/shared"
+import { addressSegments, SUB_AGENT_SEPARATOR, sectionOf, threadHandle, type ProjectQueue, type SubAgentDirectory, type SubAgentDirectoryEntry, type ThreadView } from "@frizz/shared"
 import { orderByInteraction, threadHandleOf } from "../groups.ts"
 import { compactAge } from "./activityTime.ts"
 import { formatCompactElapsed } from "./durationLabels.ts"
@@ -23,6 +23,10 @@ export interface MentionCandidate {
   /** Set on a thread of ANOTHER project than the one the prompt box writes into (All projects,
    *  crossProjectMentionCandidates): whose it is, to show in the menu and to open it in place. */
   project?: { slug: string; name: string }
+  /** The handles of names the thread carried before its current one (ThreadView.formerTitles). A
+   *  mention written under one still resolves (resolveMention), after every current handle; the
+   *  typeahead never offers one. */
+  formerHandles?: string[]
 }
 
 /** How many done threads the typeahead offers: the recent ones a message plausibly means, the same
@@ -43,7 +47,11 @@ export function mentionCandidates(threads: readonly ThreadView[], excludeSlug?: 
     if (section === null) continue
     const handle = threadHandleOf(t)
     if (!handle) continue
-    const candidate = { slug: t.id, handle, status: t.statusLine?.trim() || undefined, done: section === "inactive" }
+    const formerHandles = (t.formerTitles ?? []).flatMap((title) => threadHandle(title) ?? []).filter((h) => h !== handle)
+    const candidate: MentionCandidate = {
+      slug: t.id, handle, status: t.statusLine?.trim() || undefined, done: section === "inactive",
+      ...(formerHandles.length ? { formerHandles } : {}),
+    }
     if (candidate.done) done.push(candidate)
     else open.push(candidate)
   }
@@ -203,10 +211,14 @@ export function foldAddress(address: string): string {
   return addressSegments(address).map(foldHandle).join(SUB_AGENT_SEPARATOR)
 }
 
-/** The directory entry a `thread.child` mention names, by the folded address, or undefined. */
+/** The directory entry a `thread.child` mention names, by the folded address BELOW its thread, or
+ *  undefined. The thread segment is not compared: the directory is already that thread's, found by the
+ *  mention resolving it — possibly by a name it carried before a rename, which no current address has. */
 export function resolveSubAgentMention(directory: SubAgentDirectory, mention: string): SubAgentDirectoryEntry | undefined {
-  const key = foldAddress(mention)
-  return directory.agents.find((entry) => entry.address !== undefined && foldAddress(entry.address) === key)
+  const below = (address: string) => foldAddress(addressSegments(address).slice(1).join(SUB_AGENT_SEPARATOR))
+  const key = below(mention)
+  if (!key) return undefined
+  return directory.agents.find((entry) => entry.address !== undefined && below(entry.address) === key)
 }
 
 /** Complete the mention at `start` to `@handle`, replacing what was typed of it (including any part of
@@ -222,11 +234,12 @@ export function insertMention(prose: string, start: number, caret: number, handl
   return { prose: next, caret: start + 1 + handle.length + 1 }
 }
 
-/** The thread a mention names, by the same fold the server resolves it with, or undefined. */
+/** The thread a mention names, by the same fold the server resolves it with, or undefined. A current
+ *  handle wins over a former one, so a name another thread has since taken means that thread. */
 export function resolveMention(candidates: readonly MentionCandidate[], mention: string): MentionCandidate | undefined {
   const key = foldHandle(mention)
   if (!key) return undefined
-  return candidates.find((c) => foldHandle(c.handle) === key)
+  return candidates.find((c) => foldHandle(c.handle) === key) ?? candidates.find((c) => c.formerHandles?.some((h) => foldHandle(h) === key))
 }
 
 /** A mention segment names a thread by `slug`; a `@thread.child` one also carries the child's

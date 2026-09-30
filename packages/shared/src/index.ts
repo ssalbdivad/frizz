@@ -3178,6 +3178,11 @@ export const ThreadView = z.object({
   // treating any non-guessed title as the human's. The server enforces this too by withholding aiTitle
   // from a locked row; the client keeps its own copy so a stale record can never win on either side.
   titleLocked: z.boolean().optional(),
+  // The NAMES this thread has carried before its current one, oldest first (storage.ts
+  // session_former_titles trigger). Prose written under an old name keeps linking: a worker told its
+  // sub-agent is `@donePersistence.doneRepro` a second before it renamed the thread "Done reappears"
+  // still wrote that address in every handoff after. Resolved only, never offered in the typeahead.
+  formerTitles: z.array(z.string()).optional(),
   // Live background sub-agents the worker dispatched (tailer-derived). Defaults to [] so an old
   // snapshot/row (or a pre-restart server that doesn't emit the field yet) parses without breaking.
   subAgents: z.array(SubAgentView).default([]),

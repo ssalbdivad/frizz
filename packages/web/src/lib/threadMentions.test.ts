@@ -1,6 +1,7 @@
 import { test } from "node:test"
 import assert from "node:assert/strict"
 import type { ProjectQueue, SubAgentDirectory, ThreadView } from "@frizz/shared"
+import { threadHandle } from "@frizz/shared"
 import {
   crossProjectMentionCandidates,
   foldAddress,
@@ -211,6 +212,20 @@ test("resolveSubAgentMention / foldAddress: a mention finds its directory entry 
   assert.equal(resolveSubAgentMention(directory, "shellBudgets.capAudit")?.id, "t3", "a returned child still resolves")
   assert.equal(resolveSubAgentMention(directory, "shellBudgets.implW3"), undefined, "an address skipping its Workflow names nothing")
   assert.equal(resolveSubAgentMention(directory, "shellBudgets.nothing"), undefined)
+})
+
+test("a thread's former names still resolve, after every current handle, and are never offered", () => {
+  const renamed = thread({ id: "r", title: "Done reappears", titleAuto: false, formerTitles: ["Done persistence", "A sentence far too long to ever be a handle"] })
+  const taken = thread({ id: "p", title: "Done persistence", titleAuto: false })
+  const all = mentionCandidates([renamed])
+  assert.deepEqual(all[0]?.formerHandles, [threadHandle("Done persistence")], "a sentence has no handle to keep")
+  assert.equal(resolveMention(all, "donePersistence")?.slug, "r")
+  assert.deepEqual(mentionSegments("Waiting on @donePersistence.doneRepro's reproduction", all).flatMap((s) => (s.kind === "mention" ? [[s.slug, s.address]] : [])), [["r", "donePersistence.doneRepro"]])
+  assert.equal(resolveMention(mentionCandidates([renamed, taken]), "donePersistence")?.slug, "p", "a thread that holds the name now wins")
+  assert.deepEqual(matchMentions(all, "persist"), [], "the typeahead offers current handles only")
+  // Its sub-agents' addresses are rebuilt under the new name; the old address still finds the child.
+  assert.equal(resolveSubAgentMention(directory, "anOldName.cacheKeys")?.id, "t1")
+  assert.equal(resolveSubAgentMention(directory, "shellBudgets"), undefined, "a bare thread names no child")
 })
 
 test("crossProjectMentionCandidates: other projects' threads, tagged, minus the box's project and handles it has", () => {

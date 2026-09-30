@@ -64,6 +64,9 @@ export interface SessionRow {
   // 2026-09-29): minted at dispatch, corrected once by the worker after orienting, and after that nothing
   // automatic changes it — so a second call is refused, and a re-dispatch over the slug clears this.
   title_worker_renamed?: number
+  // JSON array of the names `title` held before its current one, oldest first — appended by the
+  // session_former_titles trigger (ensureStorageSchema), never written by hand. NULL until a rename.
+  former_titles?: string | null
   // The thread's live STATUS: a short phrase of what is happening NOW, rewritten every 5th operator
   // message by periodic-status.ts. Never the name — the name is `title`, and stays put. NULL until the
   // first status lands; a re-dispatch clears it.
@@ -1545,6 +1548,8 @@ export function ensureStorageSchema(db: Database): void {
     "recurring_stop_reason TEXT", "recurring_stopped_at TEXT",
     // When the live status last changed — its elapsed clock (live-status.ts).
     "status_at TEXT",
+    // 2026-09-30: the names a thread carried before its current one (session_former_titles below).
+    "former_titles TEXT",
   ]) {
     try {
       db.exec(`ALTER TABLE session ADD COLUMN ${column}`)
@@ -1574,6 +1579,25 @@ export function ensureStorageSchema(db: Database): void {
       // duplicate column — the file already has it
     }
   }
+  // A THREAD'S FORMER NAMES (2026-09-30). A rename breaks every `@handle` and `@thread.child` already
+  // written under the old name — a worker told its sub-agent's address a second before it renamed the
+  // thread kept writing that address in every handoff, and none of them linked. So the old name is kept
+  // and mentions resolve it too (ThreadView.formerTitles). A TRIGGER rather than one more clause on each
+  // statement: five writers change `title` (human rename and its CAS, the Codex marker, Frizz's mint, the
+  // worker's own rename), and a sixth must not be able to forget. Only a NAME is kept: a dispatch guess
+  // (title_auto = 1 with no persisted name, title_agent = 0) is a chop of the prompt nobody addressed
+  // anything by. A re-dispatch over the slug is a new thread: it moves `session_id`, which the trigger
+  // skips, and its upsert clears the column.
+  db.exec(`
+    CREATE TRIGGER IF NOT EXISTS session_former_titles
+    AFTER UPDATE OF title ON session
+    WHEN OLD.title IS NOT NULL AND trim(OLD.title) <> '' AND NEW.title IS NOT OLD.title
+      AND NEW.session_id IS OLD.session_id AND (OLD.title_auto = 0 OR OLD.title_agent <> 0)
+    BEGIN
+      UPDATE session SET former_titles = json_insert(coalesce(former_titles, '[]'), '$[#]', OLD.title)
+      WHERE project_id = NEW.project_id AND slug = NEW.slug;
+    END
+  `)
   // THE 2026-09-29 RE-PARENTING. A command thread that predates it was started from the prompt box, so
   // nothing recorded which thread (if any) it went with: no row carries a parent to attach it to. The
   // only honest move is to file every such row away — it has nowhere to render now — and keep it, since
@@ -1707,6 +1731,7 @@ export function createStorage(source: string | Database, projectId: string): Sto
       title_agent = 0,
       -- Same reasoning: a fresh session gets its own one rename and has no status yet.
       title_worker_renamed = 0,
+      former_titles = NULL,
       status = NULL,
       status_at = NULL,
       snoozed_until = excluded.snoozed_until,

@@ -673,6 +673,23 @@ test("a worker's own title persists on either backend, and a human's rename refu
   assert.equal(sessionTitleLocked(s.getSession("still-open")!), false)
 })
 
+test("a rename keeps the names the thread carried before; a dispatch guess and a re-dispatch keep none", () => {
+  const s = store()
+  s.upsertSession(row({ slug: "renamed", session_id: "sid", title: "i keep marking threads as done…", title_auto: 1 }))
+  assert.equal(s.setMintedTitle("renamed", "sid", "Done persistence"), true)
+  assert.equal(s.getSession("renamed")?.former_titles ?? null, null, "the prompt chop was a guess, not a name anyone used")
+  assert.equal(s.setAgentTitle("renamed", "Done reappears"), true)
+  assert.deepEqual(JSON.parse(s.getSession("renamed")!.former_titles!), ["Done persistence"])
+  s.setTitle("renamed", "Done reappears")
+  assert.deepEqual(JSON.parse(s.getSession("renamed")!.former_titles!), ["Done persistence"], "rewriting the same text is no rename")
+  s.setTitle("renamed", "Done card")
+  assert.deepEqual(JSON.parse(s.getSession("renamed")!.former_titles!), ["Done persistence", "Done reappears"])
+
+  // A re-dispatch over the slug is a different thread: nothing it inherits was ever its name.
+  s.upsertSession(row({ slug: "renamed", session_id: "sid2", title: "a new prompt", title_auto: 1 }))
+  assert.equal(s.getSession("renamed")?.former_titles ?? null, null)
+})
+
 test("automatic title CAS persists provenance and rejects manual, native-session, generation, and replacement races", () => {
   const s = store()
   s.upsertSession(row({

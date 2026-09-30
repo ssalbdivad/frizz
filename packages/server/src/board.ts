@@ -1597,6 +1597,18 @@ export function resolveSessionTitle(
   }
 }
 
+/** The names a row carried before its current one (storage.ts session_former_titles), or none when the
+ *  column is empty or unreadable — a mention that stops resolving is the worst a bad value can cost. */
+export function parseFormerTitles(raw: string | null | undefined): string[] {
+  if (!raw) return []
+  try {
+    const parsed: unknown = JSON.parse(raw)
+    return Array.isArray(parsed) ? parsed.filter((t): t is string => typeof t === "string" && t.trim() !== "") : []
+  } catch {
+    return []
+  }
+}
+
 /** A registered completion as the ```done fence it replaces, or undefined when it no longer stands.
  *
  *  ITS LIFETIME IS "NOTHING NEWER HAS BEEN DONE FOR THE HUMAN". A fence is superseded the moment the
@@ -1881,9 +1893,11 @@ function sessionThreadView(
   const permissionMode = resolveSessionPermission(row, tele)
   const permissionPending = resolvePendingPermission(row)
   const title = resolveSessionTitle(row, tele)
+  const formerTitles = parseFormerTitles(row.former_titles)
   return {
     id: row.slug,
     ...title,
+    ...(formerTitles.length ? { formerTitles } : {}),
     // The live status line (periodic-status.ts) — what is happening now, beside a name that stays put.
     ...(row.status?.trim() ? { statusLine: row.status.trim(), ...(row.status_at ? { statusSince: row.status_at } : {}) } : {}),
     status: "active", // synthesized: the field is required but UNUSED for session rows (see note above)
