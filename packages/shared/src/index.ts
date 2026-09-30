@@ -3014,6 +3014,9 @@ export const ThreadView = z.object({
   // legacy .frizz-file lifecycle field, synthesized and unused for session rows; the registry column is
   // `session.status`.
   statusLine: z.string().optional(),
+  // When `statusLine` last CHANGED (ISO) — the start of the task it names. While the thread is working
+  // the status wears "for how long" off this (server live-status.ts); a write that keeps the text keeps it.
+  statusSince: z.string().optional(),
   // True when `title` is a machine-guessed dispatch slug (title_auto=1), NOT a real name — the display
   // then shows a "Spinning up a thread…" placeholder instead of the guess until aiTitle lands. Optional
   // (absent ⇒ legacy/slim row) so old snapshots parse; absent is treated as "not provisional".

@@ -33,6 +33,7 @@ import { RecurringPromptLine } from "./RecurringPromptLine.tsx"
 import { LinkifiedText } from "./LinkifiedText.tsx"
 import { parseSentContext, splitProseByTokens, tokenLabel, type SentContextItem } from "../lib/composerContext.ts"
 import { AnswersCard } from "./AnswersCard.tsx"
+import { MentionIndexProvider } from "./MentionLinks.tsx"
 import { WakeDivider } from "./WakeDivider.tsx"
 import { useLiveAnswering, type LiveAnswering } from "../lib/answering.ts"
 import { useIsMobile } from "../lib/mobile.ts"
@@ -218,7 +219,10 @@ export function ThreadView({ slug, onStatusApplied, onClose, virtualized = false
   return (
     <div className="flex-1 min-h-0 flex flex-col">
       <ThreadHeader slug={slug} onStatusApplied={onStatusApplied} onClose={onClose} showReturnToQueue={showReturnToQueue} />
-      <ChatView slug={slug} virtualized={virtualized} />
+      {/* `@handle` mentions in the human's messages link to the threads they name (MentionLinks.tsx). */}
+      <MentionIndexProvider>
+        <ChatView slug={slug} virtualized={virtualized} />
+      </MentionIndexProvider>
       {thread && <ThreadLifecycleFooter thread={thread} sticky safeArea onArchived={onStatusApplied} />}
     </div>
   )
@@ -1639,7 +1643,7 @@ export function ThreadHeader({ slug, onStatusApplied, onClose, showReturnToQueue
               lead={<span aria-hidden className="shrink-0 opacity-60">·</span>}
               className="min-w-0 truncate"
             />
-            <ThreadStatusLine status={thread.statusLine} lead={<span aria-hidden className="shrink-0 opacity-60">·</span>} />
+            <ThreadStatusLine thread={thread} lead={<span aria-hidden className="shrink-0 opacity-60">·</span>} />
             <SpunOffFrom thread={thread} lead={<span aria-hidden className="shrink-0 opacity-60">·</span>} />
           </div>
         </div>

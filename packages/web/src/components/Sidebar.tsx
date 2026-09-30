@@ -20,6 +20,7 @@ import { useThreadApi, useThreadIsForeignToPage, useThreadProjectDir, useThreadP
 import { formatAutoSnoozedUntil, formatUserSnooze } from "../lib/snooze.ts"
 import { SUBAGENTS_SNOOZE_TOAST } from "../lib/subAgentWait.ts"
 import { formatCompactElapsed } from "../lib/durationLabels.ts"
+import { statusElapsed } from "./ThreadStatusLine.tsx"
 import { awaitingProse, awaitingWaitClause } from "../lib/awaitingPresentation.ts"
 import { clearArchived } from "../lib/optimisticArchive.ts"
 import type { ReactElement, ReactNode } from "react"
@@ -98,10 +99,10 @@ export interface RowScope {
 
 // One row of a band: the thread, then its live sub-agents as rows of their own. A thread's TERMINALS get
 // no row (ThreadTerminals.tsx): one small mark after its title says one is running.
-export function RailRow({ t, active, open = false, restedAge = false, scope, cardKey }: { t: ThreadView; active: boolean; open?: boolean; restedAge?: boolean; scope: RowScope; cardKey?: string }) {
+export function RailRow({ t, active, open = false, restedAge = false, scope, cardKey, band }: { t: ThreadView; active: boolean; open?: boolean; restedAge?: boolean; scope: RowScope; cardKey?: string; band?: BandKey }) {
   return (
     <>
-      <ThreadRow t={t} active={active} open={open} restedAge={restedAge} scope={scope} cardKey={cardKey} />
+      <ThreadRow t={t} active={active} open={open} restedAge={restedAge} scope={scope} cardKey={cardKey} band={band} />
       <SubAgentRows t={t} scope={scope} />
     </>
   )
@@ -179,6 +180,7 @@ export const ThreadRow = memo(function ThreadRow({
   restedAge = false,
   scope,
   cardKey,
+  band,
 }: {
   t: ThreadView
   active?: boolean
@@ -191,6 +193,9 @@ export const ThreadRow = memo(function ThreadRow({
   /** A Ready row's card on Everything (`threadKey`) — what the thread across the gutter ties it to
    *  (ThreadConnector). */
   cardKey?: string
+  /** The band the list drew this row in, as `data-xq-band` — Ready and Working carry no name over their
+   *  rows (ProjectList.tsx), so this is how a script tells them apart. */
+  band?: BandKey
 }) {
   const foreign = t.foreign === true
   // Snoozed rows are uniformly grayed as a whole; provisional titles retain their local dim treatment.
@@ -247,6 +252,7 @@ export const ThreadRow = memo(function ThreadRow({
       // Strung on its project's cord at its indicator, card or none (ThreadConnector).
       data-xq-thread-row
       data-xq-rail-row={cardKey}
+      data-xq-band={band}
       className={`group relative flex min-w-0 items-start rounded-md transition-[color,opacity] ${rowWashClass(open)} ${dim ? "sidebar-row-dim" : ""}`}
     >
       {/* The reading position owns a real, in-row rail rather than borrowing the status-icon column.
@@ -654,7 +660,10 @@ export function ThreadIndicator({ t }: { t: ThreadView }) {
   const { node, tip: stateTip } = sessionIndicatorFor(t)
   // The thread's live STATUS rides this tooltip, under the state — the rail's one hover of detail, never
   // a second line on the row (see "A ROW IS ITS TITLE" above, and ThreadStatusLine.tsx).
-  const status = t.statusLine?.trim()
+  // While it works, the task's clock rides with it (ThreadStatusLine statusElapsed).
+  const nowMs = useNowMs()
+  const elapsed = statusElapsed(t, nowMs)
+  const status = t.statusLine?.trim() && (elapsed ? `${t.statusLine.trim()} · ${elapsed}` : t.statusLine.trim())
   const tip = status ? (stateTip ? `${stateTip}\n${status}` : status) : stateTip
   // The resolved kind, on the shipped markup. Cheap, and it is what lets the rail's own glyphs be
   // measured where they actually render (scripts/verify-rail-status-glyphs.mjs holds the family to one

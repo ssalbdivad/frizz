@@ -1836,7 +1836,7 @@ function sessionThreadView(
     id: row.slug,
     ...title,
     // The live status line (periodic-status.ts) — what is happening now, beside a name that stays put.
-    ...(row.status?.trim() ? { statusLine: row.status.trim() } : {}),
+    ...(row.status?.trim() ? { statusLine: row.status.trim(), ...(row.status_at ? { statusSince: row.status_at } : {}) } : {}),
     status: "active", // synthesized: the field is required but UNUSED for session rows (see note above)
     hasPlan: false,
     mechanism: null,
