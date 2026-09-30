@@ -117,7 +117,8 @@ export interface LiveStatusDeps {
   storage: Pick<Storage, "getSession" | "setStatus">
   /** The model. Absent ⇒ no working status is ever written. */
   complete?: ClaudeOneShot
-  readMessages: (sessionId: string) => TranscriptMessage[]
+  /** `forkAnchor` is the row's SessionRow.fork_anchor — a forked thread is read from its fork point. */
+  readMessages: (sessionId: string, forkAnchor?: string | null) => TranscriptMessage[]
   onStatus: () => void
   onError?: (slug: string, error: unknown) => void
   now?: () => number
@@ -181,7 +182,7 @@ export function createLiveStatus(deps: LiveStatusDeps): LiveStatus {
       }
       if (st.inFlight || at < st.nextCheckAt) return
       st.nextCheckAt = at + intervalMs
-      const read = liveActivity(deps.readMessages(row.session_id))
+      const read = liveActivity(deps.readMessages(row.session_id, row.fork_anchor))
       if (!read) return
       const resumes = st.wroteThisTurn || (st.turnEndedAt !== undefined && st.turnStartedAt - st.turnEndedAt < RESUME_GAP_MS)
       const current = resumes ? st.last : undefined

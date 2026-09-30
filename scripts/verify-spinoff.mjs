@@ -1,6 +1,11 @@
 #!/usr/bin/env node
 // verify-spinoff.mjs — a SPINOFF, end to end, on a REAL Frizz with REAL Claude workers.
 //
+// SINCE 2026-09-30 A CLAUDE PARENT IS FORKED, not briefed — that route is scripts/verify-spinoff-fork.ts.
+// This script drives the BRIEF route (the side turn, the parent's brief as the child's context), which is
+// now what Codex/ACP parents, cross-project spinoffs and a parent with no transcript yet take; against a
+// Claude parent as written below its brief assertions (section 2) fail by design.
+//
 // What it proves (the human's Spinoff button → the `spinoff` RPC → the parent worker's side turn →
 // `spawn_thread` → the child's dispatch → the tailer, board and chat projection at both ends):
 //   1. PARENT AT REST ON A DONE CARD: the spinoff starts a child, and the parent comes back EXACTLY as it

@@ -156,6 +156,7 @@ import {
   SpinoffInput,
   SpinoffResult,
   spinoffChildPrompt,
+  spinoffForkPrompt,
   spinoffNameSource,
   spinoffRequestMessage,
 } from "@frizz/shared"
@@ -1851,6 +1852,72 @@ export function createRouter(ctx: AppContext) {
     }
   }
 
+  // THE CLAUDE SPINOFF ROUTE: FORK THE PARENT (maintainer 2026-09-30). The brief route below hands the
+  // request to the parent's own worker, which writes a cold start for the new thread and dispatches it —
+  // an errand run INSIDE the parent's conversation, which is why ~800 lines exist to keep that side turn
+  // out of the parent's chat, rest and queue place (spinoff-side-turn.ts, spinoff-edge-recovery.ts). On a
+  // Claude thread the new thread instead starts as a FORK of the parent's session: it continues the
+  // parent's whole conversation, then the human's instructions. Measured over 18 graded handoffs
+  // (Opus, 118k-235k-token parents), the fork matched the brief on correctness and scope in every run,
+  // cost the same (the child reads the parent's prompt cache) and was ~1.1-2x faster, because nothing
+  // waits on the parent to finish its turn and write a brief. And the parent is never touched: no
+  // message reaches it, so a running turn runs on, and a rested one keeps its handoff, its unread and
+  // its place in the queue exactly as they were.
+  //
+  // What stays the brief route, and why:
+  //   • Codex and ACP threads — nothing here can fork their sessions.
+  //   • A CROSS-PROJECT spinoff. The Claude CLI finds a session to fork from any cwd (measured on 2.1.284),
+  //     but the conversation it would copy is full of paths relative to ANOTHER checkout, the target's
+  //     tool surface differs so the fork would not read the parent's cache anyway, and the brief route
+  //     already tells the worker to write for a different checkout (spinoffRequestMessage).
+  //   • A parent with no transcript on disk yet — there is nothing to fork; the brief queues behind its
+  //     first turn like any message.
+  function forkSource(parent: SessionRow, target: AppContext | undefined): string | undefined {
+    if (target || !isBrokerClaudeRow(parent)) return undefined
+    const source = threadTranscriptSource(ctx.project, ctx.storage, parent.slug, ctx.backendFor)
+    try {
+      if (!source || statSync(source.path).size === 0) return undefined
+    } catch {
+      return undefined
+    }
+    // The session the file IS: the pinned id, or the drifted one a legacy row was re-linked to.
+    return source.nativeId
+  }
+
+  async function forkSpinoff(parent: SessionRow, fromSessionId: string, instructions: string): Promise<{ id: string }> {
+    const named = threadNamer().threads().find((t) => t.slug === parent.slug)
+    const prompt = spinoffForkPrompt({
+      parentSlug: parent.slug,
+      parentTitle: parent.title || parent.slug,
+      ...(named ? { parentHandle: handleOf(named) } : {}),
+      instructions,
+    })
+    // THE PARENT'S PROFILE, not the operator's saved one: a prompt cache is per model, and reading the
+    // parent's is half of why the fork is cheap. The effort rides along because it is the same
+    // conversation's, and a stale value the model no longer accepts is dropped rather than refused.
+    const effort = Settings.shape.effort.safeParse(parent.effort ?? undefined)
+    const result = await ctx.dispatcher.dispatch(
+      {
+        prompt,
+        ...(parent.model ? { model: parent.model } : {}),
+        ...(effort.success && effort.data !== undefined ? { effort: effort.data } : {}),
+      },
+      // Named from the human's words — the prompt opens on Frizz's "A spinoff of @parent…" boilerplate.
+      { backend: "claude", nameSource: spinoffNameSource({ instructions, brief: "" }), fork: { sessionId: fromSessionId } },
+    )
+    // The edge is written only once the child exists, and complete from birth: a forked request is never
+    // pending, so nothing ever reads the parent's transcript looking for its answer.
+    const id = `spn_${randomBytes(8).toString("hex")}`
+    const now = Date.now()
+    ctx.storage.insertSpinoff({ id, parentSlug: parent.slug, instructions, createdAtMs: now, forked: true })
+    ctx.storage.completeSpinoff(id, result.slug, now)
+    ctx.board.refresh()
+    // The parent's transcript did not move, so nothing else would re-push its chat — and the request card
+    // there is drawn from the row just written (transcript.ts withForkedSpinoffRequests).
+    ctx.transcriptChange.emit([parent.slug])
+    return { id }
+  }
+
   const router = {
     board: query({
       output: BoardSnapshot,
@@ -2315,8 +2382,10 @@ export function createRouter(ctx: AppContext) {
       input: SpinoffInput,
       output: SpinoffResult,
       handler: async ({ input }) => {
-        currentOwnedSession(input.slug, input.sessionId)
+        const parent = currentOwnedSession(input.slug, input.sessionId)
         const target = spinoffTarget(input.project)
+        const from = forkSource(parent, target)
+        if (from) return forkSpinoff(parent, from, input.instructions)
         const id = `spn_${randomBytes(8).toString("hex")}`
         ctx.storage.insertSpinoff({
           id, parentSlug: input.slug, instructions: input.instructions, createdAtMs: Date.now(),
@@ -4388,7 +4457,7 @@ export function createRouter(ctx: AppContext) {
         // brief, the same text its dispatch minted its name from (spinoffNameSource). The whole
         // projection goes through withSpinoffChildOrigin first, so a legacy child whose prompt predates
         // the framing is named from its row's instructions and its raw brief the same way.
-        const opening = withSpinoffChildOrigin(readTranscript(ctx.project, row.session_id), ctx.storage, input.slug, true)
+        const opening = withSpinoffChildOrigin(readTranscript(ctx.project, row.session_id, row.fork_anchor), ctx.storage, input.slug, true)
           .find((m) => m.role === "user")
         const description = (opening?.spinoffOrigin && spinoffNameSource(opening.spinoffOrigin)) ||
           opening?.displayText?.trim() || opening?.text?.trim() || row.title?.trim() || input.slug

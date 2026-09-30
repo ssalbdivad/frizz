@@ -218,6 +218,8 @@ export interface ForkBrokerOptions {
   effort?: string
   /** Resume the on-disk session instead of starting fresh (dead-daemon follow-up cold start). */
   resume?: boolean
+  /** Fork this session into `sessionId` on first start — see ClaudeBrokerConfig.forkFrom. */
+  forkFrom?: string
   /** The frizz worker environment (plugin + MCP + per-thread frizz vars) — see ClaudeBrokerConfig. */
   pluginDir?: string
   mcpServers?: WorkerMcpServers
@@ -242,6 +244,7 @@ export function forkBroker(options: ForkBrokerOptions): Promise<BrokerRecord> {
     diagnosticLogPath: claudeBrokerDiagnosticLogPath(options.stateDir, options.sessionId),
     appendSystemPrompt: options.appendSystemPrompt, model: options.model, effort: options.effort,
     resume: options.resume,
+    ...(options.forkFrom ? { forkFrom: options.forkFrom } : {}),
     pluginDir: options.pluginDir, mcpServers: options.mcpServers, allowedTools: options.allowedTools,
     workerEnv: options.workerEnv,
   }

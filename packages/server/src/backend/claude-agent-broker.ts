@@ -55,6 +55,11 @@ export interface ClaudeBrokerConfig {
   /** Resume the session from its on-disk transcript instead of starting a fresh one. Set when a
    *  follow-up cold-starts a daemon after the previous one died (the live-daemon reconnect never forks). */
   resume?: boolean
+  /** Start `sessionId` as a FORK of this session: a new session that opens on a copy of that one's
+   *  conversation (the Claude spinoff route, router.ts forkSpinoff). Only a first start forks — a cold
+   *  start after a death sets `resume` on the child's own id, which wins, because by then the child's own
+   *  transcript holds the copy and everything after it. */
+  forkFrom?: string
   /** The frizz WORKER ENVIRONMENT — the SDK equivalents of the argv path's --plugin-dir/--mcp-config
    *  injection. Without these a broker worker is bare: no frizz sub-agent profiles, no frizz MCP,
    *  no cc-worker hooks. `pluginDir` loads the local cc-worker plugin; `mcpServers`/`allowedTools` mount + pre-approve
@@ -168,7 +173,11 @@ export function runClaudeBroker(config: ClaudeBrokerConfig): RunningBroker {
   const env = { ...inheritWorkerEnvironment(config.env), ...(config.workerEnv ?? {}) }
   const handle = factory.start({
     cwd: config.cwd,
-    session: config.resume ? { kind: "resume", sessionId: config.sessionId } : { kind: "new", sessionId: config.sessionId },
+    session: config.resume
+      ? { kind: "resume", sessionId: config.sessionId }
+      : config.forkFrom
+        ? { kind: "fork", sessionId: config.sessionId, from: config.forkFrom }
+        : { kind: "new", sessionId: config.sessionId },
     permissionMode: config.permissionMode ?? "default",
     env,
     persistSession: true, // write the tailer-readable transcript JSONL
@@ -236,6 +245,10 @@ export function runClaudeBroker(config: ClaudeBrokerConfig): RunningBroker {
   // a transcript that already carries its title, and a follow-up must never rename the thread.
   // Deliberately not awaited by the caller (a title must never delay the turn) but tracked here so a
   // failure is a diagnostic rather than an unhandled rejection.
+  //
+  // A FORK is a session this daemon started, so its first input titles it too — and that title is what
+  // replaces the parent's `ai-title` the fork copied into the child's file (the tailer ignores the copy
+  // wherever the CLI re-appends it: fork-point.ts).
   let titleSeeded = config.resume === true
   const seedSessionTitle = (message: ClaudeInputMessage): void => {
     if (titleSeeded) return

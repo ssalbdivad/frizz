@@ -58,8 +58,10 @@ const WINDOW_BYTES = 4 * 1024 * 1024
 
 export interface SpinoffEdgeRecoveryDeps {
   storage: Pick<Storage, "pendingSpinoffs" | "completeSpinoff" | "getSession" | "spinoffOfChild">
-  /** A thread's transcript file and the line parser of the backend that wrote it; undefined when it has none. */
-  transcriptOf(slug: string): { path: string; parseLine: (line: string) => NormalizedEvent[] } | undefined
+  /** A thread's transcript file and the line parser of the backend that wrote it; undefined when it has none.
+   *  `start` is where the thread's OWN transcript begins: a forked thread's file opens on a copy of its
+   *  parent's conversation (fork-point.ts), whose spinoff calls answer the PARENT's requests, not its own. */
+  transcriptOf(slug: string): { path: string; start?: number; parseLine: (line: string) => NormalizedEvent[] } | undefined
   /** Called once per stamped edge (the board refresh). */
   onRepaired?: (row: ThreadSpinoffRow, childSlug: string) => void
   now?: () => number
@@ -128,7 +130,7 @@ export function createSpinoffEdgeRecovery(deps: SpinoffEdgeRecoveryDeps): Spinof
     if (!source) return false
     let cursor = cursors.get(parent)
     if (!cursor || cursor.path !== source.path) {
-      cursor = { path: source.path, offset: 0, carry: Buffer.alloc(0), caughtUp: false, calls: new Map() }
+      cursor = { path: source.path, offset: source.start ?? 0, carry: Buffer.alloc(0), caughtUp: false, calls: new Map() }
       cursors.set(parent, cursor)
     }
     let size: number
@@ -139,7 +141,7 @@ export function createSpinoffEdgeRecovery(deps: SpinoffEdgeRecoveryDeps): Spinof
     }
     if (size < cursor.offset) {
       // Truncated or replaced: whatever was read belongs to a file that no longer exists.
-      cursor.offset = 0
+      cursor.offset = source.start !== undefined && source.start <= size ? source.start : 0
       cursor.carry = Buffer.alloc(0)
       cursor.calls.clear()
     }

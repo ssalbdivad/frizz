@@ -3,6 +3,11 @@ import type { FoldState, NormalizedEvent } from "./backend/types.ts"
 
 // THE SPINOFF SIDE TURN (2026-09-30).
 //
+// SCOPE, SINCE THE SAME EVENING: only the BRIEF route has a side turn. A spinoff from a Claude thread now
+// forks the parent's session instead (router.ts forkSpinoff) and sends the parent nothing, so none of what
+// follows happens to it. What still reaches this module is a Codex or ACP parent, a cross-project spinoff,
+// a Claude parent with no transcript yet — and every transcript written before the change.
+//
 // A spinoff request reaches the parent's worker as a message (router.ts `spinoff`), and the worker answers
 // it with one `spawn_thread` call. When the worker was AT REST, that answer used to be an ordinary turn of
 // the parent's conversation, and everything a turn does followed from it: the request cleared the rest's

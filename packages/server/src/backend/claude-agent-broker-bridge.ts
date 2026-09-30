@@ -126,6 +126,13 @@ export interface ClaudeSpawnDispatchInput {
   appendSystemPrompt?: string
   model?: string
   effort?: string
+  /** Start this thread as a FORK of that session (the Claude spinoff route): the new session opens on a
+   *  copy of its conversation. See ClaudeBrokerConfig.forkFrom. */
+  forkFrom?: string
+  /** The uuid the opening prompt is sent under, when the caller must find that record again. The CLI
+   *  echoes it as the record's `uuid`, which is how a forked thread's reader finds where the thread's
+   *  OWN transcript begins below the copied history (session.fork_anchor, fork-point.ts). */
+  inputId?: string
 }
 
 // The uuid to hand the SDK for one input. frizz's own deliveryId when it is UUID-shaped (the browser
@@ -142,7 +149,7 @@ function inputIdFor(deliveryId: string | undefined): string {
 
 // Options that shape a FORK (only consulted when attach cold-starts a daemon; ignored when it reattaches
 // to a live one — the running session already carries them). `resume` picks up the on-disk transcript.
-type ForkOpts = Pick<ClaudeSpawnDispatchInput, "appendSystemPrompt" | "model" | "effort"> & { resume?: boolean }
+type ForkOpts = Pick<ClaudeSpawnDispatchInput, "appendSystemPrompt" | "model" | "effort" | "forkFrom"> & { resume?: boolean }
 
 
 interface ActiveSession { slug: string; sessionId: string; cwd: string; generation: string; client: ClaudeBrokerClient }
@@ -592,8 +599,11 @@ export function createClaudeAgentBrokerBridge(deps: ClaudeBrokerBridgeDeps): Cla
       // VALIDATED BEFORE THE SOCKET, for the reason spelled out on followUp below: a frame the daemon
       // refuses is discarded there with nobody to tell, and for a DISPATCH that means a worker that
       // boots, receives no task at all, and sits idle looking frozen from birth.
-      const message = validatedInput({ id: randomUUID(), text: input.prompt })
-      const session = await attach(input.threadSlug, input.sessionId, input.cwd, input.permissionMode ?? "default", { appendSystemPrompt: input.appendSystemPrompt, model: input.model, effort: input.effort })
+      const message = validatedInput({ id: input.inputId ?? randomUUID(), text: input.prompt })
+      const session = await attach(input.threadSlug, input.sessionId, input.cwd, input.permissionMode ?? "default", {
+        appendSystemPrompt: input.appendSystemPrompt, model: input.model, effort: input.effort,
+        ...(input.forkFrom ? { forkFrom: input.forkFrom } : {}),
+      })
       session.client.sendInput(message)
       return { binding: { threadSlug: input.threadSlug, sessionId: input.sessionId, cwd: input.cwd, generation: session.generation, state: "active" } }
     },
