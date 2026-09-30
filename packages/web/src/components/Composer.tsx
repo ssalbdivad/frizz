@@ -10,7 +10,8 @@ import { RAIL_ACTION_OFFSET, RAIL_PAPERCLIP_OFFSET, RAIL_PAPERCLIP_PLAIN_OFFSET,
 import { apiBase } from "../lib/base-path.ts"
 import { localImageUrl } from "../lib/markdownTargets.ts"
 import { basename } from "../lib/paths.ts"
-import { insertMention, matchMentions, mentionQueryAt, type MentionCandidate } from "../lib/threadMentions.ts"
+import { insertMention, matchMentions, mentionQueryAt, resolveMention, splitMentionQuery, subAgentMentionCandidates, type MentionCandidate } from "../lib/threadMentions.ts"
+import { useSubAgentDirectory } from "../hooks/useSubAgentDirectory.ts"
 
 // The shared prompt composer (the pattern the user called "perfect"): ONE rounded bordered box
 // holding a borderless auto-growing textarea plus a small round accent send button hovering INSIDE
@@ -429,10 +430,18 @@ export function Composer({
   const [caret, setCaret] = useState<number | null>(null)
   const trackCaret = (el: HTMLTextAreaElement) => setCaret(el.selectionStart === el.selectionEnd ? el.selectionStart : null)
   const mention = mentionCandidates && mentionCandidates.length > 0 && !suggestOpen ? mentionQueryAt(prose, caret) : undefined
-  const mentionMatches = useMemo(
-    () => (mention && mentionCandidates && dismissedFor !== prose ? matchMentions(mentionCandidates, mention.query) : []),
-    [mention?.start, mention?.query, mentionCandidates, dismissedFor, prose],
-  )
+  // AFTER THE DOT the menu is the named thread's SUB-AGENTS (`@portTheParser.ca`): the head resolves to
+  // one of the candidates by the same fold a plain mention does, and its children arrive from the
+  // server's directory through SubAgentMentionSource below — mounted only while such a query is open, so
+  // a box nobody types a dot into never asks, and a surface with no query client never needs one.
+  const dotted = mention ? splitMentionQuery(mention.query) : undefined
+  const mentionThread = dotted && mentionCandidates ? resolveMention(mentionCandidates, dotted.head) : undefined
+  const [subMentions, setSubMentions] = useState<{ slug: string; candidates: MentionCandidate[] } | null>(null)
+  const mentionMatches = useMemo(() => {
+    if (!mention || !mentionCandidates || dismissedFor === prose) return []
+    if (!dotted) return matchMentions(mentionCandidates, mention.query)
+    return mentionThread && subMentions?.slug === mentionThread.slug ? matchMentions(subMentions.candidates, dotted.rest) : []
+  }, [mention?.start, mention?.query, mentionCandidates, dismissedFor, prose, mentionThread?.slug, subMentions])
   const mentionOpen = mentionMatches.length > 0
   function acceptMention(item: MentionCandidate) {
     if (!mention || caret === null) return
@@ -651,18 +660,21 @@ export function Composer({
       )}
       {/* The mention menu: the skills menu's box and rows, so the two read as one control. A row is the
           handle — exactly the text that will land in the box — then the thread's live status, dimmed and
-          truncated, and a `done` tag in the tag column for a thread already filed. */}
+          truncated, and a `done` tag in the tag column for a thread already filed. A sub-agent's row is
+          its whole address, how it stands (`running 12m`, `returned 3h ago`), and the same `done` tag
+          once it has returned. */}
+      {mentionThread && <SubAgentMentionSource slug={mentionThread.slug} onCandidates={setSubMentions} />}
       {mentionOpen && (
         <div
           ref={suggestListRef}
           data-mention-menu
           role="listbox"
-          aria-label="Threads"
+          aria-label={dotted ? "Sub-agents" : "Threads"}
           className="absolute bottom-full left-0 right-0 z-20 mb-1.5 max-h-56 overflow-y-auto rounded-lg border border-border bg-bg py-1 shadow-lg"
         >
           {mentionMatches.map((m, i) => (
             <button
-              key={m.slug}
+              key={m.subAgentId ?? m.slug}
               type="button"
               role="option"
               aria-selected={i === suggestSel}
@@ -819,6 +831,20 @@ export function Composer({
 // its extension. A broken image (route 4xx / missing file) falls back to the document tile so a stale
 // path is never a blank square. The × removes just this path from the draft. `title` carries the full
 // path so the raw location is still one hover away.
+// The `@thread.` menu's data: the named thread's sub-agent directory, handed up as candidates. A
+// component rather than a hook in Composer because it is MOUNTED ONLY while a dotted query names a
+// thread — Composer also renders on fixture pages with no query client, and a hook would need one there.
+// The candidates are built when the directory lands (their ages are read then; the stale time bounds how
+// old that is) and tagged with the slug they belong to, so a head retyped to another thread never shows
+// the previous thread's children for a frame.
+function SubAgentMentionSource({ slug, onCandidates }: { slug: string; onCandidates: (next: { slug: string; candidates: MentionCandidate[] }) => void }) {
+  const { data } = useSubAgentDirectory(slug)
+  useEffect(() => {
+    if (data) onCandidates({ slug, candidates: subAgentMentionCandidates(slug, data) })
+  }, [data, slug])
+  return null
+}
+
 function AttachmentChip({
   attachment,
   disabled,
