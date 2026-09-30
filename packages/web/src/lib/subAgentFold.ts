@@ -11,6 +11,10 @@ import { isDirectSubAgent } from "@frizz/shared"
 // rows it stands for. The line still spins while any of them runs, so live work never leaves the rail —
 // only the names wait for a click.
 //
+// The line carries NO age. Its thread's row sits directly above it with its own time in the same
+// right-hand column, and the batch's age landed within a minute of it on every seeded thread (25m under
+// 24m, 22m under 22m) — a second column of nearly the same number. Each child's own age is one click in.
+//
 // Only the RAIL folds. A queue card lists its children openly (QueueChildOps), because a card is the
 // thread you are reading; the drawer's ops strip does too. The rail is the overview.
 
@@ -21,13 +25,11 @@ export interface SubAgentFold {
   label: string
   /** Spins while ANY row under it runs, at any depth, since the fold is all the rail shows of them. */
   state: "running" | "stale"
-  /** The earliest direct child's dispatch: how long this batch has been out. */
-  startedAt: string | undefined
   /** The names the fold hides, for its tooltip. */
   names: string
 }
 
-type FoldChild = { readonly state: string; readonly depth?: number; readonly workflow?: boolean; readonly label: string; readonly startedAt?: string }
+type FoldChild = { readonly state: string; readonly depth?: number; readonly workflow?: boolean; readonly label: string }
 
 const plural = (n: number, noun: string): string => `${n} ${noun}${n === 1 ? "" : "s"}`
 
@@ -39,11 +41,9 @@ export function subAgentFold(children: readonly FoldChild[]): SubAgentFold {
   const label = [agents > 0 ? plural(agents, "sub-agent") : null, workflows > 0 ? plural(workflows, "workflow") : null]
     .filter((part) => part !== null)
     .join(", ")
-  const starts = direct.map((child) => child.startedAt).filter((at): at is string => Boolean(at)).sort()
   return {
     label,
     state: children.some((child) => child.state === "running") ? "running" : "stale",
-    startedAt: starts[0],
     names: direct.map((child) => child.label).join(", "),
   }
 }

@@ -50,6 +50,8 @@ test("folded, a thread's children are one line naming how many, and none of thei
   assert.match(html, /data-rail-subagents="fold-closed"/)
   // A running child spins the fold, so live work never leaves the rail.
   assert.match(html, /data-rail-subagents="fold-closed"[\s\S]*viewBox="0 0 15 15"/)
+  // No age on the fold: the thread row above it already reads a time in that column.
+  assert.ok(!/data-rail-subagents="fold-closed"[\s\S]*Working for/.test(html), "the folded line reads no age")
 })
 
 test("open, every child is listed one indent step under the fold line", () => {

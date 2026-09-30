@@ -262,7 +262,9 @@ export function ChildOpRow({
     // that clears the parent thread row's indicator column, and it has always been part of the click
     // target. Putting it on the wrapper renders identically (the duration is `ml-auto`, so the right
     // edge does not move) while quietly carving that gutter out of the drill-in — for no gain.
-    ? "group flex min-w-0 items-center gap-2 pl-[26px] text-left outline-none"
+    // A FOLD takes the whole line (`flex-1`): it has no × and no reading to share the row with, and a
+    // disclosure line that toggles only over its words leaves most of its own highlight dead.
+    ? `group flex min-w-0 items-center gap-2 pl-[26px] text-left outline-none ${disclosure ? "flex-1" : ""}`
     // `overflow-hidden` is load-bearing at a narrow width: the arrow/dot/kind tag inside are shrink-0,
     // so once the row runs out of room the button's own content used to SPILL and the × landed on top
     // of the "AGENT" tag. Clipping keeps the collapse graceful. The ring goes inset to survive it.

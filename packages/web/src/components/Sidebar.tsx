@@ -635,7 +635,6 @@ function SubAgentRows({ t, scope }: { t: ThreadView; scope: RowScope }) {
         label={fold.label}
         state={fold.state}
         density="rail"
-        startedAt={fold.startedAt}
         parentSlug={t.id}
         onOpen={() => toggleSubAgentFold(t.id)}
         disclosure={{ open }}
