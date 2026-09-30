@@ -1,5 +1,5 @@
 import { useContext, useEffect, useId, useRef, useState, type KeyboardEvent as ReactKeyboardEvent, type MouseEvent as ReactMouseEvent, type ReactNode } from "react"
-import { Check, ChevronDown, ChevronRight, Loader2, Split } from "lucide-react"
+import { ArrowRight, Check, ChevronDown, ChevronRight, Loader2, Split } from "lucide-react"
 import { useQuery } from "@tanstack/react-query"
 import { SPINOFF_INSTRUCTIONS_MAX, type ProjectCard, type SpinoffView, type ThreadView } from "@frizz/shared"
 import { rpc } from "../api/rpc.ts"
@@ -133,7 +133,7 @@ function SpinoffDialog({ thread, open, onOpenChange }: { thread: ThreadView & { 
         <>
           {/* Only where there is somewhere else to start: one open project has nothing to choose. */}
           {home && projects.length > 1 && (
-            <SpinoffProjectPicker projects={projects} current={target ?? home} disabled={pending} onPick={(p) => setTargetId(p.id)} />
+            <SpinoffProjectRoute from={home} projects={projects} current={target ?? home} disabled={pending} onPick={(p) => setTargetId(p.id)} />
           )}
           <button
             type="button"
@@ -229,6 +229,27 @@ function useOpenProjects(enabled: boolean): OpenProject[] {
  *  reads as a setting of the request rather than a third action. Ink gaps (sans 12px, scripts/ink-gaps.mjs,
  *  2026-09-30): square→name at `gap-[5px]` to match the prompt box's project picker (it drew 6.50px at
  *  `gap-1.5`); name→chevron 6.31px against that picker's 6.00px, left alone. */
+/** FROM → INTO, at the footer's left end: this thread's project, then where the new thread starts (the
+ *  picker, this project by default). A spinoff carries context ONE way, out of this thread into the new
+ *  one, so the arrow points at the destination — the reading order, source first. A left-pointing merge
+ *  arrow (GitHub's `base ← compare`) would say the chosen project flows back into this one. The source is
+ *  plain text, not a control: it is a fact about this thread, and only the destination is a choice. */
+function SpinoffProjectRoute({ from, ...picker }: { from: OpenProject } & Parameters<typeof SpinoffProjectPicker>[0]) {
+  return (
+    <div data-spinoff-route className="flex min-w-0 flex-1 items-center gap-1.5 text-[12px] text-muted">
+      <span data-spinoff-from={from.slug} title={`From ${from.name}`} className="flex min-w-0 max-w-[45%] shrink-0 items-center gap-[5px]">
+        <ProjectSquare project={from.card} size={12} />
+        <span className="min-w-0 truncate">{from.name}</span>
+      </span>
+      {/* The arrow's box is mostly dead space: at `gap-1.5` alone it drew 9.06px of ink after the name and
+          8.00px before the pill's border (scripts/ink-gaps.mjs, sans 12px, 2026-09-30). The margins take
+          both to ~6px, so it sits evenly between the two ends it joins. */}
+      <ArrowRight size={12} aria-label="into" className="-ml-[0.25em] -mr-[0.17em] shrink-0 text-muted-60" />
+      <SpinoffProjectPicker {...picker} />
+    </div>
+  )
+}
+
 function SpinoffProjectPicker({ projects, current, disabled, onPick }: {
   projects: OpenProject[]
   current: OpenProject
@@ -244,7 +265,7 @@ function SpinoffProjectPicker({ projects, current, disabled, onPick }: {
           data-spinoff-project={current.slug}
           aria-label={`The new thread starts in ${current.name}. Choose a project`}
           title={`The new thread starts in ${current.name} (${PROJECT_STEP_KEYS} in the field)`}
-          className="button-outline mr-auto flex min-w-0 max-w-[60%] items-center gap-[5px] rounded-md px-2.5 py-1.5 text-[12px] text-muted outline-none transition-colors hover:bg-panel-2 hover:text-fg disabled:opacity-45 data-[state=open]:bg-panel-2 data-[state=open]:text-fg"
+          className="button-outline flex min-w-0 shrink items-center gap-[5px] rounded-md px-2.5 py-1.5 text-[12px] text-muted outline-none transition-colors hover:bg-panel-2 hover:text-fg disabled:opacity-45 data-[state=open]:bg-panel-2 data-[state=open]:text-fg"
         >
           <ProjectSquare project={current.card} size={12} />
           <span className="min-w-0 truncate">{current.name}</span>
