@@ -4,7 +4,7 @@ import { ATTACHMENT_ACCEPT, ATTACHMENT_MAX_BYTES, isAllowedAttachmentName, type 
 import { showToast } from "../store.ts"
 import { joinComposerValue, splitComposerValue } from "../lib/imagePaths.ts"
 import { splitProseByTokens } from "../lib/composerContext.ts"
-import { shouldInterruptSubmitComposerEnter, shouldRestoreOptionEnterNewline, shouldSubmitComposerEnter } from "../lib/composerKeyboard.ts"
+import { shouldInterruptSubmitComposerEnter, shouldPushQueuedComposerEnter, shouldRestoreOptionEnterNewline, shouldSubmitComposerEnter } from "../lib/composerKeyboard.ts"
 import { queueComposerHandlesOptionEnter } from "../lib/queueComposerKeyboard.ts"
 import { RAIL_ACTION_OFFSET, RAIL_PAPERCLIP_OFFSET, RAIL_PAPERCLIP_PLAIN_OFFSET, RAIL_RESERVE_PLAIN, RAIL_RESERVE_WITH_ACTION, RAIL_SEND_OFFSET } from "../lib/iconRhythm.ts"
 import { apiBase } from "../lib/base-path.ts"
@@ -99,6 +99,7 @@ export function Composer({
   mentionCandidates,
   ownMention,
   onInterruptSubmit,
+  onPushQueued,
   attachBase,
 }: {
   value: string
@@ -156,6 +157,10 @@ export function Composer({
   // needs no message payload because the send is already in the provider's queue. The shortcut stays
   // because it is a real send path with muscle memory behind it — only the picture was wrong.
   onInterruptSubmit?: () => void
+  // SEND THE WAITING MESSAGE NOW — what ⌘/Ctrl-Enter does in an EMPTY box. Returns whether it acted:
+  // the caller owns the "is a follow-up actually queued behind a running turn" check, so with nothing
+  // queued it returns false and the keypress keeps its default.
+  onPushQueued?: () => boolean
   // WHICH PROJECT AN ATTACHMENT IS UPLOADED TO, when it is not the page's. Omitted, `apiBase()` — the
   // page project, which in a drawer or on /full is the thread's own. The cross-project page's queue
   // card shows a thread of ANY project while the page is focused on one, so it passes the thread's
@@ -602,6 +607,13 @@ export function Composer({
       e.preventDefault()
       e.stopPropagation()
       ;(onInterruptSubmit ?? onSubmit)()
+      return
+    }
+    // ⌘/Ctrl-Enter on an EMPTY box: nothing to send, so push the already-queued follow-up through (the
+    // queued bubble's ↑). Attachments count as content — a box holding only a chip is not empty.
+    if (onPushQueued && !busy && shouldPushQueuedComposerEnter(keyboardEvent, value.trim().length === 0) && onPushQueued()) {
+      e.preventDefault()
+      e.stopPropagation()
       return
     }
     if (shouldRestoreOptionEnterNewline(keyboardEvent)) {

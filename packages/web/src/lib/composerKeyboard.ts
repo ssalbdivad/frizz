@@ -53,6 +53,15 @@ export function shouldInterruptSubmitComposerEnter(event: ComposerKeyboardEvent,
 }
 
 /**
+ * THE FORCED CHORD ON AN EMPTY BOX — ⌘/Ctrl-Enter with nothing typed. There is no message to send, so
+ * the chord means "send the one already waiting": it pushes the thread's queued follow-up through now,
+ * the same act as the ↑ on the queued bubble. The caller decides whether anything is queued.
+ */
+export function shouldPushQueuedComposerEnter(event: ComposerKeyboardEvent, isEmpty: boolean): boolean {
+  return isEmpty && isEnter(event) && (event.metaKey || event.ctrlKey)
+}
+
+/**
  * Whether the forced chord may INTERRUPT at all on this thread — the policy behind the keystroke.
  * Only a running broker-backed Claude turn can be preempted: the SDK interrupt aborts the turn and
  * (since the query declares `perTaskStopAffordance`, 2026-09-24) spares its sub-agents. Codex is

@@ -1,6 +1,6 @@
 import { test } from "node:test"
 import assert from "node:assert/strict"
-import { canInterruptAndSend, shouldInterruptSubmitComposerEnter, shouldRestoreOptionEnterNewline, shouldSubmitComposerEnter, shouldSubmitStagedEnter, type ComposerKeyboardEvent } from "./composerKeyboard.ts"
+import { canInterruptAndSend, shouldInterruptSubmitComposerEnter, shouldPushQueuedComposerEnter, shouldRestoreOptionEnterNewline, shouldSubmitComposerEnter, shouldSubmitStagedEnter, type ComposerKeyboardEvent } from "./composerKeyboard.ts"
 
 function key(overrides: Partial<ComposerKeyboardEvent> = {}): ComposerKeyboardEvent {
   return {
@@ -110,4 +110,20 @@ test("⌘-Enter may interrupt only a running Claude turn — never Codex or an A
   assert.equal(canInterruptAndSend({ runtime: "rested", backend: "claude" }, false), false, "nothing in flight to interrupt")
   assert.equal(canInterruptAndSend(undefined, false), false)
   assert.equal(canInterruptAndSend({ runtime: "running", backend: "claude" }, true), false, "a staged-answer surface sends a whole answer set")
+})
+
+// ---- shouldPushQueuedComposerEnter — ⌘/Ctrl-Enter in an EMPTY box pushes the queued message ----
+
+test("the forced chord on an empty box pushes the queued message; anything else does not", () => {
+  assert.equal(shouldPushQueuedComposerEnter(key({ metaKey: true }), true), true)
+  assert.equal(shouldPushQueuedComposerEnter(key({ ctrlKey: true }), true), true)
+  // A draft goes through the forced SEND instead.
+  assert.equal(shouldPushQueuedComposerEnter(key({ metaKey: true }), false), false)
+  // A plain, Shift or Option Enter on an empty box stays a no-op/newline.
+  assert.equal(shouldPushQueuedComposerEnter(key(), true), false)
+  assert.equal(shouldPushQueuedComposerEnter(key({ metaKey: true, shiftKey: true }), true), false)
+  assert.equal(shouldPushQueuedComposerEnter(key({ ctrlKey: true, altKey: true }), true), false)
+  assert.equal(shouldPushQueuedComposerEnter(key({ metaKey: true, isComposing: true }), true), false)
+  // Disjoint from the forced send: with a draft only that one fires, with none only this one.
+  assert.equal(shouldInterruptSubmitComposerEnter(key({ metaKey: true }), false), false)
 })

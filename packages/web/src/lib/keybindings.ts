@@ -141,6 +141,7 @@ export const FIXED_SHORTCUTS: readonly { heading: string; keys: readonly { label
     heading: "In a thread's prompt box",
     keys: [
       { label: "Run a command in a terminal on the thread, typed first", chord: "$" },
+      { label: "Send the queued message now, from an empty box", chord: "mod+enter" },
     ],
   },
   {

@@ -13,6 +13,9 @@ import { draftKey, draftStore, useDraft, useProjectDir } from "../lib/drafts.ts"
 import { parseAccountAlias } from "../lib/signIn.ts"
 import { useEagerFollowUp, type EagerFollowUpCallbacks } from "../lib/eagerComposerSubmission.ts"
 import { canInterruptAndSend } from "../lib/composerKeyboard.ts"
+import { useDeliverQueuedNow } from "../lib/deliverQueuedNow.ts"
+import { useQueryClient } from "@tanstack/react-query"
+import type { TranscriptData } from "../hooks.ts"
 import { RegisteredAnsweringContext } from "./RegisteredQuestionCards.tsx"
 import { composerTerminalLine } from "../lib/threadTerminals.ts"
 import { startComposerTerminal } from "./ThreadTerminals.tsx"
@@ -116,6 +119,17 @@ export function ThreadComposerBox({
   // preempted — `runtime === "running"` is exactly "process alive, turn in flight". The backend policy
   // (Claude only; Codex steers, ACP queues) lives in canInterruptAndSend, pinned by its test.
   const canInterrupt = canInterruptAndSend(thread, submitOverride !== undefined)
+  // ⌘/Ctrl-Enter in an EMPTY box pushes the queued follow-up through — the queued bubble's ↑, from the
+  // keyboard. Same gate as the forced send, plus a queued message in the transcript cache, read at
+  // keypress time so this box does not re-render on every transcript push.
+  const qc = useQueryClient()
+  const { deliverNow } = useDeliverQueuedNow(slug)
+  const pushQueued = () => {
+    const messages = qc.getQueryData<TranscriptData>(["transcript", slug])?.messages
+    if (!messages?.some((m) => m.queued)) return false
+    deliverNow()
+    return true
+  }
 
   function send(interrupt = false) {
     const text = message.trim()
@@ -190,6 +204,7 @@ export function ThreadComposerBox({
         onChange={setMessage}
         onSubmit={() => send()}
         onInterruptSubmit={canInterrupt ? () => send(true) : undefined}
+        onPushQueued={canInterrupt ? pushQueued : undefined}
         slashSuggest={slashSuggest}
         mentionCandidates={mentions}
         ownMention={ownMention}
