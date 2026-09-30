@@ -29,7 +29,7 @@ import {
   type TranscriptPage,
   type TranscriptTodo,
   type TranscriptToolCall,
-  parseSpinOffRequest,
+  parseSpinoffRequest,
 } from "@frizz/shared"
 import { workDirOf, type Project } from "./project.ts"
 import type { Storage } from "./storage.ts"
@@ -223,7 +223,7 @@ function userDisplayText(text: string, first: boolean): string | undefined {
 // Both derive from the same raw record, and every site that pushes a user message needs both — keeping
 // them in one helper is what stops a new push site from shipping the display projection while silently
 // dropping the wake flag (which would put a scheduler steer back in the human's own bubble).
-function userProjection(text: string, first: boolean): { displayText?: string; spinOff?: { id: string; instructions: string; excerpt: string }; wake?: true; wakeSteer?: GithubWakeSteer; peerFrom?: string; peerSession?: true; peerUnnamed?: true } {
+function userProjection(text: string, first: boolean): { displayText?: string; spinoff?: { id: string; instructions: string }; wake?: true; wakeSteer?: GithubWakeSteer; peerFrom?: string; peerSession?: true; peerUnnamed?: true } {
   // An UPWARD agent-to-agent message — a background child calling `SendMessage({to:"main"})` — is not
   // the human's text at all, so it is settled FIRST and returns on its own. Its body, not the
   // `<agent-message>` wrapper, is what a reader wants, and none of the projections below apply: the
@@ -236,10 +236,10 @@ function userProjection(text: string, first: boolean): { displayText?: string; s
   const session = parseCrossSessionMessage(crossSessionDeliveryWrapper(text) ?? text)
   if (session) return crossSessionProjection(session)
   const displayText = userDisplayText(text, first)
-  // A SPIN-OFF REQUEST is the human's (they asked for it), but its text is frizz's brief to the worker.
-  // The chat draws the human's instructions as a spin-off card; the brief stays in `text` for the worker.
-  const spinOff = parseSpinOffRequest(displayText ?? text)
-  if (spinOff) return { displayText: spinOff.instructions, spinOff }
+  // A SPINOFF REQUEST is the human's (they asked for it), but its text is Frizz's brief to the worker.
+  // The chat draws the human's instructions as a spinoff card; the brief stays in `text` for the worker.
+  const spinoff = parseSpinoffRequest(displayText ?? text)
+  if (spinoff) return { displayText: spinoff.instructions, spinoff }
   if (!isWakeDelivery(text)) return { ...(displayText ? { displayText } : {}) }
   // Parse the steer HERE, not in the browser. The formatter that composed this text and the parser
   // reading it are the same build on this side, so they cannot disagree; a browser tab is routinely a

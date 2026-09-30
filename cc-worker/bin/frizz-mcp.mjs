@@ -108,10 +108,10 @@ const SPAWN_THREAD = {
       spinoff: {
         type: "string",
         description:
-          "Set ONLY when fulfilling a spin-off request — a message from frizz wrapped in `<spin-off-request id=\"spn_…\">` " +
-          "asking for a new thread from one message of your conversation. Pass that id verbatim. Frizz then puts the " +
+          "Set ONLY when fulfilling a spinoff request — a message from frizz wrapped in `<spinoff-request id=\"spn_…\">` " +
+          "asking for a new thread from your conversation. Pass that id verbatim. Frizz then puts the " +
           "human's own instructions and a link back to your thread above your `prompt`, and links the two threads on " +
-          "the board. A spin-off is the human's explicit request, so the last-resort caution above does not apply to it.",
+          "the board. A spinoff is the human's explicit request, so the last-resort caution above does not apply to it.",
       },
     },
     required: ["prompt", "model", "effort"],
@@ -1325,11 +1325,11 @@ async function spawnThread(args) {
   const body = { prompt, model, effort }
   if (typeof args.title === "string" && args.title.trim()) body.title = args.title.trim()
   if (args.backend === "claude" || args.backend === "codex") body.backend = args.backend
-  // A spin-off names the request it fulfils, and the CALLER — read from our own identity, never from the
+  // A spinoff names the request it fulfils, and the CALLER — read from our own identity, never from the
   // arguments — so the server can refuse a request that belongs to another thread.
   if (typeof args.spinoff === "string" && args.spinoff.trim()) {
-    body.spinOff = args.spinoff.trim()
-    body.spinOffFrom = threadSlug()
+    body.spinoff = args.spinoff.trim()
+    body.spinoffFrom = threadSlug()
   }
 
   const port = serverLockPort()

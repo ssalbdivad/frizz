@@ -12,7 +12,7 @@ import { AskedQuestionSchema, BoardDiffer, PermissionMode, SnoozeUntil, ThreadSl
 import type { Bus } from "./bus.ts"
 import { workDirOf, type Project } from "./project.ts"
 import { isHeadlessRow, isBrokerClaudeRow, sessionTitleLocked, type ThreadQuestionRow } from "./storage.ts"
-import type { Storage, SessionRow, PrWatchRow, ThreadTimerRow, ThreadWatchRow, ThreadLinkRow, ShellBudgetRow, ThreadSpinOffRow } from "./storage.ts"
+import type { Storage, SessionRow, PrWatchRow, ThreadTimerRow, ThreadWatchRow, ThreadLinkRow, ShellBudgetRow, ThreadSpinoffRow } from "./storage.ts"
 import { resolveShellBudget, shellBudgetRecordOf } from "./shell-budget.ts"
 import { threadLinkView } from "./thread-links.ts"
 import { normalizeObservedThreadModel } from "./backend/thread-profiles.ts"
@@ -1625,7 +1625,7 @@ interface ThreadRegistries {
   watches: Map<string, ThreadWatchRow[]>
   done: Map<string, { body: string; doneAt: number }>
   shellBudgets: Map<string, ShellBudgetRow[]>
-  spinOffs: Map<string, ThreadSpinOffRow[]>
+  spinoffs: Map<string, ThreadSpinoffRow[]>
 }
 
 function readThreadRegistries(storage: Storage): ThreadRegistries {
@@ -1637,7 +1637,7 @@ function readThreadRegistries(storage: Storage): ThreadRegistries {
     watches: storage.armedThreadWatchesBySlug(),
     done: storage.threadDoneBySlug(),
     shellBudgets: storage.shellBudgetsBySlug(),
-    spinOffs: storage.spinOffsBySlug(),
+    spinoffs: storage.spinoffsBySlug(),
   }
 }
 
@@ -1859,8 +1859,8 @@ function sessionThreadView(
     subAgents: stampStoppable(tele?.subAgents ?? [], row),
     bgShells: stampShellBudgets(stampStoppableShells(tele?.bgShells ?? [], row), registries.shellBudgets.get(row.slug), registries.watches.get(row.slug)),
     links: (registries.links.get(row.slug) ?? []).map(threadLinkView),
-    spinOffs: (registries.spinOffs.get(row.slug) ?? []).map((o) => ({
-      id: o.id, parentSlug: o.parent_slug, childSlug: o.child_slug, sourceId: o.source_id,
+    spinoffs: (registries.spinoffs.get(row.slug) ?? []).map((o) => ({
+      id: o.id, parentSlug: o.parent_slug, childSlug: o.child_slug,
       instructions: o.instructions, createdAt: o.created_at,
     })),
     // ONE SOURCE: the FENCE. Both kinds are derived from what the worker wrote — `prs:` entries

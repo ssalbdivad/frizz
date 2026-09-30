@@ -2267,41 +2267,86 @@ test("a repeat of a deliveryId already delivered is a no-op even after the ledge
   h.storage.close()
 })
 
-// A SPIN-OFF is fulfilled by the parent's own `spawn_thread` naming the request: the dispatch writes the
+// A SPINOFF is fulfilled by the parent's own `spawn_thread` naming the request: the dispatch writes the
 // human's words and a link back above the parent's brief, stamps the child once, and refuses a second
 // spawn or a caller that is not the parent.
-test("dispatch fulfils a spin-off once, from its parent only, with the human's words above the brief", async () => {
+test("dispatch fulfils a spinoff once, from its parent only, with the human's words above the brief", async () => {
   const h = harness()
   try {
     h.storage.upsertSession(row("parent"))
     const id = "spn_00000000000000aa"
-    h.storage.insertSpinOff({ id, parentSlug: "parent", sourceId: "m1", excerpt: "slow query", instructions: "investigate perf", createdAtMs: 1 })
+    h.storage.insertSpinoff({ id, parentSlug: "parent", instructions: "investigate perf", createdAtMs: 1 })
     const calls: { prompt: string; model?: string }[] = []
     ;(h.ctx.dispatcher as { dispatch: unknown }).dispatch = async (input: { prompt: string; model?: string }) => {
       calls.push(input)
       return { slug: "child", sessionId: "sid-child" }
     }
     const dispatch = (from: string) =>
-      h.router.dispatch.handler({ input: { prompt: "Brief: the N+1 in loadUsers", model: "opus", effort: "high", spinOff: id, spinOffFrom: from } })
+      h.router.dispatch.handler({ input: { prompt: "Brief: the N+1 in loadUsers", model: "opus", effort: "high", spinoff: id, spinoffFrom: from } })
 
     await assert.rejects(dispatch("someone-else"), /requested from another thread/)
     assert.equal(calls.length, 0)
 
     assert.deepEqual(await dispatch("parent"), { slug: "child", sessionId: "sid-child" })
     assert.equal(calls.length, 1)
-    assert.match(calls[0].prompt, /^Spun off from \[parent\]\(\/thread\/parent\) at the human's request\. Their instructions:\n\n> investigate perf\n/)
+    assert.match(calls[0].prompt, /^A spinoff of \[parent\]\(\/thread\/parent\), at the human's request\. Their instructions:\n\n> investigate perf\n/)
     assert.ok(calls[0].prompt.endsWith("Brief: the N+1 in loadUsers"))
-    assert.equal("spinOff" in calls[0], false)
-    assert.equal(h.storage.getSpinOff(id)?.child_slug, "child")
+    assert.equal("spinoff" in calls[0], false)
+    assert.equal(h.storage.getSpinoff(id)?.child_slug, "child")
 
     await assert.rejects(dispatch("parent"), /already started thread child/)
     assert.equal(calls.length, 1)
 
     // Both ends see the edge.
-    const edges = h.storage.spinOffsBySlug()
+    const edges = h.storage.spinoffsBySlug()
     assert.deepEqual(edges.get("parent")?.map((e) => e.id), [id])
     assert.deepEqual(edges.get("child")?.map((e) => e.id), [id])
   } finally {
     rmSync(h.dir, { recursive: true, force: true })
+  }
+})
+
+// A worker's MCP server lives as long as its session, so one started before the single-word rename still
+// names the request `spinOff`. That must still fulfil it — read as a plain dispatch, the child would start
+// without the human's words and the parent's card would wait on it forever.
+test("dispatch still fulfils a spinoff named in its first-day spelling", async () => {
+  const h = harness()
+  try {
+    h.storage.upsertSession(row("parent"))
+    const id = "spn_00000000000000bb"
+    h.storage.insertSpinoff({ id, parentSlug: "parent", instructions: "fix this", createdAtMs: 1 })
+    const calls: { prompt: string }[] = []
+    ;(h.ctx.dispatcher as { dispatch: unknown }).dispatch = async (input: { prompt: string }) => {
+      calls.push(input)
+      return { slug: "child", sessionId: "sid-child" }
+    }
+    await h.router.dispatch.handler({ input: { prompt: "Brief", model: "opus", effort: "high", spinOff: id, spinOffFrom: "parent" } })
+    assert.match(calls[0].prompt, /^A spinoff of /)
+    assert.equal("spinOff" in calls[0], false)
+    assert.equal(h.storage.getSpinoff(id)?.child_slug, "child")
+  } finally {
+    rmSync(h.dir, { recursive: true, force: true })
+  }
+})
+
+// The RPC the thread's menu calls: it records the request and hands it to THIS thread's worker through the
+// follow-up path, as the envelope the chat draws as a spinoff card. A delivery that fails leaves no row.
+test("spinoff delivers the request to the thread's own worker, and drops it when delivery fails", async () => {
+  const { h, slug, calls } = restartHarness()
+  try {
+    const { id } = await h.router.spinoff.handler({ input: { slug, sessionId: `sid-${slug}`, instructions: "investigate perf" } })
+    assert.equal(calls.length, 1)
+    assert.ok(calls[0].text.startsWith(`<spinoff-request id="${id}">`), calls[0].text)
+    assert.match(calls[0].text, /<instructions>\ninvestigate perf\n<\/instructions>/)
+    assert.equal(h.storage.getSpinoff(id)?.parent_slug, slug)
+    assert.equal(h.storage.getSpinoff(id)?.child_slug, null)
+
+    ;(h.ctx as { claudeBroker?: unknown }).claudeBroker = {
+      followUp: async () => { throw new Error("daemon gone") },
+    }
+    await assert.rejects(h.router.spinoff.handler({ input: { slug, sessionId: `sid-${slug}`, instructions: "fix this" } }), /daemon gone/)
+    assert.deepEqual(h.storage.spinoffsBySlug().get(slug)?.map((e) => e.id), [id], "only the delivered request is on the thread")
+  } finally {
+    h.storage.close()
   }
 })

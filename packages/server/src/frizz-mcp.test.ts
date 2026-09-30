@@ -1621,7 +1621,7 @@ test("`watch_issue` registers, lists and drops against the CALLING thread, and l
   }
 })
 
-// A SPIN-OFF names its request AND its caller — the caller from the server's own identity, never from the
+// A SPINOFF names its request AND its caller — the caller from the server's own identity, never from the
 // model's arguments — so the dispatch can refuse a request that belongs to another thread.
 test("spawn_thread with a spinoff forwards the request id and the calling thread", async () => {
   const seen: unknown[] = []
@@ -1650,7 +1650,7 @@ test("spawn_thread with a spinoff forwards the request id and the calling thread
     })
     const call = await rpc.next(2)
     assert.equal(call.result.isError, undefined)
-    assert.deepEqual(seen, [{ prompt: "brief", model: "opus", effort: "high", spinOff: "spn_0123456789abcdef", spinOffFrom: "the-parent" }])
+    assert.deepEqual(seen, [{ prompt: "brief", model: "opus", effort: "high", spinoff: "spn_0123456789abcdef", spinoffFrom: "the-parent" }])
   } finally {
     rpc.kill()
     http.close()

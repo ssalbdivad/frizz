@@ -144,10 +144,10 @@ import {
   acpModelIdFromModel,
   AcpAgentModels,
   AcpAgentModelsInput,
-  SpinOffInput,
-  SpinOffResult,
-  spinOffChildPrompt,
-  spinOffRequestMessage,
+  SpinoffInput,
+  SpinoffResult,
+  spinoffChildPrompt,
+  spinoffRequestMessage,
 } from "@frizz/shared"
 import { type AppContext } from "./context.ts"
 import { listAcpAgents } from "./backend/acp-agents.ts"
@@ -1525,40 +1525,40 @@ export function createRouter(ctx: AppContext) {
     return await gitGithubRemote(ctx.project.dir)
   }
 
-  // The followUp procedure, captured where it is defined below so `spinOff` delivers through the SAME
+  // The followUp procedure, captured where it is defined below so `spinoff` delivers through the SAME
   // handler rather than a copy of its ~350 lines of runtime routing.
   let followUpProcedure: { handler: (args: { input: z.infer<typeof FollowUpInput> }) => Promise<void> } | undefined
 
   // One request can become one thread. The check-then-stamp below spans an await (the dispatch), so two
   // racing `spawn_thread` calls for the same id would both pass the pending check; this set closes that.
-  const spinOffsInFlight = new Set<string>()
+  const spinoffsInFlight = new Set<string>()
 
-  // A `spawn_thread` that names a spin-off: check it is a pending request of the CALLING thread, write the
-  // human's instructions and a link back above the parent's brief (spinOffChildPrompt), dispatch, and
+  // A `spawn_thread` that names a spinoff: check it is a pending request of the CALLING thread, write the
+  // human's instructions and a link back above the parent's brief (spinoffChildPrompt), dispatch, and
   // stamp the child. Refusals are errors the parent's worker reads, so each says what went wrong.
-  async function fulfilSpinOff(id: string, from: string | undefined, input: Omit<DispatchInput, "spinOff" | "spinOffFrom">) {
-    const request = ctx.storage.getSpinOff(id)
-    if (!request) throw new Error(`No spin-off request ${id} exists in this project`)
+  async function fulfilSpinoff(id: string, from: string | undefined, input: Omit<DispatchInput, "spinoff" | "spinoffFrom" | "spinOff" | "spinOffFrom">) {
+    const request = ctx.storage.getSpinoff(id)
+    if (!request) throw new Error(`No spinoff request ${id} exists in this project`)
     if (from !== undefined && from !== request.parent_slug) {
-      throw new Error(`Spin-off ${id} was requested from another thread, so this thread cannot fulfil it`)
+      throw new Error(`Spinoff ${id} was requested from another thread, so this thread cannot fulfil it`)
     }
-    if (request.child_slug) throw new Error(`Spin-off ${id} already started thread ${request.child_slug}; do not spawn it twice`)
-    if (spinOffsInFlight.has(id)) throw new Error(`Spin-off ${id} is already being dispatched`)
-    spinOffsInFlight.add(id)
+    if (request.child_slug) throw new Error(`Spinoff ${id} already started thread ${request.child_slug}; do not spawn it twice`)
+    if (spinoffsInFlight.has(id)) throw new Error(`Spinoff ${id} is already being dispatched`)
+    spinoffsInFlight.add(id)
     try {
       const parent = ctx.storage.getSession(request.parent_slug)
-      const prompt = spinOffChildPrompt({
+      const prompt = spinoffChildPrompt({
         parentSlug: request.parent_slug,
         parentTitle: parent?.title || request.parent_slug,
         instructions: request.instructions,
         brief: input.prompt,
       })
       const result = await ctx.dispatcher.dispatch({ ...input, prompt }, { backend: input.backend })
-      ctx.storage.completeSpinOff(id, result.slug, Date.now())
+      ctx.storage.completeSpinoff(id, result.slug, Date.now())
       ctx.board.refresh()
       return result
     } finally {
-      spinOffsInFlight.delete(id)
+      spinoffsInFlight.delete(id)
     }
   }
 
@@ -1965,37 +1965,36 @@ export function createRouter(ctx: AppContext) {
       // byte-identical. The resume path needs NO analog — resume reads the backend from the row's
       // `backend` column (backendFor(row.backend)), which dispatch already stamped for a codex thread.
       handler: async ({ input }) => {
-        const { spinOff, spinOffFrom, ...rest } = input
-        if (!spinOff) return ctx.dispatcher.dispatch(rest, { backend: input.backend })
-        return fulfilSpinOff(spinOff, spinOffFrom, rest)
+        // `spinOff`/`spinOffFrom` are the first-day spelling a long-lived worker's MCP server still sends.
+        const { spinoff, spinoffFrom, spinOff, spinOffFrom, ...rest } = input
+        const request = spinoff ?? spinOff
+        if (!request) return ctx.dispatcher.dispatch(rest, { backend: input.backend })
+        return fulfilSpinoff(request, spinoffFrom ?? spinOffFrom, rest)
       },
     }),
 
-    // SPIN OFF a new thread from one message of this one (SpinOffInput). Records the request, then hands
-    // it to THIS thread's worker as a message — through the very path a typed follow-up takes, so it wakes
-    // a rested thread, queues behind a running turn, and reopens a done one exactly as the human's own
-    // words would. The worker answers by dispatching through `spawn_thread` with the request's id, which
-    // lands in `fulfilSpinOff` above. A delivery that fails drops the row: a request the worker never
-    // received must not sit on the thread as one it is ignoring.
-    spinOff: mutation({
-      input: SpinOffInput,
-      output: SpinOffResult,
+    // SPINOFF a new thread from this one (SpinoffInput). Records the request, then hands it to THIS
+    // thread's worker as a message — through the very path a typed follow-up takes, so it wakes a rested
+    // thread, queues behind a running turn, and reopens a done one exactly as the human's own words
+    // would. The worker answers by dispatching through `spawn_thread` with the request's id, which lands
+    // in `fulfilSpinoff` above. A delivery that fails drops the row: a request the worker never received
+    // must not sit on the thread as one it is ignoring.
+    spinoff: mutation({
+      input: SpinoffInput,
+      output: SpinoffResult,
       handler: async ({ input }) => {
         currentOwnedSession(input.slug, input.sessionId)
         const id = `spn_${randomBytes(8).toString("hex")}`
-        ctx.storage.insertSpinOff({
-          id, parentSlug: input.slug, sourceId: input.sourceId, excerpt: input.excerpt,
-          instructions: input.instructions, createdAtMs: Date.now(),
-        })
+        ctx.storage.insertSpinoff({ id, parentSlug: input.slug, instructions: input.instructions, createdAtMs: Date.now() })
         try {
           await followUpProcedure!.handler({ input: {
             slug: input.slug,
             sessionId: input.sessionId,
-            message: spinOffRequestMessage({ id, instructions: input.instructions, excerpt: input.excerpt }),
+            message: spinoffRequestMessage({ id, instructions: input.instructions }),
             deliveryId: `spinoff-${id}`,
           } })
         } catch (err) {
-          ctx.storage.dropSpinOff(id)
+          ctx.storage.dropSpinoff(id)
           throw err
         }
         ctx.board.refresh()
