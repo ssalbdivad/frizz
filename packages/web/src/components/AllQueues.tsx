@@ -291,7 +291,9 @@ export function AllQueuesPage() {
           folds every other project to one line), and a centred column moved the prompt box and the row just
           clicked out from under the pointer — by 110-200px with five projects. 48px sets the status row's middle
           level with the READY header's across the gutter (64 vs 59.85px at 52px). */}
-      <aside aria-label="Projects" className={`${SIDEBAR_COLUMN_CLASS} !justify-start pt-[48px] max-[800px]:!pt-5`}>
+      {/* Above the thread connector (ThreadConnector.tsx, z-[5]) while the prompt box's menu is open: the
+          column is sticky, so the menu's own z-index cannot leave it, and the cords drew over its rows. */}
+      <aside aria-label="Projects" className={`${SIDEBAR_COLUMN_CLASS} !justify-start pt-[48px] max-[800px]:!pt-5 has-[[data-mention-menu]]:z-[6] has-[[data-slash-menu]]:z-[6]`}>
         <div className="flex max-h-[calc(100vh-68px)] min-h-0 min-w-0 w-full flex-col max-[800px]:max-h-none">
           {/* The column head: the status row, led by the page's title (the switcher), and the prompt box
               under it — a new thread without leaving.

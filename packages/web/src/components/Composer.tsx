@@ -316,7 +316,7 @@ export function Composer({
   // Two kinds of run get painted. A staged ⌘I context token gets a pill behind it. A `@handle` that
   // NAMES a thread (the same resolver the transcript links with, lib/threadMentions.ts scanMentions)
   // is TINTED, so a finished mention reads as one once typed rather than as prose — a half-typed or
-  // unknown `@` stays plain, which is the signal it resolved. A <textarea> cannot colour part of its
+  // unknown `@` stays plain, which is the signal it resolved. A textarea cannot colour part of its
   // own text, so while a mention is on screen the MIRROR draws every glyph and the textarea's go
   // transparent (its caret keeps the fg colour); with only pills, the textarea draws the text as ever.
   const stagedTokens = useMemo(() => contextTokens ?? [], [contextTokens])
@@ -476,6 +476,16 @@ export function Composer({
     return mentionThread && subMentions?.slug === mentionThread.slug ? matchMentions(subMentions.candidates, dotted.rest) : []
   }, [mention?.start, mention?.query, mentionCandidates, dismissedFor, prose, mentionThread?.slug, subMentions])
   const mentionOpen = mentionMatches.length > 0
+  // WHICH WAY THE MENUS OPEN. Up by default — a prompt box usually sits at the bottom of its surface —
+  // but All projects puts its box at the TOP of the page, where a menu floated above opened off-screen
+  // and hid most of its rows. So a menu opens below whenever the room above the box is less than the
+  // menu's full height (`max-h-56`, 224px, plus its 6px margin).
+  const [menuBelow, setMenuBelow] = useState(false)
+  const menuOpen = suggestOpen || mentionOpen
+  useLayoutEffect(() => {
+    const box = suggestListRef.current?.parentElement
+    if (menuOpen && box) setMenuBelow(box.getBoundingClientRect().top < 230)
+  }, [menuOpen])
   function acceptMention(item: MentionCandidate) {
     if (!mention || caret === null) return
     const next = insertMention(prose, mention.start, caret, item.handle)
@@ -641,15 +651,15 @@ export function Composer({
           Drop file to attach
         </div>
       )}
-      {/* The skills menu, floated ABOVE the box (the composer lives at the bottom of its surface, so
-          up is the direction with room). Rows are text-only — a name and its one-line description —
+      {/* The skills menu, floated ABOVE the box (the composer usually lives at the bottom of its surface,
+          so up is the direction with room; `menuBelow` flips it where it does not). Rows are text-only — a name and its one-line description —
           which keeps this out of icon-ink territory entirely. Mousedown is prevented on every row for
           the same reason as the send button: choosing a suggestion must never blur the textarea. */}
       {suggestOpen && (
         <div
           ref={suggestListRef}
           data-slash-menu
-          className="absolute bottom-full left-0 right-0 z-20 mb-1.5 max-h-56 overflow-y-auto rounded-lg border border-border bg-bg py-1 shadow-lg"
+          className={`absolute ${menuBelow ? "top-full mt-1.5" : "bottom-full mb-1.5"} left-0 right-0 z-20 max-h-56 overflow-y-auto rounded-lg border border-border bg-bg py-1 shadow-lg`}
         >
           {suggestions.map((s, i) => (
             <button
@@ -705,7 +715,7 @@ export function Composer({
           data-mention-menu
           role="listbox"
           aria-label={dotted ? "Sub-agents" : "Threads"}
-          className="absolute bottom-full left-0 right-0 z-20 mb-1.5 max-h-56 overflow-y-auto rounded-lg border border-border bg-bg py-1 shadow-lg"
+          className={`absolute ${menuBelow ? "top-full mt-1.5" : "bottom-full mb-1.5"} left-0 right-0 z-20 max-h-56 overflow-y-auto rounded-lg border border-border bg-bg py-1 shadow-lg`}
         >
           {mentionMatches.map((m, i) => (
             <button
