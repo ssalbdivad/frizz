@@ -1,4 +1,4 @@
-import { useRef } from "react"
+import { useRef, useState } from "react"
 import { useQueryClient } from "@tanstack/react-query"
 import { Code, Copy, Ellipsis, FileText, Plug, RefreshCw, SquareTerminal } from "lucide-react"
 import type { ThreadView } from "@frizz/shared"
@@ -113,19 +113,29 @@ export function ThreadMenu({ thread, onDoc, restart = true, className = HEADER_I
   const devBuild = useDevFrizzBuild()
   const ownSession = thread.kind === "session" && thread.foreign !== true
   const terminalCommand = useTerminalCommandMenuItem(slug)
-  // `e` opens the editor without opening this menu: the trigger is the surface's one always-rendered
-  // anchor for it (an item exists only while the menu is open), so it carries the command.
-  useCommandHandler(trigger, () => { if (ownSession) openInEditor(api, slug) })
+  const [open, setOpen] = useState(false)
+  const onOpenChange = (next: boolean) => {
+    setOpen(next)
+    if (next && ownSession) terminalCommand.prefetch()
+  }
+  // The items' keys work without opening the menu: an item exists only while its menu is open, so the
+  // trigger — the surface's one always-rendered anchor — carries their commands beside its own `m`.
+  useCommandHandler(trigger, () => onOpenChange(true), "menu")
+  useCommandHandler(trigger, () => { if (ownSession) openInEditor(api, slug) }, "editor")
+  useCommandHandler(trigger, () => { if (ownSession) terminalCommand.copy() }, "copyCommand")
+  const editorKeys = useShortcutLabel("thread.editor")
+  const copyKeys = useShortcutLabel("thread.copyCommand")
+  const menuKeys = useShortcutLabel("thread.menu")
   return (
-    <Menu onOpenChange={(open) => { if (open && ownSession) terminalCommand.prefetch() }}>
+    <Menu open={open} onOpenChange={onOpenChange}>
       <MenuTrigger asChild>
         <button
           ref={trigger}
           type="button"
-          aria-label="More"
-          title="More"
+          aria-label="More actions"
+          title={menuKeys ? `More actions (${menuKeys})` : "More actions"}
           data-thread-menu={slug}
-          data-command="editor"
+          data-command="menu editor copyCommand"
           // The strip's shared focus behaviour: a click here must not take the keyboard away from the
           // composer below it.
           onMouseDown={(event) => event.preventDefault()}
@@ -141,12 +151,12 @@ export function ThreadMenu({ thread, onDoc, restart = true, className = HEADER_I
           </MenuItem>
         )}
         {ownSession && (
-          <MenuItem value="open-in-editor" onSelect={() => openInEditor(api, slug)} icon={<Code size={12} aria-hidden />}>
+          <MenuItem value="open-in-editor" onSelect={() => openInEditor(api, slug)} icon={<Code size={12} aria-hidden />} shortcut={editorKeys}>
             Open in editor
           </MenuItem>
         )}
         {ownSession && (
-          <MenuItem value="copy-terminal-command" onSelect={terminalCommand.copy} icon={<Copy size={12} aria-hidden />}>
+          <MenuItem value="copy-terminal-command" onSelect={terminalCommand.copy} icon={<Copy size={12} aria-hidden />} shortcut={copyKeys}>
             {terminalCommand.label}
           </MenuItem>
         )}

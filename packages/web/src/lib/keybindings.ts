@@ -52,6 +52,8 @@ export type ActionId =
   | "thread.open"
   | "thread.terminal"
   | "thread.editor"
+  | "thread.copyCommand"
+  | "thread.menu"
   | "thread.spinoff"
   | "app.newThread"
   | "app.newProject"
@@ -86,6 +88,12 @@ export const ACTIONS: readonly ActionDef[] = [
   { id: "thread.terminal", label: "Open terminal", group: "queue", defaultChord: "t" },
   // The same folder in the External app — the step `t` then `code .` took (ThreadMenu.tsx openInEditor).
   { id: "thread.editor", label: "Open in editor", group: "queue", defaultChord: "e" },
+  // Vim's and GitHub's `y` for copy ("yank"): each initial of "Copy terminal command" is already bound
+  // (C is New thread, T Open terminal), and the modifier forms are the browser's or need Shift.
+  { id: "thread.copyCommand", label: "Copy terminal command", group: "queue", defaultChord: "y" },
+  // The ⋯ menu itself, so its rarer verbs (Reload plugins, Restart worker, …) are ↓ and Enter away
+  // without each needing a letter of its own.
+  { id: "thread.menu", label: "More actions", group: "queue", defaultChord: "m" },
   // → sends the thread off to the side, the way its dialog's footer reads "from → into". Not `s`, which
   // is Snooze, and not ⇧S, which the rule below would have given it (maintainer 2026-09-30: "i dont like
   // shift"). Free on a card: ↑/↓ scroll it, and the browser claims → only with a modifier held.

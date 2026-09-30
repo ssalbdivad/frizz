@@ -168,7 +168,7 @@ export function currentThreadSurface(): HTMLElement | null {
  *  a click (a Radix menu trigger opens on pointerdown/keydown) can claim it with preventDefault. */
 export const COMMAND_EVENT = "frizz:command"
 
-export type ThreadCommand = "done" | "snooze" | "fullscreen" | "open" | "terminal" | "editor" | "spinoff" | "reply"
+export type ThreadCommand = "done" | "snooze" | "fullscreen" | "open" | "terminal" | "editor" | "copyCommand" | "menu" | "spinoff" | "reply"
 
 // Every prompt box that answers the thing on screen. Deliberately NOT the question card's free-text
 // answer box (`questionAnswer`) — `r` is a reply to the thread, and a question has its own chips.
@@ -180,7 +180,9 @@ function runThreadCommand(command: ThreadCommand): boolean {
   const surface = currentThreadSurface()
   if (!surface) return false
   if (command === "reply") return focusReplyBox(surface)
-  const control = surface.querySelector<HTMLElement>(`[data-command="${command}"]`)
+  // `~=`: one control can carry several commands, space-separated — the ⋯ trigger answers for its menu
+  // and for the items inside it, which exist only while it is open.
+  const control = surface.querySelector<HTMLElement>(`[data-command~="${command}"]`)
   if (!control) return false
   if (!control.dispatchEvent(new CustomEvent(COMMAND_EVENT, { cancelable: true, detail: command }))) return true
   if (control instanceof HTMLButtonElement && control.disabled) return true
@@ -190,21 +192,23 @@ function runThreadCommand(command: ThreadCommand): boolean {
 
 /**
  * Claim a command for a control that must open rather than be clicked — see COMMAND_EVENT. The element
- * still needs its `data-command` attribute; this only replaces what the press does.
+ * still needs its `data-command` attribute; this only replaces what the press does. On a control that
+ * carries several commands, name the one this handler answers.
  */
-export function useCommandHandler(ref: RefObject<HTMLElement | null>, handler: () => void): void {
+export function useCommandHandler(ref: RefObject<HTMLElement | null>, handler: () => void, command?: ThreadCommand): void {
   const latest = useRef(handler)
   latest.current = handler
   useEffect(() => {
     const el = ref.current
     if (!el) return
     const listener = (event: Event) => {
+      if (command && (event as CustomEvent<ThreadCommand>).detail !== command) return
       event.preventDefault()
       latest.current()
     }
     el.addEventListener(COMMAND_EVENT, listener)
     return () => el.removeEventListener(COMMAND_EVENT, listener)
-  }, [ref])
+  }, [ref, command])
 }
 
 // ── the listener ──────────────────────────────────────────────────────────────────────────────────
@@ -219,6 +223,8 @@ const BUILT_INS: Partial<Record<ActionId, Handler>> = {
   "thread.open": () => runThreadCommand("open"),
   "thread.terminal": () => runThreadCommand("terminal"),
   "thread.editor": () => runThreadCommand("editor"),
+  "thread.copyCommand": () => runThreadCommand("copyCommand"),
+  "thread.menu": () => runThreadCommand("menu"),
   "thread.spinoff": () => runThreadCommand("spinoff"),
   "app.shortcuts": () => {
     store.showShortcuts = !store.showShortcuts
