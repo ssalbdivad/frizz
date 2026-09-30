@@ -167,6 +167,7 @@ import { runThreadUpdate } from "./frizz.ts"
 import { repairThreadFile } from "./repair.ts"
 import { reopenArchivedThreadForFollowUp, resumeThread, wakeParkedThreadForFollowUp } from "./resume.ts"
 import { appendDelivery, cancelDelivery, deliverOutstandingDeliveries, deliveryItem, hasDelivery, retireOutstandingDeliveries } from "./delivery-ledger.ts"
+import { SPINOFF_DELIVERY_PREFIX, spinoffIdOfDelivery } from "./spinoff-side-turn.ts"
 import { noteSubAgentsEndedByInterrupt, runningSubAgentsOf } from "./interrupt-ended.ts"
 import {
   readEarlierThreadTranscriptPage,
@@ -937,9 +938,14 @@ export function handoffOf(messages: readonly TranscriptMessage[]): ThreadHandoff
  *  release or strand the others (2026-09-29). This one pairs the queue card's quoted ask with the reply
  *  under it. Answers now arrive one question at a time and the worker rests after acting on each, so
  *  the newest handoff is usually the reply TO an answer; skipping the answer would quote the typed
- *  message before it, over a reply about something else. */
+ *  message before it, over a reply about something else.
+ *
+ *  A spinoff request does NOT count (2026-09-30), though the human asked for it: it asks for another
+ *  thread, so nothing this thread says afterwards answers it, and its side turn is dropped from the chat
+ *  when it did only that (spinoff-side-turn.ts). Anchoring on it would quote the spinoff's instructions
+ *  over no reply at all — the card's handoff is the one the request found. */
 function isHumanTurn(m: TranscriptMessage): boolean {
-  if (m.role !== "user" || m.kind || m.queued || m.peerFrom || m.agentInstruction) return false
+  if (m.role !== "user" || m.kind || m.queued || m.peerFrom || m.agentInstruction || m.spinoff) return false
   const said = (m.displayText ?? m.text).trim()
   if (!said) return false
   // questionAnswerMessage's form; the wake token rides outside `displayText`.
@@ -1583,9 +1589,28 @@ export function createRouter(ctx: AppContext) {
     return await gitGithubRemote(ctx.project.dir)
   }
 
-  // The followUp procedure, captured where it is defined below so `spinoff` delivers through the SAME
+  // The followUp handler, captured where it is defined below so `spinoff` delivers through the SAME
   // handler rather than a copy of its ~350 lines of runtime routing.
-  let followUpProcedure: { handler: (args: { input: z.infer<typeof FollowUpInput> }) => Promise<void> } | undefined
+  let deliverFollowUp: ((args: { input: z.infer<typeof FollowUpInput> }, delivery?: FollowUpDelivery) => Promise<void>) | undefined
+
+  // How a delivery reaches the worker, for callers INSIDE the server. It is a second parameter of the
+  // handler, never a field of FollowUpInput: a client could set a wire field, and nothing a tab sends may
+  // claim that its message is not the human speaking.
+  //
+  // `sideRequest` (2026-09-30): the message is a spinoff request — an errand the thread was asked to run on
+  // the side (start another thread), NOT the human picking this one back up. Everything a follow-up does
+  // BECAUSE the human re-engaged is skipped for it:
+  //   • the riders (humanGapNote, openQuestionsNote) — they tell the worker about ITS work ("the human
+  //     answered after 4h", "these questions are still open"), which is noise on an errand whose answer is
+  //     one spawn_thread call, and an invitation to reopen the thread's own work inside the side turn;
+  //   • reopening an archived thread and clearing a snooze — the human finished or shelved THIS thread, and
+  //     a spinoff from it did not change their mind. The request's side turn is kept out of the thread
+  //     entirely when it is clean (spinoff-side-turn.ts), so the row should be exactly where it was;
+  //   • the model upgrade at compaction — it restarts the worker's process, which is the thread's business
+  //     at the next real turn, not the errand's.
+  // What it keeps is everything about GETTING the message to a working process: the runtime routing, the
+  // limit restart, the ledger entry, the `exited` clearing.
+  interface FollowUpDelivery { sideRequest?: boolean }
 
   // One request can become one thread. The check-then-stamp below spans an await (the dispatch), so two
   // racing `spawn_thread` calls for the same id would both pass the pending check; this set closes that.
@@ -2058,10 +2083,12 @@ export function createRouter(ctx: AppContext) {
 
     // SPINOFF a new thread from this one (SpinoffInput). Records the request, then hands it to THIS
     // thread's worker as a message — through the very path a typed follow-up takes, so it wakes a rested
-    // thread, queues behind a running turn, and reopens a done one exactly as the human's own words
-    // would. The worker answers by dispatching through `spawn_thread` with the request's id, which lands
-    // in `fulfilSpinoff` above. A delivery that fails drops the row: a request the worker never received
-    // must not sit on the thread as one it is ignoring.
+    // (or hibernated) worker and queues behind a running turn exactly as the human's own words would. It
+    // is delivered as a SIDE REQUEST (FollowUpDelivery above): a done thread stays done and a snoozed one
+    // stays snoozed, because the human asked for a new thread, not for this one back. The worker answers
+    // by dispatching through `spawn_thread` with the request's id, which lands in `fulfilSpinoff` above. A
+    // delivery that fails drops the row: a request the worker never received must not sit on the thread
+    // as one it is ignoring — and so does one the human takes back out of the queue (unqueueFollowUp).
     spinoff: mutation({
       input: SpinoffInput,
       output: SpinoffResult,
@@ -2070,12 +2097,12 @@ export function createRouter(ctx: AppContext) {
         const id = `spn_${randomBytes(8).toString("hex")}`
         ctx.storage.insertSpinoff({ id, parentSlug: input.slug, instructions: input.instructions, createdAtMs: Date.now() })
         try {
-          await followUpProcedure!.handler({ input: {
+          await deliverFollowUp!({ input: {
             slug: input.slug,
             sessionId: input.sessionId,
             message: spinoffRequestMessage({ id, instructions: input.instructions }),
-            deliveryId: `spinoff-${id}`,
-          } })
+            deliveryId: `${SPINOFF_DELIVERY_PREFIX}${id}`,
+          } }, { sideRequest: true })
         } catch (err) {
           ctx.storage.dropSpinoff(id)
           throw err
@@ -2092,9 +2119,10 @@ export function createRouter(ctx: AppContext) {
       handler: ({ input }) => ctx.dispatcher.adopt(input.slug, input.message),
     }),
 
-    followUp: followUpProcedure = mutation({
+    followUp: mutation({
       input: FollowUpInput,
-      handler: ({ input }) => joinInflightFollowUp(input.slug, input.deliveryId, async () => {
+      handler: deliverFollowUp = ({ input }, delivery = {}) => joinInflightFollowUp(input.slug, input.deliveryId, async () => {
+        const side = delivery.sideRequest === true
         // Every follow-up crosses a TYPED CONTROL CHANNEL now, never a terminal: a codex row goes to the
         // app-server bridge and a claude row to the session broker, each of which owns its own
         // steer-vs-start decision and reconnects or cold-resumes a dead session itself. Nothing types
@@ -2156,24 +2184,25 @@ export function createRouter(ctx: AppContext) {
         // uses below): what the human typed is what the board shows. Only the copy handed to the worker
         // carries the note, and the note names frizz as its author because the message it rides on is
         // not frizz's.
-        const gapNote = humanGapNote(Date.now(), ctx.tailer.get(input.slug)?.lastAssistantAt)
+        // Neither rider rides a side request (FollowUpDelivery): both speak to the thread's own work.
+        const gapNote = side ? undefined : humanGapNote(Date.now(), ctx.tailer.get(input.slug)?.lastAssistantAt)
         // …AND THE QUESTIONS STILL OPEN, the same way and for the same reader. A typed message no longer
         // releases open questions by timestamp (shared questionRepliedPast, 2026-09-29): it released seven
         // the human still meant to answer when they typed a side question. The worker reads the message
         // and decides which ones it made moot — so it is told, here, at the moment it reads it, which ones
         // are open and by what id `unask` takes them. Appended AFTER the gap note, so that note's "the
         // message above" still means the human's words.
-        const questionsNote = openQuestionsNote(ctx.storage.listThreadQuestions(input.slug, { openOnly: true }).flatMap((q) => {
+        const questionsNote = side ? undefined : openQuestionsNote(ctx.storage.listThreadQuestions(input.slug, { openOnly: true }).flatMap((q) => {
           const spec = parseQuestionSpec(q.spec)
           return spec ? [{ id: q.id, question: spec.question }] : []
         }))
         const riders = [gapNote, questionsNote].filter((note): note is string => note !== undefined)
         const messageForWorker = riders.length > 0 ? `${input.message}\n\n${riders.join("\n\n")}` : input.message
-        if (row) reopenArchivedThreadForFollowUp(ctx, row)
+        if (row && !side) reopenArchivedThreadForFollowUp(ctx, row)
         // Un-park HERE, above the runtime branches, for the same reason the reopen is here: a broker
         // Claude row and an app-server Codex row both return from their own branch below, so anything
-        // that must hold for every runtime has to run before the split.
-        if (row) wakeParkedThreadForFollowUp(ctx, row)
+        // that must hold for every runtime has to run before the split. A side request does neither.
+        if (row && !side) wakeParkedThreadForFollowUp(ctx, row)
         // Every Codex follow-up flows through the app-server bridge — no terminal composer, no queue, no
         // stale-draft class. The bridge owns the steer-vs-start decision atomically and dedups on
         // deliveryId. A LEGACY Codex row (dispatched before the cutover) is migrated on its first
@@ -2296,7 +2325,8 @@ export function createRouter(ctx: AppContext) {
           // family has since moved past takes this message in a fresh process, forked from the current pin.
           // Only at rest — the gate refuses a turn in flight, a sub-agent, a shell, an approval or an
           // undelivered send, so a steer never restarts anything.
-          const upgradeCandidate = claudeUpgradeCandidate({ stateDir: ctx.project.stateDir, projectId: ctx.project.id, storage: ctx.storage, telemetry: ctx.tailer.get(input.slug) }, row)
+          // Not for a side request: the errand runs in the process the thread has (FollowUpDelivery).
+          const upgradeCandidate = side ? undefined : claudeUpgradeCandidate({ stateDir: ctx.project.stateDir, projectId: ctx.project.id, storage: ctx.storage, telemetry: ctx.tailer.get(input.slug) }, row)
           const upgrade = upgradeCandidate
             ? claudeModelUpgradeDue(upgradeCandidate, { catalogue: peekClaudeModels(), nowMs: Date.now(), serverStartedAtMs: SERVER_STARTED_AT_MS })
             : undefined
@@ -2506,6 +2536,13 @@ export function createRouter(ctx: AppContext) {
         // would hide a message the agent is about to read — the one failure this feature must not have.
         if (!cancelled) return tooLate
         cancelDelivery(ctx.storage, input.slug, input.deliveryId)
+        // A spinoff request taken back before the worker read it is a request that will never be answered,
+        // so its row goes the way a failed delivery's does (the `spinoff` mutation): left behind, it would
+        // sit on the thread as a pending spinoff card nothing is ever going to fulfil. Only a PENDING row of
+        // THIS thread — one already fulfilled is a thread that exists.
+        const spinoffId = spinoffIdOfDelivery(input.deliveryId)
+        const spinoff = spinoffId ? ctx.storage.getSpinoff(spinoffId) : undefined
+        if (spinoff && spinoff.parent_slug === input.slug && spinoff.child_slug === null) ctx.storage.dropSpinoff(spinoff.id)
         ctx.board.refresh()
         return { unqueued: true }
       },
@@ -3909,7 +3946,8 @@ export function createRouter(ctx: AppContext) {
         if (childPath.length > 0) return readSubAgent(hit.slug, handleOf(hit), childPath, clip)
         const messages = readThreadTranscript(ctx.project, ctx.storage, hit.slug, ctx.backendFor)
         const said = (m: (typeof messages)[number]) => (m.displayText ?? m.text).trim()
-        const opening = messages.find((m) => m.role === "user" && !m.kind && said(m))
+        // Never a spinoff request (isHumanTurn): it asks for ANOTHER thread, so it is never this one's request.
+        const opening = messages.find((m) => m.role === "user" && !m.kind && !m.spinoff && said(m))
         // The newest assistant words: the handoff when it is resting, the latest narration when it is not —
         // and the three before them, which is where the APPROACH lives when the newest is a terse handoff.
         const spoken = messages.filter((m) => m.role === "assistant" && !m.kind && said(m))
