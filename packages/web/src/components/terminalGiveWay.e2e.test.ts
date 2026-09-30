@@ -73,8 +73,10 @@ test("a terminal row's label outranks its folder hint, which shows whole or not 
       }
     }
 
-    // The agent drawer's header: the reading's numbers are whole or gone, and the title keeps a real width.
-    for (const width of [420, 390]) {
+    // The agent drawer's header: the reading's numbers are whole or gone, each `·` stands a space clear of what
+    // it follows (a part opens a flex item, where a leading space collapses: `running· 43m left· 16m`), and the
+    // title keeps a real width.
+    for (const width of [1400, 420, 390]) {
       await page.setViewport({ width, height: 700, deviceScaleFactor: 1 })
       await page.goto(`${baseUrl}/terminals-unified-fixture.html?mode=agent`, { waitUntil: "networkidle0" })
       await page.waitForSelector("header [data-sheet-meta] [data-reading-part]")
@@ -83,12 +85,26 @@ test("a terminal row's label outranks its folder hint, which shows whole or not 
         const reading = h.querySelector("[data-sheet-meta]")!.firstElementChild!.getBoundingClientRect()
         const parts = [...h.querySelectorAll("[data-reading-part]")].map((p) => {
           const b = p.getBoundingClientRect()
-          return { whole: b.right <= reading.right + 0.5, shown: b.top < reading.bottom - 1 }
+          const sep = p.firstElementChild as HTMLElement
+          const before = p.previousElementSibling as HTMLElement | null
+          let dotGap: number | null = null
+          if (sep.offsetWidth > 0 && before && before.offsetWidth > 0 && sep.firstChild) {
+            const range = document.createRange()
+            range.setStart(sep.firstChild, 1)
+            range.setEnd(sep.firstChild, 2)
+            dotGap = range.getBoundingClientRect().left - before.getBoundingClientRect().right
+          }
+          return { whole: b.right <= reading.right + 0.5, shown: b.top < reading.bottom - 1, dotGap }
         })
         return { titleW: title.width, parts }
       })
       assert.ok(header.titleW > 150, `${width}px: the title keeps ${header.titleW}px (it kept 39-51px on one line)`)
-      for (const p of header.parts) assert.ok(!p.shown || p.whole, `${width}px: a reading part is cut`)
+      for (const p of header.parts) {
+        assert.ok(!p.shown || p.whole, `${width}px: a reading part is cut`)
+        if (p.shown && p.dotGap !== null) assert.ok(p.dotGap >= 2, `${width}px: a \`·\` sits ${p.dotGap}px from what it follows`)
+      }
+      // At 1400 `running` stands before the age; narrower, beside the Stop, it goes with its `·`.
+      if (width === 1400) assert.ok(header.parts.some((p) => p.shown && p.dotGap !== null), `${width}px: a separator was measured`)
     }
     assert.deepEqual(errors, [])
   } finally {

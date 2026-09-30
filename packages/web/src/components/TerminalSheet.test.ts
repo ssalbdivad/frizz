@@ -54,7 +54,9 @@ test("the reading's parts give way whole, and a narrow header drops a `running` 
   assert.ok(!box.includes("truncate"), "the box as a whole never ellipsises a number")
   const parts = [...html.matchAll(/<span data-reading-part="true" class="([^"]*)">/g)].map((m) => m[1])
   assert.deepEqual(parts, ["shrink-0", "shrink-0"], "each number is whole, never shrunk")
-  assert.match(html, /<span class="min-w-0 truncate @max-\[28rem\]:hidden ">running<\/span><span data-reading-part="true" class="shrink-0"><span class="@max-\[28rem\]:hidden"> · <\/span>12m left/)
+  assert.match(html, /<span class="min-w-0 truncate @max-\[28rem\]:hidden ">running<\/span><span data-reading-part="true" class="shrink-0"><span class="whitespace-pre @max-\[28rem\]:hidden"> · <\/span>12m left/)
+  // Every separator keeps its spaces: each opens a flex item, where a leading space is otherwise collapsed.
+  assert.equal([...html.matchAll(/<span class="whitespace-pre[^"]*"> · <\/span>/g)].length, 2)
   // No Stop (a finished run, a shell Frizz cannot stop), or a state that is not `running`: the word stays.
   const done = renderToStaticMarkup(createElement(StateReading, { state: "exit 2", tone: "danger", attr: {} }))
   assert.doesNotMatch(done, /@max-\[28rem\]:hidden/)

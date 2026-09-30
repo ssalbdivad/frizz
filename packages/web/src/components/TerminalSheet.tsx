@@ -115,7 +115,9 @@ export function StateReading({ state, age, budget, tone, stopShown, attr }: {
       {/* The budget before the age, as the strip and the rail read the same shell: one order everywhere. */}
       {parts.map((part, i) => (
         <span key={i} data-reading-part className="shrink-0">
-          <span className={i === 0 && quietState ? "@max-[28rem]:hidden" : undefined}>{" · "}</span>
+          {/* `whitespace-pre`, or the separator's leading space is lost: a part is a flex item, and a space
+              opening a flex item's line is collapsed away, which drew `running· 43m left· 16m`. */}
+          <span className={i === 0 && quietState ? "whitespace-pre @max-[28rem]:hidden" : "whitespace-pre"}>{" · "}</span>
           {part}
         </span>
       ))}
