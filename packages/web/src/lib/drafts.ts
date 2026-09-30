@@ -91,6 +91,8 @@ export const draftKey = {
   dispatchProfile: (projectDir: string | undefined) => `dispatch-profile:${projectDraftScope(projectDir)}:new`,
   // The command half of a thread's "Open terminal" dialog (OpenTerminalDialog), one per thread.
   terminalCommand: (projectDir: string | undefined, slug: string) => `terminal-command:${projectDraftScope(projectDir)}:${encodeURIComponent(slug)}`,
+  // A thread's "Spinoff" dialog (SpinoffDialog) — the instructions for the new thread, one per thread.
+  spinoff: (projectDir: string | undefined, slug: string) => `spinoff:${projectDraftScope(projectDir)}:${encodeURIComponent(slug)}`,
   // A finished terminal's next line (TerminalFollowUp) — one per terminal.
   terminalNext: (projectDir: string | undefined, id: string) => `terminal-next:${projectDraftScope(projectDir)}:${encodeURIComponent(id)}`,
   followUp: (projectDir: string | undefined, slug: string, sessionId?: string) => `followup:${projectDraftScope(projectDir)}:${encodeURIComponent(slug)}:${encodeURIComponent(sessionId ?? "unowned")}`,

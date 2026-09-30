@@ -111,10 +111,7 @@ export function MessageStamp({ at, host }: { at: string | undefined; host: Stamp
   )
 }
 
-/** `action` is a per-message control (the spin-off button) laid in the row's right GUTTER — the `px-6` —
- *  at the message's top edge, so it covers no text and adds no height. It positions itself
- *  horizontally; the row supplies only the vertical offset, since that is the row's own `gap`. */
-export function MessageRow({ at, host, gap, children, action }: { at: string | undefined; host: StampHost; gap: number; children: ReactNode; action?: ReactNode }) {
+export function MessageRow({ at, host, gap, children }: { at: string | undefined; host: StampHost; gap: number; children: ReactNode }) {
   return (
     // A NAMED group (`group/ts`), not a bare one: the transcript nests plenty of its own `group`
     // hovers (the retractable bubble's unqueue control, the clickable dividers), and an unnamed group
@@ -122,7 +119,6 @@ export function MessageRow({ at, host, gap, children, action }: { at: string | u
     <div className="group/ts relative flex flex-col px-6" style={{ paddingTop: gap }}>
       {children}
       <MessageStamp at={at} host={host} />
-      {action && <div className="absolute inset-x-0" style={{ top: gap }}>{action}</div>}
     </div>
   )
 }

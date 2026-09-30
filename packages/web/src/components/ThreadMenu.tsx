@@ -7,7 +7,10 @@ import { prefersReducedMotion } from "../lib/sheet.ts"
 import { standaloneThreadHref } from "../lib/standaloneThreadRoute.ts"
 import { HEADER_ICON_CLASS } from "../lib/headerIcon.ts"
 import { useCommandHandler, useShortcutLabel } from "../lib/keyboardRuntime.ts"
+import { useBoard } from "../hooks.ts"
+import { threadBySlug } from "../store.ts"
 import { Menu, MenuContent, MenuItem, MenuTrigger } from "./ui/Menu.tsx"
+import { canSpinoff, SpinoffDialog, SpinoffMark } from "./Spinoff.tsx"
 import { OpenTerminalDialog } from "./ThreadTerminals.tsx"
 
 // THE DRAWER'S "MORE" MENU, and the one way into a thread's /full page.
@@ -59,10 +62,16 @@ export function openFullscreen(slug: string, from: HTMLElement | null, href = st
 // so it is opened from that thread's drawer, in the folder its agent is working in. `t` is its key; the
 // menu trigger already answers to `f`, so the terminal's `data-command` rides a hidden element whose only
 // job is to receive the key's press (lib/keyboardRuntime.ts runThreadCommand finds it in this drawer).
+//
+// And SPINOFF (Spinoff.tsx): a new thread briefed from this one, asked of the thread as a whole — this
+// item is its only door. It has no key: the single-letter rule (lib/keybindings.ts) wants an initial of
+// its label, and `s` is Snooze's.
 export function ThreadMenu({ slug }: { slug: string }) {
   const trigger = useRef<HTMLButtonElement>(null)
   const terminalKey = useRef<HTMLSpanElement>(null)
   const [terminalOpen, setTerminalOpen] = useState(false)
+  const [spinoffOpen, setSpinoffOpen] = useState(false)
+  const thread = threadBySlug(useBoard(), slug)
   const keys = useShortcutLabel("thread.fullscreen")
   const terminalKeys = useShortcutLabel("thread.terminal")
   // `f` on this drawer goes straight to /full: the key presses the thread's `fullscreen` control, which is
@@ -73,6 +82,7 @@ export function ThreadMenu({ slug }: { slug: string }) {
     <>
     <span ref={terminalKey} data-command="terminal" hidden />
     <OpenTerminalDialog slug={slug} open={terminalOpen} onOpenChange={setTerminalOpen} />
+    {canSpinoff(thread) && <SpinoffDialog thread={thread} open={spinoffOpen} onOpenChange={setSpinoffOpen} />}
     <Menu>
       <MenuTrigger asChild>
         <button
@@ -103,6 +113,11 @@ export function ThreadMenu({ slug }: { slug: string }) {
             {terminalKeys && <span className="text-[10px] text-muted-55">{terminalKeys}</span>}
           </span>
         </MenuItem>
+        {canSpinoff(thread) && (
+          <MenuItem value="spinoff" onSelect={() => setSpinoffOpen(true)} icon={<SpinoffMark size={12} />}>
+            Spinoff
+          </MenuItem>
+        )}
       </MenuContent>
     </Menu>
     </>
