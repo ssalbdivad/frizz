@@ -1,6 +1,6 @@
 import { test } from "node:test"
 import assert from "node:assert/strict"
-import { canInterruptAndSend, shouldInterruptSubmitComposerEnter, shouldPushQueuedComposerEnter, shouldRestoreOptionEnterNewline, shouldSaveTodoComposerEnter, shouldSubmitComposerEnter, shouldSubmitStagedEnter, type ComposerKeyboardEvent } from "./composerKeyboard.ts"
+import { canInterruptAndSend, shouldInterruptSubmitComposerEnter, shouldPushQueuedComposerEnter, shouldRestoreOptionEnterNewline, shouldSaveLazyComposerEnter, shouldSubmitComposerEnter, shouldSubmitStagedEnter, type ComposerKeyboardEvent } from "./composerKeyboard.ts"
 
 function key(overrides: Partial<ComposerKeyboardEvent> = {}): ComposerKeyboardEvent {
   return {
@@ -128,13 +128,13 @@ test("the forced chord on an empty box pushes the queued message; anything else 
   assert.equal(shouldInterruptSubmitComposerEnter(key({ metaKey: true }), false), false)
 })
 
-test("⌘/Ctrl-Shift-Enter saves a todo, and claims no other Enter", () => {
-  assert.equal(shouldSaveTodoComposerEnter(key({ metaKey: true, shiftKey: true }), true), true)
-  assert.equal(shouldSaveTodoComposerEnter(key({ ctrlKey: true, shiftKey: true }), true), true)
-  assert.equal(shouldSaveTodoComposerEnter(key({ metaKey: true, shiftKey: true }), false), false)
-  assert.equal(shouldSaveTodoComposerEnter(key({ metaKey: true, shiftKey: true, isComposing: true }), true), false)
-  assert.equal(shouldSaveTodoComposerEnter(key({ shiftKey: true }), true), false, "Shift-Enter stays a newline")
-  assert.equal(shouldSaveTodoComposerEnter(key({ metaKey: true }), true), false, "⌘-Enter stays the forced send")
+test("⌘/Ctrl-Shift-Enter saves a lazy thread, and claims no other Enter", () => {
+  assert.equal(shouldSaveLazyComposerEnter(key({ metaKey: true, shiftKey: true }), true), true)
+  assert.equal(shouldSaveLazyComposerEnter(key({ ctrlKey: true, shiftKey: true }), true), true)
+  assert.equal(shouldSaveLazyComposerEnter(key({ metaKey: true, shiftKey: true }), false), false)
+  assert.equal(shouldSaveLazyComposerEnter(key({ metaKey: true, shiftKey: true, isComposing: true }), true), false)
+  assert.equal(shouldSaveLazyComposerEnter(key({ shiftKey: true }), true), false, "Shift-Enter stays a newline")
+  assert.equal(shouldSaveLazyComposerEnter(key({ metaKey: true }), true), false, "⌘-Enter stays the forced send")
   assert.equal(shouldInterruptSubmitComposerEnter(key({ metaKey: true, shiftKey: true }), true), false)
   assert.equal(shouldSubmitComposerEnter(key({ metaKey: true, shiftKey: true }), true), false)
 })

@@ -8,7 +8,7 @@ import {
   BoardSnapshot,
   AdoptThreadInput,
   AdoptThreadResult,
-  CreateTodoInput,
+  CreateLazyThreadInput,
   DispatchInput,
   FollowUpInput,
   UnqueueFollowUpInput,
@@ -48,8 +48,8 @@ import {
   GithubBatchInput,
   GithubBatchResult,
   Settings,
-  LaunchTodoInput,
-  UpdateTodoInput,
+  StartLazyThreadInput,
+  UpdateLazyPromptInput,
   TranscriptMessage,
   WorkflowAgentView,
   TranscriptPage,
@@ -217,7 +217,7 @@ import type { BackendKind } from "./backend/types.ts"
 import { threadProfileOptions, validateThreadProfile } from "./backend/thread-profiles.ts"
 import { adoptionRuntimeBinding, type AdoptionPaneLookup, type ExpectedAdoptionPane } from "./adoption-recovery.ts"
 import { parseIssueRef, parsePrRef, readGithubIssueStatusBook, readGithubStatusBook, GITHUB_ISSUE_STATUS_SETTING, GITHUB_STATUS_SETTING } from "./awaiting.ts"
-import { isBrokerClaudeRow, isTodoRow, type RecurringWrite, type SessionRow, type Storage, type SubAgentSteerRow, type ThreadQuestionRow } from "./storage.ts"
+import { isBrokerClaudeRow, isLazyRow, type RecurringWrite, type SessionRow, type Storage, type SubAgentSteerRow, type ThreadQuestionRow } from "./storage.ts"
 import { SUBAGENT_STALE_MS, unwrapShellCommand, type SessionTelemetry } from "./tailer.ts"
 import { workflowAgentViews } from "./workflow-runs.ts"
 import { providerResumeCommand } from "./external-terminal.ts"
@@ -1373,27 +1373,27 @@ export function createRouter(ctx: AppContext) {
     })().catch((error) => frizzLog.warn("worktree", `cleanup for ${slug} failed: ${String(error)}`))
   }
 
-  // One launch per todo at a time. A second click while the first is still spawning would start a
+  // One launch per lazy thread at a time. A second click while the first is still spawning would start a
   // second agent on the SAME session id, so it is refused here rather than raced in the broker.
-  const launchingTodos = new Set<string>()
-  async function launchTodoRow(
+  const startingLazyThreads = new Set<string>()
+  async function startLazyThreadRow(
     row: SessionRow,
     prompt: string,
     profile: { model?: string; backend?: BackendKind; effort?: DispatchInput["effort"] } = {},
   ): Promise<{ slug: string; sessionId: string }> {
-    if (!isTodoRow(row)) throw new Error("This thread has already started")
-    if (launchingTodos.has(row.slug)) throw new Error("This thread is already starting")
-    launchingTodos.add(row.slug)
+    if (!isLazyRow(row)) throw new Error("This thread has already started")
+    if (startingLazyThreads.has(row.slug)) throw new Error("This thread is already starting")
+    startingLazyThreads.add(row.slug)
     try {
       const backend = profile.backend ?? (row.backend === "codex" || row.backend === "acp" ? row.backend : "claude")
       const sameBackend = profile.backend === undefined || profile.backend === row.backend
       const model = profile.model ?? (sameBackend ? row.model ?? undefined : undefined)
       const effort = profile.effort ?? (sameBackend && model === (row.model ?? undefined) ? (row.effort ?? undefined) as DispatchInput["effort"] : undefined)
-      const started = await ctx.dispatcher.dispatch({ prompt, model, effort }, { backend, todo: row })
+      const started = await ctx.dispatcher.dispatch({ prompt, model, effort }, { backend, lazy: row })
       ctx.board.refresh()
       return started
     } finally {
-      launchingTodos.delete(row.slug)
+      startingLazyThreads.delete(row.slug)
     }
   }
 
@@ -2493,30 +2493,30 @@ export function createRouter(ctx: AppContext) {
       },
     }),
 
-    // TODOS (plans/todos.md): a thread written down without starting an agent. Creating one spawns
+    // LAZY THREADS (plans/lazy-threads.md): a thread written down without starting an agent. Creating one spawns
     // nothing; it rests in the queue as an ordinary thread row whose note stands where a transcript would.
-    createTodo: mutation({
-      input: CreateTodoInput,
+    createLazyThread: mutation({
+      input: CreateLazyThreadInput,
       output: z.object({ slug: ThreadSlug, sessionId: z.string() }),
-      handler: async ({ input }) => ctx.dispatcher.createTodo(input),
+      handler: async ({ input }) => ctx.dispatcher.createLazyThread(input),
     }),
 
-    // Rewrite a todo's note. Refused once the thread has started: the note was its first message by then.
-    updateTodo: mutation({
-      input: UpdateTodoInput,
+    // Rewrite a lazy thread's note. Refused once the thread has started: the note was its first message by then.
+    updateLazyPrompt: mutation({
+      input: UpdateLazyPromptInput,
       handler: async ({ input }) => {
         currentOwnedSession(input.slug, input.sessionId)
-        if (!ctx.storage.setTodoNote(input.slug, input.sessionId, input.note)) throw new Error("This thread has already started")
+        if (!ctx.storage.setLazyPrompt(input.slug, input.sessionId, input.prompt)) throw new Error("This thread has already started")
         ctx.board.refresh()
       },
     }),
 
-    // Start a todo's agent with `prompt` as its opening message — usually the note, edited in the prompt
-    // box first. The profile defaults to the one the todo was written down with.
-    launchTodo: mutation({
-      input: LaunchTodoInput,
+    // Start a lazy thread's agent with `prompt` as its opening message — usually the note, edited in the prompt
+    // box first. The profile defaults to the one the lazy thread was written down with.
+    startLazyThread: mutation({
+      input: StartLazyThreadInput,
       output: z.object({ slug: ThreadSlug, sessionId: z.string() }),
-      handler: async ({ input }) => launchTodoRow(currentOwnedSession(input.slug, input.sessionId), input.prompt, input),
+      handler: async ({ input }) => startLazyThreadRow(currentOwnedSession(input.slug, input.sessionId), input.prompt, input),
     }),
 
     // SPINOFF a new thread from this one (SpinoffInput). Records the request, then hands it to THIS
@@ -2596,14 +2596,14 @@ export function createRouter(ctx: AppContext) {
         // false for every ordinary send, so the guard still runs first for everything else.
         await promoteExternalSession(input.slug, input.sessionId)
         const row = currentOwnedSession(input.slug, input.sessionId)
-        // A TODO HAS NO AGENT TO DELIVER TO: its first message is what starts one, through the dispatch
-        // path (launchTodoRow). Every sender lands here — the drawer's prompt box, a snooze carrying a
-        // prompt, another thread's message — so each of them starts the todo rather than resuming a
+        // A LAZY THREAD HAS NO AGENT TO DELIVER TO: its first message is what starts one, through the dispatch
+        // path (startLazyThreadRow). Every sender lands here — the drawer's prompt box, a snooze carrying a
+        // prompt, another thread's message — so each of them starts the lazy thread rather than resuming a
         // session no provider has heard of. A side request is the exception: it asks this thread's worker
         // for an errand, and there is no worker to ask.
-        if (isTodoRow(row)) {
+        if (isLazyRow(row)) {
           if (side) throw new Error("This thread has not started yet; send it a message to start it")
-          await launchTodoRow(row, input.message)
+          await startLazyThreadRow(row, input.message)
           return
         }
         if (hasPendingPermissionChange(row)) {
@@ -5392,7 +5392,7 @@ const HUMAN_THREAD_ACTS = [
   "dismissThread", "setThreadSnooze", "setThreadPinned", "setThreadRecurringPrompt", "setThreadHeartbeat",
   "snoozeAwaitingBackground", "snoozeUntilSubAgentsReturn", "answerQuestions", "dismissQuestions", "renameThread",
   "aiRenameThread", "killAgent", "subAgentSteer", "subAgentStop", "stopBackgroundOp", "interactionResolve",
-  "interactionCancel", "terminalStart", "terminalRun", "openThreadFolder", "updateTodo", "launchTodo",
+  "interactionCancel", "terminalStart", "terminalRun", "openThreadFolder", "updateLazyPrompt", "startLazyThread",
 ] as const satisfies readonly (keyof ReturnType<typeof createRouter>)[]
 
 export type AppRouter = ReturnType<typeof createRouter>

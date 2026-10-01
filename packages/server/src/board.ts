@@ -13,7 +13,7 @@ import { AskedQuestionSchema, BoardDiffer, PermissionMode, SnoozeUntil, ThreadSl
 import type { Bus } from "./bus.ts"
 import { workDirOf, type Project } from "./project.ts"
 import { liftWorkingDir } from "./thread-cwd.ts"
-import { isHeadlessRow, isBrokerClaudeRow, isTodoRow, sessionTitleLocked, type ThreadQuestionRow } from "./storage.ts"
+import { isHeadlessRow, isBrokerClaudeRow, isLazyRow, sessionTitleLocked, type ThreadQuestionRow } from "./storage.ts"
 import type { Storage, SessionRow, PrWatchRow, ThreadTimerRow, ThreadWatchRow, ThreadLinkRow, ShellBudgetRow, ThreadSpinoffRow } from "./storage.ts"
 import { resolveShellBudget, shellBudgetRecordOf } from "./shell-budget.ts"
 import { threadLinkView } from "./thread-links.ts"
@@ -2261,16 +2261,16 @@ function sessionThreadView(
   }
 }
 
-// A TODO's reading (SessionRow.todo, plans/todos.md). Everything the row itself decides — title, done,
+// A LAZY THREAD's reading (SessionRow.lazy_prompt, plans/lazy-threads.md). Everything the row itself decides — title, done,
 // snooze, pin, links, the profile it will start on — comes from sessionThreadView like any thread's;
 // what it would derive from a running agent is replaced, because there has never been one. Without
 // this an untailed row reads as a dispatch still spinning up (Active, forever), and past the discovery
-// grace as a worker that never wrote its transcript (a stall card). A todo is neither: it is waiting
+// grace as a worker that never wrote its transcript (a stall card). A lazy thread is neither: it is waiting
 // on the human, exactly like a bare rest, so it queues unless it is done or snoozed.
-export function todoThreadView(view: ThreadView, row: SessionRow): ThreadView {
+export function lazyThreadView(view: ThreadView, row: SessionRow): ThreadView {
   return {
     ...view,
-    todo: row.todo ?? "",
+    lazyPrompt: row.lazy_prompt ?? "",
     runtime: "turn-idle",
     needsYou: !view.archived && view.snoozedUntil === undefined,
     awaitingBackground: false,
@@ -2695,8 +2695,8 @@ export function createBoard(
         issueBook,
         claudeModels(),
       )
-      if (isTodoRow(row)) {
-        out.push(todoThreadView(base, row))
+      if (isLazyRow(row)) {
+        out.push(lazyThreadView(base, row))
         continue
       }
       const view = base

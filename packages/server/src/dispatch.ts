@@ -6,7 +6,7 @@ import {
   AdoptSessionInput,
   AdoptThreadInput,
   DISPATCH_TASK_BANNER_MARKER,
-  CreateTodoInput,
+  CreateLazyThreadInput,
   DispatchInput,
   THREAD_SLUG_MAX_CHARS,
   ThreadSlug,
@@ -19,7 +19,7 @@ import {
 import { log as frizzLog } from "./logging.ts"
 import { PERM_DIR_ENV, permRequestDir, workDirOf, type Project } from "./project.ts"
 import type { SessionRow, Storage } from "./storage.ts"
-import { isTodoRow } from "./storage.ts"
+import { isLazyRow } from "./storage.ts"
 import type { BoardManager } from "./board.ts"
 import type { AgentBackend, BackendKind, BuiltCommand, FrizzMcp } from "./backend/types.ts"
 import { workerMcpServers, type WorkerMcpServers } from "./backend/project-mcp-servers.ts"
@@ -780,18 +780,18 @@ export interface Dispatcher {
   // only — a fork of any other backend's session is refused, never approximated. Server-only, for the
   // same reason as `nameSource`: what a thread starts from is not a caller's to choose over the RPC.
   //
-  // `opts.todo` STARTS AN UNSTARTED THREAD (SessionRow.todo, plans/todos.md): the dispatch runs on that
+  // `opts.lazy` STARTS AN UNSTARTED THREAD (SessionRow.lazy thread, plans/lazy-threads.md): the dispatch runs on that
   // row's own slug, session id and title instead of minting new ones, so everything already hung on the
   // row — its place in the queue, a pin, links, a name the human typed — carries over, and the upsert
-  // that writes the live row clears the note. Server-only, like `fork`: the caller is launchTodo.
-  dispatch(input: DispatchInput, opts?: { backend?: BackendKind; nameSource?: string; fork?: { sessionId: string }; todo?: SessionRow }): Promise<{ slug: string; sessionId: string }>
+  // that writes the live row clears the note. Server-only, like `fork`: the caller is startLazyThread.
+  dispatch(input: DispatchInput, opts?: { backend?: BackendKind; nameSource?: string; fork?: { sessionId: string }; lazy?: SessionRow }): Promise<{ slug: string; sessionId: string }>
   // Cold-adopt an EXISTING thread frizz didn't originate (e.g. a repo with a pre-existing .frizz
   // board): spawn a fresh worker pointed at the thread file. Frizz's contract makes this sound —
   // the doc, not the conversation, is the durable context; the worker reads it and continues.
   adopt(slug: string, message?: string): Promise<{ slug: string; sessionId: string }>
-  // Write down a TODO: a thread row with a name and a session id but no agent (SessionRow.todo). Nothing
-  // is spawned and no provider is contacted; `dispatch` with `opts.todo` starts it later.
-  createTodo(input: CreateTodoInput): { slug: string; sessionId: string }
+  // Write down a LAZY THREAD: a thread row with a name and a session id but no agent (SessionRow.lazy_prompt). Nothing
+  // is spawned and no provider is contacted; `dispatch` with `opts.lazy` starts it later.
+  createLazyThread(input: CreateLazyThreadInput): { slug: string; sessionId: string }
   // Take over an EXTERNAL session — one of the human's own `claude`/`codex` terminals, listed in the
   // rail's External band. Distinct from `adopt` above, which cold-starts a fresh worker on a thread
   // FILE: this one binds frizz to a conversation that already exists and continues it.
@@ -935,28 +935,28 @@ export function createDispatcher(deps: DispatchDeps): Dispatcher {
       // held to the project's uniqueness rule here.
       // So is its length: a caller's name too long to type as a handle is dropped, and the thread is minted
       // a name like any other — a spawn_thread title is where `@spinoffFeatureScopeAndUi` came from.
-      const todo = opts?.todo
-      if (todo && !isTodoRow(todo)) throw new Error("that thread has already started")
+      const lazy = opts?.lazy
+      if (lazy && !isLazyRow(lazy)) throw new Error("that thread has already started")
       const callerTitle = input.title?.trim() && !threadNameProblem(input.title.trim()) ? input.title.trim() : undefined
       const nameSource = opts?.nameSource?.trim() || input.prompt
-      // A todo keeps the name it was given when it was created, minted or typed; it is not named again.
-      const title = todo?.title?.trim() || (callerTitle && deps.threadNamer ? deps.threadNamer.distinct(callerTitle, nameSource, input.slug) : callerTitle) ||
+      // A lazy thread keeps the name it was given when it was created, minted or typed; it is not named again.
+      const title = lazy?.title?.trim() || (callerTitle && deps.threadNamer ? deps.threadNamer.distinct(callerTitle, nameSource, input.slug) : callerTitle) ||
         fallbackTitle(nameSource)
       const mintName = (slug: string, sessionId: string) => {
-        if (!callerTitle && !todo) void deps.threadNamer?.mint(slug, sessionId, nameSource)
+        if (!callerTitle && !lazy) void deps.threadNamer?.mint(slug, sessionId, nameSource)
       }
       const base = input.slug ?? slugify(title)
-      const slug = todo ? todo.slug : resolveSlug(frizzDir, base, (s) => deps.storage.getSession(s) !== undefined)
-      // The title flags a todo already has: a name the human typed stays locked against the worker's rename.
-      const titleFlags = todo
-        ? { title_auto: todo.title_auto, title_locked: todo.title_locked }
+      const slug = lazy ? lazy.slug : resolveSlug(frizzDir, base, (s) => deps.storage.getSession(s) !== undefined)
+      // The title flags a lazy thread already has: a name the human typed stays locked against the worker's rename.
+      const titleFlags = lazy
+        ? { title_auto: lazy.title_auto, title_locked: lazy.title_locked }
         : undefined
       // Codex TUI does not reliably emit either a native title or Frizz's requested hidden marker.
       // Keep the already bounded, deterministic dispatch title as the durable automatic fallback.
       // Unlike the full composed prompt, fallbackTitle is capped and topic-oriented; a later valid
       // provider/Frizz signal may still replace it through the title_auto CAS.
       const registryTitle = title
-      const sessionId = todo ? todo.session_id : randomUUID()
+      const sessionId = lazy ? lazy.session_id : randomUUID()
       const permissionMode = workerDispatchPermission(kind, settings)
       // Resolve the profile ONCE for this session. It feeds both the CLI argv and the persisted row,
       // so the thread UI describes what this dispatch actually launched with rather than whatever the
@@ -1186,13 +1186,13 @@ export function createDispatcher(deps: DispatchDeps): Dispatcher {
       throw new Error(`unsupported backend for dispatch: ${String(kind)}`)
     },
 
-    createTodo(input) {
-      input = CreateTodoInput.parse(input)
+    createLazyThread(input) {
+      input = CreateLazyThreadInput.parse(input)
       const kind: BackendKind = input.backend ?? "claude"
       // A typed name is the human's, so it is locked; otherwise the note is chopped like a prompt and the
       // row is minted a real name, exactly as a dispatch would be.
       const typed = input.title?.trim() && !threadNameProblem(input.title.trim()) ? input.title.trim() : undefined
-      const title = (typed && deps.threadNamer ? deps.threadNamer.distinct(typed, input.note) : typed) || fallbackTitle(input.note)
+      const title = (typed && deps.threadNamer ? deps.threadNamer.distinct(typed, input.prompt) : typed) || fallbackTitle(input.prompt)
       const slug = resolveSlug(frizzDir, slugify(title), (s) => deps.storage.getSession(s) !== undefined)
       const sessionId = randomUUID()
       const settings = deps.getSettings()
@@ -1221,10 +1221,10 @@ export function createDispatcher(deps: DispatchDeps): Dispatcher {
         model: model ?? null,
         effort: kind === "acp" ? null : effort ?? null,
         permission_mode: null,
-        todo: input.note,
+        lazy_prompt: input.prompt,
       })
       deps.storage.setBackend(slug, kind)
-      if (!typed) void deps.threadNamer?.mint(slug, sessionId, input.note)
+      if (!typed) void deps.threadNamer?.mint(slug, sessionId, input.prompt)
       void deps.board.rebuild().catch(() => {})
       return { slug, sessionId }
     },

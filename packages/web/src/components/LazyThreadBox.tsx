@@ -5,14 +5,14 @@ import { showToast } from "../store.ts"
 import { useThreadApi } from "../api/threadApi.tsx"
 import { Composer } from "./Composer.tsx"
 
-// A TODO's prompt box (plans/todos.md): a thread written down without an agent. The note IS the box's
+// A LAZY THREAD's prompt box (plans/lazy-threads.md): a thread written down without an agent. The note IS the box's
 // text — there is no separate note view to keep in step with a draft — so the queue card and the drawer
 // show the same words, edits save back to the thread as they are typed, and sending it starts the agent
 // with whatever the box says by then.
 //
 // It is not ThreadComposerBox, on purpose. Everything that box carries is about a RUNNING agent — its
 // model and permission controls act on a live runtime, `/` asks the harness for its skills, ⌘-Enter
-// interrupts a turn, `$ cmd` opens a terminal in the agent's folder — and a todo has none of those yet.
+// interrupts a turn, `$ cmd` opens a terminal in the agent's folder — and a lazy thread has none of those yet.
 // The profile it starts on is the one the prompt box had when it was written down.
 //
 // The draft store is not used either: the server holds the note, so the box reads it from the board and
@@ -20,7 +20,7 @@ import { Composer } from "./Composer.tsx"
 // our own save is told apart from an edit made somewhere else (the other surface, another tab).
 const SAVE_DELAY_MS = 500
 
-export function TodoBox({
+export function LazyThreadBox({
   thread,
   surface,
   className,
@@ -32,7 +32,7 @@ export function TodoBox({
   id?: string
 }): ReactElement {
   const api = useThreadApi()
-  const note = thread.todo ?? ""
+  const note = thread.lazyPrompt ?? ""
   const [text, setText] = useState(note)
   const saved = useRef(note)
 
@@ -47,7 +47,7 @@ export function TodoBox({
     if (text === saved.current || !thread.sessionId) return
     const timer = setTimeout(() => {
       const sending = text
-      api.updateTodo({ slug: thread.id, sessionId: thread.sessionId!, note: sending }).then(
+      api.updateLazyPrompt({ slug: thread.id, sessionId: thread.sessionId!, prompt: sending }).then(
         () => { saved.current = sending },
         // Started meanwhile (another tab sent it): the note is now the thread's first message, so there is
         // nothing left to save it into.
@@ -58,7 +58,7 @@ export function TodoBox({
   }, [text, thread.id, thread.sessionId, api])
 
   const launch = useMutation({
-    mutationFn: (prompt: string) => api.launchTodo({ slug: thread.id, sessionId: thread.sessionId!, prompt }),
+    mutationFn: (prompt: string) => api.startLazyThread({ slug: thread.id, sessionId: thread.sessionId!, prompt }),
     onError: (cause) => showToast(`Could not start the agent: ${(cause instanceof Error ? cause.message : String(cause)).slice(0, 80)}`),
   })
 
@@ -69,7 +69,7 @@ export function TodoBox({
   }
 
   return (
-    <div data-thread-composer-box={surface} data-todo-box className={className}>
+    <div data-thread-composer-box={surface} data-lazy-box className={className}>
       <Composer
         id={id}
         surface={surface}
