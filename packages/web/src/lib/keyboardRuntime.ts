@@ -176,7 +176,9 @@ const REPLY_BOXES = ["queueComposer", "chatComposer", "adoptComposer", "subAgent
   .map((surface) => `[data-surface="${surface}"]`)
   .join(",")
 
-function runThreadCommand(command: ThreadCommand): boolean {
+/** Press `command` on the surface in front of the human; false when there is no such surface or control,
+ *  which lets a page fall back to its own reading of the key (AllQueues.tsx: `e` with no card). */
+export function runThreadCommand(command: ThreadCommand): boolean {
   const surface = currentThreadSurface()
   if (!surface) return false
   if (command === "reply") return focusReplyBox(surface)
@@ -258,6 +260,18 @@ function overlayOpen(): boolean {
   if (typeof document === "undefined") return false
   if (document.querySelector(OVERLAY_SELECTOR) !== null) return true
   return document.body.style.pointerEvents === "none" && document.querySelector('[data-drawer-layer][aria-modal="true"]') === null
+}
+
+/**
+ * Whether a key nobody has claimed is the PAGE's: not typed into a field, not under an overlay, not
+ * already handled. The same gate a plain binding passes, for the fixed keys a page hears on the window
+ * itself (AllQueues.tsx: ⌥↑/⌥↓ with no prompt box focused).
+ */
+export function isPageKey(event: KeyboardEvent): boolean {
+  if (event.defaultPrevented || event.isComposing || event.keyCode === 229) return false
+  if (event.target instanceof Element && event.target.closest(".xterm")) return false
+  if (isTypingTarget(event.target) || isTypingTarget(document.activeElement)) return false
+  return !overlayOpen()
 }
 
 let cachedOverrides: unknown = null

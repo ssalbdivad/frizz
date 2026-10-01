@@ -357,8 +357,10 @@ function useListReorder(projects: readonly QueuesProject[]) {
       if (!run) return
       const fromIndex = run.indexOf(id)
       const toIndex = fromIndex + (event.key === "ArrowUp" ? -1 : 1)
-      if (toIndex < 0 || toIndex >= run.length) return
+      // Claimed even at either end, where it moves nothing: unclaimed, the page would hear ⌥↑/⌥↓ as a
+      // step to another project (AllQueues.tsx) on a row that is being reordered.
       event.preventDefault()
+      if (toIndex < 0 || toIndex >= run.length) return
       commit(run, fromIndex, toIndex)
     }
 

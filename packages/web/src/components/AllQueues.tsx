@@ -41,7 +41,7 @@ import { Check, ChevronDown, Inbox } from "lucide-react"
 import { useLocation, useNavigate } from "react-router"
 import { useSnapshot } from "valtio"
 import type { BoardSnapshot, ProjectCard, ProjectQueue } from "@frizz/shared"
-import { rpc } from "../api/rpc.ts"
+import { projectRpc, rpc } from "../api/rpc.ts"
 import { readProjectsQueues, readStartedAt } from "../lib/projectsQueuesRead.ts"
 import { isBusy, liveQueue, mergedQueue, overlayQueues, projectMarkdownScope, queuesProjects, threadKey, type QueueEntry, type QueuesProject } from "../lib/allQueues.ts"
 import { innerPath, projectSlug } from "../lib/base-path.ts"
@@ -58,7 +58,8 @@ import { stableQueue, type QueueSlot } from "../lib/stableQueue.ts"
 import { actedOnHere } from "../lib/humanActs.ts"
 import { useSteeredAt } from "../lib/steering.ts"
 import { glideTo, gliding, useViewportLock } from "../lib/viewportLock.ts"
-import { registerQueueCursor, releaseAutoOpened } from "../lib/keyboardRuntime.ts"
+import { isPageKey, registerQueueCursor, releaseAutoOpened, runThreadCommand, useShortcut } from "../lib/keyboardRuntime.ts"
+import { runExternalOpen } from "../lib/externalOpen.ts"
 import { PROJECT_STEP_CHORDS, detectPlatform, formatChord, parseChord } from "../lib/keybindings.ts"
 import { AllQueuesCard } from "./AllQueuesCard.tsx"
 import { ProjectSquare, warmProjectIcon } from "./ProjectSquare.tsx"
@@ -163,29 +164,61 @@ export function AllQueuesPage() {
   // takes the keyboard when it lands, with the caret where it was in the box it replaced.
   const [focusComposerFor, setFocusComposerFor] = useState<{ slug: string; caret?: Caret } | null>(null)
   const clearFocusComposerFor = useCallback(() => setFocusComposerFor(null), [])
-  // ⌥↓ / ⌥↑ IN THE BOX — the next or previous project (lib/crossProject.ts stepPick), without leaving the
-  // box: the draft goes with it as it does with a pick, and the caret stays put. Heard on the column head,
-  // below which both of the box's tabs sit; anywhere else, and with nowhere else to go, the key is the
-  // browser's.
-  const onColumnKeyDown = (event: KeyboardEvent<HTMLDivElement>) => {
-    const box = event.target
-    const step = projectStep(event)
-    if (!step || !(box instanceof HTMLTextAreaElement) || !box.matches(NEW_THREAD_BOXES)) return
+  // ⌥↓ / ⌥↑ — the next or previous project (lib/crossProject.ts stepPick). IN THE BOX it re-aims the box
+  // without leaving it: the draft goes with it as it does with a pick, and the caret stays put. Heard on
+  // the column head, below which both of the box's tabs sit.
+  const stepProject = (step: 1 | -1, box?: HTMLTextAreaElement): boolean => {
     const next = stepPick(pickOrder(projects), focus, step)
-    if (!next) return
-    event.preventDefault()
-    setFocusComposerFor({
-      slug: next.slug,
-      caret: { value: box.value, start: box.selectionStart ?? box.value.length, end: box.selectionEnd ?? box.value.length, direction: box.selectionDirection ?? "none" },
-    })
+    if (!next) return false
+    if (box) {
+      setFocusComposerFor({
+        slug: next.slug,
+        caret: { value: box.value, start: box.selectionStart ?? box.value.length, end: box.selectionEnd ?? box.value.length, direction: box.selectionDirection ?? "none" },
+      })
+    }
     // Focused, the box's project IS the page's, so stepping it moves the page: the next project, with
     // what was typed carried along as a pick carries it.
     if (focused) {
       carryDraft(draftKey.dispatch, dirs?.projectDir, next.projectDir)
       navigate(projectViewHref(next.slug))
     } else pickProject(next, dirs?.projectDir)
+    return true
   }
-
+  const onColumnKeyDown = (event: KeyboardEvent<HTMLDivElement>) => {
+    const box = event.target
+    const step = projectStep(event.nativeEvent)
+    if (!step || !(box instanceof HTMLTextAreaElement) || !box.matches(NEW_THREAD_BOXES)) return
+    if (stepProject(step, box)) event.preventDefault()
+  }
+  // AND ANYWHERE ELSE ON THE PAGE — nothing typed into, nothing layered over it (lib/keyboardRuntime.ts
+  // isPageKey): the same step, leaving the keyboard where it was, so `j` / `k` and the card keys go on
+  // working after it. Focused, that is switching projects; showing All projects, re-aiming the box. In a
+  // text field the keys stay the field's (macOS moves the caret a paragraph), but for the box's own.
+  const stepProjectRef = useRef(stepProject)
+  stepProjectRef.current = stepProject
+  useEffect(() => {
+    const onKeyDown = (event: globalThis.KeyboardEvent) => {
+      const step = projectStep(event)
+      if (!step || !isPageKey(event)) return
+      if (stepProjectRef.current(step)) event.preventDefault()
+    }
+    window.addEventListener("keydown", onKeyDown)
+    return () => window.removeEventListener("keydown", onKeyDown)
+  }, [])
+  // `e` WITH NO THREAD IN FRONT OF THE HUMAN — no drawer, no card being read — opens the project's own
+  // folder in the editor: the page's project, or showing All projects, the one the box would start in.
+  useShortcut("thread.editor", () => {
+    if (runThreadCommand("editor")) return
+    if (!focusProject?.open) return false
+    const project = focusProject
+    void runExternalOpen(
+      `editor-project:${project.id}`,
+      "Opening in editor…",
+      () => projectRpc(project.id).openProjectFolder({}),
+      () => {},
+      (message) => `Could not open an editor: ${message}`,
+    )
+  })
 
   const leaving = useLeavingCards(projects, readAt)
   // A thread whose drawer is open is read THERE, so its card goes INERT — a second live copy of the same
@@ -767,8 +800,8 @@ const NEW_THREAD_BOXES = '[data-surface="newComposer"]'
 const PROJECT_STEP_KEYS = [PROJECT_STEP_CHORDS.previous, PROJECT_STEP_CHORDS.next].map((chord) => formatChord(parseChord(chord)!, detectPlatform())).join("/")
 
 /** ⌥↓ is a step down the picker, ⌥↑ one up (lib/keybindings.ts PROJECT_STEP_CHORDS); 0 for any other key. */
-function projectStep(event: KeyboardEvent): 1 | -1 | 0 {
-  if (!event.altKey || event.ctrlKey || event.metaKey || event.shiftKey || event.nativeEvent.isComposing || event.defaultPrevented) return 0
+function projectStep(event: globalThis.KeyboardEvent): 1 | -1 | 0 {
+  if (!event.altKey || event.ctrlKey || event.metaKey || event.shiftKey || event.isComposing || event.defaultPrevented) return 0
   return event.key === "ArrowDown" ? 1 : event.key === "ArrowUp" ? -1 : 0
 }
 

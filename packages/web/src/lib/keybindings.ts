@@ -87,6 +87,7 @@ export const ACTIONS: readonly ActionDef[] = [
   // was "New terminal thread", from anywhere, until the Terminal tab went on 2026-09-29.
   { id: "thread.terminal", label: "Open terminal", group: "queue", defaultChord: "t" },
   // The same folder in the External app — the step `t` then `code .` took (ThreadMenu.tsx openInEditor).
+  // With no thread in front of the human, the project's own folder (AllQueues.tsx).
   { id: "thread.editor", label: "Open in editor", group: "queue", defaultChord: "e" },
   // Vim's and GitHub's `y` for copy ("yank"): each initial of "Copy terminal command" is already bound
   // (C is New thread, T Open terminal), and the modifier forms are the browser's or need Shift.
@@ -120,6 +121,9 @@ export const GROUP_LABELS: Record<ActionGroup, string> = {
  * common shortcut for cycling tabs on browser"). What it displaces is macOS's own ⌥↑/⌥↓ inside that one
  * box, which moves the caret a paragraph. Not rebindable: a binding with no ⌘/Ctrl never fires in a
  * text box (see above).
+ *
+ * Outside any text field the same keys step the PAGE's project (AllQueues.tsx): focused on one project,
+ * that is switching to the next; showing All projects, re-aiming the box without focusing it.
  */
 export const PROJECT_STEP_CHORDS = { next: "alt+arrowdown", previous: "alt+arrowup" } as const
 
@@ -145,10 +149,10 @@ export const FIXED_SHORTCUTS: readonly { heading: string; keys: readonly { label
     ],
   },
   {
-    heading: "In the new-thread box, or the Spinoff dialog",
+    heading: "Projects — anywhere, in the new-thread box, or the Spinoff dialog",
     keys: [
-      { label: "Start in the next project", chord: PROJECT_STEP_CHORDS.next },
-      { label: "Start in the previous project", chord: PROJECT_STEP_CHORDS.previous },
+      { label: "Next project", chord: PROJECT_STEP_CHORDS.next },
+      { label: "Previous project", chord: PROJECT_STEP_CHORDS.previous },
     ],
   },
 ]

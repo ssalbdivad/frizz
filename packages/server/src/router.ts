@@ -4232,6 +4232,14 @@ export function createRouter(ctx: AppContext) {
       },
     }),
 
+    // The same, for the project itself: `e` with no thread in front of the human opens the project's
+    // own folder. No input — the folder is the tenant's, never a path the page names.
+    openProjectFolder: mutation({
+      input: z.object({}),
+      output: z.object({ path: z.string() }),
+      handler: async () => openLocalFolder(workDir, ctx.getSettings().localFileOpener ?? "system"),
+    }),
+
     // A local Markdown file's source, for the built-in reader. Same openable-root gate as openLocalFile
     // — the click that reaches here already had to pass it — plus an extension check on BOTH the
     // requested and the canonical path, so this route reads Markdown or nothing. It is the only local

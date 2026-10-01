@@ -310,6 +310,8 @@ export interface Api {
   openLocalFile(input: { path: string; image?: boolean }): Promise<{ action: "opened" | "copy"; path: string }>
   // "Open in editor": the thread's working folder, in the External app when it is an editor, else $EDITOR.
   openThreadFolder(input: { slug: string }): Promise<{ path: string }>
+  // The same for the project's own folder — `e` with no thread in front of the human.
+  openProjectFolder(input: Record<never, never>): Promise<{ path: string }>
   // A disk-local Markdown file's source, for the built-in reader drawer. Openable-root gated and
   // extension-locked server-side; `truncated` marks a file cut at the read ceiling.
   localMarkdown(input: { path: string }): Promise<{ path: string; markdown: string; truncated: boolean }>
@@ -501,6 +503,7 @@ export const PROCEDURES = {
   openExternal: "mutation",
   openLocalFile: "mutation",
   openThreadFolder: "mutation",
+  openProjectFolder: "mutation",
   localMarkdown: "query",
   localFile: "query",
   resolveLocalPaths: "query",
