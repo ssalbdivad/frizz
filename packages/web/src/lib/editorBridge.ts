@@ -2,6 +2,9 @@ import type { QueryClient } from "@tanstack/react-query"
 import { subscribe } from "valtio"
 import type { EditorComposeItem, EditorWindowSummary, ProjectCard, Settings } from "@frizz/shared"
 import { rpc } from "../api/rpc.ts"
+import { isRemoteSession } from "../api/signOut.ts"
+import { supervisorStatusQueryOptions } from "../api/supervisorStatus.ts"
+import { getFrizzSupervisorStatus } from "../api/restart.ts"
 import { publishMachineSettings } from "../hooks/useSettingsAutosave.tsx"
 import { showToast, store, topThreadSlug } from "../store.ts"
 import { innerPath, projectSlug } from "./base-path.ts"
@@ -79,12 +82,12 @@ async function considerEditorOffer(): Promise<void> {
   if (typeof document === "undefined" || considering || document.visibilityState !== "visible" || store.showSettings || store.toast?.sticky) return
   const phone = window.matchMedia?.(MOBILE_QUERY).matches ?? false
   // Could anything be offered at all, whatever the settings say? Asked first so an `editors` event that
-  // changes nothing worth offering costs no settings read.
-  if (!editorOffer({ windows: store.editorWindows, codeFiles: "frizz", opener: undefined, offered: readOffered(), phone })) return
+  // changes nothing worth offering costs no settings or supervisor read.
+  if (!editorOffer({ windows: store.editorWindows, codeFiles: "frizz", opener: undefined, offered: readOffered(), phone, remote: false })) return
   considering = true
   try {
-    const settings = await readSettings()
-    const kind = editorOffer({ windows: store.editorWindows, codeFiles: prefs.codeFiles, opener: settings.localFileOpener, offered: readOffered(), phone })
+    const [settings, remote] = await Promise.all([readSettings(), readRemoteSession()])
+    const kind = editorOffer({ windows: store.editorWindows, codeFiles: prefs.codeFiles, opener: settings.localFileOpener, offered: readOffered(), phone, remote })
     if (!kind) return
     rememberOffered(kind)
     const label = EDITOR_OPENER_LABEL[kind]
@@ -115,6 +118,14 @@ function rememberOffered(kind: EditorOpener): void {
   }
 }
 
+// The supervisor's word on whether this page came in over remote access (api/signOut.ts), through the
+// one shared poll's cache when it is fresh. Strict like isRemoteSession: an unreachable supervisor reads
+// "not remote", and the phone check still stands beside it.
+async function readRemoteSession(): Promise<boolean> {
+  const status = queryClient ? await queryClient.fetchQuery(supervisorStatusQueryOptions) : await getFrizzSupervisorStatus()
+  return isRemoteSession(status)
+}
+
 async function readSettings(): Promise<Settings> {
   if (!queryClient) return rpc.settingsGet()
   return queryClient.fetchQuery({ queryKey: ["settingsGet"], queryFn: () => rpc.settingsGet() })
@@ -123,13 +134,19 @@ async function readSettings(): Promise<Settings> {
 // Both halves of "code files go to the editor": this browser's "Open code files" (prefs) and the
 // machine's External app. The settings write carries the WHOLE object (useSettingsAutosave), so it is
 // built on a fresh read rather than whatever this page cached, and published to every project's cached
-// copy the way the drawer's own save is.
-async function sendCodeFilesTo(kind: EditorOpener): Promise<void> {
+// copy the way the drawer's own save is — which is also how a Settings drawer open under the toast
+// learns of it rather than writing its old External app back (useSettingsAutosave adoptPublishedSettings).
+//
+// The browser half is switched only once the machine half has landed. It was switched first until
+// review C7, so a failed write left this browser sending every code-file click to the OLD External app
+// (System, say) instead of the reader — a change nobody asked for, under a toast that said only that
+// the External app could not be set. Exported for its test.
+export async function sendCodeFilesTo(kind: EditorOpener): Promise<void> {
   const label = EDITOR_OPENER_LABEL[kind]
-  prefs.codeFiles = "editor"
   try {
     const current = await rpc.settingsGet()
     const saved = await rpc.settingsSet({ ...current, localFileOpener: kind })
+    prefs.codeFiles = "editor"
     if (queryClient) {
       queryClient.setQueryData(["settingsGet"], saved)
       publishMachineSettings(queryClient, saved)
@@ -212,9 +229,15 @@ async function insertComposeItem(item: EditorComposeItem): Promise<void> {
   await placeCaret(target.kind === "thread" ? THREAD_BOX : NEW_THREAD_BOX, splitComposerValue(edit.value).prose, edit.caret)
 }
 
-/** The thread the human is reading: the topmost thread drawer, or the /full page's thread. */
-function threadInFront(): { slug: string; sessionId?: string } | undefined {
-  const slug = topThreadSlug() ?? (store.splitFileViewer ? parseStandaloneThreadPath(innerPath()) : null)
+/**
+ * The thread the human is reading: the topmost thread drawer, or the /full page's thread — which the
+ * ADDRESS names, at any width. It was read off `store.splitFileViewer` until review C4, a layout flag the
+ * /full page sets only at 1200px and wider, so in a window tiled half-width beside the editor an insert
+ * went to a new-thread draft that page never shows, or navigated the human off the thread they were
+ * reading. Exported for its test.
+ */
+export function threadInFront(): { slug: string; sessionId?: string } | undefined {
+  const slug = topThreadSlug() ?? parseStandaloneThreadPath(innerPath())
   if (!slug) return undefined
   const thread = store.board?.threads.find((candidate) => candidate.id === slug)
   return thread ? { slug, sessionId: thread.sessionId } : undefined
