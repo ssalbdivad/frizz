@@ -1909,7 +1909,7 @@ const projected = (role: "user" | "assistant", sourceId: string, text = sourceId
   ...(kind ? { kind } : {}),
 })
 
-test("pagination: an assistant anchor and a user anchor both step to the immediately previous user boundary", () => {
+test("pagination: a page reaches back to a user boundary and packs every earlier turn that fits", () => {
   const messages = [
     projected("user", "u0"),
     projected("assistant", "a0"),
@@ -1917,14 +1917,30 @@ test("pagination: an assistant anchor and a user anchor both step to the immedia
     projected("user", "u1"),
     projected("assistant", "a1"),
   ]
-  assert.deepEqual(pageProjectedTranscript(messages, 4).messages.map((m) => m.sourceId), ["u1"])
+  assert.deepEqual(pageProjectedTranscript(messages, 4).messages.map((m) => m.sourceId), ["u0", "a0", "tool-event", "u1"])
   assert.deepEqual(pageProjectedTranscript(messages, 3).messages.map((m) => m.sourceId), ["u0", "a0", "tool-event"])
 })
 
-test("pagination: consecutive user messages remain distinct one-click turn boundaries", () => {
-  const messages = [projected("user", "u0"), projected("user", "u1"), projected("assistant", "a1")]
-  assert.deepEqual(pageProjectedTranscript(messages, 2).messages.map((m) => m.sourceId), ["u1"])
-  assert.deepEqual(pageProjectedTranscript(messages, 1).messages.map((m) => m.sourceId), ["u0"])
+test("pagination: an earlier turn joins the page whole or not at all, so every page opens on a user message", () => {
+  const messages = [
+    projected("user", "u0"),
+    projected("assistant", "a0"),
+    projected("user", "u1"),
+    projected("assistant", "a1"),
+    projected("assistant", "a1b"),
+    projected("user", "u2"),
+    projected("assistant", "a2"),
+  ]
+  // Room for u2's turn and u1's three messages, not for u0's two on top.
+  const byItems = pageProjectedTranscript(messages, messages.length, { maxItems: 5 })
+  assert.deepEqual(byItems.messages.map((m) => m.sourceId), ["u1", "a1", "a1b", "u2", "a2"])
+  assert.equal(byItems.reachedTurnBoundary, true)
+  const next = pageProjectedTranscript(messages, byItems.start, { maxItems: 5 })
+  assert.deepEqual(next.messages.map((m) => m.sourceId), ["u0", "a0"])
+  assert.equal(next.start, 0)
+  // The same by bytes: the first turn always loads, a later one only if the whole of it fits.
+  const oneTurn = pageProjectedTranscript(messages, messages.length, { maxBytes: 2 * Math.max(...messages.map((m) => Buffer.byteLength(JSON.stringify(m)))) })
+  assert.deepEqual(oneTurn.messages.map((m) => m.sourceId), ["u2", "a2"])
 })
 
 test("pagination: tool/event-only spans stay attached to their opening user turn", () => {
@@ -1978,14 +1994,15 @@ test("pagination: a huge prior turn uses explicit continuation chunks and eventu
   assert.ok(clicks > 1)
 })
 
-test("pagination: repeated clicks walk exactly one user turn backward", () => {
+test("pagination: repeated pages walk whole turns backward, all of them when they fit", () => {
   const messages = [
     projected("user", "u0"), projected("assistant", "a0"),
     projected("user", "u1"), projected("assistant", "a1"),
     projected("user", "u2"), projected("assistant", "a2"),
   ]
-  const first = pageProjectedTranscript(messages, messages.length)
-  const second = pageProjectedTranscript(messages, first.start)
+  assert.deepEqual(pageProjectedTranscript(messages, messages.length).messages.map((m) => m.sourceId), ["u0", "a0", "u1", "a1", "u2", "a2"])
+  const first = pageProjectedTranscript(messages, messages.length, { maxItems: 3 })
+  const second = pageProjectedTranscript(messages, first.start, { maxItems: 3 })
   assert.deepEqual(first.messages.map((m) => m.sourceId), ["u2", "a2"])
   assert.deepEqual(second.messages.map((m) => m.sourceId), ["u1", "a1"])
 })

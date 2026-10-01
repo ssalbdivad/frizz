@@ -1278,7 +1278,7 @@ test("codex parser is defensive: empty input, blank/malformed lines, and sidecar
   assert.deepEqual(parseCodexTranscript(sidecar), [])
 })
 
-test("Codex pagination uses the uncapped provider-neutral projection and walks one user turn per page", () => {
+test("Codex pagination uses the uncapped provider-neutral projection and packs whole user turns per page", () => {
   const records: Array<{ type: string; payload: Record<string, unknown> }> = []
   for (let i = 0; i < 155; i++) {
     records.push({ type: "event_msg", payload: { type: "user_message", message: `user-${i}` } })
@@ -1288,8 +1288,9 @@ test("Codex pagination uses the uncapped provider-neutral projection and walks o
   assert.equal(projected.length, 310, "pagination projects before applying the ordinary 300-message presentation cap")
   const first = pageProjectedTranscript(projected, projected.length)
   const second = pageProjectedTranscript(projected, first.start)
-  assert.deepEqual(first.messages.map((message) => message.text), ["user-154", "assistant-154"])
-  assert.deepEqual(second.messages.map((message) => message.text), ["user-153", "assistant-153"])
+  assert.equal(first.messages.length, 100, "fifty whole two-message turns fill the 100-item page")
+  assert.deepEqual([first.messages[0].text, first.messages.at(-1)!.text], ["user-105", "assistant-154"])
+  assert.deepEqual([second.messages[0].text, second.messages.at(-1)!.text], ["user-55", "assistant-104"])
 })
 
 // ---- an MCP take_screenshot renders the SHOT ----

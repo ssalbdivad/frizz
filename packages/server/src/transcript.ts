@@ -4181,9 +4181,10 @@ function defaultCodexBackend(): AgentBackend {
 
 // ── bounded, turn-aligned backward pagination ──────────────────────────────────────────────────────
 // The normal live transcript remains the latest MAX_MESSAGES projection. Older history is fetched only
-// on demand. A page walks backward to the previous PROJECTED user message; provider records that do not
-// render have already disappeared by this point, so Claude/Codex plumbing can never manufacture a turn
-// boundary. Pathological single turns continue in bounded chunks instead of creating an unbounded RPC.
+// on demand. A page walks backward to the previous PROJECTED user message, then packs in whole earlier
+// turns up to the item/byte bounds; provider records that do not render have already disappeared by this
+// point, so Claude/Codex plumbing can never manufacture a turn boundary. Pathological single turns
+// continue in bounded chunks instead of creating an unbounded RPC.
 export const TRANSCRIPT_EARLIER_MAX_ITEMS = 100
 export const TRANSCRIPT_EARLIER_MAX_BYTES = 512 * 1024
 
@@ -4538,14 +4539,14 @@ export function pageProjectedTranscript(
   // the exchange being summarised. An `agentInstruction` is also user-side but belongs to a CHILD's
   // coordinator/peer conversation, never the operator's turn. A spinoff request asks for another thread,
   // so the exchange the reader needs goes back past it too.
-  let boundary = 0
-  for (let i = anchor - 1; i >= 0; i--) {
-    const m = messages[i]
-    if (m.role === "user" && !m.wake && !m.queued && !m.agentInstruction && !m.spinoff) {
-      boundary = i
-      break
+  const turnStart = (before: number): number => {
+    for (let i = before - 1; i >= 0; i--) {
+      const m = messages[i]
+      if (m.role === "user" && !m.wake && !m.queued && !m.agentInstruction && !m.spinoff) return i
     }
+    return 0
   }
+  const boundary = turnStart(anchor)
   const maxItems = Math.max(1, Math.floor(limits.maxItems ?? TRANSCRIPT_EARLIER_MAX_ITEMS))
   const maxBytes = Math.max(1, Math.floor(limits.maxBytes ?? TRANSCRIPT_EARLIER_MAX_BYTES))
   let start = anchor
@@ -4559,10 +4560,26 @@ export function pageProjectedTranscript(
     start--
     bytes += nextBytes
   }
+  // THEN WHOLE EARLIER TURNS, while each fits. One turn per page made reading back one round trip per
+  // exchange — three messages a request on a chatty thread — and the drawer now pages all history in
+  // behind the reader, so the unit that matters is the request, not the click. A turn is taken whole or
+  // not at all, so every page still starts on a human message; one too big for the room left opens the
+  // next page instead, where the partial walk above bounds it.
+  if (start === boundary) {
+    while (start > 0) {
+      const prev = turnStart(start)
+      if (anchor - prev > maxItems) break
+      let turnBytes = 0
+      for (let i = prev; i < start; i++) turnBytes += messageBytes(messages[i])
+      if (bytes + turnBytes > maxBytes) break
+      start = prev
+      bytes += turnBytes
+    }
+  }
   return {
     start,
     messages: messages.slice(start, anchor),
-    reachedTurnBoundary: start === boundary,
+    reachedTurnBoundary: start <= boundary,
   }
 }
 
