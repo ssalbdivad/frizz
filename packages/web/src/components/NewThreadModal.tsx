@@ -1,7 +1,7 @@
 import * as RadixDialog from "@radix-ui/react-dialog"
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react"
 import { useIsMutating, useMutation, useQuery } from "@tanstack/react-query"
-import { type AccountBackend, type DispatchInput } from "@frizz/shared"
+import { type AccountBackend, type CreateTodoInput, type DispatchInput } from "@frizz/shared"
 import { rpc } from "../api/rpc.ts"
 import { showToast } from "../store.ts"
 import { Composer } from "./Composer.tsx"
@@ -161,6 +161,44 @@ function PromptForm({
     },
   })
 
+  // SAVE AS A TODO (plans/todos.md): the same prompt, written down as a thread with no agent behind it.
+  // No auth gate — nothing is started, so no provider is contacted; the sign-in, if one is needed, comes
+  // when the todo is launched. The draft clears like a dispatch's and comes back on failure the same way.
+  const saveTodo = useMutation({
+    mutationFn: (input: CreateTodoInput) => {
+      const project = projectSlug()
+      return rpc.createTodo(input).then((res) => ({ ...res, project }))
+    },
+    onSuccess: (res) => {
+      onDispatched?.()
+      showToast("Todo added", { link: { label: "Open", slug: res.slug, project: res.project } })
+    },
+    onError: (e, input) => {
+      if (!draftStore.get(promptKey)) setPrompt(submittedDraftRef.current || input.note)
+      restoreContextItems(promptKey, submittedContextRef.current)
+      submittedContextRef.current = []
+      if (!draftStore.get(pickKey)) setPick(submittedPickRef.current)
+      showToast(`Could not add the todo: ${(e as Error).message.slice(0, 80)}`)
+    },
+  })
+
+  function submitTodo() {
+    if (!prompt.trim() || !resolved || savingSettings || parseAccountAlias(prompt)) return
+    const input: CreateTodoInput = {
+      note: buildMessageWithContext(prompt, [...stagedItems(promptKey)], projectDir).trim(),
+      // The pick rides along: it is what the todo starts on when it is launched, unless changed then.
+      model: resolved.model,
+      backend: resolved.backend,
+      effort: (resolved.effort || undefined) as CreateTodoInput["effort"],
+    }
+    submittedDraftRef.current = prompt
+    submittedPickRef.current = pick
+    submittedContextRef.current = takeContextItems(promptKey)
+    clearPrompt()
+    setPick(undefined)
+    saveTodo.mutate(input)
+  }
+
   // Fire the dispatch and do the one-shot UI bookkeeping (optimistic toast + prompt clear). Called both
   // on a clean submit and after the sign-in gate is cleared, so the prompt is only cleared once the
   // thread is actually being started — a gated submit leaves the draft intact.
@@ -296,12 +334,13 @@ function PromptForm({
         value={prompt}
         onChange={setPrompt}
         onSubmit={submit}
+        onSaveTodo={submitTodo}
         contextTokens={contextTokens}
         placeholder="Describe the task…"
         mentionCandidates={mentions}
         minHeight={96}
         maxHeight={340}
-        busy={dispatch.isPending || savingSettings}
+        busy={dispatch.isPending || saveTodo.isPending || savingSettings}
         footer={footer}
         leftAction={githubTriggerVisible ? <GithubTrigger /> : undefined}
       />

@@ -52,9 +52,9 @@ function SpinoffMark({ size, className = "" }: { size: number; className?: strin
 }
 
 /** Whether a thread can be asked for a spinoff: a live Frizz session, whose worker is the one that briefs
- *  the new thread. A foreign row has no worker of ours. */
+ *  the new thread. A foreign row has no worker of ours, and neither does a todo that has not started. */
 function canSpinoff(thread: ThreadView | undefined): thread is ThreadView & { sessionId: string } {
-  return Boolean(thread && thread.kind === "session" && thread.foreign !== true && thread.sessionId)
+  return Boolean(thread && thread.kind === "session" && thread.foreign !== true && thread.todo === undefined && thread.sessionId)
 }
 
 /** The Spinoff icon in a thread's header strip, and its dialog; nothing for a thread that cannot take one.

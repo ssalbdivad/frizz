@@ -4,7 +4,7 @@ import { ATTACHMENT_ACCEPT, ATTACHMENT_MAX_BYTES, isAllowedAttachmentName, type 
 import { showToast } from "../store.ts"
 import { joinComposerValue, splitComposerValue } from "../lib/imagePaths.ts"
 import { splitProseByTokens } from "../lib/composerContext.ts"
-import { shouldInterruptSubmitComposerEnter, shouldPushQueuedComposerEnter, shouldRestoreOptionEnterNewline, shouldSubmitComposerEnter } from "../lib/composerKeyboard.ts"
+import { shouldInterruptSubmitComposerEnter, shouldSaveTodoComposerEnter, shouldPushQueuedComposerEnter, shouldRestoreOptionEnterNewline, shouldSubmitComposerEnter } from "../lib/composerKeyboard.ts"
 import { queueComposerHandlesOptionEnter } from "../lib/queueComposerKeyboard.ts"
 import { RAIL_ACTION_OFFSET, RAIL_PAPERCLIP_OFFSET, RAIL_PAPERCLIP_PLAIN_OFFSET, RAIL_RESERVE_PLAIN, RAIL_RESERVE_WITH_ACTION, RAIL_SEND_OFFSET } from "../lib/iconRhythm.ts"
 import { apiBase } from "../lib/base-path.ts"
@@ -100,6 +100,7 @@ export function Composer({
   ownMention,
   onInterruptSubmit,
   onPushQueued,
+  onSaveTodo,
   attachBase,
 }: {
   value: string
@@ -163,6 +164,10 @@ export function Composer({
   // the caller owns the "is a follow-up actually queued behind a running turn" check, so with nothing
   // queued it returns false and the keypress keeps its default.
   onPushQueued?: () => boolean
+  // SAVE AS A TODO — the new-thread box only (plans/todos.md). ⌘/Ctrl-Shift-Enter, and the quiet
+  // "add as todo" hint in the footer while there is a draft, write the prompt down as a thread with no
+  // agent behind it instead of starting one.
+  onSaveTodo?: () => void
   // WHICH PROJECT AN ATTACHMENT IS UPLOADED TO, when it is not the page's. Omitted, `apiBase()` — the
   // page project, which in a drawer or on /full is the thread's own. The cross-project page's queue
   // card shows a thread of ANY project while the page is focused on one, so it passes the thread's
@@ -515,6 +520,7 @@ export function Composer({
 
   const hasContent = value.trim().length > 0
   const interruptChord = useMemo(() => (detectPlatform() === "mac" ? "⌘⏎" : "Ctrl+Enter"), [])
+  const todoChord = useMemo(() => (detectPlatform() === "mac" ? "⌘⇧⏎" : "Ctrl+Shift+Enter"), [])
   // ONE rail slot. Reserving it must track what is actually rendered — the padding/offset classes below
   // key off `railAction`, and a truthy element that renders null would carve out an empty hole (the bug
   // GithubTrigger's `useGithubTriggerVisible` exists to prevent). Its only filler now is `leftAction`
@@ -599,6 +605,12 @@ export function Composer({
       e.preventDefault()
       e.stopPropagation()
       onSubmit()
+      return
+    }
+    if (onSaveTodo && shouldSaveTodoComposerEnter(keyboardEvent, canSend)) {
+      e.preventDefault()
+      e.stopPropagation()
+      onSaveTodo()
       return
     }
     // ⌘/Ctrl-Enter — the FORCED send. With a worker mid-turn it preempts what the worker is doing so
@@ -845,6 +857,22 @@ export function Composer({
             <span data-composer-interrupt-hint className="ml-auto shrink-0 whitespace-nowrap text-[11px] text-muted-70">
               {interruptChord} to interrupt
             </span>
+          )}
+          {/* The todo chord's visible trace, in the same slot and the same quiet type as the interrupt
+              hint (the two never share a box: one is the new-thread composer's, the other a running
+              thread's). It is a button as well as a hint, so the act is reachable without the chord. */}
+          {onSaveTodo && hasContent && !busy && (
+            <button
+              type="button"
+              data-composer-todo-hint
+              onMouseDown={(e) => e.preventDefault()}
+              onClick={onSaveTodo}
+              disabled={uploading}
+              title="Save this as a todo without starting an agent"
+              className="ml-auto shrink-0 whitespace-nowrap rounded text-[11px] text-muted-70 transition-colors hover:text-fg disabled:opacity-50"
+            >
+              {todoChord} add as todo
+            </button>
           )}
         </div>
       )}

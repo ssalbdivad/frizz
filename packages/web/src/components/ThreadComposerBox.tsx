@@ -1,6 +1,6 @@
 import { useContext, useMemo, useState, type ReactElement, type ReactNode } from "react"
 import { useSnapshot } from "valtio"
-import type { AccountBackend, ThreadSkill } from "@frizz/shared"
+import type { AccountBackend, ThreadSkill, ThreadView } from "@frizz/shared"
 import { rpc } from "../api/rpc.ts"
 import { showToast, store } from "../store.ts"
 import { buildMessageWithContext } from "../lib/composerContext.ts"
@@ -19,6 +19,7 @@ import type { TranscriptData } from "../hooks.ts"
 import { RegisteredAnsweringContext } from "./RegisteredQuestionCards.tsx"
 import { composerTerminalLine } from "../lib/threadTerminals.ts"
 import { startComposerTerminal } from "./ThreadTerminals.tsx"
+import { TodoBox } from "./TodoBox.tsx"
 
 // THE prompt box for a registered thread — the single block every "steer this thread" surface renders.
 // The <Composer> leaf was already shared; the ~14 lines AROUND it were not, and the queue card's copy had
@@ -176,6 +177,15 @@ export function ThreadComposerBox({
       return
     }
     deliver()
+  }
+
+  // A TODO has no agent to steer yet: its box is the note, and sending it starts one (TodoBox).
+  if (thread?.todo !== undefined) {
+    return (
+      <div {...(surface === "chatComposer" ? { "data-thread-action-bar": "" } : {})} className={className}>
+        <TodoBox thread={thread as ThreadView} surface={surface} id={id} />
+      </div>
+    )
   }
 
   return (
