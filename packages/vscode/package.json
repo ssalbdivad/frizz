@@ -7,10 +7,10 @@
   "publisher": "ssalbdivad",
   "license": "MIT",
   "author": "Colin McDonnell",
-  "homepage": "https://github.com/colinhacks/frizz",
+  "homepage": "https://github.com/ssalbdivad/frizz",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/colinhacks/frizz.git",
+    "url": "git+https://github.com/ssalbdivad/frizz.git",
     "directory": "packages/vscode"
   },
   "type": "module",

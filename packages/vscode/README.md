@@ -1,6 +1,6 @@
 # Frizz for VS Code
 
-Talk to [Frizz](https://github.com/colinhacks/frizz) from your editor, and land on Frizz's file links
+Talk to [Frizz](https://github.com/ssalbdivad/frizz) from your editor, and land on Frizz's file links
 in it. Works in VS Code, Cursor and Windsurf.
 
 - **Ask Frizz…** — select code (or right-click a file), type a question, and Frizz starts a thread on
