@@ -6165,6 +6165,12 @@ export const ProjectCard = z.object({
   name: z.string(),
   path: z.string(),
   lastOpenedAt: z.string(),
+  /**
+   * When `frizz` was last run in this project (a cold launch or a join), as the launcher stamped it in
+   * the registry. All projects' prompt box aims at the most recent one when this browser has neither
+   * picked nor focused a project. Absent for a project no current launcher has run in.
+   */
+  lastLaunchedAt: z.string().optional(),
   /** The directory is gone — moved or deleted. The card stays so it can be reopened or forgotten. */
   stale: z.boolean(),
   /**
