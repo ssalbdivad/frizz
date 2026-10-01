@@ -1,7 +1,7 @@
 import { test } from "node:test"
 import assert from "node:assert/strict"
 import { setHomeFocus } from "./base-path.ts"
-import { isLocalMarkdownFile, localFileDir, localImageUrl, localImageUrlForTarget, localMarkdownTarget, resolveRelativeLocalPath } from "./markdownTargets.ts"
+import { isLocalMarkdownFile, localFileDir, localImageUrl, localImageUrlForTarget, localMarkdownTarget, positionFragment, resolveRelativeLocalPath, resolveRelativeLocalTarget } from "./markdownTargets.ts"
 
 test("absolute POSIX and file URLs become local targets with decoded proxy paths", () => {
   assert.deepEqual(
@@ -24,10 +24,12 @@ test("absolute POSIX and file URLs become local targets with decoded proxy paths
 
 test("an absolute path's #section or ?query tail is not part of the path", () => {
   const path = "/Users/me/repo/AGENTS.md"
-  for (const href of [`${path}#cutting-a-release`, `${path}?plain=1`, `${path}?plain=1#L3`]) {
+  for (const href of [`${path}#cutting-a-release`, `${path}?plain=1`]) {
     assert.deepEqual(localMarkdownTarget(href), { display: path, filePath: path }, href)
     assert.ok(isLocalMarkdownFile(localMarkdownTarget(href)!.filePath!), href)
   }
+  // …but a `#L3` tail is the place in the file — GitHub's own line link carries `?plain=1` before it.
+  assert.deepEqual(localMarkdownTarget(`${path}?plain=1#L3`), { display: `${path}:3`, filePath: path, position: { line: 3 } })
   // An ENCODED `#` is a character in the file name, not a fragment.
   assert.deepEqual(localMarkdownTarget("/tmp/issue%23482.md"), { display: "/tmp/issue#482.md", filePath: "/tmp/issue#482.md" })
 })
@@ -63,11 +65,20 @@ test("editor deep links resolve to the local path they name", () => {
     localMarkdownTarget("windsurf://file/tmp/a.ts"),
     { display: "/tmp/a.ts", filePath: "/tmp/a.ts" },
   )
-  // The editor cursor suffix survives (the reader and the server's opener strip it themselves), and a
-  // query tail does not.
+  // The editor cursor suffix is the place the link opens at: it comes off the path as `position`, so
+  // the reader is handed a file that exists (it said "not found" while the suffix rode on the path).
+  // A query tail is the editor's and is dropped.
   assert.deepEqual(
     localMarkdownTarget("cursor://file/repo/AGENTS.md:42:7"),
-    { display: "/repo/AGENTS.md:42:7", filePath: "/repo/AGENTS.md:42:7" },
+    { display: "/repo/AGENTS.md:42", filePath: "/repo/AGENTS.md", position: { line: 42, column: 7 } },
+  )
+  assert.deepEqual(
+    localMarkdownTarget("vscode://file//repo/a.ts:3:2?windowId=_blank"),
+    { display: "/repo/a.ts:3", filePath: "/repo/a.ts", position: { line: 3, column: 2 } },
+  )
+  assert.deepEqual(
+    localMarkdownTarget("vscode://file/c:/Users/me/a.ts:12"),
+    { display: "c:/Users/me/a.ts:12", filePath: "c:/Users/me/a.ts", position: { line: 12 } },
   )
   assert.deepEqual(
     localMarkdownTarget("vscode://file/tmp/a.ts?windowId=_blank"),
@@ -266,4 +277,47 @@ test("a Windows document's base directory is its parent, in its own separator", 
   assert.equal(localFileDir("C:\\Users\\x\\proj\\docs\\guide.md"), "C:\\Users\\x\\proj\\docs")
   assert.equal(localFileDir("C:/Users/x/proj/README.md"), "C:/Users/x/proj")
   assert.equal(localFileDir("C:\\README.md"), "C:\\")
+})
+
+// EVERY SPELLING OF A PLACE IN A FILE, on every absolute destination kind — split off the path, never
+// left on it: the reader is handed the bare path, the external app the line (lib/localFilePosition.ts).
+test("an absolute destination's line comes off the path as a position", () => {
+  const cases: [string, string, { line: number; column?: number; endLine?: number }][] = [
+    ["/repo/src/a.ts:12", "/repo/src/a.ts", { line: 12 }],
+    ["/repo/src/a.ts:12:3", "/repo/src/a.ts", { line: 12, column: 3 }],
+    ["/repo/src/a.ts:12-20", "/repo/src/a.ts", { line: 12, endLine: 20 }],
+    ["/repo/src/a.ts#L12", "/repo/src/a.ts", { line: 12 }],
+    ["/repo/src/a.ts#L12-L20", "/repo/src/a.ts", { line: 12, endLine: 20 }],
+    ["/repo/src/a.ts#L12C4", "/repo/src/a.ts", { line: 12, column: 4 }],
+    ["/repo/one%20two.ts#L5", "/repo/one two.ts", { line: 5 }],
+    ["file:///repo/src/a.ts#L4", "/repo/src/a.ts", { line: 4 }],
+    ["file:///repo/src/a.ts:4:2", "/repo/src/a.ts", { line: 4, column: 2 }],
+    ["C:\\repo\\a.ts:7", "C:\\repo\\a.ts", { line: 7 }],
+    ["D:/repo/a.ts#L7-L9", "D:/repo/a.ts", { line: 7, endLine: 9 }],
+  ]
+  for (const [href, filePath, position] of cases) {
+    const target = localMarkdownTarget(href)
+    assert.equal(target?.filePath, filePath, href)
+    assert.deepEqual(target?.position, position, href)
+  }
+  // Negative controls: a section anchor, a line 0 and a non-numeric tail name no line.
+  for (const href of ["/repo/AGENTS.md#setup", "/repo/a.ts:0", "/repo/a.ts:x", "/repo/a.ts#Lx"]) {
+    assert.equal(localMarkdownTarget(href)?.position, undefined, href)
+  }
+})
+
+test("a relative link keeps its line, and the rebase hands it on through the href", () => {
+  const base = "/repo"
+  assert.deepEqual(resolveRelativeLocalTarget("src/a.ts:12", base), { path: "/repo/src/a.ts", position: { line: 12 } })
+  assert.deepEqual(resolveRelativeLocalTarget("./docs/guide.md#L3-L9", base), { path: "/repo/docs/guide.md", position: { line: 3, endLine: 9 } })
+  assert.deepEqual(resolveRelativeLocalTarget("~/notes.md#L2", base, "/home/me"), { path: "/home/me/notes.md", position: { line: 2 } })
+  assert.deepEqual(resolveRelativeLocalTarget("guide.md#section", base), { path: "/repo/guide.md" })
+  // The path-only reading is the same path, never with a suffix glued on.
+  assert.equal(resolveRelativeLocalPath("src/a.ts:12", base), "/repo/src/a.ts")
+  // The fragment the rebase writes reads back as the very position it came from.
+  for (const position of [{ line: 12 }, { line: 12, column: 3 }, { line: 12, endLine: 20 }, { line: 12, column: 3, endLine: 20 }]) {
+    assert.deepEqual(localMarkdownTarget(`/repo/a.ts${positionFragment(position)}`)?.position, position)
+    assert.deepEqual(localMarkdownTarget(`C:\\repo\\a.ts${positionFragment(position)}`)?.position, position)
+  }
+  assert.equal(positionFragment(undefined), "")
 })

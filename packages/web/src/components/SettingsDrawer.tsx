@@ -14,6 +14,7 @@ import { SHEET_CLOSE_MS, SHEET_PANEL_CLASS, SHEET_SCRIM_CLASS, prefersReducedMot
 import { SaveStatus, useSettingsDraft, type SaveState } from "../hooks/useSettingsAutosave.tsx"
 import { useIsMobile } from "../lib/mobile.ts"
 import { SNOOZE_PRESETS, isSnoozePreset } from "../lib/snooze.ts"
+import { EDITOR_OPENER_LABEL, connectedOpeners } from "../lib/editorWindows.ts"
 import { useSupervisorStatus } from "../api/supervisorStatus.ts"
 import { isRemoteSession } from "../api/signOut.ts"
 import { SignOutThisDeviceRow } from "./SignOutThisDeviceRow.tsx"
@@ -199,6 +200,7 @@ export function SettingsDrawer() {
                 indicatorPosition="right"
                 ariaLabel="Local file link opener"
               />
+              <EditorConnectedHint />
             </SettingsField>
             </>
           )}
@@ -658,6 +660,20 @@ function QueueOrderControl() {
       ))}
     </div>
   )
+}
+
+// Which of the External app's editors has a window connected right now (the editor bridge,
+// packages/vscode): a file sent to one opens in the window that has its folder, at the line the link
+// names. The notification field's hint type (PermHint), at the field's 6px from its control; absent
+// when nothing is connected, so the field reads exactly as it always did for everyone without the
+// extension.
+function EditorConnectedHint() {
+  const { editorWindows } = useSnapshot(store)
+  const connected = connectedOpeners(editorWindows)
+  // The select's own order (Cursor, then VS Code), whichever window connected first.
+  const names = (["cursor", "vscode"] as const).filter((kind) => connected.has(kind)).map((kind) => EDITOR_OPENER_LABEL[kind])
+  if (names.length === 0) return null
+  return <span data-editor-connected className="text-[11px] text-muted-70">{names.join(" and ")} {names.length > 1 ? "are" : "is"} connected.</span>
 }
 
 // Quiet, small permission-state line under the notifications toggle. Everything is muted (the old

@@ -1,9 +1,11 @@
+import type { FilePosition } from "@frizz/shared"
 import { projectRpc, rpc } from "../api/rpc.ts"
 import { openImageViewer, pushFileReader, showToast } from "../store.ts"
 import { copyTextToClipboard } from "./clipboard.ts"
 import { baseName, runExternalOpen } from "./externalOpen.ts"
 import { prefs } from "./prefs.ts"
 import { localViewerFor } from "./localViewer.ts"
+import { localPositionOf } from "./localFilePosition.ts"
 import type { MarkdownScope } from "./useMarkdown.ts"
 
 // One delegated listener covers every sanitized markdown surface (chat, the doc drawer, and
@@ -78,7 +80,13 @@ function imageFailureHandler(): (event: Event) => void {
 // pictures it was shown among. `scope` names the project the link belongs to when that is not the
 // page's — a card on the everything page, or a reader opened from one — and every read and open then
 // goes through that project's gate, whose roots include its own checkout wherever it lives.
-export function openLocalPath(path: string, from?: Element | null, scope?: MarkdownScope | null): void {
+//
+// `position` is the place in the file the link names (`a.ts:12`, `#L12-L20`). The external app is handed
+// it; the reader is handed the bare path. Absent, it is read off `from` (lib/localFilePosition.ts), which is
+// how every DELEGATED reader of `data-local-path` — this module's, the everything page's card scope, the
+// reader's own scoped links — carries a line without each one knowing the attributes exist.
+export function openLocalPath(path: string, from?: Element | null, scope?: MarkdownScope | null, position?: FilePosition): void {
+  const at = position ?? localPositionOf(from)
   const viewer = localViewerFor(path)
   if (viewer === "image") {
     openImageViewer(path, from ? imageGalleryFor(from) : [], scope?.projectId)
@@ -87,14 +95,14 @@ export function openLocalPath(path: string, from?: Element | null, scope?: Markd
   // A code file goes straight to the external app when this browser asked for that (prefs.codeFiles),
   // and lands in the reader anyway when the app cannot start — the reader is the one that always works.
   if (viewer === "text" && prefs.codeFiles === "editor") {
-    void openExternally(path, scope?.projectId, () => pushFileReader(path, scope))
+    void openExternally(path, scope?.projectId, () => pushFileReader(path, scope), at)
     return
   }
   if (viewer) {
     pushFileReader(path, scope)
     return
   }
-  void openExternally(path, scope?.projectId)
+  void openExternally(path, scope?.projectId, undefined, at)
 }
 
 // The surfaces a picture's gallery stays inside: a queue card, a drawer, the /full page's reader slot,
@@ -118,11 +126,13 @@ export function imageGalleryFor(from: Element): string[] {
   return paths
 }
 
-async function openExternally(path: string, project?: string, fallback?: () => void) {
+// The cooldown key carries the line: a second link into the same file at ANOTHER line, clicked within
+// the cooldown, is a new place to go, not a double-click to swallow (lib/externalOpen.ts).
+async function openExternally(path: string, project?: string, fallback?: () => void, position?: FilePosition) {
   await runExternalOpen(
-    `file:${path}`,
+    position ? `file:${path}:${position.line}` : `file:${path}`,
     `Opening ${baseName(path)}…`,
-    () => (project ? projectRpc(project) : rpc).openLocalFile({ path }),
+    () => (project ? projectRpc(project) : rpc).openLocalFile({ path, ...position }),
     (result) => settleLocalFileOpen(result),
     (message) => {
       fallback?.()

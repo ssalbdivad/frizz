@@ -1,7 +1,7 @@
 import { proxy } from "valtio"
 import type { BoardSnapshot, ThreadView, BoardDelta, ProjectEnclosed } from "@frizz/shared"
 import { applyBoardDelta } from "@frizz/shared"
-import type { ComposerContextItem } from "./lib/composerContext.ts"
+import type { EditorWindowSummary } from "@frizz/shared"
 import type { MarkdownScope } from "./lib/useMarkdown.ts"
 import { disarmFullscreenMorph } from "./lib/fullscreenMorph.ts"
 import { closeDrawerAnimated, focusDrawer } from "./lib/overlays.ts"
@@ -133,11 +133,14 @@ export const store = proxy({
   // Keep each reader mounted under the next so following a link preserves its scroll and view mode.
   // Instance ids (not paths) also let A → B → A unwind through both visits independently.
   filePanels: [] as { id: number; path: string; closing?: boolean }[],
-  // SELECTED-CONTEXT items staged for a thread's next message (⌘I over a selection in the file
-  // viewer). Rendered as chips above the thread's composer — every surface showing that composer shows
-  // them — and serialized into the outgoing text on send. Session-scoped on purpose: unlike the typed
-  // draft these are quotes of files on disk, re-creatable in two keystrokes.
-  composerContext: {} as Record<string, ComposerContextItem[]>,
+  // (Selected-context items staged for a prompt box's next message lived here, keyed by thread slug, until
+  // 2026-10-01; they are keyed by draft and persisted with it now — lib/stagedContext.ts.)
+  //
+  // The EDITOR WINDOWS connected over the editor bridge (packages/vscode): which app each is and whether
+  // it takes file opens. MACHINE-WIDE — one Frizz, every project — so a project switch leaves it alone.
+  // Read at boot (`editorWindows`) and replaced whole by every `editors` event (lib/editorBridge.ts);
+  // the settings drawer marks the External app that is connected, and the first connection offers it.
+  editorWindows: [] as EditorWindowSummary[],
   // The in-app PICTURE VIEWER (components/ImageViewer), over every page and drawer. `paths` is what
   // ←/→ step through: the pictures rendered in the same card, drawer or page as the one clicked, in
   // reading order (imageGalleryFor in lib/local-file-links.ts), so a worker's before/after shots are
@@ -424,31 +427,6 @@ export function closeFilePanel(): void {
   }, prefersReducedMotion() ? 0 : SHEET_CLOSE_MS)
 }
 
-// ── selected-context items (⌘I in the file viewer) ───────────────────────────────────────────────
-let contextSeq = 0
-
-export function addContextItem(slug: string, item: Omit<ComposerContextItem, "id">): void {
-  const items = store.composerContext[slug] ?? (store.composerContext[slug] = [])
-  items.push({ ...item, id: ++contextSeq })
-}
-
-// There is no remove-by-id: an item leaves the roster when its `@` token leaves the draft prose
-// (ThreadComposerBox's token sweep) — the token in the text is the only handle the human has on it.
-
-// Take (and clear) a thread's staged items at send time. Returns plain copies so the caller can
-// restore them on a rejected send — the proxy entries themselves are gone from the store by then.
-export function takeContextItems(slug: string): ComposerContextItem[] {
-  const items = (store.composerContext[slug] ?? []).map((item) => ({ ...item }))
-  delete store.composerContext[slug]
-  return items
-}
-
-export function restoreContextItems(slug: string, items: ComposerContextItem[]): void {
-  if (!items.length) return
-  // Never clobber items staged while the failed send was in flight — put the old ones first.
-  store.composerContext[slug] = [...items, ...(store.composerContext[slug] ?? [])]
-}
-
 export function popDrawer(): void {
   const top = store.drawers[store.drawers.length - 1]
   if (top) closeDrawersById([top.id])
@@ -550,7 +528,6 @@ export function resetProjectState() {
   store.drawers = []
   store.filePanels = []
   store.imageViewer = null
-  store.composerContext = {}
   store.routeThreadSlug = null
   store.socketBoardFallback = null
   store.socketTranscriptFallbacks = {}

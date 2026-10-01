@@ -167,6 +167,75 @@ test("Markdown local image syntax uses the gated image proxy and local files rem
     ])
     assert.equal(fromHeaders.expanded, expandedBefore)
 
+    // A PLACE IN A FILE. Every spelling — a `#L` fragment, an editor deep link's `:3:2`, a relative
+    // `:12`, a file URL's fragment, inline code with a line (a bare `App.tsx:42` included), a raw-HTML
+    // button and a Codex finding — leaves its path BARE on the element and its line beside it.
+    await page.waitForSelector('[data-positioned] code[data-local-path="/fixture/App.tsx"]')
+    const positioned = await page.$$eval("[data-positioned] [data-local-path], [data-codex-finding] [data-local-path]", (nodes) => nodes.map((n) => [
+      n.getAttribute("data-local-path"),
+      n.getAttribute("data-local-line"),
+      n.getAttribute("data-local-col"),
+      n.getAttribute("data-local-end-line"),
+    ].join(" ").trim()))
+    assert.deepEqual(positioned, [
+      "/fixture/src/a.ts 5  9",
+      "/fixture/src/a.ts 30",
+      "/fixture/src/b.ts 3 2",
+      "/fixture/src/c.ts 12",
+      "/fixture/src/d.ts 7",
+      "/fixture/src/e.ts 4",
+      "/fixture/src/f.ts 21",
+      "/fixture/App.tsx 42",
+      "/fixture/src/g.ts 12  14",
+      "/fixture/guide.md 8",
+      // The sanitizer keeps an authored line (ALLOWED_ATTRS); the malformed column is left for the click
+      // handler to refuse, and an unlisted data attribute is gone.
+      "/fixture/src/raw.ts 8 nope",
+      "/fixture/src/h.ts 30  34",
+    ])
+    assert.equal(await page.$eval('[data-positioned] button[data-local-path="/fixture/src/raw.ts"]', (n) => n.hasAttribute("data-bogus")), false)
+
+    // In Frizz (the default), a code file with a line opens the reader on the BARE path — the editor
+    // deep link `vscode://file/…:3:2` used to hand the reader `b.ts:3:2`, which it reported not found.
+    await page.click('[data-positioned] [data-local-path="/fixture/src/b.ts"]')
+    await page.click('[data-positioned] [data-local-path="/fixture/guide.md"]')
+    const readerPaths = await page.evaluate(() => (window as unknown as { __localFileFixtureDrawers: () => { path?: string }[] }).__localFileFixtureDrawers().map((d) => d.path))
+    assert.deepEqual(readerPaths.slice(-2), ["/fixture/src/b.ts", "/fixture/guide.md"])
+
+    // Code files to the external app: each click reaches `openLocalFile` with its line beside the path.
+    // The two links into a.ts at different lines are clicked back to back, inside the opener's cooldown:
+    // the second is a new place to go, not a double-click to swallow.
+    await page.evaluate(() => (window as unknown as { __localFileFixtureCodeFiles: (to: string) => void }).__localFileFixtureCodeFiles("editor"))
+    for (const selector of [
+      '[data-positioned] button[data-local-path="/fixture/src/a.ts"][data-local-line="5"]',
+      '[data-positioned] button[data-local-path="/fixture/src/a.ts"][data-local-line="30"]',
+      '[data-positioned] [data-local-path="/fixture/src/b.ts"]',
+      '[data-positioned] [data-local-path="/fixture/src/c.ts"]',
+      '[data-positioned] [data-local-path="/fixture/src/d.ts"]',
+      '[data-positioned] [data-local-path="/fixture/src/e.ts"]',
+      '[data-positioned] [data-local-path="/fixture/src/f.ts"]',
+      '[data-positioned] [data-local-path="/fixture/App.tsx"]',
+      '[data-positioned] [data-local-path="/fixture/src/g.ts"]',
+      // Markdown always opens in Frizz, line or no line — it never reaches the RPC.
+      '[data-positioned] [data-local-path="/fixture/guide.md"]',
+      '[data-positioned] [data-local-path="/fixture/src/raw.ts"]',
+      '[data-codex-finding] [data-local-path="/fixture/src/h.ts"]',
+    ]) await page.click(selector)
+    const bodies = await page.evaluate(() => (window as unknown as { __localFileFixtureOpenBodies?: unknown[] }).__localFileFixtureOpenBodies ?? [])
+    assert.deepEqual(bodies.slice(-11), [
+      { path: "/fixture/src/a.ts", line: 5, endLine: 9 },
+      { path: "/fixture/src/a.ts", line: 30 },
+      { path: "/fixture/src/b.ts", line: 3, column: 2 },
+      { path: "/fixture/src/c.ts", line: 12 },
+      { path: "/fixture/src/d.ts", line: 7 },
+      { path: "/fixture/src/e.ts", line: 4 },
+      { path: "/fixture/src/f.ts", line: 21 },
+      { path: "/fixture/App.tsx", line: 42 },
+      { path: "/fixture/src/g.ts", line: 12, endLine: 14 },
+      { path: "/fixture/src/raw.ts", line: 8 },
+      { path: "/fixture/src/h.ts", line: 30, endLine: 34 },
+    ])
+
     assert.deepEqual(pageErrors, [])
   } finally {
     await browser.close()
