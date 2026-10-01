@@ -676,13 +676,14 @@ async function claimProjectLaunch(): Promise<
  * `/` is not a board (it is the cross-project page), so a board lives under its own slug — including
  * the board we are about to launch. Registration is idempotent: an id already in the registry keeps the slug it was given.
  */
-function ownSlug(): string | undefined {
+function ownSlug(launched = false): string | undefined {
   try {
     return registerProject(
       {
         dir: workspace.root,
         id: workspaceLaunchTarget(workspace).projectId,
         remoteOwner: resolveProjectLabel(workspace.root)?.split("/")[0],
+        launched,
       },
       homedir()
     ).entry?.slug;
@@ -779,11 +780,25 @@ function slugPath(): string {
   return cachedSlugPath;
 }
 
+/**
+ * Record in the machine's registry that `frizz` was just run in THIS project, cold or joining. The page
+ * lands on All projects (`/`) for every launch, so this stamp is how its prompt box still aims a new
+ * thread at the repository the operator launched from when this browser has neither picked nor focused
+ * a project (web lib/crossProject.ts). Only an `open` launch is from a project: an `everything` launch
+ * from $HOME names none, and an `offer` launch is hosted on a project that is not where it was run.
+ * Internal relaunches (a supervisor child, an update re-exec) carry no intent, so a restart never
+ * re-stamps the host over a later launch elsewhere.
+ */
+function noteLaunchedHere(): void {
+  if (launchIntent?.kind === "open") ownSlug(true);
+}
+
 async function openOrPrint(
   port: number,
   reused: boolean,
   path = ""
 ): Promise<void> {
+  noteLaunchedHere();
   const url = `http://127.0.0.1:${port}${path}`;
   const home = homedir();
   logger.info("launcher", `${reused ? "reusing" : "started"} Frizz at ${url} for ${workspace.root}`);

@@ -37,6 +37,15 @@ export interface RegistryEntry {
   /** Operator's display override, if they renamed it. */
   name?: string
   lastOpenedAt: string
+  /**
+   * When `frizz` was last RUN in this project — a launch that started the server or joined the running
+   * one, stamped by the launcher alone (registerProject's `launched`). Not `lastOpenedAt`, which every
+   * registration bumps: adding a project from the page, a move, a re-key. All projects' prompt box reads
+   * this to aim a new thread at the repository the operator just launched from, when this browser has
+   * neither picked nor focused one (web lib/crossProject.ts defaultCrossProjectFocus). Absent until a
+   * launcher from 2026-09-30 on has run here.
+   */
+  lastLaunchedAt?: string
   /** Hidden from the project list without forgetting it — throwaway repos should not be permanent fixtures. */
   archived?: boolean
   /**
@@ -211,18 +220,26 @@ function canonicalPath(dir: string): string {
   }
 }
 
+/**
+ * `launched` says this registration IS a launch — `frizz` run in this directory, landing the operator on
+ * the page — and stamps `lastLaunchedAt` beside `lastOpenedAt`. Only the launchers pass it.
+ */
 export function registerProject(
-  input: { dir: string; id: string; remoteOwner?: string; now?: () => Date },
+  input: { dir: string; id: string; remoteOwner?: string; launched?: boolean; now?: () => Date },
   home = homedir(),
 ): { entry?: RegistryEntry; action: RegisterAction } {
   input = { ...input, dir: canonicalPath(input.dir) }
   const registry = readRegistry(home)
   const at = (input.now ?? (() => new Date()))().toISOString()
+  const touch = (entry: RegistryEntry) => {
+    entry.lastOpenedAt = at
+    if (input.launched) entry.lastLaunchedAt = at
+  }
   const byId = registry.projects.find((p) => p.id === input.id)
 
   if (byId) {
     if (byId.path === input.dir) {
-      byId.lastOpenedAt = at
+      touch(byId)
       writeRegistry(registry, home)
       return { entry: byId, action: "reopened" }
     }
@@ -230,7 +247,7 @@ export function registerProject(
     // project relocated. Refuse rather than stealing the original's threads.
     if (existsSync(join(byId.path, ".frizz", ".id"))) return { action: "duplicate" }
     byId.path = input.dir
-    byId.lastOpenedAt = at
+    touch(byId)
     writeRegistry(registry, home)
     return { entry: byId, action: "moved" }
   }
@@ -239,7 +256,7 @@ export function registerProject(
   const byPath = registry.projects.find((p) => p.path === input.dir)
   if (byPath) {
     byPath.id = input.id
-    byPath.lastOpenedAt = at
+    touch(byPath)
     writeRegistry(registry, home)
     return { entry: byPath, action: "rekeyed" }
   }
@@ -251,6 +268,7 @@ export function registerProject(
     slug: deriveSlug(input.dir, taken, { remoteOwner: input.remoteOwner }),
     lastOpenedAt: at,
   }
+  if (input.launched) entry.lastLaunchedAt = at
   registry.projects.push(entry)
   writeRegistry(registry, home)
   return { entry, action: "created" }

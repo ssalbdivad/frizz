@@ -45,6 +45,40 @@ test("the Home workspace is focused only when chosen", () => {
   assert.equal(defaultCrossProjectFocus([card("a", "2026-09-20T10:00:00Z"), recent], "home-id", new Set(["home-id"])), "home")
 })
 
+// THE ORDER (2026-09-30): pick, then last focused, then where `frizz` was last run, then most recently
+// opened. Every launch lands on All projects at a bare `/`, so the address no longer names the project the
+// launcher ran in; the reproduction was a stack launched from `storefront` whose prompt box aimed at
+// `billing-api`, registered a moment later and so "opened" more recently.
+const launched = (id: string, lastOpenedAt: string, lastLaunchedAt?: string, stale = false) => ({ ...card(id, lastOpenedAt, stale), lastLaunchedAt })
+
+test("with no pick and no focus here, the box aims at the project frizz was last run in", () => {
+  const cards = [launched("billing-api", "2026-09-30T10:00:05Z"), launched("storefront", "2026-09-30T10:00:00Z", "2026-09-30T10:00:00Z")]
+  assert.equal(defaultCrossProjectFocus(cards, null), "storefront-slug", "a launch outranks a later registration")
+  // The most recent launch wins, whichever project registered last.
+  const both = [launched("a", "2026-09-30T12:00:00Z", "2026-09-29T10:00:00Z"), launched("b", "2026-09-28T10:00:00Z", "2026-09-30T09:00:00Z")]
+  assert.equal(defaultCrossProjectFocus(both, null), "b-slug")
+})
+
+test("the pick, then the last-focused project, each outrank the launch", () => {
+  const cards = [launched("a", "2026-09-30T10:00:00Z"), launched("b", "2026-09-30T10:00:00Z"), launched("c", "2026-09-30T10:00:00Z", "2026-09-30T11:00:00Z")]
+  assert.equal(defaultCrossProjectFocus(cards, "a", undefined, "b"), "a-slug", "an explicit pick is first")
+  assert.equal(defaultCrossProjectFocus(cards, null, undefined, "b"), "b-slug", "then the project last focused")
+  assert.equal(defaultCrossProjectFocus(cards, "gone", undefined, "b"), "b-slug", "a pick since removed falls through to the focus")
+  assert.equal(defaultCrossProjectFocus(cards, null, undefined, "gone"), "c-slug", "a focus since removed falls through to the launch")
+  assert.equal(defaultCrossProjectFocus(cards, null, undefined, null), "c-slug")
+})
+
+test("a launch is skipped where its project is gone or not open, like every other step", () => {
+  const cards = [launched("a", "2026-09-30T10:00:00Z", "2026-09-30T12:00:00Z", true), launched("b", "2026-09-30T10:00:00Z", "2026-09-30T11:00:00Z"), launched("c", "2026-09-30T11:00:00Z")]
+  assert.equal(defaultCrossProjectFocus(cards, null), "b-slug", "the newest launch's directory is gone")
+  assert.equal(defaultCrossProjectFocus(cards, null, new Set(["c"])), "c-slug", "the launched project is not open here")
+  assert.equal(defaultCrossProjectFocus(cards, null, new Set(["c"]), "b"), "c-slug", "nor is the focused one")
+  // Home is never the fallback, even stamped (it cannot be launched from, but a stamp is no reason).
+  const home = { id: "home-id", slug: "home", stale: false, lastOpenedAt: "2026-09-30T13:00:00Z", lastLaunchedAt: "2026-09-30T13:00:00Z", home: true as const }
+  assert.equal(defaultCrossProjectFocus([home, launched("c", "2026-09-30T11:00:00Z")], null), "c-slug")
+  assert.equal(defaultCrossProjectFocus([home, launched("c", "2026-09-30T11:00:00Z")], null, undefined, "home-id"), "home", "focused, it is the box's")
+})
+
 const project = (slug: string, open = true, stale = false) => ({ slug, open, stale })
 
 test("⌥↓ / ⌥↑ step the box through the picker's order, wrapping round at either end", () => {
