@@ -37,6 +37,9 @@ type FixtureWindow = Window & {
   // this a remote session. The page reads the last two over the wire, so they are answered below.
   __localFileFixtureEditor?: (state: { windows?: EditorWindowSummary[]; opener?: LocalFileOpener; remote?: boolean }) => void
   __localFileFixtureResetOpens?: () => void
+  // openOrRaiseDrawer RAISES a reader already open on the path, so a second click into the same file
+  // adds no drawer; a step that reads "did the reader open" starts from none.
+  __localFileFixtureCloseDrawers?: () => void
   __localFileFixtureDrawers?: () => { kind: string; path?: string }[]
   __localFileFixtureViewer?: () => { paths: string[]; index: number } | null
 }
@@ -80,6 +83,7 @@ window.fetch = async (input, init) => {
   if (remote !== undefined) fixtureRemote = remote
 }
 ;(window as FixtureWindow).__localFileFixtureResetOpens = resetExternalOpens
+;(window as FixtureWindow).__localFileFixtureCloseDrawers = () => { store.drawers.splice(0) }
 
 // Prose whose inline code is decorated the way every transcript surface decorates it — rendered through
 // the same hook, so the line a backticked `a.ts:12` names is stamped by the real code path.

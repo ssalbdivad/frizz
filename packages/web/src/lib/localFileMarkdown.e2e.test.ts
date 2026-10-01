@@ -246,6 +246,7 @@ test("Markdown local image syntax uses the gated image proxy and local files rem
       __localFileFixtureCodeFiles: (to: string) => void
       __localFileFixtureEditor: (state: unknown) => void
       __localFileFixtureResetOpens: () => void
+      __localFileFixtureCloseDrawers: () => void
       __localFileFixtureOpenBodies?: unknown[]
       __localFileFixtureDrawers: () => { path?: string }[]
     }
@@ -260,6 +261,7 @@ test("Markdown local image syntax uses the gated image proxy and local files rem
         w.__localFileFixtureCodeFiles(c)
         w.__localFileFixtureEditor(s)
         w.__localFileFixtureResetOpens()
+        w.__localFileFixtureCloseDrawers()
       }, state, codeFiles)
       const before = await where()
       await page.click(selector)
