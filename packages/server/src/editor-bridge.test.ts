@@ -306,6 +306,25 @@ test("an open goes to the window whose folder holds the file: deepest folder, th
   assert.equal(second.requests.length, 2, "the window left last")
 })
 
+test("focus recency survives a reconnect: the hello says how long ago the window last had focus", async (t) => {
+  // After a Frizz restart every window redials while the human is in the browser, so none is focused.
+  // Without the hello's focusedAgoMs they all ranked 0 and the window that redialled LAST took every
+  // open no folder claims.
+  const h = await harness(t)
+  const dirs = tree(t)
+  const usedLast = await editor(h.port, { focused: false, focusedAgoMs: 5_000 })
+  const usedEarlier = await editor(h.port, { focused: false, focusedAgoMs: 60_000 })
+  assert.equal(await h.bridge.openFile(dirs.outside, undefined, ["vscode"]), true)
+  assert.equal(usedLast.requests.length, 1, "the window used most recently before the restart, though it redialled first")
+  assert.equal(usedEarlier.requests.length, 0)
+  // A window that never had focus (absent) ranks below both; a value past the epoch is clamped, not negative.
+  const never = await editor(h.port, { focused: false })
+  const ancient = await editor(h.port, { focused: false, focusedAgoMs: 10 ** 15 })
+  assert.equal(await h.bridge.openFile(dirs.outside, undefined, ["vscode"]), true)
+  assert.equal(usedLast.requests.length, 2)
+  assert.equal(never.requests.length + ancient.requests.length, 0)
+})
+
 test("a symlinked workspace folder gets the file in its own spelling", async (t) => {
   const h = await harness(t)
   const dirs = tree(t)

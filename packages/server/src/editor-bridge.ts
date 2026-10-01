@@ -101,7 +101,7 @@ interface EditorWindow {
   kind: EditorKind
   folders: string[]
   focused: boolean
-  /** The last moment this window was seen focused: when it gained focus, and again when it lost it. */
+  /** The last moment this window was seen focused: when it gained focus, and again when it lost it — or, from a hello, what its `focusedAgoMs` says. 0 is never. */
   lastFocusedAt: number
   acceptsOpens: boolean
   home: string
@@ -314,13 +314,18 @@ export function createEditorBridge(deps: EditorBridgeDeps): EditorBridge {
         closeWith(other, 1000, "superseded")
       }
     }
+    // A reconnect must not erase which window the human used last: after a Frizz restart every window
+    // redials while they are in the browser, and with every one at 0 the last to redial won each open
+    // no folder claims. Clamped, so a window that says it was focused before the epoch ranks as never.
+    const at = now()
+    const lastFocusedAt = msg.focused ? at : msg.focusedAgoMs === undefined ? 0 : Math.min(at, Math.max(0, at - msg.focusedAgoMs))
     conn.window = {
       windowId: msg.windowId,
       app: msg.app,
       kind: editorKindOf(msg.app),
       folders: msg.folders,
       focused: msg.focused,
-      lastFocusedAt: msg.focused ? now() : 0,
+      lastFocusedAt,
       acceptsOpens: msg.acceptsOpens,
       home: msg.home,
       platform: msg.platform,
