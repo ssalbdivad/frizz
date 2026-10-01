@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react"
 import { useQuery } from "@tanstack/react-query"
-import { closeFilePanel, addContextItem, store } from "../store.ts"
+import { closeFilePanel } from "../store.ts"
+import { addContextItem, stagedItems } from "../lib/stagedContext.ts"
 import { draftKey, draftStore, useProjectDir, useThreadSessionId } from "../lib/drafts.ts"
 import { joinComposerValue, splitComposerValue } from "../lib/imagePaths.ts"
 import { useLiveLocalFile } from "../hooks.ts"
@@ -145,10 +146,10 @@ export function FileViewerPanel({ slug, path, active }: { slug: string; path: st
       const { prose, attachments } = splitComposerValue(draftStore.get(key))
       // The token is the chip's own label behind an `@` — what the human reads in the box is the
       // reference itself, not a number pointing at one.
-      const token = uniqueToken(contextChipLabel({ path: resolved, ...(lines ?? {}) }), store.composerContext[slug] ?? [], prose)
+      const token = uniqueToken(contextChipLabel({ path: resolved, ...(lines ?? {}) }), stagedItems(key), prose)
       const spliced = insertTokenIntoProse(prose, caretIn(ta, prose), token)
       draftStore.set(key, joinComposerValue(spliced.prose, attachments.map((attachment) => attachment.path)))
-      addContextItem(slug, { token, path: resolved, text, ...(lines ?? {}) })
+      addContextItem(key, { token, path: resolved, text, ...(lines ?? {}) })
       // Collapsing the selection is the acknowledgment — the reference appearing in the composer is
       // the payload, and a still-highlighted range invites a second ⌘I that would stage a duplicate.
       selection!.removeAllRanges()

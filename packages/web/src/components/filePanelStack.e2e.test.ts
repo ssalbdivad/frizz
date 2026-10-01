@@ -78,8 +78,9 @@ test("full-screen file links push readers and Escape restores the reader underne
       })
       await page.keyboard.down("Control"); await page.keyboard.press("i"); await page.keyboard.up("Control")
       assert.equal(await page.evaluate(async () => {
-        const path = "/src/store.ts"; const { store } = await import(path)
-        return store.composerContext["file-panel-stack"]?.length
+        // Staged under the thread's follow-up DRAFT key (lib/stagedContext.ts), which names its slug.
+        const path = "/src/lib/stagedContext.ts"; const { stagedContext } = await import(path)
+        return Object.entries(stagedContext as Record<string, unknown[]>).filter(([key]) => key.includes(":file-panel-stack:")).flatMap(([, items]) => items).length
       }), 1)
       await page.evaluate(() => (document.activeElement as HTMLElement)?.blur())
       // Source mode stays alive while another visit covers it.

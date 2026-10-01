@@ -29,6 +29,8 @@ import { displayTitle, offersRetry, queueLabelAt, queueLabelWord } from "../grou
 import { useMentionCandidates, useOwnMention } from "../hooks/useMentionCandidates.ts"
 import { handoffParts, projectMarkdownScope, sameProjectAddress, squareCard, threadKey, type QueuesProject } from "../lib/allQueues.ts"
 import { draftKey, draftStore, useDraftValues } from "../lib/drafts.ts"
+import { buildMessageWithContext, type ComposerContextItem } from "../lib/composerContext.ts"
+import { restoreContextItems, takeContextItems, useStagedContextTokens } from "../lib/stagedContext.ts"
 import { rememberFullscreenOrigin } from "../lib/fullscreenHandoff.ts"
 import { openLocalPath } from "../lib/local-file-links.ts"
 import { pageUnloading } from "../lib/pendingSends.ts"
@@ -779,18 +781,22 @@ function ReplyBox({ project, thread, onSent, onLanded, onFailed }: { project: Qu
   // `@` mentions of this card's project's threads — offered only when the page's board IS that project.
   const mentions = useMentionCandidates(thread.id, project.slug)
   const ownMention = useOwnMention(thread.id, project.slug)
+  // The drawer's chips, on the drawer's draft: a selection staged in the thread's drawer (⌘I, or sent from
+  // an editor) is the same staging here, and rides this box's send the same way (lib/stagedContext.ts).
+  const contextTokens = useStagedContextTokens(key, text)
   const send = useMutation({
-    mutationFn: (message: string) => deliverFollowUp(project, thread, message),
+    mutationFn: ({ outgoing }: { outgoing: string; typed: string; staged: ComposerContextItem[] }) => deliverFollowUp(project, thread, outgoing),
     onSuccess: () => {
       onLanded()
       void queryClient.invalidateQueries({ queryKey: ["projectsQueues"] })
     },
-    onError: (cause, message) => {
+    onError: (cause, { typed, staged }) => {
       // A reload aborting the send: the next page replays it (lib/pendingSends.ts), so no rollback.
       if (pageUnloading()) return
       // The card faded on send; the message did not land, so bring it back with the text still in it —
-      // unless something new was typed meanwhile, which is not ours to overwrite.
-      if (!draftStore.get(key)) draftStore.set(key, message)
+      // unless something new was typed meanwhile, which is not ours to overwrite — and its chips with it.
+      if (!draftStore.get(key)) draftStore.set(key, typed)
+      restoreContextItems(key, staged)
       onFailed()
       const reason = cause instanceof Error ? cause.message : "The reply could not be sent."
       // A TOAST as well as the inline line: by the time a failure lands the card has usually finished its
@@ -822,9 +828,10 @@ function ReplyBox({ project, thread, onSent, onLanded, onFailed }: { project: Qu
     setError(undefined)
     const deliver = () => {
       // Local truth first, then the network — the order every send on the board's card obeyed.
+      const staged = takeContextItems(key)
       draftStore.set(key, "")
       onSent()
-      send.mutate(message)
+      send.mutate({ outgoing: buildMessageWithContext(message, staged, project.projectDir), typed: message, staged })
     }
     // Picked answers ride the reply rather than being replied past — ThreadComposerBox's send has the why.
     if (answering?.slug === thread.id && answering.staged > 0) {
@@ -838,6 +845,7 @@ function ReplyBox({ project, thread, onSent, onLanded, onFailed }: { project: Qu
     <div className="shrink-0 px-5 pb-3 pt-0">
       <Composer
         surface="queueComposer"
+        contextTokens={contextTokens}
         value={text}
         onChange={(value) => draftStore.set(key, value)}
         onSubmit={submit}

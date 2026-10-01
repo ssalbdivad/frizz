@@ -1,10 +1,10 @@
-import { useContext, useEffect, useMemo, useState, type ReactElement, type ReactNode } from "react"
+import { useContext, useMemo, useState, type ReactElement, type ReactNode } from "react"
 import { useSnapshot } from "valtio"
 import type { AccountBackend, ThreadSkill } from "@frizz/shared"
 import { rpc } from "../api/rpc.ts"
-import { restoreContextItems, showToast, store, takeContextItems } from "../store.ts"
-import { buildMessageWithContext, hasToken } from "../lib/composerContext.ts"
-import { splitComposerValue } from "../lib/imagePaths.ts"
+import { showToast, store } from "../store.ts"
+import { buildMessageWithContext } from "../lib/composerContext.ts"
+import { restoreContextItems, takeContextItems, useStagedContextTokens } from "../lib/stagedContext.ts"
 import { useThreadComposerControls } from "../hooks/useThreadComposerControls.tsx"
 import { Composer } from "./Composer.tsx"
 import { useMentionCandidates, useOwnMention } from "../hooks/useMentionCandidates.ts"
@@ -101,19 +101,9 @@ export function ThreadComposerBox({
   // The thread's registered-question state, when this box sits under the surface that draws the cards.
   const answering = useContext(RegisteredAnsweringContext)
 
-  // The ⌘I roster and its tokens. DELETING A TOKEN IS THE REMOVAL GESTURE: whenever the draft or
-  // the roster changes, any staged item whose `@` token no longer appears in the prose is dropped —
-  // so backspacing a reference out of the text retires its chip, exactly as the chip's × strips the
-  // reference out of the text. Terminates: the write only fires when something is actually dropped.
-  const stagedContext = snap.composerContext[slug]
-  const contextTokens = useMemo(() => stagedContext?.map((item) => item.token) ?? [], [stagedContext])
-  useEffect(() => {
-    const items = store.composerContext[slug]
-    if (!items?.length) return
-    const { prose } = splitComposerValue(message)
-    const kept = items.filter((item) => hasToken(prose, item.token))
-    if (kept.length !== items.length) store.composerContext[slug] = kept
-  }, [slug, message, stagedContext])
+  // The staged selections' tokens, painted as chips; deleting a token's text drops its item
+  // (lib/stagedContext.ts). Keyed by this draft, so the queue card's copy of the box shows the same.
+  const contextTokens = useStagedContextTokens(key, message)
 
   // INTERRUPT AND SEND is offered only when there is something to interrupt AND a runtime that can be
   // preempted — `runtime === "running"` is exactly "process alive, turn in flight". The backend policy
@@ -162,14 +152,14 @@ export function ThreadComposerBox({
     }
     // Staged ⌘I context items ride the send: serialized into the text (before any trailing
     // attachment paths) and cleared with it — restored on a rejected send exactly like the draft.
-    const staged = takeContextItems(slug)
+    const staged = takeContextItems(key)
     const outgoing = buildMessageWithContext(text, staged, projectDir)
     const callbacks: EagerFollowUpCallbacks = {
       onOptimistic: clearMessage,
       // Never clobber a newer draft typed while the request was in flight.
       onRollback: () => {
         if (!draftStore.get(key)) setMessage(message)
-        restoreContextItems(slug, staged)
+        restoreContextItems(key, staged)
       },
     }
     const deliver = () => {

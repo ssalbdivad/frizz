@@ -16,6 +16,8 @@ import { dispatchProfileGroups } from "../lib/dispatchPreferences.ts"
 import { useDispatchProfile, useDraftDispatchPick } from "../hooks/useDispatchProfile.ts"
 import { handleDialogEscape } from "../lib/selectOverlay.ts"
 import { draftKey, draftStore, useDraft, useProjectDir } from "../lib/drafts.ts"
+import { buildMessageWithContext, type ComposerContextItem } from "../lib/composerContext.ts"
+import { restoreContextItems, stagedItems, takeContextItems, useStagedContextTokens } from "../lib/stagedContext.ts"
 import { projectSlug } from "../lib/base-path.ts"
 import { parseAccountAlias } from "../lib/signIn.ts"
 import { PROMPT_CONTROL_TYPOGRAPHY_CLASS } from "../lib/promptControlTypography.ts"
@@ -92,6 +94,12 @@ function PromptForm({
   const [prompt, setPrompt, clearPrompt] = useDraft(draftKey.dispatch(projectDir))
   const promptKey = draftKey.dispatch(projectDir)
   const submittedDraftRef = useRef("")
+  // SELECTED CONTEXT in a new thread's prompt — a selection sent from an editor window lands here as an
+  // `@a.ts:12-20` chip (lib/editorCompose.ts), staged under this box's own draft key and serialized into
+  // the prompt on dispatch exactly as a reply box serializes it (composerContext.ts), so the new thread's
+  // first message renders its chips like any later one. The box had no chips until 2026-10-01.
+  const contextTokens = useStagedContextTokens(promptKey, prompt)
+  const submittedContextRef = useRef<ComposerContextItem[]>([])
   const [pendingDispatch, setPendingDispatch] = useState<string | null>(null)
   // The new-thread default (shared with the GitHub picker) with this prompt's own pick over it. The
   // pick is part of the draft: it lasts until this prompt is dispatched, then the box is back on the
@@ -132,6 +140,9 @@ function PromptForm({
       // A submit clears before the RPC starts. Restore only into a still-empty field so retry is
       // effortless without overwriting text typed during the failed request.
       if (!draftStore.get(promptKey)) setPrompt(submittedDraftRef.current || input.prompt)
+      // Its chips come back with it, or the restored token would be bare text with nothing behind it.
+      restoreContextItems(promptKey, submittedContextRef.current)
+      submittedContextRef.current = []
       // The pick comes back with its prompt, on the same terms: a retry must not quietly run on the
       // default, and a pick made during the failed request is not overwritten.
       if (!draftStore.get(pickKey)) setPick(submittedPickRef.current)
@@ -156,6 +167,8 @@ function PromptForm({
   function runDispatch(input: DispatchInput) {
     submittedDraftRef.current = prompt
     submittedPickRef.current = pick
+    // Taken here, not in submit: a submit the sign-in gate holds keeps its draft, and so its chips.
+    submittedContextRef.current = takeContextItems(promptKey)
     clearPrompt()
     setPick(undefined)
     setPendingDispatch(input.prompt)
@@ -190,7 +203,7 @@ function PromptForm({
       return
     }
     const input: DispatchInput = {
-      prompt: prompt.trim(),
+      prompt: buildMessageWithContext(prompt, [...stagedItems(promptKey)], projectDir).trim(),
       // No permissionMode: the server stamps every created worker itself (workerDispatchPermission —
       // the non-interactive floor, raised to bypass only when Settings asks). Dispatch offers no
       // per-thread permission choice; the "Permissions" control behind the Claude Code gear in the model
@@ -283,6 +296,7 @@ function PromptForm({
         value={prompt}
         onChange={setPrompt}
         onSubmit={submit}
+        contextTokens={contextTokens}
         placeholder="Describe the task…"
         mentionCandidates={mentions}
         minHeight={96}
