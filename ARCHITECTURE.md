@@ -22,7 +22,7 @@ Full procedure in [plans/runtime-pin-bumps.md](plans/runtime-pin-bumps.md).
 | Path | What it is |
 | --- | --- |
 | [`src/`](src/) | The `frizz` launcher itself — artifact build/promote/verify, port + lock, browser launch. |
-| [`packages/`](packages/) | The app workspace — `shared`, `rpc`, `server`, `web`, `desktop` (see **Packages** below). |
+| [`packages/`](packages/) | The app workspace — `shared`, `rpc`, `server`, `web`, `desktop`, `vscode` (see **Packages** below). |
 | [`board/`](board/) | The zero-dep `.frizz/` board parser + thread writer. The server SHELLS OUT to it; never re-implement it. |
 | [`cc-worker/`](cc-worker/) | The Claude Code plugin every dispatched agent loads: worker contract seed, sub-agent profiles, hooks. |
 | [`monitors/`](monitors/) | Portable CI/PR/review watchers, synced into `cc-worker/skills/gh/scripts/`. |
@@ -167,6 +167,9 @@ Neither name is worth a rename sweep — but every new comment says Active / Res
 - `web` — React 19 + Vite 8 + Tailwind v4 + valtio + TanStack Query + xterm.js.
 - `desktop` — the Electron app: a window onto the one server, never a server of its own (see
   **Desktop app** below). Private; nothing it adds reaches the published packages.
+- `vscode` — the VS Code (and Cursor, Windsurf) extension: a client of the one server over the
+  machine-wide editor bridge (see **VS Code extension** below). Private; nothing it adds reaches the
+  published packages.
 
 Plus root `src/` — the `frizz` launcher (NOT a workspace package): canonicalize cwd's Git root,
 health-check/reuse its detached supervisor, atomically allocate/persist an isolated port, then open the
@@ -346,6 +349,33 @@ raise an Electron window. `electron` is its one dependency; electron-builder is 
 `desktop:dist` run, never installed. [`desktop.yml`](.github/workflows/desktop.yml) publishes unsigned
 installers to the GitHub release `desktop-v<version>` from `release`, each installed and launched on its
 own OS first.
+
+### VS Code extension
+
+[`packages/vscode`](packages/vscode/README.md) connects each editor window to the one server, in both
+directions: a selection becomes a new thread (Ask Frizz), a follow-up (Send to Frizz thread) or a chip
+in the page's prompt box (Add to Frizz prompt), and a file link clicked on the page opens in the window
+that has its folder open, at the line it names. Design and protocol: [`plans/vscode-extension.md`](plans/vscode-extension.md).
+
+- **The extension dials the server, never the reverse.** Each window holds one WebSocket to the
+  MACHINE-WIDE `/_frizz/editor` (`server/src/editor-bridge.ts`), answered in `index.ts`'s upgrade
+  handler before tenant routing. It says which folders the window has open and whether it has focus;
+  the server sends it files to open, folders to raise, and every project with its Ready/Working counts.
+  Frames are pinned in `shared/src/editor-protocol.ts` (plain types the extension bundles) and validated
+  by their zod twins in the shared index. Ask and Send use the ordinary RPCs, addressed by project id.
+- **`openLocalFile` tries a connected window first** when the External app names its editor family
+  (`vscode`, `cursor`, or `$EDITOR`'s), choosing the window whose folder contains the file, then the
+  most recently focused one on the same machine; otherwise it spawns the CLI as before, now with
+  `-g path:line:col`. Positions travel as `line`/`column`/`endLine` beside the path, parsed by the one
+  grammar in `shared/src/file-position.ts` (`a.ts:12:3`, `a.ts#L12-L20`).
+- **Prompt-box inserts are claimed, not broadcast.** The server holds what an editor sends and
+  publishes a payload-free `compose-pending` on every open project's bus; the page that has focus takes
+  it with `composeTake`, so exactly one tab inserts it (`web/src/lib/editorBridge.ts`).
+- It finds the server the way the desktop app does (owner record, then the well-known ports with the
+  launch-token proof), plus frizz-dev's `dev-supervisor.lock`, and declares `extensionKind: ["workspace"]`
+  so a Remote-WSL or SSH window runs it where the files and the server are. It ships as a `.vsix`
+  (`nub run vscode:package`, `vscode:install`); `@vscode/vsce` is fetched per run, never installed.
+  `packages/vscode/scripts/e2e.ts` drives a real VS Code under Xvfb against a fake or a real Frizz.
 
 ### Running against a repo outside this monorepo
 

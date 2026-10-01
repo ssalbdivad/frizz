@@ -204,6 +204,9 @@ const steps: Step[] = [
         assert.ok(compose && compose.t === "compose")
         assert.equal(compose.id, composed!.id)
         assert.deepEqual(compose.item, expected)
+      } else if (process.env.FRIZZ_E2E_PAGE_CLAIMS === "1") {
+        // A real page is open on this Frizz and claims it itself; the harness beside it asserts the chip.
+        return
       } else {
         const { item } = await rpc.mutation(project.id, "composeTake", {})
         assert.ok(item, "the server holds it for a page to claim")

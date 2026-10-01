@@ -10,7 +10,8 @@
 //       REAL mode: the same suite against a running Frizz — a disposable one (scripts/adhoc-stack.mjs),
 //       since it writes a sample file into the project folder and, with FRIZZ_E2E_SET_OPENER=1, sets
 //       External app to VS Code for the run. FRIZZ_E2E_DISPATCH=1 (+ FRIZZ_E2E_THREAD=<slug>) also
-//       runs the steps that start or message a real agent.
+//       runs the steps that start or message a real agent. FRIZZ_E2E_PAGE_CLAIMS=1 leaves the
+//       prompt-box insert for a real page open on that Frizz to claim, instead of taking it itself.
 //
 // NEVER ON THE REAL DISPLAY. On Linux the run re-executes itself under `xvfb-run -a` with DISPLAY and
 // WAYLAND_DISPLAY removed — on this machine DISPLAY=:0 is the maintainer's screen through WSLg, and a
@@ -124,6 +125,7 @@ try {
       FRIZZ_E2E_DISPATCH: process.env.FRIZZ_E2E_DISPATCH,
       FRIZZ_E2E_THREAD: process.env.FRIZZ_E2E_THREAD,
       FRIZZ_E2E_SET_OPENER: process.env.FRIZZ_E2E_SET_OPENER,
+      FRIZZ_E2E_PAGE_CLAIMS: process.env.FRIZZ_E2E_PAGE_CLAIMS,
     },
   })
 } catch (error) {

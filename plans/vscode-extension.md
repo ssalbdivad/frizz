@@ -47,7 +47,7 @@ server scanning lock files and dialling N editors.
 | `projects {projects}` | after hello, and on any change (2s in-memory diff) | maps files to projects; status bar counts |
 | `open {id, path, line?, column?, endLine?}` | a file link was clicked | opens + reveals, raises the window, answers `result` |
 | `focus {id, path}` | "Open in editor" on a folder this window has open | raises the window, answers `result` |
-| `composed {id, ok, error?}` | after a `compose` | reports failure; success is silent |
+| `composed {id, ok, error?}` | after a `compose` | says it was added (with an "Open Frizz" button), or why not |
 
 ### Which window gets an open
 
@@ -104,7 +104,7 @@ Commands (editor context menu under **Frizz**, the command palette, and the expl
 | --- | --- |
 | Ask Frizz… | input box → new thread in the file's project, the selection (or file) as context |
 | Send to Frizz thread… | pick one of the project's open threads → input box → follow-up |
-| Add to Frizz prompt | the selection as a chip in the Frizz page's prompt box |
+| Add to Frizz prompt (`Ctrl+Alt+P`, `⌘⌥P`) | the selection as a chip in the Frizz page's prompt box |
 | Open Frizz | the page, focused on this workspace's project (also the status bar item) |
 | Frizz: Show log | the connection log |
 
@@ -114,7 +114,10 @@ and the quoted selection, so the transcript shows the chip.
 
 Finding Frizz (no configuration): the published launcher's owner record
 (`<state>/frizz-server/address.json`), then the well-known ports (9393, 19393, 9494, 19494) with the
-same ownership proof the desktop app uses, then `<data>/server.lock`. `frizz.serverUrl` overrides.
+same ownership proof the desktop app uses, then frizz-dev's public port
+(`<data>/projects/<id>/dev-supervisor.lock`), and last `<data>/server.lock`'s private port, which serves
+RPC but is never used to open a page (a different port is a different origin, with its own tab state).
+`frizz.serverUrl` overrides.
 The extension declares `extensionKind: ["workspace"]` so in a Remote-WSL/SSH window it runs where
 the files and Frizz are.
 
