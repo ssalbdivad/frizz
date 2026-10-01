@@ -43,12 +43,18 @@ import { isTrustedLocalWebSocketRequest, rejectWebSocketUpgrade } from "./local-
 
 export const EDITOR_MAX_WINDOWS = 32
 /**
- * `ws`'s own frame ceiling, sized for a compose: its text may be 64 Ki UTF-16 units (the shared schema),
- * which is 64 KiB of ASCII but up to three times that as UTF-8. A frame past this is closed 1009 by `ws`
- * before it reaches a schema, so the extension caps a selection by its encoded size, not its length.
+ * `ws`'s own frame ceiling, sized for a compose: its text may be EDITOR_COMPOSE_MAX_TEXT (64 Ki) UTF-16
+ * units (editor-protocol.ts), which is 64 KiB of ASCII but up to three times that as UTF-8. A frame past
+ * this is closed 1009 by `ws` before it reaches a schema, so the extension has to fit a compose by its
+ * encoded size, not its text's length.
  */
 export const EDITOR_MAX_PAYLOAD_BYTES = 128 * 1024
-/** Every other frame is a hello, a state or a result, and none of those is anywhere near this. */
+/**
+ * Every other frame is a hello, a state or a result. A real one is a few KiB; only dozens of folders
+ * with kilobyte-long paths come near this. It is a limit of its own, not implied by the per-field ones
+ * in editor-protocol.ts (EDITOR_MAX_FOLDERS x EDITOR_MAX_PATH alone allows 256 KiB): a frame past it is
+ * refused 4401, and one past EDITOR_MAX_PAYLOAD_BYTES is closed 1009 by `ws` first.
+ */
 export const EDITOR_MAX_FRAME_BYTES = 64 * 1024
 export const EDITOR_HEARTBEAT_MS = 15_000
 export const EDITOR_PROJECTS_POLL_MS = 2_000
