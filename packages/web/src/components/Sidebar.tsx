@@ -658,7 +658,7 @@ export function awaitingReason(t: Pick<ThreadView, "lastFence">): string | null 
 
 // How long a working thread has been on the task its inline status names — the rested row's rest-time
 // column and type, so a rail's right edge always reads as "time", whichever band the row is in.
-// A THREAD'S LIVE SUB-AGENTS, AS A COUNT IN THE RIGHT-EDGE COLUMN — `5` and a robot, left of the clock.
+// A THREAD'S LIVE SUB-AGENTS, AS A COUNT IN THE RIGHT-EDGE COLUMN — a robot and `5`, left of the clock.
 // They were rows of their own under the thread until 2026-10-01, then one folded "5 sub-agents" line;
 // either way every busy thread took two lines of a rail that is meant to be a column of names, for a
 // list nobody opened from there (maintainer 2026-10-01: "usually people won't want to click on it from
@@ -667,14 +667,16 @@ export function awaitingReason(t: Pick<ThreadView, "lastFence">): string | null 
 // ride the tooltip; the children themselves are one click away on the card and in the drawer, which is
 // where the row's own click already goes.
 //
-// The column's type and grey (WorkingAge, RestedAge), and it yields to the hover actions the same way.
-// THE BOT'S FACE SITS ON THE DIGIT, NOT ITS INK BOX: the antenna is a hairline and the eye reads the
-// face, so centring the whole ink (antenna included) left the face riding low beside the number
-// (maintainer 2026-10-01: "alignment super needs to be fixed"). Everything is in `cap`, the resolved
-// font's cap height, so it holds in any font with nothing to re-measure. In lucide's 24-unit box the
-// face's ink (rect y 8–20 plus its 2-unit stroke) spans y 7–21: at 1.6cap that face is 0.93cap tall,
-// `self-baseline` puts the box bottom on the baseline, and 0.146cap down (0.2cap would seat the face
-// ON the baseline) centres it on the cap band — measured residual 0.00px at 10.5px and at 21px.
+// THE PROJECT ROW'S COUNTS, SPOKEN THE SAME WAY (ProjectList QuietToggles): glyph first, then digits,
+// a 10px glyph 3px from them, in the column's type and grey — so the robot here and the Working count's
+// robot on a folded project are one mark. It yields to the hover actions as the clock does.
+//
+// THE BOT'S FACE SITS ON THE DIGITS' CAP BAND, NOT ITS INK BOX: the antenna is a hairline and the eye
+// reads the face, so centring the whole ink (antenna included) left the face riding low beside the
+// number (maintainer 2026-10-01: "alignment super needs to be fixed"). In lucide's 24-unit box the
+// face's ink (rect y 8–20 plus its stroke) centres at y 14, which is 4.17px above the bottom of a 10px
+// box; `self-baseline` puts that bottom on the baseline, and the translate lifts the face's centre to
+// half the cap height. Measured residual ~0 (sans, 10.5px); `cap` keeps it right in any font.
 function SubAgentCount({ t, yieldsToRetry }: { t: ThreadView; yieldsToRetry?: boolean }) {
   const subs = visibleChildOps(t.subAgents ?? [], "rail")
   if (subs.length === 0) return null
@@ -684,12 +686,14 @@ function SubAgentCount({ t, yieldsToRetry }: { t: ThreadView; yieldsToRetry?: bo
       data-rail-subagents={t.id}
       title={names}
       aria-label={`${subs.length} ${subs.length === 1 ? "sub-agent" : "sub-agents"}`}
-      className={`flex shrink-0 items-baseline gap-0.5 tabular-nums text-[10.5px] leading-[19px] text-muted-55 ${
+      className={`flex shrink-0 items-baseline gap-[3px] text-[10.5px] leading-[19px] text-muted-55 ${
         yieldsToRetry ? "transition-opacity group-hover:opacity-0 group-focus-within:opacity-0" : ""
       }`}
     >
-      {subs.length}
-      <Bot aria-hidden className="size-[1.6cap] shrink-0 self-baseline translate-y-[0.146cap]" />
+      <span aria-hidden className="flex self-baseline translate-y-[calc(4.17px_-_0.5cap)]">
+        <Bot size={10} />
+      </span>
+      <span className="tabular-nums">{subs.length}</span>
     </span>
   )
 }

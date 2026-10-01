@@ -43,7 +43,7 @@ const CHILDREN: Partial<SubAgentView>[] = [
 test("a thread's live children are a count on its row, every depth included, and no rows of their own", () => {
   const html = rail("count", CHILDREN)
   assert.match(html, /data-rail-subagents="count" title="fix-r1, fix-r2, impl-flow, impl-w3" aria-label="4 sub-agents"/)
-  assert.match(html, /aria-label="4 sub-agents"[^>]*>4<svg/, "the number, then the robot")
+  assert.match(html, /aria-label="4 sub-agents"[^>]*><span aria-hidden="true"[^>]*><svg[\s\S]*?<\/svg><\/span><span class="tabular-nums">4</, "the robot, then the number, as the project row's counts read")
   for (const name of [">fix-r1<", ">impl-flow<", ">impl-w3<"]) assert.ok(!html.includes(name), `${name} is not drawn as a row`)
   assert.ok(!html.includes("data-op-row") && !html.includes("data-subagent-parent"), "no child row renders in the rail")
 })

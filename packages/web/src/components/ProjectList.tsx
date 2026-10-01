@@ -823,47 +823,46 @@ function ProjectRow({
           </span>
         </button>
       )}
-      {/* The right edge, beside the fold rather than inside it: the counts are buttons of their own. On a
-          touch screen the "…" never hides, so they step left of it rather than under it. */}
-      <div className="flex shrink-0 items-center gap-2 self-stretch pr-1.5 [@media(hover:none)]:pr-7">
+      {/* THE RIGHT EDGE, flush with every thread row's readings under it, and filled from the right: the
+          Ready badge when there is one, then the counts, then — on hover — the "…". Each mark that
+          appears takes its place on the LEFT of the ones already there, so nothing already drawn moves
+          and the column lines up down the whole list (maintainer 2026-10-01: "everything has to be right
+          aligned so it all lines up and new icons appear as needed moving left"). It used to hold a
+          19px slot for the badge on every row, so a project with no badge stood its counts 27px in from
+          the thread clocks beneath it, and the "…" overlaid that slot on hover. Beside the fold rather
+          than inside it: the counts are buttons of their own. */}
+      <div className="flex shrink-0 items-center gap-2 self-stretch pr-1.5">
+        {project.card && (
+          <div className={`items-center group-hover:flex group-has-[:focus-visible]:flex [@media(hover:none)]:flex ${menuOpen ? "flex" : "hidden"}`}>
+            <ProjectMenu
+              project={project.card}
+              home={home}
+              githubRepo={project.githubRepo}
+              focused={focused}
+              onFocus={() => {
+                // Leaving a project for All projects carries it over as the prompt box's pick, as the
+                // switcher does (AllQueues.tsx Switcher).
+                if (focused) rememberCrossProjectFocus(project.id)
+                navigate(focused ? viewHref(ALL_PROJECTS) : projectViewHref(project.slug))
+                glideTo(() => 0)
+              }}
+              onOpenChange={setMenuOpen}
+            >
+              <button type="button" aria-label={`More actions for ${project.name}`} className={`${ROW_ACTION_CLASS} data-[state=open]:bg-panel-2 data-[state=open]:text-fg data-[state=open]:opacity-100`}>
+                <Ellipsis size={13} />
+              </button>
+            </ProjectMenu>
+          </div>
+        )}
         {note ? (
           <span className="text-[10.5px] leading-[19px] text-muted-55">{note}</span>
         ) : (
           <>
             <QuietToggles project={project} quiet={quiet} opened={opened} working={collapsed ? working : 0} />
-            {/* The Ready count, in the "…"'s own slot — it gives way to the menu on hover. */}
-            {project.card && (
-              <span
-                className={`flex w-[19px] shrink-0 justify-end transition-opacity group-hover:opacity-0 group-has-[:focus-visible]:opacity-0 ${menuOpen ? "opacity-0" : ""} [@media(hover:none)]:opacity-100`}
-              >
-                {count > 0 && <QueueBadge count={count} />}
-              </span>
-            )}
+            {count > 0 && <span className="flex shrink-0"><QueueBadge count={count} /></span>}
           </>
         )}
       </div>
-      {project.card && (
-        <div className={`absolute right-1.5 top-0.5 items-center group-hover:flex group-has-[:focus-visible]:flex [@media(hover:none)]:flex ${menuOpen ? "flex" : "hidden"}`}>
-          <ProjectMenu
-            project={project.card}
-            home={home}
-            githubRepo={project.githubRepo}
-            focused={focused}
-            onFocus={() => {
-              // Leaving a project for All projects carries it over as the prompt box's pick, as the
-              // switcher does (AllQueues.tsx Switcher).
-              if (focused) rememberCrossProjectFocus(project.id)
-              navigate(focused ? viewHref(ALL_PROJECTS) : projectViewHref(project.slug))
-              glideTo(() => 0)
-            }}
-            onOpenChange={setMenuOpen}
-          >
-            <button type="button" aria-label={`More actions for ${project.name}`} className={`${ROW_ACTION_CLASS} data-[state=open]:bg-panel-2 data-[state=open]:text-fg data-[state=open]:opacity-100`}>
-              <Ellipsis size={13} />
-            </button>
-          </ProjectMenu>
-        </div>
-      )}
     </div>
   )
 }
