@@ -8,8 +8,9 @@ import { useSyncExternalStore } from "react"
 //
 // This is a different question: below what width does the desktop's information model stop working at
 // all? A 390pt viewport cannot hold a rail AND a workpane in any arrangement, so the phone gets its own
-// shell (nav bar → one list → tab bar) rather than a squeezed one. 700px is where that switch happens:
-// wide enough that every phone in portrait and most in landscape get the phone shell, narrow enough
+// layout of the page (components/PhonePage.tsx: a header, three tabs, one list) rather than a squeezed
+// one. 700px is where that switch happens: wide enough that every phone in portrait and most in
+// landscape get the phone layout, narrow enough
 // that a small window on a desktop keeps the layout its user knows.
 export const MOBILE_MAX_PX = 700
 export const MOBILE_QUERY = `(max-width: ${MOBILE_MAX_PX}px)`

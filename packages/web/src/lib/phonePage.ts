@@ -1,5 +1,5 @@
 import { activeBandThread, type BoardSnapshot, type ThreadView } from "@frizz/shared"
-import { isPinned, needsAction, orderByInteraction, orderQueue, sectionThreads, type QueueDirection } from "../groups.ts"
+import { isPinned, orderByInteraction, orderQueue, sectionThreads, sessionIndicatorKind, type QueueDirection } from "../groups.ts"
 import { isBusy, threadKey, type QueuesProject } from "./allQueues.ts"
 import { loudBands } from "./listBands.ts"
 
@@ -16,8 +16,14 @@ import { loudBands } from "./listBands.ts"
 // THE QUEUE IS READY AND WORKING TOGETHER, asks first — upstream's call (maintainer review 2026-08-17:
 // "something is active until it's marked done"), and on the one screen a phone has, "what needs me" earns
 // the top. Within that, upstream's own order: PINNED leads (the phone has no pinned band, so the human's
-// shelf folds into the top of the one list rather than vanishing), then the asks, then the rest of Ready,
-// both in the queue's order, then Working by recency — `orderActive`'s order with the asks lifted out.
+// shelf folds into the top of the one list rather than vanishing), then the asks, then the rest of Ready
+// in the queue's order, then Working by recency — `orderActive`'s order with the asks lifted out.
+//
+// AN ASK IS A ROW MARKED "?" (`isAsk`), the one mark that spends the accent. Upstream lifted and counted
+// `needsAction` rows, which misses a permission request waiting on the human (`actionableInteraction`):
+// its row wore the "?" while it sorted among the handoffs and the header's "need you" left it out
+// (seen 2026-09-30 on the standup demo's lockfile-bump). The mark is what the eye counts, so the order
+// and the header count the mark.
 // Across projects the Ready rows merge in ONE queue order (the desktop's `mergedQueue`): one server stamps
 // every project's `queuedAt` on one clock, so the stamps compare.
 
@@ -42,6 +48,11 @@ function rowsOf(threads: readonly ThreadView[], owner: ReadonlyMap<ThreadView, Q
     const project = owner.get(thread)!
     return { project, thread, key: threadKey(project.id, thread.id) }
   })
+}
+
+/** A row marked "?" — waiting on the human's answer (sessionIndicatorKind's `needs-input`). */
+export function isAsk(t: ThreadView): boolean {
+  return sessionIndicatorKind(t) === "needs-input"
 }
 
 /** Pin order, oldest pin first — the shelf the human arranged (groups.ts sectionThreads). */
@@ -71,11 +82,8 @@ export function phoneQueue(
     ready.push(...bands.ready)
     working.push(...bands.working)
   }
-  const queue = orderQueue(ready, direction)
-  return rowsOf(
-    [...pinned.sort(byPin), ...queue.filter(needsAction), ...queue.filter((t) => !needsAction(t)), ...orderByInteraction(working)],
-    owner,
-  )
+  const active = [...orderQueue(ready, direction), ...orderByInteraction(working)]
+  return rowsOf([...pinned.sort(byPin), ...active.filter(isAsk), ...active.filter((t) => !isAsk(t))], owner)
 }
 
 /** THE SNOOZED TAB: every shown project's parked threads, most recently touched first. A pinned one is on the
@@ -104,12 +112,12 @@ export function phoneDone(projects: readonly QueuesProject[], boardOf: (project:
   return rowsOf(orderByInteraction([...owner.keys()]), owner)
 }
 
-/** The header's and the tabs' readings: how many rows ask for the human, and how many are spinning. */
+/** The header's and the tabs' readings: how many rows are marked "?", and how many are spinning. */
 export function phoneCounts(queue: readonly PhoneRow[]): { asks: number; working: number } {
   let asks = 0
   let working = 0
   for (const { thread } of queue) {
-    if (needsAction(thread)) asks += 1
+    if (isAsk(thread)) asks += 1
     // The maintainer's ACTIVE band, counted with the predicate the desktop rail's badge uses, so the phone
     // and the rail cannot disagree (upstream MobileBoard's own rule).
     if (activeBandThread(thread)) working += 1

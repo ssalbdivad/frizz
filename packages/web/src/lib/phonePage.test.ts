@@ -86,6 +86,12 @@ test("the header counts asks and the spinning band, never a rested handoff", () 
   const alpha = project("alpha", { queued: [ask("a-ask", 60_000), ready("handoff", 30_000)], running: [running("run", 1_000)] })
   const beta = project("beta", { queued: [ask("b-ask", 10_000)] })
   assert.deepEqual(phoneCounts(phoneQueue([alpha, beta])), { asks: 2, working: 1 })
+  // A permission request waiting on the human wears the "?" too, so it is an ask: lifted with the others
+  // and counted. `needsAction`, upstream's predicate, leaves it among the handoffs.
+  const approval = ready("approve-bash", 90_000, { actionableInteraction: { id: "i1" } } as Partial<ThreadView>)
+  const gamma = project("gamma", { queued: [ready("plain", 120_000), approval] })
+  assert.deepEqual(names(phoneQueue([gamma])), ["gamma:approve-bash", "gamma:plain"])
+  assert.deepEqual(phoneCounts(phoneQueue([gamma])), { asks: 1, working: 0 })
   assert.deepEqual(phoneCounts([]), { asks: 0, working: 0 })
 })
 

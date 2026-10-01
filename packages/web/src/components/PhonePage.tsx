@@ -63,6 +63,9 @@ import { shortPath } from "./ProjectActions.tsx"
 // project they would have to go through each project's own client, with the card's optimistic exit, and
 // a thread's drawer already has Snooze and Mark as done one tap away.
 
+/** The row title's size, which its mark's slot reads `cap` at. */
+const TITLE_PX = 15.5
+
 /** The rail's checkbox geometry (BoxSpinner's STATUS_BOX) as a ratio, so a mark keeps its SHAPE at any size. */
 const BOX_RADIUS_RATIO = 4 / 15
 
@@ -188,13 +191,16 @@ function ThreadRow({ row, tab, last, withProject }: { row: PhoneRow; tab: PhoneT
         onClick={() => open(project, t.id)}
         className="flex w-full items-start gap-3 px-4 py-[11px] text-left active:bg-hover"
       >
-        <span className="flex h-[21px] shrink-0 items-center justify-center">
+        <CapSlot size={18} fontSize={TITLE_PX}>
           <ThreadMark kind={kind} userSnoozed={futureSnoozedUntil(t) !== undefined} />
-        </span>
-        <span className="flex min-w-0 flex-1 flex-col gap-px">
+        </CapSlot>
+        <span className="flex min-w-0 flex-1 flex-col gap-px self-baseline">
           <span className="flex min-w-0 items-baseline gap-2.5">
             <span className="min-w-0 flex-1 truncate text-[15.5px] font-medium leading-[21px] tracking-[-0.005em] text-fg">{displayTitle(t)}</span>
-            {right ? <span data-mobile-row-right className="shrink-0 text-[12px] leading-[21px] tabular-nums text-faint">{right}</span> : null}
+            {/* `leading-[16px]`, not the title's 21px: baseline-aligned to the 15.5px title, a 12px reading
+                on a 21px line hung 1.25px below the title's line box, so every row with an age stood 1px
+                taller than one without (64 against 63px, 2026-09-30). */}
+            {right ? <span data-mobile-row-right className="shrink-0 text-[12px] leading-[16px] tabular-nums text-faint">{right}</span> : null}
           </span>
           {withProject || line || agents ? (
             // The project and the agent count sit OUTSIDE the truncating span, so a long activity line
@@ -222,6 +228,29 @@ function ThreadRow({ row, tab, last, withProject }: { row: PhoneRow; tab: PhoneT
   )
 }
 
+/**
+ * A MARK ON ITS TEXT'S CAP BAND, computed by the browser, so it holds in any font and at any size.
+ *
+ * The slot is a ZERO-HEIGHT box on the text's BASELINE (`self-baseline`, beside an item that is baseline-
+ * aligned too): it has no in-flow content, so its baseline is synthesized from its edge — never taken from
+ * a "?" inside some marks and not others — and at no height it cannot push the text down. The mark stands
+ * on that baseline and drops by half its own height less half a cap, which puts its centre on the cap
+ * band's; the slot carries the text's font-size, so `cap` is the text's.
+ *
+ * Upstream centred both marks in their boxes instead: the row's 18px box in the title's 21px line, and
+ * the + in the pill. In sans that left the box's ink centre 1.50px below the title's cap band on every
+ * row and the +'s 1.22px below its label's (the visual-review ink routine, 390px, 2026-09-30).
+ */
+function CapSlot({ size, fontSize, children }: { size: number; fontSize: number; children: ReactNode }) {
+  return (
+    <span className="relative h-0 shrink-0 self-baseline" style={{ width: size, fontSize }}>
+      <span className="absolute bottom-0 left-0 flex" style={{ width: size, height: size, transform: `translateY(calc(${size / 2}px - 0.5cap))` }}>
+        {children}
+      </span>
+    </span>
+  )
+}
+
 function EmptyBand({ label }: { label: string }) {
   return (
     <div className="flex flex-1 flex-col items-center justify-center px-10 pb-24 text-center">
@@ -233,9 +262,17 @@ function EmptyBand({ label }: { label: string }) {
 /**
  * One band's tab: a text label with an underline, and its count after it on the same baseline.
  *
- * The label reserves its SEMIBOLD width whichever state it is in (an invisible bold copy shares its grid
+ * The tab reserves its SEMIBOLD width whichever state it is in (an invisible bold copy shares its grid
  * cell), so selecting a tab never nudges the tabs after it sideways. 44px tall: the whole strip under the
  * header is the hit area, not the 20px of text in it.
+ *
+ * The copy is the label AND its count, where upstream reserved the label alone: the slack a regular-weight
+ * label leaves then fell BETWEEN the label and its count, which stood 11.10px of ink off an unselected
+ * "Snoozed" against 7.14px off the selected "Queue" (scripts/ink-gaps.mjs, sans, dsf 4, 2026-09-30) — the
+ * count drifting off the word it counts whenever its tab was not the one open. Reserved together and
+ * centred, the count holds at 7.1-7.9px in both states and the slack splits into the gaps either side,
+ * which stay within 3px of each other — 26.85 and 29.69px with Queue open (left-aligned instead, it all landed after the count and the two
+ * gaps read 23.4 and 31.2px).
  */
 function BandTab({ band, label, active, onClick, children }: { band: PhoneTab; label: string; active: boolean; onClick: () => void; children?: ReactNode }) {
   return (
@@ -247,18 +284,23 @@ function BandTab({ band, label, active, onClick, children }: { band: PhoneTab; l
       onClick={onClick}
       className={`-mb-px flex h-[44px] items-center border-b-2 ${active ? "border-fg text-fg" : "border-transparent text-muted"}`}
     >
-      <span className="flex items-baseline gap-1.5">
-        <span className="grid text-[14.5px] leading-[20px]">
-          <span aria-hidden className="invisible col-start-1 row-start-1 font-semibold">{label}</span>
-          <span className={`col-start-1 row-start-1 ${active ? "font-semibold" : ""}`}>{label}</span>
+      <span className="grid">
+        <span aria-hidden className={`invisible ${TAB_FACE}`}>
+          <span className="font-semibold">{label}</span>
+          {children}
         </span>
-        {children}
+        <span className={`${TAB_FACE} justify-self-center`}>
+          <span className={active ? "font-semibold" : undefined}>{label}</span>
+          {children}
+        </span>
       </span>
     </button>
   )
 }
 
 const TAB_COUNT = "text-[12.5px] font-medium tabular-nums text-muted"
+/** A tab's label and count on one baseline, in the grid cell its bold copy reserves. */
+const TAB_FACE = "col-start-1 row-start-1 flex items-baseline gap-1.5 text-[14.5px] leading-[20px]"
 /** The header's 44px round buttons (←, the gear). */
 const HEADER_BUTTON = "flex size-[44px] shrink-0 items-center justify-center rounded-full text-fg/85 active:bg-hover-strong"
 /** Done rows drawn at once, then this many more per "Show more": the band grows without bound. */
@@ -435,10 +477,16 @@ function PhoneThreads({ shown, viewed, focusedSlug, hidden, loading, error, comp
         // NOT the accent: a permanent yellow pill would out-shout every ask in the list under it, and the
         // accent means exactly one thing in this product. This is the app's own primary-button fill.
         // Labelled, not a bare +: the verb is the one thing on this screen that is not a thread.
-        className="button-outline fixed bottom-[calc(16px+env(safe-area-inset-bottom))] right-4 z-30 flex h-[50px] items-center gap-1.5 rounded-full bg-fg pl-4 pr-5 text-[15px] font-semibold text-bg shadow-lg shadow-shadow-ink/50 active:opacity-85"
+        className="button-outline fixed bottom-[calc(16px+env(safe-area-inset-bottom))] right-4 z-30 flex h-[50px] items-center rounded-full bg-fg pl-4 pr-5 text-[15px] font-semibold text-bg shadow-lg shadow-shadow-ink/50 active:opacity-85"
       >
-        <Plus size={20} strokeWidth={2.4} />
-        New thread
+        {/* The + on the label's cap band (CapSlot): lucide's plus is symmetric in its box, so the box's
+            centre is the ink's. */}
+        <span className="flex items-baseline gap-1.5">
+          <CapSlot size={20} fontSize={15}>
+            <Plus size={20} strokeWidth={2.4} />
+          </CapSlot>
+          <span className="self-baseline">New thread</span>
+        </span>
       </button>
       {composing ? <PhoneNewThread onClose={() => setComposing(false)}>{composer(() => setComposing(false))}</PhoneNewThread> : null}
     </div>
@@ -487,7 +535,9 @@ function PhoneProjects({ projects, focusedSlug, hidden, homeDir, onAll, onProjec
   const total = [...list.projects, ...(list.home ? [list.home] : [])].reduce((sum, entry) => sum + entry.ready, 0)
   const allWorking = [...list.projects, ...(list.home ? [list.home] : [])].reduce((sum, entry) => sum + entry.working, 0)
   const isAll = focusedSlug === undefined
-  useEffect(() => window.scrollTo(0, 0), [])
+  useEffect(() => {
+    window.scrollTo(0, 0)
+  }, [])
   const choose = (project: QueuesProject) => (project.slug === focusedSlug ? onChoose() : onProject(project))
   const row = (entry: PhoneProjectEntry) => {
     const { project } = entry
@@ -539,7 +589,7 @@ function PhoneProjects({ projects, focusedSlug, hidden, homeDir, onAll, onProjec
             <span className="flex min-w-0 flex-1 flex-col">
               <span className="truncate text-[15.5px] font-medium leading-[20px] text-fg">All projects</span>
               <span className="truncate text-[12.5px] leading-[17px] text-muted">
-                {projects.length === 1 ? "1 project" : `${projects.length} projects`}
+                {list.projects.length === 1 ? "1 project" : `${list.projects.length} projects`}
               </span>
             </span>
             <Counts ready={total} working={allWorking} />
