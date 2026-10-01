@@ -61,10 +61,25 @@ export interface EmbedComposeMessage {
   type: "frizz:compose"
   /** The extension's own nonce, echoed in `frizz:composed`. */
   id: string
+  /**
+   * `path` is the file's absolute path — or `EMBED_TERMINAL_PATH` for text selected in VS Code's
+   * terminal, which has no file: its chip reads `@terminal` and its definition `(terminal)`.
+   */
   item: EditorComposeInput & { app: string }
   target: "front" | "new" | { thread: string; project: string }
   focus: boolean
+  /**
+   * Prose to put right after the chip, as if typed there — "Ask Frizz to fix" sends the problem's own
+   * message (`Fix: Cannot find name 'foo'. ts(2304)`), so the box reads as a request rather than a bare
+   * reference. Plain text, one line, at most `EMBED_MAX_NOTE` characters; the human can edit it before
+   * sending like anything else in the box.
+   */
+  note?: string
 }
+
+/** The `path` of a terminal selection's compose item (see `EmbedComposeMessage.item`). */
+export const EMBED_TERMINAL_PATH = "terminal"
+export const EMBED_MAX_NOTE = 2000
 
 /** Show a thread (its drawer, full height), a project's queue, or this page's own queue view. */
 export interface EmbedNavigateMessage {
@@ -72,7 +87,51 @@ export interface EmbedNavigateMessage {
   to: { thread: string; project: string } | { project: string } | "queue"
 }
 
-export type EmbedHostMessage = EmbedThemeMessage | EmbedComposeMessage | EmbedNavigateMessage
+/** One file open in the editor, as the sidebar's context bar shows it. */
+export interface EmbedEditorFile {
+  /** Absolute path, in the server's filesystem terms. */
+  path: string
+  /** Workspace-relative path for display (`workspace.asRelativePath`), else the basename. */
+  label: string
+  /** The project it belongs to, when the extension matched one — the add's target, like a compose item's. */
+  projectId?: string
+}
+
+/** A non-empty selection in the editor in front. Lines are 1-based and inclusive, as a chip's are. */
+export interface EmbedEditorSelection {
+  startLine: number
+  /** A selection that ends at column 1 of a line ends on the line BEFORE it, as the chip it would make does. */
+  endLine: number
+  /** Characters selected, across every selection the editor holds (multi-cursor counts each). */
+  chars: number
+}
+
+/**
+ * THE EDITOR'S LIVE CONTEXT — what the sidebar's context bar shows: the file in front and its selection,
+ * and the other files open in tabs. Sent after `frizz:ready` and again on every change (active editor,
+ * selection — debounced, so a drag is not a message per pixel — and the tab set). Paths and line numbers
+ * only, never the selected text: the text crosses only when the human adds it (`frizz:add-context`).
+ */
+export interface EmbedEditorContextMessage {
+  type: "frizz:editor-context"
+  /** The text editor in front, or null when none is (a terminal has focus with no editor beside it, a diff, nothing open). */
+  active: (EmbedEditorFile & { selection?: EmbedEditorSelection }) | null
+  /** Every OTHER file open in a tab, most recently active first, at most `EMBED_MAX_OPEN_FILES`. */
+  open: EmbedEditorFile[]
+}
+
+export const EMBED_MAX_OPEN_FILES = 50
+
+/**
+ * A button in VS Code's own title row above the frame — the sidebar has no Frizz header of its own, so
+ * the header's doors live there: a new thread, back to the queue, jump to a thread (⌘K), settings.
+ */
+export interface EmbedCommandMessage {
+  type: "frizz:command"
+  command: "new-thread" | "queue" | "jump" | "settings"
+}
+
+export type EmbedHostMessage = EmbedThemeMessage | EmbedComposeMessage | EmbedNavigateMessage | EmbedEditorContextMessage | EmbedCommandMessage
 
 // ── page → host ────────────────────────────────────────────────────────────────────────────────────
 
@@ -129,4 +188,39 @@ export interface EmbedKeyMessage {
   alt: boolean
 }
 
-export type EmbedPageMessage = EmbedReadyMessage | EmbedComposedMessage | EmbedOpenFileMessage | EmbedOpenExternalMessage | EmbedKeyMessage
+/**
+ * Put the editor's context in the composer in front — a click on the context bar (the selection, or the
+ * file in front when nothing is selected) or a pick from its open files. The page cannot do it alone: it
+ * holds paths and line numbers, never the text. The host answers with a `frizz:compose` (target "front",
+ * focus true) carrying the text as the editor has it at that moment, or with nothing when the file or
+ * selection is gone.
+ */
+export interface EmbedAddContextMessage {
+  type: "frizz:add-context"
+  /** "selection": the editor in front's selection. "file": `path`, as a whole-file reference. */
+  what: "selection" | "file"
+  path?: string
+}
+
+/**
+ * Where the page is — VS Code's title row above the frame carries it, since the sidebar draws no header
+ * of its own. Sent on every change of view, and when the readings in it change.
+ */
+export interface EmbedRouteMessage {
+  type: "frizz:route"
+  /** Which title-row buttons apply: "thread" shows Back to queue, the others New thread. */
+  view: "queue" | "thread" | "settings" | "other"
+  /** The view's name, short: the thread's title, the queue's scope ("All projects", a project's name), "Settings". */
+  title: string
+  /** The reading beside it, e.g. `2 need you · 3 ready`; absent says nothing. */
+  description?: string
+}
+
+export type EmbedPageMessage =
+  | EmbedReadyMessage
+  | EmbedComposedMessage
+  | EmbedOpenFileMessage
+  | EmbedOpenExternalMessage
+  | EmbedKeyMessage
+  | EmbedAddContextMessage
+  | EmbedRouteMessage

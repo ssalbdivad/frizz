@@ -200,6 +200,34 @@ What embedding needed, each found by the spike:
 
 The view's badge is the Ready count the status bar shows, and the status bar item reveals the sidebar.
 
+### The editor in the sidebar, and the app's own feel
+
+The maintainer, after using the first cut in a Remote-WSL window (2026-10-01): the sidebar must show what
+the editor has open and what is highlighted, with a visual indicator; a Cursor-style shortcut must drop
+the highlighted code into the current prompt as a pill; everything else — the UI, text sizes, shortcuts —
+must match the core app, with a hint wherever the sidebar differs; and no Frizz header.
+
+- **The context bar.** Above each composer in the sidebar, a quiet strip names the file in front and its
+  selection (`r2-private.ts:91-116`, `26 lines`), live from `frizz:editor-context`; a click adds it as a
+  chip (`frizz:add-context` → `frizz:compose`), and the other open files are one more click away. It
+  shows paths and line numbers only; the text crosses when the human adds it. Nothing is attached
+  implicitly — a chip in the box is the only way context rides a message, as in the browser.
+- **⌘I / Ctrl+I in the editor** adds the selection as a chip in the sidebar's prompt and puts the caret
+  after it: the core app's own chord for staging a selection (FileViewerPanel's ⌘I), and the chord
+  Cursor gives its agent. It replaces the first cut's Ctrl+Alt+P, and fires only with a selection, so
+  VS Code's own Ctrl+I (suggest, inline chat) is untouched everywhere else.
+- **More ways in:** an editor tab's context menu and the explorer add a whole file; a problem's quick
+  fix, "Ask Frizz to fix", adds its lines with the message after the chip (`note`); the terminal's
+  context menu adds its selection as `@terminal`.
+- **The page is the desktop app, narrowed — not the phone app.** The phone layout gave the sidebar its
+  one-column structure, and with it touch-only variants the browser app never shows (the answer sheet in
+  place of inline question cards, a floating button, no keyboard). In the sidebar those take the
+  desktop's variant: inline cards, the desktop type scale, every shortcut the `?` sheet lists. Where the
+  sidebar must differ — a chord VS Code keeps, a setting that cannot apply in a frame — the page says so
+  where it happens.
+- **No Frizz header.** VS Code's title row is the header: the view's scope and its counts (`frizz:route`
+  → `WebviewView.title`/`description`), and the header's doors as title-row buttons (`frizz:command`).
+
 ## Verification
 
 - Unit: `file-position.test.ts`; the bridge against real `ws` clients (`editor-bridge.test.ts`);
