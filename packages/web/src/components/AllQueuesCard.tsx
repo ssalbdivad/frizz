@@ -55,6 +55,7 @@ import { ExpandThreadLink } from "./ExpandThreadLink.tsx"
 import { SpinoffButton, SpinoffOf } from "./Spinoff.tsx"
 import { HEADER_ICON_CLASS } from "../lib/headerIcon.ts"
 import { LastActive } from "./LastActive.tsx"
+import { TodoBox } from "./TodoBox.tsx"
 import { ProjectSquare } from "./ProjectSquare.tsx"
 import { LinkedHtml } from "./LinkedHtml.tsx"
 import { QuestionBlockCard } from "./QuestionBlockCard.tsx"
@@ -325,8 +326,8 @@ export const AllQueuesCard = memo(function AllQueuesCard({
                   </>
                 ) : (
                   <LastActive
-                    at={queueLabelAt(thread)}
-                    label={queueLabelWord(thread)}
+                    at={thread.todo !== undefined ? thread.spawnedAt : queueLabelAt(thread)}
+                    label={thread.todo !== undefined ? "Added" : queueLabelWord(thread)}
                     fallbackAt={thread.spawnedAt}
                     lead={chip ? <span aria-hidden>·</span> : undefined}
                     className="min-w-0 truncate"
@@ -386,6 +387,8 @@ export const AllQueuesCard = memo(function AllQueuesCard({
           <QueueDismissContext.Provider value={dismiss}>
           <RegisteredAnsweringProvider thread={thread} scope={answeringScope}>
           <ProjectLinkScope project={project}>
+            {/* A todo has no conversation, handoff or process to show: its note is the box below. */}
+            {thread.todo === undefined && (
             <div className="flex min-w-0 flex-col gap-4 px-5 pt-5 pb-4">
               {/* EARLIER MESSAGES OPEN THE DRAWER, never the card. History drawn into the card grew it
                   inside the queue, and the queue is ONE page: whether a page loaded on a press or on a
@@ -463,6 +466,7 @@ export const AllQueuesCard = memo(function AllQueuesCard({
                 <TerminalPromptPane thread={thread} onOpen={openProcess} />
               </ThreadProjectScope>
             </div>
+            )}
 
             {/* Keyed on the rest: an answered card keeps its slot while the card holds for the worker's
                 turn, and a NEW handoff — which says what became of it — starts the stack over. */}
@@ -472,7 +476,10 @@ export const AllQueuesCard = memo(function AllQueuesCard({
           </ProjectLinkScope>
 
           <ThreadProjectScope projectId={project.id} projectDir={project.projectDir}>
-            <ReplyBox project={project} thread={thread} onSent={onSent} onLanded={onLanded} onFailed={onReturn} />
+            {/* A TODO's box is its note, and sending it starts the agent (TodoBox). */}
+            {thread.todo !== undefined
+              ? <TodoBox thread={thread} surface="queueComposer" className="shrink-0 px-5 pt-5 pb-3" />
+              : <ReplyBox project={project} thread={thread} onSent={onSent} onLanded={onLanded} onFailed={onReturn} />}
             {/* EVERYTHING IT HAS RUNNING, in the drawer's one column (QueueChildOps): its sub-agents and
                 Workflows as AGENT / FLOW rows — the awaiting card's to list while it is drawn — then every
                 terminal on the thread, yours and the agent's, as the drawer's TERM strip (ThreadTerminals.tsx),

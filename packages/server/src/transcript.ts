@@ -35,6 +35,7 @@ import {
 } from "@frizz/shared"
 import { workDirOf, type Project } from "./project.ts"
 import type { Storage } from "./storage.ts"
+import { isTodoRow } from "./storage.ts"
 import type { AgentBackend, NormalizedEvent } from "./backend/types.ts"
 import { parseDeliveryLedger, projectDeliveryLedger, suppressCancelledDeliveries, attachmentPromptText } from "./delivery-ledger.ts"
 import { editedFilesOf } from "./edited-files.ts"
@@ -4829,6 +4830,8 @@ function readThreadTranscriptMessages(
   backendFor?: (kind?: string) => AgentBackend,
 ): TranscriptMessage[] {
   const row = storage.getSession(slug)
+  // A todo has no transcript, and looking for one would scan the log directory on every view.
+  if (isTodoRow(row)) return []
   if (row) {
     // Codex threads write a DIFFERENT transcript schema in a DIFFERENT place (~/.codex/sessions,
     // date-sharded, located by the discovered rollout id) — route them through the codex reader+parser
