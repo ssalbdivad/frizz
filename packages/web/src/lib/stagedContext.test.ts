@@ -21,7 +21,7 @@ test("staged items survive the round trip through sessionStorage", () => {
   const key = draftKey.dispatch("/repo")
   const staged = { [key]: [item("@a.ts:12-20"), item("@b.ts:3", { id: 2, path: "/repo/b.ts", startLine: 3, endLine: 3 })] }
   const drafts: Record<string, string> = { [key]: "look at @a.ts:12-20 and @b.ts:3" }
-  assert.deepEqual(parseStagedContext(serializeStagedContext(staged), (k) => drafts[k] ?? ""), staged)
+  assert.deepEqual(parseStagedContext(serializeStagedContext(staged, () => 1), (k) => drafts[k] ?? ""), staged)
 })
 
 test("only items whose token is still in their draft come back", () => {
@@ -30,7 +30,7 @@ test("only items whose token is still in their draft come back", () => {
   const raw = serializeStagedContext({
     [kept]: [item("@a.ts:12-20"), item("@a.ts:12-20#2", { id: 2 })],
     [sent]: [item("@a.ts:12-20", { id: 3 })],
-  })
+  }, () => 1)
   // The second item's token was deleted from the prose; the other draft was sent (and so cleared).
   const drafts: Record<string, string> = { [kept]: "see @a.ts:12-20" }
   assert.deepEqual(parseStagedContext(raw, (k) => drafts[k] ?? ""), { [kept]: [item("@a.ts:12-20")] })
@@ -50,9 +50,40 @@ test("a damaged snapshot reads as nothing staged, and never throws", () => {
 test("the snapshot is bounded: a draft whose quotes would overflow it is left out whole", () => {
   const small = draftKey.dispatch("/small")
   const huge = draftKey.dispatch("/huge")
-  const raw = serializeStagedContext({ [small]: [item("@a.ts:1")], [huge]: [item("@b.ts:1", { text: "x".repeat(2 * 1024 * 1024) })] })
+  const raw = serializeStagedContext({ [small]: [item("@a.ts:1")], [huge]: [item("@b.ts:1", { text: "x".repeat(2 * 1024 * 1024) })] }, () => 1)
   assert.ok(raw.length < 1024 * 1024)
   assert.deepEqual(Object.keys(JSON.parse(raw) as object), [small])
+})
+
+// Past the cap the OLDEST drafts go, as the drafts' own bound does — never the selection just sent to the
+// box in front of the human, which is the one appended last (review C10).
+test("past the cap the snapshot keeps the newest drafts, whatever order they were staged in", () => {
+  const quote = "q".repeat(64 * 1024)
+  const staged: Record<string, ComposerContextItem[]> = {}
+  const touched: Record<string, number> = {}
+  for (let i = 0; i < 16; i++) {
+    const key = draftKey.followUp("/repo", `old-${i}`, "s1")
+    staged[key] = [item("@a.ts:12-20", { text: quote })]
+    touched[key] = 1_000 + i
+  }
+  const fresh = draftKey.dispatch("/repo")
+  staged[fresh] = [item("@b.ts:3", { text: quote })]
+  touched[fresh] = 9_000
+  const raw = serializeStagedContext(staged, (key) => touched[key])
+  assert.ok(raw.length <= 1024 * 1024)
+  const keys = Object.keys(JSON.parse(raw) as object)
+  assert.ok(keys.includes(fresh), "the newest draft's quote is kept")
+  // What did not fit is the oldest: every key kept is newer than every key dropped.
+  const dropped = Object.keys(staged).filter((key) => !keys.includes(key))
+  assert.ok(dropped.length > 0, "the fixture really does overflow the cap")
+  assert.ok(Math.min(...keys.map((key) => touched[key]!)) > Math.max(...dropped.map((key) => touched[key]!)))
+})
+
+test("a key whose draft is gone is not written at all", () => {
+  const live = draftKey.dispatch("/repo")
+  const gone = draftKey.followUp("/repo", "sent", "s1")
+  const raw = serializeStagedContext({ [gone]: [item("@a.ts:1")], [live]: [item("@b.ts:2")] }, (key) => (key === live ? 5 : undefined))
+  assert.deepEqual(Object.keys(JSON.parse(raw) as object), [live])
 })
 
 // Keyed by DRAFT, so two projects' identically named threads — slugs are unique only within a project —
