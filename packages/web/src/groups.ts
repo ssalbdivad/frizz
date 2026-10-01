@@ -501,7 +501,7 @@ export function parkedAwaitingHint(_hints: readonly AwaitingHint[], _nowMs = Dat
 // OWN turn is over (turn-idle/exited). It must not make the PARENT's rail mark claim motion the parent
 // does not have (maintainer 2026-07-27: "when an agent comes to rest and shows up in the queue, it
 // should get the ellipsis indicator in the sidebar, even though its sub-agents are still spinning").
-// The children keep their own spinners on their own indented rows (Sidebar SubAgentRows → ChildOpRow);
+// The children keep their own spinners on the card and in the drawer (ChildOpRow), and a count on the rail row (Sidebar SubAgentCount);
 // the parent's indicator speaks for the parent. A queued row therefore sits in the rested band AND
 // reads as rested.
 //

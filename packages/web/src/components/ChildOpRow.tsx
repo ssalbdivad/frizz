@@ -1,11 +1,10 @@
 import type { ReactElement, ReactNode } from "react"
-import { Check, ChevronRight, CircleSlash, X } from "lucide-react"
+import { Check, CircleSlash, X } from "lucide-react"
 import { BoxSpinner } from "./BoxSpinner.tsx"
 import { isRunningOperation } from "../lib/operationIndicators.ts"
 import { compactElapsedSince } from "../lib/durationLabels.ts"
 import { useNowMs } from "../lib/liveClock.ts"
 import { PRIMER } from "../lib/primer.ts"
-import { transcriptMetaChevronClass } from "../lib/transcriptMetaLabels.ts"
 import {
   CHILD_ARROW,
   CHILD_ARROW_CLASS,
@@ -77,7 +76,6 @@ export function ChildOpRow({
   title,
   outcome,
   endedAt,
-  disclosure,
 }: {
   kind: ChildOpKind
   label: string
@@ -137,12 +135,6 @@ export function ChildOpRow({
   // when the live strips deliberately draw none.
   outcome?: "completed" | "failed" | "killed"
   endedAt?: string
-  // THE ROW AS A FOLD: it stands for rows hidden under it, and `onOpen` shows or hides them. The rail's
-  // "3 sub-agents" line (lib/subAgentFold.ts) is the one caller. It is this component rather than a
-  // look-alike so the fold keeps the child rows' geometry by construction — arrow, mark and label sit
-  // in the same columns as the rows it opens to. It adds the disclosure chevron after the label and
-  // speaks as a disclosure (aria-expanded; its label names the batch, not "open sub-agent").
-  disclosure?: { open: boolean }
 }): ReactElement {
   const running = isRunningOperation(state)
   // ONE HUE PER RUNTIME CONCERN, and the row is the only place they are named. A sub-agent pulses the
@@ -237,24 +229,12 @@ export function ChildOpRow({
   ) : null
 
   const labelText = <span className={`min-w-0 truncate text-muted-70 ${rail ? "leading-[16px]" : clickable ? "group-hover:text-fg/80 group-hover:underline" : ""}`}>{label}</span>
-  // A FOLD IS RECEDED (maintainer 2026-10-01: "usually people won't want to click on it from that
-  // view"): its mark, count and chevron sit at 55% until hovered, so the line says "work is happening
-  // under here" without competing with the thread title above it. The arrow keeps the child rows' ink,
-  // so the fold still reads as hanging off its thread.
-  const recede = disclosure ? "opacity-55 transition-opacity group-hover:opacity-100" : ""
   const identity = (
     <>
       <span aria-hidden className={CHILD_ARROW_CLASS}>{CHILD_ARROW}</span>
-      {disclosure ? <span className={`flex shrink-0 ${recede}`}>{indicator}</span> : indicator}
+      {indicator}
       {sheet && <span className={CHILD_KIND_TAG_CLASS}>{KIND_TAG[kind]}</span>}
-      {disclosure ? (
-        // The chevron is the transcript column's measured one (transcriptMetaChevronClass): 1em, lifted
-        // onto the cap band, trimmed to its ink so this `gap-1.5` IS the 6px the eye reads.
-        <span className={`flex min-w-0 items-baseline gap-1.5 ${recede}`}>
-          {labelText}
-          <ChevronRight aria-hidden size={12} className={transcriptMetaChevronClass(disclosure.open)} />
-        </span>
-      ) : labelText}
+      {labelText}
     </>
   )
 
@@ -270,9 +250,7 @@ export function ChildOpRow({
     // that clears the parent thread row's indicator column, and it has always been part of the click
     // target. Putting it on the wrapper renders identically (the duration is `ml-auto`, so the right
     // edge does not move) while quietly carving that gutter out of the drill-in — for no gain.
-    // A FOLD takes the whole line (`flex-1`): it has no × and no reading to share the row with, and a
-    // disclosure line that toggles only over its words leaves most of its own highlight dead.
-    ? `group flex min-w-0 items-center gap-2 pl-[26px] text-left outline-none ${disclosure ? "flex-1" : ""}`
+    ? "group flex min-w-0 items-center gap-2 pl-[26px] text-left outline-none"
     // `overflow-hidden` is load-bearing at a narrow width: the arrow/dot/kind tag inside are shrink-0,
     // so once the row runs out of room the button's own content used to SPILL and the × landed on top
     // of the "AGENT" tag. Clipping keeps the collapse graceful. The ring goes inset to survive it.
@@ -293,8 +271,7 @@ export function ChildOpRow({
       // ThreadSheet reads it (via data-subagent-parent) to decide to STACK rather than dismiss.
       onMouseDown={sheet ? (e) => e.stopPropagation() : undefined}
       title={rowTitle}
-      aria-label={disclosure ? label : `${openTitle}: ${label}`}
-      aria-expanded={disclosure?.open}
+      aria-label={`${openTitle}: ${label}`}
       className={rowClass}
     >
       {identity}
