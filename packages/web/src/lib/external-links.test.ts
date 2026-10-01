@@ -74,3 +74,24 @@ test("prepareExternalAnchor is idempotent and compares the complete origin inclu
   assert.equal(prepareExternalAnchor(anchor, "http://127.0.0.1:4917/"), true)
   assert.equal(anchor.getAttribute("rel"), "noopener noreferrer")
 })
+
+test("in an editor's sidebar an external click goes to the editor instead, middle click too", () => {
+  const sent: string[] = []
+  const handler = createExternalLinkClickHandler(() => "http://127.0.0.1:4917/", (url) => sent.push(url))
+  for (const button of [0, 1]) {
+    let prevented = false
+    handler(clickFor(new FakeAnchor("https://github.com/nodejs/node/issues/62720"), { button, preventDefault: () => { prevented = true } } as Partial<MouseEvent>))
+    assert.equal(prevented, true, `button ${button}: the webview's own (dead) new tab is cancelled`)
+  }
+  assert.deepEqual(sent, ["https://github.com/nodejs/node/issues/62720", "https://github.com/nodejs/node/issues/62720"])
+
+  // Same-origin, non-http and already-handled clicks are not the editor's.
+  sent.length = 0
+  for (const href of ["/thread/local", "mailto:hello@example.com", "cursor://file/tmp/a.ts"]) {
+    let prevented = false
+    handler(clickFor(new FakeAnchor(href), { preventDefault: () => { prevented = true } } as Partial<MouseEvent>))
+    assert.equal(prevented, false, href)
+  }
+  handler(clickFor(new FakeAnchor("https://example.com"), { defaultPrevented: true }))
+  assert.deepEqual(sent, [])
+})

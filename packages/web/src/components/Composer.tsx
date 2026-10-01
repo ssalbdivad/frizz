@@ -854,7 +854,7 @@ export function Composer({
               short is running (`onInterruptSubmit` is set exactly then), so an idle box stays quiet.
               Right-justified against the rail; the readouts before it are `flex-1`. */}
           {onInterruptSubmit && hasContent && !busy && (
-            <span data-composer-interrupt-hint className="ml-auto shrink-0 whitespace-nowrap text-[11px] text-muted-70">
+            <span data-composer-interrupt-hint className="ml-auto max-w-full shrink-0 truncate text-[11px] text-muted-70">
               {interruptChord} to interrupt
             </span>
           )}
@@ -869,7 +869,9 @@ export function Composer({
               onClick={onSaveLazy}
               disabled={uploading}
               title="Save this as a lazy thread without starting an agent"
-              className="ml-auto shrink-0 whitespace-nowrap rounded text-[11px] text-muted-70 transition-colors hover:text-fg disabled:opacity-50"
+              // `max-w-full truncate`: wrapped onto its own line and still wider than the line — the
+              // New thread sheet in a 300px editor sidebar — it ran on under the paperclip and send.
+              className="ml-auto max-w-full shrink-0 truncate rounded text-[11px] text-muted-70 transition-colors hover:text-fg disabled:opacity-50"
             >
               {lazyChord} add as lazy thread
             </button>

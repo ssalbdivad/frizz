@@ -23,6 +23,7 @@ import { SheetHeader } from "./ui/SheetHeader.tsx"
 import { Select } from "./ui/Select.tsx"
 import { SettingsField } from "./SettingsField.tsx"
 import { DeleteOldThreads, RETENTION_DAYS } from "./DeleteOldThreads.tsx"
+import { embedded } from "../lib/embed.ts"
 
 type NotifPerm = "default" | "granted" | "denied" | "unsupported"
 function currentPerm(): NotifPerm {
@@ -449,6 +450,7 @@ function MobileSettingsPage({
   const conn = CONNECTION_WORD[connection]
   const supervisor = useSupervisorStatus().data
   const version = supervisor?.version
+  const inEditor = embedded()
   return (
     <div
       data-mobile-settings-page
@@ -483,7 +485,9 @@ function MobileSettingsPage({
         <MobileSection label="Appearance">
           <div className={MOBILE_ROW}>
             <span className="min-w-0 flex-1 truncate">Theme</span>
-            <MobileThemeSegments />
+            {/* In an editor's sidebar the theme is the editor's (lib/theme.ts setHostTheme): a choice here
+                would be saved and then never shown. */}
+            {inEditor ? <span data-mobile-theme-editor className="shrink-0 text-[14px] text-muted">Follows your editor</span> : <MobileThemeSegments />}
           </div>
         </MobileSection>
 
@@ -507,16 +511,20 @@ function MobileSettingsPage({
               if (isSnoozePreset(v)) prefs.snoozePreset = v
             }}
           />
-          <div className={MOBILE_ROW}>
-            <span className="min-w-0 flex-1 truncate">Notifications</span>
-            <MobileSwitch
-              label="Notifications"
-              checked={notifications === true}
-              disabled={notifications === null}
-              onChange={onNotifications}
-            />
-          </div>
-          {notifications ? (
+          {/* Not in an editor's sidebar: a frame cannot be granted the permission, and this switch is the
+              BROWSER's — turning it here would ask for a permission that is refused. */}
+          {inEditor ? null : (
+            <div className={MOBILE_ROW}>
+              <span className="min-w-0 flex-1 truncate">Notifications</span>
+              <MobileSwitch
+                label="Notifications"
+                checked={notifications === true}
+                disabled={notifications === null}
+                onChange={onNotifications}
+              />
+            </div>
+          )}
+          {notifications && !inEditor ? (
             <div className="border-b border-border/70 px-[18px] py-2.5">
               <PermHint perm={perm} />
             </div>

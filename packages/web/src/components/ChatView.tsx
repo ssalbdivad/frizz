@@ -113,6 +113,7 @@ import { META_CARD_STEP, PICTURE_STEP, STEP, USER_TAIL_EXTRA, VSpace } from "./r
 import { SpinoffButton, SpinoffCard, SpinoffOf, SpinoffOriginCard } from "./Spinoff.tsx"
 import { ThreadSlugContext } from "./threadSlugContext.ts"
 import { HEADER_ICON_CLASS } from "../lib/headerIcon.ts"
+import { openExternalUrl } from "../lib/external-links.ts"
 
 // Answer types moved to lib/questionBlocks.ts (shared by the queue card, the thread view, and the
 // answering controller). Re-exported here so existing importers keep working.
@@ -4178,7 +4179,7 @@ export function BackgroundOpsStrip({
           counterTitle={w.subject === "issue"
             ? (w.issue ? `${w.target} — ${issueStatusLine(w.issue)}` : undefined)
             : (w.github ? `${w.target} — ${watchStatusLine(w.github)}` : undefined)}
-          onOpen={() => window.open(githubRefUrl(w.target, w.subject === "issue" ? "issue" : "pull") ?? `https://github.com/${w.target.replace("#", w.subject === "issue" ? "/issues/" : "/pull/")}`, "_blank", "noreferrer,noopener")}
+          onOpen={() => openExternalUrl(githubRefUrl(w.target, w.subject === "issue" ? "issue" : "pull") ?? `https://github.com/${w.target.replace("#", w.subject === "issue" ? "/issues/" : "/pull/")}`)}
         />
       ))}
       <ThreadLinks links={links} />

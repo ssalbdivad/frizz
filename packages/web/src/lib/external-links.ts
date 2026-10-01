@@ -2,6 +2,15 @@
 // the browser's native click path: target=_blank opens a normal tab synchronously from the user
 // gesture, preserves modifier-key behavior, and cannot be stranded behind an async RPC. Internal
 // links and non-http schemes are left untouched so local navigation remains local.
+//
+// IN AN EDITOR'S SIDEBAR (lib/embed.ts) there is no new tab to open: a VS Code webview cannot open a
+// window, so a `target=_blank` click and a `window.open` both do nothing at all. There the same external
+// anchors are cancelled and handed to the editor (`frizz:open-external`), which opens them in the
+// system browser. Still decided in the CAPTURE phase, before any component sees the click: several of
+// these anchors stop the click's propagation in their own onClick (ThreadLinks, the GitHub picker's
+// rows), so a listener that waited for the bubble would never hear them.
+
+import { embedded, postToHost } from "./embed.ts"
 
 type AnchorLike = Pick<HTMLAnchorElement, "getAttribute" | "setAttribute" | "hasAttribute">
 
@@ -41,21 +50,51 @@ export function prepareExternalAnchor(anchor: AnchorLike, currentHref: string): 
   return true
 }
 
-/** Exported for focused node tests; the installed listener delegates to this exact handler. */
+/**
+ * Exported for focused node tests; the installed listener delegates to this exact handler. `toHost` is
+ * set in embed mode: an external anchor's click is cancelled and its URL handed there instead — a middle
+ * click too, whose new tab a webview cannot open either.
+ */
 export function createExternalLinkClickHandler(
   currentHref: () => string = () => location.href,
+  toHost?: (url: string) => void,
 ): (event: MouseEvent) => void {
   return (event) => {
-    if (event.defaultPrevented || event.button !== 0) return
+    if (event.defaultPrevented) return
+    if (event.button !== 0 && !(toHost && event.button === 1)) return
     const anchor = findAnchor(event)
-    if (anchor) prepareExternalAnchor(anchor, currentHref())
+    if (!anchor || !prepareExternalAnchor(anchor, currentHref())) return
+    const url = toHost ? safeHttpUrl(anchor.getAttribute("href") ?? "", currentHref()) : null
+    if (!toHost || !url) return
+    event.preventDefault()
+    toHost(url)
   }
 }
 
+function hostOpens(url: string): void {
+  postToHost({ type: "frizz:open-external", url })
+}
+
 export function installExternalLinkInterceptor(): () => void {
-  const handler = createExternalLinkClickHandler()
+  const host = embedded()
+  const handler = createExternalLinkClickHandler(undefined, host ? hostOpens : undefined)
   document.addEventListener("click", handler, true)
-  return () => document.removeEventListener("click", handler, true)
+  if (host) document.addEventListener("auxclick", handler, true)
+  return () => {
+    document.removeEventListener("click", handler, true)
+    document.removeEventListener("auxclick", handler, true)
+  }
+}
+
+/**
+ * Open a web page from code — a control that is not an anchor. A new tab in a browser; in an editor's
+ * sidebar, the editor's `openExternal`. Only http(s) ever leaves.
+ */
+export function openExternalUrl(raw: string): void {
+  const url = safeHttpUrl(raw, location.href)
+  if (!url) return
+  if (embedded()) hostOpens(url)
+  else window.open(url, "_blank", "noreferrer,noopener")
 }
 
 // Nearest enclosing anchor with an href — via composedPath (crosses shadow boundaries) with a

@@ -3,6 +3,7 @@ import { projectRpc, rpc } from "../api/rpc.ts"
 import { openImageViewer, pushFileReader, showToast } from "../store.ts"
 import { copyTextToClipboard } from "./clipboard.ts"
 import { autoCodeFilesGoToEditor, autoCodeFilesMayGoToEditor } from "./editorBridge.ts"
+import { embedded, postToHost } from "./embed.ts"
 import { baseName, runExternalOpen } from "./externalOpen.ts"
 import { prefs } from "./prefs.ts"
 import { localViewerFor } from "./localViewer.ts"
@@ -93,6 +94,14 @@ export function openLocalPath(path: string, from?: Element | null, scope?: Markd
     openImageViewer(path, from ? imageGalleryFor(from) : [], scope?.projectId)
     return
   }
+  // IN AN EDITOR'S SIDEBAR a code file opens in that editor, at the place the link names, whatever this
+  // browser's "Open code files" or the machine's External app say: the human is sitting in the editor
+  // they want it in (embed-protocol.ts `frizz:open-file`). Not through the server, whose opener would
+  // pick a window by its own rules, and not into the reader, which a sidebar has no room beside.
+  if (viewer === "text" && embedded()) {
+    openInHostEditor(path, at)
+    return
+  }
   // A code file goes straight to the external app when this browser asked for that (prefs.codeFiles),
   // and lands in the reader anyway when the app cannot start — the reader is the one that always works.
   if (viewer === "text" && prefs.codeFiles === "editor") {
@@ -114,6 +123,11 @@ export function openLocalPath(path: string, from?: Element | null, scope?: Markd
     return
   }
   void openExternally(path, scope?.projectId, undefined, at)
+}
+
+/** Hand a file to the editor framing this page, at a place in it (lib/embed.ts). */
+export function openInHostEditor(path: string, position?: FilePosition): void {
+  postToHost({ type: "frizz:open-file", path, ...(position ? { line: position.line, ...(position.column ? { column: position.column } : {}), ...(position.endLine ? { endLine: position.endLine } : {}) } : {}) })
 }
 
 // The surfaces a picture's gallery stays inside: a queue card, a drawer, the /full page's reader slot,

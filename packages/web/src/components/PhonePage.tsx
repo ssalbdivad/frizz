@@ -2,7 +2,7 @@ import { useEffect, useRef, useState, type ReactNode } from "react"
 import * as RadixDialog from "@radix-ui/react-dialog"
 import { useLocation, useNavigate } from "react-router"
 import { useSnapshot } from "valtio"
-import { AlarmClock, ArrowLeft, Check, Hourglass, Layers, Plus, Settings as SettingsIcon } from "lucide-react"
+import { AlarmClock, ArrowLeft, Check, ChevronDown, Hourglass, Layers, Plus, Settings as SettingsIcon } from "lucide-react"
 import type { ThreadView } from "@frizz/shared"
 import { store } from "../store.ts"
 import { useBoard } from "../hooks.ts"
@@ -11,6 +11,7 @@ import { displayTitle, futureSnoozedUntil, lastActiveLabelAt, queued, queueLabel
 import { ageSpan, spanUntil } from "../lib/activityTime.ts"
 import { useNowMs } from "../lib/liveClock.ts"
 import { projectSlug } from "../lib/base-path.ts"
+import { embedded } from "../lib/embed.ts"
 import { squareCard, type QueuesProject } from "../lib/allQueues.ts"
 import { listOverlay } from "../lib/listBands.ts"
 import { useSteeredAt } from "../lib/steering.ts"
@@ -18,7 +19,7 @@ import { useArchivingAt } from "../lib/optimisticArchive.ts"
 import { useProjectBoards } from "../lib/projectBoards.ts"
 import { handleDialogEscape } from "../lib/selectOverlay.ts"
 import { agentSuffix, liveAgentCount, rowSecondLine, wakeAt } from "../lib/mobileBoardRow.ts"
-import { phoneCounts, phoneDone, phoneProjects, phoneQueue, phoneSnoozed, type PhoneProjectEntry, type PhoneRow, type PhoneTab } from "../lib/phonePage.ts"
+import { phoneCounts, phoneDone, phoneSubtitle, phoneProjects, phoneQueue, phoneSnoozed, type PhoneProjectEntry, type PhoneRow, type PhoneTab } from "../lib/phonePage.ts"
 import { useOpenThreadInPlace } from "./AllQueuesCard.tsx"
 import { ProjectSquare } from "./ProjectSquare.tsx"
 import { shortPath } from "./ProjectActions.tsx"
@@ -298,6 +299,48 @@ function BandTab({ band, label, active, onClick, children }: { band: PhoneTab; l
   )
 }
 
+/** The view's name in the header. */
+const TITLE_TYPE = "text-[16.5px] font-semibold leading-[21px] tracking-[-0.01em] text-fg"
+/** An editor sidebar's header buttons: a pointer's, so 32px rather than a thumb's 44, which in a 300px
+ *  column left the view's name 192px. With `pr-2.5` the gear's ink stands 18.5px off the right edge, the
+ *  title's distance off the left, and the gear's `-ml-1.5` puts 14px of ink between + and gear (20px on
+ *  the bare gap: two 32px hover squares around 13-15px glyphs). scripts/ink-gaps.mjs, sans, 300px, dsf 4. */
+const EDITOR_HEADER_BUTTON = "flex size-8 shrink-0 items-center justify-center rounded-md text-fg/85 hover:bg-hover active:bg-hover-strong"
+
+/**
+ * The header's chevron, the title's handle — the desktop switcher's (ProjectSwitcher.tsx), scaled to the
+ * 16.5px title. On the title's cap band by the browser's own `cap`: standing on the baseline, its 14px box
+ * drops by half its height less half a cap (not the desktop's `0.5em`, which assumes a 1em glyph and left
+ * this one 1.75px low). `-ml-[5px]` against the box's 3.5px dead side puts its ink 5.05px off the title's,
+ * the desktop's 4px scaled to 16.5px. Vertical residual 0.0px against the CSS `cap` (12px; a canvas "H"
+ * reads 13 and fakes a 0.5px error). Sans, 300px, dsf 4, 2026-10-01.
+ */
+function SwitcherChevron() {
+  return <ChevronDown size={14} strokeWidth={2.2} aria-hidden data-mobile-switcher-chevron className="-ml-[5px] shrink-0 self-baseline translate-y-[calc(7px_-_0.5cap)] text-muted" />
+}
+
+/**
+ * The line under the view's name (lib/phonePage.ts phoneSubtitle). Its parts WRAP rather than truncate,
+ * onto a second line the box clips: a part that does not fit is left out whole — the Queue tab counts the
+ * same rows — instead of being cut to "1 w…" mid-word, which a 300px sidebar did to the last one.
+ */
+function Subtitle({ subtitle }: { subtitle: { accent: string | null; rest: string | null } }) {
+  const parts = [
+    subtitle.accent ? <span key="accent" className="font-semibold text-accent">{subtitle.accent}</span> : null,
+    ...(subtitle.rest ?? "").split(" · ").filter(Boolean).map((part) => <span key={part}>{part}</span>),
+  ].filter((part) => part !== null)
+  return (
+    <div data-mobile-board-subtitle className="flex h-[17px] flex-wrap overflow-hidden text-[13px] leading-[17px] text-muted">
+      {parts.map((part, index) => (
+        <span key={index} className="shrink-0 whitespace-pre">
+          {index > 0 ? " · " : null}
+          {part}
+        </span>
+      ))}
+    </div>
+  )
+}
+
 const TAB_COUNT = "text-[12.5px] font-medium tabular-nums text-muted"
 /** A tab's label and count on one baseline, in the grid cell its bold copy reserves. */
 const TAB_FACE = "col-start-1 row-start-1 flex items-baseline gap-1.5 text-[14.5px] leading-[20px]"
@@ -324,8 +367,9 @@ export interface PhonePageProps {
   error: string | undefined
   /** The home folder, to shorten paths with. */
   homeDir: string | undefined
-  /** The prompt box, aimed where a new thread from this view goes; `onDispatched` closes its sheet. */
-  composer: (onDispatched: () => void) => ReactNode
+  /** The prompt box, aimed where a new thread from this view goes; `onDispatched` closes its sheet, and
+   *  `autoFocus` is false when an editor opened the sheet to show a chip without taking the caret. */
+  composer: (onDispatched: () => void, autoFocus: boolean) => ReactNode
   /** Show All projects. */
   onAll: () => void
   /** Focus a project. */
@@ -359,7 +403,12 @@ function useProjectsListing() {
 function PhoneThreads({ shown, viewed, focusedSlug, hidden, loading, error, composer, onProjects }: PhonePageProps & { onProjects: () => void }) {
   const focused = focusedSlug !== undefined
   const [tab, setTab] = useState<PhoneTab>("queue")
-  const [composing, setComposing] = useState(false)
+  // In the store, not local state: an editor's selection opens it too (lib/editorBridge.ts composeInto).
+  const composing = useSnapshot(store).phoneNewThread
+  const setComposing = (open: boolean) => (store.phoneNewThread = open ? { focus: true } : null)
+  // …and it closes with the list under it, as local state did: the projects list or the desktop layout
+  // coming back must not find a sheet left open.
+  useEffect(() => () => { store.phoneNewThread = null }, [])
   const [donePage, setDonePage] = useState(DONE_PAGE)
   // A different view is a different list to read: from its Queue, at its top.
   const viewId = focusedSlug ?? "*"
@@ -383,6 +432,7 @@ function PhoneThreads({ shown, viewed, focusedSlug, hidden, loading, error, comp
   const onPage = (project: QueuesProject) => project.slug === focus && live?.projectSlug === project.slug
   const queue = phoneQueue(shown, hidden, (project) => listOverlay(project.id, onPage(project), steeredAt, archivingAt), direction)
   const counts = phoneCounts(queue)
+  const subtitle = phoneSubtitle(counts)
   const snoozed = phoneSnoozed(shown)
   // Done's rows are each project's own board — the page project's live one, every other's read through
   // the cache, fetched while the tab is open.
@@ -394,6 +444,8 @@ function PhoneThreads({ shown, viewed, focusedSlug, hidden, loading, error, comp
 
   const rows = tab === "queue" ? queue : tab === "snoozed" ? snoozed : done.slice(0, donePage)
   const title = focused ? (viewed?.name ?? focusedSlug) : "All projects"
+  // In an editor's sidebar (lib/embed.ts) the same page in the editor's idiom: no ← and no floating pill.
+  const inEditor = embedded()
 
   return (
     <div data-mobile-board={focused ? "project" : "all"} className="relative min-h-dvh bg-bg">
@@ -401,25 +453,43 @@ function PhoneThreads({ shown, viewed, focusedSlug, hidden, loading, error, comp
           status bar sits over the top of the viewport, and no headless shot has that inset — so this is a
           defect no screenshot here can show and every real device would. */}
       <div className="fixed inset-x-0 top-0 z-30 bg-bg pt-[env(safe-area-inset-top)]">
-        <div className="flex h-[56px] items-center gap-0.5 pr-0.5">
-          <button type="button" aria-label="Projects" data-mobile-projects onClick={onProjects} className={HEADER_BUTTON}>
-            <ArrowLeft size={21} strokeWidth={2.1} />
-          </button>
-          <div className="min-w-0 flex-1 pl-0.5">
-            <div data-mobile-board-title className="truncate text-[16.5px] font-semibold leading-[21px] tracking-[-0.01em] text-fg">
-              {title}
-            </div>
-            {!loading ? (
-              <div data-mobile-board-subtitle className="truncate text-[13px] leading-[17px] text-muted">
-                {counts.asks > 0 ? <span className="font-semibold text-accent">{counts.asks} need you</span> : null}
-                {counts.asks > 0 && counts.working > 0 ? " · " : null}
-                {counts.working > 0 ? `${counts.working} working` : null}
-                {counts.asks === 0 && counts.working === 0 ? "Nothing needs you" : null}
+        <div className={`flex h-[56px] items-center gap-0.5 ${inEditor ? "pl-[18px] pr-2.5" : "pr-0.5"}`}>
+          {inEditor ? null : (
+            <button type="button" aria-label="Projects" data-mobile-projects onClick={onProjects} className={HEADER_BUTTON}>
+              <ArrowLeft size={21} strokeWidth={2.1} />
+            </button>
+          )}
+          <div className={`min-w-0 flex-1 ${inEditor ? "" : "pl-0.5"}`}>
+            {inEditor ? (
+              // In an editor the view's NAME is the way to the projects, as the desktop's switcher is: a ←
+              // in a sidebar reads as Back, and there is nothing behind a sidebar to go back to.
+              <button
+                type="button"
+                data-mobile-projects
+                aria-label={`Showing ${title}. Switch project`}
+                onClick={onProjects}
+                className={`-ml-1.5 flex max-w-full items-baseline gap-1.5 rounded-md px-1.5 ${TITLE_TYPE} outline-none hover:bg-hover focus-visible:ring-1 focus-visible:ring-focus-ink-60`}
+              >
+                <span data-mobile-board-title className="min-w-0 truncate">{title}</span>
+                <SwitcherChevron />
+              </button>
+            ) : (
+              <div data-mobile-board-title className={`truncate ${TITLE_TYPE}`}>
+                {title}
               </div>
-            ) : null}
+            )}
+            {!loading ? <Subtitle subtitle={subtitle} /> : null}
           </div>
-          <button type="button" aria-label="Settings" data-mobile-settings onClick={() => (store.showSettings = true)} className={HEADER_BUTTON}>
-            <SettingsIcon size={21} strokeWidth={1.9} />
+          {inEditor ? (
+            // The verb in the header's corner, beside Settings, rather than a pill floating over the list:
+            // a sidebar is one narrow column a pointer reaches anywhere in, and a pill over its last rows
+            // covered their ages at every width.
+            <button type="button" aria-label="New thread" title="New thread" data-mobile-new-thread onClick={() => setComposing(true)} className={EDITOR_HEADER_BUTTON}>
+              <Plus size={19} strokeWidth={2} />
+            </button>
+          ) : null}
+          <button type="button" aria-label="Settings" data-mobile-settings onClick={() => (store.showSettings = true)} className={inEditor ? `${EDITOR_HEADER_BUTTON} -ml-1.5` : HEADER_BUTTON}>
+            <SettingsIcon size={inEditor ? 18 : 21} strokeWidth={1.9} />
           </button>
         </div>
         <div role="tablist" aria-label="Bands" className="flex gap-[22px] border-b border-border/70 px-[18px]">
@@ -435,8 +505,9 @@ function PhoneThreads({ shown, viewed, focusedSlug, hidden, loading, error, comp
       </div>
 
       {/* The list: 56 + 45 of header and tabs above; below, the "New thread" button's 50 plus 16 either
-          side, so the last row scrolls clear of it and its age column is never under the button. */}
-      <div className="flex min-h-dvh flex-col pb-[calc(82px+env(safe-area-inset-bottom))] pt-[calc(101px+env(safe-area-inset-top))]">
+          side, so the last row scrolls clear of it and its age column is never under the button. An
+          editor's sidebar has no floating button, so its list ends where its rows do. */}
+      <div className={`flex min-h-dvh flex-col pt-[calc(101px+env(safe-area-inset-top))] ${inEditor ? "pb-4" : "pb-[calc(82px+env(safe-area-inset-bottom))]"}`}>
         {error ? (
           <EmptyBand label={`Could not read the queues: ${error}`} />
         ) : rows.length === 0 ? (
@@ -445,7 +516,7 @@ function PhoneThreads({ shown, viewed, focusedSlug, hidden, loading, error, comp
               loading || (tab === "done" && doneLoading)
                 ? "Loading…"
                 : tab === "queue"
-                  ? "Nothing in the queue. Tap New thread to start one."
+                  ? inEditor ? "Nothing in the queue." : "Nothing in the queue. Tap New thread to start one."
                   : tab === "snoozed"
                     ? "Nothing snoozed."
                     : "Nothing finished yet."
@@ -470,7 +541,7 @@ function PhoneThreads({ shown, viewed, focusedSlug, hidden, loading, error, comp
         )}
       </div>
 
-      <button
+      {inEditor ? null : <button
         type="button"
         data-mobile-new-thread
         onClick={() => setComposing(true)}
@@ -487,8 +558,8 @@ function PhoneThreads({ shown, viewed, focusedSlug, hidden, loading, error, comp
           </CapSlot>
           <span className="self-baseline">New thread</span>
         </span>
-      </button>
-      {composing ? <PhoneNewThread onClose={() => setComposing(false)}>{composer(() => setComposing(false))}</PhoneNewThread> : null}
+      </button>}
+      {composing ? <PhoneNewThread onClose={() => setComposing(false)}>{composer(() => setComposing(false), composing.focus)}</PhoneNewThread> : null}
     </div>
   )
 }
