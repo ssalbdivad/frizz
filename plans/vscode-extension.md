@@ -148,6 +148,58 @@ check Frizz before asking again, since it may have started the thread.
 The extension declares `extensionKind: ["workspace"]` so in a Remote-WSL/SSH window it runs where
 the files and Frizz are.
 
+## The sidebar
+
+A Frizz icon in the activity bar opens a view that IS the Frizz page: one iframe of the discovered origin
+with `?embed=vscode&theme=<light|dark>&project=<this window's project slug>`. The queue, threads, question
+cards, approvals, handoffs and the reply box are the app's own, live over its own socket, so the sidebar
+is in sync with every other Frizz surface by construction and nothing in it is drawn twice.
+
+Why the real page and not a rebuild, a tree or a chat participant (measured 2026-10-01, in real VS Code
+1.90 and 1.140 under Xvfb, against a disposable Frizz):
+
+- Framing works. The server sends no `X-Frame-Options` or `frame-ancestors`; the frame's RPC (writes
+  included) and both sockets pass the origin gate, because the frame's own requests are same-origin to
+  Frizz; a card archived elsewhere left the sidebar in about half a second; the queue and a thread read
+  cleanly at 297px.
+- A native rebuild is a second renderer for the question tree, typed approvals that must fail closed,
+  delivery states and chips. It would drift, and a drifted approval button is a safety bug.
+- A TreeView cannot hold a card, markdown or a composer.
+- A chat participant (`@frizz`) cannot reach Cursor, which registers no `chatParticipants` extension
+  point, and is request/response only: a worker cannot put a question in front of the human there.
+
+The wire between the extension and the page is `packages/shared/src/embed-protocol.ts`, relayed by the
+webview document: host → page `frizz:theme`, `frizz:compose`, `frizz:navigate`; page → host
+`frizz:ready`, `frizz:composed`, `frizz:open-file`, `frizz:open-external`, `frizz:key`. It never goes
+through the server.
+
+What embedding needed, each found by the spike:
+
+- **Embed mode in the page** (`lib/embed.ts`). The narrow layout at any width, so a widened sidebar does
+  not flip to the desktop page. A code-file link opens in the window that holds the sidebar
+  (`frizz:open-file`), whatever External app says: the phone layout's "the desk is not here" gate is
+  false in an editor, and so is the server's choice of window. The theme is VS Code's, for the session, never persisted (the frame's
+  storage is partitioned from the browser's anyway). Web links go out through `env.openExternal`, since
+  a webview cannot open a window. Browser notifications, which a frame cannot raise, are not attempted.
+- **Selections reach the sidebar directly.** A held item is claimed by whichever page has FOCUS, and a
+  sidebar does not have it while the human works in the editor: the item waited, a browser tab could take
+  it, and the click that finally claimed it interleaved the chip with what was being typed. So once the
+  sidebar has been opened in a window (and its page said `frizz:ready`), "Add to Frizz prompt" posts the
+  chip into it and reveals it, keeping focus in the editor; "Ask Frizz…" opens its new-thread box with
+  the chip and the caret, and "Send to Frizz thread…" opens the picked thread with the chip in its reply
+  box — a real multi-line composer instead of a one-line input box. A window that never opened the
+  sidebar keeps the browser path.
+- **Keys.** While the frame has focus no VS Code keybinding sees a key, and an untrusted re-dispatch is
+  dropped by the workbench. The page forwards the Ctrl/Cmd chords it does not handle; the extension runs
+  the command an allowlist maps each to.
+- **Addressing.** The frame loads the plain discovered origin. Every Frizz gate requires the request's
+  port to be Frizz's own, so a remapped port would refuse every request; the view says so instead of
+  showing a broken page. Under Remote-WSL the frame loads from the Windows side, where WSL's localhost
+  forwarding reaches the same port.
+- `retainContextWhenHidden`, so hiding the view is not a cold boot of the app, its socket and its drafts.
+
+The view's badge is the Ready count the status bar shows, and the status bar item reveals the sidebar.
+
 ## Verification
 
 - Unit: `file-position.test.ts`; the bridge against real `ws` clients (`editor-bridge.test.ts`);
