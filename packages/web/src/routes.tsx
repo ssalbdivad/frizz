@@ -14,6 +14,7 @@ import { defaultCrossProjectFocus, useCrossProjectPick } from "./lib/crossProjec
 import { rememberTabView, resolveView, retiredProjectHref, viewAt, viewInSearch, viewSearch, type PageView } from "./lib/pageView.ts"
 import type { ProjectCard } from "@frizz/shared"
 import { rpc } from "./api/rpc.ts"
+import { readProjectsQueues } from "./lib/projectsQueuesRead.ts"
 import { feedIsBoundTo, rebindProject } from "./api/socket.ts"
 import { noteStandaloneThreadRender, resetProjectState, showToast, store } from "./store.ts"
 
@@ -181,7 +182,7 @@ function usePageResolution(drawerSlug: string | undefined): PageResolution {
   const cards = useQuery({ queryKey: ["projectsList"], queryFn: () => rpc.projectsList() })
   // Which projects this server has open, so All projects binds one that can take a thread. Shared with
   // the page itself (same key), so the page it lands on paints from this read.
-  const queues = useQuery({ queryKey: ["projectsQueues"], queryFn: () => rpc.projectsQueues() })
+  const queues = useQuery({ queryKey: ["projectsQueues"], queryFn: readProjectsQueues })
   const pickId = useCrossProjectPick()
   useState(() => {
     if (!atHome) return

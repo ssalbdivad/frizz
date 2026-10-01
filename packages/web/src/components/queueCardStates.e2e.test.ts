@@ -14,6 +14,8 @@ import test, { after, before } from "node:test"
 //        out of the queue — what queueSteerDissolve.e2e.test.ts pinned on the board's queue until 098de26d.
 //   4b   a reply still on the wire past REAPPEAR_MS keeps its card gone: the card came back without the
 //        reply, then left again once the worker picked it up (maintainer 2026-09-30).
+//   4c   a poll that started before Mark as done cannot bring the card back however late it lands, and a
+//        fresh one that still lists the thread does (maintainer 2026-09-30).
 //   5-6  a done the worker REGISTERED (`mcp__frizz__done`) draws its Done card on the queue card, and one
 //        both fenced and registered draws exactly one (B1, restored 2026-09-29).
 //   7-9  the terminal net: a frozen native ask and a bare permission prompt — two states the server queues a
@@ -199,7 +201,34 @@ test("a reply still being delivered past the reappear deadline keeps its card go
   assert.deepEqual(errors, [])
 })
 
-test("a registered done (mcp__frizz__done) draws its Done card on the queue card", { skip: !baseUrl, timeout: 60_000 }, async () => {
+// The card is sampled IN THE PAGE for `ms`, so a reappearance between two looks from here still counts.
+const reappearsWithin = (sel: string, ms: number) => page!.evaluate((s, wait) => new Promise<boolean>((resolve) => {
+  let seen = false
+  const timer = setInterval(() => { if (document.querySelector(s)) seen = true }, 50)
+  setTimeout(() => { clearInterval(timer); resolve(seen) }, wait)
+}), sel, ms)
+
+test("a poll that started before Mark as done cannot bring the card back, however late it lands", { skip: !baseUrl, timeout: 60_000 }, async () => {
+  // The read landing at 9s started before the click and still lists the thread; it used to restore the
+  // card at REAPPEAR_MS and leave it up until the next read (maintainer 2026-09-30: "reopened for a long time").
+  await open("case=exit&delay=300&stalePoll=1")
+  await clickDone()
+  await page!.waitForFunction((sel) => !document.querySelector(sel), { timeout: 2_000 }, FIRST)
+  assert.equal(await reappearsWithin(FIRST, 12_500), false, "the card stayed gone until a fresh read dropped the thread")
+  assert.equal(await leavingOf(NEIGHBOUR), "false")
+  assert.deepEqual(errors, [])
+})
+
+test("a read that started after Mark as done and still lists the thread brings the card back", { skip: !baseUrl, timeout: 60_000 }, async () => {
+  // The negative control: the guard waits for evidence, it does not swallow it.
+  await open("case=exit&delay=300&stillQueued=1")
+  await clickDone()
+  await page!.waitForFunction((sel) => !document.querySelector(sel), { timeout: 2_000 }, FIRST)
+  await page!.waitForFunction((sel) => document.querySelector(sel)?.getAttribute("data-queue-leaving") === "false", { timeout: 10_000 }, FIRST)
+  assert.deepEqual(errors, [])
+})
+
+test("a registered done (mcp__frizz__done) draws its Done card on the queue card",{ skip: !baseUrl, timeout: 60_000 }, async () => {
   await open("case=registered-done")
   const text = await page!.$eval(FIRST, (card) => card.textContent ?? "")
   assert.match(text, /Done/)

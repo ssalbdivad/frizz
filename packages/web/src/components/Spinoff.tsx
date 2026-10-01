@@ -3,6 +3,7 @@ import { ArrowRight, Check, ChevronDown, ChevronRight, Loader2, Split } from "lu
 import { useQuery } from "@tanstack/react-query"
 import { SPINOFF_INSTRUCTIONS_MAX, type ProjectCard, type SpinoffView, type ThreadView } from "@frizz/shared"
 import { rpc } from "../api/rpc.ts"
+import { readProjectsQueues } from "../lib/projectsQueuesRead.ts"
 import { useThreadApi, useThreadProjectDir } from "../api/threadApi.tsx"
 import { stepPick } from "../lib/crossProject.ts"
 import { useShortcutLabel, withShortcut } from "../lib/keyboardRuntime.ts"
@@ -223,7 +224,7 @@ interface OpenProject { id: string; slug: string; name: string; dir: string; car
 /** Every open project, from the machine-wide polls the All projects page already runs (same keys, so
  *  one fetch serves both). Joined with the project list for each one's icon; the Home workspace last. */
 function useOpenProjects(enabled: boolean): OpenProject[] {
-  const queues = useQuery({ queryKey: ["projectsQueues"], queryFn: () => rpc.projectsQueues(), enabled, staleTime: 5_000 })
+  const queues = useQuery({ queryKey: ["projectsQueues"], queryFn: readProjectsQueues, enabled, staleTime: 5_000 })
   const cards = useQuery({ queryKey: ["projectsList"], queryFn: () => rpc.projectsList(), enabled })
   const out: OpenProject[] = []
   for (const q of queues.data ?? []) {
