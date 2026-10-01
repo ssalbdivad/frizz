@@ -4,6 +4,7 @@ import { seedBoard, store } from "../store.ts"
 import { useBoard } from "../hooks.ts"
 import { rpc } from "../api/rpc.ts"
 import { displayTitle, queued } from "../groups.ts"
+import { reportRoute } from "../lib/embedRoute.ts"
 import { resolveThreadRoute } from "../lib/threadRouteState.ts"
 import { crossProjectHref } from "../lib/base-path.ts"
 import { setFaviconBadge } from "../lib/faviconBadge.ts"
@@ -97,6 +98,10 @@ export function StandaloneThreadPage({ slug }: { slug: string }) {
     const projectLabel = board?.projectLabel ?? board?.projectName
     const threadLabel = thread ? displayTitle(thread) : slug
     document.title = projectLabel ? `${threadLabel} · ${projectLabel} — Frizz` : `${threadLabel} · Frizz`
+    // An editor's sidebar names it in VS Code's title row instead (lib/embedRoute.ts); a no-op elsewhere.
+    // The sidebar reaches this page only by a link to a thread's /full address (one in a transcript, or
+    // a `frizz:navigate`): its own fullscreen door opens the browser instead (ExpandThreadLink.tsx).
+    reportRoute({ view: "thread", title: threadLabel })
   }, [board?.projectLabel, board?.projectName, slug, thread])
 
   // THE TAB'S REST MARK: a dot on the favicon while this thread is in the queue, so a strip of /full
