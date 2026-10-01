@@ -1,7 +1,7 @@
 import { useContext, useEffect, useId, useRef, useState, type KeyboardEvent as ReactKeyboardEvent, type MouseEvent as ReactMouseEvent, type ReactNode } from "react"
 import { ArrowRight, Check, ChevronDown, ChevronRight, Loader2, Split } from "lucide-react"
 import { useQuery } from "@tanstack/react-query"
-import { SPINOFF_INSTRUCTIONS_MAX, type ProjectCard, type SpinoffView, type ThreadView } from "@frizz/shared"
+import { type ProjectCard, type SpinoffView, type ThreadView } from "@frizz/shared"
 import { rpc } from "../api/rpc.ts"
 import { readProjectsQueues } from "../lib/projectsQueuesRead.ts"
 import { useThreadApi, useThreadProjectDir } from "../api/threadApi.tsx"
@@ -187,7 +187,6 @@ function SpinoffDialog({ thread, open, onOpenChange }: { thread: ThreadView & { 
           ref={fieldRef}
           data-spinoff-instructions
           value={instructions}
-          maxLength={SPINOFF_INSTRUCTIONS_MAX}
           onChange={(e) => setInstructions(e.target.value)}
           onKeyDown={(e) => {
             if (e.key === "Enter" && !e.shiftKey && !e.nativeEvent.isComposing) {

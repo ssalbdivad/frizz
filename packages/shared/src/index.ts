@@ -4221,12 +4221,13 @@ export type DispatchInput = z.infer<typeof DispatchInput>
 // what the new thread needs and dispatches it through `spawn_thread` naming the request's id. Both threads then carry the edge: the parent's timeline shows the request as a card linking
 // forward, and the child's header links back. "Spinoff" is one word, verb and noun alike (maintainer
 // 2026-09-29); it is asked of the whole thread, never of one message (spinoffRequestMessage).
-export const SPINOFF_INSTRUCTIONS_MAX = 4_000
 export const SpinoffInput = z.object({
   slug: ThreadSlug,
   // Bound to the session the tab is looking at, exactly like FollowUpInput: the request is a message.
   sessionId: z.string().min(1),
-  instructions: z.string().trim().min(1).max(SPINOFF_INSTRUCTIONS_MAX),
+  // Uncapped, like the prompt box's own follow-up and dispatch: a 4,000-char cap here silently cut off
+  // pasted context (maintainer 2026-10-01).
+  instructions: z.string().trim().min(1),
   // The project the new thread starts in (its id), when that is not this thread's own (2026-09-30). It
   // must be open on this server: the parent's worker still dispatches through its own project, and Frizz
   // routes that dispatch to this one (router fulfilSpinoff).
