@@ -1,4 +1,5 @@
 import { useSyncExternalStore } from "react"
+import { embedded } from "./embed.ts"
 
 // THE PHONE BREAKPOINT, and why it is not the 800px one the layout already uses.
 //
@@ -32,7 +33,22 @@ function subscribe(callback: () => void): () => void {
 }
 
 function snapshot(): boolean {
+  if (embedded()) return true
   return media ? media.matches : typeof window !== "undefined" && !!window.matchMedia?.(MOBILE_QUERY).matches
+}
+
+/**
+ * The same answer outside React — for a module that acts on the layout rather than rendering it
+ * (lib/editorBridge.ts opening the phone's New thread sheet).
+ *
+ * IN AN EDITOR'S SIDEBAR IT IS ALWAYS THE PHONE LAYOUT (lib/embed.ts), at any width. A sidebar is one
+ * narrow column whatever its width, and a human who drags it to 760px still wants that column, not the
+ * desktop page's prompt box and two columns flipping in under the pointer mid-drag. The phone layout's
+ * pieces — the tabs, the thread drawer drawn full-width, the New thread sheet, Settings as a page — are
+ * exactly a sidebar's. styles.css carries the CSS half (`html[data-embed]` beside the 700px query).
+ */
+export function phoneLayout(): boolean {
+  return snapshot()
 }
 
 /**

@@ -363,12 +363,12 @@ export function AllQueuesPage() {
         loading={loading}
         error={queues.error && !queues.data ? String(queues.error) : undefined}
         homeDir={home}
-        composer={(onDispatched) => (
+        composer={(onDispatched, autoFocus) => (
           <FocusedComposer
             focus={focus}
             project={focusProject}
             dirs={dirs}
-            autoFocus
+            autoFocus={autoFocus}
             caret={undefined}
             onFocused={noop}
             onDispatched={onDispatched}

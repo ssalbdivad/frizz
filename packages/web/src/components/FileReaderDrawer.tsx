@@ -4,7 +4,8 @@ import { ExternalLink } from "lucide-react"
 import { projectRpc, rpc } from "../api/rpc.ts"
 import { useLiveLocalFile } from "../hooks.ts"
 import { useInnerHtml } from "../lib/innerHtml.ts"
-import { openLocalPath, settleLocalFileOpen } from "../lib/local-file-links.ts"
+import { openInHostEditor, openLocalPath, settleLocalFileOpen } from "../lib/local-file-links.ts"
+import { embedded } from "../lib/embed.ts"
 import { baseName, runExternalOpen } from "../lib/externalOpen.ts"
 import { LOCAL_FILE_POLL_MS, highlightedSource, localFileQuery } from "../lib/localFileQuery.ts"
 import { useLocalFileCodeLinks } from "../lib/localFileCode.ts"
@@ -42,6 +43,12 @@ export const FOOTER_STYLE = { paddingBottom: "max(0.75rem, env(safe-area-inset-b
 export function OpenAction({ path, image, project, onOpen, className = "" }: { path: string; image?: boolean; project?: string; onOpen?: () => void; className?: string }) {
   const open = () => {
     onOpen?.()
+    // In an editor's sidebar "outside Frizz" is that editor (lib/embed.ts) — a Markdown file as much as
+    // source, since Open is how a file gets EDITED. A picture still goes to the OS's viewer below.
+    if (!image && embedded()) {
+      openInHostEditor(path)
+      return
+    }
     void runExternalOpen(
       `file:${path}`,
       `Opening ${baseName(path)}…`,

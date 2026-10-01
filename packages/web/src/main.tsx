@@ -9,6 +9,7 @@ import { connectSync } from "./api/socket.ts"
 import { initTranscriptLive } from "./api/transcript-live.ts"
 import { initSupervisorStatus } from "./api/supervisorStatus.ts"
 import { initEditorBridge } from "./lib/editorBridge.ts"
+import { initEmbedHost } from "./lib/embedHost.ts"
 import { initFont } from "./lib/font.ts"
 import { initTheme } from "./lib/theme.ts"
 import { installExternalLinkInterceptor } from "./lib/external-links.ts"
@@ -73,6 +74,8 @@ if (!settingsFixture) {
   // The connected editor windows, the offer to send code files to one, and what an editor sends to the
   // prompt box — machine-wide, so once per page rather than per project.
   initEditorBridge(queryClient)
+  // In an editor's sidebar (lib/embed.ts): VS Code's theme, its selections, its keys. Nothing otherwise.
+  initEmbedHost()
   initFont()
   installExternalLinkInterceptor()
   installLocalFileLinkInterceptor()

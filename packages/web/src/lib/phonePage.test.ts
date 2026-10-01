@@ -3,7 +3,7 @@ import assert from "node:assert/strict"
 import type { ThreadView } from "@frizz/shared"
 import { threadKey, type QueuesProject } from "./allQueues.ts"
 import { listOverlay } from "./listBands.ts"
-import { phoneCounts, phoneDone, phoneProjects, phoneQueue, phoneSnoozed } from "./phonePage.ts"
+import { phoneCounts, phoneDone, phoneProjects, phoneQueue, phoneSnoozed, phoneSubtitle } from "./phonePage.ts"
 
 // The phone page's tabs, across the projects a view shows (components/PhonePage.tsx). The rows are the
 // desktop list's own bands (lib/listBands.ts loudBands); what is the phone's is the merge across projects
@@ -82,17 +82,27 @@ test("a card being finished leaves with its row, and a steer moves its row to Wo
   assert.equal(rows[1]!.thread.runtime, "running", "the steered row reads as running, so its mark and the header count agree")
 })
 
-test("the header counts asks and the spinning band, never a rested handoff", () => {
+test("the header counts asks apart from the rest of Ready, and the spinning band", () => {
   const alpha = project("alpha", { queued: [ask("a-ask", 60_000), ready("handoff", 30_000)], running: [running("run", 1_000)] })
   const beta = project("beta", { queued: [ask("b-ask", 10_000)] })
-  assert.deepEqual(phoneCounts(phoneQueue([alpha, beta])), { asks: 2, working: 1 })
+  assert.deepEqual(phoneCounts(phoneQueue([alpha, beta])), { asks: 2, ready: 1, working: 1 })
   // A permission request waiting on the human wears the "?" too, so it is an ask: lifted with the others
   // and counted. `needsAction`, upstream's predicate, leaves it among the handoffs.
   const approval = ready("approve-bash", 90_000, { actionableInteraction: { id: "i1" } } as Partial<ThreadView>)
   const gamma = project("gamma", { queued: [ready("plain", 120_000), approval] })
   assert.deepEqual(names(phoneQueue([gamma])), ["gamma:approve-bash", "gamma:plain"])
-  assert.deepEqual(phoneCounts(phoneQueue([gamma])), { asks: 1, working: 0 })
-  assert.deepEqual(phoneCounts([]), { asks: 0, working: 0 })
+  assert.deepEqual(phoneCounts(phoneQueue([gamma])), { asks: 1, ready: 1, working: 0 })
+  assert.deepEqual(phoneCounts([]), { asks: 0, ready: 0, working: 0 })
+})
+
+test("the header never says nothing needs you over a queue that holds anything", () => {
+  // Four handoffs and no asks: what the sidebar spike showed under "Nothing needs you" (2026-10-01).
+  const handoffs = project("alpha", { queued: [ready("a", 40_000), ready("b", 30_000), ready("c", 20_000), ready("d", 10_000)] })
+  assert.deepEqual(phoneSubtitle(phoneCounts(phoneQueue([handoffs]))), { accent: null, rest: "4 ready" })
+  const mixed = project("beta", { queued: [ask("q", 60_000), ready("h", 30_000)], running: [running("r", 1_000)] })
+  assert.deepEqual(phoneSubtitle(phoneCounts(phoneQueue([mixed]))), { accent: "1 needs you", rest: "1 ready · 1 working" })
+  assert.deepEqual(phoneSubtitle({ asks: 2, ready: 0, working: 0 }), { accent: "2 need you", rest: null })
+  assert.deepEqual(phoneSubtitle(phoneCounts([])), { accent: null, rest: "Nothing needs you" })
 })
 
 test("Snoozed and Done list every shown project's rows, most recently touched first", () => {

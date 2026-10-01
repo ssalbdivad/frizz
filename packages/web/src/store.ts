@@ -66,6 +66,11 @@ export const store = proxy({
   showShortcuts: false,
   // The anywhere-modal behind the "New thread" pill (Gmail-compose style).
   showNewThread: false,
+  // The PHONE layout's New thread sheet (components/PhonePage.tsx), open or not — and whether it takes
+  // the caret as it opens. Its own button opens it focused; a selection an editor sends to the prompt
+  // box (lib/editorBridge.ts composeInto) opens it to SHOW the chip, focused only when the human writes
+  // next: "Add to Frizz prompt" from an editor's sidebar leaves the caret in the editor.
+  phoneNewThread: null as { focus: boolean } | null,
   // The GitHub picker modal (Issues/PRs tabs → multi-select → batch dispatch). Its trigger appears
   // only when gh is authed AND the project is a GitHub repo; see GithubTrigger + openGithubPicker.
   // The modal reads the durable new-thread profile live and carries its own selector for it, so
