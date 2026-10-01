@@ -502,7 +502,7 @@ const steps: Step[] = [
     },
   },
   {
-    name: "Frizz on a new port re-frames the sidebar there; with no Frizz at all, Reload says so",
+    name: "Frizz on a new port re-frames the sidebar there; a page that never loads offers Reload",
     modes: ["fake"],
     async run({ api, project }) {
       const frizz = vscode.workspace.getConfiguration("frizz")
@@ -510,20 +510,19 @@ const steps: Step[] = [
         await frizz.update("serverUrl", elsewhere, vscode.ConfigurationTarget.Global)
         await until("the frame on the new port, ready", () => api.sidebar().url === `${elsewhere}/${embedQuery(project)}` && api.sidebar().ready, 30_000)
         assert.deepEqual((await fakeLog(elsewhere)).page.loads, [`/${embedQuery(project)}`])
+        assert.equal(api.sidebar().hinted, false)
 
-        // Nothing listens on port 1. The page that was showing stays — it says it is offline itself —
-        // until the human reloads it.
+        // The setting is taken at its word, so the frame goes to port 1, where nothing listens; its
+        // page never says it is ready, and the view offers Reload and Open in browser over it.
         await frizz.update("serverUrl", "http://127.0.0.1:1", vscode.ConfigurationTarget.Global)
-        await until("offline", () => api.status().kind === "offline")
-        await new Promise((resolve) => setTimeout(resolve, 500))
-        assert.equal(api.sidebar().url, `${elsewhere}/${embedQuery(project)}`)
-        await vscode.commands.executeCommand("frizz.sidebar.reload")
-        await until("a message instead of the page", () => api.sidebar().message !== undefined && api.sidebar().url === undefined)
+        await until("the frame on port 1", () => api.sidebar().url === `http://127.0.0.1:1/${embedQuery(project)}`)
         assert.equal(api.sidebar().ready, false)
+        await until("the hint", () => api.sidebar().hinted, 15_000)
       } finally {
         await frizz.update("serverUrl", control, vscode.ConfigurationTarget.Global)
       }
       await until("the frame back on the first Frizz, ready", () => api.sidebar().url === `${control}/${embedQuery(project)}` && api.sidebar().ready, 30_000)
+      assert.equal(api.sidebar().hinted, false)
     },
   },
 ]
