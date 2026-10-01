@@ -265,3 +265,15 @@ export function handoffParts(text: string, registered: readonly Pick<RegisteredQ
   }
   return { prose: prose.trim(), questions, fences }
 }
+
+/**
+ * The prose of the human's ANSWER (router handoffOf `answer`: the first rest after their turn, when wakes
+ * rested after it), or "" when the newest rest supersedes it. A `done` is the whole stretch's write-up, so
+ * an earlier rest above it can only be stale: on 2026-10-01 a card opened on "The six scouts are still
+ * reading the codebase" over the finished integration's done card. The answer earns its place only over
+ * a newest rest that is a status line after a wake — the CI-went-green case it was added for.
+ */
+export function answerProse(answer: string | undefined, newest: Pick<HandoffParts, "fences"> | null, registeredDone: boolean, registered: readonly Pick<RegisteredQuestionView, "id" | "spec">[] = []): string {
+  if (!answer || registeredDone || newest?.fences.some((fence) => fence.kind === "done")) return ""
+  return handoffParts(answer, registered).prose
+}

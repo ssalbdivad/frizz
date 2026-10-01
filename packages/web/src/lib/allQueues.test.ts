@@ -1,7 +1,7 @@
 import { test } from "node:test"
 import assert from "node:assert/strict"
 import type { ProjectCard, ProjectQueue, ThreadView } from "@frizz/shared"
-import { handoffParts, isBusy, mergedQueue, queuesProjects, threadKey, liveQueue, overlayQueues } from "./allQueues.ts"
+import { answerProse, handoffParts, isBusy, mergedQueue, queuesProjects, threadKey, liveQueue, overlayQueues } from "./allQueues.ts"
 
 function thread(id: string, over: Partial<ThreadView> = {}): ThreadView {
   return {
@@ -207,4 +207,13 @@ test("a project the poll answered unchanged keeps its object, so the list can sk
   assert.notEqual(second[1], first[1])
   // The order the queue is drawn in is part of what was built, so a different one rebuilds.
   assert.notEqual(queuesProjects(cards, [a, queue("b", [])], "lifo")[0], first[0])
+})
+
+test("a done supersedes the earlier answer; a status line after a wake does not", () => {
+  const answer = "The six scouts are still reading the codebase."
+  assert.equal(answerProse(answer, handoffParts("**Fixed** — landed.\n\n```done\n- Shipped it.\n```"), false), "", "a fenced done")
+  assert.equal(answerProse(answer, handoffParts("**Fixed** — landed."), true), "", "a registered done")
+  assert.equal(answerProse(answer, handoffParts("Every check is green; nothing has changed."), false), answer)
+  assert.equal(answerProse(`${answer}\n\n\`\`\`awaiting\nfor: 1h\n---\nScouts.\n\`\`\``, handoffParts("Still green."), false), answer, "its own fences are dropped")
+  assert.equal(answerProse(undefined, null, false), "")
 })

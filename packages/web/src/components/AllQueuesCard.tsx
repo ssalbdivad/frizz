@@ -27,7 +27,7 @@ import { ThreadProjectScope } from "../api/threadApi.tsx"
 import { ThreadMenu, ThreadTerminalButton } from "./ThreadMenu.tsx"
 import { displayTitle, offersRetry, queueLabelAt, queueLabelWord } from "../groups.ts"
 import { useMentionCandidates, useOwnMention } from "../hooks/useMentionCandidates.ts"
-import { handoffParts, projectMarkdownScope, sameProjectAddress, squareCard, threadKey, type QueuesProject } from "../lib/allQueues.ts"
+import { answerProse, handoffParts, projectMarkdownScope, sameProjectAddress, squareCard, threadKey, type QueuesProject } from "../lib/allQueues.ts"
 import { draftKey, draftStore, useDraftValues } from "../lib/drafts.ts"
 import { buildMessageWithContext, type ComposerContextItem } from "../lib/composerContext.ts"
 import { restoreContextItems, takeContextItems, useStagedContextTokens } from "../lib/stagedContext.ts"
@@ -262,9 +262,10 @@ export const AllQueuesCard = memo(function AllQueuesCard({
   const text = handoff.data?.text
   const parts = useMemo(() => (text ? handoffParts(text, thread.questions) : null), [text, thread.questions])
   // The reply to the human's message when wakes rested after it (router handoffOf): its prose alone, since
-  // its fences were superseded by the newest rest's.
+  // its fences were superseded by the newest rest's — and none of it under a done, which says it all.
   const answer = handoff.data?.answer
-  const answerProse = useMemo(() => (answer ? handoffParts(answer, thread.questions).prose : ""), [answer, thread.questions])
+  const registeredDone = showsRegisteredDoneCard(thread, text)
+  const answered = useMemo(() => answerProse(answer, parts, registeredDone, thread.questions), [answer, parts, registeredDone, thread.questions])
   // Does the awaiting card list the children, or the ops column under the reply box (QueueChildOps)?
   const drawsSubAgentWait = drawsSubAgentWaitCard(thread, parts?.fences)
   // THIS CARD IS THE NEWEST HANDOFF, and every CURRENT question rides to the bottom of the newest handoff
@@ -401,9 +402,9 @@ export const AllQueuesCard = memo(function AllQueuesCard({
                 Show earlier messages
               </a>
               {handoff.data?.asked && <AskedBubble text={handoff.data.asked} />}
-              {answerProse && (
+              {answered && (
                 <ClampedBody resetKey={thread.lastAssistantAt ?? ""}>
-                  <Prose md={answerProse} />
+                  <Prose md={answered} />
                 </ClampedBody>
               )}
               {/* Only the PROSE clamps. The fence card under it is the handoff's ledger — what shipped, or
@@ -434,7 +435,7 @@ export const AllQueuesCard = memo(function AllQueuesCard({
                   from the thread (ChatView's "registered-done" rung); this is the same predicate, keyed on
                   the same handoff text, so a worker that fenced AND registered gets one card, the fenced one.
                   Held until the handoff is read, or a fenced done would draw here first and then swap. */}
-              {(handoff.data || handoff.isError) && showsRegisteredDoneCard(thread, text) && <FenceBody kind="done" body={thread.lastFence!.body} />}
+              {(handoff.data || handoff.isError) && registeredDone && <FenceBody kind="done" body={thread.lastFence!.body} />}
               {/* THE GATE: a turn parked on a request — "Run a command?", a native question, an MCP form —
                   with its real buttons, under the prose that led to it. It is the whole reason such a card
                   is in the queue, and this card drew none of it until 2026-09-28: a thread held on a
