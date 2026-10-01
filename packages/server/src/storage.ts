@@ -68,8 +68,8 @@ export interface SessionRow {
   // JSON array of the names `title` held before its current one, oldest first — appended by the
   // session_former_titles trigger (ensureStorageSchema), never written by hand. NULL until a rename.
   former_titles?: string | null
-  // The thread's live STATUS: a short phrase of what is happening NOW, rewritten every 5th operator
-  // message by periodic-status.ts. Never the name — the name is `title`, and stays put. NULL until the
+  // The thread's live STATUS: a short phrase of what is happening NOW, rewritten at
+  // every rest the conversation moved by periodic-status.ts. Never the name — the name is `title`, and stays put. NULL until the
   // first status lands; a re-dispatch clears it.
   status?: string | null
   // When `status` was last CHANGED (ISO) — the start of the task it names, which the board reads as

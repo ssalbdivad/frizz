@@ -3218,8 +3218,8 @@ export const ThreadView = z.object({
   // lastActivityAt/spawnedAt when absent.
   lastAssistantAt: z.string().optional(),
   aiTitle: z.string().optional(), // Claude's own auto-generated session title (latest ai-title record)
-  // The thread's live STATUS — a short phrase of what is happening NOW, rewritten every 5th operator
-  // message (server periodic-status.ts). Never the NAME: the name is one or two stable words for the
+  // The thread's live STATUS — a short phrase of what is happening NOW, rewritten at
+  // every rest the conversation moved (server periodic-status.ts). Never the NAME: the name is one or two stable words for the
   // subject, and this is the part allowed to move. Shown beside the name on the queue card, in the
   // drawer header and in the rail row's tooltip — never as a second rail line, which would cost the rail
   // its density. Absent until the first one lands. Named `statusLine` because `status` above is the

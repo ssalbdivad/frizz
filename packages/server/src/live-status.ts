@@ -11,7 +11,7 @@ import { cleanThreadStatus } from "./thread-names.ts"
 // is doing"). The elapsed half is `session.status_at`, which storage stamps only when the TEXT changes,
 // so a check that keeps the task keeps its clock.
 //
-// periodic-status.ts owns the status at REST (every 5th operator message, Sonnet). This owns it while the
+// periodic-status.ts owns the status at REST (every rest the conversation moved, Sonnet). This owns it while the
 // turn runs, and hands back at the rest: `onTurnDone` reports whether the turn wore a working status, and
 // the caller then forces one rest write so a rested card does not go on saying "Running the tests".
 //
