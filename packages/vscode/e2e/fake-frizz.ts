@@ -4,6 +4,8 @@
 //   GET  /_frizz/health                      { ok, bootId }
 //   /_frizz/<projectId>/rpc/<proc>           dispatchPreferencesGet, dispatch, board, followUp
 //   WS   /_frizz/editor                      hello → welcome + projects; compose → composed; results recorded
+//   GET  /                                   a fake PAGE that speaks the sidebar's embed contract
+//                                            (embed-protocol.ts): says frizz:ready, answers frizz:compose
 //
 // plus a control surface for the suite running inside VS Code, which cannot reach this process any
 // other way:
@@ -13,6 +15,11 @@
 //   POST /__e2e/focus     {path}             send `focus` the same way
 //   POST /__e2e/projects  {projects}         push a `projects` frame
 //   POST /__e2e/drop                         close the editor socket (1001), as a restart would
+//   POST /__e2e/page-post {message}          have the page post `message` to its parent (the sidebar)
+//   POST /__e2e/page-answer {answer}         how the page answers a compose: "ok", "refuse" or "silent"
+//
+// and two the fake page itself calls: POST /__e2e/page-event (what it received, recorded in `page`) and
+// GET /__e2e/page-next (the messages it was told to post).
 //
 // It is a stand-in for the seams the extension touches, not for the server: the REAL mode of
 // scripts/e2e.ts runs the same suite against a real Frizz. What it does take from the server is the
@@ -47,10 +54,46 @@ export interface FakeLog {
   refused: string[]
   rpc: { projectId: string; procedure: string; input: unknown }[]
   origins: (string | undefined)[]
+  /** The fake page: every load of it (the request's path and query), and every message it received from its parent. */
+  page: { loads: string[]; received: { origin: string; data: unknown }[] }
 }
 
+/**
+ * The fake page. It does what the real page's embed mode promises and nothing else: says it is ready,
+ * answers each compose as the control surface says, and posts whatever the suite queues — so the suite
+ * can drive the extension's side of the wire inside a real VS Code. It records what reached it at its
+ * own origin, which is the proof the relay posted it there.
+ */
+const FAKE_PAGE = `<!doctype html>
+<html><head><meta charset="utf-8"><title>Fake Frizz</title></head>
+<body><p>Fake Frizz page</p>
+<script>
+  const event = (body) => fetch("/__e2e/page-event", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) }).then((r) => r.json())
+  window.addEventListener("message", async (message) => {
+    if (message.source !== window.parent) return
+    const data = message.data
+    const { answer } = await event({ origin: message.origin, data })
+    if (data && data.type === "frizz:compose" && answer !== "silent") {
+      parent.postMessage({ type: "frizz:composed", id: data.id, ok: answer === "ok", ...(answer === "ok" ? {} : { error: "The fake page refused it." }) }, "*")
+    }
+  })
+  parent.postMessage({ type: "frizz:ready", v: 1 }, "*")
+  ;(async () => {
+    for (;;) {
+      try {
+        const { messages } = await (await fetch("/__e2e/page-next")).json()
+        for (const message of messages) parent.postMessage(message, "*")
+      } catch {}
+      await new Promise((resolve) => setTimeout(resolve, 100))
+    }
+  })()
+</script>
+</body></html>`
+
 export class FakeFrizz {
-  readonly log: FakeLog = { frames: [], refused: [], rpc: [], origins: [] }
+  readonly log: FakeLog = { frames: [], refused: [], rpc: [], origins: [], page: { loads: [], received: [] } }
+  #pageOutbox: unknown[] = []
+  #pageAnswer: "ok" | "refuse" | "silent" = "ok"
   readonly #server: Server
   readonly #wss = new WebSocketServer({ noServer: true, maxPayload: EDITOR_MAX_PAYLOAD_BYTES })
   readonly #sockets: WebSocket[] = []
@@ -154,6 +197,20 @@ export class FakeFrizz {
         case "/__e2e/drop":
           for (const ws of [...this.#sockets]) ws.close(1001, "restarting")
           return json(200, { ok: true })
+        case "/__e2e/page-post":
+          this.#pageOutbox.push(input.message)
+          return json(200, { ok: true })
+        case "/__e2e/page-answer":
+          this.#pageAnswer = input.answer
+          return json(200, { ok: true })
+        case "/__e2e/page-event":
+          this.log.page.received.push(input)
+          return json(200, { answer: this.#pageAnswer })
+        case "/__e2e/page-next": {
+          const messages = this.#pageOutbox
+          this.#pageOutbox = []
+          return json(200, { messages })
+        }
         case "/__e2e/open":
         case "/__e2e/focus": {
           const ws = this.#sockets.at(-1)
@@ -166,6 +223,13 @@ export class FakeFrizz {
         }
       }
       return json(404, { error: "unknown control" })
+    }
+
+    if (request.method === "GET" && url.pathname === "/") {
+      this.log.page.loads.push(`${url.pathname}${url.search}`)
+      response.setHeader("content-type", "text/html; charset=utf-8")
+      response.end(FAKE_PAGE)
+      return
     }
 
     // The real server's gate (app.ts): no Origin is admitted only with sec-fetch-site: same-origin.
