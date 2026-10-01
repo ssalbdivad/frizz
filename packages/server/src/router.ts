@@ -192,7 +192,7 @@ import {
   threadTranscriptSource,
   withSpinoffChildOrigin,
 } from "./transcript.ts"
-import { liftCheckout, resolveThreadWorkingDir, terminalFolder } from "./thread-cwd.ts"
+import { liftCheckout, resolveThreadWorkingDir, subAgentFolders, terminalFolder } from "./thread-cwd.ts"
 import { openExternalUrl } from "./open-external.ts"
 import { editorKindsForOpener, folderEditor, openLocalFile, openLocalFolder, readLocalMarkdown, resolveLocalFileAt, resolveOpenableFile, readLocalTextFile } from "./local-file.ts"
 import { openableFileRoots, workDirOf } from "./project.ts"
@@ -1292,6 +1292,21 @@ export function createRouter(ctx: AppContext) {
     } catch {
       return false
     }
+  }
+
+  // Every folder "Open in editor" can offer: the thread's own first, then each other checkout its recent
+  // sub-agents work in, newest first. Only a Claude thread has sub-agent transcripts to read.
+  function threadFolderChoices(slug: string): { dir: string; thread: boolean; agents: number; newest?: string }[] {
+    const row = ctx.storage.getSession(slug)
+    if (!row) throw new Error(`no session registered for ${slug}`)
+    const own = threadWorkingDir(slug).dir
+    const choices: { dir: string; thread: boolean; agents: number; newest?: string }[] = [{ dir: own, thread: true, agents: 0 }]
+    const source = row.backend === "codex" || row.backend === "acp" ? undefined : threadTranscriptSource(ctx.project, ctx.storage, slug, ctx.backendFor)
+    for (const folder of source ? subAgentFolders(source.path, workDir) : []) {
+      if (folder.dir === own) choices[0]!.agents = folder.agents
+      else choices.push({ dir: folder.dir, thread: false, agents: folder.agents, ...(folder.newest ? { newest: folder.newest } : {}) })
+    }
+    return choices
   }
 
   function threadWorkingDirFromTranscript(slug: string): ThreadWorkingDir {
@@ -4367,14 +4382,27 @@ export function createRouter(ctx: AppContext) {
     }),
 
     // "Open in editor": the thread's working folder, in the External app when that is an editor and
-    // `$EDITOR` otherwise. The folder is the one a terminal on the thread starts in, resolved here —
-    // the page names only the thread, so this can open no path the server did not choose.
+    // `$EDITOR` otherwise. The folder is the one a terminal on the thread starts in, resolved here.
+    //
+    // When the thread's recent SUB-AGENTS work in another checkout (thread-cwd.ts subAgentFolders — an
+    // orchestrator that stays in the root while its agents build in a sibling worktree), nothing opens:
+    // the answer is the CHOICES, and the page asks which (maintainer 2026-10-01: "the open editor should
+    // give a dropdown choice"). The pick comes back as `path`, which must be one of the choices — the
+    // page still names only folders the server chose.
     openThreadFolder: mutation({
-      input: SlugInput,
-      output: z.object({ path: z.string() }),
+      input: z.object({ slug: ThreadSlug, path: z.string().max(4096).optional() }).strict(),
+      output: z.object({
+        path: z.string().optional(),
+        choices: z.array(z.object({ dir: z.string(), thread: z.boolean(), agents: z.number(), newest: z.string().optional() })).optional(),
+      }),
       handler: async ({ input }) => {
-        if (!ctx.storage.getSession(input.slug)) throw new Error(`no session registered for ${input.slug}`)
-        return openFolderInEditor(threadWorkingDir(input.slug).dir)
+        const choices = threadFolderChoices(input.slug)
+        if (input.path !== undefined) {
+          if (!choices.some((c) => c.dir === input.path)) throw new Error("That folder is no longer one this thread works in")
+          return openFolderInEditor(input.path)
+        }
+        if (choices.length > 1) return { choices }
+        return openFolderInEditor(choices[0]!.dir)
       },
     }),
 

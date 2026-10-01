@@ -1,4 +1,4 @@
-import { closeSync, existsSync, openSync, readFileSync, readSync, realpathSync, statSync } from "node:fs"
+import { closeSync, existsSync, openSync, readdirSync, readFileSync, readSync, realpathSync, statSync } from "node:fs"
 import { homedir } from "node:os"
 import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path"
 import type { ThreadWorkingDir, TranscriptMessage, WorkCheckout } from "@frizz/shared"
@@ -30,6 +30,26 @@ import type { ThreadWorkingDir, TranscriptMessage, WorkCheckout } from "@frizz/s
 // the worktree — not in whatever folder the last command happened to need. The walk stops at the project
 // root, so a project that is itself a folder inside a larger repository is never climbed out of. The
 // human sees the result in the terminal dialog and can edit it before anything starts.
+
+// WHERE A SHELL STARTS when its command opens with a `cd`. The launch record's `cwd` is where the SESSION
+// was; `cd /home/ssalb/frizz/packages/web && nubx vite` runs the server somewhere else, and a worktree
+// shell is very often exactly `cd .frizz/worktrees/x && …`. Deliberately NARROW: one leading `cd` to a
+// literal path, then `&&` or `;`. A bare token with no `$`, backtick, glob or subshell character, or the
+// same wrapped in plain quotes; `~` is the home folder and a relative path resolves against `base`.
+// Anything cleverer (`cd "$D"`, `pushd`, a `cd` mid-command, a subshell) answers undefined and the shell
+// keeps the session's folder until the OS names the one its process is really in (shell-cwd-probe.ts).
+const LEADING_CD_RE = /^\s*cd\s+(?:"([^"$`*?(\\]+)"|'([^'$`*?(]+)'|([^\s"'$`*?(;&|<>\\]+))\s*(?:&&|;)/
+
+export function leadingCd(command: unknown, base: string | undefined): string | undefined {
+  if (typeof command !== "string" || !base) return undefined
+  const m = LEADING_CD_RE.exec(command)
+  const raw = (m?.[1] ?? m?.[2] ?? m?.[3])?.trim()
+  if (!raw || raw.startsWith("-")) return undefined // `cd -` / an option is not a folder
+  if (raw === "~") return homedir()
+  if (raw.startsWith("~/")) return join(homedir(), raw.slice(2))
+  if (raw.startsWith("~")) return undefined // `~user` — not ours to resolve
+  return isAbsolute(raw) ? resolve(raw) : resolve(base, raw)
+}
 
 /** How far back the Claude reader looks for a record with a `cwd`. Every record but a handful of
  *  bookkeeping ones carries it, so the newest is almost always in the last few KiB; the bound is only
@@ -316,4 +336,142 @@ export function terminalFolder(input: string): string {
   if (!isAbsolute(expanded)) throw new Error(`The folder must be an absolute path: ${raw}`)
   if (!isDirectory(expanded)) throw new Error(`No such folder: ${raw}`)
   return resolve(expanded)
+}
+
+// WHERE THE THREAD'S SUB-AGENTS ARE WORKING — the other answer `e` can give. An orchestrating thread
+// often never moves at all: its session stays in the project root while the agents it dispatches build in
+// a sibling worktree of the same repository (@massive-refactor-branch-status, 2026-10-01: the thread in
+// `~/arktype`, every Workflow agent editing `~/rest/orca/workspaces/arktype/featherduster`). A sub-agent's
+// `cwd` does not show it either — it records the project root too, because Claude Code resets a `cd` out
+// of the project — so, as for the thread itself (tailer.ts trackToolCwd), the reading is where its tools
+// WORK: a Bash call's leading `cd`, or the folder of a file it edits. Outside the project it counts only
+// when it lifts to a worktree of the project's own repository (liftRepoWorktree); a scratch copy in `/tmp`
+// or an edit to `~/.claude` memory is not somewhere to open an editor.
+
+/** Only sub-agents active this recently are read: an orchestrator dispatches hundreds over a long effort,
+ *  and where one worked last week is not a choice anyone wants today. */
+const SUB_AGENT_RECENT_MS = 24 * 60 * 60 * 1000
+/** And at most this many of them, newest first. */
+const SUB_AGENT_MAX = 48
+/** How much of each sub-agent transcript's tail is read for its newest tool call. */
+const SUB_AGENT_TAIL_BYTES = 1024 * 1024
+const SUB_AGENT_FILE_EDIT_TOOLS = new Set(["Edit", "MultiEdit", "Write", "NotebookEdit"])
+
+export interface SubAgentFolder {
+  /** The checkout, lifted (liftWorkingDir) — the project root included. */
+  dir: string
+  /** How many recent sub-agents last worked there. */
+  agents: number
+  /** The newest of them's own description (its `.meta.json`), when it has one. */
+  newest?: string
+  newestAtMs: number
+}
+
+/** Every `agent-*.jsonl` under a session's `subagents/` folder, Workflow agents' subfolders included. */
+function subAgentTranscripts(sessionDir: string): string[] {
+  const out: string[] = []
+  const walk = (dir: string, depth: number) => {
+    let names: string[]
+    try {
+      names = readdirSync(dir)
+    } catch {
+      return
+    }
+    for (const name of names) {
+      const path = join(dir, name)
+      if (name.startsWith("agent-") && name.endsWith(".jsonl")) out.push(path)
+      else if (depth < 2 && !name.includes(".")) walk(path, depth + 1)
+    }
+  }
+  walk(join(sessionDir, "subagents"), 0)
+  return out
+}
+
+/** The folder a sub-agent's newest folder-naming tool call worked in, read off its transcript's tail. */
+export function newestToolFolder(path: string, maxBytes = SUB_AGENT_TAIL_BYTES): string | undefined {
+  let text: string
+  try {
+    const size = statSync(path).size
+    const fd = openSync(path, "r")
+    try {
+      const start = Math.max(0, size - maxBytes)
+      const buf = Buffer.alloc(size - start)
+      readSync(fd, buf, 0, buf.length, start)
+      text = buf.toString("utf8")
+    } finally {
+      closeSync(fd)
+    }
+  } catch {
+    return undefined
+  }
+  const lines = text.split("\n")
+  for (let i = lines.length - 1; i >= 0; i--) {
+    const line = lines[i]!
+    if (!line.includes('"tool_use"')) continue
+    let record: { cwd?: unknown; message?: { content?: unknown } }
+    try {
+      record = JSON.parse(line)
+    } catch {
+      continue // the window's first line, cut mid-record
+    }
+    const base = typeof record.cwd === "string" && isAbsolute(record.cwd) ? record.cwd : undefined
+    const content = Array.isArray(record.message?.content) ? record.message.content : []
+    for (let b = content.length - 1; b >= 0; b--) {
+      const block = content[b] as { type?: unknown; name?: unknown; input?: { command?: unknown; file_path?: unknown; notebook_path?: unknown } } | null
+      if (block?.type !== "tool_use" || typeof block.name !== "string") continue
+      const file = block.input?.file_path ?? block.input?.notebook_path
+      const dir = block.name === "Bash" ? leadingCd(block.input?.command, base)
+        : SUB_AGENT_FILE_EDIT_TOOLS.has(block.name) && typeof file === "string" && isAbsolute(file) ? dirname(file)
+        : undefined
+      if (dir) return dir
+    }
+  }
+  return undefined
+}
+
+function subAgentDescription(transcript: string): string | undefined {
+  try {
+    const meta = JSON.parse(readFileSync(transcript.replace(/\.jsonl$/u, ".meta.json"), "utf8")) as { description?: unknown }
+    return typeof meta.description === "string" && meta.description.trim() ? meta.description.trim() : undefined
+  } catch {
+    return undefined
+  }
+}
+
+/** The checkouts a Claude thread's recent sub-agents work in, newest first. `transcriptPath` is the
+ *  thread's own transcript; its sub-agents live beside it in `<session>/subagents/`. */
+export function subAgentFolders(transcriptPath: string, projectDir: string, nowMs = Date.now()): SubAgentFolder[] {
+  const sessionDir = transcriptPath.replace(/\.jsonl$/u, "")
+  const recent = subAgentTranscripts(sessionDir)
+    .map((path) => {
+      try {
+        return { path, at: statSync(path).mtimeMs }
+      } catch {
+        return undefined
+      }
+    })
+    .filter((t): t is { path: string; at: number } => t !== undefined && nowMs - t.at < SUB_AGENT_RECENT_MS)
+    .sort((a, b) => b.at - a.at)
+    .slice(0, SUB_AGENT_MAX)
+  const byDir = new Map<string, SubAgentFolder>()
+  for (const { path, at } of recent) {
+    const raw = newestToolFolder(path)
+    if (!raw) continue
+    const inside = within(raw, projectDir)
+    const reading = inside ? liftWorkingDir(nearestDirectory(raw), projectDir, nowMs) : liftRepoWorktree(raw, projectDir, nowMs)
+    if (!reading) continue
+    const seen = byDir.get(reading.dir)
+    if (seen) seen.agents++
+    else {
+      const newest = subAgentDescription(path)
+      byDir.set(reading.dir, { dir: reading.dir, agents: 1, newestAtMs: at, ...(newest ? { newest } : {}) })
+    }
+  }
+  return [...byDir.values()]
+}
+
+function nearestDirectory(path: string): string {
+  let at = path
+  while (!isDirectory(at) && dirname(at) !== at) at = dirname(at)
+  return at
 }

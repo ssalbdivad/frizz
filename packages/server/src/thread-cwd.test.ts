@@ -4,7 +4,7 @@ import { mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, writeFileSyn
 import { homedir, tmpdir } from "node:os"
 import { join } from "node:path"
 import type { TranscriptMessage } from "@frizz/shared"
-import { checkoutOf, liftCheckout, liftWorkingDir, newestToolWorkdir, newestTranscriptCwd, resetCheckoutMemo, resolveThreadWorkingDir, terminalFolder } from "./thread-cwd.ts"
+import { checkoutOf, liftCheckout, liftWorkingDir, newestToolWorkdir, newestTranscriptCwd, resetCheckoutMemo, resolveThreadWorkingDir, subAgentFolders, terminalFolder } from "./thread-cwd.ts"
 
 // WHERE A TERMINAL OPENED ON A THREAD STARTS. Real folders and real JSONL files: the reading is the
 // newest `cwd` a Claude transcript records (checked against real transcripts — see thread-cwd.ts), lifted
@@ -214,6 +214,58 @@ test("liftCheckout is memoized for a minute, then re-reads — a removed worktre
     assert.equal(liftCheckout(worktree, project, 62_000), undefined, "past it: the folder is gone, so no reading")
   } finally {
     resetCheckoutMemo()
+    cleanup()
+  }
+})
+
+test("sub-agents: the checkouts their newest edits and cd's work in, a sibling worktree of the same repo included", () => {
+  const { root, project, worktree, cleanup } = fixture()
+  try {
+    resetCheckoutMemo()
+    // A sibling worktree OUTSIDE the project, of the project's own repository — where an orchestrator's
+    // agents build while the thread itself never leaves the root.
+    const sibling = join(root, "elsewhere", "featherduster")
+    mkdirSync(join(sibling, "ark", "type"), { recursive: true })
+    const gitdir = join(project, ".git", "worktrees", "featherduster")
+    mkdirSync(gitdir, { recursive: true })
+    writeFileSync(join(gitdir, "commondir"), "../..\n")
+    writeFileSync(join(sibling, ".git"), `gitdir: ${gitdir}\n`)
+    // An unrelated repository: an agent editing it is not somewhere this thread works.
+    const other = join(root, "other-repo")
+    mkdirSync(join(other, ".git"), { recursive: true })
+
+    const transcript = join(root, "session.jsonl")
+    writeFileSync(transcript, "")
+    const agents = join(root, "session", "subagents")
+    mkdirSync(join(agents, "workflows", "wf_1"), { recursive: true })
+    const tool = (name: string, input: Record<string, unknown>) =>
+      record({ cwd: project, isSidechain: true, message: { content: [{ type: "tool_use", id: "t", name, input }] } })
+    const agent = (path: string, lines: string[], description?: string) => {
+      writeFileSync(path, lines.join("\n") + "\n")
+      if (description) writeFileSync(path.replace(/\.jsonl$/u, ".meta.json"), JSON.stringify({ description }))
+    }
+    agent(join(agents, "workflows", "wf_1", "agent-a.jsonl"), [tool("Edit", { file_path: join(sibling, "ark", "type", "x.ts") })], "impl:T")
+    // The NEWEST folder-naming call wins: a later Read names no folder, an earlier edit elsewhere is stale.
+    agent(join(agents, "workflows", "wf_1", "agent-b.jsonl"), [
+      tool("Edit", { file_path: join(project, "packages", "web", "src", "a.ts") }),
+      tool("Bash", { command: `cd ${sibling} && pnpm test` }),
+      tool("Read", { file_path: join(project, "README.md") }),
+    ], "fix:T")
+    agent(join(agents, "agent-c.jsonl"), [tool("Write", { file_path: join(worktree, "packages", "server", "new.ts") })])
+    agent(join(agents, "agent-d.jsonl"), [tool("Edit", { file_path: join(project, "packages", "web", "src", "b.ts") })])
+    agent(join(agents, "agent-e.jsonl"), [tool("Edit", { file_path: join(other, "x.ts") })])
+    agent(join(agents, "agent-f.jsonl"), [tool("Read", { file_path: join(sibling, "x.ts") })])
+
+    const byDir = new Map(subAgentFolders(transcript, project).map((f) => [f.dir, f]))
+    assert.deepEqual([...byDir.keys()].sort(), [project, sibling, worktree].sort())
+    assert.equal(byDir.get(sibling)?.agents, 2)
+    assert.ok(["impl:T", "fix:T"].includes(byDir.get(sibling)?.newest ?? ""))
+    assert.equal(byDir.get(worktree)?.agents, 1)
+    assert.equal(byDir.get(project)?.agents, 1)
+
+    // Long-idle sub-agents are not offered.
+    assert.deepEqual(subAgentFolders(transcript, project, Date.now() + 2 * 24 * 60 * 60 * 1000), [])
+  } finally {
     cleanup()
   }
 })

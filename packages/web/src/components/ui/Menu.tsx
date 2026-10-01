@@ -72,6 +72,11 @@ export function MenuItem({
   )
 }
 
+/** A muted heading over a run of items — what the menu is asking, when it opened without being clicked. */
+export function MenuLabel({ children }: { children: ReactNode }) {
+  return <RadixMenu.Label className="px-2.5 pb-1 pt-1.5 text-[11px] text-muted-55">{children}</RadixMenu.Label>
+}
+
 export function MenuSeparator() {
   return <RadixMenu.Separator className="my-1 h-px bg-border" />
 }
