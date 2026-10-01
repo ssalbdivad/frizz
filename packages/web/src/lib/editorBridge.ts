@@ -123,9 +123,11 @@ function rememberOffered(kind: EditorOpener): void {
 /**
  * Whether a code-file click on an "auto" browser goes to the External app (editorWindows.ts
  * codeFilesDestination), for lib/local-file-links.ts. Only asked while an editor window that takes opens
- * is connected, so a page with none never reads anything. What it needs beyond the windows — the
- * External app, and whether this is a remote session — comes from the page's caches when they hold it
- * (ensureQueryData: no request per click), and a failed read is the reader, which always works.
+ * is connected, so a page with none never reads anything. The External app is read FRESH (fetchQuery),
+ * because the server opens with its own current setting: nothing refreshes this page's cached copy when
+ * another tab or browser changes it, so a click trusting the cache after External app moved to Copy path
+ * copied the path instead of opening the reader. Whether this is a remote session comes from the shared
+ * supervisor poll's cache. A failed read is the reader, which always works.
  */
 export function autoCodeFilesMayGoToEditor(): boolean {
   return prefs.codeFiles === "auto" && connectedOpeners(store.editorWindows).size > 0
@@ -135,7 +137,7 @@ export async function autoCodeFilesGoToEditor(): Promise<boolean> {
   if (!autoCodeFilesMayGoToEditor()) return false
   try {
     const [settings, remote] = await Promise.all([
-      queryClient ? queryClient.ensureQueryData({ queryKey: ["settingsGet"], queryFn: () => rpc.settingsGet() }) : rpc.settingsGet(),
+      queryClient ? queryClient.fetchQuery({ queryKey: ["settingsGet"], queryFn: () => rpc.settingsGet() }) : rpc.settingsGet(),
       queryClient ? queryClient.ensureQueryData(supervisorStatusQueryOptions).then(isRemoteSession) : getFrizzSupervisorStatus().then(isRemoteSession),
     ])
     const phone = typeof window !== "undefined" && (window.matchMedia?.(MOBILE_QUERY).matches ?? false)

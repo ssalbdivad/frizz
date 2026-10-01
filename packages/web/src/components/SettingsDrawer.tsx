@@ -616,7 +616,9 @@ function DensityToggle() {
 // queue and the sidebar's rested rows the instant it flips. FIFO by default (longest in the queue first).
 // Pressed is where a click goes NOW: a browser that has chosen neither ("auto", lib/prefs.ts) shows the
 // External app while it is an editor with a window connected, and the reader otherwise — so the control
-// moves as the editor comes and goes, and a click on either button makes that the choice.
+// moves as the editor comes and goes. Pressing the OTHER button makes that the choice; pressing the one
+// already pressed changes nothing, so a click that looks like a no-op cannot quietly fix automatic in
+// place (it did, and the browser then ignored the editor coming and going for good).
 function CodeFilesControl({ opener }: { opener: Settings["localFileOpener"] }) {
   const { codeFiles } = useSnapshot(prefs)
   const { editorWindows } = useSnapshot(store)
@@ -632,7 +634,9 @@ function CodeFilesControl({ opener }: { opener: Settings["localFileOpener"] }) {
       {opts.map((o) => (
         <button
           key={o.v}
-          onClick={() => (prefs.codeFiles = o.v)}
+          onClick={() => {
+            if (current !== o.v) prefs.codeFiles = o.v
+          }}
           aria-pressed={current === o.v}
           className={`rounded px-3 py-1 text-[12px] transition-colors ${
             current === o.v ? "bg-fg text-bg" : "text-muted hover:text-fg"
