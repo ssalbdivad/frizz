@@ -46,3 +46,23 @@ test("a retired /project/<slug> address lands focused on its project", () => {
   assert.equal(retiredProjectHref("/status/active"), undefined)
   assert.equal(retiredProjectHref("/"), undefined)
 })
+
+test("a tab on All projects stays on it across a reload with a drawer open", async () => {
+  const store = new Map<string, string>()
+  const storage = { getItem: (key: string) => store.get(key) ?? null, setItem: (key: string, value: string) => void store.set(key, value) }
+  const saved = Object.getOwnPropertyDescriptor(globalThis, "sessionStorage")
+  Object.defineProperty(globalThis, "sessionStorage", { value: storage, configurable: true })
+  try {
+    const before = await import("./pageView.ts?before-reload")
+    before.rememberTabView(before.ALL_PROJECTS)
+    // A fresh module instance is a reload: its in-memory copy is gone, only sessionStorage survives.
+    const after = await import("./pageView.ts?after-reload")
+    assert.deepEqual(after.viewAt("/all/frizz/thread/x", ""), ALL_PROJECTS)
+    before.rememberTabView({ kind: "project", slug: "nub" })
+    const again = await import("./pageView.ts?after-second-reload")
+    assert.deepEqual(again.viewAt("/all/frizz/thread/x", ""), { kind: "project", slug: "nub" })
+  } finally {
+    if (saved) Object.defineProperty(globalThis, "sessionStorage", saved)
+    else delete (globalThis as { sessionStorage?: unknown }).sessionStorage
+  }
+})
