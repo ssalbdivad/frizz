@@ -5,7 +5,7 @@ import test, { after, before } from "node:test"
 // ThreadRow and LinkifiedText on a stubbed board (thread-mentions-fixture.tsx). Pins the keyboard contract
 // the skills menu set — ArrowDown/Enter and Tab complete, Escape dismisses without blurring — plus what
 // is particular to mentions: the menu follows the CARET (a mention mid-draft), the thread being written
-// into is never offered, and a sent `@handle` opens its thread.
+// into is offered last of all, and a sent `@handle` opens its thread.
 //
 // Skipped unless a Vite URL serving the fixtures is provided: start `vite` in packages/web and set
 // FRIZZ_MENTIONS_E2E_URL to its origin.
@@ -53,7 +53,7 @@ async function open() {
   await page!.click(BOX)
 }
 
-test("the rail shows names as handles, and `@` offers them — open first, done last, never this thread", {
+test("the rail shows names as handles, and `@` offers them — open first, then done, this thread last", {
   skip: !baseUrl,
   timeout: 150_000,
 }, async () => {
@@ -63,8 +63,8 @@ test("the rail shows names as handles, and `@` offers them — open first, done 
   await page!.type(BOX, "ask @")
   await page!.waitForSelector(MENU)
   const rows = await menuRows()
-  assert.ok(!rows.includes("@focus-mode"), "the thread being written into is not offered")
-  assert.equal(rows.at(-1), "@billing-webhooks", "a done thread comes after every open one")
+  assert.equal(rows.at(-1), "@focus-mode", "the thread being written into is offered, after every other")
+  assert.equal(rows.at(-2), "@billing-webhooks", "a done thread comes after every open one")
   assert.ok(!rows.some((r) => r.startsWith("@rework")), "a sentence-length title has no handle")
   await page!.type(BOX, "bud")
   assert.deepEqual(await menuRows(), ["@budget-report", "@shell-budgets"], "a handle prefix, then a word inside one")

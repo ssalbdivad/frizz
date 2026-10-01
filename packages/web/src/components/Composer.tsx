@@ -140,10 +140,12 @@ export function Composer({
   // owns the list (lib/threadMentions.ts mentionCandidates — the project's threads minus the one being
   // written into); omitted, the affordance is inert.
   mentionCandidates?: readonly MentionCandidate[]
-  // The thread this box writes INTO, as a candidate for the head of a DOTTED mention only. A thread has no
-  // use for `@itself`, so the flat list leaves it out — but `@itself.cache-keys` is how the human points
-  // the worker at one of its OWN sub-agents ("what did @port-the-parser.cache-keys find?"), which is the
-  // commonest sub-agent mention there is. Absent on a box that writes into no thread (the dispatch box).
+  // The thread this box writes INTO. It completes like any other candidate, offered LAST so it never
+  // crowds out the threads a message usually means: `@itself.cache-keys` is how the human points the
+  // worker at one of its OWN sub-agents ("what did @port-the-parser.cache-keys find?"), the commonest
+  // sub-agent mention there is, and a bare `@itself` still has uses — naming its branch, quoting it to
+  // another thread (maintainer 2026-09-30: "@ mentioning the current thread should still autocomplete").
+  // Absent on a box that writes into no thread (the dispatch box).
   ownMention?: MentionCandidate
   // INTERRUPT AND SEND — what the FORCED chord (⌘/Ctrl-Enter) does while the thread's worker is
   // mid-turn AND its runtime can be preempted; the caller owns that policy entirely. When it is not
@@ -326,7 +328,7 @@ export function Composer({
   // own text, so while a mention is on screen the MIRROR draws every glyph and the textarea's go
   // transparent (its caret keeps the fg colour); with only pills, the textarea draws the text as ever.
   const stagedTokens = useMemo(() => contextTokens ?? [], [contextTokens])
-  const highlightCandidates = useMemo(
+  const allMentions = useMemo(
     () => (ownMention ? [...(mentionCandidates ?? []), ownMention] : mentionCandidates ?? []),
     [mentionCandidates, ownMention],
   )
@@ -346,7 +348,7 @@ export function Composer({
         )
         continue
       }
-      for (const seg of mentionSegments(run.text, highlightCandidates)) {
+      for (const seg of mentionSegments(run.text, allMentions)) {
         if (seg.kind === "text") {
           out.push(seg.text)
           continue
@@ -360,7 +362,7 @@ export function Composer({
       }
     }
     return hasMention || hasToken ? { segments: out, paintsText: hasMention } : null
-  }, [prose, stagedTokens, highlightCandidates])
+  }, [prose, stagedTokens, allMentions])
   const backdropSegments = backdrop?.segments
 
   // The mirror rides the textarea's own scroll position (a textarea at maxHeight scrolls its
@@ -474,13 +476,13 @@ export function Composer({
   // server's directory through SubAgentMentionSource below — mounted only while such a query is open, so
   // a box nobody types a dot into never asks, and a surface with no query client never needs one.
   const dotted = mention ? splitMentionQuery(mention.query) : undefined
-  const mentionThread = dotted ? resolveMention(ownMention ? [...(mentionCandidates ?? []), ownMention] : mentionCandidates ?? [], dotted.head) : undefined
+  const mentionThread = dotted ? resolveMention(allMentions, dotted.head) : undefined
   const [subMentions, setSubMentions] = useState<{ slug: string; candidates: MentionCandidate[] } | null>(null)
   const mentionMatches = useMemo(() => {
     if (!mention || dismissedFor === prose) return []
-    if (!dotted) return matchMentions(mentionCandidates ?? [], mention.query)
+    if (!dotted) return matchMentions(allMentions, mention.query)
     return mentionThread && subMentions?.slug === mentionThread.slug ? matchMentions(subMentions.candidates, dotted.rest) : []
-  }, [mention?.start, mention?.query, mentionCandidates, dismissedFor, prose, mentionThread?.slug, subMentions])
+  }, [mention?.start, mention?.query, allMentions, dismissedFor, prose, mentionThread?.slug, subMentions])
   const mentionOpen = mentionMatches.length > 0
   // WHICH WAY THE MENUS OPEN. Up by default — a prompt box usually sits at the bottom of its surface —
   // but All projects puts its box at the TOP of the page, where a menu floated above opened off-screen

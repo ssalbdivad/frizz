@@ -7,7 +7,7 @@ import { TooltipProvider } from "./components/Tooltip.tsx"
 import { Composer } from "./components/Composer.tsx"
 import { LinkifiedText } from "./components/LinkifiedText.tsx"
 import { MentionIndexProvider } from "./components/MentionLinks.tsx"
-import { useMentionCandidates } from "./hooks/useMentionCandidates.ts"
+import { useMentionCandidates, useOwnMention } from "./hooks/useMentionCandidates.ts"
 import { useMarkdownHtml } from "./lib/useMarkdown.ts"
 import { setMentionIndex } from "./lib/mentionAutolink.ts"
 import { installThreadLinkInterceptor } from "./lib/thread-links.ts"
@@ -89,6 +89,7 @@ function Box() {
   const [value, setValue] = useState("")
   hooks.value = value
   const mentions = useMentionCandidates("focus-mode")
+  const ownMention = useOwnMention("focus-mode")
   const root = useRef<HTMLDivElement>(null)
   useEffect(() => {
     const draft = new URLSearchParams(location.search).get("draft")
@@ -109,6 +110,7 @@ function Box() {
         }}
         placeholder="Reply…"
         mentionCandidates={mentions}
+        ownMention={ownMention}
       />
     </div>
   )

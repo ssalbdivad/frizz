@@ -34,8 +34,8 @@ export interface MentionCandidate {
 const DONE_CANDIDATES = 20
 
 /** The threads a prompt box can mention: every open thread with a handle, most recently active first,
- *  then the most recent done ones. `excludeSlug` drops the thread being written INTO — a thread has no
- *  use for a mention of itself. External rows are never offered: Frizz holds no name for them.
+ *  then the most recent done ones. `excludeSlug` drops the thread being written INTO — the prompt box
+ *  re-adds it LAST (Composer `ownMention`), so it never outranks a thread the message means. External rows are never offered: Frizz holds no name for them.
  *  `doneLimit` is the typeahead's bound; a surface that only RESOLVES what was already written (agent
  *  prose, lib/mentionAutolink.ts) lifts it, since an old thread named there is still that thread. */
 export function mentionCandidates(threads: readonly ThreadView[], excludeSlug?: string, doneLimit = DONE_CANDIDATES): MentionCandidate[] {
