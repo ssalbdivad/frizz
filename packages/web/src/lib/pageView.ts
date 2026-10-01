@@ -100,7 +100,10 @@ export function rememberTabView(view: PageView): void {
   tab = view
   tabLoaded = true
   try {
-    sessionStorage.setItem(TAB_KEY, viewSearch(view))
+    // `?all`, not viewSearch's `""`: the empty query names NO view, so All projects stored as one read back
+    // after a reload as "this tab has none" — and a reload with a drawer open landed focused on the
+    // drawer's project (2026-09-30).
+    sessionStorage.setItem(TAB_KEY, view.kind === "all" ? `?${ALL_PARAM}` : viewSearch(view))
   } catch {
     // Storage disabled: the address still carries the view; only a drawer's close forgets it.
   }
