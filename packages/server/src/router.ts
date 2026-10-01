@@ -3033,7 +3033,10 @@ export function createRouter(ctx: AppContext) {
         // Same snapshot-then-note as followUp's interrupt: this preempts the same turn and kills the
         // same children (interrupt-ended.ts).
         const childrenBefore = runningSubAgentsOf(ctx.tailer.get(input.slug))
-        if (!bridge.interruptTurn({ threadSlug: input.slug, sessionId: row.session_id })) {
+        // `onlyIfQueued`: this push has nothing of its own to deliver, so once the queue has been read —
+        // above all by the interrupt a ⌘⏎ send fired a moment earlier — it must not abort the turn now
+        // reading it (the daemon decides; it is the only party that knows what is still queued).
+        if (!bridge.interruptTurn({ threadSlug: input.slug, sessionId: row.session_id, onlyIfQueued: true })) {
           return { interrupted: false, reason: "Nothing to interrupt — this thread has no turn running" }
         }
         void noteSubAgentsEndedByInterrupt(

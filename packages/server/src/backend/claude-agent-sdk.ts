@@ -157,6 +157,12 @@ export interface ClaudeQueryHandle extends AsyncIterable<ClaudeQueryEvent> {
   reinitialize(): Promise<ClaudeControlInitialization>
   interrupt(): Promise<ClaudeInterruptReceipt | undefined>
   /**
+   * Whether any input `send` handed over has not yet been echoed back as read. False means there is
+   * nothing waiting behind the current turn, so an interrupt meant to push the queue through would only
+   * abort the turn the agent is now working on — the turn that opened on that queue.
+   */
+  hasQueuedInput(): boolean
+  /**
    * Take one still-QUEUED input back out of the CLI's command queue, by the uuid `send` supplied.
    * Resolves true only when the CLI positively removed it — i.e. the agent will never read it. False
    * means it had already been dequeued for execution (or was never queued): the message is on its way
@@ -455,6 +461,10 @@ class RealClaudeQueryHandle implements ClaudeQueryHandle {
     const receipt = await this.awaitOpenControl(this.sdkQuery.interrupt())
     if (!receipt) return undefined
     return { stillQueued: boundedStringArray(receipt.still_queued, "interrupt.stillQueued", 256, 512).map((id, index) => boundedId(id, `interrupt.stillQueued[${index}]`)) }
+  }
+
+  hasQueuedInput(): boolean {
+    return this.outstandingInputs.size > 0
   }
 
   async stopTask(taskId: string): Promise<void> {

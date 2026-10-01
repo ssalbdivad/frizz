@@ -235,8 +235,11 @@ export interface ClaudeAgentBrokerBridge {
    * Returns false when there is no live daemon to interrupt. That is not an error: the follow-up has
    * already been delivered by then and will be read the ordinary way. This never attaches and never
    * cold-resumes — a turn only exists inside a running process.
+   *
+   * `onlyIfQueued` is the queue-push form (the queued bubble's ↑, ⌘⏎ on an empty box): the daemon skips
+   * it once the queue has been read, so it can never abort the turn that opened on that queue.
    */
-  interruptTurn(input: { threadSlug: string; sessionId: string }): boolean
+  interruptTurn(input: { threadSlug: string; sessionId: string; onlyIfQueued?: boolean }): boolean
   /**
    * Reattach at boot to every broker daemon this project left running, without waiting for someone to
    * touch the thread.
@@ -668,7 +671,7 @@ export function createClaudeAgentBrokerBridge(deps: ClaudeBrokerBridgeDeps): Cla
       // handler answers nothing, so there is nothing to wait for and nothing to time out on. A daemon
       // too old to know the frame ignores it, and the follow-up — already delivered above — is simply
       // read at the ordinary time. The degradation is "no faster", never "lost".
-      held.client.interrupt()
+      held.client.interrupt({ ifQueued: input.onlyIfQueued === true })
       return true
     },
 

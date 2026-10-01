@@ -258,3 +258,49 @@ test("a failed title request neither throws nor stops the turn", { timeout: 15_0
     c.client.close()
   } finally { await b.close() }
 })
+
+// A second interrupt behind a first one aborts the turn that first one opened — the turn reading the
+// operator's message. Live on 2026-10-01: ⌘⏎ sent a follow-up and interrupted, a second ⌘⏎ on the
+// now-empty box asked to "push the queue through", and the thread rested on two
+// `[Request interrupted by user]` records with no reply. The daemon drops a push when nothing was sent
+// since the last interrupt, and drops ANY interrupt while one is still in flight.
+test("a queue push behind an interrupt that already freed the queue interrupts nothing", { timeout: 15_000 }, async () => {
+  const b = startBroker("hold-inputs")
+  const interrupts = () => captureRows(b.dir).filter((r) => r.kind === "host-control" && (r as { subtype?: string }).subtype === "interrupt").length
+  try {
+    const c = clientWith(b.socketPath)
+    await new Promise((r) => setTimeout(r, 300))
+    c.client.sendInput({ id: randomUUID(), text: "first" })
+    c.client.interrupt()
+    await waitForRows(b.dir, () => interrupts() === 1)
+    c.client.interrupt({ ifQueued: true })
+    await new Promise((r) => setTimeout(r, 300))
+    assert.equal(interrupts(), 1, "the push found nothing sent since the interrupt that opened the turn, so it must not abort it")
+    c.client.sendInput({ id: randomUUID(), text: "second" })
+    c.client.interrupt({ ifQueued: true })
+    await waitForRows(b.dir, () => interrupts() === 2)
+    assert.equal(interrupts(), 2, "a push with a genuinely new message queued still preempts")
+    c.client.close()
+  } finally {
+    await b.close()
+  }
+})
+
+test("an interrupt arriving while another is still in flight is dropped", { timeout: 15_000 }, async () => {
+  const b = startBroker("hanging-control")
+  const interrupts = () => captureRows(b.dir).filter((r) => r.kind === "host-control" && (r as { subtype?: string }).subtype === "interrupt").length
+  try {
+    const c = clientWith(b.socketPath)
+    await new Promise((r) => setTimeout(r, 300))
+    c.client.sendInput({ id: randomUUID(), text: "first" })
+    c.client.interrupt()
+    await waitForRows(b.dir, () => interrupts() === 1)
+    c.client.sendInput({ id: randomUUID(), text: "second" })
+    c.client.interrupt()
+    await new Promise((r) => setTimeout(r, 300))
+    assert.equal(interrupts(), 1, "the first interrupt never answered, so the second must not reach the CLI")
+    c.client.close()
+  } finally {
+    await b.close()
+  }
+})

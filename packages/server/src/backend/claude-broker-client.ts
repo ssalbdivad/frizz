@@ -29,7 +29,12 @@ export interface ClaudeBrokerClientHandlers {
 export interface ClaudeBrokerClient {
   sendInput(message: ClaudeInputMessage): void
   answerPermission(requestId: string, decision: ClaudePermissionDecision): void
-  interrupt(): void
+  /**
+   * Abort the running turn. `ifQueued` makes it a PUSH: the daemon interrupts only while an input is
+   * still waiting to be read, so a push behind a queue that has already been read cannot abort the turn
+   * reading it. A daemon predating the flag ignores it and interrupts as before.
+   */
+  interrupt(options?: { ifQueued?: boolean }): void
   /**
    * Take a still-queued input back out of the session, by the id `sendInput` supplied. The ONE
    * round-trip in this protocol: resolves with the CLI's own verdict (true ⇒ the agent will never
@@ -203,7 +208,7 @@ export function connectClaudeBroker(
   return {
     sendInput: (message: ClaudeInputMessage) => send({ t: "input", message }),
     answerPermission: (requestId: string, decision: ClaudePermissionDecision) => send({ t: "permission", requestId, decision }),
-    interrupt: () => send({ t: "interrupt" }),
+    interrupt: (options?: { ifQueued?: boolean }) => send(options?.ifQueued ? { t: "interrupt", ifQueued: true } : { t: "interrupt" }),
     cancelInput: (id: string) => new Promise<boolean>((resolve, reject) => {
       if (closed) { reject(new Error("the broker connection is closed")); return }
       const requestId = `cancel-${++cancelSeq}`

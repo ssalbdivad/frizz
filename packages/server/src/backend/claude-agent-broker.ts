@@ -6,7 +6,7 @@
 // small typed socket protocol (claude-broker-client.ts), never the SDK directly.
 //
 // Wire protocol — newline-delimited JSON frames:
-//   frizz -> broker:  {t:"input", message} | {t:"permission", requestId, decision} | {t:"interrupt"} | {t:"set-mode", mode}
+//   frizz -> broker:  {t:"input", message} | {t:"permission", requestId, decision} | {t:"interrupt", ifQueued?} | {t:"set-mode", mode}
 //                  | {t:"cancel-input", requestId, id} | {t:"stop-task", requestId, taskId}
 //                  | {t:"reload-plugins", requestId} | {t:"rename", requestId, description} | {t:"list-skills", requestId}
 //   broker -> frizz:  {t:"hello", sessionId, generation} | {t:"event", event} | {t:"permission-request", requestId, request} | {t:"diagnostic", diagnostic}
@@ -124,6 +124,11 @@ export function runClaudeBroker(config: ClaudeBrokerConfig): RunningBroker {
   const eventBacklog: string[] = []
   let eventBacklogBytes = 0
   const pendingPermissions = new Map<string, { request: ClaudePermissionRequest; resolve: (d: ClaudePermissionDecision) => void }>()
+  // Set while an SDK interrupt is outstanding, and the input count when the last one was issued; see the
+  // `interrupt` frame handler for why both exist.
+  let interruptInFlight = false
+  let inputsReceived = 0
+  let inputsAtLastInterrupt = -1
   let permSeq = 0
   let published = false
   let idleTimer: NodeJS.Timeout | undefined
@@ -326,6 +331,7 @@ export function runClaudeBroker(config: ClaudeBrokerConfig): RunningBroker {
         let msg: Record<string, unknown>; try { msg = JSON.parse(line) } catch { continue }
         if (msg.t === "input") {
           const message = msg.message as ClaudeInputMessage
+          inputsReceived += 1
           // Record RECEIPT, not only failure. The drop path below fires ONLY when `handle.send`
           // REJECTS; a send that simply never completes — the agent wedged before it drains stdin — is
           // identically silent, so from this log the two were indistinguishable. That cost a whole
@@ -367,7 +373,30 @@ export function runClaudeBroker(config: ClaudeBrokerConfig): RunningBroker {
           seedSessionTitle(message)
         }
         else if (msg.t === "permission") { const e = pendingPermissions.get(msg.requestId as string); if (e) { pendingPermissions.delete(msg.requestId as string); e.resolve(msg.decision as ClaudePermissionDecision) } }
-        else if (msg.t === "interrupt") void handle.interrupt().catch(() => {})
+        else if (msg.t === "interrupt") {
+          // ONE INTERRUPT PER QUEUE. An interrupt aborts whatever turn is running when the CLI gets to
+          // it, and the turn that opens next is the one reading the queue the operator wanted pushed
+          // through — so a second interrupt arriving behind the first kills exactly that turn. That is
+          // how a ⌘⏎ send followed by a second ⌘⏎ (on the now-empty box: "push the queue through")
+          // left a thread resting on two `[Request interrupted by user]` records and no reply
+          // (2026-10-01): the CLI took ~1.9s to act on the first, the second landed 1.5s after it.
+          // Coalesce while one is in flight; and a push (`ifQueued`) whose queue is already read has
+          // nothing left to deliver, so it interrupts nothing. "Already read" is decided by COUNT, not
+          // by the SDK's echo: every input handed over before an interrupt is read by the turn that
+          // interrupt opens, but the SDK only releases it on that turn's first assistant frame — after
+          // the model's whole time-to-first-token, which is exactly the window a second ⌘⏎ lands in
+          // (measured live with _live_broker_interrupt_send.mts's shape: the echo-based check still
+          // aborted the follow-up's turn). Interrupt-and-send carries no flag: its own input was handed
+          // over just before, so it always has something to deliver.
+          const pushNothingNew = msg.ifQueued === true && (inputsReceived === inputsAtLastInterrupt || !handle.hasQueuedInput())
+          if (interruptInFlight || pushNothingNew) {
+            writeDiagnostic?.({ kind: "stderr", message: `interrupt skipped: ${interruptInFlight ? "one already in flight" : "nothing queued since the last one"}`, truncated: false })
+          } else {
+            interruptInFlight = true
+            inputsAtLastInterrupt = inputsReceived
+            void handle.interrupt().catch(() => {}).finally(() => { interruptInFlight = false })
+          }
+        }
         else if (msg.t === "cancel-input") {
           // ALWAYS answer, including on failure: the caller is blocked on this reply and a silent drop
           // would be indistinguishable from a wedged daemon. `sock` rather than `client` is deliberate —
