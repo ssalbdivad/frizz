@@ -10,7 +10,9 @@ Status: implemented 2026-10-01. The extension and Frizz talk in both directions:
   folder open, at the line the link names, and that window comes to the front. "Open in editor"
   (`e`) on a thread raises the window that already has the thread's folder open.
 
-The extension also works in Cursor and Windsurf (they run VS Code extensions).
+The extension also works in Cursor and Windsurf (they run VS Code extensions), on any base from the
+manifest's VS Code 1.90 up. Raising the window is best-effort: `workbench.action.focusWindow` arrived
+in 1.128, so on an older base (Cursor 3.11 is 1.125) the file still opens and the answer is still ok.
 
 ## Why a live connection, and why the extension dials Frizz
 
@@ -37,7 +39,10 @@ server scanning lock files and dialling N editors.
 - The first frame must be `hello` (`v: 1`). The server answers `welcome`, then `projects`.
 - The server sends `{t:"hb"}` every 15s; the extension reconnects when it hears nothing for 45s. The
   server reaps a socket that misses two protocol pings.
-- Limits: 64 KiB per frame (128 KiB for compose), 64 folders, 32 windows.
+- Limits: 64 KiB per frame (128 KiB for compose), 64 folders, 32 windows. The extension fits itself to
+  them rather than be refused on every redial: it reports at most 64 folders, none over 4096 characters
+  and within 32 KiB encoded, and a compose whose text would pass 96 KiB once JSON-encoded (NUL-padded
+  text encodes at six bytes a character) is sent as its range alone.
 
 ### What the server sends
 
@@ -112,21 +117,47 @@ A new thread uses the operator's saved model and effort (`dispatchPreferencesGet
 composer. The message is the ⌘I serialization: `@a.ts:12-20 <question>` then `Selected context:`
 and the quoted selection, so the transcript shows the chip.
 
-Finding Frizz (no configuration): the published launcher's owner record
-(`<state>/frizz-server/address.json`), then the well-known ports (9393, 19393, 9494, 19494) with the
-same ownership proof the desktop app uses, then frizz-dev's public port
-(`<data>/projects/<id>/dev-supervisor.lock`), and last `<data>/server.lock`'s private port, which serves
-RPC but is never used to open a page (a different port is a different origin, with its own tab state).
+Finding Frizz (no configuration): the published launcher's address record
+(`<state>/frizz-server/address.json`), trusted only as the desktop app trusts it — the owner record
+beside it must name the same token, pid and process start, and that process generation must be alive
+(`readStableServerOwner`, replicated in `discovery.ts` with async spawns and no writes, and tested
+against the real one) — then the well-known ports (9393, 19393, 9494, 19494) with the same ownership
+proof the desktop app uses, then frizz-dev's public port (`<data>/projects/<id>/dev-supervisor.lock`),
+and last the port in `<data>/server.lock`. Behind the restart supervisor that last one is the control
+plane's private port: RPC and the editor socket work there, but a page opened on it is a different
+origin, with its own tab state, that dies on the next restart. Without a supervisor it IS the public
+port. The steps before it win whenever a supervisor is up, so it is reached only in narrow windows, and
+pages are still opened on it; the log says which kind of address each page was opened on.
 `frizz.serverUrl` overrides.
+
+A command that needs the connection and has none says the connection's own reason (a Frizz that refused
+the socket is told to update, not reported as stopped), and Open Frizz opens the discovered address even
+then. A dispatch or follow-up that got no answer (a timeout, a connection dropped mid-request) says to
+check Frizz before asking again, since it may have started the thread.
 The extension declares `extensionKind: ["workspace"]` so in a Remote-WSL/SSH window it runs where
 the files and Frizz are.
 
 ## Verification
 
 - Unit: `file-position.test.ts`; the bridge against real `ws` clients (`editor-bridge.test.ts`);
-  opener argv with positions (`local-file.test.ts`); page link parsing; the extension's discovery,
-  project matching and message format (pinned to the page's `parseSentContext`).
-- End to end: `packages/vscode/scripts/e2e.ts` boots a disposable Frizz (`scripts/adhoc-stack.mjs`),
-  downloads a real VS Code (`@vscode/test-electron`), runs it under Xvfb with the extension, and drives
-  both directions — `openLocalFile` with a line landing in the editor, and a compose landing in a real
-  page's prompt box.
+  opener argv with positions (`local-file.test.ts`); page link parsing; the extension's discovery
+  (its address-record verdict run beside `readStableServerOwner` over files the server's own writer
+  wrote), project matching, message format (pinned to the page's `parseSentContext`) and compose size;
+  its connection against an in-process server that judges every frame with the server's own
+  `EditorClientMessageSchema` and frame ceilings. `nub --test packages/vscode/src/*.test.ts`.
+- End to end, `packages/vscode/scripts/e2e.ts` downloads a real VS Code (`@vscode/test-electron`) and
+  runs it under Xvfb with the extension, never on the real display:
+  - `nub packages/vscode/scripts/e2e.ts` — FAKE mode, against an in-process fake Frizz (which also
+    judges frames with the server's schema): opens at a line and a range, focus and a folder answering
+    ok, the status bar's count, Ask, Send to thread (and its refusal of an untitled selection), Add to
+    Frizz prompt, the open-links setting, and a dropped connection coming back.
+  - `FRIZZ_E2E_VSCODE=oldest nub packages/vscode/scripts/e2e.ts` — the same on the oldest VS Code the
+    manifest's `engines.vscode` admits (1.90.0), where `focusWindow` does not exist.
+  - `nub packages/vscode/scripts/e2e.ts --stack` — boots a disposable two-project Frizz itself
+    (`scripts/adhoc-stack.mjs`: sandbox HOME, a free port, two throwaway git repos) and runs REAL mode
+    against the TENANT project: `openLocalFile` with a line landing in the editor over the bridge, the
+    window listed in `editorWindows`, and "Add to Frizz prompt" landing as a chip in the new-thread box
+    of a headless page open on the tenant (`e2e/page-claim.ts`). Every opener the server could spawn
+    (`code`, `cursor`, `xdg-open` …) is a stub on its PATH, and the run fails if one was spawned. The
+    stack is stopped by its process group and anything still carrying its HOME is killed, pass or fail.
+    Ask and Send start real agents, so they run only with `FRIZZ_E2E_DISPATCH=1` (which adds `--creds`).
