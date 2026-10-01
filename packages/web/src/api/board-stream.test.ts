@@ -24,6 +24,21 @@ test("BoardStream forwards typed-interaction invalidations without treating them
   assert.equal(resyncs, 0)
 })
 
+// The editor bridge's events are machine-wide and ride every project's bus: the windows land in the store
+// whole (replacing, never merging — a window that closed is gone), and a compose ping on a page nobody is
+// looking at claims nothing (lib/editorBridge.ts) — neither is a board frame, so neither resyncs.
+test("BoardStream takes the editor windows whole and leaves a compose ping to the page in front", () => {
+  let resyncs = 0
+  const stream = new BoardStream(() => resyncs++)
+  const windows = [{ app: "Visual Studio Code", kind: "vscode", acceptsOpens: true }] as const
+  stream.handle({ type: "editors", windows: [...windows, { app: "Cursor", kind: "cursor", acceptsOpens: false }] })
+  stream.handle({ type: "editors", windows: [...windows] })
+  assert.deepEqual(store.editorWindows, windows)
+  stream.handle({ type: "compose-pending", id: "c1" })
+  assert.equal(resyncs, 0)
+  store.editorWindows = []
+})
+
 // A DESKTOP NOTIFICATION IS CLICKED LATER — often much later, since it is only ever raised while the
 // window is hidden. By then the tab may be showing a different project, and `openThread` opens a slug
 // in whatever project is showing. Slugs are unique only WITHIN a project, so the click did not fail
