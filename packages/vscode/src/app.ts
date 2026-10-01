@@ -90,10 +90,15 @@ export function activateFrizz(api: Vscode, context: vscode.ExtensionContext): Fr
 
   const focusWindow = () => api.commands.executeCommand("workbench.action.focusWindow")
 
+  let lastNotes: string | undefined
   const connection = new EditorConnection({
     async discover() {
       const result = await discoverFrizz({ serverUrl: config().get<string>("serverUrl", "") })
-      for (const note of result.notes) log.debug(note)
+      // Where it looked, in full the first time and whenever the answer changes; the same misses on
+      // every retry are only for the debug level.
+      const notes = result.notes.join("\n")
+      for (const note of result.notes) (notes === lastNotes ? log.debug : log.info).call(log, `Looked for Frizz: ${note}`)
+      lastNotes = notes
       return result.found ? { origin: result.found.origin, detail: `found through ${SOURCE_WORDS[result.found.source]}` } : undefined
     },
     hello: () => ({ windowId, app: api.env.appName, extensionVersion, ...windowState(), home: homedir(), platform: process.platform }),

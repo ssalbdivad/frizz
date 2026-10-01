@@ -1,0 +1,180 @@
+// A FAKE FRIZZ for the end-to-end run — just enough of the server for the extension to find it, connect
+// and call it, on 127.0.0.1 with the real server's origin gates:
+//
+//   GET  /_frizz/health                      { ok, bootId }
+//   /_frizz/<projectId>/rpc/<proc>           dispatchPreferencesGet, dispatch, board, followUp
+//   WS   /_frizz/editor                      hello → welcome + projects; compose → composed; results recorded
+//
+// plus a control surface for the suite running inside VS Code, which cannot reach this process any
+// other way:
+//
+//   GET  /__e2e/log                          every frame and RPC call received so far
+//   POST /__e2e/open      {path, line?, …}   send `open` to the newest editor socket; answers its `result`
+//   POST /__e2e/projects  {projects}         push a `projects` frame
+//   POST /__e2e/drop                         close the editor socket (1001), as a restart would
+//
+// It is a stand-in for the seams the extension touches, not for the server: the REAL mode of
+// scripts/e2e.ts runs the same suite against a real Frizz.
+
+import { randomUUID } from "node:crypto"
+import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http"
+import type { AddressInfo } from "node:net"
+import { WebSocket, WebSocketServer } from "ws"
+import type { EditorClientMessage, EditorProject, EditorServerMessage } from "@frizz/shared/editor-protocol"
+
+export const FAKE_THREAD = {
+  id: "fake-thread",
+  sessionId: "fake-session",
+  title: "Fake thread",
+  titleAuto: false,
+  kind: "session",
+  state: "open",
+  needsYou: true,
+  runtime: "turn-idle",
+  statusLine: "Waiting on you",
+}
+
+export const FAKE_PREFERENCES = { backend: "claude", claude: { model: "sonnet", effort: "low" }, codex: {} }
+
+export interface FakeLog {
+  frames: EditorClientMessage[]
+  rpc: { projectId: string; procedure: string; input: unknown }[]
+  origins: (string | undefined)[]
+}
+
+export class FakeFrizz {
+  readonly log: FakeLog = { frames: [], rpc: [], origins: [] }
+  readonly #server: Server
+  readonly #wss = new WebSocketServer({ noServer: true })
+  readonly #sockets: WebSocket[] = []
+  readonly #results = new Map<string, (result: unknown) => void>()
+  readonly #heartbeat: NodeJS.Timeout
+  port = 0
+
+  constructor(readonly projects: EditorProject[]) {
+    this.#server = createServer((request, response) => void this.#http(request, response))
+    this.#server.on("upgrade", (request, socket, head) => {
+      if (request.url !== "/_frizz/editor" || request.headers.origin !== this.origin) {
+        socket.end("HTTP/1.1 403 Forbidden\r\n\r\n")
+        return
+      }
+      this.log.origins.push(request.headers.origin)
+      this.#wss.handleUpgrade(request, socket, head, (ws) => this.#accept(ws))
+    })
+    this.#heartbeat = setInterval(() => this.#broadcast({ t: "hb" }), 15_000)
+  }
+
+  async listen(): Promise<this> {
+    await new Promise<void>((resolve) => this.#server.listen(0, "127.0.0.1", resolve))
+    this.port = (this.#server.address() as AddressInfo).port
+    return this
+  }
+
+  get origin(): string {
+    return `http://127.0.0.1:${this.port}`
+  }
+
+  async close(): Promise<void> {
+    clearInterval(this.#heartbeat)
+    for (const ws of this.#sockets) ws.terminate()
+    this.#wss.close()
+    this.#server.closeAllConnections()
+    await new Promise((resolve) => this.#server.close(resolve))
+  }
+
+  #send(ws: WebSocket, message: EditorServerMessage): void {
+    if (ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify(message))
+  }
+
+  #broadcast(message: EditorServerMessage): void {
+    for (const ws of this.#sockets) this.#send(ws, message)
+  }
+
+  #accept(ws: WebSocket): void {
+    this.#sockets.push(ws)
+    ws.on("close", () => this.#sockets.splice(this.#sockets.indexOf(ws), 1))
+    ws.on("message", (data) => {
+      const frame = JSON.parse(data.toString()) as EditorClientMessage
+      this.log.frames.push(frame)
+      if (frame.t === "hello") {
+        this.#send(ws, { t: "welcome", v: 1, bootId: "fake-boot" })
+        this.#send(ws, { t: "projects", projects: this.projects })
+      } else if (frame.t === "compose") {
+        this.#send(ws, { t: "composed", id: frame.id, ok: true })
+      } else if (frame.t === "result") {
+        this.#results.get(frame.id)?.(frame)
+        this.#results.delete(frame.id)
+      }
+    })
+  }
+
+  async #http(request: IncomingMessage, response: ServerResponse): Promise<void> {
+    const url = new URL(request.url ?? "/", this.origin)
+    const body = await new Promise<string>((resolve) => {
+      let text = ""
+      request.on("data", (chunk) => (text += chunk))
+      request.on("end", () => resolve(text))
+    })
+    const json = (status: number, value: unknown) => {
+      response.statusCode = status
+      response.setHeader("content-type", "application/json")
+      response.end(JSON.stringify(value))
+    }
+
+    if (url.pathname === "/_frizz/health") return json(200, { ok: true, bootId: "fake-boot" })
+
+    if (url.pathname.startsWith("/__e2e/")) {
+      const input = body ? JSON.parse(body) : {}
+      switch (url.pathname) {
+        case "/__e2e/log":
+          return json(200, this.log)
+        case "/__e2e/projects":
+          this.projects.splice(0, this.projects.length, ...(input.projects as EditorProject[]))
+          this.#broadcast({ t: "projects", projects: this.projects })
+          return json(200, { ok: true })
+        case "/__e2e/drop":
+          for (const ws of [...this.#sockets]) ws.close(1001, "restarting")
+          return json(200, { ok: true })
+        case "/__e2e/open": {
+          const ws = this.#sockets.at(-1)
+          if (!ws) return json(409, { error: "no editor connected" })
+          const id = randomUUID()
+          const result = new Promise((resolve) => this.#results.set(id, resolve))
+          this.#send(ws, { t: "open", id, ...input })
+          const answer = await Promise.race([result, new Promise((resolve) => setTimeout(() => resolve({ timeout: true }), 10_000))])
+          return json(200, answer)
+        }
+      }
+      return json(404, { error: "unknown control" })
+    }
+
+    // The real server's gate (app.ts): no Origin is admitted only with sec-fetch-site: same-origin.
+    if (request.headers["sec-fetch-site"] !== "same-origin" && request.headers.origin !== this.origin) {
+      response.statusCode = 403
+      response.end("Forbidden")
+      return
+    }
+    const rpc = /^\/_frizz\/([^/]+)\/rpc\/([A-Za-z]+)$/.exec(url.pathname)
+    if (!rpc) {
+      response.statusCode = 404
+      response.end("Not Found")
+      return
+    }
+    const projectId = decodeURIComponent(rpc[1]!)
+    const procedure = rpc[2]!
+    const input = request.method === "GET" ? (url.searchParams.has("input") ? JSON.parse(url.searchParams.get("input")!) : undefined) : body ? JSON.parse(body) : undefined
+    this.log.rpc.push({ projectId, procedure, input })
+    if (!this.projects.some((project) => project.id === projectId)) return json(404, { error: `no project ${projectId}` })
+    switch (procedure) {
+      case "dispatchPreferencesGet":
+        return json(200, { result: FAKE_PREFERENCES })
+      case "dispatch":
+        return json(200, { result: { slug: "asked-thread", sessionId: "asked-session" } })
+      case "board":
+        return json(200, { result: { projectDir: this.projects[0]?.dir, projectName: "fake", threads: [FAKE_THREAD] } })
+      case "followUp":
+        return json(200, { result: null })
+    }
+    return json(404, { error: `unknown RPC procedure \`${procedure}\`` })
+  }
+}
