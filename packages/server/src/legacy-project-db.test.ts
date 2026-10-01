@@ -175,8 +175,11 @@ test("the title_agent backfill marks worker-written codex titles and leaves unto
   first.upsertSession(row({ slug: "some-old-prompt", session_id: "sid-c", title: "Resolver cache bug", title_auto: 1, title_locked: 0 }))
   first.close()
 
-  // Rewind to the pre-column shape and clear the marker, exactly as a server upgrade finds it.
+  // Rewind to the pre-column shape and clear the marker, exactly as a server upgrade finds it. A file
+  // from before title_agent also predates the session_former_titles trigger (2026-09-30), which reads
+  // the column — and SQLite refuses to drop a column a trigger still names — so the rewind drops it too.
   const raw = new Database(dbPath)
+  raw.exec("DROP TRIGGER IF EXISTS session_former_titles")
   raw.exec("ALTER TABLE session DROP COLUMN title_agent")
   raw.exec("DELETE FROM settings WHERE key = 'repair:mark-agent-written-titles'")
   raw.close()
