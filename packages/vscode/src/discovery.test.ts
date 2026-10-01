@@ -155,7 +155,9 @@ test("an address record a crash left behind is not trusted, even when something 
   }
 })
 
-test("the address-record verdict is readStableServerOwner's, case by case, over files the server's own writer wrote", async () => {
+// The fixtures forge Linux process-start markers (`linux:<boot id>:<ticks>`); elsewhere a forged marker
+// would carry the wrong platform tag, which both readers rightly decline to compare.
+test("the address-record verdict is readStableServerOwner's, case by case, over files the server's own writer wrote", { skip: process.platform !== "linux" && "Linux process-start markers" }, async () => {
   const { home, roots } = fixtureRoots()
   const ownerPath = join(roots.state, "frizz-server", "project-launch.owner")
   const addressPath = join(roots.state, "frizz-server", "address.json")

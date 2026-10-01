@@ -14,7 +14,7 @@ test("the install command quotes the .vsix path where it goes through a shell, a
   assert.deepEqual(installInvocation("darwin", "code", vsix).shell, false)
 })
 
-test("through a shell, the quoted path reaches the CLI as ONE argument (and the unquoted one as two)", () => {
+test("through a shell, the quoted path reaches the CLI as ONE argument (and the unquoted one as two)", { skip: process.platform === "win32" && "the stand-in CLI is a shebang script" }, () => {
   // Node joins a shell command's arguments unescaped (DEP0190) on every platform; this box's shell is
   // sh, not cmd.exe, but both read a double-quoted run of spaces as one word, which is the whole fix.
   const dir = mkdtempSync(join(tmpdir(), "frizz-install-"))
