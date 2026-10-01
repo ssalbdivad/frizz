@@ -60,6 +60,15 @@ test("host messages are accepted in the contract's shapes only", () => {
   assert.deepEqual(parseHostMessage({ type: "frizz:navigate", to: { project: "nub", thread: "fix" } }), { type: "frizz:navigate", to: { thread: "fix", project: "nub" } })
   // Only the fields the contract names travel on: a stray one is not passed into the prompt box's code.
   assert.deepEqual(parseHostMessage({ ...compose, item: { ...compose.item, extra: "x" }, more: 1 }), compose)
+  // A note is one line of prose: newlines and runs of space fold to one space.
+  assert.deepEqual(parseHostMessage({ ...compose, note: "Fix: Cannot find\n  name 'a'." }), { ...compose, note: "Fix: Cannot find name 'a'." })
+  assert.deepEqual(parseHostMessage({ ...compose, note: "" }), compose)
+  const file = { path: "/repo/a.ts", label: "src/a.ts", projectId: "p1" }
+  const context = { type: "frizz:editor-context", active: { ...file, selection: { startLine: 3, endLine: 9, chars: 120 } }, open: [{ path: "/repo/b.ts", label: "b.ts" }] }
+  assert.deepEqual(parseHostMessage(context), context)
+  assert.deepEqual(parseHostMessage({ ...context, active: { ...file, extra: 1 } }), { ...context, active: file })
+  assert.deepEqual(parseHostMessage({ type: "frizz:editor-context", active: null, open: [] }), { type: "frizz:editor-context", active: null, open: [] })
+  for (const command of ["new-thread", "queue", "jump", "settings"]) assert.deepEqual(parseHostMessage({ type: "frizz:command", command }), { type: "frizz:command", command })
 
   const refused: unknown[] = [
     null,
@@ -78,6 +87,18 @@ test("host messages are accepted in the contract's shapes only", () => {
     { ...compose, item: { ...compose.item, text: "x".repeat(64 * 1024 + 1) } },
     { ...compose, item: { ...compose.item, startLine: 0 } },
     { ...compose, item: { ...compose.item, endLine: 2.5 } },
+    { ...compose, note: 5 },
+    { ...compose, note: "x".repeat(2001) },
+    { ...context, open: undefined },
+    { ...context, open: Array.from({ length: 51 }, () => file) },
+    { ...context, open: [{ path: "/repo/b.ts" }] },
+    { ...context, active: undefined },
+    { ...context, active: { ...file, label: "" } },
+    { ...context, active: { ...file, selection: { startLine: 9, endLine: 3, chars: 1 } } },
+    { ...context, active: { ...file, selection: { startLine: 3, endLine: 9, chars: 0 } } },
+    { ...context, active: { ...file, selection: { startLine: 3, chars: 4 } } },
+    { type: "frizz:command", command: "close" },
+    { type: "frizz:command" },
   ]
   for (const message of refused) assert.equal(parseHostMessage(message), null, JSON.stringify(message)?.slice(0, 120))
 })

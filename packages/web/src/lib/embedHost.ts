@@ -2,6 +2,8 @@ import type { EmbedHostMessage } from "@frizz/shared"
 import { store } from "../store.ts"
 import { crossProjectHref } from "./base-path.ts"
 import { boardOrTimeout, composeInto, threadIsThere } from "./editorBridge.ts"
+import { setEditorContext } from "./editorContext.ts"
+import { runHostCommand } from "./embedCommand.ts"
 import { EMBED_READY, embedded, hostKeyChord, parseHostMessage, postToHost } from "./embed.ts"
 import { basename } from "./paths.ts"
 import { homeHref, projectViewHref } from "./pageView.ts"
@@ -11,7 +13,8 @@ import { setHostTheme } from "./theme.ts"
 // THE PAGE'S SIDE OF THE SIDEBAR'S WIRE, live (lib/embed.ts holds the state and the pure checks;
 // packages/shared/src/embed-protocol.ts the contract). Installed once, at boot, and only in embed mode:
 //
-//  - host → page: `frizz:theme`, `frizz:compose`, `frizz:navigate`, accepted only from `window.parent`
+//  - host → page: `frizz:theme`, `frizz:compose`, `frizz:navigate`, `frizz:editor-context` (lib/
+//    editorContext.ts) and `frizz:command` (lib/embedCommand.ts), accepted only from `window.parent`
 //    — the relay the extension's webview runs — and only in a shape the contract defines.
 //  - page → host: `frizz:ready` once the page can act on those, and `frizz:key` for the chords the
 //    page left alone. (`frizz:open-file` and `frizz:open-external` leave from the link handlers that
@@ -43,6 +46,14 @@ export function initEmbedHost(): void {
 async function handle(message: EmbedHostMessage): Promise<void> {
   if (message.type === "frizz:theme") {
     setHostTheme(message.theme)
+    return
+  }
+  if (message.type === "frizz:editor-context") {
+    setEditorContext(message)
+    return
+  }
+  if (message.type === "frizz:command") {
+    runHostCommand(message.command)
     return
   }
   if (message.type === "frizz:navigate") {

@@ -3,8 +3,12 @@ import {
   EDITOR_MAX_PATH,
   EMBED_PARAM,
   EMBED_PROTOCOL_VERSION,
+  EMBED_MAX_NOTE,
+  EMBED_MAX_OPEN_FILES,
   EMBED_THEME_PARAM,
   EMBED_VSCODE,
+  type EmbedCommandMessage,
+  type EmbedEditorFile,
   type EmbedHostMessage,
   type EmbedKeyMessage,
   type EmbedPageMessage,
@@ -149,6 +153,8 @@ export function parseHostMessage(data: unknown): EmbedHostMessage | null {
     if (item.text !== undefined && (typeof item.text !== "string" || item.text.length > EDITOR_COMPOSE_MAX_TEXT)) return null
     if (item.projectId !== undefined && !nonEmpty(item.projectId, 200)) return null
     if (!optionalLine(item.startLine) || !optionalLine(item.endLine)) return null
+    const { note } = data
+    if (note !== undefined && (typeof note !== "string" || note.length > EMBED_MAX_NOTE)) return null
     let to: Extract<EmbedHostMessage, { type: "frizz:compose" }>["target"]
     if (target === "front" || target === "new") to = target
     else if (isRecord(target) && nonEmpty(target.thread, 200) && nonEmpty(target.project, 200)) to = { thread: target.thread, project: target.project }
@@ -166,9 +172,47 @@ export function parseHostMessage(data: unknown): EmbedHostMessage | null {
       },
       target: to,
       focus,
+      ...(note ? { note: note.replace(/\s+/g, " ") } : {}),
     }
   }
+  if (data.type === "frizz:editor-context") {
+    const { active, open } = data
+    if (!Array.isArray(open) || open.length > EMBED_MAX_OPEN_FILES) return null
+    const files: EmbedEditorFile[] = []
+    for (const entry of open) {
+      const file = editorFile(entry)
+      if (!file) return null
+      files.push(file)
+    }
+    if (active === null) return { type: "frizz:editor-context", active: null, open: files }
+    const file = editorFile(active)
+    if (!file || !isRecord(active)) return null
+    const { selection } = active
+    if (selection === undefined) return { type: "frizz:editor-context", active: file, open: files }
+    if (!isRecord(selection)) return null
+    const { startLine, endLine, chars } = selection
+    if (startLine === undefined || endLine === undefined || !optionalLine(startLine) || !optionalLine(endLine) || (endLine as number) < (startLine as number)) return null
+    if (!Number.isSafeInteger(chars) || (chars as number) < 1) return null
+    return {
+      type: "frizz:editor-context",
+      active: { ...file, selection: { startLine: startLine as number, endLine: endLine as number, chars: chars as number } },
+      open: files,
+    }
+  }
+  if (data.type === "frizz:command") {
+    const { command } = data
+    return HOST_COMMANDS.has(command as EmbedCommandMessage["command"]) ? { type: "frizz:command", command: command as EmbedCommandMessage["command"] } : null
+  }
   return null
+}
+
+const HOST_COMMANDS = new Set<EmbedCommandMessage["command"]>(["new-thread", "queue", "jump", "settings"])
+
+/** One open file of a `frizz:editor-context`, with only the contract's fields, or null. */
+function editorFile(value: unknown): EmbedEditorFile | null {
+  if (!isRecord(value) || !nonEmpty(value.path, EDITOR_MAX_PATH) || !nonEmpty(value.label, EDITOR_MAX_PATH)) return null
+  if (value.projectId !== undefined && !nonEmpty(value.projectId, 200)) return null
+  return { path: value.path, label: value.label, ...(value.projectId !== undefined ? { projectId: value.projectId as string } : {}) }
 }
 
 // ── page → host: the key chords ─────────────────────────────────────────────────────────────────────
