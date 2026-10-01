@@ -40,6 +40,7 @@ import { createAcpBackend } from "./backend/acp-transcript.ts"
 import { createAcpBridge, type AcpBridge } from "./backend/acp-bridge.ts"
 import { readClaudePreflightAuth, readCodexAuthState, readCodexBinaryState } from "./backend/auth-status.ts"
 import { createTerminalRunner, type TerminalRunner } from "./thread-terminals.ts"
+import type { EditorBridge } from "./editor-bridge.ts"
 import type { AgentBackend } from "./backend/types.ts"
 import { needsFreshProcessForLimit } from "./backend/usage-limit.ts"
 import { onClaudeModelsResolved, peekClaudeModels, readClaudeModels } from "./backend/claude-models.ts"
@@ -247,6 +248,12 @@ export interface AppContext {
    * context, where there is no launcher to protect.
    */
   launchProjectId?: string
+  /**
+   * The editor windows connected over `/_frizz/editor` (editor-bridge.ts) — ONE bridge for the machine,
+   * so a file link clicked in any project's page can land in whichever window has its folder open.
+   * Supplied by the server, which owns it; absent under a test context, where every opener spawns.
+   */
+  editors?: EditorBridge
   // GitHub detection (installed/inRepo/nameWithOwner) resolved ONCE at boot via initGithub() — stable
   // for the process lifetime. `authed` is NOT cached here; the githubStatus query re-checks it live so
   // a mid-session `gh auth login` reflects immediately. Undefined until initGithub() resolves (the
@@ -296,6 +303,8 @@ export interface ContextOptions {
   launchProjectId?: string
   /** See AppContext.reopenHomeWorkspace — supplied by the server, which owns the tenant map. */
   reopenHomeWorkspace?: AppContext["reopenHomeWorkspace"]
+  /** See AppContext.editors — supplied by the server, which owns the one bridge. */
+  editors?: EditorBridge
   /** Internal deterministic construction/rollback seam. */
   startup?: {
     afterPhase?: (phase: ContextStartupPhase) => void
@@ -1244,6 +1253,7 @@ function createContextUnchecked(opts: ContextOptions, resources: PartialContextR
     teardownProject: opts.teardownProject,
     reopenHomeWorkspace: opts.reopenHomeWorkspace,
     launchProjectId: opts.launchProjectId,
+    editors: opts.editors,
     claudeBin: opts.claudeBin,
     codexBin: opts.codexBin,
     terminalRunner,

@@ -191,7 +191,7 @@ import {
 } from "./transcript.ts"
 import { liftCheckout, resolveThreadWorkingDir, terminalFolder } from "./thread-cwd.ts"
 import { openExternalUrl } from "./open-external.ts"
-import { openLocalFile, openLocalFolder, readLocalMarkdown, resolveOpenableFile, readLocalTextFile } from "./local-file.ts"
+import { editorKindsForOpener, folderEditor, openLocalFile, openLocalFolder, readLocalMarkdown, resolveLocalFileAt, resolveOpenableFile, readLocalTextFile } from "./local-file.ts"
 import { openableFileRoots, workDirOf } from "./project.ts"
 import { resolveThreadLink, threadLinkView } from "./thread-links.ts"
 import { ghInstalled, ghAuthed, ghRepo, gitGithubRemote, listItems, hydrateIssue, hydratePr, renderGithubPrompt, effectiveTemplate, DEFAULT_GITHUB_PROMPT } from "./github.ts"
@@ -225,6 +225,7 @@ import { expandHomeFolder, homeFolderProblem } from "./home-folder.ts"
 import { basename, dirname, isAbsolute, relative } from "node:path"
 import { existsSync, mkdirSync, rmSync, writeFileSync } from "node:fs"
 import { questionRepliedPast, ProjectCard, ProjectQueue, PROJECT_ICON_EXTENSIONS, PROJECT_ICON_MAX_BASE64_CHARS, queuedThread, ThreadHandoff, BURIED_ANSWERS_HEADER, workingThread } from "@frizz/shared"
+import { EditorComposeInputSchema, type EditorKind, type FilePosition } from "@frizz/shared"
 import { imageDimensions } from "./image-header.ts"
 import { homedir } from "node:os"
 import { chosenProjectRoot, ensureProjectIdFile, existingProjectId, isHomeDirectory, writeProjectIdFile } from "./project-root.ts"
@@ -764,6 +765,24 @@ export async function deleteExpiredDoneThreads(
  * smaller authority than running `frizz` in that directory. The one deliberate divergence is the
  * root: an explicit choice resolves through chosenProjectRoot, not the launcher's cwd walk-up.
  */
+// A place in a file as `openLocalFile` takes it (shared file-position.ts): 1-based, whole numbers.
+const FileLine = z.number().int().positive()
+
+/** The position an `openLocalFile` call names, or none. A column or end with no line means nothing. */
+function requestedPosition(input: { line?: number; column?: number; endLine?: number }): FilePosition | undefined {
+  if (input.line === undefined) return undefined
+  return {
+    line: input.line,
+    ...(input.column !== undefined ? { column: input.column } : {}),
+    ...(input.endLine !== undefined && input.endLine > input.line ? { endLine: input.endLine } : {}),
+  }
+}
+
+// The editor bridge's page-facing shapes (shared editor-protocol.ts). Output only — the server builds
+// these values itself — and rpc-contract.ts pins each to the type contract.ts declares.
+const EditorWindowSummaryOutput = z.object({ app: z.string(), kind: z.enum(["vscode", "cursor", "windsurf", "other"]), acceptsOpens: z.boolean() })
+const EditorComposeItemOutput = EditorComposeInputSchema.extend({ id: z.string(), app: z.string(), at: z.string() })
+
 /**
  * A registry entry as the project list and the rail see it.
  *
@@ -1211,6 +1230,19 @@ export function createRouter(ctx: AppContext) {
   // Roots for the file-OPEN action + the inline-code path classifier (see openableFileRoots): shared so
   // a path the resolver blesses is exactly a path the open action will accept.
   const openRoots = openableFileRoots(ctx.project)
+
+  // "Open in editor" on a folder: raise the editor window that already has it open (editor-bridge.ts),
+  // else spawn the editor on it. The bridge is asked only for the family the spawn would launch —
+  // folderEditor's choice, which is `$EDITOR` when the External app is not an editor at all.
+  async function openFolderInEditor(dir: string): Promise<{ path: string }> {
+    const opener = ctx.getSettings().localFileOpener ?? "system"
+    if (ctx.editors) {
+      let kinds: EditorKind[] = []
+      try { kinds = editorKindsForOpener(folderEditor(opener, process.env), process.env) } catch {}
+      if (kinds.length > 0 && await ctx.editors.focusFolder(dir, kinds)) return { path: dir }
+    }
+    return openLocalFolder(dir, opener)
+  }
 
   // A CODEX background exec, for the drawer that opens on its row. Scoped to this thread's own app-server
   // binding (backgroundExecs(slug, sessionId)), so another thread's process id finds nothing here either.
@@ -4239,15 +4271,32 @@ export function createRouter(ctx: AppContext) {
     // A local file can be opened only after its canonical real path is contained by the openable roots
     // (home-and-below + temp + project). The HTTP layer already rejects non-local/mismatched origins;
     // this gate means the endpoint never becomes arbitrary remote-origin or whole-filesystem access.
+    //
+    // When the External app is an editor and a window of it is connected over the editor bridge, the
+    // window whose folder holds the file opens it at the position, in-process — no CLI round trip, no
+    // guessed window. Otherwise, or when no window answers in time, the opener is spawned with the
+    // position (`code -g path:12:3`). A window that answers that it could NOT open the file is the
+    // error the page shows; spawning a second opener would fail the same way somewhere less visible.
     openLocalFile: mutation({
-      input: z.object({ path: z.string(), image: z.boolean().optional() }).strict(),
+      input: z.object({
+        path: z.string(),
+        image: z.boolean().optional(),
+        line: FileLine.optional(),
+        column: FileLine.optional(),
+        endLine: FileLine.optional(),
+      }).strict(),
       output: z.object({ action: z.enum(["opened", "copy"]), path: z.string() }),
-      handler: async ({ input }) => openLocalFile(
-        input.path,
-        ctx.getSettings().localFileOpener ?? "system",
-        openRoots,
-        { forceSystem: input.image === true },
-      ),
+      handler: async ({ input }) => {
+        const opener = ctx.getSettings().localFileOpener ?? "system"
+        const asked = requestedPosition(input)
+        // An image goes to the system viewer whatever the setting says, so never to an editor window.
+        const kinds = input.image === true ? [] : editorKindsForOpener(opener, process.env)
+        if (ctx.editors && kinds.length > 0) {
+          const { path, position } = resolveLocalFileAt(input.path, openRoots)
+          if (await ctx.editors.openFile(path, asked ?? position, kinds)) return { action: "opened" as const, path }
+        }
+        return openLocalFile(input.path, opener, openRoots, { forceSystem: input.image === true, position: asked })
+      },
     }),
 
     // "Open in editor": the thread's working folder, in the External app when that is an editor and
@@ -4258,7 +4307,7 @@ export function createRouter(ctx: AppContext) {
       output: z.object({ path: z.string() }),
       handler: async ({ input }) => {
         if (!ctx.storage.getSession(input.slug)) throw new Error(`no session registered for ${input.slug}`)
-        return openLocalFolder(threadWorkingDir(input.slug).dir, ctx.getSettings().localFileOpener ?? "system")
+        return openFolderInEditor(threadWorkingDir(input.slug).dir)
       },
     }),
 
@@ -4267,7 +4316,7 @@ export function createRouter(ctx: AppContext) {
     openProjectFolder: mutation({
       input: z.object({}),
       output: z.object({ path: z.string() }),
-      handler: async () => openLocalFolder(workDir, ctx.getSettings().localFileOpener ?? "system"),
+      handler: async () => openFolderInEditor(workDir),
     }),
 
     // A local Markdown file's source, for the built-in reader. Same openable-root gate as openLocalFile
@@ -4305,6 +4354,22 @@ export function createRouter(ctx: AppContext) {
         })
         return { resolved }
       },
+    }),
+
+    // The editor windows connected over the editor bridge — machine-wide, the same answer from every
+    // project; the `editors` event pushes each change. Empty when the server has no bridge.
+    editorWindows: query({
+      output: z.object({ windows: z.array(EditorWindowSummaryOutput) }),
+      handler: async () => ({ windows: ctx.editors?.windows() ?? [] }),
+    }),
+
+    // Claim what an editor sent to the prompt box (`compose-pending` announced it on every open
+    // project's bus). First caller wins, so of every tab that heard the event, the one the human is in
+    // inserts it and the rest get null. No id: the oldest still held.
+    composeTake: mutation({
+      input: z.object({ id: z.string().min(1).max(200).optional() }).strict(),
+      output: z.object({ item: EditorComposeItemOutput.nullable() }),
+      handler: async ({ input }) => ({ item: ctx.editors?.takeCompose(input.id) ?? null }),
     }),
 
     markComplete: mutation({

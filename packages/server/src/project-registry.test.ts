@@ -115,8 +115,8 @@ test("on collision the incumbent keeps its slug and the newcomer is qualified", 
 
 test("a slug that would shadow Frizz's own routes is refused", () => {
   const taken = new Set<string>()
-  // These are reachable: a repo really can be called `rpc` or `assets`.
-  for (const reserved of ["rpc", "assets", "events", "health"]) {
+  // These are reachable: a repo really can be called `rpc`, `assets` or `editor`.
+  for (const reserved of ["rpc", "assets", "events", "health", "editor"]) {
     assert.notEqual(deriveSlug(`/x/${reserved}`, taken), reserved, reserved)
   }
   // `_frizz` itself is unreachable BY CONSTRUCTION — slugify strips the underscore, so a directory

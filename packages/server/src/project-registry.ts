@@ -111,6 +111,8 @@ const RESERVED = new Set([
   // The Home workspace's address (home-workspace.ts). A project already registered under it keeps it,
   // and Home answers on its id instead.
   "home",
+  // `/_frizz/editor`, the machine-wide socket editor extensions dial (editor-bridge.ts).
+  "editor",
 ])
 
 export function registryPath(home = homedir()): string {

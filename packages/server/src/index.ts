@@ -18,6 +18,7 @@ import { createApp, type AppOptions } from "./app.ts"
 import { compress, negotiateEncoding, shouldCompress, type ContentEncoding } from "./compression.ts"
 import { createTerminalServer } from "./terminal.ts"
 import { createAppSocketServer, makeTranscriptReader } from "./app-socket.ts"
+import { createEditorBridge, listEditorProjects } from "./editor-bridge.ts"
 import { captureLaunchEnvironment } from "./backend/worker-env.ts"
 import {
   createRetryableCleanup,
@@ -621,6 +622,18 @@ export async function startServer(opts: StartOptions = {}): Promise<StartedServe
   // the launching project's own context (built before the map is populated) sees the same live list.
   const activeTenants: NonNullable<AppContext["activeTenants"]> = () =>
     tenants.active().map(({ project: open, ctx: openCtx }) => ({ project: open, board: openCtx.board, ctx: openCtx }))
+  // The editor windows connected over `/_frizz/editor` (editor-bridge.ts): ONE for the machine, like
+  // this server, handed to every project's context so any project's file link can reach any window.
+  // Its upgrade is answered before tenant routing below; it has no boot phase because it holds nothing
+  // until a window connects, which cannot happen before the server is accepting.
+  const editors = createEditorBridge({
+    bootId: () => ctx?.bootId ?? "",
+    listProjects: () => listEditorProjects(listWorkspaces(), activeTenants()),
+    // On every open project's bus, because a page hears only its own project's.
+    publish: (event) => {
+      for (const open of tenants.active()) open.ctx.bus.publish(event)
+    },
+  })
   /**
    * Take one project apart while the rest keep serving — the resource half of deleting a project.
    *
@@ -662,7 +675,7 @@ export async function startServer(opts: StartOptions = {}): Promise<StartedServe
     },
     // serverLockPath is the LAUNCHING project's: it is the only `server.lock` this process publishes
     // (see "status publication"), so it is the only file a tenant's worker can read the port out of.
-    contextOptions: { get claudeBin() { return runtimes?.claude.bin ?? opts.claudeBin }, get codexBin() { return runtimes?.codex.bin ?? opts.codexBin }, serverLockPath: serverLockPathFor(project), activeTenants, teardownProject, reopenHomeWorkspace, launchProjectId: project.id, get database() { return frizzDb?.db } },
+    contextOptions: { get claudeBin() { return runtimes?.claude.bin ?? opts.claudeBin }, get codexBin() { return runtimes?.codex.bin ?? opts.codexBin }, serverLockPath: serverLockPathFor(project), activeTenants, teardownProject, reopenHomeWorkspace, launchProjectId: project.id, editors, get database() { return frizzDb?.db } },
     // Each project's app carries ITS OWN owner proof, so /health stays honest per project rather than
     // answering for whichever one happened to launch the server. The socket is per project for a
     // blunter reason: it is a live feed of ONE board, so sharing the launcher's would push its
@@ -790,6 +803,7 @@ export async function startServer(opts: StartOptions = {}): Promise<StartedServe
   })
   const cleanupTerminal = createRetryableCleanup(async () => { await terminal?.close() })
   const cleanupAppSocket = createRetryableCleanup(async () => { await appSocket?.close() })
+  const cleanupEditorBridge = createRetryableCleanup(() => editors.close())
   // The per-project half, from context.ts, so one project can be torn down without the server —
   // `() => ctx` rather than `ctx` because these are built before the context exists.
   const tenant = projectContextCleanups(() => ctx)
@@ -839,6 +853,8 @@ export async function startServer(opts: StartOptions = {}): Promise<StartedServe
         name: "application socket",
         run: cleanupAppSocket,
       },
+      // Before "other projects": a window dropping publishes `editors` on every open project's bus.
+      { name: "editor bridge", run: cleanupEditorBridge },
       { name: "other projects", run: cleanupExtraTenants },
       { name: "tailer producer", run: cleanupTailer },
       // Hang up every thread terminal, so a dev server started from Frizz stops with it.
@@ -983,6 +999,7 @@ export async function startServer(opts: StartOptions = {}): Promise<StartedServe
         teardownProject,
         reopenHomeWorkspace,
         launchProjectId: project.id,
+        editors,
         startup: {
           afterPhase: (p) => {
             bootProgress(`context: ${p}`)
@@ -1181,6 +1198,9 @@ export async function startServer(opts: StartOptions = {}): Promise<StartedServe
         socket.destroy()
         return
       }
+      // The editor socket is machine-wide and answered here, BEFORE routing: a project prefix would only
+      // open a project for nothing. `editor` is a reserved slug, so no project can shadow the path.
+      if (editors.handleUpgrade(req, socket, head)) return
       // A `/_frizz/<slug>/ws` upgrade has to reach THAT project's socket, so this resolves the tenant
       // exactly as the request path does — asynchronously, because the project may not be open yet.
       // The socket simply waits; there is nothing to answer with until we know whose feed it wants.
