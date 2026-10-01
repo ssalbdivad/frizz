@@ -78,6 +78,10 @@ export function projectMarkdownScope(project: Pick<QueuesProject, "id" | "slug" 
   }
 }
 
+const NO_CARD = {} as ProjectCard
+const NO_QUEUE = {} as ProjectQueue
+const buildMemo = new WeakMap<ProjectCard, WeakMap<ProjectQueue, { direction: QueueDirection; project: QueuesProject }>>()
+
 export function queuesProjects(
   cards: readonly ProjectCard[] | undefined,
   queues: readonly ProjectQueue[] | undefined,
@@ -86,6 +90,20 @@ export function queuesProjects(
   const byId = new Map((queues ?? []).map((queue) => [queue.projectId, queue]))
   const out: QueuesProject[] = []
   const build = (card: ProjectCard | undefined, queue: ProjectQueue | undefined): QueuesProject => {
+    // SAME INPUTS, SAME OBJECT. The poll's cache shares every project the server answered unchanged
+    // (react-query's structural sharing), and handing that on as the same QueuesProject is what lets the
+    // list skip re-rendering it (ProjectList.tsx ProjectGroup's memo). Rebuilt fresh, every 3s poll
+    // re-rendered every project's group whenever ANY one of them had changed — ~85ms of main thread per
+    // poll on an 8-project dev page (measured 2026-10-01 with react-scan).
+    const memo = buildMemo.get(card ?? NO_CARD)?.get(queue ?? NO_QUEUE)
+    if (memo && memo.direction === direction) return memo.project
+    const project = buildProject(card, queue)
+    let byQueue = buildMemo.get(card ?? NO_CARD)
+    if (!byQueue) buildMemo.set(card ?? NO_CARD, (byQueue = new WeakMap()))
+    byQueue.set(queue ?? NO_QUEUE, { direction, project })
+    return project
+  }
+  const buildProject = (card: ProjectCard | undefined, queue: ProjectQueue | undefined): QueuesProject => {
     const threads = queue?.threads ?? []
     return {
       id: card?.id ?? queue!.projectId,

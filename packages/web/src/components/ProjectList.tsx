@@ -37,7 +37,7 @@
 // A drag stays inside its run — the busy projects, or the quiet ones under them — because busy-ness, not
 // the order, decides which run a project is in: a busy project dropped among the quiet ones would
 // only jump back. Alt+Arrow on a focused row moves it one place, for anyone not using a mouse.
-import { useCallback, useEffect, useMemo, useRef, useState, type KeyboardEvent as KeyboardEvent_, type PointerEvent as PointerEvent_, type ReactNode } from "react"
+import { memo, useCallback, useEffect, useMemo, useRef, useState, type KeyboardEvent as KeyboardEvent_, type PointerEvent as PointerEvent_, type ReactNode } from "react"
 import { useMutation, useQueryClient } from "@tanstack/react-query"
 import { ChevronRight, Ellipsis, Plus } from "lucide-react"
 import { useLocation, useNavigate } from "react-router"
@@ -275,102 +275,118 @@ function useListReorder(projects: readonly QueuesProject[]) {
     return bound
   }
 
+  // THE HANDLERS ARE ONE FUNCTION PER PROJECT FOR THE PAGE'S LIFE, reading this render's runs and
+  // `commit` through `current` when they fire. A grip whose handlers were fresh closures every render made
+  // every ProjectGroup's props differ on every poll, so the group's memo could never hold (see ProjectGroup).
+  const current = useRef<{ runOf: (id: string) => string[] | undefined; commit: typeof commit }>({ runOf: () => undefined, commit })
+  const handlers = useRef(new Map<string, Pick<Grip, "onPointerDown" | "onKeyDown">>())
+  const handlersOf = (id: string) => {
+    let bound = handlers.current.get(id)
+    if (!bound) {
+      bound = { onPointerDown: (event) => onPointerDown(id, event), onKeyDown: (event) => onKeyDown(id, event) }
+      handlers.current.set(id, bound)
+    }
+    return bound
+  }
+
+  const onPointerDown = (id: string, event: PointerEvent_<HTMLButtonElement>) => {
+    const { runOf, commit } = current.current
+    // Left button only, never modified: those clicks are someone else's.
+    if (event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return
+    const run = runOf(id)
+    if (!run || run.length < 2) return
+    const fromIndex = run.indexOf(id)
+    const button = event.currentTarget
+    // The list's own scroll box when it has one; stacked under the queue, the page scrolls instead.
+    const scroller = button.closest<HTMLElement>("[data-xq-rail]")
+    const scrollTop = () => scroller?.scrollTop ?? window.scrollY
+    const startY = event.clientY
+    const startScroll = scrollTop()
+    let boxes: ListBox[] = []
+    let started = false
+    let latest: ListDrag | null = null
+    let frame = 0
+
+    const apply = (clientY: number) => {
+      // Auto-scroll near the scroll box's edges, folding the scroll into the delta — a list longer than
+      // its column is otherwise reorderable only within one screen of itself.
+      if (scroller) {
+        const velocity = edgeScrollVelocity(clientY, scroller.getBoundingClientRect())
+        if (velocity) scroller.scrollTop += velocity
+      }
+      const deltaY = clientY - startY + scrollTop() - startScroll
+      latest = { run, fromIndex, toIndex: listDropIndex(boxes, fromIndex, deltaY), deltaY, pitch: listPitch(boxes, fromIndex) }
+      setDrag(latest)
+    }
+
+    const onMove = (moveEvent: PointerEvent) => {
+      if (!started) {
+        if (Math.abs(moveEvent.clientY - startY) < DRAG_THRESHOLD_PX) return
+        started = true
+        button.setPointerCapture(moveEvent.pointerId)
+        // Measured ONCE, as laid out before anything moved: the transforms that follow would skew any
+        // later reading, and this snapshot is what every hit-test is against.
+        boxes = run.map((runId) => {
+          const box = elements.current.get(runId)?.getBoundingClientRect()
+          return { top: box?.top ?? 0, height: box?.height ?? 0 }
+        })
+      }
+      moveEvent.preventDefault()
+      const clientY = moveEvent.clientY
+      // One update per frame, and the loop keeps running while the pointer is HELD STILL in the edge
+      // zone, which a move-driven update alone never would.
+      cancelAnimationFrame(frame)
+      const tick = () => {
+        apply(clientY)
+        if (scroller && edgeScrollVelocity(clientY, scroller.getBoundingClientRect())) frame = requestAnimationFrame(tick)
+      }
+      frame = requestAnimationFrame(tick)
+    }
+
+    const onUp = () => {
+      cancelAnimationFrame(frame)
+      window.removeEventListener("pointermove", onMove)
+      window.removeEventListener("pointerup", onUp)
+      window.removeEventListener("pointercancel", onUp)
+      setDrag(null)
+      if (!started || !latest) return
+      lastDragEndedAt = Date.now()
+      commit(run, latest.fromIndex, latest.toIndex)
+    }
+
+    window.addEventListener("pointermove", onMove, { passive: false })
+    window.addEventListener("pointerup", onUp)
+    window.addEventListener("pointercancel", onUp)
+  }
+
+  // Alt+Arrow, not bare arrows: a bare arrow on a focused button is how the page scrolls. The row's
+  // button is the same element after the move (keyed by project), so focus rides along with it.
+  const onKeyDown = (id: string, event: KeyboardEvent_<HTMLButtonElement>) => {
+    const { runOf, commit } = current.current
+    if (!event.altKey || (event.key !== "ArrowUp" && event.key !== "ArrowDown")) return
+    const run = runOf(id)
+    if (!run) return
+    const fromIndex = run.indexOf(id)
+    const toIndex = fromIndex + (event.key === "ArrowUp" ? -1 : 1)
+    // Claimed even at either end, where it moves nothing: unclaimed, the page would hear ⌥↑/⌥↓ as a
+    // step to another project (AllQueues.tsx) on a row that is being reordered.
+    event.preventDefault()
+    if (toIndex < 0 || toIndex >= run.length) return
+    commit(run, fromIndex, toIndex)
+  }
+
   /** The grip for each project, given the runs the list drew — busy, then quiet — in its order. */
   const grips = (groups: readonly (readonly QueuesProject[])[]) => {
     const runs = groups.map((group) => group.filter(orderable).map((project) => project.id))
     const runOf = (id: string) => runs.find((run) => run.includes(id))
-
-    const onPointerDown = (id: string) => (event: PointerEvent_<HTMLButtonElement>) => {
-      // Left button only, never modified: those clicks are someone else's.
-      if (event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return
-      const run = runOf(id)
-      if (!run || run.length < 2) return
-      const fromIndex = run.indexOf(id)
-      const button = event.currentTarget
-      // The list's own scroll box when it has one; stacked under the queue, the page scrolls instead.
-      const scroller = button.closest<HTMLElement>("[data-xq-rail]")
-      const scrollTop = () => scroller?.scrollTop ?? window.scrollY
-      const startY = event.clientY
-      const startScroll = scrollTop()
-      let boxes: ListBox[] = []
-      let started = false
-      let latest: ListDrag | null = null
-      let frame = 0
-
-      const apply = (clientY: number) => {
-        // Auto-scroll near the scroll box's edges, folding the scroll into the delta — a list longer than
-        // its column is otherwise reorderable only within one screen of itself.
-        if (scroller) {
-          const velocity = edgeScrollVelocity(clientY, scroller.getBoundingClientRect())
-          if (velocity) scroller.scrollTop += velocity
-        }
-        const deltaY = clientY - startY + scrollTop() - startScroll
-        latest = { run, fromIndex, toIndex: listDropIndex(boxes, fromIndex, deltaY), deltaY, pitch: listPitch(boxes, fromIndex) }
-        setDrag(latest)
-      }
-
-      const onMove = (moveEvent: PointerEvent) => {
-        if (!started) {
-          if (Math.abs(moveEvent.clientY - startY) < DRAG_THRESHOLD_PX) return
-          started = true
-          button.setPointerCapture(moveEvent.pointerId)
-          // Measured ONCE, as laid out before anything moved: the transforms that follow would skew any
-          // later reading, and this snapshot is what every hit-test is against.
-          boxes = run.map((runId) => {
-            const box = elements.current.get(runId)?.getBoundingClientRect()
-            return { top: box?.top ?? 0, height: box?.height ?? 0 }
-          })
-        }
-        moveEvent.preventDefault()
-        const clientY = moveEvent.clientY
-        // One update per frame, and the loop keeps running while the pointer is HELD STILL in the edge
-        // zone, which a move-driven update alone never would.
-        cancelAnimationFrame(frame)
-        const tick = () => {
-          apply(clientY)
-          if (scroller && edgeScrollVelocity(clientY, scroller.getBoundingClientRect())) frame = requestAnimationFrame(tick)
-        }
-        frame = requestAnimationFrame(tick)
-      }
-
-      const onUp = () => {
-        cancelAnimationFrame(frame)
-        window.removeEventListener("pointermove", onMove)
-        window.removeEventListener("pointerup", onUp)
-        window.removeEventListener("pointercancel", onUp)
-        setDrag(null)
-        if (!started || !latest) return
-        lastDragEndedAt = Date.now()
-        commit(run, latest.fromIndex, latest.toIndex)
-      }
-
-      window.addEventListener("pointermove", onMove, { passive: false })
-      window.addEventListener("pointerup", onUp)
-      window.addEventListener("pointercancel", onUp)
-    }
-
-    // Alt+Arrow, not bare arrows: a bare arrow on a focused button is how the page scrolls. The row's
-    // button is the same element after the move (keyed by project), so focus rides along with it.
-    const onKeyDown = (id: string) => (event: KeyboardEvent_<HTMLButtonElement>) => {
-      if (!event.altKey || (event.key !== "ArrowUp" && event.key !== "ArrowDown")) return
-      const run = runOf(id)
-      if (!run) return
-      const fromIndex = run.indexOf(id)
-      const toIndex = fromIndex + (event.key === "ArrowUp" ? -1 : 1)
-      // Claimed even at either end, where it moves nothing: unclaimed, the page would hear ⌥↑/⌥↓ as a
-      // step to another project (AllQueues.tsx) on a row that is being reordered.
-      event.preventDefault()
-      if (toIndex < 0 || toIndex >= run.length) return
-      commit(run, fromIndex, toIndex)
-    }
-
+    current.current = { runOf, commit }
     return (id: string): Grip | undefined => {
       if (!runOf(id)) return undefined
       const index = drag ? drag.run.indexOf(id) : -1
       const held = drag !== null && index === drag.fromIndex
       // The held group follows the pointer; the ones it has passed slide one pitch towards its old slot.
       const offset = !drag || index < 0 ? 0 : held ? drag.deltaY : shiftFor(index, drag.fromIndex, drag.toIndex, drag.pitch)
-      return { ref: ref(id), offset, held, dragging: drag !== null, onPointerDown: onPointerDown(id), onKeyDown: onKeyDown(id) }
+      return { ref: ref(id), offset, held, dragging: drag !== null, ...handlersOf(id) }
     }
   }
 
@@ -433,7 +449,52 @@ function useReadAhead(projects: QueuesProject[]) {
  * Its FOCUS project (the page project, whose board is live in the store) reads the rest from that board;
  * every other reads its board through the cache, which the list read ahead.
  */
-function ProjectGroup({
+type ProjectGroupProps = Parameters<typeof ProjectGroupRows>[0]
+
+/**
+ * MEMOIZED, because the page above it re-renders on every poll and every board push, and without this
+ * every project's group — its row, its "…" menu, every one of its rows' props — re-rendered with it:
+ * ~85ms of main thread per poll on an 8-project dev page, when one project had changed (measured
+ * 2026-10-01 with react-scan; it is what made an unpin feel slow after its own fix). An unchanged
+ * project now keeps its object across polls (allQueues.ts queuesProjects), its grip keeps its handlers
+ * (useListReorder), and this compares the rest by what it draws.
+ *
+ * `moved` is not compared: it is a fresh closure every render, consulted only while the list is held, and
+ * everything that changes its answer — a hidden card, a steer, an archive, an act from this tab — also
+ * changes the bands it is handed. What the group reads for itself (the live board, the list hold, the
+ * drawers, the route) it subscribes to directly, so those re-render it without its props changing.
+ */
+const ProjectGroup = memo(ProjectGroupRows, (a: ProjectGroupProps, b: ProjectGroupProps) =>
+  a.project === b.project &&
+  sameLoud(a.loud, b.loud) &&
+  sameGrip(a.grip, b.grip) &&
+  a.collapsed === b.collapsed &&
+  a.open === b.open &&
+  a.spaced === b.spaced &&
+  a.home === b.home &&
+  a.onQueuedRow === b.onQueuedRow &&
+  // The scrollspy's card moves on every scroll; it lights a row only in its own project.
+  (a.activeKey === b.activeKey || (!ownKey(a.project.id, a.activeKey) && !ownKey(b.project.id, b.activeKey))))
+
+function ownKey(projectId: string, key: string | null): boolean {
+  return key !== null && key.startsWith(`${projectId}/`)
+}
+
+function sameRows(a: readonly ThreadView[], b: readonly ThreadView[]): boolean {
+  return a.length === b.length && a.every((t, i) => t === b[i])
+}
+
+function sameLoud(a: LoudBands, b: LoudBands): boolean {
+  return sameRows(a.pinned, b.pinned) && sameRows(a.ready, b.ready) && sameRows(a.working, b.working) &&
+    a.carded.size === b.carded.size && [...a.carded].every((id) => b.carded.has(id))
+}
+
+function sameGrip(a: Grip | undefined, b: Grip | undefined): boolean {
+  if (!a || !b) return a === b
+  return a.ref === b.ref && a.offset === b.offset && a.held === b.held && a.dragging === b.dragging && a.onPointerDown === b.onPointerDown
+}
+
+function ProjectGroupRows({
   project,
   grip,
   loud,
@@ -459,13 +520,17 @@ function ProjectGroup({
   onQueuedRow: (key: string) => number | null
 }) {
   const focus = projectSlug(useLocation().pathname)
-  const live = useBoard()
-  const onPage = project.slug === focus && live?.projectSlug === project.slug
+  const snap = useSnapshot(store)
+  // The live board's SLUG first, unconditionally, and the board itself only for the page's own project.
+  // valtio re-renders on the fields a render READ: a group that read `snap.board` and then short-circuited
+  // before touching any field of it (every group but the focus's, on All projects) re-rendered on every
+  // board push, memo or not (measured 2026-10-01: all 8 groups on each push).
+  const onPage = snap.board?.projectSlug === project.slug && project.slug === focus
+  const live = onPage ? (snap.board as BoardSnapshot) : null
   const opened = collapsed ? [] : QUIET_BANDS.filter((band) => open.has(bandKey(project.id, band)))
   const cached = useProjectBoard(project.id, opened.length > 0 && !onPage && project.open)
   const board = onPage ? live : cached
   const quiet = useMemo(() => quietBands(project, board), [project, board])
-  const snap = useSnapshot(store)
   // Only the page project's drawers can be open on this page, so only its rows can be the one up in one.
   const openSlug = onPage ? drawerThreadSlug(snap.drawers) : null
   const scope = useRowScope(project, onPage, onQueuedRow)

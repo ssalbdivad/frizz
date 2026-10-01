@@ -196,3 +196,15 @@ test("two projects' threads with the same slug stay two cards, each with its own
   ])
   assert.deepEqual(mergedQueue(projects).map(({ project, thread }) => `${project.id}/${thread.id}`), ["b/fix-auth", "a/fix-auth"])
 })
+
+test("a project the poll answered unchanged keeps its object, so the list can skip re-rendering it", () => {
+  const cards = [card("a"), card("b")]
+  const a = queue("a", [thread("x", { needsYou: true })])
+  const first = queuesProjects(cards, [a, queue("b", [])])
+  // The next poll: `a` structurally shared by the query cache, `b` changed.
+  const second = queuesProjects(cards, [a, queue("b", [thread("y")])])
+  assert.equal(second[0], first[0])
+  assert.notEqual(second[1], first[1])
+  // The order the queue is drawn in is part of what was built, so a different one rebuilds.
+  assert.notEqual(queuesProjects(cards, [a, queue("b", [])], "lifo")[0], first[0])
+})
