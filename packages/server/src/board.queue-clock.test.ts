@@ -50,6 +50,9 @@ test("a snoozed thread let back into the queue joins the BACK, and keeps that pl
   const deps = { now: () => nowMs }
   const dbPath = join(dir, "ui.db")
   let storage = createStorage(dbPath, "p")
+  // These rests stand for ordinary queue arrivals, so the sign-off reminder is off: a bare rest it is
+  // about to take is held out of the queue, which has its own test in board.test.ts.
+  storage.setSetting("signoffNudge", "off")
   storage.upsertSession(row("plain"))
   // Rested at 09:00, parked by the human's snooze until 12:30 — the wait that used to hand it the 09:00.
   storage.upsertSession(row("held"))
@@ -76,6 +79,9 @@ test("a snoozed thread let back into the queue joins the BACK, and keeps that pl
     await board.stop()
     storage.close()
     storage = createStorage(dbPath, "p")
+    // These rests stand for ordinary queue arrivals, so the sign-off reminder is off: a bare rest it is
+    // about to take is held out of the queue, which has its own test in board.test.ts.
+    storage.setSetting("signoffNudge", "off")
     board = createBoard(project, storage, new Bus(), tailer, "queue-boot-2", deps)
     primed = false
     // Unprimed rows read as running, but the ones with a place in line keep SHOWING it until the tailer
@@ -128,6 +134,9 @@ test("a parent let go by its sub-agent is withheld while its wake lands, and nei
   } satisfies Tailer
   let nowMs = Date.parse(at("10:00"))
   const storage = createStorage(join(dir, "ui.db"), "p")
+  // These rests stand for ordinary queue arrivals, so the sign-off reminder is off: a bare rest it is
+  // about to take is held out of the queue, which has its own test in board.test.ts.
+  storage.setSetting("signoffNudge", "off")
   for (const slug of ["parent", "failing", "ending", "sent"]) {
     storage.upsertSession(row(slug))
     storage.setClaudeRuntime(slug, "broker")
@@ -198,6 +207,9 @@ test("a thread woken by its own work keeps its place in line; one the human sent
   } satisfies Tailer
   let nowMs = Date.parse(iso("10:00:00"))
   const storage = createStorage(join(dir, "ui.db"), "p")
+  // These rests stand for ordinary queue arrivals, so the sign-off reminder is off: a bare rest it is
+  // about to take is held out of the queue, which has its own test in board.test.ts.
+  storage.setSetting("signoffNudge", "off")
   for (const slug of telemetry.keys()) {
     storage.upsertSession(row(slug))
     storage.setClaudeRuntime(slug, "broker")

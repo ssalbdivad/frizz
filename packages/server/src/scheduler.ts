@@ -13,7 +13,7 @@ import { createWakeDeliveryStore, WAKE_QUIET_WINDOW_MS, type WakeDelivery } from
 import { isReplyWait } from "./thread-mentions.ts"
 // The board owns the registered-done lifetime rule, and the waker must read it by exactly the same rule
 // or the two disagree about whether a thread is finished.
-import { answersInFlight, registeredDoneFence, safeQuestionAnswer, safeQuestionSpec } from "./board.ts"
+import { answersInFlight, registeredDoneFence, safeQuestionAnswer, safeQuestionSpec, SIGNOFF_NUDGE_SETTING, signoffNudgeVerdict } from "./board.ts"
 import { ProducerStoppedError } from "./shutdown.ts"
 import { liveShellBudget, SHELL_BUDGET_GRACE_MS, shellBudgetWarningMessage, type ShellStopReason } from "./shell-budget.ts"
 import { completionsDueForRelay, relayMessage } from "./completion-relay.ts"
@@ -1115,14 +1115,12 @@ function concurrencyGate(limit: number): <T>(fn: () => Promise<T>) => Promise<T>
 
 const SIGNOFF_FENCE_PREFIX = "signoff"
 const SIGNOFF_HINT_KEY = "signoff:rest"
-const SIGNOFF_NUDGE_MAX = 2
 /** SOURCE 12's cap on CORRECTIVE bumps (nameless / retired / dead). Three, not two: there are three
  *  distinct corrections and a worker may legitimately need to be told about more than one. `expired` is
  *  uncounted — re-parking on still-running work is unlimited by explicit decision (2026-08-15). */
 const PARK_BUMP_MAX = 3
-/** The kill switch. Not in the UI — this lands on every live thread at once, so there has to be a way
- *  to stop it that is not a code change. Absent (the default) means ON. */
-const SIGNOFF_NUDGE_SETTING = "signoffNudge"
+// The kill switch (SIGNOFF_NUDGE_SETTING, board.ts) is not in the UI — this lands on every live thread
+// at once, so there has to be a way to stop it that is not a code change. Absent (the default) means ON.
 
 function signoffFenceId(restedAt: string): string {
   return `${SIGNOFF_FENCE_PREFIX}:${restedAt}`
@@ -2099,8 +2097,10 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
     if (deps.storage.getSetting(SIGNOFF_NUDGE_SETTING) === "off") return
     for (const row of deps.storage.allSessions()) {
       if (row.state === "archived" || row.archived === 1) continue
+      // EVERY GUARD BELOW IS signoffNudgeVerdict's (board.ts), shared with the queue rule so the queue can
+      // hold a rest out while this nudge is on its way (signoffNudgeDue). The reasoning stays here, in
+      // the order the predicate checks it.
       const tele = deps.tailer.get(row.slug)
-      if (!tele || tele.turn !== "idle") continue
       // THE AGENT MUST HAVE SPOKEN LAST, and this is the load-bearing guard rather than a nicety.
       //
       // Frizz's own delivery lands in the transcript as a USER record, so it advances `lastActivityAt`
@@ -2112,13 +2112,9 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
       // `lastAssistantAt > lastUserAt` is the honest question — did the AGENT end the exchange? — and it
       // is immune to anything frizz says, because frizz only ever speaks as the user. A thread whose last
       // word is frizz's own nudge is a thread that has not answered it yet.
-      const spokeAt = tele.lastAssistantAt
-      if (!spokeAt) continue
-      if (tele.lastUserAt && Date.parse(tele.lastUserAt) >= Date.parse(spokeAt)) continue
       // Same trap as the stop hook's: a signed-out provider answers instantly, so the failure LOOKS like
       // a fenceless rest and satisfies every guard above. Teaching it to sign off cannot help — it never
       // reached the model.
-      if (tele.authFault) continue
       // AND THE GENERAL CASE OF IT, which the auth guard above is one instance of. A FAILED TURN IS NOT A
       // REST: a synthetic API-error record is written as an assistant record, so it advances the rest
       // instant and satisfies every guard above, and a thread whose every turn fails therefore presents
@@ -2128,7 +2124,6 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
       // made permanent by anything that appends to the conversation, which is exactly what the nudge
       // does. Observed unbounded in the field before the cap was fixed to bind at all; both fixes are
       // needed, because the cap alone still spends two deliveries on a thread that can never use them.
-      if (tele.apiFault) continue
       // ANY fence means the thread already said where it stands — including `awaiting`, which is still
       // a legitimate sign-off until the registry replaces it. Nothing to teach, AND the allowance comes
       // back: signing off is the only event that proves the nudge worked, and the only one frizz cannot
@@ -2153,33 +2148,17 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
       // into what this pass reads as a bare one — so the nudge took the rest ("you rested without a
       // fence", to a worker whose question frizz itself had just cancelled) and the Goal stood down for
       // it. The armed-rest flag scopes it to exactly the threads whose dismissals wake on their own.
-      const questionRows = deps.storage.listThreadQuestions(row.slug)
-      if (
-        tele.lastFence ||
-        tele.pendingQuestion ||
-        registeredDoneFence(deps.storage.getThreadDone(row.slug), tele.lastUserAt, tele.lastToolCallAt, tele) !== undefined ||
         // …any open one the human has not typed past. One they have is set aside — answerable where it was
         // asked, but no sign-off for a rest after their message unless the worker `keep`s it (shared
         // questionRepliedPast, 2026-09-30).
-        questionRows.some((q) => q.state === "open" && !questionRepliedPast(q, tele.lastHumanAt)) ||
-        answersInFlight(questionRows, tele.lastUserAt, row.recurring_on_rest === 1 && Boolean(row.recurring_prompt?.trim())) !== undefined ||
-        deps.storage.listThreadWatches(row.slug, { armedOnly: true }).length > 0 ||
         // A wait on ANOTHER THREAD's answer (`message_thread` with `await_reply`) is a registration like a
         // watch: the tool tells the worker to rest on it with nothing else, so it must count here too…
-        deps.storage.listThreadTimers(row.slug, { armedOnly: true }).some((t) => isReplyWait(t.prompt)) ||
         // …and so does a thread's message ON ITS WAY, the twin of the answer-in-flight case above: the
         // answer CANCELS the wait the instant it is sent, so until it is delivered the rest reads bare.
         // Seen on a real run (2026-09-29): the nudge was merged into the very delivery carrying the answer.
-        outbox.pendingFor(row.slug, row.session_id).some((d) => isThreadMessageFenceId(d.fenceId))
-      ) {
-        if ((row.signoff_nudges ?? 0) > 0) deps.storage.resetSignoffNudges(row.slug)
-        continue
-      }
       // A native ask is a question by another route: the thread is frozen on a modal the human has to
       // answer, and telling it to write a ```question fence is telling it to do what it already did.
-      if (tele.pendingAsk || tele.permPrompt) continue
       // The sentinel still ends the arrangement for sessions that predate the fence (see `saidDone`).
-      if (tele.lastAssistantAllDone) continue
       // IT DOES NOT YIELD TO THE GOAL, and that is a deliberate reversal (maintainer 2026-08-12: "we
       // should keep it separate from goal… It should just be enabled all the time"). The reminder used
       // to ride the Goal's at-rest trailer so a rest produced one delivery instead of two — but that
@@ -2196,7 +2175,19 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
       // THE CONSECUTIVE CAP. It counts fenceless rests and is cleared ONLY by a fence (above) — never by
       // a user record, because frizz's own delivery is one, and anchoring on that let the nudge reset its
       // own counter with its own message.
-      if ((row.signoff_nudges ?? 0) >= SIGNOFF_NUDGE_MAX) continue
+      const verdict = signoffNudgeVerdict(row, tele, {
+        questionRows: () => deps.storage.listThreadQuestions(row.slug),
+        done: () => deps.storage.getThreadDone(row.slug),
+        armedWatchCount: () => deps.storage.listThreadWatches(row.slug, { armedOnly: true }).length,
+        replyWaitArmed: () => deps.storage.listThreadTimers(row.slug, { armedOnly: true }).some((t) => isReplyWait(t.prompt)),
+        threadMessageInFlight: () => outbox.pendingFor(row.slug, row.session_id).some((d) => isThreadMessageFenceId(d.fenceId)),
+      })
+      if (verdict === "signed-off") {
+        if ((row.signoff_nudges ?? 0) > 0) deps.storage.resetSignoffNudges(row.slug)
+        continue
+      }
+      if (verdict !== "nudge" || !tele?.lastAssistantAt) continue
+      const spokeAt = tele.lastAssistantAt
       const fenceId = signoffFenceId(spokeAt)
       const deliveryId = wakeDeliveryId(row.slug, row.session_id, fenceId)
       // Bound to the AGENT'S OWN last word, so one nudge per rest falls out of delivery-id uniqueness.

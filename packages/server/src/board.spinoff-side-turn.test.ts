@@ -42,6 +42,9 @@ test("a queued thread keeps its place and stays quiet through a spinoff request'
   } satisfies Tailer
   let nowMs = Date.parse(iso("10:00:00"))
   const storage = createStorage(join(dir, "ui.db"), "p")
+  // These rests stand for ordinary queue arrivals, so the sign-off reminder is off: a bare rest it is
+  // about to take is held out of the queue, which has its own test in board.test.ts.
+  storage.setSetting("signoffNudge", "off")
   for (const slug of telemetry.keys()) {
     storage.upsertSession(row(slug))
     storage.setClaudeRuntime(slug, "broker")
@@ -101,6 +104,9 @@ test("a queued thread woken without a person, that comes back blocked on an appr
   } satisfies Tailer
   let nowMs = Date.parse(iso("10:00:00"))
   const storage = createStorage(join(dir, "ui.db"), "p")
+  // These rests stand for ordinary queue arrivals, so the sign-off reminder is off: a bare rest it is
+  // about to take is held out of the queue, which has its own test in board.test.ts.
+  storage.setSetting("signoffNudge", "off")
   for (const slug of telemetry.keys()) {
     // Before the question-fence cutover, so a ```question at rest is still this worker's ask.
     storage.upsertSession(row(slug, { spawned_at: "2026-09-01T08:00:00.000Z" }))
@@ -158,6 +164,9 @@ test("an archived or snoozed parent comes out when its side turn blocks on the h
   } satisfies Tailer
   let nowMs = Date.parse(iso("10:00:00"))
   const storage = createStorage(join(dir, "ui.db"), "p")
+  // These rests stand for ordinary queue arrivals, so the sign-off reminder is off: a bare rest it is
+  // about to take is held out of the queue, which has its own test in board.test.ts.
+  storage.setSetting("signoffNudge", "off")
   storage.upsertSession(row("done-blocked", { state: "archived" }))
   storage.upsertSession(row("done-clean", { state: "archived" }))
   storage.upsertSession(row("snoozed-unclean"))

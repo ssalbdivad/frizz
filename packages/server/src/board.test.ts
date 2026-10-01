@@ -4,8 +4,9 @@ import { lstatSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, w
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { questionAnswerMessage, questionsCancelledWakeMessage, type InteractionRequest } from "@frizz/shared"
-import { ANSWER_IN_FLIGHT_EXCUSAL_MS, DELIVERY_IN_FLIGHT_SPIN_MS, answerAwaitingDelivery, deriveDeliveryInFlight, answersInFlight, appServerTurnStalled, createBoard, deriveAwaitingBackground, deriveNeedsYou, degradeIfAwaitingAnswer, degradeIfNoTranscript, fenceWatchViews, hasDeclaredWait, hasParkedTimerWatch, hasRegisteredBackgroundPark, isBoardRelevantFrizzPath, registeredDoneFence, replyUnseen, resolveLimitPause, returnedSubAgentsView, resolveSessionPermission, resolveSessionProfile, resolveSessionTitle, stampShellBudgets, type RegisteredWatch, QUIET_TURN_MS, quietTurnSince } from "./board.ts"
+import { ANSWER_IN_FLIGHT_EXCUSAL_MS, SIGNOFF_NUDGE_EXCUSAL_MS, DELIVERY_IN_FLIGHT_SPIN_MS, answerAwaitingDelivery, deriveDeliveryInFlight, answersInFlight, appServerTurnStalled, createBoard, deriveAwaitingBackground, deriveNeedsYou, degradeIfAwaitingAnswer, degradeIfNoTranscript, fenceWatchViews, hasDeclaredWait, hasParkedTimerWatch, hasRegisteredBackgroundPark, isBoardRelevantFrizzPath, registeredDoneFence, replyUnseen, resolveLimitPause, returnedSubAgentsView, resolveSessionPermission, resolveSessionProfile, resolveSessionTitle, stampShellBudgets, type RegisteredWatch, QUIET_TURN_MS, quietTurnSince } from "./board.ts"
 import { Bus } from "./bus.ts"
+import { SETTLE_MS } from "./queue-clock.ts"
 import { createStorage, type ThreadQuestionRow } from "./storage.ts"
 import type { Project } from "./project.ts"
 import type { SessionRow } from "./storage.ts"
@@ -2487,6 +2488,61 @@ test("deriveDeliveryInFlight: never over a queued thread, a running turn, a dead
   assert.equal(deriveDeliveryInFlight(sending, "turn-idle", false, true, false, at), false, "the process holding it is gone")
   // A codex rollout send can sit pending for hours; the row keeps its excusal but stops claiming motion.
   assert.equal(deriveDeliveryInFlight(sending, "turn-idle", false, false, false, at + DELIVERY_IN_FLIGHT_SPIN_MS), false)
+})
+
+// ---- A REST THE SIGN-OFF NUDGE IS ABOUT TO TAKE ----------------------------------------------------
+//
+// A fenceless rest entered the queue the instant it happened, the nudge woke the worker two seconds
+// later (off the queue), and its sign-off put it back: a card that blinked in and out (2026-10-01,
+// `work-on-a-frizz-integration-vscode`: rest 21:14:18.8, nudge 21:14:21.0, done 21:14:24.2).
+
+test("a bare rest the sign-off nudge will take stays out of the queue until the nudge has had its window", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "frizz-board-signoff-"))
+  const project: Project = { dir, id: "project-signoff", name: "fixture", label: "fixture", stateDir: dir, cwdSlug: "fixture" }
+  const storage = createStorage(join(dir, "ui.db"), "p")
+  const restedAt = Date.parse(T0) + 60_000
+  const bare = tele({ lastActivityAt: new Date(restedAt).toISOString(), lastAssistantAt: new Date(restedAt).toISOString(), lastUserAt: T0 })
+  const byslug: Record<string, SessionTelemetry> = {
+    bare,
+    fenced: { ...bare, lastFence: { kind: "done", body: "Shipped.", hints: [] } },
+    capped: bare,
+  }
+  storage.upsertSession(row({ slug: "bare", session_id: "s-bare", thread_name: "frizz-bare" }))
+  storage.upsertSession(row({ slug: "fenced", session_id: "s-fenced", thread_name: "frizz-fenced" }))
+  storage.upsertSession(row({ slug: "capped", session_id: "s-capped", thread_name: "frizz-capped" }))
+  storage.countSignoffNudge("capped", "signoff:a")
+  storage.countSignoffNudge("capped", "signoff:b")
+  const tailer = {
+    get: (slug: string) => byslug[slug],
+    foreignIds: () => [],
+    subAgent: () => undefined,
+    forget: () => {},
+    start: () => {},
+    stop: () => {},
+    tick: () => {},
+  } satisfies Tailer
+  let now = restedAt + 2_000
+  const board = createBoard(project, storage, new Bus(), tailer, "signoff-boot", { now: () => now })
+  const view = (slug: string) => board.refresh().threads.find((t) => t.id === slug)
+  try {
+    assert.equal(view("bare")?.needsYou, false, "the nudge is on its way, so the rest is not the human's yet")
+    assert.equal(view("bare")?.deliveryInFlight, true, "…and the row reads as about to move, not as idle")
+    assert.equal(view("fenced")?.needsYou, true, "control: a signed-off rest queues at once")
+    assert.equal(view("capped")?.needsYou, true, "the nudge's allowance is spent, so the bare rest queues as it always did")
+    // A nudge that never landed lets the rest go — and, like any release off a hold, it settles first
+    // (queue-clock.ts SETTLE_MS) and then enters at the back.
+    now = restedAt + SIGNOFF_NUDGE_EXCUSAL_MS
+    assert.equal(view("bare")?.needsYou, false, "released, settling")
+    now = restedAt + SIGNOFF_NUDGE_EXCUSAL_MS + SETTLE_MS
+    assert.equal(view("bare")?.needsYou, true, "a nudge that never landed lets the rest reach the queue")
+    now = restedAt + 2_000
+    storage.setSetting("signoffNudge", "off")
+    assert.equal(view("bare")?.needsYou, true, "with the nudge switched off nothing is coming, so it queues")
+  } finally {
+    await board.stop()
+    storage.close()
+    rmSync(dir, { recursive: true, force: true })
+  }
 })
 
 // ---- A REGISTERED COMPLETION -----------------------------------------------------------------------

@@ -662,6 +662,73 @@ export function answersInFlight(rows: readonly ThreadQuestionRow[], lastUserAt: 
   return wakeOnDismissals && dismissed.length > 0 ? questionsCancelledWakeMessage(dismissed.length) : undefined
 }
 
+/** SOURCE 9's consecutive cap: how many fenceless rests in a row the sign-off nudge takes before it gives
+ *  up and leaves the rest in the queue as a plain bare rest. Here rather than in the scheduler because
+ *  the queue rule reads it too (signoffNudgeDue). */
+export const SIGNOFF_NUDGE_MAX = 2
+/** The nudge's kill switch, a machine setting. Absent (the default) means ON. */
+export const SIGNOFF_NUDGE_SETTING = "signoffNudge"
+
+export type SignoffNudgeVerdict = "ineligible" | "signed-off" | "nudge"
+
+/** Will the built-in sign-off nudge (scheduler SOURCE 9) take this rest? ONE predicate for the two
+ *  readers that must agree on it: the scheduler, which sends the nudge on `"nudge"` and gives the
+ *  consecutive allowance back on `"signed-off"`, and the queue rule, which holds the rest out of the
+ *  queue while the nudge is on its way (signoffNudgeDue). Two copies of this list would drift, and a
+ *  queue that excuses a rest the scheduler then declines hides a thread for nothing. The reasoning for
+ *  each guard lives at SOURCE 9 in scheduler.ts. Not covered here: the kill switch, and the outbox's own
+ *  one-per-rest dedupe, which only the scheduler can see. */
+export function signoffNudgeVerdict(
+  row: Pick<SessionRow, "signoff_nudges" | "recurring_on_rest" | "recurring_prompt">,
+  tele: SessionTelemetry | undefined,
+  // LAZY, because the scheduler asks this of every idle row on every tick and most of them have a fence,
+  // which settles it before any registry is read.
+  facts: {
+    questionRows: () => readonly ThreadQuestionRow[]
+    done: () => { body: string; doneAt: number } | undefined
+    armedWatchCount: () => number
+    replyWaitArmed: () => boolean
+    threadMessageInFlight?: () => boolean
+  },
+): SignoffNudgeVerdict {
+  if (!tele || tele.turn !== "idle") return "ineligible"
+  const spokeAt = tele.lastAssistantAt
+  if (!spokeAt) return "ineligible"
+  if (tele.lastUserAt && Date.parse(tele.lastUserAt) >= Date.parse(spokeAt)) return "ineligible"
+  if (tele.authFault || tele.apiFault) return "ineligible"
+  if (
+    tele.lastFence ||
+    tele.pendingQuestion ||
+    registeredDoneFence(facts.done(), tele.lastUserAt, tele.lastToolCallAt, tele) !== undefined ||
+    facts.questionRows().some((q) => q.state === "open" && !questionRepliedPast(q, tele.lastHumanAt)) ||
+    answersInFlight(facts.questionRows(), tele.lastUserAt, row.recurring_on_rest === 1 && Boolean(row.recurring_prompt?.trim())) !== undefined ||
+    facts.armedWatchCount() > 0 ||
+    facts.replyWaitArmed() ||
+    facts.threadMessageInFlight?.() === true
+  ) return "signed-off"
+  if (tele.pendingAsk || tele.permPrompt) return "ineligible"
+  if (tele.lastAssistantAllDone) return "ineligible"
+  if ((row.signoff_nudges ?? 0) >= SIGNOFF_NUDGE_MAX) return "ineligible"
+  return "nudge"
+}
+
+/** How long a rest the sign-off nudge is about to take stays out of the queue. The scheduler mints the
+ *  nudge within a tick (measured 2.2s on 2026-10-01, `work-on-a-frizz-integration-vscode`) and the
+ *  worker's reply lands a beat later; the cap is for a nudge that never arrives (runtime unreachable,
+ *  outbox exhausted), so that rest still reaches the queue rather than hiding behind a wake that died. */
+export const SIGNOFF_NUDGE_EXCUSAL_MS = 60_000
+
+/** Is the sign-off nudge on its way to this rest? Without this a fenceless rest entered the queue the
+ *  instant it happened, the nudge pulled it back to the running rail two seconds later, and the worker's
+ *  sign-off put it back — a card that blinked in and out of the queue for no reason the human could see
+ *  (maintainer 2026-10-01: "threads randomly appear and disappear off the queue quickly"). Once the cap
+ *  is spent the verdict is `"ineligible"` and the rest queues at once, as it always did. */
+export function signoffNudgeDue(verdict: SignoffNudgeVerdict, tele: SessionTelemetry | undefined, nowMs = Date.now()): boolean {
+  if (verdict !== "nudge") return false
+  const spokeAt = Date.parse(tele?.lastAssistantAt ?? "")
+  return Number.isFinite(spokeAt) && nowMs - spokeAt < SIGNOFF_NUDGE_EXCUSAL_MS
+}
+
 /** How long a stored answer excuses its thread from the queue while the wake carrying it has not landed.
  *  The delivery normally lands within seconds (answerQuestions kicks the scheduler at once); a worker
  *  that has to be resumed first takes longer. The cap is what keeps the excusal honest: a wake the
@@ -1210,11 +1277,12 @@ export function deriveDeliveryInFlight(
   runtime: RuntimeState,
   needsYou: boolean,
   deliveryProcessGone: boolean,
-  answerInFlight: boolean,
+  // A frizz wake owns this rest and is on its way: the human's answer, or the sign-off nudge.
+  wakeInFlight: boolean,
   nowMs = Date.now(),
 ): boolean {
   if (needsYou || (runtime !== "turn-idle" && runtime !== "exited")) return false
-  if (answerInFlight) return true
+  if (wakeInFlight) return true
   if (deliveryProcessGone) return false
   // A spinoff request is not the human's message to THIS thread (see hasFreshDelivery), so it spins nothing.
   return parseDeliveryLedger(row.delivery_ledger).some((d) =>
@@ -1256,6 +1324,9 @@ export function deriveNeedsYou(
   // The human has ANSWERED a registered question and the wake carrying it has not landed yet — see
   // answerAwaitingDelivery, which bounds it. The caller's for the same reason `openQuestions` is.
   answerInFlight = false,
+  // The sign-off nudge is about to wake this rest — see signoffNudgeDue. The caller's, because the
+  // verdict reads the registries.
+  signoffNudgePending = false,
 ): boolean {
   // Snooze is explicit operator lifecycle state. It must be checked before provider/question/crash
   // gates so choosing Snooze from any queue card actually parks that card until its exact deadline.
@@ -1319,6 +1390,11 @@ export function deriveNeedsYou(
   // stale ```awaiting fence from the rest BEFORE the kill must not bury it. The operator's own snooze
   // still wins (futureSnooze, checked first), so a card can be parked deliberately.
   if (limitPause) return true
+  // A BARE REST THE SIGN-OFF NUDGE IS ABOUT TO TAKE is not the human's yet: frizz is sending the worker
+  // back to sign off, and the queue reads what it signs off with. Queueing it here is what made a card
+  // blink in and out — see signoffNudgeDue. After every hard member above, so nothing that IS the
+  // human's waits behind it.
+  if (signoffNudgePending) return false
   // Declared parks are STRONGER excusals than the awaiting-background card below, so they are checked
   // first: a worker that declared an awaiting-human fence stays held even if a child of its is still
   // live (it explicitly said what it is waiting on).
@@ -1816,6 +1892,8 @@ interface ThreadRegistries {
   done: Map<string, { body: string; doneAt: number }>
   shellBudgets: Map<string, ShellBudgetRow[]>
   spinoffs: Map<string, ThreadSpinoffRow[]>
+  // Not a registry, but read once per build for the same reason: the sign-off nudge's kill switch.
+  signoffNudgeOn: boolean
 }
 
 function readThreadRegistries(storage: Storage): ThreadRegistries {
@@ -1828,6 +1906,7 @@ function readThreadRegistries(storage: Storage): ThreadRegistries {
     done: storage.threadDoneBySlug(),
     shellBudgets: storage.shellBudgetsBySlug(),
     spinoffs: storage.spinoffsBySlug(),
+    signoffNudgeOn: storage.getSetting(SIGNOFF_NUDGE_SETTING) !== "off",
   }
 }
 
@@ -2005,6 +2084,12 @@ function sessionThreadView(
   const limitPause = resolveLimitPause(row, tele, nowMs)
   const quietSince = archived ? undefined : quietTurnSince(runtime, tele, nowMs)
   const answerInFlight = answerAwaitingDelivery(questionRows, rawTele?.lastUserAt, nowMs)
+  const signoffNudgePending = !archived && registries.signoffNudgeOn && signoffNudgeDue(signoffNudgeVerdict(row, rawTele, {
+    questionRows: () => questionRows,
+    done: () => registries.done.get(row.slug),
+    armedWatchCount: () => armedWatches.length,
+    replyWaitArmed: () => armedTimers.some((t) => isReplyWait(t.prompt)),
+  }), rawTele, nowMs)
   // A silent turn queues past every rest gate in deriveNeedsYou (it is not at rest), except the human's
   // own wall-clock snooze, which is how a deliberate long wait is parked.
   // WAITING ON ANOTHER THREAD'S ANSWER (`message_thread` with `await_reply`) is a wait on automation, like a
@@ -2013,8 +2098,8 @@ function sessionThreadView(
   // permission prompt still queues it. The wait is a timer (thread-mentions.ts), so it lapses on its own.
   const waitingOnThread = !archived && runtime === "turn-idle" && currentQuestionCount === 0 && !interactionPresence.needsUser &&
     armedTimers.some((t) => isReplyWait(t.prompt) && Date.parse(t.fireAt) > nowMs)
-  const needsYou = archived || waitingOnThread ? false : deriveNeedsYou(row, tele, runtime, interactionPresence.needsUser, nowMs, limitPause, true, deliveryProcessGone, github, registeredPrWatches, armedTimerIds, armedWatches, currentQuestionCount, answerInFlight) || (quietSince !== undefined && !futureSnooze(row, nowMs))
-  const deliveryInFlight = !archived && deriveDeliveryInFlight(row, runtime, needsYou, deliveryProcessGone, answerInFlight, nowMs)
+  const needsYou = archived || waitingOnThread ? false : deriveNeedsYou(row, tele, runtime, interactionPresence.needsUser, nowMs, limitPause, true, deliveryProcessGone, github, registeredPrWatches, armedTimerIds, armedWatches, currentQuestionCount, answerInFlight, signoffNudgePending) || (quietSince !== undefined && !futureSnooze(row, nowMs))
+  const deliveryInFlight = !archived && deriveDeliveryInFlight(row, runtime, needsYou, deliveryProcessGone, answerInFlight || signoffNudgePending, nowMs)
   const awaitingBackground = archived ? false : deriveAwaitingBackground(row, tele, runtime, interactionPresence.needsUser, nowMs, limitPause, deliveryProcessGone, github, registeredPrWatches, armedTimerIds, armedWatches, currentQuestionCount)
   // A worker that exited with work still outstanding — a turn in flight, OR a sub-agent still reading
   // "running" (its parent is gone, so it cannot actually be live) — is a crash/stall, not a clean
