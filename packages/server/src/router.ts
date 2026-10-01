@@ -1279,8 +1279,14 @@ export function createRouter(ctx: AppContext) {
   }
 
   // Marked done ⇒ the worktrees the thread made in the worktree folder go too, when the setting says so
-  // (worktree-cleanup.ts: clean ones only, so nothing unrecoverable). Off the request path: `git
-  // worktree remove` on a tree full of node_modules takes seconds, and the card should move now.
+  // (worktree-cleanup.ts says exactly what is kept and why). Off the request path: `git worktree remove`
+  // on a tree full of node_modules takes seconds, and the card should move now.
+  //
+  // `inUse` is every OTHER not-done thread's working folder, read the way the terminal reads it
+  // (threadWorkingDir), so a worktree another thread is still working in — a spinoff child forked into
+  // its parent's folder — is kept. Not-done is the board's own reading (effectiveSessionState): an
+  // explicit `state` wins, else the legacy `archived` bit. A legacy row whose paired thread file alone
+  // says done counts as live here, which can only keep a worktree, never remove one.
   function cleanupThreadWorktrees(slug: string): void {
     const settings = ctx.getSettings()
     if (settings.removeWorktreesOnDone === false) return
@@ -1288,7 +1294,12 @@ export function createRouter(ctx: AppContext) {
       const messages = readThreadTranscript(ctx.project, ctx.storage, slug, ctx.backendFor)
       const checkout = ctx.tailer.get(slug)?.checkout
       const candidates = [...worktreesAddedBy(messages, workDir), ...(checkout?.kind === "worktree" ? [checkout.dir] : [])]
-      const { removed, kept } = await removeThreadWorktrees(candidates, settings.worktreeDir)
+      const inUse = () =>
+        ctx.storage
+          .allSessions()
+          .filter((row) => row.slug !== slug && row.state !== "archived" && !(row.state !== "open" && row.archived === 1))
+          .map((row) => ({ dir: threadWorkingDir(row.slug).dir, by: row.slug }))
+      const { removed, kept } = await removeThreadWorktrees(candidates, settings.worktreeDir, inUse)
       for (const dir of removed) frizzLog.info("worktree", `removed ${dir} (thread ${slug} marked done)`)
       for (const { path: dir, reason } of kept) frizzLog.info("worktree", `kept ${dir} (thread ${slug}): ${reason}`)
     })().catch((error) => frizzLog.warn("worktree", `cleanup for ${slug} failed: ${String(error)}`))
