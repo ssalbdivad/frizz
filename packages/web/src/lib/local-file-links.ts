@@ -2,6 +2,7 @@ import type { FilePosition } from "@frizz/shared"
 import { projectRpc, rpc } from "../api/rpc.ts"
 import { openImageViewer, pushFileReader, showToast } from "../store.ts"
 import { copyTextToClipboard } from "./clipboard.ts"
+import { autoCodeFilesGoToEditor, autoCodeFilesMayGoToEditor } from "./editorBridge.ts"
 import { baseName, runExternalOpen } from "./externalOpen.ts"
 import { prefs } from "./prefs.ts"
 import { localViewerFor } from "./localViewer.ts"
@@ -96,6 +97,16 @@ export function openLocalPath(path: string, from?: Element | null, scope?: Markd
   // and lands in the reader anyway when the app cannot start — the reader is the one that always works.
   if (viewer === "text" && prefs.codeFiles === "editor") {
     void openExternally(path, scope?.projectId, () => pushFileReader(path, scope), at)
+    return
+  }
+  // A browser that chose neither, with an editor connected: there when the External app is that editor
+  // (lib/editorWindows.ts codeFilesDestination), the reader otherwise. Settled before anything opens, so
+  // one click never shows both. With no editor connected this is the reader, synchronously, as always.
+  if (viewer === "text" && autoCodeFilesMayGoToEditor()) {
+    void autoCodeFilesGoToEditor().then((toEditor) => {
+      if (toEditor) void openExternally(path, scope?.projectId, () => pushFileReader(path, scope), at)
+      else pushFileReader(path, scope)
+    })
     return
   }
   if (viewer) {
