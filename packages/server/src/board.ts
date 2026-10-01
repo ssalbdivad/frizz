@@ -169,6 +169,56 @@ function deriveRuntime(
   return "exited"
 }
 
+// Whether the tailer can VOUCH for this reading: it has primed the row — folded its transcript — or
+// given up on one and flagged it missing. Anything else (no state yet, or a state set up but not folded)
+// is the fresh default, not an observation. ONE predicate, because two readers must agree on it: the
+// queue clock (which decides nothing off an unvouched reading) and boardTelemetry (which replaces one).
+export function telemetryVouched(tele: SessionTelemetry | undefined): tele is SessionTelemetry {
+  return tele !== undefined && (tele.primed !== false || tele.noTranscript === true)
+}
+
+// THE READING A ROW IS DRAWN FROM WHILE THE TAILER HAS NOT PRIMED IT (2026-09-30). The full story is at
+// tailer.ts `provisional`: after every restart some rows stay unprimed for seconds, and an unprimed
+// headless row derived `running` here (deriveRuntime's default with no turn), so a thread parked in the
+// Snoozed band jumped into Active, spinning, then fell back once primed. The operator clicked where it
+// had been and messaged the wrong thread (maintainer: "very important we avoid unintuitive scenarios like
+// this and randomly aggressively hiding or swapping threads"). So, in order:
+//
+//   1. A vouched reading is used as-is.
+//   2. Otherwise the tailer's PROVISIONAL reading: the row's tail-cache entry, i.e. what was true before
+//      the restart — the fence, the park, the rest time, the live sub-agents — so every band predicate
+//      reads what it read a minute ago.
+//   3. Otherwise (a cache miss: a row never flushed, a different session, a follow-up in flight) the
+//      row's durable columns. A row that has RESTED before (`rested_at`) and has nothing on its way to
+//      the worker (no delivery ledger) reads as at rest with nothing known about that rest: `turn-idle`,
+//      no fence, the durable rest time. That is the least-moving honest option. Its band then comes from
+//      durable state alone: a wall-clock snooze keeps it in Snoozed (a `running` reading pulled even
+//      those out, since isSnoozed refuses to dim a running row), a registered PR or timer park holds it
+//      out of the queue, and its queue membership is the queue clock's durable stamp, which a stand-in
+//      can neither add (an urgent reason aside) nor remove (queue-clock.ts). What it cannot know is a
+//      fence-only park, which shows in Active at rest until its prime: the band a `running` default put
+//      it in, without the false spinner. It is wrong in one direction only — a turn genuinely in flight
+//      shows at rest for those seconds, instead of every resting thread showing as running. A row that
+//      has never rested (its first turn) keeps the old default, because `running` is what it most
+//      likely is.
+//
+// Nothing here is EVIDENCE: the queue clock reads `telemetryVouched` off the tailer's own reading, never
+// off this, and is told which rows were drawn from a stand-in (`standIn`); and every stand-in carries
+// `primed: false`, which surfaceSideTurn keys on.
+export function boardTelemetry(
+  row: Pick<SessionRow, "rested_at" | "delivery_ledger">,
+  tele: SessionTelemetry | undefined,
+  provisional: () => SessionTelemetry | undefined,
+): SessionTelemetry | undefined {
+  if (telemetryVouched(tele)) return tele
+  const cached = provisional()
+  if (cached) return { ...cached, primed: false }
+  if (row.rested_at && !row.delivery_ledger) {
+    return { primed: false, turn: "idle", permPrompt: false, pendingQuestion: false, subAgents: [], bgShells: [], lastAssistantAt: row.rested_at }
+  }
+  return tele
+}
+
 // A worker whose transcript never materialized (a boot failure the tailer flagged noTranscript) would
 // otherwise read "running" forever — deriveRuntime sees a bridge-owned row with no telemetry and
 // defaults to running, so the row spins with nothing to tail. Downgrade ONLY that spinner to the degraded
@@ -2436,6 +2486,9 @@ export function createBoard(
   // a send that failed, only the send itself, and the thread it lost has to come straight back), and which
   // reads it as the human acting on the thread, so it loses its place in line.
   let heldByDelivery = new Set<string>()
+  // Rows drawn from a stand-in for telemetry the tailer has not produced yet (boardTelemetry), as of the
+  // last build — for the queue clock, which lets no such reading put a thread in the queue.
+  let standIns = new Set<string>()
   function buildSessionThreads(nowMs: number): ThreadView[] {
     // Old/corrupt databases predate the canonical storage guard. Keep such rows inert instead of
     // emitting an invalid board id or allowing it to reach tailer/dispatch consumers.
@@ -2451,6 +2504,7 @@ export function createBoard(
     const currentInteractionKeys = new Set<string>()
     const out: ThreadView[] = []
     heldByDelivery = new Set()
+    standIns = new Set()
     for (const row of rows) {
       if (row.delivery_ledger && hasFreshDelivery(row, false)) heldByDelivery.add(row.slug)
       const key = interactionKey(row.slug, row.session_id)
@@ -2479,11 +2533,13 @@ export function createBoard(
         pendingInteractionCache.set(key, interactionPresence)
       }
       const tele = tailer.get(row.slug)
+      const drawnFrom = boardTelemetry(row, tele, () => tailer.provisional?.(row.slug))
+      if (drawnFrom !== tele) standIns.add(row.slug)
       const view = sessionThreadView(
         project.dir,
         storage,
         row,
-        tele,
+        drawnFrom,
         legacyTerminalCache.has(row.slug),
         interactionPresence,
         nowMs,
@@ -2572,13 +2628,16 @@ export function createBoard(
     queueClock.stamp(sessionThreads, assembledAtMs, {
       // A session reading is only vouched for once the tailer has PRIMED the row — folded its transcript,
       // or given up on one and flagged it missing — or when durable row state alone decided it (archived,
-      // snoozed). A row the tailer has not reached, or has set up but not yet folded, reads `running` by
-      // default, and that is not a departure.
+      // snoozed). A row the tailer has not reached, or has set up but not yet folded, is drawn from a
+      // stand-in (boardTelemetry: what the tail cache held before the restart, or its durable columns),
+      // and a stand-in is neither a departure nor an arrival.
+      // A PROVISIONAL reading (boardTelemetry) is not vouched for either: this asks the tailer's own
+      // reading, never the one the row was drawn from.
       known: (t) => {
         if (t.kind !== "session" || t.archived || t.snoozedUntil !== undefined) return true
-        const tele = tailer.get(t.id)
-        return tele !== undefined && (tele.primed !== false || tele.noTranscript === true)
+        return telemetryVouched(tailer.get(t.id))
       },
+      standIn: (t) => standIns.has(t.id),
       // At rest and out of the queue anyway: a live sub-agent, CI, a park, a timer, an event-snooze on a
       // shell. Two holds have no wake behind them: the human's own snooze, unless it carries a prompt to
       // deliver when it ends, and the human's own follow-up, which either starts a turn or was lost.

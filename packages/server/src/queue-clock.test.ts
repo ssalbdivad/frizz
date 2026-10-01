@@ -27,6 +27,8 @@ function harness(stored: Record<string, string> = {}, alive?: string) {
   })
   // Every reading is vouched for unless its slug is in `unknown` — a row the tailer has not primed yet.
   const unknown = new Set<string>()
+  // …of which these were drawn from a stand-in for the telemetry (board.ts boardTelemetry).
+  const standIn = new Set<string>()
   // Out of the queue behind a hold a wake follows (`parked`), and a reading that must surface at once.
   const parked = new Set<string>()
   const urgent = new Set<string>()
@@ -37,6 +39,7 @@ function harness(stored: Record<string, string> = {}, alive?: string) {
   const run = (nowHHMM: string, ...threads: ThreadView[]) => {
     clock.stamp(threads, ms(nowHHMM), {
       known: (t) => !unknown.has(t.id),
+      standIn: (t) => standIn.has(t.id),
       parked: (t) => parked.has(t.id),
       urgent: (t) => urgent.has(t.id),
       humanOut: (t) => humanOut.has(t.id),
@@ -44,7 +47,7 @@ function harness(stored: Record<string, string> = {}, alive?: string) {
     })
     return Object.fromEntries(threads.map((t) => [t.id, t.queuedAt]))
   }
-  return { run, saves, unknown, alives, parked, urgent, humanOut, humanGate, clock }
+  return { run, saves, unknown, standIn, alives, parked, urgent, humanOut, humanGate, clock }
 }
 
 test("a plain rest enters the queue at its rest time, so ordinary arrivals keep the order they always had", () => {
@@ -122,6 +125,32 @@ test("an unknown reading that happens to be queued shows the stamp it has and de
   unknown.add("a").add("b")
   assert.deepEqual(run("13:00", thread("a", true, "12:45"), thread("b", true, "12:50")), { a: at("10:00"), b: undefined })
   assert.deepEqual(saves, [])
+})
+
+test("a STAND-IN reading with no stamp does not enter the queue: no card for the seconds of a prime", () => {
+  // board.ts boardTelemetry draws an unprimed row from the tail cache's pre-restart state; one that says
+  // queued with no stamp behind it is an account the real reading may take straight back.
+  const { run, saves, unknown, standIn } = harness({ a: at("10:00") })
+  unknown.add("a").add("b")
+  standIn.add("a").add("b")
+  const a = thread("a", false, "12:45")
+  const b = thread("b", true, "12:50")
+  assert.deepEqual(run("13:00", a, b), { a: at("10:00"), b: undefined })
+  assert.equal(a.needsYou, true, "a stamp still holds its place")
+  assert.equal(b.needsYou, false)
+  assert.equal(b.queueSettling, undefined, "not withheld: nothing says a park ended")
+  assert.deepEqual(saves, [])
+})
+
+test("a stand-in reading that is URGENT still enters at once", () => {
+  const { run, unknown, standIn, urgent, saves } = harness()
+  unknown.add("asks")
+  standIn.add("asks")
+  urgent.add("asks")
+  const asks = thread("asks", true, "12:50")
+  run("13:00", asks)
+  assert.equal(asks.needsYou, true)
+  assert.deepEqual(saves, [], "but nothing is decided off it")
 })
 
 test("a stored stamp the agent has since spoken past is refused at boot — it left and re-entered while the server was down", () => {
