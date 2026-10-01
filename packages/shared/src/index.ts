@@ -2,7 +2,7 @@ import { parse as parseYaml } from "yaml"
 import { z } from "zod"
 import { InteractionLifecycle, InteractionOpaqueId, InteractionRevision, InteractionThreadSlug } from "./interactions.ts"
 import { ThreadSlug } from "./thread-slug.ts"
-import { EDITOR_PROTOCOL_VERSION, type EditorClientMessage, type EditorComposeInput, type EditorWindowSummary } from "./editor-protocol.ts"
+import { EDITOR_COMPOSE_MAX_TEXT, EDITOR_MAX_FOLDERS, EDITOR_MAX_PATH, EDITOR_PROTOCOL_VERSION, type EditorClientMessage, type EditorComposeInput, type EditorWindowSummary } from "./editor-protocol.ts"
 
 // ---- Attachment intake (drag/drop, paste, file picker) ----
 // What a worker can actually GET AT. A format qualifies two ways: an agent's Read/file tool consumes
@@ -5661,10 +5661,8 @@ export type BoardMeta = z.infer<typeof BoardMeta>
 // The server validates every frame an editor sends with these; each is pinned to its plain type below.
 const EditorKindSchema = z.enum(["vscode", "cursor", "windsurf", "other"])
 const EditorWindowSummarySchema = z.object({ app: z.string(), kind: EditorKindSchema, acceptsOpens: z.boolean() }).strict()
-const EditorPath = z.string().min(1).max(4096)
+const EditorPath = z.string().min(1).max(EDITOR_MAX_PATH)
 const EditorLine = z.number().int().min(1).max(10_000_000)
-export const EDITOR_MAX_FOLDERS = 64
-export const EDITOR_COMPOSE_MAX_TEXT = 64 * 1024
 export const EditorComposeInputSchema = z.object({
   projectId: z.string().min(1).max(200).optional(),
   path: EditorPath,
@@ -5681,6 +5679,7 @@ export const EditorClientMessageSchema = z.discriminatedUnion("t", [
     extensionVersion: z.string().max(100),
     folders: z.array(EditorPath).max(EDITOR_MAX_FOLDERS),
     focused: z.boolean(),
+    focusedAgoMs: z.number().int().min(0).optional(),
     acceptsOpens: z.boolean(),
     home: z.string().max(4096),
     platform: z.string().max(40),

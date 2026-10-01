@@ -18,6 +18,15 @@ import type { FilePosition } from "./file-position.ts"
 export const EDITOR_SOCKET_PATH = "/_frizz/editor"
 export const EDITOR_PROTOCOL_VERSION = 1
 
+/**
+ * What the server accepts in one frame. The extension must fit itself to these before sending: a frame
+ * over any of them is refused (4401), and a hello that is refused is refused again on every redial.
+ */
+export const EDITOR_MAX_FOLDERS = 64
+export const EDITOR_MAX_PATH = 4096
+/** Characters of selected text in one `compose`. The frame itself is capped at 128 KiB of bytes. */
+export const EDITOR_COMPOSE_MAX_TEXT = 64 * 1024
+
 /** Close codes the server uses beyond the standard ones, so the extension can say why it was dropped. */
 export const EDITOR_CLOSE = {
   /** The hello's `v` is not one this server speaks. The extension should say "update Frizz or the extension". */
@@ -75,6 +84,12 @@ export interface EditorHello {
   folders: string[]
   /** Whether this window has OS focus right now (`vscode.window.state.focused`). */
   focused: boolean
+  /**
+   * How long ago this window last had focus, when it does not have it now. A reconnect (every window
+   * redials after a Frizz restart, while the human is in the browser) would otherwise erase which
+   * window was used last, and an open no folder claims would go to whichever window redialled last.
+   */
+  focusedAgoMs?: number
   /** Whether this window takes file opens from Frizz (the extension's `frizz.openFileLinks` setting). */
   acceptsOpens: boolean
   /** `os.homedir()` and `process.platform` of the extension host — how the server tells a window that shares its filesystem. */
