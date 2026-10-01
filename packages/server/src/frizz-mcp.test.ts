@@ -1487,12 +1487,16 @@ test("a call landing in a restart window waits for the server instead of failing
     await rpc.next(1)
     // Fire the call while nothing is up…
     rpc.send({ jsonrpc: "2.0", id: 2, method: "tools/call", params: { name: "timer", arguments: { action: "list" } } })
-    // …then bring the server up mid-flight, the way a restart finishes.
-    await new Promise((r) => setTimeout(r, 800))
+    // …then bring the server up mid-flight, the way a restart finishes. 8s in: past the 6s window this
+    // started with, which three `ask` calls in a row outlasted during a restart on a loaded machine
+    // (arktype, 2026-09-29) — a real boot is not always seconds.
+    const started = Date.now()
+    await new Promise((r) => setTimeout(r, 8_000))
     writeFileSync(lock, JSON.stringify({ pid: process.pid, port }))
     const call = await rpc.next(2)
     assert.equal(call.result.isError, undefined, "the window must be invisible to the worker")
     assert.deepEqual(seen, ["/_frizz/rpc/listOwnThreadTimers"], "and the call actually lands, once")
+    assert.ok(Date.now() - started >= 8_000, "it really did wait past the old window")
   } finally {
     rpc.kill()
     http.close()
