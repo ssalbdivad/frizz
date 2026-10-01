@@ -251,6 +251,8 @@ let stack: Stack | undefined
 /** The stack's teardown, set as soon as it is spawned; idempotent, so the boot's own failure path and the run's may both call it. */
 let stackTeardown: (() => Promise<void>) | undefined
 let fake: FakeFrizz | undefined
+/** A second fake on another port, which the sidebar's suite moves the window to, as a Frizz restarting elsewhere would. */
+let fakeElsewhere: FakeFrizz | undefined
 let exitCode = 1
 let pageClaim: Promise<PageClaimResult> | undefined
 const stopPage = new AbortController()
@@ -271,6 +273,7 @@ async function teardown(): Promise<void> {
     pageBrowser.kill("SIGKILL")
   }
   await fake?.close()
+  await fakeElsewhere?.close()
   await stackTeardown?.()
   if (sample && wroteSample) rmSync(sample, { force: true })
 }
@@ -313,6 +316,7 @@ try {
       { id: "686f6d65-0000-4000-8000-000000000000", slug: "home", name: "Home", dir: homedir(), home: true },
     ]
     fake = await new FakeFrizz(projects).listen()
+    fakeElsewhere = await new FakeFrizz(structuredClone(projects)).listen()
   }
   const origin = realOrigin ?? fake!.origin
 
@@ -363,6 +367,7 @@ try {
       FRIZZ_E2E_MODE: mode,
       FRIZZ_E2E_WORKSPACE: workspace,
       FRIZZ_E2E_CONTROL: fake?.origin,
+      FRIZZ_E2E_CONTROL_ELSEWHERE: fakeElsewhere?.origin,
       FRIZZ_E2E_DISPATCH: process.env.FRIZZ_E2E_DISPATCH,
       FRIZZ_E2E_THREAD: process.env.FRIZZ_E2E_THREAD,
       FRIZZ_E2E_SET_OPENER: stack ? "1" : process.env.FRIZZ_E2E_SET_OPENER,

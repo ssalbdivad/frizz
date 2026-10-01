@@ -241,7 +241,13 @@ must match the core app, with a hint wherever the sidebar differs; and no Frizz 
   - `nub packages/vscode/scripts/e2e.ts` — FAKE mode, against an in-process fake Frizz (which also
     judges frames with the server's schema): opens at a line and a range, focus answering whether the
     window came to the front, a folder answering ok, the status bar's count, Ask, Send to thread (and its refusal of an untitled selection), Add to
-    Frizz prompt, the open-links setting, and a dropped connection coming back.
+    Frizz prompt, the open-links setting, and a dropped connection coming back. Then the sidebar,
+    framing the fake's own page, which speaks the embed contract: the embed params on the frame, the
+    badge, Add (target front, focus false), Ask (new) and Send (the thread) landing in the page instead of
+    the server, a file the page links opening at its position, a forwarded chord running its command,
+    unknown messages doing nothing, a theme change, the fallbacks (a silent page, the setting off), and a
+    re-frame when Frizz moves to another port. The relay, the CSP and the routing are unit tests
+    (`embed.test.ts`, `sidebar-html.test.ts`).
   - `FRIZZ_E2E_VSCODE=oldest nub packages/vscode/scripts/e2e.ts` — the same on the oldest VS Code the
     manifest's `engines.vscode` admits (1.90.0), where `focusWindow` does not exist.
   - `nub packages/vscode/scripts/e2e.ts --stack` — boots a disposable two-project Frizz itself

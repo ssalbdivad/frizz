@@ -1,7 +1,9 @@
 // THE END-TO-END SUITE — runs INSIDE a real VS Code (scripts/e2e.ts launches it as
 // `--extensionTestsPath`), against the extension under development, and drives both directions:
 // Frizz → editor (an `open` landing at its line, the status bar's count) and editor → Frizz (ask, send
-// to thread, add to prompt), plus a dropped connection coming back.
+// to thread, add to prompt), plus a dropped connection coming back. Then the Frizz sidebar (fake mode
+// only): its frame of a fake page that speaks the embed contract (fake-frizz.ts), the same three
+// commands landing in that page instead, and what the page can ask of the editor.
 //
 // FAKE mode (default) talks to e2e/fake-frizz.ts through its /__e2e control surface and asserts on the
 // exact frames and RPC calls it received. REAL mode points the extension at a real Frizz
@@ -24,20 +26,53 @@ const mode = process.env.FRIZZ_E2E_MODE === "real" ? "real" : "fake"
 const workspace = realpathSync(process.env.FRIZZ_E2E_WORKSPACE ?? "")
 const sample = join(workspace, "src", "sample.ts")
 const control = process.env.FRIZZ_E2E_CONTROL ?? ""
+const elsewhere = process.env.FRIZZ_E2E_CONTROL_ELSEWHERE ?? ""
 
 interface FakeLog {
   frames: EditorClientMessage[]
   refused: string[]
   rpc: { projectId: string; procedure: string; input: Record<string, unknown> }[]
   origins: string[]
+  page: { loads: string[]; received: { origin: string; data: { type?: string } & Record<string, unknown> }[] }
 }
 
-async function fake<T = unknown>(path: string, body?: unknown): Promise<T> {
-  const response = await fetch(`${control}${path}`, body === undefined ? {} : { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) })
+async function fake<T = unknown>(path: string, body?: unknown, at = control): Promise<T> {
+  const response = await fetch(`${at}${path}`, body === undefined ? {} : { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) })
   return (await response.json()) as T
 }
 
-const fakeLog = () => fake<FakeLog>("/__e2e/log")
+const fakeLog = (at = control) => fake<FakeLog>("/__e2e/log", undefined, at)
+
+/** What the fake page received from the sidebar after `from` messages, by type. */
+async function pageReceived(type: string, from = 0, at = control) {
+  return (await fakeLog(at)).page.received.slice(from).map((entry) => entry.data).filter((data) => data.type === type)
+}
+
+/**
+ * A command that should land in the sidebar, bounded: when it does not, Ask and Send fall back to an
+ * input box that would wait for a human forever. Dismissed, so the next step starts clean.
+ */
+async function landsInSidebar<T>(command: Thenable<T>, what: string): Promise<T> {
+  let timer: NodeJS.Timeout | undefined
+  const late = new Promise<never>((_, reject) => (timer = setTimeout(() => reject(new Error(`${what} did not land in the sidebar within 30s`)), 30_000)))
+  try {
+    return await Promise.race([command, late])
+  } catch (error) {
+    await vscode.commands.executeCommand("workbench.action.closeQuickOpen")
+    throw error
+  } finally {
+    clearTimeout(timer)
+  }
+}
+
+/** Have the fake page post `message` to the sidebar, as the real page would. */
+const pagePosts = (message: unknown) => fake("/__e2e/page-post", { message })
+
+/** The query the sidebar's frame carries for this window. */
+function embedQuery(project: EditorProject): string {
+  const light = vscode.window.activeColorTheme.kind === vscode.ColorThemeKind.Light || vscode.window.activeColorTheme.kind === vscode.ColorThemeKind.HighContrastLight
+  return `?embed=vscode&theme=${light ? "light" : "dark"}&project=${project.slug}`
+}
 
 async function until(what: string, condition: () => boolean | Promise<boolean>, timeoutMs = 10_000): Promise<void> {
   const deadline = Date.now() + timeoutMs
@@ -159,7 +194,7 @@ const steps: Step[] = [
       await fake("/__e2e/projects", { projects: [{ ...project, ready: 3, working: 1 }] })
       await until("Frizz · 3 ready", () => api.statusBar().text === "Frizz · 3 ready")
       assert.match(api.statusBar().tooltip, /3 ready · 1 working/)
-      assert.equal(api.statusBar().command, "frizz.open")
+      assert.equal(api.statusBar().command, "frizz.sidebar.focus", "a click shows the sidebar")
       await fake("/__e2e/projects", { projects: [{ ...project, ready: 0, working: 1 }] })
       await until("a bare Frizz", () => api.statusBar().text === "Frizz")
     },
@@ -281,6 +316,223 @@ const steps: Step[] = [
       await fake("/__e2e/drop", {})
       await until("a second hello", async () => (await fakeLog()).frames.filter((frame) => frame.t === "hello").length > before, 15_000)
       await until("connected again", () => api.status().kind === "connected")
+    },
+  },
+
+  // ── the sidebar ────────────────────────────────────────────────────────────────────────────────────
+  // Every step above ran with the sidebar never opened, so Add to Frizz prompt took the server path; Ask
+  // and Send passed their text, which is sent directly whatever the sidebar does.
+  {
+    name: "the sidebar frames Frizz's page with the embed params, and the page says it is ready",
+    modes: ["fake"],
+    async run({ api, project }) {
+      assert.equal(api.sidebar().opened, false, "nothing has opened it yet")
+      await vscode.commands.executeCommand("frizz.sidebar.focus")
+      await until("the page ready", () => api.sidebar().ready, 30_000)
+      const query = embedQuery(project)
+      assert.equal(api.sidebar().url, `${control}/${query}`)
+      const log = await fakeLog()
+      assert.deepEqual(log.page.loads, [`/${query}`], "Frizz served the page once, with those params")
+      // Whatever the page reads from its URL, the theme follows once it is ready.
+      await until("the theme posted", async () => (await pageReceived("frizz:theme")).length > 0)
+      assert.ok(log.page.received.every((entry) => entry.origin.startsWith("vscode-webview://")), "everything reached the page from the sidebar's own document")
+    },
+  },
+  {
+    name: "the sidebar's badge is the workspace's Ready count",
+    modes: ["fake"],
+    async run({ api, project }) {
+      await fake("/__e2e/projects", { projects: [{ ...project, ready: 2, working: 0 }] })
+      await until("a badge of 2", () => api.sidebar().badge === 2)
+      await fake("/__e2e/projects", { projects: [{ ...project, ready: 0, working: 0 }] })
+      await until("no badge", () => api.sidebar().badge === undefined)
+    },
+  },
+  {
+    name: "Add to Frizz prompt puts the selection into the prompt box the sidebar shows, not through Frizz",
+    modes: ["fake"],
+    async run({ api, project }) {
+      const editor = await openSample([1, 0, 2])
+      const before = await fakeLog()
+      const composed = await vscode.commands.executeCommand<EditorComposed | undefined>("frizz.addToPrompt")
+      assert.equal(composed?.ok, true, JSON.stringify(composed))
+      const composes = await pageReceived("frizz:compose", before.page.received.length)
+      assert.deepEqual(composes, [{
+        type: "frizz:compose",
+        id: composed!.id,
+        // The very item the server path carries (the step above), so the page writes the same chip.
+        item: { projectId: project.id, path: sample, text: sampleLines(editor.document, 2, 3), startLine: 2, endLine: 3, app: vscode.env.appName },
+        target: "front",
+        focus: false,
+      }])
+      assert.equal((await fakeLog()).frames.filter((frame) => frame.t === "compose").length, before.frames.filter((frame) => frame.t === "compose").length, "nothing went to Frizz to hold")
+      assert.equal(api.sidebar().visible, true)
+      assert.equal(vscode.window.activeTextEditor?.document.uri.fsPath, sample)
+    },
+  },
+  {
+    name: "Ask Frizz… opens the sidebar's new-thread box with the selection, and starts nothing itself",
+    modes: ["fake"],
+    async run({ project }) {
+      const editor = await openSample([1, 0, 3])
+      const before = await fakeLog()
+      const asked = await landsInSidebar(vscode.commands.executeCommand<{ composed?: EditorComposed } | undefined>("frizz.ask"), "Ask")
+      assert.equal(asked?.composed?.ok, true, JSON.stringify(asked))
+      assert.deepEqual(await pageReceived("frizz:compose", before.page.received.length), [{
+        type: "frizz:compose",
+        id: asked!.composed!.id,
+        item: { projectId: project.id, path: sample, text: sampleLines(editor.document, 2, 4), startLine: 2, endLine: 4, app: vscode.env.appName },
+        target: "new",
+        focus: true,
+      }])
+      assert.deepEqual((await fakeLog()).rpc.slice(before.rpc.length).map((call) => call.procedure), [], "no dispatch: the human writes the question in the sidebar")
+    },
+  },
+  {
+    name: "Send to Frizz thread… opens the picked thread in the sidebar with the selection in its reply box",
+    modes: ["fake"],
+    async run({ project }) {
+      const editor = await openSample([2, 0, 2])
+      const before = await fakeLog()
+      const sent = await landsInSidebar(vscode.commands.executeCommand<{ slug: string; composed?: EditorComposed } | undefined>("frizz.sendToThread", { thread: "@fake-thread" }), "Send")
+      assert.equal(sent?.composed?.ok, true, JSON.stringify(sent))
+      assert.deepEqual(await pageReceived("frizz:compose", before.page.received.length), [{
+        type: "frizz:compose",
+        id: sent!.composed!.id,
+        item: { projectId: project.id, path: sample, text: sampleLines(editor.document, 3, 3), startLine: 3, endLine: 3, app: vscode.env.appName },
+        target: { thread: "fake-thread", project: project.slug },
+        focus: true,
+      }])
+      assert.deepEqual((await fakeLog()).rpc.slice(before.rpc.length).map((call) => call.procedure), ["board"], "the picker's thread list, and no follow-up")
+    },
+  },
+  {
+    name: "a file the page links opens here at its position; a missing one is said, not opened",
+    modes: ["fake"],
+    async run({ api }) {
+      await vscode.commands.executeCommand("workbench.action.closeAllEditors")
+      await pagePosts({ type: "frizz:open-file", path: sample, line: 6, column: 3 })
+      await until("the sample in front", () => vscode.window.activeTextEditor?.document.uri.fsPath === sample)
+      const editor = vscode.window.activeTextEditor!
+      await until("the cursor at 6:3", () => editor.selection.isEmpty && editor.selection.active.line === 5 && editor.selection.active.character === 2)
+      await pagePosts({ type: "frizz:open-file", path: join(workspace, "nope.ts"), line: 1 })
+      await until("the missing file reported", () => api.sidebar().events.some((event) => event.type === "frizz:open-file" && event.outcome === "missing"))
+      assert.equal(vscode.window.activeTextEditor?.document.uri.fsPath, sample, "nothing else opened")
+    },
+  },
+  {
+    name: "a chord the page forwards runs its VS Code command",
+    modes: ["fake"],
+    async run({ api }) {
+      assert.equal(api.sidebar().visible, true)
+      const mac = process.platform === "darwin"
+      // Ctrl+Shift+E (⌘⇧E): the Explorer takes the side bar, so the Frizz view is no longer visible.
+      await pagePosts({ type: "frizz:key", key: "E", code: "KeyE", ctrl: !mac, meta: mac, shift: true, alt: false })
+      await until("the explorer shown", () => !api.sidebar().visible)
+      assert.deepEqual(api.sidebar().events.at(-1), { type: "frizz:key", outcome: "workbench.view.explorer" })
+      await vscode.commands.executeCommand("frizz.sidebar.focus")
+      await until("the sidebar back", () => api.sidebar().visible)
+    },
+  },
+  {
+    name: "a message the sidebar does not know, a chord off its list, a link that is not a web page: nothing happens",
+    modes: ["fake"],
+    async run({ api }) {
+      await openSample()
+      const from = api.sidebar().events.length
+      const mac = process.platform === "darwin"
+      await pagePosts({ type: "frizz:bogus", path: sample })
+      // Ctrl+W would close the editor were it run.
+      await pagePosts({ type: "frizz:key", key: "w", code: "KeyW", ctrl: !mac, meta: mac, shift: false, alt: false })
+      await pagePosts({ type: "frizz:open-external", url: "javascript:alert(1)" })
+      await until("three messages handled", () => api.sidebar().events.length >= from + 3)
+      assert.deepEqual(api.sidebar().events.slice(from), [
+        { type: "frizz:bogus", outcome: "ignored" },
+        { type: "frizz:key", outcome: "ignored" },
+        { type: "frizz:open-external", outcome: "ignored" },
+      ])
+      assert.equal(vscode.window.activeTextEditor?.document.uri.fsPath, sample, "the editor is still open")
+      assert.equal(api.sidebar().visible, true)
+    },
+  },
+  {
+    name: "a theme change reaches the page",
+    modes: ["fake"],
+    async run() {
+      const workbench = vscode.workspace.getConfiguration("workbench")
+      const from = (await fakeLog()).page.received.length
+      const light = vscode.window.activeColorTheme.kind === vscode.ColorThemeKind.Light
+      await workbench.update("colorTheme", light ? "Default Dark Modern" : "Default Light Modern", vscode.ConfigurationTarget.Global)
+      try {
+        const want = light ? "dark" : "light"
+        await until(`frizz:theme ${want}`, async () => (await pageReceived("frizz:theme", from)).some((data) => data.theme === want))
+      } finally {
+        await workbench.update("colorTheme", undefined, vscode.ConfigurationTarget.Global)
+      }
+    },
+  },
+  {
+    name: "a page that doesn't answer leaves Add to Frizz prompt to Frizz, and so does turning the setting off",
+    modes: ["fake"],
+    async run() {
+      await openSample([1, 0, 1])
+      const composes = async () => (await fakeLog()).frames.filter((frame) => frame.t === "compose").length
+      await fake("/__e2e/page-answer", { answer: "silent" })
+      try {
+        const before = await composes()
+        const composed = await vscode.commands.executeCommand<EditorComposed | undefined>("frizz.addToPrompt")
+        assert.equal(composed?.ok, true, JSON.stringify(composed))
+        assert.equal(await composes(), before + 1, "after the page's silence, Frizz holds it for a page to claim")
+      } finally {
+        await fake("/__e2e/page-answer", { answer: "ok" })
+      }
+
+      const frizz = vscode.workspace.getConfiguration("frizz")
+      await frizz.update("useSidebar", false, vscode.ConfigurationTarget.Global)
+      try {
+        const before = await composes()
+        const pageBefore = (await fakeLog()).page.received.length
+        const composed = await vscode.commands.executeCommand<EditorComposed | undefined>("frizz.addToPrompt")
+        assert.equal(composed?.ok, true)
+        assert.equal(await composes(), before + 1)
+        assert.deepEqual(await pageReceived("frizz:compose", pageBefore), [], "the open sidebar was left alone")
+      } finally {
+        await frizz.update("useSidebar", undefined, vscode.ConfigurationTarget.Global)
+      }
+    },
+  },
+  {
+    name: "Frizz on a new port re-frames the sidebar there; a page that never loads offers Reload; no Frizz at all says so",
+    modes: ["fake"],
+    async run({ api, project }) {
+      const frizz = vscode.workspace.getConfiguration("frizz")
+      try {
+        await frizz.update("serverUrl", elsewhere, vscode.ConfigurationTarget.Global)
+        await until("the frame on the new port, ready", () => api.sidebar().url === `${elsewhere}/${embedQuery(project)}` && api.sidebar().ready, 30_000)
+        assert.deepEqual((await fakeLog(elsewhere)).page.loads, [`/${embedQuery(project)}`])
+        assert.equal(api.sidebar().hinted, false)
+
+        // The setting is taken at its word, so the frame goes to port 1, where nothing listens; its
+        // page never says it is ready, and the view offers Reload and Open in browser over it.
+        await frizz.update("serverUrl", "http://127.0.0.1:1", vscode.ConfigurationTarget.Global)
+        await until("the frame on port 1", () => api.sidebar().url === `http://127.0.0.1:1/${embedQuery(project)}`)
+        assert.equal(api.sidebar().ready, false)
+        await until("the hint", () => api.sidebar().hinted, 15_000)
+
+        // No address at all: discovery finds nothing. The page that was showing stays until Reload, which
+        // then says why there is nothing to show.
+        await frizz.update("serverUrl", "not an address", vscode.ConfigurationTarget.Global)
+        await until("offline", () => api.status().kind === "offline")
+        await new Promise((resolve) => setTimeout(resolve, 500))
+        assert.equal(api.sidebar().url, `http://127.0.0.1:1/${embedQuery(project)}`)
+        await vscode.commands.executeCommand("frizz.sidebar.reload")
+        // Reload looks again first ("Looking for Frizz…"), then says what it found.
+        await until("a message instead of the page", () => api.sidebar().url === undefined && api.sidebar().message === "Frizz isn't running.")
+      } finally {
+        await frizz.update("serverUrl", control, vscode.ConfigurationTarget.Global)
+      }
+      await until("the frame back on the first Frizz, ready", () => api.sidebar().url === `${control}/${embedQuery(project)}` && api.sidebar().ready, 30_000)
+      assert.equal(api.sidebar().hinted, false)
     },
   },
 ]

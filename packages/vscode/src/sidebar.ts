@@ -49,6 +49,8 @@ export interface SidebarSnapshot {
   opened: boolean
   visible: boolean
   ready: boolean
+  /** The "hasn't finished loading" bar is showing over the frame. */
+  hinted: boolean
   /** The frame's address, after asExternalUri, when it shows the page. */
   url?: string
   /** The copy it shows instead of the page. */
@@ -85,6 +87,7 @@ export function registerSidebar(api: Vscode, context: vscode.ExtensionContext, h
   let frameUrl: string | undefined
   let message: string | undefined
   let ready = false
+  let hinted = false
   let renders = 0
   let readyTimer: NodeJS.Timeout | undefined
   let refreshTimer: NodeJS.Timeout | undefined
@@ -117,6 +120,7 @@ export function registerSidebar(api: Vscode, context: vscode.ExtensionContext, h
 
   function setReady(next: boolean): void {
     ready = next
+    hinted = false
     clearTimeout(readyTimer)
     readyTimer = undefined
     if (!next) {
@@ -179,6 +183,7 @@ export function registerSidebar(api: Vscode, context: vscode.ExtensionContext, h
     view.webview.html = frameDocument({ nonce: nonce(), url: target.url, origin: target.origin })
     readyTimer = setTimeout(() => {
       host.log.warn(`The sidebar's page didn't say it was ready within ${READY_HINT_MS / 1000}s.`)
+      hinted = true
       void post({ view: "hint", show: true })
       settle(false)
     }, READY_HINT_MS)
@@ -348,6 +353,7 @@ export function registerSidebar(api: Vscode, context: vscode.ExtensionContext, h
       opened: view !== undefined,
       visible: view?.visible ?? false,
       ready,
+      hinted,
       ...(frameUrl ? { url: frameUrl } : {}),
       ...(message ? { message } : {}),
       ...(view?.badge ? { badge: view.badge.value } : {}),
