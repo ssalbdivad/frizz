@@ -300,7 +300,14 @@ export class EditorConnection {
     })
     socket.on("error", (error) => {
       if (generation !== this.#generation) return
-      refusal ??= (error as NodeJS.ErrnoException).code === "ECONNREFUSED" ? "Frizz isn't running." : `Couldn't reach Frizz: ${error.message}`
+      const code = (error as NodeJS.ErrnoException).code
+      // A Frizz from before the editor connection, behind its restart supervisor, does not answer the
+      // upgrade at all: the child drops a path it has no handler for. Measured against one 2026-10-01.
+      refusal ??= code === "ECONNREFUSED"
+        ? "Frizz isn't running."
+        : code === "ECONNRESET" || error.message === "socket hang up"
+          ? "Frizz didn't accept the editor connection. Update Frizz if this keeps happening."
+          : `Couldn't reach Frizz: ${error.message}`
     })
     socket.on("open", () => {
       if (generation !== this.#generation) return

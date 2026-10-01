@@ -364,6 +364,23 @@ test("a Frizz from before the editor connection (a plain 404 on the upgrade) is 
   }
 })
 
+test("a Frizz that hangs up on the upgrade (one from before the editor connection, behind its supervisor) is told to update", async () => {
+  const server = createServer()
+  server.on("upgrade", (_request, socket) => socket.destroy())
+  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve))
+  const origin = `http://127.0.0.1:${(server.address() as AddressInfo).port}`
+  const host = makeHost({ origin } as FakeFrizz)
+  const connection = new EditorConnection(host, FAST)
+  try {
+    connection.start()
+    await until("the offline status", () => connection.status.kind === "offline")
+    assert.deepEqual(connection.status, { kind: "offline", reason: "Frizz didn't accept the editor connection. Update Frizz if this keeps happening." })
+  } finally {
+    connection.stop()
+    await new Promise((resolve) => server.close(resolve))
+  }
+})
+
 test("stop closes the socket cleanly and nothing redials", async () => {
   const { frizz, connection, done } = await connected()
   const closed = new Promise<number>((resolve) => frizz.live.on("close", (code) => resolve(code)))
