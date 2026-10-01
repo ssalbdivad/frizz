@@ -67,6 +67,18 @@ export function ageSpan(at: string | undefined, nowMs = Date.now()): string | nu
 }
 
 /**
+ * The same ladder pointed FORWARD — `3h` until an instant, for a reading like the phone's Snoozed
+ * column (`wakes 3h`). Null for an invalid instant, and for one already reached: a wake that has
+ * passed is the scheduler's to deliver, and `wakes 0s` would promise a moment that is already gone.
+ */
+export function spanUntil(at: string | undefined, nowMs = Date.now()): string | null {
+  const targetMs = at ? Date.parse(at) : NaN
+  if (!Number.isFinite(targetMs) || !Number.isFinite(nowMs)) return null
+  const seconds = Math.floor((targetMs - nowMs) / 1_000)
+  return seconds <= 0 ? null : ageLadder(seconds)
+}
+
+/**
  * A message's own instant, for the transcript's hover reveal: `Aug 25, 10:31 AM`.
  *
  * The DATE is unconditional, and that is the point of the reading. A frizz thread is not a chat you

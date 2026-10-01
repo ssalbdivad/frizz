@@ -7,6 +7,7 @@ import {
   awaitingWaitClause,
   reasonSentence,
   awaitingProse,
+  hintGloss,
 } from "./awaitingPresentation.ts"
 
 const now = Date.parse("2026-07-21T18:00:00.000Z")
@@ -126,6 +127,12 @@ test("a fence naming nothing yields nothing, so the popover cannot invent a wait
   assert.equal(awaitingWaitClause([{ kind: "shell", value: "  " }]), null, "a blank value names nothing")
 })
 
+// The MOBILE row keeps one inline caption, because a phone has no hover to move it to.
+test("hintGloss is the phone's one line, and it is the PR ref", () => {
+  assert.equal(hintGloss([{ kind: "pr", value: "acme/app#391" }, { kind: "for", value: "2h" }]), "PR acme/app#391")
+  assert.equal(hintGloss([{ kind: "shell", value: "bvg44v4ij" }]), null)
+})
+
 // THE WORKER'S REASON, SET AS A SENTENCE. It stands alone everywhere frizz draws it — its own paragraph
 // under the rail popover's sentence, its own line on the card — and it arrives lowercase because the
 // shipped contract's example was a fragment (maintainer 2026-08-19: "why is that second sentence
@@ -217,4 +224,9 @@ test("prWatchRefs: an `issues:` entry is a chip with the issue path, deduped apa
     { ref: "acme/app#7", url: "https://github.com/acme/app/pull/7" },
     { ref: "not a ref", url: null },
   ])
+})
+
+test("hintGloss: an issue-only fence glosses as the issue; a PR still wins when both are named", () => {
+  assert.equal(hintGloss([{ kind: "issue", value: "acme/app#7" }, { kind: "for", value: "3d" }]), "Issue acme/app#7")
+  assert.equal(hintGloss([{ kind: "issue", value: "acme/app#7" }, { kind: "pr", value: "acme/app#391" }]), "PR acme/app#391")
 })
