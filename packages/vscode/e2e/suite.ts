@@ -292,7 +292,7 @@ function skip(why: string): never {
 
 export async function run(): Promise<void> {
   console.log(`frizz e2e: ${mode} mode, workspace ${workspace}, ${vscode.env.appName} ${vscode.version}`)
-  const extension = vscode.extensions.getExtension<FrizzExtensionApi>("colinhacks.frizz-vscode")
+  const extension = vscode.extensions.getExtension<FrizzExtensionApi>("ssalbdivad.frizz-vscode")
   assert.ok(extension, "the extension under development is installed")
   const api = await extension.activate()
   await until("the connection to Frizz", () => api.status().kind === "connected", 30_000)
