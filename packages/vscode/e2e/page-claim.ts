@@ -13,6 +13,7 @@
 // takes it), so `document.hasFocus()` is forced true. The browser gets a throwaway profile and is
 // closed in `finally`; its pid is returned so a caller that was interrupted can kill exactly it.
 
+import type { ChildProcess } from "node:child_process"
 import { mkdtempSync, rmSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join, resolve } from "node:path"
@@ -29,8 +30,8 @@ export interface PageClaimOptions {
   timeoutMs?: number
   /** Stop early (the suite already failed, or the harness is tearing down). */
   signal?: AbortSignal
-  /** Called once the browser is up, with its pid. */
-  onBrowser?: (pid: number | undefined) => void
+  /** Called once the browser is up, with its process: a handle, not a pid, so a caller can tell it exited. */
+  onBrowser?: (browser: ChildProcess | undefined) => void
   log?: (line: string) => void
 }
 
@@ -50,7 +51,7 @@ export async function watchPageClaim(options: PageClaimOptions): Promise<PageCla
   // protocolTimeout well past puppeteer's 180s: a screenshot on a machine where a dozen agents are
   // compiling at once can take minutes, and the failure reads like a bug in the page (scripts/shot.mjs).
   const browser = await puppeteer.launch({ headless: true, args: ["--no-sandbox"], userDataDir: profile, protocolTimeout: 600_000 })
-  options.onBrowser?.(browser.process()?.pid)
+  options.onBrowser?.(browser.process() ?? undefined)
   const errors: string[] = []
   let value = ""
   let ok = false

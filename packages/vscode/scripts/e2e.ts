@@ -194,7 +194,7 @@ async function bootStack(): Promise<Stack> {
   log(`stack: pid ${pid} (process group), port ${port}, HOME ${home}; its log is ${stackLog}`)
 
   const groupAlive = () => alive(-pid)
-  const teardown = async () => {
+  const tearDown = async () => {
     try {
       process.kill(-pid, "SIGTERM")
     } catch {}
@@ -215,6 +215,11 @@ async function bootStack(): Promise<Stack> {
     log(strays.length ? `stack: STILL RUNNING after teardown: ${strays.join(", ")}` : `stack: torn down (pid ${pid}${exited ? " exited" : ""}; nothing left with its HOME)`)
     rmSync(home, { recursive: true, force: true })
   }
+  let tearing: Promise<void> | undefined
+  const teardown = () => (tearing ??= tearDown())
+  // Published the moment the group exists, not when the boot returns: a Ctrl-C during the minute the
+  // stack takes to come up must still reach it, and `stack` is not assigned until it is up.
+  stackTeardown = teardown
 
   try {
     const deadline = Date.now() + 180_000
@@ -243,11 +248,13 @@ async function bootStack(): Promise<Stack> {
 // ── the run ───────────────────────────────────────────────────────────────────────────────────────────
 
 let stack: Stack | undefined
+/** The stack's teardown, set as soon as it is spawned; idempotent, so the boot's own failure path and the run's may both call it. */
+let stackTeardown: (() => Promise<void>) | undefined
 let fake: FakeFrizz | undefined
 let exitCode = 1
 let pageClaim: Promise<PageClaimResult> | undefined
 const stopPage = new AbortController()
-let pageBrowser: number | undefined
+let pageBrowser: ChildProcess | undefined
 let sample: string | undefined
 let wroteSample = false
 let tornDown = false
@@ -257,12 +264,14 @@ async function teardown(): Promise<void> {
   tornDown = true
   stopPage.abort()
   if (pageClaim) await Promise.race([pageClaim, new Promise((resolve) => setTimeout(resolve, 15_000))])
-  if (pageBrowser && alive(pageBrowser)) {
-    log(`the page's browser (pid ${pageBrowser}) outlived its watcher; killing it`)
-    try { process.kill(pageBrowser, "SIGKILL") } catch {}
+  // The handle, not a bare pid: a browser the watcher already closed has an exit code, so its pid —
+  // possibly someone else's process by now — is never signalled.
+  if (pageBrowser && pageBrowser.exitCode === null && pageBrowser.signalCode === null) {
+    log(`the page's browser (pid ${pageBrowser.pid}) outlived its watcher; killing it`)
+    pageBrowser.kill("SIGKILL")
   }
   await fake?.close()
-  await stack?.teardown()
+  await stackTeardown?.()
   if (sample && wroteSample) rmSync(sample, { force: true })
 }
 
@@ -331,7 +340,7 @@ try {
       shot: join(scratch, "page-claim.png"),
       timeoutMs: 600_000,
       signal: stopPage.signal,
-      onBrowser: (pid) => (pageBrowser = pid),
+      onBrowser: (browser) => (pageBrowser = browser),
     }).catch((error: unknown): PageClaimResult => ({ ok: false, value: "", errors: [String(error)] }))
   }
 

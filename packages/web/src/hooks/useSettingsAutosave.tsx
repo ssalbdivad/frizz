@@ -49,6 +49,18 @@ export function publishMachineSettings(queryClient: QueryClient, saved: Settings
 }
 
 /**
+ * Publish a write this surface made, and return the cache's copy of it exactly as a `useQuery` on
+ * `settingsGet` will read it back. The cache stores its own structurally-shared copy, not `saved`, so
+ * that copy is the identity a draft compares against to know the move was its own (ownPublish below).
+ */
+export function publishOwnSettings(queryClient: QueryClient, saved: Settings): Settings | undefined {
+  // The server's validated copy, rather than racing queued writes with a refetch.
+  queryClient.setQueryData(["settingsGet"], saved)
+  publishMachineSettings(queryClient, saved)
+  return queryClient.getQueryData<Settings>(["settingsGet"])
+}
+
+/**
  * A MACHINE setting another surface changed while a draft was open, adopted into that draft.
  *
  * A draft is seeded once and its every write carries the WHOLE object, so a value written elsewhere
@@ -61,8 +73,13 @@ export function publishMachineSettings(queryClient: QueryClient, saved: Settings
  * Only the machine keys: a project's own keys change in the cache when the PAGE's project does, and
  * pouring another project's values into a draft open on this one is not an adoption. Returns `draft`
  * itself when nothing is adopted, so a caller's state update is a no-op.
+ *
+ * `own` is this surface's last publish (publishOwnSettings). A move to it is this draft's own write
+ * landing, never another surface's: adopting it put back a value the human had already changed again —
+ * toggle on, toggle off before the first write lands, and the first write's landing turned it back on.
  */
-export function adoptPublishedSettings(draft: Settings, before: Settings, after: Settings): Settings {
+export function adoptPublishedSettings(draft: Settings, before: Settings, after: Settings, own?: Settings): Settings {
+  if (own !== undefined && after === own) return draft
   let adopted: Settings | null = null
   for (const key of MACHINE_SETTING_KEYS) {
     // Every machine key is a scalar, so `===` is the comparison.
@@ -101,6 +118,8 @@ export function useSettingsAutosave() {
   const writeRef = useRef(write)
   writeRef.current = write
   const queryClient = useQueryClient()
+  // The cache's copy of this surface's last landed write: a move to it is this surface's own.
+  const ownPublish = useRef<Settings | undefined>(undefined)
 
   const flush = useCallback(() => {
     if (timer.current !== undefined) window.clearTimeout(timer.current)
@@ -113,9 +132,7 @@ export function useSettingsAutosave() {
     chain.current = chain.current
       .then(() => writeRef.current.mutateAsync(next))
       .then((saved) => {
-        // Publish the server's validated copy rather than racing queued writes with a refetch.
-        queryClient.setQueryData(["settingsGet"], saved)
-        publishMachineSettings(queryClient, saved)
+        ownPublish.current = publishOwnSettings(queryClient, saved)
         inflight.current -= 1
         retries.current = 0
         if (inflight.current > 0 || pending.current) return
@@ -151,7 +168,7 @@ export function useSettingsAutosave() {
   // A write still waiting — debounced, or queued for a retry — is a whole snapshot taken before the
   // cache moved, and would put the old value back as surely as the draft would (adoptPublishedSettings).
   const adopt = useCallback((before: Settings, after: Settings) => {
-    if (pending.current) pending.current = adoptPublishedSettings(pending.current, before, after)
+    if (pending.current) pending.current = adoptPublishedSettings(pending.current, before, after, ownPublish.current)
   }, [])
 
   useEffect(
@@ -162,7 +179,7 @@ export function useSettingsAutosave() {
     [flush],
   )
 
-  return { state, queue, flush, adopt }
+  return { state, queue, flush, adopt, ownPublish }
 }
 
 // A settings surface's whole read/write loop: the server's copy seeds a local draft ONCE, and every
@@ -174,7 +191,7 @@ export function useSettingsAutosave() {
 export function useSettingsDraft() {
   const settings = useQuery({ queryKey: ["settingsGet"], queryFn: () => rpc.settingsGet() })
   const [draft, setDraft] = useState<Settings | null>(() => settings.data ?? null)
-  const { state, queue, flush, adopt } = useSettingsAutosave()
+  const { state, queue, flush, adopt, ownPublish } = useSettingsAutosave()
 
   useEffect(() => {
     if (settings.data && !draft) setDraft(settings.data)
@@ -186,9 +203,10 @@ export function useSettingsDraft() {
     const after = settings.data
     seen.current = after
     if (!before || !after || before === after) return
-    setDraft((current) => current && adoptPublishedSettings(current, before, after))
+    const own = ownPublish.current
+    setDraft((current) => current && adoptPublishedSettings(current, before, after, own))
     adopt(before, after)
-  }, [settings.data, adopt])
+  }, [settings.data, adopt, ownPublish])
 
   const update = useCallback(
     (next: Settings, opts?: { debounce?: boolean }) => {

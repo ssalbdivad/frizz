@@ -1,7 +1,8 @@
 import assert from "node:assert/strict"
 import test from "node:test"
+import { QueryClient, QueryObserver } from "@tanstack/react-query"
 import type { Settings } from "@frizz/shared"
-import { adoptPublishedSettings } from "./useSettingsAutosave.tsx"
+import { adoptPublishedSettings, publishMachineSettings, publishOwnSettings } from "./useSettingsAutosave.tsx"
 
 const base = {
   localFileOpener: "system",
@@ -35,4 +36,31 @@ test("a value the human chose in the draft is theirs, and nothing changed adopts
   // A project's own key moves in the cache when the PAGE's project does; it is never poured in.
   const otherProject = with_({ effort: "low", githubPrompt: "another project's" })
   assert.equal(adoptPublishedSettings(base, base, otherProject), base)
+})
+
+// Toggle a setting on and back off before the first write lands: the first write's landing moved the
+// cache off the draft's value, and adopting it turned the setting back on under the human (re-review).
+// The draft knows its own write by the cache's copy of it — the very object a useQuery reads back.
+test("a draft never adopts its own write landing, only another surface's", () => {
+  const client = new QueryClient()
+  client.setQueryData(["settingsGet"], base)
+  const observer = new QueryObserver<Settings>(client, { queryKey: ["settingsGet"], enabled: false })
+  const unsubscribe = observer.subscribe(() => {})
+  try {
+    const toggledOn = with_({ notifications: true })
+    const own = publishOwnSettings(client, toggledOn)
+    const after = observer.getCurrentResult().data!
+    assert.equal(after, own, "what the draft compares against is what the page reads")
+    assert.notEqual(after, toggledOn, "the cache keeps its own copy, so `saved` itself would never match")
+    // The human has already toggled it back off: the draft holds `before`'s value, and keeps it.
+    assert.equal(adoptPublishedSettings(base, base, after, own), base)
+    // The same move from ANOTHER surface is still adopted.
+    publishMachineSettings(client, with_({ notifications: true, localFileOpener: "vscode" }))
+    const fromElsewhere = observer.getCurrentResult().data!
+    assert.notEqual(fromElsewhere, own)
+    assert.equal(adoptPublishedSettings(base, after, fromElsewhere, own).localFileOpener, "vscode")
+  } finally {
+    unsubscribe()
+    client.clear()
+  }
 })

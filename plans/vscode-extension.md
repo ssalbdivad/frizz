@@ -12,7 +12,9 @@ Status: implemented 2026-10-01. The extension and Frizz talk in both directions:
 
 The extension also works in Cursor and Windsurf (they run VS Code extensions), on any base from the
 manifest's VS Code 1.90 up. Raising the window is best-effort: `workbench.action.focusWindow` arrived
-in 1.128, so on an older base (Cursor 3.11 is 1.125) the file still opens and the answer is still ok.
+in 1.128, so on an older base (Cursor 3.11 is 1.125) a clicked file still opens and the answer is still
+ok. A `focus` request is nothing but the raise, so there it answers that it could not, and the server
+falls back to the editor's command line on the folder, which raises the window that has it open.
 
 ## Why a live connection, and why the extension dials Frizz
 
@@ -51,7 +53,7 @@ server scanning lock files and dialling N editors.
 | `welcome {bootId}` | after hello | logs it; a changed bootId means Frizz restarted |
 | `projects {projects}` | after hello, and on any change (2s in-memory diff) | maps files to projects; status bar counts |
 | `open {id, path, line?, column?, endLine?}` | a file link was clicked | opens + reveals, raises the window, answers `result` |
-| `focus {id, path}` | "Open in editor" on a folder this window has open | raises the window, answers `result` |
+| `focus {id, path}` | "Open in editor" on a folder this window has open | raises the window, answers `result` (not ok where it cannot raise itself) |
 | `composed {id, ok, error?}` | after a `compose` | says it was added (with an "Open Frizz" button), or why not |
 
 ### Which window gets an open
@@ -73,7 +75,7 @@ setting names an editor family a connected window belongs to:
   A window that ANSWERS `ok:false` is an error the page toasts, not a reason to spawn a second opener.
 
 `openThreadFolder` / `openProjectFolder` send `focus` to a window whose workspace folder IS that
-folder (realpath-equal), else spawn as before.
+folder (realpath-equal), else — or when that window cannot raise itself — spawn as before.
 
 ### Prompt-box inserts (`compose`)
 
@@ -150,8 +152,8 @@ the files and Frizz are.
 - End to end, `packages/vscode/scripts/e2e.ts` downloads a real VS Code (`@vscode/test-electron`) and
   runs it under Xvfb with the extension, never on the real display:
   - `nub packages/vscode/scripts/e2e.ts` — FAKE mode, against an in-process fake Frizz (which also
-    judges frames with the server's schema): opens at a line and a range, focus and a folder answering
-    ok, the status bar's count, Ask, Send to thread (and its refusal of an untitled selection), Add to
+    judges frames with the server's schema): opens at a line and a range, focus answering whether the
+    window came to the front, a folder answering ok, the status bar's count, Ask, Send to thread (and its refusal of an untitled selection), Add to
     Frizz prompt, the open-links setting, and a dropped connection coming back.
   - `FRIZZ_E2E_VSCODE=oldest nub packages/vscode/scripts/e2e.ts` — the same on the oldest VS Code the
     manifest's `engines.vscode` admits (1.90.0), where `focusWindow` does not exist.

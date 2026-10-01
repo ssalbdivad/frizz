@@ -130,14 +130,20 @@ const steps: Step[] = [
     },
   },
   {
-    name: "a focus request and an open on a folder answer ok, even where the editor cannot bring its window to the front",
+    name: "a focus request says whether the window came to the front; an open on a folder answers ok either way",
     modes: ["fake"],
     async run() {
       // `workbench.action.focusWindow` arrived in VS Code 1.128: on the oldest VS Code the manifest
-      // admits (FRIZZ_E2E_VSCODE=oldest), and in Cursor and Windsurf, raising the window throws. The
-      // work it follows has already happened, so the answer is still ok.
+      // admits (FRIZZ_E2E_VSCODE=oldest), and in Cursor and Windsurf, raising the window throws. A focus
+      // request is only the raise, so there it answers that it could not, and Frizz falls back to the
+      // editor's command line; an open has already happened by then, so it is ok on every version.
+      const canRaise = (await vscode.commands.getCommands(true)).includes("workbench.action.focusWindow")
       const focused = await fake<{ ok: boolean; error?: string }>("/__e2e/focus", { path: workspace })
-      assert.deepEqual({ ok: focused.ok, error: focused.error }, { ok: true, error: undefined })
+      if (canRaise) assert.deepEqual({ ok: focused.ok, error: focused.error }, { ok: true, error: undefined })
+      else {
+        assert.equal(focused.ok, false)
+        assert.match(focused.error ?? "", /can't bring its window to the front/)
+      }
       const folder = await fake<{ ok: boolean; error?: string }>("/__e2e/open", { path: join(workspace, "src") })
       assert.deepEqual({ ok: folder.ok, error: folder.error }, { ok: true, error: undefined })
     },

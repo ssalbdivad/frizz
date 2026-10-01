@@ -89,17 +89,19 @@ export function activateFrizz(api: Vscode, context: vscode.ExtensionContext): Fr
 
   // Raising the window is best-effort. `workbench.action.focusWindow` arrived in VS Code 1.128, so the
   // VS Codes the manifest's ^1.90 admits before it — and Cursor and Windsurf, which build on older
-  // bases (Cursor 3.11 is 1.125) — have no such command. The open has already happened by the time the
-  // window is raised, so a window that cannot raise itself still answers ok: refusing would toast an
-  // error over a file that opened, and turn "Open in editor" into a failure.
+  // bases (Cursor 3.11 is 1.125) — have no such command. After an OPEN the file has already opened by
+  // the time the window is raised, so the answer is still ok: refusing would toast an error over a file
+  // that opened. A FOCUS request is nothing but the raise, though, so it answers that it could not, and
+  // Frizz falls back to the editor's own command line, which raises the window holding the folder.
   let raiseMissing = false
-  const focusWindow = async (): Promise<void> => {
+  const focusWindow = async (): Promise<boolean> => {
     try {
       await api.commands.executeCommand("workbench.action.focusWindow")
+      return true
     } catch (error) {
-      if (raiseMissing) return
+      if (!raiseMissing) log.info(`${api.env.appName} ${api.version} can't bring its own window to the front (${(error as Error).message}); Frizz's file links still open here.`)
       raiseMissing = true
-      log.info(`${api.env.appName} ${api.version} can't bring its own window to the front (${(error as Error).message}); Frizz's file links still open here.`)
+      return false
     }
   }
 
@@ -125,8 +127,7 @@ export function activateFrizz(api: Vscode, context: vscode.ExtensionContext): Fr
     state: windowState,
     open: (message) => openFromFrizz(message),
     async focus() {
-      await focusWindow()
-      return { ok: true }
+      return (await focusWindow()) ? { ok: true } : { ok: false, error: `${api.env.appName} can't bring its window to the front.` }
     },
     projects(next) {
       projects = next

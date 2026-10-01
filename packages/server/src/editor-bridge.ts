@@ -95,7 +95,12 @@ export interface EditorBridge {
    * opener would only fail the same way in another window.
    */
   openFile(path: string, position: FilePosition | undefined, kinds: readonly EditorKind[]): Promise<boolean>
-  /** Raise a window of `kinds` that has `dir` open as a workspace folder. Same answers as openFile. */
+  /**
+   * Raise a window of `kinds` that has `dir` open as a workspace folder. True: it came to the front.
+   * False otherwise — never a throw: a window that answers it cannot raise itself (an editor without
+   * `workbench.action.focusWindow`) is exactly the case the caller's fallback serves, since the editor's
+   * own CLI spawned on the folder raises the window that has it open.
+   */
   focusFolder(dir: string, kinds: readonly EditorKind[]): Promise<boolean>
   /** Claim a held compose item: that one, or with no id the oldest. Null when there is none (or it expired). */
   takeCompose(id?: string): EditorComposeItem | null
@@ -562,7 +567,7 @@ export function createEditorBridge(deps: EditorBridgeDeps): EditorBridge {
       }
       const conn = mostRecent(matches.map((m) => m.conn))
       if (!conn) return false
-      return request(conn, { t: "focus", path: matches.find((m) => m.conn === conn)!.folder })
+      return request(conn, { t: "focus", path: matches.find((m) => m.conn === conn)!.folder }).catch(() => false)
     },
 
     takeCompose(id) {

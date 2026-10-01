@@ -396,6 +396,16 @@ test("focus goes only to a window whose folder IS the folder", async (t) => {
   assert.equal(await h.bridge.focusFolder(dirs.mono, ["cursor"]), false)
 })
 
+test("a window that cannot raise itself makes focus false, not an error, so the caller spawns the editor instead", async (t) => {
+  const h = await harness(t)
+  const dirs = tree(t)
+  const stuck = await editor(h.port, { folders: [dirs.mono] }, "fail")
+  assert.equal(await h.bridge.focusFolder(dirs.mono, ["vscode"]), false)
+  assert.equal(stuck.requests.length, 1, "it was asked")
+  // The same answer to an open is still the window's error: a second opener would fail the same way.
+  await assert.rejects(h.bridge.openFile(dirs.inMono, { line: 1 }, ["vscode"]), /binary file/)
+})
+
 test("compose: held, acknowledged, announced, claimed once, oldest first, expired after its time, capped", async (t) => {
   const h = await harness(t, { composeTtlMs: 60_000, maxComposeItems: 3 })
   const win = await editor(h.port, { app: "Cursor" })
