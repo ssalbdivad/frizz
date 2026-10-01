@@ -62,7 +62,9 @@ setting names an editor family a connected window belongs to:
 - No folder contains it: the most recently focused window that shares the server's filesystem
   (same `home` and `platform` in its hello) — what `code -g` would do.
 - No window, a timeout (5s), or a dropped socket: the old spawn, now with the position
-  (`code -g path:line:col`, `cursor -g …`; `open vscode://file…` on macOS when there is a line).
+  (`code -g path:line:col`, `cursor -g …`; on macOS the app bundle's own CLI,
+  `<App>.app/Contents/Resources/app/bin/code -g …`, and `open -a <App>` without the line when that is
+  missing — never `open vscode://file…`, which VS Code answers with a confirmation dialog by default).
   A window that ANSWERS `ok:false` is an error the page toasts, not a reason to spawn a second opener.
 
 `openThreadFolder` / `openProjectFolder` send `focus` to a window whose workspace folder IS that

@@ -393,7 +393,7 @@ test("the $EDITOR opener runs $VISUAL/$EDITOR as an argv, skipping terminal edit
   assert.deepEqual(argv({ EDITOR: "C:\\Zed\\zed.exe" }, "win32"), ["C:\\Zed\\zed.exe", "/p/app.ts"])
 })
 
-test("a position reaches every editor's argv: `-g path:line:col` for the VS Code family, a deep link on macOS, nothing for the system opener", () => {
+test("a position reaches every editor's argv: `-g path:line:col` for the VS Code family, the app bundle's own CLI on macOS, nothing for the system opener", () => {
   const at = { line: 12, column: 3, endLine: 20 }
   const argv = (selected: Parameters<typeof localFileOpenCommand>[1], platform: NodeJS.Platform, path: string, position?: typeof at | { line: number }, env: NodeJS.ProcessEnv = {}, exists = (_: string) => false) => {
     const spec = localFileOpenCommand(path, selected, { platform, env, exists, position })
@@ -404,11 +404,28 @@ test("a position reaches every editor's argv: `-g path:line:col` for the VS Code
   assert.deepEqual(argv("cursor", "linux", "/p/a.ts", { line: 7 }), ["cursor", "-g", "/p/a.ts:7"])
   assert.deepEqual(argv("vscode", "linux", "/p/a.ts"), ["code", "/p/a.ts"], "no position: the argv is what it always was")
   assert.deepEqual(argv("system", "linux", "/p/a.ts", at), ["xdg-open", "/p/a.ts"], "the system opener cannot be told a line")
-  // macOS: `open -a <app> a.ts:12` would open a file NAMED that, so a position goes through the editor's
-  // URL handler, each segment encoded so a space or `#` stays part of the path.
-  assert.deepEqual(argv("vscode", "darwin", "/Users/me/my app/a#b.ts", at), ["open", "vscode://file/Users/me/my%20app/a%23b.ts:12:3"])
-  assert.deepEqual(argv("cursor", "darwin", "/p/a.ts", { line: 7 }), ["open", "cursor://file/p/a.ts:7"])
-  assert.deepEqual(argv("vscode", "darwin", "/p/a.ts"), ["open", "-a", "Visual Studio Code", "/p/a.ts"])
+  // macOS: `open -a <app> a.ts:12` would open a file NAMED that, and `open vscode://file/…:12` makes VS
+  // Code ask the human to confirm every one (security.promptForLocalFileProtocolHandling, on by default) —
+  // so a position goes to the CLI inside the app bundle, under /Applications or ~/Applications, as an
+  // argv: a space or `#` in the path is just part of it.
+  const mac = { HOME: "/Users/me" }
+  const codeCli = "/Applications/Visual Studio Code.app/Contents/Resources/app/bin/code"
+  const userCodeCli = "/Users/me/Applications/Visual Studio Code.app/Contents/Resources/app/bin/code"
+  const cursorCli = "/Applications/Cursor.app/Contents/Resources/app/bin/cursor"
+  const userCursorCli = "/Users/me/Applications/Cursor.app/Contents/Resources/app/bin/cursor"
+  assert.deepEqual(argv("vscode", "darwin", "/Users/me/my app/a#b.ts", at, mac, (p) => p === codeCli), [codeCli, "-g", "/Users/me/my app/a#b.ts:12:3"])
+  assert.deepEqual(argv("vscode", "darwin", "/p/a.ts", at, mac, (p) => p === userCodeCli), [userCodeCli, "-g", "/p/a.ts:12:3"], "a per-user install")
+  assert.deepEqual(argv("vscode", "darwin", "/p/a.ts", at, mac, (p) => p === codeCli || p === userCodeCli), [codeCli, "-g", "/p/a.ts:12:3"], "/Applications first")
+  assert.deepEqual(argv("cursor", "darwin", "/p/a.ts", { line: 7 }, mac, (p) => p === cursorCli), [cursorCli, "-g", "/p/a.ts:7"])
+  assert.deepEqual(argv("cursor", "darwin", "/p/a.ts", { line: 7 }, mac, (p) => p === userCursorCli), [userCursorCli, "-g", "/p/a.ts:7"])
+  assert.deepEqual(argv("cursor", "darwin", "/p/a.ts", { line: 7 }, mac, (p) => p === codeCli), ["open", "-a", "Cursor", "/p/a.ts"], "VS Code's CLI is not Cursor's")
+  // No CLI where it should be (a renamed bundle, an install elsewhere): the file still opens, without the
+  // line — never a URL that stops for a confirmation dialog.
+  assert.deepEqual(argv("vscode", "darwin", "/p/a.ts", at, mac), ["open", "-a", "Visual Studio Code", "/p/a.ts"])
+  assert.deepEqual(argv("cursor", "darwin", "/p/a.ts", at, mac), ["open", "-a", "Cursor", "/p/a.ts"])
+  assert.deepEqual(argv("vscode", "darwin", "/p/a.ts", at, {}, (p) => p === userCodeCli), ["open", "-a", "Visual Studio Code", "/p/a.ts"], "no HOME, no ~/Applications to look in")
+  // No position: `open -a`, as it always was, whatever is installed.
+  assert.deepEqual(argv("vscode", "darwin", "/p/a.ts", undefined, mac, (p) => p === codeCli), ["open", "-a", "Visual Studio Code", "/p/a.ts"])
   assert.deepEqual(argv("finder", "darwin", "/p/a.ts", at), ["open", "-R", "/p/a.ts"])
   // Windows: the installed exe takes -g directly; the shim takes it inside the one quoted cmd.exe argument.
   const win = "C:\\p\\a.ts"

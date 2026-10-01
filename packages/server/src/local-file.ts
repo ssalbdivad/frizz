@@ -1,7 +1,7 @@
 import { spawn, type SpawnOptions } from "node:child_process"
 import { existsSync, readFileSync, realpathSync, statSync } from "node:fs"
 import { homedir } from "node:os"
-import { dirname, isAbsolute, join, resolve, sep } from "node:path"
+import { dirname, isAbsolute, join, posix, resolve, sep } from "node:path"
 import { goToArgument, splitFilePosition, type EditorKind, type FilePosition, type LocalFileOpener } from "@frizz/shared"
 import { normalizeLocalPath } from "./local-path.ts"
 
@@ -333,15 +333,25 @@ export function editorKindsForOpener(opener: LocalFileOpener | "editor", env: No
   return []
 }
 
-/**
- * An editor deep link for macOS, where the editor is launched with `open` and `open -a <app> path:12`
- * would open a file named `path:12`. VS Code and Cursor register `vscode://file/<path>:<line>:<col>`
- * (Cursor as `cursor://`). Each path segment is percent-encoded so a space, `#` or `?` stays part of
- * the path rather than ending the URL.
- */
-function editorDeepLink(scheme: "vscode" | "cursor", path: string, position: FilePosition): string {
-  const encoded = path.split("/").map(encodeURIComponent).join("/")
-  return `${scheme}://file${goToArgument(encoded, position)}`
+// The CLI inside each editor's macOS app bundle — what `code` / `cursor` on PATH link to once the human
+// runs "Install 'code' command in PATH", which a GUI-launched Frizz cannot count on having on its PATH.
+// It is the only macOS opener that takes a line silently: `open -a <app> a.ts:12` opens a file NAMED
+// that, and `open vscode://file/a.ts:12` makes VS Code (and Cursor, its fork) stop on a confirmation
+// dialog every time until the human ticks it off (security.promptForLocalFileProtocolHandling).
+const MAC_EDITOR_APP: Record<"cursor" | "vscode", { app: string; cli: string }> = {
+  cursor: { app: "Cursor", cli: "cursor" },
+  vscode: { app: "Visual Studio Code", cli: "code" },
+}
+
+/** The bundle CLI of a drag-installed editor: /Applications, then a per-user ~/Applications. */
+function macEditorCli(selected: "cursor" | "vscode", env: NodeJS.ProcessEnv, exists: (path: string) => boolean): string | undefined {
+  const { app, cli } = MAC_EDITOR_APP[selected]
+  const roots = ["/Applications", ...(env.HOME ? [posix.join(env.HOME, "Applications")] : [])]
+  for (const root of roots) {
+    const path = posix.join(root, `${app}.app`, "Contents", "Resources", "app", "bin", cli)
+    if (exists(path)) return path
+  }
+  return undefined
 }
 
 /**
@@ -371,11 +381,12 @@ export function localFileOpenCommand(path: string, selected: Exclude<LocalFileOp
   // `code -g path:12:3` / `cursor -g …`: the one argv both editors' CLIs take a line in.
   const editorTarget = position ? ["-g", goToArgument(path, position)] : [path]
   if (platform === "darwin") {
-    if (position && (selected === "vscode" || selected === "cursor")) return { command: "open", args: [editorDeepLink(selected, path, position)] }
-    return selected === "cursor" ? { command: "open", args: ["-a", "Cursor", path] }
-      : selected === "vscode" ? { command: "open", args: ["-a", "Visual Studio Code", path] }
-        : selected === "finder" ? { command: "open", args: ["-R", path] }
-          : { command: "open", args: [path] }
+    if (selected === "finder") return { command: "open", args: ["-R", path] }
+    if (selected === "system") return { command: "open", args: [path] }
+    // A line needs the bundle's CLI; without one the file still opens, at its top.
+    const cli = position ? macEditorCli(selected, options.env ?? process.env, options.exists ?? existsSync) : undefined
+    if (cli) return { command: cli, args: editorTarget }
+    return { command: "open", args: ["-a", MAC_EDITOR_APP[selected].app, path] }
   }
   if (platform === "win32") {
     if (selected === "system") return { command: "explorer.exe", args: [path] }
