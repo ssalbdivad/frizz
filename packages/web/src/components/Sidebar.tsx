@@ -24,6 +24,7 @@ import { formatCompactElapsed } from "../lib/durationLabels.ts"
 import { statusElapsed } from "./ThreadStatusLine.tsx"
 import { awaitingProse, awaitingWaitClause } from "../lib/awaitingPresentation.ts"
 import { clearArchived } from "../lib/optimisticArchive.ts"
+import { clearPinned, markPinned } from "../lib/optimisticPin.ts"
 import { holdLayout, type HeldSection } from "../lib/heldLayout.ts"
 import { actedOnHere } from "../lib/humanActs.ts"
 import { useListHold } from "../lib/listHold.ts"
@@ -537,32 +538,37 @@ function PinnedMark({ besideClock = false }: { besideClock?: boolean }) {
 // offers to unpin, so a filled pin anywhere on the rail means "pinned" and nothing else (maintainer
 // 2026-09-02: "use the solid pin icon to make sure that the icons are consistent everywhere";
 // 2026-09-03: "the pin icon should be unfilled for unpinned threads").
+//
+// OPTIMISTIC (lib/optimisticPin.ts): the row moves on the click, not on the server's answer, and the
+// button is never disabled meanwhile — a dimmed button waiting on a round trip is what read as an
+// unresponsive click. A fixture's row (no project scope) has no list to move, so it just waits.
 function RowPinButton({ t, className = "" }: { t: ThreadView; className?: string }) {
   const pinned = isPinned(t)
-  const [busy, setBusy] = useState(false)
   // The row's own project's client: its ThreadProjectScope's, else the page's `rpc` (a fixture's row).
   const api = useThreadApi()
+  const projectId = useThreadProjectId()
   const afterWrite = useAfterScopedWrite()
   return (
     <Tooltip label={pinned ? "Unpin — return this thread to the rail's bands" : "Pin — keep this thread at the very top"}>
       <button
         data-sidebar-pin={t.id}
         aria-label={pinned ? "Unpin thread" : "Pin thread"}
-        disabled={busy}
         // Same two guards as Retry: keep DOM focus off the button so the hover reveal doesn't outlive
         // the pointer, and stop the press from reaching the row (which would also open the thread).
         onMouseDown={(e) => e.preventDefault()}
         onClick={(e) => {
           e.stopPropagation()
-          setBusy(true)
+          if (projectId) markPinned(projectId, t.id, !pinned)
           api
             .setThreadPinned({ slug: t.id, sessionId: t.sessionId ?? "", pinned: !pinned })
             .then(afterWrite)
-            .catch((error: unknown) => showToast(`${pinned ? "Unpin" : "Pin"} failed: ${String(error instanceof Error ? error.message : error).slice(0, 80)}`))
-            .finally(() => setBusy(false))
+            .catch((error: unknown) => {
+              if (projectId) clearPinned(projectId, t.id)
+              showToast(`${pinned ? "Unpin" : "Pin"} failed: ${String(error instanceof Error ? error.message : error).slice(0, 80)}`)
+            })
         }}
         // `className` carries a layout trim the strip decides per position (see ThreadRow's readings).
-        className={`${ROW_ACTION_CLASS} disabled:opacity-50 ${className}`}
+        className={`${ROW_ACTION_CLASS} ${className}`}
       >
         {pinned ? <PinOff size={12} fill="currentColor" /> : <Pin size={12} />}
       </button>

@@ -57,6 +57,7 @@ import { MarkdownScopeContext } from "../lib/useMarkdown.ts"
 import { stableQueue, type QueueSlot } from "../lib/stableQueue.ts"
 import { actedOnHere } from "../lib/humanActs.ts"
 import { useSteeredAt } from "../lib/steering.ts"
+import { pinOverlayQueues, usePinOverrides } from "../lib/optimisticPin.ts"
 import { glideTo, gliding, useViewportLock } from "../lib/viewportLock.ts"
 import { isPageKey, registerQueueCursor, releaseAutoOpened, runThreadCommand, useShortcut } from "../lib/keyboardRuntime.ts"
 import { runExternalOpen } from "../lib/externalOpen.ts"
@@ -144,7 +145,9 @@ export function AllQueuesPage() {
   const readAt = readStartedAt(queues.data)
   const departed = useDepartedQueue(live, readAt)
   const base = useMemo(() => queuesProjects(cards.data, polled, direction), [cards.data, polled, direction])
-  const projects = useMemo(() => overlayQueues(base, [live, departed], direction), [base, live, departed, direction])
+  // The pins this tab just set or cleared, ahead of the board that will confirm them (lib/optimisticPin.ts).
+  const pinOverrides = usePinOverrides()
+  const projects = useMemo(() => pinOverlayQueues(overlayQueues(base, [live, departed], direction), pinOverrides), [base, live, departed, direction, pinOverrides])
   const focusProject = projects.find((project) => project.slug === focus)
   // THE VIEW (lib/pageView.ts): one project, or every project. Focused, the list and the queue are that
   // project's alone and the prompt box is its; showing All projects, they are every project's.
