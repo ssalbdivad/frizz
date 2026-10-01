@@ -12,10 +12,13 @@
 // from a `vscode-webview://` origin) and the page in its iframe. Messages cross it unchanged:
 //  - page → host: only from ITS iframe (`event.source === frame.contentWindow`) at Frizz's origin, sent on
 //    as `{ page: <message> }`. The extension validates the message again (embed.ts parsePageMessage).
-//  - host → page: VS Code's host frame delivers the extension's messages as events from this document's
-//    parent at this document's own origin (pre/index.html, `contentWindow.postMessage(…, window.origin)`).
-//    A `frizz:` message is posted on with `targetOrigin` = Frizz's origin, so if the frame were ever
-//    somewhere else the browser drops it instead of handing it selected code.
+//  - host → page: VS Code's host frame delivers the extension's messages at this document's own origin
+//    (pre/index.html, `contentWindow.postMessage(…, window.origin)`), and that ORIGIN is how they are
+//    known: VS Code sets `window.parent = window` in a webview document (its injected API script), so
+//    the source cannot be compared with the parent, and each webview's origin is its own — only VS
+//    Code's frame and this document share it. A `frizz:` message is posted on with `targetOrigin` =
+//    Frizz's origin, so if the frame were ever somewhere else the browser drops it instead of handing it
+//    selected code.
 //  - the view's own traffic never reaches the page: `{ view: … }` from this document (its buttons, its
 //    platform) and `{ view: "hint" }` from the extension, which shows or hides the "hasn't loaded" bar.
 // The envelope keeps the two apart, so nothing the page posts can pass for a click on Reload.
@@ -134,7 +137,7 @@ export function frameDocument(input: { nonce: string; url: string; origin: strin
       if (event.origin === FRIZZ) vscode.postMessage({ page: data })
       return
     }
-    if (event.source !== window.parent || event.origin !== window.origin) return
+    if (event.origin !== window.origin) return
     if (!data || typeof data !== "object") return
     if (data.view === "hint") {
       hint.hidden = !data.show

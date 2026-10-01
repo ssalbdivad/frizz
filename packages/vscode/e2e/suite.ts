@@ -48,6 +48,23 @@ async function pageReceived(type: string, from = 0, at = control) {
   return (await fakeLog(at)).page.received.slice(from).map((entry) => entry.data).filter((data) => data.type === type)
 }
 
+/**
+ * A command that should land in the sidebar, bounded: when it does not, Ask and Send fall back to an
+ * input box that would wait for a human forever. Dismissed, so the next step starts clean.
+ */
+async function landsInSidebar<T>(command: Thenable<T>, what: string): Promise<T> {
+  let timer: NodeJS.Timeout | undefined
+  const late = new Promise<never>((_, reject) => (timer = setTimeout(() => reject(new Error(`${what} did not land in the sidebar within 30s`)), 30_000)))
+  try {
+    return await Promise.race([command, late])
+  } catch (error) {
+    await vscode.commands.executeCommand("workbench.action.closeQuickOpen")
+    throw error
+  } finally {
+    clearTimeout(timer)
+  }
+}
+
 /** Have the fake page post `message` to the sidebar, as the real page would. */
 const pagePosts = (message: unknown) => fake("/__e2e/page-post", { message })
 
@@ -359,7 +376,7 @@ const steps: Step[] = [
     async run({ project }) {
       const editor = await openSample([1, 0, 3])
       const before = await fakeLog()
-      const asked = await vscode.commands.executeCommand<{ composed?: EditorComposed } | undefined>("frizz.ask")
+      const asked = await landsInSidebar(vscode.commands.executeCommand<{ composed?: EditorComposed } | undefined>("frizz.ask"), "Ask")
       assert.equal(asked?.composed?.ok, true, JSON.stringify(asked))
       assert.deepEqual(await pageReceived("frizz:compose", before.page.received.length), [{
         type: "frizz:compose",
@@ -377,7 +394,7 @@ const steps: Step[] = [
     async run({ project }) {
       const editor = await openSample([2, 0, 2])
       const before = await fakeLog()
-      const sent = await vscode.commands.executeCommand<{ slug: string; composed?: EditorComposed } | undefined>("frizz.sendToThread", { thread: "@fake-thread" })
+      const sent = await landsInSidebar(vscode.commands.executeCommand<{ slug: string; composed?: EditorComposed } | undefined>("frizz.sendToThread", { thread: "@fake-thread" }), "Send")
       assert.equal(sent?.composed?.ok, true, JSON.stringify(sent))
       assert.deepEqual(await pageReceived("frizz:compose", before.page.received.length), [{
         type: "frizz:compose",

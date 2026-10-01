@@ -41,7 +41,8 @@ interface Relay {
   toHost: unknown[]
   toPage: { data: unknown; targetOrigin: string }[]
   frameWindow: object
-  parent: object
+  /** VS Code's host frame, which is NOT `window.parent` in a webview document. */
+  hostFrame: object
   hint: { hidden: boolean }
   focused: number
   dispatch(event: { source: unknown; origin: string; data: unknown }): void
@@ -52,14 +53,17 @@ function relay(html: string): Relay {
   const toHost: unknown[] = []
   const toPage: { data: unknown; targetOrigin: string }[] = []
   const frameWindow = { postMessage: (data: unknown, targetOrigin: string) => toPage.push({ data, targetOrigin }) }
-  const parent = {}
+  const hostFrame = {}
   const hint = { hidden: true }
   const listeners: ((event: unknown) => void)[] = []
   const state = { focused: 0 }
   const frame = { contentWindow: frameWindow, focus: () => state.focused++ }
   const window = {
     origin: WEBVIEW,
-    parent,
+    // As VS Code's injected API script leaves it in a webview document.
+    get parent() {
+      return window
+    },
     addEventListener: (type: string, listener: (event: unknown) => void) => {
       if (type === "message") listeners.push(listener)
     },
@@ -77,7 +81,7 @@ function relay(html: string): Relay {
     toHost,
     toPage,
     frameWindow,
-    parent,
+    hostFrame,
     hint,
     get focused() {
       return state.focused
@@ -106,22 +110,22 @@ test("the relay hands the host only what its own frame sent from Frizz's origin"
 test("the relay posts the host's frizz: messages to the page at Frizz's origin only, and keeps its own", () => {
   const r = relay(frameDocument({ nonce: "n", url: URL_, origin: FRIZZ }))
   const compose = { type: "frizz:compose", id: "1", item: { path: "/r/a.ts", app: "Code" }, target: "front", focus: false }
-  r.dispatch({ source: r.parent, origin: WEBVIEW, data: compose })
+  r.dispatch({ source: r.hostFrame, origin: WEBVIEW, data: compose })
   assert.deepEqual(r.toPage, [{ data: compose, targetOrigin: FRIZZ }])
   assert.equal(r.focused, 0, "focus false leaves focus alone")
-  r.dispatch({ source: r.parent, origin: WEBVIEW, data: { ...compose, id: "2", focus: true } })
+  r.dispatch({ source: r.hostFrame, origin: WEBVIEW, data: { ...compose, id: "2", focus: true } })
   assert.equal(r.focused, 1, "focus true gives the frame the focus, so the page's caret shows")
   assert.equal(r.toPage.length, 2)
 
-  r.dispatch({ source: r.parent, origin: "http://evil.example", data: compose })
-  r.dispatch({ source: {}, origin: WEBVIEW, data: compose })
-  r.dispatch({ source: r.parent, origin: WEBVIEW, data: { type: "other" } })
-  r.dispatch({ source: r.parent, origin: WEBVIEW, data: "frizz:compose" })
+  r.dispatch({ source: r.hostFrame, origin: "http://evil.example", data: compose })
+  r.dispatch({ source: r.hostFrame, origin: "vscode-webview://another-webview", data: compose })
+  r.dispatch({ source: r.hostFrame, origin: WEBVIEW, data: { type: "other" } })
+  r.dispatch({ source: r.hostFrame, origin: WEBVIEW, data: "frizz:compose" })
   assert.equal(r.toPage.length, 2, "only a frizz: object from the host frame")
 
-  r.dispatch({ source: r.parent, origin: WEBVIEW, data: { view: "hint", show: true } })
+  r.dispatch({ source: r.hostFrame, origin: WEBVIEW, data: { view: "hint", show: true } })
   assert.equal(r.hint.hidden, false)
-  r.dispatch({ source: r.parent, origin: WEBVIEW, data: { view: "hint", show: false } })
+  r.dispatch({ source: r.hostFrame, origin: WEBVIEW, data: { view: "hint", show: false } })
   assert.equal(r.hint.hidden, true)
   assert.equal(r.toPage.length, 2, "the view's own message never reaches the page")
 })
