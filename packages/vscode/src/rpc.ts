@@ -19,12 +19,16 @@ export type Procedure = keyof Api
 export type ProcedureInput<P extends Procedure> = Parameters<Api[P]>[0]
 export type ProcedureOutput<P extends Procedure> = Awaited<ReturnType<Api[P]>>
 
-export type RpcErrorKind = "unreachable" | "refused" | "failed"
+export type RpcErrorKind = "unreachable" | "unanswered" | "refused" | "failed"
 
 export class RpcError extends Error {
   constructor(
     message: string,
-    /** `unreachable`: no answer at all. `refused`: the server said no (4xx). `failed`: it tried and failed (5xx). */
+    /**
+     * `unreachable`: the request never got there (nothing listening). `unanswered`: it went out and no
+     * answer came back — it timed out, or the connection dropped mid-request — so it may have taken
+     * effect. `refused`: the server said no (4xx). `failed`: it tried and failed (5xx).
+     */
     readonly kind: RpcErrorKind,
     readonly retryable = false,
     readonly status?: number,
@@ -64,8 +68,10 @@ export class FrizzRpc {
       })
     } catch (error) {
       const cause = (error as { cause?: { code?: string } }).cause?.code
-      const timedOut = (error as Error).name === "TimeoutError"
-      throw new RpcError(timedOut ? `Frizz did not answer within ${Math.round(timeoutMs / 1000)}s` : `Frizz isn't reachable (${cause ?? (error as Error).message})`, "unreachable")
+      if ((error as Error).name === "TimeoutError") throw new RpcError(`Frizz did not answer within ${Math.round(timeoutMs / 1000)}s`, "unanswered")
+      // A connection Frizz took and then dropped (a restart mid-request) is as ambiguous as a timeout.
+      if (cause === "ECONNRESET" || cause === "UND_ERR_SOCKET" || cause === "EPIPE") throw new RpcError(`Frizz dropped the request (${cause})`, "unanswered")
+      throw new RpcError(`Frizz isn't reachable (${cause ?? (error as Error).message})`, "unreachable")
     }
     const text = await response.text()
     let body: { result?: unknown; error?: unknown; retryable?: unknown } | undefined
@@ -98,12 +104,24 @@ export async function withRetry<T>(attempt: () => Promise<T>, delays: readonly n
   }
 }
 
+/** What the human was doing, for the words an unanswered request needs: whether to check before trying again. */
+export type RpcAction = "ask" | "send" | "read"
+
+const UNANSWERED: Record<RpcAction, string> = {
+  // No retry and no idempotency key: a dispatch that went unanswered may still have started its thread.
+  ask: "Frizz didn't answer in time. Check Frizz before asking again: it may have started the thread.",
+  send: "Frizz didn't answer in time. Check the thread before sending again: the message may have arrived.",
+  read: "Frizz didn't answer in time. Try again.",
+}
+
 /**
  * Words for a failure, for a notification. A signed-out provider is the one the human can fix in a
  * click, so it says where; an unreachable server says Frizz is not running, which is almost always why.
+ * An unanswered one is NOT that — Frizz is up and slow, and what to do depends on what was asked of it.
  */
-export function describeRpcError(error: unknown): string {
+export function describeRpcError(error: unknown, action: RpcAction = "read"): string {
   if (error instanceof RpcError && error.kind === "unreachable") return "Frizz isn't running."
+  if (error instanceof RpcError && error.kind === "unanswered") return UNANSWERED[action]
   const message = error instanceof Error ? error.message : String(error)
   const auth = /^AUTH_REQUIRED:(claude|codex)$/u.exec(message)
   if (auth) return `Sign in to ${auth[1] === "claude" ? "Claude" : "Codex"} in Frizz first.`

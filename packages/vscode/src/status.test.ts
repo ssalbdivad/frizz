@@ -1,6 +1,6 @@
 import { test } from "node:test"
 import assert from "node:assert/strict"
-import { statusView } from "./status.ts"
+import { notConnectedMessage, statusView } from "./status.ts"
 
 const connected = { kind: "connected" as const, origin: "http://127.0.0.1:9393", bootId: "b" }
 
@@ -29,4 +29,15 @@ test("offline or incompatible, a click tries again and the tooltip says why", ()
   assert.equal(incompatible.command, "frizz.reconnect")
   assert.match(incompatible.tooltip, /^Update Frizz or the extension\. Click to try again\.$/)
   assert.equal(statusView({ kind: "connecting" }, []).command, "frizz.reconnect")
+})
+
+test("a command with no connection says the connection's own reason, not that Frizz is stopped", () => {
+  // A Frizz that is up but refused this window: the commands must not contradict the tooltip.
+  assert.equal(notConnectedMessage({ kind: "offline", reason: "This Frizz has no editor connection yet. Update Frizz." }), "This Frizz has no editor connection yet. Update Frizz.")
+  assert.equal(
+    notConnectedMessage({ kind: "incompatible", reason: "This Frizz speaks a different version of the editor connection. Update Frizz or the extension." }),
+    "This Frizz speaks a different version of the editor connection. Update Frizz or the extension.",
+  )
+  assert.equal(notConnectedMessage({ kind: "offline", reason: "Frizz isn't running." }), "Frizz isn't running.", "when it really is not running, it says so")
+  assert.equal(notConnectedMessage({ kind: "connecting" }), "Still connecting to Frizz. Try again in a moment.")
 })

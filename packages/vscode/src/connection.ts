@@ -18,6 +18,9 @@
 //     is gone).
 //   - One log line per change of state, not per retry: a window left open on a stopped Frizz would
 //     otherwise write a line every 30s for days.
+//   - Nothing goes out that Frizz will refuse. A refused hello (4401) is refused again on every redial,
+//     forever, so the folders a window reports are fitted to Frizz's limits (`fitFolders`) rather than
+//     sent whole.
 //
 // Pure node (no `vscode` import): the host interface is how the window is reached, and the tests drive
 // this against a real `ws` server in-process.
@@ -26,6 +29,8 @@ import { randomUUID } from "node:crypto"
 import WebSocket from "ws"
 import {
   EDITOR_CLOSE,
+  EDITOR_MAX_FOLDERS,
+  EDITOR_MAX_PATH,
   EDITOR_PROTOCOL_VERSION,
   EDITOR_SOCKET_PATH,
   type EditorClientMessage,
@@ -104,6 +109,61 @@ function stateKey(state: Omit<EditorState, "t">): string {
   return JSON.stringify([state.folders, state.focused, state.acceptsOpens])
 }
 
+/**
+ * Bytes of folder paths one hello or state may carry, encoded. Frizz refuses any frame but a compose
+ * past 64 KiB (editor-bridge.ts EDITOR_MAX_FRAME_BYTES), and 64 folders of 4096 units each could be
+ * 768 KiB of UTF-8. 32 KiB is hundreds of real folders' worth, and leaves the rest of a hello room.
+ */
+export const FOLDERS_MAX_BYTES = 32 * 1024
+
+/**
+ * The window's folders as Frizz takes them: none longer than EDITOR_MAX_PATH, at most EDITOR_MAX_FOLDERS,
+ * within FOLDERS_MAX_BYTES, in the workspace's own order — so a multi-root workspace past a limit still
+ * connects, with Frizz knowing its first folders, instead of being refused on every redial.
+ */
+export function fitFolders(folders: readonly string[]): string[] {
+  const fitted: string[] = []
+  let bytes = 0
+  for (const folder of folders) {
+    if (fitted.length >= EDITOR_MAX_FOLDERS) break
+    if (!folder || folder.length > EDITOR_MAX_PATH) continue
+    const size = Buffer.byteLength(JSON.stringify(folder), "utf8") + 1
+    if (bytes + size > FOLDERS_MAX_BYTES) break
+    fitted.push(folder)
+    bytes += size
+  }
+  return fitted
+}
+
+/**
+ * When this window last had focus, for the hello's `focusedAgoMs`. Frizz ranks windows by it for an open
+ * no folder claims, and every window redials after a Frizz restart — while the human is in the browser,
+ * so none is focused, and without this whichever redialled last would win. Gaining focus and losing it
+ * both mean "focused until now", the rule the server applies to a `state` frame. Monotonic, so a clock
+ * change cannot make it negative.
+ */
+export class FocusRecency {
+  readonly #now: () => number
+  #focused = false
+  #at: number | undefined
+
+  constructor(now: () => number = () => performance.now()) {
+    this.#now = now
+  }
+
+  /** The window's focus at activation, and at every change. */
+  observe(focused: boolean): void {
+    if (focused || this.#focused) this.#at = this.#now()
+    this.#focused = focused
+  }
+
+  /** How long ago the window last had focus: undefined while it has it, and when it never has. */
+  agoMs(focused: boolean): number | undefined {
+    if (focused || this.#at === undefined) return undefined
+    return Math.max(0, Math.round(this.#now() - this.#at))
+  }
+}
+
 /** 1s, 2s, 4s … 30s, each ±20%. `attempt` counts from 0. */
 export function backoffDelay(attempt: number, minMs: number, maxMs: number, random: () => number): number {
   const base = Math.min(maxMs, minMs * 2 ** Math.min(attempt, 30))
@@ -134,6 +194,7 @@ export class EditorConnection {
   /** The state the hello carried, which becomes `#lastState` once Frizz welcomes it. */
   #helloState: string | undefined
   #lastLogged: string | undefined
+  #foldersNote: string | undefined
   readonly #composes = new Map<string, { resolve: (value: EditorComposed) => void; timer: NodeJS.Timeout }>()
 
   constructor(host: ConnectionHost, options: ConnectionOptions = {}) {
@@ -179,7 +240,7 @@ export class EditorConnection {
   /** Tell Frizz this window's folders, focus or open-links setting changed. Unchanged state is not resent. */
   sendState(): void {
     if (!this.#welcomed) return
-    const state = this.#host.state()
+    const state = this.#fitted(this.#host.state())
     const key = stateKey(state)
     if (key === this.#lastState) return
     if (this.#send({ t: "state", ...state })) this.#lastState = key
@@ -198,6 +259,17 @@ export class EditorConnection {
       }, this.#composeTimeoutMs)
       this.#composes.set(id, { resolve, timer })
     })
+  }
+
+  /** The window's state with its folders fitted to Frizz's limits, saying so once when that leaves some out. */
+  #fitted<T extends { folders: string[] }>(state: T): T {
+    const folders = fitFolders(state.folders)
+    const note = folders.length < state.folders.length
+      ? `This window has ${state.folders.length} folders; Frizz takes ${folders.length} of them (at most ${EDITOR_MAX_FOLDERS}, none over ${EDITOR_MAX_PATH} characters), so file links to the rest open elsewhere.`
+      : undefined
+    if (note && note !== this.#foldersNote) this.#host.log.warn(note)
+    this.#foldersNote = note
+    return { ...state, folders }
   }
 
   #setStatus(status: ConnectionStatus): void {
@@ -312,7 +384,7 @@ export class EditorConnection {
     socket.on("open", () => {
       if (generation !== this.#generation) return
       this.#armSilence(generation)
-      const hello = this.#host.hello()
+      const hello = this.#fitted(this.#host.hello())
       this.#helloState = stateKey(hello)
       this.#send({ t: "hello", v: EDITOR_PROTOCOL_VERSION, ...hello })
     })

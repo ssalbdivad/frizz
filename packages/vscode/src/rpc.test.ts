@@ -83,6 +83,40 @@ test("nothing listening is `unreachable`, which reads as Frizz not running", asy
   assert.equal(describeRpcError(error), "Frizz isn't running.")
 })
 
+test("a request Frizz took and never answered is `unanswered`, not Frizz being down — and Ask says to check before asking again", async () => {
+  // A dispatch on a busy server (a cold Codex app-server) can run past the extension's 60s: the
+  // request is held, the thread may well be started, and "Frizz isn't running" would invite a second.
+  const held: import("node:http").ServerResponse[] = []
+  const slow = createServer((_request, response) => void held.push(response))
+  await new Promise<void>((resolve) => slow.listen(0, "127.0.0.1", resolve))
+  const origin = `http://127.0.0.1:${(slow.address() as AddressInfo).port}`
+  try {
+    const timedOut = await new FrizzRpc(origin).mutation("p1", "dispatch", { prompt: "hi", backend: "claude" }, 150).catch((e: unknown) => e)
+    assert.ok(timedOut instanceof RpcError)
+    assert.equal(timedOut.kind, "unanswered")
+    assert.equal(timedOut.retryable, false, "never resent: it may have taken effect")
+    assert.equal(describeRpcError(timedOut, "ask"), "Frizz didn't answer in time. Check Frizz before asking again: it may have started the thread.")
+    assert.match(describeRpcError(timedOut, "send"), /^Frizz didn't answer in time\. Check the thread before sending again/)
+    assert.equal(describeRpcError(timedOut), "Frizz didn't answer in time. Try again.")
+  } finally {
+    for (const response of held) response.destroy()
+    slow.closeAllConnections()
+    await new Promise((resolve) => slow.close(resolve))
+  }
+
+  // A connection dropped mid-request (Frizz restarting under it) is the same kind of ambiguous.
+  const dropping = createServer((request) => request.socket.destroy())
+  await new Promise<void>((resolve) => dropping.listen(0, "127.0.0.1", resolve))
+  try {
+    const dropped = await new FrizzRpc(`http://127.0.0.1:${(dropping.address() as AddressInfo).port}`).mutation("p1", "dispatch", { prompt: "hi", backend: "claude" }, 5_000).catch((e: unknown) => e)
+    assert.ok(dropped instanceof RpcError)
+    assert.equal(dropped.kind, "unanswered", dropped.message)
+    assert.doesNotMatch(describeRpcError(dropped, "ask"), /isn't running/)
+  } finally {
+    await new Promise((resolve) => dropping.close(resolve))
+  }
+})
+
 test("only a retryable refusal is retried, on the page's schedule, and the attempt is the same each time", async () => {
   const slept: number[] = []
   const sleep = async (ms: number) => void slept.push(ms)

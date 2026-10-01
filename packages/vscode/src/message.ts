@@ -20,12 +20,23 @@
 // (the cursor's line, when the ask came from an editor) ahead of the question. The same applies to a
 // selection too large to quote — past QUOTE_MAX_LINES lines or QUOTE_MAX_BYTES — which becomes a
 // reference to its range: the agent can read the file, and a 2 MB prompt helps nobody.
+//
+// The same goes for a prompt-box insert (`composeInput`), with one more bound: the size of the FRAME.
 
 import { basename } from "node:path"
+import { EDITOR_COMPOSE_MAX_TEXT, type EditorComposeInput } from "@frizz/shared/editor-protocol"
 import { formatFileReference } from "@frizz/shared/file-position"
 
 export const QUOTE_MAX_LINES = 400
 export const QUOTE_MAX_BYTES = 32 * 1024
+/**
+ * Bytes a compose's text may take ONCE JSON-ENCODED. Frizz's socket closes a frame over 128 KiB
+ * (editor-bridge.ts EDITOR_MAX_PAYLOAD_BYTES) with 1009 before any schema sees it, and JSON writes each
+ * control character other than \n and \t as six bytes (`\u0000`): 32 KiB of NUL-padded text, which
+ * QUOTE_MAX_BYTES admits, is a 196 KB frame. 96 KiB leaves room for the path (at most 4096 UTF-16 units,
+ * so at most 24 KiB encoded) and the envelope.
+ */
+export const COMPOSE_TEXT_MAX_ENCODED_BYTES = 96 * 1024
 
 export interface Selected {
   /** The selected text, verbatim. */
@@ -55,6 +66,29 @@ export function quotable(selection: Selected | undefined): selection is Selected
   if (!selection || !selection.text.trim()) return false
   const lines = selection.endLine - selection.startLine + 1
   return lines <= QUOTE_MAX_LINES && Buffer.byteLength(selection.text, "utf8") <= QUOTE_MAX_BYTES
+}
+
+/** A selection a prompt-box insert can carry as text: quotable, and small enough once encoded to fit the frame. */
+export function composable(selection: Selected | undefined): selection is Selected {
+  return quotable(selection) &&
+    selection.text.length <= EDITOR_COMPOSE_MAX_TEXT &&
+    Buffer.byteLength(JSON.stringify(selection.text), "utf8") <= COMPOSE_TEXT_MAX_ENCODED_BYTES
+}
+
+/**
+ * What "Add to Frizz prompt" hands Frizz: the selection's text and range, or — too large to carry — the
+ * range alone, which the page writes as a reference. Still a place in a file, never a refusal.
+ */
+export function composeInput(target: { path: string; projectId?: string; selection?: Selected; cursorLine?: number }): EditorComposeInput {
+  const item: EditorComposeInput = { path: target.path, ...(target.projectId ? { projectId: target.projectId } : {}) }
+  if (target.selection) {
+    if (composable(target.selection)) item.text = target.selection.text
+    item.startLine = target.selection.startLine
+    item.endLine = target.selection.endLine
+  } else if (target.cursorLine) {
+    item.startLine = target.cursorLine
+  }
+  return item
 }
 
 /** `a.ts:12` / `a.ts:12-20` — the chip label, `contextChipLabel` in the page. */

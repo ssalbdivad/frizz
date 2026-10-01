@@ -1,14 +1,16 @@
 import { test } from "node:test"
 import assert from "node:assert/strict"
 import { randomUUID } from "node:crypto"
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs"
+import { mkdirSync, mkdtempSync, readFileSync, realpathSync as realpath, rmSync, writeFileSync } from "node:fs"
 import { createServer, type Server } from "node:http"
 import type { AddressInfo } from "node:net"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { frizzPaths, type FrizzPaths } from "@frizz/server/frizz-paths"
-import { acquireProjectLaunchOwner, projectLaunchTokenProof } from "@frizz/server/project-launch"
-import { discoverFrizz, launchTokenProof, originFromSetting, ownedFrizz } from "./discovery.ts"
+import { acquireProjectLaunchOwner, processStartTime, projectLaunchTokenProof } from "@frizz/server/project-launch"
+// The desktop app's reader and the launcher's own writer: the extension's replica is pinned to both.
+import { acquireStableServerOwner, publishStableServerAddress, readStableServerOwner, releaseStableServerOwner, type ServerOwnerLease } from "../../../src/server-owner.ts"
+import { discoverFrizz, launchTokenProof, observeGeneration, originFromSetting, ownedFrizz, pageAddressNote, psGeneration, readOwnerAddress } from "./discovery.ts"
 
 interface Health {
   ok: true
@@ -52,6 +54,19 @@ function writeJson(path: string, value: unknown): void {
   writeFileSync(path, JSON.stringify(value))
 }
 
+function readJsonFile(path: string): Record<string, unknown> {
+  return JSON.parse(readFileSync(path, "utf8")) as Record<string, unknown>
+}
+
+/** This process as the published launcher: the machine-wide owner lease and its address record, written by the server's own code. */
+function publishOwner(roots: FrizzPaths, port: number): ServerOwnerLease {
+  const acquired = acquireStableServerOwner(roots)
+  assert.equal(acquired.kind, "acquired")
+  if (acquired.kind !== "acquired") throw new Error("unreachable")
+  publishStableServerAddress(acquired.lease, port)
+  return acquired.lease
+}
+
 test("the launch-token proof is byte-for-byte the server's projectLaunchTokenProof", () => {
   for (const [projectId, projectDir] of [[randomUUID(), "/home/me/repo"], [randomUUID(), "C:\\Users\\me\\repo"], [randomUUID(), "/tmp/ünïcode dir"]] as const) {
     const token = randomUUID()
@@ -91,20 +106,101 @@ test("the setting wins outright — nothing on disk is read and no port is probe
 test("the launcher's address record is taken while its port answers health, and passed over once it does not", async () => {
   const { home, roots } = fixtureRoots()
   const { port, server } = await healthServer(() => ({ ok: true, bootId: "boot" }))
+  const lease = publishOwner(roots, port)
   try {
-    writeJson(join(roots.state, "frizz-server", "address.json"), { version: 1, ownerToken: randomUUID(), pid: 1, processStart: "x", publisherToken: randomUUID(), port })
     const live = await discoverFrizz({ roots, ports: [] })
     assert.deepEqual(live.found, { origin: `http://127.0.0.1:${port}`, port, source: "owner-record" })
 
-    // Negative control: the same record over a dead listener (a crash leaves it behind) finds nothing.
-    writeJson(join(roots.state, "frizz-server", "address.json"), { version: 1, port: await deadPort() })
+    // Negative control: the same live owner's record over a dead listener finds nothing.
+    publishStableServerAddress(lease, await deadPort())
     const dead = await discoverFrizz({ roots, ports: [] })
     assert.equal(dead.found, undefined)
     assert.match(dead.notes.join("\n"), /does not answer/)
   } finally {
+    releaseStableServerOwner(lease)
     server.close()
     rmSync(home, { recursive: true, force: true })
   }
+})
+
+test("an address record a crash left behind is not trusted, even when something answers health on its port", async () => {
+  // The case the record's own comment warns about: the launcher was SIGKILLed (or WSL shut down), the
+  // record stayed, and a `frizz --sandbox` or another account's Frizz now holds the port.
+  const { home, roots } = fixtureRoots()
+  const foreign = await healthServer(() => ({ ok: true, bootId: "foreign" }))
+  const addressPath = join(roots.state, "frizz-server", "address.json")
+  mkdirSync(roots.data, { recursive: true })
+  try {
+    // A record with no owner beside it, and one whose owner pid is gone.
+    writeJson(addressPath, { version: 1, ownerToken: randomUUID(), pid: 999_999, processStart: "linux:x:1", publisherToken: randomUUID(), port: foreign.port })
+    const orphan = await discoverFrizz({ roots, ports: [], pidAlive: () => false })
+    assert.equal(orphan.found, undefined)
+    assert.match(orphan.notes.join("\n"), /no owner record behind it/)
+
+    const lease = publishOwner(roots, foreign.port)
+    releaseStableServerOwner(lease)
+    // The release removed both; put back what a crash leaves: the owner record and the address, pid dead.
+    const ownerToken = randomUUID()
+    writeJson(join(roots.state, "frizz-server", "project-launch.owner"), {
+      version: 2, token: ownerToken, projectId: "c1fd5810-0f8a-4c1d-91a0-6d7445d28e5a", projectDir: realpath(roots.data), role: "server",
+      state: "active", delegates: [], acquiredAt: "t", updatedAt: "t", pid: 999_999, processStart: "linux:x:1",
+    })
+    writeJson(addressPath, { version: 1, ownerToken, pid: 999_999, processStart: "linux:x:1", publisherToken: randomUUID(), port: foreign.port })
+    const crashed = await discoverFrizz({ roots, ports: [], pidAlive: () => false })
+    assert.equal(crashed.found, undefined, "a dead owner's port is not this user's Frizz any more")
+    assert.match(crashed.notes.join("\n"), /its owner, pid 999999, is gone/)
+  } finally {
+    foreign.server.close()
+    rmSync(home, { recursive: true, force: true })
+  }
+})
+
+test("the address-record verdict is readStableServerOwner's, case by case, over files the server's own writer wrote", async () => {
+  const { home, roots } = fixtureRoots()
+  const ownerPath = join(roots.state, "frizz-server", "project-launch.owner")
+  const addressPath = join(roots.state, "frizz-server", "address.json")
+  const lease = publishOwner(roots, 4321)
+  const owner = readJsonFile(ownerPath)
+  const address = readJsonFile(addressPath)
+  const bootId = readFileSync("/proc/sys/kernel/random/boot_id", "utf8").trim()
+  const dead = 2 ** 22 + 12_345
+  const cases: { name: string; owner?: Record<string, unknown> | null; address?: Record<string, unknown>; running: boolean }[] = [
+    { name: "the live owner and its own address", running: true },
+    { name: "an address from another owner token", address: { ...address, ownerToken: randomUUID() }, running: false },
+    { name: "an address naming another pid", address: { ...address, pid: 1 }, running: false },
+    { name: "an address naming another process start", address: { ...address, processStart: `linux:${bootId}:1` }, running: false },
+    { name: "an address missing its publisher token", address: { ...address, publisherToken: undefined }, running: false },
+    { name: "an owner whose pid was reused by another process", owner: { ...owner, processStart: `linux:${bootId}:1` }, address: { ...address, processStart: `linux:${bootId}:1` }, running: false },
+    { name: "an owner whose pid is gone", owner: { ...owner, pid: dead }, address: { ...address, pid: dead }, running: false },
+    { name: "no owner record at all", owner: null, running: false },
+    { name: "an owner from another data folder", owner: { ...owner, projectDir: "/elsewhere" }, running: false },
+    { name: "an owner the platform cannot compare (opaque), still alive", owner: { ...owner, processStart: "opaque:x" }, address: { ...address, processStart: "opaque:x" }, running: true },
+  ]
+  try {
+    for (const entry of cases) {
+      if (entry.owner === null) rmSync(ownerPath, { force: true })
+      else writeJson(ownerPath, entry.owner ?? owner)
+      writeJson(addressPath, entry.address ?? address)
+      const theirs = readStableServerOwner(roots)
+      const ours = await readOwnerAddress(roots)
+      assert.equal(theirs.kind === "running", entry.running, `${entry.name}: the desktop's reader says ${theirs.kind}`)
+      assert.equal(ours.kind === "running", entry.running, `${entry.name}: the extension's reader says ${JSON.stringify(ours)}`)
+      if (theirs.kind === "running" && ours.kind === "running") assert.equal(ours.port, theirs.port)
+    }
+  } finally {
+    writeJson(ownerPath, owner)
+    writeJson(addressPath, address)
+    releaseStableServerOwner(lease)
+    rmSync(home, { recursive: true, force: true })
+  }
+})
+
+test("a live process's start marker is byte-for-byte the server's processStartTime", async () => {
+  assert.equal(await observeGeneration(process.pid), processStartTime(process.pid))
+  // The ps fallback (Linux without /proc, and macOS): canonical, and stable across reads.
+  const ps = await psGeneration(process.pid)
+  assert.match(ps ?? "", /^ps-utc:[A-Z][a-z]{2} [A-Z][a-z]{2} \d{1,2} \d{2}:\d{2}:\d{2} \d{4}$/)
+  assert.equal(await psGeneration(process.pid), ps)
 })
 
 test("a well-known port is joined only when its health proves THIS user's launch token", async () => {
@@ -180,4 +276,17 @@ test("with nothing on disk and nothing listening, discovery finds nothing and sa
   } finally {
     rmSync(home, { recursive: true, force: true })
   }
+})
+
+test("a page opened on server.lock's port is logged as such; every other source is a public address", () => {
+  for (const source of ["setting", "owner-record", "well-known-port", "dev-supervisor"] as const) {
+    const { level, note } = pageAddressNote(source)
+    assert.equal(level, "info")
+    assert.match(note, /^a public address/)
+  }
+  const lock = pageAddressNote("server-lock")
+  assert.equal(lock.level, "warn")
+  assert.match(lock.note, /lock file/)
+  assert.match(lock.note, /only when Frizz runs without its restart supervisor/)
+  assert.match(lock.note, /frizz\.serverUrl/)
 })

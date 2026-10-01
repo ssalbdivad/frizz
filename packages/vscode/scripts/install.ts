@@ -16,10 +16,17 @@ import { homedir } from "node:os"
 import { dirname, join, resolve } from "node:path"
 import { fileURLToPath } from "node:url"
 
-const pkg = resolve(dirname(fileURLToPath(import.meta.url)), "..")
-const { name, version } = JSON.parse(readFileSync(join(pkg, "package.json"), "utf8")) as { name: string; version: string }
-const vsix = join(pkg, "dist", `${name}-${version}.vsix`)
-const dryRun = process.argv.includes("--dry-run")
+/**
+ * How to run `<cli> --install-extension <vsix> --force` on this platform. On Windows `code` is
+ * `code.cmd`, a batch file Node runs only through a shell (cmd.exe), and with `shell: true` Node joins
+ * the arguments with spaces and escapes NOTHING (DEP0190) — so a checkout under `C:\Users\Jane Doe`
+ * handed `code` two arguments, `C:\Users\Jane` and `Doe\…\x.vsix`. The path is quoted there instead
+ * (a Windows path cannot contain `"`). Everywhere else there is no shell, and nothing to quote.
+ */
+export function installInvocation(platform: NodeJS.Platform, cli: string, vsix: string): { file: string; args: string[]; shell: boolean } {
+  const shell = platform === "win32"
+  return { file: cli, args: ["--install-extension", shell ? `"${vsix}"` : vsix, "--force"], shell }
+}
 
 function underWsl(): boolean {
   if (process.platform !== "linux") return false
@@ -41,26 +48,34 @@ function serverClis(): string[] {
   return candidates.filter((cli) => existsSync(cli)).sort((a, b) => statSync(b).mtimeMs - statSync(a).mtimeMs)
 }
 
-if (!existsSync(vsix)) {
-  console.error(`No ${vsix}. Build it first: nub run vscode:package`)
-  process.exit(1)
-}
+function main(): void {
+  const pkg = resolve(dirname(fileURLToPath(import.meta.url)), "..")
+  const { name, version } = JSON.parse(readFileSync(join(pkg, "package.json"), "utf8")) as { name: string; version: string }
+  const vsix = join(pkg, "dist", `${name}-${version}.vsix`)
+  const dryRun = process.argv.includes("--dry-run")
 
-let command: string
-if (underWsl()) {
-  const cli = serverClis()[0]
-  if (!cli) {
-    console.error("This is WSL, but there is no VS Code Server in ~/.vscode-server yet. Open a folder in WSL from VS Code once (Remote - WSL), then run this again.")
+  if (!existsSync(vsix)) {
+    console.error(`No ${vsix}. Build it first: nub run vscode:package`)
     process.exit(1)
   }
-  command = cli
-} else {
-  command = "code"
+
+  let cli = "code"
+  if (underWsl()) {
+    const server = serverClis()[0]
+    if (!server) {
+      console.error("This is WSL, but there is no VS Code Server in ~/.vscode-server yet. Open a folder in WSL from VS Code once (Remote - WSL), then run this again.")
+      process.exit(1)
+    }
+    cli = server
+  }
+
+  const invocation = installInvocation(process.platform, cli, vsix)
+  console.log(`${dryRun ? "would run" : "running"}: ${invocation.file} ${invocation.args.join(" ")}`)
+  if (!dryRun) {
+    execFileSync(invocation.file, invocation.args, { stdio: "inherit", shell: invocation.shell })
+    console.log("Installed. Reload the editor window (Developer: Reload Window) to start it.")
+  }
 }
 
-const args = ["--install-extension", vsix, "--force"]
-console.log(`${dryRun ? "would run" : "running"}: ${command} ${args.join(" ")}`)
-if (!dryRun) {
-  execFileSync(command, args, { stdio: "inherit", shell: process.platform === "win32" })
-  console.log("Installed. Reload the editor window (Developer: Reload Window) to start it.")
-}
+// Run as a script; a test imports `installInvocation` without installing anything.
+if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) main()
