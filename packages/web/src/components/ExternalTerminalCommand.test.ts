@@ -25,7 +25,10 @@ test("the pick writes a PREFETCHED command synchronously (no RPC inside the clip
   // synchronously and writes without a round-trip in the activation window. Cold cache falls through to
   // the activation-safe async path.
   const menu = readFileSync(fileURLToPath(new URL("./ThreadMenu.tsx", import.meta.url)), "utf8")
-  assert.match(menu, /onOpenChange=\{\(open\) => \{ if \(open && ownSession\) terminalCommand\.prefetch\(\) \}\}/)
+  // The menu's open state is controlled (its `m` key opens it from the trigger), so the prefetch lives
+  // in the one named handler both the click and the key go through.
+  assert.match(menu, /const onOpenChange = \(next: boolean\) => \{\s*setOpen\(next\)\s*if \(next && ownSession\) terminalCommand\.prefetch\(\)\s*\}/)
+  assert.match(menu, /<Menu open=\{open\} onOpenChange=\{onOpenChange\}>/)
   assert.match(source, /queryClient\.prefetchQuery\(\{\s*queryKey: commandKey/)
   assert.match(source, /const resolved = queryClient\.getQueryData<ResolvedTerminalCommand>\(commandKey\)/)
   assert.match(source, /if \(resolved\) \{/)

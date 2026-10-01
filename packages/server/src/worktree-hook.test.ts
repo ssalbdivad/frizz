@@ -1,12 +1,12 @@
 import { test } from "node:test"
 import assert from "node:assert/strict"
 import { execFileSync, spawnSync } from "node:child_process"
-import { existsSync, mkdtempSync, realpathSync, writeFileSync } from "node:fs"
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { dirname, join } from "node:path"
 import { fileURLToPath } from "node:url"
 import { worktreeAddTargets } from "../../../cc-worker/hooks/worktree.mjs"
-import { removeThreadWorktrees, worktreesAddedBy } from "./worktree-cleanup.ts"
+import { regenerable, removeThreadWorktrees, worktreesAddedBy } from "./worktree-cleanup.ts"
 
 const here = dirname(fileURLToPath(import.meta.url))
 const hooks = join(here, "../../../cc-worker/hooks")
@@ -112,4 +112,126 @@ test("cleanup on done removes the thread's clean worktrees and keeps dirty or fo
   const branches = execFileSync("git", ["-C", dir, "branch", "--format=%(refname:short)"], { encoding: "utf8" })
   assert.ok(!branches.split("\n").includes("clean"))
   assert.ok(branches.split("\n").includes("dirty"))
+})
+
+// THE CLEANUP NEVER DISCARDS WORK. Each case is a real repository and a real `git worktree remove`; the
+// helpers below make the shapes an agent actually leaves behind.
+function cleanupRepo() {
+  const { parent, dir } = repo()
+  const git = (cwd: string, ...args: string[]) => execFileSync("git", ["-C", cwd, ...args], { encoding: "utf8" }).trim()
+  writeFileSync(join(dir, ".gitignore"), ".env\nnode_modules/\ndist/\n*.tsbuildinfo\nlocal.db\n")
+  git(dir, "add", ".gitignore")
+  git(dir, "commit", "-qm", "ignore")
+  const tree = (name: string) => join(dir, ".frizz/worktrees", name)
+  const commitIn = (cwd: string, file: string) => {
+    writeFileSync(join(cwd, file), `${file}\n`)
+    git(cwd, "add", file)
+    git(cwd, "commit", "-qm", file)
+    return git(cwd, "rev-parse", "HEAD")
+  }
+  const refsContaining = (sha: string) => git(dir, "for-each-ref", "--contains", sha, "--format=%(refname)").split("\n").filter(Boolean)
+  const branches = () => git(dir, "branch", "--format=%(refname:short)").split("\n")
+  return { parent, dir, git, tree, commitIn, refsContaining, branches }
+}
+
+test("cleanup keeps a detached worktree whose commit is on no ref, and removes one whose commit is", async () => {
+  const { dir, git, tree, commitIn, refsContaining } = cleanupRepo()
+  git(dir, "worktree", "add", "-q", "--detach", tree("orphan"))
+  const sha = commitIn(tree("orphan"), "work.txt")
+  assert.deepEqual(refsContaining(sha), [], "the precondition: only the detached HEAD holds it")
+  git(dir, "worktree", "add", "-q", "--detach", tree("at-main"))
+
+  const { removed, kept } = await removeThreadWorktrees([tree("orphan"), tree("at-main")], undefined)
+
+  assert.deepEqual(kept.map((k) => k.path), [tree("orphan")])
+  assert.match(kept[0]!.reason, /detached HEAD .* is on no branch/)
+  assert.equal(git(tree("orphan"), "rev-parse", "HEAD"), sha, "the commit is still checked out where the agent left it")
+  assert.deepEqual(removed, [tree("at-main")], "a detached HEAD that main contains loses nothing")
+  assert.equal(existsSync(tree("at-main")), false)
+})
+
+test("cleanup keeps a branch worktree with unmerged commits, and removes a merged one with its branch", async () => {
+  const { dir, git, tree, commitIn, branches } = cleanupRepo()
+  git(dir, "worktree", "add", "-q", tree("unmerged"), "-b", "unmerged")
+  commitIn(tree("unmerged"), "wip.txt")
+  // THE NEGATIVE CONTROL: commits made on a branch, then merged into main, so main holds every one.
+  git(dir, "worktree", "add", "-q", tree("merged"), "-b", "merged")
+  const landed = commitIn(tree("merged"), "landed.txt")
+  git(dir, "merge", "-q", "--ff-only", "merged")
+  assert.equal(git(dir, "rev-parse", "main"), landed)
+
+  const { removed, kept } = await removeThreadWorktrees([tree("unmerged"), tree("merged")], undefined)
+
+  assert.deepEqual(removed, [tree("merged")])
+  assert.equal(existsSync(tree("merged")), false)
+  assert.ok(!branches().includes("merged"), "the merged branch went with it")
+  assert.deepEqual(kept.map((k) => k.path), [tree("unmerged")])
+  assert.match(kept[0]!.reason, /only on its own branch unmerged/)
+  assert.ok(existsSync(join(tree("unmerged"), "wip.txt")))
+  assert.ok(branches().includes("unmerged"))
+})
+
+test("cleanup keeps a worktree holding a hand-made ignored file, and removes one holding only build output", async () => {
+  const { dir, git, tree } = cleanupRepo()
+  git(dir, "worktree", "add", "-q", tree("secrets"), "-b", "secrets")
+  writeFileSync(join(tree("secrets"), ".env"), "TOKEN=abc\n")
+  git(dir, "worktree", "add", "-q", tree("db"), "-b", "db")
+  writeFileSync(join(tree("db"), "local.db"), "rows\n")
+  // Everything here is rebuilt by an install or a build, and `.frizz/` holds only what Frizz itself
+  // writes into any folder it resolves as a project.
+  git(dir, "worktree", "add", "-q", tree("built"), "-b", "built")
+  for (const sub of ["node_modules/pkg", "dist", "packages/web/node_modules/x", ".frizz"]) mkdirSync(join(tree("built"), sub), { recursive: true })
+  writeFileSync(join(tree("built"), "node_modules/pkg/index.js"), "x\n")
+  writeFileSync(join(tree("built"), "packages/web/node_modules/x/.env"), "inside a dependency\n")
+  writeFileSync(join(tree("built"), "dist/out.js"), "x\n")
+  writeFileSync(join(tree("built"), "tsconfig.tsbuildinfo"), "{}\n")
+  writeFileSync(join(tree("built"), ".frizz/.id"), "id\n")
+  writeFileSync(join(tree("built"), ".frizz/.gitignore"), "*\n")
+  // A `.frizz/` holding anything else (a worker's notes) is not Frizz's markers, so it is kept.
+  git(dir, "worktree", "add", "-q", tree("notes"), "-b", "notes")
+  mkdirSync(join(tree("notes"), ".frizz/threads/x"), { recursive: true })
+  writeFileSync(join(tree("notes"), ".frizz/.gitignore"), "*\n")
+  writeFileSync(join(tree("notes"), ".frizz/threads/x/notes.md"), "findings\n")
+
+  const { removed, kept } = await removeThreadWorktrees([tree("secrets"), tree("db"), tree("built"), tree("notes")], undefined)
+
+  assert.deepEqual(removed, [tree("built")], JSON.stringify(kept))
+  assert.equal(existsSync(tree("built")), false)
+  assert.deepEqual(kept.map((k) => k.path), [tree("secrets"), tree("db"), tree("notes")])
+  assert.match(kept[0]!.reason, /ignored files git cannot restore: \.env/)
+  assert.match(kept[1]!.reason, /local\.db/)
+  assert.match(kept[2]!.reason, /\.frizz\//)
+  assert.equal(readFileSync(join(tree("secrets"), ".env"), "utf8"), "TOKEN=abc\n")
+  assert.ok(existsSync(join(tree("notes"), ".frizz/threads/x/notes.md")))
+})
+
+test("cleanup keeps a worktree another live thread is working in", async () => {
+  const { dir, git, tree } = cleanupRepo()
+  git(dir, "worktree", "add", "-q", tree("shared"), "-b", "shared")
+  mkdirSync(join(tree("shared"), "packages/web"), { recursive: true })
+  git(dir, "worktree", "add", "-q", tree("alone"), "-b", "alone")
+  let asked = 0
+  const inUse = () => {
+    asked++
+    // A spinoff child standing in a subfolder of its parent's worktree, and a thread at the project root.
+    return [{ dir: join(tree("shared"), "packages/web"), by: "child-thread" }, { dir, by: "root-thread" }]
+  }
+
+  const { removed, kept } = await removeThreadWorktrees([tree("shared"), tree("alone")], undefined, inUse)
+
+  assert.deepEqual(kept, [{ path: tree("shared"), reason: `thread child-thread is still working in it (${join(tree("shared"), "packages/web")})` }])
+  assert.ok(existsSync(tree("shared")))
+  assert.deepEqual(removed, [tree("alone")], "a thread at the project root is not inside the worktree")
+  assert.equal(asked, 1, "the live threads' folders are read once per cleanup")
+  // The worktree itself, exactly, counts as inside it.
+  const exact = await removeThreadWorktrees([tree("shared")], undefined, () => [{ dir: tree("shared"), by: "t" }])
+  assert.equal(exact.kept.length, 1)
+})
+
+test("regenerable: dependency and build output only", () => {
+  const wt = "/nonexistent"
+  for (const entry of ["node_modules/", "packages/a/node_modules/", "dist/", "web-dist/", "a/.turbo/", "tsconfig.tsbuildinfo", "x/.DS_Store", ".frizz/.id", "a/.frizz/.gitignore", "dist/sub/.env", "__pycache__/", "m.pyc"])
+    assert.equal(regenerable(entry, wt), true, entry)
+  for (const entry of [".env", "config/.env.local", "local.db", "secrets/", "notes.md", "runtime/", ".frizz/", ".frizz/threads/", "app.log", ".id"])
+    assert.equal(regenerable(entry, wt), false, entry)
 })

@@ -219,18 +219,63 @@ function isUntimedBackgroundCall(toolInput) {
   return !(typeof timeout === 'number' && Number.isFinite(timeout) && timeout > 0);
 }
 
+// THE LONG-FOREGROUND PROMPT. Frizz lifted the foreground ceiling to 24h on purpose (server
+// backend/types.ts BASH_MAX_TIMEOUT_MS: "a worker can block on anything it chooses"), so a long call is
+// never refused. But a foreground call holds the whole turn: no transcript record until it returns, so
+// past QUIET_TURN_MS (server board.ts, 15m) the board queues the thread as gone quiet, and the human
+// reads a worker that is running a gate as one that is stuck. Measured on 2026-09-29/30 (arktype
+// session 50d1f5b7): a repo-wide pre-push gate run five times in the foreground under `timeout: 3600000`,
+// 13–25m each, two of them failing on load, and the maintainer twice asking whether the worker was
+// stuck. In the background the same run keeps the turn moving and its exit still wakes the worker.
+//
+// So a foreground call DECLARING more than that window gets one line of context. Only a declared
+// `timeout` counts — with none, Claude bounces the call to the background at BASH_DEFAULT_TIMEOUT_MS
+// itself — and a call declaring at most the window cannot trip the quiet card. Claude only: a codex
+// exec has no `run_in_background` to point at. Like the prompt above, it lands after the call is
+// committed, so it speaks to the next one.
+export const LONG_FOREGROUND_MS = 15 * 60_000;
+
+/** A duration in the house grammar (`1h`, `40m`, `2h 30m`), whole minutes only. @param {number} ms */
+function minutesLabel(ms) {
+  const minutes = Math.round(ms / 60_000);
+  const h = Math.floor(minutes / 60);
+  const m = minutes % 60;
+  return h ? (m ? `${h}h ${m}m` : `${h}h`) : `${m}m`;
+}
+
+/** @param {number} timeoutMs */
+export function longForegroundContext(timeoutMs) {
+  return (
+    `⟦long foreground call⟧ This call may hold the turn for up to ${minutesLabel(timeoutMs)}. Nothing reaches the board while it runs, ` +
+    `and past ${minutesLabel(LONG_FOREGROUND_MS)} the human sees a thread gone quiet. Run a gate, build or suite that takes minutes with ` +
+    '`run_in_background: true` and the same `timeout` instead: its exit wakes you, and you can keep working or rest meanwhile.'
+  );
+}
+
+/** @param {unknown} toolInput @returns {number | undefined} the declared timeout of a long foreground call */
+function longForegroundTimeout(toolInput) {
+  if (!toolInput || typeof toolInput !== 'object') return undefined;
+  const { run_in_background: background, timeout } = /** @type {Record<string, unknown>} */ (toolInput);
+  if (background === true) return undefined;
+  return typeof timeout === 'number' && Number.isFinite(timeout) && timeout > LONG_FOREGROUND_MS ? timeout : undefined;
+}
+
 export function evaluateBashBackgroundHook(input, env = process.env) {
   if (!String(env.FRIZZ_THREAD ?? '').trim()) return {};
   const command = input && typeof input === 'object'
     ? String(input.tool_input?.command ?? '')
     : '';
+  const codex = typeof input?.model === 'string';
   if (!hasEscapingBackgroundJob(command)) {
     if (isUntimedBackgroundCall(input?.tool_input)) {
       return { hookSpecificOutput: { hookEventName: 'PreToolUse', additionalContext: BACKGROUND_NO_TIMEOUT_CONTEXT } };
     }
+    const longTimeout = codex ? undefined : longForegroundTimeout(input?.tool_input);
+    if (longTimeout !== undefined) {
+      return { hookSpecificOutput: { hookEventName: 'PreToolUse', additionalContext: longForegroundContext(longTimeout) } };
+    }
     return {};
   }
-  const codex = typeof input?.model === 'string';
   return {
     hookSpecificOutput: {
       hookEventName: 'PreToolUse',

@@ -192,6 +192,7 @@ export function StateButton({
   thread,
   onArchived,
   onDismissCancel,
+  onCompleted,
   className = "rounded-md border border-border-strong bg-panel-2/60 px-2.5 py-1 text-[12px] text-fg/80 hover:bg-panel-2 hover:text-fg",
   iconClassName = "",
   command = false,
@@ -201,6 +202,9 @@ export function StateButton({
   // Undo an optimistic dismissal (queue only). Present ⇒ the click may dismiss the card BEFORE the RPC
   // returns and reinstate it if the server declines; absent ⇒ the button waits for the round-trip.
   onDismissCancel?: () => void
+  // The server recorded Done. The queue card times its return from here, not from the click, because the
+  // round-trip can be long and only a read that starts after it can say whether the thread really left.
+  onCompleted?: () => void
   // Carries the CORNER as well as the fill, because the two surfaces disagree about it: the footer is a
   // free-standing control at rounded-md, while the in-card copy takes the tighter card-action radius so
   // it relates to the card's own corner (TranscriptCard's CARD_ACTION_RADIUS). It cannot be hardcoded
@@ -275,6 +279,7 @@ export function StateButton({
         setConfirmOpen(false)
         showToast("Done")
         if (!optimistic) onArchived?.() // non-optimistic path dismisses now; optimistic already did
+        onCompleted?.()
       })
       .catch((error) => {
         if (overlayRail) clearArchived(thread.id) // …and the rail row back out of Done

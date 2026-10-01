@@ -920,9 +920,8 @@ function createContextUnchecked(opts: ContextOptions, resources: PartialContextR
     onNamed: () => board.refresh(),
     log: (message) => frizzLog.warn("server", `thread namer: ${message}`),
   })
-  // Every 5th operator message, write the thread's live STATUS from the recent conversation — never its
-  // name (periodic-status.ts). FRIZZ_STATUS_EVERY lowers the cadence for a verification run only.
-  const statusEvery = Number(process.env.FRIZZ_STATUS_EVERY)
+  // At every rest the conversation moved, write the thread's live STATUS from the recent conversation —
+  // never its name (periodic-status.ts).
   const periodicStatus = createPeriodicStatus({
     storage,
     writeStatus: threadNamer.available ? (input) => threadNamer.status(input) : undefined,
@@ -930,7 +929,6 @@ function createContextUnchecked(opts: ContextOptions, resources: PartialContextR
     readMessages: (sessionId, forkAnchor) => readTranscript(project, sessionId, forkAnchor),
     onStatus: () => board.refresh(),
     onError: (slug, error) => process.stderr.write(`[frizz] status of ${slug} failed: ${error instanceof Error ? error.message : String(error)}\n`),
-    every: Number.isInteger(statusEvery) && statusEvery > 0 ? statusEvery : undefined,
   })
   // While a turn runs, keep the status on the TASK the thread is working on, with its own clock
   // (live-status.ts). Its own completer, so a dispatch's name mint never queues behind a fleet's checks.
@@ -952,7 +950,7 @@ function createContextUnchecked(opts: ContextOptions, resources: PartialContextR
     bus,
     backendFor,
     onChange: () => board.refresh(),
-    // A turn that wore a working status gets a rest status at once, off the 5-message cadence.
+    // A turn that wore a working status gets a rest status even when no reply moved the conversation.
     onTurnDone: (row) => periodicStatus.onTurnDone(row, { force: liveStatus.onTurnDone(row) }),
     onTurnActivity: (row) => liveStatus.onActivity(row),
     // The Codex first-output marker is a dispatch-time name like any other: held to the project's

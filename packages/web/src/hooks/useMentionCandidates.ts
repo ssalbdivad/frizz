@@ -3,6 +3,7 @@ import { useQuery } from "@tanstack/react-query"
 import { useSnapshot } from "valtio"
 import type { ProjectQueue, ThreadView } from "@frizz/shared"
 import { rpc } from "../api/rpc.ts"
+import { readProjectsQueues } from "../lib/projectsQueuesRead.ts"
 import { store } from "../store.ts"
 import { viewAt } from "../lib/pageView.ts"
 import { crossProjectMentionCandidates, mentionCandidates, type MentionCandidate } from "../lib/threadMentions.ts"
@@ -13,7 +14,7 @@ import { crossProjectMentionCandidates, mentionCandidates, type MentionCandidate
  *  prompt box on a fixture page with no router still renders. */
 function useCrossProjectQueues(): readonly ProjectQueue[] | undefined {
   const allProjects = typeof window !== "undefined" && viewAt(window.location.pathname, window.location.search).kind === "all"
-  const queues = useQuery({ queryKey: ["projectsQueues"], queryFn: () => rpc.projectsQueues(), enabled: allProjects, staleTime: 5_000 })
+  const queues = useQuery({ queryKey: ["projectsQueues"], queryFn: readProjectsQueues, enabled: allProjects, staleTime: 5_000 })
   return allProjects ? queues.data : undefined
 }
 

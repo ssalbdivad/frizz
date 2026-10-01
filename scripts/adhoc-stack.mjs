@@ -135,6 +135,14 @@ try {
   // thread. `gridUrl` is kept, now naming that same `/`, so older callers keep a real address.
   const { findByPath, registerProject } = await import("../packages/server/src/project-registry.ts")
   const { resolveProject } = await import("../packages/server/src/project.ts")
+  // The real launcher stamps the project it was run in as LAUNCHED (src/production.ts noteLaunchedHere),
+  // which is what All projects' prompt box aims at when a browser has no pick of its own. This stack boots
+  // the server without a launcher, so it stamps its own project the same way — BEFORE registering the
+  // tenants, so they read as projects added after the launch, as `--also-project` means them.
+  {
+    const own = findByPath(projectDir, home)
+    if (own) registerProject({ dir: own.path, id: own.id, launched: true }, home)
+  }
   // Extra projects are registered AFTER boot, the way opening one in the grid does it — the server
   // activates a tenant lazily on the first `/_frizz/<id-or-slug>/…` request, so nothing else is needed.
   const tenants = []

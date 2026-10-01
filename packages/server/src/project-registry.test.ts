@@ -58,6 +58,33 @@ test("a fresh registration takes the directory basename", () => {
   }
 })
 
+// `lastLaunchedAt` is what All projects' prompt box aims at when a browser has no pick of its own, so only
+// a LAUNCH may move it — not adding a project from the page, not a stack registering its tenants.
+test("only a launch stamps lastLaunchedAt; every registration bumps lastOpenedAt", () => {
+  const home = sandbox()
+  const clock = (iso: string) => () => new Date(iso)
+  try {
+    const store = project(home, "code/storefront", A)
+    const billing = project(home, "code/billing-api", B)
+    registerProject({ dir: store, id: A, launched: true, now: clock("2026-09-30T10:00:00.000Z") }, home)
+    registerProject({ dir: billing, id: B, now: clock("2026-09-30T10:00:05.000Z") }, home)
+    let byId = new Map(readRegistry(home).projects.map((entry) => [entry.id, entry]))
+    assert.equal(byId.get(A)?.lastLaunchedAt, "2026-09-30T10:00:00.000Z", "a launch that CREATES the entry stamps it")
+    assert.equal(byId.get(B)?.lastLaunchedAt, undefined, "a plain registration never does")
+    assert.equal(byId.get(B)?.lastOpenedAt, "2026-09-30T10:00:05.000Z")
+
+    // A re-registration that is not a launch leaves an earlier launch alone; a later launch moves it.
+    registerProject({ dir: store, id: A, now: clock("2026-09-30T11:00:00.000Z") }, home)
+    registerProject({ dir: billing, id: B, launched: true, now: clock("2026-09-30T12:00:00.000Z") }, home)
+    byId = new Map(readRegistry(home).projects.map((entry) => [entry.id, entry]))
+    assert.equal(byId.get(A)?.lastOpenedAt, "2026-09-30T11:00:00.000Z")
+    assert.equal(byId.get(A)?.lastLaunchedAt, "2026-09-30T10:00:00.000Z")
+    assert.equal(byId.get(B)?.lastLaunchedAt, "2026-09-30T12:00:00.000Z", "a reopening launch stamps too")
+  } finally {
+    rmSync(home, { recursive: true, force: true })
+  }
+})
+
 // `~/x/app` and `~/y/app` are both `app`. This is a live case — pullfrog/app is registered today.
 test("a generic basename is qualified by its parent", () => {
   const home = sandbox()

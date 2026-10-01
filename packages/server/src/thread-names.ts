@@ -19,8 +19,8 @@ import type { ClaudeOneShot, ClaudeOneShotRequest } from "./backend/claude-onesh
 // dispatched as "Cache review" read `@pluggable-cache-store-changes-evaluation`), and the worker's
 // "correct it once after orienting" rename (`perf-review` became a sentence and then `perf-bench`).
 //
-// The STATUS is the part that is allowed to move: a short phrase of what is happening NOW, rewritten every
-// 5th operator message (periodic-status.ts). It used to be the name itself being rewritten, and that is
+// The STATUS is the part that is allowed to move: a short phrase of what is happening NOW, rewritten at
+// every rest the conversation moved (periodic-status.ts). It used to be the name itself being rewritten, and that is
 // the conflation this module ends.
 //
 // NAMES ARE NEVER DUPLICATED: "that has to be part of the prompt". No two of a project's non-archived

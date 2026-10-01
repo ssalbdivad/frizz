@@ -1432,9 +1432,14 @@ async function spawnThread(args) {
 // failed, and the Goal that was keeping a long autonomous effort alive silently never existed.
 //
 // Telling the model to retry (which the error also does) is strictly weaker than retrying, because it
-// only works if the model complies. Bounded and short: a genuinely-down frizz still fails, promptly,
-// with the same message — this only covers the seconds where a new server is coming up.
-const LOCK_RETRY_MS = 6_000
+// only works if the model complies. Bounded: a genuinely-down frizz still fails, with the same message —
+// this only covers the window where a new server is coming up.
+//
+// A MINUTE, not the six seconds this started at. A boot on a loaded machine is not seconds: on
+// 2026-09-29 (arktype session 50d1f5b7, load average ~15) three `ask` calls in a row each spent the
+// whole 6s window and failed, the outage outlasting all three (~27s), and the worker had to notice and
+// re-ask by hand. Waiting longer costs only latency on a call that would otherwise have failed.
+const LOCK_RETRY_MS = 60_000
 const LOCK_RETRY_INTERVAL_MS = 400
 
 /** The port, waiting out a brief restart window rather than failing into one. Rethrows the real

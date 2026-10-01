@@ -5,7 +5,8 @@ import { mkdtempSync, symlinkSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { dirname, join } from "node:path"
 import { fileURLToPath, pathToFileURL } from "node:url"
-import { isDirectHookExecution } from "../../../cc-worker/hooks/bash-background.mjs"
+import { evaluateBashBackgroundHook, isDirectHookExecution, LONG_FOREGROUND_MS, longForegroundContext } from "../../../cc-worker/hooks/bash-background.mjs"
+import { QUIET_TURN_MS } from "./board.ts"
 
 const here = dirname(fileURLToPath(import.meta.url))
 const hook = join(here, "../../../cc-worker/hooks/bash-background.mjs")
@@ -174,4 +175,40 @@ test("an aliased plugin path (symlink, junction, 8.3 short name) still recognize
   })
   assert.equal(result.status, 0, result.stderr)
   assert.equal(JSON.parse(result.stdout).hookSpecificOutput?.permissionDecision, "deny")
+})
+
+// THE LONG-FOREGROUND PROMPT (arktype session 50d1f5b7, 2026-09-29/30: a repo-wide gate run five times
+// in the foreground under a 1h `timeout`, the thread read as stuck each time). Advice, never a refusal —
+// the 24h foreground ceiling is deliberate — and only past the window the board's quiet card uses.
+test("a foreground call declaring more than the quiet-turn window gets ONE non-blocking line; nothing else does", () => {
+  const long = decision("pnpm prChecks", true, { timeout: 3_600_000 })
+  assert.equal(long.hookSpecificOutput?.hookEventName, "PreToolUse")
+  assert.equal(long.hookSpecificOutput?.permissionDecision, undefined, "never a decision — the call runs as written")
+  const context = long.hookSpecificOutput?.additionalContext ?? ""
+  assert.match(context, /up to 1h\./)
+  assert.match(context, /past 15m/)
+  assert.match(context, /run_in_background: true/)
+  assert.ok(context.length < 500, "brief")
+  assert.match(decision("pnpm prChecks", true, { timeout: 20 * 60_000, run_in_background: false }).hookSpecificOutput?.additionalContext ?? "", /up to 20m\./)
+  // The negative controls.
+  assert.deepEqual(decision("pnpm prChecks", true, { timeout: LONG_FOREGROUND_MS }), {}, "at the window, the quiet card cannot trip")
+  assert.deepEqual(decision("pnpm prChecks", true, { timeout: 600_000 }), {}, "an ordinary sized call")
+  assert.deepEqual(decision("pnpm prChecks", true, {}), {}, "no timeout: Claude bounces it to the background itself")
+  assert.deepEqual(decision("pnpm prChecks", true, { timeout: 3_600_000, run_in_background: true }), {}, "already in the background")
+  assert.deepEqual(decision("pnpm prChecks", false, { timeout: 3_600_000 }), {}, "inert outside a worker")
+  // The deny still outranks the advice.
+  assert.equal(decision("server &", true, { timeout: 3_600_000 }).hookSpecificOutput?.permissionDecision, "deny")
+})
+
+test("the long-foreground window IS the board's quiet-turn window", () => {
+  assert.equal(LONG_FOREGROUND_MS, QUIET_TURN_MS)
+  assert.match(longForegroundContext(150 * 60_000), /up to 2h 30m\./)
+})
+
+test("the long-foreground prompt is Claude-only: a codex exec has no run_in_background to point at", () => {
+  const out = evaluateBashBackgroundHook(
+    { model: "gpt-5", tool_input: { command: "pnpm prChecks", timeout: 3_600_000 } },
+    { FRIZZ_THREAD: "thread-under-test" },
+  )
+  assert.deepEqual(out, {})
 })

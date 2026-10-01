@@ -65,13 +65,10 @@ test("the description is the recent window, both sides, never the opening ask", 
   assert.doesNotMatch(text, /ask 2\b/)
 })
 
-test("every 5th operator message writes a STATUS and leaves the name alone", async () => {
+test("every rest the conversation moved writes a STATUS and leaves the name alone", async () => {
   const { storage, asked, names, rest } = harness()
   storage.setMintedTitle(SLUG, SESSION, "Shell budgets")
-  await rest(exchanges(1)) // first sighting only records the count
-  await rest(exchanges(4))
-  assert.equal(asked.length, 0)
-  await rest(exchanges(5))
+  await rest(exchanges(1))
   assert.equal(asked.length, 1)
   const row = storage.getSession(SLUG)!
   assert.equal(row.status, "Status 1")
@@ -81,21 +78,35 @@ test("every 5th operator message writes a STATUS and leaves the name alone", asy
   assert.equal(row.title_worker_renamed, 0)
   // The writer is told the name only so the status does not repeat it.
   assert.equal(names[0], "Shell budgets")
-  await rest([...exchanges(5), user("wake", { wake: true })]) // same window, nothing new
-  await rest(exchanges(9))
-  assert.equal(asked.length, 1)
-  await rest(exchanges(10))
+  await rest(exchanges(2))
   assert.equal(asked.length, 2)
-  assert.match(asked[1]!, /ask 6/)
-  assert.doesNotMatch(asked[1]!, /ask 5\b/)
   assert.equal(storage.getSession(SLUG)?.status, "Status 2")
   assert.equal(storage.getSession(SLUG)?.title, "Shell budgets")
 })
 
+test("a rest that added no reply and no operator message keeps the standing status", async () => {
+  const { asked, rest } = harness()
+  await rest(exchanges(2))
+  assert.equal(asked.length, 1)
+  // A watcher tick the agent answered with tool calls only, and a still-queued bubble.
+  await rest([...exchanges(2), user("wake", { wake: true }), agent(""), user("later", { queued: true })])
+  assert.equal(asked.length, 1)
+  // A wake the agent DID answer moves the conversation: the reply may be what makes the status stale.
+  await rest([...exchanges(2), user("wake", { wake: true }), agent(""), user("later", { queued: true }), agent("published")])
+  assert.equal(asked.length, 2)
+  assert.match(asked[1]!, /Assistant: published/)
+})
+
+test("the window is the last five exchanges", async () => {
+  const { asked, rest } = harness()
+  await rest(exchanges(10))
+  assert.match(asked[0]!, /ask 6/)
+  assert.doesNotMatch(asked[0]!, /ask 5\b/)
+})
+
 test("a human-named thread still gets a status — the status is not the name", async () => {
   const { storage, asked, rest } = harness(1)
-  await rest(exchanges(4))
-  await rest(exchanges(5))
+  await rest(exchanges(1))
   assert.equal(asked.length, 1)
   assert.equal(storage.getSession(SLUG)?.status, "Status 1")
   assert.equal(storage.getSession(SLUG)?.title, "Opening ask")
@@ -106,13 +117,5 @@ test("a status read from a replaced session never lands on its successor", async
   const { storage, rest } = harness()
   await rest(exchanges(4))
   assert.equal(storage.setStatus(SLUG, "22222222-2222-4222-8222-222222222222", "Stale"), false)
-  assert.equal(storage.getSession(SLUG)?.status ?? null, null)
-})
-
-test("a first sighting after a restart records the count instead of writing at once", async () => {
-  const { asked, rest } = harness()
-  await rest(exchanges(12))
-  assert.equal(asked.length, 0)
-  await rest(exchanges(15))
-  assert.equal(asked.length, 1)
+  assert.equal(storage.getSession(SLUG)?.status, "Status 1")
 })

@@ -30,6 +30,7 @@ import {
 } from "./router.ts"
 import { projectTranscriptPageAgentLifecycles } from "./transcript.ts"
 import { readProjectIdFile, writeProjectIdFile } from "./project-root.ts"
+import { captureLogRecords } from "./logging.ts"
 import { findByPath, registerProject } from "./project-registry.ts"
 import { createThreadNamer } from "./thread-names.ts"
 import { createStorage, type AdoptionClaimRow, type SessionRow } from "./storage.ts"
@@ -2500,4 +2501,47 @@ test("Compact now asks an app-server codex thread for thread/compact/start", asy
   await h.router.compactThread.handler({ input: { slug, sessionId: `sid-${slug}` } })
   assert.deepEqual(compacted, [`${slug}/sid-${slug}`])
   h.storage.close()
+})
+
+test("Mark as done keeps a worktree another open thread is working in, and removes it once that thread is done too", async () => {
+  // The router half of worktree-cleanup.ts check 1: the folders it protects are every OTHER not-done
+  // thread's working folder, as threadWorkingDir reads it. The shape that found it: a spinoff child
+  // forked into its parent's worktree, still working there when the parent is marked done.
+  const wt = (dir: string) => join(dir, ".frizz/worktrees/parent")
+  const readings: Record<string, { workingDir: string; checkout?: { kind: "worktree"; dir: string } }> = {}
+  const h = harness({ ...noopTailer, get: (slug: string) => readings[slug] } as unknown as Tailer)
+  const logs = captureLogRecords()
+  try {
+    const git = (...args: string[]) => execFileSync("git", ["-C", h.dir, ...args], { stdio: "ignore" })
+    git("init", "-q", "-b", "main")
+    git("config", "user.email", "t@t")
+    git("config", "user.name", "t")
+    git("commit", "-q", "--allow-empty", "-m", "init")
+    git("worktree", "add", "-q", wt(h.dir), "-b", "parent")
+    mkdirSync(join(wt(h.dir), "packages/web"), { recursive: true })
+    readings.parent = { workingDir: wt(h.dir), checkout: { kind: "worktree", dir: wt(h.dir) } }
+    readings.child = { workingDir: join(wt(h.dir), "packages/web") }
+    h.storage.upsertSession(row("parent"))
+    h.storage.upsertSession(row("child"))
+    const settled = async (pattern: RegExp) => {
+      for (let i = 0; i < 200 && !logs.messages().some((m) => pattern.test(m)); i++) await new Promise((r) => setTimeout(r, 25))
+      return logs.messages().find((m) => pattern.test(m))
+    }
+
+    await h.router.setThreadState.handler({ input: { slug: "parent", state: "archived" } })
+    const kept = await settled(/kept .*parent/)
+    assert.ok(kept, logs.messages().join("\n"))
+    assert.match(kept, /thread child is still working in it/)
+    assert.ok(existsSync(wt(h.dir)))
+
+    // The negative control: with the child done as well, nothing else is in it, and it goes.
+    await h.router.setThreadState.handler({ input: { slug: "child", state: "archived" } })
+    await h.router.setThreadState.handler({ input: { slug: "parent", state: "archived" } })
+    assert.ok(await settled(/removed .*parent/), logs.messages().join("\n"))
+    assert.equal(existsSync(wt(h.dir)), false)
+  } finally {
+    logs.restore()
+    h.storage.close()
+    rmSync(h.dir, { recursive: true, force: true })
+  }
 })
