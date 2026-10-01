@@ -33,7 +33,26 @@ export const SUPERVISOR_STATUS_PATH = `${SUPERVISOR_CONTROL_PREFIX}/status`
 export const SUPERVISOR_ACCESS_CODE_PATH = `${SUPERVISOR_CONTROL_PREFIX}/access-code`
 /** List the devices holding a session, and sign one (or all) of them out. */
 export const SUPERVISOR_SESSIONS_PATH = `${SUPERVISOR_CONTROL_PREFIX}/sessions`
+/**
+ * Sign out the device making the request, and only that one. Reachable from the tunnel, unlike
+ * SUPERVISOR_SESSIONS_PATH: see handleControl for why this one is safe to expose.
+ */
+export const SUPERVISOR_SIGN_OUT_PATH = `${SUPERVISOR_CONTROL_PREFIX}/sign-out`
 export const SUPERVISOR_CONTROL_PROTOCOL = 1
+
+/**
+ * What POST SUPERVISOR_SIGN_OUT_PATH answers.
+ *
+ * - `signed-out`: this device's session is on the persisted denylist and its cookie is cleared.
+ * - `cookie-cleared`: the session predates per-device ids, so there was nothing to put on the denylist;
+ *   this browser forgot it, which is all that can be done without rotating the key.
+ * - `no-remote-session`: the request carried no session to end — the operator's own tab on loopback,
+ *   a board with no public origin, or a cookie that was already dead. Nothing was changed.
+ */
+export type SignOutThisDeviceResult =
+  | { protocol: 1; result: "signed-out"; id: string }
+  | { protocol: 1; result: "cookie-cleared" }
+  | { protocol: 1; result: "no-remote-session" }
 
 export type RestartControlState = "ready" | "restarting" | "failed"
 
@@ -172,6 +191,7 @@ function isControlRequest(req: IncomingMessage): boolean {
     || url.pathname === SUPERVISOR_STATUS_PATH
     || url.pathname === SUPERVISOR_ACCESS_CODE_PATH
     || url.pathname === SUPERVISOR_SESSIONS_PATH
+    || url.pathname === SUPERVISOR_SIGN_OUT_PATH
 }
 
 // `/_frizz/local-image` AND `/_frizz/<project>/local-image` — the client builds it from `apiBase()`,
@@ -440,8 +460,10 @@ export class RestartSupervisorProxy {
     //
     // Checked first, as handle() does for pages, so an unauthenticated caller learns nothing beyond the
     // 401 — no body, no per-path answer. Loopback never trips it (arrivedPublicly is false), so the
-    // operator's own tab and every launcher CLI call are untouched.
-    if (this.arrivedPublicly(req) && !this.sessionAccepted(req)) {
+    // operator's own tab and every launcher CLI call are untouched. The one exception is sign-out, which
+    // verifies the session itself and answers a dead cookie with its own 401 plus a cleared cookie, so
+    // the browser stops presenting it.
+    if (pathname !== SUPERVISOR_SIGN_OUT_PATH && this.arrivedPublicly(req) && !this.sessionAccepted(req)) {
       res.writeHead(401, { "cache-control": "no-store" })
       res.end()
       return
@@ -517,8 +539,34 @@ export class RestartSupervisorProxy {
       responseJson(res, 200, { signedOut: 1 })
       return
     }
+    if (pathname === SUPERVISOR_SIGN_OUT_PATH) {
+      // Reachable from the tunnel, unlike SESSIONS above, because it can only ever end the session that
+      // is MAKING the request: the id is read out of this request's own cookie after its signature
+      // verifies, and there is no body to name another one. So the worst a stolen session can do here is
+      // sign ITSELF out — which is what the owner wanted done to it anyway — and the rule that protects
+      // the owner ("a stolen session must not be able to evict the owner and keep the board") is
+      // untouched: evicting ANY OTHER device still needs loopback.
+      //
+      // CSRF: it is a POST, so the authority gate above has already demanded an Origin naming this
+      // board (allowMissingOrigin is false for every path but a same-origin status read), and the
+      // cookie is SameSite=Lax, so a cross-site page neither passes the gate nor carries the session.
+      if (req.method !== "POST") {
+        res.writeHead(405, { allow: "POST" })
+        res.end()
+        return
+      }
+      this.signOutThisDevice(req, res)
+      return
+    }
     if (pathname === SUPERVISOR_STATUS_PATH && req.method === "GET") {
-      responseJson(res, 200, { protocol: SUPERVISOR_CONTROL_PROTOCOL, ...this.status() })
+      responseJson(res, 200, {
+        protocol: SUPERVISOR_CONTROL_PROTOCOL,
+        ...this.status(),
+        // Sent ONLY when true, so a loopback tab's payload is byte-identical to what it was. The web
+        // app cannot tell on its own: the session cookie is HttpOnly, and the page is the same bundle
+        // whichever way it was reached. It is a fact about THIS request, never about the board.
+        ...(this.carriesRemoteSession(req) ? { remoteSession: true } : {}),
+      })
       return
     }
     if ((pathname !== SUPERVISOR_RESTART_PATH && pathname !== SUPERVISOR_UPDATE_RESTART_PATH) || req.method !== "POST") {
@@ -605,6 +653,46 @@ export class RestartSupervisorProxy {
   private sessionAccepted(req: IncomingMessage): boolean {
     if (!this.publicOrigin) return true
     return this.access.verifySession(readCookie(req.headers.cookie, SESSION_COOKIE))
+  }
+
+  /** Did this request arrive through the public origin carrying a live session? Loopback never does. */
+  private carriesRemoteSession(req: IncomingMessage): boolean {
+    return this.arrivedPublicly(req) && this.access.verifySession(readCookie(req.headers.cookie, SESSION_COOKIE))
+  }
+
+  /**
+   * End the session this request carries, and nothing else — see SUPERVISOR_SIGN_OUT_PATH in
+   * handleControl for why that makes it safe to reach from the tunnel.
+   *
+   * A loopback request is a no-op even if it somehow carries a cookie: the operator's own tab has no
+   * remote session to end, and loopback is the place `--sign-out` already covers.
+   */
+  private signOutThisDevice(req: IncomingMessage, res: ServerResponse): void {
+    const reply = (status: number, body: SignOutThisDeviceResult, clearCookie: boolean) => {
+      res.writeHead(status, {
+        "content-type": "application/json; charset=utf-8",
+        "cache-control": "no-store",
+        // Same attributes the exchange set, so the browser matches and drops that exact cookie.
+        ...(clearCookie ? { "set-cookie": `${SESSION_COOKIE}=; Path=/; HttpOnly; Secure; SameSite=Lax; Max-Age=0` } : {}),
+      })
+      res.end(JSON.stringify(body))
+    }
+    if (!this.arrivedPublicly(req)) {
+      reply(200, { protocol: SUPERVISOR_CONTROL_PROTOCOL, result: "no-remote-session" }, false)
+      return
+    }
+    const outcome = this.access.signOutSession(readCookie(req.headers.cookie, SESSION_COOKIE))
+    if (outcome.result === "revoked") {
+      reply(200, { protocol: SUPERVISOR_CONTROL_PROTOCOL, result: "signed-out", id: outcome.id }, true)
+      return
+    }
+    if (outcome.result === "legacy") {
+      reply(200, { protocol: SUPERVISOR_CONTROL_PROTOCOL, result: "cookie-cleared" }, true)
+      return
+    }
+    // A dead cookie is cleared too: it can never work again, and leaving it only makes the browser keep
+    // presenting it. 401 because a public request with no live session is unauthenticated.
+    reply(401, { protocol: SUPERVISOR_CONTROL_PROTOCOL, result: "no-remote-session" }, true)
   }
 
   /**

@@ -11,7 +11,7 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { createStorage, type SessionRow } from "./storage.ts"
-import { QUESTION_FENCE_RETIRED_AT } from "@frizz/shared"
+import { QUESTION_FENCE_RETIRED_AT, retiredAwaitingKindsIn } from "@frizz/shared"
 import { Bus } from "./bus.ts"
 import type { Project } from "./project.ts"
 import { applyRecord, createTailer, newTailState, type SessionTelemetry, type Tailer } from "./tailer.ts"
@@ -105,7 +105,12 @@ test("a rest with no fence is told how to sign off, and the text names all three
     // THE CURRENT FENCE GRAMMAR, not the deleted `watch:` one — this reminder is the last thing many
     // workers read before writing a fence, so a stale example here teaches the wrong syntax to exactly
     // the audience that most needs the right one.
-    assert.match(h.delivered[0], /shell: <the id your runtime gave you>/)
+    assert.match(h.delivered[0], /shells: \[<the id your runtime gave you>\]/)
+    assert.match(h.delivered[0], /prs: \[owner\/repo#123\]/)
+    // …and never the SINGULAR keys the 2026-08-24 YAML cutover retired. The example kept them for a
+    // month after the park check started refusing them by name, so a worker that copied the reminder's
+    // own fence was bumped for it.
+    assert.deepEqual(retiredAwaitingKindsIn(h.delivered[0].split("```awaiting\n")[1].split("```")[0]), [])
     assert.match(h.delivered[0], /for: 2h/)
     // FRONTMATTER, THEN MARKDOWN (2026-08-17): the structural lines, a `---`, and the worker's prose
     // below it. This pinned `reason:` — the ONE-LINE form that shape replaced — for two days after the

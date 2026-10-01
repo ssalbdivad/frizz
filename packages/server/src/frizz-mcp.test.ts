@@ -982,6 +982,21 @@ test("`watch` and `unwatch` register and withdraw against the CALLING thread", a
     assert.equal(noId.result.isError, true)
     assert.match(noId.result.content[0].text, /`id` is required/)
     assert.equal(seen.length, before, "not one of the four reached the server")
+
+    // A PR, issue or timer id handed to `unwatch` reaches the call that really withdraws it, instead of
+    // dropOwnWatch reporting it "already settled" while the row stayed armed on the rail.
+    replies.push({ dropped: true, watches: [] }, { dropped: true, watches: [] }, { cancelled: true, timers: [] })
+    for (const [n, id, url] of [
+      [8, "prw_aaa111", "/_frizz/rpc/dropOwnPrWatch"],
+      [9, "isw_bbb222", "/_frizz/rpc/dropOwnPrWatch"],
+      [10, "tmr_ccc333", "/_frizz/rpc/cancelOwnThreadTimer"],
+    ] as const) {
+      rpc.send({ jsonrpc: "2.0", id: n, method: "tools/call", params: { name: "unwatch", arguments: { id } } })
+      const out = await rpc.next(n)
+      assert.equal(out.result.isError, undefined)
+      assert.deepEqual(seen[seen.length - 1], { url, body: { slug: "watching-thread", id } })
+      assert.match(out.result.content[0].text, id.startsWith("tmr_") ? /Timer tmr_ccc333 cancelled/ : new RegExp(`Watcher ${id} dropped`))
+    }
   } finally {
     rpc.kill()
     http.close()

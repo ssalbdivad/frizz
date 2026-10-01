@@ -1,6 +1,8 @@
 import assert from "node:assert/strict"
 import test from "node:test"
+import { SetThreadSnoozeInput } from "@frizz/shared"
 import {
+  AWAITING_FALLBACK_TITLE,
   AWAITING_NO_PROSE,
   awaitingProseBlock,
   prWatchRefs,

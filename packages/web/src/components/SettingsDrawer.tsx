@@ -1,17 +1,21 @@
 import { useDeferredValue, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react"
 import { keepPreviousData, useQuery, useQueryClient } from "@tanstack/react-query"
 import { useSnapshot } from "valtio"
-import { Check, Copy } from "lucide-react"
+import { ArrowLeft, Check, ChevronRight, Copy } from "lucide-react"
 import { type Settings } from "@frizz/shared"
 import { rpc } from "../api/rpc.ts"
-import { store } from "../store.ts"
+import { store, type ConnectionState } from "../store.ts"
 import { copyTextToClipboard } from "../lib/clipboard.ts"
 import { prefs } from "../lib/prefs.ts"
 import { getThemeSnapshot, setThemePreference, subscribeTheme, type ThemePreference } from "../lib/theme.ts"
 import { registerSettingsClose } from "../lib/overlays.ts"
 import { SETTINGS_HELP } from "../lib/settingsHelp.ts"
 import { SHEET_CLOSE_MS, SHEET_PANEL_CLASS, SHEET_SCRIM_CLASS, prefersReducedMotion } from "../lib/sheet.ts"
-import { SaveStatus, useSettingsDraft } from "../hooks/useSettingsAutosave.tsx"
+import { SaveStatus, useSettingsDraft, type SaveState } from "../hooks/useSettingsAutosave.tsx"
+import { useIsMobile } from "../lib/mobile.ts"
+import { SNOOZE_PRESETS, isSnoozePreset } from "../lib/snooze.ts"
+import { useSupervisorStatus } from "../api/supervisorStatus.ts"
+import { QuotaMeters } from "./QuotaBar.tsx"
 import { SheetHeader } from "./ui/SheetHeader.tsx"
 import { Select } from "./ui/Select.tsx"
 import { SettingsField } from "./SettingsField.tsx"
@@ -32,6 +36,7 @@ function currentPerm(): NotifPerm {
 // means it no longer lives here at all, so the tab strip went with it.
 export function SettingsDrawer() {
   const { draft, update, saveState, flush } = useSettingsDraft()
+  const isMobile = useIsMobile()
   const [perm, setPerm] = useState<NotifPerm>(currentPerm())
   // The Home workspace's square, its picker row and its project list entry all show its folder, and they
   // read it from the project list — so the list is re-read once a moved folder has actually saved.
@@ -80,6 +85,19 @@ export function SettingsDrawer() {
       setPerm(result)
     }
     update({ ...draft, notifications: on })
+  }
+
+  if (isMobile) {
+    return (
+      <MobileSettingsPage
+        shown={shown}
+        onClose={close}
+        saveState={saveState}
+        notifications={draft ? draft.notifications : null}
+        onNotifications={toggleNotifications}
+        perm={perm}
+      />
+    )
   }
 
   return (
@@ -280,6 +298,236 @@ function WorktreeDirField({ value, onCommit }: { value: string; onCommit: (dir: 
       autoComplete="off"
       className="w-full rounded-md border border-border bg-bg px-2 py-1 font-mono text-[12px] text-fg outline-none placeholder:text-muted-50 focus-visible:ring-1 focus-visible:ring-focus-ink-60"
     />
+  )
+}
+
+// ── THE PHONE'S SETTINGS PAGE ────────────────────────────────────────────────────────────────────────
+//
+// Below the phone breakpoint Settings is a full page, not a sheet beside a board (phone design
+// 2026-09-30, scratch/mobile-simplify/v2.html § 6). Two things differ from the desktop drawer, and each
+// is the design's call:
+//
+//   · IT LEADS WITH THE READINGS. The board's ⋯ sheet used to carry the connection dot and the quota
+//     chips; that sheet is gone and its gear opens this page, so the readings arrive here first — they
+//     are what a phone opens Settings to check.
+//   · IT HOLDS ONLY WHAT MEANS SOMETHING ON A PHONE. The project sidebar, diff density and local file
+//     links are desktop-only rows and do not render here; the SERVER values behind them are untouched,
+//     so the desktop reads exactly what it did. Snooze length is here instead: it was only settable from
+//     the thread footer's Snooze ▾, which the phone's thread page no longer has.
+//
+// Plain full-width rows under section labels — no grouped-inset cards, no iOS chrome.
+
+/** The live connection, in the words the board's ⋯ sheet used before this page took its reading over. */
+const CONNECTION_WORD: Record<ConnectionState, { dot: string; word: string }> = {
+  open: { dot: "bg-live", word: "Connected" },
+  connecting: { dot: "bg-muted", word: "Connecting…" },
+  closed: { dot: "bg-danger-fill", word: "Disconnected" },
+}
+
+const MOBILE_ROW = "flex min-h-[52px] items-center gap-3 border-b border-border/70 px-[18px] text-[15.5px] text-fg"
+
+function MobileSection({ label, children }: { label: string; children: React.ReactNode }) {
+  return (
+    <section>
+      <h2 className="m-0 px-[18px] pb-1.5 pt-[18px] text-[12.5px] font-semibold leading-[17px] text-muted">{label}</h2>
+      <div className="border-t border-border/70">{children}</div>
+    </section>
+  )
+}
+
+/**
+ * A row whose value opens the phone's own picker: the row shows the value and a chevron, and an
+ * invisible native `<select>` covers the whole row, so a tap anywhere on it raises the platform's
+ * wheel or list — the control a phone already knows how to drive.
+ */
+function MobilePickerRow<V extends string>({
+  label,
+  value,
+  options,
+  onChange,
+  data,
+}: {
+  label: string
+  value: V
+  options: readonly { value: V; label: string }[]
+  onChange: (value: V) => void
+  data: string
+}) {
+  const shown = options.find((o) => o.value === value)?.label ?? value
+  return (
+    <label data-mobile-setting={data} className={`${MOBILE_ROW} relative`}>
+      <span className="min-w-0 flex-1 truncate">{label}</span>
+      <span className="flex shrink-0 items-center gap-1 text-[14px] text-muted">
+        {shown}
+        {/* Ink, not box: the chevron paints 6 of its 15 box px, centred. -mr-[5px] lands its ink on the
+            row's 18px inset, the same right edge the theme segments and the switch draw to, and
+            -ml-[3px] leaves ~6px of ink after the value (measured 9.6 → 6.6 and 23.6 → 18.6 from the
+            row's edge, sans, 2026-09-30). */}
+        <ChevronRight size={15} aria-hidden className="-ml-[3px] -mr-[5px]" />
+      </span>
+      <select
+        aria-label={label}
+        value={value}
+        onChange={(e) => onChange(e.target.value as V)}
+        className="absolute inset-0 cursor-pointer appearance-none opacity-0"
+      >
+        {options.map((o) => (
+          <option key={o.value} value={o.value}>{o.label}</option>
+        ))}
+      </select>
+    </label>
+  )
+}
+
+/** Theme as three joined segments. Each segment is 30px of ink with a 44px hit area around it. */
+function MobileThemeSegments() {
+  const theme = useSyncExternalStore(subscribeTheme, getThemeSnapshot, getThemeSnapshot)
+  const options: { value: ThemePreference; label: string }[] = [
+    { value: "system", label: "System" },
+    { value: "dark", label: "Dark" },
+    { value: "light", label: "Light" },
+  ]
+  return (
+    <div role="radiogroup" aria-label="Theme" className="flex shrink-0 rounded-[9px] border border-border-strong">
+      {options.map((o, i) => (
+        <button
+          key={o.value}
+          role="radio"
+          aria-checked={theme.preference === o.value}
+          onClick={() => setThemePreference(o.value)}
+          className={`relative h-[30px] px-[11px] text-[13px] after:absolute after:inset-x-0 after:-inset-y-[7px] after:content-[''] ${
+            i > 0 ? "border-l border-border-strong" : ""
+          } ${i === 0 ? "rounded-l-[8px]" : ""} ${i === options.length - 1 ? "rounded-r-[8px]" : ""} ${
+            theme.preference === o.value ? "bg-fg text-bg" : "text-muted"
+          }`}
+        >
+          {o.label}
+        </button>
+      ))}
+    </div>
+  )
+}
+
+/** On/off as a switch: 40×24 of ink, the row's full height to hit. */
+function MobileSwitch({ checked, disabled, label, onChange }: { checked: boolean; disabled?: boolean; label: string; onChange: (on: boolean) => void }) {
+  return (
+    <button
+      role="switch"
+      aria-checked={checked}
+      aria-label={label}
+      disabled={disabled}
+      onClick={() => onChange(!checked)}
+      className={`relative h-6 w-10 shrink-0 rounded-full after:absolute after:-inset-x-2 after:-inset-y-[10px] after:content-[''] disabled:opacity-45 ${checked ? "bg-fg" : "bg-border-strong"}`}
+    >
+      <span className={`absolute top-[3px] size-[18px] rounded-full ${checked ? "right-[3px] bg-bg" : "left-[3px] bg-muted"}`} />
+    </button>
+  )
+}
+
+function MobileSettingsPage({
+  shown,
+  onClose,
+  saveState,
+  notifications,
+  onNotifications,
+  perm,
+}: {
+  shown: boolean
+  onClose: () => void
+  saveState: SaveState
+  /** Null while the server settings are still loading — the switch waits rather than guessing. */
+  notifications: boolean | null
+  onNotifications: (on: boolean) => void
+  perm: NotifPerm
+}) {
+  const { connection } = useSnapshot(store)
+  const { queueOrder, snoozePreset } = useSnapshot(prefs)
+  const conn = CONNECTION_WORD[connection]
+  const version = useSupervisorStatus().data?.version
+  return (
+    <div
+      data-mobile-settings-page
+      className={`fixed inset-0 z-50 flex flex-col bg-bg pt-[env(safe-area-inset-top)] transition-transform duration-200 ease-out motion-reduce:transition-none ${
+        shown ? "translate-x-0" : "translate-x-full"
+      }`}
+    >
+      <header className="flex h-[56px] shrink-0 items-center gap-0.5 border-b border-border/70 pl-0.5 pr-[18px]">
+        <button
+          aria-label="Back"
+          onClick={onClose}
+          className="flex size-[44px] shrink-0 items-center justify-center rounded-full text-fg/85 active:bg-hover-strong"
+        >
+          <ArrowLeft size={21} strokeWidth={2.1} />
+        </button>
+        <h1 className="m-0 min-w-0 flex-1 truncate pl-0.5 text-[16.5px] font-semibold tracking-[-0.01em] text-fg">Settings</h1>
+        <SaveStatus state={saveState} />
+      </header>
+
+      <div className="min-h-0 flex-1 overflow-y-auto pb-[env(safe-area-inset-bottom)]">
+        <div data-mobile-connection className="flex items-center gap-2 px-[18px] pb-1 pt-[14px] text-[14px] leading-[20px] text-fg">
+          <span aria-hidden className={`size-2 shrink-0 rounded-full ${conn.dot}`} />
+          <span className="min-w-0 truncate">
+            {conn.word}
+            {connection === "open" ? ` · ${location.host}` : null}
+          </span>
+        </div>
+        <div className="px-[18px] pb-1 pt-2.5">
+          <QuotaMeters />
+        </div>
+
+        <MobileSection label="Appearance">
+          <div className={MOBILE_ROW}>
+            <span className="min-w-0 flex-1 truncate">Theme</span>
+            <MobileThemeSegments />
+          </div>
+        </MobileSection>
+
+        <MobileSection label="Queue">
+          <MobilePickerRow
+            data="queue-order"
+            label="Order"
+            value={queueOrder}
+            options={[
+              { value: "fifo", label: "Oldest first" },
+              { value: "lifo", label: "Newest first" },
+            ]}
+            onChange={(v) => (prefs.queueOrder = v)}
+          />
+          <MobilePickerRow
+            data="snooze-length"
+            label="Snooze length"
+            value={snoozePreset}
+            options={SNOOZE_PRESETS.map((p) => ({ value: p.value, label: p.kind === "calendar" ? `Until ${p.label}, ${p.detail}` : p.label }))}
+            onChange={(v) => {
+              if (isSnoozePreset(v)) prefs.snoozePreset = v
+            }}
+          />
+          <div className={MOBILE_ROW}>
+            <span className="min-w-0 flex-1 truncate">Notifications</span>
+            <MobileSwitch
+              label="Notifications"
+              checked={notifications === true}
+              disabled={notifications === null}
+              onChange={onNotifications}
+            />
+          </div>
+          {notifications ? (
+            <div className="border-b border-border/70 px-[18px] py-2.5">
+              <PermHint perm={perm} />
+            </div>
+          ) : null}
+        </MobileSection>
+
+        {/* ── THIS DEVICE ──────────────────────────────────────────────────────────────────────────────
+            The mount point for the "This device" section ("Sign out this device", which ends only this
+            browser's own session). Another slice builds it; mount it here, above the version line, as
+            <MobileSection label="This device">…</MobileSection>. */}
+
+        {version ? (
+          <div data-mobile-version className="px-[18px] py-[14px] text-[12.5px] text-faint">Frizz {version}</div>
+        ) : null}
+      </div>
+    </div>
   )
 }
 

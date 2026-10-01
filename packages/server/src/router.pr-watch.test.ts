@@ -100,6 +100,18 @@ test("registering the same PR twice returns the SAME watcher rather than a dupli
   } finally { h.close() }
 })
 
+test("the same PR in a different letter case is the same watcher — GitHub names are case-blind", async () => {
+  const h = harness()
+  try {
+    h.storage.upsertSession(row("t"))
+    const first = await h.router.addOwnPrWatch.handler({ input: { slug: "t", target: "acme/app#391", for: "2h" } })
+    const again = await h.router.addOwnPrWatch.handler({ input: { slug: "t", target: "Acme/App#391", for: "2h" } })
+    assert.equal(again.id, first.id)
+    assert.equal(again.alreadyArmed, true)
+    assert.equal(h.storage.listPrWatches("t", { armedOnly: true }).length, 1)
+  } finally { h.close() }
+})
+
 // REFUSED, NOT STORED. A ref frizz cannot parse names no PR, so the watcher could never fire — and the
 // worker would rest believing it was covered. The refusal has to say what a good ref looks like, since
 // the model's next move is to try again.
@@ -356,4 +368,21 @@ test("issue watchers read back through activity and block done under their own n
   } finally {
     h.close()
   }
+})
+
+// A TIMER REFRESHES THE BOARD like a PR watcher does, so the rail shows it the moment it is set and drops
+// it the moment it is cancelled — not at the next tailer change or the 15s reconcile.
+test("setting and cancelling a timer each refresh the board; a cancel that matched nothing does not", async () => {
+  const h = harness()
+  try {
+    h.storage.upsertSession(row("t"))
+    const before = h.refreshes()
+    const set = await h.router.setOwnThreadTimer.handler({ input: { slug: "t", prompt: "check the deploy", fireAt: new Date(Date.now() + 3_600_000).toISOString() } })
+    assert.equal(h.refreshes(), before + 1)
+    const cancelled = await h.router.cancelOwnThreadTimer.handler({ input: { slug: "t", id: set.id } })
+    assert.equal(cancelled.cancelled, true)
+    assert.equal(h.refreshes(), before + 2)
+    await h.router.cancelOwnThreadTimer.handler({ input: { slug: "t", id: set.id } })
+    assert.equal(h.refreshes(), before + 2)
+  } finally { h.close() }
 })

@@ -41,8 +41,21 @@ export const WAKE_QUIET_WINDOW_MS = 5 * 60_000
  *  MID-TURN, so a second one due seconds after the first lands inside the turn the first one opened.
  *
  *  A message from ANOTHER THREAD (`thread-message:`) is the same case as an answer: its sender is often
- *  waiting on the reply, and holding it five minutes would make two threads talking cost ten per round. */
-export const WAKE_QUIET_EXEMPT_HINT_PREFIXES = ["answers:", "limit:", "interrupt-ended:", "shell-budget:", "thread-message:"] as const
+ *  waiting on the reply, and holding it five minutes would make two threads talking cost ten per round.
+ *
+ *  THE SIGN-OFF NUDGE AND THE FENCE CORRECTIONS answer the worker's OWN rest, and that rest is the card
+ *  the human is reading in the queue right now: a bare rest nobody can triage, or a park frizz refused.
+ *  Holding the fix for five minutes leaves that card on the board for five minutes, which is the whole
+ *  failure the nudge exists to prevent — observed 2026-09-25, a Codex thread's bare rest landing 9s after
+ *  its PR-merged wake, its nudge queued 2s later and held until 4m51s after that, by which point the
+ *  maintainer had opened it and asked how it stopped without a sign-off. Neither can burst, which is what
+ *  the window rations: both are capped per consecutive rest (scheduler SIGNOFF_NUDGE_MAX, PARK_BUMP_MAX).
+ *  An EXPIRED park stays held — it is a scheduled re-check, uncapped, and a `for: 30s` re-park would
+ *  otherwise wake every 30 seconds. */
+export const WAKE_QUIET_EXEMPT_HINT_PREFIXES = [
+  "answers:", "limit:", "interrupt-ended:", "shell-budget:", "thread-message:",
+  "signoff:", "park:question:", "park:retired:", "park:nameless:", "park:dead:",
+] as const
 
 export function isQuietWindowExempt(hintKey: string): boolean {
   return WAKE_QUIET_EXEMPT_HINT_PREFIXES.some((prefix) => hintKey.startsWith(prefix))

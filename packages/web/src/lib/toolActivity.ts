@@ -37,7 +37,7 @@ function readableToolName(name: string): string {
   return segment.replaceAll("_", " ").trim()
 }
 
-function normalizedToolName(name: string): string {
+export function normalizedToolName(name: string): string {
   return readableToolName(name).toLowerCase()
 }
 
@@ -733,7 +733,7 @@ export function currentToolActivity<T extends Pick<TranscriptToolCall, "status">
 }
 
 /** Tools whose whole job is to write a file — the ones the digest reports as "edited". */
-const FILE_WRITING_TOOL_NAMES = new Set(["edit", "multiedit", "write", "apply patch"])
+export const FILE_WRITING_TOOL_NAMES = new Set(["edit", "multiedit", "write", "apply patch"])
 
 /** The collapsed render shape merges consecutive edits to one file, so `edits` is the plural of `edit`. */
 export interface FileWritingTool {

@@ -1,5 +1,6 @@
 import { statSync, openSync, readSync, closeSync, readdirSync, realpathSync, mkdirSync, writeFileSync, readFileSync, existsSync } from "node:fs"
 import { execFile } from "node:child_process"
+import { createHash } from "node:crypto"
 import { promisify } from "node:util"
 import { basename, dirname, isAbsolute, join, resolve, win32 } from "node:path"
 import { homedir, tmpdir } from "node:os"
@@ -801,6 +802,14 @@ export interface TailState extends FoldState {
   // prompt rest signal the branch has. See recordDescendantTerminal. Bounded; keyed by task-id, which
   // IS the agent id, so it joins straight onto a sidecar. Absent until the first one lands.
   descendantTerminals?: Map<string, number>
+  // DIRECT op task-id → a fingerprint of the last terminal <task-notification> block folded for it. One
+  // notification reaches the transcript up to THREE times, byte-identical — queue enqueue, the inline
+  // attachment, queue remove — and a `SendMessage` resume can land BETWEEN the copies. A later copy
+  // then found the REVIVED run live under the same task id and retired it as if the new run had
+  // finished: a rename helper resumed at 18:28:15 on a real lando thread (2026-09-30) vanished from the
+  // board 100 ms later and stayed gone for an hour while it built. See trackCompletions. Bounded;
+  // absent until the first terminal lands.
+  foldedTerminals?: Map<string, string>
   // SendMessage tool_use id → the `summary` that call carried, held only until its tool_result lands
   // (the very next record). A RESTART ack names the child's runtime id and its output path but nothing
   // about the work, so this is the label of last resort when `trackResumes` has to mint a row for a
@@ -863,6 +872,8 @@ interface Record {
   timestamp?: string
   isMeta?: boolean // `/rename <title>` reminder record: CLI metadata, not a user/model turn
   isCompactSummary?: boolean // the carry-over summary claude writes as a user record after compacting
+  subtype?: string // on `system` records: "compact_boundary" is the one the fold reads
+  compactMetadata?: { postTokens?: unknown } // on a compact_boundary: the context size after the summary
   aiTitle?: string // present only on ai-title sidecar records
   customTitle?: string // present only on custom-title records (written by /rename)
   permissionMode?: unknown // present only on Claude permission-mode sidecars
@@ -1094,8 +1105,9 @@ export function isRealUserMessage(content: unknown): boolean {
 // runtime reading override a fold holding real evidence, so the fold has to know. Measured 2026-09-25.
 //
 // Anchored at BOTH ends on the trimmed text, like the interrupt markers: a human message that quotes the
-// tag is still a prompt. Older builds wrote a local command's output as a `system`/`local_command`
-// record instead, which the fold already ignores.
+// tag is still a prompt. The CLI also writes some local-command output as a `system`/`local_command`
+// record instead — on 2.1.283 a `/compact` with nothing to summarize answers "Not enough messages to
+// compact." that way — and applyRecord treats that receipt as ending the command too.
 const LOCAL_COMMAND_RECEIPT = /^<local-command-(stdout|stderr)>[\s\S]*<\/local-command-\1>$/
 function isLocalCommandReceipt(content: unknown): boolean {
   return LOCAL_COMMAND_RECEIPT.test(userMessageText(content).trim())
@@ -1473,6 +1485,29 @@ function findLiveByTaskId(state: TailState, taskId: string): SubAgentEntry | und
   return undefined
 }
 
+// Is this task id one of THIS session's own ops, live or already retired? Only such a notification is
+// remembered for trackCompletions' repeat check. An id the fold has not met yet must NOT be: that is
+// the shell race, where carrier (a) lands before the launch record and carrier (c) is the one that
+// actually retires the row — remembering (a) would make (c) look like a repeat and pin the shell live.
+function knowsDirectOp(state: TailState, taskId: string): boolean {
+  if (findLiveByTaskId(state, taskId)) return true
+  for (const r of state.retiredSubAgents.values()) if (r.taskId === taskId) return true
+  for (const r of state.retiredShells.values()) if (r.taskId === taskId) return true
+  return false
+}
+
+const FOLDED_TERMINALS_MAX = 64
+function rememberFoldedTerminal(state: TailState, taskId: string, fingerprint: string): void {
+  const seen = (state.foldedTerminals ??= new Map())
+  seen.delete(taskId)
+  seen.set(taskId, fingerprint)
+  while (seen.size > FOLDED_TERMINALS_MAX) {
+    const oldest = seen.keys().next().value
+    if (oldest === undefined) break
+    seen.delete(oldest)
+  }
+}
+
 // Resolve a tracked child's transcript path from its launch ack, best shape first: an explicit
 // "output_file:" (older Agent ack), the shell ack's "Output is being written to:", else DERIVED from
 // the mailbox ack's agentId — subagent transcripts live at <session-dir>/subagents/agent-<id>.jsonl
@@ -1789,6 +1824,8 @@ function backfillRetiredAck(state: TailState, id: string, text: string): void {
 //   • "Agent \"<id>\" had no active task; resumed from transcript …"          230 · resumedAgentId
 //   • "Agent \"<id>\" was stopped (completed); resumed it in the background …"  95 · resumedAgentId
 //   • "Agent \"<id>\" was stopped (failed); resumed it in the background …"     11 · resumedAgentId
+// A fifth, newer shape carries `resumedAgentId` but no output path: "Resuming agent <short id>" (lando
+// thread, 2026-09-30). It parses the same way; only the task id correlates it.
 // The first is the child already being alive — reviving on it would DOUBLE a row the fold still holds,
 // which is the phantom class this whole path has leaked three times. The other three each promise the
 // <task-notification> that will retire the revived row, so nothing minted here can dangle without a
@@ -1920,7 +1957,8 @@ function trackResumes(state: TailState, rec: Record): void {
 // each is retired independently. A task-id can notify more than once (a resumed background agent
 // re-notifies) and a non-terminal "running" ping exists too, so only completed/failed/killed retire
 // the entry. Idempotent: a repeat terminal notify (the same completion arriving via both (a) and (c))
-// finds nothing live to move (no-op).
+// retires nothing — usually because nothing is live to move, and, when a `SendMessage` resume landed
+// between the two copies, because `foldedTerminals` recognises the second copy (see TailState).
 function notificationText(rec: Record): string | undefined {
   if (typeof rec.content === "string") return rec.content
   if (typeof rec.attachment?.prompt === "string") return rec.attachment.prompt
@@ -1974,14 +2012,26 @@ function trackCompletions(state: TailState, rec: Record): void {
     // EVERY correlated live entry, not just the first: the old single-.match() left all-but-one live, so a
     // 3-agent recovery still leaked 2. Dedupe (a tool-use-id and a task-id can name the same entry) and
     // collect before retiring, since retireLive mutates the map findLiveByTaskId scans.
+    // A LATER CARRIER OF A NOTIFICATION ALREADY FOLDED IS NOT A NEW TERMINAL. Any run it could end is
+    // one that started after it was written — a `SendMessage` resume landing between the copies — so it
+    // leaves that run alone. NOT consumed on a match: the lando thread carried THREE byte-identical
+    // copies (queue enqueue, inline attachment, queue remove, 18:27:12 → 18:28:15) around one resume.
+    // The resumed run's own notification carries its own <result>, so it fingerprints differently.
+    const fingerprint = createHash("sha1").update(block).digest("hex").slice(0, 16)
+    const repeatOf = new Set<string>()
+    for (const id of blockTaskIds(block)) {
+      if (state.foldedTerminals?.get(id) === fingerprint) repeatOf.add(id)
+      else if (knowsDirectOp(state, id)) rememberFoldedTerminal(state, id, fingerprint)
+    }
     const doomed = new Set<SubAgentEntry>()
     for (const m of block.matchAll(/<tool-use-id>([^<]*)<\/tool-use-id>/g)) {
       const entry = state.subAgents.get(m[1])
-      if (entry) doomed.add(entry)
+      if (entry && !(entry.taskId && repeatOf.has(entry.taskId))) doomed.add(entry)
     }
     const stampedAt = typeof rec.timestamp === "string" ? Date.parse(rec.timestamp) : Number.NaN
     for (const m of block.matchAll(/<task-id>([^<]*)<\/task-id>/g)) {
       if (m[1].startsWith("__orphan_summary__")) continue // internal scan sentinel — correlates to nothing
+      if (repeatOf.has(m[1])) continue
       const entry = findLiveByTaskId(state, m[1])
       if (entry) doomed.add(entry)
       // Nothing live under this task id. For a DIRECT child that just means the notify is a repeat of
@@ -2189,6 +2239,25 @@ export function applyRecord(state: TailState, rec: Record): void {
   // fold already reads, which makes it the post-compaction trigger's clock (scheduler SOURCE 7). It moves
   // nothing else — see the flag's own note above for why this record must not read as human motion.
   if (compactSummaryRec && typeof rec.timestamp === "string") state.lastCompactionAt = rec.timestamp
+  // The boundary's own `postTokens` is the context reading after the summary. An AUTO-compaction does
+  // not need it — it fires mid-turn, and the next request's usage reports the smaller context anyway —
+  // but a MANUAL `/compact` (the footer's "Compact now") runs at rest and makes no model request at all,
+  // so without this the dial kept showing the pre-compaction fill until the thread's next turn
+  // (measured 2026-09-26: 40,467 tokens before and after a compaction whose boundary said 4,304).
+  if (type === "system" && rec.subtype === "compact_boundary" && rec.isSidechain !== true) {
+    const post = rec.compactMetadata?.postTokens
+    if (typeof post === "number" && Number.isFinite(post) && post >= 0) state.contextTokens = post
+  }
+  // A local command answered by a SYSTEM record rather than a user one. The command's
+  // `<command-name>` envelope is a user record, so the fold reads it as a prompt and the turn as in
+  // flight; a user-shaped receipt ends that (see isLocalCommandReceipt), and this is the same receipt
+  // in its other shape. Without it a second "Compact now" on an already-compacted thread — answered
+  // "Not enough messages to compact." — held the thread running until its next real message
+  // (observed 2026-09-26: 3+ minutes). Only straight after a user record: an assistant's end of turn
+  // has already settled the reading, and this record must not reopen or close anything else.
+  if (type === "system" && rec.subtype === "local_command" && state.lastKind === "user" && typeof rec.content === "string" && LOCAL_COMMAND_RECEIPT.test(rec.content.trim())) {
+    state.localCommandDone = true
+  }
   if (typeof rec.timestamp === "string" && (type === "assistant" || (type === "user" && !metaUserRec) || type === "system")) {
     state.lastActivityAt = rec.timestamp
   }

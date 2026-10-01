@@ -22,6 +22,16 @@ test("absolute POSIX and file URLs become local targets with decoded proxy paths
   )
 })
 
+test("an absolute path's #section or ?query tail is not part of the path", () => {
+  const path = "/Users/me/repo/AGENTS.md"
+  for (const href of [`${path}#cutting-a-release`, `${path}?plain=1`, `${path}?plain=1#L3`]) {
+    assert.deepEqual(localMarkdownTarget(href), { display: path, filePath: path }, href)
+    assert.ok(isLocalMarkdownFile(localMarkdownTarget(href)!.filePath!), href)
+  }
+  // An ENCODED `#` is a character in the file name, not a fragment.
+  assert.deepEqual(localMarkdownTarget("/tmp/issue%23482.md"), { display: "/tmp/issue#482.md", filePath: "/tmp/issue#482.md" })
+})
+
 test("only server-supported local image extensions become proxy URLs", () => {
   for (const path of ["/tmp/shot.png", "/tmp/shot.JPG", "/tmp/shot.jpeg", "/tmp/shot.gif", "/tmp/shot.webp"]) {
     assert.ok(localImageUrlForTarget(localMarkdownTarget(path)!), path)

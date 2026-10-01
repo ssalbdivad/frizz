@@ -50,6 +50,13 @@ export interface FrizzSupervisorStatus {
    * launcher knows, so it says so here.
    */
   dev?: boolean
+  /**
+   * Did THIS page reach Frizz through the public origin, holding a live session? Sent only when true.
+   * A fact about the request, not the board: the operator's own loopback tab never gets it, and the
+   * page cannot work it out for itself because the session cookie is HttpOnly. It is what shows the
+   * "Sign out this device" row (see api/signOut.ts).
+   */
+  remoteSession?: boolean
 }
 
 /** Wakes the app-level status monitor immediately after a control action is accepted. */

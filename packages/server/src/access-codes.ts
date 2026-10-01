@@ -262,6 +262,36 @@ export class AccessStore {
   }
 
   /**
+   * Sign out the device HOLDING this session — the "Sign out this device" row, not `--sign-out`.
+   *
+   * The id comes from the session itself, and only after its signature verifies, so the one thing this
+   * can ever revoke is the credential the caller just proved it holds. There is deliberately no
+   * parameter naming any other id: signing out SOMEONE ELSE stays loopback-only, because a stolen
+   * session must not be able to evict the owner and keep the board.
+   *
+   * - `revoked`: the id is on the denylist now, so a surviving copy of this cookie is refused too.
+   * - `legacy`: a session minted before ids existed verifies but has no id to revoke on its own. The
+   *   caller can still clear the cookie; rotating the key remains the way to kill a copy of it.
+   * - `no-session`: nothing valid was presented — absent, forged, expired, or already signed out.
+   */
+  signOutSession(session: string | undefined):
+    | { result: "revoked"; id: string }
+    | { result: "legacy" }
+    | { result: "no-session" } {
+    if (!session || !this.verifySession(session)) return { result: "no-session" }
+    const id = AccessStore.idOf(session.slice(0, session.lastIndexOf(".")))
+    if (!id) return { result: "legacy" }
+    // The directory only knows ids it recorded, so a session minted while it was held in memory (a board
+    // started without a persisted one) is unknown after a restart even though the key still verifies it.
+    // Record it first, or revoke() refuses the unknown id and the sign-out silently does nothing.
+    if (!this.sessions.revoke(id)) {
+      this.sessions.record({ id, label: "unknown device", createdAt: this.options.now() })
+      this.sessions.revoke(id)
+    }
+    return this.sessions.isRevoked(id) ? { result: "revoked", id } : { result: "no-session" }
+  }
+
+  /**
    * Drop codes past their expiry so a long-lived board does not accumulate them forever.
    *
    * A CONSUMED code is deliberately kept until that same expiry rather than deleted on use. Deleting it

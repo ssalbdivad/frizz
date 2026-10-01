@@ -268,3 +268,66 @@ test("an unreadable session directory leaves the board running rather than takin
     rmSync(dir, { recursive: true, force: true })
   }
 })
+
+test("a session signs ITSELF out: its own id is revoked and persisted, and no other device is touched", () => {
+  // The phone's "Sign out this device". The id is taken from the verified session, so the only
+  // credential it can end is the one presented — the laptop beside it must not notice.
+  const dir = mkdtempSync(join(tmpdir(), "frizz-sign-self-out-"))
+  try {
+    const store = new AccessStore({ sessions: fileSessionDirectory(dir) })
+    const phone = store.redeem(store.issue().code, "Safari on iPhone")
+    const laptop = store.redeem(store.issue().code, "Chrome on macOS")
+    assert.ok(phone.ok && laptop.ok)
+
+    assert.deepEqual(store.signOutSession(phone.session), { result: "revoked", id: phone.id })
+    assert.equal(store.verifySession(phone.session), false, "the phone still works after signing itself out")
+    assert.equal(store.verifySession(laptop.session), true, "signing the phone out kicked the laptop")
+    // On disk, where a restart and `frizz --sessions` both read it.
+    assert.equal(fileSessionDirectory(dir).isRevoked(phone.id), true)
+    assert.equal(fileSessionDirectory(dir).isRevoked(laptop.id), false)
+
+    // Once dead, presenting it again ends nothing.
+    assert.deepEqual(store.signOutSession(phone.session), { result: "no-session" })
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+test("signing out needs a VALID session: nothing, a forgery, or a grafted id revokes nothing", () => {
+  const store = new AccessStore()
+  const phone = store.redeem(store.issue().code, "iPhone")
+  const laptop = store.redeem(store.issue().code, "macOS")
+  assert.ok(phone.ok && laptop.ok)
+  assert.deepEqual(store.signOutSession(undefined), { result: "no-session" })
+  assert.deepEqual(store.signOutSession(""), { result: "no-session" })
+  // Graft the laptop's id into the phone's cookie: the signature no longer matches, so the laptop's id
+  // never reaches the directory. This is what stops one device naming another's id.
+  const [exp, , nonce, sig] = phone.session.split(".")
+  assert.deepEqual(store.signOutSession(`${exp}.${laptop.id}.${nonce}.${sig}`), { result: "no-session" })
+  assert.equal(store.verifySession(laptop.session), true)
+  assert.equal(store.verifySession(phone.session), true)
+  assert.deepEqual(store.sessions.list().filter((r) => r.revokedAt !== undefined), [])
+})
+
+test("a session the directory never recorded still signs itself out, instead of silently not", () => {
+  // A board whose directory was in memory forgets its records on restart while a persisted key keeps
+  // verifying the session. revoke() refuses unknown ids, so without recording first this reported
+  // success and changed nothing.
+  const key = Buffer.alloc(32, 9)
+  const before = new AccessStore({ signingKey: key })
+  const phone = before.redeem(before.issue().code, "iPhone")
+  assert.ok(phone.ok)
+  const after = new AccessStore({ signingKey: key })
+  assert.equal(after.verifySession(phone.session), true)
+  assert.deepEqual(after.signOutSession(phone.session), { result: "revoked", id: phone.id })
+  assert.equal(after.verifySession(phone.session), false)
+})
+
+test("a pre-id session cannot be put on the denylist, and says so rather than claiming it was", () => {
+  const key = Buffer.alloc(32, 7)
+  const store = new AccessStore({ signingKey: key })
+  const payload = `${Date.now() + 60_000}.legacy-nonce`
+  const legacy = `${payload}.${createHmac("sha256", key).update(payload).digest("base64url")}`
+  assert.deepEqual(store.signOutSession(legacy), { result: "legacy" })
+  assert.deepEqual(store.sessions.list(), [])
+})

@@ -533,13 +533,14 @@ const UNWATCH = {
     "you are about to end the thread. A watch you no longer care about still parks you, and a thread " +
     "parked on a wait nobody is waiting for is invisible to the human.\n\n" +
     "You do NOT need this when the work simply finishes: frizz settles the row itself and wakes you. " +
-    "`activity` prints the id of everything you hold.",
+    "`activity` prints the id of everything you hold. A `watch_pr` / `watch_issue` id (`prw_…` / " +
+    "`isw_…`) or a `timer` id (`tmr_…`) is withdrawn here too.",
   inputSchema: {
     type: "object",
     properties: {
       id: {
         type: "string",
-        description: "The watch id `watch` returned (or that `activity` lists). Only your own thread's.",
+        description: "The watch id `watch` returned (or that `activity` lists), or a PR, issue or timer id. Only your own thread's.",
       },
     },
     required: ["id"],
@@ -1876,6 +1877,24 @@ async function unwatch(args) {
   const slug = threadSlug()
   const id = typeof args.id === "string" ? args.id.trim() : ""
   if (!id) throw new Error("`id` is required — take it from `watch` or from `activity`")
+  // A PR, issue or timer id is not a `watch` row, and dropOwnWatch would report it "already settled"
+  // while it stayed armed. The id prefix names its kind, so the one verb a worker reaches for routes it
+  // to the call that really withdraws it.
+  if (id.startsWith("prw_") || id.startsWith("isw_")) {
+    const dropped = (await callRpc("dropOwnPrWatch", { slug, id }))?.result
+    const kind = id.startsWith("isw_") ? "issue" : "pull request"
+    const head = dropped?.dropped
+      ? `Watcher ${id} dropped. It will not wake you.`
+      : `No ARMED ${kind} watcher ${id} on this thread — it was already settled, or the id is not one of yours.`
+    return `${head}\n\n${id.startsWith("isw_") ? armedIssueWatchList(dropped) : armedPrWatchList(dropped)}`
+  }
+  if (id.startsWith("tmr_")) {
+    const cancelled = (await callRpc("cancelOwnThreadTimer", { slug, id }))?.result
+    const head = cancelled?.cancelled
+      ? `Timer ${id} cancelled — it will not fire.`
+      : `No ARMED timer ${id} on this thread (it may have already fired, or already been cancelled).`
+    return `${head}\n\n${armedList(cancelled)}`
+  }
   const result = (await callRpc("dropOwnWatch", { slug, id }))?.result
   // A drop that matched nothing is reported rather than swallowed: the id was wrong, already settled, or
   // another thread's — and a worker that believes it withdrew a wait it still holds will rest on it.

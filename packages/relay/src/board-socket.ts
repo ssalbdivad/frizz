@@ -34,9 +34,21 @@ interface NestedSocket {
   settle?: (ok: boolean) => void
 }
 
+/**
+ * The head of the board's answer. `end` says the frame was the WHOLE answer — its body, or none — so
+ * nothing further will arrive; without it a body-less answer and the head of a stream look the same,
+ * and the visitor's stream for an empty 200, a HEAD or a redirect was never closed.
+ */
+export interface RelayedResponse {
+  status: number
+  headers: Array<[string, string]>
+  body: Uint8Array | null
+  end: boolean
+}
+
 interface Pending {
   /** Head resolved; the body may still be streaming. */
-  settle: (response: { status: number; headers: Array<[string, string]>; body: Uint8Array | null }) => void
+  settle: (response: RelayedResponse) => void
   fail: (reason: string) => void
   /** Present once a streamed body is underway. */
   stream?: { push: (chunk: Uint8Array) => void; end: () => void }
@@ -183,7 +195,7 @@ export class BoardSocket {
   async request(
     input: { method: string; url: string; headers: Array<[string, string]>; body?: Uint8Array },
     stream?: { push: (chunk: Uint8Array) => void; end: () => void }
-  ): Promise<{ status: number; headers: Array<[string, string]>; body: Uint8Array | null }> {
+  ): Promise<RelayedResponse> {
     if (!this.socket) throw new Error("the board is not connected")
     const id = `r${++this.counter}`
 
@@ -294,6 +306,7 @@ export class BoardSocket {
           status: frame.status,
           headers: stripHopByHop(frame.headers),
           body: frame.body ? decodeBody(frame.body) : null,
+          end: frame.end,
         })
         return
       }

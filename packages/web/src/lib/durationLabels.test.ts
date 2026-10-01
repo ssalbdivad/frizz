@@ -1,6 +1,6 @@
 import assert from "node:assert/strict"
 import test from "node:test"
-import { formatAgo, formatCountdown, formatCountdownSeconds, formatElapsedMinutes, formatFixedDuration,
+import { compactElapsedSince, formatAgo, formatCountdown, formatCountdownSeconds, formatElapsedMinutes, formatFixedDuration,
   formatToolDuration, formatCompactElapsed, formatRuntimeElapsed, liveAgeSince,
 } from "./durationLabels.ts"
 
@@ -114,4 +114,13 @@ test("formatCountdown: padded, two units, in the house grammar", () => {
   assert.equal(formatCountdown(3 * H + 5 * M), "3h 05m", "the trailing unit pads and never drops")
   assert.equal(formatCountdown(2 * D + 3 * H), "2d 3h", "past a day it goes unpadded")
   assert.equal(formatCountdown(0), "0s")
+})
+
+test("compactElapsedSince: a start the clock has not reached yet reads as just started, never blank", () => {
+  const now = Date.parse("2026-09-30T10:00:00Z")
+  // The shared clock ticks every 30s, so a row minted between ticks carries a start after `now`.
+  assert.equal(compactElapsedSince("2026-09-30T10:00:12Z", now), "0s")
+  assert.equal(compactElapsedSince("2026-09-30T09:59:22Z", now), "38s")
+  assert.equal(compactElapsedSince(undefined, now), "")
+  assert.equal(compactElapsedSince("not a date", now), "")
 })

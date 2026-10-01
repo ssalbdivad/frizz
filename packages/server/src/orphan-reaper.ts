@@ -25,9 +25,10 @@
 // being user-spawned rather than worker-spawned), or any process whose slug is currently live. Every
 // enumeration failure fails CLOSED (reap nothing). An age guard skips just-spawned processes.
 
-import { execFileSync } from "node:child_process"
+import { execFile } from "node:child_process"
 import { readFileSync } from "node:fs"
 import { dirname } from "node:path"
+import { promisify } from "node:util"
 import { claudeBrokerSocketPath } from "./backend/claude-broker-host.ts"
 import { sweepStaleSockets } from "./backend/stale-socket-sweep.ts"
 
@@ -192,10 +193,16 @@ export function parseEtimeMs(etime: string): number {
 
 // ---- Process enumeration (impure, injectable) -----------------------------------------------------
 
-export type Exec = (file: string, args: string[]) => string
+export type Exec = (file: string, args: string[]) => string | Promise<string>
 
-const defaultExec: Exec = (file, args) =>
-  execFileSync(file, args, { encoding: "utf8", maxBuffer: 16 * 1024 * 1024, timeout: 10_000 })
+// ASYNC, never execFileSync. The reaper runs inside the server's event loop, and on a busy machine the
+// env pass alone reads megabytes of `ps -E` output (5.5MB across ~1,450 processes, 2026-09-30): the sync
+// spawn held the loop for 1-8s per call, three calls a sweep, so every RPC, pin and websocket frame
+// stalled behind it — a bare health check took 42s. The tests inject a synchronous fake, which `await`
+// takes just as well.
+const execFileAsync = promisify(execFile)
+const defaultExec: Exec = async (file, args) =>
+  (await execFileAsync(file, args, { encoding: "utf8", maxBuffer: 16 * 1024 * 1024, timeout: 10_000 })).stdout
 
 /** Reads one process's raw environment block, or null when unreadable (gone, or another user's). */
 export type ReadEnv = (pid: number) => string | null
@@ -252,10 +259,10 @@ export interface EnumerateOpts {
   readEnv?: ReadEnv
 }
 
-export function enumerateProcs(exec: Exec = defaultExec, opts: EnumerateOpts = {}): ProcRow[] {
+export async function enumerateProcs(exec: Exec = defaultExec, opts: EnumerateOpts = {}): Promise<ProcRow[]> {
   // `-ww` (both passes) disables ps's column truncation so pass-1 argv is the FULL argv — required
   // on macOS for the prefix strip below to leave a clean env segment.
-  const base = exec("ps", ["-Aww", "-o", "pid=,ppid=,etime=,command="])
+  const base = await exec("ps", ["-Aww", "-o", "pid=,ppid=,etime=,command="])
   const rows: ProcRow[] = []
   const byPid = new Map<number, ProcRow>()
   const pids: number[] = []
@@ -312,7 +319,7 @@ export function enumerateProcs(exec: Exec = defaultExec, opts: EnumerateOpts = {
   //      roots with a 4-digit pid unattributed, 34 of 34 with a 5-digit pid attributed correctly.
   let text: string
   try {
-    text = exec("ps", ["-Eww", "-o", "pid=,command=", "-p", pids.join(",")])
+    text = await exec("ps", ["-Eww", "-o", "pid=,command=", "-p", pids.join(",")])
   } catch {
     return rows // env unreadable → every slug null → reap nothing this pass (fail closed)
   }
@@ -441,17 +448,17 @@ export function parseCpuTimeMs(value: string): number {
  * Pure apart from the injected `exec`, and deliberately a SEPARATE `ps` pass: `enumerateProcs`'s
  * two-pass format is load-bearing for slug attribution and is not worth destabilising for telemetry.
  */
-export function detectRunawayAux(
+export async function detectRunawayAux(
   rows: ProcRow[],
   liveSlugs: ReadonlySet<string>,
   exec: Exec = defaultExec,
   options: RunawayOptions = {},
-): RunawayAux[] {
+): Promise<RunawayAux[]> {
   const minCores = options.minCores ?? 0.5
   const minAgeMs = options.minAgeMs ?? 30 * 60_000
   let text: string
   try {
-    text = exec("ps", ["-Ao", "pid=,cputime="])
+    text = await exec("ps", ["-Ao", "pid=,cputime="])
   } catch {
     return [] // telemetry only — never let it perturb the sweep
   }
@@ -486,14 +493,14 @@ export function summarizeRunaways(runaways: readonly RunawayAux[]): string[] {
     })
 }
 
-/** One periodic sweep: enumerate → decide → reap. Never throws (fails closed). */
-export function sweepOrphansOnce(deps: SweepDeps = {}): SweepResult {
+/** One periodic sweep: enumerate → decide → reap. Never rejects (fails closed). */
+export async function sweepOrphansOnce(deps: SweepDeps = {}): Promise<SweepResult> {
   const exec = deps.exec ?? defaultExec
   const selfPid = deps.selfPid ?? process.pid
   const minAgeMs = deps.minAgeMs ?? ORPHAN_MIN_AGE_MS
   let rows: ProcRow[]
   try {
-    rows = enumerateProcs(exec, { platform: deps.platform, readEnv: deps.readEnv })
+    rows = await enumerateProcs(exec, { platform: deps.platform, readEnv: deps.readEnv })
   } catch (error) {
     // ENOENT is `ps` itself missing, which no later sweep will find either; anything else (a
     // timeout, a transient exec failure) is this sweep's problem alone and fails closed as before.
@@ -505,7 +512,7 @@ export function sweepOrphansOnce(deps: SweepDeps = {}): SweepResult {
   // Report-only, and BEFORE the early return: a board with nothing to reap is exactly the board most
   // likely to be quietly on fire.
   if (deps.log && deps.runawayReport !== false) {
-    for (const line of summarizeRunaways(detectRunawayAux(rows, new Set(liveSlugs), exec, deps.runaway))) deps.log(line)
+    for (const line of summarizeRunaways(await detectRunawayAux(rows, new Set(liveSlugs), exec, deps.runaway))) deps.log(line)
   }
   if (!reap.length) return { reaped: 0, deadSlugs: [], liveSlugs }
   const bySlug = new Map(rows.map((r) => [r.pid, r.slug]))
@@ -572,29 +579,73 @@ export function startOrphanReaper(deps: SweepDeps & { intervalMs?: number } = {}
     return () => {}
   }
   const intervalMs = deps.intervalMs ?? ORPHAN_REAP_INTERVAL_MS
+  let stopped = false
+  let timer: ReturnType<typeof setInterval> | null = null
+  // One sweep at a time: a sweep is three `ps` passes, and on a loaded machine one of them has taken
+  // 8s — an interval that fires again before the last sweep settles must not stack a second on top.
+  let sweeping = false
+  const stopSweeps = (): void => {
+    if (timer) clearInterval(timer)
+    timer = null
+  }
   // A POSIX box without `ps` (a stripped container) is the same silence with a different cause: say
   // it once, on whichever sweep first sees it, and stop asking.
-  const unavailable = (result: SweepResult): boolean => {
-    if (!result.unavailable) return false
-    deps.log?.(`orphan-reaper: unavailable on this machine — ${result.unavailable}; background processes a stopped thread leaves behind are not collected here`)
-    return true
-  }
-  try {
-    if (unavailable(sweepOrphansOnce(deps))) return () => {}
-  } catch {
-    // startup sweep is best-effort
-  }
-  const timer = setInterval(() => {
+  const sweep = async (): Promise<void> => {
+    if (sweeping || stopped) return
+    sweeping = true
     try {
-      if (unavailable(sweepOrphansOnce(deps))) clearInterval(timer)
+      const result = await sweepOrphansOnce(deps)
+      if (result.unavailable && !stopped) {
+        stopped = true
+        stopSweeps()
+        deps.log?.(`orphan-reaper: unavailable on this machine — ${result.unavailable}; background processes a stopped thread leaves behind are not collected here`)
+      }
     } catch {
       // never let a sweep error escape the timer
+    } finally {
+      sweeping = false
     }
-  }, intervalMs)
-  timer.unref?.()
+  }
+  // The startup sweep is best-effort, and the interval only starts once it has settled, so a machine
+  // with no `ps` never arms one.
+  void sweep().then(() => {
+    if (stopped) return
+    timer = setInterval(() => void sweep(), intervalMs)
+    timer.unref?.()
+  })
   const socketDelay = setTimeout(sweepStaleBrokerSockets, STALE_SOCKET_SWEEP_DELAY_MS)
   socketDelay.unref?.()
   const socketTimer = setInterval(sweepStaleBrokerSockets, STALE_SOCKET_SWEEP_INTERVAL_MS)
   socketTimer.unref?.()
-  return () => { clearInterval(timer); clearTimeout(socketDelay); clearInterval(socketTimer) }
+  return () => {
+    stopped = true
+    stopSweeps()
+    clearTimeout(socketDelay)
+    clearInterval(socketTimer)
+  }
+}
+
+// ONE reaper per server process, however many projects it serves. Every sweep is machine-wide — it
+// enumerates every process and reaps a dead slug wherever it lives — so a second copy adds no coverage,
+// only a second set of `ps` passes. Until 2026-09-30 each project's context started its own: the
+// maintainer's singleton serving 22 projects ran 22 reapers, whose sweeps ran back to back and held the
+// event loop ~95% of the time, so a pin took seconds to land. The first context to acquire starts it,
+// the last to release stops it, and the first acquirer's deps (the same server log for every context)
+// are the ones it runs with.
+let shared: { refs: number; stop: () => void } | null = null
+
+export function acquireSharedOrphanReaper(deps: SweepDeps & { intervalMs?: number } = {}): () => void {
+  if (!shared) shared = { refs: 0, stop: startOrphanReaper(deps) }
+  const handle = shared
+  handle.refs++
+  let released = false
+  return () => {
+    if (released) return
+    released = true
+    handle.refs--
+    if (handle.refs === 0 && shared === handle) {
+      shared = null
+      handle.stop()
+    }
+  }
 }

@@ -4,7 +4,6 @@ import { createElement } from "react"
 import { renderToStaticMarkup } from "react-dom/server"
 import type { ThreadView } from "@frizz/shared"
 import { ContextMeter } from "./ContextMeter.tsx"
-import { TooltipProvider } from "./Tooltip.tsx"
 
 // The readout has two halves that are easy to break in opposite directions, so both are pinned here.
 //
@@ -23,13 +22,10 @@ function thread(context?: { tokens: number; window: number }): ThreadView {
   return { id: "ctx", kind: "session", context } as unknown as ThreadView
 }
 
-// Wrapped in the provider the real app mounts at the root of every surface — the readout's own hover
-// label goes through Radix, which throws without it. The provider itself emits no markup, so an absent
-// reading still has to come out as the empty string.
+// The hover panel (the numbers and "Compact now") is a closed Radix popover here, so it renders no
+// markup: what this sees is the dial alone, which is the surface these tests pin.
 function render(context?: { tokens: number; window: number }): string {
-  return renderToStaticMarkup(
-    createElement(TooltipProvider, null, createElement(ContextMeter, { thread: thread(context) })),
-  )
+  return renderToStaticMarkup(createElement(ContextMeter, { thread: thread(context) }))
 }
 
 test("an absent reading renders NOTHING — no dial, no placeholder, no box", () => {

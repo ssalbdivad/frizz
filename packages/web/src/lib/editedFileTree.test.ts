@@ -57,6 +57,15 @@ test("without a project directory every path is absolute", () => {
   assert.deepEqual(rows([file("/repo/src/a.ts")]), ["0d /repo/src", "1f a.ts"])
 })
 
+test("a directory's path is unique where its name repeats: two `lib` rows at one depth", () => {
+  const files = ["/p/one/x.ts", "/p/one/lib/a.ts", "/p/two/y.ts", "/p/two/lib/b.ts"].map((path) => ({ path, edits: 1 }))
+  const dirs = flattenEditedFileTree(editedFileTree(files, "/p")).flatMap((n) => (n.kind === "dir" ? [n.path] : []))
+  assert.deepEqual(dirs, ["one", "one/lib", "two", "two/lib"])
+  // Outside the project the root is `/`, and it does not double.
+  const outside = flattenEditedFileTree(editedFileTree([{ path: "/etc/a/b.conf", edits: 1 }, { path: "/etc/c.conf", edits: 1 }]))
+  assert.deepEqual(outside.flatMap((n) => (n.kind === "dir" ? [n.path] : [])), ["/etc", "/etc/a"])
+})
+
 test("segments: a trailing slash on either side is not a segment, and the project dir itself is not under itself", () => {
   assert.deepEqual(editedFileSegments("/repo/src/a.ts/", "/repo/"), ["src", "a.ts"])
   assert.deepEqual(editedFileSegments("/repo", "/repo"), ["/", "repo"])

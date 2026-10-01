@@ -38,15 +38,15 @@ After the manual bootstrap, configure a trusted publisher for `frizz-server` on 
 | Repository | `frizz` |
 | Workflow filename | `release.yml` |
 | Environment name | leave blank |
-| Allowed actions | allow `npm stage publish` only |
+| Allowed actions | allow `npm publish` |
 
-The workflow file is `.github/workflows/release.yml` and already grants `id-token: write`. npm requires the filename only, not its path. Trusted-publisher configurations created after 2026-09-03 are stage-only by default, and that is the setting this repo wants: the workflow reserves a version with `npm stage publish` and a maintainer approves it with 2FA. Direct `npm publish` stays disabled, so even a run that a stolen credential somehow started could fill a queue and ship nothing. Since 2026-09-23 it cannot start one either: the workflow is `workflow_dispatch`-only, and a push credential cannot dispatch.
+The workflow file is `.github/workflows/release.yml` and already grants `id-token: write`. npm requires the filename only, not its path. Trusted-publisher configurations created after 2026-09-03 are stage-only by default, so direct `npm publish` must be allowed explicitly: a stage-only publisher rejects the workflow's publish with `E403 OIDC permission denied for this action`. From 2026-09-22 to 2026-09-30 this repo kept both publishers stage-only on purpose, with the workflow running `npm stage publish` and a maintainer approving every version with 2FA; that was dropped as too onerous. What still keeps a stolen push credential from shipping a package is the trigger: the workflow is `workflow_dispatch`-only (since 2026-09-23), and a push credential cannot dispatch.
 
 The npm organization `frizzsh` does not change these fields: they identify the GitHub repository, and the package is the unscoped `frizz-server` selected for this release.
 
 ## Automated releases
 
-The server package must exist before `release.yml` can publish a shell version that bootstraps it. After the first package and trusted publisher are configured, move the verified commit to the `release` branch and dispatch the workflow against it (`gh workflow run release.yml --ref release`); moving the branch alone starts nothing. The workflow stages `frizz-server` before `frizz`, waits for the maintainer to approve both, and uses npm registry checks to make retries idempotent. Approve `frizz-server` first: staging puts both versions in the queue at once, so the approvals, not the workflow, order the two releases.
+The server package must exist before `release.yml` can publish a shell version that bootstraps it. After the first package and trusted publisher are configured, move the verified commit to the `release` branch and dispatch the workflow against it (`gh workflow run release.yml --ref release`); moving the branch alone starts nothing. The workflow publishes `frizz-server`, waits until npm serves it, then publishes `frizz`, and uses npm registry checks to make retries idempotent. The wait is what orders the two releases: npm holds each new version in review before serving it, and a shell must not go live before the server it boots.
 
 Server/frontend/provider changes normally bump only `packages/server-release/package.json`. A shell release separately bumps root `package.json`; its `frizzServer.version` is the exact default for a machine without a selected generation, not a dependency range. Compatible server updates are selected independently after bootstrap.
 

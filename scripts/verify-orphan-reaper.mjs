@@ -75,7 +75,7 @@ try {
   await wait(700) // let them register in the process table
 
   // 1) REAL enumeration: ps -Aww joined with the platform env read (-Eww / /proc environ)
-  const rows = enumerateProcs()
+  const rows = await enumerateProcs()
   const find = (pid) => rows.find((r) => r.pid === pid)
   ok(find(rootPid)?.slug === LIVE, "real env read surfaces FRIZZ_THREAD for the root")
   ok(find(liveAuxPid)?.slug === LIVE, "real env read surfaces the live-aux slug")
@@ -98,7 +98,7 @@ try {
 
   // 3) full sweep path, DRY RUN (record kills, don't signal) — proves the real orchestration
   const recorded = []
-  sweepOrphansOnce({ minAgeMs: 0, selfPid: process.pid, kill: (pid) => recorded.push(pid) })
+  await sweepOrphansOnce({ minAgeMs: 0, selfPid: process.pid, kill: (pid) => recorded.push(pid) })
   const rec = new Set(recorded)
   ok(rec.has(orphanPid), "full sweep would reap the orphan")
   ok(!rec.has(rootPid) && !rec.has(liveAuxPid), "full sweep spares root + live-slug aux")

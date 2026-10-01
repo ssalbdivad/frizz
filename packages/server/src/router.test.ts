@@ -2444,6 +2444,65 @@ test("spinoff delivers the request to the thread's own worker, and drops it when
   }
 })
 
+// ── Compact now (the context meter's hover panel) ───────────────────────────────────────────────
+// The button reaches each harness's own manual compaction. The Claude half rides the follow-up channel
+// but is NOT a follow-up: the text must arrive as the bare `/compact` (Claude Code reads anything after
+// it as summarization instructions, so a gap note appended there would steer the summary), and it must
+// leave no delivery-ledger entry behind, because no bubble is drawn for it.
+function compactHarness(turn: "idle" | "in-flight" = "idle") {
+  const tailer = { ...noopTailer, get: () => ({ turn, subAgents: [], lastAssistantAt: "2026-01-01T00:00:00.000Z" }) as never }
+  const h = harness(tailer)
+  const slug = "compact-me"
+  h.storage.upsertSession(row(slug))
+  h.storage.setBackend(slug, "claude")
+  h.storage.setClaudeRuntime(slug, "broker")
+  const calls: { text: string; deliveryId?: string }[] = []
+  ;(h.ctx as { claudeBroker?: unknown }).claudeBroker = {
+    followUp: async (input: { text: string; deliveryId?: string }) => void calls.push(input),
+  }
+  return { h, slug, calls }
+}
+
+test("Compact now sends a broker Claude worker the bare /compact, with no ledger entry", async () => {
+  const { h, slug, calls } = compactHarness()
+  await h.router.compactThread.handler({ input: { slug, sessionId: `sid-${slug}` } })
+  assert.equal(calls.length, 1)
+  assert.equal(calls[0].text, "/compact", "no gap note, even on a thread that rested long ago")
+  assert.equal(calls[0].deliveryId, undefined)
+  assert.equal(h.storage.getSession(slug)?.delivery_ledger ?? null, null, "no bubble to project")
+  h.storage.close()
+})
+
+test("Compact now refuses a turn in flight rather than splicing /compact into it", async () => {
+  const { h, slug, calls } = compactHarness("in-flight")
+  await assert.rejects(h.router.compactThread.handler({ input: { slug, sessionId: `sid-${slug}` } }), /current turn to end/)
+  assert.equal(calls.length, 0)
+  h.storage.close()
+})
+
+test("Compact now refuses a runtime Frizz cannot compact", async () => {
+  const { h, slug, calls } = compactHarness()
+  h.storage.setBackend(slug, "acp")
+  await assert.rejects(h.router.compactThread.handler({ input: { slug, sessionId: `sid-${slug}` } }), /can't be compacted/)
+  assert.equal(calls.length, 0)
+  h.storage.close()
+})
+
+test("Compact now asks an app-server codex thread for thread/compact/start", async () => {
+  const { h, slug } = compactHarness()
+  h.storage.setBackend(slug, "codex")
+  h.storage.setCodexRuntime(slug, "app-server")
+  const compacted: string[] = []
+  ;(h.ctx as { codexAppServer?: unknown }).codexAppServer = {
+    binding: () => ({ state: "active", currentTurnId: null }),
+    resumeOwnedSession: async () => { throw new Error("an active binding needs no resume") },
+    compactThread: async (threadSlug: string, sessionId: string) => void compacted.push(`${threadSlug}/${sessionId}`),
+  }
+  await h.router.compactThread.handler({ input: { slug, sessionId: `sid-${slug}` } })
+  assert.deepEqual(compacted, [`${slug}/sid-${slug}`])
+  h.storage.close()
+})
+
 test("Mark as done keeps a worktree another open thread is working in, and removes it once that thread is done too", async () => {
   // The router half of worktree-cleanup.ts check 1: the folders it protects are every OTHER not-done
   // thread's working folder, as threadWorkingDir reads it. The shape that found it: a spinoff child

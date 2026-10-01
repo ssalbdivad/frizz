@@ -111,6 +111,7 @@ export function InteractionStack({
           key={interaction.id}
           record={interaction}
           autoFocus={autoFocusFirst && index === 0}
+          siblings={interactions}
         />
       ))}
     </section>
@@ -138,14 +139,16 @@ function InteractionQuestionCard({
   record,
   questions,
   autoFocus,
+  siblings,
 }: {
   record: InteractionRecord
   questions: NonNullable<ReturnType<typeof interactionQuestions>>
   autoFocus: boolean
+  siblings: readonly InteractionRecord[]
 }) {
   const qc = useQueryClient()
   const api = useThreadApi()
-  const steer = useSteerOnDecision(record.owner.threadSlug)
+  const turn = useTurnRelease(record, siblings)
   const cardRef = useRef<HTMLElement>(null)
   const responseIds = useRef(new Map<string, string>())
   const projectDir = useThreadProjectDir()
@@ -203,7 +206,7 @@ function InteractionQuestionCard({
       // Fail CLOSED on an ambiguous write, exactly as the typed card does: a response frizz cannot
       // prove landed must not look re-sendable.
       failClosedAmbiguousInteraction(qc, record)
-      steer.undo()
+      turn.rollback()
       setError(errorText(cause))
     },
   })
@@ -216,7 +219,7 @@ function InteractionQuestionCard({
     responseIds.current.set(signature, responseId)
     // The answer releases the blocked turn, so the rail row moves to the running band now rather than
     // when the tailer next sees the turn advance — see steerOnDecision.
-    steer.commit()
+    turn.release(true)
     mutation.mutate({ decisionId: answerDecision.id, values, responseId })
   }
   const setText = (entry: (typeof questions)[number], text: string) => {
@@ -296,16 +299,21 @@ function InteractionQuestionCard({
 export function InteractionCard({
   record,
   autoFocus = false,
+  siblings,
 }: {
   record: InteractionRecord
   autoFocus?: boolean
+  // Every request this thread has pending, this one included — what decides whether answering this one
+  // releases the turn (useTurnRelease). Absent ⇒ this is the only one.
+  siblings?: readonly InteractionRecord[]
 }) {
   // A QUESTION renders as the shared question card, not as this authorization chrome. Anything that
   // cannot be expressed as a question (a numeric or secret prompt) falls through to the typed form
   // below rather than silently dropping an input the operator still has to fill.
   const asQuestions = useMemo(() => interactionQuestions(record), [record])
-  if (asQuestions) return <InteractionQuestionCard record={record} questions={asQuestions} autoFocus={autoFocus} />
-  return <InteractionApprovalCard record={record} autoFocus={autoFocus} />
+  const all = siblings ?? [record]
+  if (asQuestions) return <InteractionQuestionCard record={record} questions={asQuestions} autoFocus={autoFocus} siblings={all} />
+  return <InteractionApprovalCard record={record} autoFocus={autoFocus} siblings={all} />
 }
 
 // A RESPONSE TO A BLOCKED TURN IS A STEER. The provider is mid-turn, parked on this request, and every
@@ -318,25 +326,52 @@ function steerOnDecision(decision: CanonicalInteractionDecision): boolean {
   return decision.semantic !== "cancel"
 }
 
-// How a steer SHOWS. The thread's row in the project list takes the optimistic overlay, and a queue card
-// leaves the queue, the way a reply sent from its box does; a failed send undoes both. The record is
-// filed by bare slug for the page's own project (its drawer), and under the thread's key for a card
-// scoped to another project (threadApi.tsx useThreadIsForeignToPage) — a bare slug there would set the
-// page project's thread of the same name to work.
-function useSteerOnDecision(slug: string): { commit: () => void; undo: () => void } {
+// THE ROW AND THE CARD MOVE TOGETHER. The steer puts the rail row in Running, so the queue card has to
+// leave on the same click — a row in Running with a card still in the queue breaks the rail's one
+// invariant (groups.inActiveBand), and it is the same dissolve a registered answer or a composer steer
+// makes, and a failed send undoes both. Null context on the thread page, where there is no card to dismiss.
+//
+// The steer's row overlay is filed by bare slug for the page's own project (its drawer), and under the
+// thread's key for a card scoped to another project (threadApi.tsx useThreadIsForeignToPage) — a bare
+// slug there would set the page project's thread of the same name to work.
+//
+// ONLY THE LAST OPEN REQUEST RELEASES THE TURN. With two out, answering one leaves the turn blocked on the
+// other, so the steer and the dismissal wait for the response that clears the last of them. "Open" is
+// judged at the click, not from the list: the list refetches only after a response lands, so answering
+// two in quick succession would otherwise see the first still pending and never move the row. A request
+// is settled for this purpose once THIS browser has responded to it (any copy of the card — the queue
+// card and the drawer share the module-level set) or the server already reports it sending. The released
+// set is keyed by project as well as slug, since one page shows every project's threads.
+const respondedInteractions = new Set<string>()
+const releasedThreads = new Set<string>()
+
+function useTurnRelease(record: InteractionRecord, siblings: readonly InteractionRecord[]) {
+  const queueDismiss = useContext(QueueDismissContext)
   const foreign = useThreadIsForeignToPage()
   const projectId = useThreadProjectId()
-  const queue = useContext(QueueDismissContext)
+  const slug = record.owner.threadSlug
+  const threadKey = `${projectId ?? ""}/${slug}`
   return {
-    commit: () => {
+    // Every response, whatever its decision, stops this request being one the turn waits on; `steer`
+    // says whether the decision lets the turn run on (see steerOnDecision).
+    release: (steer: boolean) => {
+      respondedInteractions.add(record.id)
+      if (!steer) return
+      const lastOpen = siblings.every((i) => i.id === record.id || respondedInteractions.has(i.id) || i.delivery?.effect === "sending")
+      if (!lastOpen) return
+      releasedThreads.add(threadKey)
       if (foreign && projectId) markSteeredIn(projectId, slug)
       else if (!foreign) markSteered(slug)
-      queue?.dismiss()
+      queueDismiss?.dismiss()
     },
-    undo: () => {
+    // A failed response puts its request back, and with it any release a later response made on the
+    // strength of it: the turn is still blocked on this one.
+    rollback: () => {
+      respondedInteractions.delete(record.id)
+      if (!releasedThreads.delete(threadKey)) return
       if (foreign && projectId) clearSteeredIn(projectId, slug)
       else if (!foreign) clearSteered(slug)
-      queue?.cancel()
+      queueDismiss?.cancel()
     },
   }
 }
@@ -344,13 +379,15 @@ function useSteerOnDecision(slug: string): { commit: () => void; undo: () => voi
 function InteractionApprovalCard({
   record,
   autoFocus = false,
+  siblings,
 }: {
   record: InteractionRecord
   autoFocus?: boolean
+  siblings: readonly InteractionRecord[]
 }) {
   const qc = useQueryClient()
   const api = useThreadApi()
-  const steer = useSteerOnDecision(record.owner.threadSlug)
+  const turn = useTurnRelease(record, siblings)
   const headingId = useId()
   const cardRef = useRef<HTMLElement>(null)
   const responseIds = useRef(new Map<string, string>())
@@ -470,9 +507,9 @@ function InteractionApprovalCard({
         }, 1_000)
       }
     },
-    onError: (cause, action) => {
+    onError: (cause) => {
       setStatus(undefined)
-      if (steerOnDecision(action.decision)) steer.undo()
+      turn.rollback()
       setError(errorText(cause))
       // The write may have committed even though its HTTP response was lost. Fail the shared list
       // cache closed before attempting reconciliation so a remount (or a second copy of this card in
@@ -543,7 +580,7 @@ function InteractionApprovalCard({
     const signature = interactionDecisionSignature(decision.id, values)
     const responseId = responseIds.current.get(signature) ?? newResponseId()
     responseIds.current.set(signature, responseId)
-    if (steerOnDecision(decision)) steer.commit()
+    turn.release(steerOnDecision(decision))
     mutation.mutate({ decision, values, responseId })
   }
 

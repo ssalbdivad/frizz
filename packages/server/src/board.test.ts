@@ -4,7 +4,7 @@ import { lstatSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, w
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { questionAnswerMessage, questionsCancelledWakeMessage, type InteractionRequest } from "@frizz/shared"
-import { ANSWER_IN_FLIGHT_EXCUSAL_MS, answerAwaitingDelivery, answersInFlight, appServerTurnStalled, createBoard, deriveAwaitingBackground, deriveNeedsYou, degradeIfAwaitingAnswer, degradeIfNoTranscript, fenceWatchViews, hasDeclaredWait, hasParkedTimerWatch, hasRegisteredBackgroundPark, isBoardRelevantFrizzPath, registeredDoneFence, resolveLimitPause, returnedSubAgentsView, resolveSessionPermission, resolveSessionProfile, resolveSessionTitle, stampShellBudgets, type RegisteredWatch, QUIET_TURN_MS, quietTurnSince } from "./board.ts"
+import { ANSWER_IN_FLIGHT_EXCUSAL_MS, DELIVERY_IN_FLIGHT_SPIN_MS, answerAwaitingDelivery, deriveDeliveryInFlight, answersInFlight, appServerTurnStalled, createBoard, deriveAwaitingBackground, deriveNeedsYou, degradeIfAwaitingAnswer, degradeIfNoTranscript, fenceWatchViews, hasDeclaredWait, hasParkedTimerWatch, hasRegisteredBackgroundPark, isBoardRelevantFrizzPath, registeredDoneFence, resolveLimitPause, returnedSubAgentsView, resolveSessionPermission, resolveSessionProfile, resolveSessionTitle, stampShellBudgets, type RegisteredWatch, QUIET_TURN_MS, quietTurnSince } from "./board.ts"
 import { Bus } from "./bus.ts"
 import { createStorage, type ThreadQuestionRow } from "./storage.ts"
 import type { Project } from "./project.ts"
@@ -1423,6 +1423,11 @@ test("a rested broker thread whose daemon died holding live sub-agents surfaces 
   assert.equal(orphaned.runtime, "exited", "a dead daemon holding work is a stall, not an idle rest")
   assert.equal(orphaned.needsYou, true, "so the thread reaches the human instead of being excused forever")
   assert.equal(orphaned.crashed, true, "and it cards as stalled — its children died with the process")
+  // The rail must say the same: the child is not spinning, and there is nothing to stop.
+  assert.equal(orphaned.subAgents[0].state, "stale", "a dead daemon's child is not shown running")
+  assert.equal(orphaned.subAgents[0].stoppable, undefined, "and offers no stop control")
+  assert.equal(healthy.subAgents[0].state, "running", "control: a live daemon's child still runs")
+  assert.equal(healthy.subAgents[0].stoppable, true)
 
   // AND IT MUST NOT WEAR OFF. Measured against the real fold: a child whose owner died reads `running`
   // for SUBAGENT_STALE_MS and `stale` for ever after. Keying the stall on `running` alone therefore
@@ -2463,6 +2468,25 @@ test("deriveNeedsYou: an answer in flight takes a bare rest out of the queue, bu
   assert.equal(needs(tele({ turn: "in-flight" }), "exited", true), true, "a worker that died mid-turn is still a stall")
   assert.equal(needs(rested, "turn-idle", true, true), true, "a typed interaction is its own gate")
   assert.equal(needs(tele({ pendingAsk: { id: "x", questions: [] } }), "turn-idle", true), true, "…and so is a native ask")
+})
+
+test("deriveDeliveryInFlight: a message on its way, at rest and let go by the queue, reads as in flight", () => {
+  const at = Date.parse(T0)
+  const sending = row({ delivery_ledger: ledger("pending") })
+  assert.equal(deriveDeliveryInFlight(sending, "turn-idle", false, false, false, at + 1_000), true, "a follow-up the transcript has not reflected")
+  assert.equal(deriveDeliveryInFlight(row(), "turn-idle", false, false, true, at), true, "an answer whose wake has not landed")
+  assert.equal(deriveDeliveryInFlight(row(), "turn-idle", false, false, false, at), false, "control: nothing on its way")
+  assert.equal(deriveDeliveryInFlight(row({ delivery_ledger: ledger("unconfirmed") }), "turn-idle", false, false, false, at), false, "an unconfirmed send is not on its way")
+})
+
+test("deriveDeliveryInFlight: never over a queued thread, a running turn, a dead daemon or a stale send", () => {
+  const at = Date.parse(T0)
+  const sending = row({ delivery_ledger: ledger("pending") })
+  assert.equal(deriveDeliveryInFlight(sending, "turn-idle", true, false, false, at), false, "the queue still holds it — its own mark wins")
+  assert.equal(deriveDeliveryInFlight(sending, "running", false, false, false, at), false, "the turn is already visibly running")
+  assert.equal(deriveDeliveryInFlight(sending, "turn-idle", false, true, false, at), false, "the process holding it is gone")
+  // A codex rollout send can sit pending for hours; the row keeps its excusal but stops claiming motion.
+  assert.equal(deriveDeliveryInFlight(sending, "turn-idle", false, false, false, at + DELIVERY_IN_FLIGHT_SPIN_MS), false)
 })
 
 // ---- A REGISTERED COMPLETION -----------------------------------------------------------------------
