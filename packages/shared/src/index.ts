@@ -4017,9 +4017,10 @@ export const Settings = z.object({
    */
   worktreeDir: z.string().max(4_096).optional(),
   /**
-   * Whether marking a thread done removes the worktrees it made in `worktreeDir` — only CLEAN ones
-   * (`git worktree remove` without --force), plus their branch when merged. Optional so an old blob
-   * parses; defaultSettings pins true. Machine-level. See server/worktree-cleanup.ts.
+   * Whether marking a thread done removes the worktrees it made in `worktreeDir`, plus their branch when
+   * merged. Only one nothing would be lost from: clean, its HEAD on another ref, no hand-made ignored
+   * files, no other live thread working in it. Optional so an old blob parses; defaultSettings pins
+   * true. Machine-level. See server/worktree-cleanup.ts.
    */
   removeWorktreesOnDone: z.boolean().optional(),
   /**

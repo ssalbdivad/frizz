@@ -95,6 +95,9 @@ test("the contract teaches ask as the only way to ask, and no question fence at 
     assert.match(c, /THERE IS NO `question` FENCE ANY MORE/)
     assert.match(c, /A QUESTION HAS NO FENCE ANY MORE/)
     assert.match(c, /WAITING ON A PERSON IS A REGISTERED QUESTION/)
+    // A step only the human can perform (2FA, a login) is a question too, even beside a live sub-agent.
+    assert.match(c, /That includes a STEP only the human can perform/)
+    assert.match(c, /A sub-agent still running does NOT turn that into an `awaiting` park/)
     assert.match(c, /AN OPEN REGISTERED QUESTION IS THE HANDBACK/)
     // No fenced question of any shape — neither one with a body nor the retired empty marker.
     assert.deepEqual(prompt.match(/```question[^\n]*\n/g) ?? [], [])

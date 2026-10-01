@@ -433,6 +433,19 @@ export class RestartSupervisorProxy {
 
   private async handleControl(req: IncomingMessage, res: ServerResponse): Promise<void> {
     const pathname = new URL(req.url ?? "/", "http://frizz.invalid").pathname
+    // THE SESSION GATE, for the control plane. handle() sends every control path here BEFORE its own
+    // session check, so without this the tunnel reached restart, update-restart and status with no
+    // session at all: the authority check below keys on Host and Origin, which any non-browser client
+    // sets to whatever it likes. Found while building the phone's sign-out (2026-09-30).
+    //
+    // Checked first, as handle() does for pages, so an unauthenticated caller learns nothing beyond the
+    // 401 — no body, no per-path answer. Loopback never trips it (arrivedPublicly is false), so the
+    // operator's own tab and every launcher CLI call are untouched.
+    if (this.arrivedPublicly(req) && !this.sessionAccepted(req)) {
+      res.writeHead(401, { "cache-control": "no-store" })
+      res.end()
+      return
+    }
     const sameOrigin = req.headers["sec-fetch-site"] === "same-origin" || this.vouchesSameOrigin(req)
     const allowMissingOrigin = pathname === SUPERVISOR_STATUS_PATH && req.method === "GET" && sameOrigin
     if (!this.authorityAccepted(req, allowMissingOrigin)) {
