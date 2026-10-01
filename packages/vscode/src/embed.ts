@@ -9,6 +9,8 @@ import {
   EMBED_PROTOCOL_VERSION,
   EMBED_THEME_PARAM,
   EMBED_VSCODE,
+  type EmbedComposeMessage,
+  type EmbedComposedMessage,
   type EmbedPageMessage,
   type EmbedTheme,
 } from "@frizz/shared/embed-protocol"
@@ -203,4 +205,31 @@ export function addRoute(sidebar: SidebarReadiness): "sidebar" | "server" {
  */
 export function promptRoute(enabled: boolean, text: unknown): "sidebar" | "server" {
   return enabled && typeof text !== "string" ? "sidebar" : "server"
+}
+
+/** What `composeInSidebar` needs of the sidebar (sidebar.ts implements it). */
+export interface ComposeSidebar {
+  reveal(preserveFocus: boolean): Promise<void>
+  waitReady(ms: number): Promise<boolean>
+  compose(input: Omit<EmbedComposeMessage, "type" | "id">, ms: number): Promise<EmbedComposedMessage | undefined>
+}
+
+/**
+ * Put a selection into a composer of the sidebar's page: bring the view into sight (opening it, the first
+ * time), wait for its page, post the item and wait for the page's answer. Anything short of the page
+ * saying it took the item — it never got ready, never answered, or refused — is `ok: false` with the
+ * reason for the log, and the command then takes its path from before the sidebar, so a selection is
+ * never simply lost.
+ */
+export async function composeInSidebar(
+  sidebar: ComposeSidebar,
+  input: Omit<EmbedComposeMessage, "type" | "id">,
+  options: { preserveFocus: boolean; readyMs: number; composeMs: number },
+): Promise<{ ok: true; id: string } | { ok: false; why: string }> {
+  await sidebar.reveal(options.preserveFocus)
+  if (!(await sidebar.waitReady(options.readyMs))) return { ok: false, why: "The Frizz sidebar didn't load in time." }
+  const answer = await sidebar.compose(input, options.composeMs)
+  if (!answer) return { ok: false, why: "The Frizz sidebar didn't answer." }
+  if (!answer.ok) return { ok: false, why: `The Frizz sidebar couldn't take it: ${answer.error ?? "no reason given"}` }
+  return { ok: true, id: answer.id }
 }

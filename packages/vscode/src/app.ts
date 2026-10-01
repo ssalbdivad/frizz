@@ -14,7 +14,7 @@ import type { EditorComposeInput, EditorComposed, EditorOpen, EditorProject } fr
 import type { EmbedComposeMessage } from "@frizz/shared/embed-protocol"
 import { EditorConnection, FocusRecency, type ConnectionStatus, type OpenResult } from "./connection.ts"
 import { discoverFrizz, pageAddressNote, SOURCE_WORDS, type FoundFrizz } from "./discovery.ts"
-import { addRoute, promptRoute } from "./embed.ts"
+import { addRoute, composeInSidebar as composeVia, promptRoute } from "./embed.ts"
 import { composeInput, composeMessage, normalizeNewlines, refLabel, type FileRef, type Selected } from "./message.ts"
 import { projectForPath, workspaceProjects } from "./projects.ts"
 import { describeRpcError, dispatchProfile, FrizzRpc, withRetry } from "./rpc.ts"
@@ -330,22 +330,11 @@ export function activateFrizz(api: Vscode, context: vscode.ExtensionContext): Fr
   const threadUrl = (origin: string, project: EditorProject, slug: string) =>
     `${origin}/all/${encodeURIComponent(project.slug)}/thread/${encodeURIComponent(slug)}`
 
-  /**
-   * Put a selection into a composer of the sidebar's page: bring the view into sight (opening it, the
-   * first time), wait for its page, post the item and wait for the page's answer. Undefined when the page
-   * never got ready, never answered or refused — then the command takes its path from before the sidebar,
-   * so a selection is never simply lost. The item is the one the server path carries (`composeInput`), so
-   * the page writes the same chip either way.
-   */
+  /** A selection into the sidebar's page (embed.ts composeInSidebar), as the server path's answer; undefined to fall back. */
   async function composeInSidebar(input: Omit<EmbedComposeMessage, "type" | "id">, preserveFocus: boolean): Promise<EditorComposed | undefined> {
-    await sidebar.reveal(preserveFocus)
-    if (!(await sidebar.waitReady(SIDEBAR_READY_MS))) {
-      log.warn("The Frizz sidebar didn't load in time.")
-      return undefined
-    }
-    const answer = await sidebar.compose(input, SIDEBAR_COMPOSE_MS)
-    if (answer?.ok) return { t: "composed", id: answer.id, ok: true }
-    log.warn(answer ? `The Frizz sidebar couldn't take it: ${answer.error ?? "no reason given"}` : "The Frizz sidebar didn't answer.")
+    const result = await composeVia(sidebar, input, { preserveFocus, readyMs: SIDEBAR_READY_MS, composeMs: SIDEBAR_COMPOSE_MS })
+    if (result.ok) return { t: "composed", id: result.id, ok: true }
+    log.warn(result.why)
     return undefined
   }
 

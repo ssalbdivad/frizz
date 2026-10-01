@@ -1,6 +1,6 @@
 import { test } from "node:test"
 import assert from "node:assert/strict"
-import { addRoute, chordCommand, embedTheme, embedUrl, frameTarget, parsePageMessage, promptRoute, safeOrigin, webUrl, type KeyChord } from "./embed.ts"
+import { addRoute, chordCommand, composeInSidebar, type ComposeSidebar, embedTheme, embedUrl, frameTarget, parsePageMessage, promptRoute, safeOrigin, webUrl, type KeyChord } from "./embed.ts"
 
 test("VS Code's four theme kinds fold to the page's two", () => {
   // ColorThemeKind: Light 1, Dark 2, HighContrast 3, HighContrastLight 4.
@@ -140,4 +140,41 @@ test("Ask and Send write in the sidebar unless it is off or the caller passed th
   assert.equal(promptRoute(false, undefined), "server")
   assert.equal(promptRoute(true, "why does this loop?"), "server")
   assert.equal(promptRoute(true, ""), "server", "an empty argument is still an argument")
+})
+
+function fakeSidebar(behaviour: { ready: boolean; answer?: { ok: boolean; error?: string } }) {
+  const calls: string[] = []
+  const sidebar: ComposeSidebar = {
+    async reveal(preserveFocus) {
+      calls.push(`reveal ${preserveFocus}`)
+    },
+    async waitReady(ms) {
+      calls.push(`wait ${ms}`)
+      return behaviour.ready
+    },
+    async compose(input, ms) {
+      calls.push(`compose ${JSON.stringify(input.target)} ${input.focus} ${ms}`)
+      return behaviour.answer && { type: "frizz:composed", id: "c1", ...behaviour.answer }
+    },
+  }
+  return { sidebar, calls }
+}
+
+const composeInput = { item: { path: "/r/a.ts", startLine: 2, app: "Code" }, target: "new" as const, focus: true }
+const timing = { preserveFocus: false, readyMs: 15_000, composeMs: 5_000 }
+
+test("a selection the page takes is done: revealed, waited for, posted, answered", async () => {
+  const { sidebar, calls } = fakeSidebar({ ready: true, answer: { ok: true } })
+  assert.deepEqual(await composeInSidebar(sidebar, composeInput, timing), { ok: true, id: "c1" })
+  assert.deepEqual(calls, ["reveal false", "wait 15000", 'compose "new" true 5000'])
+})
+
+test("a page that never gets ready, never answers or refuses leaves the selection to the command's old path", async () => {
+  const notReady = fakeSidebar({ ready: false })
+  assert.deepEqual(await composeInSidebar(notReady.sidebar, composeInput, timing), { ok: false, why: "The Frizz sidebar didn't load in time." })
+  assert.deepEqual(notReady.calls, ["reveal false", "wait 15000"], "nothing is posted to a page that is not listening")
+  const silent = fakeSidebar({ ready: true })
+  assert.deepEqual(await composeInSidebar(silent.sidebar, composeInput, timing), { ok: false, why: "The Frizz sidebar didn't answer." })
+  const refused = fakeSidebar({ ready: true, answer: { ok: false, error: "Its project isn't in Frizz." } })
+  assert.deepEqual(await composeInSidebar(refused.sidebar, composeInput, timing), { ok: false, why: "The Frizz sidebar couldn't take it: Its project isn't in Frizz." })
 })
