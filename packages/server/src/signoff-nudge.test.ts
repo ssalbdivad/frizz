@@ -171,7 +171,7 @@ test("a rest with no fence is told how to sign off, and the text names all three
     // The 1-3-sentences shape belongs to a `done` BODY and nowhere else — read as general guidance it
     // made an agent omit most of what had happened (maintainer 2026-08-12, with the screenshot).
     // The 1-3-sentence shape belongs to the `done` entry and nowhere else.
-    assert.match(h.delivered[0], /done[\s\S]{0,220}1-3 sentences/)
+    assert.match(h.delivered[0], /done[\s\S]{0,220}at most one sentence/)
     assert.doesNotMatch(h.delivered[0], /^Keep it SHORT/m)
   } finally { h.close() }
 })

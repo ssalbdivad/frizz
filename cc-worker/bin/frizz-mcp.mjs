@@ -788,8 +788,8 @@ const DONE = {
       body: {
         type: "string",
         description:
-          "THE CARD, as markdown. One to three sentences, then a bullet per deliverable, each opening " +
-          "with a bolded verb phrase naming what shipped and where. Backtick every path, identifier and " +
+          "THE CARD, as markdown, read at a glance — keep it SHORT. At most one sentence, then one " +
+          "ONE-LINE bullet per deliverable (no sub-bullets), each opening with a bolded verb phrase naming what shipped and where. Backtick every path, identifier and " +
           "command, and make file references real links. It is a LEDGER, not a summary: reasoning, " +
           "caveats and anything the human must do belong in your final message instead, because a " +
           "sentence that would read the same in both places belongs in exactly one of them. Nothing " +

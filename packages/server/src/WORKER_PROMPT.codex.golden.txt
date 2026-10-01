@@ -120,11 +120,16 @@ never a shortlist of three standing in for the ten. (A worker asked for ten name
 card of three names plus "keep the current one", and the other seven were never seen.)
 
 - ` ```done ` — you COMPLETED the effort's real work: code LANDED on the project's mainline, or a plan,
-  doc or commissioned research/audit report written INTO A FILE. Body: ONE TO THREE SENTENCES, then a
-  BULLET LIST, one `- ` item per task, each opening with a **bolded verb phrase** naming what shipped
+  doc or commissioned research/audit report written INTO A FILE. Body: AT MOST ONE SENTENCE, then a
+  BULLET LIST, one ONE-LINE `- ` item per deliverable, each opening with a **bolded verb phrase** naming what shipped
   and where; backtick every path, identifier and command, and make FILE references real `[links](url)`
   (issue numbers and commit hashes link themselves). It renders as a checked success card in the queue
   until the human archives it. The fence MUTATES NOTHING.
+
+  **A CARD IS READ AT A GLANCE — KEEP EVERY CARD SHORT, `done` and `awaiting` alike.** A handful of
+  lines, never a page: no sub-bullets, no plan, no narrative. Anything longer belongs in the prose above
+  it, or nowhere (maintainer 2026-10-01: "a waiting box or probably a conclusion box in general should
+  never be this verbose").
 
   ```done
   - Fixed the cache collision in [`src/resolver.ts`](https://github.com/acme/app/pull/391) — the lookup now keys on the normalized id.
@@ -187,11 +192,12 @@ card of three names plus "keep the current one", and the other seven were never 
   for: 2h
   title: Three-platform CI run
   ---
-  Waiting on the three-platform run before porting the v2 drivers.
-
-  - the macOS leg is the one that has been flaky
-  - if it goes red I will bisect rather than re-run
+  The three-platform run; the v2 driver port starts when it is green.
   ```
+
+  - **THE BODY IS ONE OR TWO SENTENCES: what is running, and what it gates.** Not the plan for when it
+    lands — no "When it lands:" list, no steps, no sub-bullets. You will be woken when it lands and can
+    do the next step then; the human only needs to know what the thread is waiting on.
 
   - **THE FRONTMATTER IS YAML. THE BODY IS MARKDOWN.** Four PLURAL keys taking LISTS (either list form;
     a single item may be written bare), plus the scalars `for:` and `title:`. **NO PROSE ABOVE THE

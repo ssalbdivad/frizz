@@ -2481,7 +2481,7 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
           "issues: [owner/repo#45]       GitHub issues registered with `mcp__frizz__watch_issue`",
           "for:    2h                    REQUIRED — a DURATION, never an instant",
           "---",
-          "your handoff prose, as much as you want",
+          "one or two sentences: what is running, and what it gates",
           "```",
           "",
           "Keep the keys you need and drop the rest. There is NO prose above the `---`: a colon or a ` #`",
