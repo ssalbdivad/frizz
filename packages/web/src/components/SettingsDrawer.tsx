@@ -14,7 +14,7 @@ import { SHEET_CLOSE_MS, SHEET_PANEL_CLASS, SHEET_SCRIM_CLASS, prefersReducedMot
 import { SaveStatus, useSettingsDraft, type SaveState } from "../hooks/useSettingsAutosave.tsx"
 import { useIsMobile } from "../lib/mobile.ts"
 import { SNOOZE_PRESETS, isSnoozePreset } from "../lib/snooze.ts"
-import { EDITOR_OPENER_LABEL, connectedOpeners } from "../lib/editorWindows.ts"
+import { EDITOR_OPENER_LABEL, codeFilesDestination, connectedOpeners } from "../lib/editorWindows.ts"
 import { useSupervisorStatus } from "../api/supervisorStatus.ts"
 import { isRemoteSession } from "../api/signOut.ts"
 import { SignOutThisDeviceRow } from "./SignOutThisDeviceRow.tsx"
@@ -181,7 +181,7 @@ export function SettingsDrawer() {
             {/* Client-only (prefs): where a click on a code file goes, in this browser. The app it
                 goes to is the machine-wide select just below, which it reads as a pair with. */}
             <SettingsField label="Open code files" help={SETTINGS_HELP.codeFiles}>
-              <CodeFilesControl />
+              <CodeFilesControl opener={draft.localFileOpener} />
             </SettingsField>
 
             <SettingsField label="External app" help={SETTINGS_HELP.localFileOpener}>
@@ -614,8 +614,15 @@ function DensityToggle() {
 
 // Queue/rested-band direction: client-only (localStorage prefs proxy), applies live to the Needs-you
 // queue and the sidebar's rested rows the instant it flips. FIFO by default (longest in the queue first).
-function CodeFilesControl() {
+// Pressed is where a click goes NOW: a browser that has chosen neither ("auto", lib/prefs.ts) shows the
+// External app while it is an editor with a window connected, and the reader otherwise — so the control
+// moves as the editor comes and goes, and a click on either button makes that the choice.
+function CodeFilesControl({ opener }: { opener: Settings["localFileOpener"] }) {
   const { codeFiles } = useSnapshot(prefs)
+  const { editorWindows } = useSnapshot(store)
+  const phone = useIsMobile()
+  const remote = isRemoteSession(useSupervisorStatus().data)
+  const current = codeFilesDestination({ codeFiles, windows: editorWindows, opener, phone, remote })
   const opts: { v: "frizz" | "editor"; label: string }[] = [
     { v: "frizz", label: "In Frizz" },
     { v: "editor", label: "In external app" },
@@ -626,9 +633,9 @@ function CodeFilesControl() {
         <button
           key={o.v}
           onClick={() => (prefs.codeFiles = o.v)}
-          aria-pressed={codeFiles === o.v}
+          aria-pressed={current === o.v}
           className={`rounded px-3 py-1 text-[12px] transition-colors ${
-            codeFiles === o.v ? "bg-fg text-bg" : "text-muted hover:text-fg"
+            current === o.v ? "bg-fg text-bg" : "text-muted hover:text-fg"
           }`}
         >
           {o.label}

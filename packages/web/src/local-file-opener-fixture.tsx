@@ -3,11 +3,13 @@ import { createRoot } from "react-dom/client"
 import "./styles.css"
 import { CodexDirectiveCard } from "./components/CodexRichOutput.tsx"
 import { DiffBlock } from "./components/DiffBlock.tsx"
+import type { EditorWindowSummary, LocalFileOpener } from "@frizz/shared"
+import { resetExternalOpens } from "./lib/externalOpen.ts"
 import { mdToHtml } from "./lib/markdown.ts"
 import { installLocalFileLinkInterceptor } from "./lib/local-file-links.ts"
 import { useLocalFileCodeLinks } from "./lib/localFileCode.ts"
 import { useInnerHtml } from "./lib/innerHtml.ts"
-import { prefs } from "./lib/prefs.ts"
+import { prefs, type CodeFiles } from "./lib/prefs.ts"
 import { store } from "./store.ts"
 
 // Every destination a local-file link can have, on one page. A file Frizz can show opens in Frizz: a
@@ -29,14 +31,27 @@ type FixtureWindow = Window & {
   __localFileFixtureOpened?: string[]
   // Every `openLocalFile` body whole — the line, column and range a link carried to the RPC.
   __localFileFixtureOpenBodies?: OpenBody[]
-  __localFileFixtureCodeFiles?: (to: "frizz" | "editor") => void
+  __localFileFixtureCodeFiles?: (to: CodeFiles) => void
+  // What an "auto" browser's click is settled by (lib/editorWindows.ts codeFilesDestination): the
+  // connected editor windows, the External app `settingsGet` answers, and whether the supervisor calls
+  // this a remote session. The page reads the last two over the wire, so they are answered below.
+  __localFileFixtureEditor?: (state: { windows?: EditorWindowSummary[]; opener?: LocalFileOpener; remote?: boolean }) => void
+  __localFileFixtureResetOpens?: () => void
   __localFileFixtureDrawers?: () => { kind: string; path?: string }[]
   __localFileFixtureViewer?: () => { paths: string[]; index: number } | null
 }
 
+let fixtureOpener: LocalFileOpener = "system"
+let fixtureRemote = false
 const nativeFetch = window.fetch.bind(window)
 window.fetch = async (input, init) => {
   const url = new URL(typeof input === "string" ? input : input instanceof URL ? input.href : input.url, window.location.href)
+  if (url.pathname === "/_frizz/rpc/settingsGet") {
+    return new Response(JSON.stringify({ result: { localFileOpener: fixtureOpener } }), { headers: { "content-type": "application/json" } })
+  }
+  if (url.pathname === "/_frizz/control/status") {
+    return new Response(JSON.stringify({ protocol: 1, state: "ready", remoteSession: fixtureRemote }), { headers: { "content-type": "application/json" } })
+  }
   if (url.pathname === "/_frizz/rpc/openLocalFile") {
     const body = JSON.parse(String(init?.body ?? "{}")) as OpenBody
     const w = window as FixtureWindow
@@ -59,6 +74,12 @@ window.fetch = async (input, init) => {
 }
 
 ;(window as FixtureWindow).__localFileFixtureCodeFiles = (to) => { prefs.codeFiles = to }
+;(window as FixtureWindow).__localFileFixtureEditor = ({ windows, opener, remote }) => {
+  if (windows) store.editorWindows = windows
+  if (opener) fixtureOpener = opener
+  if (remote !== undefined) fixtureRemote = remote
+}
+;(window as FixtureWindow).__localFileFixtureResetOpens = resetExternalOpens
 
 // Prose whose inline code is decorated the way every transcript surface decorates it — rendered through
 // the same hook, so the line a backticked `a.ts:12` names is stamped by the real code path.

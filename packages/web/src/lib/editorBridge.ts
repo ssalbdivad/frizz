@@ -11,7 +11,7 @@ import { innerPath, projectSlug } from "./base-path.ts"
 import { rememberCrossProjectFocus } from "./crossProject.ts"
 import { draftStore } from "./drafts.ts"
 import { composeEdit, composeProjectsOf, composeTarget, type ComposeMove, type ComposeProject } from "./editorCompose.ts"
-import { EDITOR_OPENER_LABEL, editorOffer, parseOffered, type EditorOpener } from "./editorWindows.ts"
+import { codeFilesDestination, connectedOpeners, EDITOR_OPENER_LABEL, editorOffer, parseOffered, type EditorOpener } from "./editorWindows.ts"
 import { splitComposerValue } from "./imagePaths.ts"
 import { MOBILE_QUERY } from "./mobile.ts"
 import { homeHref, projectViewHref, viewAt } from "./pageView.ts"
@@ -115,6 +115,33 @@ function rememberOffered(kind: EditorOpener): void {
     localStorage.setItem(OFFERED_KEY, JSON.stringify([...readOffered(), kind]))
   } catch {
     // Storage disabled: the offer may come again next load, which is the lesser harm.
+  }
+}
+
+// ── 2b. where an automatic browser's code files go ─────────────────────────────────────────────────
+
+/**
+ * Whether a code-file click on an "auto" browser goes to the External app (editorWindows.ts
+ * codeFilesDestination), for lib/local-file-links.ts. Only asked while an editor window that takes opens
+ * is connected, so a page with none never reads anything. What it needs beyond the windows — the
+ * External app, and whether this is a remote session — comes from the page's caches when they hold it
+ * (ensureQueryData: no request per click), and a failed read is the reader, which always works.
+ */
+export function autoCodeFilesMayGoToEditor(): boolean {
+  return prefs.codeFiles === "auto" && connectedOpeners(store.editorWindows).size > 0
+}
+
+export async function autoCodeFilesGoToEditor(): Promise<boolean> {
+  if (!autoCodeFilesMayGoToEditor()) return false
+  try {
+    const [settings, remote] = await Promise.all([
+      queryClient ? queryClient.ensureQueryData({ queryKey: ["settingsGet"], queryFn: () => rpc.settingsGet() }) : rpc.settingsGet(),
+      queryClient ? queryClient.ensureQueryData(supervisorStatusQueryOptions).then(isRemoteSession) : getFrizzSupervisorStatus().then(isRemoteSession),
+    ])
+    const phone = typeof window !== "undefined" && (window.matchMedia?.(MOBILE_QUERY).matches ?? false)
+    return codeFilesDestination({ codeFiles: prefs.codeFiles, windows: store.editorWindows, opener: settings.localFileOpener, phone, remote }) === "editor"
+  } catch {
+    return false
   }
 }
 

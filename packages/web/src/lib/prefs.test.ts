@@ -46,8 +46,18 @@ test("keyboard-shortcut overrides persist, and a bad entry falls back to its def
   assert.deepEqual(parseStoredPrefs(JSON.stringify({ keybindings: "garbage", diffsRedefaulted: true })).keybindings, {})
 })
 
-test("code files open in Frizz by default, and only \"editor\" sends them out", () => {
-  assert.equal(parseStoredPrefs(null).codeFiles, "frizz")
+test("code files are automatic by default; a stored In Frizz from before is the old default, once", () => {
+  assert.equal(parseStoredPrefs(null).codeFiles, "auto")
   assert.equal(parseStoredPrefs(JSON.stringify({ codeFiles: "editor", diffsRedefaulted: true })).codeFiles, "editor")
-  assert.equal(parseStoredPrefs(JSON.stringify({ codeFiles: "cursor", diffsRedefaulted: true })).codeFiles, "frizz")
+  assert.equal(parseStoredPrefs(JSON.stringify({ codeFiles: "cursor", diffsRedefaulted: true })).codeFiles, "auto")
+  // Every pref write persists the whole blob, so a "frizz" stored before the default moved is the old
+  // default riding along: re-defaulted once. After that (the marker is set), "In Frizz" is a choice.
+  const old = parseStoredPrefs(JSON.stringify({ codeFiles: "frizz", diffsRedefaulted: true }))
+  assert.equal(old.codeFiles, "auto")
+  assert.equal(parseStoredPrefs(JSON.stringify(old)).codeFiles, "auto")
+  const chosen = parseStoredPrefs(JSON.stringify({ ...old, codeFiles: "frizz" }))
+  assert.equal(chosen.codeFiles, "frizz")
+  assert.equal(parseStoredPrefs(JSON.stringify(chosen)).codeFiles, "frizz")
+  // A fresh browser carries the marker from its first write, so its own later "In Frizz" sticks too.
+  assert.equal(parseStoredPrefs(JSON.stringify({ ...parseStoredPrefs(null), codeFiles: "frizz" })).codeFiles, "frizz")
 })

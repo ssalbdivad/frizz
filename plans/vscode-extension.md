@@ -92,9 +92,16 @@ it as a chip; a reference with no text becomes a plain `` `path:line` `` in the 
 ### What the page learns
 
 - `editorWindows()` (query) and the `editors` event: the connected windows' app names and families.
-  The settings drawer marks the External app option that is connected, and the first time an editor
-  connects in a browser whose code files do not go to it, a toast offers to send them there (one
-  click sets "Open code files: In external app" and External app to that editor).
+  The settings drawer marks the External app option that is connected.
+- Where a code-file click goes. A browser that has not chosen in "Open code files" sends it to the
+  External app while that app is an editor with a window connected that takes opens, and to the reader
+  otherwise; never from the phone layout or a remote session (`codeFilesDestination`,
+  `lib/editorWindows.ts`). A choice in Settings is final either way. Until 2026-10-01 only the offer
+  below switched a browser over, and a human who missed its 12s toast got the reader with VS Code
+  connected.
+- The first time an editor connects in a browser whose code files do not go to it — External app is
+  something else, or the browser chose the reader — a toast offers to send them there (one click sets
+  "Open code files: In external app" and External app to that editor).
 
 ## Positions in links
 
