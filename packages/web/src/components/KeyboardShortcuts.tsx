@@ -214,7 +214,10 @@ function KeyboardShortcutsDialog({ open, onOpenChange }: { open: boolean; onOpen
       }}
       footer={
         <>
-          <span aria-live="polite" data-shortcut-status className="mr-auto min-w-0 truncate text-[11.5px] text-muted-70">
+          {/* In an editor's sidebar the sheet is the frame's width less its margin — 276px at 300 — and the
+              line beside Restore defaults has ~130px: truncated, "Click a key to change it" read
+              "Click a key to ch…" and a binding conflict lost its second half. There it wraps. */}
+          <span aria-live="polite" data-shortcut-status className={`mr-auto min-w-0 text-[11.5px] text-muted-70 ${sidebar ? "leading-[15px]" : "truncate"}`}>
             {status || "Click a key to change it"}
           </span>
           <button
