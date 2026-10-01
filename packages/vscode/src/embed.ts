@@ -139,7 +139,7 @@ export function webUrl(text: string): string | undefined {
  * `primary` is Cmd on a Mac and Ctrl elsewhere; the terminal and source control are Ctrl on every
  * platform, as VS Code binds them.
  */
-const CHORDS: readonly { chord: string; mac?: string; command: string }[] = [
+const CHORDS: readonly { chord: string; command: string }[] = [
   { chord: "primary+shift+KeyP", command: "workbench.action.showCommands" },
   { chord: "primary+KeyP", command: "workbench.action.quickOpen" },
   { chord: "primary+KeyB", command: "workbench.action.toggleSidebarVisibility" },
