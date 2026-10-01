@@ -3334,6 +3334,9 @@ export const ThreadView = z.object({
   // There is no third kind. Terminal COMMAND threads (`kind: "command"`, 2026-09-23) were rows of their
   // own until 2026-09-29; a terminal now belongs to a session thread (`terminals` below).
   kind: z.enum(["session", "legacy"]).optional(),
+  // An UNSTARTED thread's note (plans/todos.md): present ⇒ no agent has ever run for this thread. It
+  // rests in the queue like a bare rest, and the first message sent to it starts the agent.
+  todo: z.string().optional(),
   // The terminals the human opened on this thread that are not yet filed away — running, or finished and
   // still worth reading. Absent ⇒ none. A terminal waiting at a prompt (`awaitingInput`) is what queues
   // this thread on its behalf (server board.ts withThreadTerminals).
@@ -4211,6 +4214,32 @@ export const DispatchInput = z.object({
   spinOffFrom: ThreadSlug.optional(),
 })
 export type DispatchInput = z.infer<typeof DispatchInput>
+
+// A TODO (plans/todos.md): a thread created WITHOUT starting an agent — a note the human comes back to,
+// marks done, or launches later by sending it a message. `note` is what it says; it prefills the prompt
+// box when the human opens it. The profile is the prompt box's pick at the moment it was written down,
+// and is what the agent starts on unless the human changes it before launching.
+export const CreateTodoInput = z.object({
+  note: z.string().trim().min(1),
+  title: z.string().min(1).optional(),
+  model: z.string().optional(),
+  backend: Backend.optional(),
+  effort: Settings.shape.effort,
+})
+export type CreateTodoInput = z.infer<typeof CreateTodoInput>
+export const UpdateTodoInput = z.object({ slug: ThreadSlug, sessionId: z.string().min(1), note: z.string() }).strict()
+export type UpdateTodoInput = z.infer<typeof UpdateTodoInput>
+// Start a todo's agent: `prompt` is its opening message (the note, usually edited first). The profile
+// fields default to the ones the todo was written down with.
+export const LaunchTodoInput = z.object({
+  slug: ThreadSlug,
+  sessionId: z.string().min(1),
+  prompt: z.string().min(1),
+  model: z.string().optional(),
+  backend: Backend.optional(),
+  effort: Settings.shape.effort,
+}).strict()
+export type LaunchTodoInput = z.infer<typeof LaunchTodoInput>
 
 // ---- SPINOFFS (2026-09-29) -----------------------------------------------------------------------
 // A new thread the HUMAN asks for from an existing one — "fix this", "investigate perf" — with the

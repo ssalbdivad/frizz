@@ -14,6 +14,9 @@
 // nothing but the `PROCEDURES` data table as a value. Transport concerns (fetch, RpcCallOpts, the
 // Proxy) live in rpc.ts, which is browser-only and never enters the server program.
 import type {
+  CreateTodoInput,
+  LaunchTodoInput,
+  UpdateTodoInput,
   EditorComposeItem,
   EditorWindowSummary,
   BackgroundShellOutputInput,
@@ -200,6 +203,10 @@ export interface Api {
   // lib/eagerComposerSubmission.ts DELIVERY_SEND_TIMEOUT_MS for what that costs without one.
   followUp(input: FollowUpInput, opts?: RpcCallOpts): Promise<void>
   spinoff(input: SpinoffInput): Promise<SpinoffResult>
+  // Todos (plans/todos.md): a thread written down without an agent, its note edited, and its agent started.
+  createTodo(input: CreateTodoInput): Promise<{ slug: string; sessionId: string }>
+  updateTodo(input: UpdateTodoInput): Promise<void>
+  launchTodo(input: LaunchTodoInput): Promise<{ slug: string; sessionId: string }>
   unqueueFollowUp(input: UnqueueFollowUpInput): Promise<UnqueueFollowUpResult>
   // The ↑ on a queued bubble: stop waiting and make the worker read what is already queued. No message
   // payload — see DeliverQueuedNowInput.
@@ -461,6 +468,9 @@ export const PROCEDURES = {
   adoptThread: "mutation",
   followUp: "mutation",
   spinoff: "mutation",
+  createTodo: "mutation",
+  updateTodo: "mutation",
+  launchTodo: "mutation",
   unqueueFollowUp: "mutation",
   deliverQueuedNow: "mutation",
   compactThread: "mutation",

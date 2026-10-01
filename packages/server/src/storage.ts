@@ -270,6 +270,18 @@ export interface SessionRow {
   // until it has landed. The uuid is the one the opening prompt was SENT under, which the CLI echoes onto
   // the record; minted at dispatch, so no copied record can carry it. NULL on every other row.
   fork_anchor?: string | null
+  // A TODO: a thread the human created to come back to, with no agent behind it yet. Non-NULL means
+  // UNSTARTED, and the value is the note (possibly empty). The row is otherwise an ordinary thread — it
+  // queues, snoozes, is marked done and renamed like any other — but its session id names a session no
+  // provider has ever heard of, so nothing may tail, resume, nudge or wake it (isTodoRow). The first
+  // message sent to it starts the agent through the dispatch path, on this same slug and session id,
+  // and that dispatch's upsert writes NULL here (plans/todos.md).
+  todo?: string | null
+}
+
+/** An unstarted thread (SessionRow.todo): no agent has ever run for it. */
+export function isTodoRow(row: Pick<SessionRow, "todo"> | undefined | null): boolean {
+  return row?.todo !== null && row?.todo !== undefined
 }
 
 /**
@@ -1085,6 +1097,8 @@ export interface Storage {
   /** Record a forked thread's anchor (SessionRow.fork_anchor). Guarded on the session id, so a slug
    *  re-dispatched since cannot inherit another session's anchor. */
   setForkAnchor(slug: string, sessionId: string, anchor: string): boolean
+  /** Rewrite an unstarted thread's note. False when the row is not (or no longer) a todo. */
+  setTodoNote(slug: string, sessionId: string, note: string): boolean
   setAcpAgent(slug: string, agentId: string): void
   setProfile(slug: string, model: string, effort: string): void
   setPermissionMode(slug: string, permissionMode: string): void
@@ -1597,6 +1611,8 @@ export function ensureStorageSchema(db: Database): void {
     "interacted_at TEXT",
     // 2026-09-30: a forked thread's own first record (SessionRow.fork_anchor).
     "fork_anchor TEXT",
+    // 2026-10-01: an unstarted thread's note (SessionRow.todo).
+    "todo TEXT",
   ]) {
     try {
       db.exec(`ALTER TABLE session ADD COLUMN ${column}`)
@@ -1769,8 +1785,8 @@ export function createStorage(source: string | Database, projectId: string): Sto
     return cachedBySlug.get(slug) ?? selOne.get(slug)
   }
   const upsertStmt = scope.prepare(`
-    INSERT INTO session (project_id, slug, session_id, thread_name, spawned_at, last_read_at, unread, exited, title_auto, title_locked, title, state, snoozed_until, snooze_prompt, meta, seen_at, transcript_id, model, effort, profile_pending_model, profile_pending_effort, profile_revision, profile_handoff, permission_mode, permission_pending, control_error, runtime_generation, runtime_control, runtime_control_revision)
-    VALUES (@project_id, @slug, @session_id, @thread_name, @spawned_at, @last_read_at, @unread, @exited, @title_auto, @title_locked, @title, @state, @snoozed_until, @snooze_prompt, @meta, @seen_at, @transcript_id, @model, @effort, @profile_pending_model, @profile_pending_effort, @profile_revision, @profile_handoff, @permission_mode, @permission_pending, @control_error, @runtime_generation, @runtime_control, @runtime_control_revision)
+    INSERT INTO session (project_id, slug, session_id, thread_name, spawned_at, last_read_at, unread, exited, title_auto, title_locked, title, state, snoozed_until, snooze_prompt, meta, seen_at, transcript_id, model, effort, profile_pending_model, profile_pending_effort, profile_revision, profile_handoff, permission_mode, permission_pending, control_error, runtime_generation, runtime_control, runtime_control_revision, todo)
+    VALUES (@project_id, @slug, @session_id, @thread_name, @spawned_at, @last_read_at, @unread, @exited, @title_auto, @title_locked, @title, @state, @snoozed_until, @snooze_prompt, @meta, @seen_at, @transcript_id, @model, @effort, @profile_pending_model, @profile_pending_effort, @profile_revision, @profile_handoff, @permission_mode, @permission_pending, @control_error, @runtime_generation, @runtime_control, @runtime_control_revision, @todo)
     ON CONFLICT(project_id, slug) DO UPDATE SET
       session_id = excluded.session_id,
       thread_name  = excluded.thread_name,
@@ -1815,6 +1831,9 @@ export function createStorage(source: string | Database, projectId: string): Sto
       -- A forked thread's anchor names a record in ITS session's transcript: kept across a resume (the
       -- same session spread back), dropped by a re-dispatch or adopt, whose fresh session holds no copy.
       fork_anchor = CASE WHEN session.session_id = excluded.session_id THEN session.fork_anchor ELSE NULL END,
+      -- The note an UNSTARTED thread carries (SessionRow.todo). Every dispatch writes NULL here, so the
+      -- upsert that starts a todo's agent is the same write that makes it an ordinary thread.
+      todo = excluded.todo,
       archived = 0,
       state = 'open'
   `)
@@ -2608,6 +2627,7 @@ export function createStorage(source: string | Database, projectId: string): Sto
   const codexRuntimeStmt = scope.prepare("UPDATE session SET codex_runtime = ? WHERE project_id = @project_id AND slug = ?")
   const claudeRuntimeStmt = scope.prepare("UPDATE session SET claude_runtime = ? WHERE project_id = @project_id AND slug = ?")
   const forkAnchorStmt = scope.prepare("UPDATE session SET fork_anchor = ? WHERE project_id = @project_id AND slug = ? AND session_id = ?")
+  const todoNoteStmt = scope.prepare("UPDATE session SET todo = ? WHERE project_id = @project_id AND slug = ? AND session_id = ? AND todo IS NOT NULL")
   const acpAgentStmt = scope.prepare("UPDATE session SET acp_agent = ? WHERE project_id = @project_id AND slug = ?")
   // Stamps profile_set_at alongside model/effort: the OPERATOR's set-time. Both backends' setThreadProfile
   // paths write through here, and the stamp is what marks the pair as CHOSEN rather than observed — the
@@ -2775,6 +2795,7 @@ export function createStorage(source: string | Database, projectId: string): Sto
     claude_runtime: row.claude_runtime ?? null,
     acp_agent: row.acp_agent ?? null,
     fork_anchor: row.fork_anchor ?? null,
+    todo: row.todo ?? null,
   })
 
   const getAdoptionRuntimeSnapshot = db.transaction((slug: string) => ({
@@ -3320,6 +3341,7 @@ export function createStorage(source: string | Database, projectId: string): Sto
     setCodexRuntime: (slug, runtime) => void codexRuntimeStmt.run(runtime, slug),
     setClaudeRuntime: (slug, runtime) => void claudeRuntimeStmt.run(runtime, slug),
     setForkAnchor: (slug, sessionId, anchor) => forkAnchorStmt.run(anchor, slug, sessionId).changes === 1,
+    setTodoNote: (slug, sessionId, note) => todoNoteStmt.run(note, slug, sessionId).changes === 1,
     setAcpAgent: (slug, agentId) => void acpAgentStmt.run(agentId, slug),
     setProfile: (slug, model, effort) => void profileStmt.run(model, effort, new Date().toISOString(), slug),
     setPermissionMode: (slug, permissionMode) => void permissionModeStmt.run(permissionMode, new Date().toISOString(), slug),
