@@ -3218,8 +3218,8 @@ export const ThreadView = z.object({
   // lastActivityAt/spawnedAt when absent.
   lastAssistantAt: z.string().optional(),
   aiTitle: z.string().optional(), // Claude's own auto-generated session title (latest ai-title record)
-  // The thread's live STATUS — a short phrase of what is happening NOW, rewritten every 5th operator
-  // message (server periodic-status.ts). Never the NAME: the name is one or two stable words for the
+  // The thread's live STATUS — a short phrase of what is happening NOW, rewritten at
+  // every rest the conversation moved (server periodic-status.ts). Never the NAME: the name is one or two stable words for the
   // subject, and this is the part allowed to move. Shown beside the name on the queue card, in the
   // drawer header and in the rail row's tooltip — never as a second rail line, which would cost the rail
   // its density. Absent until the first one lands. Named `statusLine` because `status` above is the
@@ -6166,6 +6166,12 @@ export const ProjectCard = z.object({
   name: z.string(),
   path: z.string(),
   lastOpenedAt: z.string(),
+  /**
+   * When `frizz` was last run in this project (a cold launch or a join), as the launcher stamped it in
+   * the registry. All projects' prompt box aims at the most recent one when this browser has neither
+   * picked nor focused a project. Absent for a project no current launcher has run in.
+   */
+  lastLaunchedAt: z.string().optional(),
   /** The directory is gone — moved or deleted. The card stays so it can be reopened or forgotten. */
   stale: z.boolean(),
   /**

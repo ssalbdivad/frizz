@@ -21,6 +21,11 @@ import "./styles.css"
 //     &needsConfirmation=1     …the server declines instead (fast, as it really is — the liveness check
 //                              runs before any teardown), carrying a hold naming live work.
 //     &fail=1                  …the RPC fails.
+//     &stalePoll=1             …it succeeds, but the poll does not drop the thread: 9s after the click a
+//                              read that STARTED before the done lands (thread still queued), and only
+//                              12s after it does a fresh read drop the thread — a loaded server's poll.
+//     &stillQueued=1           …it succeeds, and a read started after it still lists the thread: the
+//                              done evidently did not take, so the card must come back.
 //                              A reply sent from the first card's box steers it: the "poll" drops the
 //                              thread 400ms later, once the fade is over.
 //     &replyDelay=<ms>         …the reply's followUp answers only after that long (a cold resume, a retry).
@@ -41,6 +46,8 @@ const DELAY = Number(params.get("delay") ?? 1500)
 const DECLINE = params.get("needsConfirmation") === "1"
 const FAIL = params.get("fail") === "1"
 const REPLY_DELAY = Number(params.get("replyDelay") ?? 0)
+const STALE_POLL = params.get("stalePoll") === "1"
+const STILL_QUEUED = params.get("stillQueued") === "1"
 
 const now = new Date().toISOString()
 function thread(id: string, title: string, extra: Partial<ThreadViewModel> = {}): ThreadViewModel {
@@ -138,6 +145,8 @@ const log: RpcLog = { calls: [], completeCalledAt: null, completeResolvedAt: nul
 
 // The poll dropping a completed thread, as the page's projectsQueues read would once the server archives it.
 let dropThread: (id: string) => void = () => {}
+// A read that LANDS now, still listing every thread, having started at `startedAt`.
+let landRead: (startedAt: number) => void = () => {}
 
 const json = (result: unknown) => new Response(JSON.stringify({ result }), { headers: { "content-type": "application/json" } })
 const originalFetch = window.fetch
@@ -183,6 +192,16 @@ window.fetch = async (input, init) => {
     await new Promise((resolve) => setTimeout(resolve, DELAY))
     log.completeResolvedAt = performance.now()
     if (FAIL) return new Response(JSON.stringify({ error: "the worker would not stop" }), { status: 500, headers: { "content-type": "application/json" } })
+    if (STILL_QUEUED) {
+      setTimeout(() => landRead(Date.now()), 1_000)
+      return json({ needsConfirmation: false })
+    }
+    if (STALE_POLL) {
+      const calledAt = Date.now() - DELAY
+      setTimeout(() => landRead(calledAt - 500), 9_000 - DELAY)
+      setTimeout(() => dropThread(body.slug ?? ""), 12_000 - DELAY)
+      return json({ needsConfirmation: false })
+    }
     setTimeout(() => dropThread(body.slug ?? ""), 50)
     return json({ needsConfirmation: false })
   }
@@ -191,7 +210,16 @@ window.fetch = async (input, init) => {
 
 function Queue() {
   const [queued, setQueued] = useState(THREADS)
-  dropThread = (id) => setQueued((list) => list.filter((t) => t.id !== id))
+  // When the newest "poll" STARTED (lib/projectsQueuesRead.ts). A drop is a fresh read.
+  const [readAt, setReadAt] = useState(() => Date.now())
+  dropThread = (id) => {
+    setQueued((list) => list.filter((t) => t.id !== id))
+    setReadAt(Date.now())
+  }
+  landRead = (startedAt) => {
+    setQueued((list) => [...list])
+    setReadAt(startedAt)
+  }
   const project: QueuesProject = useMemo(() => ({
     id: "fixture-card",
     slug: "signing",
@@ -207,7 +235,7 @@ function Queue() {
     snoozed: [],
     doneCount: 0,
   }), [queued])
-  const leaving = useLeavingCards([project])
+  const leaving = useLeavingCards([project], readAt)
   return (
     <div className="flex flex-col gap-5">
       {queued.filter((t) => !leaving.hidden(threadKey(project.id, t.id))).map((t) => {

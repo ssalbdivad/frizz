@@ -10,10 +10,11 @@ import { Toaster } from "./components/Toaster.tsx"
 import { KeyboardLayer } from "./components/KeyboardShortcuts.tsx"
 import { applyLocation, noteRouterTransition, primeReturnFromFullscreen, registerNavigate } from "./lib/router.ts"
 import { setHomeFocus } from "./lib/base-path.ts"
-import { defaultCrossProjectFocus, useCrossProjectPick } from "./lib/crossProject.ts"
+import { defaultCrossProjectFocus, lastFocusedProject, rememberLastFocusedProject, useCrossProjectPick } from "./lib/crossProject.ts"
 import { rememberTabView, resolveView, retiredProjectHref, viewAt, viewInSearch, viewSearch, type PageView } from "./lib/pageView.ts"
 import type { ProjectCard } from "@frizz/shared"
 import { rpc } from "./api/rpc.ts"
+import { readProjectsQueues } from "./lib/projectsQueuesRead.ts"
 import { feedIsBoundTo, rebindProject } from "./api/socket.ts"
 import { noteStandaloneThreadRender, resetProjectState, showToast, store } from "./store.ts"
 
@@ -181,7 +182,7 @@ function usePageResolution(drawerSlug: string | undefined): PageResolution {
   const cards = useQuery({ queryKey: ["projectsList"], queryFn: () => rpc.projectsList() })
   // Which projects this server has open, so All projects binds one that can take a thread. Shared with
   // the page itself (same key), so the page it lands on paints from this read.
-  const queues = useQuery({ queryKey: ["projectsQueues"], queryFn: () => rpc.projectsQueues() })
+  const queues = useQuery({ queryKey: ["projectsQueues"], queryFn: readProjectsQueues })
   const pickId = useCrossProjectPick()
   useState(() => {
     if (!atHome) return
@@ -200,6 +201,13 @@ function usePageResolution(drawerSlug: string | undefined): PageResolution {
   // Render-phase and idempotent, like setHomeFocus: everything below reads the tab's view (usePageView),
   // and a drawer's close goes home to it (lib/router.ts).
   if (view) rememberTabView(view)
+  // The project this browser last showed on its own — All projects' prompt box falls back to it when
+  // nothing was picked there (lib/crossProject.ts). Only at `/`: a drawer's project is not one the
+  // operator focused, and a slug nobody has resolves to All projects, so it never gets here.
+  const focusedId = atHome && view?.kind === "project" ? cards.data?.find((card) => card.slug === view.slug)?.id : undefined
+  useEffect(() => {
+    if (focusedId) rememberLastFocusedProject(focusedId)
+  }, [focusedId])
   const unknown = resolved && "unknown" in resolved ? resolved.unknown : undefined
   useEffect(() => {
     if (unknown) showToast(`No project named ${unknown}`, { duration: 7000 })
@@ -214,7 +222,7 @@ function usePageResolution(drawerSlug: string | undefined): PageResolution {
   if (!cards.data || !view || queues.isPending) return { kind: "loading" }
   if (view.kind === "project") return { kind: "page", view, slug: view.slug }
   const openIds = queues.data ? new Set(queues.data.map((queue) => queue.projectId)) : undefined
-  const pick = defaultCrossProjectFocus(cards.data, pickId, openIds)
+  const pick = defaultCrossProjectFocus(cards.data, pickId, openIds, lastFocusedProject())
   return pick ? { kind: "page", view, slug: pick } : { kind: "welcome", projects: cards.data }
 }
 

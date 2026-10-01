@@ -1,7 +1,7 @@
 import type { TranscriptMessage } from "@frizz/shared"
 import { isBrokerClaudeRow, type SessionRow, type Storage } from "./storage.ts"
 
-// Every Nth operator message on a thread, write its live STATUS from the RECENT conversation.
+// At every rest where the conversation has moved, write the thread's STATUS from the RECENT conversation.
 //
 // This began (a7be3046, 2026-09-24) as a periodic RETITLE: a long thread drifts, and by its twentieth
 // exchange the operator is steering something the opening prompt never mentioned (maintainer: "every x
@@ -14,12 +14,19 @@ import { isBrokerClaudeRow, type SessionRow, type Storage } from "./storage.ts"
 // The window is the last few EXCHANGES — the operator's own words plus the agent's replies — not the
 // newest line alone (issue #22: a summary fed only the newest reply describes the last agent action).
 //
-// What counts is the OPERATOR's messages, not every user-role record: frizz's wakes, a child's upward
+// It ran every 5th operator message until 2026-09-30, and a rested card went on saying "Waiting on npm
+// 2FA trust command" for exchanges after the human had run it and the agent had moved on (maintainer:
+// "statuses are updated with each interaction so that stale indicators like this dont linger around and
+// make users think they need to act when they don't. seems like minimal cost"). So now every rest whose
+// transcript gained an agent reply or an operator message since the last write gets one Sonnet one-shot;
+// a rest that added nothing — a watcher tick the agent answered with no text — reuses the standing status.
+//
+// The WINDOW is still the last few operator exchanges. What counts there is the OPERATOR's messages, not every user-role record: frizz's wakes, a child's upward
 // `SendMessage`, completion boundaries and still-queued bubbles are all user-side turns nobody typed,
 // and counting them would rewrite a quiet thread's status every few watcher ticks. A SPINOFF REQUEST is not
 // one either (2026-09-30), though the human asked for it: it is about the NEW thread, so it neither moves
 // this thread's conversation on nor names the request live-status.ts should describe this one's work by.
-export const STATUS_EVERY_MESSAGES = 5
+export const STATUS_WINDOW_MESSAGES = 5
 // Enough to say what the conversation is doing, bounded well under anything a one-shot should carry.
 const PER_MESSAGE_CHARS = 1_500
 const CONVERSATION_CHARS = 12_000
@@ -32,7 +39,7 @@ export function operatorMessages(messages: readonly TranscriptMessage[]): Transc
 
 /** The last `window` operator messages and every agent reply among them, as a transcript the status
  *  writer can read. Undefined when there is nothing to read. */
-export function recentConversation(messages: readonly TranscriptMessage[], window = STATUS_EVERY_MESSAGES): string | undefined {
+export function recentConversation(messages: readonly TranscriptMessage[], window = STATUS_WINDOW_MESSAGES): string | undefined {
   const ops = operatorMessages(messages)
   if (ops.length === 0) return undefined
   const from = messages.indexOf(ops[Math.max(0, ops.length - window)]!)
@@ -61,23 +68,20 @@ export interface PeriodicStatusDeps {
   readMessages: (sessionId: string, forkAnchor?: string | null) => TranscriptMessage[]
   onStatus: () => void
   onError?: (slug: string, error: unknown) => void
-  every?: number
 }
 
 export interface PeriodicStatus {
-  /** Call at every live rest. Fire-and-forget: a status never delays anything. `force` writes one off
-   *  the cadence — live-status.ts asks for it when the turn that just ended wore a WORKING status, which
-   *  would otherwise sit on the rested card still saying "Running the tests". */
+  /** Call at every live rest. Fire-and-forget: a status never delays anything. `force` writes one even
+   *  when the conversation has not moved — live-status.ts asks for it when the turn that just ended wore
+   *  a WORKING status, which would otherwise sit on the rested card still saying "Running the tests". */
   onTurnDone(row: SessionRow, options?: { force?: boolean }): void
 }
 
 export function createPeriodicStatus(deps: PeriodicStatusDeps): PeriodicStatus {
-  const every = Math.max(1, deps.every ?? STATUS_EVERY_MESSAGES)
-  // The last multiple-of-`every` each session was summarized at. In memory on purpose: the first rest a
-  // session shows this process only RECORDS its count, because this process cannot know whether the
-  // previous one already covered that window — so a restart costs at most one missed window and never
-  // a burst of status requests across every live thread.
-  const doneAt = new Map<string, number>()
+  // How many messages of the transcript each session's last status read: the conversation has moved
+  // when an operator message or agent reply sits past it. In memory, so a restart costs at most one
+  // re-write at a thread's next rest — and rests fire only on a live edge, never as a boot-time burst.
+  const readTo = new Map<string, number>()
   const inFlight = new Set<string>()
   return {
     onTurnDone(row, options) {
@@ -86,11 +90,13 @@ export function createPeriodicStatus(deps: PeriodicStatusDeps): PeriodicStatus {
       const key = `${row.slug}\0${row.session_id}`
       if (inFlight.has(key)) return
       const messages = deps.readMessages(row.session_id, row.fork_anchor)
-      const bucket = Math.floor(operatorMessages(messages).length / every)
-      const prev = doneAt.get(key)
-      doneAt.set(key, Math.max(bucket, prev ?? 0))
-      if (!options?.force && (prev === undefined || bucket <= prev || bucket === 0)) return
-      const conversation = recentConversation(messages, every)
+      const ops = new Set(operatorMessages(messages))
+      const prev = readTo.get(key) ?? 0
+      const moved = messages.slice(prev).some((m) =>
+        ops.has(m) || (m.role === "assistant" && !m.kind && !m.boundary && m.text.trim() !== ""))
+      if (!moved && !options?.force) return
+      readTo.set(key, messages.length)
+      const conversation = recentConversation(messages)
       if (!conversation) return
       inFlight.add(key)
       void deps.writeStatus({ name: deps.nameOf?.(row), conversation })

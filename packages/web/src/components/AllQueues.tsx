@@ -42,6 +42,7 @@ import { useLocation, useNavigate } from "react-router"
 import { useSnapshot } from "valtio"
 import type { BoardSnapshot, ProjectCard, ProjectQueue } from "@frizz/shared"
 import { rpc } from "../api/rpc.ts"
+import { readProjectsQueues, readStartedAt } from "../lib/projectsQueuesRead.ts"
 import { isBusy, liveQueue, mergedQueue, overlayQueues, projectMarkdownScope, queuesProjects, threadKey, type QueueEntry, type QueuesProject } from "../lib/allQueues.ts"
 import { innerPath, projectSlug } from "../lib/base-path.ts"
 import { rememberCrossProjectFocus, stepPick } from "../lib/crossProject.ts"
@@ -125,7 +126,7 @@ export function AllQueuesPage() {
   const cards = useQuery({ queryKey: ["projectsList"], queryFn: () => rpc.projectsList() })
   const queues = useQuery({
     queryKey: ["projectsQueues"],
-    queryFn: () => rpc.projectsQueues(),
+    queryFn: readProjectsQueues,
     refetchInterval: POLL_MS,
   })
   const direction = useSnapshot(prefs).queueOrder
@@ -137,7 +138,10 @@ export function AllQueuesPage() {
   const snap = useSnapshot(store)
   const polled = useLastKnownQueues(queues.data, cards.data)
   const live = useMemo(() => liveQueue(polled, board, focus), [polled, board, focus])
-  const departed = useDepartedQueue(live, queues.dataUpdatedAt)
+  // When the read behind `queues.data` STARTED (lib/projectsQueuesRead.ts) — never `dataUpdatedAt`, which
+  // is when it landed and can postdate an action the read never saw.
+  const readAt = readStartedAt(queues.data)
+  const departed = useDepartedQueue(live, readAt)
   const base = useMemo(() => queuesProjects(cards.data, polled, direction), [cards.data, polled, direction])
   const projects = useMemo(() => overlayQueues(base, [live, departed], direction), [base, live, departed, direction])
   const focusProject = projects.find((project) => project.slug === focus)
@@ -183,7 +187,7 @@ export function AllQueuesPage() {
   }
 
 
-  const leaving = useLeavingCards(projects)
+  const leaving = useLeavingCards(projects, readAt)
   // A thread whose drawer is open is read THERE, so its card goes INERT — a second live copy of the same
   // questions and reply box under the sheet would take keys and clicks meant for the drawer (store.ts
   // slugsInThreadDrawers). Drawers belong to the page project, so only the focus's cards can be. It
@@ -650,7 +654,7 @@ function useLastKnownQueues(queues: readonly ProjectQueue[] | undefined, cards: 
   }, [queues, cards])
 }
 
-function useDepartedQueue(live: ProjectQueue | undefined, polledAt: number): ProjectQueue | undefined {
+function useDepartedQueue(live: ProjectQueue | undefined, readAt: number | undefined): ProjectQueue | undefined {
   const queryClient = useQueryClient()
   const last = useRef<ProjectQueue | undefined>(undefined)
   const [departed, setDeparted] = useState<{ queue: ProjectQueue; at: number } | null>(null)
@@ -661,7 +665,7 @@ function useDepartedQueue(live: ProjectQueue | undefined, polledAt: number): Pro
     setDeparted({ queue: previous, at: Date.now() })
     void queryClient.invalidateQueries({ queryKey: ["projectsQueues"] })
   }, [live, queryClient])
-  if (!departed || departed.queue.projectId === live?.projectId || polledAt > departed.at) return undefined
+  if (!departed || departed.queue.projectId === live?.projectId || (readAt ?? 0) > departed.at) return undefined
   return departed.queue
 }
 
@@ -865,6 +869,13 @@ interface LeavingCards {
  * (answer, reply, snooze, done), is gone once the fade ends, and stays gone until the server's next read
  * agrees — or comes back, if REAPPEAR_MS pass and the thread is still in its queue.
  *
+ * "STILL IN ITS QUEUE" MEANS ACCORDING TO A READ THAT STARTED AFTER THE ACTION. A card came back on a poll
+ * that had left before Mark as done reached the server and landed after REAPPEAR_MS — one took 25s on a
+ * loaded server — and it then stayed until the next read landed (maintainer 2026-09-30: "it reopened for
+ * a long time"). Such a read cannot know about the action, so it cannot overrule it: the card stays gone
+ * until a read that started after the action (after it LANDED, for a send) has come back, and only that
+ * read's verdict brings it back. `readAt` is when the newest read STARTED (lib/projectsQueuesRead.ts).
+ *
  * A SEND'S CLOCK STARTS WHEN IT LANDS. A reply is not in when it is typed: a cold session resume, a
  * contention retry (lib/eagerComposerSubmission.ts withDeliveryRetry, ~6s of backoff on its own) or a
  * slow provider can hold the request for longer than REAPPEAR_MS, and a clock started at the click then
@@ -878,8 +889,12 @@ interface LeavingCards {
  * Keyed by `threadKey` (project + slug), never by slug: this page holds several projects' threads, and
  * a slug is unique only within one.
  */
-export function useLeavingCards(projects: QueuesProject[]): LeavingCards {
+export function useLeavingCards(projects: QueuesProject[], readAt: number | undefined): LeavingCards {
   const [since, setSince] = useState<ReadonlyMap<string, number>>(() => new Map())
+  // When each acted-on card's action was last known to have reached the server: the click, re-stamped
+  // when a send lands. Only a read started after this may bring the card back (see the header). Written
+  // only beside a `since` change, so it is never read stale.
+  const actedAt = useRef(new Map<string, number>())
   const [, tick] = useState(0)
   const callbacks = useRef(new Map<string, { leave: () => void; restore: () => void; sent: () => void; landed: () => void; hold: () => void }>())
   // Cards whose send is still on the wire: gone whatever their age (see the header).
@@ -899,7 +914,7 @@ export function useLeavingCards(projects: QueuesProject[]): LeavingCards {
     setSince((prev) => {
       let changed = false
       const next = new Map(prev)
-      for (const key of prev.keys()) if (!stillQueued.has(key)) { next.delete(key); changed = true }
+      for (const key of prev.keys()) if (!stillQueued.has(key)) { next.delete(key); actedAt.current.delete(key); changed = true }
       return changed ? next : prev
     })
   }, [stillQueued])
@@ -929,6 +944,7 @@ export function useLeavingCards(projects: QueuesProject[]): LeavingCards {
     if (!entry) {
       const leave = () => {
         held.current.delete(key)
+        actedAt.current.set(key, Date.now())
         setSince((prev) => new Map(prev).set(key, Date.now()))
         // Re-render at the end of the fade (to unmount) and at the reappear deadline (to restore).
         window.setTimeout(() => tick((n) => n + 1), EXIT_MS + 20)
@@ -938,6 +954,7 @@ export function useLeavingCards(projects: QueuesProject[]): LeavingCards {
         leave,
         restore: () => {
           setFlying(key, false)
+          actedAt.current.delete(key)
           setSince((prev) => {
             if (!prev.has(key)) return prev
             const next = new Map(prev)
@@ -951,6 +968,7 @@ export function useLeavingCards(projects: QueuesProject[]): LeavingCards {
         },
         landed: () => {
           setFlying(key, false)
+          actedAt.current.set(key, Date.now())
           // Re-anchored as though the fade had just ended, so the card stays gone rather than fading in
           // again, and a thread that has already left its queue is not given a guard it no longer needs.
           setSince((prev) => (prev.has(key) ? new Map(prev).set(key, Date.now() - EXIT_MS) : prev))
@@ -966,14 +984,18 @@ export function useLeavingCards(projects: QueuesProject[]): LeavingCards {
     const at = since.get(key)
     return at === undefined ? undefined : now - at
   }
+  // Gone while the window is open, while a send is on the wire, and while no read has yet started after
+  // the action — the last because a read that predates it is no evidence it failed.
+  const away = (key: string, elapsed: number) =>
+    elapsed < REAPPEAR_MS || inFlight.has(key) || !(readAt !== undefined && readAt > (actedAt.current.get(key) ?? Infinity))
   return {
     isLeaving: (key) => {
       const elapsed = age(key)
-      return elapsed !== undefined && (elapsed < REAPPEAR_MS || inFlight.has(key))
+      return elapsed !== undefined && away(key, elapsed)
     },
     hidden: (key) => {
       const elapsed = age(key)
-      return elapsed !== undefined && elapsed >= EXIT_MS && (elapsed < REAPPEAR_MS || inFlight.has(key))
+      return elapsed !== undefined && elapsed >= EXIT_MS && away(key, elapsed)
     },
     leave: (key) => handles(key).leave,
     restore: (key) => handles(key).restore,

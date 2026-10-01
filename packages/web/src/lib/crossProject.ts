@@ -4,10 +4,11 @@ import type { ProjectCard } from "@frizz/shared"
 // ALL PROJECTS' PICK — which project the prompt box dispatches into while the page shows every project.
 //
 // The page is always bound to one project — the page project, for every "which project" question (see
-// base-path.ts). Focused on a project (lib/pageView.ts, the default), that is the project the page shows.
-// Showing All projects, it is the prompt box's own setting, like its model (maintainer 2026-09-28): the
-// project the operator last chose in its picker, in this browser, and failing that the one opened most
-// recently on the machine.
+// base-path.ts). Focused on a project (lib/pageView.ts), that is the project the page shows. Showing All
+// projects — the home, and where every launch lands — it is the prompt box's own setting, like its model
+// (maintainer 2026-09-28), resolved by defaultCrossProjectFocus below: the operator's own pick in this
+// browser, else the project they last focused here, else the one `frizz` was last run in, else the one
+// opened most recently.
 //
 // Remembered by ID, not slug: a rename changes the slug, and a remembered slug that no longer resolves
 // would quietly fall back to another project.
@@ -58,6 +59,29 @@ export function useCrossProjectPick(): string | null {
   return useSyncExternalStore(subscribeCrossProjectFocus, rememberedCrossProjectFocus, () => null)
 }
 
+// THE PROJECT LAST FOCUSED, in this browser — written whenever the page shows one project at `/`
+// (routes.tsx). It aimed a bare `/` itself until 2026-09-30, when All projects became home and the launcher
+// stopped naming a project (97fb6c42 removed it as having no reader left); it is kept for the prompt box,
+// as the next-best answer after an explicit pick to "which project is this person working in". By ID, not
+// slug: a rename changes the slug.
+const LAST_FOCUSED_KEY = "frizz.lastFocusedProject"
+
+export function lastFocusedProject(): string | null {
+  try {
+    return localStorage.getItem(LAST_FOCUSED_KEY)
+  } catch {
+    return null
+  }
+}
+
+export function rememberLastFocusedProject(projectId: string): void {
+  try {
+    if (localStorage.getItem(LAST_FOCUSED_KEY) !== projectId) localStorage.setItem(LAST_FOCUSED_KEY, projectId)
+  } catch {
+    // Storage disabled: the box falls through to the project Frizz was launched from.
+  }
+}
+
 /**
  * Where ⌥↓ (`step` 1) or ⌥↑ (-1) in the prompt box sends the next thread: the project below or above the
  * focus in the picker's own list (AllQueues.tsx ProjectPicker — every project whose directory still
@@ -80,34 +104,57 @@ export function stepPick<P extends { slug: string; open: boolean; stale: boolean
 }
 
 /**
- * The project All projects is bound to: the remembered pick if it is still registered and its directory
- * still exists, else the most recently opened such project, else none (no usable project — the page then
- * shows the welcome, where one is added).
+ * The project All projects is bound to — the one its prompt box dispatches into — in this order:
  *
- * `openIds`, when known, narrows that to projects whose board this server has open: a project another
+ *   1. the operator's own PICK in this browser (`pickId`: the picker, ⌥↑/⌥↓, leaving a focused project
+ *      for All projects);
+ *   2. else the project they last FOCUSED in this browser (`lastFocusedId`);
+ *   3. else the project `frizz` was most recently RUN in, cold or joining (`lastLaunchedAt`, which only
+ *      the launcher stamps);
+ *   4. else the project opened most recently, which is also the list's own order until someone arranges it.
+ *
+ * Each step takes only a project that is still registered and whose directory still exists; else none (no
+ * usable project — the page then shows the welcome, where one is added).
+ *
+ * Step 3 exists because every launch lands on All projects at a bare `/` (97fb6c42), so the address no
+ * longer says where `frizz` was run. Without it a browser with no pick fell to step 4, and `lastOpenedAt`
+ * is bumped by any registration — adding a project from the page, a stack registering its tenants after
+ * boot — so a launch from `storefront` aimed the box at `billing-api` and a task landed in the wrong repo.
+ *
+ * `openIds`, when known, narrows every step to projects whose board this server has open: a project another
  * Frizz serves, or one that failed to open, can be focused but never takes a thread, and landing on it
  * showed a prompt box that never arrived. It only narrows — with none open (a boot still opening them)
  * the page lands as it would without the list.
  */
 export function defaultCrossProjectFocus(
-  cards: readonly Pick<ProjectCard, "id" | "slug" | "stale" | "lastOpenedAt" | "home">[],
-  rememberedId: string | null,
+  cards: readonly Pick<ProjectCard, "id" | "slug" | "stale" | "lastOpenedAt" | "lastLaunchedAt" | "home">[],
+  pickId: string | null,
   openIds?: ReadonlySet<string>,
+  lastFocusedId: string | null = null,
 ): string | undefined {
   const present = cards.filter((card) => !card.stale)
   const open = openIds ? present.filter((card) => openIds.has(card.id)) : present
   const usable = open.length > 0 ? open : present
-  const remembered = rememberedId ? usable.find((card) => card.id === rememberedId) : undefined
-  if (remembered) return remembered.slug
+  for (const id of [pickId, lastFocusedId]) {
+    const remembered = id ? usable.find((card) => card.id === id) : undefined
+    if (remembered) return remembered.slug
+  }
   // The Home workspace is focused only when CHOSEN. It exists on every machine, so falling back to it
   // would mean an empty machine never shows the welcome page that adds its first project — and nobody
-  // "last opened" it in a terminal, which is what the fallback is reading.
-  let latest: (typeof usable)[number] | undefined
-  for (const card of usable) {
-    if (card.home) continue
-    if (!latest || Date.parse(card.lastOpenedAt || "") > Date.parse(latest.lastOpenedAt || "")) latest = card
+  // runs `frizz` in it, which is what both fallbacks are reading.
+  const latest = (stamp: (card: (typeof usable)[number]) => string | undefined) => {
+    let best: (typeof usable)[number] | undefined
+    for (const card of usable) {
+      if (card.home) continue
+      const at = Date.parse(stamp(card) || "")
+      if (Number.isNaN(at)) continue
+      if (!best || at > Date.parse(stamp(best) || "")) best = card
+    }
+    return best
   }
-  return latest?.slug
+  const launched = latest((card) => card.lastLaunchedAt)
+  if (launched) return launched.slug
+  return (latest((card) => card.lastOpenedAt) ?? usable.find((card) => !card.home))?.slug
 }
 
 // HOW MUCH OF EACH PROJECT THE LIST SHOWS — the list's own folds, in both views. Two of them (maintainer

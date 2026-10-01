@@ -213,10 +213,10 @@ interface AllQueuesCardProps {
   onLeave: () => void
   /** The action failed after the card had already faded: put it back. */
   onReturn: () => void
-  /** A reply or Retry went out: the card leaves, and stays gone while the send is on the wire. `onLeave`
-   *  when absent. */
+  /** A reply, Retry or Mark as done went out: the card leaves, and stays gone while it is on the wire.
+   *  `onLeave` when absent. */
   onSent?: () => void
-  /** That send landed, so the wait for its thread to leave the queue starts now (AllQueues useLeavingCards). */
+  /** It landed, so the wait for its thread to leave the queue starts now (AllQueues useLeavingCards). */
   onLanded?: () => void
   /** A question on the card was answered and the worker went to work on it, while the card still asks
    *  more: keep it where it is, live, although its thread leaves the queue (AllQueues useLeavingCards). */
@@ -489,7 +489,7 @@ export const AllQueuesCard = memo(function AllQueuesCard({
           <ThreadProjectScope projectId={project.id} projectDir={project.projectDir}>
             <footer className={`${BLOCK_RADIUS_INNER_BOTTOM} flex min-h-10 flex-wrap items-center justify-end gap-3 border-t border-border/70 bg-panel/95 px-3 py-2 text-[12px]`}>
               <SnoozeButton thread={thread} projectName={project.name} onSnoozed={onLeave} onUndone={onUnsnoozed} eventItems={showsSubAgentWait(thread) && <SubAgentWaitSnoozeItems thread={thread} onSnoozed={onLeave} onUndone={onUnsnoozed} />} />
-              <StateButton thread={thread} onArchived={onLeave} onDismissCancel={onReturn} command />
+              <StateButton thread={thread} onArchived={onSent} onDismissCancel={onReturn} onCompleted={onLanded} command />
             </footer>
           </ThreadProjectScope>
         </article>

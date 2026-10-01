@@ -26,7 +26,8 @@ function router(w: ReturnType<typeof world>, over: { workingDir?: string; backen
   const started: { parent: string; command?: string; cwd: string }[] = []
   const ctx = {
     project: { dir: w.project, stateDir: w.root, cwdSlug: "-frizz-router-wd-test-none" },
-    storage: { getSession: (slug: string) => (slug === "t" ? { slug, session_id: "sid", backend: over.backend ?? "claude" } : undefined) },
+    // `setInteractedAt`: terminalStart is a human verb, so createRouter's wrapper stamps the thread first.
+    storage: { getSession: (slug: string) => (slug === "t" ? { slug, session_id: "sid", backend: over.backend ?? "claude" } : undefined), setInteractedAt: () => {} },
     board: {},
     tailer: {
       get: (slug: string) => (slug === "t" && over.workingDir ? { workingDir: over.workingDir } : undefined),

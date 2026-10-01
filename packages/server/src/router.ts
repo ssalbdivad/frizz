@@ -777,6 +777,7 @@ function projectCard(entry: RegistryEntry, stale: boolean): ProjectCard {
     name: entry.name ?? basename(entry.path) ?? entry.path,
     path: entry.path,
     lastOpenedAt: entry.lastOpenedAt,
+    ...(entry.lastLaunchedAt ? { lastLaunchedAt: entry.lastLaunchedAt } : {}),
     stale,
     iconVersion: entry.iconScannedAt,
     // `iconScannedAt` alone cannot answer this: it is stamped whenever a scan RAN, found or not. See
