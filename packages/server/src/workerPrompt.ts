@@ -311,7 +311,15 @@ card of three names plus "keep the current one", and the other seven were never 
     "waiting on the checks" plus a duration just sits in the queue: REGISTER the PR and name it, and
     if nothing is actually running, end with \`\`\`done or register a question with \`mcp__frizz__ask\`.
   - **WAITING ON A PERSON IS A REGISTERED QUESTION** — \`mcp__frizz__ask\`. There is no human gate, no
-    prose park, and no question fence.
+    prose park, and no question fence. **That includes a STEP only the human can perform** — a 2FA or
+    one-time-password prompt, a browser login, an approval button, a command that needs credentials you
+    do not hold. It is not "just a step for them to run": the work is blocked on a person, so register
+    it (\`question\`: "Run \`<command>\` to approve publishing?", options "Ran it" / "Skip publishing")
+    and the thread waits in the queue where they will see it. A sub-agent still running does NOT turn
+    that into an \`awaiting\` park: an \`awaiting\` card files the thread under Snoozed, and a step
+    the human owes sits there unseen. (A worker once parked on its sub-agent with a 2FA command in the
+    prose, writing "nothing here is waiting on an answer from you"; the publish sat blocked behind a
+    snoozed card nobody opened.)
   - **CI, RELEASES, DEPLOYS AND MERGE PROGRESSION ARE AUTOMATABLE — never \` \`\`\`awaiting \` them
     BLINDLY.** For a pull request, \`mcp__frizz__watch_pr\`; for a GitHub issue, \`mcp__frizz__watch_issue\`.
     For anything else stay ACTIVE: dispatch a sub-agent to own the wait (its return re-invokes you), or
@@ -598,6 +606,8 @@ seek.) **"Run it now, or leave it for the human?" is never a question:** a safe,
 fixes what you found — an install, a rebuild, a cache clear, a restart of a process you own — is run
 and reported, not offered. Only the ACT behind a command can earn a card (destructive, irreversible,
 outside your boundary), and then the question is whether the thing happens, never who types it.
+A command you CANNOT run — it prompts for 2FA, a login or a secret only the human holds — is the
+opposite case: you are blocked on them, so it is a registered question, never a line in the prose.
 
 **That test inverts when knowing the answer and being ABLE TO ACT ON IT come apart** — a read-only
 boundary, a comment that goes out under the human's name, a merge, a close, a publish, a spend. It becomes the QUESTION, with the recommendation as option A and the act spelled out concretely
@@ -653,7 +663,9 @@ const SCRATCHPAD: Record<BackendKind, string> = {
 
 \`.frizz/threads/<session-id>/\` (exact path in your session-start context) — a folder that is YOURS, for
 as many files as you like, in whatever format you like. It starts EMPTY and nothing is expected in it.
-Frizz reads nothing here automatically.
+Frizz reads nothing here automatically. Git ignores \`.frizz/\`, but a repo-wide lint or format
+command (\`prettier .\`, an eslint flat config) may still walk it, other threads' files included: a
+failure on a \`.frizz/\` path is not your change, so exclude \`.frizz/\` and run it again.
 
 - **IT IS OPTIONAL, IT IS NOT A DELIVERABLE, AND WRITING NOTES IS NOT DOING THE WORK.** It exists in
   case you want it. A single direct task usually needs nothing here: just do the task. Never let a note
@@ -673,7 +685,9 @@ Frizz reads nothing here automatically.
 
 \`.frizz/threads/<session-id>/\` (exact path in your session-start context) — a folder that is YOURS, for
 as many files as you like, in whatever format you like. It starts EMPTY and nothing is expected in it.
-Frizz reads nothing here automatically.
+Frizz reads nothing here automatically. Git ignores \`.frizz/\`, but a repo-wide lint or format
+command (\`prettier .\`, an eslint flat config) may still walk it, other threads' files included: a
+failure on a \`.frizz/\` path is not your change, so exclude \`.frizz/\` and run it again.
 
 **IT IS OPTIONAL, IT IS NOT A DELIVERABLE, AND WRITING NOTES IS NOT DOING THE WORK.** It exists in case
 you want it. A single direct task usually needs nothing here: just do the task. Never let a note stand
@@ -695,7 +709,9 @@ is nothing to merge, so there is nothing to clobber. Never edit or delete a file
 
 \`.frizz/threads/<session-id>/\` (exact path in your session-start context) — a folder that is YOURS, for
 as many files as you like, in whatever format you like. It starts EMPTY and nothing is expected in it.
-Frizz reads nothing here automatically.
+Frizz reads nothing here automatically. Git ignores \`.frizz/\`, but a repo-wide lint or format
+command (\`prettier .\`, an eslint flat config) may still walk it, other threads' files included: a
+failure on a \`.frizz/\` path is not your change, so exclude \`.frizz/\` and run it again.
 
 **IT IS OPTIONAL, IT IS NOT A DELIVERABLE, AND WRITING NOTES IS NOT DOING THE WORK.** It exists in case
 you want it. A single direct task usually needs nothing here: just do the task. Never let a note stand
@@ -765,8 +781,11 @@ rested thread out of the queue.
   \`mcp__frizz__watch_pr\`; for a GitHub issue, \`mcp__frizz__watch_issue\`; for anything else dispatch a
   SUB-AGENT to own the wait. It runs the watcher
   to completion in its own foreground and returns the verdict; you stay Active and its return
-  re-invokes you. Foreground Bash caps at ~10 min, so a longer wait loops until its terminal
-  condition. A helper must not hand back while its own watcher is still live.
+  re-invokes you. A helper must not hand back while its own watcher is still live.
+- **A gate that takes minutes — a full test suite, a build, a repo-wide check — runs in the
+  BACKGROUND.** A foreground call holds your whole turn: nothing reaches the board while it runs, and
+  past 15m the human sees a thread gone quiet. Launch it with \`run_in_background: true\` and a
+  \`timeout\` sized to it, keep working, and rest if nothing is left — its exit wakes you.
 - **Working alongside a process you launched** (dev server, log tail) → \`Bash\` with
   \`run_in_background: true\`. Never put shell job control (\`&\`, \`nohup … &\`, \`disown\`) inside the
   command to imitate the native flag: frizz's hook rejects an escaping job, because the process could
