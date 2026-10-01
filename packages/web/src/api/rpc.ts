@@ -83,7 +83,12 @@ async function call(base: string, name: string, type: ProcType, input?: unknown,
     signal: opts?.signal,
   })
   noteServerBootId(res.headers.get("x-frizz-boot"))
-  return parseRpcResponse(res, name)
+  const result = await parseRpcResponse(res, name)
+  // And the thread it ANSWERS with: a dispatch names its new thread only in its result, and that thread is
+  // the human's as much as one they replied to — the project list draws it at once rather than holding it
+  // back as an arrival (lib/heldLayout.ts).
+  noteRpcMutation(name, result)
+  return result
 }
 
 /** A typed client whose every call goes to `base()`, read at CALL time. */

@@ -1,7 +1,7 @@
-import { Fragment, memo, useCallback, useState } from "react"
+import { Fragment, memo, useCallback, useRef, useState } from "react"
 import { useQueryClient } from "@tanstack/react-query"
 import { AlarmClock, Check, ChevronRight, Ellipsis, Github, Hourglass, Loader2, Pin, PinOff, RotateCcw } from "lucide-react"
-import { questionsOwed, type ThreadView } from "@frizz/shared"
+import { questionsOwed, type SubAgentView, type ThreadView } from "@frizz/shared"
 import { pushSubAgentDrawer, showToast } from "../store.ts"
 import { displayTitle, subAgentName, titleIsProvisional, isPinned, isSnoozed, sessionIndicatorKind, offersRetry, futureSnoozedUntil, queueLabelAt, waitNamesPr, prChecksRunning, restingOnSubAgents } from "../groups.ts"
 import { ageSpan, relativeAge, limitResumeClock } from "../lib/activityTime.ts"
@@ -24,6 +24,9 @@ import { formatCompactElapsed } from "../lib/durationLabels.ts"
 import { statusElapsed } from "./ThreadStatusLine.tsx"
 import { awaitingProse, awaitingWaitClause } from "../lib/awaitingPresentation.ts"
 import { clearArchived } from "../lib/optimisticArchive.ts"
+import { holdLayout, type HeldSection } from "../lib/heldLayout.ts"
+import { actedOnHere } from "../lib/humanActs.ts"
+import { useListHold } from "../lib/listHold.ts"
 import type { ReactElement, ReactNode } from "react"
 
 // THE THREAD ROW — one thread as a line of a list, with its indicator, its title and trailers, and the
@@ -101,10 +104,10 @@ export interface RowScope {
 // One row of a band: the thread, then its live sub-agents as rows of their own. A thread's TERMINALS get
 // no row and no mark (ThreadTerminals.tsx): the status dot, the queue and the thread's own strip already
 // say everything one could (a title-trailing terminal glyph was dropped 2026-09-30 as noise).
-export function RailRow({ t, active, open = false, restedAge = false, scope, cardKey, band }: { t: ThreadView; active: boolean; open?: boolean; restedAge?: boolean; scope: RowScope; cardKey?: string; band?: BandKey }) {
+export function RailRow({ t, active, open = false, restedAge = false, scope, cardKey, band, held = false }: { t: ThreadView; active: boolean; open?: boolean; restedAge?: boolean; scope: RowScope; cardKey?: string; band?: BandKey; held?: boolean }) {
   return (
     <>
-      <ThreadRow t={t} active={active} open={open} restedAge={restedAge} scope={scope} cardKey={cardKey} band={band} />
+      <ThreadRow t={t} active={active} open={open} restedAge={restedAge} scope={scope} cardKey={cardKey} band={band} held={held} />
       <SubAgentRows t={t} scope={scope} />
     </>
   )
@@ -199,6 +202,7 @@ export const ThreadRow = memo(function ThreadRow({
   scope,
   cardKey,
   band,
+  held = false,
 }: {
   t: ThreadView
   active?: boolean
@@ -214,6 +218,9 @@ export const ThreadRow = memo(function ThreadRow({
   /** The band the list drew this row in, as `data-xq-band` — Ready and Working carry no name over their
    *  rows (ProjectList.tsx), so this is how a script tells them apart. */
   band?: BandKey
+  /** Drawn where the list last put it, not where it now belongs: the list is held under the pointer
+   *  (lib/listHold.ts). Drawn exactly like any row; `data-xq-held` is for scripts. */
+  held?: boolean
 }) {
   const foreign = t.foreign === true
   // Snoozed rows are uniformly grayed as a whole; provisional titles retain their local dim treatment.
@@ -281,6 +288,7 @@ export const ThreadRow = memo(function ThreadRow({
       data-xq-thread-row
       data-xq-rail-row={cardKey}
       data-xq-band={band}
+      data-xq-held={held || undefined}
       className={`group relative flex min-w-0 items-start rounded-md transition-[color,opacity] ${rowWashClass(open)} ${dim ? "sidebar-row-dim" : ""}`}
     >
       {/* The reading position owns a real, in-row rail rather than borrowing the status-icon column.
@@ -628,7 +636,21 @@ function RowUncheckDone({ t }: { t: ThreadView }) {
 function SubAgentRows({ t, scope }: { t: ThreadView; scope: RowScope }) {
   const api = useThreadApi()
   const open = useSubAgentFoldOpen(t.id)
-  const subs = visibleChildOps(t.subAgents ?? [], "rail")
+  // HELD WITH THE LIST (lib/listHold.ts): a sub-agent's line appearing or going pushes every row under it,
+  // so while the pointer is over the list the lines stay as drawn — a child that finished keeps its line,
+  // as it is now, and a new one waits — unless this tab acted on the thread (dismissed a child, say).
+  const held = useListHold()
+  const drawn = useRef<HeldSection<SubAgentView & { id: string }>[]>([])
+  const layout = holdLayout({
+    prev: drawn.current,
+    target: [{ id: "subs", items: visibleChildOps(t.subAgents ?? [], "rail") }],
+    keyOf: (s) => s.id,
+    frozen: held,
+    moved: () => actedOnHere(t.id),
+    live: (id) => t.subAgents?.find((s): s is SubAgentView & { id: string } => s.id === id),
+  })
+  drawn.current = layout
+  const subs = layout[0]?.slots.map((slot) => slot.item) ?? []
   if (subs.length === 0) return null
   const fold = subAgentFold(subs)
   // A child's drawer is pushed on the PAGE project, so a row of another project opens its parent's
