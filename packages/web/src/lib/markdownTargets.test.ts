@@ -306,6 +306,24 @@ test("an absolute destination's line comes off the path as a position", () => {
   }
 })
 
+// A bare filename at the base's root with a line passes the scheme test (`app.tsx:` is a legal scheme)
+// and was a dead anchor, while `src/a.ts:12` resolved.
+test("a bare filename with a line is a file at the base's root, not a scheme", () => {
+  const base = "/repo"
+  assert.deepEqual(resolveRelativeLocalTarget("App.tsx:42", base), { path: "/repo/App.tsx", position: { line: 42 } })
+  assert.deepEqual(resolveRelativeLocalTarget("README.md:3", base), { path: "/repo/README.md", position: { line: 3 } })
+  assert.deepEqual(resolveRelativeLocalTarget("a.ts:12-20", base), { path: "/repo/a.ts", position: { line: 12, endLine: 20 } })
+  assert.deepEqual(resolveRelativeLocalTarget("a.ts:12:3", base), { path: "/repo/a.ts", position: { line: 12, column: 3 } })
+  assert.equal(resolveRelativeLocalPath("App.tsx:42", base), "/repo/App.tsx")
+  // Real schemes stay links — including the ones whose payload is digits — and so does a drive path.
+  for (const href of [
+    "mailto:x", "mailto:a@b.c", "http:", "http://h:80", "https://example.com:8080/a.ts:3", "javascript:alert(1)", "javascript:1",
+    "tel:5551234", "localhost:3000", "vscode://file/repo/a.ts:12", "file:///repo/a.ts:3", "c:\\repo\\a.ts:3", "C:/repo/a.ts:3",
+    // A bare name with no position is still whatever scheme it reads as.
+    "App.tsx:", "App.tsx:x",
+  ]) assert.equal(resolveRelativeLocalTarget(href, base), null, JSON.stringify(href))
+})
+
 test("a relative link keeps its line, and the rebase hands it on through the href", () => {
   const base = "/repo"
   assert.deepEqual(resolveRelativeLocalTarget("src/a.ts:12", base), { path: "/repo/src/a.ts", position: { line: 12 } })
