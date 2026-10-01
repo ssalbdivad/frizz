@@ -882,8 +882,12 @@ export function useLeavingCards(projects: QueuesProject[], readAt: number | unde
     if (!entry) {
       const leave = () => {
         held.current.delete(key)
-        actedAt.current.set(key, Date.now())
-        setSince((prev) => new Map(prev).set(key, Date.now()))
+        // Stamped HERE, not inside the updater: React runs an updater when it processes the update, which
+        // a loaded page does ~100ms later — the card then measured younger than EXIT_MS when the fade tick
+        // below fired, nothing re-rendered it after, and it stayed drawn until the RPC returned.
+        const at = Date.now()
+        actedAt.current.set(key, at)
+        setSince((prev) => new Map(prev).set(key, at))
         // Re-render at the end of the fade (to unmount) and at the reappear deadline (to restore).
         window.setTimeout(() => tick((n) => n + 1), EXIT_MS + 20)
         window.setTimeout(() => tick((n) => n + 1), REAPPEAR_MS + 20)
@@ -906,10 +910,11 @@ export function useLeavingCards(projects: QueuesProject[], readAt: number | unde
         },
         landed: () => {
           setFlying(key, false)
-          actedAt.current.set(key, Date.now())
+          const at = Date.now()
+          actedAt.current.set(key, at)
           // Re-anchored as though the fade had just ended, so the card stays gone rather than fading in
           // again, and a thread that has already left its queue is not given a guard it no longer needs.
-          setSince((prev) => (prev.has(key) ? new Map(prev).set(key, Date.now() - EXIT_MS) : prev))
+          setSince((prev) => (prev.has(key) ? new Map(prev).set(key, at - EXIT_MS) : prev))
           window.setTimeout(() => tick((n) => n + 1), REAPPEAR_MS - EXIT_MS + 20)
         },
         hold: () => { held.current.add(key) },

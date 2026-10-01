@@ -171,6 +171,9 @@ window.fetch = async (input, init) => {
     setTimeout(() => dropThread(body.slug ?? ""), 400)
     return json({})
   }
+  // The reply box's @ typeahead reads every project's queue on an All projects page, which this path
+  // reads as; its answer is a list, and `{}` crashed the box.
+  if (rpc === "projectsQueues") return json([])
   if (rpc === "threadTerminalCommand") return json({ command: "claude --resume sess-rotate-key", mode: "attach" })
   if (rpc === "completeThread") {
     log.completeCalledAt = performance.now()
