@@ -12,6 +12,8 @@ import { rememberCrossProjectFocus } from "./crossProject.ts"
 import { draftStore } from "./drafts.ts"
 import { embedded } from "./embed.ts"
 import { composeEdit, composeProjectsOf, composeTarget, type ComposeMove, type ComposeProject } from "./editorCompose.ts"
+import type { ContextBox } from "./editorContext.ts"
+import { isTerminalPath } from "./composerContext.ts"
 import { codeFilesDestination, connectedOpeners, EDITOR_OPENER_LABEL, editorOffer, parseOffered, type EditorOpener } from "./editorWindows.ts"
 import { splitComposerValue } from "./imagePaths.ts"
 import { phoneLayout } from "./mobile.ts"
@@ -249,10 +251,15 @@ async function insertComposeItem(item: EditorComposeItem): Promise<void> {
  * of the human — the open thread's reply box, else the new-thread box; "new" the new-thread box, whatever
  * is open; `{ thread, project }` that thread's reply box, its drawer opened first. `focus` puts the caret
  * there; false leaves focus where it is (in the editor, for "Add to Frizz prompt" from its sidebar).
+ *
+ * `{ box }` is the page's own: the box whose context bar asked for this item (lib/editorContext.ts
+ * `requestEditorContext`), which the host's answer — aimed at "front" — is routed back to. `note` is
+ * prose to put after the chip (embed-protocol.ts `EmbedComposeMessage.note`).
  */
 export interface ComposeRequest {
-  target: "front" | "new" | { thread: string; project: string }
+  target: "front" | "new" | { thread: string; project: string } | { box: ContextBox }
   focus: boolean
+  note?: string
 }
 
 export type ComposeOutcome = { ok: true } | { ok: false; reason: string }
@@ -273,6 +280,9 @@ export async function composeInto(item: EditorComposeInput, request: ComposeRequ
   // A cold page: the drawer the address names and the board its drafts are keyed by arrive with the
   // first board. An item inserted before then would miss a drawer that is about to open.
   await boardOrTimeout()
+  // A terminal has no file to fall back to: with no text, there is nothing to reference.
+  if (isTerminalPath(item.path) && !item.text?.trim()) return { ok: false, reason: "Nothing is selected in the terminal." }
+  if (typeof request.target === "object" && "box" in request.target) return composeIntoBox(item, request.target.box, request)
   const named = typeof request.target === "object" ? request.target : undefined
   if (named) {
     const shown = () => threadInFront()?.slug === named.thread && projectSlug() === named.project
@@ -299,7 +309,7 @@ export async function composeInto(item: EditorComposeInput, request: ComposeRequ
     projects: projects ?? [],
   })
   if (target.kind === "refused") return { ok: false, reason: target.reason }
-  const edit = composeEdit({ value: draftStore.get(target.key), staged: stagedItems(target.key), item, projectDir: target.projectDir })
+  const edit = composeEdit({ value: draftStore.get(target.key), staged: stagedItems(target.key), item, projectDir: target.projectDir, note: request.note })
   // The draft first, then the chip: a mounted box sweeps any staged item whose token its draft lacks.
   draftStore.set(target.key, edit.value)
   if (edit.stage) addContextItem(target.key, edit.stage)
@@ -314,6 +324,19 @@ export async function composeInto(item: EditorComposeInput, request: ComposeRequ
     ;(window as { frizzDesktop?: { focusWindow?(): void } }).frizzDesktop?.focusWindow?.()
   }
   await placeCaret(target.kind === "thread" ? THREAD_BOX : NEW_THREAD_BOX, splitComposerValue(edit.value).prose, edit.caret, request.focus)
+  return { ok: true }
+}
+
+/**
+ * The box a context bar asked for, as it is: no target to resolve and nothing to navigate, since the
+ * human just clicked in it. Its draft and chips are keyed as the box keys them, so if it has gone in the
+ * moment since (a drawer closed), the chip waits in its draft like any other.
+ */
+async function composeIntoBox(item: EditorComposeInput, box: ContextBox, request: ComposeRequest): Promise<ComposeOutcome> {
+  const edit = composeEdit({ value: draftStore.get(box.key), staged: stagedItems(box.key), item, projectDir: box.projectDir, note: request.note })
+  draftStore.set(box.key, edit.value)
+  if (edit.stage) addContextItem(box.key, edit.stage)
+  await placeCaret(`textarea[data-surface="${box.surface}"]`, splitComposerValue(edit.value).prose, edit.caret, request.focus)
   return { ok: true }
 }
 
