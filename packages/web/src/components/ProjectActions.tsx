@@ -14,11 +14,12 @@ import { Ellipsis, Loader2 } from "lucide-react"
 import { useNavigate } from "react-router"
 import { useSnapshot } from "valtio"
 import { PROJECT_ICON_EXTENSIONS, slugify, type ProjectAddResult, type ProjectCard, type ProjectEnclosed } from "@frizz/shared"
-import { rpc } from "../api/rpc.ts"
+import { projectRpc, rpc } from "../api/rpc.ts"
 import { innerPath, projectSlug } from "../lib/base-path.ts"
 import { showToast, store } from "../store.ts"
 import { rememberCrossProjectFocus } from "../lib/crossProject.ts"
-import { ALL_PROJECTS, homeHref, projectViewHref, tabView, viewHref } from "../lib/pageView.ts"
+import { ALL_PROJECTS, homeHref, projectViewHref, tabView, usePageView, viewHref } from "../lib/pageView.ts"
+import { projectBoardKey } from "../lib/projectBoards.ts"
 import { useShortcut } from "../lib/keyboardRuntime.ts"
 import { Dialog } from "./ui/Dialog.tsx"
 import { ProjectSquare } from "./ProjectSquare.tsx"
@@ -754,16 +755,37 @@ export function useAddProject(): { start: () => void; pending: boolean } {
 }
 
 /**
- * Adding a project is only ever a step towards working in it, so it lands there: the page focused on it
- * (`?project=`, lib/pageView.ts), from the page or from the welcome page of a machine with nothing on it.
+ * Adding a project is only ever a step towards working in it, so it lands there — WITHOUT changing the
+ * view. Focused on a project, the page moves its focus to the new one (`?project=`, lib/pageView.ts).
+ * Showing All projects, it stays on All projects and aims the prompt box at the new project, the way a
+ * pick in the box's own picker does (maintainer 2026-10-01: adding `local` from All projects dropped
+ * the page into `local`'s own view).
+ *
+ * The new project's board is READ before anything moves. A project is not open on the server until a
+ * request addresses it (tenant-prime.ts), and All projects only aims at, and draws, projects the server
+ * has open (crossProject.ts defaultCrossProjectFocus) — so without this read the pick was ignored and
+ * the new project stayed off the page until something else happened to open it.
  * `navigate`, not location.assign: the page must not be torn down on the way.
  */
 function useOpenAddedProject(): (project: { id: string; slug: string }) => void {
   const navigate = useNavigate()
   const queryClient = useQueryClient()
+  const view = usePageView()
   return (project) => {
-    void queryClient.invalidateQueries({ queryKey: ["projectsList"] })
-    navigate(projectViewHref(project.slug))
+    void (async () => {
+      await queryClient.fetchQuery({ queryKey: projectBoardKey(project.id), queryFn: () => projectRpc(project.id).board() }).catch(() => undefined)
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: ["projectsList"] }),
+        queryClient.invalidateQueries({ queryKey: ["projectsQueues"] }),
+      ])
+      if (view.kind === "project") {
+        navigate(projectViewHref(project.slug))
+        return
+      }
+      rememberCrossProjectFocus(project.id)
+      // A drawer binds the page to its own project, so aiming the box goes home (AllQueues usePickProject).
+      if (innerPath() !== "/") navigate(homeHref(), { replace: true })
+    })()
   }
 }
 
