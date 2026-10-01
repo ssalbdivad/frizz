@@ -50,7 +50,7 @@ import { useBoard } from "../hooks.ts"
 import { threadKey, type QueuesProject } from "../lib/allQueues.ts"
 import { projectSlug } from "../lib/base-path.ts"
 import { bandKey, rememberCrossProjectFocus, setBandOpen, setBandsOpen, setProjectCollapsed, useCollapsedProjects, useOpenBands, type QuietBandKey } from "../lib/crossProject.ts"
-import { ALL_PROJECTS, projectViewHref, usePageView, viewHref } from "../lib/pageView.ts"
+import { ALL_PROJECTS, projectViewHref, usePageView, viewHref, viewKey } from "../lib/pageView.ts"
 import { useArchivingAt } from "../lib/optimisticArchive.ts"
 import { holdLayout, type HeldSection, type HeldSlot } from "../lib/heldLayout.ts"
 import { actedOnHere } from "../lib/humanActs.ts"
@@ -139,7 +139,16 @@ export function ProjectList({
   // A folded project keeps its place: it is still busy, only quieter to look at. And while the list is
   // held, a project keeps the run and the place it was drawn in — one that has just gone quiet stays among
   // the busy ones, so the projects under it do not move up (lib/listHold.ts).
+  //
+  // NEVER ACROSS A CHANGE OF VIEW. The hold keeps the projects as last drawn, so with the pointer parked
+  // over the list a switch from All projects to one project kept every other project's rows on the
+  // focused page, and the switch back drew only the project it came from — until the pointer left (driven
+  // 2026-10-01, desktop and sidebar alike: build2-shell.md). Switching the view is the human reshaping the
+  // list by their own hand, the case lib/listHold.ts releases for, and it happens wherever the switch was
+  // made (the switcher's menu, the palette, Back) — so the list draws the new view live on its first
+  // render and holds from there.
   const drawnRuns = useRef<HeldSection<(typeof groups)[number]>[]>([])
+  const drawnView = useRef(viewKey(view))
   const runs = holdLayout({
     prev: drawnRuns.current,
     target: [
@@ -147,10 +156,11 @@ export function ProjectList({
       { id: "quiet", items: groups.filter((group) => group.bands.rows === 0) },
     ],
     keyOf: (entry) => entry.project.id,
-    frozen: held,
+    frozen: held && drawnView.current === viewKey(view),
     moved: () => false,
   })
   drawnRuns.current = runs
+  drawnView.current = viewKey(view)
   const run = (id: string) => (runs.find((section) => section.id === id)?.slots ?? []).map((slot) => slot.item)
   const busy = run("busy")
   const quiet = run("quiet")
