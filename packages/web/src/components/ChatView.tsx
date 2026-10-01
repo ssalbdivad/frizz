@@ -497,8 +497,8 @@ function ChatView({ slug, virtualized }: { slug: string; virtualized: boolean })
               <span className="flex items-center gap-2"><Dots /> Loading…</span>
             ) : running ? (
               <span className="flex items-center gap-2"><Dots /> Session starting…</span>
-            ) : thread?.todo !== undefined ? (
-              // A todo: no agent has run, so there is nothing to read. Its note is the prompt box below.
+            ) : thread?.lazyPrompt !== undefined ? (
+              // A lazy thread: no agent has run, so there is nothing to read. Its note is the prompt box below.
               "Not started yet."
             ) : canAdoptThread(thread) ? (
               // A thread frizz never originated (pre-existing .frizz board): no session, no
@@ -1632,9 +1632,9 @@ export function ThreadHeader({ slug, onStatusApplied, onClose, showReturnToQueue
           <div className="mt-0.5 flex min-w-0 items-center gap-1.5 text-[11px] leading-tight text-muted-75">
             <ThreadBandStamp thread={thread} />
             <LastActive
-              // A todo has never been active: its time is when it was written down (the queue card's word too).
-              at={thread.todo !== undefined ? thread.spawnedAt : lastActiveLabelAt(thread)}
-              {...(thread.todo !== undefined ? { label: "Added" } : {})}
+              // A lazy thread has never been active: its time is when it was written down (the queue card's word too).
+              at={thread.lazyPrompt !== undefined ? thread.spawnedAt : lastActiveLabelAt(thread)}
+              {...(thread.lazyPrompt !== undefined ? { label: "Added" } : {})}
               fallbackAt={thread.spawnedAt}
               lead={<span aria-hidden className="shrink-0 opacity-60">·</span>}
               className="min-w-0 truncate"

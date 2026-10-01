@@ -26,8 +26,8 @@ export type ComposerKeyboardEvent = {
 // Enter and the forced chord — a question card exists while the worker waits, so there is nothing to
 // interrupt and "send now" and "send" are the same act.
 //
-// A FOURTH, in the new-thread box alone: ⌘/Ctrl-Shift-Enter saves the prompt as a todo instead of
-// starting it (shouldSaveTodoComposerEnter).
+// A FOURTH, in the new-thread box alone: ⌘/Ctrl-Shift-Enter saves the prompt as a lazy thread instead of
+// starting it (shouldSaveLazyComposerEnter).
 function isEnter(event: ComposerKeyboardEvent): boolean {
   return event.key === "Enter"
     && !event.altKey
@@ -56,11 +56,11 @@ export function shouldInterruptSubmitComposerEnter(event: ComposerKeyboardEvent,
 }
 
 /**
- * SAVE AS A TODO — ⌘/Ctrl-Shift-Enter in the new-thread box: the prompt is written down as a thread with
- * no agent behind it (plans/todos.md) instead of being dispatched. Disjoint from the other three, every
+ * SAVE AS A LAZY THREAD — ⌘/Ctrl-Shift-Enter in the new-thread box: the prompt is written down as a thread with
+ * no agent behind it (plans/lazy-threads.md) instead of being dispatched. Disjoint from the other three, every
  * one of which refuses Shift (isEnter). Same `canSubmit` gate and the same IME guard as every send.
  */
-export function shouldSaveTodoComposerEnter(event: ComposerKeyboardEvent, canSubmit: boolean): boolean {
+export function shouldSaveLazyComposerEnter(event: ComposerKeyboardEvent, canSubmit: boolean): boolean {
   return canSubmit && event.key === "Enter" && event.shiftKey && (event.metaKey || event.ctrlKey) && !event.altKey
     && !event.isComposing && event.keyCode !== 229
 }

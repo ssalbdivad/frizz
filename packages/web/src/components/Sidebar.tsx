@@ -964,9 +964,9 @@ function timerWake(t: Pick<ThreadView, "watches">, nowMs = Date.now()): string |
 
 function sessionStateIndicatorFor(t: ThreadView): { node: ReactElement; tip: string | null } {
   const kind = sessionIndicatorKind(t)
-  // A TODO (plans/todos.md) is an EMPTY box: the same box Done fills with its check, so a todo reads as
-  // the checkbox it is. Done and a snooze keep their own marks; only an open, unparked todo wears it.
-  if (t.todo !== undefined && kind !== "archived" && kind !== "done" && !t.snoozedUntil) return { node: <StatusBox />, tip: "Not started" }
+  // A LAZY THREAD (plans/lazy-threads.md) is an EMPTY box: the same box Done fills with its check, so a lazy thread reads
+  // as an unchecked box. Done and a snooze keep their own marks; only an open, unparked lazy thread wears it.
+  if (t.lazyPrompt !== undefined && kind !== "archived" && kind !== "done" && !t.snoozedUntil) return { node: <StatusBox />, tip: "Not started" }
   if (kind === "archived") return { node: <StatusBox><Check size={10} strokeWidth={3} className="text-muted-75" /></StatusBox>, tip: "Done" }
   if (kind === "needs-input") {
     // Muted "?", same gray as every other glyph — a needs-you thread already carries maximum emphasis

@@ -1,7 +1,7 @@
 import * as RadixDialog from "@radix-ui/react-dialog"
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react"
 import { useIsMutating, useMutation, useQuery } from "@tanstack/react-query"
-import { type AccountBackend, type CreateTodoInput, type DispatchInput } from "@frizz/shared"
+import { type AccountBackend, type CreateLazyThreadInput, type DispatchInput } from "@frizz/shared"
 import { rpc } from "../api/rpc.ts"
 import { showToast } from "../store.ts"
 import { Composer } from "./Composer.tsx"
@@ -161,42 +161,42 @@ function PromptForm({
     },
   })
 
-  // SAVE AS A TODO (plans/todos.md): the same prompt, written down as a thread with no agent behind it.
+  // SAVE AS A LAZY THREAD (plans/lazy-threads.md): the same prompt, written down as a thread with no agent behind it.
   // No auth gate — nothing is started, so no provider is contacted; the sign-in, if one is needed, comes
-  // when the todo is launched. The draft clears like a dispatch's and comes back on failure the same way.
-  const saveTodo = useMutation({
-    mutationFn: (input: CreateTodoInput) => {
+  // when the lazy thread is launched. The draft clears like a dispatch's and comes back on failure the same way.
+  const saveLazy = useMutation({
+    mutationFn: (input: CreateLazyThreadInput) => {
       const project = projectSlug()
-      return rpc.createTodo(input).then((res) => ({ ...res, project }))
+      return rpc.createLazyThread(input).then((res) => ({ ...res, project }))
     },
     onSuccess: (res) => {
       onDispatched?.()
-      showToast("Todo added", { link: { label: "Open", slug: res.slug, project: res.project } })
+      showToast("Lazy thread added", { link: { label: "Open", slug: res.slug, project: res.project } })
     },
     onError: (e, input) => {
-      if (!draftStore.get(promptKey)) setPrompt(submittedDraftRef.current || input.note)
+      if (!draftStore.get(promptKey)) setPrompt(submittedDraftRef.current || input.prompt)
       restoreContextItems(promptKey, submittedContextRef.current)
       submittedContextRef.current = []
       if (!draftStore.get(pickKey)) setPick(submittedPickRef.current)
-      showToast(`Could not add the todo: ${(e as Error).message.slice(0, 80)}`)
+      showToast(`Could not add the lazy thread: ${(e as Error).message.slice(0, 80)}`)
     },
   })
 
-  function submitTodo() {
+  function submitLazy() {
     if (!prompt.trim() || !resolved || savingSettings || parseAccountAlias(prompt)) return
-    const input: CreateTodoInput = {
-      note: buildMessageWithContext(prompt, [...stagedItems(promptKey)], projectDir).trim(),
-      // The pick rides along: it is what the todo starts on when it is launched, unless changed then.
+    const input: CreateLazyThreadInput = {
+      prompt: buildMessageWithContext(prompt, [...stagedItems(promptKey)], projectDir).trim(),
+      // The pick rides along: it is what the lazy thread starts on when it is launched, unless changed then.
       model: resolved.model,
       backend: resolved.backend,
-      effort: (resolved.effort || undefined) as CreateTodoInput["effort"],
+      effort: (resolved.effort || undefined) as CreateLazyThreadInput["effort"],
     }
     submittedDraftRef.current = prompt
     submittedPickRef.current = pick
     submittedContextRef.current = takeContextItems(promptKey)
     clearPrompt()
     setPick(undefined)
-    saveTodo.mutate(input)
+    saveLazy.mutate(input)
   }
 
   // Fire the dispatch and do the one-shot UI bookkeeping (optimistic toast + prompt clear). Called both
@@ -334,13 +334,13 @@ function PromptForm({
         value={prompt}
         onChange={setPrompt}
         onSubmit={submit}
-        onSaveTodo={submitTodo}
+        onSaveLazy={submitLazy}
         contextTokens={contextTokens}
         placeholder="Describe the task…"
         mentionCandidates={mentions}
         minHeight={96}
         maxHeight={340}
-        busy={dispatch.isPending || saveTodo.isPending || savingSettings}
+        busy={dispatch.isPending || saveLazy.isPending || savingSettings}
         footer={footer}
         leftAction={githubTriggerVisible ? <GithubTrigger /> : undefined}
       />
