@@ -991,33 +991,63 @@ export function handoffOf(messages: readonly TranscriptMessage[]): ThreadHandoff
     if (isHumanTurn(messages[i]!)) { anchor = i; break }
   }
   const says = (m: TranscriptMessage) => m.role === "assistant" && !m.kind && m.text.trim() !== ""
-  let replyAt = -1
-  for (let i = messages.length - 1; i > anchor; i--) {
-    if (says(messages[i]!)) { replyAt = i; break }
-  }
-  const reply = replyAt === -1 ? undefined : messages[replyAt]!
+  const isNudge = (m: TranscriptMessage) => parseRecurringPrompt(m.displayText ?? m.text)?.kind === "signoff"
   // A REPLY TO THE SIGN-OFF NUDGE IS THE TAIL OF THE MESSAGE IT SIGNS OFF, not a handoff of its own. The
   // nudge tells the worker not to repeat itself — "the human reads both together" — so its answer is
   // routinely a fence alone or "Nothing to add; my previous message has the full answer". Taken on its
   // own, that line WAS the card: the real answer sat one message up, reachable only by opening the
   // thread (maintainer 2026-09-30). So walk back over every nudge-and-reply pair and carry the earlier
   // text too, oldest first. Only the nudge bridges: any other wake is new input with its own answer.
-  const parts: string[] = reply ? [reply.text] : []
-  for (let i = replyAt - 1, bridged = false; i > anchor; i--) {
+  const restEndingAt = (end: number): { texts: string[]; start: number } => {
+    const texts = [messages[end]!.text]
+    let start = end
+    for (let i = end - 1, bridged = false; i > anchor; i--) {
+      const m = messages[i]!
+      if (says(m)) {
+        if (!bridged) break
+        texts.unshift(m.text)
+        start = i
+        bridged = false
+      } else if (m.role === "user") {
+        if (!isNudge(m)) break
+        bridged = true
+      }
+    }
+    return { texts, start }
+  }
+  let replyAt = -1
+  for (let i = messages.length - 1; i > anchor; i--) {
+    if (says(messages[i]!)) { replyAt = i; break }
+  }
+  const reply = replyAt === -1 ? undefined : messages[replyAt]!
+  const latest = reply ? restEndingAt(replyAt) : undefined
+  // THE ANSWER TO THE HUMAN, WHEN WAKES RESTED AFTER IT. The human's turn is answered by the FIRST rest
+  // after it. A later wake (a shell finishing, CI going green, a PR comment) gets its own reply, and taking
+  // only the newest one made the card quote the human's question over a CI status line, the answer
+  // reachable only by opening the thread (@yes-0-1-0, 2026-10-01: "where was the case…" answered, then a
+  // shell wake and a CI wake each rested on "nothing has changed"). So the card carries that first rest
+  // too; the replies to wakes in between are dropped, because the newest one already says where things
+  // stand. A turn ends at its `rest` boundary — unless the sign-off nudge follows it, whose reply is the
+  // same rest — or at the next wake, which a shell or sub-agent wake marks only as a `wake` boundary.
+  const nextSpoken = (from: number) => messages.slice(from).find((m) => !m.kind)
+  let answer: string | undefined
+  for (let i = anchor + 1, end = -1; i < (latest?.start ?? 0); i++) {
     const m = messages[i]!
-    if (says(m)) {
-      if (!bridged) break
-      parts.unshift(m.text)
-      bridged = false
-    } else if (m.role === "user") {
-      if (parseRecurringPrompt(m.displayText ?? m.text)?.kind !== "signoff") break
-      bridged = true
+    if (says(m)) { end = i; continue }
+    if (end === -1) continue
+    const next = m.boundary === "rest" ? nextSpoken(i + 1) : undefined
+    const turnEnds = (m.boundary === "rest" && !(next && next.role === "user" && isNudge(next))) ||
+      m.boundary === "wake" || (m.role === "user" && !isNudge(m))
+    if (turnEnds) {
+      answer = restEndingAt(end).texts.join("\n\n")
+      break
     }
   }
   const asked = anchor === -1 ? undefined : messages[anchor]!
   const askedText = asked ? (asked.displayText ?? asked.text).trim() : undefined
   return {
-    ...(reply ? { text: parts.join("\n\n"), at: reply.at } : {}),
+    ...(reply ? { text: latest!.texts.join("\n\n"), at: reply.at } : {}),
+    ...(answer ? { answer } : {}),
     ...(askedText ? { asked: askedText.length > HANDOFF_ASKED_MAX ? `${askedText.slice(0, HANDOFF_ASKED_MAX - 1)}…` : askedText, askedAt: asked!.at } : {}),
   }
 }

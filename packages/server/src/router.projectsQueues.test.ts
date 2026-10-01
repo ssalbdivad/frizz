@@ -159,6 +159,43 @@ test("a reply to the sign-off nudge carries the message it signs off, so 'nothin
   assert.equal(fresh.text, "Done.")
 })
 
+test("wakes that rest after the human's answer keep that answer on the card, as its own part", () => {
+  const nudge = msg("user", `${SIGNOFF_NUDGE_MESSAGE}\n\n(It is now 14:49.)`, { wake: true })
+  // @yes-0-1-0, 2026-10-01, in the shape the transcript projects: the question answered, the sign-off
+  // nudge, a shell wake (only a `wake` boundary, no user message), then a CI wake.
+  const rest = msg("assistant", "Agent rested", { kind: "event", boundary: "rest" })
+  const handoff = handoffOf([
+    msg("user", "TASK:\nBump yes."),
+    msg("assistant", "Parked on CI.\n\n```awaiting\nprs: [a/b#1]\nfor: 3d\n---\nCI.\n```"),
+    rest,
+    msg("user", "Where was the Buffer case?"),
+    msg("assistant", "Looking."),
+    msg("assistant", "It's `putPrivateObject`."),
+    rest,
+    nudge,
+    msg("assistant", "```awaiting\nprs: [a/b#1]\nfor: 3d\n---\nCI.\n```"),
+    rest,
+    msg("assistant", "Agent terminal finished", { kind: "event", boundary: "wake" }),
+    msg("assistant", ""),
+    msg("assistant", "Asked about the merge."),
+    rest,
+    msg("user", "CI PASSED on a/b#1", { wake: true }),
+    msg("assistant", "Every check is green; nothing has changed."),
+    rest,
+  ])
+  assert.equal(handoff.asked, "Where was the Buffer case?")
+  assert.equal(handoff.answer, "It's `putPrivateObject`.\n\n```awaiting\nprs: [a/b#1]\nfor: 3d\n---\nCI.\n```", "the rest that answered, nudge reply and all, not the narration before it")
+  assert.equal(handoff.text, "Every check is green; nothing has changed.", "the newest rest; the wake reply between is dropped")
+  // No wake after the answer: the newest rest IS the answer, and the narration before it is not one.
+  const plain = handoffOf([msg("user", "Where?"), msg("assistant", "Looking."), msg("assistant", "Here."), rest, nudge, msg("assistant", "Nothing to add."), rest])
+  assert.equal(plain.answer, undefined)
+  assert.equal(plain.text, "Here.\n\nNothing to add.")
+  // A wake the worker answered without saying anything leaves nothing to separate.
+  const silent = handoffOf([msg("user", "Where?"), msg("assistant", "Here."), msg("user", "CI went green", { wake: true }), msg("assistant", "")])
+  assert.equal(silent.answer, undefined)
+  assert.equal(silent.text, "Here.")
+})
+
 test("an empty window has no handoff, a thread that has not spoken has only its ask, and a very long ask is clipped", () => {
   assert.deepEqual(handoffOf([]), {})
   assert.deepEqual(handoffOf([msg("user", "TASK:\nGo.")]), { asked: "TASK:\nGo.", askedAt: "2026-09-23T10:00:00.000Z" })

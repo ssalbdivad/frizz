@@ -259,6 +259,10 @@ export const AllQueuesCard = memo(function AllQueuesCard({
   })
   const text = handoff.data?.text
   const parts = useMemo(() => (text ? handoffParts(text, thread.questions) : null), [text, thread.questions])
+  // The reply to the human's message when wakes rested after it (router handoffOf): its prose alone, since
+  // its fences were superseded by the newest rest's.
+  const answer = handoff.data?.answer
+  const answerProse = useMemo(() => (answer ? handoffParts(answer, thread.questions).prose : ""), [answer, thread.questions])
   // Does the awaiting card list the children, or the ops column under the reply box (QueueChildOps)?
   const drawsSubAgentWait = drawsSubAgentWaitCard(thread, parts?.fences)
   // THIS CARD IS THE NEWEST HANDOFF, and every CURRENT question rides to the bottom of the newest handoff
@@ -395,6 +399,11 @@ export const AllQueuesCard = memo(function AllQueuesCard({
                 Show earlier messages
               </a>
               {handoff.data?.asked && <AskedBubble text={handoff.data.asked} />}
+              {answerProse && (
+                <ClampedBody resetKey={thread.lastAssistantAt ?? ""}>
+                  <Prose md={answerProse} />
+                </ClampedBody>
+              )}
               {/* Only the PROSE clamps. The fence card under it is the handoff's ledger — what shipped, or
                   what it is waiting on — and the rested notice is its state; both are the glance. */}
               {parts ? (

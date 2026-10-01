@@ -6342,9 +6342,13 @@ export type ProjectQueue = z.infer<typeof ProjectQueue>
  * which loses exactly the structure a verdict line and a done card depend on. This is the final
  * assistant message of the latest transcript window, verbatim, plus the human's own last message so a
  * card can say what the agent was answering. Both absent when the thread has not spoken.
+ *
+ * `answer` is the worker's reply to `asked` when wakes rested after it, so `text` — the newest rest —
+ * answers a wake rather than the human (router.ts `handoffOf`). Absent when `text` is the reply.
  */
 export const ThreadHandoff = z.object({
   text: z.string().optional(),
+  answer: z.string().optional(),
   at: z.string().optional(),
   asked: z.string().optional(),
   askedAt: z.string().optional(),
