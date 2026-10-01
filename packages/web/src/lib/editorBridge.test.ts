@@ -55,6 +55,10 @@ async function withFetch(answer: (url: string) => Response | Promise<Response>, 
   return calls
 }
 
+// The procedure a request names: the last segment of its path, whatever prefix the page's apiBase gave it
+// (a query is an absolute URL with `?input=`, a mutation a bare path).
+const procedure = (url: string) => url.replace(/[?#].*$/u, "").split("/").pop()
+
 const json = (body: unknown, status = 200) => new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json" } })
 
 // "Use VS Code" switches this browser's code files only once the External app has landed. Switched first,
@@ -62,10 +66,11 @@ const json = (body: unknown, status = 200) => new Response(JSON.stringify(body),
 test("the offer's action leaves this browser's code files alone when the settings write fails", async () => {
   prefs.codeFiles = "frizz"
   for (const fail of ["settingsGet", "settingsSet"]) {
-    await withFetch((url) => {
-      if (url.includes(`/rpc/${fail}`)) return json({ error: "Frizz is restarting" }, 500)
+    const calls = await withFetch((url) => {
+      if (procedure(url) === fail) return json({ error: "Frizz is restarting" }, 500)
       return json({ result: settings })
     }, () => sendCodeFilesTo("vscode"))
+    assert.equal(calls.map(procedure).at(-1), fail, "the failure is the one this case meant")
     assert.equal(prefs.codeFiles, "frizz", `${fail} failed: the browser half stays as it was`)
     assert.equal(store.toast?.text, "Couldn't set the External app to VS Code")
   }
@@ -76,8 +81,8 @@ test("the offer's action leaves this browser's code files alone when the setting
 
 test("the offer's action switches both halves once the write lands", async () => {
   prefs.codeFiles = "frizz"
-  const calls = await withFetch((url) => json({ result: url.includes("/rpc/settingsSet") ? { localFileOpener: "vscode" } : settings }), () => sendCodeFilesTo("vscode"))
-  assert.ok(calls.some((url) => url.includes("/rpc/settingsSet")))
+  const calls = await withFetch((url) => json({ result: procedure(url) === "settingsSet" ? { localFileOpener: "vscode" } : settings }), () => sendCodeFilesTo("vscode"))
+  assert.ok(calls.some((url) => procedure(url) === "settingsSet"))
   assert.equal(prefs.codeFiles, "editor")
   assert.equal(store.toast?.text, "Code files open in VS Code")
   prefs.codeFiles = "frizz"
