@@ -1296,6 +1296,14 @@ a[href] {
   color: var(--code-del);
   background: var(--code-del-bg);
 }
+/* Fenced code typed into a textarea, painted on its mirror (components/TextareaCodeFences.tsx). The
+   mirror has to keep every advance width identical to the textarea's own glyphs, so the palette's
+   italic comments and bold `**strong**` give way: colour only, never a slant or a weight. */
+.hljs.input-hljs,
+.hljs.input-hljs * {
+  font-style: inherit;
+  font-weight: inherit;
+}
 /* The `cat -n` line numbers a Read excerpt carries. They are not source and must never compete with
    it: the same tone the rendered diff gives its own gutter, and unselectable-looking but still
    SELECTABLE, because copying the excerpt has always yielded the numbers and quietly changing that

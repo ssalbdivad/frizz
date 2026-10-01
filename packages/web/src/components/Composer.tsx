@@ -4,6 +4,8 @@ import { ATTACHMENT_ACCEPT, ATTACHMENT_MAX_BYTES, isAllowedAttachmentName, type 
 import { showToast } from "../store.ts"
 import { joinComposerValue, splitComposerValue } from "../lib/imagePaths.ts"
 import { splitProseByTokens } from "../lib/composerContext.ts"
+import { clipFenceRuns, scanInputFences } from "../lib/inputCodeFences.ts"
+import { renderInputFenceRun } from "./TextareaCodeFences.tsx"
 import { shouldInterruptSubmitComposerEnter, shouldSaveLazyComposerEnter, shouldPushQueuedComposerEnter, shouldRestoreOptionEnterNewline, shouldSubmitComposerEnter } from "../lib/composerKeyboard.ts"
 import { queueComposerHandlesOptionEnter } from "../lib/queueComposerKeyboard.ts"
 import { RAIL_ACTION_OFFSET, RAIL_PAPERCLIP_OFFSET, RAIL_PAPERCLIP_PLAIN_OFFSET, RAIL_RESERVE_PLAIN, RAIL_RESERVE_WITH_ACTION, RAIL_SEND_OFFSET } from "../lib/iconRhythm.ts"
@@ -341,7 +343,14 @@ export function Composer({
     let hasMention = false
     let hasToken = false
     const out: React.ReactNode[] = []
+    // Fenced code is a third kind of painted run (lib/inputCodeFences.ts): its body highlighted, its
+    // delimiters muted, and no mention tinting inside it. Fences are found on the WHOLE prose — a
+    // block spans lines a token split knows nothing about — then clipped to each run below.
+    const fences = scanInputFences(prose)
+    let offset = 0
     for (const run of splitProseByTokens(prose, stagedTokens)) {
+      const runStart = offset
+      offset += run.text.length
       if (run.token) {
         hasToken = true
         // The vertical pad is free (vertical padding on an inline box never moves layout); the
@@ -353,20 +362,30 @@ export function Composer({
         )
         continue
       }
-      for (const seg of mentionSegments(run.text, allMentions)) {
-        if (seg.kind === "text") {
-          out.push(seg.text)
+      const pieces = fences
+        ? clipFenceRuns(fences, runStart, offset)
+        : [{ kind: "prose" as const, start: runStart, end: offset }]
+      for (const piece of pieces) {
+        if (piece.kind !== "prose") {
+          out.push(renderInputFenceRun(prose, piece, out.length))
           continue
         }
-        hasMention = true
-        out.push(
-          <span key={out.length} data-composer-mention className="rounded-[3px] bg-accent/10 py-px -mx-px px-px text-accent">
-            {seg.text}
-          </span>,
-        )
+        for (const seg of mentionSegments(prose.slice(piece.start, piece.end), allMentions)) {
+          if (seg.kind === "text") {
+            out.push(seg.text)
+            continue
+          }
+          hasMention = true
+          out.push(
+            <span key={out.length} data-composer-mention className="rounded-[3px] bg-accent/10 py-px -mx-px px-px text-accent">
+              {seg.text}
+            </span>,
+          )
+        }
       }
     }
-    return hasMention || hasToken ? { segments: out, paintsText: hasMention } : null
+    const paintsText = hasMention || fences !== null
+    return paintsText || hasToken ? { segments: out, paintsText } : null
   }, [prose, stagedTokens, allMentions])
   const backdropSegments = backdrop?.segments
 
@@ -778,6 +797,9 @@ export function Composer({
             className={`pointer-events-none absolute inset-0 select-none overflow-hidden whitespace-pre-wrap [overflow-wrap:break-word] px-3.5 ${footer ? "py-2.5 pb-3" : `py-2.5 ${railAction ? RAIL_RESERVE_WITH_ACTION : RAIL_RESERVE_PLAIN}`} text-[13px] leading-relaxed ${backdrop?.paintsText ? `text-fg ${busy ? "opacity-60" : ""}` : "text-transparent"}`}
           >
             {backdropSegments}
+            {/* A textarea gives a trailing newline its own empty line and a div does not; without
+                this the mirror is a line short and stops panning before the textarea does. */}
+            {prose.endsWith("\n") && " "}
           </div>
         )}
         <textarea

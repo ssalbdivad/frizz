@@ -15,6 +15,7 @@ import { showToast } from "../store.ts"
 import { shouldSubmitStagedEnter } from "../lib/composerKeyboard.ts"
 import { Popover, PopoverAnchor, PopoverContent } from "./ui/Popover.tsx"
 import { Switch } from "./ui/Switch.tsx"
+import { TextareaCodeFences } from "./TextareaCodeFences.tsx"
 
 // THE GOAL MARK — `target-arrow` from Tabler Icons 3.46.0 (MIT, https://tabler.io/icons/icon/target-arrow),
 // inlined rather than pulled in as a dependency: it is one glyph out of a 5,900-icon package, and this
@@ -717,6 +718,7 @@ function PromptPanel({ thread, armed, close }: {
         // are parked, not live.
         className={`field-sizing-content max-h-[28vh] min-h-[4rem] w-full resize-none overflow-y-auto rounded-md border border-border bg-bg px-2 py-1.5 text-[12px] leading-snug outline-none placeholder:text-muted-50 focus:border-border-strong ${anyTrigger ? "text-fg" : "text-muted"}`}
       />
+      <TextareaCodeFences value={text} />
       {/* THE THREE MECHANISMS, one per line under the text they all send. They are NAMED — Stop hook,
           Heartbeat, Compaction — rather than described, because those are the names everything else in
           frizz uses for them: the scheduler's passes, the delivery fence prefixes, the trailer on every

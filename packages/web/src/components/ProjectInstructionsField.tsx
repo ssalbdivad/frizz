@@ -4,6 +4,7 @@ import { rpc } from "../api/rpc.ts"
 import { SETTINGS_HELP } from "../lib/settingsHelp.ts"
 import { SaveStatus, type SaveState } from "../hooks/useSettingsAutosave.tsx"
 import { SettingsField } from "./SettingsField.tsx"
+import { TextareaCodeFences } from "./TextareaCodeFences.tsx"
 
 const SAVE_DEBOUNCE_MS = 500
 const SAVED_LINGER_MS = 1600
@@ -96,6 +97,7 @@ export function ProjectInstructionsField() {
             className="input resize-y text-[12px] leading-relaxed font-mono-keep"
             spellCheck={false}
           />
+          <TextareaCodeFences value={text} />
           <div className="flex items-center justify-between gap-3 text-[11px] text-muted-70">
             {conflict ? (
               <span className="text-accent">

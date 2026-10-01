@@ -6,6 +6,7 @@ import { registerOpenSelect } from "../lib/selectOverlay.ts"
 import { SETTINGS_HELP } from "../lib/settingsHelp.ts"
 import { LabelWithHelp } from "./SettingsField.tsx"
 import { Popover, PopoverContent, PopoverTrigger } from "./ui/Popover.tsx"
+import { TextareaCodeFences } from "./TextareaCodeFences.tsx"
 
 // The 6 substitution tokens the server fills in a GitHub batch-dispatch template, each with a one-word
 // gloss of what it expands to. Kept in lockstep with PROMPT_TOKENS in server/github.ts (there is no
@@ -151,6 +152,7 @@ export function GithubPromptField({
         className="input resize-none text-[12px] leading-relaxed font-mono-keep"
         spellCheck={false}
       />
+      <TextareaCodeFences value={value ?? fallback} />
     </div>
   )
 }
