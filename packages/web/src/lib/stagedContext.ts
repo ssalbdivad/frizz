@@ -139,6 +139,23 @@ export function restoreContextItems(key: string, items: ComposerContextItem[]): 
 }
 
 /**
+ * Move a draft to another key WITH what its tokens stand for — the new-thread box re-aimed at another
+ * project (AllQueues carryDraft). Only into an empty draft, so one already waiting there is never
+ * overwritten; a no-op when there is nothing to move. Text first, then the items, the order an insert
+ * uses: a mounted box sweeps any staged item whose token its draft lacks. Moving the text alone left
+ * the chips filed under the old project (review C5): the new box showed `@a.ts:12-20` as bare text,
+ * the dispatch went out with no definition behind it, and the next reload's load dropped the orphans.
+ */
+export function carryDraft(from: string, to: string): void {
+  if (from === to) return
+  const text = draftStore.get(from)
+  if (!text || draftStore.get(to)) return
+  draftStore.set(to, text)
+  restoreContextItems(to, takeContextItems(from))
+  draftStore.clear(from)
+}
+
+/**
  * The tokens a box paints as chips (Composer `contextTokens`), and THE SWEEP: whenever the draft or the
  * roster changes, any staged item whose token no longer appears in the prose is dropped — so
  * backspacing a reference out of the text retires its chip, exactly as the chip's × strips the

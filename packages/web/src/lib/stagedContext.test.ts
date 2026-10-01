@@ -1,9 +1,10 @@
 import { test } from "node:test"
 import assert from "node:assert/strict"
 import type { ComposerContextItem } from "./composerContext.ts"
-import { draftKey } from "./drafts.ts"
+import { draftKey, draftStore } from "./drafts.ts"
 import {
   addContextItem,
+  carryDraft,
   parseStagedContext,
   restoreContextItems,
   serializeStagedContext,
@@ -108,4 +109,33 @@ test("staging is per draft: same slug in two projects, or two sessions, never sh
   assert.equal(new Set(ids).size, ids.length)
   takeContextItems(a)
   takeContextItems(b)
+})
+
+// The new-thread box re-aimed at another project (AllQueues: the picker, ⌥↑/⌥↓) takes its chips with
+// its text. Moving the text alone left `@a.ts:12-20` as bare text in B's box, and a dispatch from B with
+// no definition behind it (review C5).
+test("carrying a draft to another key carries its staged items too", () => {
+  const a = draftKey.dispatch("/work/a")
+  const b = draftKey.dispatch("/work/b")
+  draftStore.set(a, "look at @a.ts:12-20")
+  addContextItem(a, { token: "@a.ts:12-20", path: "/work/a/a.ts", text: "const a = 1", startLine: 12, endLine: 20 })
+  carryDraft(a, b)
+  assert.equal(draftStore.get(b), "look at @a.ts:12-20")
+  assert.equal(draftStore.get(a), "")
+  assert.deepEqual(stagedItems(b).map((i) => i.token), ["@a.ts:12-20"])
+  assert.equal(stagedContext[a], undefined)
+
+  // Never into a draft already waiting there: neither the text nor the chips move.
+  const c = draftKey.dispatch("/work/c")
+  draftStore.set(c, "mine")
+  carryDraft(b, c)
+  assert.equal(draftStore.get(c), "mine")
+  assert.equal(draftStore.get(b), "look at @a.ts:12-20")
+  assert.deepEqual(stagedItems(b).map((i) => i.token), ["@a.ts:12-20"])
+  assert.deepEqual(stagedItems(c), [])
+
+  for (const key of [a, b, c]) {
+    draftStore.clear(key)
+    takeContextItems(key)
+  }
 })
