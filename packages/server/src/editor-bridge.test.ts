@@ -6,7 +6,7 @@ import { mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, writeFileSyn
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { randomUUID } from "node:crypto"
-import type { AddressInfo } from "node:net"
+import { connect, type AddressInfo } from "node:net"
 import { WebSocket, type ClientOptions } from "ws"
 import {
   EDITOR_CLOSE,
@@ -149,6 +149,23 @@ async function rejectedStatus(port: number, path: string, options: ClientOptions
     })
     ws.once("error", () => {})
   })
+}
+
+/**
+ * A hand-written upgrade request, for the handshakes `ws` itself refuses (a missing key, a version it
+ * does not speak, a POST) — no client library will send one. Resolves with the response's status code.
+ */
+async function malformedUpgradeStatus(port: number, path: string, headers: Record<string, string>, method = "GET"): Promise<number> {
+  const socket = connect(port, "127.0.0.1")
+  await once(socket, "connect")
+  const lines = [`${method} ${path} HTTP/1.1`, `Host: 127.0.0.1:${port}`, `Origin: http://127.0.0.1:${port}`, "Connection: Upgrade", "Upgrade: websocket"]
+  for (const [name, value] of Object.entries(headers)) lines.push(`${name}: ${value}`)
+  socket.write(lines.join("\r\n") + "\r\n\r\n")
+  let response = ""
+  socket.on("data", (chunk) => { response += chunk.toString("latin1") })
+  socket.on("error", () => {})
+  await once(socket, "close")
+  return Number(/^HTTP\/1\.1 (\d{3})/.exec(response)?.[1] ?? 0)
 }
 
 /** Open a socket and send `frames` raw, before (or instead of) a hello. */
@@ -432,6 +449,23 @@ test("a window that reconnects supersedes its old socket, and a dead peer is rea
   assert.equal(h.bridge.windows().length, 2, "the silent peer is gone; the answering one stays")
   assert.ok(alive.frames.some((m) => m.t === "hb"), "and windows hear the heartbeat frame")
   assert.equal(alive.ws.readyState, WebSocket.OPEN)
+})
+
+test("a handshake ws refuses itself gives its window slot back, so malformed upgrades cannot lock windows out", async (t) => {
+  // ws answers a bad key, version or method with its own 400/405 and never calls back. A slot reserved
+  // for it and never released was gone until restart: 32 of these refused every editor with 503.
+  const maxWindows = 2
+  const h = await harness(t, { maxWindows })
+  const key = "dGhlIHNhbXBsZSBub25jZQ=="
+  for (let i = 0; i < maxWindows; i++) {
+    assert.equal(await malformedUpgradeStatus(h.port, EDITOR_SOCKET_PATH, { "Sec-WebSocket-Version": "13" }), 400, "no key")
+    assert.equal(await malformedUpgradeStatus(h.port, EDITOR_SOCKET_PATH, { "Sec-WebSocket-Key": key, "Sec-WebSocket-Version": "7" }), 400, "a version ws does not speak")
+    assert.equal(await malformedUpgradeStatus(h.port, EDITOR_SOCKET_PATH, { "Sec-WebSocket-Key": key, "Sec-WebSocket-Version": "13" }, "POST"), 405, "not a GET")
+  }
+  const windows = [await editor(h.port), await editor(h.port)]
+  assert.equal(h.bridge.windows().length, maxWindows, "every slot is still there for a real window")
+  assert.equal(await rejectedStatus(h.port, EDITOR_SOCKET_PATH, { origin: `http://127.0.0.1:${h.port}` }), 503, "and the cap still holds")
+  for (const w of windows) w.ws.close()
 })
 
 test(`at most ${EDITOR_MAX_WINDOWS} windows, then 503; after close, 503 and every waiting open is false`, async (t) => {

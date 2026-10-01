@@ -2,7 +2,7 @@ import { test } from "node:test"
 import assert from "node:assert/strict"
 import { createServer, type Server } from "node:http"
 import { once } from "node:events"
-import type { AddressInfo } from "node:net"
+import { connect, type AddressInfo } from "node:net"
 import { WebSocket, type ClientOptions } from "ws"
 import type { BoardSnapshot, SocketServerMsg, TranscriptMessage } from "@frizz/shared"
 import { Bus, Emitter } from "./bus.ts"
@@ -277,6 +277,46 @@ test("resource control: process-wide connection capacity rejects before board wo
     assert.equal(snapshots, 3)
     b.ws.close()
     recovery.ws.close()
+  } finally {
+    await h.close()
+  }
+})
+
+/**
+ * A hand-written upgrade request, for the handshakes `ws` itself refuses (a missing key, a version it
+ * does not speak, a POST) — no client library will send one. Resolves with the response's status code.
+ */
+async function malformedUpgradeStatus(port: number, headers: Record<string, string>, method = "GET"): Promise<number> {
+  const socket = connect(port, "127.0.0.1")
+  await once(socket, "connect")
+  const lines = [`${method} /_frizz/ws HTTP/1.1`, `Host: 127.0.0.1:${port}`, `Origin: http://127.0.0.1:${port}`, "Connection: Upgrade", "Upgrade: websocket"]
+  for (const [name, value] of Object.entries(headers)) lines.push(`${name}: ${value}`)
+  socket.write(lines.join("\r\n") + "\r\n\r\n")
+  let response = ""
+  socket.on("data", (chunk) => { response += chunk.toString("latin1") })
+  socket.on("error", () => {})
+  await once(socket, "close")
+  return Number(/^HTTP\/1\.1 (\d{3})/.exec(response)?.[1] ?? 0)
+}
+
+test("resource control: a handshake ws refuses itself gives its capacity back, so malformed upgrades cannot lock tabs out", async () => {
+  // ws answers a bad key, version or method with its own 400/405 and never calls back. A slot reserved
+  // for it and never released was gone until restart: enough of them refused every tab with 503.
+  const h = await startHarness({ maxConnections: 2 })
+  try {
+    const key = "dGhlIHNhbXBsZSBub25jZQ=="
+    for (let i = 0; i < 2; i++) {
+      assert.equal(await malformedUpgradeStatus(h.port, { "Sec-WebSocket-Version": "13" }), 400, "no key")
+      assert.equal(await malformedUpgradeStatus(h.port, { "Sec-WebSocket-Key": key, "Sec-WebSocket-Version": "7" }), 400, "a version ws does not speak")
+      assert.equal(await malformedUpgradeStatus(h.port, { "Sec-WebSocket-Key": key, "Sec-WebSocket-Version": "13" }, "POST"), 405, "not a GET")
+    }
+    const a = await connectClient(h.port)
+    const b = await connectClient(h.port)
+    await Promise.all([a.next(), b.next()])
+    assert.equal(h.appSocket.connectionCount, 2, "every slot is still there for a real tab")
+    assert.equal(await rejectedClient(h.port, { origin: `http://127.0.0.1:${h.port}` }), 503, "and the cap still holds")
+    a.ws.close()
+    b.ws.close()
   } finally {
     await h.close()
   }

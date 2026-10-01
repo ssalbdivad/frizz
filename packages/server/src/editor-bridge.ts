@@ -466,8 +466,14 @@ export function createEditorBridge(deps: EditorBridgeDeps): EditorBridge {
           accept(ws)
         })
       } catch {
-        release()
         rejectWebSocketUpgrade(socket, 400, "Bad Request")
+      } finally {
+        // A handshake ws refuses itself (no key, a version it does not speak, a POST, a peer that already
+        // sent FIN) is answered 400/405 by ws and NEVER calls back, so a release only in the callback
+        // leaked the slot for good — 32 malformed upgrades refused every editor until restart. Without a
+        // verifyClient, ws calls back synchronously or not at all, so by here the socket is either a
+        // counted connection or refused, and no reservation has to outlive the call.
+        release()
       }
       return true
     },

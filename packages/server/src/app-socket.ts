@@ -1106,8 +1106,14 @@ export function createAppSocketServer(deps: AppSocketDeps): AppSocketServer {
           wss.emit("connection", ws, req)
         })
       } catch {
-        releaseReservation()
         rejectWebSocketUpgrade(socket, 400, "Bad Request")
+      } finally {
+        // A handshake ws refuses itself (no key, a version it does not speak, a POST, a peer that already
+        // sent FIN) is answered 400/405 by ws and NEVER calls back, so a release only in the callback
+        // leaked the slot for good and enough malformed upgrades refused every tab until restart. Without
+        // a verifyClient, ws calls back synchronously or not at all, so by here the socket is either a
+        // counted connection or refused, and no reservation has to outlive the call.
+        releaseReservation()
       }
       return true
     },
