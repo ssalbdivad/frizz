@@ -57,6 +57,9 @@ function Bar({ box }: { box: ContextBox }) {
             // Keep the caret where it is: the add comes back to this box and puts it after the chip.
             onMouseDown={(e) => e.preventDefault()}
             onClick={add}
+            // The readings are separate spans spaced by the row's gap, so the text alone would read
+            // "r2-private.ts:91-11626 lines" to a screen reader.
+            aria-label={`Add ${reading.name}${reading.range}${reading.count ? `, ${reading.count},` : ""} to the prompt`}
             title={selection
               ? `Add ${reading.where}${reading.range} to the prompt — or press ${chord} in the editor`
               : `Add ${reading.where} to the prompt — or select code and press ${chord} in the editor`}
@@ -103,7 +106,8 @@ function OpenFiles({ box, open, labelled, hover }: { box: ContextBox; open: Edit
           <ChevronDown aria-hidden size="1em" strokeWidth={2.25} className={MARK} />
         </button>
       </MenuTrigger>
-      <MenuContent align="start">
+      {/* Kept 8px off the frame's edges: a sidebar is narrow enough that the menu usually has to shift. */}
+      <MenuContent align="start" collisionPadding={8}>
         <div className="max-h-72 max-w-[min(26rem,calc(100vw-24px))] overflow-y-auto">
           <div className="px-2.5 pb-1 pt-1 text-[11px] text-muted-55">Add an open file</div>
           {open.map((file) => (
