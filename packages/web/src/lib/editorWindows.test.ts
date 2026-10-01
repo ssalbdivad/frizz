@@ -17,7 +17,7 @@ test("the settings mark names only an External app choice with an accepting wind
 
 test("the offer: an accepting editor this browser's code files do not go to yet", () => {
   const offer = (over: Partial<Parameters<typeof editorOffer>[0]>) =>
-    editorOffer({ windows: [vscode], codeFiles: "frizz", opener: "system", offered: none, phone: false, ...over })
+    editorOffer({ windows: [vscode], codeFiles: "frizz", opener: "system", offered: none, phone: false, remote: false, ...over })
   assert.equal(offer({}), "vscode")
   // Either half of "code files go there" missing is still an offer.
   assert.equal(offer({ codeFiles: "editor", opener: "cursor" }), "vscode")
@@ -27,6 +27,9 @@ test("the offer: an accepting editor this browser's code files do not go to yet"
   // Once per editor per browser, and never on the phone layout.
   assert.equal(offer({ offered: new Set(["vscode"]) }), null)
   assert.equal(offer({ phone: true }), null)
+  // Nor to a remote-access session at any width: its clicks would open in a window on the desk (review C8).
+  assert.equal(offer({ remote: true }), null)
+  assert.equal(offer({ remote: true, windows: [cursor, vscode] }), null)
   // Only an accepting window, only an editor the setting can name.
   assert.equal(offer({ windows: [closed] }), null)
   assert.equal(offer({ windows: [windsurf] }), null)

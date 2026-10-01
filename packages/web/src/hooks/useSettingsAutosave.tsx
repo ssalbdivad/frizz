@@ -48,6 +48,30 @@ export function publishMachineSettings(queryClient: QueryClient, saved: Settings
   }
 }
 
+/**
+ * A MACHINE setting another surface changed while a draft was open, adopted into that draft.
+ *
+ * A draft is seeded once and its every write carries the WHOLE object, so a value written elsewhere
+ * meanwhile — the editor offer's "Use VS Code" toast (lib/editorBridge.ts), the project rail's toggle —
+ * was put back by the draft's next save of anything at all: the toast said "Code files open in VS
+ * Code", and the next toggle in the open Settings drawer wrote System back (review C6). Every such write
+ * is published into the cache (publishMachineSettings), so `before` → `after` is the change the drawer
+ * can see. A key is adopted only where it changed there AND the draft still holds the `before` value —
+ * one the human has edited here is theirs, and their own save is the next thing the cache will say.
+ * Only the machine keys: a project's own keys change in the cache when the PAGE's project does, and
+ * pouring another project's values into a draft open on this one is not an adoption. Returns `draft`
+ * itself when nothing is adopted, so a caller's state update is a no-op.
+ */
+export function adoptPublishedSettings(draft: Settings, before: Settings, after: Settings): Settings {
+  let adopted: Settings | null = null
+  for (const key of MACHINE_SETTING_KEYS) {
+    // Every machine key is a scalar, so `===` is the comparison.
+    if (after[key] === before[key] || draft[key] !== before[key]) continue
+    adopted = { ...(adopted ?? draft), [key]: after[key] }
+  }
+  return adopted ?? draft
+}
+
 // The write side of every settings surface — the drawer and the in-context popovers alike. Three
 // invariants, all silent when broken:
 //
@@ -124,6 +148,12 @@ export function useSettingsAutosave() {
     [flush],
   )
 
+  // A write still waiting — debounced, or queued for a retry — is a whole snapshot taken before the
+  // cache moved, and would put the old value back as surely as the draft would (adoptPublishedSettings).
+  const adopt = useCallback((before: Settings, after: Settings) => {
+    if (pending.current) pending.current = adoptPublishedSettings(pending.current, before, after)
+  }, [])
+
   useEffect(
     () => () => {
       flush()
@@ -132,22 +162,33 @@ export function useSettingsAutosave() {
     [flush],
   )
 
-  return { state, queue, flush }
+  return { state, queue, flush, adopt }
 }
 
 // A settings surface's whole read/write loop: the server's copy seeds a local draft ONCE, and every
 // change renders first and persists second through the autosave above. The draft is never re-seeded
-// afterwards: every save publishes the stored value straight into the query cache, so a later fetch
-// can only agree with what is here. `debounce` is for the free-text fields alone — a picker or a
-// toggle is a single discrete intent and writes on the spot.
+// wholesale: every save publishes the stored value straight into the query cache, so a later fetch can
+// only agree with what is here — except for a machine setting another surface wrote meanwhile, which
+// is adopted key by key (adoptPublishedSettings). `debounce` is for the free-text fields alone — a
+// picker or a toggle is a single discrete intent and writes on the spot.
 export function useSettingsDraft() {
   const settings = useQuery({ queryKey: ["settingsGet"], queryFn: () => rpc.settingsGet() })
   const [draft, setDraft] = useState<Settings | null>(() => settings.data ?? null)
-  const { state, queue, flush } = useSettingsAutosave()
+  const { state, queue, flush, adopt } = useSettingsAutosave()
 
   useEffect(() => {
     if (settings.data && !draft) setDraft(settings.data)
   }, [settings.data, draft])
+
+  const seen = useRef(settings.data)
+  useEffect(() => {
+    const before = seen.current
+    const after = settings.data
+    seen.current = after
+    if (!before || !after || before === after) return
+    setDraft((current) => current && adoptPublishedSettings(current, before, after))
+    adopt(before, after)
+  }, [settings.data, adopt])
 
   const update = useCallback(
     (next: Settings, opts?: { debounce?: boolean }) => {

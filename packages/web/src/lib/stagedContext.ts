@@ -63,11 +63,25 @@ export function parseStagedContext(raw: string | null, draftValue: (key: string)
   return staged
 }
 
-/** The snapshot sessionStorage holds — whole drafts' worth, dropped whole from the end past the cap. */
-export function serializeStagedContext(staged: Staged): string {
+/**
+ * The snapshot sessionStorage holds — whole drafts' worth, newest draft first, dropped whole past the cap.
+ *
+ * `touchedAt` is the draft store's own clock for a key (lib/drafts.ts), undefined when there is no such
+ * draft. Two rules, both the drafts' own `bounded`: a key with no draft behind it is not written at all
+ * (its token has nowhere to sit, so parseStagedContext would drop it on load anyway), and past the cap
+ * the OLDEST drafts go first. Insertion order was the order until review C10 — and a newly staged draft
+ * is appended last, so once older quotes filled the cap, the selection just sent to the box in front of
+ * the human was the one left out, and after a reload it went out as a bare `@a.ts:12-20`.
+ */
+export function serializeStagedContext(staged: Staged, touchedAt: (key: string) => number | undefined): string {
+  const live = Object.entries(staged)
+    .flatMap(([key, items]) => {
+      const at = touchedAt(key)
+      return items.length && at !== undefined ? [{ key, items, at }] : []
+    })
+    .sort((a, b) => b.at - a.at)
   const kept: Staged = {}
-  for (const [key, items] of Object.entries(staged)) {
-    if (!items.length) continue
+  for (const { key, items } of live) {
     kept[key] = items
     if (JSON.stringify(kept).length > MAX_SNAPSHOT_BYTES) delete kept[key]
   }
@@ -90,7 +104,7 @@ let contextSeq = Math.max(0, ...Object.values(stagedContext).flat().map((item) =
 if (typeof sessionStorage !== "undefined") {
   subscribe(stagedContext, () => {
     try {
-      sessionStorage.setItem(STAGED_CONTEXT_STORAGE_KEY, serializeStagedContext(stagedContext))
+      sessionStorage.setItem(STAGED_CONTEXT_STORAGE_KEY, serializeStagedContext(stagedContext, (key) => draftStore.getSnapshot().entries[key]?.touchedAt))
     } catch {
       // Quota or disabled storage: the items stay in this page's memory, as they always did.
     }
@@ -122,6 +136,23 @@ export function restoreContextItems(key: string, items: ComposerContextItem[]): 
   if (!items.length) return
   // Never clobber items staged while the failed send was in flight — put the old ones first.
   stagedContext[key] = [...items, ...(stagedContext[key] ?? [])]
+}
+
+/**
+ * Move a draft to another key WITH what its tokens stand for — the new-thread box re-aimed at another
+ * project (AllQueues carryDraft). Only into an empty draft, so one already waiting there is never
+ * overwritten; a no-op when there is nothing to move. Text first, then the items, the order an insert
+ * uses: a mounted box sweeps any staged item whose token its draft lacks. Moving the text alone left
+ * the chips filed under the old project (review C5): the new box showed `@a.ts:12-20` as bare text,
+ * the dispatch went out with no definition behind it, and the next reload's load dropped the orphans.
+ */
+export function carryDraft(from: string, to: string): void {
+  if (from === to) return
+  const text = draftStore.get(from)
+  if (!text || draftStore.get(to)) return
+  draftStore.set(to, text)
+  restoreContextItems(to, takeContextItems(from))
+  draftStore.clear(from)
 }
 
 /**

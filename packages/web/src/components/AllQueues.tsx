@@ -48,7 +48,8 @@ import { innerPath, projectSlug } from "../lib/base-path.ts"
 import { rememberCrossProjectFocus, stepPick } from "../lib/crossProject.ts"
 import { setFaviconBadge } from "../lib/faviconBadge.ts"
 import { ALL_PROJECTS, homeHref, projectViewHref, usePageView, viewHref, viewKey } from "../lib/pageView.ts"
-import { draftKey, draftStore } from "../lib/drafts.ts"
+import { draftKey } from "../lib/drafts.ts"
+import { carryDraft as carryDraftWithContext } from "../lib/stagedContext.ts"
 import { QUEUE_CARD_VIEWPORT_TOP, slugsInThreadDrawers, store } from "../store.ts"
 import { useBoard } from "../hooks.ts"
 import { prefs } from "../lib/prefs.ts"
@@ -640,12 +641,11 @@ function usePickProject(): (project: QueuesProject, from: string | undefined) =>
   )
 }
 
+// The draft goes with its staged chips (lib/stagedContext.ts carryDraft): the new-thread box carries editor
+// selections, and a chip left under the old project's key is a reference with no definition behind it.
 function carryDraft(key: (projectDir: string | undefined) => string, from: string | undefined, to: string | undefined) {
   if (!from || !to || from === to) return
-  const text = draftStore.get(key(from))
-  if (!text || draftStore.get(key(to))) return
-  draftStore.set(key(to), text)
-  draftStore.clear(key(from))
+  carryDraftWithContext(key(from), key(to))
 }
 
 /**

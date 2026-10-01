@@ -204,6 +204,18 @@ export function resolveRelativeLocalPath(
   return resolveRelativeLocalTarget(raw, baseDir, home)?.path ?? null
 }
 
+// `App.tsx:42`, `README.md:3`, `a.ts:12-20`: a file at the root of the base, named with its line. It
+// passes the scheme test in resolveRelativeLocalTarget (a dot is legal in a scheme, so `app.tsx:` reads
+// as one), and was left a dead anchor to an unknown scheme while `src/a.ts:12` resolved. Told apart by
+// shape: a position suffix, and before it one name with an extension and no `:`, `/` or `\`. The
+// extension keeps a REAL scheme whose payload is digits (`tel:5551234`, `localhost:3000`) a link; the
+// single bare name keeps `mailto:x`, `http://h:80` and a drive path (`C:\a.ts:3`) out. A file with no
+// extension (`Makefile:3`) stays unreachable this way; `./Makefile:3` resolves.
+function isBareFileAtPosition(href: string): boolean {
+  const { path, position } = splitFilePosition(href.replace(/[?#].*$/u, ""))
+  return position !== undefined && /^[^:/\\]+\.[\w-]+$/u.test(path)
+}
+
 /** resolveRelativeLocalPath, with the place in the file the link names kept beside the path. */
 export function resolveRelativeLocalTarget(
   raw: string | null | undefined,
@@ -212,7 +224,7 @@ export function resolveRelativeLocalTarget(
 ): { path: string; position?: FilePosition } | null {
   const href = raw?.trim()
   if (!href) return null
-  if (/^[a-z][a-z0-9+.-]*:/i.test(href)) return null // http(s):, file:, mailto:, cursor:, C:\…, …
+  if (/^[a-z][a-z0-9+.-]*:/i.test(href) && !isBareFileAtPosition(href)) return null // http(s):, file:, mailto:, cursor:, C:\…, …
   if (/^[\\/#?]/.test(href)) return null
   const { path: relative, position } = pathAndPosition(href)
   if (!relative) return null

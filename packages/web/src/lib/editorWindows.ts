@@ -26,18 +26,22 @@ export function connectedOpeners(windows: readonly EditorWindowSummary[]): Set<E
  * The editor to offer this browser's code files to, or null. Offered when a window of that editor is
  * connected and accepting, this browser's code files do not already go there (both halves: "Open code
  * files" is In external app AND External app is that editor), it has never been offered here before,
- * and the page is not the phone layout — a phone reaching this Frizz over a tunnel should not be asked
- * to send its clicks to an editor on the desk (prefs.ts `codeFiles`). Windows are taken in the order
- * the server lists them, so two editors connecting at once are offered one at a time.
+ * and the page is neither the phone layout nor a remote-access session: a device reaching this Frizz
+ * over a tunnel should not be asked to send its clicks to an editor on the desk (prefs.ts `codeFiles`),
+ * where an open lands in a window it cannot see and the reader never opens. Phone width alone stood in
+ * for "remote" until review C8, so a laptop on the tunnel was asked. Windows are taken in the order the
+ * server lists them, so two editors connecting at once are offered one at a time.
  */
-export function editorOffer({ windows, codeFiles, opener, offered, phone }: {
+export function editorOffer({ windows, codeFiles, opener, offered, phone, remote }: {
   windows: readonly EditorWindowSummary[]
   codeFiles: "frizz" | "editor"
   opener: LocalFileOpener | undefined
   offered: ReadonlySet<string>
   phone: boolean
+  /** The supervisor says this page came in over remote access (api/signOut.ts isRemoteSession). */
+  remote: boolean
 }): EditorOpener | null {
-  if (phone) return null
+  if (phone || remote) return null
   for (const window of windows) {
     if (!window.acceptsOpens || (window.kind !== "vscode" && window.kind !== "cursor")) continue
     const kind: EditorOpener = window.kind
