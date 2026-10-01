@@ -160,6 +160,7 @@ import {
   spinoffForkPrompt,
   spinoffNameSource,
   spinoffRequestMessage,
+  parseRecurringPrompt,
 } from "@frizz/shared"
 import { type AppContext } from "./context.ts"
 import { listAcpAgents } from "./backend/acp-agents.ts"
@@ -988,15 +989,34 @@ export function handoffOf(messages: readonly TranscriptMessage[]): ThreadHandoff
   for (let i = messages.length - 1; i >= 0; i--) {
     if (isHumanTurn(messages[i]!)) { anchor = i; break }
   }
-  let reply: TranscriptMessage | undefined
+  const says = (m: TranscriptMessage) => m.role === "assistant" && !m.kind && m.text.trim() !== ""
+  let replyAt = -1
   for (let i = messages.length - 1; i > anchor; i--) {
+    if (says(messages[i]!)) { replyAt = i; break }
+  }
+  const reply = replyAt === -1 ? undefined : messages[replyAt]!
+  // A REPLY TO THE SIGN-OFF NUDGE IS THE TAIL OF THE MESSAGE IT SIGNS OFF, not a handoff of its own. The
+  // nudge tells the worker not to repeat itself — "the human reads both together" — so its answer is
+  // routinely a fence alone or "Nothing to add; my previous message has the full answer". Taken on its
+  // own, that line WAS the card: the real answer sat one message up, reachable only by opening the
+  // thread (maintainer 2026-09-30). So walk back over every nudge-and-reply pair and carry the earlier
+  // text too, oldest first. Only the nudge bridges: any other wake is new input with its own answer.
+  const parts: string[] = reply ? [reply.text] : []
+  for (let i = replyAt - 1, bridged = false; i > anchor; i--) {
     const m = messages[i]!
-    if (m.role === "assistant" && !m.kind && m.text.trim()) { reply = m; break }
+    if (says(m)) {
+      if (!bridged) break
+      parts.unshift(m.text)
+      bridged = false
+    } else if (m.role === "user") {
+      if (parseRecurringPrompt(m.displayText ?? m.text)?.kind !== "signoff") break
+      bridged = true
+    }
   }
   const asked = anchor === -1 ? undefined : messages[anchor]!
   const askedText = asked ? (asked.displayText ?? asked.text).trim() : undefined
   return {
-    ...(reply ? { text: reply.text, at: reply.at } : {}),
+    ...(reply ? { text: parts.join("\n\n"), at: reply.at } : {}),
     ...(askedText ? { asked: askedText.length > HANDOFF_ASKED_MAX ? `${askedText.slice(0, HANDOFF_ASKED_MAX - 1)}…` : askedText, askedAt: asked!.at } : {}),
   }
 }
