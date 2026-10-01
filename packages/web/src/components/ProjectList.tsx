@@ -735,11 +735,16 @@ function useRowScope(project: QueuesProject, page: boolean, onQueuedRow: (key: s
  * A project's own row — the same for a busy project heading its threads and a quiet one alone.
  *
  * ITS CLICK FOLDS THE PROJECT (maintainer 2026-09-28: "we need a primary collapse button that would easily
- * allow you to visually filter which projects you're looking at"). A busy project folds away EVERYTHING
- * under its row — its work in flight and, if any is open, the rest — and a second click brings it all
- * back; a quiet project has nothing under it but the rest, so its click opens every quiet band it has,
- * and folds them away again. Nothing navigates. The whole row is the fold's target; only its own controls
- * sit above it.
+ * allow you to visually filter which projects you're looking at"), and OPENS IT ONE STEP FURTHER each time
+ * (2026-10-01: "clicking expand once its already open would be a good way to let people see done/snoozed").
+ * A busy project cycles folded → its work in flight → that and every quiet band it has → folded, the last
+ * click putting the bands away with it so the cycle starts over. Unfolding a project with nothing Ready
+ * skips the middle step ("if a project has nothing ready, clicking expand should probably expand
+ * done/snoozed etc. as well"): its work in flight is all it would show, and none of it wants you. A step
+ * with nothing to add is skipped too — a project with no quiet bands just folds and unfolds. A quiet project
+ * has nothing under it but the rest, so its click opens every quiet band it has (any it lacks, if some are
+ * open already), and the next puts them all away.
+ * Nothing navigates. The whole row is the fold's target; only its own controls sit above it.
  *
  * Its right edge carries, in order: the quiet bands' counts — each ITS OWN toggle, always here, folded or
  * not, so opening one never moves the rest (maintainer 2026-09-29, reversing a morning's move of them under
@@ -781,16 +786,25 @@ function ProjectRow({
   const quietBandsHere = QUIET_BANDS.filter((band) => quietCount(quiet, band) > 0)
   // Whether anything is listed under the row: the fold's own state, on either kind of project.
   const unfolded = busy ? !collapsed : opened.length > 0
+  // What the click does next, by the cycle above. "all" opens every quiet band, on top of what is listed.
+  const allOpen = quietBandsHere.every((band) => opened.includes(band))
+  const next: "unfold" | "all" | "fold" | "hide" = !busy
+    ? allOpen && opened.length > 0 ? "hide" : "all"
+    : collapsed ? count === 0 && quietBandsHere.length > 0 ? "all" : "unfold"
+    : allOpen ? "fold" : "all"
   const fold = () => {
-    if (busy) return setProjectCollapsed(project.id)
-    // A quiet project folds only the rest. A fold left over from when it was busy is lifted, so the click
-    // always shows what it says it will.
-    setProjectCollapsed(project.id, false)
-    setBandsOpen(project.id, quietBandsHere, opened.length === 0)
+    // A fold left over from when the project was busy is lifted, so the click always shows what it says.
+    if (next !== "fold") setProjectCollapsed(project.id, false)
+    if (next === "all") setBandsOpen(project.id, quietBandsHere, true)
+    if (next === "hide" || next === "fold") setBandsOpen(project.id, QUIET_BANDS, false)
+    if (next === "fold") setProjectCollapsed(project.id, true)
   }
-  const foldTitle = busy
-    ? `${collapsed ? "Show" : "Collapse"} ${project.name}'s threads`
-    : `${opened.length > 0 ? "Hide" : "Show"} everything in ${project.name}`
+  const foldTitle = {
+    unfold: `Show ${project.name}'s threads`,
+    all: `Show everything in ${project.name}`,
+    fold: `Collapse ${project.name}'s threads`,
+    hide: `Hide everything in ${project.name}`,
+  }[next]
   return (
     <div
       data-xq-project-row={project.id}
@@ -828,13 +842,13 @@ function ProjectRow({
           {/* THE DISCLOSURE, in the gutter the rail's scroll marker uses — where the rail's own collapsible
               band headers kept theirs, so the list folds the way the rail did. Only while it means
               something: on hover (and always on touch), and HELD whenever the project is not as it starts —
-              a busy project folded away (pointing right), a quiet one showing the rest (turned down). A busy
+              a busy project folded away (pointing right), any project showing the rest (turned down). A busy
               project open, the usual case, draws none, so the list is not a column of chevrons. */}
           <span
             aria-hidden
             data-xq-project-chevron
             className={`pointer-events-none absolute left-[4.5px] top-0.5 flex h-[19px] items-center text-muted-60 transition-[opacity,transform] ${unfolded ? "rotate-90" : ""} ${
-              (busy ? collapsed : opened.length > 0) ? "opacity-100" : "opacity-0 group-hover:opacity-100 group-has-[:focus-visible]:opacity-100 [@media(hover:none)]:opacity-100"
+              (busy && collapsed) || opened.length > 0 ? "opacity-100" : "opacity-0 group-hover:opacity-100 group-has-[:focus-visible]:opacity-100 [@media(hover:none)]:opacity-100"
             }`}
           >
             <ChevronRight size={11} />

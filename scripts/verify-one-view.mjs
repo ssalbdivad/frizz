@@ -241,6 +241,12 @@ try {
     const badgeBefore = await badge()
     // Its Working rows (a pinned row is neither Ready nor Working).
     const workingBefore = await page.$$eval(`[data-xq-rail-project="${busy}"] > [data-xq-band="working"]`, (rows) => rows.length)
+    // An open project's click opens its quiet bands first, if it has any; the click after that folds it.
+    if (countsBefore) {
+      await clickSettled(`[data-xq-project-row="${busy}"] [data-xq-project-fold]`)
+      await page.waitForSelector(`[data-xq-drill="${busy}"]`, { timeout: 8000 })
+      check("an open project's first click opens the rest under its rows", (await page.$$eval(`[data-xq-drill="${busy}"] [data-xq-drill-band]`, (b) => b.length)) === countsBefore.split(" ").length)
+    }
     await clickSettled(`[data-xq-project-row="${busy}"] [data-xq-project-fold]`)
     await sleep(300)
     const after = await rowsOf(busy)
@@ -257,7 +263,13 @@ try {
     check("the fold survives a reload", (await rowsOf(busy)) === 0)
     await clickSettled(`[data-xq-project-row="${busy}"] [data-xq-project-fold]`)
     await sleep(300)
-    check("a second click brings every row back", (await rowsOf(busy)) === before, `${await rowsOf(busy)} of ${before}`)
+    // With nothing Ready it opens the rest too (the next step pins that), so count the rows in flight.
+    const inFlight = await page.$$eval(`[data-xq-rail-project="${busy}"] [data-sidebar-item]`, (rows) => rows.filter((r) => !r.closest("[data-xq-drill]")).length)
+    check("a second click brings every row back", inFlight === before, `${inFlight} of ${before}`)
+    await page.evaluate(() => localStorage.removeItem("frizz.openBands"))
+    await page.reload({ waitUntil: "networkidle2" })
+    await page.waitForSelector(`[data-xq-project-row="${busy}"]`)
+    await sleep(600)
   })
   await step("a project's counts open its quiet bands in place, one at a time, and a Done row opens its drawer on the page", async () => {
     const withDone = await page.$$eval("[data-xq-project-row]", (rows) => rows.find((r) => r.closest("[data-xq-rail-project]").querySelector('[data-xq-quiet-count="done"]'))?.getAttribute("data-xq-project-row"))
@@ -281,13 +293,29 @@ try {
       check("…and Snoozed's name closes Snoozed alone", (await bandsOpen()) === "done", await bandsOpen())
     }
     await page.screenshot({ path: join(shots, "one-view-drill.png") })
-    // The fold folds the rest too, and brings it back as it was.
-    await clickSettled(`[data-xq-project-row="${withDone}"] [data-xq-project-fold]`)
+    // A click on the open project's row opens every quiet band; the next folds it all away, bands too.
+    const fold = `[data-xq-project-row="${withDone}"] [data-xq-project-fold]`
+    const quietHere = await page.$$eval(`[data-xq-project-row="${withDone}"] [data-xq-quiet-count]:not([data-xq-quiet-count="working"])`, (c) => c.map((b) => b.getAttribute("data-xq-quiet-count")).join(" "))
+    if (quietHere !== "done") {
+      await clickSettled(fold)
+      await sleep(300)
+      await page.waitForSelector(`[data-xq-drill="${withDone}"] [data-xq-drill-band="done"] [data-sidebar-item]`, { timeout: 8000 })
+      check("clicking an open project's row opens every quiet band it has", (await bandsOpen()) === quietHere, `${await bandsOpen()} of ${quietHere}`)
+      check("…and keeps its rows in flight", (await page.$$eval(`[data-xq-rail-project="${withDone}"] [data-sidebar-item]`, (rows) => rows.filter((r) => !r.closest("[data-xq-drill]")).length)) === loud)
+    }
+    const ready = (await page.$$eval(`[data-xq-rail-project="${withDone}"] > [data-xq-band="ready"]`, (rows) => rows.length)) > 0
+    await clickSettled(fold)
     await sleep(300)
-    check("folding the project folds its opened bands too", (await page.$(`[data-xq-drill="${withDone}"]`)) === null && (await rowsOf(withDone)) === 0)
-    await clickSettled(`[data-xq-project-row="${withDone}"] [data-xq-project-fold]`)
+    check("the next click folds the project, its opened bands too", (await page.$(`[data-xq-drill="${withDone}"]`)) === null && (await rowsOf(withDone)) === 0)
+    // Unfolding shows the rows in flight, or everything when none is Ready.
+    await clickSettled(fold)
+    await sleep(300)
+    if (ready) {
+      check("unfolding a project with Ready rows shows only its rows in flight", (await page.$(`[data-xq-drill="${withDone}"]`)) === null && (await rowsOf(withDone)) === loud)
+      await clickSettled(fold)
+    }
     await page.waitForSelector(`[data-xq-drill="${withDone}"] [data-xq-drill-band="done"] [data-sidebar-item]`, { timeout: 8000 })
-    check("…and unfolding it brings them back", true)
+    if (!ready) check("unfolding a project with nothing Ready opens everything", (await bandsOpen()) === quietHere, `${await bandsOpen()} of ${quietHere}`)
     await clickSettled(`[data-xq-drill="${withDone}"] [data-xq-drill-band="done"] [data-sidebar-item] button`)
     await waitPath(() => /^\/all\/[^/]+\/thread\/[^/]+$/.test(location.pathname), "a drawer address")
     await page.waitForSelector("[data-drawer-layer]")
@@ -297,7 +325,11 @@ try {
     check("…which closes back to All projects", (await path()) === "/" && (await search()) === "", `${await path()}${await search()}`)
     await clickSettled(count("done"))
     await sleep(300)
-    check("the Done count puts its band away again", (await page.$(`[data-xq-drill="${withDone}"]`)) === null && (await rowsOf(withDone)) === loud)
+    check("the Done count puts its band away again", !(await bandsOpen()).includes("done"), await bandsOpen())
+    await page.evaluate(() => localStorage.removeItem("frizz.openBands"))
+    await page.reload({ waitUntil: "networkidle2" })
+    await page.waitForSelector(`[data-xq-project-row="${withDone}"]`)
+    check("…and with its bands put away, only its rows in flight are left", (await rowsOf(withDone)) === loud)
   })
 
   // ── /full is the drawer's option ─────────────────────────────────────────────────────────────────
