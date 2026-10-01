@@ -3554,7 +3554,7 @@ export const Message = memo(function Message({ m, answering, dense, paired, show
 // A user's composed multi-block answer, rendered as a structured card that MIRRORS the question
 // component's answered state — so it wears the SAME anatomy as every other transcript card
 // (TranscriptCard's CardHead + CardContent): "Answers" as a real sentence-case title flush with the
-// card's left padding, the glyph parked top-right, and the rows starting on that same left edge.
+// card's left padding beside its top-left glyph, and the rows starting on that same left edge.
 //
 // It composes those pieces instead of using TranscriptCard because it is the HUMAN's artifact and must
 // keep the user bubble's identity: right-aligned, capped at 85%, the elevated fill and the

@@ -109,7 +109,11 @@ export function compactElapsedSince(startedAt: string | undefined, nowMs = Date.
   if (!startedAt) return ""
   const started = Date.parse(startedAt)
   if (!Number.isFinite(started)) return ""
-  return formatCompactElapsed(nowMs - started)
+  // A start LATER than `nowMs` is a clock that has not caught up, not a start in the future: the shared
+  // clock ticks every 30s (liveClock.ts), so a row that appears between ticks renders against the last
+  // one, and the server's stamp can lead the browser's clock. Negative read as "" — a blank status and a
+  // tooltip ending "working for " — so it reads as just started instead.
+  return formatCompactElapsed(Math.max(0, nowMs - started))
 }
 
 // A LIVE PROCESS'S AGE — a terminal row's, yours or the agent's (ThreadTerminals.tsx ProcessRow, the agent

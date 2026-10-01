@@ -1,6 +1,6 @@
 import { test } from "node:test"
 import assert from "node:assert/strict"
-import { activityTimestamp, ageSpan, compactAge, exactStamp, formatLastActive } from "./activityTime.ts"
+import { activityTimestamp, ageSpan, compactAge, exactStamp, formatLastActive, spanUntil } from "./activityTime.ts"
 
 const now = Date.parse("2026-07-13T12:00:00.000Z")
 const at = (offsetMs: number) => new Date(now - offsetMs).toISOString()
@@ -36,6 +36,20 @@ test("ageSpan is relativeAge without the ago, and keeps just now intact", () => 
   assert.equal(ageSpan(at(60 * 24 * 60 * 60 * 1_000), now), "2mo")
   assert.equal(ageSpan(undefined, now), null)
   assert.equal(ageSpan("not-a-date", now), null)
+})
+
+// The phone's Snoozed column reads FORWARD ("wakes 3h") on the same ladder, and says nothing once the
+// instant has passed rather than "wakes 0s".
+test("spanUntil is the age ladder pointed at a future instant", () => {
+  const ahead = (offsetMs: number) => new Date(now + offsetMs).toISOString()
+  assert.equal(spanUntil(ahead(45_000), now), "45s")
+  assert.equal(spanUntil(ahead(40 * 60_000), now), "40m")
+  assert.equal(spanUntil(ahead(3 * 60 * 60 * 1_000 + 59_000), now), "3h")
+  assert.equal(spanUntil(ahead(26 * 60 * 60 * 1_000), now), "1d")
+  assert.equal(spanUntil(ahead(0), now), null)
+  assert.equal(spanUntil(at(60_000), now), null)
+  assert.equal(spanUntil(undefined, now), null)
+  assert.equal(spanUntil("not-a-date", now), null)
 })
 
 test("activityTimestamp prefers tailer activity and falls back to a valid launch timestamp", () => {

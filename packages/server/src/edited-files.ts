@@ -26,7 +26,15 @@ import { shellWriteTargets, type EditedFile, type TranscriptMessage } from "@fri
 // It runs over the FULL projection, never the latest window: the window is the last ~300 messages,
 // and a worker's edits sit in the middle of an effort with verification and the handoff after them.
 // Distinct by path, newest edit first, each with how many write calls touched it and when the last
-// one was issued (the emitting message's own stamp). A Bash `rm`/`mv` is deliberately not inspected.
+// one was issued (the emitting message's own stamp).
+//
+// A FILE THAT NO LONGER EXISTS IS NOT A ROW, whichever reading named it. A Bash `rm`/`mv` is not
+// parsed; the rail asks the filesystem at read time instead, which also catches a file deleted by
+// another thread, by the maintainer, or by anything else. Until 2026-09-25 an Edit/Write row was kept
+// after its file was deleted, as part of "the account of what the effort did" — and two memory files a
+// worker wrote under `~/.claude` and then deleted stayed on the rail for good, each row opening a file
+// that was not there (maintainer: "These two files keep showing up in the sidebar … despite the fact
+// that they've been deleted"). The rail is a way into the files; one that is gone has no way in.
 
 const FILE_WRITING_TOOL_NAMES = new Set(["edit", "multiedit", "write", "apply patch"])
 
@@ -79,7 +87,7 @@ function expandHome(candidate: string, home: string): string {
 // 66,705 are `/dev/null` or `/tmp`. Everything outside the project is that noise; everything inside it
 // is work the maintainer has a reason to look at, INCLUDING the thread's own `.frizz/` scratch — which
 // is exactly where the file that prompted this was written.
-function shellWrittenPaths(tool: ToolLike, projectDir: string, onDisk: (p: string) => boolean): string[] {
+function shellWrittenPaths(tool: ToolLike, projectDir: string): string[] {
   if (normalizedToolName(tool.name) !== "bash" || !tool.command) return []
   const truncated = tool.command.endsWith(TRUNCATION_TAIL)
   const targets = shellWriteTargets(truncated ? tool.command.slice(0, -TRUNCATION_TAIL.length) : tool.command)
@@ -93,35 +101,24 @@ function shellWrittenPaths(tool: ToolLike, projectDir: string, onDisk: (p: strin
     const resolved = path.resolve(absoluteBase, expandHome(target.path, home))
     const relative = path.relative(projectDir, resolved)
     if (relative === "" || relative.startsWith("..") || path.isAbsolute(relative)) continue
-    // AND IT HAS TO EXIST. A shell write is read out of a command the worker TYPED, so a relative
-    // target written while the worker stood somewhere this parser cannot see (`cd "$TMP"` earlier in
-    // the effort, a fixture tree built under a temp root) resolves against the project and names a
-    // file that was never there — 26% of in-project targets over the measured corpus. The rail's rows
-    // OPEN the file on click and prefetch it on hover, so a phantom row is a broken row. The tool-call
-    // rows are deliberately NOT gated this way: an Edit is direct evidence the worker wrote that exact
-    // path, and a file it later deleted still belongs in the account of what the effort did.
-    if (!onDisk(resolved)) continue
+    // It also has to EXIST, which editedFilesOf checks for every row — and which matters most here. A
+    // shell write is read out of a command the worker TYPED, so a relative target written while the
+    // worker stood somewhere this parser cannot see (`cd "$TMP"` earlier in the effort, a fixture tree
+    // built under a temp root) resolves against the project and names a file that was never there —
+    // 26% of in-project targets over the measured corpus.
     out.push(resolved)
   }
   return out
 }
 
-// `onDisk` is injected so the pure tool-call reading stays testable without a filesystem; the server
-// always takes the default. Memoized per call: one effort writes the same scratch file many times.
+// `onDisk` is injected so the readings stay testable without a filesystem; the server always takes the
+// default. It runs once per distinct path, after the writes have collapsed into rows.
 export function editedFilesOf(
   messages: readonly MessageLike[],
   projectDir?: string,
   onDisk: (p: string) => boolean = fs.existsSync,
 ): EditedFile[] {
   const byPath = new Map<string, EditedFile>()
-  const existence = new Map<string, boolean>()
-  const exists = (candidate: string): boolean => {
-    const cached = existence.get(candidate)
-    if (cached !== undefined) return cached
-    const seen = onDisk(candidate)
-    existence.set(candidate, seen)
-    return seen
-  }
   const bump = (rawPath: string, at: string | undefined, added?: number, removed?: number) => {
     const existing = byPath.get(rawPath)
     if (existing) {
@@ -153,8 +150,11 @@ export function editedFilesOf(
       // it changed. FileRow already renders a file with no counted lines as a row with no status
       // rather than a fabricated 0.
       if (!projectDir) continue
-      for (const shellPath of shellWrittenPaths(tool, projectDir, exists)) bump(shellPath, message.at)
+      for (const shellPath of shellWrittenPaths(tool, projectDir)) bump(shellPath, message.at)
     }
   }
-  return [...byPath.values()].reverse()
+  // A tool-call path is normally absolute; a relative one (a codex patch) is read against the project.
+  const onDiskNow = (file: EditedFile): boolean =>
+    onDisk(projectDir && !path.isAbsolute(file.path) ? path.resolve(projectDir, file.path) : file.path)
+  return [...byPath.values()].filter(onDiskNow).reverse()
 }

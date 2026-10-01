@@ -66,7 +66,7 @@ import {
   adoptionRuntimeBinding,
   reconcileAdoptionClaims,
 } from "./adoption-recovery.ts"
-import { startOrphanReaper } from "./orphan-reaper.ts"
+import { acquireSharedOrphanReaper } from "./orphan-reaper.ts"
 import { hibernationEnabled, startThreadHibernator } from "./thread-hibernation.ts"
 import { liveBrokerRecords } from "./backend/claude-broker-host.ts"
 import {
@@ -673,9 +673,10 @@ function createContextUnchecked(opts: ContextOptions, resources: PartialContextR
   // never a leftover multiplexer server from a pre-cutover frizz (orphan-reaper.ts keeps that one
   // guard deliberately — an operator may still be reading those panes).
   // FRIZZ_ORPHAN_REAPER_OFF disables it for disposable adhoc/test stacks (mirrors FRIZZ_WAKERS_OFF) so a
-  // throwaway instance never reaps the real machine's processes.
+  // throwaway instance never reaps the real machine's processes. The sweep is machine-wide, so every
+  // project's context shares the server's ONE reaper rather than starting its own.
   if (!process.env.FRIZZ_ORPHAN_REAPER_OFF) {
-    contextUnsubscribers.push(startOrphanReaper({ log: (m) => frizzLog.info("reaper", m) }))
+    contextUnsubscribers.push(acquireSharedOrphanReaper({ log: (m) => frizzLog.info("reaper", m) }))
   }
   opts.startup?.afterPhase?.("orphan reaper")
   reconcileSessions(storage)

@@ -81,8 +81,15 @@ export function useSteeredAt(): Record<string, number> {
 //
 // Every field here is what the SERVER itself will report once the tailer sees the turn start, so the
 // optimistic position is the position truth lands on — the row settles once and never hops again.
+//
+// THE SERVER CAN ASSERT THE SAME THING, and does once it has stored the message (`deliveryInFlight`,
+// board.deriveDeliveryInFlight). The local stamp is instant but lives 12s in the one tab that sent it; the
+// server's flag reaches every tab and a reload, and holds for as long as the delivery is actually on its
+// way. Either one takes the overlay. Only the local stamp moves `lastUserAt`: it is the only one that
+// knows the instant, and the server's own reading of it lands with the turn.
 export function optimisticallySteered(t: ThreadView, at: number | undefined, nowMs = Date.now()): ThreadView {
-  if (at === undefined || !isOptimisticallySteering(t, at, nowMs)) return t
+  const local = at !== undefined && isOptimisticallySteering(t, at, nowMs)
+  if (!local && t.deliveryInFlight !== true) return t
   return {
     ...t,
     runtime: "running",
@@ -97,7 +104,7 @@ export function optimisticallySteered(t: ThreadView, at: number | undefined, now
     // The steer IS a user interaction, and the running band orders by user recency (groups.ts
     // orderByInteraction). Without this the row would enter the band at its STALE position and then
     // jump again when the server reported this same instant a beat later.
-    lastUserAt: new Date(at).toISOString(),
+    lastUserAt: local ? new Date(at!).toISOString() : t.lastUserAt,
     // lastActivityAt is deliberately untouched: it is the evidence isOptimisticallySteering watches
     // for to hand the row back to server truth, so writing it here would make the hint self-sealing.
   }

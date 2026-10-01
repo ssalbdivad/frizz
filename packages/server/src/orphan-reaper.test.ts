@@ -16,6 +16,7 @@ import {
   reapSubtrees,
   sweepOrphansOnce,
   startOrphanReaper,
+  acquireSharedOrphanReaper,
   type ProcRow,
   type Exec,
 } from "./orphan-reaper.ts"
@@ -138,7 +139,7 @@ function fakePs(base: string, env: string): Exec {
   }
 }
 
-test("enumerateProcs joins argv pass with env pass, slug from the ENV segment only", () => {
+test("enumerateProcs joins argv pass with env pass, slug from the ENV segment only", async () => {
   const base = [
     "  100        1 10:00 claude --session-id A",
     "  200      100 09:00 Google Chrome for Testing --remote-debugging-port=0",
@@ -150,7 +151,7 @@ test("enumerateProcs joins argv pass with env pass, slug from the ENV segment on
     "200 Google Chrome for Testing --remote-debugging-port=0 FRIZZ_THREAD=alpha",
     "400 tmux -L frizz-repo-x new-session -d -e FRIZZ_THREAD=argvslug HOME=/x FRIZZ_THREAD=envslug",
   ].join("\n")
-  const procs = enumerateProcs(fakePs(base, env), { platform: "darwin" })
+  const procs = await enumerateProcs(fakePs(base, env), { platform: "darwin" })
   const byPid = new Map(procs.map((p) => [p.pid, p]))
   assert.equal(byPid.get(100)!.slug, "alpha")
   assert.equal(byPid.get(200)!.slug, "alpha")
@@ -160,16 +161,16 @@ test("enumerateProcs joins argv pass with env pass, slug from the ENV segment on
   assert.equal(byPid.get(400)!.slug, "envslug")
 })
 
-test("enumerateProcs: a FRIZZ_THREAD literal in a ROOT's argv never overrides its real env slug", () => {
+test("enumerateProcs: a FRIZZ_THREAD literal in a ROOT's argv never overrides its real env slug", async () => {
   // Reproduces the critical mis-attribution: a worker whose task text pasted `FRIZZ_THREAD=other`
   // into its argv. Ownership must come from ENV, or the root's real slug would be lost from `live`.
   const base = ["  100 1 10:00 claude --session-id A pasted:FRIZZ_THREAD=other-slug"].join("\n")
   const env = ["100 claude --session-id A pasted:FRIZZ_THREAD=other-slug FRIZZ_THREAD=realroot"].join("\n")
-  const procs = enumerateProcs(fakePs(base, env), { platform: "darwin" })
+  const procs = await enumerateProcs(fakePs(base, env), { platform: "darwin" })
   assert.equal(procs[0]!.slug, "realroot")
 })
 
-test("enumerateProcs: reads the slug across a multiline env value and re-merges false splits", () => {
+test("enumerateProcs: reads the slug across a multiline env value and re-merges false splits", async () => {
   const base = ["  100 1 10:00 node dev.js"].join("\n")
   // env contains a PEM key with newlines, AND a line that starts with a digit+space (a false record
   // boundary that must be re-merged), with the real slug appearing AFTER all of it.
@@ -178,7 +179,7 @@ test("enumerateProcs: reads the slug across a multiline env value and re-merges 
     "500 not-a-real-record continues the KEY value",
     "-----END----- FRIZZ_THREAD=realslug",
   ].join("\n")
-  const procs = enumerateProcs(fakePs(base, env), { platform: "darwin" })
+  const procs = await enumerateProcs(fakePs(base, env), { platform: "darwin" })
   assert.equal(procs[0]!.slug, "realslug")
 })
 
@@ -189,7 +190,7 @@ test("enumerateProcs: reads the slug across a multiline env value and re-merges 
 // SESSION ROOT, its thread vanished from `live` — and the reaper SIGKILLed that live worker's aux,
 // including the adhoc-stack verification servers it had booted. Measured on the maintainer's machine
 // 2026-08-19: 3 of 3 session roots with a 4-digit pid unattributed, 34 of 34 with a 5-digit pid fine.
-test("enumerateProcs: a pid narrower than ps's right-aligned pid column still gets its slug", () => {
+test("enumerateProcs: a pid narrower than ps's right-aligned pid column still gets its slug", async () => {
   const base = [
     "  1154        1 21:44:15 claude --session-id A",
     " 48311     1154 03:00 node scripts/adhoc-stack.mjs --port=48311",
@@ -202,7 +203,7 @@ test("enumerateProcs: a pid narrower than ps's right-aligned pid column still ge
     "48311 node scripts/adhoc-stack.mjs --port=48311 HOME=/tmp/sandbox FRIZZ_THREAD=live-worker",
     "65816 Google Chrome for Testing --headless FRIZZ_THREAD=live-worker",
   ].join("\n")
-  const procs = enumerateProcs(fakePs(base, env), { platform: "darwin" })
+  const procs = await enumerateProcs(fakePs(base, env), { platform: "darwin" })
   const byPid = new Map(procs.map((p) => [p.pid, p]))
   assert.equal(byPid.get(1154)!.slug, "live-worker") // the padded record is a record, not a merge artifact
   assert.equal(byPid.get(48311)!.slug, "live-worker")
@@ -213,19 +214,19 @@ test("enumerateProcs: a pid narrower than ps's right-aligned pid column still ge
   assert.deepEqual(decision.reap, [])
 })
 
-test("enumerateProcs: a pid whose pass-2 argv does not match pass-1 (reuse) yields no slug (fail-safe)", () => {
+test("enumerateProcs: a pid whose pass-2 argv does not match pass-1 (reuse) yields no slug (fail-safe)", async () => {
   const base = ["  100 1 10:00 node real-argv"].join("\n")
   const env = ["100 node DIFFERENT-argv FRIZZ_THREAD=whatever"].join("\n") // marker mismatch
-  const procs = enumerateProcs(fakePs(base, env), { platform: "darwin" })
+  const procs = await enumerateProcs(fakePs(base, env), { platform: "darwin" })
   assert.equal(procs[0]!.slug, null)
 })
 
-test("enumerateProcs fails closed when the env pass throws", () => {
+test("enumerateProcs fails closed when the env pass throws", async () => {
   const exec: Exec = (_file, args) => {
     if (args.includes("-Eww")) throw new Error("boom")
     return "  100 1 10:00 node x"
   }
-  const procs = enumerateProcs(exec, { platform: "darwin" })
+  const procs = await enumerateProcs(exec, { platform: "darwin" })
   assert.equal(procs.length, 1)
   assert.equal(procs[0]!.slug, null) // no slug → never reaped
 })
@@ -248,13 +249,13 @@ function environ(entries: Record<number, string[]>): (pid: number) => string | n
   return (pid) => (entries[pid] ? `${entries[pid]!.join("\0")}\0` : null)
 }
 
-test("enumerateProcs (linux): slug from an exact environ entry; a literal inside another value never spoofs", () => {
+test("enumerateProcs (linux): slug from an exact environ entry; a literal inside another value never spoofs", async () => {
   const base = [
     "  100        1 10:00 claude --session-id A",
     "  200      100 09:00 node chrome-devtools-mcp",
     "  300        1 08:00 node bystander.js",
   ].join("\n")
-  const procs = enumerateProcs(
+  const procs = await enumerateProcs(
     linuxPs(base),
     {
       platform: "linux",
@@ -273,14 +274,14 @@ test("enumerateProcs (linux): slug from an exact environ entry; a literal inside
   assert.equal(byPid.get(200)!.ageMs, 9 * 60_000)
 })
 
-test("enumerateProcs (linux): an unreadable environ (gone, or another user's) leaves the slug null", () => {
+test("enumerateProcs (linux): an unreadable environ (gone, or another user's) leaves the slug null", async () => {
   const base = ["  100 1 10:00 node x"].join("\n")
-  const procs = enumerateProcs(linuxPs(base), { platform: "linux", readEnv: () => null })
+  const procs = await enumerateProcs(linuxPs(base), { platform: "linux", readEnv: () => null })
   assert.equal(procs.length, 1)
   assert.equal(procs[0]!.slug, null) // no slug → never reaped
 })
 
-test("sweepOrphansOnce (linux) end-to-end: reaps dead-slug aux, spares live + self", () => {
+test("sweepOrphansOnce (linux) end-to-end: reaps dead-slug aux, spares live + self", async () => {
   const base = [
     "  100     1 10:00 claude --session-id A",
     "  101   100 10:00 node chrome-devtools-mcp",
@@ -288,7 +289,7 @@ test("sweepOrphansOnce (linux) end-to-end: reaps dead-slug aux, spares live + se
     "  999     1 10:00 node server.js",
   ].join("\n")
   const killed: number[] = []
-  const res = sweepOrphansOnce({
+  const res = await sweepOrphansOnce({
     exec: linuxPs(base),
     platform: "linux",
     readEnv: environ({
@@ -308,7 +309,7 @@ test("sweepOrphansOnce (linux) end-to-end: reaps dead-slug aux, spares live + se
   assert.deepEqual(res.liveSlugs, ["alpha"])
 })
 
-test("sweepOrphansOnce end-to-end with fakes: reaps dead-slug Chrome, spares live + self", () => {
+test("sweepOrphansOnce end-to-end with fakes: reaps dead-slug Chrome, spares live + self", async () => {
   const base = [
     "  100     1 10:00 claude --session-id A",
     "  101   100 10:00 node chrome-devtools-mcp",
@@ -324,7 +325,7 @@ test("sweepOrphansOnce end-to-end with fakes: reaps dead-slug Chrome, spares liv
     "999 node server.js FRIZZ_THREAD=beta", // even if tagged beta, it is self → protected
   ].join("\n")
   const killed: number[] = []
-  const res = sweepOrphansOnce({
+  const res = await sweepOrphansOnce({
     exec: fakePs(base, env),
     platform: "darwin",
     kill: (pid) => killed.push(pid),
@@ -339,7 +340,7 @@ test("sweepOrphansOnce end-to-end with fakes: reaps dead-slug Chrome, spares liv
   assert.deepEqual(res.liveSlugs, ["alpha"])
 })
 
-test("sweepOrphansOnce: a live root whose argv holds a stray FRIZZ_THREAD literal never gets its aux reaped", () => {
+test("sweepOrphansOnce: a live root whose argv holds a stray FRIZZ_THREAD literal never gets its aux reaped", async () => {
   // The critical false-kill regression: root's REAL slug is `realthread` (env); its argv also contains
   // a pasted `FRIZZ_THREAD=spoofed`. If ownership were read from argv, `realthread` would look dead
   // and the live aux (101) would be reaped mid-verification. It must not be.
@@ -352,7 +353,7 @@ test("sweepOrphansOnce: a live root whose argv holds a stray FRIZZ_THREAD litera
     "101 node chrome-devtools-mcp FRIZZ_THREAD=realthread",
   ].join("\n")
   const killed: number[] = []
-  const res = sweepOrphansOnce({ exec: fakePs(base, env), platform: "darwin", kill: (p) => killed.push(p), selfPid: 999, minAgeMs: 120_000 })
+  const res = await sweepOrphansOnce({ exec: fakePs(base, env), platform: "darwin", kill: (p) => killed.push(p), selfPid: 999, minAgeMs: 120_000 })
   assert.deepEqual(killed, [], "no aux reaped — realthread is live via its root")
   assert.deepEqual(res.liveSlugs, ["realthread"])
 })
@@ -378,7 +379,7 @@ test("parseCpuTimeMs handles ps's [dd-]hh:mm:ss[.ff] accumulated-CPU format", ()
   assert.equal(parseCpuTimeMs(""), 0)
 })
 
-test("detectRunawayAux names a LIVE thread's long-burning aux, and nothing else", () => {
+test("detectRunawayAux names a LIVE thread's long-burning aux, and nothing else", async () => {
   const HOUR = 3_600_000
   const rows: ProcRow[] = [
     // the runaway: 2h old, 1.9h of CPU ⇒ ~0.95 cores sustained
@@ -395,14 +396,14 @@ test("detectRunawayAux names a LIVE thread's long-burning aux, and nothing else"
     { pid: 15, ppid: 1, ageMs: 2 * HOUR, command: "node someone-else.js", slug: null },
   ]
   const cpu = ["10 1:54:00", "11 1:54:00", "12 0:03.00", "13 0:59.00", "14 1:54:00", "15 1:54:00"].join("\n")
-  const out = detectRunawayAux(rows, new Set(["busy"]), () => cpu)
+  const out = await detectRunawayAux(rows, new Set(["busy"]), () => cpu)
   assert.deepEqual(out.map((r) => r.pid), [10])
   assert.ok(out[0].cores > 0.9 && out[0].cores < 1.0, `cores was ${out[0].cores}`)
 })
 
-test("detectRunawayAux fails silent when ps is unavailable — telemetry never perturbs the sweep", () => {
+test("detectRunawayAux fails silent when ps is unavailable — telemetry never perturbs the sweep", async () => {
   const rows: ProcRow[] = [{ pid: 1, ppid: 0, ageMs: 9_999_999, command: "node x.js", slug: "s" }]
-  assert.deepEqual(detectRunawayAux(rows, new Set(["s"]), () => { throw new Error("no ps") }), [])
+  assert.deepEqual(await detectRunawayAux(rows, new Set(["s"]), () => { throw new Error("no ps") }), [])
 })
 
 test("summarizeRunaways reports per THREAD, summing cores, worst first", () => {
@@ -427,11 +428,11 @@ test("startOrphanReaper on win32: one clear log line, no ps, no interval", () =>
   assert.match(log[0]!, /^orphan-reaper: unavailable on Windows — .*not collected here/u)
 })
 
-test("sweepOrphansOnce: `ps` missing (ENOENT) is reported as unavailable; any other failure is one closed sweep", () => {
+test("sweepOrphansOnce: `ps` missing (ENOENT) is reported as unavailable; any other failure is one closed sweep", async () => {
   const enoent: Exec = () => { throw Object.assign(new Error("spawnSync ps ENOENT"), { code: "ENOENT" }) }
-  assert.deepEqual(sweepOrphansOnce({ exec: enoent, platform: "darwin" }), { reaped: 0, deadSlugs: [], liveSlugs: [], unavailable: "`ps` is not on PATH" })
+  assert.deepEqual(await sweepOrphansOnce({ exec: enoent, platform: "darwin" }), { reaped: 0, deadSlugs: [], liveSlugs: [], unavailable: "`ps` is not on PATH" })
   const timeout: Exec = () => { throw Object.assign(new Error("spawnSync ps ETIMEDOUT"), { code: "ETIMEDOUT" }) }
-  assert.deepEqual(sweepOrphansOnce({ exec: timeout, platform: "darwin" }), { reaped: 0, deadSlugs: [], liveSlugs: [] })
+  assert.deepEqual(await sweepOrphansOnce({ exec: timeout, platform: "darwin" }), { reaped: 0, deadSlugs: [], liveSlugs: [] })
 })
 
 test("startOrphanReaper on a POSIX box without ps: the first sweep says so and the interval never starts", async () => {
@@ -453,4 +454,63 @@ test("startOrphanReaper on a POSIX box without ps: the first sweep says so and t
   stopFlaky()
   assert.ok(ticks > 2, `the interval kept sweeping (${ticks} ticks)`)
   assert.equal(log.length, 1, "and said nothing more")
+})
+
+// Until 2026-09-30 every `ps` pass was execFileSync inside the server's event loop, and every project's
+// context started its own reaper: 22 projects, 22 machine-wide sweeps a minute, the loop blocked ~95% of
+// the time and a pin took seconds to land. These pin the three properties that fixed it.
+
+test("sweepOrphansOnce yields the event loop while ps runs", async () => {
+  let ticked = false
+  const slowPs: Exec = async () => {
+    await delay(20)
+    return ""
+  }
+  const sweep = sweepOrphansOnce({ exec: slowPs, platform: "darwin" })
+  setImmediate(() => { ticked = true })
+  await delay(5)
+  assert.equal(ticked, true, "a timer callback ran while the sweep was still waiting on ps")
+  assert.deepEqual(await sweep, { reaped: 0, deadSlugs: [], liveSlugs: [] })
+})
+
+test("startOrphanReaper never runs a second sweep while one is still in flight", async () => {
+  let inFlight = 0
+  let maxInFlight = 0
+  let calls = 0
+  const slowPs: Exec = async () => {
+    calls++
+    maxInFlight = Math.max(maxInFlight, ++inFlight)
+    await delay(15)
+    inFlight--
+    return ""
+  }
+  const stop = startOrphanReaper({ platform: "darwin", intervalMs: 1, exec: slowPs })
+  await delay(80)
+  stop()
+  assert.ok(calls >= 2, `the interval kept sweeping (${calls} ps calls)`)
+  assert.equal(maxInFlight, 1, "sweeps are serialized, not stacked on a 1ms interval")
+})
+
+test("acquireSharedOrphanReaper: N projects share ONE reaper, which stops when the last one releases", async () => {
+  let calls = 0
+  const countingPs: Exec = () => {
+    calls++
+    return ""
+  }
+  const deps = { platform: "darwin" as const, intervalMs: 5, exec: countingPs }
+  const releases = Array.from({ length: 5 }, () => acquireSharedOrphanReaper(deps))
+  await delay(60)
+  // One reaper at a 5ms interval sweeps at most ~13 times in 60ms (one `ps` each — no rows, no env
+  // pass); five independent ones would have made ~65 calls.
+  assert.ok(calls >= 2 && calls <= 20, `one reaper's worth of sweeps, got ${calls} ps calls`)
+  for (const release of releases.slice(0, 4)) release()
+  releases[0]!() // a double release is a no-op, not a second decrement
+  const beforeLast = calls
+  await delay(30)
+  assert.ok(calls > beforeLast, "still sweeping while one project holds it")
+  releases[4]!()
+  await delay(5)
+  const afterStop = calls
+  await delay(30)
+  assert.equal(calls, afterStop, "the last release stopped it")
 })

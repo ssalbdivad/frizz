@@ -2,13 +2,16 @@ import { test } from "node:test"
 import assert from "node:assert/strict"
 import { editedFilesOf } from "./edited-files.ts"
 
+// Every candidate exists unless a test says otherwise, so existence is not silently doing the work.
+const allPresent = () => true
+
 const msg = (at: string, ...tools: { name: string; detail?: string; command?: string; edit?: { file: string; added?: number; removed?: number } }[]) => ({ at, tools } as never)
 
 test("distinct files, newest edit first, counted per write call, diffstat summed", () => {
   const out = editedFilesOf([
     msg("2026-08-28T10:00:00Z", { name: "Edit", edit: { file: "/r/a.ts", added: 5, removed: 2 } }, { name: "Write", edit: { file: "/r/b.ts", added: 40, removed: 0 } }),
     msg("2026-08-28T10:05:00Z", { name: "Edit", edit: { file: "/r/a.ts", added: 1, removed: 1 } }, { name: "Read", detail: "/r/c.ts" }),
-  ])
+  ], undefined, allPresent)
   assert.deepEqual(out, [
     { path: "/r/a.ts", edits: 2, lastEditedAt: "2026-08-28T10:05:00Z", added: 6, removed: 3 },
     { path: "/r/b.ts", edits: 1, lastEditedAt: "2026-08-28T10:00:00Z", added: 40, removed: 0 },
@@ -17,7 +20,7 @@ test("distinct files, newest edit first, counted per write call, diffstat summed
 
 test("an unreconstructed apply_patch counts by name + detail; a Bash SUMMARY never does", () => {
   // `detail` is the one-line summary of a Bash call, never a path it wrote — only `command` is parsed.
-  const out = editedFilesOf([msg("t", { name: "apply_patch", detail: "/r/d.ts" }, { name: "Bash", detail: "rm /r/e.ts" })])
+  const out = editedFilesOf([msg("t", { name: "apply_patch", detail: "/r/d.ts" }, { name: "Bash", detail: "rm /r/e.ts" })], undefined, allPresent)
   assert.deepEqual(out.map((f) => f.path), ["/r/d.ts"])
 })
 
@@ -26,16 +29,13 @@ test("a path still carrying a `${…}` placeholder is a codex script's variable,
   // fill — a loop variable, an expression — is not a file, and a row for it would open nothing.
   const out = editedFilesOf([
     msg("t", { name: "Edit", detail: "${dir}/a.ts", edit: { file: "${dir}/a.ts" } }, { name: "apply_patch", detail: "${p}" }, { name: "Edit", edit: { file: "/r/b.ts" } }),
-  ])
+  ], undefined, allPresent)
   assert.deepEqual(out.map((f) => f.path), ["/r/b.ts"])
 })
 
 // ---- Shell writes (see the header): the reading that makes a heredoc-authored file visible. ----
 
 const bash = (command: string) => ({ name: "Bash", detail: command.split("\n")[0], command })
-// Every candidate exists unless a test says otherwise, so existence is not silently doing the work.
-const allPresent = () => true
-
 test("a file written by a shell redirect reaches the rail, resolved against the project", () => {
   const out = editedFilesOf(
     [msg("2026-09-04T13:13:00Z", bash("cd /p/nub; cat > .frizz/notes.md <<'MD'\n# hi\nMD"))],
@@ -83,9 +83,22 @@ test("a target severed by the command cap is dropped rather than shown as half a
   )
 })
 
-test("a shell target that is not on disk is dropped; an Edit to a deleted path is kept", () => {
-  const messages = [msg("t", bash("echo x > gone.txt"), { name: "Write", edit: { file: "/p/nub/removed.ts", added: 9, removed: 0 } })]
-  assert.deepEqual(editedFilesOf(messages, "/p/nub", () => false).map((f) => f.path), ["/p/nub/removed.ts"])
+test("a file no longer on disk is not a row, whether a shell write or an Edit named it", () => {
+  const messages = [
+    msg(
+      "t",
+      bash("echo x > gone.txt"),
+      { name: "Write", edit: { file: "/Users/me/.claude/projects/p/memory/removed.md", added: 13, removed: 0 } },
+      { name: "apply_patch", detail: "src/removed.ts" },
+      { name: "Edit", edit: { file: "/p/nub/kept.ts", added: 1, removed: 0 } },
+    ),
+  ]
+  const present = new Set(["/p/nub/kept.ts"])
+  const asked: string[] = []
+  const onDisk = (p: string) => (asked.push(p), present.has(p))
+  assert.deepEqual(editedFilesOf(messages, "/p/nub", onDisk).map((f) => f.path), ["/p/nub/kept.ts"])
+  // A relative tool path is checked against the project, not the server's cwd.
+  assert.ok(asked.includes("/p/nub/src/removed.ts"))
 })
 
 test("without a project dir the shell reading is off entirely", () => {

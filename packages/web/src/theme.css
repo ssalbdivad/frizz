@@ -253,7 +253,6 @@
   --input-focus: color-mix(in oklab, #e8b923 60%, transparent);
   --hover-strong: rgb(255 255 255 / .06);
   --frizz-control-strong: #33363c;
-  --inactive-mark-opacity: .55;
   --sidebar-dim-opacity: .65;
   --mobile-dim-opacity: .6;
   --row-dim-hover-opacity: .9;
@@ -424,7 +423,6 @@
   --input-focus: #416896;
   --hover-strong: rgb(0 0 0 / .08);
   --frizz-control-strong: #7d7d7d;
-  --inactive-mark-opacity: 1;
   --sidebar-dim-opacity: .95;
   --mobile-dim-opacity: .95;
   --row-dim-hover-opacity: 1;
@@ -591,7 +589,6 @@
     --input-focus: #416896;
     --hover-strong: rgb(0 0 0 / .08);
     --frizz-control-strong: #7d7d7d;
-    --inactive-mark-opacity: 1;
     --sidebar-dim-opacity: .95;
     --mobile-dim-opacity: .95;
     --row-dim-hover-opacity: 1;

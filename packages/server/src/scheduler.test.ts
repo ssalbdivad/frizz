@@ -2626,9 +2626,12 @@ test("coalesce: identical events fold into one section that counts them", async 
   assert.equal(h.resumes.length, 2)
   const merged = h.resumes[1].message
   assert.match(merged, /held 3 wakes/)
-  assert.match(merged, /### 1\. one-off timer elapsed \([^)]+\) — 2 identical events/)
+  // The three rows share one enqueue instant, so their order falls to the delivery id — which carries the
+  // file-wide timer counter, and so moves with whichever tests ran first. Pin the sections, not their order.
+  assert.match(merged, /### [12]\. one-off timer elapsed \([^)]+\) — 2 identical events\n\nsame thing/)
   assert.equal((merged.match(/same thing/g) ?? []).length, 1, "said once, counted twice")
-  assert.match(merged, /### 2\. [^\n]+\n\nother thing/)
+  assert.match(merged, /### [12]\. [^\n]+\n\nother thing/)
+  assert.equal((merged.match(/^### /gm) ?? []).length, 2, "two sections for three events")
   h.storage.close()
 })
 
@@ -2675,6 +2678,65 @@ test("coalesce: a wake older than the window is delivered at once", async () => 
   armTimer(h, "b", h.clock.ms, "later")
   await s.tick()
   assert.deepEqual(h.resumes.map((r) => r.message.split("\n")[0]), ["first", "later"], "the window had already elapsed, so nothing waits")
+  h.storage.close()
+})
+
+// THE NUDGE ANSWERS THE WORKER'S OWN REST, which is the card on the board right now — so the window that
+// rations news must not hold it. The shape of the thread that surfaced it (2026-09-25): a wake goes out,
+// the worker rests bare seconds later, and the nudge sat for the rest of the window while the maintainer
+// opened a card that said nothing about where it stood.
+test("coalesce: the sign-off nudge for a bare rest right after a wake is not held by the window", async () => {
+  const h = harness() // the nudge ON — coalesceHarness turns it off
+  h.storage.upsertSession(row("n"))
+  h.tele.set("n", tele())
+  const s = h.make({ wakeQuietWindowMs: WAKE_QUIET_WINDOW_MS })
+  const t0 = h.clock.ms
+  armTimer(h, "n", t0, "first")
+  await s.tick()
+  assert.equal(h.resumes.length, 1, "the wake that starts the window")
+
+  h.clock.ms = t0 + 9_000
+  h.tele.set("n", { ...tele(), lastUserAt: iso(t0), lastAssistantAt: iso(h.clock.ms) })
+  h.clock.ms += 2_000
+  await s.tick()
+  assert.equal(h.resumes.length, 2, "delivered on the tick that minted it, not when the window ends")
+  assert.match(h.resumes[1].message, /You rested without a fence/)
+  assert.match(h.resumes[1].message, /you last spoke 2s ago\.$/)
+  h.storage.close()
+})
+
+// A LONE HELD WAKE READS ITS CLOCK AT SEND. The stamp is taken at enqueue, and the window can hold the row
+// across a turn the worker finished meanwhile — observed 2026-09-25 as "you last spoke 14m ago" on a
+// wake that reached a worker 39 seconds after it last spoke.
+test("coalesce: a lone wake held by the window carries the clock of its send, not its enqueue", async () => {
+  const h = coalesceHarness()
+  h.storage.upsertSession(row("c"))
+  h.watch("c", "acme/app#1")
+  const t0 = h.clock.ms
+  h.tele.set("c", { ...tele(), lastAssistantAt: iso(t0 - 14 * 60_000) })
+  h.review.result = []
+  const s = h.make({ wakeQuietWindowMs: WAKE_QUIET_WINDOW_MS })
+  armTimer(h, "c", t0, "first")
+  await s.tick()
+  assert.equal(h.resumes.length, 1, "the wake that starts the window")
+
+  h.clock.ms = t0 + 60_000
+  h.review.result = [{ id: "comment:c1", actor: "alice", at: iso(h.clock.ms), kind: "comment" }]
+  await s.tick()
+  assert.equal(h.resumes.length, 1, "the review is held")
+  const held = createWakeDeliveryStore(h.storage.scope).listOpen()
+  assert.equal(held.length, 1)
+  assert.match(held[0].message, /you last spoke 15m ago\.$/, "stamped at enqueue")
+
+  // The worker takes a turn of its own inside the window and rests.
+  h.tele.set("c", { ...tele(), lastAssistantAt: iso(t0 + WAKE_QUIET_WINDOW_MS - 39_000) })
+  h.clock.ms = t0 + WAKE_QUIET_WINDOW_MS
+  await s.tick()
+  assert.equal(h.resumes.length, 2)
+  const sent = h.resumes[1].message
+  assert.doesNotMatch(sent, /held \d+ wakes/, "a lone wake, not a merge")
+  assert.equal((sent.match(/⏱/g) ?? []).length, 1, "the old clock is replaced, not joined")
+  assert.match(sent, /you last spoke 39s ago\.$/)
   h.storage.close()
 })
 

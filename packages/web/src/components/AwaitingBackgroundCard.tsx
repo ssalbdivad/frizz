@@ -47,7 +47,7 @@ import { ICON_LABEL_NUDGE } from "../lib/iconAlign.ts"
 import { PRIMER, PRIMER_DANGER_LINK } from "../lib/primer.ts"
 import { LinkedHtml } from "./LinkedHtml.tsx"
 import { useShellFolderHint } from "./ThreadTerminals.tsx"
-import { BLOCK_RADIUS_INNER_BOTTOM, CARD_ACTION_EXPLAINER, CARD_ACTION_RADIUS, CARD_BODY, CARD_LINK, CARD_PRIMARY_ACTION, QUEUE_WRAP, TranscriptCard } from "./TranscriptCard.tsx"
+import { CARD_ACTION_EXPLAINER, CARD_ACTION_RADIUS, CardActions, CARD_BODY, CARD_LINK, CARD_PRIMARY_ACTION, QUEUE_WRAP, TranscriptCard } from "./TranscriptCard.tsx"
 
 // Name what the thread is ACTUALLY waiting on. Three real cases, and the sentence has to be true in all
 // of them: "sub-agents" is wrong for a shell-only thread (a launched dev server is not a child whose
@@ -750,9 +750,11 @@ export function TermWaitRow({ terminal, slug, now, hint }: { terminal: ThreadTer
 // rather than as a disabled control.
 export function TimerRow({ watch, now }: { watch: ThreadWatchView; now: number }) {
   const fireMs = Date.parse(watch.timer?.fireAt ?? "")
-  // "fires in 34m", counting down live off the card's shared clock. A due-but-undelivered timer (the
-  // scheduler's tick is seconds behind the instant) says "firing…" rather than a 0s countdown or a
-  // negative one — the same present-progressive the PR row uses for its own gap ("Checking…").
+  // "fires in 34m", counting down live off the card's shared clock. A due-but-undelivered timer says
+  // "firing…" rather than a 0s countdown or a negative one — the same present-progressive the PR row uses
+  // for its own gap ("Checking…"). That gap is usually a scheduler tick, but it can run to minutes: a
+  // timer wake is not exempt from the quiet window after a handoff (wake-store.ts), and the row settles
+  // only once the delivery is confirmed.
   const status = !Number.isFinite(fireMs) ? "armed" : fireMs > now ? `fires in ${formatCompactElapsed(fireMs - now)}` : "firing…"
   return (
     <WaitRow
@@ -1208,9 +1210,6 @@ export function AwaitingBackgroundCard({ thread, fence }: {
       // ONE watched PR the table does not already row rides the title, as the GitHub wake card's ref
       // does; SEVERAL take a row of their own under the prose (see unrowedWatchRefs).
       aside={unrowed.length === 1 ? <WatchedRef watch={unrowed[0]} /> : undefined}
-      // The recessed footer band below sits flush against the card's bottom edge, so the shell's own
-      // bottom padding has to go when one renders — the band carries its own.
-      className={footer ? "pb-0" : ""}
     >
       {/* THE WORKER'S PROSE — the fence's whole Markdown body, block-rendered, exactly as the old
           free-standing message drew it (md-body inside card-md; QUEUE_WRAP so a long unbreakable token
@@ -1278,17 +1277,17 @@ export function AwaitingBackgroundCard({ thread, fence }: {
         </p>
       )}
       <WaitGrid groups={groups} divider={!!prose} />
-      {/* THE FOOTER BAND — the card's snooze, in a recessed full-width strip flush with the card's
-          bottom corners (the queue card's own footer idiom), so the control reads as chrome under the
-          content rather than as one more row of it. It draws on EVERY surface the card is live on as of
-          2026-08-31; a thread with no snooze verb draws the card with the shell's normal padding.
+      {/* THE FOOTER BAND — the card's snooze, in the family's shared action footer (CardActions), so
+          the control reads as chrome under the content rather than as one more row of it. This card
+          introduced the band on 2026-08-31; every card with a verb wears it since 2026-09-30. It draws
+          on EVERY surface the card is live on; a thread with no snooze verb draws the card without it.
           Since 2026-09-29 it also carries the Stop, and draws for EITHER verb. Stop TRAILS: the caption
           belongs to Snooze and must stay one line directly beside it, and the caption's flex-grow then
           carries the Stop to the band's right edge, apart from the pair. Stop-first (the sign-in card's
           Retry-before-Sign-in order) was drawn and rejected: at 780px it forced the caption onto two
           lines at widths where it fits one today. Alone, the Stop sits at the band's left edge. */}
       {footer ? (
-        <div data-awaiting-snooze className={`-mx-4 mt-3 flex flex-wrap items-center gap-x-2.5 gap-y-2 border-t border-border bg-fg/[0.03] px-4 py-2.5 ${BLOCK_RADIUS_INNER_BOTTOM}`}>
+        <CardActions data-awaiting-snooze>
           {/* Snooze and its caption as ONE flex item, sized to their content. The caption alone has a
               flex-basis of 0, so beside a Stop the row would fit all three on one line by folding the
               caption instead of wrapping the Stop. As a unit the PAIR yields a line: the Stop wraps
@@ -1301,7 +1300,7 @@ export function AwaitingBackgroundCard({ thread, fence }: {
             </div>
           )}
           {stopIds.length > 0 && <AwaitingStopShells key={stopIds.join(" ")} slug={thread!.id} ids={stopIds} />}
-        </div>
+        </CardActions>
       ) : null}
     </TranscriptCard>
   )

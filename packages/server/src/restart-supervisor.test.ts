@@ -3,7 +3,7 @@ import { createServer, request, type IncomingHttpHeaders, type RequestListener }
 import { connect as netConnect } from "node:net"
 import { once } from "node:events"
 import { test } from "node:test"
-import { mkdtempSync, writeFileSync } from "node:fs"
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import {
@@ -12,8 +12,11 @@ import {
   SUPERVISOR_UPDATE_RESTART_PATH,
   SUPERVISOR_STATUS_PATH,
   SUPERVISOR_ACCESS_CODE_PATH,
+  SUPERVISOR_SESSIONS_PATH,
+  SUPERVISOR_SIGN_OUT_PATH,
   type RestartResult,
 } from "./restart-supervisor.ts"
+import { fileSessionDirectory } from "./access-codes.ts"
 
 async function listen(handler: RequestListener) {
   const server = createServer(handler)
@@ -872,7 +875,8 @@ test("--link mints from loopback only: a tunnelled session cannot hand out furth
     // From the tunnel: refused outright, session or no session.
     const publicHeaders = { host: "colin.frizz.sh", origin: "https://colin.frizz.sh" }
     const session = /frizz_session=([^;]+)/.exec(String(redeemed.headers?.["set-cookie"]))![1]!
-    assert.equal((await proxied(port, SUPERVISOR_ACCESS_CODE_PATH, publicHeaders, "POST")).status, 403)
+    // With no session the control plane's session gate answers first (see the control-plane gate test).
+    assert.equal((await proxied(port, SUPERVISOR_ACCESS_CODE_PATH, publicHeaders, "POST")).status, 401)
     assert.equal(
       (await proxied(port, SUPERVISOR_ACCESS_CODE_PATH, { ...publicHeaders, cookie: `frizz_session=${session}` }, "POST")).status,
       403,
@@ -933,5 +937,193 @@ test("setPublicOrigin flips the gate on a running board, and clearing it flips i
   } finally {
     await proxy.close().catch(() => undefined)
     await current.close()
+  }
+})
+
+test("sign out this device: a tunnelled session ends ITSELF, persisted, and can reach no other device", async () => {
+  // The phone's Settings row. It is the one session-ending verb the tunnel may reach, and only because
+  // it can end nothing but the credential on the request making it. What must hold: the caller's own id
+  // lands on the SAME directory `--sign-out` writes (so a restart remembers it), the cookie is cleared,
+  // the very next request with that cookie is refused, a body naming another id is ignored, and the
+  // loopback-only rule for signing out OTHER devices is exactly as strict as before.
+  const current = await child("only")
+  const port = await freePort()
+  const dir = mkdtempSync(join(tmpdir(), "frizz-sign-out-"))
+  const proxy = new RestartSupervisorProxy({
+    port,
+    publicOrigin: "https://colin.frizz.sh",
+    sessionDirectory: fileSessionDirectory(dir),
+    childPort: () => current.port,
+    restart: async () => ({ state: "ready" }),
+  })
+  try {
+    await proxy.listen()
+    const publicHeaders = { host: "colin.frizz.sh", origin: "https://colin.frizz.sh" }
+    const loopback = { host: `127.0.0.1:${port}`, origin: `http://127.0.0.1:${port}` }
+    const redeem = async () => {
+      const exchange = await proxied(port, `/?frizz_code=${proxy.issueAccessCode()!.code}`, publicHeaders)
+      return String(exchange.headers?.["set-cookie"]).split(";")[0]!
+    }
+    const phone = await redeem()
+    const laptop = await redeem()
+    const idOf = (cookie: string) => cookie.split("=")[1]!.split(".")[1]!
+
+    // Only a request that arrived publicly WITH a live session is told it has one to end.
+    const statusOf = async (headers: Record<string, string>) =>
+      JSON.parse((await proxied(port, SUPERVISOR_STATUS_PATH, headers)).body) as { remoteSession?: boolean }
+    assert.equal((await statusOf({ ...publicHeaders, cookie: phone })).remoteSession, true)
+    // No cookie through the tunnel: the control plane's session gate refuses status outright.
+    assert.equal((await proxied(port, SUPERVISOR_STATUS_PATH, publicHeaders)).status, 401)
+    assert.equal((await statusOf(loopback)).remoteSession, undefined, "the operator's own tab has none")
+    assert.equal((await statusOf({ ...loopback, cookie: phone })).remoteSession, undefined, "a cookie on loopback is not a remote session")
+
+    // It is a mutation, so it is a POST and nothing else.
+    assert.equal((await proxied(port, SUPERVISOR_SIGN_OUT_PATH, { ...publicHeaders, cookie: phone })).status, 405)
+
+    // CSRF: a cross-site page cannot drive it. A foreign Origin fails the authority gate before any
+    // session is looked at, and so does a POST with no Origin at all.
+    assert.equal((await proxied(port, SUPERVISOR_SIGN_OUT_PATH, { ...publicHeaders, origin: "https://evil.example", cookie: phone }, "POST")).status, 403)
+    assert.equal((await proxied(port, SUPERVISOR_SIGN_OUT_PATH, { host: "colin.frizz.sh", cookie: phone }, "POST")).status, 403)
+    assert.equal((await proxied(port, "/", { ...publicHeaders, cookie: phone })).status, 200, "a refused attempt signed nothing out")
+
+    // THE FEATURE. A body naming the LAPTOP's id is ignored — the id comes from the cookie, never the body.
+    const signOut = await new Promise<{ status: number; body: string; headers: IncomingHttpHeaders }>((resolve, reject) => {
+      const req = request({ host: "127.0.0.1", port, path: SUPERVISOR_SIGN_OUT_PATH, method: "POST", headers: { ...publicHeaders, cookie: phone, "content-type": "application/json" } }, (res) => {
+        let body = ""
+        res.setEncoding("utf8")
+        res.on("data", (chunk) => { body += chunk })
+        res.on("end", () => resolve({ status: res.statusCode ?? 0, body, headers: res.headers }))
+      })
+      req.once("error", reject)
+      req.end(JSON.stringify({ id: idOf(laptop), all: true }))
+    })
+    assert.equal(signOut.status, 200)
+    assert.deepEqual(JSON.parse(signOut.body), { protocol: 1, result: "signed-out", id: idOf(phone) })
+    assert.match(String(signOut.headers["set-cookie"]), /^frizz_session=;.*Max-Age=0/, "the browser is told to drop the cookie")
+
+    // The phone is refused on its very next request — page and socket — even holding the old cookie.
+    assert.equal((await proxied(port, "/", { ...publicHeaders, cookie: phone })).status, 401)
+    assert.equal(await upgradeStatus(port, { ...publicHeaders, cookie: phone }), "401")
+    // And the laptop, which the body named, is untouched.
+    assert.equal((await proxied(port, "/", { ...publicHeaders, cookie: laptop })).status, 200)
+
+    // Persisted to the directory `--sign-out` uses, so a restart remembers it.
+    const reloaded = fileSessionDirectory(dir)
+    assert.equal(reloaded.isRevoked(idOf(phone)), true)
+    assert.equal(reloaded.isRevoked(idOf(laptop)), false)
+
+    // Replaying the dead cookie changes nothing and says so.
+    const replay = await proxied(port, SUPERVISOR_SIGN_OUT_PATH, { ...publicHeaders, cookie: phone }, "POST")
+    assert.equal(replay.status, 401)
+    assert.equal(JSON.parse(replay.body).result, "no-remote-session")
+
+    // Loopback with no session (the maintainer's own machine): a clear no-op, and no cookie is touched.
+    const local = await proxied(port, SUPERVISOR_SIGN_OUT_PATH, loopback, "POST")
+    assert.equal(local.status, 200)
+    assert.deepEqual(JSON.parse(local.body), { protocol: 1, result: "no-remote-session" })
+    assert.equal(local.headers?.["set-cookie"], undefined)
+    // Even a loopback request carrying a live cookie ends nothing.
+    assert.equal(JSON.parse((await proxied(port, SUPERVISOR_SIGN_OUT_PATH, { ...loopback, cookie: laptop }, "POST")).body).result, "no-remote-session")
+    assert.equal((await proxied(port, "/", { ...publicHeaders, cookie: laptop })).status, 200)
+
+    // The loopback-only rule for signing out OTHER devices is unchanged: a live session still cannot.
+    assert.equal((await proxied(port, SUPERVISOR_SESSIONS_PATH, { ...publicHeaders, cookie: laptop }, "POST")).status, 403)
+    assert.equal((await proxied(port, SUPERVISOR_SESSIONS_PATH, { ...publicHeaders, cookie: laptop })).status, 403)
+  } finally {
+    await proxy.close().catch(() => undefined)
+    await current.close().catch(() => undefined)
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+test("the control plane is behind the session gate: no session through the tunnel, no restart, no status", async () => {
+  // handle() routes /_frizz/control/* to handleControl BEFORE its own session check, and handleControl
+  // judged only Host and Origin — which a non-browser client sets freely. So anyone who knew a board's
+  // public name could restart it, start an update, and read its status with no session at all. Found
+  // while building the phone's sign-out. What must hold now: every control path refuses a public request
+  // without a live session with a bare 401 and NO side effect; a valid session gets exactly today's
+  // answer; loopback is untouched; sign-out keeps its own self-verifying handling.
+  const current = await child("only")
+  const port = await freePort()
+  let restarts = 0
+  let updates = 0
+  const proxy = new RestartSupervisorProxy({
+    port,
+    publicOrigin: "https://colin.frizz.sh",
+    childPort: () => current.port,
+    restart: async () => { restarts++; return { state: "ready" } },
+    updateRestart: async () => { updates++; return { state: "ready" } },
+  })
+  try {
+    await proxy.listen()
+    const publicHeaders = { host: "colin.frizz.sh", origin: "https://colin.frizz.sh" }
+    const loopback = { host: `127.0.0.1:${port}`, origin: `http://127.0.0.1:${port}` }
+    const exchange = await proxied(port, `/?frizz_code=${proxy.issueAccessCode()!.code}`, publicHeaders)
+    const session = String(exchange.headers?.["set-cookie"]).split(";")[0]!
+    const forged = session.slice(0, -1) + (session.endsWith("a") ? "b" : "a")
+    const settle = () => new Promise((resolve) => setTimeout(resolve, 50))
+
+    const routes: Array<[string, string]> = [
+      [SUPERVISOR_RESTART_PATH, "POST"],
+      [SUPERVISOR_UPDATE_RESTART_PATH, "POST"],
+      [SUPERVISOR_STATUS_PATH, "GET"],
+      [SUPERVISOR_ACCESS_CODE_PATH, "POST"],
+      [SUPERVISOR_SESSIONS_PATH, "GET"],
+      [SUPERVISOR_SESSIONS_PATH, "POST"],
+    ]
+    // No session, a forged one, and the missing-Origin spelling a same-origin status read may use: all
+    // refused before any per-path logic, with nothing in the body to say what lives here.
+    const unauthenticated: Array<Record<string, string>> = [
+      publicHeaders,
+      { ...publicHeaders, cookie: forged },
+      { host: "colin.frizz.sh", "sec-fetch-site": "same-origin" },
+    ]
+    for (const headers of unauthenticated) {
+      for (const [path, method] of routes) {
+        const refused = await proxied(port, path, headers, method)
+        assert.equal(refused.status, 401, `${method} ${path} without a live session`)
+        assert.equal(refused.body, "", `${method} ${path} leaked a body to an unauthenticated caller`)
+      }
+    }
+    await settle()
+    assert.equal(restarts, 0, "an unauthenticated restart ran")
+    assert.equal(updates, 0, "an unauthenticated update ran")
+
+    // A live session gets today's behaviour, path by path.
+    const authed = { ...publicHeaders, cookie: session }
+    const status = await proxied(port, SUPERVISOR_STATUS_PATH, authed)
+    assert.equal(status.status, 200)
+    assert.equal(JSON.parse(status.body).protocol, 1)
+    assert.equal((await proxied(port, SUPERVISOR_RESTART_PATH, authed, "POST")).status, 202)
+    assert.equal((await proxied(port, SUPERVISOR_UPDATE_RESTART_PATH, authed, "POST")).status, 202)
+    await settle()
+    assert.equal(restarts, 1)
+    assert.equal(updates, 1)
+    // Minting and the device list stay loopback-only even WITH a session.
+    assert.equal((await proxied(port, SUPERVISOR_ACCESS_CODE_PATH, authed, "POST")).status, 403)
+    assert.equal((await proxied(port, SUPERVISOR_SESSIONS_PATH, authed)).status, 403)
+    assert.equal((await proxied(port, SUPERVISOR_SESSIONS_PATH, authed, "POST")).status, 403)
+
+    // Loopback is never asked for a session.
+    const localStatus = await proxied(port, SUPERVISOR_STATUS_PATH, loopback)
+    assert.equal(localStatus.status, 200)
+    assert.equal(localStatus.body, status.body.replace(/,"remoteSession":true/, ""), "loopback status changed shape")
+    assert.equal((await proxied(port, SUPERVISOR_RESTART_PATH, loopback, "POST")).status, 202)
+    assert.equal((await proxied(port, SUPERVISOR_ACCESS_CODE_PATH, loopback, "POST")).status, 200)
+    assert.equal((await proxied(port, SUPERVISOR_SESSIONS_PATH, loopback)).status, 200)
+    await settle()
+    assert.equal(restarts, 2)
+
+    // A foreign authority is still the authority check's 403, exactly as before.
+    assert.equal((await proxied(port, SUPERVISOR_RESTART_PATH, { host: "evil.example", origin: "https://evil.example" }, "POST")).status, 403)
+
+    // Sign-out is the exception: a dead cookie gets ITS 401, with a body and a cleared cookie.
+    const dead = await proxied(port, SUPERVISOR_SIGN_OUT_PATH, { ...publicHeaders, cookie: forged }, "POST")
+    assert.equal(dead.status, 401)
+    assert.deepEqual(JSON.parse(dead.body), { protocol: 1, result: "no-remote-session" })
+    assert.match(String(dead.headers?.["set-cookie"]), /^frizz_session=;.*Max-Age=0/)
+  } finally {
+    await proxy.close().catch(() => undefined)
+    await current.close().catch(() => undefined)
   }
 })

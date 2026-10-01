@@ -152,7 +152,7 @@ export function RecurringPromptControl({ thread }: { thread: ThreadView }) {
           onBlur={closePreview}
           // `items-baseline` once a reading rides beside the mark, so the mark can seat itself on the
           // reading's cap band (GOAL_MARK_BESIDE_TEXT below) — centring the two boxes is what reads ~1px off.
-          className={`icon-hover-outline flex rounded-md p-1 outline-none ${reading ? "items-baseline gap-[5px] pr-1.5" : "items-center"}`}
+          className={`group/goal icon-hover-outline flex rounded-md p-1 outline-none ${reading ? "items-baseline gap-[5px] pr-1.5" : "items-center"}`}
         >
           {/* A TARGET WITH AN ARROW IN IT (see GoalMark for the geometry and why it is drawn rather
               than imported), and the ONLY surface that says this exists (the rail deliberately carries
@@ -181,10 +181,17 @@ export function RecurringPromptControl({ thread }: { thread: ThreadView }) {
               from three different families (maintainer 2026-08-04: "the icon brightnesses and spacing
               look absolutely terrible"). The cluster is one status group, so it takes one tone — the
               armed/idle distinction is carried by the amber, which is the state worth seeing, and not
-              by holding the resting glyph a step below the readouts beside it. */}
+              by holding the resting glyph a step below the readouts beside it.
+
+              THE GLYPH BRIGHTENS ON THE BUTTON'S HOVER, NOT ITS OWN. It carried a bare `hover:`, so the
+              outline lit the moment the pointer crossed the button's padding while the glyph waited for
+              the pointer to reach its 12px of ink — two reactions to one target (maintainer 2026-09-26:
+              "As soon as I'm hovering over the box at all, the icon and the border should both
+              animate"). The group is NAMED because Tailwind's `group-hover` matches ANY `.group`
+              ancestor, not the nearest one. */}
           <GoalMark
             size={12}
-            className={`${live ? "text-attention-90" : "text-muted-60 hover:text-muted"} ${reading ? GOAL_MARK_BESIDE_TEXT : ""}`}
+            className={`${live ? "text-attention-90" : "text-muted-60 group-hover/goal:text-muted group-focus-visible/goal:text-muted"} ${reading ? GOAL_MARK_BESIDE_TEXT : ""}`}
           />
           {reading && (
             // A READOUT, in the cluster's one tone — the amber belongs to the mark, which already says

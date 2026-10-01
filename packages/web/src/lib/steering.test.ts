@@ -94,3 +94,26 @@ test("the overlay never writes lastActivityAt — that is the evidence it yields
   assert.equal(t.lastActivityAt, new Date(SENT - 5_000).toISOString())
   assert.equal(isOptimisticallySteering(t, SENT, SENT + 400), true)
 })
+
+// ── the server's own assertion ────────────────────────────────────────────────────────────────────
+// The local stamp lives 12s in the one tab that sent the message. `deliveryInFlight` is the server
+// saying the same thing — message stored, turn not started — so every tab, a reload, and a delivery
+// slower than the hint draw the row as working instead of as an at-rest row in the Running band.
+
+test("the server's in-flight flag takes the overlay with no local stamp at all", () => {
+  // The server only raises it once the queue has let the thread go, so needsYou is already false.
+  const rested = queued({ needsYou: false, pendingQuestion: false, deliveryInFlight: true })
+  const t = optimisticallySteered(rested, undefined, SENT + 60_000)
+  assert.equal(sessionIndicatorKind(t), "working")
+  assert.deepEqual(partitionActive(orderActive([t])).running.map((x) => x.id), ["t"])
+  // It knows no instant, so it leaves the ordering to the server's own reading.
+  assert.equal(t.lastUserAt, rested.lastUserAt)
+})
+
+test("…and outlives the local hint, which is the whole reason it exists", () => {
+  const rested = queued({ needsYou: false, pendingQuestion: false, deliveryInFlight: true })
+  assert.equal(optimisticallySteered(rested, SENT, SENT + STEER_OPTIMISM_MS + 1).runtime, "running")
+  // Control: the same row without the flag is back to its at-rest reading once the hint expires.
+  const bare = queued({ needsYou: false, pendingQuestion: false })
+  assert.equal(optimisticallySteered(bare, SENT, SENT + STEER_OPTIMISM_MS + 1), bare)
+})

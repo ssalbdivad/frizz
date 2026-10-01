@@ -25,8 +25,10 @@ import { isRooted, relativeTo, splitPath } from "./paths.ts"
 // list's most-recently-edited-first, because a tree that reorders itself on every save cannot be
 // read. Recency has to come back some other way if it is wanted; it was never what the tree is for.
 
+// A directory's `path` is its segments from the tree's root, joined with `/` — unique where `name` is
+// not: `one/lib` and `two/lib` both draw a row named `lib` at the same depth, and the rail keys on it.
 export type EditedFileTreeNode =
-  | { kind: "dir"; name: string; depth: number; children: EditedFileTreeNode[] }
+  | { kind: "dir"; name: string; path: string; depth: number; children: EditedFileTreeNode[] }
   | { kind: "file"; name: string; depth: number; file: EditedFile }
 
 type Dir = { dirs: Map<string, Dir>; files: Map<string, EditedFile> }
@@ -50,7 +52,7 @@ export function editedFileSegments(path: string, projectDir?: string): string[] 
 
 const byName = (a: string, b: string) => a.localeCompare(b, undefined, { sensitivity: "base", numeric: true })
 
-function emit(dir: Dir, depth: number): EditedFileTreeNode[] {
+function emit(dir: Dir, depth: number, parent = ""): EditedFileTreeNode[] {
   const out: EditedFileTreeNode[] = []
   for (const name of [...dir.dirs.keys()].sort(byName)) {
     let node = dir.dirs.get(name)!
@@ -62,7 +64,8 @@ function emit(dir: Dir, depth: number): EditedFileTreeNode[] {
       label = label === "/" ? `/${childName}` : `${label}/${childName}`
       node = child
     }
-    out.push({ kind: "dir", name: label, depth, children: emit(node, depth + 1) })
+    const path = parent === "" || parent === "/" ? `${parent}${label}` : `${parent}/${label}`
+    out.push({ kind: "dir", name: label, path, depth, children: emit(node, depth + 1, path) })
   }
   for (const name of [...dir.files.keys()].sort(byName)) {
     out.push({ kind: "file", name, depth, file: dir.files.get(name)! })

@@ -56,6 +56,10 @@ class FakeAppServerProcess extends EventEmitter implements CodexAppServerProcess
   // still running inside this app-server, `{type:"idle"}` once it has ended. Left undefined by
   // default so the existing tests keep exercising the pre-status behavior of an older server.
   resumeThreadStatus?: { type: string; activeFlags?: string[] }
+  // What `thread/backgroundTerminals/list` reports, per codex thread id: the execs still running in
+  // this process's PTYs. Left undefined by default so the method answers "not implemented", exactly
+  // like a codex that predates it.
+  backgroundTerminals?: Record<string, Array<Record<string, unknown>>>
 
   constructor(version = CODEX_APP_SERVER_SUPPORTED_VERSION) {
     super()
@@ -222,6 +226,11 @@ class FakeAppServerProcess extends EventEmitter implements CodexAppServerProcess
       }
       this.send({ id, result: {} })
       if (this.interruptBehavior !== "accept-no-end") this.completeActiveTurn(params.threadId, params.turnId)
+      return
+    }
+    if (message.method === "thread/backgroundTerminals/list" && this.backgroundTerminals) {
+      const params = message.params as { threadId: string }
+      this.send({ id, result: { data: this.backgroundTerminals[params.threadId] ?? [], nextCursor: null } })
       return
     }
     if (message.method === "skills/list") {
@@ -584,9 +593,9 @@ test("bridge is the sole codex transport (always enabled) and negotiates exact i
   // be retyped by hand, so a bump that moves the version and forgets the source tag or the commit
   // fails here instead of shipping a revision that names a build nobody audited.
   assert.deepEqual(CODEX_APP_SERVER_PROTOCOL_REVISION, {
-    packageVersion: "0.157.0",
-    sourceTag: "rust-v0.157.0",
-    sourceCommit: "00c972ed5d6ff6499317fd41b7f23605b8e6850d",
+    packageVersion: "0.158.0",
+    sourceTag: "rust-v0.158.0",
+    sourceCommit: "064c6b8c737f5b41d171fdda80bd9ef10ad06eb3",
   })
   assert.notEqual(h.calls[0]!.env, process.env, "the child receives a point-in-time environment snapshot")
   // Looked up the way the OS does, because the snapshot is a PLAIN object: `process.env` is a
@@ -2353,6 +2362,7 @@ function scriptedHostHarness(script: () => { generation: string; reattached: boo
   const processes: FakeAppServerProcess[] = []
   const bridges: CodexAppServerBridge[] = []
   let nextResumeThreadStatus: { type: string; activeFlags?: string[] } | undefined
+  let nextBackgroundTerminals: Record<string, Array<Record<string, unknown>>> | undefined
   const newBridge = () => {
     const bridge = new CodexAppServerBridge({
       projectId: "project-1",
@@ -2365,6 +2375,7 @@ function scriptedHostHarness(script: () => { generation: string; reattached: boo
         // Applied at CREATION: the reconnect's process does not exist until the bridge connects, which
         // is the same call whose reconciliation the status has to steer.
         process_.resumeThreadStatus = nextResumeThreadStatus
+        process_.backgroundTerminals = nextBackgroundTerminals
         processes.push(process_)
         const { generation, reattached, droppedWhileDetached, serviceExitCode } = script()
         process_.serviceExitCode = serviceExitCode ?? 0
@@ -2389,6 +2400,10 @@ function scriptedHostHarness(script: () => { generation: string; reattached: boo
     /** What the NEXT app-server process reports for `thread.status` on `thread/resume`. */
     resumeThreadStatus(status: { type: string; activeFlags?: string[] } | undefined) {
       nextResumeThreadStatus = status
+    },
+    /** What the NEXT app-server process reports from `thread/backgroundTerminals/list`. */
+    backgroundTerminals(terminals: Record<string, Array<Record<string, unknown>>> | undefined) {
+      nextBackgroundTerminals = terminals
     },
     close() {
       for (const bridge of bridges.reverse()) bridge.close()
@@ -2533,6 +2548,130 @@ test("a reattach that lost events is not a rejoin: the thread resumes instead of
     `the loss is reported, not swallowed — saw ${JSON.stringify(h.diagnostics)}`,
   )
   h.close()
+})
+
+// ---- a background exec survives a rejoin, and so must its row -----------------------------------
+// A yielded exec keeps running in the app-server's PTY after the turn that started it, and the
+// app-server outlives both a Frizz restart and a dropped socket. Its `item/started` went to the client
+// that is gone and is never sent again, so the row (and its ×) used to vanish on every rejoin until the
+// exec ended. These pin the re-seed from `thread/backgroundTerminals/list`, and the cases that must NOT
+// seed.
+
+/** Start an idle-by-now thread that launched one background exec, and return what a rejoin needs. */
+async function threadWithBackgroundExec(h: ReturnType<typeof scriptedHostHarness>, bridge: CodexAppServerBridge, slug: string) {
+  const binding = await bridge.startDisposableSession({ threadSlug: slug, sessionId: `${slug}-session`, cwd: h.dir, ephemeral: false })
+  const { turnId } = await bridge.startTurn({ threadSlug: binding.threadSlug, sessionId: binding.sessionId, text: "Run it in the background" })
+  const process_ = h.processes.at(-1)!
+  process_.notify("item/started", {
+    item: { type: "commandExecution", id: "exec-item-1", command: "sleep 811", processId: "4242", status: "inProgress", exitCode: null },
+    threadId: binding.codexThreadId,
+    turnId,
+    startedAtMs: Date.parse("2026-07-13T11:00:00.000Z"),
+  })
+  await waitFor(() => bridge.backgroundExecs(binding.threadSlug, binding.sessionId).length === 1, "exec folded off the stream")
+  // The yielded exec outlives its turn: the thread goes IDLE while the shell keeps running.
+  process_.completeActiveTurn()
+  await waitFor(() => bridge.binding(binding.threadSlug, binding.sessionId)?.currentTurnId === null, "turn completed")
+  const terminal = { itemId: "exec-item-1", processId: "4242", command: "sleep 811", cwd: h.dir, osPid: null }
+  return { binding, terminal }
+}
+
+test("a Frizz restart that rejoins the same app-server re-learns a background exec that is still running", async () => {
+  let plan = { generation: "gen-A", reattached: false, droppedWhileDetached: 0 }
+  const h = scriptedHostHarness(() => plan)
+  try {
+    const bridge = h.newBridge()
+    const { binding, terminal } = await threadWithBackgroundExec(h, bridge, "bg-restart")
+    const quiet = await bridge.startDisposableSession({ threadSlug: "bg-quiet", sessionId: "bg-quiet-session", cwd: h.dir, ephemeral: false })
+    bridge.close() // frizz restarts; the listener and its PTY keep going
+
+    // Every native reattach is lossy by construction (droppedWhileDetached: 1) — and it is still the
+    // same process, so its PTYs are still the ones the list names.
+    plan = { generation: "gen-A", reattached: true, droppedWhileDetached: 1 }
+    h.backgroundTerminals({ [binding.codexThreadId]: [terminal] })
+    const restarted = h.newBridge()
+    await restarted.warmUp()
+    assert.deepEqual(restarted.backgroundExecs(binding.threadSlug, binding.sessionId), [
+      { processId: "4242", command: "sleep 811", startedAtMs: Date.parse("2026-07-13T12:00:00.000Z") },
+    ], "the running exec is back on the board, clocked from the rejoin that found it")
+    // Over the native listener a detached idle thread is subscribed to nothing on the new connection, so
+    // its exec's `item/completed` would never arrive and the row would outlive the command. The rejoin
+    // must rebind exactly the threads that own a live exec — and only those.
+    const resumed = h.processes[1]!.clientRequests
+      .filter((message) => message.method === "thread/resume")
+      .map((message) => (message.params as { threadId: string }).threadId)
+    assert.deepEqual(resumed, [binding.codexThreadId], "the exec's idle thread is re-subscribed; the idle thread without one is not")
+    assert.equal(restarted.binding(binding.threadSlug, binding.sessionId)?.state, "active")
+    assert.equal(restarted.binding(quiet.threadSlug, quiet.sessionId)?.state, "detached")
+  } finally { h.close() }
+})
+
+test("a dropped socket that rejoins the same daemon re-learns a background exec that is still running", async () => {
+  let plan = { generation: "gen-A", reattached: false, droppedWhileDetached: 0 }
+  const h = scriptedHostHarness(() => plan)
+  try {
+    const bridge = h.newBridge()
+    const { binding, terminal } = await threadWithBackgroundExec(h, bridge, "bg-socket")
+    h.processes[0]!.disconnect()
+    await waitFor(() => bridge.backgroundExecs(binding.threadSlug, binding.sessionId).length === 0, "disconnect forgot the level")
+
+    plan = { generation: "gen-A", reattached: true, droppedWhileDetached: 0 }
+    h.backgroundTerminals({ [binding.codexThreadId]: [terminal] })
+    await bridge.warmUp()
+    assert.equal(h.processes.length, 2, "the bridge reconnected")
+    assert.deepEqual(bridge.backgroundExecs(binding.threadSlug, binding.sessionId).map((exec) => exec.processId), ["4242"])
+  } finally { h.close() }
+})
+
+test("a rejoin whose app-server lists nothing leaves the level empty", async () => {
+  let plan = { generation: "gen-A", reattached: false, droppedWhileDetached: 0 }
+  const h = scriptedHostHarness(() => plan)
+  try {
+    const bridge = h.newBridge()
+    const { binding } = await threadWithBackgroundExec(h, bridge, "bg-ended")
+    bridge.close()
+
+    plan = { generation: "gen-A", reattached: true, droppedWhileDetached: 1 }
+    h.backgroundTerminals({ [binding.codexThreadId]: [] }) // the exec ended while nobody was attached
+    const restarted = h.newBridge()
+    await restarted.warmUp()
+    assert.ok(h.processes[1]!.clientRequests.some((message) => message.method === "thread/backgroundTerminals/list"), "the list was asked")
+    assert.deepEqual(restarted.backgroundExecs(binding.threadSlug, binding.sessionId), [])
+  } finally { h.close() }
+})
+
+test("a rejoin against a codex without the list method still connects, with an empty level", async () => {
+  let plan = { generation: "gen-A", reattached: false, droppedWhileDetached: 0 }
+  const h = scriptedHostHarness(() => plan)
+  try {
+    const bridge = h.newBridge()
+    const { binding } = await threadWithBackgroundExec(h, bridge, "bg-old-codex")
+    bridge.close()
+
+    plan = { generation: "gen-A", reattached: true, droppedWhileDetached: 0 }
+    h.backgroundTerminals(undefined) // the fake answers -32601, as a pre-experimental codex would
+    const restarted = h.newBridge()
+    await restarted.resumeOwnedSession(binding.threadSlug, binding.sessionId)
+    assert.equal(restarted.binding(binding.threadSlug, binding.sessionId)?.state, "active", "the connect path survived the failed list")
+    assert.deepEqual(restarted.backgroundExecs(binding.threadSlug, binding.sessionId), [])
+  } finally { h.close() }
+})
+
+test("a NEW app-server is never asked for background execs: its processIds name different PTYs", async () => {
+  let plan = { generation: "gen-A", reattached: false, droppedWhileDetached: 0 }
+  const h = scriptedHostHarness(() => plan)
+  try {
+    const bridge = h.newBridge()
+    const { binding, terminal } = await threadWithBackgroundExec(h, bridge, "bg-replaced")
+    bridge.close()
+
+    plan = { generation: "gen-B", reattached: false, droppedWhileDetached: 0 }
+    h.backgroundTerminals({ [binding.codexThreadId]: [terminal] })
+    const restarted = h.newBridge()
+    await restarted.warmUp()
+    assert.equal(h.processes[1]!.clientRequests.some((message) => message.method === "thread/backgroundTerminals/list"), false)
+    assert.deepEqual(restarted.backgroundExecs(binding.threadSlug, binding.sessionId), [])
+  } finally { h.close() }
 })
 
 // ---- non-interactive by construction ------------------------------------------------------------

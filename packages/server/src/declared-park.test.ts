@@ -436,8 +436,12 @@ test("a correction prints the live ids inline, ready to copy into a fence", asyn
     await h.s.tick()
     const msg = h.queued()[0].message
     assert.match(msg, /Background shells still running:/)
-    // The COPYABLE form — the exact line the worker should have written, by the id the runtime showed it.
-    assert.match(msg, /`shell: bzvtnt3ig`/, "the id, in the shape a fence line takes")
+    // The COPYABLE form — the exact line the worker should have written, by the id the runtime showed it,
+    // in the plural YAML list the park check accepts. The singular `shell:` it printed until 2026-09-25 is
+    // retired, so a worker copying it was refused for copying it.
+    assert.match(msg, /- `bzvtnt3ig`  — /)
+    assert.match(msg, /In a fence: `shells: \[bzvtnt3ig\]`/, "the id, in the shape a fence line takes")
+    assert.doesNotMatch(msg, /`shell: /)
   } finally { h.close() }
 })
 
@@ -449,7 +453,8 @@ test("a nameless fence with nothing running is told it is not awaiting at all", 
     await h.s.tick()
     const msg = h.queued()[0].message
     assert.match(msg, /You have NOTHING running right now/)
-    assert.match(msg, /finish in\s*```done, or ask a ```question/s)
+    // The question fence is retired (2026-09-11); a registered question is the other way out.
+    assert.match(msg, /finish in\s*```done, or register a question with `mcp__frizz__ask`/s)
   } finally { h.close() }
 })
 
@@ -761,8 +766,9 @@ test("the correction lists a running sub-agent by its runtime agentId, not its t
   try {
     await h.s.tick()
     const msg = h.queued()[0].message
-    assert.match(msg, /- `agent: a01b2d20b32feab11`  — the reviewer/)
-    assert.doesNotMatch(msg, /agent: toolu_A/)
+    assert.match(msg, /- `a01b2d20b32feab11`  — the reviewer/)
+    assert.match(msg, /In a fence: `agents: \[a01b2d20b32feab11\]`/)
+    assert.doesNotMatch(msg, /toolu_A/)
   } finally { h.close() }
 })
 

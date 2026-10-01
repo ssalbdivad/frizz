@@ -325,16 +325,19 @@ test("no prose, no divider — and non-prose fences contribute nothing", () => {
   assert.doesNotMatch(text(done), /All landed/)
 })
 
-test("the snooze renders in a recessed footer band, flush with the card's bottom", () => {
+// The band is the family's shared action footer (TranscriptCard's CardActions, 2026-09-30), so the done
+// card's Mark as done and every other card's verb sit in this same shape.
+test("the snooze renders in the shared footer band, flush with the card's bottom", () => {
   const t = thread([agent("running")], [])
   const withBand = render(t)
-  assert.match(withBand, /-mx-4 mt-3 flex[^"]*border-t border-border bg-fg/, "the band runs edge to edge under a rule")
-  assert.match(withBand, /pb-0/, "the shell yields its bottom padding to the band")
-  // No verb => no band, and the shell keeps its own padding (an archived thread has no lifecycle verbs).
+  assert.match(withBand, /data-awaiting-snooze="true" data-card-actions="true"/, "the snooze rides the shared action footer")
+  assert.match(withBand, /-mx-4 -mb-4 mt-3 flex[^"]*border-t border-border bg-fg/, "the band runs edge to edge under a rule, through the shell's bottom padding")
+  assert.doesNotMatch(withBand, /pb-0/, "the band pulls itself flush; the shell keeps its padding")
+  // No verb => no band (an archived thread has no lifecycle verbs).
   const past = renderToStaticMarkup(
     createElement(AwaitingBackgroundCard, { thread: { ...t, state: "archived" } as typeof t }),
   )
-  assert.doesNotMatch(past, /pb-0/)
+  assert.doesNotMatch(past, /data-card-actions/)
 })
 
 // THE TABLE AS A PIECE (2026-08-28). The awaiting FENCE card draws it whenever the thread is NOT at rest

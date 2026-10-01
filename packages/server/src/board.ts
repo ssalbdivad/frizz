@@ -335,6 +335,17 @@ function hasUnretiredOwnAgents(tele: SessionTelemetry | undefined): boolean {
 //
 // Only RUNNING rows are marked: a stale/rested row's × means "clear this from the list", which needs no
 // provider control and works everywhere. The flag answers "can this be KILLED", not "can this be clicked".
+// A DEAD BROKER DAEMON TOOK ITS SUB-AGENTS WITH IT — they are in-process children of that process — so a
+// child the fold still reads `running` is shown `stale` in the VIEW. The fold only ages one out after
+// SUBAGENT_STALE_MS of silence, and until then the rail spun a child (and offered to stop it) beside a
+// thread the same view carded as crashed. View-only on purpose: `crashed`, `headlessLostWork` and the
+// queue read the raw telemetry above, which is where that meaning lives. (Shells need none of this:
+// bgShellViews already empties on a dead owner.)
+function orphanedAgents(agents: ThreadView["subAgents"], ownerGone: boolean): ThreadView["subAgents"] {
+  if (!ownerGone) return agents
+  return agents.map((agent) => (agent.state === "running" ? { ...agent, state: "stale" } : agent))
+}
+
 function stampStoppable(agents: ThreadView["subAgents"], row: SessionRow): ThreadView["subAgents"] {
   if (!isBrokerClaudeRow(row)) return agents
   // A WORKFLOW's agents belong to its run, which schedules them itself: stopping the run is the control,
@@ -1101,6 +1112,38 @@ function hasFreshDelivery(row: SessionRow, processGone: boolean): boolean {
   if (processGone) return false
   return parseDeliveryLedger(row.delivery_ledger).some((d) =>
     (d.state === "pending" || d.state === "enqueued" || d.state === "delivered") && spinoffIdOfDelivery(d.id) === undefined)
+}
+
+/** How long a message on its way to the worker keeps its row SPINNING (see deriveDeliveryInFlight). A
+ *  broker send lands in a second or two and an answer's wake in a few; a codex rollout send can take
+ *  minutes to hours to show up in the transcript (board's own measurement: 8 of 75 over 60s), and a
+ *  spinner that long is a claim of motion nobody can see. Past this the row keeps its excusal and wears
+ *  its true at-rest mark. */
+export const DELIVERY_IN_FLIGHT_SPIN_MS = 60_000
+
+/** THE HUMAN'S MESSAGE IS ON ITS WAY AND THE TURN HAS NOT STARTED YET — a follow-up in the delivery
+ *  ledger the transcript has not reflected, or a registered answer whose wake has not landed. The queue
+ *  already excuses both (deriveNeedsYou); this is the same fact exported, so every tab draws the row as
+ *  working rather than as an at-rest thread sitting in the Running band. The browser that SENT the
+ *  message already does this for 12s on its own (web lib/steering.ts); this is what reaches every other
+ *  tab, a reload, and a delivery slower than that hint. Only at rest and only once the queue has let the
+ *  thread go: a crash, a live ask or anything else deriveNeedsYou still queues keeps its own mark. */
+export function deriveDeliveryInFlight(
+  row: SessionRow,
+  runtime: RuntimeState,
+  needsYou: boolean,
+  deliveryProcessGone: boolean,
+  answerInFlight: boolean,
+  nowMs = Date.now(),
+): boolean {
+  if (needsYou || (runtime !== "turn-idle" && runtime !== "exited")) return false
+  if (answerInFlight) return true
+  if (deliveryProcessGone) return false
+  // A spinoff request is not the human's message to THIS thread (see hasFreshDelivery), so it spins nothing.
+  return parseDeliveryLedger(row.delivery_ledger).some((d) =>
+    (d.state === "pending" || d.state === "enqueued" || d.state === "delivered") && spinoffIdOfDelivery(d.id) === undefined &&
+    nowMs - Date.parse(d.at) < DELIVERY_IN_FLIGHT_SPIN_MS
+  )
 }
 
 export function deriveNeedsYou(
@@ -1877,6 +1920,7 @@ function sessionThreadView(
   const archived = state === "archived"
   const limitPause = resolveLimitPause(row, tele, nowMs)
   const quietSince = archived ? undefined : quietTurnSince(runtime, tele, nowMs)
+  const answerInFlight = answerAwaitingDelivery(questionRows, rawTele?.lastUserAt, nowMs)
   // A silent turn queues past every rest gate in deriveNeedsYou (it is not at rest), except the human's
   // own wall-clock snooze, which is how a deliberate long wait is parked.
   // WAITING ON ANOTHER THREAD'S ANSWER (`message_thread` with `await_reply`) is a wait on automation, like a
@@ -1885,7 +1929,8 @@ function sessionThreadView(
   // permission prompt still queues it. The wait is a timer (thread-mentions.ts), so it lapses on its own.
   const waitingOnThread = !archived && runtime === "turn-idle" && currentQuestionCount === 0 && !interactionPresence.needsUser &&
     armedTimers.some((t) => isReplyWait(t.prompt) && Date.parse(t.fireAt) > nowMs)
-  const needsYou = archived || waitingOnThread ? false : deriveNeedsYou(row, tele, runtime, interactionPresence.needsUser, nowMs, limitPause, true, deliveryProcessGone, github, registeredPrWatches, armedTimerIds, armedWatches, currentQuestionCount, answerAwaitingDelivery(questionRows, rawTele?.lastUserAt, nowMs)) || (quietSince !== undefined && !futureSnooze(row, nowMs))
+  const needsYou = archived || waitingOnThread ? false : deriveNeedsYou(row, tele, runtime, interactionPresence.needsUser, nowMs, limitPause, true, deliveryProcessGone, github, registeredPrWatches, armedTimerIds, armedWatches, currentQuestionCount, answerInFlight) || (quietSince !== undefined && !futureSnooze(row, nowMs))
+  const deliveryInFlight = !archived && deriveDeliveryInFlight(row, runtime, needsYou, deliveryProcessGone, answerInFlight, nowMs)
   const awaitingBackground = archived ? false : deriveAwaitingBackground(row, tele, runtime, interactionPresence.needsUser, nowMs, limitPause, deliveryProcessGone, github, registeredPrWatches, armedTimerIds, armedWatches, currentQuestionCount)
   // A worker that exited with work still outstanding — a turn in flight, OR a sub-agent still reading
   // "running" (its parent is gone, so it cannot actually be live) — is a crash/stall, not a clean
@@ -1935,7 +1980,7 @@ function sessionThreadView(
     spawnedAt: row.spawned_at,
     lastActivityAt: tele?.lastActivityAt,
     lastAssistantAt: tele?.lastAssistantAt,
-    subAgents: stampStoppable(tele?.subAgents ?? [], row),
+    subAgents: stampStoppable(orphanedAgents(tele?.subAgents ?? [], deliveryProcessGone), row),
     bgShells: stampShellBudgets(stampStoppableShells(tele?.bgShells ?? [], row), registries.shellBudgets.get(row.slug), registries.watches.get(row.slug)),
     endedShells: endedShellViews(tele?.retiredShells),
     // Where the agent is working when that is off the project root (tailer workingDirTelemetry) — the
@@ -1961,6 +2006,7 @@ function sessionThreadView(
     pendingQuestion: tele?.pendingQuestion ?? false,
     questions,
     answersInFlight: inFlightAnswers,
+    deliveryInFlight: deliveryInFlight || undefined,
     lastUserAt: tele?.lastUserAt,
     // Runtime provider-auth rejection (claude-auth plan): only the typed category travels — the raw
     // error/provider text never leaves the server. Drives the trusted sign-in recovery card in ChatView.

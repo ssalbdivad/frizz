@@ -281,6 +281,53 @@ function QuotaChip({
   )
 }
 
+/**
+ * THE PHONE'S QUOTA READING — every window of every provider that has one, as a labelled meter.
+ *
+ * The phone has no status row to hang the chips on, and no hover to open their popover, so its Settings
+ * page leads with the whole breakdown instead (phone design 2026-09-30, § 6): one row per backend
+ * window, a bar and a number. The number is REMAINING quota, like the chip's — a phone that read 38%
+ * where the desktop chip reads 62% for the same window would be two answers to one question — and the
+ * bar fills with what is left. Same query keys and the same no-reading rule as the chips, so it renders
+ * nothing for a provider the chips would hide, and one fetch serves both.
+ *
+ * The tone spends colour only where the chip does, minus the amber: on a phone screen the accent is the
+ * ask colour and nothing else, so a low window reads in the foreground and only a nearly empty one in
+ * the danger colour.
+ */
+export function QuotaMeters() {
+  const quota = useQuery({
+    queryKey: ["quota"],
+    queryFn: ({ signal }) => rpc.quota(undefined, { signal: deadline(POLL_TIMEOUT_MS, signal) }),
+    refetchInterval: 30_000,
+    staleTime: 10_000,
+  })
+  const auth = useQuery({
+    queryKey: ["authStatus"],
+    queryFn: ({ signal }) => rpc.authStatus(undefined, { signal: deadline(POLL_TIMEOUT_MS, signal) }),
+    staleTime: 30_000,
+  })
+  const rows = (["claude", "codex"] as const).flatMap((backend) => {
+    const q = quota.data?.[backend]
+    if (!hasReading(q, auth.data?.[backend], quota.isLoading)) return []
+    return q!.windows.map((w) => ({ key: `${backend}-${w.key}`, label: `${PROVIDER_LABEL[backend]} · ${w.label}`, left: clampPct(100 - w.usedPercent) }))
+  })
+  if (rows.length === 0) return null
+  return (
+    <ul data-quota-meters className="m-0 flex list-none flex-col gap-[9px] p-0">
+      {rows.map((row) => (
+        <li key={row.key} className="flex items-center gap-2.5 text-[13.5px] leading-[19px]">
+          <span className="w-[108px] shrink-0 truncate text-muted">{row.label}</span>
+          <span className="h-[5px] min-w-0 flex-1 overflow-hidden rounded-full bg-border" aria-hidden>
+            <span className={`block h-full rounded-full ${row.left <= 8 ? "bg-danger" : "bg-fg/75"}`} style={{ width: `${row.left}%` }} />
+          </span>
+          <span className={`w-[64px] shrink-0 text-right tabular-nums ${row.left <= 8 ? "text-danger" : "text-fg"}`}>{row.left}% left</span>
+        </li>
+      ))}
+    </ul>
+  )
+}
+
 function clampPct(n: number): number {
   return Math.max(0, Math.min(100, Math.round(n)))
 }

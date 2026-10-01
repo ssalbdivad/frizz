@@ -1,16 +1,18 @@
 import { FileDiff, Folder } from "lucide-react"
+import { useEffect, useMemo, useRef } from "react"
 import { useQueryClient } from "@tanstack/react-query"
 import { useSnapshot } from "valtio"
-import type { EditedFile, ThreadView } from "@frizz/shared"
+import { isDirectSubAgent, type EditedFile, type ThreadView } from "@frizz/shared"
 import { useBoard, useProjectDir, useTranscript } from "../hooks.ts"
 import { editedFileTree, flattenEditedFileTree } from "../lib/editedFileTree.ts"
+import { newestFileChangeKey } from "../lib/editedFilesRefresh.ts"
 import { openLocalPath } from "../lib/local-file-links.ts"
 import { prewarmLocalFile } from "../lib/localFileQuery.ts"
 import { useNowMs } from "../lib/liveClock.ts"
 import { prefs } from "../lib/prefs.ts"
 import { PRIMER } from "../lib/primer.ts"
 import { threadProcesses } from "../lib/threadProcesses.ts"
-import { AgentRow, BgShellRow, GithubWatchRow, ON_CAP, TermWaitRow, TimerRow, WaitGrid, WaitRow, liveAgents, type WaitGroup } from "./AwaitingBackgroundCard.tsx"
+import { AgentRow, BgShellRow, GithubWatchRow, ON_CAP, TermWaitRow, TimerRow, WaitGrid, WaitRow, type WaitGroup } from "./AwaitingBackgroundCard.tsx"
 import { FolderHintToken, folderHintTitle, processFolderHint } from "./ThreadTerminals.tsx"
 
 // THE FULLSCREEN PAGE'S OPERATIONAL RAIL — what is going on in this thread, listed beside the transcript
@@ -78,7 +80,7 @@ function EditedFileTree({ files }: { files: readonly EditedFile[] }) {
     <div data-edited-file-tree className="col-span-4 flex flex-col gap-y-px">
       {rows.map((node) =>
         node.kind === "dir"
-          ? <DirRow key={`d:${node.depth}:${node.name}`} name={node.name} depth={node.depth} />
+          ? <DirRow key={`d:${node.path}`} name={node.name} depth={node.depth} />
           : <FileRow key={node.file.path} file={node.file} name={node.name} depth={node.depth} />,
       )}
     </div>
@@ -126,6 +128,34 @@ function FileRow({ file, name, depth }: { file: EditedFile; name: string; depth:
   )
 }
 
+// How long the rail waits after a file-changing edge before it re-reads: a worker's edits come in bursts,
+// and one read after the burst is the whole point.
+const FILES_REFRESH_DEBOUNCE_MS = 1500
+
+// Re-reads the transcript page — the only carrier of `editedFiles` — on the two edges
+// lib/editedFilesRefresh.ts describes: a newer file-changing tool call, and the turn ending. Neither
+// fires on mount, nor when the first page lands: that read is already fresh.
+function useEditedFilesRefresh(slug: string, loaded: boolean, changeKey: string | undefined, turnLive: boolean) {
+  const client = useQueryClient()
+  const seen = useRef({ slug, loaded, changeKey, turnLive })
+  // The pending read lives in a ref, not in the edge effect's cleanup: that cleanup runs on EVERY dep
+  // change, so a turn starting inside the debounce would cancel the read a write had just scheduled.
+  const timer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined)
+  useEffect(() => () => clearTimeout(timer.current), [slug])
+  useEffect(() => {
+    const prev = seen.current
+    seen.current = { slug, loaded, changeKey, turnLive }
+    if (prev.slug !== slug || !prev.loaded) return
+    const wrote = changeKey !== undefined && changeKey !== prev.changeKey
+    const rested = prev.turnLive && !turnLive
+    if (!wrote && !rested) return
+    clearTimeout(timer.current)
+    timer.current = setTimeout(() => {
+      void client.refetchQueries({ queryKey: ["transcript", slug], exact: true, type: "active" })
+    }, FILES_REFRESH_DEBOUNCE_MS)
+  }, [client, slug, loaded, changeKey, turnLive])
+}
+
 export function FocusRail({ thread }: { thread: ThreadView }) {
   const now = useNowMs()
   const board = useBoard()
@@ -133,14 +163,27 @@ export function FocusRail({ thread }: { thread: ThreadView }) {
   // Shared with ChatView's own subscription (same key), so this adds no request and no poll.
   const transcript = useTranscript(thread.id, { poll: false })
   const files = transcript.data?.editedFiles ?? []
-  const agents = liveAgents(thread)
+  const changeKey = useMemo(() => newestFileChangeKey(transcript.data?.messages ?? []), [transcript.data?.messages])
+  useEditedFilesRefresh(thread.id, transcript.data !== undefined, changeKey, thread.runtime === "running" || thread.runtime === "spawning")
+  // The card's live children PLUS the rested ones: a direct child whose own run ended while sub-agents
+  // it dispatched are still working. The server emits a rested row only while that fan-out runs (tailer
+  // anchorRoots), so the branch is genuinely in motion — yet the card's `liveAgents` drops the rested
+  // root by state and the running grandchildren by depth, and the rail's Sub-agents group went empty
+  // with work in flight. The card keeps its own set: it counts the results the thread still AWAITS, and
+  // a rested child has already delivered its result.
+  const agents = (thread.subAgents ?? []).filter((a) => isDirectSubAgent(a) && (a.state === "running" || a.state === "rested"))
   // EVERY TERMINAL ON THE THREAD that is running or waiting on you — the agent's and yours, in the one order
   // every surface lists them (lib/threadProcesses.ts): a prompt first, then the live ones oldest first.
   const terminals = threadProcesses(thread, [], { now }).filter((p) => p.state === "prompt" || p.state === "running")
-  const github = (thread.watches ?? []).filter((w) => w.kind === "github" && w.state === "armed")
+  // AN ARCHIVED THREAD WATCHES NOTHING, though its registrations stay armed for the day it is reopened:
+  // the scheduler neither fires its timers nor polls its PRs and issues (scheduler.ts evalTimers, and the
+  // per-watcher liveness skip). Rowed here, a past-due timer read "firing…" forever and a PR row froze on
+  // its last reading, so the rail leaves them out until the thread is reopened.
+  const watching = thread.state !== "archived"
+  const github = (thread.watches ?? []).filter((w) => watching && w.kind === "github" && w.state === "armed")
   const prs = github.filter((w) => w.subject !== "issue")
   const issues = github.filter((w) => w.subject === "issue")
-  const timers = (thread.watches ?? []).filter((w) => w.kind === "timer" && w.state === "armed")
+  const timers = (thread.watches ?? []).filter((w) => watching && w.kind === "timer" && w.state === "armed")
   const { railFilesCollapsed } = useSnapshot(prefs)
   // The card's order — most-alive first — then the files, which are not a wait at all. The files are
   // also the one group that FOLDS (maintainer 2026-09-03): a worker that touched 22 files fills the

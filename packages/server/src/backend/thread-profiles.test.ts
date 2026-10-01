@@ -49,6 +49,8 @@ test("observed model normalization accepts only the current provider's identitie
   // A model whose version carries a MINOR part — Claude Code 2.1.280 bills `opus` as claude-opus-5-5 —
   // still collapses to the family the picker offers. The catalogue keys on the family, never a version.
   assert.equal(normalizeObservedThreadModel("claude", "claude-opus-5-5"), "opus")
+  // …and 2.1.284 moved `sonnet` the same way, to claude-sonnet-5-5.
+  assert.equal(normalizeObservedThreadModel("claude", "claude-sonnet-5-5"), "sonnet")
   assert.equal(normalizeObservedThreadModel("claude", "gpt-5.5"), undefined)
   assert.equal(normalizeObservedThreadModel("codex", "sonnet"), undefined)
 })
@@ -89,6 +91,7 @@ test("a limit message names a model in the PROVIDER's spelling, matched by token
   assert.equal(claudeModelFromLimitName("Fable 5"), "fable")
   assert.equal(claudeModelFromLimitName("Opus 4.6"), "opus")
   assert.equal(claudeModelFromLimitName("Opus 5.5"), "opus")
+  assert.equal(claudeModelFromLimitName("Sonnet 5.5"), "sonnet")
   assert.equal(claudeModelFromLimitName("Haiku 4.5"), "haiku")
   assert.equal(claudeModelFromLimitName("sonnet"), "sonnet")
   // …and it fails closed rather than reaching for the nearest rung: a name the catalogue cannot place

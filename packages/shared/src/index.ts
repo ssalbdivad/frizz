@@ -1644,14 +1644,14 @@ export const SIGNOFF_NUDGE_MARKER = "**This message is from frizz, not from the 
 export interface SignoffLiveOps {
   /** Running background shells, named by the handle the RUNTIME gave the worker — the string it was
    *  actually shown ("Command running in background with ID: bzvtnt3ig"), not the launch tool_use id.
-   *  These are what a `shell:` line names. */
+   *  These are what a `shells:` list names. */
   shells: { id?: string; label: string }[]
   /** Running sub-agents, named the same way. A fence may park on one, though it does not need to: a
    *  finished sub-agent re-invokes its parent by itself. */
   subAgents: { id?: string; label: string }[]
-  /** Armed one-off timers, by row id (`tmr_…`) — what a `timer:` line names. */
+  /** Armed one-off timers, by row id (`tmr_…`) — what a `timers:` list names. */
   timers?: { id?: string; label: string }[]
-  /** Registered pull requests, by ref (`owner/repo#N`) — what a `pr:` line names. */
+  /** Registered pull requests, by ref (`owner/repo#N`) — what a `prs:` list names. */
   prs?: { id?: string; label: string }[]
   /** Registered GitHub issues, by ref (`owner/repo#N`) — what an `issues:` entry names. */
   issues?: { id?: string; label: string }[]
@@ -1662,7 +1662,12 @@ export interface SignoffLiveOps {
 // turn) cannot write a correct fence and will be bumped for naming something wrong. Giving it the exact
 // lines here closes that loop at the one moment it is provably needed: it just rested without a fence.
 // `mcp__frizz__activity` returns the same list on demand, from the same source.
-/** The four registries as `kind: id` lines a fence can copy verbatim, or `[]` when nothing is running.
+/** The registries as one `kinds: [id, …]` line per kind a fence can copy verbatim, each above the ids it
+ *  holds and what they are, or `[]` when nothing is running.
+ *
+ *  ONE LINE PER KIND, NOT PER ITEM, because the frontmatter is YAML (2026-08-24) and YAML has no repeated
+ *  keys. This printed `shell: <id>` per item until 2026-09-25 — the retired grammar, which the park check
+ *  refuses by name — so a worker that copied what frizz handed it was bumped for copying it.
  *
  *  Shared with SOURCE 12's corrections, and that sharing is the point rather than tidiness: a worker
  *  dispatched before `mcp__frizz__activity` existed CANNOT call it — its MCP server is frozen at dispatch
@@ -1670,24 +1675,25 @@ export interface SignoffLiveOps {
  *  the population most likely to be writing a bad fence. Printing the ids needs no tool at all. */
 export function liveOpsLines(ops?: SignoffLiveOps): string[] {
   const lines: string[] = []
-  const section = (heading: string, kind: string, items: { id?: string; label: string }[]) => {
+  const section = (heading: string, key: string, items: { id?: string; label: string }[]) => {
     if (!items.length) return
     lines.push("", heading)
-    for (const i of items) lines.push(`- \`${kind}: ${i.id ?? "?"}\`  — ${i.label}`)
+    for (const i of items) lines.push(`- \`${i.id ?? "?"}\`  — ${i.label}`)
+    lines.push(`In a fence: \`${key}: [${items.map((i) => i.id ?? "?").join(", ")}]\``)
   }
-  section("Background shells still running:", "shell", ops?.shells ?? [])
-  section("Sub-agents still running (they re-invoke you on their own, so parking on one is optional):", "agent", ops?.subAgents ?? [])
-  section("Timers you have armed:", "timer", ops?.timers ?? [])
-  section("Pull requests you registered:", "pr", ops?.prs ?? [])
-  section("Issues you registered:", "issue", ops?.issues ?? [])
+  section("Background shells still running:", "shells", ops?.shells ?? [])
+  section("Sub-agents still running (they re-invoke you on their own, so parking on one is optional):", "agents", ops?.subAgents ?? [])
+  section("Timers you have armed:", "timers", ops?.timers ?? [])
+  section("Pull requests you registered:", "prs", ops?.prs ?? [])
+  section("Issues you registered:", "issues", ops?.issues ?? [])
   return lines
 }
 
 export function signoffNudgeMessage(ops?: SignoffLiveOps): string {
   const lines = liveOpsLines(ops)
   if (lines.length) {
-    lines.push("", "An ```awaiting fence takes one such line per thing you are ACTUALLY waiting on, plus a")
-    lines.push("required `for:` duration (`30s`/`15m`/`2h`/`3d`), then a `---` line and whatever prose you want")
+    lines.push("", "An ```awaiting fence names only what you are ACTUALLY waiting on, one such list per kind, plus")
+    lines.push("a required `for:` duration (`30s`/`15m`/`2h`/`3d`), then a `---` line and whatever prose you want")
     lines.push("(optional). Frizz checks every id: name something that is not running and you are bumped")
     lines.push("rather than parked.")
   }
@@ -1753,12 +1759,12 @@ export const SIGNOFF_NUDGE_MESSAGE = [
   "  if anything is still owed, it is not done. Body: 1-3 sentences, then bullets, each opening with a",
   "  **bolded verb phrase**.",
   "- `` ```awaiting `` — you are WAITING on work that is actually running. FRONTMATTER, THEN MARKDOWN:",
-  "  one structural line per thing you are waiting on, a REQUIRED `for:` duration, then a `---` line and",
+  "  one YAML list per kind of thing you are waiting on, a REQUIRED `for:` duration, then a `---` line and",
   "  as much prose as you want. The prose is OPTIONAL; the lines above it are not.",
   "",
   "  ```awaiting",
-  "  shell: <the id your runtime gave you>",
-  "  pr: owner/repo#123",
+  "  shells: [<the id your runtime gave you>]",
+  "  prs: [owner/repo#123]",
   "  for: 2h",
   "  ---",
   "  What you are waiting for, in your own words — this is what the human reads on your card.",
@@ -3296,6 +3302,11 @@ export const ThreadView = z.object({
    *  same card and the swap is invisible. Absent whenever there is nothing in flight, which is almost
    *  always — it exists for the seconds between the human sending and the worker being handed it. */
   answersInFlight: z.string().optional(),
+  /** The human's message — a follow-up or a registered answer — is on its way to the worker and the turn
+   *  has not started yet (board.deriveDeliveryInFlight). The queue has already let the thread go; this
+   *  tells the rail to draw it as working in every tab, not only the one that sent it (web
+   *  lib/steering.ts). Absent otherwise. */
+  deliveryInFlight: z.boolean().optional(),
   // ISO8601 of the newest REAL user interaction (answer/steer/dispatch) — the chronological listing
   // sort key. Optional; the listing falls back to spawnedAt when absent (a dispatch IS an interaction).
   lastUserAt: z.string().optional(),
@@ -4320,6 +4331,27 @@ export const DeliverQueuedNowResult = z.object({
   reason: z.string().optional(),
 }).strict()
 export type DeliverQueuedNowResult = z.infer<typeof DeliverQueuedNowResult>
+
+// COMPACT NOW — the button in the context meter's hover panel. Asks the thread's own harness to
+// summarize its context in place, the same act as typing `/compact` into Claude Code or codex: a
+// broker-backed Claude row is sent the literal `/compact` (the Agent SDK runs a streamed slash command
+// as a local command, recording a `compact_boundary` with trigger "manual"), and an app-server codex row
+// gets `thread/compact/start`. Refused while a turn is in flight and for every other runtime.
+export const CompactThreadInput = z.object({
+  slug: ThreadSlug,
+  // Same staleness guard as followUp: a stale tab must not compact a re-dispatched session.
+  sessionId: z.string().min(1),
+}).strict()
+export type CompactThreadInput = z.infer<typeof CompactThreadInput>
+
+/** Whether the thread's runtime gives Frizz a way to request a compaction at all — the gate the
+ *  server enforces and the context meter's panel reads to decide whether to offer the button. */
+export function threadCanCompact(thread: { backend?: string; claudeRuntime?: string; foreign?: boolean }): boolean {
+  if (thread.foreign) return false
+  // `claudeRuntime` is set only on a Claude row, whose `backend` may itself be absent (Claude is the
+  // unmarked default), so the broker marker alone identifies one.
+  return thread.backend === "codex" || thread.claudeRuntime === "broker"
+}
 
 export const SetThreadSnoozeInput = z.object({
   slug: ThreadSlug,

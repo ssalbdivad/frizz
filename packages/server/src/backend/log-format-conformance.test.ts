@@ -154,7 +154,24 @@ function pinnedClaudeTranscript(): Sample | undefined {
     if (stamps.size !== 1 || !stamps.has(CLAUDE_CODE_VERSION)) continue
     qualifying.push({ path, lines })
   }
-  return largest(qualifying)
+  // The largest is not always the richest: a 404-record session in which the model never called a tool
+  // (an agent's /compact harness, 2026-09-26) outgrew every real one and failed the tool_use assertion
+  // below on a format nothing had changed. So prefer the largest session whose model used a block that
+  // is neither text nor thinking. That test is spelling-blind on purpose — a vendor that renamed
+  // `tool_use` still writes such a block, so the renamed session is still picked and still fails.
+  return largest(qualifying.filter(modelCalledATool)) ?? largest(qualifying)
+}
+
+function modelCalledATool(sample: Sample): boolean {
+  return sample.lines.some((line) => {
+    try {
+      const record = JSON.parse(line) as { type?: unknown; message?: { content?: unknown } }
+      if (record.type !== "assistant" || !Array.isArray(record.message?.content)) return false
+      return record.message.content.some((block: { type?: unknown }) => typeof block?.type === "string" && !["text", "thinking", "redacted_thinking"].includes(block.type))
+    } catch {
+      return false
+    }
+  })
 }
 
 // ---- codex -----------------------------------------------------------------------------------------

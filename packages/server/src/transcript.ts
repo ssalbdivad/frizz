@@ -426,6 +426,8 @@ export function coalescedQueuedKeys(deliveredText: string, pendingKeys: Iterable
 // exactly. 83 such deliveries in the corpus.
 const COMMAND_NAME_RE = /<command-name>([\s\S]*?)<\/command-name>/
 const COMMAND_ARGS_RE = /<command-args>([\s\S]*?)<\/command-args>/
+// A local command's output record, anchored at both ends like the fold's own copy in tailer.ts.
+const LOCAL_COMMAND_RECEIPT = /^<local-command-(stdout|stderr)>[\s\S]*<\/local-command-\1>$/
 export function commandEnvelopeQueuedKey(deliveredText: string): string | undefined {
   const name = COMMAND_NAME_RE.exec(deliveredText)?.[1]?.trim()
   if (!name) return undefined
@@ -640,6 +642,8 @@ export function createTranscriptFold(identityPrefix = "claude"): TranscriptFold 
   // A just-delivered queued message's text — so an immediately-following NORMAL user record carrying the
   // identical text (a belt-and-suspenders guard; unobserved in the evidence) doesn't double-render.
   let deliveredDedupe: string | null = null
+  // Set by a `/compact` command envelope, consumed by the output receipt that follows it (see below).
+  let compactCommandOpen = false
   // The rest divider (see restMessage) for a turn that has ended, held back until we know the resting
   // message is really finished. It is DEFERRED rather than pushed on the spot because one assistant
   // MESSAGE can be split across several records and `stop_reason:"end_turn"` rides EVERY one of them —
@@ -796,6 +800,19 @@ export function createTranscriptFold(identityPrefix = "claude"): TranscriptFold 
       const post = typeof meta?.postTokens === "number" ? meta.postTokens : undefined
       out.push(compactionMessage(sourceId, thisTs, pre, post))
       lastAssistantId = null // the divider breaks the assistant-record merge chain
+      return
+    }
+
+    // A `/compact` the CLI declined — "Not enough messages to compact." — is answered by a SYSTEM
+    // record, not the user-shaped receipt a real compaction leaves, and there is no boundary to draw.
+    // With the command's envelope hidden (see the user arm), that answer is the only trace the operator's
+    // click left, so it renders as a one-line meta label in Claude's own words.
+    if (rec.type === "system" && rec.subtype === "local_command" && compactCommandOpen && typeof rec.content === "string") {
+      compactCommandOpen = false
+      const said = LOCAL_COMMAND_RECEIPT.exec(rec.content.trim())
+      const inner = said ? rec.content.trim().replace(/^<local-command-(?:stdout|stderr)>|<\/local-command-(?:stdout|stderr)>$/g, "").trim() : ""
+      if (inner) out.push({ sourceId, role: "assistant", kind: "event", text: inner, tools: [], parts: [], at: thisTs })
+      lastAssistantId = null
       return
     }
 
@@ -1083,6 +1100,7 @@ export function createTranscriptFold(identityPrefix = "claude"): TranscriptFold 
         // raw `<command-name>` markup underneath a permanently-gray "/effort".
         const commandKey = commandEnvelopeQueuedKey(text)
         if (commandKey !== undefined && resolveQueued(commandKey)) {
+          compactCommandOpen = commandKey === "/compact"
           lastAssistantId = null
           return
         }
@@ -1094,6 +1112,24 @@ export function createTranscriptFold(identityPrefix = "claude"): TranscriptFold 
           return
         }
         deliveredDedupe = null
+        // A MANUAL COMPACTION — the footer's "Compact now" — writes two user records after its boundary:
+        // the command's `<command-name>/compact</command-name>` envelope and its
+        // `<local-command-stdout>Compacted …</local-command-stdout>` output. Neither is the human
+        // speaking, and the compact_boundary divider above already says what happened, with the token
+        // bracket, so both drew a raw-markup bubble attributed to the human for nothing. The receipt is
+        // dropped only straight after a `/compact` envelope: another local command's output is its own
+        // answer and not this projection's to hide.
+        if (commandEnvelopeQueuedKey(text) === "/compact") {
+          compactCommandOpen = true
+          lastAssistantId = null
+          return
+        }
+        if (compactCommandOpen && LOCAL_COMMAND_RECEIPT.test(text.trim())) {
+          compactCommandOpen = false
+          lastAssistantId = null
+          return
+        }
+        compactCommandOpen = false
         // The first user message is the composed dispatch prompt (scratchpad orientation + project
         // instructions + banner + TASK). Only what sits below the banner is the human's words — that
         // narrowing is a DISPLAY projection (userDisplayText), never a rewrite of the stored text.

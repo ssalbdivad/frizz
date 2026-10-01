@@ -77,7 +77,7 @@ export function selectCodexHostKind(
   if (flagValue === "1" || flagValue === "true") return nativeSupported ? "native" : "daemon"
   return nativeSupported ? "native" : "daemon"
 }
-export const CODEX_APP_SERVER_SUPPORTED_VERSION = "0.157.0"
+export const CODEX_APP_SERVER_SUPPORTED_VERSION = "0.158.0"
 // Upgrade policy: the AUDITED version is an exact coordinate — changing it requires a fresh
 // generated-protocol audit plus a source audit at the matching immutable Rust tag/commit, then a new
 // fingerprint and contract fixtures. These coordinates are intentionally runtime-visible diagnostics,
@@ -86,8 +86,8 @@ export const CODEX_APP_SERVER_SUPPORTED_VERSION = "0.157.0"
 // The ACCEPTANCE RULE is deliberately not that exact coordinate — see codexVersionVerdict below.
 export const CODEX_APP_SERVER_PROTOCOL_REVISION = Object.freeze({
   packageVersion: CODEX_APP_SERVER_SUPPORTED_VERSION,
-  sourceTag: "rust-v0.157.0",
-  sourceCommit: "00c972ed5d6ff6499317fd41b7f23605b8e6850d",
+  sourceTag: "rust-v0.158.0",
+  sourceCommit: "064c6b8c737f5b41d171fdda80bd9ef10ad06eb3",
 })
 /** Numeric semver compare; a version that will not parse sorts BELOW everything (fails closed). */
 export function compareCodexVersions(a: string, b: string): number {
@@ -414,8 +414,9 @@ const FileChangeItem = z.object({
 // in backend/_live_codex_bgterm.mts: `osPid` came back null every time and the value never equalled a
 // real OS pid), and it is the only thing `thread/backgroundTerminals/terminate` accepts. It appears
 // ONLY on an exec that yielded — the deliberate background handoff — which is exactly the set frizz
-// wants, and it is absent from the rollout frizz folds, so this stream is the only place to get it
-// (`_live_codex_bgterm_match.mts`: the projected background row carried no handle at all).
+// wants, and it is absent from the rollout frizz folds, so this stream is the place to get it
+// (`_live_codex_bgterm_match.mts`: the projected background row carried no handle at all) — with
+// `backgroundTerminals/list` as the backstop for an exec that started before we attached.
 const CommandExecutionItem = z.object({
   type: z.literal("commandExecution"),
   id: Opaque,
@@ -438,6 +439,19 @@ export interface LiveBackgroundExec {
   /** Where it runs: the item's own `cwd` when codex reports one. Never guessed (see backgroundExecs). */
   cwd?: string
 }
+// The app-server's own snapshot of a thread's running background execs — the one way to learn about
+// an exec whose `item/started` went to a client connection frizz no longer has. Loose for the same
+// reason as CommandExecutionItem: frizz reads two fields off each entry (the probe in
+// backend/_live_codex_bgterm.mts shows the rest: `itemId`, `cwd`, `osPid`, …), and a codex release
+// that grows the entry must not stop the rows coming back. It carries NO start time, so a seeded row's
+// clock starts at the reattach that found it.
+const BackgroundTerminalsListResponse = z.object({
+  data: z.array(z.object({
+    processId: z.union([z.string().max(128), z.number()]),
+    command: z.string().max(8_192).optional(),
+  })).max(256),
+  nextCursor: z.string().max(1_024).nullish(),
+})
 const ItemStartedNotification = z.object({
   item: z.unknown(),
   threadId: Opaque,
@@ -1895,8 +1909,9 @@ export class CodexAppServerBridge {
   // ops-strip row it projects has no handle to address a kill with. This map is what gives a codex
   // shell row an id, and the id it gives is exactly what `backgroundTerminals/terminate` accepts.
   //
-  // A LEVEL, not an edge log: `item/started` adds, any terminal `item/*` removes, and the whole
-  // per-thread entry is dropped when the session is released or the process goes away. Nothing here is
+  // A LEVEL, not an edge log: `item/started` adds, any terminal `item/*` removes, a rejoin of the same
+  // process re-seeds it from `backgroundTerminals/list` (seedLiveExecs), and the whole per-thread entry
+  // is dropped when the session is released or the process goes away. Nothing here is
   // durable, and it must not be — a processId belongs to one app-server process, so a stale one
   // surviving a restart would offer an × that addresses a PTY that no longer exists.
   private readonly liveExecs = new Map<string, Map<string, LiveBackgroundExec>>()
@@ -2247,6 +2262,28 @@ export class CodexAppServerBridge {
         throw new Error("Codex accepted the interrupt but the turn has not ended; nothing was stopped")
       }
       return { interrupted: true }
+    } finally {
+      releaseOperation()
+    }
+  }
+
+  // The operator's "Compact now" (the context meter's hover panel). `thread/compact/start` asks the
+  // app-server to summarize the thread's history in place; it answers at once with an empty object and
+  // runs the compaction as a turn of its own, which the bridge adopts from `turn/started` like any
+  // other app-server-opened turn — so the thread reads as working while it compacts, and the rollout's
+  // `compacted` envelope is what the tailer then folds. Refused mid-turn: the compaction would race the
+  // turn for the same history, and the operator's button is only offered at rest anyway.
+  async compactThread(threadSlug: string, sessionId: string): Promise<void> {
+    const releaseOperation = this.beginOperation()
+    try {
+      const connection = await this.ensureConnected()
+      const binding = this.bindingForScope(threadSlug, sessionId)
+      if (!binding) throw new Error("Codex app-server compaction requires a bridge-owned session")
+      if (binding.connection_epoch !== this.connectionEpoch || binding.state !== "active") {
+        throw new Error("Codex app-server session detached; cannot compact")
+      }
+      if (binding.current_turn_id) throw new Error("Wait for the current turn to end, then compact")
+      await connection.request("thread/compact/start", { threadId: binding.codex_thread_id })
     } finally {
       releaseOperation()
     }
@@ -2908,8 +2945,16 @@ export class CodexAppServerBridge {
           deathAt: matched?.at || undefined,
         })
       }
-      await this.reconcileOwnedSessions(connection, negotiated.sameProcess)
+      // Which bound threads still have a background exec running in this process (see seedLiveExecs).
+      // The PROCESS test, not `sameProcess`: a lossy rejoin (every native reattach, a daemon that
+      // overflowed its queue) still joined the very app-server whose PTYs are running, and the list is
+      // exactly what repairs the holes in its stream. Only a different generation is skipped — its
+      // processIds would name PTYs that do not exist.
+      const sameGeneration = attachment.reattached && negotiated.previousGeneration === attachment.generation
+      const execThreads = sameGeneration ? [...(await this.listLiveExecs(connection, this.boundCodexThreadIds())).keys()] : []
+      await this.reconcileOwnedSessions(connection, negotiated.sameProcess, execThreads)
       if (this.connection !== connection) throw new Error("Codex app-server disconnected during session reconciliation")
+      if (execThreads.length > 0) this.seedLiveExecs(connection, await this.listLiveExecs(connection, execThreads))
       return connection
     } catch (error) {
       connection.close()
@@ -2961,16 +3006,31 @@ export class CodexAppServerBridge {
    * mid-turn detached rows too; idle detached rows stay lazily rebound on next use, which keeps this
    * bounded on a board with a long history.
    *
+   * The one exception is `execThreads`: idle threads that still own a running background exec. Over
+   * the native listener subscriptions are per-connection, so an idle thread left detached never
+   * hears its exec END — the `item/completed` goes nowhere and the re-seeded row outlives the command
+   * (measured live, backend/_live_codex_bgterm_reseed.mts). Rebinding them here, exactly as the next
+   * follow-up would, is what re-subscribes this connection to them.
+   *
    * `sameProcess` says we rejoined the very app-server that owned these turns (it outlived our
    * restart inside the daemon). Then the turns are STILL RUNNING and the only correct action is to
    * re-mark the binding active and keep `current_turn_id`: issuing `thread/resume` against a live
    * turn would disturb it, and clearing the id would orphan the `turn/completed` still to come.
    */
-  private async reconcileOwnedSessions(connection: JsonlRpcConnection, sameProcess: boolean): Promise<void> {
+  private async reconcileOwnedSessions(
+    connection: JsonlRpcConnection,
+    sameProcess: boolean,
+    execThreads: readonly string[] = [],
+  ): Promise<void> {
     const rows = this.scope.prepare<BindingRow>(`
       SELECT * FROM codex_app_server_session
       WHERE project_id = @project_id AND (state = 'active' OR (state = 'detached' AND current_turn_id IS NOT NULL))
     `).all().map(checkedBindingRow)
+    for (const threadId of execThreads) {
+      if (rows.some((row) => row.codex_thread_id === threadId)) continue
+      const row = this.bindingForCodexThread(threadId)
+      if (row) rows.push(row)
+    }
     const detach = (row: BindingRow): void => {
       this.scope.prepare("UPDATE codex_app_server_session SET state = 'detached', updated_at = ? WHERE project_id = @project_id AND frizz_session_id = ?")
         .run(this.now().toISOString(), row.frizz_session_id)
@@ -3506,8 +3566,9 @@ export class CodexAppServerBridge {
   // The live background-exec level rides the same lifecycle as the correlated file items — a released
   // session and a lost process both invalidate it — but for a different reason. A `processId` names a
   // PTY inside ONE app-server process, so a surviving entry after that process goes away would put an ×
-  // on the board that addresses a handle nothing can honour. The next connection's item stream
-  // repopulates it, exactly as the SDK's `background_tasks_changed` level does on the Claude side.
+  // on the board that addresses a handle nothing can honour. The next connection's item stream only
+  // repopulates it with execs that START after it attached; one already running when we rejoin the same
+  // process is re-learned by seedLiveExecs, because its `item/started` is never sent again.
   private forgetCorrelatedFileItems(threadId?: string, turnId?: string): void {
     if (threadId === undefined) {
       this.correlatedFileItems.clear()
@@ -3870,6 +3931,75 @@ export class CodexAppServerBridge {
       startedAtMs: existing?.startedAtMs ?? startedAtMs ?? this.now().getTime(),
       ...(cwd ? { cwd } : {}),
     })
+  }
+
+  // Re-learn the live background execs after rejoining an app-server we had already been talking to.
+  //
+  // The level above is folded off `item/started`, and that notification went to the client connection
+  // we just lost: the daemon queues only while NO client is attached, and the native listener queues
+  // nothing, so neither ever replays it. The exec, meanwhile, is still running in that process's PTY —
+  // so without this its row vanished from the board after every Frizz restart or dropped socket and
+  // never came back until the exec ended, taking its × with it. `thread/backgroundTerminals/list` is
+  // the app-server's own answer to "what is still running".
+  //
+  // connect() asks TWICE. The first pass goes to every bound thread, because a yielded exec outlives
+  // its turn and the thread most likely to own one is an IDLE one whose binding sat detached; it only
+  // decides which threads reconcile must rebind. The second pass, after that rebind re-subscribed this
+  // connection, is the one that seeds — so an exec that ended in between is not seeded as a row no
+  // `item/completed` will ever clear. A thread the process never loaded answers "thread not found"
+  // (measured on 0.158.0, and the list does not load it), and any failure — that, an older codex
+  // without the method — leaves the thread out, which is exactly the level it had before this existed.
+  // Nothing here throws: a board row is not worth a failed connect.
+  private async listLiveExecs(connection: JsonlRpcConnection, threadIds: readonly string[]): Promise<Map<string, LiveBackgroundExec[]>> {
+    const found = new Map<string, LiveBackgroundExec[]>()
+    const seenAtMs = this.now().getTime()
+    await Promise.all(threadIds.map(async (threadId) => {
+      const execs: LiveBackgroundExec[] = []
+      let cursor: string | undefined
+      // Bounded: a page is the app-server's default size, and no real thread holds more than one.
+      for (let page = 0; page < 8; page++) {
+        let parsed: z.infer<typeof BackgroundTerminalsListResponse>
+        try {
+          parsed = BackgroundTerminalsListResponse.parse(await connection.request(
+            "thread/backgroundTerminals/list",
+            cursor === undefined ? { threadId } : { threadId, cursor },
+          ))
+        } catch {
+          return
+        }
+        for (const terminal of parsed.data) {
+          execs.push({ processId: String(terminal.processId), command: terminal.command, startedAtMs: seenAtMs })
+        }
+        if (!parsed.nextCursor) break
+        cursor = parsed.nextCursor
+      }
+      if (execs.length > 0) found.set(threadId, execs)
+    }))
+    return found
+  }
+
+  private seedLiveExecs(connection: JsonlRpcConnection, found: ReadonlyMap<string, readonly LiveBackgroundExec[]>): void {
+    // A connection that died while we waited has already forgotten the level; writing into it now
+    // would resurrect processIds from a process we are no longer talking to.
+    if (this.connection !== connection) return
+    for (const [threadId, execs] of found) {
+      let byProcess = this.liveExecs.get(threadId)
+      if (!byProcess) { byProcess = new Map(); this.liveExecs.set(threadId, byProcess) }
+      for (const exec of execs) {
+        // An `item/started` that raced ahead of the answer carries the real start; keep it.
+        if (!byProcess.has(exec.processId)) byProcess.set(exec.processId, exec)
+      }
+    }
+  }
+
+  private boundCodexThreadIds(): string[] {
+    try {
+      return this.scope.prepare<{ codex_thread_id: string }>(
+        "SELECT codex_thread_id FROM codex_app_server_session WHERE project_id = @project_id",
+      ).all().map((row) => row.codex_thread_id)
+    } catch {
+      return []
+    }
   }
 
   private async handleNotification(connection: JsonlRpcConnection, method: string, rawParams: unknown): Promise<void> {

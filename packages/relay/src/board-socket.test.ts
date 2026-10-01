@@ -40,6 +40,23 @@ test("a request reaches the board and its answer comes back", async () => {
   const response = await pending
   assert.equal(response.status, 200)
   assert.equal(new TextDecoder().decode(response.body!), "hi")
+  assert.equal(response.end, true)
+})
+
+test("a whole answer with no body is marked ended, so the visitor's stream can close", async () => {
+  // A body-less whole answer and the head of a stream both carry a null body. Only `end` tells them
+  // apart, and without it the relay left an empty 200, a HEAD or a redirect loading forever.
+  const board = fakeSocket()
+  const relay = new BoardSocket()
+  relay.attach(board.socket)
+
+  const whole = relay.request({ method: "HEAD", url: "https://ada.frizz.sh/", headers: [] })
+  relay.handleFrame(serializeFrame({ t: "res", id: board.lastId(), status: 200, headers: [], end: true }))
+  assert.deepEqual(await whole, { status: 200, headers: [], body: null, end: true })
+
+  const streamed = relay.request({ method: "GET", url: "https://ada.frizz.sh/events", headers: [] }, { push: () => {}, end: () => {} })
+  relay.handleFrame(serializeFrame({ t: "res", id: board.lastId(), status: 200, headers: [], end: false }))
+  assert.equal((await streamed).end, false)
 })
 
 test("a STREAMED body reaches the visitor while it is still being produced", async () => {

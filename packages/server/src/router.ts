@@ -13,6 +13,7 @@ import {
   UnqueueFollowUpInput,
   UnqueueFollowUpResult,
   DeliverQueuedNowInput,
+  CompactThreadInput,
   DeliverQueuedNowResult,
   SetThreadRecurringPromptInput,
   SetOwnThreadRecurringPromptInput,
@@ -2889,6 +2890,68 @@ export function createRouter(ctx: AppContext) {
       },
     }),
 
+    // COMPACT NOW — the button in the context meter's hover panel (CompactThreadInput). Each harness
+    // already has its own manual compaction, so this only reaches it: a broker Claude row is sent the
+    // literal `/compact`, which the Agent SDK runs as a local slash command (probed against the pinned
+    // SDK 2026-09-26: `system/compact_boundary` with trigger "manual", then a `Compacted` local-command
+    // record — no model turn), and an app-server codex row gets `thread/compact/start`.
+    //
+    // NOT a follow-up, although the Claude half travels the same channel: no ledger entry (the
+    // transcript's own compaction divider is the receipt), no gap note (Claude Code reads text after
+    // `/compact` as summarization instructions, so the note would steer the summary), and no reopen or
+    // un-park — tidying a thread's context says nothing about whether it should wake.
+    //
+    // Refused mid-turn. A queued `/compact` did wait for a plain turn to end in the probe, but a turn
+    // with tool calls can splice queued input in between them, where the text is no longer a command;
+    // the panel offers the button only at rest, and this is the same rule for a stale tab.
+    compactThread: mutation({
+      input: CompactThreadInput,
+      handler: async ({ input }) => {
+        const row = currentOwnedSession(input.slug, input.sessionId)
+        if (!row) throw new Error("This thread is no longer the session this tab is looking at")
+        if (hasPendingPermissionChange(row)) throw new Error("Wait for the current permission change to finish, then compact")
+        const telemetry = ctx.tailer.get(input.slug)
+        if (telemetry?.turn === "in-flight") throw new Error("Wait for the current turn to end, then compact")
+        if (row.backend === "codex") {
+          const bridge = ctx.codexAppServer
+          if (!bridge) throw new Error("Codex app-server is unavailable; cannot compact this thread")
+          if (row.codex_runtime !== "app-server") throw new Error("Send this thread a message first — it predates the Codex app-server")
+          const binding = bridge.binding(input.slug, row.session_id)
+          if (!binding || binding.state !== "active") await bridge.resumeOwnedSession(input.slug, row.session_id)
+          await bridge.compactThread(input.slug, row.session_id)
+          ctx.board.refresh()
+          return
+        }
+        if (row.backend !== "claude" || row.claude_runtime !== "broker") {
+          throw new Error("This thread's runtime can't be compacted from Frizz")
+        }
+        const bridge = ctx.claudeBroker
+        if (!bridge) throw new Error("Claude session broker is unavailable; cannot compact this thread")
+        // The same cold-resume inputs a follow-up carries: a hibernated daemon is resumed to run the
+        // command, and it must come back as the worker it was.
+        const appendSystemPrompt = [
+          loadWorkerPrompt("claude"),
+          scratchpadOrientation(row.session_id, "claude"),
+          frizzConfigBlock(ctx.project.dir),
+        ].filter(Boolean).join("\n\n")
+        await bridge.followUp({
+          threadSlug: input.slug,
+          sessionId: row.session_id,
+          cwd: ctx.project.dir,
+          text: "/compact",
+          permissionMode: coldResumePermission(row, ctx.getSettings()),
+          appendSystemPrompt,
+          model: row.model ?? undefined,
+          effort: row.effort ?? undefined,
+          // A process latched on its own usage-limit 429 cannot summarize any more than it can answer.
+          freshProcess: needsFreshProcessForLimit(telemetry?.limitFault, Date.now(), mayHaveLiveBackgroundWork(telemetry)),
+        })
+        // The bridge accepted the command, so a deliberate stop is over — see followUp's same write.
+        if (row.exited === 1) ctx.storage.setExitedIfCurrent(input.slug, row.session_id, row.runtime_generation ?? 0, false)
+        ctx.board.refresh()
+      },
+    }),
+
     // Per-thread permission/sandbox control. Idle conversations reattach with backend-native launch
     // flags; active work, pending approvals, and unsent native drafts fail closed with a precise error.
     setThreadPermission: mutation({
@@ -3368,6 +3431,9 @@ export function createRouter(ctx: AppContext) {
           fireAtMs: Date.parse(input.fireAt),
           createdAtMs: Date.now(),
         })
+        // So the rail shows the new timer at once, as addOwnPrWatch does for a PR, rather than at the
+        // next tailer change or the board's 15s reconcile.
+        ctx.board.refresh()
         return { id, fireAt: input.fireAt, timers: armedTimerViews(input.slug) }
       },
     }),
@@ -3379,6 +3445,7 @@ export function createRouter(ctx: AppContext) {
         // Scoped to the caller's own slug in storage, so an id belonging to another thread cannot be
         // cancelled even if a worker somehow learned it.
         const cancelled = ctx.storage.cancelThreadTimer(input.slug, input.id, Date.now())
+        if (cancelled) ctx.board.refresh()
         return { cancelled, timers: armedTimerViews(input.slug) }
       },
     }),
@@ -3523,8 +3590,11 @@ export function createRouter(ctx: AppContext) {
         // forgotten what it holds and is being careful — and a duplicate would mean two wakes per event,
         // which reads to the operator as the watcher misfiring. Per KIND as well as ref: an issue and a
         // PR cannot share a number in one repo, so the same number registered both ways is a mistake
-        // the probe catches on whichever one is wrong, never two watchers on one thing.
-        const existing = armed.find((w) => w.kind === kind && w.owner === ref.owner && w.repo === ref.repo && w.number === ref.number)
+        // the probe catches on whichever one is wrong, never two watchers on one thing. CASE-BLIND on
+        // owner and repo, as GitHub is: `acme/app#391` and `Acme/App#391` are one PR, and matching them
+        // exactly put two rows on the rail and two wakes on every event.
+        const sameName = (a: string, b: string) => a.toLowerCase() === b.toLowerCase()
+        const existing = armed.find((w) => w.kind === kind && sameName(w.owner, ref.owner) && sameName(w.repo, ref.repo) && w.number === ref.number)
         const target = `${ref.owner}/${ref.repo}#${ref.number}`
         if (existing) {
           // The ORIGINAL expiry, which this call left alone — the re-registration is a no-op and must

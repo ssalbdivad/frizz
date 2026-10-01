@@ -23,6 +23,8 @@ npx frizz --sessions      # the devices holding a session
 npx frizz --sign-out all  # revoke them
 ```
 
+A device can sign itself out: **Sign out this device** in Settings ends that browser's session and nothing else. Signing out any other device is still `frizz --sign-out`, which runs only on the host (SSH counts), so a stolen phone cannot sign out the laptop.
+
 ## Try it without touching your board
 
 A second Frizz that shares nothing with the one you run: a throwaway home and project, its own port, deleted when you press ctrl-c.

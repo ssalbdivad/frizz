@@ -2209,7 +2209,7 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
         fenceId,
         hintKey: SIGNOFF_HINT_KEY,
         // The reminder plus THIS THREAD's live ops and their ids, so the agent can write a correct
-        // `watch:` line without going looking for an id it cannot see. Shells are named by `taskId` —
+        // fence without going looking for an id it cannot see. Shells are named by `taskId` —
         // the handle the runtime actually showed the worker — because that is the string it will
         // naturally reach for, and the one the fence's own integrity check matches on.
         message: withClock(signoffNudgeMessage({
@@ -2575,7 +2575,7 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
         ? `${head}\n${ops.join("\n")}`
         : cause === "expired"
         ? head
-        : `${head}\n\nYou have NOTHING running right now — no shell, no sub-agent, no timer, no registered\npull request. There is nothing that could wake you, so this thread is not awaiting: finish in\n\`\`\`done, or ask a \`\`\`question.`
+        : `${head}\n\nYou have NOTHING running right now — no shell, no sub-agent, no timer, no registered\npull request. There is nothing that could wake you, so this thread is not awaiting: finish in\n\`\`\`done, or register a question with \`mcp__frizz__ask\`.`
       // THE CONSECUTIVE CAP, and the reason SOURCE 12 needed one. A correction is only worth sending to a
       // worker that can act on it, and a worker whose contract froze before this grammar existed cannot:
       // no fence it knows how to write will pass the check. Uncapped, that is a closed loop — bump, wake,
@@ -4178,6 +4178,16 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
     return `${lead}\n\n${body.join("\n\n")}\n\n${wakeTimeHeader(now(), spokeAt)}`
   }
 
+  // A LONE wake's clock is re-read at SEND, for the same reason the merged one is: the stamp was taken at
+  // enqueue, and the quiet window can hold a row for five minutes, across a turn the worker finished in
+  // the meantime. Observed 2026-09-25: a PR-merged wake queued at 14:55 went out at 14:59 still saying
+  // "you last spoke 14m ago" to a worker that had spoken 39 seconds earlier. Only a message that ends in
+  // a clock gets a new one; the token is appended downstream, so this cannot disturb confirmation.
+  function restampedWakeMessage(message: string, spokeAt: string | null | undefined): string {
+    const bare = stripWakeTimeHeader(message)
+    return bare === message ? message : `${bare}\n\n${wakeTimeHeader(now(), spokeAt)}`
+  }
+
   // A frame confirmed by its carrier's token is confirmed whole. The merged delivery is ONE user record
   // carrying ONE token — the carrier's — so a companion can never be confirmed by the transcript on its
   // own; left to itself it would wait out the grace and be confirmed by the runtime's survival, or, if
@@ -4232,10 +4242,12 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
       // creation order. One `resume`, one turn; see adoptCompanions.
       const companions = adoptCompanions(item, claimedAt)
       const frame = [...companions, item].sort((a, b) => a.createdAt - b.createdAt || a.id.localeCompare(b.id))
-      const merged = companions.length === 0 ? undefined : isQuestionAnswerFenceId(item.fenceId)
-        ? withClock(mergeAnswerMessages(frame.map((d) => d.message))!, deps.tailer.get(item.slug)?.lastAssistantAt)
-        : mergedWakeMessage(frame, deps.tailer.get(item.slug)?.lastAssistantAt)
-      const message = merged ?? item.message
+      const spokeAt = deps.tailer.get(item.slug)?.lastAssistantAt
+      const message = companions.length === 0
+        ? restampedWakeMessage(item.message, spokeAt)
+        : isQuestionAnswerFenceId(item.fenceId)
+          ? withClock(mergeAnswerMessages(frame.map((d) => d.message))!, spokeAt)
+          : mergedWakeMessage(frame, spokeAt)
       if (companions.length > 0) {
         log(`waker: merged ${frame.length} wakes for ${item.slug} into one delivery — ${frame.map((d) => d.reason).join("; ")}`)
       }

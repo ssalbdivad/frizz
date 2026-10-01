@@ -52,6 +52,14 @@ test("quiet window: an answer and a limit resume are not held; the exemption is 
   // that send and must hear it before it rests on a dead id (see interruptEndedSubAgentsMessage).
   assert.equal(isQuietWindowExempt("interrupt-ended:1700000000000"), true)
   assert.equal(isQuietWindowExempt("shell-budget:1700000000000:toolu_sh"), true)
+  // The sign-off nudge and the fence corrections answer the worker's own rest — the card the human is
+  // reading now. An EXPIRED park is a scheduled re-check, and stays held.
+  assert.equal(isQuietWindowExempt("signoff:rest"), true)
+  assert.equal(isQuietWindowExempt("park:dead:2026-09-25T21:59:41.787Z"), true)
+  assert.equal(isQuietWindowExempt("park:retired:2026-09-25T21:59:41.787Z"), true)
+  assert.equal(isQuietWindowExempt("park:nameless:2026-09-25T21:59:41.787Z"), true)
+  assert.equal(isQuietWindowExempt("park:question:2026-09-25T21:59:41.787Z"), true)
+  assert.equal(isQuietWindowExempt("park:expired:2026-09-25T21:59:41.787Z"), false)
   assert.equal(isQuietWindowExempt("prwatch:prw_1"), false)
   assert.equal(isQuietWindowExempt("timer:tmr_1"), false)
   const { storage, outbox } = store()

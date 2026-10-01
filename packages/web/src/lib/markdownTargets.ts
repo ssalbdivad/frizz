@@ -79,7 +79,11 @@ export function localMarkdownTarget(raw: string | null | undefined): LocalMarkdo
   if (WINDOWS_ABSOLUTE_PATH.test(decodedHref)) return { display: decodedHref, filePath: decodedHref }
 
   if (decodedHref.startsWith("/") && !decodedHref.startsWith("//") && !isFrizzRoute(decodedHref)) {
-    const path = decodedHref
+    // A `#section` or `?query` tail names a place in the file, not part of its path — strip it before
+    // decoding, as the editor-URL and relative branches do. Kept, it made `/repo/AGENTS.md#setup` fail
+    // the Markdown test and go to the desktop opener instead of the reader, which on a phone meant a
+    // tap that opened the file on the server machine and showed nothing where the tap was.
+    const path = decodePath(href.replace(/[?#].*$/u, ""))
     return { display: path, filePath: path }
   }
 
