@@ -237,15 +237,20 @@ export function ChildOpRow({
   ) : null
 
   const labelText = <span className={`min-w-0 truncate text-muted-70 ${rail ? "leading-[16px]" : clickable ? "group-hover:text-fg/80 group-hover:underline" : ""}`}>{label}</span>
+  // A FOLD IS RECEDED (maintainer 2026-10-01: "usually people won't want to click on it from that
+  // view"): its mark, count and chevron sit at 55% until hovered, so the line says "work is happening
+  // under here" without competing with the thread title above it. The arrow keeps the child rows' ink,
+  // so the fold still reads as hanging off its thread.
+  const recede = disclosure ? "opacity-55 transition-opacity group-hover:opacity-100" : ""
   const identity = (
     <>
       <span aria-hidden className={CHILD_ARROW_CLASS}>{CHILD_ARROW}</span>
-      {indicator}
+      {disclosure ? <span className={`flex shrink-0 ${recede}`}>{indicator}</span> : indicator}
       {sheet && <span className={CHILD_KIND_TAG_CLASS}>{KIND_TAG[kind]}</span>}
       {disclosure ? (
         // The chevron is the transcript column's measured one (transcriptMetaChevronClass): 1em, lifted
         // onto the cap band, trimmed to its ink so this `gap-1.5` IS the 6px the eye reads.
-        <span className="flex min-w-0 items-baseline gap-1.5">
+        <span className={`flex min-w-0 items-baseline gap-1.5 ${recede}`}>
           {labelText}
           <ChevronRight aria-hidden size={12} className={transcriptMetaChevronClass(disclosure.open)} />
         </span>

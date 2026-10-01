@@ -21,8 +21,7 @@ import { subAgentName } from "../groups.ts"
 
 /** What one fold line says about the children it stands for. */
 export interface SubAgentFold {
-  /** "3 sub-agents", "1 workflow", "2 sub-agents, 1 workflow" — direct children only; a workflow's own
-   *  agents and a sub-agent's own sub-agents are inside the thing already counted. */
+  /** "5 sub-agents" — every row the fold opens to, recursively, a workflow's row and its agents alike. */
   label: string
   /** Spins while ANY row under it runs, at any depth, since the fold is all the rail shows of them. */
   state: "running" | "stale"
@@ -35,15 +34,13 @@ type FoldChild = { readonly state: string; readonly depth?: number; readonly wor
 const plural = (n: number, noun: string): string => `${n} ${noun}${n === 1 ? "" : "s"}`
 
 export function subAgentFold(children: readonly FoldChild[]): SubAgentFold {
-  // A descendant with no direct parent listed cannot be counted as "inside" anything, so it counts itself.
+  // The tooltip names the DIRECT children; a descendant with no direct parent listed names itself.
   const direct = children.some(isDirectSubAgent) ? children.filter(isDirectSubAgent) : children
-  const workflows = direct.filter((child) => child.workflow).length
-  const agents = direct.length - workflows
-  const label = [agents > 0 ? plural(agents, "sub-agent") : null, workflows > 0 ? plural(workflows, "workflow") : null]
-    .filter((part) => part !== null)
-    .join(", ")
   return {
-    label,
+    // EVERY row the fold opens to, at every depth (maintainer 2026-10-01: "show the total number of
+    // subagents (recursively) that will appear if you expand"). It used to count direct children by
+    // kind — "1 workflow" — which named the one row that matters least and hid the four under it.
+    label: plural(children.length, "sub-agent"),
     state: children.some((child) => child.state === "running") ? "running" : "stale",
     names: direct.map((child) => subAgentName(child.label)).join(", "),
   }

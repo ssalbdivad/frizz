@@ -9,14 +9,14 @@ const child = (label: string, over: { state?: string; depth?: number; workflow?:
   workflow: over.workflow,
 })
 
-test("the fold counts direct children, naming sub-agents and workflows apart", () => {
+test("the fold counts every row it opens to, at every depth", () => {
   assert.equal(subAgentFold([child("fix:r1")]).label, "1 sub-agent")
   assert.equal(subAgentFold([child("fix:r1"), child("fix:r2"), child("review")]).label, "3 sub-agents")
-  assert.equal(subAgentFold([child("slow-flow", { workflow: true })]).label, "1 workflow")
+  assert.equal(subAgentFold([child("slow-flow", { workflow: true })]).label, "1 sub-agent")
   assert.equal(
-    subAgentFold([child("a"), child("b"), child("flow", { workflow: true }), child("flow-agent", { depth: 2 })]).label,
-    "2 sub-agents, 1 workflow",
-    "a workflow's own agent is inside the workflow already counted",
+    subAgentFold([child("flow", { workflow: true }), child("a", { depth: 2 }), child("b", { depth: 2 }), child("c", { depth: 3 })]).label,
+    "4 sub-agents",
+    "a workflow's agents and their own children are counted, not hidden inside it",
   )
 })
 
