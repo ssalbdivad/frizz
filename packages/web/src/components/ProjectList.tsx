@@ -52,6 +52,9 @@ import { projectSlug } from "../lib/base-path.ts"
 import { bandKey, rememberCrossProjectFocus, setBandOpen, setBandsOpen, setProjectCollapsed, useCollapsedProjects, useOpenBands, type QuietBandKey } from "../lib/crossProject.ts"
 import { ALL_PROJECTS, projectViewHref, usePageView, viewHref } from "../lib/pageView.ts"
 import { useArchivingAt } from "../lib/optimisticArchive.ts"
+import { holdLayout, type HeldSection, type HeldSlot } from "../lib/heldLayout.ts"
+import { actedOnHere } from "../lib/humanActs.ts"
+import { useListHold } from "../lib/listHold.ts"
 import { listOverlay, loudBands, type LoudBands } from "../lib/listBands.ts"
 import { prefetchProjectBoard, projectBoardKey, useProjectBoard } from "../lib/projectBoards.ts"
 import { edgeScrollVelocity, listDropIndex, listPitch, placeAmong, shiftFor, type ListBox } from "../lib/railReorder.ts"
@@ -112,13 +115,37 @@ export function ProjectList({
   const focus = projectSlug(useLocation().pathname)
   const live = useBoard()
   const reorder = useListReorder(projects)
+  const held = useListHold()
   const groups = reorder.ordered.map((project) => {
     const onPage = project.slug === focus && live?.projectSlug === project.slug
-    return { project, bands: loudBands(project, hidden, listOverlay(project.id, onPage, steeredAt, archivingAt)) }
+    // What THIS TAB just did to one of the project's threads: a row the human moved goes where it now
+    // belongs even while the list is held (lib/heldLayout.ts) — the act's own record (lib/humanActs.ts),
+    // the card being finished, and the optimistic steer and archive that move the row before the RPC does.
+    const moved = (slug: string) =>
+      actedOnHere(slug) ||
+      hidden(threadKey(project.id, slug)) ||
+      steeredAt[threadKey(project.id, slug)] !== undefined ||
+      (onPage && (steeredAt[slug] !== undefined || archivingAt[slug] !== undefined))
+    return { project, bands: loudBands(project, hidden, listOverlay(project.id, onPage, steeredAt, archivingAt)), moved }
   })
-  // A folded project keeps its place: it is still busy, only quieter to look at.
-  const busy = groups.filter((group) => group.bands.rows > 0)
-  const quiet = groups.filter((group) => group.bands.rows === 0)
+  // A folded project keeps its place: it is still busy, only quieter to look at. And while the list is
+  // held, a project keeps the run and the place it was drawn in — one that has just gone quiet stays among
+  // the busy ones, so the projects under it do not move up (lib/listHold.ts).
+  const drawnRuns = useRef<HeldSection<(typeof groups)[number]>[]>([])
+  const runs = holdLayout({
+    prev: drawnRuns.current,
+    target: [
+      { id: "busy", items: groups.filter((group) => group.bands.rows > 0) },
+      { id: "quiet", items: groups.filter((group) => group.bands.rows === 0) },
+    ],
+    keyOf: (entry) => entry.project.id,
+    frozen: held,
+    moved: () => false,
+  })
+  drawnRuns.current = runs
+  const run = (id: string) => (runs.find((section) => section.id === id)?.slots ?? []).map((slot) => slot.item)
+  const busy = run("busy")
+  const quiet = run("quiet")
   const grip = reorder.grips([busy.map((entry) => entry.project), quiet.map((entry) => entry.project)])
   const group = (entry: (typeof groups)[number], spaced: boolean) => (
     <ProjectGroup
@@ -126,6 +153,7 @@ export function ProjectList({
       project={entry.project}
       grip={grip(entry.project.id)}
       loud={entry.bands}
+      moved={entry.moved}
       // A FOCUSED project never folds, whatever the list remembers: its row there has no fold button
       // (ProjectRow), so a fold set from All projects hid every thread on the project's own page with
       // nothing to bring them back but the yellow count (maintainer 2026-09-30).
@@ -413,10 +441,13 @@ function ProjectGroup({
   home,
   activeKey,
   onQueuedRow,
+  moved,
 }: {
   project: QueuesProject
   grip: Grip | undefined
   loud: LoudBands
+  /** Whether this tab just moved the thread — its row is not held (lib/heldLayout.ts). */
+  moved: (slug: string) => boolean
   collapsed: boolean
   /** Every project's open quiet bands, as crossProject.ts `bandKey`s. */
   open: ReadonlySet<string>
@@ -438,19 +469,49 @@ function ProjectGroup({
   const scope = useRowScope(project, onPage, onQueuedRow)
   const queryClient = useQueryClient()
   const carded = loud.carded
-  const row = (restedAge: boolean, band?: BandKey) => (t: ThreadView) => (
-    <RailRow
-      key={t.id}
-      t={t}
-      active={activeKey === threadKey(project.id, t.id)}
-      open={openSlug === t.id}
-      restedAge={restedAge}
-      scope={scope}
-      cardKey={carded.has(t.id) ? threadKey(project.id, t.id) : undefined}
-      band={band}
-    />
-  )
-  const pinned = [...loud.pinned, ...quiet.pinnedDone]
+  // THE BANDS AS DRAWN — live, or held as they were while the pointer is over the list (lib/listHold.ts,
+  // lib/heldLayout.ts). Listed fresher-first, so a thread a cached board still lists elsewhere is drawn
+  // once, where the poll puts it.
+  const held = useListHold()
+  const target = [
+    { id: "pinned", items: [...loud.pinned, ...quiet.pinnedDone] },
+    { id: "ready", items: loud.ready },
+    { id: "working", items: loud.working },
+    { id: "snoozed", items: quiet.snoozed },
+    { id: "done", items: quiet.done ?? [] },
+    { id: "external", items: quiet.external },
+  ] satisfies { id: ListBand; items: ThreadView[] }[]
+  const drawnBands = useRef<HeldSection<ThreadView>[]>([])
+  const bands = holdLayout({
+    prev: drawnBands.current,
+    target,
+    keyOf: (t) => t.id,
+    frozen: held,
+    moved,
+    live: (slug) => [...project.queued, ...project.running, ...project.snoozed, ...(board?.threads ?? [])].find((t) => t.id === slug),
+  })
+  drawnBands.current = bands
+  // The band each thread is in NOW: a held row is drawn in its old place but as what it is — a rest time if
+  // it is Ready, a spinner if it is working — since only the layout is held, never what a row says.
+  const bandNow = new Map(target.flatMap((band) => band.items.map((t) => [t.id, band.id] as const)))
+  const slots = (band: ListBand) => bands.find((section) => section.id === band)?.slots ?? []
+  const row = (slot: HeldSlot<ThreadView>) => {
+    const t = slot.item
+    const band = bandNow.get(t.id)
+    return (
+      <RailRow
+        key={t.id}
+        t={t}
+        active={activeKey === threadKey(project.id, t.id)}
+        open={openSlug === t.id}
+        restedAge={band === "ready"}
+        scope={scope}
+        cardKey={carded.has(t.id) ? threadKey(project.id, t.id) : undefined}
+        band={band === "pinned" || band === "ready" || band === "working" ? band : undefined}
+        held={slot.held}
+      />
+    )
+  }
   return (
     <section
       ref={grip?.ref}
@@ -489,10 +550,10 @@ function ProjectGroup({
               row its spinner, so a name over any of them said what the rows already did (maintainer
               2026-09-29: "let the icons show what is working", then Ready, then "just a pin icon next to
               the threads that are pinned"). */}
-          {pinned.map(row(false, "pinned"))}
-          {loud.ready.map(row(true, "ready"))}
-          {loud.working.map(row(false, "working"))}
-          {opened.length > 0 && <QuietBands project={project} quiet={quiet} opened={opened} row={row} />}
+          {slots("pinned").map(row)}
+          {slots("ready").map(row)}
+          {slots("working").map(row)}
+          {opened.length > 0 && <QuietBands project={project} quiet={quiet} slots={slots} opened={opened} row={row} />}
         </ThreadProjectScope>
       )}
     </section>
@@ -501,6 +562,9 @@ function ProjectGroup({
 
 /** The quiet bands, in the order the list gives them. */
 const QUIET_BANDS: readonly QuietBandKey[] = ["snoozed", "done", "external"]
+
+/** Every band a project's rows are drawn in, loud then quiet — the sections lib/heldLayout.ts holds. */
+type ListBand = "pinned" | "ready" | "working" | QuietBandKey
 
 /**
  * AN OPEN QUIET BAND'S NAME, over its rows — the rail's legend (BandLabel.tsx BANDS), in the rail header's
@@ -527,6 +591,7 @@ function BandName({ band, count, onToggle }: { band: QuietBandKey; count: number
     <button
       type="button"
       data-xq-band-label={band}
+      data-xq-reshape
       aria-expanded
       title={`Hide ${label.toLowerCase()}`}
       onClick={onToggle}
@@ -675,6 +740,9 @@ function ProjectRow({
         <button
           type="button"
           data-xq-project-fold
+          // Folding a project, or dragging it by this row, reshapes the list by the human's own hand
+          // (lib/listHold.ts): the list follows it rather than holding what they asked for.
+          data-xq-reshape
           onClick={() => {
             // A drag ENDS over the row it lifted, so the browser fires a click on release; that one is not
             // a fold.
@@ -791,6 +859,7 @@ function QuietToggles({ project, quiet, opened, working = 0 }: { project: Queues
             key={band}
             type="button"
             data-xq-quiet-count={band}
+            data-xq-reshape
             aria-expanded={band === "working" ? undefined : isOpen}
             aria-label={label}
             title={label}
@@ -825,31 +894,46 @@ function QuietToggles({ project, quiet, opened, working = 0 }: { project: Queues
  * name, which closes it. Off the cord: the cord is the work in flight (ThreadConnector reads only the
  * group's own children, and these sit in a container of their own).
  */
-function QuietBands({ project, quiet, opened, row }: { project: QueuesProject; quiet: QuietBands; opened: readonly QuietBandKey[]; row: (restedAge: boolean) => (t: ThreadView) => ReactNode }) {
+function QuietBands({
+  project,
+  quiet,
+  slots,
+  opened,
+  row,
+}: {
+  project: QueuesProject
+  quiet: QuietBands
+  /** The rows each band DRAWS — held while the pointer is over the list, so a band whose last row left on
+   *  its own keeps its name and that row until the hold ends. */
+  slots: (band: ListBand) => HeldSlot<ThreadView>[]
+  opened: readonly QuietBandKey[]
+  row: (slot: HeldSlot<ThreadView>) => ReactNode
+}) {
   const [donePage, setDonePage] = useState(DONE_PAGE)
-  const shown = opened.filter((band) => quietCount(quiet, band) > 0)
+  const shown = opened.filter((band) => slots(band).length > 0 || (band === "done" && quiet.done === undefined && quiet.doneCount > 0))
   const close = (band: QuietBandKey) => () => setBandOpen(project.id, band, false)
   return (
     <div data-xq-drill={project.id} className="flex min-w-0 flex-col">
       {shown.includes("snoozed") && (
         <div data-xq-drill-band="snoozed">
           <BandName band="snoozed" count={quiet.snoozed.length} onToggle={close("snoozed")} />
-          {quiet.snoozed.map(row(false))}
+          {slots("snoozed").map(row)}
         </div>
       )}
       {shown.includes("done") && (
         <div data-xq-drill-band="done">
           <BandName band="done" count={quiet.doneCount} onToggle={close("done")} />
-          {quiet.done ? (
+          {slots("done").length > 0 ? (
             <>
-              {quiet.done.slice(0, donePage).map(row(false))}
-              {quiet.done.length > donePage && (
+              {slots("done").slice(0, donePage).map(row)}
+              {slots("done").length > donePage && (
                 <button
                   type="button"
+                  data-xq-reshape
                   onClick={() => setDonePage((page) => page + DONE_PAGE * 2)}
                   className="rounded-md py-1 pl-[44px] pr-1.5 text-left text-[11.5px] leading-[19px] text-muted-60 outline-none transition-colors hover:text-fg focus-visible:ring-1 focus-visible:ring-focus-ink-60"
                 >
-                  Show {Math.min(DONE_PAGE * 2, quiet.done.length - donePage)} more
+                  Show {Math.min(DONE_PAGE * 2, slots("done").length - donePage)} more
                 </button>
               )}
             </>
@@ -861,7 +945,7 @@ function QuietBands({ project, quiet, opened, row }: { project: QueuesProject; q
       {shown.includes("external") && (
         <div data-xq-drill-band="external">
           <BandName band="external" count={quiet.external.length} onToggle={close("external")} />
-          {quiet.external.map(row(false))}
+          {slots("external").map(row)}
         </div>
       )}
     </div>
@@ -876,7 +960,7 @@ export function AddProjectRow() {
   const add = useAddProject()
   return (
     <div className={`${ROW_CLASS} ${GROUP_GAP}`}>
-      <button type="button" onClick={add.start} disabled={add.pending} className={`${ROW_BUTTON_CLASS} group/add items-center disabled:opacity-60`}>
+      <button type="button" data-xq-reshape onClick={add.start} disabled={add.pending} className={`${ROW_BUTTON_CLASS} group/add items-center disabled:opacity-60`}>
         <span className={INDICATOR_SLOT}>
           <span className="flex h-4 w-4 items-center justify-center rounded-[30%] border border-dotted border-border-strong text-muted-70 transition-colors group-hover/add:border-fg/40 group-hover/add:text-fg">
             <Plus size={10} strokeWidth={2.25} />
