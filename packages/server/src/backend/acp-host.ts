@@ -24,6 +24,7 @@ import { endDaemonTree } from "./daemon-tree.ts"
 import { frizzIpcPath } from "./ipc-path.ts"
 import { spawnAcpChild, type AcpProcess, type AcpSpawn, type AcpSpawnOptions } from "./acp-rpc.ts"
 import { log as frizzLog } from "../logging.ts"
+import { launchEnvironment } from "./worker-env.ts"
 
 export interface AcpDaemonRecord {
   threadSlug: string
@@ -180,7 +181,9 @@ function forkDaemon(options: AcpHostOptions): Promise<AcpDaemonRecord> {
     cwd: options.cwd,
     // The daemon's OWN environment only needs the handoff; the agent's environment travels in the
     // payload and is applied by the daemon, keeping the audited env allowlist authoritative.
-    env: { ...process.env, FRIZZ_ACP_DAEMON: payload },
+    // launchEnvironment, not process.env, so the daemon never carries what the dev server's Vite wrote
+    // (worker-env.ts).
+    env: { ...launchEnvironment(), FRIZZ_ACP_DAEMON: payload },
     detached: true,
     stdio: "ignore",
     windowsHide: true,

@@ -1,9 +1,10 @@
 import assert from "node:assert/strict"
-import { existsSync, mkdtempSync, mkdirSync, writeFileSync, rmSync } from "node:fs"
+import { existsSync, mkdtempSync, mkdirSync, readFileSync, writeFileSync, rmSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { delimiter, join } from "node:path"
 import { test } from "node:test"
 import { claudeBrokerRecordPath, forkBroker, killBroker, resolveClaudeExecutableAbsolute } from "./claude-broker-host.ts"
+import { captureLaunchEnvironment } from "./worker-env.ts"
 
 // The npm `.cmd` stub, verbatim from a real `npm i -g @anthropic-ai/claude-code` on Windows Server
 // 2022 (claude 2.1.220). Its whole job is to call the native exe that ships inside the package.
@@ -172,6 +173,39 @@ test("forkBroker: control — a daemon that publishes its record and stays up re
     assert.equal(record.generation.length, 36)
     assert.ok(daemonPid > 0)
   } finally {
+    if (daemonPid) { try { process.kill(daemonPid, "SIGKILL") } catch {} }
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+// --- forkBroker: the daemon is forked from the LAUNCH env, not the live one ---------------------------
+//
+// 2026-09-30: the dev server creates Vite in-process, Vite writes NODE_ENV=development into its
+// process.env, and a broker forked from a live spread carried it into every Claude worker (`next build`
+// in a worker then failed). The daemon must see this process's launch value, whatever was written since.
+
+test("forkBroker: a NODE_ENV written into the server after launch does not reach the daemon", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "frizz-broker-fork-"))
+  const launch = captureLaunchEnvironment().get("NODE_ENV")
+  const before = process.env.NODE_ENV
+  let daemonPid: number | undefined
+  try {
+    process.env.NODE_ENV = "frizz-test-vite-wrote-this"
+    const reportPath = join(dir, "env.json")
+    const entry = scratchDaemon(dir, "reports-env", [
+      `writeFileSync(${JSON.stringify(reportPath)}, JSON.stringify({ nodeEnv: process.env.NODE_ENV ?? null, hasConfig: typeof process.env.FRIZZ_CLAUDE_BROKER === "string" }))`,
+      "writeFileSync(config.recordPath, JSON.stringify({ daemonPid: process.pid, socketPath: config.socketPath, sessionId: config.sessionId, generation: config.generation, createdAt: new Date().toISOString() }))",
+      "setInterval(() => {}, 1000)",
+    ].join("\n"))
+    const record = await forkBroker(forkOptions(dir, entry))
+    daemonPid = record.daemonPid
+    const report = JSON.parse(readFileSync(reportPath, "utf8")) as { nodeEnv: string | null; hasConfig: boolean }
+    assert.equal(report.hasConfig, true, "control: the daemon got its config handoff")
+    assert.notEqual(report.nodeEnv, "frizz-test-vite-wrote-this", "the value written after launch leaked into the daemon")
+    assert.equal(report.nodeEnv, launch ?? null, "the daemon sees exactly what this process was launched with")
+  } finally {
+    if (before === undefined) delete process.env.NODE_ENV
+    else process.env.NODE_ENV = before
     if (daemonPid) { try { process.kill(daemonPid, "SIGKILL") } catch {} }
     rmSync(dir, { recursive: true, force: true })
   }

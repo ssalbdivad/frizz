@@ -40,6 +40,27 @@
 // worker genuinely needs are re-added explicitly afterwards, because every caller merges its own
 // `workerEnv` ON TOP of this (see the broker's `env:` and the bridge's `attach`).
 //
+// ── WHAT FRIZZ ITSELF WROTE, AND WHY IT IS RESET RATHER THAN DENIED ────────────────────────────
+// "What you exported" is the LAUNCH environment, and process.env is not that once frizz is running:
+// the dev server creates Vite in-process, and Vite 8's resolveConfig does
+// `if (!isNodeEnvSet) process.env.NODE_ENV = defaultNodeEnv` (vite/dist/node/chunks/node.js), so
+// every worker of a `nub run dev` frizz started with NODE_ENV=development nobody exported. That broke
+// real work: `next build` in a worker died prerendering /_global-error with "Cannot read properties of
+// null (reading 'useContext')", because Next keeps a non-standard NODE_ENV (2026-09-30).
+//
+// Denying NODE_ENV would fix that and break the rule above — an operator who DID export
+// NODE_ENV=production before launching frizz must still see it. So the keys frizz's own in-process
+// tooling writes are instead taken from a snapshot of this process's environment at module load, which
+// is before anything runs: an operator's value comes through, a value frizz injected does not, and a
+// key absent at launch is absent in the worker. The list is exactly what Vite writes into process.env
+// (NODE_ENV in resolveConfig; VITE_USER_NODE_ENV, BROWSER and BROWSER_ARGS from a `.env` file in
+// loadEnv); add a key here when another in-process dependency starts writing one.
+//
+// The snapshot is per PROCESS, which is why the daemon spawn sites (claude-broker-host, the codex and
+// ACP hosts) hand their daemon `launchEnvironment()` rather than `process.env`: a broker forked with the
+// server's live env would snapshot Vite's value as its own launch value, and the Claude SDK builds the
+// worker's env inside the broker from the broker's own process.env.
+//
 // This is NOT a secrets boundary and must not be described as one. It keeps frizz's plumbing out of a
 // worker's environment; it does not keep the operator's credentials out, and it never could.
 const FRIZZ_INTERNAL_PREFIX = "FRIZZ_"
@@ -50,13 +71,41 @@ export function isFrizzInternalEnvKey(key: string): boolean {
   return key.startsWith(FRIZZ_INTERNAL_PREFIX)
 }
 
+/** Keys frizz's own in-process dependencies write into process.env at runtime — see the header. */
+export const RUNTIME_WRITTEN_ENV_KEYS = ["NODE_ENV", "VITE_USER_NODE_ENV", "BROWSER", "BROWSER_ARGS"] as const
+
+let launchValues: ReadonlyMap<string, string | undefined> | undefined
+
+/** Snapshot this process's launch values of RUNTIME_WRITTEN_ENV_KEYS. Runs at module load; idempotent,
+ *  so the code that creates Vite calls it too, to keep the ordering from resting on the import graph. */
+export function captureLaunchEnvironment(): ReadonlyMap<string, string | undefined> {
+  launchValues ??= new Map(RUNTIME_WRITTEN_ENV_KEYS.map((key) => [key, process.env[key]]))
+  return launchValues
+}
+captureLaunchEnvironment()
+
+/** A copy of `source` with every runtime-written key it carries reset to this process's launch value
+ *  (deleted if it was unset at launch). A key `source` does not carry stays absent: a caller that scoped
+ *  its env down is not handed one back. Unlike inheritWorkerEnvironment it keeps FRIZZ_ variables, so it
+ *  is what a daemon's OWN environment is spawned from. */
+export function launchEnvironment(source: NodeJS.ProcessEnv = process.env): NodeJS.ProcessEnv {
+  const env: NodeJS.ProcessEnv = { ...source }
+  for (const [key, value] of captureLaunchEnvironment()) {
+    if (!(key in env)) continue
+    if (value === undefined) delete env[key]
+    else env[key] = value
+  }
+  return env
+}
+
 /** The environment a dispatched worker starts from: `source` (frizz's own process env by default) with
- *  frizz's control-plane variables removed and undefined values dropped. Callers merge their per-thread
+ *  the runtime-written keys put back to their launch values (see launchEnvironment), frizz's
+ *  control-plane variables removed and undefined values dropped. Callers merge their per-thread
  *  `workerEnv` on top — that is what puts the FRIZZ_ variables a worker DOES need back, with this
  *  thread's values rather than the server's. */
 export function inheritWorkerEnvironment(source: NodeJS.ProcessEnv = process.env): Record<string, string> {
   const env: Record<string, string> = {}
-  for (const [key, value] of Object.entries(source)) {
+  for (const [key, value] of Object.entries(launchEnvironment(source))) {
     if (value === undefined || isFrizzInternalEnvKey(key)) continue
     env[key] = value
   }

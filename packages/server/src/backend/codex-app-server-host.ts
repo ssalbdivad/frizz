@@ -34,6 +34,7 @@ import { codexAppServerArgv } from "./codex-mcp.ts"
 import type { FrizzMcp } from "./types.ts"
 import type { CodexAppServerProcess } from "./codex-app-server.ts"
 import { log as frizzLog } from "../logging.ts"
+import { launchEnvironment } from "./worker-env.ts"
 
 export interface CodexAppServerDaemonRecord {
   projectId: string
@@ -244,7 +245,9 @@ function forkDaemon(options: CodexAppServerHostOptions): Promise<CodexAppServerD
     cwd: options.cwd,
     // The daemon's OWN environment only needs the handoff; the app-server's environment travels in
     // the payload and is applied by the daemon, keeping the audited env allowlist authoritative.
-    env: { ...process.env, FRIZZ_CODEX_APP_SERVER_DAEMON: payload },
+    // launchEnvironment, not process.env, so the daemon never carries what the dev server's Vite wrote
+    // (worker-env.ts).
+    env: { ...launchEnvironment(), FRIZZ_CODEX_APP_SERVER_DAEMON: payload },
     detached: true,
     stdio: "ignore",
     // Belt to the daemon's own braces: a detached process owns no console on Windows, so anything

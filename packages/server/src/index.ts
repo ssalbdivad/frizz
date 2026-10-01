@@ -18,6 +18,7 @@ import { createApp, type AppOptions } from "./app.ts"
 import { compress, negotiateEncoding, shouldCompress, type ContentEncoding } from "./compression.ts"
 import { createTerminalServer } from "./terminal.ts"
 import { createAppSocketServer, makeTranscriptReader } from "./app-socket.ts"
+import { captureLaunchEnvironment } from "./backend/worker-env.ts"
 import {
   createRetryableCleanup,
   createShutdownBarrier,
@@ -131,6 +132,9 @@ const defaultStartServerRuntime: StartServerRuntime = {
   createTerminal: createTerminalServer,
   createAppSocket: createAppSocketServer,
   createVite: async (options) => {
+    // Vite writes NODE_ENV (and a few more) into process.env. Pin the launch snapshot workers inherit
+    // from BEFORE it runs, rather than trusting the import graph to have loaded worker-env.ts first.
+    captureLaunchEnvironment()
     const { createServer: createVite } = await import("vite")
     return createVite(options)
   },

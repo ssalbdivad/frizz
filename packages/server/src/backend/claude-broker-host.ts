@@ -11,6 +11,7 @@ import { claudeBrokerDiagnosticLogPath, describeClaudeBrokerExit, readClaudeBrok
 import { endDaemonTree, type EndDaemonTreeDeps } from "./daemon-tree.ts"
 import { frizzIpcPath } from "./ipc-path.ts"
 import type { WorkerMcpServers } from "./project-mcp-servers.ts"
+import { launchEnvironment } from "./worker-env.ts"
 
 // The Claude Agent SDK REQUIRES an absolute `pathToClaudeCodeExecutable` (validateExecutablePath rejects
 // a bare name), unlike an execvp of the CLI, which resolves "claude" on PATH itself. When the dispatch layer
@@ -251,7 +252,10 @@ export function forkBroker(options: ForkBrokerOptions): Promise<BrokerRecord> {
   const entry = options.daemonEntry ?? resolveDetachedDaemonEntry(import.meta.url, "claude-agent-broker")
   const child = spawn(process.execPath, [entry], {
     cwd: options.cwd,
-    env: { ...process.env, FRIZZ_CLAUDE_BROKER: JSON.stringify(config) },
+    // launchEnvironment, not process.env: the daemon snapshots its own launch env, and the Claude SDK
+    // builds the worker's env from it — a live spread would hand every worker the NODE_ENV Vite wrote
+    // into the dev server (worker-env.ts).
+    env: { ...launchEnvironment(), FRIZZ_CLAUDE_BROKER: JSON.stringify(config) },
     detached: true,
     stdio: "ignore",
     // A detached process owns no console on Windows; keep the daemon from ever being handed a

@@ -4,6 +4,7 @@ import type { IPty, IPtyForkOptions } from "node-pty"
 import type { ThreadTerminal } from "@frizz/shared"
 import type { CommandThreadRow, Storage } from "./storage.ts"
 import type { TerminalAttachment } from "./terminal.ts"
+import { launchEnvironment } from "./backend/worker-env.ts"
 
 // THREAD TERMINALS — a live pty that belongs to one thread. The human opens it from the thread's drawer
 // (or types `$ cmd` into the thread's prompt box), and it runs in the folder that thread's agent is
@@ -220,10 +221,12 @@ export function shellLabel(env: NodeJS.ProcessEnv, platform = process.platform):
 
 /** The environment a terminal runs in: the server's, minus every FRIZZ_* variable. Those name the
  *  running server's own project, state dir and log — a `npm run dev` of Frizz itself inside Frizz would
- *  otherwise obey them and write into the live server's files. */
+ *  otherwise obey them and write into the live server's files. The keys Vite writes into the dev
+ *  server's process.env go back to their launch values first, exactly as for a worker
+ *  (backend/worker-env.ts): a `next build` typed here must not inherit NODE_ENV=development. */
 export function commandEnvironment(env: NodeJS.ProcessEnv): Record<string, string> {
   const out: Record<string, string> = {}
-  for (const [key, value] of Object.entries(env)) {
+  for (const [key, value] of Object.entries(launchEnvironment(env))) {
     if (value == null || key.startsWith("FRIZZ_")) continue
     out[key] = value
   }
