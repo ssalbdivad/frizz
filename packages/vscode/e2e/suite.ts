@@ -526,8 +526,8 @@ const steps: Step[] = [
         await new Promise((resolve) => setTimeout(resolve, 500))
         assert.equal(api.sidebar().url, `http://127.0.0.1:1/${embedQuery(project)}`)
         await vscode.commands.executeCommand("frizz.sidebar.reload")
-        await until("a message instead of the page", () => api.sidebar().url === undefined && api.sidebar().message !== undefined)
-        assert.equal(api.sidebar().message, "Frizz isn't running.")
+        // Reload looks again first ("Looking for Frizz…"), then says what it found.
+        await until("a message instead of the page", () => api.sidebar().url === undefined && api.sidebar().message === "Frizz isn't running.")
       } finally {
         await frizz.update("serverUrl", control, vscode.ConfigurationTarget.Global)
       }
