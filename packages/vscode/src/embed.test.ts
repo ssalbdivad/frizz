@@ -65,6 +65,15 @@ test("every page message the contract names is taken, with only its own fields",
     shift: true,
     alt: false,
   })
+  assert.deepEqual(parsePageMessage({ type: "frizz:add-context", what: "selection", text: "x" }), { type: "frizz:add-context", what: "selection" })
+  assert.deepEqual(parsePageMessage({ type: "frizz:add-context", what: "file", path: "/r/a.ts" }), { type: "frizz:add-context", what: "file", path: "/r/a.ts" })
+  assert.deepEqual(parsePageMessage({ type: "frizz:route", view: "thread", title: "hello-there", description: "Ready", x: 1 }), {
+    type: "frizz:route",
+    view: "thread",
+    title: "hello-there",
+    description: "Ready",
+  })
+  assert.deepEqual(parsePageMessage({ type: "frizz:route", view: "queue", title: "All projects", description: "" }), { type: "frizz:route", view: "queue", title: "All projects" })
 })
 
 test("anything else from the page is nothing: unknown types, wrong shapes, other versions, non-web links", () => {
@@ -94,6 +103,16 @@ test("anything else from the page is nothing: unknown types, wrong shapes, other
     { type: "frizz:open-external", url: "not a url" },
     { type: "frizz:key", key: "p", code: "KeyP", ctrl: true },
     { type: "frizz:key", key: "p", code: "KeyP", ctrl: 1, meta: false, shift: false, alt: false },
+    { type: "frizz:add-context" },
+    { type: "frizz:add-context", what: "selection", path: "/r/a.ts" },
+    { type: "frizz:add-context", what: "file" },
+    { type: "frizz:add-context", what: "file", path: "src/a.ts" },
+    { type: "frizz:add-context", what: "file", path: "/r/a\0.ts" },
+    { type: "frizz:add-context", what: "line", path: "/r/a.ts" },
+    { type: "frizz:route", view: "drawer", title: "x" },
+    { type: "frizz:route", view: "thread" },
+    { type: "frizz:route", view: "thread", title: "x".repeat(501) },
+    { type: "frizz:route", view: "queue", title: "All projects", description: 3 },
   ]
   for (const message of refused) assert.equal(parsePageMessage(message), undefined, JSON.stringify(message))
   assert.equal(webUrl("http://"), undefined)

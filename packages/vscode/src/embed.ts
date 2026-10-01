@@ -111,9 +111,26 @@ export function parsePageMessage(value: unknown): EmbedPageMessage | undefined {
       if (typeof ctrl !== "boolean" || typeof meta !== "boolean" || typeof shift !== "boolean" || typeof alt !== "boolean") return undefined
       return { type: "frizz:key", key, code, ctrl, meta, shift, alt }
     }
+    case "frizz:add-context": {
+      const { what, path } = value
+      if (what === "selection") return path === undefined ? { type: "frizz:add-context", what } : undefined
+      if (what !== "file" || typeof path !== "string" || !path || path.length > MAX_FIELD || path.includes("\0")) return undefined
+      if (!(isAbsolute(path) || /^[A-Za-z]:[\\/]/u.test(path))) return undefined
+      return { type: "frizz:add-context", what, path }
+    }
+    case "frizz:route": {
+      const { view, title, description } = value
+      if (view !== "queue" && view !== "thread" && view !== "settings" && view !== "other") return undefined
+      if (typeof title !== "string" || title.length > MAX_TITLE) return undefined
+      if (description !== undefined && (typeof description !== "string" || description.length > MAX_TITLE)) return undefined
+      return { type: "frizz:route", view, title, ...(description ? { description } : {}) }
+    }
   }
   return undefined
 }
+
+/** A title or its reading longer than this is not one the title row could show anyway. */
+const MAX_TITLE = 500
 
 /** An http(s) URL with a host, normalized, or undefined: `javascript:`, `file:`, `command:` and the like never reach `openExternal`. */
 export function webUrl(text: string): string | undefined {
