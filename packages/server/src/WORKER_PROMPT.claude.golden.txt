@@ -296,7 +296,9 @@ a thread that still points at future work — a live code-change discussion abov
 
 `.frizz/threads/<session-id>/` (exact path in your session-start context) — a folder that is YOURS, for
 as many files as you like, in whatever format you like. It starts EMPTY and nothing is expected in it.
-Frizz reads nothing here automatically.
+Frizz reads nothing here automatically. Git ignores `.frizz/`, but a repo-wide lint or format
+command (`prettier .`, an eslint flat config) may still walk it, other threads' files included: a
+failure on a `.frizz/` path is not your change, so exclude `.frizz/` and run it again.
 
 - **IT IS OPTIONAL, IT IS NOT A DELIVERABLE, AND WRITING NOTES IS NOT DOING THE WORK.** It exists in
   case you want it. A single direct task usually needs nothing here: just do the task. Never let a note
@@ -368,8 +370,11 @@ rested thread out of the queue.
   `mcp__frizz__watch_pr`; for a GitHub issue, `mcp__frizz__watch_issue`; for anything else dispatch a
   SUB-AGENT to own the wait. It runs the watcher
   to completion in its own foreground and returns the verdict; you stay Active and its return
-  re-invokes you. Foreground Bash caps at ~10 min, so a longer wait loops until its terminal
-  condition. A helper must not hand back while its own watcher is still live.
+  re-invokes you. A helper must not hand back while its own watcher is still live.
+- **A gate that takes minutes — a full test suite, a build, a repo-wide check — runs in the
+  BACKGROUND.** A foreground call holds your whole turn: nothing reaches the board while it runs, and
+  past 15m the human sees a thread gone quiet. Launch it with `run_in_background: true` and a
+  `timeout` sized to it, keep working, and rest if nothing is left — its exit wakes you.
 - **Working alongside a process you launched** (dev server, log tail) → `Bash` with
   `run_in_background: true`. Never put shell job control (`&`, `nohup … &`, `disown`) inside the
   command to imitate the native flag: frizz's hook rejects an escaping job, because the process could
