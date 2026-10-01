@@ -14,6 +14,8 @@
 // nothing but the `PROCEDURES` data table as a value. Transport concerns (fetch, RpcCallOpts, the
 // Proxy) live in rpc.ts, which is browser-only and never enters the server program.
 import type {
+  EditorComposeItem,
+  EditorWindowSummary,
   BackgroundShellOutputInput,
   BackgroundShellOutputResult,
   WorkflowAgentView,
@@ -307,7 +309,9 @@ export interface Api {
   // A live Frizz-owned runtime is deliberately unavailable: a second provider client is uncoordinated.
   threadTerminalCommand(input: { slug: string }): Promise<{ command: string | null; mode: "attach" | "resume" | "unavailable"; reason: string | null }>
   openExternal(input: { url: string }): Promise<void>
-  openLocalFile(input: { path: string; image?: boolean }): Promise<{ action: "opened" | "copy"; path: string }>
+  // `line`/`column`/`endLine` land the External app on a place in the file: through a connected editor
+  // window (the editor bridge, packages/vscode) when the app is one, else its CLI's `-g path:line:col`.
+  openLocalFile(input: { path: string; image?: boolean; line?: number; column?: number; endLine?: number }): Promise<{ action: "opened" | "copy"; path: string }>
   // "Open in editor": the thread's working folder, in the External app when it is an editor, else $EDITOR.
   openThreadFolder(input: { slug: string }): Promise<{ path: string }>
   // The same for the project's own folder — `e` with no thread in front of the human.
@@ -319,6 +323,10 @@ export interface Api {
   // Classify path references (as they appear in inline code) → canonical openable path, or null when the
   // candidate doesn't resolve to a real file under the server's openable roots. Drives clickable inline code.
   resolveLocalPaths(input: { paths: string[] }): Promise<{ resolved: { input: string; path: string | null }[] }>
+  // Editor windows connected over the editor bridge (machine-wide; the `editors` event pushes changes).
+  editorWindows(): Promise<{ windows: EditorWindowSummary[] }>
+  // Claim what an editor sent to the prompt box (machine-wide, first caller wins). No id: the oldest.
+  composeTake(input: { id?: string }): Promise<{ item: EditorComposeItem | null }>
   markComplete(input: { slug: string }): Promise<void>
   setThreadStatus(input: { slug: string; status: "active" | "planning" | "planned" | "needs-human" | "blocked" | "done" | "dismissed" }): Promise<void>
   dismissThread(input: { slug: string }): Promise<void>
@@ -507,6 +515,8 @@ export const PROCEDURES = {
   localMarkdown: "query",
   localFile: "query",
   resolveLocalPaths: "query",
+  editorWindows: "query",
+  composeTake: "mutation",
   markComplete: "mutation",
   setThreadStatus: "mutation",
   dismissThread: "mutation",

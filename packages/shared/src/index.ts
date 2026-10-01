@@ -2,6 +2,7 @@ import { parse as parseYaml } from "yaml"
 import { z } from "zod"
 import { InteractionLifecycle, InteractionOpaqueId, InteractionRevision, InteractionThreadSlug } from "./interactions.ts"
 import { ThreadSlug } from "./thread-slug.ts"
+import { EDITOR_PROTOCOL_VERSION, type EditorClientMessage, type EditorComposeInput, type EditorWindowSummary } from "./editor-protocol.ts"
 
 // ---- Attachment intake (drag/drop, paste, file picker) ----
 // What a worker can actually GET AT. A format qualifies two ways: an agent's Read/file tool consumes
@@ -5656,6 +5657,50 @@ export const BoardMeta = z.object({
 })
 export type BoardMeta = z.infer<typeof BoardMeta>
 
+// ── The editor bridge's wire (types and rationale: ./editor-protocol.ts, plans/vscode-extension.md) ──
+// The server validates every frame an editor sends with these; each is pinned to its plain type below.
+const EditorKindSchema = z.enum(["vscode", "cursor", "windsurf", "other"])
+const EditorWindowSummarySchema = z.object({ app: z.string(), kind: EditorKindSchema, acceptsOpens: z.boolean() }).strict()
+const EditorPath = z.string().min(1).max(4096)
+const EditorLine = z.number().int().min(1).max(10_000_000)
+export const EDITOR_MAX_FOLDERS = 64
+export const EDITOR_COMPOSE_MAX_TEXT = 64 * 1024
+export const EditorComposeInputSchema = z.object({
+  projectId: z.string().min(1).max(200).optional(),
+  path: EditorPath,
+  text: z.string().max(EDITOR_COMPOSE_MAX_TEXT).optional(),
+  startLine: EditorLine.optional(),
+  endLine: EditorLine.optional(),
+}).strict()
+export const EditorClientMessageSchema = z.discriminatedUnion("t", [
+  z.object({
+    t: z.literal("hello"),
+    v: z.literal(EDITOR_PROTOCOL_VERSION),
+    windowId: z.string().min(1).max(200),
+    app: z.string().min(1).max(200),
+    extensionVersion: z.string().max(100),
+    folders: z.array(EditorPath).max(EDITOR_MAX_FOLDERS),
+    focused: z.boolean(),
+    acceptsOpens: z.boolean(),
+    home: z.string().max(4096),
+    platform: z.string().max(40),
+  }).strict(),
+  z.object({
+    t: z.literal("state"),
+    folders: z.array(EditorPath).max(EDITOR_MAX_FOLDERS),
+    focused: z.boolean(),
+    acceptsOpens: z.boolean(),
+  }).strict(),
+  z.object({ t: z.literal("result"), id: z.string().min(1).max(200), ok: z.boolean(), error: z.string().max(1000).optional() }).strict(),
+  z.object({ t: z.literal("compose"), id: z.string().min(1).max(200), item: EditorComposeInputSchema }).strict(),
+])
+// Both directions, so neither the plain types nor the schemas can drift without a type error here.
+type Same<A, B> = [A] extends [B] ? ([B] extends [A] ? true : false) : false
+const editorClientWireMatches: Same<z.infer<typeof EditorClientMessageSchema>, EditorClientMessage> = true
+const editorWindowWireMatches: Same<z.infer<typeof EditorWindowSummarySchema>, EditorWindowSummary> = true
+const editorComposeWireMatches: Same<z.infer<typeof EditorComposeInputSchema>, EditorComposeInput> = true
+void editorClientWireMatches, editorWindowWireMatches, editorComposeWireMatches
+
 export const ServerEvent = z.discriminatedUnion("type", [
   z.object({
     type: z.literal("board"),
@@ -5695,6 +5740,18 @@ export const ServerEvent = z.discriminatedUnion("type", [
     lifecycle: InteractionLifecycle,
     recordRevision: InteractionRevision,
   }).strict(),
+  z.object({
+    // The editor windows connected over the editor bridge (packages/vscode), whole, on every change.
+    // MACHINE-WIDE: published on every open project's bus, because a page hears only its own project's.
+    type: z.literal("editors"),
+    windows: z.array(EditorWindowSummarySchema),
+  }).strict(),
+  z.object({
+    // An editor sent something to the prompt box. Payload-free, like interactions-invalidated: the
+    // page that has focus claims it through `composeTake`, so exactly one tab inserts it.
+    type: z.literal("compose-pending"),
+    id: z.string(),
+  }).strict(),
 ])
 export type ServerEvent = z.infer<typeof ServerEvent>
 export type BoardEvent = Extract<ServerEvent, { type: "board" }>
@@ -5707,6 +5764,8 @@ export * from "./claude-editions.ts"
 export * from "./code-fences.ts"
 export * from "./delta.ts"
 export * from "./drainable-worker.ts"
+export * from "./editor-protocol.ts"
+export * from "./file-position.ts"
 export * from "./interactions.ts"
 export * from "./receipt-bus.ts"
 export * from "./relay-protocol.ts"
