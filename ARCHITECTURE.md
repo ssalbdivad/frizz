@@ -371,11 +371,14 @@ that has its folder open, at the line it names. Design and protocol: [`plans/vsc
 - **Prompt-box inserts are claimed, not broadcast.** The server holds what an editor sends and
   publishes a payload-free `compose-pending` on every open project's bus; the page that has focus takes
   it with `composeTake`, so exactly one tab inserts it (`web/src/lib/editorBridge.ts`).
-- It finds the server the way the desktop app does (owner record, then the well-known ports with the
+- It finds the server the way the desktop app does (the address record, trusted only with a live owner
+  generation behind it, as `readStableServerOwner` checks; then the well-known ports with the
   launch-token proof), plus frizz-dev's `dev-supervisor.lock`, and declares `extensionKind: ["workspace"]`
   so a Remote-WSL or SSH window runs it where the files and the server are. It ships as a `.vsix`
   (`nub run vscode:package`, `vscode:install`); `@vscode/vsce` is fetched per run, never installed.
-  `packages/vscode/scripts/e2e.ts` drives a real VS Code under Xvfb against a fake or a real Frizz.
+  `packages/vscode/scripts/e2e.ts` drives a real VS Code under Xvfb against a fake Frizz (on stable and
+  on the manifest's oldest VS Code), or with `--stack` against a disposable two-project Frizz it boots
+  itself, with a headless page that must receive the prompt-box insert.
 
 ### Running against a repo outside this monorepo
 

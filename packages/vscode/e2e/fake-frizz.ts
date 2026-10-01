@@ -8,19 +8,24 @@
 // plus a control surface for the suite running inside VS Code, which cannot reach this process any
 // other way:
 //
-//   GET  /__e2e/log                          every frame and RPC call received so far
+//   GET  /__e2e/log                          every frame and RPC call received so far, and any refused
 //   POST /__e2e/open      {path, line?, …}   send `open` to the newest editor socket; answers its `result`
+//   POST /__e2e/focus     {path}             send `focus` the same way
 //   POST /__e2e/projects  {projects}         push a `projects` frame
 //   POST /__e2e/drop                         close the editor socket (1001), as a restart would
 //
 // It is a stand-in for the seams the extension touches, not for the server: the REAL mode of
-// scripts/e2e.ts runs the same suite against a real Frizz.
+// scripts/e2e.ts runs the same suite against a real Frizz. What it does take from the server is the
+// judgement of a frame — the server's own schema and ceilings — so a frame Frizz would refuse is
+// refused here too (closed 4401) and listed in `refused`.
 
 import { randomUUID } from "node:crypto"
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http"
 import type { AddressInfo } from "node:net"
 import { WebSocket, WebSocketServer } from "ws"
-import type { EditorClientMessage, EditorProject, EditorServerMessage } from "@frizz/shared/editor-protocol"
+import { EditorClientMessageSchema } from "@frizz/shared"
+import { EDITOR_CLOSE, type EditorClientMessage, type EditorProject, type EditorServerMessage } from "@frizz/shared/editor-protocol"
+import { EDITOR_MAX_FRAME_BYTES, EDITOR_MAX_PAYLOAD_BYTES } from "../../server/src/editor-bridge.ts"
 
 export const FAKE_THREAD = {
   id: "fake-thread",
@@ -38,14 +43,16 @@ export const FAKE_PREFERENCES = { backend: "claude", claude: { model: "sonnet", 
 
 export interface FakeLog {
   frames: EditorClientMessage[]
+  /** Frames the real server would have refused, and why. */
+  refused: string[]
   rpc: { projectId: string; procedure: string; input: unknown }[]
   origins: (string | undefined)[]
 }
 
 export class FakeFrizz {
-  readonly log: FakeLog = { frames: [], rpc: [], origins: [] }
+  readonly log: FakeLog = { frames: [], refused: [], rpc: [], origins: [] }
   readonly #server: Server
-  readonly #wss = new WebSocketServer({ noServer: true })
+  readonly #wss = new WebSocketServer({ noServer: true, maxPayload: EDITOR_MAX_PAYLOAD_BYTES })
   readonly #sockets: WebSocket[] = []
   readonly #results = new Map<string, (result: unknown) => void>()
   readonly #heartbeat: NodeJS.Timeout
@@ -92,9 +99,21 @@ export class FakeFrizz {
 
   #accept(ws: WebSocket): void {
     this.#sockets.push(ws)
-    ws.on("close", () => this.#sockets.splice(this.#sockets.indexOf(ws), 1))
+    ws.on("close", (code) => {
+      this.#sockets.splice(this.#sockets.indexOf(ws), 1)
+      if (code === 1009) this.log.refused.push("a frame past the socket's ceiling (1009)")
+    })
     ws.on("message", (data) => {
-      const frame = JSON.parse(data.toString()) as EditorClientMessage
+      const text = data.toString()
+      const decoded = JSON.parse(text) as { t?: unknown }
+      const parsed = EditorClientMessageSchema.safeParse(decoded)
+      const oversize = decoded.t !== "compose" && Buffer.byteLength(text, "utf8") > EDITOR_MAX_FRAME_BYTES
+      if (!parsed.success || oversize) {
+        this.log.refused.push(`${String(decoded.t)}: ${oversize ? "frame too large" : parsed.error?.message}`)
+        ws.close(EDITOR_CLOSE.invalidMessage, "invalid frame")
+        return
+      }
+      const frame = decoded as EditorClientMessage
       this.log.frames.push(frame)
       if (frame.t === "hello") {
         this.#send(ws, { t: "welcome", v: 1, bootId: "fake-boot" })
@@ -135,12 +154,13 @@ export class FakeFrizz {
         case "/__e2e/drop":
           for (const ws of [...this.#sockets]) ws.close(1001, "restarting")
           return json(200, { ok: true })
-        case "/__e2e/open": {
+        case "/__e2e/open":
+        case "/__e2e/focus": {
           const ws = this.#sockets.at(-1)
           if (!ws) return json(409, { error: "no editor connected" })
           const id = randomUUID()
           const result = new Promise((resolve) => this.#results.set(id, resolve))
-          this.#send(ws, { t: "open", id, ...input })
+          this.#send(ws, url.pathname === "/__e2e/open" ? { t: "open", id, ...input } : { t: "focus", id, path: input.path })
           const answer = await Promise.race([result, new Promise((resolve) => setTimeout(() => resolve({ timeout: true }), 10_000))])
           return json(200, answer)
         }

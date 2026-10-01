@@ -26,6 +26,7 @@ const control = process.env.FRIZZ_E2E_CONTROL ?? ""
 
 interface FakeLog {
   frames: EditorClientMessage[]
+  refused: string[]
   rpc: { projectId: string; procedure: string; input: Record<string, unknown> }[]
   origins: string[]
 }
@@ -82,6 +83,8 @@ const steps: Step[] = [
         assert.equal(hello.platform, process.platform)
         assert.equal(hello.windowId, api.windowId)
         assert.ok(log.origins.length > 0 && log.origins.every((origin) => origin === control))
+        assert.deepEqual(log.refused, [], "every frame is one the server's own schema takes")
+        assert.deepEqual(api.discovered(), { origin: control, port: Number(new URL(control).port), source: "setting" }, "the page opener knows where the address came from")
       } else {
         const { windows } = await rpc.query(project.id, "editorWindows")
         assert.ok(windows.some((window) => window.app === vscode.env.appName && window.acceptsOpens), JSON.stringify(windows))
@@ -120,6 +123,19 @@ const steps: Step[] = [
         assert.equal(missing.ok, false)
         assert.match(missing.error ?? "", /doesn't exist/)
       }
+    },
+  },
+  {
+    name: "a focus request and an open on a folder answer ok, even where the editor cannot bring its window to the front",
+    modes: ["fake"],
+    async run() {
+      // `workbench.action.focusWindow` arrived in VS Code 1.128: on the oldest VS Code the manifest
+      // admits (FRIZZ_E2E_VSCODE=oldest), and in Cursor and Windsurf, raising the window throws. The
+      // work it follows has already happened, so the answer is still ok.
+      const focused = await fake<{ ok: boolean; error?: string }>("/__e2e/focus", { path: workspace })
+      assert.deepEqual({ ok: focused.ok, error: focused.error }, { ok: true, error: undefined })
+      const folder = await fake<{ ok: boolean; error?: string }>("/__e2e/open", { path: join(workspace, "src") })
+      assert.deepEqual({ ok: folder.ok, error: folder.error }, { ok: true, error: undefined })
     },
   },
   {
@@ -189,6 +205,20 @@ const steps: Step[] = [
       assert.ok(parsed)
       assert.equal(parsed.body, "@sample.ts:3 look here")
       assert.equal(parsed.items[0]?.text, sampleLines(editor.document, 3, 3))
+    },
+  },
+  {
+    name: "Send to Frizz thread refuses a selection in an untitled buffer rather than sending the message without it",
+    modes: ["fake"],
+    async run() {
+      await vscode.commands.executeCommand("workbench.action.closeAllEditors")
+      const editor = await vscode.window.showTextDocument(await vscode.workspace.openTextDocument({ content: "a pasted log\nERROR the part that matters\n" }))
+      editor.selection = new vscode.Selection(1, 0, 1, 26)
+      const before = (await fakeLog()).rpc.length
+      const sent = await vscode.commands.executeCommand<unknown>("frizz.sendToThread", { thread: "@fake-thread", message: "why?" })
+      assert.equal(sent, undefined, "nothing was sent")
+      assert.deepEqual((await fakeLog()).rpc.slice(before).map((call) => call.procedure), [], "not even the thread list was asked for")
+      await vscode.commands.executeCommand("workbench.action.revertAndCloseActiveEditor")
     },
   },
   {

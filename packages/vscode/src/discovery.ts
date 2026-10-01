@@ -3,32 +3,64 @@
 // that gets the PUBLIC origin — the one the human's tab is on — whenever one exists:
 //
 //   1. `frizz.serverUrl`, when the human set it. Nothing else is consulted.
-//   2. `<state>/frizz-server/address.json` — the published launcher's owner record, naming the port it
-//      serves. Valid only while that port answers /_frizz/health: the record outlives a crash.
+//   2. `<state>/frizz-server/address.json` — the published launcher's address record, naming the port it
+//      serves. Trusted the way the desktop app trusts it (src/server-owner.ts `readStableServerOwner`):
+//      the machine-wide owner record beside it must name the same token, pid and process start, and that
+//      process generation must still be alive. The record outlives a crash, and by then its port can be
+//      anyone's — a `frizz --sandbox` takes the next free well-known port, another account any port.
 //   3. The well-known ports (9393, 19393, 9494, 19494), accepted only with the launch-token proof the
 //      desktop app checks (packages/desktop/src/server.ts `ownedFrizz`): loopback is shared with every
 //      other account on the machine and with a `frizz --sandbox`, so answering proves nothing.
 //   4. `<data>/projects/<id>/dev-supervisor.lock` — `frizz-dev`'s public port when it is not on a
 //      well-known one. Ours by construction (it is in our own data root), so liveness is enough.
-//   5. `<data>/server.lock` — written by every launch mode, but its port is the control plane's
-//      PRIVATE listener behind the restart supervisor. RPC and the editor socket work there; a page
-//      opened on it is a different origin (its own storage, and a port that moves on every restart).
-//      Last for that reason, and only while the pid that wrote it is alive.
+//   5. `<data>/server.lock` — written by every launch mode, only while the pid that wrote it is alive.
+//      Behind the restart supervisor its port is the control plane's PRIVATE listener: RPC and the editor
+//      socket work there, but a page opened on it is a different origin (its own storage, and a port
+//      that moves on every restart). Without a supervisor (a bare `startServer`) it IS the public port.
+//      Last for the first reason. The steps above win whenever a supervisor is up, so pages land here
+//      only in narrow windows — a supervisor that died under a live child, or a Frizz on a port outside
+//      the well-known set with no address record — and the extension logs which kind of address a page
+//      was opened on (app.ts `openUrl`) instead of refusing to open one.
 //
 // Every address is `http://127.0.0.1:<port>`, never `localhost`: the server's origin gate compares
 // hostnames exactly, and `localhost` is a different origin to the browser as well.
 //
 // Pure node — no `vscode` import — so the unit tests run it against fixture roots and a real listener.
 
+import { execFile } from "node:child_process"
 import { createHash } from "node:crypto"
-import { readFileSync } from "node:fs"
-import { join } from "node:path"
+import { readFileSync, realpathSync } from "node:fs"
+import { isAbsolute, join } from "node:path"
 import { frizzPaths, type FrizzPaths } from "@frizz/server/frizz-paths"
 
 /** `DEFAULT_PORT`, its fallback, `DEFAULT_DEV_PORT`, its fallback (packages/shared `fallbackPort` = +10 000). */
 export const WELL_KNOWN_PORTS: readonly number[] = [9393, 19393, 9494, 19494]
 
 export type DiscoverySource = "setting" | "owner-record" | "well-known-port" | "dev-supervisor" | "server-lock"
+
+/** Where an address came from, for the log. */
+export const SOURCE_WORDS: Record<DiscoverySource, string> = {
+  setting: "the frizz.serverUrl setting",
+  "owner-record": "the launcher's address record",
+  "well-known-port": "its well-known port",
+  "dev-supervisor": "frizz-dev's address record",
+  "server-lock": "the server's own lock file",
+}
+
+/**
+ * What kind of address a page is being opened on, for the log line beside it. Every source but the
+ * lock file names the port the human's own tab is on. The lock file's is that port only when Frizz runs
+ * without its restart supervisor; behind one it is the control plane's private port, where a tab keeps
+ * drafts of its own and stops answering on the next restart — the log says so, so a tab that went dead
+ * has its explanation one command away.
+ */
+export function pageAddressNote(source: DiscoverySource): { level: "info" | "warn"; note: string } {
+  if (source !== "server-lock") return { level: "info", note: `a public address, from ${SOURCE_WORDS[source]}` }
+  return {
+    level: "warn",
+    note: "an address from the server's own lock file, found because no public one was. It is Frizz's page address only when Frizz runs without its restart supervisor; otherwise the tab keeps separate drafts and stops working when Frizz restarts. Set frizz.serverUrl to Frizz's page address to pin it",
+  }
+}
 
 export interface FoundFrizz {
   origin: string
@@ -49,6 +81,8 @@ export interface DiscoveryOptions {
   ports?: readonly number[]
   timeoutMs?: number
   pidAlive?: (pid: number) => boolean
+  /** A live process's start marker, in the server's tagged format; injectable for tests. */
+  observeGeneration?: (pid: number) => Promise<string | undefined>
 }
 
 export interface FrizzHealth {
@@ -153,6 +187,148 @@ export async function ownedFrizz(port: number, data: string, timeoutMs = 1_000):
   return launchTokenProof(health.projectId, health.projectDir, owner.token) === health.ownerProof
 }
 
+// ── the published launcher's address record ──────────────────────────────────────────────────────────
+//
+// `readStableServerOwner` (src/server-owner.ts) REPLICATED, not imported. It bundles (14 KB, nothing
+// native), but three things it does are wrong in an editor's extension host, which runs every
+// extension on one thread: its module load observes the current process's generation, which on
+// Windows is a synchronous PowerShell spawn (250-430ms, process-generation.ts) during activation; its
+// staleness check spawns PowerShell synchronously again on every discovery that finds a live pid; and
+// `stableServerOwnerTarget` creates Frizz's data folder — a read that writes, on a machine where the
+// extension is installed and Frizz is not. Here the same verdict is reached with async spawns and no
+// writes, and discovery.test.ts runs both readers over the same fixture files, written by the server's
+// own writer, so the two cannot drift apart silently.
+
+/** `STABLE_SERVER_OWNER_PROJECT_ID`: the fixed id of the one machine-wide server target, never a repository's. */
+const STABLE_SERVER_OWNER_ID = "c1fd5810-0f8a-4c1d-91a0-6d7445d28e5a"
+const STABLE_SERVER_DIR = "frizz-server"
+const GENERATION_TAG_RE = /^(?:linux|ps-utc|win32|opaque):/u
+
+export type OwnerAddressRead = { kind: "running"; port: number } | { kind: "not-running"; why: string }
+
+interface Generation {
+  pid: number
+  processStart: string
+}
+
+function validText(value: unknown, max = 4096): value is string {
+  return typeof value === "string" && value.length > 0 && value.length <= max && !/[\0\r\n]/u.test(value)
+}
+
+/** project-launch.ts `parseOwner`, down to the fields the verdict reads. */
+function readOwner(path: string): (Generation & { token: string; projectId: string; projectDir: string }) | undefined {
+  const value = readJson(path)
+  if (!value) return undefined
+  const { pid, processStart, token, projectId, projectDir } = value
+  if (
+    (value.version !== 1 && value.version !== 2) ||
+    typeof pid !== "number" || !Number.isInteger(pid) || pid <= 0 || !validText(processStart, 128) ||
+    typeof token !== "string" || !UUID_RE.test(token) ||
+    typeof projectId !== "string" || !UUID_RE.test(projectId) ||
+    !validText(projectDir) || !isAbsolute(projectDir) ||
+    (value.role !== "launcher" && value.role !== "supervisor" && value.role !== "server") ||
+    !validText(value.acquiredAt, 128) || !validText(value.updatedAt, 128) ||
+    (value.version === 2 && ((value.state !== "active" && value.state !== "draining") || !Array.isArray(value.delegates) || value.delegates.length > 64))
+  ) return undefined
+  return { pid, processStart, token, projectId, projectDir }
+}
+
+/** server-owner.ts `readAddress`. */
+function readAddress(path: string): (Generation & { ownerToken: string; port: number }) | undefined {
+  const value = readJson(path)
+  if (!value) return undefined
+  const { ownerToken, publisherToken, pid, processStart, port } = value
+  if (
+    value.version !== 1 ||
+    typeof ownerToken !== "string" || !UUID_RE.test(ownerToken) ||
+    typeof publisherToken !== "string" || !UUID_RE.test(publisherToken) ||
+    typeof pid !== "number" || !Number.isInteger(pid) || pid <= 0 ||
+    typeof processStart !== "string" || processStart.length === 0 ||
+    !validPort(port)
+  ) return undefined
+  return { ownerToken, pid, processStart, port }
+}
+
+function linuxGeneration(pid: number): string | undefined {
+  try {
+    const bootId = readFileSync("/proc/sys/kernel/random/boot_id", "utf8").trim().toLowerCase()
+    if (!/^[0-9a-f-]{36}$/u.test(bootId)) return undefined
+    const stat = readFileSync(`/proc/${pid}/stat`, "utf8").trim()
+    const suffixAt = stat.lastIndexOf(") ")
+    if (suffixAt < 0) return undefined
+    const startTicks = stat.slice(suffixAt + 2).trim().split(/\s+/u)[19]
+    return startTicks && /^\d+$/u.test(startTicks) ? `linux:${bootId}:${startTicks}` : undefined
+  } catch {
+    return undefined
+  }
+}
+
+function run(file: string, args: string[], env?: NodeJS.ProcessEnv): Promise<string | undefined> {
+  return new Promise((resolve) => {
+    execFile(file, args, { encoding: "utf8", timeout: 5_000, windowsHide: true, ...(env ? { env } : {}) }, (error, stdout) => resolve(error ? undefined : stdout.trim()))
+  })
+}
+
+export async function psGeneration(pid: number): Promise<string | undefined> {
+  const value = (await run("ps", ["-o", "lstart=", "-p", String(pid)], { ...process.env, LC_ALL: "C", LANG: "C", TZ: "UTC0" }))?.replace(/\s+/gu, " ")
+  return value && value.length <= 128 && !/[\0\r\n]/u.test(value) ? `ps-utc:${value}` : undefined
+}
+
+async function windowsGeneration(pid: number): Promise<string | undefined> {
+  const shell = join(process.env.SystemRoot ?? "C:\\Windows", "System32", "WindowsPowerShell", "v1.0", "powershell.exe")
+  const value = await run(shell, [
+    "-NoProfile", "-NonInteractive", "-NoLogo", "-Command",
+    `try{[Console]::Out.Write((Get-Process -Id ${pid} -ErrorAction Stop).StartTime.ToFileTimeUtc())}catch{exit 1}`,
+  ])
+  return value && /^\d{1,20}$/u.test(value) ? `win32:${value}` : undefined
+}
+
+/** process-generation.ts `observeDefault`, asynchronously: the marker a live pid has now, or undefined. */
+export async function observeGeneration(pid: number): Promise<string | undefined> {
+  if (process.platform === "linux") return linuxGeneration(pid) ?? (await psGeneration(pid))
+  if (process.platform === "darwin") return psGeneration(pid)
+  if (process.platform === "win32") return windowsGeneration(pid)
+  return undefined
+}
+
+/**
+ * process-generation.ts `processGenerationIsStale`: dead, or alive as a DIFFERENT process (the pid was
+ * reused). A marker that cannot be compared — opaque, a legacy format, a platform that cannot observe —
+ * is not stale, exactly as the server retains such an owner rather than stealing from it.
+ */
+async function generationIsStale(generation: Generation, pidAlive: (pid: number) => boolean, observe: (pid: number) => Promise<string | undefined>): Promise<boolean> {
+  if (!pidAlive(generation.pid)) return true
+  if (generation.processStart.startsWith("opaque:") || !GENERATION_TAG_RE.test(generation.processStart)) return false
+  const observed = await observe(generation.pid)
+  if (!observed) return false
+  if (observed.split(":", 1)[0] !== generation.processStart.split(":", 1)[0]) return false
+  return observed !== generation.processStart
+}
+
+/** The port the published launcher serves, when its address record is backed by a live owner generation. */
+export async function readOwnerAddress(
+  roots: Pick<FrizzPaths, "data" | "state">,
+  pidAlive: (pid: number) => boolean = defaultPidAlive,
+  observe: (pid: number) => Promise<string | undefined> = observeGeneration,
+): Promise<OwnerAddressRead> {
+  let dataDir: string
+  try {
+    dataDir = realpathSync(roots.data)
+  } catch {
+    return { kind: "not-running", why: "no Frizz data folder" }
+  }
+  const stateDir = join(roots.state, STABLE_SERVER_DIR)
+  const owner = readOwner(join(stateDir, "project-launch.owner"))
+  if (!owner || owner.projectId !== STABLE_SERVER_OWNER_ID || owner.projectDir !== dataDir) return { kind: "not-running", why: "no owner record behind it" }
+  if (await generationIsStale(owner, pidAlive, observe)) return { kind: "not-running", why: `its owner, pid ${owner.pid}, is gone` }
+  const address = readAddress(join(stateDir, "address.json"))
+  if (!address) return { kind: "not-running", why: "none" }
+  if (address.ownerToken !== owner.token || address.pid !== owner.pid || address.processStart !== owner.processStart) {
+    return { kind: "not-running", why: `port ${address.port} was written by another owner than the live one` }
+  }
+  return { kind: "running", port: address.port }
+}
+
 /** Find the running Frizz. Asked again before every connection attempt: the port can move. */
 export async function discoverFrizz(options: DiscoveryOptions = {}): Promise<DiscoveryResult> {
   const notes: string[] = []
@@ -171,16 +347,16 @@ export async function discoverFrizz(options: DiscoveryOptions = {}): Promise<Dis
 
   const roots = options.roots ?? frizzPaths()
 
-  const addressPath = join(roots.state, "frizz-server", "address.json")
-  const address = readJson(addressPath)
-  if (address && address.version === 1 && validPort(address.port)) {
-    if (await readHealth(loopbackOrigin(address.port), timeoutMs)) {
-      notes.push(`${addressPath}: port ${address.port} answers`)
-      return { found: { origin: loopbackOrigin(address.port), port: address.port, source: "owner-record" }, notes }
+  const addressPath = join(roots.state, STABLE_SERVER_DIR, "address.json")
+  const owner = await readOwnerAddress(roots, pidAlive, options.observeGeneration ?? observeGeneration)
+  if (owner.kind === "running") {
+    if (await readHealth(loopbackOrigin(owner.port), timeoutMs)) {
+      notes.push(`${addressPath}: port ${owner.port} answers`)
+      return { found: { origin: loopbackOrigin(owner.port), port: owner.port, source: "owner-record" }, notes }
     }
-    notes.push(`${addressPath}: port ${address.port} does not answer (Frizz may be starting)`)
+    notes.push(`${addressPath}: port ${owner.port} does not answer (Frizz may be starting)`)
   } else {
-    notes.push(`${addressPath}: none`)
+    notes.push(`${addressPath}: ${owner.why}`)
   }
 
   const ports = options.ports ?? WELL_KNOWN_PORTS

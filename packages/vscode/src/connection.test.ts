@@ -3,23 +3,31 @@ import assert from "node:assert/strict"
 import { createServer, type Server } from "node:http"
 import type { AddressInfo } from "node:net"
 import { WebSocket, WebSocketServer } from "ws"
-import { EDITOR_CLOSE, EDITOR_SOCKET_PATH, type EditorClientMessage, type EditorOpen, type EditorProject, type EditorServerMessage } from "@frizz/shared/editor-protocol"
-import { backoffDelay, EditorConnection, type ConnectionHost, type ConnectionOptions, type ConnectionStatus, type OpenResult } from "./connection.ts"
+import { EDITOR_CLOSE, EDITOR_MAX_FOLDERS, EDITOR_MAX_PATH, EDITOR_SOCKET_PATH, type EditorClientMessage, type EditorOpen, type EditorProject, type EditorServerMessage } from "@frizz/shared/editor-protocol"
+// The server's OWN frame rules (the extension never bundles these): a frame Frizz would refuse fails here.
+import { EditorClientMessageSchema } from "@frizz/shared"
+import { EDITOR_MAX_FRAME_BYTES, EDITOR_MAX_PAYLOAD_BYTES } from "../../server/src/editor-bridge.ts"
+import { notConnectedMessage } from "./status.ts"
+import { backoffDelay, EditorConnection, fitFolders, FocusRecency, FOLDERS_MAX_BYTES, type ConnectionHost, type ConnectionOptions, type ConnectionStatus, type OpenResult } from "./connection.ts"
 
 // A real `ws` server speaking the server's half of the editor protocol, in-process — with the origin
-// gate the real one has (an upgrade without `Origin: http://127.0.0.1:<port>` is refused).
+// gate the real one has (an upgrade without `Origin: http://127.0.0.1:<port>` is refused), its frame
+// ceilings, and its schema: a frame the server would close 4401 is closed 4401 here too, and recorded,
+// and `close()` fails the test that sent it.
 class FakeFrizz {
   readonly frames: EditorClientMessage[] = []
+  /** Frames the real server would have refused, with why. */
+  readonly refused: string[] = []
   readonly origins: (string | undefined)[] = []
   readonly sockets: WebSocket[] = []
   /** Answer each hello with welcome + projects, as the server does. */
   welcome = true
   projects: EditorProject[] = [{ id: "p1", slug: "repo", name: "repo", dir: "/home/me/repo", ready: 2, working: 1 }]
   readonly #server: Server
-  readonly #wss = new WebSocketServer({ noServer: true })
+  readonly #wss = new WebSocketServer({ noServer: true, maxPayload: EDITOR_MAX_PAYLOAD_BYTES })
   port = 0
 
-  constructor(options: { editorPath?: boolean } = {}) {
+  constructor(readonly options: { editorPath?: boolean } = {}) {
     this.#server = createServer((_request, response) => {
       response.statusCode = 404
       response.end("Not Found")
@@ -48,8 +56,21 @@ class FakeFrizz {
 
   #accept(ws: WebSocket): void {
     this.sockets.push(ws)
+    ws.on("close", (code) => {
+      if (code === 1009) this.refused.push("a frame past the socket's ceiling (1009)")
+    })
     ws.on("message", (data) => {
-      const frame = JSON.parse(data.toString()) as EditorClientMessage
+      const text = data.toString()
+      const decoded: unknown = JSON.parse(text)
+      const parsed = EditorClientMessageSchema.safeParse(decoded)
+      const t = (decoded as { t?: unknown }).t
+      const oversize = t !== "compose" && Buffer.byteLength(text, "utf8") > EDITOR_MAX_FRAME_BYTES
+      if (!parsed.success || oversize) {
+        this.refused.push(`${String(t)}: ${oversize ? "frame too large" : parsed.error?.message}`)
+        ws.close(EDITOR_CLOSE.invalidMessage, "invalid frame")
+        return
+      }
+      const frame = decoded as EditorClientMessage
       this.frames.push(frame)
       if (frame.t === "hello" && this.welcome) {
         this.send(ws, { t: "welcome", v: 1, bootId: "boot-1" })
@@ -76,6 +97,7 @@ class FakeFrizz {
     for (const ws of this.sockets) ws.terminate()
     this.#wss.close()
     await new Promise((resolve) => this.#server.close(resolve))
+    assert.deepEqual(this.refused, [], "every frame the window sent is one the real server takes")
   }
 }
 
@@ -327,6 +349,7 @@ test("close 4400 says to update Frizz or the extension, and retries only at the 
     frizz.live.close(EDITOR_CLOSE.unsupportedVersion, "protocol 1 unsupported")
     await until("the incompatible status", () => connection.status.kind === "incompatible")
     assert.match((connection.status as { reason: string }).reason, /Update Frizz or the extension/)
+    assert.match(notConnectedMessage(connection.status), /Update Frizz or the extension/)
     assert.ok(host.logs.some((line) => line.startsWith("error ") && line.includes("[4400]")))
     await sleep(250)
     assert.equal(frizz.of("hello").length, 1, "no quick retry against a server that cannot speak to us")
@@ -358,6 +381,7 @@ test("a Frizz from before the editor connection (a plain 404 on the upgrade) is 
     connection.start()
     await until("the offline status", () => connection.status.kind === "offline")
     assert.deepEqual(connection.status, { kind: "offline", reason: "This Frizz has no editor connection yet. Update Frizz." })
+    assert.equal(notConnectedMessage(connection.status), "This Frizz has no editor connection yet. Update Frizz.", "a command says so too, not that Frizz is stopped")
   } finally {
     connection.stop()
     await frizz.close()
@@ -375,6 +399,7 @@ test("a Frizz that hangs up on the upgrade (one from before the editor connectio
     connection.start()
     await until("the offline status", () => connection.status.kind === "offline")
     assert.deepEqual(connection.status, { kind: "offline", reason: "Frizz didn't accept the editor connection. Update Frizz if this keeps happening." })
+    assert.equal(notConnectedMessage(connection.status), "Frizz didn't accept the editor connection. Update Frizz if this keeps happening.")
   } finally {
     connection.stop()
     await new Promise((resolve) => server.close(resolve))
@@ -389,6 +414,75 @@ test("stop closes the socket cleanly and nothing redials", async () => {
   await sleep(150)
   assert.equal(frizz.of("hello").length, 1)
   await done()
+})
+
+test("a window with more folders than Frizz takes still connects: the hello and every state are fitted, and the log says so once", async () => {
+  // 70 roots and one path past the cap: sent whole, the hello is refused (4401) on every redial, forever.
+  const many = Array.from({ length: 70 }, (_, i) => `/home/me/roots/r${String(i).padStart(2, "0")}`)
+  const long = `/home/me/${"x".repeat(EDITOR_MAX_PATH)}`
+  const frizz = await new FakeFrizz().listen()
+  const host = makeHost(frizz)
+  host.current = { ...host.current, folders: [long, ...many] }
+  const connection = new EditorConnection(host, FAST)
+  try {
+    connection.start()
+    await until("the welcome", () => connection.status.kind === "connected")
+    const hello = frizz.of("hello")[0]!
+    assert.deepEqual(hello.folders, many.slice(0, EDITOR_MAX_FOLDERS), "the first 64 that fit, in the workspace's order")
+    host.current = { ...host.current, folders: [...many, "/home/me/one-more"], focused: true }
+    connection.sendState()
+    await until("the state frame", () => frizz.of("state").length === 1)
+    assert.equal(frizz.of("state")[0]!.folders.length, EDITOR_MAX_FOLDERS)
+    assert.deepEqual(host.logs.filter((line) => /Frizz takes/.test(line)), [
+      "warn This window has 71 folders; Frizz takes 64 of them (at most 64, none over 4096 characters), so file links to the rest open elsewhere.",
+    ], "said once, not on every frame")
+  } finally {
+    connection.stop()
+    await frizz.close()
+  }
+})
+
+test("folders fit by count, by path length and by encoded bytes, in order", () => {
+  assert.deepEqual(fitFolders(["/a", "", `/${"y".repeat(EDITOR_MAX_PATH)}`, "/b"]), ["/a", "/b"])
+  assert.equal(fitFolders(Array.from({ length: 100 }, (_, i) => `/r${i}`)).length, EDITOR_MAX_FOLDERS)
+  // 64 maximal paths in three-byte characters would be 768 KiB; they stop at the byte budget instead.
+  const wide = Array.from({ length: 64 }, (_, i) => `/${String(i).padStart(2, "0")}${"€".repeat(EDITOR_MAX_PATH - 3)}`)
+  const fitted = fitFolders(wide)
+  assert.ok(fitted.length > 0 && fitted.length < 64)
+  assert.deepEqual(fitted, wide.slice(0, fitted.length))
+  assert.ok(Buffer.byteLength(JSON.stringify(fitted), "utf8") <= FOLDERS_MAX_BYTES + 2)
+  const hello = { t: "hello", v: 1, windowId: "w", app: "Visual Studio Code", extensionVersion: "0.1.0", folders: fitted, focused: false, acceptsOpens: true, home: `/${"h".repeat(4095)}`, platform: "linux" }
+  assert.ok(EditorClientMessageSchema.safeParse(hello).success)
+  assert.ok(Buffer.byteLength(JSON.stringify(hello), "utf8") <= EDITOR_MAX_FRAME_BYTES)
+})
+
+test("the hello says how long ago an unfocused window last had focus, so a reconnect keeps its rank", async () => {
+  let now = 1_000
+  const focus = new FocusRecency(() => now)
+  assert.equal(focus.agoMs(false), undefined, "never focused since activation: nothing to say")
+  focus.observe(true)
+  now += 60_000
+  assert.equal(focus.agoMs(true), undefined, "focused now: the hello's `focused` says it")
+  focus.observe(false)
+  now += 5_000
+  assert.equal(focus.agoMs(false), 5_000, "focused until it lost focus, 5s ago")
+  focus.observe(false)
+  now += 1_000
+  assert.equal(focus.agoMs(false), 6_000, "a repeated unfocused report does not reset the moment")
+
+  const frizz = await new FakeFrizz().listen()
+  const host = makeHost(frizz)
+  const hello = host.hello
+  host.hello = () => ({ ...hello(), focusedAgoMs: focus.agoMs(false) })
+  const connection = new EditorConnection(host, FAST)
+  try {
+    connection.start()
+    await until("the welcome", () => connection.status.kind === "connected")
+    assert.equal(frizz.of("hello")[0]?.focusedAgoMs, 6_000)
+  } finally {
+    connection.stop()
+    await frizz.close()
+  }
 })
 
 test("the backoff doubles from 1s to a 30s ceiling, jittered ±20%", () => {

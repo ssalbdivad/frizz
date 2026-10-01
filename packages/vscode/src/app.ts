@@ -11,12 +11,12 @@ import { homedir } from "node:os"
 import { basename, dirname } from "node:path"
 import type * as vscode from "vscode"
 import type { EditorComposeInput, EditorComposed, EditorOpen, EditorProject } from "@frizz/shared/editor-protocol"
-import { EditorConnection, type ConnectionStatus, type OpenResult } from "./connection.ts"
-import { discoverFrizz } from "./discovery.ts"
-import { composeMessage, normalizeNewlines, quotable, refLabel, type FileRef, type Selected } from "./message.ts"
+import { EditorConnection, FocusRecency, type ConnectionStatus, type OpenResult } from "./connection.ts"
+import { discoverFrizz, pageAddressNote, SOURCE_WORDS, type FoundFrizz } from "./discovery.ts"
+import { composeInput, composeMessage, normalizeNewlines, refLabel, type FileRef, type Selected } from "./message.ts"
 import { projectForPath, workspaceProjects } from "./projects.ts"
 import { describeRpcError, dispatchProfile, FrizzRpc, withRetry } from "./rpc.ts"
-import { statusView } from "./status.ts"
+import { notConnectedMessage, statusView } from "./status.ts"
 import { findThread, pickerThreads, threadHandleOf, threadItem, displayTitle, type PickerThread } from "./threads.ts"
 
 type Vscode = typeof vscode
@@ -27,6 +27,8 @@ export interface FrizzExtensionApi {
   status(): ConnectionStatus
   statusBar(): { text: string; tooltip: string; command: string }
   origin(): string | undefined
+  /** Where the last discovery found Frizz, and how — set even when the editor connection was refused. */
+  discovered(): FoundFrizz | undefined
   projects(): EditorProject[]
 }
 
@@ -47,13 +49,8 @@ interface CommandOptions {
 
 const FLASH_MS = 1_500
 
-const SOURCE_WORDS = {
-  setting: "the frizz.serverUrl setting",
-  "owner-record": "the launcher's address record",
-  "well-known-port": "its well-known port",
-  "dev-supervisor": "frizz-dev's address record",
-  "server-lock": "the server's own lock file",
-} as const
+/** What Ask gives for a selection it cannot place; Send to thread says the same rather than dropping it. */
+const OPEN_A_FILE = "Open a file to ask Frizz about it."
 
 export function activateFrizz(api: Vscode, context: vscode.ExtensionContext): FrizzExtensionApi {
   const log = api.window.createOutputChannel("Frizz", { log: true })
@@ -66,6 +63,8 @@ export function activateFrizz(api: Vscode, context: vscode.ExtensionContext): Fr
   const config = () => api.workspace.getConfiguration("frizz")
   const folders = () => (api.workspace.workspaceFolders ?? []).filter((folder) => folder.uri.scheme === "file").map((folder) => folder.uri.fsPath)
   const windowState = () => ({ folders: folders(), focused: api.window.state.focused, acceptsOpens: config().get<boolean>("openFileLinks", true) })
+  const focus = new FocusRecency()
+  focus.observe(api.window.state.focused)
 
   // ── status bar ───────────────────────────────────────────────────────────────────────────────────
   const item = api.window.createStatusBarItem("frizz.status", api.StatusBarAlignment.Right, 100)
@@ -88,9 +87,25 @@ export function activateFrizz(api: Vscode, context: vscode.ExtensionContext): Fr
   })
   context.subscriptions.push(highlight)
 
-  const focusWindow = () => api.commands.executeCommand("workbench.action.focusWindow")
+  // Raising the window is best-effort. `workbench.action.focusWindow` arrived in VS Code 1.128, so the
+  // VS Codes the manifest's ^1.90 admits before it — and Cursor and Windsurf, which build on older
+  // bases (Cursor 3.11 is 1.125) — have no such command. The open has already happened by the time the
+  // window is raised, so a window that cannot raise itself still answers ok: refusing would toast an
+  // error over a file that opened, and turn "Open in editor" into a failure.
+  let raiseMissing = false
+  const focusWindow = async (): Promise<void> => {
+    try {
+      await api.commands.executeCommand("workbench.action.focusWindow")
+    } catch (error) {
+      if (raiseMissing) return
+      raiseMissing = true
+      log.info(`${api.env.appName} ${api.version} can't bring its own window to the front (${(error as Error).message}); Frizz's file links still open here.`)
+    }
+  }
 
   let lastNotes: string | undefined
+  /** The last discovery's answer: the origin a page opens on even when the editor connection was refused. */
+  let found: FoundFrizz | undefined
   const connection = new EditorConnection({
     async discover() {
       const result = await discoverFrizz({ serverUrl: config().get<string>("serverUrl", "") })
@@ -99,9 +114,14 @@ export function activateFrizz(api: Vscode, context: vscode.ExtensionContext): Fr
       const notes = result.notes.join("\n")
       for (const note of result.notes) (notes === lastNotes ? log.debug : log.info).call(log, `Looked for Frizz: ${note}`)
       lastNotes = notes
+      found = result.found
       return result.found ? { origin: result.found.origin, detail: `found through ${SOURCE_WORDS[result.found.source]}` } : undefined
     },
-    hello: () => ({ windowId, app: api.env.appName, extensionVersion, ...windowState(), home: homedir(), platform: process.platform }),
+    hello() {
+      const state = windowState()
+      const ago = focus.agoMs(state.focused)
+      return { windowId, app: api.env.appName, extensionVersion, ...state, ...(ago === undefined ? {} : { focusedAgoMs: ago }), home: homedir(), platform: process.platform }
+    },
     state: windowState,
     open: (message) => openFromFrizz(message),
     async focus() {
@@ -160,7 +180,10 @@ export function activateFrizz(api: Vscode, context: vscode.ExtensionContext): Fr
 
   // ── the window's own changes ─────────────────────────────────────────────────────────────────────
   context.subscriptions.push(
-    api.window.onDidChangeWindowState(() => connection.sendState()),
+    api.window.onDidChangeWindowState((state) => {
+      focus.observe(state.focused)
+      connection.sendState()
+    }),
     api.workspace.onDidChangeWorkspaceFolders(() => {
       connection.sendState()
       renderStatus()
@@ -173,18 +196,30 @@ export function activateFrizz(api: Vscode, context: vscode.ExtensionContext): Fr
 
   // ── helpers the commands share ───────────────────────────────────────────────────────────────────
 
-  /** The origin, or undefined after telling the human Frizz is not reachable from here. */
-  function requireOrigin(): string | undefined {
-    const origin = connection.origin
-    if (origin) return origin
-    void api.window.showErrorMessage("Frizz isn't running.", "Try again", "Show log").then((choice) => {
+  /** Say why the connection is down — its own reason, not a guess — with a way to try again. */
+  function showNotConnected(): void {
+    void api.window.showErrorMessage(notConnectedMessage(status), "Try again", "Show log").then((choice) => {
       if (choice === "Try again") connection.reconnect()
       else if (choice === "Show log") log.show()
     })
+  }
+
+  /** The connected origin, or undefined after telling the human why there is none. */
+  function requireOrigin(): string | undefined {
+    const origin = connection.origin
+    if (origin) return origin
+    showNotConnected()
     return undefined
   }
 
   function openUrl(url: string): void {
+    // Which kind of address this page lands on: almost always the public one, but not when discovery
+    // fell through to the server's lock file (discovery.ts, step 5).
+    const source = found && url.startsWith(`${found.origin}/`) ? found.source : undefined
+    if (source) {
+      const { level, note } = pageAddressNote(source)
+      log[level](`Opening ${url} on ${note}.`)
+    }
     void api.env.openExternal(api.Uri.parse(url))
   }
 
@@ -201,6 +236,17 @@ export function activateFrizz(api: Vscode, context: vscode.ExtensionContext): Fr
       else if (arg && typeof arg === "object" && !Array.isArray(arg)) options = { ...options, ...(arg as CommandOptions) }
     }
     return { uri, options }
+  }
+
+  /**
+   * Text selected where no command can place it: an editor that is not a file on disk — an untitled
+   * buffer, the git side of a diff. A command that would otherwise carry the selection must refuse
+   * rather than send without it.
+   */
+  function unplaceableSelection(uri: vscode.Uri | undefined): boolean {
+    const editor = api.window.activeTextEditor
+    if (!editor || (uri && editor.document.uri.toString() !== uri.toString())) return false
+    return editor.document.uri.scheme !== "file" && !editor.selection.isEmpty
   }
 
   /** The file a command is about: the resource it was invoked on, else the active editor's. */
@@ -258,7 +304,7 @@ export function activateFrizz(api: Vscode, context: vscode.ExtensionContext): Fr
     const { uri, options } = splitArgs(args)
     const target = targetOf(uri)
     if (!target) {
-      void api.window.showInformationMessage("Open a file to ask Frizz about it.")
+      void api.window.showInformationMessage(OPEN_A_FILE)
       return undefined
     }
     const placed = await place(target, origin, "Ask in Home")
@@ -290,7 +336,7 @@ export function activateFrizz(api: Vscode, context: vscode.ExtensionContext): Fr
       return { slug: result.slug }
     } catch (error) {
       log.error(`Asking Frizz failed: ${(error as Error).message}`)
-      void api.window.showErrorMessage(describeRpcError(error))
+      void api.window.showErrorMessage(describeRpcError(error, "ask"))
       return undefined
     }
   }
@@ -300,6 +346,10 @@ export function activateFrizz(api: Vscode, context: vscode.ExtensionContext): Fr
     if (!origin) return undefined
     const { uri, options } = splitArgs(args)
     const target = targetOf(uri)
+    if (!target && unplaceableSelection(uri)) {
+      void api.window.showInformationMessage(OPEN_A_FILE)
+      return undefined
+    }
     let project: EditorProject | undefined
     let ref: FileRef | undefined
     if (target) {
@@ -371,7 +421,7 @@ export function activateFrizz(api: Vscode, context: vscode.ExtensionContext): Fr
       return { slug: chosen.id, deliveryId }
     } catch (error) {
       log.error(`Sending to ${chosen.id} failed: ${(error as Error).message}`)
-      void api.window.showErrorMessage(describeRpcError(error))
+      void api.window.showErrorMessage(describeRpcError(error, "send"))
       return undefined
     }
   }
@@ -386,15 +436,7 @@ export function activateFrizz(api: Vscode, context: vscode.ExtensionContext): Fr
       return undefined
     }
     const match = projectForPath(target.path, projects)
-    const item: EditorComposeInput = { path: match?.path ?? target.path, ...(match ? { projectId: match.project.id } : {}) }
-    if (target.selection) {
-      // Too large to quote is still a place in a file: the range alone, which the page writes as a reference.
-      if (quotable(target.selection)) item.text = target.selection.text
-      item.startLine = target.selection.startLine
-      item.endLine = target.selection.endLine
-    } else if (target.cursorLine) {
-      item.startLine = target.cursorLine
-    }
+    const item: EditorComposeInput = composeInput({ ...target, path: match?.path ?? target.path, projectId: match?.project.id })
     const composed = await connection.compose(item)
     if (composed.ok) {
       api.window.setStatusBarMessage("Added to Frizz's prompt box", 4_000)
@@ -409,8 +451,11 @@ export function activateFrizz(api: Vscode, context: vscode.ExtensionContext): Fr
   }
 
   function openFrizz(): void {
-    const origin = requireOrigin()
+    // The page needs no editor connection: a Frizz that answered discovery but refused the socket (an
+    // older Frizz, a version mismatch) still serves its page.
+    const origin = connection.origin ?? found?.origin
     if (origin) openUrl(projectUrl(origin, windowProject()))
+    else showNotConnected()
   }
 
   context.subscriptions.push(
@@ -433,6 +478,7 @@ export function activateFrizz(api: Vscode, context: vscode.ExtensionContext): Fr
     status: () => status,
     statusBar: () => ({ ...shown }),
     origin: () => connection.origin,
+    discovered: () => found,
     projects: () => projects,
   }
 }
