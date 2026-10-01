@@ -914,7 +914,7 @@ test("completionConfirmationHold names WHY it declined: the executing turn plus 
 // back to the queue when the shell ended. Its sub-agents and an executing turn still ask.
 test("completionConfirmationHold lets a done sign-off take its own shells down without asking", () => {
   const at = "2026-09-30T00:00:00.000Z"
-  const done = { kind: "done" as const, body: "Shipped.", hints: [], registered: true }
+  const done = { kind: "done" as const, body: "Shipped.", hints: [], registered: true as const }
   const base = { turn: "idle" as const, permPrompt: false, pendingQuestion: false, subAgents: [], bgShells: [{ label: "Hung test run", startedAt: at, state: "running" as const }] }
   assert.equal(completionConfirmationHold({ ...base, lastFence: done }), undefined, "a done rest's shell does not hold Done")
   assert.equal(completionConfirmationHold({ ...base })?.bgShellCount, 1, "without the done, the shell still asks")
