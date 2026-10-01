@@ -1,6 +1,7 @@
 import { useEffect, useId, useRef, useState, useSyncExternalStore, type ReactNode } from "react"
 import { useInnerHtml } from "../lib/innerHtml.ts"
 import { localImageUrl } from "../lib/markdownTargets.ts"
+import { localPositionAttrs } from "../lib/localFilePosition.ts"
 import {
   Archive,
   CalendarClock,
@@ -87,11 +88,16 @@ function CodeCommentCard({ directive }: { directive: CodexHostDirective }) {
   const end = number(attrs, "end") ?? start
   const priority = number(attrs, "priority")
   const location = file ? `${file}${start ? `:${start}${end && end !== start ? `-${end}` : ""}` : ""}` : "Code location unavailable"
+  // The finding's lines ride beside the path, so the External app opens the file AT the finding rather
+  // than at its top; the reader is handed the bare file (lib/localFilePosition.ts).
+  const position = start !== undefined && Number.isInteger(start) && start >= 1
+    ? { line: start, ...(end !== undefined && Number.isInteger(end) && end > start ? { endLine: end } : {}) }
+    : undefined
   return (
     <Card directive={directive} icon={<MessageSquareCode size={15} />} title={text(attrs, "title") ?? "Review finding"} meta={priority === undefined ? undefined : `P${priority}`}>
       {text(attrs, "body") && <Detail>{text(attrs, "body")}</Detail>}
       {file ? (
-        <button type="button" className="local-file-action ml-6 mt-1 max-w-[calc(100%-1.5rem)] break-all text-left font-mono-keep text-[11px] leading-4 text-accent underline decoration-dotted underline-offset-2" data-local-path={file} title={location}>
+        <button type="button" className="local-file-action ml-6 mt-1 max-w-[calc(100%-1.5rem)] break-all text-left font-mono-keep text-[11px] leading-4 text-accent underline decoration-dotted underline-offset-2" data-local-path={file} {...localPositionAttrs(position)} title={location}>
           {location}
         </button>
       ) : <Detail mono>{location}</Detail>}

@@ -1,6 +1,8 @@
 import { useContext, useLayoutEffect, useSyncExternalStore, type RefObject } from "react"
+import { formatFileReference, splitFilePosition, type FilePosition } from "@frizz/shared"
 import { projectRpc, rpc, type Api } from "../api/rpc.ts"
 import { apiBase } from "./base-path.ts"
+import { stampLocalPosition } from "./localFilePosition.ts"
 import { MarkdownScopeContext } from "./useMarkdown.ts"
 
 // Clickable inline-code file paths. Agent prose often mentions files in backticks (`~/.claude/CLAUDE.md`,
@@ -24,8 +26,9 @@ const BARE_FILENAME = /^[\w.@+-]+\.[a-z][a-z0-9]{0,7}$/i
 // 12) none of them ever became a link because the test below asked for a `/`. The segment class is
 // deliberately narrow: inline code is full of backslashes that are NOT paths (`\n`, `\d+`, `\\`), and
 // each one this admits costs a batched round-trip the server answers with "no". A leading backslash
-// that is not a UNC pair is an escape, not a root. An editor `:line[:col]` suffix rides along, as it
-// does on a `/` path (the server strips it).
+// that is not a UNC pair is an escape, not a root. The pattern still admits an editor `:line[:col]`
+// suffix, but localFileCandidate splits any position off before asking, so the server only ever sees
+// the bare path.
 const WINDOWS_PATH = /^(?:[A-Za-z]:\\|\\\\)?[\w.@+~-]+(?:\\[\w.@+~-]+)*(?::\d+(?::\d+)?)?$/
 
 // A path-like candidate: no whitespace, not a URL, and either home-anchored (`~`), slash-bearing
@@ -41,6 +44,21 @@ export function isPathCandidate(raw: string): boolean {
   if (v === "~" || v.startsWith("~/") || v.startsWith("/") || v.includes("/")) return true
   if (v.includes("\\") && WINDOWS_PATH.test(v)) return true
   return BARE_FILENAME.test(v)
+}
+
+/**
+ * An inline-code file reference: the BARE path to resolve, and the place in the file the text names.
+ * The position is split off first (shared file-position.ts — `App.tsx:42`, `src/a.ts:12:3`,
+ * `src/a.ts#L12-L20`), so a bare filename with a line is a candidate (`App.tsx:42` failed the bare-name
+ * test until 2026-10-01), every mention of one file shares one resolution however many lines it names,
+ * and the line stays here, client-side, to be stamped on the element: the server resolves a path and
+ * knows nothing of where in it the prose pointed. Null for anything that is not path-like.
+ */
+export function localFileCandidate(raw: string): { path: string; position?: FilePosition } | null {
+  const v = raw.trim()
+  if (!v || v.length > 1024 || /\s/.test(v)) return null
+  const split = splitFilePosition(v)
+  return isPathCandidate(split.path) ? split : null
 }
 
 // Session cache: candidate text → canonical openable path, or null when it doesn't resolve to a real
@@ -118,9 +136,10 @@ export async function resolveUnknown(paths: string[], space: string, api: Pick<A
   for (const listener of listeners) listener()
 }
 
-function decorate(code: Element, openPath: string): void {
+function decorate(code: Element, openPath: string, position: FilePosition | undefined): void {
   code.setAttribute("data-local-path", openPath)
-  code.setAttribute("title", `Open ${openPath}`)
+  stampLocalPosition(code, position)
+  code.setAttribute("title", `Open ${formatFileReference(openPath, position)}`)
   code.classList.add("local-file-code")
 }
 
@@ -147,11 +166,11 @@ export function useLocalFileCodeLinks(ref: RefObject<HTMLElement | null>, html: 
       // interceptor's `closest()` would find the inner one and open whatever a `draft.md` at the
       // project root happens to be, instead of the file the link names.
       if (code.closest("a, [data-local-path]")) continue
-      const raw = (code.textContent ?? "").trim()
-      if (!isPathCandidate(raw)) continue
-      const resolved = cachedResolution(space, raw)
-      if (resolved === undefined) unknown.push(raw)
-      else if (resolved) decorate(code, resolved)
+      const candidate = localFileCandidate(code.textContent ?? "")
+      if (!candidate) continue
+      const resolved = cachedResolution(space, candidate.path)
+      if (resolved === undefined) unknown.push(candidate.path)
+      else if (resolved) decorate(code, resolved, candidate.position)
     }
     if (unknown.length) void resolveUnknown(unknown, space, projectId ? projectRpc(projectId) : rpc)
   }, [ref, html, seen, projectId])

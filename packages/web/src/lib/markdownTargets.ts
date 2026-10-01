@@ -1,3 +1,4 @@
+import { formatFileReference, splitFilePosition, type FilePosition } from "@frizz/shared"
 import { apiBase, isRetiredAppPath, projectSlug, APP_ROUTE_SEGMENTS, MACHINE_ROUTE_SEGMENTS } from "./base-path.ts"
 import { dirnameLike, isRooted, joinLike } from "./paths.ts"
 // Markdown is often written by tools that report local artifacts as links. A browser interprets a
@@ -13,7 +14,11 @@ export interface LocalMarkdownTarget {
   display: string
   // Present only for an absolute path the server can act on — its gated image endpoint, its Markdown
   // reader, or the desktop opener. POSIX (`/a/b`) and Windows (`C:\a\b`) alike; see localMarkdownTarget.
+  // Always the BARE path: a place in the file is `position`, never a suffix left on the path.
   filePath?: string
+  // The place in the file the link names — `a.ts:12:3`, `a.ts#L12-L20`, `vscode://file/…:12` — split
+  // off the path so the reader gets the file and the external app gets the line (lib/localFilePosition.ts).
+  position?: FilePosition
 }
 
 // Keep one-letter URL schemes such as x://host/p out of the drive-path branch.
@@ -35,6 +40,25 @@ function decodePath(value: string): string {
     // An invalid escape is still a local-looking value, but must never make sanitization throw.
     return value
   }
+}
+
+// A destination's path and the place in it, from either spelling (shared file-position.ts): an editor
+// suffix on the path itself (`/a.ts:12:3`), or a GitHub fragment (`/a.ts#L12-L20`, which is also what
+// a `?plain=1#L3` link copied off GitHub carries). Any other `?query`/`#section` tail names nothing in
+// the file and is dropped, before decoding — an ENCODED `#` is a character in the name, not a fragment.
+// The fragment wins when both are present: it is the more deliberate of the two.
+function pathAndPosition(href: string): { path: string; position?: FilePosition } {
+  const hash = href.indexOf("#")
+  // `splitFilePosition` reads a fragment only AFTER a path (it refuses a bare `#L12`), so give it one.
+  const fromFragment = hash === -1 ? undefined : splitFilePosition(`_${href.slice(hash)}`).position
+  const split = splitFilePosition(decodePath(href.replace(/[?#].*$/u, "")))
+  const position = fromFragment ?? split.position
+  return position ? { path: split.path, position } : { path: split.path }
+}
+
+/** The target for a bare local path and the place in it; `display` reads as the reference does (`/a.ts:12`). */
+function fileTarget(path: string, position: FilePosition | undefined): LocalMarkdownTarget {
+  return position ? { display: formatFileReference(path, position), filePath: path, position } : { display: path, filePath: path }
 }
 
 // The SPA's intentionally supported root-relative routes. All other single-slash absolute targets
@@ -76,27 +100,32 @@ export function localMarkdownTarget(raw: string | null | undefined): LocalMarkdo
   // the decoded value before checking its drive-prefix form.
   const decodedHref = decodePath(href)
 
-  if (WINDOWS_ABSOLUTE_PATH.test(decodedHref)) return { display: decodedHref, filePath: decodedHref }
+  // A Windows path keeps any `#`/`?` it has — both are legal in a Windows file name — and sheds only a
+  // position at its very end.
+  if (WINDOWS_ABSOLUTE_PATH.test(decodedHref)) {
+    const { path, position } = splitFilePosition(decodedHref)
+    return fileTarget(path, position)
+  }
 
   if (decodedHref.startsWith("/") && !decodedHref.startsWith("//") && !isFrizzRoute(decodedHref)) {
-    // A `#section` or `?query` tail names a place in the file, not part of its path — strip it before
-    // decoding, as the editor-URL and relative branches do. Kept, it made `/repo/AGENTS.md#setup` fail
+    // A `#section` or `?query` tail is not part of the path — kept, it made `/repo/AGENTS.md#setup` fail
     // the Markdown test and go to the desktop opener instead of the reader, which on a phone meant a
-    // tap that opened the file on the server machine and showed nothing where the tap was.
-    const path = decodePath(href.replace(/[?#].*$/u, ""))
-    return { display: path, filePath: path }
+    // tap that opened the file on the server machine and showed nothing where the tap was. A `#L12`
+    // tail, or a `:12` suffix, is the place in the file, and comes off as `position`.
+    const { path, position } = pathAndPosition(href)
+    return fileTarget(path, position)
   }
 
   const editor = EDITOR_FILE_URL.exec(href)
   if (editor) {
-    // Strip a query/fragment tail (`?windowId=_blank`) before decoding, as resolveRelativeLocalPath
-    // does — a filesystem path has neither. The editor cursor suffix (`:12:3`) stays: the reader and
-    // the server's opener both strip it themselves, the same as for a bare `README.md:12` path.
-    const rest = decodePath(editor[1].replace(/[?#].*$/u, "")).replace(/^\/+/, "")
+    // A query tail (`?windowId=_blank`) is the editor's, not the file's. The cursor suffix (`:12:3`) is
+    // the place the link opens at: it comes off the path as `position`. Kept on the path until
+    // 2026-10-01 — on the belief that the reader and the server's opener stripped it, which neither did,
+    // so `[x](vscode://file/repo/a.ts:12)` opened a reader that said the file was not found.
+    const { path: named, position } = pathAndPosition(editor[1])
+    const rest = named.replace(/^\/+/, "")
     if (!rest) return null
-    if (WINDOWS_ABSOLUTE_PATH.test(rest)) return { display: rest, filePath: rest }
-    const path = `/${rest}`
-    return { display: path, filePath: path }
+    return fileTarget(WINDOWS_ABSOLUTE_PATH.test(rest) ? rest : `/${rest}`, position)
   }
 
   if (!/^file:/i.test(href)) return null
@@ -106,8 +135,9 @@ export function localMarkdownTarget(raw: string | null | undefined): LocalMarkdo
     // A UNC/remote file URL is not a local file the server can safely proxy. It remains a
     // non-navigating chip, while an empty or localhost authority can use the existing gated route.
     if (url.hostname && url.hostname !== "localhost") return { display: href }
-    const path = decodePath(url.pathname)
-    return { display: path, filePath: path }
+    // `file:///repo/a.ts#L12` names a line the way a web link does.
+    const { path, position } = pathAndPosition(`${url.pathname}${url.hash}`)
+    return fileTarget(path, position)
   } catch {
     return { display: href }
   }
@@ -163,16 +193,28 @@ export function isLocalMarkdownFile(path: string): boolean {
 // Markdown file ever opened on Windows. joinLike keeps the base's separator and drive; the link itself
 // is always written with `/`, whatever the platform (a `..` climb is bounded by the drive the same way
 // it is bounded by `/`).
+//
+// A place in the file (`src/a.ts:12`, `guide.md#L3-L9`) is split off as `position`, exactly as for an
+// absolute link, so a relative link opens at its line too (resolveRelativeLocalTarget).
 export function resolveRelativeLocalPath(
   raw: string | null | undefined,
   baseDir: string,
   home?: string,
 ): string | null {
+  return resolveRelativeLocalTarget(raw, baseDir, home)?.path ?? null
+}
+
+/** resolveRelativeLocalPath, with the place in the file the link names kept beside the path. */
+export function resolveRelativeLocalTarget(
+  raw: string | null | undefined,
+  baseDir: string,
+  home?: string,
+): { path: string; position?: FilePosition } | null {
   const href = raw?.trim()
   if (!href) return null
   if (/^[a-z][a-z0-9+.-]*:/i.test(href)) return null // http(s):, file:, mailto:, cursor:, C:\…, …
   if (/^[\\/#?]/.test(href)) return null
-  const relative = decodePath(href.replace(/[?#].*$/u, ""))
+  const { path: relative, position } = pathAndPosition(href)
   if (!relative) return null
   // A home-anchored path carries its own root, so it needs no base at all — and must never be glued
   // onto one, which is what turned `~/.claude/CLAUDE.md` into `<baseDir>/~/.claude/CLAUDE.md`.
@@ -180,7 +222,19 @@ export function resolveRelativeLocalPath(
   if (homeAnchored && !(home && isRooted(home))) return null
   const root = homeAnchored ? home! : baseDir
   if (!isRooted(root)) return null
-  return joinLike(root, homeAnchored ? relative.slice(2) : relative)
+  const path = joinLike(root, homeAnchored ? relative.slice(2) : relative)
+  return position ? { path, position } : { path }
+}
+
+/**
+ * A position as the `#L` fragment `pathAndPosition` reads back — how the sanitizer's relative-link
+ * rebase hands a link's line on to localMarkdownTarget through the rewritten href (markdown.ts
+ * rebaseRelative). `#L12C3-L20`; the empty string for no position.
+ */
+export function positionFragment(position: FilePosition | undefined): string {
+  if (!position) return ""
+  const end = position.endLine && position.endLine > position.line ? `-L${position.endLine}` : ""
+  return `#L${position.line}${position.column ? `C${position.column}` : ""}${end}`
 }
 
 /**

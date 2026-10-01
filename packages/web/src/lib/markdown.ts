@@ -1,7 +1,8 @@
 import { Marked } from "marked"
 import type { Token, Tokens, TokenizerAndRendererExtension } from "marked"
 import { CODE_BLOCK_CLASS, renderHighlightedCode } from "./syntaxHighlight.ts"
-import { isLocalMarkdownFile, localImageUrlForTarget, localMarkdownTarget, resolveRelativeLocalPath } from "./markdownTargets.ts"
+import { isLocalMarkdownFile, localImageUrlForTarget, localMarkdownTarget, positionFragment, resolveRelativeLocalTarget } from "./markdownTargets.ts"
+import { LOCAL_POSITION_ATTRS, stampLocalPosition } from "./localFilePosition.ts"
 import { prefixedAppRoute } from "./base-path.ts"
 import { githubRefFromUrl, linkifyGithubRefs, withGithubRepo } from "./githubAutolink.ts"
 import { linkifyThreadMentions, withMentionProject } from "./mentionAutolink.ts"
@@ -334,7 +335,10 @@ const ALLOWED_TAGS = new Set([
   "h1", "h2", "h3", "h4", "h5", "h6", "p", "br", "hr", "strong", "em", "del", "code", "pre",
   "blockquote", "ul", "ol", "li", "a", "img", "button", "table", "thead", "tbody", "tr", "th", "td", "span",
 ])
-const ALLOWED_ATTRS = new Set(["href", "src", "alt", "title", "type", "class", "data-local-path", "data-local-image"])
+// The `data-local-*` position attributes ride beside `data-local-path` (lib/localFilePosition.ts): a
+// local-file element minted here never reaches this loop, but one an author wrote as raw HTML does, and
+// its line is as much the link's as its path is.
+const ALLOWED_ATTRS = new Set(["href", "src", "alt", "title", "type", "class", "data-local-path", "data-local-image", ...LOCAL_POSITION_ATTRS])
 // `class` is allowlisted outright on every other tag; on `code` and `span` it is filtered to this set,
 // because those two are the tags the renderers below mint with meaning attached. Built from the constant
 // so the fenced-code wrapper's class cannot drift out of the pattern that has to admit it — a stripped
@@ -421,7 +425,11 @@ function walk(node: ParentNode, ctx: WalkContext) {
           button.type = "button"
           button.className = "local-file-action"
           button.title = readable ? `Read ${target.display}` : target.display
-          if (target.filePath) button.setAttribute("data-local-path", target.filePath)
+          if (target.filePath) {
+            button.setAttribute("data-local-path", target.filePath)
+            // The line the link names, for the external app; the path stays bare for the reader.
+            stampLocalPosition(button, target.position)
+          }
           while (el.firstChild) button.append(el.firstChild)
           el.replaceWith(button)
           continue
@@ -482,10 +490,12 @@ function walk(node: ParentNode, ctx: WalkContext) {
 // Rewrite a relative or `~`-anchored destination into the absolute path it names on disk, so the
 // branches below see the same thing they would have seen had the author written the path out in full.
 // A no-op when the caller supplied no base at all, and for anything already absolute or schemed.
+// The rebased href keeps the link's line as a `#L` fragment, which localMarkdownTarget reads back like
+// any absolute link's — so `[a](src/a.ts:12)` opens at line 12 the same as `[a](/repo/src/a.ts:12)`.
 function rebaseRelative(el: Element, attr: "href" | "src", { baseDir, homeDir }: WalkContext): void {
   if (!baseDir && !homeDir) return
-  const resolved = resolveRelativeLocalPath(el.getAttribute(attr), baseDir ?? "", homeDir)
-  if (resolved) el.setAttribute(attr, resolved)
+  const resolved = resolveRelativeLocalTarget(el.getAttribute(attr), baseDir ?? "", homeDir)
+  if (resolved) el.setAttribute(attr, `${resolved.path}${positionFragment(resolved.position)}`)
 }
 
 // Wrap a local Markdown image in the SAME frame every other rendered picture in the app sits in —

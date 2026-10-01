@@ -1,8 +1,13 @@
+import { useRef } from "react"
 import { createRoot } from "react-dom/client"
 import "./styles.css"
+import { CodexDirectiveCard } from "./components/CodexRichOutput.tsx"
 import { DiffBlock } from "./components/DiffBlock.tsx"
 import { mdToHtml } from "./lib/markdown.ts"
 import { installLocalFileLinkInterceptor } from "./lib/local-file-links.ts"
+import { useLocalFileCodeLinks } from "./lib/localFileCode.ts"
+import { useInnerHtml } from "./lib/innerHtml.ts"
+import { prefs } from "./lib/prefs.ts"
 import { store } from "./store.ts"
 
 // Every destination a local-file link can have, on one page. A file Frizz can show opens in Frizz: a
@@ -19,8 +24,12 @@ import { store } from "./store.ts"
 // and out of the app. `baseDir`/`homeDir` are what useMarkdownHtml hands the renderer off the board.
 const BASE_DIR = "/fixture"
 const HOME_DIR = "/fixture/home"
+type OpenBody = { path?: string; line?: number; column?: number; endLine?: number }
 type FixtureWindow = Window & {
   __localFileFixtureOpened?: string[]
+  // Every `openLocalFile` body whole — the line, column and range a link carried to the RPC.
+  __localFileFixtureOpenBodies?: OpenBody[]
+  __localFileFixtureCodeFiles?: (to: "frizz" | "editor") => void
   __localFileFixtureDrawers?: () => { kind: string; path?: string }[]
   __localFileFixtureViewer?: () => { paths: string[]; index: number } | null
 }
@@ -29,14 +38,35 @@ const nativeFetch = window.fetch.bind(window)
 window.fetch = async (input, init) => {
   const url = new URL(typeof input === "string" ? input : input instanceof URL ? input.href : input.url, window.location.href)
   if (url.pathname === "/_frizz/rpc/openLocalFile") {
-    const body = JSON.parse(String(init?.body ?? "{}")) as { path?: string }
+    const body = JSON.parse(String(init?.body ?? "{}")) as OpenBody
     const w = window as FixtureWindow
     w.__localFileFixtureOpened = [...(w.__localFileFixtureOpened ?? []), body.path ?? ""]
+    w.__localFileFixtureOpenBodies = [...(w.__localFileFixtureOpenBodies ?? []), body]
     return new Response(JSON.stringify({ result: { action: "copy", path: body.path } }), {
       headers: { "content-type": "application/json", "x-frizz-boot": "local-file-fixture" },
     })
   }
+  // Inline code resolves against the project directory server-side; here every candidate under `src/`
+  // or named `App.tsx` is a file at the fixture root. The server is only ever asked for the BARE path —
+  // a candidate arriving with its `:42` still on is answered "not a file", so a regression that stops
+  // splitting it leaves the code inert and the e2e fails rather than passing on a lenient stub.
+  if (url.pathname === "/_frizz/rpc/resolveLocalPaths") {
+    const { paths } = JSON.parse(url.searchParams.get("input") ?? "{}") as { paths: string[] }
+    const resolved = paths.map((input) => ({ input, path: /^(?:src\/[\w.-]+\.ts|App\.tsx)$/.test(input) ? `/fixture/${input}` : null }))
+    return new Response(JSON.stringify({ result: { resolved } }), { headers: { "content-type": "application/json" } })
+  }
   return nativeFetch(input, init)
+}
+
+;(window as FixtureWindow).__localFileFixtureCodeFiles = (to) => { prefs.codeFiles = to }
+
+// Prose whose inline code is decorated the way every transcript surface decorates it — rendered through
+// the same hook, so the line a backticked `a.ts:12` names is stamped by the real code path.
+function PositionedProse({ html }: { html: string }) {
+  const ref = useRef<HTMLDivElement>(null)
+  const inner = useInnerHtml(html)
+  useLocalFileCodeLinks(ref, html)
+  return <div ref={ref} data-positioned className="md-body mt-6" dangerouslySetInnerHTML={inner} />
 }
 
 ;(window as FixtureWindow).__localFileFixtureDrawers = () =>
@@ -88,6 +118,24 @@ createRoot(document.getElementById("root")!).render(
         ].join("\n"), { baseDir: BASE_DIR, homeDir: HOME_DIR }),
       }}
     />
+    {/* A PLACE IN A FILE, in every spelling a link, a deep link, a relative path, a file URL or inline
+        code uses (shared file-position.ts), plus a raw-HTML button an author wrote by hand. Each one's
+        path is bare on the element and its line beside it; with code files sent to the external app the
+        line reaches `openLocalFile`, and in Frizz's reader the bare path does. */}
+    <PositionedProse
+      html={mdToHtml([
+        "At [`a.ts`](/fixture/src/a.ts#L5-L9) and [again](/fixture/src/a.ts:30), [`b.ts`](vscode://file/fixture/src/b.ts:3:2), [`c.ts`](src/c.ts:12), [`d.ts`](src/d.ts#L7) and [`e.ts`](file:///fixture/src/e.ts#L4).",
+        "",
+        "Inline: `src/f.ts:21`, `App.tsx:42` and `src/g.ts#L12-L14`.",
+        "",
+        "The guide is [`guide.md`](vscode://file/fixture/guide.md:8).",
+        "",
+        '<button data-local-path="/fixture/src/raw.ts" data-local-line="8" data-local-col="nope" data-bogus="x">raw.ts</button>',
+      ].join("\n"), { baseDir: BASE_DIR, homeDir: HOME_DIR })}
+    />
+    <div className="mt-4" data-codex-finding>
+      <CodexDirectiveCard directive={{ name: "code-comment", attrs: { title: "Off by one", file: "/fixture/src/h.ts", start: 30, end: 34 } }} />
+    </div>
     {/* The OTHER producer of a local-file link: a tool card's header path (PathLink), here in its diff
         form. It used to be an `<a href="cursor://file/…">` the OS resolved, so it ignored the opener
         setting entirely and always landed in Cursor. It now takes the same route as everything above —

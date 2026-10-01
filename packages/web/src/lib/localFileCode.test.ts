@@ -1,6 +1,6 @@
 import { test } from "node:test"
 import assert from "node:assert/strict"
-import { isPathCandidate } from "./localFileCode.ts"
+import { isPathCandidate, localFileCandidate } from "./localFileCode.ts"
 
 test("isPathCandidate accepts path-like inline code", () => {
   for (const v of [
@@ -10,7 +10,7 @@ test("isPathCandidate accepts path-like inline code", () => {
     "packages/web/src/App.tsx",
     "./foo/bar.ts",
     "../sibling/x.md",
-    "packages/web/src/App.tsx:42:7", // an editor :line[:col] suffix is still a candidate (stripped server-side)
+    "packages/web/src/App.tsx:42:7", // an editor :line[:col] suffix is still a candidate (localFileCandidate splits it)
     "a/b", // any slash-bearing token is a candidate; the server decides if it's real
     // A bare filename with an extension — how a worker names a file it wrote at the project root
     // (`it's in \`cloudflare-ask.md\``). Resolved against the project dir server-side, like any
@@ -84,4 +84,31 @@ test("a resolution is cached per project, and asked of that project's own client
   // …and a project that has already asked is not asked again.
   await resolveUnknown(["README.md"], "project-a", client("/work/a") as never)
   assert.deepEqual(asked, ["/work/a", "/work/b"])
+})
+
+// A PLACE IN A FILE in inline code: the server is asked for the BARE path (one resolution per file, however
+// many lines the prose names) and the line stays client-side, to be stamped on the element.
+test("localFileCandidate splits the line off before the path test", () => {
+  assert.deepEqual(localFileCandidate("packages/web/src/App.tsx:42:7"), { path: "packages/web/src/App.tsx", position: { line: 42, column: 7 } })
+  assert.deepEqual(localFileCandidate("src/a.ts#L12-L20"), { path: "src/a.ts", position: { line: 12, endLine: 20 } })
+  assert.deepEqual(localFileCandidate(" src/a.ts:3-9 "), { path: "src/a.ts", position: { line: 3, endLine: 9 } })
+  assert.deepEqual(localFileCandidate("C:\\Users\\me\\a.ts:7"), { path: "C:\\Users\\me\\a.ts", position: { line: 7 } })
+  // A bare filename WITH a line — `App.tsx:42` — was no candidate at all until the split came first.
+  assert.equal(isPathCandidate("App.tsx:42"), false)
+  assert.deepEqual(localFileCandidate("App.tsx:42"), { path: "App.tsx", position: { line: 42 } })
+  // No position: the path alone, exactly as isPathCandidate would take it.
+  assert.deepEqual(localFileCandidate("src/a.ts"), { path: "src/a.ts" })
+  assert.deepEqual(localFileCandidate("package.json"), { path: "package.json" })
+})
+
+test("localFileCandidate refuses what is not a path, line or no line", () => {
+  for (const v of [
+    "localhost:3000", // a host and port: `localhost` has no extension and no slash
+    "https://example.com:443/x.ts", // a URL stays a URL
+    "useState:12",
+    "git status:1",
+    "1.5:2",
+    ":12",
+    "",
+  ]) assert.equal(localFileCandidate(v), null, v)
 })
