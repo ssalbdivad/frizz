@@ -37,6 +37,7 @@ const GLOBS = [
   "packages/relay/src/**/*.test.ts",
   "packages/web/src/**/*.test.ts",
   "packages/desktop/src/**/*.test.ts",
+  "packages/vscode/src/**/*.test.ts",
 ];
 
 const forwarded = process.argv.slice(2);

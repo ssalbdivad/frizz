@@ -1,0 +1,159 @@
+{
+  "name": "frizz-vscode",
+  "displayName": "Frizz",
+  "description": "Ask Frizz about the code in front of you, and open Frizz's file links in this window",
+  "version": "0.1.0",
+  "private": true,
+  "publisher": "colinhacks",
+  "license": "MIT",
+  "author": "Colin McDonnell",
+  "homepage": "https://github.com/colinhacks/frizz",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/colinhacks/frizz.git",
+    "directory": "packages/vscode"
+  },
+  "type": "module",
+  "main": "./dist/extension.cjs",
+  "icon": "dist/icon.png",
+  "engines": {
+    "vscode": "^1.90.0"
+  },
+  "categories": [
+    "AI",
+    "Other"
+  ],
+  "keywords": [
+    "frizz",
+    "agents",
+    "claude-code",
+    "codex"
+  ],
+  "extensionKind": [
+    "workspace"
+  ],
+  "activationEvents": [
+    "onStartupFinished"
+  ],
+  "capabilities": {
+    "untrustedWorkspaces": {
+      "supported": true
+    },
+    "virtualWorkspaces": false
+  },
+  "contributes": {
+    "commands": [
+      {
+        "command": "frizz.ask",
+        "title": "Ask Frizz…",
+        "category": "Frizz"
+      },
+      {
+        "command": "frizz.sendToThread",
+        "title": "Send to Frizz thread…",
+        "category": "Frizz"
+      },
+      {
+        "command": "frizz.addToPrompt",
+        "title": "Add to Frizz prompt",
+        "category": "Frizz"
+      },
+      {
+        "command": "frizz.open",
+        "title": "Open Frizz",
+        "category": "Frizz"
+      },
+      {
+        "command": "frizz.showLog",
+        "title": "Show log",
+        "category": "Frizz"
+      },
+      {
+        "command": "frizz.reconnect",
+        "title": "Reconnect",
+        "category": "Frizz"
+      }
+    ],
+    "submenus": [
+      {
+        "id": "frizz.editor",
+        "label": "Frizz"
+      }
+    ],
+    "menus": {
+      "editor/context": [
+        {
+          "submenu": "frizz.editor",
+          "group": "frizz"
+        }
+      ],
+      "frizz.editor": [
+        {
+          "command": "frizz.ask",
+          "group": "frizz@1"
+        },
+        {
+          "command": "frizz.sendToThread",
+          "group": "frizz@2"
+        },
+        {
+          "command": "frizz.addToPrompt",
+          "group": "frizz@3"
+        }
+      ],
+      "explorer/context": [
+        {
+          "command": "frizz.ask",
+          "when": "!explorerResourceIsFolder",
+          "group": "frizz@1"
+        },
+        {
+          "command": "frizz.addToPrompt",
+          "when": "!explorerResourceIsFolder",
+          "group": "frizz@2"
+        }
+      ]
+    },
+    "keybindings": [
+      {
+        "command": "frizz.addToPrompt",
+        "key": "ctrl+alt+p",
+        "mac": "cmd+alt+p",
+        "when": "editorTextFocus && editorHasSelection"
+      }
+    ],
+    "configuration": {
+      "title": "Frizz",
+      "properties": {
+        "frizz.serverUrl": {
+          "type": "string",
+          "default": "",
+          "markdownDescription": "The Frizz server's address, such as `http://127.0.0.1:9393`. Leave empty to find the Frizz running on this machine."
+        },
+        "frizz.openFileLinks": {
+          "type": "boolean",
+          "default": true,
+          "description": "Open file links from Frizz in this window"
+        }
+      }
+    }
+  },
+  "scripts": {
+    "build": "nub scripts/build.ts",
+    "package": "nub scripts/build.ts && nubx -y -p @vscode/vsce@3.9.2 vsce package --no-dependencies --out dist/",
+    "e2e": "nub scripts/e2e.ts"
+  },
+  "dependencies": {
+    "ws": "^8.18"
+  },
+  "devDependencies": {
+    "@frizz/server": "workspace:*",
+    "@frizz/shared": "workspace:*",
+    "@types/node": "^24",
+    "@types/vscode": "1.90.0",
+    "@types/ws": "^8.5",
+    "@vscode/test-electron": "^3.1.0",
+    "esbuild": "^0.25.0",
+    "typescript": "^5.7"
+  }
+}

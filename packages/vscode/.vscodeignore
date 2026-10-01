@@ -1,0 +1,8 @@
+# The .vsix carries the bundle and its manifest, nothing else: esbuild has already inlined every
+# dependency, so sources, tests, the e2e harness and node_modules would only be weight.
+**
+!package.json
+!README.md
+!LICENSE
+!dist/extension.cjs
+!dist/icon.png

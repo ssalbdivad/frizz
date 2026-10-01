@@ -1,0 +1,6 @@
+{
+  "extends": "../../tsconfig.base.json",
+  // The base pins `types` to node; the extension also needs the editor's API declarations.
+  "compilerOptions": { "types": ["node", "vscode"] },
+  "include": ["src", "e2e", "scripts"]
+}
