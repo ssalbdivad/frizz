@@ -1,5 +1,8 @@
 import type { MouseEvent } from "react"
-import { Maximize2 } from "lucide-react"
+import { ExternalLink, Maximize2 } from "lucide-react"
+import { embedded } from "../lib/embed.ts"
+import { openExternalUrl } from "../lib/external-links.ts"
+import { useShortcutLabel, withShortcut } from "../lib/keyboardRuntime.ts"
 import { isPlainLeftClick, standaloneThreadHref } from "../lib/standaloneThreadRoute.ts"
 import { HEADER_ICON_CLASS } from "../lib/headerIcon.ts"
 import { openFullscreen } from "./ThreadMenu.tsx"
@@ -20,6 +23,13 @@ import { Tooltip } from "./Tooltip.tsx"
 // A real anchor, so ⌘/middle/right-click and "copy link address" need no code; a plain left click
 // navigates in place through the drawer menu's own openFullscreen, so both doors take one path — the view
 // transition from the drawer's panel, the reader's place, and the way back out.
+//
+// IN AN EDITOR'S SIDEBAR IT OPENS THE THREAD IN THE BROWSER (lib/embed.ts). The drawer there is already
+// the frame's whole width, so /full in the frame would be the same thread with the list gone from behind
+// it — fullscreen in name only. The room the door is for is a browser tab's, so it opens the same /full
+// page there (`frizz:open-external`; a webview cannot open a window), says so in its icon and tooltip,
+// and `f` presses it as ever. The ↗ is the door's own earlier icon: it was "Open in new tab" until
+// 2026-08-28.
 export function ExpandThreadLink({
   slug,
   href = standaloneThreadHref(slug),
@@ -37,18 +47,28 @@ export function ExpandThreadLink({
   className?: string
   label?: string
 }) {
+  const browser = embedded()
+  const keys = useShortcutLabel("thread.fullscreen")
+  // In the sidebar the tooltip names the key too: `f` there does something other than its name in the
+  // shortcuts sheet, and the control is where the human finds out what.
+  const tip = browser ? withShortcut("Open in browser", command ? keys : null) : label
   function onClick(event: MouseEvent<HTMLAnchorElement>) {
     // Never let the click reach the card or row underneath, which would open the drawer as well.
     event.stopPropagation()
+    if (browser) {
+      event.preventDefault()
+      openExternalUrl(new URL(href, location.href).toString())
+      return
+    }
     if (!isPlainLeftClick(event)) return
     event.preventDefault()
     openFullscreen(slug, event.currentTarget, href)
   }
   return (
-    <Tooltip label={label}>
+    <Tooltip label={tip}>
       <a
         href={href}
-        aria-label={label}
+        aria-label={tip}
         data-expand-thread={slug}
         data-command={command ? "fullscreen" : undefined}
         // Focus must not leave a card's composer, as with every other icon verb in the strip.
@@ -56,7 +76,7 @@ export function ExpandThreadLink({
         onClick={onClick}
         className={className ?? HEADER_ICON_CLASS}
       >
-        <Maximize2 size={size} />
+        {browser ? <ExternalLink size={size} /> : <Maximize2 size={size} />}
       </a>
     </Tooltip>
   )

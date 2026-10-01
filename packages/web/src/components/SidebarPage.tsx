@@ -8,6 +8,7 @@ import { phoneCounts, phoneQueue, phoneSubtitle } from "../lib/phonePage.ts"
 import { prefs } from "../lib/prefs.ts"
 import { store } from "../store.ts"
 import { useOpenThreadInPlace } from "./AllQueuesCard.tsx"
+import { StatusRow } from "./StatusRow.tsx"
 
 // THE PAGE IN AN EDITOR'S SIDEBAR — the desktop app's left column, alone (plans/vscode-extension.md
 // § The editor in the sidebar, and the app's own feel). The VS Code extension frames this page at any
@@ -85,6 +86,7 @@ export function SidebarPage({
 
   return (
     <div data-sidebar-page className="min-h-screen bg-bg px-3 pb-8 pt-3 text-sm text-fg">
+      <StatusRow settings={false} />
       {composer}
       {error ? (
         <p className="mt-6 text-center text-[13px] text-muted">Could not read the queues: {error}</p>
