@@ -43,6 +43,9 @@ import { questionsOwed, type ThreadView } from "@frizz/shared"
 // outside the queue clears a stamp or counts as having seen the thread out. An unknown one changes
 // nothing: the stamp waits for the thread's first real reading, and the thread keeps SHOWING queued at it
 // meanwhile — a queue that blinked empty for the seconds of a prime moved every card on the reader's screen.
+// Symmetrically, a reading the board drew from a STAND-IN with no stamp does not enter the queue unless it
+// is urgent (2026-09-30): the stamps are durable, so their absence is the queue's membership as of the last
+// server, and it holds until a real reading says otherwise.
 //
 // A STORED STAMP IS CHECKED ONCE, the first time its thread reads as queued after a boot: if the agent
 // has spoken since it (a rest newer than the stamp), the thread left and re-entered while this server was
@@ -126,6 +129,10 @@ export interface QueueReading {
   /** Whether its `needsYou` is real, rather than a default standing in for telemetry the server does not
    *  have yet. */
   known(thread: ThreadView): boolean
+  /** An unknown reading the board drew from a STAND-IN for that telemetry (board.ts boardTelemetry: the
+   *  tail cache's pre-restart state, or a bare rest off the durable columns). Such a reading cannot put
+   *  the thread in the queue — see `stamp`. Optional: absent reads as no stand-in, the old behaviour. */
+  standIn?(thread: ThreadView): boolean
   /** Out of the queue at rest behind a hold that usually ends in a wake — so its entry is withheld. */
   parked(thread: ThreadView): boolean
   /** A reason the human must see at once, never withheld. */
@@ -254,9 +261,27 @@ export function createQueueClock(store: QueueClockStore): QueueClock {
         }
         // Queued on a reading the board cannot vouch for yet: show the stamp it has, keep withholding an
         // entry already withheld, and decide nothing.
+        //
+        // AND A STAND-IN WITH NO STAMP IS NOT QUEUED (2026-09-30). The mirror of the branch above: just as
+        // an unknown reading cannot take a thread OUT of the queue, a reading drawn from a stand-in cannot
+        // put one IN. The board draws an unprimed row from what was true before the restart (board.ts
+        // boardTelemetry), and stamps are durable and written on every entry, so a thread with none was
+        // outside the queue as far as anyone knows — a stand-in that queues it anyway (an account older
+        // than the last flush, a park whose deadline passed while nobody watched, a bare rest standing in
+        // for a fence it cannot see) would put a card on the reader's screen for the seconds of a prime and
+        // possibly take it straight back, the same swap this branch exists to prevent. A thread that really
+        // did arrive while the server was down enters at its first real reading, seconds later, on the
+        // rules below (and notifies then, as a real arrival should). Not `withhold`: that also says "no
+        // park stands", which would pull a parked row out of the Snoozed band it is drawn in.
+        //
+        // EXCEPT AN URGENT ONE, as everywhere in this clock: a request in the interaction journal, a
+        // registered question, a crash, a limit pause. Most of those are durable facts the board read
+        // without the tailer at all — an approval a provider raised while the row is still unprimed has
+        // to reach the human now, not after the prime.
         if (!vouched) {
           if (held !== undefined) t.queuedAt = new Date(held).toISOString()
           else if ((settling.get(t.id) ?? -Infinity) > nowMs) withhold(t)
+          else if (reading.standIn?.(t) === true && !reading.urgent(t)) t.needsYou = false
           continue
         }
         const rest = restMs(t)

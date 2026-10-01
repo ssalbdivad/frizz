@@ -2723,6 +2723,12 @@ export type SubAgentDirectoryRecord = Omit<SubAgentDirectoryEntry, "address">
 
 export interface Tailer {
   get(slug: string): SessionTelemetry | undefined
+  // WHAT WAS TRUE BEFORE THE RESTART, for a registered row this tailer has not primed yet: its durable
+  // tail-cache entry, decoded and projected exactly as `get` projects a primed state, always carrying
+  // `primed: false`. Undefined once the row is primed (read `get`), and for a row with no usable entry.
+  // A stand-in for the seconds before the real fold lands, never evidence — see the implementation, and
+  // board.ts `boardTelemetry` for the one reader. Optional so a hand-rolled test tailer keeps compiling.
+  provisional?(slug: string): SessionTelemetry | undefined
   // FOREIGN session ids (JSONL files in the project dir with no registry row — maintainer terminals)
   // whose transcript is FRESH (recent mtime): the board lists these as read-only session threads.
   // Keyed by session id (the thread id for a foreign thread IS its session id).
@@ -3108,6 +3114,10 @@ export const UNRESTORED_TAIL_FIELDS: ReadonlySet<string> = new Set([
  * one. Keying on `archived` ALONE would be wrong — storage.ts is explicit that it is a legacy column
  * kept only in sync, and an explicit `state: "open"` must beat a stale bit, not lose to it.
  */
+function nativeIdOf(row: SessionRow): string {
+  return row.backend === "acp" ? row.session_id : row.agent_session_id ?? row.transcript_id ?? row.session_id
+}
+
 function rowIsArchived(row: SessionRow): boolean {
   if (row.state === "open" || row.state === "archived") return row.state === "archived"
   return row.archived === 1
@@ -4898,6 +4908,23 @@ export function createTailer(deps: TailerDeps): Tailer {
   // Loaded lazily on the first tick, consumed once per slug. Entries that miss their fence are simply
   // never applied: the row then folds from byte 0, exactly as it always did.
   let cacheEntries: Map<string, TailCacheEntry> | null = null
+  // EVERY stored entry, whatever fold schema wrote it, for the provisional reading (see `provisional`).
+  // Read in the SAME query as `cacheEntries`, and before the first flush can prune the old schema's rows
+  // — which is the boot that needs them. Not one-shot: a provisional reading is asked for on every board
+  // assembly until its row primes, and the entry leaves this map then.
+  let provisionalEntries: Map<string, TailCacheEntry> | null = null
+  function loadCacheEntries(): Map<string, TailCacheEntry> {
+    if (cacheEntries !== null) return cacheEntries
+    if (!tailCache) return (cacheEntries = new Map())
+    if (tailCache.loadProvisional) {
+      provisionalEntries = tailCache.loadProvisional()
+      cacheEntries = new Map([...provisionalEntries].filter(([, entry]) => entry.schemaCurrent !== false))
+    } else {
+      cacheEntries = tailCache.load()
+      provisionalEntries = new Map(cacheEntries)
+    }
+    return cacheEntries
+  }
   // Slugs whose cached entry is stale (or absent) and must be (re)written at the next flush.
   const cacheDirty = new Set<string>()
   // Slugs that were restored from the cache on this boot — used to skip rewriting an entry that is
@@ -4933,13 +4960,28 @@ export function createTailer(deps: TailerDeps): Tailer {
     return cached === bound || basename(cached) === basename(bound)
   }
 
+  // Whether a decoded state's lifecycle collections came back with their native collection types. A
+  // plain object here crashes the incremental fold on the first completion after restart (and the
+  // board's projection of the state on its first read).
+  //
+  // `ownedToolUseIds` too: a state cached by a build BEFORE the ownership gate carries none, and
+  // restoring that would leave the set empty while the fold resumes past every dispatch that filled it —
+  // so every op would read as foreign and NO report would ever be repaired again. Reject the cache and
+  // re-fold instead; it is one replay, once, per thread across the upgrade.
+  function hasNativeCollections(decoded: { [key: string]: unknown }): boolean {
+    for (const field of ["subAgents", "retiredSubAgents", "queuedReports", "retiredShells"]) {
+      if (!(decoded[field] instanceof Map)) return false
+    }
+    return decoded.deliveredReports instanceof Set && decoded.ownedToolUseIds instanceof Set
+  }
+
   function hydrateFromCache(state: TailState, row: SessionRow | null, nativeId: string): boolean {
     if (!tailCache) return false
-    if (cacheEntries === null) cacheEntries = tailCache.load()
+    const entries = loadCacheEntries()
     const key = cacheKey(state)
-    const entry = cacheEntries.get(key)
+    const entry = entries.get(key)
     if (!entry) return false
-    cacheEntries.delete(key) // one shot: a rebind within this process must re-derive, not re-restore
+    entries.delete(key) // one shot: a rebind within this process must re-derive, not re-restore
     if (
       entry.sessionId !== (row ? row.session_id : state.sessionId) ||
       entry.nativeSessionId !== nativeId ||
@@ -4960,17 +5002,7 @@ export function createTailer(deps: TailerDeps): Tailer {
     const decoded = decodeTailState(entry.state)
     if (!decoded) return false
     if (decoded.offset !== entry.offset || typeof decoded.partial !== "string") return false
-    // Lifecycle collections must survive the round trip with their native collection types; a plain
-    // object here crashes the incremental fold on the first completion after restart.
-    for (const field of ["subAgents", "retiredSubAgents", "queuedReports", "retiredShells"]) {
-      if (!(decoded[field] instanceof Map)) return false
-    }
-    if (!(decoded.deliveredReports instanceof Set)) return false
-    // A state cached by a build BEFORE the ownership gate carries no `ownedToolUseIds`, and restoring
-    // that would leave the set empty while the fold resumes past every dispatch that filled it — so
-    // every op would read as foreign and NO report would ever be repaired again. Reject the cache and
-    // re-fold instead; it is one replay, once, per thread across the upgrade.
-    if (!(decoded.ownedToolUseIds instanceof Set)) return false
+    if (!hasNativeCollections(decoded)) return false
     // `Record` is shadowed in this module by the JSONL record interface — spell the index type out.
     const target = state as unknown as { [key: string]: unknown }
     for (const [key, value] of Object.entries(decoded)) {
@@ -5010,9 +5042,7 @@ export function createTailer(deps: TailerDeps): Tailer {
   // The durable record of `state` at its current byte cursor, or null when it must not be cached: a
   // state bound to nothing yet, a row with an open delivery ledger, or a file that will not stat/read.
   function cacheSnapshot(state: TailState, row: SessionRow | null): TailCacheEntry | null {
-    // Codex rows are never cached — the prime cache predates their live sub-agent tracker and cannot
-    // round-trip it (see hydrateFromCache). Never persisting them keeps hydrate a guaranteed miss.
-    if (state.offset <= 0 || row?.delivery_ledger || row?.backend === "codex") return null
+    if (state.offset <= 0 || row?.delivery_ledger) return null
     const fence = measureFence(state.path, state.offset)
     if (!fence) return null
     return {
@@ -5021,7 +5051,14 @@ export function createTailer(deps: TailerDeps): Tailer {
       nativeSessionId: state.nativeSessionId,
       runtimeGeneration: state.runtimeGeneration,
       path: state.path,
-      state: encodeTailState(state),
+      // A CODEX row is written for the PROVISIONAL reading alone (see `provisional`), never to resume a
+      // fold from: hydrateFromCache refuses every codex row before it decodes anything, because this
+      // cache cannot round-trip the row's live sub-agent tracker and resuming mid-file would skip the
+      // `spawn_agent` records the tracker rebuilds itself from. Until 2026-09-30 codex rows were not
+      // written at all, which left every codex thread with nothing to show but a spinner while it waited
+      // for its full replay after a restart. The tracker itself is left out: it is a live object, and
+      // what it knows is already in `subAgents`, which it writes into.
+      state: encodeTailState(row?.backend === "codex" ? { ...state, codexSubAgents: undefined } : state),
       ...fence,
     }
   }
@@ -5427,6 +5464,9 @@ export function createTailer(deps: TailerDeps): Tailer {
     // Every tick, so a host suspension is placed within one tick of where it really fell (awake-clock.ts).
     processAwakeClock.sample()
     adoptionBindings = new Map()
+    // Before anything this tick can flush (and the first flush PRUNES every other fold schema's rows):
+    // the provisional readings are served from what this read finds. See `provisional`.
+    if (tailCache && cacheEntries === null) loadCacheEntries()
     const rows = deps.storage.allSessions()
     // ARCHIVED ROWS PRIME LAST. Priming is bounded per tick, so on a cold board the registry's order
     // decides who converges first — and a long-lived board is overwhelmingly archive. The maintainer's
@@ -5479,7 +5519,7 @@ export function createTailer(deps: TailerDeps): Tailer {
       // session/load), but the transcript is FRIZZ-written and keyed by the frizz session id
       // (acp-transcript.ts) — so its stem is always `session_id`.
       const backend = resolveBackend(row.backend)
-      const nativeId = row.backend === "acp" ? row.session_id : row.agent_session_id ?? row.transcript_id ?? row.session_id
+      const nativeId = nativeIdOf(row)
       const known = states.get(row.slug)
       const runtimeGeneration = row.runtime_generation ?? 0
       // The state this row may KEEP: same session, same native transcript stem, same runtime
@@ -6071,6 +6111,110 @@ export function createTailer(deps: TailerDeps): Tailer {
     return currentRowFor(state) !== undefined
   }
 
+  // The board's projection of one state — what `get` answers for a primed row and `provisional` for a
+  // cached one, so the two can never be shaped differently.
+  function telemetryOf(s: TailState, row: SessionRow | undefined): SessionTelemetry {
+    // pendingQuestion: the latest assistant message carries a ```question fence and the HUMAN has not
+    // answered it. NO REST-GATE, and that is the point. It used to require `turn === "idle"` as well,
+    // copied from the `humanBlocked` net where the gate is genuinely needed — that signal is a thread
+    // FILE flag written mid-turn, ~150ms after dispatch, long before the ask text exists, so counting
+    // it early yields a card with no visible ask. This flag is derived from the ask TEXT ITSELF: by the
+    // time it is true the question is on disk and in the chat, so there is nothing to wait for.
+    //
+    // What the gate did instead was make the ask disappear the instant anything re-opened the turn —
+    // and the chat, which reads the transcript rather than the turn, went on drawing the answerable
+    // card. One thread showed its ```question card AND the working shimmer, in the Active rail instead
+    // of the queue (maintainer 2026-08-24: "this needs to be structurally impossible"). An unanswered
+    // question is a claim on the HUMAN; whether the agent happens to be mid-turn is a fact about the
+    // agent. The board reports both, and `boardRuntime` decides which one the row is allowed to draw.
+    //
+    // AND ONLY FOR A THREAD THAT STILL SPEAKS THE FENCE (2026-09-11). The free-form ```question fence
+    // is retired from the worker contract — a worker asks via `mcp__frizz__ask`, a registered row —
+    // so for a thread dispatched at or after the cutover a fence in its prose is prose: it must not
+    // queue the thread, degrade its runtime, excuse the sign-off nudge or turn the Goal's bump. A
+    // thread dispatched BEFORE it is a legacy worker whose fence is still its ask, and everything
+    // downstream keeps treating it as one. This is the ONE gate: `lastAssistantHasQuestion` stays
+    // the fold's plain fact about the TEXT (and the tail cache may restore it from an older build),
+    // and every consumer — board queue, `degradeIfAwaitingAnswer`, the ThreadView, both scheduler
+    // reads — sees only what leaves here. Gated on the live row rather than a value stamped into the
+    // state at creation so a (re)spawn that bumps `spawned_at` is read the moment it lands. A foreign
+    // thread has no row and reads as legacy, which is what `questionFencesLive` does with unknown.
+    //
+    // AND THE REST A HIDDEN SPINOFF SIDE TURN FOUND (2026-09-30, spinoff-side-turn.ts). Once a side turn
+    // has done only what it was asked and the worker is idle again, every rest field leaves here as it
+    // stood BEFORE the request: the fence and the registered done still stand, the rest time — the key
+    // the queue, the sign-off nudge, the Goal and the park bumps read — is the old one, and nothing asks
+    // the human anything new. While the side turn runs, the raw fold shows: the thread is genuinely
+    // working, so it reads Active.
+    const rest = (s.turn === "idle" ? hiddenSideTurnRest(s) : undefined) ?? s
+    const pendingQuestion = rest.lastAssistantHasQuestion && questionFencesLive(row?.spawned_at)
+    const nowMs = now()
+    return { primed: s.primed, turn: s.turn, permPrompt: s.permPrompt, permPolicy: s.permPolicy, permDenies: s.permDenies, model: s.model, effort: s.effort, profileAt: s.profileAt, profileRevision: s.profileRevision, permissionMode: s.permissionMode, permissionModeAt: s.permissionModeAt, permissionModeRevision: s.permissionModeRevision, lastActivityAt: s.lastActivityAt, lastAssistantAt: rest.lastAssistantAt, lastAssistant: rest.lastAssistant, aiTitle: s.aiTitle, customTitle: s.customTitle, customTitleRevision: s.customTitleRevision, subAgents: subAgentViews(s, nowMs), droppedReports: [...s.queuedReports.values()], bgShells: [...bgShellViews(s), ...codexBgShellViews(s)], retiredShells: retiredShellViews(s), retiredSubAgents: retiredSubAgentViews(s), pendingAsk: s.pendingAsk, pendingQuestion, lastAssistantAllDone: rest.lastAssistantAllDone, lastUserAt: rest.lastUserAt, lastHumanAt: rest.lastHumanAt, lastToolCallAt: rest.lastToolCallAt, openCall: newestOpenCall(s), lastUserText: rest.lastUserText, firstUserText: s.firstUserText, lastFence: rest.lastFence, noTranscript: s.noTranscript, authFault: s.authFault, apiFault: s.apiFault, providerError: s.providerError, limitFault: s.limitFault, contextTokens: s.contextTokens, contextWindow: s.contextWindow, lastCompactionAt: s.lastCompactionAt, ...(s.sideTurn?.current ? { sideTurn: { ...s.sideTurn.current } } : {}), ...workingDirTelemetry(s) }
+  }
+
+  // ---- the provisional reading (2026-09-30) ------------------------------------------------------
+  // THE ROW WE HAVE NOT READ YET MUST NOT MOVE. Priming is bounded (MAX_PRIME_ROWS_PER_TICK,
+  // PRIME_BUDGET_MS, archived rows last, tenant projects one after another — tenant-prime.ts), so after
+  // every restart there is a window of seconds in which some rows have no folded state. The board read
+  // such a row as `running` (deriveRuntime's default for a headless row with no turn), so a thread
+  // resting in the Snoozed band on a PR park jumped into Active, spinning, then fell back to Snoozed when
+  // its prime landed. The dev server restarts whenever server source lands on main, many times a day;
+  // on 2026-09-30 the operator watched a parked thread "pop up then suddenly go back to snoozed", clicked
+  // where it had been, and sent a message to the wrong thread — which closed a PR they wanted open
+  // (maintainer: "very important we avoid unintuitive scenarios like this and randomly aggressively
+  // hiding or swapping threads").
+  //
+  // What was true before the restart is already on disk: the tail cache holds every row's folded state
+  // as of the last flush (CACHE_FLUSH_MS, and stop() on a clean shutdown). So a row we have not primed
+  // reads THAT, projected exactly as `get` projects a primed state, until the real prime replaces it.
+  //
+  //   • DECODE ONLY. No stat, no content fence, no fold-schema match — hydrateFromCache needs all three
+  //     because it RESUMES A FOLD from the entry and any doubt would corrupt the thread for good. This
+  //     reading is replaced within seconds and drives nothing durable, so the best available account is
+  //     the right one, even one an older build folded (the dev server restarts exactly when the fold's
+  //     own sources change, so a schema filter would blank the reading on the restarts that need it).
+  //     Identity is still checked: an entry for a different session or generation is a different
+  //     conversation, not an older account of this one.
+  //   • NEVER EVIDENCE. It carries `primed: false`, so the board's queue clock still reads it as unknown —
+  //     it can neither take a thread out of the queue, put one in (an urgent reason aside), nor reorder
+  //     it (queue-clock.ts) — and nothing that
+  //     fires on a reading (notifications, the side-turn surfacing, the scheduler, which reads `get`)
+  //     ever sees it.
+  //   • THE TURN IS RE-ASKED, NOT REPLAYED: `turnFor` folds in the broker's live reading, so a thread
+  //     whose detached daemon is genuinely mid-turn across the restart reads `running` as soon as the
+  //     bridge reports it, primed or not. Owner liveness is re-read the same way (`paneDead`), so a dead
+  //     daemon's shells and the crash nets read off this exactly as they would off the primed state.
+  //   • An open delivery ledger gets nothing: the cache never writes such a row (cacheSnapshot), so any
+  //     entry it has predates the follow-up in flight, and that thread is about to move anyway.
+  const provisionalStates = new Map<string, { identity: string; state: TailState | null }>()
+  function provisionalState(row: SessionRow): TailState | null {
+    const nativeId = nativeIdOf(row)
+    const generation = row.runtime_generation ?? 0
+    const identity = `${row.session_id}\u0000${nativeId}\u0000${generation}`
+    const memo = provisionalStates.get(row.slug)
+    if (memo && memo.identity === identity) return memo.state
+    let state: TailState | null = null
+    const entry = (loadCacheEntries(), provisionalEntries)?.get(row.slug)
+    if (entry && entry.sessionId === row.session_id && entry.nativeSessionId === nativeId && entry.runtimeGeneration === generation) {
+      const decoded = decodeTailState(entry.state)
+      if (decoded && hasNativeCollections(decoded)) {
+        state = newTailState(row.slug, row.session_id, entry.path, false, nativeId, generation)
+        const target = state as unknown as { [key: string]: unknown }
+        for (const [key, value] of Object.entries(decoded)) {
+          if (UNRESTORED_TAIL_FIELDS.has(key) || key === "codexSubAgents") continue
+          target[key] = value
+        }
+        // The operator's × is durable and may postdate the entry, exactly as on the hydrate path.
+        for (const id of deps.storage.retiredOps(row.slug, row.session_id)) {
+          state.subAgents.delete(id)
+          state.pendingShells?.delete(id)
+        }
+      }
+    }
+    provisionalStates.set(row.slug, { identity, state })
+    return state
+  }
+
   return {
     get(slug) {
       // Registered states win the key; a foreign thread resolves by its session id (its thread id).
@@ -6080,42 +6224,31 @@ export function createTailer(deps: TailerDeps): Tailer {
         ? row ? registered : undefined
         : foreignStates.get(slug)
       if (!s) return undefined
-      // pendingQuestion: the latest assistant message carries a ```question fence and the HUMAN has not
-      // answered it. NO REST-GATE, and that is the point. It used to require `turn === "idle"` as well,
-      // copied from the `humanBlocked` net where the gate is genuinely needed — that signal is a thread
-      // FILE flag written mid-turn, ~150ms after dispatch, long before the ask text exists, so counting
-      // it early yields a card with no visible ask. This flag is derived from the ask TEXT ITSELF: by the
-      // time it is true the question is on disk and in the chat, so there is nothing to wait for.
-      //
-      // What the gate did instead was make the ask disappear the instant anything re-opened the turn —
-      // and the chat, which reads the transcript rather than the turn, went on drawing the answerable
-      // card. One thread showed its ```question card AND the working shimmer, in the Active rail instead
-      // of the queue (maintainer 2026-08-24: "this needs to be structurally impossible"). An unanswered
-      // question is a claim on the HUMAN; whether the agent happens to be mid-turn is a fact about the
-      // agent. The board reports both, and `boardRuntime` decides which one the row is allowed to draw.
-      //
-      // AND ONLY FOR A THREAD THAT STILL SPEAKS THE FENCE (2026-09-11). The free-form ```question fence
-      // is retired from the worker contract — a worker asks via `mcp__frizz__ask`, a registered row —
-      // so for a thread dispatched at or after the cutover a fence in its prose is prose: it must not
-      // queue the thread, degrade its runtime, excuse the sign-off nudge or turn the Goal's bump. A
-      // thread dispatched BEFORE it is a legacy worker whose fence is still its ask, and everything
-      // downstream keeps treating it as one. This is the ONE gate: `lastAssistantHasQuestion` stays
-      // the fold's plain fact about the TEXT (and the tail cache may restore it from an older build),
-      // and every consumer — board queue, `degradeIfAwaitingAnswer`, the ThreadView, both scheduler
-      // reads — sees only what leaves here. Gated on the live row rather than a value stamped into the
-      // state at creation so a (re)spawn that bumps `spawned_at` is read the moment it lands. A foreign
-      // thread has no row and reads as legacy, which is what `questionFencesLive` does with unknown.
-      //
-      // AND THE REST A HIDDEN SPINOFF SIDE TURN FOUND (2026-09-30, spinoff-side-turn.ts). Once a side turn
-      // has done only what it was asked and the worker is idle again, every rest field leaves here as it
-      // stood BEFORE the request: the fence and the registered done still stand, the rest time — the key
-      // the queue, the sign-off nudge, the Goal and the park bumps read — is the old one, and nothing asks
-      // the human anything new. While the side turn runs, the raw fold shows: the thread is genuinely
-      // working, so it reads Active.
-      const rest = (s.turn === "idle" ? hiddenSideTurnRest(s) : undefined) ?? s
-      const pendingQuestion = rest.lastAssistantHasQuestion && questionFencesLive(row?.spawned_at)
-      const nowMs = now()
-      return { primed: s.primed, turn: s.turn, permPrompt: s.permPrompt, permPolicy: s.permPolicy, permDenies: s.permDenies, model: s.model, effort: s.effort, profileAt: s.profileAt, profileRevision: s.profileRevision, permissionMode: s.permissionMode, permissionModeAt: s.permissionModeAt, permissionModeRevision: s.permissionModeRevision, lastActivityAt: s.lastActivityAt, lastAssistantAt: rest.lastAssistantAt, lastAssistant: rest.lastAssistant, aiTitle: s.aiTitle, customTitle: s.customTitle, customTitleRevision: s.customTitleRevision, subAgents: subAgentViews(s, nowMs), droppedReports: [...s.queuedReports.values()], bgShells: [...bgShellViews(s), ...codexBgShellViews(s)], retiredShells: retiredShellViews(s), retiredSubAgents: retiredSubAgentViews(s), pendingAsk: s.pendingAsk, pendingQuestion, lastAssistantAllDone: rest.lastAssistantAllDone, lastUserAt: rest.lastUserAt, lastHumanAt: rest.lastHumanAt, lastToolCallAt: rest.lastToolCallAt, openCall: newestOpenCall(s), lastUserText: rest.lastUserText, firstUserText: s.firstUserText, lastFence: rest.lastFence, noTranscript: s.noTranscript, authFault: s.authFault, apiFault: s.apiFault, providerError: s.providerError, limitFault: s.limitFault, contextTokens: s.contextTokens, contextWindow: s.contextWindow, lastCompactionAt: s.lastCompactionAt, ...(s.sideTurn?.current ? { sideTurn: { ...s.sideTurn.current } } : {}), ...workingDirTelemetry(s) }
+      return telemetryOf(s, row)
+    },
+    provisional(slug) {
+      const known = states.get(slug)
+      if (known?.primed && registeredStateIsCurrent(known)) {
+        // Primed: the real reading has landed, and this row will never ask again.
+        provisionalStates.delete(slug)
+        provisionalEntries?.delete(slug)
+        return undefined
+      }
+      const row = deps.storage.getSession(slug)
+      if (!row || row.delivery_ledger) return undefined
+      try {
+        const state = provisionalState(row)
+        if (!state) return undefined
+        const nowMs = now()
+        state.turn = turnFor(row, state, nowMs)
+        state.paneDead = paneDeadForRow(row)
+        state.permPrompt = false
+        return { ...telemetryOf(state, row), primed: false }
+      } catch {
+        // An entry an older build wrote can be any shape. A reading we cannot project is no reading:
+        // the board falls back to its own (boardTelemetry), and the prime is seconds away.
+        return undefined
+      }
     },
     // The CURRENT fresh foreign session ids (mtime within FOREIGN_FRESH_MS, capped), mtime-desc. Kept
     // as the last scan's result — recomputed at most every FOREIGN_SCAN_EVERY ticks.

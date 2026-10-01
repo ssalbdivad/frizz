@@ -62,11 +62,23 @@ export interface TailCacheEntry extends TailCacheFence {
   path: string
   /** Encoded TailState (see encodeTailState). */
   state: string
+  /** Set by `loadProvisional` alone: whether the entry was folded by THIS build's fold schema. */
+  schemaCurrent?: boolean
 }
 
 export interface TailStateCache {
   /** Every cached entry for this project, keyed by slug. Never throws. */
   load(): Map<string, TailCacheEntry>
+  /**
+   * Every cached entry WHATEVER build folded it, each marked `schemaCurrent`. Never throws. For the
+   * tailer's PROVISIONAL reading of a row it has not primed yet (tailer.ts `provisional`), which wants
+   * what was true before the restart and is replaced by a real fold seconds later — so an entry an
+   * older fold produced is still the best account of the thread there is, where a resumed FOLD must
+   * refuse it. The dev server restarts precisely because the server's sources changed, and those are
+   * often the very modules the schema digest covers: filtering here would blank the reading on the
+   * restarts that need it most. Optional so a hand-rolled cache keeps compiling.
+   */
+  loadProvisional?(): Map<string, TailCacheEntry>
   /** Upsert a batch in one transaction. Best-effort: a failure is swallowed. */
   put(entries: TailCacheEntry[]): void
   /** Drop entries for slugs that no longer exist in the registry. Best-effort. */
@@ -292,28 +304,41 @@ export function createTailStateCache(scope: ProjectScope, schema = foldSchemaDig
       })()
     : null
 
+  const selectEvery = (): CacheRow[] => scope.prepare<[], CacheRow>(
+    "SELECT * FROM tail_state WHERE project_id = @project_id",
+  ).all()
+  const toEntry = (row: CacheRow): TailCacheEntry => ({
+    slug: row.slug,
+    sessionId: row.session_id,
+    nativeSessionId: row.native_session_id,
+    runtimeGeneration: row.runtime_generation,
+    path: row.path,
+    offset: row.offset_bytes,
+    size: row.size_bytes,
+    mtimeMs: row.mtime_ms,
+    ino: row.ino,
+    contentDigest: row.content_digest,
+    state: row.state,
+  })
+
   return {
     load() {
       const map = new Map<string, TailCacheEntry>()
       if (!usable) return map
       try {
-        for (const row of selectAll()) {
-          map.set(row.slug, {
-            slug: row.slug,
-            sessionId: row.session_id,
-            nativeSessionId: row.native_session_id,
-            runtimeGeneration: row.runtime_generation,
-            path: row.path,
-            offset: row.offset_bytes,
-            size: row.size_bytes,
-            mtimeMs: row.mtime_ms,
-            ino: row.ino,
-            contentDigest: row.content_digest,
-            state: row.state,
-          })
-        }
+        for (const row of selectAll()) map.set(row.slug, toEntry(row))
       } catch {
         // A corrupt/absent table reads as an empty cache: correct, just slow.
+        return new Map()
+      }
+      return map
+    },
+    loadProvisional() {
+      const map = new Map<string, TailCacheEntry>()
+      if (!usable) return map
+      try {
+        for (const row of selectEvery()) map.set(row.slug, { ...toEntry(row), schemaCurrent: row.fold_schema === schema })
+      } catch {
         return new Map()
       }
       return map
