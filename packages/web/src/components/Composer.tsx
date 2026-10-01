@@ -75,6 +75,25 @@ const MENU_ROW_INSET = "pl-3.5 pr-1.5"
 // a numbered `[^1]` in between read as plumbing — 2026-09-03: "worse than just rendering the chip
 // inline").
 
+// THE PILL behind a staged token — its whole look, so it is changed in one place. Tinted from the
+// text's own ink (`fg`) rather than a panel token: `bg-panel-2` was a step AWAY from the box's fill in
+// one theme and toward it in the other, and read as nothing in either (in light it was lighter than
+// the box it sat on, so a chip looked like a hole). An ink tint reads as the same pill on every
+// surface the box sits on, in both themes, the way the transcript's own chip is tinted from the
+// bubble's ink (ChatView SentContextBody) — with a softer edge than that chip's (7% fill, 14% edge, not
+// 20%): with 1px of side room rather than that chip's 4px, the stronger edge drew a box AROUND the text
+// rather than a pill under it. Zero-layout, as every backdrop decoration must be: its side pad is bought back
+// by an equal negative margin, so the pill reaches 1px past the token's ink on each side — not the 2px
+// it had. Two chips added one after another are one SPACE apart (4.13px in this headless sans; ~3.6 in
+// Segoe UI, ~3.3 in SF), and 2px a side then merged their edges into one box in Segoe and SF; at 1px
+// they stand 1.3-2.1px apart.
+//
+// The edge is `inset-ring`, NOT `ring-1 ring-inset ring-…`: the theme names a colour `inset`
+// (theme.css --color-inset), so Tailwind also makes `ring-inset` a RING COLOUR utility, and it wins
+// over the colour beside it — every pill's edge was drawn in --color-inset (#090b10 in dark, nearly
+// the box's own fill) and never showed. Measured on the computed box-shadow, 2026-10-01.
+const CONTEXT_PILL = "rounded-[5px] bg-fg/[0.07] py-0.5 -mx-px px-px inset-ring inset-ring-fg/[0.14]"
+
 // Auto-grow: reset to auto, then snap to content height clamped at maxHeight.
 function snapHeight(el: HTMLTextAreaElement, maxHeight: number): void {
   el.style.height = "auto"
@@ -93,8 +112,10 @@ export function Composer({
   autoFocus,
   busy,
   footer,
+  header,
   leftAction,
   contextTokens,
+  contextSources,
   slashSuggest,
   mentionCandidates,
   ownMention,
@@ -120,6 +141,10 @@ export function Composer({
   // Rendered INSIDE the box along its bottom edge (the dispatch form's inline mode/model/effort
   // readouts). The textarea auto-grows above it; the footer strip is always reserved.
   footer?: React.ReactNode
+  // Rendered INSIDE the box along its TOP edge, above the text: the editor sidebar's context bar
+  // (EditorContextBar), which names what the editor has in front and adds it as a chip. Whatever it
+  // renders owns its own inset, so a header that renders nothing costs the box nothing.
+  header?: React.ReactNode
   // STAGED CONTEXT — the `@` tokens the ⌘I flow has staged on this thread. Drives the backdrop pill
   // behind each staged token in the prose (an unstaged `@thing` the user happened to type stays
   // plain text) and the atomic Backspace that deletes a whole token. The pill IS the chip: there is
@@ -127,6 +152,9 @@ export function Composer({
   // cut (maintainer 2026-09-03: "we DONT NEED THE CHIPS AT THE BOTTOM … just the inline chip"), so
   // removing a reference is deleting its text. Order-irrelevant; empty/omitted disables both.
   contextTokens?: string[]
+  // Where each staged token came from (`src/a.ts, lines 12-20`), shown as the box's tooltip while the
+  // pointer is over that token's pill (lib/stagedContext.ts useStagedContextSources).
+  contextSources?: Readonly<Record<string, string>>
   // A small action rendered just LEFT of the send button (the dispatch composer's GitHub-picker icon).
   // Only surfaces that pass it get it; reply/queue composers omit it.
   leftAction?: React.ReactNode
@@ -347,7 +375,7 @@ export function Composer({
         // The vertical pad is free (vertical padding on an inline box never moves layout); the
         // horizontal pad is bought back by the negative margin so the advance width is untouched.
         out.push(
-          <span key={out.length} className="rounded bg-panel-2 py-0.5 -mx-0.5 px-0.5 ring-1 ring-inset ring-border">
+          <span key={out.length} data-context-token={run.token} className={CONTEXT_PILL}>
             {run.text}
           </span>,
         )
@@ -378,6 +406,21 @@ export function Composer({
     if (el && backdrop) backdrop.scrollTop = el.scrollTop
   }
   useLayoutEffect(syncContextScroll)
+
+  // A PILL'S HOVER. The textarea is on top and owns every pointer event, so the pill under the pointer
+  // is found by geometry: each pill's line boxes in the mirror (a token that wraps has two), against the
+  // pointer. Its source becomes the box's own tooltip — the textarea's `title` — and goes when the
+  // pointer leaves the pill, so the rest of the box says nothing.
+  const [hoverSource, setHoverSource] = useState<string | undefined>(undefined)
+  const sourceAt = (x: number, y: number): string | undefined => {
+    if (!contextSources) return undefined
+    for (const pill of contextRef.current?.querySelectorAll<HTMLElement>("[data-context-token]") ?? []) {
+      for (const rect of pill.getClientRects()) {
+        if (x >= rect.left && x <= rect.right && y >= rect.top && y <= rect.bottom) return contextSources[pill.dataset.contextToken!]
+      }
+    }
+    return undefined
+  }
 
   // The browser BLURS a focused element the instant it becomes `disabled`, so every `busy` window
   // evicts the caret and the user must re-click the box to keep typing. A focusout whose target is
@@ -769,6 +812,7 @@ export function Composer({
           change from the bare textarea), the mirror fills it behind the transparent-backgrounded
           textarea, and the padding/typography class string is IDENTICAL on both by construction —
           any drift between them detaches every pill from its token. */}
+      {header}
       <div className="relative">
         {backdropSegments && (
           <div
@@ -787,6 +831,9 @@ export function Composer({
           // its documented opt-out. Every prose textarea in the app carries it.
           data-1p-ignore
           onScroll={backdropSegments ? syncContextScroll : undefined}
+          title={hoverSource}
+          onMouseMove={backdropSegments && contextSources ? (e) => setHoverSource(sourceAt(e.clientX, e.clientY)) : undefined}
+          onMouseLeave={hoverSource === undefined ? undefined : () => setHoverSource(undefined)}
           data-surface={surface}
           // Escape here BLURS (onKeyDown below); the enclosing ThreadSheet reads this to leave the
           // key to us instead of dismissing itself on the same press.
