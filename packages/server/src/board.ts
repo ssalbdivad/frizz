@@ -882,6 +882,33 @@ function hasHonouredPark(
   return expiresAt !== null && nowMs < expiresAt
 }
 
+/** HAS THE WORKER ANSWERED THE HUMAN, AND THE HUMAN NOT SEEN IT? True when the thread's newest typed
+ *  human turn has an assistant reply after it, and since that turn the human has neither opened the
+ *  thread at rest (`seen_at` — the drawer re-stamps it at every rest while open) nor acted on it
+ *  (`interacted_at` — every human verb, a snooze included; the send itself is stamped just BEFORE the
+ *  transcript records the message, so it never counts as having seen the reply).
+ *
+ *  It is what lets a thread be PARKED and READY at once. A park excuses a thread from the queue because
+ *  there is nothing for the human to do until the wait wakes it — but when the rest is the reply to
+ *  something the human asked, there IS: read the answer. Reported 2026-10-01 on @standup-followups: a
+ *  direct question was answered, the worker parked on an open PR in the same message, and the answer
+ *  sat in Snoozed unread. So the park keeps its card and its watchers, and only stops hiding the thread
+ *  until the human has looked; after that it parks exactly as before, and watcher wakes the worker
+ *  answers with "still waiting" do not bring it back (they are not replies to a human turn).
+ *
+ *  One known miss: opening the drawer while the worker rests on a sub-agent MID-reply stamps `seen_at`
+ *  before the answer exists. The drawer re-stamps if it is still open when the answer lands, so only a
+ *  glance-and-close in that window loses it. */
+export function replyUnseen(
+  row: Pick<SessionRow, "seen_at" | "interacted_at">,
+  tele: Pick<SessionTelemetry, "lastHumanAt" | "lastAssistantAt"> | undefined,
+): boolean {
+  const humanMs = Date.parse(tele?.lastHumanAt ?? "")
+  if (!Number.isFinite(humanMs)) return false
+  if (!(Date.parse(tele?.lastAssistantAt ?? "") > humanMs)) return false
+  return [row.seen_at, row.interacted_at].every((at) => !(Date.parse(at ?? "") > humanMs))
+}
+
 // The awaiting-background event-snooze is armed for the CURRENT rest iff the captured rested_at still
 // equals the row's rested_at. rested_at only advances when the top-level turn comes to a NEW rest, so
 // any advance — the exact event of a sub-agent/shell returning and the worker acting on it — auto-clears
@@ -1354,15 +1381,22 @@ export function deriveNeedsYou(
   //
   // A REGISTERED park is the same rule with a durable row behind it instead of a sentence: it excuses
   // the thread for as long as the row is armed and its target is live, whether or not any fence says so.
-  if (excuseLiveOwnWork && runtime !== "exited" && (hasDeclaredBackgroundPark(tele, nowMs) || hasRegisteredBackgroundPark(tele, armedWatches, nowMs))) return false
+  //
+  // UNLESS THE REST ANSWERS THE HUMAN, who has not looked yet (replyUnseen). The three park excusals
+  // below are all gated on it: the thread is still parked on what it named, but it is READY too, because
+  // there is something new for the human to read. Not while a sub-agent is out: that child re-invokes
+  // the parent within minutes, and the rest it comes back to is the answer, which queues then — queueing
+  // the "dispatched it, waiting" rest too would bounce the row between bands (maintainer 2026-07-30).
+  const parkExcuses = excuseLiveOwnWork && runtime !== "exited" && (hasLiveBackgroundWork(tele) || !replyUnseen(row, tele))
+  if (parkExcuses && (hasDeclaredBackgroundPark(tele, nowMs) || hasRegisteredBackgroundPark(tele, armedWatches, nowMs))) return false
   // CI STILL RUNNING ON EVERY WATCHED PR. Ahead of the live-own-work line below, which would otherwise
   // queue the same thread on the strength of the watcher being armed at all. Rides `excuseLiveOwnWork`
   // for the reason that flag exists: the CARD must still state the wait (deriveAwaitingBackground opts
   // out), or the drawer blanks at rest and reads as "the agent died".
-  if (excuseLiveOwnWork && runtime !== "exited" && heldByRunningChecks(github, registeredPrWatches)) return false
+  if (parkExcuses && heldByRunningChecks(github, registeredPrWatches)) return false
   // AN HONOURED PARK. The worker fenced on waits frizz can see, and nothing it named has settled — so
   // there is nothing for the human to do until one of them wakes it. See hasHonouredPark.
-  if (excuseLiveOwnWork && runtime !== "exited" && hasHonouredPark(tele, nowMs, registeredPrWatches, armedTimerIds)) return false
+  if (parkExcuses && hasHonouredPark(tele, nowMs, registeredPrWatches, armedTimerIds)) return false
   // A TIMER PARK TAKES THE SAME SNOOZE (2026-08-25). A timer park that is NOT honoured (no `for:`, or
   // run out) — or a bare armed timer with no fence — still queues, and since 2026-08-24 it cards like a PR, with the resting card's event-Snooze as
   // its one control. But it is not "live own work" (nothing of the thread's is running; the clock is),

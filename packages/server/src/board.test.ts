@@ -4,7 +4,7 @@ import { lstatSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, w
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { questionAnswerMessage, questionsCancelledWakeMessage, type InteractionRequest } from "@frizz/shared"
-import { ANSWER_IN_FLIGHT_EXCUSAL_MS, DELIVERY_IN_FLIGHT_SPIN_MS, answerAwaitingDelivery, deriveDeliveryInFlight, answersInFlight, appServerTurnStalled, createBoard, deriveAwaitingBackground, deriveNeedsYou, degradeIfAwaitingAnswer, degradeIfNoTranscript, fenceWatchViews, hasDeclaredWait, hasParkedTimerWatch, hasRegisteredBackgroundPark, isBoardRelevantFrizzPath, registeredDoneFence, resolveLimitPause, returnedSubAgentsView, resolveSessionPermission, resolveSessionProfile, resolveSessionTitle, stampShellBudgets, type RegisteredWatch, QUIET_TURN_MS, quietTurnSince } from "./board.ts"
+import { ANSWER_IN_FLIGHT_EXCUSAL_MS, DELIVERY_IN_FLIGHT_SPIN_MS, answerAwaitingDelivery, deriveDeliveryInFlight, answersInFlight, appServerTurnStalled, createBoard, deriveAwaitingBackground, deriveNeedsYou, degradeIfAwaitingAnswer, degradeIfNoTranscript, fenceWatchViews, hasDeclaredWait, hasParkedTimerWatch, hasRegisteredBackgroundPark, isBoardRelevantFrizzPath, registeredDoneFence, replyUnseen, resolveLimitPause, returnedSubAgentsView, resolveSessionPermission, resolveSessionProfile, resolveSessionTitle, stampShellBudgets, type RegisteredWatch, QUIET_TURN_MS, quietTurnSince } from "./board.ts"
 import { Bus } from "./bus.ts"
 import { createStorage, type ThreadQuestionRow } from "./storage.ts"
 import type { Project } from "./project.ts"
@@ -2746,4 +2746,32 @@ test("stampShellBudgets: budgetEndsAt is the deadline the scheduler will act on,
     toolu_x: new Date(start + 5 * H).toISOString(),
     toolu_m: undefined,
   })
+})
+
+// PARKED AND READY AT ONCE (2026-10-01, @standup-followups): a direct question was answered in the same
+// message that parked on a wait, and the answer sat in Snoozed unread. A park that answers the human's
+// newest typed turn queues until they open the thread or act on it; after that it parks as before.
+test("deriveNeedsYou: a park that answers the human queues until they have seen it", () => {
+  const ASKED = "2026-07-09T10:30:00.000Z"
+  const ANSWERED = "2026-07-09T10:40:00.000Z"
+  const now = Date.parse("2026-07-09T10:45:00.000Z")
+  const armed = new Set(["tmr_1"])
+  const park = (over: Partial<SessionTelemetry> = {}) => tele({
+    lastHumanAt: ASKED, lastAssistantAt: ANSWERED, lastActivityAt: ANSWERED,
+    lastFence: { kind: "awaiting", body: "Answered; waiting on the re-check.", hints: [{ kind: "timer", value: "tmr_1" }, { kind: "for", value: "2h" }] },
+    ...over,
+  })
+  const needs = (r: SessionRow, t: SessionTelemetry) => deriveNeedsYou(r, t, "turn-idle", false, now, undefined, true, false, {}, new Set(), armed)
+  assert.equal(needs(row({ rested_at: ANSWERED }), park()), true, "an unseen answer queues despite the honoured park")
+  assert.equal(needs(row({ rested_at: ANSWERED, seen_at: ASKED, interacted_at: ASKED }), park()), true, "the send itself is not having seen the reply")
+  assert.equal(needs(row({ rested_at: ANSWERED, seen_at: ANSWERED }), park()), false, "opening it at rest lets the park take")
+  assert.equal(needs(row({ rested_at: ANSWERED, interacted_at: ANSWERED }), park()), false, "so does any human act on it, a snooze included")
+  // No human turn behind the rest — a dispatch-less wake, or the reply has not landed — is the plain park.
+  assert.equal(needs(row({ rested_at: ANSWERED }), park({ lastHumanAt: undefined })), false, "no human turn: parked")
+  assert.equal(needs(row({ rested_at: ANSWERED }), park({ lastAssistantAt: "2026-07-09T10:20:00.000Z" })), false, "nothing after the human turn: parked")
+  // A live sub-agent keeps excusing it: the answer is the rest its return wakes the parent into.
+  const running = { label: "Cache keys", startedAt: ANSWERED, state: "running" as const, id: "toolu_c" }
+  const childPark = park({ subAgents: [running], lastFence: { kind: "awaiting", body: "", hints: [{ kind: "agent", value: "toolu_c" }, { kind: "for", value: "1h" }] } })
+  assert.equal(needs(row({ rested_at: ANSWERED }), childPark), false, "a running sub-agent still parks it")
+  assert.equal(replyUnseen(row(), park()), true)
 })
