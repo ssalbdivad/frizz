@@ -1,44 +1,40 @@
 # Todos — threads that have not started yet
 
-Evaluation written 2026-10-01, revised the same day. Not shipped; nothing here is implemented.
+Evaluated and built 2026-10-01. Shipped on `main`.
 
-## The ask
+## What it is
 
-Create an item from the prompt box that does NOT dispatch. It sits on the board as a note to follow up on, can be marked done whenever, and can later be launched as a prompt. The direction: Frizz as the place the operator organizes all their open loops, agent or not.
+A todo is a thread written down without starting an agent: a note to come back to, mark as done, snooze, or launch later. It is the board's first item the human owns before any agent exists, which moves Frizz toward organizing every open loop, agent or not. Todos that aren't about a repo go in the Home workspace.
 
-## Verdict: worth building, as an unstarted THREAD
+## Why it is a thread, not a separate record
 
-A todo is a session row that has a minted session id and a title but no agent behind it yet. It shows up in the queue as a bare rest does. Sending it a message is what starts the agent.
+The first draft of this plan proposed a separate `todo` table, worried that a thread row with no session would break every reader keyed on a live session. That was overstated. Dispatch already mints the session id itself (`randomUUID()` in `dispatch.ts`) before spawning anything, and a row whose agent is gone is an ordinary board state. A todo is the same shape with no transcript yet, so it gets the queue position, snooze, mark as done, rename, the drawer, keyboard navigation and the Done archive for free. A separate table would have had to rebuild all of them.
 
-The first draft of this plan proposed a separate `todo` table, out of fear that a sessionless row would break every reader keyed on a live session. That framing was wrong. The row is not sessionless: dispatch already mints the session id itself (`randomUUID()` in `dispatch.ts`) before spawning anything, and an exited row whose agent is gone is already an ordinary board state. An unstarted row is the same shape, with no transcript yet. The separate table would have had to rebuild everything a thread row gets for free: the queue position, snooze, mark as done, rename, the drawer, keyboard navigation, the project scoping, and the Done archive.
+It is not a new thread kind, which was Colin's objection to terminal command threads. It is a thread in its earliest state, and its first message ends that state.
 
-It is also not a new thread KIND (Colin's objection to terminal command threads), because it is not a different thing. It is a thread in its earliest state, and it leaves that state the first time it gets a prompt.
+## How it works
 
-## Shape
+**Storage.** One nullable column on `session`, `todo`. Non-NULL means unstarted, and the value is the note (`SessionRow.todo`, `isTodoRow`). Every dispatch upsert writes `todo = excluded.todo`, which is NULL for a dispatch, so the write that records the live session is the same write that ends the todo.
 
-**Storage:** one nullable column on `session`, `started_at`. NULL means unstarted. Every existing row is backfilled to `spawned_at`. Dispatch writes it; the new `createTodo` mutation does not.
+**Create.** `createTodo` (`dispatch.ts`) mints a slug, a session id and a title (a typed title is locked; otherwise the note is named like a prompt). It records the profile the prompt box had at the time and spawns nothing. In the web, it is ⌘/Ctrl-Shift-Enter in the new-thread box, or the "add as todo" hint in its footer.
 
-**Create:** `createTodo({ title, body })` mints a slug and session id and writes the row with `exited=0`, no runtime, `started_at` NULL, and the body stored as a pending first message. In the web, it is a secondary action on the prompt box's send (`⌘⇧⏎`, "Add as todo"). The note body renders in the drawer where a transcript would be.
+**Launch.** `launchTodo` (with an edited prompt and an optional profile) and `followUp` both run `launchTodoRow` in `router.ts`, which calls `dispatch` with `opts.todo`. That dispatch keeps the row's own slug, session id and title, so its pin, links and queue position carry over. Any sender starts a todo: the prompt box, a snooze carrying a prompt, or another thread's message. A side request is refused, since there is no worker to run it. A second launch while the first is still spawning is refused, because it would start a second agent on the same session id. A failed launch leaves the todo untouched.
 
-**Launch:** sending into an unstarted thread's composer, prefilled with the stored note so it can be edited first, runs the dispatch first-turn path with the row's EXISTING slug and session id. It does not take the resume path. The backend, model and effort are chosen at that moment, from the composer's own picker.
+**What learned about "unstarted":**
 
-**What has to learn about "unstarted":** this is the whole cost, and it is a list one can check:
+- The tailer's tick skips todo rows. Every scheduler source (sign-off nudge, Goal, timers, shell and park checks, limit resume) keys on tailer telemetry, so none of them can act on a todo. Hibernation only walks live daemons, and a todo has none.
+- The board's per-row reading (`todoThreadView`) is a bare rest: queued unless done or snoozed, never "spinning up" and never a stall card.
+- The transcript read returns nothing for a todo instead of scanning the log directory for a file.
+- Boot reconciliation needs nothing new: a todo has no runtime, so it is stamped `exited` like any row without one, and it is never offered to the broker's warm-up.
+- Mark as done needs nothing new either: with nothing live, it never asks for confirmation.
 
-- `resumeThread` / follow-up delivery: route to first-turn dispatch instead of `--resume` on a session that does not exist.
-- The board's row derivation: no transcript means rested, with no fence and no runtime. It must draw the note and queue the row, and never card it as a crash.
-- The scheduler: no sign-off nudge, Goal, timer or wake may target an unstarted row. They have nothing to deliver to.
-- Boot recovery and the liveness reaper: never treat "no transcript, no process" as a dead worker to recover.
-- The thread controls that act on a live runtime (restart worker, profile, permission, open terminal): hidden or inert until it starts.
-- Mark as done / delete: should skip the "End this session?" hold, since nothing is live.
+**Web.** The queue card and the drawer render one box, `TodoBox`. The note is its text, edits save back as they are typed, and sending it starts the agent. It deliberately is not `ThreadComposerBox`, whose controls all assume a running agent. The rail draws an open todo as an empty status box (Done fills the same box with its check). The card and drawer date it "Added", the drawer says "Not started yet.", and Spinoff is hidden.
 
-The cleanest guard is one predicate, `isUnstarted(row)`, checked at each of those entry points, with a test per entry point that drives a real unstarted row through it.
+## Verified
 
-## Open product questions
+- `packages/server/src/todos.test.ts`: create spawns nothing; the first message dispatches on the same slug and session id and clears the note; the next message is an ordinary follow-up; a double launch is refused; a failed launch keeps the todo; the board reading queues it unless it is done or snoozed.
+- Real stack (`scripts/adhoc-stack.mjs --creds`), driven in a headless browser: added a todo from the prompt box; edited a note in its card and read the edit back over RPC; sent it, which started a real Haiku worker on the todo's own session id that answered and signed off; marked one done and snoozed another; restarted the server and confirmed a todo stayed a queued todo past the 60s transcript-discovery window.
 
-1. **Queue or its own band?** Default: the queue. A todo is waiting on the operator by definition, and Colin's sidebar-density concern argues against another band. The cost is that a pile of notes could crowd out agent cards.
-2. **Mark:** a todo's row needs to read differently from a rested agent at a glance, for example a hollow circle in place of the status dot.
-3. **Non-repo todos** go in the Home workspace. No project-less todos.
+## Not in v1
 
-## Deliberately not in v1
-
-Due dates (Snooze already is "show me this at…"), checklists, recurring todos (the Goal covers recurring agent work), and a todo created from a GitHub issue (a natural v2, since the issue picker exists).
+Due dates (Snooze already covers "show me this at…"), checklists inside a todo, recurring todos (the Goal covers recurring agent work), changing a todo's profile before launch, and creating a todo from a GitHub issue.
