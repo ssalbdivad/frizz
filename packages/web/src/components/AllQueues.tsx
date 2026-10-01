@@ -265,13 +265,8 @@ export function AllQueuesPage() {
   // (maintainer 2026-09-30: "scrolling jumps around and makes it hard to read/type"). Drawn as it was
   // while the focus stays in it; the draft is the thread's either way, and a reply still reaches it. Read
   // off the DOM at render, which is when the thread's leaving is drawn.
-  //
-  // NOT A CARD THE HUMAN JUST SENT AWAY. Sending a reply leaves the caret in the emptied box, so the
-  // replied-to card read as "being typed in" and was drawn straight back after its fade — the handoff
-  // again, with no sign of the reply — until a click elsewhere took the focus (maintainer 2026-09-30:
-  // "I see the same card reappear without the response, then it goes away again"). Leaving wins.
-  const typing = typingInCard()
-  const typingKey = typing !== undefined && !leaving.isLeaving(typing) ? typing : undefined
+  // Never a card the human just sent away: useLeavingCards `leave` takes the caret out of it.
+  const typingKey = typingInCard()
   // Gaps the human's last move closed (below).
   const [closed, setClosed] = useState<ReadonlySet<string>>(() => new Set())
   const mayGhost = (key: string): boolean => {
@@ -977,6 +972,15 @@ export function useLeavingCards(projects: QueuesProject[], readAt: number | unde
     if (!entry) {
       const leave = () => {
         held.current.delete(key)
+        // THE CARET LEAVES WITH THE CARD. Sending a reply leaves it in the emptied box, and a card whose
+        // box has the keyboard is kept drawn live (AllQueues `typingKey`). A check that the card was not
+        // leaving did not hold: the moment the worker picks the reply up its thread leaves the queue,
+        // which ends the leaving, so mid-fade the card snapped back to full opacity — the old handoff,
+        // no sign of the reply — and stayed for the worker's whole turn, until a click took the focus
+        // (maintainer 2026-10-01: "it just shows up in the old state"; measured: back 170ms into the
+        // fade). Blurring ends it at the source, for every way a card is put away.
+        const typed = document.activeElement
+        if (typed instanceof HTMLElement && typed.closest(`[data-xq-card="${CSS.escape(key)}"]`)) typed.blur()
         // Stamped HERE, not inside the updater: React runs an updater when it processes the update, which
         // a loaded page does ~100ms later — the card then measured younger than EXIT_MS when the fade tick
         // below fired, nothing re-rendered it after, and it stayed drawn until the RPC returned.
