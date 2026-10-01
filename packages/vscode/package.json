@@ -60,8 +60,15 @@
       },
       {
         "command": "frizz.open",
-        "title": "Open Frizz",
-        "category": "Frizz"
+        "title": "Open in browser",
+        "category": "Frizz",
+        "icon": "$(link-external)"
+      },
+      {
+        "command": "frizz.sidebar.reload",
+        "title": "Reload sidebar",
+        "category": "Frizz",
+        "icon": "$(refresh)"
       },
       {
         "command": "frizz.showLog",
@@ -112,6 +119,18 @@
           "when": "!explorerResourceIsFolder",
           "group": "frizz@2"
         }
+      ],
+      "view/title": [
+        {
+          "command": "frizz.sidebar.reload",
+          "when": "view == frizz.sidebar",
+          "group": "navigation@1"
+        },
+        {
+          "command": "frizz.open",
+          "when": "view == frizz.sidebar",
+          "group": "navigation@2"
+        }
       ]
     },
     "keybindings": [
@@ -134,8 +153,31 @@
           "type": "boolean",
           "default": true,
           "description": "Open file links from Frizz in this window"
+        },
+        "frizz.useSidebar": {
+          "type": "boolean",
+          "default": true,
+          "markdownDescription": "Put selections from **Add to Frizz prompt**, **Ask Frizz…** and **Send to Frizz thread…** into the Frizz sidebar's prompt box, to write the rest there. Turn it off to send them to Frizz in your browser, and to type Ask and Send messages in an input box."
         }
       }
+    },
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "frizz",
+          "title": "Frizz",
+          "icon": "media/frizz.svg"
+        }
+      ]
+    },
+    "views": {
+      "frizz": [
+        {
+          "type": "webview",
+          "id": "frizz.sidebar",
+          "name": "Frizz"
+        }
+      ]
     }
   },
   "scripts": {
