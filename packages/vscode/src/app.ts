@@ -11,11 +11,14 @@ import { homedir } from "node:os"
 import { basename, dirname } from "node:path"
 import type * as vscode from "vscode"
 import type { EditorComposeInput, EditorComposed, EditorOpen, EditorProject } from "@frizz/shared/editor-protocol"
+import type { EmbedComposeMessage } from "@frizz/shared/embed-protocol"
 import { EditorConnection, FocusRecency, type ConnectionStatus, type OpenResult } from "./connection.ts"
 import { discoverFrizz, pageAddressNote, SOURCE_WORDS, type FoundFrizz } from "./discovery.ts"
+import { addRoute, composeInSidebar as composeVia, promptRoute } from "./embed.ts"
 import { composeInput, composeMessage, normalizeNewlines, refLabel, type FileRef, type Selected } from "./message.ts"
 import { projectForPath, workspaceProjects } from "./projects.ts"
 import { describeRpcError, dispatchProfile, FrizzRpc, withRetry } from "./rpc.ts"
+import { registerSidebar, type SidebarSnapshot } from "./sidebar.ts"
 import { notConnectedMessage, statusView } from "./status.ts"
 import { findThread, pickerThreads, threadHandleOf, threadItem, displayTitle, type PickerThread } from "./threads.ts"
 
@@ -30,6 +33,8 @@ export interface FrizzExtensionApi {
   /** Where the last discovery found Frizz, and how — set even when the editor connection was refused. */
   discovered(): FoundFrizz | undefined
   projects(): EditorProject[]
+  /** What the Frizz sidebar shows and what its page asked of it. */
+  sidebar(): SidebarSnapshot
 }
 
 /** A file the command is about, with what was selected in it. */
@@ -52,6 +57,14 @@ const FLASH_MS = 1_500
 /** What Ask gives for a selection it cannot place; Send to thread says the same rather than dropping it. */
 const OPEN_A_FILE = "Open a file to ask Frizz about it."
 
+/**
+ * How long Ask and Send to thread wait for the sidebar's page to be ready — a cold open of the view boots
+ * the whole app — before falling back to the input box; and how long any command waits for the page to
+ * answer a compose before handing the selection to the server instead.
+ */
+const SIDEBAR_READY_MS = 15_000
+const SIDEBAR_COMPOSE_MS = 5_000
+
 export function activateFrizz(api: Vscode, context: vscode.ExtensionContext): FrizzExtensionApi {
   const log = api.window.createOutputChannel("Frizz", { log: true })
   context.subscriptions.push(log)
@@ -66,6 +79,21 @@ export function activateFrizz(api: Vscode, context: vscode.ExtensionContext): Fr
   const focus = new FocusRecency()
   focus.observe(api.window.state.focused)
 
+  // ── the sidebar ──────────────────────────────────────────────────────────────────────────────────
+  // Its host reads the connection, the discovery and the openers below only when the view asks, which
+  // is never before activation returns.
+  const sidebar = registerSidebar(api, context, {
+    // Like the browser page, the sidebar needs no editor connection: a Frizz discovery found serves its page.
+    origin: () => connection.origin ?? found?.origin,
+    projectSlug: () => workspaceProjects(folders(), projects)[0]?.slug,
+    notFound: () => (status.kind === "offline" || status.kind === "incompatible" ? status.reason : undefined),
+    openFile: (message) => openFromFrizz(message),
+    openInBrowser: () => openFrizz(),
+    reconnect: () => connection.reconnect(),
+    log: { info: (line) => log.info(line), warn: (line) => log.warn(line) },
+  })
+  const useSidebar = () => config().get<boolean>("useSidebar", true)
+
   // ── status bar ───────────────────────────────────────────────────────────────────────────────────
   const item = api.window.createStatusBarItem("frizz.status", api.StatusBarAlignment.Right, 100)
   item.name = "Frizz"
@@ -77,6 +105,7 @@ export function activateFrizz(api: Vscode, context: vscode.ExtensionContext): Fr
     item.tooltip = shown.tooltip
     item.command = shown.command
     item.show()
+    sidebar.setBadge(shown.ready)
   }
   renderStatus()
 
@@ -132,14 +161,17 @@ export function activateFrizz(api: Vscode, context: vscode.ExtensionContext): Fr
     projects(next) {
       projects = next
       renderStatus()
+      sidebar.refresh()
     },
     status(next) {
       status = next
       renderStatus()
+      sidebar.refresh()
     },
     log: { info: (line) => log.info(line), warn: (line) => log.warn(line), error: (line) => log.error(line) },
   })
   context.subscriptions.push({ dispose: () => connection.stop() })
+
 
   async function openFromFrizz(message: EditorOpen): Promise<OpenResult> {
     let entry
@@ -188,6 +220,7 @@ export function activateFrizz(api: Vscode, context: vscode.ExtensionContext): Fr
     api.workspace.onDidChangeWorkspaceFolders(() => {
       connection.sendState()
       renderStatus()
+      sidebar.refresh()
     }),
     api.workspace.onDidChangeConfiguration((event) => {
       if (event.affectsConfiguration("frizz.serverUrl")) connection.reconnect()
@@ -297,9 +330,17 @@ export function activateFrizz(api: Vscode, context: vscode.ExtensionContext): Fr
   const threadUrl = (origin: string, project: EditorProject, slug: string) =>
     `${origin}/all/${encodeURIComponent(project.slug)}/thread/${encodeURIComponent(slug)}`
 
+  /** A selection into the sidebar's page (embed.ts composeInSidebar), as the server path's answer; undefined to fall back. */
+  async function composeInSidebar(input: Omit<EmbedComposeMessage, "type" | "id">, preserveFocus: boolean): Promise<EditorComposed | undefined> {
+    const result = await composeVia(sidebar, input, { preserveFocus, readyMs: SIDEBAR_READY_MS, composeMs: SIDEBAR_COMPOSE_MS })
+    if (result.ok) return { t: "composed", id: result.id, ok: true }
+    log.warn(result.why)
+    return undefined
+  }
+
   // ── commands ─────────────────────────────────────────────────────────────────────────────────────
 
-  async function ask(...args: unknown[]): Promise<{ slug: string } | undefined> {
+  async function ask(...args: unknown[]): Promise<{ slug: string } | { composed: EditorComposed } | undefined> {
     const origin = requireOrigin()
     if (!origin) return undefined
     const { uri, options } = splitArgs(args)
@@ -311,6 +352,13 @@ export function activateFrizz(api: Vscode, context: vscode.ExtensionContext): Fr
     const placed = await place(target, origin, "Ask in Home")
     if (!placed) return undefined
     const { project, ref } = placed
+    if (promptRoute(useSidebar(), options.question) === "sidebar") {
+      // The sidebar's new-thread box, with the chip and the caret: the question is written there.
+      const item = { ...composeInput({ ...ref, projectId: project.id }), app: api.env.appName }
+      const composed = await composeInSidebar({ item, target: "new", focus: true }, false)
+      if (composed) return { composed }
+      log.info("Asking in an input box instead.")
+    }
     const question = typeof options.question === "string"
       ? options.question
       : await api.window.showInputBox({
@@ -342,7 +390,7 @@ export function activateFrizz(api: Vscode, context: vscode.ExtensionContext): Fr
     }
   }
 
-  async function sendToThread(...args: unknown[]): Promise<{ slug: string; deliveryId: string } | undefined> {
+  async function sendToThread(...args: unknown[]): Promise<{ slug: string; deliveryId?: string; composed?: EditorComposed } | undefined> {
     const origin = requireOrigin()
     if (!origin) return undefined
     const { uri, options } = splitArgs(args)
@@ -397,6 +445,20 @@ export function activateFrizz(api: Vscode, context: vscode.ExtensionContext): Fr
       thread = picked?.thread
     }
     if (!thread) return undefined
+    if (promptRoute(useSidebar(), options.message) === "sidebar") {
+      // The thread in the sidebar, the chip in its reply box and the caret after it. With no file to
+      // carry, the thread alone, to write in.
+      const to = { thread: thread.id, project: project.slug }
+      if (ref) {
+        const item = { ...composeInput({ ...ref, projectId: project.id }), app: api.env.appName }
+        const composed = await composeInSidebar({ item, target: to, focus: true }, false)
+        if (composed) return { slug: thread.id, composed }
+      } else {
+        await sidebar.reveal(false)
+        if ((await sidebar.waitReady(SIDEBAR_READY_MS)) && (await sidebar.navigate(to))) return { slug: thread.id }
+      }
+      log.info("Sending from an input box instead.")
+    }
     const name = threadHandleOf(thread) ? `@${threadHandleOf(thread)}` : displayTitle(thread)
     const message = typeof options.message === "string"
       ? options.message
@@ -438,6 +500,16 @@ export function activateFrizz(api: Vscode, context: vscode.ExtensionContext): Fr
     }
     const match = projectForPath(target.path, projects)
     const item: EditorComposeInput = composeInput({ ...target, path: match?.path ?? target.path, projectId: match?.project.id })
+    if (addRoute({ enabled: useSidebar(), opened: sidebar.opened(), ready: sidebar.ready() }) === "sidebar") {
+      // Into the composer the sidebar shows, the view brought into sight and the caret left in the
+      // editor, so the next selection can follow.
+      const composed = await composeInSidebar({ item: { ...item, app: api.env.appName }, target: "front", focus: false }, true)
+      if (composed) {
+        api.window.setStatusBarMessage("Added to Frizz's prompt box", 4_000)
+        return composed
+      }
+      log.info("Handing it to Frizz for its page instead.")
+    }
     const composed = await connection.compose(item)
     if (composed.ok) {
       api.window.setStatusBarMessage("Added to Frizz's prompt box", 4_000)
@@ -465,6 +537,7 @@ export function activateFrizz(api: Vscode, context: vscode.ExtensionContext): Fr
     api.commands.registerCommand("frizz.addToPrompt", addToPrompt),
     api.commands.registerCommand("frizz.open", openFrizz),
     api.commands.registerCommand("frizz.showLog", () => log.show()),
+    api.commands.registerCommand("frizz.sidebar.reload", () => sidebar.reload()),
     api.commands.registerCommand("frizz.reconnect", () => {
       log.info("Reconnecting.")
       connection.reconnect()
@@ -481,5 +554,6 @@ export function activateFrizz(api: Vscode, context: vscode.ExtensionContext): Fr
     origin: () => connection.origin,
     discovered: () => found,
     projects: () => projects,
+    sidebar: () => sidebar.snapshot(),
   }
 }

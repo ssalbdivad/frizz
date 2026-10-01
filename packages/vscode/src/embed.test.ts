@@ -1,0 +1,180 @@
+import { test } from "node:test"
+import assert from "node:assert/strict"
+import { addRoute, chordCommand, composeInSidebar, type ComposeSidebar, embedTheme, embedUrl, frameTarget, parsePageMessage, promptRoute, safeOrigin, webUrl, type KeyChord } from "./embed.ts"
+
+test("VS Code's four theme kinds fold to the page's two", () => {
+  // ColorThemeKind: Light 1, Dark 2, HighContrast 3, HighContrastLight 4.
+  assert.deepEqual([1, 2, 3, 4].map(embedTheme), ["light", "dark", "dark", "light"])
+})
+
+test("the frame's URL carries the embed switch, the theme and this window's project, encoded", () => {
+  assert.equal(embedUrl("http://127.0.0.1:9393", "dark", "frizz"), "http://127.0.0.1:9393/?embed=vscode&theme=dark&project=frizz")
+  assert.equal(embedUrl("http://127.0.0.1:9393", "light", undefined), "http://127.0.0.1:9393/?embed=vscode&theme=light", "no project param when no folder maps to one")
+  const odd = new URL(embedUrl("http://127.0.0.1:9393", "dark", "a b&theme=light#x"))
+  assert.equal(odd.searchParams.get("project"), "a b&theme=light#x", "a slug cannot add or override a param")
+  assert.equal(odd.searchParams.getAll("theme").join(), "dark")
+  assert.equal(odd.hash, "")
+})
+
+test("a host the window reaches Frizz by is framed as such; a different port is refused, never framed", () => {
+  assert.deepEqual(frameTarget("http://127.0.0.1:9393/?embed=vscode", "http://127.0.0.1:9393/?embed=vscode"), {
+    kind: "frame",
+    url: "http://127.0.0.1:9393/?embed=vscode",
+    origin: "http://127.0.0.1:9393",
+  })
+  // Cursor's Remote-WSL tunnel hands back localhost on the same port, which Frizz accepts.
+  assert.deepEqual(frameTarget("http://127.0.0.1:9393/?embed=vscode", "http://localhost:9393/?embed=vscode"), {
+    kind: "frame",
+    url: "http://localhost:9393/?embed=vscode",
+    origin: "http://localhost:9393",
+  })
+  assert.deepEqual(frameTarget("http://127.0.0.1:9393/", "http://127.0.0.1:49152/"), { kind: "remapped", port: 9393, external: 49152 })
+  // A default port is a port: an https tunnel on 443 is not Frizz's 9393, and an explicit :80 is http's 80.
+  assert.deepEqual(frameTarget("http://127.0.0.1:9393/", "https://abc.tunnel.example/"), { kind: "remapped", port: 9393, external: 443 })
+  assert.equal(frameTarget("http://frizz.local/", "http://frizz.local:80/").kind, "frame")
+})
+
+test("only a plain http(s) origin may go into the policy and the relay", () => {
+  assert.equal(safeOrigin("http://127.0.0.1:9393"), true)
+  assert.equal(safeOrigin("http://[::1]:9393"), true)
+  assert.equal(safeOrigin("https://localhost"), true)
+  for (const bad of ["http://127.0.0.1:9393/", "http://a;script-src *", "http://a\" onload=\"x", "javascript:alert(1)", "file:///etc", "http://a b"]) {
+    assert.equal(safeOrigin(bad), false, bad)
+  }
+})
+
+test("every page message the contract names is taken, with only its own fields", () => {
+  assert.deepEqual(parsePageMessage({ type: "frizz:ready", v: 1, extra: true }), { type: "frizz:ready", v: 1 })
+  assert.deepEqual(parsePageMessage({ type: "frizz:composed", id: "n", ok: false, error: "No box." }), { type: "frizz:composed", id: "n", ok: false, error: "No box." })
+  assert.deepEqual(parsePageMessage({ type: "frizz:composed", id: "n", ok: true }), { type: "frizz:composed", id: "n", ok: true })
+  assert.deepEqual(parsePageMessage({ type: "frizz:open-file", path: "/r/a.ts", line: 12, column: 3, endLine: 20, evil: 1 }), {
+    type: "frizz:open-file",
+    path: "/r/a.ts",
+    line: 12,
+    column: 3,
+    endLine: 20,
+  })
+  assert.deepEqual(parsePageMessage({ type: "frizz:open-file", path: "C:\\r\\a.ts" }), { type: "frizz:open-file", path: "C:\\r\\a.ts" })
+  assert.deepEqual(parsePageMessage({ type: "frizz:open-external", url: "https://github.com/x/y/pull/1" }), { type: "frizz:open-external", url: "https://github.com/x/y/pull/1" })
+  assert.deepEqual(parsePageMessage({ type: "frizz:key", key: "P", code: "KeyP", ctrl: true, meta: false, shift: true, alt: false }), {
+    type: "frizz:key",
+    key: "P",
+    code: "KeyP",
+    ctrl: true,
+    meta: false,
+    shift: true,
+    alt: false,
+  })
+})
+
+test("anything else from the page is nothing: unknown types, wrong shapes, other versions, non-web links", () => {
+  const refused: unknown[] = [
+    undefined,
+    null,
+    "frizz:ready",
+    [],
+    { type: "frizz:compose", id: "x" },
+    { type: "frizz:theme", theme: "dark" },
+    { type: "frizz:unknown" },
+    { type: "frizz:ready", v: 2 },
+    { type: "frizz:ready" },
+    { type: "frizz:composed", id: "n" },
+    { type: "frizz:composed", id: "", ok: true },
+    { type: "frizz:composed", id: "n", ok: "yes" },
+    { type: "frizz:composed", id: "n", ok: false, error: 5 },
+    { type: "frizz:open-file", path: "src/a.ts" },
+    { type: "frizz:open-file", path: "/r/a\0.ts" },
+    { type: "frizz:open-file", path: "/r/a.ts", line: 0 },
+    { type: "frizz:open-file", path: "/r/a.ts", line: 1.5 },
+    { type: "frizz:open-file", path: "/r/a.ts", line: "3" },
+    { type: "frizz:open-external", url: "javascript:alert(1)" },
+    { type: "frizz:open-external", url: "file:///etc/passwd" },
+    { type: "frizz:open-external", url: "command:workbench.action.terminal.new" },
+    { type: "frizz:open-external", url: "vscode://ssalbdivad.frizz-vscode/x" },
+    { type: "frizz:open-external", url: "not a url" },
+    { type: "frizz:key", key: "p", code: "KeyP", ctrl: true },
+    { type: "frizz:key", key: "p", code: "KeyP", ctrl: 1, meta: false, shift: false, alt: false },
+  ]
+  for (const message of refused) assert.equal(parsePageMessage(message), undefined, JSON.stringify(message))
+  assert.equal(webUrl("http://"), undefined)
+})
+
+const chord = (code: string, mods: Partial<Omit<KeyChord, "code">> = {}): KeyChord => ({ code, ctrl: false, meta: false, shift: false, alt: false, ...mods })
+
+test("a forwarded chord runs the command VS Code binds it to by default — Ctrl off a Mac, Cmd on one", () => {
+  assert.equal(chordCommand(chord("KeyP", { ctrl: true, shift: true }), false), "workbench.action.showCommands")
+  assert.equal(chordCommand(chord("KeyP", { meta: true, shift: true }), true), "workbench.action.showCommands")
+  assert.equal(chordCommand(chord("KeyP", { ctrl: true }), false), "workbench.action.quickOpen")
+  assert.equal(chordCommand(chord("KeyB", { meta: true }), true), "workbench.action.toggleSidebarVisibility")
+  assert.equal(chordCommand(chord("KeyJ", { ctrl: true }), false), "workbench.action.togglePanel")
+  assert.equal(chordCommand(chord("Digit1", { ctrl: true }), false), "workbench.action.focusFirstEditorGroup")
+  assert.equal(chordCommand(chord("KeyE", { ctrl: true, shift: true }), false), "workbench.view.explorer")
+  // VS Code binds the terminal and source control to Ctrl on a Mac too.
+  assert.equal(chordCommand(chord("Backquote", { ctrl: true }), true), "workbench.action.terminal.toggleTerminal")
+  assert.equal(chordCommand(chord("KeyG", { ctrl: true, shift: true }), true), "workbench.view.scm")
+})
+
+test("a chord the allowlist does not name, or with one modifier more or less, runs nothing", () => {
+  const none = [
+    [chord("KeyP", { ctrl: true, shift: true }), true], // Ctrl on a Mac is not Cmd
+    [chord("KeyP", { meta: true, shift: true }), false], // the Windows key off a Mac is not Ctrl
+    [chord("KeyP", { ctrl: true, shift: true, alt: true }), false],
+    [chord("KeyP", { ctrl: true, meta: true }), false],
+    [chord("KeyP"), false],
+    [chord("KeyW", { ctrl: true }), false], // closing an editor is not getting around
+    [chord("KeyC", { ctrl: true }), false],
+    [chord("Backquote", { meta: true }), true],
+  ] as const
+  for (const [key, mac] of none) assert.equal(chordCommand(key, mac), undefined, JSON.stringify({ key, mac }))
+})
+
+test("Add to Frizz prompt goes to the sidebar only when it is on, open in this window, and its page is ready", () => {
+  assert.equal(addRoute({ enabled: true, opened: true, ready: true }), "sidebar")
+  assert.equal(addRoute({ enabled: false, opened: true, ready: true }), "server", "the setting keeps the browser flow")
+  assert.equal(addRoute({ enabled: true, opened: false, ready: false }), "server", "a window that never opened the sidebar")
+  assert.equal(addRoute({ enabled: true, opened: true, ready: false }), "server", "a page still booting, or one that never says it is ready")
+})
+
+test("Ask and Send write in the sidebar unless it is off or the caller passed the text to send", () => {
+  assert.equal(promptRoute(true, undefined), "sidebar")
+  assert.equal(promptRoute(false, undefined), "server")
+  assert.equal(promptRoute(true, "why does this loop?"), "server")
+  assert.equal(promptRoute(true, ""), "server", "an empty argument is still an argument")
+})
+
+function fakeSidebar(behaviour: { ready: boolean; answer?: { ok: boolean; error?: string } }) {
+  const calls: string[] = []
+  const sidebar: ComposeSidebar = {
+    async reveal(preserveFocus) {
+      calls.push(`reveal ${preserveFocus}`)
+    },
+    async waitReady(ms) {
+      calls.push(`wait ${ms}`)
+      return behaviour.ready
+    },
+    async compose(input, ms) {
+      calls.push(`compose ${JSON.stringify(input.target)} ${input.focus} ${ms}`)
+      return behaviour.answer && { type: "frizz:composed", id: "c1", ...behaviour.answer }
+    },
+  }
+  return { sidebar, calls }
+}
+
+const composeInput = { item: { path: "/r/a.ts", startLine: 2, app: "Code" }, target: "new" as const, focus: true }
+const timing = { preserveFocus: false, readyMs: 15_000, composeMs: 5_000 }
+
+test("a selection the page takes is done: revealed, waited for, posted, answered", async () => {
+  const { sidebar, calls } = fakeSidebar({ ready: true, answer: { ok: true } })
+  assert.deepEqual(await composeInSidebar(sidebar, composeInput, timing), { ok: true, id: "c1" })
+  assert.deepEqual(calls, ["reveal false", "wait 15000", 'compose "new" true 5000'])
+})
+
+test("a page that never gets ready, never answers or refuses leaves the selection to the command's old path", async () => {
+  const notReady = fakeSidebar({ ready: false })
+  assert.deepEqual(await composeInSidebar(notReady.sidebar, composeInput, timing), { ok: false, why: "The Frizz sidebar didn't load in time." })
+  assert.deepEqual(notReady.calls, ["reveal false", "wait 15000"], "nothing is posted to a page that is not listening")
+  const silent = fakeSidebar({ ready: true })
+  assert.deepEqual(await composeInSidebar(silent.sidebar, composeInput, timing), { ok: false, why: "The Frizz sidebar didn't answer." })
+  const refused = fakeSidebar({ ready: true, answer: { ok: false, error: "Its project isn't in Frizz." } })
+  assert.deepEqual(await composeInSidebar(refused.sidebar, composeInput, timing), { ok: false, why: "The Frizz sidebar couldn't take it: Its project isn't in Frizz." })
+})
