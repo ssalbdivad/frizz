@@ -1,50 +1,44 @@
-# Todos — notes on the board that are not (yet) agents
+# Todos — threads that have not started yet
 
-Evaluation written 2026-10-01. Not shipped; nothing here is implemented.
+Evaluation written 2026-10-01, revised the same day. Not shipped; nothing here is implemented.
 
 ## The ask
 
 Create an item from the prompt box that does NOT dispatch. It sits on the board as a note to follow up on, can be marked done whenever, and can later be launched as a prompt. The direction: Frizz as the place the operator organizes all their open loops, agent or not.
 
-## Verdict: worth building, as its own small entity — not as a thread with no session
+## Verdict: worth building, as an unstarted THREAD
 
-The board already is a todo list: the queue is "things that need you", Snoozed is "not until then", Done is the archive. What is missing is the one item the human owns before any agent exists. The demand is real and the surfaces it needs (queue order, snooze, done, the Home workspace for non-repo work) already exist.
+A todo is a session row that has a minted session id and a title but no agent behind it yet. It shows up in the queue as a bare rest does. Sending it a message is what starts the agent.
 
-The trap is the obvious implementation: a `session` row with no session yet. Every thread verb and reader is keyed on a live session — `completeThread` takes `{ slug, sessionId }` and resolves through `currentOwnedSession`; the board derives a row's state by tailing its transcript; `session.session_id` is `NOT NULL`; the web reads `.sessionId` in ~67 places. A sessionless row would have to be guarded in each, and every one missed is a crash or a phantom ("neither queued nor carded: invisible" is already a recurring bug class in `board.ts`). It is also exactly the "extra thread kind" shape Colin objected to with terminal command threads, which were folded back into threads on 2026-09-29.
+The first draft of this plan proposed a separate `todo` table, out of fear that a sessionless row would break every reader keyed on a live session. That framing was wrong. The row is not sessionless: dispatch already mints the session id itself (`randomUUID()` in `dispatch.ts`) before spawning anything, and an exited row whose agent is gone is already an ordinary board state. An unstarted row is the same shape, with no transcript yet. The separate table would have had to rebuild everything a thread row gets for free: the queue position, snooze, mark as done, rename, the drawer, keyboard navigation, the project scoping, and the Done archive.
 
-So: a todo is a separate record, rendered on the board, that BECOMES a thread when launched. Nothing thread-shaped has to learn about it.
+It is also not a new thread KIND (Colin's objection to terminal command threads), because it is not a different thing. It is a thread in its earliest state, and it leaves that state the first time it gets a prompt.
 
 ## Shape
 
-**Storage** — one table in `storage.ts`, tenant-prefixed like every other:
+**Storage:** one nullable column on `session`, `started_at`. NULL means unstarted. Every existing row is backfilled to `spawned_at`. Dispatch writes it; the new `createTodo` mutation does not.
 
-```
-todo(project_id, id, title, body, created_at, updated_at, snoozed_until, done_at, launched_slug)
-```
+**Create:** `createTodo({ title, body })` mints a slug and session id and writes the row with `exited=0`, no runtime, `started_at` NULL, and the body stored as a pending first message. In the web, it is a secondary action on the prompt box's send (`⌘⇧⏎`, "Add as todo"). The note body renders in the drawer where a transcript would be.
 
-`title` is the first line of `body` unless edited. `launched_slug` records the thread it became, so the done archive can link it.
+**Launch:** sending into an unstarted thread's composer, prefilled with the stored note so it can be edited first, runs the dispatch first-turn path with the row's EXISTING slug and session id. It does not take the resume path. The backend, model and effort are chosen at that moment, from the composer's own picker.
 
-**RPC** — `createTodo`, `updateTodo`, `snoozeTodo`, `completeTodo` / `reopenTodo`, `deleteTodo`, `launchTodo`. `launchTodo` calls the existing `dispatcher.dispatch` with `body` as the prompt and `nameSource: title`, then stamps `done_at` + `launched_slug` in the same handler. Launching should be able to edit the prompt first (the note is rarely a finished prompt), so the web opens it in the composer prefilled rather than firing blind.
+**What has to learn about "unstarted":** this is the whole cost, and it is a list one can check:
 
-**Snapshot** — `todos: Todo[]` beside `threads` on the board snapshot, not inside it. The web merges them in the rail; the server's queue and notification logic stays untouched.
+- `resumeThread` / follow-up delivery: route to first-turn dispatch instead of `--resume` on a session that does not exist.
+- The board's row derivation: no transcript means rested, with no fence and no runtime. It must draw the note and queue the row, and never card it as a crash.
+- The scheduler: no sign-off nudge, Goal, timer or wake may target an unstarted row. They have nothing to deliver to.
+- Boot recovery and the liveness reaper: never treat "no transcript, no process" as a dead worker to recover.
+- The thread controls that act on a live runtime (restart worker, profile, permission, open terminal): hidden or inert until it starts.
+- Mark as done / delete: should skip the "End this session?" hold, since nothing is live.
 
-**Web**
+The cleanest guard is one predicate, `isUnstarted(row)`, checked at each of those entry points, with a test per entry point that drives a real unstarted row through it.
 
-- **Create**: a secondary action on the prompt box's send (split button / `⌘⇧⏎` "Add as todo"). The draft store already keys the box per project, so a todo is a draft that persisted.
-- **Where it sits**: in Rested (the queue) by default — a todo is by definition waiting on the human — with a distinct mark (a checkbox circle in place of the status dot) and no rest time, or its creation age. Snoozed todos go to Snoozed; done ones to Done.
-- **Open**: the drawer shows an editable note and three verbs: Launch, Snooze, Mark as done. No transcript, no composer, no profile control.
-- **Keyboard**: the queue's existing done/snooze keys work on it; Enter opens it.
+## Open product questions
 
-## What it costs
-
-Roughly: table + migration + six mutations + snapshot field (server, ~1 day with tests); split send, rail row, note drawer, launch-into-composer (web, ~1–2 days including the optical pass every new row needs). Blast radius stays small because no existing thread code path changes — the one real seam is the rail and queue merge, where todos must sort and key-navigate with threads.
-
-## Questions the build needs answered
-
-1. **Queue or own band?** Default to the queue (they need you; one list to triage). Its own "Todo" band above Rested is the alternative if an inbox of notes would drown the agent cards. Colin's density concern for the sidebar argues for the queue, with no extra band.
-2. **Does launching consume the todo?** Default yes: it is marked done and links to its thread. The alternative keeps it open until the thread is done, which turns todos into a parent of threads — a bigger feature (a project tracker), and the point where "organize todos" starts to grow subtasks, due dates, and lists. Out of scope for v1.
-3. **Cross-project**: a todo belongs to a project; non-repo todos go in the Home workspace. No project-less todos.
+1. **Queue or its own band?** Default: the queue. A todo is waiting on the operator by definition, and Colin's sidebar-density concern argues against another band. The cost is that a pile of notes could crowd out agent cards.
+2. **Mark:** a todo's row needs to read differently from a rested agent at a glance, for example a hollow circle in place of the status dot.
+3. **Non-repo todos** go in the Home workspace. No project-less todos.
 
 ## Deliberately not in v1
 
-Due dates (Snooze already is "show me this at…"), checklists inside a todo, recurring todos (the Goal covers recurring agent work), import from GitHub issues (`watch_issue` and the issue picker already exist; a "todo from issue" is a natural v2).
+Due dates (Snooze already is "show me this at…"), checklists, recurring todos (the Goal covers recurring agent work), and a todo created from a GitHub issue (a natural v2, since the issue picker exists).

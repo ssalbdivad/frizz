@@ -181,6 +181,14 @@ ready for review, or awaiting merge. Use "shipped" only after the change has act
 into the repository's primary branch. This applies to progress updates, final handoffs, and signal-card
 bullets.
 
+# No timetable estimates — size work by scope, not by days
+
+Never estimate work in human time ("~1 day", "2–3 days", "a week"). Agents build here, so the build
+itself is minutes to hours, and the wall clock is set by review, verification and the maintainer's
+decisions. A day count borrowed from human engineering means nothing (maintainer 2026-10-01). Say what
+the cost actually is: the surfaces and files it touches, which existing code paths change, the risk, and
+what needs the maintainer's review or a decision.
+
 # Project-local skills and tools are shared across agents
 
 Any project-local skill or tool lives in ONE agent-neutral copy that every agent configuration
