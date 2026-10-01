@@ -476,22 +476,34 @@ export async function checkSurfaceStates({ page, url, font, palette, out, check,
     await new Promise(resolve => gallery.close(resolve))
   }
 
-  // At a phone's width the page is the same page: its queue, and the project list with the quiet bands
-  // opened. Until 2026-09-28 a phone had its own board, with a tab per band and a "more" sheet of
-  // actions; both went with the project view, so there is no tab to press and no sheet to open.
+  // At a phone's width the page has its own layout (components/PhonePage.tsx, since 2026-09-30): a tab
+  // per band over one list of rows, and a gear that opens the phone Settings page. From 2026-09-28 until
+  // then a phone got the desktop page stacked in one column, and before that the board's own phone
+  // layout; these are upstream's checks of its redesigned phone board, on the fork's page. Each tab
+  // waits for one of its own fixture rows (a row's key is `<project id>/<slug>`), so the contrast is
+  // sampled over rows rather than over a tab still drawing its empty state.
   await page.setViewport({ width: 390, height: 844, deviceScaleFactor: 1 })
   await page.goto(home, { waitUntil: "networkidle2" })
-  await page.waitForSelector("[data-xq-card]")
-  await contrast("phone-queue")
-  await shot("phone-queue")
-  await openBands()
-  await page.$eval('[data-xq-drill-band="snoozed"]', el => el.scrollIntoView({ block: "start" }))
-  await contrast("phone-bands")
-  await shot("phone-bands")
+  await page.waitForSelector('[data-mobile-tab="snoozed"]')
+  for (const [band, slug] of [["snoozed", "theme-snoozed"], ["done", "theme-done"], ["queue", "theme-question"]]) {
+    await page.click(`[data-mobile-tab="${band}"]`)
+    await page.waitForSelector(`[data-mobile-thread-row$="/${slug}"]`)
+    await contrast(`phone-${band}`)
+    await shot(`phone-${band}`)
+  }
   await page.goto(`${url}/thread/theme-question/full`, { waitUntil: 'networkidle2' })
   await page.waitForSelector('[data-question-option]')
   await contrast('phone-question')
   await shot('phone-question')
+  await page.goto(home, { waitUntil: 'networkidle2' })
+  // The phone page's gear opens the Settings page, which carries the connection and quota readings.
+  await page.click('[data-mobile-settings]')
+  await page.waitForFunction(() => {
+    const panel = document.querySelector('[data-mobile-settings-page]')
+    return panel && Math.abs(panel.getBoundingClientRect().left) < .5
+  })
+  await contrast('phone-settings')
+  await shot('phone-settings')
   await page.setViewport({ width: 1440, height: 1000, deviceScaleFactor: 1 })
   await page.goto(url, { waitUntil: "networkidle2" })
 }

@@ -15,6 +15,8 @@ import { SaveStatus, useSettingsDraft, type SaveState } from "../hooks/useSettin
 import { useIsMobile } from "../lib/mobile.ts"
 import { SNOOZE_PRESETS, isSnoozePreset } from "../lib/snooze.ts"
 import { useSupervisorStatus } from "../api/supervisorStatus.ts"
+import { isRemoteSession } from "../api/signOut.ts"
+import { SignOutThisDeviceRow } from "./SignOutThisDeviceRow.tsx"
 import { QuotaMeters } from "./QuotaBar.tsx"
 import { SheetHeader } from "./ui/SheetHeader.tsx"
 import { Select } from "./ui/Select.tsx"
@@ -443,7 +445,8 @@ function MobileSettingsPage({
   const { connection } = useSnapshot(store)
   const { queueOrder, snoozePreset } = useSnapshot(prefs)
   const conn = CONNECTION_WORD[connection]
-  const version = useSupervisorStatus().data?.version
+  const supervisor = useSupervisorStatus().data
+  const version = supervisor?.version
   return (
     <div
       data-mobile-settings-page
@@ -519,9 +522,17 @@ function MobileSettingsPage({
         </MobileSection>
 
         {/* ── THIS DEVICE ──────────────────────────────────────────────────────────────────────────────
-            The mount point for the "This device" section ("Sign out this device", which ends only this
-            browser's own session). Another slice builds it; mount it here, above the version line, as
-            <MobileSection label="This device">…</MobileSection>. */}
+            "Sign out this device", which ends only this browser's own remote session
+            (SignOutThisDeviceRow.tsx). The SECTION is gated on the same reading as the row, so the
+            operator's own loopback tab — which has nothing to sign out, and on which the row renders
+            nothing — does not show a label over an empty section. The row draws its own top and bottom
+            rules for standing alone; under the section's rule it drops the top one, and takes the
+            section rows' tone for the bottom. */}
+        {isRemoteSession(supervisor) ? (
+          <MobileSection label="This device">
+            <SignOutThisDeviceRow className="!border-t-0 !border-b-border/70" />
+          </MobileSection>
+        ) : null}
 
         {version ? (
           <div data-mobile-version className="px-[18px] py-[14px] text-[12.5px] text-faint">Frizz {version}</div>
