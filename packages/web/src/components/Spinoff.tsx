@@ -109,6 +109,27 @@ function SpinoffDialog({ thread, open, onOpenChange }: { thread: ThreadView & { 
     }
   }, [open])
 
+  // ⌥↓ / ⌥↑ — the next or previous project, as in the new-thread box (AllQueues.tsx onColumnKeyDown):
+  // the same list order, wrapping at either end, and the key stays the browser's when there is nowhere
+  // else to go. Read off the document for as long as the dialog is up, not off the field, so the chord
+  // still steps after a click has moved focus to a footer button or the dialog's own body. Capture
+  // phase, and stopped there, so nothing behind the modal reads the same chord.
+  useEffect(() => {
+    if (!open || !home || pending || projects.length < 2) return
+    const from = (target ?? home).slug
+    function onKeyDown(event: KeyboardEvent) {
+      const step = projectStep(event)
+      if (!step) return
+      const next = stepPick(projects.map((p) => ({ ...p, open: true, stale: false })), from, step)
+      if (!next) return
+      event.preventDefault()
+      event.stopPropagation()
+      setTargetId(next.id)
+    }
+    document.addEventListener("keydown", onKeyDown, true)
+    return () => document.removeEventListener("keydown", onKeyDown, true)
+  }, [open, home, pending, projects, target])
+
   function submit() {
     const text = instructions.trim()
     if (!text || pending) return
@@ -171,17 +192,7 @@ function SpinoffDialog({ thread, open, onOpenChange }: { thread: ThreadView & { 
             if (e.key === "Enter" && !e.shiftKey && !e.nativeEvent.isComposing) {
               e.preventDefault()
               submit()
-              return
             }
-            // ⌥↓ / ⌥↑ — the next or previous project, as in the new-thread box (AllQueues.tsx
-            // onColumnKeyDown): the same list order, wrapping at either end, and the key stays the
-            // browser's when there is nowhere else to go.
-            const step = projectStep(e)
-            if (!step || !home || pending) return
-            const next = stepPick(projects.map((p) => ({ ...p, open: true, stale: false })), (target ?? home).slug, step)
-            if (!next) return
-            e.preventDefault()
-            setTargetId(next.id)
           }}
           rows={3}
           placeholder="What should the new thread do?"
@@ -201,8 +212,8 @@ const PROJECT_STEP_KEYS = [PROJECT_STEP_CHORDS.previous, PROJECT_STEP_CHORDS.nex
 
 /** ⌥↓ is a step down the project menu, ⌥↑ one up; 0 for any other key. The new-thread box's own reading
  *  of the chord (AllQueues.tsx projectStep). */
-function projectStep(event: ReactKeyboardEvent): 1 | -1 | 0 {
-  if (!event.altKey || event.ctrlKey || event.metaKey || event.shiftKey || event.nativeEvent.isComposing || event.defaultPrevented) return 0
+function projectStep(event: KeyboardEvent): 1 | -1 | 0 {
+  if (!event.altKey || event.ctrlKey || event.metaKey || event.shiftKey || event.isComposing || event.defaultPrevented) return 0
   return event.key === "ArrowDown" ? 1 : event.key === "ArrowUp" ? -1 : 0
 }
 

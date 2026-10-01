@@ -1,7 +1,7 @@
 import assert from "node:assert/strict"
 import { tmpdir } from "node:os"
 import test from "node:test"
-import { questionAnswerMessage, type BoardSnapshot, type ThreadView, type TranscriptMessage } from "@frizz/shared"
+import { questionAnswerMessage, SIGNOFF_NUDGE_MESSAGE, type BoardSnapshot, type ThreadView, type TranscriptMessage } from "@frizz/shared"
 import { createRouter, handoffOf } from "./router.ts"
 import type { AppContext } from "./context.ts"
 import type { BoardManager } from "./board.ts"
@@ -131,6 +131,32 @@ test("a reply belongs to the human's LAST turn: a turn with no reply yet has an 
   const queued = handoffOf([msg("user", "TASK:\nGo."), msg("assistant", "Done."), msg("user", "One more thing", { queued: true })])
   assert.equal(queued.asked, "TASK:\nGo.")
   assert.equal(queued.text, "Done.")
+})
+
+test("a reply to the sign-off nudge carries the message it signs off, so 'nothing to add' is never the whole card", () => {
+  const nudge = msg("user", `${SIGNOFF_NUDGE_MESSAGE}\n\n(It is now 22:32.)`, { wake: true })
+  const handoff = handoffOf([
+    msg("user", "TASK:\nShip it."),
+    msg("assistant", "Shipped."),
+    msg("user", "Can we migrate before publishing?"),
+    msg("assistant", "Not quite: copy the code in, or publish first."),
+    nudge,
+    msg("assistant", ""),
+    msg("assistant", "Nothing to add; my previous message has the full answer."),
+  ])
+  assert.equal(handoff.text, "Not quite: copy the code in, or publish first.\n\nNothing to add; my previous message has the full answer.")
+  assert.equal(handoff.asked, "Can we migrate before publishing?")
+  // Any OTHER wake is new input with its own answer, so it does not bridge.
+  const woke = handoffOf([
+    msg("user", "Watch CI."),
+    msg("assistant", "Watching."),
+    msg("user", "PR #12 went green", { wake: true }),
+    msg("assistant", "Green."),
+  ])
+  assert.equal(woke.text, "Green.")
+  // Nor does a nudge with no reply before it in this turn reach past the human's message.
+  const fresh = handoffOf([msg("assistant", "Old answer."), msg("user", "New ask."), nudge, msg("assistant", "Done.")])
+  assert.equal(fresh.text, "Done.")
 })
 
 test("an empty window has no handoff, a thread that has not spoken has only its ask, and a very long ask is clipped", () => {
