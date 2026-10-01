@@ -1928,10 +1928,14 @@ async function ask(args) {
       "answer as one batch."
   return (
     `${head}\n${lines.join("\n")}\n\n` +
-    "NOW REST. The human is not prompted until you do: while your turn runs the thread spins in the " +
-    "Active band, not the queue, and the card waits unseen. Wrap up only what is quick and does not " +
-    "depend on the answer, then stop — the open question is your sign-off, and its card renders under " +
-    "your final message, so that message is where the explanation goes. If you are about to keep " +
+    "NOW WRITE YOUR FINAL MESSAGE, THEN REST. The card holds only the choice; it renders under that " +
+    "message, which must carry everything the human needs to make it — what you found, the evidence, " +
+    "and the answer to anything they asked — written out in full. \"The decision is in the card below\" " +
+    "is not a handoff: a worker once ended a PR review on exactly that line, and the review itself " +
+    "existed only in its thinking, which the human never sees. The human is not prompted until you " +
+    "rest: while your turn runs the thread spins in the Active band, not the queue, and the card waits " +
+    "unseen — so do no further WORK that does not depend on the answer, but never shorten the write-up " +
+    "to rest sooner. The open question is your sign-off. If you are about to keep " +
     "going for long on your own best guess, `unask` it and decide instead. The answer arrives as its " +
     "own wake, restating what was asked.\n\n" +
     "WITHDRAW ONE THE MOMENT IT STOPS MATTERING (`unask`), above all if you work the answer out " +

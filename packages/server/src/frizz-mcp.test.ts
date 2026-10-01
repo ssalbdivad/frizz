@@ -1102,7 +1102,10 @@ test("`ask` and `unask` register and withdraw the CALLING thread's questions, tr
     // THE STANDING INSTRUCTION, at the moment of temptation: a question queues only once the worker
     // rests (deriveNeedsYou), so one asked and then worked past sits unseen in the Active band while the
     // thread spins (maintainer 2026-09-24: "decide and go with it, or mark as ready and ask").
-    assert.match(asked.result.content[0].text, /NOW REST/)
+    assert.match(asked.result.content[0].text, /THEN REST/)
+    // …and the rest is never bought by a stub: the card holds only the choice, so the final message must
+    // carry the findings (a PR review once ended "The decision on PR #1673 is in the card below.").
+    assert.match(asked.result.content[0].text, /never shorten the write-up/)
     assert.doesNotMatch(asked.result.content[0].text, /on the human's board now/)
 
     rpc.send({ jsonrpc: "2.0", id: 3, method: "tools/call", params: { name: "unask", arguments: { id: "qst_aaa111" } } })
