@@ -1,0 +1,13 @@
+// The extension's entry point, and the ONLY module with a value import of "vscode" — which exists solely
+// inside an editor's extension host. Everything else takes the API as an argument, so it loads (and is
+// unit-tested) under plain node. Design: plans/vscode-extension.md.
+
+import * as vscode from "vscode"
+import { activateFrizz, type FrizzExtensionApi } from "./app.ts"
+
+export function activate(context: vscode.ExtensionContext): FrizzExtensionApi {
+  return activateFrizz(vscode, context)
+}
+
+// The socket closes through the context's subscriptions; nothing else holds the window open.
+export function deactivate(): void {}
