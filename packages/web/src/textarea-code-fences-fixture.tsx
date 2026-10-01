@@ -2,6 +2,7 @@ import { useState } from "react"
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query"
 import { createRoot } from "react-dom/client"
 import { Composer } from "./components/Composer.tsx"
+import { LinkifiedText } from "./components/LinkifiedText.tsx"
 import { TextareaCodeFences } from "./components/TextareaCodeFences.tsx"
 import { TooltipProvider } from "./components/Tooltip.tsx"
 import "./styles.css"
@@ -42,6 +43,12 @@ function Fixture() {
         <p className="text-[11px] text-muted">Plain textarea (Spinoff styling)</p>
         <textarea data-fixture="plain" value={plain} onChange={(e) => setPlain(e.target.value)} rows={14} className="w-full resize-none rounded-md border border-border bg-bg px-3 py-2 text-[13px] leading-5 text-fg outline-none focus:border-accent" />
         <TextareaCodeFences value={plain} />
+      </div>
+      <div className="w-[560px]">
+        <p className="mb-2 text-[11px] text-muted">Sent (user bubble)</p>
+        <div data-fixture="bubble" className="rounded-lg rounded-br-sm bg-user-bubble px-3.5 py-3 text-[14px] whitespace-pre-wrap [overflow-wrap:anywhere] text-user-bubble-fg">
+          <LinkifiedText text={SAMPLE + "See #1065 and https://example.com outside the fence."} />
+        </div>
       </div>
       <div className="w-[420px] flex flex-col">
         <p className="text-[11px] text-muted">Mono settings field, scrolled</p>

@@ -3,12 +3,35 @@ import { plainLinkSegments } from "../lib/plainLinks.ts"
 import { noteGithubRefs } from "../lib/githubHovercards.ts"
 import { useGithubRepoForLinks } from "../lib/useMarkdown.ts"
 import { MentionLink, useMentionSegments } from "./MentionLinks.tsx"
+import { scanInputFences } from "../lib/inputCodeFences.ts"
+import { highlightToHtml } from "../lib/syntaxHighlight.ts"
 
 // Plain user text with the link-shaped runs made clickable — the render half of lib/plainLinks.ts.
 // For the surfaces that show a human's words verbatim (the user bubble, an answers-card reply) where
 // full markdown would rewrite what they typed: every text byte renders as-is, but a pasted URL or a
 // GitHub ref becomes the same anchor it would be in agent prose, hovercard included.
+//
+// Fenced code is the one structure honoured: what the prompt box highlighted as it was typed
+// (TextareaCodeFences) reads the same once sent. The bytes still render verbatim — delimiters and all,
+// muted — but a body is monospaced and coloured by the transcript's highlight.js pipeline, and nothing
+// inside it is linkified: a `#123` in a code comment is code, not a reference.
 export function LinkifiedText({ text }: { text: string }) {
+  const runs = useMemo(() => scanInputFences(text), [text])
+  if (!runs) return <LinkedRun text={text} />
+  return (
+    <>
+      {runs.map((run, i) => {
+        const slice = text.slice(run.start, run.end)
+        if (run.kind === "prose") return <LinkedRun key={i} text={slice} />
+        if (run.kind === "fence") return <span key={i} className="font-mono-keep text-[0.9em] opacity-55">{slice}</span>
+        // `highlightToHtml` escapes everything it is given; its only markup is hljs's token spans.
+        return <span key={i} className="hljs font-mono-keep text-[0.9em]" dangerouslySetInnerHTML={{ __html: highlightToHtml(slice, run.language) }} />
+      })}
+    </>
+  )
+}
+
+function LinkedRun({ text }: { text: string }) {
   // A render input for the same reason useMarkdownHtml subscribes: plainLinkSegments reads the repo
   // from githubAutolink's module state (it arrives from the board a beat after the transcript), so
   // `repo` is deliberately a dependency without appearing in the body.
