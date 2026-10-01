@@ -42,7 +42,11 @@ import { isTrustedLocalWebSocketRequest, rejectWebSocketUpgrade } from "./local-
 // it all again in its hello.
 
 export const EDITOR_MAX_WINDOWS = 32
-/** `ws`'s own frame ceiling: a compose (a selection of up to 64 KiB of text, JSON-escaped) needs the room. */
+/**
+ * `ws`'s own frame ceiling, sized for a compose: its text may be 64 Ki UTF-16 units (the shared schema),
+ * which is 64 KiB of ASCII but up to three times that as UTF-8. A frame past this is closed 1009 by `ws`
+ * before it reaches a schema, so the extension caps a selection by its encoded size, not its length.
+ */
 export const EDITOR_MAX_PAYLOAD_BYTES = 128 * 1024
 /** Every other frame is a hello, a state or a result, and none of those is anywhere near this. */
 export const EDITOR_MAX_FRAME_BYTES = 64 * 1024

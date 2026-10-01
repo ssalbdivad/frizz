@@ -853,7 +853,7 @@ export async function startServer(opts: StartOptions = {}): Promise<StartedServe
         name: "application socket",
         run: cleanupAppSocket,
       },
-      // Before "other projects": a window dropping publishes `editors` on every open project's bus.
+      // Beside the application socket: a live transport, cut so every window reconnects to the next server.
       { name: "editor bridge", run: cleanupEditorBridge },
       { name: "other projects", run: cleanupExtraTenants },
       { name: "tailer producer", run: cleanupTailer },
