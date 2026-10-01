@@ -502,7 +502,7 @@ const steps: Step[] = [
     },
   },
   {
-    name: "Frizz on a new port re-frames the sidebar there; a page that never loads offers Reload",
+    name: "Frizz on a new port re-frames the sidebar there; a page that never loads offers Reload; no Frizz at all says so",
     modes: ["fake"],
     async run({ api, project }) {
       const frizz = vscode.workspace.getConfiguration("frizz")
@@ -518,6 +518,16 @@ const steps: Step[] = [
         await until("the frame on port 1", () => api.sidebar().url === `http://127.0.0.1:1/${embedQuery(project)}`)
         assert.equal(api.sidebar().ready, false)
         await until("the hint", () => api.sidebar().hinted, 15_000)
+
+        // No address at all: discovery finds nothing. The page that was showing stays until Reload, which
+        // then says why there is nothing to show.
+        await frizz.update("serverUrl", "not an address", vscode.ConfigurationTarget.Global)
+        await until("offline", () => api.status().kind === "offline")
+        await new Promise((resolve) => setTimeout(resolve, 500))
+        assert.equal(api.sidebar().url, `http://127.0.0.1:1/${embedQuery(project)}`)
+        await vscode.commands.executeCommand("frizz.sidebar.reload")
+        await until("a message instead of the page", () => api.sidebar().url === undefined && api.sidebar().message !== undefined)
+        assert.equal(api.sidebar().message, "Frizz isn't running.")
       } finally {
         await frizz.update("serverUrl", control, vscode.ConfigurationTarget.Global)
       }
