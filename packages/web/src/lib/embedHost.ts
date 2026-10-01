@@ -32,12 +32,18 @@ export function initEmbedHost(): void {
     const message = parseHostMessage(event.data)
     if (message) void handle(message)
   })
-  // BUBBLE phase on the window, the last place a keydown reaches: every handler of the page's own has had
-  // its turn by then, so `defaultPrevented` says whether one took it. A handler that stopped the event
-  // took it too, and it never gets here — which is the same answer.
+  // Asked once the keydown has been everywhere it goes, so `defaultPrevented` says whether one of the
+  // page's own handlers took it. A handler that stopped the event took it too, and it never gets here —
+  // which is the same answer. BUBBLE phase on the window is not late enough by itself: the shortcut
+  // runtime listens there too (keyboardRuntime useShortcutListener), and this listener, installed at boot,
+  // runs before it — so every chord Frizz binds (⌘K, ⌘I, ⌘,) went to VS Code as well as to Frizz (driven
+  // 2026-10-01, build2-shell.md). The next task runs after dispatch has finished, and the event keeps its
+  // `defaultPrevented` after it.
   window.addEventListener("keydown", (event) => {
-    const chord = hostKeyChord(event)
-    if (chord) postToHost(chord)
+    setTimeout(() => {
+      const chord = hostKeyChord(event)
+      if (chord) postToHost(chord)
+    }, 0)
   })
   // Ready once a board is in — the page's drafts and its drawer are keyed by it, and the router that
   // navigation goes through is mounted by then — or after 5s regardless, for a machine with nothing open.
