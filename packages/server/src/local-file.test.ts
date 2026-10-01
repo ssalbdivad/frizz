@@ -9,6 +9,7 @@ import { test } from "node:test"
 import type { LocalFileOpener } from "@frizz/shared"
 import {
   MARKDOWN_READ_LIMIT,
+  editorKindsForOpener,
   localFileOpenCommand,
   awaitOpenerHandoff,
   openLocalFile,
@@ -17,6 +18,7 @@ import {
   readLocalMarkdown,
   readLocalTextFile,
   resolveLocalFile,
+  resolveLocalFileAt,
   resolveOpenableFile,
   resolveWatchableLocalFile,
 } from "./local-file.ts"
@@ -389,4 +391,90 @@ test("the $EDITOR opener runs $VISUAL/$EDITOR as an argv, skipping terminal edit
   // Windows: a bare name is a `.cmd` shim, so it goes through cmd.exe quoted; a real exe runs directly.
   assert.deepEqual(argv({ EDITOR: "code -w" }, "win32"), ["cmd.exe", "/d", "/s", "/c", `""code" "-w" "/p/app.ts""`])
   assert.deepEqual(argv({ EDITOR: "C:\\Zed\\zed.exe" }, "win32"), ["C:\\Zed\\zed.exe", "/p/app.ts"])
+})
+
+test("a position reaches every editor's argv: `-g path:line:col` for the VS Code family, a deep link on macOS, nothing for the system opener", () => {
+  const at = { line: 12, column: 3, endLine: 20 }
+  const argv = (selected: Parameters<typeof localFileOpenCommand>[1], platform: NodeJS.Platform, path: string, position?: typeof at | { line: number }, env: NodeJS.ProcessEnv = {}, exists = (_: string) => false) => {
+    const spec = localFileOpenCommand(path, selected, { platform, env, exists, position })
+    return [spec.command, ...spec.args]
+  }
+  // Linux (and WSL): the CLIs take the line through -g; the range end has no CLI spelling and is dropped.
+  assert.deepEqual(argv("vscode", "linux", "/p/a.ts", at), ["code", "-g", "/p/a.ts:12:3"])
+  assert.deepEqual(argv("cursor", "linux", "/p/a.ts", { line: 7 }), ["cursor", "-g", "/p/a.ts:7"])
+  assert.deepEqual(argv("vscode", "linux", "/p/a.ts"), ["code", "/p/a.ts"], "no position: the argv is what it always was")
+  assert.deepEqual(argv("system", "linux", "/p/a.ts", at), ["xdg-open", "/p/a.ts"], "the system opener cannot be told a line")
+  // macOS: `open -a <app> a.ts:12` would open a file NAMED that, so a position goes through the editor's
+  // URL handler, each segment encoded so a space or `#` stays part of the path.
+  assert.deepEqual(argv("vscode", "darwin", "/Users/me/my app/a#b.ts", at), ["open", "vscode://file/Users/me/my%20app/a%23b.ts:12:3"])
+  assert.deepEqual(argv("cursor", "darwin", "/p/a.ts", { line: 7 }), ["open", "cursor://file/p/a.ts:7"])
+  assert.deepEqual(argv("vscode", "darwin", "/p/a.ts"), ["open", "-a", "Visual Studio Code", "/p/a.ts"])
+  assert.deepEqual(argv("finder", "darwin", "/p/a.ts", at), ["open", "-R", "/p/a.ts"])
+  // Windows: the installed exe takes -g directly; the shim takes it inside the one quoted cmd.exe argument.
+  const win = "C:\\p\\a.ts"
+  const env = { LOCALAPPDATA: "C:\\L" }
+  const codeExe = join("C:\\L", "Programs", "Microsoft VS Code", "Code.exe")
+  assert.deepEqual(argv("vscode", "win32", win, at, env, (p) => p === codeExe), [codeExe, "-g", `${win}:12:3`])
+  assert.deepEqual(argv("cursor", "win32", win, at, env), ["cmd.exe", "/d", "/s", "/c", `"cursor -g "${win}:12:3""`])
+  assert.deepEqual(argv("cursor", "win32", win, undefined, env), ["cmd.exe", "/d", "/s", "/c", `"cursor "${win}""`])
+  assert.deepEqual(argv("system", "win32", win, at, env), ["explorer.exe", win])
+})
+
+test("$EDITOR is told the position in its own dialect, and an editor with none gets the bare path", () => {
+  const at = { line: 12, column: 3 }
+  const argv = (env: NodeJS.ProcessEnv, platform: NodeJS.Platform = "linux") => {
+    const spec = localFileOpenCommand("/p/a.ts", "editor", { env, platform, position: at })
+    return [spec.command, ...spec.args]
+  }
+  for (const name of ["code", "code-insiders", "cursor", "codium", "windsurf", "/usr/local/bin/code"]) {
+    assert.deepEqual(argv({ EDITOR: `${name} --wait` }), [name, "--wait", "-g", "/p/a.ts:12:3"], name)
+  }
+  for (const name of ["subl", "sublime_text", "zed"]) assert.deepEqual(argv({ EDITOR: name }), [name, "/p/a.ts:12:3"], name)
+  // Guessing a flag for an editor that takes none would open a file called `-g`.
+  assert.deepEqual(argv({ EDITOR: "emacs" }), ["emacs", "/p/a.ts"])
+  assert.deepEqual(argv({ EDITOR: "C:\\VS\\Code.exe" }, "win32"), ["C:\\VS\\Code.exe", "-g", "/p/a.ts:12:3"])
+  assert.deepEqual(argv({ EDITOR: "code" }, "win32"), ["cmd.exe", "/d", "/s", "/c", `""code" "-g" "/p/a.ts:12:3""`])
+})
+
+test("the editor families the bridge may route to are the ones the External app would have spawned", () => {
+  assert.deepEqual(editorKindsForOpener("vscode", {}), ["vscode"])
+  assert.deepEqual(editorKindsForOpener("cursor", { EDITOR: "windsurf" }), ["cursor"], "the setting outranks $EDITOR")
+  for (const opener of ["system", "finder", "copy"] as const) assert.deepEqual(editorKindsForOpener(opener, { EDITOR: "code" }), [], opener)
+  const viaEnv = (env: NodeJS.ProcessEnv) => editorKindsForOpener("editor", env)
+  assert.deepEqual(viaEnv({ EDITOR: "code -w" }), ["vscode"])
+  assert.deepEqual(viaEnv({ EDITOR: "/opt/bin/code-insiders" }), ["vscode"])
+  assert.deepEqual(viaEnv({ VISUAL: "nvim", EDITOR: "cursor" }), ["cursor"], "a terminal $VISUAL falls through, as the spawn does")
+  assert.deepEqual(viaEnv({ EDITOR: "windsurf" }), ["windsurf"])
+  assert.deepEqual(viaEnv({ EDITOR: "C:\\Programs\\Cursor.exe" }), ["cursor"])
+  assert.deepEqual(viaEnv({ EDITOR: "subl" }), [], "an editor no extension runs in")
+  assert.deepEqual(viaEnv({}), [])
+})
+
+test("a path with a trailing position that does not exist as written opens the bare file AT that position", async (t) => {
+  const root = realpathSync(mkdtempSync(join(tmpdir(), "frizz-local-file-position-")))
+  t.after(() => rmSync(root, { recursive: true, force: true }))
+  const file = join(root, "a.ts")
+  writeFileSync(file, "x")
+  // `[x](vscode://file/…/a.ts:12)` reached the reader as `/…/a.ts:12` and read "not found" (2026-10-01).
+  assert.equal(resolveLocalFile(`${file}:12`, [root]), file)
+  assert.deepEqual(resolveLocalFileAt(`${file}:12:3`, [root]), { path: file, position: { line: 12, column: 3 } })
+  assert.deepEqual(resolveLocalFileAt(`${file}#L4-L9`, [root]), { path: file, position: { line: 4, endLine: 9 } })
+  assert.deepEqual(resolveLocalFileAt(file, [root]), { path: file })
+  // The whole string first: a file genuinely named `notes:12` is that file, not `notes` at line 12.
+  const named = join(root, "notes:12")
+  writeFileSync(named, "y")
+  writeFileSync(join(root, "notes"), "z")
+  assert.deepEqual(resolveLocalFileAt(named, [root]), { path: named })
+  assert.throws(() => resolveLocalFileAt(join(root, "gone.ts:12"), [root]), /not found/)
+  // The split path passes the same gate as any other.
+  const outside = realpathSync(mkdtempSync(join(tmpdir(), "frizz-local-file-position-out-")))
+  t.after(() => rmSync(outside, { recursive: true, force: true }))
+  writeFileSync(join(outside, "b.ts"), "x")
+  assert.throws(() => resolveLocalFileAt(join(outside, "b.ts:3"), [root]), /trusted roots/)
+
+  const calls: SpawnCall[] = []
+  const linux = { platform: "linux" as const, spawn: fakeSpawn(calls) }
+  assert.deepEqual(await openLocalFile(`${file}:12`, "vscode", [root], linux), { action: "opened", path: file })
+  await openLocalFile(`${file}:12`, "vscode", [root], { ...linux, position: { line: 40 } })
+  assert.deepEqual(calls.map((c) => c.args), [["-g", `${file}:12`], ["-g", `${file}:40`]], "an explicit position wins over the path's own")
 })

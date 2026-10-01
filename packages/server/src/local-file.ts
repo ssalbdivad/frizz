@@ -2,7 +2,7 @@ import { spawn, type SpawnOptions } from "node:child_process"
 import { existsSync, readFileSync, realpathSync, statSync } from "node:fs"
 import { homedir } from "node:os"
 import { dirname, isAbsolute, join, resolve, sep } from "node:path"
-import type { LocalFileOpener } from "@frizz/shared"
+import { goToArgument, splitFilePosition, type EditorKind, type FilePosition, type LocalFileOpener } from "@frizz/shared"
 import { normalizeLocalPath } from "./local-path.ts"
 
 export type LocalFileOpenResult = { action: "opened"; path: string } | { action: "copy"; path: string }
@@ -17,7 +17,13 @@ export interface SpawnedOpener {
 
 export type LocalFileSpawn = (command: string, args: readonly string[], options: SpawnOptions) => SpawnedOpener
 
-function isUnder(real: string, root: string): boolean {
+/**
+ * Whether the canonical path `real` is `root` or lies beneath it, after resolving `root`'s own links.
+ * The one containment rule Frizz has: the openable-roots gate below, and the editor bridge choosing the
+ * window whose workspace folder holds a file (editor-bridge.ts), which must agree with it on what
+ * "inside" means — a symlinked folder, a Windows path in another case.
+ */
+export function isUnder(real: string, root: string): boolean {
   let rootReal: string
   try { rootReal = realpathSync(root) } catch { return false }
   if (process.platform !== "win32") {
@@ -42,10 +48,29 @@ function isUnder(real: string, root: string): boolean {
 // Files only; readers, watchers and openers share the caller's trusted directory roots.
 // The image proxy has its own, deliberately path-unconfined resolver.
 export function resolveLocalFile(rawPath: string, roots: readonly string[]): string {
+  return resolveLocalFileAt(rawPath, roots).path
+}
+
+/**
+ * resolveLocalFile, plus the place in the file a trailing `:12:3` / `#L12` named. The whole string is
+ * tried FIRST, because a file can genuinely be called `notes:12`; only when it does not exist is the
+ * suffix split off (shared file-position.ts) and the bare path tried. Until 2026-10-01 there was no
+ * second try, so `[x](vscode://file/repo/a.ts:12)` — the link shape agents write most — opened a reader
+ * that said the file was not found.
+ */
+export function resolveLocalFileAt(rawPath: string, roots: readonly string[]): { path: string; position?: FilePosition } {
   rawPath = normalizeLocalPath(rawPath)
   if (!isAbsolute(rawPath)) throw new Error("Local path must be absolute")
   let real: string
-  try { real = realpathSync(rawPath) } catch { throw new Error("Local file was not found") }
+  let position: FilePosition | undefined
+  try {
+    real = realpathSync(rawPath)
+  } catch {
+    const split = splitFilePosition(rawPath)
+    if (!split.position) throw new Error("Local file was not found")
+    try { real = realpathSync(split.path) } catch { throw new Error("Local file was not found") }
+    position = split.position
+  }
   if (!roots.some((root) => isUnder(real, root))) throw new Error("Local file is outside Frizz's trusted roots")
   try {
     if (!statSync(real).isFile()) throw new Error("Local path is not a regular file")
@@ -53,7 +78,7 @@ export function resolveLocalFile(rawPath: string, roots: readonly string[]): str
     if (error instanceof Error && error.message === "Local path is not a regular file") throw error
     throw new Error("Local file was not found")
   }
-  return real
+  return position ? { path: real, position } : { path: real }
 }
 
 // Resolve a human-written path REFERENCE (as it might appear in inline code) to a canonical openable
@@ -220,6 +245,8 @@ export interface OpenerCommandOptions {
   env?: NodeJS.ProcessEnv
   /** Probe for an editor's real executable (tests point it at a fixture). */
   exists?: (path: string) => boolean
+  /** Where in the file to land, for the openers that can be told (an editor; never the system opener). */
+  position?: FilePosition
 }
 
 // Where the two editors' user-scope installers put the real executable on Windows. The `cursor` /
@@ -247,8 +274,13 @@ function splitEditorCommand(raw: string): string[] {
   return words
 }
 
+/** An editor command's executable as a bare lowercase name: `/usr/bin/code` and `C:\…\Code.exe` are both `code`. */
+function editorExecutableName(word: string | undefined): string {
+  return (word ?? "").split(/[\\/]/).pop()!.toLowerCase().replace(/\.(?:exe|cmd|bat)$/, "")
+}
+
 function isTerminalEditor(words: readonly string[]): boolean {
-  const name = (words[0] ?? "").split(/[\\/]/).pop()!.toLowerCase().replace(/\.exe$/, "")
+  const name = editorExecutableName(words[0])
   // `emacs` is a GUI app unless told otherwise; `emacs -nw` / `emacsclient -t` are the terminal forms.
   if (name === "emacs" || name === "emacsclient") return words.some((w) => w === "-nw" || w === "-t" || w === "--tty")
   return TERMINAL_EDITORS.has(name)
@@ -268,6 +300,50 @@ export function envEditorCommand(env: NodeJS.ProcessEnv): string[] {
   return usable
 }
 
+// How an `$EDITOR` is told a line. The VS Code family takes `-g path:line:col` (a bare `path:12` is a
+// file NAMED that to it); Sublime and Zed parse the suffix off the path itself. Anything else gets the
+// path alone — guessing a flag for an editor that does not take one would open a file called `-g`.
+const GOTO_FLAG_EDITORS = new Set(["code", "code-insiders", "cursor", "codium", "windsurf"])
+const GOTO_SUFFIX_EDITORS = new Set(["subl", "sublime_text", "zed"])
+
+function envEditorTarget(command: string, path: string, position: FilePosition | undefined): string[] {
+  if (!position) return [path]
+  const name = editorExecutableName(command)
+  if (GOTO_FLAG_EDITORS.has(name)) return ["-g", goToArgument(path, position)]
+  if (GOTO_SUFFIX_EDITORS.has(name)) return [goToArgument(path, position)]
+  return [path]
+}
+
+/**
+ * The editor families a connected editor window must belong to before the editor bridge may take an
+ * open the External app setting would otherwise hand to a spawn (editor-bridge.ts): the family that
+ * spawn would have launched, and nothing else. `system`, `finder` and `copy` are never an editor; for
+ * `editor` it is whatever `$VISUAL`/`$EDITOR` runs, and only the families an extension can live in.
+ */
+export function editorKindsForOpener(opener: LocalFileOpener | "editor", env: NodeJS.ProcessEnv): EditorKind[] {
+  if (opener === "vscode") return ["vscode"]
+  if (opener === "cursor") return ["cursor"]
+  if (opener !== "editor") return []
+  let words: string[]
+  try { words = envEditorCommand(env) } catch { return [] }
+  const name = editorExecutableName(words[0])
+  if (name === "code" || name === "code-insiders") return ["vscode"]
+  if (name === "cursor") return ["cursor"]
+  if (name === "windsurf") return ["windsurf"]
+  return []
+}
+
+/**
+ * An editor deep link for macOS, where the editor is launched with `open` and `open -a <app> path:12`
+ * would open a file named `path:12`. VS Code and Cursor register `vscode://file/<path>:<line>:<col>`
+ * (Cursor as `cursor://`). Each path segment is percent-encoded so a space, `#` or `?` stays part of
+ * the path rather than ending the URL.
+ */
+function editorDeepLink(scheme: "vscode" | "cursor", path: string, position: FilePosition): string {
+  const encoded = path.split("/").map(encodeURIComponent).join("/")
+  return `${scheme}://file${goToArgument(encoded, position)}`
+}
+
 /**
  * The fixed command plus argv that opens `path` with the selected app on `platform`. Pure over its
  * inputs so the Windows shapes are testable from a Mac.
@@ -281,16 +357,21 @@ export function envEditorCommand(env: NodeJS.ProcessEnv): string[] {
  */
 export function localFileOpenCommand(path: string, selected: Exclude<LocalFileOpener, "copy">, options: OpenerCommandOptions = {}): OpenerCommand {
   const platform = options.platform ?? process.platform
+  const position = options.position
   if (selected === "editor") {
     const [command, ...args] = envEditorCommand(options.env ?? process.env)
-    if (platform !== "win32" || /\.exe$/i.test(command!)) return { command: command!, args: [...args, path] }
+    const target = envEditorTarget(command!, path, position)
+    if (platform !== "win32" || /\.exe$/i.test(command!)) return { command: command!, args: [...args, ...target] }
     // A bare name on Windows is usually a `.cmd` shim (`code`, `subl`), which node will not spawn
     // without a shell — so the same quoted `cmd.exe /c` shape as the editor shims below.
-    const words = [command!, ...args, path]
+    const words = [command!, ...args, ...target]
     if (words.some((w) => /["%\r\n]/u.test(w))) throw new Error(`cannot hand ${path} to ${command} through cmd.exe`)
     return { command: "cmd.exe", args: ["/d", "/s", "/c", `"${words.map((w) => `"${w}"`).join(" ")}"`], verbatim: true }
   }
+  // `code -g path:12:3` / `cursor -g …`: the one argv both editors' CLIs take a line in.
+  const editorTarget = position ? ["-g", goToArgument(path, position)] : [path]
   if (platform === "darwin") {
+    if (position && (selected === "vscode" || selected === "cursor")) return { command: "open", args: [editorDeepLink(selected, path, position)] }
     return selected === "cursor" ? { command: "open", args: ["-a", "Cursor", path] }
       : selected === "vscode" ? { command: "open", args: ["-a", "Visual Studio Code", path] }
         : selected === "finder" ? { command: "open", args: ["-R", path] }
@@ -305,13 +386,14 @@ export function localFileOpenCommand(path: string, selected: Exclude<LocalFileOp
     const localAppData = env.LOCALAPPDATA
     if (localAppData) {
       const exe = join(localAppData, ...editor.exe)
-      if (exists(exe)) return { command: exe, args: [path] }
+      if (exists(exe)) return { command: exe, args: editorTarget }
     }
     if (/["%\r\n]/u.test(path)) throw new Error(`cannot hand ${path} to the ${editor.shim} shim through cmd.exe`)
-    return { command: "cmd.exe", args: ["/d", "/s", "/c", `"${editor.shim} "${path}""`], verbatim: true }
+    const quoted = position ? `-g "${goToArgument(path, position)}"` : `"${path}"`
+    return { command: "cmd.exe", args: ["/d", "/s", "/c", `"${editor.shim} ${quoted}"`], verbatim: true }
   }
-  return selected === "cursor" ? { command: "cursor", args: [path] }
-    : selected === "vscode" ? { command: "code", args: [path] }
+  return selected === "cursor" ? { command: "cursor", args: editorTarget }
+    : selected === "vscode" ? { command: "code", args: editorTarget }
       : { command: "xdg-open", args: [path] }
 }
 
@@ -326,11 +408,12 @@ export async function openLocalFile(
   roots: readonly string[],
   options: { forceSystem?: boolean; spawn?: LocalFileSpawn } & OpenerCommandOptions = {},
 ): Promise<LocalFileOpenResult> {
-  const path = resolveLocalFile(rawPath, roots)
+  const { path, position } = resolveLocalFileAt(rawPath, roots)
   const selected = options.forceSystem ? "system" : opener
   if (selected === "copy") return { action: "copy", path }
 
-  const spec = localFileOpenCommand(path, selected, options)
+  // An explicit position (the page read it off the link) wins over one split off the path itself.
+  const spec = localFileOpenCommand(path, selected, { ...options, position: options.position ?? position })
   const child = (options.spawn ?? defaultSpawn)(spec.command, spec.args, {
     detached: true, stdio: "ignore", shell: false, windowsHide: true,
     ...(spec.verbatim ? { windowsVerbatimArguments: true } : {}),
