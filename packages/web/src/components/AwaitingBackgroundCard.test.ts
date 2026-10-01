@@ -468,5 +468,6 @@ test("Stop draws the footer on its own where there is no rest to park", () => {
   const html = render(t)
   assert.doesNotMatch(html, /Snooze/)
   assert.match(html, /data-awaiting-stop-shells="1"/)
-  assert.match(html, /pb-0/, "the band still sits flush with the card's bottom")
+  assert.match(html, /data-awaiting-snooze="true" data-card-actions="true"/, "the Stop rides the shared action footer")
+  assert.match(html, /-mx-4 -mb-4 mt-3 flex/, "the band still sits flush with the card's bottom")
 })
