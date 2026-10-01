@@ -7,7 +7,8 @@
 // exact frames and RPC calls it received. REAL mode points the extension at a real Frizz
 // (FRIZZ_E2E_ORIGIN, with FRIZZ_E2E_PROJECT_DIR as the opened folder, which must be a registered
 // project) and asserts through the server's own RPCs instead; the steps that would start a real agent
-// run only with FRIZZ_E2E_DISPATCH=1 (and Send to thread also needs FRIZZ_E2E_THREAD, a thread's slug).
+// run only with FRIZZ_E2E_DISPATCH=1; Send to thread follows up FRIZZ_E2E_THREAD, or else the thread
+// Ask just started.
 
 import assert from "node:assert/strict"
 import { realpathSync } from "node:fs"
@@ -60,6 +61,9 @@ async function openSample(selection?: [number, number, number, number?]): Promis
 function sampleLines(document: vscode.TextDocument, from: number, to: number): string {
   return document.getText(new vscode.Range(from - 1, 0, to - 1, document.lineAt(to - 1).text.length))
 }
+
+/** The thread the real-mode Ask step started, for Send to follow up when no FRIZZ_E2E_THREAD is named. */
+let askedThread: string | undefined
 
 interface Step {
   name: string
@@ -162,6 +166,7 @@ const steps: Step[] = [
       const editor = await openSample([1, 0, 3])
       const asked = await vscode.commands.executeCommand<{ slug: string } | undefined>("frizz.ask", { question: "why does this loop?" })
       assert.ok(asked?.slug, "the command returns the new thread")
+      askedThread = asked.slug
       const expected = sampleLines(editor.document, 2, 4)
       let prompt: string
       if (mode === "fake") {
@@ -189,8 +194,9 @@ const steps: Step[] = [
     name: "Send to Frizz thread follows up the named thread, once, with an idempotent delivery id",
     modes: ["fake", "real"],
     async run({ project }) {
-      if (mode === "real" && (process.env.FRIZZ_E2E_DISPATCH !== "1" || !process.env.FRIZZ_E2E_THREAD)) return skip("delivers to a real agent; set FRIZZ_E2E_DISPATCH=1 and FRIZZ_E2E_THREAD")
-      const thread = mode === "fake" ? "@fake-thread" : process.env.FRIZZ_E2E_THREAD!
+      const realThread = process.env.FRIZZ_E2E_THREAD || askedThread
+      if (mode === "real" && (process.env.FRIZZ_E2E_DISPATCH !== "1" || !realThread)) return skip("delivers to a real agent; set FRIZZ_E2E_DISPATCH=1")
+      const thread = mode === "fake" ? "@fake-thread" : realThread!
       const editor = await openSample([2, 0, 2])
       const sent = await vscode.commands.executeCommand<{ slug: string; deliveryId: string } | undefined>("frizz.sendToThread", { thread, message: "look here" })
       assert.ok(sent, "the command returns the delivery")
