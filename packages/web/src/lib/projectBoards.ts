@@ -1,4 +1,4 @@
-import { useQuery, type QueryClient } from "@tanstack/react-query"
+import { useQueries, useQuery, type QueryClient } from "@tanstack/react-query"
 import type { BoardSnapshot } from "@frizz/shared"
 import { projectRpc } from "../api/rpc.ts"
 
@@ -40,6 +40,18 @@ function projectBoardQuery(projectId: string) {
  */
 export function useProjectBoard(projectId: string, live: boolean): BoardSnapshot | undefined {
   return useQuery({ ...projectBoardQuery(projectId), enabled: live }).data
+}
+
+/**
+ * Several projects' boards at once, by id, in `projectIds`' order — the phone page's Done tab, which lists
+ * every shown project's finished threads in one list (components/PhonePage.tsx). `live` fetches and keeps
+ * them fresh (re-read every `refetchMs`, since no list is mounted there to invalidate them when the poll's
+ * Done count moves); otherwise each answers from whatever the cache holds.
+ */
+export function useProjectBoards(projectIds: readonly string[], live: boolean, refetchMs?: number): (BoardSnapshot | undefined)[] {
+  return useQueries({
+    queries: projectIds.map((id) => ({ ...projectBoardQuery(id), enabled: live, refetchInterval: live ? refetchMs : undefined })),
+  }).map((query) => query.data)
 }
 
 /** Read a project's board ahead of a click — a no-op while the cached one is still fresh. */

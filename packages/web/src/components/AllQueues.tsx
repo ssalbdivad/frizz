@@ -72,6 +72,8 @@ import { ProjectSwitcher, type SwitcherProject } from "./ProjectSwitcher.tsx"
 import { AddProjectRow, ProjectList } from "./ProjectList.tsx"
 import { setCrossProjectMentions } from "../lib/mentionAutolink.ts"
 import { readingLine } from "../lib/readingLine.ts"
+import { useIsMobile } from "../lib/mobile.ts"
+import { PhonePage } from "./PhonePage.tsx"
 
 /** How often the page re-reads every project. The rail's badges poll at 5s; this is the page the
  *  operator is looking AT, so it runs a little faster — the read is the servers' cached snapshots. */
@@ -298,6 +300,8 @@ export function AllQueuesPage() {
   // rather than sitting between the prompt box and the queue it indexes.
   const stacked = useStacked()
   const home = homeOf(cards.data)
+  const phone = useIsMobile()
+  const chooseView = useChooseView()
   // The list drops a row only with a card being FINISHED. A thread open in a drawer keeps its row, marked
   // open: the card steps aside because the drawer is the same thread, but the list is where the reader
   // finds their place, and a row that vanished when clicked left them nothing to find. Focused, it is the
@@ -308,6 +312,40 @@ export function AllQueuesPage() {
       {!focused && <AddProjectRow />}
     </>
   )
+
+  // A PHONE GETS ITS OWN LAYOUT of the same page (PhonePage.tsx): a header naming the view, Queue /
+  // Snoozed / Done tabs of one-line rows, and a New thread button — upstream's phone board, over this
+  // page's projects. The stack below is the desktop's, down to the 800px stacking point.
+  if (phone) {
+    return (
+      <PhonePage
+        projects={projects}
+        shown={shown}
+        viewed={viewed}
+        focusedSlug={view.kind === "project" ? view.slug : undefined}
+        hidden={hidden}
+        loading={loading}
+        error={queues.error && !queues.data ? String(queues.error) : undefined}
+        homeDir={home}
+        composer={(onDispatched) => (
+          <FocusedComposer
+            focus={focus}
+            project={focusProject}
+            dirs={dirs}
+            autoFocus
+            caret={undefined}
+            onFocused={noop}
+            onDispatched={onDispatched}
+            target={focused ? undefined : <ProjectPicker projects={projects} focus={focus} onPick={(project) => pickProject(project, dirs?.projectDir)} />}
+          />
+        )}
+        // Choosing from the phone's projects list replaces the list's own history entry (PhonePage.tsx
+        // useProjectsListing), so Back from the view chosen returns to the one before the list.
+        onAll={() => chooseView.all(focusProject && focused ? focusProject : undefined, { replace: true })}
+        onProject={(project) => chooseView.project(project.slug, { replace: true })}
+      />
+    )
+  }
 
   return (
     <div className="flex min-h-screen justify-center gap-[clamp(28px,3.4vw,52px)] bg-bg px-5 text-sm text-fg max-[800px]:flex-col max-[800px]:justify-start max-[800px]:gap-0 max-[800px]:px-3">
@@ -410,7 +448,7 @@ export function AllQueuesPage() {
  * where the operator just was.
  */
 function Switcher({ projects, hidden, current }: { projects: QueuesProject[]; hidden: (key: string) => boolean; current: QueuesProject | undefined }) {
-  const navigate = useNavigate()
+  const choose = useChooseView()
   const add = useAddProject()
   // The list's own order (ProjectList): busy projects first, then the quiet ones; Home last, on its own.
   const listed = projects.filter((project) => !project.card?.home)
@@ -426,26 +464,47 @@ function Switcher({ projects, hidden, current }: { projects: QueuesProject[]; hi
   const homeProject = projects.find((project) => project.card?.home)
   const items = ordered.map(item)
   const home = homeProject && item(homeProject)
-  // A different set of cards is a different page to read, so it is read from its top.
-  const go = (href: string) => {
-    navigate(href)
-    glideTo(() => 0)
-  }
   return (
     <ProjectSwitcher
       projects={items}
       home={home}
       homeHint={homeProject?.card && shortPath(homeProject.card.path, homeProject.homeDir)}
       current={current && (current.card?.home ? home : items.find((entry) => entry.id === current.id))}
-      onAll={() => {
-        if (current) rememberCrossProjectFocus(current.id)
-        go(viewHref(ALL_PROJECTS))
-      }}
-      onProject={(project) => go(projectViewHref(project.slug))}
+      onAll={() => choose.all(current)}
+      onProject={(project) => choose.project(project.slug)}
       onAdd={add.start}
     />
   )
 }
+
+/**
+ * CHANGE THE PAGE'S VIEW — the switcher's one verb, and the phone's projects list's (PhonePage.tsx), so the
+ * two cannot drift. Choosing is a navigation (`/?project=<slug>`, `/`), so Back returns to the view before.
+ * Leaving a project for All projects carries it over as the prompt box's pick, so the box there starts
+ * where the operator just was. A different set of cards is a different page to read, so it is read from
+ * its top.
+ */
+function useChooseView(): {
+  all: (from: Pick<QueuesProject, "id"> | undefined, options?: { replace?: boolean }) => void
+  project: (slug: string, options?: { replace?: boolean }) => void
+} {
+  const navigate = useNavigate()
+  return useMemo(() => {
+    const go = (href: string, replace = false) => {
+      navigate(href, { replace })
+      glideTo(() => 0)
+    }
+    return {
+      all: (from, options) => {
+        if (from) rememberCrossProjectFocus(from.id)
+        go(viewHref(ALL_PROJECTS), options?.replace)
+      },
+      project: (slug, options) => go(projectViewHref(slug), options?.replace),
+    }
+  }, [navigate])
+}
+
+const noop = () => {}
 
 // ---- The column head --------------------------------------------------------------------------------
 
@@ -629,6 +688,7 @@ function FocusedComposer({
   autoFocus,
   caret,
   onFocused,
+  onDispatched,
 }: {
   focus: string | undefined
   project: QueuesProject | undefined
@@ -638,6 +698,8 @@ function FocusedComposer({
   autoFocus: boolean
   caret: Caret | undefined
   onFocused: () => void
+  /** A thread was started — the phone's New thread sheet closes on it. */
+  onDispatched?: () => void
 }) {
   const ready = dirs !== undefined
   const [slow, setSlow] = useState(false)
@@ -673,7 +735,7 @@ function FocusedComposer({
       </div>
     )
   }
-  return <DispatchForm key={focus} autoFocus={autoFocus} target={target} dirs={dirs} />
+  return <DispatchForm key={focus} autoFocus={autoFocus} target={target} dirs={dirs} onDispatched={onDispatched} />
 }
 
 /**
