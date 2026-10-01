@@ -4,6 +4,8 @@ import { crossProjectHref } from "./base-path.ts"
 import { boardOrTimeout, composeInto, threadIsThere } from "./editorBridge.ts"
 import { setEditorContext } from "./editorContext.ts"
 import { runHostCommand } from "./embedCommand.ts"
+import { repostRoute } from "./embedRoute.ts"
+import { closeSettingsAnimated } from "./overlays.ts"
 import { EMBED_READY, embedded, hostKeyChord, parseHostMessage, postToHost } from "./embed.ts"
 import { basename } from "./paths.ts"
 import { homeHref, projectViewHref } from "./pageView.ts"
@@ -40,7 +42,12 @@ export function initEmbedHost(): void {
   // Ready once a board is in — the page's drafts and its drawer are keyed by it, and the router that
   // navigation goes through is mounted by then — or after 5s regardless, for a machine with nothing open.
   // The extension posts nothing before this; a compose that still beats the board waits for it (composeInto).
-  void boardOrTimeout().then(() => postToHost(EMBED_READY))
+  // The title row's reading (lib/embedRoute.ts) goes again right behind it: the page has drawn its view
+  // by then, and said so to a host that may not have been listening yet.
+  void boardOrTimeout().then(() => {
+    postToHost(EMBED_READY)
+    repostRoute()
+  })
 }
 
 async function handle(message: EmbedHostMessage): Promise<void> {
@@ -57,9 +64,12 @@ async function handle(message: EmbedHostMessage): Promise<void> {
     return
   }
   if (message.type === "frizz:navigate") {
-    // Whatever is over the page goes: the human asked to see a thread or a queue, not Settings.
-    store.showSettings = false
-    store.phoneNewThread = null
+    // Whatever is over the page goes: the human asked to see a thread or a queue, not Settings — closed
+    // by its own close, which sends a change still in its debounce.
+    if (store.showSettings && !closeSettingsAnimated()) store.showSettings = false
+    store.showPalette = false
+    store.showShortcuts = false
+    store.showNewThread = false
     const { to } = message
     if (to === "queue") spaNavigate(homeHref())
     else if ("thread" in to) {

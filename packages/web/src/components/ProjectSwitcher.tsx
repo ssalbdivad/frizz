@@ -59,6 +59,7 @@ export function ProjectSwitcher({
   onProject,
   onAdd,
   homeHint,
+  row = false,
 }: {
   projects: SwitcherProject[]
   /** The Home workspace, listed last under its own rule. */
@@ -71,6 +72,12 @@ export function ProjectSwitcher({
   onAdd?: () => void
   /** Home's folder, beside its name. */
   homeHint?: ReactNode
+  /**
+   * Drawn as the project list's own head row rather than the status row's title — in an editor's sidebar,
+   * which has no status row (AllQueues.tsx SidebarPage): the mark in the list's 16px indicator column and
+   * the list's 8px gap to the name (ProjectList.tsx ProjectRow), so the scope reads as the list's first row.
+   */
+  row?: boolean
 }) {
   const total = [...projects, ...(home ? [home] : [])].reduce((sum, project) => sum + project.ready, 0)
   const name = current ? current.name : "All projects"
@@ -97,7 +104,7 @@ export function ProjectSwitcher({
           // The list's project-name type (ProjectList.tsx ProjectRow), since it IS the project's name now.
           // `-ml-1.5` hangs the hover wash past the square, so the square's ink stands on the column's
           // left edge, flush with the prompt box's border below it.
-          className="-ml-1.5 flex min-w-0 items-baseline gap-1.5 rounded-md px-1.5 py-0.5 text-[13px] font-semibold text-fg outline-none transition-colors hover:bg-hover hover:text-fg focus-visible:ring-1 focus-visible:ring-focus-ink-60 data-[state=open]:bg-hover data-[state=open]:text-fg"
+          className={`-ml-1.5 flex min-w-0 items-baseline ${row ? "gap-2" : "gap-1.5"} rounded-md px-1.5 py-0.5 text-[13px] font-semibold text-fg outline-none transition-colors hover:bg-hover hover:text-fg focus-visible:ring-1 focus-visible:ring-focus-ink-60 data-[state=open]:bg-hover data-[state=open]:text-fg`}
         >
           {/* Both marks on the NAME's cap band, computed by the browser from the resolved font: the square
               has no baseline of its own, so it sits ON the name's and is lowered by half its height less
@@ -106,6 +113,11 @@ export function ProjectSwitcher({
           {current ? (
             <span className="flex shrink-0 self-baseline translate-y-[calc(8px_-_0.5cap)]">
               <ProjectSquare project={current.card} size={16} />
+            </span>
+          ) : row ? (
+            // The list's indicator column is 16px, the square's size; the glyph is centred in it.
+            <span className="flex w-4 shrink-0 justify-center self-baseline translate-y-[calc(0.5em_-_0.5cap)]">
+              <Layers size={14} aria-hidden data-xq-switcher-glyph className="text-muted" />
             </span>
           ) : (
             <Layers size={14} aria-hidden data-xq-switcher-glyph className="shrink-0 self-baseline translate-y-[calc(0.5em_-_0.5cap)] text-muted" />

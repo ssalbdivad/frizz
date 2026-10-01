@@ -98,6 +98,7 @@ export function ProjectList({
   activeKey,
   hidden,
   onQueuedRow,
+  switcher,
 }: {
   projects: QueuesProject[]
   home: string | undefined
@@ -105,6 +106,13 @@ export function ProjectList({
   hidden: (key: string) => boolean
   /** Bring a Ready card into view: its scroll offset, or null when the queue is not showing it. */
   onQueuedRow: (key: string) => number | null
+  /**
+   * THE VIEW'S SWITCHER, as the list's head — in an editor's sidebar, which has no status row to carry it
+   * (AllQueues.tsx SidebarPage). Focused on a project it takes the left of that project's own row, the
+   * slot the status row's title leaves empty on the desktop (ProjectRow); showing All projects, a row of
+   * its own above the first project.
+   */
+  switcher?: ReactNode
 }) {
   const collapsed = useCollapsedProjects()
   const openBands = useOpenBands()
@@ -163,11 +171,17 @@ export function ProjectList({
       home={home}
       activeKey={activeKey}
       onQueuedRow={onQueuedRow}
+      switcher={view.kind === "project" && view.slug === entry.project.slug ? switcher : undefined}
     />
   )
   return (
     <>
-      {busy.map((entry, index) => group(entry, index > 0))}
+      {switcher && view.kind === "all" && (
+        <div data-xq-switcher-row className={`${ROW_CLASS} after:hidden`}>
+          <div className={`${HEAD_BUTTON_CLASS} !gap-0`}>{switcher}</div>
+        </div>
+      )}
+      {busy.map((entry, index) => group(entry, index > 0 || (switcher !== undefined && view.kind === "all")))}
       {/* Always listed, one line each, under the busy ones — until one is opened, when it lists the rest of
           itself under its name like any other. They sat behind a collapsed "Quiet" fold until 2026-09-24,
           which cost a click to reach a project whose row is already about as quiet as a row can be
@@ -473,6 +487,8 @@ const ProjectGroup = memo(ProjectGroupRows, (a: ProjectGroupProps, b: ProjectGro
   a.spaced === b.spaced &&
   a.home === b.home &&
   a.onQueuedRow === b.onQueuedRow &&
+  // Only the focused project's group is handed one (ProjectList `switcher`), so this re-renders that one.
+  a.switcher === b.switcher &&
   // The scrollspy's card moves on every scroll; it lights a row only in its own project.
   (a.activeKey === b.activeKey || (!ownKey(a.project.id, a.activeKey) && !ownKey(b.project.id, b.activeKey))))
 
@@ -505,6 +521,7 @@ function ProjectGroupRows({
   activeKey,
   onQueuedRow,
   moved,
+  switcher,
 }: {
   project: QueuesProject
   grip: Grip | undefined
@@ -518,6 +535,8 @@ function ProjectGroupRows({
   home: string | undefined
   activeKey: string | null
   onQueuedRow: (key: string) => number | null
+  /** The view's switcher, on the focused project's row (ProjectList `switcher`). */
+  switcher?: ReactNode
 }) {
   const focus = projectSlug(useLocation().pathname)
   const snap = useSnapshot(store)
@@ -610,6 +629,7 @@ function ProjectGroupRows({
         opened={opened}
         collapsed={collapsed}
         home={home}
+        switcher={switcher}
       />
       {!collapsed && (
         <ThreadProjectScope projectId={project.id} projectDir={project.projectDir}>
@@ -766,6 +786,7 @@ function ProjectRow({
   collapsed,
   working,
   home,
+  switcher,
 }: {
   project: QueuesProject
   grip: Grip | undefined
@@ -777,6 +798,7 @@ function ProjectRow({
   /** Its Working rows — counted on the row while it is folded, the one state that hides them. */
   working: number
   home: string | undefined
+  switcher?: ReactNode
 }) {
   const [menuOpen, setMenuOpen] = useState(false)
   const navigate = useNavigate()
@@ -816,7 +838,9 @@ function ProjectRow({
           page leaves nothing to look at. With no square the cord starts at the first band name instead
           (ThreadConnector ties only rows that carry an indicator). */}
       {focused ? (
-        <span className="flex-1" />
+        // …unless there is no such title (an editor's sidebar): the switcher takes the slot, in the head
+        // button's own geometry, so its square stands in the rows' indicator column.
+        switcher ? <div className={`${HEAD_BUTTON_CLASS} !gap-0`}>{switcher}</div> : <span className="flex-1" />
       ) : (
         <button
           type="button"

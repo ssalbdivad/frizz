@@ -2,7 +2,8 @@ import { useEffect, useRef, useState } from "react"
 import { useLocation, useNavigate } from "react-router"
 import { useSnapshot } from "valtio"
 import { useQuery } from "@tanstack/react-query"
-import { closeGithubPicker, store, seedBoard, openNewThread, pushDrawer, resolveRoutedThread, topDrawer, topThreadSlug, showToast } from "./store.ts"
+import { closeGithubPicker, store, seedBoard, pushDrawer, resolveRoutedThread, topDrawer, topThreadSlug, showToast } from "./store.ts"
+import { openDispatch } from "./lib/newThreadDoor.ts"
 import { useBoard } from "./hooks.ts"
 import { closeDrawerAnimated } from "./lib/overlays.ts"
 import { useShortcut } from "./lib/keyboardRuntime.ts"
@@ -44,23 +45,6 @@ function maybeShowSignInHint() {
   signInHintShown = true
   showToast("Sign in to the GitHub CLI (`gh auth login`) to dispatch from issues/PRs.", { duration: 6000 })
 }
-
-// The new-thread key, `c`. With the page in front of you the prompt box at the top of its left column IS
-// the new-thread door, so the key puts the caret in it. With a drawer over the page the rail sits behind
-// its scrim, so the anywhere-modal opens instead and the drawer stays where it was — Gmail's compose
-// window over the conversation you were reading. (`t` opened the box on its Terminal tab until
-// 2026-09-29; a terminal belongs to a thread now, and `t` opens one on the thread you are reading.)
-function openDispatch(): void {
-  if (!store.drawers.some((drawer) => !drawer.closing)) {
-    const form = [...document.querySelectorAll<HTMLElement>("[data-dispatch-form]")].find((el) => !el.closest('[role="dialog"]'))
-    if (form) {
-      form.querySelector<HTMLElement>('[data-surface="newComposer"]')?.focus()
-      return
-    }
-  }
-  openNewThread()
-}
-
 
 /**
  * THE SHELL AROUND THE ONE PAGE (AllQueues.tsx), focused on one project or showing All projects
