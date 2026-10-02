@@ -2016,7 +2016,7 @@ try {
     const extra = (what: string) => inPage((w) => [...document.querySelectorAll<HTMLElement>(`[data-editor-extra="${w}"]`)].filter((row) => row.getClientRects().length > 0).map((row) => row.innerText.replace(/\s+/gu, " ").trim())[0] ?? null, what)
     const openMenu = async () => {
       await clickInComposer("newComposer", "[data-editor-open-files]")
-      return until(async () => (await extra("problems")) !== null, 5_000)
+      return until(async () => (await extra("problems")) !== null && (await extra("terminal")) !== null, 5_000)
     }
     const shown = await openMenu()
     const problemsRow = await extra("problems")
@@ -2038,6 +2038,13 @@ try {
       const state = await box("newComposer")
       return state?.value.includes("@problems") ? state : undefined
     }, 8_000).catch(async () => box("newComposer"))
+    if (!withProblems?.value.includes("@problems")) notes.extrasClick = {
+      clicks: [...clicks],
+      focus: await workbenchFocus(),
+      menuOpen: await inPage(() => document.querySelector('[data-editor-extra="problems"]')?.closest("[role=menu]") !== null),
+      boxes: await inPage(() => [...document.querySelectorAll<HTMLTextAreaElement>("textarea[data-surface]")].map((t) => ({ surface: t.dataset.surface, shown: t.getClientRects().length > 0, value: t.value.slice(0, 60) }))),
+      log: frizzLog().split("\n").slice(-12),
+    }
     expect("c15", "Add problems puts one @problems chip in the box, drawn as a pill", !!withProblems?.pills.some((pill) => pill.token === "@problems"), withProblems)
     await openMenu()
     await clickInPage('[data-editor-extra="terminal"]')
