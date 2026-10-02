@@ -53,6 +53,7 @@ import { watchPageClaim, type PageClaimResult } from "../e2e/page-claim.ts"
 import { bootStack, freePort, type StackProject } from "../e2e/stack.ts"
 
 const pkg = resolve(dirname(fileURLToPath(import.meta.url)), "..")
+const repo = resolve(pkg, "..", "..")
 
 if (process.argv.includes("--sidebar")) {
   const args = process.argv.slice(2).filter((arg) => arg !== "--sidebar")
