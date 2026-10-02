@@ -41,7 +41,7 @@ import { parseAccountAlias } from "../lib/signIn.ts"
 import { TRANSCRIPT_META_LABEL_CLASS, transcriptMetaChevronClass } from "../lib/transcriptMetaLabels.ts"
 import { isPlainLeftClick } from "../lib/standaloneThreadRoute.ts"
 import { useMarkdownHtml } from "../lib/useMarkdown.ts"
-import { observeCardSlot, whenCardRendered } from "../lib/cardVisibility.ts"
+import { drawnHeight, observeCardSlot, whenCardRendered } from "../lib/cardVisibility.ts"
 import { IN_PLACE_OPEN_STATE, openThread, showToast, store } from "../store.ts"
 import { crossProjectHref, innerPath, projectSlug } from "../lib/base-path.ts"
 import { LimitPauseNotice, QueueDismissContext, TerminalNetCard } from "./ChatView.tsx"
@@ -264,15 +264,38 @@ export const AllQueuesCard = memo(function AllQueuesCard(props: AllQueuesCardPro
   // `data-near` on the slot is that module's too, never React's: within a viewport of the screen the
   // browser draws the card, further off it skips it.
   const [built, setBuilt] = useState(false)
-  const slotRef = useCallback((slot: HTMLDivElement | null) => observeCardSlot(slot, () => setBuilt(true)), [])
+  // Its handoff is fetched ahead of the build (cardVisibility.ts `prefetch`), under the key the card reads
+  // it by — from the props it has WHEN it runs, since a thread that rests again meanwhile has a new handoff.
+  const queryClient = useQueryClient()
+  const latest = useRef(props)
+  latest.current = props
+  const slotRef = useCallback((slot: HTMLDivElement | null) => observeCardSlot(
+    slot,
+    () => setBuilt(true),
+    () => queryClient.prefetchQuery(handoffQuery(latest.current.project, latest.current.thread)),
+  ), [queryClient])
+  // A card mounted again starts at the height it was last drawn at, not the guess (cardVisibility.ts
+  // `drawnHeight`): the inline intrinsic size sizes it while it is skipped, the stand-in while it is near.
+  const [remembered] = useState(() => drawnHeight(key))
   return (
-    <div ref={slotRef} data-xq-card={key} data-queue-leaving={leaving} data-queue-ghost={ghost || undefined} aria-hidden={ghost || undefined} data-queue-concealed={concealed || undefined} inert={concealed || ghost} className="frizz-card-slot min-w-0">
+    <div ref={slotRef} data-xq-card={key} data-queue-leaving={leaving} data-queue-ghost={ghost || undefined} aria-hidden={ghost || undefined} data-queue-concealed={concealed || undefined} inert={concealed || ghost} className="frizz-card-slot min-w-0" style={remembered ? { containIntrinsicBlockSize: `auto ${remembered}px` } : undefined}>
       <div className="frizz-card-clip min-h-0 min-w-0">
-        {built ? <CardArticle {...props} /> : <CardStandIn thread={thread} />}
+        {built ? <CardArticle {...props} /> : <CardStandIn thread={thread} height={remembered} />}
       </div>
     </div>
   )
 }, sameCard)
+
+/** The card's handoff query, for the card and for the prefetch ahead of its build (one key, one fetch). */
+function handoffQuery(project: QueuesProject, thread: ThreadView) {
+  // KEYED ON THE REST, so a thread that rests again fetches its new handoff, and one that has not moved
+  // is read exactly once however often the page polls.
+  return {
+    queryKey: ["ofProject", project.id, "handoff", thread.id, thread.lastAssistantAt ?? ""],
+    queryFn: () => projectRpc(project.id).threadHandoff({ slug: thread.id }),
+    staleTime: Infinity,
+  }
+}
 
 /**
  * A card not built yet, far from the screen: its frame and its title, at the height every unbuilt card is
@@ -280,11 +303,12 @@ export const AllQueuesCard = memo(function AllQueuesCard(props: AllQueuesCardPro
  * the guess and not a short stand-in if it ever draws one). Nothing in it takes focus or a click: the card
  * replaces it before anyone can reach it, and a link here would be swapped out from under the focus.
  */
-function CardStandIn({ thread }: { thread: ThreadView }) {
+function CardStandIn({ thread, height }: { thread: ThreadView; height?: number }) {
   return (
     <article
       data-xq-card-stand-in
       aria-label={displayTitle(thread)}
+      style={height ? { height } : undefined}
       className={`frizz-card-body flex h-[540px] min-w-0 max-w-full flex-col ${BLOCK_RADIUS} border border-border-strong bg-panel shadow-lg shadow-shadow-ink/25`}
     >
       <header className="rounded-t-xl border-b border-border/60 px-5 py-3.5">
@@ -309,13 +333,9 @@ function CardArticle({
   const api = projectRpc(project.id)
   const chipNode = chip ? <ProjectChip project={project} onChoose={onChoose} square={false} /> : undefined
   const openInPlace = useOpenThreadInPlace()
-  // KEYED ON THE REST, so a thread that rests again fetches its new handoff, and one that has not moved
-  // is read exactly once however often the page polls. The previous handoff stays on screen while the
-  // next one loads rather than blanking the card.
+  // The previous handoff stays on screen while the next one loads rather than blanking the card.
   const handoff = useQuery({
-    queryKey: ["ofProject", project.id, "handoff", thread.id, thread.lastAssistantAt ?? ""],
-    queryFn: () => api.threadHandoff({ slug: thread.id }),
-    staleTime: Infinity,
+    ...handoffQuery(project, thread),
     placeholderData: (previous) => previous,
   })
   const text = handoff.data?.text

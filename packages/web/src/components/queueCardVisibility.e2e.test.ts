@@ -19,7 +19,14 @@ import test, { after, before } from "node:test"
 //      the viewport lock re-took its anchor before undoing such a move, and cards building near the screen
 //      made it common;
 //   7  typing `@` into a card's reply box still offers the board's threads — the box subscribes to them only
-//      once its draft holds an `@`, so this pins that the switch turns on.
+//      once its draft holds an `@`, so this pins that the switch turns on;
+//   8  after the column changes width, every skipped card is re-drawn at its new height — a width change
+//      mutates nothing, and each skipped card kept the height it had at the old width;
+//   9  cards moved on screen by a filter (no scroll, no mount) are real cards in the first frame, and cards
+//      mounted again after it start at the height they were last drawn at, not the guess;
+//  10  `k` landing on a card whose handoff is still loading presses its "Show more" once it appears;
+//  11  End before the page is built stays at the end — the cards it lands on and the cards above them
+//      change height as they are built, and each change used to push the last card off screen.
 //
 // Skipped unless a Vite URL serving the fixtures is provided: `nub run test:e2e` sets it, or start
 // `vite` in packages/web and set FRIZZ_QUEUE_CARD_VISIBILITY_E2E_URL to its origin.
@@ -33,7 +40,7 @@ let browser: Browser | undefined
 let page: Page | undefined
 const errors: string[] = []
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms))
-const URL_MANY = () => `${baseUrl}/queue-card-states-fixture.html?case=many&n=60`
+const URL_MANY = (extra = "", n = 60) => `${baseUrl}/queue-card-states-fixture.html?case=many&n=${n}${extra}`
 
 before(async () => {
   if (!baseUrl) return
@@ -56,6 +63,21 @@ before(async () => {
 after(async () => { await browser?.close() })
 
 const allBuilt = () => page!.waitForFunction(() => document.querySelectorAll("[data-xq-card]").length === 60 && !document.querySelector("[data-xq-card-stand-in]"), { timeout: 60_000 })
+// Every card the browser is skipping, asked the question test 2 asks: is that its real height?
+const skippedOff = () => page!.evaluate(() => {
+  const off: { index: number; skipped: number; real: number }[] = []
+  let far = 0
+  for (const [index, slot] of [...document.querySelectorAll<HTMLElement>("[data-xq-card]")].entries()) {
+    if (slot.hasAttribute("data-near")) continue
+    far++
+    const skipped = slot.getBoundingClientRect().height
+    slot.setAttribute("data-near", "")
+    const real = slot.getBoundingClientRect().height
+    slot.removeAttribute("data-near")
+    if (Math.abs(real - skipped) > 1) off.push({ index, skipped, real })
+  }
+  return { far, off }
+})
 // SETTLED: every card built, and for a second and a half no card has committed and no slot has been drawn
 // or let go (a `data-near` flip) — the idle steps re-draw a skipped card whose handoff landed after it was
 // first drawn, and those run after the builds. A condition the page reaches by design, not a retry.
@@ -158,6 +180,10 @@ test("a far card's clamp is measured once it is drawn, and it still clamps", { s
 test("a board delta re-renders no card", { skip: !baseUrl, timeout: 120_000 }, async () => {
   await page!.goto(URL_MANY(), { waitUntil: "load" })
   await settled()
+  // CLEAR OF THE SHARED CLOCK: lib/liveClock.ts re-renders every card's "2m ago" on a 30s edge of the wall
+  // clock, which a Profiler counts like any other commit — 60 cards "re-rendered" by no delta at all, about
+  // one run in 30. So the deltas and the second after them sit between two edges.
+  await page!.waitForFunction(() => { const into = Date.now() % 30_000; return into > 1_000 && into < 27_000 }, { polling: 100, timeout: 10_000 })
   const before = await page!.evaluate(() => ({ ...(window as unknown as { __renders: Record<string, number> }).__renders }))
   await page!.evaluate(() => {
     const w = window as unknown as { __boardDelta: () => void }
@@ -246,4 +272,110 @@ test("typing @ in a card's reply box offers the board's threads", { skip: !baseU
   const offered = await page!.$$eval("[data-mention-menu] [role=option]", (options) => options.map((o) => o.textContent ?? ""))
   assert.ok(offered.some((text) => text.includes("card-2")), `the menu offers the board's threads: ${JSON.stringify(offered.slice(0, 5))}`)
   assert.deepEqual(errors, [])
+})
+
+test("after the column changes width, every skipped card is re-drawn at its new height", { skip: !baseUrl, timeout: 120_000 }, async () => {
+  // Short cards with a ~300-character handoff (`mid=1`), which re-wraps at the new width; the long ones clamp.
+  await page!.goto(URL_MANY("&mid=1"), { waitUntil: "load" })
+  await settled()
+  assert.deepEqual((await skippedOff()).off, [], "the page was right before the width changed")
+  await page!.evaluate(() => { document.querySelector<HTMLElement>("[data-fixture-queue]")!.style.width = "420px" })
+  await settled()
+  const after = await skippedOff()
+  assert.ok(after.far >= 40, `most cards are still skipped: ${after.far}`)
+  assert.deepEqual(after.off, [], "a skipped card still the height it had at the old width")
+})
+
+test("cards a filter moves on screen are real in the first frame, and cards mounted again start at their drawn height", { skip: !baseUrl, timeout: 120_000 }, async () => {
+  // FIRST FRAME: on the first frame the cards exist, every card from 40 on is a stand-in far below. A filter
+  // (no scroll, no mount) brings them to the top; read the first animation frame after the commit that did.
+  const script = await page!.evaluateOnNewDocument(() => {
+    const w = window as unknown as { __filtered?: unknown; __filter: (pattern: string | null) => void }
+    const look = () => {
+      if (document.querySelectorAll("[data-xq-card]").length !== 60) return requestAnimationFrame(look)
+      setTimeout(() => {
+        const standInsBefore = document.querySelectorAll("[data-xq-card-stand-in]").length
+        w.__filter("^card-[45]\\d$")
+        const wait = () => {
+          const slots = [...document.querySelectorAll<HTMLElement>("[data-xq-card]")]
+          if (slots.length !== 20) return requestAnimationFrame(wait)
+          const onScreen = slots.filter((slot) => { const r = slot.getBoundingClientRect(); return r.bottom > 0 && r.top < innerHeight })
+          w.__filtered = {
+            standInsBefore,
+            onScreen: onScreen.length,
+            standInsOnScreen: onScreen.filter((slot) => slot.querySelector("[data-xq-card-stand-in]")).length,
+          }
+        }
+        requestAnimationFrame(wait)
+      }, 0)
+    }
+    requestAnimationFrame(look)
+  })
+  await page!.goto(URL_MANY(), { waitUntil: "load" })
+  await page!.waitForFunction(() => (window as unknown as { __filtered?: unknown }).__filtered !== undefined)
+  const filtered = await page!.evaluate(() => (window as unknown as { __filtered: Record<string, number> }).__filtered)
+  await page!.removeScriptToEvaluateOnNewDocument(script.identifier)
+  assert.ok(filtered.standInsBefore >= 40, `the filter ran before the page was built: ${JSON.stringify(filtered)}`)
+  assert.ok(filtered.onScreen > 0, `the filtered cards came on screen: ${JSON.stringify(filtered)}`)
+  assert.equal(filtered.standInsOnScreen, 0, `a stand-in on screen in the filter's first frame: ${JSON.stringify(filtered)}`)
+
+  // MOUNTED AGAIN: a built page filtered down to its last ten and back. The forty cards that come back are
+  // stand-ins again (building them all at once is the mount this module exists to avoid), but each at the
+  // height it was last drawn at, so the page is as tall as it was the moment they mount.
+  await page!.goto(URL_MANY(), { waitUntil: "load" })
+  await settled()
+  const roundTrip = await page!.evaluate(async () => {
+    const w = window as unknown as { __filter: (pattern: string | null) => void }
+    const frame = () => new Promise((resolve) => requestAnimationFrame(resolve))
+    const height = document.documentElement.scrollHeight
+    w.__filter("^card-5\\d$")
+    while (document.querySelectorAll("[data-xq-card]").length !== 10) await frame()
+    await frame()
+    w.__filter(null)
+    while (document.querySelectorAll("[data-xq-card]").length !== 60) await frame()
+    return { height, again: document.documentElement.scrollHeight, standIns: document.querySelectorAll("[data-xq-card-stand-in]").length }
+  })
+  assert.ok(roundTrip.standIns >= 30, `the cards mounted again are stand-ins: ${JSON.stringify(roundTrip)}`)
+  assert.ok(Math.abs(roundTrip.again - roundTrip.height) <= 2, `the page changed height when the cards came back: ${JSON.stringify(roundTrip)}`)
+})
+
+test("`k` landing on a card whose handoff is still loading opens its Show more once it appears", { skip: !baseUrl, timeout: 120_000 }, async () => {
+  // Handoffs answer 800ms late, so the target's is still on its way when `k`, wrapping from the first card,
+  // lands on the last — card-57 of 58, a long one (every third card clamps). The key goes through the real
+  // keyboard runtime, onto the fixture's cursor, which lands a card as AllQueues' does.
+  await page!.goto(URL_MANY("&handoffDelay=800", 58), { waitUntil: "load" })
+  await page!.waitForSelector("[data-xq-card-root]")
+  await page!.keyboard.press("k")
+  const landings = await page!.evaluate(() => (window as unknown as { __landings: unknown[] }).__landings)
+  assert.deepEqual(landings, [{ key: "fixture-card/card-57", hadShowMore: false }], "the key landed on the last card before it had a Show more")
+  const toggle = '[data-xq-card="fixture-card/card-57"] [data-xq-show-more]'
+  await page!.waitForSelector(toggle, { timeout: 10_000 })
+  // Its arrival is pressed in the microtask after the commit that drew it; a frame is ample.
+  await page!.evaluate(() => new Promise((resolve) => requestAnimationFrame(() => setTimeout(resolve, 0))))
+  assert.equal(await page!.$eval(toggle, (button) => button.getAttribute("aria-expanded")), "true", "the landed card stayed shut")
+})
+
+test("End before the page is built stays at the end", { skip: !baseUrl, timeout: 120_000 }, async () => {
+  // Three things moved the end away from a jump to it, each below the card the viewport lock holds at its
+  // reading line: the cards End lands on built at their real height instead of the 540px guess (put back at
+  // the end in the jump's own scroll event); a card above built SHORTER, whose clamp of the offset the lock
+  // undid a second time; and a handoff landing a round trip after its card was built (fetched ahead of the
+  // build now; handoffs here answer 300ms late, and End waits for them to have been fetched).
+  await page!.goto(URL_MANY("&handoffDelay=300"), { waitUntil: "load" })
+  await page!.waitForSelector("[data-xq-card-root]")
+  // The handoffs are fetched four at a time from the first idle moment: 60 × 300ms / 4 ≈ 4.5s. The end of the
+  // page is still stand-ins by then (building is far slower), which is the case End has to get right.
+  await page!.waitForFunction(() => (window as unknown as { __rpc: { calls: { path: string }[] } }).__rpc.calls.filter((call) => call.path.endsWith("/threadHandoff")).length >= 60, { polling: 100, timeout: 30_000 })
+  // The last of them answers 300ms after it was asked.
+  await sleep(600)
+  const atEnd = await page!.evaluate(async () => {
+    const standIns = document.querySelectorAll("[data-xq-card-stand-in]").length
+    scrollTo({ top: document.documentElement.scrollHeight, behavior: "instant" as ScrollBehavior })
+    await new Promise((resolve) => setTimeout(resolve, 1_500))
+    const last = document.querySelectorAll<HTMLElement>("[data-xq-card]")[59]!.getBoundingClientRect()
+    return { standIns, gapBelow: Math.round(document.documentElement.scrollHeight - innerHeight - scrollY), lastBottom: Math.round(last.bottom), viewport: innerHeight }
+  })
+  assert.ok(atEnd.standIns >= 10, `every handoff was fetched while most of the page was unbuilt (ahead of the build), and End came then: ${JSON.stringify(atEnd)}`)
+  assert.ok(atEnd.gapBelow <= 2, `End no longer shows the end: ${JSON.stringify(atEnd)}`)
+  assert.ok(atEnd.lastBottom <= atEnd.viewport + 2, `the last card is pushed off screen: ${JSON.stringify(atEnd)}`)
 })

@@ -1,4 +1,4 @@
-import { Profiler, memo, useCallback, useMemo, useState, type ComponentProps, type ProfilerOnRenderCallback } from "react"
+import { Profiler, memo, useCallback, useEffect, useMemo, useState, type ComponentProps, type ProfilerOnRenderCallback } from "react"
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query"
 import { createRoot } from "react-dom/client"
 import { MemoryRouter } from "react-router"
@@ -8,6 +8,8 @@ import { AllQueuesCard } from "./components/AllQueuesCard.tsx"
 import { TooltipProvider } from "./components/Tooltip.tsx"
 import { threadKey, type QueuesProject } from "./lib/allQueues.ts"
 import { useViewportLock } from "./lib/viewportLock.ts"
+import { drawCardNow } from "./lib/cardVisibility.ts"
+import { registerQueueCursor, releaseAutoOpened, useShortcutListener } from "./lib/keyboardRuntime.ts"
 import { store } from "./store.ts"
 import "./styles.css"
 
@@ -42,7 +44,11 @@ import "./styles.css"
 //                              a page whose board IS the cards' project (so the `@` typeahead has threads to
 //                              offer). Each card sits in a <Profiler> counting its commits on
 //                              window.__renders, and window.__boardDelta() moves the board the way a live
-//                              delta does — queueCardVisibility.e2e.test.ts.
+//                              delta does — queueCardVisibility.e2e.test.ts. `&mid=1` gives the short cards
+//                              a ~300-character handoff instead, which rewraps (changes height) when the
+//                              column's width changes; `&handoffDelay=<ms>` answers every handoff that late.
+//                              window.__filter(pattern) shows only the cards whose id matches, as a project
+//                              filter does (the rest unmount), and __filter(null) shows them all again.
 //
 // The card's project is NOT the page's: `store.board` names another project, so a control that read the
 // page's client instead of the card's would call `/_frizz/rpc/…` (unprefixed) and show up in __rpc as
@@ -56,6 +62,8 @@ const FAIL = params.get("fail") === "1"
 const REPLY_DELAY = Number(params.get("replyDelay") ?? 0)
 const STALE_POLL = params.get("stalePoll") === "1"
 const STILL_QUEUED = params.get("stillQueued") === "1"
+const MID = params.get("mid") === "1"
+const HANDOFF_DELAY = Number(params.get("handoffDelay") ?? 0)
 
 const now = new Date().toISOString()
 function thread(id: string, title: string, extra: Partial<ThreadViewModel> = {}): ThreadViewModel {
@@ -110,6 +118,9 @@ const ASK = {
 // Long enough to clamp (AllQueuesCard ClampedBody, 188px).
 const LONG = Array.from({ length: 14 }, (_, i) => `Paragraph ${i + 1} of a long handoff: what changed, why, and what is left to check before this can be marked done.`).join("\n\n")
 
+// Under the clamp, and long enough to wrap onto more lines when the column narrows.
+const midHandoff = (id: string) => `A mid-length handoff for ${id}: ${"the change landed, the tests pass, and one follow-up is left for review before it can be marked done. ".repeat(3)}`
+
 interface Scenario { threads: ThreadViewModel[]; text: (id: string) => string }
 function scenario(): Scenario {
   switch (CASE) {
@@ -142,7 +153,7 @@ function scenario(): Scenario {
     case "many": {
       const count = Number(params.get("n") ?? 60)
       const threads = Array.from({ length: count }, (_, i) => thread(`card-${i}`, `Queue card ${i}`))
-      return { threads, text: (id) => (Number(id.slice(5)) % 3 === 0 ? LONG : `Short handoff for ${id}.`) }
+      return { threads, text: (id) => (Number(id.slice(5)) % 3 === 0 ? LONG : MID ? midHandoff(id) : `Short handoff for ${id}.`) }
     }
     default:
       return {
@@ -202,6 +213,7 @@ window.fetch = async (input, init) => {
   const raw = typeof init?.body === "string" ? init.body : url.searchParams.get("input")
   const body = raw ? (JSON.parse(raw) as { slug?: string }) : {}
   if (rpc === "threadHandoff") {
+    if (HANDOFF_DELAY) await new Promise((resolve) => setTimeout(resolve, HANDOFF_DELAY))
     const handoff: ThreadHandoff = { asked: "Rotate the signing key without downtime.", askedAt: now, text: textOf(body.slug ?? ""), at: now }
     return json(handoff)
   }
@@ -258,8 +270,13 @@ window.fetch = async (input, init) => {
   return json({})
 }
 
+let setFilter: (pattern: string | null) => void = () => {}
+;(window as unknown as { __filter: (pattern: string | null) => void }).__filter = (pattern) => setFilter(pattern)
+
 function Queue() {
   const [queued, setQueued] = useState(THREADS)
+  const [filter, setFilterState] = useState<RegExp | null>(null)
+  setFilter = (pattern) => setFilterState(pattern === null ? null : new RegExp(pattern))
   // When the newest "poll" STARTED (lib/projectsQueuesRead.ts). A drop is a fresh read.
   const [readAt, setReadAt] = useState(() => Date.now())
   dropThread = (id) => {
@@ -288,7 +305,7 @@ function Queue() {
   const leaving = useLeavingCards([project], readAt)
   return (
     <div className="flex flex-col gap-5">
-      {queued.filter((t) => !leaving.hidden(threadKey(project.id, t.id))).map((t) => {
+      {queued.filter((t) => !leaving.hidden(threadKey(project.id, t.id)) && (!filter || filter.test(t.id))).map((t) => {
         const key = threadKey(project.id, t.id)
         return (
           <CountedCard key={key} id={key} project={project} thread={t} leaving={leaving.isLeaving(key)} onLeave={leaving.leave(key)} onReturn={leaving.restore(key)} onSent={leaving.sent(key)} onLanded={leaving.landed(key)} />
@@ -299,10 +316,34 @@ function Queue() {
 }
 
 // `many` holds the page with the queue's own viewport lock (lib/viewportLock.ts), as AllQueues does, so the
-// cards building near the screen can be checked against it (queueCardVisibility.e2e.test.ts).
+// cards building near the screen can be checked against it (queueCardVisibility.e2e.test.ts) — and with the
+// keyboard runtime and a cursor that lands a card the way AllQueues' does (useScrollToCard: release the card
+// a key opened, draw the target, go there; instantly, where the page glides). The card being read is the one
+// last landed on, else the first. Each landing is recorded on window.__landings, with whether the card had a
+// "Show more" the moment it was landed on.
+const landings: { key: string; hadShowMore: boolean }[] = []
+;(window as unknown as { __landings: typeof landings }).__landings = landings
 function LockedQueue() {
   const [, repaint] = useState(0)
   useViewportLock("[data-xq-card]", (slot) => slot.dataset.xqCard, useCallback(() => repaint((n) => n + 1), []))
+  useShortcutListener()
+  useEffect(() => {
+    const slots = () => [...document.querySelectorAll<HTMLElement>('[data-xq-card][data-queue-leaving="false"]')]
+    const slotOf = (key: string) => slots().find((slot) => slot.dataset.xqCard === key)
+    return registerQueueCursor({
+      keys: () => slots().map((slot) => slot.dataset.xqCard!),
+      current: () => landings.at(-1)?.key ?? slots()[0]?.dataset.xqCard ?? null,
+      root: (key) => slotOf(key)?.querySelector<HTMLElement>("[data-xq-card-root]") ?? null,
+      go: (key) => {
+        releaseAutoOpened(key)
+        const slot = slotOf(key)
+        if (!slot) return
+        drawCardNow(slot)
+        scrollTo({ top: slot.getBoundingClientRect().top + scrollY - 40, behavior: "instant" })
+        landings.push({ key, hadShowMore: Boolean(slot.querySelector("[data-xq-show-more]")) })
+      },
+    })
+  }, [])
   return <Queue />
 }
 

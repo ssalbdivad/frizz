@@ -46,7 +46,19 @@
 // viewport lock correcting for cards growing above the reader. So after load the far cards are built and
 // drawn a card at a time — off screen, with their measurements — and kept for a couple of frames, long
 // enough for `contain-intrinsic-size: auto` to remember their real height. From then on every skipped card
-// is the height it really is, and nothing on the page can tell it is skipped.
+// is the height it really is, and nothing on the page can tell it is skipped — and it STAYS that height
+// through the three things that change a skipped card without a frame drawing it: content arriving in it
+// (`ensureMutations`), the column changing width (`ensureSizes`), and the card being unmounted and mounted
+// again (`drawnHeights`).
+//
+// AND EVERY CARD'S DATA IS FETCHED AHEAD OF ITS BUILD (`prefetch`). A card fetches its handoff when it is
+// built, and a handoff lands a round trip later and grows the card from the server's 200-character preview
+// to its clamped body — so every card built on the spot (a jump to the bottom, a key landing far down) grew
+// under the reader a moment after it was drawn: End left the last card pushed 1,234px off the bottom of the
+// 243-card mirror (review 2026-10-02), and a key landing on a card never auto-pressed its "Show more", which
+// did not exist yet. Fetching is cheap next to building — no render, no layout — so the handoffs are read a
+// few at a time from the first idle moment, as main read them all at mount, and a card built later builds
+// with its handoff in hand, at its real height in its first frame.
 import { flushSync } from "react-dom"
 
 /** The card slot (AllQueuesCard.tsx). */
@@ -62,6 +74,11 @@ const MARGIN = "100% 0px"
 const STEP_BUDGET_MS = 8
 /** How long a step may wait for an idle moment before running anyway, so a busy page still gets there. */
 const STEP_IDLE_TIMEOUT_MS = 1_000
+
+/** Handoffs fetched at once ahead of the build (`prefetch`): a few, so they never queue the page's own requests. */
+const PREFETCH_CONCURRENCY = 4
+/** How long input must have stopped before a step runs where `requestIdleCallback` is missing (`idle`). */
+const INPUT_QUIET_MS = 150
 
 const noop = () => {}
 const waiters = new Map<HTMLElement, Set<() => void>>()
@@ -81,6 +98,13 @@ const touched = new WeakMap<HTMLElement, number>()
 const letting = new Set<HTMLElement>()
 /** Every mounted slot, for the scroll-time pass (`drawOnScreen`). */
 const mounted = new Set<HTMLElement>()
+/** Each unbuilt slot's prefetch of its card's data; gone once it has run or the card is built. */
+const prefetchers = new Map<HTMLElement, () => Promise<unknown>>()
+let prefetching = 0
+/** Each slot's inline size when the browser last sized it, to see the column change width (`ensureSizes`). */
+const widths = new WeakMap<HTMLElement, number>()
+/** Each card's height the last time it was drawn, by its slot's `data-xq-card` key (`drawnHeight`). */
+const drawnHeights = new Map<string, number>()
 let observer: IntersectionObserver | null = null
 let stepScheduled = false
 
@@ -88,8 +112,12 @@ let stepScheduled = false
 // content that arrives while it is skipped — above all its handoff, which each card fetches after it is
 // built and which is often still loading when it is first drawn (a 315px preview remembered for a card
 // that clamps at ~600px) — is laid out by nobody. Structure only: a ticking "2m ago" changes text, not
-// height, and would re-draw every card every minute. A card near the screen is laid out live already, but
-// the time of its change is noted: a frame has to draw it before the card may be skipped (`letGo`).
+// height, and would re-draw every card every minute. Structure includes a `style` or `class` change, though:
+// a key's "Show more" closed again from afar (keyboardRuntime.ts releaseAutoOpened collapses the card a key
+// opened once the reader moves on, wherever that card now is) changes only the clamp's style and the
+// toggle's class and text, and the card would keep its open height for good. A card near the screen is laid
+// out live already, but the time of its change is noted: a frame has to draw it before the card may be
+// skipped (`letGo`).
 let mutations: MutationObserver | null = null
 function ensureMutations(): MutationObserver {
   mutations ??= new MutationObserver((records) => {
@@ -117,6 +145,8 @@ function build(slot: HTMLElement): void {
   const builder = builders.get(slot)
   if (!builder) return
   builders.delete(slot)
+  // The card fetches its own from here (deduplicated with a prefetch already in flight).
+  prefetchers.delete(slot)
   flushSync(builder)
 }
 
@@ -182,8 +212,20 @@ function letGo(slot: HTMLElement): void {
 // clamps the scroll, the cards before it — and can bring another stand-in on screen (the 60-card fixture:
 // one of three after a single pass). Each pass is one layout, which the frame pays anyway; bounded, so a
 // page that keeps changing under it cannot hold the frame.
+//
+// AND A JUMP TO THE END STAYS AT THE END. The cards it lands on were guessed at 540px and are built at their
+// real height, so the page's end moves; the viewport lock then holds the card at its reading line, a third
+// of the way down, and every px the cards below that line gained pushed the end off screen — End showed the
+// second-last card cut off, 1,234px short on the 243-card mirror (review 2026-10-02). So a page that was at
+// its end before this built anything is put back at its new end, here, before the lock re-takes its anchor
+// in its animation frame. Only then: a page merely scrolled to its end, building nothing, is left alone, and
+// cards built later — the observer's, a viewport out — sit above the reading line, where the lock's hold
+// keeps the end where it is.
 const DRAW_PASSES = 4
 function drawOnScreen(): void {
+  const scroller = document.scrollingElement ?? document.documentElement
+  let atEnd: boolean | undefined
+  let built = false
   for (let pass = 0; pass < DRAW_PASSES; pass++) {
     const viewport = window.innerHeight
     const due: HTMLElement[] = []
@@ -192,13 +234,91 @@ function drawOnScreen(): void {
       const rect = slot.getBoundingClientRect()
       if (rect.bottom > 0 && rect.top < viewport) due.push(slot)
     }
-    if (due.length === 0) return
+    if (due.length === 0) break
+    // Read with the layout the box reads above just made: no extra layout.
+    atEnd ??= window.scrollY >= scroller.scrollHeight - viewport - 1
     for (const slot of due) markNear(slot)
+    built = true
+  }
+  if (!built || !atEnd) return
+  const end = scroller.scrollHeight - window.innerHeight
+  if (window.scrollY < end - 1) window.scrollTo({ top: end, left: 0, behavior: "instant" })
+}
+
+// A WIDTH CHANGE re-wraps every card and mutates nothing, so `ensureMutations` cannot see it, and every
+// skipped card kept the height it had at the old width: measured 2026-10-02 (review), a 243-card mirror built
+// at 1440px and narrowed to 900px was laid out 112,777px tall against a real 221,348px, and End stopped
+// 1,006px short of the last card. The window, an editor's sidebar dragged, the column's own `max-w-[62vw]`
+// — whatever narrows it, every slot's own box narrows, and a ResizeObserver on the slots sees it on a
+// skipped card too (its box is laid out; only its contents are skipped). Each skipped card whose width moved
+// is re-drawn in idle time like any other changed card. The same reports remember each card's drawn height
+// (`drawnHeights`), and run no layout of their own: a ResizeObserver reads sizes the frame computed anyway.
+let sizes: ResizeObserver | null = null
+function ensureSizes(): ResizeObserver {
+  sizes ??= new ResizeObserver((entries) => {
+    let changed = false
+    for (const entry of entries) {
+      const slot = entry.target as HTMLElement
+      const box = entry.borderBoxSize[0]
+      if (!box || !slot.isConnected) continue
+      const was = widths.get(slot)
+      widths.set(slot, box.inlineSize)
+      // A stand-in: nothing in it wraps, and its height is the guess.
+      if (builders.has(slot)) continue
+      if (was !== undefined && Math.abs(box.inlineSize - was) > 0.5 && !slot.hasAttribute(NEAR)) {
+        if (!unprimed.has(slot)) {
+          unprimed.add(slot)
+          changed = true
+        }
+        continue
+      }
+      // Any other report is a height the browser laid out: a card near the screen, one the browser drew early
+      // within its own margin for `auto` content, or the drawn height a skipped card is sized from. Even for a
+      // card marked unprimed — the browser may have drawn its change already, and the step that re-draws it
+      // then changes nothing, so nothing would report it again (measured: 1 card in 60 left 170px short).
+      const key = slot.dataset.xqCard
+      if (key && box.blockSize > 0) drawnHeights.set(key, box.blockSize)
+    }
+    if (changed) scheduleStep()
+  })
+  return sizes
+}
+
+// A FEW AT A TIME, in page order, from the first idle moment on (`place`). Starting a fetch renders nothing:
+// the handoff lands in the query cache with no card subscribed to it yet.
+function prefetch(): void {
+  while (prefetching < PREFETCH_CONCURRENCY) {
+    const next = prefetchers.entries().next()
+    if (next.done) return
+    const [slot, fetch] = next.value
+    prefetchers.delete(slot)
+    prefetching++
+    void fetch().finally(() => {
+      prefetching--
+      prefetch()
+    })
   }
 }
 
+// CARDS MOVED ON SCREEN WITHOUT A SCROLL OR A MOUNT — a project filter hiding every card above them, a batch
+// dismissed — were painted as stand-ins for a frame: the observer reports after a paint. A slot unmounting
+// is what moves them, so the slots are re-checked in a microtask after the commit that unmounted it, before
+// paint, the same moment `place` builds a newly mounted one.
+let drawQueued = false
+function queueDrawOnScreen(): void {
+  if (drawQueued) return
+  drawQueued = true
+  queueMicrotask(() => {
+    drawQueued = false
+    if (mounted.size > 0) drawOnScreen()
+  })
+}
+
 function ensureObserver(): IntersectionObserver {
-  if (!observer) window.addEventListener("scroll", drawOnScreen, { passive: true })
+  if (!observer) {
+    window.addEventListener("scroll", drawOnScreen, { passive: true })
+    for (const type of ["keydown", "pointerdown", "wheel", "touchstart"] as const) window.addEventListener(type, noteInput, { capture: true, passive: true })
+  }
   observer ??= new IntersectionObserver((entries) => {
     for (const entry of entries) {
       const slot = entry.target as HTMLElement
@@ -206,7 +326,11 @@ function ensureObserver(): IntersectionObserver {
       if (entry.isIntersecting) markNear(slot)
       else letGo(slot)
     }
-  }, { rootMargin: MARGIN })
+    // `root: document`, not the implicit root: in a cross-origin iframe — an editor's sidebar hosts the page
+    // in one (packages/vscode/src/sidebar-html.ts) — the implicit root is the TOP page's viewport, and the
+    // browser ignores `rootMargin` there, so no card was ever built a viewport ahead (review 2026-10-02).
+    // The document as root is this frame's own viewport, margin and all; at top level the two are the same.
+  }, { root: document, rootMargin: MARGIN })
   return observer
 }
 
@@ -226,23 +350,27 @@ function place(): void {
   })
   for (const slot of near) markNear(slot)
   scheduleStep()
+  if (prefetchers.size > 0) idle(prefetch)
 }
 
 /**
  * The slot's ref (React 19 ref callback, so it returns its own cleanup): registers a card slot with the
  * observer and places it before its first paint. `build` is how the card is told to mount its content —
- * omitted for a slot whose content is always built.
+ * omitted for a slot whose content is always built — and `prefetchCard` fetches what the card will show
+ * (resolving when it has landed or failed), run ahead of the build.
  */
-export function observeCardSlot(slot: HTMLElement | null, buildCard?: () => void): (() => void) | undefined {
+export function observeCardSlot(slot: HTMLElement | null, buildCard?: () => void, prefetchCard?: () => Promise<unknown>): (() => void) | undefined {
   if (!slot) return undefined
   if (unplaced.size === 0) queueMicrotask(place)
   unplaced.add(slot)
   unprimed.add(slot)
   mounted.add(slot)
   if (buildCard) builders.set(slot, buildCard)
+  if (buildCard && prefetchCard) prefetchers.set(slot, prefetchCard)
   ensureObserver().observe(slot)
   // Disconnected with the slot: a node's registrations go with the node.
-  ensureMutations().observe(slot, { childList: true, subtree: true })
+  ensureMutations().observe(slot, { childList: true, subtree: true, attributes: true, attributeFilter: ["style", "class"] })
+  ensureSizes().observe(slot)
   return () => {
     observer?.unobserve(slot)
     mounted.delete(slot)
@@ -252,7 +380,19 @@ export function observeCardSlot(slot: HTMLElement | null, buildCard?: () => void
     letting.delete(slot)
     waiters.delete(slot)
     builders.delete(slot)
+    prefetchers.delete(slot)
+    sizes?.unobserve(slot)
+    queueDrawOnScreen()
   }
+}
+
+/**
+ * The height the card keyed `key` had the last time it was drawn, if it has been — for a slot mounting again
+ * (a project filter switched away and back), which would otherwise start from the 540px guess and leave
+ * every far jump and End landing wrong until the page had built it again.
+ */
+export function drawnHeight(key: string): number | undefined {
+  return drawnHeights.get(key)
 }
 
 /** Whether `el` sits in a card the browser is currently skipping (or about to: not yet placed). */
@@ -306,8 +446,43 @@ function releaseAfterDraw(slots: HTMLElement[]): void {
   }, 0)), 0))
 }
 
-const idle = (fn: () => void) =>
-  typeof requestIdleCallback === "function" ? requestIdleCallback(fn, { timeout: STEP_IDLE_TIMEOUT_MS }) : window.setTimeout(fn, 50)
+// WHERE `requestIdleCallback` IS MISSING (Safari) a step waits until input has stopped for INPUT_QUIET_MS,
+// up to the same deadline, rather than running on a bare timer: a card costs 10–30ms to build, and a step every
+// 50ms whatever the page was doing would land in the middle of typing and scrolling.
+let lastInput = -Infinity
+function noteInput(): void {
+  lastInput = performance.now()
+}
+function idle(fn: () => void): void {
+  if (typeof requestIdleCallback === "function") {
+    requestIdleCallback(fn, { timeout: STEP_IDLE_TIMEOUT_MS })
+    return
+  }
+  const deadline = performance.now() + STEP_IDLE_TIMEOUT_MS
+  const wait = () => {
+    const now = performance.now()
+    if (now < deadline && now - lastInput < INPUT_QUIET_MS) window.setTimeout(wait, INPUT_QUIET_MS)
+    else fn()
+  }
+  window.setTimeout(wait, 50)
+}
+
+// NOT WHILE THE TAB IS HIDDEN: a drawn card is let go in animation frames, and a hidden tab runs none, so each
+// step there left its cards near — unskipped — for good: 45 near cards became 73 over 40s in the background
+// (review 2026-10-02), each one more for the frame that brings the tab back to lay out. The steps resume as
+// it comes back.
+let waitingVisible = false
+function resumeWhenVisible(): void {
+  if (waitingVisible) return
+  waitingVisible = true
+  const onVisible = () => {
+    if (document.hidden) return
+    document.removeEventListener("visibilitychange", onVisible)
+    waitingVisible = false
+    scheduleStep()
+  }
+  document.addEventListener("visibilitychange", onVisible)
+}
 
 function scheduleStep(): void {
   if (stepScheduled || unprimed.size === 0) return
@@ -321,6 +496,7 @@ function scheduleStep(): void {
 // always unprimed too: a slot is both from the moment it mounts, and `markNear` builds what it draws.)
 function step(): void {
   stepScheduled = false
+  if (document.hidden) return resumeWhenVisible()
   const started = performance.now()
   const batch: HTMLElement[] = []
   for (const slot of [...unprimed]) {
