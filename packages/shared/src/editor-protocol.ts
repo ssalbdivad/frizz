@@ -3,7 +3,8 @@
 //
 // One WebSocket per editor WINDOW, opened BY the extension to the one machine-wide endpoint
 // `/_frizz/editor` (never per project: a window's folders can span several projects, and the server
-// is a singleton). Over it the extension says which folders it has open and whether it has focus;
+// is a singleton). Over it the extension says which folders it has open, whether it has focus, and —
+// for the agents to read — what its editor shows (`editor`, below);
 // the server sends it files to open and folders to raise, and the projects its folders belong to with
 // their queue counts. Everything else the extension does — dispatching a thread, a follow-up — goes
 // through the ordinary RPC surface, like any other client.
@@ -26,6 +27,39 @@ export const EDITOR_MAX_FOLDERS = 64
 export const EDITOR_MAX_PATH = 4096
 /** Characters of selected text in one `compose`. The frame itself is capped at 128 KiB of bytes. */
 export const EDITOR_COMPOSE_MAX_TEXT = 64 * 1024
+
+/**
+ * What a server can do beyond v1, named in its `welcome` (`features`). The protocol stays v1 and grows by
+ * these instead: the server closes a socket on ANY frame it does not know (4401), so an extension that
+ * sent a new frame to a Frizz from before it would be refused on every redial, forever. A new extension
+ * sends a new frame only to a server that named it; an old extension ignores the field.
+ */
+export const EDITOR_FEATURES = {
+  /** The server takes `editor` frames (EditorSnapshot) and answers the workers' `editorState` with them. */
+  editorState: "editor-state",
+} as const
+export type EditorFeature = (typeof EDITOR_FEATURES)[keyof typeof EDITOR_FEATURES]
+
+/**
+ * The `editor` frame's ceilings. The server refuses a frame past any of them, and the extension fits the
+ * frame to them (packages/vscode editor-state.ts) before sending — never by being refused.
+ */
+/** Other open files, most recent first. */
+export const EDITOR_STATE_MAX_OPEN = 50
+/** Errors and warnings, the file in front first and every error before any warning. */
+export const EDITOR_STATE_MAX_DIAGNOSTICS = 100
+/** Characters of one diagnostic's message; longer ones are clipped with an ellipsis. */
+export const EDITOR_STATE_MAX_MESSAGE = 300
+/** Characters of a diagnostic's source or code, and of a language id. */
+export const EDITOR_STATE_MAX_TAG = 100
+/** Characters of selected text carried. A longer selection carries its start, flagged `truncated`. */
+export const EDITOR_STATE_MAX_SELECTION_TEXT = 32 * 1024
+/**
+ * Encoded bytes a whole `editor` frame is fitted into. The server refuses any frame but a compose past
+ * 64 KiB (editor-bridge.ts EDITOR_MAX_FRAME_BYTES); 56 KiB leaves the JSON's own framing room and keeps a
+ * frame of NUL-padded text, which encodes at six bytes a character, from ever reaching that ceiling.
+ */
+export const EDITOR_STATE_MAX_BYTES = 56 * 1024
 
 /** Close codes the server uses beyond the standard ones, so the extension can say why it was dropped. */
 export const EDITOR_CLOSE = {
@@ -121,7 +155,80 @@ export interface EditorCompose {
   item: EditorComposeInput
 }
 
-export type EditorClientMessage = EditorHello | EditorState | EditorResult | EditorCompose
+// ── what the human has in front of them, for the agents (`editor`) ─────────────────────────────────
+//
+// The editor as a worker reads it through `mcp__frizz__editor` (cc-worker/bin/frizz-mcp.mjs → the
+// `editorState` RPC): the file in front with its selection and the selected text, the other open tabs,
+// and the editor's errors and warnings. Claude Code's IDE integration gives its agent the same picture
+// (getCurrentSelection, getOpenEditors, getDiagnostics); without it an agent asked about "the selected
+// code" had to say it could not see the editor. The extension sends it whole on every change (debounced)
+// and once on every connect, ONLY to a server whose welcome names EDITOR_FEATURES.editorState, and the
+// server keeps the latest per window and forgets it with the window.
+
+/** A selection in the file in front: the primary one, which is the one a chip would carry. */
+export interface EditorStateSelection {
+  /** 1-based, inclusive; a selection ending at column 1 of a line does not include that line (the chip's rule). */
+  startLine: number
+  endLine: number
+  /** The selected text. Absent only when the frame could not carry any of it. */
+  text?: string
+  /** `text` is only the start of the selection (or absent): it was too large to carry whole. */
+  truncated?: true
+}
+
+/** The text editor in front. */
+export interface EditorActiveFile {
+  /** Absolute path as the extension host sees it; for an untitled buffer, its label (`Untitled-1`). */
+  path: string
+  /** An unsaved buffer that is not a file on disk. */
+  untitled?: true
+  /** VS Code's language id: `typescript`, `python`, `plaintext`… */
+  languageId: string
+  /** Edited and not saved: what is on disk is not what the human sees. */
+  dirty: boolean
+  lineCount: number
+  /** 1-based line of the caret (the primary selection's moving end). */
+  cursorLine: number
+  /** Absent: nothing selected, only a caret. */
+  selection?: EditorStateSelection
+  /** The lines on screen, 1-based and inclusive. */
+  visible: { startLine: number; endLine: number }
+}
+
+/** Another file open in a tab. */
+export interface EditorOpenFile {
+  path: string
+  untitled?: true
+  dirty?: true
+}
+
+export interface EditorDiagnostic {
+  path: string
+  /** 1-based. */
+  line: number
+  severity: "error" | "warning"
+  message: string
+  /** What reported it (`ts`, `eslint`) and its code (`2304`), as the Problems panel shows them. */
+  source?: string
+  code?: string
+}
+
+/**
+ * The `editor` frame: everything a worker may read about this window's editor, whole. `shared: false` is
+ * the human's `frizz.shareEditorState` turned off — sent once, with everything else empty, so the server
+ * forgets what it had and can tell a worker WHY it has nothing.
+ */
+export interface EditorSnapshot {
+  t: "editor"
+  shared: boolean
+  active: EditorActiveFile | null
+  open: EditorOpenFile[]
+  diagnostics: EditorDiagnostic[]
+  /** Every error and warning the editor has, before `diagnostics` was capped and fitted. */
+  problems: { errors: number; warnings: number }
+}
+
+export type EditorClientMessage = EditorHello | EditorState | EditorResult | EditorCompose | EditorSnapshot
 
 // ── server → extension ─────────────────────────────────────────────────────────────────────────────
 
@@ -129,6 +236,8 @@ export interface EditorWelcome {
   t: "welcome"
   v: typeof EDITOR_PROTOCOL_VERSION
   bootId: string
+  /** What this server takes beyond v1 (EDITOR_FEATURES). Absent from a server older than the field: nothing. */
+  features?: string[]
 }
 
 /** Open a file and reveal the position; raise the window. Answer with `result`. */
@@ -183,4 +292,30 @@ export interface EditorWindowSummary {
   kind: EditorKind
   /** False when the window turned file opens off. */
   acceptsOpens: boolean
+}
+
+/** One editor window as a worker reads it (`editorState`). */
+export interface EditorStateWindow {
+  app: string
+  kind: EditorKind
+  /** Whether this window has OS focus right now. */
+  focused: boolean
+  /** How long ago it last had focus, when it does not now; absent when it never has. */
+  focusedAgoMs?: number
+  folders: string[]
+  /**
+   * What its editor showed at its last report, and how long ago that was. The extension reports every
+   * change, so an old report is a quiet editor, not a stale one. Absent: this window has reported nothing
+   * — an extension from before the report, or one that has not sent it yet.
+   */
+  editor?: Omit<EditorSnapshot, "t"> & { reportedAgoMs: number }
+}
+
+/** The `editorState` RPC: the editor windows that have this project open, the one the human was in last first. */
+export interface EditorStateResult {
+  windows: EditorStateWindow[]
+  /** Every editor window connected to Frizz, these included. */
+  connected: number
+  /** The connected windows that do NOT have this project open: their app and folders, so a worker can say what is open instead. */
+  elsewhere: { app: string; folders: string[] }[]
 }

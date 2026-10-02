@@ -157,6 +157,22 @@ test("editorWindows and composeTake answer from the bridge, and from nothing wit
   assert.deepEqual(await bare.composeTake.handler({ input: {} }), { item: null })
 })
 
+test("editorState asks the bridge about the folder the project's agents work in, and answers nothing without one", async () => {
+  const asked: string[] = []
+  const answer = { windows: [], connected: 2, elsewhere: [{ app: "Cursor", folders: ["/x"] }] }
+  const editors: Partial<EditorBridge> = { editorState: (dir) => (asked.push(dir), answer) }
+  assert.deepEqual(await router("/work/alpha", "vscode", editors).editorState.handler({ input: {} }), answer)
+  // Home keeps its board in a state directory and runs its agents in the home folder (project.ts
+  // workDirOf): the editor that matters is the one on the folder the agents are in.
+  const home = createRouter({
+    project: { dir: "/state/home", workDir: "/home/me", stateDir: "/state/home", id: "h", name: "Home", label: "Home", cwdSlug: "h" },
+    storage: {}, board: {}, tailer: {}, getSettings: () => ({}), editors,
+  } as unknown as AppContext)
+  await home.editorState.handler({ input: {} })
+  assert.deepEqual(asked, ["/work/alpha", "/home/me"])
+  assert.deepEqual(await router("/work/alpha", "vscode").editorState.handler({ input: {} }), { windows: [], connected: 0, elsewhere: [] })
+})
+
 test("openLocalFile takes a position only as positive whole numbers, and still nothing else", () => {
   const input = router(tmpdir(), "vscode").openLocalFile.input
   assert.equal(input.safeParse({ path: "/a", line: 1, column: 2, endLine: 3 }).success, true)

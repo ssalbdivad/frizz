@@ -11,7 +11,9 @@ import { WebSocket, type ClientOptions } from "ws"
 import {
   EDITOR_CLOSE,
   EDITOR_SOCKET_PATH,
+  EDITOR_STATE_MAX_DIAGNOSTICS,
   type EditorHello,
+  type EditorSnapshot,
   type EditorProject,
   type EditorServerMessage,
   type ServerEvent,
@@ -252,7 +254,8 @@ test("a hello is answered with welcome then projects, and a projects change is r
   s.ws.send(JSON.stringify({ t: "hello", v: 1, windowId: "raw", app: "Cursor", extensionVersion: "1", folders: [], focused: false, acceptsOpens: true, home: HOME, platform: "linux" }))
   await until(() => got.length >= 2, "welcome and projects")
   assert.deepEqual(got.slice(0, 2), [
-    { t: "welcome", v: 1, bootId: "boot-1" },
+    // `features`: what this server takes beyond v1, so a new extension sends the `editor` frame only here.
+    { t: "welcome", v: 1, bootId: "boot-1", features: ["editor-state"] },
     { t: "projects", projects: [{ id: "p1", slug: "alpha", name: "Alpha", dir: "/work/alpha", ready: 1, working: 0 }] },
   ])
   // Unchanged: nothing more across several polls.
@@ -439,6 +442,88 @@ test("compose: held, acknowledged, announced, claimed once, oldest first, expire
   assert.equal(refused.ok, false)
   assert.match(refused.error ?? "", /already waiting/)
   assert.equal(h.published.length, before, "a refused item is not announced")
+})
+
+/** An `editor` frame: the file in front with a selection, one tab, one error. */
+function snapshot(active: string, over: Partial<EditorSnapshot> = {}): EditorSnapshot {
+  return {
+    t: "editor",
+    shared: true,
+    active: { path: active, languageId: "typescript", dirty: false, lineCount: 9, cursorLine: 3, selection: { startLine: 2, endLine: 3, text: "let x = 1\nx++" }, visible: { startLine: 1, endLine: 9 } },
+    open: [{ path: "/elsewhere/b.ts", dirty: true }],
+    diagnostics: [{ path: active, line: 2, severity: "error", message: "Cannot find name 'y'.", source: "ts", code: "2304" }],
+    problems: { errors: 1, warnings: 0 },
+    ...over,
+  }
+}
+
+test("editor state: kept per window, answered for the windows that have the project open, the one used last first, forgotten with the window", async (t) => {
+  const h = await harness(t)
+  const dirs = tree(t)
+  // The project is `mono`. A window on the monorepo itself, used a minute ago:
+  const onMono = await editor(h.port, { folders: [dirs.mono], focused: false, focusedAgoMs: 60_000 })
+  // one on a package INSIDE it (a thread's worktree opened with "Open in editor" is the same shape), in front now:
+  const onPkg = await editor(h.port, { folders: [dirs.pkg], focused: true })
+  // one with no folder, showing a file of the project (`code a.ts`):
+  const loose = await editor(h.port, { folders: [], focused: false })
+  // and one on another project entirely.
+  const other = await editor(h.port, { app: "Cursor", folders: [dirs.other], focused: false })
+  onMono.send(snapshot(dirs.inMono))
+  onPkg.send(snapshot(dirs.inPkg, { open: [] }))
+  loose.send(snapshot(dirs.inPkg, { diagnostics: [], problems: { errors: 0, warnings: 0 } }))
+  other.send(snapshot(dirs.outside))
+  await until(() => h.bridge.editorState(dirs.mono).windows.filter((w) => w.editor).length === 3, "three windows' state")
+
+  h.advance(4_000)
+  const state = h.bridge.editorState(dirs.mono)
+  assert.equal(state.connected, 4)
+  assert.deepEqual(state.elsewhere, [{ app: "Cursor", folders: [dirs.other] }], "a window on another project is named, not read")
+  assert.deepEqual(state.windows.map((w) => [w.folders, w.focused, w.focusedAgoMs]), [
+    [[dirs.pkg], true, undefined],
+    [[dirs.mono], false, 60_000 + 4_000],
+    [[], false, undefined],
+  ], "the window in front, then the one used a minute ago, then the one never focused")
+  const { t: _t, ...expected } = snapshot(dirs.inPkg, { open: [] })
+  assert.deepEqual(state.windows[0]!.editor, { ...expected, reportedAgoMs: 4_000 }, "kept whole, with how long ago it came")
+
+  // A new frame replaces the old one whole; turning sharing off leaves nothing but that it is off.
+  onPkg.send({ t: "editor", shared: false, active: null, open: [], diagnostics: [], problems: { errors: 0, warnings: 0 } })
+  await until(() => h.bridge.editorState(dirs.mono).windows[0]!.editor?.shared === false, "sharing off")
+  assert.deepEqual(h.bridge.editorState(dirs.mono).windows[0]!.editor, { shared: false, active: null, open: [], diagnostics: [], problems: { errors: 0, warnings: 0 }, reportedAgoMs: 0 })
+
+  // A window that has said nothing yet (an extension from before the frame) is listed without an editor.
+  const silent = await editor(h.port, { folders: [dirs.mono] })
+  assert.equal(h.bridge.editorState(dirs.mono).windows.filter((w) => !w.editor).length, 1)
+
+  // Gone with the window. The loose window was matched only by its file in front: once it has none, it
+  // does not have the project open.
+  onPkg.ws.close()
+  loose.send(snapshot(dirs.outside))
+  silent.ws.close()
+  await until(() => h.bridge.editorState(dirs.mono).windows.length === 1, "the closed windows gone, the loose one elsewhere")
+  assert.deepEqual(h.bridge.editorState(dirs.mono).windows.map((w) => w.folders), [[dirs.mono]])
+  assert.equal(h.bridge.editorState(dirs.mono).connected, 3)
+  // A folder that does not exist has no window.
+  assert.deepEqual(h.bridge.editorState(join(dirs.root, "gone")).windows, [])
+})
+
+test("an editor frame Frizz cannot take closes the socket like any other bad frame", async (t) => {
+  const h = await harness(t)
+  const send = async (frame: unknown) => {
+    const win = await editor(h.port)
+    win.send(frame)
+    return (await win.closed).code
+  }
+  const good = snapshot("/work/alpha/a.ts")
+  assert.equal(await send({ ...good, extra: 1 }), EDITOR_CLOSE.invalidMessage, "an unknown key")
+  const many = Array.from({ length: EDITOR_STATE_MAX_DIAGNOSTICS + 1 }, () => good.diagnostics[0]!)
+  assert.equal(await send({ ...good, diagnostics: many }), EDITOR_CLOSE.invalidMessage, "past the diagnostics cap")
+  assert.equal(await send({ ...good, active: { ...good.active!, selection: { startLine: 1, endLine: 2, text: "x".repeat(70 * 1024) } } }), EDITOR_CLOSE.invalidMessage, "past the frame ceiling")
+  // And a good one does not: the window is still connected after it.
+  const win = await editor(h.port, { folders: ["/work/alpha"] })
+  win.send(good)
+  await new Promise((resolve) => setTimeout(resolve, 50))
+  assert.equal(win.ws.readyState, WebSocket.OPEN)
 })
 
 test("`editors` is published when a window comes, goes or changes what the page shows — never for focus", async (t) => {

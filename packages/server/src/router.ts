@@ -229,7 +229,7 @@ import { expandHomeFolder, homeFolderProblem } from "./home-folder.ts"
 import { basename, dirname, isAbsolute, relative } from "node:path"
 import { existsSync, mkdirSync, rmSync, writeFileSync } from "node:fs"
 import { questionRepliedPast, ProjectCard, ProjectQueue, PROJECT_ICON_EXTENSIONS, PROJECT_ICON_MAX_BASE64_CHARS, queuedThread, ThreadHandoff, BURIED_ANSWERS_HEADER, workingThread } from "@frizz/shared"
-import { EditorComposeInputSchema, type EditorKind, type FilePosition } from "@frizz/shared"
+import { EditorComposeInputSchema, EditorSnapshotSchema, type EditorKind, type FilePosition } from "@frizz/shared"
 import { imageDimensions } from "./image-header.ts"
 import { homedir } from "node:os"
 import { chosenProjectRoot, ensureProjectIdFile, existingProjectId, isHomeDirectory, writeProjectIdFile } from "./project-root.ts"
@@ -786,6 +786,18 @@ function requestedPosition(input: { line?: number; column?: number; endLine?: nu
 // these values itself — and rpc-contract.ts pins each to the type contract.ts declares.
 const EditorWindowSummaryOutput = z.object({ app: z.string(), kind: z.enum(["vscode", "cursor", "windsurf", "other"]), acceptsOpens: z.boolean() })
 const EditorComposeItemOutput = EditorComposeInputSchema.extend({ id: z.string(), app: z.string(), at: z.string() })
+const EditorStateOutput = z.object({
+  windows: z.array(z.object({
+    app: z.string(),
+    kind: z.enum(["vscode", "cursor", "windsurf", "other"]),
+    focused: z.boolean(),
+    focusedAgoMs: z.number().optional(),
+    folders: z.array(z.string()),
+    editor: EditorSnapshotSchema.omit({ t: true }).extend({ reportedAgoMs: z.number() }).optional(),
+  })),
+  connected: z.number(),
+  elsewhere: z.array(z.object({ app: z.string(), folders: z.array(z.string()) })),
+})
 
 /**
  * A registry entry as the project list and the rail see it.
@@ -4456,6 +4468,18 @@ export function createRouter(ctx: AppContext) {
     editorWindows: query({
       output: z.object({ windows: z.array(EditorWindowSummaryOutput) }),
       handler: async () => ({ windows: ctx.editors?.windows() ?? [] }),
+    }),
+
+    // WHAT THE HUMAN HAS IN FRONT OF THEM, for a worker (`mcp__frizz__editor`, cc-worker/bin/frizz-mcp.mjs):
+    // the editor windows that have THIS project's folder open — the file in front, the selection and its
+    // text, the open tabs, the errors and warnings — the one the human was in last first, and how many
+    // windows are connected at all, so "no editor has this project open" can be told from "no editor".
+    // Project-scoped by the URL prefix like every worker call. A mutation only because the worker's MCP
+    // server POSTs every procedure it calls; it changes nothing.
+    editorState: mutation({
+      input: z.object({}),
+      output: EditorStateOutput,
+      handler: async () => ctx.editors?.editorState(workDir) ?? { windows: [], connected: 0, elsewhere: [] },
     }),
 
     // Claim what an editor sent to the prompt box (`compose-pending` announced it on every open

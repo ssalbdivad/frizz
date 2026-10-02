@@ -18,6 +18,7 @@ import type {
   StartLazyThreadInput,
   UpdateLazyPromptInput,
   EditorComposeItem,
+  EditorStateResult,
   EditorWindowSummary,
   BackgroundShellOutputInput,
   BackgroundShellOutputResult,
@@ -346,6 +347,9 @@ export interface Api {
   editorWindows(): Promise<{ windows: EditorWindowSummary[] }>
   // Claim what an editor sent to the prompt box (machine-wide, first caller wins). No id: the oldest.
   composeTake(input: { id?: string }): Promise<{ item: EditorComposeItem | null }>
+  // What the editor windows that have this project open show: file in front, selection, tabs, problems.
+  // The workers' `mcp__frizz__editor` reads it; the page does not.
+  editorState(input: Record<never, never>): Promise<EditorStateResult>
   markComplete(input: { slug: string }): Promise<void>
   setThreadStatus(input: { slug: string; status: "active" | "planning" | "planned" | "needs-human" | "blocked" | "done" | "dismissed" }): Promise<void>
   dismissThread(input: { slug: string }): Promise<void>
@@ -539,6 +543,7 @@ export const PROCEDURES = {
   resolveLocalPaths: "query",
   editorWindows: "query",
   composeTake: "mutation",
+  editorState: "mutation",
   markComplete: "mutation",
   setThreadStatus: "mutation",
   dismissThread: "mutation",

@@ -7,6 +7,7 @@ import { basename, sep } from "node:path"
 import { WebSocketServer, type RawData, type WebSocket } from "ws"
 import {
   EDITOR_CLOSE,
+  EDITOR_FEATURES,
   EDITOR_PROTOCOL_VERSION,
   EDITOR_SOCKET_PATH,
   EditorClientMessageSchema,
@@ -18,6 +19,9 @@ import {
   type EditorKind,
   type EditorProject,
   type EditorServerMessage,
+  type EditorSnapshot,
+  type EditorStateResult,
+  type EditorStateWindow,
   type EditorWindowSummary,
   type FilePosition,
   type ServerEvent,
@@ -36,9 +40,9 @@ import { isTrustedLocalWebSocketRequest, rejectWebSocketUpgrade } from "./local-
 // window's folders can span several projects, and a file link clicked in any project's page has to be
 // able to land in any window.
 //
-// What it holds is small and all in memory: the connected windows (their folders, focus and app), the
-// requests waiting on a window's answer, and the selections an editor sent to the prompt box until a
-// page claims one. Nothing survives a restart, and nothing needs to — the extension reconnects and says
+// What it holds is small and all in memory: the connected windows (their folders, focus and app, and
+// what their editor last showed, for the agents), the requests waiting on a window's answer, and the
+// selections an editor sent to the prompt box until a page claims one. Nothing survives a restart, and nothing needs to — the extension reconnects and says
 // it all again in its hello.
 
 export const EDITOR_MAX_WINDOWS = 32
@@ -50,8 +54,10 @@ export const EDITOR_MAX_WINDOWS = 32
  */
 export const EDITOR_MAX_PAYLOAD_BYTES = 128 * 1024
 /**
- * Every other frame is a hello, a state or a result. A real one is a few KiB; only dozens of folders
- * with kilobyte-long paths come near this. It is a limit of its own, not implied by the per-field ones
+ * Every other frame is a hello, a state, a result or an editor snapshot. A real hello is a few KiB; only
+ * dozens of folders with kilobyte-long paths come near this. A snapshot can be larger — a selection's
+ * text, a hundred diagnostics — and the extension fits it under EDITOR_STATE_MAX_BYTES (editor-protocol.ts),
+ * which is below this, before sending. It is a limit of its own, not implied by the per-field ones
  * in editor-protocol.ts (EDITOR_MAX_FOLDERS x EDITOR_MAX_PATH alone allows 256 KiB): a frame past it is
  * refused 4401, and one past EDITOR_MAX_PAYLOAD_BYTES is closed 1009 by `ws` first.
  */
@@ -104,6 +110,14 @@ export interface EditorBridge {
   focusFolder(dir: string, kinds: readonly EditorKind[]): Promise<boolean>
   /** Claim a held compose item: that one, or with no id the oldest. Null when there is none (or it expired). */
   takeCompose(id?: string): EditorComposeItem | null
+  /**
+   * What the editor windows that have `dir` open show — their file in front, selection, tabs and
+   * problems — the one the human was in last first; and how many windows are connected at all. A window
+   * "has" the project when a workspace folder of it holds the project folder or sits inside it (a
+   * package of a monorepo, a thread's worktree opened with "Open in editor"), or when its file in front
+   * is under the project folder.
+   */
+  editorState(dir: string): EditorStateResult
 }
 
 interface EditorWindow {
@@ -117,6 +131,8 @@ interface EditorWindow {
   acceptsOpens: boolean
   home: string
   platform: string
+  /** Its latest `editor` frame and when it arrived; absent until the extension sends one. */
+  editor?: { snapshot: Omit<EditorSnapshot, "t">; at: number }
 }
 
 /** How a request to a window ended: its answer, or "gone" for a timeout or a dropped socket. */
@@ -341,7 +357,7 @@ export function createEditorBridge(deps: EditorBridgeDeps): EditorBridge {
       home: msg.home,
       platform: msg.platform,
     }
-    send(conn, { t: "welcome", v: EDITOR_PROTOCOL_VERSION, bootId: deps.bootId() })
+    send(conn, { t: "welcome", v: EDITOR_PROTOCOL_VERSION, bootId: deps.bootId(), features: [EDITOR_FEATURES.editorState] })
     publishEditorsIfChanged()
     void pollProjects()
   }
@@ -386,6 +402,13 @@ export function createEditorBridge(deps: EditorBridgeDeps): EditorBridge {
     }
     if (msg.t === "result") {
       conn.pending.get(msg.id)?.(msg.ok ? { ok: true } : { ok: false, error: msg.error })
+      return
+    }
+    if (msg.t === "editor") {
+      // Kept whole, replacing the last: the extension sends the entire picture on every change, so there
+      // is nothing to merge, and a window that turned sharing off sends `shared: false` with nothing else.
+      const { t: _t, ...snapshot } = msg
+      window.editor = { snapshot, at: now() }
       return
     }
     // compose: held for whichever page claims it (composeTake), announced to every open project's pages.
@@ -440,6 +463,18 @@ export function createEditorBridge(deps: EditorBridgeDeps): EditorBridge {
 
   function eligible(kinds: readonly EditorKind[]): Connection[] {
     return [...connections].filter((c) => c.window && c.window.acceptsOpens && kinds.includes(c.window.kind))
+  }
+
+  /** Whether `window` has the project at `dir` (realpath `realDir`) open; see EditorBridge.editorState. */
+  function holdsProject(window: EditorWindow, dir: string, realDir: string): boolean {
+    for (const folder of window.folders) {
+      const realFolder = realpathOrUndefined(folder)
+      if (realFolder && (isUnder(realDir, folder) || isUnder(realFolder, dir))) return true
+    }
+    const active = window.editor?.snapshot.active
+    if (!active || active.untitled) return false
+    const realActive = realpathOrUndefined(active.path)
+    return realActive !== undefined && isUnder(realActive, dir)
   }
 
   function mostRecent(candidates: readonly Connection[]): Connection | undefined {
@@ -568,6 +603,34 @@ export function createEditorBridge(deps: EditorBridgeDeps): EditorBridge {
       const conn = mostRecent(matches.map((m) => m.conn))
       if (!conn) return false
       return request(conn, { t: "focus", path: matches.find((m) => m.conn === conn)!.folder }).catch(() => false)
+    },
+
+    editorState(dir) {
+      const realDir = closing ? undefined : realpathOrUndefined(dir)
+      const at = now()
+      const matched: Connection[] = []
+      const elsewhere: EditorStateResult["elsewhere"] = []
+      let connected = 0
+      for (const conn of connections) {
+        const window = conn.window
+        if (!window) continue
+        connected++
+        if (realDir && holdsProject(window, dir, realDir)) matched.push(conn)
+        else elsewhere.push({ app: window.app, folders: window.folders })
+      }
+      matched.sort((a, b) => (moreRecentlyFocused(a, b) ? -1 : moreRecentlyFocused(b, a) ? 1 : 0))
+      const windows = matched.map(({ window }): EditorStateWindow => {
+        const { app, kind, focused, lastFocusedAt, folders, editor } = window!
+        return {
+          app,
+          kind,
+          focused,
+          ...(!focused && lastFocusedAt > 0 ? { focusedAgoMs: Math.max(0, at - lastFocusedAt) } : {}),
+          folders,
+          ...(editor ? { editor: { ...editor.snapshot, reportedAgoMs: Math.max(0, at - editor.at) } } : {}),
+        }
+      })
+      return { windows, connected, elsewhere }
     },
 
     takeCompose(id) {

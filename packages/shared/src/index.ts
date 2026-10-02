@@ -2,7 +2,7 @@ import { parse as parseYaml } from "yaml"
 import { z } from "zod"
 import { InteractionLifecycle, InteractionOpaqueId, InteractionRevision, InteractionThreadSlug } from "./interactions.ts"
 import { ThreadSlug } from "./thread-slug.ts"
-import { EDITOR_COMPOSE_MAX_TEXT, EDITOR_MAX_FOLDERS, EDITOR_MAX_PATH, EDITOR_PROTOCOL_VERSION, type EditorClientMessage, type EditorComposeInput, type EditorWindowSummary } from "./editor-protocol.ts"
+import { EDITOR_COMPOSE_MAX_TEXT, EDITOR_MAX_FOLDERS, EDITOR_MAX_PATH, EDITOR_PROTOCOL_VERSION, EDITOR_STATE_MAX_DIAGNOSTICS, EDITOR_STATE_MAX_MESSAGE, EDITOR_STATE_MAX_OPEN, EDITOR_STATE_MAX_SELECTION_TEXT, EDITOR_STATE_MAX_TAG, type EditorClientMessage, type EditorComposeInput, type EditorSnapshot, type EditorWindowSummary } from "./editor-protocol.ts"
 
 // ---- Attachment intake (drag/drop, paste, file picker) ----
 // What a worker can actually GET AT. A format qualifies two ways: an agent's Read/file tool consumes
@@ -5709,6 +5709,38 @@ export const EditorComposeInputSchema = z.object({
   startLine: EditorLine.optional(),
   endLine: EditorLine.optional(),
 }).strict()
+// The `editor` frame — what a window's editor shows, for the agents (`mcp__frizz__editor`). Every
+// count and length is capped, so one frame is bounded however large the workspace; the extension fits
+// itself under these and under EDITOR_STATE_MAX_BYTES before it sends (packages/vscode editor-state.ts).
+const EditorStateLines = z.object({ startLine: EditorLine, endLine: EditorLine }).strict()
+const EditorStateTag = z.string().max(EDITOR_STATE_MAX_TAG)
+export const EditorSnapshotSchema = z.object({
+  t: z.literal("editor"),
+  shared: z.boolean(),
+  active: z.object({
+    path: EditorPath,
+    untitled: z.literal(true).optional(),
+    languageId: EditorStateTag,
+    dirty: z.boolean(),
+    lineCount: z.number().int().min(0).max(10_000_000),
+    cursorLine: EditorLine,
+    selection: EditorStateLines.extend({
+      text: z.string().max(EDITOR_STATE_MAX_SELECTION_TEXT).optional(),
+      truncated: z.literal(true).optional(),
+    }).strict().optional(),
+    visible: EditorStateLines,
+  }).strict().nullable(),
+  open: z.array(z.object({ path: EditorPath, untitled: z.literal(true).optional(), dirty: z.literal(true).optional() }).strict()).max(EDITOR_STATE_MAX_OPEN),
+  diagnostics: z.array(z.object({
+    path: EditorPath,
+    line: EditorLine,
+    severity: z.enum(["error", "warning"]),
+    message: z.string().max(EDITOR_STATE_MAX_MESSAGE),
+    source: EditorStateTag.optional(),
+    code: EditorStateTag.optional(),
+  }).strict()).max(EDITOR_STATE_MAX_DIAGNOSTICS),
+  problems: z.object({ errors: z.number().int().min(0), warnings: z.number().int().min(0) }).strict(),
+}).strict()
 export const EditorClientMessageSchema = z.discriminatedUnion("t", [
   z.object({
     t: z.literal("hello"),
@@ -5731,13 +5763,15 @@ export const EditorClientMessageSchema = z.discriminatedUnion("t", [
   }).strict(),
   z.object({ t: z.literal("result"), id: z.string().min(1).max(200), ok: z.boolean(), error: z.string().max(1000).optional() }).strict(),
   z.object({ t: z.literal("compose"), id: z.string().min(1).max(200), item: EditorComposeInputSchema }).strict(),
+  EditorSnapshotSchema,
 ])
 // Both directions, so neither the plain types nor the schemas can drift without a type error here.
 type Same<A, B> = [A] extends [B] ? ([B] extends [A] ? true : false) : false
 const editorClientWireMatches: Same<z.infer<typeof EditorClientMessageSchema>, EditorClientMessage> = true
 const editorWindowWireMatches: Same<z.infer<typeof EditorWindowSummarySchema>, EditorWindowSummary> = true
 const editorComposeWireMatches: Same<z.infer<typeof EditorComposeInputSchema>, EditorComposeInput> = true
-void editorClientWireMatches, editorWindowWireMatches, editorComposeWireMatches
+const editorSnapshotWireMatches: Same<z.infer<typeof EditorSnapshotSchema>, EditorSnapshot> = true
+void editorClientWireMatches, editorWindowWireMatches, editorComposeWireMatches, editorSnapshotWireMatches
 
 export const ServerEvent = z.discriminatedUnion("type", [
   z.object({
