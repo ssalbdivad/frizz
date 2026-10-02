@@ -109,6 +109,22 @@ export class Workbench {
     }
   }
 
+  /** Click the centre of the first element `selector` matches, with a real (trusted) mouse; false when nothing matches. */
+  async click(selector: string): Promise<boolean> {
+    const box = await this.evaluate<{ x: number; y: number } | null>(`(() => {
+      const element = document.querySelector(${JSON.stringify(selector)})
+      if (!element) return null
+      const r = element.getBoundingClientRect()
+      return { x: r.x + r.width / 2, y: r.y + r.height / 2 }
+    })()`)
+    if (!box) return false
+    await this.send("Emulation.setFocusEmulationEnabled", { enabled: true })
+    for (const type of ["mouseMoved", "mousePressed", "mouseReleased"]) {
+      await this.send("Input.dispatchMouseEvent", { type, x: box.x, y: box.y, button: type === "mouseMoved" ? "none" : "left", clickCount: type === "mouseMoved" ? 0 : 1 })
+    }
+    return true
+  }
+
   /** A PNG of `clip` (CSS pixels) rendered at `scale` device pixels per CSS pixel. */
   async shot(clip: { x: number; y: number; width: number; height: number }, scale = 1): Promise<Buffer> {
     const { data } = await this.send<{ data: string }>("Page.captureScreenshot", { format: "png", clip: { ...clip, scale }, captureBeyondViewport: false })
