@@ -328,7 +328,29 @@ async function clickHandle(handle: ElementHandle | null, what: string): Promise<
   }, x, y).catch(() => null)
   clicks.push({ at: Date.now(), what, x: Math.round(x), y: Math.round(y), ...under })
   if (clicks.length > 12) clicks.shift()
+  // A press meant for the page that the WORKBENCH receives, aimed at the webview's iframe element itself, is
+  // the browser's input routing gone stale (see capture()), not anything the page did — said as that, here,
+  // rather than as a check's "nothing happened" three steps later.
+  const overWebview = under?.hit?.startsWith("iframe.webview") === true
+  if (overWebview) await page.evaluate(() => {
+    const w = window as unknown as { __misrouted?: string | null; __misroutedWatch?: (event: Event) => void }
+    w.__misrouted = null
+    w.__misroutedWatch = (event) => {
+      if ((event.target as Element | null)?.matches?.("iframe.webview")) w.__misrouted = `${(event as MouseEvent).clientX},${(event as MouseEvent).clientY}`
+    }
+    document.addEventListener("pointerdown", w.__misroutedWatch, true)
+  }).catch(() => undefined)
   await page.mouse.click(x, y)
+  if (!overWebview) return
+  const misrouted = await page.evaluate(() => {
+    const w = window as unknown as { __misrouted?: string | null; __misroutedWatch?: (event: Event) => void }
+    if (w.__misroutedWatch) document.removeEventListener("pointerdown", w.__misroutedWatch, true)
+    return w.__misrouted ?? null
+  }).catch(() => null)
+  if (misrouted) {
+    ;((notes.misroutedPresses ??= []) as unknown[]).push({ what, at: misrouted })
+    throw new Error(`${what}: the press went to the workbench's webview element, not into the page — the browser's routing to the webview's frames is stale (a DevTools capture's emulation; see capture())`)
+  }
 }
 const clicks: Record<string, unknown>[] = []
 
@@ -556,6 +578,15 @@ function traceInstaller() {
     if (name && name !== "frizz:editor-context") trace.push({ at: Date.now(), kind: `message ${name}${data?.focus === true ? " focus" : ""}`, active: describe(document.activeElement), hasFocus: document.hasFocus() })
   }, true)
   window.addEventListener("blur", () => push("window-blur", null))
+  // The press itself, in each document it crosses: where it went, and whether a handler prevented it (read
+  // after the page's own handlers, on the way back up) — a click that "does nothing" shows here whether it
+  // arrived, and as what.
+  for (const type of ["pointerover", "pointerdown", "mousedown", "pointerup", "mouseup", "click"]) {
+    document.addEventListener(type, (event) => push(`${type}${event.isTrusted ? "" : " (synthetic)"}`, event.target), true)
+    window.addEventListener(type, (event) => {
+      if (event.defaultPrevented) push(`${type} prevented`, event.target)
+    })
+  }
   const focus = HTMLElement.prototype.focus
   HTMLElement.prototype.focus = function (this: HTMLElement, ...args: Parameters<HTMLElement["focus"]>) {
     const stack = stackOf()
@@ -595,6 +626,25 @@ async function installFocusTrace(): Promise<void> {
       if (this.tagName === "IFRAME" || this.closest?.(".webview")) trace.push({ at: Date.now(), where: `focus() ${this.tagName}.${String(this.className).slice(0, 30)}`, stack: (new Error().stack ?? "").split("\n").slice(2, 14).map((l) => l.trim().replace(/vscode-file:\/\/vscode-app\/[^ ]*\/out\//u, "")).join(" | ") })
       return nativeFocus.apply(this, args)
     }
+    // A press the WORKBENCH gets is one no webview document saw: what it hit, and what was there.
+    for (const type of ["pointerover", "pointerdown", "mousedown", "pointerup", "mouseup", "click"]) {
+      document.addEventListener(type, (event) => {
+        const target = event.target as HTMLElement | null
+        const chain: string[] = []
+        for (let el: HTMLElement | null = target, i = 0; el && i < 4; el = el.parentElement, i++) chain.push(`${el.tagName.toLowerCase()}.${String(el.className).slice(0, 40)}`)
+        const e = event as MouseEvent
+        trace.push({ at: Date.now(), where: `${type} ${chain.join(" < ")}`, x: e.clientX, y: e.clientY, active: document.activeElement?.tagName, pe: target ? getComputedStyle(target).pointerEvents : null })
+      }, true)
+    }
+    // What VS Code does to its webviews' frames and their overlay containers: a style or class that stops
+    // the frame taking a press (VS Code blocks webview frames with `pointer-events: none` during a drag).
+    new MutationObserver((records) => {
+      for (const record of records) {
+        const el = record.target as HTMLElement
+        if (!(el.tagName === "IFRAME" || el.classList?.contains("webview-overlay-content") || el.querySelector?.(":scope > iframe.webview"))) continue
+        trace.push({ at: Date.now(), where: `attr ${record.attributeName} ${el.tagName.toLowerCase()}.${String(el.className).slice(0, 40)}`, value: el.getAttribute(record.attributeName!)?.slice(0, 160) })
+      }
+    }).observe(document.body, { attributes: true, attributeFilter: ["style", "class"], subtree: true })
     setInterval(() => {
       const active = document.activeElement
       const where = !active ? "none" : active.closest(".editor-group-container .monaco-editor") ? "editor" : active.closest(".part.sidebar") ? "sidebar" : active.tagName === "IFRAME" ? `iframe(${(active as HTMLElement).className}${(active as HTMLElement).getBoundingClientRect().width > 0 ? "" : ", no box"})` : `${active.tagName.toLowerCase()}.${(active as HTMLElement).className.toString().slice(0, 40)}`
@@ -650,8 +700,24 @@ async function clearBox(surface: "chatComposer" | "newComposer"): Promise<void> 
 
 // ── screenshots ───────────────────────────────────────────────────────────────────────────────────────
 
+/**
+ * A screenshot through DevTools — and, after it, the input routing it can break put right.
+ *
+ * A capture with a CLIP is taken under a temporary device emulation (Chromium scales the viewport to the
+ * clip), and restoring it can leave the browser's hit-testing of the webview's nested out-of-process
+ * frames stale: every press over the sidebar then goes to the WORKBENCH, aimed at the `iframe.webview`
+ * element itself, and never reaches the page — its default action focuses the webview, so the click looks
+ * like "focus moved to the sidebar and nothing happened". Driven in real VS Code 1.140 (2026-10-02, the
+ * thread's first-click.md): c15's 6x capture of the open menu, then the item click, misrouted 6 runs of 6,
+ * every later press with it (4 more over 5s, the frame focused by then); without that capture, or at 1x,
+ * 3 of 3 passed. Not a page bug and not a human's: no human's mouse goes through DevTools emulation.
+ * Clearing an override that is not set is a no-op and did not help (1 of 1 still failed); SETTING an
+ * empty one and clearing it re-sends the frames their geometry, and did (1 of 1, and the suites since).
+ */
 async function capture(file: string, clip?: { x: number; y: number; width: number; height: number }, scale = 1): Promise<Buffer> {
   const { data } = await cdp.send("Page.captureScreenshot", { format: "png", ...(clip ? { clip: { ...clip, scale } } : {}), captureBeyondViewport: false })
+  await cdp.send("Emulation.setDeviceMetricsOverride", { width: 0, height: 0, deviceScaleFactor: 0, mobile: false }).catch(() => undefined)
+  await cdp.send("Emulation.clearDeviceMetricsOverride").catch(() => undefined)
   const png = Buffer.from(data, "base64")
   if (file) {
     writeFileSync(file, png)
@@ -1245,6 +1311,7 @@ try {
     await agent({ op: "select", selection: [1, 0, 2, -1] })
     await waitFor("the reply box's bar on the selection", async () => (await contextBar("chatComposer"))?.kind === "selection" || undefined, 5_000)
     const barAt = Date.now()
+    const barEventsAt = (await status()).sidebar.events.length
     await clickInComposer("chatComposer", "[data-editor-context=selection]")
     const viaBar = await waitFor("the chip from the bar's click", async () => {
       const state = await box("chatComposer")
@@ -1256,7 +1323,7 @@ try {
     expect("c4", "clicking the context bar puts the same chip in the box", viaBar?.value.startsWith("@sample.ts:2-3") === true && !!viaBar.pills.some((pill) => pill.token === "@sample.ts:2-3"), viaBar)
     expect("c4", "…and leaves the caret after it, in the box", !!barCaret.box?.active && barCaret.box.frameFocused && barCaret.box.caret >= "@sample.ts:2-3".length, barCaret)
     if (!barCaret.box?.active) {
-      notes.barClickFocus = { after: barCaret, trace: await focusTraceSince(barAt), clicks: [...clicks] }
+      notes.barClickFocus = { after: barCaret, trace: await focusTraceSince(barAt), clicks: [...clicks], events: (await status()).sidebar.events.slice(barEventsAt) }
       // The human clicks into the box to go on.
       await clickInPage('textarea[data-surface="chatComposer"]')
       await press("End")
@@ -2018,6 +2085,9 @@ try {
       await clickInComposer("newComposer", "[data-editor-open-files]")
       return until(async () => (await extra("problems")) !== null && (await extra("terminal")) !== null, 5_000)
     }
+    await installFocusTrace()
+    const menuAt = Date.now()
+    const eventsAt = (await status()).sidebar.events.length
     const shown = await openMenu()
     const problemsRow = await extra("problems")
     const terminalRow = await extra("terminal")
@@ -2044,6 +2114,8 @@ try {
       menuOpen: await inPage(() => document.querySelector('[data-editor-extra="problems"]')?.closest("[role=menu]") !== null),
       boxes: await inPage(() => [...document.querySelectorAll<HTMLTextAreaElement>("textarea[data-surface]")].map((t) => ({ surface: t.dataset.surface, shown: t.getClientRects().length > 0, value: t.value.slice(0, 60) }))),
       log: frizzLog().split("\n").slice(-12),
+      events: (await status()).sidebar.events.slice(eventsAt),
+      trace: await focusTraceSince(menuAt),
     }
     expect("c15", "Add problems puts one @problems chip in the box, drawn as a pill", !!withProblems?.pills.some((pill) => pill.token === "@problems"), withProblems)
     await openMenu()
