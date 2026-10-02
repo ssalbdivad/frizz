@@ -1,6 +1,6 @@
 import type { EmbedEditorContextMessage } from "@frizz/shared"
 import { proxy, useSnapshot } from "valtio"
-import { appendEditorContext, buildMessageWithContext, contextChipLabel, hasToken, serializeEditorContext, type ComposerContextItem } from "./composerContext.ts"
+import { appendEditorContext, appendWorktreeNote, buildMessageWithContext, contextChipLabel, hasToken, serializeEditorContext, worktreeNote, type ComposerContextItem } from "./composerContext.ts"
 import { embedded, postToHost } from "./embed.ts"
 import { splitComposerValue } from "./imagePaths.ts"
 import { formatChord, type Chord, type Platform } from "./keybindings.ts"
@@ -227,17 +227,26 @@ export function sendsEditorContext(): boolean {
  * thread's reply box on a queue card has no bar, and context the human could not see go out is context
  * they could not turn off.
  */
-export function outgoingMessage(value: string, staged: readonly ComposerContextItem[], projectDir: string | null | undefined, editor: boolean): string {
-  return outgoingMessageWith(value, staged, projectDir, editor && sendsEditorContext() ? editorContext.active : null)
+export function outgoingMessage(value: string, staged: readonly ComposerContextItem[], projectDir: string | null | undefined, editor: boolean, checkout?: ThreadCheckout | null): string {
+  return outgoingMessageWith(value, staged, projectDir, editor && sendsEditorContext() ? editorContext.active : null, checkout)
 }
 
-/** `outgoingMessage` with the editor's context passed in, for its test. */
-export function outgoingMessageWith(value: string, staged: readonly ComposerContextItem[], projectDir: string | null | undefined, active: EditorContextState["active"]): string {
-  const withChips = buildMessageWithContext(value, [...staged], projectDir)
-  if (!active) return withChips
+/** Where the box's thread works when that is not the project root (ThreadView.checkout). */
+export type ThreadCheckout = { dir: string; kind?: string }
+
+/**
+ * `outgoingMessage` with the editor's context passed in, for its test. `checkout` is the thread's own
+ * checkout: a file in it is written relative to it, and context from the main checkout gets the sentence
+ * that says whose copy it is (composerContext.ts worktreeNote).
+ */
+export function outgoingMessageWith(value: string, staged: readonly ComposerContextItem[], projectDir: string | null | undefined, active: EditorContextState["active"], checkout?: ThreadCheckout | null): string {
+  const checkoutDir = checkout?.dir
+  const withChips = buildMessageWithContext(value, [...staged], projectDir, checkoutDir)
   // The chips that serialize — the ones whose token is still in the prose — are the ones that can say
   // what the editor block would (composerContext.ts editorContextCovered).
   const { prose } = splitComposerValue(value)
   const present = staged.filter((item) => hasToken(prose, item.token))
-  return appendEditorContext(withChips, serializeEditorContext(active, present, projectDir))
+  const block = active ? serializeEditorContext(active, present, projectDir, checkoutDir) : ""
+  const named = [...present.map((item) => item.path), ...(block && active ? [active.path] : [])]
+  return appendWorktreeNote(appendEditorContext(withChips, block), worktreeNote(named, projectDir, checkout))
 }

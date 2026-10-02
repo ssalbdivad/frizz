@@ -32,7 +32,7 @@ import { settledQuestionPositions } from "../lib/settledQuestions.ts"
 import { FrizzWake, ShellWakeText } from "./FrizzWake.tsx"
 import { RecurringPromptLine } from "./RecurringPromptLine.tsx"
 import { LinkifiedText } from "./LinkifiedText.tsx"
-import { parseSentContext, parseSentEditorContext, splitProseByTokens, tokenLabel, withoutEditorContext, type SentContextItem } from "../lib/composerContext.ts"
+import { parseSentContext, parseSentEditorContext, splitProseByTokens, tokenLabel, withoutEditorContext, withoutWorktreeNote, type SentContextItem } from "../lib/composerContext.ts"
 import { SentEditorContextChip } from "./SentEditorContext.tsx"
 import { AnswersCard } from "./AnswersCard.tsx"
 import { MentionIndexProvider } from "./MentionLinks.tsx"
@@ -3239,7 +3239,12 @@ function UserBubble({ text, rawText, queued, deliveryUnconfirmed, deliveryId, so
   // the trailing run, so a path typed mid-sentence stays the human's own words, and (unlike
   // splitProseAttachments, the agent-prose splitter) it never swallows a ::directive or mermaid line.
   // `text` itself stays whole for the unqueue payload below — restoreDraft must hand the paths back.
-  const { prose: sentProse, attachments } = useMemo(() => splitComposerValue(text), [text])
+  // A sent message to a thread in a worktree may end on a sentence for its agent about whose copy the
+  // context is (lib/composerContext.ts worktreeNote) — the agent's, not the human's words, so it comes off too.
+  const { prose: sentProse, attachments } = useMemo(() => {
+    const split = splitComposerValue(text)
+    return { ...split, prose: withoutWorktreeNote(split.prose) }
+  }, [text])
   // What an editor's sidebar attached on its own — the editor block at the very END of the prose — comes
   // off first and is drawn as a chip under the bubble (SentEditorContext.tsx); everything below reads
   // what is left, so the ⌘I parse keeps its strictness and the bubble holds only what the human wrote.

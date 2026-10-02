@@ -100,6 +100,22 @@ test("with nothing selected the send names the file and the caret's line, no fil
   assert.equal(sent.endsWith("\n\nOpen in the editor: src/lib/r2-private.ts (cursor on line 40)"), true, sent)
 })
 
+test("a send to a thread in a worktree writes its paths for the worktree and says whose copy the context is", () => {
+  const worktree = { dir: "/work/alpha/.frizz/worktrees/r2", kind: "worktree" }
+  const active = { ...file, selection: { startLine: 91, endLine: 92, chars: 40, text: "const sig = sign(key, body)\nreturn sig" } }
+  const sent = outgoingMessageWith("why does this throw?", [], "/work/alpha", active, worktree)
+  assert.equal(sent.endsWith("\n\nThe context above is from the human's editor, which shows the project's main checkout (/work/alpha). You are working in your own worktree (/work/alpha/.frizz/worktrees/r2): the same relative path there is your copy, and it may differ from what they see."), true, sent)
+  // The window shows the worktree itself: the path is the worktree's, and nothing needs saying.
+  const own = outgoingMessageWith("why does this throw?", [], "/work/alpha", { ...active, path: "/work/alpha/.frizz/worktrees/r2/src/lib/r2-private.ts" }, worktree)
+  assert.equal(parseSentEditorContext(own)?.editor.display, "src/lib/r2-private.ts")
+  assert.doesNotMatch(own, /main checkout/)
+  // A chip alone from the main checkout gets the sentence too; plain words get nothing.
+  assert.match(outgoingMessageWith("@r2-private.ts:91-116 ok?", [chip], "/work/alpha", null, worktree), /main checkout \(\/work\/alpha\)/)
+  assert.equal(outgoingMessageWith("plain words", [], "/work/alpha", null, worktree), "plain words")
+  // A thread at the root: exactly as before.
+  assert.equal(outgoingMessageWith("why does this throw?", [], "/work/alpha", active, undefined), outgoingMessageWith("why does this throw?", [], "/work/alpha", active))
+})
+
 test("outside an editor's sidebar nothing is attached, whatever the editor state says", () => {
   // Under plain node the page is not embedded, which is the browser tab's case: the chips alone go.
   setEditorContext({ type: "frizz:editor-context", active: { ...file, selection: { startLine: 1, endLine: 1, chars: 1, text: "x" } }, open: [] })

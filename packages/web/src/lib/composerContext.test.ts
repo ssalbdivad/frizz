@@ -14,6 +14,9 @@ import {
   serializeContextItems,
   serializeEditorContext,
   withoutEditorContext,
+  withoutWorktreeNote,
+  worktreeNote,
+  appendWorktreeNote,
   splitProseByTokens,
   tokenLabel,
   uniqueToken,
@@ -292,4 +295,59 @@ test("a message taken back loses its editor block and keeps everything the human
   const sent = appendEditorContext(withChips, block)
   assert.equal(withoutEditorContext(sent), withChips)
   assert.equal(withoutEditorContext("plain"), "plain")
+})
+
+// ── a thread in a worktree ──────────────────────────────────────────────────────────────────────────
+
+const WT = "/repo/.frizz/worktrees/tidy"
+
+test("a file in the thread's own worktree is relative to the worktree; a main-checkout file to the project", () => {
+  // The agent resolves a relative path against its own working folder: from the worktree,
+  // `.frizz/worktrees/tidy/src/a.ts` names nothing.
+  assert.equal(contextDisplayPath(`${WT}/src/a.ts`, "/repo", WT), "src/a.ts")
+  assert.equal(contextDisplayPath("/repo/src/a.ts", "/repo", WT), "src/a.ts")
+  assert.equal(contextDisplayPath("/elsewhere/a.ts", "/repo", WT), "/elsewhere/a.ts")
+  assert.equal(contextDisplayPath("terminal", "/repo", WT), "terminal")
+  // A sibling worktree outside the project.
+  assert.equal(contextDisplayPath("/repo-perf/src/a.ts", "/repo", "/repo-perf"), "src/a.ts")
+  // Without a checkout, exactly as before.
+  assert.equal(contextDisplayPath(`${WT}/src/a.ts`, "/repo"), ".frizz/worktrees/tidy/src/a.ts")
+  assert.equal(serializeContextItems([item({ path: `${WT}/docs/guide.md` })], "/repo", WT), "Selected context:\n\n@guide.md:3 (docs/guide.md, line 3):\n> some text")
+  assert.equal(serializeEditorContext({ path: `${WT}/src/a.ts`, cursorLine: 4 }, [], "/repo", WT).endsWith("Open in the editor: src/a.ts (cursor on line 4)"), true)
+})
+
+test("the worktree note: only for context from the main checkout, sent to a thread working elsewhere", () => {
+  const note = worktreeNote(["/repo/src/a.ts"], "/repo", { dir: WT, kind: "worktree" })
+  assert.equal(note, "The context above is from the human's editor, which shows the project's main checkout (/repo). You are working in your own worktree (/repo/.frizz/worktrees/tidy): the same relative path there is your copy, and it may differ from what they see.")
+  assert.match(worktreeNote(["/repo/src/a.ts"], "/repo", { dir: "/repo-perf", kind: "folder" }), /You are working in your own checkout \(\/repo-perf\)/)
+  // Nothing to say: the thread is at the root, the file is the worktree's own, outside the project, the
+  // terminal, or there is no context at all.
+  assert.equal(worktreeNote(["/repo/src/a.ts"], "/repo", null), "")
+  assert.equal(worktreeNote(["/repo/src/a.ts"], "/repo", { dir: "/repo" }), "")
+  assert.equal(worktreeNote([`${WT}/src/a.ts`], "/repo", { dir: WT }), "")
+  assert.equal(worktreeNote(["/etc/hosts", "terminal"], "/repo", { dir: WT }), "")
+  assert.equal(worktreeNote([], "/repo", { dir: WT }), "")
+  assert.equal(worktreeNote(["/repo/src/a.ts"], null, { dir: WT }), "")
+})
+
+test("the note goes last, before the attachment lines, and the transcript and a take-back peel it off", () => {
+  const note = worktreeNote(["/repo/docs/guide.md"], "/repo", { dir: WT })
+  const block = serializeEditorContext({ path: "/repo/src/a.ts", selection: { startLine: 2, endLine: 3, text: "x\ny" } }, [], "/repo", WT)
+  const withChips = buildMessageWithContext("fix @guide.md:3\n/tmp/shot.png", [item({})], "/repo", WT)
+  const sent = appendWorktreeNote(appendEditorContext(withChips, block), note)
+  assert.equal(sent.endsWith(`\n\n${note}\n/tmp/shot.png`), true, sent)
+  // The transcript: the note comes off, then the editor block and the chips parse exactly as before.
+  const prose = withoutWorktreeNote(sent.slice(0, sent.lastIndexOf("\n/tmp/shot.png")))
+  const parsed = parseSentEditorContext(prose)
+  assert.deepEqual(parsed?.editor, { kind: "selection", display: "src/a.ts", startLine: 2, endLine: 3, text: "x\ny" })
+  assert.equal(parseSentContext(parsed!.body)?.body, "fix @guide.md:3")
+  // Taken back: the human's words, chips and attachment, with neither the block nor the note.
+  assert.equal(withoutEditorContext(sent), withChips)
+  // A note with no editor block (chips only) also comes off a take-back.
+  assert.equal(withoutEditorContext(appendWorktreeNote(withChips, note)), withChips)
+  // Only at the very end, and only the exact sentence: a human quoting it mid-message keeps it.
+  assert.equal(withoutWorktreeNote(`${note}\n\nand then?`), `${note}\n\nand then?`)
+  assert.equal(withoutWorktreeNote(`hi\n\n${note}`), "hi")
+  assert.equal(withoutWorktreeNote("hi"), "hi")
+  assert.equal(appendWorktreeNote("hi", ""), "hi")
 })
