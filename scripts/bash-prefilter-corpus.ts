@@ -94,7 +94,7 @@ if (out) writeFileSync(out, entries.map(line).join("\n") + "\n")
 // are replaced. In the decoded strings, never the JSON text: there an email right after a `\n` escape
 // would swallow its `n` and leave a `\u`. None of them can change a decision, since the pre-filter
 // reads only `&`, `worktree`, `\u` and the key names (the test re-proves the property on the result
-// anyway). The first fixture went in without this and held the maintainer's commit email.
+// anyway). A draft of the fixture made without this held the maintainer's commit email.
 const identity = (() => {
   const home = homedir()
   const user = userInfo().username
