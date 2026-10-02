@@ -461,17 +461,23 @@ function Chip({
             : disabled
               ? "border-border text-muted-80"
               // hover lands on `elevated`, one step above the card's own panel-2 fill — hovering to
-              // panel-2 was invisible once every card standardized on that fill.
-              : "border-border text-fg/90 hover:bg-elevated hover:border-border-strong"
+              // panel-2 was invisible once every card standardized on that fill. Keyboard focus on the
+              // row's button lifts the border the same step hover does (the ring below is the mark).
+              : "border-border text-fg/90 hover:bg-elevated hover:border-border-strong has-[>button:focus-visible]:border-border-strong"
       }`}
     >
+      {/* THE FOCUS MARK is the stretched button's own inset ring, in the app's focus ink. It had none:
+          Tab reached option A and Space picked it with nothing on screen saying which row had the key
+          (outline none, box-shadow none, border unchanged — measured on the desktop drawer and in VS
+          Code's sidebar alike, where answering by keyboard is the point). `inset-ring`, never
+          `ring-inset`: in this theme that one is a colour utility too (lib/theme.test.ts). */}
       <button
         type="button"
         disabled={disabled}
         aria-labelledby={labelId}
         onClick={onClick}
         onMouseDown={(e) => e.preventDefault()}
-        className="absolute inset-0 rounded-md outline-none"
+        className="absolute inset-0 rounded-md outline-none focus-visible:inset-ring-1 focus-visible:inset-ring-focus-ink-60"
       />
       {multi && (
         <span
