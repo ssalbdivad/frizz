@@ -1,11 +1,19 @@
 import assert from "node:assert/strict"
-import { test } from "node:test"
+import { after, test } from "node:test"
 import { existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, readlinkSync, rmSync, symlinkSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { isAbsolute, join } from "node:path"
 import { defaultPluginStageRoot, defaultStablePluginRoot, ensureSymlink, stageStablePluginDir } from "./stable-plugin-path.ts"
 
-const tmp = (prefix: string) => mkdtempSync(join(tmpdir(), prefix))
+// Every scratch dir is removed when the file finishes. Recursive rm unlinks the links inside it rather
+// than following them, on every Node — only a non-recursive rm of a link hits nodejs/node#61040.
+const scratch: string[] = []
+after(() => { for (const dir of scratch) rmSync(dir, { recursive: true, force: true }) })
+const tmp = (prefix: string) => {
+  const dir = mkdtempSync(join(tmpdir(), prefix))
+  scratch.push(dir)
+  return dir
+}
 
 /** A minimal plugin tree: a hooks.json plus the script it names, so a half-staged copy is detectable. */
 function plugin(root: string, marker: string): string {

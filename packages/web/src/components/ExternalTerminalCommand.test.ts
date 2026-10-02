@@ -29,7 +29,8 @@ test("the pick writes a PREFETCHED command synchronously (no RPC inside the clip
   // in the one named handler both the click and the key go through. That handler also does other work —
   // since 2026-10-01 (124aa000) closing it drops the "Open in editor" folder choice — so pin the two
   // statements that matter inside its body rather than the body's exact shape.
-  const handler = menu.match(/const onOpenChange = \(next: boolean\) => \{\n([\s\S]*?)\n  \}\n/)?.[1]
+  // The body ends at the first `}` indented to the handler's own level; `\r?` keeps a CRLF checkout working.
+  const handler = menu.match(/const onOpenChange = \(next: boolean\) => \{\r?\n([\s\S]*?)\r?\n  \}\r?\n/)?.[1]
   assert.ok(handler, "ThreadMenu's onOpenChange handler should remain discoverable")
   assert.match(handler, /^\s*setOpen\(next\)$/m)
   assert.match(handler, /^\s*if \(next && ownSession\) terminalCommand\.prefetch\(\)$/m)
