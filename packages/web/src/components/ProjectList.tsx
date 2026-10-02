@@ -50,7 +50,7 @@ import { useBoard } from "../hooks.ts"
 import { threadKey, type QueuesProject } from "../lib/allQueues.ts"
 import { projectSlug } from "../lib/base-path.ts"
 import { bandKey, rememberCrossProjectFocus, setBandOpen, setBandsOpen, setProjectCollapsed, useCollapsedProjects, useOpenBands, type QuietBandKey } from "../lib/crossProject.ts"
-import { ALL_PROJECTS, projectViewHref, usePageView, viewHref } from "../lib/pageView.ts"
+import { ALL_PROJECTS, projectViewHref, usePageView, viewHref, viewKey } from "../lib/pageView.ts"
 import { useArchivingAt } from "../lib/optimisticArchive.ts"
 import { holdLayout, type HeldSection, type HeldSlot } from "../lib/heldLayout.ts"
 import { actedOnHere } from "../lib/humanActs.ts"
@@ -98,6 +98,7 @@ export function ProjectList({
   activeKey,
   hidden,
   onQueuedRow,
+  switcher,
 }: {
   projects: QueuesProject[]
   home: string | undefined
@@ -105,6 +106,13 @@ export function ProjectList({
   hidden: (key: string) => boolean
   /** Bring a Ready card into view: its scroll offset, or null when the queue is not showing it. */
   onQueuedRow: (key: string) => number | null
+  /**
+   * THE VIEW'S SWITCHER, as the list's head — in an editor's sidebar, which has no status row to carry it
+   * (AllQueues.tsx SidebarPage). Focused on a project it takes the left of that project's own row, the
+   * slot the status row's title leaves empty on the desktop (ProjectRow); showing All projects, a row of
+   * its own above the first project.
+   */
+  switcher?: ReactNode
 }) {
   const collapsed = useCollapsedProjects()
   const openBands = useOpenBands()
@@ -131,7 +139,16 @@ export function ProjectList({
   // A folded project keeps its place: it is still busy, only quieter to look at. And while the list is
   // held, a project keeps the run and the place it was drawn in — one that has just gone quiet stays among
   // the busy ones, so the projects under it do not move up (lib/listHold.ts).
+  //
+  // NEVER ACROSS A CHANGE OF VIEW. The hold keeps the projects as last drawn, so with the pointer parked
+  // over the list a switch from All projects to one project kept every other project's rows on the
+  // focused page, and the switch back drew only the project it came from — until the pointer left (driven
+  // 2026-10-01, desktop and sidebar alike: build2-shell.md). Switching the view is the human reshaping the
+  // list by their own hand, the case lib/listHold.ts releases for, and it happens wherever the switch was
+  // made (the switcher's menu, the palette, Back) — so the list draws the new view live on its first
+  // render and holds from there.
   const drawnRuns = useRef<HeldSection<(typeof groups)[number]>[]>([])
+  const drawnView = useRef(viewKey(view))
   const runs = holdLayout({
     prev: drawnRuns.current,
     target: [
@@ -139,10 +156,11 @@ export function ProjectList({
       { id: "quiet", items: groups.filter((group) => group.bands.rows === 0) },
     ],
     keyOf: (entry) => entry.project.id,
-    frozen: held,
+    frozen: held && drawnView.current === viewKey(view),
     moved: () => false,
   })
   drawnRuns.current = runs
+  drawnView.current = viewKey(view)
   const run = (id: string) => (runs.find((section) => section.id === id)?.slots ?? []).map((slot) => slot.item)
   const busy = run("busy")
   const quiet = run("quiet")
@@ -163,11 +181,17 @@ export function ProjectList({
       home={home}
       activeKey={activeKey}
       onQueuedRow={onQueuedRow}
+      switcher={view.kind === "project" && view.slug === entry.project.slug ? switcher : undefined}
     />
   )
   return (
     <>
-      {busy.map((entry, index) => group(entry, index > 0))}
+      {switcher && view.kind === "all" && (
+        <div data-xq-switcher-row className={`${ROW_CLASS} after:hidden`}>
+          <div className={`${HEAD_BUTTON_CLASS} !gap-0`}>{switcher}</div>
+        </div>
+      )}
+      {busy.map((entry, index) => group(entry, index > 0 || (switcher !== undefined && view.kind === "all")))}
       {/* Always listed, one line each, under the busy ones — until one is opened, when it lists the rest of
           itself under its name like any other. They sat behind a collapsed "Quiet" fold until 2026-09-24,
           which cost a click to reach a project whose row is already about as quiet as a row can be
@@ -473,6 +497,8 @@ const ProjectGroup = memo(ProjectGroupRows, (a: ProjectGroupProps, b: ProjectGro
   a.spaced === b.spaced &&
   a.home === b.home &&
   a.onQueuedRow === b.onQueuedRow &&
+  // Only the focused project's group is handed one (ProjectList `switcher`), so this re-renders that one.
+  a.switcher === b.switcher &&
   // The scrollspy's card moves on every scroll; it lights a row only in its own project.
   (a.activeKey === b.activeKey || (!ownKey(a.project.id, a.activeKey) && !ownKey(b.project.id, b.activeKey))))
 
@@ -505,6 +531,7 @@ function ProjectGroupRows({
   activeKey,
   onQueuedRow,
   moved,
+  switcher,
 }: {
   project: QueuesProject
   grip: Grip | undefined
@@ -518,6 +545,8 @@ function ProjectGroupRows({
   home: string | undefined
   activeKey: string | null
   onQueuedRow: (key: string) => number | null
+  /** The view's switcher, on the focused project's row (ProjectList `switcher`). */
+  switcher?: ReactNode
 }) {
   const focus = projectSlug(useLocation().pathname)
   const snap = useSnapshot(store)
@@ -610,6 +639,7 @@ function ProjectGroupRows({
         opened={opened}
         collapsed={collapsed}
         home={home}
+        switcher={switcher}
       />
       {!collapsed && (
         <ThreadProjectScope projectId={project.id} projectDir={project.projectDir}>
@@ -766,6 +796,7 @@ function ProjectRow({
   collapsed,
   working,
   home,
+  switcher,
 }: {
   project: QueuesProject
   grip: Grip | undefined
@@ -777,6 +808,7 @@ function ProjectRow({
   /** Its Working rows — counted on the row while it is folded, the one state that hides them. */
   working: number
   home: string | undefined
+  switcher?: ReactNode
 }) {
   const [menuOpen, setMenuOpen] = useState(false)
   const navigate = useNavigate()
@@ -816,7 +848,9 @@ function ProjectRow({
           page leaves nothing to look at. With no square the cord starts at the first band name instead
           (ThreadConnector ties only rows that carry an indicator). */}
       {focused ? (
-        <span className="flex-1" />
+        // …unless there is no such title (an editor's sidebar): the switcher takes the slot, in the head
+        // button's own geometry, so its square stands in the rows' indicator column.
+        switcher ? <div className={`${HEAD_BUTTON_CLASS} !gap-0`}>{switcher}</div> : <span className="flex-1" />
       ) : (
         <button
           type="button"

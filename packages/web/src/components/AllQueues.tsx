@@ -78,6 +78,8 @@ import { setCrossProjectMentions } from "../lib/mentionAutolink.ts"
 import { readingLine } from "../lib/readingLine.ts"
 import { useIsMobile } from "../lib/mobile.ts"
 import { PhonePage } from "./PhonePage.tsx"
+import { SidebarPage } from "./SidebarPage.tsx"
+import { embedded } from "../lib/embed.ts"
 
 /** How often the page re-reads every project. The rail's badges poll at 5s; this is the page the
  *  operator is looking AT, so it runs a little faster — the read is the servers' cached snapshots. */
@@ -330,7 +332,10 @@ export function AllQueuesPage() {
     return () => setFaviconBadge(false)
   }, [ready])
   const scrollToCard = useScrollToCard()
-  const { active: activeKey, land } = useQueueKeys(useScrollspy(queue), scrollToCard)
+  // An editor's sidebar draws no cards, so its keys step its list instead (SidebarPage.tsx) — and only
+  // one cursor may answer `j`.
+  const sidebar = embedded()
+  const { active: activeKey, land } = useQueueKeys(useScrollspy(queue), scrollToCard, !sidebar)
   const loading = (cards.isPending || queues.isPending) && !queues.data
   // Below the page's stacking point the columns are one above the other, so the list follows the queue
   // rather than sitting between the prompt box and the queue it indexes.
@@ -348,6 +353,60 @@ export function AllQueuesPage() {
       {!focused && <AddProjectRow />}
     </>
   )
+
+  // AN EDITOR'S SIDEBAR IS THE DESKTOP'S LEFT COLUMN (SidebarPage.tsx): the prompt box over the list, the
+  // view's switcher heading the list, a thread in its drawer. The cards have no room; a Ready row opens its
+  // thread instead of landing on its card.
+  if (sidebar) {
+    return (
+      <SidebarPage
+        projects={projects}
+        shown={shown}
+        viewed={viewed}
+        focusedSlug={view.kind === "project" ? view.slug : undefined}
+        hidden={hidden}
+        loading={loading}
+        error={queues.error && !queues.data ? String(queues.error) : undefined}
+        composer={
+          <div onKeyDown={onColumnKeyDown}>
+            <FocusedComposer
+              focus={focus}
+              project={focusProject}
+              dirs={dirs}
+              autoFocus={focusComposerFor !== null && focusComposerFor.slug === focus}
+              caret={focusComposerFor?.caret}
+              onFocused={clearFocusComposerFor}
+              target={
+                focused ? undefined : (
+                  <ProjectPicker
+                    projects={projects}
+                    focus={focus}
+                    onPick={(project) => {
+                      setFocusComposerFor({ slug: project.slug })
+                      pickProject(project, dirs?.projectDir)
+                    }}
+                  />
+                )
+              }
+            />
+          </div>
+        }
+        list={(reading) => (
+          <>
+            <ProjectList
+              projects={shown}
+              home={home}
+              activeKey={reading}
+              hidden={leaving.hidden}
+              onQueuedRow={noCard}
+              switcher={<Switcher projects={projects} hidden={hidden} current={viewed} row />}
+            />
+            {!focused && <AddProjectRow />}
+          </>
+        )}
+      />
+    )
+  }
 
   // A PHONE GETS ITS OWN LAYOUT of the same page (PhonePage.tsx): a header naming the view, Queue /
   // Snoozed / Done tabs of one-line rows, and a New thread button — upstream's phone board, over this
@@ -483,7 +542,7 @@ export function AllQueuesPage() {
  * Leaving a project for All projects carries it over as the prompt box's pick, so the box there starts
  * where the operator just was.
  */
-function Switcher({ projects, hidden, current }: { projects: QueuesProject[]; hidden: (key: string) => boolean; current: QueuesProject | undefined }) {
+function Switcher({ projects, hidden, current, row = false }: { projects: QueuesProject[]; hidden: (key: string) => boolean; current: QueuesProject | undefined; row?: boolean }) {
   const choose = useChooseView()
   const add = useAddProject()
   // The list's own order (ProjectList): busy projects first, then the quiet ones; Home last, on its own.
@@ -509,6 +568,7 @@ function Switcher({ projects, hidden, current }: { projects: QueuesProject[]; hi
       onAll={() => choose.all(current)}
       onProject={(project) => choose.project(project.slug)}
       onAdd={add.start}
+      row={row}
     />
   )
 }
@@ -541,6 +601,8 @@ function useChooseView(): {
 }
 
 const noop = () => {}
+/** A Ready row with no card on the page to land on: it opens its thread (ProjectList.tsx useRowScope). */
+const noCard = () => null
 
 // ---- The column head --------------------------------------------------------------------------------
 
@@ -1107,7 +1169,7 @@ function useScrollToCard(): (key: string) => number | null {
  * scroll that far — could otherwise never be picked at all. Returns the card being read, which the rail
  * and its connector mark, so they agree with the ring.
  */
-function useQueueKeys(activeKey: string | null, scrollToCard: (key: string) => number | null): { active: string | null; land: (key: string) => number | null } {
+function useQueueKeys(activeKey: string | null, scrollToCard: (key: string) => number | null, enabled = true): { active: string | null; land: (key: string) => number | null } {
   const reading = useRef(activeKey)
   reading.current = activeKey
   const landing = useRef<{ key: string; y: number; until: number } | null>(null)
@@ -1146,7 +1208,7 @@ function useQueueKeys(activeKey: string | null, scrollToCard: (key: string) => n
     }
     return y
   }, [scrollToCard])
-  useEffect(() => registerQueueCursor({
+  useEffect(() => enabled ? registerQueueCursor({
     // Not a ghost (lib/stableQueue.ts), whose thread is no longer waiting, nor a card whose drawer is open.
     keys: () => [...document.querySelectorAll<HTMLElement>('[data-xq-card][data-queue-leaving="false"]:not([data-queue-ghost]):not([data-queue-concealed])')]
       .map((slot) => slot.dataset.xqCard ?? "")
@@ -1154,7 +1216,7 @@ function useQueueKeys(activeKey: string | null, scrollToCard: (key: string) => n
     current,
     root,
     go: (key) => void land(key),
-  }), [land, current, root])
+  }) : undefined, [land, current, root, enabled])
 
   // Re-read on every render (a card leaving re-renders the page) and on scroll (which can end a hold);
   // an unchanged key is a bail-out, not a render.

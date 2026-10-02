@@ -4,6 +4,8 @@ import { crossProjectHref } from "./base-path.ts"
 import { boardOrTimeout, composeInto, threadIsThere } from "./editorBridge.ts"
 import { setEditorContext } from "./editorContext.ts"
 import { runHostCommand } from "./embedCommand.ts"
+import { repostRoute } from "./embedRoute.ts"
+import { closeSettingsAnimated } from "./overlays.ts"
 import { EMBED_READY, embedded, hostKeyChord, parseHostMessage, postToHost } from "./embed.ts"
 import { basename } from "./paths.ts"
 import { homeHref, projectViewHref } from "./pageView.ts"
@@ -30,17 +32,28 @@ export function initEmbedHost(): void {
     const message = parseHostMessage(event.data)
     if (message) void handle(message)
   })
-  // BUBBLE phase on the window, the last place a keydown reaches: every handler of the page's own has had
-  // its turn by then, so `defaultPrevented` says whether one took it. A handler that stopped the event
-  // took it too, and it never gets here — which is the same answer.
+  // Asked once the keydown has been everywhere it goes, so `defaultPrevented` says whether one of the
+  // page's own handlers took it. A handler that stopped the event took it too, and it never gets here —
+  // which is the same answer. BUBBLE phase on the window is not late enough by itself: the shortcut
+  // runtime listens there too (keyboardRuntime useShortcutListener), and this listener, installed at boot,
+  // runs before it — so every chord Frizz binds (⌘K, ⌘I, ⌘,) went to VS Code as well as to Frizz (driven
+  // 2026-10-01, build2-shell.md). The next task runs after dispatch has finished, and the event keeps its
+  // `defaultPrevented` after it.
   window.addEventListener("keydown", (event) => {
-    const chord = hostKeyChord(event)
-    if (chord) postToHost(chord)
+    setTimeout(() => {
+      const chord = hostKeyChord(event)
+      if (chord) postToHost(chord)
+    }, 0)
   })
   // Ready once a board is in — the page's drafts and its drawer are keyed by it, and the router that
   // navigation goes through is mounted by then — or after 5s regardless, for a machine with nothing open.
   // The extension posts nothing before this; a compose that still beats the board waits for it (composeInto).
-  void boardOrTimeout().then(() => postToHost(EMBED_READY))
+  // The title row's reading (lib/embedRoute.ts) goes again right behind it: the page has drawn its view
+  // by then, and said so to a host that may not have been listening yet.
+  void boardOrTimeout().then(() => {
+    postToHost(EMBED_READY)
+    repostRoute()
+  })
 }
 
 async function handle(message: EmbedHostMessage): Promise<void> {
@@ -57,9 +70,12 @@ async function handle(message: EmbedHostMessage): Promise<void> {
     return
   }
   if (message.type === "frizz:navigate") {
-    // Whatever is over the page goes: the human asked to see a thread or a queue, not Settings.
-    store.showSettings = false
-    store.phoneNewThread = null
+    // Whatever is over the page goes: the human asked to see a thread or a queue, not Settings — closed
+    // by its own close, which sends a change still in its debounce.
+    if (store.showSettings && !closeSettingsAnimated()) store.showSettings = false
+    store.showPalette = false
+    store.showShortcuts = false
+    store.showNewThread = false
     const { to } = message
     if (to === "queue") spaNavigate(homeHref())
     else if ("thread" in to) {

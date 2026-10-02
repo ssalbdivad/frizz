@@ -41,6 +41,10 @@ function currentPerm(): NotifPerm {
 export function SettingsDrawer() {
   const { draft, update, saveState, flush } = useSettingsDraft()
   const isMobile = useIsMobile()
+  // AN EDITOR'S SIDEBAR GETS THIS DRAWER, the desktop's, the frame's full width (lib/mobile.ts: a sidebar is
+  // never the phone). Four rows behave differently there, and each says so in the field's own hint type
+  // rather than offering a control that would not do what it says.
+  const inEditor = embedded()
   const [perm, setPerm] = useState<NotifPerm>(currentPerm())
   // The Home workspace's square, its picker row and its project list entry all show its folder, and they
   // read it from the project list — so the list is re-read once a moved folder has actually saved.
@@ -84,7 +88,9 @@ export function SettingsDrawer() {
   // truthful about the OS-level grant so a green checkbox can't imply notifications that won't fire.
   async function toggleNotifications(on: boolean) {
     if (!draft) return
-    if (on && typeof Notification !== "undefined" && Notification.permission === "default") {
+    // Not from an editor's sidebar: a frame is never granted the permission, so asking only records a
+    // refusal against Frizz's origin. The setting itself is the machine's, and stands (see below).
+    if (on && !inEditor && typeof Notification !== "undefined" && Notification.permission === "default") {
       const result = (await Notification.requestPermission()) as NotifPerm
       setPerm(result)
     }
@@ -117,7 +123,9 @@ export function SettingsDrawer() {
         <div className="flex-1 overflow-y-auto p-5 flex flex-col gap-6">
           {/* Browser appearance remains usable even while server settings are unavailable. */}
           <SettingsField label="Appearance" help={SETTINGS_HELP.appearance}>
-            <AppearanceControl />
+            {/* The editor's theme, for the session (lib/theme.ts setHostTheme): a choice here would be saved
+                and never shown. */}
+            {inEditor ? <EditorFixed name="appearance">Follows your editor</EditorFixed> : <AppearanceControl />}
           </SettingsField>
           {!draft ? (
             <div className="text-[13px] text-muted">Loading server settings…</div>
@@ -136,9 +144,11 @@ export function SettingsDrawer() {
 
             {/* Same segmented Off/On control as every other row (the old bare checkbox matched
                 nothing else in the form). Off left, On right — switch convention. */}
+            {/* The machine's setting, so it is changed here as anywhere; but a frame cannot raise a
+                notification (api/board-stream.ts stands down in embed), so the browser does. */}
             <SettingsField label="Desktop notifications" help={SETTINGS_HELP.notifications}>
               <OnOffToggle value={draft.notifications} onChange={toggleNotifications} />
-              {draft.notifications && <PermHint perm={perm} />}
+              {inEditor ? <EditorHint>Shown in your browser, not in the sidebar.</EditorHint> : draft.notifications && <PermHint perm={perm} />}
             </SettingsField>
 
             <SettingsField label="Home folder" help={SETTINGS_HELP.homeFolder}>
@@ -182,7 +192,9 @@ export function SettingsDrawer() {
             {/* Client-only (prefs): where a click on a code file goes, in this browser. The app it
                 goes to is the machine-wide select just below, which it reads as a pair with. */}
             <SettingsField label="Open code files" help={SETTINGS_HELP.codeFiles}>
-              <CodeFilesControl opener={draft.localFileOpener} />
+              {/* From the sidebar a code file opens in the editor around it, whatever this says
+                  (lib/local-file-links.ts); the choice is a browser's. */}
+              {inEditor ? <EditorFixed name="code-files">In this window</EditorFixed> : <CodeFilesControl opener={draft.localFileOpener} />}
             </SettingsField>
 
             <SettingsField label="External app" help={SETTINGS_HELP.localFileOpener}>
@@ -201,6 +213,7 @@ export function SettingsDrawer() {
                 indicatorPosition="right"
                 ariaLabel="Local file link opener"
               />
+              {inEditor ? <EditorHint>Code files from the sidebar open in this window.</EditorHint> : null}
               <EditorConnectedHint />
             </SettingsField>
             </>
@@ -450,7 +463,6 @@ function MobileSettingsPage({
   const conn = CONNECTION_WORD[connection]
   const supervisor = useSupervisorStatus().data
   const version = supervisor?.version
-  const inEditor = embedded()
   return (
     <div
       data-mobile-settings-page
@@ -485,9 +497,7 @@ function MobileSettingsPage({
         <MobileSection label="Appearance">
           <div className={MOBILE_ROW}>
             <span className="min-w-0 flex-1 truncate">Theme</span>
-            {/* In an editor's sidebar the theme is the editor's (lib/theme.ts setHostTheme): a choice here
-                would be saved and then never shown. */}
-            {inEditor ? <span data-mobile-theme-editor className="shrink-0 text-[14px] text-muted">Follows your editor</span> : <MobileThemeSegments />}
+            <MobileThemeSegments />
           </div>
         </MobileSection>
 
@@ -511,20 +521,16 @@ function MobileSettingsPage({
               if (isSnoozePreset(v)) prefs.snoozePreset = v
             }}
           />
-          {/* Not in an editor's sidebar: a frame cannot be granted the permission, and this switch is the
-              BROWSER's — turning it here would ask for a permission that is refused. */}
-          {inEditor ? null : (
-            <div className={MOBILE_ROW}>
-              <span className="min-w-0 flex-1 truncate">Notifications</span>
-              <MobileSwitch
-                label="Notifications"
-                checked={notifications === true}
-                disabled={notifications === null}
-                onChange={onNotifications}
-              />
-            </div>
-          )}
-          {notifications && !inEditor ? (
+          <div className={MOBILE_ROW}>
+            <span className="min-w-0 flex-1 truncate">Notifications</span>
+            <MobileSwitch
+              label="Notifications"
+              checked={notifications === true}
+              disabled={notifications === null}
+              onChange={onNotifications}
+            />
+          </div>
+          {notifications ? (
             <div className="border-b border-border/70 px-[18px] py-2.5">
               <PermHint perm={perm} />
             </div>
@@ -679,6 +685,17 @@ function QueueOrderControl() {
       ))}
     </div>
   )
+}
+
+// A row's value where an editor's sidebar fixes it (the theme, where code files open): the reading in the
+// controls' own 12px, muted as a value no click changes.
+function EditorFixed({ name, children }: { name: string; children: React.ReactNode }) {
+  return <span data-settings-editor={name} className="py-1 text-[12px] text-muted">{children}</span>
+}
+
+// Where a row works differently from an editor's sidebar: the field's hint type (PermHint, below).
+function EditorHint({ children }: { children: React.ReactNode }) {
+  return <span data-settings-editor-hint className="text-[11px] text-muted-70">{children}</span>
 }
 
 // Which of the External app's editors has a window connected right now (the editor bridge,

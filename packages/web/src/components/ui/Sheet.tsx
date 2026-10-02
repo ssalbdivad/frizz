@@ -3,6 +3,7 @@ import { RemoveScroll } from "react-remove-scroll"
 import { useSnapshot } from "valtio"
 import { store, markDrawerClosing, removeDrawerAfterExit } from "../../store.ts"
 import { registerDrawerClose } from "../../lib/overlays.ts"
+import { embedded } from "../../lib/embed.ts"
 import { isToastPointer } from "../Toaster.tsx"
 import {
   SHEET_CLOSE_MS,
@@ -39,9 +40,14 @@ export function useIsTopDrawer(id: number): boolean {
   return [...snap.drawers].reverse().find((drawer) => !drawer.closing)?.id === id
 }
 
+// …and in an editor's sidebar at ANY width (lib/embed.ts): its drawers are the frame's full width
+// (styles.css `html[data-embed] .frizz-sheet-panel`), so they cover the page as a phone's do and must take
+// the modal's lock and focus trap with them — a sidebar dragged past 800px otherwise scrolled the list
+// under an open thread.
 export function useNarrowDrawer(): boolean {
-  const [narrow, setNarrow] = useState(() => typeof window !== "undefined" && !!window.matchMedia?.("(max-width: 800px)").matches)
+  const [narrow, setNarrow] = useState(() => embedded() || (typeof window !== "undefined" && !!window.matchMedia?.("(max-width: 800px)").matches))
   useEffect(() => {
+    if (embedded()) return
     const query = window.matchMedia?.("(max-width: 800px)")
     if (!query) return
     const update = () => setNarrow(query.matches)

@@ -20,6 +20,8 @@ import {
   type Chord,
 } from "../lib/keybindings.ts"
 import { useShortcutLabel, useShortcutListener, withShortcut } from "../lib/keyboardRuntime.ts"
+import { embedded } from "../lib/embed.ts"
+import { HOST_CHORDS, HOST_CHORDS_NOTE, SIDEBAR_KEY_HINTS, SIDEBAR_KEYS_NOTE, hostChordKeycaps } from "../lib/embedKeys.ts"
 import { STATUS_ROW_ACTION, STATUS_ROW_ICON } from "../lib/statusRow.ts"
 import { Dialog } from "./ui/Dialog.tsx"
 
@@ -67,9 +69,14 @@ const CAP_CLASS =
   "font-[inherit] inline-flex h-[21px] min-w-[21px] items-center justify-center rounded-[5px] border border-border-strong bg-panel-2 px-[5px] text-[11px] font-medium leading-none shadow-[0_1px_0_0_var(--color-border-strong)]"
 
 export function Keycaps({ chord, muted = false }: { chord: Chord; muted?: boolean }) {
+  return <KeycapList caps={chordKeycaps(chord, platform)} label={formatChord(chord, platform)} muted={muted} />
+}
+
+/** Caps already spelled — a chord that is not the app's own (the VS Code chords an editor's sidebar passes on). */
+function KeycapList({ caps, label, muted = false }: { caps: readonly string[]; label: string; muted?: boolean }) {
   return (
-    <span className="inline-flex items-center gap-[3px]" aria-label={formatChord(chord, platform)}>
-      {chordKeycaps(chord, platform).map((cap, index) => (
+    <span className="inline-flex items-center gap-[3px]" aria-label={label}>
+      {caps.map((cap, index) => (
         <kbd key={index} aria-hidden="true" className={`${CAP_CLASS} ${muted ? "text-fg/55" : "text-fg/85"}`}>{cap}</kbd>
       ))}
     </span>
@@ -82,6 +89,7 @@ type Held = { mod: boolean; alt: boolean; shift: boolean }
 const NOTHING_HELD: Held = { mod: false, alt: false, shift: false }
 
 function KeyboardShortcutsDialog({ open, onOpenChange }: { open: boolean; onOpenChange: (open: boolean) => void }) {
+  const sidebar = embedded()
   const overrides = useSnapshot(prefs).keybindings as typeof prefs.keybindings
   const bindings = effectiveBindings(overrides)
   const [recording, setRecording] = useState<ActionId | null>(null)
@@ -206,7 +214,10 @@ function KeyboardShortcutsDialog({ open, onOpenChange }: { open: boolean; onOpen
       }}
       footer={
         <>
-          <span aria-live="polite" data-shortcut-status className="mr-auto min-w-0 truncate text-[11.5px] text-muted-70">
+          {/* In an editor's sidebar the sheet is the frame's width less its margin — 276px at 300 — and the
+              line beside Restore defaults has ~130px: truncated, "Click a key to change it" read
+              "Click a key to ch…" and a binding conflict lost its second half. There it wraps. */}
+          <span aria-live="polite" data-shortcut-status className={`mr-auto min-w-0 text-[11.5px] text-muted-70 ${sidebar ? "leading-[15px]" : "truncate"}`}>
             {status || "Click a key to change it"}
           </span>
           <button
@@ -225,6 +236,9 @@ function KeyboardShortcutsDialog({ open, onOpenChange }: { open: boolean; onOpen
             they have not looked up. Written against the defaults: a rebind changes a key, not the rule.
             `text-balance`: at phone width it wraps, and unbalanced it left "compose." alone on line two. */}
         <p className="mt-2.5 text-balance text-[11.5px] text-muted-65">Letter keys are initials, except J/K to move and C to compose.</p>
+        {/* IN AN EDITOR'S SIDEBAR the sheet says where it differs (lib/embedKeys.ts): this line, a hint
+            under each key whose meaning changes, and the VS Code chords the sidebar passes on, last. */}
+        {sidebar && <p data-shortcut-sidebar-note className="mt-1 text-balance text-[11.5px] text-muted-65">{SIDEBAR_KEYS_NOTE}</p>}
         {groups.map((group) => (
           <section key={group.heading} aria-label={group.heading} className="mt-3">
             <h3 className="text-[11px] font-medium uppercase tracking-wide text-fg/60">{group.heading}</h3>
@@ -235,6 +249,7 @@ function KeyboardShortcutsDialog({ open, onOpenChange }: { open: boolean; onOpen
                   key={action.id}
                   id={action.id}
                   label={action.label}
+                  hint={sidebar ? SIDEBAR_KEY_HINTS[action.id] : undefined}
                   chord={bindings[action.id]}
                   isDefault={isDefault(overrides, action.id)}
                   defaultLabel={formatChord(parseChord(action.defaultChord)!, platform)}
@@ -273,6 +288,23 @@ function KeyboardShortcutsDialog({ open, onOpenChange }: { open: boolean; onOpen
             </ul>
           </section>
         ))}
+        {sidebar && (
+          <section aria-label="VS Code" data-shortcut-host className="mt-3">
+            <h3 className="text-[11px] font-medium uppercase tracking-wide text-fg/60">VS Code</h3>
+            <p className="mt-0.5 text-[11.5px] text-muted-65">{HOST_CHORDS_NOTE}</p>
+            <ul className="mt-1.5 flex flex-col">
+              {HOST_CHORDS.map((chord) => {
+                const caps = hostChordKeycaps(chord, platform)
+                return (
+                  <li key={chord.label} className="flex min-h-7 items-center gap-3">
+                    <span className="min-w-0 flex-1 text-[13px] text-fg/70">{chord.label}</span>
+                    <span className="p-[3px]"><KeycapList caps={caps} label={caps.join(platform === "mac" ? "" : "+")} muted /></span>
+                  </li>
+                )
+              })}
+            </ul>
+          </section>
+        )}
       </div>
     </Dialog>
   )
@@ -281,6 +313,7 @@ function KeyboardShortcutsDialog({ open, onOpenChange }: { open: boolean; onOpen
 function ShortcutRow({
   id,
   label,
+  hint,
   chord,
   isDefault,
   defaultLabel,
@@ -294,6 +327,8 @@ function ShortcutRow({
 }: {
   id: ActionId
   label: string
+  /** What the key does here, where that is not what its label says (an editor's sidebar, lib/embedKeys.ts). */
+  hint?: string
   chord: Chord | null
   isDefault: boolean
   defaultLabel: string
@@ -311,7 +346,16 @@ function ShortcutRow({
       {/* The row's flash is its own layer, keyed on the change so a second change replays it — keying the
           row itself would remount the focused key button and drop the keyboard user's place. */}
       {changedNonce > 0 && <span key={changedNonce} aria-hidden="true" className="kbd-row-flash pointer-events-none absolute inset-0 rounded-md" />}
-      <span className="shrink-0 text-[13px] text-fg/90">{label}</span>
+      {/* A hint goes UNDER the label, not in the slot beside it: that slot is the recording's, and a hint
+          there truncated to nothing in a 300px sidebar. It may wrap; the key keeps its place. */}
+      {hint ? (
+        <span className="flex min-w-0 flex-col py-0.5">
+          <span className="text-[13px] text-fg/90">{label}</span>
+          <span data-shortcut-hint className="text-[11px] leading-[14px] text-muted-65">{hint}</span>
+        </span>
+      ) : (
+        <span className="shrink-0 text-[13px] text-fg/90">{label}</span>
+      )}
       {/* What the row is waiting for, or why it refused a key — on the row's own line, right-aligned
           against the key it is about. A second line under the label would push every row below it down
           and back up again on each recording. */}

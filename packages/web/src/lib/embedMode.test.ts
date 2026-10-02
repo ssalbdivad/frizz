@@ -23,7 +23,7 @@ Object.assign(globalThis, {
   location: { search: "?embed=vscode&theme=dark&project=nub", pathname: "/", href: "http://127.0.0.1:9393/?embed=vscode&theme=dark&project=nub", origin: "http://127.0.0.1:9393" },
   sessionStorage: { getItem: (k: string) => session.get(k) ?? null, setItem: (k: string, v: string) => void session.set(k, v), removeItem: (k: string) => void session.delete(k) },
   localStorage: { getItem: (k: string) => local.get(k) ?? null, setItem: (k: string, v: string) => void local.set(k, v), removeItem: (k: string) => void local.delete(k) },
-  document: { documentElement: root, querySelector: () => null, hasFocus: () => false, visibilityState: "visible", addEventListener() {} },
+  document: { documentElement: root, querySelector: () => null, querySelectorAll: () => [], hasFocus: () => false, visibilityState: "visible", addEventListener() {} },
   fetch: async (url: string) => {
     fetched.push(String(url))
     throw new Error("no server in this test")
@@ -38,14 +38,60 @@ const { getThemeSnapshot, initTheme, setHostTheme } = await import("./theme.ts")
 const { prefs } = await import("./prefs.ts")
 const { store } = await import("../store.ts")
 const { composePending } = await import("./editorBridge.ts")
+const { runHostCommand } = await import("./embedCommand.ts")
+const { reportRoute, repostRoute } = await import("./embedRoute.ts")
 
 test("the address's embed mode is kept for the frame's session", () => {
   assert.equal(embedded(), true)
   assert.deepEqual(JSON.parse(session.get("frizz.embed")!), { host: "vscode", theme: "dark" })
 })
 
-test("a sidebar is the phone layout at any width", () => {
-  assert.equal(phoneLayout(), true)
+test("a sidebar is never the phone, at any width", () => {
+  // Wide: the 700px query does not match.
+  assert.equal(phoneLayout(), false)
+  // Phone-narrow: still not the phone — a sidebar has a pointer and a keyboard, and takes the desktop's
+  // inline question cards, type scale and Settings rather than the phone's sheets and big targets.
+  const wide = window.matchMedia
+  window.matchMedia = (() => ({ matches: true, addEventListener() {}, removeEventListener() {} })) as unknown as typeof window.matchMedia
+  try {
+    assert.equal(phoneLayout(), false)
+  } finally {
+    window.matchMedia = wide
+  }
+})
+
+test("the title row's buttons are the app's own doors", () => {
+  const reset = () => Object.assign(store, { showSettings: false, showPalette: false, showShortcuts: false, showNewThread: false, drawers: [] })
+  reset()
+  runHostCommand("jump")
+  assert.equal(store.showPalette, true, "⌘K's palette")
+  store.showShortcuts = true
+  runHostCommand("settings")
+  assert.deepEqual([store.showSettings, store.showPalette, store.showShortcuts], [true, false, false], "⌘,'s Settings, over whatever was up")
+  // Back to the queue: every drawer goes, and Settings with them.
+  store.drawers = [{ id: 1, kind: "thread", slug: "a", closing: false, openedAt: 1 }, { id: 2, kind: "doc", slug: "a", closing: false, openedAt: 2 }] as typeof store.drawers
+  runHostCommand("queue")
+  assert.equal(store.showSettings, false)
+  assert.deepEqual(store.drawers.filter((drawer) => !drawer.closing), [], "every drawer closed")
+  // New thread with no page box in this test's document: `c`'s door falls back to the new-thread dialog.
+  reset()
+  runHostCommand("new-thread")
+  assert.equal(store.showNewThread, true)
+  reset()
+})
+
+test("the title row hears the view only when it changes, and again after ready", () => {
+  posted.length = 0
+  reportRoute({ view: "queue", title: "acme-api", description: "1 needs you · 4 ready" })
+  reportRoute({ view: "queue", title: "acme-api", description: "1 needs you · 4 ready" })
+  reportRoute({ view: "thread", title: "Split the constants" })
+  assert.deepEqual(posted, [
+    { type: "frizz:route", view: "queue", title: "acme-api", description: "1 needs you · 4 ready" },
+    { type: "frizz:route", view: "thread", title: "Split the constants" },
+  ])
+  posted.length = 0
+  repostRoute()
+  assert.deepEqual(posted, [{ type: "frizz:route", view: "thread", title: "Split the constants" }])
 })
 
 test("a code file goes to the editor with its place, never to the reader or the server", async () => {

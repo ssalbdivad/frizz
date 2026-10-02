@@ -32,27 +32,41 @@ function subscribe(callback: () => void): () => void {
   return () => listeners.delete(callback)
 }
 
-function snapshot(): boolean {
-  if (embedded()) return true
+// The VIEWPORT's answer alone: is it phone-sized? Embed mode does not enter into it — see the two
+// questions below, which are what the app actually asks.
+function viewportIsPhone(): boolean {
   return media ? media.matches : typeof window !== "undefined" && !!window.matchMedia?.(MOBILE_QUERY).matches
 }
 
-/**
- * The same answer outside React — for a module that acts on the layout rather than rendering it
- * (lib/editorBridge.ts opening the phone's New thread sheet).
- *
- * IN AN EDITOR'S SIDEBAR IT IS ALWAYS THE PHONE LAYOUT (lib/embed.ts), at any width. A sidebar is one
- * narrow column whatever its width, and a human who drags it to 760px still wants that column, not the
- * desktop page's prompt box and two columns flipping in under the pointer mid-drag. The phone layout's
- * pieces — the tabs, the thread drawer drawn full-width, the New thread sheet, Settings as a page — are
- * exactly a sidebar's. styles.css carries the CSS half (`html[data-embed]` beside the 700px query).
- */
-export function phoneLayout(): boolean {
-  return snapshot()
+// TWO QUESTIONS, NOT ONE. This module answered a single "is this a phone?" until 2026-10-01, and an
+// editor's sidebar (lib/embed.ts) answered yes to it at any width — which bought the sidebar the phone's
+// one-column STRUCTURE it wanted and, with it, every phone BEHAVIOUR it did not: the answer sheet in place
+// of inline question cards, a 16.5px type scale and 44px targets, the Settings page with the phone's rows,
+// a floating New thread pill. A sidebar has a pointer and a keyboard; it is the desktop app in a narrow
+// column, not a phone (plans/vscode-extension.md § The editor in the sidebar, and the app's own feel).
+// So the two halves are asked separately:
+//
+//  - THE PHONE — its own page (PhonePage.tsx), its sheets, its touch-sized controls, no keyboard: this
+//    module, phoneLayout / useIsMobile. A phone-sized viewport, and never a sidebar.
+//  - ONE COLUMN — the page with nothing beside it, its drawers the full width: a phone, and a sidebar at
+//    any width. Asked where the column is drawn — AllQueues.tsx (embedded() → SidebarPage), ui/Sheet.tsx
+//    useNarrowDrawer, and styles.css `html[data-embed]` beside the 700px query — rather than here.
+
+function phoneSnapshot(): boolean {
+  return !embedded() && viewportIsPhone()
 }
 
 /**
- * Is this a phone-shaped viewport?
+ * The same answer as useIsMobile, outside React — for a module that acts on the layout rather than
+ * rendering it (lib/editorBridge.ts opening the phone's New thread sheet). False in an editor's sidebar,
+ * whose new-thread box is the desktop's, always on screen (AllQueues.tsx SidebarPage).
+ */
+export function phoneLayout(): boolean {
+  return phoneSnapshot()
+}
+
+/**
+ * Is this a phone-shaped viewport — the phone's page and touch behaviour? Never in an editor's sidebar.
  *
  * `useSyncExternalStore` rather than a `useState` + effect pair: the effect version renders ONCE with
  * the wrong answer before it corrects itself, which on a cold load means the desktop shell mounts, binds
@@ -60,5 +74,5 @@ export function phoneLayout(): boolean {
  * on exactly the devices least able to afford it.
  */
 export function useIsMobile(): boolean {
-  return useSyncExternalStore(subscribe, snapshot, () => false)
+  return useSyncExternalStore(subscribe, phoneSnapshot, () => false)
 }
