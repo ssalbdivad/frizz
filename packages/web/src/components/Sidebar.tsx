@@ -4,7 +4,8 @@ import { AlarmClock, Bot, Check, ChevronRight, Ellipsis, Github, Hourglass, Load
 import { questionsOwed, type ThreadView } from "@frizz/shared"
 import { showToast } from "../store.ts"
 import { displayTitle, subAgentName, titleIsProvisional, isPinned, isSnoozed, sessionIndicatorKind, offersRetry, futureSnoozedUntil, queueLabelAt, waitNamesPr, prChecksRunning, restingOnSubAgents } from "../groups.ts"
-import { ageSpan, relativeAge, limitResumeClock } from "../lib/activityTime.ts"
+import { ageSpan, relativeAge } from "../lib/activityTime.ts"
+import { limitPauseResume, limitPauseTitle } from "../lib/limitPause.ts"
 import { useNowMs } from "../lib/liveClock.ts"
 import { humpStarts } from "../lib/threadMentions.ts"
 import { BANDS, BAND_LABEL_TYPE, BandCount, BandGlyph, type BandKey } from "./BandLabel.tsx"
@@ -962,19 +963,14 @@ function sessionStateIndicatorFor(t: ThreadView): { node: ReactElement; tip: str
     // maintainer: every yellow row gets the hover Retry), but the glyph stays the hourglass because this
     // one has a wake frizz itself delivers. Until 2026-08-31 it wore the MUTED hourglass in the Snoozed
     // band, which read as a calm intentional park over a whole limit-killed fleet (maintainer: "they
-    // showed up and fucking snoozed"). The tip mirrors the drawer's LimitPauseCard word for word, so the
-    // rail and the card can never tell two stories about one thread.
-    const p = t.limitPause
-    const which = p?.window === "weekly" ? "weekly limit" : p?.window === "session" ? "session limit" : "usage limit"
-    // The auto-resume promise is the server's word (resolveLimitPause keeps it truthful — an unknown
-    // window has no wake), so the tip splits on it: a promised wake names its clock, an unpromised one
-    // says plainly that Retry is the way back.
-    const resume = p?.autoResume
-      ? p.resumesAt ? `continuing automatically at ${limitResumeClock(p.resumesAt)}` : "continuing automatically once the window resets"
-      : "won't resume by itself — Retry to continue"
+    // showed up and fucking snoozed"). The words are lib/limitPause's, shared with the drawer's and the
+    // queue card's pause card, so no two surfaces can tell two stories about one thread. The kind is only
+    // ever "limit" with a pause present.
+    const p = t.limitPause!
+    const resume = limitPauseResume(p).replace(/\.$/, "")
     return {
       node: <StatusBox accent><Hourglass size={9} className="text-accent" /></StatusBox>,
-      tip: `Paused by the ${p?.backend === "codex" ? "Codex" : "Claude"} ${which} — ${resume}`,
+      tip: `${limitPauseTitle(p)} — ${resume[0]!.toLowerCase()}${resume.slice(1)}`,
     }
   }
   // AWAITING A PR, IN THE QUEUE — the same octocat the Snoozed arm draws, on the rows that never park.
