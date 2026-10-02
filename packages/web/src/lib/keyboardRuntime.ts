@@ -103,10 +103,51 @@ function stepCard(step: 1 | -1): boolean {
  * and `r` is the one extra key to answer (maintainer 2026-09-28).
  */
 function openCard(key: string, root: HTMLElement | null): void {
-  const button = root?.querySelector<HTMLButtonElement>('[data-xq-show-more][aria-expanded="false"]')
-  if (!button) return
+  pendingOpen?.stop()
+  const button = showMoreIn(root)
+  if (button) return pressShowMore(key, button)
+  if (root) awaitShowMore(key, root)
+}
+
+const showMoreIn = (root: ParentNode | null) => root?.querySelector<HTMLButtonElement>('[data-xq-show-more][aria-expanded="false"]') ?? null
+
+function pressShowMore(key: string, button: HTMLButtonElement): void {
   button.click()
   autoOpened = { key, button }
+}
+
+/**
+ * A CARD WHOSE "Show more" IS NOT THERE YET is opened when it arrives. A card far down a long queue is built
+ * only as a key lands on it (lib/cardVisibility.ts), and its handoff — the text that clamps, and so the
+ * button — can still be on its way: the press found nothing, and the card a key landed on stayed shut once
+ * the button appeared a moment later (review 2026-10-02: `k` from the first card, wrapping to a never-built
+ * last one). So the landing waits for the button, until the reader moves on (`releaseAutoOpened`, another
+ * key), acts in the card themselves (a press or a key inside it is theirs to make), or OPEN_WAIT_MS passes —
+ * a card that turns out short never shows one.
+ */
+const OPEN_WAIT_MS = 5_000
+let pendingOpen: { key: string; stop: () => void } | null = null
+
+function awaitShowMore(key: string, root: HTMLElement): void {
+  const stop = () => {
+    observer.disconnect()
+    window.clearTimeout(timer)
+    for (const type of ["pointerdown", "keydown"] as const) document.removeEventListener(type, ownAct, true)
+    if (pendingOpen?.stop === stop) pendingOpen = null
+  }
+  const ownAct = (event: Event) => {
+    if (event.isTrusted && event.target instanceof Node && root.contains(event.target)) stop()
+  }
+  const observer = new MutationObserver(() => {
+    const button = showMoreIn(root)
+    if (!button) return
+    stop()
+    pressShowMore(key, button)
+  })
+  observer.observe(root, { childList: true, subtree: true })
+  const timer = window.setTimeout(stop, OPEN_WAIT_MS)
+  for (const type of ["pointerdown", "keydown"] as const) document.addEventListener(type, ownAct, true)
+  pendingOpen = { key, stop }
 }
 
 /**
@@ -133,6 +174,7 @@ if (typeof document !== "undefined") {
  * on its own — the viewport lock (lib/viewportLock.ts) holds what is on screen when a card above it shrinks.
  */
 export function releaseAutoOpened(key: string | null): void {
+  if (pendingOpen && pendingOpen.key !== key) pendingOpen.stop()
   const held = autoOpened
   if (!held || held.key === key) return
   autoOpened = null
