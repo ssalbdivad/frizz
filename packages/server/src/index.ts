@@ -1064,7 +1064,9 @@ export async function startServer(opts: StartOptions = {}): Promise<StartedServe
     startupPhase = "Vite"
     if (opts.dev) {
       try {
-        const hmrPort = port + 39000 <= 65535 ? port + 39000 : port - 1000
+        // Supervised, the board's stable HMR port (dev-supervisor.ts devHmrPort says why it must not
+        // follow this child's private port); a bare startServer({ dev: true }) derives one from its own.
+        const hmrPort = Number(process.env.FRIZZ_DEV_HMR_PORT) || (port + 39000 <= 65535 ? port + 39000 : port - 1000)
         vite = await runtime.createVite({
           root: webRoot,
           server: { middlewareMode: true, hmr: { port: hmrPort } },

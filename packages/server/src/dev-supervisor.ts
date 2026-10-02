@@ -421,9 +421,21 @@ export function devConfigSyntaxError(path: string): string | null {
   return null
 }
 
-/** A child gets a copy of the caller's complete environment; only the private dev port marker is added. */
-export function devChildEnv(env: NodeJS.ProcessEnv, port: number): NodeJS.ProcessEnv {
-  return { ...env, FRIZZ_DEV_PORT: String(port), FRIZZ_DEV_CHILD: "1" }
+/**
+ * Vite's HMR socket port for a board on `publicPort`. Keyed on the PUBLIC port, which the supervisor
+ * holds for its whole life, never on the child's private one: every recycle (any server save, by
+ * anyone — constant on a shared checkout) moves the child to a fresh random port, and an HMR port
+ * derived from it moved too. The open tab's Vite client then sat "Polling for restart…" on a port
+ * nothing would ever bind again, so no later edit reached it and it never reloaded (2026-10-01,
+ * scripts/verify-dev-hmr.ts). On a stable port the tab reconnects to the next child and reloads.
+ */
+export function devHmrPort(publicPort: number): number {
+  return publicPort + 39_000 <= 65_535 ? publicPort + 39_000 : publicPort - 1000
+}
+
+/** A child gets a copy of the caller's complete environment, plus its private port and the board's HMR port. */
+export function devChildEnv(env: NodeJS.ProcessEnv, port: number, hmrPort?: number): NodeJS.ProcessEnv {
+  return { ...env, FRIZZ_DEV_PORT: String(port), FRIZZ_DEV_CHILD: "1", ...(hmrPort ? { FRIZZ_DEV_HMR_PORT: String(hmrPort) } : {}) }
 }
 
 /** Allocate a disposable control-plane port. The durable proxy keeps the public port throughout. */
@@ -437,20 +449,10 @@ async function allocatePrivateDevPort(publicPort: number): Promise<number> {
         listener.close((error) => error ? rejectPort(error) : resolvePort(typeof address === "object" && address ? address.port : 0))
       })
     })
-    // Vite's legacy source-only HMR companion is still private to the disposable child. Stable
-    // artifacts do not create it, but reserving the pair keeps the legacy escape hatch coherent.
-    const hmrPort = candidate + 39_000 <= 65_535 ? candidate + 39_000 : candidate - 1000
-    if (candidate > 0 && candidate !== publicPort && await canBindPrivatePort(hmrPort)) return candidate
+    // The HMR port is the board's, not the child's (devHmrPort), so it must not be handed out here.
+    if (candidate > 0 && candidate !== publicPort && candidate !== devHmrPort(publicPort)) return candidate
   }
   throw new Error("could not allocate a private Frizz control-plane port")
-}
-
-async function canBindPrivatePort(port: number): Promise<boolean> {
-  return new Promise<boolean>((resolveBind) => {
-    const listener = createNetServer()
-    listener.once("error", () => resolveBind(false))
-    listener.listen(port, "127.0.0.1", () => listener.close(() => resolveBind(true)))
-  })
 }
 
 export function devReexecEnv(env: NodeJS.ProcessEnv): Record<string, string> {
@@ -1061,7 +1063,7 @@ class Supervisor implements DevSupervisor {
       try {
         child = fork(launch?.entry ?? this.childEntryProvider?.() ?? this.childEntry, this.childArgs, {
           cwd: this.cwd,
-          env: devChildEnv({ ...this.parentEnv, ...(launch?.environment ?? this.childEnvironment()) }, privatePort),
+          env: devChildEnv({ ...this.parentEnv, ...(launch?.environment ?? this.childEnvironment()) }, privatePort, devHmrPort(this.port)),
           // The supervisor may itself run under `node --input-type`, `--test`, an inspector, etc. Those
           // parent-only flags are invalid or dangerous for a file-backed control-plane child.
           execArgv: [],
