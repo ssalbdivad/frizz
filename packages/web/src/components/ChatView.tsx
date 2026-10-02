@@ -52,7 +52,7 @@ import { ICON_LABEL_NUDGE } from "../lib/iconAlign.ts"
 import { getThemeSnapshot, subscribeTheme } from "../lib/theme.ts"
 import { isVisualizationThemeAck, visualizationThemeMessage } from "../lib/visualizationThemeProtocol.ts"
 import { canAdoptThread } from "../lib/adoption.ts"
-import { THREAD_HEADER_CLASS, THREAD_HEADER_CONTROLS_CLASS, THREAD_HEADER_TITLE_CLASS } from "../lib/threadHeaderLayout.ts"
+import { THREAD_HEADER_CLASS, THREAD_HEADER_CONTAINER_CLASS, THREAD_HEADER_CONTROLS_CLASS, THREAD_HEADER_TITLE_CLASS } from "../lib/threadHeaderLayout.ts"
 import { ThreadActionBar } from "./ThreadActionBar.tsx"
 import { HeaderActions } from "./HeaderActions.tsx"
 import { ThreadLifecycleFooter, StateButton } from "./ThreadLifecycleFooter.tsx"
@@ -1612,6 +1612,9 @@ export function ThreadHeader({ slug, onStatusApplied, onClose, showReturnToQueue
   const hasDoc = stripFrontmatter(docQ.data?.markdown ?? "").trim().length > 0
   if (!thread) return null
   return (
+    // The size container the header's two-row wrap reads (lib/threadHeaderLayout.ts): the drawer's
+    // width decides it, not the window's.
+    <div className={THREAD_HEADER_CONTAINER_CLASS}>
     <header
       data-thread-header
       className={THREAD_HEADER_CLASS}
@@ -1691,6 +1694,7 @@ export function ThreadHeader({ slug, onStatusApplied, onClose, showReturnToQueue
         )}
       </div>
     </header>
+    </div>
   )
 }
 
@@ -2898,15 +2902,15 @@ export function AgentBlock({
           // each pushed it to a different x, and a column of them read with a ragged left edge. The
           // right-hand slot already varies card to card, so it absorbs a second reading without moving
           // anything the eye scans down.
-          (profile || reading) && (
-            <>
-              {profile && (
-                <span
           //
           // BELOW 18rem OF HEADER the profile and its `·` drop out and the runtime stays: at 243px (a 300px
           // VS Code sidebar) `opus › high · 1h 15m` left the title 0px of its own and the title's text was
           // drawn UNDER the reading, overlapping it by 9-19.7px. The runtime is what says the child ran
           // and stopped; the profile is still in the sub-agent's drawer, one click away.
+          (profile || reading) && (
+            <>
+              {profile && (
+                <span
                   data-subagent-profile
                   className="petite-caps frizz-tool-header-caps shrink-0 whitespace-nowrap text-[11.5px] leading-none text-muted-55 @max-[18rem]:hidden"
                   title={`Sub-agent profile: ${profile}`}
