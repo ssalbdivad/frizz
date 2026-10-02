@@ -169,8 +169,9 @@ Why the real page and not a rebuild, a tree or a chat participant (measured 2026
   point, and is request/response only: a worker cannot put a question in front of the human there.
 
 The wire between the extension and the page is `packages/shared/src/embed-protocol.ts`, relayed by the
-webview document: host → page `frizz:theme`, `frizz:compose`, `frizz:navigate`; page → host
-`frizz:ready`, `frizz:composed`, `frizz:open-file`, `frizz:open-external`, `frizz:key`. It never goes
+webview document: host → page `frizz:theme`, `frizz:compose`, `frizz:navigate`, `frizz:editor-context`,
+`frizz:command`, `frizz:host-state`; page → host `frizz:ready`, `frizz:composed`, `frizz:open-file`,
+`frizz:open-external`, `frizz:key`, `frizz:add-context`, `frizz:route`, `frizz:share-editor`. It never goes
 through the server.
 
 What embedding needed, each found by the spike:
@@ -212,29 +213,63 @@ must match the core app, with a hint wherever the sidebar differs; and no Frizz 
   (`r2-private.ts:91-116`, `26 lines`), live from `frizz:editor-context`: a selection lights up in the
   accent, a file alone is an outline. A click adds it as a chip (`frizz:add-context` → `frizz:compose`)
   in THAT box — the page remembers which box asked, since the host answers "front" — and the split
-  control's chevron lists the other open files. With nothing selected it spells out ⌘L / Ctrl+L. It
-  shows paths and line numbers only; the text crosses when the human adds it. Nothing is attached
-  implicitly — a chip in the box is the only way context rides a message, as in the browser.
-  (components/EditorContextBar.tsx, lib/editorContext.ts.)
+  control's chevron lists the other open files. (components/EditorContextBar.tsx, lib/editorContext.ts.)
+- **What the bar shows goes with the message.** Every send from a box with a bar carries an "Editor
+  context (attached automatically … it may or may not be related)" block after the human's words: the
+  selection, quoted up to 16 Ki characters, or with nothing selected the file and the caret's line — as
+  Claude Code's extension and Cursor do (maintainer 2026-10-02: *"the only reason this is useful is if it
+  has full context on the editor"*). A chip is still how the human points at code mid-sentence; the block
+  is what happened to be in front, and its header says so. The reading says what the agent can and cannot
+  do with it: `(unsaved changes)` quotes the buffer, not the disk; past the ceiling an unsaved buffer says
+  the copy on disk differs, an untitled one that there is no file to read, and a file that may hold
+  secrets that it was not quoted for that reason. A selection the thread's last block already quoted —
+  same lines, same text — is named, not quoted again ("Still selected in src/a.ts, lines 12-20 (quoted in
+  an earlier message)"; `previousEditorQuote` reads the thread's transcript). A lazy thread carries no
+  block, at saving or at launch: baked into its note it would be read hours later as the moment of launch,
+  and at launch it would describe whatever the editor shows then, from a box with no bar to see or stop
+  it; the agent reads the editor through its tool if the note means it. (lib/composerContext.ts
+  serializeEditorContext, lib/editorContext.ts outgoingMessage; the transcript draws the block as a chip
+  under the bubble, components/SentEditorContext.tsx.)
+- **One switch, the eye.** The eye before the reading is `frizz.shareEditorState`, the extension's setting:
+  on, sends carry the block and the agents can read the editor (below); off, neither — only what the human
+  adds as a chip, and the page feed carries no selection text at all. The page shows it from
+  `frizz:host-state` and flips it with `frizz:share-editor`; the extension writes it where it takes effect
+  (the workspace's value when one is set, else the user's). Until 2026-10-02 the eye was the frame's own
+  pref and governed the block alone, so with the eye off an agent could still read the selection through
+  its tool. Being a VS Code setting, it holds across window reloads and in every window.
+- **The hint** beside the reading says what goes on its own and what the chord is still for — "Selections
+  go with your message · Ctrl+L puts one at the caret", "Goes with your message" over a selection, "Lines
+  only: the file may hold secrets", "Not shared" with the eye off — the longest that fits. It said "Select
+  code and press Ctrl+L" until the block made that step unnecessary for a plain question.
 - **The chords people already know, in the editor** (maintainer 2026-10-02: *"there is a standard
   shortcut for adding a pill for highlighted snippet to a message … look at cursor, claude code vscode
   extension and take the best parts of each"*). Each adds a chip to the sidebar's front prompt box and
   puts the caret after it:
-  - **⌘L / Ctrl+L**, Cursor's "add selection to chat" — the one the page names (the context bar's hint,
-    the `?` sheet's Editor group first). Only with a selection, so VS Code's own Ctrl+L (select the line)
-    works without one; a second Ctrl+L to grow a line selection is the price.
+  - **⌘L / Ctrl+L**, Cursor's chord, both halves of it — the one the page names (the context bar's hint,
+    the `?` sheet's Editor group first). With a selection: add it as a chip at the prompt box's caret.
+    With NOTHING selected: reveal the sidebar and put the caret at the end of the prompt box in front
+    (`frizz.focusPrompt` → `frizz:command` `prompt`). Pressed in the sidebar: back to the editor (the page
+    forwards it like VS Code's own chords; the extension's allowlist runs focusActiveEditorGroup). The
+    trade: VS Code's own Ctrl+L (expand line selection) is Frizz's in the editor, with a selection or
+    without, while `frizz.useSidebar` is on — the no-selection binding is gated on it, so with the sidebar
+    off Ctrl+L selects the line again. Shift+↓ grows a selection by lines. Until 2026-10-02 ⌘L pressed in
+    the page added the editor's selection again (⌘I does that there), which left no chord back out.
   - **⌘I / Ctrl+I**, the core app's own chord for staging a selection (FileViewerPanel's ⌘I). It replaced
     the first cut's Ctrl+Alt+P, and also fires only with a selection, so VS Code's Ctrl+I (suggest,
-    inline chat) is untouched everywhere else.
+    inline chat) is untouched everywhere else. Pressed in a sidebar prompt box it adds the editor's
+    selection (or its file) to that box.
   - **⌥K / Alt+K**, Claude Code's @-mention: the selection, or with only a caret the whole file
     (`frizz.addSelectionOrFile`, which is Add to Frizz prompt or Add file to Frizz prompt). Bound with or
-    without a selection, as Claude Code binds it.
+    without a selection, as Claude Code binds it — and ONLY while Claude Code's own extension
+    (`anthropic.claude-code`) is not installed: it binds Alt+K with the same `when`, so with both, which
+    one answered depended on load order (the maintainer's machine has it). The extension sets
+    `frizz.claudeCodeInstalled` at activation and on every extensions change and the binding is gated on
+    it; `frizz:host-state` `altK` tells the page, and the `?` sheet drops the row. Claude Code's
+    Ctrl+Escape and Ctrl+Shift+Escape are not bound here.
 
   ⌘L is listed after ⌘I in the manifest on purpose: VS Code shows a command's LAST contributed binding in
   its menus and the palette. In Cursor, which binds ⌘L and ⌘I to its own chat and agent, the two compete;
-  the README says to rebind. Pressed in the sidebar's prompt box, ⌘L and ⌘I do the same as from the
-  editor (into that box; ⌘L with a thread open and the caret elsewhere, into its reply box), so the chord
-  the hint names works on both sides of the frame.
+  the README says to rebind.
 - **More ways in:** an editor tab's context menu and the explorer add a whole file; a problem's quick
   fix, "Ask Frizz to fix", adds its lines with the message after the chip (`note`); the terminal's
   context menu adds its selection as `@terminal`.
@@ -289,33 +324,52 @@ gives its agent the editor through MCP tools it calls on demand (getCurrentSelec
 getDiagnostics); Frizz now does the same for every worker, Claude, Codex and ACP alike, through the
 socket it already had.
 
+- **One reading of "in front", for the bar, the block and the tool.** The extension had two observers of
+  the editor, written by two builders, that disagreed about the same moment: the page's read `file:`
+  documents only, went blank when the Output panel took focus and had no dirty flag; the tool's read
+  untitled buffers, kept the last file editor on screen and knew about unsaved changes. Now one rule and
+  one reading (packages/vscode editor-front.ts, pure) and one observer (editor-watcher.ts) feed both: a
+  file on disk or an untitled buffer — the modified side of a diff included — the active one when it is,
+  else the last one still on screen (focus in an output pane or the debug console makes THAT the active
+  text editor in VS Code, which would blank the selection the human was pointing at). Each feed keeps only
+  what is its own: the page's 16 Ki text ceiling and 100ms cadence (the text rides every send; a bar the
+  human watches while selecting) against the tool's 32 Ki and 250ms (read once, when an agent asks; a frame
+  that also carries diagnostics a language server re-publishes per keystroke).
+- **Secrets stay home.** A selection's TEXT never leaves on its own — not in the block, not in the frame —
+  from a file whose name says it holds credentials (`.env*`, `*.pem`, `*.key`, `*.p12`, `id_rsa*`,
+  `*credentials*`, `*secret*`, `.netrc`, `.npmrc`, …; editor-front.ts secretFile, loose on the safe side)
+  or that VS Code is told to hide (`files.exclude`, matched by VS Code's own glob engine). The path and
+  lines are still named, and the human can still add the text on purpose as a chip. Gitignored files are
+  not withheld: a build output is not a secret, and an agent told "not quoted" for every file under dist/
+  would be told it for nothing.
 - **The frame.** Each window sends `editor` (`EditorSnapshot`, editor-protocol.ts): the text editor in
   front — path (an untitled buffer's label), language, unsaved, line count, caret, the lines on screen,
-  the primary selection with its text — the other tabs most recent first, the errors and warnings, and
-  the full problem counts. Only `file` and `untitled` documents: never an output pane, a git revision or
-  a settings UI. Focus in an output pane or the debug console makes that the active text editor in VS
-  Code, so the last file editor still on screen stands in rather than blank the selection.
+  the primary selection with its text (or `withheld`) — the other tabs most recent first, the errors and
+  warnings, and the full problem counts.
 - **When.** Debounced 250ms after any change of the active editor, selection, visible range, tabs, a
   document's text or dirty state, or the diagnostics; at once when the setting changes; and once on
   every connect. An unchanged picture is not resent (packages/vscode editor-state-feed.ts).
 - **Version skew.** The server closes a socket on any frame it does not know (4401), on every redial,
   so the protocol stays v1 and grows by advertisement: the welcome names `features: ["editor-state"]`
   and the extension sends the frame only to a Frizz that named it. An older Frizz never hears it, and the
-  log says its agents cannot read the editor.
+  log says its agents cannot read the editor. The schema is strict, so a newer FIELD is advertised too:
+  `editor-selection-withheld`; a Frizz that does not name it gets a withheld selection as `truncated`
+  with no text (connection.ts forServer), which keeps the text home all the same.
 - **Fitting.** Capped to the server's schema — 50 tabs, 100 diagnostics (every error before any warning,
   the file in front first within each, so 200 lint warnings cannot push out an error elsewhere), messages
   at 300 characters, selected text at 32 Ki characters flagged `truncated` — and the whole frame fitted
   into 56 KiB encoded (`EDITOR_STATE_MAX_BYTES`, under the 64 KiB frame ceiling) by trimming the
   diagnostics, then the tabs, then the selected text, by ENCODED size (packages/vscode editor-state.ts).
-- **The opt-out.** `frizz.shareEditorState` (default on). Off, the window sends `shared: false` with
-  nothing else, and the server forgets what it had: a worker is told the human turned it off, which is a
-  different next move from "no editor".
+- **The opt-out** is the one switch, the bar's eye: `frizz.shareEditorState` (default on). Off, the
+  window sends `shared: false` with nothing else, and the server forgets what it had: a worker is told
+  the human turned it off, which is a different next move from "no editor".
 - **The server** keeps each window's latest frame with its arrival time and drops it with the window.
   `editorState` (project-prefixed, a mutation only because the worker's MCP server POSTs everything)
   answers the windows that have the project open — a workspace folder that holds `workDirOf(project)`,
   one inside it (a package, a thread's worktree opened with "Open in editor"), or a loose window whose
-  file in front is under it — most recently focused first, with how many windows are connected and what
-  the others have open.
+  file in front is under it — most recently focused first, with how many windows are connected. The
+  others are counted, not described: until 2026-10-02 their folders were listed (`elsewhere`) to any
+  worker of any project, which told a worker of project A every other project the human had open.
 - **The tool.** `editor` (cc-worker/bin/frizz-mcp.mjs, `readOnlyHint`, no arguments: the window is the
   one on the caller's project) renders the window used last as text: the file, the selected lines and
   text in a fence, the caret and screen, the tabs, the problems grouped by file. Every way of having
@@ -324,9 +378,11 @@ socket it already had.
   to paste it. Its description names the words humans use ("this", "the selected code", "the error"),
   and the worker contract names the tool in one sentence, since a worker's MCP tools are deferred.
 
-Nothing is attached to a message implicitly: the chip is still the only context that rides one. The
-agent READS the editor when it decides to, which is the Claude Code model rather than Cursor's
-always-attached context.
+Both models, then, as the two products the maintainer named do it between them: what is in front rides
+every sidebar send on its own (Cursor's always-attached context, Claude Code's selection indicator), and
+the agent can READ the editor when it decides to (Claude Code's IDE tools) — including from a thread the
+human talks to in a browser tab, and for what the block does not carry (the tabs, the problems, a
+selection between the block's 16 Ki and the tool's 32 Ki).
 
 ## Verification
 
