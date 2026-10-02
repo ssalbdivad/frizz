@@ -81,6 +81,31 @@ export interface ClaudeBrokerExitRecord {
   exit: { reason: ClaudeBrokerExitReason; detail?: string }
 }
 
+/** Why FRIZZ asked a daemon to end — written by the SERVER, into the daemon's log, before the signal.
+ *
+ *  The daemon cannot know who signalled it, so its own breadcrumb for every requested teardown is the
+ *  same `signal-SIGTERM`. Across the whole 2026-09-23..10-01 corpus (292 daemon generations, 238
+ *  sessions) that was the ONLY exit reason ever recorded — 277 of 277 — so a hibernation, a Stop, a Mark
+ *  as done, a launch-flag retirement, a usage-limit fresh process and an operator's `kill` all read
+ *  identically, and the one mark that did name a cause (`.retired`) is consumed by the resume it
+ *  explains. On Windows it is worse: `taskkill /F` runs no handler, so a requested teardown there left no
+ *  line at all. This record closes both: the signal's sender writes what it meant, with the daemon's
+ *  generation, so a reader joins it to the `signal-SIGTERM` that follows. A `signal-SIGTERM` with NO
+ *  preceding `terminate` for its generation is then genuinely external.
+ *
+ *  It carries `terminate`, not `diagnostic` or `exit`, so neither reader below changes. */
+export type ClaudeBrokerTerminationCause =
+  | "retire" | "fresh-process" | "hibernate"
+  | "session-replaced" | "session-deleted" | "dispatch-replaced"
+  | "unspecified"
+
+export interface ClaudeBrokerTerminationRecord {
+  at: string
+  daemonPid: number
+  generation: string
+  terminate: { cause: ClaudeBrokerTerminationCause; requestedBy: number }
+}
+
 /** One synchronous, best-effort, rotating append. Every writer below funnels through here, so the
  *  "never throw, never perturb the session" guarantee is stated once. */
 function appendRecord(path: string, record: unknown): void {
@@ -127,6 +152,18 @@ export function createClaudeBrokerExitWriter(
     }
     appendRecord(path, record)
   }
+}
+
+/** Record, from the server, that it is about to end this daemon and why. Best-effort like every
+ *  writer here: a teardown never waits on, or fails because of, its own forensics. */
+export function recordClaudeBrokerTermination(
+  path: string,
+  meta: { daemonPid: number; generation: string },
+  cause: ClaudeBrokerTerminationCause,
+  now: () => Date = () => new Date(),
+): void {
+  const record: ClaudeBrokerTerminationRecord = { at: now().toISOString(), ...meta, terminate: { cause, requestedBy: process.pid } }
+  appendRecord(path, record)
 }
 
 /** The exit this session's log records for a NAMED daemon, or null when it recorded none for that one.
