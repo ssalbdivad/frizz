@@ -198,13 +198,19 @@ export function activateFrizz(api: Vscode, context: vscode.ExtensionContext): Fr
 
 
   async function openFromFrizz(message: EditorOpen): Promise<OpenResult> {
-    let entry
-    try {
-      entry = await stat(message.path)
-    } catch {
-      return { ok: false, error: `${message.path} doesn't exist.` }
+    let path = message.path
+    let entry = await stat(path).catch(() => undefined)
+    if (!entry) {
+      // A link into a thread's worktree that Done has since removed: Frizz names the main checkout's copy,
+      // which the work was merged into (settleMissing). Asked only for a path that is not there, so an
+      // ordinary open never waits on the server.
+      const settled = await settleMissing(path)
+      entry = settled ? await stat(settled).catch(() => undefined) : undefined
+      if (!entry || !settled) return { ok: false, error: `${message.path} doesn't exist.` }
+      log.info(`${message.path} is gone; opening the main checkout's copy, ${settled}.`)
+      path = settled
     }
-    const uri = api.Uri.file(message.path)
+    const uri = api.Uri.file(path)
     if (entry.isDirectory()) {
       // In the explorer when the window has it; a folder outside every one of its folders (a thread's
       // worktree elsewhere, another project) has nothing to reveal it in, and revealing it did nothing
@@ -238,6 +244,25 @@ export function activateFrizz(api: Vscode, context: vscode.ExtensionContext): Fr
     }
     await focusWindow()
     return { ok: true }
+  }
+
+  /**
+   * The main checkout's copy of a file in a worktree that is gone (the server's `settleLocalPath`), or
+   * undefined. A file link the sidebar's page hands over (`frizz:open-file`) comes straight here, not
+   * through Frizz's opener, which settles its own; an agent that worked in `.frizz/worktrees/<slug>` wrote
+   * its links there, and Done removes the worktree. Asked of the project the path lies in, else the
+   * window's; a Frizz too old for the procedure, or no answer within a moment, leaves the path missing.
+   */
+  async function settleMissing(path: string): Promise<string | undefined> {
+    const origin = connection.origin ?? found?.origin
+    const project = projectForPath(path, projects)?.project ?? windowProject()
+    if (!origin || !project) return undefined
+    try {
+      const settled = (await new FrizzRpc(origin).query(project.id, "settleLocalPath", { path }, 3_000)).path
+      return settled && settled !== path ? settled : undefined
+    } catch {
+      return undefined
+    }
   }
 
   // ── the window's own changes ─────────────────────────────────────────────────────────────────────

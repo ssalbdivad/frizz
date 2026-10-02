@@ -211,6 +211,52 @@ test("editorState names the calling thread's own checkout, and only when it is n
   assert.equal(r.editorState.input.safeParse({ slug: "tidy", extra: 1 }).success, true)
 })
 
+// A thread in a worktree links its own copy; once Done removes the worktree, the same link opens the main
+// checkout's copy rather than "not found". A real repository, a real `git worktree add` and `remove`.
+test("file links: a thread's worktree first, the main checkout after it is gone, and the page's spelling kept", { skip: process.platform === "win32" }, async (t) => {
+  const repo = realpathSync(mkdtempSync(join(tmpdir(), "frizz-router-links-")))
+  t.after(() => rmSync(repo, { recursive: true, force: true }))
+  const git = (...args: string[]) => execFileSync("git", ["-C", repo, ...args], { stdio: "ignore" })
+  execFileSync("git", ["init", "-q", "-b", "main", repo])
+  mkdirSync(join(repo, "src"))
+  writeFileSync(join(repo, "src", "a.ts"), "main copy\n")
+  git("add", ".")
+  git("-c", "user.email=t@t", "-c", "user.name=t", "commit", "-q", "-m", "init")
+  const tree = join(repo, ".frizz", "worktrees", "tidy")
+  git("worktree", "add", "-q", tree, "-b", "tidy")
+  writeFileSync(join(tree, "src", "a.ts"), "worktree copy\n")
+  writeFileSync(join(tree, "src", "new.ts"), "only in the worktree\n")
+  mkdirSync(join(repo, ".frizz", "threads", "x"), { recursive: true })
+  writeFileSync(join(repo, ".frizz", "threads", "x", "notes.md"), "# only in the main checkout\n")
+  const r = router(repo, "copy")
+
+  // Inline code from the worktree thread: its own copy first, then the project root.
+  const { resolved } = await r.resolveLocalPaths.handler({ input: { paths: ["src/a.ts", "src/new.ts", ".frizz/threads/x/notes.md", "src/nope.ts"], base: tree } })
+  assert.deepEqual(resolved.map((each) => each.path), [join(tree, "src", "a.ts"), join(tree, "src", "new.ts"), join(repo, ".frizz", "threads", "x", "notes.md"), null])
+  // Without a base, the project root as always.
+  assert.equal((await r.resolveLocalPaths.handler({ input: { paths: ["src/a.ts"] } })).resolved[0]!.path, join(repo, "src", "a.ts"))
+  // A link resolved into the worktree for a file only the main checkout has (the page's base is the worktree).
+  assert.equal((await r.settleLocalPath.handler({ input: { path: join(tree, ".frizz", "threads", "x", "notes.md") } })).path, join(repo, ".frizz", "threads", "x", "notes.md"))
+  // While the worktree stands, its own files are what they are.
+  assert.equal((await r.settleLocalPath.handler({ input: { path: join(tree, "src", "a.ts") } })).path, join(tree, "src", "a.ts"))
+  assert.equal((await r.localFile.handler({ input: { path: join(tree, "src", "a.ts") } })).text, "worktree copy\n")
+
+  // Done: the worktree goes. Its links now open the main checkout's copy, in every opener.
+  git("worktree", "remove", "--force", tree)
+  assert.equal(existsSync(tree), false)
+  assert.deepEqual(await r.settleLocalPath.handler({ input: { path: join(tree, "src", "a.ts") } }), { path: join(repo, "src", "a.ts") })
+  assert.deepEqual(await r.localFile.handler({ input: { path: join(tree, "src", "a.ts") } }), { path: join(repo, "src", "a.ts"), text: "main copy\n", truncated: false })
+  assert.equal((await r.localMarkdown.handler({ input: { path: join(tree, ".frizz", "threads", "x", "notes.md") } })).markdown, "# only in the main checkout\n")
+  assert.deepEqual(await r.openLocalFile.handler({ input: { path: join(tree, "src", "a.ts"), line: 1 } }), { action: "copy", path: join(repo, "src", "a.ts") })
+  assert.equal((await r.resolveLocalPaths.handler({ input: { paths: [join(tree, "src", "a.ts")] } })).resolved[0]!.path, join(repo, "src", "a.ts"))
+  // A file the main checkout never had stays missing, as asked — the error it gets is unchanged.
+  assert.deepEqual(await r.settleLocalPath.handler({ input: { path: join(tree, "src", "new.ts") } }), { path: join(tree, "src", "new.ts") })
+  await assert.rejects(r.localFile.handler({ input: { path: join(tree, "src", "new.ts") } }), /not found/i)
+  // Outside the worktree folder nothing is rewritten, and the page's own spelling comes back (never a realpath).
+  assert.deepEqual(await r.settleLocalPath.handler({ input: { path: join(repo, "src", "gone.ts") } }), { path: join(repo, "src", "gone.ts") })
+  assert.deepEqual(await r.settleLocalPath.handler({ input: { path: "/etc/../etc/hosts" } }), { path: "/etc/../etc/hosts" })
+})
+
 test("openLocalFile takes a position only as positive whole numbers, and still nothing else", () => {
   const input = router(tmpdir(), "vscode").openLocalFile.input
   assert.equal(input.safeParse({ path: "/a", line: 1, column: 2, endLine: 3 }).success, true)

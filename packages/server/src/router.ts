@@ -95,6 +95,7 @@ import {
   type InteractionRecord,
   type ThreadView,
   ThreadSlug,
+  splitFilePosition,
   isDirectSubAgent,
   DirectoryPickResult,
   ProjectAddResult,
@@ -195,7 +196,7 @@ import {
 } from "./transcript.ts"
 import { liftCheckout, resolveThreadWorkingDir, subAgentFolders, terminalFolder } from "./thread-cwd.ts"
 import { openExternalUrl } from "./open-external.ts"
-import { editorKindsForOpener, folderEditor, openLocalFile, openLocalFolder, readLocalMarkdown, resolveLocalFileAt, resolveOpenableFile, readLocalTextFile } from "./local-file.ts"
+import { editorKindsForOpener, folderEditor, mainCheckoutCopy, openLocalFile, openLocalFolder, readLocalMarkdown, resolveLocalFileAt, resolveOpenableFile, readLocalTextFile } from "./local-file.ts"
 import { openableFileRoots, workDirOf } from "./project.ts"
 import { resolveThreadLink, threadLinkView } from "./thread-links.ts"
 import { ghInstalled, ghAuthed, ghRepo, gitGithubRemote, listItems, hydrateIssue, hydratePr, renderGithubPrompt, effectiveTemplate, DEFAULT_GITHUB_PROMPT } from "./github.ts"
@@ -1439,6 +1440,24 @@ export function createRouter(ctx: AppContext) {
     const root = worktreeRootFor(setting, workDir)
     worktreeRootMemo = { setting, root }
     return root
+  }
+
+  // A LINK INTO A WORKTREE THAT IS GONE OPENS THE MAIN CHECKOUT'S COPY. An agent working in a worktree
+  // names its files there — absolute paths in its tool calls and prose, relative ones the page resolves
+  // against its worktree (lib/useMarkdown.ts CheckoutBaseContext) — and Done removes the worktree. Every
+  // way the page opens a local file (the editor, the reader, inline-code links, the sidebar's own opener
+  // through `settleLocalPath`) passes the path through here: as asked while it exists, else the main
+  // checkout's copy when THAT exists (local-file.ts mainCheckoutCopy), else as asked, so the error a
+  // missing file gets is unchanged. A trailing `:12` the opener strips later is carried along.
+  function settleWorktreePath(path: string): string {
+    if (!isAbsolute(path) || existsOrPositioned(path)) return path
+    const copy = mainCheckoutCopy(path, workDir, worktreeRoot(ctx.getSettings().worktreeDir))
+    return copy && existsOrPositioned(copy) ? copy : path
+  }
+  function existsOrPositioned(path: string): boolean {
+    if (existsSync(path)) return true
+    const split = splitFilePosition(path)
+    return split.position !== undefined && existsSync(split.path)
   }
 
   // DONE REFUSES WHILE AN EDITOR HOLDS UNSAVED CHANGES IN A WORKTREE IT WOULD REMOVE. Marked done, a
@@ -4451,11 +4470,12 @@ export function createRouter(ctx: AppContext) {
         const asked = requestedPosition(input)
         // An image goes to the system viewer whatever the setting says, so never to an editor window.
         const kinds = input.image === true ? [] : editorKindsForOpener(opener, process.env)
+        const requested = settleWorktreePath(input.path)
         if (ctx.editors && kinds.length > 0) {
-          const { path, position } = resolveLocalFileAt(input.path, openRoots)
+          const { path, position } = resolveLocalFileAt(requested, openRoots)
           if (await ctx.editors.openFile(path, asked ?? position, kinds)) return { action: "opened" as const, path }
         }
-        return openLocalFile(input.path, opener, openRoots, { forceSystem: input.image === true, position: asked })
+        return openLocalFile(requested, opener, openRoots, { forceSystem: input.image === true, position: asked })
       },
     }),
 
@@ -4500,7 +4520,7 @@ export function createRouter(ctx: AppContext) {
     localMarkdown: query({
       input: z.object({ path: z.string().max(4096) }).strict(),
       output: z.object({ path: z.string(), markdown: z.string(), truncated: z.boolean() }),
-      handler: async ({ input }) => readLocalMarkdown(input.path, openRoots),
+      handler: async ({ input }) => readLocalMarkdown(settleWorktreePath(input.path), openRoots),
     }),
 
     // A file's SOURCE, for the fullscreen page's file viewer. The SAME openable roots as the Markdown
@@ -4509,23 +4529,50 @@ export function createRouter(ctx: AppContext) {
     localFile: query({
       input: z.object({ path: z.string().max(4096) }).strict(),
       output: z.object({ path: z.string(), text: z.string(), truncated: z.boolean() }),
-      handler: async ({ input }) => readLocalTextFile(input.path, openRoots),
+      handler: async ({ input }) => readLocalTextFile(settleWorktreePath(input.path), openRoots),
     }),
 
     // Batch-classify path REFERENCES (as they appear in inline code) → their canonical openable path, or
     // null when a candidate doesn't resolve to a real file under the openable roots. The client renders
     // resolved ones as clickable inline code (opened via openLocalFile). Pure read: it only realpath-
     // resolves + stats within the gate, never opening a file nor revealing existence outside it.
+    //
+    // `base` is the folder the prose's author worked in when that is not the project root — a thread in a
+    // worktree, whose `src/a.ts` means its worktree's copy. A relative candidate is tried there first, then
+    // at the project root, so a file only the main checkout has (`.frizz/threads/<id>/notes.md`) still
+    // links; the openable-roots gate judges the result either way, so a base outside them resolves nothing.
     resolveLocalPaths: query({
-      input: z.object({ paths: z.array(z.string().max(1024)).max(128) }).strict(),
+      input: z.object({ paths: z.array(z.string().max(1024)).max(128), base: z.string().max(4096).optional() }).strict(),
       output: z.object({ resolved: z.array(z.object({ input: z.string(), path: z.string().nullable() })) }),
       handler: async ({ input }) => {
         const memo = new Map<string, string | null>()
+        const at = (raw: string, dir: string) => resolveOpenableFile(raw, dir, openRoots, homedir(), settleWorktreePath)
+        const base = input.base && isAbsolute(input.base) && input.base !== workDir ? input.base : undefined
         const resolved = input.paths.map((raw) => {
-          if (!memo.has(raw)) memo.set(raw, resolveOpenableFile(raw, workDir, openRoots))
+          if (!memo.has(raw)) memo.set(raw, (base ? at(raw, base) : null) ?? at(raw, workDir))
           return { input: raw, path: memo.get(raw) ?? null }
         })
         return { resolved }
+      },
+    }),
+
+    // The sidebar's opener (lib/local-file-links.ts openInHostEditor) hands a path straight to the editor
+    // around it, not through the server, so it asks here first: the path as it is while it exists, else
+    // the main checkout's copy of a file in a worktree that is gone (settleWorktreePath). Never a realpath
+    // — the editor opens what it is given, and a symlink-resolved spelling opens as a file outside its
+    // workspace. Says nothing about a path outside the openable roots: that one comes back as asked.
+    settleLocalPath: query({
+      input: z.object({ path: z.string().max(4096) }).strict(),
+      output: z.object({ path: z.string() }),
+      handler: async ({ input }) => {
+        const settled = settleWorktreePath(input.path)
+        if (settled === input.path) return { path: input.path }
+        try {
+          resolveLocalFileAt(settled, openRoots)
+          return { path: settled }
+        } catch {
+          return { path: input.path }
+        }
       },
     }),
 

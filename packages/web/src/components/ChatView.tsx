@@ -10,7 +10,7 @@ import { useBoard, useProjectDir, useTranscript, type ChatMessage, type Transcri
 import { rpc } from "../api/rpc.ts"
 import { UNNAMED_SUB_AGENT_LABEL, lastActiveLabelAt, subAgentName } from "../groups.ts"
 import { stripFrontmatter } from "../lib/markdown.ts"
-import { useMarkdownHtml } from "../lib/useMarkdown.ts"
+import { CheckoutBaseContext, useMarkdownHtml } from "../lib/useMarkdown.ts"
 import { splitComposerValue, splitProseAttachments } from "../lib/imagePaths.ts"
 import { localImageUrl } from "../lib/markdownTargets.ts"
 import { basename } from "../lib/paths.ts"
@@ -205,9 +205,13 @@ export function ThreadView({ slug, onStatusApplied, onClose, virtualized = false
   return (
     <div className="flex-1 min-h-0 flex flex-col">
       <ThreadHeader slug={slug} onStatusApplied={onStatusApplied} onClose={onClose} showReturnToQueue={showReturnToQueue} />
-      {/* `@handle` mentions in the human's messages link to the threads they name (MentionLinks.tsx). */}
+      {/* `@handle` mentions in the human's messages link to the threads they name (MentionLinks.tsx). A
+          thread working in a worktree has its relative file links resolved there (lib/useMarkdown.ts
+          CheckoutBaseContext). */}
       <MentionIndexProvider>
-        <ChatView slug={slug} virtualized={virtualized} />
+        <CheckoutBaseContext.Provider value={thread?.checkout?.dir ?? null}>
+          <ChatView slug={slug} virtualized={virtualized} />
+        </CheckoutBaseContext.Provider>
       </MentionIndexProvider>
       {thread && <ThreadLifecycleFooter thread={thread} sticky safeArea onArchived={onStatusApplied} />}
     </div>
