@@ -3,7 +3,7 @@ import assert from "node:assert/strict"
 import { threadHandle as sharedThreadHandle } from "@frizz/shared"
 // The page's originals, run beside the ports over the same rows (groups.ts loads under node).
 import { displayTitle as pageDisplayTitle, threadHandleOf as pageThreadHandleOf } from "../../web/src/groups.ts"
-import { bandOf, displayTitle, findThread, pickerThreads, threadHandle, threadHandleOf, threadItem, type PickerThread } from "./threads.ts"
+import { bandOf, displayTitle, findThread, pickerThreads, threadHandle, threadHandleOf, threadItem, windowThread, windowThreadFirst, type PickerThread } from "./threads.ts"
 
 const LONG_AGO = "2026-01-01T00:00:00.000Z"
 const justNow = () => new Date(Date.now() - 2_000).toISOString()
@@ -86,4 +86,29 @@ test("a picker row shows the @handle, where the thread stands, and what it is do
     detail: "Reading the file",
   })
   assert.equal(threadItem(row("t3", { title: "x", titleAuto: false, lastAssistant: "y".repeat(300) })).detail?.length, 140)
+})
+
+// A window opened on a thread's worktree is about that thread: the sidebar opens on it and Send offers it
+// first. Matched by folder identity (the extension passes a realpath comparison), never by name.
+test("a window whose folder is a thread's worktree finds that thread; a window on the root finds none", () => {
+  const tree = "/repo/.frizz/worktrees/tidy"
+  const same = (a: string, b: string) => a.replace(/\/$/, "") === b.replace(/\/$/, "")
+  const threads = [
+    row("root-thread", { needsYou: true }),
+    row("tidy", { checkout: { dir: tree, kind: "worktree" }, lastActivityAt: "2026-09-01T00:00:00Z" }),
+    // A spinoff child working on in its parent's worktree, waiting on the human: listed first, so chosen.
+    row("tidy-child", { checkout: { dir: tree, kind: "worktree" }, needsYou: true, lastActivityAt: "2026-08-01T00:00:00Z" }),
+    row("tidy-done", { checkout: { dir: tree, kind: "worktree" }, state: "archived", needsYou: true }),
+    row("other", { checkout: { dir: "/repo/.frizz/worktrees/other", kind: "worktree" } }),
+  ]
+  assert.equal(windowThread(threads, [`${tree}/`], same)?.id, "tidy-child")
+  assert.equal(windowThread(threads.filter((t) => t.id !== "tidy-child"), [tree], same)?.id, "tidy")
+  assert.equal(windowThread(threads, ["/repo"], same), undefined, "the project root is no thread's own")
+  assert.equal(windowThread(threads, [`${tree}/packages/web`], same), undefined, "a folder inside the worktree is not the worktree")
+  assert.equal(windowThread(threads.filter((t) => t.id.startsWith("tidy-done")), [tree], same), undefined, "a thread marked done is not offered")
+  assert.equal(windowThread(threads, [], same), undefined)
+
+  const listed = pickerThreads(threads)
+  assert.deepEqual(windowThreadFirst(listed, listed.find((t) => t.id === "other")).map((t) => t.id), ["other", "tidy-child", "root-thread", "tidy"])
+  assert.deepEqual(windowThreadFirst(listed, undefined).map((t) => t.id), listed.map((t) => t.id))
 })
