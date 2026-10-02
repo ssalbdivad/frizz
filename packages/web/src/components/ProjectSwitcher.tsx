@@ -125,8 +125,10 @@ export function ProjectSwitcher({
           <span data-xq-switcher-label className="min-w-0 truncate">{name}</span>
           {/* Its ink 4px off the name's, closer than the square's 6px, so it reads as the name's handle rather
               than floating between the two (at `-ml-[3.5px]` both gaps measured 6.1px; scripts/ink-gaps.mjs,
-              sans 13px semibold, 2026-09-29). */}
-          <ChevronDown size={12} aria-hidden data-xq-switcher-chevron className="-ml-[5.5px] shrink-0 self-baseline translate-y-[calc(0.5em_-_0.5cap)] text-muted" />
+              sans 13px semibold, 2026-09-29). In the list's row (`row`) the gap is the list's 8px, so the
+              chevron comes 2px further back to keep the same 4px: 5.97px → 3.97px beside "acme-api", 5.24px →
+              3.24px beside "All projects" — the status row's own reading there (2026-10-01, sidebar, 300px). */}
+          <ChevronDown size={12} aria-hidden data-xq-switcher-chevron className={`${row ? "-ml-[7.5px]" : "-ml-[5.5px]"} shrink-0 self-baseline translate-y-[calc(0.5em_-_0.5cap)] text-muted`} />
         </button>
       </MenuTrigger>
       <MenuContent align="start">
