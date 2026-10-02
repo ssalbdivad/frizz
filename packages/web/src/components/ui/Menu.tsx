@@ -17,14 +17,16 @@ export function MenuContent({
   align = "end",
   sideOffset = 6,
   aboveDialog = false,
-  collisionPadding,
+  collisionPadding = 8,
 }: {
   children: ReactNode
   align?: "start" | "center" | "end"
   sideOffset?: number
   /** Opened from inside the shared z-[200] Dialog, whose backdrop the default z-[110] paints beneath. */
   aboveDialog?: boolean
-  /** Room to keep between the menu and the viewport's edges when it is shifted to fit (Radix's default is 0). */
+  /** Room to keep between the menu and the viewport's edges when it is shifted to fit. Radix's own default
+   *  is 0, which pinned a menu flush against the window's edge wherever it had to shift — in an editor's
+   *  narrow sidebar that was every menu: the drawer's ⋯ sat at x=0 at 300 and 450px. */
   collisionPadding?: number
 }) {
   return (
@@ -33,7 +35,19 @@ export function MenuContent({
         align={align}
         sideOffset={sideOffset}
         collisionPadding={collisionPadding}
-        className={`${aboveDialog ? OPAQUE_PORTAL_SURFACE_ABOVE_DIALOG_Z : OPAQUE_PORTAL_SURFACE_Z} ${OPAQUE_SURFACE_BASE} min-w-[184px] overflow-hidden rounded-lg p-1`}
+        // Escape closes ONLY the menu — the pattern ui/Popover.tsx and ui/Select.tsx already follow. Radix
+        // dismisses it from a document-CAPTURE listener, so without this the same key went on to
+        // DrawerStack's window listener, which popped the drawer the menu was opened from: one Esc on a
+        // thread's ⋯ or Snooze ▾ closed the menu AND the thread (sidebar and desktop alike, 2026-10-01). Not
+        // `preventDefault` — Radix still closes the menu — and not a `defaultPrevented` guard in DrawerStack,
+        // which would kill Escape on every sheet stacked over a thread (ThreadSheet prevents it on purpose to
+        // hand the key to DrawerStack).
+        onEscapeKeyDown={(event) => event.stopPropagation()}
+        // Never wider than the room Radix measured on the menu's side of the trigger (the viewport less the
+        // collision padding). A menu sized to its longest row — a long project name, Home's folder — ran
+        // off a 300px sidebar by 35px and hid the counts and "Not open" at the rows' ends; capped, the
+        // rows' `min-w-0 truncate` names give way and what follows them stays.
+        className={`${aboveDialog ? OPAQUE_PORTAL_SURFACE_ABOVE_DIALOG_Z : OPAQUE_PORTAL_SURFACE_Z} ${OPAQUE_SURFACE_BASE} min-w-[min(184px,var(--radix-dropdown-menu-content-available-width))] max-w-[var(--radix-dropdown-menu-content-available-width)] overflow-hidden rounded-lg p-1`}
       >
         {children}
       </RadixMenu.Content>
@@ -63,7 +77,12 @@ export function MenuItem({
     <RadixMenu.Item
       onSelect={onSelect}
       data-value={value}
-      className={`flex cursor-pointer select-none items-center gap-2 rounded-md px-2.5 py-1.5 text-[12px] outline-none transition-colors data-[highlighted]:bg-panel-2 ${
+      // `[&>*]:basis-auto`: when a capped menu (MenuContent's max width) is narrower than a row, its parts give
+      // way in proportion to their length. A `flex-1` name has a 0 basis, so beside a shrinkable hint it gave
+      // way FIRST and entirely — Home's row in a 300px sidebar read "H…" beside its whole folder path, or
+      // lost its name altogether. With room to spare the row lays out exactly as before: the name is still
+      // its only growing part, so it still takes all the free space.
+      className={`flex cursor-pointer select-none items-center gap-2 rounded-md px-2.5 py-1.5 text-[12px] outline-none transition-colors data-[highlighted]:bg-panel-2 [&>*]:basis-auto ${
         danger
           ? "text-danger data-[highlighted]:text-danger-soft"
           : "text-muted data-[highlighted]:text-fg"
