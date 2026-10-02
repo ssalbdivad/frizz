@@ -342,10 +342,15 @@ export function sortThreads(threads: readonly ThreadView[]): ThreadView[] {
 // an at-rest row keys off when it came to rest, matching its "Last active" label. New array; input
 // untouched.
 export function orderByInteraction(threads: readonly ThreadView[]): ThreadView[] {
-  return [...threads].sort((a, b) => {
-    const d = lastActiveAt(b) - lastActiveAt(a)
+  // Keys read ONCE per thread, not twice per comparison: these are valtio snapshot proxies, where every
+  // property read is tracked, and lastActiveAt parses dates — inside the comparator that was O(n log n)
+  // of both (1.2s of a 20s page profile on a 440-thread mirror, 2026-10-01).
+  const keyed = threads.map((t) => ({ t, at: lastActiveAt(t), id: t.id }))
+  keyed.sort((a, b) => {
+    const d = b.at - a.at
     return d !== 0 ? d : a.id.localeCompare(b.id)
   })
+  return keyed.map((k) => k.t)
 }
 
 // The queue is a SINGLE strictly time-ordered list — no priority band. Every waiting card orders by
