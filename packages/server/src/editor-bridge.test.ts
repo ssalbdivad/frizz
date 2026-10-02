@@ -507,6 +507,48 @@ test("editor state: kept per window, answered for the windows that have the proj
   assert.deepEqual(h.bridge.editorState(join(dirs.root, "gone")).windows, [])
 })
 
+// What Done asks before it removes a thread's worktree (router.ts assertNoUnsavedWorktreeFiles): a file
+// the human edited and has not saved is invisible to git, so only the editor can say it is there.
+test("unsaved files: the dirty file in front and dirty tabs under the folders asked, once each, never an untitled buffer or a window that stopped sharing", async (t) => {
+  const h = await harness(t)
+  const dirs = tree(t)
+  const front = await editor(h.port, { folders: [dirs.mono], focused: true })
+  const cursor = await editor(h.port, { app: "Cursor", folders: [dirs.pkg] })
+  const private_ = await editor(h.port, { folders: [dirs.mono] })
+  assert.deepEqual(h.bridge.unsavedUnder([dirs.pkg]), [], "nothing before any window has said what it shows")
+  front.send(snapshot(dirs.inPkg, {
+    active: { ...snapshot(dirs.inPkg).active!, dirty: true },
+    open: [
+      { path: dirs.inMono, dirty: true },      // dirty, but under mono and not under pkg
+      { path: dirs.outside, dirty: true },     // dirty, under neither
+      { path: "Untitled-1", untitled: true, dirty: true },
+      { path: join(dirs.pkg, "clean.ts") },    // open, saved
+    ],
+  }))
+  // The same file dirty in a second window is still one file.
+  cursor.send(snapshot(join(dirs.pkg, "nested", "gone.ts"), { active: null, open: [{ path: dirs.inPkg, dirty: true }, { path: join(dirs.pkg, "nested", "gone.ts"), dirty: true }] }))
+  await until(() => h.bridge.unsavedUnder([dirs.pkg]).length === 2, "both windows' state")
+  assert.deepEqual(h.bridge.unsavedUnder([dirs.pkg]), [
+    { path: dirs.inPkg, app: "Visual Studio Code", kind: "vscode" },
+    // Deleted on disk with the buffer still open: its spelling is what places it.
+    { path: join(dirs.pkg, "nested", "gone.ts"), app: "Cursor", kind: "cursor" },
+  ])
+  assert.deepEqual(h.bridge.unsavedUnder([dirs.mono]).map((f) => f.path).sort(), [dirs.inMono, dirs.inPkg, join(dirs.pkg, "nested", "gone.ts")].sort())
+  assert.deepEqual(h.bridge.unsavedUnder([dirs.other, dirs.pkg]).map((f) => f.path).sort(), [dirs.outside, dirs.inPkg, join(dirs.pkg, "nested", "gone.ts")].sort())
+  assert.deepEqual(h.bridge.unsavedUnder([]), [])
+  assert.deepEqual(h.bridge.unsavedUnder([join(dirs.root, "gone")]), [], "a folder that does not exist holds nothing")
+
+  // A window whose human turned sharing off says nothing about its buffers — even ones it reported before.
+  private_.send(snapshot(dirs.inMono, { active: { ...snapshot(dirs.inMono).active!, dirty: true }, open: [] }))
+  await until(() => h.bridge.unsavedUnder([dirs.mono]).some((f) => f.path === dirs.inMono && f.app === "Visual Studio Code"), "the third window")
+  front.send({ t: "editor", shared: false, active: null, open: [], diagnostics: [], problems: { errors: 0, warnings: 0 } })
+  private_.send({ t: "editor", shared: false, active: null, open: [], diagnostics: [], problems: { errors: 0, warnings: 0 } })
+  await until(() => h.bridge.unsavedUnder([dirs.mono]).length === 2, "only Cursor's")
+  assert.deepEqual(h.bridge.unsavedUnder([dirs.mono]).map((f) => f.app), ["Cursor", "Cursor"])
+  cursor.ws.close()
+  await until(() => h.bridge.unsavedUnder([dirs.mono]).length === 0, "gone with the window")
+})
+
 test("an editor frame Frizz cannot take closes the socket like any other bad frame", async (t) => {
   const h = await harness(t)
   const send = async (frame: unknown) => {

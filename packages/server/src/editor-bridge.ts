@@ -118,6 +118,23 @@ export interface EditorBridge {
    * is under the project folder.
    */
   editorState(dir: string): EditorStateResult
+  /**
+   * The files an editor window shows with UNSAVED changes that lie under any of `dirs` (realpath
+   * containment), each once, from every window whose last `editor` frame shared its state. What Done asks
+   * before it removes a thread's worktree (router.ts completeThread): a worktree removed under an open,
+   * edited buffer takes the file the human was editing with it, and the buffer is left pointing at a
+   * folder that no longer exists. Best effort by construction — a window with sharing off, an extension
+   * too old to send the frame, or a dirty tab past the frame's 50-tab cap is not seen — so it can only
+   * ever ADD a reason to keep a worktree, never remove one.
+   */
+  unsavedUnder(dirs: readonly string[]): EditorUnsavedFile[]
+}
+
+/** A file an editor window shows with unsaved changes (EditorBridge.unsavedUnder). */
+export interface EditorUnsavedFile {
+  path: string
+  app: string
+  kind: EditorKind
 }
 
 interface EditorWindow {
@@ -631,6 +648,31 @@ export function createEditorBridge(deps: EditorBridgeDeps): EditorBridge {
         }
       })
       return { windows, connected, elsewhere }
+    },
+
+    unsavedUnder(dirs) {
+      if (closing || dirs.length === 0) return []
+      const out: EditorUnsavedFile[] = []
+      const seen = new Set<string>()
+      for (const conn of connections) {
+        const window = conn.window
+        const snapshot = window?.editor?.snapshot
+        if (!window || !snapshot?.shared) continue
+        // An untitled buffer is not a file in any folder; a dirty one is the human's text with nowhere to go.
+        const files = [
+          ...(snapshot.active && snapshot.active.dirty && !snapshot.active.untitled ? [snapshot.active.path] : []),
+          ...snapshot.open.filter((file) => file.dirty && !file.untitled).map((file) => file.path),
+        ]
+        for (const path of files) {
+          if (seen.has(path)) continue
+          // A dirty buffer whose file was deleted on disk keeps its path; containment then reads the spelling.
+          const real = realpathOrUndefined(path) ?? path
+          if (!dirs.some((dir) => isUnder(real, dir))) continue
+          seen.add(path)
+          out.push({ path, app: window.app, kind: window.kind })
+        }
+      }
+      return out
     },
 
     takeCompose(id) {

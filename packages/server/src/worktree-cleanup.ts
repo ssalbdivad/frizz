@@ -20,6 +20,13 @@ import { isInside, mainCheckoutOf, worktreeAddTargets, worktreeRootFor } from ".
 // folders (check 3 — a hand edit inside node_modules or dist is the one thing that can still go). Before a
 // worktree goes, each of these must hold, and the first that fails KEEPS it, with the reason in `kept`:
 //
+//   0. (checked first, because it is free) NO EDITOR HOLDS UNSAVED CHANGES IN IT. Git cannot see a
+//      buffer: a file the human is editing in VS Code but has not saved reads as clean, so checks 2-4 pass
+//      and the worktree goes, taking the file under the buffer with it. The editor bridge knows each
+//      connected window's dirty tabs (editor-bridge.ts unsavedUnder), so the caller's `unsaved` answers
+//      it. The human-facing Done refuses BEFORE archiving on the same answer (router.ts
+//      assertNoUnsavedWorktreeFiles), with what to save or close; this check is the backstop for every
+//      other way a thread reaches cleanup, and for a buffer edited between that refusal and this run.
 //   1. NO OTHER LIVE THREAD IS WORKING IN IT. A thread that is not done and whose working folder (the
 //      caller's `inUse`, read the way the terminal reads it — thread-cwd.ts) is the worktree or inside it
 //      would have its folder vanish under it. The router passes this project's threads only; a thread of
@@ -115,8 +122,17 @@ async function git(dir: string, ...args: string[]): Promise<string> {
   return (await exec("git", ["-C", dir, ...args], { maxBuffer: 64 * 1024 * 1024 })).stdout
 }
 
+/** Files an editor holds with unsaved changes under `dir`, for check 0. */
+export type UnsavedIn = (dir: string) => readonly string[]
+
 /** Why `dir` must be kept, or undefined when every check passed. */
-async function reasonToKeep(dir: string, main: string, branch: string, inUse: () => readonly FolderInUse[]): Promise<string | undefined> {
+async function reasonToKeep(dir: string, main: string, branch: string, inUse: () => readonly FolderInUse[], unsaved: UnsavedIn): Promise<string | undefined> {
+  const edited = unsaved(dir)
+  if (edited.length > 0) {
+    const shown = edited.slice(0, 5).map((file) => path.relative(dir, file) || file).join(", ")
+    return `an editor holds unsaved changes in it: ${shown}${edited.length > 5 ? `, and ${edited.length - 5} more` : ""}`
+  }
+
   const here = canonical(dir)
   const busy = inUse().find((use) => {
     const there = canonical(use.dir)
@@ -158,10 +174,42 @@ async function reasonToKeep(dir: string, main: string, branch: string, inUse: ()
   return undefined
 }
 
+/**
+ * The candidates removeThreadWorktrees would actually consider — an existing linked worktree (not a main
+ * checkout) inside the worktree folder — without running any of its checks. What Done's refusal looks
+ * under: a dirty buffer in a folder cleanup would never touch is no reason to refuse anything.
+ */
+export function removableWorktrees(candidates: readonly string[], setting: string | undefined): string[] {
+  const out: string[] = []
+  for (const dir of new Set(candidates)) {
+    if (!existsSync(dir)) continue
+    const main = mainCheckoutOf(dir)
+    if (!main || path.resolve(main) === path.resolve(dir)) continue
+    if (isInside(worktreeRootFor(setting, main), dir)) out.push(dir)
+  }
+  return out
+}
+
+/** Short editor names for the refusal's copy: what the human calls the window, not `vscode.env.appName`. */
+const EDITOR_NAMES: Record<string, string> = { vscode: "VS Code", cursor: "Cursor", windsurf: "Windsurf" }
+
+/**
+ * Done's refusal when an editor holds unsaved changes in a worktree Done would remove — what to do first,
+ * then why. Short, because the page shows it as a toast after "Couldn’t finish: " and clips it at 80
+ * characters: the action leads so a long file name clips the reason, never the instruction.
+ */
+export function unsavedWorktreeRefusal(files: readonly { path: string; app: string; kind: string }[]): string {
+  const names = [...new Set(files.map((file) => path.basename(file.path)))]
+  const editor = EDITOR_NAMES[files[0]?.kind ?? ""] ?? files[0]?.app ?? "your editor"
+  const what = names.length === 1 ? names[0] : names.length === 2 ? `${names[0]} and ${names[1]}` : `${names[0]} and ${names.length - 1} more`
+  return `Save or close ${what} in ${editor} first: ${names.length === 1 ? "it has" : "they have"} unsaved changes.`
+}
+
 export async function removeThreadWorktrees(
   candidates: readonly string[],
   setting: string | undefined,
   inUse: () => readonly FolderInUse[] = () => [],
+  unsaved: UnsavedIn = () => [],
 ): Promise<WorktreeCleanup> {
   const result: WorktreeCleanup = { removed: [], kept: [] }
   // Read once, and only if some candidate gets that far: the caller's answer may mean reading every
@@ -179,7 +227,7 @@ export async function removeThreadWorktrees(
     } catch {}
     let keep: string | undefined
     try {
-      keep = await reasonToKeep(dir, main, branch, foldersInUse)
+      keep = await reasonToKeep(dir, main, branch, foldersInUse, unsaved)
     } catch (error) {
       keep = `could not check it: ${(error as { stderr?: string }).stderr?.trim() || String(error)}`
     }
