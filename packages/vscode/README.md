@@ -40,6 +40,12 @@ in it. Works in VS Code, Cursor and Windsurf.
   box, which opens with the selection in it as the same chip the page's prompt box makes.
 - **Send to Frizz thread…** — pick one of the project's open threads, ones waiting on you first; it
   opens in the sidebar with the selection in its reply box.
+- **Review a thread's changes** — everything a thread changed, as VS Code's multi-file diff: from its ⋯
+  menu in the sidebar (**Review changes**), from Frizz in your browser (**Review changes in VS Code**,
+  which brings this window to the front), or **Frizz: Review a thread's changes…** in the palette. A
+  thread that worked in a worktree shows its whole branch since it started, committed or not; one that
+  worked in the project folder shows its own files' uncommitted changes. The left side is where it
+  started; the right side is the file itself, to fix in place.
 - **File links from Frizz** open here — in the window that has the file's folder open, at the line the
   link names, and that window comes to the front — when Frizz's External app setting is this editor
   (Frizz offers to switch it the first time a window connects).

@@ -55,6 +55,7 @@ server scanning lock files and dialling N editors.
 | `open {id, path, line?, column?, endLine?}` | a file link was clicked | opens + reveals, raises the window, answers `result` |
 | `focus {id, path}` | "Open in editor" on a folder this window has open | raises the window, answers `result` (not ok where it cannot raise itself) |
 | `composed {id, ok, error?}` | after a `compose` | says it was added (with an "Open Frizz" button), or why not |
+| `review {id, title, checkouts}` | a browser tab's Review changes, to a window that said it can | opens the multi-file diff, raises the window, answers `result` |
 
 ### Which window gets an open
 
@@ -328,6 +329,63 @@ Nothing is attached to a message implicitly: the chip is still the only context 
 agent READS the editor when it decides to, which is the Claude Code model rather than Cursor's
 always-attached context.
 
+## Reviewing a thread's changes
+
+Claude Code and Cursor show an agent's edits as native diffs. A Frizz worker edits files directly, often
+in a worktree of its own, so the Frizz form is: from a thread, open everything it changed as VS Code's
+multi-file diff (`vscode.changes`, the editor Source Control's "View changes" opens — present and the
+same in 1.90 and 1.140) against where it started. The left side is the base, read-only; the right side
+is the real file, so the human fixes what they see in place, with the language server running.
+
+**Where it is offered** — the diff is the editor's, so only where one can show it:
+
+- The sidebar: the thread's ⋯ **Review changes**, always. The page posts `frizz:review {thread, project,
+  title}` — names, never a folder — and the extension asks Frizz what the thread changed
+  (`reviewTarget`) and opens it in that window.
+- A browser tab: the thread's ⋯ **Review changes in VS Code** (the editor's name; "in your editor" when
+  two kinds could take it), and **Review** on the fullscreen rail's Edited files heading — only while a
+  window that can review is connected and takes opens. `reviewInEditor` pushes a `review` frame to the
+  window holding the thread's checkout (deepest folder, first checkout first), else the project, else the
+  one used last on this filesystem; it opens the diff and comes to the front. No editor, no item: an
+  in-browser diff is a different feature, and an item that could only say "connect an editor" is a dead
+  end.
+- The palette: **Frizz: Review a thread's changes…**, a pick of the window's project's threads.
+
+**What the server names** (server `review-target.ts`). Frizz records nothing about a thread's base, but it
+knows where the thread WROTE — the rail's edited files, over the whole transcript, filtered to what git
+carries — and where its agent works now. Those name the checkouts: a worktree of the project's
+repository is the thread's own (scope `branch`, every change in it); the project folder is shared by
+every agent and the human (scope `files`: the thread's own files and nothing else). A file in another
+repository is left out. The worktree the agent works in counts even with no edit seen there (a codemod
+writes no Edit record).
+
+**What git answers** (extension `review.ts`). `files`: the thread's files against HEAD, i.e. their
+uncommitted changes — a commit in the shared tree is as likely someone else's. `branch`: everything since
+the branch LEFT the branch it came from, committed or not. Candidates: where the branch was created (its
+reflog's `branch: Created from X`, which `git worktree add -b` writes), X at its current tip when X is a
+branch, and the project folder's branch; a tip that already holds HEAD (the work merged back) is skipped,
+and the merge-base with the fewest commits to HEAD wins. So main moving on after the fork shows nothing of
+main's, a thread that merged main in is shown against that merge, and a branch merged back into main still
+shows its work. `git diff <base>` against the working tree, renames paired for a whole branch (not for a
+file list, where git would pair one of the thread's files with someone else's), untracked non-ignored files
+as added, binaries left out (the diff shows text). Reads take no optional lock (`GIT_OPTIONAL_LOCKS=0`).
+The base side is `frizz-base:<file>?repo&ref&path`, `git cat-file blob`; its parser refuses a non-sha ref
+and an absolute or `..` path.
+
+**Version skew.** The hello is strict and reaches every server, so a window cannot announce a new ability
+there. The welcome names `review`; only then does the extension send a `features` frame saying it can,
+and only a window that said so is ever sent `review`. `editorWindows` / `editors` carry `reviews: true`,
+which is what the page offers the action by. A review waits 20s for its answer (git runs several commands
+per checkout), an open still 5s.
+
+What VS Code does with it, measured in 1.90 and 1.140: the tab reads "Changes in <title> (5 files)"; an
+added file shows an empty base and a deleted one an empty file side; a rename pairs both names in its
+header; `TabInputTextMultiDiff.textDiffs` lists only the two-sided entries.
+
+Also fixed for it: the rail's edited files dropped EVERY file of a worktree thread — `check-ignore` ran in
+the project root, which ignores `.frizz/`. Each path is now probed in the checkout that holds it
+(`repo-files.ts`).
+
 ## Verification
 
 - Unit: `file-position.test.ts`; the bridge against real `ws` clients (`editor-bridge.test.ts`);
@@ -369,6 +427,12 @@ always-attached context.
     the row still reading Frizz; and every title-row command (Keyboard shortcuts in the ⋯), and a real click on one, reaching the page as `frizz:command`.
     And the agents' picture: a selection, a tab and a problem from a real diagnostic collection reaching
     Frizz as the `editor` frame, an edit marking it dirty, and sharing off sending nothing else.
+    And Review changes over a real worktree (`e2e/review-repo.ts`: committed and uncommitted edits, an add,
+    a delete, a rename, an untracked file, an ignored one, a binary, and main moving on after the fork):
+    pushed as a browser's ask, from the sidebar's page by thread name (and a folder in its place ignored),
+    and from the palette — each the right files in git's order, the base side through the content
+    provider and the file side from disk, the base at the fork, and the loop's diff DRAWN on both sides
+    (the workbench's DOM); nothing to compare and not a repository refused in words with nothing opened.
     `FRIZZ_E2E_ONLY=<part of a step's name>` runs just those steps.
   - `FRIZZ_E2E_VSCODE=oldest nub packages/vscode/scripts/e2e.ts` — the same on the oldest VS Code the
     manifest's `engines.vscode` admits (1.90.0), where `focusWindow` does not exist.
@@ -378,7 +442,9 @@ always-attached context.
     window listed in `editorWindows`, and "Add to Frizz prompt" landing as a chip in the new-thread box
     of a headless page open on the tenant (`e2e/page-claim.ts`), and a worker's `editor` tool — the real
     `frizz-mcp.mjs`, stamped with the tenant's id — reading the window's selection and problem through the
-    real server. Every opener the server could spawn
+    real server; and a seeded thread whose agent edited files in a worktree (`e2e/review-seed.ts`): the
+    server reads those edits as its edited files and the worktree as its checkout, and `reviewInEditor`
+    — what a browser tab's ⋯ calls — opens them in this window. Every opener the server could spawn
     (`code`, `cursor`, `xdg-open` …) is a stub on its PATH, and the run fails if one was spawned. The
     stack is stopped by its process group and anything still carrying its HOME is killed, pass or fail.
     Ask and Send start real agents, so they run only with `FRIZZ_E2E_DISPATCH=1` (which adds `--creds`).
