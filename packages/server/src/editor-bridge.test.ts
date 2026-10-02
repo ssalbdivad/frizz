@@ -706,7 +706,7 @@ test("review: only a window that said it can, the one holding the checkout first
   const old = await editor(h.port, { folders: [dirs.pkg], focused: true })
   assert.equal(await h.bridge.review(target(dirs.pkg), dirs.mono), false)
   assert.equal(reviews(old).length, 0)
-  assert.deepEqual(h.bridge.windows(), [{ app: "Visual Studio Code", kind: "vscode", acceptsOpens: true }])
+  assert.deepEqual(h.bridge.windows(), [{ app: "Visual Studio Code", kind: "vscode", acceptsOpens: true, extensionVersion: "0.0.1" }])
 
   const monoWin = await editor(h.port, { folders: [dirs.mono], focused: true })
   monoWin.send({ t: "features", features: ["review", "something-newer"] })
