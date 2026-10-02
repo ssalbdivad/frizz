@@ -1750,7 +1750,7 @@ export function messageHeadIsTool(m: ChatMessage): boolean {
 // run instead of forcing a full STEP break on both sides. A BOUNDARY event is a section-break divider,
 // not a quiet label.
 function isMetaLabelMessage(m: ChatMessage): boolean {
-  return (m.kind === "event" && !m.boundary) || m.kind === "reasoning"
+  return (m.kind === "event" && !m.boundary && !m.commandOutput) || m.kind === "reasoning"
 }
 // Tail/head predicates for the tight-run spacer: a tool band OR a meta label. An event/reasoning
 // message is a single row, so its head and tail are the same meta label.
@@ -3378,6 +3378,7 @@ export const Message = memo(function Message({ m, answering, dense, paired, show
   // An event line (a sub-agent completion) is transcript PUNCTUATION — a quiet full-width line, not a
   // bubble or a tool band. Rendered before the role branches (its role field is nominal).
   if (m.providerError) return <ProviderErrorCard error={m.providerError} />
+  if (m.commandOutput) return <CommandOutputBlock text={m.text} stream={m.commandOutput.stream} command={m.commandOutput.command} sourceId={m.sourceId} />
   if (m.kind === "event") return <EventLine text={m.text} boundary={m.boundary} wakeShellId={m.wakeShellId} sourceId={m.sourceId} at={m.at} />
   // A model-reasoning summary (Codex) — quiet punctuation like an event line, but CLICKABLE to expand
   // the full reasoning. Rendered before the role branches (its role field is nominal, like an event).
@@ -4618,6 +4619,22 @@ function EventLine({ text, boundary, wakeShellId, sourceId, at }: { text: string
 // shimmer already says `Thinking…` while that is happening, and afterwards it is not a fact worth a row
 // (maintainer 2026-08-01: "it should never show up persistently like that"). The server still measures
 // `durationMs`; nothing renders it.
+// A SLASH COMMAND'S OUTPUT — what `/context` or `/usage` printed, under the human's `/name` bubble. Not
+// the agent speaking and not the human, so it takes neither's treatment: the reasoning block's quiet
+// left rule, always open (the operator ran the command to read this). stderr takes the danger tone.
+function CommandOutputBlock({ text, stream, command, sourceId }: { text: string; stream: "stdout" | "stderr"; command?: string; sourceId?: string }) {
+  return (
+    <div
+      data-frizz-msg={sourceId}
+      data-command-output={command ?? ""}
+      aria-label={command ? `${command} output` : "Command output"}
+      className={`frizz-command-output ml-[5px] border-l pl-3 ${stream === "stderr" ? "border-danger/60 text-danger-soft" : "border-border/70"}`}
+    >
+      <ProseHtml md={text} wrap />
+    </div>
+  )
+}
+
 function ReasoningBlock({ text, sourceId }: { text: string; sourceId?: string }) {
   const [open, setOpen] = useState(false)
   const bodyId = useId()

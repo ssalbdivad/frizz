@@ -133,8 +133,8 @@ test("a refused input is relayed to the attached client, not just written to the
 
 // The composer typeahead's data path, end to end over the REAL socket: client `list-skills` frame →
 // daemon dispatch → handle (initialize commands ∩ init-frame skills) → `skills-result` frame → client
-// promise. The fake CLI's initialize response carries "review" and "explore" AND the built-in stand-in
-// "compact"; only the first two are named by its init frame's `skills`, so only those may cross back.
+// promise. The fake CLI's initialize response carries "review" and "explore", the built-in stand-in
+// "compact" (offered) and three built-ins that are not; all three offered rows must cross back.
 // Each one's SOURCE has to survive the socket too, including the undefined one — the client re-checks
 // the value against the closed set, and a bug there would silently strip every label.
 test("listSkills round-trips the harness's skill list over the broker socket", { timeout: 15_000 }, async () => {
@@ -144,6 +144,7 @@ test("listSkills round-trips the harness's skill list over the broker socket", {
     await c.waitEvent((e) => e.kind === "init")
     assert.deepEqual(await c.client.listSkills(), [
       { name: "review", description: "Review changes", source: "project" },
+      { name: "compact", description: "Compact the conversation", source: "builtin" },
       { name: "explore", description: "Explore the repository (dynamic workflow)", source: undefined },
     ])
     c.client.close()

@@ -149,7 +149,7 @@ export function Composer({
   // Only surfaces that pass it get it; reply/queue composers omit it.
   leftAction?: React.ReactNode
   // SKILLS TYPEAHEAD. When set, a draft that is exactly one `/`-led token opens a suggestion menu of
-  // the thread's invocable skills above the box (fetched lazily, once, on first trigger). The list is
+  // the thread's invocable skills and slash commands (`/context`, `/usage`, …) above the box (fetched lazily, once, on first trigger). The list is
   // whatever the thread's own harness reports — the caller owns sourcing entirely; this component only
   // renders and completes. Surfaces without a session to ask (the dispatch composer) omit it and the
   // whole affordance is inert.
