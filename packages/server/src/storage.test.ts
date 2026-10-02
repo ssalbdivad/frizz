@@ -820,6 +820,36 @@ test("allSessions: the cached read reflects every write, and repeats are the sam
   assert.equal(s.allSessions().length, 0, "a delete invalidates")
 })
 
+// The cache must SURVIVE what cannot change a session row (2026-10-01): the per-assemble snooze sweep
+// that matches nothing, and writes to the other tables (a settings write here; the tailer's tail_state
+// flush on the live server). Both used to throw the whole table away on every board assemble.
+test("allSessions: a no-op write and writes to other tables keep the cached array", () => {
+  const s = store()
+  s.upsertSession(row({ slug: "one", session_id: "sid-1" }))
+  const first = s.allSessions()
+  assert.equal(s.clearExpiredSnoozes("2026-10-01T00:00:00.000Z"), 0)
+  assert.equal(s.allSessions(), first, "an UPDATE that matched nothing is not a write")
+  s.setSetting("some.key", JSON.stringify({ a: 1 }))
+  assert.equal(s.allSessions(), first, "a write to another table cannot touch a session row")
+  // Negative control: the same harness does see a real session write.
+  s.setTitle("one", "after")
+  assert.notEqual(s.allSessions(), first)
+  assert.equal(s.allSessions()[0].title, "after")
+})
+
+test("allSessions: another connection's commit is seen from the next turn", async () => {
+  const file = join(mkdtempSync(join(tmpdir(), "frizz-storage-")), "ui.db")
+  const a = createStorage(file, "p")
+  const b = createStorage(file, "p")
+  a.upsertSession(row({ slug: "one", session_id: "sid-1", title: "before" }))
+  assert.equal(a.allSessions()[0].title, "before")
+  b.setTitle("one", "from-b")
+  await Promise.resolve()
+  assert.equal(a.allSessions()[0].title, "from-b", "data_version moved, so the snapshot was re-read")
+  assert.equal(a.getSession("one")?.title, "from-b")
+  a.close(); b.close()
+})
+
 test("allSessions: getSession rides the same snapshot and never lags it", () => {
   const s = store()
   s.upsertSession(row({ slug: "one", session_id: "sid-1", title: "before" }))
