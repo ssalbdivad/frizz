@@ -1,6 +1,6 @@
 import assert from "node:assert/strict"
 import { test } from "node:test"
-import { ADD_CONTEXT_WINDOW_MS, contextBarReading, editorAddChord, editorContext, pendingBox, requestEditorContext, setEditorContext, takePendingAdd, type ContextBox } from "./editorContext.ts"
+import { ADD_CONTEXT_WINDOW_MS, contextBarReading, editorAddChord, editorContext, isEditorAddKey, pendingBox, requestEditorContext, setEditorContext, takePendingAdd, type ContextBox } from "./editorContext.ts"
 import { contextChipLabel } from "./composerContext.ts"
 
 const file = { path: "/work/alpha/src/lib/r2-private.ts", label: "src/lib/r2-private.ts" }
@@ -20,9 +20,22 @@ test("a file with nothing selected is the file alone; no editor is no reading", 
   assert.equal(contextBarReading(null), null)
 })
 
-test("the editor's add chord is spelled the way every other shortcut is, per platform", () => {
-  assert.equal(editorAddChord("mac"), "⌘I")
-  assert.equal(editorAddChord("other"), "Ctrl+I")
+test("the editor's add chord is Cursor's, spelled the way every other shortcut is, per platform", () => {
+  assert.equal(editorAddChord("mac"), "⌘L")
+  assert.equal(editorAddChord("other"), "Ctrl+L")
+})
+
+test("⌘L in the page is the chord the bar names: ⌘ on a Mac, Ctrl elsewhere, nothing else held", () => {
+  const key = (over: Partial<KeyboardEvent>) => ({ key: "l", code: "KeyL", ctrlKey: false, metaKey: false, altKey: false, shiftKey: false, repeat: false, isComposing: false, ...over })
+  assert.equal(isEditorAddKey(key({ metaKey: true }), "mac"), true)
+  assert.equal(isEditorAddKey(key({ ctrlKey: true }), "other"), true)
+  // Caps lock, or a layout whose L is elsewhere but whose key still says "l".
+  assert.equal(isEditorAddKey(key({ ctrlKey: true, key: "L" }), "other"), true)
+  // ⌃L on a Mac is the terminal's clear-screen and a text box's own; ⌘ elsewhere is the OS's.
+  assert.equal(isEditorAddKey(key({ ctrlKey: true }), "mac"), false)
+  assert.equal(isEditorAddKey(key({ metaKey: true }), "other"), false)
+  for (const held of [{ shiftKey: true }, { altKey: true }, { repeat: true }, { isComposing: true }]) assert.equal(isEditorAddKey(key({ ctrlKey: true, ...held }), "other"), false, JSON.stringify(held))
+  assert.equal(isEditorAddKey(key({ ctrlKey: true, key: "k", code: "KeyK" }), "other"), false, "negative control")
 })
 
 test("a new editor context replaces the last one whole", () => {

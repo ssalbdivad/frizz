@@ -126,10 +126,11 @@ export function SidebarPage({
 
   return (
     <div data-sidebar-page className="flex h-screen flex-col bg-bg px-3 pt-3 text-sm text-fg">
-      {/* The column head, as the desktop's: the status row (restart, quota) over the prompt box. Above the
-          cords (ThreadConnector.tsx, z-[5]) while the box's own menu is open over the list. */}
+      {/* The column head, as the desktop's: the status row (restart, quota) over the prompt box — none,
+          when it has neither (StatusRow.tsx). Settings and the shortcuts sheet are in VS Code's title row.
+          Above the cords (ThreadConnector.tsx, z-[5]) while the box's own menu is open over the list. */}
       <div className="relative mb-5 shrink-0 px-0.5 has-[[data-mention-menu]]:z-[6] has-[[data-slash-menu]]:z-[6]">
-        <StatusRow settings={false} />
+        <StatusRow settings={false} shortcuts={false} />
         {composer}
       </div>
       {error ? (

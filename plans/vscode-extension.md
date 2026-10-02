@@ -212,14 +212,29 @@ must match the core app, with a hint wherever the sidebar differs; and no Frizz 
   (`r2-private.ts:91-116`, `26 lines`), live from `frizz:editor-context`: a selection lights up in the
   accent, a file alone is an outline. A click adds it as a chip (`frizz:add-context` → `frizz:compose`)
   in THAT box — the page remembers which box asked, since the host answers "front" — and the split
-  control's chevron lists the other open files. With nothing selected it spells out ⌘I / Ctrl+I. It
+  control's chevron lists the other open files. With nothing selected it spells out ⌘L / Ctrl+L. It
   shows paths and line numbers only; the text crosses when the human adds it. Nothing is attached
   implicitly — a chip in the box is the only way context rides a message, as in the browser.
   (components/EditorContextBar.tsx, lib/editorContext.ts.)
-- **⌘I / Ctrl+I in the editor** adds the selection as a chip in the sidebar's prompt and puts the caret
-  after it: the core app's own chord for staging a selection (FileViewerPanel's ⌘I), and the chord
-  Cursor gives its agent. It replaces the first cut's Ctrl+Alt+P, and fires only with a selection, so
-  VS Code's own Ctrl+I (suggest, inline chat) is untouched everywhere else.
+- **The chords people already know, in the editor** (maintainer 2026-10-02: *"there is a standard
+  shortcut for adding a pill for highlighted snippet to a message … look at cursor, claude code vscode
+  extension and take the best parts of each"*). Each adds a chip to the sidebar's front prompt box and
+  puts the caret after it:
+  - **⌘L / Ctrl+L**, Cursor's "add selection to chat" — the one the page names (the context bar's hint,
+    the `?` sheet's Editor group first). Only with a selection, so VS Code's own Ctrl+L (select the line)
+    works without one; a second Ctrl+L to grow a line selection is the price.
+  - **⌘I / Ctrl+I**, the core app's own chord for staging a selection (FileViewerPanel's ⌘I). It replaced
+    the first cut's Ctrl+Alt+P, and also fires only with a selection, so VS Code's Ctrl+I (suggest,
+    inline chat) is untouched everywhere else.
+  - **⌥K / Alt+K**, Claude Code's @-mention: the selection, or with only a caret the whole file
+    (`frizz.addSelectionOrFile`, which is Add to Frizz prompt or Add file to Frizz prompt). Bound with or
+    without a selection, as Claude Code binds it.
+
+  ⌘L is listed after ⌘I in the manifest on purpose: VS Code shows a command's LAST contributed binding in
+  its menus and the palette. In Cursor, which binds ⌘L and ⌘I to its own chat and agent, the two compete;
+  the README says to rebind. Pressed in the sidebar's prompt box, ⌘L and ⌘I do the same as from the
+  editor (into that box; ⌘L with a thread open and the caret elsewhere, into its reply box), so the chord
+  the hint names works on both sides of the frame.
 - **More ways in:** an editor tab's context menu and the explorer add a whole file; a problem's quick
   fix, "Ask Frizz to fix", adds its lines with the message after the chip (`note`); the terminal's
   context menu adds its selection as `@terminal`.
@@ -233,7 +248,10 @@ must match the core app, with a hint wherever the sidebar differs; and no Frizz 
   by the page's view (`frizz:route` → a context key), and the badge's tooltip carries the counts. Not the
   view's `title`/`description`: a single-view container's row reads "Frizz: <title>" re-cased by VS Code
   ("Frizz: Tidy-The-Sample-Loop" on 1.140, all caps on 1.90) and drops the description (measured in real
-  VS Code, scripts/e2e-sidebar.ts), so names stay in the page.
+  VS Code, scripts/e2e-sidebar.ts), so names stay in the page. The keyboard shortcuts sheet is under the
+  row's ⋯ (`shortcuts`): the page's status row drops its ⌨ in the sidebar, and is not drawn at all when
+  nothing else is in it (no supervisor to restart, no quota) — the ⌨ alone on a 36px row above the prompt
+  box read as debris (scripts/e2e-sidebar.ts, 2026-10-01).
   The count is the desktop's READY count — every card, a question included — so a tab and the sidebar
   never disagree (`7 ready · 2 working`); a file's reader over a thread names the file and keeps Back. The
   route also carries the page's own address (`href`, kept only on the frame's origin), so ⋯ Open in
@@ -342,12 +360,13 @@ always-attached context.
     across selections, the other open files once each and most recent first, null for an untitled
     buffer and a diff, no text anywhere), a drag as one message and an unchanged context as none, a
     reloaded page told at once; `frizz:add-context` for the selection and a whole file, and nothing when
-    either is gone; Ctrl+I PRESSED with a selection landing a chip with the caret and pressed with a caret
-    landing nothing (trusted keys through the workbench's debugging port, `e2e/cdp.ts`); the quick fix
+    either is gone; Ctrl+L and Ctrl+I PRESSED with a selection landing a chip with the caret and pressed
+    with a caret landing nothing (Ctrl+L selecting the line instead), Alt+K landing the selection and,
+    with a caret, the whole file (trusted keys through the workbench's debugging port, `e2e/cdp.ts`); the quick fix
     offered for a diagnostic with its lines and `note`, two problems told apart, none with the setting
     off; a tab's and the explorer's files; a terminal selection as `@terminal` with the clipboard
     restored; `frizz:route` as the buttons the title row really shows and the badge's tooltip, with
-    the row still reading Frizz; and every title-row command, and a real click on one, reaching the page as `frizz:command`.
+    the row still reading Frizz; and every title-row command (Keyboard shortcuts in the ⋯), and a real click on one, reaching the page as `frizz:command`.
     And the agents' picture: a selection, a tab and a problem from a real diagnostic collection reaching
     Frizz as the `editor` frame, an edit marking it dirty, and sharing off sending nothing else.
     `FRIZZ_E2E_ONLY=<part of a step's name>` runs just those steps.

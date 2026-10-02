@@ -1,4 +1,4 @@
-import type { ActionId, Platform } from "./keybindings.ts"
+import type { ActionId, Chord, Platform } from "./keybindings.ts"
 
 // THE KEYBOARD IN AN EDITOR'S SIDEBAR — what the shortcuts sheet (components/KeyboardShortcuts.tsx) says
 // where the sidebar differs from the browser. Every key the sheet lists works there; these are the
@@ -47,6 +47,29 @@ export const SIDEBAR_KEYS_NOTE = "Keys reach Frizz while the sidebar has focus. 
 
 /** The Queue group's note in the sidebar, where the drawer is the card (lib/keyboardRuntime.ts openCurrent). */
 export const SIDEBAR_QUEUE_NOTE = "In the open thread. With none open, a key opens the one you're on."
+
+/**
+ * A chord the extension binds IN THE EDITOR to put code into the sidebar's prompt box — the reason the
+ * sidebar exists, so the sheet leads with them there. Cursor's ⌘L first, the chord the context bar names
+ * (lib/editorContext.ts editorAddChord); Claude Code's ⌥K second. (The app's own ⌘I is bound there too,
+ * and listed where it always is, under Thread details with its sidebar hint.) `command` and `when` are the
+ * extension's keybinding, which embedKeys.test.ts finds in packages/vscode/package.json, so the sheet can
+ * never teach a chord the editor does not have.
+ */
+export interface EditorChord {
+  label: string
+  chord: Chord
+  command: string
+  when: string
+}
+
+export const EDITOR_CHORDS: readonly EditorChord[] = [
+  { label: "Add the selection", chord: { key: "l", mod: true, alt: false, shift: false }, command: "frizz.addToPrompt", when: "editorTextFocus && editorHasSelection" },
+  { label: "Add the selection or file", chord: { key: "k", mod: false, alt: true, shift: false }, command: "frizz.addSelectionOrFile", when: "editorTextFocus" },
+]
+
+/** The note under the Editor group. ⌘L also works from a prompt box here (lib/embedHost.ts), as ⌘I does. */
+export const EDITOR_CHORDS_NOTE = "Pressed in the editor, these add to the prompt box here."
 
 /**
  * A VS Code chord the sidebar passes on. `primary` is ⌘ on a Mac and Ctrl elsewhere, as VS Code spells it;

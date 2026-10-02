@@ -2,7 +2,7 @@ import type { EmbedEditorContextMessage } from "@frizz/shared"
 import { proxy, useSnapshot } from "valtio"
 import { contextChipLabel } from "./composerContext.ts"
 import { postToHost } from "./embed.ts"
-import { formatChord, type Platform } from "./keybindings.ts"
+import { formatChord, type Chord, type Platform } from "./keybindings.ts"
 import { basename } from "./paths.ts"
 
 // WHAT THE EDITOR AROUND THE SIDEBAR HAS OPEN — the latest `frizz:editor-context` (packages/shared/src/
@@ -58,12 +58,30 @@ export function contextBarReading(active: EditorContextState["active"]): Context
 }
 
 /**
- * The editor's own chord for "add the selection to the sidebar's prompt": ⌘I on a Mac, Ctrl+I
- * elsewhere — the app's ⌘I staging chord (FileViewerPanel), which the extension binds in the editor
- * while text is selected. Spelled by the app's keycap formatter so it reads like every other shortcut.
+ * The editor's chord for "add the selection to the sidebar's prompt", as the page advertises it: ⌘L on a
+ * Mac, Ctrl+L elsewhere — Cursor's "add selection to chat", the chord a human coming from Cursor already
+ * has in their fingers (maintainer 2026-10-02: "there is a standard shortcut for adding a pill for
+ * highlighted snippet to a message"). The extension binds it in the editor while text is selected, beside
+ * the app's own ⌘I (FileViewerPanel's staging chord, still bound) and Claude Code's ⌥K (the selection, or
+ * the whole file with none). One chord is named, the one most people know; the `?` sheet lists all three
+ * (lib/embedKeys.ts EDITOR_CHORDS). Spelled by the app's keycap formatter so it reads like every other
+ * shortcut.
  */
+export const EDITOR_ADD_CHORD: Chord = { key: "l", mod: true, alt: false, shift: false }
+
 export function editorAddChord(platform: Platform): string {
-  return formatChord({ key: "i", mod: true, alt: false, shift: false }, platform)
+  return formatChord(EDITOR_ADD_CHORD, platform)
+}
+
+/**
+ * The keydown is ⌘L / Ctrl+L — on a Mac ⌘ and not Ctrl, elsewhere Ctrl and not ⌘, so ⌃L on a Mac (the
+ * terminal's clear-screen) is left alone. ⌘L is a browser chord (keybindings.ts BROWSER_CHORDS), so no
+ * rebind can claim it from under this.
+ */
+export function isEditorAddKey(event: Pick<KeyboardEvent, "key" | "code" | "ctrlKey" | "metaKey" | "altKey" | "shiftKey" | "repeat" | "isComposing">, platform: Platform): boolean {
+  if (event.altKey || event.shiftKey || event.repeat || event.isComposing) return false
+  const primary = platform === "mac" ? event.metaKey && !event.ctrlKey : event.ctrlKey && !event.metaKey
+  return primary && (event.key.toLowerCase() === "l" || event.code === "KeyL")
 }
 
 // ── adding: a click on the bar, answered by the host's compose ────────────────────────────────────
@@ -162,5 +180,22 @@ export function addEditorContextByKey(focused: Element | null, drawerOpen: boole
   const what = barAdd(editorContext.active)
   if (!what) return "nothing"
   requestEditorContext(box, what)
+  return "added"
+}
+
+/**
+ * ⌘L / Ctrl+L IN THE SIDEBAR — the chord the page advertises for the editor (`editorAddChord`), pressed with
+ * the keyboard in the page instead: what ⌘I does here, so the chord the hint names works on both sides of
+ * the frame. Except where ⌘I gives way to Thread details (a thread open, the caret outside its reply box):
+ * ⌘L has no other meaning to give way to, so it does what the editor's chord does there — the request goes
+ * out with no box remembered, the host answers "front", and the chip lands in the open thread's reply box.
+ */
+export function addEditorContextByChord(focused: Element | null, drawerOpen: boolean, dialogOpen: boolean): "added" | "nothing" {
+  const byKey = addEditorContextByKey(focused, drawerOpen, dialogOpen)
+  if (byKey) return byKey
+  const what = barAdd(editorContext.active)
+  if (!what) return "nothing"
+  pending = null
+  postToHost({ type: "frizz:add-context", ...what })
   return "added"
 }

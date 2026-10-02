@@ -17,6 +17,8 @@ import { parseStandaloneThreadPath } from "./standaloneThreadRoute.ts"
 //   queue       the palette's Queue: every drawer closed, back to the page under them.
 //   jump        ⌘K: the palette.
 //   settings    ⌘,: Settings.
+//   shortcuts   `?`: the keyboard shortcuts sheet, from the row's ⋯ — the status row's ⌨ button is not
+//               drawn in the sidebar (StatusRow.tsx).
 //
 // A button is pressed in VS Code, not in the frame, so whatever transient layer the page had up (the
 // palette, the shortcuts sheet, the picture viewer, a dialog) goes first, as a click outside it would
@@ -43,6 +45,12 @@ export function runHostCommand(command: EmbedCommandMessage["command"]): void {
   // The rest are about the page under Settings, so Settings goes too — by its own close, which sends a
   // change still waiting in its debounce rather than dropping it with the drawer.
   if (store.showSettings && !closeSettingsAnimated()) store.showSettings = false
+  // The sheet over the page as it is, an open thread included — where `?` opens it in a browser, which
+  // waits for Settings to close first (keyboardRuntime.ts overlayOpen).
+  if (command === "shortcuts") {
+    store.showShortcuts = true
+    return
+  }
   const fullPage = parseStandaloneThreadPath(innerPath()) !== null
   if (command === "queue") {
     store.showNewThread = false

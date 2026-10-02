@@ -36,7 +36,7 @@ function Bar({ box }: { box: ContextBox }) {
   const { active, open } = useEditorContext()
   const reading = contextBarReading(active)
   const chord = useMemo(() => editorAddChord(detectPlatform()), [])
-  // Registered by its strip, so ⌘I typed in this box presses it (lib/editorContext.ts addEditorContextByKey).
+  // Registered by its strip, so ⌘I or ⌘L typed in this box presses it (lib/editorContext.ts addEditorContextByKey).
   const strip = useRef<HTMLDivElement>(null)
   const drawn = Boolean(reading || open.length)
   useEffect(() => {
@@ -68,7 +68,7 @@ function Bar({ box }: { box: ContextBox }) {
             // The readings are separate spans spaced by the row's gap, so the text alone would read
             // "r2-private.ts:91-11626 lines" to a screen reader.
             aria-label={`Add ${reading.name}${reading.range}${reading.count ? `, ${reading.count},` : ""} to the prompt`}
-            // ⌘I does this from the box as well as from the editor (App.tsx app.details).
+            // The chord does this from the box as well as from the editor (lib/embedHost.ts; ⌘I too, App.tsx app.details).
             title={`Add ${reading.where}${reading.range} to the prompt (${chord})`}
             // 7px, not 6, on the right when the chevron follows: its glyph carries 0.88px of side
             // bearing, and the rule between them should sit centred in ink (6.88 | 6.88, sans).
@@ -132,8 +132,8 @@ function OpenFiles({ box, open, labelled, hover }: { box: ContextBox; open: Edit
 }
 
 /**
- * How to add LINES, for a bar that has none selected: the editor's chord, which the human cannot learn
- * from anywhere else in the sidebar. The longest wording that fits the room the control leaves, measured
+ * How to add LINES, for a bar that has none selected: the editor's chord (⌘L, Cursor's — lib/editorContext.ts
+ * editorAddChord), which the human cannot learn from anywhere else in the sidebar but the `?` sheet. The longest wording that fits the room the control leaves, measured
  * — never one cut to "Select code and pr…", and nothing at all when even the short one does not fit (the
  * control's tooltip says it too). The room changes with the file's name as much as with the sidebar's
  * width, so a fixed breakpoint could not pick.

@@ -215,7 +215,7 @@ export function parseHostMessage(data: unknown): EmbedHostMessage | null {
   return null
 }
 
-const HOST_COMMANDS = new Set<EmbedCommandMessage["command"]>(["new-thread", "queue", "jump", "settings"])
+const HOST_COMMANDS = new Set<EmbedCommandMessage["command"]>(["new-thread", "queue", "jump", "settings", "shortcuts"])
 
 /** One open file of a `frizz:editor-context`, with only the contract's fields, or null. */
 function editorFile(value: unknown): EmbedEditorFile | null {

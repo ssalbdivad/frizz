@@ -40,14 +40,17 @@ test("every file the manifest names is one .vscodeignore lets into the package",
   for (const path of named.map(normalize).filter((path) => !path.startsWith("dist/"))) assert.ok(existsSync(join(pkg, path)), `${path} is missing`)
 })
 
-test("the activity-bar mark's pen is 1/16 of its box, a codicon's at 16px and at 24px", () => {
-  // Measured, not taste (media/frizz.svg's own comment): the bar draws the mark at 16px when it sits at
-  // the top and 24px at the side, and a codicon's pen is 1px and 1.5px there. Re-measure the mark in a
-  // real VS Code before changing either number.
+test("the activity-bar mark's pen is 0.7/16 of its box: 70% of a codicon's, and at least a device pixel at 24px", () => {
+  // Measured, not taste (media/frizz.svg's own comment has the readings): the bar draws the mark at 16px
+  // when it sits at the top and 24px at the side. A codicon's pen (1/16) drew 1.7x the ink of the codicons
+  // beside it, the fff being three loops and a crossbar; 0.7 brings it to ~1.2x their mean, under
+  // Explorer's. Below one device pixel Chromium draws the stroke as a grey hairline, so at 24px on a 1x
+  // screen the pen must stay at or over 1px — 0.65 (0.975px) went grey. Re-measure before changing it.
   const svg = readFileSync(join(pkg, "media", "frizz.svg"), "utf8")
   const [, , width, height] = /viewBox="([^"]+)"/u.exec(svg)![1]!.split(/\s+/u).map(Number)
   const stroke = Number(/stroke-width="([^"]+)"/u.exec(svg)![1])
   assert.equal(width, height, "a square box, as the bar's mask is")
-  assert.ok(Math.abs((stroke * 16) / width! - 1) < 0.01, `stroke ${stroke} on a ${width}-unit box`)
+  assert.ok(Math.abs((stroke * 16) / width! - 0.7) < 0.01, `stroke ${stroke} on a ${width}-unit box`)
+  assert.ok((stroke * 24) / width! >= 1, "at 24px on a 1x screen the pen is at least one device pixel")
   assert.match(svg, /stroke="currentColor"/u, "one colour: the bar paints the mark as a mask")
 })

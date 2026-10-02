@@ -8,9 +8,10 @@ in it. Works in VS Code, Cursor and Windsurf.
   project. It is the app you know, narrowed: the same cards, type sizes and shortcuts. File links in it
   open in this window, web links in your browser. Its badge counts the threads ready for you.
 - **VS Code's title row holds the header's buttons**: **Back to queue** in a thread, **New thread**
-  elsewhere, **Jump to a thread** (the app's ⌘K) and **Settings**. **Reload sidebar** and **Open in
-  browser** are under its `…`. Each is in the command palette too, and brings the sidebar back if it
-  was hidden. The badge's tooltip reads the counts (`1 needs you · 3 ready`).
+  elsewhere, **Jump to a thread** (the app's ⌘K) and **Settings**. **Reload sidebar**, **Open in
+  browser** and **Keyboard shortcuts** (the app's `?`) are under its `…`. Each is in the command palette
+  too, and brings the sidebar back if it was hidden. The badge's tooltip reads the counts
+  (`1 needs you · 3 ready`).
 - **The sidebar sees your editor.** Over its prompt boxes it names the file in front and what you have
   selected (`sample.ts:12-20`, `26 lines`), live; a click adds it as a chip, and the other open files
   are one more click away. Only paths and line numbers reach the sidebar until you add something.
@@ -20,11 +21,13 @@ in it. Works in VS Code, Cursor and Windsurf.
   window that has the thread's project open. The extension keeps Frizz on this machine up to date with
   it; an agent reads it only when it asks. Turn off `frizz.shareEditorState` to keep the editor to
   yourself.
-- **Add to Frizz prompt** (`Ctrl+I`, `⌘I` on macOS, with text selected) — the selection becomes a chip
-  in the prompt box the sidebar shows, with the caret after it so you can type straight on: the reply
-  box of the thread you are in, else the new-thread box. The sidebar opens if this window never had it.
-  Without a selection (from the editor's right-click menu or the palette) it adds the line your caret
-  is on.
+- **Add to Frizz prompt** (`Ctrl+L`, `⌘L` on macOS, with text selected — Cursor's chord; `Ctrl+I` / `⌘I`
+  too) — the selection becomes a chip in the prompt box the sidebar shows, with the caret after it so you
+  can type straight on: the reply box of the thread you are in, else the new-thread box. The sidebar
+  opens if this window never had it. Without a selection (from the editor's right-click menu or the
+  palette) it adds the line your caret is on.
+- **`Alt+K`** (`⌥K` on macOS — Claude Code's chord) — the selection as a chip, or with nothing selected,
+  the whole file.
 - **More ways in**, each landing as a chip with the caret after it:
   - **Add file to Frizz prompt** on an editor tab's right-click menu, on files in the explorer (every
     file selected), and in the editor's Frizz menu — a reference to the whole file.
@@ -50,18 +53,23 @@ command palette.
 
 | where | keys | does |
 | --- | --- | --- |
-| the editor, with text selected | `Ctrl+I` / `⌘I` | Add to Frizz prompt, caret in the sidebar |
+| the editor, with text selected | `Ctrl+L` / `⌘L`, or `Ctrl+I` / `⌘I` | Add to Frizz prompt, caret in the sidebar |
+| the editor | `Alt+K` / `⌥K` | the selection, or with none the whole file, into the prompt |
+| the sidebar's prompt box | `Ctrl+L` / `⌘L`, `Ctrl+I` / `⌘I` | the editor's selection (or its file) into this box |
 | the sidebar | every shortcut the app's `?` sheet lists | what it does in the app |
 | the sidebar | `Ctrl+Shift+P`, `Ctrl+P`, `Ctrl+B`, `Ctrl+J`, ``Ctrl+` ``, `Ctrl+1`, `Ctrl+Shift+E/F/G/D/X` (`⌘` on macOS) | VS Code's own: palette, quick open, side bar, panel, terminal, back to the editor, the built-in views |
 
 ## Where the sidebar differs from Frizz in your browser
 
-- **`Ctrl+I` with text selected is Frizz's.** Without a selection, and everywhere outside the editor,
-  `Ctrl+I` stays the editor's own: VS Code's suggestions (also on `Ctrl+Space`), or its inline chat where
-  chat is on, and Cursor's own chord in Cursor. With a selection, Frizz's binding wins over both; reach
-  inline chat from the palette (**Inline Chat**), or rebind either in **Keyboard Shortcuts**. Frizz's
-  first binding, `Ctrl+Alt+P`, is gone. (`Ctrl+L`, the chord Cursor gives its chat, was not taken: in
-  VS Code it selects the line.)
+- **`Ctrl+L` and `Ctrl+I` with text selected are Frizz's.** Without a selection, and everywhere outside
+  the editor, both stay the editor's own: `Ctrl+L` selects the caret's line, and `Ctrl+I` is VS Code's
+  suggestions (also on `Ctrl+Space`) or its inline chat where chat is on. With a selection, Frizz's
+  bindings win: a second `Ctrl+L` to grow a line selection adds it to Frizz instead (`Ctrl+L` once, then
+  `Shift+↓`, still does), and inline chat is in the palette (**Inline Chat**). In Cursor, whose chat and
+  agent are on `Ctrl+L` and `Ctrl+I`, Cursor and Frizz bind the same chords; rebind either in **Keyboard
+  Shortcuts** if the wrong one answers. Frizz's first binding, `Ctrl+Alt+P`, is gone.
+- **`Alt+K` in the editor is Frizz's**, with or without a selection. On macOS `⌥K` types `˚` in other
+  apps; in the editor it adds to Frizz, as Claude Code's does.
 - **While the sidebar has focus, VS Code sees only the chords in the table above**; every other key goes
   to Frizz, as in the browser. Copy, cut, paste, undo and select all stay the text box's.
 - **The terminal's right-click menu**: on Windows a right-click in the terminal copies or pastes by

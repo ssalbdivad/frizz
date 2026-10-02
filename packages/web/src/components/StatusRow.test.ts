@@ -7,6 +7,7 @@ import { MemoryRouter } from "react-router"
 import type { BoardSnapshot } from "@frizz/shared"
 import { StatusRow } from "./StatusRow.tsx"
 import { store, type ConnectionState } from "../store.ts"
+import { SUPERVISOR_STATUS_KEY } from "../api/supervisorStatus.ts"
 
 // The row's SHAPE is a spec, not an accident: settings → shortcuts → reload → quota, left to right and all
 // of it left-justified — and nothing else: no door and no name (2026-09-28). It has been three separate pieces
@@ -160,4 +161,34 @@ test("a provider with NO DATA renders nothing at all — and takes the divider w
   const none = render("colinhacks/frizz", { quota: false })
   assert.doesNotMatch(none, /data-quota-bar/)
   assert.equal(none.split('class="h-3 w-px shrink-0 bg-border"').length - 1, 0)
+})
+
+// IN AN EDITOR'S SIDEBAR the row draws neither the gear nor the ⌨ — VS Code's title row carries Settings
+// and, under its ⋯, Keyboard shortcuts — and is not drawn at all when nothing is left. The real-page run
+// found the ⌨ alone on a 36px row above the prompt box (scripts/e2e-sidebar.ts, 2026-10-01): a Frizz with
+// no supervisor (run from source) and no quota to read.
+test("the sidebar's row: no gear, no ⌨, and no row at all with nothing left in it", () => {
+  const sidebarRow = (options: { quota: boolean; supervisor: boolean }) => {
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } })
+    if (options.quota) {
+      client.setQueryData(["quota"], { claude: { status: "ok", planType: "max", windows: [{ key: "5h", label: "5h", usedPercent: 17 }] }, codex: { status: "unavailable", windows: [] } })
+      client.setQueryData(["authStatus"], { claude: "authed", codex: "signed-out", emails: {} })
+    }
+    if (options.supervisor) client.setQueryData(SUPERVISOR_STATUS_KEY, { protocol: 1, state: "ready", requestedAt: Date.now() })
+    return renderToStaticMarkup(
+      createElement(QueryClientProvider, { client }, createElement(MemoryRouter, null, createElement(StatusRow, { settings: false, shortcuts: false }))),
+    )
+  }
+  assert.equal(sidebarRow({ quota: false, supervisor: false }), "", "nothing to show, no row")
+  for (const [options, shows] of [
+    [{ quota: true, supervisor: false }, /data-quota-bar/],
+    [{ quota: false, supervisor: true }, /aria-label="Frizz is up to date"/],
+  ] as const) {
+    const html = sidebarRow(options)
+    assert.match(html, /data-status-row/, JSON.stringify(options))
+    assert.match(html, shows)
+    assert.doesNotMatch(html, /aria-label="Keyboard shortcuts"|aria-label="Settings"/)
+  }
+  // The browser's row keeps both (negative control for the props).
+  assert.match(render(), /aria-label="Keyboard shortcuts"/)
 })
