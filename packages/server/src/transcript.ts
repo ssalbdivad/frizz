@@ -2460,6 +2460,53 @@ export function readTranscript(project: Project, sessionId: string, forkAnchor?:
   }
 }
 
+/** Bytes folded per slice by readTranscriptYielding before it hands the event loop back. ~15ms of fold. */
+const YIELDING_SLICE_BYTES = 512 * 1024
+
+/**
+ * readTranscript for a caller that can wait: the SAME retained fold and the same answer, but a cold fold
+ * is fed in 512 KB slices with the event loop handed back between them.
+ *
+ * A cold fold of a large transcript is one long synchronous block — measured 2026-10-01 on the
+ * maintainer's own transcripts: 1.2–1.8s for 22–53 MB — and the retained cache keeps only 16 files, so a
+ * fleet of busy threads keeps falling out of it. The background readers that do not need the answer
+ * NOW (the working-status and rest-status writers, which go on to await a model call anyway) were
+ * paying that block on the server's one thread: on a mirror of the maintainer's machine six threads'
+ * first working-status checks landed together and froze every request for 6.0s. Sliced, the same fold
+ * costs the same CPU and blocks for one slice at a time.
+ *
+ * Safe against the sync reader interleaving: both feed the one entry, whose `bytesRead` only advances
+ * past bytes already ingested (ingestBounded), so whichever reader runs next continues where the other
+ * stopped and this loop ends once the entry has reached the size it set out to read. If the entry is
+ * evicted or replaced meanwhile, this finishes on its own copy and returns a correct, uncached answer.
+ */
+export async function readTranscriptYielding(project: Project, sessionId: string, forkAnchor?: string | null): Promise<TranscriptMessage[]> {
+  const path = resolveTranscriptPath(project, sessionId)
+  const identityPrefix = `claude:${sessionId}`
+  let fd: number | undefined
+  try {
+    const fork = forkAnchor ? forkPointOf(path, forkAnchor) : undefined
+    if (forkAnchor && !fork) return []
+    fd = openSync(path, "r")
+    const st = fstatSync(fd)
+    const size = st.size
+    const fileId = `${st.dev}:${st.ino}:${Math.trunc(st.birthtimeMs)}`
+    const { entry } = retainedFoldEntry(path, identityPrefix, fileId, size, fork?.offset ?? 0)
+    const openFd = fd
+    while (entry.bytesRead < size) {
+      const before = entry.bytesRead
+      ingestBounded(entry, Math.min(size, entry.bytesRead + YIELDING_SLICE_BYTES), (from, length) => readAppendedBytes(openFd, from, from + length))
+      if (entry.bytesRead === before) break // the file came up short of its stat; nothing more to read
+      if (entry.bytesRead < size) await new Promise<void>((resolve) => setImmediate(resolve))
+    }
+    return retireStaleQueuedBubbles([...entry.fold.messages()])
+  } catch {
+    return []
+  } finally {
+    if (fd !== undefined) closeSync(fd)
+  }
+}
+
 // Correctness net for the retained fold: re-parse the whole file from scratch and deep-compare (by JSON
 // stringification) against the incremental result. Logs a loud structured line on divergence; NEVER
 // throws — a false alarm from a mid-write torn read must not break the read path.

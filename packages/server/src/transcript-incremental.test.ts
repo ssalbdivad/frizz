@@ -8,6 +8,7 @@ import {
   parseTranscript,
   projectClaudeTranscript,
   readTranscript,
+  readTranscriptYielding,
   __clearTranscriptCacheForTests,
 } from "./transcript.ts"
 import type { Project } from "./project.ts"
@@ -304,5 +305,37 @@ test("perf: retained fold is dramatically cheaper than re-parsing the whole file
   } finally {
     hBefore.cleanup()
     hAfter.cleanup()
+  }
+})
+
+// The background status writers read through readTranscriptYielding (2026-10-01): a cold fold of a
+// multi-MB transcript must hand the event loop back between slices and still give readTranscript's answer.
+test("readTranscriptYielding: a cold multi-slice fold yields the loop and equals readTranscript", async () => {
+  __clearTranscriptCacheForTests()
+  const h = cacheHarness()
+  try {
+    const lines: string[] = []
+    for (let i = 0; i < 1500; i++) {
+      lines.push(userLine(`q${i} ${"x".repeat(600)}`), asstTool(`m${i}`, `t${i}`, "Bash", { command: `echo ${i}`, description: "Run" }), toolResult(`t${i}`, "y".repeat(600)))
+    }
+    h.write(lines)
+    assert.ok(readFileWhole(h.path).length > 2 * 1024 * 1024, "the fixture spans several slices")
+    let ticks = 0
+    const timer = setInterval(() => { ticks++ }, 0)
+    const yielded = await readTranscriptYielding(h.project, h.sessionId)
+    clearInterval(timer)
+    assert.ok(ticks > 0, "timers ran while the fold was in progress")
+    __clearTranscriptCacheForTests()
+    const whole = readTranscript(h.project, h.sessionId)
+    assert.equal(JSON.stringify(yielded), JSON.stringify(whole))
+
+    // Interleaved with a sync read on the same retained entry, both finish with the same answer.
+    __clearTranscriptCacheForTests()
+    const pending = readTranscriptYielding(h.project, h.sessionId)
+    const sync = readTranscript(h.project, h.sessionId)
+    assert.equal(JSON.stringify(await pending), JSON.stringify(sync))
+    assert.equal(JSON.stringify(sync), JSON.stringify(whole))
+  } finally {
+    h.cleanup()
   }
 })
