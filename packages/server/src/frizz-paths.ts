@@ -72,7 +72,11 @@ export interface FrizzPathOptions {
   env?: NodeJS.ProcessEnv
   platform?: NodeJS.Platform
   home?: string
-  /** Injected so the whole resolution matrix is testable without touching a filesystem. */
+  /**
+   * Injected so the whole resolution matrix is testable without touching a filesystem. Passing one —
+   * even `existsSync` itself — also BYPASSES the per-process memo below, which is how a test that
+   * reshapes a real temp home between two calls asks for a fresh answer each time.
+   */
   exists?: (path: string) => boolean
 }
 
@@ -212,17 +216,73 @@ function xdgRoots(env: NodeJS.ProcessEnv, home: string): Omit<FrizzPaths, "legac
 }
 
 /**
- * Resolve Frizz's global roots.
+ * Every answer this process has given, by the inputs it was computed from. Unbounded on purpose: a
+ * server sees one or two keys for its whole life (its own home, and the real home a sandbox resolves
+ * runtimes under), and a test file one per temp home — a few hundred short strings at worst.
+ */
+const memo = new Map<string, FrizzPaths>()
+
+/**
+ * Resolve Frizz's global roots — ONCE per process for any given home and environment.
  *
  * An explicitly SET XDG variable wins on every platform, including macOS and Windows — a developer
  * who has configured XDG has asked for it and should get it. Everything else follows the platform.
+ *
+ * WHY THE ANSWER IS MEMOISED, and why that is a correctness rule rather than a speed-up. Resolution
+ * reads the FILESYSTEM (does `~/.frizz` exist, does it hold a registry, does the platform root), and
+ * production asks for these paths on every registry lookup — `registryPath(home = homedir())` lands
+ * here per call, and the server's tenant router reads the registry on every `/_frizz/<project>/…`
+ * request. Re-resolving each time meant a running server's data root was whatever the disk said at
+ * that instant. On 2026-10-02 a test harness wrote a `registry.json` into a debris `~/.frizz`; the
+ * live server's very next lookup took that file for a legacy install, moved its data root onto it,
+ * found none of its own projects there, and answered 404 to every worker's `/_frizz/<project>/rpc/…`
+ * call. ad124bae stopped the harness choosing that directory; this stops ANY later write from moving a
+ * process that has already chosen. A Frizz moves between roots only by restarting, which is also the
+ * only point at which every daemon, descriptor and env var it handed out is re-derived together.
+ *
+ * The memo is KEYED on every input the answer depends on — home, platform, the three XDG roots and
+ * %LOCALAPPDATA% — never a single process-wide slot, because a process legitimately resolves more
+ * than one home: `prepareSandbox` (src/launcher.ts) swaps $HOME before first use and still resolves
+ * the operator's real cache under the real home; tests resolve a fresh temp home per case. Each of
+ * those is its own key and gets its own answer, frozen from the first time that key was asked.
+ *
+ * Caching "no install yet" cannot strand a fresh machine's first launch. With no `~/.frizz`, the
+ * answer is the platform roots whether or not they exist yet (their existence is only ever consulted
+ * to OVERRULE a `~/.frizz`, in supersededByInstall), so the memo holds exactly the directories the
+ * launch is about to create. The only thing a later disk change could do is make `~/.frizz` appear —
+ * the debris case this exists to ignore — and the next process, seeing the registry this one wrote
+ * under the platform root, resolves the same platform root (supersededByInstall again).
+ *
+ * An injected `exists` bypasses the memo: it is a test asking about a hypothetical filesystem, and
+ * an answer about one imaginary disk must never be served for a real one, or vice versa.
  */
 export function frizzPaths(options: FrizzPathOptions = {}): FrizzPaths {
   const env = options.env ?? process.env
   const platform = options.platform ?? process.platform
   const home = options.home ?? homedir()
-  const exists = options.exists ?? existsSync
+  if (options.exists) return resolveFrizzPaths(env, platform, home, options.exists)
+  const key = JSON.stringify([
+    platform,
+    home,
+    env.XDG_DATA_HOME,
+    env.XDG_STATE_HOME,
+    env.XDG_CACHE_HOME,
+    env.LOCALAPPDATA,
+  ])
+  let paths = memo.get(key)
+  if (!paths) {
+    paths = Object.freeze(resolveFrizzPaths(env, platform, home, existsSync))
+    memo.set(key, paths)
+  }
+  return paths
+}
 
+function resolveFrizzPaths(
+  env: NodeJS.ProcessEnv,
+  platform: NodeJS.Platform,
+  home: string,
+  exists: (path: string) => boolean,
+): FrizzPaths {
   const explicit = {
     data: xdg(env, "XDG_DATA_HOME"),
     state: xdg(env, "XDG_STATE_HOME"),
@@ -254,20 +314,23 @@ export function frizzPaths(options: FrizzPathOptions = {}): FrizzPaths {
 }
 
 /**
- * The roots, resolved once per process.
+ * The roots for this process's own home and environment.
  *
- * Deliberately cached: resolution stats the legacy directory, and a launch asks for these paths from
- * dozens of call sites. More importantly it must not CHANGE mid-process — a run that resolved
- * `~/.frizz` at boot and something else later would split one project's state across two trees.
+ * Once a single process-wide slot that kept the FIRST answer whatever $HOME said later, while
+ * `frizzPaths({ home })` beside it re-resolved on every call — so a process could hold two different
+ * opinions of its data root at once. Both now go through the one keyed memo above: stable for a given
+ * home, and a home swapped in before first use (`prepareSandbox`) is simply a different key.
  */
-let cached: FrizzPaths | undefined
 export function frizzRoots(): FrizzPaths {
-  return (cached ??= frizzPaths())
+  return frizzPaths()
 }
 
-/** Test-only: drop the memo so a case can resolve under a different HOME or platform. */
+/**
+ * Test-only: forget every memoised answer, so a case that RESHAPES a home it already resolved (creates
+ * `~/.frizz`, writes a registry) can watch a fresh resolution — what a restarted process would see.
+ */
 export function resetFrizzRoots(): void {
-  cached = undefined
+  memo.clear()
 }
 
 /**

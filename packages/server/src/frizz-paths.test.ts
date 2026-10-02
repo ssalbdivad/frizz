@@ -1,11 +1,15 @@
 import assert from "node:assert/strict"
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs"
+import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { dirname, join } from "node:path"
 import { test } from "node:test"
-import { frizzPaths, isPromptAttachmentPath, legacyFrizzRoot, projectStateDir, serverAddressPathForStateDir } from "./frizz-paths.ts"
+import { frizzPaths, frizzRoots, isPromptAttachmentPath, legacyFrizzRoot, projectStateDir, serverAddressPathForStateDir } from "./frizz-paths.ts"
 
 const never = () => false
+// The REAL disk, read afresh on every call. The cases below reshape one temp home between resolutions
+// to pin what a freshly started process would conclude; without an injected `exists`, the per-process
+// memo (frizz-paths.ts) would — correctly — keep answering with the first resolution.
+const disk = { exists: existsSync }
 
 // The property the whole module exists to protect: an installed Frizz never moves. This tree reaches
 // gigabytes, detached daemons hold descriptors into it, and the threads have no second copy.
@@ -60,9 +64,9 @@ test("the stray-board rule holds on a real directory, and a real install beside 
   const base = mkdtempSync(join(tmpdir(), "frizz-paths-stray-"))
   try {
     mkdirSync(join(legacyFrizzRoot(base), "threads", "sid-1"), { recursive: true })
-    assert.equal(frizzPaths({ home: base, platform: "linux", env: {} }).legacy, false)
+    assert.equal(frizzPaths({ home: base, platform: "linux", env: {}, ...disk }).legacy, false)
     writeFileSync(join(legacyFrizzRoot(base), "registry.json"), "{}")
-    assert.equal(frizzPaths({ home: base, platform: "linux", env: {} }).legacy, true)
+    assert.equal(frizzPaths({ home: base, platform: "linux", env: {}, ...disk }).legacy, true)
   } finally {
     rmSync(base, { recursive: true, force: true })
   }
@@ -73,7 +77,7 @@ test("the stray-board rule holds on a real directory, and a real install beside 
 test("a ~/.frizz with no registry never takes over an install whose platform root has one", () => {
   const base = mkdtempSync(join(tmpdir(), "frizz-paths-superseded-"))
   try {
-    const linux = { home: base, platform: "linux" as const, env: {} }
+    const linux = { home: base, platform: "linux" as const, env: {}, ...disk }
     const platformData = join(base, ".local", "share", "frizz")
     mkdirSync(platformData, { recursive: true })
     writeFileSync(join(platformData, "registry.json"), "{}")
@@ -101,15 +105,117 @@ test("a ~/.frizz with no registry never outranks an XDG_DATA_HOME somebody set",
     const env = { XDG_DATA_HOME: join(isolated, "data"), XDG_STATE_HOME: join(isolated, "state"), XDG_CACHE_HOME: join(isolated, "cache") }
     mkdirSync(join(legacyFrizzRoot(base), "scratch", "thread-1"), { recursive: true })
     mkdirSync(join(legacyFrizzRoot(base), "projects", "p1"), { recursive: true })
-    const paths = frizzPaths({ home: base, platform: "linux", env })
+    const paths = frizzPaths({ home: base, platform: "linux", env, ...disk })
     assert.equal(paths.legacy, false)
     assert.equal(paths.data, join(isolated, "data", "frizz"))
     assert.equal(paths.cache, join(isolated, "cache", "frizz"))
     // Unset, the same debris is still honored on a machine with no other install — that rule is unchanged.
-    assert.equal(frizzPaths({ home: base, platform: "linux", env: {} }).legacy, true)
+    assert.equal(frizzPaths({ home: base, platform: "linux", env: {}, ...disk }).legacy, true)
     // And a ~/.frizz with a registry is an install, which keeps winning over a set XDG variable.
     writeFileSync(join(legacyFrizzRoot(base), "registry.json"), "{}")
-    assert.equal(frizzPaths({ home: base, platform: "linux", env }).legacy, true)
+    assert.equal(frizzPaths({ home: base, platform: "linux", env, ...disk }).legacy, true)
+  } finally {
+    rmSync(base, { recursive: true, force: true })
+  }
+})
+
+// A RUNNING PROCESS KEEPS THE ROOTS IT RESOLVED. 2026-10-02: a harness wrote `registry.json` into a
+// debris `~/.frizz`; the live server re-resolved on its next registry lookup, took that file for a
+// legacy install, and answered 404 to every worker's `/_frizz/<project>/rpc/…` call. The stray write
+// below is the same one, and the fresh resolution after it is the control: it proves the file DOES
+// flip the rule, so the memoised answer holding still is the memo working, not a write that missed.
+test("after first resolution, a registry dropped into ~/.frizz does not move this process's roots", () => {
+  const base = mkdtempSync(join(tmpdir(), "frizz-paths-stable-"))
+  try {
+    const linux = { home: base, platform: "linux" as const, env: {} }
+    const platformData = join(base, ".local", "share", "frizz")
+    mkdirSync(platformData, { recursive: true })
+    writeFileSync(join(platformData, "registry.json"), "{}")
+    mkdirSync(join(legacyFrizzRoot(base), "scratch", "thread-1"), { recursive: true })
+    const before = frizzPaths(linux)
+    assert.equal(before.data, platformData)
+    assert.equal(before.legacy, false)
+
+    writeFileSync(join(legacyFrizzRoot(base), "registry.json"), JSON.stringify({ projects: [] }))
+    assert.equal(frizzPaths({ ...linux, ...disk }).legacy, true, "control: a fresh resolution now takes ~/.frizz")
+    const after = frizzPaths(linux)
+    assert.deepEqual(after, before, "the running process stays on the root it resolved")
+    assert.equal(projectStateDir("p1", base), join(platformData, "projects", "p1"), "home-taking helpers hold still too")
+  } finally {
+    rmSync(base, { recursive: true, force: true })
+  }
+})
+
+// The first-launch question the memo could get wrong: a fresh machine resolves BEFORE anything exists,
+// then the launch creates the platform root. Caching "no install yet" must hold exactly the root the
+// launch creates, and must agree with what the NEXT process resolves once the install exists — even if
+// debris `~/.frizz` appears in between. (A guard: it passes on the unmemoised code too, by design.)
+test("caching 'no install yet' points at the root a first launch creates, and the next process agrees", () => {
+  const base = mkdtempSync(join(tmpdir(), "frizz-paths-first-"))
+  try {
+    const linux = { home: base, platform: "linux" as const, env: {} }
+    const first = frizzPaths(linux)
+    assert.equal(first.legacy, false)
+    assert.equal(first.data, join(base, ".local", "share", "frizz"))
+    // The launch establishes the install where this process said it would.
+    mkdirSync(first.data, { recursive: true })
+    writeFileSync(join(first.data, "registry.json"), "{}")
+    assert.deepEqual(frizzPaths({ ...linux, ...disk }), first, "a later process resolves the same root")
+    // Debris lands by name; neither this process nor the next one moves for it.
+    mkdirSync(join(legacyFrizzRoot(base), "runtimes"), { recursive: true })
+    assert.deepEqual(frizzPaths(linux), first)
+    assert.deepEqual(frizzPaths({ ...linux, ...disk }), first)
+  } finally {
+    rmSync(base, { recursive: true, force: true })
+  }
+})
+
+// The memo is keyed, not one slot: a sandbox swaps $HOME before first use (prepareSandbox) and still
+// resolves the operator's real roots, and every test hands in its own temp home. Each must get its own
+// answer. The $HOME case drives `frizzRoots()`, the no-argument form production uses, which until this
+// change kept the FIRST home's answer for the life of the process whatever $HOME said next.
+test("a different home, XDG root or $HOME gets its own answer, not the first one memoised", () => {
+  const legacyHome = mkdtempSync(join(tmpdir(), "frizz-paths-key-legacy-"))
+  const freshHome = mkdtempSync(join(tmpdir(), "frizz-paths-key-fresh-"))
+  const savedHome = process.env.HOME
+  try {
+    mkdirSync(legacyFrizzRoot(legacyHome))
+    writeFileSync(join(legacyFrizzRoot(legacyHome), "registry.json"), "{}")
+    const legacy = frizzPaths({ home: legacyHome, platform: "linux", env: {} })
+    const fresh = frizzPaths({ home: freshHome, platform: "linux", env: {} })
+    assert.equal(legacy.data, legacyFrizzRoot(legacyHome))
+    assert.equal(fresh.data, join(freshHome, ".local", "share", "frizz"))
+
+    const env = { XDG_DATA_HOME: join(freshHome, "xdg-data") }
+    assert.equal(frizzPaths({ home: freshHome, platform: "linux", env }).data, join(freshHome, "xdg-data", "frizz"))
+    assert.equal(frizzPaths({ home: freshHome, platform: "darwin", env: {} }).data, join(freshHome, "Library", "Application Support", "Frizz"))
+
+    process.env.HOME = legacyHome
+    const a = frizzRoots().data
+    process.env.HOME = freshHome
+    const b = frizzRoots().data
+    // Only meaningful where homedir() reads $HOME (POSIX); win32 reads USERPROFILE.
+    if (process.platform !== "win32") {
+      assert.equal(a, legacyFrizzRoot(legacyHome))
+      assert.notEqual(b, a, "a swapped $HOME is a different home")
+    }
+  } finally {
+    process.env.HOME = savedHome
+    rmSync(legacyHome, { recursive: true, force: true })
+    rmSync(freshHome, { recursive: true, force: true })
+  }
+})
+
+// An injected `exists` describes an imaginary disk. Its answer must never be served for the real one —
+// and a memoised real answer must never be served for it — in either order.
+test("an injected exists bypasses the memo in both directions", () => {
+  const base = mkdtempSync(join(tmpdir(), "frizz-paths-inject-"))
+  try {
+    const linux = { home: base, platform: "linux" as const, env: {} }
+    const everything = () => true
+    assert.equal(frizzPaths({ ...linux, exists: everything }).legacy, true, "imaginary disk first")
+    assert.equal(frizzPaths(linux).legacy, false, "the real (empty) home was not answered from the imaginary one")
+    assert.equal(frizzPaths({ ...linux, exists: everything }).legacy, true, "nor the imaginary one from the real memo")
   } finally {
     rmSync(base, { recursive: true, force: true })
   }
