@@ -279,7 +279,8 @@ test("`editor` reads the window on this project as text, and says why when there
         dirty: true,
         lineCount: 40,
         cursorLine: 14,
-        selection: { startLine: 12, endLine: 14, text: "  let total = 0\n  // ```not a fence```\n  total += x" },
+        // A whole-line drag: the text ends in the newline before the next line, which the fence leaves out.
+        selection: { startLine: 12, endLine: 14, text: "  let total = 0\n  // ```not a fence```\n  total += x\n" },
         visible: { startLine: 1, endLine: 30 },
       },
       open: [{ path: "/home/me/repo/src/b.ts", dirty: true }, { path: "Untitled-1", untitled: true }],

@@ -50,7 +50,7 @@ server scanning lock files and dialling N editors.
 
 | frame | when | extension does |
 | --- | --- | --- |
-| `welcome {bootId}` | after hello | logs it; a changed bootId means Frizz restarted |
+| `welcome {bootId, features?}` | after hello | logs it; a changed bootId means Frizz restarted; `features` names what this Frizz takes beyond v1 (`editor-state`) |
 | `projects {projects}` | after hello, and on any change (2s in-memory diff) | maps files to projects; status bar counts |
 | `open {id, path, line?, column?, endLine?}` | a file link was clicked | opens + reveals, raises the window, answers `result` |
 | `focus {id, path}` | "Open in editor" on a folder this window has open | raises the window, answers `result` (not ok where it cannot raise itself) |
@@ -262,6 +262,54 @@ The roots gate the server's own opener, because that launches an application wit
 shell's default handler); a VS Code tab is inert, the extension opens it in the window that holds the
 sidebar, and the human clicked the link.
 
+## What the agents can read: `mcp__frizz__editor`
+
+The maintainer, after asking an agent in the sidebar "can you see the highlighted code in vscode?" and
+being told no (2026-10-02): *"the only reason this is useful is if it has full context on the editor"*.
+Until then a selection reached a worker only as a chip the human added. Claude Code's IDE integration
+gives its agent the editor through MCP tools it calls on demand (getCurrentSelection, getOpenEditors,
+getDiagnostics); Frizz now does the same for every worker, Claude, Codex and ACP alike, through the
+socket it already had.
+
+- **The frame.** Each window sends `editor` (`EditorSnapshot`, editor-protocol.ts): the text editor in
+  front — path (an untitled buffer's label), language, unsaved, line count, caret, the lines on screen,
+  the primary selection with its text — the other tabs most recent first, the errors and warnings, and
+  the full problem counts. Only `file` and `untitled` documents: never an output pane, a git revision or
+  a settings UI. Focus in an output pane or the debug console makes that the active text editor in VS
+  Code, so the last file editor still on screen stands in rather than blank the selection.
+- **When.** Debounced 250ms after any change of the active editor, selection, visible range, tabs, a
+  document's text or dirty state, or the diagnostics; at once when the setting changes; and once on
+  every connect. An unchanged picture is not resent (packages/vscode editor-state-feed.ts).
+- **Version skew.** The server closes a socket on any frame it does not know (4401), on every redial,
+  so the protocol stays v1 and grows by advertisement: the welcome names `features: ["editor-state"]`
+  and the extension sends the frame only to a Frizz that named it. An older Frizz never hears it, and the
+  log says its agents cannot read the editor.
+- **Fitting.** Capped to the server's schema — 50 tabs, 100 diagnostics (every error before any warning,
+  the file in front first within each, so 200 lint warnings cannot push out an error elsewhere), messages
+  at 300 characters, selected text at 32 Ki characters flagged `truncated` — and the whole frame fitted
+  into 56 KiB encoded (`EDITOR_STATE_MAX_BYTES`, under the 64 KiB frame ceiling) by trimming the
+  diagnostics, then the tabs, then the selected text, by ENCODED size (packages/vscode editor-state.ts).
+- **The opt-out.** `frizz.shareEditorState` (default on). Off, the window sends `shared: false` with
+  nothing else, and the server forgets what it had: a worker is told the human turned it off, which is a
+  different next move from "no editor".
+- **The server** keeps each window's latest frame with its arrival time and drops it with the window.
+  `editorState` (project-prefixed, a mutation only because the worker's MCP server POSTs everything)
+  answers the windows that have the project open — a workspace folder that holds `workDirOf(project)`,
+  one inside it (a package, a thread's worktree opened with "Open in editor"), or a loose window whose
+  file in front is under it — most recently focused first, with how many windows are connected and what
+  the others have open.
+- **The tool.** `editor` (cc-worker/bin/frizz-mcp.mjs, `readOnlyHint`, no arguments: the window is the
+  one on the caller's project) renders the window used last as text: the file, the selected lines and
+  text in a fence, the caret and screen, the tabs, the problems grouped by file. Every way of having
+  nothing to read says why — no editor, none on this project, an extension too old to report, sharing
+  off, a Frizz too old for the procedure ("restart Frizz to enable this") — and ends on asking the human
+  to paste it. Its description names the words humans use ("this", "the selected code", "the error"),
+  and the worker contract names the tool in one sentence, since a worker's MCP tools are deferred.
+
+Nothing is attached to a message implicitly: the chip is still the only context that rides one. The
+agent READS the editor when it decides to, which is the Claude Code model rather than Cursor's
+always-attached context.
+
 ## Verification
 
 - Unit: `file-position.test.ts`; the bridge against real `ws` clients (`editor-bridge.test.ts`);
@@ -272,7 +320,11 @@ sidebar, and the human clicked the link.
   `EditorClientMessageSchema` and frame ceilings; the sidebar's relay, CSP and routing (`embed.test.ts`,
   `sidebar-html.test.ts`); the editor's context for the sidebar — the column-1 line rule, the selection's
   characters, labels, open-file order, dedupe and cap, the fix note and titles, a terminal selection's
-  bounds (`editor-context.test.ts`); and what the `.vsix` carries — every file the manifest names admitted
+  bounds (`editor-context.test.ts`); the agents' picture of the editor — caps, order, the line rule, the
+  fitting by encoded size with every result judged by the server's schema (`editor-state.test.ts`), the
+  frame sent only to a Frizz that advertises it, resent on reconnect, never refused
+  (`connection.test.ts`), the bridge keeping and answering it across windows (`editor-bridge.test.ts`),
+  and the real `frizz-mcp.mjs` rendering it (`frizz-mcp.test.ts`); and what the `.vsix` carries — every file the manifest names admitted
   by `.vscodeignore`, the activity-bar mark's pen at 1/16 of its box (`package-contents.test.ts`).
   `nub --test packages/vscode/src/*.test.ts`.
 - End to end, `packages/vscode/scripts/e2e.ts` downloads a real VS Code (`@vscode/test-electron`) and
@@ -296,6 +348,8 @@ sidebar, and the human clicked the link.
     off; a tab's and the explorer's files; a terminal selection as `@terminal` with the clipboard
     restored; `frizz:route` as the buttons the title row really shows and the badge's tooltip, with
     the row still reading Frizz; and every title-row command, and a real click on one, reaching the page as `frizz:command`.
+    And the agents' picture: a selection, a tab and a problem from a real diagnostic collection reaching
+    Frizz as the `editor` frame, an edit marking it dirty, and sharing off sending nothing else.
     `FRIZZ_E2E_ONLY=<part of a step's name>` runs just those steps.
   - `FRIZZ_E2E_VSCODE=oldest nub packages/vscode/scripts/e2e.ts` — the same on the oldest VS Code the
     manifest's `engines.vscode` admits (1.90.0), where `focusWindow` does not exist.
@@ -303,7 +357,9 @@ sidebar, and the human clicked the link.
     (`scripts/adhoc-stack.mjs`: sandbox HOME, a free port, two throwaway git repos) and runs REAL mode
     against the TENANT project: `openLocalFile` with a line landing in the editor over the bridge, the
     window listed in `editorWindows`, and "Add to Frizz prompt" landing as a chip in the new-thread box
-    of a headless page open on the tenant (`e2e/page-claim.ts`). Every opener the server could spawn
+    of a headless page open on the tenant (`e2e/page-claim.ts`), and a worker's `editor` tool — the real
+    `frizz-mcp.mjs`, stamped with the tenant's id — reading the window's selection and problem through the
+    real server. Every opener the server could spawn
     (`code`, `cursor`, `xdg-open` …) is a stub on its PATH, and the run fails if one was spawned. The
     stack is stopped by its process group and anything still carrying its HOME is killed, pass or fail.
     Ask and Send start real agents, so they run only with `FRIZZ_E2E_DISPATCH=1` (which adds `--creds`).

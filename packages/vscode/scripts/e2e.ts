@@ -13,7 +13,9 @@
 //       server did not launch from — with a headless page open on it (e2e/page-claim.ts) that must
 //       receive "Add to Frizz prompt" as a chip in its new-thread box. Every file opener the server
 //       could spawn is a stub on its PATH, and the run fails if one was spawned: the opens must all go
-//       over the editor connection. Everything it started is torn down by exact pid, pass or fail.
+//       over the editor connection. A worker's `editor` tool (the real cc-worker/bin/frizz-mcp.mjs, pointed
+//       at the stack) must read this window's selection and a problem. Everything it started is torn
+//       down by exact pid, pass or fail.
 //       FRIZZ_E2E_DISPATCH=1 adds `--creds` and runs the steps that start a real agent.
 //
 //   FRIZZ_E2E_ORIGIN=http://127.0.0.1:<port> FRIZZ_E2E_PROJECT_DIR=<a registered project's folder> \
@@ -89,12 +91,15 @@ const log = (line: string) => console.log(`frizz e2e: ${line}`)
 interface StackInfo {
   port: number
   home: string
+  launcher: { serverLock: string }
   tenants: { id: string; slug: string; dir: string }[]
 }
 
 interface Stack {
   origin: string
   tenant: { id: string; slug: string; dir: string }
+  /** The server's lock file, which a worker's MCP server finds Frizz by. */
+  serverLock: string
   /** Every opener the server spawned; empty when every open went over the editor connection. */
   openers(): string
   teardown(): Promise<void>
@@ -237,6 +242,7 @@ async function bootStack(): Promise<Stack> {
     return {
       origin: `http://127.0.0.1:${info.port}`,
       tenant,
+      serverLock: info.launcher.serverLock,
       openers: () => (existsSync(opened) ? readFileSync(opened, "utf8").trim() : ""),
       teardown,
     }
@@ -391,6 +397,10 @@ try {
       FRIZZ_E2E_SET_OPENER: stack ? "1" : process.env.FRIZZ_E2E_SET_OPENER,
       FRIZZ_E2E_PAGE_CLAIMS: pageClaims ? "1" : undefined,
       FRIZZ_E2E_ONLY: process.env.FRIZZ_E2E_ONLY,
+      // A worker's view of this window: the REAL frizz-mcp.mjs, run by this node, finding the stack by its lock.
+      FRIZZ_E2E_MCP: stack ? join(repo, "cc-worker", "bin", "frizz-mcp.mjs") : undefined,
+      FRIZZ_E2E_SERVER_LOCK: stack?.serverLock,
+      FRIZZ_E2E_NODE: stack ? process.execPath : undefined,
     },
   }).catch((error: unknown) => {
     log(`the suite did not run: ${(error as Error).message}`)

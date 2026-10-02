@@ -13,11 +13,12 @@
 // Ask just started.
 
 import assert from "node:assert/strict"
+import { spawn } from "node:child_process"
 import { realpathSync, writeFileSync } from "node:fs"
 import { join } from "node:path"
 import { isDeepStrictEqual } from "node:util"
 import * as vscode from "vscode"
-import type { EditorClientMessage, EditorComposed, EditorProject } from "@frizz/shared/editor-protocol"
+import type { EditorClientMessage, EditorComposed, EditorProject, EditorSnapshot } from "@frizz/shared/editor-protocol"
 import type { EmbedEditorContextMessage } from "@frizz/shared/embed-protocol"
 import { parseSentContext } from "../../web/src/lib/composerContext.ts"
 import type { FrizzExtensionApi } from "../src/app.ts"
@@ -137,6 +138,65 @@ function sampleLines(document: vscode.TextDocument, from: number, to: number): s
   return document.getText(new vscode.Range(from - 1, 0, to - 1, document.lineAt(to - 1).text.length))
 }
 
+/**
+ * The window as an agent will read it: the sample in front with lines 2-4 selected, another file open in
+ * a tab, and a problem on line 4 published through a real diagnostic collection (the API a language server
+ * uses), so `languages.onDidChangeDiagnostics` really fires. Returns the collection, to dispose.
+ */
+async function agentScene(): Promise<{ editor: vscode.TextEditor; other: string; problems: vscode.DiagnosticCollection }> {
+  await vscode.commands.executeCommand("workbench.action.closeAllEditors")
+  const other = workspaceFile("other.ts")
+  await vscode.window.showTextDocument(await vscode.workspace.openTextDocument(other), { preview: false })
+  const editor = await vscode.window.showTextDocument(await vscode.workspace.openTextDocument(sample), { preview: false })
+  editor.selection = new vscode.Selection(1, 0, 3, editor.document.lineAt(3).text.length)
+  const problems = vscode.languages.createDiagnosticCollection("frizz-e2e")
+  const problem = new vscode.Diagnostic(new vscode.Range(3, 4, 3, 9), "Cannot find name 'totals'.", vscode.DiagnosticSeverity.Error)
+  problem.source = "e2e"
+  problem.code = 2304
+  problems.set(editor.document.uri, [problem])
+  problems.set(vscode.Uri.file(other), [new vscode.Diagnostic(new vscode.Range(0, 0, 0, 6), "Unused export.", vscode.DiagnosticSeverity.Warning)])
+  return { editor, other, problems }
+}
+
+/** Every `editor` frame the fake received, newest last. */
+const editorFrames = async () => (await fakeLog()).frames.filter((frame): frame is EditorSnapshot => frame.t === "editor")
+
+/** One `tools/call editor` on the REAL frizz-mcp.mjs, run as a worker of `projectId` would run it, finding the stack by its lock. */
+async function workerReadsEditor(projectId: string): Promise<string> {
+  const child = spawn(process.env.FRIZZ_E2E_NODE!, [process.env.FRIZZ_E2E_MCP!], {
+    stdio: ["pipe", "pipe", "ignore"],
+    env: { PATH: process.env.PATH ?? "", HOME: process.env.HOME ?? "", FRIZZ_PROJECT_ID: projectId, FRIZZ_SERVER_LOCK: process.env.FRIZZ_E2E_SERVER_LOCK! },
+  })
+  try {
+    let buffer = ""
+    const replies = new Map<number, (reply: { result?: { content: { text: string }[] } }) => void>()
+    child.stdout.setEncoding("utf8")
+    child.stdout.on("data", (chunk: string) => {
+      buffer += chunk
+      for (let nl = buffer.indexOf("\n"); nl >= 0; nl = buffer.indexOf("\n")) {
+        const line = buffer.slice(0, nl).trim()
+        buffer = buffer.slice(nl + 1)
+        if (!line) continue
+        const reply = JSON.parse(line) as { id: number; result?: { content: { text: string }[] } }
+        replies.get(reply.id)?.(reply)
+      }
+    })
+    const request = (id: number, method: string, params: unknown) => new Promise<{ result?: { content: { text: string }[] } }>((resolve, reject) => {
+      const timer = setTimeout(() => reject(new Error(`frizz-mcp did not answer ${method}`)), 20_000)
+      replies.set(id, (reply) => {
+        clearTimeout(timer)
+        resolve(reply)
+      })
+      child.stdin.write(JSON.stringify({ jsonrpc: "2.0", id, method, params }) + "\n")
+    })
+    await request(1, "initialize", { protocolVersion: "2025-06-18" })
+    const reply = await request(2, "tools/call", { name: "editor", arguments: {} })
+    return reply.result?.content[0]?.text ?? JSON.stringify(reply)
+  } finally {
+    child.kill()
+  }
+}
+
 /** The thread the real-mode Ask step started, for Send to follow up when no FRIZZ_E2E_THREAD is named. */
 let askedThread: string | undefined
 
@@ -237,6 +297,76 @@ const steps: Step[] = [
       assert.equal(api.statusBar().command, "frizz.sidebar.focus", "a click shows the sidebar")
       await fake("/__e2e/projects", { projects: [{ ...project, ready: 0, working: 1 }] })
       await until("a bare Frizz", () => api.statusBar().text === "Frizz")
+    },
+  },
+  {
+    name: "Frizz's agents can read the editor: the file in front, the selection and its text, the tabs, the problems — nothing with sharing off",
+    modes: ["fake"],
+    async run() {
+      const { editor, other, problems } = await agentScene()
+      const frizz = vscode.workspace.getConfiguration("frizz")
+      try {
+        const expectedText = sampleLines(editor.document, 2, 4)
+        let frame: EditorSnapshot | undefined
+        await until("the selection and the problem in an editor frame", async () => {
+          frame = (await editorFrames()).at(-1)
+          return frame?.active?.selection?.text === expectedText && frame.diagnostics.some((d) => d.source === "e2e")
+        })
+        assert.equal(frame!.shared, true)
+        const active = frame!.active!
+        assert.deepEqual({ path: active.path, languageId: active.languageId, dirty: active.dirty, lineCount: active.lineCount, selection: active.selection, untitled: active.untitled }, {
+          path: sample, languageId: "typescript", dirty: false, lineCount: editor.document.lineCount, selection: { startLine: 2, endLine: 4, text: expectedText }, untitled: undefined,
+        })
+        assert.equal(active.cursorLine, 4)
+        assert.ok(active.visible.startLine <= 2 && active.visible.endLine >= 4, JSON.stringify(active.visible))
+        assert.deepEqual(frame!.open.map((file) => file.path), [other], "the other tab, once, never the file in front")
+        // Errors before warnings, the file in front first: ours leads, the other file's warning follows.
+        const ours = frame!.diagnostics.filter((d) => d.source === "e2e" || d.message === "Unused export.")
+        assert.deepEqual(ours, [
+          { path: sample, line: 4, severity: "error", message: "Cannot find name 'totals'.", source: "e2e", code: "2304" },
+          { path: other, line: 1, severity: "warning", message: "Unused export." },
+        ])
+        assert.ok(frame!.problems.errors >= 1 && frame!.problems.warnings >= 1)
+
+        // A keystroke: the frame follows the text and the dirty flag.
+        await editor.edit((edit) => edit.insert(new vscode.Position(1, 0), "  // edited\n"))
+        await until("a dirty frame with the edited selection", async () => (await editorFrames()).at(-1)?.active?.dirty === true)
+
+        // Sharing off: one frame that says so and carries nothing; back on, the picture again.
+        await frizz.update("shareEditorState", false, vscode.ConfigurationTarget.Global)
+        await until("sharing off", async () => (await editorFrames()).at(-1)?.shared === false)
+        assert.deepEqual((await editorFrames()).at(-1), { t: "editor", shared: false, active: null, open: [], diagnostics: [], problems: { errors: 0, warnings: 0 } })
+        await frizz.update("shareEditorState", undefined, vscode.ConfigurationTarget.Global)
+        await until("sharing back on", async () => (await editorFrames()).at(-1)?.shared === true)
+        assert.deepEqual((await fakeLog()).refused, [], "every editor frame is one the server's own schema takes")
+      } finally {
+        problems.dispose()
+        await frizz.update("shareEditorState", undefined, vscode.ConfigurationTarget.Global)
+        await vscode.commands.executeCommand("workbench.action.files.revert")
+        await vscode.commands.executeCommand("workbench.action.closeAllEditors")
+      }
+    },
+  },
+  {
+    name: "a worker's `editor` tool reads this window's selection and its problem through the real server",
+    modes: ["real"],
+    async run({ project }) {
+      if (!process.env.FRIZZ_E2E_MCP || !process.env.FRIZZ_E2E_SERVER_LOCK || !process.env.FRIZZ_E2E_NODE) return skip("needs the stack's lock; run with --stack")
+      const { editor, other, problems } = await agentScene()
+      try {
+        const expectedText = sampleLines(editor.document, 2, 4)
+        let text = ""
+        await until("the worker reading the selection", async () => (text = await workerReadsEditor(project.id)).includes(expectedText), 20_000)
+        console.log(`    the worker read:\n${text.replace(/^/gmu, "      ")}`)
+        assert.ok(text.includes(`In front: ${sample} (typescript), lines 2-4 selected.`), text)
+        assert.ok(text.includes(`\`\`\`typescript\n${expectedText}\n\`\`\``), "the selected text, verbatim, fenced")
+        assert.ok(text.includes(`${sample}\n  4: error: Cannot find name 'totals'. [e2e 2304]`), "the problem")
+        assert.ok(text.includes(`- ${other}`), "the other tab")
+        assert.match(text, /^Visual Studio Code \(/u)
+      } finally {
+        problems.dispose()
+        await vscode.commands.executeCommand("workbench.action.closeAllEditors")
+      }
     },
   },
   {

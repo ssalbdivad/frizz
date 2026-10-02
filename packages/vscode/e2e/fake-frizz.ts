@@ -3,7 +3,8 @@
 //
 //   GET  /_frizz/health                      { ok, bootId }
 //   /_frizz/<projectId>/rpc/<proc>           dispatchPreferencesGet, dispatch, board, followUp
-//   WS   /_frizz/editor                      hello → welcome + projects; compose → composed; results recorded
+//   WS   /_frizz/editor                      hello → welcome (naming "editor-state", as the real one does)
+//                                            + projects; compose → composed; results and editor frames recorded
 //   GET  /                                   a fake PAGE that speaks the sidebar's embed contract
 //                                            (embed-protocol.ts): says frizz:ready, answers frizz:compose
 //
@@ -173,7 +174,7 @@ export class FakeFrizz {
       const frame = decoded as EditorClientMessage
       this.log.frames.push(frame)
       if (frame.t === "hello") {
-        this.#send(ws, { t: "welcome", v: 1, bootId: "fake-boot" })
+        this.#send(ws, { t: "welcome", v: 1, bootId: "fake-boot", features: ["editor-state"] })
         this.#send(ws, { t: "projects", projects: this.projects })
       } else if (frame.t === "compose") {
         this.#send(ws, { t: "composed", id: frame.id, ok: true })

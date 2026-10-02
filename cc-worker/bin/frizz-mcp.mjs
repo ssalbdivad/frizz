@@ -1310,7 +1310,9 @@ function editorWindowReport(w) {
       const count = s.endLine - s.startLine + 1
       if (typeof s.text === "string") {
         lines.push(`Selected text (${count} line${count === 1 ? "" : "s"}${s.truncated ? `; ONLY THE START — the selection was too large to carry whole, so read the file for the rest` : ""}):`)
-        lines.push(codeFence(s.text, a.languageId))
+        // A whole-line drag ends at column 1 of the next line, so its text ends in a newline the fence
+        // would show as a blank last line.
+        lines.push(codeFence(s.text.replace(/\n$/, ""), a.languageId))
       } else {
         lines.push(`The selection was too large to carry its text; read ${editorLines(s)} of the file.`)
       }

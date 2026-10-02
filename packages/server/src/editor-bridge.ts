@@ -42,8 +42,8 @@ import { isTrustedLocalWebSocketRequest, rejectWebSocketUpgrade } from "./local-
 //
 // What it holds is small and all in memory: the connected windows (their folders, focus and app, and
 // what their editor last showed, for the agents), the requests waiting on a window's answer, and the
-// selections an editor sent to the prompt box until a page claims one. Nothing survives a restart, and nothing needs to — the extension reconnects and says
-// it all again in its hello.
+// selections an editor sent to the prompt box until a page claims one. Nothing survives a restart, and
+// nothing needs to — the extension reconnects and says it all again.
 
 export const EDITOR_MAX_WINDOWS = 32
 /**
