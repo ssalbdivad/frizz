@@ -144,8 +144,10 @@ export function frameDocument(input: { nonce: string; url: string; origin: strin
       return
     }
     if (typeof data.type !== "string" || !data.type.startsWith("frizz:")) return
-    // The page puts the caret in its composer; the frame has to hold the focus for the caret to show.
-    if (data.focus === true) frame.focus()
+    // The page puts the caret in its composer, or opens the door a title-row button names (New thread's
+    // caret, the palette's search box, Settings); the frame has to hold the focus for either to take the
+    // keyboard. Without it a button left the keyboard in this document, where no key reaches the page.
+    if (data.focus === true || data.type === "frizz:command") frame.focus()
     frame.contentWindow.postMessage(data, FRIZZ)
   })
   // Focus that lands on this document (the view revealed, a click on its edge) belongs to the page.

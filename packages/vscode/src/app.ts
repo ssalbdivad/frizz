@@ -677,7 +677,10 @@ export function activateFrizz(api: Vscode, context: vscode.ExtensionContext): Fr
       }
       item = itemFor({ path: message.path! })
     }
-    const composed = await composeInSidebar({ item: { ...item, app: api.env.appName }, target: "front", focus: true }, false)
+    // `preserveFocus`: the human clicked the bar, so the view is in sight and focused already; revealing it
+    // again re-focused the view after the page had put the caret in its box, and the caret was lost
+    // (scripts/e2e-sidebar.ts, 1 run in 3).
+    const composed = await composeInSidebar({ item: { ...item, app: api.env.appName }, target: "front", focus: true }, true)
     return composed ? "composed" : "not taken"
   }
 

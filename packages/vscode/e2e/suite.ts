@@ -790,22 +790,26 @@ const steps: Step[] = [
     },
   },
   {
-    name: "where the page is becomes VS Code's title row: the thread's title or the scope, the counts, and the buttons for that view",
+    name: "where the page is picks the title row's buttons and its counts ride the badge; the row itself still reads Frizz",
     modes: ["fake"],
-    async run({ api }) {
+    async run({ api, project }) {
       await vscode.commands.executeCommand("frizz.sidebar.focus")
-      await pagePosts({ type: "frizz:route", view: "thread", title: "Fake thread", description: "Waiting on you" })
-      await until("the thread in the title row", () => api.sidebar().title === "Fake thread" && api.sidebar().description === "Waiting on you" && api.sidebar().view === "thread")
+      await fake("/__e2e/projects", { projects: [{ ...project, ready: 2, working: 0 }] })
+      await until("a badge of 2", () => api.sidebar().badge === 2)
+      await pagePosts({ type: "frizz:route", view: "thread", title: "fake-thread", description: "Waiting on you" })
+      await until("the thread's view and counts", () => api.sidebar().view === "thread" && api.sidebar().badgeTooltip === "Waiting on you")
       let row = await titleRow()
       await until("the thread's buttons", async () => (row = await titleRow()).buttons.includes("Back to queue"))
-      assert.match(row.heading, /Fake thread/u)
+      // VS Code re-cases a view's title ("Frizz: Fake-Thread"), so the page's names stay in the page.
+      assert.doesNotMatch(row.heading, /fake-thread/iu)
       assert.deepEqual(row.buttons.filter((label) => !/More Actions/u.test(label)), ["Back to queue", "Jump to a thread", "Settings"])
 
       await pagePosts({ type: "frizz:route", view: "queue", title: "", description: "2 ready" })
-      await until("the queue in the title row", () => api.sidebar().view === "queue" && api.sidebar().title === undefined && api.sidebar().description === "2 ready")
+      await until("the queue's view and counts", () => api.sidebar().view === "queue" && api.sidebar().badgeTooltip === "2 ready")
       await until("the queue's buttons", async () => (row = await titleRow()).buttons.includes("New thread"))
       assert.deepEqual(row.buttons.filter((label) => !/More Actions/u.test(label)), ["New thread", "Jump to a thread", "Settings"])
-      assert.doesNotMatch(row.heading, /Fake thread/u)
+      await fake("/__e2e/projects", { projects: [{ ...project, ready: 0, working: 0 }] })
+      await until("no badge", () => api.sidebar().badge === undefined)
     },
   },
   {
@@ -840,7 +844,6 @@ const steps: Step[] = [
       await vscode.commands.executeCommand("frizz.sidebar.reload")
       await until("the new page ready", async () => (await fakeLog()).page.loads.length === loads + 1 && api.sidebar().ready, 30_000)
       assert.equal(api.sidebar().view, "", "no page has said where it is yet")
-      assert.equal(api.sidebar().title, undefined)
       await until("the context told to the new page", async () => (await contexts(from)).some((message) => message.active?.selection?.startLine === 3))
     },
   },

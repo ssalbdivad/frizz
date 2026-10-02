@@ -229,8 +229,11 @@ must match the core app, with a hint wherever the sidebar differs; and no Frizz 
   desktop's variant: inline cards, the desktop type scale, every shortcut the `?` sheet lists. Where the
   sidebar must differ — a chord VS Code keeps, a setting that cannot apply in a frame — the page says so
   where it happens.
-- **No Frizz header.** VS Code's title row is the header: the view's scope and its counts (`frizz:route`
-  → `WebviewView.title`/`description`), and the header's doors as title-row buttons (`frizz:command`).
+- **No Frizz header.** VS Code's title row carries the header's doors as buttons (`frizz:command`), shown
+  by the page's view (`frizz:route` → a context key), and the badge's tooltip carries the counts. Not the
+  view's `title`/`description`: a single-view container's row reads "Frizz: <title>" re-cased by VS Code
+  ("Frizz: Tidy-The-Sample-Loop" on 1.140, all caps on 1.90) and drops the description (measured in real
+  VS Code, scripts/e2e-sidebar.ts), so names stay in the page.
   The count is the desktop's READY count — every card, a question included — so a tab and the sidebar
   never disagree (`7 ready · 2 working`); a file's reader over a thread names the file and keeps Back. The
   route also carries the page's own address (`href`, kept only on the frame's origin), so ⋯ Open in
@@ -291,8 +294,8 @@ sidebar, and the human clicked the link.
     landing nothing (trusted keys through the workbench's debugging port, `e2e/cdp.ts`); the quick fix
     offered for a diagnostic with its lines and `note`, two problems told apart, none with the setting
     off; a tab's and the explorer's files; a terminal selection as `@terminal` with the clipboard
-    restored; `frizz:route` as the view's title, description and the buttons the title row really
-    shows; and every title-row command, and a real click on one, reaching the page as `frizz:command`.
+    restored; `frizz:route` as the buttons the title row really shows and the badge's tooltip, with
+    the row still reading Frizz; and every title-row command, and a real click on one, reaching the page as `frizz:command`.
     `FRIZZ_E2E_ONLY=<part of a step's name>` runs just those steps.
   - `FRIZZ_E2E_VSCODE=oldest nub packages/vscode/scripts/e2e.ts` — the same on the oldest VS Code the
     manifest's `engines.vscode` admits (1.90.0), where `focusWindow` does not exist.

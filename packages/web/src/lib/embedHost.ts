@@ -57,6 +57,7 @@ export function initEmbedHost(): void {
       if (chord && !frizzChord(event)) postToHost(chord)
     }, 0)
   }, true)
+  guardFocus()
   // Ready once a board is in — the page's drafts and its drawer are keyed by it, and the router that
   // navigation goes through is mounted by then — or after 5s regardless, for a machine with nothing open.
   // The extension posts nothing before this; a compose that still beats the board waits for it (composeInto).
@@ -81,7 +82,59 @@ function frizzChord(event: KeyboardEvent): boolean {
   return matchAction(event, cachedLookup) !== null
 }
 
+// ── focus: the keyboard is the editor's until the human (or the host) hands it over ──────────────────
+//
+// A frame inside VS Code is not a browser tab. In a tab, a script calling `focus()` while the human is in
+// another window moves nothing; in a VS Code webview it takes the keyboard from the EDITOR. Driven in real
+// VS Code 1.140 and 1.90 (scripts/e2e-sidebar.ts, 2026-10-01): with a thread open, every selection in the
+// editor posted `frizz:editor-context`, the context bar re-rendered inside the drawer, Radix's focus trap
+// saw the frame's `activeElement` fall back to <body> (Chromium does that in a frame that has lost focus)
+// and called `focus()` on the drawer — and 150-300ms after the selection the webview had the keyboard,
+// even with the sidebar hidden. Ctrl+I then never reached the editor, and the next letters typed were the
+// page's shortcuts: `d` marked the thread done. 6 runs of 6.
+//
+// So while the page does not have focus, a programmatic `focus()` is dropped — unless the host just asked
+// for the page to take it (a compose with the caret, a title-row command, a navigation), when the relay
+// focuses the frame first (packages/vscode/src/sidebar-html.ts) and the page's own focus lands after.
+// This guards every focus thief, the one found and the ones not written yet; ThreadSheet's trap is off in
+// the sidebar too, for the cause.
+//
+// And the reverse: a frame that gets focus back (the human clicks the view's edge, VS Code re-focuses the
+// view after a title-row button) comes back with nothing focused — Chromium does not restore an iframe's
+// focused element the way it restores a window's. So the last element that had focus gets it again, unless
+// the human is pressing somewhere in the page, whose click decides.
+
+const HOST_FOCUS_MS = 1500
+let hostFocusUntil = 0
+let lastFocused: HTMLElement | null = null
+let pointerAt = 0
+
+/** The host asked for the page to take the keyboard: a focus the page makes in the next moment is welcome. */
+function allowHostFocus(): void {
+  hostFocusUntil = Date.now() + HOST_FOCUS_MS
+}
+
+function guardFocus(): void {
+  if (typeof HTMLElement === "undefined" || typeof document === "undefined") return
+  const native = HTMLElement.prototype.focus
+  HTMLElement.prototype.focus = function focus(this: HTMLElement, options?: FocusOptions) {
+    if (!document.hasFocus() && Date.now() > hostFocusUntil) return
+    native.call(this, options)
+  }
+  document.addEventListener("focusin", (event) => {
+    if (event.target instanceof HTMLElement && event.target !== document.body) lastFocused = event.target
+  }, true)
+  document.addEventListener("pointerdown", () => {
+    pointerAt = Date.now()
+  }, true)
+  window.addEventListener("focus", () => setTimeout(() => {
+    if (document.activeElement !== document.body || Date.now() - pointerAt < 300) return
+    if (lastFocused?.isConnected) native.call(lastFocused, { preventScroll: true })
+  }))
+}
+
 async function handle(message: EmbedHostMessage): Promise<void> {
+  if (message.type === "frizz:command" || message.type === "frizz:navigate" || (message.type === "frizz:compose" && message.focus)) allowHostFocus()
   if (message.type === "frizz:theme") {
     setHostTheme(message.theme)
     return

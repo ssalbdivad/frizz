@@ -4,9 +4,9 @@
 // over its own socket; what this file adds is what a frame cannot do for itself — keys VS Code would
 // otherwise never see, files and links opened in the editor, VS Code's theme, the Ready badge, the
 // editor commands' selections put straight into a composer, and the HEADER: the page draws none in the
-// sidebar, so VS Code's own title row above the frame carries where the page is (`frizz:route` → the
-// view's title and description, and the `frizz.sidebarView` context key its buttons show by) and the
-// header's doors (`frizz:command`). Design: plans/vscode-extension.md § The sidebar; the wire:
+// sidebar, so VS Code's own title row above the frame carries the header's doors (`frizz:command`), shown
+// by the page's view (`frizz:route` → the `frizz.sidebarView` context key), and the badge's tooltip carries
+// its counts. Design: plans/vscode-extension.md § The sidebar; the wire:
 // packages/shared/src/embed-protocol.ts; the pure rules: embed.ts.
 //
 // Only `import type` from vscode, like app.ts.
@@ -41,11 +41,13 @@ export const SIDEBAR_FOCUS = `${SIDEBAR_VIEW}.focus`
 export const SIDEBAR_VIEW_KEY = "frizz.sidebarView"
 
 /**
- * How long a page gets to say `frizz:ready` before the view offers Reload. A local Frizz boots its page
- * in a second or two; an older Frizz, which has no embed mode, never says it, and its page still shows
- * under the bar.
+ * How long a page gets to say `frizz:ready` before the view offers Reload. An installed Frizz boots its
+ * page in a second or two; a Frizz run from source serves ~250 unbundled modules through Vite, which took
+ * 13s and 42s to load on a busy machine (scripts/e2e-sidebar.ts, 2026-10-01) — and offered Reload under
+ * a page that was only slow. An older Frizz, which has no embed mode, never says it, and its page still
+ * shows under the bar.
  */
-const READY_HINT_MS = 10_000
+const READY_HINT_MS = 20_000
 /** Status and project pushes arrive a frame apart after a connect; one render for the pair. */
 const REFRESH_DEBOUNCE_MS = 200
 const EVENTS_KEPT = 50
@@ -77,9 +79,8 @@ export interface SidebarSnapshot {
   /** The copy it shows instead of the page. */
   message?: string
   badge?: number
-  /** VS Code's title row: the view's title (absent: the view's own name, "Frizz") and description. */
-  title?: string
-  description?: string
+  /** The badge's tooltip: the page's counts when it said them, else the Ready count. */
+  badgeTooltip?: string
   /** What `frizz.sidebarView` was set to, "" for none. */
   view: string
   /** The page's address for what it shows, from its last `frizz:route`. */
@@ -123,6 +124,7 @@ export function registerSidebar(api: Vscode, context: vscode.ExtensionContext, h
   let frameOrigin: string | undefined
   /** The page's address for what it shows, from its last route (⋯ Open in browser opens it). */
   let routeHref: string | undefined
+  let routeCounts: string | undefined
   let message: string | undefined
   let ready = false
   let hinted = false
@@ -178,14 +180,20 @@ export function registerSidebar(api: Vscode, context: vscode.ExtensionContext, h
   }
 
   /**
-   * VS Code's title row, from the page's `frizz:route`: the scope or the thread's title (an empty one
-   * leaves the view's own name, "Frizz"), the counts as the description, and the context key the buttons
-   * show by. Undefined resets all three, for a page that is gone or not yet ready.
+   * What the page's `frizz:route` says to VS Code: the context key the title row's buttons show by, and the
+   * counts, which ride the badge's tooltip. Undefined resets them, for a page that is gone or not yet ready.
+   *
+   * NOT the view's `title` or `description`, though the route carries both. A single-view container's
+   * row reads "<container>: <view title>", and VS Code re-cases it — capitalize on 1.140, uppercase on
+   * 1.90 — so a thread's handle came out "Frizz: Tidy-The-Sample-Loop", and it drops the description
+   * there altogether (scripts/e2e-sidebar.ts, 2026-10-01). The row says "Frizz"; the page names the
+   * thread it shows in its own drawer header, and the list names its scope.
    */
   function applyRoute(route: EmbedRouteMessage | undefined): void {
-    if (view) {
-      view.title = route?.title || undefined
-      view.description = route?.description || undefined
+    const counts = route?.description || undefined
+    if (counts !== routeCounts) {
+      routeCounts = counts
+      applyBadge()
     }
     routeHref = route?.href
     const next = route?.view ?? ""
@@ -332,7 +340,7 @@ export function registerSidebar(api: Vscode, context: vscode.ExtensionContext, h
   }
 
   function applyBadge(): void {
-    if (view) view.badge = badge > 0 ? { value: badge, tooltip: `${badge} ready` } : undefined
+    if (view) view.badge = badge > 0 ? { value: badge, tooltip: routeCounts ?? `${badge} ready` } : undefined
   }
 
   function reload(): void {
@@ -438,8 +446,7 @@ export function registerSidebar(api: Vscode, context: vscode.ExtensionContext, h
       ...(frameUrl ? { url: frameUrl } : {}),
       ...(message ? { message } : {}),
       ...(view?.badge ? { badge: view.badge.value } : {}),
-      ...(view?.title ? { title: view.title } : {}),
-      ...(view?.description ? { description: view.description } : {}),
+      ...(view?.badge ? { badgeTooltip: view.badge.tooltip } : {}),
       view: routeView,
       ...(routeHref ? { href: routeHref } : {}),
       events: [...events],

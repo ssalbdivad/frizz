@@ -7,11 +7,10 @@ in it. Works in VS Code, Cursor and Windsurf.
   queue, threads, questions and prompt boxes, live, in VS Code's light or dark theme, on this window's
   project. It is the app you know, narrowed: the same cards, type sizes and shortcuts. File links in it
   open in this window, web links in your browser. Its badge counts the threads ready for you.
-- **VS Code's title row is its header.** It names what the sidebar shows — the thread you are in, or the
-  queue's scope — with the counts beside it, and holds the header's buttons: **Back to queue** in a
-  thread, **New thread** elsewhere, **Jump to a thread** (the app's ⌘K) and **Settings**. **Reload
-  sidebar** and **Open in browser** are under its `…`. Each is in the command palette too, and brings
-  the sidebar back if it was hidden.
+- **VS Code's title row holds the header's buttons**: **Back to queue** in a thread, **New thread**
+  elsewhere, **Jump to a thread** (the app's ⌘K) and **Settings**. **Reload sidebar** and **Open in
+  browser** are under its `…`. Each is in the command palette too, and brings the sidebar back if it
+  was hidden. The badge's tooltip reads the counts (`1 needs you · 3 ready`).
 - **The sidebar sees your editor.** Over its prompt boxes it names the file in front and what you have
   selected (`sample.ts:12-20`, `26 lines`), live; a click adds it as a chip, and the other open files
   are one more click away. Only paths and line numbers reach the sidebar until you add something.
@@ -63,7 +62,9 @@ command palette.
   default (`terminal.integrated.rightClickBehavior`); Shift+right-click opens the menu. Adding from the
   terminal borrows the clipboard for a moment and puts your text back: a clipboard holding an image
   comes back empty, and a clipboard history records the selection.
-- **No Frizz header, no browser notifications.** The title row stands in for the header; Frizz's
+- **No Frizz header, no browser notifications.** The title row's buttons stand in for the header, and
+  it always reads "Frizz": VS Code re-cases a view's title, so thread and project names stay in the page,
+  and it shows no view description in a sidebar of one view. Frizz's
   desktop notifications cannot fire inside an editor, so the badge and the status bar carry the count.
 - **The theme is VS Code's**, light or dark, for as long as the sidebar shows; your Frizz theme setting
   is the browser's.
