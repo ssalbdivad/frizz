@@ -34,7 +34,6 @@ import {
   assertArtifactHostCompatible,
   defaultArtifactRoot,
   ensureStableFrizzArtifact,
-  promoteCurrentSourceArtifact,
   promoteFrizzArtifact,
   readFrizzArtifact,
   readStableArtifact,
@@ -84,6 +83,11 @@ import {
 } from "@frizz/server/project-launch";
 import { registerProject } from "@frizz/server/project-registry";
 import { resolveProjectLabel } from "@frizz/server/project-identity";
+import { runArtifactBuildJob, spawnArtifactBuild } from "./artifact-build-job.ts";
+
+// Update & Restart re-runs this entry as its artifact build job (see artifact-build-job.ts). It must
+// hand off before anything below parses an argument, resolves a project or opens a log.
+if (runArtifactBuildJob()) await new Promise<never>(() => {});
 
 function fail(error: unknown): never {
   console.error(`frizz: ${error instanceof Error ? error.message : error}`);
@@ -330,7 +334,7 @@ async function runSupervisor(
   let supervisor: Awaited<ReturnType<typeof startDevSupervisor>>;
   const stableOptions = selectedArtifact
     ? (() => {
-        let updateRollbackArtifact: typeof selectedArtifact | undefined;
+        let updateRollbackArtifact: string | undefined;
         let firstChildLaunch = true;
         const selectedChildLaunch = () => {
           // The launcher selected this artifact before starting the foreground supervisor. The first control-plane child is
@@ -363,12 +367,15 @@ async function runSupervisor(
             // Build and verify before touching the healthy child. No source edit can enter this path.
             // An unverifiable current artifact leaves us without a rollback target but does not
             // block the update — see promoteCurrentSourceArtifact.
+            // In a child process: this one owns the board's listener and the stop signals, and the
+            // build blocks for minutes — see artifact-build-job.ts.
             try {
-              const { previous } = promoteCurrentSourceArtifact(
-                workspace.stateDir,
-                sourceWorkspaceDir(),
-                defaultArtifactRoot()
-              );
+              const { previous } = await spawnArtifactBuild({
+                stateDir: workspace.stateDir,
+                sourceDir: sourceWorkspaceDir(),
+                root: defaultArtifactRoot(),
+                onProgress: (message) => logger.info("artifact", message),
+              }).result;
               updateRollbackArtifact = previous;
               return { state: "ready" as const };
             } catch (error) {
@@ -382,7 +389,7 @@ async function runSupervisor(
             if (!updateRollbackArtifact) return;
             promoteFrizzArtifact(
               workspace.stateDir,
-              updateRollbackArtifact.digest,
+              updateRollbackArtifact,
               defaultArtifactRoot()
             );
             updateRollbackArtifact = undefined;
