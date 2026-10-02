@@ -10,8 +10,11 @@ import {
   formatFeedLine,
   latestLogPath,
   logEnvironment,
+  openRunLogger,
   pruneRunLogs,
   runLogPath,
+  setAmbientLogger,
+  log,
 } from "./logging.ts"
 import { frizzPaths } from "./frizz-paths.ts"
 
@@ -233,5 +236,47 @@ test("the terminal feed and the disk log agree, character for character", () => 
     assert.match(formatFeedLine(record), /^\d\d:\d\d:\d\d\.\d\d\d {2}WARN {3}tailer {8}slow tick$/)
   } finally {
     rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+test("an entry point that opens its run logger leaves a file behind — the dev entry once logged nowhere", () => {
+  // packages/server/src/dev.ts installed no logger, and `ambientLogger()` deliberately invents no file
+  // for an unconfigured process, so every record the dev board emitted was dropped. openRunLogger is
+  // the one decision every entry point now shares: own a fresh run file beside the project's state.
+  const stateDir = scratch()
+  const restore = setAmbientLogger(createLogger({ file: null }))
+  try {
+    const logger = openRunLogger(stateDir, { env: {}, debug: false })
+    log.warn("supervisor", "child exited before ready")
+    const file = logger.file
+    assert.ok(file, "the run logger must hold a file")
+    assert.equal(join(file, ".."), join(stateDir, "logs"))
+    assert.match(readFileSync(file, "utf8"), /WARN\s+supervisor\s+child exited before ready/)
+    // It OWNS the directory: latest.log is repointed at this run, and its children are told the path.
+    assert.match(readFileSync(latestLogPath(join(stateDir, "logs")), "utf8"), /child exited before ready/)
+    assert.deepEqual(logEnvironment(logger, "info"), { FRIZZ_LOG_FILE: file, FRIZZ_LOG_LEVEL: "info" })
+  } finally {
+    setAmbientLogger(restore)
+    rmSync(stateDir, { recursive: true, force: true })
+  }
+})
+
+test("a re-exec'd or forked entry ADOPTS its parent's run file and leaves the directory alone", () => {
+  const stateDir = scratch()
+  const parentDir = scratch()
+  const restore = setAmbientLogger(createLogger({ file: null }))
+  try {
+    const parentFile = join(parentDir, "frizz-parent.log")
+    const logger = openRunLogger(stateDir, { env: { FRIZZ_LOG_FILE: parentFile }, debug: false })
+    assert.equal(logger.file, parentFile)
+    log.info("server", "control plane listening")
+    assert.match(readFileSync(parentFile, "utf8"), /INFO\s+server\s+control plane listening/)
+    // No second file, no latest.log repointed away from the parent's run.
+    assert.equal(existsSync(join(stateDir, "logs")), false)
+    assert.equal(existsSync(latestLogPath(parentDir)), false)
+  } finally {
+    setAmbientLogger(restore)
+    rmSync(stateDir, { recursive: true, force: true })
+    rmSync(parentDir, { recursive: true, force: true })
   }
 })
