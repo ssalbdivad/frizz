@@ -1,3 +1,5 @@
+import { embedTheme, rememberEmbedTheme } from "./embed.ts"
+
 export type ThemePreference = "system" | "light" | "dark"
 export type ResolvedTheme = "light" | "dark"
 
@@ -14,6 +16,12 @@ const listeners = new Set<() => void>()
 let snapshot: ThemeSnapshot = { preference: "system", resolved: "dark" }
 let media: MediaQueryList | undefined
 let dispose: (() => void) | undefined
+// THE EDITOR'S THEME, while this page is framed by one (lib/embed.ts): VS Code says light or dark, by the
+// frame's query at boot and by `frizz:theme` whenever its own theme changes, and that wins over the
+// stored preference and the OS for this session. It is never written to `frizz-theme` — the preference
+// stays what the human chose, and the Settings control still shows that choice; only the RESOLVED theme
+// follows the editor. index.html's guard reads the same override before first paint.
+let hostTheme: ResolvedTheme | undefined
 
 export function parseThemePreference(value: unknown): ThemePreference {
   return value === "light" || value === "dark" || value === "system" ? value : "system"
@@ -43,7 +51,7 @@ function apply(next: ThemeSnapshot) {
 }
 
 function publish(preference: ThemePreference, dark = systemPrefersDark()) {
-  const next = { preference, resolved: resolveTheme(preference, dark) }
+  const next = { preference, resolved: hostTheme ?? resolveTheme(preference, dark) }
   const changed = next.preference !== snapshot.preference || next.resolved !== snapshot.resolved
   if (changed) snapshot = next
   apply(next)
@@ -63,6 +71,13 @@ export function setThemePreference(preference: ThemePreference) {
   }
 }
 
+/** The editor framing this page changed its theme (lib/embedHost.ts): apply it, for this session only. */
+export function setHostTheme(theme: ResolvedTheme): void {
+  hostTheme = theme
+  rememberEmbedTheme(theme)
+  publish(snapshot.preference)
+}
+
 export function subscribeTheme(listener: () => void): () => void {
   listeners.add(listener)
   return () => listeners.delete(listener)
@@ -71,6 +86,7 @@ export function subscribeTheme(listener: () => void): () => void {
 export function initTheme() {
   if (dispose || typeof window === "undefined") return dispose
   try { media = window.matchMedia("(prefers-color-scheme: dark)") } catch { media = undefined }
+  hostTheme = embedTheme()
   publish(storedPreference())
   const mediaChange = (event: MediaQueryListEvent) => { if (snapshot.preference === "system") publish("system", event.matches) }
   media?.addEventListener("change", mediaChange)

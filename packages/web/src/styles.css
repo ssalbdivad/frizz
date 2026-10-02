@@ -116,6 +116,17 @@
   }
 }
 
+/* …AND IN AN EDITOR'S SIDEBAR, AT ANY WIDTH. The page framed by the VS Code extension is one column
+   whatever the sidebar's width — the desktop's left column alone (components/SidebarPage.tsx), never the
+   phone's page (lib/mobile.ts) — so a thread's drawer covers it, as a phone's sheet does: a sidebar
+   dragged past 700px drew the thread as an 80vw panel with a strip of the page beside it. `data-embed`
+   is set by index.html before first paint. No safe areas: a sidebar has none. */
+html[data-embed] .frizz-sheet-panel {
+  width: 100vw !important;
+  max-width: 100vw !important;
+  border-left: 0;
+}
+
 /* min-height (not height): the PAGE is the app's one scroll container — content taller than the
    viewport grows the document and the body scrolls.
 

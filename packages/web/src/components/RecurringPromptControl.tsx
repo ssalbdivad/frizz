@@ -749,8 +749,13 @@ export function PromptPanel({ thread, armed, close, heading = true }: {
           `items-baseline`, NOT `items-center` — the switch places itself on the text's CAP BAND and needs
           a shared baseline to do it (see ui/Switch.tsx). Centring the boxes instead read 1.45px low in
           the mono font while measuring clean in sans, which is the whole reason the correction is
-          computed from `cap` rather than fitted. */}
-      <div className="mt-3 grid grid-cols-[auto_auto_1fr] items-baseline gap-x-2.5 gap-y-2">
+          computed from `cap` rather than fitted.
+
+          `minmax(0,1fr)`, not `1fr`, and `flex-wrap` on the rows that are a field among words: a bare `1fr`
+          is at least its content's min-content, and the Limit row's "stop after [∞] runs or [∞] e.g. 30m,
+          2h, 3d" is one unbreakable line — so in a 300px sidebar the grid ran 36px past the 276px panel,
+          and the glosses ended mid-word at the frame's edge (2026-10-01). Where they fit nothing moves. */}
+      <div className="mt-3 grid grid-cols-[auto_auto_minmax(0,1fr)] items-baseline gap-x-2.5 gap-y-2">
         <Switch
           testId="stop-hook"
           label="Stop hook"
@@ -793,7 +798,7 @@ export function PromptPanel({ thread, armed, close, heading = true }: {
             "every … min, even mid-turn" and "on a clock, even mid-turn" are the same sentence with the
             number removed. */}
         {heartbeat ? (
-          <span className="flex items-center gap-1.5 text-muted">
+          <span className="flex flex-wrap items-center gap-x-1.5 gap-y-1 text-muted">
             every
             {/* Sized to its content (4ch fits 1440) with tabular digits, so the box does not twitch as
                 the number changes. */}
@@ -849,7 +854,7 @@ export function PromptPanel({ thread, armed, close, heading = true }: {
             in the worker contract's `for:` grammar, the same token the worker gives the `goal` tool. */}
         <span aria-hidden />
         <span className={`font-medium ${runsField.trim() || forField.trim() ? "text-fg" : "text-muted"}`}>Limit</span>
-        <span className="flex items-center gap-1.5 text-muted">
+        <span className="flex flex-wrap items-center gap-x-1.5 gap-y-1 text-muted">
           stop after
           <input
             type="text"

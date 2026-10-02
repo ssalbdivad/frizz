@@ -1,6 +1,6 @@
 import * as RadixMenu from "@radix-ui/react-dropdown-menu"
 import { ChevronDown, Loader2 } from "lucide-react"
-import { useLayoutEffect, useMemo, useRef, useState, type KeyboardEvent } from "react"
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type KeyboardEvent } from "react"
 import {
   moveProfileGridSelection,
   PROFILE_GRID_CELL_CLASS,
@@ -10,12 +10,15 @@ import {
   profileGridDisplayLabel,
   profileGridDisplayParts,
   profileGridEffortLabel,
+  profileGridRowSlots,
   profileGridSelectionFromKey,
   profileGridSelectionKey,
   profileGridSelectionKnown,
+  profileGridStacks,
   profileGridTemplateColumns,
   type ProfileGridGroup,
   type ProfileGridMoveKey,
+  type ProfileGridOption,
   type ProfileGridDisplayParts,
   type ProfileGridSelection,
   profileGridSelections,
@@ -129,6 +132,46 @@ function DesktopProfileGridSelector({
   const unregisterOpenRef = useRef<(() => void) | undefined>(undefined)
   const cellRefs = useRef(new Map<string, HTMLElement>())
   const committedKeyRef = useRef<string | undefined>(undefined)
+  // STACKED when the matrix does not fit the menu (profileGridStacks): each model's name on its own line,
+  // its effort words wrapping under it. Decided by MEASURING, never by a breakpoint, because the matrix's
+  // width is the catalogue's: the menu opens as the matrix, `fitMenu` reads its widest row against the
+  // menu's resolved max-width in the same commit, and a matrix that overflows re-renders stacked before
+  // the browser paints. That natural width can only be read while the matrix is drawn, so it is kept for
+  // the way back — a resize that gives it room draws the matrix again — and a closed menu forgets the
+  // decision, so a catalogue that changed meanwhile is measured afresh on the next open.
+  const [stacked, setStacked] = useState(false)
+  const stackedRef = useRef(stacked)
+  stackedRef.current = stacked
+  const menuNodeRef = useRef<HTMLDivElement | null>(null)
+  const naturalWidthRef = useRef(0)
+  const fitMenu = useCallback(() => {
+    const menu = menuNodeRef.current
+    if (!menu) return
+    const style = getComputedStyle(menu)
+    const cap = parseFloat(style.maxWidth)
+    if (!Number.isFinite(cap)) return
+    if (!stackedRef.current) {
+      const rows = [...menu.querySelectorAll<HTMLElement>("[data-profile-grid-row]")]
+      if (rows.length === 0) return
+      // A matrix row is `w-max`, so its box IS its natural width. Around the widest, the menu adds its
+      // padding, its border and any vertical scrollbar (offsetWidth less clientWidth less the borders).
+      const borders = parseFloat(style.borderLeftWidth) + parseFloat(style.borderRightWidth)
+      const scrollbar = Math.max(0, menu.offsetWidth - menu.clientWidth - borders)
+      naturalWidthRef.current = Math.max(...rows.map((row) => row.getBoundingClientRect().width))
+        + parseFloat(style.paddingLeft) + parseFloat(style.paddingRight) + borders + scrollbar
+    }
+    const next = profileGridStacks(naturalWidthRef.current, cap)
+    if (next !== stackedRef.current) {
+      stackedRef.current = next
+      setStacked(next)
+    }
+  }, [])
+  // The content mounts a commit after `open` flips (Radix portals it in a layout effect of its own), so
+  // the first measurement runs from its ref, not from the effect below.
+  const menuRef = useCallback((node: HTMLDivElement | null) => {
+    menuNodeRef.current = node
+    if (node) fitMenu()
+  }, [fitMenu])
   const columns = useMemo(() => profileGridColumns(groups), [groups])
   const selections = useMemo(() => profileGridSelections(groups), [groups])
   const typography = compact ? PROFILE_GRID_COMPACT_TYPOGRAPHY_CLASS : PROFILE_GRID_TYPOGRAPHY_CLASS
@@ -190,6 +233,22 @@ function DesktopProfileGridSelector({
 
   useLayoutEffect(() => () => unregisterOpenRef.current?.(), [])
 
+  // Re-measure when the catalogue changes under an open menu and when a resize draws the matrix again;
+  // forget the decision on close.
+  useLayoutEffect(() => {
+    if (open) fitMenu()
+    else if (stackedRef.current) {
+      stackedRef.current = false
+      setStacked(false)
+    }
+  }, [open, groups, stacked, fitMenu])
+
+  useEffect(() => {
+    if (!open) return
+    window.addEventListener("resize", fitMenu)
+    return () => window.removeEventListener("resize", fitMenu)
+  }, [open, fitMenu])
+
   // A pointer selection also reaches RadioGroup's onValueChange. Clear the one-event guard once
   // its controlled value has caught up, so keyboard activation remains available while one click
   // can never enqueue two preference writes.
@@ -211,6 +270,78 @@ function DesktopProfileGridSelector({
     event.preventDefault()
     event.stopPropagation()
     cellRefs.current.get(profileGridSelectionKey(next))?.focus()
+  }
+
+  // A row with NO effort axis — an ACP agent runs on whatever model and effort its own CLI is configured
+  // for — is one cell, keyed on `effort: ""` (profileGridOptionEfforts). In the matrix it spans every
+  // effort column. "Default" is the honest label: Frizz sets nothing, the agent's own defaults apply.
+  function renderDefaultCell(group: ProfileGridGroup, option: ProfileGridOption) {
+    const selection = { provider: group.id, model: option.model, effort: "" }
+    const key = profileGridSelectionKey(selection)
+    return (
+      <RadixMenu.RadioItem
+        key="default"
+        value={key}
+        ref={(node) => {
+          if (node) cellRefs.current.set(key, node)
+          else cellRefs.current.delete(key)
+        }}
+        onKeyDown={(event) => handleCellKeyDown(event, selection)}
+        onSelect={(event) => {
+          event.preventDefault()
+          commitSelection(selection)
+          unregisterOpenRef.current?.()
+          closeFromRegistry()
+        }}
+        aria-label={`${option.label}, the agent's own defaults`}
+        title={`${option.label} › the agent's own model and effort`}
+        className={PROFILE_GRID_CELL_CLASS}
+        style={stacked ? undefined : { gridColumn: "2 / -1", justifySelf: "start" }}
+      >
+        <span className="grid">
+          <span aria-hidden="true" className="invisible col-start-1 row-start-1 font-medium">Default</span>
+          <span className="col-start-1 row-start-1">Default</span>
+        </span>
+      </RadixMenu.RadioItem>
+    )
+  }
+
+  function renderEffortCell(group: ProfileGridGroup, option: ProfileGridOption, effort: string) {
+    const selection = { provider: group.id, model: option.model, effort }
+    const key = profileGridSelectionKey(selection)
+    return (
+      <RadixMenu.RadioItem
+        key={effort}
+        value={key}
+        ref={(node) => {
+          if (node) cellRefs.current.set(key, node)
+          else cellRefs.current.delete(key)
+        }}
+        onKeyDown={(event) => handleCellKeyDown(event, selection)}
+        onSelect={(event) => {
+          // Radix dismisses a DropdownMenu as part of selection. Commit this
+          // pointer path first and own the close, otherwise a controlled menu
+          // can close with its RadioGroup callback already unmounted.
+          event.preventDefault()
+          commitSelection(selection)
+          unregisterOpenRef.current?.()
+          closeFromRegistry()
+        }}
+        aria-label={`${option.label}, ${effortLabel(effort)} effort`}
+        title={`${option.label} › ${effortLabel(effort)}`}
+        className={PROFILE_GRID_CELL_CLASS}
+      >
+        <span className="grid">
+          {/* A checked cell sets its label in `font-medium`, which is 0.82px wider
+              here — enough to push every cell to its right along the moment the
+              selection moves, now that a cell is only as wide as its word. Stack an
+              invisible copy at the heavier weight in the same grid cell so the cell
+              always reserves its widest state and never resizes. */}
+          <span aria-hidden="true" className="invisible col-start-1 row-start-1 font-medium">{effortLabel(effort)}</span>
+          <span className="col-start-1 row-start-1">{effortLabel(effort)}</span>
+        </span>
+      </RadixMenu.RadioItem>
+    )
   }
 
   return (
@@ -247,6 +378,7 @@ function DesktopProfileGridSelector({
       </RadixMenu.Trigger>
       <RadixMenu.Portal>
         <RadixMenu.Content
+          ref={menuRef}
           aria-label={menuAriaLabel}
           align="start"
           side={side}
@@ -295,116 +427,57 @@ function DesktopProfileGridSelector({
                   if (selection) commitSelection(selection)
                 }}
               >
-                {group.options.map((option) => (
-                  <div
-                    key={option.model}
-                    data-profile-grid-row={option.model}
-                    // `w-max`, not `min-w-max`: a stretched row hands its leftover width to its own
-                    // `auto` tracks, so a row shorter or narrower than the widest one slid every cell
-                    // in it out of line with the rows above. Sized to its content, a row has no
-                    // leftover to spread, and each column lands where its content puts it.
-                    className="grid w-max items-center gap-1 py-0.5"
-                    style={{ gridTemplateColumns: profileGridTemplateColumns(columns.length) }}
-                  >
-                    <span className={`profile-grid-model-label min-w-0 max-w-[9.5rem] truncate px-1.5 text-left text-muted ${typography}`} title={option.label}>
-                      <ModelLabel label={option.label} edition={option.edition} />
-                    </span>
-                    {option.efforts.length === 0 && (() => {
-                      // A row with NO effort axis — an ACP agent runs on whatever model and effort its
-                      // own CLI is configured for — is one cell spanning every effort column, keyed
-                      // on `effort: ""` (profileGridOptionEfforts). "Default" is the honest label:
-                      // Frizz sets nothing, the agent's own defaults apply.
-                      const selection = { provider: group.id, model: option.model, effort: "" }
-                      const key = profileGridSelectionKey(selection)
-                      return (
-                        <RadixMenu.RadioItem
-                          key="default"
-                          value={key}
-                          ref={(node) => {
-                            if (node) cellRefs.current.set(key, node)
-                            else cellRefs.current.delete(key)
-                          }}
-                          onKeyDown={(event) => handleCellKeyDown(event, selection)}
-                          onSelect={(event) => {
-                            event.preventDefault()
-                            commitSelection(selection)
-                            unregisterOpenRef.current?.()
-                            closeFromRegistry()
-                          }}
-                          aria-label={`${option.label}, the agent's own defaults`}
-                          title={`${option.label} › the agent's own model and effort`}
-                          className={PROFILE_GRID_CELL_CLASS}
-                          style={{ gridColumn: "2 / -1", justifySelf: "start" }}
-                        >
-                          <span className="grid">
-                            <span aria-hidden="true" className="invisible col-start-1 row-start-1 font-medium">Default</span>
-                            <span className="col-start-1 row-start-1">Default</span>
-                          </span>
-                        </RadixMenu.RadioItem>
-                      )
-                    })()}
-                    {option.efforts.length > 0 && columns.map((column) => {
-                      // A column can hold more than one effort name — "ultra" and "ultracode" share the
-                      // ceiling — so take whichever name this model actually offers.
-                      const effort = column.find((candidate) => option.efforts.includes(candidate))
-                      // An unsupported cell still has to HOLD ITS COLUMN. Each row is its own grid, so a
-                      // column that renders nothing here collapses and every cell to its right slides
-                      // left, out of line with the rows above (already true of any codex row with fewer
-                      // levels, and of Haiku, which cannot honour the ceiling). Ghosting the label keeps
-                      // the column exactly as wide as it is everywhere else — and the widest name in it,
-                      // since one column can hold two ("Ultra" beside "Ultracode").
-                      const widest = column.reduce((a, b) => (effortLabel(b).length > effortLabel(a).length ? b : a))
-                      if (!effort) {
-                        return (
+                {group.options.map((option) => {
+                  // Matrix and stack draw the same cells in the same order; only the frame around them
+                  // differs, so selection, keys and the checked ring cannot drift between the two.
+                  const cells = option.efforts.length === 0
+                    ? [renderDefaultCell(group, option)]
+                    : profileGridRowSlots(option, columns, { stacked }).map((slot) => slot.ghost
+                      ? (
                           // Same box as a real cell (border + padding + type), just invisible — a
                           // ghost that is 2px narrower still drags the column out of true.
                           <span
-                            key={widest}
+                            key={slot.effort}
                             aria-hidden="true"
                             className={`invisible cursor-default border border-transparent px-1 text-left font-medium ${typography}`}
                           >
-                            {effortLabel(widest)}
+                            {effortLabel(slot.effort)}
                           </span>
                         )
-                      }
-                      const selection = { provider: group.id, model: option.model, effort }
-                      const key = profileGridSelectionKey(selection)
-                      return (
-                        <RadixMenu.RadioItem
-                          key={effort}
-                          value={key}
-                          ref={(node) => {
-                            if (node) cellRefs.current.set(key, node)
-                            else cellRefs.current.delete(key)
-                          }}
-                          onKeyDown={(event) => handleCellKeyDown(event, selection)}
-                          onSelect={(event) => {
-                            // Radix dismisses a DropdownMenu as part of selection. Commit this
-                            // pointer path first and own the close, otherwise a controlled menu
-                            // can close with its RadioGroup callback already unmounted.
-                            event.preventDefault()
-                            commitSelection(selection)
-                            unregisterOpenRef.current?.()
-                            closeFromRegistry()
-                          }}
-                          aria-label={`${option.label}, ${effortLabel(effort)} effort`}
-                          title={`${option.label} › ${effortLabel(effort)}`}
-                          className={PROFILE_GRID_CELL_CLASS}
-                        >
-                          <span className="grid">
-                            {/* A checked cell sets its label in `font-medium`, which is 0.82px wider
-                                here — enough to push every cell to its right along the moment the
-                                selection moves, now that a cell is only as wide as its word. Stack an
-                                invisible copy at the heavier weight in the same grid cell so the cell
-                                always reserves its widest state and never resizes. */}
-                            <span aria-hidden="true" className="invisible col-start-1 row-start-1 font-medium">{effortLabel(effort)}</span>
-                            <span className="col-start-1 row-start-1">{effortLabel(effort)}</span>
-                          </span>
-                        </RadixMenu.RadioItem>
-                      )
-                    })}
-                  </div>
-                ))}
+                      : renderEffortCell(group, option, slot.effort))
+                  if (stacked) {
+                    return (
+                      // Spacing does the grouping, since name and effort share one type and tone. Text to
+                      // text: a name sits 20px over its first line of cells, a wrapped line follows at 26px
+                      // (the 24px cell plus 2px), and the next model's name starts 34px down (12px clear).
+                      // The cells sit 8px in under the name, so a wrapped ULTRACODE alone on its line reads
+                      // as the row's tail, not as the next model.
+                      <div key={option.model} data-profile-grid-row={option.model} data-profile-grid-stacked="" className="py-0.5 not-first:pt-3">
+                        <span className={`profile-grid-model-label block truncate px-1.5 text-left text-muted ${typography}`} title={option.label}>
+                          <ModelLabel label={option.label} edition={option.edition} />
+                        </span>
+                        <div className="flex flex-wrap gap-x-1 gap-y-0.5 pl-2">{cells}</div>
+                      </div>
+                    )
+                  }
+                  return (
+                    <div
+                      key={option.model}
+                      data-profile-grid-row={option.model}
+                      // `w-max`, not `min-w-max`: a stretched row hands its leftover width to its own
+                      // `auto` tracks, so a row shorter or narrower than the widest one slid every cell
+                      // in it out of line with the rows above. Sized to its content, a row has no
+                      // leftover to spread, and each column lands where its content puts it.
+                      className="grid w-max items-center gap-1 py-0.5"
+                      style={{ gridTemplateColumns: profileGridTemplateColumns(columns.length) }}
+                    >
+                      <span className={`profile-grid-model-label min-w-0 max-w-[9.5rem] truncate px-1.5 text-left text-muted ${typography}`} title={option.label}>
+                        <ModelLabel label={option.label} edition={option.edition} />
+                      </span>
+                      {cells}
+                    </div>
+                  )
+                })}
               </RadixMenu.RadioGroup>
               {group !== groups.at(-1) && <RadixMenu.Separator className="my-1 h-px bg-border" />}
             </RadixMenu.Group>

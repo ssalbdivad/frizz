@@ -37,8 +37,11 @@ export function Dialog({
           onOpenAutoFocus={onOpenAutoFocus}
           className={`pop-in fixed left-1/2 top-1/2 z-[200] flex -translate-x-1/2 -translate-y-1/2 flex-col overflow-hidden rounded-xl border border-border bg-panel shadow-2xl shadow-shadow-ink/50 outline-none ${className}`}
         >
-          <header className="flex h-11 shrink-0 items-center gap-2 border-b border-border px-4">
-            <RadixDialog.Title className="min-w-0 flex-1 truncate text-[13px] font-medium">
+          {/* The title WRAPS rather than truncating: it often carries the thing being acted on ("Delete
+              <thread title>"), and in a 300px sidebar the ellipsis cut exactly that ("Delete Return
+              rate-limit head…"). `min-h-11` keeps the one-line header the 44px it always was. */}
+          <header className="flex min-h-11 shrink-0 items-center gap-2 border-b border-border px-4 py-2">
+            <RadixDialog.Title className="min-w-0 flex-1 break-words text-[13px] font-medium">
               {title}
             </RadixDialog.Title>
             <RadixDialog.Close type="button" aria-label="Close" className="rounded-md p-1 text-muted outline-none transition-colors hover:bg-panel-2 hover:text-fg">

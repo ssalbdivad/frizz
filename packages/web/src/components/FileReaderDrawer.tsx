@@ -4,7 +4,8 @@ import { ExternalLink } from "lucide-react"
 import { projectRpc, rpc } from "../api/rpc.ts"
 import { useLiveLocalFile } from "../hooks.ts"
 import { useInnerHtml } from "../lib/innerHtml.ts"
-import { openLocalPath, settleLocalFileOpen } from "../lib/local-file-links.ts"
+import { openInHostEditor, openLocalPath, settleLocalFileOpen } from "../lib/local-file-links.ts"
+import { embedded } from "../lib/embed.ts"
 import { baseName, runExternalOpen } from "../lib/externalOpen.ts"
 import { LOCAL_FILE_POLL_MS, highlightedSource, localFileQuery } from "../lib/localFileQuery.ts"
 import { useLocalFileCodeLinks } from "../lib/localFileCode.ts"
@@ -39,9 +40,19 @@ export const FOOTER_STYLE = { paddingBottom: "max(0.75rem, env(safe-area-inset-b
 // same escape in different frames and must not fork this. `onOpen` runs first — the picture viewer
 // closes itself there, since the answer can be a toast and a toast sits below every modal layer.
 // `project` opens through that project rather than the page's, for a file cited on its card.
+//
+// IN AN EDITOR'S SIDEBAR (lib/embed.ts) everything opens in that editor's window, a picture too, and the
+// button's title says so. The OS's viewer is on the machine running Frizz, which under Remote-SSH has no
+// display at all — while VS Code previews PNG, JPG, GIF, WebP and SVG itself — and a Markdown file opens
+// there as much as source, since Open is how a file gets EDITED.
 export function OpenAction({ path, image, project, onOpen, className = "" }: { path: string; image?: boolean; project?: string; onOpen?: () => void; className?: string }) {
+  const inEditor = embedded()
   const open = () => {
     onOpen?.()
+    if (inEditor) {
+      openInHostEditor(path)
+      return
+    }
     void runExternalOpen(
       `file:${path}`,
       `Opening ${baseName(path)}…`,
@@ -56,7 +67,7 @@ export function OpenAction({ path, image, project, onOpen, className = "" }: { p
       onClick={open}
       onMouseDown={(e) => e.preventDefault()}
       className={`flex items-center gap-1.5 rounded-md border border-border-strong bg-panel-2/60 px-2.5 py-1 text-[12px] font-medium text-fg/80 outline-none transition-colors hover:bg-panel-2 hover:text-fg focus-visible:ring-1 focus-visible:ring-focus-ink-60 ${className}`}
-      title={`Open ${path} outside Frizz`}
+      title={inEditor ? `Open ${path} in this window` : `Open ${path} outside Frizz`}
       aria-label="Open"
     >
       <ExternalLink size={12} aria-hidden="true" /> Open

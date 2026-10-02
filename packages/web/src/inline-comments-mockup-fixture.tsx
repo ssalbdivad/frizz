@@ -464,7 +464,7 @@ function ComposerBox({ p }: { p: ComposerProps }) {
 // prose after it. Drawn static — the live prototype covers A, B and C.
 function ChipComposer({ seeds }: { seeds: Seed[] }) {
   const chip = (q: string) => (
-    <span className="mx-[1px] rounded bg-panel-2 px-1 py-0.5 text-[12px] ring-1 ring-inset ring-border">“{q.length > 22 ? `${q.slice(0, 21)}…` : q}”</span>
+    <span className="mx-[1px] rounded bg-panel-2 px-1 py-0.5 text-[12px] inset-ring inset-ring-border">“{q.length > 22 ? `${q.slice(0, 21)}…` : q}”</span>
   )
   return (
     <div className="shrink-0 px-3 pb-3 pt-2">

@@ -1,6 +1,6 @@
 import { createContext, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react"
 import { ArrowUp, FileText, Loader2, Paperclip, Plus, Snail, X } from "lucide-react"
-import { ATTACHMENT_ACCEPT, ATTACHMENT_MAX_BYTES, isAllowedAttachmentName, type ThreadSkill } from "@frizz/shared"
+import { ATTACHMENT_ACCEPT, ATTACHMENT_MAX_BYTES, isAllowedAttachmentName, type EmbedPickedFile, type ThreadSkill } from "@frizz/shared"
 import { showToast } from "../store.ts"
 import { joinComposerValue, splitComposerValue } from "../lib/imagePaths.ts"
 import { splitProseByTokens } from "../lib/composerContext.ts"
@@ -12,7 +12,8 @@ import { RAIL_ACTION_OFFSET, RAIL_LAZY_ACTION_OFFSET, RAIL_LAZY_OFFSET, RAIL_LAZ
 import { apiBase } from "../lib/base-path.ts"
 import { detectPlatform } from "../lib/keybindings.ts"
 import { localImageUrl } from "../lib/markdownTargets.ts"
-import { basename } from "../lib/paths.ts"
+import { DROPPED_URI_TYPES, droppedUris, fileQueryAt, insertFileReference, insertReferencesAt, isVscodeDrag, type FileMentionSource } from "../lib/editorReach.ts"
+import { basename, dirnameLike } from "../lib/paths.ts"
 import { draftStart, insertSlashCommand, matchSlashItems, slashQueryAt, slashSegments } from "../lib/slashCommands"
 import { insertMention, matchMentions, mentionQueryAt, mentionSegments, resolveMention, splitMentionQuery, subAgentMentionCandidates, type MentionCandidate } from "../lib/threadMentions.ts"
 import { useSubAgentDirectory } from "../hooks/useSubAgentDirectory.ts"
@@ -70,6 +71,15 @@ const SKILL_SOURCE_LABEL: Record<NonNullable<ThreadSkill["source"]>, string> = {
 // list's reserved 8px scrollbar gutter supplies the rest (see the skills menu's row).
 const MENU_ROW_INSET = "pl-3.5 pr-1.5"
 
+// The `@` menu with the editor's files in it (the `fileMentions` prop): one row per thread or file, in
+// one keyboard order. While files are offered the threads give way to a few, and the files to the most
+// the menu shows without scrolling far; a narrower query is a keystroke away.
+type MentionRow = { kind: "thread"; thread: MentionCandidate } | { kind: "file"; file: EmbedPickedFile }
+const THREADS_BESIDE_FILES = 4
+const FILE_ROWS = 12
+/** How long the menu waits after a keystroke before asking the editor for files. */
+const FILE_QUERY_DEBOUNCE_MS = 60
+
 // A staged context reference in the prose is the literal `@guide.md:3` token the ⌘I flow splices in
 // at the caret (lib/composerContext.ts) — the chip's own label, so the text reads as the chip. The
 // BACKDROP below paints the pill behind each staged token; the token itself is ordinary textarea
@@ -79,6 +89,25 @@ const MENU_ROW_INSET = "pl-3.5 pr-1.5"
 // still shows up at the beginning of the prompt box instead of where the cursor currently exists";
 // a numbered `[^1]` in between read as plumbing — 2026-09-03: "worse than just rendering the chip
 // inline").
+
+// THE PILL behind a staged token — its whole look, so it is changed in one place. Tinted from the
+// text's own ink (`fg`) rather than a panel token: `bg-panel-2` was a step AWAY from the box's fill in
+// one theme and toward it in the other, and read as nothing in either (in light it was lighter than
+// the box it sat on, so a chip looked like a hole). An ink tint reads as the same pill on every
+// surface the box sits on, in both themes, the way the transcript's own chip is tinted from the
+// bubble's ink (ChatView SentContextBody) — with a softer edge than that chip's (7% fill, 14% edge, not
+// 20%): with 1px of side room rather than that chip's 4px, the stronger edge drew a box AROUND the text
+// rather than a pill under it. Zero-layout, as every backdrop decoration must be: its side pad is bought back
+// by an equal negative margin, so the pill reaches 1px past the token's ink on each side — not the 2px
+// it had. Two chips added one after another are one SPACE apart (4.13px in this headless sans; ~3.6 in
+// Segoe UI, ~3.3 in SF), and 2px a side then merged their edges into one box in Segoe and SF; at 1px
+// they stand 1.3-2.1px apart.
+//
+// The edge is `inset-ring`, NOT `ring-1 ring-inset ring-…`: the theme names a colour `inset`
+// (theme.css --color-inset), so Tailwind also makes `ring-inset` a RING COLOUR utility, and it wins
+// over the colour beside it — every pill's edge was drawn in --color-inset (#090b10 in dark, nearly
+// the box's own fill) and never showed. Measured on the computed box-shadow, 2026-10-01.
+const CONTEXT_PILL = "rounded-[5px] bg-fg/[0.07] py-0.5 -mx-px px-px inset-ring inset-ring-fg/[0.14]"
 
 // THE PHONE LAYOUTS (below the 700px breakpoint; the caller decides, with useIsMobile). Same draft,
 // same attachment intake, same keyboard rules, same send — only the shell around the textarea differs.
@@ -160,12 +189,15 @@ export function Composer({
   autoFocus,
   busy,
   footer,
+  header,
   leftAction,
   contextTokens,
+  contextSources,
   slashSuggest,
   slashSuggestVersion,
   mentionCandidates,
   ownMention,
+  fileMentions,
   onInterruptSubmit,
   onPushQueued,
   onSaveLazy,
@@ -190,6 +222,10 @@ export function Composer({
   // Rendered INSIDE the box along its bottom edge (the dispatch form's inline mode/model/effort
   // readouts). The textarea auto-grows above it; the footer strip is always reserved.
   footer?: React.ReactNode
+  // Rendered INSIDE the box along its TOP edge, above the text: the editor sidebar's context bar
+  // (EditorContextBar), which names what the editor has in front and adds it as a chip. Whatever it
+  // renders owns its own inset, so a header that renders nothing costs the box nothing.
+  header?: React.ReactNode
   // STAGED CONTEXT — the `@` tokens the ⌘I flow has staged on this thread. Drives the backdrop pill
   // behind each staged token in the prose (an unstaged `@thing` the user happened to type stays
   // plain text) and the atomic Backspace that deletes a whole token. The pill IS the chip: there is
@@ -197,6 +233,9 @@ export function Composer({
   // cut (maintainer 2026-09-03: "we DONT NEED THE CHIPS AT THE BOTTOM … just the inline chip"), so
   // removing a reference is deleting its text. Order-irrelevant; empty/omitted disables both.
   contextTokens?: string[]
+  // Where each staged token came from (`src/a.ts, lines 12-20`), shown as the box's tooltip while the
+  // pointer is over that token's pill (lib/stagedContext.ts useStagedContextSources).
+  contextSources?: Readonly<Record<string, string>>
   // A small action rendered just LEFT of the send button (the dispatch composer's GitHub-picker icon).
   // Only surfaces that pass it get it; reply/queue composers omit it.
   leftAction?: React.ReactNode
@@ -222,6 +261,12 @@ export function Composer({
   // another thread (maintainer 2026-09-30: "@ mentioning the current thread should still autocomplete").
   // Absent on a box that writes into no thread (the dispatch box).
   ownMention?: MentionCandidate
+  // THE EDITOR'S FILES, in a prompt box in VS Code's sidebar (lib/editorReach.ts embedFileMentions): the
+  // `@` menu offers the workspace's files after the threads, ranked by the editor (its query runs over a
+  // path's characters, `@src/web/App`), and choosing one writes a whole-file reference, `` `src/a.ts` ``.
+  // Files dragged in from the editor's explorer land as the same references at the caret. Omitted (a
+  // browser tab), `@` offers threads alone and a drop is an attachment, as ever.
+  fileMentions?: FileMentionSource
   // INTERRUPT AND SEND — what the FORCED chord (⌘/Ctrl-Enter) does while the thread's worker is
   // mid-turn AND its runtime can be preempted; the caller owns that policy entirely. When it is not
   // set, the same chord is an ordinary send, so ⌘-Enter never goes dead (three Enter keys everywhere:
@@ -256,7 +301,9 @@ export function Composer({
   const taRef = useRef<HTMLTextAreaElement>(null)
   const contextRef = useRef<HTMLDivElement>(null)
   const fileRef = useRef<HTMLInputElement>(null)
-  const [dragging, setDragging] = useState(false)
+  // What a drag over the box would do: upload a file as an attachment, or (a drag from VS Code's own
+  // explorer, which carries resources rather than files) reference what it names.
+  const [dragging, setDragging] = useState<false | "attach" | "reference">(false)
   const [uploading, setUploading] = useState(false)
 
   // Attachment paths live INSIDE the draft `value` (trailing lines) so submit, draft persistence, and
@@ -355,6 +402,28 @@ export function Composer({
     requestAnimationFrame(() => taRef.current?.focus({ preventScroll: true }))
   }
 
+  // Files and folders dragged in from VS Code's explorer: the editor resolves what the drag named to paths
+  // on its side, and each lands as a whole-file reference at the caret (at the end when the box did not
+  // have it) — what `@` writes, so a dragged file and a typed one read the same to the agent.
+  async function takeDropped(uris: string[]) {
+    if (!fileMentions || !uris.length) return
+    const files = await fileMentions.resolve(uris)
+    if (!files?.length) {
+      showToast(files === null ? "Update the Frizz extension to drop files here." : "Only files and folders on disk can be added.")
+      return
+    }
+    const latest = splitComposerValue(valueRef.current)
+    const el = taRef.current
+    const at = el && document.activeElement === el ? Math.min(el.selectionStart, latest.prose.length) : latest.prose.length
+    const next = insertReferencesAt(latest.prose, at, files.map((file) => fileMentions.reference(file)))
+    onChange(joinComposerValue(next.prose, latest.attachments.map((a) => a.path)))
+    setCaret(next.caret)
+    requestAnimationFrame(() => {
+      taRef.current?.focus({ preventScroll: true })
+      taRef.current?.setSelectionRange(next.caret, next.caret)
+    })
+  }
+
   // Auto-grow on every value change. A first layout pass
   // can precede font settlement or a narrow drawer's final width, leaving scrollHeight stale and the
   // last wrapped line hidden beneath the in-box controls. Recheck on the next frame and when fonts
@@ -449,7 +518,7 @@ export function Composer({
         // The vertical pad is free (vertical padding on an inline box never moves layout); the
         // horizontal pad is bought back by the negative margin so the advance width is untouched.
         out.push(
-          <span key={out.length} className="rounded bg-panel-2 py-0.5 -mx-0.5 px-0.5 ring-1 ring-inset ring-border">
+          <span key={out.length} data-context-token={run.token} className={CONTEXT_PILL}>
             {run.text}
           </span>,
         )
@@ -506,6 +575,21 @@ export function Composer({
     if (el && backdrop) backdrop.scrollTop = el.scrollTop
   }
   useLayoutEffect(syncContextScroll)
+
+  // A PILL'S HOVER. The textarea is on top and owns every pointer event, so the pill under the pointer
+  // is found by geometry: each pill's line boxes in the mirror (a token that wraps has two), against the
+  // pointer. Its source becomes the box's own tooltip — the textarea's `title` — and goes when the
+  // pointer leaves the pill, so the rest of the box says nothing.
+  const [hoverSource, setHoverSource] = useState<string | undefined>(undefined)
+  const sourceAt = (x: number, y: number): string | undefined => {
+    if (!contextSources) return undefined
+    for (const pill of contextRef.current?.querySelectorAll<HTMLElement>("[data-context-token]") ?? []) {
+      for (const rect of pill.getClientRects()) {
+        if (x >= rect.left && x <= rect.right && y >= rect.top && y <= rect.bottom) return contextSources[pill.dataset.contextToken!]
+      }
+    }
+    return undefined
+  }
 
   // The browser BLURS a focused element the instant it becomes `disabled`, so every `busy` window
   // evicts the caret and the user must re-click the box to keep typing. A focusout whose target is
@@ -607,7 +691,32 @@ export function Composer({
     if (!dotted) return matchMentions(allMentions, mention.query)
     return mentionThread && subMentions?.slug === mentionThread.slug ? matchMentions(subMentions.candidates, dotted.rest) : []
   }, [mention?.start, mention?.query, allMentions, dismissedFor, prose, mentionThread?.slug, subMentions])
-  const mentionOpen = mentionMatches.length > 0
+  // FILES IN THE SAME MENU (`fileMentions`): the editor's answer for the query at the caret, asked a beat
+  // after the last keystroke and kept against the `@` it was asked for, so a new `@` elsewhere never
+  // shows the last one's files. Threads come first — `@` has always meant a thread here — but only a few
+  // of them while files are offered too, so the files are not scrolled out of sight.
+  const fileQuery = fileMentions && !suggestOpen ? fileQueryAt(prose, caret) : undefined
+  const [filePicks, setFilePicks] = useState<{ start: number; query: string; files: EmbedPickedFile[] } | null>(null)
+  useEffect(() => {
+    if (!fileMentions || !fileQuery) return
+    let live = true
+    const { start, query } = fileQuery
+    const timer = setTimeout(() => {
+      void fileMentions.search(query).then((files) => {
+        if (live) setFilePicks({ start, query, files: files ?? [] })
+      })
+    }, FILE_QUERY_DEBOUNCE_MS)
+    return () => {
+      live = false
+      clearTimeout(timer)
+    }
+  }, [fileMentions, fileQuery?.start, fileQuery?.query])
+  const fileMatches = fileQuery && filePicks?.start === fileQuery.start && dismissedFor !== prose ? filePicks.files.slice(0, FILE_ROWS) : []
+  const mentionRows: MentionRow[] = [
+    ...(fileMatches.length ? mentionMatches.slice(0, THREADS_BESIDE_FILES) : mentionMatches).map((thread) => ({ kind: "thread" as const, thread })),
+    ...fileMatches.map((file) => ({ kind: "file" as const, file })),
+  ]
+  const mentionOpen = mentionRows.length > 0
   // WHICH WAY THE MENUS OPEN. Up by default — a prompt box usually sits at the bottom of its surface —
   // but All projects puts its box at the TOP of the page, where a menu floated above opened off-screen
   // and hid most of its rows. So a menu opens below whenever the room above the box is less than the
@@ -625,11 +734,23 @@ export function Composer({
     setCaret(next.caret)
     requestAnimationFrame(() => taRef.current?.setSelectionRange(next.caret, next.caret))
   }
+  function acceptFile(file: EmbedPickedFile) {
+    if (!fileQuery || !fileMentions || caret === null) return
+    const next = insertFileReference(prose, fileQuery.start, caret, fileMentions.reference(file))
+    setProse(next.prose)
+    setCaret(next.caret)
+    requestAnimationFrame(() => taRef.current?.setSelectionRange(next.caret, next.caret))
+  }
   // The open menu's length and accept, whichever of the two menus it is — one keyboard contract for both.
-  const menuLength = suggestOpen ? suggestions.length : mentionMatches.length
+  const menuLength = suggestOpen ? suggestions.length : mentionRows.length
   const acceptHighlighted = () => {
-    if (suggestOpen) acceptSuggestion(suggestions[suggestSel] ?? suggestions[0]!)
-    else acceptMention(mentionMatches[suggestSel] ?? mentionMatches[0]!)
+    if (suggestOpen) {
+      acceptSuggestion(suggestions[suggestSel] ?? suggestions[0]!)
+      return
+    }
+    const row = mentionRows[suggestSel] ?? mentionRows[0]!
+    if (row.kind === "thread") acceptMention(row.thread)
+    else acceptFile(row.file)
   }
   function acceptSuggestion(item: { name: string }) {
     if (!slash || caret === null) return
@@ -1071,21 +1192,33 @@ export function Composer({
         dragging ? "border-dashed border-accent" : "border-border"
       }`}
       onDragOver={(e) => {
+        // A drag from VS Code's explorer first: it may carry a text fallback too, which the textarea
+        // would otherwise take as typed text.
+        if (fileMentions && isVscodeDrag([...e.dataTransfer.types])) {
+          e.preventDefault()
+          e.dataTransfer.dropEffect = "copy"
+          setDragging("reference")
+          return
+        }
         if ([...e.dataTransfer.items].some((i) => i.kind === "file")) {
           e.preventDefault()
-          setDragging(true)
+          setDragging("attach")
         }
       }}
       onDragLeave={() => setDragging(false)}
       onDrop={(e) => {
         e.preventDefault()
         setDragging(false)
+        if (fileMentions && isVscodeDrag([...e.dataTransfer.types])) {
+          void takeDropped(droppedUris(DROPPED_URI_TYPES.map((type) => e.dataTransfer.getData(type))))
+          return
+        }
         void takeFiles(e.dataTransfer.files)
       }}
     >
       {dragging && (
         <div className="pointer-events-none absolute inset-0 z-10 flex items-center justify-center rounded-xl bg-bg/80 text-[12px] text-muted">
-          Drop file to attach
+          {dragging === "reference" ? "Drop to add to the prompt" : "Drop file to attach"}
         </div>
       )}
       {suggestMenu}
@@ -1102,10 +1235,32 @@ export function Composer({
           ref={suggestListRef}
           data-mention-menu
           role="listbox"
-          aria-label={dotted ? "Sub-agents" : "Threads"}
+          aria-label={fileMatches.length ? (mentionRows.length > fileMatches.length ? "Threads and files" : "Files") : dotted ? "Sub-agents" : "Threads"}
           className={`absolute ${menuBelow ? "top-full mt-1.5" : "bottom-full mb-1.5"} left-0 right-0 z-20 max-h-56 overflow-y-auto rounded-lg border border-border bg-bg py-1 shadow-lg`}
         >
-          {mentionMatches.map((m, i) => (
+          {mentionRows.map((row, i) => {
+            // A file's row: its name where a thread's handle stands — no `@`, since what lands is a path,
+            // not a mention — and its folder, dimmed, where a thread's status stands.
+            if (row.kind === "file") return (
+            <button
+              key={`file:${row.file.path}`}
+              type="button"
+              role="option"
+              aria-selected={i === suggestSel}
+              data-suggest-index={i}
+              data-mention-file={row.file.label}
+              title={row.file.label}
+              onMouseDown={(e) => e.preventDefault()}
+              onClick={() => acceptFile(row.file)}
+              onMouseEnter={() => setSuggestSel(i)}
+              className={`flex w-full items-baseline gap-2 ${MENU_ROW_INSET} py-1.5 text-left ${i === suggestSel ? "bg-panel-2" : ""}`}
+            >
+              <span className="shrink-0 text-[12px] font-medium text-fg">{basename(row.file.label)}{row.file.folder ? "/" : ""}</span>
+              {dirnameLike(row.file.label) && <span className="min-w-0 truncate text-[11px] text-muted">{dirnameLike(row.file.label)}</span>}
+            </button>
+            )
+            const m = row.thread
+            return (
             <button
               key={m.subAgentId ?? m.slug}
               type="button"
@@ -1122,13 +1277,15 @@ export function Composer({
               {m.done && <span className="petite-caps ml-auto shrink-0 text-[10px] text-muted-70">done</span>}
               {m.project && <span className={`${m.done ? "" : "ml-auto "}shrink-0 text-[11px] text-muted-70`}>{m.project.name}</span>}
             </button>
-          ))}
+            )
+          })}
         </div>
       )}
       {/* The textarea and its marker backdrop share one box: the wrapper is a plain block (no layout
           change from the bare textarea), the mirror fills it behind the transparent-backgrounded
           textarea, and the padding/typography class string is IDENTICAL on both by construction —
           any drift between them detaches every pill from its token. */}
+      {header}
       <div className="relative">
         {backdropSegments && (
           <div
@@ -1150,6 +1307,9 @@ export function Composer({
           // its documented opt-out. Every prose textarea in the app carries it.
           data-1p-ignore
           onScroll={backdropSegments ? syncContextScroll : undefined}
+          title={hoverSource}
+          onMouseMove={backdropSegments && contextSources ? (e) => setHoverSource(sourceAt(e.clientX, e.clientY)) : undefined}
+          onMouseLeave={hoverSource === undefined ? undefined : () => setHoverSource(undefined)}
           data-surface={surface}
           // Escape here BLURS (onKeyDown below; on /full it leaves fullscreen instead); the enclosing
           // ThreadSheet reads this to leave the key to us instead of dismissing itself on the same press.
@@ -1161,8 +1321,8 @@ export function Composer({
             setProse(e.target.value)
             trackCaret(e.target)
           }}
-          onSelect={mentionCandidates || slashSuggest ? (e) => trackCaret(e.currentTarget) : undefined}
-          onBlur={mentionCandidates || slashSuggest ? () => setCaret(null) : undefined}
+          onSelect={mentionCandidates || slashSuggest || fileMentions ? (e) => trackCaret(e.currentTarget) : undefined}
+          onBlur={mentionCandidates || slashSuggest || fileMentions ? () => setCaret(null) : undefined}
           onKeyDown={onKeyDown}
           onPaste={(e) => {
             // Any file item claims the whole paste (preventDefault) — deliberately. An image paste
@@ -1217,7 +1377,7 @@ export function Composer({
               short is running (`onInterruptSubmit` is set exactly then), so an idle box stays quiet.
               Right-justified against the rail; the readouts before it are `flex-1`. */}
           {onInterruptSubmit && hasContent && !busy && (
-            <span data-composer-interrupt-hint className="ml-auto shrink-0 whitespace-nowrap text-[11px] text-muted-70">
+            <span data-composer-interrupt-hint className="ml-auto max-w-full shrink-0 truncate text-[11px] text-muted-70">
               {interruptChord} to interrupt
             </span>
           )}
@@ -1276,7 +1436,7 @@ export function Composer({
         onClick={onSubmit}
         // `uploading` mirrors the Enter gate above: sending mid-upload dropped the pending attachment.
         disabled={!hasContent || busy || uploading}
-        title="Send (Enter · ⌘⏎ sends now)"
+        title={`Send (Enter · ${interruptChord} sends now)`}
         aria-label="Send"
         className={`icon-hover-outline absolute bottom-2 ${RAIL_SEND_OFFSET} flex h-7 w-7 items-center justify-center rounded-lg transition-all ${
           // Primary actions use neutral contrast; the accent marks focus.
@@ -1291,11 +1451,6 @@ export function Composer({
   )
 }
 
-// One attached file as a compact square tile. An image renders a /local-image thumbnail (object-cover,
-// the same gated route the transcript uses); a document renders a bordered tile with a file glyph and
-// its extension. A broken image (route 4xx / missing file) falls back to the document tile so a stale
-// path is never a blank square. The × removes just this path from the draft. `title` carries the full
-// path so the raw location is still one hover away.
 // The `@thread.` menu's data: the named thread's sub-agent directory, handed up as candidates. A
 // component rather than a hook in Composer because it is MOUNTED ONLY while a dotted query names a
 // thread — Composer also renders on fixture pages with no query client, and a hook would need one there.
@@ -1310,6 +1465,17 @@ function SubAgentMentionSource({ slug, onCandidates }: { slug: string; onCandida
   return null
 }
 
+// One attached file as a compact square tile. An image renders a /local-image thumbnail (object-cover,
+// the same gated route the transcript uses); a document renders a bordered tile with a file glyph and
+// its extension. A broken image (route 4xx / missing file) falls back to the document tile so a stale
+// path is never a blank square. The × removes just this path from the draft. Its name is the file's as
+// it was dropped: the server stores each upload as `<ms>-<8 hex>-<name>` (app.ts /attach) so two of the
+// same name never collide, and that stamp named the tile until the sweep (2026-10-01) — the draft still
+// carries the full path.
+function attachmentDisplayName(path: string): string {
+  return basename(path).replace(/^\d{10,}-[0-9a-f]{8}-/u, "")
+}
+
 function AttachmentChip({
   attachment,
   disabled,
@@ -1320,7 +1486,7 @@ function AttachmentChip({
   onRemove: () => void
 }) {
   const [broken, setBroken] = useState(false)
-  const base = basename(attachment.path)
+  const base = attachmentDisplayName(attachment.path)
   const ext = (base.includes(".") ? base.split(".").pop()! : "").toUpperCase()
   const asImage = attachment.kind === "image" && !broken
   return (

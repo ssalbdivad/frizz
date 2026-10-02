@@ -5,6 +5,7 @@ import { mkdtempSync, mkdirSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { repoCarriedFiles, repoCarriedEditedFiles } from "./repo-files.ts"
+import { resetCheckoutMemo } from "./thread-cwd.ts"
 
 // A REAL repository every time: the whole module is a question put to git, so a mocked git would only
 // ever confirm what this file already believes. The force-added case below is exactly the one a
@@ -56,6 +57,67 @@ test("a path outside the project is passed through — git has no opinion on ano
   const dir = repo()
   const outside = join(tmpdir(), "somewhere-else", "x.ts")
   assert.deepEqual(repoCarriedFiles(dir, [outside]), [outside])
+})
+
+// A worktree Frizz's way: `.frizz/worktrees/<slug>`, INSIDE the project, whose `.gitignore` ignores all
+// of `.frizz/`. Asked in the project root, every one of these paths read as ignored and the rail of a
+// worktree thread was empty; asked in the worktree, its own rules apply.
+function worktreeOf(dir: string, slug: string, at = join(dir, ".frizz", "worktrees", slug)): string {
+  execFileSync("git", ["worktree", "add", "-q", "-b", slug, at], { cwd: dir, stdio: "ignore" })
+  mkdirSync(join(at, "node_modules", "pkg"), { recursive: true })
+  writeFileSync(join(at, "node_modules", "pkg", "index.js"), "module.exports = 1\n")
+  writeFileSync(join(at, "src", "feature.ts"), "export const feature = 1\n")
+  writeFileSync(join(at, "src", "app.ts"), "export const changed = 1\n")
+  writeFileSync(join(at, "debug.log"), "noise\n")
+  return at
+}
+
+test("a worktree under the project's ignored .frizz/ keeps its repo work and drops what IT ignores", () => {
+  resetCheckoutMemo()
+  const dir = repo()
+  const wt = worktreeOf(dir, "feature")
+  // The control: the project root really does ignore this path, which is the whole bug.
+  const rootSays = execFileSync("git", ["check-ignore", join(wt, "src", "feature.ts")], { cwd: dir, encoding: "utf8" }).trim()
+  assert.equal(rootSays, join(wt, "src", "feature.ts"), "the project root ignores a path inside its .frizz/worktrees")
+  const kept = repoCarriedFiles(dir, [
+    join(wt, "src", "feature.ts"),
+    join(wt, "src", "app.ts"),
+    join(wt, "node_modules", "pkg", "index.js"),
+    join(wt, "debug.log"),
+    join(dir, "src", "app.ts"),
+    join(dir, ".frizz", "notes.md"),
+  ])
+  assert.deepEqual(kept, [join(wt, "src", "feature.ts"), join(wt, "src", "app.ts"), join(dir, "src", "app.ts")])
+})
+
+test("a sibling worktree outside the project is judged by its own checkout, not passed through", () => {
+  resetCheckoutMemo()
+  const dir = repo()
+  const sibling = worktreeOf(dir, "perf", `${dir}-perf`)
+  const kept = repoCarriedFiles(dir, [join(sibling, "src", "feature.ts"), join(sibling, "node_modules", "pkg", "index.js")])
+  assert.deepEqual(kept, [join(sibling, "src", "feature.ts")])
+})
+
+test("an unrelated clone in the project's scratch is still the project's ignored scratch", () => {
+  resetCheckoutMemo()
+  const dir = repo()
+  const clone = join(dir, ".frizz", "scratch", "lib")
+  mkdirSync(clone, { recursive: true })
+  execFileSync("git", ["init", "-q"], { cwd: clone, stdio: "ignore" })
+  writeFileSync(join(clone, "index.ts"), "export {}\n")
+  assert.deepEqual(repoCarriedFiles(dir, [join(clone, "index.ts")]), [])
+})
+
+test("rows from two checkouts keep their order and diffstats", () => {
+  resetCheckoutMemo()
+  const dir = repo()
+  const wt = worktreeOf(dir, "rows")
+  const rows = [
+    { path: join(wt, "src", "feature.ts"), edits: 3, added: 4 },
+    { path: join(wt, "node_modules", "pkg", "index.js"), edits: 1 },
+    { path: join(dir, "src", "app.ts"), edits: 1, added: 1, removed: 1 },
+  ]
+  assert.deepEqual(repoCarriedEditedFiles(dir, rows), [rows[0], rows[2]])
 })
 
 test("a project that is not a git repository filters nothing", () => {

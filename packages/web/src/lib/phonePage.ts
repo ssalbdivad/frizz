@@ -1,5 +1,5 @@
 import { activeBandThread, type BoardSnapshot, type ThreadView } from "@frizz/shared"
-import { isPinned, orderByInteraction, orderQueue, sectionThreads, sessionIndicatorKind, type QueueDirection } from "../groups.ts"
+import { isPinned, orderByInteraction, orderQueue, queued, sectionThreads, sessionIndicatorKind, type QueueDirection } from "../groups.ts"
 import { isBusy, threadKey, type QueuesProject } from "./allQueues.ts"
 import { loudBands } from "./listBands.ts"
 
@@ -112,17 +112,38 @@ export function phoneDone(projects: readonly QueuesProject[], boardOf: (project:
   return rowsOf(orderByInteraction([...owner.keys()]), owner)
 }
 
-/** The header's and the tabs' readings: how many rows are marked "?", and how many are spinning. */
-export function phoneCounts(queue: readonly PhoneRow[]): { asks: number; working: number } {
+/**
+ * The header's and the tabs' readings: how many rows are marked "?", how many more wait in Ready without
+ * one (a handoff, a stall, a limit kill — each waiting on the human all the same), and how many are
+ * spinning.
+ */
+export function phoneCounts(queue: readonly PhoneRow[]): { asks: number; ready: number; working: number } {
   let asks = 0
+  let ready = 0
   let working = 0
   for (const { thread } of queue) {
     if (isAsk(thread)) asks += 1
+    else if (queued(thread)) ready += 1
     // The maintainer's ACTIVE band, counted with the predicate the desktop rail's badge uses, so the phone
     // and the rail cannot disagree (upstream MobileBoard's own rule).
     if (activeBandThread(thread)) working += 1
   }
-  return { asks, working }
+  return { asks, ready, working }
+}
+
+/**
+ * THE HEADER'S LINE under the view's name: `2 need you · 3 ready · 1 working`, the asks in the accent.
+ *
+ * "Nothing needs you" is said only of an EMPTY queue. Upstream's line counted the asks and the spinning
+ * rows alone, so a queue of four handoffs — or four stalled threads, each with a Retry waiting — sat
+ * under a header that said nothing needed the human (the sidebar spike, 2026-10-01, beside "Queue 4" and
+ * a status bar reading "4 ready"); it read the same on a phone. One ask is "1 needs you", not "1 need you".
+ */
+export function phoneSubtitle(counts: { asks: number; ready: number; working: number }): { accent: string | null; rest: string | null } {
+  const accent = counts.asks > 0 ? `${counts.asks} ${counts.asks === 1 ? "needs" : "need"} you` : null
+  const parts = [counts.ready > 0 ? `${counts.ready} ready` : null, counts.working > 0 ? `${counts.working} working` : null].filter((part) => part !== null)
+  const rest = parts.length > 0 ? parts.join(" · ") : accent ? null : "Nothing needs you"
+  return { accent, rest }
 }
 
 /** One project as the phone's projects list draws it. */

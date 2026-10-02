@@ -21,7 +21,9 @@ import { actionDef, bindingLookup, detectPlatform, effectiveBindings, formatChor
 //     with `data-command`, and the key clicks it, so every gate that control already obeys (the
 //     completion confirm, the optimistic fade, a disabled state, a foreign session) applies to the key
 //     for free. A key that took its own route to the RPC would be a second implementation of
-//     "Mark as done" — and the queue has learned the hard way what two of those drift into.
+//     "Mark as done" — and the queue has learned the hard way what two of those drift into. A page with
+//     no cards (an editor's sidebar) reads a thread in its drawer, so there a key with no drawer open
+//     opens the thread first (QueueCursor `openCurrent`).
 
 type Handler = () => boolean | void
 
@@ -58,6 +60,12 @@ export interface QueueCursor {
   root(key: string): HTMLElement | null
   /** Land on a card exactly the way clicking its rail row does. */
   go(key: string): void
+  /**
+   * A page with NO CARDS (an editor's sidebar, SidebarPage.tsx), where a thread is read in its drawer: open
+   * the thread the reader is on, for a thread key pressed with no drawer open. False when there is none.
+   * A page with cards leaves it unset, and the key then acts on the card being read.
+   */
+  openCurrent?(): boolean
 }
 
 let cursors: QueueCursor[] = []
@@ -164,6 +172,46 @@ export function currentThreadSurface(): HTMLElement | null {
   return cursor.root(key)
 }
 
+/**
+ * A thread key with nothing in front of it, on a page whose cursor reads threads in their drawers (QueueCursor
+ * `openCurrent`): the FIRST press opens the thread you're on, and only that — Mark as done, Snooze and the
+ * rest act on a thread the human has seen, as they do on the desktop's card, so the second press is the one
+ * that acts. `r` goes on into the drawer's reply box, which is all the desktop's `r` does to a card.
+ */
+function openForCommand(command: ThreadCommand): boolean {
+  const cursor = activeCursor()
+  if (!cursor?.openCurrent?.()) return false
+  if (command === "reply") focusReplyBoxOnceOpen()
+  return true
+}
+
+/** How long `r` waits for the drawer it opened — a thread of another project is a navigation first. */
+const REPLY_OPEN_WAIT_MS = 5_000
+
+/**
+ * The caret into the reply box of a drawer that is still opening. The box mounts with the thread's body, a
+ * frame or more after the open, and the sheet then focuses its own first control (ThreadSheet.tsx, once the
+ * body is ready): so wait for the box, then two frames more, or the sheet takes the focus straight back.
+ * Never over the human's own move: a field they are typing in by then keeps the caret.
+ */
+function focusReplyBoxOnceOpen(): void {
+  const deadline = performance.now() + REPLY_OPEN_WAIT_MS
+  const poll = () => {
+    const surface = currentThreadSurface()
+    if (!surface?.querySelector(REPLY_BOXES)) {
+      if (performance.now() < deadline) requestAnimationFrame(poll)
+      return
+    }
+    requestAnimationFrame(() =>
+      requestAnimationFrame(() => {
+        const typing = isTypingTarget(document.activeElement) && !surface.contains(document.activeElement)
+        if (surface.isConnected && !typing) focusReplyBox(surface)
+      }),
+    )
+  }
+  requestAnimationFrame(poll)
+}
+
 /** Dispatched on a `data-command` control before the default press, so a control whose press is not
  *  a click (a Radix menu trigger opens on pointerdown/keydown) can claim it with preventDefault. */
 export const COMMAND_EVENT = "frizz:command"
@@ -180,7 +228,7 @@ const REPLY_BOXES = ["queueComposer", "chatComposer", "adoptComposer", "subAgent
  *  which lets a page fall back to its own reading of the key (AllQueues.tsx: `e` with no card). */
 export function runThreadCommand(command: ThreadCommand): boolean {
   const surface = currentThreadSurface()
-  if (!surface) return false
+  if (!surface) return openForCommand(command)
   if (command === "reply") return focusReplyBox(surface)
   // `~=`: one control can carry several commands, space-separated — the ⋯ trigger answers for its menu
   // and for the items inside it, which exist only while it is open.

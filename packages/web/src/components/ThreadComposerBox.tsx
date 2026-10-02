@@ -3,10 +3,12 @@ import { useSnapshot } from "valtio"
 import { expandUserCommandDraft, type AccountBackend, type ThreadSkill, type ThreadView } from "@frizz/shared"
 import { rpc } from "../api/rpc.ts"
 import { showToast, store } from "../store.ts"
-import { buildMessageWithContext } from "../lib/composerContext.ts"
-import { restoreContextItems, takeContextItems, useStagedContextTokens } from "../lib/stagedContext.ts"
+import { outgoingMessage } from "../lib/editorContext.ts"
+import { restoreContextItems, takeContextItems, useStagedContextSources, useStagedContextTokens } from "../lib/stagedContext.ts"
 import { useThreadComposerControls } from "../hooks/useThreadComposerControls.tsx"
 import { Composer } from "./Composer.tsx"
+import { EditorContextBar } from "./EditorContextBar.tsx"
+import { embedFileMentions } from "../lib/editorReach.ts"
 import { useMentionCandidates, useOwnMention } from "../hooks/useMentionCandidates.ts"
 import { LogoutConfirmModal, SignInModal } from "./SignInModal.tsx"
 import { draftKey, draftStore, mergeIntoDraft, useDraft, useProjectDir } from "../lib/drafts.ts"
@@ -125,6 +127,7 @@ export function ThreadComposerBox({
   // The staged selections' tokens, painted as chips; deleting a token's text drops its item
   // (lib/stagedContext.ts). Keyed by this draft, so the queue card's copy of the box shows the same.
   const contextTokens = useStagedContextTokens(key, message)
+  const contextSources = useStagedContextSources(key, projectDir)
 
   // INTERRUPT AND SEND is offered only when there is something to interrupt AND a runtime that can be
   // preempted — `runtime === "running"` is exactly "process alive, turn in flight". The backend policy
@@ -178,11 +181,19 @@ export function ThreadComposerBox({
       return
     }
     // Staged ⌘I context items ride the send: serialized into the text (before any trailing
-    // attachment paths) and cleared with it — restored on a rejected send exactly like the draft.
+    // attachment paths) and cleared with it — restored on a rejected send exactly like the draft. In an
+    // editor's sidebar the drawer's box — the one that shows the context bar — also carries what the
+    // editor has in front, read now; the queue card's copy shows no bar and so carries none of it. The
+    // thread's transcript rides along so a selection it already quoted is named, not quoted again.
     // A USER COMMAND (`/commit fix the tests`) goes out as the prompt it names, expanded here so it means
     // the same on every backend; the transcript reads it back as what was typed (messagePresentation.ts).
     const staged = takeContextItems(key)
-    const outgoing = buildMessageWithContext(expandUserCommandDraft(text, userCommands ?? []) ?? text, staged, projectDir)
+    // A thread working in a worktree reads paths against IT, so they are written for it, with a word on
+    // whose copy the context is (lib/composerContext.ts worktreeNote).
+    const outgoing = outgoingMessage(expandUserCommandDraft(text, userCommands ?? []) ?? text, staged, projectDir, surface === "chatComposer", {
+      history: qc.getQueryData<TranscriptData>(["transcript", slug])?.messages,
+      checkout: thread?.checkout,
+    })
     const callbacks: EagerFollowUpCallbacks = {
       onOptimistic: clearMessage,
       // Re-sending words an earlier failure handed back replaces that failure's bubble — see
@@ -268,6 +279,11 @@ export function ThreadComposerBox({
     >
       <Composer
         contextTokens={contextTokens}
+        contextSources={contextSources}
+        // In an editor's sidebar, what the editor has in front, one click from a chip in this box. The
+        // drawer's box only: the queue card's copy of it is one of many on a page, and a bar on each
+        // would be noise.
+        header={surface === "chatComposer" ? <EditorContextBar box={{ key, projectDir, surface }} /> : undefined}
         id={id}
         surface={surface}
         value={message}
@@ -280,6 +296,9 @@ export function ThreadComposerBox({
           slashSuggestVersion={userCommandsQuery.dataUpdatedAt}
         mentionCandidates={mentions}
         ownMention={ownMention}
+        // In an editor's sidebar, `@` offers the editor's files too, and a file dragged in from its
+        // explorer lands as a reference (lib/editorReach.ts).
+        fileMentions={embedFileMentions(projectDir)}
         placeholder={answering?.slug === slug && answering.staged > 0 ? "Add a note to your answers…" : placeholder}
         // NOT `|| followUp.pending`. The send is already committed locally (draft cleared, bubble
         // appended, and in the queue the card has already begun dissolving), so gating the textarea on

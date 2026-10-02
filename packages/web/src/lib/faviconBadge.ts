@@ -1,3 +1,4 @@
+import { embedded } from "./embed.ts"
 // THE TAB'S OWN REST MARK: a dot on the favicon of a /full tab whose thread is in the queue (maintainer
 // 2026-09-19: "a little indicator should pop up in the favicon when a full-screen view tab is at
 // rest"), and a COUNT on the page's tab — how many cards its queue holds, in one project's view or
@@ -164,6 +165,8 @@ function baseIcon(links: readonly IconLink[]): Promise<HTMLImageElement> {
  * rules, and leaving the unbadged PNGs declared lets it pick one of those.
  */
 export function setFaviconBadge(badge: FaviconBadge): void {
+  // In an editor's sidebar there is no tab to wear it (lib/embed.ts): the extension badges its own view.
+  if (embedded()) return
   const label = badgeLabel(badge)
   wanted = label
   const links = iconLinks()

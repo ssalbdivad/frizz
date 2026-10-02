@@ -103,6 +103,22 @@ test("asks made in one turn go out as one request per project", async () => {
   assert.equal(cachedResolution("project-c", "three.md"), "/work/c/three.md")
 })
 
+// A thread in a worktree: its `src/a.ts` is its own copy, so the server is told where it worked (`base`) and
+// the answer is kept apart from the same text in the project's other prose.
+test("a worktree thread's paths are asked with its worktree as the base, and cached apart", async () => {
+  const { resolveUnknown, cachedResolution } = await import("./localFileCode.ts")
+  const asked: unknown[] = []
+  const client = { resolveLocalPaths: async (input: { paths: string[]; base?: string }) => {
+    asked.push(input)
+    return { resolved: input.paths.map((path) => ({ input: path, path: `${input.base ?? "/work/d"}/${path}` })) }
+  } }
+  await resolveUnknown(["src/a.ts"], "project-d\u0001/work/d/.frizz/worktrees/x", client as never, "/work/d/.frizz/worktrees/x")
+  await resolveUnknown(["src/a.ts"], "project-d", client as never)
+  assert.deepEqual(asked, [{ paths: ["src/a.ts"], base: "/work/d/.frizz/worktrees/x" }, { paths: ["src/a.ts"] }])
+  assert.equal(cachedResolution("project-d\u0001/work/d/.frizz/worktrees/x", "src/a.ts"), "/work/d/.frizz/worktrees/x/src/a.ts")
+  assert.equal(cachedResolution("project-d", "src/a.ts"), "/work/d/src/a.ts")
+})
+
 // A PLACE IN A FILE in inline code: the server is asked for the BARE path (one resolution per file, however
 // many lines the prose names) and the line stays client-side, to be stamped on the element.
 test("localFileCandidate splits the line off before the path test", () => {

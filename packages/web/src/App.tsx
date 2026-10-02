@@ -2,7 +2,11 @@ import { useEffect, useRef, useState } from "react"
 import { useLocation, useNavigate } from "react-router"
 import { useSnapshot } from "valtio"
 import { useQuery } from "@tanstack/react-query"
-import { closeGithubPicker, store, seedBoard, openNewThread, pushDrawer, resolveRoutedThread, topDrawer, topThreadSlug, showToast } from "./store.ts"
+import { closeGithubPicker, store, seedBoard, pushDrawer, resolveRoutedThread, topDrawer, topThreadSlug, showToast } from "./store.ts"
+import { embedded, hostTerminalHint } from "./lib/embed.ts"
+import { addEditorContextByKey } from "./lib/editorContext.ts"
+import { detectPlatform } from "./lib/keybindings.ts"
+import { openDispatch } from "./lib/newThreadDoor.ts"
 import { useBoard } from "./hooks.ts"
 import { closeDrawerAnimated } from "./lib/overlays.ts"
 import { useShortcut } from "./lib/keyboardRuntime.ts"
@@ -38,30 +42,17 @@ import {
 import { formatCompactElapsed } from "./lib/durationLabels.ts"
 
 // The not-signed-in hint fires at most once per page load. A module-scoped flag (not React state)
-// keeps it from re-firing across re-renders, effect re-runs, or a StrictMode double-invoke.
+// keeps it from re-firing across re-renders, effect re-runs, or a StrictMode double-invoke. In an
+// editor's sidebar it says where a terminal is: VS Code's, one chord away (lib/embed.ts).
 let signInHintShown = false
 function maybeShowSignInHint() {
   if (signInHintShown) return
   signInHintShown = true
-  showToast("Sign in to the GitHub CLI (`gh auth login`) to dispatch from issues/PRs.", { duration: 6000 })
+  showToast("Sign in to the GitHub CLI (`gh auth login`) to dispatch from issues/PRs.", {
+    duration: 6000,
+    ...(embedded() ? { detail: hostTerminalHint(detectPlatform() === "mac") } : {}),
+  })
 }
-
-// The new-thread key, `c`. With the page in front of you the prompt box at the top of its left column IS
-// the new-thread door, so the key puts the caret in it. With a drawer over the page the rail sits behind
-// its scrim, so the anywhere-modal opens instead and the drawer stays where it was — Gmail's compose
-// window over the conversation you were reading. (`t` opened the box on its Terminal tab until
-// 2026-09-29; a terminal belongs to a thread now, and `t` opens one on the thread you are reading.)
-function openDispatch(): void {
-  if (!store.drawers.some((drawer) => !drawer.closing)) {
-    const form = [...document.querySelectorAll<HTMLElement>("[data-dispatch-form]")].find((el) => !el.closest('[role="dialog"]'))
-    if (form) {
-      form.querySelector<HTMLElement>('[data-surface="newComposer"]')?.focus()
-      return
-    }
-  }
-  openNewThread()
-}
-
 
 /**
  * THE SHELL AROUND THE ONE PAGE (AllQueues.tsx), focused on one project or showing All projects
@@ -244,6 +235,14 @@ export function App() {
     store.showPalette = !store.showPalette
   })
   useShortcut("app.details", () => {
+    // In an editor's sidebar ⌘I is first the editor's chord — the code in front into the prompt box it was
+    // typed in, or with no thread open into the new-thread box — and Thread details only where it is not
+    // that (lib/editorContext.ts addEditorContextByKey). Consumed either way, so it never leaves the page.
+    if (embedded()) {
+      const added = addEditorContextByKey(document.activeElement, store.drawers.some((drawer) => !drawer.closing), store.showNewThread)
+      if (added === "nothing") showToast("Open a file in the editor to add it.")
+      if (added) return
+    }
     // The frizz document for the topmost open thread (stacks another layer / pops its own).
     const top = topDrawer()
     const target = topThreadSlug()
@@ -251,7 +250,8 @@ export function App() {
       if (!closeDrawerAnimated(top.id)) store.drawers.pop()
       return
     }
-    if (!target) return false
+    // Nothing to show. In a browser the key goes on unclaimed; in a sidebar it stays in the page.
+    if (!target) return embedded() ? undefined : false
     pushDrawer("doc", target)
   })
   // ⌘, OPENS settings and leaves closing to Esc, the way it brings a Mac app's preferences forward

@@ -30,11 +30,24 @@
       html[data-theme="light"], html[data-theme="light"] body { background: #f7f7f7; }
       @media (prefers-color-scheme: light) { html:not([data-theme]), html:not([data-theme]) body { background: #f7f7f7; } }
     </style>
+    <!-- …and in an editor's sidebar the EDITOR's theme wins (src/lib/embed.ts, which this mirrors: the
+         `embed`/`theme` query on the frame's first address, else the frame's `frizz.embed` session
+         record). Without it the sidebar painted the stored or OS theme first and flipped a beat later. -->
     <script>
       let frizzThemePreference
       try { frizzThemePreference = localStorage.getItem("frizz-theme") } catch {}
       let frizzSystemDark = false
       try { frizzSystemDark = typeof matchMedia === "function" && matchMedia("(prefers-color-scheme: dark)").matches } catch {}
+      let frizzEmbed = null
+      try {
+        const query = new URLSearchParams(location.search)
+        if (query.get("embed") === "vscode") frizzEmbed = { host: "vscode", theme: query.get("theme") }
+        else frizzEmbed = JSON.parse(sessionStorage.getItem("frizz.embed") || "null")
+      } catch {}
+      if (frizzEmbed && frizzEmbed.host === "vscode") {
+        document.documentElement.dataset.embed = "vscode"
+        if (frizzEmbed.theme === "dark" || frizzEmbed.theme === "light") frizzThemePreference = frizzEmbed.theme
+      }
       const frizzTheme = frizzThemePreference === "dark" || frizzThemePreference === "light" ? frizzThemePreference : frizzSystemDark ? "dark" : "light"
       document.documentElement.dataset.theme = frizzTheme
       document.documentElement.style.colorScheme = frizzTheme

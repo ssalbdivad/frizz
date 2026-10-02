@@ -1,7 +1,9 @@
 // THE END-TO-END SUITE — runs INSIDE a real VS Code (scripts/e2e.ts launches it as
 // `--extensionTestsPath`), against the extension under development, and drives both directions:
 // Frizz → editor (an `open` landing at its line, the status bar's count) and editor → Frizz (ask, send
-// to thread, add to prompt), plus a dropped connection coming back.
+// to thread, add to prompt), plus a dropped connection coming back. Then the Frizz sidebar (fake mode
+// only): its frame of a fake page that speaks the embed contract (fake-frizz.ts), the same three
+// commands landing in that page instead, and what the page can ask of the editor.
 //
 // FAKE mode (default) talks to e2e/fake-frizz.ts through its /__e2e control surface and asserts on the
 // exact frames and RPC calls it received. REAL mode points the extension at a real Frizz
@@ -11,33 +13,133 @@
 // Ask just started.
 
 import assert from "node:assert/strict"
-import { realpathSync } from "node:fs"
+import { randomUUID } from "node:crypto"
+import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs"
+import { tmpdir } from "node:os"
 import { join } from "node:path"
+import { isDeepStrictEqual } from "node:util"
 import * as vscode from "vscode"
-import type { EditorClientMessage, EditorComposed, EditorProject } from "@frizz/shared/editor-protocol"
+import { EDITOR_FEATURES, type EditorClientMessage, type EditorComposed, type EditorProject, type EditorSnapshot } from "@frizz/shared/editor-protocol"
+import type { EmbedContextPicksMessage, EmbedEditorContextMessage, EmbedPickedFile } from "@frizz/shared/embed-protocol"
 import { parseSentContext } from "../../web/src/lib/composerContext.ts"
 import type { FrizzExtensionApi } from "../src/app.ts"
+import { HINT_OLD_FRIZZ } from "../src/sidebar-html.ts"
 import { projectForPath } from "../src/projects.ts"
+import { workerTool } from "./worker-tool.ts"
+import type { ReviewSnapshot } from "../src/review-view.ts"
 import { FrizzRpc } from "../src/rpc.ts"
+import { seedReviewRepo, type ReviewRepo } from "./review-repo.ts"
+import type { SeededReview } from "./review-seed.ts"
 
 const mode = process.env.FRIZZ_E2E_MODE === "real" ? "real" : "fake"
 const workspace = realpathSync(process.env.FRIZZ_E2E_WORKSPACE ?? "")
 const sample = join(workspace, "src", "sample.ts")
 const control = process.env.FRIZZ_E2E_CONTROL ?? ""
+const elsewhere = process.env.FRIZZ_E2E_CONTROL_ELSEWHERE ?? ""
 
 interface FakeLog {
   frames: EditorClientMessage[]
   refused: string[]
   rpc: { projectId: string; procedure: string; input: Record<string, unknown> }[]
   origins: string[]
+  page: { loads: string[]; received: { origin: string; data: { type?: string } & Record<string, unknown> }[] }
 }
 
-async function fake<T = unknown>(path: string, body?: unknown): Promise<T> {
-  const response = await fetch(`${control}${path}`, body === undefined ? {} : { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) })
+async function fake<T = unknown>(path: string, body?: unknown, at = control): Promise<T> {
+  const response = await fetch(`${at}${path}`, body === undefined ? {} : { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) })
   return (await response.json()) as T
 }
 
-const fakeLog = () => fake<FakeLog>("/__e2e/log")
+const fakeLog = (at = control) => fake<FakeLog>("/__e2e/log", undefined, at)
+
+/** What the fake page received from the sidebar after `from` messages, by type. */
+async function pageReceived(type: string, from = 0, at = control) {
+  return (await fakeLog(at)).page.received.slice(from).map((entry) => entry.data).filter((data) => data.type === type)
+}
+
+/**
+ * A command that should land in the sidebar, bounded: when it does not, Ask and Send fall back to an
+ * input box that would wait for a human forever. Dismissed, so the next step starts clean.
+ */
+async function landsInSidebar<T>(command: Thenable<T>, what: string): Promise<T> {
+  let timer: NodeJS.Timeout | undefined
+  const late = new Promise<never>((_, reject) => (timer = setTimeout(() => reject(new Error(`${what} did not land in the sidebar within 30s`)), 30_000)))
+  try {
+    return await Promise.race([command, late])
+  } catch (error) {
+    await vscode.commands.executeCommand("workbench.action.closeQuickOpen")
+    throw error
+  } finally {
+    clearTimeout(timer)
+  }
+}
+
+/** Have the fake page post `message` to the sidebar, as the real page would. */
+const pagePosts = (message: unknown) => fake("/__e2e/page-post", { message })
+
+/** Every `frizz:editor-context` the page was told, after `from` messages. */
+const contexts = async (from = 0) => (await pageReceived("frizz:editor-context", from)) as unknown as EmbedEditorContextMessage[]
+const received = async () => (await fakeLog()).page.received.length
+const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms))
+
+/** The workbench itself, over the harness's debugging port: an expression's value, a trusted key, a trusted click. */
+async function workbench<T>(expression: string): Promise<T> {
+  const answer = await fake<{ value?: T; error?: string }>("/__e2e/workbench", { expression })
+  if (answer.error) throw new Error(answer.error)
+  return answer.value as T
+}
+async function press(chord: string): Promise<void> {
+  const answer = await fake<{ error?: string }>("/__e2e/press", { chord })
+  if (answer.error) throw new Error(answer.error)
+}
+const click = async (selector: string) => (await fake<{ clicked?: boolean; error?: string }>("/__e2e/click", { selector })).clicked === true
+
+/** What VS Code's title row above the sidebar shows: its heading and the buttons in it, by their labels. */
+const titleRow = () => workbench<{ heading: string; buttons: string[] }>(`(() => {
+  const title = document.querySelector(".part.sidebar .composite.title")
+  return {
+    heading: title?.querySelector(".title-label")?.textContent ?? "",
+    buttons: [...(title?.querySelectorAll(".title-actions .action-label") ?? [])].filter((a) => a.offsetWidth > 0).map((a) => a.getAttribute("aria-label") ?? ""),
+  }
+})()`)
+
+/**
+ * Where the keyboard is in the workbench. A webview view's iframe is not in the side bar's DOM — VS Code
+ * lays it over the view from a container of its own — so the sidebar is a webview iframe with a box.
+ */
+const focusIn = () => workbench<"editor" | "sidebar" | "elsewhere">(`(() => {
+  const active = document.activeElement
+  if (active?.closest(".part.editor")) return "editor"
+  const r = active?.getBoundingClientRect()
+  if (active?.tagName === "IFRAME" && active.classList.contains("webview") && r && r.width > 0) return "sidebar"
+  return "elsewhere"
+})()`)
+
+/** The extension's own manifest, as the editor loaded it. */
+const manifest = () => vscode.extensions.getExtension("ssalbdivad.frizz-vscode")!.packageJSON as {
+  contributes: { keybindings: unknown[]; menus: Record<string, { command?: string; when?: string; group?: string }[]> }
+}
+
+/** A `.env` with a key in it: a file whose name says it holds secrets. */
+const SECRET = "sk-e2e-not-a-key"
+function envFile(): string {
+  const path = join(workspace, ".env")
+  writeFileSync(path, `API_KEY=${SECRET}\n`)
+  return path
+}
+
+/** A second file in the workspace for the steps that need more than one open. */
+function workspaceFile(name: string): string {
+  const path = join(workspace, "src", name)
+  writeFileSync(path, `export const ${name.replace(/\W/gu, "_")} = 1\n`)
+  return path
+}
+
+/** The query the sidebar's frame carries for this window. */
+function embedQuery(project: EditorProject): string {
+  const light = vscode.window.activeColorTheme.kind === vscode.ColorThemeKind.Light || vscode.window.activeColorTheme.kind === vscode.ColorThemeKind.HighContrastLight
+  return `?embed=vscode&theme=${light ? "light" : "dark"}&project=${project.slug}`
+}
 
 async function until(what: string, condition: () => boolean | Promise<boolean>, timeoutMs = 10_000): Promise<void> {
   const deadline = Date.now() + timeoutMs
@@ -61,6 +163,121 @@ async function openSample(selection?: [number, number, number, number?]): Promis
 function sampleLines(document: vscode.TextDocument, from: number, to: number): string {
   return document.getText(new vscode.Range(from - 1, 0, to - 1, document.lineAt(to - 1).text.length))
 }
+
+/**
+ * The window as an agent will read it: the sample in front with lines 2-4 selected, another file open in
+ * a tab, and a problem on line 4 published through a real diagnostic collection (the API a language server
+ * uses), so `languages.onDidChangeDiagnostics` really fires. Returns the collection, to dispose.
+ */
+async function agentScene(): Promise<{ editor: vscode.TextEditor; other: string; problems: vscode.DiagnosticCollection }> {
+  await vscode.commands.executeCommand("workbench.action.closeAllEditors")
+  const other = workspaceFile("other.ts")
+  await vscode.window.showTextDocument(await vscode.workspace.openTextDocument(other), { preview: false })
+  const editor = await vscode.window.showTextDocument(await vscode.workspace.openTextDocument(sample), { preview: false })
+  editor.selection = new vscode.Selection(1, 0, 3, editor.document.lineAt(3).text.length)
+  const problems = vscode.languages.createDiagnosticCollection("frizz-e2e")
+  const problem = new vscode.Diagnostic(new vscode.Range(3, 4, 3, 9), "Cannot find name 'totals'.", vscode.DiagnosticSeverity.Error)
+  problem.source = "e2e"
+  problem.code = 2304
+  problems.set(editor.document.uri, [problem])
+  problems.set(vscode.Uri.file(other), [new vscode.Diagnostic(new vscode.Range(0, 0, 0, 6), "Unused export.", vscode.DiagnosticSeverity.Warning)])
+  return { editor, other, problems }
+}
+
+/** Every `editor` frame the fake received, newest last. */
+const editorFrames = async () => (await fakeLog()).frames.filter((frame): frame is EditorSnapshot => frame.t === "editor")
+
+/** One `tools/call editor` on the REAL frizz-mcp.mjs, run as a worker of `projectId` would run it, finding the stack by its lock. */
+const workerReadsEditor = (projectId: string) =>
+  workerTool({ node: process.env.FRIZZ_E2E_NODE!, mcp: process.env.FRIZZ_E2E_MCP!, serverLock: process.env.FRIZZ_E2E_SERVER_LOCK!, projectId })
+
+// ── Review changes ────────────────────────────────────────────────────────────────────────────────────
+
+/** The worktree the fake-mode review steps show, built once (e2e/review-repo.ts) inside the workspace. */
+let fakeReviewRepo: ReviewRepo | undefined
+const reviewRepo = () => (fakeReviewRepo ??= seedReviewRepo(join(workspace, "review-repo")))
+
+/**
+ * The review in front is the repository's whole branch — every file in git's order, each side what it must
+ * be — read three ways: the tab VS Code shows (its label, and its diffs where the API exposes a multi-diff
+ * tab's input), what the extension handed `vscode.changes`, and each side's text as the editor loads it
+ * (the base side through the extension's `frizz-base:` provider, the file side from disk).
+ */
+async function assertReviewInFront(api: FrizzExtensionApi, repo: ReviewRepo, title: string): Promise<void> {
+  const label = `Changes in ${title}`
+  const tabs = () => vscode.window.tabGroups.all.flatMap((group) => group.tabs.map((tab) => `${group.isActive ? "*" : ""}${tab.isActive ? ">" : ""}${tab.label} [${(tab.input as object | undefined)?.constructor?.name ?? typeof tab.input}]`))
+  // VS Code names the tab by the title, and later versions add the count: "Changes in x (5 files)".
+  const named = (tab: string | undefined) => tab === label || tab === `${label} (${repo.expected.length} files)`
+  await until(`"${label}" in front`, () => named(vscode.window.tabGroups.activeTabGroup.activeTab?.label), 20_000).catch((error: unknown) => {
+    throw new Error(`${(error as Error).message}; the tabs: ${JSON.stringify(tabs())}`)
+  })
+  const shown = api.review()
+  assert.ok(shown, "the extension handed the diff editor a review")
+  const review: ReviewSnapshot = shown
+  assert.equal(review.title, label)
+  const relative = (uri: string) => vscode.Uri.parse(uri).fsPath.slice(repo.worktree.length + 1)
+  assert.deepEqual(review.resources.map((resource) => relative(resource.label)), repo.expected.map((entry) => entry.path), "every change, in git's order; nothing ignored, binary or main's")
+  for (const [i, entry] of repo.expected.entries()) {
+    const resource = review.resources[i]!
+    const text = repo.text[entry.path]!
+    if (entry.status === "deleted") assert.equal(resource.modified, undefined, `${entry.path} has no file side`)
+    else {
+      const file = vscode.Uri.parse(resource.modified!)
+      assert.equal(file.scheme, "file", `${entry.path}'s right side is the real file, to edit in place`)
+      assert.equal((await vscode.workspace.openTextDocument(file)).getText(), text.now, `${entry.path} as it is on disk`)
+    }
+    if (entry.basePath === undefined) assert.equal(resource.original, undefined, `${entry.path} is new: no base side`)
+    else {
+      const base = vscode.Uri.parse(resource.original!)
+      assert.equal(base.scheme, "frizz-base")
+      assert.equal(base.fsPath, join(repo.worktree, ...entry.basePath.split("/")), `${entry.path}'s base side is named for where it was`)
+      assert.equal((await vscode.workspace.openTextDocument(base)).getText(), text.base, `${entry.path} as the base had it`)
+    }
+  }
+  assert.deepEqual(review.checkouts.map(({ top, base }) => ({ top, base })), [{ top: repo.worktree, base: repo.base }], "the base is where the branch started, not main's tip")
+  assert.deepEqual(review.checkouts[0]!.binary, [join(repo.worktree, "logo.png")])
+  // The tab itself, where this VS Code exposes a multi-diff tab's input to extensions.
+  const Multi = (vscode as unknown as { TabInputTextMultiDiff?: new (...args: never[]) => { textDiffs: { original: vscode.Uri; modified: vscode.Uri }[] } }).TabInputTextMultiDiff
+  const input = vscode.window.tabGroups.activeTabGroup.activeTab?.input
+  if (Multi && input instanceof Multi) {
+    // The API lists only the entries with BOTH sides (a TabInputTextDiff needs two): here the modified
+    // and the renamed file. The added and deleted ones are in the editor all the same — its label counts
+    // them, and the drawn entries below show them.
+    const twoSided = repo.expected.filter((entry) => entry.basePath !== undefined && entry.status !== "deleted")
+    console.log(`  · the tab's own input lists the ${input.textDiffs.length} two-sided diffs: ${input.textDiffs.map((diff) => `${diff.original.scheme}→${diff.modified.scheme}`).join(", ")}`)
+    assert.deepEqual(
+      input.textDiffs.map((diff) => [diff.original.scheme, diff.modified.fsPath.slice(repo.worktree.length + 1)]),
+      twoSided.map((entry) => ["frizz-base", entry.path]),
+    )
+  } else console.log(`  · this VS Code (${vscode.version}) does not expose a multi-diff tab's input; its label and the documents stand in`)
+}
+
+/**
+ * What the multi-diff editor DRAWS (fake mode, over the workbench's debugging port): an entry per file, and
+ * for the loop, the removed line on the base side and the added one on the file side.
+ */
+async function assertReviewDrawn(repo: ReviewRepo, shot: string): Promise<void> {
+  type Entry = { header: string; original: string; modified: string }
+  let entries: Entry[] = []
+  await until("the loop's diff drawn on both sides", async () => {
+    entries = await workbench<Entry[]>(`[...document.querySelectorAll(".multiDiffEntry")].map((entry) => ({
+      header: (entry.querySelector(".header")?.textContent ?? "").replace(/\\s+/g, " ").trim(),
+      // Every block of lines on each side: a narrow diff draws the REMOVED lines inside the file side, in a
+      // zone of their own before its real lines, so the first block alone is not the file.
+      original: [...entry.querySelectorAll(".editor.original .view-lines")].map((lines) => lines.textContent ?? "").join("\\n").replace(/\\u00a0/g, " "),
+      modified: [...entry.querySelectorAll(".editor.modified .view-lines")].map((lines) => lines.textContent ?? "").join("\\n").replace(/\\u00a0/g, " "),
+    }))`)
+    const loop = entries.find((entry) => entry.header.includes("loop.ts"))
+    return !!loop && loop.original.includes("let total = 0") && loop.modified.includes("xs.reduce")
+  }, 20_000).catch((error: unknown) => {
+    throw new Error(`${(error as Error).message}; the editor drew ${JSON.stringify(entries)}`)
+  })
+  for (const { path } of repo.expected.slice(0, 3)) assert.ok(entries.some((entry) => entry.header.includes(path.split("/").pop()!)), `an entry for ${path}: ${JSON.stringify(entries.map((entry) => entry.header))}`)
+  await fake("/__e2e/shot", { path: shot })
+  console.log(`  · ${entries.length} entries drawn; the window is in ${shot}`)
+}
+
+const reviewShot = (name: string) => join(process.env.FRIZZ_E2E_SHOTS || workspace, `${vscode.version}-${name}.png`)
 
 /** The thread the real-mode Ask step started, for Send to follow up when no FRIZZ_E2E_THREAD is named. */
 let askedThread: string | undefined
@@ -159,9 +376,87 @@ const steps: Step[] = [
       await fake("/__e2e/projects", { projects: [{ ...project, ready: 3, working: 1 }] })
       await until("Frizz · 3 ready", () => api.statusBar().text === "Frizz · 3 ready")
       assert.match(api.statusBar().tooltip, /3 ready · 1 working/)
-      assert.equal(api.statusBar().command, "frizz.open")
+      assert.equal(api.statusBar().command, "frizz.sidebar.focus", "a click shows the sidebar")
       await fake("/__e2e/projects", { projects: [{ ...project, ready: 0, working: 1 }] })
       await until("a bare Frizz", () => api.statusBar().text === "Frizz")
+    },
+  },
+  {
+    name: "Frizz's agents can read the editor: the file in front, the selection and its text, the tabs, the problems — nothing with sharing off",
+    modes: ["fake"],
+    async run() {
+      const { editor, other, problems } = await agentScene()
+      const frizz = vscode.workspace.getConfiguration("frizz")
+      try {
+        const expectedText = sampleLines(editor.document, 2, 4)
+        let frame: EditorSnapshot | undefined
+        await until("the selection and the problem in an editor frame", async () => {
+          frame = (await editorFrames()).at(-1)
+          return frame?.active?.selection?.text === expectedText && frame.diagnostics.some((d) => d.source === "e2e")
+        })
+        assert.equal(frame!.shared, true)
+        const active = frame!.active!
+        assert.deepEqual({ path: active.path, languageId: active.languageId, dirty: active.dirty, lineCount: active.lineCount, selection: active.selection, untitled: active.untitled }, {
+          path: sample, languageId: "typescript", dirty: false, lineCount: editor.document.lineCount, selection: { startLine: 2, endLine: 4, text: expectedText }, untitled: undefined,
+        })
+        assert.equal(active.cursorLine, 4)
+        assert.ok(active.visible.startLine <= 2 && active.visible.endLine >= 4, JSON.stringify(active.visible))
+        assert.deepEqual(frame!.open.map((file) => file.path), [other], "the other tab, once, never the file in front")
+        // Errors before warnings, the file in front first: ours leads, the other file's warning follows.
+        const ours = frame!.diagnostics.filter((d) => d.source === "e2e" || d.message === "Unused export.")
+        assert.deepEqual(ours, [
+          { path: sample, line: 4, severity: "error", message: "Cannot find name 'totals'.", source: "e2e", code: "2304" },
+          { path: other, line: 1, severity: "warning", message: "Unused export." },
+        ])
+        assert.ok(frame!.problems.errors >= 1 && frame!.problems.warnings >= 1)
+
+        // A keystroke: the frame follows the text and the dirty flag.
+        await editor.edit((edit) => edit.insert(new vscode.Position(1, 0), "  // edited\n"))
+        await until("a dirty frame with the edited selection", async () => (await editorFrames()).at(-1)?.active?.dirty === true)
+
+        // Sharing off: one frame that says so and carries nothing; back on, the picture again.
+        await frizz.update("shareEditorState", false, vscode.ConfigurationTarget.Global)
+        await until("sharing off", async () => (await editorFrames()).at(-1)?.shared === false)
+        assert.deepEqual((await editorFrames()).at(-1), { t: "editor", shared: false, active: null, open: [], diagnostics: [], problems: { errors: 0, warnings: 0 } })
+        await frizz.update("shareEditorState", undefined, vscode.ConfigurationTarget.Global)
+        await until("sharing back on", async () => (await editorFrames()).at(-1)?.shared === true)
+
+        // A file whose name says it holds secrets: its lines go to the agents, its text never. (The page's
+        // half is the sidebar's context step below: no page is framed yet.)
+        const secret = await vscode.window.showTextDocument(await vscode.workspace.openTextDocument(envFile()), { preview: false })
+        secret.selection = new vscode.Selection(0, 0, 0, 24)
+        await until("the .env selection, withheld", async () => (await editorFrames()).at(-1)?.active?.selection?.withheld === true)
+        assert.deepEqual((await editorFrames()).at(-1)!.active!.selection, { startLine: 1, endLine: 1, withheld: true })
+        assert.ok(!JSON.stringify(await fakeLog()).includes(SECRET), "the key never reached the agents' frames")
+        assert.deepEqual((await fakeLog()).refused, [], "every editor frame is one the server's own schema takes")
+      } finally {
+        problems.dispose()
+        await frizz.update("shareEditorState", undefined, vscode.ConfigurationTarget.Global)
+        await vscode.commands.executeCommand("workbench.action.files.revert")
+        await vscode.commands.executeCommand("workbench.action.closeAllEditors")
+      }
+    },
+  },
+  {
+    name: "a worker's `editor` tool reads this window's selection and its problem through the real server",
+    modes: ["real"],
+    async run({ project }) {
+      if (!process.env.FRIZZ_E2E_MCP || !process.env.FRIZZ_E2E_SERVER_LOCK || !process.env.FRIZZ_E2E_NODE) return skip("needs the stack's lock; run with --stack")
+      const { editor, other, problems } = await agentScene()
+      try {
+        const expectedText = sampleLines(editor.document, 2, 4)
+        let text = ""
+        await until("the worker reading the selection", async () => (text = await workerReadsEditor(project.id)).includes(expectedText), 20_000)
+        console.log(`    the worker read:\n${text.replace(/^/gmu, "      ")}`)
+        assert.ok(text.includes(`In front: ${sample} (typescript), lines 2-4 selected.`), text)
+        assert.ok(text.includes(`\`\`\`typescript\n${expectedText}\n\`\`\``), "the selected text, verbatim, fenced")
+        assert.ok(text.includes(`${sample}\n  4: error: Cannot find name 'totals'. [e2e 2304]`), "the problem")
+        assert.ok(text.includes(`- ${other}`), "the other tab")
+        assert.match(text, /^Visual Studio Code \(/u)
+      } finally {
+        problems.dispose()
+        await vscode.commands.executeCommand("workbench.action.closeAllEditors")
+      }
     },
   },
   {
@@ -234,11 +529,19 @@ const steps: Step[] = [
     },
   },
   {
-    name: "Add to Frizz prompt hands the selection to Frizz for the page's prompt box",
+    name: "with the sidebar off, Add to Frizz prompt hands the selection to Frizz for the page's prompt box",
     modes: ["fake", "real"],
     async run({ project, rpc }) {
       const editor = await openSample([1, 0, 2])
-      const composed = await vscode.commands.executeCommand<EditorComposed | undefined>("frizz.addToPrompt")
+      // With the sidebar on, Add opens it (the sidebar steps below); off, it is the browser's path.
+      const frizz = vscode.workspace.getConfiguration("frizz")
+      await frizz.update("useSidebar", false, vscode.ConfigurationTarget.Global)
+      let composed: EditorComposed | undefined
+      try {
+        composed = await vscode.commands.executeCommand<EditorComposed | undefined>("frizz.addToPrompt")
+      } finally {
+        await frizz.update("useSidebar", undefined, vscode.ConfigurationTarget.Global)
+      }
       assert.equal(composed?.ok, true, JSON.stringify(composed))
       const expected = { projectId: project.id, path: sample, text: sampleLines(editor.document, 2, 3), startLine: 2, endLine: 3 }
       if (mode === "fake") {
@@ -283,6 +586,1054 @@ const steps: Step[] = [
       await until("connected again", () => api.status().kind === "connected")
     },
   },
+
+  // ── the sidebar ────────────────────────────────────────────────────────────────────────────────────
+  // Every step above ran with the sidebar never opened: Add to Frizz prompt with the setting off, and Ask
+  // and Send passing their text, which is sent directly whatever the sidebar does.
+  {
+    name: "Add to Frizz prompt opens the sidebar in a window that never had it, framing Frizz's page with the embed params, and lands there with the caret",
+    modes: ["fake"],
+    async run({ api, project }) {
+      assert.equal(api.sidebar().opened, false, "nothing has opened it yet")
+      const editor = await openSample([1, 0, 1])
+      const composed = await landsInSidebar(vscode.commands.executeCommand<EditorComposed | undefined>("frizz.addToPrompt"), "Add")
+      assert.equal(composed?.ok, true, JSON.stringify(composed))
+      assert.equal(api.sidebar().opened, true)
+      assert.equal(api.sidebar().ready, true)
+      assert.deepEqual(await pageReceived("frizz:compose"), [{
+        type: "frizz:compose",
+        id: composed!.id,
+        item: { projectId: project.id, path: sample, text: sampleLines(editor.document, 2, 2), startLine: 2, endLine: 2, app: vscode.env.appName },
+        target: "front",
+        focus: true,
+      }])
+      const query = embedQuery(project)
+      assert.equal(api.sidebar().url, `${control}/${query}`)
+      const log = await fakeLog()
+      assert.deepEqual(log.page.loads, [`/${query}`], "Frizz served the page once, with those params")
+      // Whatever the page reads from its URL, the theme follows once it is ready.
+      await until("the theme posted", async () => (await pageReceived("frizz:theme")).length > 0)
+      assert.ok(log.page.received.every((entry) => entry.origin.startsWith("vscode-webview://")), "everything reached the page from the sidebar's own document")
+    },
+  },
+  {
+    name: "the sidebar's badge is the workspace's Ready count",
+    modes: ["fake"],
+    async run({ api, project }) {
+      await fake("/__e2e/projects", { projects: [{ ...project, ready: 2, working: 0 }] })
+      await until("a badge of 2", () => api.sidebar().badge === 2)
+      await fake("/__e2e/projects", { projects: [{ ...project, ready: 0, working: 0 }] })
+      await until("no badge", () => api.sidebar().badge === undefined)
+    },
+  },
+  {
+    name: "Add to Frizz prompt puts the selection into the prompt box the sidebar shows, with the caret, not through Frizz",
+    modes: ["fake"],
+    async run({ api, project }) {
+      const editor = await openSample([1, 0, 2])
+      const before = await fakeLog()
+      const composed = await vscode.commands.executeCommand<EditorComposed | undefined>("frizz.addToPrompt")
+      assert.equal(composed?.ok, true, JSON.stringify(composed))
+      const composes = await pageReceived("frizz:compose", before.page.received.length)
+      assert.deepEqual(composes, [{
+        type: "frizz:compose",
+        id: composed!.id,
+        // The very item the server path carries (the step above), so the page writes the same chip.
+        item: { projectId: project.id, path: sample, text: sampleLines(editor.document, 2, 3), startLine: 2, endLine: 3, app: vscode.env.appName },
+        target: "front",
+        // The caret goes after the chip, as Cursor's Cmd+L and Frizz's own ⌘I put it.
+        focus: true,
+      }])
+      assert.equal((await fakeLog()).frames.filter((frame) => frame.t === "compose").length, before.frames.filter((frame) => frame.t === "compose").length, "nothing went to Frizz to hold")
+      assert.equal(api.sidebar().visible, true)
+      // Focus is in the sidebar now; the editor in front is still the one the selection came from.
+      assert.equal(vscode.window.activeTextEditor?.document.uri.fsPath, sample)
+    },
+  },
+  {
+    name: "Ask Frizz… opens the sidebar's new-thread box with the selection, and starts nothing itself",
+    modes: ["fake"],
+    async run({ project }) {
+      const editor = await openSample([1, 0, 3])
+      const before = await fakeLog()
+      const asked = await landsInSidebar(vscode.commands.executeCommand<{ composed?: EditorComposed } | undefined>("frizz.ask"), "Ask")
+      assert.equal(asked?.composed?.ok, true, JSON.stringify(asked))
+      assert.deepEqual(await pageReceived("frizz:compose", before.page.received.length), [{
+        type: "frizz:compose",
+        id: asked!.composed!.id,
+        item: { projectId: project.id, path: sample, text: sampleLines(editor.document, 2, 4), startLine: 2, endLine: 4, app: vscode.env.appName },
+        target: "new",
+        focus: true,
+      }])
+      assert.deepEqual((await fakeLog()).rpc.slice(before.rpc.length).map((call) => call.procedure), [], "no dispatch: the human writes the question in the sidebar")
+    },
+  },
+  {
+    name: "Send to Frizz thread… opens the picked thread in the sidebar with the selection in its reply box",
+    modes: ["fake"],
+    async run({ project }) {
+      const editor = await openSample([2, 0, 2])
+      const before = await fakeLog()
+      const sent = await landsInSidebar(vscode.commands.executeCommand<{ slug: string; composed?: EditorComposed } | undefined>("frizz.sendToThread", { thread: "@fake-thread" }), "Send")
+      assert.equal(sent?.composed?.ok, true, JSON.stringify(sent))
+      assert.deepEqual(await pageReceived("frizz:compose", before.page.received.length), [{
+        type: "frizz:compose",
+        id: sent!.composed!.id,
+        item: { projectId: project.id, path: sample, text: sampleLines(editor.document, 3, 3), startLine: 3, endLine: 3, app: vscode.env.appName },
+        target: { thread: "fake-thread", project: project.slug },
+        focus: true,
+      }])
+      assert.deepEqual((await fakeLog()).rpc.slice(before.rpc.length).map((call) => call.procedure), ["board"], "the picker's thread list, and no follow-up")
+    },
+  },
+  {
+    name: "a file the page links opens here at its position; a missing one is said, not opened",
+    modes: ["fake"],
+    async run({ api }) {
+      await vscode.commands.executeCommand("workbench.action.closeAllEditors")
+      await pagePosts({ type: "frizz:open-file", path: sample, line: 6, column: 3 })
+      await until("the sample in front", () => vscode.window.activeTextEditor?.document.uri.fsPath === sample)
+      const editor = vscode.window.activeTextEditor!
+      await until("the cursor at 6:3", () => editor.selection.isEmpty && editor.selection.active.line === 5 && editor.selection.active.character === 2)
+      await pagePosts({ type: "frizz:open-file", path: join(workspace, "nope.ts"), line: 1 })
+      await until("the missing file reported", () => api.sidebar().events.some((event) => event.type === "frizz:open-file" && event.outcome === "missing"))
+      assert.equal(vscode.window.activeTextEditor?.document.uri.fsPath, sample, "nothing else opened")
+    },
+  },
+  {
+    name: "a chord the page forwards runs its VS Code command; Ctrl+L there goes back to the editor",
+    modes: ["fake"],
+    async run({ api }) {
+      assert.equal(api.sidebar().visible, true)
+      const mac = process.platform === "darwin"
+      // The keys' own records, read by type: an earlier step's open can record its outcome after these.
+      const keys = () => api.sidebar().events.filter((event) => event.type === "frizz:key").map((event) => event.outcome)
+      let from = keys().length
+      // Ctrl+Shift+E (⌘⇧E): the Explorer takes the side bar, so the Frizz view is no longer visible.
+      await pagePosts({ type: "frizz:key", key: "E", code: "KeyE", ctrl: !mac, meta: mac, shift: true, alt: false })
+      await until("the explorer shown", () => !api.sidebar().visible)
+      assert.deepEqual(keys().slice(from), ["workbench.view.explorer"])
+      await vscode.commands.executeCommand("frizz.sidebar.focus")
+      await until("the sidebar back", () => api.sidebar().visible)
+
+      // Ctrl+L (⌘L) in the page goes back to the editor — the other half of Ctrl+L with nothing selected.
+      await until("the sidebar focused", async () => (await focusIn()) === "sidebar")
+      from = keys().length
+      await pagePosts({ type: "frizz:key", key: "l", code: "KeyL", ctrl: !mac, meta: mac, shift: false, alt: false })
+      await until("the editor focused", async () => (await focusIn()) === "editor")
+      assert.deepEqual(keys().slice(from), ["workbench.action.focusActiveEditorGroup"])
+      assert.equal(api.sidebar().visible, true, "the sidebar stays in sight")
+    },
+  },
+  {
+    name: "a message the sidebar does not know, a chord off its list, a link that is not a web page: nothing happens",
+    modes: ["fake"],
+    async run({ api }) {
+      await openSample()
+      const from = api.sidebar().events.length
+      const mac = process.platform === "darwin"
+      await pagePosts({ type: "frizz:bogus", path: sample })
+      // Ctrl+W would close the editor were it run.
+      await pagePosts({ type: "frizz:key", key: "w", code: "KeyW", ctrl: !mac, meta: mac, shift: false, alt: false })
+      await pagePosts({ type: "frizz:open-external", url: "javascript:alert(1)" })
+      await until("three messages handled", () => api.sidebar().events.length >= from + 3)
+      assert.deepEqual(api.sidebar().events.slice(from), [
+        { type: "frizz:bogus", outcome: "ignored" },
+        { type: "frizz:key", outcome: "ignored" },
+        { type: "frizz:open-external", outcome: "ignored" },
+      ])
+      assert.equal(vscode.window.activeTextEditor?.document.uri.fsPath, sample, "the editor is still open")
+      assert.equal(api.sidebar().visible, true)
+    },
+  },
+  {
+    name: "a theme change reaches the page",
+    modes: ["fake"],
+    async run() {
+      const workbench = vscode.workspace.getConfiguration("workbench")
+      const from = (await fakeLog()).page.received.length
+      const light = vscode.window.activeColorTheme.kind === vscode.ColorThemeKind.Light
+      await workbench.update("colorTheme", light ? "Default Dark Modern" : "Default Light Modern", vscode.ConfigurationTarget.Global)
+      try {
+        const want = light ? "dark" : "light"
+        await until(`frizz:theme ${want}`, async () => (await pageReceived("frizz:theme", from)).some((data) => data.theme === want))
+      } finally {
+        await workbench.update("colorTheme", undefined, vscode.ConfigurationTarget.Global)
+      }
+    },
+  },
+  // ── the editor in the sidebar ───────────────────────────────────────────────────────────────────────
+  {
+    name: "the page is told the editor's context: the file in front, its selection's lines, characters and text (or the caret's line), unsaved or untitled, the other open files most recent first",
+    modes: ["fake"],
+    async run({ api, project }) {
+      const a = workspaceFile("a.ts")
+      const b = workspaceFile("b.ts")
+      await vscode.commands.executeCommand("workbench.action.closeAllEditors")
+      // Not previews: each would take the last one's tab, and only one file would be open.
+      await vscode.window.showTextDocument(await vscode.workspace.openTextDocument(a), { preview: false })
+      await vscode.window.showTextDocument(await vscode.workspace.openTextDocument(b), { preview: false })
+      const editor = await vscode.window.showTextDocument(await vscode.workspace.openTextDocument(sample), { preview: false })
+      // Lines 2-3 dragged whole: the caret ends at column 1 of line 4, which is not in the selection.
+      editor.selection = new vscode.Selection(1, 0, 3, 0)
+      const document = editor.document
+      const chars = document.offsetAt(new vscode.Position(3, 0)) - document.offsetAt(new vscode.Position(1, 0))
+      const file = (path: string, label: string) => ({ path, label, projectId: project.id })
+      // The text a send from the sidebar would quote: lines 2-3 as the editor has them, with their newline.
+      const text = document.getText(new vscode.Range(1, 0, 3, 0)).replace(/\r\n?/gu, "\n")
+      assert.ok(text.includes("let total = 0") && text.includes("for (const x of xs)"), text)
+      const want = { type: "frizz:editor-context", active: { ...file(sample, "src/sample.ts"), selection: { startLine: 2, endLine: 3, chars, text } }, open: [file(b, "src/b.ts"), file(a, "src/a.ts")] }
+      await until("lines 2-3 of the sample in front, with b.ts and a.ts open", async () => isDeepStrictEqual((await contexts()).at(-1), want)).catch(async (error: unknown) => {
+        assert.deepEqual((await contexts()).at(-1), want)
+        throw error
+      })
+      assert.deepEqual(api.editorContext(), want)
+
+      // Multi-cursor: the primary selection's lines and text, every selection's characters.
+      editor.selections = [new vscode.Selection(4, 2, 4, 7), new vscode.Selection(0, 0, 0, 6)]
+      await until("line 5, 11 characters", async () => isDeepStrictEqual((await contexts()).at(-1)?.active?.selection, { startLine: 5, endLine: 5, chars: 11, text: "} // " }))
+
+      // A caret: no selection, and the caret's line instead — then a line further down is a new message.
+      editor.selection = new vscode.Selection(5, 3, 5, 3)
+      await until("the caret on line 6", async () => {
+        const last = (await contexts()).at(-1)?.active
+        return last?.cursorLine === 6 && last.selection === undefined
+      })
+      editor.selection = new vscode.Selection(2, 0, 2, 0)
+      await until("the caret on line 3", async () => (await contexts()).at(-1)?.active?.cursorLine === 3)
+
+      // a.ts in a second group too: still listed once, and first, being the most recent.
+      await vscode.window.showTextDocument(await vscode.workspace.openTextDocument(a), { viewColumn: vscode.ViewColumn.Two, preview: false })
+      await vscode.window.showTextDocument(document, { viewColumn: vscode.ViewColumn.One, preview: false })
+      await until("a.ts once, most recent first", async () => {
+        const last = (await contexts()).at(-1)
+        return last?.active?.path === sample && isDeepStrictEqual(last.open.map((entry) => entry.path), [a, b])
+      })
+
+      // An edit the human has not saved: the page is told, so the block can say the disk copy differs.
+      await editor.edit((edit) => edit.insert(new vscode.Position(0, 0), "// unsaved\n"))
+      await until("the sample, unsaved", async () => (await contexts()).at(-1)?.active?.dirty === true)
+      await vscode.commands.executeCommand("workbench.action.files.revert")
+      await until("the sample, saved again", async () => {
+        const last = (await contexts()).at(-1)?.active
+        return last?.path === sample && last.dirty === undefined
+      })
+
+      // Focus in the Output panel makes ITS editor VS Code's active text editor; the file the human was
+      // pointing at, still on screen, stays in front — no message blanks the bar.
+      const channel = vscode.window.createOutputChannel("frizz e2e")
+      try {
+        channel.appendLine("[info] built")
+        const settled = await received()
+        channel.show(false)
+        await until("the output pane in focus", () => vscode.window.activeTextEditor?.document.uri.scheme === "output")
+        await sleep(500)
+        assert.ok((await contexts(settled)).every((message) => message.active?.path === sample), "the sample stayed in front")
+        assert.deepEqual(api.editorContext()?.active?.path, sample)
+      } finally {
+        channel.dispose()
+        await vscode.commands.executeCommand("workbench.action.closePanel")
+      }
+
+      // A file whose name says it holds secrets: the page is told its lines, never its text.
+      const secret = await vscode.window.showTextDocument(await vscode.workspace.openTextDocument(envFile()), { viewColumn: vscode.ViewColumn.One, preview: false })
+      secret.selection = new vscode.Selection(0, 0, 0, 24)
+      await until("the page told the .env selection withheld", async () => (await contexts()).at(-1)?.active?.withheld === true)
+      assert.deepEqual((await contexts()).at(-1)!.active!.selection, { startLine: 1, endLine: 1, chars: 24 })
+      assert.ok(!JSON.stringify(await contexts()).includes(SECRET), "the key never reached the page")
+      await vscode.commands.executeCommand("workbench.action.closeActiveEditor")
+
+      // An untitled buffer is in front in its own right, named by its label, its caret's line told.
+      await vscode.window.showTextDocument(await vscode.workspace.openTextDocument({ content: "a scratch buffer\n" }), vscode.ViewColumn.One)
+      await until("an untitled buffer in front", async () => (await contexts()).at(-1)?.active?.untitled === true)
+      const scratch = (await contexts()).at(-1)!.active!
+      assert.match(scratch.path, /^Untitled-\d+$/u)
+      // Opened with text, it is unsaved from the start.
+      assert.deepEqual(scratch, { path: scratch.path, label: scratch.path, cursorLine: 1, untitled: true, dirty: true })
+      await vscode.commands.executeCommand("workbench.action.revertAndCloseActiveEditor")
+      await vscode.window.showTextDocument(document, vscode.ViewColumn.One)
+      await until("the sample back", async () => (await contexts()).at(-1)?.active?.path === sample)
+      // A diff: its working-tree side is the file in front (a git revision on the left never is).
+      await vscode.commands.executeCommand("vscode.diff", vscode.Uri.file(a), vscode.Uri.file(b), "a.ts ↔ b.ts")
+      await until("a diff's modified side in front", async () => (await contexts()).at(-1)?.active?.path === b)
+
+      // The text the page is told is the SELECTION's, never a file's: no message carried line 1 or line 7,
+      // which no selection above took in.
+      const told = JSON.stringify(await contexts())
+      assert.ok(!told.includes("export function sample") && !told.includes("return total"), "no unselected text reached the page")
+      await vscode.commands.executeCommand("workbench.action.closeAllEditors")
+    },
+  },
+  {
+    name: "a drag is one message, not one per line, and a context that ends where it started is not sent again",
+    modes: ["fake"],
+    async run() {
+      const editor = await openSample()
+      editor.selection = new vscode.Selection(0, 0, 0, 0)
+      await until("the sample with a caret", async () => {
+        const last = (await contexts()).at(-1)
+        return last?.active?.path === sample && !last.active.selection
+      })
+      const from = await received()
+      for (let line = 1; line <= 6; line++) {
+        editor.selection = new vscode.Selection(0, 0, line, 0)
+        await sleep(15)
+      }
+      await sleep(500)
+      const sent = await contexts(from)
+      assert.ok(sent.length >= 1 && sent.length <= 2, `${sent.length} messages for a six-step drag`)
+      assert.deepEqual(sent.at(-1)?.active?.selection?.endLine, 6)
+      const settled = await received()
+      editor.selection = new vscode.Selection(0, 0, 2, 0)
+      editor.selection = new vscode.Selection(0, 0, 6, 0)
+      await sleep(500)
+      assert.deepEqual(await contexts(settled), [], "the same context as last time")
+    },
+  },
+  {
+    name: "the page's context bar adds the selection, or a whole file, to the composer it shows; nothing when it is gone",
+    modes: ["fake"],
+    async run({ api, project }) {
+      const b = join(workspace, "src", "b.ts")
+      const editor = await openSample([1, 0, 3])
+      await until("the selection told", async () => (await contexts()).at(-1)?.active?.selection?.endLine === 4)
+      // What came of each add-context, as the sidebar recorded it (after the page answered the compose).
+      const added = () => api.sidebar().events.filter((event) => event.type === "frizz:add-context").map((event) => event.outcome)
+      const first = added().length
+      const from = await received()
+      await pagePosts({ type: "frizz:add-context", what: "selection" })
+      await pagePosts({ type: "frizz:add-context", what: "file", path: b })
+      await until("two composes", async () => (await pageReceived("frizz:compose", from)).length === 2)
+      const [selection, file] = (await pageReceived("frizz:compose", from)).map(({ id: _, ...rest }) => rest)
+      await until("both recorded", () => added().length >= first + 2)
+      assert.deepEqual(added().slice(first), ["composed", "composed"])
+      assert.deepEqual(selection, {
+        type: "frizz:compose",
+        item: { projectId: project.id, path: sample, text: sampleLines(editor.document, 2, 4), startLine: 2, endLine: 4, app: vscode.env.appName },
+        target: "front",
+        focus: true,
+      })
+      assert.deepEqual(file, { type: "frizz:compose", item: { projectId: project.id, path: b, app: vscode.env.appName }, target: "front", focus: true })
+
+      editor.selection = new vscode.Selection(2, 1, 2, 1)
+      await sleep(300)
+      const before = await received()
+      const outcomes = added().length
+      await pagePosts({ type: "frizz:add-context", what: "selection" })
+      await pagePosts({ type: "frizz:add-context", what: "file", path: join(workspace, "src", "gone.ts") })
+      await until("both answered", () => added().length >= outcomes + 2)
+      assert.deepEqual(added().slice(outcomes), ["nothing selected", "missing"])
+      assert.deepEqual(await pageReceived("frizz:compose", before), [])
+    },
+  },
+  {
+    name: "one switch: the page's eye is frizz.shareEditorState, and the agents' frame and the page's feed both follow it",
+    modes: ["fake"],
+    async run() {
+      const frizz = vscode.workspace.getConfiguration("frizz")
+      await openSample([1, 0, 2])
+      await until("the selection's text told", async () => (await contexts()).at(-1)?.active?.selection?.text !== undefined)
+      try {
+        // The eye, off: its `frizz:share-editor` writes the setting, and the agents' frame, the page's own
+        // feed (the lines without their text) and the eye (`frizz:host-state`) follow.
+        const from = await received()
+        await pagePosts({ type: "frizz:share-editor", on: false })
+        await until("the setting off", () => frizz.inspect<boolean>("shareEditorState")?.globalValue === false)
+        await until("the agents' frame off", async () => (await editorFrames()).at(-1)?.shared === false)
+        await until("the eye told", async () => (await pageReceived("frizz:host-state", from)).some((state) => state.shareEditor === false))
+        await until("the page told the lines alone", async () => {
+          const last = (await contexts(from)).at(-1)?.active?.selection
+          return last?.startLine === 2 && last.text === undefined
+        })
+        // On again from VS Code's side — the setting, as Settings or another window writes it: the eye follows.
+        const back = await received()
+        await frizz.update("shareEditorState", true, vscode.ConfigurationTarget.Global)
+        await until("the eye told it is on", async () => (await pageReceived("frizz:host-state", back)).some((state) => state.shareEditor === true))
+        await until("the agents' frame on", async () => (await editorFrames()).at(-1)?.shared === true)
+        await until("the page told the text again", async () => (await contexts(back)).at(-1)?.active?.selection?.text !== undefined)
+        // A workspace that sets its own value: the eye writes THERE, since a user-level write under it would change nothing.
+        await frizz.update("shareEditorState", true, vscode.ConfigurationTarget.Workspace)
+        await pagePosts({ type: "frizz:share-editor", on: false })
+        await until("the workspace's value off", () => frizz.inspect<boolean>("shareEditorState")?.workspaceValue === false)
+        assert.equal(frizz.inspect<boolean>("shareEditorState")?.globalValue, true, "the user's value untouched")
+        await until("the agents' frame off", async () => (await editorFrames()).at(-1)?.shared === false)
+      } finally {
+        await frizz.update("shareEditorState", undefined, vscode.ConfigurationTarget.Workspace)
+        await frizz.update("shareEditorState", undefined, vscode.ConfigurationTarget.Global)
+      }
+    },
+  },
+  {
+    name: "Ctrl+L (Cursor's) and Ctrl+I in the editor put the selection in the sidebar's prompt with the caret; with no selection Ctrl+L goes to the prompt box and Ctrl+I is VS Code's",
+    modes: ["fake"],
+    async run({ project }) {
+      // Ctrl+L LAST: VS Code shows a command's last-contributed binding in its menus and the palette.
+      assert.deepEqual(manifest().contributes.keybindings, [
+        { command: "frizz.addToPrompt", key: "ctrl+i", mac: "cmd+i", when: "editorTextFocus && editorHasSelection" },
+        { command: "frizz.addToPrompt", key: "ctrl+l", mac: "cmd+l", when: "editorTextFocus && editorHasSelection" },
+        { command: "frizz.focusPrompt", key: "ctrl+l", mac: "cmd+l", when: "editorTextFocus && !editorHasSelection && config.frizz.useSidebar" },
+        { command: "frizz.addSelectionOrFile", key: "alt+k", mac: "alt+k", when: "editorTextFocus && !frizz.claudeCodeInstalled" },
+      ])
+      const mod = process.platform === "darwin" ? "meta" : "ctrl"
+      for (const chord of [`${mod}+l`, `${mod}+i`]) {
+        const editor = await openSample([4, 0, 4])
+        await sleep(500)
+        const from = await received()
+        await press(chord)
+        await until(`${chord}'s chip in the page`, async () => (await pageReceived("frizz:compose", from)).length > 0, 15_000)
+        await sleep(300)
+        const composes = await pageReceived("frizz:compose", from)
+        assert.equal(composes.length, 1, `${chord}: one press, one chip`)
+        const [compose] = composes
+        assert.deepEqual({ ...compose, id: undefined }, {
+          type: "frizz:compose",
+          id: undefined,
+          item: { projectId: project.id, path: sample, text: sampleLines(editor.document, 5, 5), startLine: 5, endLine: 5, app: vscode.env.appName },
+          target: "front",
+          focus: true,
+        }, chord)
+      }
+
+      // A caret, no selection: nothing is added. Ctrl+L takes the human to the sidebar's prompt box (Cursor's
+      // "open the chat"), leaving the caret where it was; Ctrl+I stays VS Code's own.
+      // The selection crosses to the window's renderer, where `editorHasSelection` is kept, on its own
+      // channel; the key must not overtake it — hence the waits.
+      const caret = await openSample()
+      caret.selection = new vscode.Selection(5, 2, 5, 2)
+      await sleep(500)
+      let before = await received()
+      await press(`${mod}+l`)
+      await until("the page asked for its prompt box", async () => (await pageReceived("frizz:command", before)).some((message) => message.command === "prompt"), 15_000)
+      await until("the sidebar focused", async () => (await focusIn()) === "sidebar")
+      assert.deepEqual(await pageReceived("frizz:compose", before), [], "Ctrl+L with a caret adds nothing")
+      assert.deepEqual([caret.selection.active.line, caret.selection.active.character, caret.selection.isEmpty], [5, 2, true], "the caret untouched")
+
+      await openSample().then((editor) => (editor.selection = new vscode.Selection(5, 2, 5, 2)))
+      await sleep(500)
+      before = await received()
+      await press(`${mod}+i`)
+      await sleep(1_500)
+      assert.deepEqual(await pageReceived("frizz:compose", before), [], "Ctrl+I with a caret")
+      assert.deepEqual(await pageReceived("frizz:command", before), [], "Ctrl+I with a caret")
+      await press("escape")
+
+      // With the sidebar off, Ctrl+L with a caret is VS Code's again: it selects the caret's line.
+      const frizz = vscode.workspace.getConfiguration("frizz")
+      await frizz.update("useSidebar", false, vscode.ConfigurationTarget.Global)
+      try {
+        const line = await openSample()
+        line.selection = new vscode.Selection(5, 2, 5, 2)
+        await sleep(500)
+        before = await received()
+        await press(`${mod}+l`)
+        await until("VS Code's Ctrl+L selected the line", () => {
+          const { start, end } = line.selection
+          return isDeepStrictEqual([start.line, start.character, end.line, end.character], [5, 0, 6, 0])
+        })
+        assert.deepEqual(await pageReceived("frizz:command", before), [])
+      } finally {
+        await frizz.update("useSidebar", undefined, vscode.ConfigurationTarget.Global)
+      }
+    },
+  },
+  {
+    name: "Alt+K (Claude Code's) adds the selection, or with only a caret the whole file",
+    modes: ["fake"],
+    async run({ project }) {
+      const editor = await openSample([1, 0, 2])
+      await sleep(500)
+      let from = await received()
+      await press("alt+k")
+      await until("the selection's chip", async () => (await pageReceived("frizz:compose", from)).length > 0, 15_000)
+      await sleep(300)
+      assert.deepEqual((await pageReceived("frizz:compose", from)).map(({ id: _, ...rest }) => rest), [{
+        type: "frizz:compose",
+        item: { projectId: project.id, path: sample, text: sampleLines(editor.document, 2, 3), startLine: 2, endLine: 3, app: vscode.env.appName },
+        target: "front",
+        focus: true,
+      }])
+
+      // A caret only: the whole file, not the caret's line (which the palette's Add to Frizz prompt adds).
+      const caret = await openSample()
+      caret.selection = new vscode.Selection(3, 1, 3, 1)
+      await sleep(500)
+      from = await received()
+      await press("alt+k")
+      await until("the file's chip", async () => (await pageReceived("frizz:compose", from)).length > 0, 15_000)
+      await sleep(300)
+      assert.deepEqual((await pageReceived("frizz:compose", from)).map(({ id: _, ...rest }) => rest), [{
+        type: "frizz:compose",
+        item: { projectId: project.id, path: sample, app: vscode.env.appName },
+        target: "front",
+        focus: true,
+      }])
+    },
+  },
+  {
+    name: "a problem's quick fix asks Frizz to fix it: its lines in the prompt and the problem written after the chip",
+    modes: ["fake"],
+    async run({ project }) {
+      const diagnostics = vscode.languages.createDiagnosticCollection("frizz-e2e")
+      const frizz = vscode.workspace.getConfiguration("frizz")
+      try {
+        const editor = await openSample()
+        const uri = editor.document.uri
+        const problem = new vscode.Diagnostic(new vscode.Range(3, 4, 3, 9), "Cannot find name 'total'.", vscode.DiagnosticSeverity.Error)
+        problem.source = "ts"
+        problem.code = 2304
+        diagnostics.set(uri, [problem])
+        const fixes = async () => {
+          const actions = (await vscode.commands.executeCommand<vscode.CodeAction[]>("vscode.executeCodeActionProvider", uri, new vscode.Range(3, 6, 3, 6))) ?? []
+          return actions.filter((action) => action.title.startsWith("Ask Frizz to fix"))
+        }
+        let offered: vscode.CodeAction[] = []
+        await until("the fix offered", async () => (offered = await fixes()).length === 1)
+        assert.equal(offered[0]!.title, "Ask Frizz to fix")
+        assert.equal(offered[0]!.kind?.value, vscode.CodeActionKind.QuickFix.value)
+        const from = await received()
+        const command = offered[0]!.command!
+        await vscode.commands.executeCommand(command.command, ...(command.arguments ?? []))
+        const [compose] = await pageReceived("frizz:compose", from)
+        assert.deepEqual({ ...compose, id: undefined }, {
+          type: "frizz:compose",
+          id: undefined,
+          item: { projectId: project.id, path: sample, text: sampleLines(editor.document, 4, 4), startLine: 4, endLine: 4, app: vscode.env.appName },
+          target: "front",
+          focus: true,
+          note: "Fix: Cannot find name 'total'. ts(2304)",
+        })
+
+        // Two problems under the caret: one fix each, told apart by their messages.
+        const lint = new vscode.Diagnostic(new vscode.Range(3, 2, 3, 12), "Assignment to a loop's sum.", vscode.DiagnosticSeverity.Warning)
+        lint.source = "eslint"
+        lint.code = { value: "no-sum", target: vscode.Uri.parse("https://eslint.org/docs/rules/no-sum") }
+        diagnostics.set(uri, [problem, lint])
+        await until("two fixes", async () => (offered = await fixes()).length === 2)
+        assert.deepEqual(offered.map((action) => action.title).sort(), ["Ask Frizz to fix: Assignment to a loop's sum.", "Ask Frizz to fix: Cannot find name 'total'."])
+
+        // The sidebar off: nowhere for the problem's words to go, so nothing is offered.
+        await frizz.update("useSidebar", false, vscode.ConfigurationTarget.Global)
+        assert.deepEqual(await fixes(), [])
+      } finally {
+        diagnostics.dispose()
+        await frizz.update("useSidebar", undefined, vscode.ConfigurationTarget.Global)
+      }
+    },
+  },
+  {
+    name: "a tab's menu and the explorer add whole files — every file selected, never a folder",
+    modes: ["fake"],
+    async run({ project }) {
+      const menus = manifest().contributes.menus
+      assert.deepEqual(menus["editor/title/context"], [{ command: "frizz.addFileToPrompt", when: "resourceScheme == file", group: "frizz@1" }])
+      assert.ok(menus["explorer/context"]!.some((entry) => entry.command === "frizz.addFileToPrompt" && entry.when === "!explorerResourceIsFolder"))
+      const a = join(workspace, "src", "a.ts")
+      const b = join(workspace, "src", "b.ts")
+      const item = (path: string) => ({ type: "frizz:compose", item: { projectId: project.id, path, app: vscode.env.appName }, target: "front", focus: true })
+      const composes = async (from: number) => (await pageReceived("frizz:compose", from)).map(({ id: _, ...rest }) => rest)
+
+      // A tab's menu hands the command the tab's file and the group it is in.
+      let from = await received()
+      await vscode.commands.executeCommand("frizz.addFileToPrompt", vscode.Uri.file(a), { groupId: 0 })
+      assert.deepEqual(await composes(from), [item(a)])
+
+      // The explorer hands it the file right-clicked and everything selected, a folder among them.
+      from = await received()
+      await vscode.commands.executeCommand("frizz.addFileToPrompt", vscode.Uri.file(b), [vscode.Uri.file(a), vscode.Uri.file(b), vscode.Uri.file(join(workspace, "src"))])
+      assert.deepEqual(await composes(from), [item(a), item(b)])
+    },
+  },
+  {
+    name: "the terminal's menu adds its selection as @terminal, and the clipboard is the human's again after",
+    modes: ["fake"],
+    async run({ project }) {
+      assert.deepEqual(manifest().contributes.menus["terminal/context"], [
+        { command: "frizz.addTerminalSelection", when: "terminalTextSelected && config.frizz.useSidebar", group: "frizz@1" },
+        { command: "frizz.addTerminalOutput", when: "config.frizz.useSidebar", group: "frizz@2" },
+      ])
+      const clipboard = "the human's own clipboard"
+      await vscode.env.clipboard.writeText(clipboard)
+      const terminal = vscode.window.createTerminal({ name: "frizz e2e", shellPath: "/bin/sh" })
+      try {
+        terminal.show()
+        terminal.sendText("echo frizz-from-the-terminal")
+        // The echo's output, not a fixed beat: VS Code holds a new terminal until it has resolved the
+        // user's shell environment, which took over 10s on a loaded machine ("ptyHost was unable to resolve
+        // shell environment"), and 1.5s then selected an empty terminal. Read through the clipboard, which
+        // is the human's again before the step's own reading starts.
+        await terminal.processId
+        await until("the echo in the terminal", async () => {
+          await vscode.commands.executeCommand("workbench.action.terminal.selectAll")
+          await vscode.commands.executeCommand("workbench.action.terminal.copySelection")
+          return /frizz-from-the-terminal\s*\n.*frizz-from-the-terminal/su.test(await vscode.env.clipboard.readText())
+        }, 30_000)
+        await vscode.env.clipboard.writeText(clipboard)
+        await vscode.commands.executeCommand("workbench.action.terminal.selectAll")
+        const from = await received()
+        const composed = await vscode.commands.executeCommand<EditorComposed | undefined>("frizz.addTerminalSelection")
+        assert.equal(composed?.ok, true, JSON.stringify(composed))
+        const [compose] = await pageReceived("frizz:compose", from)
+        const item = compose!.item as { path: string; text: string; projectId?: string }
+        assert.equal(item.path, "terminal")
+        assert.equal(item.projectId, project.id)
+        assert.match(item.text, /frizz-from-the-terminal/u)
+        assert.deepEqual({ target: compose!.target, focus: compose!.focus }, { target: "front", focus: true })
+        assert.equal(await vscode.env.clipboard.readText(), clipboard, "the clipboard is as the human left it")
+
+        // Nothing selected: nothing added, and the clipboard still kept.
+        await vscode.commands.executeCommand("workbench.action.terminal.clearSelection")
+        const before = await received()
+        assert.equal(await vscode.commands.executeCommand("frizz.addTerminalSelection"), undefined)
+        assert.deepEqual(await pageReceived("frizz:compose", before), [])
+        assert.equal(await vscode.env.clipboard.readText(), clipboard)
+      } finally {
+        terminal.dispose()
+      }
+    },
+  },
+  {
+    name: "where the page is picks the title row's buttons and its counts ride the badge; the row itself still reads Frizz",
+    modes: ["fake"],
+    async run({ api, project }) {
+      await vscode.commands.executeCommand("frizz.sidebar.focus")
+      await fake("/__e2e/projects", { projects: [{ ...project, ready: 2, working: 0 }] })
+      await until("a badge of 2", () => api.sidebar().badge === 2)
+      await pagePosts({ type: "frizz:route", view: "thread", title: "fake-thread", description: "Waiting on you" })
+      await until("the thread's view and counts", () => api.sidebar().view === "thread" && api.sidebar().badgeTooltip === "Waiting on you")
+      let row = await titleRow()
+      await until("the thread's buttons", async () => (row = await titleRow()).buttons.includes("Back to queue"))
+      // VS Code re-cases a view's title ("Frizz: Fake-Thread"), so the page's names stay in the page.
+      assert.doesNotMatch(row.heading, /fake-thread/iu)
+      assert.deepEqual(row.buttons.filter((label) => !/More Actions/u.test(label)), ["Back to queue", "Jump to a thread", "Settings"])
+
+      await pagePosts({ type: "frizz:route", view: "queue", title: "", description: "2 ready" })
+      await until("the queue's view and counts", () => api.sidebar().view === "queue" && api.sidebar().badgeTooltip === "2 ready")
+      await until("the queue's buttons", async () => (row = await titleRow()).buttons.includes("New thread"))
+      assert.deepEqual(row.buttons.filter((label) => !/More Actions/u.test(label)), ["New thread", "Jump to a thread", "Settings"])
+      await fake("/__e2e/projects", { projects: [{ ...project, ready: 0, working: 0 }] })
+      await until("no badge", () => api.sidebar().badge === undefined)
+    },
+  },
+  {
+    name: "each title-row command opens its door in the page, bringing the sidebar back first when it was hidden",
+    modes: ["fake"],
+    async run({ api }) {
+      await vscode.commands.executeCommand("workbench.view.explorer")
+      await until("the sidebar hidden", () => !api.sidebar().visible)
+      let from = await received()
+      assert.equal(await vscode.commands.executeCommand("frizz.sidebar.jump"), true)
+      assert.equal(api.sidebar().visible, true)
+      for (const command of ["frizz.sidebar.newThread", "frizz.sidebar.queue", "frizz.sidebar.settings", "frizz.sidebar.shortcuts"]) assert.equal(await vscode.commands.executeCommand(command), true, command)
+      await until("five doors", async () => (await pageReceived("frizz:command", from)).length === 5)
+      assert.deepEqual((await pageReceived("frizz:command", from)).map((data) => data.command), ["jump", "new-thread", "queue", "settings", "shortcuts"])
+      // Keyboard shortcuts is under the row's ⋯ (the page's status row does not draw its ⌨ in the sidebar),
+      // with the other overflow entries, and only while a page says where it is.
+      const overflow = manifest().contributes.menus["view/title"]!.filter((item) => !item.group?.startsWith("navigation"))
+      assert.deepEqual(overflow.map((item) => item.command), ["frizz.sidebar.reload", "frizz.open", "frizz.sidebar.shortcuts"])
+      assert.equal(overflow.at(-1)!.when, "view == frizz.sidebar && frizz.sidebarView")
+
+      // The button itself, clicked with a mouse: the queue's row has New thread.
+      await pagePosts({ type: "frizz:route", view: "queue", title: "", description: "2 ready" })
+      await until("the New thread button", async () => (await titleRow()).buttons.includes("New thread"))
+      from = await received()
+      assert.equal(await click('.part.sidebar .title-actions .action-label[aria-label="New thread"]'), true, "the New thread button is in the title row")
+      await until("the click's door", async () => isDeepStrictEqual((await pageReceived("frizz:command", from)).map((data) => data.command), ["new-thread"]))
+    },
+  },
+  {
+    name: "a page that loads again starts with no title-row view and is told the editor's context at once",
+    modes: ["fake"],
+    async run({ api }) {
+      await openSample([2, 0, 2])
+      await until("line 3 told", async () => (await contexts()).at(-1)?.active?.selection?.startLine === 3)
+      const loads = (await fakeLog()).page.loads.length
+      const from = await received()
+      await vscode.commands.executeCommand("frizz.sidebar.reload")
+      await until("the new page ready", async () => (await fakeLog()).page.loads.length === loads + 1 && api.sidebar().ready, 30_000)
+      assert.equal(api.sidebar().view, "", "no page has said where it is yet")
+      await until("the context told to the new page", async () => (await contexts(from)).some((message) => message.active?.selection?.startLine === 3))
+    },
+  },
+  {
+    name: "a page that doesn't answer leaves Add to Frizz prompt to Frizz, and so does turning the setting off",
+    modes: ["fake"],
+    async run() {
+      await openSample([1, 0, 1])
+      const composes = async () => (await fakeLog()).frames.filter((frame) => frame.t === "compose").length
+      await fake("/__e2e/page-answer", { answer: "silent" })
+      try {
+        const before = await composes()
+        const composed = await vscode.commands.executeCommand<EditorComposed | undefined>("frizz.addToPrompt")
+        assert.equal(composed?.ok, true, JSON.stringify(composed))
+        assert.equal(await composes(), before + 1, "after the page's silence, Frizz holds it for a page to claim")
+      } finally {
+        await fake("/__e2e/page-answer", { answer: "ok" })
+      }
+
+      const frizz = vscode.workspace.getConfiguration("frizz")
+      await frizz.update("useSidebar", false, vscode.ConfigurationTarget.Global)
+      try {
+        const before = await composes()
+        const pageBefore = (await fakeLog()).page.received.length
+        const composed = await vscode.commands.executeCommand<EditorComposed | undefined>("frizz.addToPrompt")
+        assert.equal(composed?.ok, true)
+        assert.equal(await composes(), before + 1)
+        assert.deepEqual(await pageReceived("frizz:compose", pageBefore), [], "the open sidebar was left alone")
+      } finally {
+        await frizz.update("useSidebar", undefined, vscode.ConfigurationTarget.Global)
+      }
+    },
+  },
+  {
+    name: "review: Frizz's push (a browser's Review changes) opens a worktree's branch as one multi-file diff and says this window can",
+    modes: ["fake"],
+    async run({ api }) {
+      const repo = reviewRepo()
+      // The window told this Frizz it can review — only because its welcome named the feature.
+      const features = (await fakeLog()).frames.filter((frame) => frame.t === "features")
+      assert.deepEqual(features.at(-1), { t: "features", features: ["review"] })
+      await vscode.commands.executeCommand("workbench.action.closeAllEditors")
+      const result = await fake<{ t: string; ok: boolean; error?: string }>("/__e2e/review", { title: "Tidy the loop", checkouts: [{ dir: repo.worktree, scope: "branch", files: repo.edited }] })
+      assert.deepEqual({ ok: result.ok, error: result.error }, { ok: true, error: undefined })
+      await assertReviewInFront(api, repo, "Tidy the loop")
+      await assertReviewDrawn(repo, reviewShot("review-pushed"))
+    },
+  },
+  {
+    name: "review: the sidebar's page names a thread (frizz:review), and the extension asks Frizz what it changed",
+    modes: ["fake"],
+    async run({ api, project }) {
+      const repo = reviewRepo()
+      await fake("/__e2e/review-target", { target: { title: "Fake thread", checkouts: [{ dir: repo.worktree, scope: "branch", files: [] }] } })
+      await vscode.commands.executeCommand("workbench.action.closeAllEditors")
+      const asked = (await fakeLog()).rpc.length
+      const events = api.sidebar().events.length
+      await pagePosts({ type: "frizz:review", thread: "fake-thread", project: project.slug, title: "Tidy the loop from the sidebar" })
+      await until("the review opened", () => api.sidebar().events.slice(events).some((event) => event.type === "frizz:review"), 20_000)
+      assert.deepEqual(api.sidebar().events.slice(events).filter((event) => event.type === "frizz:review"), [{ type: "frizz:review", outcome: "opened" }])
+      assert.deepEqual((await fakeLog()).rpc.slice(asked).filter((call) => call.procedure === "reviewTarget").map((call) => ({ projectId: call.projectId, input: call.input })), [
+        { projectId: project.id, input: { slug: "fake-thread", title: "Tidy the loop from the sidebar" } },
+      ], "the page named the thread, Frizz named the folder")
+      await assertReviewInFront(api, repo, "Tidy the loop from the sidebar")
+      // A page message naming a folder instead of a thread is not a review.
+      const before = api.sidebar().events.length
+      await pagePosts({ type: "frizz:review", thread: "../../etc", project: project.slug })
+      await until("the refusal recorded", () => api.sidebar().events.length > before)
+      assert.equal(api.sidebar().events.at(-1)?.outcome, "ignored")
+    },
+  },
+  {
+    name: "review: from the palette by thread; nothing to compare is said, not opened",
+    modes: ["fake"],
+    async run({ api }) {
+      const repo = reviewRepo()
+      await fake("/__e2e/review-target", { target: { title: "Fake thread", checkouts: [{ dir: repo.worktree, scope: "branch", files: [] }] } })
+      await vscode.commands.executeCommand("workbench.action.closeAllEditors")
+      assert.equal(await vscode.commands.executeCommand("frizz.reviewThread", { thread: "fake-thread" }), "opened")
+      await assertReviewInFront(api, repo, "Fake thread")
+
+      // The project folder's review is the thread's own files' UNCOMMITTED changes: loop.ts is committed there.
+      const shown = api.review()
+      const clean = await fake<{ ok: boolean; error?: string }>("/__e2e/review", { title: "Clean", checkouts: [{ dir: repo.dir, scope: "files", files: [join(repo.dir, "src", "loop.ts")] }] })
+      assert.deepEqual({ ok: clean.ok, error: clean.error }, { ok: false, error: "The files this thread edited have no uncommitted changes." })
+      const plain = realpathSync(mkdtempSync(join(tmpdir(), "frizz-e2e-not-a-repo-")))
+      const notRepo = await fake<{ ok: boolean; error?: string }>("/__e2e/review", { title: "Plain", checkouts: [{ dir: plain, scope: "branch", files: [] }] })
+      assert.equal(notRepo.ok, false)
+      assert.match(notRepo.error ?? "", /isn't a git repository/)
+      assert.equal(api.review(), shown, "neither opened anything")
+      assert.match(vscode.window.tabGroups.activeTabGroup.activeTab?.label ?? "", /^Changes in Fake thread( \(5 files\))?$/u)
+    },
+  },
+  {
+    name: "review: a thread that worked in a worktree — Frizz reads its edits there, and Review changes opens them here",
+    modes: ["real"],
+    async run({ api, project, rpc }) {
+      const raw = process.env.FRIZZ_E2E_REVIEW
+      if (!raw) return skip("needs the stack's seeded thread (scripts/e2e.ts --stack)")
+      const seeded = JSON.parse(raw) as SeededReview
+      // The server's own reading: the worktree is the checkout, its scope the whole branch, and the files
+      // the agent wrote there are the edited files — before 11f327a0 the rail read every one as ignored.
+      const target = await rpc.query(project.id, "reviewTarget", { slug: seeded.slug })
+      assert.deepEqual(target.checkouts.map(({ dir, scope }) => ({ dir, scope })), [{ dir: seeded.repo.worktree, scope: "branch" }], JSON.stringify(target))
+      assert.deepEqual(target.checkouts[0]!.files, seeded.repo.edited, "the worktree's edits, newest first")
+      const windows = await rpc.query(project.id, "editorWindows")
+      assert.ok(windows.windows.some((window) => window.reviews && window.app === vscode.env.appName), `this window says it can review: ${JSON.stringify(windows)}`)
+      await vscode.commands.executeCommand("workbench.action.closeAllEditors")
+      // What a browser tab's ⋯ Review changes calls.
+      assert.deepEqual(await rpc.mutation(project.id, "reviewInEditor", { slug: seeded.slug, title: seeded.title }), { ok: true })
+      await assertReviewInFront(api, seeded.repo, seeded.title)
+    },
+  },
+  {
+    name: "the hello names this build, the status bar's tooltip says it, and a new build on disk is offered as a reload",
+    modes: ["fake"],
+    async run({ api }) {
+      // Built by scripts/build.ts, so it names its commit (and whether the tree was dirty).
+      assert.match(api.build, /^\d+\.\d+\.\d+\+[0-9a-f]{8}(-dirty)?$/u)
+      const hello = (await fakeLog()).frames.find((frame) => frame.t === "hello")
+      assert.equal(hello?.t === "hello" ? hello.extensionVersion : undefined, api.build)
+      assert.ok(api.statusBar().tooltip.includes(`Frizz extension ${api.build}`), api.statusBar().tooltip)
+      // The same build reinstalled in place (`--install-extension --force`) is a new id under the folder
+      // this window loaded from; the window offers to reload into it.
+      const file = join(vscode.extensions.getExtension("ssalbdivad.frizz-vscode")!.extensionPath, "dist", "build.json")
+      const original = readFileSync(file, "utf8")
+      try {
+        const next = { ...(JSON.parse(original) as { version: string; dirty?: boolean }), id: randomUUID(), commit: "0badc0de" }
+        writeFileSync(file, JSON.stringify(next))
+        const label = `${next.version}+0badc0de${next.dirty ? "-dirty" : ""}`
+        await until("the reload offer", () => api.reloadOffered() === label, 15_000)
+        await until("its toast, with Reload window", () => workbench<boolean>(`[...document.querySelectorAll(".notification-toast")].some((toast) => toast.textContent.includes(${JSON.stringify(`updated to ${label}. Reload the window to use it.`)}) && toast.textContent.includes("Reload window"))`))
+      } finally {
+        writeFileSync(file, original)
+        await vscode.commands.executeCommand("notifications.clearAll")
+      }
+    },
+  },
+  {
+    name: "a thread that needs you while the sidebar is out of sight is a notification here, and its Open shows the thread in the sidebar",
+    modes: ["fake"],
+    async run({ api, project }) {
+      assert.ok((await fakeLog()).frames.some((frame) => frame.t === "listen" && frame.attention), "the window asks to be told")
+      await vscode.commands.executeCommand("notifications.clearAll")
+      await vscode.commands.executeCommand("frizz.sidebar.focus")
+      await until("the sidebar in sight and ready", () => api.sidebar().visible && api.sidebar().ready, 30_000)
+      const before = api.notifications().length
+      const attention = (id: string, title: string, body: string) =>
+        fake("/__e2e/attention", { message: { projectId: project.id, thread: { id, title }, needs: "question", body } })
+
+      // In sight, the card is in front of the human already: no toast.
+      await attention("fake-thread", "Fake thread", "Which branch?")
+      await sleep(500)
+      assert.equal(api.notifications().length, before)
+
+      await vscode.commands.executeCommand("workbench.view.explorer")
+      await until("the sidebar out of sight", () => !api.sidebar().visible)
+      await attention("other-thread", "Other thread", "Which branch should I merge into?")
+      await until("the notification", () => api.notifications().length === before + 1)
+      // Named as the board names it: the thread's handle (threads.ts displayTitle).
+      assert.equal(api.notifications().at(-1), "other-thread has a question: Which branch should I merge into?")
+
+      // Open, pressed with a real mouse on the toast's own button.
+      const from = await received()
+      await until("the toast's Open", () => workbench<boolean>(`(() => {
+        const open = [...document.querySelectorAll(".notification-toast .monaco-button")].find((button) => button.textContent.trim() === "Open")
+        open?.setAttribute("data-e2e-open", "")
+        return Boolean(open)
+      })()`))
+      // The toast slides in: the button is clicked where it comes to rest, as a hand would, and again
+      // if the first press found it still moving.
+      const shown = async () => api.sidebar().visible && (await pageReceived("frizz:navigate", from)).length > 0
+      for (let attempt = 0; attempt < 3 && !(await shown()); attempt++) {
+        await sleep(800)
+        if (await workbench<boolean>(`Boolean(document.querySelector("[data-e2e-open]"))`)) assert.ok(await click("[data-e2e-open]"))
+        await until("the thread shown in the sidebar", shown, 5_000).catch(() => undefined)
+      }
+      await until("the thread shown in the sidebar", shown, 10_000)
+      assert.deepEqual((await pageReceived("frizz:navigate", from))[0], { type: "frizz:navigate", to: { thread: "other-thread", project: project.slug } })
+
+      // frizz.notify off: the window tells Frizz it is not listening, and shows nothing.
+      const frizz = vscode.workspace.getConfiguration("frizz")
+      const listens = async () => (await fakeLog()).frames.filter((frame) => frame.t === "listen").map((frame) => frame.t === "listen" && frame.attention)
+      try {
+        await frizz.update("notify", false, vscode.ConfigurationTarget.Global)
+        await until("listen off", async () => (await listens()).at(-1) === false)
+        await vscode.commands.executeCommand("workbench.view.explorer")
+        await until("the sidebar out of sight", () => !api.sidebar().visible)
+        await attention("third-thread", "Third thread", "Anything?")
+        await sleep(500)
+        assert.equal(api.notifications().length, before + 1)
+      } finally {
+        await frizz.update("notify", undefined, vscode.ConfigurationTarget.Global)
+      }
+      await until("listen on again", async () => (await listens()).at(-1) === true)
+      await vscode.commands.executeCommand("notifications.clearAll")
+      await vscode.commands.executeCommand("frizz.sidebar.focus")
+    },
+  },
+  {
+    name: "a Frizz from before the sidebar is named as the cause at once, not after the 20s wait",
+    modes: ["fake"],
+    async run({ api }) {
+      const hellos = async () => (await fakeLog()).frames.filter((frame) => frame.t === "hello").length
+      const reconnect = async () => {
+        const count = await hellos()
+        await fake("/__e2e/drop")
+        await until("hello again", async () => (await hellos()) > count && api.status().kind === "connected", 30_000)
+      }
+      await vscode.commands.executeCommand("frizz.sidebar.focus")
+      try {
+        await fake("/__e2e/features", { features: [], ready: false })
+        await reconnect()
+        const started = Date.now()
+        await vscode.commands.executeCommand("frizz.sidebar.reload")
+        await until("the bar naming an old Frizz", () => api.sidebar().hint === HINT_OLD_FRIZZ, 8_000)
+        assert.ok(Date.now() - started < 8_000)
+        assert.equal(api.sidebar().ready, false)
+      } finally {
+        await fake("/__e2e/features", { features: Object.values(EDITOR_FEATURES), ready: true })
+        await reconnect()
+        await vscode.commands.executeCommand("frizz.sidebar.reload")
+      }
+      await until("the page ready again, no bar", () => api.sidebar().ready && !api.sidebar().hinted, 30_000)
+    },
+  },
+  {
+    name: "the page's `@` finds the workspace's files as the editor lists them, and a drop resolves to files and folders on disk",
+    modes: ["fake"],
+    async run({ api, project }) {
+      const excluded = join(workspace, "src", "excluded")
+      const built = join(workspace, "build")
+      mkdirSync(excluded, { recursive: true })
+      mkdirSync(built, { recursive: true })
+      writeFileSync(join(excluded, "sample-copy.ts"), "export {}\n")
+      writeFileSync(join(built, "sample-out.ts"), "export {}\n")
+      const search = vscode.workspace.getConfiguration("search")
+      const files = vscode.workspace.getConfiguration("files")
+      await search.update("exclude", { "**/excluded": true }, vscode.ConfigurationTarget.Workspace)
+      await files.update("exclude", { "**/build": true }, vscode.ConfigurationTarget.Workspace)
+      const picks = async (id: string, request: { query: string } | { uris: string[] }): Promise<EmbedPickedFile[]> => {
+        const from = await received()
+        await pagePosts({ type: "frizz:pick-context", id, ...request })
+        let answer: EmbedContextPicksMessage | undefined
+        await until(`the answer to ${id}`, async () => {
+          answer = (await pageReceived("frizz:context-picks", from)).find((message) => message.id === id) as EmbedContextPicksMessage | undefined
+          return answer !== undefined
+        })
+        return answer!.files
+      }
+      try {
+        await openSample()
+        const own = { path: sample, label: "src/sample.ts", projectId: project.id }
+        // search.exclude and files.exclude both hold: neither copy is offered.
+        assert.deepEqual(await picks("q1", { query: "sample" }), [own])
+        assert.deepEqual(await picks("q2", { query: "src/samp" }), [own])
+        // An empty `@` offers the open tabs, the one in front first.
+        assert.deepEqual((await picks("q3", { query: "" }))[0], own)
+        // A drop: a file and a folder on disk, as VS Code's explorer carries them; an untitled buffer and a
+        // file that is gone are not on disk, and are left out.
+        const dropped = await picks("d1", { uris: [vscode.Uri.file(sample).toString(), vscode.Uri.file(join(workspace, "src")).toString(), "untitled:Untitled-1", vscode.Uri.file(join(workspace, "gone.ts")).toString()] })
+        assert.deepEqual(dropped, [own, { path: join(workspace, "src"), label: "src", projectId: project.id, folder: true }])
+        assert.deepEqual(api.sidebar().events.filter((event) => event.type === "frizz:pick-context").slice(-1), [{ type: "frizz:pick-context", outcome: "2 dropped" }])
+      } finally {
+        await search.update("exclude", undefined, vscode.ConfigurationTarget.Workspace)
+        await files.update("exclude", undefined, vscode.ConfigurationTarget.Workspace)
+        rmSync(excluded, { recursive: true, force: true })
+        rmSync(built, { recursive: true, force: true })
+      }
+    },
+  },
+  {
+    name: "the page is told the file's problems and the terminal's last command, and adding either puts one chip in the box",
+    modes: ["fake"],
+    async run({ api, project }) {
+      const menus = manifest().contributes.menus
+      assert.ok(menus["frizz.editor"]!.some((entry) => entry.command === "frizz.addProblems"))
+      assert.ok(menus["terminal/context"]!.some((entry) => entry.command === "frizz.addTerminalOutput"))
+      const editor = await openSample()
+      const problems = vscode.languages.createDiagnosticCollection("frizz-e2e-extras")
+      try {
+        const error = new vscode.Diagnostic(new vscode.Range(3, 4, 3, 9), "Cannot find name 'totals'.", vscode.DiagnosticSeverity.Error)
+        error.source = "ts"
+        error.code = 2304
+        const warning = new vscode.Diagnostic(new vscode.Range(1, 6, 1, 11), "'total' is never reassigned.", vscode.DiagnosticSeverity.Warning)
+        problems.set(editor.document.uri, [warning, error])
+        await until("the counts told", async () => {
+          const told = (await pageReceived("frizz:editor-extras")).at(-1) as { problems?: unknown } | undefined
+          return isDeepStrictEqual(told?.problems, { label: "src/sample.ts", errors: 1, warnings: 1, infos: 0 })
+        })
+        const text = "Problems in src/sample.ts: 1 error, 1 warning\n4:5 error Cannot find name 'totals'. ts(2304)\n2:7 warning 'total' is never reassigned."
+        const from = await received()
+        await pagePosts({ type: "frizz:add-context", what: "problems" })
+        await until("the problems composed", async () => (await pageReceived("frizz:compose", from)).length === 1)
+        const [compose] = await pageReceived("frizz:compose", from)
+        assert.deepEqual(compose!.item, { path: "problems", text, projectId: project.id, app: vscode.env.appName })
+        // The palette's command lands the same chip.
+        const composed = await vscode.commands.executeCommand<EditorComposed | undefined>("frizz.addProblems")
+        assert.equal(composed?.ok, true)
+      } finally {
+        problems.dispose()
+      }
+      await until("no problems told", () => api.editorExtras()?.problems === undefined)
+
+      const clipboard = "the human's own clipboard"
+      await vscode.env.clipboard.writeText(clipboard)
+      const terminal = vscode.window.createTerminal({ name: "frizz e2e last command", shellPath: "/bin/bash" })
+      // Not `in vscode.window`: before 1.93 the name is there, as a proposal whose getter throws.
+      const [major, minor] = vscode.version.split(".").map(Number) as [number, number]
+      const executions = major > 1 || minor >= 93
+      try {
+        terminal.show()
+        await terminal.processId
+        let item: { path: string; text: string } | undefined
+        if (executions) {
+          // VS Code 1.93+: shell integration hands each command over as it runs, with its output.
+          const integrated = terminal as vscode.Terminal & { shellIntegration?: { executeCommand(command: string): unknown } }
+          await until("shell integration", () => integrated.shellIntegration !== undefined, 30_000)
+          integrated.shellIntegration!.executeCommand("echo frizz-last-command")
+          await until("the command told", () => api.editorExtras()?.terminal?.command === "echo frizz-last-command" && api.editorExtras()?.terminal?.exitCode === 0, 30_000)
+          const from = await received()
+          await pagePosts({ type: "frizz:add-context", what: "terminal" })
+          await until("the command composed", async () => (await pageReceived("frizz:compose", from)).length === 1)
+          item = (await pageReceived("frizz:compose", from))[0]!.item as { path: string; text: string }
+          assert.deepEqual(item, { path: "terminal", text: "$ echo frizz-last-command\nfrizz-last-command\n(exit code 0)", projectId: project.id, app: vscode.env.appName })
+        } else {
+          // Before 1.93 there is no such API: the terminal's own Copy Last Command and Copy Last Command
+          // Output, through a borrowed clipboard. The menu offers the entry while a terminal is open; adding
+          // is retried until shell integration has seen the command.
+          await until("the page told a terminal is open", async () => (await pageReceived("frizz:editor-extras")).some((told) => "terminal" in told), 30_000)
+          terminal.sendText("echo frizz-last-command")
+          let from = 0
+          await until("the command added", async () => {
+            from = await received()
+            return (await vscode.commands.executeCommand<EditorComposed | undefined>("frizz.addTerminalOutput"))?.ok === true
+          }, 30_000)
+          item = (await pageReceived("frizz:compose", from))[0]!.item as { path: string; text: string }
+          assert.equal(item.path, "terminal")
+          assert.match(item.text, /^\$ echo frizz-last-command\nfrizz-last-command/u)
+        }
+        assert.equal(await vscode.env.clipboard.readText(), clipboard, "the clipboard is as the human left it")
+      } finally {
+        terminal.dispose()
+        await vscode.commands.executeCommand("notifications.clearAll")
+      }
+    },
+  },
+  {
+    name: "Frizz on a new port re-frames the sidebar there; a page that never loads offers Reload; no Frizz at all says so",
+    modes: ["fake"],
+    async run({ api, project }) {
+      const frizz = vscode.workspace.getConfiguration("frizz")
+      try {
+        await frizz.update("serverUrl", elsewhere, vscode.ConfigurationTarget.Global)
+        await until("the frame on the new port, ready", () => api.sidebar().url === `${elsewhere}/${embedQuery(project)}` && api.sidebar().ready, 30_000)
+        assert.deepEqual((await fakeLog(elsewhere)).page.loads, [`/${embedQuery(project)}`])
+        assert.equal(api.sidebar().hinted, false)
+
+        // The setting is taken at its word, so the frame goes to port 1, where nothing listens; its
+        // page never says it is ready, and the view offers Reload and Open in browser over it.
+        await frizz.update("serverUrl", "http://127.0.0.1:1", vscode.ConfigurationTarget.Global)
+        await until("the frame on port 1", () => api.sidebar().url === `http://127.0.0.1:1/${embedQuery(project)}`)
+        assert.equal(api.sidebar().ready, false)
+        // The view waits 20s for a page to say it is ready (src/sidebar.ts READY_HINT_MS; 10s until a Frizz
+        // run from source took 13s and 42s to load on a busy machine), so the hint comes after that.
+        await until("the hint", () => api.sidebar().hinted, 30_000)
+
+        // No address at all: discovery finds nothing. The page that was showing stays until Reload, which
+        // then says why there is nothing to show.
+        await frizz.update("serverUrl", "not an address", vscode.ConfigurationTarget.Global)
+        await until("offline", () => api.status().kind === "offline")
+        await new Promise((resolve) => setTimeout(resolve, 500))
+        assert.equal(api.sidebar().url, `http://127.0.0.1:1/${embedQuery(project)}`)
+        await vscode.commands.executeCommand("frizz.sidebar.reload")
+        // Reload looks again first ("Looking for Frizz…"), then says what it found.
+        await until("a message instead of the page", () => api.sidebar().url === undefined && api.sidebar().message === "Frizz isn't running.")
+      } finally {
+        await frizz.update("serverUrl", control, vscode.ConfigurationTarget.Global)
+      }
+      await until("the frame back on the first Frizz, ready", () => api.sidebar().url === `${control}/${embedQuery(project)}` && api.sidebar().ready, 30_000)
+      assert.equal(api.sidebar().hinted, false)
+    },
+  },
 ]
 
 class Skipped extends Error {}
@@ -312,8 +1663,16 @@ export async function run(): Promise<void> {
 
   const failures: string[] = []
   try {
+    // FRIZZ_E2E_ONLY=<part of a step's name>[|<another>…] runs just those steps; the sidebar steps lean on a sidebar the
+    // earlier ones opened, so it is opened for them first.
+    const only = process.env.FRIZZ_E2E_ONLY
+    if (only && mode === "fake") {
+      await vscode.commands.executeCommand("frizz.sidebar.focus")
+      await until("the sidebar's page ready", () => api.sidebar().ready, 30_000)
+    }
     for (const step of steps) {
       if (!step.modes.includes(mode)) continue
+      if (only && !only.split("|").some((part) => step.name.includes(part))) continue
       try {
         await step.run({ api, project, rpc })
         console.log(`  ✔ ${step.name}`)

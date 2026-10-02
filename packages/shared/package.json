@@ -6,7 +6,8 @@
   "exports": {
     ".": "./src/index.ts",
     "./editor-protocol": "./src/editor-protocol.ts",
-    "./file-position": "./src/file-position.ts"
+    "./file-position": "./src/file-position.ts",
+    "./embed-protocol": "./src/embed-protocol.ts"
   },
   "dependencies": {
     "yaml": "^2.9",

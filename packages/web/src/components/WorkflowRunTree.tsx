@@ -73,7 +73,7 @@ function WorkflowAgentRow({ slug, agent, now }: { slug: string; agent: WorkflowA
       data-workflow-agent={agent.id}
       onClick={() => pushSubAgentDrawer(slug, agent.id, { label: agent.label, startedAt: agent.startedAt })}
       title="Open agent transcript"
-      className="group -mx-2 flex min-w-0 items-center gap-1 rounded-md px-2 py-1 text-left text-[13px] outline-none transition-colors hover:bg-panel-2/60 focus-visible:ring-1 focus-visible:ring-inset focus-visible:ring-focus-ink-60"
+      className="group -mx-2 flex min-w-0 items-center gap-1 rounded-md px-2 py-1 text-left text-[13px] outline-none transition-colors hover:bg-panel-2/60 focus-visible:inset-ring-1 focus-visible:inset-ring-focus-ink-60"
     >
       <span className="flex w-3 shrink-0 items-center justify-center">{mark}</span>
       <span className={`min-w-0 truncate ${live ? "text-fg/85" : "text-muted-70"} group-hover:text-fg group-hover:underline`}>{subAgentName(agent.label)}</span>

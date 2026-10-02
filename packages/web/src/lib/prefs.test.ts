@@ -61,3 +61,11 @@ test("code files are automatic by default; a stored In Frizz from before is the 
   // A fresh browser carries the marker from its first write, so its own later "In Frizz" sticks too.
   assert.equal(parseStoredPrefs(JSON.stringify({ ...parseStoredPrefs(null), codeFiles: "frizz" })).codeFiles, "frizz")
 })
+
+test("the context bar's eye is no longer a pref: a stored value is dropped and everything else kept", () => {
+  // It is the extension's frizz.shareEditorState now (lib/editorContext.ts setShareEditor).
+  assert.equal("sendEditorContext" in parseStoredPrefs(null), false)
+  const older = parseStoredPrefs(JSON.stringify({ sendEditorContext: false, queueOrder: "lifo", diffsRedefaulted: true }))
+  assert.equal("sendEditorContext" in older, false)
+  assert.equal(older.queueOrder, "lifo")
+})

@@ -1,7 +1,7 @@
 import { spawn, type SpawnOptions } from "node:child_process"
 import { existsSync, readFileSync, realpathSync, statSync } from "node:fs"
 import { homedir } from "node:os"
-import { dirname, isAbsolute, join, posix, resolve, sep } from "node:path"
+import { dirname, isAbsolute, join, posix, relative, resolve, sep } from "node:path"
 import { goToArgument, splitFilePosition, type EditorKind, type FilePosition, type LocalFileOpener } from "@frizz/shared"
 import { normalizeLocalPath } from "./local-path.ts"
 
@@ -87,11 +87,15 @@ export function resolveLocalFileAt(rawPath: string, roots: readonly string[]): {
 // dir (so a repo-relative `packages/web/App.tsx` works). A trailing `:line[:col]` (editor cursor
 // suffix) is dropped. Returns null rather than throwing so a batch resolver can score many candidates
 // cheaply; the same realpath + containment + is-file gate as resolveLocalFile keeps it confined.
+//
+// `settle` is the caller's last word on an absolute path before the gate — the router's worktree fallback
+// (`mainCheckoutCopy`), which turns a file of a removed worktree into the main checkout's copy.
 export function resolveOpenableFile(
   raw: string,
   projectDir: string,
   roots: readonly string[],
   home: string = homedir(),
+  settle?: (abs: string) => string,
 ): string | null {
   const trimmed = raw.trim().replace(/:\d+(?::\d+)?$/, "")
   if (!trimmed) return null
@@ -101,10 +105,35 @@ export function resolveOpenableFile(
       : isAbsolute(trimmed) ? trimmed
         : resolve(projectDir, trimmed)
   try {
-    return resolveLocalFile(abs, roots)
+    return resolveLocalFile(settle ? settle(abs) : abs, roots)
   } catch {
     return null
   }
+}
+
+/**
+ * THE MAIN CHECKOUT'S COPY of a path inside one of the project's worktrees: `<worktreeRoot>/<name>/src/a.ts`
+ * → `<projectDir>/src/a.ts`. Undefined for a path outside the worktree folder, and for a worktree folder
+ * itself. Pure — whether either file exists is the caller's question.
+ *
+ * What it is for: a link an agent wrote while it worked in a worktree names the worktree's copy, and Done
+ * removes the worktree (worktree-cleanup.ts). The work it pointed at is merged into the main checkout by
+ * then (cleanup keeps any worktree whose commits are on no other ref), so the same relative path there is
+ * the file the link meant — and the same holds for a file an agent in a worktree names that was never in
+ * its worktree at all (`.frizz/threads/<id>/notes.md`, untracked, lives only in the main checkout). The
+ * worktree folder is the one place Frizz's workers make worktrees (the PreToolUse guard and the
+ * WorktreeCreate hook put them there), so its first segment under the root is always a worktree's name.
+ */
+export function mainCheckoutCopy(path: string, projectDir: string, worktreeRoot: string): string | undefined {
+  const rel = posix.normalize(relativePath(worktreeRoot, path))
+  if (!rel || rel === "." || rel.startsWith("..") || isAbsolute(rel)) return undefined
+  const [, ...rest] = rel.split("/").filter(Boolean)
+  return rest.length ? join(projectDir, ...rest) : undefined
+}
+
+/** `relative` in forward slashes, whichever separator the platform writes. */
+function relativePath(from: string, to: string): string {
+  return relative(from, to).split(sep).join("/")
 }
 
 // A local Markdown file is the ONE local-file kind Frizz renders itself instead of handing to the

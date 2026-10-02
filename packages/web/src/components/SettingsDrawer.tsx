@@ -9,7 +9,7 @@ import { copyTextToClipboard } from "../lib/clipboard.ts"
 import { prefs } from "../lib/prefs.ts"
 import { getThemeSnapshot, setThemePreference, subscribeTheme, type ThemePreference } from "../lib/theme.ts"
 import { registerSettingsClose } from "../lib/overlays.ts"
-import { SETTINGS_HELP } from "../lib/settingsHelp.ts"
+import { SETTINGS_HELP, SETTINGS_HELP_IN_EDITOR } from "../lib/settingsHelp.ts"
 import { SHEET_CLOSE_MS, SHEET_PANEL_CLASS, SHEET_SCRIM_CLASS, prefersReducedMotion } from "../lib/sheet.ts"
 import { SaveStatus, useSettingsDraft, type SaveState } from "../hooks/useSettingsAutosave.tsx"
 import { useIsMobile } from "../lib/mobile.ts"
@@ -21,9 +21,12 @@ import { SignOutThisDeviceRow } from "./SignOutThisDeviceRow.tsx"
 import { RemoteAccessField } from "./RemoteAccessField.tsx"
 import { QuotaMeters } from "./QuotaBar.tsx"
 import { SheetHeader } from "./ui/SheetHeader.tsx"
+import { OverDrawersFocusLayer } from "./ui/Sheet.tsx"
 import { Select } from "./ui/Select.tsx"
 import { SettingsField } from "./SettingsField.tsx"
 import { DeleteOldThreads, RETENTION_DAYS } from "./DeleteOldThreads.tsx"
+import { embedded } from "../lib/embed.ts"
+import { aboveDrawersZ } from "../lib/overlaySurface.ts"
 import { SlashCommandsField } from "./SlashCommandsField.tsx"
 
 type NotifPerm = "default" | "granted" | "denied" | "unsupported"
@@ -42,6 +45,17 @@ function currentPerm(): NotifPerm {
 export function SettingsDrawer() {
   const { draft, update, saveState, flush } = useSettingsDraft()
   const isMobile = useIsMobile()
+  // AN EDITOR'S SIDEBAR GETS THIS DRAWER, the desktop's, the frame's full width (lib/mobile.ts: a sidebar is
+  // never the phone). Four rows behave differently there, and each says so in the field's own hint type
+  // rather than offering a control that would not do what it says.
+  const inEditor = embedded()
+  // ABOVE AN OPEN THREAD, as Escape already ranks it (DrawerStack): at a fixed z-50 it slid in UNDER the
+  // drawer stack, whose layers climb from 50 — ⌘, or the gear over a thread drew nothing, and in an
+  // editor's sidebar the title row's Settings button looked dead (scripts/e2e-sidebar.ts, 5 of 5). The
+  // New thread dialog's tier (lib/overlaySurface.ts aboveDrawersZ), which also keeps toasts and its
+  // own selects above it.
+  const z = aboveDrawersZ(useSnapshot(store).drawers.length)
+  const panelRef = useRef<HTMLDivElement>(null)
   const [perm, setPerm] = useState<NotifPerm>(currentPerm())
   // The Home workspace's square, its picker row and its project list entry all show its folder, and they
   // read it from the project list — so the list is re-read once a moved folder has actually saved.
@@ -85,7 +99,9 @@ export function SettingsDrawer() {
   // truthful about the OS-level grant so a green checkbox can't imply notifications that won't fire.
   async function toggleNotifications(on: boolean) {
     if (!draft) return
-    if (on && typeof Notification !== "undefined" && Notification.permission === "default") {
+    // Not from an editor's sidebar: a frame is never granted the permission, so asking only records a
+    // refusal against Frizz's origin. The setting itself is the machine's, and stands (see below).
+    if (on && !inEditor && typeof Notification !== "undefined" && Notification.permission === "default") {
       const result = (await Notification.requestPermission()) as NotifPerm
       setPerm(result)
     }
@@ -105,20 +121,36 @@ export function SettingsDrawer() {
     )
   }
 
+  // OVER AN OPEN THREAD the z above is only half of it: the thread's own dialog still held the page.
+  // Narrow — an editor's sidebar at any width, a browser below 800px — that dialog is modal, and its
+  // `body{pointer-events:none}` ran through this scrim, so Settings DREW on top and every click went
+  // through it to the thread underneath (real VS Code e2e, c9: the hit under Settings' first row was the
+  // thread's user bubble, 2 widths of 2); its focus trap pulled the keyboard back into the thread; and at
+  // any width Radix gave Escape to the thread's dialog, which closed the thread instead of Settings. So
+  // the scrim takes the pointer back (`pointer-events: auto`), `data-over-drawers` tells the drawers
+  // beneath that a click here is not theirs to dismiss on (ThreadSheet, ui/Sheet.tsx), and the panel is
+  // the newest Radix layer (OverDrawersFocusLayer), which pauses the thread's trap and takes Escape first.
   return (
     <div
-      className={`${SHEET_SCRIM_CLASS} z-50 flex justify-end ${shown ? "opacity-100" : "opacity-0"}`}
+      data-over-drawers
+      className={`${SHEET_SCRIM_CLASS} flex justify-end ${shown ? "opacity-100" : "opacity-0"}`}
+      style={{ zIndex: z, pointerEvents: "auto" }}
       onMouseDown={(e) => e.target === e.currentTarget && close()}
     >
+      <OverDrawersFocusLayer panelRef={panelRef}>
       <div
-        className={`${SHEET_PANEL_CLASS} w-[560px] max-w-[94vw] ${shown ? "translate-x-0" : "translate-x-full"}`}
+        ref={panelRef}
+        aria-label="Settings"
+        className={`${SHEET_PANEL_CLASS} w-[560px] max-w-[94vw] outline-none ${shown ? "translate-x-0" : "translate-x-full"}`}
       >
         <SheetHeader title="Settings" actions={<SaveStatus state={saveState} />} onClose={close} />
 
         <div className="flex-1 overflow-y-auto p-5 flex flex-col gap-6">
           {/* Browser appearance remains usable even while server settings are unavailable. */}
-          <SettingsField label="Appearance" help={SETTINGS_HELP.appearance}>
-            <AppearanceControl />
+          <SettingsField label="Appearance" help={inEditor ? SETTINGS_HELP_IN_EDITOR.appearance : SETTINGS_HELP.appearance}>
+            {/* The editor's theme, for the session (lib/theme.ts setHostTheme): a choice here would be saved
+                and never shown. */}
+            {inEditor ? <EditorFixed name="appearance">Follows your editor</EditorFixed> : <AppearanceControl />}
           </SettingsField>
           {!draft ? (
             <div className="text-[13px] text-muted">Loading server settings…</div>
@@ -126,20 +158,26 @@ export function SettingsDrawer() {
             <>
             {/* A client-only VIEW preference (localStorage, not server Settings): it never travels to
                 the server at all, so it's wired straight to the prefs proxy rather than the draft. */}
+            {/* In an editor's sidebar that localStorage is the FRAME's, partitioned from the browser's, so a
+                choice here is the sidebar's alone — said under each, since nothing else would tell you. */}
             <SettingsField label="Density" help={SETTINGS_HELP.density}>
               <DensityToggle />
+              {inEditor ? <EditorHint>Your browser keeps its own.</EditorHint> : null}
             </SettingsField>
 
             {/* Client-only VIEW preference (localStorage): applies immediately, wired to prefs. */}
             <SettingsField label="Queue order" help={SETTINGS_HELP.queueOrder}>
               <QueueOrderControl />
+              {inEditor ? <EditorHint>Your browser keeps its own.</EditorHint> : null}
             </SettingsField>
 
             {/* Same segmented Off/On control as every other row (the old bare checkbox matched
                 nothing else in the form). Off left, On right — switch convention. */}
+            {/* The machine's setting, so it is changed here as anywhere; but a frame cannot raise a
+                notification (api/board-stream.ts stands down in embed), so the browser does. */}
             <SettingsField label="Desktop notifications" help={SETTINGS_HELP.notifications}>
               <OnOffToggle value={draft.notifications} onChange={toggleNotifications} />
-              {draft.notifications && <PermHint perm={perm} />}
+              {inEditor ? <EditorHint>Shown in your browser, not in the sidebar.</EditorHint> : draft.notifications && <PermHint perm={perm} />}
             </SettingsField>
 
             {/* Its own files, not a Settings value: saved by its own button (SlashCommandsField.tsx). */}
@@ -190,7 +228,9 @@ export function SettingsDrawer() {
             {/* Client-only (prefs): where a click on a code file goes, in this browser. The app it
                 goes to is the machine-wide select just below, which it reads as a pair with. */}
             <SettingsField label="Open code files" help={SETTINGS_HELP.codeFiles}>
-              <CodeFilesControl opener={draft.localFileOpener} />
+              {/* From the sidebar a code file opens in the editor around it, whatever this says
+                  (lib/local-file-links.ts); the choice is a browser's. */}
+              {inEditor ? <EditorFixed name="code-files">In this window</EditorFixed> : <CodeFilesControl opener={draft.localFileOpener} />}
             </SettingsField>
 
             <SettingsField label="External app" help={SETTINGS_HELP.localFileOpener}>
@@ -209,12 +249,14 @@ export function SettingsDrawer() {
                 indicatorPosition="right"
                 ariaLabel="Local file link opener"
               />
+              {inEditor ? <EditorHint>Code files from the sidebar open in this window.</EditorHint> : null}
               <EditorConnectedHint />
             </SettingsField>
             </>
           )}
         </div>
       </div>
+      </OverDrawersFocusLayer>
     </div>
   )
 }
@@ -274,8 +316,10 @@ function HomeFolderField({ value, onCommit }: { value: string; onCommit: (folder
         }`}
       />
       {/* Always a line tall, so the drawer does not jump as the reading comes and goes. The notification
-          field's hint type (PermHint), at the same 6px from its control. */}
-      <p className={`mt-1.5 min-h-[1.4em] truncate text-[11px] ${reading?.problem ? "text-danger" : "text-muted-70"}`}>
+          field's hint type (PermHint), at the same 6px from its control. It WRAPS where it does not fit, the
+          path breaking anywhere: the folder is the whole reading, and truncated in a 300px sidebar it was the
+          part cut ("…run in /tmp/frizz-a…"). */}
+      <p className={`mt-1.5 min-h-[1.4em] break-words text-[11px] ${reading?.problem ? "text-danger" : "text-muted-70"}`}>
         {reading ? reading.problem ?? `Threads started in Home run in ${reading.folder}` : ""}
       </p>
     </div>
@@ -682,6 +726,17 @@ function QueueOrderControl() {
   )
 }
 
+// A row's value where an editor's sidebar fixes it (the theme, where code files open): the reading in the
+// controls' own 12px, muted as a value no click changes.
+function EditorFixed({ name, children }: { name: string; children: React.ReactNode }) {
+  return <span data-settings-editor={name} className="py-1 text-[12px] text-muted">{children}</span>
+}
+
+// Where a row works differently from an editor's sidebar: the field's hint type (PermHint, below).
+function EditorHint({ children }: { children: React.ReactNode }) {
+  return <span data-settings-editor-hint className="text-[11px] text-muted-70">{children}</span>
+}
+
 // Which of the External app's editors has a window connected right now (the editor bridge,
 // packages/vscode): a file sent to one opens in the window that has its folder, at the line the link
 // names. The notification field's hint type (PermHint), at the field's 6px from its control; absent
@@ -693,7 +748,10 @@ function EditorConnectedHint() {
   // The select's own order (Cursor, then VS Code), whichever window connected first.
   const names = (["cursor", "vscode"] as const).filter((kind) => connected.has(kind)).map((kind) => EDITOR_OPENER_LABEL[kind])
   if (names.length === 0) return null
-  return <span data-editor-connected className="text-[11px] text-muted-70">{names.join(" and ")} {names.length > 1 ? "are" : "is"} connected.</span>
+  // Which build of the extension each window runs, on hover: "is this window running the fix?" is
+  // answered here as well as in the editor's own status bar.
+  const builds = [...new Set(editorWindows.flatMap((window) => (window.extensionVersion ? [`${window.app}: Frizz extension ${window.extensionVersion}`] : [])))]
+  return <span data-editor-connected title={builds.length ? builds.join("\n") : undefined} className="text-[11px] text-muted-70">{names.join(" and ")} {names.length > 1 ? "are" : "is"} connected.</span>
 }
 
 // Quiet, small permission-state line under the notifications toggle. Everything is muted (the old

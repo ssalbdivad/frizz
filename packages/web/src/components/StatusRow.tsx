@@ -6,6 +6,8 @@ import { QuotaChips, useQuotaChipsVisible } from "./QuotaBar.tsx"
 import { RestartFrizzButton } from "./RestartFrizzButton.tsx"
 import { KeyboardShortcutsButton } from "./KeyboardShortcuts.tsx"
 import { useShortcutLabel, withShortcut } from "../lib/keyboardRuntime.ts"
+import { canRestart } from "../api/restart.ts"
+import { useSupervisorStatus } from "../api/supervisorStatus.ts"
 
 // THE STATUS ROW — one loose line along the TOP OF THE PROMPT BOX: the page's title at the left, then,
 // pushed to the right end, the app's controls and its readouts:
@@ -49,13 +51,25 @@ function Divider() {
   return <span aria-hidden="true" className="h-3 w-px shrink-0 bg-border" />
 }
 
-/** Reads its live values itself; `title` is the page's name, drawn first. */
-export function StatusRow({ title }: { title?: ReactNode } = {}) {
+/**
+ * Reads its live values itself; `title` is the page's name, drawn first. `settings` and `shortcuts` false
+ * drop the gear and the ⌨: in an editor's sidebar the title row VS Code draws over the frame carries both
+ * (Settings as a button, Keyboard shortcuts under its ⋯), and the page's name (SidebarPage.tsx), so the
+ * row there is the rest of it, at the right end — and NOTHING when there is no rest. With no supervisor to
+ * restart (a Frizz run from source) and no quota to read, the ⌨ stood alone on a 36px row above the prompt
+ * box, a stray glyph the real-page run flagged as debris (scripts/e2e-sidebar.ts, 2026-10-01); a row of
+ * nothing would still hold the box 10px down, so the row is not drawn at all.
+ */
+export function StatusRow({ title, settings = true, shortcuts = true }: { title?: ReactNode; settings?: boolean; shortcuts?: boolean } = {}) {
   // Whether there is a quota group behind the second divider at all. Every chip hides itself when it
   // has no reading, so without this a row with neither provider reporting draws a trailing hairline
   // with nothing after it.
   const quotaVisible = useQuotaChipsVisible()
   const settingsKeys = useShortcutLabel("app.settings")
+  // RestartFrizzButton's own test, on the poll it shares (api/supervisorStatus.ts): one request however
+  // many read it.
+  const restartVisible = canRestart(useSupervisorStatus().data ?? null)
+  if (!title && !settings && !shortcuts && !restartVisible && !quotaVisible) return null
 
   return (
     <div
@@ -66,18 +80,20 @@ export function StatusRow({ title }: { title?: ReactNode } = {}) {
       className="mb-2.5 flex min-w-0 items-center gap-3 text-[12px]"
     >
       {/* Takes the row's slack, so the controls after it stand at the right end. */}
-      {title && <div data-status-title className="flex min-w-0 flex-1">{title}</div>}
-      <button
-        type="button"
-        aria-label="Settings"
-        title={withShortcut("Settings", settingsKeys)}
-        className={STATUS_ROW_ACTION}
-        onClick={() => (store.showSettings = true)}
-      >
-        <SettingsIcon size={STATUS_ROW_ICON} aria-hidden="true" />
-      </button>
+      {title ? <div data-status-title className="flex min-w-0 flex-1">{title}</div> : <span aria-hidden="true" className="flex-1" />}
+      {settings && (
+        <button
+          type="button"
+          aria-label="Settings"
+          title={withShortcut("Settings", settingsKeys)}
+          className={STATUS_ROW_ACTION}
+          onClick={() => (store.showSettings = true)}
+        >
+          <SettingsIcon size={STATUS_ROW_ICON} aria-hidden="true" />
+        </button>
+      )}
       {/* The keyboard shortcuts sheet — also `?` from anywhere, which its title names. */}
-      <KeyboardShortcutsButton />
+      {shortcuts && <KeyboardShortcutsButton />}
       {/* Greyed when there is no update to install; null only before a supervisor has answered, when
           the gap collapses and the row stays even. */}
       <RestartFrizzButton />

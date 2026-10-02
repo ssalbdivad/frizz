@@ -12,11 +12,12 @@ test("connected, the item reads Frizz plus the workspace's Ready count, and the 
   ])
   assert.deepEqual(view, {
     text: "Frizz · 3 ready",
-    tooltip: "frizz: 2 ready · 1 working\nsite: 1 ready · 0 working\ndocs\nClick to open Frizz.",
-    command: "frizz.open",
+    tooltip: "frizz: 2 ready · 1 working\nsite: 1 ready · 0 working\ndocs\nClick to show Frizz.",
+    command: "frizz.sidebar.focus",
+    ready: 3,
   })
   assert.equal(statusView(connected, [{ id: "a", slug: "a", name: "frizz", dir: "/r", ready: 0, working: 4 }]).text, "Frizz", "nothing waiting, no number")
-  assert.equal(statusView(connected, []).tooltip, "Click to open Frizz.")
+  assert.equal(statusView(connected, []).tooltip, "Click to show Frizz.")
 })
 
 test("offline or incompatible, a click tries again and the tooltip says why", () => {
@@ -24,6 +25,7 @@ test("offline or incompatible, a click tries again and the tooltip says why", ()
     text: "$(debug-disconnect) Frizz",
     tooltip: "Frizz isn't running. Click to try again.",
     command: "frizz.reconnect",
+    ready: 0,
   })
   const incompatible = statusView({ kind: "incompatible", reason: "Update Frizz or the extension." }, [])
   assert.equal(incompatible.command, "frizz.reconnect")
@@ -40,4 +42,10 @@ test("a command with no connection says the connection's own reason, not that Fr
   )
   assert.equal(notConnectedMessage({ kind: "offline", reason: "Frizz isn't running." }), "Frizz isn't running.", "when it really is not running, it says so")
   assert.equal(notConnectedMessage({ kind: "connecting" }), "Still connecting to Frizz. Try again in a moment.")
+})
+
+test("the tooltip's last line names the extension's build, in every state", () => {
+  assert.equal(statusView(connected, [], "0.1.0+1a2b3c4d").tooltip, "Click to show Frizz.\nFrizz extension 0.1.0+1a2b3c4d")
+  assert.equal(statusView({ kind: "offline", reason: "Frizz isn't running." }, [], "0.1.0+1a2b3c4d-dirty").tooltip, "Frizz isn't running. Click to try again.\nFrizz extension 0.1.0+1a2b3c4d-dirty")
+  assert.equal(statusView({ kind: "connecting" }, []).tooltip, "Looking for Frizz…", "no build named, no line")
 })

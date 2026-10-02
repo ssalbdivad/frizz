@@ -187,9 +187,18 @@ export function ThreadSheet({ id, slug, depth, widthDepth, initiallyOpen }: { id
     return () => registerDrawerFocus(id, null)
   }, [id])
 
+  // A CLOSING layer lets go of the keyboard and the page. Radix ties a modal dialog's focus trap and its
+  // `body{pointer-events:none}` to `open`, and this layer stays mounted for the ~210ms of its slide-out —
+  // so with `open` held true the trap outlived the close: New thread pressed right after Back to queue (VS
+  // Code's title row over an editor's sidebar, where every drawer is modal) focused the page's prompt box,
+  // the departing thread's trap pulled focus straight back to its ✕, the ✕ unmounted with the layer, and
+  // focus fell to <body> — the caret lost 3 runs of 3 (scripts/e2e-sidebar.ts c2). `open` follows the
+  // store's closing flag instead, and `forceMount` on the Portal keeps the Overlay and the Content mounted
+  // through the exit exactly as before; a rapid re-open clears the flag and re-arms the trap.
+  const closing = drawerSnap.drawers.find((drawer) => drawer.id === id)?.closing === true
   return (
-    <RadixDialog.Root modal={narrow} open onOpenChange={(open) => { if (!open) close() }}>
-      <RadixDialog.Portal>
+    <RadixDialog.Root modal={narrow} open={!closing} onOpenChange={(open) => { if (!open) close() }}>
+      <RadixDialog.Portal forceMount>
         {/* The modal Overlay is what carries Radix's scroll lock, so a thread covered by another layer
             renders the same scrim WITHOUT it and lets the layer on top hold the lock (useHoldsScrollLock).
             The Content stays modal either way: toggling `modal` would remount the whole transcript. */}
@@ -226,7 +235,7 @@ export function ThreadSheet({ id, slug, depth, widthDepth, initiallyOpen }: { id
             }
             handleDialogEscape(event)
           }}
-          // A non-modal Radix layer also dismisses on any pointer-down OUTSIDE its content. Three cases
+          // A non-modal Radix layer also dismisses on any pointer-down OUTSIDE its content. Four cases
           // must not self-dismiss: (0) the pointer landed on the TOAST, whose buttons are its own
           // (isToastPointer — a snooze's Undo closed this drawer); (1) this sheet is BURIED under another
           // drawer layer (a sub-agent/doc sheet stacked over it, or a lateral swap in flight) — only the
@@ -234,11 +243,26 @@ export function ThreadSheet({ id, slug, depth, widthDepth, initiallyOpen }: { id
           // silently closes the parent underneath it; (2) the pointer landed on one of THIS thread's own
           // sub-agent rows (sidebar child rows / queue card lines carry data-subagent-parent) — that click
           // is a drill-IN, and the drawer policy in openOrRaiseDrawer stacks the child over this sheet
-          // instead of dismissing it. Every other outside pointer (backdrop, blank sidebar, sibling rows)
+          // instead of dismissing it; (3) the pointer landed in a hovercard or other popper this sheet
+          // did not open (below). Every other outside pointer (backdrop, blank sidebar, sibling rows)
           // dismisses as before — sibling opens also route through the store policy, which closes this
           // layer anyway.
           onPointerDownOutside={(event) => {
             if (isToastPointer(event.target)) {
+              event.preventDefault()
+              return
+            }
+            // (3) the pointer landed in a POPPER that is not this sheet's React descendant — the GitHub
+            // hovercard is one global Popover (GithubHovercards.tsx), so Radix cannot tell a click on it from
+            // a click on the page, and clicking a PR title in the card over a thread's link closed the
+            // thread (sidebar and desktop, 2026-10-01; Radix defers a left click's outside-dismiss to the
+            // `click`, so the drawer went as the link went out). ui/Sheet.tsx PORTALED_OVERLAY exempts the
+            // same wrapper for the plain sheets. A menu or select opened from inside this sheet is a React
+            // descendant, which Radix already counts as inside.
+            // (4) The same for an overlay drawn above the whole drawer stack (Settings, `data-over-drawers`):
+            // a click in it, or on its scrim, belongs to it — with Settings open over this thread, every
+            // click in Settings closed the thread beneath it.
+            if (event.target instanceof Element && event.target.closest("[data-radix-popper-content-wrapper],[data-over-drawers]")) {
               event.preventDefault()
               return
             }

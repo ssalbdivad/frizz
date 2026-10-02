@@ -2,8 +2,11 @@ import assert from "node:assert/strict"
 import test from "node:test"
 import type { BoardSnapshot } from "@frizz/shared"
 import { resetProjectState, store } from "../store.ts"
-import { sendCodeFilesTo, threadInFront } from "./editorBridge.ts"
+import { draftKey, draftStore } from "./drafts.ts"
+import { composeInto, sendCodeFilesTo, threadInFront } from "./editorBridge.ts"
+import { splitComposerValue } from "./imagePaths.ts"
 import { prefs } from "./prefs.ts"
+import { stagedItems } from "./stagedContext.ts"
 
 function at<T>(pathname: string, run: () => T): T {
   const previous = globalThis.location
@@ -86,4 +89,72 @@ test("the offer's action switches both halves once the write lands", async () =>
   assert.equal(prefs.codeFiles, "editor")
   assert.equal(store.toast?.text, "Code files open in VS Code")
   prefs.codeFiles = "frizz"
+})
+
+// The page as composeInto sees it: an address, and a DOM whose only textarea is the one `selector` asks for,
+// showing whatever its draft says (placeCaret waits for the box to show the insert). Returns the selectors
+// asked for, so a test can say WHICH box the caret was put in.
+async function onPage<T>(pathname: string, draft: () => string, run: () => Promise<T>): Promise<{ result: T; asked: string[] }> {
+  const previous = { location: globalThis.location, document: globalThis.document, window: globalThis.window }
+  const asked: string[] = []
+  const box = {
+    get value() { return splitComposerValue(draft()).prose },
+    getClientRects: () => [{}],
+    scrollIntoView() {},
+    focus() {},
+    setSelectionRange() {},
+  }
+  globalThis.location = { pathname, search: "", origin: "http://127.0.0.1:4100" } as unknown as Location
+  globalThis.document = { querySelectorAll: (selector: string) => { asked.push(selector); return [box] } } as unknown as Document
+  globalThis.window = globalThis as unknown as Window & typeof globalThis
+  try {
+    return { result: await run(), asked }
+  } finally {
+    globalThis.location = previous.location
+    globalThis.document = previous.document
+    globalThis.window = previous.window
+  }
+}
+
+const item = { path: "/repo/src/a.ts", app: "Visual Studio Code", text: "export const a = 1", startLine: 4, endLine: 6 }
+
+// A lazy thread's box is its note, held by the server: a chip "added" to its follow-up draft never showed,
+// and surfaced in the reply box once the thread had started (sweep 2026-10-01).
+test("an editor's insert refuses a lazy thread in front, and writes no draft", async () => {
+  resetProjectState()
+  store.board = { projectDir: "/repo", projectSlug: "acme", threads: [{ id: "later", sessionId: "s9", lazyPrompt: "Refactor the limiter" }] } as unknown as BoardSnapshot
+  store.drawers = [{ id: 1, kind: "thread", slug: "later" }] as typeof store.drawers
+  const key = draftKey.followUp("/repo", "later", "s9")
+  try {
+    const { result } = await onPage("/all/acme/thread/later", () => draftStore.get(key), () => composeInto(item, { target: "front", focus: false }))
+    assert.deepEqual(result, { ok: false, reason: "Start the thread to add code to it." })
+    assert.equal(draftStore.get(key), "")
+  } finally {
+    resetProjectState()
+  }
+})
+
+// With the New thread dialog over a drawer, "front" is the dialog's box. It was the drawer's reply box
+// behind the scrim, and the dialog stayed empty (sweep 2026-10-01).
+test("with the New thread dialog up, an editor's insert goes into the dialog, and the drawer stays", async () => {
+  resetProjectState()
+  store.board = { projectDir: "/repo", projectSlug: "acme", threads: [{ id: "fix-auth", sessionId: "s1" }] } as unknown as BoardSnapshot
+  store.drawers = [{ id: 1, kind: "thread", slug: "fix-auth" }] as typeof store.drawers
+  store.showNewThread = true
+  const dialogKey = draftKey.dispatch("/repo")
+  const replyKey = draftKey.followUp("/repo", "fix-auth", "s1")
+  draftStore.set(dialogKey, "")
+  draftStore.set(replyKey, "")
+  try {
+    const { result, asked } = await onPage("/all/acme/thread/fix-auth", () => draftStore.get(dialogKey), () => composeInto(item, { target: "front", focus: true }))
+    assert.deepEqual(result, { ok: true })
+    assert.equal(draftStore.get(dialogKey), "@a.ts:4-6 ")
+    assert.deepEqual(stagedItems(dialogKey).map((staged) => staged.token), ["@a.ts:4-6"])
+    assert.equal(draftStore.get(replyKey), "", "the reply box behind the dialog is untouched")
+    assert.deepEqual(asked, ['[role="dialog"]:not([data-drawer-layer]) textarea[data-surface="newComposer"]'])
+    assert.equal(store.drawers.length, 1, "the drawer stays where it is")
+  } finally {
+    draftStore.set(dialogKey, "")
+    resetProjectState()
+  }
 })

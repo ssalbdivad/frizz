@@ -20,3 +20,11 @@ export const SETTINGS_HELP = {
   githubPrompt: "The prompt for every item dispatched from the GitHub picker, issues and PRs alike. The default has the worker read the whole thread, classify it, and branch — reproduce + fix-plan for a bug, a plan for a feature, an adversarial review for a PR.",
   remoteAccess: "How a phone or another machine reaches this Frizz. Every choice keeps Frizz on 127.0.0.1 and puts something in front of it, and the first visit from each device needs a single-use sign-in link. Applies at once and is remembered for later launches. The same setup as pressing R in the terminal running Frizz, and changeable only from this machine.",
 } as const
+
+// The few that read differently in an editor's sidebar (lib/embed.ts), where the row itself says what
+// differs. The frame's preferences are its own — the editor's theme for the session, and a separate
+// localStorage the browser never sees (plans/vscode-extension.md § The sidebar) — so a help text that
+// says "this browser" would contradict the row above it.
+export const SETTINGS_HELP_IN_EDITOR = {
+  appearance: "Follows VS Code's color theme. Your browser keeps its own.",
+} as const

@@ -1,6 +1,6 @@
 import { useEffect, useMemo } from "react"
 import { proxy, subscribe, useSnapshot } from "valtio"
-import { hasToken, type ComposerContextItem } from "./composerContext.ts"
+import { contextSourceLabel, hasToken, type ComposerContextItem } from "./composerContext.ts"
 import { draftStore } from "./drafts.ts"
 import { splitComposerValue } from "./imagePaths.ts"
 
@@ -174,4 +174,13 @@ export function useStagedContextTokens(key: string, value: string): string[] {
     else delete stagedContext[key]
   }, [key, value, staged])
   return tokens
+}
+
+/**
+ * Where each staged chip came from, by token — the hover a box shows over a chip (Composer
+ * `contextSources`): `src/a.ts, lines 12-20`, the same words its definition will carry.
+ */
+export function useStagedContextSources(key: string, projectDir: string | undefined): Readonly<Record<string, string>> {
+  const staged = useSnapshot(stagedContext)[key]
+  return useMemo(() => Object.fromEntries((staged ?? []).map((item) => [item.token, contextSourceLabel(item, projectDir)])), [staged, projectDir])
 }
