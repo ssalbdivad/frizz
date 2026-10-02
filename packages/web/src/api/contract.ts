@@ -17,7 +17,9 @@ import type {
   CreateLazyThreadInput,
   StartLazyThreadInput,
   UpdateLazyPromptInput,
+  EditorComposeInput,
   EditorComposeItem,
+  EditorFront,
   EditorReviewTarget,
   EditorStateResult,
   EditorWindowSummary,
@@ -366,6 +368,9 @@ export interface Api {
   // What the editor windows that have this project open show: file in front, selection, tabs, problems.
   // The workers' `mcp__frizz__editor` reads it; the page does not.
   editorState(input: { slug?: string }): Promise<EditorStateResult>
+  // What a browser tab shows of the editor beside it: the file in front and its selection's lines, from
+  // the window this project's agents' editor tool reads; `text` adds what a click puts in the prompt box.
+  editorFront(input: { text?: boolean }): Promise<{ front: EditorFront | null; item?: EditorComposeInput }>
   markComplete(input: { slug: string }): Promise<void>
   setThreadStatus(input: { slug: string; status: "active" | "planning" | "planned" | "needs-human" | "blocked" | "done" | "dismissed" }): Promise<void>
   dismissThread(input: { slug: string }): Promise<void>
@@ -567,6 +572,7 @@ export const PROCEDURES = {
   reviewInEditor: "mutation",
   composeTake: "mutation",
   editorState: "mutation",
+  editorFront: "query",
   markComplete: "mutation",
   setThreadStatus: "mutation",
   dismissThread: "mutation",

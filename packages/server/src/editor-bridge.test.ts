@@ -610,6 +610,84 @@ test("`editors` is published when a window comes, goes or changes what the page 
   assert.deepEqual(editorsEvents().at(-1), [{ app: "Windsurf", kind: "windsurf", acceptsOpens: false, extensionVersion: "0.0.1" }])
 })
 
+// THE BROWSER TAB'S LINE (`editorFront`): what the agents' tool would read, named — never its text until a
+// click asks — and an `editor-front` ping whenever the answer for some project could have changed.
+test("front: the file and selection lines of the window the tool would read, only while it shares; the click's item quotes only whole text", async (t) => {
+  const h = await harness(t, { frontCoalesceMs: 10 })
+  const dirs = tree(t)
+  assert.equal(h.bridge.front(dirs.mono), null, "no window")
+  const used = await editor(h.port, { folders: [dirs.mono], focused: false, focusedAgoMs: 60_000 })
+  const now = await editor(h.port, { app: "Cursor", folders: [dirs.pkg], focused: true })
+  const other = await editor(h.port, { folders: [dirs.other], focused: false })
+  assert.equal(h.bridge.front(dirs.mono), null, "windows that have said nothing of their editor")
+  used.send(snapshot(dirs.inMono))
+  now.send(snapshot(dirs.inPkg, { active: { ...snapshot(dirs.inPkg).active!, dirty: true } }))
+  other.send(snapshot(dirs.outside))
+  await until(() => h.bridge.front(dirs.mono)?.app === "Cursor", "the window in front's report")
+  // The window in front, as the tool ranks them — and nothing of the selection but its lines.
+  assert.deepEqual(h.bridge.front(dirs.mono), { app: "Cursor", kind: "cursor", path: dirs.inPkg, dirty: true, cursorLine: 3, selection: { startLine: 2, endLine: 3 } })
+  assert.ok(!JSON.stringify(h.bridge.front(dirs.mono)).includes("let x"), "no text in the line")
+  assert.deepEqual(h.bridge.frontItem(dirs.mono), { path: dirs.inPkg, startLine: 2, endLine: 3, text: "let x = 1\nx++" })
+  assert.equal(h.bridge.front(dirs.other)?.path, dirs.outside, "each project its own window")
+
+  // Cut short, or withheld: the lines alone.
+  now.send(snapshot(dirs.inPkg, { active: { ...snapshot(dirs.inPkg).active!, selection: { startLine: 2, endLine: 90, text: "let x", truncated: true } } }))
+  await until(() => h.bridge.front(dirs.mono)?.selection?.endLine === 90, "the long selection")
+  assert.deepEqual(h.bridge.frontItem(dirs.mono), { path: dirs.inPkg, startLine: 2, endLine: 90 })
+  now.send(snapshot(dirs.inPkg, { active: { ...snapshot(dirs.inPkg).active!, selection: { startLine: 4, endLine: 4, withheld: true } } }))
+  await until(() => h.bridge.front(dirs.mono)?.withheld === true, "the withheld selection")
+  assert.deepEqual(h.bridge.front(dirs.mono)?.selection, { startLine: 4, endLine: 4 })
+  assert.deepEqual(h.bridge.frontItem(dirs.mono), { path: dirs.inPkg, startLine: 4, endLine: 4 })
+  // Only a caret: the file.
+  now.send(snapshot(dirs.inPkg, { active: { ...snapshot(dirs.inPkg).active!, selection: undefined, cursorLine: 7 } }))
+  await until(() => h.bridge.front(dirs.mono)?.selection === undefined, "the caret alone")
+  assert.equal(h.bridge.front(dirs.mono)?.cursorLine, 7)
+  assert.deepEqual(h.bridge.frontItem(dirs.mono), { path: dirs.inPkg })
+  // An untitled buffer is named, and cannot be added.
+  now.send(snapshot("Untitled-1", { active: { ...snapshot("Untitled-1").active!, untitled: true } }))
+  await until(() => h.bridge.front(dirs.mono)?.untitled === true, "the untitled buffer")
+  assert.equal(h.bridge.front(dirs.mono)?.path, "Untitled-1")
+  assert.equal(h.bridge.frontItem(dirs.mono), null)
+
+  // The window in front stops sharing: the tool would read nothing from it, and neither does the line —
+  // not the window behind it either, since that is not the one the tool reads.
+  now.send({ t: "editor", shared: false, active: null, open: [], diagnostics: [], problems: { errors: 0, warnings: 0 } })
+  await until(() => h.bridge.front(dirs.mono) === null, "sharing off")
+  assert.equal(h.bridge.frontItem(dirs.mono), null)
+  // It closes: the window used before it is the one now.
+  now.ws.close()
+  await until(() => h.bridge.front(dirs.mono)?.path === dirs.inMono, "the other window")
+})
+
+test("`editor-front` is published once per burst, only when what a page could show changed", async (t) => {
+  const h = await harness(t, { frontCoalesceMs: 30 })
+  const dirs = tree(t)
+  const pings = () => h.published.filter((e) => e.type === "editor-front").length
+  const win = await editor(h.port, { folders: [dirs.mono], focused: true })
+  await until(() => pings() === 1, "the window's arrival")
+  // A burst of frames — a drag over lines — is one ping.
+  for (let end = 3; end <= 6; end++) win.send(snapshot(dirs.inMono, { active: { ...snapshot(dirs.inMono).active!, selection: { startLine: 2, endLine: end, text: "x" } } }))
+  await until(() => pings() === 2, "the burst")
+  await new Promise((resolve) => setTimeout(resolve, 80))
+  assert.equal(pings(), 2, "one ping for four frames")
+  // What no page shows — a tab, a diagnostic, the lines on screen, the text itself — is no ping.
+  win.send(snapshot(dirs.inMono, { active: { ...snapshot(dirs.inMono).active!, selection: { startLine: 2, endLine: 6, text: "something else" }, visible: { startLine: 3, endLine: 40 } }, open: [], diagnostics: [], problems: { errors: 0, warnings: 0 } }))
+  await new Promise((resolve) => setTimeout(resolve, 80))
+  assert.equal(pings(), 2, "nothing the line shows changed")
+  // A second window in front reorders who the tool reads: a ping, though neither window's editor moved.
+  const second = await editor(h.port, { folders: [dirs.mono], focused: false })
+  second.send(snapshot(dirs.inPkg))
+  await until(() => pings() === 3, "the second window's report")
+  second.state({ focused: true })
+  await until(() => pings() === 4, "the focus moving")
+  assert.equal(h.bridge.front(dirs.mono)?.path, dirs.inPkg)
+  // Sharing off, and a window leaving: each a ping.
+  second.send({ t: "editor", shared: false, active: null, open: [], diagnostics: [], problems: { errors: 0, warnings: 0 } })
+  await until(() => pings() === 5, "sharing off")
+  second.ws.close()
+  await until(() => pings() === 6, "the window gone")
+})
+
 /** A project's bus as the bridge hears it, counting its listeners so a test can see a subscription end. */
 function countingBus() {
   const listeners = new Set<(event: ServerEvent) => void>()

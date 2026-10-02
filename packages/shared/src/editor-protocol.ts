@@ -418,6 +418,32 @@ export interface EditorWindowSummary {
   extensionVersion?: string
 }
 
+/**
+ * WHAT A BROWSER TAB SHOWS OF THE EDITOR BESIDE IT (`editorFront`). In the sidebar the context bar reads the
+ * editor live and every send carries it; a human talking to a thread from a browser tab beside VS Code has
+ * neither, and an agent there reads the editor only when it decides to call its `editor` tool. So the
+ * tab's prompt boxes show one quiet line — `VS Code: a.ts:12-20` — naming what that tool would read: the
+ * file in front of the window the human used last that has the project open, and its selection's lines,
+ * only while that window shares its editor (`frizz.shareEditorState`). Never the text: a click asks for
+ * it (`editorFront({ text: true })`'s `item`), so what crosses is what the human chose to add.
+ */
+export interface EditorFront {
+  /** `vscode.env.appName`, and its family, for the line's words ("VS Code"). */
+  app: string
+  kind: EditorKind
+  /** Absolute, as the extension sees it; for an untitled buffer, its label (`Untitled-1`). */
+  path: string
+  untitled?: true
+  /** Unsaved changes: the copy on disk is not what the human sees. */
+  dirty?: true
+  /** 1-based line of the caret. */
+  cursorLine: number
+  /** The selection's lines, 1-based and inclusive; absent with only a caret. */
+  selection?: { startLine: number; endLine: number }
+  /** The selection's text stays in the editor: the file may hold secrets. */
+  withheld?: true
+}
+
 /** One editor window as a worker reads it (`editorState`). */
 export interface EditorStateWindow {
   app: string

@@ -6136,6 +6136,12 @@ export const ServerEvent = z.discriminatedUnion("type", [
     type: z.literal("compose-pending"),
     id: z.string(),
   }).strict(),
+  z.object({
+    // What some editor window shows changed — its file in front, its selection's lines, whether it shares,
+    // which one was used last. MACHINE-WIDE and payload-free: which window has which project open is the
+    // server's to work out, so a page showing an editor line asks its project again (`editorFront`).
+    type: z.literal("editor-front"),
+  }).strict(),
 ])
 export type ServerEvent = z.infer<typeof ServerEvent>
 export type BoardEvent = Extract<ServerEvent, { type: "board" }>
