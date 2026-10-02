@@ -40,6 +40,7 @@ const { store } = await import("../store.ts")
 const { composePending } = await import("./editorBridge.ts")
 const { runHostCommand } = await import("./embedCommand.ts")
 const { reportRoute, repostRoute } = await import("./embedRoute.ts")
+const { addEditorContextByChord, setEditorContext } = await import("./editorContext.ts")
 
 test("the address's embed mode is kept for the frame's session", () => {
   assert.equal(embedded(), true)
@@ -77,7 +78,34 @@ test("the title row's buttons are the app's own doors", () => {
   reset()
   runHostCommand("new-thread")
   assert.equal(store.showNewThread, true)
+  // Keyboard shortcuts, from the row's ⋯: `?`'s sheet over the page as it is — an open thread stays,
+  // the palette goes as for any button, and so does Settings, which a browser's `?` waits on.
   reset()
+  store.drawers = [{ id: 3, kind: "thread", slug: "a", closing: false, openedAt: 3 }] as typeof store.drawers
+  store.showPalette = true
+  runHostCommand("shortcuts")
+  assert.deepEqual([store.showShortcuts, store.showPalette, store.drawers.length], [true, false, 1])
+  store.showShortcuts = false
+  store.showSettings = true
+  runHostCommand("shortcuts")
+  assert.deepEqual([store.showShortcuts, store.showSettings], [true, false])
+  reset()
+})
+
+test("⌘L in the page adds the editor's selection, and with a thread open sends it to that thread's reply box", () => {
+  // The caret is in no box here; the class is only what the check for one asks of the globals.
+  Object.assign(globalThis, { HTMLTextAreaElement: globalThis.HTMLTextAreaElement ?? class {} })
+  setEditorContext({ type: "frizz:editor-context", active: { path: "/repo/a.ts", label: "a.ts", selection: { startLine: 2, endLine: 3, chars: 20 } }, open: [] })
+  // A thread open and the caret outside its reply box — where ⌘I is Thread details — ⌘L asks for the
+  // selection with no box of its own: the host answers "front", the open thread's reply box.
+  posted.length = 0
+  assert.equal(addEditorContextByChord(null, true, false), "added")
+  assert.deepEqual(posted, [{ type: "frizz:add-context", what: "selection" }])
+  // Nothing in front of the editor: nothing to add, and nothing asked.
+  setEditorContext({ type: "frizz:editor-context", active: null, open: [] })
+  posted.length = 0
+  assert.equal(addEditorContextByChord(null, true, false), "nothing")
+  assert.deepEqual(posted, [])
 })
 
 test("the title row hears the view only when it changes, and again after ready", () => {

@@ -1,8 +1,10 @@
 import assert from "node:assert/strict"
 import test from "node:test"
 import { chordCommand } from "../../../vscode/src/embed.ts"
-import { HOST_CHORDS, SIDEBAR_KEY_HINTS, SIDEBAR_KEY_NAMES, hostChordEvent, hostChordKeycaps, hostChordProblem } from "./embedKeys.ts"
-import { ACTIONS, chordProblem, type Platform } from "./keybindings.ts"
+import { readFileSync } from "node:fs"
+import { EDITOR_ADD_CHORD } from "./editorContext.ts"
+import { EDITOR_CHORDS, HOST_CHORDS, SIDEBAR_KEY_HINTS, SIDEBAR_KEY_NAMES, hostChordEvent, hostChordKeycaps, hostChordProblem } from "./embedKeys.ts"
+import { ACTIONS, chordProblem, formatChord, type Chord, type Platform } from "./keybindings.ts"
 
 // The sidebar's half of the keyboard (lib/embedKeys.ts). The shortcuts sheet tells the human which chords
 // go to VS Code from the sidebar; the EXTENSION decides which do (packages/vscode/src/embed.ts CHORDS). So
@@ -68,4 +70,30 @@ test("in the sidebar, rebinding to a VS Code chord is refused as VS Code's, in e
   assert.equal(hostChordProblem({ code: "Backquote", ctrlKey: false, metaKey: true, shiftKey: false, altKey: false }, "mac"), null)
   // The browser's reason stays the desktop's.
   assert.equal(chordProblem({ key: "p", mod: true, alt: false, shift: true }, "other"), "Ctrl+Shift+P belongs to the browser")
+})
+
+// The Editor group teaches chords the EXTENSION binds in the editor (packages/vscode/package.json
+// contributes.keybindings). Each one the sheet lists must be a keybinding there, on both platforms, for
+// the command and `when` the sheet says — or the sidebar would promise a key the editor does not have.
+const keybindings = (JSON.parse(readFileSync(new URL("../../../vscode/package.json", import.meta.url), "utf8")) as {
+  contributes: { keybindings: { command: string; key: string; mac?: string; when?: string }[] }
+}).contributes.keybindings
+
+/** A chord as VS Code's manifest spells it: `ctrl+l` / `cmd+l`, `alt+k`. */
+const vscodeSpelling = (chord: Chord, platform: Platform) =>
+  [...(chord.mod ? [platform === "mac" ? "cmd" : "ctrl"] : []), ...(chord.alt ? ["alt"] : []), ...(chord.shift ? ["shift"] : []), chord.key].join("+")
+
+test("every editor chord the sheet lists is the extension's keybinding, on a Mac and elsewhere", () => {
+  for (const { label, chord, command, when } of EDITOR_CHORDS) {
+    const bound = keybindings.find((binding) => binding.command === command && binding.key === vscodeSpelling(chord, "other"))
+    assert.ok(bound, `${label}: no ${vscodeSpelling(chord, "other")} for ${command}`)
+    assert.equal(bound.mac ?? bound.key, vscodeSpelling(chord, "mac"), `${label} on a Mac`)
+    assert.equal(bound.when, when, label)
+    assert.ok(sentenceCase(label), label)
+  }
+  // The chord the context bar names is the sheet's first.
+  assert.deepEqual(EDITOR_CHORDS[0]!.chord, EDITOR_ADD_CHORD)
+  assert.deepEqual([formatChord(EDITOR_ADD_CHORD, "mac"), formatChord(EDITOR_ADD_CHORD, "other")], ["⌘L", "Ctrl+L"])
+  // Negative control: a chord the extension does not bind is not found.
+  assert.equal(keybindings.find((binding) => binding.key === vscodeSpelling({ key: "w", mod: true, alt: false, shift: false }, "other")), undefined)
 })

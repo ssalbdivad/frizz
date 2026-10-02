@@ -124,11 +124,13 @@ export const EMBED_MAX_OPEN_FILES = 50
 
 /**
  * A button in VS Code's own title row above the frame — the sidebar has no Frizz header of its own, so
- * the header's doors live there: a new thread, back to the queue, jump to a thread (⌘K), settings.
+ * the header's doors live there: a new thread, back to the queue, jump to a thread (⌘K), settings, and,
+ * under the row's ⋯, the keyboard shortcuts sheet (`?`), whose ⌨ button the page's status row drops in
+ * the sidebar, where it stood alone on a row of its own.
  */
 export interface EmbedCommandMessage {
   type: "frizz:command"
-  command: "new-thread" | "queue" | "jump" | "settings"
+  command: "new-thread" | "queue" | "jump" | "settings" | "shortcuts"
 }
 
 export type EmbedHostMessage = EmbedThemeMessage | EmbedComposeMessage | EmbedNavigateMessage | EmbedEditorContextMessage | EmbedCommandMessage

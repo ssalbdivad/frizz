@@ -64,6 +64,11 @@
         "category": "Frizz"
       },
       {
+        "command": "frizz.addSelectionOrFile",
+        "title": "Add selection or file to Frizz prompt",
+        "category": "Frizz"
+      },
+      {
         "command": "frizz.addTerminalSelection",
         "title": "Add to Frizz prompt",
         "category": "Frizz"
@@ -96,6 +101,12 @@
         "title": "Settings",
         "category": "Frizz",
         "icon": "$(gear)"
+      },
+      {
+        "command": "frizz.sidebar.shortcuts",
+        "title": "Keyboard shortcuts",
+        "category": "Frizz",
+        "icon": "$(keyboard)"
       },
       {
         "command": "frizz.open",
@@ -207,6 +218,11 @@
           "command": "frizz.open",
           "when": "view == frizz.sidebar",
           "group": "frizz@2"
+        },
+        {
+          "command": "frizz.sidebar.shortcuts",
+          "when": "view == frizz.sidebar && frizz.sidebarView",
+          "group": "frizz@3"
         }
       ],
       "commandPalette": [
@@ -217,6 +233,10 @@
         {
           "command": "frizz.addTerminalSelection",
           "when": "false"
+        },
+        {
+          "command": "frizz.addSelectionOrFile",
+          "when": "false"
         }
       ]
     },
@@ -226,6 +246,18 @@
         "key": "ctrl+i",
         "mac": "cmd+i",
         "when": "editorTextFocus && editorHasSelection"
+      },
+      {
+        "command": "frizz.addToPrompt",
+        "key": "ctrl+l",
+        "mac": "cmd+l",
+        "when": "editorTextFocus && editorHasSelection"
+      },
+      {
+        "command": "frizz.addSelectionOrFile",
+        "key": "alt+k",
+        "mac": "alt+k",
+        "when": "editorTextFocus"
       }
     ],
     "configuration": {
@@ -244,7 +276,7 @@
         "frizz.useSidebar": {
           "type": "boolean",
           "default": true,
-          "markdownDescription": "Put what you add from the editor — **Add to Frizz prompt** (`Ctrl+I`), a file, a problem's **Ask Frizz to fix**, a terminal selection — and **Ask Frizz…** and **Send to Frizz thread…** into the Frizz sidebar's prompt box, to write the rest there. Turn it off to send selections and files to Frizz in your browser, and to type Ask and Send messages in an input box."
+          "markdownDescription": "Put what you add from the editor — **Add to Frizz prompt** (`Ctrl+L`), a file, a problem's **Ask Frizz to fix**, a terminal selection — and **Ask Frizz…** and **Send to Frizz thread…** into the Frizz sidebar's prompt box, to write the rest there. Turn it off to send selections and files to Frizz in your browser, and to type Ask and Send messages in an input box."
         }
       }
     },

@@ -575,7 +575,10 @@ export function activateFrizz(api: Vscode, context: vscode.ExtensionContext): Fr
     return composeInput({ ...target, path: match?.path ?? target.path, projectId: match?.project.id })
   }
 
-  /** Add to Frizz prompt — Ctrl+I / ⌘I with a selection, the editor's Frizz menu, the palette: the selection, else the caret's line. */
+  /**
+   * Add to Frizz prompt — Ctrl+L / ⌘L (Cursor's chord) or Ctrl+I / ⌘I with a selection, the editor's Frizz
+   * menu, the palette: the selection, else the caret's line.
+   */
   async function addToPrompt(...args: unknown[]): Promise<EditorComposed | undefined> {
     const { uri } = splitArgs(args)
     const target = targetOf(uri)
@@ -608,6 +611,17 @@ export function activateFrizz(api: Vscode, context: vscode.ExtensionContext): Fr
       return undefined
     }
     return deliver(items)
+  }
+
+  /**
+   * Alt+K (Option+K on a Mac) — Claude Code's chord for an @-mention of the code in front: the selection
+   * when there is one, as Add to Frizz prompt adds it; with only a caret, the whole file, as Add file to
+   * Frizz prompt adds it. Not the caret's line, which is what the palette's Add to Frizz prompt falls back
+   * to: a mention with nothing selected names the file, which is what the human is looking at.
+   */
+  async function addSelectionOrFile(...args: unknown[]): Promise<EditorComposed | undefined> {
+    const editor = api.window.activeTextEditor
+    return editor && !editor.selection.isEmpty ? addToPrompt(...args) : addFileToPrompt(...args)
   }
 
   /**
@@ -685,9 +699,9 @@ export function activateFrizz(api: Vscode, context: vscode.ExtensionContext): Fr
   }
 
   /**
-   * A title-row button, or the same command from the palette: the view brought into sight (opened, the
-   * first time) and focused, then the door posted to its page — New thread puts the caret in the box,
-   * Jump opens the page's own ⌘K palette.
+   * A title-row button (or its ⋯ menu), or the same command from the palette: the view brought into sight
+   * (opened, the first time) and focused, then the door posted to its page — New thread puts the caret in
+   * the box, Jump opens the page's own ⌘K palette, Keyboard shortcuts the page's `?` sheet.
    */
   async function sidebarCommand(command: EmbedCommandMessage["command"]): Promise<boolean> {
     await sidebar.reveal(false)
@@ -714,12 +728,14 @@ export function activateFrizz(api: Vscode, context: vscode.ExtensionContext): Fr
     api.commands.registerCommand("frizz.sendToThread", sendToThread),
     api.commands.registerCommand("frizz.addToPrompt", addToPrompt),
     api.commands.registerCommand("frizz.addFileToPrompt", addFileToPrompt),
+    api.commands.registerCommand("frizz.addSelectionOrFile", addSelectionOrFile),
     api.commands.registerCommand("frizz.addTerminalSelection", addTerminalSelection),
     api.commands.registerCommand(FIX_COMMAND, askToFix),
     api.commands.registerCommand("frizz.sidebar.newThread", () => sidebarCommand("new-thread")),
     api.commands.registerCommand("frizz.sidebar.queue", () => sidebarCommand("queue")),
     api.commands.registerCommand("frizz.sidebar.jump", () => sidebarCommand("jump")),
     api.commands.registerCommand("frizz.sidebar.settings", () => sidebarCommand("settings")),
+    api.commands.registerCommand("frizz.sidebar.shortcuts", () => sidebarCommand("shortcuts")),
     // "Ask Frizz to fix" on any problem in a file on disk, in every language. Offered only with the sidebar
     // on: without it the problem's message has nowhere to go, and a bare chip is Add to Frizz prompt.
     api.languages.registerCodeActionsProvider({ scheme: "file" }, {

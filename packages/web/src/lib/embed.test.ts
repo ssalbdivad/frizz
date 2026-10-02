@@ -69,7 +69,7 @@ test("host messages are accepted in the contract's shapes only", () => {
   assert.deepEqual(parseHostMessage(context), context)
   assert.deepEqual(parseHostMessage({ ...context, active: { ...file, extra: 1 } }), { ...context, active: file })
   assert.deepEqual(parseHostMessage({ type: "frizz:editor-context", active: null, open: [] }), { type: "frizz:editor-context", active: null, open: [] })
-  for (const command of ["new-thread", "queue", "jump", "settings"]) assert.deepEqual(parseHostMessage({ type: "frizz:command", command }), { type: "frizz:command", command })
+  for (const command of ["new-thread", "queue", "jump", "settings", "shortcuts"]) assert.deepEqual(parseHostMessage({ type: "frizz:command", command }), { type: "frizz:command", command })
 
   const refused: unknown[] = [
     null,

@@ -21,7 +21,7 @@ import {
 } from "../lib/keybindings.ts"
 import { useShortcutLabel, useShortcutListener, withShortcut } from "../lib/keyboardRuntime.ts"
 import { embedded } from "../lib/embed.ts"
-import { HOST_CHORDS, HOST_CHORDS_NOTE, SIDEBAR_KEY_HINTS, SIDEBAR_KEY_NAMES, SIDEBAR_KEYS_NOTE, SIDEBAR_QUEUE_NOTE, hostChordKeycaps, hostChordProblem } from "../lib/embedKeys.ts"
+import { EDITOR_CHORDS, EDITOR_CHORDS_NOTE, HOST_CHORDS, HOST_CHORDS_NOTE, SIDEBAR_KEY_HINTS, SIDEBAR_KEY_NAMES, SIDEBAR_KEYS_NOTE, SIDEBAR_QUEUE_NOTE, hostChordKeycaps, hostChordProblem } from "../lib/embedKeys.ts"
 import { STATUS_ROW_ACTION, STATUS_ROW_ICON } from "../lib/statusRow.ts"
 import { Dialog } from "./ui/Dialog.tsx"
 
@@ -245,9 +245,25 @@ function KeyboardShortcutsDialog({ open, onOpenChange }: { open: boolean; onOpen
             they have not looked up. Written against the defaults: a rebind changes a key, not the rule.
             `text-balance`: at phone width it wraps, and unbalanced it left "compose." alone on line two. */}
         <p className="mt-2.5 text-balance text-[11.5px] text-muted-65">Letter keys are initials, except J/K to move and C to compose.</p>
-        {/* IN AN EDITOR'S SIDEBAR the sheet says where it differs (lib/embedKeys.ts): this line, a hint
-            under each key whose meaning changes, and the VS Code chords the sidebar passes on, last. */}
+        {/* IN AN EDITOR'S SIDEBAR the sheet says where it differs (lib/embedKeys.ts): this line, the
+            editor's own chords for adding code first (what the sidebar is for), a hint under each key
+            whose meaning changes, and the VS Code chords the sidebar passes on, last. */}
         {sidebar && <p data-shortcut-sidebar-note className="mt-1 text-balance text-[11.5px] text-muted-65">{SIDEBAR_KEYS_NOTE}</p>}
+        {sidebar && (
+          <section aria-label="Editor" data-shortcut-editor className="mt-3">
+            <h3 className="text-[11px] font-medium uppercase tracking-wide text-fg/60">Editor</h3>
+            <p className="mt-0.5 text-[11.5px] text-muted-65">{EDITOR_CHORDS_NOTE}</p>
+            <ul className="mt-1.5 flex flex-col">
+              {EDITOR_CHORDS.map((editorChord) => (
+                <li key={editorChord.label} className="flex min-h-7 items-center gap-3">
+                  <span className="min-w-0 flex-1 text-[13px] text-fg/90">{editorChord.label}</span>
+                  {/* Not muted, unlike the fixed keys and VS Code's: these are what the sidebar is for. */}
+                  <span className="p-[3px]"><Keycaps chord={editorChord.chord} /></span>
+                </li>
+              ))}
+            </ul>
+          </section>
+        )}
         {groups.map((group) => (
           <section key={group.heading} aria-label={group.heading} className="mt-3">
             <h3 className="text-[11px] font-medium uppercase tracking-wide text-fg/60">{group.heading}</h3>

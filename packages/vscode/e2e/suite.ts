@@ -645,39 +645,86 @@ const steps: Step[] = [
     },
   },
   {
-    name: "Ctrl+I in the editor puts the selection in the sidebar's prompt with the caret; with no selection the chord is VS Code's own",
+    name: "Ctrl+L (Cursor's) and Ctrl+I in the editor put the selection in the sidebar's prompt with the caret; with no selection both chords are VS Code's own",
     modes: ["fake"],
     async run({ project }) {
-      assert.deepEqual(manifest().contributes.keybindings, [{ command: "frizz.addToPrompt", key: "ctrl+i", mac: "cmd+i", when: "editorTextFocus && editorHasSelection" }])
-      const chord = process.platform === "darwin" ? "meta+i" : "ctrl+i"
-      const editor = await openSample([4, 0, 4])
+      // Ctrl+L LAST: VS Code shows a command's last-contributed binding in its menus and the palette.
+      assert.deepEqual(manifest().contributes.keybindings, [
+        { command: "frizz.addToPrompt", key: "ctrl+i", mac: "cmd+i", when: "editorTextFocus && editorHasSelection" },
+        { command: "frizz.addToPrompt", key: "ctrl+l", mac: "cmd+l", when: "editorTextFocus && editorHasSelection" },
+        { command: "frizz.addSelectionOrFile", key: "alt+k", mac: "alt+k", when: "editorTextFocus" },
+      ])
+      const mod = process.platform === "darwin" ? "meta" : "ctrl"
+      for (const chord of [`${mod}+l`, `${mod}+i`]) {
+        const editor = await openSample([4, 0, 4])
+        await sleep(500)
+        const from = await received()
+        await press(chord)
+        await until(`${chord}'s chip in the page`, async () => (await pageReceived("frizz:compose", from)).length > 0, 15_000)
+        await sleep(300)
+        const composes = await pageReceived("frizz:compose", from)
+        assert.equal(composes.length, 1, `${chord}: one press, one chip`)
+        const [compose] = composes
+        assert.deepEqual({ ...compose, id: undefined }, {
+          type: "frizz:compose",
+          id: undefined,
+          item: { projectId: project.id, path: sample, text: sampleLines(editor.document, 5, 5), startLine: 5, endLine: 5, app: vscode.env.appName },
+          target: "front",
+          focus: true,
+        }, chord)
+      }
+
+      // A caret, no selection: neither binding's `when` matches, so nothing reaches Frizz — and Ctrl+L is
+      // VS Code's own again, which selects the caret's line.
+      for (const chord of [`${mod}+l`, `${mod}+i`]) {
+        const caret = await openSample()
+        caret.selection = new vscode.Selection(5, 2, 5, 2)
+        // The selection crosses to the window's renderer, where `editorHasSelection` is kept, on its own
+        // channel; the key must not overtake it.
+        await sleep(500)
+        const before = await received()
+        await press(chord)
+        await sleep(1_500)
+        assert.deepEqual(await pageReceived("frizz:compose", before), [], chord)
+        if (chord.endsWith("+l")) {
+          const line = caret.selection
+          assert.deepEqual([line.start.line, line.start.character, line.end.line, line.end.character], [5, 0, 6, 0], "VS Code's Ctrl+L selected the line")
+        }
+        await press("escape")
+      }
+    },
+  },
+  {
+    name: "Alt+K (Claude Code's) adds the selection, or with only a caret the whole file",
+    modes: ["fake"],
+    async run({ project }) {
+      const editor = await openSample([1, 0, 2])
       await sleep(500)
-      const from = await received()
-      await press(chord)
-      await until("the chip in the page", async () => (await pageReceived("frizz:compose", from)).length > 0, 15_000)
+      let from = await received()
+      await press("alt+k")
+      await until("the selection's chip", async () => (await pageReceived("frizz:compose", from)).length > 0, 15_000)
       await sleep(300)
-      const composes = await pageReceived("frizz:compose", from)
-      assert.equal(composes.length, 1, "one press, one chip")
-      const [compose] = composes
-      assert.deepEqual({ ...compose, id: undefined }, {
+      assert.deepEqual((await pageReceived("frizz:compose", from)).map(({ id: _, ...rest }) => rest), [{
         type: "frizz:compose",
-        id: undefined,
-        item: { projectId: project.id, path: sample, text: sampleLines(editor.document, 5, 5), startLine: 5, endLine: 5, app: vscode.env.appName },
+        item: { projectId: project.id, path: sample, text: sampleLines(editor.document, 2, 3), startLine: 2, endLine: 3, app: vscode.env.appName },
         target: "front",
         focus: true,
-      })
+      }])
 
-      // A caret, no selection: the binding's `when` does not match, so nothing reaches Frizz.
+      // A caret only: the whole file, not the caret's line (which the palette's Add to Frizz prompt adds).
       const caret = await openSample()
-      caret.selection = new vscode.Selection(5, 2, 5, 2)
-      // The selection crosses to the window's renderer, where `editorHasSelection` is kept, on its own
-      // channel; the key must not overtake it.
+      caret.selection = new vscode.Selection(3, 1, 3, 1)
       await sleep(500)
-      const before = await received()
-      await press(chord)
-      await sleep(1_500)
-      assert.deepEqual(await pageReceived("frizz:compose", before), [])
-      await press("escape")
+      from = await received()
+      await press("alt+k")
+      await until("the file's chip", async () => (await pageReceived("frizz:compose", from)).length > 0, 15_000)
+      await sleep(300)
+      assert.deepEqual((await pageReceived("frizz:compose", from)).map(({ id: _, ...rest }) => rest), [{
+        type: "frizz:compose",
+        item: { projectId: project.id, path: sample, app: vscode.env.appName },
+        target: "front",
+        focus: true,
+      }])
     },
   },
   {
@@ -821,9 +868,14 @@ const steps: Step[] = [
       let from = await received()
       assert.equal(await vscode.commands.executeCommand("frizz.sidebar.jump"), true)
       assert.equal(api.sidebar().visible, true)
-      for (const command of ["frizz.sidebar.newThread", "frizz.sidebar.queue", "frizz.sidebar.settings"]) assert.equal(await vscode.commands.executeCommand(command), true, command)
-      await until("four doors", async () => (await pageReceived("frizz:command", from)).length === 4)
-      assert.deepEqual((await pageReceived("frizz:command", from)).map((data) => data.command), ["jump", "new-thread", "queue", "settings"])
+      for (const command of ["frizz.sidebar.newThread", "frizz.sidebar.queue", "frizz.sidebar.settings", "frizz.sidebar.shortcuts"]) assert.equal(await vscode.commands.executeCommand(command), true, command)
+      await until("five doors", async () => (await pageReceived("frizz:command", from)).length === 5)
+      assert.deepEqual((await pageReceived("frizz:command", from)).map((data) => data.command), ["jump", "new-thread", "queue", "settings", "shortcuts"])
+      // Keyboard shortcuts is under the row's ⋯ (the page's status row does not draw its ⌨ in the sidebar),
+      // with the other overflow entries, and only while a page says where it is.
+      const overflow = manifest().contributes.menus["view/title"]!.filter((item) => !item.group?.startsWith("navigation"))
+      assert.deepEqual(overflow.map((item) => item.command), ["frizz.sidebar.reload", "frizz.open", "frizz.sidebar.shortcuts"])
+      assert.equal(overflow.at(-1)!.when, "view == frizz.sidebar && frizz.sidebarView")
 
       // The button itself, clicked with a mouse: the queue's row has New thread.
       await pagePosts({ type: "frizz:route", view: "queue", title: "", description: "2 ready" })
