@@ -228,21 +228,22 @@ test("host runtime injection is stripped whatever case the OS spells its variabl
   }
 })
 
-test("listSkills intersects the initialize command list with the init frame's skills array", { timeout: 10_000 }, async () => {
+test("listSkills offers the skills and the built-in commands a Frizz thread can run", { timeout: 10_000 }, async () => {
   const harness = startHarness("basic")
   try {
     await withTimeout(harness.handle.ready(), "session init")
-    // The fixture's initialize response carries THREE commands ("review", "compact", "explore") and
-    // its init frame names only "review" and "explore" as skills: the built-in stand-in must not
-    // surface as a skill. Each carries the source `get_context_usage` reported for it — "review" from
-    // a root frizz maps, "explore" from an invented one that must degrade to no label rather than a
-    // wrong one. "compact" has a source too and still must not appear.
+    // The fixture's initialize response carries "review", "compact", "explore" and three built-ins
+    // that must stay out ("clear", "__remote-workflow", "extra-usage"); its init frame names only
+    // "review" and "explore" as skills. Each carries the source `get_context_usage` reported for it —
+    // "review" from a root frizz maps, "explore" from an invented one that must degrade to no label
+    // rather than a wrong one, and the built-in "compact" from claude's own "built-in".
     const skills = await withTimeout(harness.handle.listSkills(), "skill listing")
     assert.deepEqual(skills, [
       // "review" arrives as "Review changes (project)" and loses the suffix, because the column is
       // about to say the same thing. "explore" keeps "(dynamic workflow)": it is a parenthetical, not
       // a source, and nothing frizz renders would contradict it.
       { name: "review", description: "Review changes", source: "project" },
+      { name: "compact", description: "Compact the conversation", source: "builtin" },
       { name: "explore", description: "Explore the repository (dynamic workflow)", source: undefined },
     ])
     // The source map is memoized: a second listing must not re-ask for the context usage, which is a
@@ -265,6 +266,8 @@ test("listSkills still answers when the harness cannot report where its skills c
       // With no source to render, "(project)" is the only thing telling the operator where this came
       // from — so it stays. The suffix is only redundant next to a column that repeats it.
       { name: "review", description: "Review changes (project)", source: undefined },
+      // A built-in with no reported source is still a built-in.
+      { name: "compact", description: "Compact the conversation", source: "builtin" },
       { name: "explore", description: "Explore the repository (dynamic workflow)", source: undefined },
     ])
   } finally {

@@ -4832,7 +4832,8 @@ export const ThreadProfileOptionsResult = z.object({
 })
 export type ThreadProfileOptionsResult = z.infer<typeof ThreadProfileOptionsResult>
 
-// The thread's invocable skills, for the composer's `/` typeahead. Always the HARNESS's own list —
+// The thread's invocable skills — and, on Claude, the built-in slash commands a Frizz thread can run —
+// for the composer's `/` typeahead. Always the HARNESS's own list —
 // Claude's `supportedCommands()` through the broker, Codex's `skills/list` through the app-server —
 // never a frizz-side scan of skill directories, which could only drift from what the session actually
 // loaded. `description` may be empty (Claude's init-frame names carry no descriptions for entries the
@@ -6098,6 +6099,12 @@ export const TranscriptMessage = z.object({
   // "Steered"/"Followed up" divider promises the corresponding instruction remains readable there.
   // Additive + optional: ordinary thread transcripts never set it.
   agentInstruction: z.literal(true).optional(),
+  // The OUTPUT of a slash command the harness ran itself — `/context`, `/usage`, `/mcp` — rather than
+  // handing to the model. Set on a `kind:"event"` message whose `text` is that output (plain text or
+  // Markdown); `command` is the command it answered, when the transcript named it. Neither the agent nor
+  // the human said it, so it renders as its own block under the `/name` bubble. Additive + optional: a
+  // client that predates it shows the text as an ordinary event line.
+  commandOutput: z.object({ command: z.string().max(512).optional(), stream: z.enum(["stdout", "stderr"]) }).strict().optional(),
   // A SUB-AGENT (or peer session) wrote this user turn, not the human — the same defect class `wake`
   // above corrects. Claude Code's agent-to-agent channel (a background child calling
   // `SendMessage({to:"main"})`) delivers UPWARD into the parent's queue like any follow-up, so the

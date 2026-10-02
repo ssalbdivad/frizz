@@ -2167,14 +2167,17 @@ test("a declined /compact renders Claude's answer as a meta line", () => {
 })
 
 // The CONTROL: only the receipt straight after a `/compact` envelope is the compaction's. Another local
-// command's output, or a human message quoting the tag, keeps its bubble.
-test("a local-command receipt that does not follow /compact still renders", () => {
+// command's output still renders — as that command's output block, unwrapped, never as the human.
+test("a local-command receipt that does not follow /compact still renders, as command output", () => {
   const receipt = "<local-command-stdout>Total cost: $0.01</local-command-stdout>"
   const raw = [
     JSON.stringify({ type: "user", timestamp: "2026-09-26T10:00:00.000Z", message: { content: "orientation\n\nTASK:\nthe task" } }),
     JSON.stringify({ type: "user", timestamp: "2026-09-26T10:00:05.000Z", message: { role: "user", content: receipt } }),
   ].join("\n")
-  assert.deepEqual(projectClaudeTranscript(raw).map((m) => m.displayText ?? m.text), ["the task", receipt])
+  const msgs = projectClaudeTranscript(raw)
+  assert.deepEqual(msgs.map((m) => m.displayText ?? m.text), ["the task", "Total cost: $0.01"])
+  assert.deepEqual(msgs[1].commandOutput, { stream: "stdout" })
+  assert.equal(msgs[1].role, "assistant", "the CLI printed it; it is not the human's bubble")
 })
 
 // ---- the runtime's interrupt receipt ------------------------------------------------------------
@@ -2476,6 +2479,46 @@ test("an argument-less slash command resolves too", () => {
   const users = msgs.filter((m) => m.role === "user")
   assert.deepEqual(users.map((m) => m.text), ["/effort"])
   assert.equal(users[0].queued, false)
+})
+
+// ---- typed slash commands (shapes from a real broker session, claude 2.1.285, 2026-10-02) ----------
+const envelopeOf = (name: string, args = "") =>
+  `<command-name>/${name}</command-name>\n            <command-message>${name}</command-message>\n            <command-args>${args}</command-args>`
+const localCommandLine = (body: string, stream = "stdout", ts = "2026-07-01T00:00:11.000Z") =>
+  JSON.stringify({ type: "system", subtype: "local_command", timestamp: ts, content: `<local-command-${stream}>${body}</local-command-${stream}>` })
+const caveatLine = () => userLine("<local-command-caveat>The command below was run directly in Claude Code, not sent to you as a request.</local-command-caveat>", "2026-07-01T00:00:10.000Z", { isMeta: true })
+
+test("a typed /context renders the human's bubble, then the command's output block", () => {
+  const table = "## Context Usage\n\n| Category | Tokens |\n|---|---|\n| Messages | 4.2k |"
+  const msgs = parseTranscript([enqueueLine("/context"), caveatLine(), userLine(envelopeOf("context")), localCommandLine(table)].join("\n"))
+  assert.deepEqual(msgs.map((m) => `${m.role}:${m.text}`), ["user:/context", `assistant:${table}`])
+  assert.equal(msgs[0].queued, false)
+  assert.deepEqual(msgs[1].commandOutput, { command: "/context", stream: "stdout" })
+  assert.equal(msgs[1].kind, "event", "an older client falls back to an event line, never a parse failure")
+})
+
+test("a command typed under an ALIAS resolves its bubble — /cost arrives as /usage", () => {
+  const msgs = parseTranscript([enqueueLine("/cost"), caveatLine(), userLine(envelopeOf("usage")), localCommandLine("Current session: 11% used")].join("\n"))
+  assert.deepEqual(msgs.map((m) => `${m.role}:${m.text}`), ["user:/cost", "assistant:Current session: 11% used"])
+  assert.equal(msgs[0].queued, false, "not stranded gray")
+  assert.equal(msgs[1].commandOutput?.command, "/usage")
+})
+
+test("the alias fallback matches arguments, so it never resolves an unrelated queued command", () => {
+  const msgs = parseTranscript([enqueueLine("/loop 5m check"), userLine(envelopeOf("usage"))].join("\n"))
+  const users = msgs.filter((m) => m.role === "user")
+  assert.deepEqual(users.map((m) => [m.text, m.queued]), [["/loop 5m check", true], ["/usage", undefined]])
+})
+
+test("an envelope nothing queued draws what was typed, never the markup", () => {
+  const msgs = parseTranscript([userLine(envelopeOf("mcp", "reconnect github")), localCommandLine("Reconnected", "stderr")].join("\n"))
+  assert.deepEqual(msgs.map((m) => `${m.role}:${m.displayText ?? m.text}`), ["user:/mcp reconnect github", "assistant:Reconnected"])
+  assert.deepEqual(msgs[1].commandOutput, { command: "/mcp", stream: "stderr" })
+})
+
+test("command output loses its ANSI escapes", () => {
+  const msgs = parseTranscript([userLine(envelopeOf("doctor")), localCommandLine("\x1b[32m✓\x1b[0m healthy")].join("\n"))
+  assert.equal(msgs.at(-1)!.text, "✓ healthy")
 })
 
 test("a PEER-session message resolves against Claude Code's wrapper, and renders as plumbing never does", () => {
