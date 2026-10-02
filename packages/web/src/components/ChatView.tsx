@@ -112,6 +112,7 @@ import { CodexDirectiveCard, MermaidDiagram } from "./CodexRichOutput.tsx"
 import { META_CARD_STEP, PICTURE_STEP, STEP, USER_TAIL_EXTRA, VSpace } from "./rhythm.tsx"
 import { SpinoffButton, SpinoffCard, SpinoffOf, SpinoffOriginCard } from "./Spinoff.tsx"
 import { ThreadSlugContext } from "./threadSlugContext.ts"
+import { toolSchedule, type ToolSlot } from "../lib/toolQueue.ts"
 import { HEADER_ICON_CLASS } from "../lib/headerIcon.ts"
 
 // Answer types moved to lib/questionBlocks.ts (shared by the queue card, the thread view, and the
@@ -2127,7 +2128,7 @@ function shortenTarget(detail: string): string {
 // `at` is the emitting assistant message's ISO timestamp — the moment the model issued this batch of
 // calls, and therefore the clock a pending FOREGROUND card times itself against. Optional: a pre-restart
 // server projects messages without it, and a card with no clock marks itself immediately.
-function MinimalToolActivity({ tools, at }: { tools: CollapsedTool[]; at?: string }) {
+function MinimalToolActivity({ tools, slots, at }: { tools: CollapsedTool[]; slots?: readonly (ToolSlot | undefined)[]; at?: string }) {
   const [expanded, setExpanded] = useState(false)
   const cardsId = useId()
   const total = tools.reduce((n, t) => n + t.count, 0)
@@ -2157,7 +2158,7 @@ function MinimalToolActivity({ tools, at }: { tools: CollapsedTool[]; at?: strin
       </button>
       {expanded && (
         <div id={cardsId} className="mt-1.5 flex flex-col">
-          {withSpacers(tools.map((tool, i) => <ToolCardRouter key={i} t={tool} startedAt={at} />), 6)}
+          {withSpacers(tools.map((tool, i) => <ToolCardRouter key={i} t={tool} slot={slots?.[i]} startedAt={at} />), 6)}
         </div>
       )}
       {!expanded && <div id={cardsId} hidden />}
@@ -2169,14 +2170,16 @@ function MinimalToolActivity({ tools, at }: { tools: CollapsedTool[]; at?: strin
 // batching. Dedicated block tools split the run and remain visible: sub-agent and send cards, and — as
 // of 2026-08-01 — every LIVE background/detached lifecycle; a finished one folds back in as of
 // 2026-09-13 (see lib/toolActivity.isToolActivityException).
-function ToolCalls({ tools, at }: { tools: CollapsedTool[]; dense?: boolean; at?: string }) {
-  const runs: { exceptional: boolean; tools: CollapsedTool[] }[] = []
-  for (const tool of tools) {
+function ToolCalls({ tools, slots, at }: { tools: CollapsedTool[]; slots?: readonly ToolSlot[]; dense?: boolean; at?: string }) {
+  const runs: { exceptional: boolean; tools: CollapsedTool[]; slots: (ToolSlot | undefined)[] }[] = []
+  tools.forEach((tool, i) => {
     const exceptional = isToolActivityException(tool)
     const previous = runs[runs.length - 1]
-    if (previous?.exceptional === exceptional) previous.tools.push(tool)
-    else runs.push({ exceptional, tools: [tool] })
-  }
+    if (previous?.exceptional === exceptional) {
+      previous.tools.push(tool)
+      previous.slots.push(slots?.[i])
+    } else runs.push({ exceptional, tools: [tool], slots: [slots?.[i]] })
+  })
 
   // A PICTURE card sets its own gap against both its neighbours here — the cards batched beside it and
   // the digest below the batch alike — while the compact cards around it keep the tight run between
@@ -2188,21 +2191,57 @@ function ToolCalls({ tools, at }: { tools: CollapsedTool[]; dense?: boolean; at?
           ? (
               <div key={`exceptions-${runIndex}`} className="flex flex-col">
                 {withSpacers(
-                  run.tools.map((tool, i) => <ToolCardRouter key={i} t={tool} startedAt={at} />),
+                  run.tools.map((tool, i) => <ToolCardRouter key={i} t={tool} slot={run.slots[i]} startedAt={at} />),
                   pictureAwareGap(run.tools.map((tool) => toolBandEdges([tool])), META_CARD_STEP),
                 )}
               </div>
             )
-          : <MinimalToolActivity key={`activity-${runIndex}`} tools={run.tools} at={at} />
+          : <MinimalToolActivity key={`activity-${runIndex}`} tools={run.tools} slots={run.slots} at={at} />
       )), pictureAwareGap(runs.map((run) => toolBandEdges(run.tools)), META_CARD_STEP))}
     </div>
   )
 }
 
+// Set by ToolCardRouter around one card: this call is pending behind an earlier batch of the same message
+// and has not started (lib/toolQueue.ts). The reading says "queued" with no clock, and the liveness mark
+// stays off — the dot means something is running right now.
+const ToolQueuedContext = createContext(false)
+
+/** Is this thread's agent Claude? A thread with no recorded backend predates codex support, so it is. */
+function threadBackendIsClaude(slug: string | null): boolean {
+  if (!slug) return false
+  const backend = threadBySlug(store.board, slug)?.backend
+  return backend === undefined || backend === "claude"
+}
+
+/** Cut one message-wide schedule back into its tools bands (a non-tools part gets none). */
+function splitSlots(slots: readonly ToolSlot[], bands: readonly (readonly unknown[] | undefined)[]): (ToolSlot[] | undefined)[] {
+  let at = 0
+  return bands.map((band) => {
+    if (!band) return undefined
+    const mine = slots.slice(at, at + band.length)
+    at += band.length
+    return mine
+  })
+}
+
 // Route a collapsed tool entry to its card. Edit/Bash/Read/Agent get expandable bodies (chevron);
 // everything else (Grep, Glob, Read-without-excerpt, MCP, Monitor, a pre-restart Bash with no command)
 // is a header-only card. All share the same bordered card family so no call ever reads as bare text.
-export function ToolCardRouter({ t, startedAt }: { t: CollapsedTool; startedAt?: string }) {
+export function ToolCardRouter({ t, slot, startedAt }: { t: CollapsedTool; slot?: ToolSlot; startedAt?: string }) {
+  // A call that WAITED for the batch before it began when that batch returned, not when the message was
+  // written: its live clock starts there, and its settled duration drops the wait (lib/toolQueue.ts).
+  const waited = slot?.waitedMs
+  const began = waited && startedAt && Number.isFinite(Date.parse(startedAt)) ? new Date(Date.parse(startedAt) + waited).toISOString() : startedAt
+  const shown = waited && t.status !== "pending" && t.durationMs !== undefined ? { ...t, durationMs: Math.max(0, t.durationMs - waited) } : t
+  return (
+    <ToolQueuedContext.Provider value={slot?.queued === true}>
+      <ToolCardRoute t={shown} startedAt={began} />
+    </ToolQueuedContext.Provider>
+  )
+}
+
+function ToolCardRoute({ t, startedAt }: { t: CollapsedTool; startedAt?: string }) {
   const slug = useContext(ThreadSlugContext)
   const board = useBoard()
   const thread = slug ? threadBySlug(board, slug) : undefined
@@ -2335,7 +2374,8 @@ function useForegroundRunning(status: ToolStatus | undefined, backgroundState: T
 // information — and a still frame cannot show a pulse, so the finished mark had to be muted to avoid
 // reading as live, i.e. it was already conceding it had no business being there.
 function ToolLiveMark({ status, backgroundState, liveBackgroundState, startedAt }: { status?: ToolStatus; backgroundState?: TranscriptToolCall["backgroundState"]; liveBackgroundState?: "running" | "stale"; startedAt?: string }) {
-  const foregroundRunning = useForegroundRunning(status, backgroundState, startedAt)
+  const queued = useContext(ToolQueuedContext)
+  const foregroundRunning = useForegroundRunning(queued ? undefined : status, backgroundState, startedAt)
   // Precedence follows the READING beside it, exactly: a tracked op's own observed state outranks the
   // call's pending-ness, so a shell frizz watches and finds quiet draws the breathing mark next to the
   // word "stale". The old right-hand indicator tested `running || pending-background` first and so
@@ -2357,7 +2397,11 @@ function ToolLiveMark({ status, backgroundState, liveBackgroundState, startedAt 
 }
 
 export function ToolStatusMeta({ status, backgroundState, liveBackgroundState, exitCode, durationMs }: { status?: ToolStatus; backgroundState?: TranscriptToolCall["backgroundState"]; liveBackgroundState?: "running" | "stale"; exitCode?: number; durationMs?: number }) {
+  const queued = useContext(ToolQueuedContext) && status === "pending"
   if (!status && durationMs === undefined) return null
+  // Not started yet, so no clock: an elapsed time here would be the wait for the call above, read as
+  // this call's own runtime (lib/toolQueue.ts).
+  if (queued) return <ToolMetaReading tone="text-muted-55" title="queued · starts when the call before it finishes" label="queued" duration={undefined} />
   // The GLYPH carries "background", so the words no longer have to. "BACKGROUND RUNNING" in petite-caps
   // beside a dot that already says background was the longest string in the header and pushed the command
   // it annotates into truncation for a fact it was stating twice (maintainer 2026-07-29: "it is way too
@@ -2402,8 +2446,9 @@ export function ToolStatusMeta({ status, backgroundState, liveBackgroundState, e
 // such as "11 sec" for hours. Pending Bash cards measure from their original transcript timestamp and
 // tick live; completed cards keep the provider-derived fixed duration.
 function useBashDuration(status: ToolStatus | undefined, startedAt: string | undefined, fixedDurationMs: number | undefined): number | undefined {
+  const queued = useContext(ToolQueuedContext)
   const started = startedAt ? Date.parse(startedAt) : Number.NaN
-  const live = status === "pending" && Number.isFinite(started)
+  const live = status === "pending" && !queued && Number.isFinite(started)
   const [now, setNow] = useState(() => Date.now())
   useEffect(() => {
     if (!live) return
@@ -3328,6 +3373,7 @@ export const Message = memo(function Message({ m, answering, dense, paired, show
   // produced them but a 44pt-thumb answer never has to land on a 24pt chip inside a scrolling message.
   const isMobile = useIsMobile()
   const [answerSheetOpen, setAnswerSheetOpen] = useState(false)
+  const slugForSchedule = useContext(ThreadSlugContext)
   // An event line (a sub-agent completion) is transcript PUNCTUATION — a quiet full-width line, not a
   // bubble or a tool band. Rendered before the role branches (its role field is nominal).
   if (m.providerError) return <ProviderErrorCard error={m.providerError} />
@@ -3503,6 +3549,16 @@ export const Message = memo(function Message({ m, answering, dense, paired, show
     }
   }
 
+  // WHICH CALLS ARE STILL WAITING THEIR TURN (lib/toolQueue.ts). Scheduled over the WHOLE message, every
+  // tools part in order, because Claude batches a message's calls regardless of the prose between them.
+  // Claude only: codex runs a turn's calls side by side. Read off the store rather than subscribed to —
+  // a thread's backend never changes, and this component is memoized per message.
+  const scheduleTools = threadBackendIsClaude(slugForSchedule)
+  const toolBands = m.parts && m.parts.length > 0
+    ? normalizeParts(m.parts).map((part) => (part.kind === "tools" ? collapseTools(part.tools) : undefined))
+    : [collapseTools(m.tools)]
+  const toolSlots = scheduleTools ? splitSlots(toolSchedule(toolBands.flatMap((band) => band ?? [])), toolBands) : toolBands.map(() => undefined)
+
   if (m.parts && m.parts.length > 0) {
     // Ordered walk (the fix): each part renders where it belongs. A tools part → a card band over its
     // CONTIGUOUS run (collapseTools folds ×N + merges same-file edits within the run); a text part →
@@ -3514,8 +3570,8 @@ export const Message = memo(function Message({ m, answering, dense, paired, show
     // seam withMessageSpacers erases across messages. Order is preserved; only invisible parts go.
     normalizeParts(m.parts).forEach((part, pi) => {
       if (part.kind === "tools") {
-        const collapsed = collapseTools(part.tools)
-        if (collapsed.length) push(<ToolCalls key={`t${pi}`} tools={collapsed} dense={dense} at={m.at} />, toolBandEdges(collapsed))
+        const collapsed = toolBands[pi] ?? []
+        if (collapsed.length) push(<ToolCalls key={`t${pi}`} tools={collapsed} slots={toolSlots[pi]} dense={dense} at={m.at} />, toolBandEdges(collapsed))
       } else {
         renderText(part.text, `x${pi}`)
       }
@@ -3523,8 +3579,8 @@ export const Message = memo(function Message({ m, answering, dense, paired, show
   } else {
     // LEGACY fallback (a pre-restart server ships no `parts`): the old flat layout — tool band first,
     // then all prose. Degrades to today's (order-lossy) rendering until the server bounce.
-    const collapsed = collapseTools(m.tools)
-    if (collapsed.length > 0) push(<ToolCalls key="tools" tools={collapsed} dense={dense} at={m.at} />, toolBandEdges(collapsed))
+    const collapsed = toolBands[0] ?? []
+    if (collapsed.length > 0) push(<ToolCalls key="tools" tools={collapsed} slots={toolSlots[0]} dense={dense} at={m.at} />, toolBandEdges(collapsed))
     renderText(m.text, "leg")
   }
 
