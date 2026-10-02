@@ -626,6 +626,27 @@ test("a park whose work simply FINISHED is told to read the result, not that its
     assert.match(rows[0].message, /Do NOT relaunch the same work/)
     // …and it must NOT read as a broken fence, or the worker fixes something that was never wrong.
     assert.doesNotMatch(rows[0].message, /not running, so it is not a park/)
+    // …nor end by telling it to wrap up: "read the result and carry on" was followed by "nothing could
+    // wake you, finish in done", which contradicted it (2026-10-01).
+    assert.doesNotMatch(rows[0].message, /NOTHING running/)
+  } finally { h.close() }
+})
+
+// ONE EVENT, ONE WAKE. A shell that finishes AFTER the rest gets its own completion wake, so the park's
+// "has FINISHED" for the same shell was the same news twice, merged under two headings (wsl-cleanup,
+// 2026-10-01). The test above is the control: finished BEFORE the rest, no completion wake, so the
+// park still speaks.
+test("a park whose shell finished after the rest draws ONE wake — the shell's own", async () => {
+  const h = parkHarness([{ kind: "shell", value: "b5h60hai3" }, { kind: "for", value: "2h" }], {
+    shells: [],
+    retired: [{ id: "toolu_p", taskId: "b5h60hai3", label: "Pruning package stores", status: "completed", finishedAt: new Date().toISOString() }],
+  })
+  try {
+    await h.s.tick()
+    await h.s.tick()
+    assert.equal(h.sent.length, 1, "one shell finishing is one piece of news")
+    assert.match(h.sent[0], /Your background shell finished: `b5h60hai3`/)
+    assert.doesNotMatch(h.sent[0], /parked on has FINISHED/)
   } finally { h.close() }
 })
 
