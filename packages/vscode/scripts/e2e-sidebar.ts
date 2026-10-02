@@ -4,7 +4,7 @@
 // routes them through the webview into the page's frame), and what is asserted is read where it shows —
 // the page's own DOM, VS Code's own title row and editor, the simulated worker's socket.
 //
-//   nub packages/vscode/scripts/e2e-sidebar.ts [--out=<dir>] [--dev] [--only=c1,c4] [--icon-before=<png>]
+//   nub packages/vscode/scripts/e2e-sidebar.ts [--out=<dir>] [--dev] [--only=c1,c4] [--icon-before=<png>] [--worktree]
 //   (or: nub packages/vscode/scripts/e2e.ts --sidebar [same flags])
 //
 //   --out    where the screenshots and results.json go (default: a `shots` dir in the run's scratch folder,
@@ -16,6 +16,9 @@
 //   --only   run only these checks (c1…c9); the boot, the seed and the view opening always run.
 //   --icon-before=<png>   an earlier top-dark activity-bar strip (1x enlarged 6x, as c1 writes it) to set
 //            beside this run's, for the eye.
+//   --worktree  open the window on a thread's git worktree (`.frizz/worktrees/<slug>` of the workspace)
+//            instead of the workspace, for c10's positive half; runs c10 alone unless --only says more,
+//            because every other check is written against a window on the workspace itself.
 //   FRIZZ_E2E_VSCODE=oldest|<version>   VS Code to run (default: stable). `oldest` is the manifest's floor.
 //   FRIZZ_E2E_KEEP=1                    keep the scratch folder (logs, the stack's log) even on a pass.
 //
@@ -40,6 +43,8 @@
 //      shortcuts opening the same sheet, Ctrl+1 back to the editor
 //   c9 the gallery: queue (dark, light), a thread with a selection and a chip, the open-files menu,
 //      Settings, the shortcuts sheet — at ~300px and ~450px
+//   c10 the window's own thread: a window opened on a thread's worktree opens the sidebar on that thread
+//      (--worktree); a window on the project itself opens on the queue (every other run, the control)
 //
 // NEVER ON THE REAL DISPLAY. On Linux the run re-executes itself under `xvfb-run -a` with DISPLAY and
 // WAYLAND_DISPLAY removed (DISPLAY=:0 here is the maintainer's screen through WSLg). The editor gets its
@@ -60,7 +65,7 @@ import puppeteer, { type Browser, type CDPSession, type ElementHandle, type Fram
 import { parseSentContext } from "../../web/src/lib/composerContext.ts"
 import type { AgentOp, AgentStatus, EditorState } from "../e2e/sidebar-agent.ts"
 import { decodePng, inkOf } from "../e2e/png.ts"
-import { SAMPLE, seedSidebarStack, type Seeded } from "../e2e/sidebar-seed.ts"
+import { SAMPLE, seedSidebarStack, seedWorktreeThread, type Seeded } from "../e2e/sidebar-seed.ts"
 import { bootStack, freePort, killAll, leftovers, stubbedPath, type Stack } from "../e2e/stack.ts"
 
 const pkg = resolve(dirname(fileURLToPath(import.meta.url)), "..")
@@ -84,7 +89,8 @@ if (process.platform === "linux" && (!process.env.DISPLAY || process.env.DISPLAY
 
 const flag = (name: string) => process.argv.find((arg) => arg.startsWith(`--${name}=`))?.slice(name.length + 3)
 const devMode = process.argv.includes("--dev")
-const only = flag("only")?.split(",").map((id) => id.trim())
+const worktreeWindow = process.argv.includes("--worktree")
+const only = flag("only")?.split(",").map((id) => id.trim()) ?? (worktreeWindow ? ["c10"] : undefined)
 const wanted = (id: string) => !only || only.includes(id)
 
 function vscodeVersion(): string {
@@ -608,7 +614,10 @@ try {
   const workspace = stack.info.tenants.find((tenant) => tenant.slug === "marketing-site")!
   seeded = await seedSidebarStack({ stack, workspace, scratch, log })
   const files = seeded.files
-  log(`stack up at ${origin}; the window's folder is the tenant ${workspace.slug} (${workspace.dir})`)
+  // c10: a thread working in a worktree of the workspace, and (--worktree) the window opened on it.
+  const worktreeThread = worktreeWindow ? await seedWorktreeThread({ stack, workspace, log }) : undefined
+  const windowFolder = worktreeThread?.dir ?? workspace.dir
+  log(`stack up at ${origin}; the window's folder is ${worktreeThread ? `the worktree of ${worktreeThread.slug}` : "the tenant"} ${workspace.slug} (${windowFolder})`)
 
   // A cold dev server optimizes its dependencies on the first page load, which can take a minute — a
   // stall no installed Frizz has (it serves a build). One headless load first, so the sidebar's first
@@ -657,7 +666,7 @@ try {
     extensionDevelopmentPath: extensionPath,
     extensionTestsPath: join(pkg, "dist", "e2e", "sidebar-agent.cjs"),
     launchArgs: [
-      workspace.dir,
+      windowFolder,
       `--user-data-dir=${userData}`,
       `--extensions-dir=${join(scratch, "extensions")}`,
       "--disable-extension=GitHub.copilot",
@@ -819,6 +828,9 @@ try {
   notes.readyAfterMs = Date.now() - started
   await waitFor("the queue in the page", async () => (await inPage(() => document.querySelectorAll("[data-xq-thread-row]").length)) > 0 || undefined, 60_000)
   await sleep(1_000)
+  // Where the page went on its own, before anything here moved it (c10): a thread only for a window on
+  // that thread's worktree. The extension asks the board once the page is ready, which a second covers.
+  notes.firstRoute = (await status()).sidebar.href ?? null
   await installFocusTrace()
   // What the first load cost: a dev server serves the page as hundreds of unbundled modules, where an
   // installed Frizz serves a build — so a slow first ready here is a fact about the stack, and the
@@ -1469,6 +1481,32 @@ try {
     await gallery(`w${Math.round(await sidebarWidth())}`)
     await dragSidebarTo(450)
     await gallery(`w${Math.round(await sidebarWidth())}`)
+  })
+
+  // ── c10: the window's own thread ──
+  await run("c10", "a window opened on a thread's worktree opens the sidebar on that thread", async () => {
+    const first = notes.firstRoute as string | null
+    if (!worktreeThread) {
+      expect("c10", "a window on the project itself opens on the queue, not on a thread", first !== null && !/\/thread\//u.test(first), { firstRoute: first })
+      return
+    }
+    const onIt = (href: string | null | undefined) => !!href && new URL(href).pathname.endsWith(`/thread/${worktreeThread.slug}`)
+    const href = await waitFor(`the sidebar on ${worktreeThread.slug}`, async () => {
+      const now = (await status()).sidebar.href
+      return onIt(now) ? now : undefined
+    }, 20_000).catch(async () => (await status()).sidebar.href)
+    expect("c10", "the sidebar's page is on the worktree's thread, with nothing here asking it to be", onIt(href), { firstRoute: first, href })
+    const shown = await waitFor("the thread's drawer", async () => {
+      const read = await inPage((title) => {
+        const drawer = [...document.querySelectorAll<HTMLElement>("[data-drawer-layer]")].at(-1)
+        return drawer && drawer.innerText.includes(title) ? { title, composer: !!drawer.querySelector('textarea[data-surface="chatComposer"]') } : undefined
+      }, worktreeThread.title)
+      return read
+    }, 15_000).catch(() => undefined)
+    expect("c10", "the page shows that thread, its title and its reply box", !!shown?.composer, shown)
+    const said = frizzLog().split("\n").find((line) => line.includes(`worktree of thread ${worktreeThread.slug}`))
+    expect("c10", "the extension says why it opened there", !!said, said?.trim())
+    await shot("c10-worktree-window-thread", { window: true })
   })
 
   expect("all", "no page errors in the framed page", pageErrors.length === 0, pageErrors.slice(0, 10))

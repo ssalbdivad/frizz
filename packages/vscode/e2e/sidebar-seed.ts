@@ -140,3 +140,43 @@ export async function seedSidebarStack(options: { stack: Stack; workspace: Stack
   }
   return { workspace, files, thread, broker, inputs }
 }
+
+/**
+ * A thread working in its OWN git worktree of the workspace, at `.frizz/worktrees/<slug>` as Frizz's
+ * worktree hook makes one — for the run whose window is opened ON that worktree (e2e-sidebar.ts
+ * `--worktree`, check c10). No worker: the transcript's `cwd` is the worktree, and that is what the REAL
+ * tailer lifts into the thread's `checkout`, exactly as it does for a Claude worker that works there.
+ * Resolves once the board says the thread works in that worktree, so the window opened next finds it.
+ */
+export async function seedWorktreeThread(options: { stack: Stack; workspace: StackProject; log(line: string): void }): Promise<SeededThread & { dir: string }> {
+  const { stack, workspace, log } = options
+  const { home } = stack.info
+  const thread: SeededThread & { dir: string } = {
+    slug: "polish-pricing", title: "Polish the pricing page", handle: "polish-the-pricing-page",
+    sessionId: "e2e5170e-0000-4000-8000-00000000017e", jsonl: "", dir: join(workspace.dir, ".frizz", "worktrees", "polish-pricing"),
+  }
+  const git = (...args: string[]) => execFileSync("git", ["-c", "user.name=frizz e2e", "-c", "user.email=e2e@frizz.invalid", "-C", workspace.dir, ...args], { stdio: "ignore" })
+  git("worktree", "add", "-q", thread.dir, "-b", thread.slug)
+  const transcripts = join(home, ".claude", "projects", workspace.dir.replace(/[/.]/gu, "-"))
+  mkdirSync(transcripts, { recursive: true })
+  thread.jsonl = join(transcripts, `${thread.sessionId}.jsonl`)
+  const at = (minutes: number) => new Date(Date.now() - minutes * 60_000).toISOString()
+  const records = [
+    { type: "user", sessionId: thread.sessionId, cwd: thread.dir, timestamp: at(30), message: { role: "user", content: [{ type: "text", text: `TASK:\n${thread.title}` }] } },
+    { type: "assistant", sessionId: thread.sessionId, cwd: thread.dir, timestamp: at(20), message: { role: "assistant", id: "m-polish", stop_reason: "end_turn", content: [{ type: "text", text: "The pricing page is polished in this worktree." }], usage: { input_tokens: 2, output_tokens: 12 } } },
+  ]
+  writeFileSync(thread.jsonl, `${records.map((record) => JSON.stringify(record)).join("\n")}\n`)
+  execFileSync("sqlite3", ["-cmd", ".timeout 10000", join(home, ".frizz", "ui.db"),
+    `INSERT OR REPLACE INTO session (project_id, slug, session_id, thread_name, spawned_at, title, title_auto, backend, claude_runtime, model, effort, permission_mode, state, unread, exited, archived, rested_at)
+     VALUES (${q(workspace.id)}, ${q(thread.slug)}, ${q(thread.sessionId)}, ${q(`frizz-${thread.slug}`)}, ${q(at(31))}, ${q(thread.title)}, 0, 'claude', 'broker', 'opus', 'high', 'default', 'open', 0, 0, 0, ${q(at(20))})`])
+  const deadline = Date.now() + 60_000
+  for (;;) {
+    const board = await fetch(`${stack.origin}/_frizz/${workspace.id}/rpc/board`, { headers: { "sec-fetch-site": "same-origin" } })
+    const body = (await board.json()) as { result?: { threads?: { id: string; checkout?: { dir: string } }[] } }
+    if (body.result?.threads?.some((t) => t.id === thread.slug && t.checkout?.dir === thread.dir)) break
+    if (Date.now() > deadline) throw new Error(`the board never read ${thread.slug} as working in ${thread.dir}`)
+    await new Promise((resolve) => setTimeout(resolve, 500))
+  }
+  log(`seeded ${workspace.slug}/${thread.slug}, working in its worktree ${thread.dir}`)
+  return thread
+}
