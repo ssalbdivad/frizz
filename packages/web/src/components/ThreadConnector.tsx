@@ -30,7 +30,12 @@
 // One fixed SVG under the lane headers (z-10), which cover the card too, and under the drawers' scrim. It
 // is moved imperatively, not rendered: it has to stay glued to the card on every scroll frame, and a React
 // render per frame for a hairline would be the most expensive pixel on the page.
+//
+// IN AN EDITOR'S SIDEBAR (SidebarPage.tsx) there are no cards, so only the cords draw — at any width: the
+// page is the desktop's left column alone, which is narrow by nature, not the stacked page the 800px rule
+// below hides them on.
 import { useEffect, useRef } from "react"
+import { embedded } from "../lib/embed.ts"
 import { OFFSCREEN, landing, snapToPixels, threadPath, twist, type ThreadGeometry } from "../lib/threadConnector.ts"
 
 /** How far each strand bows out either side of the icon column: narrow, so a crossing reads as a twist of thread rather than as an x. */
@@ -287,7 +292,7 @@ export function ThreadConnector({ activeKey }: { activeKey: string | null }) {
     // rows coming and going, a card starting to leave.
     const resize = new ResizeObserver(schedule)
     const mutations = new MutationObserver(schedule)
-    for (const el of document.querySelectorAll("#workpane, aside[aria-label='Projects']")) {
+    for (const el of document.querySelectorAll("#workpane, aside[aria-label='Projects'], [data-sidebar-page]")) {
       resize.observe(el)
       mutations.observe(el, { childList: true, subtree: true, attributes: true, attributeFilter: ["data-queue-leaving"] })
     }
@@ -311,7 +316,7 @@ export function ThreadConnector({ activeKey }: { activeKey: string | null }) {
       aria-hidden
       data-thread-connector
       data-shown="false"
-      className="group/thread pointer-events-none fixed inset-0 z-[5] h-full w-full overflow-visible max-[800px]:hidden"
+      className={`group/thread pointer-events-none fixed inset-0 z-[5] h-full w-full overflow-visible ${embedded() ? "" : "max-[800px]:hidden"}`}
     >
       <defs>
         <mask id="frizz-thread-cords" maskUnits="userSpaceOnUse" x={-1e4} y={-1e4} width={2e4} height={2e4}>

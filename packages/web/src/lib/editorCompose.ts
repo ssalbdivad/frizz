@@ -1,5 +1,5 @@
 import { formatFileReference, type EditorComposeInput, type ProjectCard, type ProjectQueue } from "@frizz/shared"
-import { contextChipLabel, contextDisplayPath, insertTokenIntoProse, uniqueToken, type ComposerContextItem } from "./composerContext.ts"
+import { contextChipLabel, contextDisplayPath, insertTokenIntoProse, isTerminalPath, uniqueToken, type ComposerContextItem } from "./composerContext.ts"
 import { draftKey } from "./drafts.ts"
 import { joinComposerValue, splitComposerValue } from "./imagePaths.ts"
 
@@ -108,15 +108,21 @@ export interface ComposeEdit {
  * the human was in their editor, not in this box, so there is no caret of theirs to honour. Spliced into
  * the prose, never appended to the raw value: a draft's trailing lines may be attachment paths
  * (imagePaths.ts), and those must stay trailing.
+ *
+ * `note` is prose the editor wants after the reference, as if typed there ("Ask Frizz to fix" sends the
+ * problem's message: `@a.ts:12 Fix: Cannot find name 'foo'. ts(2304)`). One space between, one after,
+ * and the caret after that, so the human's own words carry straight on. A terminal selection
+ * (`isTerminalPath`) drops its lines: they are the terminal buffer's, not a file's.
  */
-export function composeEdit({ value, staged, item, projectDir }: {
+export function composeEdit({ value, staged, item, projectDir, note }: {
   value: string
   staged: readonly { token: string }[]
   item: EditorComposeInput
   projectDir: string | undefined
+  note?: string
 }): ComposeEdit {
   const { prose, attachments } = splitComposerValue(value)
-  const startLine = item.startLine
+  const startLine = isTerminalPath(item.path) ? undefined : item.startLine
   const endLine = startLine === undefined ? undefined : Math.max(startLine, item.endLine ?? startLine)
   const lines = startLine === undefined ? {} : { startLine, endLine: endLine! }
   let insert: string
@@ -129,6 +135,9 @@ export function composeEdit({ value, staged, item, projectDir }: {
     insert = `\`${reference}\``
   }
   const spliced = insertTokenIntoProse(prose, prose.length, insert)
-  const next = `${spliced.prose} `
+  // The note is one line (the page's parser folds its whitespace), so it can never open a line that
+  // splitComposerValue would read as an attachment path.
+  const said = note?.trim()
+  const next = said ? `${spliced.prose} ${said} ` : `${spliced.prose} `
   return { value: joinComposerValue(next, attachments.map((attachment) => attachment.path)), caret: next.length, ...(stage ? { stage } : {}) }
 }

@@ -6,6 +6,8 @@ import type { AccountBackend, AccountLogoutResult, AuthSnapshot } from "@frizz/s
 import { rpc } from "../api/rpc.ts"
 import { showToast } from "../store.ts"
 import { copyTextToClipboard } from "../lib/clipboard.ts"
+import { embedded, hostTerminalHint } from "../lib/embed.ts"
+import { detectPlatform } from "../lib/keybindings.ts"
 import { SIGN_IN_COMMAND, PROVIDER_LABEL } from "../lib/signIn.ts"
 
 // The sign-in gate modal. Shown when a dispatch targets a signed-out provider or the runtime 401
@@ -13,7 +15,8 @@ import { SIGN_IN_COMMAND, PROVIDER_LABEL } from "../lib/signIn.ts"
 // in a terminal on the machine Frizz runs on, then re-reads the credential on Retry. Frizz does not run
 // the login itself: it embedded `claude auth login` in a terminal pane here until 2026-09-24, and the
 // maintainer chose the command alone over keeping that pane and its /term transport alive (#42).
-// Fails open — the gate only ever reaches here on a positive "signed-out".
+// Fails open — the gate only ever reaches here on a positive "signed-out". In an editor's sidebar a line
+// under the command says where a terminal is: VS Code's, one chord away (lib/embed.ts hostTerminalHint).
 export function SignInModal({
   backend,
   onClose,
@@ -69,7 +72,7 @@ export function SignInModal({
             the machine running Frizz, then retry:
           </p>
 
-          <div className="mb-4 flex items-center gap-2 rounded-lg border border-border bg-panel-2 px-3 py-2">
+          <div className={`${embedded() ? "mb-2" : "mb-4"} flex items-center gap-2 rounded-lg border border-border bg-panel-2 px-3 py-2`}>
             <code className="flex-1 select-all font-mono-keep text-[12.5px] text-fg">{command}</code>
             <button
               type="button"
@@ -80,6 +83,7 @@ export function SignInModal({
               {copied ? <Check size={14} strokeWidth={2} className="text-success" /> : <Copy size={14} strokeWidth={1.8} />}
             </button>
           </div>
+          {embedded() && <p data-sign-in-terminal-hint className="mb-4 text-[11.5px] text-muted-70">{hostTerminalHint(detectPlatform() === "mac")}</p>}
 
           <div className="flex items-center justify-end gap-2">
             <button

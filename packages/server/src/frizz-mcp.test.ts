@@ -66,7 +66,7 @@ test("the frizz MCP server identifies as `frizz` and exposes its worker tools", 
     rpc.send({ jsonrpc: "2.0", method: "notifications/initialized" })
     rpc.send({ jsonrpc: "2.0", id: 2, method: "tools/list" })
     const list = await rpc.next(2)
-    assert.deepEqual(list.result.tools.map((t: { name: string }) => t.name), ["spawn_thread", "goal", "timer", "watch_pr", "watch", "unwatch", "ask", "unask", "done", "title", "activity", "link", "unlink", "watch_issue", "extend_shell", "read_thread", "message_thread", "keep"])
+    assert.deepEqual(list.result.tools.map((t: { name: string }) => t.name), ["spawn_thread", "goal", "timer", "watch_pr", "watch", "unwatch", "ask", "unask", "done", "title", "activity", "link", "unlink", "watch_issue", "extend_shell", "read_thread", "message_thread", "keep", "editor"])
     assert.deepEqual(list.result.tools.find((t: { name: string }) => t.name === "link").inputSchema.required, ["label", "target"])
     // `keep` takes the id, and optionally a whole reworded question in `ask`'s own tree shape.
     const keepTool = list.result.tools.find((t: { name: string }) => t.name === "keep")
@@ -160,7 +160,15 @@ test("the frizz MCP server identifies as `frizz` and exposes its worker tools", 
     // `wch_…` id of any watch holding one. It takes NOTHING: there is no thread parameter and no filter,
     // because the only correct answer is "everything you have running", and a worker that has lost its
     // ids cannot be trusted to name them.
-    assert.equal(list.result.tools.length, 18)
+    assert.equal(list.result.tools.length, 19)
+    // `editor` READS the human's editor and takes nothing: no window to pick, no project to name — the
+    // window is the one on the caller's project, chosen by the server. Marked read-only for the client.
+    const editorTool = list.result.tools.find((t: { name: string }) => t.name === "editor")
+    assert.deepEqual(editorTool.inputSchema.required, [])
+    assert.deepEqual(Object.keys(editorTool.inputSchema.properties), [])
+    assert.equal(editorTool.annotations.readOnlyHint, true)
+    // The words a human uses for code they have not pasted are what make a worker reach for it.
+    for (const cue of ["\"this\"", "\"the selected code\"", "\"the error\"", "\"what I'm looking at\""]) assert.ok(editorTool.description.includes(cue), cue)
     // `read_thread` / `message_thread` name the OTHER thread by handle; the CALLER still comes from the
     // env, so a message is always signed by the thread that really sent it.
     assert.deepEqual(list.result.tools[15].inputSchema.required, ["handle"])
@@ -222,6 +230,219 @@ test("`spawn_thread` POSTs the real dispatch RPC and returns the thread's drawer
     const bad = await rpc.next(3)
     assert.equal(bad.result.isError, true)
     assert.match(bad.result.content[0].text, /`spawn_thread` failed: `model` is required/)
+  } finally {
+    rpc.kill()
+    http.close()
+  }
+})
+
+// `editor` against a real HTTP stand-in for the `editorState` RPC: what the worker READS is the text, so
+// the text is what is asserted — the file and selection first, the selected code verbatim in a fence,
+// the tabs, the problems grouped by file — and every way of having nothing to show says why.
+test("`editor` reads the window on this project as text, and says why when there is nothing to read", async () => {
+  const seen: Array<{ url: string; body: unknown }> = []
+  let answer: { status: number; body: unknown } = { status: 200, body: {} }
+  const http = createServer((req, res) => {
+    let body = ""
+    req.on("data", (c) => (body += c))
+    req.on("end", () => {
+      seen.push({ url: req.url ?? "", body: JSON.parse(body) })
+      res.writeHead(answer.status, { "content-type": "application/json" })
+      res.end(JSON.stringify(answer.body))
+    })
+  })
+  await new Promise<void>((resolve) => http.listen(0, "127.0.0.1", resolve))
+  const port = (http.address() as { port: number }).port
+  const stateDir = mkdtempSync(join(tmpdir(), "frizz-mcp-"))
+  writeFileSync(join(stateDir, "server.lock"), JSON.stringify({ port }))
+  const projectId = "0b7c1f6e-5a2d-4c4e-9d61-6f1f7c2b9a10"
+  // No thread stamped (the test may itself run inside a Frizz worker, whose FRIZZ_THREAD would ride in).
+  const rpc = startServer({ FRIZZ_STATE_DIR: stateDir, FRIZZ_PROJECT_ID: projectId, FRIZZ_THREAD: "", FRIZZ_THREAD_SLUG: "" })
+  let id = 10
+  const call = async (result: unknown, status = 200) => {
+    answer = { status, body: status === 200 ? { result } : result }
+    const n = ++id
+    rpc.send({ jsonrpc: "2.0", id: n, method: "tools/call", params: { name: "editor", arguments: {} } })
+    const reply = await rpc.next(n)
+    return { text: reply.result.content[0].text as string, isError: reply.result.isError as boolean | undefined }
+  }
+  const front = {
+    app: "Visual Studio Code",
+    kind: "vscode",
+    focused: true,
+    folders: ["/home/me/repo"],
+    editor: {
+      shared: true,
+      reportedAgoMs: 4_000,
+      active: {
+        path: "/home/me/repo/src/a.ts",
+        languageId: "typescript",
+        dirty: true,
+        lineCount: 40,
+        cursorLine: 14,
+        // A whole-line drag: the text ends in the newline before the next line, which the fence leaves out.
+        selection: { startLine: 12, endLine: 14, text: "  let total = 0\n  // ```not a fence```\n  total += x\n" },
+        visible: { startLine: 1, endLine: 30 },
+      },
+      open: [{ path: "/home/me/repo/src/b.ts", dirty: true }, { path: "Untitled-1", untitled: true }],
+      diagnostics: [
+        { path: "/home/me/repo/src/a.ts", line: 13, severity: "error", message: "Cannot find name 'x'.", source: "ts", code: "2304" },
+        { path: "/home/me/repo/src/c.ts", line: 2, severity: "error", message: "Type 'string' is not assignable to type 'number'." },
+        { path: "/home/me/repo/src/a.ts", line: 3, severity: "warning", message: "'y' is declared but never used.", source: "ts", code: "6133" },
+      ],
+      problems: { errors: 2, warnings: 7 },
+    },
+  }
+  try {
+    rpc.send({ jsonrpc: "2.0", id: 1, method: "initialize", params: {} })
+    await rpc.next(1)
+
+    const full = await call({ windows: [front, { app: "Cursor", kind: "cursor", focused: false, focusedAgoMs: 7_200_000, folders: ["/home/me/repo/packages/x"], editor: { ...front.editor, active: { ...front.editor.active, path: "/home/me/repo/packages/x/i.ts", dirty: false, selection: undefined, cursorLine: 3 } } }], connected: 2 })
+    assert.equal(full.isError, undefined)
+    assert.deepEqual(seen.at(-1), { url: `/_frizz/${projectId}/rpc/editorState`, body: {} }, "the CALLING project's procedure, by its id")
+    assert.equal(full.text, [
+      "Visual Studio Code (focused now, folder /home/me/repo), last changed 4s ago.",
+      "",
+      "In front: /home/me/repo/src/a.ts (typescript, unsaved changes), lines 12-14 selected.",
+      "Selected text (3 lines):",
+      // A fence one longer than any backtick run inside the selection, so the code cannot close it.
+      "````typescript",
+      "  let total = 0",
+      "  // ```not a fence```",
+      "  total += x",
+      "````",
+      "Caret on line 14; lines 1-30 on screen; 40 lines in all.",
+      "",
+      "Other open tabs, most recent first (2):",
+      "- /home/me/repo/src/b.ts (unsaved changes)",
+      "- Untitled-1 (untitled, not saved to disk)",
+      "",
+      "Problems: 2 errors, 7 warnings (the first 3: the file in front first, errors before warnings).",
+      "/home/me/repo/src/a.ts",
+      "  13: error: Cannot find name 'x'. [ts 2304]",
+      "  3: warning: 'y' is declared but never used. [ts 6133]",
+      "/home/me/repo/src/c.ts",
+      "  2: error: Type 'string' is not assignable to type 'number'.",
+      "",
+      "Also open in 1 other window (not read in full; the one above was used last):",
+      "- Cursor (last focused 2h ago, folder /home/me/repo/packages/x) — /home/me/repo/packages/x/i.ts (typescript), caret on line 3",
+    ].join("\n"))
+
+    // A selection too large to carry whole says so, and where to read the rest.
+    const truncated = await call({ windows: [{ ...front, editor: { ...front.editor, active: { ...front.editor.active, selection: { startLine: 1, endLine: 900, text: "x", truncated: true } } } }], connected: 1 })
+    assert.match(truncated.text, /Selected text \(900 lines; ONLY THE START — the selection was too large to carry whole, so read the file for the rest\):/)
+
+    // A file that may hold secrets: its lines are named and its text is not there to quote.
+    const withheld = await call({ windows: [{ ...front, editor: { ...front.editor, active: { ...front.editor.active, path: "/home/me/repo/.env", selection: { startLine: 2, endLine: 3, withheld: true } } } }], connected: 1 })
+    assert.match(withheld.text, /In front: \/home\/me\/repo\/\.env \(typescript, unsaved changes\), lines 2-3 selected\.\nIts text is not shared: the file may hold secrets\. Read lines 2-3 of the file yourself only if the task needs it\./)
+    assert.doesNotMatch(withheld.text, /````/)
+
+    // Each way of having nothing to show, with its reason and the move that is always open.
+    const off = await call({ windows: [{ ...front, editor: { shared: false, reportedAgoMs: 0, active: null, open: [], diagnostics: [], problems: { errors: 0, warnings: 0 } } }], connected: 1 })
+    assert.match(off.text, /turned off sharing their editor with Frizz \(the eye over the sidebar's prompt box, the `frizz.shareEditorState` setting\)/)
+    const silent = await call({ windows: [{ ...front, editor: undefined }], connected: 1 })
+    assert.match(silent.text, /has this project open, but it has not reported what it shows: its Frizz extension predates this/)
+    const none = await call({ windows: [], connected: 0 })
+    assert.match(none.text, /^No editor is connected to Frizz/)
+    // Windows on other projects are counted, never described — and an OLDER server's listing of their
+    // folders (it sent `elsewhere` until 2026-10-02) is not repeated to the worker either.
+    const elsewhere = await call({ windows: [], connected: 2, elsewhere: [{ app: "Cursor", folders: ["/home/me/other"] }] })
+    assert.match(elsewhere.text, /^2 editor windows are connected to Frizz, but none has this project open, so what the human has in front of them is in another project\./)
+    assert.doesNotMatch(elsewhere.text, /\/home\/me\/other/)
+    const empty = await call({ windows: [{ ...front, editor: { ...front.editor, active: null, open: [], diagnostics: [], problems: { errors: 0, warnings: 0 } } }], connected: 1 })
+    assert.match(empty.text, /No file is in front/)
+    assert.match(empty.text, /Problems: no errors or warnings\./)
+    for (const reply of [off, silent, none, elsewhere]) {
+      assert.match(reply.text, /Ask the human to paste the code, or to name the file and lines they mean\.$/)
+      assert.equal(reply.isError, undefined, "having nothing to read is an answer, not a failure")
+    }
+
+    // A Frizz from before the procedure answers 404 naming it (packages/rpc's fall-through).
+    const old = await call({ error: "unknown RPC procedure `editorState` — this server does not implement it." }, 404)
+    assert.match(old.text, /predates this tool\. Restart Frizz to enable this\./)
+    assert.equal(old.isError, undefined)
+    // Any other failure is the tool failing, with the server's own words.
+    const broken = await call({ error: "the bridge exploded" }, 500)
+    assert.equal(broken.isError, true)
+    assert.match(broken.text, /`editor` failed: the bridge exploded/)
+  } finally {
+    rpc.kill()
+    http.close()
+  }
+})
+
+// A thread in a worktree: the human's editor shows the main checkout, so what they selected is THEIR copy.
+// The tool names the calling thread (its own stamp, never an argument), and when the server says that
+// thread works elsewhere, the report says whose copy each path is and names the worker's own copy.
+test("`editor` tells a thread in a worktree that the human's editor shows the main checkout, and names its own copy", async () => {
+  const seen: unknown[] = []
+  let answer: unknown = {}
+  const http = createServer((req, res) => {
+    let body = ""
+    req.on("data", (c) => (body += c))
+    req.on("end", () => {
+      seen.push(JSON.parse(body))
+      res.writeHead(200, { "content-type": "application/json" })
+      res.end(JSON.stringify({ result: answer }))
+    })
+  })
+  await new Promise<void>((resolve) => http.listen(0, "127.0.0.1", resolve))
+  const port = (http.address() as { port: number }).port
+  const stateDir = mkdtempSync(join(tmpdir(), "frizz-mcp-"))
+  writeFileSync(join(stateDir, "server.lock"), JSON.stringify({ port }))
+  const rpc = startServer({ FRIZZ_STATE_DIR: stateDir, FRIZZ_PROJECT_ID: "0b7c1f6e-5a2d-4c4e-9d61-6f1f7c2b9a10", FRIZZ_THREAD_SLUG: "tidy-loop", FRIZZ_THREAD: "" })
+  let id = 10
+  const call = async (result: unknown) => {
+    answer = result
+    const n = ++id
+    rpc.send({ jsonrpc: "2.0", id: n, method: "tools/call", params: { name: "editor", arguments: {} } })
+    return ((await rpc.next(n)).result.content[0].text as string)
+  }
+  const root = "/home/me/repo"
+  const dir = "/home/me/repo/.frizz/worktrees/tidy-loop"
+  const window = (active: string, open: string[] = [], folders = [root]) => ({
+    app: "Visual Studio Code",
+    kind: "vscode",
+    focused: true,
+    folders,
+    editor: {
+      shared: true,
+      reportedAgoMs: 0,
+      active: { path: active, languageId: "typescript", dirty: false, lineCount: 9, cursorLine: 3, selection: { startLine: 2, endLine: 3, text: "a\nb" }, visible: { startLine: 1, endLine: 9 } },
+      open: open.map((path) => ({ path })),
+      diagnostics: [],
+      problems: { errors: 0, warnings: 0 },
+    },
+  })
+  try {
+    rpc.send({ jsonrpc: "2.0", id: 1, method: "initialize", params: {} })
+    await rpc.next(1)
+
+    const main = await call({ windows: [window(`${root}/src/a.ts`, [`${root}/src/b.ts`])], connected: 1, elsewhere: [], checkout: { dir, root, kind: "worktree" } })
+    assert.deepEqual(seen.at(-1), { slug: "tidy-loop" }, "the CALLING thread, from its own stamp")
+    assert.equal(main.split("\n").slice(0, 5).join("\n"), [
+      "Visual Studio Code (focused now, folder /home/me/repo), last changed just now.",
+      "",
+      "You are working in your own worktree, /home/me/repo/.frizz/worktrees/tidy-loop, but this window shows the project's main checkout, /home/me/repo. " +
+        "A file below under /home/me/repo is the human's copy, and what they selected is its text; the same relative path under " +
+        "/home/me/repo/.frizz/worktrees/tidy-loop is your copy, which may differ. Read and edit yours.",
+      "",
+      "In front: /home/me/repo/src/a.ts (typescript), lines 2-3 selected. Your copy: /home/me/repo/.frizz/worktrees/tidy-loop/src/a.ts.",
+    ].join("\n"))
+
+    // The human opened the worktree itself: everything shown is already the worker's own copy.
+    const own = await call({ windows: [window(`${dir}/src/a.ts`, [], [dir])], connected: 1, elsewhere: [], checkout: { dir, root, kind: "worktree" } })
+    assert.match(own, /\n\nThis window has your own worktree open, \/home\/me\/repo\/\.frizz\/worktrees\/tidy-loop: the files below under it are your own copies\.\n\nIn front: \/home\/me\/repo\/\.frizz\/worktrees\/tidy-loop\/src\/a\.ts \(typescript\), lines 2-3 selected\.\n/)
+    assert.doesNotMatch(own, /Your copy:|main checkout/)
+
+    // A file outside the project is nobody's copy; a thread at the root gets no clause at all.
+    const outside = await call({ windows: [window("/etc/hosts")], connected: 1, elsewhere: [], checkout: { dir, root, kind: "worktree" } })
+    assert.doesNotMatch(outside, /Your copy:|main checkout|own copies/)
+    const atRoot = await call({ windows: [window(`${root}/src/a.ts`)], connected: 1, elsewhere: [] })
+    assert.doesNotMatch(atRoot, /Your copy:|main checkout|own copies/)
+    // A malformed checkout is ignored rather than trusted.
+    const junk = await call({ windows: [window(`${root}/src/a.ts`)], connected: 1, elsewhere: [], checkout: { dir: 3 } })
+    assert.doesNotMatch(junk, /Your copy:/)
   } finally {
     rpc.kill()
     http.close()

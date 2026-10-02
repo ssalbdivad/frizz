@@ -24,6 +24,11 @@ import { AiRenameButton } from "./AiRenameButton.tsx"
 //
 // Foreign rows and legacy docs have no registry row to rename, so the name is plain text there; the
 // refresh mark makes its own call (AiRenameButton) and hides while the editor is open.
+// The name's two-line wrap in the narrow (two-row) thread header: `line-clamp-2` brings its own overflow
+// and box, `whitespace-normal` undoes `truncate`'s nowrap, and `overflow-wrap:anywhere` breaks a slug-like
+// run with no space in it rather than letting it run out of the row.
+const NARROW_WRAP = "@max-[27.5rem]/thread-header:line-clamp-2 @max-[27.5rem]/thread-header:whitespace-normal @max-[27.5rem]/thread-header:[overflow-wrap:anywhere]"
+
 export function ThreadTitle({ thread, className = "" }: { thread: ThreadView; className?: string }) {
   const slug = thread.id
   const renameTitle = useMutation({ mutationFn: (title: string) => rpc.renameThread({ slug, title }) })
@@ -87,6 +92,14 @@ export function ThreadTitle({ thread, className = "" }: { thread: ThreadView; cl
   // `group/thread-title` is the refresh mark's hover zone. `min-w-0 shrink` on the name rather than
   // `flex-1`, so a short title does not push the mark to the far side of the row — and so a short
   // name does not claim the whole row as a click target.
+  //
+  // IN THE TWO-ROW HEADER THE NAME WRAPS to a second line (`NARROW_WRAP`), on the header's own condition
+  // (lib/threadHeaderLayout.ts THREAD_HEADER_NARROW — spelled out in full, since Tailwind generates a class
+  // from its literal text). There the name has a row to itself, and in a 300px VS Code sidebar that row
+  // is 268px: "Return rate-limit headers on every response" was cut to "Return rate-limit headers ..."
+  // with no way to read the rest short of opening the rename box — the button's tooltip names its
+  // action, not the title. Two lines, then the ellipsis; anywhere else (the desktop's one-row bar) it
+  // truncates on one line exactly as before.
   return (
     <div className="group/thread-title flex min-w-0 items-center gap-2">
       {editing ? (
@@ -134,12 +147,12 @@ export function ThreadTitle({ thread, className = "" }: { thread: ThreadView; cl
             setDraft(manualThreadTitleSeed(stored, slug))
             setEditing(true)
           }}
-          className={`min-w-0 max-w-full shrink truncate rounded px-0.5 -mx-0.5 font-semibold text-[15px] text-left outline-none transition-colors hover:bg-panel-2 focus-visible:ring-1 focus-visible:ring-focus-ink-60 disabled:cursor-not-allowed disabled:opacity-40 ${className}`}
+          className={`min-w-0 max-w-full shrink truncate rounded px-0.5 -mx-0.5 font-semibold text-[15px] text-left outline-none transition-colors hover:bg-panel-2 focus-visible:ring-1 focus-visible:ring-focus-ink-60 disabled:cursor-not-allowed disabled:opacity-40 ${NARROW_WRAP} ${className}`}
         >
           {shown}
         </button>
       ) : (
-        <div className={`min-w-0 max-w-full shrink truncate px-0.5 -mx-0.5 font-semibold text-[15px] ${className}`} title={shown}>
+        <div className={`min-w-0 max-w-full shrink truncate px-0.5 -mx-0.5 font-semibold text-[15px] ${NARROW_WRAP} ${className}`} title={shown}>
           {shown}
         </div>
       )}

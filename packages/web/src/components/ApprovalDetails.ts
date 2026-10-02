@@ -77,7 +77,7 @@ function PreviewDisclosure({ label, text }: { label: string; text: string }) {
     open: text.length < 1_200,
   },
   h("summary", {
-    className: "cursor-pointer px-2.5 py-2 text-[10.5px] text-muted outline-none focus-visible:ring-1 focus-visible:ring-inset focus-visible:ring-focus-ink-50",
+    className: "cursor-pointer px-2.5 py-2 text-[10.5px] text-muted outline-none focus-visible:inset-ring-1 focus-visible:inset-ring-focus-ink-50",
   }, label),
   h("pre", {
     className: "max-h-64 max-w-full min-w-0 overflow-auto border-t border-border/60 px-2.5 py-2 whitespace-pre-wrap break-words font-mono-keep text-[11px] leading-relaxed text-fg/80",

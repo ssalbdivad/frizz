@@ -1,7 +1,8 @@
 // THE STATUS BAR ITEM, as data: what it says, what hovering it says, and what clicking it does.
 //
 // Connected, it is "Frizz", with this workspace's Ready count beside it when anything is waiting on the
-// human — the one number worth a glance from the editor. Ready and Working are the page's own words
+// human — the one number worth a glance from the editor, and the one the sidebar's badge shows. A click
+// shows the Frizz sidebar, where those threads are. Ready and Working are the page's own words
 // for the queue and for what is spinning. A project the server has not opened yet has no counts (the
 // `projects` push omits them), and says nothing rather than claiming zero.
 //
@@ -14,17 +15,29 @@ import type { ConnectionStatus } from "./connection.ts"
 export interface StatusView {
   text: string
   tooltip: string
-  command: "frizz.open" | "frizz.reconnect"
+  command: "frizz.sidebar.focus" | "frizz.reconnect"
+  /** This workspace's Ready count; 0 when not connected. */
+  ready: number
 }
 
-export function statusView(connection: ConnectionStatus, projects: readonly EditorProject[]): StatusView {
+/**
+ * The item for this connection and workspace. `build` is the extension's own label (build-info.ts), the
+ * tooltip's last line in every state — the one place in the window it can be read at a glance, which is
+ * what "is this window running the fix?" needs.
+ */
+export function statusView(connection: ConnectionStatus, projects: readonly EditorProject[], build?: string): StatusView {
+  const view = statusFor(connection, projects)
+  return build ? { ...view, tooltip: `${view.tooltip}\nFrizz extension ${build}` } : view
+}
+
+function statusFor(connection: ConnectionStatus, projects: readonly EditorProject[]): StatusView {
   switch (connection.kind) {
     case "connecting":
-      return { text: "$(sync~spin) Frizz", tooltip: "Looking for Frizz…", command: "frizz.reconnect" }
+      return { text: "$(sync~spin) Frizz", tooltip: "Looking for Frizz…", command: "frizz.reconnect", ready: 0 }
     case "offline":
-      return { text: "$(debug-disconnect) Frizz", tooltip: `${connection.reason.replace(/\.$/u, "")}. Click to try again.`, command: "frizz.reconnect" }
+      return { text: "$(debug-disconnect) Frizz", tooltip: `${connection.reason.replace(/\.$/u, "")}. Click to try again.`, command: "frizz.reconnect", ready: 0 }
     case "incompatible":
-      return { text: "$(warning) Frizz", tooltip: `${connection.reason} Click to try again.`, command: "frizz.reconnect" }
+      return { text: "$(warning) Frizz", tooltip: `${connection.reason} Click to try again.`, command: "frizz.reconnect", ready: 0 }
     case "connected": {
       const ready = projects.reduce((sum, project) => sum + (project.ready ?? 0), 0)
       const lines = projects.map((project) => {
@@ -33,8 +46,9 @@ export function statusView(connection: ConnectionStatus, projects: readonly Edit
       })
       return {
         text: ready > 0 ? `Frizz · ${ready} ready` : "Frizz",
-        tooltip: [...lines, "Click to open Frizz."].join("\n"),
-        command: "frizz.open",
+        tooltip: [...lines, "Click to show Frizz."].join("\n"),
+        command: "frizz.sidebar.focus",
+        ready,
       }
     }
   }

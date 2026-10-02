@@ -42,6 +42,7 @@ import {
   type InteractionDraftValue,
 } from "../lib/typedInteractions.ts"
 import { safeHttpUrl } from "../lib/external-links.ts"
+import { revealInDrawerTranscript } from "../lib/drawerReveal.ts"
 import { draftKey, draftStore, useDraftValues } from "../lib/drafts.ts"
 import { clearSteered, clearSteeredIn, markSteered, markSteeredIn } from "../lib/steering.ts"
 import { QueueDismissContext } from "./ChatView.tsx"
@@ -418,6 +419,14 @@ function InteractionApprovalCard({
   const [status, setStatus] = useState<string>()
   const [responseAccepted, setResponseAccepted] = useState(false)
   const [confirming, setConfirming] = useState<CanonicalInteractionDecision>()
+  // THE CONFIRMATION OPENS INTO VIEW. It grows the card under the human's own click, below the fold of a
+  // drawer's transcript, and its checkbox's autofocus scrolls only the checkbox in: at a 300px VS Code
+  // sidebar "Confirm grant for session" sat under the floating "Jump to latest" control. The whole group
+  // is revealed, clear of that control, in the drawer's transcript only (lib/drawerReveal.ts).
+  const confirmationRef = useRef<HTMLDivElement>(null)
+  useEffect(() => {
+    if (confirming) revealInDrawerTranscript(confirmationRef.current)
+  }, [confirming])
   const [durableAcknowledged, setDurableAcknowledged] = useState(false)
   const delivery = interactionDeliveryPresentation(record.delivery?.effect)
   const decisions = useMemo(() => canonicalInteractionDecisions(record), [record])
@@ -668,7 +677,7 @@ function InteractionApprovalCard({
         )}
 
         {confirming && (
-          <div data-durable-confirmation role="group" aria-label={`Confirm ${confirming.label}`} className="mt-3 rounded-md border border-attention/45 bg-attention-fill/[0.08] p-3">
+          <div ref={confirmationRef} data-durable-confirmation role="group" aria-label={`Confirm ${confirming.label}`} className="mt-3 rounded-md border border-attention/45 bg-attention-fill/[0.08] p-3">
             <div className="text-[12px] font-semibold text-attention-soft">This approval persists beyond the current request.</div>
             <div className="mt-1 text-[11px] leading-snug text-attention-soft-75">{confirming.scope}</div>
             <label className="mt-2.5 flex cursor-pointer items-start gap-2 text-[11px] leading-snug text-fg/85">
@@ -796,7 +805,7 @@ function BoundedPlainText({ text }: { text: string }) {
   if (!long) return <div className="whitespace-pre-wrap break-words text-[12px] leading-relaxed text-fg/80">{text}</div>
   return (
     <details className="rounded-md border border-border/70 bg-panel/60">
-      <summary className="cursor-pointer px-2.5 py-2 text-[11px] text-muted outline-none focus-visible:ring-1 focus-visible:ring-inset focus-visible:ring-focus-ink-50">Request message</summary>
+      <summary className="cursor-pointer px-2.5 py-2 text-[11px] text-muted outline-none focus-visible:inset-ring-1 focus-visible:inset-ring-focus-ink-50">Request message</summary>
       <div className="max-h-52 overflow-auto border-t border-border/60 px-2.5 py-2 whitespace-pre-wrap break-words text-[12px] leading-relaxed text-fg/80">{text}</div>
     </details>
   )

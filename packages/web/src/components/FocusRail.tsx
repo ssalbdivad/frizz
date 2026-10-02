@@ -2,6 +2,11 @@ import { FileDiff, Folder } from "lucide-react"
 import { useEffect, useMemo, useRef } from "react"
 import { useQueryClient } from "@tanstack/react-query"
 import { useSnapshot } from "valtio"
+import { useThreadApi } from "../api/threadApi.tsx"
+import { displayName } from "../groups.ts"
+import { embedded } from "../lib/embed.ts"
+import { reviewChanges, reviewLabel } from "../lib/reviewChanges.ts"
+import { store } from "../store.ts"
 import { isDirectSubAgent, type EditedFile, type ThreadView } from "@frizz/shared"
 import { useBoard, useProjectDir, useTranscript } from "../hooks.ts"
 import { editedFileTree, flattenEditedFileTree } from "../lib/editedFileTree.ts"
@@ -185,6 +190,11 @@ export function FocusRail({ thread }: { thread: ThreadView }) {
   const issues = github.filter((w) => w.subject === "issue")
   const timers = (thread.watches ?? []).filter((w) => watching && w.kind === "timer" && w.state === "armed")
   const { railFilesCollapsed } = useSnapshot(prefs)
+  // The files' one verb: all of them as the editor's diff, where an editor that can show it is connected
+  // (lib/reviewChanges.ts). Its full label is the tooltip; the heading's own word is enough beside it.
+  const api = useThreadApi()
+  const { editorWindows } = useSnapshot(store)
+  const review = reviewLabel(editorWindows, embedded())
   // The card's order — most-alive first — then the files, which are not a wait at all. The files are
   // also the one group that FOLDS (maintainer 2026-09-03): a worker that touched 22 files fills the
   // rail with them, and the wait rows above are what the reader came for. The fold is a saved view
@@ -213,6 +223,29 @@ export function FocusRail({ thread }: { thread: ThreadView }) {
       count: files.length,
       collapsed: railFilesCollapsed,
       onToggle: () => (prefs.railFilesCollapsed = !prefs.railFilesCollapsed),
+      action: review && thread.kind === "session" && thread.foreign !== true
+        ? (
+            <button
+              type="button"
+              data-review-changes
+              title={review}
+              aria-label={review}
+              onMouseDown={(e) => e.stopPropagation()}
+              onClick={() => reviewChanges(api, thread.id, displayName(thread))}
+              className="flex items-baseline gap-[5px] rounded-sm text-[10.5px] uppercase tracking-wide text-muted-45 transition-colors hover:text-muted-80"
+            >
+              {/* The glyph is what makes it a verb. Bare, "REVIEW" in the heading's type sat right above
+                  the rows' "+1 ›" column and read as that column's header. It is the file rows' own
+                  FileDiff mark, 1em on ON_CAP's cap-band correction (its ink is vertically symmetric in
+                  its box). Measured on the fullscreen rail, sans, dsf 3: glyph ink 0.33px above the cap
+                  band's centre (the heading's caret: 0.08px), under the device grid; glyph→"R" ink gap
+                  6.75px, a little under the label→count gap's 7.84px so the glyph reads as the word's.
+                  Its right edge is the rail's, the rows' carets'. */}
+              <FileDiff size="1em" aria-hidden className={ON_CAP} />
+              Review
+            </button>
+          )
+        : undefined,
     },
   ].filter((g) => g.rows.length > 0)
   return (

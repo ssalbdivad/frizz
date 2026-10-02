@@ -5,6 +5,7 @@ import { noteServerBootId } from "./boot.ts"
 import { crossProjectHref, projectSlug } from "../lib/base-path.ts"
 import { spaNavigate } from "../lib/router.ts"
 import { composePending, setEditorWindows } from "../lib/editorBridge.ts"
+import { embedded } from "../lib/embed.ts"
 
 // The transport-agnostic board/notify handler — the stage-1 delta/seq/boot state machine, extracted so
 // BOTH transports drive it identically: SSE (sse.ts, the fallback) and the /ws multiplex (socket.ts).
@@ -87,6 +88,9 @@ export class BoardStream {
 // (lib/crossProjectNotify.ts) raises notifications for every project the page is not bound to.
 export function notify(event: Extract<ServerEvent, { type: "notify" }>, forProject?: string): void {
   if (!store.notificationsEnabled) return
+  // A page framed by an editor's sidebar (lib/embed.ts) cannot raise one: a cross-origin frame is
+  // refused the permission, and the editor shows Frizz's attention itself (its badge and status bar).
+  if (embedded()) return
   if (!document.hidden) return
   if (typeof Notification === "undefined" || Notification.permission !== "granted") return
   // THE PROJECT THIS NOTIFICATION IS ABOUT, frozen now — the last place in the client where "which

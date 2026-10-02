@@ -101,6 +101,10 @@ export function adoptPublishedSettings(draft: Settings, before: Settings, after:
 //    again, so the one failure the RPC layer certifies as side-effect-free — `isRetryableRpcError`,
 //    which the composer already leans on during a control-plane restart — has to be replayed here.
 //    Anything else is AMBIGUOUS (it may have landed) and must be reported, never re-sent.
+//
+// And one more, for a surface that re-reads the server while it is open (useSettingsDraft's refresh):
+// a write HELD behind that read (`holdFor`) leaves `pending` in place until the read lands, so the
+// snapshot it sends has adopted whatever the read brought in, rather than racing it.
 export function useSettingsAutosave() {
   const [state, setState] = useState<SaveState>("idle")
   const pending = useRef<Settings | null>(null)
@@ -120,10 +124,15 @@ export function useSettingsAutosave() {
   const queryClient = useQueryClient()
   // The cache's copy of this surface's last landed write: a move to it is this surface's own.
   const ownPublish = useRef<Settings | undefined>(undefined)
+  // A read of the server in flight that every write waits behind (holdFor).
+  const gate = useRef<Promise<unknown> | null>(null)
 
-  const flush = useCallback(() => {
+  // `force` is the unmount's: nothing will be left to send a held write once the surface is gone, and a
+  // write that might carry one stale key beats losing the human's last change outright.
+  const flush = useCallback((force = false) => {
     if (timer.current !== undefined) window.clearTimeout(timer.current)
     timer.current = undefined
+    if (gate.current && !force) return
     const next = pending.current
     if (!next) return
     pending.current = null
@@ -171,15 +180,30 @@ export function useSettingsAutosave() {
     if (pending.current) pending.current = adoptPublishedSettings(pending.current, before, after, ownPublish.current)
   }, [])
 
+  // Hold every write until `read` settles; `read` must have adopted what it brought into `pending` (adopt)
+  // by then. A debounce still running when it settles is left to fire on its own.
+  const holdFor = useCallback(
+    (read: Promise<unknown>) => {
+      gate.current = read
+      const release = () => {
+        if (gate.current !== read) return
+        gate.current = null
+        if (pending.current && timer.current === undefined) flush()
+      }
+      read.then(release, release)
+    },
+    [flush],
+  )
+
   useEffect(
     () => () => {
-      flush()
+      flush(true)
       if (linger.current !== undefined) window.clearTimeout(linger.current)
     },
     [flush],
   )
 
-  return { state, queue, flush, adopt, ownPublish }
+  return { state, queue, flush, adopt, ownPublish, holdFor }
 }
 
 // A settings surface's whole read/write loop: the server's copy seeds a local draft ONCE, and every
@@ -188,10 +212,23 @@ export function useSettingsAutosave() {
 // only agree with what is here — except for a machine setting another surface wrote meanwhile, which
 // is adopted key by key (adoptPublishedSettings). `debounce` is for the free-text fields alone — a
 // picker or a toggle is a single discrete intent and writes on the spot.
+//
+// A surface left OPEN re-reads the server whenever it comes back into use — the window takes focus, or
+// the page becomes visible again — and holds its writes until that read lands. No socket carries
+// settings, so nothing else tells an open draft that another surface wrote meanwhile, and its next save
+// of anything put the old value back: a sidebar's Settings, open beside the browser for hours, undid
+// "Remove worktrees: Off" set in the browser the moment Notifications was toggled in the sidebar (and
+// two browser tabs did the same). Focus arrives on the pointer-DOWN that clicks into the frame, a hair
+// before the click it carries, so the read alone loses that race (a scripted click into the sidebar,
+// down and up in one tick, lost it 3 runs of 3, while the drawer went on to SHOW the adopted Off); the
+// hold is what makes the click's write wait for it.
 export function useSettingsDraft() {
   const settings = useQuery({ queryKey: ["settingsGet"], queryFn: () => rpc.settingsGet() })
   const [draft, setDraft] = useState<Settings | null>(() => settings.data ?? null)
-  const { state, queue, flush, adopt, ownPublish } = useSettingsAutosave()
+  const { state, queue, flush, adopt, ownPublish, holdFor } = useSettingsAutosave()
+  const queryClient = useQueryClient()
+  const refetch = useRef(settings.refetch)
+  refetch.current = settings.refetch
 
   useEffect(() => {
     if (settings.data && !draft) setDraft(settings.data)
@@ -207,6 +244,30 @@ export function useSettingsDraft() {
     setDraft((current) => current && adoptPublishedSettings(current, before, after, own))
     adopt(before, after)
   }, [settings.data, adopt, ownPublish])
+
+  useEffect(() => {
+    const refresh = () => {
+      if (document.visibilityState !== "visible") return
+      const before = queryClient.getQueryData<Settings>(["settingsGet"])
+      // `cancelRefetch: false` joins a read already in flight (the mount's own) instead of restarting it.
+      const read = refetch.current({ cancelRefetch: false }).then(({ data: after }) => {
+        // Adopted HERE, not left to the effect above: that runs only once React has rendered the new
+        // data, after this promise settles and releases the held write. Adopting twice is a no-op.
+        if (!before || !after || before === after) return
+        const own = ownPublish.current
+        setDraft((current) => current && adoptPublishedSettings(current, before, after, own))
+        adopt(before, after)
+      })
+      holdFor(read)
+    }
+    refresh()
+    window.addEventListener("focus", refresh)
+    document.addEventListener("visibilitychange", refresh)
+    return () => {
+      window.removeEventListener("focus", refresh)
+      document.removeEventListener("visibilitychange", refresh)
+    }
+  }, [queryClient, adopt, ownPublish, holdFor])
 
   const update = useCallback(
     (next: Settings, opts?: { debounce?: boolean }) => {

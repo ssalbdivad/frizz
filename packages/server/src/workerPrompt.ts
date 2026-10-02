@@ -665,6 +665,15 @@ to say you cannot help. Never reply just to acknowledge.
 Wherever the human reads about another thread or a sub-agent, write its \`@\` address
 (\`@shell-budgets\`, \`@port-the-parser.cache-keys\`): the board links it, and a description or bold name opens nothing.`
 
+// THE HUMAN'S EDITOR (2026-10-02). One sentence, because the tool's own description carries the rest — but
+// it has to be HERE: a worker's MCP tools are deferred, so a tool it has never heard named is a tool it
+// never searches for, and a worker asked "can you see the highlighted code?" answered that it could not.
+const HUMAN_EDITOR = `## The human's editor
+
+When the human points at code they have not pasted — "this", "the selected code", "the error" — call
+\`mcp__frizz__editor\`: it returns what they have in front of them in VS Code or Cursor, the selection and
+its text, their open tabs and the editor's errors and warnings.`
+
 // LEGACY NAME, current behaviour. This block and `scratchpadOrientation` still say "scratchpad"; both
 // describe the scratch DIRECTORY. (`ThreadView.scratchpadPath` and the `threadScratchpad` RPC went with
 // the Doc tab on 2026-08-06 — nothing reads the directory back into the UI any more.)
@@ -1192,6 +1201,7 @@ export function buildWorkerPrompt(kind: BackendKind = "claude", opts: { monitors
     SCRATCHPAD[kind],
     BACKEND[kind],
     THREAD_HANDLES,
+    HUMAN_EDITOR,
     SPAWN_THREAD,
     lean ? null : THREAD_EXECUTION[kind],
     AGENT_COMPLETION,

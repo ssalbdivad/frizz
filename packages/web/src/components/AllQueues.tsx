@@ -35,7 +35,7 @@
 // (`projectsList`, `projectsQueues`) or carries its project explicitly, and every action goes through
 // that project's own client (`projectRpc`). See AllQueuesCard.tsx for the card's half of the same rule.
 // The prompt box and the drawers are the page project's, which is exactly what they should be.
-import { Fragment, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore, type KeyboardEvent, type ReactNode } from "react"
+import { Fragment, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore, type KeyboardEvent, type ReactNode, type RefObject } from "react"
 import { useQuery, useQueryClient } from "@tanstack/react-query"
 import { Check, ChevronDown, Inbox } from "lucide-react"
 import { useLocation, useNavigate } from "react-router"
@@ -83,6 +83,8 @@ import { setCrossProjectMentions } from "../lib/mentionAutolink.ts"
 import { readingLine } from "../lib/readingLine.ts"
 import { useIsMobile } from "../lib/mobile.ts"
 import { PhonePage } from "./PhonePage.tsx"
+import { SidebarPage } from "./SidebarPage.tsx"
+import { embedded, postToHost } from "../lib/embed.ts"
 
 /** How often the page re-reads every project. The rail's badges poll at 5s; this is the page the
  *  operator is looking AT, so it runs a little faster — the read is the servers' cached snapshots. */
@@ -216,9 +218,16 @@ export function AllQueuesPage() {
   }, [])
   // `e` WITH NO THREAD IN FRONT OF THE HUMAN — no drawer, no card being read — opens the project's own
   // folder in the editor: the page's project, or showing All projects, the one the box would start in.
+  // In an editor's sidebar that editor is the one around it, whatever External app says: the extension
+  // shows the folder (and opens one outside the window's folders in a window of its own).
   useShortcut("thread.editor", () => {
     if (runThreadCommand("editor")) return
     if (!focusProject?.open) return false
+    if (embedded()) {
+      if (!focusProject.projectDir) return false
+      postToHost({ type: "frizz:open-file", path: focusProject.projectDir })
+      return
+    }
     const project = focusProject
     void runExternalOpen(
       `editor-project:${project.id}`,
@@ -335,7 +344,10 @@ export function AllQueuesPage() {
     return () => setFaviconBadge(false)
   }, [ready])
   const scrollToCard = useScrollToCard()
-  const { active: activeKey, land } = useQueueKeys(useScrollspy(queue), scrollToCard)
+  // An editor's sidebar draws no cards, so its keys step its list instead (SidebarPage.tsx) — and only
+  // one cursor may answer `j`.
+  const sidebar = embedded()
+  const { active: activeKey, land } = useQueueKeys(useScrollspy(queue), scrollToCard, !sidebar)
   const loading = (cards.isPending || queues.isPending) && !queues.data
   // Below the page's stacking point the columns are one above the other, so the list follows the queue
   // rather than sitting between the prompt box and the queue it indexes.
@@ -354,6 +366,62 @@ export function AllQueuesPage() {
     </>
   )
 
+  // AN EDITOR'S SIDEBAR IS THE DESKTOP'S LEFT COLUMN (SidebarPage.tsx): the prompt box over the list, the
+  // view's switcher heading the list, a thread in its drawer. The cards have no room; a Ready row opens its
+  // thread instead of landing on its card.
+  if (sidebar) {
+    return (
+      <SidebarPage
+        projects={projects}
+        shown={shown}
+        viewed={viewed}
+        focusedSlug={view.kind === "project" ? view.slug : undefined}
+        hidden={hidden}
+        loading={loading}
+        error={queues.error && !queues.data ? String(queues.error) : undefined}
+        ready={ready}
+        empty={queue.length > 0 ? null : focused ? focusedEmptyLine(viewed?.name) : allEmptyLine(unopened)}
+        composer={
+          <div onKeyDown={onColumnKeyDown}>
+            <FocusedComposer
+              focus={focus}
+              project={focusProject}
+              dirs={dirs}
+              autoFocus={focusComposerFor !== null && focusComposerFor.slug === focus}
+              caret={focusComposerFor?.caret}
+              onFocused={clearFocusComposerFor}
+              target={
+                focused ? undefined : (
+                  <ProjectPicker
+                    projects={projects}
+                    focus={focus}
+                    onPick={(project) => {
+                      setFocusComposerFor({ slug: project.slug })
+                      pickProject(project, dirs?.projectDir)
+                    }}
+                  />
+                )
+              }
+            />
+          </div>
+        }
+        list={(reading) => (
+          <>
+            <ProjectList
+              projects={shown}
+              home={home}
+              activeKey={reading}
+              hidden={leaving.hidden}
+              onQueuedRow={noCard}
+              switcher={<Switcher projects={projects} hidden={hidden} current={viewed} row />}
+            />
+            {!focused && <AddProjectRow />}
+          </>
+        )}
+      />
+    )
+  }
+
   // A PHONE GETS ITS OWN LAYOUT of the same page (PhonePage.tsx): a header naming the view, Queue /
   // Snoozed / Done tabs of one-line rows, and a New thread button — upstream's phone board, over this
   // page's projects. The stack below is the desktop's, down to the 800px stacking point.
@@ -368,12 +436,12 @@ export function AllQueuesPage() {
         loading={loading}
         error={queues.error && !queues.data ? String(queues.error) : undefined}
         homeDir={home}
-        composer={(onDispatched) => (
+        composer={(onDispatched, autoFocus) => (
           <FocusedComposer
             focus={focus}
             project={focusProject}
             dirs={dirs}
-            autoFocus
+            autoFocus={autoFocus}
             caret={undefined}
             onFocused={noop}
             onDispatched={onDispatched}
@@ -465,7 +533,7 @@ export function AllQueuesPage() {
               ))
             ) : focused ? (
               <p data-xq-focus-empty className="mt-16 text-center text-[13px] text-muted">
-                Nothing in {viewed?.name ?? "this project"} is waiting on you.
+                {focusedEmptyLine(viewed?.name)}
               </p>
             ) : (
               <EmptyQueues unopened={unopened} />
@@ -489,7 +557,7 @@ export function AllQueuesPage() {
  * Leaving a project for All projects carries it over as the prompt box's pick, so the box there starts
  * where the operator just was.
  */
-function Switcher({ projects, hidden, current }: { projects: QueuesProject[]; hidden: (key: string) => boolean; current: QueuesProject | undefined }) {
+function Switcher({ projects, hidden, current, row = false }: { projects: QueuesProject[]; hidden: (key: string) => boolean; current: QueuesProject | undefined; row?: boolean }) {
   const choose = useChooseView()
   const add = useAddProject()
   // The list's own order (ProjectList): busy projects first, then the quiet ones; Home last, on its own.
@@ -515,6 +583,7 @@ function Switcher({ projects, hidden, current }: { projects: QueuesProject[]; hi
       onAll={() => choose.all(current)}
       onProject={(project) => choose.project(project.slug)}
       onAdd={add.start}
+      row={row}
     />
   )
 }
@@ -547,6 +616,8 @@ function useChooseView(): {
 }
 
 const noop = () => {}
+/** A Ready row with no card on the page to land on: it opens its thread (ProjectList.tsx useRowScope). */
+const noCard = () => null
 
 // ---- The column head --------------------------------------------------------------------------------
 
@@ -573,6 +644,8 @@ function ProjectPicker({ projects, focus, onPick }: { projects: QueuesProject[];
   useEffect(() => {
     for (const project of projects) if (!project.stale) warmProjectIcon(project.card ?? fallbackCard(project))
   }, [projects])
+  const triggerRef = useRef<HTMLButtonElement>(null)
+  const alone = useAloneOnItsLine(triggerRef)
   const choice = (project: QueuesProject, hint?: string) => (
     <MenuItem key={project.id} value={project.slug} onSelect={() => onPick(project)} icon={<ProjectSquare project={project.card ?? fallbackCard(project)} size={14} />}>
       <span className={`min-w-0 flex-1 truncate ${project.slug === focus ? "text-fg" : ""}`}>{project.name}</span>
@@ -586,13 +659,16 @@ function ProjectPicker({ projects, focus, onPick }: { projects: QueuesProject[];
     <Menu>
       <MenuTrigger asChild>
         <button
+          ref={triggerRef}
           type="button"
           data-xq-project-picker
+          data-alone={alone || undefined}
           title={steps ? `New threads start in ${name} (${PROJECT_STEP_KEYS})` : `New threads start in ${name}`}
           aria-label={`New threads start in ${name}. Choose a project`}
           // The model pill's own chrome and type (ProfileGridSelector's trigger), so the strip reads as one
-          // row of settings for the next thread.
-          className={`group inline-flex min-w-0 max-w-[min(14rem,45%)] cursor-pointer items-center gap-[5px] rounded-md border border-border/50 bg-transparent px-2 py-1 text-left text-muted outline-none transition-colors hover:border-border hover:bg-panel-2 hover:text-fg focus-visible:ring-1 focus-visible:ring-focus-ink-60 data-[state=open]:border-border data-[state=open]:bg-panel-2 ${PROMPT_CONTROL_TYPOGRAPHY_CLASS}`}
+          // row of settings for the next thread. Capped beside the model pill, so it leaves that room on the
+          // line; on a line of its own, the line (useAloneOnItsLine).
+          className={`group inline-flex min-w-0 ${alone ? "max-w-full" : "max-w-[min(14rem,45%)]"} cursor-pointer items-center gap-[5px] rounded-md border border-border/50 bg-transparent px-2 py-1 text-left text-muted outline-none transition-colors hover:border-border hover:bg-panel-2 hover:text-fg focus-visible:ring-1 focus-visible:ring-focus-ink-60 data-[state=open]:border-border data-[state=open]:bg-panel-2 ${PROMPT_CONTROL_TYPOGRAPHY_CLASS}`}
         >
           {/* Ink gaps (sans, scripts/ink-gaps.mjs): square→name 5.00px; name→chevron 6.00px against the model
               pill's own 6.12px, which `-ml-[3px]` buys back from the chevron's dead box. */}
@@ -620,6 +696,49 @@ function ProjectPicker({ projects, focus, onPick }: { projects: QueuesProject[];
       </MenuContent>
     </Menu>
   )
+}
+
+/**
+ * WHETHER THE PICKER HAS ITS LINE TO ITSELF, even at its cap: the strip too narrow for it and the model pill
+ * beside it, so the model pill wraps under it. The cap (45% of the strip) exists to leave the model pill
+ * room on the line, and on a line of its own it only cut the name — "ACME…" in a 300px editor sidebar, at
+ * the desktop's narrowest column and on a phone, with half the line empty beside it. Measured rather than
+ * guessed from a width, because the model pill's width is its model's name: the pill as it would be capped
+ * (its chrome plus the whole name, at most the cap) beside the model pill, against the strip. Read off the
+ * capped size, not the current one, so taking the line never feeds back into the answer.
+ */
+function useAloneOnItsLine(ref: RefObject<HTMLElement | null>): boolean {
+  const [alone, setAlone] = useState(false)
+  useLayoutEffect(() => {
+    const pill = ref.current
+    const strip = pill?.parentElement
+    if (!pill || !strip) return
+    let watched: Element | null = null
+    const measure = () => {
+      // Read afresh: the strip swaps its placeholder for the real model pill once the models load.
+      const model = pill.nextElementSibling
+      if (model !== watched) {
+        if (watched) observer.unobserve(watched)
+        if (model) observer.observe(model)
+        watched = model
+      }
+      const name = pill.querySelector<HTMLElement>("[data-xq-picker-name]")
+      const width = strip.clientWidth
+      // The pending box draws the picker alone in a corner, sized to it: nothing shares a line there.
+      if (!(model instanceof HTMLElement) || !name || !width) return setAlone(false)
+      const natural = pill.offsetWidth - name.clientWidth + name.scrollWidth
+      const rem = parseFloat(getComputedStyle(document.documentElement).fontSize) || 16
+      const capped = Math.min(natural, 14 * rem, 0.45 * width)
+      const gap = parseFloat(getComputedStyle(strip).columnGap) || 0
+      setAlone(capped + gap + model.offsetWidth > width)
+    }
+    const observer = new ResizeObserver(measure)
+    observer.observe(strip)
+    observer.observe(pill)
+    measure()
+    return () => observer.disconnect()
+  }, [ref])
+  return alone
 }
 
 /**
@@ -871,6 +990,20 @@ function QueueCardOf({ entry, ghost, status, concealed, leaving, chip }: { entry
 }
 
 /**
+ * The queue's empty line, focused on a project — the sidebar says it under its list too (SidebarPage), where
+ * it wraps: the name is kept whole on one line (cut short only past the line's width), since a slug broken
+ * at its hyphen ("docs- / portal") no longer reads as a name.
+ */
+const focusedEmptyLine = (name: string | undefined) => (
+  <>
+    Nothing in <span className="inline-block max-w-full truncate align-bottom">{name ?? "this project"}</span> is waiting on you.
+  </>
+)
+
+/** …and showing All projects, admitting the projects this server has not opened, whose queues it cannot see. */
+const allEmptyLine = (unopened: number) => (unopened > 0 ? "No threads awaiting human input in any open project" : "No threads awaiting human input")
+
+/**
  * RESUME EVERY THREAD A USAGE LIMIT PAUSED, in one click — the inbox header's verb whenever any card below
  * is one (maintainer 2026-10-02: "a builtin way to resume all threads at once that were paused because of
  * hitting a session limit"). A session limit stops every thread on the account at once, so the fleet comes
@@ -926,9 +1059,7 @@ function EmptyQueues({ unopened }: { unopened: number }) {
   return (
     <div data-xq-empty className="flex flex-col items-center gap-2 pt-2">
       <Inbox size={40} strokeWidth={1.25} className="text-muted-30" />
-      <div className="text-[13px] text-muted-80">
-        {unopened > 0 ? "No threads awaiting human input in any open project" : "No threads awaiting human input"}
-      </div>
+      <div className="text-[13px] text-muted-80">{allEmptyLine(unopened)}</div>
     </div>
   )
 }
@@ -1164,7 +1295,7 @@ function useScrollToCard(): (key: string) => number | null {
  * scroll that far — could otherwise never be picked at all. Returns the card being read, which the rail
  * and its connector mark, so they agree with the ring.
  */
-function useQueueKeys(activeKey: string | null, scrollToCard: (key: string) => number | null): { active: string | null; land: (key: string) => number | null } {
+function useQueueKeys(activeKey: string | null, scrollToCard: (key: string) => number | null, enabled = true): { active: string | null; land: (key: string) => number | null } {
   const reading = useRef(activeKey)
   reading.current = activeKey
   const landing = useRef<{ key: string; y: number; until: number } | null>(null)
@@ -1203,7 +1334,7 @@ function useQueueKeys(activeKey: string | null, scrollToCard: (key: string) => n
     }
     return y
   }, [scrollToCard])
-  useEffect(() => registerQueueCursor({
+  useEffect(() => enabled ? registerQueueCursor({
     // Not a ghost (lib/stableQueue.ts), whose thread is no longer waiting, nor a card whose drawer is open.
     keys: () => [...document.querySelectorAll<HTMLElement>('[data-xq-card][data-queue-leaving="false"]:not([data-queue-ghost]):not([data-queue-concealed])')]
       .map((slot) => slot.dataset.xqCard ?? "")
@@ -1211,7 +1342,7 @@ function useQueueKeys(activeKey: string | null, scrollToCard: (key: string) => n
     current,
     root,
     go: (key) => void land(key),
-  }), [land, current, root])
+  }) : undefined, [land, current, root, enabled])
 
   // Re-read on every render (a card leaving re-renders the page) and on scroll (which can end a hold);
   // an unchanged key is a bail-out, not a render.

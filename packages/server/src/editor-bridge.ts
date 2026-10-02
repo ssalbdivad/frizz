@@ -7,17 +7,25 @@ import { basename, sep } from "node:path"
 import { WebSocketServer, type RawData, type WebSocket } from "ws"
 import {
   EDITOR_CLOSE,
+  EDITOR_FEATURES,
   EDITOR_PROTOCOL_VERSION,
   EDITOR_SOCKET_PATH,
   EditorClientMessageSchema,
   editorKindOf,
   queuedThread,
+  queueUrgency,
   workingThread,
+  type EditorAttentionNeeds,
+  type EditorAttentionThread,
   type EditorComposeItem,
   type EditorHello,
   type EditorKind,
   type EditorProject,
+  type EditorReviewTarget,
   type EditorServerMessage,
+  type EditorSnapshot,
+  type EditorStateResult,
+  type EditorStateWindow,
   type EditorWindowSummary,
   type FilePosition,
   type ServerEvent,
@@ -36,10 +44,14 @@ import { isTrustedLocalWebSocketRequest, rejectWebSocketUpgrade } from "./local-
 // window's folders can span several projects, and a file link clicked in any project's page has to be
 // able to land in any window.
 //
-// What it holds is small and all in memory: the connected windows (their folders, focus and app), the
-// requests waiting on a window's answer, and the selections an editor sent to the prompt box until a
-// page claims one. Nothing survives a restart, and nothing needs to — the extension reconnects and says
-// it all again in its hello.
+// What it holds is small and all in memory: the connected windows (their folders, focus and app, and
+// what their editor last showed, for the agents), the requests waiting on a window's answer, and the
+// selections an editor sent to the prompt box until a page claims one. Nothing survives a restart, and
+// nothing needs to — the extension reconnects and says it all again.
+//
+// And it tells ONE window when a thread needs the human (`attention`): it listens on every open
+// project's bus for the board's own needs-you edge while a window wants to hear it, and hands each one
+// to the window the human was in last of those that have the project open.
 
 export const EDITOR_MAX_WINDOWS = 32
 /**
@@ -50,8 +62,10 @@ export const EDITOR_MAX_WINDOWS = 32
  */
 export const EDITOR_MAX_PAYLOAD_BYTES = 128 * 1024
 /**
- * Every other frame is a hello, a state or a result. A real one is a few KiB; only dozens of folders
- * with kilobyte-long paths come near this. It is a limit of its own, not implied by the per-field ones
+ * Every other frame is a hello, a state, a result or an editor snapshot. A real hello is a few KiB; only
+ * dozens of folders with kilobyte-long paths come near this. A snapshot can be larger — a selection's
+ * text, a hundred diagnostics — and the extension fits it under EDITOR_STATE_MAX_BYTES (editor-protocol.ts),
+ * which is below this, before sending. It is a limit of its own, not implied by the per-field ones
  * in editor-protocol.ts (EDITOR_MAX_FOLDERS x EDITOR_MAX_PATH alone allows 256 KiB): a frame past it is
  * refused 4401, and one past EDITOR_MAX_PAYLOAD_BYTES is closed 1009 by `ws` first.
  */
@@ -59,6 +73,12 @@ export const EDITOR_MAX_FRAME_BYTES = 64 * 1024
 export const EDITOR_HEARTBEAT_MS = 15_000
 export const EDITOR_PROJECTS_POLL_MS = 2_000
 export const EDITOR_REQUEST_TIMEOUT_MS = 5_000
+/**
+ * A review asks git several questions per checkout before it answers (packages/vscode review.ts): the
+ * base, the changed files, which are binary. Each is milliseconds, but a cold repository on a busy disk
+ * is not, and an answer late is a review the human sees anyway — a false "did not answer" is worse.
+ */
+export const EDITOR_REVIEW_TIMEOUT_MS = 20_000
 export const EDITOR_HELLO_TIMEOUT_MS = 10_000
 export const EDITOR_COMPOSE_TTL_MS = 10 * 60_000
 export const EDITOR_COMPOSE_MAX_ITEMS = 20
@@ -70,11 +90,18 @@ export interface EditorBridgeDeps {
   listProjects: () => EditorProject[] | Promise<EditorProject[]>
   /** Publish on EVERY open project's bus: a page hears only its own project's. */
   publish: (event: ServerEvent) => void
+  /**
+   * Every OPEN project: the folder its agents run in (what a window "has open" is judged against), the
+   * bus its board publishes the needs-you edge on, and the board to read that thread from. Read on every
+   * projects poll while a window listens for attention; absent, no window is ever told.
+   */
+  openProjects?: () => readonly AttentionSource[]
   now?: () => number
   /** This server's `os.homedir()` / `process.platform` — what a window must share before it may take a file no folder of it holds. */
   home?: string
   platform?: string
   requestTimeoutMs?: number
+  reviewTimeoutMs?: number
   heartbeatMs?: number
   projectsPollMs?: number
   helloTimeoutMs?: number
@@ -102,13 +129,57 @@ export interface EditorBridge {
    * own CLI spawned on the folder raises the window that has it open.
    */
   focusFolder(dir: string, kinds: readonly EditorKind[]): Promise<boolean>
+  /**
+   * Show a thread's changes (`review`) in the window that should: one that can and takes things from
+   * Frizz, whose workspace folder holds a checkout of the review — the deepest, the first checkout first —
+   * or the project folder; else the window the human was in last that shares this server's filesystem.
+   * True: it opened them. False: no window can, or it did not answer. THROWS with the window's own words
+   * when it answered that it could not (nothing to review, not a repository).
+   */
+  review(target: EditorReviewTarget, projectDir: string): Promise<boolean>
   /** Claim a held compose item: that one, or with no id the oldest. Null when there is none (or it expired). */
   takeCompose(id?: string): EditorComposeItem | null
+  /**
+   * What the editor windows that have `dir` open show — their file in front, selection, tabs and
+   * problems — the one the human was in last first; and how many windows are connected at all. A window
+   * "has" the project when a workspace folder of it holds the project folder or sits inside it (a
+   * package of a monorepo, a thread's worktree opened with "Open in editor"), or when its file in front
+   * is under the project folder. `also` are more folders that count the same way — a thread's checkout
+   * outside the project folder (a sibling worktree), so a window opened on it is the thread's window.
+   */
+  editorState(dir: string, also?: readonly string[]): EditorStateResult
+  /**
+   * The files an editor window shows with UNSAVED changes that lie under any of `dirs` (realpath
+   * containment), each once, from every window whose last `editor` frame shared its state. What Done asks
+   * before it removes a thread's worktree (router.ts completeThread): a worktree removed under an open,
+   * edited buffer takes the file the human was editing with it, and the buffer is left pointing at a
+   * folder that no longer exists. Best effort by construction — a window with sharing off, an extension
+   * too old to send the frame, or a dirty tab past the frame's 50-tab cap is not seen — so it can only
+   * ever ADD a reason to keep a worktree, never remove one.
+   */
+  unsavedUnder(dirs: readonly string[]): EditorUnsavedFile[]
+}
+
+/** A file an editor window shows with unsaved changes (EditorBridge.unsavedUnder). */
+export interface EditorUnsavedFile {
+  path: string
+  app: string
+  kind: EditorKind
+}
+
+/** One open project, as the needs-you notifications read it (EditorBridgeDeps.openProjects). */
+export interface AttentionSource {
+  id: string
+  dir: string
+  bus: { subscribe(listener: (event: ServerEvent) => void): () => void }
+  board: { snapshot(): Promise<{ threads: ThreadView[] }> }
 }
 
 interface EditorWindow {
   windowId: string
   app: string
+  /** The extension's build, as its hello said it. */
+  extensionVersion: string
   kind: EditorKind
   folders: string[]
   focused: boolean
@@ -117,6 +188,12 @@ interface EditorWindow {
   acceptsOpens: boolean
   home: string
   platform: string
+  /** Its latest `editor` frame and when it arrived; absent until the extension sends one. */
+  editor?: { snapshot: Omit<EditorSnapshot, "t">; at: number }
+  /** What it said it can do beyond v1 (its `features` frame); empty until it says. */
+  features: ReadonlySet<string>
+  /** It said it shows needs-you notifications (`listen`); false until it does. */
+  attention: boolean
 }
 
 /** How a request to a window ended: its answer, or "gone" for a timeout or a dropped socket. */
@@ -173,6 +250,7 @@ export function createEditorBridge(deps: EditorBridgeDeps): EditorBridge {
   const home = deps.home ?? homedir()
   const platform = deps.platform ?? process.platform
   const requestTimeoutMs = deps.requestTimeoutMs ?? EDITOR_REQUEST_TIMEOUT_MS
+  const reviewTimeoutMs = deps.reviewTimeoutMs ?? EDITOR_REVIEW_TIMEOUT_MS
   const heartbeatMs = deps.heartbeatMs ?? EDITOR_HEARTBEAT_MS
   const projectsPollMs = deps.projectsPollMs ?? EDITOR_PROJECTS_POLL_MS
   const helloTimeoutMs = deps.helloTimeoutMs ?? EDITOR_HELLO_TIMEOUT_MS
@@ -226,7 +304,9 @@ export function createEditorBridge(deps: EditorBridgeDeps): EditorBridge {
   function summaries(): EditorWindowSummary[] {
     const out: EditorWindowSummary[] = []
     for (const conn of connections) {
-      if (conn.window) out.push({ app: conn.window.app, kind: conn.window.kind, acceptsOpens: conn.window.acceptsOpens })
+      if (!conn.window) continue
+      const { app, kind, acceptsOpens, features, extensionVersion } = conn.window
+      out.push({ app, kind, acceptsOpens, ...(features.has(EDITOR_FEATURES.review) ? { reviews: true as const } : {}), ...(extensionVersion ? { extensionVersion } : {}) })
     }
     return out
   }
@@ -253,6 +333,8 @@ export function createEditorBridge(deps: EditorBridgeDeps): EditorBridge {
     projectsPoll = (async () => {
       do {
         projectsPollAgain = false
+        // A project opened or closed since the last tick changes which buses there are to hear.
+        watchAttention()
         if (closing || ![...connections].some((c) => c.window)) return
         let projects: EditorProject[]
         try {
@@ -311,6 +393,7 @@ export function createEditorBridge(deps: EditorBridgeDeps): EditorBridge {
     if (conn.window) {
       conn.window = undefined
       publishEditorsIfChanged()
+      watchAttention()
     }
     if (connections.size === 0) stopTimers()
   }
@@ -333,6 +416,7 @@ export function createEditorBridge(deps: EditorBridgeDeps): EditorBridge {
     conn.window = {
       windowId: msg.windowId,
       app: msg.app,
+      extensionVersion: msg.extensionVersion,
       kind: editorKindOf(msg.app),
       folders: msg.folders,
       focused: msg.focused,
@@ -340,8 +424,10 @@ export function createEditorBridge(deps: EditorBridgeDeps): EditorBridge {
       acceptsOpens: msg.acceptsOpens,
       home: msg.home,
       platform: msg.platform,
+      features: new Set(),
+      attention: false,
     }
-    send(conn, { t: "welcome", v: EDITOR_PROTOCOL_VERSION, bootId: deps.bootId() })
+    send(conn, { t: "welcome", v: EDITOR_PROTOCOL_VERSION, bootId: deps.bootId(), features: [EDITOR_FEATURES.editorState, EDITOR_FEATURES.selectionWithheld, EDITOR_FEATURES.review, EDITOR_FEATURES.sidebar, EDITOR_FEATURES.attention] })
     publishEditorsIfChanged()
     void pollProjects()
   }
@@ -388,6 +474,23 @@ export function createEditorBridge(deps: EditorBridgeDeps): EditorBridge {
       conn.pending.get(msg.id)?.(msg.ok ? { ok: true } : { ok: false, error: msg.error })
       return
     }
+    if (msg.t === "features") {
+      window.features = new Set(msg.features)
+      publishEditorsIfChanged()
+      return
+    }
+    if (msg.t === "listen") {
+      window.attention = msg.attention
+      watchAttention()
+      return
+    }
+    if (msg.t === "editor") {
+      // Kept whole, replacing the last: the extension sends the entire picture on every change, so there
+      // is nothing to merge, and a window that turned sharing off sends `shared: false` with nothing else.
+      const { t: _t, ...snapshot } = msg
+      window.editor = { snapshot, at: now() }
+      return
+    }
     // compose: held for whichever page claims it (composeTake), announced to every open project's pages.
     pruneCompose()
     if (compose.length >= maxComposeItems) {
@@ -420,18 +523,22 @@ export function createEditorBridge(deps: EditorBridgeDeps): EditorBridge {
     startTimers()
   }
 
-  /** Send `open`/`focus` and wait for the window's `result`. */
-  function request(conn: Connection, frame: { t: "open"; path: string } & Partial<FilePosition> | { t: "focus"; path: string }): Promise<boolean> {
+  /** Send `open`/`focus`/`review` and wait for the window's `result`. */
+  function request(
+    conn: Connection,
+    frame: { t: "open"; path: string } & Partial<FilePosition> | { t: "focus"; path: string } | { t: "review" } & EditorReviewTarget,
+    timeoutMs = requestTimeoutMs,
+  ): Promise<boolean> {
     const id = randomUUID()
     const app = conn.window!.app
     return new Promise<boolean>((resolve, reject) => {
-      const timer = setTimeout(() => settle("gone"), requestTimeoutMs)
+      const timer = setTimeout(() => settle("gone"), timeoutMs)
       function settle(outcome: Outcome): void {
         clearTimeout(timer)
         conn.pending.delete(id)
         if (outcome === "gone") resolve(false)
         else if (outcome.ok) resolve(true)
-        else reject(new Error(outcome.error || `${app} could not open ${basename(frame.path)}`))
+        else reject(new Error(outcome.error || (frame.t === "review" ? `${app} could not show the changes` : `${app} could not open ${basename(frame.path)}`)))
       }
       conn.pending.set(id, settle)
       if (!send(conn, { ...frame, id } as EditorServerMessage)) settle("gone")
@@ -442,10 +549,78 @@ export function createEditorBridge(deps: EditorBridgeDeps): EditorBridge {
     return [...connections].filter((c) => c.window && c.window.acceptsOpens && kinds.includes(c.window.kind))
   }
 
+  /** Whether `window` has the project at `dir` (realpath `realDir`) open; see EditorBridge.editorState. */
+  function holdsProject(window: EditorWindow, dir: string, realDir: string): boolean {
+    for (const folder of window.folders) {
+      const realFolder = realpathOrUndefined(folder)
+      if (realFolder && (isUnder(realDir, folder) || isUnder(realFolder, dir))) return true
+    }
+    const active = window.editor?.snapshot.active
+    if (!active || active.untitled) return false
+    const realActive = realpathOrUndefined(active.path)
+    return realActive !== undefined && isUnder(realActive, dir)
+  }
+
   function mostRecent(candidates: readonly Connection[]): Connection | undefined {
     let best: Connection | undefined
     for (const c of candidates) if (!best || moreRecentlyFocused(c, best)) best = c
     return best
+  }
+
+  // ── attention: one window told when a thread needs the human ────────────────────────────────────
+  //
+  // THE SIGNAL IS THE BOARD'S OWN: `notify` `needs-decision`, which board.ts notifyNeedsYou publishes on
+  // the edge of a thread entering the queue — a question, a request, a finished turn — deduped, primed at
+  // boot so a restart does not announce the whole queue, and quiet for a thread that comes back to the
+  // place it left. The page's desktop notifications fire on the same event, so a VS Code notification is
+  // never news the board would not call news. Computing an edge here from the projects poll would be a
+  // second notifier, and the two disagreeing is what shared queueUrgency was written to end.
+  //
+  // Buses are heard only while some window wants it: a subscription per open project, kept in step with
+  // the open projects on every projects poll (2s), and dropped when the last listening window goes.
+
+  const watching = new Map<string, { bus: AttentionSource["bus"]; stop: () => void }>()
+
+  function watchAttention(): void {
+    const wanted = closing || !deps.openProjects || ![...connections].some((c) => c.window?.attention) ? [] : deps.openProjects()
+    const keep = new Set<string>()
+    for (const source of wanted) {
+      keep.add(source.id)
+      const current = watching.get(source.id)
+      // The same bus is the same project still open; a project reopened (a moved checkout) has a new one.
+      if (current?.bus === source.bus) continue
+      current?.stop()
+      const stop = source.bus.subscribe((event) => {
+        if (event.type !== "notify" || event.kind !== "needs-decision") return
+        // After this task: the board publishes the edge from INSIDE its assembly, before the snapshot it
+        // is assembling becomes the one `snapshot()` answers, so a read now would still see the thread out
+        // of the queue.
+        setTimeout(() => void tellAttention(source, event.slug, event.body), 0)
+      })
+      watching.set(source.id, { bus: source.bus, stop })
+    }
+    for (const [id, entry] of watching) {
+      if (keep.has(id)) continue
+      entry.stop()
+      watching.delete(id)
+    }
+  }
+
+  async function tellAttention(source: AttentionSource, slug: string, body: string | undefined): Promise<void> {
+    let thread: ThreadView | undefined
+    try {
+      thread = (await source.board.snapshot()).threads.find((candidate) => candidate.id === slug)
+    } catch {
+      return // a board stopping: its project is closing, and nobody needs telling
+    }
+    // Answered in the moment since (another tab, a fast human): no longer news.
+    if (!thread || !queuedThread(thread) || closing) return
+    const realDir = realpathOrUndefined(source.dir)
+    if (!realDir) return
+    // Decided now, after the read: the window the human is in at the moment it is shown.
+    const target = mostRecent([...connections].filter((c) => c.window?.attention && holdsProject(c.window, source.dir, realDir)))
+    if (!target) return
+    send(target, { t: "attention", projectId: source.id, thread: attentionThread(thread), needs: attentionNeeds(thread), ...(body ? { body } : {}) })
   }
 
   return {
@@ -498,6 +673,7 @@ export function createEditorBridge(deps: EditorBridgeDeps): EditorBridge {
       if (closePromise) return closePromise
       closing = true
       stopTimers()
+      watchAttention()
       for (const conn of connections) for (const settle of [...conn.pending.values()]) settle("gone")
       // Terminate rather than handshake, as the application socket does: the extension reconnects on
       // any close, and a polite close can keep a replaced server alive while a sleeping peer dawdles.
@@ -570,6 +746,86 @@ export function createEditorBridge(deps: EditorBridgeDeps): EditorBridge {
       return request(conn, { t: "focus", path: matches.find((m) => m.conn === conn)!.folder }).catch(() => false)
     },
 
+    async review(target, projectDir) {
+      if (closing) return false
+      const candidates = [...connections].filter((c) => c.window && c.window.acceptsOpens && c.window.features.has(EDITOR_FEATURES.review))
+      // The checkouts first, in the review's order, then the project: a window on the thread's worktree
+      // beats one on the whole project, and either beats a window on something else.
+      const dirs = [...target.checkouts.map((checkout) => checkout.dir), projectDir]
+      let best: { conn: Connection; rank: number; depth: number } | undefined
+      for (const [rank, dir] of dirs.entries()) {
+        const real = realpathOrUndefined(dir)
+        if (!real) continue
+        for (const conn of candidates) {
+          for (const folder of conn.window!.folders) {
+            const realFolder = realpathOrUndefined(folder)
+            if (!realFolder || !isUnder(real, folder)) continue
+            const depth = realFolder.length
+            const better = !best || rank < best.rank || (rank === best.rank && (depth > best.depth || (depth === best.depth && moreRecentlyFocused(conn, best.conn))))
+            if (better) best = { conn, rank, depth }
+          }
+        }
+      }
+      const conn = best?.conn ?? mostRecent(candidates.filter((c) => c.window!.home === home && c.window!.platform === platform))
+      if (!conn) return false
+      return request(conn, { t: "review", title: target.title, checkouts: target.checkouts }, reviewTimeoutMs)
+    },
+
+    editorState(dir, also = []) {
+      const targets = closing ? [] : [dir, ...also].flatMap((folder) => {
+        const real = realpathOrUndefined(folder)
+        return real ? [{ folder, real }] : []
+      })
+      const at = now()
+      const matched: Connection[] = []
+      // The windows on other projects are counted, never described: their folders are not this worker's.
+      let connected = 0
+      for (const conn of connections) {
+        const window = conn.window
+        if (!window) continue
+        connected++
+        if (targets.some((target) => holdsProject(window, target.folder, target.real))) matched.push(conn)
+      }
+      matched.sort((a, b) => (moreRecentlyFocused(a, b) ? -1 : moreRecentlyFocused(b, a) ? 1 : 0))
+      const windows = matched.map(({ window }): EditorStateWindow => {
+        const { app, kind, focused, lastFocusedAt, folders, editor } = window!
+        return {
+          app,
+          kind,
+          focused,
+          ...(!focused && lastFocusedAt > 0 ? { focusedAgoMs: Math.max(0, at - lastFocusedAt) } : {}),
+          folders,
+          ...(editor ? { editor: { ...editor.snapshot, reportedAgoMs: Math.max(0, at - editor.at) } } : {}),
+        }
+      })
+      return { windows, connected }
+    },
+
+    unsavedUnder(dirs) {
+      if (closing || dirs.length === 0) return []
+      const out: EditorUnsavedFile[] = []
+      const seen = new Set<string>()
+      for (const conn of connections) {
+        const window = conn.window
+        const snapshot = window?.editor?.snapshot
+        if (!window || !snapshot?.shared) continue
+        // An untitled buffer is not a file in any folder; a dirty one is the human's text with nowhere to go.
+        const files = [
+          ...(snapshot.active && snapshot.active.dirty && !snapshot.active.untitled ? [snapshot.active.path] : []),
+          ...snapshot.open.filter((file) => file.dirty && !file.untitled).map((file) => file.path),
+        ]
+        for (const path of files) {
+          if (seen.has(path)) continue
+          // A dirty buffer whose file was deleted on disk keeps its path; containment then reads the spelling.
+          const real = realpathOrUndefined(path) ?? path
+          if (!dirs.some((dir) => isUnder(real, dir))) continue
+          seen.add(path)
+          out.push({ path, app: window.app, kind: window.kind })
+        }
+      }
+      return out
+    },
+
     takeCompose(id) {
       pruneCompose()
       const index = id === undefined ? 0 : compose.findIndex((entry) => entry.item.id === id)
@@ -614,4 +870,36 @@ export async function listEditorProjects(
     out.push(project)
   }
   return out
+}
+
+/**
+ * What a queued thread needs from the human, most pressing first — read off the same reasons the queue
+ * calls urgent (shared queueUrgency), so the notification says what the card will: a terminal at a prompt,
+ * a request to approve, a question, a stop it cannot get past on its own, a usage limit; and with none of
+ * those, a turn that finished and is ready for the human to read.
+ */
+export function attentionNeeds(t: ThreadView): EditorAttentionNeeds {
+  const reasons = queueUrgency(t).split(" ")
+  const has = (...names: string[]) => reasons.some((reason) => names.includes(reason) || names.some((name) => name.endsWith(":") && reason.startsWith(name)))
+  if (has("terminal")) return "terminal"
+  if (has("interaction", "perm-prompt")) return "approval"
+  if (has("ask", "question", "q:")) return "question"
+  if (has("crashed", "provider-error")) return "stopped"
+  if (has("limit")) return "limit"
+  return "ready"
+}
+
+/** The fields the extension names a thread by (its port of groups.ts displayTitle), and nothing else. */
+export function attentionThread(t: ThreadView): EditorAttentionThread {
+  return {
+    id: t.id,
+    title: t.title,
+    ...(t.aiTitle !== undefined ? { aiTitle: t.aiTitle } : {}),
+    ...(t.titleAuto !== undefined ? { titleAuto: t.titleAuto } : {}),
+    ...(t.titleLocked !== undefined ? { titleLocked: t.titleLocked } : {}),
+    ...(t.titleNamed !== undefined ? { titleNamed: t.titleNamed } : {}),
+    ...(t.spawnedAt !== undefined ? { spawnedAt: t.spawnedAt } : {}),
+    ...(t.backend !== undefined ? { backend: t.backend } : {}),
+    ...(t.runtime !== undefined ? { runtime: t.runtime } : {}),
+  }
 }

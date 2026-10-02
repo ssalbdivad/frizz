@@ -3,8 +3,11 @@ import { useEffect, useMemo, useRef, useState, type ReactNode } from "react"
 import { useIsMutating, useMutation, useQuery } from "@tanstack/react-query"
 import { expandUserCommandDraft, type AccountBackend, type CreateLazyThreadInput, type DispatchInput } from "@frizz/shared"
 import { rpc } from "../api/rpc.ts"
-import { showToast } from "../store.ts"
+import { useSnapshot } from "valtio"
+import { showToast, store } from "../store.ts"
 import { Composer } from "./Composer.tsx"
+import { EditorContextBar } from "./EditorContextBar.tsx"
+import { embedFileMentions } from "../lib/editorReach.ts"
 import { useMentionCandidates } from "../hooks/useMentionCandidates.ts"
 import { userCommandItems, useUserCommands } from "../hooks/useUserCommands.ts"
 import { GithubTrigger, useGithubTriggerVisible } from "./GithubTrigger.tsx"
@@ -17,11 +20,13 @@ import { dispatchProfileGroups } from "../lib/dispatchPreferences.ts"
 import { useDispatchProfile, useDraftDispatchPick } from "../hooks/useDispatchProfile.ts"
 import { handleDialogEscape } from "../lib/selectOverlay.ts"
 import { draftKey, draftStore, useDraft, useProjectDir } from "../lib/drafts.ts"
-import { buildMessageWithContext, type ComposerContextItem } from "../lib/composerContext.ts"
-import { restoreContextItems, stagedItems, takeContextItems, useStagedContextTokens } from "../lib/stagedContext.ts"
+import type { ComposerContextItem } from "../lib/composerContext.ts"
+import { outgoingMessage } from "../lib/editorContext.ts"
+import { restoreContextItems, stagedItems, takeContextItems, useStagedContextSources, useStagedContextTokens } from "../lib/stagedContext.ts"
 import { projectSlug } from "../lib/base-path.ts"
 import { parseAccountAlias } from "../lib/signIn.ts"
 import { PROMPT_CONTROL_TYPOGRAPHY_CLASS } from "../lib/promptControlTypography.ts"
+import { aboveDrawersZ } from "../lib/overlaySurface.ts"
 
 /** The directories of the project a prompt box dispatches into, named by its caller (DispatchForm `dirs`). */
 export interface DispatchDirs {
@@ -106,6 +111,7 @@ function PromptForm({
   // the prompt on dispatch exactly as a reply box serializes it (composerContext.ts), so the new thread's
   // first message renders its chips like any later one. The box had no chips until 2026-10-01.
   const contextTokens = useStagedContextTokens(promptKey, prompt)
+  const contextSources = useStagedContextSources(promptKey, projectDir)
   const submittedContextRef = useRef<ComposerContextItem[]>([])
   const [pendingDispatch, setPendingDispatch] = useState<string | null>(null)
   // The new-thread default (shared with the GitHub picker) with this prompt's own pick over it. The
@@ -192,7 +198,14 @@ function PromptForm({
   function submitLazy() {
     if (!prompt.trim() || !resolved || savingSettings || parseAccountAlias(prompt)) return
     const input: CreateLazyThreadInput = {
-      prompt: buildMessageWithContext(expandedPrompt(prompt), [...stagedItems(promptKey)], projectDir).trim(),
+      // The chips — which the human placed, on purpose — and NOT the editor block, at saving or at launch.
+      // A lazy thread is written down for later. The block says what the editor showed "when they sent
+      // this"; baked into the note it would be read hours later as the moment of launch, and it sat in an
+      // editable note the human never typed. Attached at launch instead, it would describe whatever the
+      // editor happens to show then — unrelated to a note written earlier, more often than not — from a box
+      // (LazyThreadBox) that shows no context bar, so the human could neither see it go nor turn it off.
+      // If the note means the editor ("fix this"), the agent reads it then through its editor tool.
+      prompt: outgoingMessage(expandedPrompt(prompt), stagedItems(promptKey), projectDir, false).trim(),
       // The pick rides along: it is what the lazy thread starts on when it is launched, unless changed then.
       model: resolved.model,
       backend: resolved.backend,
@@ -249,7 +262,10 @@ function PromptForm({
     }
     const expanded = expandedPrompt(prompt)
     const input: DispatchInput = {
-      prompt: buildMessageWithContext(expanded, [...stagedItems(promptKey)], projectDir).trim(),
+      // The chips, and in an editor's sidebar what the editor has in front at THIS Enter
+      // (lib/editorContext.ts outgoingMessage). Built here, once: a dispatch the sign-in gate holds runs
+      // with this input after the sign-in, so it carries what the human saw when they pressed Enter.
+      prompt: outgoingMessage(expanded, stagedItems(promptKey), projectDir, true).trim(),
       // A user command's thread is titled by what was typed, not by the first words of its wrapper.
       ...(expanded !== prompt ? { title: prompt.trim().split("\n")[0]!.slice(0, 120) } : {}),
       // No permissionMode: the server stamps every created worker itself (workerDispatchPermission —
@@ -346,8 +362,11 @@ function PromptForm({
         onSubmit={submit}
         onSaveLazy={submitLazy}
         contextTokens={contextTokens}
+        contextSources={contextSources}
+        header={<EditorContextBar box={{ key: promptKey, projectDir, surface: "newComposer" }} />}
         placeholder="Describe the task…"
         mentionCandidates={mentions}
+        fileMentions={embedFileMentions(projectDir)}
         slashSuggest={slashSuggest}
         slashSuggestVersion={userCommandsQuery.dataUpdatedAt}
         minHeight={96}
@@ -389,6 +408,9 @@ function PromptForm({
 // here BEFORE the composer's own Escape-blurs handler can swallow it).
 export function NewThreadDialog({ onClose }: { onClose: () => void }) {
   const contentRef = useRef<HTMLDivElement>(null)
+  // Over whatever drawers are open — `c`, the palette's New thread or an editor's New thread button all
+  // open it on top of a thread (lib/overlaySurface.ts aboveDrawersZ, which says why not z-[200]).
+  const z = aboveDrawersZ(useSnapshot(store).drawers.length)
   // Frizz opens this dialog by writing store state, not through RadixDialog.Trigger. Capture the real
   // opener during the mount render so close can restore it explicitly.
   const openerRef = useRef<HTMLElement | null>(
@@ -405,7 +427,7 @@ export function NewThreadDialog({ onClose }: { onClose: () => void }) {
       <RadixDialog.Portal>
         {/* Frosted glass: heavy blur + saturation over a light black wash, so the board reads as a
             texture behind the dialog rather than going fully dark. */}
-        <RadixDialog.Overlay className="fixed inset-0 z-50 bg-scrim-30 backdrop-blur-md backdrop-saturate-150" />
+        <RadixDialog.Overlay className="fixed inset-0 bg-scrim-30 backdrop-blur-md backdrop-saturate-150" style={{ zIndex: z }} />
         <RadixDialog.Content
           ref={contentRef}
           aria-modal="true"
@@ -423,7 +445,8 @@ export function NewThreadDialog({ onClose }: { onClose: () => void }) {
           // TOP-ANCHORED ON A PHONE. Vertically centred, this dialog sits at ~420pt on a 844pt screen —
           // which is under the keyboard the moment its textarea takes focus, and the composer is the
           // entire point of the dialog. Above the phone breakpoint nothing changes.
-          className="fixed left-1/2 top-1/2 z-50 w-[640px] max-w-[86vw] -translate-x-1/2 -translate-y-1/2 rounded-xl border border-border bg-panel p-5 shadow-2xl shadow-shadow-ink/50 outline-none max-[700px]:top-[calc(env(safe-area-inset-top)+56px)] max-[700px]:w-[calc(100vw-24px)] max-[700px]:max-w-none max-[700px]:translate-y-0"
+          style={{ zIndex: z + 1 }}
+          className="fixed left-1/2 top-1/2 w-[640px] max-w-[86vw] -translate-x-1/2 -translate-y-1/2 rounded-xl border border-border bg-panel p-5 shadow-2xl shadow-shadow-ink/50 outline-none max-[700px]:top-[calc(env(safe-area-inset-top)+56px)] max-[700px]:w-[calc(100vw-24px)] max-[700px]:max-w-none max-[700px]:translate-y-0"
         >
           <RadixDialog.Title className="mb-1 text-[14px] font-medium">New thread</RadixDialog.Title>
           <DispatchForm autoFocus onDispatched={onClose} />

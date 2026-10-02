@@ -31,7 +31,7 @@ import { useMentionCandidates, useOwnMention } from "../hooks/useMentionCandidat
 import { answerProse, handoffParts, projectMarkdownScope, sameProjectAddress, squareCard, threadKey, type QueuesProject } from "../lib/allQueues.ts"
 import { draftKey, draftStore, useDraftValues } from "../lib/drafts.ts"
 import { buildMessageWithContext, type ComposerContextItem } from "../lib/composerContext.ts"
-import { restoreContextItems, takeContextItems, useStagedContextTokens } from "../lib/stagedContext.ts"
+import { restoreContextItems, takeContextItems, useStagedContextSources, useStagedContextTokens } from "../lib/stagedContext.ts"
 import { rememberFullscreenOrigin } from "../lib/fullscreenHandoff.ts"
 import { openLocalPath } from "../lib/local-file-links.ts"
 import { pageUnloading } from "../lib/pendingSends.ts"
@@ -927,6 +927,7 @@ function ReplyBox({ project, thread, onSent, onLanded, onFailed }: { project: Qu
   // The drawer's chips, on the drawer's draft: a selection staged in the thread's drawer (⌘I, or sent from
   // an editor) is the same staging here, and rides this box's send the same way (lib/stagedContext.ts).
   const contextTokens = useStagedContextTokens(key, text)
+  const contextSources = useStagedContextSources(key, project.projectDir)
   const send = useMutation({
     mutationFn: ({ outgoing }: { outgoing: string; typed: string; staged: ComposerContextItem[] }) => deliverFollowUp(project, thread, outgoing),
     onSuccess: () => {
@@ -989,6 +990,7 @@ function ReplyBox({ project, thread, onSent, onLanded, onFailed }: { project: Qu
       <Composer
         surface="queueComposer"
         contextTokens={contextTokens}
+        contextSources={contextSources}
         value={text}
         onChange={(value) => draftStore.set(key, value)}
         onSubmit={submit}

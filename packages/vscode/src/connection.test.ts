@@ -3,12 +3,12 @@ import assert from "node:assert/strict"
 import { createServer, type Server } from "node:http"
 import type { AddressInfo } from "node:net"
 import { WebSocket, WebSocketServer } from "ws"
-import { EDITOR_CLOSE, EDITOR_MAX_FOLDERS, EDITOR_MAX_PATH, EDITOR_SOCKET_PATH, type EditorClientMessage, type EditorOpen, type EditorProject, type EditorServerMessage } from "@frizz/shared/editor-protocol"
+import { EDITOR_CLOSE, EDITOR_MAX_FOLDERS, EDITOR_MAX_PATH, EDITOR_SOCKET_PATH, EDITOR_STATE_MAX_SELECTION_TEXT, type EditorClientMessage, type EditorOpen, type EditorProject, type EditorServerMessage, type EditorSnapshot } from "@frizz/shared/editor-protocol"
 // The server's OWN frame rules (the extension never bundles these): a frame Frizz would refuse fails here.
 import { EditorClientMessageSchema } from "@frizz/shared"
 import { EDITOR_MAX_FRAME_BYTES, EDITOR_MAX_PAYLOAD_BYTES } from "../../server/src/editor-bridge.ts"
 import { notConnectedMessage } from "./status.ts"
-import { backoffDelay, EditorConnection, fitFolders, FocusRecency, FOLDERS_MAX_BYTES, type ConnectionHost, type ConnectionOptions, type ConnectionStatus, type OpenResult } from "./connection.ts"
+import { backoffDelay, EditorConnection, fitFolders, FocusRecency, FOLDERS_MAX_BYTES, forServer, type ConnectionHost, type ConnectionOptions, type ConnectionStatus, type OpenResult } from "./connection.ts"
 
 // A real `ws` server speaking the server's half of the editor protocol, in-process — with the origin
 // gate the real one has (an upgrade without `Origin: http://127.0.0.1:<port>` is refused), its frame
@@ -22,6 +22,8 @@ class FakeFrizz {
   readonly sockets: WebSocket[] = []
   /** Answer each hello with welcome + projects, as the server does. */
   welcome = true
+  /** What the welcome says this Frizz takes beyond v1, as the real one does; undefined is a Frizz from before the field. */
+  features: string[] | undefined = ["editor-state"]
   projects: EditorProject[] = [{ id: "p1", slug: "repo", name: "repo", dir: "/home/me/repo", ready: 2, working: 1 }]
   readonly #server: Server
   readonly #wss = new WebSocketServer({ noServer: true, maxPayload: EDITOR_MAX_PAYLOAD_BYTES })
@@ -73,7 +75,7 @@ class FakeFrizz {
       const frame = decoded as EditorClientMessage
       this.frames.push(frame)
       if (frame.t === "hello" && this.welcome) {
-        this.send(ws, { t: "welcome", v: 1, bootId: "boot-1" })
+        this.send(ws, { t: "welcome", v: 1, bootId: "boot-1", ...(this.features ? { features: this.features } : {}) })
         this.send(ws, { t: "projects", projects: this.projects })
       }
     })
@@ -231,6 +233,167 @@ test("a change between the hello and the welcome is sent as soon as Frizz welcom
     connection.stop()
     await frizz.close()
   }
+})
+
+function picture(selected: string, over: Partial<EditorSnapshot> = {}): EditorSnapshot {
+  return {
+    t: "editor",
+    shared: true,
+    active: { path: "/home/me/repo/a.ts", languageId: "typescript", dirty: false, lineCount: 9, cursorLine: 2, selection: { startLine: 2, endLine: 2, text: selected }, visible: { startLine: 1, endLine: 9 } },
+    open: [],
+    diagnostics: [],
+    problems: { errors: 0, warnings: 0 },
+    ...over,
+  }
+}
+
+test("the editor's picture goes only to a Frizz whose welcome names it: on connect, then only when it changes", async () => {
+  // A Frizz from before the frame closes the socket on it (4401) — on every redial, forever — so it
+  // must never hear one. Its welcome has no `features`.
+  const old = await new FakeFrizz().listen()
+  old.features = undefined
+  const oldHost = makeHost(old)
+  oldHost.editor = () => picture("x")
+  const oldConnection = new EditorConnection(oldHost, FAST)
+  try {
+    oldConnection.start()
+    await until("the welcome", () => oldConnection.status.kind === "connected")
+    oldConnection.sendEditor()
+    await sleep(60)
+    assert.equal(old.of("editor").length, 0, "nothing an old Frizz would refuse")
+    assert.equal(oldConnection.sharesEditor, false)
+    assert.match(oldHost.logs.join("\n"), /too old for its agents to read the editor/)
+  } finally {
+    oldConnection.stop()
+    await old.close()
+  }
+
+  const frizz = await new FakeFrizz().listen()
+  const host = makeHost(frizz)
+  let selected = "let x = 1"
+  host.editor = () => picture(selected)
+  const connection = new EditorConnection(host, FAST)
+  try {
+    connection.start()
+    await until("the picture, sent on the welcome", () => frizz.of("editor").length === 1)
+    assert.deepEqual(frizz.of("editor")[0], picture("let x = 1"))
+    assert.equal(connection.sharesEditor, true)
+    connection.sendEditor()
+    await sleep(60)
+    assert.equal(frizz.of("editor").length, 1, "an unchanged picture is not sent again")
+    selected = "let x = 2"
+    connection.sendEditor()
+    await until("the changed picture", () => frizz.of("editor").length === 2)
+    assert.equal(frizz.of("editor")[1]?.active?.selection?.text, "let x = 2")
+    // A Frizz that restarted knows nothing: the same picture again on the new welcome.
+    frizz.live.close(1001, "restarting")
+    await until("the picture on the redial", () => frizz.of("editor").length === 3)
+    assert.deepEqual(frizz.of("editor")[2], frizz.of("editor")[1])
+  } finally {
+    connection.stop()
+    await frizz.close()
+  }
+})
+
+test("a window says it can show a thread's changes only to a Frizz that asks, and answers a review with its result", async () => {
+  // A Frizz from before the feature: its welcome does not name it, so the frame it would refuse never goes.
+  const old = await new FakeFrizz().listen()
+  const oldHost = makeHost(old)
+  oldHost.review = async () => ({ ok: true })
+  const oldConnection = new EditorConnection(oldHost, FAST)
+  try {
+    oldConnection.start()
+    await until("the welcome", () => oldConnection.status.kind === "connected")
+    await sleep(60)
+    assert.equal(old.of("features").length, 0)
+  } finally {
+    oldConnection.stop()
+    await old.close()
+  }
+
+  const frizz = await new FakeFrizz().listen()
+  frizz.features = ["editor-state", "review"]
+  const host = makeHost(frizz)
+  const asked: unknown[] = []
+  host.review = async (message) => {
+    asked.push(message)
+    return message.title === "refuse" ? { ok: false, error: "Nothing has changed in tidy yet." } : { ok: true }
+  }
+  const connection = new EditorConnection(host, FAST)
+  try {
+    connection.start()
+    await until("the features frame", () => frizz.of("features").length === 1)
+    assert.deepEqual(frizz.of("features")[0], { t: "features", features: ["review"] })
+    const target = { title: "Tidy", checkouts: [{ dir: "/home/me/repo/.frizz/worktrees/tidy", scope: "branch" as const, files: [] }] }
+    frizz.send(frizz.live, { t: "review", id: "r1", ...target })
+    await until("the result", () => frizz.of("result").length === 1)
+    assert.deepEqual(asked, [{ t: "review", id: "r1", ...target }])
+    assert.deepEqual(frizz.of("result")[0], { t: "result", id: "r1", ok: true })
+    frizz.send(frizz.live, { t: "review", id: "r2", ...target, title: "refuse" })
+    await until("the refusal", () => frizz.of("result").length === 2)
+    assert.deepEqual(frizz.of("result")[1], { t: "result", id: "r2", ok: false, error: "Nothing has changed in tidy yet." })
+    // A restarted Frizz is told again.
+    frizz.live.close(1001, "restarting")
+    await until("the features frame on the redial", () => frizz.of("features").length === 2)
+  } finally {
+    connection.stop()
+    await frizz.close()
+  }
+
+  // A host that cannot review never says it can, and answers a review it was sent anyway with why not.
+  const plain = await new FakeFrizz().listen()
+  plain.features = ["editor-state", "review"]
+  const plainConnection = new EditorConnection(makeHost(plain), FAST)
+  try {
+    plainConnection.start()
+    await until("the welcome", () => plainConnection.status.kind === "connected")
+    plain.send(plain.live, { t: "review", id: "r3", title: "x", checkouts: [] })
+    await until("the result", () => plain.of("result").length === 1)
+    assert.equal(plain.of("features").length, 0)
+    assert.equal(plain.of("result")[0]?.ok, false)
+  } finally {
+    plainConnection.stop()
+    await plain.close()
+  }
+})
+
+test("a picture past Frizz's ceiling is fitted before it is sent, never refused", async () => {
+  const { frizz, host, connection, done } = await connected()
+  try {
+    // 32 Ki NULs (six bytes each, encoded) and a hundred long diagnostics: ~220 KB as built. The fake
+    // judges every frame with the server's schema and ceiling, and `done()` fails on any it would refuse.
+    const diagnostics = Array.from({ length: 100 }, (_, i) => ({ path: `/home/me/repo/src/f${i}.ts`, line: i + 1, severity: "error" as const, message: "m".repeat(299) }))
+    host.editor = () => picture("\u0000".repeat(EDITOR_STATE_MAX_SELECTION_TEXT), { diagnostics, problems: { errors: 100, warnings: 0 } })
+    connection.sendEditor()
+    await until("the fitted picture", () => frizz.of("editor").length === 1)
+    const sent = frizz.of("editor")[0]!
+    assert.equal(sent.active?.selection?.truncated, true)
+    assert.ok((sent.active?.selection?.text?.length ?? 0) > 0)
+    assert.deepEqual(sent.problems, { errors: 100, warnings: 0 }, "the counts survive the trimming")
+    assert.equal(frizz.live.readyState, WebSocket.OPEN)
+  } finally {
+    await done()
+  }
+})
+
+test("a withheld selection is spelled the way each Frizz's schema takes it: `withheld` to one that names it, `truncated` to one from before", () => {
+  const frame: EditorSnapshot = {
+    t: "editor",
+    shared: true,
+    active: { path: "/r/.env", languageId: "dotenv", dirty: false, lineCount: 3, cursorLine: 2, selection: { startLine: 1, endLine: 2, withheld: true }, visible: { startLine: 1, endLine: 3 } },
+    open: [],
+    diagnostics: [],
+    problems: { errors: 0, warnings: 0 },
+  }
+  const now = forServer(frame, new Set(["editor-state", "editor-selection-withheld"]))
+  assert.equal(now, frame, "a Frizz that takes the field gets the frame as built")
+  const before = forServer(frame, new Set(["editor-state"]))
+  assert.deepEqual(before.active?.selection, { startLine: 1, endLine: 2, truncated: true })
+  // Both spellings are frames today's server takes; the converted one carries nothing an older schema
+  // (strict, without the key) could refuse.
+  assert.ok(EditorClientMessageSchema.safeParse(before).success)
+  assert.ok(EditorClientMessageSchema.safeParse(frame).success)
+  assert.equal(JSON.stringify(before).includes("withheld"), false)
 })
 
 test("every open and focus is answered with a result: ok, the window's own refusal, or what it threw", async () => {
@@ -491,4 +654,75 @@ test("the backoff doubles from 1s to a 30s ceiling, jittered ±20%", () => {
   assert.equal(backoffDelay(0, 1_000, 30_000, () => 0), 800)
   assert.equal(backoffDelay(0, 1_000, 30_000, () => 1), 1_200)
   assert.equal(backoffDelay(9, 1_000, 30_000, () => 1), 30_000, "jitter never pushes past the ceiling")
+})
+
+test("whether this window shows notifications goes only to a Frizz that takes it, again on every welcome; an attention reaches the host", async () => {
+  // A Frizz from before `listen` closes the socket on it, on every redial: it must never hear one.
+  const old = await new FakeFrizz().listen()
+  const oldHost = makeHost(old)
+  const oldConnection = new EditorConnection(oldHost, FAST)
+  try {
+    oldConnection.listen(true)
+    oldConnection.start()
+    await until("the welcome", () => oldConnection.status.kind === "connected")
+    oldConnection.listen(false)
+    oldConnection.listen(true)
+    await sleep(60)
+    assert.equal(old.of("listen").length, 0, "nothing an old Frizz would refuse")
+    assert.deepEqual([...oldConnection.features!], ["editor-state"])
+  } finally {
+    oldConnection.stop()
+    await old.close()
+  }
+
+  const frizz = await new FakeFrizz().listen()
+  frizz.features = ["editor-state", "sidebar", "attention"]
+  const host = makeHost(frizz)
+  const told: unknown[] = []
+  host.attention = (message) => void told.push(message)
+  const connection = new EditorConnection(host, FAST)
+  try {
+    connection.listen(true)
+    connection.start()
+    await until("listen, sent on the welcome", () => frizz.of("listen").length === 1)
+    assert.deepEqual(frizz.of("listen")[0], { t: "listen", attention: true })
+    connection.listen(true)
+    await sleep(40)
+    assert.equal(frizz.of("listen").length, 1, "unchanged, not sent again")
+    connection.listen(false)
+    await until("the change", () => frizz.of("listen").length === 2)
+    assert.equal(frizz.of("listen")[1]?.attention, false)
+    // A Frizz that restarted knows nothing: said again on the new welcome.
+    frizz.live.close(1001, "restarting")
+    await until("listen on the redial", () => frizz.of("listen").length === 3)
+    assert.equal(frizz.of("listen")[2]?.attention, false)
+    const attention = { t: "attention", projectId: "p1", thread: { id: "tidy", title: "tidy" }, needs: "question", body: "Which branch?" } as const
+    frizz.send(frizz.live, attention)
+    await until("the attention", () => told.length === 1)
+    assert.deepEqual(told[0], attention)
+  } finally {
+    connection.stop()
+    await frizz.close()
+  }
+})
+
+test("a Frizz that answers the editor socket with a 404 predates it; one that welcomes this window does not", async () => {
+  const old = await new FakeFrizz({ editorPath: false }).listen()
+  const host = makeHost(old)
+  const connection = new EditorConnection(host, FAST)
+  try {
+    connection.start()
+    await until("the refusal", () => connection.status.kind === "offline" && connection.predatesBridge)
+    assert.equal(connection.features, undefined, "no welcome, no features")
+  } finally {
+    connection.stop()
+    await old.close()
+  }
+  const { connection: fresh, done } = await connected()
+  try {
+    assert.equal(fresh.predatesBridge, false)
+    assert.ok(fresh.features?.has("editor-state"))
+  } finally {
+    await done()
+  }
 })

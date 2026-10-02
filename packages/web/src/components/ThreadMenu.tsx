@@ -1,6 +1,7 @@
 import { useRef, useState } from "react"
 import { useMutation, useQueryClient } from "@tanstack/react-query"
-import { Code, Copy, Ellipsis, FileText, Folder, Loader2, Plug, RefreshCw, SquareTerminal, Trash2 } from "lucide-react"
+import { Code, Copy, Ellipsis, FileDiff, FileText, Folder, Loader2, Plug, RefreshCw, SquareTerminal, Trash2 } from "lucide-react"
+import { useSnapshot } from "valtio"
 import type { ThreadView } from "@frizz/shared"
 import type { Api, ThreadFolderChoice } from "../api/contract.ts"
 import { captureFullscreenEnterAnchor, rememberFullscreenOrigin } from "../lib/fullscreenHandoff.ts"
@@ -12,16 +13,19 @@ import { HEADER_ICON_CLASS } from "../lib/headerIcon.ts"
 import { useCommandHandler, useShortcutLabel } from "../lib/keyboardRuntime.ts"
 import { Menu, MenuContent, MenuItem, MenuLabel, MenuSeparator, MenuTrigger } from "./ui/Menu.tsx"
 import { Dialog } from "./ui/Dialog.tsx"
-import { displayTitle } from "../groups.ts"
+import { displayName, displayTitle } from "../groups.ts"
 import { startComposerTerminal } from "./ThreadTerminals.tsx"
-import { useThreadApi } from "../api/threadApi.tsx"
+import { useThreadApi, useThreadProjectId } from "../api/threadApi.tsx"
 import { Tooltip } from "./Tooltip.tsx"
 import { useTerminalCommandMenuItem } from "./ExternalTerminalCommand.tsx"
 import { useDevFrizzBuild } from "../lib/devBuild.ts"
 import { restartWorker } from "../lib/restartWorker.ts"
 import { closeDrawersById, showToast, store } from "../store.ts"
 import { baseName, runExternalOpen } from "../lib/externalOpen.ts"
+import { embedded } from "../lib/embed.ts"
+import { openInHostEditor } from "../lib/local-file-links.ts"
 import { offersReloadPlugins, offersRestartWorker, reloadThreadPlugins } from "../lib/workerMaintenance.ts"
+import { reviewChanges, reviewLabel } from "../lib/reviewChanges.ts"
 
 // openFullscreen, the one navigation into a thread's /full page, shared by the ⤢ door (ExpandThreadLink.tsx)
 // on the queue card and in the drawer header. It lived here while fullscreen was this menu's item
@@ -96,8 +100,25 @@ export function ThreadTerminalButton({ slug }: { slug: string }) {
 /** Open the thread's working folder in the External app (or `$EDITOR`) — the step `t` then `code .` took.
  *  The server resolves the folder, the same one a terminal on the thread starts in. When the thread's
  *  sub-agents work in another checkout it opens nothing and hands back the folders, and `choose` puts
- *  them in front of the human (the ⋯ menu, in its folder mode); the pick comes back as `path`. */
+ *  them in front of the human (the ⋯ menu, in its folder mode); the pick comes back as `path`.
+ *
+ *  IN AN EDITOR'S SIDEBAR the editor is the one the human is sitting in, so the folder goes there, as a
+ *  code-file link does (lib/local-file-links.ts openInHostEditor): the extension reveals it in this
+ *  window's Explorer. Through the External app it opened a file manager or another window, or — with
+ *  System default, or Copy path and no $EDITOR — said "Set External app to an editor in Settings" to a
+ *  human already in one (sweep 2026-10-01). A folder picked from the choices goes the same way. */
 function openInEditor(api: Api, slug: string, choose: (choices: ThreadFolderChoice[]) => void, path?: string): void {
+  if (embedded()) {
+    if (path !== undefined) {
+      openInHostEditor(path)
+      return
+    }
+    api.threadWorkingDir({ slug }).then(
+      ({ dir }) => openInHostEditor(dir),
+      (cause: unknown) => showToast("Couldn't find this thread's folder", { detail: (cause instanceof Error ? cause.message : String(cause)).slice(0, 100) }),
+    )
+    return
+  }
   void runExternalOpen(
     path === undefined ? `editor:${slug}` : `editor:${slug}:${path}`,
     "Opening in editor…",
@@ -153,6 +174,11 @@ export function ThreadMenu({ thread, onDoc, restart = true, className = HEADER_I
   const copyKeys = useShortcutLabel("thread.copyCommand")
   const menuKeys = useShortcutLabel("thread.menu")
   const [deleting, setDeleting] = useState(false)
+  // Review changes: in the editor's sidebar always, in a browser while an editor that can show them is
+  // connected (lib/reviewChanges.ts says why only there).
+  const { editorWindows } = useSnapshot(store)
+  const review = ownSession ? reviewLabel(editorWindows, embedded()) : null
+  const projectId = useThreadProjectId()
   return (
     <>
     <Menu open={open} onOpenChange={onOpenChange}>
@@ -194,6 +220,11 @@ export function ThreadMenu({ thread, onDoc, restart = true, className = HEADER_I
         {ownSession && (
           <MenuItem value="open-in-editor" onSelect={editor} icon={<Code size={12} aria-hidden />} shortcut={editorKeys}>
             Open in editor
+          </MenuItem>
+        )}
+        {review && (
+          <MenuItem value="review-changes" onSelect={() => reviewChanges(api, slug, displayName(thread), projectId)} icon={<FileDiff size={12} aria-hidden />}>
+            {review}
           </MenuItem>
         )}
         {ownSession && (

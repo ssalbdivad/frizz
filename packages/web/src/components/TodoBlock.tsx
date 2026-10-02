@@ -81,7 +81,7 @@ export function TodoBlock({
         aria-controls={expandable ? bodyId : undefined}
         aria-expanded={expandable ? open : undefined}
         aria-label={`${expandable ? `${open ? "Collapse" : "Expand"} ` : ""}${TODO_LABEL}${summary ? `: ${summary}` : ""}${counter ? ` — ${done} of ${todos.length} done` : ""}`}
-        className="frizz-bash-header w-full text-left outline-none focus-visible:ring-1 focus-visible:ring-inset focus-visible:ring-focus-ink-60"
+        className="frizz-bash-header w-full text-left outline-none focus-visible:inset-ring-1 focus-visible:inset-ring-focus-ink-60"
       >
         <span className="flex min-w-0 items-center gap-2">
           <span className="petite-caps frizz-bash-label shrink-0">{TODO_LABEL}</span>

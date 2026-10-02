@@ -311,12 +311,19 @@ function PrWatchExpiredDivider({ watchRef, sourceId, at }: { watchRef: string; s
 // 2026-08-19). The agent-facing half of the sentence, "Continue exactly where you left off", is dropped
 // like every other trailer here: it is an instruction to the worker, and the human has nothing to
 // continue.
+//
+// "— resuming" is the NEWS and stays whole; the window's name is what truncates. As one truncating run
+// it read "SESSION USAGE LIMIT RESET — R…" at a 450px VS Code sidebar's width, losing the one word that
+// says the thread is going again. The full sentence rides on the title.
 function LimitResumeDivider({ window, sourceId, at }: { window: LimitWindow; sourceId?: string; at?: string }) {
   const which = window === "weekly" ? "Weekly usage limit" : window === "session" ? "Session usage limit" : "Usage limit"
   const label = `${which} reset — resuming`
   return (
     <WakeDivider icon={Hourglass} sourceId={sourceId} marker="limit-resume" ariaLabel={label} at={at}>
-      <span className="min-w-0 truncate">{label}</span>
+      <span className="flex min-w-0 items-center" title={label}>
+        <span className="min-w-0 truncate">{which} reset</span>
+        <span className="shrink-0 whitespace-pre">{" — resuming"}</span>
+      </span>
     </WakeDivider>
   )
 }
@@ -450,7 +457,7 @@ function PrWatchStatusDivider({ wake, sourceId, at }: { wake: PrWatchWake; sourc
       // Only the inert form takes the separator role — a divider carrying a focusable link may not.
       ariaLabel={href ? undefined : `${lead}${wake.ref}${jobs}${checks ? ` · ${checks}` : ""}`}
     >
-      <span className="min-w-0 truncate">
+      <span className="min-w-0 truncate" title={`${lead}${wake.ref}${jobs}`}>
         {lead}
         {ref}
         {jobs}
@@ -492,7 +499,7 @@ function PrWatchStateDivider({ wake, sourceId, at }: { wake: PrWatchStateWake; s
       at={at}
       ariaLabel={href ? undefined : `PR updated on ${wake.ref}: ${wake.detail}`}
     >
-      <span className="min-w-0 truncate">
+      <span className="min-w-0 truncate" title={`PR updated on ${wake.ref}: ${wake.detail}`}>
         {"PR updated on "}
         {ref}
         {`: ${wake.detail}`}
@@ -541,12 +548,24 @@ function GithubSteerDivider({ steer, text, sourceId, at }: { steer: GithubWakeSt
   // wake, the sub-agent wake, the collapsed-run summary — all petite-caps end to end). The ref keeps its
   // link underline, which is what marks it as the thing to press; it no longer needs a second signal in
   // a different alphabet. `WAKE_DIVIDER_IDENT` survives for callers with a genuinely mixed line.
+  //
+  // THE REF NEVER TRUNCATES FIRST. It is the line's one link and the only thing on it a reader can act
+  // on, and it sat at the END of the one truncating run — so at a 300px VS Code sidebar's width the line
+  // read "NEW REVIEW COMMENT FROM @… · 1H AGO" and "NEW APPROVAL FROM @DANA O…", the link clipped to 0px and
+  // nothing carrying it, and at 450px it was cut mid-token ("NUBJS/NUB#5…"). Now the sentence is its own
+  // truncating run, so the actor goes first and then the kind, while " on " and the ref stay whole: they
+  // ride in one `shrink-0` group, capped at the line (`max-w-full`), so only a ref too long for the line
+  // on its own ever truncates. NOT a lower shrink factor on the ref — a truncating box that shrinks by
+  // even a twentieth of a pixel draws its ellipsis, which is how a first cut showed "NUBJS/NUB#5…" beside
+  // a sentence that had all the squeeze. The whole sentence is the run's title. Same spacing as before:
+  // the pieces sit in flex runs with no gap, and " on " is its own whitespace-preserving text, as the
+  // shell wake's «name» does it (ShellWakeText).
   const ref = href ? (
-    <a href={href} target="_blank" rel="noreferrer noopener" className={DIVIDER_LINK}>
+    <a href={href} target="_blank" rel="noreferrer noopener" className={`min-w-0 truncate ${DIVIDER_LINK}`}>
       {steer.ref}
     </a>
   ) : (
-    <span>{steer.ref}</span>
+    <span className="min-w-0 truncate">{steer.ref}</span>
   )
   return (
     <WakeDivider
@@ -565,8 +584,12 @@ function GithubSteerDivider({ steer, text, sourceId, at }: { steer: GithubWakeSt
       {/* The label TRUNCATES rather than wrapping. At queue-rail width the full sentence does not fit,
           and a divider whose label wraps to four lines stops being a hairline at all — it was the first
           thing that broke when this shape was tried. */}
-      <span className="min-w-0 truncate">
-        {title} on {ref}
+      <span className="flex min-w-0 items-center">
+        <span className="min-w-0 truncate" title={`${title} on ${steer.ref}`}>{title}</span>
+        <span className="flex min-w-0 max-w-full shrink-0 items-center">
+          <span className="shrink-0 whitespace-pre">{" on "}</span>
+          {ref}
+        </span>
       </span>
     </WakeDivider>
   )

@@ -31,6 +31,7 @@ export type PickerThread = Pick<
   | "lastActivityAt"
   | "lastAssistantAt"
   | "lastUserAt"
+  | "checkout"
 >
 
 export type ThreadBand = "ready" | "working" | "rest"
@@ -93,6 +94,11 @@ export function displayTitle(t: TitleFields, now = Date.now()): string {
   return source.name ? threadHandle(source.text) ?? source.text : source.text
 }
 
+/** The thread's name in the words it is stored as ("Tidy the sample loop") — for a title in prose, where a handle reads as an id. */
+export function displayName(t: TitleFields, now = Date.now()): string {
+  return titleSource(t, now).text
+}
+
 /** The `@` handle the thread is addressed by, or undefined when what it shows is not a name. */
 export function threadHandleOf(t: TitleFields, now = Date.now()): string | undefined {
   const source = titleSource(t, now)
@@ -134,6 +140,31 @@ export function pickerThreads<T extends PickerThread>(threads: readonly T[]): (T
     .map((t) => ({ t, band: BAND_ORDER[bandOf(t)], at: lastActivity(t) }))
     .sort((a, b) => a.band - b.band || b.at - a.at || a.t.id.localeCompare(b.t.id))
     .map(({ t }) => t)
+}
+
+// ── the window's own thread ──────────────────────────────────────────────────────────────────────────
+//
+// A VS Code window whose workspace folder IS a thread's worktree (the drawer's "Open in editor" on a thread
+// in `.frizz/worktrees/<slug>` opens exactly that) is about that thread, not about the project in general:
+// the sidebar opens on it, and "Send to Frizz thread…" offers it first. The thread's `checkout` is the
+// server's own reading of where its agent works (thread-cwd.ts, the same one the terminal and Done use),
+// so the match needs nothing new from Frizz. Decided on the EXTENSION's side, after the page says it is
+// ready, rather than through the frame's address: the page already takes `frizz:navigate`, and the
+// address is read once per frame — a thread chosen there would be stale the moment the human moved on.
+
+/**
+ * The open thread whose own checkout IS one of the window's folders, or undefined: none does, or the window
+ * is on the project root (a thread at the root has no `checkout`). Several threads in one worktree (a
+ * spinoff child keeps working in its parent's) give the one the picker would list first — waiting on the
+ * human, then working, then the newest. `same` says whether two folders are one (realpath identity).
+ */
+export function windowThread<T extends PickerThread>(threads: readonly T[], folders: readonly string[], same: (a: string, b: string) => boolean): (T & { sessionId: string }) | undefined {
+  return pickerThreads(threads).find((t) => t.checkout && folders.some((folder) => same(folder, t.checkout!.dir)))
+}
+
+/** The picker's list with the window's own thread moved to the top, everything else in its order. */
+export function windowThreadFirst<T extends PickerThread>(threads: readonly T[], own: T | undefined): T[] {
+  return own ? [own, ...threads.filter((t) => t.id !== own.id)] : [...threads]
 }
 
 /** A thread named by a command argument: its slug, or its handle with or without the `@`. */

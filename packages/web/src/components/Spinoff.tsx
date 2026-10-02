@@ -104,6 +104,10 @@ function SpinoffDialog({ thread, open, onOpenChange }: { thread: ThreadView & { 
   const home = projects.find((p) => p.dir === projectDir)
   const [targetId, setTargetId] = useState<string | undefined>(undefined)
   const target = targetId && targetId !== home?.id ? projects.find((p) => p.id === targetId) : undefined
+  const routeOwnRow = useRouteOwnRow()
+  const route = home && projects.length > 1
+    ? <SpinoffProjectRoute from={home} projects={projects} current={target ?? home} disabled={pending} onPick={(p) => setTargetId(p.id)} />
+    : null
   useEffect(() => {
     if (!open) {
       setError(null)
@@ -159,9 +163,7 @@ function SpinoffDialog({ thread, open, onOpenChange }: { thread: ThreadView & { 
       footer={
         <>
           {/* Only where there is somewhere else to start: one open project has nothing to choose. */}
-          {home && projects.length > 1 && (
-            <SpinoffProjectRoute from={home} projects={projects} current={target ?? home} disabled={pending} onPick={(p) => setTargetId(p.id)} />
-          )}
+          {!routeOwnRow && route}
           <button
             type="button"
             disabled={pending}
@@ -205,6 +207,7 @@ function SpinoffDialog({ thread, open, onOpenChange }: { thread: ThreadView & { 
         {error
           ? <p role="alert" className="text-[11px] leading-4 text-danger">{error}</p>
           : <p className="text-[11px] leading-4 text-muted-60">{target ? `It starts in ${target.name}, with this thread's context.` : "It starts with this thread's context."}</p>}
+        {routeOwnRow && route && <div className="flex pt-1.5">{route}</div>}
       </div>
     </Dialog>
   )
@@ -240,6 +243,27 @@ function useOpenProjects(enabled: boolean): OpenProject[] {
   const rank = (p: OpenProject) => { const i = cards.data?.findIndex((c) => c.id === p.id) ?? -1; return i === -1 ? Infinity : i }
   out.sort((a, b) => rank(a) - rank(b))
   return [...out.filter((p) => !p.card.home), ...out.filter((p) => p.card.home)]
+}
+
+/** WHERE THE ROUTE GOES: the footer's left end, unless the dialog is too narrow to hold it beside Cancel and
+ *  Spinoff — then its own row, under the field. At a 300px VS Code sidebar the dialog is 276px, the buttons
+ *  leave the route ~98px, and the source chip's 45% left the picker's name 0px: "ac… → [ ⌄ ]", nowhere
+ *  saying where the new thread starts. The dialog is `min(460px, 92vw)`, a function of the window alone, so
+ *  the window decides: under 440px (a dialog under 405px, a route under ~224px — "acme-api → acme-api" needs
+ *  ~196px) the route takes the row, whole; from 440 up (a 450px sidebar, the desktop) it stays in the footer.
+ *  ONE route is mounted, never a hidden twin, so there is one picker and one menu. */
+const ROUTE_OWN_ROW_QUERY = "(max-width: 439.98px)"
+function useRouteOwnRow(): boolean {
+  const [ownRow, setOwnRow] = useState(() => typeof window !== "undefined" && !!window.matchMedia?.(ROUTE_OWN_ROW_QUERY).matches)
+  useEffect(() => {
+    const query = window.matchMedia?.(ROUTE_OWN_ROW_QUERY)
+    if (!query) return
+    const update = () => setOwnRow(query.matches)
+    update()
+    query.addEventListener("change", update)
+    return () => query.removeEventListener("change", update)
+  }, [])
+  return ownRow
 }
 
 /** The dialog's "start in" pill: the footer's left end, in the footer buttons' own chrome and size, so it

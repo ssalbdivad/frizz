@@ -33,7 +33,7 @@ export const PROFILE_GRID_COMPACT_TYPOGRAPHY_CLASS = PROMPT_CONTROL_TYPOGRAPHY_C
 // leaves that slack trailing: a 2.75rem minimum made the gap after LOW/HIGH/MAX 23px against 14px
 // after MEDIUM/X-HIGH, and hung the selection ring off the right of the word it marks. Hugging gives
 // one uniform 14px gap the whole way across and a ring that is symmetric around every label.
-export const PROFILE_GRID_CELL_CLASS = `profile-grid-cell relative flex h-6 cursor-pointer select-none items-center justify-start rounded border border-transparent px-1 text-left text-muted outline-none transition-colors ${PROFILE_GRID_TYPOGRAPHY_CLASS} data-[highlighted]:border-border data-[highlighted]:bg-panel-2 data-[highlighted]:text-fg data-[highlighted]:outline data-[highlighted]:outline-1 data-[highlighted]:outline-offset-1 data-[highlighted]:outline-fg/55 data-[state=checked]:border-accent/70 data-[state=checked]:bg-accent/10 data-[state=checked]:font-medium data-[state=checked]:text-fg data-[state=checked]:ring-1 data-[state=checked]:ring-inset data-[state=checked]:ring-accent/90`
+export const PROFILE_GRID_CELL_CLASS = `profile-grid-cell relative flex h-6 cursor-pointer select-none items-center justify-start rounded border border-transparent px-1 text-left text-muted outline-none transition-colors ${PROFILE_GRID_TYPOGRAPHY_CLASS} data-[highlighted]:border-border data-[highlighted]:bg-panel-2 data-[highlighted]:text-fg data-[highlighted]:outline data-[highlighted]:outline-1 data-[highlighted]:outline-offset-1 data-[highlighted]:outline-fg/55 data-[state=checked]:border-accent/70 data-[state=checked]:bg-accent/10 data-[state=checked]:font-medium data-[state=checked]:text-fg data-[state=checked]:inset-ring-1 data-[state=checked]:inset-ring-accent/90`
 
 // Effort tracks are `auto` with NO minimum: a track floor wider than the word it holds is slack, and
 // left-aligned slack all lands on one side. The row itself is `w-max` (see the component), so `auto`
@@ -50,6 +50,50 @@ export function profileGridEffortLabel(effort: string): string {
 }
 
 export type ProfileGridMoveKey = "ArrowLeft" | "ArrowRight" | "ArrowUp" | "ArrowDown" | "Home" | "End"
+
+// WHEN THE MATRIX DOES NOT FIT, IT STACKS. The menu is capped at the viewport less 1rem, and the matrix
+// is as wide as a model column plus every effort word in a row — about 385px with both ladders loaded.
+// In a 300px VS Code sidebar that cap is 284px, so the menu scrolled sideways and X-HIGH, MAX and
+// ULTRACODE sat out of sight behind a scrollbar nobody reads as one (sweep 2026-10-02); a 375px phone
+// lost ULTRACODE the same way. Stacked, each model's name gets its own line and its effort words wrap
+// under it at full size. The comparison is between widths the menu itself measured — the matrix's
+// natural border-box and the menu's resolved max-width — so a catalogue with a short ladder keeps the
+// matrix in a sidebar it fits, and nothing here encodes a breakpoint. The half pixel absorbs subpixel
+// layout: a matrix that fits exactly must not flip.
+export function profileGridStacks(naturalWidth: number, availableWidth: number): boolean {
+  return naturalWidth > availableWidth + 0.5
+}
+
+/** One slot in a model's row: a real cell for an effort the model offers, or a GHOST — the widest name
+ *  its column can hold, drawn invisible — where it offers none, so the column keeps its width. */
+export interface ProfileGridRowSlot {
+  effort: string
+  ghost: boolean
+}
+
+// The slots one model's row draws, in column order. Every column gets one: a ghost holds an unsupported
+// column open, which is what lines each column up across rows (a row is its own grid, so a column that
+// rendered nothing would collapse and slide every cell to its right out of line). STACKED, the row wraps
+// under the model's name, and a ghost AFTER the last real cell holds nothing in line — it can only wrap
+// onto a line of its own and draw a blank one — so those are dropped. Ghosts before a real cell stay:
+// with every row's slots the same widths, every row wraps at the same points and the columns still line
+// up down the stack.
+export function profileGridRowSlots(
+  option: ProfileGridOption,
+  columns: readonly (readonly string[])[],
+  { stacked = false }: { stacked?: boolean } = {},
+): ProfileGridRowSlot[] {
+  const slots = columns.map((column) => {
+    const effort = column.find((candidate) => option.efforts.includes(candidate))
+    if (effort) return { effort, ghost: false }
+    // A column can hold more than one effort name ("ultra" beside "ultracode"); its ghost is the widest.
+    const widest = column.reduce((a, b) => (profileGridEffortLabel(b).length > profileGridEffortLabel(a).length ? b : a))
+    return { effort: widest, ghost: true }
+  })
+  if (!stacked) return slots
+  const last = slots.findLastIndex((slot) => !slot.ghost)
+  return slots.slice(0, last + 1)
+}
 
 // "ultra" (codex) and "ultracode" (Claude Code) are ONE rung under two provider-specific names: the
 // ceiling of each ladder, where each CLI's own /effort lists it. They therefore share one column. Give

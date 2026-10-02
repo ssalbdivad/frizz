@@ -18,7 +18,7 @@ import { useArchivingAt } from "../lib/optimisticArchive.ts"
 import { useProjectBoards } from "../lib/projectBoards.ts"
 import { handleDialogEscape } from "../lib/selectOverlay.ts"
 import { agentSuffix, liveAgentCount, rowSecondLine, wakeAt } from "../lib/mobileBoardRow.ts"
-import { phoneCounts, phoneDone, phoneProjects, phoneQueue, phoneSnoozed, type PhoneProjectEntry, type PhoneRow, type PhoneTab } from "../lib/phonePage.ts"
+import { phoneCounts, phoneDone, phoneSubtitle, phoneProjects, phoneQueue, phoneSnoozed, type PhoneProjectEntry, type PhoneRow, type PhoneTab } from "../lib/phonePage.ts"
 import { useOpenThreadInPlace } from "./AllQueuesCard.tsx"
 import { ProjectSquare } from "./ProjectSquare.tsx"
 import { shortPath } from "./ProjectActions.tsx"
@@ -298,6 +298,31 @@ function BandTab({ band, label, active, onClick, children }: { band: PhoneTab; l
   )
 }
 
+/** The view's name in the header. */
+const TITLE_TYPE = "text-[16.5px] font-semibold leading-[21px] tracking-[-0.01em] text-fg"
+
+/**
+ * The line under the view's name (lib/phonePage.ts phoneSubtitle). Its parts WRAP rather than truncate,
+ * onto a second line the box clips: a part that does not fit is left out whole — the Queue tab counts the
+ * same rows — instead of being cut to "1 w…" mid-word, which a 300px column did to the last one.
+ */
+function Subtitle({ subtitle }: { subtitle: { accent: string | null; rest: string | null } }) {
+  const parts = [
+    subtitle.accent ? <span key="accent" className="font-semibold text-accent">{subtitle.accent}</span> : null,
+    ...(subtitle.rest ?? "").split(" · ").filter(Boolean).map((part) => <span key={part}>{part}</span>),
+  ].filter((part) => part !== null)
+  return (
+    <div data-mobile-board-subtitle className="flex h-[17px] flex-wrap overflow-hidden text-[13px] leading-[17px] text-muted">
+      {parts.map((part, index) => (
+        <span key={index} className="shrink-0 whitespace-pre">
+          {index > 0 ? " · " : null}
+          {part}
+        </span>
+      ))}
+    </div>
+  )
+}
+
 const TAB_COUNT = "text-[12.5px] font-medium tabular-nums text-muted"
 /** A tab's label and count on one baseline, in the grid cell its bold copy reserves. */
 const TAB_FACE = "col-start-1 row-start-1 flex items-baseline gap-1.5 text-[14.5px] leading-[20px]"
@@ -324,8 +349,10 @@ export interface PhonePageProps {
   error: string | undefined
   /** The home folder, to shorten paths with. */
   homeDir: string | undefined
-  /** The prompt box, aimed where a new thread from this view goes; `onDispatched` closes its sheet. */
-  composer: (onDispatched: () => void) => ReactNode
+  /** The prompt box, aimed where a new thread from this view goes; `onDispatched` closes its sheet, and
+   *  `autoFocus` is false when the sheet was opened to show a chip without taking the caret
+   *  (lib/editorBridge.ts composeInto). */
+  composer: (onDispatched: () => void, autoFocus: boolean) => ReactNode
   /** Show All projects. */
   onAll: () => void
   /** Focus a project. */
@@ -359,7 +386,12 @@ function useProjectsListing() {
 function PhoneThreads({ shown, viewed, focusedSlug, hidden, loading, error, composer, onProjects }: PhonePageProps & { onProjects: () => void }) {
   const focused = focusedSlug !== undefined
   const [tab, setTab] = useState<PhoneTab>("queue")
-  const [composing, setComposing] = useState(false)
+  // In the store, not local state: an editor's selection opens it too (lib/editorBridge.ts composeInto).
+  const composing = useSnapshot(store).phoneNewThread
+  const setComposing = (open: boolean) => (store.phoneNewThread = open ? { focus: true } : null)
+  // …and it closes with the list under it, as local state did: the projects list or the desktop layout
+  // coming back must not find a sheet left open.
+  useEffect(() => () => { store.phoneNewThread = null }, [])
   const [donePage, setDonePage] = useState(DONE_PAGE)
   // A different view is a different list to read: from its Queue, at its top.
   const viewId = focusedSlug ?? "*"
@@ -383,6 +415,7 @@ function PhoneThreads({ shown, viewed, focusedSlug, hidden, loading, error, comp
   const onPage = (project: QueuesProject) => project.slug === focus && live?.projectSlug === project.slug
   const queue = phoneQueue(shown, hidden, (project) => listOverlay(project.id, onPage(project), steeredAt, archivingAt), direction)
   const counts = phoneCounts(queue)
+  const subtitle = phoneSubtitle(counts)
   const snoozed = phoneSnoozed(shown)
   // Done's rows are each project's own board — the page project's live one, every other's read through
   // the cache, fetched while the tab is open.
@@ -406,17 +439,10 @@ function PhoneThreads({ shown, viewed, focusedSlug, hidden, loading, error, comp
             <ArrowLeft size={21} strokeWidth={2.1} />
           </button>
           <div className="min-w-0 flex-1 pl-0.5">
-            <div data-mobile-board-title className="truncate text-[16.5px] font-semibold leading-[21px] tracking-[-0.01em] text-fg">
+            <div data-mobile-board-title className={`truncate ${TITLE_TYPE}`}>
               {title}
             </div>
-            {!loading ? (
-              <div data-mobile-board-subtitle className="truncate text-[13px] leading-[17px] text-muted">
-                {counts.asks > 0 ? <span className="font-semibold text-accent">{counts.asks} need you</span> : null}
-                {counts.asks > 0 && counts.working > 0 ? " · " : null}
-                {counts.working > 0 ? `${counts.working} working` : null}
-                {counts.asks === 0 && counts.working === 0 ? "Nothing needs you" : null}
-              </div>
-            ) : null}
+            {!loading ? <Subtitle subtitle={subtitle} /> : null}
           </div>
           <button type="button" aria-label="Settings" data-mobile-settings onClick={() => (store.showSettings = true)} className={HEADER_BUTTON}>
             <SettingsIcon size={21} strokeWidth={1.9} />
@@ -488,7 +514,7 @@ function PhoneThreads({ shown, viewed, focusedSlug, hidden, loading, error, comp
           <span className="self-baseline">New thread</span>
         </span>
       </button>
-      {composing ? <PhoneNewThread onClose={() => setComposing(false)}>{composer(() => setComposing(false))}</PhoneNewThread> : null}
+      {composing ? <PhoneNewThread onClose={() => setComposing(false)}>{composer(() => setComposing(false), composing.focus)}</PhoneNewThread> : null}
     </div>
   )
 }

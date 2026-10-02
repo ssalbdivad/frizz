@@ -59,9 +59,87 @@
         "category": "Frizz"
       },
       {
-        "command": "frizz.open",
-        "title": "Open Frizz",
+        "command": "frizz.addFileToPrompt",
+        "title": "Add file to Frizz prompt",
         "category": "Frizz"
+      },
+      {
+        "command": "frizz.addSelectionOrFile",
+        "title": "Add selection or file to Frizz prompt",
+        "category": "Frizz"
+      },
+      {
+        "command": "frizz.focusPrompt",
+        "title": "Go to the prompt box",
+        "category": "Frizz"
+      },
+      {
+        "command": "frizz.addTerminalSelection",
+        "title": "Add to Frizz prompt",
+        "category": "Frizz"
+      },
+      {
+        "command": "frizz.addProblems",
+        "title": "Add problems in this file to Frizz prompt",
+        "category": "Frizz"
+      },
+      {
+        "command": "frizz.addTerminalOutput",
+        "title": "Add last terminal command to Frizz prompt",
+        "category": "Frizz"
+      },
+      {
+        "command": "frizz.askToFix",
+        "title": "Ask Frizz to fix",
+        "category": "Frizz"
+      },
+      {
+        "command": "frizz.reviewThread",
+        "title": "Review a thread's changes…",
+        "category": "Frizz",
+        "icon": "$(diff-multiple)"
+      },
+      {
+        "command": "frizz.sidebar.queue",
+        "title": "Back to queue",
+        "category": "Frizz",
+        "icon": "$(arrow-left)"
+      },
+      {
+        "command": "frizz.sidebar.newThread",
+        "title": "New thread",
+        "category": "Frizz",
+        "icon": "$(add)"
+      },
+      {
+        "command": "frizz.sidebar.jump",
+        "title": "Jump to a thread",
+        "category": "Frizz",
+        "icon": "$(search)"
+      },
+      {
+        "command": "frizz.sidebar.settings",
+        "title": "Settings",
+        "category": "Frizz",
+        "icon": "$(gear)"
+      },
+      {
+        "command": "frizz.sidebar.shortcuts",
+        "title": "Keyboard shortcuts",
+        "category": "Frizz",
+        "icon": "$(keyboard)"
+      },
+      {
+        "command": "frizz.open",
+        "title": "Open in browser",
+        "category": "Frizz",
+        "icon": "$(link-external)"
+      },
+      {
+        "command": "frizz.sidebar.reload",
+        "title": "Reload sidebar",
+        "category": "Frizz",
+        "icon": "$(refresh)"
       },
       {
         "command": "frizz.showLog",
@@ -99,6 +177,15 @@
         {
           "command": "frizz.addToPrompt",
           "group": "frizz@3"
+        },
+        {
+          "command": "frizz.addFileToPrompt",
+          "group": "frizz@4"
+        },
+        {
+          "command": "frizz.addProblems",
+          "when": "config.frizz.useSidebar",
+          "group": "frizz@5"
         }
       ],
       "explorer/context": [
@@ -108,18 +195,114 @@
           "group": "frizz@1"
         },
         {
-          "command": "frizz.addToPrompt",
+          "command": "frizz.addFileToPrompt",
           "when": "!explorerResourceIsFolder",
           "group": "frizz@2"
+        }
+      ],
+      "editor/title/context": [
+        {
+          "command": "frizz.addFileToPrompt",
+          "when": "resourceScheme == file",
+          "group": "frizz@1"
+        }
+      ],
+      "terminal/context": [
+        {
+          "command": "frizz.addTerminalSelection",
+          "when": "terminalTextSelected && config.frizz.useSidebar",
+          "group": "frizz@1"
+        },
+        {
+          "command": "frizz.addTerminalOutput",
+          "when": "config.frizz.useSidebar",
+          "group": "frizz@2"
+        }
+      ],
+      "view/title": [
+        {
+          "command": "frizz.sidebar.queue",
+          "when": "view == frizz.sidebar && frizz.sidebarView == thread",
+          "group": "navigation@1"
+        },
+        {
+          "command": "frizz.sidebar.newThread",
+          "when": "view == frizz.sidebar && frizz.sidebarView && frizz.sidebarView != thread",
+          "group": "navigation@2"
+        },
+        {
+          "command": "frizz.sidebar.jump",
+          "when": "view == frizz.sidebar && frizz.sidebarView",
+          "group": "navigation@3"
+        },
+        {
+          "command": "frizz.sidebar.settings",
+          "when": "view == frizz.sidebar && frizz.sidebarView",
+          "group": "navigation@4"
+        },
+        {
+          "command": "frizz.sidebar.reload",
+          "when": "view == frizz.sidebar",
+          "group": "frizz@1"
+        },
+        {
+          "command": "frizz.open",
+          "when": "view == frizz.sidebar",
+          "group": "frizz@2"
+        },
+        {
+          "command": "frizz.sidebar.shortcuts",
+          "when": "view == frizz.sidebar && frizz.sidebarView",
+          "group": "frizz@3"
+        }
+      ],
+      "commandPalette": [
+        {
+          "command": "frizz.askToFix",
+          "when": "false"
+        },
+        {
+          "command": "frizz.addTerminalSelection",
+          "when": "false"
+        },
+        {
+          "command": "frizz.addSelectionOrFile",
+          "when": "false"
+        },
+        {
+          "command": "frizz.addProblems",
+          "when": "config.frizz.useSidebar"
+        },
+        {
+          "command": "frizz.addTerminalOutput",
+          "when": "config.frizz.useSidebar"
         }
       ]
     },
     "keybindings": [
       {
         "command": "frizz.addToPrompt",
-        "key": "ctrl+alt+p",
-        "mac": "cmd+alt+p",
+        "key": "ctrl+i",
+        "mac": "cmd+i",
         "when": "editorTextFocus && editorHasSelection"
+      },
+      {
+        "command": "frizz.addToPrompt",
+        "key": "ctrl+l",
+        "mac": "cmd+l",
+        "when": "editorTextFocus && editorHasSelection"
+      },
+      {
+        "command": "frizz.focusPrompt",
+        "key": "ctrl+l",
+        "mac": "cmd+l",
+        "when": "editorTextFocus && !editorHasSelection && config.frizz.useSidebar"
+      },
+      {
+        "command": "frizz.addSelectionOrFile",
+        "key": "alt+k",
+        "mac": "alt+k",
+        "when": "editorTextFocus && !frizz.claudeCodeInstalled"
       }
     ],
     "configuration": {
@@ -134,8 +317,41 @@
           "type": "boolean",
           "default": true,
           "description": "Open file links from Frizz in this window"
+        },
+        "frizz.shareEditorState": {
+          "type": "boolean",
+          "default": true,
+          "markdownDescription": "Share what you have in front of you in this editor with Frizz: the file you are in and what you have selected, with its text, goes with every message you send from the Frizz sidebar, and Frizz's agents can read it — with your open tabs and the editor's errors and warnings — when they need it. So you can ask about \"this\" without pasting it. The eye on the sidebar's prompt box is this setting. Turn it off to keep the editor to yourself: only what you add to a prompt goes. Text from files that may hold secrets (`.env`, keys, credentials) is never sent on its own."
+        },
+        "frizz.notify": {
+          "type": "boolean",
+          "default": true,
+          "markdownDescription": "Show a notification when a thread in this window's Frizz project needs you — a question, a request to approve, a finished turn — while the Frizz sidebar is out of sight. Only the window you used last shows it."
+        },
+        "frizz.useSidebar": {
+          "type": "boolean",
+          "default": true,
+          "markdownDescription": "Put what you add from the editor — **Add to Frizz prompt** (`Ctrl+L`), a file, a problem's **Ask Frizz to fix**, a terminal selection — and **Ask Frizz…** and **Send to Frizz thread…** into the Frizz sidebar's prompt box, to write the rest there. Turn it off to send selections and files to Frizz in your browser, and to type Ask and Send messages in an input box."
         }
       }
+    },
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "frizz",
+          "title": "Frizz",
+          "icon": "media/frizz.svg"
+        }
+      ]
+    },
+    "views": {
+      "frizz": [
+        {
+          "type": "webview",
+          "id": "frizz.sidebar",
+          "name": "Frizz"
+        }
+      ]
     }
   },
   "scripts": {
