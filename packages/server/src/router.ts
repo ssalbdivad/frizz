@@ -796,7 +796,6 @@ const EditorStateOutput = z.object({
     editor: EditorSnapshotSchema.omit({ t: true }).extend({ reportedAgoMs: z.number() }).optional(),
   })),
   connected: z.number(),
-  elsewhere: z.array(z.object({ app: z.string(), folders: z.array(z.string()) })),
 })
 
 /**
@@ -4479,7 +4478,7 @@ export function createRouter(ctx: AppContext) {
     editorState: mutation({
       input: z.object({}),
       output: EditorStateOutput,
-      handler: async () => ctx.editors?.editorState(workDir) ?? { windows: [], connected: 0, elsewhere: [] },
+      handler: async () => ctx.editors?.editorState(workDir) ?? { windows: [], connected: 0 },
     }),
 
     // Claim what an editor sent to the prompt box (`compose-pending` announced it on every open

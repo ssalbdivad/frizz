@@ -1239,11 +1239,11 @@ async function editor() {
         `Cursor or Windsurf with the Frizz extension. ${EDITOR_FALLBACK}`
       )
     }
-    const elsewhere = Array.isArray(result?.elsewhere) ? result.elsewhere : []
-    const listed = elsewhere.map((w) => `- ${w.app}: ${w.folders?.length ? w.folders.join(", ") : "no folder open"}`).join("\n")
+    // Which folders those windows have open is not this worker's to read — they are other projects — so
+    // Frizz says only that they exist (editor-bridge.ts editorState).
     return (
-      `${connected} editor window${connected === 1 ? " is" : "s are"} connected to Frizz, but none has this project open` +
-      `${listed ? `:\n${listed}` : "."}\n\nWhat those show is not read here. ${EDITOR_FALLBACK}`
+      `${connected} editor window${connected === 1 ? " is" : "s are"} connected to Frizz, but none has this project open, ` +
+      `so what the human has in front of them is in another project. ${EDITOR_FALLBACK}`
     )
   }
   const [front, ...others] = windows
@@ -1308,7 +1308,11 @@ function editorWindowReport(w) {
     if (a.selection) {
       const s = a.selection
       const count = s.endLine - s.startLine + 1
-      if (typeof s.text === "string") {
+      if (s.withheld) {
+        // The extension keeps the text of a file that may hold secrets (.env, a key) out of the frame; the
+        // lines still say where the human is looking.
+        lines.push(`Its text is not shared: the file may hold secrets. Read ${editorLines(s)} of the file yourself only if the task needs it.`)
+      } else if (typeof s.text === "string") {
         lines.push(`Selected text (${count} line${count === 1 ? "" : "s"}${s.truncated ? `; ONLY THE START — the selection was too large to carry whole, so read the file for the rest` : ""}):`)
         // A whole-line drag ends at column 1 of the next line, so its text ends in a newline the fence
         // would show as a blank last line.

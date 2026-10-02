@@ -8,7 +8,7 @@ import { EDITOR_CLOSE, EDITOR_MAX_FOLDERS, EDITOR_MAX_PATH, EDITOR_SOCKET_PATH, 
 import { EditorClientMessageSchema } from "@frizz/shared"
 import { EDITOR_MAX_FRAME_BYTES, EDITOR_MAX_PAYLOAD_BYTES } from "../../server/src/editor-bridge.ts"
 import { notConnectedMessage } from "./status.ts"
-import { backoffDelay, EditorConnection, fitFolders, FocusRecency, FOLDERS_MAX_BYTES, type ConnectionHost, type ConnectionOptions, type ConnectionStatus, type OpenResult } from "./connection.ts"
+import { backoffDelay, EditorConnection, fitFolders, FocusRecency, FOLDERS_MAX_BYTES, forServer, type ConnectionHost, type ConnectionOptions, type ConnectionStatus, type OpenResult } from "./connection.ts"
 
 // A real `ws` server speaking the server's half of the editor protocol, in-process — with the origin
 // gate the real one has (an upgrade without `Origin: http://127.0.0.1:<port>` is refused), its frame
@@ -312,6 +312,26 @@ test("a picture past Frizz's ceiling is fitted before it is sent, never refused"
   } finally {
     await done()
   }
+})
+
+test("a withheld selection is spelled the way each Frizz's schema takes it: `withheld` to one that names it, `truncated` to one from before", () => {
+  const frame: EditorSnapshot = {
+    t: "editor",
+    shared: true,
+    active: { path: "/r/.env", languageId: "dotenv", dirty: false, lineCount: 3, cursorLine: 2, selection: { startLine: 1, endLine: 2, withheld: true }, visible: { startLine: 1, endLine: 3 } },
+    open: [],
+    diagnostics: [],
+    problems: { errors: 0, warnings: 0 },
+  }
+  const now = forServer(frame, new Set(["editor-state", "editor-selection-withheld"]))
+  assert.equal(now, frame, "a Frizz that takes the field gets the frame as built")
+  const before = forServer(frame, new Set(["editor-state"]))
+  assert.deepEqual(before.active?.selection, { startLine: 1, endLine: 2, truncated: true })
+  // Both spellings are frames today's server takes; the converted one carries nothing an older schema
+  // (strict, without the key) could refuse.
+  assert.ok(EditorClientMessageSchema.safeParse(before).success)
+  assert.ok(EditorClientMessageSchema.safeParse(frame).success)
+  assert.equal(JSON.stringify(before).includes("withheld"), false)
 })
 
 test("every open and focus is answered with a result: ok, the window's own refusal, or what it threw", async () => {

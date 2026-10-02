@@ -255,7 +255,7 @@ test("a hello is answered with welcome then projects, and a projects change is r
   await until(() => got.length >= 2, "welcome and projects")
   assert.deepEqual(got.slice(0, 2), [
     // `features`: what this server takes beyond v1, so a new extension sends the `editor` frame only here.
-    { t: "welcome", v: 1, bootId: "boot-1", features: ["editor-state"] },
+    { t: "welcome", v: 1, bootId: "boot-1", features: ["editor-state", "editor-selection-withheld"] },
     { t: "projects", projects: [{ id: "p1", slug: "alpha", name: "Alpha", dir: "/work/alpha", ready: 1, working: 0 }] },
   ])
   // Unchanged: nothing more across several polls.
@@ -477,7 +477,9 @@ test("editor state: kept per window, answered for the windows that have the proj
   h.advance(4_000)
   const state = h.bridge.editorState(dirs.mono)
   assert.equal(state.connected, 4)
-  assert.deepEqual(state.elsewhere, [{ app: "Cursor", folders: [dirs.other] }], "a window on another project is named, not read")
+  // The window on another project is counted and nothing else: its folder is another project's business.
+  assert.deepEqual(Object.keys(state).sort(), ["connected", "windows"])
+  assert.ok(!JSON.stringify(state).includes(dirs.other), "no trace of the other project's folder")
   assert.deepEqual(state.windows.map((w) => [w.folders, w.focused, w.focusedAgoMs]), [
     [[dirs.pkg], true, undefined],
     [[dirs.mono], false, 60_000 + 4_000],

@@ -13,10 +13,11 @@ import type * as vscode from "vscode"
 import type { EditorComposeInput, EditorComposed, EditorOpen, EditorProject } from "@frizz/shared/editor-protocol"
 import { EMBED_TERMINAL_PATH, type EmbedAddContextMessage, type EmbedCommandMessage, type EmbedComposeMessage, type EmbedEditorContextMessage } from "@frizz/shared/embed-protocol"
 import { EditorConnection, FocusRecency, type ConnectionStatus, type OpenResult } from "./connection.ts"
-import { activeFileEditor, registerContextFeed } from "./context-feed.ts"
+import { registerContextFeed } from "./context-feed.ts"
 import { discoverFrizz, pageAddressNote, SOURCE_WORDS, type FoundFrizz } from "./discovery.ts"
 import { fixNote, fixTitle, lineSpan, terminalText, type Problem } from "./editor-context.ts"
-import { registerEditorStateFeed } from "./editor-state-feed.ts"
+import { registerEditorStateFeed, SHARE_SETTING } from "./editor-state-feed.ts"
+import { registerEditorWatcher } from "./editor-watcher.ts"
 import { addRoute, composeInSidebar as composeVia, promptRoute } from "./embed.ts"
 import { composeInput, composeMessage, normalizeNewlines, refLabel, type FileRef, type Selected } from "./message.ts"
 import { projectForPath, workspaceProjects } from "./projects.ts"
@@ -104,11 +105,16 @@ export function activateFrizz(api: Vscode, context: vscode.ExtensionContext): Fr
     log: { info: (line) => log.info(line), warn: (line) => log.warn(line) },
   })
   const useSidebar = () => config().get<boolean>("useSidebar", true)
-  const feed = registerContextFeed(api, context, {
+  // Whether the human shares the editor with Frizz: the one switch both feeds read.
+  const shared = () => config().get<boolean>(SHARE_SETTING, true)
+  // One observer of the window's editors, which both feeds read (editor-front.ts says why there is one).
+  const watcher = registerEditorWatcher(api, context)
+  const feed = registerContextFeed(api, context, watcher, {
     ready: () => sidebar.ready(),
     onReady: (listener) => sidebar.onReady(listener),
     post: (message) => sidebar.post(message),
     projects: () => projects,
+    shared,
   })
 
   // ── status bar ───────────────────────────────────────────────────────────────────────────────────
@@ -154,7 +160,7 @@ export function activateFrizz(api: Vscode, context: vscode.ExtensionContext): Fr
   // What this window shows — file, selection, tabs, problems — for Frizz's agents to read
   // (`mcp__frizz__editor`), sent on every change to a Frizz that takes it. `frizz.shareEditorState` off
   // sends that it is off, and nothing else.
-  const editorState = registerEditorStateFeed(api, context, { send: () => connection.sendEditor() })
+  const editorState = registerEditorStateFeed(api, context, watcher, { send: () => connection.sendEditor(), shared })
 
   let lastNotes: string | undefined
   /** The last discovery's answer: the origin a page opens on even when the editor connection was refused. */
@@ -254,6 +260,10 @@ export function activateFrizz(api: Vscode, context: vscode.ExtensionContext): Fr
     api.workspace.onDidChangeConfiguration((event) => {
       if (event.affectsConfiguration("frizz.serverUrl")) connection.reconnect()
       else if (event.affectsConfiguration("frizz.openFileLinks")) connection.sendState()
+      if (event.affectsConfiguration(`frizz.${SHARE_SETTING}`)) {
+        editorState.sharingChanged()
+        feed.refresh()
+      }
     }),
   )
 
@@ -312,9 +322,12 @@ export function activateFrizz(api: Vscode, context: vscode.ExtensionContext): Fr
     return editor.document.uri.scheme !== "file" && !editor.selection.isEmpty
   }
 
-  /** The file a command is about: the resource it was invoked on, else the active editor's. */
-  function targetOf(uri: vscode.Uri | undefined): Target | undefined {
-    const editor = api.window.activeTextEditor
+  /**
+   * The file a command is about: the resource it was invoked on, else the editor's — the active one, unless
+   * the caller names the editor (the context bar names the one it showed, which with an output pane focused
+   * is the file editor still on screen, not the active one).
+   */
+  function targetOf(uri: vscode.Uri | undefined, editor = api.window.activeTextEditor): Target | undefined {
     const fromEditor = editor && (!uri || editor.document.uri.toString() === uri.toString()) ? editor : undefined
     if (fromEditor) {
       const document = fromEditor.document
@@ -685,9 +698,10 @@ export function activateFrizz(api: Vscode, context: vscode.ExtensionContext): Fr
   async function addContextFromPage(message: EmbedAddContextMessage): Promise<string> {
     let item: EditorComposeInput
     if (message.what === "selection") {
-      const editor = activeFileEditor(api)
-      if (!editor || editor.selection.isEmpty) return "nothing selected"
-      const target = targetOf(editor.document.uri)
+      // The editor the bar showed (the one in front, by the watcher's rule); a chip needs a file on disk.
+      const editor = watcher.frontEditor()
+      if (!editor || editor.document.uri.scheme !== "file" || editor.selection.isEmpty) return "nothing selected"
+      const target = targetOf(editor.document.uri, editor)
       if (!target?.selection) return "nothing selected"
       item = itemFor(target)
     } else {

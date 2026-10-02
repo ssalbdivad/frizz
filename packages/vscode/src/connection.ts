@@ -23,7 +23,9 @@
 //     sent whole, and the editor's picture is fitted to its byte ceiling (editor-state.ts).
 //   - Nothing goes out that Frizz does not know. The server closes the socket on a frame it has never
 //     heard of, so the `editor` frame — newer than v1 — goes only to a Frizz whose welcome names it
-//     (`features`). An older Frizz simply never hears it, and its agents cannot read the editor.
+//     (`features`). An older Frizz simply never hears it, and its agents cannot read the editor. A field
+//     newer than the frame (a selection's `withheld`) is spelled the way that Frizz's schema takes
+//     (`forServer`): its schema is strict, so an unknown key would be refused like an unknown frame.
 //
 // Pure node (no `vscode` import): the host interface is how the window is reached, and the tests drive
 // this against a real `ws` server in-process.
@@ -269,7 +271,7 @@ export class EditorConnection {
    */
   sendEditor(): void {
     if (!this.sharesEditor || !this.#host.editor) return
-    const snapshot = fitEditorSnapshot(this.#host.editor())
+    const snapshot = forServer(fitEditorSnapshot(this.#host.editor()), this.#features)
     const key = JSON.stringify(snapshot)
     if (key === this.#lastEditor) return
     if (this.#send(snapshot)) this.#lastEditor = key
@@ -498,4 +500,17 @@ export class EditorConnection {
         return
     }
   }
+}
+
+/**
+ * The frame as THIS Frizz's schema takes it. A server from before `withheld` (its welcome does not name
+ * EDITOR_FEATURES.selectionWithheld) refuses the key, so a withheld selection goes to it as one whose text
+ * did not fit — `truncated`, no text — which still keeps the text home, and its agents are told to read the
+ * file if they need it.
+ */
+export function forServer(snapshot: EditorSnapshot, features: ReadonlySet<string>): EditorSnapshot {
+  const selection = snapshot.active?.selection
+  if (!selection?.withheld || features.has(EDITOR_FEATURES.selectionWithheld)) return snapshot
+  const { withheld: _withheld, ...rest } = selection
+  return { ...snapshot, active: { ...snapshot.active!, selection: { ...rest, truncated: true } } }
 }

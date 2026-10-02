@@ -105,10 +105,11 @@ export interface EmbedEditorSelection {
   /** Characters selected, across every selection the editor holds (multi-cursor counts each). */
   chars: number
   /**
-   * The PRIMARY selection's text, newlines as `\n` — what a message sent from the sidebar carries when the
-   * human leaves "send the editor selection" on (packages/web/src/lib/editorContext.ts outgoingMessage).
-   * Absent past `EMBED_MAX_SELECTION_TEXT` characters, and then the message names the lines without
-   * quoting them. Optional for an extension from before it, whose selections then go as references too.
+   * The PRIMARY selection's text, newlines as `\n` — what a message sent from the sidebar carries while the
+   * human shares the editor (`frizz.shareEditorState`; packages/web/src/lib/editorContext.ts
+   * outgoingMessage). Absent past `EMBED_MAX_SELECTION_TEXT` characters, from a file whose text is withheld
+   * (`withheld`), and while sharing is off; the message then names the lines without quoting them.
+   * Optional for an extension from before it, whose selections then go as references too.
    */
   text?: string
 }
@@ -136,7 +137,12 @@ export const EMBED_MAX_SELECTION_TEXT = 16 * 1024
  */
 export interface EmbedEditorContextMessage {
   type: "frizz:editor-context"
-  /** The text editor in front, or null when none is (a terminal has focus with no editor beside it, a diff, nothing open). */
+  /**
+   * The text editor in front, or null when none is (a terminal has focus with no editor beside it, nothing
+   * open). The same editor the agents' tool reads (packages/vscode editor-front.ts): a file on disk or an
+   * untitled buffer — the modified side of a diff included — and, while an output pane or the debug console
+   * has focus, the last such editor still on screen.
+   */
   active: (EmbedEditorFile & {
     selection?: EmbedEditorSelection
     /**
@@ -144,6 +150,15 @@ export interface EmbedEditorContextMessage {
      * file the human was ("cursor on line 40"). Absent beside a selection, whose own lines say it.
      */
     cursorLine?: number
+    /** An untitled buffer: `path` and `label` are its label (`Untitled-1`), and there is no file to read. */
+    untitled?: true
+    /** Unsaved changes: the copy on disk is not what the human sees, so a selection not quoted cannot be read from it. */
+    dirty?: true
+    /**
+     * The selection's text is not carried, whatever its size: the file may hold secrets (`.env`, a key, a
+     * file VS Code is told to hide). The block names the lines and says why it does not quote them.
+     */
+    withheld?: true
   }) | null
   /** Every OTHER file open in a tab, most recently active first, at most `EMBED_MAX_OPEN_FILES`. */
   open: EmbedEditorFile[]
