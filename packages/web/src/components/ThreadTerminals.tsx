@@ -36,7 +36,7 @@ const TerminalPane = lazy(() => import("./TerminalPane.tsx").then((m) => ({ defa
 const ROW = "flex min-w-0 items-center gap-1.5 text-[11.5px]"
 // No width cap: the label is the row's identity and gives way LAST (see WHO GIVES WAY). A `max-w-[70%]`
 // here truncated a long command at 70% of the row while a folder hint beside it still had room.
-const IDENTITY = "group flex min-w-0 items-center gap-1.5 overflow-hidden text-left outline-none rounded-sm focus-visible:ring-1 focus-visible:ring-inset focus-visible:ring-focus-ink-60"
+const IDENTITY = "group flex min-w-0 items-center gap-1.5 overflow-hidden text-left outline-none rounded-sm focus-visible:inset-ring-1 focus-visible:inset-ring-focus-ink-60"
 
 // THE OWNER MARK sits IN THE MARK SLOT — the 9px column the liveness dot used to fill — and its hue is the
 // row's liveness. Not a glyph slot of its own beside the tag: `.frizz-kind-tag` is a fixed track so every

@@ -1,6 +1,6 @@
 import assert from "node:assert/strict"
 import test from "node:test"
-import { readFileSync } from "node:fs"
+import { readdirSync, readFileSync } from "node:fs"
 import vm from "node:vm"
 import { getThemeSnapshot, initTheme, parseThemePreference, resolveTheme, setThemePreference, subscribeTheme } from "./theme.ts"
 import { recoveryPage, unauthorizedPage } from "../../../server/src/supervisor-pages.ts"
@@ -45,6 +45,39 @@ test("the runtime and pre-paint resolver share the dedicated preference key and 
   assert.match(entry, /#f7f7f7/)
   assert.match(runtime, /THEME_STORAGE_KEY = "frizz-theme"/)
   assert.match(runtime, /LIGHT_CANVAS = "#f7f7f7"/)
+})
+
+// `ring-inset` is a trap in this theme: theme.css names a colour `inset` (--color-inset), so Tailwind
+// ALSO generates `ring-inset` as a ring COLOUR utility, and the sheet emits it after the colour beside
+// it. Every `ring-1 ring-inset ring-focus-ink-60` therefore drew its focus ring in --color-inset —
+// rgb(244,244,244) on a #fff panel in light, #090b10 on #131519 in dark: invisible — and the profile
+// grid's checked cell lost its accent ring the same way (measured on the computed box-shadow,
+// 2026-10-01). `inset-ring-*` is the utility that means "an inset ring" and carries no such collision.
+// Comments are stripped first: the files that explain the trap have to be able to name it.
+const RING_INSET_CLASS = /(^|[\s"'`:{(])ring-inset(?![\w-])/m
+const stripComments = (source: string) => source
+  .replace(/\/\*[\s\S]*?\*\//g, "")
+  .replace(/(^|[^:\\])\/\/.*$/gm, "$1")
+const usesRingInset = (source: string) => RING_INSET_CLASS.test(stripComments(source))
+
+test("no class uses `ring-inset`, which this theme turns into a ring colour", () => {
+  // Negative controls: the detector must catch each spelling that shipped, and must not trip on a
+  // comment naming the trap, an `inset-ring` utility, or a URL's `//`.
+  assert.equal(usesRingInset(`className="outline-none focus-visible:ring-1 focus-visible:ring-inset focus-visible:ring-focus-ink-60"`), true)
+  assert.equal(usesRingInset("const CELL = `data-[state=checked]:ring-1 data-[state=checked]:ring-inset`"), true)
+  assert.equal(usesRingInset(`.x { @apply ring-1 ring-inset ring-accent; }`), true)
+  assert.equal(usesRingInset(`const a = "https://example.test" + " ring-inset"`), true)
+  assert.equal(usesRingInset(`// \`inset-ring\`, never \`ring-inset\`\nconst x = "inset-ring inset-ring-fg/10"`), false)
+  assert.equal(usesRingInset(`/* NOT ring-1 ring-inset ring-… */ const y = "focus-visible:inset-ring-1"`), false)
+  assert.equal(usesRingInset(`{/* ring-inset */}<div className="inset-ring-accent/35" />`), false)
+
+  const root = new URL("../", import.meta.url)
+  const files = (readdirSync(root, { recursive: true }) as string[])
+    .filter((file) => /\.(?:tsx?|css)$/.test(file) && !file.includes("node_modules"))
+  assert.ok(files.length > 100, `scanned ${files.length} files`)
+  assert.ok(files.some((file) => file.endsWith("EditorContextBar.tsx")), "the scan reaches the file whose comment names the trap")
+  const offenders = files.filter((file) => file !== "lib/theme.test.ts" && usesRingInset(readFileSync(new URL(file, root), "utf8")))
+  assert.deepEqual(offenders, [], "use inset-ring-1 inset-ring-<colour> instead of ring-1 ring-inset ring-<colour>")
 })
 
 const declarations = (css: string) => Object.fromEntries([...css.matchAll(/(--[\w-]+):\s*([^;]+);/g)].map(([, name, value]) => [name, value.trim()]))

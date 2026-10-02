@@ -795,7 +795,7 @@ function BoundedPlainText({ text }: { text: string }) {
   if (!long) return <div className="whitespace-pre-wrap break-words text-[12px] leading-relaxed text-fg/80">{text}</div>
   return (
     <details className="rounded-md border border-border/70 bg-panel/60">
-      <summary className="cursor-pointer px-2.5 py-2 text-[11px] text-muted outline-none focus-visible:ring-1 focus-visible:ring-inset focus-visible:ring-focus-ink-50">Request message</summary>
+      <summary className="cursor-pointer px-2.5 py-2 text-[11px] text-muted outline-none focus-visible:inset-ring-1 focus-visible:inset-ring-focus-ink-50">Request message</summary>
       <div className="max-h-52 overflow-auto border-t border-border/60 px-2.5 py-2 whitespace-pre-wrap break-words text-[12px] leading-relaxed text-fg/80">{text}</div>
     </details>
   )

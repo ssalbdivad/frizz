@@ -409,7 +409,7 @@ function ChatView({ slug, virtualized }: { slug: string; virtualized: boolean })
         // py-5, so putting it here is the one place both paths end up with the same gap to the
         // non-scrolling composer footer. 20px of trailing space read as the last row crowding the
         // prompt box; 32px reads as an ending.
-        className="relative min-h-0 flex-1 overflow-y-auto pb-3 outline-none [overflow-anchor:none] focus-visible:ring-1 focus-visible:ring-inset focus-visible:ring-focus-ink-60"
+        className="relative min-h-0 flex-1 overflow-y-auto pb-3 outline-none [overflow-anchor:none] focus-visible:inset-ring-1 focus-visible:inset-ring-focus-ink-60"
       >
       {virtualized && count > 0 ? (
         <VirtualizedThreadTranscript
@@ -2533,7 +2533,7 @@ function SentFilesCard({ images, files, caption, status, durationMs }: { images:
         aria-controls={bodyId}
         aria-expanded={open}
         aria-label={`${open ? "Collapse" : "Expand"} files sent to you${summary ? `: ${summary}` : ""}`}
-        className="frizz-bash-header w-full text-left outline-none focus-visible:ring-1 focus-visible:ring-inset focus-visible:ring-focus-ink-60"
+        className="frizz-bash-header w-full text-left outline-none focus-visible:inset-ring-1 focus-visible:inset-ring-focus-ink-60"
       >
         <span className="flex min-w-0 items-center gap-2">
           <span className="petite-caps frizz-bash-label shrink-0">Sent to you</span>
@@ -2617,7 +2617,7 @@ function BashBlock({
         aria-controls={expandable ? bodyId : undefined}
         aria-expanded={expandable ? open : undefined}
         aria-label={`${expandable ? `${open ? "Collapse" : "Expand"} ` : ""}${prettyToolName(name)}${shownDesc ? `: ${shownDesc}` : ""}`}
-        className="frizz-bash-header w-full text-left outline-none focus-visible:ring-1 focus-visible:ring-inset focus-visible:ring-focus-ink-60"
+        className="frizz-bash-header w-full text-left outline-none focus-visible:inset-ring-1 focus-visible:inset-ring-focus-ink-60"
       >
         <span className="flex min-w-0 items-center gap-2">
           <ToolLiveMark status={status} backgroundState={backgroundState} liveBackgroundState={liveBackgroundState} startedAt={startedAt} />
@@ -3044,7 +3044,7 @@ function SendMessageCard({ to, summary, body, type, status, durationMs }: { to?:
         aria-controls={hasBody ? bodyId : undefined}
         aria-expanded={hasBody ? open : undefined}
         aria-label={`${hasBody ? `${open ? "Collapse" : "Expand"} ` : ""}${label}${to ? ` to ${to}` : ""}`}
-        className="frizz-bash-header w-full text-left outline-none focus-visible:ring-1 focus-visible:ring-inset focus-visible:ring-focus-ink-60"
+        className="frizz-bash-header w-full text-left outline-none focus-visible:inset-ring-1 focus-visible:inset-ring-focus-ink-60"
         disabled={!hasBody}
       >
         <span className="flex min-w-0 items-center gap-2">

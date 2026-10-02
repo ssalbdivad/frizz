@@ -112,7 +112,7 @@ test("profile grid triggers match the adjacent prompt-control type scale in ever
 
 test("profile grid cells use pointer affordance and icon-free selection ring/tint classes", () => {
   assert.match(PROFILE_GRID_CELL_CLASS, /cursor-pointer/)
-  assert.match(PROFILE_GRID_CELL_CLASS, /data-\[state=checked\]:ring-accent/)
+  assert.match(PROFILE_GRID_CELL_CLASS, /data-\[state=checked\]:inset-ring-accent/)
   assert.match(PROFILE_GRID_CELL_CLASS, /data-\[state=checked\]:bg-accent/)
   assert.match(PROFILE_GRID_CELL_CLASS, /data-\[highlighted\]:outline-fg/)
   assert.match(PROFILE_GRID_CELL_CLASS, /prompt-control-type/)
