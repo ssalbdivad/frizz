@@ -2423,6 +2423,12 @@ try {
       return state ?? undefined
     }, 20_000).catch(() => null)
     const sidebarWide = await inPage(() => innerWidth)
+    // Whether the tab's page shares the sidebar's storage (drafts, the page's own settings): both frames
+    // sit under the same workbench, which is what a partition is keyed by. Recorded, not judged.
+    const probeKey = `frizz-e2e-tab-probe-${Date.now()}`
+    await inPage((key: string) => localStorage.setItem(key, "from the sidebar"), probeKey)
+    notes.tabSharesSidebarStorage = await tabFrame.evaluate((key: string) => localStorage.getItem(key), probeKey)
+    await inPage((key: string) => localStorage.removeItem(key), probeKey)
     expect("c19", "…its page shows the thread, with its reply box and the editor's context bar, wider than the sidebar", !!shownInTab && shownInTab.bar && shownInTab.width > sidebarWide + 100, { tab: shownInTab, sidebar: sidebarWide })
     const titled = await waitFor("the tab titled by its page", async () => {
       const now = (await status()).threadTabs[0]

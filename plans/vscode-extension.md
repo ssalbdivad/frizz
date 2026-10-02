@@ -308,6 +308,20 @@ must match the core app, with a hint wherever the sidebar differs; and no Frizz 
   ⌘L is listed after ⌘I in the manifest on purpose: VS Code shows a command's LAST contributed binding in
   its menus and the palette. In Cursor, which binds ⌘L and ⌘I to its own chat and agent, the two compete;
   the README says to rebind.
+- **The chord where the eye is: the selection hint** (2026-10-02, Cursor's "⌘L to chat"). A fresh selection
+  shows `Ctrl+L to add to Frizz` (`⌘L` where the window's UI is a Mac — under a remote window that is not
+  the extension host's platform, so the sidebar's relay says it) past the end of the selection's line
+  nearest the caret, in `editorCodeLens.foreground`: the editor's quiet annotation colour, not
+  `editorGhostText`, which is an inline completion's and reads as a suggestion Tab would take. A
+  decoration (`after.contentText`), so nothing takes focus or covers code (selection-hint.ts). It settles
+  250ms after the last change and clears at once on any change, so a drag shows nothing until the hand
+  stops. Not shown: in a diff (the group's tab must be a plain text tab of the file — the review diff is
+  where an agent's change is read, and ghost text there reads as part of it); for a select-all (a step
+  toward copy or replace, and the caret is on the file's last line, off screen); on a selection an
+  extension or a jump set (VS Code reports `api`, `code.jump` and `code.navigation` as kind Command —
+  Frizz's own links select lines); on one just added; while not connected; in Cursor and Windsurf, which
+  draw their own hint for the same chord. `frizz.selectionHint` turns it off. Placement follows the chip's
+  line count (lineSpan): a whole-line drag ending at column 1 puts it after the last line the chip reads.
 - **More ways in:** an editor tab's context menu and the explorer add a whole file; a problem's quick
   fix, "Ask Frizz to fix", adds its lines with the message after the chip (`note`); the terminal's
   context menu adds its selection as `@terminal`.
@@ -392,6 +406,38 @@ Code-file links in the sidebar open in VS Code even for a file OUTSIDE Frizz's t
 The roots gate the server's own opener, because that launches an application with the path (an editor, a
 shell's default handler); a VS Code tab is inert, the extension opens it in the window that holds the
 sidebar, and the human clicked the link.
+
+### A thread in an editor tab
+
+Claude Code's "open in new tab" (2026-10-02): a long conversation wants the editor's width, and the sidebar
+stays the primary surface. **Frizz: Open thread in editor tab** — the title row's ⋯ while the sidebar shows
+a thread (first in it), or the palette, which takes the thread the sidebar shows when it is in sight and
+otherwise offers the project's threads — opens a webview panel (`frizz.thread`) beside the code (in the
+active group when no code is in front).
+
+- **The same page, on the thread's own address.** The tab frames `/all/<project>/thread/<slug>?embed=vscode
+  &theme=…&project=…`, which the page opens as its drawer painted open on the first render the board arrives
+  (a cold deep link) — no queue flashing under a sliding drawer, as a navigate after ready would draw. Embed
+  mode makes the drawer full width, so the transcript and the reply box take the tab's width.
+- **A full frame.** The relay and its origin checks are the sidebar's (frameDocument), and every page
+  message is answered the way the sidebar answers it: the handling the sidebar had inline is shared
+  (framed-page.ts `actOnPage`, `Composes`), and the editor's feeds (`frizz:editor-context`,
+  `frizz:editor-extras`, `frizz:host-state`) go to every ready page. So code links open in the editor, `@`
+  lists the workspace, the bar reads the editor and a reply carries the editor block, the eye is the same
+  setting. Two things mean something else in a tab: Ctrl+L pressed in it goes back to the code (the
+  sidebar's "focus the active editor group" would focus the tab's own group), and a click on its bar adds
+  to its own box (`PageHost.addContext` takes the asking frame).
+- **One tab per thread, by what it shows.** A tab is the thread its page's last `frizz:route` names (its
+  `href`), so a thread link followed inside it makes it that thread's; asking for a thread a tab shows
+  brings that tab forward. Its title is the page's — VS Code does not re-case a tab's title as it does the
+  sidebar's row. A tab whose page went back to the queue reads "Frizz" and is nobody's.
+- **Ctrl+L goes to the Frizz used last.** The relay posts `{ view: "focused" }` when its page takes the
+  keyboard; the editor's adds (Ctrl+L, Ctrl+I, Alt+K, a file, the quick fix, the terminal) and Ctrl+L with
+  nothing selected go to the tab when it was used last and is on screen, else to the sidebar. Ask and Send
+  keep the sidebar: they name their own box.
+- **Restored after a reload.** The relay keeps `{ thread, project }` as the webview's state (`setState`,
+  names only, JSON made safe for a script), and a serializer (`onWebviewPanel:frizz.thread`) frames it
+  again; a tab restored before Frizz is found says "Looking for Frizz…" until it is.
 
 ## What the agents can read: `mcp__frizz__editor`
 
@@ -617,7 +663,12 @@ the project root, which ignores `.frizz/`. Each path is now probed in the checko
     on 1.93+, the borrowed clipboard on 1.90) each adding one chip.
     `FRIZZ_E2E_ONLY=<part of a step's name>` runs just those steps.
   - `FRIZZ_E2E_VSCODE=oldest nub packages/vscode/scripts/e2e.ts` — the same on the oldest VS Code the
-    manifest's `engines.vscode` admits (1.90.0), where `focusWindow` does not exist and shell
+    manifest's `engines.vscode` admits (1.90.0). Its three failures at 75bee49a were all the harness's
+    (2026-10-02): a step reverted the active editor instead of the sample it dirtied, and 1.90 keeps a dirty
+    buffer through closeAllEditors, so every later step read an extra line; the real-page run's agent read
+    `terminal.shellIntegration`, a throwing proposal before 1.93; and 1.90's default side bar (255px) is too
+    narrow for any variant of the bar's hint, which c3 now measures at the ~300px its shots are named for.
+    Also on the floor: `focusWindow` does not exist and shell
     integration's command events are a proposal that throws (which killed activation once).
   - `nub packages/vscode/scripts/e2e.ts --stack` — boots a disposable two-project Frizz itself
     (`scripts/adhoc-stack.mjs`: sandbox HOME, a free port, two throwaway git repos) and runs REAL mode
@@ -644,7 +695,10 @@ the project root, which ignores `.frizz/`. Each path is now probed in the checko
   c11 a stand-in extension with Claude Code's id and Alt+K installed live, Alt+K then its and the sheet
   without the row, and Frizz's again once it is uninstalled; c12 a window on a thread's worktree opening
   the sidebar on that thread (`--worktree`); c13–c16 `@` files, an explorer drop, the problems and last
-  command pills, and a needs-you notification; c17, always last, a restart and then a window reload
+  command pills, and a needs-you notification; c18 the selection hint where the editor draws it (its
+  colour, its line, the settle, the ink gap, gone on an empty selection, after Ctrl+L and with the setting
+  off); c19 a thread in an editor tab from the title row's ⋯, its reply box sending to the simulated
+  worker with the editor block, Ctrl+L into the tab and back; c17, always last, a restart and then a window reload
   (Developer: Reload Window, typed in the palette), both of which the framed page's own `localStorage`
   and the eye survive. Under the test runner a reload ends the run (VS Code exits with its extension
   host), so c17 reopens the same profile in a VS Code of the harness's own and reloads that.
