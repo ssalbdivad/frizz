@@ -18,6 +18,7 @@ import type {
   StartLazyThreadInput,
   UpdateLazyPromptInput,
   EditorComposeItem,
+  EditorReviewTarget,
   EditorStateResult,
   EditorWindowSummary,
   BackgroundShellOutputInput,
@@ -346,6 +347,10 @@ export interface Api {
   settleLocalPath(input: { path: string }): Promise<{ path: string }>
   // Editor windows connected over the editor bridge (machine-wide; the `editors` event pushes changes).
   editorWindows(): Promise<{ windows: EditorWindowSummary[] }>
+  // A thread's changes for VS Code's multi-file diff: the checkouts it wrote in (the sidebar's extension
+  // reads this), and the same pushed to the editor window that should show them (a browser tab's ask).
+  reviewTarget(input: { slug: string; title?: string }): Promise<EditorReviewTarget>
+  reviewInEditor(input: { slug: string; title?: string }): Promise<{ ok: true }>
   // Claim what an editor sent to the prompt box (machine-wide, first caller wins). No id: the oldest.
   composeTake(input: { id?: string }): Promise<{ item: EditorComposeItem | null }>
   // What the editor windows that have this project open show: file in front, selection, tabs, problems.
@@ -544,6 +549,8 @@ export const PROCEDURES = {
   resolveLocalPaths: "query",
   settleLocalPath: "query",
   editorWindows: "query",
+  reviewTarget: "query",
+  reviewInEditor: "mutation",
   composeTake: "mutation",
   editorState: "mutation",
   markComplete: "mutation",

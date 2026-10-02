@@ -195,6 +195,7 @@ import {
   withSpinoffChildOrigin,
 } from "./transcript.ts"
 import { liftCheckout, resolveThreadWorkingDir, subAgentFolders, terminalFolder } from "./thread-cwd.ts"
+import { reviewTargetOf } from "./review-target.ts"
 import { openExternalUrl } from "./open-external.ts"
 import { editorKindsForOpener, folderEditor, mainCheckoutCopy, openLocalFile, openLocalFolder, readLocalMarkdown, resolveLocalFileAt, resolveOpenableFile, readLocalTextFile } from "./local-file.ts"
 import { openableFileRoots, workDirOf } from "./project.ts"
@@ -231,7 +232,7 @@ import { expandHomeFolder, homeFolderProblem } from "./home-folder.ts"
 import { basename, dirname, isAbsolute, relative } from "node:path"
 import { existsSync, mkdirSync, rmSync, writeFileSync } from "node:fs"
 import { questionRepliedPast, ProjectCard, ProjectQueue, PROJECT_ICON_EXTENSIONS, PROJECT_ICON_MAX_BASE64_CHARS, queuedThread, ThreadHandoff, BURIED_ANSWERS_HEADER, workingThread } from "@frizz/shared"
-import { EditorComposeInputSchema, EditorSnapshotSchema, type EditorKind, type EditorStateCheckout, type FilePosition } from "@frizz/shared"
+import { EditorComposeInputSchema, EditorReviewTargetSchema, EditorSnapshotSchema, type EditorKind, type EditorReviewTarget, type EditorStateCheckout, type FilePosition } from "@frizz/shared"
 import { imageDimensions } from "./image-header.ts"
 import { homedir } from "node:os"
 import { chosenProjectRoot, ensureProjectIdFile, existingProjectId, isHomeDirectory, writeProjectIdFile } from "./project-root.ts"
@@ -786,7 +787,7 @@ function requestedPosition(input: { line?: number; column?: number; endLine?: nu
 
 // The editor bridge's page-facing shapes (shared editor-protocol.ts). Output only — the server builds
 // these values itself — and rpc-contract.ts pins each to the type contract.ts declares.
-const EditorWindowSummaryOutput = z.object({ app: z.string(), kind: z.enum(["vscode", "cursor", "windsurf", "other"]), acceptsOpens: z.boolean() })
+const EditorWindowSummaryOutput = z.object({ app: z.string(), kind: z.enum(["vscode", "cursor", "windsurf", "other"]), acceptsOpens: z.boolean(), reviews: z.literal(true).optional() })
 const EditorComposeItemOutput = EditorComposeInputSchema.extend({ id: z.string(), app: z.string(), at: z.string() })
 const EditorStateCheckoutOutput = z.object({ dir: z.string(), root: z.string(), kind: z.enum(["worktree", "folder"]) })
 const EditorStateOutput = z.object({
@@ -1299,6 +1300,21 @@ export function createRouter(ctx: AppContext) {
     const folded = ctx.tailer.get(slug)?.workingDir
     if (folded && isDirectory(folded)) return withKind({ dir: folded, source: "transcript" })
     return withKind(threadWorkingDirFromTranscript(slug))
+  }
+
+  // WHAT "REVIEW CHANGES" SHOWS (review-target.ts): the checkouts the thread wrote in, from the rail's own
+  // edited files — the whole transcript, filtered to what git carries — and where its agent works now.
+  // The title is the page's, which shows the thread by name; without one, the registry's.
+  function reviewTarget(slug: string, title: string | undefined): EditorReviewTarget {
+    const row = ctx.storage.getSession(slug)
+    if (!row) throw new Error(`no session registered for ${slug}`)
+    const page = readLatestThreadTranscriptPage(ctx.project, ctx.storage, slug, ctx.backendFor)
+    return reviewTargetOf({
+      projectDir: workDir,
+      title: (title?.trim() || row.title?.trim() || slug).slice(0, 200),
+      edited: page.editedFiles ?? [],
+      working: threadWorkingDir(slug),
+    })
   }
 
   function isDirectory(path: string): boolean {
@@ -4605,6 +4621,34 @@ export function createRouter(ctx: AppContext) {
       },
     }),
 
+    // A THREAD'S CHANGES AS VS CODE'S MULTI-FILE DIFF (review-target.ts; packages/vscode review.ts).
+    //
+    // `reviewTarget` is what the editor extension reads when the human asks from the SIDEBAR: the page
+    // there names the thread to its host (`frizz:review`), and the host asks this — so the page never
+    // hands the extension a folder. `reviewInEditor` is the ask from a BROWSER TAB: the same target,
+    // pushed over the editor bridge to the window that has the thread's checkout (or the project) open,
+    // which opens the diff and comes to the front. The page offers it only while a window that can is
+    // connected (`editorWindows` … `reviews`); a window that answers it could not (nothing changed, not a
+    // repository) is the error the page toasts.
+    reviewTarget: query({
+      input: z.object({ slug: ThreadSlug, title: z.string().max(500).optional() }).strict(),
+      output: EditorReviewTargetSchema,
+      handler: async ({ input }) => reviewTarget(input.slug, input.title),
+    }),
+
+    reviewInEditor: mutation({
+      input: z.object({ slug: ThreadSlug, title: z.string().max(500).optional() }).strict(),
+      output: z.object({ ok: z.literal(true) }),
+      handler: async ({ input }) => {
+        const target = reviewTarget(input.slug, input.title)
+        if (target.checkouts.length === 0) throw new Error("This thread hasn't changed any files yet.")
+        if (!ctx.editors || !(await ctx.editors.review(target, workDir))) {
+          throw new Error("No editor window can show the changes. Open the project in VS Code with the Frizz extension.")
+        }
+        return { ok: true as const }
+      },
+    }),
+
     // Claim what an editor sent to the prompt box (`compose-pending` announced it on every open
     // project's bus). First caller wins, so of every tab that heard the event, the one the human is in
     // inserts it and the rest get null. No id: the oldest still held.
@@ -5570,7 +5614,7 @@ const HUMAN_THREAD_ACTS = [
   "dismissThread", "setThreadSnooze", "setThreadPinned", "setThreadRecurringPrompt", "setThreadHeartbeat",
   "snoozeAwaitingBackground", "snoozeUntilSubAgentsReturn", "answerQuestions", "dismissQuestions", "renameThread",
   "aiRenameThread", "killAgent", "subAgentSteer", "subAgentStop", "stopBackgroundOp", "interactionResolve",
-  "interactionCancel", "terminalStart", "terminalRun", "openThreadFolder", "updateLazyPrompt", "startLazyThread",
+  "interactionCancel", "terminalStart", "terminalRun", "openThreadFolder", "reviewInEditor", "updateLazyPrompt", "startLazyThread",
 ] as const satisfies readonly (keyof ReturnType<typeof createRouter>)[]
 
 export type AppRouter = ReturnType<typeof createRouter>

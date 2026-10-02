@@ -39,8 +39,17 @@ export const EDITOR_FEATURES = {
   editorState: "editor-state",
   /** The server takes `withheld` on an `editor` frame's selection (EditorStateSelection). */
   selectionWithheld: "editor-selection-withheld",
+  /**
+   * Both ways. In a server's `welcome`: it takes a `features` frame, and may send `review` to a window that
+   * named this in one. In a window's `features` frame: it can show a thread's changes (`review`).
+   */
+  review: "review",
 } as const
 export type EditorFeature = (typeof EDITOR_FEATURES)[keyof typeof EDITOR_FEATURES]
+
+/** A review's ceilings, which the server's schema holds a window's answer to and the server fits a request to. */
+export const EDITOR_REVIEW_MAX_CHECKOUTS = 8
+export const EDITOR_REVIEW_MAX_FILES = 512
 
 /**
  * The `editor` frame's ceilings. The server refuses a frame past any of them, and the extension fits the
@@ -141,7 +150,7 @@ export interface EditorState {
   acceptsOpens: boolean
 }
 
-/** The answer to an `open` or `focus` request. */
+/** The answer to an `open`, `focus` or `review` request. */
 export interface EditorResult {
   t: "result"
   id: string
@@ -236,7 +245,18 @@ export interface EditorSnapshot {
   problems: { errors: number; warnings: number }
 }
 
-export type EditorClientMessage = EditorHello | EditorState | EditorResult | EditorCompose | EditorSnapshot
+/**
+ * What this window can do beyond v1 (EDITOR_FEATURES), sent once after a `welcome` that names
+ * EDITOR_FEATURES.review — never to a server that does not, which would refuse the frame (4401) on every
+ * redial. Not in the hello, for the same reason: a server's schema is strict, and the hello reaches every
+ * server, old ones included.
+ */
+export interface EditorFeatures {
+  t: "features"
+  features: string[]
+}
+
+export type EditorClientMessage = EditorHello | EditorState | EditorResult | EditorCompose | EditorSnapshot | EditorFeatures
 
 // ── server → extension ─────────────────────────────────────────────────────────────────────────────
 
@@ -260,6 +280,43 @@ export interface EditorFocus {
   t: "focus"
   id: string
   path: string
+}
+
+// ── a thread's changes, as VS Code's multi-file diff (`review`) ──────────────────────────────────────
+//
+// Claude Code and Cursor show an agent's edits as native diffs. A Frizz worker edits files directly, often
+// in a worktree of its own, so the Frizz form is to open everything a thread changed as one multi-file
+// diff against where it started. The SERVER names what to show — the checkouts the thread's edits are in,
+// read off its transcript (review-target.ts) — and the EXTENSION, which runs where the files are, asks git
+// for the base and the changed files and opens the diff (packages/vscode review.ts). The same target
+// reaches the extension two ways: pushed in a `review` frame when the human asks from a browser tab, and
+// fetched with the `reviewTarget` RPC when they ask from the sidebar (`frizz:review`, embed-protocol.ts).
+
+/** One checkout a thread changed files in. */
+export interface EditorReviewCheckout {
+  /** The checkout's root: a worktree of the project's repository, or the project folder. */
+  dir: string
+  /**
+   * "branch": every change in it since its branch left the one it came from, committed or not — the
+   * checkout is the thread's own (a worktree). "files": only `files`, against the last commit — the
+   * checkout is the project folder, which other agents share, so anything else changed there is theirs.
+   */
+  scope: "branch" | "files"
+  /** Absolute paths of the files the thread edited in it, the most recent first. */
+  files: string[]
+}
+
+export interface EditorReviewTarget {
+  /** The thread's title, for the diff's tab: "Changes in <title>". */
+  title: string
+  /** The checkout the thread edited in last first. Empty: it has edited nothing Frizz can see. */
+  checkouts: EditorReviewCheckout[]
+}
+
+/** Open a thread's changes as a multi-file diff and raise the window. Answer with `result`. */
+export interface EditorReview extends EditorReviewTarget {
+  t: "review"
+  id: string
 }
 
 export interface EditorComposed {
@@ -292,7 +349,7 @@ export interface EditorHeartbeat {
   t: "hb"
 }
 
-export type EditorServerMessage = EditorWelcome | EditorOpen | EditorFocus | EditorComposed | EditorProjects | EditorHeartbeat
+export type EditorServerMessage = EditorWelcome | EditorOpen | EditorFocus | EditorReview | EditorComposed | EditorProjects | EditorHeartbeat
 
 /** What a Frizz page knows about connected editor windows (`editorWindows`, and the `editors` event). */
 export interface EditorWindowSummary {
@@ -300,6 +357,8 @@ export interface EditorWindowSummary {
   kind: EditorKind
   /** False when the window turned file opens off. */
   acceptsOpens: boolean
+  /** The window can show a thread's changes (`review`); absent from an extension from before it. */
+  reviews?: true
 }
 
 /** One editor window as a worker reads it (`editorState`). */

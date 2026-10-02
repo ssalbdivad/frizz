@@ -308,6 +308,22 @@ export interface EmbedShareEditorMessage {
   on: boolean
 }
 
+/**
+ * Show a thread's changes in this window as VS Code's multi-file diff — the thread's ⋯ Review changes.
+ * It names the thread and nothing else: the extension asks Frizz which checkouts the thread changed
+ * (`reviewTarget`, the same answer a browser tab's request pushes to a window), and git for the rest, so
+ * the page cannot point it at any folder. `project` is the project's SLUG, as the page's routes spell it,
+ * or its id when the control is scoped to another project than the page's (a card of the cross-project
+ * page); the extension matches either against the projects it knows.
+ */
+export interface EmbedReviewMessage {
+  type: "frizz:review"
+  thread: string
+  project: string
+  /** The thread's name as the page shows it in words, for the diff's tab; Frizz's own record without it. */
+  title?: string
+}
+
 export type EmbedPageMessage =
   | EmbedShareEditorMessage
   | EmbedReadyMessage
@@ -317,3 +333,4 @@ export type EmbedPageMessage =
   | EmbedKeyMessage
   | EmbedAddContextMessage
   | EmbedRouteMessage
+  | EmbedReviewMessage

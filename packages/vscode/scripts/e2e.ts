@@ -50,6 +50,7 @@ import type { EditorProject } from "@frizz/shared/editor-protocol"
 import { Workbench } from "../e2e/cdp.ts"
 import { FakeFrizz } from "../e2e/fake-frizz.ts"
 import { watchPageClaim, type PageClaimResult } from "../e2e/page-claim.ts"
+import { seedReviewThread, type SeededReview } from "../e2e/review-seed.ts"
 import { bootStack, freePort, type StackProject } from "../e2e/stack.ts"
 
 const pkg = resolve(dirname(fileURLToPath(import.meta.url)), "..")
@@ -102,6 +103,8 @@ const log = (line: string) => console.log(`frizz e2e: ${line}`)
 
 interface Stack {
   origin: string
+  /** The sandbox HOME the server runs with: its database, and the transcripts its tailer reads. */
+  home: string
   tenant: StackProject
   /** The server's lock file, which a worker's MCP server finds Frizz by. */
   serverLock: string
@@ -112,7 +115,7 @@ interface Stack {
 
 async function bootE2eStack(): Promise<Stack> {
   const booted = await bootStack({ scratch, projects: ["launcher", "tenant"], creds: dispatch, log, onSpawn: (teardown) => (stackTeardown = teardown) })
-  return { origin: booted.origin, tenant: booted.info.tenants[0]!, serverLock: booted.info.launcher.serverLock, openers: booted.openers, teardown: booted.teardown }
+  return { origin: booted.origin, home: booted.info.home, tenant: booted.info.tenants[0]!, serverLock: booted.info.launcher.serverLock, openers: booted.openers, teardown: booted.teardown }
 }
 
 // ── the run ───────────────────────────────────────────────────────────────────────────────────────────
@@ -161,6 +164,9 @@ for (const signal of ["SIGINT", "SIGTERM"] as const) {
 
 try {
   if (stackMode) stack = await bootE2eStack()
+  // A thread that worked in a worktree of the tenant, for Review changes to open (e2e/review-seed.ts).
+  let review: SeededReview | undefined
+  if (stack) review = seedReviewThread({ home: stack.home, project: stack.tenant, log })
   const realOrigin = stack?.origin ?? process.env.FRIZZ_E2E_ORIGIN
   const mode = realOrigin ? "real" : "fake"
   const projectDir = stack?.tenant.dir ?? process.env.FRIZZ_E2E_PROJECT_DIR
@@ -231,6 +237,11 @@ try {
       press: async (chord) => (await connect()).press(chord),
       evaluate: async (expression) => (await connect()).evaluate(expression),
       click: async (selector) => (await connect()).click(selector),
+      shot: async () => {
+        const bench = await connect()
+        const { width, height } = await bench.evaluate<{ width: number; height: number }>("({ width: window.innerWidth, height: window.innerHeight })")
+        return bench.shot({ x: 0, y: 0, width, height })
+      },
     }
   }
 
@@ -260,6 +271,8 @@ try {
       FRIZZ_E2E_SET_OPENER: stack ? "1" : process.env.FRIZZ_E2E_SET_OPENER,
       FRIZZ_E2E_PAGE_CLAIMS: pageClaims ? "1" : undefined,
       FRIZZ_E2E_ONLY: process.env.FRIZZ_E2E_ONLY,
+      FRIZZ_E2E_REVIEW: review ? JSON.stringify(review) : undefined,
+      FRIZZ_E2E_SHOTS: scratch,
       // A worker's view of this window: the REAL frizz-mcp.mjs, run by this node, finding the stack by its lock.
       FRIZZ_E2E_MCP: stack ? join(repo, "cc-worker", "bin", "frizz-mcp.mjs") : undefined,
       FRIZZ_E2E_SERVER_LOCK: stack?.serverLock,

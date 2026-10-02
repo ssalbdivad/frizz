@@ -129,9 +129,19 @@ export function parsePageMessage(value: unknown, origin?: string): EmbedPageMess
       const href = pageHref(value.href, origin)
       return { type: "frizz:route", view, title, ...(description ? { description } : {}), ...(href ? { href } : {}) }
     }
+    case "frizz:review": {
+      // Two names and nothing else: the extension asks Frizz what they mean (embed-protocol.ts).
+      const { thread, project, title } = value
+      if (typeof thread !== "string" || typeof project !== "string" || !SLUG.test(thread) || !SLUG.test(project)) return undefined
+      if (title !== undefined && (typeof title !== "string" || title.length > MAX_TITLE)) return undefined
+      return { type: "frizz:review", thread, project, ...(title ? { title } : {}) }
+    }
   }
   return undefined
 }
+
+/** A thread's or project's slug as Frizz spells them in a route: no slash, no space, nothing to escape. */
+const SLUG = /^[A-Za-z0-9][A-Za-z0-9._-]{0,199}$/u
 
 /** A title or its reading longer than this is not one the title row could show anyway. */
 const MAX_TITLE = 500

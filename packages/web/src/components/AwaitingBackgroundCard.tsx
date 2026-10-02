@@ -891,6 +891,8 @@ export interface WaitGroup {
   count?: number
   collapsed?: boolean
   onToggle?: () => void
+  /** A verb on the whole group, at the heading's right end (the rail's Edited files → Review). */
+  action?: ReactNode
 }
 
 // The heading's caret TRAILS the label rather than leading it, so a collapsible heading's label sits
@@ -901,9 +903,12 @@ export interface WaitGroup {
 // scripts/ink-gaps.mjs at dsf 6 on the fullscreen rail — label→count / count→caret: sans 7.84 / 8.10px,
 // mono 8.10 / 7.42px. `ml-[3px]` read 6.10px in sans, visibly tighter than the gap before it.
 function GroupHeading({ group, first }: { group: WaitGroup; first: boolean }) {
-  const cls = `col-span-4 text-[10.5px] uppercase tracking-wide text-muted-45 ${first ? "" : "mt-2.5"}`
-  if (!group.onToggle) return <div className={cls}>{group.head}</div>
-  return (
+  const place = `col-span-4 ${first ? "" : "mt-2.5"}`
+  // With an action the heading and the action share the row, which takes the grid placement; the toggle
+  // stays its own button (a button cannot hold another), and both keep the heading's type on one baseline.
+  const at = group.action ? "" : place
+  const cls = `${at} text-[10.5px] uppercase tracking-wide text-muted-45`
+  const heading = !group.onToggle ? <div className={cls}>{group.head}</div> : (
     <button
       type="button"
       onClick={group.onToggle}
@@ -916,6 +921,8 @@ function GroupHeading({ group, first }: { group: WaitGroup; first: boolean }) {
       <ChevronRight size={10} aria-hidden className={`${ON_CAP} ml-[5px] transition-transform ${group.collapsed ? "" : "rotate-90"}`} />
     </button>
   )
+  if (!group.action) return heading
+  return <div className={`${place} flex items-baseline justify-between gap-3`}>{heading}{group.action}</div>
 }
 
 export function WaitGrid({ groups, divider }: { groups: ReadonlyArray<WaitGroup>; divider: boolean }) {

@@ -24,6 +24,7 @@ import type {
   EmbedHostStateMessage,
   EmbedNavigateMessage,
   EmbedPageMessage,
+  EmbedReviewMessage,
   EmbedRouteMessage,
 } from "@frizz/shared/embed-protocol"
 import { chordCommand, embedTheme, embedUrl, frameTarget, parsePageMessage } from "./embed.ts"
@@ -69,6 +70,8 @@ export interface SidebarHost {
   hostState(): Omit<EmbedHostStateMessage, "type">
   /** The page's eye: share the editor with Frizz or stop (`frizz:share-editor`); resolves to what came of it. */
   setShareEditor(on: boolean): Promise<string>
+  /** The page asked for a thread's changes in this window (`frizz:review`); resolves to what came of it, for the record. */
+  review(message: EmbedReviewMessage): Promise<string>
   log: { info(line: string): void; warn(line: string): void }
 }
 
@@ -318,6 +321,10 @@ export function registerSidebar(api: Vscode, context: vscode.ExtensionContext, h
       case "frizz:route": {
         applyRoute(page)
         record(page.type, page.view)
+        return
+      }
+      case "frizz:review": {
+        record(page.type, await host.review(page))
         return
       }
     }

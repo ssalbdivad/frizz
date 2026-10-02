@@ -94,6 +94,11 @@ export function displayTitle(t: TitleFields, now = Date.now()): string {
   return source.name ? threadHandle(source.text) ?? source.text : source.text
 }
 
+/** The thread's name in the words it is stored as ("Tidy the sample loop") — for a title in prose, where a handle reads as an id. */
+export function displayName(t: TitleFields, now = Date.now()): string {
+  return titleSource(t, now).text
+}
+
 /** The `@` handle the thread is addressed by, or undefined when what it shows is not a name. */
 export function threadHandleOf(t: TitleFields, now = Date.now()): string | undefined {
   const source = titleSource(t, now)

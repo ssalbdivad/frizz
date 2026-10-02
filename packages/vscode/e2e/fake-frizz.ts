@@ -2,9 +2,10 @@
 // and call it, on 127.0.0.1 with the real server's origin gates:
 //
 //   GET  /_frizz/health                      { ok, bootId }
-//   /_frizz/<projectId>/rpc/<proc>           dispatchPreferencesGet, dispatch, board, followUp
+//   /_frizz/<projectId>/rpc/<proc>           dispatchPreferencesGet, dispatch, board, followUp, reviewTarget
 //   WS   /_frizz/editor                      hello → welcome (naming every editor feature, as the real one does)
-//                                            + projects; compose → composed; results and editor frames recorded
+//                                            + projects; compose → composed; results, editor and features
+//                                            frames recorded
 //   GET  /                                   a fake PAGE that speaks the sidebar's embed contract
 //                                            (embed-protocol.ts): says frizz:ready, answers frizz:compose
 //
@@ -14,6 +15,8 @@
 //   GET  /__e2e/log                          every frame and RPC call received so far, and any refused
 //   POST /__e2e/open      {path, line?, …}   send `open` to the newest editor socket; answers its `result`
 //   POST /__e2e/focus     {path}             send `focus` the same way
+//   POST /__e2e/review    {title, checkouts} send `review` the same way (a browser tab's Review changes)
+//   POST /__e2e/review-target {target}       what `reviewTarget` answers (the sidebar's Review changes)
 //   POST /__e2e/projects  {projects}         push a `projects` frame
 //   POST /__e2e/drop                         close the editor socket (1001), as a restart would
 //   POST /__e2e/page-post {message}          have the page post `message` to its parent (the sidebar)
@@ -23,6 +26,7 @@
 //   POST /__e2e/workbench {expression}       evaluate an expression in the workbench page — what the
 //                                            title row shows
 //   POST /__e2e/click     {selector}         click an element of the workbench with a real mouse
+//   POST /__e2e/shot      {path}             save a screenshot of the whole workbench to `path`
 //
 // and two the fake page itself calls: POST /__e2e/page-event (what it received, recorded in `page`) and
 // GET /__e2e/page-next (the messages it was told to post).
@@ -37,7 +41,8 @@ import { createServer, type IncomingMessage, type Server, type ServerResponse } 
 import type { AddressInfo } from "node:net"
 import { WebSocket, WebSocketServer } from "ws"
 import { EditorClientMessageSchema } from "@frizz/shared"
-import { EDITOR_CLOSE, EDITOR_FEATURES, type EditorClientMessage, type EditorProject, type EditorServerMessage } from "@frizz/shared/editor-protocol"
+import { writeFileSync } from "node:fs"
+import { EDITOR_CLOSE, EDITOR_FEATURES, type EditorClientMessage, type EditorProject, type EditorReviewTarget, type EditorServerMessage } from "@frizz/shared/editor-protocol"
 import { EDITOR_MAX_FRAME_BYTES, EDITOR_MAX_PAYLOAD_BYTES } from "../../server/src/editor-bridge.ts"
 
 export const FAKE_THREAD = {
@@ -101,6 +106,8 @@ export interface WorkbenchControl {
   press(chord: string): Promise<void>
   evaluate(expression: string): Promise<unknown>
   click(selector: string): Promise<boolean>
+  /** The whole workbench as a PNG. */
+  shot(): Promise<Buffer>
 }
 
 export class FakeFrizz {
@@ -109,6 +116,7 @@ export class FakeFrizz {
   readonly log: FakeLog = { frames: [], refused: [], rpc: [], origins: [], page: { loads: [], received: [] } }
   #pageOutbox: unknown[] = []
   #pageAnswer: "ok" | "refuse" | "silent" = "ok"
+  #reviewTarget: EditorReviewTarget = { title: "Fake thread", checkouts: [] }
   readonly #server: Server
   readonly #wss = new WebSocketServer({ noServer: true, maxPayload: EDITOR_MAX_PAYLOAD_BYTES })
   readonly #sockets: WebSocket[] = []
@@ -218,11 +226,19 @@ export class FakeFrizz {
         case "/__e2e/page-answer":
           this.#pageAnswer = input.answer
           return json(200, { ok: true })
+        case "/__e2e/review-target":
+          this.#reviewTarget = input.target as EditorReviewTarget
+          return json(200, { ok: true })
         case "/__e2e/press":
         case "/__e2e/click":
+        case "/__e2e/shot":
         case "/__e2e/workbench": {
           if (!this.workbench) return json(409, { error: "no workbench: the harness launched the editor without a debugging port" })
           try {
+            if (url.pathname === "/__e2e/shot") {
+              writeFileSync(String(input.path), await this.workbench.shot())
+              return json(200, { ok: true })
+            }
             if (url.pathname === "/__e2e/press") {
               await this.workbench.press(String(input.chord))
               return json(200, { ok: true })
@@ -242,13 +258,14 @@ export class FakeFrizz {
           return json(200, { messages })
         }
         case "/__e2e/open":
-        case "/__e2e/focus": {
+        case "/__e2e/focus":
+        case "/__e2e/review": {
           const ws = this.#sockets.at(-1)
           if (!ws) return json(409, { error: "no editor connected" })
           const id = randomUUID()
           const result = new Promise((resolve) => this.#results.set(id, resolve))
-          this.#send(ws, url.pathname === "/__e2e/open" ? { t: "open", id, ...input } : { t: "focus", id, path: input.path })
-          const answer = await Promise.race([result, new Promise((resolve) => setTimeout(() => resolve({ timeout: true }), 10_000))])
+          this.#send(ws, url.pathname === "/__e2e/open" ? { t: "open", id, ...input } : url.pathname === "/__e2e/focus" ? { t: "focus", id, path: input.path } : { t: "review", id, title: input.title, checkouts: input.checkouts })
+          const answer = await Promise.race([result, new Promise((resolve) => setTimeout(() => resolve({ timeout: true }), 20_000))])
           return json(200, answer)
         }
       }
@@ -288,6 +305,8 @@ export class FakeFrizz {
         return json(200, { result: { projectDir: this.projects[0]?.dir, projectName: "fake", threads: [FAKE_THREAD] } })
       case "followUp":
         return json(200, { result: null })
+      case "reviewTarget":
+        return json(200, { result: { ...this.#reviewTarget, ...(input?.title ? { title: input.title } : {}) } })
     }
     return json(404, { error: `unknown RPC procedure \`${procedure}\`` })
   }

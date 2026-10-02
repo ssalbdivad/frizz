@@ -52,6 +52,12 @@ in it. Works in VS Code, Cursor and Windsurf.
   first. Links the thread's agent wrote open its worktree's copy, and the main checkout's once the
   worktree is gone. Done can remove the worktree, so Frizz won't mark the thread done while an editor
   has unsaved changes in it: save or close them first.
+- **Review a thread's changes** — everything a thread changed, as VS Code's multi-file diff: from its ⋯
+  menu in the sidebar (**Review changes**), from Frizz in your browser (**Review changes in VS Code**,
+  which brings this window to the front), or **Frizz: Review a thread's changes…** in the palette. A
+  thread that worked in a worktree shows its whole branch since it started, committed or not; one that
+  worked in the project folder shows its own files' uncommitted changes. The left side is where it
+  started; the right side is the file itself, to fix in place.
 - **File links from Frizz** open here — in the window that has the file's folder open, at the line the
   link names, and that window comes to the front — when Frizz's External app setting is this editor
   (Frizz offers to switch it the first time a window connects).

@@ -2,7 +2,7 @@ import { parse as parseYaml } from "yaml"
 import { z } from "zod"
 import { InteractionLifecycle, InteractionOpaqueId, InteractionRevision, InteractionThreadSlug } from "./interactions.ts"
 import { ThreadSlug } from "./thread-slug.ts"
-import { EDITOR_COMPOSE_MAX_TEXT, EDITOR_MAX_FOLDERS, EDITOR_MAX_PATH, EDITOR_PROTOCOL_VERSION, EDITOR_STATE_MAX_DIAGNOSTICS, EDITOR_STATE_MAX_MESSAGE, EDITOR_STATE_MAX_OPEN, EDITOR_STATE_MAX_SELECTION_TEXT, EDITOR_STATE_MAX_TAG, type EditorClientMessage, type EditorComposeInput, type EditorSnapshot, type EditorWindowSummary } from "./editor-protocol.ts"
+import { EDITOR_COMPOSE_MAX_TEXT, EDITOR_MAX_FOLDERS, EDITOR_MAX_PATH, EDITOR_PROTOCOL_VERSION, EDITOR_REVIEW_MAX_CHECKOUTS, EDITOR_REVIEW_MAX_FILES, EDITOR_STATE_MAX_DIAGNOSTICS, EDITOR_STATE_MAX_MESSAGE, EDITOR_STATE_MAX_OPEN, EDITOR_STATE_MAX_SELECTION_TEXT, EDITOR_STATE_MAX_TAG, type EditorClientMessage, type EditorComposeInput, type EditorReviewTarget, type EditorSnapshot, type EditorWindowSummary } from "./editor-protocol.ts"
 
 // ---- Attachment intake (drag/drop, paste, file picker) ----
 // What a worker can actually GET AT. A format qualifies two ways: an agent's Read/file tool consumes
@@ -5699,7 +5699,7 @@ export type BoardMeta = z.infer<typeof BoardMeta>
 // ── The editor bridge's wire (types and rationale: ./editor-protocol.ts, plans/vscode-extension.md) ──
 // The server validates every frame an editor sends with these; each is pinned to its plain type below.
 const EditorKindSchema = z.enum(["vscode", "cursor", "windsurf", "other"])
-const EditorWindowSummarySchema = z.object({ app: z.string(), kind: EditorKindSchema, acceptsOpens: z.boolean() }).strict()
+const EditorWindowSummarySchema = z.object({ app: z.string(), kind: EditorKindSchema, acceptsOpens: z.boolean(), reviews: z.literal(true).optional() }).strict()
 const EditorPath = z.string().min(1).max(EDITOR_MAX_PATH)
 const EditorLine = z.number().int().min(1).max(10_000_000)
 export const EditorComposeInputSchema = z.object({
@@ -5765,14 +5765,27 @@ export const EditorClientMessageSchema = z.discriminatedUnion("t", [
   z.object({ t: z.literal("result"), id: z.string().min(1).max(200), ok: z.boolean(), error: z.string().max(1000).optional() }).strict(),
   z.object({ t: z.literal("compose"), id: z.string().min(1).max(200), item: EditorComposeInputSchema }).strict(),
   EditorSnapshotSchema,
+  // Names this server does not know are kept, not refused: a newer extension may name more than it.
+  z.object({ t: z.literal("features"), features: z.array(z.string().max(100)).max(32) }).strict(),
 ])
+// A thread's changes for the extension to show (`review`, editor-protocol.ts): the `reviewTarget` RPC's
+// answer, and the body of the `review` frame the server pushes.
+export const EditorReviewTargetSchema = z.object({
+  title: z.string().max(500),
+  checkouts: z.array(z.object({
+    dir: EditorPath,
+    scope: z.enum(["branch", "files"]),
+    files: z.array(EditorPath).max(EDITOR_REVIEW_MAX_FILES),
+  }).strict()).max(EDITOR_REVIEW_MAX_CHECKOUTS),
+}).strict()
 // Both directions, so neither the plain types nor the schemas can drift without a type error here.
 type Same<A, B> = [A] extends [B] ? ([B] extends [A] ? true : false) : false
 const editorClientWireMatches: Same<z.infer<typeof EditorClientMessageSchema>, EditorClientMessage> = true
 const editorWindowWireMatches: Same<z.infer<typeof EditorWindowSummarySchema>, EditorWindowSummary> = true
 const editorComposeWireMatches: Same<z.infer<typeof EditorComposeInputSchema>, EditorComposeInput> = true
 const editorSnapshotWireMatches: Same<z.infer<typeof EditorSnapshotSchema>, EditorSnapshot> = true
-void editorClientWireMatches, editorWindowWireMatches, editorComposeWireMatches, editorSnapshotWireMatches
+const editorReviewWireMatches: Same<z.infer<typeof EditorReviewTargetSchema>, EditorReviewTarget> = true
+void editorClientWireMatches, editorWindowWireMatches, editorComposeWireMatches, editorSnapshotWireMatches, editorReviewWireMatches
 
 export const ServerEvent = z.discriminatedUnion("type", [
   z.object({

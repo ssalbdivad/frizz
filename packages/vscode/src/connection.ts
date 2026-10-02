@@ -25,7 +25,9 @@
 //     heard of, so the `editor` frame — newer than v1 — goes only to a Frizz whose welcome names it
 //     (`features`). An older Frizz simply never hears it, and its agents cannot read the editor. A field
 //     newer than the frame (a selection's `withheld`) is spelled the way that Frizz's schema takes
-//     (`forServer`): its schema is strict, so an unknown key would be refused like an unknown frame.
+//     (`forServer`): its schema is strict, so an unknown key would be refused like an unknown frame. The
+//     same for this window's own `features` frame (it can show a thread's changes), sent only to a Frizz
+//     whose welcome names `review`: the one way Frizz learns a window can, since the hello reaches every Frizz.
 //
 // Pure node (no `vscode` import): the host interface is how the window is reached, and the tests drive
 // this against a real `ws` server in-process.
@@ -46,6 +48,7 @@ import {
   type EditorHello,
   type EditorOpen,
   type EditorProject,
+  type EditorReview,
   type EditorServerMessage,
   type EditorSnapshot,
   type EditorState,
@@ -79,6 +82,8 @@ export interface ConnectionHost {
   editor?(): EditorSnapshot
   open(message: EditorOpen): Promise<OpenResult>
   focus(message: EditorFocus): Promise<OpenResult>
+  /** Show a thread's changes and raise the window. Absent: this window cannot, and never says it can. */
+  review?(message: EditorReview): Promise<OpenResult>
   projects(projects: EditorProject[]): void
   status(status: ConnectionStatus): void
   log: ConnectionLog
@@ -464,6 +469,8 @@ export class EditorConnection {
         const blind = this.#host.editor && !this.#features.has(EDITOR_FEATURES.editorState) ? "; this Frizz is too old for its agents to read the editor, so update it" : ""
         this.#host.log.info(`Connected to Frizz at ${origin} (${detail})${restarted ? "; Frizz restarted since the last connection" : ""}${blind}.`)
         this.#setStatus({ kind: "connected", origin, bootId: message.bootId })
+        // What this window can do beyond v1, to a Frizz that takes the frame (see the header).
+        if (this.#host.review && this.#features.has(EDITOR_FEATURES.review)) this.#send({ t: "features", features: [EDITOR_FEATURES.review] })
         // Anything that changed between the hello and the welcome, and the editor's picture: a Frizz that
         // just (re)started knows nothing of it.
         this.sendState()
@@ -474,10 +481,13 @@ export class EditorConnection {
         this.#host.projects(Array.isArray(message.projects) ? message.projects : [])
         return
       case "open":
-      case "focus": {
+      case "focus":
+      case "review": {
         let result: OpenResult
         try {
-          result = message.t === "open" ? await this.#host.open(message) : await this.#host.focus(message)
+          if (message.t === "open") result = await this.#host.open(message)
+          else if (message.t === "focus") result = await this.#host.focus(message)
+          else result = this.#host.review ? await this.#host.review(message) : { ok: false, error: "This window can't show changes." }
         } catch (error) {
           result = { ok: false, error: (error as Error).message }
         }
