@@ -166,7 +166,7 @@ import {
   parseRecurringPrompt,
 } from "@frizz/shared"
 import { type AppContext } from "./context.ts"
-import { listAcpAgents } from "./backend/acp-agents.ts"
+import { listAcpAgentsCached } from "./backend/acp-agents.ts"
 import { sessionTitleLocked } from "./storage.ts"
 import { createThreadNamer, rowThreadName, threadNameProblem, type NamedThread, type ThreadNamer } from "./thread-names.ts"
 import { handleOf, isReplyWaitFor, knownHandles, replyWaitPrompt, resolveSubAgent, resolveThreadHandle, subAgentAddresses, THREAD_MESSAGE_HOURLY_CAP, threadMessageBody } from "./thread-mentions.ts"
@@ -4812,7 +4812,7 @@ export function createRouter(ctx: AppContext) {
     // The composer lists the available ones as `acp:<id>` models (plans/acp-backend.md, decision 9).
     acpAgents: query({
       output: z.array(AcpAgent),
-      handler: async () => listAcpAgents(ctx.getSettings().acpAgents).map((a) => ({ id: a.id, label: a.label, command: a.command, available: a.bin !== undefined })),
+      handler: async () => (await listAcpAgentsCached(ctx.getSettings().acpAgents)).map((a) => ({ id: a.id, label: a.label, command: a.command, available: a.bin !== undefined })),
     }),
     // The models one ACP agent advertises — read by opening a throwaway session in the project dir
     // (cached in the bridge), so it is a separate query the composer asks only once a model picker
