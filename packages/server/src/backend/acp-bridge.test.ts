@@ -9,6 +9,7 @@ import { createInteractionStore, type InteractionStore } from "../interaction-st
 import { createAcpBridge, type AcpBridge } from "./acp-bridge.ts"
 import { liveAcpDaemonRecord, liveAcpDaemonSessionIds, stopAcpDaemon } from "./acp-host.ts"
 import { spawnAcpChild } from "./acp-rpc.ts"
+import { processStartTime } from "../process-generation.ts"
 import { acpTranscriptPath, parseAcpRecord, projectAcpTranscript, type AcpRecord } from "./acp-transcript.ts"
 import { newTailState } from "../tailer.ts"
 import { createAcpBackend } from "./acp-transcript.ts"
@@ -277,6 +278,8 @@ test("acp-bridge: a turn survives the bridge shutting down mid-turn; a fresh bri
     await a.bridge.shutdown() // the restart: the socket drops, the agent does not
     const record = liveAcpDaemonRecord(a.stateDir, "s1")
     assert.ok(record, "the daemon is still running after the bridge went away")
+    // Its birth, so a stranger on a reused pid after a reboot is not taken for it (daemon-identity.ts).
+    if (process.platform === "linux") assert.equal(record.processStart, processStartTime(record.daemonPid))
     const beforeReattach = records(a, "s1")
     assert.equal(beforeReattach.filter((x) => x.kind === "turn-end").length, 0, "shutting down did NOT write a turn-end: the turn is still running")
     assert.equal(beforeReattach.filter((x) => x.kind === "provider-error").length, 0)

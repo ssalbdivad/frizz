@@ -10,7 +10,7 @@ import type { BrokerRecord, ClaudeBrokerConfig } from "./claude-agent-broker.ts"
 import { claudeBrokerDiagnosticLogPath, describeClaudeBrokerExit, readClaudeBrokerExit, recordClaudeBrokerTermination, type ClaudeBrokerTerminationCause } from "./claude-broker-diagnostics.ts"
 import { endDaemonTree, type EndDaemonTreeDeps } from "./daemon-tree.ts"
 import { frizzIpcPath } from "./ipc-path.ts"
-import { processGenerationIsStale } from "../process-generation.ts"
+import { recordedDaemonIsLive } from "./daemon-identity.ts"
 import type { WorkerMcpServers } from "./project-mcp-servers.ts"
 import { launchEnvironment } from "./worker-env.ts"
 
@@ -184,30 +184,12 @@ function rememberBrokerIdentity(recordPath: string, record: BrokerRecord): void 
   try { writeFileSync(brokerLastKnownPath(recordPath), JSON.stringify(record)) } catch {}
 }
 
-/** Does this record still name ITS daemon, rather than a dead one or a stranger holding its pid?
- *
- *  `pidAlive` alone answered "some process has this pid", and that is not the daemon after a reboot.
- *  A reboot kills every daemon without a breadcrumb (all 8 unattributed deaths in the 2026-09-23..10-01
- *  corpus line up with one) and leaves its record on disk, and the next boot restarts the pid counter —
- *  the live daemons on the maintainer's machine that day were pids 4555 and 4774, which the boot after
- *  hands to whatever starts in its first hour. A record that then reads as live is not a harmless
- *  stale entry: `killBroker` SIGTERMs it on Stop or Mark as done, the hibernation sweep retires it
- *  after an hour idle, and the bridge "reattaches" to a socket that no longer exists.
- *
- *  So a record that carries its daemon's birth marker is checked against the process now holding the
- *  pid, and only an EXACT mismatch (or death) disowns it — an observation that cannot be made, or a
- *  record from a daemon that predates the marker, keeps the old answer rather than guessing a live
- *  daemon dead, since a wrongly disowned daemon self-collects within a minute and takes its turn with it. */
-function recordNamesLiveDaemon(record: BrokerRecord): boolean {
-  if (!pidAlive(record.daemonPid)) return false
-  if (typeof record.processStart !== "string" || record.processStart === "") return true
-  return !processGenerationIsStale({ pid: record.daemonPid, processStart: record.processStart })
-}
-
 /** A record whose daemon is still alive; prunes a stale record as a side effect. */
 export function liveBrokerRecord(recordPath: string): BrokerRecord | null {
   const record = readBrokerRecord(recordPath)
-  if (record && recordNamesLiveDaemon(record)) return record
+  // The pid AND its birth (daemon-identity.ts): after a reboot a stale record's pid can belong to a
+  // stranger, which `killBroker` would SIGTERM on Stop and the hibernation sweep would retire.
+  if (record && recordedDaemonIsLive(record.daemonPid, record.processStart, pidAlive)) return record
   if (record) { rememberBrokerIdentity(recordPath, record); try { unlinkSync(recordPath) } catch {} }
   return null
 }

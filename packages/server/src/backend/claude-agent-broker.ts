@@ -27,7 +27,7 @@ import { fileURLToPath } from "node:url"
 import { createClaudeQueryFactory } from "./claude-agent-sdk.ts"
 import { inheritWorkerEnvironment } from "./worker-env.ts"
 import { leaseRuntime } from "../runtime-lease.ts"
-import { processStartTime } from "../process-generation.ts"
+import { daemonBirthMarker } from "./daemon-identity.ts"
 import { projectMcpServers, workerMcpServers, type WorkerMcpServers } from "./project-mcp-servers.ts"
 import { WORKER_DISALLOWED_TOOLS, claudeCompactionWindowOf } from "./types.ts"
 import { createClaudeBrokerDiagnosticWriter, createClaudeBrokerExitWriter, type ClaudeBrokerExitReason } from "./claude-broker-diagnostics.ts"
@@ -511,9 +511,7 @@ export function runClaudeBroker(config: ClaudeBrokerConfig): RunningBroker {
   server.listen(config.socketPath, () => {
     published = true
     if (config.recordPath) {
-      // The birth marker only where reading it is a /proc read: on Windows it is a PowerShell spawn
-      // (~0.3s) sitting between listen and the record, i.e. on every dispatch's critical path.
-      const processStart = process.platform === "linux" ? processStartTime(process.pid) : undefined
+      const processStart = daemonBirthMarker() // see daemon-identity.ts
       const record: BrokerRecord = { daemonPid: process.pid, socketPath: config.socketPath, sessionId: config.sessionId, generation, createdAt: new Date().toISOString(), capabilities: BROKER_CAPABILITIES, compactionWindow: claudeCompactionWindowOf(config.workerEnv), ...(processStart ? { processStart } : {}) }
       try { writeFileSync(config.recordPath, JSON.stringify(record), { mode: 0o600 }) } catch {}
     }
