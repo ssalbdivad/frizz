@@ -13,7 +13,7 @@
 //   --dev    run the extension from the source tree (dist/ as scripts/build.ts makes it) instead of the
 //            packaged .vsix. The default is the .vsix, unpacked, because the maintainer's "the icon
 //            doesn't display" was a package with no icon in it: the source tree had it all along.
-//   --only   run only these checks (c1…c17); the boot, the seed and the view opening always run.
+//   --only   run only these checks (c1…c23); the boot, the seed and the view opening always run.
 //   --icon-before=<png>   an earlier top-dark activity-bar strip (1x enlarged 6x, as c1 writes it) to set
 //            beside this run's, for the eye.
 //   --worktree  open the window on a thread's git worktree (`.frizz/worktrees/<slug>` of the workspace)
@@ -67,6 +67,15 @@
 //   c16 a thread that enters the queue needing the human while the sidebar is out of sight (snoozed, then
 //      woken, through the REAL server's needs-you edge) is a VS Code notification, and its Open shows the
 //      thread in the sidebar
+//   c21 the bar's × (pointed at, the reading's glyph): this selection left out of a send while the eye
+//      stays on and the agents' tool still reads it; a new selection goes again and is quoted
+//   c22 an image on the OS clipboard (xclip under the run's Xvfb, fetched with apt if missing), Ctrl+V in
+//      the reply box: attached as in a browser tab, a tile with the picture, its path sent to the worker —
+//      after a control where a TEXT clipboard pastes text and attaches nothing
+//   c23 a file dropped from the OS: VS Code's routing of an external file drag measured on the workbench
+//      (Shift keeps the webview's pointer events on; `osDropNeedsShift` says whether a plain drag lost
+//      them), and the drop itself, trusted and carrying the file from disk, dispatched to the page's frame
+//      (DevTools cannot route a drop into the out-of-process frame, as c14 says), attaches it
 //   c17 a restart and a window reload (last: the test runner's VS Code ends with a reload, so the same
 //      profile is reopened by a VS Code of the harness's own): the framed page's localStorage survives
 //      both, and so does the eye, which is the VS Code setting
@@ -497,8 +506,9 @@ const contextBar = (surface: "chatComposer" | "newComposer") =>
       label: reading?.getAttribute("aria-label") ?? null,
       hint: bar.querySelector<HTMLElement>("[data-editor-context-hint]")?.innerText ?? null,
       openFiles: bar.querySelector<HTMLElement>("[data-editor-open-files]")?.getAttribute("aria-label") ?? null,
-      color: reading ? getComputedStyle(reading.parentElement!).color : null,
-      background: reading ? getComputedStyle(reading.parentElement!).backgroundColor : null,
+      // The control the reading sits in wears its tone (the reading's own half carries only the hover).
+      color: reading ? getComputedStyle(reading.closest("[data-editor-context-control]") ?? reading).color : null,
+      background: reading ? getComputedStyle(reading.closest("[data-editor-context-control]") ?? reading).backgroundColor : null,
     }
   }, surface)
 
@@ -2251,6 +2261,188 @@ try {
     notes.attentionOpen = { pressed, log: frizzLog().split("\n").filter((line) => /Told you|Opening/u.test(line)).slice(-3) }
     expect("c16", "Open brings the sidebar back on that thread", shown === true, (await status()).sidebar)
     await shot("c16-opened-thread-w300")
+  })
+
+  // ── c21: the bar's ×, one selection left out with the eye still on ──
+  /** The bar's leave-out control on a box: its state, and which glyph it shows now. */
+  const leaveOutState = (surface: "chatComposer" | "newComposer") =>
+    inPage((s) => {
+      const area = [...document.querySelectorAll<HTMLTextAreaElement>(`textarea[data-surface="${s}"]`)].find((t) => t.getClientRects().length > 0)
+      let scope: HTMLElement | null = area?.parentElement ?? null
+      while (scope && !scope.querySelector("[data-editor-context-bar]")) scope = scope.parentElement
+      const bar = scope?.querySelector<HTMLElement>("[data-editor-context-bar]")
+      const toggle = bar?.querySelector<HTMLElement>("[data-editor-context-leave-out]")
+      if (!bar || !toggle) return null
+      const glyph = [...toggle.querySelectorAll("svg")].find((svg) => getComputedStyle(svg).display !== "none")
+      return {
+        leftOut: bar.dataset.editorContextLeftOut ?? null,
+        pressed: toggle.getAttribute("aria-pressed"),
+        glyph: glyph?.getAttribute("class")?.match(/lucide-([a-z0-9-]+)/u)?.[1] ?? null,
+        struck: getComputedStyle(bar.querySelector("[data-editor-context] span")!).textDecorationLine,
+        hint: bar.querySelector<HTMLElement>("[data-editor-context-hint]")?.innerText ?? null,
+        reading: bar.querySelector<HTMLElement>("[data-editor-context]")?.getAttribute("aria-label") ?? null,
+      }
+    }, surface)
+  await run("c21", "the bar's × leaves this selection out of the message, the eye still on, until the selection changes", async () => {
+    await resetPage()
+    await openThreadRow()
+    await openInEditor(files.sample, [1, 0, 2, -1])
+    await waitFor("the reply box's bar on lines 2-3", async () => (await contextBar("chatComposer"))?.kind === "selection" || undefined, 5_000)
+    const atRest = await leaveOutState("chatComposer")
+    expect("c21", "at rest the reading wears the file glyph, nothing left out", atRest?.glyph === "file-code2" && atRest.leftOut === "false", atRest)
+    // A human points at the reading: the glyph becomes the ×.
+    const reading = await (await frame()).evaluateHandle(() => [...document.querySelectorAll<HTMLElement>('textarea[data-surface="chatComposer"]')].find((t) => t.getClientRects().length > 0)?.closest("[data-thread-composer-box]")?.querySelector("[data-editor-context] span") ?? null)
+    const at = await (reading.asElement() as ElementHandle | null)?.boundingBox()
+    if (at) await page.mouse.move(at.x + at.width / 2, at.y + at.height / 2, { steps: 4 })
+    const hovered = await waitFor("the × on the pointed-at reading", async () => { const s = await leaveOutState("chatComposer"); return s?.glyph === "x" ? s : undefined }, 3_000).catch(() => leaveOutState("chatComposer"))
+    expect("c21", "pointing at the reading turns its glyph into the ×", hovered?.glyph === "x", hovered)
+    // Not `shot`, which parks the pointer on the side bar's edge first: the × is there only while pointed at.
+    { const rect = await rectOf(".part.sidebar"); if (rect) await capture(join(out, `${version}-c21-bar-x-hover-w300.png`), rect, 2) }
+    await clickInComposer("chatComposer", "[data-editor-context-leave-out]")
+    const leftOut = await waitFor("left out", async () => { const s = await leaveOutState("chatComposer"); return s?.leftOut === "true" ? s : undefined }, 3_000).catch(() => leaveOutState("chatComposer"))
+    expect("c21", "clicked: left out — struck through, pressed, the hint says so", leftOut?.leftOut === "true" && leftOut.pressed === "true" && leftOut.struck === "line-through" && /^Left out/u.test(leftOut.hint ?? ""), leftOut)
+    expect("c21", "…and the eye is still on, the setting untouched", (await eye()) === "true" && (await sharing()).value !== false, { eye: await eye(), setting: await sharing() })
+    await page.mouse.move(2, 400)
+    await shot("c21-bar-left-out-w300")
+    const tool = await toolReads()
+    expect("c21", "…so the agents' tool still reads the selection (only the message leaves it out)", /lines 2-3 selected/u.test(tool), tool.slice(0, 300))
+    const withheld = await sendFromReply("leave that one out")
+    expect("c21", "a send carries no editor context while it is left out", withheld.text.startsWith("leave that one out") && parseSentEditorContext(withheld.text) === null && !withheld.text.includes("let total = 0"), withheld.text.slice(0, 400))
+    // A new selection in the editor: it goes again, on its own.
+    await openInEditor(files.sample, [3, 0, 4, -1])
+    const back = await waitFor("the new selection", async () => { const s = await leaveOutState("chatComposer"); return s?.leftOut === "false" && /:4-5/u.test(s.reading ?? "") ? s : undefined }, 5_000).catch(() => leaveOutState("chatComposer"))
+    expect("c21", "a new selection brings it back: lit, not struck", back?.leftOut === "false" && back.struck !== "line-through", back)
+    const sent = await sendFromReply("and this one?")
+    const block = parseSentEditorContext(sent.text)
+    expect("c21", "…and the next send quotes it", block?.editor.kind === "selection" && block.editor.startLine === 4 && block.editor.endLine === 5 && block.body === "and this one?", { text: sent.text.slice(0, 500), block })
+  })
+
+  // ── c22: a screenshot pasted from the OS clipboard ──
+  /** `xclip`, for putting an image on the X clipboard the way a screenshot tool does — fetched into the run's scratch with apt when the machine lacks it (no root needed for either step). */
+  const xclip = (): string => {
+    const onPath = spawnSync("sh", ["-c", "command -v xclip"], { encoding: "utf8" }).stdout.trim()
+    if (onPath) return onPath
+    const dir = join(scratch, "xclip")
+    const bin = join(dir, "usr", "bin", "xclip")
+    if (existsSync(bin)) return bin
+    mkdirSync(dir, { recursive: true })
+    execFileSync("apt-get", ["download", "xclip"], { cwd: dir, stdio: "ignore", timeout: 60_000 })
+    const deb = execFileSync("sh", ["-c", "ls xclip_*.deb"], { cwd: dir, encoding: "utf8" }).trim()
+    execFileSync("dpkg", ["-x", join(dir, deb), dir])
+    return bin
+  }
+  /** Own the X clipboard with `bytes` as `type` until the returned stop is called (xclip in the foreground, its pid ours). */
+  const clipboard = (type: string, file: string): (() => void) => {
+    const owner = spawn(xclip(), ["-quiet", "-selection", "clipboard", "-t", type, "-i", file], { stdio: "ignore", env: process.env })
+    return () => { if (owner.exitCode === null && owner.signalCode === null) owner.kill("SIGTERM") }
+  }
+  /** The attachments a box holds: what its value carries after the prose, and whether each tile's image loaded. */
+  const attachments = (surface: "chatComposer" | "newComposer") =>
+    inPage((s) => {
+      const area = [...document.querySelectorAll<HTMLTextAreaElement>(`textarea[data-surface="${s}"]`)].find((t) => t.getClientRects().length > 0)
+      const root = area?.closest(".rounded-xl")
+      return {
+        value: area?.value ?? null,
+        tiles: [...(root?.querySelectorAll<HTMLImageElement>(".group\\/att img") ?? [])].map((img) => ({ alt: img.alt, loaded: img.complete && img.naturalWidth > 0, width: img.naturalWidth })),
+      }
+    }, surface)
+  await run("c22", "an image pasted from the clipboard into a sidebar prompt box attaches, as in a browser tab", async () => {
+    await resetPage()
+    await openThreadRow()
+    // The picture: the sidebar as it is now, a screenshot like any other.
+    const shotFile = join(scratch, "pasted-shot.png")
+    const rect = (await rectOf(".part.sidebar"))!
+    await capture(shotFile, { x: rect.x, y: rect.y, width: Math.min(rect.width, 240), height: 160 })
+    const textFile = join(scratch, "pasted-text.txt")
+    writeFileSync(textFile, "plain words from the clipboard")
+    let stop = (): void => undefined
+    try {
+      // The negative control first: a clipboard holding TEXT pastes text, and nothing is attached.
+      stop = clipboard("text/plain", textFile)
+      await sleep(300)
+      await clickInPage('textarea[data-surface="chatComposer"]')
+      await until(async () => (await box("chatComposer"))?.active === true, 3_000)
+      await press("Control+KeyV")
+      const text = await waitFor("the pasted text", async () => { const a = await attachments("chatComposer"); return a.value?.includes("plain words from the clipboard") ? a : undefined }, 5_000).catch(() => attachments("chatComposer"))
+      expect("c22", "control: a text clipboard pastes its text and attaches nothing", !!text.value?.includes("plain words from the clipboard") && text.tiles.length === 0, text)
+      await clearBox("chatComposer")
+      stop()
+      // A screenshot on the clipboard, as a screenshot tool leaves it: Ctrl+V in the reply box.
+      stop = clipboard("image/png", shotFile)
+      await sleep(300)
+      if (!(await box("chatComposer"))?.active) await clickInPage('textarea[data-surface="chatComposer"]')
+      await until(async () => (await box("chatComposer"))?.active === true, 3_000)
+      await press("Control+KeyV")
+      const pasted = await waitFor("the attachment", async () => { const a = await attachments("chatComposer"); return a.tiles.some((tile) => tile.loaded) ? a : undefined }, 15_000).catch(() => attachments("chatComposer"))
+      notes.pastedImage = pasted
+      expect("c22", "Ctrl+V with an image on the clipboard attaches it: a tile with the picture, as in a browser tab", pasted.tiles.some((tile) => tile.loaded), pasted)
+      await shot("c22-pasted-image-w300")
+      // Sent, the agent gets the picture's path, and the file is there.
+      const before = readFileSync(seeded!.inputs, "utf8").trim().split("\n").filter(Boolean).length
+      await typeInto("chatComposer", "what is wrong in this screenshot?")
+      await press("Enter")
+      const sent = await waitFor("the message at the simulated worker", () => {
+        const lines = readFileSync(seeded!.inputs, "utf8").trim().split("\n").filter(Boolean)
+        return lines.length > before ? (JSON.parse(lines.at(-1)!) as { text: string }) : undefined
+      }, 20_000)
+      const path = sent.text.split("\n").map((line) => line.trim()).find((line) => /^\/.*\.png$/u.test(line))
+      expect("c22", "…sent, the message carries the image's path, and the image is on disk", !!path && existsSync(path) && readFileSync(path).subarray(1, 4).toString() === "PNG", { text: sent.text.slice(0, 300), path })
+    } finally {
+      stop()
+    }
+  })
+
+  // ── c23: a file dropped from the OS ──
+  await run("c23", "a file dropped from the OS onto a sidebar prompt box attaches", async () => {
+    await resetPage()
+    await openThreadRow()
+    const dropped = join(scratch, "dropped-from-the-os.png")
+    writeFileSync(dropped, readFileSync(join(scratch, "pasted-shot.png")))
+    await waitFor("the reply box", async () => (await box("chatComposer")) ?? undefined, 10_000)
+    // An OS file drag as Chromium receives one from a file manager: files, no VS Code resource types.
+    const data = { items: [] as { mimeType: string; data: string }[], files: [dropped], dragOperationsMask: 1 }
+    // VS CODE'S ROUTING, measured in its own handler. A drag from a file manager enters the window over the
+    // workbench (the activity bar, the editor) before it reaches the sidebar, and VS Code's
+    // WebviewWindowDragMonitor answers every `dragover` on the workbench: without Shift it turns the
+    // webview's pointer events OFF for the drag (so the editor can take file drops), with Shift it turns
+    // them back on. DevTools' own drag events do not reach that listener reliably (c14 saw one dragenter of
+    // five), so the workbench is sent the dragover a real drag delivers there, once plain and once with
+    // Shift, and the sidebar's frame is read after each.
+    const blocked = await page.evaluate(() => {
+      const frameOf = () => [...document.querySelectorAll<HTMLElement>("iframe.webview")].find((f) => f.getBoundingClientRect().width > 0 && f.closest(".part.sidebar, .webview-container, body"))
+      const read = () => frameOf()?.style.pointerEvents || "auto"
+      const over = (shiftKey: boolean) => window.dispatchEvent(new DragEvent("dragover", { bubbles: true, cancelable: true, shiftKey, dataTransfer: new DataTransfer() }))
+      const before = read()
+      over(false)
+      const plain = read()
+      over(true)
+      const shift = read()
+      return { before, plain, shift }
+    })
+    notes.osDropRouting = blocked
+    expect("c23", "VS Code takes an OS drag from the sidebar unless Shift is held: plain, the webview's pointer events go off; Shift, back on", blocked.plain === "none" && blocked.shift === "auto", blocked)
+    // The page's half: the drop itself, trusted, carrying the file from disk, on the page's own frame.
+    const sessionOf = (f: Frame) => (f as unknown as { client: CDPSession }).client
+    const frameSession = sessionOf(await frame())
+    const inner = await inPage(() => {
+      const rect = [...document.querySelectorAll<HTMLTextAreaElement>('textarea[data-surface="chatComposer"]')].find((t) => t.getClientRects().length > 0)!.getBoundingClientRect()
+      return { x: rect.x + rect.width / 2, y: rect.y + rect.height / 2 }
+    })
+    const hint = { seen: "" }
+    for (const type of ["dragEnter", "dragOver", "dragOver"] as const) {
+      await frameSession.send("Input.dispatchDragEvent", { type, x: inner.x, y: inner.y, data, modifiers: 8 }).catch((error: unknown) => { notes.osDropError = String(error) })
+      await sleep(150)
+    }
+    hint.seen = await inPage(() => [...document.querySelectorAll<HTMLElement>(".rounded-xl")].map((el) => el.innerText).find((t) => /Drop file to attach/u.test(t)) ? "Drop file to attach" : "")
+    await shot("c23-dragging-over-w300")
+    await frameSession.send("Input.dispatchDragEvent", { type: "drop", x: inner.x, y: inner.y, data, modifiers: 8 }).catch((error: unknown) => { notes.osDropError = String(error) })
+    expect("c23", "over the box the page says it will attach the file", hint.seen === "Drop file to attach", hint)
+    const landed = await waitFor("the dropped file attached", async () => { const a = await attachments("chatComposer"); return a.tiles.some((tile) => tile.loaded) ? a : undefined }, 15_000).catch(() => attachments("chatComposer"))
+    notes.osDrop = landed
+    // The box shows its attachments as tiles (the paths ride the draft after the prose, not the textarea).
+    expect("c23", "dropped with Shift held: the file is attached, a tile with its picture", landed.tiles.some((tile) => tile.loaded && tile.alt.includes("dropped-from-the-os")), landed)
+    await shot("c23-dropped-file-w300")
+    await clearBox("chatComposer").catch(() => undefined)
   })
 
   // ── c17: a restart and a window reload (LAST: it ends the agent's VS Code) ──
