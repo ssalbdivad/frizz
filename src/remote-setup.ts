@@ -1,4 +1,5 @@
 import { isAnonymousClaimName } from "@frizz/shared";
+import { renderQrSvg } from "@frizz/server/qr";
 import type { RemoteControlHandler, RemoteControlReply } from "@frizz/server/restart-supervisor";
 import { type CloudConfig, isClaimedConfig, isExternalConfig, normalizeHostname } from "./cloud.ts";
 import type { CloudflaredProbe, GithubProbe, TailscaleProbe } from "./remote-detect.ts";
@@ -139,6 +140,13 @@ export function createRemoteControlHandler(options: RemoteControlOptions): Remot
   let applying = false;
   const reply = (status: number, body: unknown): RemoteControlReply => ({ status, body });
 
+  // A sign-in link with its QR drawn here, where the encoder already ships, so the browser needs no
+  // QR library of its own.
+  const link = () => {
+    const issued = options.issueLink();
+    return issued ? { url: issued.url, expiresAt: issued.expiresAt, qrSvg: renderQrSvg(issued.url) } : null;
+  };
+
   return {
     async get() {
       const [github, cloudflared, tailscale] = await Promise.all([
@@ -155,6 +163,13 @@ export function createRemoteControlHandler(options: RemoteControlOptions): Remot
       });
     },
     async post(body) {
+      // `{ link: true }` mints a fresh sign-in link for the setup in force, changing nothing else.
+      if (body && typeof body === "object" && (body as { link?: unknown }).link === true) {
+        const issued = link();
+        return issued
+          ? reply(200, { protocol: 1, current: viewOf(options.current()), link: issued })
+          : reply(409, { protocol: 1, error: "remote access is off, so there is nothing to sign in to" });
+      }
       const choice = parseRemoteChoice(body);
       if (typeof choice === "string") return reply(400, { protocol: 1, error: choice });
       if (applying) return reply(409, { protocol: 1, error: "another remote-access change is still being applied" });
@@ -162,7 +177,7 @@ export function createRemoteControlHandler(options: RemoteControlOptions): Remot
       try {
         const next = await applyRemoteChoice(choice, options);
         options.onChanged?.(next);
-        return reply(200, { protocol: 1, current: viewOf(next), link: next ? options.issueLink() : null });
+        return reply(200, { protocol: 1, current: viewOf(next), link: next ? link() : null });
       } catch (error) {
         // The controller has already dropped the origin for a setup that failed to start, so what is in
         // force now is whatever it says — report that alongside the error.

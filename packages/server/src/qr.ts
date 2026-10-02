@@ -108,3 +108,20 @@ export function renderQr(value: string, options: QrRenderOptions = {}): string {
 export function qrWidth(value: string, errorCorrection: "L" | "M" | "Q" | "H" = "M"): number {
   return encode(value, errorCorrection).size
 }
+
+/**
+ * The code as a standalone SVG, quiet zone included, for a browser to show (Settings → Remote access).
+ *
+ * One path of unit squares in a `size × size` viewBox, dark on an explicit white field — the same
+ * reason as the terminal's explicit colours: an inverted code on a dark theme does not scan on iOS.
+ * `shape-rendering="crispEdges"` keeps adjacent modules from leaving anti-aliased seams at odd scales.
+ */
+export function renderQrSvg(value: string, errorCorrection: "L" | "M" | "Q" | "H" = "M"): string {
+  if (!value) throw new Error("renderQrSvg requires a value")
+  const { size, at } = encode(value, errorCorrection)
+  let path = ""
+  for (let y = 0; y < size; y++) {
+    for (let x = 0; x < size; x++) if (at(x, y)) path += `M${x} ${y}h1v1h-1z`
+  }
+  return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${size} ${size}" shape-rendering="crispEdges"><rect width="${size}" height="${size}" fill="#fff"/><path d="${path}" fill="#000"/></svg>`
+}
