@@ -1,4 +1,4 @@
-import { Profiler, memo, useMemo, useState, type ComponentProps, type ProfilerOnRenderCallback } from "react"
+import { Profiler, memo, useCallback, useMemo, useState, type ComponentProps, type ProfilerOnRenderCallback } from "react"
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query"
 import { createRoot } from "react-dom/client"
 import { MemoryRouter } from "react-router"
@@ -7,6 +7,7 @@ import { useLeavingCards } from "./components/AllQueues.tsx"
 import { AllQueuesCard } from "./components/AllQueuesCard.tsx"
 import { TooltipProvider } from "./components/Tooltip.tsx"
 import { threadKey, type QueuesProject } from "./lib/allQueues.ts"
+import { useViewportLock } from "./lib/viewportLock.ts"
 import { store } from "./store.ts"
 import "./styles.css"
 
@@ -297,13 +298,21 @@ function Queue() {
   )
 }
 
+// `many` holds the page with the queue's own viewport lock (lib/viewportLock.ts), as AllQueues does, so the
+// cards building near the screen can be checked against it (queueCardVisibility.e2e.test.ts).
+function LockedQueue() {
+  const [, repaint] = useState(0)
+  useViewportLock("[data-xq-card]", (slot) => slot.dataset.xqCard, useCallback(() => repaint((n) => n + 1), []))
+  return <Queue />
+}
+
 createRoot(document.getElementById("root")!).render(
   <QueryClientProvider client={new QueryClient()}>
     <MemoryRouter>
       <TooltipProvider>
         <div className="min-h-screen bg-bg px-4 py-6 text-sm text-fg">
           <div data-fixture-queue className="mx-auto w-[640px] max-w-full min-w-0">
-            <Queue />
+            {CASE === "many" ? <LockedQueue /> : <Queue />}
           </div>
         </div>
       </TooltipProvider>

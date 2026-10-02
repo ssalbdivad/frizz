@@ -15,7 +15,10 @@ import test, { after, before } from "node:test"
 //      threads, so each delta re-rendered every card on the page;
 //   5  a JUMP past the observer's margin (a scrollbar drag, End) paints real cards in its first frame, not
 //      stand-ins — the observer reports a frame late, so the cards are built from the scroll event itself;
-//   6  typing `@` into a card's reply box still offers the board's threads — the box subscribes to them only
+//   6  the card being read holds still when a card above it changes height in a frame that also scrolls —
+//      the viewport lock re-took its anchor before undoing such a move, and cards building near the screen
+//      made it common;
+//   7  typing `@` into a card's reply box still offers the board's threads — the box subscribes to them only
 //      once its draft holds an `@`, so this pins that the switch turns on.
 //
 // Skipped unless a Vite URL serving the fixtures is provided: `nub run test:e2e` sets it, or start
@@ -41,6 +44,10 @@ before(async () => {
   await page.setViewport({ width: 900, height: 1000, deviceScaleFactor: 1 })
   page.on("console", (m) => { if (m.type() === "error" && !/404|favicon/i.test(m.text())) errors.push(m.text()) })
   page.on("pageerror", (e) => errors.push(String(e)))
+  // EVERY TEST STARTS AT THE TOP. The `many` page holds the viewport lock, which writes down the card being
+  // read as a page goes and puts the next load of the same address back on it (lib/viewportLock.ts, "A
+  // RELOAD") — so one test's scroll would become the next test's starting point.
+  await page.evaluateOnNewDocument(() => sessionStorage.removeItem("frizz.queueReading.v1"))
   // WARM A COLD VITE before any timed step (its first load optimizes dependencies and reloads the page).
   await page.goto(URL_MANY(), { waitUntil: "networkidle0", timeout: 120_000 })
   await page.waitForSelector("[data-xq-card]", { timeout: 120_000 })
@@ -200,6 +207,32 @@ test("a jump to the bottom before the page is built paints real cards in its fir
   assert.ok(jump.scrollY > 10_000 && jump.onScreen > 0, `it landed far down the queue: ${JSON.stringify(jump)}`)
   assert.equal(jump.standInsOnScreen, 0, `a stand-in on screen in the jump's first frame: ${JSON.stringify(jump)}`)
   assert.equal(jump.nearOnScreen, jump.onScreen, `and every card on screen is drawn unclipped: ${JSON.stringify(jump)}`)
+})
+
+test("the card being read holds still when a card above it grows in a frame that scrolls", { skip: !baseUrl, timeout: 120_000 }, async () => {
+  await page!.goto(URL_MANY(), { waitUntil: "load" })
+  await settled()
+  const result = await page!.evaluate(async () => {
+    const frame = () => new Promise((resolve) => requestAnimationFrame(() => setTimeout(resolve, 0)))
+    scrollTo({ top: Math.round((document.documentElement.scrollHeight - innerHeight) / 2), behavior: "instant" as ScrollBehavior })
+    for (let i = 0; i < 5; i++) await frame()
+    const slots = [...document.querySelectorAll<HTMLElement>("[data-xq-card]")]
+    const line = innerHeight / 3
+    const index = slots.findIndex((slot) => { const r = slot.getBoundingClientRect(); return r.top <= line && r.bottom >= line })
+    const reading = slots[index]!
+    const above = slots[index - 1]!
+    const before = reading.getBoundingClientRect().top
+    // In ONE task: a 1px scroll (its event, and the lock's re-take, land in the next frame) and a card above
+    // the reader growing by 300px, as a card built or a handoff landing above the screen does.
+    scrollBy({ top: 1, behavior: "instant" as ScrollBehavior })
+    const grow = document.createElement("div")
+    grow.style.height = "300px"
+    above.querySelector("[data-xq-card-root]")!.appendChild(grow)
+    for (let i = 0; i < 5; i++) await frame()
+    return { index, before, after: reading.getBoundingClientRect().top }
+  })
+  assert.ok(result.index > 0, `a card is under the reading line, with one above it: ${JSON.stringify(result)}`)
+  assert.ok(Math.abs(result.after - (result.before - 1)) <= 1, `the card being read moved: ${JSON.stringify(result)}`)
 })
 
 test("typing @ in a card's reply box offers the board's threads", { skip: !baseUrl, timeout: 120_000 }, async () => {

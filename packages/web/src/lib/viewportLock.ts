@@ -416,9 +416,21 @@ export function useViewportLock(slots: string, keyOf: (slot: HTMLElement) => str
       pointer.current = null
     }
     let frame = 0
+    // UNDO FIRST, THEN RE-TAKE. A re-take in an animation frame runs BEFORE that frame's layout and the
+    // ResizeObserver below, so anything that moved the cards since the last frame — a card above the reader
+    // built or laid out at its real height, its handoff landing — was taken as the page "as the human last
+    // saw it" and never undone, whenever a scroll event fell in the same frame. And the lock's own
+    // correction is a scroll, so its next frame always has one. Holding first undoes such a move (net of
+    // any scroll since: `hold` measures against the offset the anchor was taken at), and only then is the
+    // page re-read. Measured 2026-10-02 on the 244-card mirror, a jump to the middle while the page was
+    // still building its cards (lib/cardVisibility.ts): the card being read moved 106-250px within 3s
+    // without this, 0.7-0.9px with it.
     const retake = () => {
       cancelAnimationFrame(frame)
-      frame = requestAnimationFrame(() => take.current())
+      frame = requestAnimationFrame(() => {
+        hold.current()
+        take.current()
+      })
     }
     // Still scrolling: the repaint waits for the page to sit still. And a scroll the restore did not make
     // ends it.
