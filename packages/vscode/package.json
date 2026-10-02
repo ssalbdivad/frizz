@@ -278,6 +278,11 @@
           "default": true,
           "markdownDescription": "Let Frizz's agents see what you have in front of you in this window when they need it: the file you are in, what you have selected and its text, your open tabs, and the editor's errors and warnings — so you can ask about \"this\" without pasting it. Turn it off to keep the editor to yourself."
         },
+        "frizz.notify": {
+          "type": "boolean",
+          "default": true,
+          "markdownDescription": "Show a notification when a thread in this window's Frizz project needs you — a question, a request to approve, a finished turn — while the Frizz sidebar is out of sight. Only the window you used last shows it."
+        },
         "frizz.useSidebar": {
           "type": "boolean",
           "default": true,

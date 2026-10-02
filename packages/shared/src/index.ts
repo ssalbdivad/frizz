@@ -5699,7 +5699,7 @@ export type BoardMeta = z.infer<typeof BoardMeta>
 // ── The editor bridge's wire (types and rationale: ./editor-protocol.ts, plans/vscode-extension.md) ──
 // The server validates every frame an editor sends with these; each is pinned to its plain type below.
 const EditorKindSchema = z.enum(["vscode", "cursor", "windsurf", "other"])
-const EditorWindowSummarySchema = z.object({ app: z.string(), kind: EditorKindSchema, acceptsOpens: z.boolean() }).strict()
+const EditorWindowSummarySchema = z.object({ app: z.string(), kind: EditorKindSchema, acceptsOpens: z.boolean(), extensionVersion: z.string().optional() }).strict()
 const EditorPath = z.string().min(1).max(EDITOR_MAX_PATH)
 const EditorLine = z.number().int().min(1).max(10_000_000)
 export const EditorComposeInputSchema = z.object({
@@ -5764,6 +5764,7 @@ export const EditorClientMessageSchema = z.discriminatedUnion("t", [
   z.object({ t: z.literal("result"), id: z.string().min(1).max(200), ok: z.boolean(), error: z.string().max(1000).optional() }).strict(),
   z.object({ t: z.literal("compose"), id: z.string().min(1).max(200), item: EditorComposeInputSchema }).strict(),
   EditorSnapshotSchema,
+  z.object({ t: z.literal("listen"), attention: z.boolean() }).strict(),
 ])
 // Both directions, so neither the plain types nor the schemas can drift without a type error here.
 type Same<A, B> = [A] extends [B] ? ([B] extends [A] ? true : false) : false

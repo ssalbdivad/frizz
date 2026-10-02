@@ -37,6 +37,18 @@ export const EDITOR_COMPOSE_MAX_TEXT = 64 * 1024
 export const EDITOR_FEATURES = {
   /** The server takes `editor` frames (EditorSnapshot) and answers the workers' `editorState` with them. */
   editorState: "editor-state",
+  /**
+   * The page this server serves can live in an editor's sidebar (`?embed=vscode`, packages/web lib/
+   * embed.ts). A server without it serves a page that never says `frizz:ready` there, and the sidebar
+   * says to update Frizz rather than that it is still loading. `editor-state` came after embed mode, so
+   * a server naming only that one has it too.
+   */
+  sidebar: "sidebar",
+  /**
+   * The server sends `attention` (EditorAttention) when a thread of a project a window has open comes to
+   * rest needing the human — to ONE window, the one the human was in last.
+   */
+  attention: "attention",
 } as const
 export type EditorFeature = (typeof EDITOR_FEATURES)[keyof typeof EDITOR_FEATURES]
 
@@ -228,7 +240,19 @@ export interface EditorSnapshot {
   problems: { errors: number; warnings: number }
 }
 
-export type EditorClientMessage = EditorHello | EditorState | EditorResult | EditorCompose | EditorSnapshot
+/**
+ * What this window wants to be told beyond v1 — sent only to a server whose welcome names
+ * EDITOR_FEATURES.attention, once after the welcome and again when it changes. `attention`: this window
+ * shows a notification when a thread needs the human (the extension's `frizz.notify` setting). A window
+ * that never says so — an older extension, or one with the setting off — is never the one a thread's
+ * notification goes to, so it cannot swallow one another window would have shown.
+ */
+export interface EditorListen {
+  t: "listen"
+  attention: boolean
+}
+
+export type EditorClientMessage = EditorHello | EditorState | EditorResult | EditorCompose | EditorSnapshot | EditorListen
 
 // ── server → extension ─────────────────────────────────────────────────────────────────────────────
 
@@ -284,7 +308,38 @@ export interface EditorHeartbeat {
   t: "hb"
 }
 
-export type EditorServerMessage = EditorWelcome | EditorOpen | EditorFocus | EditorComposed | EditorProjects | EditorHeartbeat
+/** What a thread that came to rest needs from the human, most pressing first (shared queueUrgency's reasons). */
+export type EditorAttentionNeeds = "terminal" | "approval" | "question" | "stopped" | "limit" | "ready"
+
+/**
+ * A thread of a project this window has open came to rest needing the human — it entered the queue
+ * (board.ts notifyNeedsYou's `needs-decision`, the edge the page's own notifications use). Sent to ONE
+ * window: of those that said `listen {attention: true}` and have the project open, the one the human was
+ * in last. The extension shows it unless the Frizz sidebar is in sight (it shows the card already).
+ */
+export interface EditorAttention {
+  t: "attention"
+  projectId: string
+  /** The fields the page names a thread by (groups.ts displayTitle), so the notification says what the board says. */
+  thread: EditorAttentionThread
+  needs: EditorAttentionNeeds
+  /** One line of what it asks or said last, as the page's own notification reads. */
+  body?: string
+}
+
+export interface EditorAttentionThread {
+  id: string
+  title: string
+  aiTitle?: string
+  titleAuto?: boolean
+  titleLocked?: boolean
+  titleNamed?: boolean
+  spawnedAt?: string
+  backend?: string
+  runtime?: string
+}
+
+export type EditorServerMessage = EditorWelcome | EditorOpen | EditorFocus | EditorComposed | EditorProjects | EditorHeartbeat | EditorAttention
 
 /** What a Frizz page knows about connected editor windows (`editorWindows`, and the `editors` event). */
 export interface EditorWindowSummary {
@@ -292,6 +347,8 @@ export interface EditorWindowSummary {
   kind: EditorKind
   /** False when the window turned file opens off. */
   acceptsOpens: boolean
+  /** The Frizz extension's build in that window (its hello's `extensionVersion`: `0.1.0+1a2b3c4d`). */
+  extensionVersion?: string
 }
 
 /** One editor window as a worker reads it (`editorState`). */

@@ -43,3 +43,9 @@ test("a command with no connection says the connection's own reason, not that Fr
   assert.equal(notConnectedMessage({ kind: "offline", reason: "Frizz isn't running." }), "Frizz isn't running.", "when it really is not running, it says so")
   assert.equal(notConnectedMessage({ kind: "connecting" }), "Still connecting to Frizz. Try again in a moment.")
 })
+
+test("the tooltip's last line names the extension's build, in every state", () => {
+  assert.equal(statusView(connected, [], "0.1.0+1a2b3c4d").tooltip, "Click to show Frizz.\nFrizz extension 0.1.0+1a2b3c4d")
+  assert.equal(statusView({ kind: "offline", reason: "Frizz isn't running." }, [], "0.1.0+1a2b3c4d-dirty").tooltip, "Frizz isn't running. Click to try again.\nFrizz extension 0.1.0+1a2b3c4d-dirty")
+  assert.equal(statusView({ kind: "connecting" }, []).tooltip, "Looking for Frizz…", "no build named, no line")
+})

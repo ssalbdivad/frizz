@@ -110,8 +110,19 @@ export const HINT = {
   actions: [{ action: "reload", label: "Reload" }, { action: "browser", label: "Open in browser", secondary: true }],
 } as const
 
-/** The iframe of Frizz at `url` (whose origin is `origin`), and the relay. */
-export function frameDocument(input: { nonce: string; url: string; origin: string }): string {
+/**
+ * The bar's words when the Frizz the frame reached is one from before the sidebar (its editor connection
+ * says so — sidebar.ts SidebarHost.pageSupport): its page will never say it is ready, and "hasn't finished
+ * loading" sent the human to wait, or to Reload, for something that was never coming.
+ */
+export const HINT_OLD_FRIZZ = "This Frizz is older than the sidebar. Update Frizz to use it here, or open it in your browser."
+
+/**
+ * The iframe of Frizz at `url` (whose origin is `origin`), and the relay. `hint`: the bar's words, shown
+ * from the first paint — for a Frizz already known to predate the sidebar, rather than a message posted
+ * at a document whose relay may not be listening yet.
+ */
+export function frameDocument(input: { nonce: string; url: string; origin: string; hint?: string }): string {
   const { url, origin } = input
   if (!safeOrigin(origin) || new URL(url).origin !== origin) throw new Error(`refusing to frame ${url} as ${origin}`)
   return `<!doctype html>
@@ -123,7 +134,7 @@ export function frameDocument(input: { nonce: string; url: string; origin: strin
 </head>
 <body>
 <div class="frame">
-<div class="hint" id="hint" role="status" hidden><p>${escapeHtml(HINT.text)}</p><div class="actions">${buttons(HINT.actions)}</div></div>
+<div class="hint" id="hint" role="status"${input.hint ? "" : " hidden"}><p id="hint-text">${escapeHtml(input.hint ?? HINT.text)}</p><div class="actions">${buttons(HINT.actions)}</div></div>
 <iframe id="frizz" title="Frizz" src="${escapeHtml(url)}" allow="clipboard-read; clipboard-write; local-network-access"></iframe>
 </div>
 <script nonce="${input.nonce}">
@@ -131,6 +142,7 @@ export function frameDocument(input: { nonce: string; url: string; origin: strin
   const FRIZZ = ${JSON.stringify(origin)}
   const frame = document.getElementById("frizz")
   const hint = document.getElementById("hint")
+  const hintText = document.getElementById("hint-text")
   window.addEventListener("message", (event) => {
     const data = event.data
     if (event.source === frame.contentWindow) {
@@ -141,6 +153,7 @@ export function frameDocument(input: { nonce: string; url: string; origin: strin
     if (!data || typeof data !== "object") return
     if (data.view === "hint") {
       hint.hidden = !data.show
+      if (typeof data.text === "string") hintText.textContent = data.text
       return
     }
     if (typeof data.type !== "string" || !data.type.startsWith("frizz:")) return
