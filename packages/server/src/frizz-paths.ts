@@ -128,6 +128,23 @@ function supersededByInstall(root: string, platformData: string, exists: (path: 
   return !exists(join(root, "registry.json")) && exists(join(platformData, "registry.json"))
 }
 
+/**
+ * A `~/.frizz` with no registry never outranks an XDG_DATA_HOME somebody SET.
+ *
+ * Setting XDG_DATA_HOME is how a harness isolates a throwaway Frizz, and its fresh temp root has no
+ * registry yet — so supersededByInstall cannot fire, and the legacy rule used to hand the harness the
+ * REAL `~/.frizz` instead. On 2026-10-02 `scripts/verify-dev-remote.ts` booted a test board that way;
+ * `~/.frizz` existed only as agent scratch debris, the board wrote its registry into it, and that
+ * registry made `~/.frizz` an install: the live board re-resolved its root on the next lookup, saw
+ * one throwaway project, and answered 404 to every worker's `/_frizz/<project>/rpc/…` call.
+ *
+ * A real legacy install always has a registry (every launch writes one), so this only ever passes
+ * over debris; a `~/.frizz` with a registry still wins whatever XDG says.
+ */
+function yieldsToExplicitData(root: string, explicitData: string | undefined, exists: (path: string) => boolean): boolean {
+  return explicitData !== undefined && !exists(join(root, "registry.json"))
+}
+
 /** An XDG variable counts only when it is SET and ABSOLUTE; the spec says to ignore relative values. */
 function xdg(env: NodeJS.ProcessEnv, name: string): string | undefined {
   const value = env[name]
@@ -225,7 +242,12 @@ export function frizzPaths(options: FrizzPathOptions = {}): FrizzPaths {
   }
 
   const legacyRoot = legacyFrizzRoot(home)
-  if (exists(legacyRoot) && !isStrayBoard(legacyRoot, exists) && !supersededByInstall(legacyRoot, resolved.data, exists)) {
+  if (
+    exists(legacyRoot) &&
+    !isStrayBoard(legacyRoot, exists) &&
+    !supersededByInstall(legacyRoot, resolved.data, exists) &&
+    !yieldsToExplicitData(legacyRoot, explicit.data, exists)
+  ) {
     return { data: legacyRoot, state: legacyRoot, cache: legacyRoot, legacy: true }
   }
   return resolved
