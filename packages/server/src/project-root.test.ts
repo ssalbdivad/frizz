@@ -1,5 +1,5 @@
 import assert from "node:assert/strict"
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs"
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, unlinkSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { test } from "node:test"
@@ -233,7 +233,9 @@ test("the home directory is recognised even when it is reached through a symlink
     mkdirSync(child, { recursive: true })
     assert.equal(isHomeDirectory(child, real), false, "a directory inside home is not home")
   } finally {
-    rmSync(link, { force: true })
+    // unlinkSync, not rmSync: Node 25's rmSync follows a link to a directory and throws ERR_FS_EISDIR
+    // (nodejs/node#61040), which failed this test in its cleanup after every assertion had passed.
+    unlinkSync(link)
     rmSync(real, { recursive: true, force: true })
   }
 })

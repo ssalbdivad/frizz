@@ -1,4 +1,4 @@
-import { chmodSync, lstatSync, mkdirSync, rmSync, writeFileSync } from "node:fs"
+import { chmodSync, lstatSync, mkdirSync, rmSync, unlinkSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { frizzTempDir } from "./frizz-paths.ts"
@@ -61,11 +61,13 @@ function unlinkDirectChild(parent: string, filename: string): boolean {
   if (!isDirectDirectory(parent)) return pathAbsent(parent)
   const child = join(parent, filename)
   try {
-    // rm/unlink of the direct child itself does not follow a child symlink. Parent validation above
-    // prevents a poisoned directory symlink from redirecting recovery outside Frizz-owned roots.
-    rmSync(child, { force: true })
-  } catch {
-    return false
+    // unlink removes the direct child itself and never follows a child symlink. Not rmSync: on Node
+    // 23.0–24.13.0 and 25.0–25.3.x it looks through a link (nodejs/node#61040) — EISDIR on a link to a
+    // directory, a silent no-op on a dangling one. Parent validation above prevents a poisoned
+    // directory symlink from redirecting recovery outside Frizz-owned roots.
+    unlinkSync(child)
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "ENOENT") return false
   }
   return pathAbsent(child)
 }

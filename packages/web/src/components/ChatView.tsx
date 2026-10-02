@@ -42,7 +42,8 @@ import { MobileAnswerSheet } from "./MobileAnswerSheet.tsx"
 import { PhoneAnswerBar, PhoneQuestionsContext, type PhoneQuestions } from "./PhoneQuestionCards.tsx"
 import { RegisteredAnswerSheet } from "./RegisteredAnswerSheet.tsx"
 import { sendEagerFollowUp } from "../lib/eagerComposerSubmission.ts"
-import { limitResumeClock } from "../lib/activityTime.ts"
+import { limitPauseResume, limitPauseTitle } from "../lib/limitPause.ts"
+import { STALLED_RETRY_MESSAGE } from "../lib/retrySession.ts"
 import { useUnqueueFollowUp, useUnqueueSupported } from "../lib/unqueueFollowUp.ts"
 import { useFailedDeliveryActions } from "../lib/failedDelivery.ts"
 import { useDeliverQueuedNow, useDeliverQueuedNowSupported } from "../lib/deliverQueuedNow.ts"
@@ -4181,11 +4182,7 @@ export function ProviderFaultCard({
 // credential is fine and the recovery is TIME, not an action. So the card leads with information —
 // when the window comes back, and that frizz will pick the thread up itself — and keeps a manual
 // continue as the secondary, for the operator who has capacity elsewhere and doesn't want to wait.
-export function LimitPauseCard({ slug, sessionId, pause }: { slug: string; sessionId: string | undefined; pause: NonNullable<ThreadViewData["limitPause"]> }) {
-  // Only Claude and Codex report a limit window Frizz can read; an ACP agent's limits stay inside its
-  // own CLI, so a pause attributed to one is labelled generically rather than crashing on the lookup.
-  const label = pause.backend === "acp" ? "The agent" : PROVIDER_LABEL[pause.backend]
-  const which = pause.window === "weekly" ? "weekly limit" : pause.window === "session" ? "session limit" : "usage limit"
+export function LimitPauseCard({ slug, pause }: { slug: string; sessionId: string | undefined; pause: NonNullable<ThreadViewData["limitPause"]> }) {
   const [continuing, setContinuing] = useState(false)
   const queryClient = useQueryClient()
   // "Continue now" is a manual override of the auto-resume — a turn-starting action exactly like a
@@ -4196,28 +4193,29 @@ export function LimitPauseCard({ slug, sessionId, pause }: { slug: string; sessi
     setContinuing(true)
     // The message is a non-empty constant, so `started` is always true here; the reset-on-false is a
     // belt-and-suspenders that keeps the button from sticking disabled if that ever changes.
-    const started = sendEagerFollowUp(queryClient, slug, "Continue exactly where you left off.", {
+    const started = sendEagerFollowUp(queryClient, slug, STALLED_RETRY_MESSAGE, {
       onSuccess: () => { setContinuing(false); showToast("Continuing…") },
       onRollback: () => setContinuing(false),
       failureToast: (m) => `Continue failed: ${m.slice(0, 80)}`,
     })
     if (!started) setContinuing(false)
   }
+  return <LimitPauseNotice pause={pause} onContinue={continueNow} continuing={continuing} />
+}
+
+/** THE pause card itself, with no opinion on how "Continue now" reaches the thread — the drawer sends
+ *  through the page's own project (LimitPauseCard above), a queue card through the card's project
+ *  (AllQueuesCard). One component, so a paused thread reads identically in the drawer and in the queue. */
+export function LimitPauseNotice({ pause, onContinue, continuing }: { pause: NonNullable<ThreadViewData["limitPause"]>; onContinue: () => void; continuing: boolean }) {
   return (
-    <TranscriptCard data-limit-pause tone="caution" icon={Hourglass} label={`Paused by the ${label} ${which}`}>
+    <TranscriptCard data-limit-pause tone="caution" icon={Hourglass} label={limitPauseTitle(pause)}>
       {/* The provider's own "You've hit your session limit · resets …" line sits directly above this
           card (unlike an auth error, it is informative, so transcript.ts keeps its bubble). So this
           card says only what THAT line cannot: what frizz is going to do about it. */}
-      <span className={CARD_BODY}>
-        {pause.autoResume
-          ? pause.resumesAt
-            ? `Continuing automatically at ${limitResumeClock(pause.resumesAt)}.`
-            : "Continuing automatically once the window resets."
-          : "Continue it whenever you have capacity again."}
-      </span>
+      <span className={CARD_BODY}>{limitPauseResume(pause)}</span>
       <CardActions>
         <button
-          onClick={continueNow}
+          onClick={onContinue}
           disabled={continuing}
           onMouseDown={(e) => e.preventDefault()}
           className={`disabled:opacity-45 ${CARD_PRIMARY_ACTION}`}

@@ -1,6 +1,6 @@
 import { useRef, useState } from "react"
 import { useQuery, useQueryClient } from "@tanstack/react-query"
-import { Loader2 } from "lucide-react"
+import { RotateCw } from "lucide-react"
 import type { AccountBackend, ProviderAuth, ProviderQuota, QuotaWindow } from "@frizz/shared"
 import { rpc } from "../api/rpc.ts"
 import { ProviderMark } from "./ProviderMark.tsx"
@@ -28,8 +28,10 @@ import { PROVIDER_LABEL } from "../lib/signIn.ts"
 // The server keeps the reading warm on its own heartbeat (refreshClaudeQuotaInBackground), so
 // this poll just reads that warm cache — a cheap local RPC, no provider round-trip — and a 30s cadence
 // keeps the chip tracking the cache within half a minute instead of drifting minutes stale during a
-// fast burn. An UNAVAILABLE read re-polls at 15s (a blip should self-heal in seconds), and opening a
-// chip's popover forces a fresh read of both quota and auth — the popover is the recheck.
+// fast burn. An UNAVAILABLE read re-polls at 15s (a blip should self-heal in seconds). Opening a chip's
+// popover re-reads that cache and auth; its refresh button is the LIVE recheck (`force`), which is the
+// only read that reaches past the endpoint's rate-limit window — server-side it runs the `claude -p
+// /usage` CLI then, ~8s, which is why opening the popover alone does not.
 
 // Every quota/auth request carries an abort deadline. Without one, a single response the server never
 // finishes (a dev-server restart severing an in-flight request) leaves the fetch pending FOREVER:
@@ -142,11 +144,11 @@ export function QuotaChips() {
     refetchOnWindowFocus: true,
   })
 
-  const recheck = (backend: AccountBackend) => {
+  const recheck = (backend: AccountBackend, force: boolean) => {
     if (recheckInFlight.current) return
     setRechecking(true)
     const request = Promise.all([
-      rpc.quota({ force: backend === "claude" }, { signal: deadline(RECHECK_TIMEOUT_MS) })
+      rpc.quota({ force: force && backend === "claude" }, { signal: deadline(force ? RECHECK_TIMEOUT_MS : POLL_TIMEOUT_MS) })
         .then((snapshot) => queryClient.setQueryData(["quota"], snapshot)),
       queryClient.refetchQueries({ queryKey: ["authStatus"] }),
     ]).then(() => {}).catch(() => {})
@@ -165,8 +167,8 @@ export function QuotaChips() {
     // chip (mark → percentage) is deliberately half of it — that is what keeps each mark reading as
     // one pill rather than four loose glyphs.
     <div data-quota-bar className={`flex shrink-0 items-center gap-3 ${QUOTA_READING}`}>
-      <QuotaChip backend="claude" quota={quota.data?.claude} auth={auth.data?.claude} email={auth.data?.emails?.claude} loading={quota.isLoading} fetching={quota.isFetching || rechecking} onRecheck={() => recheck("claude")} />
-      <QuotaChip backend="codex" quota={quota.data?.codex} auth={auth.data?.codex} email={auth.data?.emails?.codex} loading={quota.isLoading} fetching={quota.isFetching || rechecking} onRecheck={() => recheck("codex")} />
+      <QuotaChip backend="claude" quota={quota.data?.claude} auth={auth.data?.claude} email={auth.data?.emails?.claude} loading={quota.isLoading} fetching={quota.isFetching || rechecking} onRecheck={(force) => recheck("claude", force)} />
+      <QuotaChip backend="codex" quota={quota.data?.codex} auth={auth.data?.codex} email={auth.data?.emails?.codex} loading={quota.isLoading} fetching={quota.isFetching || rechecking} onRecheck={(force) => recheck("codex", force)} />
     </div>
   )
 }
@@ -194,7 +196,7 @@ function QuotaChip({
   email: string | undefined
   loading: boolean
   fetching: boolean
-  onRecheck: () => void
+  onRecheck: (force: boolean) => void
 }) {
   const providerLabel = PROVIDER_LABEL[backend]
 
@@ -212,9 +214,8 @@ function QuotaChip({
     <>
       <Popover
         onOpenChange={(open) => {
-          // Opening the chip IS the recheck. This is a true server-side cache bypass, not a replay of
-          // the last cached failure with a decorative spinner.
-          if (open) onRecheck()
+          // Opening re-reads the server's warm cache; the refresh button below is the live recheck.
+          if (open) onRecheck(false)
         }}
       >
         <PopoverTrigger asChild>
@@ -233,7 +234,7 @@ function QuotaChip({
           </button>
         </PopoverTrigger>
         {/* Drops DOWN from the row, which sits at the top of the sidebar column. */}
-        <PopoverContent side="bottom" align="start" className="w-[min(15rem,calc(100vw-1.5rem))] p-3 text-[11px] leading-relaxed text-fg">
+        <PopoverContent side="bottom" align="start" onOpenAutoFocus={(event) => event.preventDefault()} className="w-[min(15rem,calc(100vw-1.5rem))] p-3 text-[11px] leading-relaxed text-fg">
           {/* The IDENTITY block: who this provider is, which plan, and which account — one unit, held
               together by its own tight internal leading and separated from the numbers below by mb-2.
               Measured cap-band gaps: 10.9px inside the block vs 18.9px to the first window row, so the
@@ -244,7 +245,20 @@ function QuotaChip({
               <ProviderMark backend={backend} />
               <span>{providerLabel}</span>
               {quota?.planType && <span className="text-muted-70">· {cap(quota.planType)} plan</span>}
-              {fetching && <Loader2 size={11} className="animate-spin text-muted-60" aria-label="Rechecking" />}
+              {/* THE MANUAL REFRESH: a true server-side cache bypass, which for Claude reaches past the
+                  usage endpoint's rate-limit window through the CLI. The mark spins while ANY read is in
+                  flight, so it doubles as the old loading spinner. `-my-1` keeps the 20px hover square
+                  from growing the 11px header line. */}
+              <button
+                type="button"
+                aria-label={`Refresh ${providerLabel} quota`}
+                aria-busy={fetching}
+                title="Refresh"
+                onClick={() => onRecheck(true)}
+                className="-my-1 -mr-1 ml-auto flex size-5 shrink-0 items-center justify-center rounded text-muted-60 outline-none transition-colors hover:bg-elevated hover:text-fg focus-visible:ring-1 focus-visible:ring-border-strong"
+              >
+                <RotateCw size={11} className={fetching ? "animate-spin" : undefined} />
+              </button>
             </div>
             {/* WHICH account this is. Sits above the window breakdown because it is an AUTH fact, not a
                 quota one — "am I on the right account?" is asked while reading the numbers, not after.
