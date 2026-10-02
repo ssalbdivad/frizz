@@ -77,6 +77,9 @@ import {
   ThreadProfileOptionsInput,
   ThreadProfileOptionsResult,
   ThreadSkillsInput,
+  UserCommandsResult,
+  SaveUserCommandInput,
+  DeleteUserCommandInput,
   ThreadSkillsResult,
   type ThreadSkill,
   SetThreadProfileInput,
@@ -241,6 +244,7 @@ import { pickDirectory, pickImageFile } from "./directory-picker.ts"
 import { completePath } from "./path-complete.ts"
 import Database from "./sqlite.ts"
 import { projectStateDir } from "./frizz-paths.ts"
+import { deleteUserCommand, frizzCommandsDir, listUserCommands, saveUserCommand } from "./user-commands.ts"
 
 const SlugInput = z.object({ slug: ThreadSlug }).strict()
 
@@ -3277,6 +3281,26 @@ export function createRouter(ctx: AppContext) {
         const row = ctx.storage.getSession(input.slug)
         if (!row) throw new Error(`thread ${input.slug} is not editable`)
         return threadProfileOptions(row.backend, row.backend === "claude" ? await readClaudeModels({ claudeBin: ctx.claudeBin, cwd: workDir }) : undefined)
+      },
+    }),
+
+    // USER SLASH COMMANDS — the markdown prompts in Frizz's own folder, this project's `.agents/commands`
+    // and `~/.agents/commands` (user-commands.ts). Read fresh on every ask; the composer offers them beside
+    // the harness's skills and expands them itself, so they work on every backend.
+    userCommands: query({
+      output: UserCommandsResult,
+      handler: async () => ({ commands: await listUserCommands(workDir), frizzDir: frizzCommandsDir() }),
+    }),
+    saveUserCommand: mutation({
+      input: SaveUserCommandInput,
+      handler: async ({ input }) => {
+        await saveUserCommand(input)
+      },
+    }),
+    deleteUserCommand: mutation({
+      input: DeleteUserCommandInput,
+      handler: async ({ input }) => {
+        await deleteUserCommand(input.name)
       },
     }),
 

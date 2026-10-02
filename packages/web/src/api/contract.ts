@@ -54,6 +54,9 @@ import type {
   SetThreadPermissionResult,
   ThreadProfileOptionsInput,
   ThreadSkillsInput,
+  UserCommandsResult,
+  SaveUserCommandInput,
+  DeleteUserCommandInput,
   ThreadSkillsResult,
   ThreadProfileOptionsResult,
   SetThreadProfileInput,
@@ -232,6 +235,9 @@ export interface Api {
   // The composer's `/` typeahead: the thread's invocable skills, as its own harness reports them.
   // Any failure (no live session, a legacy row) means "no suggestions", never a surfaced error.
   threadSkills(input: ThreadSkillsInput): Promise<ThreadSkillsResult>
+  userCommands(): Promise<UserCommandsResult>
+  saveUserCommand(input: SaveUserCommandInput): Promise<void>
+  deleteUserCommand(input: DeleteUserCommandInput): Promise<void>
   setThreadProfile(input: SetThreadProfileInput): Promise<SetThreadProfileResult>
   upgradeThreadModel(input: UpgradeThreadModelInput): Promise<UpgradeThreadModelResult>
   markRead(input: { slug: string }): Promise<void>
@@ -494,6 +500,9 @@ export const PROCEDURES = {
   setThreadPermission: "mutation",
   threadProfileOptions: "query",
   threadSkills: "query",
+  userCommands: "query",
+  saveUserCommand: "mutation",
+  deleteUserCommand: "mutation",
   setThreadProfile: "mutation",
   upgradeThreadModel: "mutation",
   markRead: "mutation",

@@ -5052,7 +5052,9 @@ export type ThreadProfileOptionsResult = z.infer<typeof ThreadProfileOptionsResu
 // renders "project" the same whether Claude called it `projectSettings` or Codex called it `repo`. It
 // is OPTIONAL, and deliberately so: the promise is "show it if we know it", and a harness that reports
 // a scope frizz has no mapping for must degrade to an unlabelled row rather than to a wrong label.
-export const ThreadSkillSource = z.enum(["project", "user", "builtin", "plugin"])
+// `frizz` is never a harness's answer: it labels a USER COMMAND written in Frizz's own editor, which the
+// composer offers in the same menu (UserCommand below).
+export const ThreadSkillSource = z.enum(["project", "user", "builtin", "plugin", "frizz"])
 export type ThreadSkillSource = z.infer<typeof ThreadSkillSource>
 export const ThreadSkill = z.object({
   name: z.string().min(1).max(512),
@@ -5069,6 +5071,86 @@ export const ThreadSkillsInput = z.object({ slug: ThreadSlug }).strict()
 export type ThreadSkillsInput = z.infer<typeof ThreadSkillsInput>
 export const ThreadSkillsResult = z.object({ skills: z.array(ThreadSkill).max(1024) }).strict()
 export type ThreadSkillsResult = z.infer<typeof ThreadSkillsResult>
+
+// USER SLASH COMMANDS — a markdown file whose body is a prompt, invoked by its file name (`commit.md` is
+// `/commit`). The same format Claude Code and Cursor read: an optional frontmatter block carrying
+// `description` and `argument-hint`, then the prompt, where `$ARGUMENTS` stands for whatever was typed
+// after the name. Frizz reads them from three places, first match winning:
+//
+// - `frizz` — `<Frizz data home>/commands/`, the ones written in Frizz's own editor. The only kind it edits.
+// - `project` — `<project>/.agents/commands/`, a repo's own, checked in beside its skills.
+// - `global` — `~/.agents/commands/`, the agent-neutral home every agent tool on the machine can share.
+//
+// FRIZZ expands them, not the harness, so `/commit` means the same thing on a Claude, Codex or ACP
+// thread — see expandUserCommand.
+export const UserCommandSource = z.enum(["frizz", "project", "global"])
+export type UserCommandSource = z.infer<typeof UserCommandSource>
+// A file name is a command name: what can follow a `/` and survive every filesystem.
+export const UserCommandName = z.string().regex(/^[A-Za-z0-9][A-Za-z0-9._:-]{0,63}$/, "Use letters, digits, '-', '_', '.' or ':' (up to 64), starting with a letter or digit")
+export const UserCommand = z.object({
+  name: UserCommandName,
+  description: z.string().max(1024),
+  argumentHint: z.string().max(256).optional(),
+  body: z.string().max(64 * 1024),
+  source: UserCommandSource,
+  path: z.string(),
+}).strict()
+export type UserCommand = z.infer<typeof UserCommand>
+export const UserCommandsResult = z.object({
+  commands: z.array(UserCommand).max(1024),
+  // Where a new Frizz command is written, for the editor to say.
+  frizzDir: z.string(),
+}).strict()
+export type UserCommandsResult = z.infer<typeof UserCommandsResult>
+export const SaveUserCommandInput = z.object({
+  name: UserCommandName,
+  description: z.string().max(1024),
+  argumentHint: z.string().max(256).optional(),
+  body: z.string().min(1).max(64 * 1024),
+  // Set when an edit RENAMES a command: that file is removed once the new one is written.
+  previousName: UserCommandName.optional(),
+}).strict()
+export type SaveUserCommandInput = z.infer<typeof SaveUserCommandInput>
+export const DeleteUserCommandInput = z.object({ name: UserCommandName }).strict()
+export type DeleteUserCommandInput = z.infer<typeof DeleteUserCommandInput>
+
+// The text a user command is DELIVERED as. The prompt goes to the agent wrapped in a tag naming the
+// command and what was typed after it, so any surface that reads the message back — the transcript, a
+// queued bubble, a retry — can show `/commit fix the tests` instead of the whole expanded prompt.
+const USER_COMMAND_OPEN = /^<frizz-command name="([^"]+)"(?: args="([^"]*)")?>\n/
+const USER_COMMAND_CLOSE = "\n</frizz-command>"
+const escapeAttr = (text: string) => text.replace(/&/g, "&amp;").replace(/"/g, "&quot;").replace(/</g, "&lt;").replace(/\n/g, "&#10;")
+const unescapeAttr = (text: string) => text.replace(/&#10;/g, "\n").replace(/&lt;/g, "<").replace(/&quot;/g, "\"").replace(/&amp;/g, "&")
+
+/** The prompt `/name args` sends: `$ARGUMENTS` replaced by the arguments, or — when the prompt never
+ *  names them — the arguments appended on a line of their own, as Claude Code does. */
+export function expandUserCommand(command: Pick<UserCommand, "name" | "body">, args: string): string {
+  const body = command.body.trim()
+  const prompt = body.includes("$ARGUMENTS") ? body.replaceAll("$ARGUMENTS", args) : args ? `${body}\n\nARGUMENTS: ${args}` : body
+  return `<frizz-command name="${escapeAttr(command.name)}"${args ? ` args="${escapeAttr(args)}"` : ""}>\n${prompt}${USER_COMMAND_CLOSE}`
+}
+
+/** A draft that INVOKES a user command — `/name` as its first token, the rest of the first line and
+ *  anything after as the arguments — expanded; undefined when its first token names none. */
+export function expandUserCommandDraft(draft: string, commands: readonly Pick<UserCommand, "name" | "body">[]): string | undefined {
+  const m = /^\s*\/([^\s/]+)(?:[ \t]+([\s\S]*))?$/.exec(draft)
+  if (!m) return undefined
+  const command = commands.find((c) => c.name === m[1])
+  return command ? expandUserCommand(command, (m[2] ?? "").trim()) : undefined
+}
+
+/** What a delivered user command reads as to the human: `/name args`, plus anything the send appended
+ *  after the wrapper (attached context, file paths). Undefined for any other text. */
+export function userCommandDisplayText(text: string): string | undefined {
+  const open = USER_COMMAND_OPEN.exec(text)
+  if (!open) return undefined
+  const close = text.indexOf(USER_COMMAND_CLOSE, open[0].length)
+  if (close < 0) return undefined
+  const args = open[2] ? unescapeAttr(open[2]) : ""
+  const typed = `/${unescapeAttr(open[1]!)}${args ? ` ${args}` : ""}`
+  const after = text.slice(close + USER_COMMAND_CLOSE.length)
+  return after.trim() ? `${typed}${after}` : typed
+}
 
 export const SetThreadProfileInput = z.object({
   slug: ThreadSlug,

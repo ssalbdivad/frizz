@@ -63,6 +63,7 @@ const SKILL_SOURCE_LABEL: Record<NonNullable<ThreadSkill["source"]>, string> = {
   user: "global",
   builtin: "built-in",
   plugin: "plugin",
+  frizz: "frizz",
 }
 
 // Both typeahead menus' row inset: the textarea's 14px on the left, and 6px on the right because the
@@ -411,6 +412,12 @@ export function Composer({
   // that failed, which must read as "no suggestions", never as an error the operator has to dismiss).
   // Read by the menu AND the tint, so a draft restored with `/frizz-stack` in it lights up too.
   const [skillItems, setSkillItems] = useState<ThreadSkill[] | null>(null)
+  // A new source is a new list (a user command saved in Settings): forget the old one, re-ask on demand.
+  const [skillsFrom, setSkillsFrom] = useState(() => slashSuggest)
+  if (skillsFrom !== slashSuggest) {
+    setSkillsFrom(() => slashSuggest)
+    setSkillItems(null)
+  }
   const slashItems = useMemo(() => skillItems ?? [], [skillItems])
   const opensAt = draftStart(prose)
   // The textarea's collapsed selection (null while blurred or while a range is selected), refreshed on

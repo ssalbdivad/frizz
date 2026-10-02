@@ -1,6 +1,6 @@
 import { useContext, useMemo, useState, type ReactElement, type ReactNode } from "react"
 import { useSnapshot } from "valtio"
-import type { AccountBackend, ThreadSkill, ThreadView } from "@frizz/shared"
+import { expandUserCommandDraft, type AccountBackend, type ThreadSkill, type ThreadView } from "@frizz/shared"
 import { rpc } from "../api/rpc.ts"
 import { showToast, store } from "../store.ts"
 import { buildMessageWithContext } from "../lib/composerContext.ts"
@@ -24,6 +24,7 @@ import { LazyThreadBox } from "./LazyThreadBox.tsx"
 import { useIsMobile } from "../lib/mobile.ts"
 import { threadLifecycleAvailability } from "../lib/threadLifecycle.ts"
 import { PhoneDoneButton } from "./PhoneDoneButton.tsx"
+import { fetchUserCommands, mergeSlashItems, useUserCommands } from "../hooks/useUserCommands.ts"
 import type { PhoneBarApi } from "./Composer.tsx"
 
 // THE prompt box for a registered thread — the single block every "steer this thread" surface renders.
@@ -106,7 +107,14 @@ export function ThreadComposerBox({
   const controls = useThreadComposerControls(slug)
   const followUp = useEagerFollowUp(slug)
   const [signInFor, setSignInFor] = useState<AccountBackend | null>(null)
-  const slashSuggest = useMemo(() => () => fetchThreadSkills(slug), [slug])
+  const qc = useQueryClient()
+  const userCommands = useUserCommands().data?.commands
+  // The thread's harness skills and the operator's own user commands, as one menu (useUserCommands.ts).
+  const slashSuggest = useMemo(
+    () => () => Promise.all([fetchThreadSkills(slug), fetchUserCommands(qc, projectDir)]).then(([skills, commands]) => mergeSlashItems(skills, commands)),
+    // `userCommands` too: a command saved in Settings hands the box a new list, and the box re-asks.
+    [slug, qc, projectDir, userCommands],
+  )
   // `@` mentions offer every OTHER thread on the board — this one cannot usefully point at itself.
   const mentions = useMentionCandidates(slug)
   const ownMention = useOwnMention(slug)
@@ -125,7 +133,6 @@ export function ThreadComposerBox({
   // ⌘/Ctrl-Enter in an EMPTY box pushes the queued follow-up through — the queued bubble's ↑, from the
   // keyboard. Same gate as the forced send, plus a queued message in the transcript cache, read at
   // keypress time so this box does not re-render on every transcript push.
-  const qc = useQueryClient()
   const { deliverNow } = useDeliverQueuedNow(slug)
   const pushQueued = () => {
     const messages = qc.getQueryData<TranscriptData>(["transcript", slug])?.messages
@@ -172,8 +179,10 @@ export function ThreadComposerBox({
     }
     // Staged ⌘I context items ride the send: serialized into the text (before any trailing
     // attachment paths) and cleared with it — restored on a rejected send exactly like the draft.
+    // A USER COMMAND (`/commit fix the tests`) goes out as the prompt it names, expanded here so it means
+    // the same on every backend; the transcript reads it back as what was typed (messagePresentation.ts).
     const staged = takeContextItems(key)
-    const outgoing = buildMessageWithContext(text, staged, projectDir)
+    const outgoing = buildMessageWithContext(expandUserCommandDraft(text, userCommands ?? []) ?? text, staged, projectDir)
     const callbacks: EagerFollowUpCallbacks = {
       onOptimistic: clearMessage,
       // Re-sending words an earlier failure handed back replaces that failure's bubble — see
