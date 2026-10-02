@@ -2,6 +2,7 @@ import { type ReactNode } from "react"
 import { useSnapshot } from "valtio"
 import { store } from "../store.ts"
 import { ThreadComposerBox } from "./ThreadComposerBox.tsx"
+import type { PhoneBarApi } from "./Composer.tsx"
 
 // The bar under the chat/terminal is now JUST the follow-up composer — the Done button and the
 // ⋯ menu live in the workpane header (ThreadHeaderActions) next to the tabs. `ops` (the live
@@ -11,7 +12,8 @@ import { ThreadComposerBox } from "./ThreadComposerBox.tsx"
 // This is now a THIN wrapper around <ThreadComposerBox> — the same block the queue card renders.
 // Everything the two surfaces must agree on (the draft key, the `/login`/`/logout` intercept, the
 // model/effort footer, the status line) lives in that component.
-export function ThreadActionBar({ slug, ops }: { slug: string; onTerminal?: () => void; ops?: ReactNode }) {
+// `phoneBarOverride` passes straight through to the phone bar's answer seam (ThreadComposerBox).
+export function ThreadActionBar({ slug, ops, phoneBarOverride }: { slug: string; onTerminal?: () => void; ops?: ReactNode; phoneBarOverride?: (api: PhoneBarApi) => ReactNode }) {
   const snap = useSnapshot(store)
   const thread = snap.board?.threads.find((t) => t.id === slug)
 
@@ -38,6 +40,7 @@ export function ThreadActionBar({ slug, ops }: { slug: string; onTerminal?: () =
       // own reply box (AllQueuesCard: `shrink-0 px-5 pb-3 pt-0`) and as drawer-composer-footer-fixture.
       className="shrink-0 px-3 py-3"
       ops={ops}
+      phoneBarOverride={phoneBarOverride}
     />
   )
 }

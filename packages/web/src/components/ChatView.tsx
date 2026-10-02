@@ -40,9 +40,13 @@ import { WakeDivider } from "./WakeDivider.tsx"
 import { useLiveAnswering, type LiveAnswering } from "../lib/answering.ts"
 import { useIsMobile } from "../lib/mobile.ts"
 import { MobileAnswerSheet } from "./MobileAnswerSheet.tsx"
+import { PhoneAnswerBar, PhoneQuestionsContext, type PhoneQuestions } from "./PhoneQuestionCards.tsx"
+import { RegisteredAnswerSheet } from "./RegisteredAnswerSheet.tsx"
 import { sendEagerFollowUp } from "../lib/eagerComposerSubmission.ts"
-import { limitResumeClock } from "../lib/activityTime.ts"
+import { limitPauseResume, limitPauseTitle } from "../lib/limitPause.ts"
+import { STALLED_RETRY_MESSAGE } from "../lib/retrySession.ts"
 import { useUnqueueFollowUp, useUnqueueSupported } from "../lib/unqueueFollowUp.ts"
+import { useFailedDeliveryActions } from "../lib/failedDelivery.ts"
 import { useDeliverQueuedNow, useDeliverQueuedNowSupported } from "../lib/deliverQueuedNow.ts"
 import { useInnerHtml } from "../lib/innerHtml.ts"
 import { useLocalFileCodeLinks } from "../lib/localFileCode.ts"
@@ -55,6 +59,7 @@ import { isVisualizationThemeAck, visualizationThemeMessage } from "../lib/visua
 import { canAdoptThread } from "../lib/adoption.ts"
 import { THREAD_HEADER_CLASS, THREAD_HEADER_CONTAINER_CLASS, THREAD_HEADER_CONTROLS_CLASS, THREAD_HEADER_TITLE_CLASS } from "../lib/threadHeaderLayout.ts"
 import { ThreadActionBar } from "./ThreadActionBar.tsx"
+import { MobileThreadHeader } from "./MobileThreadHeader.tsx"
 import { HeaderActions } from "./HeaderActions.tsx"
 import { ThreadLifecycleFooter, StateButton } from "./ThreadLifecycleFooter.tsx"
 import { ThreadTitle } from "./ThreadTitle.tsx"
@@ -199,26 +204,37 @@ export function withoutLiveTranscriptBackgroundTools(messages: readonly ChatMess
 // canonical `scratch.md`. That document is gone (see dispatch.ts), and a tab strip whose only job was
 // to reach it is a control that now points at nothing — so the toggle, the Radix tab shell it needed,
 // and the per-thread persisted tab preference all go with it. The thread is its conversation.
+//
+// ON A PHONE (below 700px, in the drawer — the only way a phone opens a thread) the chrome is the phone's
+// own (mockup v2 §2): a 56px MobileThreadHeader in place of the two-row header and its icon strip, and NO
+// lifecycle footer — Snooze, Goal, the context reading and the maintenance verbs moved into the header's
+// ⋯ sheet, and the one lifecycle verb that matters at rest belongs to the bottom bar. The /full page (no
+// `onClose`) keeps the desktop chrome on every width; a phone never links to it.
 export function ThreadView({ slug, onStatusApplied, onClose, virtualized = false, showReturnToQueue = false }: { slug: string; onStatusApplied?: () => void; onClose?: () => void; virtualized?: boolean; showReturnToQueue?: boolean }) {
   const board = useBoard()
   const thread = threadBySlug(board, slug)
+  const phone = useIsMobile() && onClose !== undefined
   return (
     <div className="flex-1 min-h-0 flex flex-col">
-      <ThreadHeader slug={slug} onStatusApplied={onStatusApplied} onClose={onClose} showReturnToQueue={showReturnToQueue} />
+      {phone ? (
+        <MobileThreadHeader slug={slug} onClose={onClose} />
+      ) : (
+        <ThreadHeader slug={slug} onStatusApplied={onStatusApplied} onClose={onClose} showReturnToQueue={showReturnToQueue} />
+      )}
       {/* `@handle` mentions in the human's messages link to the threads they name (MentionLinks.tsx). A
           thread working in a worktree has its relative file links resolved there (lib/useMarkdown.ts
           CheckoutBaseContext). */}
       <MentionIndexProvider>
         <CheckoutBaseContext.Provider value={thread?.checkout?.dir ?? null}>
-          <ChatView slug={slug} virtualized={virtualized} />
+          <ChatView slug={slug} virtualized={virtualized} phone={phone} />
         </CheckoutBaseContext.Provider>
       </MentionIndexProvider>
-      {thread && <ThreadLifecycleFooter thread={thread} sticky safeArea onArchived={onStatusApplied} />}
+      {thread && !phone && <ThreadLifecycleFooter thread={thread} sticky safeArea onArchived={onStatusApplied} />}
     </div>
   )
 }
 
-function ChatView({ slug, virtualized }: { slug: string; virtualized: boolean }) {
+function ChatView({ slug, virtualized, phone = false }: { slug: string; virtualized: boolean; phone?: boolean }) {
   const board = useBoard()
   // The same just-sent overlay the rail rows wear (lib/steering.ts): a reply sets the thread to work the
   // instant it is committed, so the tail's rest card (a registered done, the rested card, a resting
@@ -231,6 +247,13 @@ function ChatView({ slug, virtualized }: { slug: string; virtualized: boolean })
   // never draws as both.
   const settledQuestions = useSettledQuestions(thread)
   const openQuestions = useMemo(() => openQuestionsOf(thread, settledQuestions), [thread, settledQuestions])
+  // ON A PHONE the registered cards are read-only and answering is a sheet (PhoneQuestionCards,
+  // RegisteredAnswerSheet), opened from the bottom bar's "Answer". Null off the phone page.
+  const phoneQuestions = useMemo<PhoneQuestions | null>(
+    () => (phone ? { numberOf: (id) => openQuestions.findIndex((q) => q.id === id) + 1 } : null),
+    [phone, openQuestions],
+  )
+  const [answerSheetOpen, setAnswerSheetOpen] = useState(false)
   const running = thread?.runtime === "running" || thread?.runtime === "spawning"
   const copyTerminalCommand = useCopyTerminalCommand(slug)
 
@@ -384,6 +407,7 @@ function ChatView({ slug, virtualized }: { slug: string; virtualized: boolean })
   return (
     <ThreadSlugContext.Provider value={slug}>
     <RegisteredAnsweringProvider thread={thread}>
+    <PhoneQuestionsContext.Provider value={phoneQuestions}>
     <div
       data-drawer-scroll-ready={q.isPending ? "false" : "true"}
       className="flex-1 min-h-0 flex flex-col overflow-hidden outline-none"
@@ -442,6 +466,7 @@ function ChatView({ slug, virtualized }: { slug: string; virtualized: boolean })
           earlierError={earlierError}
           loadEarlier={() => void loadEarlier()}
           jumpOverlay={jumpOverlay}
+          openAtLastMessage={phone && !running}
         />
       ) : (
       <>
@@ -630,10 +655,17 @@ function ChatView({ slug, virtualized }: { slug: string; virtualized: boolean })
         <ThreadActionBar
           slug={slug}
           onTerminal={copyTerminalCommand}
-          ops={<BackgroundOpsStrip slug={slug} transcriptShells={liveTranscriptShells} className="px-1 pt-1.5" />}
+          // The phone draws no ops rows under the prompt (mockup v2 §2): a sub-agent is already a row
+          // in the transcript and on the board, and the registered files and links are the ⋯ sheet's.
+          ops={phone ? undefined : <BackgroundOpsStrip slug={slug} transcriptShells={liveTranscriptShells} className="px-1 pt-1.5" />}
+          phoneBarOverride={phone && openQuestions.length > 0
+            ? (api) => <PhoneAnswerBar count={openQuestions.length} onAnswer={() => setAnswerSheetOpen(true)} onReply={api.editReply} />
+            : undefined}
         />
       </div>
+      {phone && answerSheetOpen && <RegisteredAnswerSheet questions={openQuestions} onClose={() => setAnswerSheetOpen(false)} />}
     </div>
+    </PhoneQuestionsContext.Provider>
     </RegisteredAnsweringProvider>
     </ThreadSlugContext.Provider>
   )
@@ -653,6 +685,10 @@ const ANCHOR_RESTORE_MS = 250
 // before the next lands, and a re-check while the reader or a restore holds the scroller.
 const EAGER_HISTORY_STEP_MS = 120
 const EAGER_HISTORY_RETRY_MS = 250
+// How long the phone's open-at-the-last-message landing holds its row at the pane top while the rows
+// around it measure (see VirtualizedThreadTranscript's initial scroll). A cold open measures every row
+// from its estimate, and markdown, code and images keep settling for several frames after mount.
+const OPEN_AT_MESSAGE_HOLD_MS = 900
 
 // Opt-in drift diagnostic: `localStorage["frizz.debugScroll"] = "1"`, then reload.
 //
@@ -868,6 +904,7 @@ function VirtualizedThreadTranscript({
   earlierError,
   loadEarlier,
   jumpOverlay,
+  openAtLastMessage = false,
 }: {
   slug: string
   transcriptRef: React.RefObject<HTMLDivElement | null>
@@ -896,6 +933,9 @@ function VirtualizedThreadTranscript({
   earlierError: string | null
   loadEarlier: () => void
   jumpOverlay: HTMLElement | null
+  // The phone opens a thread at rest on the START of its last message rather than the end of it — see
+  // the initial-scroll effect below. Read once, when the transcript first lands.
+  openAtLastMessage?: boolean
 }) {
   const projectDir = useProjectDir()
   const coalescedActivityMessages = useMemo(() => coalesceToolActivityMessages(messages), [messages])
@@ -1089,6 +1129,7 @@ function VirtualizedThreadTranscript({
   const readerAnchorRef = useRef<{ rowKey: string; viewportTop: number } | null>(null)
   const firstMessageKeyRef = useRef<string | undefined>(undefined)
   const anchorRestoreUntilRef = useRef(0)
+  const openHoldFrameRef = useRef(0)
 
   const requestEarlier = useCallback(() => {
     const scroller = transcriptRef.current
@@ -1144,7 +1185,54 @@ function VirtualizedThreadTranscript({
     const anchor = handoff?.candidates
       .map((candidate) => ({ candidate, index: rows.findIndex((row) => row.kind === "message" && row.message.sourceId === candidate.sourceId) }))
       .find((hit) => hit.index >= 0)
+    // THE PHONE OPENS A RESTED THREAD AT THE TOP OF ITS LAST MESSAGE (mockup v2, "Behaviour a still frame
+    // cannot show"). A handoff is written verdict-first, and on a 390pt screen a 40-line one opened at the
+    // tail puts the reader on its last bullet with the verdict 30 lines up. So at rest the phone lands the
+    // top of the newest thing the agent SAID at the top of the pane; a running thread still opens on the
+    // tail, where the live line is. `lastAgentIdx` is that message (lastAssistantIndex skips frizz's own
+    // event rows); if it draws no row of its own — a fence-only rest the resting card states — the last
+    // assistant row before it stands in, and with none the tail is still the answer. The fullscreen
+    // hand-off above outranks this: it is the reader's own place, carried over.
+    const lastMessageRow = !anchor && openAtLastMessage && lastAgentIdx >= 0
+      ? rows.reduce((found, row, index) => (row.kind === "message" && row.messageIndex <= lastAgentIdx && row.message.role === "assistant" && row.message.kind !== "event" ? index : found), -1)
+      : -1
     let frame = requestAnimationFrame(() => {
+      if (!anchor && lastMessageRow >= 0) {
+        // The fullscreen hand-off's two steps and its hold, aimed at a row's top instead of a remembered
+        // screen height: mount the row, release tail-follow, then re-align every frame while the rows
+        // around it correct from their estimates. The hold is longer than the hand-off's because nothing
+        // above this row has ever been measured on a cold open; a touch on the scroller ends it at once.
+        const rowKey = rows[lastMessageRow].key
+        virtualizer.scrollToIndex(lastMessageRow, { align: "start", behavior: "instant" })
+        followingTailRef.current = false
+        setAtEnd(false)
+        tailReadyRef.current = true
+        const until = performance.now() + OPEN_AT_MESSAGE_HOLD_MS
+        anchorRestoreUntilRef.current = until
+        // Its own frame chain, NOT `frame`: this effect re-runs (and cancels `frame`) whenever the row
+        // count moves, which on a cold open it does while the hold is still needed. Only unmount ends it.
+        const hold = () => {
+          const scroller = transcriptRef.current
+          if (!scroller || performance.now() >= until || performance.now() < readerScrollUntilRef.current) {
+            anchorRestoreUntilRef.current = 0
+            openHoldFrameRef.current = 0
+            // A last message shorter than the pane cannot reach its top: the landing clamps at the
+            // bottom, which IS the tail — so say so, or "Jump to latest" would sit over a reader who is
+            // already there until something else happened to re-run the tail reconciliation.
+            if (scroller && scroller.scrollHeight - scroller.clientHeight - scroller.scrollTop <= TAIL_FOLLOW_PX) {
+              followingTailRef.current = true
+              tailHeightRef.current = scroller.scrollHeight
+              setAtEnd(true)
+            }
+            return
+          }
+          const row = scroller.querySelector<HTMLElement>(`[data-transcript-row-key="${CSS.escape(rowKey)}"]`)
+          if (row) scroller.scrollTop += row.getBoundingClientRect().top - scroller.getBoundingClientRect().top
+          openHoldFrameRef.current = requestAnimationFrame(hold)
+        }
+        hold()
+        return
+      }
       if (!anchor) {
         virtualizer.scrollToEnd({ behavior: "instant" })
         setAtEnd(true)
@@ -1176,6 +1264,7 @@ function VirtualizedThreadTranscript({
     })
     return () => cancelAnimationFrame(frame)
   }, [alignToScreenTop, rows.length, slug, transcriptKey, virtualizer])
+  useEffect(() => () => cancelAnimationFrame(openHoldFrameRef.current), [])
 
   useLayoutEffect(() => {
     const anchor = pendingPrependAnchorRef.current
@@ -1768,7 +1857,7 @@ export function messageHeadIsTool(m: ChatMessage): boolean {
 // run instead of forcing a full STEP break on both sides. A BOUNDARY event is a section-break divider,
 // not a quiet label.
 function isMetaLabelMessage(m: ChatMessage): boolean {
-  return (m.kind === "event" && !m.boundary) || m.kind === "reasoning"
+  return (m.kind === "event" && !m.boundary && !m.commandOutput) || m.kind === "reasoning"
 }
 // Tail/head predicates for the tight-run spacer: a tool band OR a meta label. An event/reasoning
 // message is a single row, so its head and tail are the same meta label.
@@ -3207,7 +3296,63 @@ function SentContextBody({ body, items }: { body: string; items: SentContextItem
   )
 }
 
-function UserBubble({ text, rawText, queued, deliveryUnconfirmed, deliveryId, sourceId }: { text: string; rawText?: string; queued?: boolean; deliveryUnconfirmed?: boolean; deliveryId?: string; sourceId?: string }) {
+// A FAILED SEND's row, under its bubble: why it failed, then the operator's three ways out (see
+// lib/failedDelivery.ts for what each does and why none of them is automatic). Its own component so the
+// hooks behind the actions — one of which reads the board snapshot — mount only for a failed bubble,
+// never for every user bubble in the transcript.
+//
+// The actions need a thread to act on, so they render only inside ThreadSlugContext — the same
+// authorization boundary unqueue uses. Without one (a sub-agent's transcript) the error still shows.
+function FailedSendRow({ deliveryId, text, rawText, error }: { deliveryId: string; text: string; rawText: string; error?: string }) {
+  const slug = useContext(ThreadSlugContext)
+  const { retry, edit, dismiss, pending } = useFailedDeliveryActions(slug)
+  const button = "rounded-md border border-border-strong bg-panel-2/60 px-2.5 py-1 text-[12px] font-medium text-fg/80 outline-none transition-colors hover:bg-panel-2 hover:text-fg focus-visible:ring-1 focus-visible:ring-focus-ink-60 disabled:opacity-45 disabled:hover:bg-panel-2/60 disabled:hover:text-fg/80"
+  return (
+    <div data-failed-send={deliveryId} className="mt-1 flex flex-col items-end gap-1.5">
+      {/* LEFT-aligned inside a right-justified column: a short error hugs the bubble's right edge like
+          any one-liner here, and a long one fills the bubble's width as an ordinary paragraph instead of
+          a ragged-left block. */}
+      <div role="alert" className="text-left text-[12px] leading-snug text-danger-soft [overflow-wrap:anywhere]">
+        {/* The first line only: the server already trims, and this keeps an older row's stack trace off
+            the screen too. */}
+        Not delivered{error ? ` — ${error.split("\n", 1)[0]}` : ""}
+      </div>
+      {slug && (
+        <div className="flex items-center gap-1.5">
+          <button
+            type="button"
+            className={button}
+            disabled={pending}
+            title="Send this message again"
+            onClick={() => retry({ deliveryId, text: rawText })}
+          >
+            Retry
+          </button>
+          <button
+            type="button"
+            className={button}
+            disabled={pending}
+            title="Put this message back in the prompt box"
+            onClick={(e) => edit({ deliveryId, text, from: e.currentTarget })}
+          >
+            Edit
+          </button>
+          <button
+            type="button"
+            className={button}
+            disabled={pending}
+            title="Discard this message"
+            onClick={() => dismiss({ deliveryId })}
+          >
+            Dismiss
+          </button>
+        </div>
+      )}
+    </div>
+  )
+}
+
+function UserBubble({ text, rawText, queued, deliveryUnconfirmed, deliveryFailed, deliveryError, deliveryId, sourceId }: { text: string; rawText?: string; queued?: boolean; deliveryUnconfirmed?: boolean; deliveryFailed?: boolean; deliveryError?: string; deliveryId?: string; sourceId?: string }) {
   // TAKE IT BACK. A still-queued send is the one bubble in the transcript that isn't history yet, so
   // it alone is clickable: the click unqueues it at the provider and hands the words back to the
   // prompt box (see lib/unqueueFollowUp.ts). Three gates, all of them load-bearing:
@@ -3304,7 +3449,7 @@ function UserBubble({ text, rawText, queued, deliveryUnconfirmed, deliveryId, so
           // focus ring still has to exist, so it keeps the accent — but
           // OFFSET onto the near-black page, which is the only place this yellow reads clean and is how
           // every other focus ring in the app is drawn.
-          className={`relative ${BLOCK_RADIUS} rounded-br-sm bg-user-bubble px-3.5 py-3 text-[14px] whitespace-pre-wrap [overflow-wrap:anywhere] text-user-bubble-fg ${queued ? "opacity-50" : ""} ${unqueueable ? "cursor-pointer transition-opacity group-hover:opacity-100 focus-visible:opacity-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent focus-visible:ring-offset-2 focus-visible:ring-offset-bg" : ""} ${unqueuePending ? "!opacity-30" : ""}`}
+          className={`relative ${BLOCK_RADIUS} rounded-br-sm bg-user-bubble px-3.5 py-3 text-[14px] whitespace-pre-wrap [overflow-wrap:anywhere] text-user-bubble-fg ${queued || deliveryFailed ? "opacity-50" : ""} ${unqueueable ? "cursor-pointer transition-opacity group-hover:opacity-100 focus-visible:opacity-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent focus-visible:ring-offset-2 focus-visible:ring-offset-bg" : ""} ${unqueuePending ? "!opacity-30" : ""}`}
         >
           {/* Verbatim bytes, but link-shaped runs (a pasted URL, `#123`, a commit hash) render as the
               anchors they would be in agent prose — see LinkifiedText. The anchors stop their own
@@ -3360,6 +3505,9 @@ function UserBubble({ text, rawText, queued, deliveryUnconfirmed, deliveryId, so
           now, so it states the fact and leaves the next move to them. */}
       {deliveryUnconfirmed && (
         <div className="text-[11px] text-attention-80">Delivery unconfirmed — no receipt from the worker</div>
+      )}
+      {deliveryFailed && deliveryId && (
+        <FailedSendRow deliveryId={deliveryId} text={text} rawText={rawText ?? text} error={deliveryError} />
       )}
       {/* No "click to unqueue" hint: the hover lift above already says the bubble is live, and a
           label spelling that out is noise on every queued send. Only the IN-FLIGHT retraction gets a
@@ -3417,6 +3565,7 @@ export const Message = memo(function Message({ m, answering, dense, paired, show
   // An event line (a sub-agent completion) is transcript PUNCTUATION — a quiet full-width line, not a
   // bubble or a tool band. Rendered before the role branches (its role field is nominal).
   if (m.providerError) return <ProviderErrorCard error={m.providerError} />
+  if (m.commandOutput) return <CommandOutputBlock text={m.text} stream={m.commandOutput.stream} command={m.commandOutput.command} sourceId={m.sourceId} />
   if (m.kind === "event") return <EventLine text={m.text} boundary={m.boundary} wakeShellId={m.wakeShellId} sourceId={m.sourceId} at={m.at} />
   // A model-reasoning summary (Codex) — quiet punctuation like an event line, but CLICKABLE to expand
   // the full reasoning. Rendered before the role branches (its role field is nominal, like an event).
@@ -3439,7 +3588,9 @@ export const Message = memo(function Message({ m, answering, dense, paired, show
     // renders as a structured answers card echoing the question component — not a flat run-on bubble.
     // Non-matching text (and a parse hiccup → null) falls back to the plain bubble; text is never lost.
     const answers = paired !== undefined ? paired : parseAnswersCard(text)
-    if (answers) return <AnswersCard answers={answers} queued={m.queued} sourceId={m.sourceId} />
+    // …unless it FAILED: the answers card has no failure row, and a failed send must always show its
+    // Retry / Edit / Dismiss (lib/failedDelivery.ts). The plain bubble carries the same words.
+    if (answers && m.deliveryState !== "failed") return <AnswersCard answers={answers} queued={m.queued} sourceId={m.sourceId} />
     // A scheduler wake is recorded as a user turn because it is pasted into the worker's composer —
     // but FRIZZ wrote it, not the human, so it must not wear the human's right-justified
     // bubble. `m.wake` is the server's own tell (the delivery token it stripped), never a text guess.
@@ -3475,7 +3626,7 @@ export const Message = memo(function Message({ m, answering, dense, paired, show
     // `rawText` rides alongside the presentation text because the two differ: the bubble shows the
     // stripped/normalized copy, while the optimistic cache entry an unqueue has to evict is keyed on
     // the message's own raw text.
-    return <UserBubble text={text} rawText={m.text} queued={m.queued} deliveryUnconfirmed={m.deliveryState === "unconfirmed"} deliveryId={m.deliveryId} sourceId={m.sourceId} />
+    return <UserBubble text={text} rawText={m.text} queued={m.queued} deliveryUnconfirmed={m.deliveryState === "unconfirmed"} deliveryFailed={m.deliveryState === "failed"} deliveryError={m.deliveryError} deliveryId={m.deliveryId} sourceId={m.sourceId} />
   }
 
   // Build ONE ordered list of block-level children, then interleave with explicit spacers. The
@@ -3928,6 +4079,11 @@ export function FenceCard({ fenceKind, body, hints, wrap }: { fenceKind: FenceKi
   const doneThreadRef = useRef<ThreadViewData | null>(null)
   if (canAct && fenceThread) doneThreadRef.current = fenceThread
   const doneThread = canAct && fenceThread ? fenceThread : doneThreadRef.current
+  // ON A PHONE THE CARD CARRIES NO VERB. The button below exists to be redundant with the lifecycle
+  // footer; the phone has no footer, and its bottom bar's Done (PhoneDoneButton) is that stable control —
+  // so the card's copy would only draw the same verb twice, one above the other (the 2026-09-30 capture of
+  // the phone thread flagged exactly that, and the approved design draws the card without it).
+  const isMobile = useIsMobile()
   if (fenceKind === "done") {
     return (
       // NEUTRAL tone — the green splash stood out as the only saturated color in the UI (maintainer
@@ -3936,8 +4092,8 @@ export function FenceCard({ fenceKind, body, hints, wrap }: { fenceKind: FenceKi
         {html && <LinkedHtml className={`md-body${wrap ? ` ${QUEUE_WRAP}` : ""}`} html={html} />}
         {/* A white "Mark as done" button, deliberately redundant with the stable lifecycle footer — the
             same completion mutation, styled as the primary (light-on-dark) verb. Only shown when the
-            thread can actually take the action. */}
-        {doneThread && (
+            thread can actually take the action, and never on a phone (see `isMobile` above). */}
+        {doneThread && !isMobile && (
           <CardActions>
             <StateButton
               thread={doneThread}
@@ -4067,11 +4223,7 @@ export function ProviderFaultCard({
 // credential is fine and the recovery is TIME, not an action. So the card leads with information —
 // when the window comes back, and that frizz will pick the thread up itself — and keeps a manual
 // continue as the secondary, for the operator who has capacity elsewhere and doesn't want to wait.
-export function LimitPauseCard({ slug, sessionId, pause }: { slug: string; sessionId: string | undefined; pause: NonNullable<ThreadViewData["limitPause"]> }) {
-  // Only Claude and Codex report a limit window Frizz can read; an ACP agent's limits stay inside its
-  // own CLI, so a pause attributed to one is labelled generically rather than crashing on the lookup.
-  const label = pause.backend === "acp" ? "The agent" : PROVIDER_LABEL[pause.backend]
-  const which = pause.window === "weekly" ? "weekly limit" : pause.window === "session" ? "session limit" : "usage limit"
+export function LimitPauseCard({ slug, pause }: { slug: string; sessionId: string | undefined; pause: NonNullable<ThreadViewData["limitPause"]> }) {
   const [continuing, setContinuing] = useState(false)
   const queryClient = useQueryClient()
   // "Continue now" is a manual override of the auto-resume — a turn-starting action exactly like a
@@ -4082,28 +4234,29 @@ export function LimitPauseCard({ slug, sessionId, pause }: { slug: string; sessi
     setContinuing(true)
     // The message is a non-empty constant, so `started` is always true here; the reset-on-false is a
     // belt-and-suspenders that keeps the button from sticking disabled if that ever changes.
-    const started = sendEagerFollowUp(queryClient, slug, "Continue exactly where you left off.", {
+    const started = sendEagerFollowUp(queryClient, slug, STALLED_RETRY_MESSAGE, {
       onSuccess: () => { setContinuing(false); showToast("Continuing…") },
       onRollback: () => setContinuing(false),
       failureToast: (m) => `Continue failed: ${m.slice(0, 80)}`,
     })
     if (!started) setContinuing(false)
   }
+  return <LimitPauseNotice pause={pause} onContinue={continueNow} continuing={continuing} />
+}
+
+/** THE pause card itself, with no opinion on how "Continue now" reaches the thread — the drawer sends
+ *  through the page's own project (LimitPauseCard above), a queue card through the card's project
+ *  (AllQueuesCard). One component, so a paused thread reads identically in the drawer and in the queue. */
+export function LimitPauseNotice({ pause, onContinue, continuing }: { pause: NonNullable<ThreadViewData["limitPause"]>; onContinue: () => void; continuing: boolean }) {
   return (
-    <TranscriptCard data-limit-pause tone="caution" icon={Hourglass} label={`Paused by the ${label} ${which}`}>
+    <TranscriptCard data-limit-pause tone="caution" icon={Hourglass} label={limitPauseTitle(pause)}>
       {/* The provider's own "You've hit your session limit · resets …" line sits directly above this
           card (unlike an auth error, it is informative, so transcript.ts keeps its bubble). So this
           card says only what THAT line cannot: what frizz is going to do about it. */}
-      <span className={CARD_BODY}>
-        {pause.autoResume
-          ? pause.resumesAt
-            ? `Continuing automatically at ${limitResumeClock(pause.resumesAt)}.`
-            : "Continuing automatically once the window resets."
-          : "Continue it whenever you have capacity again."}
-      </span>
+      <span className={CARD_BODY}>{limitPauseResume(pause)}</span>
       <CardActions>
         <button
-          onClick={continueNow}
+          onClick={onContinue}
           disabled={continuing}
           onMouseDown={(e) => e.preventDefault()}
           className={`disabled:opacity-45 ${CARD_PRIMARY_ACTION}`}
@@ -4660,6 +4813,22 @@ function EventLine({ text, boundary, wakeShellId, sourceId, at }: { text: string
 // shimmer already says `Thinking…` while that is happening, and afterwards it is not a fact worth a row
 // (maintainer 2026-08-01: "it should never show up persistently like that"). The server still measures
 // `durationMs`; nothing renders it.
+// A SLASH COMMAND'S OUTPUT — what `/context` or `/usage` printed, under the human's `/name` bubble. Not
+// the agent speaking and not the human, so it takes neither's treatment: the reasoning block's quiet
+// left rule, always open (the operator ran the command to read this). stderr takes the danger tone.
+function CommandOutputBlock({ text, stream, command, sourceId }: { text: string; stream: "stdout" | "stderr"; command?: string; sourceId?: string }) {
+  return (
+    <div
+      data-frizz-msg={sourceId}
+      data-command-output={command ?? ""}
+      aria-label={command ? `${command} output` : "Command output"}
+      className={`frizz-command-output ml-[5px] border-l pl-3 ${stream === "stderr" ? "border-danger/60 text-danger-soft" : "border-border/70"}`}
+    >
+      <ProseHtml md={text} wrap />
+    </div>
+  )
+}
+
 function ReasoningBlock({ text, sourceId }: { text: string; sourceId?: string }) {
   const [open, setOpen] = useState(false)
   const bodyId = useId()

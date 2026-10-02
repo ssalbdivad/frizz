@@ -1680,7 +1680,7 @@ export function liveOpsLines(ops?: SignoffLiveOps): string[] {
     if (!items.length) return
     lines.push("", heading)
     for (const i of items) lines.push(`- \`${i.id ?? "?"}\`  — ${i.label}`)
-    lines.push(`In a fence: \`${key}: [${items.map((i) => i.id ?? "?").join(", ")}]\``)
+    lines.push(`In a fence: \`${key}: [${items.map((i) => i.id ? fenceScalar(i.id) : "?").join(", ")}]\``)
   }
   section("Background shells still running:", "shells", ops?.shells ?? [])
   section("Sub-agents still running (they re-invoke you on their own, so parking on one is optional):", "agents", ops?.subAgents ?? [])
@@ -1690,7 +1690,93 @@ export function liveOpsLines(ops?: SignoffLiveOps): string[] {
   return lines
 }
 
+// ---- THE WAITING VARIANT: A BARE REST WITH A SHELL STILL RUNNING ---------------------------------
+// The long reminder below is written for a worker that STOPPED — it opens on "the task still has parts
+// left, go back to the work" and spends sixty lines on ceilings, documents and questions. Read at a worker
+// that is legitimately waiting on a build it just launched, every line of that is the wrong framing.
+// Measured 2026-09-29 → 10-01: 46 nudges, ~20 of them to a worker resting behind a live shell, sub-agent
+// or Workflow, and every one of those answered with a correct ```awaiting fence 2–3s later — a turn and
+// a wall of "unfinished work" prose spent to produce one fence the worker already meant to write.
+//
+// So a bare rest with a running shell gets THIS: the shells by the id the runtime gave the worker, the
+// fence already written for them, and one line for the case where the work is in fact finished. The
+// worker deletes what it is not waiting on and sets `for:`; nothing else is left to compose, so nothing
+// else can be got wrong.
+//
+// IT IS STILL A NUDGE, NOT A PARK. Treating a live shell as an implicit park was the alternative and it
+// was turned down: 26% of real background launches are servers that never exit (see board.ts on the
+// shell excusal that was tried and reverted on 2026-08-04), so a forgotten dev server would hold its
+// thread out of the queue forever, silently. Asking costs one short turn; inferring costs a lost thread.
+//
+// SHELLS, because they are the one live thing that does NOT already park. A running direct sub-agent
+// — a `Workflow` run is one too — excuses its parent from the queue on its own, so the nudge does not
+// fire behind one at all (board.signoffNudgeVerdict) — EXCEPT on a thread with a Goal armed at rest,
+// which a child does not hold: there the children are listed here too, with an `agents:` line, because
+// that fence is the one thing that quiets the Goal until they return. Timers, PRs and issues are
+// registrations, not running work; they ride along as lines to add, never pre-filled, because a shell
+// wait and a PR wait are different waits and the fence must name only what this rest is for.
+/** The `for:` the waiting variant pre-fills. A guess, deliberately on the short side: running out only
+ *  brings the worker back to re-check and re-park (uncapped), while a long one leaves a dead shell's
+ *  thread quiet for longer. */
+export const SIGNOFF_WAITING_FOR = "1h"
+
+/** An id as a fence can carry it: bare when YAML reads it back as the same string, JSON-quoted when it
+ *  would not. Ids are base36 runtime handles, `tmr_…` rows and `owner/repo#N` refs, which are all bare in
+ *  practice — but a runtime id that happens to read as a number (`1234e5678` is Infinity, `0x1a2b3c4` is
+ *  27440068) would otherwise be copied verbatim into a fence whose park check then refuses it. */
+export function fenceScalar(id: string): string {
+  try {
+    const doc = parseYaml(`k: [${id}]`) as { k?: unknown } | null
+    if (Array.isArray(doc?.k) && doc.k.length === 1 && doc.k[0] === id) return id
+  } catch {
+    // not even a flow item on its own — quote it
+  }
+  return JSON.stringify(id)
+}
+
+export function signoffWaitingNudgeMessage(ops: SignoffLiveOps): string {
+  const { shells, subAgents } = ops
+  const count = shells.length + subAgents.length
+  const one = count === 1
+  // An id the fence can carry, or the label QUOTED — the park check answers to a shell's label too, and a
+  // label is free text, so bare it could break the YAML flow list.
+  const handle = (i: { id?: string; label: string }) => i.id ? fenceScalar(i.id) : JSON.stringify(i.label)
+  const what = !subAgents.length
+    ? (one ? "this background shell" : `${count} background shells`)
+    : !shells.length
+      ? (one ? "this sub-agent" : `${count} sub-agents`)
+      : "this background work"
+  const extras = (
+    [["timers", ops.timers], ["prs", ops.prs], ["issues", ops.issues]] as const
+  ).filter(([, items]) => items?.length).map(([key, items]) => `\`${key}: [${items!.map(handle).join(", ")}]\``)
+  return [
+    `${SIGNOFF_NUDGE_MARKER} You rested without a fence, with ${what} still running:`,
+    "",
+    ...shells.map((sh) => `- \`${handle(sh)}\` — ${sh.label}`),
+    ...subAgents.map((a) => `- \`${handle(a)}\` — sub-agent: ${a.label}`),
+    "",
+    `If you are waiting on ${one ? "it" : "them"}, end your next message with this fence${one ? "" : " (keep only the ids you are waiting on)"}, setting \`for:\` to how long it should take:`,
+    "",
+    "```awaiting",
+    ...(shells.length ? [`shells: [${shells.map(handle).join(", ")}]`] : []),
+    ...(subAgents.length ? [`agents: [${subAgents.map(handle).join(", ")}]`] : []),
+    `for: ${SIGNOFF_WAITING_FOR}`,
+    "---",
+    "What is running and what it gates, in one sentence.",
+    "```",
+    // Only a Goal thread reaches here with a child, and it is the one place the child's own park falls
+    // short — said in a line, because a worker told "a running child parks you" has no other reason to fence.
+    ...(subAgents.length ? ["", "A running sub-agent keeps you out of the queue on its own, but only this fence holds your Goal until it returns."] : []),
+    ...(extras.length ? ["", `Add a line only if this rest waits on these too: ${extras.join(", ")}.`] : []),
+    "",
+    `If work is left, do it now; if it is finished${subAgents.length ? "" : ` and ${one ? "the shell is" : "they are"} only left running`}, end with \`\`\`done instead.`,
+  ].join("\n")
+}
+
+/** The sign-off nudge for one fenceless rest: the short waiting variant when a background shell (or, on a
+ *  Goal thread, a direct child) is still running, the full protocol when nothing is. */
 export function signoffNudgeMessage(ops?: SignoffLiveOps): string {
+  if (ops && (ops.shells.length || ops.subAgents.length)) return signoffWaitingNudgeMessage(ops)
   const lines = liveOpsLines(ops)
   if (lines.length) {
     lines.push("", "An ```awaiting fence names only what you are ACTUALLY waiting on, one such list per kind, plus")
@@ -3188,6 +3274,18 @@ export const SpinoffView = z.object({
 export type SpinoffView = z.infer<typeof SpinoffView>
 
 // One sidebar row: frizz board thread + runtime overlay.
+/**
+ * The in-flight tool call a board row can name: the tool, the model's own one-line `description` (a
+ * Bash call's), and the target the input reveals (a path, a pattern, a command's first line). A subset
+ * of TranscriptToolCall, so the web labels it with the transcript's own `toolActivityLabel`.
+ */
+export const LiveTool = z.object({
+  name: z.string(),
+  desc: z.string().optional(),
+  detail: z.string().optional(),
+})
+export type LiveTool = z.infer<typeof LiveTool>
+
 export const ThreadView = z.object({
   id: ThreadSlug, // slug; filename is <slug>.md
   title: z.string(),
@@ -3220,6 +3318,15 @@ export const ThreadView = z.object({
   unread: z.boolean(),
   archived: z.boolean(), // user hid the row from the nav; respawn/resume un-archives
   lastAssistant: z.string().optional(), // trimmed preview of last assistant text
+  // The FIRST non-empty line of that same text, markdown intact and newlines honoured (capped) — the
+  // handoff's verdict line ("**Fixed** — …"), which `lastAssistant` cannot give back because its preview
+  // collapses every newline to a space. The phone board's rested row reads it. Optional so old
+  // snapshots parse.
+  lastAssistantLine: z.string().optional(),
+  // The newest tool call the agent has issued and not yet had a result for (Claude session threads),
+  // in the shape `toolActivityLabel` reads, so a list row can say "Running the focused tests" with the
+  // gerund the chat's working indicator shows. Absent between calls, at rest, and for other backends.
+  liveTool: LiveTool.optional(),
   spawnedAt: z.string().optional(), // ISO8601
   lastActivityAt: z.string().optional(), // ISO8601, from jsonl tail — ANY record (incl. sub-agent/system)
   // ISO8601 of the agent's OWN last output (Claude: last assistant record; Codex: turn-end/final text).
@@ -3861,6 +3968,93 @@ export function workingThread(t: ThreadView): boolean {
   return activeBandThread(t) || doneButRunning(t)
 }
 
+// Moved here from web/src/groups.ts (which re-exports it) on 2026-09-30 so the SERVER can count a
+// project's asks for the phone's projects list with the rule the board's "N need you" uses.
+// A thread "needs action" when it is genuinely waiting on the human — and ONLY once the agent has
+// actually come to rest on that wait. A mid-turn thread is still working; surfacing it as a card
+// gives an empty "no ask" card because the ask text lands only when the turn ends. These sort to top.
+export function needsAction(t: ThreadView): boolean {
+  // A TERMINAL thread (done/dismissed) NEVER cards — no exceptions. The thread file is the source
+  // of truth, and a thread whose own status says the work is over has by definition nothing waiting
+  // on the human. (An earlier "done-but-unread = card until acknowledged" rule violated this and
+  // was explicitly overruled by the maintainer: a done thread must never appear in the queue.)
+  if (t.status === "done" || t.status === "dismissed") return false
+  // THE OPERATOR'S OWN PARK COMES FIRST, exactly as the server orders it (deriveNeedsYou checks
+  // futureSnooze ahead of every ask gate). Without it this predicate promoted rows the server had
+  // already dequeued — a snoozed thread with an unanswered ask sorted to the top of the attention order
+  // and led the mobile asks-first list, with no card behind it to open. Same pair of guards as
+  // sessionIndicatorKind, for the same reasons.
+  if (futureSnoozedUntil(t) !== undefined && isSnoozed(t)) return false
+  // Paused on an interactive permission prompt: the process is parked waiting on the human's answer.
+  if (t.runtime === "perm-prompt") return true
+  // Frozen at a native AskUserQuestion TUI dialog (safety net for pre-contract / adopted sessions that
+  // bypass the thread-file ask channel). Unlike the chat/needs-human nets below, NO rest-gate: the ask
+  // text lives in the tool_use input (tailer-captured) and is available even while the turn reads
+  // "running" (the session is blocked mid-tool_use), so it should card the moment it appears.
+  if (t.pendingAsk) return true
+  // The DECLARED awaiting-you channel: humanBlocked is re-derived server-side from `status:
+  // needs-human` — the first-class "awaiting a human" state and THE queue definition. TWO gates:
+  //   • NOT mid-turn (running/spawning): the worker writes needs-human MID-TURN (~150ms after the
+  //     file hits disk), but the visible ask text lands with the final message only when the turn
+  //     comes to rest — counting it early yields a card with no visible ask.
+  //   • A SESSION EXISTS (runtime !== "none"): the queue is strictly "agent work paused on the
+  //     human" (maintainer, 2026-07-09: with no agent it makes no sense for a thread to ever show
+  //     up inside the queue). A needs-human thread worked OUTSIDE frizz (frizz classic, hand
+  //     edits) has no transcript to card — it stays visible in the SIDEBAR (yellow awaiting-you
+  //     dot), and its click-through composite (doc + kick-off composer) is where it gets read and
+  //     acted on. `exited` still cards: that agent RAN and asked here — the ask is in its transcript.
+  if (t.humanBlocked && t.runtime !== "none" && t.runtime !== "running" && t.runtime !== "spawning") return true
+  // DERIVED safety net behind the declared needs-human channel: a worker that asked the human a
+  // question IN CHAT (a ```question block in its final message) but never flipped its thread file to
+  // needs-human — the board would otherwise see {active, humanBlocked:false, turn-idle} and show
+  // nothing. Same rest-gate: only once the agent is off-turn (else the ask text hasn't landed).
+  if (t.pendingQuestion && t.runtime !== "running" && t.runtime !== "spawning") return true
+  // A REGISTERED question (open thread_question rows on the view) is the same ask through the durable
+  // channel — the server queues it once at rest (deriveNeedsYou's openQuestions), and this predicate
+  // must agree so the mobile asks-first ordering and the attention sort count it. Same rest-gate as the
+  // fence net above: the worker keeps working after registering, and the card lands at its rest. Every
+  // open one: since 2026-09-29 a typed message past a question no longer sets it aside — the worker
+  // `unask`s what the message made moot — so a question stays the human's until it is settled.
+  if (questionsOwed(t.questions).length > 0 && t.runtime !== "running" && t.runtime !== "spawning") return true
+  // CRASH / STALL net (replaces the old `unread`-gated clause — `unread` no longer drives anything).
+  // A thread whose status still claims WORK IN FLIGHT (active or planning) but whose backing agent
+  // PROCESS is gone — `exited` (session row present, worker process dead) or `none` (registry lost the row)
+  // — is a crash/stall the human must see. Deliberately SCOPED to the in-flight work statuses, because
+  // "an agent died MID-WORK" is exactly active/planning:
+  //   • `blocked` is a MACHINE-wait — its agent is LEGITIMATELY absent (waiting on revalidate_at /
+  //     blocking_threads), and a killed/rebooted session (the workers die → every spawned thread goes
+  //     exited/none) must NOT card it or steal its timer/threads glyph (Nav short-circuits on
+  //     needsAction before those glyphs). blocked never cards — that's the spec.
+  //   • `needs-human` with a session already cards via the humanBlocked clause above (session-less
+  //     needs-human deliberately does NOT card — see that clause); `done`/`dismissed` are excluded
+  //     by the terminal guard; `planned` is not-yet-started backlog.
+  // No fight with the humanBlocked clause: this net requires status active/planning, which
+  // needs-human never is; and its `none` case requires spawnedAt (a session RAN then vanished from
+  // the registry — a real crash), which a never-spawned thread lacks.
+  // Also gated on `spawnedAt` (a NEVER-spawned item never "died mid-work") and `!archived` (a hidden
+  // thread never cards, even if its archive→done write lost a race).
+  if (
+    (t.status === "active" || t.status === "planning") &&
+    (t.runtime === "exited" || t.runtime === "none") &&
+    t.spawnedAt &&
+    !t.archived
+  )
+    return true
+  return false
+}
+
+/**
+ * An ASK on the board: a queue row (the Rested/Active section, or the pinned shelf the phone folds into
+ * the top of it) that is waiting on the human by `needsAction`. The phone board's "N need you" and the
+ * phone projects list's accent count are both this, so the two cannot disagree. Narrower than
+ * `queuedThread`, which also counts a rested handoff that asks nothing.
+ */
+export function boardAskThread(t: ThreadView): boolean {
+  if (t.kind === "session" && t.foreign === true) return false
+  const pinned = t.kind === "session" && typeof t.pinnedAt === "string"
+  return (pinned || sectionOf(t) === "active") && needsAction(t)
+}
+
 // STRUCTURED board error — a machine-readable companion to the legacy `errors: string[]` so the
 // client can tell a REPAIRABLE error from an inert one and which file it names. `no-frontmatter` is
 // the one-click-repairable case (a thread .md written with no YAML frontmatter, invisible to the
@@ -4326,8 +4520,23 @@ export const FollowUpInput = z.object({
   // any other runtime the message is delivered normally and this is ignored, never refused: a send
   // that arrives is always better than a send that errors.
   interrupt: z.boolean().optional(),
+  // The deliveryId of a FAILED send this one re-sends — the failed bubble's Retry. The server drops that
+  // failed entry in the same write that opens this send's own, so the retry replaces the failed bubble
+  // rather than standing beside it. A new deliveryId, never the old one: the old send's failure may be
+  // ambiguous, and only the operator decides to risk a second copy.
+  supersedes: z.string().min(1).max(200).optional(),
 })
 export type FollowUpInput = z.infer<typeof FollowUpInput>
+
+// Dismiss a FAILED send — the × on its bubble, or the second half of Edit (the text goes back into the
+// prompt box first). Only a failed entry can go: every other ledger state belongs to its transport.
+export const DismissFailedFollowUpInput = z.object({
+  slug: ThreadSlug,
+  deliveryId: z.string().min(1).max(200),
+}).strict()
+export type DismissFailedFollowUpInput = z.infer<typeof DismissFailedFollowUpInput>
+export const DismissFailedFollowUpResult = z.object({ dismissed: z.boolean() }).strict()
+export type DismissFailedFollowUpResult = z.infer<typeof DismissFailedFollowUpResult>
 
 // Take a follow-up back out of the provider's queue — the operator clicked their own queued bubble to
 // unqueue it and get the text back in the prompt box. Keyed by the same `deliveryId` the send carried,
@@ -4832,7 +5041,8 @@ export const ThreadProfileOptionsResult = z.object({
 })
 export type ThreadProfileOptionsResult = z.infer<typeof ThreadProfileOptionsResult>
 
-// The thread's invocable skills, for the composer's `/` typeahead. Always the HARNESS's own list —
+// The thread's invocable skills — and, on Claude, the built-in slash commands a Frizz thread can run —
+// for the composer's `/` typeahead. Always the HARNESS's own list —
 // Claude's `supportedCommands()` through the broker, Codex's `skills/list` through the app-server —
 // never a frizz-side scan of skill directories, which could only drift from what the session actually
 // loaded. `description` may be empty (Claude's init-frame names carry no descriptions for entries the
@@ -4842,12 +5052,18 @@ export type ThreadProfileOptionsResult = z.infer<typeof ThreadProfileOptionsResu
 // renders "project" the same whether Claude called it `projectSettings` or Codex called it `repo`. It
 // is OPTIONAL, and deliberately so: the promise is "show it if we know it", and a harness that reports
 // a scope frizz has no mapping for must degrade to an unlabelled row rather than to a wrong label.
-export const ThreadSkillSource = z.enum(["project", "user", "builtin", "plugin"])
+// `frizz` is never a harness's answer: it labels a USER COMMAND written in Frizz's own editor, which the
+// composer offers in the same menu (UserCommand below).
+export const ThreadSkillSource = z.enum(["project", "user", "builtin", "plugin", "frizz"])
 export type ThreadSkillSource = z.infer<typeof ThreadSkillSource>
 export const ThreadSkill = z.object({
   name: z.string().min(1).max(512),
   description: z.string().max(1024),
   source: ThreadSkillSource.optional(),
+  // A built-in COMMAND (`/context`, `/usage`) rather than a skill. Claude runs a command only when it
+  // OPENS the message — mid-sentence it is plain text — so the composer offers these at the start of a
+  // draft alone, where a skill is offered at any word boundary.
+  command: z.literal(true).optional(),
 }).strict()
 export type ThreadSkill = z.infer<typeof ThreadSkill>
 
@@ -4855,6 +5071,87 @@ export const ThreadSkillsInput = z.object({ slug: ThreadSlug }).strict()
 export type ThreadSkillsInput = z.infer<typeof ThreadSkillsInput>
 export const ThreadSkillsResult = z.object({ skills: z.array(ThreadSkill).max(1024) }).strict()
 export type ThreadSkillsResult = z.infer<typeof ThreadSkillsResult>
+
+// USER SLASH COMMANDS — a markdown file whose body is a prompt, invoked by its file name (`commit.md` is
+// `/commit`). The same format Claude Code and Cursor read: an optional frontmatter block carrying
+// `description` and `argument-hint`, then the prompt, where `$ARGUMENTS` stands for whatever was typed
+// after the name. Frizz reads them from three places, first match winning:
+//
+// - `frizz` — `<Frizz data home>/commands/`, the ones written in Frizz's own editor. The only kind it edits.
+// - `project` — `<project>/.agents/commands/`, a repo's own, checked in beside its skills.
+// - `global` — `~/.agents/commands/`, the agent-neutral home every agent tool on the machine can share.
+//
+// FRIZZ expands them, not the harness, so `/commit` means the same thing on a Claude, Codex or ACP
+// thread — see expandUserCommand.
+export const UserCommandSource = z.enum(["frizz", "project", "global"])
+export type UserCommandSource = z.infer<typeof UserCommandSource>
+// A file name is a command name: what can follow a `/` and survive every filesystem.
+export const UserCommandName = z.string().regex(/^[A-Za-z0-9][A-Za-z0-9._:-]{0,63}$/, "Use letters, digits, '-', '_', '.' or ':' (up to 64), starting with a letter or digit")
+export const UserCommand = z.object({
+  name: UserCommandName,
+  description: z.string().max(1024),
+  argumentHint: z.string().max(256).optional(),
+  body: z.string().max(64 * 1024),
+  source: UserCommandSource,
+  path: z.string(),
+}).strict()
+export type UserCommand = z.infer<typeof UserCommand>
+export const UserCommandsResult = z.object({
+  commands: z.array(UserCommand).max(1024),
+  // Where a new Frizz command is written, for the editor to say.
+  frizzDir: z.string(),
+}).strict()
+export type UserCommandsResult = z.infer<typeof UserCommandsResult>
+export const SaveUserCommandInput = z.object({
+  name: UserCommandName,
+  description: z.string().max(1024),
+  argumentHint: z.string().max(256).optional(),
+  body: z.string().min(1).max(64 * 1024),
+  // Set when an edit RENAMES a command: that file is removed once the new one is written.
+  previousName: UserCommandName.optional(),
+}).strict()
+export type SaveUserCommandInput = z.infer<typeof SaveUserCommandInput>
+export const DeleteUserCommandInput = z.object({ name: UserCommandName }).strict()
+export type DeleteUserCommandInput = z.infer<typeof DeleteUserCommandInput>
+
+// The text a user command is DELIVERED as. Not a `<frizz-…>` tag: that prefix marks Frizz's own
+// plumbing, which every transcript drops (NOISE_PREFIXES), and this is the human's message. The prompt goes to the agent wrapped in a tag naming the
+// command and what was typed after it, so any surface that reads the message back — the transcript, a
+// queued bubble, a retry — can show `/commit fix the tests` instead of the whole expanded prompt.
+const USER_COMMAND_OPEN = /^<slash-command name="([^"]+)"(?: args="([^"]*)")?>\n/
+const USER_COMMAND_CLOSE = "\n</slash-command>"
+const escapeAttr = (text: string) => text.replace(/&/g, "&amp;").replace(/"/g, "&quot;").replace(/</g, "&lt;").replace(/\n/g, "&#10;")
+const unescapeAttr = (text: string) => text.replace(/&#10;/g, "\n").replace(/&lt;/g, "<").replace(/&quot;/g, "\"").replace(/&amp;/g, "&")
+
+/** The prompt `/name args` sends: `$ARGUMENTS` replaced by the arguments, or — when the prompt never
+ *  names them — the arguments appended on a line of their own, as Claude Code does. */
+export function expandUserCommand(command: Pick<UserCommand, "name" | "body">, args: string): string {
+  const body = command.body.trim()
+  const prompt = body.includes("$ARGUMENTS") ? body.replaceAll("$ARGUMENTS", args) : args ? `${body}\n\nARGUMENTS: ${args}` : body
+  return `<slash-command name="${escapeAttr(command.name)}"${args ? ` args="${escapeAttr(args)}"` : ""}>\n${prompt}${USER_COMMAND_CLOSE}`
+}
+
+/** A draft that INVOKES a user command — `/name` as its first token, the rest of the first line and
+ *  anything after as the arguments — expanded; undefined when its first token names none. */
+export function expandUserCommandDraft(draft: string, commands: readonly Pick<UserCommand, "name" | "body">[]): string | undefined {
+  const m = /^\s*\/([^\s/]+)(?:[ \t]+([\s\S]*))?$/.exec(draft)
+  if (!m) return undefined
+  const command = commands.find((c) => c.name === m[1])
+  return command ? expandUserCommand(command, (m[2] ?? "").trim()) : undefined
+}
+
+/** What a delivered user command reads as to the human: `/name args`, plus anything the send appended
+ *  after the wrapper (attached context, file paths). Undefined for any other text. */
+export function userCommandDisplayText(text: string): string | undefined {
+  const open = USER_COMMAND_OPEN.exec(text)
+  if (!open) return undefined
+  const close = text.indexOf(USER_COMMAND_CLOSE, open[0].length)
+  if (close < 0) return undefined
+  const args = open[2] ? unescapeAttr(open[2]) : ""
+  const typed = `/${unescapeAttr(open[1]!)}${args ? ` ${args}` : ""}`
+  const after = text.slice(close + USER_COMMAND_CLOSE.length)
+  return after.trim() ? `${typed}${after}` : typed
+}
 
 export const SetThreadProfileInput = z.object({
   slug: ThreadSlug,
@@ -6123,8 +6420,13 @@ export const TranscriptMessage = z.object({
   // yet — renders as an ordinary (un-grayed) user bubble. "unconfirmed": no evidence appeared within
   // the timeout — the injection likely mutated/never landed; the client renders a quiet warning.
   // Once the real transcript record lands the ledger drops the item and this field goes with it.
-  // Additive + optional.
-  deliveryState: z.enum(["pending", "enqueued", "delivered", "unconfirmed"]).optional(),
+  // "sending": the server's WRITE-AHEAD entry, opened before any transport is touched, so the text is
+  // the server's from the instant it arrives. "failed": the transport threw, or never answered — the
+  // text is kept until the operator retries, edits or dismisses it, and nothing retries it on its own.
+  // Additive + optional: an older client renders both as a plain bubble (gray for "sending").
+  deliveryState: z.enum(["sending", "pending", "enqueued", "delivered", "unconfirmed", "failed"]).optional(),
+  // Why a "failed" send failed, verbatim from the transport. Set only alongside deliveryState "failed".
+  deliveryError: z.string().optional(),
   // FRIZZ wrote this user turn, not the human: it is a scheduler wake delivery (isWakeDelivery). The
   // client renders it as a first-party card rather than the human's off-white right-justified bubble,
   // which was claiming the operator had typed a message the watcher composed. Additive + optional: an
@@ -6148,6 +6450,12 @@ export const TranscriptMessage = z.object({
   // "Steered"/"Followed up" divider promises the corresponding instruction remains readable there.
   // Additive + optional: ordinary thread transcripts never set it.
   agentInstruction: z.literal(true).optional(),
+  // The OUTPUT of a slash command the harness ran itself — `/context`, `/usage`, `/mcp` — rather than
+  // handing to the model. Set on a `kind:"event"` message whose `text` is that output (plain text or
+  // Markdown); `command` is the command it answered, when the transcript named it. Neither the agent nor
+  // the human said it, so it renders as its own block under the `/name` bubble. Additive + optional: a
+  // client that predates it shows the text as an ordinary event line.
+  commandOutput: z.object({ command: z.string().max(512).optional(), stream: z.enum(["stdout", "stderr"]) }).strict().optional(),
   // A SUB-AGENT (or peer session) wrote this user turn, not the human — the same defect class `wake`
   // above corrects. Claude Code's agent-to-agent channel (a background child calling
   // `SendMessage({to:"main"})`) delivers UPWARD into the parent's queue like any follow-up, so the

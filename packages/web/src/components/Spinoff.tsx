@@ -417,7 +417,7 @@ export type SpinoffCardState = "started" | "starting" | "waiting" | "unconfirmed
  *  (while the ledger still holds it), and the parent thread's live reading. */
 export interface SpinoffCardInputs {
   /** The ledger's state for the send, present only until the transcript's own record takes over. */
-  deliveryState?: "pending" | "enqueued" | "delivered" | "unconfirmed"
+  deliveryState?: "sending" | "pending" | "enqueued" | "delivered" | "unconfirmed" | "failed"
   /** The send is still waiting to be read (the ledger's `queued`, or the transcript's enqueue record). */
   queued?: boolean
   runtime?: ThreadView["runtime"]
@@ -459,6 +459,8 @@ export interface SpinoffCardInputs {
 export function spinoffCardState(edge: SpinoffView | undefined, opts: SpinoffCardInputs): SpinoffCardState {
   if (edge?.childSlug) return "started"
   if (opts.deliveryState === "unconfirmed") return "unconfirmed"
+  // The server kept a send whose delivery threw (delivery-ledger.ts `failed`): it never reached the worker.
+  if (opts.deliveryState === "failed") return "unstarted"
   if (opts.queued || opts.deliveryState !== undefined) return opts.blocked || opts.runtime === "perm-prompt" ? "waiting" : "starting"
   if (!edge && opts.edgeGone) return "detached"
   if (opts.superseded) return "unstarted"

@@ -3,7 +3,7 @@ import { closeSync, existsSync, mkdirSync, openSync, readFileSync, statSync } fr
 import { delimiter, dirname, join } from "node:path"
 import { setTimeout as delay } from "node:timers/promises"
 import { DEFAULT_DEV_PORT, DEFAULT_PORT, fallbackPort } from "@frizz/shared"
-import { frizzPaths, type FrizzPaths } from "@frizz/server/frizz-paths"
+import { frizzPathsNow, type FrizzPaths } from "@frizz/server/frizz-paths"
 import { projectLaunchTokenProof, readProjectLaunchOwner } from "@frizz/server/project-launch"
 import { readStableServerOwner, type ServerOwnerRead } from "../../../src/server-owner.ts"
 import { PRODUCTION_PRINT_LAUNCHER_FLAG } from "../../../src/production-update.ts"
@@ -59,7 +59,7 @@ export async function frizzAnswers(port: number, timeoutMs = 1_500): Promise<boo
  * the token in its project's owner record, and that record lives in our own data root, readable by
  * nobody else — the same proof `frizz --stop` checks before it signals anything.
  */
-export async function ownedFrizz(port: number, roots: FrizzPaths = frizzPaths(), timeoutMs = 1_500): Promise<boolean> {
+export async function ownedFrizz(port: number, roots: FrizzPaths = frizzPathsNow(), timeoutMs = 1_500): Promise<boolean> {
   const health = await readHealth(port, timeoutMs)
   if (!health || typeof health.projectId !== "string" || typeof health.projectDir !== "string") return false
   if (typeof health.ownerProof !== "string" || !/^[0-9a-f-]{36}$/iu.test(health.projectId)) return false
@@ -79,9 +79,13 @@ export async function ownedFrizz(port: number, roots: FrizzPaths = frizzPaths(),
  * proves it is ours (`ownedFrizz`), since a port answers for whoever holds it.
  */
 export async function locateServer(options: LocateOptions = {}): Promise<string | "starting" | undefined> {
-  const readOwner = options.readOwner ?? (() => readStableServerOwner(options.roots))
+  // Afresh per search, never memoised: the app's main process owns no Frizz data, and the server it is
+  // looking for resolved at ITS boot, possibly after this process would have frozen its own answer
+  // (frizz-paths.ts `frizzPathsNow`).
+  const roots = options.roots ?? frizzPathsNow()
+  const readOwner = options.readOwner ?? (() => readStableServerOwner(roots))
   const healthy = options.healthy ?? ((port: number) => frizzAnswers(port))
-  const owned = options.owned ?? ((port: number) => ownedFrizz(port, options.roots))
+  const owned = options.owned ?? ((port: number) => ownedFrizz(port, roots))
   const owner = readOwner()
   if (owner.kind === "running" && await healthy(owner.port)) return loopbackOrigin(owner.port)
   for (const port of new Set([DEFAULT_PORT, fallbackPort(DEFAULT_PORT), DEFAULT_DEV_PORT, fallbackPort(DEFAULT_DEV_PORT)])) {

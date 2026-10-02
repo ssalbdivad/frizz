@@ -2063,6 +2063,15 @@ try {
     // simulated worker answers one, but never clears the delivery the server holds the thread out of the
     // queue for, so its rest never reaches the queue.)
     const rpc = new FrizzRpc(origin)
+    // At rest first. Earlier checks send the thread messages (c10's one-switch sends among them), and the
+    // simulated worker answers each with a turn; a thread still mid-turn enters the queue only when that
+    // turn ends, so the notification came 30s+ after the wake in a full run and the check timed out on a
+    // notification that did arrive (integrated run, 2026-10-02: "Told you" logged, Open then worked).
+    await waitFor("the thread at rest", async () => {
+      const board = await rpc.query(workspace.id, "board")
+      const thread = board.threads.find((t) => t.id === seeded!.thread.slug)
+      return thread && thread.runtime !== "running" && thread.needsYou ? true : undefined
+    }, 60_000).catch(() => undefined)
     await rpc.mutation(workspace.id, "setThreadSnooze", { slug: seeded!.thread.slug, sessionId: seeded!.thread.sessionId, until: new Date(Date.now() + 3_600_000).toISOString() })
     await sleep(3_000)
     await rpc.mutation(workspace.id, "setThreadSnooze", { slug: seeded!.thread.slug, sessionId: seeded!.thread.sessionId, until: null })

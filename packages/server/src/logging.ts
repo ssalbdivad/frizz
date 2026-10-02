@@ -6,6 +6,7 @@ import {
   rmSync,
   statSync,
   symlinkSync,
+  unlinkSync,
   writeFileSync,
   writeSync,
 } from "node:fs"
@@ -104,7 +105,15 @@ export function latestLogPath(dir: string): string {
 function linkLatest(dir: string, target: string): void {
   const link = latestLogPath(dir)
   try {
-    rmSync(link, { force: true })
+    // unlinkSync, not rmSync: unlink removes the LINK itself on every Node. On 23.0–24.13.0 and
+    // 25.0–25.3.x rmSync looks through it (nodejs/node#61040), so a latest.log left DANGLING by retention
+    // was reported missing, `force` swallowed that, symlinkSync failed EEXIST, and the fallback below
+    // wrote this run's path THROUGH the stale link — recreating the pruned log.
+    try {
+      unlinkSync(link)
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error
+    }
     symlinkSync(target, link)
   } catch {
     try {

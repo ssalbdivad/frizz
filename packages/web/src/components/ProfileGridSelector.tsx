@@ -9,7 +9,7 @@ import {
   profileGridColumns,
   profileGridDisplayLabel,
   profileGridDisplayParts,
-  profileGridEffortLabel as effortLabel,
+  profileGridEffortLabel,
   profileGridRowSlots,
   profileGridSelectionFromKey,
   profileGridSelectionKey,
@@ -26,6 +26,10 @@ import {
 import { dismissOpenSelect, registerOpenSelect } from "../lib/selectOverlay.ts"
 import { OPAQUE_PORTAL_SURFACE_Z, OPAQUE_SURFACE_BASE } from "../lib/overlaySurface.ts"
 import { AgentSettingsPopover } from "./AgentSettingsPopover.tsx"
+import { PhoneProfileSelector } from "./MobileModelSheet.tsx"
+import { useIsMobile } from "../lib/mobile.ts"
+
+const effortLabel = profileGridEffortLabel
 
 // The model column's label: the family word, then its version one step dimmer (maintainer 2026-09-24,
 // picking candidate A of the version mockups: "a grade-out version after the model name in the left
@@ -66,24 +70,7 @@ export interface ProfileGridUpgrade {
   onUpgrade: () => void
 }
 
-export function ProfileGridSelector({
-  groups,
-  value,
-  pending,
-  onValueChange,
-  placeholder,
-  ariaLabel,
-  menuAriaLabel = "Choose model and effort",
-  title,
-  disabled = false,
-  compact = false,
-  side = "bottom",
-  menuZClass = OPAQUE_PORTAL_SURFACE_Z,
-  className = "",
-  agentSettings = false,
-  runningModelLabel,
-  upgrade,
-}: {
+type ProfileGridSelectorProps = {
   groups: readonly ProfileGridGroup[]
   value?: Partial<ProfileGridSelection>
   pending?: Partial<ProfileGridSelection>
@@ -108,7 +95,34 @@ export function ProfileGridSelector({
   // offers the move to the family's current edition — both only on a live thread's own picker.
   runningModelLabel?: string
   upgrade?: ProfileGridUpgrade
-}) {
+}
+
+// ONE selector, two presentations. Below the phone breakpoint the grid popover gives way to a chip and
+// a bottom sheet (MobileModelSheet): the grid's six effort columns do not fit a 390px screen. Both write
+// the same selection through the same `onValueChange`, so no call site knows which one it rendered — and
+// a separate component per branch keeps each one's hooks its own when a window crosses the breakpoint.
+export function ProfileGridSelector(props: ProfileGridSelectorProps) {
+  return useIsMobile() ? <PhoneProfileSelector {...props} /> : <DesktopProfileGridSelector {...props} />
+}
+
+function DesktopProfileGridSelector({
+  groups,
+  value,
+  pending,
+  onValueChange,
+  placeholder,
+  ariaLabel,
+  menuAriaLabel = "Choose model and effort",
+  title,
+  disabled = false,
+  compact = false,
+  side = "bottom",
+  menuZClass = OPAQUE_PORTAL_SURFACE_Z,
+  className = "",
+  agentSettings = false,
+  runningModelLabel,
+  upgrade,
+}: ProfileGridSelectorProps) {
   const [open, setOpen] = useState(false)
   const [settingsGroup, setSettingsGroup] = useState<string | null>(null)
   const settingsGroupRef = useRef(settingsGroup)

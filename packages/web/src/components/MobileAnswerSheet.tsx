@@ -6,6 +6,12 @@ import { QuestionBlockCard } from "./QuestionBlockCard.tsx"
 
 // ANSWERING ON A PHONE — one question at a time, in a sheet that slides up from the bottom.
 //
+// THIS ONE SERVES THE RETIRED ```question FENCE ONLY: a live fence still exists on a thread dispatched
+// before QUESTION_FENCE_RETIRED_AT, and its answer state is per-message (MessageAnswering), sent as a
+// composed follow-up. A REGISTERED question — the only kind since 2026-09-11 — is answered in
+// RegisteredAnswerSheet, opened from the bottom bar, over the thread-wide registered state and the
+// answerQuestions RPC. The two controllers share neither state nor transport, so they stay two sheets.
+//
 // The mockup's first attempt put a per-question "Answer" button in the transcript that opened a PAGE
 // rendering every question at once with a single Send at the bottom, and the maintainer took it apart
 // (2026-08-17): "will there be an answer button like that on every question? When you open it up, for

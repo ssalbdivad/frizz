@@ -1,4 +1,4 @@
-import type { LimitWindow, PermissionMode, ProviderError } from "@frizz/shared"
+import type { LimitWindow, LiveTool, PermissionMode, ProviderError } from "@frizz/shared"
 import type { FenceView, SubAgentView, BgShellView, PendingAskData, TurnState } from "../tailer.ts"
 import type { SideTurnFold } from "../spinoff-side-turn.ts"
 
@@ -109,6 +109,10 @@ export interface NormalizedTail {
   lastActivityAt?: string
   lastAssistantAt?: string // ISO8601 of the agent's OWN last output (rest time; excludes sub-agent/system bumps)
   lastAssistant?: string
+  // The first non-empty line of the same text, newlines honoured — see FoldState.lastAssistantLine.
+  lastAssistantLine?: string
+  // The newest tool call awaiting its result (Claude only) — see TailState.liveTools in tailer.ts.
+  liveTool?: LiveTool
   aiTitle?: string
   lastUserAt?: string
   // ISO8601 of the newest turn the HUMAN typed — lastUserAt minus every frizz wake delivery (a watcher,
@@ -169,6 +173,10 @@ export interface FoldState {
   lastActivityAt?: string // ISO8601 of the latest timestamped event (ANY line, incl. sub-agent/system)
   lastAssistantAt?: string // ISO8601 of the agent's OWN last output — the rest-time key (see NormalizedTail)
   lastAssistant?: string // ~200-char preview of the latest assistant text
+  // The first non-empty line of that same text, markdown intact — the handoff's verdict line. The
+  // preview above cannot give it back: it collapses newlines to spaces, and its every reader (the
+  // notification bodies, the tests pinning the flat shape) wants that. Set with it, always.
+  lastAssistantLine?: string
   aiTitle?: string // the backend's own session auto-title (latest non-empty wins)
   // A backend may carry one in-band auto-title candidate on its first finalized response. Recording
   // that first final lets a backend distinguish a later recovery signal from an initial title; only a
@@ -349,7 +357,7 @@ export function frizzMcpEnv(mcp: FrizzMcp): Record<string, string> {
 }
 
 // Frizz mounts NO browser. The only MCP server it injects into a worker is the unified `frizz`
-// server above (claude: an inline `--mcp-config` in dispatch.ts; codex: `-c` TOML overrides on the
+// server above (claude: a `--mcp-config` file in dispatch.ts; codex: `-c` TOML overrides on the
 // app-server argv in codex-mcp.ts). A `chrome-devtools` mount used to ride every dispatch on both
 // backends, together with a lazy proxy in `cc-worker/bin/` that answered `tools/list` from a
 // committed schema snapshot; all of it was removed 2026-08-26. Two reasons: its 29 tool schemas cost

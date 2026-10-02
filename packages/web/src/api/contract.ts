@@ -45,6 +45,8 @@ import type {
   SpinoffResult,
   UnqueueFollowUpInput,
   UnqueueFollowUpResult,
+  DismissFailedFollowUpInput,
+  DismissFailedFollowUpResult,
   DeliverQueuedNowInput,
   DeliverQueuedNowResult,
   CompactThreadInput,
@@ -54,6 +56,9 @@ import type {
   SetThreadPermissionResult,
   ThreadProfileOptionsInput,
   ThreadSkillsInput,
+  UserCommandsResult,
+  SaveUserCommandInput,
+  DeleteUserCommandInput,
   ThreadSkillsResult,
   ThreadProfileOptionsResult,
   SetThreadProfileInput,
@@ -220,6 +225,8 @@ export interface Api {
   updateLazyPrompt(input: UpdateLazyPromptInput): Promise<void>
   startLazyThread(input: StartLazyThreadInput): Promise<{ slug: string; sessionId: string }>
   unqueueFollowUp(input: UnqueueFollowUpInput): Promise<UnqueueFollowUpResult>
+  // The × (and Edit) on a FAILED send's bubble — see DismissFailedFollowUpInput.
+  dismissFailedFollowUp(input: DismissFailedFollowUpInput): Promise<DismissFailedFollowUpResult>
   // The ↑ on a queued bubble: stop waiting and make the worker read what is already queued. No message
   // payload — see DeliverQueuedNowInput.
   deliverQueuedNow(input: DeliverQueuedNowInput): Promise<DeliverQueuedNowResult>
@@ -230,6 +237,9 @@ export interface Api {
   // The composer's `/` typeahead: the thread's invocable skills, as its own harness reports them.
   // Any failure (no live session, a legacy row) means "no suggestions", never a surfaced error.
   threadSkills(input: ThreadSkillsInput): Promise<ThreadSkillsResult>
+  userCommands(): Promise<UserCommandsResult>
+  saveUserCommand(input: SaveUserCommandInput): Promise<void>
+  deleteUserCommand(input: DeleteUserCommandInput): Promise<void>
   setThreadProfile(input: SetThreadProfileInput): Promise<SetThreadProfileResult>
   upgradeThreadModel(input: UpgradeThreadModelInput): Promise<UpgradeThreadModelResult>
   markRead(input: { slug: string }): Promise<void>
@@ -494,11 +504,15 @@ export const PROCEDURES = {
   updateLazyPrompt: "mutation",
   startLazyThread: "mutation",
   unqueueFollowUp: "mutation",
+  dismissFailedFollowUp: "mutation",
   deliverQueuedNow: "mutation",
   compactThread: "mutation",
   setThreadPermission: "mutation",
   threadProfileOptions: "query",
   threadSkills: "query",
+  userCommands: "query",
+  saveUserCommand: "mutation",
+  deleteUserCommand: "mutation",
   setThreadProfile: "mutation",
   upgradeThreadModel: "mutation",
   markRead: "mutation",

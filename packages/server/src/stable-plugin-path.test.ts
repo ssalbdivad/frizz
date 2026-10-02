@@ -1,11 +1,19 @@
 import assert from "node:assert/strict"
-import { test } from "node:test"
-import { existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, readlinkSync, symlinkSync, writeFileSync } from "node:fs"
+import { after, test } from "node:test"
+import { existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, readlinkSync, rmSync, symlinkSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { isAbsolute, join } from "node:path"
 import { defaultPluginStageRoot, defaultStablePluginRoot, ensureSymlink, stageStablePluginDir } from "./stable-plugin-path.ts"
 
-const tmp = (prefix: string) => mkdtempSync(join(tmpdir(), prefix))
+// Every scratch dir is removed when the file finishes. Recursive rm unlinks the links inside it rather
+// than following them, on every Node — only a non-recursive rm of a link hits nodejs/node#61040.
+const scratch: string[] = []
+after(() => { for (const dir of scratch) rmSync(dir, { recursive: true, force: true }) })
+const tmp = (prefix: string) => {
+  const dir = mkdtempSync(join(tmpdir(), prefix))
+  scratch.push(dir)
+  return dir
+}
 
 /** A minimal plugin tree: a hooks.json plus the script it names, so a half-staged copy is detectable. */
 function plugin(root: string, marker: string): string {
@@ -39,6 +47,23 @@ test("ensureSymlink repoints a link aimed elsewhere — the case the whole desig
   ensureSymlink(link, a)
   assert.equal(ensureSymlink(link, b), "repointed")
   assert.equal(readlinkSync(link), b, "a live worker following this path now sees buildB")
+})
+
+// The link outlives what it pointed at whenever an old build is cleaned away. Repointing must still
+// work: Node 25's rmSync follows the link, finds nothing, and `force` swallows that — leaving the
+// dangling link in place, so recreating it failed EEXIST.
+test("ensureSymlink repoints a DANGLING link whose old target is gone", () => {
+  const dir = tmp("frizz-symlink-")
+  const gone = join(dir, "buildGone")
+  const b = join(dir, "buildB")
+  mkdirSync(gone); mkdirSync(b)
+  const link = join(dir, "current")
+
+  ensureSymlink(link, gone)
+  rmSync(gone, { recursive: true })
+  assert.ok(lstatSync(link).isSymbolicLink() && !existsSync(link), "the fixture link dangles")
+  assert.equal(ensureSymlink(link, b), "repointed")
+  assert.equal(readlinkSync(link), b)
 })
 
 // A RELATIVE existing link resolves against the link's own directory, never the process cwd. Compare

@@ -42,13 +42,14 @@ export function profileGridTemplateColumns(columnCount: number): string {
   return `minmax(6rem, 7rem) repeat(${Math.max(0, columnCount)}, auto)`
 }
 
-export type ProfileGridMoveKey = "ArrowLeft" | "ArrowRight" | "ArrowUp" | "ArrowDown" | "Home" | "End"
-
-/** The word a cell shows for an effort: "X-high" for xhigh, otherwise the effort capitalised. */
+// The product's own word for an effort level, as the picker's cells print it: "X-high" for xhigh, the
+// rest capitalised ("Low", "Ultracode"). Shared by the desktop grid and the phone's model sheet.
 export function profileGridEffortLabel(effort: string): string {
   if (effort === "xhigh") return "X-high"
   return effort.charAt(0).toUpperCase() + effort.slice(1)
 }
+
+export type ProfileGridMoveKey = "ArrowLeft" | "ArrowRight" | "ArrowUp" | "ArrowDown" | "Home" | "End"
 
 // WHEN THE MATRIX DOES NOT FIT, IT STACKS. The menu is capped at the viewport less 1rem, and the matrix
 // is as wide as a model column plus every effort word in a row — about 385px with both ladders loaded.

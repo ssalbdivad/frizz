@@ -198,9 +198,10 @@ const answeringSource = readFileSync(new URL("./answering.ts", import.meta.url),
 test("sendMessage composes the caller's own onRollback ahead of the failure tail", () => {
   // sendAnswers restores the answer drafts with its onRollback and the composer restores its text with
   // one; overwriting either — rather than calling it first — loses the human's words on a failed send.
+  // The failure is passed THROUGH: the composer uses it to make its re-send supersede the failed bubble.
   assert.match(
     answeringSource,
-    /onRollback: \(\) => \{ callbacks\.onRollback\?\.\(\); onSendFailedRef\.current\?\.\(\) \}/,
+    /onRollback: \(failure\) => \{ callbacks\.onRollback\?\.\(failure\); onSendFailedRef\.current\?\.\(\) \}/,
     "the caller's rollback must run, and run BEFORE the card is reinstated",
   )
 })

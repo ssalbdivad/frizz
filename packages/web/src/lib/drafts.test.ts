@@ -1,6 +1,6 @@
 import assert from "node:assert/strict"
 import test from "node:test"
-import { DRAFT_STORAGE_KEY, DraftStore, draftKey, parseDraftSnapshot } from "./drafts.ts"
+import { DRAFT_STORAGE_KEY, DraftStore, draftKey, draftStore, mergeIntoDraft, parseDraftSnapshot } from "./drafts.ts"
 
 class MemoryStorage {
   values = new Map<string, string>()
@@ -61,4 +61,20 @@ test("answer drafts use the transcript message identity and session, never a que
   assert.equal(first, sameQuestionInDrawer)
   assert.notEqual(first, reorderedQuestion)
   assert.notEqual(first, replacementSession)
+})
+
+// A failed send's words go back into the prompt box WITHOUT displacing what the operator typed since.
+// The composer's rollback used to restore only into an EMPTY box, so a failed message was silently
+// discarded the moment anything else was in it.
+test("mergeIntoDraft never drops either text, and never duplicates the returned one", () => {
+  const key = draftKey.followUp("/merge", "thread", "session")
+  draftStore.clear(key)
+  mergeIntoDraft(key, "the failed steer")
+  assert.equal(draftStore.get(key), "the failed steer")
+  draftStore.set(key, "typed while it was in flight")
+  mergeIntoDraft(key, "the failed steer")
+  assert.equal(draftStore.get(key), "the failed steer\n\ntyped while it was in flight")
+  mergeIntoDraft(key, "the failed steer")
+  assert.equal(draftStore.get(key), "the failed steer\n\ntyped while it was in flight", "a second rollback adds nothing")
+  draftStore.clear(key)
 })

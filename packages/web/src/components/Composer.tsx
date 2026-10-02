@@ -1,5 +1,5 @@
-import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react"
-import { ArrowUp, FileText, Loader2, Paperclip, Snail, X } from "lucide-react"
+import { createContext, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react"
+import { ArrowUp, FileText, Loader2, Paperclip, Plus, Snail, X } from "lucide-react"
 import { ATTACHMENT_ACCEPT, ATTACHMENT_MAX_BYTES, isAllowedAttachmentName, type EmbedPickedFile, type ThreadSkill } from "@frizz/shared"
 import { showToast } from "../store.ts"
 import { joinComposerValue, splitComposerValue } from "../lib/imagePaths.ts"
@@ -14,8 +14,10 @@ import { detectPlatform } from "../lib/keybindings.ts"
 import { localImageUrl } from "../lib/markdownTargets.ts"
 import { DROPPED_URI_TYPES, droppedUris, fileQueryAt, insertFileReference, insertReferencesAt, isVscodeDrag, type FileMentionSource } from "../lib/editorReach.ts"
 import { basename, dirnameLike } from "../lib/paths.ts"
+import { draftStart, insertSlashCommand, matchSlashItems, slashQueryAt, slashSegments } from "../lib/slashCommands"
 import { insertMention, matchMentions, mentionQueryAt, mentionSegments, resolveMention, splitMentionQuery, subAgentMentionCandidates, type MentionCandidate } from "../lib/threadMentions.ts"
 import { useSubAgentDirectory } from "../hooks/useSubAgentDirectory.ts"
+import { useKeyboardInset } from "../lib/keyboardInset.ts"
 
 // The shared prompt composer (the pattern the user called "perfect"): ONE rounded bordered box
 // holding a borderless auto-growing textarea plus a small round accent send button hovering INSIDE
@@ -62,6 +64,7 @@ const SKILL_SOURCE_LABEL: Record<NonNullable<ThreadSkill["source"]>, string> = {
   user: "global",
   builtin: "built-in",
   plugin: "plugin",
+  frizz: "frizz",
 }
 
 // Both typeahead menus' row inset: the textarea's 14px on the left, and 6px on the right because the
@@ -106,6 +109,52 @@ const FILE_QUERY_DEBOUNCE_MS = 60
 // the box's own fill) and never showed. Measured on the computed box-shadow, 2026-10-01.
 const CONTEXT_PILL = "rounded-[5px] bg-fg/[0.07] py-0.5 -mx-px px-px inset-ring inset-ring-fg/[0.14]"
 
+// THE PHONE LAYOUTS (below the 700px breakpoint; the caller decides, with useIsMobile). Same draft,
+// same attachment intake, same keyboard rules, same send — only the shell around the textarea differs.
+//
+//   "bar"  — a thread's bottom bar (the approved phone design, 2026-09-30). At rest it is ONE row: a
+//            round + (attach), a pill field, and one verb on the right. The verb follows the draft: with
+//            text it is Send; with none it is whatever the caller passes as `idlePrimary` (the thread's
+//            Done), or a disabled ↑. Focus or text opens the field into a box whose second row carries
+//            the + , the caller's `tools` (the model chip) and the verb. `override` is the seam for a
+//            bar that is not a prompt at all — see PhoneBarApi.
+//   "page" — the new-thread page: the textarea fills the space it is given, and the tool row (+ and
+//            `tools`) sits under it. The page's own header carries the send.
+//
+// Both ride the software keyboard: a spacer under the bar, sized by useKeyboardInset, lifts it onto
+// the keyboard while the panel above shrinks.
+export interface PhoneBarApi {
+  /** Switch the bar back to the prompt and focus it (opens the keyboard: call it from a tap). */
+  editReply: () => void
+}
+
+export type PhoneComposerLayout =
+  | {
+      layout: "bar"
+      tools?: ReactNode
+      // The verb when the draft is empty. `compact` is true inside the open box's toolbar (36px),
+      // false in the resting row (42px).
+      idlePrimary?: (compact: boolean) => ReactNode
+      // THE ANSWER SEAM. When set, the resting bar renders this INSTEAD of its row — a thread with open
+      // questions shows [keyboard] + "Answer N questions" there. The textarea stays mounted (hidden),
+      // so `editReply` can focus it inside the same tap and iOS still raises the keyboard; once the
+      // field has focus or text, the ordinary prompt row returns, and the override comes back when it
+      // is empty and blurred again.
+      override?: (api: PhoneBarApi) => ReactNode
+      // Long-press (≈500ms) on Send. Only passed where interrupt-and-send is allowed
+      // (canInterruptAndSend); without it a long press is an ordinary send.
+      onLongPressSend?: () => void
+    }
+  | { layout: "page"; tools?: ReactNode }
+
+const LONG_PRESS_MS = 500
+
+// HOLDING THE BAR OPEN. The open box's toolbar is only there while the field has focus or text — but a
+// control in it that opens a sheet (the model chip) closes the keyboard first, which blurs an empty
+// field, which would unmount the toolbar and the sheet it just opened along with it. A toolbar control
+// calls `hold(true)` for as long as its sheet is up, and the bar stays open until it lets go.
+export const PhoneBarHoldContext = createContext<((held: boolean) => void) | null>(null)
+
 // Auto-grow: reset to auto, then snap to content height clamped at maxHeight.
 //
 // BATCHED across every composer on the page (2026-10-01). Each snap writes `height` and then reads
@@ -145,6 +194,7 @@ export function Composer({
   contextTokens,
   contextSources,
   slashSuggest,
+  slashSuggestVersion,
   mentionCandidates,
   ownMention,
   fileMentions,
@@ -152,6 +202,8 @@ export function Composer({
   onPushQueued,
   onSaveLazy,
   attachBase,
+  phone,
+  onUploadingChange,
 }: {
   value: string
   onChange: (v: string) => void
@@ -188,11 +240,15 @@ export function Composer({
   // Only surfaces that pass it get it; reply/queue composers omit it.
   leftAction?: React.ReactNode
   // SKILLS TYPEAHEAD. When set, a draft that is exactly one `/`-led token opens a suggestion menu of
-  // the thread's invocable skills above the box (fetched lazily, once, on first trigger). The list is
+  // the thread's invocable skills and slash commands (`/context`, `/usage`, …) above the box (fetched lazily, once, on first trigger). The list is
   // whatever the thread's own harness reports — the caller owns sourcing entirely; this component only
   // renders and completes. Surfaces without a session to ask (the dispatch composer) omit it and the
   // whole affordance is inert.
   slashSuggest?: () => Promise<ThreadSkill[]>
+  // Changes when the list behind `slashSuggest` has (a user command saved in Settings): the box forgets
+  // the list it holds and asks again on the next `/`. A value, not the function's identity — a caller
+  // that hands over a fresh arrow every render must not refetch on every render.
+  slashSuggestVersion?: string | number
   // MENTION TYPEAHEAD. When set, an `@` at a word boundary with the caret inside its token opens a menu
   // of these threads' handles above the box; choosing one inserts `@handle ` as plain text. The caller
   // owns the list (lib/threadMentions.ts mentionCandidates — the project's threads minus the one being
@@ -236,6 +292,11 @@ export function Composer({
   // card shows a thread of ANY project while the page is focused on one, so it passes the thread's
   // project explicitly (AllQueuesCard ReplyBox).
   attachBase?: string
+  // A phone layout (see PhoneComposerLayout). Absent everywhere above the phone breakpoint.
+  phone?: PhoneComposerLayout
+  // For a surface whose send lives OUTSIDE this box (the phone's new-thread page puts Start in its
+  // header): an upload in flight must hold that send too, as it holds Enter and ↑ here.
+  onUploadingChange?: (uploading: boolean) => void
 }) {
   const taRef = useRef<HTMLTextAreaElement>(null)
   const contextRef = useRef<HTMLDivElement>(null)
@@ -420,6 +481,22 @@ export function Composer({
   // own text, so while a mention is on screen the MIRROR draws every glyph and the textarea's go
   // transparent (its caret keeps the fg colour); with only pills, the textarea draws the text as ever.
   const stagedTokens = useMemo(() => contextTokens ?? [], [contextTokens])
+  // The thread's skills and commands, as its harness reports them: fetched once, the first time the draft
+  // holds a `/` token anywhere (null = not asked yet; [] = asked, nothing to offer — including a fetch
+  // that failed, which must read as "no suggestions", never as an error the operator has to dismiss).
+  // Read by the menu AND the tint, so a draft restored with `/frizz-stack` in it lights up too.
+  const [skillItems, setSkillItems] = useState<ThreadSkill[] | null>(null)
+  const [skillsVersion, setSkillsVersion] = useState(slashSuggestVersion)
+  if (skillsVersion !== slashSuggestVersion) {
+    setSkillsVersion(slashSuggestVersion)
+    setSkillItems(null)
+  }
+  const slashItems = useMemo(() => skillItems ?? [], [skillItems])
+  const opensAt = draftStart(prose)
+  // The textarea's collapsed selection (null while blurred or while a range is selected), refreshed on
+  // every edit and caret move. Both typeaheads follow it: a `/` or an `@` can sit anywhere in the prose.
+  const [caret, setCaret] = useState<number | null>(null)
+  const trackCaret = (el: HTMLTextAreaElement) => setCaret(el.selectionStart === el.selectionEnd ? el.selectionStart : null)
   const allMentions = useMemo(
     () => (ownMention ? [...(mentionCandidates ?? []), ownMention] : mentionCandidates ?? []),
     [mentionCandidates, ownMention],
@@ -455,9 +532,25 @@ export function Composer({
           out.push(renderInputFenceRun(prose, piece, out.length))
           continue
         }
+        let segAt = piece.start
         for (const seg of mentionSegments(prose.slice(piece.start, piece.end), allMentions)) {
+          const segStart = segAt
+          segAt += seg.text.length
           if (seg.kind === "text") {
-            out.push(seg.text)
+            // A `/name` the thread can run takes the same treatment as a mention in its OWN colour
+            // (lib/slashCommands.ts), so a skill never reads as a thread.
+            for (const run of slashSegments(seg.text, slashItems, segStart, opensAt)) {
+              if (run.kind === "text") {
+                out.push(run.text)
+                continue
+              }
+              hasMention = true
+              out.push(
+                <span key={out.length} data-composer-command className="rounded-[3px] bg-command/12 py-px -mx-px px-px text-command">
+                  {run.text}
+                </span>,
+              )
+            }
             continue
           }
           hasMention = true
@@ -471,7 +564,7 @@ export function Composer({
     }
     const paintsText = hasMention || fences !== null
     return paintsText || hasToken ? { segments: out, paintsText } : null
-  }, [prose, stagedTokens, allMentions])
+  }, [prose, stagedTokens, allMentions, slashItems, opensAt])
   const backdropSegments = backdrop?.segments
 
   // The mirror rides the textarea's own scroll position (a textarea at maxHeight scrolls its
@@ -531,12 +624,9 @@ export function Composer({
     if (el && (!active || active.contains(el))) el.focus({ preventScroll: true })
   }, [busy])
 
-  // SKILLS TYPEAHEAD state. `skillItems` is the harness's list, fetched once on the first `/` trigger
-  // (null = not asked yet; [] = asked, nothing to offer — including a fetch that failed, which must
-  // read as "no suggestions", never as an error the operator has to dismiss). `dismissedFor` records
-  // the exact draft an Escape closed the menu over, so it stays closed until the draft CHANGES —
-  // without it the menu would reopen on the very next render.
-  const [skillItems, setSkillItems] = useState<ThreadSkill[] | null>(null)
+  // SKILLS TYPEAHEAD state (`skillItems`, `caret` and the tint inputs live above the backdrop, which
+  // reads them). `dismissedFor` records the exact draft an Escape closed the menu over, so it stays
+  // closed until the draft CHANGES — without it the menu would reopen on the very next render.
   // The highlighted row, REMEMBERED WITH THE DRAFT IT WAS CHOSEN OVER: the filtered list under it
   // changes with every keystroke, so a highlight belongs to one draft and reads as row 0 for any
   // other. Derived, not reset by an effect — `useEffect(() => setSuggestSel(0), [prose])` looked free
@@ -550,11 +640,13 @@ export function Composer({
   const setSuggestSel = (next: number | ((current: number) => number)) =>
     setSuggestSelFor({ prose, index: typeof next === "function" ? next(suggestSel) : next })
   const [dismissedFor, setDismissedFor] = useState<string | null>(null)
-  // Active while the draft is exactly one `/`-led token — the shape of a skill invocation still being
-  // typed. A space (arguments have begun) or a newline closes it.
-  const slashActive = Boolean(slashSuggest) && /^\/\S*$/.test(prose)
+  // The `/` token the caret is in, at any word boundary — the mention menu's own rule (lib/slashCommands.ts).
+  // A space (arguments have begun) or the caret leaving the token closes it.
+  const slash = slashSuggest ? slashQueryAt(prose, caret) : undefined
+  const slashActive = slash !== undefined
+  const wantsSkills = Boolean(slashSuggest) && /(?:^|\s)\/[^\s/@]/.test(prose)
   useEffect(() => {
-    if (!slashActive || skillItems !== null) return
+    if (!(slashActive || wantsSkills) || skillItems !== null) return
     let live = true
     // Errors resolve to "asked, nothing to offer": the caller decides whether to retry on a later
     // trigger by handing this component a fresh mount (drawer reopen) — a typeahead never toasts.
@@ -563,16 +655,11 @@ export function Composer({
       () => { if (live) setSkillItems([]) },
     )
     return () => { live = false }
-  }, [slashActive, skillItems, slashSuggest])
+  }, [slashActive, wantsSkills, skillItems, slashSuggest])
   const suggestions = useMemo(() => {
-    if (!slashActive || !skillItems || dismissedFor === prose) return []
-    const query = prose.slice(1).toLowerCase()
-    // Prefix matches first (what completion usually wants), then substring matches — those are what
-    // surface a namespaced skill (`frizz:gh`) from its bare name.
-    const starts = skillItems.filter((s) => s.name.toLowerCase().startsWith(query))
-    const contains = skillItems.filter((s) => !s.name.toLowerCase().startsWith(query) && s.name.toLowerCase().includes(query))
-    return [...starts, ...contains]
-  }, [slashActive, skillItems, dismissedFor, prose])
+    if (!slash || !skillItems || dismissedFor === prose) return []
+    return matchSlashItems(skillItems, slash.query, slash.start === opensAt)
+  }, [slash?.start, slash?.query, opensAt, skillItems, dismissedFor, prose])
   const suggestOpen = suggestions.length > 0
   // The DISTINCT source labels in the list on screen, which every row then reserves room for (see the
   // sizer in the menu below). Empty when no visible suggestion reports a source — a harness that says
@@ -587,14 +674,11 @@ export function Composer({
   useEffect(() => {
     suggestListRef.current?.querySelector(`[data-suggest-index="${suggestSel}"]`)?.scrollIntoView({ block: "nearest" })
   }, [suggestSel])
-  // MENTION TYPEAHEAD state. Unlike `/`, a mention can sit anywhere in the prose, so the menu follows
-  // the CARET: `caret` is the textarea's collapsed selection (null while blurred or while a range is
-  // selected), refreshed on every edit and caret move. Disjoint from the skills menu by construction —
-  // that one needs the whole draft to be a single `/` token, and a `/` right before `@` never opens this.
-  const [caret, setCaret] = useState<number | null>(null)
-  const trackCaret = (el: HTMLTextAreaElement) => setCaret(el.selectionStart === el.selectionEnd ? el.selectionStart : null)
+  // MENTION TYPEAHEAD state. It follows the CARET like the skills menu, and is disjoint from it by
+  // construction: a `/` token never contains an `@`, and an open skills menu wins.
   const mentionable = (mentionCandidates?.length ?? 0) > 0 || ownMention !== undefined
-  const mention = mentionable && !suggestOpen ? mentionQueryAt(prose, caret) : undefined
+  // The phone layouts draw no mention menu, so one must never open there: it would claim Enter unseen.
+  const mention = mentionable && !suggestOpen && !phone ? mentionQueryAt(prose, caret) : undefined
   // AFTER THE DOT the menu is the named thread's SUB-AGENTS (`@port-the-parser.ca`): the head resolves to
   // one of the candidates by the same fold a plain mention does, and its children arrive from the
   // server's directory through SubAgentMentionSource below — mounted only while such a query is open, so
@@ -669,9 +753,11 @@ export function Composer({
     else acceptFile(row.file)
   }
   function acceptSuggestion(item: { name: string }) {
-    const next = `/${item.name} `
-    setProse(next)
-    requestAnimationFrame(() => taRef.current?.setSelectionRange(next.length, next.length))
+    if (!slash || caret === null) return
+    const next = insertSlashCommand(prose, slash.start, caret, item.name)
+    setProse(next.prose)
+    setCaret(next.caret)
+    requestAnimationFrame(() => taRef.current?.setSelectionRange(next.caret, next.caret))
   }
 
   const hasContent = value.trim().length > 0
@@ -809,6 +895,11 @@ export function Composer({
       })
     }
     if (e.key === "Escape" && !e.nativeEvent.isComposing) {
+      // On the /full page the key is not ours: Escape there always leaves fullscreen (DrawerStack's
+      // `onEscapeAtRest`), and a blur first would make the reader press it twice with nothing visible
+      // happening the first time. The draft is persisted, so the drawer or card it lands in shows it.
+      // A drawer opened OVER /full is portaled outside this column and still climbs out below.
+      if (e.currentTarget.closest("[data-standalone-thread]")) return
       // Climb out: blur the textarea and STOP the event — the same physical keypress must not also
       // reach App's window handler and pop a drawer. The NEXT Esc, at rest, unwinds normally.
       // Mid-IME-composition Esc is the IME's own cancel — leave it to the editor, don't blur.
@@ -819,48 +910,11 @@ export function Composer({
     // Arrow keys just move the caret — no boundary semantics (the nav walk they used to drive is gone).
   }
 
-  return (
-    // Focused = the accent border: the visual handoff from the nav chevron to the box.
-    // While a file drags over, the border dashes and a hint overlay appears (screenshot intake).
-    <div
-      className={`group relative rounded-xl border bg-bg transition-colors focus-within:border-accent ${
-        dragging ? "border-dashed border-accent" : "border-border"
-      }`}
-      onDragOver={(e) => {
-        // A drag from VS Code's explorer first: it may carry a text fallback too, which the textarea
-        // would otherwise take as typed text.
-        if (fileMentions && isVscodeDrag([...e.dataTransfer.types])) {
-          e.preventDefault()
-          e.dataTransfer.dropEffect = "copy"
-          setDragging("reference")
-          return
-        }
-        if ([...e.dataTransfer.items].some((i) => i.kind === "file")) {
-          e.preventDefault()
-          setDragging("attach")
-        }
-      }}
-      onDragLeave={() => setDragging(false)}
-      onDrop={(e) => {
-        e.preventDefault()
-        setDragging(false)
-        if (fileMentions && isVscodeDrag([...e.dataTransfer.types])) {
-          void takeDropped(droppedUris(DROPPED_URI_TYPES.map((type) => e.dataTransfer.getData(type))))
-          return
-        }
-        void takeFiles(e.dataTransfer.files)
-      }}
-    >
-      {dragging && (
-        <div className="pointer-events-none absolute inset-0 z-10 flex items-center justify-center rounded-xl bg-bg/80 text-[12px] text-muted">
-          {dragging === "reference" ? "Drop to add to the prompt" : "Drop file to attach"}
-        </div>
-      )}
-      {/* The skills menu, floated ABOVE the box (the composer usually lives at the bottom of its surface,
-          so up is the direction with room; `menuBelow` flips it where it does not). Rows are text-only — a name and its one-line description —
-          which keeps this out of icon-ink territory entirely. Mousedown is prevented on every row for
-          the same reason as the send button: choosing a suggestion must never blur the textarea. */}
-      {suggestOpen && (
+  // The skills menu, floated ABOVE the box (the composer lives at the bottom of its surface, so up is
+  // the direction with room). Rows are text-only — a name and its one-line description — which keeps
+  // this out of icon-ink territory entirely. Mousedown is prevented on every row for the same reason as
+  // the send button: choosing a suggestion must never blur the textarea. Shared by every layout.
+  const suggestMenu = suggestOpen ? (
         <div
           ref={suggestListRef}
           data-slash-menu
@@ -905,7 +959,269 @@ export function Composer({
             </button>
           ))}
         </div>
+  ) : null
+
+  // ── The phone layouts ────────────────────────────────────────────────────────────────────────────
+  // Hooks first and unconditionally, so a window that crosses the breakpoint keeps its hook order.
+  const [focused, setFocused] = useState(false)
+  const [held, setHeld] = useState(false)
+  const phoneRootRef = useRef<HTMLDivElement>(null)
+  const keyboardInset = useKeyboardInset(phoneRootRef, Boolean(phone))
+  const pressTimerRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined)
+  const longPressedRef = useRef(false)
+  useEffect(() => () => clearTimeout(pressTimerRef.current), [])
+  const onUploadingChangeRef = useRef(onUploadingChange)
+  onUploadingChangeRef.current = onUploadingChange
+  useEffect(() => { onUploadingChangeRef.current?.(uploading) }, [uploading])
+
+  if (phone) {
+    const canSend = hasContent && !busy && !uploading
+    // The textarea's type is 16px on a phone, not the mockup's 15.5: iOS Safari zooms the whole page
+    // into any focused field set below 16px, and the desktop's 13px would do exactly that.
+    const page = phone.layout === "page"
+    // THE BAR opens (a box with a toolbar) while the field has focus or anything in it, and is a single
+    // row otherwise. The textarea is the SAME element in both — every child before it keeps its slot (a
+    // `false` holds one) — so opening the box never remounts it and never costs the caret.
+    const expanded = !page && (focused || held || hasContent || attachments.length > 0)
+    // Resting, the field is a 42px pill: 40px of textarea inside its 1px border, one 20px line.
+    const typeClass = page
+      ? "px-[18px] py-[14px] text-[17px] leading-[25px]"
+      : expanded
+        ? "px-3 pt-[10px] pb-1 text-[16px] leading-[22px]"
+        : "px-[14px] py-[10px] text-[16px] leading-[20px]"
+    const textareaBox = page ? { minHeight, maxHeight } : expanded ? { minHeight: 44, maxHeight: 176 } : { minHeight: 40, maxHeight: 40 }
+    const fileInput = (
+      <input
+        ref={fileRef}
+        type="file"
+        multiple
+        accept={ATTACHMENT_ACCEPT}
+        className="hidden"
+        onChange={(e) => {
+          void takeFiles(e.target.files)
+          e.target.value = "" // reset so re-picking the same file fires change again
+        }}
+      />
+    )
+    // The + is the paperclip's own path: the same hidden file input, the same intake.
+    const attachButton = (size: 36 | 42) => (
+      <button
+        type="button"
+        data-phone-attach
+        onMouseDown={(e) => e.preventDefault()}
+        onClick={() => fileRef.current?.click()}
+        disabled={busy || uploading}
+        title="Attach files"
+        aria-label="Attach files"
+        className={`relative flex shrink-0 items-center justify-center rounded-full border border-border-strong bg-panel text-fg active:bg-hover disabled:opacity-45 ${
+          size === 42 ? "size-[42px]" : "size-[36px] after:absolute after:-inset-[4px] after:content-['']"
+        }`}
+      >
+        {uploading ? <Loader2 size={17} strokeWidth={2.2} className="animate-spin" /> : <Plus size={size === 42 ? 19 : 17} strokeWidth={2.2} />}
+      </button>
+    )
+    const textarea = (
+      <div className={page ? "relative flex flex-1 flex-col" : "relative"}>
+        {backdropSegments && (
+          <div
+            ref={contextRef}
+            aria-hidden
+            data-composer-context-backdrop
+            className={`pointer-events-none absolute inset-0 select-none overflow-hidden whitespace-pre-wrap [overflow-wrap:break-word] ${typeClass} text-transparent`}
+          >
+            {backdropSegments}
+          </div>
+        )}
+        <textarea
+          id={id}
+          ref={taRef}
+          data-1p-ignore
+          onScroll={backdropSegments ? syncContextScroll : undefined}
+          data-surface={surface}
+          data-claims-escape
+          value={prose}
+          autoFocus={autoFocus}
+          disabled={busy}
+          onChange={(e) => {
+            setProse(e.target.value)
+            trackCaret(e.target)
+          }}
+          onSelect={slashSuggest ? (e) => trackCaret(e.currentTarget) : undefined}
+          onKeyDown={onKeyDown}
+          onFocus={() => setFocused(true)}
+          onBlur={() => {
+            setFocused(false)
+            setCaret(null)
+          }}
+          onPaste={(e) => {
+            const files = [...e.clipboardData.items].filter((i) => i.kind === "file").map((i) => i.getAsFile()!).filter(Boolean)
+            if (files.length) {
+              e.preventDefault()
+              void takeFiles(files)
+            }
+          }}
+          placeholder={placeholder}
+          rows={1}
+          spellCheck={false}
+          style={textareaBox}
+          // `flex-1` on the page: the textarea's snapped height is its basis, and it grows to fill the
+          // page, so a tap anywhere on the blank page below the prompt lands in it.
+          className={`relative block w-full resize-none bg-transparent ${typeClass} text-fg outline-none placeholder:text-faint scrollbar-none disabled:opacity-60 ${page ? "flex-1" : ""}`}
+        />
+      </div>
+    )
+    const attachmentRow = attachments.length > 0 && (
+      <div className={`flex flex-wrap gap-1.5 ${page ? "px-[18px] pb-3" : "px-3 pb-1"}`}>
+        {attachments.map((a, i) => (
+          <AttachmentChip
+            key={`${a.path}-${i}`}
+            attachment={a}
+            disabled={busy}
+            onRemove={() => setPaths(attachmentPaths.filter((_, j) => j !== i))}
+          />
+        ))}
+      </div>
+    )
+    // Under the bar: the strip the keyboard covers (0 without one), else the device's home-indicator
+    // inset. Inside this root, so the panel above shrinks rather than the bar floating over it.
+    const keyboardSpacer = keyboardInset > 0 ? <div aria-hidden data-keyboard-spacer style={{ height: keyboardInset }} /> : null
+
+    if (page) {
+      return (
+        <div ref={phoneRootRef} data-phone-composer="page" className={`flex min-h-0 flex-1 flex-col ${keyboardInset > 0 ? "" : "pb-[env(safe-area-inset-bottom)]"}`}>
+          <div className="relative flex min-h-0 flex-1 flex-col overflow-y-auto scrollbar-none">
+            {suggestMenu}
+            {textarea}
+            {attachmentRow}
+          </div>
+          <div data-phone-tool-row className="flex min-w-0 shrink-0 items-center gap-2 px-2.5 py-2">
+            {attachButton(36)}
+            {phone.tools}
+          </div>
+          {fileInput}
+          {keyboardSpacer}
+        </div>
+      )
+    }
+
+    const override = !expanded && phone.override ? phone.override({ editReply: () => taRef.current?.focus() }) : null
+    const sendButton = (compact: boolean) => (
+      <button
+        type="button"
+        data-phone-send
+        // Keep the caret: pressing Send must not blur the field (the desktop send's own rule).
+        onMouseDown={(e) => e.preventDefault()}
+        onContextMenu={(e) => e.preventDefault()}
+        onPointerDown={() => {
+          longPressedRef.current = false
+          clearTimeout(pressTimerRef.current)
+          if (!canSend || !phone.onLongPressSend) return
+          const fire = phone.onLongPressSend
+          pressTimerRef.current = setTimeout(() => {
+            longPressedRef.current = true
+            navigator.vibrate?.(12)
+            fire()
+          }, LONG_PRESS_MS)
+        }}
+        onPointerUp={() => clearTimeout(pressTimerRef.current)}
+        onPointerLeave={() => clearTimeout(pressTimerRef.current)}
+        onPointerCancel={() => clearTimeout(pressTimerRef.current)}
+        onClick={() => {
+          // The long press already sent; the click that ends it must not send again.
+          if (longPressedRef.current) {
+            longPressedRef.current = false
+            return
+          }
+          onSubmit()
+        }}
+        disabled={!canSend}
+        title={phone.onLongPressSend ? "Send · hold to interrupt and send now" : "Send"}
+        aria-label="Send"
+        // The ↑ is solid whenever it is the verb; with nothing to send it is the same disc, dimmed.
+        // `[-webkit-touch-callout:none]` + `select-none`: a long press must not raise iOS's callout.
+        className={`relative flex shrink-0 select-none items-center justify-center rounded-full bg-fg text-bg [-webkit-touch-callout:none] disabled:opacity-35 ${
+          compact ? "size-[36px] after:absolute after:-inset-[4px] after:content-['']" : "size-[42px]"
+        }`}
+      >
+        {busy ? <Loader2 size={compact ? 17 : 19} strokeWidth={2.4} className="animate-spin" /> : <ArrowUp size={compact ? 17 : 19} strokeWidth={2.4} />}
+      </button>
+    )
+    const primary = (compact: boolean) => (hasContent ? sendButton(compact) : (phone.idlePrimary?.(compact) ?? sendButton(compact)))
+
+    return (
+      <div ref={phoneRootRef} data-phone-composer="bar" data-phone-composer-open={expanded ? "" : undefined} className="relative bg-bg">
+        <div className={`px-2.5 pt-2 ${keyboardInset > 0 ? "pb-2.5" : "pb-[max(10px,env(safe-area-inset-bottom))]"}`}>
+          {override && <div data-phone-bar-override className="flex min-w-0 items-end gap-2">{override}</div>}
+          <div
+            // Hidden, not unmounted, under an override: `editReply` focuses this textarea inside the
+            // tap that asked for it, which is what makes iOS raise the keyboard at all.
+            className={override ? "pointer-events-none absolute h-0 w-0 overflow-hidden opacity-0" : "flex min-w-0 items-end gap-2"}
+          >
+            {!expanded && attachButton(42)}
+            <div
+              className={`relative min-w-0 flex-1 border border-border-strong bg-panel ${
+                expanded ? "rounded-[20px] pb-2" : "rounded-[21px]"
+              }`}
+            >
+              {suggestMenu}
+              {textarea}
+              {expanded && attachmentRow}
+              {expanded && (
+                <div data-phone-composer-toolbar className="flex min-w-0 items-center gap-2 px-2 pt-1">
+                  {attachButton(36)}
+                  <PhoneBarHoldContext.Provider value={setHeld}>{phone.tools}</PhoneBarHoldContext.Provider>
+                  <span className="flex-1" />
+                  {primary(true)}
+                </div>
+              )}
+            </div>
+            {!expanded && primary(false)}
+          </div>
+          {fileInput}
+        </div>
+        {keyboardSpacer}
+      </div>
+    )
+  }
+
+  return (
+    // Focused = the accent border: the visual handoff from the nav chevron to the box.
+    // While a file drags over, the border dashes and a hint overlay appears (screenshot intake).
+    <div
+      className={`group relative rounded-xl border bg-bg transition-colors focus-within:border-accent ${
+        dragging ? "border-dashed border-accent" : "border-border"
+      }`}
+      onDragOver={(e) => {
+        // A drag from VS Code's explorer first: it may carry a text fallback too, which the textarea
+        // would otherwise take as typed text.
+        if (fileMentions && isVscodeDrag([...e.dataTransfer.types])) {
+          e.preventDefault()
+          e.dataTransfer.dropEffect = "copy"
+          setDragging("reference")
+          return
+        }
+        if ([...e.dataTransfer.items].some((i) => i.kind === "file")) {
+          e.preventDefault()
+          setDragging("attach")
+        }
+      }}
+      onDragLeave={() => setDragging(false)}
+      onDrop={(e) => {
+        e.preventDefault()
+        setDragging(false)
+        if (fileMentions && isVscodeDrag([...e.dataTransfer.types])) {
+          void takeDropped(droppedUris(DROPPED_URI_TYPES.map((type) => e.dataTransfer.getData(type))))
+          return
+        }
+        void takeFiles(e.dataTransfer.files)
+      }}
+    >
+      {dragging && (
+        <div className="pointer-events-none absolute inset-0 z-10 flex items-center justify-center rounded-xl bg-bg/80 text-[12px] text-muted">
+          {dragging === "reference" ? "Drop to add to the prompt" : "Drop file to attach"}
+        </div>
       )}
+      {suggestMenu}
       {/* The mention menu: the skills menu's box and rows, so the two read as one control. A row is the
           handle — exactly the text that will land in the box — then the thread's live status, dimmed and
           truncated, and a `done` tag in the tag column for a thread already filed. A sub-agent's row is
@@ -995,8 +1311,8 @@ export function Composer({
           onMouseMove={backdropSegments && contextSources ? (e) => setHoverSource(sourceAt(e.clientX, e.clientY)) : undefined}
           onMouseLeave={hoverSource === undefined ? undefined : () => setHoverSource(undefined)}
           data-surface={surface}
-          // Escape here BLURS (onKeyDown below); the enclosing ThreadSheet reads this to leave the
-          // key to us instead of dismissing itself on the same press.
+          // Escape here BLURS (onKeyDown below; on /full it leaves fullscreen instead); the enclosing
+          // ThreadSheet reads this to leave the key to us instead of dismissing itself on the same press.
           data-claims-escape
           value={prose}
           autoFocus={autoFocus}
@@ -1005,8 +1321,8 @@ export function Composer({
             setProse(e.target.value)
             trackCaret(e.target)
           }}
-          onSelect={mentionCandidates || fileMentions ? (e) => trackCaret(e.currentTarget) : undefined}
-          onBlur={mentionCandidates || fileMentions ? () => setCaret(null) : undefined}
+          onSelect={mentionCandidates || slashSuggest || fileMentions ? (e) => trackCaret(e.currentTarget) : undefined}
+          onBlur={mentionCandidates || slashSuggest || fileMentions ? () => setCaret(null) : undefined}
           onKeyDown={onKeyDown}
           onPaste={(e) => {
             // Any file item claims the whole paste (preventDefault) — deliberately. An image paste

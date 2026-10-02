@@ -337,22 +337,43 @@ test("claude quota: a rejected token (401) falls back to the CLI, which owns ref
 test("claude quota: a 429 backs off — no CLI hammering, last good reading served", () => withCache(async (cacheDir) => {
   await readClaudeQuota("claude-test", { cacheDir, readToken: noToken, now: () => 0, execUsage: async () => usageEnvelope })
   let cliCalls = 0
-  const q = await readClaudeQuota(
-    "claude-test",
-    {
-      cacheDir,
-      now: () => 4 * 60_000,
-      readToken: async () => "tok-live",
-      fetchImpl: usageResponse(429),
-      execUsage: async () => { cliCalls++; return usageEnvelope },
-    },
-    { force: true },
-  )
+  // The heartbeat's refresh meets the 429: it spends no CLI process and keeps the reading.
+  await refreshClaudeQuotaInBackground("claude-test", {
+    cacheDir,
+    now: () => 4 * 60_000,
+    readToken: async () => "tok-live",
+    fetchImpl: usageResponse(429),
+    execUsage: async () => { cliCalls++; return usageEnvelope },
+  })
+  await claudeQuotaRefreshSettled()
+  const q = await readClaudeQuota("claude-test", { cacheDir, readToken: async () => "tok-live", now: () => 4 * 60_000 })
   assert.equal(q.status, "ok")
   assert.equal(q.windows[0]?.usedPercent, 20)
-  // A refusal is not a failure: no `retry-after` header → the 5m default, and the copy says when.
-  assert.equal(q.detail, "Next refresh in 5m · last updated 4m ago")
   assert.equal(cliCalls, 0)
+}))
+
+test("claude quota: a manual recheck during a 429 reads through the CLI and keeps the endpoint's deadline", () => withCache(async (cacheDir) => {
+  await readClaudeQuota("claude-test", { cacheDir, readToken: noToken, now: () => 0, execUsage: async () => usageEnvelope })
+  let fetches = 0
+  let cliCalls = 0
+  const deps = {
+    cacheDir,
+    readToken: async () => "tok-live",
+    fetchImpl: (async () => { fetches++; return new Response("", { status: 429 }) }) as unknown as typeof fetch,
+    execUsage: async () => { cliCalls++; return "Current session: 55% used\nCurrent week (all models): 3% used" },
+  }
+  // The refresh that meets the 429 falls through to the CLI at once rather than serving the old reading.
+  const fresh = await readClaudeQuota("claude-test", { ...deps, now: () => 4 * 60_000 }, { force: true })
+  assert.equal(fresh.windows[0]?.usedPercent, 55)
+  assert.equal(fresh.detail, undefined)
+  assert.deepEqual([fetches, cliCalls], [1, 1])
+  // Inside the window a second press goes straight to the CLI, never the endpoint…
+  await readClaudeQuota("claude-test", { ...deps, now: () => 5 * 60_000 }, { force: true })
+  assert.deepEqual([fetches, cliCalls], [1, 2])
+  // …and the heartbeat, past the fresh reading's TTL, still leaves the refusing endpoint alone.
+  await refreshClaudeQuotaInBackground("claude-test", { ...deps, now: () => 8 * 60_000 })
+  await claudeQuotaRefreshSettled()
+  assert.deepEqual([fetches, cliCalls], [1, 2])
 }))
 
 test("claude quota: a 429's retry-after is honored by every caller until it passes, then cleared by a success", () => withCache(async (cacheDir) => {
@@ -364,7 +385,8 @@ test("claude quota: a 429's retry-after is honored by every caller until it pass
       ? new Response("", { status: 429, headers: { "retry-after": "139" } })
       : new Response(JSON.stringify(endpointBody), { status: 200 })
   }) as unknown as typeof fetch
-  const deps = { cacheDir, readToken: async () => "tok-live", fetchImpl, execUsage: async () => { throw new Error("CLI must not run") } }
+  // The CLI fails too, so a manual recheck inside the window can only serve the labeled cached reading.
+  const deps = { cacheDir, readToken: async () => "tok-live", fetchImpl, execUsage: async () => { throw new Error("CLI unavailable") } }
   await readClaudeQuota("claude-test", { cacheDir, readToken: noToken, now: () => 0, execUsage: async () => usageEnvelope })
 
   // The recheck that learns the deadline: 3m in, the endpoint answers 429 + retry-after 139s.

@@ -27,6 +27,7 @@ import { SettingsField } from "./SettingsField.tsx"
 import { DeleteOldThreads, RETENTION_DAYS } from "./DeleteOldThreads.tsx"
 import { embedded } from "../lib/embed.ts"
 import { aboveDrawersZ } from "../lib/overlaySurface.ts"
+import { SlashCommandsField } from "./SlashCommandsField.tsx"
 
 type NotifPerm = "default" | "granted" | "denied" | "unsupported"
 function currentPerm(): NotifPerm {
@@ -178,6 +179,9 @@ export function SettingsDrawer() {
               <OnOffToggle value={draft.notifications} onChange={toggleNotifications} />
               {inEditor ? <EditorHint>Shown in your browser, not in the sidebar.</EditorHint> : draft.notifications && <PermHint perm={perm} />}
             </SettingsField>
+
+            {/* Its own files, not a Settings value: saved by its own button (SlashCommandsField.tsx). */}
+            <SlashCommandsField />
 
             <SettingsField label="Home folder" help={SETTINGS_HELP.homeFolder}>
               <HomeFolderField

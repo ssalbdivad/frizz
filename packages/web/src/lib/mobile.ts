@@ -57,6 +57,14 @@ function phoneSnapshot(): boolean {
 }
 
 /**
+ * The same answer as `useIsMobile`, for code outside React that acts on a click (lib/local-file-links).
+ * False in an editor's sidebar: a link there opens in the editor beside it, not the phone's reader.
+ */
+export function isMobileViewport(): boolean {
+  return phoneSnapshot()
+}
+
+/**
  * The same answer as useIsMobile, outside React — for a module that acts on the layout rather than
  * rendering it (lib/editorBridge.ts opening the phone's New thread sheet). False in an editor's sidebar,
  * whose new-thread box is the desktop's, always on screen (AllQueues.tsx SidebarPage).

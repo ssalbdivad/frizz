@@ -14,6 +14,7 @@ import { ThreadView as ThreadViewSurface } from "./ChatView.tsx"
 import { DrawerStack } from "./DrawerStack.tsx"
 import { FileViewerPanel } from "./FileViewerPanel.tsx"
 import { FocusRail, RAIL_WIDTH } from "./FocusRail.tsx"
+import { exitFullscreen } from "./CollapseThreadLink.tsx"
 import { TooltipProvider } from "./Tooltip.tsx"
 import { Toaster } from "./Toaster.tsx"
 import { useQuery } from "@tanstack/react-query"
@@ -185,8 +186,10 @@ export function StandaloneThreadPage({ slug }: { slug: string }) {
             sub-agent row, a background-shell row, the frizz-doc button, a `[…](/thread/<slug>)` link —
             pushed a layer onto the store that nothing displayed, so the click was simply dead. Mounted
             OUTSIDE the transformed row: the sheets are `fixed inset-0`, and a transform on an ancestor
-            is a containing block for them, which would drag every sheet along with the slide. */}
-        <DrawerStack />
+            is a containing block for them, which would drag every sheet along with the slide.
+            Escape at rest — every drawer and the file viewer already unwound — exits fullscreen, the
+            same way out as the header's collapse icon. */}
+        <DrawerStack onEscapeAtRest={() => exitFullscreen(slug)} />
         <Toaster />
       </div>
     </TooltipProvider>

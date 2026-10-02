@@ -50,6 +50,7 @@ import { describeRuntime, resolveRuntimes, type ResolvedRuntimes, type ResolveRu
 import { createTenantMap } from "./tenants.ts"
 import { openFrizzDatabase, type FrizzDatabase, type OpenFrizzDatabaseOptions } from "./frizz-db.ts"
 import { startTenantPrime, type TenantPrimeRun } from "./tenant-prime.ts"
+import { startWakeLockLoop, type WakeLockLoop } from "./wake-lock.ts"
 import { HOME_WORKSPACE_ID, findWorkspaceBySegment, homeWorkspaceProject, listWorkspaces, projectForEntry } from "./home-workspace.ts"
 import { backfillRegistry } from "./project-registry.ts"
 import { servedByAnotherProcess } from "./project-launch.ts"
@@ -601,6 +602,8 @@ export async function startServer(opts: StartOptions = {}): Promise<StartedServe
   // their queue badges and their schedulers exist without the operator clicking into each square.
   // Started at the very end of boot; stopped and awaited by the "other projects" shutdown phase.
   let tenantPrime: TenantPrimeRun | undefined
+  // Holds the OS's idle-sleep request while any open project has work running (wake-lock.ts).
+  let wakeLock: WakeLockLoop | undefined
   // One process, N projects (tenants.ts). The launching project is adopted below once its own boot
   // phases have built it; anything opened later goes through activate(), which is where the
   // AppContext-seam error boundary lives.
@@ -816,6 +819,7 @@ export async function startServer(opts: StartOptions = {}): Promise<StartedServe
   const cleanupTerminal = createRetryableCleanup(async () => { await terminal?.close() })
   const cleanupAppSocket = createRetryableCleanup(async () => { await appSocket?.close() })
   const cleanupEditorBridge = createRetryableCleanup(() => editors.close())
+  const cleanupWakeLock = createRetryableCleanup(() => wakeLock?.stop())
   // The per-project half, from context.ts, so one project can be torn down without the server —
   // `() => ctx` rather than `ctx` because these are built before the context exists.
   const tenant = projectContextCleanups(() => ctx)
@@ -867,6 +871,8 @@ export async function startServer(opts: StartOptions = {}): Promise<StartedServe
       },
       // Beside the application socket: a live transport, cut so every window reconnects to the next server.
       { name: "editor bridge", run: cleanupEditorBridge },
+      // Before the tenants close: it reads their tailers, and a stopping server holds nothing awake.
+      { name: "wake lock", run: cleanupWakeLock },
       { name: "other projects", run: cleanupExtraTenants },
       { name: "tailer producer", run: cleanupTailer },
       // Hang up every thread terminal, so a dev server started from Frizz stops with it.
@@ -1340,6 +1346,14 @@ export async function startServer(opts: StartOptions = {}): Promise<StartedServe
         activate: (candidate) => tenants.activate(candidate),
         servedElsewhere: (candidate) => servedByAnotherProcess(candidate.stateDir, candidate.id),
       })
+    }
+
+    // Every open project, read on each poll, so one tenant-prime opens later is covered from then on.
+    if (process.env.FRIZZ_WAKE_LOCK_OFF !== "1") {
+      wakeLock = startWakeLockLoop(() => tenants.active().map(({ ctx: open }) => ({
+        sessions: () => open.storage.allSessions(),
+        telemetry: (slug: string) => open.tailer.get(slug),
+      })))
     }
 
     return { httpServer, ctx, port, close: beginClose, shutdownFence }

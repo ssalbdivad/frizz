@@ -2,7 +2,7 @@
 // a real forked daemon — no real claude, no network). Proves: a tool-permission escalation the daemon
 // relays is journaled as a provider-neutral approval interaction (provider.kind "claude",
 // payload.kind "permission-approval"), and the human's dashboard decision is applied back to the daemon.
-import { chmodSync, copyFileSync, existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs"
+import { chmodSync, copyFileSync, existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { fileURLToPath } from "node:url"
@@ -14,7 +14,8 @@ import { createInteractionStore } from "../interaction-store.ts"
 import { createClaudeAgentBrokerBridge } from "./claude-agent-broker-bridge.ts"
 import { claudeBrokerRecordPath, claudeBrokerRetirementPath, killBroker, liveBrokerRecords, markBrokerRetired, readBrokerRecord, takeBrokerRetirement } from "./claude-broker-host.ts"
 import { describeClaudeBrokerDiagnostic } from "./claude-broker-diagnostics.ts"
-import { CLAUDE_INPUT_DROP_DIAGNOSTIC_PREFIX, type ClaudeQueryEvent } from "./claude-agent-sdk-protocol.ts"
+import { CLAUDE_BROKER_CAPABILITY_INPUT_ACK, CLAUDE_INPUT_DROP_DIAGNOSTIC_PREFIX, type ClaudeQueryEvent } from "./claude-agent-sdk-protocol.ts"
+import { claudeBrokerDiagnosticLogPath } from "./claude-broker-diagnostics.ts"
 import { WORKER_MAX_CONCURRENT_SUBAGENTS, WORKER_MAX_SUBAGENTS, WORKER_MAX_WEB_SEARCHES } from "./types.ts"
 
 /** Did this argv resume a transcript? Either spelling: `--resume <id>` (SDK ≤ 0.3.207) or `--resume=<id>` (0.3.260+). */
@@ -240,7 +241,10 @@ test("retireDaemon retires the process without ending the conversation, and the 
 // frizz server can ever learn that a message the scheduler already recorded as `delivered` was thrown
 // away — and until 2026-08-05 the server's end of it discarded everything that was not a daemon crash.
 // Thread `are-taking-over-an-in-flight-epic` refused every input for over two hours in total silence.
-test("a refused input reaches the bridge's onDiagnostic — the server's only view of a lost message", { timeout: 25_000 }, async () => {
+// Since input-ack-v1 the refusal ALSO fails the follow-up itself — the daemon answers the frame with the
+// reason, so the operator's send rolls back instead of rendering as delivered. The diagnostic is still
+// relayed and persisted: it is the only trace a send from an older bridge (which asks for no ack) leaves.
+test("a refused input fails the follow-up with the daemon's reason, and still reaches the bridge's onDiagnostic", { timeout: 25_000 }, async () => {
   const dir = mkdtempSync(join(tmpdir(), "cbrk-drop-"))
   // `hold-inputs` never answers, so the first uuid stays outstanding and re-using it is refused — the
   // cheapest way to make the daemon's `handle.send` reject through the bridge's own public surface.
@@ -261,7 +265,11 @@ test("a refused input reaches the bridge's onDiagnostic — the server's only vi
     await bridge.spawnDispatch({ threadSlug: slug, sessionId, cwd: dir, prompt: "start the session", permissionMode: "default" })
     await bridge.followUp({ threadSlug: slug, sessionId, cwd: dir, text: "this one holds the uuid", deliveryId })
     await sleep(300)
-    await bridge.followUp({ threadSlug: slug, sessionId, cwd: dir, text: "this one is refused", deliveryId })
+    await assert.rejects(
+      bridge.followUp({ threadSlug: slug, sessionId, cwd: dir, text: "this one is refused", deliveryId }),
+      /refused this message: input UUID is already outstanding/,
+      "the operator's send fails, naming why, instead of resolving for a message the session refused",
+    )
     const deadline = Date.now() + 10_000
     while (!seen.some((s) => s.message.startsWith(CLAUDE_INPUT_DROP_DIAGNOSTIC_PREFIX))) {
       if (Date.now() > deadline) throw new Error("the drop never reached onDiagnostic")
@@ -424,6 +432,84 @@ test("the lifted worker caps reach the process the broker actually forks", { tim
     bridge.releaseSession(slug, sessionId, "session-deleted")
     bridge.close()
     try { const r = readBrokerRecord(claudeBrokerRecordPath(dir, sessionId)); if (r) process.kill(r.daemonPid, "SIGKILL") } catch {}
+    await rmEventually(dir)
+  }
+})
+
+// SINGLE-FLIGHT COLD RESUME. A hibernated thread whose operator answers its questions receives two
+// inputs in the same instant — the waker's delivery of the answers and the operator's own send — and
+// each used to find no live daemon and fork one. On 2026-09-30 that put two daemons on one session
+// (pids 51062/51063) and, via the loser's teardown deleting the survivor's socket, lost every send that
+// followed. Both calls must ride ONE fork, and both messages must reach the claude that fork started.
+// Negative control: against the pre-single-flight bridge, the `started` count below is 2.
+test("concurrent follow-ups to a daemon-less thread share ONE cold resume, and both reach claude", { timeout: 25_000 }, async () => {
+  const dir = mkdtempSync(join(tmpdir(), "cbrk-single-"))
+  const exe = join(dir, "fake-claude--basic.mjs")
+  copyFileSync(fakeCli, exe); chmodSync(exe, 0o700)
+  const bridge = createClaudeAgentBrokerBridge({ stateDir: dir, executablePath: exe, env: { PATH: process.env.PATH ?? "", HOME: process.env.HOME ?? "" } })
+  const sessionId = randomUUID()
+  const slug = "answered-while-hibernated"
+  const capture = () => { try { return readFileSync(join(dir, "capture.jsonl"), "utf8").split("\n").filter(Boolean).map((l) => JSON.parse(l) as { kind: string; uuid?: string }) } catch { return [] } }
+  const daemonStarts = () => { try { return readFileSync(claudeBrokerDiagnosticLogPath(dir, sessionId), "utf8").split("\n").filter((l) => l.includes('"phase":"started"')).length } catch { return 0 } }
+  try {
+    await bridge.spawnDispatch({ threadSlug: slug, sessionId, cwd: dir, prompt: "start", permissionMode: "default" })
+    const first = readBrokerRecord(claudeBrokerRecordPath(dir, sessionId))!
+    for (let i = 0; i < 100 && !capture().some((r) => r.kind === "startup"); i++) await sleep(50)
+    bridge.retireDaemon({ threadSlug: slug, sessionId, reason: "hibernate" })
+    for (let i = 0; i < 100; i++) { try { process.kill(first.daemonPid, 0); await sleep(50) } catch { break } }
+    const startsBefore = daemonStarts()
+
+    const answers = randomUUID(), steer = randomUUID()
+    await Promise.all([
+      bridge.followUp({ threadSlug: slug, sessionId, cwd: dir, text: "4 question answers", deliveryId: answers }),
+      bridge.followUp({ threadSlug: slug, sessionId, cwd: dir, text: "and the operator's own send", deliveryId: steer }),
+    ])
+    assert.equal(daemonStarts() - startsBefore, 1, "exactly one daemon cold-resumed the session")
+    // Resolved ⇒ acknowledged by the daemon, so both are already in the session's input queue.
+    for (let i = 0; i < 100 && !(capture().some((r) => r.uuid === answers) && capture().some((r) => r.uuid === steer)); i++) await sleep(50)
+    assert.ok(capture().some((r) => r.kind === "user-input" && r.uuid === answers), "the waker's answers reached claude")
+    assert.ok(capture().some((r) => r.kind === "user-input" && r.uuid === steer), "the operator's send reached claude")
+  } finally {
+    bridge.releaseSession(slug, sessionId, "session-deleted")
+    bridge.close()
+    try { const r = readBrokerRecord(claudeBrokerRecordPath(dir, sessionId)); if (r) process.kill(r.daemonPid, "SIGKILL") } catch {}
+    await rmEventually(dir)
+  }
+})
+
+// A daemon forked by an OLDER build survives the upgrade by hours and has no `input-result` to send.
+// The bridge must read that off the record and not wait for an answer that never comes — a follow-up
+// to such a thread would otherwise fail every time, 30s late. Simulated by stripping the capability
+// from a current daemon's record before a fresh bridge adopts it, which is exactly what an old
+// daemon's record looks like; the frame then carries no requestId and the daemon sends no reply.
+test("a follow-up to a daemon that predates input acknowledgement still resolves and still arrives", { timeout: 25_000 }, async () => {
+  const dir = mkdtempSync(join(tmpdir(), "cbrk-noack-"))
+  const exe = join(dir, "fake-claude--basic.mjs")
+  copyFileSync(fakeCli, exe); chmodSync(exe, 0o700)
+  const env = { PATH: process.env.PATH ?? "", HOME: process.env.HOME ?? "" }
+  const sessionId = randomUUID()
+  const slug = "old-daemon"
+  const recordPath = claudeBrokerRecordPath(dir, sessionId)
+  const bridge = createClaudeAgentBrokerBridge({ stateDir: dir, executablePath: exe, env })
+  const adopter = createClaudeAgentBrokerBridge({ stateDir: dir, executablePath: exe, env })
+  try {
+    await bridge.spawnDispatch({ threadSlug: slug, sessionId, cwd: dir, prompt: "start", permissionMode: "default" })
+    bridge.close() // a frizz restart
+    const record = readBrokerRecord(recordPath)!
+    assert.ok(record.capabilities?.includes(CLAUDE_BROKER_CAPABILITY_INPUT_ACK), "precondition: a current daemon advertises the capability")
+    writeFileSync(recordPath, JSON.stringify({ ...record, capabilities: record.capabilities!.filter((c) => c !== CLAUDE_BROKER_CAPABILITY_INPUT_ACK) }))
+    const deliveryId = randomUUID()
+    const started = Date.now()
+    await adopter.followUp({ threadSlug: slug, sessionId, cwd: dir, text: "carry on", deliveryId })
+    assert.ok(Date.now() - started < 10_000, "resolved on the write, not after an acknowledgement deadline")
+    assert.equal(readBrokerRecord(recordPath)?.daemonPid, record.daemonPid, "it was delivered to the adopted daemon, not a fresh fork")
+    let seen = false
+    for (let i = 0; i < 100 && !seen; i++) { try { seen = readFileSync(join(dir, "capture.jsonl"), "utf8").includes(deliveryId) } catch {} if (!seen) await sleep(50) }
+    assert.ok(seen, "the message reached claude")
+  } finally {
+    adopter.releaseSession(slug, sessionId, "session-deleted")
+    adopter.close()
+    try { const r = readBrokerRecord(recordPath); if (r) process.kill(r.daemonPid, "SIGKILL") } catch {}
     await rmEventually(dir)
   }
 })

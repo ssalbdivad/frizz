@@ -23,6 +23,9 @@
   --color-user-bubble-fg: var(--frizz-user-bubble-fg);
   --color-live: var(--frizz-live);
   --color-watch: var(--frizz-watch);
+  /* A runnable `/skill` in the prompt box: the watch purple, distinct from the `@` mention accent in both
+     themes (amber dark, blue light). Its own name so the two uses can part later. */
+  --color-command: var(--frizz-watch);
   --color-idle: var(--frizz-idle);
   --color-shell: var(--frizz-shell);
   --color-hover: var(--frizz-hover);

@@ -1,7 +1,7 @@
 import * as RadixDialog from "@radix-ui/react-dialog"
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react"
 import { useIsMutating, useMutation, useQuery } from "@tanstack/react-query"
-import { type AccountBackend, type CreateLazyThreadInput, type DispatchInput } from "@frizz/shared"
+import { expandUserCommandDraft, type AccountBackend, type CreateLazyThreadInput, type DispatchInput } from "@frizz/shared"
 import { rpc } from "../api/rpc.ts"
 import { useSnapshot } from "valtio"
 import { showToast, store } from "../store.ts"
@@ -9,6 +9,7 @@ import { Composer } from "./Composer.tsx"
 import { EditorContextBar } from "./EditorContextBar.tsx"
 import { embedFileMentions } from "../lib/editorReach.ts"
 import { useMentionCandidates } from "../hooks/useMentionCandidates.ts"
+import { userCommandItems, useUserCommands } from "../hooks/useUserCommands.ts"
 import { GithubTrigger, useGithubTriggerVisible } from "./GithubTrigger.tsx"
 import { ProfileGridSelector } from "./ProfileGridSelector.tsx"
 import { SETTINGS_WRITE_KEY } from "../hooks/useSettingsAutosave.tsx"
@@ -93,6 +94,12 @@ function PromptForm({
   const githubTriggerVisible = useGithubTriggerVisible()
   // A new thread can be pointed at any thread on the board it is dispatched into (`@shell-budgets`).
   const mentions = useMentionCandidates()
+  // No session yet, so no harness to list skills: the `/` menu here is the operator's own user commands,
+  // which Frizz expands itself (useUserCommands.ts) — `/commit` starts a thread on that prompt.
+  const userCommandsQuery = useUserCommands()
+  const userCommands = userCommandsQuery.data?.commands
+  const slashSuggest = useMemo(() => () => Promise.resolve(userCommandItems(userCommands ?? [])), [userCommands])
+  const expandedPrompt = (text: string) => expandUserCommandDraft(text, userCommands ?? []) ?? text
   const boardDir = useProjectDir()
   const projectDir = dirs ? dirs.projectDir : boardDir
   // Queue and modal are the same semantic new-thread composer.
@@ -198,7 +205,7 @@ function PromptForm({
       // editor happens to show then — unrelated to a note written earlier, more often than not — from a box
       // (LazyThreadBox) that shows no context bar, so the human could neither see it go nor turn it off.
       // If the note means the editor ("fix this"), the agent reads it then through its editor tool.
-      prompt: outgoingMessage(prompt, stagedItems(promptKey), projectDir, false).trim(),
+      prompt: outgoingMessage(expandedPrompt(prompt), stagedItems(promptKey), projectDir, false).trim(),
       // The pick rides along: it is what the lazy thread starts on when it is launched, unless changed then.
       model: resolved.model,
       backend: resolved.backend,
@@ -253,11 +260,14 @@ function PromptForm({
       showToast("Saved reasoning level is unavailable for this model — choose another level")
       return
     }
+    const expanded = expandedPrompt(prompt)
     const input: DispatchInput = {
       // The chips, and in an editor's sidebar what the editor has in front at THIS Enter
       // (lib/editorContext.ts outgoingMessage). Built here, once: a dispatch the sign-in gate holds runs
       // with this input after the sign-in, so it carries what the human saw when they pressed Enter.
-      prompt: outgoingMessage(prompt, stagedItems(promptKey), projectDir, true).trim(),
+      prompt: outgoingMessage(expanded, stagedItems(promptKey), projectDir, true).trim(),
+      // A user command's thread is titled by what was typed, not by the first words of its wrapper.
+      ...(expanded !== prompt ? { title: prompt.trim().split("\n")[0]!.slice(0, 120) } : {}),
       // No permissionMode: the server stamps every created worker itself (workerDispatchPermission —
       // the non-interactive floor, raised to bypass only when Settings asks). Dispatch offers no
       // per-thread permission choice; the "Permissions" control behind the Claude Code gear in the model
@@ -357,6 +367,8 @@ function PromptForm({
         placeholder="Describe the task…"
         mentionCandidates={mentions}
         fileMentions={embedFileMentions(projectDir)}
+        slashSuggest={slashSuggest}
+        slashSuggestVersion={userCommandsQuery.dataUpdatedAt}
         minHeight={96}
         maxHeight={340}
         busy={dispatch.isPending || saveLazy.isPending || savingSettings}

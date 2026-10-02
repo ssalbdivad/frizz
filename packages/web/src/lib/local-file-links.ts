@@ -9,6 +9,7 @@ import { prefs } from "./prefs.ts"
 import { localViewerFor } from "./localViewer.ts"
 import { localPositionOf } from "./localFilePosition.ts"
 import type { MarkdownScope } from "./useMarkdown.ts"
+import { isMobileViewport } from "./mobile.ts"
 
 // One delegated listener covers every sanitized markdown surface (chat, the doc drawer, and
 // drawers). It never follows file:// or an accidental same-origin pathname: only explicit data
@@ -100,6 +101,13 @@ export function openLocalPath(path: string, from?: Element | null, scope?: Markd
   // pick a window by its own rules, and not into the reader, which a sidebar has no room beside.
   if (viewer === "text" && embedded()) {
     openInHostEditor(path, at)
+    return
+  }
+  // ON A PHONE the external app is the wrong machine: it launches on the computer Frizz runs on, which
+  // from a phone is somewhere else entirely, and the tap appears to do nothing. So every other file opens
+  // in Frizz's own reader instead, as source when it is not one the reader renders.
+  if (isMobileViewport()) {
+    pushFileReader(path, scope)
     return
   }
   // A code file goes straight to the external app when this browser asked for that (prefs.codeFiles),
