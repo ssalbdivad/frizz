@@ -1,4 +1,4 @@
-import { cpSync, lstatSync, mkdirSync, readlinkSync, realpathSync, renameSync, rmSync, symlinkSync } from "node:fs"
+import { cpSync, lstatSync, mkdirSync, readlinkSync, realpathSync, renameSync, rmSync, symlinkSync, unlinkSync } from "node:fs"
 import { homedir } from "node:os"
 import { dirname, isAbsolute, join, resolve } from "node:path"
 import { frizzPaths } from "./frizz-paths.ts"
@@ -67,7 +67,14 @@ export function ensureSymlink(link: string, target: string): SymlinkOutcome {
   }
   const current = readlinkSync(link)
   if ((isAbsolute(current) ? current : resolve(dirname(link), current)) === target) return "unchanged"
-  rmSync(link, { force: true })
+  // unlinkSync, never rmSync: lstat above proved this is a link, and unlink removes the LINK on every
+  // Node. rmSync looks through it on Node 23.0–24.13.0 and 25.0–25.3.x (its C++ port checked the path
+  // with std::filesystem::status(), which follows symlinks; nodejs/node#61040 fixed it in 24.13.1 and
+  // 25.4.0; 22.x was never affected) — a link to a directory throws
+  // ERR_FS_EISDIR, and a DANGLING link (its build pruned) is reported missing, swallowed by `force`, and
+  // left in place, so the symlinkSync below fails EEXIST. Measured on this machine 2026-10-02: v25.2.1
+  // throws, v20.20.0 / v22.18.0 / v24.14.1 remove the link.
+  unlinkSync(link)
   symlinkSync(target, link)
   return "repointed"
 }

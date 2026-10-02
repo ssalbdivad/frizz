@@ -1,6 +1,6 @@
 import assert from "node:assert/strict"
 import { test } from "node:test"
-import { existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, readlinkSync, symlinkSync, writeFileSync } from "node:fs"
+import { existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, readlinkSync, rmSync, symlinkSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { isAbsolute, join } from "node:path"
 import { defaultPluginStageRoot, defaultStablePluginRoot, ensureSymlink, stageStablePluginDir } from "./stable-plugin-path.ts"
@@ -39,6 +39,23 @@ test("ensureSymlink repoints a link aimed elsewhere — the case the whole desig
   ensureSymlink(link, a)
   assert.equal(ensureSymlink(link, b), "repointed")
   assert.equal(readlinkSync(link), b, "a live worker following this path now sees buildB")
+})
+
+// The link outlives what it pointed at whenever an old build is cleaned away. Repointing must still
+// work: Node 25's rmSync follows the link, finds nothing, and `force` swallows that — leaving the
+// dangling link in place, so recreating it failed EEXIST.
+test("ensureSymlink repoints a DANGLING link whose old target is gone", () => {
+  const dir = tmp("frizz-symlink-")
+  const gone = join(dir, "buildGone")
+  const b = join(dir, "buildB")
+  mkdirSync(gone); mkdirSync(b)
+  const link = join(dir, "current")
+
+  ensureSymlink(link, gone)
+  rmSync(gone, { recursive: true })
+  assert.ok(lstatSync(link).isSymbolicLink() && !existsSync(link), "the fixture link dangles")
+  assert.equal(ensureSymlink(link, b), "repointed")
+  assert.equal(readlinkSync(link), b)
 })
 
 // A RELATIVE existing link resolves against the link's own directory, never the process cwd. Compare
