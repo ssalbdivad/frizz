@@ -25,6 +25,7 @@ import { Select } from "./ui/Select.tsx"
 import { SettingsField } from "./SettingsField.tsx"
 import { DeleteOldThreads, RETENTION_DAYS } from "./DeleteOldThreads.tsx"
 import { embedded } from "../lib/embed.ts"
+import { aboveDrawersZ } from "../lib/overlaySurface.ts"
 
 type NotifPerm = "default" | "granted" | "denied" | "unsupported"
 function currentPerm(): NotifPerm {
@@ -46,6 +47,12 @@ export function SettingsDrawer() {
   // never the phone). Four rows behave differently there, and each says so in the field's own hint type
   // rather than offering a control that would not do what it says.
   const inEditor = embedded()
+  // ABOVE AN OPEN THREAD, as Escape already ranks it (DrawerStack): at a fixed z-50 it slid in UNDER the
+  // drawer stack, whose layers climb from 50 — ⌘, or the gear over a thread drew nothing, and in an
+  // editor's sidebar the title row's Settings button looked dead (scripts/e2e-sidebar.ts, 5 of 5). The
+  // New thread dialog's tier (lib/overlaySurface.ts aboveDrawersZ), which also keeps toasts and its
+  // own selects above it.
+  const z = aboveDrawersZ(useSnapshot(store).drawers.length)
   const [perm, setPerm] = useState<NotifPerm>(currentPerm())
   // The Home workspace's square, its picker row and its project list entry all show its folder, and they
   // read it from the project list — so the list is re-read once a moved folder has actually saved.
@@ -113,7 +120,8 @@ export function SettingsDrawer() {
 
   return (
     <div
-      className={`${SHEET_SCRIM_CLASS} z-50 flex justify-end ${shown ? "opacity-100" : "opacity-0"}`}
+      className={`${SHEET_SCRIM_CLASS} flex justify-end ${shown ? "opacity-100" : "opacity-0"}`}
+      style={{ zIndex: z }}
       onMouseDown={(e) => e.target === e.currentTarget && close()}
     >
       <div
