@@ -1864,7 +1864,12 @@ export function registeredDoneFence(
   // `registered` is the one thing the transcript needs that the fence it replaces never carried: a fenced
   // done is drawn from the message that holds it, and this one is in no message, so the client draws it
   // at the bottom of the thread itself (ChatView, showsRegisteredDoneCard). Every predicate ignores it.
-  return { kind: "done", body: done.body, hints: [], registered: true }
+  //
+  // `spokenPast` marks a done that stood through a prose reply. The card still has to be there — it is
+  // the thread's sign-off and carries Mark as done — but redrawing the whole ledger under every answer to
+  // a follow-up question buries the answer under a summary the human already read (maintainer
+  // 2026-10-01: "don't keep showing a giant done message like this when I'm asking questions").
+  return { kind: "done", body: done.body, hints: [], registered: true, ...(Number.isFinite(userAt) && userAt > done.doneAt ? { spokenPast: true as const } : {}) }
 }
 
 // Every per-thread REGISTRY the row builder needs, read whole ONCE per build and indexed by slug.

@@ -408,6 +408,8 @@ export interface FenceView {
   // Set by the board alone, on the fence it synthesizes from a REGISTERED done (board.registeredDoneFence);
   // the tailer never sets it, because everything it parses came from a message.
   registered?: true
+  // Board-only too: the human spoke after the registered done, which still stands (registeredDoneFence).
+  spokenPast?: true
 }
 
 // Per-session derived telemetry surfaced to the board overlay. Structurally a NormalizedTail (the

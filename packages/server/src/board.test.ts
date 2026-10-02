@@ -2831,3 +2831,16 @@ test("deriveNeedsYou: a park that answers the human queues until they have seen 
   assert.equal(needs(row({ rested_at: ANSWERED }), childPark), false, "a running sub-agent still parks it")
   assert.equal(replyUnseen(row(), park()), true)
 })
+
+test("a done that stood through a prose reply is marked spoken-past, so its ledger is not redrawn in full", () => {
+  const done = { body: "- **Fixed** it", doneAt: Date.parse("2026-08-27T01:00:00.000Z") }
+  // Nobody has spoken since: the card is the fresh sign-off and keeps its body.
+  assert.equal(registeredDoneFence(done, "2026-08-27T00:59:00.000Z")?.spokenPast, undefined)
+  assert.equal(registeredDoneFence(done, undefined)?.spokenPast, undefined)
+  // The same-millisecond tie is the turn the done signed off on, not a later message.
+  assert.equal(registeredDoneFence(done, "2026-08-27T01:00:00.000Z")?.spokenPast, undefined)
+  // The human asked a follow-up and the worker answered in prose: the done stands, marked.
+  assert.deepEqual(registeredDoneFence(done, "2026-08-27T01:05:00.000Z"), {
+    kind: "done", body: "- **Fixed** it", hints: [], registered: true, spokenPast: true,
+  })
+})

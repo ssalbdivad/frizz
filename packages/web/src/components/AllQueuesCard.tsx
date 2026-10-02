@@ -44,7 +44,7 @@ import { IN_PLACE_OPEN_STATE, openThread, showToast, store } from "../store.ts"
 import { crossProjectHref, innerPath, projectSlug } from "../lib/base-path.ts"
 import { QueueDismissContext, TerminalNetCard } from "./ChatView.tsx"
 import { useCopyTerminalCommand } from "./ExternalTerminalCommand.tsx"
-import { showsRegisteredDoneCard } from "../lib/registeredDone.ts"
+import { registeredDoneBody, showsRegisteredDoneCard } from "../lib/registeredDone.ts"
 import { ThreadStatusLine } from "./ThreadStatusLine.tsx"
 import { Composer } from "./Composer.tsx"
 import { InteractionStack } from "./InteractionCards.tsx"
@@ -438,7 +438,7 @@ export const AllQueuesCard = memo(function AllQueuesCard({
                   from the thread (ChatView's "registered-done" rung); this is the same predicate, keyed on
                   the same handoff text, so a worker that fenced AND registered gets one card, the fenced one.
                   Held until the handoff is read, or a fenced done would draw here first and then swap. */}
-              {(handoff.data || handoff.isError) && registeredDone && <FenceBody kind="done" body={thread.lastFence!.body} />}
+              {(handoff.data || handoff.isError) && registeredDone && <FenceBody kind="done" body={registeredDoneBody(thread.lastFence!)} />}
               {/* THE GATE: a turn parked on a request — "Run a command?", a native question, an MCP form —
                   with its real buttons, under the prose that led to it. It is the whole reason such a card
                   is in the queue, and this card drew none of it until 2026-09-28: a thread held on a
@@ -702,7 +702,8 @@ function FenceBody({ kind, body }: { kind: "done" | "awaiting"; body: string }) 
   const html = useMarkdownHtml(body)
   return (
     <TranscriptCard icon={kind === "done" ? Check : Hourglass} label={kind === "done" ? "Done" : "Awaiting"}>
-      {html && <LinkedHtml className={`md-body ${QUEUE_WRAP}`} html={html} />}
+      {/* null, not a falsy "": an empty body (registeredDoneBody) is a header-only card, not a blank content gap. */}
+      {html ? <LinkedHtml className={`md-body ${QUEUE_WRAP}`} html={html} /> : null}
     </TranscriptCard>
   )
 }

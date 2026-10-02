@@ -22,7 +22,7 @@ import { resolveFileLanguage } from "../lib/syntaxHighlight.ts"
 import { TodoBlock } from "./TodoBlock.tsx"
 import { splitQuestionBlocks, type QuestionKind, type BlockAnswer, type MessageAnswering } from "../lib/questionBlocks.ts"
 import { splitFenceBlocks, type FenceKind } from "../lib/fenceBlocks.ts"
-import { showsRegisteredDoneCard } from "../lib/registeredDone.ts"
+import { registeredDoneBody, showsRegisteredDoneCard } from "../lib/registeredDone.ts"
 import { optimisticallySteered, useSteeredAt } from "../lib/steering.ts"
 import { RestedCard, showsRestedCard } from "./RestedCard.tsx"
 import { ProviderErrorCard, providerErrorVisible } from "./ProviderErrorCard.tsx"
@@ -826,7 +826,7 @@ function RuntimeStatusLadder({
     // everything because `done` refuses while anything above could still be true — an open question or an
     // armed watch blocks the verb — so a thread showing this is at rest with nothing left to wait on.
     case "registered-done":
-      return <FenceCard fenceKind="done" body={thread!.lastFence!.body} hints={[]} />
+      return <FenceCard fenceKind="done" body={registeredDoneBody(thread!.lastFence!)} hints={[]} />
     // NOTHING ELSE APPLIES, and the bottom of the thread still has to say so — see RestedCard.
     case "rested":
       return <RestedCard thread={thread!} />

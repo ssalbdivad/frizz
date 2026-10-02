@@ -3044,6 +3044,10 @@ export const ThreadFence = z.object({
   // is in no message, needs the client to know it must draw the card itself at the bottom of the thread
   // (maintainer 2026-08-27: a thread that signed off by tool rested with no card at all).
   registered: z.literal(true).optional(),
+  // On a registered done only: the human has written since it was registered and the worker answered in
+  // prose, so the done still stands (board.registeredDoneFence) but its ledger is old news. The client
+  // draws the card without its body (web lib/registeredDone registeredDoneBody).
+  spokenPast: z.literal(true).optional(),
 })
 export type ThreadFence = z.infer<typeof ThreadFence>
 
