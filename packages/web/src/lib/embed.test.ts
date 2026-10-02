@@ -3,6 +3,7 @@ import test from "node:test"
 import { readFileSync } from "node:fs"
 import vm from "node:vm"
 import { hostKeyChord, parseHostMessage, readEmbedState } from "./embed.ts"
+import { HOST_CHORDS, hostChordEvent } from "./embedKeys.ts"
 
 // Embed mode's pure halves (lib/embed.ts): the boot read, the host messages the page accepts, and the
 // key chords it hands the editor. The contract is packages/shared/src/embed-protocol.ts.
@@ -109,13 +110,37 @@ const key = (over: Partial<KeyboardEvent>) =>
 test("Ctrl and Cmd chords the page left alone go to the editor; the editing chords never do", () => {
   assert.deepEqual(hostKeyChord(key({})), { type: "frizz:key", key: "p", code: "KeyP", ctrl: true, meta: false, shift: true, alt: false })
   assert.deepEqual(hostKeyChord(key({ key: "b", code: "KeyB", ctrlKey: false, metaKey: true, shiftKey: false })), { type: "frizz:key", key: "b", code: "KeyB", ctrl: false, meta: true, shift: false, alt: false })
-  for (const editing of ["c", "x", "v", "z", "y", "a", "C", "Z", "V", "Insert"]) {
-    assert.equal(hostKeyChord(key({ key: editing, shiftKey: editing !== editing.toLowerCase() })), null, editing)
-    assert.equal(hostKeyChord(key({ key: editing, ctrlKey: false, metaKey: true })), null, `⌘${editing}`)
+  // The editing chords, exactly: the plain ones, and with Shift only redo and paste as plain text.
+  for (const [editing, shift] of [["c", false], ["x", false], ["v", false], ["z", false], ["y", false], ["a", false], ["Insert", false], ["Z", true], ["V", true]] as const) {
+    assert.equal(hostKeyChord(key({ key: editing, shiftKey: shift })), null, editing)
+    assert.equal(hostKeyChord(key({ key: editing, shiftKey: shift, ctrlKey: false, metaKey: true })), null, `⌘${editing}`)
+  }
+  // Shift makes another chord of the rest: ⌘⇧X is VS Code's Extensions, not cut, and Ctrl+Shift+C goes too
+  // (the extension ignores what it does not list).
+  for (const shifted of ["X", "C", "A", "Y"]) {
+    assert.equal(hostKeyChord(key({ key: shifted, code: `Key${shifted}`, shiftKey: true }))?.key, shifted, `Ctrl+Shift+${shifted}`)
   }
   assert.equal(hostKeyChord(key({ ctrlKey: false, metaKey: false })), null, "no Ctrl or Cmd")
   assert.equal(hostKeyChord(key({ defaultPrevented: true })), null, "the page took it")
   assert.equal(hostKeyChord(key({ repeat: true })), null, "auto-repeat")
   assert.equal(hostKeyChord(key({ isComposing: true })), null, "IME composition")
   assert.equal(hostKeyChord(key({ key: "Control", code: "ControlLeft" })), null, "a bare modifier")
+})
+
+test("every VS Code chord the ? sheet lists leaves the page, on both platforms", () => {
+  // The keydown as the browser delivers it: `key` is the cap Shift makes of `code`.
+  const keyOf = (code: string, shift: boolean) => {
+    if (code.startsWith("Key")) return shift ? code.slice(3) : code.slice(3).toLowerCase()
+    if (code.startsWith("Digit")) return code.slice(5)
+    if (code === "Backquote") return "`"
+    return code
+  }
+  for (const platform of ["mac", "linux"] as const) {
+    for (const chord of HOST_CHORDS) {
+      const event = hostChordEvent(chord, platform)
+      const sent = hostKeyChord(key({ key: keyOf(event.code, event.shift), code: event.code, ctrlKey: event.ctrl, metaKey: event.meta, shiftKey: event.shift, altKey: event.alt }))
+      assert.ok(sent, `${chord.label} on ${platform} is not forwarded`)
+      assert.equal(sent.code, chord.code, chord.label)
+    }
+  }
 })

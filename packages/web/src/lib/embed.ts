@@ -217,21 +217,31 @@ function editorFile(value: unknown): EmbedEditorFile | null {
 
 // ── page → host: the key chords ─────────────────────────────────────────────────────────────────────
 
-/** The chords a text box handles natively — copy, cut, paste, undo, redo (both spellings), select all. */
+/**
+ * The chords a text box handles natively, as EXACT chords: copy, cut, paste, undo, redo, select all and
+ * Ctrl+Insert (copy) without Shift; with it, only redo (⌘⇧Z) and paste as plain text (⌘⇧V). Exact,
+ * because the key alone cannot tell them from VS Code's: Extensions is ⌘⇧X, whose `key` is "X", and a
+ * filter that case-folded every key read it as cut and never forwarded it (sweep 2026-10-01).
+ */
 const EDITING_KEYS = new Set(["c", "x", "v", "z", "y", "a", "insert"])
+const SHIFTED_EDITING_KEYS = new Set(["z", "v"])
 const MODIFIER_KEYS = new Set(["Control", "Meta", "Shift", "Alt", "AltGraph", "CapsLock", "Fn", "OS"])
 
 type KeyLike = Pick<KeyboardEvent, "key" | "code" | "ctrlKey" | "metaKey" | "shiftKey" | "altKey" | "defaultPrevented" | "repeat" | "isComposing">
 
+function editingChord(event: KeyLike): boolean {
+  const key = event.key.toLowerCase()
+  return event.shiftKey ? SHIFTED_EDITING_KEYS.has(key) : EDITING_KEYS.has(key)
+}
+
 /**
  * The `frizz:key` for a keydown, or null when it is not the host's: no Ctrl or Cmd held, a page handler
  * already took it, a bare modifier, an auto-repeat (holding ⌘⇧P must not open the palette forty times),
- * mid-IME composition, or an editing chord. The editing chords are judged by `key`, case-folded, so
- * Shift does not sneak redo (⌘⇧Z) or a paste variant past the filter. Nothing is prevented here: a
- * chord the host ignores (Ctrl+← in a text box) must still do what it does natively.
+ * mid-IME composition, or an editing chord (above). Nothing is prevented here: a chord the host ignores
+ * (Ctrl+← in a text box, Ctrl+Shift+C) must still do what it does natively.
  */
 export function hostKeyChord(event: KeyLike): EmbedKeyMessage | null {
   if (!(event.ctrlKey || event.metaKey) || event.defaultPrevented || event.repeat || event.isComposing) return null
-  if (MODIFIER_KEYS.has(event.key) || EDITING_KEYS.has(event.key.toLowerCase())) return null
+  if (MODIFIER_KEYS.has(event.key) || editingChord(event)) return null
   return { type: "frizz:key", key: event.key, code: event.code, ctrl: event.ctrlKey, meta: event.metaKey, shift: event.shiftKey, alt: event.altKey }
 }

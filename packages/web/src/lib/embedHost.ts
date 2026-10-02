@@ -8,8 +8,10 @@ import { runHostCommand } from "./embedCommand.ts"
 import { repostRoute } from "./embedRoute.ts"
 import { closeSettingsAnimated } from "./overlays.ts"
 import { EMBED_READY, embedded, hostKeyChord, parseHostMessage, postToHost } from "./embed.ts"
+import { bindingLookup, effectiveBindings, matchAction } from "./keybindings.ts"
 import { basename } from "./paths.ts"
 import { homeHref, projectViewHref } from "./pageView.ts"
+import { prefs } from "./prefs.ts"
 import { spaNavigate } from "./router.ts"
 import { setHostTheme } from "./theme.ts"
 
@@ -34,19 +36,28 @@ export function initEmbedHost(): void {
     const message = parseHostMessage(event.data)
     if (message) void handle(message)
   })
-  // Asked once the keydown has been everywhere it goes, so `defaultPrevented` says whether one of the
-  // page's own handlers took it. A handler that stopped the event took it too, and it never gets here —
-  // which is the same answer. BUBBLE phase on the window is not late enough by itself: the shortcut
-  // runtime listens there too (keyboardRuntime useShortcutListener), and this listener, installed at boot,
-  // runs before it — so every chord Frizz binds (⌘K, ⌘I, ⌘,) went to VS Code as well as to Frizz (driven
-  // 2026-10-01, build2-shell.md). The next task runs after dispatch has finished, and the event keeps its
-  // `defaultPrevented` after it.
+  // Heard in the CAPTURE phase, before any element can stop the keydown, and asked once it has been
+  // everywhere it goes, so `defaultPrevented` says whether one of the page's own handlers took it.
+  //
+  // Capture, because stopping a key is not taking it: a question's answer box stops every key it sees
+  // (QuestionBlockCard), so that its letters never reach the page's shortcuts — and a listener on the
+  // window's bubble phase then never heard Ctrl+Shift+P, Ctrl+B or Ctrl+` typed there, while the options
+  // grid and the prompt box forwarded them (sweep 2026-10-01). What Frizz handles itself still stays home:
+  // ⌘K, ⌘I, ⌘, and Ctrl+Enter in a box are prevented by their handlers, and so is a chord the ? sheet is
+  // recording.
+  //
+  // Asked after dispatch, because neither phase is late enough by itself: the shortcut runtime listens on
+  // the window too (keyboardRuntime useShortcutListener), and a listener installed at boot runs before
+  // it — so every chord Frizz binds went to VS Code as well as to Frizz (driven 2026-10-01,
+  // build2-shell.md). The next task runs after dispatch has finished, and the event keeps its
+  // `defaultPrevented` after it. A chord Frizz binds stays home even where nothing prevented it — the
+  // answer box stops ⌘K before the shortcut runtime can hear it — since it is Frizz's, not VS Code's.
   window.addEventListener("keydown", (event) => {
     setTimeout(() => {
       const chord = hostKeyChord(event)
-      if (chord) postToHost(chord)
+      if (chord && !frizzChord(event)) postToHost(chord)
     }, 0)
-  })
+  }, true)
   // Ready once a board is in — the page's drafts and its drawer are keyed by it, and the router that
   // navigation goes through is mounted by then — or after 5s regardless, for a machine with nothing open.
   // The extension posts nothing before this; a compose that still beats the board waits for it (composeInto).
@@ -56,6 +67,19 @@ export function initEmbedHost(): void {
     postToHost(EMBED_READY)
     repostRoute()
   })
+}
+
+// The shortcut runtime's own reading of a key (lib/keyboardRuntime.ts), cached the same way: the overrides
+// object is replaced whole on every change, so its identity says when the map is stale.
+let cachedOverrides: unknown = null
+let cachedLookup = bindingLookup(effectiveBindings({}))
+
+function frizzChord(event: KeyboardEvent): boolean {
+  if (prefs.keybindings !== cachedOverrides) {
+    cachedOverrides = prefs.keybindings
+    cachedLookup = bindingLookup(effectiveBindings(prefs.keybindings))
+  }
+  return matchAction(event, cachedLookup) !== null
 }
 
 async function handle(message: EmbedHostMessage): Promise<void> {
