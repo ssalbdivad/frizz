@@ -26,6 +26,7 @@ import { addRoute, composeInSidebar as composeVia, promptRoute } from "./embed.t
 import { composeInput, composeMessage, normalizeNewlines, refLabel, type FileRef, type Selected } from "./message.ts"
 import { projectForPath, workspaceProjects } from "./projects.ts"
 import { registerReviews, type ReviewSnapshot } from "./review-view.ts"
+import { registerSelectionHint, type SelectionHintShown } from "./selection-hint.ts"
 import { describeRpcError, dispatchProfile, FrizzRpc, withRetry } from "./rpc.ts"
 import { registerSidebar, type SidebarSnapshot } from "./sidebar.ts"
 import { notConnectedMessage, statusView } from "./status.ts"
@@ -57,6 +58,8 @@ export interface FrizzExtensionApi {
   notifications(): string[]
   /** A different build found installed under this window, which it offered to reload into. */
   reloadOffered(): string | undefined
+  /** The hint beside the selection (`Ctrl+L to add to Frizz`), as it is drawn now; undefined when none is. */
+  selectionHint(): SelectionHintShown | undefined
 }
 
 /** A file the command is about, with what was selected in it. */
@@ -192,6 +195,9 @@ export function activateFrizz(api: Vscode, context: vscode.ExtensionContext): Fr
     post: (message) => sidebar.post(message),
   })
   const workspaceFiles = registerWorkspaceFiles(api, context, { projects: () => projects })
+  // Cursor's "⌘L to chat" beside a fresh selection, for Frizz's chord (selection-hint.ts says when, where
+  // and why not). Only while connected: the chord says Frizz isn't running otherwise.
+  const hint = registerSelectionHint(api, context, { connected: () => status.kind === "connected", mac: () => sidebar.mac() })
 
   // ── status bar ───────────────────────────────────────────────────────────────────────────────────
   const item = api.window.createStatusBarItem("frizz.status", api.StatusBarAlignment.Right, 100)
@@ -284,6 +290,7 @@ export function activateFrizz(api: Vscode, context: vscode.ExtensionContext): Fr
       status = next
       renderStatus()
       sidebar.refresh()
+      hint.refresh()
     },
     attention: (message) => onAttention(message),
     log: { info: (line) => log.info(line), warn: (line) => log.warn(line), error: (line) => log.error(line) },
@@ -642,6 +649,7 @@ export function activateFrizz(api: Vscode, context: vscode.ExtensionContext): Fr
   async function ask(...args: unknown[]): Promise<{ slug: string } | { composed: EditorComposed } | undefined> {
     const origin = requireOrigin()
     if (!origin) return undefined
+    hint.added()
     const { uri, options } = splitArgs(args)
     const target = targetOf(uri)
     if (!target) {
@@ -692,6 +700,7 @@ export function activateFrizz(api: Vscode, context: vscode.ExtensionContext): Fr
   async function sendToThread(...args: unknown[]): Promise<{ slug: string; deliveryId?: string; composed?: EditorComposed } | undefined> {
     const origin = requireOrigin()
     if (!origin) return undefined
+    hint.added()
     const { uri, options } = splitArgs(args)
     const target = targetOf(uri)
     if (!target && unplaceableSelection(uri)) {
@@ -856,6 +865,7 @@ export function activateFrizz(api: Vscode, context: vscode.ExtensionContext): Fr
    */
   async function addToPrompt(...args: unknown[]): Promise<EditorComposed | undefined> {
     const { uri } = splitArgs(args)
+    hint.added()
     const target = targetOf(uri)
     if (!target) {
       void api.window.showInformationMessage("Open a file to add it to Frizz's prompt box.")
@@ -995,6 +1005,7 @@ export function activateFrizz(api: Vscode, context: vscode.ExtensionContext): Fr
       if (!editor || editor.document.uri.scheme !== "file" || editor.selection.isEmpty) return "nothing selected"
       const target = targetOf(editor.document.uri, editor)
       if (!target?.selection) return "nothing selected"
+      hint.added()
       item = itemFor(target)
     } else {
       try {
@@ -1175,5 +1186,6 @@ export function activateFrizz(api: Vscode, context: vscode.ExtensionContext): Fr
     build: extensionVersion,
     notifications: () => [...shownNotifications],
     reloadOffered: () => offered?.label,
+    selectionHint: () => hint.shown(),
   }
 }

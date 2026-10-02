@@ -138,6 +138,8 @@ export interface Sidebar {
   pushState(): void
   /** Called with true when the page in the frame says it is ready, and false when that page is gone. */
   onReady(listener: (ready: boolean) => void): void
+  /** Whether the window's UI runs on a Mac, once the relay (which runs in the UI) has said; undefined before. */
+  mac(): boolean | undefined
   snapshot(): SidebarSnapshot
 }
 
@@ -161,6 +163,7 @@ export function registerSidebar(api: Vscode, context: vscode.ExtensionContext, h
   let badge = 0
   /** The relay reports the platform of the UI it runs in, which under a remote window is not the extension host's. */
   let mac = process.platform === "darwin"
+  let macReported: boolean | undefined
   const events: SidebarSnapshot["events"] = []
   const pending = new Map<string, (answer: EmbedComposedMessage | undefined) => void>()
   let waiters: ((ready: boolean) => void)[] = []
@@ -383,6 +386,7 @@ export function registerSidebar(api: Vscode, context: vscode.ExtensionContext, h
       switch (envelope.view) {
         case "platform":
           mac = envelope.mac === true
+          macReported = mac
           return
         case "retry":
           host.reconnect()
@@ -514,6 +518,7 @@ export function registerSidebar(api: Vscode, context: vscode.ExtensionContext, h
     onReady(listener) {
       readyListeners.push(listener)
     },
+    mac: () => macReported,
     snapshot: () => ({
       opened: view !== undefined,
       visible: view?.visible ?? false,

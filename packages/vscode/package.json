@@ -328,6 +328,11 @@
           "default": true,
           "markdownDescription": "Show a notification when a thread in this window's Frizz project needs you — a question, a request to approve, a finished turn — while the Frizz sidebar is out of sight. Only the window you used last shows it."
         },
+        "frizz.selectionHint": {
+          "type": "boolean",
+          "default": true,
+          "markdownDescription": "Show a quiet hint at the end of what you select in the editor, `Ctrl+L to add to Frizz` (`⌘L` on macOS), while Frizz is running. Not in diffs, and not for a select-all. The chord works either way."
+        },
         "frizz.useSidebar": {
           "type": "boolean",
           "default": true,
