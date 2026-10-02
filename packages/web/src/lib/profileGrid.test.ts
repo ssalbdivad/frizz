@@ -8,11 +8,14 @@ import {
   PROFILE_GRID_TYPOGRAPHY_CLASS,
   profileGridDisplayLabel,
   profileGridDisplayParts,
+  profileGridEffortLabel,
   profileGridEfforts,
+  profileGridRowSlots,
   profileGridSelectionFromKey,
   profileGridSelectionKey,
   profileGridSelectionKnown,
   profileGridSelections,
+  profileGridStacks,
   profileGridTemplateColumns,
   type ProfileGridGroup,
 } from "./profileGrid.ts"
@@ -190,4 +193,34 @@ test("the trigger splits the version off the model so it can be set in the editi
   assert.deepEqual(profileGridDisplayParts(groups, { model: "gpt-5.6-sol", effort: "ultra" }), { name: "GPT-5.6 Sol", effort: "ultra" })
   assert.deepEqual(profileGridDisplayParts(claude, undefined, "Profile loading…"), { name: "Profile loading…" })
   assert.equal(profileGridDisplayLabel(claude, { model: "opus", effort: "high" }, undefined, "Opus 5"), "Opus 5 › high")
+})
+
+// A 300px VS Code sidebar caps the menu at 284px; with both ladders the matrix needs about 385. It scrolled
+// sideways and hid X-HIGH, MAX and ULTRACODE (sweep 2026-10-02), so the menu stacks when it does not fit.
+test("the menu stacks only when the matrix it measured overflows the width it got", () => {
+  assert.equal(profileGridStacks(385, 284), true, "the 300px sidebar")
+  assert.equal(profileGridStacks(385, 359), true, "a 375px phone")
+  assert.equal(profileGridStacks(385, 434), false, "a 450px sidebar keeps the matrix")
+  assert.equal(profileGridStacks(284.4, 284), false, "subpixel layout of a matrix that fits exactly does not flip it")
+  assert.equal(profileGridStacks(240, 284), false, "a short catalogue keeps the matrix in a sidebar it fits — no breakpoint")
+})
+
+test("matrix slots hold every column; stacked slots drop only the ghosts after the last real cell", () => {
+  const columns = profileGridColumns(bothLaddersGroups)
+  const haiku = bothLaddersGroups[0]!.options[1]!
+  const slots = (option: (typeof haiku), stacked: boolean) => profileGridRowSlots(option, columns, { stacked }).map((slot) => `${slot.ghost ? "~" : ""}${slot.effort}`)
+  // The matrix: Haiku cannot honour the ceiling, so its ghost holds that column at its widest name.
+  assert.deepEqual(slots(haiku, false), ["low", "medium", "high", "xhigh", "max", "~ultracode"])
+  // Stacked, that trailing ghost could only wrap onto a blank line of its own.
+  assert.deepEqual(slots(haiku, true), ["low", "medium", "high", "xhigh", "max"])
+  // A ghost BEFORE a real cell stays in both, so every row wraps at the same points and columns line up.
+  const gapped = { model: "gapped", label: "Gapped", efforts: ["low", "high", "ultra"] }
+  assert.deepEqual(slots(gapped, true), ["low", "~medium", "high", "~xhigh", "~max", "ultra"])
+  assert.deepEqual(slots(gapped, true), slots(gapped, false), "nothing trails a real ceiling cell, so nothing is dropped")
+  // Negative control: a row with no real cell at all keeps none stacked.
+  assert.deepEqual(slots({ model: "none", label: "None", efforts: ["nope"] }, true), [])
+})
+
+test("effort words are the ones the matrix has always shown", () => {
+  assert.deepEqual(["low", "medium", "high", "xhigh", "max", "ultracode"].map(profileGridEffortLabel), ["Low", "Medium", "High", "X-high", "Max", "Ultracode"])
 })

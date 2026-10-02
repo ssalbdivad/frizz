@@ -44,6 +44,56 @@ export function profileGridTemplateColumns(columnCount: number): string {
 
 export type ProfileGridMoveKey = "ArrowLeft" | "ArrowRight" | "ArrowUp" | "ArrowDown" | "Home" | "End"
 
+/** The word a cell shows for an effort: "X-high" for xhigh, otherwise the effort capitalised. */
+export function profileGridEffortLabel(effort: string): string {
+  if (effort === "xhigh") return "X-high"
+  return effort.charAt(0).toUpperCase() + effort.slice(1)
+}
+
+// WHEN THE MATRIX DOES NOT FIT, IT STACKS. The menu is capped at the viewport less 1rem, and the matrix
+// is as wide as a model column plus every effort word in a row — about 385px with both ladders loaded.
+// In a 300px VS Code sidebar that cap is 284px, so the menu scrolled sideways and X-HIGH, MAX and
+// ULTRACODE sat out of sight behind a scrollbar nobody reads as one (sweep 2026-10-02); a 375px phone
+// lost ULTRACODE the same way. Stacked, each model's name gets its own line and its effort words wrap
+// under it at full size. The comparison is between widths the menu itself measured — the matrix's
+// natural border-box and the menu's resolved max-width — so a catalogue with a short ladder keeps the
+// matrix in a sidebar it fits, and nothing here encodes a breakpoint. The half pixel absorbs subpixel
+// layout: a matrix that fits exactly must not flip.
+export function profileGridStacks(naturalWidth: number, availableWidth: number): boolean {
+  return naturalWidth > availableWidth + 0.5
+}
+
+/** One slot in a model's row: a real cell for an effort the model offers, or a GHOST — the widest name
+ *  its column can hold, drawn invisible — where it offers none, so the column keeps its width. */
+export interface ProfileGridRowSlot {
+  effort: string
+  ghost: boolean
+}
+
+// The slots one model's row draws, in column order. Every column gets one: a ghost holds an unsupported
+// column open, which is what lines each column up across rows (a row is its own grid, so a column that
+// rendered nothing would collapse and slide every cell to its right out of line). STACKED, the row wraps
+// under the model's name, and a ghost AFTER the last real cell holds nothing in line — it can only wrap
+// onto a line of its own and draw a blank one — so those are dropped. Ghosts before a real cell stay:
+// with every row's slots the same widths, every row wraps at the same points and the columns still line
+// up down the stack.
+export function profileGridRowSlots(
+  option: ProfileGridOption,
+  columns: readonly (readonly string[])[],
+  { stacked = false }: { stacked?: boolean } = {},
+): ProfileGridRowSlot[] {
+  const slots = columns.map((column) => {
+    const effort = column.find((candidate) => option.efforts.includes(candidate))
+    if (effort) return { effort, ghost: false }
+    // A column can hold more than one effort name ("ultra" beside "ultracode"); its ghost is the widest.
+    const widest = column.reduce((a, b) => (profileGridEffortLabel(b).length > profileGridEffortLabel(a).length ? b : a))
+    return { effort: widest, ghost: true }
+  })
+  if (!stacked) return slots
+  const last = slots.findLastIndex((slot) => !slot.ghost)
+  return slots.slice(0, last + 1)
+}
+
 // "ultra" (codex) and "ultracode" (Claude Code) are ONE rung under two provider-specific names: the
 // ceiling of each ladder, where each CLI's own /effort lists it. They therefore share one column. Give
 // them a column each and every Claude row holds a ghost where codex's "ultra" sits, which floated
