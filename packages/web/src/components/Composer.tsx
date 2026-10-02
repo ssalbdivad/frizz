@@ -13,6 +13,7 @@ import { apiBase } from "../lib/base-path.ts"
 import { detectPlatform } from "../lib/keybindings.ts"
 import { localImageUrl } from "../lib/markdownTargets.ts"
 import { basename } from "../lib/paths.ts"
+import { draftStart, insertSlashCommand, matchSlashItems, slashQueryAt, slashSegments } from "../lib/slashCommands"
 import { insertMention, matchMentions, mentionQueryAt, mentionSegments, resolveMention, splitMentionQuery, subAgentMentionCandidates, type MentionCandidate } from "../lib/threadMentions.ts"
 import { useSubAgentDirectory } from "../hooks/useSubAgentDirectory.ts"
 import { useKeyboardInset } from "../lib/keyboardInset.ts"
@@ -405,6 +406,17 @@ export function Composer({
   // own text, so while a mention is on screen the MIRROR draws every glyph and the textarea's go
   // transparent (its caret keeps the fg colour); with only pills, the textarea draws the text as ever.
   const stagedTokens = useMemo(() => contextTokens ?? [], [contextTokens])
+  // The thread's skills and commands, as its harness reports them: fetched once, the first time the draft
+  // holds a `/` token anywhere (null = not asked yet; [] = asked, nothing to offer — including a fetch
+  // that failed, which must read as "no suggestions", never as an error the operator has to dismiss).
+  // Read by the menu AND the tint, so a draft restored with `/frizz-stack` in it lights up too.
+  const [skillItems, setSkillItems] = useState<ThreadSkill[] | null>(null)
+  const slashItems = useMemo(() => skillItems ?? [], [skillItems])
+  const opensAt = draftStart(prose)
+  // The textarea's collapsed selection (null while blurred or while a range is selected), refreshed on
+  // every edit and caret move. Both typeaheads follow it: a `/` or an `@` can sit anywhere in the prose.
+  const [caret, setCaret] = useState<number | null>(null)
+  const trackCaret = (el: HTMLTextAreaElement) => setCaret(el.selectionStart === el.selectionEnd ? el.selectionStart : null)
   const allMentions = useMemo(
     () => (ownMention ? [...(mentionCandidates ?? []), ownMention] : mentionCandidates ?? []),
     [mentionCandidates, ownMention],
@@ -440,9 +452,25 @@ export function Composer({
           out.push(renderInputFenceRun(prose, piece, out.length))
           continue
         }
+        let segAt = piece.start
         for (const seg of mentionSegments(prose.slice(piece.start, piece.end), allMentions)) {
+          const segStart = segAt
+          segAt += seg.text.length
           if (seg.kind === "text") {
-            out.push(seg.text)
+            // A `/name` the thread can run takes the same treatment as a mention in its OWN colour
+            // (lib/slashCommands.ts), so a skill never reads as a thread.
+            for (const run of slashSegments(seg.text, slashItems, segStart, opensAt)) {
+              if (run.kind === "text") {
+                out.push(run.text)
+                continue
+              }
+              hasMention = true
+              out.push(
+                <span key={out.length} data-composer-command className="rounded-[3px] bg-command/12 py-px -mx-px px-px text-command">
+                  {run.text}
+                </span>,
+              )
+            }
             continue
           }
           hasMention = true
@@ -456,7 +484,7 @@ export function Composer({
     }
     const paintsText = hasMention || fences !== null
     return paintsText || hasToken ? { segments: out, paintsText } : null
-  }, [prose, stagedTokens, allMentions])
+  }, [prose, stagedTokens, allMentions, slashItems, opensAt])
   const backdropSegments = backdrop?.segments
 
   // The mirror rides the textarea's own scroll position (a textarea at maxHeight scrolls its
@@ -501,12 +529,9 @@ export function Composer({
     if (el && (!active || active.contains(el))) el.focus({ preventScroll: true })
   }, [busy])
 
-  // SKILLS TYPEAHEAD state. `skillItems` is the harness's list, fetched once on the first `/` trigger
-  // (null = not asked yet; [] = asked, nothing to offer — including a fetch that failed, which must
-  // read as "no suggestions", never as an error the operator has to dismiss). `dismissedFor` records
-  // the exact draft an Escape closed the menu over, so it stays closed until the draft CHANGES —
-  // without it the menu would reopen on the very next render.
-  const [skillItems, setSkillItems] = useState<ThreadSkill[] | null>(null)
+  // SKILLS TYPEAHEAD state (`skillItems`, `caret` and the tint inputs live above the backdrop, which
+  // reads them). `dismissedFor` records the exact draft an Escape closed the menu over, so it stays
+  // closed until the draft CHANGES — without it the menu would reopen on the very next render.
   // The highlighted row, REMEMBERED WITH THE DRAFT IT WAS CHOSEN OVER: the filtered list under it
   // changes with every keystroke, so a highlight belongs to one draft and reads as row 0 for any
   // other. Derived, not reset by an effect — `useEffect(() => setSuggestSel(0), [prose])` looked free
@@ -520,11 +545,13 @@ export function Composer({
   const setSuggestSel = (next: number | ((current: number) => number)) =>
     setSuggestSelFor({ prose, index: typeof next === "function" ? next(suggestSel) : next })
   const [dismissedFor, setDismissedFor] = useState<string | null>(null)
-  // Active while the draft is exactly one `/`-led token — the shape of a skill invocation still being
-  // typed. A space (arguments have begun) or a newline closes it.
-  const slashActive = Boolean(slashSuggest) && /^\/\S*$/.test(prose)
+  // The `/` token the caret is in, at any word boundary — the mention menu's own rule (lib/slashCommands.ts).
+  // A space (arguments have begun) or the caret leaving the token closes it.
+  const slash = slashSuggest ? slashQueryAt(prose, caret) : undefined
+  const slashActive = slash !== undefined
+  const wantsSkills = Boolean(slashSuggest) && /(?:^|\s)\/[^\s/@]/.test(prose)
   useEffect(() => {
-    if (!slashActive || skillItems !== null) return
+    if (!(slashActive || wantsSkills) || skillItems !== null) return
     let live = true
     // Errors resolve to "asked, nothing to offer": the caller decides whether to retry on a later
     // trigger by handing this component a fresh mount (drawer reopen) — a typeahead never toasts.
@@ -533,16 +560,11 @@ export function Composer({
       () => { if (live) setSkillItems([]) },
     )
     return () => { live = false }
-  }, [slashActive, skillItems, slashSuggest])
+  }, [slashActive, wantsSkills, skillItems, slashSuggest])
   const suggestions = useMemo(() => {
-    if (!slashActive || !skillItems || dismissedFor === prose) return []
-    const query = prose.slice(1).toLowerCase()
-    // Prefix matches first (what completion usually wants), then substring matches — those are what
-    // surface a namespaced skill (`frizz:gh`) from its bare name.
-    const starts = skillItems.filter((s) => s.name.toLowerCase().startsWith(query))
-    const contains = skillItems.filter((s) => !s.name.toLowerCase().startsWith(query) && s.name.toLowerCase().includes(query))
-    return [...starts, ...contains]
-  }, [slashActive, skillItems, dismissedFor, prose])
+    if (!slash || !skillItems || dismissedFor === prose) return []
+    return matchSlashItems(skillItems, slash.query, slash.start === opensAt)
+  }, [slash?.start, slash?.query, opensAt, skillItems, dismissedFor, prose])
   const suggestOpen = suggestions.length > 0
   // The DISTINCT source labels in the list on screen, which every row then reserves room for (see the
   // sizer in the menu below). Empty when no visible suggestion reports a source — a harness that says
@@ -557,14 +579,11 @@ export function Composer({
   useEffect(() => {
     suggestListRef.current?.querySelector(`[data-suggest-index="${suggestSel}"]`)?.scrollIntoView({ block: "nearest" })
   }, [suggestSel])
-  // MENTION TYPEAHEAD state. Unlike `/`, a mention can sit anywhere in the prose, so the menu follows
-  // the CARET: `caret` is the textarea's collapsed selection (null while blurred or while a range is
-  // selected), refreshed on every edit and caret move. Disjoint from the skills menu by construction —
-  // that one needs the whole draft to be a single `/` token, and a `/` right before `@` never opens this.
-  const [caret, setCaret] = useState<number | null>(null)
-  const trackCaret = (el: HTMLTextAreaElement) => setCaret(el.selectionStart === el.selectionEnd ? el.selectionStart : null)
+  // MENTION TYPEAHEAD state. It follows the CARET like the skills menu, and is disjoint from it by
+  // construction: a `/` token never contains an `@`, and an open skills menu wins.
   const mentionable = (mentionCandidates?.length ?? 0) > 0 || ownMention !== undefined
-  const mention = mentionable && !suggestOpen ? mentionQueryAt(prose, caret) : undefined
+  // The phone layouts draw no mention menu, so one must never open there: it would claim Enter unseen.
+  const mention = mentionable && !suggestOpen && !phone ? mentionQueryAt(prose, caret) : undefined
   // AFTER THE DOT the menu is the named thread's SUB-AGENTS (`@port-the-parser.ca`): the head resolves to
   // one of the candidates by the same fold a plain mention does, and its children arrive from the
   // server's directory through SubAgentMentionSource below — mounted only while such a query is open, so
@@ -602,9 +621,11 @@ export function Composer({
     else acceptMention(mentionMatches[suggestSel] ?? mentionMatches[0]!)
   }
   function acceptSuggestion(item: { name: string }) {
-    const next = `/${item.name} `
-    setProse(next)
-    requestAnimationFrame(() => taRef.current?.setSelectionRange(next.length, next.length))
+    if (!slash || caret === null) return
+    const next = insertSlashCommand(prose, slash.start, caret, item.name)
+    setProse(next.prose)
+    setCaret(next.caret)
+    requestAnimationFrame(() => taRef.current?.setSelectionRange(next.caret, next.caret))
   }
 
   const hasContent = value.trim().length > 0
@@ -889,10 +910,17 @@ export function Composer({
           value={prose}
           autoFocus={autoFocus}
           disabled={busy}
-          onChange={(e) => setProse(e.target.value)}
+          onChange={(e) => {
+            setProse(e.target.value)
+            trackCaret(e.target)
+          }}
+          onSelect={slashSuggest ? (e) => trackCaret(e.currentTarget) : undefined}
           onKeyDown={onKeyDown}
           onFocus={() => setFocused(true)}
-          onBlur={() => setFocused(false)}
+          onBlur={() => {
+            setFocused(false)
+            setCaret(null)
+          }}
           onPaste={(e) => {
             const files = [...e.clipboardData.items].filter((i) => i.kind === "file").map((i) => i.getAsFile()!).filter(Boolean)
             if (files.length) {
@@ -1122,8 +1150,8 @@ export function Composer({
             setProse(e.target.value)
             trackCaret(e.target)
           }}
-          onSelect={mentionCandidates ? (e) => trackCaret(e.currentTarget) : undefined}
-          onBlur={mentionCandidates ? () => setCaret(null) : undefined}
+          onSelect={mentionCandidates || slashSuggest ? (e) => trackCaret(e.currentTarget) : undefined}
+          onBlur={mentionCandidates || slashSuggest ? () => setCaret(null) : undefined}
           onKeyDown={onKeyDown}
           onPaste={(e) => {
             // Any file item claims the whole paste (preventDefault) — deliberately. An image paste

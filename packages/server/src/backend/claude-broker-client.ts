@@ -224,7 +224,7 @@ export function connectClaudeBroker(
           // fail the WHOLE listing instead of costing one row its label.
           else entry.settle((Array.isArray(frame.skills) ? frame.skills : [])
             .filter((s: unknown): s is ClaudeSkillInfo => typeof (s as ClaudeSkillInfo)?.name === "string" && typeof (s as ClaudeSkillInfo)?.description === "string")
-            .map((s) => ({ name: s.name, description: s.description, source: SKILL_SOURCES.has(s.source as string) ? s.source : undefined })))
+            .map((s) => ({ name: s.name, description: s.description, source: SKILL_SOURCES.has(s.source as string) ? s.source : undefined, ...(s.command === true ? { command: true as const } : {}) })))
           break
         }
       }

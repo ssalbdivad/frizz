@@ -243,7 +243,7 @@ test("listSkills offers the skills and the built-in commands a Frizz thread can 
       // about to say the same thing. "explore" keeps "(dynamic workflow)": it is a parenthetical, not
       // a source, and nothing frizz renders would contradict it.
       { name: "review", description: "Review changes", source: "project" },
-      { name: "compact", description: "Compact the conversation", source: "builtin" },
+      { name: "compact", description: "Compact the conversation", source: "builtin", command: true },
       { name: "explore", description: "Explore the repository (dynamic workflow)", source: undefined },
     ])
     // The source map is memoized: a second listing must not re-ask for the context usage, which is a
@@ -267,7 +267,7 @@ test("listSkills still answers when the harness cannot report where its skills c
       // from — so it stays. The suffix is only redundant next to a column that repeats it.
       { name: "review", description: "Review changes (project)", source: undefined },
       // A built-in with no reported source is still a built-in.
-      { name: "compact", description: "Compact the conversation", source: "builtin" },
+      { name: "compact", description: "Compact the conversation", source: "builtin", command: true },
       { name: "explore", description: "Explore the repository (dynamic workflow)", source: undefined },
     ])
   } finally {

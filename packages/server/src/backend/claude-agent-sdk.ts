@@ -540,7 +540,7 @@ class RealClaudeQueryHandle implements ClaudeQueryHandle {
       const source = sources.get(command.name) ?? (isSkill ? undefined : "builtin")
       // The wire cap for a typeahead row is tighter than the 4KB the initialize mapper allows a
       // command description — the shared ThreadSkill schema rejects anything past 1024.
-      skills.push({ name: command.name, description: withoutRedundantSource(command.description, source).slice(0, 1024), source })
+      skills.push({ name: command.name, description: withoutRedundantSource(command.description, source).slice(0, 1024), source, ...(isSkill ? {} : { command: true as const }) })
     }
     return skills
   }

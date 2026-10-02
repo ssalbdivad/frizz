@@ -144,7 +144,7 @@ test("listSkills round-trips the harness's skill list over the broker socket", {
     await c.waitEvent((e) => e.kind === "init")
     assert.deepEqual(await c.client.listSkills(), [
       { name: "review", description: "Review changes", source: "project" },
-      { name: "compact", description: "Compact the conversation", source: "builtin" },
+      { name: "compact", description: "Compact the conversation", source: "builtin", command: true },
       { name: "explore", description: "Explore the repository (dynamic workflow)", source: undefined },
     ])
     c.client.close()

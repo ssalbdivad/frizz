@@ -134,6 +134,8 @@ export interface ClaudeSkillInfo {
   name: string
   description: string
   source?: ThreadSkillSource
+  // A built-in COMMAND rather than a skill — see ThreadSkill.command.
+  command?: true
 }
 
 // What a reload actually changed, bounded for the wire. Counts rather than full lists because the

@@ -5058,6 +5058,10 @@ export const ThreadSkill = z.object({
   name: z.string().min(1).max(512),
   description: z.string().max(1024),
   source: ThreadSkillSource.optional(),
+  // A built-in COMMAND (`/context`, `/usage`) rather than a skill. Claude runs a command only when it
+  // OPENS the message — mid-sentence it is plain text — so the composer offers these at the start of a
+  // draft alone, where a skill is offered at any word boundary.
+  command: z.literal(true).optional(),
 }).strict()
 export type ThreadSkill = z.infer<typeof ThreadSkill>
 
