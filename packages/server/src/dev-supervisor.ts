@@ -21,7 +21,7 @@ import {
   type ProjectLaunchTarget,
 } from "./project-launch.ts"
 import type { SessionDirectory } from "./access-codes.ts"
-import { RestartSupervisorProxy, type RestartResult } from "./restart-supervisor.ts"
+import { RestartSupervisorProxy, type RemoteControlHandler, type RestartResult } from "./restart-supervisor.ts"
 import { log as frizzLog } from "./logging.ts"
 import { BOOT_HARD_TIMEOUT_MS, BOOT_STALL_TIMEOUT_MS, readBootProgress } from "./boot-progress.ts"
 
@@ -193,6 +193,8 @@ export interface DevSupervisor {
   issueAccessLink(): { code: string; url: string; expiresAt: number } | null
   /** Declare (or clear) the public origin on the running board; the gate follows at once. */
   setPublicOrigin(origin: string | undefined): void
+  /** Offer the launcher's remote-access setup to the browser (Settings → Remote access), loopback only. */
+  setRemoteControl(handler: RemoteControlHandler | null): void
   readonly firstBoot: Promise<DevBoot>
   readonly stopRequested: Promise<void>
   currentBoot(): DevBoot | null
@@ -642,6 +644,10 @@ class Supervisor implements DevSupervisor {
   /** Mint a single-use access link for the public origin, or null when none is declared. */
   setPublicOrigin(origin: string | undefined): void {
     this.publicProxy.setPublicOrigin(origin)
+  }
+
+  setRemoteControl(handler: RemoteControlHandler | null): void {
+    this.publicProxy.setRemoteControl(handler)
   }
 
   issueAccessLink(): { code: string; url: string; expiresAt: number } | null {

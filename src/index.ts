@@ -2,6 +2,7 @@
 import { bindHostIsExposed } from "@frizz/server/local-origin";
 import { fileSessionDirectory, loadOrCreateSessionKey } from "@frizz/server/access-codes";
 import {
+  type CloudConfig,
   establishCloudConfig,
 } from "./cloud.ts";
 import { renderQrLines } from "@frizz/server/qr";
@@ -12,6 +13,7 @@ import { installPaneHost, type PaneHost } from "./pane-host.ts";
 import { createRemoteController, type RemoteController } from "./remote-controller.ts";
 import { probeCloudflared, probeGithub, probeTailscale } from "./remote-detect.ts";
 import { createRemotePane } from "./remote-pane.ts";
+import { createRemoteControlHandler } from "./remote-setup.ts";
 import { LOOPBACK_BIND_HOST } from "@frizz/server/local-origin";
 import { readFileSync } from "node:fs";
 import { homedir } from "node:os";
@@ -492,16 +494,20 @@ async function runSupervisor(
     activeAccessLink = remote.origin() ? supervisor.issueAccessLink() : null;
     {
       accessPane = createAccessPane({ issue: () => supervisor.issueAccessLink() });
-      const remotePane = createRemotePane({
+      // One setup, two surfaces: R in this terminal, and Settings → Remote access in a browser on this
+      // machine (the supervisor refuses it from anywhere else). Wired whether or not stdout is a terminal,
+      // so a board with no terminal to press R in can still be set up.
+      const remoteSetup = {
         port,
         current: () => remote?.current() ?? null,
-        apply: (next, applyOptions) => remote!.apply(next, applyOptions),
-        claim: (name) => establishCloudConfig(name, port),
+        apply: (next: CloudConfig | null, applyOptions?: { justClaimed?: boolean }) => remote!.apply(next, applyOptions),
+        claim: (name: string) => establishCloudConfig(name, port),
         issueLink: () => supervisor.issueAccessLink(),
         probes: { github: probeGithub, cloudflared: probeCloudflared, tailscale: probeTailscale },
-        onChanged: (config) => logger.info("remote", config ? `reached at https://${config.hostname}` : "loopback only"),
-        sandbox: sandbox !== null,
-      });
+        onChanged: (config: CloudConfig | null) => logger.info("remote", config ? `reached at https://${config.hostname}` : "loopback only"),
+      };
+      supervisor.setRemoteControl(createRemoteControlHandler(remoteSetup));
+      const remotePane = createRemotePane({ ...remoteSetup, sandbox: sandbox !== null });
       paneHost = installPaneHost({ bindings: { l: accessPane, L: accessPane, r: remotePane, R: remotePane } });
     }
   } catch (error) {
