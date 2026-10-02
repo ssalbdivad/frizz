@@ -434,6 +434,10 @@ active group when no code is in front).
   setting. Two things mean something else in a tab: Ctrl+L pressed in it goes back to the code (the
   sidebar's "focus the active editor group" would focus the tab's own group), and a click on its bar adds
   to its own box (`PageHost.addContext` takes the asking frame).
+- **In the editor's colours, on the editor's surface.** With `frizz.matchEditorTheme` (on by default) the
+  tab's relay hands its page the theme's colours as the sidebar's does, but names the `editor` surface, so
+  the page takes the editor's background (theme.css `data-host-colors="editor"`): a tab among the code's
+  tabs, not a piece of side bar dropped into the editor area.
 - **One tab per thread, by what it shows.** A tab is the thread its page's last `frizz:route` names (its
   `href`), so a thread link followed inside it makes it that thread's; asking for a thread a tab shows
   brings that tab forward. Its title is the page's — VS Code does not re-case a tab's title as it does the
@@ -702,9 +706,10 @@ the project root, which ignores `.frizz/`. Each path is now probed in the checko
   c11 a stand-in extension with Claude Code's id and Alt+K installed live, Alt+K then its and the sheet
   without the row, and Frizz's again once it is uninstalled; c12 a window on a thread's worktree opening
   the sidebar on that thread (`--worktree`); c13–c16 `@` files, an explorer drop, the problems and last
-  command pills, and a needs-you notification; c18 the selection hint where the editor draws it (its
+  command pills, and a needs-you notification; c18 the editor's colours through seven themes and
+  `frizz.matchEditorTheme` off and on; c19 the selection hint where the editor draws it (its
   colour, its line, the settle, the ink gap, gone on an empty selection, after Ctrl+L and with the setting
-  off); c19 a thread in an editor tab from the title row's ⋯, its reply box sending to the simulated
+  off); c20 a thread in an editor tab from the title row's ⋯, its reply box sending to the simulated
   worker with the editor block, Ctrl+L into the tab and back; c17, always last, a restart and then a window reload
   (Developer: Reload Window, typed in the palette), both of which the framed page's own `localStorage`
   and the eye survive. Under the test runner a reload ends the run (VS Code exits with its extension

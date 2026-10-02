@@ -2608,6 +2608,18 @@ try {
       return state ?? undefined
     }, 20_000).catch(() => null)
     const sidebarWide = await inPage(() => innerWidth)
+    // In the editor's colours on the EDITOR's surface (thread-panel.ts): the page marks its root so, and
+    // its background — the full-width drawer's, which in those colours is the surface — is the editor's.
+    const tabColours = await inTab(() => {
+      const probe = document.createElement("div")
+      probe.style.color = "var(--vscode-editor-background)"
+      document.body.append(probe)
+      const editor = getComputedStyle(probe).color
+      probe.remove()
+      const drawer = document.querySelector<HTMLElement>(".frizz-sheet-panel")
+      return { hostColors: document.documentElement.dataset.hostColors ?? null, editor, drawer: drawer ? getComputedStyle(drawer).backgroundColor : null, body: getComputedStyle(document.body).backgroundColor }
+    })
+    expect("c20", "…in the editor's colours, on the editor's surface: its drawer is the editor's background", tabColours.hostColors === "editor" && !!tabColours.editor && tabColours.drawer === tabColours.editor, tabColours)
     // The tab's own webview in the workbench: the visible one in the editor part (the sidebar's is in the
     // side bar). Its page fills it — the editor's width, whatever the side bar was left at by an earlier
     // check (c9 leaves it ~450px, so "wider than the sidebar" is no measure of anything).
