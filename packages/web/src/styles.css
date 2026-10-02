@@ -1323,6 +1323,53 @@ a[href] {
   font-style: inherit;
   font-weight: inherit;
 }
+/* A ```ansi fence (lib/ansi.ts). The sixteen indexed colours draw from the --terminal-* palette in
+   theme.css, so they follow the light/dark theme the way a terminal profile does; a 256-colour or
+   24-bit colour arrives as an inline hex instead and is the author's to choose. The escape sequences
+   themselves stay in the DOM, hidden, so the copy button still copies the source verbatim. */
+.hljs .ansi-esc { display: none; }
+.hljs .ansi-bold { font-weight: 700; }
+.hljs .ansi-dim { opacity: 0.6; }
+.hljs .ansi-italic { font-style: italic; }
+.hljs .ansi-underline { text-decoration-line: underline; }
+.hljs .ansi-strike { text-decoration-line: line-through; }
+.hljs .ansi-underline.ansi-strike { text-decoration-line: underline line-through; }
+.hljs .ansi-hidden { visibility: hidden; }
+/* Inverse on a DEFAULT colour has nothing to swap in, so it borrows the block's own pair. */
+.hljs .ansi-fg-inverse { color: var(--color-bg); }
+.hljs .ansi-bg-inverse { background-color: var(--code-base); }
+.hljs .ansi-fg-black { color: var(--terminal-black); }
+.hljs .ansi-fg-red { color: var(--terminal-red); }
+.hljs .ansi-fg-green { color: var(--terminal-green); }
+.hljs .ansi-fg-yellow { color: var(--terminal-yellow); }
+.hljs .ansi-fg-blue { color: var(--terminal-blue); }
+.hljs .ansi-fg-magenta { color: var(--terminal-magenta); }
+.hljs .ansi-fg-cyan { color: var(--terminal-cyan); }
+.hljs .ansi-fg-white { color: var(--terminal-white); }
+.hljs .ansi-fg-bright-black { color: var(--terminal-bright-black); }
+.hljs .ansi-fg-bright-red { color: var(--terminal-bright-red); }
+.hljs .ansi-fg-bright-green { color: var(--terminal-bright-green); }
+.hljs .ansi-fg-bright-yellow { color: var(--terminal-bright-yellow); }
+.hljs .ansi-fg-bright-blue { color: var(--terminal-bright-blue); }
+.hljs .ansi-fg-bright-magenta { color: var(--terminal-bright-magenta); }
+.hljs .ansi-fg-bright-cyan { color: var(--terminal-bright-cyan); }
+.hljs .ansi-fg-bright-white { color: var(--terminal-bright-white); }
+.hljs .ansi-bg-black { background-color: var(--terminal-black); }
+.hljs .ansi-bg-red { background-color: var(--terminal-red); }
+.hljs .ansi-bg-green { background-color: var(--terminal-green); }
+.hljs .ansi-bg-yellow { background-color: var(--terminal-yellow); }
+.hljs .ansi-bg-blue { background-color: var(--terminal-blue); }
+.hljs .ansi-bg-magenta { background-color: var(--terminal-magenta); }
+.hljs .ansi-bg-cyan { background-color: var(--terminal-cyan); }
+.hljs .ansi-bg-white { background-color: var(--terminal-white); }
+.hljs .ansi-bg-bright-black { background-color: var(--terminal-bright-black); }
+.hljs .ansi-bg-bright-red { background-color: var(--terminal-bright-red); }
+.hljs .ansi-bg-bright-green { background-color: var(--terminal-bright-green); }
+.hljs .ansi-bg-bright-yellow { background-color: var(--terminal-bright-yellow); }
+.hljs .ansi-bg-bright-blue { background-color: var(--terminal-bright-blue); }
+.hljs .ansi-bg-bright-magenta { background-color: var(--terminal-bright-magenta); }
+.hljs .ansi-bg-bright-cyan { background-color: var(--terminal-bright-cyan); }
+.hljs .ansi-bg-bright-white { background-color: var(--terminal-bright-white); }
 /* The `cat -n` line numbers a Read excerpt carries. They are not source and must never compete with
    it: the same tone the rendered diff gives its own gutter, and unselectable-looking but still
    SELECTABLE, because copying the excerpt has always yielded the numbers and quietly changing that

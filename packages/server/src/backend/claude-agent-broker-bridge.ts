@@ -9,7 +9,7 @@ import { adoptOrForkBroker, killBroker, lastKnownBrokerDaemon, liveBrokerRecord,
 import { connectClaudeBroker, type ClaudeBrokerClient } from "./claude-broker-client.ts"
 import { describeClaudeBrokerExit, readClaudeBrokerExit, type ClaudeBrokerExitRecord } from "./claude-broker-diagnostics.ts"
 import type { ClaudeDiagnostic, ClaudePermissionDecision, ClaudePermissionRequest, ClaudePluginReload, ClaudeQueryEvent, ClaudeSkillInfo } from "./claude-agent-sdk-protocol.ts"
-import { CLAUDE_AGENT_SDK_MAX_INPUT_BYTES, CLAUDE_BROKER_CAPABILITY_CANCEL_INPUT, CLAUDE_BROKER_CAPABILITY_LIST_SKILLS, CLAUDE_BROKER_CAPABILITY_RELOAD_PLUGINS, CLAUDE_BROKER_CAPABILITY_RENAME, CLAUDE_BROKER_CAPABILITY_STOP_TASK, CLAUDE_BROKER_CAPABILITY_SUBAGENT_STEER, validateInputMessage } from "./claude-agent-sdk-protocol.ts"
+import { CLAUDE_AGENT_SDK_MAX_INPUT_BYTES, CLAUDE_BROKER_CAPABILITY_CANCEL_INPUT, CLAUDE_BROKER_CAPABILITY_INPUT_ACK, CLAUDE_BROKER_CAPABILITY_LIST_SKILLS, CLAUDE_BROKER_CAPABILITY_RELOAD_PLUGINS, CLAUDE_BROKER_CAPABILITY_RENAME, CLAUDE_BROKER_CAPABILITY_STOP_TASK, CLAUDE_BROKER_CAPABILITY_SUBAGENT_STEER, validateInputMessage } from "./claude-agent-sdk-protocol.ts"
 import type { BrokerRecord, ClaudeBrokerConfig } from "./claude-agent-broker.ts"
 import type { InteractionSessionScope, InteractionStore } from "../interaction-store.ts"
 import {
@@ -152,7 +152,16 @@ function inputIdFor(deliveryId: string | undefined): string {
 type ForkOpts = Pick<ClaudeSpawnDispatchInput, "appendSystemPrompt" | "model" | "effort" | "forkFrom"> & { resume?: boolean }
 
 
-interface ActiveSession { slug: string; sessionId: string; cwd: string; generation: string; client: ClaudeBrokerClient }
+interface ActiveSession {
+  slug: string
+  sessionId: string
+  cwd: string
+  generation: string
+  client: ClaudeBrokerClient
+  /** The daemon answers an input frame (input-ack-v1, read off its record at bind). An older daemon
+   *  forked before the capability existed does not, and is held to "written to a connected socket". */
+  acksInput: boolean
+}
 
 export interface ClaudeAgentBrokerBridge {
   spawnDispatch(input: ClaudeSpawnDispatchInput): Promise<{ binding: ClaudeBrokerBinding }>
@@ -297,8 +306,9 @@ export interface ClaudeAgentBrokerBridge {
 /**
  * Validate a message BEFORE it becomes a socket frame, and say why in the operator's language.
  *
- * The `input` frame has no reply, so the daemon is the only place a rejection can be noticed and it has
- * no channel to answer on — every send that reached it and failed was simply gone. Running the same pure
+ * The `input` frame had no reply until input-ack-v1, so the daemon was the only place a rejection could be
+ * noticed and it had no channel to answer on — every send that reached it and failed was simply gone
+ * (a daemon forked by an older build still behaves that way, which is why this stays). Running the same pure
  * validator on this side turns that into a thrown RPC the composer can roll back and toast, which is the
  * whole difference between "frizz refused my message" and "frizz ate my message".
  *
@@ -485,7 +495,7 @@ export function createClaudeAgentBrokerBridge(deps: ClaudeBrokerBridgeDeps): Cla
           .catch(() => client.answerPermission(requestId, { behavior: "deny", message: "permission decision failed" }))
       },
     })
-    const session: ActiveSession = { slug, sessionId, cwd, generation: record.generation, client }
+    const session: ActiveSession = { slug, sessionId, cwd, generation: record.generation, client, acksInput: record.capabilities?.includes(CLAUDE_BROKER_CAPABILITY_INPUT_ACK) === true }
     sessions.set(slug, session)
     // The auto-compact ceiling THIS daemon runs under, taken off its own record so an ADOPTED daemon
     // reports the value it was forked with rather than whatever Settings says now — the board divides
@@ -565,6 +575,44 @@ export function createClaudeAgentBrokerBridge(deps: ClaudeBrokerBridgeDeps): Cla
     return bind(slug, sessionId, cwd, record)
   }
 
+  // SINGLE-FLIGHT per session: every caller that needs this session's daemon while one attach is
+  // already running for it awaits THAT attach instead of starting its own.
+  //
+  // Without it two inputs arriving together for a daemon-less thread each ran `adoptOrForkBroker`, each
+  // found no live record, and each FORKED. That is not a hypothetical interleaving — it is what a
+  // hibernated thread does every time the operator answers its questions: the waker's delivery of the
+  // answers and the operator's own send land in the same instant. On 2026-09-30 it put daemons 51062
+  // and 51063 (consecutive pids: two spawns back to back) on `we-ve-got-to-start-working`, both
+  // resuming one transcript and binding one socket path. The second took the record and the path; the
+  // first self-collected a minute later and its teardown deleted the survivor's socket file (see the
+  // daemon's shutdown), and every send after that — "GO!!" included — went to a daemon nobody could
+  // reach. The forker whose own daemon lost can also simply fail, with "exited before it became ready"
+  // (reproduced in scripts/verify-broker-resume-race.mjs), which is how an operator's send can vanish
+  // with no ledger entry at all.
+  //
+  // Keyed by SESSION, not slug: the socket, the record and the transcript are all per session, and a
+  // dispatch racing a follow-up on one session id is the same race. A rejection is shared by every
+  // caller that joined — each of them needed this daemon, so each send fails and rolls back, and the
+  // next one starts a fresh attempt because the entry is removed as the attempt settles.
+  const attaching = new Map<string, Promise<ActiveSession>>()
+  const attachOnce = (...args: Parameters<typeof attach>): Promise<ActiveSession> => {
+    const sessionId = args[1]
+    const inFlight = attaching.get(sessionId)
+    if (inFlight) return inFlight
+    const attempt: Promise<ActiveSession> = attach(...args).finally(() => {
+      if (attaching.get(sessionId) === attempt) attaching.delete(sessionId)
+    })
+    attaching.set(sessionId, attempt)
+    return attempt
+  }
+
+  // Hand the operator's message to the session and return only once it is provably there. See
+  // ClaudeBrokerClient.deliverInput: acknowledged by the daemon when it advertises input-ack-v1, else
+  // written to a connected socket. A throw here reaches the caller's RPC, which rolls the send back —
+  // the whole point, since the alternative is a `delivered` ledger row for a message no agent will see.
+  const deliver = (session: ActiveSession, message: ReturnType<typeof validateInputMessage>): Promise<void> =>
+    session.client.deliverInput(message, { acknowledged: session.acksInput })
+
   const current = (slug: string, sessionId: string): ActiveSession | undefined => {
     const s = sessions.get(slug)
     return s && s.sessionId === sessionId ? s : undefined
@@ -603,11 +651,13 @@ export function createClaudeAgentBrokerBridge(deps: ClaudeBrokerBridgeDeps): Cla
       // refuses is discarded there with nobody to tell, and for a DISPATCH that means a worker that
       // boots, receives no task at all, and sits idle looking frozen from birth.
       const message = validatedInput({ id: input.inputId ?? randomUUID(), text: input.prompt })
-      const session = await attach(input.threadSlug, input.sessionId, input.cwd, input.permissionMode ?? "default", {
+      const session = await attachOnce(input.threadSlug, input.sessionId, input.cwd, input.permissionMode ?? "default", {
         appendSystemPrompt: input.appendSystemPrompt, model: input.model, effort: input.effort,
         ...(input.forkFrom ? { forkFrom: input.forkFrom } : {}),
       })
-      session.client.sendInput(message)
+      // Acknowledged like a follow-up: a dispatch whose opening prompt never arrived is a worker that
+      // boots with no task and looks frozen from birth, so it must fail the dispatch instead.
+      await deliver(session, message)
       return { binding: { threadSlug: input.threadSlug, sessionId: input.sessionId, cwd: input.cwd, generation: session.generation, state: "active" } }
     },
 
@@ -630,6 +680,12 @@ export function createClaudeAgentBrokerBridge(deps: ClaudeBrokerBridgeDeps): Cla
       // cold resume, and must certainly not cost the `freshProcess` daemon retirement below — killing the
       // operator's worker on the way to refusing their message is the worst possible order.
       const message = validatedInput({ id: inputIdFor(input.deliveryId), text: input.text })
+      // A resume another caller already started for this session is the one this message rides — see
+      // attachOnce. Waited out BEFORE reading `current`, so the checks below see the daemon it produced
+      // (and a `freshProcess` caller retires THAT one, rather than racing it). A failed attempt is not
+      // this caller's failure: it falls through and starts its own.
+      const inFlight = attaching.get(input.sessionId)
+      if (inFlight) await inFlight.catch(() => undefined)
       // Reattach if we don't already hold this session live (frizz restarted, or it was detached). The
       // fork opts carry resume:true + the rebuilt system prompt so a DEAD daemon cold-resumes with the
       // worker contract re-applied; when the daemon is still alive they are ignored (socket reconnect).
@@ -651,7 +707,7 @@ export function createClaudeAgentBrokerBridge(deps: ClaudeBrokerBridgeDeps): Cla
         sessions.delete(input.threadSlug)
         held = undefined
       }
-      const session = held ?? await attach(
+      const session = held ?? await attachOnce(
         input.threadSlug, input.sessionId, input.cwd, input.permissionMode ?? "default",
         { resume: true, appendSystemPrompt: input.appendSystemPrompt, model: input.model, effort: input.effort },
       )
@@ -661,7 +717,11 @@ export function createClaudeAgentBrokerBridge(deps: ClaudeBrokerBridgeDeps): Cla
       // that can actually read it. Ordering aside, this is also the answer to "they typed instead of
       // clicking" — see retirePendingFor.
       retirePendingFor(input.threadSlug, input.sessionId, "user-cancelled")
-      session.client.sendInput(message)
+      // AWAITED, and that is the fix for the other half of 2026-09-30: this used to be `sendInput`, which
+      // buffers the frame while the socket is down and returns — so a follow-up bound to a socket that
+      // never came back resolved, the router recorded "GO!!" as delivered, and the client dropped the
+      // frame on its 30s give-up. Now the RPC answers success only for a message the daemon took.
+      await deliver(session, message)
     },
 
     interruptTurn(input) {
@@ -727,7 +787,8 @@ export function createClaudeAgentBrokerBridge(deps: ClaudeBrokerBridgeDeps): Cla
       // gated on. Measured on the promoted artifact: an ESC/BEL steer was accepted and vanished.
       // Running the same pure validator first turns that into an error the operator actually sees.
       const message = validateInputMessage({ id: inputIdFor(input.deliveryId), text: input.text, parentToolUseId: input.subAgentId })
-      held.client.sendInput(message)
+      // Acknowledged for the same reason a follow-up is: `delivered: true` must mean the daemon has it.
+      await deliver(held, message)
     },
 
     async stopSubAgent(input) {
@@ -817,6 +878,7 @@ export function createClaudeAgentBrokerBridge(deps: ClaudeBrokerBridgeDeps): Cla
           continue
         }
         if (current(target.threadSlug, target.sessionId)) continue // already held (a re-entrant warmUp)
+        if (attaching.has(target.sessionId)) continue // a follow-up is attaching it right now; binding too would leave two clients
         // `bind`, not `attach`: adopting must never be able to FORK. Between the enumeration above and
         // here the daemon could have exited, and adoptOrForkBroker would then cold-start a `{kind:"new"}`
         // session on the same id — a fresh empty session writing over a real thread's transcript, at

@@ -58,8 +58,27 @@ export function useGithubTriggerVisible(): boolean {
 // detection is cached server-side, `authed` re-checked live, so a later `gh auth login` surfaces it.
 // No profile gating: the picker carries its own model/effort selector, so an unloaded or unavailable
 // saved pair is something to FIX in there, not a reason to refuse to open.
-export function GithubTrigger({ className = "" }: { className?: string }) {
+//
+// `phoneChip` is the phone's new-thread tool row: the same door as a labelled chip, "Issue or PR" — on a
+// phone the icon alone names nothing, and this is where you dispatch from an issue you just read.
+export function GithubTrigger({ className = "", variant = "icon" }: { className?: string; variant?: "icon" | "phoneChip" }) {
   if (!useGithubTriggerVisible()) return null
+  if (variant === "phoneChip") {
+    return (
+      <button
+        type="button"
+        data-phone-github-trigger
+        onClick={openGithubPicker}
+        onMouseDown={(e) => e.preventDefault()}
+        title="Investigate this issue and make recommendations"
+        // 32px of chip, 44px of target — the model chip's own box, so the two read as one row.
+        className={`relative inline-flex h-[32px] shrink-0 items-center gap-[6px] rounded-full border border-border-strong bg-bg px-[11px] text-[13.5px] font-medium text-fg after:absolute after:inset-x-0 after:-inset-y-[6px] after:content-[''] active:bg-hover ${className}`}
+      >
+        <Github aria-hidden size={14} strokeWidth={1.9} className="shrink-0 text-muted" />
+        Issue or PR
+      </button>
+    )
+  }
   return (
     <button
       type="button"

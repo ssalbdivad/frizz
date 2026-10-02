@@ -53,6 +53,7 @@ const NEEDS_REAL_STACK = [
   "packages/web/src/App.firstPaint.e2e.test.ts",
   "packages/web/src/components/overlayAccessibility.e2e.test.ts",
   "packages/web/src/components/ui/Menu.e2e.test.ts",
+  "packages/web/src/components/fullscreenEscape.e2e.test.ts",
 ];
 
 const args = process.argv.slice(2);

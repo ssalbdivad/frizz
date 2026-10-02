@@ -2,7 +2,7 @@
 // (no real claude, no network — fast and deterministic). Proves the broker↔client typed socket
 // protocol, the permission round-trip over the socket, and — the reason the broker exists —
 // reconnect with a PENDING permission re-delivered to a fresh client.
-import { chmodSync, copyFileSync, mkdtempSync, readFileSync, rmSync } from "node:fs"
+import { chmodSync, copyFileSync, existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { dirname, join } from "node:path"
 import { fileURLToPath } from "node:url"
@@ -133,8 +133,8 @@ test("a refused input is relayed to the attached client, not just written to the
 
 // The composer typeahead's data path, end to end over the REAL socket: client `list-skills` frame →
 // daemon dispatch → handle (initialize commands ∩ init-frame skills) → `skills-result` frame → client
-// promise. The fake CLI's initialize response carries "review" and "explore" AND the built-in stand-in
-// "compact"; only the first two are named by its init frame's `skills`, so only those may cross back.
+// promise. The fake CLI's initialize response carries "review" and "explore", the built-in stand-in
+// "compact" (offered) and three built-ins that are not; all three offered rows must cross back.
 // Each one's SOURCE has to survive the socket too, including the undefined one — the client re-checks
 // the value against the closed set, and a bug there would silently strip every label.
 test("listSkills round-trips the harness's skill list over the broker socket", { timeout: 15_000 }, async () => {
@@ -144,6 +144,7 @@ test("listSkills round-trips the harness's skill list over the broker socket", {
     await c.waitEvent((e) => e.kind === "init")
     assert.deepEqual(await c.client.listSkills(), [
       { name: "review", description: "Review changes", source: "project" },
+      { name: "compact", description: "Compact the conversation", source: "builtin", command: true },
       { name: "explore", description: "Explore the repository (dynamic workflow)", source: undefined },
     ])
     c.client.close()
@@ -302,5 +303,83 @@ test("an interrupt arriving while another is still in flight is dropped", { time
     c.client.close()
   } finally {
     await b.close()
+  }
+})
+
+// input-ack-v1, both answers, over the real socket. The acknowledgement is what lets a follow-up RPC
+// report success only for a message the session actually took — before it, an input frame had no
+// reply, and "a frame was written somewhere" was indistinguishable from "the agent has it".
+test("an acknowledged input resolves once the session holds it, and a refused one rejects with the reason", { timeout: 15_000 }, async () => {
+  const b = startBroker("hold-inputs")
+  try {
+    const c = clientWith(b.socketPath)
+    const id = randomUUID()
+    await c.client.deliverInput({ id, text: "the first send holds the uuid outstanding" }, { acknowledged: true })
+    const rows = await waitForRows(b.dir, (r) => r.some((row) => row.kind === "user-input"))
+    assert.ok(rows.some((row) => row.kind === "user-input"), "resolved ⇒ the claude process was handed the input")
+    await assert.rejects(
+      c.client.deliverInput({ id, text: "the second send is refused" }, { acknowledged: true }),
+      /refused this message: input UUID is already outstanding/,
+      "the refusal reaches the caller instead of only a diagnostics file",
+    )
+    c.client.close()
+  } finally { await b.close() }
+})
+
+// The compatibility half: a daemon forked by an older build has no `input-result` to send, so the
+// bridge asks for no acknowledgement and settles for the frame having been WRITTEN to a connected
+// socket. Driven against a current daemon with no requestId on the frame, which is exactly the frame an
+// older daemon receives — it must still arrive, and the promise must still settle.
+test("an unacknowledged input resolves once written to a connected socket, and still arrives", { timeout: 15_000 }, async () => {
+  const b = startBroker("basic")
+  try {
+    const c = clientWith(b.socketPath)
+    const id = randomUUID()
+    await c.client.deliverInput({ id, text: "for a daemon that cannot answer" }, { acknowledged: false })
+    const rows = await waitForRows(b.dir, (r) => r.some((row) => row.kind === "user-input"))
+    assert.ok(rows.some((row) => row.kind === "user-input"), "the input reached the claude process")
+    c.client.close()
+  } finally { await b.close() }
+})
+
+// The never-connected hole, which is the one that lost "GO!!" on 2026-09-30: the client was bound to a
+// socket path whose file had been deleted, `sendInput` buffered the frame and returned, and the client
+// dropped it on its first-connect give-up with nobody told. `deliverInput` must reject at that give-up,
+// and say the message was NOT delivered (it was never written anywhere).
+test("a delivery to a socket nothing listens on rejects when the client gives up, as not delivered", { timeout: 15_000 }, async () => {
+  const client = connectClaudeBroker(shortSocket(), {}, { connectDeadlineMs: 600, retryDelayMs: 100 })
+  const started = Date.now()
+  await assert.rejects(
+    client.deliverInput({ id: randomUUID(), text: "GO!!" }, { acknowledged: true, timeoutMs: 10_000 }),
+    /could not reach this thread's Claude session, so the message was not delivered/,
+  )
+  assert.ok(Date.now() - started < 5_000, "rejected at the connect give-up, not at the ack deadline")
+  assert.equal(client.isClosed(), true)
+  client.close()
+})
+
+// Two daemons for ONE session bind ONE socket path; the second unlinks the first's file and binds its
+// own. Closing a unix-socket server makes libuv unlink its PATH, by name — so before the fix the first
+// daemon's teardown deleted the SECOND's socket file, and the survivor ran on, recorded and unreachable
+// (the 2026-09-30 loss on `we-ve-got-to-start-working`). A daemon must close its listener only while the
+// path still leads to it. Negative control: against the pre-fix daemon, the existsSync below fails.
+test("a daemon whose socket path was taken over leaves the successor's socket alone when it shuts down", { timeout: 20_000 }, async () => {
+  const socketPath = shortSocket()
+  const first = startBroker("basic")
+  const loser = runClaudeBroker({ socketPath, cwd: first.dir, sessionId: randomUUID(), executablePath: join(first.dir, "fake-claude--basic.mjs"), permissionMode: "default", env: { PATH: process.env.PATH ?? "", HOME: process.env.HOME ?? "" } })
+  await new Promise((r) => setTimeout(r, 300))
+  const survivor = startBroker("basic", { socketPath })
+  try {
+    await new Promise((r) => setTimeout(r, 300))
+    await loser.close()
+    assert.ok(existsSync(socketPath), "the survivor's socket file outlives the loser's teardown")
+    const c = clientWith(socketPath)
+    await c.client.deliverInput({ id: randomUUID(), text: "are you still reachable?" }, { acknowledged: true, timeoutMs: 5_000 })
+    const rows = await waitForRows(survivor.dir, (r) => r.some((row) => row.kind === "user-input"))
+    assert.ok(rows.some((row) => row.kind === "user-input"), "…and an input sent to it reaches the survivor's claude")
+    c.client.close()
+  } finally {
+    await survivor.close()
+    await first.close()
   }
 })

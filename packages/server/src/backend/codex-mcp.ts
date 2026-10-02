@@ -1,8 +1,8 @@
 import { FRIZZ_MCP, frizzMcpEnv, type FrizzMcp } from "./types.ts"
 
 // ---- Codex MCP injection -------------------------------------------------------------------------
-// The codex twin of dispatch.ts's `claudeMcpFlags`. Claude mounts frizz's MCP server via one inline
-// `--mcp-config` JSON on the worker's argv; codex has no such flag, so it rides a `-c` TOML override
+// The codex twin of dispatch.ts's `claudeMcpFlags`. Claude mounts frizz's MCP server via one
+// `--mcp-config` file named on the worker's argv; codex has no such flag, so it rides a `-c` TOML override
 // on the APP-SERVER's argv instead.
 //
 // WHY THE APP-SERVER'S ARGV. On codex-cli 0.146.0 it was the ONLY channel that worked: putting

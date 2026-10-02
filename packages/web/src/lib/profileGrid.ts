@@ -42,6 +42,13 @@ export function profileGridTemplateColumns(columnCount: number): string {
   return `minmax(6rem, 7rem) repeat(${Math.max(0, columnCount)}, auto)`
 }
 
+// The product's own word for an effort level, as the picker's cells print it: "X-high" for xhigh, the
+// rest capitalised ("Low", "Ultracode"). Shared by the desktop grid and the phone's model sheet.
+export function profileGridEffortLabel(effort: string): string {
+  if (effort === "xhigh") return "X-high"
+  return effort.charAt(0).toUpperCase() + effort.slice(1)
+}
+
 export type ProfileGridMoveKey = "ArrowLeft" | "ArrowRight" | "ArrowUp" | "ArrowDown" | "Home" | "End"
 
 // "ultra" (codex) and "ultracode" (Claude Code) are ONE rung under two provider-specific names: the

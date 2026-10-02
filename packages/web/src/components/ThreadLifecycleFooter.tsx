@@ -196,6 +196,7 @@ export function StateButton({
   className = "rounded-md border border-border-strong bg-panel-2/60 px-2.5 py-1 text-[12px] text-fg/80 hover:bg-panel-2 hover:text-fg",
   iconClassName = "",
   command = false,
+  iconSize = 12,
 }: {
   thread: ThreadView
   onArchived?: () => void
@@ -218,6 +219,9 @@ export function StateButton({
   // THE copy the `d` shortcut presses (lib/keyboardRuntime.ts). Only a footer's copy sets it: the
   // in-chat ```done card renders a second one, and the key must find exactly one per surface.
   command?: boolean
+  // The Check's size. 12 on both desktop surfaces; the phone's ⋯ sheet draws it as a list row, where
+  // every row's icon is 19px.
+  iconSize?: number
 }) {
   // Disables the instant it's clicked. On success we DON'T reset it: the card is dissolving, so the
   // button stays disabled (still reading "Mark as done", no spinner) for the whole fade-out rather
@@ -304,7 +308,7 @@ export function StateButton({
         onMouseDown={(event) => event.preventDefault()}
         className={`flex items-center gap-1 font-medium outline-none transition-colors focus-visible:ring-1 focus-visible:ring-focus-ink-60 disabled:opacity-45 ${className}`}
       >
-        <Check size={12} className={iconClassName} />
+        <Check size={iconSize} className={iconClassName} />
         Mark as done
       </button>
       <Dialog

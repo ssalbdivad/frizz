@@ -1,0 +1,235 @@
+import { spawn as nodeSpawn, type ChildProcess } from "node:child_process"
+import { release as osRelease } from "node:os"
+import { win32 } from "node:path"
+import type { SessionTelemetry } from "./tailer.ts"
+import type { SessionRow } from "./storage.ts"
+import { log as frizzLog } from "./logging.ts"
+
+// ── KEEP THE MACHINE AWAKE WHILE AN AGENT IS WORKING ─────────────────────────────────────────────────
+//
+// An agent left running overnight stopped for 8h 35m because the HOST idle-slept (arktype a627551f,
+// 2026-10-02): Windows logged "entering sleep, Sleep Reason: System Idle" at 01:38 — its AC plan sleeps
+// after an hour without input — and woke at 10:14 on a keypress. WSL froze with it, and so did every
+// agent, sub-agent and benchmark it hosted. A background process does not count as activity to any
+// desktop OS's idle timer, so a machine doing hours of agent work reads as idle to the one thing that
+// decides whether it sleeps.
+//
+// So while any thread has work RUNNING on this machine, the server holds the OS's own "system required"
+// request, and drops it the moment nothing is. Only IDLE sleep is blocked: closing the lid, the power
+// button and an explicit Sleep still sleep, and the display still turns off. What counts as running is
+// `keepsAwake` below — deliberately local compute only. A thread parked on a PR, an issue or a timer is
+// waiting on the world, not on this machine; it catches up on wake, and holding a laptop awake for a
+// 180-day PR watch would be absurd.
+//
+// The request is held by a CHILD PROCESS, never by this one, for two reasons: Node has no binding to
+// any of the three platform APIs, and a child ties the request's lifetime to its own. Each helper
+// below exits when its stdin closes, so a server that crashes or is SIGKILLed releases the request
+// with it — the OS never sees an orphaned hold.
+
+/** How often the server re-reads whether anything is running. Idle timers are minutes; this is plenty. */
+export const WAKE_LOCK_POLL_MS = 30_000
+
+/** The parts of a thread's telemetry that say whether it has work running on this machine. */
+export type WakeTelemetry = Pick<SessionTelemetry, "turn" | "subAgents" | "bgShells" | "permPrompt" | "pendingAsk">
+
+/**
+ * Does this thread have work running on THIS machine right now?
+ *
+ * - A turn in flight — unless it is frozen on a permission prompt or a native question, which is a
+ *   human the machine is waiting for, not work.
+ * - Any sub-agent the tailer still tracks, `stale` included: staleness is "no transcript append for
+ *   15m", and a child inside a two-hour benchmark is exactly that. A child whose process died is
+ *   retired by the tailer (its owner probe), so it does not hold the machine forever.
+ * - A background shell launched with a budget — a build, a test run, a poller: bounded work. An
+ *   unbudgeted shell is how a dev server or a log tail is launched (the worker contract says so), and
+ *   one of those must not keep a laptop awake for as long as it runs. A `Monitor` streams into a turn
+ *   and is never budgeted, so it is excluded by the same rule.
+ */
+export function keepsAwake(t: WakeTelemetry): boolean {
+  if (t.turn === "in-flight" && !t.permPrompt && !t.pendingAsk) return true
+  if (t.subAgents.length > 0) return true
+  return t.bgShells.some((shell) => !shell.monitor && shell.budgetMs !== undefined)
+}
+
+/** The tenants' sessions and their telemetry, as the server-wide loop reads them. */
+export interface WakeSource {
+  sessions(): readonly Pick<SessionRow, "slug" | "archived">[]
+  telemetry(slug: string): WakeTelemetry | undefined
+}
+
+/** The slug of one thread keeping the machine awake, for the log line — or undefined when none is. */
+export function firstLiveThread(sources: Iterable<WakeSource>): string | undefined {
+  for (const source of sources) {
+    for (const row of source.sessions()) {
+      if (row.archived) continue
+      const t = source.telemetry(row.slug)
+      if (t && keepsAwake(t)) return row.slug
+    }
+  }
+  return undefined
+}
+
+export interface WakeLockPlatform {
+  platform: NodeJS.Platform
+  env: NodeJS.ProcessEnv
+  /** `os.release()` — the only place a WSL kernel says so when WSL_DISTRO_NAME was not inherited. */
+  kernelRelease: string
+  pid: number
+}
+
+export function isWsl(p: Pick<WakeLockPlatform, "platform" | "env" | "kernelRelease">): boolean {
+  return p.platform === "linux" && (p.env.WSL_DISTRO_NAME !== undefined || /microsoft/i.test(p.kernelRelease))
+}
+
+// ES_CONTINUOUS | ES_SYSTEM_REQUIRED (0x80000001): hold "the system is in use" on this thread until it
+// is cleared or the thread exits — and nothing ever clears it, so it lasts exactly as long as the
+// process. Measured on the maintainer's machine with CallNtPowerInformation(SystemExecutionState):
+// 0x0 before, 0x1 while held, 0x0 once stdin closed. ES_DISPLAY_REQUIRED is left out on purpose.
+const WINDOWS_HOLD_SCRIPT =
+  `$k=Add-Type -Name WakeLock -Namespace Frizz -PassThru -MemberDefinition '[DllImport("kernel32.dll")] public static extern uint SetThreadExecutionState(uint f);';` +
+  `[void]$k::SetThreadExecutionState([uint32]2147483649);` +
+  `[void][Console]::In.ReadToEnd()`
+
+/**
+ * The helper that holds the request on this platform, or undefined where there is none to hold.
+ *
+ * - Windows and WSL: PowerShell calling SetThreadExecutionState. In WSL the host is what sleeps, so a
+ *   Linux inhibitor would guard a kernel nobody suspends — the request has to reach Windows. The
+ *   script goes over -EncodedCommand because WSL interop re-quotes arguments and mangles the double
+ *   quotes the P/Invoke signature needs. On native Windows the path is anchored to %SystemRoot%,
+ *   never resolved through PATH, for the reason tailer.ts windowsShellHolderCommand gives.
+ * - macOS: `caffeinate -i`, which prevents idle system sleep only. `-w` ties it to this server's pid
+ *   as well, since caffeinate does not read stdin.
+ * - Linux: `systemd-inhibit --what=idle` around a `cat` that ends with stdin. `idle` and not `sleep`:
+ *   a sleep inhibitor would also block a suspend the human asks for.
+ */
+export function wakeLockCommand(p: WakeLockPlatform): [string, string[]] | undefined {
+  const encoded = Buffer.from(WINDOWS_HOLD_SCRIPT, "utf16le").toString("base64")
+  const psArgs = ["-NoProfile", "-NonInteractive", "-NoLogo", "-EncodedCommand", encoded]
+  if (p.platform === "win32") {
+    return [win32.join(p.env.SystemRoot ?? "C:\\Windows", "System32", "WindowsPowerShell", "v1.0", "powershell.exe"), psArgs]
+  }
+  if (isWsl(p)) return ["powershell.exe", psArgs]
+  if (p.platform === "darwin") return ["caffeinate", ["-i", "-w", String(p.pid)]]
+  if (p.platform === "linux") {
+    return ["systemd-inhibit", ["--what=idle", "--who=Frizz", "--why=An agent is working", "--mode=block", "cat"]]
+  }
+  return undefined
+}
+
+export interface WakeLock {
+  /** Hold or release the request. Idempotent; cheap to call on every poll. */
+  set(held: boolean): void
+  readonly held: boolean
+  /** Release for good — shutdown. */
+  stop(): void
+}
+
+type Spawn = (command: string, args: string[]) => ChildProcess
+
+/** A helper that dies this soon after starting, this many times in a row, is broken here; stop trying. */
+const QUICK_EXIT_MS = 10_000
+const QUICK_EXITS_MAX = 3
+
+export function createWakeLock(
+  command: [string, string[]] | undefined,
+  spawn: Spawn = (cmd, args) => nodeSpawn(cmd, args, { stdio: ["pipe", "ignore", "ignore"], windowsHide: true }),
+  log: Pick<typeof frizzLog, "info" | "warn"> = frizzLog,
+): WakeLock {
+  let child: ChildProcess | undefined
+  let disabled = command === undefined
+  let quickExits = 0
+  const release = () => {
+    const c = child
+    child = undefined
+    if (!c) return
+    // Closing stdin is the release every helper but caffeinate honours; the kill covers caffeinate,
+    // and a helper that ignored the close.
+    c.stdin?.end()
+    c.kill()
+  }
+  const acquire = () => {
+    if (child || disabled || !command) return
+    const startedAt = Date.now()
+    let c: ChildProcess
+    try {
+      c = spawn(command[0], command[1])
+    } catch (error) {
+      disabled = true
+      log.warn("wake-lock", `cannot keep the machine awake: ${error instanceof Error ? error.message : error}`)
+      return
+    }
+    child = c
+    // EPIPE when the helper is already gone; the exit handler below is what reports it.
+    c.stdin?.on("error", () => {})
+    c.on("error", (error) => {
+      if (child === c) child = undefined
+      disabled = true
+      log.warn("wake-lock", `cannot keep the machine awake (${command[0]}): ${error.message}`)
+    })
+    c.on("exit", (code, signal) => {
+      if (child !== c) return // released on purpose
+      child = undefined
+      quickExits = Date.now() - startedAt < QUICK_EXIT_MS ? quickExits + 1 : 0
+      if (quickExits >= QUICK_EXITS_MAX) {
+        disabled = true
+        log.warn("wake-lock", `${command[0]} keeps exiting (${signal ?? `code ${code}`}); no longer keeping the machine awake`)
+      }
+    })
+  }
+  return {
+    set(held) {
+      if (held) acquire()
+      else release()
+    },
+    get held() {
+      return child !== undefined
+    },
+    stop() {
+      disabled = true
+      release()
+    },
+  }
+}
+
+export interface WakeLockLoop {
+  stop(): void
+  /** Exposed for tests; the interval calls it otherwise. */
+  tick(): void
+}
+
+/**
+ * Poll every open project and hold the request while any thread keeps the machine awake. One loop for
+ * the whole server — the request is machine-wide, and so is the question.
+ */
+export function startWakeLockLoop(
+  sources: () => Iterable<WakeSource>,
+  lock: WakeLock = createWakeLock(wakeLockCommand({ platform: process.platform, env: process.env, kernelRelease: osRelease(), pid: process.pid })),
+  intervalMs = WAKE_LOCK_POLL_MS,
+  log: Pick<typeof frizzLog, "info"> = frizzLog,
+): WakeLockLoop {
+  let was = false
+  const tick = () => {
+    let live: string | undefined
+    try {
+      live = firstLiveThread(sources())
+    } catch {
+      // A tenant closing under the read is not a reason to sleep through running work; keep what we had.
+      return
+    }
+    lock.set(live !== undefined)
+    const now = lock.held
+    if (now !== was) log.info("wake-lock", now ? `keeping the machine awake while ${live} works` : "nothing running; the machine may sleep")
+    was = now
+  }
+  const timer = setInterval(tick, intervalMs)
+  timer.unref()
+  tick()
+  return {
+    tick,
+    stop() {
+      clearInterval(timer)
+      lock.stop()
+    },
+  }
+}

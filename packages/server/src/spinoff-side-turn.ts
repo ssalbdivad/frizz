@@ -461,6 +461,7 @@ export function normalizedSideTurnSteps(ev: NormalizedEvent): SideTurnStep[] {
 export const SIDE_TURN_REST_FIELDS = [
   "lastFence",
   "lastAssistant",
+  "lastAssistantLine",
   "lastAssistantAt",
   "lastAssistantAllDone",
   "lastAssistantHasQuestion",

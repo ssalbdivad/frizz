@@ -50,7 +50,7 @@ import { setFaviconBadge } from "../lib/faviconBadge.ts"
 import { ALL_PROJECTS, homeHref, projectViewHref, usePageView, viewHref, viewKey } from "../lib/pageView.ts"
 import { draftKey } from "../lib/drafts.ts"
 import { carryDraft as carryDraftWithContext } from "../lib/stagedContext.ts"
-import { QUEUE_CARD_VIEWPORT_TOP, slugsInThreadDrawers, store } from "../store.ts"
+import { QUEUE_CARD_VIEWPORT_TOP, showToast, slugsInThreadDrawers, store } from "../store.ts"
 import { useBoard } from "../hooks.ts"
 import { prefs } from "../lib/prefs.ts"
 import { PROMPT_CONTROL_TYPOGRAPHY_CLASS } from "../lib/promptControlTypography.ts"
@@ -65,6 +65,10 @@ import { isPageKey, registerQueueCursor, releaseAutoOpened, runThreadCommand, us
 import { runExternalOpen } from "../lib/externalOpen.ts"
 import { PROJECT_STEP_CHORDS, detectPlatform, formatChord, parseChord } from "../lib/keybindings.ts"
 import { AllQueuesCard } from "./AllQueuesCard.tsx"
+import { Tooltip } from "./Tooltip.tsx"
+import { isLimitPaused } from "../lib/limitPause.ts"
+import { deliverProjectFollowUp } from "../lib/projectFollowUp.ts"
+import { STALLED_RETRY_MESSAGE } from "../lib/retrySession.ts"
 import { ProjectSquare, warmProjectIcon } from "./ProjectSquare.tsx"
 import { SIDEBAR_COLUMN_CLASS } from "./Sidebar.tsx"
 import { BandLabel } from "./BandLabel.tsx"
@@ -448,6 +452,7 @@ export function AllQueuesPage() {
               <h2 className="flex shrink-0">
                 <BandLabel band="ready" count={ready} />
               </h2>
+              <ResumePaused entries={queue.filter((slot) => !slot.ghost && !leaving.isLeaving(slot.key)).map((slot) => slot.item)} leaving={leaving} />
             </div>
             {queue.length > 0 ? (
               queue.map((slot, index) => (
@@ -862,6 +867,54 @@ function QueueCardOf({ entry, ghost, status, concealed, leaving, chip }: { entry
         concealed={concealed}
       />
     </MarkdownScopeContext.Provider>
+  )
+}
+
+/**
+ * RESUME EVERY THREAD A USAGE LIMIT PAUSED, in one click — the inbox header's verb whenever any card below
+ * is one (maintainer 2026-10-02: "a builtin way to resume all threads at once that were paused because of
+ * hitting a session limit"). A session limit stops every thread on the account at once, so the fleet comes
+ * back as a run of identical cards, and continuing them one by one was the only way back before the window
+ * reset. Each gets the very message its own card's "Continue now" and Retry send (STALLED_RETRY_MESSAGE),
+ * into its own project, and leaves the queue the way a card answered by hand does.
+ *
+ * Counts the cards the page SHOWS, so in a focused view it resumes that project's and showing All projects
+ * every project's. A pause the operator ALSO snoozed is not here — it is not in the queue, and their park
+ * outranks the limit (groups.sessionIndicatorKind).
+ */
+function ResumePaused({ entries, leaving }: { entries: readonly QueueEntry[]; leaving: LeavingCards }) {
+  const queryClient = useQueryClient()
+  const paused = entries.filter((entry) => isLimitPaused(entry.thread))
+  if (paused.length === 0) return null
+  const resumeAll = () => {
+    const sends = paused.map(({ project, thread }) => {
+      const key = threadKey(project.id, thread.id)
+      leaving.sent(key)()
+      return deliverProjectFollowUp({ projectId: project.id, projectDir: project.projectDir, slug: thread.id, sessionId: thread.sessionId }, STALLED_RETRY_MESSAGE)
+        .then(() => leaving.landed(key)(), (error: unknown) => {
+          leaving.restore(key)()
+          throw error
+        })
+    })
+    showToast(paused.length === 1 ? "Continuing 1 thread…" : `Continuing ${paused.length} threads…`)
+    void Promise.allSettled(sends).then((results) => {
+      const failed = results.filter((result) => result.status === "rejected").length
+      if (failed > 0) showToast(`${failed} of ${results.length} could not be continued`)
+      void queryClient.invalidateQueries({ queryKey: ["projectsQueues"] })
+    })
+  }
+  return (
+    <Tooltip label="Continue every thread paused by a usage limit">
+      <button
+        type="button"
+        data-resume-paused
+        onClick={resumeAll}
+        onMouseDown={(event) => event.preventDefault()}
+        className="ml-auto shrink-0 rounded-md border border-accent/45 bg-accent/10 px-2 py-0.5 text-[11px] font-medium text-accent outline-none transition-colors hover:border-accent/70 hover:bg-accent/15 focus-visible:ring-1 focus-visible:ring-accent/60"
+      >
+        Resume {paused.length} paused
+      </button>
+    </Tooltip>
   )
 }
 

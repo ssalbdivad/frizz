@@ -5,7 +5,7 @@ import { createServer, type Server } from "node:http";
 import { once } from "node:events";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
-import { frizzPaths } from "@frizz/server/frizz-paths";
+import { frizzPaths, frizzPathsNow } from "@frizz/server/frizz-paths";
 import {
   cloudConfigPath,
   establishCloudConfig,
@@ -109,7 +109,9 @@ test("saving the setup on a machine with no ~/.frizz does not create one", () =>
     assert.equal(existsSync(join(home, ".frizz")), false, "the literal directory must not appear");
     assert.equal(cloudConfigPath(home), join(paths.data, "cloud.json"));
     assert.equal(tunnelTokenPath(home), join(paths.state, "tunnel-token"));
-    assert.equal(frizzPaths({ home }).legacy, false, "the install is still resolved the same way");
+    // Afresh, as the NEXT launch would: this process memoised its answer above, so a plain
+    // frizzPaths() here could not fail.
+    assert.equal(frizzPathsNow({ home }).legacy, false, "the next launch still resolves the install the same way");
     assert.deepEqual(readCloudConfig(home), { hostname: "colin.frizz.sh", tunnel: "colin" });
   } finally {
     rmSync(home, { recursive: true, force: true });

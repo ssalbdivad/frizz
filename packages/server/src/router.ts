@@ -12,6 +12,8 @@ import {
   DispatchInput,
   FollowUpInput,
   UnqueueFollowUpInput,
+  DismissFailedFollowUpInput,
+  DismissFailedFollowUpResult,
   UnqueueFollowUpResult,
   DeliverQueuedNowInput,
   CompactThreadInput,
@@ -75,6 +77,9 @@ import {
   ThreadProfileOptionsInput,
   ThreadProfileOptionsResult,
   ThreadSkillsInput,
+  UserCommandsResult,
+  SaveUserCommandInput,
+  DeleteUserCommandInput,
   ThreadSkillsResult,
   type ThreadSkill,
   SetThreadProfileInput,
@@ -178,7 +183,7 @@ import { appServerTurnStalled, resolveLiveWatchTarget, resolveRecurringPrompt } 
 import { runThreadUpdate } from "./frizz.ts"
 import { repairThreadFile } from "./repair.ts"
 import { reopenArchivedThreadForFollowUp, resumeThread, wakeParkedThreadForFollowUp } from "./resume.ts"
-import { appendDelivery, cancelDelivery, deliverOutstandingDeliveries, deliveryItem, hasDelivery, retireOutstandingDeliveries } from "./delivery-ledger.ts"
+import { appendDelivery, beginDelivery, cancelDelivery, deliverOutstandingDeliveries, deliveryItem, dismissFailedDelivery, recordDeliveryFailure, retireOutstandingDeliveries } from "./delivery-ledger.ts"
 import { SPINOFF_DELIVERY_PREFIX, spinoffIdOfDelivery } from "./spinoff-side-turn.ts"
 import { noteSubAgentsEndedByInterrupt, runningSubAgentsOf } from "./interrupt-ended.ts"
 import {
@@ -239,6 +244,7 @@ import { pickDirectory, pickImageFile } from "./directory-picker.ts"
 import { completePath } from "./path-complete.ts"
 import Database from "./sqlite.ts"
 import { projectStateDir } from "./frizz-paths.ts"
+import { deleteUserCommand, frizzCommandsDir, listUserCommands, saveUserCommand } from "./user-commands.ts"
 
 const SlugInput = z.object({ slug: ThreadSlug }).strict()
 
@@ -1420,6 +1426,51 @@ export function createRouter(ctx: AppContext) {
     return row
   }
 
+  // THE SERVER OWNS A STEER'S TEXT FROM THE MOMENT IT ARRIVES (delivery-ledger.ts, "WRITE-AHEAD").
+  //
+  // `deliver` runs the whole follow-up. Once its guards have passed it calls `open()`, which writes the
+  // `sending` entry BEFORE any transport is touched and answers false for a deliveryId that is already
+  // accounted for (the replay no-op every branch used to spell as its own `hasDelivery` check). From
+  // then on a throw can no longer take the words with it: the entry turns `failed` with the error, and
+  // the error is tagged `deliveryKept` so the client knows the server has them and does not ALSO push
+  // them back into the prompt box — whose sessionStorage draft is exactly the copy a browser restart
+  // destroyed (2026-09-30: a ~4,000-character dictated steer, lost when a cold resume threw and Chrome
+  // then restarted).
+  //
+  // A throw BEFORE `open()` — a stale session, a pending permission change, a refused restart — leaves
+  // nothing on the server. Those are clean refusals of a send that never started, and the client hands
+  // the text back to the prompt box as it always has.
+  async function keepFailedFollowUp(
+    input: z.infer<typeof FollowUpInput>,
+    deliver: (open: () => boolean) => Promise<void>,
+  ): Promise<void> {
+    let opened = false
+    const open = (): boolean => {
+      if (!input.deliveryId) return true
+      if (beginDelivery(ctx.storage, input.slug, { id: input.deliveryId, text: input.message, supersedes: input.supersedes }) === "duplicate") return false
+      opened = true
+      // The ledger is not JSONL bytes: push the frame now, so the server's own bubble (and the removal
+      // of a superseded failed one) reaches every tab before the transport is even called.
+      ctx.transcriptChange.emit([input.slug])
+      return true
+    }
+    try {
+      await deliver(open)
+    } catch (error) {
+      if (opened && input.deliveryId) {
+        const retryable = (error as { retryableDelivery?: unknown } | null)?.retryableDelivery === true
+        const message = error instanceof Error ? error.message : String(error)
+        if (recordDeliveryFailure(ctx.storage, input.slug, input.deliveryId, { error: message, retryable })) {
+          frizzLog.warn("server", `${input.slug}: follow-up ${input.deliveryId} failed and is kept for the operator: ${message}`)
+          ctx.transcriptChange.emit([input.slug])
+          ctx.board.refresh()
+          if (error && typeof error === "object") Object.defineProperty(error, "deliveryKept", { value: true, enumerable: false })
+        }
+      }
+      throw error
+    }
+  }
+
   // The two checks both recurring-prompt writers owe, shared so the operator's path and the worker's
   // can never disagree about what a valid arming is.
   //
@@ -2586,7 +2637,9 @@ export function createRouter(ctx: AppContext) {
 
     followUp: mutation({
       input: FollowUpInput,
-      handler: deliverFollowUp = ({ input }, delivery = {}) => joinInflightFollowUp(input.slug, input.deliveryId, async () => {
+      // Wrapped so a delivery that throws keeps the operator's words — see keepFailedFollowUp — and so a
+      // repeat of a deliveryId still in flight joins the first attempt (joinInflightFollowUp).
+      handler: deliverFollowUp = ({ input }, delivery = {}) => joinInflightFollowUp(input.slug, input.deliveryId, () => keepFailedFollowUp(input, async (openWriteAhead) => {
         const side = delivery.sideRequest === true
         // Every follow-up crosses a TYPED CONTROL CHANNEL now, never a terminal: a codex row goes to the
         // app-server bridge and a claude row to the session broker, each of which owns its own
@@ -2643,6 +2696,11 @@ export function createRouter(ctx: AppContext) {
           // finish (maintainer 2026-08-01: "do not disable the button when there are sub-agents
           // running"). The children die; that is what the operator asked for and already knows.
         }
+        // Every refusal above is a send that never started. From here on the server holds the text —
+        // the write-ahead entry opens BEFORE the reopen and un-park below (the reopen's CAS can throw a
+        // RetryableDeliveryError) and before any transport. A deliveryId already accounted for is a
+        // replay: answer success and deliver nothing (see beginDelivery for which states count).
+        if (!openWriteAhead()) return
         // Reopen an archived thread HERE, above the runtime branches, because only the LEGACY
         // fall-through reaches resumeThread (where this used to live alone). A broker-backed Claude row
         // and an app-server Codex row both return from their own branch below, so sending them a
@@ -2777,13 +2835,11 @@ export function createRouter(ctx: AppContext) {
         if (row?.backend === "claude" && row.claude_runtime === "broker") {
           const bridge = ctx.claudeBroker
           if (!bridge) throw new Error("Claude session broker is unavailable; cannot deliver this follow-up")
-          // Replay guard, same as the legacy fall-through below: the ledger entry is written only once
-          // `bridge.followUp` RETURNS, so a hit proves the text already crossed into the daemon. The
-          // broker branch returns before that check, so it had none — a replayed deliveryId sent the
-          // message a SECOND time. It also matters now that the deliveryId IS the SDK input uuid: the
-          // SDK rejects an id that is still outstanding, so a replay would surface as an error on the
+          // Replay guard: `openWriteAhead` above already answered success for a deliveryId the ledger
+          // accounts for. This branch once had no guard at all — a replayed deliveryId sent the message
+          // a SECOND time — and it matters more now that the deliveryId IS the SDK input uuid: the SDK
+          // rejects an id that is still outstanding, so a replay would surface as an error on the
           // operator's send instead of the no-op it should be.
-          if (input.deliveryId && hasDelivery(ctx.storage, input.slug, input.deliveryId)) return
           const appendSystemPrompt = [
             loadWorkerPrompt("claude"),
             scratchpadOrientation(row.session_id, "claude", workerScratchPath(ctx.project, row.session_id)),
@@ -2851,8 +2907,8 @@ export function createRouter(ctx: AppContext) {
           // on the way to the SDK. But its RENDERING half applies here exactly as it does to codex:
           // until the JSONL carries the message, the only thing showing the human their own just-sent
           // steer is the client's optimistic bubble, and mergeOptimistic's ghost floor retires that once
-          // the transcript advances 60s past it. So open an entry; the SDK call returning IS the
-          // receipt, which also keeps it out of the amber "no receipt" state that would be meaningless
+          // the transcript advances 60s past it. So the write-ahead entry settles here into a receipted
+          // state; the SDK call returning IS the receipt, which also keeps it out of the amber "no receipt" state that would be meaningless
           // on a thread whose transport acknowledges every send. The tailer drops it as soon as the
           // record lands.
           //
@@ -2913,21 +2969,16 @@ export function createRouter(ctx: AppContext) {
           ctx.board.refresh()
           return
         }
-        // Idempotency for a REPLAYED deliveryId: if this exact send is already in the ledger, it
-        // provably reached the worker — answer success and inject nothing (and don't flush/re-inject).
+        // Idempotency for a REPLAYED deliveryId is `openWriteAhead` above: an accepted send answers
+        // success and injects nothing.
         //
-        // What actually guarantees the retry loop cannot double-send is the CLASSIFICATION, not this
+        // What actually guarantees the retry loop cannot double-send is the CLASSIFICATION, not that
         // check: the client only replays an error typed RetryableDeliveryError, and every such throw is
         // raised strictly upstream of the first write to the worker, so a replayed send never had a first
-        // copy to duplicate. This dedup is defense-in-depth for replays from OTHER sources (a stale tab, an
-        // at-least-once transport). It deliberately does NOT cover a throw misclassified as retryable
-        // AFTER an injection: `appendDelivery` runs only once `resumeThread` returns, so such a throw
-        // leaves no ledger row and this check would miss it. Keeping every retryable throw pre-injection
-        // is therefore load-bearing, not optional.
-        if (input.deliveryId && row?.backend !== "codex" &&
-            hasDelivery(ctx.storage, input.slug, input.deliveryId)) {
-          return
-        }
+        // copy to duplicate — which is also the only reason beginDelivery lets a `retryable` entry be
+        // re-opened under the same id. A throw misclassified as retryable AFTER an injection would
+        // therefore double-send on the replay. Keeping every retryable throw pre-injection is
+        // load-bearing, not optional.
         // The LEGACY fall-through: a claude row that is not broker-backed, i.e. one dispatched before the
         // cutover. The deliveryId rides along because the old terminal transport stamped each send with
         // an invisible marker (delivery-marker.ts) — that is what let the tailer confirm delivery by
@@ -2953,7 +3004,21 @@ export function createRouter(ctx: AppContext) {
           appendDelivery(ctx.storage, input.slug, { id: input.deliveryId, text: input.message })
         }
         ctx.board.refresh()
-      }),
+      })),
+    }),
+
+    // The × on a FAILED send's bubble, and the second half of its Edit (the client has already put the
+    // words back into the prompt box). The only way a failed entry leaves the ledger by hand — nothing
+    // ages it, so without this a failure the operator has dealt with would sit at the tail for good.
+    // No session guard: the entry is inert text on this slug's row, and dismissing it touches no worker.
+    dismissFailedFollowUp: mutation({
+      input: DismissFailedFollowUpInput,
+      output: DismissFailedFollowUpResult,
+      handler: async ({ input }) => {
+        const dismissed = dismissFailedDelivery(ctx.storage, input.slug, input.deliveryId)
+        if (dismissed) ctx.transcriptChange.emit([input.slug])
+        return { dismissed }
+      },
     }),
 
     // Take a queued follow-up BACK — the operator clicked their own gray bubble to unqueue it and get
@@ -2994,6 +3059,10 @@ export function createRouter(ctx: AppContext) {
         // rather than "too late": the message really is gone, and saying otherwise would be a lie in
         // the dangerous direction.
         if (item?.state === "cancelled") return { unqueued: true }
+        // A write-ahead entry is not in any provider queue yet (or never reached one), so there is
+        // nothing to cancel at the daemon, and asking it would answer "too late" — the wrong story.
+        if (item?.state === "sending") return { unqueued: false, reason: "That message is still being sent — try again in a moment" }
+        if (item?.state === "failed") return { unqueued: false, reason: "That message was never delivered — use Edit on it to get the text back" }
         // A retired ledger row means the tailer already correlated this send's delivery evidence — the
         // agent has it. It is also where a deliveryId frizz never sent lands, which the UI cannot
         // produce (every clickable bubble is one frizz itself projected from a ledger row).
@@ -3212,6 +3281,26 @@ export function createRouter(ctx: AppContext) {
         const row = ctx.storage.getSession(input.slug)
         if (!row) throw new Error(`thread ${input.slug} is not editable`)
         return threadProfileOptions(row.backend, row.backend === "claude" ? await readClaudeModels({ claudeBin: ctx.claudeBin, cwd: workDir }) : undefined)
+      },
+    }),
+
+    // USER SLASH COMMANDS — the markdown prompts in Frizz's own folder, this project's `.agents/commands`
+    // and `~/.agents/commands` (user-commands.ts). Read fresh on every ask; the composer offers them beside
+    // the harness's skills and expands them itself, so they work on every backend.
+    userCommands: query({
+      output: UserCommandsResult,
+      handler: async () => ({ commands: await listUserCommands(workDir), frizzDir: frizzCommandsDir() }),
+    }),
+    saveUserCommand: mutation({
+      input: SaveUserCommandInput,
+      handler: async ({ input }) => {
+        await saveUserCommand(input)
+      },
+    }),
+    deleteUserCommand: mutation({
+      input: DeleteUserCommandInput,
+      handler: async ({ input }) => {
+        await deleteUserCommand(input.name)
       },
     }),
 

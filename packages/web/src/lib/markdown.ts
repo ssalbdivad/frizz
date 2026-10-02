@@ -3,6 +3,7 @@ import type { Token, Tokens, TokenizerAndRendererExtension } from "marked"
 import { CODE_BLOCK_CLASS, renderHighlightedCode } from "./syntaxHighlight.ts"
 import { isLocalMarkdownFile, localImageUrlForTarget, localMarkdownTarget, positionFragment, resolveRelativeLocalTarget } from "./markdownTargets.ts"
 import { LOCAL_POSITION_ATTRS, stampLocalPosition } from "./localFilePosition.ts"
+import { ANSI_STYLE_PATTERN } from "./ansi.ts"
 import { prefixedAppRoute } from "./base-path.ts"
 import { githubRefFromUrl, linkifyGithubRefs, withGithubRepo } from "./githubAutolink.ts"
 import { linkifyThreadMentions, withMentionProject } from "./mentionAutolink.ts"
@@ -344,14 +345,17 @@ const ALLOWED_ATTRS = new Set(["href", "src", "alt", "title", "type", "class", "
 // so the fenced-code wrapper's class cannot drift out of the pattern that has to admit it — a stripped
 // class silently costs the block its `position: relative` and drops the copy button somewhere else.
 const ALLOWED_CLASS = new RegExp(
-  `^(?:hljs(?:-[a-z0-9_-]+)?|language-[a-z0-9-]+|md-task(?:-(?:checked|in-progress|cancelled|blocked|text))?|${CODE_BLOCK_CLASS})$`)
+  `^(?:hljs(?:-[a-z0-9_-]+)?|ansi-[a-z-]+|language-[a-z0-9-]+|md-task(?:-(?:checked|in-progress|cancelled|blocked|text))?|${CODE_BLOCK_CLASS})$`)
 
 // Attributes admitted only on the tag that gives them meaning, and only with a well-formed value.
 // Both carry information the author wrote and the flat allowlist above was silently discarding:
 // `start` is how a list that doesn't begin at 1 keeps its numbers (stripping it renumbered a worker's
-// "17." back to "1."), `align` is GFM's table column alignment.
+// "17." back to "1."), `align` is GFM's table column alignment. A span's `style` is an ```ansi fence's
+// 256-colour or 24-bit colour (lib/ansi.ts), admitted only as a bare hex `color`/`background-color` —
+// no other property, no `url()`, no `var()`, so it can recolour text and nothing else.
 const ALLOWED_ATTRS_BY_TAG: Record<string, Record<string, RegExp>> = {
   ol: { start: /^\d{1,9}$/ },
+  span: { style: ANSI_STYLE_PATTERN },
   th: { align: /^(?:left|center|right)$/ },
   td: { align: /^(?:left|center|right)$/ },
 }

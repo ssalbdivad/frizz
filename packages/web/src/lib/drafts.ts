@@ -81,6 +81,21 @@ export class DraftStore {
 
 export const draftStore = new DraftStore()
 
+// Put words back into a draft WITHOUT losing what is already there — the one rule every "give the
+// operator their text back" path shares (an unqueued send, a failed send, a failed bubble's Edit).
+// The returned text goes ABOVE the existing draft, separated by a blank line: it was written first,
+// and whatever is in the box was typed after it. The composer's rollback used to restore only into an
+// EMPTY box and silently drop the failed message otherwise.
+//
+// Already present verbatim → nothing to add (a second rollback of the same send, or an Edit of words
+// the rollback already put back).
+export function mergeIntoDraft(key: string, text: string): void {
+  if (!text) return
+  const existing = draftStore.get(key)
+  if (existing.includes(text)) return
+  draftStore.set(key, existing ? `${text}\n\n${existing}` : text)
+}
+
 export function projectDraftScope(projectDir: string | undefined): string {
   return encodeURIComponent(projectDir || "unresolved-project")
 }
