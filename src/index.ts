@@ -44,6 +44,8 @@ import {
   FIRST_ARTIFACT_LAUNCH_LOCK_TIMEOUT_MS,
   helpText,
   liveWorkspaceOwner,
+  DEV_SANDBOX_HOME_ENV,
+  devLauncherReexecArgs,
   durableReexecArgs,
   cleanupSandbox,
   parseCliArgs,
@@ -140,8 +142,18 @@ if (argv.includes("--prod"))
 
 // Before ANYTHING reads the home directory: the sandbox swaps $HOME for a throwaway, so every piece
 // of state after this line — registry, lock, logs, session key, cloud.json — is a disposable copy.
-const sandbox = options.sandbox ? prepareSandbox() : null;
-if (sandbox) process.on("exit", () => cleanupSandbox(sandbox.home));
+// A `--dev` launcher that re-execs itself for a source edit is still the same sandbox: the throwaway
+// home rides in the environment (its HOME already points there), so the successor adopts it rather
+// than minting a second one, and still deletes it when the board finally stops.
+const sandbox = options.sandbox
+  ? prepareSandbox()
+  : process.env.FRIZZ_DEV_REEXEC === "1" && process.env[DEV_SANDBOX_HOME_ENV]
+  ? { home: process.env[DEV_SANDBOX_HOME_ENV]!, project: process.cwd() }
+  : null;
+if (sandbox) {
+  process.env[DEV_SANDBOX_HOME_ENV] = sandbox.home;
+  process.on("exit", () => cleanupSandbox(sandbox.home));
+}
 
 const internalLaunch =
   process.env.FRIZZ_DIRECT_SUPERVISOR === "1" ||
@@ -334,7 +346,7 @@ async function runSupervisor(
         defaultArtifactRoot()
       );
   if (selectedArtifact) assertArtifactHostCompatible(selectedArtifact);
-  const { createSupervisorShutdownHandler, startDevSupervisor } = await import(
+  const { createSupervisorShutdownHandler, probeLauncherSource, startDevSupervisor } = await import(
     "@frizz/server/dev-supervisor"
   );
   let supervisor: Awaited<ReturnType<typeof startDevSupervisor>>;
@@ -461,6 +473,45 @@ async function runSupervisor(
     : {
         // --dev is intentionally the only route that can boot source plus Vite/HMR.
         watch: true,
+        // An edit to the launcher's own source re-execs this process in place. Its argv must be the
+        // internal re-entry's, not the operator's: `frizz-dev --dev` carries no --port, and the
+        // re-entry refuses to start without one, so every launcher edit used to end the board with
+        // "internal supervisor launch is missing --port" (2026-10-01, three runs in one evening).
+        reexecArgs: devLauncherReexecArgs({
+          entry: import.meta.filename,
+          port,
+          debug: options.debug,
+        }),
+        validateLauncher: async () => {
+          // `--help` loads every module this entry imports statically and exits before touching any
+          // state; dev-supervisor is the one launcher module it loads lazily, so it gets its own probe.
+          const env = { ...supervisorEnv };
+          delete env.FRIZZ_DEV_REEXEC;
+          const [cli, supervisorModule] = await Promise.all([
+            probeLauncherSource({ args: [import.meta.filename, "--help"], env }),
+            probeLauncherSource({
+              args: [
+                "--input-type=module",
+                "-e",
+                `await import(${JSON.stringify(import.meta.resolve("@frizz/server/dev-supervisor"))})`,
+              ],
+              env,
+            }),
+          ]);
+          return cli ?? supervisorModule;
+        },
+        ...(process.platform !== "win32" && typeof process.execve === "function"
+          ? {
+              reexec: (request: { executable: string; argv: string[]; env: Record<string, string> }) => {
+                // Same handoff as an update's: the successor serves the saved remote setup itself, so a
+                // tunnel left running here would outlive every handle to it. And give the terminal back
+                // before the new image installs its own key handling.
+                remote?.stop();
+                paneHost?.dispose();
+                process.execve!(request.executable, request.argv, request.env);
+              },
+            }
+          : {}),
       };
   try {
     // First run only. Asking here rather than at import keeps the question off every other launch.

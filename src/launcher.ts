@@ -165,6 +165,26 @@ export function durableReexecArgs(options: { entry: string; port: number }): str
   ];
 }
 
+/**
+ * The argv a `--dev` launcher re-execs itself with when its own source changes — the internal
+ * re-entry's, never the operator's. That re-entry (FRIZZ_DEV_REEXEC) REQUIRES `--port`, which an
+ * operator almost never types: the launcher allocates it. Re-execing `process.argv` passed it
+ * `--dev` alone and the successor exited on the spot. `--sandbox` must not ride along either — it
+ * would mint a second throwaway home; DEV_SANDBOX_HOME_ENV carries the first one instead.
+ */
+export function devLauncherReexecArgs(options: { entry: string; port: number; debug: boolean }): string[] {
+  return [
+    options.entry,
+    "--dev",
+    ...(options.debug ? ["--debug"] : []),
+    "--port",
+    String(options.port),
+  ];
+}
+
+/** The sandbox home a re-exec'd `--dev` launcher adopts instead of preparing a new one. */
+export const DEV_SANDBOX_HOME_ENV = "FRIZZ_DEV_SANDBOX_HOME";
+
 /** Flags that decided how a board was reached. Retired 2026-08-25 for the R pane; see retiredFlagMessage. */
 const RETIRED_NETWORK_FLAGS = ["--host", "--allowed-host", "--public-origin", "--cloud"];
 
