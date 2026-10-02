@@ -1680,7 +1680,7 @@ export function liveOpsLines(ops?: SignoffLiveOps): string[] {
     if (!items.length) return
     lines.push("", heading)
     for (const i of items) lines.push(`- \`${i.id ?? "?"}\`  — ${i.label}`)
-    lines.push(`In a fence: \`${key}: [${items.map((i) => i.id ?? "?").join(", ")}]\``)
+    lines.push(`In a fence: \`${key}: [${items.map((i) => i.id ? fenceScalar(i.id) : "?").join(", ")}]\``)
   }
   section("Background shells still running:", "shells", ops?.shells ?? [])
   section("Sub-agents still running (they re-invoke you on their own, so parking on one is optional):", "agents", ops?.subAgents ?? [])
@@ -1708,48 +1708,75 @@ export function liveOpsLines(ops?: SignoffLiveOps): string[] {
 // shell excusal that was tried and reverted on 2026-08-04), so a forgotten dev server would hold its
 // thread out of the queue forever, silently. Asking costs one short turn; inferring costs a lost thread.
 //
-// SHELLS ONLY, because they are the one live thing that does NOT already park. A running direct sub-agent
+// SHELLS, because they are the one live thing that does NOT already park. A running direct sub-agent
 // — a `Workflow` run is one too — excuses its parent from the queue on its own, so the nudge does not
-// fire behind one at all (board.signoffNudgeVerdict). Timers, PRs and issues are registrations, not
-// running work; they ride along as lines to add, never pre-filled, because a shell wait and a PR wait
-// are different waits and the fence must name only what this rest is for.
+// fire behind one at all (board.signoffNudgeVerdict) — EXCEPT on a thread with a Goal armed at rest,
+// which a child does not hold: there the children are listed here too, with an `agents:` line, because
+// that fence is the one thing that quiets the Goal until they return. Timers, PRs and issues are
+// registrations, not running work; they ride along as lines to add, never pre-filled, because a shell
+// wait and a PR wait are different waits and the fence must name only what this rest is for.
 /** The `for:` the waiting variant pre-fills. A guess, deliberately on the short side: running out only
  *  brings the worker back to re-check and re-park (uncapped), while a long one leaves a dead shell's
  *  thread quiet for longer. */
 export const SIGNOFF_WAITING_FOR = "1h"
 
+/** An id as a fence can carry it: bare when YAML reads it back as the same string, JSON-quoted when it
+ *  would not. Ids are base36 runtime handles, `tmr_…` rows and `owner/repo#N` refs, which are all bare in
+ *  practice — but a runtime id that happens to read as a number (`1234e5678` is Infinity, `0x1a2b3c4` is
+ *  27440068) would otherwise be copied verbatim into a fence whose park check then refuses it. */
+export function fenceScalar(id: string): string {
+  try {
+    const doc = parseYaml(`k: [${id}]`) as { k?: unknown } | null
+    if (Array.isArray(doc?.k) && doc.k.length === 1 && doc.k[0] === id) return id
+  } catch {
+    // not even a flow item on its own — quote it
+  }
+  return JSON.stringify(id)
+}
+
 export function signoffWaitingNudgeMessage(ops: SignoffLiveOps): string {
-  const shells = ops.shells
-  const one = shells.length === 1
-  // An id the fence can carry as-is, or the label QUOTED — the park check answers to a shell's label too,
-  // and a label is free text, so bare it could break the YAML flow list.
-  const handle = (i: { id?: string; label: string }) => i.id ?? JSON.stringify(i.label)
+  const { shells, subAgents } = ops
+  const count = shells.length + subAgents.length
+  const one = count === 1
+  // An id the fence can carry, or the label QUOTED — the park check answers to a shell's label too, and a
+  // label is free text, so bare it could break the YAML flow list.
+  const handle = (i: { id?: string; label: string }) => i.id ? fenceScalar(i.id) : JSON.stringify(i.label)
+  const what = !subAgents.length
+    ? (one ? "this background shell" : `${count} background shells`)
+    : !shells.length
+      ? (one ? "this sub-agent" : `${count} sub-agents`)
+      : "this background work"
   const extras = (
     [["timers", ops.timers], ["prs", ops.prs], ["issues", ops.issues]] as const
   ).filter(([, items]) => items?.length).map(([key, items]) => `\`${key}: [${items!.map(handle).join(", ")}]\``)
   return [
-    `${SIGNOFF_NUDGE_MARKER} You rested without a fence, with ${one ? "this background shell" : `${shells.length} background shells`} still running:`,
+    `${SIGNOFF_NUDGE_MARKER} You rested without a fence, with ${what} still running:`,
     "",
     ...shells.map((sh) => `- \`${handle(sh)}\` — ${sh.label}`),
+    ...subAgents.map((a) => `- \`${handle(a)}\` — sub-agent: ${a.label}`),
     "",
     `If you are waiting on ${one ? "it" : "them"}, end your next message with this fence${one ? "" : " (keep only the ids you are waiting on)"}, setting \`for:\` to how long it should take:`,
     "",
     "```awaiting",
-    `shells: [${shells.map(handle).join(", ")}]`,
+    ...(shells.length ? [`shells: [${shells.map(handle).join(", ")}]`] : []),
+    ...(subAgents.length ? [`agents: [${subAgents.map(handle).join(", ")}]`] : []),
     `for: ${SIGNOFF_WAITING_FOR}`,
     "---",
     "What is running and what it gates, in one sentence.",
     "```",
+    // Only a Goal thread reaches here with a child, and it is the one place the child's own park falls
+    // short — said in a line, because a worker told "a running child parks you" has no other reason to fence.
+    ...(subAgents.length ? ["", "A running sub-agent keeps you out of the queue on its own, but only this fence holds your Goal until it returns."] : []),
     ...(extras.length ? ["", `Add a line only if this rest waits on these too: ${extras.join(", ")}.`] : []),
     "",
-    `If the work is finished and ${one ? "the shell is" : "they are"} only left running, end with \`\`\`done instead; if work is left, do it now.`,
+    `If work is left, do it now; if it is finished${subAgents.length ? "" : ` and ${one ? "the shell is" : "they are"} only left running`}, end with \`\`\`done instead.`,
   ].join("\n")
 }
 
-/** The sign-off nudge for one fenceless rest: the short waiting variant when a background shell is still
- *  running, the full protocol when nothing is. */
+/** The sign-off nudge for one fenceless rest: the short waiting variant when a background shell (or, on a
+ *  Goal thread, a direct child) is still running, the full protocol when nothing is. */
 export function signoffNudgeMessage(ops?: SignoffLiveOps): string {
-  if (ops?.shells.length) return signoffWaitingNudgeMessage(ops)
+  if (ops && (ops.shells.length || ops.subAgents.length)) return signoffWaitingNudgeMessage(ops)
   const lines = liveOpsLines(ops)
   if (lines.length) {
     lines.push("", "An ```awaiting fence names only what you are ACTUALLY waiting on, one such list per kind, plus")

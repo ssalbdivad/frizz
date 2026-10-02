@@ -13,7 +13,7 @@ import { createWakeDeliveryStore, WAKE_QUIET_WINDOW_MS, type WakeDelivery } from
 import { isReplyWait } from "./thread-mentions.ts"
 // The board owns the registered-done lifetime rule, and the waker must read it by exactly the same rule
 // or the two disagree about whether a thread is finished.
-import { answersInFlight, registeredDoneFence, safeQuestionAnswer, safeQuestionSpec, SIGNOFF_NUDGE_SETTING, signoffNudgeVerdict } from "./board.ts"
+import { answersInFlight, childJustReturned, registeredDoneFence, safeQuestionAnswer, safeQuestionSpec, SIGNOFF_NUDGE_SETTING, signoffNudgeVerdict } from "./board.ts"
 import { ProducerStoppedError } from "./shutdown.ts"
 import { liveShellBudget, SHELL_BUDGET_GRACE_MS, shellBudgetWarningMessage, type ShellStopReason } from "./shell-budget.ts"
 import { completionsDueForRelay, relayMessage } from "./completion-relay.ts"
@@ -1602,6 +1602,9 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
       if (tele.authFault || tele.apiFault) return "superseded"
       if (item.fenceId !== signoffFenceId(tele.lastAssistantAt ?? "")) return "superseded"
       if (tele.lastFence || tele.pendingQuestion) return "superseded"
+      // A child that returned after this rest is about to wake the parent with its report, so the rest
+      // this nudge was for is over in all but the transcript (board.childJustReturned has the timing).
+      if (childJustReturned(tele, tele.lastAssistantAt, now())) return "superseded"
       return tele.turn === "idle" ? "current-idle" : "current-busy"
     }
     // SOURCE 14 is bound to its shells still running: the worker stopping them between enqueue and
@@ -2181,7 +2184,7 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
         armedWatchCount: () => deps.storage.listThreadWatches(row.slug, { armedOnly: true }).length,
         replyWaitArmed: () => deps.storage.listThreadTimers(row.slug, { armedOnly: true }).some((t) => isReplyWait(t.prompt)),
         threadMessageInFlight: () => outbox.pendingFor(row.slug, row.session_id).some((d) => isThreadMessageFenceId(d.fenceId)),
-      })
+      }, nowMs)
       if (verdict === "signed-off") {
         if ((row.signoff_nudges ?? 0) > 0) deps.storage.resetSignoffNudges(row.slug)
         continue
@@ -2204,14 +2207,16 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
         // the handle the runtime actually showed the worker — because that is the string it will
         // naturally reach for, and the one the fence's own integrity check matches on.
         //
-        // A RUNNING SHELL SELECTS THE SHORT WAITING VARIANT (signoffWaitingNudgeMessage): the shells
-        // and their fence, already written, instead of sixty lines about unfinished work.
+        // RUNNING WORK SELECTS THE SHORT WAITING VARIANT (signoffWaitingNudgeMessage): the shells (and,
+        // on a Goal thread, the children) and their fence, already written, instead of sixty lines about
+        // unfinished work.
         message: withClock(signoffNudgeMessage({
           shells: (tele.bgShells ?? []).filter((sh) => sh.state === "running").map((sh) => ({ id: sh.taskId ?? sh.id, label: sh.label })),
           // DIRECT children only — the only ones an `agents:` line can name (board.liveWaitHandles); this
           // listed a Workflow's own agents and a retired child's grandchildren too, ids a fence that
-          // copied them would have been refused for. In practice this is empty: a running direct child already
-          // parks the thread, so the verdict above never reaches a send behind one.
+          // copied them would have been refused for. Empty except on a thread with a Goal armed at rest: a
+          // running direct child parks any other thread, so the verdict never reaches a send behind one,
+          // while a Goal thread is asked for the `agents:` fence because only a fence holds its Goal.
           subAgents: (tele.subAgents ?? []).filter((a) => isDirectSubAgent(a) && a.state === "running").map((a) => ({ id: a.taskId ?? a.id, label: a.label })),
           // The other two registries, so the nudge lists EVERY kind an awaiting fence can name rather
           // than the two the fold happens to know about — a worker told about half its work writes half
@@ -3917,11 +3922,15 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
       // fence then read "you rested without a fence" and fenced again — two Done cards for one sign-off
       // (thread `wrong-agent-id-re-fencing`, maintainer: "Redundant Dones"). The reminder's own
       // supersession check in `deliveryContext` could not catch it: it ran at send, before any reply
-      // existed. The reminder already opens by sending a half-finished thread back to the work, so the
-      // operator's words lose nothing on that rest; they reach the worker on the first bare rest the
-      // reminder does not take (its cap spent, or the setting off). A DELIVERED reminder holds this too,
-      // which is what makes it per-rest rather than per-tick — in production its record closes the rest
-      // anyway (`lastUserAt` moves past `restedAt`, above). Superseded means the worker moved on and
+      // existed. The long reminder opens by sending a half-finished thread back to the work, so the
+      // operator's words lose little on that rest; the short waiting variant (a rest with a shell or, on
+      // this Goal thread, a child still running) leads with that work and its fence instead, and keeps
+      // only a closing "if work is left, do it now" — a deliberate trade, since a worker waiting on a
+      // build is better served by the fence than by "keep going". The operator's words reach the worker
+      // on the first bare rest the reminder does not take (its cap spent, or the setting off). A
+      // DELIVERED reminder holds this too, which is what makes it per-rest rather than per-tick — in
+      // production its record closes the rest anyway (`lastUserAt` moves past `restedAt`, above).
+      // Superseded means the worker moved on and
       // exhausted means the runtime could not be reached; the Goal for that rest is dead or doomed alike,
       // so neither holds it.
       const reminder = outbox.get(wakeDeliveryId(row.slug, row.session_id, signoffFenceId(restedAt)))

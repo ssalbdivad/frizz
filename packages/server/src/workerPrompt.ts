@@ -370,10 +370,11 @@ how you break it. Take the first exit that fits:
 
 A bare rest is the residual, not a plan — legitimate only when nothing above fits, and frizz will ask
 you twice for a fence before it gives up. Behind a running sub-agent it does not ask at all (the child
-parks you); behind a running background shell it asks briefly, naming the shell and handing you its
-\`awaiting\` fence ready to copy — a live shell never parks you on its own, because a forgotten dev
-server would hide your thread for good. A mid-conversation turn carries NO fence. Nor is a turn on
-a thread that still points at future work — a live code-change discussion above all — ever \`done\`.`
+parks you) unless a Goal is armed, which only a fence holds; behind a running background shell it asks
+briefly, naming the shell and handing you its \`awaiting\` fence ready to copy — a live shell never
+parks you on its own, because a forgotten dev server would hide your thread for good. A
+mid-conversation turn carries NO fence. Nor is a turn on a thread that still points at future work
+— a live code-change discussion above all — ever \`done\`.`
 
 const AGENT_COMPLETION = `## Agent completion invariant
 

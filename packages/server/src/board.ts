@@ -690,6 +690,7 @@ export function signoffNudgeVerdict(
     replyWaitArmed: () => boolean
     threadMessageInFlight?: () => boolean
   },
+  nowMs = Date.now(),
 ): SignoffNudgeVerdict {
   if (!tele || tele.turn !== "idle") return "ineligible"
   const spokeAt = tele.lastAssistantAt
@@ -715,11 +716,53 @@ export function signoffNudgeVerdict(
   // Workflow. Ineligible, not signed-off: a child is not a sign-off, so it gives no allowance back, and
   // the rest the child comes back to is judged on its own. A shell does NOT get this — see
   // signoffWaitingNudgeMessage in @frizz/shared for why it is asked instead.
-  if (hasLiveBackgroundWork(tele)) return "ineligible"
+  //
+  // EXCEPT ON A THREAD WITH A GOAL ARMED AT REST. A child parks the thread out of the QUEUE, but the Goal
+  // deliberately ignores children (scheduler evalRestPrompts, maintainer 2026-08-02) and stands down only
+  // for an ```awaiting fence or for this reminder taking the rest. With the reminder silent here, every
+  // fenceless rest behind a Workflow got the operator's "keep going" with nothing telling the worker how
+  // to quiet it — reproduced by the 2026-10-02 review: five rests, five Goal prompts, where main sent the
+  // reminder first and the fence it taught held the Goal. So a Goal thread is still asked, in the short
+  // waiting form, with the child's `agents:` fence written out (signoffWaitingNudgeMessage).
+  if (hasLiveBackgroundWork(tele) && !restGoalArmed(row)) return "ineligible"
+  // A CHILD THAT JUST RETURNED IS ABOUT TO WAKE ITS PARENT, so the rest it interrupted is not bare either.
+  // The fold retires the child on the `queue-operation` record that enqueues its <task-notification> —
+  // metadata, so `turn` stays idle and `lastUserAt` does not move — and the USER record that actually
+  // wakes the parent lands a beat later. In that window the guard above has gone false and every other
+  // guard still reads a fenceless rest, so the nudge was minted for the OLD rest and landed after the
+  // worker's own reply to the child, even after a ```done (2026-10-02 review: 1 of 25 real returns,
+  // a 47s child, the nudge's delivery row created 232ms after the enqueue record). Bounded, so a notification that never wakes
+  // the parent still leaves its rest to be asked about.
+  if (childJustReturned(tele, spokeAt, nowMs)) return "ineligible"
   if (tele.pendingAsk || tele.permPrompt) return "ineligible"
   if (tele.lastAssistantAllDone) return "ineligible"
   if ((row.signoff_nudges ?? 0) >= SIGNOFF_NUDGE_MAX) return "ineligible"
   return "nudge"
+}
+
+/** Does this row carry a Goal armed to fire at rest? The same reading answersInFlight is handed above,
+ *  and the same gate the scheduler's evalRestPrompts fires on (armedRest), minus the armed-at stamp the
+ *  verdict's row slice does not carry — a prompt flagged on-rest with no stamp is a row mid-write. */
+function restGoalArmed(row: Pick<SessionRow, "recurring_on_rest" | "recurring_prompt">): boolean {
+  return row.recurring_on_rest === 1 && Boolean(row.recurring_prompt?.trim())
+}
+
+/** How long after a direct child retires its parent's rest is treated as about to be woken by it. The
+ *  wake normally lands within a second (the enqueue and the user record are written back to back); the
+ *  bound is for a notification that never wakes the parent, so its rest is not shielded for ever. */
+export const CHILD_RETURN_WAKE_MS = 60_000
+
+/** Did a direct child of this thread retire AFTER its last rest, recently enough that the notification
+ *  waking the parent is still on its way? Read by the verdict above and by the scheduler at send, so a
+ *  nudge minted for the rest behind a running child (a Goal thread) is dropped once that child returns
+ *  rather than landing after the parent's own reply to it. The retired ring holds direct children only. */
+export function childJustReturned(tele: Pick<SessionTelemetry, "retiredSubAgents"> | undefined, spokeAt: string | undefined, nowMs = Date.now()): boolean {
+  const rested = Date.parse(spokeAt ?? "")
+  if (!Number.isFinite(rested)) return false
+  return (tele?.retiredSubAgents ?? []).some((r) => {
+    const finished = Date.parse(r.finishedAt ?? "")
+    return Number.isFinite(finished) && finished >= rested && nowMs - finished < CHILD_RETURN_WAKE_MS
+  })
 }
 
 /** How long a rest the sign-off nudge is about to take stays out of the queue. The scheduler mints the
@@ -2120,7 +2163,7 @@ function sessionThreadView(
     done: () => registries.done.get(row.slug),
     armedWatchCount: () => armedWatches.length,
     replyWaitArmed: () => armedTimers.some((t) => isReplyWait(t.prompt)),
-  }), rawTele, nowMs)
+  }, nowMs), rawTele, nowMs)
   // A silent turn queues past every rest gate in deriveNeedsYou (it is not at rest), except the human's
   // own wall-clock snooze, which is how a deliberate long wait is parked.
   // WAITING ON ANOTHER THREAD'S ANSWER (`message_thread` with `await_reply`) is a wait on automation, like a

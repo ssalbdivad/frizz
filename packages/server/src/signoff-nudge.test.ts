@@ -823,3 +823,161 @@ test("the short variant spends the same consecutive allowance as the long one", 
     assert.ok(h.nudges().every((n) => n.message.includes("shells: [bzvtnt3ig]")))
   } finally { h.close() }
 })
+
+// ---- A GOAL THREAD BEHIND A CHILD (2026-10-02 review) ----------------------------------------------
+// A child parks the thread out of the queue, but NOT out of the Goal: evalRestPrompts deliberately ignores
+// children and stands down only for an ```awaiting fence or for this reminder taking the rest. With the
+// reminder silent behind every child, a self-driving thread waiting on a Workflow got the operator's
+// "keep going" on every fenceless rest and nothing that named the park (reproduced: five rests, five Goal
+// prompts). So a Goal thread is still asked behind a child — in the SHORT form, with the child's own
+// `agents:` fence written out — and the Goal yields to it exactly as it yields to the long reminder.
+test("a Goal thread resting behind a running child gets the short variant with its `agents:` fence, and the Goal stands down", async () => {
+  const h = nudger({ subAgents: [child()] } as Partial<SessionTelemetry>)
+  try {
+    h.storage.setRecurringPromptBySlug(h.slug, {
+      prompt: "keep going until the migration is done", stopHook: true, heartbeat: false, postCompaction: false,
+      intervalMs: null, armedAt: "2026-08-11T00:00:00.000Z",
+    })
+    await h.s.tick()
+    assert.equal(h.nudges().length, 1, "the reminder takes the rest")
+    assert.ok(!h.delivered.some((m) => m.startsWith("keep going")), "and the Goal stands down on it")
+    const msg = h.nudges()[0].message
+    assert.match(msg, /^- `a01b2d20b32feab11` — sub-agent: scout the tailer$/m)
+    assert.match(msg, /```awaiting\nagents: \[a01b2d20b32feab11\]\nfor: 1h\n---\n/)
+    assert.doesNotMatch(msg, /shells:/)
+    assert.match(msg, /only this fence holds your Goal/)
+    assert.doesNotMatch(msg, /DECIDE RATHER THAN ASK/)
+    // The fence it hands over is one the real park check honours while the child runs.
+    const { parseSignalFence } = await import("./tailer.ts")
+    const { hasDeclaredBackgroundPark } = await import("./board.ts")
+    const open = msg.indexOf("```awaiting")
+    const fence = parseSignalFence(`Waiting.\n\n${msg.slice(open, msg.indexOf("```", open + 3) + 3)}`)
+    const tele = { lastFence: fence, bgShells: [], subAgents: [child()], lastAssistantAt: "2026-08-12T00:00:00.000Z" } as unknown as SessionTelemetry
+    assert.equal(hasDeclaredBackgroundPark(tele, Date.parse("2026-08-12T00:01:00.000Z")), true)
+  } finally { h.close() }
+})
+
+// ---- A FENCE ID YAML WOULD RETYPE (2026-10-02 review) ----------------------------------------------
+// The waiting variant is copied verbatim, so an id has to survive the fence's YAML parse as the same
+// string. A 9-char base36 runtime id that reads as a number (`1234e5678` → Infinity, `0x1a2b3c4` →
+// 27440068) came back as that number, and the park check — which matches strings — refused it.
+test("an id YAML would read as a number is quoted in the fence, and the park check honours it", async () => {
+  const { signoffNudgeMessage, fenceScalar } = await import("@frizz/shared")
+  const { parseSignalFence } = await import("./tailer.ts")
+  const { hasDeclaredBackgroundPark } = await import("./board.ts")
+  assert.equal(fenceScalar("bzvtnt3ig"), "bzvtnt3ig", "an ordinary id stays bare")
+  assert.equal(fenceScalar("acme/app#391"), "acme/app#391")
+  for (const id of ["1234e5678", "0x1a2b3c4", "123456789", "true", "null"]) {
+    const sh = shell({ taskId: id })
+    const msg = signoffNudgeMessage({ shells: [{ id, label: sh.label }], subAgents: [] })
+    const open = msg.indexOf("```awaiting")
+    const fence = parseSignalFence(`Waiting.\n\n${msg.slice(open, msg.indexOf("```", open + 3) + 3)}`)
+    const tele = { lastFence: fence, bgShells: [sh], subAgents: [], lastAssistantAt: "2026-08-12T00:00:00.000Z" } as unknown as SessionTelemetry
+    assert.equal(hasDeclaredBackgroundPark(tele, Date.parse("2026-08-12T00:01:00.000Z")), true, `${id} parks`)
+  }
+})
+
+// ---- THE INSTANT A CHILD RETURNS (2026-10-02 review) -----------------------------------------------
+// The fold retires a child on the `queue-operation` record that ENQUEUES its <task-notification>; the
+// USER record that re-invokes the parent lands a beat later. In between, the thread reads idle, agent
+// spoke last, no live child — a bare rest by every other guard — and the nudge was minted for the OLD
+// rest, then landed after the worker's own reply to the child (1 of 25 real returns). Driven through the
+// REAL tailer folding a transcript shaped like the real one, because the window lives in the fold.
+test("a rest behind a child is not nudged in the window between the child's notification and the parent's wake", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "frizz-signoff-return-"))
+  const logDir = join(dir, "-a-project")
+  mkdirSync(logDir, { recursive: true })
+  const storage = createStorage(join(dir, "ui.db"), "p")
+  const slug = "resting"
+  // On the wall clock, because the child's liveness is read off its output file's real mtime.
+  const T0 = Date.now() - 10_000
+  const at = (s: number) => new Date(T0 + s * 1000).toISOString()
+  const childOut = join(dir, "a01b2d20b32feab11.output")
+  writeFileSync(childOut, "")
+  storage.upsertSession({
+    slug, session_id: "sid", thread_name: `frizz-${slug}`, spawned_at: at(0),
+    last_read_at: null, unread: 0, exited: 0, archived: 0, rested_at: null, title_auto: 1,
+    title: slug, state: "open", meta: null, seen_at: null, transcript_id: null,
+  } as SessionRow)
+  const file = join(logDir, "sid.jsonl")
+  const rec = (o: unknown) => JSON.stringify(o) + "\n"
+  writeFileSync(file, [
+    rec({ type: "user", timestamp: at(0), message: { role: "user", content: "go" } }),
+    rec({ type: "assistant", timestamp: at(1), message: { stop_reason: "tool_use", content: [{ type: "tool_use", name: "Agent", id: "toolu_child", input: { description: "scout the tailer", run_in_background: true, subagent_type: "general-purpose" } }] } }),
+    rec({ type: "user", timestamp: at(1.5), message: { content: [{ type: "tool_result", tool_use_id: "toolu_child", content: [{ type: "text", text: `Async agent launched successfully.\nagentId: a01b2d20b32feab11 (internal ID - do not mention to user.)\noutput_file: ${childOut}\nDo NOT Read or tail this file.` }] }] } }),
+    rec({ type: "assistant", timestamp: at(2), message: { stop_reason: "end_turn", content: [{ type: "text", text: "Dispatched the scout; I will pick its findings up when it returns." }] } }),
+  ].join(""))
+  let nowMs = T0 + 5_000
+  const tailer = createTailer({
+    project: { cwdSlug: "x" } as Project, storage, bus: new Bus(), onChange: () => {},
+    now: () => nowMs, paneDead: () => false, sessionLogDir: logDir,
+  })
+  const s = createScheduler({ wakeQuietWindowMs: 0, storage, tailer, now: () => nowMs, resume: async () => {}, log: () => {} })
+  const nudges = () => (storage.db.prepare("SELECT fence_id FROM wake_delivery WHERE fence_id LIKE 'signoff:%'").all() as { fence_id: string }[]).map((r) => r.fence_id)
+  try {
+    tailer.tick(); await s.tick()
+    assert.equal(tailer.get(slug)?.subAgents.filter((a) => a.state === "running").length, 1, "the child is out")
+    assert.deepEqual(nudges(), [], "a running child parks the rest")
+    // The child returns: ONLY the enqueue record has been written, as at the real instant.
+    writeFileSync(file, rec({
+      type: "queue-operation", operation: "enqueue", timestamp: at(47), sessionId: "sid",
+      content: "<task-notification>\n<task-id>a01b2d20b32feab11</task-id>\n<tool-use-id>toolu_child</tool-use-id>\n<status>completed</status>\n<summary>Agent finished</summary>\n</task-notification>",
+    }), { flag: "a" })
+    nowMs = T0 + 47_200
+    tailer.tick(); await s.tick()
+    const tele = tailer.get(slug)
+    assert.equal(tele?.turn, "idle", "the window: the parent has not been woken yet")
+    assert.equal(tele?.subAgents.filter((a) => a.state === "running").length, 0, "and the child is already retired")
+    assert.deepEqual(nudges(), [], "its notification is about to wake the parent, so the old rest is not nudged")
+    // Bounded: a notification that never wakes the parent leaves the rest to be asked about after all.
+    nowMs = T0 + 47_000 + 61_000
+    tailer.tick(); await s.tick()
+    assert.deepEqual(nudges(), [`signoff:${at(2)}`])
+  } finally { void s.stop(); tailer.stop(); storage.close(); rmSync(dir, { recursive: true, force: true }) }
+})
+
+// And the same window at SEND: a nudge a Goal thread was handed behind its running child, still undelivered
+// when the child returns, is dropped rather than landing after the parent's reply to that child.
+test("a nudge still undelivered when the child returns is superseded at send", async () => {
+  const T0 = Date.parse("2026-08-12T00:00:00.000Z")
+  let nowMs = T0 + 5_000
+  let retired: unknown[] = []
+  let children: unknown[] = [child()]
+  const dir = mkdtempSync(join(tmpdir(), "frizz-signoff-send-"))
+  const storage = createStorage(join(dir, "ui.db"), "p")
+  const slug = "resting"
+  storage.upsertSession({
+    slug, session_id: "sid", thread_name: `frizz-${slug}`, spawned_at: new Date(T0).toISOString(),
+    last_read_at: null, unread: 0, exited: 0, archived: 0, rested_at: null, title_auto: 1,
+    title: slug, state: "open", meta: null, seen_at: null, transcript_id: null,
+  } as SessionRow)
+  storage.setRecurringPromptBySlug(slug, { prompt: "keep going", stopHook: true, heartbeat: false, postCompaction: false, intervalMs: null, armedAt: "2026-08-11T00:00:00.000Z" })
+  const sent: string[] = []
+  let fail = true
+  const s = createScheduler({
+    wakeQuietWindowMs: 0, storage, now: () => nowMs, retryBaseMs: 1_000,
+    tailer: {
+      get: () => ({
+        turn: "idle", lastActivityAt: new Date(T0).toISOString(), lastAssistantAt: new Date(T0).toISOString(),
+        bgShells: [], pendingQuestion: false, permPrompt: false,
+        subAgents: children, retiredSubAgents: retired,
+      }),
+    } as unknown as Tailer,
+    resume: async (_slug, message) => {
+      if (fail) { fail = false; throw new Error("runtime busy") }
+      sent.push(message)
+    },
+    log: () => {},
+  })
+  const state = () => (storage.db.prepare("SELECT state FROM wake_delivery WHERE fence_id LIKE 'signoff:%'").get() as { state: string } | undefined)?.state
+  try {
+    await s.tick()
+    assert.ok(state() && state() !== "delivered", `minted behind the running child, first send failed (${state()})`)
+    children = []
+    retired = [{ id: "toolu_agent1", taskId: "a01b2d20b32feab11", label: "scout the tailer", status: "completed", finishedAt: new Date(T0 + 30_000).toISOString() }]
+    nowMs = T0 + 30_200
+    await s.tick()
+    assert.equal(state(), "superseded")
+    assert.ok(!sent.some((m) => m.includes("without a fence")))
+  } finally { void s.stop(); storage.close(); rmSync(dir, { recursive: true, force: true }) }
+})
