@@ -179,9 +179,12 @@ export function hasEscapingBackgroundJob(raw, depth = 0) {
   if (operators.length > 0) {
     // A lifecycle action AFTER the last launch makes the command self-contained. `kill` alone does
     // not: the signal is asynchronous, so the shell still needs a wait before returning. An EXIT trap
-    // owns cleanup at the shell boundary.
+    // owns cleanup at the shell boundary — wherever it is SET. `trap 'kill $pid; wait' EXIT; server &
+    // pid=$!` is the idiomatic order (arm cleanup, then launch), and the trap fires at exit all the same;
+    // checking only the tail denied a standard-schema sub-agent on 2026-09-30 for doing exactly what the
+    // denial message tells it to do.
     const tail = command.slice(operators[operators.length - 1] + 1);
-    if (!(/\bwait\b/.test(tail) || /\btrap\b[^\n;]*\b(?:EXIT|0)\b/.test(tail))) return true;
+    if (!(/\bwait\b/.test(tail) || /\btrap\b[^\n;]*\b(?:EXIT|0)\b/.test(command))) return true;
   }
 
   // Both sanitizers substitute character-for-character, so a match position in the sanitized text
@@ -260,6 +263,27 @@ function longForegroundTimeout(toolInput) {
   return typeof timeout === 'number' && Number.isFinite(timeout) && timeout > LONG_FOREGROUND_MS ? timeout : undefined;
 }
 
+// BOTH PROMPTS ABOVE ARE THE THREAD'S, NEVER A SUB-AGENT'S. A hook firing inside a sub-agent carries
+// `agent_id` (agent-address.mjs and session-seed.mjs skip on the same field), and neither line is true
+// there:
+// - the no-`timeout` line points at `extend_shell`, which resolves a shell against the THREAD's own
+//   transcript (router extendOwnShell → tailer bgShells, which skips sidechain records), so a sub-agent's
+//   shell is never found. Both `extend_shell` failures in three days of worker transcripts (2026-09-29..
+//   10-01) were sub-agents obeying this line 3s after launching the shell, told "it has already finished
+//   … or the id is wrong" about a shell that was running. Nor does Frizz own that shell's clock: Claude
+//   itself kills a sub-agent's background shell when the sub-agent returns.
+// - the long-foreground line says "run it with `run_in_background: true`", while the sub-agent's own
+//   dispatch epilogue (agent-dispatch.mjs) tells it the opposite — "run long commands in the FOREGROUND",
+//   because nothing can wake a sub-agent that ends its turn waiting on a shell.
+// Measured over those three days: 53 no-timeout and 91 long-foreground lines landed in sub-agents, against
+// 31 and 0 in threads. The escaping-job DENY still applies to everyone.
+/** @param {unknown} input */
+function isSubAgentCall(input) {
+  if (!input || typeof input !== 'object') return false;
+  const { agent_id: snake, agentId: camel } = /** @type {Record<string, unknown>} */ (input);
+  return Boolean(snake ?? camel);
+}
+
 export function evaluateBashBackgroundHook(input, env = process.env) {
   if (!String(env.FRIZZ_THREAD ?? '').trim()) return {};
   const command = input && typeof input === 'object'
@@ -267,6 +291,7 @@ export function evaluateBashBackgroundHook(input, env = process.env) {
     : '';
   const codex = typeof input?.model === 'string';
   if (!hasEscapingBackgroundJob(command)) {
+    if (isSubAgentCall(input)) return {};
     if (isUntimedBackgroundCall(input?.tool_input)) {
       return { hookSpecificOutput: { hookEventName: 'PreToolUse', additionalContext: BACKGROUND_NO_TIMEOUT_CONTEXT } };
     }

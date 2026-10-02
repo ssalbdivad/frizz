@@ -212,3 +212,41 @@ test("the long-foreground prompt is Claude-only: a codex exec has no run_in_back
   )
   assert.deepEqual(out, {})
 })
+
+// THE TWO PROMPTS ARE THE THREAD'S, NEVER A SUB-AGENT'S (2026-09-29..10-01 transcripts): the no-timeout
+// line sent sub-agents to `extend_shell`, which cannot see a sub-agent's shell and answered "already
+// finished … or the id is wrong" about one running for 3s; the long-foreground line told sub-agents to
+// background their gates while their own dispatch epilogue says to run them in the FOREGROUND.
+function subAgentDecision(command: string, extra: Record<string, unknown>, idKey = "agent_id"): Record<string, any> {
+  const result = spawnSync(process.execPath, [hook], {
+    input: JSON.stringify({ hook_event_name: "PreToolUse", tool_name: "Bash", [idKey]: "a19ae4fa7706777f6", tool_input: { command, ...extra } }),
+    encoding: "utf8",
+    env: { ...process.env, FRIZZ_THREAD: "thread-under-test" },
+  })
+  assert.equal(result.status, 0, result.stderr)
+  return JSON.parse(result.stdout || "{}")
+}
+
+test("inside a sub-agent neither the no-timeout nor the long-foreground prompt fires; the deny still does", () => {
+  // The positive controls: the identical calls from the THREAD do get their lines.
+  assert.match(decision("npx vite --port 5231", true, { run_in_background: true }).hookSpecificOutput?.additionalContext ?? "", /extend_shell/)
+  assert.match(decision("pnpm prChecks", true, { timeout: 3_600_000 }).hookSpecificOutput?.additionalContext ?? "", /run_in_background: true/)
+  // From a sub-agent, nothing — either spelling of the id.
+  assert.deepEqual(subAgentDecision("npx vite --port 5231", { run_in_background: true }), {})
+  assert.deepEqual(subAgentDecision("pnpm prChecks", { timeout: 3_600_000 }), {})
+  assert.deepEqual(subAgentDecision("pnpm prChecks", { timeout: 3_600_000 }, "agentId"), {})
+  // An escaping job is a lifecycle hole wherever it runs, so a sub-agent is still refused.
+  assert.equal(subAgentDecision("server &", { run_in_background: true }).hookSpecificOutput?.permissionDecision, "deny")
+})
+
+// The denial tells the worker to "own cleanup with an EXIT trap", and the idiomatic order arms the trap
+// BEFORE the launch. Checking only the text after the last `&` refused exactly that (standard-schema
+// sub-agent, 2026-09-30).
+test("an EXIT trap armed before the launch owns the job as much as one armed after it", () => {
+  assert.deepEqual(decision("trap 'kill $pid 2>/dev/null; wait' EXIT; PORT=0 pnpm start > /tmp/start.log 2>&1 & pid=$!; for i in 1 2 3; do grep -q http /tmp/start.log && break; sleep 1; done; curl -s localhost"), {})
+  assert.deepEqual(decision("trap 'kill $pid' 0; server & pid=$!; curl -s localhost"), {})
+  // The negative control: the same command with no trap anywhere is still an escaping job.
+  assert.equal(output("PORT=0 pnpm start > /tmp/start.log 2>&1 & pid=$!; for i in 1 2 3; do grep -q http /tmp/start.log && break; sleep 1; done; curl -s localhost").permissionDecision, "deny")
+  // A trap on some other signal owns nothing at exit.
+  assert.equal(output("trap 'kill $pid' INT; server & pid=$!; curl -s localhost").permissionDecision, "deny")
+})
