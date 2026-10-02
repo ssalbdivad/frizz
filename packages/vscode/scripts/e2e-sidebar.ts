@@ -43,8 +43,11 @@
 //   c10 `@` in a prompt box offers the workspace's files as git and VS Code list them (a gitignored copy
 //      left out); Enter writes the whole-file reference where the `@` was
 //   c11 a file dragged from VS Code's explorer onto a prompt box, Shift held, lands as the same reference
-//      (the Frizz view moved into the Explorer's side bar so both are in sight; results.json says whether
-//      the drop was a trusted drag or had to be synthesized)
+//      (the Frizz view moved into the Explorer's side bar so both are in sight). The drag is VS Code's
+//      own, started by a real press on the explorer's row and intercepted with its data; DevTools cannot
+//      route the drop into the webview's out-of-process frame, so the drop is dispatched, trusted, to the
+//      page's own frame. results.json's `explorerDrop` says which path landed it (synthesized is the
+//      last resort)
 //   c12 the context bar's chevron menu offers the file's problems (a real TypeScript error) and the
 //      terminal's last command (run through shell integration), each adding one chip
 //   c13 a thread that enters the queue needing the human while the sidebar is out of sight (snoozed, then
@@ -1630,8 +1633,33 @@ try {
       const label = relative(workspace.dir, files.sample).split("\\").join("/")
       let landed = await until(async () => (await box("newComposer"))?.value.includes(`\`${label}\``) === true, 6_000)
       if (!landed && data) {
-        // The drag did not reach the page as a trusted drop: the same data, dropped by script on the box.
+        // DevTools' drag events go to the window's root frame, which hands nothing on to an out-of-process
+        // frame: the workbench sees the dragenter that turns the webview's pointer events on, and the page
+        // nested inside it never sees a drag event at all. The same intercepted drag, then, dispatched by
+        // DevTools to the page's OWN frame: still trusted events, Shift held, carrying the data as Chromium
+        // presents it to a page (not as a script would build it), though VS Code's routing is skipped.
         notes.explorerTrustedMiss = how
+        // (A frame's DevTools session is puppeteer's internal `client`, not in its public types.)
+        const sessionOf = (f: Frame) => (f as unknown as { client: CDPSession }).client
+        const frameSession = sessionOf(await frame())
+        if (frameSession.id() !== sessionOf(page.mainFrame()).id()) {
+          const at = await inPage(() => {
+            const rect = [...document.querySelectorAll<HTMLTextAreaElement>('textarea[data-surface="newComposer"]')].find((t) => t.getClientRects().length > 0)!.getBoundingClientRect()
+            return { x: rect.x + rect.width / 2, y: rect.y + rect.height / 2 }
+          })
+          for (const type of ["dragEnter", "dragOver", "dragOver", "drop"] as const) {
+            await frameSession.send("Input.dispatchDragEvent", { type, x: at.x, y: at.y, data, modifiers: 8 }).catch((error: unknown) => {
+              notes.explorerFrameDragError = String(error)
+            })
+            await sleep(150)
+          }
+          notes.explorerFrameDragEvents = await inPage(() => (window as unknown as { __frizzDragEvents?: string[] }).__frizzDragEvents ?? [])
+          landed = await until(async () => (await box("newComposer"))?.value.includes(`\`${label}\``) === true, 6_000)
+          if (landed) how = "trusted drop dispatched to the page's frame"
+        } else notes.explorerFrameDragError = "the page shares the workbench's process"
+      }
+      if (!landed && data) {
+        // Neither reached the page: the same data, dropped by script on the box.
         how = "synthesized"
         await inPage((items) => {
           const area = [...document.querySelectorAll<HTMLTextAreaElement>('textarea[data-surface="newComposer"]')].find((t) => t.getClientRects().length > 0)!
@@ -1649,6 +1677,12 @@ try {
       await shot("c11-dropped-reference", { window: true })
       await clearBox("newComposer").catch(() => undefined)
     } finally {
+      // The intercepted drag's drop went nowhere, so the workbench still thinks a drag is under way and
+      // swallows every later mouse press on it (c13's toast button among them): cancelled, as a hand
+      // letting go outside any target would.
+      await cdp.send("Input.dispatchDragEvent", { type: "dragCancel", x: 0, y: 0, data: { items: [], dragOperationsMask: 1 } }).catch((error: unknown) => {
+        notes.explorerDragCancel = String(error)
+      })
       await cdp.send("Input.setInterceptDrags", { enabled: false }).catch(() => undefined)
       await command("vscode.moveViews", { viewIds: ["frizz.sidebar"], destinationId: "workbench.view.extension.frizz" })
       await command("workbench.view.extension.frizz")
@@ -1730,15 +1764,36 @@ try {
     expect("c13", "a VS Code notification names the thread and what it needs, with Open", !!toast && toast.includes(seeded!.thread.handle), { toast, log: frizzLog().split("\n").filter((line) => /needs|notif|attention/iu.test(line)).slice(-5) })
     await shot("c13-notification", { window: true })
     // The toast slides in: pressed where it comes to rest, as a hand would, and again if the first press
-    // found it still moving.
+    // found it still moving. An info toast also hides itself after a while in a focused window (it is
+    // still in the notification list then, where a hand would find it), so the list is the fallback.
+    const findOpen = async () => (await page.evaluateHandle(() => [...document.querySelectorAll<HTMLElement>(".notification-toast .monaco-button, .notifications-center .monaco-button")].find((button) => button.textContent?.trim() === "Open" && button.getClientRects().length > 0) ?? null)).asElement() as ElementHandle | null
+    const pressed: string[] = []
     let shown: boolean | undefined = false
     for (let attempt = 0; attempt < 3 && !shown; attempt++) {
       await sleep(800)
-      const open = (await page.evaluateHandle(() => [...document.querySelectorAll(".notification-toast .monaco-button")].find((button) => button.textContent?.trim() === "Open") ?? null)).asElement() as ElementHandle | null
-      if (open) await clickHandle(open, "the notification's Open")
+      let open = await findOpen()
+      if (open) pressed.push("toast")
+      else {
+        await command("notifications.showList")
+        await sleep(600)
+        open = await findOpen()
+        pressed.push(open ? "notification list" : "no Open in sight")
+      }
+      if (open) {
+        const at = (await open.boundingBox())!
+        const x = at.x + at.width / 2
+        const y = at.y + at.height / 2
+        pressed.push(await page.evaluate((px, py) => {
+          const hit = document.elementFromPoint(px, py) as HTMLElement | null
+          return `hit ${hit?.tagName}.${String(hit?.className).slice(0, 40)} "${hit?.textContent?.trim().slice(0, 20)}" at ${Math.round(px)},${Math.round(py)} of ${innerWidth}x${innerHeight}`
+        }, x, y))
+        await clickHandle(open, "the notification's Open")
+        await sleep(300)
+        pressed.push(`after: ${await page.evaluate(() => document.querySelectorAll(".notification-toast").length)} toasts`)
+      }
       shown = await waitFor("the thread in the sidebar", async () => ((await status()).sidebar.visible && (await drawerOpen())) || undefined, 8_000).catch(() => false)
     }
-    notes.attentionOpen = frizzLog().split("\n").filter((line) => /Told you|Opening/u.test(line)).slice(-3)
+    notes.attentionOpen = { pressed, log: frizzLog().split("\n").filter((line) => /Told you|Opening/u.test(line)).slice(-3) }
     expect("c13", "Open brings the sidebar back on that thread", shown === true, (await status()).sidebar)
     await shot("c13-opened-thread-w300")
   })
