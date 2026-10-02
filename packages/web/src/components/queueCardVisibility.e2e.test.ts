@@ -13,7 +13,9 @@ import test, { after, before } from "node:test"
 //   3  a far card's clamp is measured once it is drawn, not at mount, and still clamps ("Show more");
 //   4  a board delta re-renders NO card: every card's reply box and model strip used to read the board's
 //      threads, so each delta re-rendered every card on the page;
-//   5  typing `@` into a card's reply box still offers the board's threads — the box subscribes to them only
+//   5  a JUMP past the observer's margin (a scrollbar drag, End) paints real cards in its first frame, not
+//      stand-ins — the observer reports a frame late, so the cards are built from the scroll event itself;
+//   6  typing `@` into a card's reply box still offers the board's threads — the box subscribes to them only
 //      once its draft holds an `@`, so this pins that the switch turns on.
 //
 // Skipped unless a Vite URL serving the fixtures is provided: `nub run test:e2e` sets it, or start
@@ -160,6 +162,44 @@ test("a board delta re-renders no card", { skip: !baseUrl, timeout: 120_000 }, a
   const after = await page!.evaluate(() => ({ ...(window as unknown as { __renders: Record<string, number> }).__renders }))
   const rerendered = Object.keys(after).filter((key) => after[key] !== before[key])
   assert.deepEqual(rerendered, [], `${rerendered.length} cards re-rendered on three board deltas`)
+})
+
+test("a jump to the bottom before the page is built paints real cards in its first frame", { skip: !baseUrl, timeout: 120_000 }, async () => {
+  // Jump from a TASK, as input does (a scrollbar drag, End), on the first frame the cards exist — while every
+  // card below the first screen is still a stand-in — and read the page in the NEXT animation frame. The
+  // jump's scroll event is dispatched in that frame's rendering step before its animation frames; what the
+  // frame holds at that point is what it lays out and paints, and the observer cannot change it: its
+  // callbacks are delivered as tasks after the frame.
+  const script = await page!.evaluateOnNewDocument(() => {
+    const w = window as unknown as { __jump?: unknown }
+    const look = () => {
+      const slots = [...document.querySelectorAll<HTMLElement>("[data-xq-card]")]
+      if (slots.length === 0) return requestAnimationFrame(look)
+      setTimeout(() => {
+        const standInsBefore = document.querySelectorAll("[data-xq-card-stand-in]").length
+        scrollTo({ top: document.documentElement.scrollHeight, behavior: "instant" as ScrollBehavior })
+        requestAnimationFrame(() => {
+          const onScreen = slots.filter((slot) => { const r = slot.getBoundingClientRect(); return r.bottom > 0 && r.top < innerHeight })
+          w.__jump = {
+            standInsBefore,
+            scrollY: scrollY,
+            onScreen: onScreen.length,
+            standInsOnScreen: onScreen.filter((slot) => slot.querySelector("[data-xq-card-stand-in]")).length,
+            nearOnScreen: onScreen.filter((slot) => slot.hasAttribute("data-near")).length,
+          }
+        })
+      }, 0)
+    }
+    requestAnimationFrame(look)
+  })
+  await page!.goto(URL_MANY(), { waitUntil: "load" })
+  await page!.waitForFunction(() => (window as unknown as { __jump?: unknown }).__jump !== undefined)
+  const jump = await page!.evaluate(() => (window as unknown as { __jump: Record<string, number> }).__jump)
+  await page!.removeScriptToEvaluateOnNewDocument(script.identifier)
+  assert.ok(jump.standInsBefore >= 40, `the jump happened before the page was built: ${JSON.stringify(jump)}`)
+  assert.ok(jump.scrollY > 10_000 && jump.onScreen > 0, `it landed far down the queue: ${JSON.stringify(jump)}`)
+  assert.equal(jump.standInsOnScreen, 0, `a stand-in on screen in the jump's first frame: ${JSON.stringify(jump)}`)
+  assert.equal(jump.nearOnScreen, jump.onScreen, `and every card on screen is drawn unclipped: ${JSON.stringify(jump)}`)
 })
 
 test("typing @ in a card's reply box offers the board's threads", { skip: !baseUrl, timeout: 120_000 }, async () => {

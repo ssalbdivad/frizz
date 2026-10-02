@@ -79,6 +79,8 @@ const priming = new Set<HTMLElement>()
 const touched = new WeakMap<HTMLElement, number>()
 /** Slots on their way to being skipped (`letGo`). */
 const letting = new Set<HTMLElement>()
+/** Every mounted slot, for the scroll-time pass (`drawOnScreen`). */
+const mounted = new Set<HTMLElement>()
 let observer: IntersectionObserver | null = null
 let stepScheduled = false
 
@@ -161,7 +163,42 @@ function letGo(slot: HTMLElement): void {
   })
 }
 
+// A JUMP IS DRAWN BEFORE IT PAINTS. The observer reports after a frame has painted, so a jump past the
+// margin it watches — the scrollbar dragged, End, Page Down, a scroll restored — painted the cards it landed
+// on as stand-ins (a frame and title) for a frame, then re-laid the page around the built cards, which are
+// rarely the 540px guessed: measured 2026-10-02 on the 244-card mirror, a jump to the middle before the
+// page was built showed 2 stand-ins in the first painted frame, and the next frame put a different card
+// under the reading line (the card read moved from -132px to 158px). A scroll event is dispatched in the
+// rendering step BEFORE animation frames, layout and the ResizeObserver the viewport lock corrects from,
+// so building what is on screen here means the first frame painted after a jump is the real cards, and the
+// lock takes its anchor (in its own animation frame) on the page as it will be drawn. Only the window
+// itself, not the observer's margin: a scrollbar drag fires this every frame, and each card built costs
+// 10–30ms on a loaded box, so this builds what must be seen now and leaves the rest to the observer.
+// Cheap once nothing is left to do: one box read per slot not already near, from a layout a scroll does not
+// dirty.
+//
+// AGAIN UNTIL NOTHING NEW IS ON SCREEN: a card built at its real height rarely keeps the 540px it was
+// guessed at, so building one moves the cards after it — and at the bottom of the page, where a shorter page
+// clamps the scroll, the cards before it — and can bring another stand-in on screen (the 60-card fixture:
+// one of three after a single pass). Each pass is one layout, which the frame pays anyway; bounded, so a
+// page that keeps changing under it cannot hold the frame.
+const DRAW_PASSES = 4
+function drawOnScreen(): void {
+  for (let pass = 0; pass < DRAW_PASSES; pass++) {
+    const viewport = window.innerHeight
+    const due: HTMLElement[] = []
+    for (const slot of mounted) {
+      if (slot.hasAttribute(NEAR)) continue
+      const rect = slot.getBoundingClientRect()
+      if (rect.bottom > 0 && rect.top < viewport) due.push(slot)
+    }
+    if (due.length === 0) return
+    for (const slot of due) markNear(slot)
+  }
+}
+
 function ensureObserver(): IntersectionObserver {
+  if (!observer) window.addEventListener("scroll", drawOnScreen, { passive: true })
   observer ??= new IntersectionObserver((entries) => {
     for (const entry of entries) {
       const slot = entry.target as HTMLElement
@@ -201,12 +238,14 @@ export function observeCardSlot(slot: HTMLElement | null, buildCard?: () => void
   if (unplaced.size === 0) queueMicrotask(place)
   unplaced.add(slot)
   unprimed.add(slot)
+  mounted.add(slot)
   if (buildCard) builders.set(slot, buildCard)
   ensureObserver().observe(slot)
   // Disconnected with the slot: a node's registrations go with the node.
   ensureMutations().observe(slot, { childList: true, subtree: true })
   return () => {
     observer?.unobserve(slot)
+    mounted.delete(slot)
     unplaced.delete(slot)
     unprimed.delete(slot)
     priming.delete(slot)
