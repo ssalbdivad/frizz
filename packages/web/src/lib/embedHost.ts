@@ -6,6 +6,7 @@ import { setEditorContext, setHostState, takePendingAdd } from "./editorContext.
 import { setEditorExtras, takeContextPicks } from "./editorReach.ts"
 import { runHostCommand } from "./embedCommand.ts"
 import { hostFocusGate } from "./hostFocusGate.ts"
+import { finishStuckTransitions } from "./stuckTransitions.ts"
 import { repostRoute } from "./embedRoute.ts"
 import { closeSettingsAnimated } from "./overlays.ts"
 import { EMBED_READY, embedded, hostKeyChord, parseHostMessage, postToHost } from "./embed.ts"
@@ -66,6 +67,9 @@ export function initEmbedHost(): void {
   // 2026-10-02 the page took it to add the editor's selection again, which ⌘I does here (App.tsx
   // app.details), so a human who pressed ⌘L to get into the box had no chord to get back out.
   guardFocus()
+  // A slide the frame was hidden in the middle of can stay pending for good, the drawer laid out a frame
+  // to the right of where it is drawn, and every click on it missing (lib/stuckTransitions.ts).
+  finishStuckTransitions()
   // Ready once a board is in — the page's drafts and its drawer are keyed by it, and the router that
   // navigation goes through is mounted by then — or after 5s regardless, for a machine with nothing open.
   // The extension posts nothing before this; a compose that still beats the board waits for it (composeInto).
