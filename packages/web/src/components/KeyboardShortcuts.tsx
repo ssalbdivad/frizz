@@ -21,7 +21,7 @@ import {
 } from "../lib/keybindings.ts"
 import { useShortcutLabel, useShortcutListener, withShortcut } from "../lib/keyboardRuntime.ts"
 import { embedded } from "../lib/embed.ts"
-import { HOST_CHORDS, HOST_CHORDS_NOTE, SIDEBAR_KEY_HINTS, SIDEBAR_KEYS_NOTE, hostChordKeycaps } from "../lib/embedKeys.ts"
+import { HOST_CHORDS, HOST_CHORDS_NOTE, SIDEBAR_KEY_HINTS, SIDEBAR_KEY_NAMES, SIDEBAR_KEYS_NOTE, SIDEBAR_QUEUE_NOTE, hostChordKeycaps, hostChordProblem } from "../lib/embedKeys.ts"
 import { STATUS_ROW_ACTION, STATUS_ROW_ICON } from "../lib/statusRow.ts"
 import { Dialog } from "./ui/Dialog.tsx"
 
@@ -113,6 +113,9 @@ function KeyboardShortcutsDialog({ open, onOpenChange }: { open: boolean; onOpen
     const chord = from[id]
     return chord ? formatChord(chord, platform) : null
   }
+  // The name a sentence uses for a key — in an editor's sidebar, what the key does there ("Next queued
+  // thread") where that is not its name on the row ("Next card").
+  const nameOf = (id: ActionId) => (sidebar ? SIDEBAR_KEY_NAMES[id] : undefined) ?? actionDef(id).label
 
   function commit(id: ActionId, chord: Chord | null) {
     const { overrides: next, swappedWith } = assignChord(prefs.keybindings, id, chord)
@@ -122,17 +125,17 @@ function KeyboardShortcutsDialog({ open, onOpenChange }: { open: boolean; onOpen
     setHeld(NOTHING_HELD)
     setProblem(null)
     setChanged({ ids: swappedWith ? [id, swappedWith] : [id], nonce: bumpNonce() })
-    const label = actionDef(id).label
+    const label = nameOf(id)
     if (!chord) setStatus(`${label} has no key now`)
     else if (swappedWith) {
       const moved = keysOf(swappedWith, after)
-      setStatus(`${label} is now ${keysOf(id, after)} — ${actionDef(swappedWith).label} ${moved ? `took ${moved}` : "has no key now"}`)
+      setStatus(`${label} is now ${keysOf(id, after)} — ${nameOf(swappedWith)} ${moved ? `took ${moved}` : "has no key now"}`)
     } else setStatus(`${label} is now ${keysOf(id, after)}`)
   }
 
   function reset(id: ActionId) {
     commit(id, parseChord(actionDef(id).defaultChord))
-    setStatus(`${actionDef(id).label} is back to ${formatChord(parseChord(actionDef(id).defaultChord)!, platform)}`)
+    setStatus(`${nameOf(id)} is back to ${formatChord(parseChord(actionDef(id).defaultChord)!, platform)}`)
   }
 
   function resetAll() {
@@ -176,7 +179,8 @@ function KeyboardShortcutsDialog({ open, onOpenChange }: { open: boolean; onOpen
         setHeld(modifiers)
         return
       }
-      const reason = chordProblem(chord, platform)
+      // In an editor's sidebar a VS Code chord is VS Code's (lib/embedKeys.ts), and the refusal says so.
+      const reason = (sidebar ? hostChordProblem(event, platform) : null) ?? chordProblem(chord, platform)
       if (reason) {
         setProblem({ id, text: reason, nonce: bumpNonce() })
         return
@@ -197,7 +201,12 @@ function KeyboardShortcutsDialog({ open, onOpenChange }: { open: boolean; onOpen
 
   const anyChanged = ACTIONS.some((action) => !isDefault(overrides, action.id))
   const groups = [
-    { heading: "Queue", note: "On the card you're reading — or the thread drawer, when one is open.", actions: ACTIONS.filter((action) => action.group === "queue") },
+    {
+      heading: "Queue",
+      // In an editor's sidebar the drawer is the card (SidebarPage.tsx), and a key with none open opens one.
+      note: sidebar ? SIDEBAR_QUEUE_NOTE : "On the card you're reading — or the thread drawer, when one is open.",
+      actions: ACTIONS.filter((action) => action.group === "queue"),
+    },
     { heading: "Anywhere", note: null, actions: ACTIONS.filter((action) => action.group === "anywhere") },
   ]
 

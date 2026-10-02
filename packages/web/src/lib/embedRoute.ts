@@ -1,4 +1,4 @@
-import type { EmbedRouteMessage } from "@frizz/shared"
+import { EMBED_PARAM, EMBED_THEME_PARAM, type EmbedRouteMessage } from "@frizz/shared"
 import { embedded, postToHost } from "./embed.ts"
 
 // WHERE THE SIDEBAR IS, said to VS Code's title row (`frizz:route`, packages/shared/src/embed-protocol.ts).
@@ -36,20 +36,45 @@ export function sidebarRoute(input: {
 }
 
 /**
- * The queue's counts as one line — the phone header's own words (lib/phonePage.ts phoneSubtitle), the asks
- * first: `1 needs you · 5 ready · 1 working`, or `Nothing needs you`. The title row has one tone, so the
- * accent part is just the first part.
+ * The queue's counts as one line: `7 ready · 2 working`, or `Nothing needs you`. "Ready" is the desktop's
+ * READY count (AllQueues.tsx `ready`, the header over the cards) — every card, a question included — so the
+ * sidebar and a browser tab never disagree about how many there are. It read the phone header's line until
+ * 2026-10-01 (`1 needs you · 6 ready`), whose "ready" leaves the questions out: beside a desktop saying 7,
+ * the sidebar said 6. The rows' own glyphs show which ones ask.
  */
-export function queueReading(subtitle: { accent: string | null; rest: string | null }): string {
-  return [subtitle.accent, subtitle.rest].filter((part): part is string => !!part).join(" · ")
+export function queueReading(counts: { ready: number; working: number }): string {
+  const parts = [counts.ready > 0 ? `${counts.ready} ready` : null, counts.working > 0 ? `${counts.working} working` : null].filter((part) => part !== null)
+  return parts.length > 0 ? parts.join(" · ") : "Nothing needs you"
+}
+
+/**
+ * The page's own address for what it shows, as a browser tab would open it: the frame's address less the
+ * embed switch and the theme (lib/embed.ts read those once, at boot), and any fragment. ⋯ Open in browser
+ * opens it (packages/vscode/src/app.ts), so a thread up in the sidebar opens as that thread.
+ */
+export function pageHref(href: string): string {
+  const url = new URL(href)
+  url.searchParams.delete(EMBED_PARAM)
+  url.searchParams.delete(EMBED_THEME_PARAM)
+  url.hash = ""
+  return url.toString()
 }
 
 let last: EmbedRouteMessage | null = null
 
-/** Tell the title row, if this page is in an editor's sidebar and the reading moved. */
+/**
+ * Tell the title row, if this page is in an editor's sidebar and the reading — or the address, when the
+ * caller names one (pageHref) — moved.
+ */
 export function reportRoute(route: EmbedRoute): void {
   if (!embedded()) return
-  const message: EmbedRouteMessage = { type: "frizz:route", view: route.view, title: route.title, ...(route.description ? { description: route.description } : {}) }
+  const message: EmbedRouteMessage = {
+    type: "frizz:route",
+    view: route.view,
+    title: route.title,
+    ...(route.description ? { description: route.description } : {}),
+    ...(route.href ? { href: route.href } : {}),
+  }
   if (last && JSON.stringify(last) === JSON.stringify(message)) return
   last = message
   postToHost(message)

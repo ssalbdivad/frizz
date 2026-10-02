@@ -9,8 +9,8 @@
 //
 //  - page → host: the relay forwards only what arrives from ITS iframe (`event.source ===
 //    frame.contentWindow`) at Frizz's origin; the extension validates the shape again and acts only on
-//    what it knows (an unknown type is ignored, a URL that is not http(s) is refused, a key chord runs a
-//    command only if the extension's own allowlist names it).
+//    what it knows (an unknown type is ignored, a URL that is not http(s) or mailto is refused, a key
+//    chord runs a command only if the extension's own allowlist names it).
 //  - host → page: the relay posts with `targetOrigin` = Frizz's origin, so selected code is never handed
 //    to a document from anywhere else; the page accepts host messages only from `window.parent`.
 //
@@ -164,7 +164,10 @@ export interface EmbedOpenFileMessage {
   endLine?: number
 }
 
-/** A link to a web page (http or https only) — a VS Code webview cannot open a window, so the extension does (`env.openExternal`). */
+/**
+ * A link to a web page (http or https), or a `mailto:` address — a VS Code webview cannot open a window,
+ * so the extension does (`env.openExternal`, which hands a mailto to the mail app).
+ */
 export interface EmbedOpenExternalMessage {
   type: "frizz:open-external"
   url: string
@@ -212,8 +215,16 @@ export interface EmbedRouteMessage {
   view: "queue" | "thread" | "settings" | "other"
   /** The view's name, short: the thread's title, the queue's scope ("All projects", a project's name), "Settings". */
   title: string
-  /** The reading beside it, e.g. `2 need you · 3 ready`; absent says nothing. */
+  /** The reading beside it, e.g. `7 ready · 2 working`; absent says nothing. */
   description?: string
+  /**
+   * The page's address for what it shows, as a browser tab would open it — the frame's own address less
+   * the embed switch and the theme (`http://127.0.0.1:9393/all/acme-api/thread/x`). ⋯ Open in browser opens
+   * it, so a thread up in the sidebar opens as that thread. The extension keeps it only when it is on the
+   * frame's own origin. Optional, so a page and an extension from before it work together: without it the
+   * extension opens the window's project.
+   */
+  href?: string
 }
 
 export type EmbedPageMessage =

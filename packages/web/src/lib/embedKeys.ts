@@ -20,13 +20,33 @@ export const SIDEBAR_KEY_HINTS: Partial<Record<ActionId, string>> = {
   "thread.fullscreen": "Opens it in your browser",
   // Every thread opens in its drawer here, so there is no card to open one from.
   "thread.open": "Every thread opens in one here",
-  // The extension binds ⌘I in the editor to add its selection to this prompt box — the same chord, and the
-  // Frizz reader's own (FileViewerPanel ⌘I).
-  "app.details": "In the editor, adds the selection",
+  // `e` on a thread: the sidebar is inside the editor already, so its folder shows there (the extension
+  // reveals it, or opens a folder outside the workspace in a new window) rather than in the External app.
+  "thread.editor": "Shows its folder in VS Code",
+  // ⌘I adds the editor's selection to the prompt box — bound by the extension in the editor, and pressed in
+  // a sidebar prompt box too, the way Cursor's ⌘L works from its chat.
+  "app.details": "In a prompt box or the editor, adds the selection",
 }
 
-/** The sheet's note over the keys, in the sidebar. */
-export const SIDEBAR_KEYS_NOTE = "Keys reach Frizz while the sidebar has focus."
+/**
+ * The sheet's names for the keys whose sidebar meaning is not their name, where a SENTENCE uses the name —
+ * the line a rebind writes ("Next queued thread is now ⇧Z"). The rows keep the desktop's names, with the
+ * hint under them.
+ */
+export const SIDEBAR_KEY_NAMES: Partial<Record<ActionId, string>> = {
+  "queue.next": "Next queued thread",
+  "queue.prev": "Previous queued thread",
+}
+
+/**
+ * The sheet's note over the keys, in the sidebar. The second sentence because a rebind is kept in the
+ * frame's own storage, which the browser partitions from a tab's: a key changed here is not changed in a
+ * browser tab, and the reverse (plans/vscode-extension.md § What the sidebar keeps apart).
+ */
+export const SIDEBAR_KEYS_NOTE = "Keys reach Frizz while the sidebar has focus. Changes here stay in the sidebar."
+
+/** The Queue group's note in the sidebar, where the drawer is the card (lib/keyboardRuntime.ts openCurrent). */
+export const SIDEBAR_QUEUE_NOTE = "In the open thread. With none open, a key opens the one you're on."
 
 /**
  * A VS Code chord the sidebar passes on. `primary` is ⌘ on a Mac and Ctrl elsewhere, as VS Code spells it;
@@ -71,6 +91,21 @@ export const HOST_CHORDS_NOTE = "Pressed in the sidebar, these go to VS Code. It
 export function hostChordKeycaps(chord: HostChord, platform: Platform): string[] {
   if (platform === "mac") return [...(chord.ctrl ? ["⌃"] : []), ...(chord.shift ? ["⇧"] : []), ...(chord.primary ? ["⌘"] : []), chord.key]
   return ["Ctrl", ...(chord.shift ? ["Shift"] : []), chord.key]
+}
+
+/**
+ * A VS Code chord the human just pressed to rebind a Frizz key to, in the sidebar: that key is VS Code's
+ * there (the page forwards it, HOST_CHORDS), so the sheet refuses it saying so — not that it belongs to the
+ * browser, which is the desktop's reason for most of them. Matched on the event as the page forwards it, so
+ * Ctrl and ⌘ are told apart on a Mac the way the extension tells them apart.
+ */
+export function hostChordProblem(event: { code: string; ctrlKey: boolean; metaKey: boolean; shiftKey: boolean; altKey: boolean }, platform: Platform): string | null {
+  const chord = HOST_CHORDS.find((candidate) => {
+    const wants = hostChordEvent(candidate, platform)
+    return wants.code === event.code && wants.ctrl === event.ctrlKey && wants.meta === event.metaKey && wants.shift === event.shiftKey && wants.alt === event.altKey
+  })
+  if (!chord) return null
+  return `${hostChordKeycaps(chord, platform).join(platform === "mac" ? "" : "+")} goes to VS Code`
 }
 
 /** The keydown a chord is on a platform, as the page forwards it (`frizz:key`) — for the pin test. */

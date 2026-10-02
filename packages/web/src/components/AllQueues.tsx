@@ -35,7 +35,7 @@
 // (`projectsList`, `projectsQueues`) or carries its project explicitly, and every action goes through
 // that project's own client (`projectRpc`). See AllQueuesCard.tsx for the card's half of the same rule.
 // The prompt box and the drawers are the page project's, which is exactly what they should be.
-import { Fragment, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore, type KeyboardEvent, type ReactNode } from "react"
+import { Fragment, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore, type KeyboardEvent, type ReactNode, type RefObject } from "react"
 import { useQuery, useQueryClient } from "@tanstack/react-query"
 import { Check, ChevronDown, Inbox } from "lucide-react"
 import { useLocation, useNavigate } from "react-router"
@@ -79,7 +79,7 @@ import { readingLine } from "../lib/readingLine.ts"
 import { useIsMobile } from "../lib/mobile.ts"
 import { PhonePage } from "./PhonePage.tsx"
 import { SidebarPage } from "./SidebarPage.tsx"
-import { embedded } from "../lib/embed.ts"
+import { embedded, postToHost } from "../lib/embed.ts"
 
 /** How often the page re-reads every project. The rail's badges poll at 5s; this is the page the
  *  operator is looking AT, so it runs a little faster — the read is the servers' cached snapshots. */
@@ -213,9 +213,16 @@ export function AllQueuesPage() {
   }, [])
   // `e` WITH NO THREAD IN FRONT OF THE HUMAN — no drawer, no card being read — opens the project's own
   // folder in the editor: the page's project, or showing All projects, the one the box would start in.
+  // In an editor's sidebar that editor is the one around it, whatever External app says: the extension
+  // shows the folder (and opens one outside the window's folders in a window of its own).
   useShortcut("thread.editor", () => {
     if (runThreadCommand("editor")) return
     if (!focusProject?.open) return false
+    if (embedded()) {
+      if (!focusProject.projectDir) return false
+      postToHost({ type: "frizz:open-file", path: focusProject.projectDir })
+      return
+    }
     const project = focusProject
     void runExternalOpen(
       `editor-project:${project.id}`,
@@ -367,6 +374,8 @@ export function AllQueuesPage() {
         hidden={hidden}
         loading={loading}
         error={queues.error && !queues.data ? String(queues.error) : undefined}
+        ready={ready}
+        empty={queue.length > 0 ? null : focused ? focusedEmptyLine(viewed?.name) : allEmptyLine(unopened)}
         composer={
           <div onKeyDown={onColumnKeyDown}>
             <FocusedComposer
@@ -518,7 +527,7 @@ export function AllQueuesPage() {
               ))
             ) : focused ? (
               <p data-xq-focus-empty className="mt-16 text-center text-[13px] text-muted">
-                Nothing in {viewed?.name ?? "this project"} is waiting on you.
+                {focusedEmptyLine(viewed?.name)}
               </p>
             ) : (
               <EmptyQueues unopened={unopened} />
@@ -629,6 +638,8 @@ function ProjectPicker({ projects, focus, onPick }: { projects: QueuesProject[];
   useEffect(() => {
     for (const project of projects) if (!project.stale) warmProjectIcon(project.card ?? fallbackCard(project))
   }, [projects])
+  const triggerRef = useRef<HTMLButtonElement>(null)
+  const alone = useAloneOnItsLine(triggerRef)
   const choice = (project: QueuesProject, hint?: string) => (
     <MenuItem key={project.id} value={project.slug} onSelect={() => onPick(project)} icon={<ProjectSquare project={project.card ?? fallbackCard(project)} size={14} />}>
       <span className={`min-w-0 flex-1 truncate ${project.slug === focus ? "text-fg" : ""}`}>{project.name}</span>
@@ -642,13 +653,16 @@ function ProjectPicker({ projects, focus, onPick }: { projects: QueuesProject[];
     <Menu>
       <MenuTrigger asChild>
         <button
+          ref={triggerRef}
           type="button"
           data-xq-project-picker
+          data-alone={alone || undefined}
           title={steps ? `New threads start in ${name} (${PROJECT_STEP_KEYS})` : `New threads start in ${name}`}
           aria-label={`New threads start in ${name}. Choose a project`}
           // The model pill's own chrome and type (ProfileGridSelector's trigger), so the strip reads as one
-          // row of settings for the next thread.
-          className={`group inline-flex min-w-0 max-w-[min(14rem,45%)] cursor-pointer items-center gap-[5px] rounded-md border border-border/50 bg-transparent px-2 py-1 text-left text-muted outline-none transition-colors hover:border-border hover:bg-panel-2 hover:text-fg focus-visible:ring-1 focus-visible:ring-focus-ink-60 data-[state=open]:border-border data-[state=open]:bg-panel-2 ${PROMPT_CONTROL_TYPOGRAPHY_CLASS}`}
+          // row of settings for the next thread. Capped beside the model pill, so it leaves that room on the
+          // line; on a line of its own, the line (useAloneOnItsLine).
+          className={`group inline-flex min-w-0 ${alone ? "max-w-full" : "max-w-[min(14rem,45%)]"} cursor-pointer items-center gap-[5px] rounded-md border border-border/50 bg-transparent px-2 py-1 text-left text-muted outline-none transition-colors hover:border-border hover:bg-panel-2 hover:text-fg focus-visible:ring-1 focus-visible:ring-focus-ink-60 data-[state=open]:border-border data-[state=open]:bg-panel-2 ${PROMPT_CONTROL_TYPOGRAPHY_CLASS}`}
         >
           {/* Ink gaps (sans, scripts/ink-gaps.mjs): square→name 5.00px; name→chevron 6.00px against the model
               pill's own 6.12px, which `-ml-[3px]` buys back from the chevron's dead box. */}
@@ -676,6 +690,49 @@ function ProjectPicker({ projects, focus, onPick }: { projects: QueuesProject[];
       </MenuContent>
     </Menu>
   )
+}
+
+/**
+ * WHETHER THE PICKER HAS ITS LINE TO ITSELF, even at its cap: the strip too narrow for it and the model pill
+ * beside it, so the model pill wraps under it. The cap (45% of the strip) exists to leave the model pill
+ * room on the line, and on a line of its own it only cut the name — "ACME…" in a 300px editor sidebar, at
+ * the desktop's narrowest column and on a phone, with half the line empty beside it. Measured rather than
+ * guessed from a width, because the model pill's width is its model's name: the pill as it would be capped
+ * (its chrome plus the whole name, at most the cap) beside the model pill, against the strip. Read off the
+ * capped size, not the current one, so taking the line never feeds back into the answer.
+ */
+function useAloneOnItsLine(ref: RefObject<HTMLElement | null>): boolean {
+  const [alone, setAlone] = useState(false)
+  useLayoutEffect(() => {
+    const pill = ref.current
+    const strip = pill?.parentElement
+    if (!pill || !strip) return
+    let watched: Element | null = null
+    const measure = () => {
+      // Read afresh: the strip swaps its placeholder for the real model pill once the models load.
+      const model = pill.nextElementSibling
+      if (model !== watched) {
+        if (watched) observer.unobserve(watched)
+        if (model) observer.observe(model)
+        watched = model
+      }
+      const name = pill.querySelector<HTMLElement>("[data-xq-picker-name]")
+      const width = strip.clientWidth
+      // The pending box draws the picker alone in a corner, sized to it: nothing shares a line there.
+      if (!(model instanceof HTMLElement) || !name || !width) return setAlone(false)
+      const natural = pill.offsetWidth - name.clientWidth + name.scrollWidth
+      const rem = parseFloat(getComputedStyle(document.documentElement).fontSize) || 16
+      const capped = Math.min(natural, 14 * rem, 0.45 * width)
+      const gap = parseFloat(getComputedStyle(strip).columnGap) || 0
+      setAlone(capped + gap + model.offsetWidth > width)
+    }
+    const observer = new ResizeObserver(measure)
+    observer.observe(strip)
+    observer.observe(pill)
+    measure()
+    return () => observer.disconnect()
+  }, [ref])
+  return alone
 }
 
 /**
@@ -927,6 +984,20 @@ function QueueCardOf({ entry, ghost, status, concealed, leaving, chip }: { entry
 }
 
 /**
+ * The queue's empty line, focused on a project — the sidebar says it under its list too (SidebarPage), where
+ * it wraps: the name is kept whole on one line (cut short only past the line's width), since a slug broken
+ * at its hyphen ("docs- / portal") no longer reads as a name.
+ */
+const focusedEmptyLine = (name: string | undefined) => (
+  <>
+    Nothing in <span className="inline-block max-w-full truncate align-bottom">{name ?? "this project"}</span> is waiting on you.
+  </>
+)
+
+/** …and showing All projects, admitting the projects this server has not opened, whose queues it cannot see. */
+const allEmptyLine = (unopened: number) => (unopened > 0 ? "No threads awaiting human input in any open project" : "No threads awaiting human input")
+
+/**
  * Inbox zero, showing All projects — the queue empty in every project, admitting the ones this server has
  * not opened, whose queues it cannot see.
  */
@@ -934,9 +1005,7 @@ function EmptyQueues({ unopened }: { unopened: number }) {
   return (
     <div data-xq-empty className="flex flex-col items-center gap-2 pt-2">
       <Inbox size={40} strokeWidth={1.25} className="text-muted-30" />
-      <div className="text-[13px] text-muted-80">
-        {unopened > 0 ? "No threads awaiting human input in any open project" : "No threads awaiting human input"}
-      </div>
+      <div className="text-[13px] text-muted-80">{allEmptyLine(unopened)}</div>
     </div>
   )
 }
