@@ -1,7 +1,7 @@
 import assert from "node:assert/strict"
 import { test } from "node:test"
 import type { BoardSnapshot, ThreadView } from "@frizz/shared"
-import { latestConfirmation, transcriptStaleTime, transcriptWatchdogStep, WATCHDOG_MAX_DEFER_TICKS } from "./hooks.ts"
+import { latestConfirmation, staleOpenHoldStamp, transcriptStaleTime, transcriptWatchdogStep, WATCHDOG_MAX_DEFER_TICKS } from "./hooks.ts"
 
 // The transcript query had no staleTime, so every open re-read the whole transcript — including a return
 // to the thread you just left, which painted from cache in 63ms and then spent 1998ms on a request whose
@@ -38,6 +38,17 @@ test("no marker to gate on means no cache window", () => {
 
 test("an empty cache entry is never served: dataUpdatedAt 0 predates every marker", () => {
   assert.equal(transcriptStaleTime(board([{ id: "cold", lastActivityAt: at(-3_600_000) }]), "cold", 0), 0)
+})
+
+// Opening a thread over a cached copy the board says is behind must not PAINT that copy: it flashed the
+// old tail (a question card long since answered) and then jumped to the current bottom.
+test("staleOpenHoldStamp: hold a moved thread's cached copy until the server answers; serve a calm one", () => {
+  const cached = { data: { messages: [] }, dataUpdatedAt: READ_AT }
+  assert.equal(staleOpenHoldStamp(board([{ id: "moved", lastActivityAt: at(5_000) }]), "moved", cached), READ_AT)
+  assert.equal(staleOpenHoldStamp(board([{ id: "calm", lastActivityAt: at(-5_000) }]), "calm", cached), null)
+  // Nothing cached means nothing to hold back: the ordinary first load already shows its loading state.
+  assert.equal(staleOpenHoldStamp(board([{ id: "moved", lastActivityAt: at(5_000) }]), "moved", undefined), null)
+  assert.equal(staleOpenHoldStamp(board([{ id: "moved", lastActivityAt: at(5_000) }]), "moved", { data: undefined, dataUpdatedAt: 0 }), null)
 })
 
 // ---- the watchdog's notion of "confirmed" (see useTranscript) ----

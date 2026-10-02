@@ -167,6 +167,19 @@ export function transcriptStaleTime(board: BoardSnapshot | null, slug: string, d
   return movedAt > dataUpdatedAt ? 0 : REVISIT_STALE_MS
 }
 
+/**
+ * Whether a view MOUNTING over a cached transcript must hold that copy back until the server answers.
+ * The revisit cache above serves a calm thread instantly; a thread that moved since the copy was
+ * confirmed (staleTime 0, so the mount re-reads) used to PAINT the old copy while that read was in
+ * flight, then swap in the new one — opening a running thread flashed whatever it showed the last time
+ * it was read (a question card from an hour ago, an old tail) and then jumped to the current bottom.
+ * Decided once, at mount, from the same gate: the stamp to wait past, or null to serve the cache.
+ */
+export function staleOpenHoldStamp(board: BoardSnapshot | null, slug: string, cached: { data: unknown; dataUpdatedAt: number } | undefined): number | null {
+  if (!cached || cached.data === undefined) return null
+  return transcriptStaleTime(board, slug, cached.dataUpdatedAt) === 0 ? cached.dataUpdatedAt : null
+}
+
 // The later of the server's last confirmation of a cache entry (`dataUpdatedAt`, as an ISO string for
 // isTranscriptStale) and the newest rendered message's own timestamp. Exported for the watchdog test.
 export function latestConfirmation(dataUpdatedAt: number | undefined, newestRendered: string | undefined): string | undefined {
@@ -255,6 +268,13 @@ export function useTranscript(slug: string, opts: { poll: boolean }) {
   // refetch beyond, nothing for typed-fallback slugs). Mounting this hook is what registers the observer.
   // `poll` retains exactly one meaning: the 1.5s HTTP interval for a RUNNING thread when the socket is
   // down (SSE fallback) — an at-rest thread must never interval-poll.
+
+  // Decided BEFORE useQuery mounts, so the mount's own re-read cannot have stamped the entry yet.
+  const holdRef = useRef<{ slug: string; stamp: number | null; errorAt: number } | null>(null)
+  if (holdRef.current?.slug !== slug) {
+    const cached = qc.getQueryState<TranscriptData>(["transcript", slug])
+    holdRef.current = { slug, stamp: staleOpenHoldStamp(store.board as BoardSnapshot | null, slug, cached), errorAt: cached?.errorUpdatedAt ?? 0 }
+  }
 
   const query = useQuery({
     queryKey: ["transcript", slug],
@@ -346,8 +366,15 @@ export function useTranscript(slug: string, opts: { poll: boolean }) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [slug, opts.poll, socket, transportFallback])
 
+  // Released for good by the first fresh answer — a refetch or a socket push, both stamp dataUpdatedAt —
+  // or by a failed read, after which the old copy beats an endless "Loading…".
+  const hold = holdRef.current
+  if (hold.stamp !== null && (query.dataUpdatedAt !== hold.stamp || query.errorUpdatedAt !== hold.errorAt)) hold.stamp = null
+  const holding = hold.stamp !== null
+
   return {
     ...query,
+    ...(holding ? { data: undefined, isPending: true as const } : {}),
     transportFallback: transportFallback
       ? transportFallback.kind === "payload-too-large"
         ? {
