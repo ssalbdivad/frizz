@@ -4,7 +4,7 @@
 import { spawn } from "node:child_process"
 import { createHash, randomUUID } from "node:crypto"
 import { accessSync, constants as fsConstants, mkdirSync, readFileSync, readdirSync, unlinkSync, writeFileSync } from "node:fs"
-import { delimiter, dirname, isAbsolute, join } from "node:path"
+import { basename, delimiter, dirname, isAbsolute, join } from "node:path"
 import { resolveDetachedDaemonEntry } from "../detached-daemons.ts"
 import type { BrokerRecord, ClaudeBrokerConfig } from "./claude-agent-broker.ts"
 import { claudeBrokerDiagnosticLogPath, describeClaudeBrokerExit, readClaudeBrokerExit } from "./claude-broker-diagnostics.ts"
@@ -91,8 +91,46 @@ export function claudeBrokerSocketPath(stateDir: string, sessionId: string): str
 
 /** The discovery record lives under the project state dir (long paths are fine here). */
 export function claudeBrokerRecordPath(stateDir: string, sessionId: string): string {
+  // Memoised: the board asks for every broker row's record on every assemble (claudeBrokerDaemonAlive),
+  // and the sha256 + join alone were ~300ms of a 40s profile on a 440-session mirror (2026-10-01).
+  const memoKey = `${stateDir}\0${sessionId}`
+  const known = recordPathMemo.get(memoKey)
+  if (known !== undefined) return known
   const key = createHash("sha256").update(sessionId).digest("hex").slice(0, 16)
-  return join(stateDir, "claude-broker", `${key}.json`)
+  const path = join(stateDir, "claude-broker", `${key}.json`)
+  if (recordPathMemo.size >= 20_000) recordPathMemo.clear()
+  recordPathMemo.set(memoKey, path)
+  return path
+}
+const recordPathMemo = new Map<string, string>()
+
+// One directory listing per record directory per SYNCHRONOUS TURN, so a caller asking about hundreds of
+// sessions in one go — the board, once per assemble — pays one readdir rather than one failed open (and
+// the ENOENT exception node builds for it) per row. Almost every row asks about a record that does not
+// exist: a board is mostly history, and a daemon's record lives only as long as the daemon. Measured on a
+// mirror of the maintainer's machine (9 projects, 440 sessions, 6 streaming) on 2026-10-01: the board's
+// liveness probe was 1.3s of readFileSync in a 40s profile — the single largest item in board assembly.
+// A record that appears mid-turn (another process's write) is seen next turn; one deleted mid-turn is
+// still read through liveBrokerRecord, which answers null for it as before.
+let turnListings: Map<string, ReadonlySet<string> | null> | undefined
+function recordListed(recordPath: string): boolean {
+  if (!turnListings) {
+    turnListings = new Map()
+    queueMicrotask(() => { turnListings = undefined })
+  }
+  const dir = dirname(recordPath)
+  let names = turnListings.get(dir)
+  if (names === undefined) {
+    try { names = new Set(readdirSync(dir)) } catch { names = null }
+    turnListings.set(dir, names)
+  }
+  return names !== null && names.has(basename(recordPath))
+}
+
+/** liveBrokerRecord, for a caller probing many sessions at once: an unlisted record is answered from the
+ *  turn's directory listing without opening it. Same answer, same pruning of a stale record. */
+export function liveBrokerRecordListed(recordPath: string): BrokerRecord | null {
+  return recordListed(recordPath) ? liveBrokerRecord(recordPath) : null
 }
 
 /** Why frizz retired a daemon ON PURPOSE, while keeping the conversation. Every one of these ends a
