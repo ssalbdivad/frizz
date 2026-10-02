@@ -26,8 +26,13 @@ test("the pick writes a PREFETCHED command synchronously (no RPC inside the clip
   // the activation-safe async path.
   const menu = readFileSync(fileURLToPath(new URL("./ThreadMenu.tsx", import.meta.url)), "utf8")
   // The menu's open state is controlled (its `m` key opens it from the trigger), so the prefetch lives
-  // in the one named handler both the click and the key go through.
-  assert.match(menu, /const onOpenChange = \(next: boolean\) => \{\s*setOpen\(next\)\s*if \(next && ownSession\) terminalCommand\.prefetch\(\)\s*\}/)
+  // in the one named handler both the click and the key go through. That handler also does other work —
+  // since 2026-10-01 (124aa000) closing it drops the "Open in editor" folder choice — so pin the two
+  // statements that matter inside its body rather than the body's exact shape.
+  const handler = menu.match(/const onOpenChange = \(next: boolean\) => \{\n([\s\S]*?)\n  \}\n/)?.[1]
+  assert.ok(handler, "ThreadMenu's onOpenChange handler should remain discoverable")
+  assert.match(handler, /^\s*setOpen\(next\)$/m)
+  assert.match(handler, /^\s*if \(next && ownSession\) terminalCommand\.prefetch\(\)$/m)
   assert.match(menu, /<Menu open=\{open\} onOpenChange=\{onOpenChange\}>/)
   assert.match(source, /queryClient\.prefetchQuery\(\{\s*queryKey: commandKey/)
   assert.match(source, /const resolved = queryClient\.getQueryData<ResolvedTerminalCommand>\(commandKey\)/)
