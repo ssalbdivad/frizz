@@ -2857,7 +2857,13 @@ try {
       return { before, plain, shift }
     })
     notes.osDropRouting = blocked
-    expect("c23", "VS Code takes an OS drag from the sidebar unless Shift is held: plain, the webview's pointer events go off; Shift, back on", blocked.plain === "none" && blocked.shift === "auto", blocked)
+    // The floor's monitor is older: 1.90.0's (read in its workbench.desktop.main.js) turns the webviews'
+    // pointer events off only for a DRAG_START in the window — a tab or a file dragged inside VS Code —
+    // and has no DRAG/DRAG_OVER handler and no Shift rule, so a drag from the OS reaches the sidebar
+    // plain. 1.140.0's adds both. Releases between the two are not measured; they get 1.140's claim.
+    const [, minor = 0] = version.split(".").map((part) => Number.parseInt(part, 10))
+    if (minor < 91) expect("c23", `VS Code ${version} leaves an OS drag to the sidebar, Shift or not: its drag monitor knows only drags started in the window`, blocked.plain === "auto" && blocked.shift === "auto", blocked)
+    else expect("c23", "VS Code takes an OS drag from the sidebar unless Shift is held: plain, the webview's pointer events go off; Shift, back on", blocked.plain === "none" && blocked.shift === "auto", blocked)
     // The page's half: the drop itself, trusted, carrying the file from disk, on the page's own frame.
     const sessionOf = (f: Frame) => (f as unknown as { client: CDPSession }).client
     const frameSession = sessionOf(await frame())
