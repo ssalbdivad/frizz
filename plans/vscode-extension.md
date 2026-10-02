@@ -207,11 +207,15 @@ the editor has open and what is highlighted, with a visual indicator; a Cursor-s
 the highlighted code into the current prompt as a pill; everything else — the UI, text sizes, shortcuts —
 must match the core app, with a hint wherever the sidebar differs; and no Frizz header.
 
-- **The context bar.** Above each composer in the sidebar, a quiet strip names the file in front and its
-  selection (`r2-private.ts:91-116`, `26 lines`), live from `frizz:editor-context`; a click adds it as a
-  chip (`frizz:add-context` → `frizz:compose`), and the other open files are one more click away. It
+- **The context bar.** Along the top of the thread's reply box and the new-thread box, inside the box (where
+  Cursor and Copilot put their context pills), a quiet strip names the file in front and its selection
+  (`r2-private.ts:91-116`, `26 lines`), live from `frizz:editor-context`: a selection lights up in the
+  accent, a file alone is an outline. A click adds it as a chip (`frizz:add-context` → `frizz:compose`)
+  in THAT box — the page remembers which box asked, since the host answers "front" — and the split
+  control's chevron lists the other open files. With nothing selected it spells out ⌘I / Ctrl+I. It
   shows paths and line numbers only; the text crosses when the human adds it. Nothing is attached
   implicitly — a chip in the box is the only way context rides a message, as in the browser.
+  (components/EditorContextBar.tsx, lib/editorContext.ts.)
 - **⌘I / Ctrl+I in the editor** adds the selection as a chip in the sidebar's prompt and puts the caret
   after it: the core app's own chord for staging a selection (FileViewerPanel's ⌘I), and the chord
   Cursor gives its agent. It replaces the first cut's Ctrl+Alt+P, and fires only with a selection, so

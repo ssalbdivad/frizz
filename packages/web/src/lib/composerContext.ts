@@ -15,6 +15,7 @@
 // dispatching thread's scratch directory — Zed, Copilot and Claude Code all key an inline mention
 // to a grouped tail this way).
 
+import { EMBED_TERMINAL_PATH } from "@frizz/shared"
 import { joinComposerValue, splitComposerValue } from "./imagePaths.ts"
 import { basename, relativeTo } from "./paths.ts"
 
@@ -51,7 +52,16 @@ function escapeRe(text: string): string {
 // A token ends where its label does: the next character may not extend it. `@a.md:3` must not
 // match inside `@a.md:30`, `@a.md:3-4` or `@a.md:3#2`; ordinary punctuation after it (`@a.md:3.`,
 // `@a.md:3,`) is the sentence's, not the token's.
-const TOKEN_BOUNDARY = "(?![0-9#]|-\\d)"
+//
+// A WHOLE-FILE token has no line suffix (`@a.ts`), and it must not match inside the longer labels a
+// file's other references wear either: `@a.ts:12`, `@a.tsx`, `@a.ts.map`, `@terminal-2`. Until
+// 2026-10-01 only digits, `#` and `-<digit>` were excluded, which was enough while nearly every chip
+// carried lines — but the sidebar's open-files menu adds whole files, so `@a.ts` beside `@a.ts:12` is
+// ordinary now, and the prefix match read the whole-file chip as still present after its own text was
+// deleted (never swept, serialized at the other chip's position) and gave a second whole-file chip a
+// needless `#2`. So: no word character, and no `-`, `.` or `:` that a word character follows. A
+// sentence's own `.` or `:` after a token (`see @a.ts.`, `@a.ts: why?`) is still the sentence's.
+const TOKEN_BOUNDARY = "(?![\\w#]|[-.:]\\w)"
 
 /** Whether the prose carries this token as a whole reference (not as the prefix of a longer one). */
 export function hasToken(prose: string, token: string): boolean {
@@ -159,12 +169,32 @@ export function locateInSource(source: string, selected: string): { startLine: n
  * the panel's canonical path is the server's spelling and the worker reads the same one.
  */
 export function contextDisplayPath(path: string, projectDir?: string | null): string {
+  if (isTerminalPath(path)) return path
   return (projectDir && relativeTo(projectDir, path)) || path
 }
 
-function lineLabel(item: { startLine?: number; endLine?: number }): string {
-  if (item.startLine === undefined || item.endLine === undefined) return ""
+/**
+ * A selection made in the editor's TERMINAL, which has no file (embed-protocol.ts
+ * `EMBED_TERMINAL_PATH`). Its chip reads `@terminal` (`@terminal#2` for a second), its definition
+ * `@terminal (terminal):` — no line numbers, which would be the terminal buffer's and mean nothing to
+ * the agent, and never resolved against the project, since `terminal` is a name, not a relative path.
+ */
+export function isTerminalPath(path: string): boolean {
+  return path === EMBED_TERMINAL_PATH
+}
+
+function lineLabel(item: { path?: string; startLine?: number; endLine?: number }): string {
+  if (item.startLine === undefined || item.endLine === undefined || (item.path !== undefined && isTerminalPath(item.path))) return ""
   return item.startLine === item.endLine ? `, line ${item.startLine}` : `, lines ${item.startLine}-${item.endLine}`
+}
+
+/**
+ * Where a staged chip came from, for its hover: `src/a.ts, lines 12-20` — the definition's own
+ * parenthesis, so the hover and what the agent reads agree — or `Terminal` for a terminal selection.
+ */
+export function contextSourceLabel(item: { path: string; startLine?: number; endLine?: number }, projectDir?: string | null): string {
+  if (isTerminalPath(item.path)) return "Terminal"
+  return `${contextDisplayPath(item.path, projectDir)}${lineLabel(item)}`
 }
 
 /**

@@ -4,9 +4,10 @@ import type { AccountBackend, ThreadSkill, ThreadView } from "@frizz/shared"
 import { rpc } from "../api/rpc.ts"
 import { showToast, store } from "../store.ts"
 import { buildMessageWithContext } from "../lib/composerContext.ts"
-import { restoreContextItems, takeContextItems, useStagedContextTokens } from "../lib/stagedContext.ts"
+import { restoreContextItems, takeContextItems, useStagedContextSources, useStagedContextTokens } from "../lib/stagedContext.ts"
 import { useThreadComposerControls } from "../hooks/useThreadComposerControls.tsx"
 import { Composer } from "./Composer.tsx"
+import { EditorContextBar } from "./EditorContextBar.tsx"
 import { useMentionCandidates, useOwnMention } from "../hooks/useMentionCandidates.ts"
 import { LogoutConfirmModal, SignInModal } from "./SignInModal.tsx"
 import { draftKey, draftStore, useDraft, useProjectDir } from "../lib/drafts.ts"
@@ -105,6 +106,7 @@ export function ThreadComposerBox({
   // The staged selections' tokens, painted as chips; deleting a token's text drops its item
   // (lib/stagedContext.ts). Keyed by this draft, so the queue card's copy of the box shows the same.
   const contextTokens = useStagedContextTokens(key, message)
+  const contextSources = useStagedContextSources(key, projectDir)
 
   // INTERRUPT AND SEND is offered only when there is something to interrupt AND a runtime that can be
   // preempted — `runtime === "running"` is exactly "process alive, turn in flight". The backend policy
@@ -198,6 +200,11 @@ export function ThreadComposerBox({
     >
       <Composer
         contextTokens={contextTokens}
+        contextSources={contextSources}
+        // In an editor's sidebar, what the editor has in front, one click from a chip in this box. The
+        // drawer's box only: the queue card's copy of it is one of many on a page, and a bar on each
+        // would be noise.
+        header={surface === "chatComposer" ? <EditorContextBar box={{ key, projectDir, surface }} /> : undefined}
         id={id}
         surface={surface}
         value={message}

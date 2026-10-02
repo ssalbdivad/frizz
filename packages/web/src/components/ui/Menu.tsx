@@ -17,18 +17,22 @@ export function MenuContent({
   align = "end",
   sideOffset = 6,
   aboveDialog = false,
+  collisionPadding,
 }: {
   children: ReactNode
   align?: "start" | "center" | "end"
   sideOffset?: number
   /** Opened from inside the shared z-[200] Dialog, whose backdrop the default z-[110] paints beneath. */
   aboveDialog?: boolean
+  /** Room to keep between the menu and the viewport's edges when it is shifted to fit (Radix's default is 0). */
+  collisionPadding?: number
 }) {
   return (
     <RadixMenu.Portal>
       <RadixMenu.Content
         align={align}
         sideOffset={sideOffset}
+        collisionPadding={collisionPadding}
         className={`${aboveDialog ? OPAQUE_PORTAL_SURFACE_ABOVE_DIALOG_Z : OPAQUE_PORTAL_SURFACE_Z} ${OPAQUE_SURFACE_BASE} min-w-[184px] overflow-hidden rounded-lg p-1`}
       >
         {children}

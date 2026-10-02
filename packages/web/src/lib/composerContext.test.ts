@@ -4,6 +4,7 @@ import {
   buildMessageWithContext,
   contextChipLabel,
   contextDisplayPath,
+  contextSourceLabel,
   hasToken,
   insertTokenIntoProse,
   locateInSource,
@@ -57,6 +58,55 @@ test("a token is only found as a whole reference", () => {
   assert.equal(hasToken("see @guide.md:30", "@guide.md:3"), false)
   assert.equal(hasToken("see @guide.md:3-4", "@guide.md:3"), false)
   assert.equal(hasToken("see @guide.md:3#2", "@guide.md:3"), false)
+})
+
+// A whole-file chip (`@a.ts`, from the sidebar's open files, or a ⌘I selection that could not be
+// located) sits beside the same file's line chips. Its token is a prefix of theirs, and must not be
+// found inside them — or deleting it leaves its item staged, riding the send at the other chip's place.
+test("a whole-file token is not found inside a longer reference to the same file", () => {
+  assert.equal(hasToken("see @a.ts:12 there", "@a.ts"), false)
+  assert.equal(hasToken("see @a.ts:12-20", "@a.ts"), false)
+  assert.equal(hasToken("see @a.tsx", "@a.ts"), false)
+  assert.equal(hasToken("see @a.ts.map", "@a.ts"), false)
+  assert.equal(hasToken("ask @terminal-fix about @terminal_2", "@terminal"), false)
+  // The sentence's own punctuation after a token is still the sentence's.
+  for (const prose of ["see @a.ts.", "see @a.ts, then", "@a.ts: why?", "(@a.ts)", "@a.ts's import", "@a.ts\nnext"]) {
+    assert.equal(hasToken(prose, "@a.ts"), true, prose)
+  }
+  // So a whole-file chip added beside a line chip of the same file is not a needless `#2`…
+  assert.equal(uniqueToken("a.ts", [{ token: "@a.ts:12" }], "@a.ts:12 "), "@a.ts")
+  // …and with both in the prose, each serializes at its own place, and only while its own text is there.
+  const both = [item({ id: 1, token: "@a.ts:12", path: "/repo/a.ts", startLine: 12, endLine: 12, text: "x" }), item({ id: 2, token: "@a.ts", path: "/repo/a.ts", startLine: undefined, endLine: undefined, text: "whole" })]
+  assert.equal(buildMessageWithContext("@a.ts:12 and @a.ts", both, "/repo"), "@a.ts:12 and @a.ts\n\nSelected context:\n\n@a.ts:12 (a.ts, line 12):\n> x\n\n@a.ts (a.ts):\n> whole")
+  assert.equal(buildMessageWithContext("only @a.ts:12", both, "/repo"), "only @a.ts:12\n\nSelected context:\n\n@a.ts:12 (a.ts, line 12):\n> x")
+  assert.deepEqual(splitProseByTokens("@a.ts:12 @a.ts", ["@a.ts", "@a.ts:12"]), [{ text: "@a.ts:12", token: "@a.ts:12" }, { text: " " }, { text: "@a.ts", token: "@a.ts" }])
+})
+
+// A selection made in the editor's terminal (embed-protocol.ts EMBED_TERMINAL_PATH) has no file: it reads
+// `@terminal`, defines as `(terminal)` — never resolved against the project, never with the terminal
+// buffer's line numbers — and the transcript parses it back into the chip it was.
+test("a terminal selection serializes as (terminal) and parses back", () => {
+  const terminal = (over: Partial<ComposerContextItem>) => item({ path: "terminal", token: "@terminal", startLine: undefined, endLine: undefined, text: "$ npm test\nFAIL a.test.ts", ...over })
+  assert.equal(contextChipLabel({ path: "terminal" }), "terminal")
+  assert.equal(contextDisplayPath("terminal", "/repo"), "terminal")
+  // Even handed line numbers, a terminal item does not spell them out.
+  const items = [terminal({ id: 1 }), terminal({ id: 2, token: "@terminal#2", text: "second", startLine: 4, endLine: 9 })]
+  const sent = buildMessageWithContext("why @terminal and @terminal#2", items, "/repo")
+  assert.equal(sent, "why @terminal and @terminal#2\n\nSelected context:\n\n@terminal (terminal):\n> $ npm test\n> FAIL a.test.ts\n\n@terminal#2 (terminal):\n> second")
+  assert.deepEqual(parseSentContext(sent), {
+    body: "why @terminal and @terminal#2",
+    items: [
+      { token: "@terminal", display: "terminal", startLine: undefined, endLine: undefined, text: "$ npm test\nFAIL a.test.ts" },
+      { token: "@terminal#2", display: "terminal", startLine: undefined, endLine: undefined, text: "second" },
+    ],
+  })
+})
+
+test("a chip's hover says where it came from, in the definition's own words", () => {
+  assert.equal(contextSourceLabel({ path: "/repo/docs/guide.md", startLine: 3, endLine: 9 }, "/repo"), "docs/guide.md, lines 3-9")
+  assert.equal(contextSourceLabel({ path: "/repo/docs/guide.md", startLine: 3, endLine: 3 }, "/repo"), "docs/guide.md, line 3")
+  assert.equal(contextSourceLabel({ path: "/elsewhere/a.ts" }, "/repo"), "/elsewhere/a.ts")
+  assert.equal(contextSourceLabel({ path: "terminal", startLine: 2, endLine: 4 }, "/repo"), "Terminal")
 })
 
 test("a token splices at the caret, padding only the sides that would glue to a word", () => {

@@ -5,6 +5,7 @@ import { type AccountBackend, type CreateLazyThreadInput, type DispatchInput } f
 import { rpc } from "../api/rpc.ts"
 import { showToast } from "../store.ts"
 import { Composer } from "./Composer.tsx"
+import { EditorContextBar } from "./EditorContextBar.tsx"
 import { useMentionCandidates } from "../hooks/useMentionCandidates.ts"
 import { GithubTrigger, useGithubTriggerVisible } from "./GithubTrigger.tsx"
 import { ProfileGridSelector } from "./ProfileGridSelector.tsx"
@@ -17,7 +18,7 @@ import { useDispatchProfile, useDraftDispatchPick } from "../hooks/useDispatchPr
 import { handleDialogEscape } from "../lib/selectOverlay.ts"
 import { draftKey, draftStore, useDraft, useProjectDir } from "../lib/drafts.ts"
 import { buildMessageWithContext, type ComposerContextItem } from "../lib/composerContext.ts"
-import { restoreContextItems, stagedItems, takeContextItems, useStagedContextTokens } from "../lib/stagedContext.ts"
+import { restoreContextItems, stagedItems, takeContextItems, useStagedContextSources, useStagedContextTokens } from "../lib/stagedContext.ts"
 import { projectSlug } from "../lib/base-path.ts"
 import { parseAccountAlias } from "../lib/signIn.ts"
 import { PROMPT_CONTROL_TYPOGRAPHY_CLASS } from "../lib/promptControlTypography.ts"
@@ -99,6 +100,7 @@ function PromptForm({
   // the prompt on dispatch exactly as a reply box serializes it (composerContext.ts), so the new thread's
   // first message renders its chips like any later one. The box had no chips until 2026-10-01.
   const contextTokens = useStagedContextTokens(promptKey, prompt)
+  const contextSources = useStagedContextSources(promptKey, projectDir)
   const submittedContextRef = useRef<ComposerContextItem[]>([])
   const [pendingDispatch, setPendingDispatch] = useState<string | null>(null)
   // The new-thread default (shared with the GitHub picker) with this prompt's own pick over it. The
@@ -336,6 +338,8 @@ function PromptForm({
         onSubmit={submit}
         onSaveLazy={submitLazy}
         contextTokens={contextTokens}
+        contextSources={contextSources}
+        header={<EditorContextBar box={{ key: promptKey, projectDir, surface: "newComposer" }} />}
         placeholder="Describe the task…"
         mentionCandidates={mentions}
         minHeight={96}

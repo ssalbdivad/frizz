@@ -2,7 +2,8 @@ import type { EmbedHostMessage } from "@frizz/shared"
 import { store } from "../store.ts"
 import { crossProjectHref } from "./base-path.ts"
 import { boardOrTimeout, composeInto, threadIsThere } from "./editorBridge.ts"
-import { setEditorContext } from "./editorContext.ts"
+import { isTerminalPath } from "./composerContext.ts"
+import { setEditorContext, takePendingAdd } from "./editorContext.ts"
 import { runHostCommand } from "./embedCommand.ts"
 import { repostRoute } from "./embedRoute.ts"
 import { closeSettingsAnimated } from "./overlays.ts"
@@ -20,7 +21,8 @@ import { setHostTheme } from "./theme.ts"
 //    — the relay the extension's webview runs — and only in a shape the contract defines.
 //  - page → host: `frizz:ready` once the page can act on those, and `frizz:key` for the chords the
 //    page left alone. (`frizz:open-file` and `frizz:open-external` leave from the link handlers that
-//    decide them, lib/local-file-links.ts and lib/external-links.ts.)
+//    decide them, lib/local-file-links.ts and lib/external-links.ts; `frizz:add-context` from the
+//    context bar over the sidebar's composers, lib/editorContext.ts.)
 
 export function initEmbedHost(): void {
   if (!embedded() || typeof window === "undefined") return
@@ -85,15 +87,19 @@ async function handle(message: EmbedHostMessage): Promise<void> {
     else spaNavigate(projectViewHref(to.project))
     return
   }
+  // The host answers a context bar's click with a compose aimed at "front"; it goes back to the box whose
+  // bar was clicked (lib/editorContext.ts requestEditorContext). Any other compose keeps its own target.
+  const box = message.target === "front" ? takePendingAdd() : null
   let outcome: Awaited<ReturnType<typeof composeInto>>
   try {
-    outcome = await composeInto(message.item, { target: message.target, focus: message.focus })
+    outcome = await composeInto(message.item, { target: box ? { box } : message.target, focus: message.focus, ...(message.note ? { note: message.note } : {}) })
   } catch (error) {
     outcome = { ok: false, reason: error instanceof Error ? error.message : String(error) }
   }
+  const what = isTerminalPath(message.item.path) ? "the terminal selection" : basename(message.item.path)
   postToHost(
     outcome.ok
       ? { type: "frizz:composed", id: message.id, ok: true }
-      : { type: "frizz:composed", id: message.id, ok: false, error: `Couldn't add ${basename(message.item.path)} to Frizz's prompt box. ${outcome.reason}` },
+      : { type: "frizz:composed", id: message.id, ok: false, error: `Couldn't add ${what} to Frizz's prompt box. ${outcome.reason}` },
   )
 }

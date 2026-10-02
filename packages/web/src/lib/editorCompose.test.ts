@@ -115,3 +115,33 @@ test("the inserted chip sends as the ⌘I serialization the transcript parses ba
     items: [{ token: "@a.ts:12-20", display: "src/a.ts", startLine: 12, endLine: 20, text: "const a = 1\nconst b = 2" }],
   })
 })
+
+// "Ask Frizz to fix" sends the problem's own message as `note` (embed-protocol.ts): the box reads as a
+// request rather than a bare reference, and the human types straight on after it.
+test("a note goes right after the chip, one space either side, and the caret after it", () => {
+  const fix = composeEdit({ value: "", staged: [], item: { ...selection, startLine: 12, endLine: 12 }, projectDir: "/work/alpha", note: "Fix: Cannot find name 'foo'. ts(2304)" })
+  assert.equal(fix.value, "@a.ts:12 Fix: Cannot find name 'foo'. ts(2304) ")
+  assert.equal(fix.caret, fix.value.length)
+  assert.equal(fix.stage?.token, "@a.ts:12")
+  // After what is already in the box, and before its trailing attachment lines.
+  const after = composeEdit({ value: "First this.\n/work/alpha/shot.png", staged: [], item: selection, projectDir: "/work/alpha", note: "  Fix: it  " })
+  assert.equal(after.value, "First this. @a.ts:12-20 Fix: it \n/work/alpha/shot.png")
+  assert.equal(after.caret, "First this. @a.ts:12-20 Fix: it ".length)
+  // A reference with no text takes it the same way; an empty note is no note.
+  assert.equal(composeEdit({ value: "", staged: [], item: { path: "/work/alpha/src/a.ts", startLine: 3 }, projectDir: "/work/alpha", note: "Fix: x" }).value, "`src/a.ts:3` Fix: x ")
+  assert.equal(composeEdit({ value: "", staged: [], item: selection, projectDir: "/work/alpha", note: "   " }).value, "@a.ts:12-20 ")
+  // The note is prose: it rides the send in the body, before the definitions.
+  const sent = buildMessageWithContext(fix.value.trim(), [{ id: 1, ...fix.stage! }], "/work/alpha")
+  assert.equal(parseSentContext(sent)?.body, "@a.ts:12 Fix: Cannot find name 'foo'. ts(2304)")
+})
+
+test("a terminal selection is an @terminal chip with no lines, and a second one is @terminal#2", () => {
+  const term = { path: "terminal", text: "$ npm test\nFAIL", startLine: 40, endLine: 41 }
+  const first = composeEdit({ value: "Why", staged: [], item: term, projectDir: "/work/alpha" })
+  assert.deepEqual(first, { value: "Why @terminal ", caret: 14, stage: { token: "@terminal", path: "terminal", text: "$ npm test\nFAIL" } })
+  const second = composeEdit({ value: first.value, staged: [first.stage!], item: term, projectDir: "/work/alpha" })
+  assert.equal(second.value, "Why @terminal @terminal#2 ")
+  const sent = buildMessageWithContext(second.value.trim(), [{ id: 1, ...first.stage! }, { id: 2, ...second.stage! }], "/work/alpha")
+  assert.equal(sent, "Why @terminal @terminal#2\n\nSelected context:\n\n@terminal (terminal):\n> $ npm test\n> FAIL\n\n@terminal#2 (terminal):\n> $ npm test\n> FAIL")
+  assert.equal(parseSentContext(sent)?.items.length, 2)
+})
