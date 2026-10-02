@@ -26,6 +26,7 @@ const KEYS: Record<string, { key: string; code: string; keyCode: number }> = {
   shift: { key: "Shift", code: "ShiftLeft", keyCode: 16 },
   alt: { key: "Alt", code: "AltLeft", keyCode: 18 },
   escape: { key: "Escape", code: "Escape", keyCode: 27 },
+  ".": { key: ".", code: "Period", keyCode: 190 },
 }
 for (const letter of "abcdefghijklmnopqrstuvwxyz") KEYS[letter] = { key: letter, code: `Key${letter.toUpperCase()}`, keyCode: letter.toUpperCase().charCodeAt(0) }
 
