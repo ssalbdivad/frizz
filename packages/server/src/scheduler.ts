@@ -1,7 +1,7 @@
 import { execFile } from "node:child_process"
 import { promisify } from "node:util"
 import { createHash, randomUUID } from "node:crypto"
-import { PARK_CORRECTION_NAMES_LEAD, PARK_CORRECTION_QUESTION_LEAD, PARK_CORRECTION_RETIRED_LEAD, interruptEndedSubAgentsMessage, type InterruptEndedSubAgent, parkExpiredWakeMessage, parkFinishedWakeMessage, prWatchExpiredWakeMessage, ownWatchExpiredWakeMessage, mergeAnswerMessages, questionAnswerMessage, questionRepliedPast, questionsCancelledWakeMessage, type QuestionAnswer, type QuestionDismissal, RETIRED_AWAITING_REPLACEMENT, retiredAwaitingKindsIn, compactionPromptMessage, goalLimitMessage, limitResumeSteer, limitModelSwitchSteer, formatGithubWakeSteer, GithubWakeItem, type GithubWatchStatus, type GithubIssueStatus, prWatchWakeMessage, issueWatchWakeMessage, shellDoneMessage, restPromptMessage, schedulePromptMessage, timerPromptMessage, signoffNudgeMessage, strayShellsMessage, liveOpsLines, wakeDeliveryToken, wakeTimeHeader, stripWakeTimeHeader, type QuotaSnapshot } from "@frizz/shared"
+import { PARK_CORRECTION_NAMES_LEAD, PARK_CORRECTION_QUESTION_LEAD, PARK_CORRECTION_RETIRED_LEAD, interruptEndedSubAgentsMessage, type InterruptEndedSubAgent, parkExpiredWakeMessage, parkFinishedWakeMessage, prWatchExpiredWakeMessage, ownWatchExpiredWakeMessage, mergeAnswerMessages, questionAnswerMessage, questionRepliedPast, questionsCancelledWakeMessage, type QuestionAnswer, type QuestionDismissal, RETIRED_AWAITING_REPLACEMENT, retiredAwaitingKindsIn, compactionPromptMessage, goalLimitMessage, limitResumeSteer, limitModelSwitchSteer, formatGithubWakeSteer, GithubWakeItem, type GithubWatchStatus, type GithubIssueStatus, prWatchWakeMessage, issueWatchWakeMessage, shellDoneMessage, restPromptMessage, schedulePromptMessage, timerPromptMessage, signoffNudgeMessage, strayShellsMessage, liveOpsLines, isDirectSubAgent, wakeDeliveryToken, wakeTimeHeader, stripWakeTimeHeader, type QuotaSnapshot } from "@frizz/shared"
 import { GITHUB_ISSUE_STATUS_SETTING, GITHUB_STATUS_SETTING, parkExpiresAt, parkIsHonoured, readAwaitingPark, unaccountedItems, type LiveActivity } from "./awaiting.ts"
 import type { PrWatchRow, SessionRow, Storage, ThreadQuestionRow } from "./storage.ts"
 import type { Tailer } from "./tailer.ts"
@@ -2203,9 +2203,16 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
         // fence without going looking for an id it cannot see. Shells are named by `taskId` —
         // the handle the runtime actually showed the worker — because that is the string it will
         // naturally reach for, and the one the fence's own integrity check matches on.
+        //
+        // A RUNNING SHELL SELECTS THE SHORT WAITING VARIANT (signoffWaitingNudgeMessage): the shells
+        // and their fence, already written, instead of sixty lines about unfinished work.
         message: withClock(signoffNudgeMessage({
           shells: (tele.bgShells ?? []).filter((sh) => sh.state === "running").map((sh) => ({ id: sh.taskId ?? sh.id, label: sh.label })),
-          subAgents: (tele.subAgents ?? []).filter((a) => a.state === "running").map((a) => ({ id: a.taskId ?? a.id, label: a.label })),
+          // DIRECT children only — the only ones an `agents:` line can name (board.liveWaitHandles); this
+          // listed a Workflow's own agents and a retired child's grandchildren too, ids a fence that
+          // copied them would have been refused for. In practice this is empty: a running direct child already
+          // parks the thread, so the verdict above never reaches a send behind one.
+          subAgents: (tele.subAgents ?? []).filter((a) => isDirectSubAgent(a) && a.state === "running").map((a) => ({ id: a.taskId ?? a.id, label: a.label })),
           // The other two registries, so the nudge lists EVERY kind an awaiting fence can name rather
           // than the two the fold happens to know about — a worker told about half its work writes half
           // a fence, and the half it left out is not what gets it bumped.

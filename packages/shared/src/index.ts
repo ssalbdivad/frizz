@@ -1690,7 +1690,66 @@ export function liveOpsLines(ops?: SignoffLiveOps): string[] {
   return lines
 }
 
+// ---- THE WAITING VARIANT: A BARE REST WITH A SHELL STILL RUNNING ---------------------------------
+// The long reminder below is written for a worker that STOPPED — it opens on "the task still has parts
+// left, go back to the work" and spends sixty lines on ceilings, documents and questions. Read at a worker
+// that is legitimately waiting on a build it just launched, every line of that is the wrong framing.
+// Measured 2026-09-29 → 10-01: 46 nudges, ~20 of them to a worker resting behind a live shell, sub-agent
+// or Workflow, and every one of those answered with a correct ```awaiting fence 2–3s later — a turn and
+// a wall of "unfinished work" prose spent to produce one fence the worker already meant to write.
+//
+// So a bare rest with a running shell gets THIS: the shells by the id the runtime gave the worker, the
+// fence already written for them, and one line for the case where the work is in fact finished. The
+// worker deletes what it is not waiting on and sets `for:`; nothing else is left to compose, so nothing
+// else can be got wrong.
+//
+// IT IS STILL A NUDGE, NOT A PARK. Treating a live shell as an implicit park was the alternative and it
+// was turned down: 26% of real background launches are servers that never exit (see board.ts on the
+// shell excusal that was tried and reverted on 2026-08-04), so a forgotten dev server would hold its
+// thread out of the queue forever, silently. Asking costs one short turn; inferring costs a lost thread.
+//
+// SHELLS ONLY, because they are the one live thing that does NOT already park. A running direct sub-agent
+// — a `Workflow` run is one too — excuses its parent from the queue on its own, so the nudge does not
+// fire behind one at all (board.signoffNudgeVerdict). Timers, PRs and issues are registrations, not
+// running work; they ride along as lines to add, never pre-filled, because a shell wait and a PR wait
+// are different waits and the fence must name only what this rest is for.
+/** The `for:` the waiting variant pre-fills. A guess, deliberately on the short side: running out only
+ *  brings the worker back to re-check and re-park (uncapped), while a long one leaves a dead shell's
+ *  thread quiet for longer. */
+export const SIGNOFF_WAITING_FOR = "1h"
+
+export function signoffWaitingNudgeMessage(ops: SignoffLiveOps): string {
+  const shells = ops.shells
+  const one = shells.length === 1
+  // An id the fence can carry as-is, or the label QUOTED — the park check answers to a shell's label too,
+  // and a label is free text, so bare it could break the YAML flow list.
+  const handle = (i: { id?: string; label: string }) => i.id ?? JSON.stringify(i.label)
+  const extras = (
+    [["timers", ops.timers], ["prs", ops.prs], ["issues", ops.issues]] as const
+  ).filter(([, items]) => items?.length).map(([key, items]) => `\`${key}: [${items!.map(handle).join(", ")}]\``)
+  return [
+    `${SIGNOFF_NUDGE_MARKER} You rested without a fence, with ${one ? "this background shell" : `${shells.length} background shells`} still running:`,
+    "",
+    ...shells.map((sh) => `- \`${handle(sh)}\` — ${sh.label}`),
+    "",
+    `If you are waiting on ${one ? "it" : "them"}, end your next message with this fence${one ? "" : " (keep only the ids you are waiting on)"}, setting \`for:\` to how long it should take:`,
+    "",
+    "```awaiting",
+    `shells: [${shells.map(handle).join(", ")}]`,
+    `for: ${SIGNOFF_WAITING_FOR}`,
+    "---",
+    "What is running and what it gates, in one sentence.",
+    "```",
+    ...(extras.length ? ["", `Add a line only if this rest waits on these too: ${extras.join(", ")}.`] : []),
+    "",
+    `If the work is finished and ${one ? "the shell is" : "they are"} only left running, end with \`\`\`done instead; if work is left, do it now.`,
+  ].join("\n")
+}
+
+/** The sign-off nudge for one fenceless rest: the short waiting variant when a background shell is still
+ *  running, the full protocol when nothing is. */
 export function signoffNudgeMessage(ops?: SignoffLiveOps): string {
+  if (ops?.shells.length) return signoffWaitingNudgeMessage(ops)
   const lines = liveOpsLines(ops)
   if (lines.length) {
     lines.push("", "An ```awaiting fence names only what you are ACTUALLY waiting on, one such list per kind, plus")

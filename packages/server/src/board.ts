@@ -706,6 +706,16 @@ export function signoffNudgeVerdict(
     facts.replyWaitArmed() ||
     facts.threadMessageInFlight?.() === true
   ) return "signed-off"
+  // A RUNNING CHILD ALREADY PARKS, so there is no sign-off to ask for (2026-10-02). The queue rule excuses
+  // a fenceless rest behind a direct sub-agent — a `Workflow` run is one — because its return re-invokes
+  // the parent within minutes, and the worker contract tells it as much ("a sub-agent needs neither,
+  // because a running child parks you on its own"). This guard used to be missing, so the nudge told a
+  // worker the contract had just excused that it rested without a fence, about a rest that was never in
+  // the queue; ~20 of 46 nudges over 2026-09-29..10-01 went to a worker waiting on a shell, sub-agent or
+  // Workflow. Ineligible, not signed-off: a child is not a sign-off, so it gives no allowance back, and
+  // the rest the child comes back to is judged on its own. A shell does NOT get this — see
+  // signoffWaitingNudgeMessage in @frizz/shared for why it is asked instead.
+  if (hasLiveBackgroundWork(tele)) return "ineligible"
   if (tele.pendingAsk || tele.permPrompt) return "ineligible"
   if (tele.lastAssistantAllDone) return "ineligible"
   if ((row.signoff_nudges ?? 0) >= SIGNOFF_NUDGE_MAX) return "ineligible"

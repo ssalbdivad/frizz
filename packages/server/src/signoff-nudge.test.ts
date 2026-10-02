@@ -710,3 +710,116 @@ test("an armed Goal does not silence the reminder — the reminder is what lands
     assert.match(reminder, /```awaiting/)
   } finally { h.close() }
 })
+
+// ---- A REST WITH LIVE BACKGROUND WORK (2026-10-02) ------------------------------------------------
+// Over 2026-09-29..10-01, ~20 of 46 nudges went to a worker resting behind a running shell, sub-agent or
+// Workflow, and each answered with a correct ```awaiting fence 2–3s later — a turn and sixty lines of
+// "unfinished work" prose to produce one fence. Two changes, pinned here: a running direct child (a
+// Workflow is one) already parks, so it draws no nudge at all; a running shell does NOT park — a
+// forgotten dev server would hide its thread forever — so it draws a SHORT nudge naming the shell, with
+// its fence written out. A rest with nothing running keeps the long protocol.
+const shell = (over: Record<string, unknown> = {}) => ({ label: "nub run typecheck", startedAt: "2026-08-12T00:00:00.000Z", state: "running", id: "toolu_shell1", taskId: "bzvtnt3ig", ...over })
+const child = (over: Record<string, unknown> = {}) => ({ label: "scout the tailer", startedAt: "2026-08-12T00:00:00.000Z", state: "running", id: "toolu_agent1", taskId: "a01b2d20b32feab11", ...over })
+
+test("a rest behind a running shell gets the short variant: the shell by its runtime id, and its fence written out", async () => {
+  const h = nudger({ bgShells: [shell()] } as Partial<SessionTelemetry>)
+  try {
+    await h.s.tick()
+    assert.equal(h.nudges().length, 1)
+    const msg = h.nudges()[0].message
+    assert.ok(msg.startsWith("**This message is from frizz, not from the human.**"), "the transcript collapses it on this marker")
+    assert.match(msg, /^- `bzvtnt3ig` — nub run typecheck$/m, "led by the shell, named by the id the runtime showed the worker")
+    assert.match(msg, /```awaiting\nshells: \[bzvtnt3ig\]\nfor: 1h\n---\n/, "the fence, ready to copy")
+    assert.match(msg, /```done instead/, "and the way out when the work is in fact finished")
+    // NOT the long protocol: none of its sections, and nowhere near its length.
+    assert.doesNotMatch(msg, /DECIDE RATHER THAN ASK|THE FENCE IS NOT WHAT YOU OWE|STILL OWED|DO NOT REPEAT YOURSELF/)
+    assert.ok(msg.split("\n").length < 20, `short: ${msg.split("\n").length} lines`)
+  } finally { h.close() }
+})
+
+test("the fence the short variant hands over is one the real park check honours", async () => {
+  const { signoffNudgeMessage } = await import("@frizz/shared")
+  const { parseSignalFence } = await import("./tailer.ts")
+  const { hasDeclaredBackgroundPark } = await import("./board.ts")
+  const shells = [shell(), shell({ id: "toolu_shell2", taskId: "b7xq2pp0k", label: "vite dev" })]
+  const msg = signoffNudgeMessage({ shells: shells.map((s) => ({ id: s.taskId, label: s.label })), subAgents: [] })
+  // The worker's reply: the fence exactly as handed over.
+  const fence = parseSignalFence(`Waiting on both.\n\n${msg.slice(msg.indexOf("```awaiting"), msg.indexOf("```", msg.indexOf("```awaiting") + 3) + 3)}`)
+  assert.equal(fence?.kind, "awaiting")
+  const tele = { lastFence: fence, bgShells: shells, subAgents: [], lastAssistantAt: "2026-08-12T00:00:00.000Z" } as unknown as SessionTelemetry
+  assert.equal(hasDeclaredBackgroundPark(tele, Date.parse("2026-08-12T00:01:00.000Z")), true)
+  // Negative control: the same fence once one of the shells has exited is refused.
+  assert.equal(hasDeclaredBackgroundPark({ ...tele, bgShells: [shells[0]] } as SessionTelemetry, Date.parse("2026-08-12T00:01:00.000Z")), false)
+})
+
+test("the short variant offers armed timers and watched PRs as lines to add, never pre-filled into the fence", async () => {
+  const { signoffNudgeMessage } = await import("@frizz/shared")
+  const msg = signoffNudgeMessage({
+    shells: [{ id: "bzvtnt3ig", label: "nub run test" }],
+    subAgents: [],
+    timers: [{ id: "tmr_a1b2c3d4e5f6", label: "re-check the deploy" }],
+    prs: [{ id: "acme/app#391", label: "acme/app#391" }],
+  })
+  const fence = msg.slice(msg.indexOf("```awaiting"), msg.indexOf("```", msg.indexOf("```awaiting") + 3))
+  assert.doesNotMatch(fence, /timers:|prs:/, "a shell wait and a PR wait are different waits")
+  assert.match(msg, /`timers: \[tmr_a1b2c3d4e5f6\]`, `prs: \[acme\/app#391\]`/)
+  // A shell with no id falls back to its label, QUOTED — the park check answers to a label, and a bare
+  // one with a comma or colon would break the YAML list.
+  const bare = signoffNudgeMessage({ shells: [{ label: "sleep 600, then poll: CI" }], subAgents: [] })
+  assert.match(bare, /shells: \["sleep 600, then poll: CI"\]/)
+})
+
+test("a stale shell is not live work: the rest gets the long protocol", async () => {
+  const h = nudger({ bgShells: [shell({ state: "stale" })] } as Partial<SessionTelemetry>)
+  try {
+    await h.s.tick()
+    assert.equal(h.nudges().length, 1)
+    assert.match(h.nudges()[0].message, /DECIDE RATHER THAN ASK/)
+  } finally { h.close() }
+})
+
+for (const [what, agents] of [
+  ["a running sub-agent", [child()]],
+  ["a running Workflow", [child({ label: "Workflow: review", workflow: true })]],
+  ["a running sub-agent beside a running shell", [child()]],
+] as Array<[string, unknown[]]>) {
+  test(`${what} already parks the rest, so it is not nudged — and the allowance is neither spent nor given back`, async () => {
+    const h = nudger({ subAgents: agents, bgShells: what.includes("shell") ? [shell()] : [] } as Partial<SessionTelemetry>)
+    try {
+      h.storage.countSignoffNudge(h.slug, "signoff:2026-08-11T00:00:00.000Z")
+      await h.s.tick()
+      await h.s.tick()
+      assert.deepEqual(h.nudges(), [])
+      assert.equal(h.storage.getSession(h.slug)?.signoff_nudges, 1, "a child is not a sign-off")
+    } finally { h.close() }
+  })
+}
+
+test("a Workflow's own agents and a retired child's grandchildren do not park, and are never offered as `agents:`", async () => {
+  // depth 2 — not a direct child, so neither the queue excusal nor the park check answers to it.
+  const h = nudger({ subAgents: [child({ id: "wf-agent-1", taskId: undefined, depth: 2, parentId: "toolu_gone" })] } as Partial<SessionTelemetry>)
+  try {
+    await h.s.tick()
+    assert.equal(h.nudges().length, 1)
+    assert.doesNotMatch(h.nudges()[0].message, /wf-agent-1|agents: \[/)
+  } finally { h.close() }
+})
+
+test("the short variant spends the same consecutive allowance as the long one", async () => {
+  let spokeAt = "2026-08-12T00:01:00.000Z"
+  const h = nudger({
+    lastUserAt: "2026-08-12T00:00:00.000Z",
+    bgShells: [shell()],
+    get lastAssistantAt() { return spokeAt },
+    get lastActivityAt() { return spokeAt },
+  } as Partial<SessionTelemetry>)
+  try {
+    await h.s.tick()
+    spokeAt = "2026-08-12T00:02:00.000Z"
+    await h.s.tick()
+    spokeAt = "2026-08-12T00:03:00.000Z"
+    await h.s.tick()
+    assert.equal(h.nudges().length, 2, "capped at 2 consecutive")
+    assert.ok(h.nudges().every((n) => n.message.includes("shells: [bzvtnt3ig]")))
+  } finally { h.close() }
+})
