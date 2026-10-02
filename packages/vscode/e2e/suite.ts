@@ -812,7 +812,17 @@ const steps: Step[] = [
       try {
         terminal.show()
         terminal.sendText("echo frizz-from-the-terminal")
-        await sleep(1_500)
+        // The echo's output, not a fixed beat: VS Code holds a new terminal until it has resolved the
+        // user's shell environment, which took over 10s on a loaded machine ("ptyHost was unable to resolve
+        // shell environment"), and 1.5s then selected an empty terminal. Read through the clipboard, which
+        // is the human's again before the step's own reading starts.
+        await terminal.processId
+        await until("the echo in the terminal", async () => {
+          await vscode.commands.executeCommand("workbench.action.terminal.selectAll")
+          await vscode.commands.executeCommand("workbench.action.terminal.copySelection")
+          return /frizz-from-the-terminal\s*\n.*frizz-from-the-terminal/su.test(await vscode.env.clipboard.readText())
+        }, 30_000)
+        await vscode.env.clipboard.writeText(clipboard)
         await vscode.commands.executeCommand("workbench.action.terminal.selectAll")
         const from = await received()
         const composed = await vscode.commands.executeCommand<EditorComposed | undefined>("frizz.addTerminalSelection")
