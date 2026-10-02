@@ -82,6 +82,8 @@ export interface SidebarSnapshot {
   description?: string
   /** What `frizz.sidebarView` was set to, "" for none. */
   view: string
+  /** The page's address for what it shows, from its last `frizz:route`. */
+  href?: string
   /** Page messages as handled: the type, and what came of it (a command run, "ignored", "opened", "missing"…). */
   events: { type: string; outcome: string }[]
 }
@@ -103,6 +105,8 @@ export interface Sidebar {
   /** Post a compose to the page and wait for its answer; undefined when it was not ready or did not answer within `ms`. */
   compose(input: Omit<EmbedComposeMessage, "type" | "id">, ms: number): Promise<EmbedComposedMessage | undefined>
   navigate(to: EmbedNavigateMessage["to"]): Promise<boolean>
+  /** The page's address for what the view shows (its last `frizz:route`), while it is in sight; else undefined. */
+  href(): string | undefined
   /** Post to the page if it is ready; false if it is not, or the post failed. */
   post(message: EmbedEditorContextMessage | EmbedCommandMessage): Promise<boolean>
   /** Called with true when the page in the frame says it is ready, and false when that page is gone. */
@@ -115,6 +119,10 @@ export function registerSidebar(api: Vscode, context: vscode.ExtensionContext, h
   /** `origin project` of the page in the frame; a change to either is a different page. */
   let framedKey: string | undefined
   let frameUrl: string | undefined
+  /** The origin of the page in the frame — the only one a route's address may be on. */
+  let frameOrigin: string | undefined
+  /** The page's address for what it shows, from its last route (⋯ Open in browser opens it). */
+  let routeHref: string | undefined
   let message: string | undefined
   let ready = false
   let hinted = false
@@ -179,6 +187,7 @@ export function registerSidebar(api: Vscode, context: vscode.ExtensionContext, h
       view.title = route?.title || undefined
       view.description = route?.description || undefined
     }
+    routeHref = route?.href
     const next = route?.view ?? ""
     if (next === routeView) return
     routeView = next
@@ -188,6 +197,7 @@ export function registerSidebar(api: Vscode, context: vscode.ExtensionContext, h
   function showMessage(text: string, actions: readonly ViewAction[]): void {
     framedKey = undefined
     frameUrl = undefined
+    frameOrigin = undefined
     setReady(false)
     settle(false)
     if (!view || text === message) return
@@ -233,6 +243,7 @@ export function registerSidebar(api: Vscode, context: vscode.ExtensionContext, h
     setReady(false)
     message = undefined
     frameUrl = target.url
+    frameOrigin = target.origin
     view.webview.html = frameDocument({ nonce: nonce(), url: target.url, origin: target.origin })
     readyTimer = setTimeout(() => {
       host.log.warn(`The sidebar's page didn't say it was ready within ${READY_HINT_MS / 1000}s.`)
@@ -311,7 +322,7 @@ export function registerSidebar(api: Vscode, context: vscode.ExtensionContext, h
       return
     }
     if (!("page" in envelope) || !frameUrl) return
-    const page = parsePageMessage(envelope.page)
+    const page = parsePageMessage(envelope.page, frameOrigin)
     if (!page) {
       const type = (envelope.page as { type?: unknown } | null)?.type
       record(typeof type === "string" ? type.slice(0, 64) : typeof envelope.page, "ignored")
@@ -341,6 +352,7 @@ export function registerSidebar(api: Vscode, context: vscode.ExtensionContext, h
           view = undefined
           framedKey = undefined
           frameUrl = undefined
+          frameOrigin = undefined
           message = undefined
           setReady(false)
           settle(false)
@@ -411,6 +423,7 @@ export function registerSidebar(api: Vscode, context: vscode.ExtensionContext, h
     async navigate(to) {
       return ready && (await post({ type: "frizz:navigate", to }))
     },
+    href: () => (ready && view?.visible ? routeHref : undefined),
     async post(message) {
       return ready && (await post(message))
     },
@@ -428,6 +441,7 @@ export function registerSidebar(api: Vscode, context: vscode.ExtensionContext, h
       ...(view?.title ? { title: view.title } : {}),
       ...(view?.description ? { description: view.description } : {}),
       view: routeView,
+      ...(routeHref ? { href: routeHref } : {}),
       events: [...events],
     }),
   }

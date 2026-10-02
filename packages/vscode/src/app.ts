@@ -199,8 +199,13 @@ export function activateFrizz(api: Vscode, context: vscode.ExtensionContext): Fr
     }
     const uri = api.Uri.file(message.path)
     if (entry.isDirectory()) {
-      await api.commands.executeCommand("revealInExplorer", uri)
-      await focusWindow()
+      // In the explorer when the window has it; a folder outside every one of its folders (a thread's
+      // worktree elsewhere, another project) has nothing to reveal it in, and revealing it did nothing
+      // visible — so it opens in a window of its own, as `code <folder>` would.
+      if (api.workspace.getWorkspaceFolder(uri)) {
+        await api.commands.executeCommand("revealInExplorer", uri)
+        await focusWindow()
+      } else await api.commands.executeCommand("vscode.openFolder", uri, { forceNewWindow: true })
       return { ok: true }
     }
     await api.commands.executeCommand("vscode.open", uri)
@@ -692,8 +697,13 @@ export function activateFrizz(api: Vscode, context: vscode.ExtensionContext): Fr
     // The page needs no editor connection: a Frizz that answered discovery but refused the socket (an
     // older Frizz, a version mismatch) still serves its page.
     const origin = connection.origin ?? found?.origin
-    if (origin) openUrl(projectUrl(origin, windowProject()))
-    else showNotConnected()
+    if (!origin) return showNotConnected()
+    // What the sidebar shows, when it is in sight — a thread up in it opens as that thread — on this
+    // window's own address for Frizz (under a remote window the frame's is the forwarded one); else this
+    // window's project.
+    const shown = sidebar.href()
+    const page = shown ? new URL(shown) : undefined
+    openUrl(page ? new URL(`${page.pathname}${page.search}`, origin).toString() : projectUrl(origin, windowProject()))
   }
 
   context.subscriptions.push(

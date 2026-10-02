@@ -74,6 +74,21 @@ test("every page message the contract names is taken, with only its own fields",
     description: "Ready",
   })
   assert.deepEqual(parsePageMessage({ type: "frizz:route", view: "queue", title: "All projects", description: "" }), { type: "frizz:route", view: "queue", title: "All projects" })
+  assert.deepEqual(parsePageMessage({ type: "frizz:open-external", url: "mailto:someone@example.com?subject=Hi" }), { type: "frizz:open-external", url: "mailto:someone@example.com?subject=Hi" })
+})
+
+test("a route's address is kept only on the frame's own origin, and the route without it otherwise", () => {
+  const origin = "http://127.0.0.1:9393"
+  const route = { type: "frizz:route", view: "thread", title: "Split the constants" }
+  assert.deepEqual(parsePageMessage({ ...route, href: "http://127.0.0.1:9393/all/acme-api/thread/split-constants" }, origin), {
+    ...route,
+    href: "http://127.0.0.1:9393/all/acme-api/thread/split-constants",
+  })
+  for (const href of ["https://evil.example/x", "http://127.0.0.1:9394/", "http://localhost:9393/", "javascript:alert(1)", "/all/acme-api", 5]) {
+    assert.deepEqual(parsePageMessage({ ...route, href }, origin), route, String(href))
+  }
+  // No origin to check it against: never kept.
+  assert.deepEqual(parsePageMessage({ ...route, href: "http://127.0.0.1:9393/" }), route)
 })
 
 test("anything else from the page is nothing: unknown types, wrong shapes, other versions, non-web links", () => {
@@ -101,6 +116,7 @@ test("anything else from the page is nothing: unknown types, wrong shapes, other
     { type: "frizz:open-external", url: "command:workbench.action.terminal.new" },
     { type: "frizz:open-external", url: "vscode://ssalbdivad.frizz-vscode/x" },
     { type: "frizz:open-external", url: "not a url" },
+    { type: "frizz:open-external", url: "mailto:" },
     { type: "frizz:key", key: "p", code: "KeyP", ctrl: true },
     { type: "frizz:key", key: "p", code: "KeyP", ctrl: 1, meta: false, shift: false, alt: false },
     { type: "frizz:add-context" },

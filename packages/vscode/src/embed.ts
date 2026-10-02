@@ -77,8 +77,9 @@ const MAX_FIELD = 8192
  * A page → host message, checked field by field — the relay already took it only from its own frame at
  * Frizz's origin, and this is the second check the contract asks for. Anything unknown, misshapen or out
  * of bounds is `undefined`, which the sidebar ignores. Only the fields the contract names are kept.
+ * `origin` is the frame's: a route's `href` is kept only on it (otherwise the route is kept without it).
  */
-export function parsePageMessage(value: unknown): EmbedPageMessage | undefined {
+export function parsePageMessage(value: unknown, origin?: string): EmbedPageMessage | undefined {
   if (!isRecord(value) || typeof value.type !== "string") return undefined
   switch (value.type) {
     case "frizz:ready":
@@ -123,7 +124,8 @@ export function parsePageMessage(value: unknown): EmbedPageMessage | undefined {
       if (view !== "queue" && view !== "thread" && view !== "settings" && view !== "other") return undefined
       if (typeof title !== "string" || title.length > MAX_TITLE) return undefined
       if (description !== undefined && (typeof description !== "string" || description.length > MAX_TITLE)) return undefined
-      return { type: "frizz:route", view, title, ...(description ? { description } : {}) }
+      const href = pageHref(value.href, origin)
+      return { type: "frizz:route", view, title, ...(description ? { description } : {}), ...(href ? { href } : {}) }
     }
   }
   return undefined
@@ -132,7 +134,27 @@ export function parsePageMessage(value: unknown): EmbedPageMessage | undefined {
 /** A title or its reading longer than this is not one the title row could show anyway. */
 const MAX_TITLE = 500
 
-/** An http(s) URL with a host, normalized, or undefined: `javascript:`, `file:`, `command:` and the like never reach `openExternal`. */
+/**
+ * A route's address for ⋯ Open in browser: a page on the frame's own origin, normalized, or undefined — the
+ * page cannot make that menu item open anywhere else. Optional on the wire: a page from before it sends none.
+ */
+function pageHref(value: unknown, origin: string | undefined): string | undefined {
+  if (typeof value !== "string" || !origin || value.length > MAX_FIELD) return undefined
+  let url: URL
+  try {
+    url = new URL(value)
+  } catch {
+    return undefined
+  }
+  return url.origin === origin ? url.toString() : undefined
+}
+
+/**
+ * An http(s) URL with a host, or a `mailto:` with an address, normalized, or undefined: `javascript:`,
+ * `file:`, `command:` and the like never reach `openExternal`. A mailto is the one scheme past the web's,
+ * because a mail link in a transcript is a link the human clicked, and the sandboxed frame cannot open
+ * the mail app itself.
+ */
 export function webUrl(text: string): string | undefined {
   let url: URL
   try {
@@ -140,6 +162,7 @@ export function webUrl(text: string): string | undefined {
   } catch {
     return undefined
   }
+  if (url.protocol === "mailto:") return url.pathname ? url.toString() : undefined
   if ((url.protocol !== "http:" && url.protocol !== "https:") || !url.hostname) return undefined
   return url.toString()
 }
