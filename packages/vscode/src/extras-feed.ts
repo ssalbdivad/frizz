@@ -14,7 +14,10 @@
 // adding it borrows the clipboard for the terminal's own "Copy Last Command" and "Copy Last Command
 // Output" (shell integration's commands since 1.79), putting the human's clipboard back after, as the
 // terminal selection's entry does (app.ts readTerminalSelection). The 1.93 API is read off `window`
-// untyped, since @types/vscode is pinned to the manifest's floor.
+// untyped, since @types/vscode is pinned to the manifest's floor — and only on 1.93 or later, inside a
+// try: before 1.93 the same names are there as a PROPOSED API, which throws when an extension that has
+// not declared it subscribes, so a presence check passed on 1.90 and the subscription then killed the
+// extension's activation (the e2e on the oldest VS Code, 2026-10-02).
 //
 // Only `import type` from vscode, like app.ts.
 
@@ -67,9 +70,27 @@ export interface ExtrasFeed {
   last(): EmbedEditorExtrasMessage | undefined
 }
 
+/** VS Code 1.93 or later: shell integration's command events are the stable API's. */
+export function hasShellExecutions(version: string): boolean {
+  const [major = 0, minor = 0] = version.split(".").map((part) => Number.parseInt(part, 10))
+  return major > 1 || (major === 1 && minor >= 93)
+}
+
+/** Subscribe to shell integration's command events; false where this VS Code does not give them to extensions. */
+function subscribeShellExecutions(api: Vscode, context: vscode.ExtensionContext, on: { start(event: ShellExecutionEvent): void; end(event: ShellExecutionEvent): void }): boolean {
+  if (!hasShellExecutions(api.version)) return false
+  try {
+    const shell = api.window as unknown as ShellIntegrationWindow
+    if (!shell.onDidStartTerminalShellExecution || !shell.onDidEndTerminalShellExecution) return false
+    context.subscriptions.push(shell.onDidStartTerminalShellExecution(on.start), shell.onDidEndTerminalShellExecution(on.end))
+    return true
+  } catch {
+    return false
+  }
+}
+
 export function registerExtrasFeed(api: Vscode, context: vscode.ExtensionContext, host: ExtrasHost): ExtrasFeed {
-  const shell = api.window as unknown as ShellIntegrationWindow
-  const captures = Boolean(shell.onDidStartTerminalShellExecution && shell.onDidEndTerminalShellExecution)
+  let captures = false
   /** Each terminal's command in flight and its last finished one, and the terminal that finished one last. */
   const running = new Map<vscode.Terminal, Captured>()
   const finished = new Map<vscode.Terminal, Captured>()
@@ -161,23 +182,21 @@ export function registerExtrasFeed(api: Vscode, context: vscode.ExtensionContext
     }),
     { dispose: () => clearTimeout(timer) },
   )
-  if (captures) {
-    context.subscriptions.push(
-      shell.onDidStartTerminalShellExecution!((event) => capture(event)),
-      shell.onDidEndTerminalShellExecution!((event) => {
-        // Kept as it is now: `read()` may still be delivering its last chunks, which land in the same
-        // entry, and the text is joined only when the human adds it.
-        const entry = running.get(event.terminal)
-        if (entry && entry.command === event.execution.commandLine.value) {
-          running.delete(event.terminal)
-          if (event.exitCode !== undefined) entry.exitCode = event.exitCode
-          finished.set(event.terminal, entry)
-          latest = event.terminal
-        }
-        schedule()
-      }),
-    )
-  }
+  captures = subscribeShellExecutions(api, context, {
+    start: (event) => capture(event),
+    end(event) {
+      // Kept as it is now: `read()` may still be delivering its last chunks, which land in the same
+      // entry, and the text is joined only when the human adds it.
+      const entry = running.get(event.terminal)
+      if (entry && entry.command === event.execution.commandLine.value) {
+        running.delete(event.terminal)
+        if (event.exitCode !== undefined) entry.exitCode = event.exitCode
+        finished.set(event.terminal, entry)
+        latest = event.terminal
+      }
+      schedule()
+    },
+  })
   host.onReady((ready) => {
     sent = undefined
     if (ready) void send(true)

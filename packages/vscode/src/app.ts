@@ -341,7 +341,9 @@ export function activateFrizz(api: Vscode, context: vscode.ExtensionContext): Fr
     shownNotifications.push(text)
     log.info(`Told you: ${text}`)
     void api.window.showInformationMessage(text, "Open").then((choice) => {
-      if (choice === "Open") void openAttention(one)
+      if (choice !== "Open") return
+      log.info(`Opening ${one ? one.slug : "the queue"} from the notification.`)
+      void openAttention(one)
     })
   }
 

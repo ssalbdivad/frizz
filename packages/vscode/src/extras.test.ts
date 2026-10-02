@@ -82,3 +82,12 @@ test("the menu is told counts and a one-line command, and only what there is to 
   assert.deepEqual(extrasMessage({ terminal: {} }), { type: "frizz:editor-extras", terminal: {} })
   assert.equal(extrasMessage({ terminal: { command: "x".repeat(1000) } }).terminal!.command!.length, EMBED_MAX_COMMAND)
 })
+
+test("shell integration's command events are used from VS Code 1.93 on; before, they are a proposal that throws", async () => {
+  const { hasShellExecutions } = await import("./extras-feed.ts")
+  assert.equal(hasShellExecutions("1.90.0"), false)
+  assert.equal(hasShellExecutions("1.92.2"), false)
+  assert.equal(hasShellExecutions("1.93.0"), true)
+  assert.equal(hasShellExecutions("1.140.0-insider"), true)
+  assert.equal(hasShellExecutions("2.0.0"), true)
+})
