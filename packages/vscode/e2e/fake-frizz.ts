@@ -3,7 +3,7 @@
 //
 //   GET  /_frizz/health                      { ok, bootId }
 //   /_frizz/<projectId>/rpc/<proc>           dispatchPreferencesGet, dispatch, board, followUp
-//   WS   /_frizz/editor                      hello → welcome (naming "editor-state", as the real one does)
+//   WS   /_frizz/editor                      hello → welcome (naming the features the real one does)
 //                                            + projects; compose → composed; results and editor frames recorded
 //   GET  /                                   a fake PAGE that speaks the sidebar's embed contract
 //                                            (embed-protocol.ts): says frizz:ready, answers frizz:compose
@@ -23,6 +23,10 @@
 //   POST /__e2e/workbench {expression}       evaluate an expression in the workbench page — what the
 //                                            title row shows
 //   POST /__e2e/click     {selector}         click an element of the workbench with a real mouse
+//   POST /__e2e/attention {message}          send an `attention` frame (a thread that needs the human) to
+//                                            the newest editor socket, as the real server picks one window
+//   POST /__e2e/features  {features, ready}  what the next welcome names, and whether the page says it is
+//                                            ready — `[]` and false is a Frizz from before the sidebar
 //
 // and two the fake page itself calls: POST /__e2e/page-event (what it received, recorded in `page`) and
 // GET /__e2e/page-next (the messages it was told to post).
@@ -83,7 +87,7 @@ const FAKE_PAGE = `<!doctype html>
       parent.postMessage({ type: "frizz:composed", id: data.id, ok: answer === "ok", ...(answer === "ok" ? {} : { error: "The fake page refused it." }) }, "*")
     }
   })
-  parent.postMessage({ type: "frizz:ready", v: 1 }, "*")
+  if (!document.body.dataset.mute) parent.postMessage({ type: "frizz:ready", v: 1 }, "*")
   ;(async () => {
     for (;;) {
       try {
@@ -109,6 +113,8 @@ export class FakeFrizz {
   readonly log: FakeLog = { frames: [], refused: [], rpc: [], origins: [], page: { loads: [], received: [] } }
   #pageOutbox: unknown[] = []
   #pageAnswer: "ok" | "refuse" | "silent" = "ok"
+  #features: string[] = ["editor-state", "sidebar", "attention"]
+  #pageReady = true
   readonly #server: Server
   readonly #wss = new WebSocketServer({ noServer: true, maxPayload: EDITOR_MAX_PAYLOAD_BYTES })
   readonly #sockets: WebSocket[] = []
@@ -174,7 +180,7 @@ export class FakeFrizz {
       const frame = decoded as EditorClientMessage
       this.log.frames.push(frame)
       if (frame.t === "hello") {
-        this.#send(ws, { t: "welcome", v: 1, bootId: "fake-boot", features: ["editor-state"] })
+        this.#send(ws, { t: "welcome", v: 1, bootId: "fake-boot", features: [...this.#features] })
         this.#send(ws, { t: "projects", projects: this.projects })
       } else if (frame.t === "compose") {
         this.#send(ws, { t: "composed", id: frame.id, ok: true })
@@ -218,6 +224,16 @@ export class FakeFrizz {
         case "/__e2e/page-answer":
           this.#pageAnswer = input.answer
           return json(200, { ok: true })
+        case "/__e2e/features":
+          this.#features = input.features as string[]
+          this.#pageReady = input.ready !== false
+          return json(200, { ok: true })
+        case "/__e2e/attention": {
+          const ws = this.#sockets.at(-1)
+          if (!ws) return json(409, { error: "no editor connected" })
+          this.#send(ws, { t: "attention", ...input.message })
+          return json(200, { ok: true })
+        }
         case "/__e2e/press":
         case "/__e2e/click":
         case "/__e2e/workbench": {
@@ -258,7 +274,7 @@ export class FakeFrizz {
     if (request.method === "GET" && url.pathname === "/") {
       this.log.page.loads.push(`${url.pathname}${url.search}`)
       response.setHeader("content-type", "text/html; charset=utf-8")
-      response.end(FAKE_PAGE)
+      response.end(this.#pageReady ? FAKE_PAGE : FAKE_PAGE.replace("<body>", '<body data-mute="1">'))
       return
     }
 

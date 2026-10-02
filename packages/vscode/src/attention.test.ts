@@ -55,3 +55,22 @@ test("the same thread again soon after is not news; later it is; the sidebar in 
   assert.equal(gate.dueAt(), undefined)
   assert.equal(gate.due(now + SPACING_MS), undefined)
 })
+
+test("the thread's line is plain text: a notification renders no Markdown", async () => {
+  const { plainLine } = await import("./attention.ts")
+  assert.equal(
+    plainLine("**Done** — the loop is tidied. The change is in [a.ts](/repo/src/a.ts#L2-L3), see `sample()` and _the notes_."),
+    "Done — the loop is tidied. The change is in a.ts, see sample() and the notes.",
+  )
+  assert.equal(plainLine("## Summary\n- one\n> quoted"), "Summary\none\nquoted")
+  // A lone asterisk or an underscore inside a name is not emphasis.
+  assert.equal(plainLine("2 * 3 = 6, snake_case_name"), "2 * 3 = 6, snake_case_name")
+  assert.equal(attentionText(item("tidy-the-sample-loop", { body: "**Done** — see [a.ts](/repo/a.ts)." })), "tidy-the-sample-loop is ready for you: Done — see a.ts.")
+})
+
+test("a line clipped inside a link keeps its words without the link's marks", async () => {
+  const { plainLine } = await import("./attention.ts")
+  assert.equal(plainLine("The notes are in [the…"), "The notes are in the…")
+  assert.equal(plainLine("The notes are in [the readme](/repo/RE…"), "The notes are in the readme")
+  assert.equal(plainLine("see [a.ts](/r/a.ts) and [b"), "see a.ts and b")
+})

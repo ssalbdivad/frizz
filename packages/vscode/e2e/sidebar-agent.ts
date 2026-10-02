@@ -25,6 +25,7 @@ export type AgentOp =
   | { op: "tabs" }
   | { op: "config"; section: string; key: string; value: unknown }
   | { op: "diagnostics"; path: string }
+  | { op: "terminal"; command: string }
   | { op: "done" }
 
 export interface AgentStatus {
@@ -105,6 +106,26 @@ async function perform(api: FrizzExtensionApi, op: AgentOp): Promise<unknown> {
         severity: d.severity,
         range: [d.range.start.line, d.range.start.character, d.range.end.line, d.range.end.character],
       }))
+    case "terminal": {
+      // A bash terminal, its command run through shell integration (VS Code 1.93+), and the run's end
+      // awaited — what the bar's "Add last terminal command" then offers.
+      const terminal = vscode.window.createTerminal({ name: "frizz e2e", shellPath: "/bin/bash" })
+      terminal.show(true)
+      const integrated = terminal as vscode.Terminal & { shellIntegration?: { executeCommand(command: string): unknown } }
+      const deadline = Date.now() + 30_000
+      while (!integrated.shellIntegration && Date.now() < deadline) await new Promise((resolve) => setTimeout(resolve, 100))
+      if (!integrated.shellIntegration) throw new Error("no shell integration in the terminal within 30s")
+      const window = vscode.window as unknown as { onDidEndTerminalShellExecution: vscode.Event<{ terminal: vscode.Terminal; exitCode?: number }> }
+      const ended = new Promise<number | undefined>((resolve) => {
+        const listener = window.onDidEndTerminalShellExecution((event) => {
+          if (event.terminal !== terminal) return
+          listener.dispose()
+          resolve(event.exitCode)
+        })
+      })
+      integrated.shellIntegration.executeCommand(op.command)
+      return { exitCode: await Promise.race([ended, new Promise((resolve) => setTimeout(() => resolve("timeout"), 30_000))]) }
+    }
     case "done":
       return null
   }

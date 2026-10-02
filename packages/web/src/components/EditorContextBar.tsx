@@ -184,7 +184,7 @@ function OpenFiles({ box, open, extras, labelled, hover }: { box: ContextBox; op
             <MenuItem onSelect={() => requestEditorContext(box, { what: "terminal" })}>
               <span data-editor-extra="terminal" title={extras.terminal.command ? `Add ${extras.terminal.command} and its output` : "Add the last command and its output"} className="flex min-w-0 items-baseline gap-1.5">
                 <span className="shrink-0">Add last terminal command</span>
-                {extras.terminal.command && <span className="min-w-0 truncate font-mono text-[11px] text-muted-55">{extras.terminal.command}</span>}
+                {extras.terminal.command && <span className="min-w-0 truncate text-[11px] text-muted-55">{extras.terminal.command}</span>}
               </span>
             </MenuItem>
           )}

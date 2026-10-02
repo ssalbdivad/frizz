@@ -50,11 +50,31 @@ server scanning lock files and dialling N editors.
 
 | frame | when | extension does |
 | --- | --- | --- |
-| `welcome {bootId, features?}` | after hello | logs it; a changed bootId means Frizz restarted; `features` names what this Frizz takes beyond v1 (`editor-state`) |
+| `welcome {bootId, features?}` | after hello | logs it; a changed bootId means Frizz restarted; `features` names what this Frizz takes beyond v1 (`editor-state`, `sidebar`, `attention`) |
 | `projects {projects}` | after hello, and on any change (2s in-memory diff) | maps files to projects; status bar counts |
 | `open {id, path, line?, column?, endLine?}` | a file link was clicked | opens + reveals, raises the window, answers `result` |
 | `focus {id, path}` | "Open in editor" on a folder this window has open | raises the window, answers `result` (not ok where it cannot raise itself) |
 | `composed {id, ok, error?}` | after a `compose` | says it was added (with an "Open Frizz" button), or why not |
+| `attention {projectId, thread, needs, body?}` | a thread came to rest needing the human, to ONE listening window (below) | a VS Code notification while the sidebar is out of sight |
+
+### Which window is told a thread needs you
+
+The page's own notifications cannot fire inside an editor (a framed page is refused the permission), so
+without this a question asked while the human was in their code waited for them to glance at the badge.
+The server takes the board's needs-you edge (`board.ts notifyNeedsYou`, the one the page's notification
+rides) and sends `attention` to one window: of those that sent `listen {attention: true}` — a window
+whose `frizz.notify` is on, from an extension that knows the frame (it is gated on the welcome's
+`attention` feature, since an unknown client frame closes the socket) — and have the thread's project
+open, the one focused most recently. An old extension or a window with notifications off can then never
+swallow the one notification. The edge is published inside the board's assembly, before its snapshot is
+kept, so the bridge reads the thread one task later. The bus is subscribed only while some window listens.
+
+The extension says nothing while the sidebar is in sight (the card is in front of the human already), and
+paces a burst (`attention.ts AttentionGate`): one toast at most every 20s, the rest held and said
+together ("3 threads need you: …"), and the same thread again within 2m not said twice. The words are the
+board's: the thread's handle, what it needs ("has a question", "needs your approval", "is ready for you")
+and the line the page's notification would show. **Open** reveals the sidebar on the thread (the queue,
+for several), or with the sidebar off, opens it in the browser.
 
 ### Which window gets an open
 
@@ -147,6 +167,23 @@ then. A dispatch or follow-up that got no answer (a timeout, a connection droppe
 check Frizz before asking again, since it may have started the thread.
 The extension declares `extensionKind: ["workspace"]` so in a Remote-WSL/SSH window it runs where
 the files and Frizz are.
+
+### Which build a window runs
+
+Every build said `0.1.0`, so "is this window running the fix?" had no answer. `scripts/build.ts` stamps
+the bundle (esbuild `define`) and `dist/build.json` (shipped in the `.vsix`) with the version, the short
+commit, whether `packages/vscode` or `packages/shared` had uncommitted changes, the build time and a
+random id. The label (`0.1.0+1a2b3c4d`, `-dirty` when it was) goes in the hello's `extensionVersion`
+(which the server now keeps, and Settings' editor hint lists), the log's first line and the status
+bar's tooltip. A window keeps running the code it loaded, so every 4s it compares the build on disk
+with its own (`build-info.ts installedBuild`: the same version reinstalled in place is a new id in its own
+folder; a new version is a sibling folder the old one's `.obsolete` entry points away from) and offers
+**Reload window**, once per build.
+
+A Frizz from before the sidebar frames a page that never says it is ready. Its welcome names neither
+`sidebar` nor `editor-state` (which came after the embed mode), or its editor socket answers 404 (before
+the bridge), so the sidebar says the real cause from the first paint — "This Frizz is older than the
+sidebar. Update Frizz to use it here, or open it in your browser." — instead of "still loading" 20s later.
 
 ## The sidebar
 
@@ -265,6 +302,41 @@ must match the core app, with a hint wherever the sidebar differs; and no Frizz 
   step every queued row, pinned ones included, as the desktop's cards do. `e` with nothing queued shows the
   project's folder in VS Code; a folder outside the window's folders opens in a window of its own.
 
+### More ways in: `@` files, explorer drops, problems and the last command
+
+What Cursor and Claude Code's extension taught the human to expect of a prompt box beside their code,
+each answered by the extension, since the page has no index of the workspace, no diagnostics and no
+terminal — and none of it goes through the server:
+
+- **`@` files.** A prompt box's `@` menu offers the workspace's files after the threads (four threads
+  while files show). The page asks `frizz:pick-context {id, query}` a beat after each keystroke; the
+  extension answers `frizz:context-picks` under the id, always, so an extension that never answers (an
+  old one) is stopped being asked after one timeout. The file query runs over a path's characters
+  (`@src/web/App`) where a thread query stops at `/`. Choosing one writes `` `src/a.ts` `` — the whole-file
+  reference Add file and the bar's open files write — so the agent reads one shape for "this file". The
+  mention menu hosts it rather than a QuickPick: it is where the human's eyes are, it keeps the caret
+  and the menu's keys, and a QuickPick would pull focus into the editor's chrome mid-sentence.
+  The index (`workspace-files.ts`): git's list in a repository (tracked, plus untracked not ignored),
+  `findFiles` elsewhere, then `files.exclude` and `search.exclude` applied by a glob matcher —
+  `findFiles` alone honours neither ignore files nor `search.exclude`, and in a Frizz checkout every
+  thread's worktree is a gitignored copy under `.frizz/worktrees/`. Rebuilt lazily after files come or
+  go, at most every 3s. Ranked as quick open reads a query (`file-picks.ts rankFiles`).
+- **Explorer drops.** A drag from VS Code's workbench carries resources (`ResourceURLs`, a uri-list),
+  not File objects. The composer knows VS Code's own drag types — never a bare `text/uri-list`, which a
+  desktop file carries too and which stays an upload — and asks the extension to resolve the URIs
+  (`frizz:pick-context {id, uris}`); each lands as the same reference at the caret. VS Code lets a webview
+  take a drop only with Shift held (`WebviewWindowDragMonitor` turns the webview's pointer events off
+  for any drag without it), as Claude Code's docs say.
+- **Problems and the last command.** `extras-feed.ts` tells the page what else there is
+  (`frizz:editor-extras`: the file in front's problem counts, the last command's line and exit code —
+  never the text, which crosses only when the human adds it), and the bar's chevron menu offers them
+  above the open files. `@problems` carries the file, its counts and one problem a line as the Problems
+  panel reads it; `@terminal` the command, the END of its output (where a failure says what failed) and
+  its exit code. The terminal side uses shell integration's execution API, stable from VS Code 1.93 and
+  a throwing proposal before it (only subscribed on 1.93+); on 1.90 the entry is offered while a
+  terminal is open and adding it borrows the clipboard for the terminal's own Copy Last Command and Copy
+  Last Command Output.
+
 ### What the sidebar keeps apart
 
 The frame's storage is PARTITIONED from the browser's: the same origin framed inside a `vscode-webview://`
@@ -369,9 +441,16 @@ always-attached context.
     the row still reading Frizz; and every title-row command (Keyboard shortcuts in the ⋯), and a real click on one, reaching the page as `frizz:command`.
     And the agents' picture: a selection, a tab and a problem from a real diagnostic collection reaching
     Frizz as the `editor` frame, an edit marking it dirty, and sharing off sending nothing else.
+    And the build in the hello and the tooltip, a new build on disk offered as Reload window; an
+    `attention` frame as a notification only while the sidebar is out of sight, its Open (a real click on
+    the toast) showing the thread, and `frizz.notify` off saying `listen false`; a Frizz from before the
+    sidebar named at once; `@` answered from the workspace with both exclude settings held, and a drop's
+    URIs resolved to a file and a folder; the problems and the last command (through shell integration
+    on 1.93+, the borrowed clipboard on 1.90) each adding one chip.
     `FRIZZ_E2E_ONLY=<part of a step's name>` runs just those steps.
   - `FRIZZ_E2E_VSCODE=oldest nub packages/vscode/scripts/e2e.ts` — the same on the oldest VS Code the
-    manifest's `engines.vscode` admits (1.90.0), where `focusWindow` does not exist.
+    manifest's `engines.vscode` admits (1.90.0), where `focusWindow` does not exist and shell
+    integration's command events are a proposal that throws (which killed activation once).
   - `nub packages/vscode/scripts/e2e.ts --stack` — boots a disposable two-project Frizz itself
     (`scripts/adhoc-stack.mjs`: sandbox HOME, a free port, two throwaway git repos) and runs REAL mode
     against the TENANT project: `openLocalFile` with a line landing in the editor over the bridge, the

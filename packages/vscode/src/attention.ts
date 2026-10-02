@@ -46,8 +46,25 @@ const NEEDS: Record<EditorAttentionNeeds, string> = {
   ready: "is ready for you",
 }
 
+/**
+ * The thread's line as plain text: a notification renders no Markdown, and the line is the start of the
+ * worker's message (`**Done** — see [a.ts](/repo/a.ts#L2)`), so its marks would show as asterisks and
+ * a whole link target. Links keep their words, code keeps its text, emphasis markers go.
+ */
+export function plainLine(text: string): string {
+  return text
+    .replace(/!?\[([^\]]*)\]\([^)]*\)/gu, "$1")
+    // A line clipped inside a link (`[the readme](/repo/RE…`, `[the…`): its words, without the marks.
+    .replace(/!?\[([^\]]*)\]\([^)]*$/u, "$1")
+    .replace(/!?\[(?=[^\]]*$)/u, "")
+    .replace(/`+([^`]*)`+/gu, "$1")
+    .replace(/(\*\*|__|~~)(?=\S)([\s\S]*?\S)\1/gu, "$2")
+    .replace(/(^|[\s(])[*_](?=\S)([^*_]*?\S)[*_](?=[\s).,:;!?]|$)/gu, "$1$2")
+    .replace(/^\s{0,3}(?:#{1,6}\s+|>\s?|[-*+]\s+)/gmu, "")
+}
+
 function clip(text: string, max: number): string {
-  const line = text.replace(/\s+/gu, " ").trim()
+  const line = plainLine(text).replace(/\s+/gu, " ").trim()
   return line.length > max ? `${line.slice(0, max - 1).trimEnd()}…` : line
 }
 
