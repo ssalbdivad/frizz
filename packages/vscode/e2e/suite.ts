@@ -42,7 +42,7 @@ interface FakeLog {
   refused: string[]
   rpc: { projectId: string; procedure: string; input: Record<string, unknown> }[]
   origins: string[]
-  page: { loads: string[]; received: { origin: string; data: { type?: string } & Record<string, unknown> }[] }
+  page: { loads: string[]; received: { origin: string; page?: string; data: { type?: string } & Record<string, unknown> }[] }
 }
 
 async function fake<T = unknown>(path: string, body?: unknown, at = control): Promise<T> {
@@ -1710,6 +1710,81 @@ const steps: Step[] = [
         terminal.dispose()
         await vscode.commands.executeCommand("notifications.clearAll")
       }
+    },
+  },
+  {
+    name: "a thread opens in an editor tab beside the code, on its own address; asked again it comes forward; Ctrl+L goes to the Frizz used last and back",
+    modes: ["fake"],
+    async run({ api, project }) {
+      // The title row's ⋯ offers it while the sidebar shows a thread, first in the menu.
+      assert.deepEqual(manifest().contributes.menus["view/title"]!.find((entry) => entry.command === "frizz.openThreadInTab"), {
+        command: "frizz.openThreadInTab", when: "view == frizz.sidebar && frizz.sidebarView == thread", group: "frizz@0",
+      })
+      const path = `/all/${project.slug}/thread/fake-thread`
+      const inTab = async (type: string, from = 0) => (await fakeLog()).page.received.slice(from).filter((entry) => entry.page === path && entry.data.type === type).map((entry) => entry.data)
+      const editor = await openSample([1, 0, 2])
+      const loadsBefore = (await fakeLog()).page.loads.length
+      try {
+        await vscode.commands.executeCommand("frizz.openThreadInTab", { thread: "fake-thread", project: project.slug })
+        await until("the tab's page ready", () => api.threadTabs()[0]?.ready === true, 30_000)
+        const [tab] = api.threadTabs()
+        assert.equal(api.threadTabs().length, 1)
+        assert.equal(tab!.url, `${control}${path}${embedQuery(project)}`, "the thread's own address, in embed mode, on this window's project")
+        assert.deepEqual((await fakeLog()).page.loads.slice(loadsBefore), [`${path}${embedQuery(project)}`])
+        assert.equal(tab!.viewColumn, 2, "beside the code")
+        assert.ok(vscode.window.visibleTextEditors.some((visible) => visible.document.uri.fsPath === sample), "the code still in sight")
+        assert.equal(tab!.title, "fake-thread", "named by the thread until its page says its title")
+        // The tab's page is told what the sidebar's is: the theme, the host's state, the editor's context.
+        await until("the editor's context in the tab", async () => (await inTab("frizz:editor-context")).some((told) => (told.active as { path?: string } | null)?.path === sample), 10_000)
+        assert.ok((await inTab("frizz:theme")).length > 0 && (await inTab("frizz:host-state")).length > 0)
+
+        // Its page names the thread: the tab takes its title, as the page wrote it (not re-cased).
+        await fake("/__e2e/page-post", { page: path, message: { type: "frizz:route", view: "thread", title: "Fake thread, wider", href: `${control}${path}` } })
+        await until("the tab titled by its page", () => api.threadTabs()[0]?.title === "Fake thread, wider")
+
+        // Asked again: the same tab, forward, no second load.
+        await vscode.window.showTextDocument(editor.document, { viewColumn: vscode.ViewColumn.One })
+        await vscode.commands.executeCommand("frizz.openThreadInTab", { thread: "fake-thread", project: project.slug })
+        await until("the tab forward", () => api.threadTabs()[0]?.active === true)
+        assert.equal(api.threadTabs().length, 1, "one tab per thread")
+        assert.equal((await fakeLog()).page.loads.length, loadsBefore + 1, "not framed again")
+
+        // The tab was used last (its page took the keyboard): Ctrl+L in the editor puts the selection in IT.
+        const mod = process.platform === "darwin" ? "meta" : "ctrl"
+        await sleep(500)
+        const shown = await vscode.window.showTextDocument(editor.document, { viewColumn: vscode.ViewColumn.One, preserveFocus: false })
+        shown.selection = new vscode.Selection(1, 0, 2, shown.document.lineAt(2).text.length)
+        await sleep(500)
+        let from = (await fakeLog()).page.received.length
+        await press(`${mod}+l`)
+        await until("Ctrl+L's chip in the tab", async () => (await inTab("frizz:compose", from)).length > 0, 15_000)
+        const [compose] = await inTab("frizz:compose", from)
+        assert.deepEqual({ ...compose, id: undefined }, {
+          type: "frizz:compose", id: undefined, target: "front", focus: true,
+          item: { projectId: project.id, path: sample, text: sampleLines(shown.document, 2, 3), startLine: 2, endLine: 3, app: vscode.env.appName },
+        })
+        assert.equal((await fakeLog()).page.received.slice(from).filter((entry) => entry.page === "/" && entry.data.type === "frizz:compose").length, 0, "not the sidebar")
+        await until("the tab in front with the keyboard", () => api.threadTabs()[0]?.active === true)
+
+        // Ctrl+L pressed in the tab: back to the code, not the tab's own group.
+        await fake("/__e2e/page-post", { page: path, message: { type: "frizz:key", key: "l", code: "KeyL", ctrl: process.platform !== "darwin", meta: process.platform === "darwin", shift: false, alt: false } })
+        await until("the code focused", async () => vscode.window.activeTextEditor?.document.uri.fsPath === sample && (await focusIn()) === "editor")
+
+        // The sidebar used since: Ctrl+L goes there again.
+        await vscode.commands.executeCommand("frizz.sidebar.focus")
+        await until("the sidebar focused", async () => (await focusIn()) === "sidebar")
+        await sleep(300)
+        await vscode.window.showTextDocument(editor.document, { viewColumn: vscode.ViewColumn.One, preserveFocus: false })
+        await sleep(500)
+        from = (await fakeLog()).page.received.length
+        await press(`${mod}+l`)
+        await until("Ctrl+L's chip in the sidebar", async () => (await fakeLog()).page.received.slice(from).some((entry) => entry.page === "/" && entry.data.type === "frizz:compose"), 15_000)
+        assert.deepEqual(await inTab("frizz:compose", from), [], "not the tab")
+        await fake("/__e2e/shot", { path: join(process.env.FRIZZ_E2E_SHOTS || workspace, `${vscode.version}-thread-tab.png`) })
+      } finally {
+        await vscode.commands.executeCommand("workbench.action.closeAllEditors")
+      }
+      await until("the tab closed", () => api.threadTabs().length === 0)
     },
   },
   {

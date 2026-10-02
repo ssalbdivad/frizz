@@ -36,6 +36,44 @@ export function embedUrl(origin: string, theme: EmbedTheme, projectSlug: string 
   return url.toString()
 }
 
+/**
+ * A thread's page in embed mode — `<origin>/all/<project>/thread/<slug>?embed=vscode&theme=…&project=<project>`:
+ * the page boots in embed mode from the query as the sidebar's does, and the path is the thread's own
+ * address, which the page opens as its drawer painted open on the first render the board arrives (a cold
+ * deep link; web lib/router.ts) — no queue flashing under a drawer sliding in, as a navigate after ready
+ * would draw. What a thread's editor tab frames (thread-panel.ts).
+ */
+export function threadEmbedUrl(origin: string, theme: EmbedTheme, project: string, thread: string): string {
+  const url = new URL(`/all/${encodeURIComponent(project)}/thread/${encodeURIComponent(thread)}`, origin)
+  url.searchParams.set(EMBED_PARAM, EMBED_VSCODE)
+  url.searchParams.set(EMBED_THEME_PARAM, theme)
+  url.searchParams.set("project", project)
+  return url.toString()
+}
+
+/**
+ * The thread a page address shows — `/all/<project>/thread/<slug>`, with or without `/full` — or undefined
+ * for any other page (the queue, Settings). What a route's `href` says a frame shows.
+ */
+export function threadOfHref(href: string | undefined): { project: string; thread: string } | undefined {
+  if (!href) return undefined
+  let path: string
+  try {
+    path = new URL(href).pathname
+  } catch {
+    return undefined
+  }
+  const match = /^\/all\/([^/]+)\/thread\/([^/]+)(?:\/full)?\/?$/u.exec(path)
+  if (!match) return undefined
+  try {
+    const project = decodeURIComponent(match[1]!)
+    const thread = decodeURIComponent(match[2]!)
+    return SLUG.test(project) && SLUG.test(thread) ? { project, thread } : undefined
+  } catch {
+    return undefined
+  }
+}
+
 /** A URL's port as a number, its scheme's default when it names none (`new URL` drops a default port). */
 function portOf(url: URL): number {
   if (url.port) return Number(url.port)
@@ -156,6 +194,11 @@ export function parsePageMessage(value: unknown, origin?: string): EmbedPageMess
 
 /** A thread's or project's slug as Frizz spells them in a route: no slash, no space, nothing to escape. */
 const SLUG = /^[A-Za-z0-9][A-Za-z0-9._-]{0,199}$/u
+
+/** A thread's or project's slug, as `SLUG` admits one — for a name that came back from anywhere (a tab's saved state). */
+export function isSlug(value: unknown): value is string {
+  return typeof value === "string" && SLUG.test(value)
+}
 
 /** A title or its reading longer than this is not one the title row could show anyway. */
 const MAX_TITLE = 500

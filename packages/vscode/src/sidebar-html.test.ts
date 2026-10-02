@@ -1,7 +1,7 @@
 import { test } from "node:test"
 import assert from "node:assert/strict"
 import { runInNewContext } from "node:vm"
-import { contentSecurityPolicy, frameDocument, HINT, HINT_OLD_FRIZZ, messageDocument } from "./sidebar-html.ts"
+import { contentSecurityPolicy, frameDocument, HINT, HINT_OLD_FRIZZ, messageDocument, scriptJson } from "./sidebar-html.ts"
 
 const FRIZZ = "http://127.0.0.1:9393"
 const URL_ = `${FRIZZ}/?embed=vscode&theme=dark&project=a%22b`
@@ -39,6 +39,8 @@ test("a message document escapes its copy and frames nothing", () => {
 
 interface Relay {
   toHost: unknown[]
+  /** What the relay kept as VS Code's webview state (`setState`), the last value it set. */
+  state: unknown
   toPage: { data: unknown; targetOrigin: string }[]
   frameWindow: object
   /** VS Code's host frame, which is NOT `window.parent` in a webview document. */
@@ -63,7 +65,7 @@ function relay(html: string): Relay {
   const hintText = { textContent: "" }
   const listeners: ((event: unknown) => void)[] = []
   const focusListeners: (() => void)[] = []
-  const state = { focused: 0, pageFocused: 0 }
+  const state = { focused: 0, pageFocused: 0, kept: undefined as unknown }
   const frame = { contentWindow: frameWindow, focus: () => state.focused++ }
   const window = {
     origin: WEBVIEW,
@@ -79,7 +81,7 @@ function relay(html: string): Relay {
   const document = { getElementById: (id: string) => (id === "frizz" ? frame : id === "hint" ? hint : id === "hint-text" ? hintText : null), addEventListener() {}, body: {}, activeElement: null as unknown }
   runInNewContext(script, {
     // A clone, as postMessage makes one — and out of the script's realm, so deepEqual compares values.
-    acquireVsCodeApi: () => ({ postMessage: (message: unknown) => toHost.push(structuredClone(message)) }),
+    acquireVsCodeApi: () => ({ postMessage: (message: unknown) => toHost.push(structuredClone(message)), setState: (value: unknown) => (state.kept = structuredClone(value)) }),
     window,
     document,
     navigator: { platform: "Linux x86_64" },
@@ -88,6 +90,9 @@ function relay(html: string): Relay {
   })
   return {
     toHost,
+    get state() {
+      return state.kept
+    },
     toPage,
     frameWindow,
     hostFrame,
@@ -169,4 +174,22 @@ test("focus landing on the relay goes on to the page — including when the fram
   await r.windowFocus("frame")
   assert.equal(r.pageFocused, 1, "the page's window is focused, the frame element being focused already")
   assert.equal(r.focused, 1)
+})
+
+test("the relay tells the host when it takes the keyboard, so Ctrl+L knows which Frizz was used last", async () => {
+  const r = relay(frameDocument({ nonce: "n", url: URL_, origin: FRIZZ }))
+  r.toHost.length = 0
+  await r.windowFocus("body")
+  await r.windowFocus("frame")
+  assert.deepEqual(r.toHost, [{ view: "focused" }, { view: "focused" }])
+})
+
+test("a thread's tab keeps its thread as the webview's state, and nothing at all without one", () => {
+  assert.equal(relay(frameDocument({ nonce: "n", url: URL_, origin: FRIZZ })).state, undefined)
+  const tab = relay(frameDocument({ nonce: "n", url: URL_, origin: FRIZZ, state: { project: "acme", thread: "fix-it" } }))
+  assert.deepEqual(tab.state, { project: "acme", thread: "fix-it" })
+  // Whatever a state holds cannot close the script it is written into.
+  const html = frameDocument({ nonce: "n", url: URL_, origin: FRIZZ, state: { project: "</script><script>alert(1)</script>", thread: "x" } })
+  assert.equal((html.match(/<\/script>/gu) ?? []).length, 1)
+  assert.equal(scriptJson({ a: "</script>\u2028" }), '{"a":"\\u003c/script>\\u2028"}')
 })

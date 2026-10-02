@@ -33,7 +33,8 @@
     "workspace"
   ],
   "activationEvents": [
-    "onStartupFinished"
+    "onStartupFinished",
+    "onWebviewPanel:frizz.thread"
   ],
   "capabilities": {
     "untrustedWorkspaces": {
@@ -98,6 +99,12 @@
         "title": "Review a thread's changes…",
         "category": "Frizz",
         "icon": "$(diff-multiple)"
+      },
+      {
+        "command": "frizz.openThreadInTab",
+        "title": "Open thread in editor tab",
+        "category": "Frizz",
+        "icon": "$(window)"
       },
       {
         "command": "frizz.sidebar.queue",
@@ -239,6 +246,11 @@
           "command": "frizz.sidebar.settings",
           "when": "view == frizz.sidebar && frizz.sidebarView",
           "group": "navigation@4"
+        },
+        {
+          "command": "frizz.openThreadInTab",
+          "when": "view == frizz.sidebar && frizz.sidebarView == thread",
+          "group": "frizz@0"
         },
         {
           "command": "frizz.sidebar.reload",

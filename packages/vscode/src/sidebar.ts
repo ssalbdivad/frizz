@@ -11,26 +11,20 @@
 //
 // Only `import type` from vscode, like app.ts.
 
-import { randomUUID } from "node:crypto"
 import type * as vscode from "vscode"
-import type { EditorOpen } from "@frizz/shared/editor-protocol"
 import type {
-  EmbedAddContextMessage,
   EmbedCommandMessage,
   EmbedComposeMessage,
   EmbedComposedMessage,
   EmbedEditorContextMessage,
   EmbedEditorExtrasMessage,
   EmbedHostMessage,
-  EmbedHostStateMessage,
   EmbedNavigateMessage,
   EmbedPageMessage,
-  EmbedReviewMessage,
-  EmbedPickContextMessage,
-  EmbedPickedFile,
   EmbedRouteMessage,
 } from "@frizz/shared/embed-protocol"
-import { chordCommand, embedTheme, embedUrl, frameTarget, parsePageMessage } from "./embed.ts"
+import { embedTheme, embedUrl, frameTarget, parsePageMessage } from "./embed.ts"
+import { actOnPage, Composes, type FrameLink, type PageHost } from "./framed-page.ts"
 import { frameDocument, HINT, HINT_OLD_FRIZZ, messageDocument, nonce, type ViewAction } from "./sidebar-html.ts"
 
 type Vscode = typeof vscode
@@ -58,7 +52,8 @@ const REFRESH_DEBOUNCE_MS = 200
 const OLD_FRIZZ_LOG = "The Frizz this window reached is older than the sidebar: its page shows, but can't take the editor's selections or open files here. Update Frizz."
 const EVENTS_KEPT = 50
 
-export interface SidebarHost {
+/** The sidebar's host: what every framed page may ask (framed-page.ts), and where its page comes from. */
+export interface SidebarHost extends PageHost {
   /** Where Frizz is: the connected origin, else the last discovery's. */
   origin(): string | undefined
   /** The project this window's folders map to, if any. */
@@ -71,20 +66,8 @@ export interface SidebarHost {
    * frame at once, saying to update Frizz, instead of waiting out READY_HINT_MS to say it is loading.
    */
   pageSupport(): "yes" | "no" | "unknown"
-  openFile(message: EditorOpen): Promise<{ ok: boolean; error?: string }>
   openInBrowser(): void
   reconnect(): void
-  /** The page asked for the editor's context in its composer (`frizz:add-context`); resolves to what came of it, for the record. */
-  addContext(message: EmbedAddContextMessage): Promise<string>
-  /** What the page shows of the extension's own state (`frizz:host-state`): posted on ready, and by `pushState`. */
-  hostState(): Omit<EmbedHostStateMessage, "type">
-  /** The page's eye: share the editor with Frizz or stop (`frizz:share-editor`); resolves to what came of it. */
-  setShareEditor(on: boolean): Promise<string>
-  /** The page asked for a thread's changes in this window (`frizz:review`); resolves to what came of it, for the record. */
-  review(message: EmbedReviewMessage): Promise<string>
-  /** The page asked for files (`frizz:pick-context`): by name for its `@` menu, or dropped from the explorer. */
-  pickContext(message: EmbedPickContextMessage): Promise<EmbedPickedFile[]>
-  log: { info(line: string): void; warn(line: string): void }
 }
 
 /** What the view shows and did, for the end-to-end suite (FrizzExtensionApi.sidebar). */
@@ -140,6 +123,8 @@ export interface Sidebar {
   onReady(listener: (ready: boolean) => void): void
   /** Whether the window's UI runs on a Mac, once the relay (which runs in the UI) has said; undefined before. */
   mac(): boolean | undefined
+  /** Called when the page in the view takes the keyboard: the human is using the sidebar. */
+  onFocus(listener: () => void): void
   snapshot(): SidebarSnapshot
 }
 
@@ -165,7 +150,8 @@ export function registerSidebar(api: Vscode, context: vscode.ExtensionContext, h
   let mac = process.platform === "darwin"
   let macReported: boolean | undefined
   const events: SidebarSnapshot["events"] = []
-  const pending = new Map<string, (answer: EmbedComposedMessage | undefined) => void>()
+  const composes = new Composes()
+  const focusListeners: (() => void)[] = []
   let waiters: ((ready: boolean) => void)[] = []
   const readyListeners: ((ready: boolean) => void)[] = []
   /** The value `frizz.sidebarView` has, so it is set only on a change. */
@@ -200,10 +186,7 @@ export function registerSidebar(api: Vscode, context: vscode.ExtensionContext, h
     readyTimer = undefined
     if (!next) {
       // A page that is gone answers nothing: what waited on it falls back now, not at its timeout.
-      for (const [id, resolve] of pending) {
-        pending.delete(id)
-        resolve(undefined)
-      }
+      composes.drop()
       // The page that said where it was is gone; the title row stops claiming it.
       applyRoute(undefined)
     }
@@ -308,6 +291,15 @@ export function registerSidebar(api: Vscode, context: vscode.ExtensionContext, h
     void post({ view: "hint", show: true, text })
   }
 
+  /** This frame, as the page-message handling every frame shares sees it (framed-page.ts actOnPage). */
+  const link: FrameLink = {
+    post: (message) => post(message),
+    mac: () => mac,
+    runChord: async (command) => {
+      await api.commands.executeCommand(command)
+    },
+  }
+
   async function onPageMessage(page: EmbedPageMessage): Promise<void> {
     switch (page.type) {
       case "frizz:ready": {
@@ -320,62 +312,15 @@ export function registerSidebar(api: Vscode, context: vscode.ExtensionContext, h
         settle(true)
         return
       }
-      case "frizz:composed": {
-        const resolve = pending.get(page.id)
-        pending.delete(page.id)
-        record(page.type, resolve ? (page.ok ? "ok" : `refused: ${page.error ?? ""}`) : "unknown id")
-        resolve?.(page)
+      case "frizz:composed":
+        record(page.type, composes.answer(page) ? (page.ok ? "ok" : `refused: ${page.error ?? ""}`) : "unknown id")
         return
-      }
-      case "frizz:open-file": {
-        const { type: _, ...open } = page
-        const result = await host.openFile({ t: "open", id: randomUUID(), ...open })
-        record(page.type, result.ok ? "opened" : "missing")
-        if (!result.ok) void api.window.showWarningMessage(result.error ?? `Couldn't open ${page.path}.`)
-        return
-      }
-      case "frizz:open-external": {
-        const opened = await api.env.openExternal(api.Uri.parse(page.url, true))
-        record(page.type, opened ? "opened" : "declined")
-        return
-      }
-      case "frizz:key": {
-        const command = chordCommand(page, mac)
-        record(page.type, command ?? "ignored")
-        if (command) await api.commands.executeCommand(command)
-        return
-      }
-      case "frizz:add-context": {
-        record(page.type, await host.addContext(page))
-        return
-      }
-      case "frizz:share-editor": {
-        record(page.type, await host.setShareEditor(page.on))
-        // Whatever came of it, the page shows what is TRUE now: a write that did not take puts its eye back.
-        void post({ type: "frizz:host-state", ...host.hostState() })
-        return
-      }
-      case "frizz:route": {
+      case "frizz:route":
         applyRoute(page)
         record(page.type, page.view)
         return
-      }
-      case "frizz:review": {
-        record(page.type, await host.review(page))
-        return
-      }
-      case "frizz:pick-context": {
-        // Answered always, with nothing when nothing matched or the ask failed: the page waits on this id.
-        let files: EmbedPickedFile[] = []
-        try {
-          files = await host.pickContext(page)
-        } catch (error) {
-          host.log.warn(`Listing the workspace's files failed: ${(error as Error).message}`)
-        }
-        await post({ type: "frizz:context-picks", id: page.id, files })
-        record(page.type, `${files.length} ${page.uris ? "dropped" : "found"}`)
-        return
-      }
+      default:
+        record(page.type, await actOnPage(api, page, host, link))
     }
   }
 
@@ -396,6 +341,9 @@ export function registerSidebar(api: Vscode, context: vscode.ExtensionContext, h
           return
         case "browser":
           host.openInBrowser()
+          return
+        case "focused":
+          for (const listener of focusListeners) listener()
           return
       }
       return
@@ -487,23 +435,7 @@ export function registerSidebar(api: Vscode, context: vscode.ExtensionContext, h
     },
     compose(input, ms) {
       if (!ready) return Promise.resolve(undefined)
-      const id = randomUUID()
-      return new Promise((resolve) => {
-        const timer = setTimeout(() => {
-          pending.delete(id)
-          resolve(undefined)
-        }, ms)
-        pending.set(id, (answer) => {
-          clearTimeout(timer)
-          resolve(answer)
-        })
-        void post({ type: "frizz:compose", id, ...input }).then((sent) => {
-          if (sent) return
-          pending.delete(id)
-          clearTimeout(timer)
-          resolve(undefined)
-        })
-      })
+      return composes.send(post, input, ms)
     },
     async navigate(to) {
       return ready && (await post({ type: "frizz:navigate", to }))
@@ -519,6 +451,9 @@ export function registerSidebar(api: Vscode, context: vscode.ExtensionContext, h
       readyListeners.push(listener)
     },
     mac: () => macReported,
+    onFocus(listener) {
+      focusListeners.push(listener)
+    },
     snapshot: () => ({
       opened: view !== undefined,
       visible: view?.visible ?? false,

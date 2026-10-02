@@ -1,6 +1,6 @@
 import { test } from "node:test"
 import assert from "node:assert/strict"
-import { addRoute, chordCommand, composeInSidebar, type ComposeSidebar, embedTheme, embedUrl, frameTarget, parsePageMessage, promptRoute, safeOrigin, webUrl, type KeyChord } from "./embed.ts"
+import { addRoute, chordCommand, composeInSidebar, type ComposeSidebar, embedTheme, embedUrl, frameTarget, isSlug, parsePageMessage, promptRoute, safeOrigin, threadEmbedUrl, threadOfHref, webUrl, type KeyChord } from "./embed.ts"
 
 test("VS Code's four theme kinds fold to the page's two", () => {
   // ColorThemeKind: Light 1, Dark 2, HighContrast 3, HighContrastLight 4.
@@ -247,4 +247,26 @@ test("a page that never gets ready, never answers or refuses leaves the selectio
   assert.deepEqual(await composeInSidebar(silent.sidebar, composeInput, timing), { ok: false, why: "The Frizz sidebar didn't answer." })
   const refused = fakeSidebar({ ready: true, answer: { ok: false, error: "Its project isn't in Frizz." } })
   assert.deepEqual(await composeInSidebar(refused.sidebar, composeInput, timing), { ok: false, why: "The Frizz sidebar couldn't take it: Its project isn't in Frizz." })
+})
+
+test("a thread's tab frames the thread's own address in embed mode, with its project and theme", () => {
+  assert.equal(threadEmbedUrl("http://127.0.0.1:9393", "dark", "acme-api", "fix-login"), "http://127.0.0.1:9393/all/acme-api/thread/fix-login?embed=vscode&theme=dark&project=acme-api")
+  const odd = new URL(threadEmbedUrl("http://127.0.0.1:9393", "light", "a/b", "c?d#e"))
+  assert.equal(odd.pathname, "/all/a%2Fb/thread/c%3Fd%23e", "a name cannot add a path segment, a query or a fragment")
+  assert.equal(odd.searchParams.get("theme"), "light")
+  assert.equal(odd.hash, "")
+})
+
+test("the thread a page address shows: a drawer or a fullscreen page, nothing for any other page", () => {
+  assert.deepEqual(threadOfHref("http://127.0.0.1:9393/all/acme-api/thread/fix-login"), { project: "acme-api", thread: "fix-login" })
+  assert.deepEqual(threadOfHref("http://127.0.0.1:9393/all/acme-api/thread/fix-login/full?x=1"), { project: "acme-api", thread: "fix-login" })
+  assert.equal(threadOfHref("http://127.0.0.1:9393/?project=acme-api"), undefined)
+  assert.equal(threadOfHref("http://127.0.0.1:9393/all/acme-api"), undefined)
+  assert.equal(threadOfHref("http://127.0.0.1:9393/all/acme-api/thread/fix-login/files"), undefined)
+  assert.equal(threadOfHref("http://127.0.0.1:9393/all/acme%20api/thread/x"), undefined, "a name no slug could be")
+  assert.equal(threadOfHref("not a url"), undefined)
+  assert.equal(threadOfHref(undefined), undefined)
+  assert.equal(isSlug("fix-login"), true)
+  assert.equal(isSlug("../x"), false)
+  assert.equal(isSlug(7), false)
 })
