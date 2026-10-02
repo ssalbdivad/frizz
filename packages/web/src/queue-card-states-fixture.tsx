@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react"
+import { Profiler, memo, useMemo, useState, type ComponentProps, type ProfilerOnRenderCallback } from "react"
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query"
 import { createRoot } from "react-dom/client"
 import { MemoryRouter } from "react-router"
@@ -37,6 +37,11 @@ import "./styles.css"
 //   ?case=perm-prompt-journaled  the same, but an answerable interaction IS journaled: the net stands down.
 //   ?case=replied              a park queued only for its unread reply (queuedForReply): "Replied", and
 //                              Mark as read records it seen (threadSeen), after which the poll drops it.
+//   ?case=many&n=<count>       a long queue (default 60 cards), every third handoff long enough to clamp, on
+//                              a page whose board IS the cards' project (so the `@` typeahead has threads to
+//                              offer). Each card sits in a <Profiler> counting its commits on
+//                              window.__renders, and window.__boardDelta() moves the board the way a live
+//                              delta does — queueCardVisibility.e2e.test.ts.
 //
 // The card's project is NOT the page's: `store.board` names another project, so a control that read the
 // page's client instead of the card's would call `/_frizz/rpc/…` (unprefixed) and show up in __rpc as
@@ -101,6 +106,9 @@ const ASK = {
   }],
 }
 
+// Long enough to clamp (AllQueuesCard ClampedBody, 188px).
+const LONG = Array.from({ length: 14 }, (_, i) => `Paragraph ${i + 1} of a long handoff: what changed, why, and what is left to check before this can be marked done.`).join("\n\n")
+
 interface Scenario { threads: ThreadViewModel[]; text: (id: string) => string }
 function scenario(): Scenario {
   switch (CASE) {
@@ -130,6 +138,11 @@ function scenario(): Scenario {
         threads: [thread("rotate-key", "Rotate the signing key without downtime", { queuedAt: now, queuedForReply: true })],
         text: () => "Yes — the old key stays readable for 24h.\n\n```awaiting\nshells: [b1]\nfor: 2h\n---\nThe dual-read window is open; the old key is retired when it closes.\n```",
       }
+    case "many": {
+      const count = Number(params.get("n") ?? 60)
+      const threads = Array.from({ length: count }, (_, i) => thread(`card-${i}`, `Queue card ${i}`))
+      return { threads, text: (id) => (Number(id.slice(5)) % 3 === 0 ? LONG : `Short handoff for ${id}.`) }
+    }
     default:
       return {
         threads: [
@@ -142,8 +155,30 @@ function scenario(): Scenario {
 }
 const { threads: THREADS, text: textOf } = scenario()
 
-// The page's project, deliberately NOT the card's (see the header).
-store.board = { projectDir: "/fixture/elsewhere", threads: [] } as unknown as BoardSnapshot
+// The page's project, deliberately NOT the card's (see the header) — but for `many`, whose page IS the
+// cards' project, as on a page focused on it.
+store.board = (CASE === "many"
+  ? { projectSlug: "signing", projectDir: "/fixture/signing", threads: THREADS }
+  : { projectDir: "/fixture/elsewhere", threads: [] }) as unknown as BoardSnapshot
+// A live board delta, applied IN PLACE as store.ts applyDelta applies one: a thread arrives on the board.
+let deltas = 0
+;(window as unknown as { __boardDelta: () => void }).__boardDelta = () => {
+  store.board!.threads.push(thread(`delta-${++deltas}`, `Arrived ${deltas}`))
+}
+const renders: Record<string, number> = {}
+;(window as unknown as { __renders: Record<string, number> }).__renders = renders
+const countRender: ProfilerOnRenderCallback = (id) => { renders[id] = (renders[id] ?? 0) + 1 }
+// The <Profiler> sits INSIDE a memo of its own: a Profiler reports every time its parent renders it, even
+// when everything under it bails out, so outside one it would count the queue's renders, not the card's.
+// Its props are the card's own, so it renders exactly when the card is handed something new — and its
+// onRender fires besides whenever anything inside the card commits.
+const CountedCard = memo(function CountedCard({ id, ...props }: ComponentProps<typeof AllQueuesCard> & { id: string }) {
+  return (
+    <Profiler id={id} onRender={countRender}>
+      <AllQueuesCard {...props} />
+    </Profiler>
+  )
+})
 
 interface RpcLog { calls: { path: string; at: number }[]; completeCalledAt: number | null; completeResolvedAt: number | null }
 const log: RpcLog = { calls: [], completeCalledAt: null, completeResolvedAt: null }
@@ -255,7 +290,7 @@ function Queue() {
       {queued.filter((t) => !leaving.hidden(threadKey(project.id, t.id))).map((t) => {
         const key = threadKey(project.id, t.id)
         return (
-          <AllQueuesCard key={key} project={project} thread={t} leaving={leaving.isLeaving(key)} onLeave={leaving.leave(key)} onReturn={leaving.restore(key)} onSent={leaving.sent(key)} onLanded={leaving.landed(key)} />
+          <CountedCard key={key} id={key} project={project} thread={t} leaving={leaving.isLeaving(key)} onLeave={leaving.leave(key)} onReturn={leaving.restore(key)} onSent={leaving.sent(key)} onLanded={leaving.landed(key)} />
         )
       })}
     </div>
