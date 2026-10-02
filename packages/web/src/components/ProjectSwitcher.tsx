@@ -73,7 +73,7 @@ export function ProjectSwitcher({
   homeHint?: ReactNode
 }) {
   const total = [...projects, ...(home ? [home] : [])].reduce((sum, project) => sum + project.ready, 0)
-  const name = current ? current.name : "All projects"
+  const name = current ? current.name : "Everything"
   const item = (project: SwitcherProject, hint?: ReactNode) => {
     const selected = current?.id === project.id
     return (
@@ -123,7 +123,7 @@ export function ProjectSwitcher({
             `scrollbar-gutter: stable`), so the badges and check marks stand in one column. */}
         <div className="pr-[var(--sbw)]">
           <MenuItem onSelect={onAll} icon={<Layers size={14} aria-hidden />} value="all-projects">
-            <span className={`min-w-0 flex-1 truncate ${current ? "" : "text-fg"}`}>All projects</span>
+            <span className={`min-w-0 flex-1 truncate ${current ? "" : "text-fg"}`}>Everything</span>
             {total > 0 && <QueueBadge count={total} />}
             <span className="flex w-3 shrink-0 justify-center">{!current && <Check size={12} aria-label="Current" className="text-fg" />}</span>
           </MenuItem>
