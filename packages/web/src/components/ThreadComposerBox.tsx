@@ -9,7 +9,8 @@ import { useThreadComposerControls } from "../hooks/useThreadComposerControls.ts
 import { Composer } from "./Composer.tsx"
 import { useMentionCandidates, useOwnMention } from "../hooks/useMentionCandidates.ts"
 import { LogoutConfirmModal, SignInModal } from "./SignInModal.tsx"
-import { draftKey, draftStore, useDraft, useProjectDir } from "../lib/drafts.ts"
+import { draftKey, draftStore, mergeIntoDraft, useDraft, useProjectDir } from "../lib/drafts.ts"
+import { noteFailedDraftOrigin, takeSupersededFailure } from "../lib/failedDelivery.ts"
 import { parseAccountAlias } from "../lib/signIn.ts"
 import { useEagerFollowUp, type EagerFollowUpCallbacks } from "../lib/eagerComposerSubmission.ts"
 import { canInterruptAndSend } from "../lib/composerKeyboard.ts"
@@ -20,6 +21,10 @@ import { RegisteredAnsweringContext } from "./RegisteredQuestionCards.tsx"
 import { composerTerminalLine } from "../lib/threadTerminals.ts"
 import { startComposerTerminal } from "./ThreadTerminals.tsx"
 import { LazyThreadBox } from "./LazyThreadBox.tsx"
+import { useIsMobile } from "../lib/mobile.ts"
+import { threadLifecycleAvailability } from "../lib/threadLifecycle.ts"
+import { PhoneDoneButton } from "./PhoneDoneButton.tsx"
+import type { PhoneBarApi } from "./Composer.tsx"
 
 // THE prompt box for a registered thread — the single block every "steer this thread" surface renders.
 // The <Composer> leaf was already shared; the ~14 lines AROUND it were not, and the queue card's copy had
@@ -64,6 +69,7 @@ export function ThreadComposerBox({
   id,
   ops,
   submitOverride,
+  phoneBarOverride,
 }: {
   slug: string
   // Pure data- tag forwarded to the textarea. Also the two surfaces' only behavioral fork inside
@@ -85,6 +91,12 @@ export function ThreadComposerBox({
   // the plain eager follow-up. Deliberately not split into separate `onSent`/`scrollToBottom` props:
   // the override already carries both, and a second copy of them here could only ever disagree.
   submitOverride?: (text: string, callbacks: EagerFollowUpCallbacks) => void
+  // THE PHONE BAR'S THIRD STATE. While set, the drawer's resting phone bar renders this in place of
+  // its row — a thread with open registered questions shows [keyboard] + "Answer N questions" there.
+  // `api.editReply()` (the keyboard button) switches back to the prompt and focuses it inside the same
+  // tap; the override returns once the field is empty and blurred. Ignored above the phone breakpoint
+  // and on the queue card. See PhoneComposerLayout in Composer.tsx.
+  phoneBarOverride?: (api: PhoneBarApi) => ReactNode
 }): ReactElement {
   const snap = useSnapshot(store)
   const thread = snap.board?.threads.find((candidate) => candidate.id === slug)
@@ -121,6 +133,13 @@ export function ThreadComposerBox({
     deliverNow()
     return true
   }
+  // THE PHONE BAR — the drawer's composer below the phone breakpoint (the queue card never renders
+  // on a phone). Its right-hand verb follows the thread: Done while it rests and can be completed,
+  // Send once there is text, a dimmed ↑ while a turn runs.
+  const isMobile = useIsMobile()
+  const phoneBar = isMobile && surface === "chatComposer"
+  const turnRunning = thread?.runtime === "running" || thread?.runtime === "spawning"
+  const canComplete = thread ? threadLifecycleAvailability(thread).archive && !turnRunning : false
 
   function send(interrupt = false) {
     const text = message.trim()
@@ -157,10 +176,18 @@ export function ThreadComposerBox({
     const outgoing = buildMessageWithContext(text, staged, projectDir)
     const callbacks: EagerFollowUpCallbacks = {
       onOptimistic: clearMessage,
-      // Never clobber a newer draft typed while the request was in flight.
-      onRollback: () => {
-        if (!draftStore.get(key)) setMessage(message)
+      // Re-sending words an earlier failure handed back replaces that failure's bubble — see
+      // lib/failedDelivery.ts.
+      supersedes: takeSupersededFailure(key, outgoing),
+      // Never clobber a newer draft typed while the request was in flight — and never DROP the failed
+      // message for it either. This used to restore only into an empty box, so a failed send was
+      // silently discarded whenever the operator had typed anything since; the words now go above
+      // whatever is there (mergeIntoDraft). The server keeps its own copy too when it can (`kept`),
+      // because this draft is sessionStorage and does not survive a browser restart.
+      onRollback: (failure) => {
+        mergeIntoDraft(key, message)
         restoreContextItems(key, staged)
+        noteFailedDraftOrigin(key, { ...failure, text: message })
       },
     }
     const deliver = () => {
@@ -184,6 +211,38 @@ export function ThreadComposerBox({
     return (
       <div {...(surface === "chatComposer" ? { "data-thread-action-bar": "" } : {})} className={className}>
         <LazyThreadBox thread={thread as ThreadView} surface={surface} id={id} />
+      </div>
+    )
+  }
+
+  if (phoneBar) {
+    return (
+      <div data-thread-composer-box={surface} data-thread-action-bar="" data-phone-thread-bar="">
+        <Composer
+          contextTokens={contextTokens}
+          id={id}
+          surface={surface}
+          value={message}
+          onChange={setMessage}
+          onSubmit={() => send()}
+          onInterruptSubmit={canInterrupt ? () => send(true) : undefined}
+          slashSuggest={slashSuggest}
+          // An external session keeps its own sentence (it says what sending does); otherwise the verb
+          // is the thread's state: steering a turn in flight, or replying to one at rest.
+          placeholder={thread?.foreign ? placeholder : turnRunning ? "Steer…" : "Reply…"}
+          busy={controls.busy}
+          phone={{
+            layout: "bar",
+            tools: controls.phoneTools,
+            idlePrimary: canComplete && thread ? (compact) => <PhoneDoneButton thread={thread as ThreadView} compact={compact} /> : undefined,
+            override: phoneBarOverride,
+            onLongPressSend: canInterrupt ? () => send(true) : undefined,
+          }}
+        />
+        {controls.status}
+        <div className="ops-column-optical-inset empty:hidden">{ops}</div>
+        {signInFor && <SignInModal backend={signInFor} onClose={() => setSignInFor(null)} onAuthed={() => setSignInFor(null)} />}
+        {logoutFor && <LogoutConfirmModal backend={logoutFor} onClose={() => setLogoutFor(null)} />}
       </div>
     )
   }

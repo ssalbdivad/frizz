@@ -25,6 +25,19 @@ test("a handoff's leading bold phrase is its verdict, and markdown reads as pros
   assert.deepEqual(handoffLine("First line\nsecond line"), { text: "First line" })
   assert.equal(handoffLine("   "), null)
   assert.equal(handoffLine(undefined), null)
+  // An EXACT line (the server's `lastAssistantLine`) is never cut: a " - " inside it is prose.
+  assert.deepEqual(handoffLine("**Fixed** — the rail holds - ws.ts no longer clears it.", true), { lead: "Fixed", text: "— the rail holds - ws.ts no longer clears it." })
+})
+
+test("a rested row reads the handoff's real first line, and the preview only when there is none", () => {
+  const t = thread({
+    lastAssistantLine: "**Fixed** — the arm builds on Node 24 - `e41c2a0` on main",
+    lastAssistant: "**Fixed** — the arm builds on Node 24 - `e41c2a0` on main - Added a test.",
+  })
+  assert.deepEqual(rowSecondLine(t, "rest", false), { lead: "Fixed", text: "— the arm builds on Node 24 - e41c2a0 on main" })
+  // A first line that is only a fence opener strips to nothing: the preview's approximation stands in.
+  const fenced = thread({ lastAssistantLine: "```done", lastAssistant: "```done - The meter reads codex tokens. - Tests green. ```" })
+  assert.deepEqual(rowSecondLine(fenced, "rest", false), { text: "The meter reads codex tokens." })
 })
 
 test("an ask's line is its question, or the count when there are several", () => {
@@ -39,6 +52,18 @@ test("an ask's line is its question, or the count when there are several", () =>
   assert.deepEqual(rowSecondLine(native, "needs-input", false), { text: "Post it?" })
   // No question text anywhere: the handoff says what was asked.
   assert.deepEqual(rowSecondLine(thread({ humanBlocked: true, lastAssistant: "Should I merge?" }), "needs-input", false), { text: "Should I merge?" })
+})
+
+test("a running row names the call it is waiting on, labelled as the chat's working indicator labels it", () => {
+  const bash = thread({ liveTool: { name: "Bash", desc: "Running the focused tests", detail: "nub --test" }, activity: "Legacy gerund", lastAssistant: "Said something" })
+  assert.deepEqual(rowSecondLine(bash, "working", true), { text: "Running the focused tests" })
+  // An imperative description reads as the gerund, exactly as the transcript's shimmer shows it.
+  assert.deepEqual(rowSecondLine(thread({ liveTool: { name: "Bash", desc: "Run the focused tests" } }), "working", true), { text: "Running the focused tests" })
+  // A call with no description is named by its target, project-relative.
+  const read = thread({ liveTool: { name: "Read", detail: "/repo/.github/workflows/ci.yml" } })
+  assert.deepEqual(rowSecondLine(read, "working", true, now, "/repo"), { text: "Reading .github/workflows/ci.yml" })
+  // At rest the live tool says nothing, whatever the view still carries.
+  assert.deepEqual(rowSecondLine(thread({ ...bash, lastAssistantLine: "Done." }), "rest", false), { text: "Done." })
 })
 
 test("a running row reads its activity, and a rested row its handoff", () => {

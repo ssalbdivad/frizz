@@ -4,7 +4,7 @@ import { createHash } from "node:crypto"
 import { promisify } from "node:util"
 import { basename, dirname, isAbsolute, join, resolve, win32 } from "node:path"
 import { homedir, tmpdir } from "node:os"
-import type { AskQuestion, AwaitingHint, SubAgentDirectoryEntry, WorkCheckout } from "@frizz/shared"
+import type { AskQuestion, AwaitingHint, LiveTool, SubAgentDirectoryEntry, WorkCheckout } from "@frizz/shared"
 import { insideFence, isAllInjectedNoise, isInterruptMarker, isWakeDelivery, parseAskUserQuestionInput, PermissionMode, questionFencesLive, saysAllDone, splitAwaitingFrontmatter } from "@frizz/shared"
 import type { Bus } from "./bus.ts"
 import { permMarkerPath, workDirOf, type Project } from "./project.ts"
@@ -51,6 +51,7 @@ import { transcriptQuietPast } from "./pending-call.ts"
 import { processAwakeClock, wallSpan } from "./awake-clock.ts"
 import { forkPointOf, isInheritedSessionMetadata } from "./fork-point.ts"
 import { claudeSideTurnSteps, foldSideTurn, hiddenSideTurnRest, normalizedSideTurnSteps, sideTurnRunning, type SideTurn } from "./spinoff-side-turn.ts"
+import { redactToolPayload } from "./credential-redaction.ts"
 
 // The JSONL tailer: incrementally reads each registered session's Claude Code transcript
 // (~/.claude/projects/<cwdSlug>/<session_id>.jsonl) to derive liveness telemetry — last activity
@@ -694,6 +695,9 @@ const PENDING_RESUMES_MAX = 32
 // Each is consumed by its own tool_result — usually the very next record — so this bounds nothing but
 // the pathological case of a turn whose results never land.
 const PENDING_SHELLS_MAX = 32
+// How many un-answered tool calls to hold for the live line (see TailState.liveTools). Parallel calls in
+// one message are the most there ever are; this bounds only a transcript whose results never land.
+const LIVE_TOOLS_MAX = 16
 // How far behind the fold's high-water mark a restart ack may sit and still count as live. Covers
 // ordinary out-of-order writes between sibling records; a REPLAYED ack (see trackResumes) carries its
 // original timestamp and is stale by minutes to days, so nothing near this boundary is ambiguous.
@@ -834,6 +838,11 @@ export interface TailState extends FoldState {
   // taught by an auto-background ack, which is a command's own output: vouched for by its session-id NAME,
   // it once vouched in turn for a folder symlinked there from another session's (2026-09-29).
   launchTasksDir?: string
+  // Every tool call the main thread has issued and not yet had a result for, keyed by tool_use id in
+  // issue order — the newest is what a board row names as the live line ("Running the focused tests").
+  // `pendingShells` above is the same idea narrowed to foreground Bash for a different job, and it is not
+  // cleared by a fresh prompt, which this must be. Bounded; absent until the first call.
+  liveTools?: Map<string, LiveTool>
   // MONOTONIC high-water mark over every timestamped record folded so far. `lastActivityAt` cannot
   // serve this purpose: it tracks the LATEST record folded and therefore moves BACKWARD whenever a
   // transcript replays history (which Claude's do — see trackResumes). This only ever advances, and it
@@ -996,6 +1005,31 @@ function previewText(raw: string): string | undefined {
   const norm = raw.replace(/\s+/g, " ").trim()
   if (!norm) return undefined
   return norm.length > 200 ? `${norm.slice(0, 200)}…` : norm
+}
+
+// How long the first line of a handoff may run. A verdict line is a sentence, not a paragraph; this only
+// bounds the message that opens with one long unbroken paragraph.
+const ASSISTANT_LINE_MAX = 240
+
+/** The FIRST non-empty line of an assistant text, markdown intact — the handoff's verdict line, which the
+ *  preview above cannot give back because it collapses the newline that ended it. Runs of whitespace
+ *  inside the line collapse, as the preview's do; nothing else is touched. */
+export function firstTextLine(raw: string | undefined): string | undefined {
+  if (typeof raw !== "string") return undefined
+  for (const line of raw.split("\n")) {
+    const norm = line.replace(/\s+/g, " ").trim()
+    if (norm) return norm.length > ASSISTANT_LINE_MAX ? `${norm.slice(0, ASSISTANT_LINE_MAX)}…` : norm
+  }
+  return undefined
+}
+
+/** Set the board's two readings of the newest assistant text together, so they never describe different
+ *  messages. An empty text leaves both on the prior message, as the preview always has. */
+function setAssistantPreview(state: FoldState, raw: string): void {
+  const preview = previewText(raw)
+  if (preview === undefined) return
+  state.lastAssistant = preview
+  state.lastAssistantLine = firstTextLine(raw)
 }
 
 // Minimal server-side MIRROR of the web's ```question fence convention (web/src/lib/questionBlocks.ts
@@ -1354,6 +1388,75 @@ function trackDispatches(state: TailState, rec: Record): void {
       }
     }
   }
+}
+
+// THE LIVE LINE. Each tool_use the MAIN thread issues is held until its tool_result lands, so the board
+// can name what the agent is doing right now with the label the chat's working indicator would give the
+// same call (web lib/toolActivity.toolActivityLabel reads exactly `name`, `desc`, `detail`). Only what
+// that label needs is kept: the model's own `description`, and the target the input names — the same
+// fields, in the same order, the transcript's `toolDetail` prefers. Credential-shaped text is redacted
+// before it is held, by the transcript's own redactor.
+function liveToolOf(name: string, input: unknown): LiveTool {
+  const i = (input && typeof input === "object" ? input : {}) as { [key: string]: unknown }
+  const str = (v: unknown) => (typeof v === "string" && v.trim() ? v.trim() : undefined)
+  const clean = (v: string | undefined) => {
+    if (v === undefined) return undefined
+    const flat = redactToolPayload(v).replace(/\s+/g, " ").trim()
+    return flat.length > 200 ? `${flat.slice(0, 199)}…` : flat || undefined
+  }
+  const desc = name === "Bash" ? clean(str(i.description)) : undefined
+  const pattern = str(i.pattern)
+  const command = str(i.command)
+  const detail = pattern
+    ? `${pattern}${str(i.path) ? ` · ${str(i.path)}` : ""}`
+    : str(i.file_path) ?? str(i.path) ?? (command ? shellSummary(command) : undefined) ?? str(i.description) ?? str(i.query) ?? str(i.url)
+  return { name, ...(desc ? { desc } : {}), ...(clean(detail) ? { detail: clean(detail) } : {}) }
+}
+
+function trackLiveTools(state: TailState, rec: Record): void {
+  if (rec.isSidechain === true) return
+  const content = rec.message?.content
+  if (!Array.isArray(content)) return
+  for (const block of content) {
+    if (!block || typeof block !== "object") continue
+    const b = block as { type?: string; name?: unknown; id?: unknown; input?: unknown }
+    if (b.type !== "tool_use" || typeof b.id !== "string" || typeof b.name !== "string") continue
+    const live = (state.liveTools ??= new Map())
+    live.delete(b.id) // a re-seen call moves to the end: the map's order IS issue order
+    live.set(b.id, liveToolOf(b.name, b.input))
+    while (live.size > LIVE_TOOLS_MAX) {
+      const oldest = live.keys().next().value
+      if (oldest === undefined) break
+      live.delete(oldest)
+    }
+  }
+  // A message that ENDED its turn has nothing left in flight — whatever it still holds lost its result
+  // (a crash, an interrupt the transcript never answered).
+  if (rec.message?.stop_reason === "end_turn") state.liveTools?.clear()
+}
+
+function settleLiveTools(state: TailState, rec: Record): void {
+  if (!state.liveTools?.size || rec.isSidechain === true) return
+  const content = rec.message?.content
+  // A real prompt (typed text, not a tool exchange) means every call before it is history: an answered
+  // call's result lands before any prompt could, and an unanswered one was cut off by it.
+  if (isRealUserMessage(content)) {
+    state.liveTools.clear()
+    return
+  }
+  if (!Array.isArray(content)) return
+  for (const block of content) {
+    if (!block || typeof block !== "object") continue
+    const b = block as { type?: string; tool_use_id?: unknown }
+    if (b.type === "tool_result" && typeof b.tool_use_id === "string") state.liveTools.delete(b.tool_use_id)
+  }
+}
+
+/** The newest un-answered call, or undefined between calls. */
+function newestLiveTool(state: TailState): LiveTool | undefined {
+  let newest: LiveTool | undefined
+  for (const tool of state.liveTools?.values() ?? []) newest = tool
+  return newest
 }
 
 // Corpus-verified LAUNCH-ACK shapes (2026-07-09; surveyed across the real transcripts in
@@ -2341,8 +2444,7 @@ export function applyRecord(state: TailState, rec: Record): void {
       state.limitFault = undefined
     }
     if (raw !== undefined) {
-      const preview = previewText(raw)
-      if (preview !== undefined) state.lastAssistant = preview
+      setAssistantPreview(state, raw)
       // Track whether THIS (now the latest) assistant text carries an unanswered question fence.
       state.lastAssistantHasQuestion = hasQuestionBlock(raw)
       // Same lifecycle for the stop-hook sentinel: it only means "nothing actionable" while it
@@ -2360,6 +2462,7 @@ export function applyRecord(state: TailState, rec: Record): void {
     trackDispatches(state, rec) // register any background Agent dispatches + background shells
     trackOpenCalls(state, rec) // what a silent turn is blocked on
     trackToolCwd(state, rec) // where its tools work, when the session's own `cwd` cannot say
+    trackLiveTools(state, rec) // the tool calls now awaiting a result — the board row's live line
     trackAsk(state, rec) // capture a pending native AskUserQuestion (frozen at a TUI dialog)
   } else if (type === "user" && !metaUserRec) {
     state.sawRecords = true
@@ -2418,6 +2521,7 @@ export function applyRecord(state: TailState, rec: Record): void {
     }
     settleOpenCalls(state, rec)
     trackLaunchResults(state, rec) // resolve a background dispatch's transcript path from its launch result
+    settleLiveTools(state, rec) // a result (or a fresh prompt) ends the calls it answers
     trackResumes(state, rec) // a SendMessage that RESTARTED a stopped child is a fresh launch — revive it
     trackStops(state, rec) // a manual TaskStop is a terminal signal — retire the op it killed
     clearAskOnResult(state, rec) // the AskUserQuestion answer landed → clear the pending ask
@@ -2451,8 +2555,7 @@ export function applyRecord(state: TailState, rec: Record): void {
 // assistant-text arm of applyRecord — minus Claude's every-block fence recompute (a normalized
 // backend fences only on the final message; a codex `commentary` block must never excuse the thread).
 function applyFinalText(state: FoldState, text: string): void {
-  const preview = previewText(text)
-  if (preview !== undefined) state.lastAssistant = preview
+  setAssistantPreview(state, text)
   state.lastAssistantHasQuestion = hasQuestionBlock(text)
   state.lastAssistantAllDone = saysAllDone(text)
   state.lastFence = parseSignalFence(text)
@@ -2485,6 +2588,7 @@ export function applyEvent(state: FoldState, ev: NormalizedEvent): void {
       state.apiFault = true
       state.providerError = ev.error
       state.lastAssistant = ev.error.message
+      state.lastAssistantLine = firstTextLine(ev.error.message)
       state.lastFence = undefined
       state.lastAssistantAllDone = false
       state.lastAssistantHasQuestion = false
@@ -2521,8 +2625,7 @@ export function applyEvent(state: FoldState, ev: NormalizedEvent): void {
         if (typeof ev.at === "string") state.lastAssistantAt = ev.at
         applyFinalText(state, ev.text)
       } else {
-        const preview = previewText(ev.text)
-        if (preview !== undefined) state.lastAssistant = preview
+        setAssistantPreview(state, ev.text)
       }
       break
     case "user-message":
@@ -6136,7 +6239,7 @@ export function createTailer(deps: TailerDeps): Tailer {
     const rest = (s.turn === "idle" ? hiddenSideTurnRest(s) : undefined) ?? s
     const pendingQuestion = rest.lastAssistantHasQuestion && questionFencesLive(row?.spawned_at)
     const nowMs = now()
-    return { primed: s.primed, turn: s.turn, permPrompt: s.permPrompt, permPolicy: s.permPolicy, permDenies: s.permDenies, model: s.model, effort: s.effort, profileAt: s.profileAt, profileRevision: s.profileRevision, permissionMode: s.permissionMode, permissionModeAt: s.permissionModeAt, permissionModeRevision: s.permissionModeRevision, lastActivityAt: s.lastActivityAt, lastAssistantAt: rest.lastAssistantAt, lastAssistant: rest.lastAssistant, aiTitle: s.aiTitle, customTitle: s.customTitle, customTitleRevision: s.customTitleRevision, subAgents: subAgentViews(s, nowMs), droppedReports: [...s.queuedReports.values()], bgShells: [...bgShellViews(s), ...codexBgShellViews(s)], retiredShells: retiredShellViews(s), retiredSubAgents: retiredSubAgentViews(s), pendingAsk: s.pendingAsk, pendingQuestion, lastAssistantAllDone: rest.lastAssistantAllDone, lastUserAt: rest.lastUserAt, lastHumanAt: rest.lastHumanAt, lastToolCallAt: rest.lastToolCallAt, openCall: newestOpenCall(s), lastUserText: rest.lastUserText, firstUserText: s.firstUserText, lastFence: rest.lastFence, noTranscript: s.noTranscript, authFault: s.authFault, apiFault: s.apiFault, providerError: s.providerError, limitFault: s.limitFault, contextTokens: s.contextTokens, contextWindow: s.contextWindow, lastCompactionAt: s.lastCompactionAt, ...(s.sideTurn?.current ? { sideTurn: { ...s.sideTurn.current } } : {}), ...workingDirTelemetry(s) }
+    return { primed: s.primed, turn: s.turn, permPrompt: s.permPrompt, permPolicy: s.permPolicy, permDenies: s.permDenies, model: s.model, effort: s.effort, profileAt: s.profileAt, profileRevision: s.profileRevision, permissionMode: s.permissionMode, permissionModeAt: s.permissionModeAt, permissionModeRevision: s.permissionModeRevision, lastActivityAt: s.lastActivityAt, lastAssistantAt: rest.lastAssistantAt, lastAssistant: rest.lastAssistant, lastAssistantLine: rest.lastAssistantLine, liveTool: newestLiveTool(s), aiTitle: s.aiTitle, customTitle: s.customTitle, customTitleRevision: s.customTitleRevision, subAgents: subAgentViews(s, nowMs), droppedReports: [...s.queuedReports.values()], bgShells: [...bgShellViews(s), ...codexBgShellViews(s)], retiredShells: retiredShellViews(s), retiredSubAgents: retiredSubAgentViews(s), pendingAsk: s.pendingAsk, pendingQuestion, lastAssistantAllDone: rest.lastAssistantAllDone, lastUserAt: rest.lastUserAt, lastHumanAt: rest.lastHumanAt, lastToolCallAt: rest.lastToolCallAt, openCall: newestOpenCall(s), lastUserText: rest.lastUserText, firstUserText: s.firstUserText, lastFence: rest.lastFence, noTranscript: s.noTranscript, authFault: s.authFault, apiFault: s.apiFault, providerError: s.providerError, limitFault: s.limitFault, contextTokens: s.contextTokens, contextWindow: s.contextWindow, lastCompactionAt: s.lastCompactionAt, ...(s.sideTurn?.current ? { sideTurn: { ...s.sideTurn.current } } : {}), ...workingDirTelemetry(s) }
   }
 
   // ---- the provisional reading (2026-09-30) ------------------------------------------------------

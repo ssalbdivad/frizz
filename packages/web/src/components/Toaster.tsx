@@ -83,6 +83,7 @@ export function Toaster() {
         )}
         {toast.action && (
           <button
+            data-toast-action
             onClick={() => {
               toast.action!.run()
               store.toast = null

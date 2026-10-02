@@ -35,6 +35,11 @@ function snapshot(): boolean {
   return media ? media.matches : typeof window !== "undefined" && !!window.matchMedia?.(MOBILE_QUERY).matches
 }
 
+/** The same answer as `useIsMobile`, for code outside React that acts on a click (lib/local-file-links). */
+export function isMobileViewport(): boolean {
+  return snapshot()
+}
+
 /**
  * Is this a phone-shaped viewport?
  *

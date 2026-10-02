@@ -322,6 +322,85 @@ test("the batched query asks for the status half too, so no PR needs a second tr
   assert.equal(result.status === "ok" && result.pr?.state, "OPEN", "the snapshot rides back with the activity")
 })
 
+// ---- THE ROLLUP IS PAGED (2026-10-01) ---------------------------------------------------------------
+//
+// nubjs/nub#995 carried 138 contexts. The watch read GitHub's first page of 100 — all green — reported
+// "CI PASSED" while `Windows embedded runtime and compile` was still running further down the list, and
+// never saw it finish, so the thread parked on it slept through its own CI going green.
+
+const HEAD = "a444bbf786754c74c0bb20adfc2150caab47151e"
+const green = (from: number, count: number) => Array.from({ length: count }, (_, i) => ({
+  __typename: "CheckRun", name: `job ${from + i}`, status: "COMPLETED", conclusion: "SUCCESS",
+}))
+const firstPage = {
+  data: {
+    ref0: { pullRequest: {
+      state: "OPEN", reviews: { nodes: [] }, comments: { nodes: [] },
+      commits: { nodes: [{ commit: { oid: HEAD, statusCheckRollup: { contexts: {
+        pageInfo: { hasNextPage: true, endCursor: "MTAw" },
+        nodes: green(0, 100),
+      } } } }] },
+    } },
+    rateLimit: { cost: 1, remaining: 4_999, resetAt: "2026-10-01T05:00:00Z", limit: 5_000 },
+  },
+}
+
+test("a rollup past one page is read to the end, so a job still running on page two is seen", async () => {
+  const bodies: any[] = []
+  const fetcher = createGithubReviewFetcher({
+    getToken: async () => "t",
+    request: async (_input, init) => {
+      bodies.push(JSON.parse(String(init?.body)))
+      if (bodies.length === 1) return response(firstPage)
+      return response({ data: {
+        page0: { object: { statusCheckRollup: { contexts: {
+          pageInfo: { hasNextPage: false, endCursor: "MTM4" },
+          nodes: [...green(100, 37), {
+            __typename: "CheckRun", name: "Windows embedded runtime and compile", status: "IN_PROGRESS", conclusion: null,
+            checkSuite: { workflowRun: { workflow: { name: "CI" } } },
+          }],
+        } } } },
+        rateLimit: { cost: 1, remaining: 4_998, resetAt: "2026-10-01T05:00:00Z", limit: 5_000 },
+      } })
+    },
+    now: () => Date.parse("2026-10-01T03:38:00Z"),
+  })
+  const result = await fetcher(ref(995))
+  assert.equal(bodies.length, 2, "one follow-up request for the second page")
+  assert.match(bodies[0].query, /pageInfo \{ hasNextPage endCursor \}/, "the first page asks whether there is another")
+  // The follow-up is addressed by the head COMMIT, so a push between the two requests cannot splice
+  // another commit's checks onto this one's.
+  assert.deepEqual(bodies[1].variables, { owner0: "nubjs", repo0: "nub", oid0: HEAD, after0: "MTAw" })
+  assert.equal(result.status, "ok")
+  const rollup = result.status === "ok" ? result.pr?.rollup ?? [] : []
+  assert.equal(rollup.length, 138, "every check, not the first hundred")
+  assert.deepEqual(rollup.at(-1), {
+    __typename: "CheckRun", name: "Windows embedded runtime and compile", status: "IN_PROGRESS", conclusion: null,
+    checkSuite: { workflowRun: { workflow: { name: "CI" } } },
+    workflowName: "CI",
+  })
+})
+
+test("a rollup whose next page cannot be read goes back with NO snapshot, never a partial one", async () => {
+  for (const second of [
+    () => response({ message: "Bad gateway" }, { status: 502 }),
+    () => response({ data: { page0: { object: null } } }), // the head commit vanished, or the shape surprised us
+    () => { throw new Error("socket hang up") },
+  ]) {
+    let calls = 0
+    const fetcher = createGithubReviewFetcher({
+      getToken: async () => "t",
+      request: async () => (++calls === 1 ? response(firstPage) : second()),
+      now: () => Date.parse("2026-10-01T03:38:00Z"),
+    })
+    const result = await fetcher(ref(995))
+    // The activity still read fine, so this is no failure; the status goes to the scheduler's `gh`
+    // fallback, which reads every check, instead of a verdict over the hundred that came back green.
+    assert.equal(calls, 2)
+    assert.deepEqual(result, { status: "ok", activity: [] })
+  }
+})
+
 // ---- ISSUES RIDE THE SAME BATCH (2026-09-14) ----------------------------------------------------------
 
 test("parseGithubIssueSnapshot: state, reason, title, labels, assignees and the comment count — nothing fabricated", () => {

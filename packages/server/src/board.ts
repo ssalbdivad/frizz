@@ -21,6 +21,7 @@ import { isReplyWait } from "./thread-mentions.ts"
 import { normalizeObservedThreadModel } from "./backend/thread-profiles.ts"
 import { claudeModelStanding } from "./backend/claude-model-upgrade.ts"
 import type { Tailer, SessionTelemetry, FenceView } from "./tailer.ts"
+import { firstTextLine } from "./tailer.ts"
 import type { InteractionChange } from "./interaction-store.ts"
 import { frizzDirExists } from "./frizz.ts"
 import { githubStatusKey, parkExpiresAt, parkIsHonoured, parseIssueRef, parsePrRef, readAwaitingPark, readGithubIssueStatusBook, readGithubStatusBook, GITHUB_ISSUE_STATUS_SETTING, GITHUB_STATUS_SETTING, type GithubIssueStatusBook, type GithubStatusBook } from "./awaiting.ts"
@@ -1242,8 +1243,10 @@ export function fenceWatchViews(
 // A follow-up frizz has delivered but the transcript has not yet reflected: it lives in the delivery
 // ledger as `pending` (injected, no JSONL evidence yet), `enqueued` (positively receipted by Claude
 // Code's own queue) or `delivered` (the transport's receipt proved it went straight into a turn). All
-// three mean the human's message is handled and in flight. `unconfirmed` is NOT fresh — frizz could not
-// confirm that send, so it must stay visible for the human to re-drive.
+// three mean the human's message is handled and in flight, and so does the write-ahead `sending` (the
+// transport is being called right now; it settles or fails within SENDING_STALL_MS). `unconfirmed` is
+// NOT fresh — frizz could not confirm that send, so it must stay visible for the human to re-drive — and
+// `failed` is not either: the words never reached the worker, so the thread is still waiting on them.
 //
 // `processGone` is what keeps "in flight" honest, and it is the whole reason this reads a second
 // argument. Both live states are claims about a process HOLDING the message: `pending` says a process
@@ -1271,7 +1274,7 @@ export function fenceWatchViews(
 function hasFreshDelivery(row: SessionRow, processGone: boolean): boolean {
   if (processGone) return false
   return parseDeliveryLedger(row.delivery_ledger).some((d) =>
-    (d.state === "pending" || d.state === "enqueued" || d.state === "delivered") && spinoffIdOfDelivery(d.id) === undefined)
+    (d.state === "sending" || d.state === "pending" || d.state === "enqueued" || d.state === "delivered") && spinoffIdOfDelivery(d.id) === undefined)
 }
 
 /** How long a message on its way to the worker keeps its row SPINNING (see deriveDeliveryInFlight). A
@@ -1302,7 +1305,7 @@ export function deriveDeliveryInFlight(
   if (deliveryProcessGone) return false
   // A spinoff request is not the human's message to THIS thread (see hasFreshDelivery), so it spins nothing.
   return parseDeliveryLedger(row.delivery_ledger).some((d) =>
-    (d.state === "pending" || d.state === "enqueued" || d.state === "delivered") && spinoffIdOfDelivery(d.id) === undefined &&
+    (d.state === "sending" || d.state === "pending" || d.state === "enqueued" || d.state === "delivered") && spinoffIdOfDelivery(d.id) === undefined &&
     nowMs - Date.parse(d.at) < DELIVERY_IN_FLIGHT_SPIN_MS
   )
 }
@@ -2050,7 +2053,8 @@ function sessionThreadView(
   const failedTele: SessionTelemetry | undefined = nativeFailure ? {
     subAgents: [], bgShells: [], ...rawTele,
     turn: "idle", permPrompt: false, pendingQuestion: false, pendingAsk: undefined, apiFault: true, providerError,
-    lastAssistant: providerError?.message, lastAssistantAt: providerError?.at,
+    lastAssistant: providerError?.message, lastAssistantLine: firstTextLine(providerError?.message), lastAssistantAt: providerError?.at,
+    liveTool: undefined,
     lastFence: undefined, lastAssistantAllDone: false,
   } : rawTele
   const done = supersededDone || providerError ? undefined : registeredDoneFence(registries.done.get(row.slug), rawTele?.lastUserAt, rawTele?.lastToolCallAt, rawTele)
@@ -2169,6 +2173,8 @@ function sessionThreadView(
     unread: row.unread === 1,
     archived,
     lastAssistant: tele?.lastAssistant,
+    lastAssistantLine: tele?.lastAssistantLine,
+    liveTool: tele?.liveTool,
     spawnedAt: row.spawned_at,
     lastActivityAt: tele?.lastActivityAt,
     lastAssistantAt: tele?.lastAssistantAt,
@@ -2362,6 +2368,7 @@ function foreignThreadView(sessionId: string, tele: SessionTelemetry, backend: "
     unread: false,
     archived: false,
     lastAssistant: tele.lastAssistant,
+    lastAssistantLine: tele.lastAssistantLine,
     lastActivityAt: tele.lastActivityAt,
     lastAssistantAt: tele.lastAssistantAt,
     lastUserAt: tele.lastUserAt,

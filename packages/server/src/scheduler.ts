@@ -1320,8 +1320,10 @@ export interface SchedulerDeps {
   fetchGithubReview?: (ref: PrRef) => Promise<GithubReviewActivity[] | GithubReviewFetchResult | undefined>
   log?: (msg: string) => void
   // After `resume` has handed a wake to the worker's runtime: is the process that took it still there?
-  // The broker transport is a socket frame with no reply, and a cold resume that dies at startup takes
-  // the frame with it — so "resume returned" is SENT, not delivered. Answering "alive" or "dead" lets the
+  // A broker daemon now ACKNOWLEDGES the input (input-ack-v1), so `resume` returning means the session
+  // queued it — but a daemon forked by an older build only proves the frame was written, and a cold
+  // resume that dies at startup takes its queued input with it either way — so "resume returned" is
+  // still SENT, not delivered. Answering "alive" or "dead" lets the
   // scheduler hold the wake as sent and confirm or re-send it later; "unknown" (or no hook at all) keeps
   // the old behaviour, delivered on return. See deliverDue and reconcileOutbox.
   wakeRuntimeState?: (slug: string, sessionId: string) => "alive" | "dead" | "unknown"
@@ -2868,7 +2870,8 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
       //
       // `fetchPr` REMAINS THE FALLBACK, and it is not vestigial: an injected fetcher (every scheduler
       // test that predates this) returns activity with no `pr`, and so does a response frizz cannot
-      // interpret. Falling back there keeps a watcher polling rather than going quiet on a shape
+      // interpret, or a rollup longer than one page that it could not read to the end. Falling back
+      // there keeps a watcher polling rather than going quiet on a shape
       // surprise — which is the failure mode this whole source exists to prevent. It runs through
       // `prStatusFallback` because it is the poll's only subprocess and a batch fails all at once; see
       // PR_STATUS_FALLBACK_LIMIT.

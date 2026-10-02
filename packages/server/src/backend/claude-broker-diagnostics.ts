@@ -52,6 +52,10 @@ export interface ClaudeBrokerDiagnosticRecord {
  *  - `idle-timeout`                 — nobody attached for IDLE_EXIT_MS.
  *  - `self-collected-record-reassigned` — unattached and the record no longer names us (a successor
  *                                    stole it, or a sweep removed it): undiscoverable, so collected.
+ *  - `self-collected-socket-lost`   — unattached and the socket PATH no longer leads to us (the file
+ *                                    was deleted, or another daemon bound it): still recorded, but no
+ *                                    client can ever connect again, so collected rather than left to
+ *                                    squat on the record every later attach would adopt.
  *  - `socket-listen-failed`         — the listen() that makes this daemon reachable never succeeded.
  */
 export type ClaudeBrokerExitReason =
@@ -64,6 +68,7 @@ export type ClaudeBrokerExitReason =
   | "event-pump-failed"
   | "idle-timeout"
   | "self-collected-record-reassigned"
+  | "self-collected-socket-lost"
   | "socket-listen-failed"
   // The daemon threw where nothing was catching. Node's default for these is to print a stack and exit
   // — and the host spawns this daemon with stdio:"ignore", so that stack goes NOWHERE. Before these were

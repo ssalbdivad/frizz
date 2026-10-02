@@ -39,7 +39,7 @@ import { claudeBrokerBridgeEnabled, type ClaudeAgentBrokerBridge } from "./backe
 import { claudeUltracodeFlags, resolveClaudeEffort } from "./backend/claude-effort.ts"
 import { ProviderAuthRequiredError } from "./backend/auth-status.ts"
 import { readBoard, type FrizzBoard, type FrizzThread } from "./frizz.ts"
-import { SYSTEM_PROMPT_DIR, cleanupAdoptionSessionFiles, systemPromptPath } from "./session-files.ts"
+import { SYSTEM_PROMPT_DIR, cleanupAdoptionSessionFiles, systemPromptPath, writeMcpConfigFile } from "./session-files.ts"
 import {
   ADOPTION_ATTEMPT_LEASE_MS,
   abandonAdoptionAttempt,
@@ -544,14 +544,16 @@ export function resolveFrizzMcp(
   }
 }
 
-// Claude flags that mount a worker's MCP servers via ONE inline `--mcp-config` JSON and PRE-APPROVE
+// Claude flags that mount a worker's MCP servers via ONE `--mcp-config` file and PRE-APPROVE
 // the frizz server's tools (`--allowedTools`) so a headless worker never blocks on a permission prompt
-// it has nobody to answer. The argv is exec'd with NO shell in between, so the JSON travels literally.
+// it has nobody to answer. The config is a FILE, never inline JSON: it carries the operator's credentials
+// (a remote server's headers, a stdio server's env), and an argv is readable by every local process
+// through `ps` (see writeMcpConfigFile).
 // The unified `frizz` server is the ONLY server frizz itself injects, and only when its descriptor
 // resolved — frizz injects no browser and nothing else (see backend/types.ts). Everything else a
 // worker mounts is the PROJECT's: since 2026-09-03 every worker runs under `--strict-mcp-config`, so
 // the CLI discovers no `.mcp.json` and no user-scope server on its own, and the project's approved
-// servers ride this same inline config (`project`, from project-mcp-servers.ts — which is also where
+// servers ride this same config (`project`, from project-mcp-servers.ts — which is also where
 // the reasons live: a user-scope stdio server was booting in EVERY worker, twice over).
 export interface ClaudeMcpStdioConfig { command: string; args?: string[]; env?: Record<string, string> }
 export interface ClaudeMcpConfig { mcpServers: WorkerMcpServers; allowedTools: string[] }
@@ -589,8 +591,9 @@ export function claudeMcpConfig(mcp?: FrizzMcp, project?: WorkerMcpServers): Cla
   return { mcpServers: workerMcpServers(project, mcpServers), allowedTools }
 }
 
-// The argv rendering of claudeMcpConfig above.
-export function claudeMcpFlags(mcp?: FrizzMcp, project?: WorkerMcpServers): string[] {
+// The argv rendering of claudeMcpConfig above. Writes the session's config file as a side effect, the
+// way systemPromptFlags writes its prompt file.
+export function claudeMcpFlags(sessionId: string, mcp?: FrizzMcp, project?: WorkerMcpServers): string[] {
   const { mcpServers, allowedTools } = claudeMcpConfig(mcp, project)
   // `--strict-mcp-config` ALWAYS, even with nothing to mount: the flag is what keeps the operator's
   // user-scope servers out of the worker, and a worker with no servers is still one that must not boot
@@ -600,13 +603,12 @@ export function claudeMcpFlags(mcp?: FrizzMcp, project?: WorkerMcpServers): stri
   // the empty string. Emit neither rather than two empty ones.
   const argv = ["--strict-mcp-config"]
   if (Object.keys(mcpServers).length === 0) return argv
-  const config = JSON.stringify({ mcpServers })
   // ONE comma-joined `--allowedTools=` in EQUALS form: the flag is VARIADIC, so a space-separated
   // value with a positional right behind it (e.g. the minimal no-system-prompt argv, where the prompt
   // directly follows) would be swallowed as a second rule. The equals form binds exactly one token —
   // immune to argv reordering. Verified live: `claude -p --allowedTools=mcp__frizz <prompt>` runs the
   // tools unprompted with the prompt surviving as the positional.
-  argv.push("--mcp-config", config)
+  argv.push("--mcp-config", writeMcpConfigFile(sessionId, mcpServers))
   if (allowedTools.length > 0) argv.push(`--allowedTools=${allowedTools.join(",")}`)
   return argv
 }
@@ -657,7 +659,7 @@ export function buildClaudeCommand(opts: {
   if (effort.effort) argv.push("--effort", effort.effort)
   argv.push(...claudeUltracodeFlags(effort))
   if (opts.pluginDir) argv.push("--plugin-dir", opts.pluginDir)
-  argv.push(...claudeMcpFlags(opts.frizzMcp, opts.projectMcpServers))
+  argv.push(...claudeMcpFlags(opts.sessionId, opts.frizzMcp, opts.projectMcpServers))
   argv.push(...workerDisallowedToolFlags())
   // The fixed worker norms live in the SYSTEM prompt: rebuilt on every invocation (incl. resume)
   // and immune to compaction, unlike a first user message.
@@ -747,7 +749,7 @@ export function buildClaudeResumeCommand(opts: {
   if (effort.effort) argv.push("--effort", effort.effort)
   argv.push(...claudeUltracodeFlags(effort))
   if (opts.pluginDir) argv.push("--plugin-dir", opts.pluginDir)
-  argv.push(...claudeMcpFlags(opts.frizzMcp, opts.projectMcpServers))
+  argv.push(...claudeMcpFlags(opts.sessionId, opts.frizzMcp, opts.projectMcpServers))
   argv.push(...workerDisallowedToolFlags())
   // The system prompt is rebuilt per invocation — the resume must re-carry the worker norms too.
   // Same file-based path as buildClaudeCommand (see systemPromptFlags): inline would put the whole

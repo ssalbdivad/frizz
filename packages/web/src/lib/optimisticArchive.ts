@@ -47,6 +47,12 @@ export function clearArchived(slug: string): void {
   delete archiving.at[slug]
 }
 
+// The same map, read outside React — for a click handler that must choose the next thread without
+// landing on one the operator marked done a moment ago whose archive the board has not echoed yet.
+export function archivingAtNow(): Readonly<Record<string, number>> {
+  return archiving.at
+}
+
 export function useArchivingAt(): Record<string, number> {
   return useSnapshot(archiving).at as Record<string, number>
 }
