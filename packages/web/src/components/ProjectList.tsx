@@ -19,7 +19,10 @@
 //           separate collapsible sections), and an open band lists its rows under the work in flight,
 //           with no name or caret of its own (maintainer 2026-10-01, of a caret row closing every project:
 //           "find some way to have it expand just from the title bar so we don't need anything at the
-//           bottom of the list").
+//           bottom of the list"). The same day the counts alone proved too hidden ("the click done on the
+//           top being the only way to view is too confusing"), so an unfolded project's list also ENDS in a
+//           small "N more" under its last row, which lists the rest in place (MoreRow) — one unnamed row,
+//           not a caret per band.
 //
 // ONE PRESENTATION, BOTH VIEWS. Focus mode is this list with one project in it; All projects is the same
 // groups, one per project. So the density is what a busy project costs beyond its own rows, and it is
@@ -42,7 +45,7 @@
 // only jump back. Alt+Arrow on a focused row moves it one place, for anyone not using a mouse.
 import { memo, useCallback, useEffect, useMemo, useRef, useState, type KeyboardEvent as KeyboardEvent_, type PointerEvent as PointerEvent_, type ReactNode } from "react"
 import { useMutation, useQueryClient } from "@tanstack/react-query"
-import { ChevronRight, Ellipsis, Plus } from "lucide-react"
+import { ChevronDown, ChevronRight, ChevronUp, Ellipsis, Plus } from "lucide-react"
 import { useLocation, useNavigate } from "react-router"
 import { useSnapshot } from "valtio"
 import type { BoardSnapshot, ProjectCard, ThreadView } from "@frizz/shared"
@@ -545,6 +548,7 @@ function ProjectGroupRows({
   const live = onPage ? (snap.board as BoardSnapshot) : null
   const opened = collapsed ? [] : QUIET_BANDS.filter((band) => open.has(bandKey(project.id, band)))
   const cached = useProjectBoard(project.id, opened.length > 0 && !onPage && project.open)
+  const [donePage, setDonePage] = useState(DONE_PAGE)
   const board = onPage ? live : cached
   const quiet = useMemo(() => quietBands(project, board), [project, board])
   // Only the page project's drawers can be open on this page, so only its rows can be the one up in one.
@@ -636,7 +640,17 @@ function ProjectGroupRows({
           {slots("pinned").map(row)}
           {slots("ready").map(row)}
           {slots("working").map(row)}
-          {opened.length > 0 && <QuietBands project={project} quiet={quiet} slots={slots} opened={opened} row={row} />}
+          {opened.length > 0 && <QuietBands project={project} quiet={quiet} slots={slots} opened={opened} row={row} donePage={donePage} />}
+          {(loud.rows > 0 || opened.length > 0) && (
+            <MoreRow
+              project={project}
+              quiet={quiet}
+              opened={opened}
+              doneDrawn={Math.min(donePage, slots("done").length)}
+              onMore={() => setDonePage((page) => page + DONE_PAGE * 2)}
+              onLess={() => setDonePage(DONE_PAGE)}
+            />
+          )}
         </ThreadProjectScope>
       )}
     </section>
@@ -749,10 +763,14 @@ function ProjectRow({
   const focused = view.kind === "project" && view.slug === project.slug
   const note = project.stale ? "Directory is missing" : !project.open ? "Not open" : null
   const quietBandsHere = QUIET_BANDS.filter((band) => quietCount(quiet, band) > 0)
+  // A project with nothing Ready and nothing Working — at most its pins — opens the rest like a quiet one
+  // rather than folding its pins away (maintainer 2026-10-01: "if a project has no ready/working threads,
+  // the expand button should open done"). Its pins stay listed either way.
+  const folds = busy && count + working > 0
   // Whether anything is listed under the row: the fold's own state, on either kind of project.
-  const unfolded = busy ? !collapsed : opened.length > 0
+  const unfolded = folds ? !collapsed : opened.length > 0
   const fold = () => {
-    if (busy) {
+    if (folds) {
       setProjectCollapsed(project.id)
       if (collapsed && count === 0) setBandsOpen(project.id, quietBandsHere, true)
       return
@@ -762,7 +780,7 @@ function ProjectRow({
     setProjectCollapsed(project.id, false)
     setBandsOpen(project.id, quietBandsHere, opened.length === 0)
   }
-  const foldTitle = busy
+  const foldTitle = folds
     ? `${collapsed ? "Show" : "Collapse"} ${project.name}'s threads`
     : `${opened.length > 0 ? "Hide" : "Show"} everything in ${project.name}`
   return (
@@ -808,7 +826,7 @@ function ProjectRow({
             aria-hidden
             data-xq-project-chevron
             className={`pointer-events-none absolute left-[4.5px] top-0.5 flex h-[19px] items-center text-muted-60 transition-[opacity,transform] ${unfolded ? "rotate-90" : ""} ${
-              (busy ? collapsed : opened.length > 0) ? "opacity-100" : "opacity-0 group-hover:opacity-100 group-has-[:focus-visible]:opacity-100 [@media(hover:none)]:opacity-100"
+              (folds ? collapsed : opened.length > 0) ? "opacity-100" : "opacity-0 group-hover:opacity-100 group-has-[:focus-visible]:opacity-100 [@media(hover:none)]:opacity-100"
             }`}
           >
             <ChevronRight size={11} />
@@ -858,7 +876,7 @@ function ProjectRow({
           <span className="text-[10.5px] leading-[19px] text-muted-55">{note}</span>
         ) : (
           <>
-            <QuietToggles project={project} quiet={quiet} opened={opened} working={collapsed ? working : 0} />
+            <QuietToggles project={project} quiet={quiet} opened={opened} working={collapsed && folds ? working : 0} />
             {count > 0 && <span className="flex shrink-0"><QueueBadge count={count} /></span>}
           </>
         )}
@@ -941,6 +959,7 @@ function QuietBands({
   slots,
   opened,
   row,
+  donePage,
 }: {
   project: QueuesProject
   quiet: QuietBands
@@ -949,8 +968,9 @@ function QuietBands({
   slots: (band: ListBand) => HeldSlot<ThreadView>[]
   opened: readonly QuietBandKey[]
   row: (slot: HeldSlot<ThreadView>) => ReactNode
+  /** How many Done rows are listed — the rest are paged in by the group's MoreRow. */
+  donePage: number
 }) {
-  const [donePage, setDonePage] = useState(DONE_PAGE)
   const bands = opened.filter((band) => slots(band).length > 0 || (band === "done" && quiet.done === undefined && quiet.doneCount > 0))
   if (bands.length === 0) return null
   return (
@@ -960,19 +980,7 @@ function QuietBands({
           {band !== "done" && slots(band).map(row)}
           {band === "done" &&
             (slots("done").length > 0 ? (
-              <>
-                {slots("done").slice(0, donePage).map(row)}
-                {slots("done").length > donePage && (
-                  <button
-                    type="button"
-                    data-xq-reshape
-                    onClick={() => setDonePage((page) => page + DONE_PAGE * 2)}
-                    className="rounded-md py-1 pl-[44px] pr-1.5 text-left text-[11.5px] leading-[19px] text-muted-60 outline-none transition-colors hover:text-fg focus-visible:ring-1 focus-visible:ring-focus-ink-60"
-                  >
-                    Show {Math.min(DONE_PAGE * 2, slots("done").length - donePage)} more
-                  </button>
-                )}
-              </>
+              slots("done").slice(0, donePage).map(row)
             ) : (
               <div aria-busy className="py-1 pl-[44px] text-[11.5px] leading-[19px] text-muted-50">
                 Loading…
@@ -980,6 +988,74 @@ function QuietBands({
             ))}
         </div>
       ))}
+    </div>
+  )
+}
+
+/**
+ * THE END OF AN UNFOLDED PROJECT'S LIST: "⌄ N more" while any of its rest is not listed — a quiet band
+ * still closed, or Done rows past the page — and "⌃ Show less" beside it once any of the rest is. It names
+ * no band (maintainer 2026-10-01: "a little expand button … at the bottom of each list … without the word
+ * done"): the rest is one continuation of the list, and the counts on the project's row stay the way to
+ * open a single band. "More" opens every closed band first, then pages Done; "less" closes them all.
+ * At the thread titles' column, in the muted tone the quiet counts use, so it reads as the list's tail and
+ * not as a row of its own.
+ */
+function MoreRow({
+  project,
+  quiet,
+  opened,
+  doneDrawn,
+  onMore,
+  onLess,
+}: {
+  project: QueuesProject
+  quiet: QuietBands
+  opened: readonly QuietBandKey[]
+  /** How many Done rows the open Done band lists right now. */
+  doneDrawn: number
+  onMore: () => void
+  onLess: () => void
+}) {
+  const closed = QUIET_BANDS.filter((band) => quietCount(quiet, band) > 0 && !opened.includes(band))
+  const unpaged = opened.includes("done") && quiet.done !== undefined ? Math.max(0, quiet.done.length - doneDrawn) : 0
+  const more = closed.reduce((sum, band) => sum + quietCount(quiet, band), 0) + unpaged
+  const less = opened.length > 0
+  if (more === 0 && !less) return null
+  const action = "flex h-[19px] items-center gap-1 rounded px-1 -mx-1 outline-none transition-colors hover:bg-hover-strong hover:text-fg/80 focus-visible:ring-1 focus-visible:ring-focus-ink-60"
+  return (
+    <div data-xq-more={project.id} className="flex items-center gap-3 py-0.5 pl-[44px] pr-1.5 text-[11px] leading-[19px] text-muted-55">
+      {more > 0 && (
+        <button
+          type="button"
+          data-xq-reshape
+          data-xq-more-open
+          className={action}
+          onClick={() => {
+            setProjectCollapsed(project.id, false)
+            if (closed.length > 0) setBandsOpen(project.id, closed, true)
+            else onMore()
+          }}
+        >
+          <ChevronDown aria-hidden size={11} />
+          <span className="tabular-nums">{more} more</span>
+        </button>
+      )}
+      {less && (
+        <button
+          type="button"
+          data-xq-reshape
+          data-xq-more-close
+          className={action}
+          onClick={() => {
+            setBandsOpen(project.id, QUIET_BANDS, false)
+            onLess()
+          }}
+        >
+          <ChevronUp aria-hidden size={11} />
+          Show less
+        </button>
+      )}
     </div>
   )
 }
