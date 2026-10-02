@@ -1043,6 +1043,15 @@ a[href] {
   position: relative;
   z-index: 1;
 }
+/* The fence's copy button is the `pre`'s SIBLING, absolutely positioned over its corner at z-index auto
+   — so the rule above lifted the `pre` OVER it: the button showed through the `pre`'s translucent fill
+   but every click landed on the `pre`, which picked the option on an open card and did nothing on an
+   answered one (maintainer 2026-10-01: "once a question is answered the copy button doesnt work"). It
+   rides one layer above the `pre`; lib/copy-code.ts's document listener then takes the click, and the
+   chip's own onClick skips it because the target is a button. */
+[data-question-option] .md-body .md-code-copy {
+  z-index: 2;
+}
 /* Block chrome INSIDE an answer chip sits on a bg that changes with the chip's state — the card's own
    panel-2 when neutral, accent/10 when selected, elevated on hover — so the prose surface's OPAQUE
    fills fail in both directions: a panel-2 code chip or table header is invisible on the neutral chip
