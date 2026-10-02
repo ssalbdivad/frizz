@@ -311,8 +311,9 @@ must match the core app, with a hint wherever the sidebar differs; and no Frizz 
 - **The chord where the eye is: the selection hint** (2026-10-02, Cursor's "⌘L to chat"). A fresh selection
   shows `Ctrl+L to add to Frizz` (`⌘L` where the window's UI is a Mac — under a remote window that is not
   the extension host's platform, so the sidebar's relay says it) past the end of the selection's line
-  nearest the caret, in `editorCodeLens.foreground`: the editor's quiet annotation colour, not
-  `editorGhostText`, which is an inline completion's and reads as a suggestion Tab would take. A
+  nearest the caret, styled as VS Code's own inline blame (the git extension: `editorInlayHint.foreground`,
+  50px from the code) — the editor's kind of note, not `editorGhostText`, which is an inline completion's
+  and reads as a suggestion Tab would take. A
   decoration (`after.contentText`), so nothing takes focus or covers code (selection-hint.ts). It settles
   250ms after the last change and clears at once on any change, so a drag shows nothing until the hand
   stops. Not shown: in a diff (the group's tab must be a plain text tab of the file — the review diff is

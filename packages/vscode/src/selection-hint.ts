@@ -119,12 +119,15 @@ export interface SelectionHint {
 export const HINT_SETTING = "selectionHint"
 
 export function registerSelectionHint(api: Vscode, context: vscode.ExtensionContext, host: SelectionHintHost): SelectionHint {
-  // One decoration type, created once: the colour is the editor's own quiet annotation colour (the one
-  // CodeLens draws "3 references" in), NOT `editorGhostText`, which is an inline completion's colour — a
-  // hint drawn in it reads as a suggestion Tab would accept. The text varies by platform, so it rides
-  // each decoration's own render options.
+  // One decoration type, created once, drawn as VS Code draws its OWN end-of-line annotation — the git
+  // extension's inline blame (extensions/git, 1.140: `after` in `git.blame.editorDecorationForeground`,
+  // which defaults to `editorInlayHint.foreground`, `margin: "0 0 0 50px"`): the same colour and the same
+  // distance from the code, so the hint reads as the editor's kind of note and not as code. NOT
+  // `editorGhostText`, which is an inline completion's colour — a hint drawn in it reads as a suggestion
+  // Tab would accept. (The first cut used CodeLens's colour and 2.5em, about 35px; mirrored 2026-10-02.)
+  // The text varies by platform, so it rides each decoration's own render options.
   const decoration = api.window.createTextEditorDecorationType({
-    after: { color: new api.ThemeColor("editorCodeLens.foreground"), margin: "0 0 0 2.5em" },
+    after: { color: new api.ThemeColor("editorInlayHint.foreground"), margin: "0 0 0 50px" },
     rangeBehavior: api.DecorationRangeBehavior.ClosedClosed,
   })
   context.subscriptions.push(decoration)

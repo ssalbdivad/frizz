@@ -68,7 +68,7 @@
 //      woken, through the REAL server's needs-you edge) is a VS Code notification, and its Open shows the
 //      thread in the sidebar
 //   c18 the selection hint: lines selected by keys get `Ctrl+L to add to Frizz` after their last line, in
-//      the editor's CodeLens colour, once the selection settles; gone when it empties, once Ctrl+L has
+//      the colour of VS Code's own inline blame, once the selection settles; gone when it empties, once Ctrl+L has
 //      added it, and with `frizz.selectionHint` off. A 6x crop of the line for the eye
 //   c19 a thread in an editor tab: the title row's ⋯ (while the sidebar shows a thread) opens it beside the
 //      code, on the thread at the editor's width, titled by the page; its reply box sends to the simulated
@@ -2286,18 +2286,19 @@ try {
     if (!span) return null
     const after = getComputedStyle(span, "::after")
     const line = span.closest<HTMLElement>(".view-line")
-    // The theme's quiet annotation colour, resolved the way the browser resolves the decoration's.
+    // The colour VS Code's own end-of-line annotation (inline blame) is drawn in, resolved the way the
+    // browser resolves the decoration's.
     const probe = document.createElement("span")
-    probe.style.color = "var(--vscode-editorCodeLens-foreground)"
+    probe.style.color = "var(--vscode-editorInlayHint-foreground)"
     document.querySelector(".part.editor")!.appendChild(probe)
-    const codeLens = getComputedStyle(probe).color
+    const annotation = getComputedStyle(probe).color
     probe.remove()
     const r = span.getBoundingClientRect()
     const l = line?.getBoundingClientRect()
     return {
       content: after.content,
       color: after.color,
-      codeLens,
+      annotation,
       fontStyle: after.fontStyle,
       line: (line?.textContent ?? "").replace(/\u00a0|\u00b7/gu, " ").trimEnd(),
       span: { x: r.x, y: r.y, width: r.width, height: r.height },
@@ -2318,16 +2319,17 @@ try {
     const told = (await status()).selectionHint
     notes.selectionHint = { drawn, told, latency }
     expect("c18", "lines 2-3 selected by keys: `Ctrl+L to add to Frizz` after line 3's text, once the selection settled", drawn?.content === '"Ctrl+L to add to Frizz"' && /for \(const x of xs\) \{$/u.test(drawn.line) && told?.line === 3 && latency >= 250, { drawn, told, latency })
-    expect("c18", "…in the editor's quiet CodeLens colour, not the code's", !!drawn && drawn.color === drawn.codeLens, drawn && { color: drawn.color, codeLens: drawn.codeLens })
+    expect("c18", "…in the colour VS Code draws its own inline blame in, not the code's", !!drawn && drawn.color === drawn.annotation, drawn && { color: drawn.color, annotation: drawn.annotation })
     if (drawn?.lineBox) {
       // The line from its start to past the hint, 6x: the gap and the weight are judged by eye on this.
       const right = drawn.span.x + drawn.span.width
       await capture(join(out, `${version}-c18-selection-hint-6x.png`), { x: drawn.lineBox.x - 4, y: drawn.lineBox.y - 6, width: right - drawn.lineBox.x + 12, height: drawn.lineBox.height + 12 }, 6)
-      // The ink gap between where the selection ends (its highlight, which is what the eye reads as its
-      // edge) and the hint's first glyph, at 2x: anything unlike the editor's own background, column by
-      // column, the background sampled past the hint's end. The decoration's box starts where the line's
-      // text ends (its margin is inside it), so the scan goes left from there for the code's last ink and
-      // right for the hint's first.
+      // The ink gap between where the selection ends (its highlight and the caret, which are what the eye
+      // reads as its edge) and the hint's first glyph, at 2x: anything unlike the editor's own background,
+      // column by column, the background sampled past the hint's end. Walked from the RIGHT: over the
+      // hint's words (whose spaces are one character, ~17 columns at 2x) to the first run of background
+      // wider than any of them, which is the margin. (Walked from the decoration's left edge, the caret
+      // standing there read as the hint's first ink and the gap as 0.)
       const png = decodePng(await capture("", { x: drawn.lineBox.x, y: drawn.lineBox.y, width: right - drawn.lineBox.x + 4, height: drawn.lineBox.height }, 2))
       const background = png.px(png.width - 2, Math.floor(png.height / 2))
       const inked: boolean[] = []
@@ -2339,12 +2341,18 @@ try {
         }
         inked.push(ink)
       }
-      const hintStart = Math.round((drawn.span.x - drawn.lineBox.x) * 2)
-      let codeEnd = hintStart
-      while (codeEnd > 0 && !inked[codeEnd - 1]) codeEnd--
-      let hintInk = hintStart
-      while (hintInk < inked.length && !inked[hintInk]) hintInk++
-      notes.selectionHintInkGapPx = (hintInk - codeEnd) / 2
+      let x = inked.length - 1
+      while (x > 0 && !inked[x]) x--
+      let hintInk = x
+      for (let run = 0; x > 0; x--) {
+        if (inked[x]) {
+          hintInk = x
+          run = 0
+        } else if (++run > 40) break
+      }
+      let codeEnd = x
+      while (codeEnd > 0 && !inked[codeEnd]) codeEnd--
+      notes.selectionHintInkGapPx = (hintInk - codeEnd - 1) / 2
     }
     await shot("c18-selection-hint", { window: true })
 

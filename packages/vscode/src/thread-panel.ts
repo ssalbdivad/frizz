@@ -327,6 +327,14 @@ export function registerThreadPanels(api: Vscode, context: vscode.ExtensionConte
         onPageMessage(tab, link, page).catch((error: unknown) => host.log.warn(`A tab couldn't act on ${page.type}: ${(error as Error).message}`))
       }),
     ]
+    // Which Frizz the human used last (app.ts frontTab). The relay's `focused` alone is not enough here: a
+    // click inside the page fires the relay window's focus only when focus comes from OUTSIDE its chain, and
+    // a tab opened with the keyboard has its relay in the chain before the relay's script listens — the human
+    // who opened a tab and clicked straight into its reply box was never counted (e2e-sidebar c19, 1 of 1).
+    // VS Code's own reading covers it: the tab becoming the active editor is the human in it.
+    listeners.push(panel.onDidChangeViewState(() => {
+      if (panel.active) for (const listener of focusListeners) listener(tab)
+    }))
     listeners.push(panel.onDidDispose(() => {
       tabs.delete(tab)
       clearTimeout(tab.readyTimer)
@@ -361,6 +369,7 @@ export function registerThreadPanels(api: Vscode, context: vscode.ExtensionConte
       for (const tab of tabs) {
         if (tab.thread === target.thread && tab.project === target.project) {
           tab.panel.reveal(tab.panel.viewColumn, false)
+          for (const listener of focusListeners) listener(tab)
           return
         }
       }
@@ -374,7 +383,9 @@ export function registerThreadPanels(api: Vscode, context: vscode.ExtensionConte
         retainContextWhenHidden: true,
         localResourceRoots: [],
       })
-      adopt(panel, target)
+      const tab = adopt(panel, target)
+      // Opened with the keyboard in it: this tab is now the Frizz used last.
+      for (const listener of focusListeners) listener(tab)
     },
     anyReady: () => [...tabs].some((tab) => tab.ready),
     onReady(listener) {
