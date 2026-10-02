@@ -11,6 +11,7 @@ import {
   locateInSource,
   parseSentContext,
   parseSentEditorContext,
+  previousEditorQuote,
   serializeContextItems,
   serializeEditorContext,
   withoutEditorContext,
@@ -261,7 +262,7 @@ test("the block goes after the prose and the chips' definitions, before the atta
 test("each reading parses back to what the chip shows", () => {
   const back = (active: Parameters<typeof serializeEditorContext>[0]) => parseSentEditorContext(appendEditorContext("hi", serializeEditorContext(active, [], "/repo")))
   assert.deepEqual(back({ ...editorFile, selection: { startLine: 7, endLine: 7, text: "x" } }), { body: "hi", editor: { kind: "selection", display: "src/a.ts", startLine: 7, endLine: 7, text: "x" } })
-  assert.deepEqual(back({ ...editorFile, selection: { startLine: 1, endLine: 900 } }), { body: "hi", editor: { kind: "selection", display: "src/a.ts", startLine: 1, endLine: 900 } })
+  assert.deepEqual(back({ ...editorFile, selection: { startLine: 1, endLine: 900 } }), { body: "hi", editor: { kind: "selection", display: "src/a.ts", startLine: 1, endLine: 900, unquoted: "long" } })
   assert.deepEqual(back({ ...editorFile, cursorLine: 40 }), { body: "hi", editor: { kind: "file", display: "src/a.ts", cursorLine: 40 } })
   assert.deepEqual(back(editorFile), { body: "hi", editor: { kind: "file", display: "src/a.ts" } })
   // A path with a comma and spaces, and code that quotes the header and a blank line, still round trip.
@@ -292,4 +293,76 @@ test("a message taken back loses its editor block and keeps everything the human
   const sent = appendEditorContext(withChips, block)
   assert.equal(withoutEditorContext(sent), withChips)
   assert.equal(withoutEditorContext("plain"), "plain")
+})
+
+test("an unsaved buffer says the copy on disk differs, an untitled one that there is none, and each says what to do instead", () => {
+  const dirty = { ...editorFile, dirty: true }
+  assert.equal(serializeEditorContext({ ...dirty, selection: { startLine: 2, endLine: 3, text: "a\nb" } }, [], "/repo"), `${HEADER}\n\nSelected in src/a.ts (unsaved changes), lines 2-3:\n> a\n> b`)
+  assert.equal(serializeEditorContext({ ...dirty, selection: { startLine: 1, endLine: 900 } }, [], "/repo"),
+    `${HEADER}\n\nSelected in src/a.ts (unsaved changes), lines 1-900 (not quoted here, and the copy on disk differs: ask the human to save it or paste it)`)
+  assert.equal(serializeEditorContext({ ...dirty, cursorLine: 40 }, [], "/repo"), `${HEADER}\n\nOpen in the editor: src/a.ts (unsaved changes; cursor on line 40)`)
+  assert.equal(serializeEditorContext(dirty, [], "/repo"), `${HEADER}\n\nOpen in the editor: src/a.ts (unsaved changes)`)
+  const scratch = { path: "Untitled-1", untitled: true }
+  assert.equal(serializeEditorContext({ ...scratch, selection: { startLine: 1, endLine: 2, text: "TODO\nlater" } }, [], "/repo"), `${HEADER}\n\nSelected in Untitled-1 (unsaved, not a file on disk), lines 1-2:\n> TODO\n> later`)
+  assert.equal(serializeEditorContext({ ...scratch, selection: { startLine: 1, endLine: 900 } }, [], "/repo"),
+    `${HEADER}\n\nSelected in Untitled-1 (unsaved, not a file on disk), lines 1-900 (not quoted here, and there is no file to read: ask the human to paste it)`)
+  // A file that may hold secrets: named, never quoted, whatever its size.
+  assert.equal(serializeEditorContext({ path: "/repo/.env", withheld: true, selection: { startLine: 1, endLine: 3 } }, [], "/repo"), `${HEADER}\n\nSelected in .env, lines 1-3 (not quoted here: the file may hold secrets)`)
+})
+
+test("every new reading parses back, with what the chip needs to say it", () => {
+  const back = (active: Parameters<typeof serializeEditorContext>[0], previous?: Parameters<typeof serializeEditorContext>[3]) =>
+    parseSentEditorContext(appendEditorContext("hi", serializeEditorContext(active, [], "/repo", previous)))?.editor
+  assert.deepEqual(back({ ...editorFile, dirty: true, selection: { startLine: 2, endLine: 3, text: "a\nb" } }), { kind: "selection", display: "src/a.ts", startLine: 2, endLine: 3, state: "unsaved", text: "a\nb" })
+  assert.deepEqual(back({ ...editorFile, dirty: true, selection: { startLine: 1, endLine: 900 } }), { kind: "selection", display: "src/a.ts", startLine: 1, endLine: 900, state: "unsaved", unquoted: "long" })
+  assert.deepEqual(back({ path: "Untitled-1", untitled: true, selection: { startLine: 1, endLine: 900 } }), { kind: "selection", display: "Untitled-1", startLine: 1, endLine: 900, state: "untitled", unquoted: "long" })
+  assert.deepEqual(back({ path: "/repo/.env", withheld: true, selection: { startLine: 1, endLine: 3 } }), { kind: "selection", display: ".env", startLine: 1, endLine: 3, unquoted: "secret" })
+  assert.deepEqual(back({ ...editorFile, dirty: true, cursorLine: 40 }), { kind: "file", display: "src/a.ts", cursorLine: 40, state: "unsaved" })
+  assert.deepEqual(back({ path: "Untitled-2", untitled: true }), { kind: "file", display: "Untitled-2", state: "untitled" })
+  const previous = { display: "src/a.ts", startLine: 2, endLine: 3, text: "a\nb" }
+  assert.deepEqual(back({ ...editorFile, selection: { startLine: 2, endLine: 3, text: "a\nb" } }, previous), { kind: "selection", display: "src/a.ts", startLine: 2, endLine: 3, repeat: true })
+  // A path with parentheses of its own is still the path.
+  assert.deepEqual(back({ path: "/repo/notes (draft).md", cursorLine: 4 }), { kind: "file", display: "notes (draft).md", cursorLine: 4 })
+  // A reason the grammar does not have is not a block.
+  assert.equal(parseSentEditorContext(`hi\n\n${HEADER}\n\nSelected in src/a.ts, lines 1-9 (because)`), null)
+  assert.equal(parseSentEditorContext(`hi\n\n${HEADER}\n\nStill selected in src/a.ts, lines 1-9:\n> x`), null)
+})
+
+// ── the repeat-send rule ──────────────────────────────────────────────────────────────────────────
+
+const sentWith = (active: Parameters<typeof serializeEditorContext>[0], words = "q", previous?: Parameters<typeof serializeEditorContext>[3]) =>
+  ({ role: "user", text: appendEditorContext(words, serializeEditorContext(active, [], "/repo", previous)) })
+
+test("a selection the thread was just sent is named, not quoted again; any change quotes afresh", () => {
+  const held = { ...editorFile, selection: { startLine: 12, endLine: 20, text: "const a = 1\nconst b = 2\n" } }
+  const first = sentWith(held)
+  const quote = previousEditorQuote([first, { role: "assistant", text: "It sets a and b." }])
+  assert.deepEqual(quote, { display: "src/a.ts", startLine: 12, endLine: 20, text: "const a = 1\nconst b = 2" })
+  // The same lines and text: a one-line reference.
+  assert.equal(serializeEditorContext(held, [], "/repo", quote), `${HEADER}\n\nStill selected in src/a.ts, lines 12-20 (quoted in an earlier message)`)
+  // …and again after that reference: the chain leads back to the quote.
+  const second = sentWith(held, "and then?", quote)
+  assert.deepEqual(previousEditorQuote([first, second]), quote)
+  // The text edited under the selection, other lines, another file: quoted in full.
+  for (const changed of [
+    { ...held, selection: { ...held.selection, text: "const a = 2\nconst b = 2\n" } },
+    { ...held, selection: { ...held.selection, endLine: 21 } },
+    { ...held, path: "/repo/src/b.ts" },
+  ]) assert.match(serializeEditorContext(changed, [], "/repo", quote), /\n\nSelected in .*:\n> /)
+  // Messages without a block (sharing off, a browser tab) are passed over; the agent still has the quote.
+  assert.deepEqual(previousEditorQuote([first, { role: "user", text: "no block here" }]), quote)
+})
+
+test("the last block decides: a different reading after the quote, or none quoted, means quote again", () => {
+  const held = { ...editorFile, selection: { startLine: 12, endLine: 20, text: "x" } }
+  const first = sentWith(held)
+  assert.equal(previousEditorQuote([first, sentWith({ ...editorFile, cursorLine: 3 })]), null, "the file with nothing selected came after")
+  assert.equal(previousEditorQuote([first, sentWith({ ...editorFile, selection: { startLine: 1, endLine: 900 } })]), null, "a selection too long to quote came after")
+  assert.equal(previousEditorQuote([first, sentWith({ path: "/repo/src/b.ts", selection: { startLine: 1, endLine: 1, text: "y" } })])?.display, "src/b.ts", "another quote is the last one")
+  // A "still selected" that names other lines than the quote before it cannot lean on it.
+  const stray = { role: "user", text: appendEditorContext("q", `${HEADER}\n\nStill selected in src/a.ts, lines 1-2 (quoted in an earlier message)`) }
+  assert.equal(previousEditorQuote([first, stray]), null)
+  assert.equal(previousEditorQuote([]), null)
+  // Attachment lines after the block do not hide it.
+  assert.deepEqual(previousEditorQuote([{ role: "user", text: `${first.text}\n/tmp/shot.png` }])?.startLine, 12)
 })

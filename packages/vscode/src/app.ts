@@ -102,11 +102,51 @@ export function activateFrizz(api: Vscode, context: vscode.ExtensionContext): Fr
     openInBrowser: () => openFrizz(),
     reconnect: () => connection.reconnect(),
     addContext: (message) => addContextFromPage(message),
+    hostState: () => ({ shareEditor: shared(), altK: !claudeCode }),
+    setShareEditor: (on) => setShareEditor(on),
     log: { info: (line) => log.info(line), warn: (line) => log.warn(line) },
   })
   const useSidebar = () => config().get<boolean>("useSidebar", true)
-  // Whether the human shares the editor with Frizz: the one switch both feeds read.
+  // Whether the human shares the editor with Frizz — THE switch: the page's feed carries the selection's
+  // text and a send attaches the block only while it is on, and the agents' frame says only `shared: false`
+  // while it is off. The bar's eye reads and writes it (`frizz:host-state` / `frizz:share-editor`).
   const shared = () => config().get<boolean>(SHARE_SETTING, true)
+
+  /**
+   * The eye, flipped: write the setting where it takes effect — the workspace's value when this workspace
+   * sets one (a user-level write under it would change nothing), else the user's, which every window reads.
+   * The configuration listener below then tells the feeds and the page.
+   */
+  async function setShareEditor(on: boolean): Promise<string> {
+    if (shared() === on) return on ? "on" : "off"
+    const where = config().inspect<boolean>(SHARE_SETTING)?.workspaceValue !== undefined ? api.ConfigurationTarget.Workspace : api.ConfigurationTarget.Global
+    try {
+      await config().update(SHARE_SETTING, on, where)
+    } catch (error) {
+      log.warn(`Couldn't ${on ? "turn on" : "turn off"} sharing the editor with Frizz: ${(error as Error).message}`)
+      return "refused"
+    }
+    log.info(on ? "Sharing the editor with Frizz." : "Not sharing the editor with Frizz: sends carry no editor context, and agents can't read it.")
+    return shared() === on ? (on ? "on" : "off") : "overridden"
+  }
+
+  // CLAUDE CODE'S CHORD. Its VS Code extension (anthropic.claude-code) binds Alt+K with the same `when` as
+  // Frizz's ("editorTextFocus"), so with both installed which one answered depended on the order the
+  // extensions loaded — on the maintainer's own machine (review-final.md, 2026-10-02). Frizz steps aside:
+  // its Alt+K binding is gated on this context key, set now and whenever the extension set changes, and
+  // the page stops naming the chord. Ctrl+L, the chord the page teaches, is not Claude Code's.
+  const CLAUDE_CODE = "anthropic.claude-code"
+  let claudeCode = api.extensions.getExtension(CLAUDE_CODE) !== undefined
+  const applyClaudeCode = () => void api.commands.executeCommand("setContext", "frizz.claudeCodeInstalled", claudeCode)
+  applyClaudeCode()
+  context.subscriptions.push(api.extensions.onDidChange(() => {
+    const next = api.extensions.getExtension(CLAUDE_CODE) !== undefined
+    if (next === claudeCode) return
+    claudeCode = next
+    log.info(next ? "Claude Code's extension is installed: Alt+K is its, not Frizz's." : "Claude Code's extension is gone: Alt+K adds to Frizz's prompt again.")
+    applyClaudeCode()
+    sidebar.pushState()
+  }))
   // One observer of the window's editors, which both feeds read (editor-front.ts says why there is one).
   const watcher = registerEditorWatcher(api, context)
   const feed = registerContextFeed(api, context, watcher, {
@@ -263,6 +303,7 @@ export function activateFrizz(api: Vscode, context: vscode.ExtensionContext): Fr
       if (event.affectsConfiguration(`frizz.${SHARE_SETTING}`)) {
         editorState.sharingChanged()
         feed.refresh()
+        sidebar.pushState()
       }
     }),
   )
@@ -757,6 +798,9 @@ export function activateFrizz(api: Vscode, context: vscode.ExtensionContext): Fr
     api.commands.registerCommand("frizz.sidebar.jump", () => sidebarCommand("jump")),
     api.commands.registerCommand("frizz.sidebar.settings", () => sidebarCommand("settings")),
     api.commands.registerCommand("frizz.sidebar.shortcuts", () => sidebarCommand("shortcuts")),
+    // Ctrl+L / ⌘L in the editor with nothing selected: Cursor's chord to its chat, here the sidebar's prompt
+    // box — revealed and focused, the caret at the end of what it holds. Ctrl+L there comes back (embed.ts).
+    api.commands.registerCommand("frizz.focusPrompt", () => sidebarCommand("prompt")),
     // "Ask Frizz to fix" on any problem in a file on disk, in every language. Offered only with the sidebar
     // on: without it the problem's message has nowhere to go, and a bare chip is Add to Frizz prompt.
     api.languages.registerCodeActionsProvider({ scheme: "file" }, {

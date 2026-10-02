@@ -119,6 +119,8 @@ export function parsePageMessage(value: unknown, origin?: string): EmbedPageMess
       if (!(isAbsolute(path) || /^[A-Za-z]:[\\/]/u.test(path))) return undefined
       return { type: "frizz:add-context", what, path }
     }
+    case "frizz:share-editor":
+      return typeof value.on === "boolean" ? { type: "frizz:share-editor", on: value.on } : undefined
     case "frizz:route": {
       const { view, title, description } = value
       if (view !== "queue" && view !== "thread" && view !== "settings" && view !== "other") return undefined
@@ -178,6 +180,10 @@ export function webUrl(text: string): string | undefined {
  *
  * `primary` is Cmd on a Mac and Ctrl elsewhere; the terminal and source control are Ctrl on every
  * platform, as VS Code binds them.
+ *
+ * One is Frizz's own rather than VS Code's default: ⌘L / Ctrl+L, Cursor's chord to its chat and back. In the
+ * editor it comes to the sidebar's prompt box (package.json binds it: with a selection the selection comes
+ * along as a chip); pressed here it goes back to the editor the human came from.
  */
 const CHORDS: readonly { chord: string; command: string }[] = [
   { chord: "primary+shift+KeyP", command: "workbench.action.showCommands" },
@@ -185,6 +191,7 @@ const CHORDS: readonly { chord: string; command: string }[] = [
   { chord: "primary+KeyB", command: "workbench.action.toggleSidebarVisibility" },
   { chord: "primary+KeyJ", command: "workbench.action.togglePanel" },
   { chord: "ctrl+Backquote", command: "workbench.action.terminal.toggleTerminal" },
+  { chord: "primary+KeyL", command: "workbench.action.focusActiveEditorGroup" },
   { chord: "primary+Digit1", command: "workbench.action.focusFirstEditorGroup" },
   { chord: "primary+shift+KeyE", command: "workbench.view.explorer" },
   { chord: "primary+shift+KeyF", command: "workbench.view.search" },

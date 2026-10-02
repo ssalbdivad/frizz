@@ -195,8 +195,17 @@ export function parseHostMessage(data: unknown): EmbedHostMessage | null {
       files.push(file)
     }
     if (active === null) return { type: "frizz:editor-context", active: null, open: files }
-    const file = editorFile(active)
-    if (!file || !isRecord(active)) return null
+    const base = editorFile(active)
+    if (!base || !isRecord(active)) return null
+    // The flags the block reads (an untitled buffer, unsaved changes, text withheld): `true` or absent, as
+    // the contract has them; anything else is not this extension.
+    const flags: { untitled?: true; dirty?: true; withheld?: true } = {}
+    for (const flag of ["untitled", "dirty", "withheld"] as const) {
+      if (active[flag] === undefined) continue
+      if (active[flag] !== true) return null
+      flags[flag] = true
+    }
+    const file = { ...base, ...flags }
     const { selection, cursorLine } = active
     if (selection === undefined) {
       // The caret's line rides only a file with nothing selected; a bad one is dropped with the message,
@@ -209,13 +218,19 @@ export function parseHostMessage(data: unknown): EmbedHostMessage | null {
     if (startLine === undefined || endLine === undefined || !optionalLine(startLine) || !optionalLine(endLine) || (endLine as number) < (startLine as number)) return null
     if (!Number.isSafeInteger(chars) || (chars as number) < 1) return null
     // The selection's text goes into a message the human sends, so it is held to the feed's own ceiling:
-    // a host that sends more is not the extension this page speaks to.
+    // a host that sends more is not the extension this page speaks to. And a withheld file's text is not
+    // there to be sent, whatever arrived.
     if (text !== undefined && (typeof text !== "string" || text.length > EMBED_MAX_SELECTION_TEXT)) return null
+    if (flags.withheld && text !== undefined) return null
     return {
       type: "frizz:editor-context",
       active: { ...file, selection: { startLine: startLine as number, endLine: endLine as number, chars: chars as number, ...(text !== undefined ? { text: text as string } : {}) } },
       open: files,
     }
+  }
+  if (data.type === "frizz:host-state") {
+    const { shareEditor, altK } = data
+    return typeof shareEditor === "boolean" && typeof altK === "boolean" ? { type: "frizz:host-state", shareEditor, altK } : null
   }
   if (data.type === "frizz:command") {
     const { command } = data
@@ -224,7 +239,7 @@ export function parseHostMessage(data: unknown): EmbedHostMessage | null {
   return null
 }
 
-const HOST_COMMANDS = new Set<EmbedCommandMessage["command"]>(["new-thread", "queue", "jump", "settings", "shortcuts"])
+const HOST_COMMANDS = new Set<EmbedCommandMessage["command"]>(["new-thread", "queue", "jump", "settings", "shortcuts", "prompt"])
 
 /** One open file of a `frizz:editor-context`, with only the contract's fields, or null. */
 function editorFile(value: unknown): EmbedEditorFile | null {

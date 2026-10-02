@@ -19,6 +19,10 @@ import { parseStandaloneThreadPath } from "./standaloneThreadRoute.ts"
 //   settings    ⌘,: Settings.
 //   shortcuts   `?`: the keyboard shortcuts sheet, from the row's ⋯ — the status row's ⌨ button is not
 //               drawn in the sidebar (StatusRow.tsx).
+//   prompt      Ctrl+L / ⌘L in the editor with nothing selected (Cursor's chord to its chat): the caret into
+//               the prompt box in front — the New thread dialog's while it is up, else the open thread's
+//               reply box, else the page's new-thread box — at the end of what is there, where the human
+//               left off. Not a door that opens anything: with a thread open the reply box is the one meant.
 //
 // A button is pressed in VS Code, not in the frame, so whatever transient layer the page had up (the
 // palette, the shortcuts sheet, the picture viewer, a dialog) goes first, as a click outside it would
@@ -51,6 +55,10 @@ export function runHostCommand(command: EmbedCommandMessage["command"]): void {
     store.showShortcuts = true
     return
   }
+  if (command === "prompt") {
+    focusFrontPrompt()
+    return
+  }
   const fullPage = parseStandaloneThreadPath(innerPath()) !== null
   if (command === "queue") {
     store.showNewThread = false
@@ -77,4 +85,26 @@ function untilPagePromptBox(): Promise<void> {
     }
     check()
   })
+}
+
+const DIALOG_BOX = '[role="dialog"]:not([data-drawer-layer]) textarea[data-surface="newComposer"]'
+const REPLY_BOX = 'textarea[data-surface="chatComposer"]'
+const PAGE_BOX = 'textarea[data-surface="newComposer"]'
+
+/**
+ * The caret into the prompt box in front, after what it holds. A box with no rendered box (behind a
+ * closing drawer, unmounted) is not in front of anyone. With a thread open whose drawer has no reply box,
+ * and on a /full page with none, `c`'s door opens the new-thread box instead — the chord always ends in a
+ * prompt box.
+ */
+export function focusFrontPrompt(): void {
+  const shown = (selector: string) => [...document.querySelectorAll<HTMLTextAreaElement>(selector)].filter((box) => box.getClientRects().length > 0)
+  const drawer = store.drawers.some((each) => !each.closing)
+  const box = store.showNewThread ? shown(DIALOG_BOX)[0] : drawer ? shown(REPLY_BOX).at(-1) : shown(PAGE_BOX).find((each) => !each.closest('[role="dialog"]'))
+  if (!box) {
+    openDispatch()
+    return
+  }
+  box.focus()
+  box.setSelectionRange(box.value.length, box.value.length)
 }

@@ -62,13 +62,10 @@ test("code files are automatic by default; a stored In Frizz from before is the 
   assert.equal(parseStoredPrefs(JSON.stringify({ ...parseStoredPrefs(null), codeFiles: "frizz" })).codeFiles, "frizz")
 })
 
-test("the sidebar sends the editor's context by default, and only a boolean turns it off", () => {
-  assert.equal(parseStoredPrefs(null).sendEditorContext, true)
-  assert.equal(parseStoredPrefs("not-json").sendEditorContext, true)
-  assert.equal(parseStoredPrefs(JSON.stringify({ sendEditorContext: false, diffsRedefaulted: true })).sendEditorContext, false)
-  assert.equal(parseStoredPrefs(JSON.stringify({ sendEditorContext: "no", diffsRedefaulted: true })).sendEditorContext, true)
-  // A blob written before the setting existed keeps everything it had and gains the default.
-  const older = parseStoredPrefs(JSON.stringify({ queueOrder: "lifo", diffsRedefaulted: true }))
+test("the context bar's eye is no longer a pref: a stored value is dropped and everything else kept", () => {
+  // It is the extension's frizz.shareEditorState now (lib/editorContext.ts setShareEditor).
+  assert.equal("sendEditorContext" in parseStoredPrefs(null), false)
+  const older = parseStoredPrefs(JSON.stringify({ sendEditorContext: false, queueOrder: "lifo", diffsRedefaulted: true }))
+  assert.equal("sendEditorContext" in older, false)
   assert.equal(older.queueOrder, "lifo")
-  assert.equal(older.sendEditorContext, true)
 })

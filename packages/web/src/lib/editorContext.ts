@@ -1,29 +1,56 @@
-import type { EmbedEditorContextMessage } from "@frizz/shared"
+import type { EmbedEditorContextMessage, EmbedHostStateMessage } from "@frizz/shared"
 import { proxy, useSnapshot } from "valtio"
-import { appendEditorContext, buildMessageWithContext, contextChipLabel, hasToken, serializeEditorContext, type ComposerContextItem } from "./composerContext.ts"
+import { appendEditorContext, buildMessageWithContext, contextChipLabel, hasToken, previousEditorQuote, serializeEditorContext, type ComposerContextItem } from "./composerContext.ts"
 import { embedded, postToHost } from "./embed.ts"
 import { splitComposerValue } from "./imagePaths.ts"
 import { formatChord, type Chord, type Platform } from "./keybindings.ts"
+import { messagePresentationText } from "./messagePresentation.ts"
 import { basename } from "./paths.ts"
-import { prefs } from "./prefs.ts"
 
 // WHAT THE EDITOR AROUND THE SIDEBAR HAS OPEN — the latest `frizz:editor-context` (packages/shared/src/
 // embed-protocol.ts), kept for the context bar over the sidebar's composers (components/
 // EditorContextBar.tsx) and for the send, which carries it (`outgoingMessage`): the file in front, its
 // selection with the primary selection's text, or the caret's line. Empty outside embed mode, where
 // nothing ever writes it.
+//
+// And the extension's own state the page shows (`frizz:host-state`): whether the human shares the editor
+// with Frizz — the one switch, `frizz.shareEditorState`, which the bar's eye shows and flips — and whether
+// Alt+K is Frizz's in this window.
 
 export interface EditorContextState {
   active: EmbedEditorContextMessage["active"]
   open: EmbedEditorContextMessage["open"]
+  /**
+   * The human shares the editor with Frizz: sends carry the block, agents can read the editor. The
+   * extension's setting, as its last `frizz:host-state` said — or, before one arrives (an extension from
+   * before the message), on, as the setting defaults, with the eye this page's alone until a reload.
+   */
+  share: boolean
+  /** Alt+K in the editor is Frizz's here (not while Claude Code's extension holds it). */
+  altK: boolean
 }
 
-export const editorContext = proxy<EditorContextState>({ active: null, open: [] })
+export const editorContext = proxy<EditorContextState>({ active: null, open: [], share: true, altK: true })
 
 /** A `frizz:editor-context` from the host replaces the last one whole. */
 export function setEditorContext(message: EmbedEditorContextMessage): void {
   editorContext.active = message.active
   editorContext.open = message.open
+}
+
+/** A `frizz:host-state`: what the extension's settings say now — the truth, over anything the eye assumed. */
+export function setHostState(message: EmbedHostStateMessage): void {
+  editorContext.share = message.shareEditor
+  editorContext.altK = message.altK
+}
+
+/**
+ * The eye, flipped: shown at once, and asked of the extension, which writes its setting and answers with
+ * `frizz:host-state` — so a write that did not take (a workspace value that wins) puts the eye back.
+ */
+export function setShareEditor(on: boolean): void {
+  editorContext.share = on
+  postToHost({ type: "frizz:share-editor", on })
 }
 
 export function useEditorContext(): EditorContextState {
@@ -61,12 +88,13 @@ export function contextBarReading(active: EditorContextState["active"]): Context
 }
 
 /**
- * The editor's chord for "add the selection to the sidebar's prompt", as the page advertises it: ⌘L on a
- * Mac, Ctrl+L elsewhere — Cursor's "add selection to chat", the chord a human coming from Cursor already
- * has in their fingers (maintainer 2026-10-02: "there is a standard shortcut for adding a pill for
- * highlighted snippet to a message"). The extension binds it in the editor while text is selected, beside
- * the app's own ⌘I (FileViewerPanel's staging chord, still bound) and Claude Code's ⌥K (the selection, or
- * the whole file with none). One chord is named, the one most people know; the `?` sheet lists all three
+ * The editor's chord for the sidebar's prompt, as the page advertises it: ⌘L on a Mac, Ctrl+L elsewhere —
+ * Cursor's, both halves of it (maintainer 2026-10-02: "take the best parts of [Cursor and the Claude Code
+ * VS Code extension]"). In the editor WITH a selection it adds the selection as a chip at the prompt box's
+ * caret; with NOTHING selected it moves to the prompt box; pressed in the sidebar it goes back to the
+ * editor (lib/embedHost.ts forwards it; packages/vscode embed.ts CHORDS runs it). The extension binds it
+ * beside the app's own ⌘I (FileViewerPanel's staging chord) and, while Claude Code's extension does not
+ * hold it, Claude Code's ⌥K. One chord is named, the one most people know; the `?` sheet lists them all
  * (lib/embedKeys.ts EDITOR_CHORDS). Spelled by the app's keycap formatter so it reads like every other
  * shortcut.
  */
@@ -77,14 +105,19 @@ export function editorAddChord(platform: Platform): string {
 }
 
 /**
- * The keydown is ⌘L / Ctrl+L — on a Mac ⌘ and not Ctrl, elsewhere Ctrl and not ⌘, so ⌃L on a Mac (the
- * terminal's clear-screen) is left alone. ⌘L is a browser chord (keybindings.ts BROWSER_CHORDS), so no
- * rebind can claim it from under this.
+ * What the bar says beside its reading, longest first (the bar shows the longest that fits, or none). It
+ * used to say "Select code and press Ctrl+L" — the step a plain question no longer needs, since whatever is
+ * selected goes with the message on its own. So it says THAT first, and then what the chord is still for:
+ * a chip at the caret, to point at code in the middle of a sentence. With sharing off it says that nothing
+ * goes on its own (the chord still adds, on purpose); with a file whose text stays home, that only its lines
+ * go. Plain words, sentence case, no machinery.
  */
-export function isEditorAddKey(event: Pick<KeyboardEvent, "key" | "code" | "ctrlKey" | "metaKey" | "altKey" | "shiftKey" | "repeat" | "isComposing">, platform: Platform): boolean {
-  if (event.altKey || event.shiftKey || event.repeat || event.isComposing) return false
-  const primary = platform === "mac" ? event.metaKey && !event.ctrlKey : event.ctrlKey && !event.metaKey
-  return primary && (event.key.toLowerCase() === "l" || event.code === "KeyL")
+export function barHints(state: { sending: boolean; selection: boolean; withheld: boolean; chord: string }): string[] {
+  const { sending, selection, withheld, chord } = state
+  if (!sending) return selection ? [`Not shared · ${chord} still adds it`, "Not shared"] : ["Not shared with Frizz", "Not shared"]
+  if (selection && withheld) return ["Lines only: the file may hold secrets", "Lines only"]
+  if (selection) return [`Goes with your message · ${chord} puts it at the caret`, "Goes with your message"]
+  return [`Selections go with your message · ${chord} puts one at the caret`, `${chord} puts a selection at the caret`, `${chord}: selection at caret`]
 }
 
 // ── adding: a click on the bar, answered by the host's compose ────────────────────────────────────
@@ -138,9 +171,12 @@ export function takePendingAdd(now = Date.now()): ContextBox | null {
   return box
 }
 
-/** What a press of the bar adds, from what the editor has in front: its selection, else the whole file. */
+/**
+ * What a press of the bar adds, from what the editor has in front: its selection, else the whole file. An
+ * untitled buffer has no file a chip could name; what is in it goes with the message, but cannot be added.
+ */
 export function barAdd(active: EditorContextState["active"]): { what: "selection" } | { what: "file"; path: string } | null {
-  if (!active) return null
+  if (!active || active.untitled) return null
   return active.selection ? { what: "selection" } : { what: "file", path: active.path }
 }
 
@@ -186,32 +222,15 @@ export function addEditorContextByKey(focused: Element | null, drawerOpen: boole
   return "added"
 }
 
-/**
- * ⌘L / Ctrl+L IN THE SIDEBAR — the chord the page advertises for the editor (`editorAddChord`), pressed with
- * the keyboard in the page instead: what ⌘I does here, so the chord the hint names works on both sides of
- * the frame. Except where ⌘I gives way to Thread details (a thread open, the caret outside its reply box):
- * ⌘L has no other meaning to give way to, so it does what the editor's chord does there — the request goes
- * out with no box remembered, the host answers "front", and the chip lands in the open thread's reply box.
- */
-export function addEditorContextByChord(focused: Element | null, drawerOpen: boolean, dialogOpen: boolean): "added" | "nothing" {
-  const byKey = addEditorContextByKey(focused, drawerOpen, dialogOpen)
-  if (byKey) return byKey
-  const what = barAdd(editorContext.active)
-  if (!what) return "nothing"
-  pending = null
-  postToHost({ type: "frizz:add-context", ...what })
-  return "added"
-}
-
 // ── sending: what the editor has in front goes with the message ───────────────────────────────────
 
 /**
  * Whether a send from this page carries the editor's context: in an editor's sidebar, while the human
- * leaves the context bar's eye on (prefs.sendEditorContext, on by default — the frame's own storage, so
- * it is the sidebar's setting and no browser tab's).
+ * shares the editor (the bar's eye — the extension's `frizz.shareEditorState`, a VS Code setting, so it
+ * holds across reloads and windows, and the same switch keeps the agents' tool out of the editor).
  */
 export function sendsEditorContext(): boolean {
-  return embedded() && prefs.sendEditorContext
+  return embedded() && editorContext.share
 }
 
 /**
@@ -226,18 +245,35 @@ export function sendsEditorContext(): boolean {
  * `editor` is the caller's to say because only a box that SHOWS the bar may carry what it reads — a
  * thread's reply box on a queue card has no bar, and context the human could not see go out is context
  * they could not turn off.
+ *
+ * `history` is the thread's transcript, for a reply: a selection whose lines and text the thread's last
+ * block already quoted is named, not quoted again (composerContext.ts previousEditorQuote).
  */
-export function outgoingMessage(value: string, staged: readonly ComposerContextItem[], projectDir: string | null | undefined, editor: boolean): string {
-  return outgoingMessageWith(value, staged, projectDir, editor && sendsEditorContext() ? editorContext.active : null)
+export function outgoingMessage(
+  value: string,
+  staged: readonly ComposerContextItem[],
+  projectDir: string | null | undefined,
+  editor: boolean,
+  history?: readonly { role: string; text: string; displayText?: string }[],
+): string {
+  if (!editor || !sendsEditorContext() || !editorContext.active) return outgoingMessageWith(value, staged, projectDir, null)
+  const previous = history ? previousEditorQuote(history.map((message) => ({ role: message.role, text: messagePresentationText(message).replace(/\r\n?/g, "\n") }))) : null
+  return outgoingMessageWith(value, staged, projectDir, editorContext.active, previous)
 }
 
-/** `outgoingMessage` with the editor's context passed in, for its test. */
-export function outgoingMessageWith(value: string, staged: readonly ComposerContextItem[], projectDir: string | null | undefined, active: EditorContextState["active"]): string {
+/** `outgoingMessage` with the editor's context (and the thread's last quote of it) passed in, for its test. */
+export function outgoingMessageWith(
+  value: string,
+  staged: readonly ComposerContextItem[],
+  projectDir: string | null | undefined,
+  active: EditorContextState["active"],
+  previous?: ReturnType<typeof previousEditorQuote>,
+): string {
   const withChips = buildMessageWithContext(value, [...staged], projectDir)
   if (!active) return withChips
   // The chips that serialize — the ones whose token is still in the prose — are the ones that can say
   // what the editor block would (composerContext.ts editorContextCovered).
   const { prose } = splitComposerValue(value)
   const present = staged.filter((item) => hasToken(prose, item.token))
-  return appendEditorContext(withChips, serializeEditorContext(active, present, projectDir))
+  return appendEditorContext(withChips, serializeEditorContext(active, present, projectDir, previous))
 }

@@ -171,13 +171,37 @@ export const EMBED_MAX_OPEN_FILES = 50
  * the header's doors live there: a new thread, back to the queue, jump to a thread (⌘K), settings, and,
  * under the row's ⋯, the keyboard shortcuts sheet (`?`), whose ⌨ button the page's status row drops in
  * the sidebar, where it stood alone on a row of its own.
+ *
+ * And `prompt`: the caret into the prompt box in front — the open thread's reply box, else the new-thread
+ * box — from Ctrl+L / ⌘L pressed in the editor with nothing selected (Cursor's chord for moving to its
+ * chat). Ctrl+L pressed in the page goes back to the editor (a forwarded `frizz:key`).
  */
 export interface EmbedCommandMessage {
   type: "frizz:command"
-  command: "new-thread" | "queue" | "jump" | "settings" | "shortcuts"
+  command: "new-thread" | "queue" | "jump" | "settings" | "shortcuts" | "prompt"
 }
 
-export type EmbedHostMessage = EmbedThemeMessage | EmbedComposeMessage | EmbedNavigateMessage | EmbedEditorContextMessage | EmbedCommandMessage
+/**
+ * What the extension holds that the page shows — sent once the page is ready and again on every change.
+ *
+ * `shareEditor` is THE switch for the editor reaching Frizz on its own (`frizz.shareEditorState`, a VS Code
+ * setting, so it survives a window reload and is the same in every window): on, a send from the sidebar
+ * carries the editor block and Frizz's agents can read the editor (`mcp__frizz__editor`); off, neither — only
+ * what the human adds as a chip. The context bar's eye shows it and changes it (`frizz:share-editor`).
+ * Until 2026-10-02 the eye was the page's own preference, kept in the frame's storage, and the setting
+ * governed the agents' tool alone: with the eye off an agent could still read the selection through the tool.
+ *
+ * `altK`: Alt+K (⌥K) in the editor is Frizz's in this window. False while Claude Code's extension is
+ * installed, which binds the same chord with the same `when`, so which one answered depended on load order;
+ * Frizz steps aside, and the page stops teaching a chord that is not its own here.
+ */
+export interface EmbedHostStateMessage {
+  type: "frizz:host-state"
+  shareEditor: boolean
+  altK: boolean
+}
+
+export type EmbedHostMessage = EmbedThemeMessage | EmbedComposeMessage | EmbedNavigateMessage | EmbedEditorContextMessage | EmbedCommandMessage | EmbedHostStateMessage
 
 // ── page → host ────────────────────────────────────────────────────────────────────────────────────
 
@@ -274,7 +298,18 @@ export interface EmbedRouteMessage {
   href?: string
 }
 
+/**
+ * The human flipped the context bar's eye: share the editor with Frizz, or stop. The extension writes
+ * `frizz.shareEditorState` (where it is set: the workspace's value when the workspace has one, else the
+ * user's) and answers with `frizz:host-state` — which is also how a page learns its write did not take.
+ */
+export interface EmbedShareEditorMessage {
+  type: "frizz:share-editor"
+  on: boolean
+}
+
 export type EmbedPageMessage =
+  | EmbedShareEditorMessage
   | EmbedReadyMessage
   | EmbedComposedMessage
   | EmbedOpenFileMessage

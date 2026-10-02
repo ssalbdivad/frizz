@@ -2,12 +2,12 @@ import type { EmbedHostMessage } from "@frizz/shared"
 import { closeImageViewer, pushDrawer, showToast, store } from "../store.ts"
 import { boardOrTimeout, composeInto, holdsBoardOf, openNamedThread, threadIsThere } from "./editorBridge.ts"
 import { isTerminalPath } from "./composerContext.ts"
-import { addEditorContextByChord, isEditorAddKey, setEditorContext, takePendingAdd } from "./editorContext.ts"
+import { setEditorContext, setHostState, takePendingAdd } from "./editorContext.ts"
 import { runHostCommand } from "./embedCommand.ts"
 import { repostRoute } from "./embedRoute.ts"
 import { closeSettingsAnimated } from "./overlays.ts"
 import { EMBED_READY, embedded, hostKeyChord, parseHostMessage, postToHost } from "./embed.ts"
-import { bindingLookup, detectPlatform, effectiveBindings, matchAction } from "./keybindings.ts"
+import { bindingLookup, effectiveBindings, matchAction } from "./keybindings.ts"
 import { basename } from "./paths.ts"
 import { homeHref, projectViewHref } from "./pageView.ts"
 import { prefs } from "./prefs.ts"
@@ -57,16 +57,11 @@ export function initEmbedHost(): void {
       if (chord && !frizzChord(event)) postToHost(chord)
     }, 0)
   }, true)
-  // ⌘L / Ctrl+L, the chord the context bar names for the editor, does the same pressed in the page (lib/
-  // editorContext.ts addEditorContextByChord). On the window's bubble phase, like the shortcut runtime, so
-  // a box or a recording sheet that takes the key first keeps it; prevented, so it is not forwarded too.
-  const platform = detectPlatform()
-  window.addEventListener("keydown", (event) => {
-    if (event.defaultPrevented || !isEditorAddKey(event, platform)) return
-    event.preventDefault()
-    const added = addEditorContextByChord(document.activeElement, store.drawers.some((drawer) => !drawer.closing), store.showNewThread)
-    if (added === "nothing") showToast("Open a file in the editor to add it.")
-  })
+  // ⌘L / Ctrl+L, the chord the context bar names, is Cursor's TOGGLE: from the editor it comes here (with a
+  // selection, bringing it as a chip), and pressed here it goes back — forwarded like any VS Code chord
+  // above, and run by the extension as "focus the editor" (packages/vscode embed.ts CHORDS). Until
+  // 2026-10-02 the page took it to add the editor's selection again, which ⌘I does here (App.tsx
+  // app.details), so a human who pressed ⌘L to get into the box had no chord to get back out.
   guardFocus()
   // Ready once a board is in — the page's drafts and its drawer are keyed by it, and the router that
   // navigation goes through is mounted by then — or after 5s regardless, for a machine with nothing open.
@@ -151,6 +146,10 @@ async function handle(message: EmbedHostMessage): Promise<void> {
   }
   if (message.type === "frizz:editor-context") {
     setEditorContext(message)
+    return
+  }
+  if (message.type === "frizz:host-state") {
+    setHostState(message)
     return
   }
   if (message.type === "frizz:command") {

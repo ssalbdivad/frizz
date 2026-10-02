@@ -21,6 +21,7 @@ import type {
   EmbedComposedMessage,
   EmbedEditorContextMessage,
   EmbedHostMessage,
+  EmbedHostStateMessage,
   EmbedNavigateMessage,
   EmbedPageMessage,
   EmbedRouteMessage,
@@ -64,6 +65,10 @@ export interface SidebarHost {
   reconnect(): void
   /** The page asked for the editor's context in its composer (`frizz:add-context`); resolves to what came of it, for the record. */
   addContext(message: EmbedAddContextMessage): Promise<string>
+  /** What the page shows of the extension's own state (`frizz:host-state`): posted on ready, and by `pushState`. */
+  hostState(): Omit<EmbedHostStateMessage, "type">
+  /** The page's eye: share the editor with Frizz or stop (`frizz:share-editor`); resolves to what came of it. */
+  setShareEditor(on: boolean): Promise<string>
   log: { info(line: string): void; warn(line: string): void }
 }
 
@@ -110,6 +115,8 @@ export interface Sidebar {
   href(): string | undefined
   /** Post to the page if it is ready; false if it is not, or the post failed. */
   post(message: EmbedEditorContextMessage | EmbedCommandMessage): Promise<boolean>
+  /** The extension's state the page shows changed (sharing, the chords): tell a ready page. */
+  pushState(): void
   /** Called with true when the page in the frame says it is ready, and false when that page is gone. */
   onReady(listener: (ready: boolean) => void): void
   snapshot(): SidebarSnapshot
@@ -269,6 +276,7 @@ export function registerSidebar(api: Vscode, context: vscode.ExtensionContext, h
         void post({ view: "hint", show: false })
         // The page read its theme from the URL when the frame was made; VS Code's may have changed since.
         void post({ type: "frizz:theme", theme: theme() })
+        void post({ type: "frizz:host-state", ...host.hostState() })
         settle(true)
         return
       }
@@ -299,6 +307,12 @@ export function registerSidebar(api: Vscode, context: vscode.ExtensionContext, h
       }
       case "frizz:add-context": {
         record(page.type, await host.addContext(page))
+        return
+      }
+      case "frizz:share-editor": {
+        record(page.type, await host.setShareEditor(page.on))
+        // Whatever came of it, the page shows what is TRUE now: a write that did not take puts its eye back.
+        void post({ type: "frizz:host-state", ...host.hostState() })
         return
       }
       case "frizz:route": {
@@ -434,6 +448,9 @@ export function registerSidebar(api: Vscode, context: vscode.ExtensionContext, h
     href: () => (ready && view?.visible ? routeHref : undefined),
     async post(message) {
       return ready && (await post(message))
+    },
+    pushState() {
+      if (ready) void post({ type: "frizz:host-state", ...host.hostState() })
     },
     onReady(listener) {
       readyListeners.push(listener)

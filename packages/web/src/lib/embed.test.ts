@@ -78,6 +78,12 @@ test("host messages are accepted in the contract's shapes only", () => {
   // A caret line beside a selection is not the contract's, and is dropped (the selection's lines say where).
   assert.deepEqual(parseHostMessage({ ...context, active: { ...file, cursorLine: 40, selection: context.active.selection } }), context)
   for (const command of ["new-thread", "queue", "jump", "settings", "shortcuts"]) assert.deepEqual(parseHostMessage({ type: "frizz:command", command }), { type: "frizz:command", command })
+  // What the block must say about the copy on disk, and a file whose text stays home.
+  const flagged = { ...context, active: { ...file, selection: { startLine: 3, endLine: 9, chars: 120 }, untitled: true, dirty: true, withheld: true } }
+  assert.deepEqual(parseHostMessage(flagged), flagged)
+  assert.deepEqual(parseHostMessage({ ...context, active: { ...file, cursorLine: 2, dirty: true } }), { ...context, active: { ...file, cursorLine: 2, dirty: true } })
+  // The extension's own state: the one switch, and whose Alt+K it is.
+  assert.deepEqual(parseHostMessage({ type: "frizz:host-state", shareEditor: false, altK: true, extra: 1 }), { type: "frizz:host-state", shareEditor: false, altK: true })
 
   const refused: unknown[] = [
     null,
@@ -112,6 +118,12 @@ test("host messages are accepted in the contract's shapes only", () => {
     { ...context, active: { ...file, cursorLine: "40" } },
     { type: "frizz:command", command: "close" },
     { type: "frizz:command" },
+    { ...context, active: { ...file, dirty: false } },
+    { ...context, active: { ...file, untitled: "yes" } },
+    // A withheld file's text is not there to be sent, whatever arrived.
+    { ...context, active: { ...file, withheld: true, selection: { startLine: 3, endLine: 9, chars: 4, text: "API_KEY=1" } } },
+    { type: "frizz:host-state", shareEditor: "on", altK: true },
+    { type: "frizz:host-state", shareEditor: true },
   ]
   for (const message of refused) assert.equal(parseHostMessage(message), null, JSON.stringify(message)?.slice(0, 120))
 })
