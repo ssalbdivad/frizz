@@ -78,9 +78,25 @@ const MENU_ROW_INSET = "pl-3.5 pr-1.5"
 // inline").
 
 // Auto-grow: reset to auto, then snap to content height clamped at maxHeight.
+//
+// BATCHED across every composer on the page (2026-10-01). Each snap writes `height` and then reads
+// `scrollHeight`, which forces a layout of the whole page — and the queue mounts one composer per card
+// in a single commit, so N composers forced N full layouts of a page that grows with N. On a 247-card
+// mirror of a busy machine that was 1.5s of a 20s profile of the page, plus 1.1s more in the cards' own
+// clamp measurements, which read layout between the composers' writes and so paid a fresh layout each.
+// Requests made in one turn are flushed together in a microtask — still before the browser paints —
+// as all the writes, then all the reads (one layout), then all the writes.
+const pendingSnaps = new Map<HTMLTextAreaElement, number>()
 function snapHeight(el: HTMLTextAreaElement, maxHeight: number): void {
-  el.style.height = "auto"
-  el.style.height = `${Math.min(el.scrollHeight, maxHeight)}px`
+  if (pendingSnaps.size === 0) queueMicrotask(flushSnaps)
+  pendingSnaps.set(el, maxHeight)
+}
+function flushSnaps(): void {
+  const batch = [...pendingSnaps]
+  pendingSnaps.clear()
+  for (const [el] of batch) el.style.height = "auto"
+  const heights = batch.map(([el, maxHeight]) => Math.min(el.scrollHeight, maxHeight))
+  batch.forEach(([el], i) => { el.style.height = `${heights[i]}px` })
 }
 
 export function Composer({
