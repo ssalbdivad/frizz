@@ -272,12 +272,17 @@ export function QuestionBlockCard({
               rows={1}
               // Its own surface tag — deliberately NOT the queue card's `queueComposer`, which is the
               // separate free-form prompt box at the bottom of the card. Escape BLURS (climb out, same
-              // semantics as the shared Composer) and stops here rather than reaching App's window
-              // handler. NOTE (verified in the real app 2026-07-26): stopping it does NOT keep an
-              // enclosing thread drawer open — Radix's DismissableLayer takes Escape on the document
-              // in the CAPTURE phase, so it has already dismissed the sheet before this bubble-phase
-              // handler runs. The typed answer survives that (it lives in the draft store), but the
-              // "Escape climbs out of the box first" intent only holds on the queue card.
+              // semantics as the shared Composer) and stops here rather than reaching the drawer
+              // stack's window handler; a second Escape, from outside the box, closes the drawer.
+              //
+              // Stopping the key alone does NOT keep an enclosing thread drawer open — Radix's
+              // DismissableLayer takes Escape on the document in the CAPTURE phase, before this
+              // bubble-phase handler runs (verified 2026-07-26). `data-claims-escape` is what does:
+              // ThreadSheet's onEscapeKeyDown refuses the dismiss for a target inside it, as it does
+              // for the prompt box and the title editor. Without it one Escape in an answer closed the
+              // whole drawer — on the desktop and in VS Code's sidebar alike, where the drawer is the
+              // only place to answer and the human landed back on the queue (draft kept).
+              data-claims-escape
               data-surface="questionAnswer"
               value={freetext}
               onChange={(e) => interactive.onText(e.target.value)}
