@@ -1,19 +1,13 @@
 #!/usr/bin/env node
+import type { RemoteController } from "./remote-controller.ts";
+import { wireRemote } from "./remote-wiring.ts";
 import { bindHostIsExposed } from "@frizz/server/local-origin";
 import { fileSessionDirectory, loadOrCreateSessionKey } from "@frizz/server/access-codes";
-import {
-  type CloudConfig,
-  establishCloudConfig,
-} from "./cloud.ts";
 import { renderQrLines } from "@frizz/server/qr";
 import { listSessions, signOutSession } from "./sessions-cli.ts";
 import { SUPERVISOR_ACCESS_CODE_PATH } from "@frizz/server/restart-supervisor";
-import { createAccessPane, type AccessPane } from "./access-pane.ts";
-import { installPaneHost, type PaneHost } from "./pane-host.ts";
-import { createRemoteController, type RemoteController } from "./remote-controller.ts";
-import { probeCloudflared, probeGithub, probeTailscale } from "./remote-detect.ts";
-import { createRemotePane } from "./remote-pane.ts";
-import { createRemoteControlHandler } from "./remote-setup.ts";
+import type { AccessPane } from "./access-pane.ts";
+import type { PaneHost } from "./pane-host.ts";
 import { LOOPBACK_BIND_HOST } from "@frizz/server/local-origin";
 import { readFileSync } from "node:fs";
 import { homedir } from "node:os";
@@ -500,35 +494,12 @@ async function runSupervisor(
       onActivity: (event) => renderSupervisorActivity(activityReadout, event),
     });
     // The supervisor is listening now, so a code minted here is immediately redeemable.
-    remote = createRemoteController({ host: supervisor, port, log: logger, say: (message) => console.error(`frizz: ${message}`) });
-    try {
-      await remote.serveSaved();
-    } catch (error) {
-      // A saved setup that cannot come up must not take the board down with it: the board still serves
-      // loopback, the readout says so, and R offers the setup again.
-      const message = error instanceof Error ? error.message : String(error);
-      logger.error("remote", message);
-      console.error(`frizz: the saved remote setup could not start: ${message}`);
-    }
-    activeAccessLink = remote.origin() ? supervisor.issueAccessLink() : null;
-    {
-      accessPane = createAccessPane({ issue: () => supervisor.issueAccessLink() });
-      // One setup, two surfaces: R in this terminal, and Settings → Remote access in a browser on this
-      // machine (the supervisor refuses it from anywhere else). Wired whether or not stdout is a terminal,
-      // so a board with no terminal to press R in can still be set up.
-      const remoteSetup = {
-        port,
-        current: () => remote?.current() ?? null,
-        apply: (next: CloudConfig | null, applyOptions?: { justClaimed?: boolean }) => remote!.apply(next, applyOptions),
-        claim: (name: string) => establishCloudConfig(name, port),
-        issueLink: () => supervisor.issueAccessLink(),
-        probes: { github: probeGithub, cloudflared: probeCloudflared, tailscale: probeTailscale },
-        onChanged: (config: CloudConfig | null) => logger.info("remote", config ? `reached at https://${config.hostname}` : "loopback only"),
-      };
-      supervisor.setRemoteControl(createRemoteControlHandler(remoteSetup));
-      const remotePane = createRemotePane({ ...remoteSetup, sandbox: sandbox !== null });
-      paneHost = installPaneHost({ bindings: { l: accessPane, L: accessPane, r: remotePane, R: remotePane } });
-    }
+    // Serve the saved setup, offer Settings → Remote access, and bind L and R (remote-wiring.ts).
+    const wiring = await wireRemote({ supervisor, port, log: logger, say: (message) => console.error(`frizz: ${message}`), sandbox: sandbox !== null });
+    remote = wiring.remote;
+    activeAccessLink = wiring.firstLink;
+    accessPane = wiring.accessPane;
+    paneHost = wiring.paneHost;
   } catch (error) {
     launchOwner.release();
     throw error;

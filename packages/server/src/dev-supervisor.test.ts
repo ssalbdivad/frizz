@@ -16,7 +16,6 @@ import {
   SUPERVISOR_ESCALATE_GRACE_MS,
   defaultDevWatchRoots,
   devChildEnv,
-  devHmrPort,
   devConfigSyntaxError,
   devCrashRetryDelay,
   devReexecEnv,
@@ -1517,15 +1516,4 @@ test("a forced supervisor stop still exits when releasing launch ownership throw
   stop()
   assert.deepEqual(exits, [1])
   assert.ok(errors.some((line) => line.includes("could not release launch ownership")))
-})
-
-test("the HMR port is the board's, so it survives the child moving to a new private port", () => {
-  // Every recycle hands the child a fresh random port. An HMR port derived from that one moved with
-  // it, and an open tab polled the dead one forever (scripts/verify-dev-hmr.ts drives the real thing).
-  assert.equal(devHmrPort(9393), 48393)
-  assert.equal(devHmrPort(30000), 29000, "past 26535 the +39000 port would not exist")
-  const first = devChildEnv({}, 41001, devHmrPort(9393))
-  const next = devChildEnv({}, 52777, devHmrPort(9393))
-  assert.equal(first.FRIZZ_DEV_HMR_PORT, "48393")
-  assert.equal(next.FRIZZ_DEV_HMR_PORT, first.FRIZZ_DEV_HMR_PORT)
 })

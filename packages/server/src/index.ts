@@ -80,6 +80,16 @@ export type ServerStartupPhase =
   | "signal handlers"
 
 type HttpServer = ReturnType<typeof createServer>
+
+/** Where Vite's HMR client connects, on the board's own port. Reserved under `/_frizz/` like every route. */
+const VITE_HMR_PATH = "/_frizz/vite-hmr"
+
+/** Vite's own sockets, by path and the subprotocol its client always sends. */
+function isViteHmrUpgrade(req: IncomingMessage): boolean {
+  const protocol = req.headers["sec-websocket-protocol"]
+  return (protocol === "vite-hmr" || protocol === "vite-ping")
+    && new URL(req.url ?? "/", "http://frizz.invalid").pathname === VITE_HMR_PATH
+}
 type TerminalServer = ReturnType<typeof createTerminalServer>
 type AppSocketServer = ReturnType<typeof createAppSocketServer>
 
@@ -104,7 +114,7 @@ export interface StartServerRuntime {
   createAppSocket(options: Parameters<typeof createAppSocketServer>[0]): AppSocketServer
   createVite(options: {
     root: string
-    server: { middlewareMode: true; hmr: { port: number } }
+    server: { middlewareMode: true; ws: { server: HttpServer; path: string } }
     appType: "custom"
   }): Promise<ViteServer>
   createHttpServer(listener: (req: IncomingMessage, res: ServerResponse) => void): HttpServer
@@ -1062,14 +1072,20 @@ export async function startServer(opts: StartOptions = {}): Promise<StartedServe
     const webRoot = resolve(import.meta.dirname, "..", "..", "web")
     const distDir = opts.webDistDir ? resolve(opts.webDistDir) : join(webRoot, "dist")
     startupPhase = "Vite"
+    // Never listens: it only carries the HMR upgrades the board's upgrade handler hands to Vite.
+    const viteUpgrades = createServer()
     if (opts.dev) {
       try {
-        // Supervised, the board's stable HMR port (dev-supervisor.ts devHmrPort says why it must not
-        // follow this child's private port); a bare startServer({ dev: true }) derives one from its own.
-        const hmrPort = Number(process.env.FRIZZ_DEV_HMR_PORT) || (port + 39000 <= 65535 ? port + 39000 : port - 1000)
+        // HMR rides the board's OWN port: Vite takes its upgrades from `viteUpgrades`, which the
+        // upgrade handler below feeds every VITE_HMR_PATH socket, and its client then connects to the
+        // origin that served the page. So it reaches through the supervisor proxy and anything in
+        // front of it — a phone on a frizz.sh name gets hot reload, behind the same session gate as
+        // the board socket — and the tab reconnects to the next child after every recycle, because
+        // the public port never moves. (A side port, childPort + 39000, did neither: a phone cannot
+        // reach it, and it followed the child's random port, so the first recycle orphaned the tab.)
         vite = await runtime.createVite({
           root: webRoot,
-          server: { middlewareMode: true, hmr: { port: hmrPort } },
+          server: { middlewareMode: true, ws: { server: viteUpgrades, path: VITE_HMR_PATH } },
           appType: "custom",
         })
       } catch (error) {
@@ -1198,6 +1214,12 @@ export async function startServer(opts: StartOptions = {}): Promise<StartedServe
     httpServer.on("upgrade", (req, socket, head) => {
       if (!accepting) {
         socket.destroy()
+        return
+      }
+      // Vite's HMR socket rides this port too (see createVite above): hand it over before routing, which
+      // would read the path's second segment as a project.
+      if (vite && isViteHmrUpgrade(req)) {
+        viteUpgrades.emit("upgrade", req, socket, head)
         return
       }
       // The editor socket is machine-wide and answered here, BEFORE routing: a project prefix would only
