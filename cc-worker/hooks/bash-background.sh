@@ -1,5 +1,5 @@
 # PreToolUse(Bash) PRE-FILTER for bash-background.mjs. Not a hook of its own: hooks.json runs it as
-# `exec sh .../bash-background.sh; node .../bash-background.mjs`, and it either answers `{}` itself or
+# `sh .../bash-background.sh || node .../bash-background.mjs`, and it either answers `{}` itself or
 # hands the identical stdin to that node hook.
 #
 # WHY: the node hook fires on every Bash call a worker makes, and almost every call is one it answers
@@ -65,18 +65,28 @@
 # on a syntax error. So the first thing this file does is arm an EXIT trap that runs node instead: a
 # syntax or fatal runtime error anywhere below lands in node, which answers exactly as it did before this
 # file existed. Every deliberate exit disarms the trap first.
+# What the trap cannot catch is this file never running: dash exits 2 on a script it cannot OPEN, and a
+# CRLF checkout breaks the trap line itself (`EXIT\r` is no signal) before the next line's syntax error
+# exits 2. Hence `||` in hooks.json rather than the first draft's `exec sh …; node …`, which blocked EVERY
+# Bash call in both cases: any failure exit here — a missing file, a missing `sh` (127), CRLF — reaches
+# node with the stdin still unread. The pre-filter itself only ever exits 0 or with node's own status.
+# (.gitattributes pins this file to LF so the CRLF case stays a slow path, not the Windows default.)
 #
-# WINDOWS, as read out of Claude Code 2.1.285's binary and then run on a real Windows host: a shell-form
-# hook runs as `<Git>\bin\bash.exe -c <command>` with `<Git>\bin` put first on PATH, so `sh` is Git's
-# own and this file runs as it does anywhere else (408 inputs, every one answered as node alone answers
-# it; p50 247ms -> 164ms, MSYS process start being most of either). Only when it finds no Git Bash does
-# Claude pick PowerShell instead, and then it offers no Bash tool at all, so this matcher never fires.
-# The command still survives PowerShell: `exec` fails as an unknown command, PowerShell carries on to
-# `node`, and the answer is node's (pwsh 7 and 5.1 both checked) — but the failed lookup costs ~1.2s,
-# so this must never become the command of a hook that DOES fire under PowerShell.
+# WINDOWS, as read out of Claude Code 2.1.287's binary (2026-10-02): a shell-form hook runs as
+# `spawn(command, [], { shell: <Git>\bin\bash.exe })`, i.e. `bash.exe -c <command>`, with the folder of
+# that bash.exe put first on PATH and CLAUDE_PLUGIN_ROOT spelled with forward slashes, so `sh` is Git's
+# own `sh.exe` and this file runs as it does anywhere else. Replayed that way with the host's real Git
+# Bash and node.exe (this WSL machine's Windows side, plugin root under a path with a space): 1,008 inputs
+# answered byte-for-byte as node alone answers them, 28 of them node's denials and advice; with this file
+# deleted, 48 of 48 still did. Only when Claude finds no Git Bash does it run hooks under PowerShell, and
+# then it registers no Bash tool at all ("Git Bash not found; BashTool will be unavailable"), so this
+# matcher never fires there. If it ever did: pwsh 7 reads `||` as its own chain operator and falls through
+# to node (48 of 48 identical), while Windows PowerShell 5.1 cannot parse `||` and the hook fails exit 1
+# — non-blocking, but with the guard off.
 #
-# POSIX sh only — dash, bash 5 and 3.2 (macOS /bin/sh), bash --posix, busybox ash and Git Bash all take
-# identical decisions on 1,038 inputs (2026-10-02): no arrays, no `${var//}`, no `[[`, no subprocess.
+# POSIX sh only — dash, bash 5, bash --posix and busybox ash take identical decisions on every input the
+# test feeds them (it runs whichever of them a box has), as does Git Bash on the Windows replay above:
+# no arrays, no `${var//}`, no `[[`, no subprocess. macOS's /bin/sh (bash 3.2) was never run.
 
 trap 'trap - EXIT; if [ -n "${prefilter_read:-}" ]; then printf %s "$prefilter_input" | node "$prefilter_dir/bash-background.mjs" "$@"; else node "$prefilter_dir/bash-background.mjs" "$@"; fi; exit $?' EXIT
 

@@ -1,0 +1,4 @@
+# Shell scripts are read by sh, which takes a CRLF line as a command ending in `\r`. A Windows clone with
+# core.autocrlf=true would otherwise check cc-worker/hooks/bash-background.sh out unrunnable: still safe,
+# because its hooks.json `||` hands the failure to node, but every Bash call then pays node again.
+*.sh text eol=lf

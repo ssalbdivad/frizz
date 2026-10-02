@@ -10,7 +10,8 @@
 //   every shell this can meet (dash, bash, bash --posix, busybox ash).
 // - A mutant of the pre-filter with any one check removed FAILS the property on these inputs, so the
 //   inputs are strong enough to catch the bug each check exists for (the negative control).
-// - Fail-open: a syntax or fatal runtime error in the pre-filter still lands in node.
+// - Fail-open: a syntax or fatal runtime error in the pre-filter, or the file or `sh` missing, still
+//   lands in node.
 // - The hooks.json command itself, through /bin/sh -c with the REAL node, as Claude Code runs it.
 //
 // These skip on win32 because the harness itself is POSIX (a `#!/bin/sh` fake node, `/bin/sh -c`). On
@@ -19,7 +20,7 @@
 import { after, test } from "node:test"
 import assert from "node:assert/strict"
 import { spawn, spawnSync } from "node:child_process"
-import { chmodSync, existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs"
+import { chmodSync, copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { delimiter, dirname, join } from "node:path"
 import { fileURLToPath } from "node:url"
@@ -279,7 +280,9 @@ test("adversarial inputs: never skipped where node acts, the hand-off is byte-id
   }
 })
 
-const SHELLS = [["dash"], ["bash"], ["bash", "--posix"], ["busybox", "sh"]].filter(([cmd]) => spawnSync(cmd, ["-c", "true"]).status === 0)
+// Probed with the shell's own arguments: `busybox -c true` fails where `busybox sh -c true` works, and
+// filtering on the bare command silently dropped busybox from this list.
+const SHELLS = [["dash"], ["bash"], ["bash", "--posix"], ["busybox", "sh"]].filter(([cmd, ...args]) => spawnSync(cmd, [...args, "-c", "true"]).status === 0)
 test("every POSIX shell available here takes the same decisions", { skip }, async (t) => {
   t.diagnostic(`shells: ${SHELLS.map((s) => s.join(" ")).join(", ")}`)
   const sample = [...ADVERSARIAL, ...MUST_SKIP, ...loadCorpus(join(here, "bash-background-prefilter.corpus.jsonl")).slice(0, 300)]
@@ -367,10 +370,11 @@ test("FAIL OPEN: a syntax or fatal runtime error in the pre-filter still reaches
 
 // The registration itself, run the way Claude Code runs a shell-form hook on POSIX (`shell: true`, so
 // `/bin/sh -c <command>` with CLAUDE_PLUGIN_ROOT in the env), with the real node behind it.
+const hookCommand = (): string =>
+  JSON.parse(readFileSync(join(hooks, "hooks.json"), "utf8")).hooks.PreToolUse.find((e: { matcher: string }) => e.matcher === "Bash").hooks[0].command
 test("the hooks.json command answers exactly as node alone does, through /bin/sh and the real node", { skip }, () => {
-  const config = JSON.parse(readFileSync(join(hooks, "hooks.json"), "utf8"))
-  const command: string = config.hooks.PreToolUse.find((e: { matcher: string }) => e.matcher === "Bash").hooks[0].command
-  assert.match(command, /^exec sh "\$\{CLAUDE_PLUGIN_ROOT\}\/hooks\/bash-background\.sh"; node "\$\{CLAUDE_PLUGIN_ROOT\}\/hooks\/bash-background\.mjs"$/)
+  const command = hookCommand()
+  assert.match(command, /^sh "\$\{CLAUDE_PLUGIN_ROOT\}\/hooks\/bash-background\.sh" \|\| node "\$\{CLAUDE_PLUGIN_ROOT\}\/hooks\/bash-background\.mjs"$/)
   const root = dirname(hooks)
   const env = { ...process.env, ...WORKER, CLAUDE_PLUGIN_ROOT: root, FRIZZ_WORKTREE_DIR: "" }
   for (const stdin of [
@@ -387,4 +391,38 @@ test("the hooks.json command answers exactly as node alone does, through /bin/sh
     assert.equal(viaCommand.stdout, viaNode.stdout, stdin)
   }
   assert.ok(existsSync(PREFILTER))
+})
+
+// The pre-filter FILE missing is the one failure its own EXIT trap cannot catch: the shell exits before
+// reading a line of it, and dash (Debian's /bin/sh, and `sh` on this box) exits 2 on a script it cannot
+// open, which Claude reads as "block this call". The first registration, `exec sh <file>; node <file>`,
+// therefore blocked EVERY Bash call whenever the file was absent. `||` hands that exit to node instead,
+// which still has the untouched stdin. A missing `sh` (127) lands in the same place.
+test("FAIL OPEN: with the pre-filter file or `sh` missing, or the file CRLF, the hooks.json command still answers as node does", { skip }, () => {
+  const root = tempDir("frizz-prefilter-noscript-")
+  const hooksDir = join(root, "hooks")
+  mkdirSync(hooksDir)
+  for (const file of ["bash-background.mjs", "worktree.mjs"]) copyFileSync(join(hooks, file), join(hooksDir, file))
+  // The same plugin with the pre-filter checked out CRLF, as a Windows clone with core.autocrlf=true
+  // would write it without .gitattributes: the `\r` breaks the very trap meant to catch it (`EXIT\r` is
+  // no signal), and the next line is a syntax error, exit 2.
+  const crlfRoot = tempDir("frizz-prefilter-crlf-")
+  mkdirSync(join(crlfRoot, "hooks"))
+  for (const file of ["bash-background.mjs", "worktree.mjs"]) copyFileSync(join(hooks, file), join(crlfRoot, "hooks", file))
+  writeFileSync(join(crlfRoot, "hooks", "bash-background.sh"), readFileSync(PREFILTER, "utf8").replace(/\n/g, "\r\n"))
+  // A PATH holding node and nothing else: `sh` is not found at all.
+  const nodeOnly = tempDir("frizz-prefilter-nodeonly-")
+  symlinkSync(process.execPath, join(nodeOnly, "node"))
+  const command = hookCommand()
+  for (const [name, env] of [
+    ["the pre-filter file is missing", { ...process.env, ...WORKER, CLAUDE_PLUGIN_ROOT: root, FRIZZ_WORKTREE_DIR: "" }],
+    ["`sh` is not on PATH", { ...WORKER, PATH: nodeOnly, CLAUDE_PLUGIN_ROOT: dirname(hooks), FRIZZ_WORKTREE_DIR: "" }],
+    ["the pre-filter has CRLF line endings", { ...process.env, ...WORKER, CLAUDE_PLUGIN_ROOT: crlfRoot, FRIZZ_WORKTREE_DIR: "" }],
+  ] as const) {
+    for (const stdin of [call({ command: "server &" }), call({ command: "npx vite", run_in_background: true }), call({ command: "ls" })]) {
+      const viaCommand = spawnSync("/bin/sh", ["-c", command], { input: stdin, encoding: "utf8", env })
+      assert.equal(viaCommand.status, 0, `${name}: ${viaCommand.stderr}`)
+      assert.equal(viaCommand.stdout, nodeAnswer(stdin), `${name}: ${stdin}`)
+    }
+  }
 })

@@ -4,7 +4,7 @@
       {
         "matcher": "Bash",
         "hooks": [
-          { "type": "command", "command": "exec sh \"${CLAUDE_PLUGIN_ROOT}/hooks/bash-background.sh\"; node \"${CLAUDE_PLUGIN_ROOT}/hooks/bash-background.mjs\"" }
+          { "type": "command", "command": "sh \"${CLAUDE_PLUGIN_ROOT}/hooks/bash-background.sh\" || node \"${CLAUDE_PLUGIN_ROOT}/hooks/bash-background.mjs\"" }
         ]
       },
       {
