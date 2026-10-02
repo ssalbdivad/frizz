@@ -31,7 +31,7 @@ Object.assign(globalThis, {
 })
 
 const { embedded } = await import("./embed.ts")
-const { narrowLayout, phoneLayout } = await import("./mobile.ts")
+const { phoneLayout } = await import("./mobile.ts")
 const { openLocalPath } = await import("./local-file-links.ts")
 const { openExternalUrl } = await import("./external-links.ts")
 const { getThemeSnapshot, initTheme, setHostTheme } = await import("./theme.ts")
@@ -46,16 +46,14 @@ test("the address's embed mode is kept for the frame's session", () => {
   assert.deepEqual(JSON.parse(session.get("frizz.embed")!), { host: "vscode", theme: "dark" })
 })
 
-test("a sidebar is one column at any width, and never the phone", () => {
+test("a sidebar is never the phone, at any width", () => {
   // Wide: the 700px query does not match.
-  assert.equal(narrowLayout(), true)
   assert.equal(phoneLayout(), false)
   // Phone-narrow: still not the phone — a sidebar has a pointer and a keyboard, and takes the desktop's
   // inline question cards, type scale and Settings rather than the phone's sheets and big targets.
   const wide = window.matchMedia
   window.matchMedia = (() => ({ matches: true, addEventListener() {}, removeEventListener() {} })) as unknown as typeof window.matchMedia
   try {
-    assert.equal(narrowLayout(), true)
     assert.equal(phoneLayout(), false)
   } finally {
     window.matchMedia = wide

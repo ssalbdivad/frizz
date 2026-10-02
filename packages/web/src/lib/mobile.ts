@@ -46,19 +46,14 @@ function viewportIsPhone(): boolean {
 // column, not a phone (plans/vscode-extension.md § The editor in the sidebar, and the app's own feel).
 // So the two halves are asked separately:
 //
-//  - phoneLayout / useIsMobile — THE PHONE: its own page (PhonePage.tsx), its sheets, its touch-sized
-//    controls, no keyboard. A phone-sized viewport, and never a sidebar.
-//  - narrowLayout / useNarrowLayout — ONE COLUMN: drawers and sheets the full width of the viewport,
-//    nothing beside them. A phone, and a sidebar at any width.
-//
-// styles.css carries the CSS half of the second (`html[data-embed]` beside the 700px query).
+//  - THE PHONE — its own page (PhonePage.tsx), its sheets, its touch-sized controls, no keyboard: this
+//    module, phoneLayout / useIsMobile. A phone-sized viewport, and never a sidebar.
+//  - ONE COLUMN — the page with nothing beside it, its drawers the full width: a phone, and a sidebar at
+//    any width. Asked where the column is drawn — AllQueues.tsx (embedded() → SidebarPage), ui/Sheet.tsx
+//    useNarrowDrawer, and styles.css `html[data-embed]` beside the 700px query — rather than here.
 
 function phoneSnapshot(): boolean {
   return !embedded() && viewportIsPhone()
-}
-
-function narrowSnapshot(): boolean {
-  return embedded() || viewportIsPhone()
 }
 
 /**
@@ -71,15 +66,6 @@ export function phoneLayout(): boolean {
 }
 
 /**
- * Is the page one column, its drawers the viewport's full width? A phone, or an editor's sidebar at any
- * width: a human who drags the sidebar to 760px still wants that column, not the desktop page's two
- * columns flipping in under the pointer mid-drag.
- */
-export function narrowLayout(): boolean {
-  return narrowSnapshot()
-}
-
-/**
  * Is this a phone-shaped viewport — the phone's page and touch behaviour? Never in an editor's sidebar.
  *
  * `useSyncExternalStore` rather than a `useState` + effect pair: the effect version renders ONCE with
@@ -89,9 +75,4 @@ export function narrowLayout(): boolean {
  */
 export function useIsMobile(): boolean {
   return useSyncExternalStore(subscribe, phoneSnapshot, () => false)
-}
-
-/** narrowLayout, for a component. */
-export function useNarrowLayout(): boolean {
-  return useSyncExternalStore(subscribe, narrowSnapshot, () => false)
 }
