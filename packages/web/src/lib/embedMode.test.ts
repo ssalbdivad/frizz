@@ -9,7 +9,11 @@ import test from "node:test"
 const posted: unknown[] = []
 const session = new Map<string, string>()
 const local = new Map<string, string>([["frizz-theme", "light"]])
-const root = { dataset: {} as Record<string, string>, style: {} as Record<string, string> }
+const props = new Map<string, string>()
+const root = {
+  dataset: {} as Record<string, string>,
+  style: { setProperty: (name: string, value: string) => void props.set(name, value), removeProperty: (name: string) => void props.delete(name) } as unknown as Record<string, string>,
+}
 const fetched: string[] = []
 
 Object.assign(globalThis, {
@@ -170,6 +174,30 @@ test("the editor's theme wins for the session and never touches the stored prefe
   assert.equal(root.dataset.theme, "dark")
   assert.equal(local.get("frizz-theme"), "light", "the preference is the human's, untouched")
   assert.equal(JSON.parse(session.get("frizz.embed")!).theme, "dark", "a reload of this frame keeps the editor's latest")
+})
+
+test("the editor's colours: worn on the root under VS Code's names while it sends them, gone when it stops", () => {
+  // Default Dark Modern, as a real VS Code 1.140 writes it on the webview (scripts/e2e-sidebar.ts c18).
+  const colors = { "sideBar-background": "#181818", foreground: "#cccccc", descriptionForeground: "#9d9d9d", focusBorder: "#0078d4", "panel-border": "#2b2b2b" }
+  setHostTheme("dark", { colors })
+  assert.equal(root.dataset.hostColors, "sideBar")
+  assert.equal(props.get("--vscode-sideBar-background"), "#181818")
+  assert.equal(props.get("--vscode-focusBorder"), "#0078d4")
+  // The focus blue is 3.9:1 on that side bar; as text it is lifted toward the foreground to 4.5.
+  assert.ok(props.get("--host-accent") && props.get("--host-accent") !== "#0078d4", props.get("--host-accent"))
+  assert.ok(props.get("--host-muted"))
+  assert.deepEqual(JSON.parse(session.get("frizz.embed")!).palette, { colors }, "a reload of this frame paints them first")
+  // An editor tab's frame takes the editor's background instead; high contrast is marked.
+  setHostTheme("dark", { colors: { "editor-background": "#000000", foreground: "#ffffff" }, surface: "editor", contrast: true })
+  assert.equal(root.dataset.hostColors, "editor")
+  assert.equal(root.dataset.hostContrast, "")
+  assert.equal(props.has("--vscode-sideBar-background"), false, "a colour the new theme lacks is not left over from the old")
+  // frizz.matchEditorTheme turned off: the next theme message has no colours.
+  setHostTheme("dark")
+  assert.equal(root.dataset.hostColors, undefined)
+  assert.equal(root.dataset.hostContrast, undefined)
+  assert.deepEqual([...props.keys()], [])
+  assert.equal(JSON.parse(session.get("frizz.embed")!).palette, undefined)
 })
 
 test("a sidebar never claims an item the server holds for a browser tab", async () => {

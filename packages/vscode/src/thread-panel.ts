@@ -16,6 +16,10 @@
 //  - a click on the tab's context bar adds to the TAB's box (framed-page.ts PageHost.addContext `into`).
 // And the editor's own Ctrl+L comes to the tab when the tab is the Frizz the human used last (app.ts).
 //
+// In the editor's colours (frizz.matchEditorTheme, sidebar-html.ts § The editor's colours) as the sidebar is,
+// but on the EDITOR's surface: a tab sits among the code's tabs, so its page takes the editor's background,
+// not the side bar's.
+//
 // Restored after a window reload: the relay keeps `{ thread, project }` as the webview's state, and the
 // serializer frames that thread again (activation event `onWebviewPanel:frizz.thread`).
 //
@@ -25,6 +29,7 @@ import type * as vscode from "vscode"
 import type { EmbedComposeMessage, EmbedComposedMessage, EmbedHostMessage, EmbedPageMessage, EmbedRouteMessage } from "@frizz/shared/embed-protocol"
 import { embedTheme, embedUrl, frameTarget, isSlug, parsePageMessage, threadEmbedUrl, threadOfHref, type ComposeSidebar } from "./embed.ts"
 import { actOnPage, Composes, type FrameLink, type PageHost } from "./framed-page.ts"
+import { MATCH_THEME_SETTING } from "./sidebar.ts"
 import { frameDocument, HINT, messageDocument, nonce } from "./sidebar-html.ts"
 
 type Vscode = typeof vscode
@@ -131,6 +136,7 @@ export function registerThreadPanels(api: Vscode, context: vscode.ExtensionConte
   const readyListeners: ((ready: boolean) => void)[] = []
   const focusListeners: ((tab: ThreadTab) => void)[] = []
   const theme = () => embedTheme(api.window.activeColorTheme.kind)
+  const matchTheme = () => api.workspace.getConfiguration("frizz").get<boolean>(MATCH_THEME_SETTING, true) !== false
   const icon = api.Uri.joinPath(context.extensionUri, "dist", "icon.png")
 
   const record = (tab: Tab, type: string, outcome: string) => {
@@ -138,7 +144,7 @@ export function registerThreadPanels(api: Vscode, context: vscode.ExtensionConte
     if (tab.events.length > EVENTS_KEPT) tab.events.shift()
   }
 
-  async function postTo(tab: Tab, data: EmbedHostMessage | { view: "hint"; show: boolean; text?: string }): Promise<boolean> {
+  async function postTo(tab: Tab, data: EmbedHostMessage | { view: "hint"; show: boolean; text?: string } | { view: "match-theme"; on: boolean }): Promise<boolean> {
     if (!tabs.has(tab) || !tab.frameUrl) return false
     try {
       return await tab.panel.webview.postMessage(data)
@@ -198,7 +204,7 @@ export function registerThreadPanels(api: Vscode, context: vscode.ExtensionConte
     tab.frameOrigin = target.origin
     tab.view = ""
     host.log.info(`A tab shows ${target.url}.`)
-    tab.panel.webview.html = frameDocument({ nonce: nonce(), url: target.url, origin: target.origin, state: { project: tab.project, ...(tab.thread ? { thread: tab.thread } : {}) } })
+    tab.panel.webview.html = frameDocument({ nonce: nonce(), url: target.url, origin: target.origin, match: matchTheme(), surface: "editor", state: { project: tab.project, ...(tab.thread ? { thread: tab.thread } : {}) } })
     tab.readyTimer = setTimeout(() => {
       host.log.warn(`A tab's page didn't say it was ready within ${READY_HINT_MS / 1000}s.`)
       void postTo(tab, { view: "hint", show: true, text: HINT.text })
@@ -358,6 +364,11 @@ export function registerThreadPanels(api: Vscode, context: vscode.ExtensionConte
     }),
     api.window.onDidChangeActiveColorTheme(() => {
       for (const tab of tabs) if (tab.ready) void postTo(tab, { type: "frizz:theme", theme: theme() })
+    }),
+    // To each tab's relay, which holds the colours (sidebar.ts does the same for the sidebar's).
+    api.workspace.onDidChangeConfiguration((event) => {
+      if (!event.affectsConfiguration(`frizz.${MATCH_THEME_SETTING}`)) return
+      for (const tab of tabs) void postTo(tab, { view: "match-theme", on: matchTheme() })
     }),
     { dispose: () => {
       for (const tab of tabs) clearTimeout(tab.readyTimer)

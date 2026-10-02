@@ -13,9 +13,8 @@ test("the frame document frames exactly Frizz's origin and runs only its own non
   const html = frameDocument({ nonce: "N0nce", url: URL_, origin: FRIZZ })
   assert.equal(cspOf(html), `default-src 'none'; frame-src ${FRIZZ}; style-src 'nonce-N0nce'; script-src 'nonce-N0nce'`)
   const frames = [...html.matchAll(/<iframe [^>]*>/gu)].map((match) => match[0])
-  assert.deepEqual(frames, [
-    `<iframe id="frizz" title="Frizz" src="${FRIZZ}/?embed=vscode&amp;theme=dark&amp;project=a%22b" allow="clipboard-read; clipboard-write; local-network-access">`,
-  ])
+  // No src in the markup: the relay sets it, with the editor's colours on its fragment (below).
+  assert.deepEqual(frames, [`<iframe id="frizz" title="Frizz" allow="clipboard-read; clipboard-write; local-network-access">`])
   assert.deepEqual([...html.matchAll(/<script\b[^>]*>/gu)].map((match) => match[0]), ['<script nonce="N0nce">'])
   assert.deepEqual([...html.matchAll(/<style\b[^>]*>/gu)].map((match) => match[0]), ['<style nonce="N0nce">'])
   assert.doesNotMatch(html, /\son[a-z]+=/u, "no inline handlers, which the policy would block anyway")
@@ -53,20 +52,31 @@ interface Relay {
   dispatch(event: { source: unknown; origin: string; data: unknown }): void
   /** The relay's window gains focus with `active` its focused element; the listener's timer has run when it resolves. */
   windowFocus(active: "body" | "frame"): Promise<void>
+  /** What the relay set the frame's address to. */
+  src(): string
+  /** VS Code rewrites the theme on this document: its custom properties and its body's class. */
+  restyle(vars: Record<string, string>, bodyClass: string): void
 }
 
-function relay(html: string): Relay {
+/** As VS Code 1.140 writes Default Dark Modern on a webview document (scripts/e2e-sidebar.ts c18). */
+const DARK_MODERN = { "--vscode-sideBar-background": "#181818", "--vscode-foreground": "#cccccc", "--vscode-focusBorder": "#0078d4", "--vscode-not-ours": "#123456" }
+
+function relay(html: string, theme: { vars: Record<string, string>; bodyClass: string } = { vars: DARK_MODERN, bodyClass: "vscode-dark" }): Relay {
   const script = /<script nonce="[^"]+">([\s\S]*?)<\/script>/u.exec(html)![1]!
   const toHost: unknown[] = []
   const toPage: { data: unknown; targetOrigin: string }[] = []
-  const frameWindow = { postMessage: (data: unknown, targetOrigin: string) => toPage.push({ data, targetOrigin }), focus: () => state.pageFocused++ }
+  const frameWindow = { postMessage: (data: unknown, targetOrigin: string) => toPage.push({ data: structuredClone(data), targetOrigin }), focus: () => state.pageFocused++ }
   const hostFrame = {}
   const hint = { hidden: true }
   const hintText = { textContent: "" }
   const listeners: ((event: unknown) => void)[] = []
   const focusListeners: (() => void)[] = []
   const state = { focused: 0, pageFocused: 0, kept: undefined as unknown }
-  const frame = { contentWindow: frameWindow, focus: () => state.focused++ }
+  const frame = { contentWindow: frameWindow, focus: () => state.focused++, src: "" }
+  const look = { vars: { ...theme.vars }, bodyClass: theme.bodyClass }
+  const observers: (() => void)[] = []
+  const body = { classList: { contains: (name: string) => look.bodyClass.split(" ").includes(name) } }
+  const documentElement = {}
   const window = {
     origin: WEBVIEW,
     // As VS Code's injected API script leaves it in a webview document.
@@ -78,7 +88,7 @@ function relay(html: string): Relay {
       if (type === "focus") focusListeners.push(listener as () => void)
     },
   }
-  const document = { getElementById: (id: string) => (id === "frizz" ? frame : id === "hint" ? hint : id === "hint-text" ? hintText : null), addEventListener() {}, body: {}, activeElement: null as unknown }
+  const document = { getElementById: (id: string) => (id === "frizz" ? frame : id === "hint" ? hint : id === "hint-text" ? hintText : null), addEventListener() {}, body, documentElement, activeElement: null as unknown }
   runInNewContext(script, {
     // A clone, as postMessage makes one — and out of the script's realm, so deepEqual compares values.
     acquireVsCodeApi: () => ({ postMessage: (message: unknown) => toHost.push(structuredClone(message)), setState: (value: unknown) => (state.kept = structuredClone(value)) }),
@@ -87,6 +97,18 @@ function relay(html: string): Relay {
     navigator: { platform: "Linux x86_64" },
     Element: class {},
     setTimeout,
+    getComputedStyle: (element: unknown) => {
+      assert.equal(element, documentElement, "the colours are read off the document's root, where VS Code writes them")
+      return { getPropertyValue: (name: string) => look.vars[name] ?? "" }
+    },
+    MutationObserver: class {
+      constructor(callback: () => void) {
+        observers.push(callback)
+      }
+      observe() {}
+    },
+    encodeURIComponent,
+    JSON,
   })
   return {
     toHost,
@@ -105,6 +127,13 @@ function relay(html: string): Relay {
       return state.pageFocused
     },
     dispatch: (event) => listeners.forEach((listener) => listener(event)),
+    src: () => frame.src,
+    restyle(vars, bodyClass) {
+      look.vars = { ...vars }
+      look.bodyClass = bodyClass
+      // One batch for the whole rewrite, as VS Code makes it; each observer (the root's, the body's) hears it.
+      observers.forEach((callback) => callback())
+    },
     async windowFocus(active) {
       document.activeElement = active === "body" ? document.body : frame
       focusListeners.forEach((listener) => listener())
@@ -192,4 +221,41 @@ test("a thread's tab keeps its thread as the webview's state, and nothing at all
   const html = frameDocument({ nonce: "n", url: URL_, origin: FRIZZ, state: { project: "</script><script>alert(1)</script>", thread: "x" } })
   assert.equal((html.match(/<\/script>/gu) ?? []).length, 1)
   assert.equal(scriptJson({ a: "</script>\u2028" }), '{"a":"\\u003c/script>\\u2028"}')
+})
+
+test("the relay hands the page the editor's colours: on the first address, with each theme message, and on every theme switch", () => {
+  const r = relay(frameDocument({ nonce: "n", url: URL_, origin: FRIZZ }))
+  const darkModern = { type: "frizz:theme", theme: "dark", colors: { "sideBar-background": "#181818", foreground: "#cccccc", focusBorder: "#0078d4" }, surface: "sideBar" }
+  // The first paint: the address carries the theme as a fragment, which the page's pre-paint guard reads.
+  const [address, fragment] = r.src().split("#frizz-theme=")
+  assert.equal(address, URL_)
+  assert.deepEqual(JSON.parse(decodeURIComponent(fragment!)), darkModern, "only the contract's names, read off the root")
+  // The extension's theme message (sent once the page is ready) goes on with the colours added.
+  r.dispatch({ source: r.hostFrame, origin: WEBVIEW, data: { type: "frizz:theme", theme: "dark" } })
+  assert.deepEqual(r.toPage, [{ data: darkModern, targetOrigin: FRIZZ }])
+  // VS Code switches theme: it rewrites the properties and the body's class, and the page hears it once.
+  r.restyle({ "--vscode-sideBar-background": "#000000", "--vscode-foreground": "#ffffff", "--vscode-focusBorder": "#f38518" }, "vscode-high-contrast")
+  assert.equal(r.toPage.length, 2, "two observers, one message: a rewrite that changes nothing more posts nothing more")
+  assert.deepEqual(r.toPage[1]!.data, { type: "frizz:theme", theme: "dark", colors: { "sideBar-background": "#000000", foreground: "#ffffff", focusBorder: "#f38518" }, surface: "sideBar", contrast: true })
+  r.restyle({ "--vscode-sideBar-background": "#ffffff" }, "vscode-high-contrast vscode-high-contrast-light")
+  assert.deepEqual(r.toPage[2]!.data, { type: "frizz:theme", theme: "light", colors: { "sideBar-background": "#ffffff" }, surface: "sideBar", contrast: true }, "the body's class is the kind, light high contrast included")
+
+  // frizz.matchEditorTheme turned off: a theme message with no colours, now and from then on.
+  r.dispatch({ source: r.hostFrame, origin: WEBVIEW, data: { view: "match-theme", on: false } })
+  assert.deepEqual(r.toPage[3], { data: { type: "frizz:theme", theme: "light" }, targetOrigin: FRIZZ })
+  r.dispatch({ source: r.hostFrame, origin: WEBVIEW, data: { type: "frizz:theme", theme: "light" } })
+  assert.deepEqual(r.toPage[4]!.data, { type: "frizz:theme", theme: "light" })
+  r.dispatch({ source: r.hostFrame, origin: WEBVIEW, data: { view: "match-theme", on: true } })
+  assert.deepEqual(r.toPage[5]!.data, { type: "frizz:theme", theme: "light", colors: { "sideBar-background": "#ffffff" }, surface: "sideBar", contrast: true })
+})
+
+test("with matching off from the start, the frame's address is the page's plain one; an editor tab's frame names its surface", () => {
+  assert.equal(relay(frameDocument({ nonce: "n", url: URL_, origin: FRIZZ, match: false })).src(), URL_)
+  const tab = relay(frameDocument({ nonce: "n", url: URL_, origin: FRIZZ, surface: "editor" }), { vars: { "--vscode-editor-background": "#1f1f1f" }, bodyClass: "vscode-dark" })
+  assert.deepEqual(JSON.parse(decodeURIComponent(tab.src().split("#frizz-theme=")[1]!)), { type: "frizz:theme", theme: "dark", colors: { "editor-background": "#1f1f1f" }, surface: "editor" })
+})
+
+test("no address can close the relay's script", () => {
+  const html = frameDocument({ nonce: "n", url: `${FRIZZ}/?q=</script><script>alert(1)</script>`, origin: FRIZZ })
+  assert.equal([...html.matchAll(/<\/script>/gu)].length, 1)
 })

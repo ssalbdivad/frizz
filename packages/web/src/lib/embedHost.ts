@@ -151,7 +151,8 @@ function guardFocus(): void {
 async function handle(message: EmbedHostMessage): Promise<void> {
   if (message.type === "frizz:command" || message.type === "frizz:navigate" || (message.type === "frizz:compose" && message.focus)) allowHostFocus()
   if (message.type === "frizz:theme") {
-    setHostTheme(message.theme)
+    const { colors, surface, contrast } = message
+    setHostTheme(message.theme, colors ? { colors, ...(surface ? { surface } : {}), ...(contrast ? { contrast } : {}) } : undefined)
     return
   }
   if (message.type === "frizz:editor-context") {

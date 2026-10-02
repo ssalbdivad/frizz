@@ -12,6 +12,7 @@ import assert from "node:assert/strict"
 import Database from "../sqlite.ts"
 import { createInteractionStore } from "../interaction-store.ts"
 import { createClaudeAgentBrokerBridge } from "./claude-agent-broker-bridge.ts"
+import { CLAUDE_PERMISSION_LAPSED_MESSAGE } from "./claude-permission-interactions.ts"
 import { claudeBrokerRecordPath, claudeBrokerRetirementPath, killBroker, liveBrokerRecords, markBrokerRetired, readBrokerRecord, takeBrokerRetirement } from "./claude-broker-host.ts"
 import { describeClaudeBrokerDiagnostic } from "./claude-broker-diagnostics.ts"
 import { CLAUDE_BROKER_CAPABILITY_INPUT_ACK, CLAUDE_INPUT_DROP_DIAGNOSTIC_PREFIX, type ClaudeQueryEvent } from "./claude-agent-sdk-protocol.ts"
@@ -94,6 +95,50 @@ test("broker routes a permission escalation to the InteractionStore and APPROVES
 
 test("broker routes a permission escalation and DENIES on the human decision", { timeout: 25_000 }, async () => {
   await runCase("deny", "deny")
+})
+
+// An unanswered approval must not hold the turn forever: past its deadline the store expires the card,
+// the daemon is answered with a DENY carrying the lapsed message (never an allow), and the turn moves on.
+test("an approval nobody answers is denied at its deadline and the turn carries on", { timeout: 25_000 }, async () => {
+  const dir = mkdtempSync(join(tmpdir(), "cbrk-lapse-"))
+  const exe = join(dir, "fake-claude--permission.mjs")
+  copyFileSync(fakeCli, exe); chmodSync(exe, 0o700)
+  const store = createInteractionStore(new Database(":memory:"))
+  let results = 0
+  const bridge = createClaudeAgentBrokerBridge({
+    stateDir: dir, executablePath: exe,
+    env: { PATH: process.env.PATH ?? "", HOME: process.env.HOME ?? "" },
+    interactions: store, projectId: "proj-1", permissionDeadlineMs: 1_500,
+    onEvent: (_slug: string, _sid: string, ev: ClaudeQueryEvent) => { if (ev.kind === "result") results++ },
+  })
+  const sessionId = randomUUID()
+  const slug = "lapse-thread"
+  const scope = { projectId: "proj-1", threadSlug: slug, sessionId }
+  const waitFor = async (cond: () => boolean, ms = 10_000) => { const d = Date.now() + ms; while (!cond()) { if (Date.now() > d) throw new Error("timeout"); await sleep(50) } }
+  const hostResponses = () => {
+    try {
+      return readFileSync(join(dir, "capture.jsonl"), "utf8").split("\n").filter(Boolean)
+        .map((l) => JSON.parse(l) as { kind: string; response?: { response?: { behavior?: string; message?: string } } })
+        .filter((r) => r.kind === "host-response")
+    } catch { return [] }
+  }
+  try {
+    await bridge.spawnDispatch({ threadSlug: slug, sessionId, cwd: dir, prompt: "do the thing", permissionMode: "default" })
+    await waitFor(() => store.listPending(scope).length > 0)
+    const [rec] = store.listPending(scope)
+    assert.ok(rec.expiresAt !== null, "an approval card carries a deadline")
+    assert.equal(results, 0, "the tool call is gated while the card is live")
+    await waitFor(() => results > 0)
+    assert.equal(store.get(scope, rec.id)?.lifecycle, "expired", "the card lapsed rather than being answered")
+    const [answer] = hostResponses()
+    assert.equal(answer?.response?.response?.behavior, "deny", "a lapsed approval fails closed")
+    assert.equal(answer?.response?.response?.message, CLAUDE_PERMISSION_LAPSED_MESSAGE)
+  } finally {
+    bridge.releaseSession(slug, sessionId, "session-deleted")
+    bridge.close()
+    try { const r = readBrokerRecord(claudeBrokerRecordPath(dir, sessionId)); if (r) process.kill(r.daemonPid, "SIGKILL") } catch {}
+    await rmEventually(dir)
+  }
 })
 
 // ---- freshProcess: the usage-limit latch escape hatch ----------------------------------------------

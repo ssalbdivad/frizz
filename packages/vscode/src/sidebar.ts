@@ -46,6 +46,8 @@ export const SIDEBAR_VIEW_KEY = "frizz.sidebarView"
  * a page that was only slow. An older Frizz, which has no embed mode, never says it, and its page still
  * shows under the bar.
  */
+/** `frizz.matchEditorTheme` (package.json): the page in the editor's colours rather than Frizz's palette. */
+export const MATCH_THEME_SETTING = "matchEditorTheme"
 const READY_HINT_MS = 20_000
 /** Status and project pushes arrive a frame apart after a connect; one render for the pair. */
 const REFRESH_DEBOUNCE_MS = 200
@@ -158,6 +160,8 @@ export function registerSidebar(api: Vscode, context: vscode.ExtensionContext, h
   let routeView = ""
 
   const theme = () => embedTheme(api.window.activeColorTheme.kind)
+  /** `frizz.matchEditorTheme`: the page wears the editor's colours (the relay reads them; sidebar-html.ts). */
+  const matchTheme = () => api.workspace.getConfiguration("frizz").get<boolean>(MATCH_THEME_SETTING, true) !== false
   const record = (type: string, outcome: string) => {
     events.push({ type, outcome })
     if (events.length > EVENTS_KEPT) events.shift()
@@ -168,7 +172,7 @@ export function registerSidebar(api: Vscode, context: vscode.ExtensionContext, h
     for (const waiter of settled) waiter(value)
   }
 
-  const post = async (data: EmbedHostMessage | { view: "hint"; show: boolean; text?: string }): Promise<boolean> => {
+  const post = async (data: EmbedHostMessage | { view: "hint"; show: boolean; text?: string } | { view: "match-theme"; on: boolean }): Promise<boolean> => {
     if (!view || !frameUrl) return false
     try {
       return await view.webview.postMessage(data)
@@ -273,7 +277,7 @@ export function registerSidebar(api: Vscode, context: vscode.ExtensionContext, h
       hinted = true
       hintText = HINT_OLD_FRIZZ
     }
-    view.webview.html = frameDocument({ nonce: nonce(), url: target.url, origin: target.origin, ...(old ? { hint: HINT_OLD_FRIZZ } : {}) })
+    view.webview.html = frameDocument({ nonce: nonce(), url: target.url, origin: target.origin, match: matchTheme(), ...(old ? { hint: HINT_OLD_FRIZZ } : {}) })
     readyTimer = setTimeout(() => {
       host.log.warn(`The sidebar's page didn't say it was ready within ${READY_HINT_MS / 1000}s.`)
       showHint()
@@ -390,6 +394,10 @@ export function registerSidebar(api: Vscode, context: vscode.ExtensionContext, h
     }, { webviewOptions: { retainContextWhenHidden: true } }),
     api.window.onDidChangeActiveColorTheme(() => {
       if (ready) void post({ type: "frizz:theme", theme: theme() })
+    }),
+    // To the relay, which holds the colours: it answers with a theme message with them, or without.
+    api.workspace.onDidChangeConfiguration((event) => {
+      if (event.affectsConfiguration(`frizz.${MATCH_THEME_SETTING}`)) void post({ view: "match-theme", on: matchTheme() })
     }),
     { dispose: () => {
       clearTimeout(readyTimer)

@@ -4,7 +4,7 @@ Talk to [Frizz](https://github.com/ssalbdivad/frizz) from your editor, and land 
 in it. Works in VS Code, Cursor and Windsurf.
 
 - **The Frizz sidebar** — the Frizz icon in the activity bar opens Frizz itself beside your code: the
-  queue, threads, questions and prompt boxes, live, in VS Code's light or dark theme, on this window's
+  queue, threads, questions and prompt boxes, live, in your color theme's colors, on this window's
   project. It is the app you know, narrowed: the same cards, type sizes and shortcuts. File links in it
   open in this window, web links in your browser. Its badge counts the threads ready for you.
 - **VS Code's title row holds the header's buttons**: **Back to queue** in a thread, **New thread**
@@ -123,8 +123,10 @@ command palette.
   and it shows no view description in a sidebar of one view. Frizz's
   desktop notifications cannot fire inside an editor: VS Code's own notification stands in for them while
   the sidebar is out of sight, and the badge and the status bar carry the count.
-- **The theme is VS Code's**, light or dark, for as long as the sidebar shows; your Frizz theme setting
-  is the browser's.
+- **The theme is VS Code's**, for as long as the sidebar shows: light or dark, and its colors — the side
+  bar's background, text, borders, focus and link colors — so the sidebar reads as part of the editor.
+  Frizz's status colors (ready, needs you, errors) stay Frizz's. Turn off `frizz.matchEditorTheme` to see
+  Frizz's own colors; your Frizz theme setting is the browser's.
 
 ## Install
 
@@ -143,6 +145,7 @@ Server when you are in WSL, since the extension runs where your files are. Or bu
 | `frizz.openFileLinks` | on | Open file links from Frizz in this window. Turn it off for a window that should never take them. |
 | `frizz.shareEditorState` | on | Share what this window shows with Frizz: the file in front and your selection, with its text, go with what you send from the sidebar, and Frizz's agents can read them — with your open tabs and the errors and warnings — when they need to. Off, nothing of the editor goes unless you add it. The eye on the sidebar's prompt box is this setting. |
 | `frizz.selectionHint` | on | Show `Ctrl+L to add to Frizz` (`⌘L` on macOS) at the end of what you select, while Frizz is running. Not in diffs, and not for a select-all. |
+| `frizz.matchEditorTheme` | on | Show the sidebar, and a thread in an editor tab, in your color theme's colors. Off, it shows Frizz's own, still light or dark as VS Code is. |
 | `frizz.notify` | on | Show a notification when a thread in this window's project needs you while the sidebar is out of sight. Only the window you used last shows it. |
 | `frizz.useSidebar` | on | Everything you add from the editor, and Ask and Send, go to the sidebar. Off, selections and files go to Frizz in your browser, Ask and Send take your message in an input box and send it, and the quick fix and the terminal's entry are not offered. |
 

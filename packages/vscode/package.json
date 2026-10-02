@@ -335,6 +335,11 @@
           "default": true,
           "markdownDescription": "Share what you have in front of you in this editor with Frizz: the file you are in and what you have selected, with its text, goes with every message you send from the Frizz sidebar, and Frizz's agents can read it — with your open tabs and the editor's errors and warnings — when they need it. So you can ask about \"this\" without pasting it. The eye on the sidebar's prompt box is this setting. Turn it off to keep the editor to yourself: only what you add to a prompt goes. Text from files that may hold secrets (`.env`, keys, credentials) is never sent on its own."
         },
+        "frizz.matchEditorTheme": {
+          "type": "boolean",
+          "default": true,
+          "markdownDescription": "Show Frizz in your color theme's colors, so the sidebar, and a thread you open in an editor tab, match the rest of the editor. Turn it off to see Frizz's own colors. Either way, Frizz follows your theme between light and dark."
+        },
         "frizz.notify": {
           "type": "boolean",
           "default": true,

@@ -23,15 +23,30 @@
 //    platform, `focused` when it takes the keyboard) and `{ view: "hint" }` from the extension, which
 //    shows or hides the "hasn't loaded" bar.
 // The envelope keeps the two apart, so nothing the page posts can pass for a click on Reload.
+//
+// THE EDITOR'S COLOURS. VS Code's API tells the extension only the theme's KIND; the colours themselves
+// exist as the `--vscode-*` custom properties VS Code writes on this document's root (and the kind as a
+// class on its body), rewritten in place when the human switches theme. So the relay is the one party
+// that can read them: it puts the colours `EMBED_THEME_COLORS` names on every `frizz:theme` it passes to
+// the page, posts a fresh one whenever VS Code rewrites them (a MutationObserver on the root's style and
+// the body's class), and puts the first one on the frame's address as a fragment, so the page's FIRST
+// paint is already in them (embed-protocol.ts EMBED_THEME_FRAGMENT). While `frizz.matchEditorTheme` is
+// off (`match` false, then `{ view: "match-theme" }` from the extension) its theme messages carry no
+// colours, and the page wears Frizz's own palette.
 
 import { randomBytes } from "node:crypto"
+import { EMBED_THEME_COLORS, EMBED_THEME_FRAGMENT, type EmbedSurface } from "@frizz/shared/embed-protocol"
 import { safeOrigin } from "./embed.ts"
 
 export function nonce(): string {
   return randomBytes(18).toString("base64url")
 }
 
-/** JSON for inside a <script>: nothing in it can close the element or open a comment. */
+/**
+ * A value as a JavaScript literal inside an inline `<script>`: JSON, with `<` escaped so no `</script>`
+ * (or `<!--`) can close or bend the element, and U+2028/U+2029, which JSON allows in a string and an older
+ * engine's JavaScript grammar does not, escaped too.
+ */
 export function scriptJson(value: unknown): string {
   return JSON.stringify(value).replace(/</gu, "\\u003c").replace(/\u2028/gu, "\\u2028").replace(/\u2029/gu, "\\u2029")
 }
@@ -130,7 +145,18 @@ export const HINT_OLD_FRIZZ = "This Frizz is older than the sidebar. Update Friz
  * (`setState`), which is what a thread's editor tab is restored from after a window reload
  * (thread-panel.ts); JSON, and only names — never anything the page showed.
  */
-export function frameDocument(input: { nonce: string; url: string; origin: string; hint?: string; state?: Record<string, string> }): string {
+export function frameDocument(input: {
+  nonce: string
+  url: string
+  origin: string
+  hint?: string
+  /** Hand the page the editor's colours (`frizz.matchEditorTheme`). Default on. */
+  match?: boolean
+  /** The surface this view sits on, whose background the page takes: the side bar's (default) or an editor tab's. */
+  surface?: EmbedSurface
+  /** Kept as the webview's state (`setState`), for a thread's tab restored after a reload: names only. */
+  state?: Record<string, string>
+}): string {
   const { url, origin } = input
   if (!safeOrigin(origin) || new URL(url).origin !== origin) throw new Error(`refusing to frame ${url} as ${origin}`)
   return `<!doctype html>
@@ -143,15 +169,52 @@ export function frameDocument(input: { nonce: string; url: string; origin: strin
 <body>
 <div class="frame">
 <div class="hint" id="hint" role="status"${input.hint ? "" : " hidden"}><p id="hint-text">${escapeHtml(input.hint ?? HINT.text)}</p><div class="actions">${buttons(HINT.actions)}</div></div>
-<iframe id="frizz" title="Frizz" src="${escapeHtml(url)}" allow="clipboard-read; clipboard-write; local-network-access"></iframe>
+<iframe id="frizz" title="Frizz" allow="clipboard-read; clipboard-write; local-network-access"></iframe>
 </div>
 <script nonce="${input.nonce}">
   const vscode = acquireVsCodeApi()${input.state ? `
   vscode.setState(${scriptJson(input.state)})` : ""}
-  const FRIZZ = ${JSON.stringify(origin)}
+  const FRIZZ = ${scriptJson(origin)}
   const frame = document.getElementById("frizz")
   const hint = document.getElementById("hint")
   const hintText = document.getElementById("hint-text")
+  const COLORS = ${scriptJson(EMBED_THEME_COLORS)}
+  const SURFACE = ${scriptJson(input.surface ?? "sideBar")}
+  let match = ${input.match === false ? "false" : "true"}
+  let posted = ""
+  // The theme as VS Code has drawn this document: its kind from the body's class (vscode-light,
+  // vscode-dark, vscode-high-contrast, and vscode-high-contrast-light beside the last), else the
+  // extension's word; its colours from the root's custom properties, while matching is on.
+  const themeMessage = (theme) => {
+    const classes = document.body.classList
+    const light = classes.contains("vscode-light") || classes.contains("vscode-high-contrast-light")
+    const known = light || classes.contains("vscode-dark") || classes.contains("vscode-high-contrast")
+    const message = { type: "frizz:theme", theme: known ? (light ? "light" : "dark") : theme === "light" ? "light" : "dark" }
+    if (!match) return message
+    const style = getComputedStyle(document.documentElement)
+    const colors = {}
+    for (const name of COLORS) {
+      const value = style.getPropertyValue("--vscode-" + name).trim()
+      if (value && value.length <= 64) colors[name] = value
+    }
+    message.colors = colors
+    message.surface = SURFACE
+    if (classes.contains("vscode-high-contrast")) message.contrast = true
+    return message
+  }
+  const postTheme = (message) => {
+    posted = JSON.stringify(message)
+    frame.contentWindow.postMessage(message, FRIZZ)
+  }
+  // VS Code rewrites the properties one by one in a single task; the observer hears them as one batch.
+  const restyled = new MutationObserver(() => {
+    const message = themeMessage(undefined)
+    if (JSON.stringify(message) !== posted) postTheme(message)
+  })
+  restyled.observe(document.documentElement, { attributes: true, attributeFilter: ["style", "class"] })
+  restyled.observe(document.body, { attributes: true, attributeFilter: ["class"] })
+  posted = JSON.stringify(themeMessage(undefined))
+  frame.src = ${scriptJson(url)} + (match ? ${scriptJson(`#${EMBED_THEME_FRAGMENT}`)} + encodeURIComponent(posted) : "")
   window.addEventListener("message", (event) => {
     const data = event.data
     if (event.source === frame.contentWindow) {
@@ -165,7 +228,16 @@ export function frameDocument(input: { nonce: string; url: string; origin: strin
       if (typeof data.text === "string") hintText.textContent = data.text
       return
     }
+    if (data.view === "match-theme") {
+      match = data.on === true
+      postTheme(themeMessage(undefined))
+      return
+    }
     if (typeof data.type !== "string" || !data.type.startsWith("frizz:")) return
+    if (data.type === "frizz:theme") {
+      postTheme(themeMessage(data.theme))
+      return
+    }
     // The page puts the caret in its composer, or opens the door a title-row button names (New thread's
     // caret, the palette's search box, Settings); the frame has to hold the focus for either to take the
     // keyboard. Without it a button left the keyboard in this document, where no key reaches the page.

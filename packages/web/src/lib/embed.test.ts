@@ -2,6 +2,7 @@ import assert from "node:assert/strict"
 import test from "node:test"
 import { readFileSync } from "node:fs"
 import vm from "node:vm"
+import { EMBED_COLOR_VALUE, EMBED_THEME_COLORS } from "@frizz/shared"
 import { hostKeyChord, parseHostMessage, readEmbedState } from "./embed.ts"
 import { HOST_CHORDS, hostChordEvent } from "./embedKeys.ts"
 
@@ -42,6 +43,66 @@ test("the pre-paint guard applies the editor's theme over the stored one, and ma
   // Embedded with no theme named: the page's own resolution, still marked embedded.
   assert.deepEqual(run("?embed=vscode", null, "dark"), { embed: "vscode", theme: "dark" })
   assert.deepEqual(run("?theme=dark", null, "light"), { theme: "light" })
+})
+
+test("the pre-paint guard wears the editor's colours from the first address's fragment, checked as the page checks them", () => {
+  const entry = readFileSync(new URL("../../index.html", import.meta.url), "utf8")
+  const script = [...entry.matchAll(/<script>([\s\S]*?)<\/script>/g)][0]![1]!
+  // In step with the contract: the same names, the same value pattern.
+  assert.deepEqual(JSON.parse(/for \(const name of (\[[^\]]*\])\)/u.exec(script)![1]!), [...EMBED_THEME_COLORS])
+  assert.ok(script.includes(`const color = /${EMBED_COLOR_VALUE.source}/u`))
+  const run = (search: string, session: string | null, hash: string) => {
+    const props: Record<string, string> = {}
+    const documentElement = { dataset: {} as Record<string, string>, style: { setProperty: (name: string, value: string) => void (props[name] = value) } }
+    const last = { session, replaced: null as string | null }
+    vm.runInNewContext(script, {
+      URLSearchParams,
+      location: { search, hash, pathname: "/" },
+      history: { state: null, replaceState: (_: unknown, __: string, url: string) => void (last.replaced = url) },
+      sessionStorage: { getItem: () => session, setItem: (_: string, value: string) => void (last.session = value) },
+      localStorage: { getItem: () => null },
+      matchMedia: () => ({ matches: false }),
+      document: { documentElement, querySelector: () => null },
+    })
+    return { dataset: documentElement.dataset, props, last }
+  }
+  const sent = { type: "frizz:theme", theme: "dark", surface: "sideBar", colors: { "sideBar-background": "#080d17", foreground: "rgba(204, 204, 204, 0.9)", focusBorder: "red; background: url(https://evil.example/)", "made-up": "#ffffff" } }
+  const first = run("?embed=vscode&theme=dark&project=nub", null, `#frizz-theme=${encodeURIComponent(JSON.stringify(sent))}`)
+  assert.equal(first.dataset.hostColors, "sideBar")
+  assert.deepEqual(first.props, { "--vscode-sideBar-background": "#080d17", "--vscode-foreground": "rgba(204, 204, 204, 0.9)" }, "a value that is not a colour, and a name not in the contract, are dropped")
+  assert.equal(first.last.replaced, "/?embed=vscode&theme=dark&project=nub", "the fragment leaves the address")
+  const record = JSON.parse(first.last.session!)
+  assert.deepEqual(record.palette.colors, sent.colors, "kept for embed.ts, which checks it again")
+  // A reload of the frame: the record alone.
+  const again = run("", JSON.stringify(record), "")
+  assert.equal(again.dataset.hostColors, "sideBar")
+  assert.equal(again.props["--vscode-sideBar-background"], "#080d17")
+  // No background among them: nothing to paint with, so Frizz's palette.
+  const bare = run("?embed=vscode&theme=dark", null, `#frizz-theme=${encodeURIComponent(JSON.stringify({ colors: { foreground: "#ffffff" } }))}`)
+  assert.equal(bare.dataset.hostColors, undefined)
+  assert.deepEqual(bare.props, {})
+  // A browser tab with a fragment that looks the part is not embedded, and wears nothing.
+  const tab = run("", null, `#frizz-theme=${encodeURIComponent(JSON.stringify(sent))}`)
+  assert.deepEqual({ ...tab.dataset }, { theme: "light" })
+  assert.equal(tab.last.replaced, null)
+})
+
+test("the editor's colours are taken only where the contract allows, and kept across a reload of the frame", () => {
+  const colors = { "sideBar-background": "#181818", foreground: "#cccccc", "list-hoverBackground": "rgba(90, 93, 94, 0.31)" }
+  assert.deepEqual(parseHostMessage({ type: "frizz:theme", theme: "dark", colors, surface: "sideBar" }), { type: "frizz:theme", theme: "dark", colors, surface: "sideBar" })
+  assert.deepEqual(
+    parseHostMessage({ type: "frizz:theme", theme: "dark", colors: { ...colors, focusBorder: "#0078d4;}*{display:none", "badge-background": "var(--x)", menu: "#000000", "button-background": "#".padEnd(70, "f") }, contrast: true, surface: "elsewhere" }),
+    { type: "frizz:theme", theme: "dark", colors, contrast: true },
+    "an injection, a var(), an unknown name and an overlong value are each dropped; an unknown surface is the side bar",
+  )
+  assert.deepEqual(parseHostMessage({ type: "frizz:theme", theme: "dark", colors: { foreground: "#cccccc" } }), { type: "frizz:theme", theme: "dark" }, "no background: no palette")
+  assert.deepEqual(parseHostMessage({ type: "frizz:theme", theme: "dark", colors: { "editor-background": "#1f1f1f" }, surface: "editor" }), { type: "frizz:theme", theme: "dark", colors: { "editor-background": "#1f1f1f" }, surface: "editor" })
+  assert.deepEqual(parseHostMessage({ type: "frizz:theme", theme: "dark", colors: "#000" }), { type: "frizz:theme", theme: "dark" })
+  // The frame's record keeps them whichever way the mode was found: the guard put them there this boot.
+  const stored = JSON.stringify({ host: "vscode", theme: "dark", palette: { colors } })
+  assert.deepEqual(readEmbedState("?embed=vscode&theme=light", stored), { host: "vscode", theme: "light", palette: { colors } })
+  assert.deepEqual(readEmbedState("", stored), { host: "vscode", theme: "dark", palette: { colors } })
+  assert.deepEqual(readEmbedState("", JSON.stringify({ host: "vscode", palette: { colors: { "sideBar-background": "url(x)" } } })), { host: "vscode" })
 })
 
 const compose = {
