@@ -67,6 +67,14 @@ test("every page message the contract names is taken, with only its own fields",
   })
   assert.deepEqual(parsePageMessage({ type: "frizz:add-context", what: "selection", text: "x" }), { type: "frizz:add-context", what: "selection" })
   assert.deepEqual(parsePageMessage({ type: "frizz:add-context", what: "file", path: "/r/a.ts" }), { type: "frizz:add-context", what: "file", path: "/r/a.ts" })
+  assert.deepEqual(parsePageMessage({ type: "frizz:add-context", what: "problems" }), { type: "frizz:add-context", what: "problems" })
+  assert.deepEqual(parsePageMessage({ type: "frizz:add-context", what: "terminal" }), { type: "frizz:add-context", what: "terminal" })
+  assert.deepEqual(parsePageMessage({ type: "frizz:pick-context", id: "n1", query: "" }), { type: "frizz:pick-context", id: "n1", query: "" })
+  assert.deepEqual(parsePageMessage({ type: "frizz:pick-context", id: "n1", query: "src/App", x: 1 }), { type: "frizz:pick-context", id: "n1", query: "src/App" })
+  assert.deepEqual(
+    parsePageMessage({ type: "frizz:pick-context", id: "n2", uris: ["file:///r/a.ts", "vscode-remote://wsl%2Bubuntu/r/b"] }),
+    { type: "frizz:pick-context", id: "n2", uris: ["file:///r/a.ts", "vscode-remote://wsl%2Bubuntu/r/b"] },
+  )
   assert.deepEqual(parsePageMessage({ type: "frizz:route", view: "thread", title: "hello-there", description: "Ready", x: 1 }), {
     type: "frizz:route",
     view: "thread",
@@ -125,6 +133,17 @@ test("anything else from the page is nothing: unknown types, wrong shapes, other
     { type: "frizz:add-context", what: "file", path: "src/a.ts" },
     { type: "frizz:add-context", what: "file", path: "/r/a\0.ts" },
     { type: "frizz:add-context", what: "line", path: "/r/a.ts" },
+    { type: "frizz:add-context", what: "problems", path: "/r/a.ts" },
+    { type: "frizz:pick-context", query: "a" },
+    { type: "frizz:pick-context", id: "", query: "a" },
+    { type: "frizz:pick-context", id: "n", query: 3 },
+    { type: "frizz:pick-context", id: "n", query: "x".repeat(201) },
+    { type: "frizz:pick-context", id: "n", query: "a", uris: ["file:///r/a.ts"] },
+    { type: "frizz:pick-context", id: "n" },
+    { type: "frizz:pick-context", id: "n", uris: [] },
+    { type: "frizz:pick-context", id: "n", uris: ["file:///r/a\0.ts"] },
+    { type: "frizz:pick-context", id: "n", uris: [7] },
+    { type: "frizz:pick-context", id: "n", uris: Array.from({ length: 51 }, (_, i) => `file:///r/${i}`) },
     { type: "frizz:route", view: "drawer", title: "x" },
     { type: "frizz:route", view: "thread" },
     { type: "frizz:route", view: "thread", title: "x".repeat(501) },

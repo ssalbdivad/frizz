@@ -11,7 +11,7 @@ import { homedir } from "node:os"
 import { basename, dirname } from "node:path"
 import type * as vscode from "vscode"
 import { EDITOR_FEATURES, type EditorAttention, type EditorComposeInput, type EditorComposed, type EditorOpen, type EditorProject } from "@frizz/shared/editor-protocol"
-import { EMBED_TERMINAL_PATH, type EmbedAddContextMessage, type EmbedCommandMessage, type EmbedComposeMessage, type EmbedEditorContextMessage } from "@frizz/shared/embed-protocol"
+import { EMBED_PROBLEMS_PATH, EMBED_TERMINAL_PATH, type EmbedAddContextMessage, type EmbedCommandMessage, type EmbedComposeMessage, type EmbedEditorContextMessage, type EmbedEditorExtrasMessage } from "@frizz/shared/embed-protocol"
 import { AttentionGate, attentionText, manyText, type AttentionItem, type AttentionToast } from "./attention.ts"
 import { BUILD, buildLabel, builtAtLabel, installedBuild } from "./build-info.ts"
 import { EditorConnection, FocusRecency, type ConnectionStatus, type OpenResult } from "./connection.ts"
@@ -19,6 +19,7 @@ import { activeFileEditor, registerContextFeed } from "./context-feed.ts"
 import { discoverFrizz, pageAddressNote, SOURCE_WORDS, type FoundFrizz } from "./discovery.ts"
 import { fixNote, fixTitle, lineSpan, terminalText, type Problem } from "./editor-context.ts"
 import { registerEditorStateFeed } from "./editor-state-feed.ts"
+import { registerExtrasFeed } from "./extras-feed.ts"
 import { addRoute, composeInSidebar as composeVia, promptRoute } from "./embed.ts"
 import { composeInput, composeMessage, normalizeNewlines, refLabel, type FileRef, type Selected } from "./message.ts"
 import { projectForPath, workspaceProjects } from "./projects.ts"
@@ -26,6 +27,7 @@ import { describeRpcError, dispatchProfile, FrizzRpc, withRetry } from "./rpc.ts
 import { registerSidebar, type SidebarSnapshot } from "./sidebar.ts"
 import { notConnectedMessage, statusView } from "./status.ts"
 import { findThread, pickerThreads, threadHandleOf, threadItem, displayTitle, type PickerThread } from "./threads.ts"
+import { registerWorkspaceFiles } from "./workspace-files.ts"
 
 type Vscode = typeof vscode
 
@@ -42,6 +44,8 @@ export interface FrizzExtensionApi {
   sidebar(): SidebarSnapshot
   /** The editor's context as the sidebar's page was last told it. */
   editorContext(): EmbedEditorContextMessage | undefined
+  /** The file's problems and the terminal's last command as the sidebar's page was last told them. */
+  editorExtras(): EmbedEditorExtrasMessage | undefined
   /** This build's label (`0.1.0+1a2b3c4d`), as the hello, the log and the status bar's tooltip say it. */
   build: string
   /** Every needs-you notification this window showed, its words, oldest first. */
@@ -121,6 +125,7 @@ export function activateFrizz(api: Vscode, context: vscode.ExtensionContext): Fr
     openInBrowser: () => openFrizz(),
     reconnect: () => connection.reconnect(),
     addContext: (message) => addContextFromPage(message),
+    pickContext: (message) => workspaceFiles.pick(message),
     log: { info: (line) => log.info(line), warn: (line) => log.warn(line) },
   })
   const useSidebar = () => config().get<boolean>("useSidebar", true)
@@ -130,6 +135,12 @@ export function activateFrizz(api: Vscode, context: vscode.ExtensionContext): Fr
     post: (message) => sidebar.post(message),
     projects: () => projects,
   })
+  const extras = registerExtrasFeed(api, context, {
+    ready: () => sidebar.ready(),
+    onReady: (listener) => sidebar.onReady(listener),
+    post: (message) => sidebar.post(message),
+  })
+  const workspaceFiles = registerWorkspaceFiles(api, context, { projects: () => projects })
 
   // ── status bar ───────────────────────────────────────────────────────────────────────────────────
   const item = api.window.createStatusBarItem("frizz.status", api.StatusBarAlignment.Right, 100)
@@ -786,6 +797,35 @@ export function activateFrizz(api: Vscode, context: vscode.ExtensionContext): Fr
   }
 
   /**
+   * Add problems in this file — the palette, the editor's Frizz menu: the file in front's errors and
+   * warnings, each with its line, as one `@problems` chip (extras.ts problemsText). Sidebar only, like a
+   * terminal selection: the chip's text has no file to fall back to as a reference.
+   */
+  async function addProblems(): Promise<EditorComposed | undefined> {
+    const found = extras.problems()
+    if (!found.ok) {
+      void api.window.showInformationMessage(found.why)
+      return undefined
+    }
+    const project = windowProject()
+    return deliver([{ path: EMBED_PROBLEMS_PATH, text: found.text, ...(project ? { projectId: project.id } : {}) }], { sidebarOnly: true })
+  }
+
+  /**
+   * Add the terminal's last command — the palette, the terminal's menu: the command, its output (the end
+   * of it, when it is long) and how it exited, as one `@terminal` chip (extras.ts terminalCommandText).
+   */
+  async function addTerminalOutput(): Promise<EditorComposed | undefined> {
+    const found = await extras.terminal()
+    if (!found.ok) {
+      void api.window.showInformationMessage(found.why)
+      return undefined
+    }
+    const project = windowProject()
+    return deliver([{ path: EMBED_TERMINAL_PATH, text: found.text, ...(project ? { projectId: project.id } : {}) }], { sidebarOnly: true })
+  }
+
+  /**
    * The page's context bar asked for the editor's context (`frizz:add-context`): the selection of the file
    * in front, or a whole file, into the composer it shows. It came from the sidebar, so it goes back there
    * or nowhere; and it carries the text as the editor has it NOW — nothing when the selection or the file
@@ -793,7 +833,15 @@ export function activateFrizz(api: Vscode, context: vscode.ExtensionContext): Fr
    */
   async function addContextFromPage(message: EmbedAddContextMessage): Promise<string> {
     let item: EditorComposeInput
-    if (message.what === "selection") {
+    if (message.what === "problems" || message.what === "terminal") {
+      const found = message.what === "problems" ? extras.problems() : await extras.terminal()
+      if (!found.ok) {
+        void api.window.showInformationMessage(found.why)
+        return "nothing to add"
+      }
+      const project = windowProject()
+      item = { path: message.what === "problems" ? EMBED_PROBLEMS_PATH : EMBED_TERMINAL_PATH, text: found.text, ...(project ? { projectId: project.id } : {}) }
+    } else if (message.what === "selection") {
       const editor = activeFileEditor(api)
       if (!editor || editor.selection.isEmpty) return "nothing selected"
       const target = targetOf(editor.document.uri)
@@ -846,6 +894,8 @@ export function activateFrizz(api: Vscode, context: vscode.ExtensionContext): Fr
     api.commands.registerCommand("frizz.addFileToPrompt", addFileToPrompt),
     api.commands.registerCommand("frizz.addSelectionOrFile", addSelectionOrFile),
     api.commands.registerCommand("frizz.addTerminalSelection", addTerminalSelection),
+    api.commands.registerCommand("frizz.addProblems", addProblems),
+    api.commands.registerCommand("frizz.addTerminalOutput", addTerminalOutput),
     api.commands.registerCommand(FIX_COMMAND, askToFix),
     api.commands.registerCommand("frizz.sidebar.newThread", () => sidebarCommand("new-thread")),
     api.commands.registerCommand("frizz.sidebar.queue", () => sidebarCommand("queue")),
@@ -891,6 +941,7 @@ export function activateFrizz(api: Vscode, context: vscode.ExtensionContext): Fr
     projects: () => projects,
     sidebar: () => sidebar.snapshot(),
     editorContext: () => feed.last(),
+    editorExtras: () => extras.last(),
     build: extensionVersion,
     notifications: () => [...shownNotifications],
     reloadOffered: () => offered?.label,

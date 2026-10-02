@@ -20,9 +20,12 @@ import type {
   EmbedComposeMessage,
   EmbedComposedMessage,
   EmbedEditorContextMessage,
+  EmbedEditorExtrasMessage,
   EmbedHostMessage,
   EmbedNavigateMessage,
   EmbedPageMessage,
+  EmbedPickContextMessage,
+  EmbedPickedFile,
   EmbedRouteMessage,
 } from "@frizz/shared/embed-protocol"
 import { chordCommand, embedTheme, embedUrl, frameTarget, parsePageMessage } from "./embed.ts"
@@ -71,6 +74,8 @@ export interface SidebarHost {
   reconnect(): void
   /** The page asked for the editor's context in its composer (`frizz:add-context`); resolves to what came of it, for the record. */
   addContext(message: EmbedAddContextMessage): Promise<string>
+  /** The page asked for files (`frizz:pick-context`): by name for its `@` menu, or dropped from the explorer. */
+  pickContext(message: EmbedPickContextMessage): Promise<EmbedPickedFile[]>
   log: { info(line: string): void; warn(line: string): void }
 }
 
@@ -120,7 +125,7 @@ export interface Sidebar {
   /** The page's address for what the view shows (its last `frizz:route`), while it is in sight; else undefined. */
   href(): string | undefined
   /** Post to the page if it is ready; false if it is not, or the post failed. */
-  post(message: EmbedEditorContextMessage | EmbedCommandMessage): Promise<boolean>
+  post(message: EmbedEditorContextMessage | EmbedCommandMessage | EmbedEditorExtrasMessage): Promise<boolean>
   /** Called with true when the page in the frame says it is ready, and false when that page is gone. */
   onReady(listener: (ready: boolean) => void): void
   snapshot(): SidebarSnapshot
@@ -333,6 +338,18 @@ export function registerSidebar(api: Vscode, context: vscode.ExtensionContext, h
       case "frizz:route": {
         applyRoute(page)
         record(page.type, page.view)
+        return
+      }
+      case "frizz:pick-context": {
+        // Answered always, with nothing when nothing matched or the ask failed: the page waits on this id.
+        let files: EmbedPickedFile[] = []
+        try {
+          files = await host.pickContext(page)
+        } catch (error) {
+          host.log.warn(`Listing the workspace's files failed: ${(error as Error).message}`)
+        }
+        await post({ type: "frizz:context-picks", id: page.id, files })
+        record(page.type, `${files.length} ${page.uris ? "dropped" : "found"}`)
         return
       }
     }

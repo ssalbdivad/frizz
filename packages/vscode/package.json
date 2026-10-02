@@ -74,6 +74,16 @@
         "category": "Frizz"
       },
       {
+        "command": "frizz.addProblems",
+        "title": "Add problems in this file to Frizz prompt",
+        "category": "Frizz"
+      },
+      {
+        "command": "frizz.addTerminalOutput",
+        "title": "Add last terminal command to Frizz prompt",
+        "category": "Frizz"
+      },
+      {
         "command": "frizz.askToFix",
         "title": "Ask Frizz to fix",
         "category": "Frizz"
@@ -160,6 +170,11 @@
         {
           "command": "frizz.addFileToPrompt",
           "group": "frizz@4"
+        },
+        {
+          "command": "frizz.addProblems",
+          "when": "config.frizz.useSidebar",
+          "group": "frizz@5"
         }
       ],
       "explorer/context": [
@@ -186,6 +201,11 @@
           "command": "frizz.addTerminalSelection",
           "when": "terminalTextSelected && config.frizz.useSidebar",
           "group": "frizz@1"
+        },
+        {
+          "command": "frizz.addTerminalOutput",
+          "when": "config.frizz.useSidebar",
+          "group": "frizz@2"
         }
       ],
       "view/title": [
@@ -237,6 +257,14 @@
         {
           "command": "frizz.addSelectionOrFile",
           "when": "false"
+        },
+        {
+          "command": "frizz.addProblems",
+          "when": "config.frizz.useSidebar"
+        },
+        {
+          "command": "frizz.addTerminalOutput",
+          "when": "config.frizz.useSidebar"
         }
       ]
     },

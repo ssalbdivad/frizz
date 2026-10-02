@@ -1,8 +1,9 @@
-import type { EmbedHostMessage } from "@frizz/shared"
+import { EMBED_PROBLEMS_PATH, type EmbedHostMessage } from "@frizz/shared"
 import { closeImageViewer, pushDrawer, showToast, store } from "../store.ts"
 import { boardOrTimeout, composeInto, holdsBoardOf, openNamedThread, threadIsThere } from "./editorBridge.ts"
 import { isTerminalPath } from "./composerContext.ts"
 import { addEditorContextByChord, isEditorAddKey, setEditorContext, takePendingAdd } from "./editorContext.ts"
+import { setEditorExtras, takeContextPicks } from "./editorReach.ts"
 import { runHostCommand } from "./embedCommand.ts"
 import { repostRoute } from "./embedRoute.ts"
 import { closeSettingsAnimated } from "./overlays.ts"
@@ -18,7 +19,8 @@ import { setHostTheme } from "./theme.ts"
 // packages/shared/src/embed-protocol.ts the contract). Installed once, at boot, and only in embed mode:
 //
 //  - host → page: `frizz:theme`, `frizz:compose`, `frizz:navigate`, `frizz:editor-context` (lib/
-//    editorContext.ts) and `frizz:command` (lib/embedCommand.ts), accepted only from `window.parent`
+//    editorContext.ts), `frizz:command` (lib/embedCommand.ts), and `frizz:editor-extras` and
+//    `frizz:context-picks` (lib/editorReach.ts), accepted only from `window.parent`
 //    — the relay the extension's webview runs — and only in a shape the contract defines.
 //  - page → host: `frizz:ready` once the page can act on those, and `frizz:key` for the chords the
 //    page left alone. (`frizz:open-file` and `frizz:open-external` leave from the link handlers that
@@ -153,6 +155,14 @@ async function handle(message: EmbedHostMessage): Promise<void> {
     setEditorContext(message)
     return
   }
+  if (message.type === "frizz:editor-extras") {
+    setEditorExtras(message)
+    return
+  }
+  if (message.type === "frizz:context-picks") {
+    takeContextPicks(message)
+    return
+  }
   if (message.type === "frizz:command") {
     runHostCommand(message.command)
     return
@@ -188,7 +198,7 @@ async function handle(message: EmbedHostMessage): Promise<void> {
   } catch (error) {
     outcome = { ok: false, reason: error instanceof Error ? error.message : String(error) }
   }
-  const what = isTerminalPath(message.item.path) ? "the terminal selection" : basename(message.item.path)
+  const what = isTerminalPath(message.item.path) ? "the terminal output" : message.item.path === EMBED_PROBLEMS_PATH ? "the problems" : basename(message.item.path)
   postToHost(
     outcome.ok
       ? { type: "frizz:composed", id: message.id, ok: true }

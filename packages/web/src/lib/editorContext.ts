@@ -120,7 +120,7 @@ let pending: PendingAdd | null = null
  * always: the New thread sheet can be open over a thread's drawer, and a chip the human asked for in
  * one box must never land in another.
  */
-export function requestEditorContext(box: ContextBox, what: { what: "selection" } | { what: "file"; path: string }): void {
+export function requestEditorContext(box: ContextBox, what: { what: "selection" } | { what: "file"; path: string } | { what: "problems" } | { what: "terminal" }): void {
   pending = { box, at: Date.now() }
   postToHost({ type: "frizz:add-context", ...what })
 }
