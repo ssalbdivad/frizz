@@ -320,7 +320,7 @@ export function AllQueuesPage() {
   // much is waiting rather than only that something is. Set here, not in
   // <App/>, because only this page knows its view — and an effect in App would run AFTER this child's on
   // mount and overwrite it. Cleared back to the bare mark when the page goes (the welcome page, `/full`).
-  const tabName = focused ? viewed?.name : "Everything"
+  const tabName = focused ? viewed?.name : "All projects"
   useEffect(() => {
     document.title = tabName ? `${tabName} — Frizz` : "Frizz"
   }, [tabName])

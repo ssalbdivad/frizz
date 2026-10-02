@@ -393,7 +393,7 @@ function PhoneThreads({ shown, viewed, focusedSlug, hidden, loading, error, comp
   const doneLoading = tab === "done" && others.some((project) => boardById.get(project.id) === undefined)
 
   const rows = tab === "queue" ? queue : tab === "snoozed" ? snoozed : done.slice(0, donePage)
-  const title = focused ? (viewed?.name ?? focusedSlug) : "Everything"
+  const title = focused ? (viewed?.name ?? focusedSlug) : "All projects"
 
   return (
     <div data-mobile-board={focused ? "project" : "all"} className="relative min-h-dvh bg-bg">
@@ -587,7 +587,7 @@ function PhoneProjects({ projects, focusedSlug, hidden, homeDir, onAll, onProjec
           >
             <AllProjectsSquare size={PROJECT_SQUARE} />
             <span className="flex min-w-0 flex-1 flex-col">
-              <span className="truncate text-[15.5px] font-medium leading-[20px] text-fg">Everything</span>
+              <span className="truncate text-[15.5px] font-medium leading-[20px] text-fg">All projects</span>
               <span className="truncate text-[12.5px] leading-[17px] text-muted">
                 {list.projects.length === 1 ? "1 project" : `${list.projects.length} projects`}
               </span>
