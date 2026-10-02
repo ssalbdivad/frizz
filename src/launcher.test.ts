@@ -2506,6 +2506,44 @@ test("--sandbox never creates ~/.frizz on a real home that has none", () => {
   }
 });
 
+// The pinned runtimes are a cache, and a sandbox that kept its own downloaded both on every launch and
+// deleted them on exit — 42s of the server's 44s start in the sandbox launch logged 2026-10-01.
+test("--sandbox shares the operator's runtime cache, resolved under the operator's own roots", () => {
+  const cwd = process.cwd();
+  const real = mkdtempSync(join(tmpdir(), "frizz-rthome-"));
+  const plain: NodeJS.ProcessEnv = {};
+  const sandbox = prepareSandbox(plain, real);
+  try {
+    assert.equal(plain.FRIZZ_RUNTIMES_DIR, join(frizzPaths({ home: real, env: {} }).cache, "runtimes"));
+    assert.ok(!plain.FRIZZ_RUNTIMES_DIR!.startsWith(sandbox.home), "never under the throwaway home");
+  } finally {
+    process.chdir(cwd);
+    cleanupSandbox(sandbox.home);
+  }
+  // XDG_CACHE_HOME is scrubbed from the sandbox, but it is still where the OPERATOR's cache lives.
+  const xdg: NodeJS.ProcessEnv = { XDG_CACHE_HOME: join(real, "xdg-cache") };
+  const second = prepareSandbox(xdg, real);
+  try {
+    assert.equal(xdg.XDG_CACHE_HOME, undefined);
+    assert.equal(xdg.FRIZZ_RUNTIMES_DIR, join(real, "xdg-cache", "frizz", "runtimes"));
+  } finally {
+    process.chdir(cwd);
+    cleanupSandbox(second.home);
+  }
+  // An explicit choice wins — that is how a run exercising provisioning itself asks for a cold root.
+  for (const explicit of [{ FRIZZ_RUNTIMES_DIR: "/elsewhere/runtimes" }, { FRIZZ_RUNTIMES: "/bin/fake" }]) {
+    const env: NodeJS.ProcessEnv = { ...explicit };
+    const third = prepareSandbox(env, real);
+    try {
+      assert.equal(env.FRIZZ_RUNTIMES_DIR, explicit.FRIZZ_RUNTIMES_DIR);
+    } finally {
+      process.chdir(cwd);
+      cleanupSandbox(third.home);
+    }
+  }
+  rmSync(real, { recursive: true, force: true });
+});
+
 // The other way a sandbox can reach the real install: a set XDG variable wins over the home in
 // frizz-paths.ts, so an inherited `$XDG_DATA_HOME` would put the sandbox's registry, identity key and
 // saved remote setup straight into the operator's real roots, where the exit cleanup never looks.
