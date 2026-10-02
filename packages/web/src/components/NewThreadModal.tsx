@@ -7,6 +7,7 @@ import { useSnapshot } from "valtio"
 import { showToast, store } from "../store.ts"
 import { Composer } from "./Composer.tsx"
 import { EditorContextBar } from "./EditorContextBar.tsx"
+import { embedFileMentions } from "../lib/editorReach.ts"
 import { useMentionCandidates } from "../hooks/useMentionCandidates.ts"
 import { GithubTrigger, useGithubTriggerVisible } from "./GithubTrigger.tsx"
 import { ProfileGridSelector } from "./ProfileGridSelector.tsx"
@@ -355,6 +356,7 @@ function PromptForm({
         header={<EditorContextBar box={{ key: promptKey, projectDir, surface: "newComposer" }} />}
         placeholder="Describe the task…"
         mentionCandidates={mentions}
+        fileMentions={embedFileMentions(projectDir)}
         minHeight={96}
         maxHeight={340}
         busy={dispatch.isPending || saveLazy.isPending || savingSettings}

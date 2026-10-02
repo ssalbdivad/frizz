@@ -13,7 +13,7 @@
 //   --dev    run the extension from the source tree (dist/ as scripts/build.ts makes it) instead of the
 //            packaged .vsix. The default is the .vsix, unpacked, because the maintainer's "the icon
 //            doesn't display" was a package with no icon in it: the source tree had it all along.
-//   --only   run only these checks (c1…c13); the boot, the seed and the view opening always run.
+//   --only   run only these checks (c1…c17); the boot, the seed and the view opening always run.
 //   --icon-before=<png>   an earlier top-dark activity-bar strip (1x enlarged 6x, as c1 writes it) to set
 //            beside this run's, for the eye.
 //   --worktree  open the window on a thread's git worktree (`.frizz/worktrees/<slug>` of the workspace)
@@ -53,7 +53,20 @@
 //      row; uninstalled, Alt+K is Frizz's again
 //   c12 the window's own thread: a window opened on a thread's worktree opens the sidebar on that thread
 //      (--worktree); a window on the project itself opens on the queue (every other run, the control)
-//   c13 a restart and a window reload (last: the test runner's VS Code ends with a reload, so the same
+//   c13 `@` in a prompt box offers the workspace's files as git and VS Code list them (a gitignored copy
+//      left out); Enter writes the whole-file reference where the `@` was
+//   c14 a file dragged from VS Code's explorer onto a prompt box, Shift held, lands as the same reference
+//      (the Frizz view moved into the Explorer's side bar so both are in sight). The drag is VS Code's
+//      own, started by a real press on the explorer's row and intercepted with its data; DevTools cannot
+//      route the drop into the webview's out-of-process frame, so the drop is dispatched, trusted, to the
+//      page's own frame. results.json's `explorerDrop` says which path landed it (synthesized is the
+//      last resort)
+//   c15 the context bar's chevron menu offers the file's problems (a real TypeScript error) and the
+//      terminal's last command (run through shell integration), each adding one chip
+//   c16 a thread that enters the queue needing the human while the sidebar is out of sight (snoozed, then
+//      woken, through the REAL server's needs-you edge) is a VS Code notification, and its Open shows the
+//      thread in the sidebar
+//   c17 a restart and a window reload (last: the test runner's VS Code ends with a reload, so the same
 //      profile is reopened by a VS Code of the harness's own): the framed page's localStorage survives
 //      both, and so does the eye, which is the VS Code setting
 //
@@ -66,10 +79,10 @@
 // the run fails if anything survives.
 
 import { execFileSync, spawn, spawnSync, type ChildProcess } from "node:child_process"
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs"
+import { appendFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs"
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http"
 import { homedir, tmpdir } from "node:os"
-import { dirname, join, resolve } from "node:path"
+import { dirname, join, relative, resolve } from "node:path"
 import { fileURLToPath } from "node:url"
 import { downloadAndUnzipVSCode, runTests } from "@vscode/test-electron"
 import puppeteer, { type Browser, type CDPSession, type ElementHandle, type Frame, type Page } from "puppeteer"
@@ -79,6 +92,7 @@ import { decodePng, inkOf } from "../e2e/png.ts"
 import { SAMPLE, seedSidebarStack, seedWorktreeThread, type Seeded } from "../e2e/sidebar-seed.ts"
 import { bootStack, freePort, killAll, leftovers, stubbedPath, type Stack } from "../e2e/stack.ts"
 import { workerTool } from "../e2e/worker-tool.ts"
+import { FrizzRpc } from "../src/rpc.ts"
 
 const pkg = resolve(dirname(fileURLToPath(import.meta.url)), "..")
 const repo = resolve(pkg, "..", "..")
@@ -561,8 +575,11 @@ async function openThreadRow(): Promise<void> {
 
 /** Empty a prompt box the way a human does: click into it, select all, delete. */
 async function clearBox(surface: "chatComposer" | "newComposer"): Promise<void> {
-  if (!(await box(surface))?.value) return
-  await clickInPage(`textarea[data-surface="${surface}"]`)
+  const state = await box(surface)
+  if (!state?.value) return
+  // Already in it (a menu's Enter leaves it there): a click could land on whatever the box draws over its
+  // middle, and take the caret out.
+  if (!state.active || !state.frameFocused) await clickInPage(`textarea[data-surface="${surface}"]`)
   if (!(await until(async () => (await box(surface))?.active === true, 3_000))) throw new Error(`could not put the caret in the ${surface} to clear it`)
   await press("Control+KeyA")
   await press("Backspace")
@@ -1678,8 +1695,318 @@ try {
     await shot("c12-settled-link", { window: true })
   })
 
-  // ── c13: a restart and a window reload (LAST: it ends the agent's VS Code) ──
-  await run("c13", "a restart and a window reload keep what the page stored, and the eye", async () => {
+  /**
+   * The text gap between a row's two parts (its name and its dimmed tail), from the text's own boxes
+   * (Range rects, so a span's padding does not count), and each part's baseline offset — for every row
+   * `selector` matches whose first two element children both hold text. Equal gaps and baselines across
+   * the rows of one menu is the claim: a file row and a thread row, an extras row and an open-file row,
+   * read as one list.
+   */
+  const rowGaps = (selector: string) =>
+    inPage((sel) => [...document.querySelectorAll<HTMLElement>(sel)].filter((row) => row.getClientRects().length > 0).map((row) => {
+      const parts = [...row.querySelectorAll<HTMLElement>(":scope > span, :scope > span > span")].filter((part) => part.children.length === 0 && part.textContent?.trim())
+      if (parts.length < 2) return null
+      const box = (el: HTMLElement) => {
+        const range = document.createRange()
+        range.selectNodeContents(el)
+        const r = range.getBoundingClientRect()
+        return { left: r.left, right: r.right, bottom: r.bottom }
+      }
+      const [a, b] = [box(parts[0]!), box(parts[1]!)]
+      return { row: row.innerText.replace(/\s+/gu, " ").trim().slice(0, 50), gap: Math.round((b.left - a.right) * 100) / 100, sizes: [getComputedStyle(parts[0]!).fontSize, getComputedStyle(parts[1]!).fontSize] }
+    }).filter(Boolean), selector)
+
+  // ── c13: `@` files ──
+  await run("c13", "`@` in a prompt box offers the workspace's files", async () => {
+    await command("workbench.view.extension.frizz")
+    await waitFor("the Frizz view", async () => (await status()).sidebar.visible || undefined, 10_000)
+    await resetPage()
+    // A gitignored copy, where a Frizz checkout keeps its threads' worktrees: never offered.
+    mkdirSync(join(workspace.dir, "ignored-copy"), { recursive: true })
+    writeFileSync(join(workspace.dir, "ignored-copy", "sample.ts"), SAMPLE)
+    appendFileSync(join(workspace.dir, ".git", "info", "exclude"), "\nignored-copy/\n")
+    const label = relative(workspace.dir, files.sample).split("\\").join("/")
+    await clearBox("newComposer")
+    await clickInPage('textarea[data-surface="newComposer"]')
+    await until(async () => (await box("newComposer"))?.active === true, 3_000)
+    await typeInto("newComposer", "look at @samp")
+    const rows = await waitFor("file rows in the @ menu", async () => {
+      const found = await inPage(() => [...document.querySelectorAll<HTMLElement>("[data-mention-file]")].map((row) => row.dataset.mentionFile ?? ""))
+      return found.length ? found : undefined
+    }, 15_000).catch(() => [] as string[])
+    expect("c13", `the @ menu lists ${label}, and not the gitignored copy`, rows.includes(label) && !rows.some((row) => row.startsWith("ignored-copy")), rows)
+    notes.atMenu = await inPage(() => [...document.querySelectorAll<HTMLElement>("[data-mention-menu] [role=option]")].map((row) => row.innerText.replace(/\s+/gu, " ").trim()))
+    const gaps = (await rowGaps("[data-mention-menu] [role=option]")) as { row: string; gap: number }[]
+    notes.atMenuGaps = gaps
+    // The rows' classes are the thread rows' own (`gap-2`, the handle's and the status's sizes), and a thread
+    // row with no status has nothing to measure: the file row's text gap is that gap.
+    expect("c13", "a file row spaces its name and folder by the menu's own gap (8px of text, as a thread's handle and status)", gaps.length >= 1 && gaps.every((g) => Math.abs(g.gap - 8) < 0.5), gaps)
+    await shot("c13-at-files-menu-w300")
+    const menu = await rectOf(".part.sidebar")
+    if (menu) await capture(join(out, `${version}-c13-at-files-menu-6x.png`), { x: menu.x, y: menu.y, width: menu.width, height: Math.min(menu.height, 420) }, 6).catch(() => undefined)
+    const index = await inPage((l) => Number(document.querySelector<HTMLElement>(`[data-mention-file="${l}"]`)?.dataset.suggestIndex ?? -1), label)
+    for (let i = 0; i < index; i++) await press("ArrowDown")
+    await press("Enter")
+    const written = await waitFor("the reference in the box", async () => {
+      const state = await box("newComposer")
+      return state?.value.includes("`") ? state : undefined
+    }, 5_000).catch(async () => box("newComposer"))
+    expect("c13", "Enter writes the whole-file reference where the @ was, the caret after it", written?.value === `look at \`${label}\` ` && written.caret === written.value.length && written.active, written)
+    await clearBox("newComposer")
+  })
+
+  // ── c14: a drag from the explorer ──
+  await run("c14", "a file dragged from the explorer lands in the prompt box", async () => {
+    // Both in sight at once: the Frizz view moved in as a pane of the Explorer's side bar.
+    await command("vscode.moveViews", { viewIds: ["frizz.sidebar"], destinationId: "workbench.view.explorer" })
+    try {
+      await command("frizz.sidebar.focus")
+      await waitFor("the page ready in the Explorer", async () => (await status()).sidebar.ready || undefined, 60_000)
+      await openInEditor(files.sample)
+      await command("workbench.files.action.showActiveFileInExplorer")
+      const name = files.sample.split(/[\\/]/u).pop()!
+      const row = await waitFor("the file's row in the explorer", async () => {
+        const handle = (await page.evaluateHandle((n) => [...document.querySelectorAll(".explorer-folders-view .monaco-list-row")].find((r) => r.querySelector(".label-name")?.textContent === n) ?? null, name)).asElement() as ElementHandle | null
+        return handle && (await handle.boundingBox()) ? handle : undefined
+      }, 10_000)
+      const from = (await row.boundingBox())!
+      const target = await waitFor("the prompt box", async () => {
+        const handle = (await (await frame()).evaluateHandle(() => [...document.querySelectorAll('textarea[data-surface="newComposer"]')].find((t) => t.getClientRects().length > 0) ?? null)).asElement() as ElementHandle | null
+        return handle && (await handle.boundingBox()) ? (await handle.boundingBox())! : undefined
+      }, 10_000)
+      await shot("c14-explorer-and-frizz", { window: true })
+      const to = { x: target.x + target.width / 2, y: target.y + target.height / 2 }
+      // A real drag: a trusted press and move on the explorer's row, so VS Code's own dragstart fills the
+      // drag (read back from the workbench as it bubbles out), intercepted by DevTools so it can be carried
+      // to the drop; then trusted drag events at the prompt box, Shift held, which VS Code requires of a
+      // drop into any webview (its WebviewWindowDragMonitor turns the webview's pointer events off for a
+      // drag without it).
+      type DragItem = { mimeType: string; data: string }
+      type DragData = { items: DragItem[]; dragOperationsMask: number }
+      await page.evaluate(() => {
+        const w = window as unknown as { __frizzDrag?: DragItem[] | null }
+        w.__frizzDrag = null
+        window.addEventListener("dragstart", (event) => {
+          w.__frizzDrag = [...(event.dataTransfer?.types ?? [])].map((type) => ({ mimeType: type, data: event.dataTransfer!.getData(type) }))
+        }, { once: true })
+      })
+      // Where the drop's events land: the workbench (with VS Code's pointer-events state on the webview) and
+      // the page, so a trusted drop that does not arrive says where it stopped.
+      await page.evaluate(() => {
+        const w = window as unknown as { __frizzDragEvents?: string[] }
+        w.__frizzDragEvents = []
+        for (const type of ["dragenter", "dragover", "drop"]) {
+          window.addEventListener(type, (event) => {
+            const target = event.target as HTMLElement
+            const webview = document.querySelector<HTMLElement>("iframe.webview")
+            if (w.__frizzDragEvents!.length < 40) w.__frizzDragEvents!.push(`${type} on ${target.tagName}.${String(target.className).slice(0, 30)} shift=${(event as DragEvent).shiftKey} webview-pointer=${webview?.style.pointerEvents ?? "?"}`)
+          }, true)
+        }
+      })
+      await inPage(() => {
+        const w = window as unknown as { __frizzDragEvents?: string[] }
+        w.__frizzDragEvents = []
+        for (const type of ["dragenter", "dragover", "drop"]) window.addEventListener(type, (event) => { if (w.__frizzDragEvents!.length < 40) w.__frizzDragEvents!.push(`${type} shift=${(event as DragEvent).shiftKey}`) }, true)
+      })
+      await cdp.send("Input.setInterceptDrags", { enabled: true })
+      const intercepted = new Promise<DragData>((resolveDrag) => cdp.once("Input.dragIntercepted", (event: { data: DragData }) => resolveDrag(event.data)))
+      const mouse = (type: "mousePressed" | "mouseMoved" | "mouseReleased", x: number, y: number) =>
+        cdp.send("Input.dispatchMouseEvent", { type, x, y, button: "left", buttons: type === "mouseReleased" ? 0 : 1, clickCount: 1 })
+      const sx = from.x + from.width / 3
+      const sy = from.y + from.height / 2
+      await mouse("mouseMoved", sx, sy)
+      await mouse("mousePressed", sx, sy)
+      for (let step = 1; step <= 6; step++) await mouse("mouseMoved", sx + step * 4, sy + step * 3)
+      const caught = await Promise.race([intercepted, sleep(3_000).then(() => undefined)])
+      const started = await page.evaluate(() => (window as unknown as { __frizzDrag?: DragItem[] | null }).__frizzDrag ?? null)
+      const data: DragData | undefined = caught ?? (started?.length ? { items: started, dragOperationsMask: 1 } : undefined)
+      notes.explorerDrag = { intercepted: !!caught, dragstart: started?.map((item) => item.mimeType) ?? null, items: data?.items.map((item) => ({ type: item.mimeType, data: item.data.slice(0, 200) })) }
+      let how = "none"
+      if (data) {
+        for (const type of ["dragEnter", "dragOver", "dragOver", "dragOver", "drop"] as const) {
+          await cdp.send("Input.dispatchDragEvent", { type, x: to.x, y: to.y, data, modifiers: 8 }).catch((error: unknown) => {
+            notes.explorerDragError = String(error)
+          })
+          await sleep(150)
+        }
+        how = caught ? "trusted drag, intercepted" : "trusted drop events carrying VS Code's dragstart data"
+      }
+      await mouse("mouseReleased", to.x, to.y)
+      await cdp.send("Input.setInterceptDrags", { enabled: false })
+      notes.explorerDragEvents = {
+        workbench: await page.evaluate(() => (window as unknown as { __frizzDragEvents?: string[] }).__frizzDragEvents ?? []),
+        page: await inPage(() => (window as unknown as { __frizzDragEvents?: string[] }).__frizzDragEvents ?? []),
+      }
+      const label = relative(workspace.dir, files.sample).split("\\").join("/")
+      let landed = await until(async () => (await box("newComposer"))?.value.includes(`\`${label}\``) === true, 6_000)
+      if (!landed && data) {
+        // DevTools' drag events go to the window's root frame, which hands nothing on to an out-of-process
+        // frame: the workbench sees the dragenter that turns the webview's pointer events on, and the page
+        // nested inside it never sees a drag event at all. The same intercepted drag, then, dispatched by
+        // DevTools to the page's OWN frame: still trusted events, Shift held, carrying the data as Chromium
+        // presents it to a page (not as a script would build it), though VS Code's routing is skipped.
+        notes.explorerTrustedMiss = how
+        // (A frame's DevTools session is puppeteer's internal `client`, not in its public types.)
+        const sessionOf = (f: Frame) => (f as unknown as { client: CDPSession }).client
+        const frameSession = sessionOf(await frame())
+        if (frameSession.id() !== sessionOf(page.mainFrame()).id()) {
+          const at = await inPage(() => {
+            const rect = [...document.querySelectorAll<HTMLTextAreaElement>('textarea[data-surface="newComposer"]')].find((t) => t.getClientRects().length > 0)!.getBoundingClientRect()
+            return { x: rect.x + rect.width / 2, y: rect.y + rect.height / 2 }
+          })
+          for (const type of ["dragEnter", "dragOver", "dragOver", "drop"] as const) {
+            await frameSession.send("Input.dispatchDragEvent", { type, x: at.x, y: at.y, data, modifiers: 8 }).catch((error: unknown) => {
+              notes.explorerFrameDragError = String(error)
+            })
+            await sleep(150)
+          }
+          notes.explorerFrameDragEvents = await inPage(() => (window as unknown as { __frizzDragEvents?: string[] }).__frizzDragEvents ?? [])
+          landed = await until(async () => (await box("newComposer"))?.value.includes(`\`${label}\``) === true, 6_000)
+          if (landed) how = "trusted drop dispatched to the page's frame"
+        } else notes.explorerFrameDragError = "the page shares the workbench's process"
+      }
+      if (!landed && data) {
+        // Neither reached the page: the same data, dropped by script on the box.
+        how = "synthesized"
+        await inPage((items) => {
+          const area = [...document.querySelectorAll<HTMLTextAreaElement>('textarea[data-surface="newComposer"]')].find((t) => t.getClientRects().length > 0)!
+          const transfer = new DataTransfer()
+          for (const item of items) transfer.setData(item.mimeType, item.data)
+          area.dispatchEvent(new DragEvent("dragover", { bubbles: true, cancelable: true, dataTransfer: transfer, shiftKey: true }))
+          area.dispatchEvent(new DragEvent("drop", { bubbles: true, cancelable: true, dataTransfer: transfer, shiftKey: true }))
+        }, data.items)
+        landed = await until(async () => (await box("newComposer"))?.value.includes(`\`${label}\``) === true, 6_000)
+      }
+      notes.explorerDrop = how
+      const state = await box("newComposer")
+      expect("c14", `the dropped file is a whole-file reference in the box (${how})`, landed && how !== "none", { how, value: state?.value, drag: notes.explorerDrag })
+      expect("c14", "the drag carried VS Code's own resource types", !!data?.items.some((item) => /resourceurls|vnd\.code\.uri-list/iu.test(item.mimeType)), notes.explorerDrag)
+      await shot("c14-dropped-reference", { window: true })
+      await clearBox("newComposer").catch(() => undefined)
+    } finally {
+      // The intercepted drag's drop went nowhere, so the workbench still thinks a drag is under way and
+      // swallows every later mouse press on it (c16's toast button among them): cancelled, as a hand
+      // letting go outside any target would.
+      await cdp.send("Input.dispatchDragEvent", { type: "dragCancel", x: 0, y: 0, data: { items: [], dragOperationsMask: 1 } }).catch((error: unknown) => {
+        notes.explorerDragCancel = String(error)
+      })
+      await cdp.send("Input.setInterceptDrags", { enabled: false }).catch(() => undefined)
+      await command("vscode.moveViews", { viewIds: ["frizz.sidebar"], destinationId: "workbench.view.extension.frizz" })
+      await command("workbench.view.extension.frizz")
+      await waitFor("the page ready back in its own view", async () => (await status()).sidebar.ready || undefined, 60_000).catch(() => undefined)
+    }
+  })
+
+  // ── c15: the file's problems and the terminal's last command, from the bar's menu ──
+  await run("c15", "the bar's menu adds the file's problems and the terminal's last command", async () => {
+    await command("workbench.view.extension.frizz")
+    await waitFor("the Frizz view", async () => (await status()).sidebar.visible || undefined, 10_000)
+    await resetPage()
+    await clearBox("newComposer")
+    await openInEditor(files.broken)
+    await waitFor("TypeScript's error in broken.ts", async () => {
+      const found = await agent<{ source: string | null }[]>({ op: "diagnostics", path: files.broken })
+      return found.some((d) => d.source === "ts") || undefined
+    }, 90_000)
+    const ran = await agent<{ exitCode: unknown }>({ op: "terminal", command: "echo frizz-from-the-terminal" })
+    notes.terminalRun = ran
+    await openInEditor(files.broken)
+    const extra = (what: string) => inPage((w) => [...document.querySelectorAll<HTMLElement>(`[data-editor-extra="${w}"]`)].filter((row) => row.getClientRects().length > 0).map((row) => row.innerText.replace(/\s+/gu, " ").trim())[0] ?? null, what)
+    const openMenu = async () => {
+      await clickInComposer("newComposer", "[data-editor-open-files]")
+      return until(async () => (await extra("problems")) !== null, 5_000)
+    }
+    const shown = await openMenu()
+    const problemsRow = await extra("problems")
+    const terminalRow = await extra("terminal")
+    expect("c15", "the menu offers the file's problems with their counts", shown && /^Add problems in this file 1 error$/u.test(problemsRow ?? ""), problemsRow)
+    expect("c15", "…and the terminal's last command, by its line", /^Add last terminal command echo frizz-from-the-terminal$/u.test(terminalRow ?? ""), { terminalRow, ran })
+    await shot("c15-bar-menu-extras-w300")
+    const extraGaps = (await rowGaps("[data-editor-extra], [data-editor-open-file]")) as { row: string; gap: number }[]
+    notes.barMenuGaps = extraGaps
+    expect("c15", "the extras rows space their name and tail as the open-file rows do", extraGaps.length >= 2 && Math.max(...extraGaps.map((g) => g.gap)) - Math.min(...extraGaps.map((g) => g.gap)) < 0.5, extraGaps)
+    const menuBox = await inPage(() => {
+      const r = document.querySelector('[data-editor-extra="problems"]')?.closest("[role=menu]")?.getBoundingClientRect()
+      return r ? { x: r.x, y: r.y, width: r.width, height: r.height } : null
+    })
+    const frameBox = await (await (await frame()).frameElement())?.boundingBox()
+    if (menuBox && frameBox) await capture(join(out, `${version}-c15-bar-menu-extras-6x.png`), { x: frameBox.x + menuBox.x - 4, y: frameBox.y + menuBox.y - 4, width: menuBox.width + 8, height: menuBox.height + 8 }, 6).catch(() => undefined)
+    await clickInPage('[data-editor-extra="problems"]')
+    const withProblems = await waitFor("the @problems chip", async () => {
+      const state = await box("newComposer")
+      return state?.value.includes("@problems") ? state : undefined
+    }, 8_000).catch(async () => box("newComposer"))
+    expect("c15", "Add problems puts one @problems chip in the box, drawn as a pill", !!withProblems?.pills.some((pill) => pill.token === "@problems"), withProblems)
+    await openMenu()
+    await clickInPage('[data-editor-extra="terminal"]')
+    const withTerminal = await waitFor("the @terminal chip", async () => {
+      const state = await box("newComposer")
+      return state?.value.includes("@terminal") ? state : undefined
+    }, 8_000).catch(async () => box("newComposer"))
+    expect("c15", "Add last terminal command puts one @terminal chip in the box", !!withTerminal?.pills.some((pill) => pill.token === "@terminal"), withTerminal)
+    await shot("c15-chips-w300")
+    await clearBox("newComposer")
+    await command("workbench.action.closePanel")
+  })
+
+  // ── c16: a thread that needs you, while the sidebar is out of sight ──
+  await run("c16", "a thread that needs you is a notification while the sidebar is hidden", async () => {
+    await resetPage()
+    await command("workbench.view.explorer")
+    await waitFor("the Frizz view hidden", async () => !(await status()).sidebar.visible || undefined, 10_000)
+    await command("notifications.clearAll")
+    // The thread leaves the queue and comes back to it through the REAL server: snoozed, then woken
+    // (the board's Wake now), so it enters the queue again needing the human — the server's own needs-you
+    // edge (board.ts notifyNeedsYou), the one the page's notifications ride. (Not a follow-up: the
+    // simulated worker answers one, but never clears the delivery the server holds the thread out of the
+    // queue for, so its rest never reaches the queue.)
+    const rpc = new FrizzRpc(origin)
+    await rpc.mutation(workspace.id, "setThreadSnooze", { slug: seeded!.thread.slug, sessionId: seeded!.thread.sessionId, until: new Date(Date.now() + 3_600_000).toISOString() })
+    await sleep(3_000)
+    await rpc.mutation(workspace.id, "setThreadSnooze", { slug: seeded!.thread.slug, sessionId: seeded!.thread.sessionId, until: null })
+    const toast = await waitFor("the notification", async () => {
+      const text = await inWorkbench(() => [...document.querySelectorAll<HTMLElement>(".notification-toast")].map((t) => t.innerText.replace(/\s+/gu, " ").trim()).find((t) => /Open/u.test(t)) ?? null)
+      return text ?? undefined
+    }, 30_000).catch(() => null)
+    expect("c16", "a VS Code notification names the thread and what it needs, with Open", !!toast && toast.includes(seeded!.thread.handle), { toast, log: frizzLog().split("\n").filter((line) => /needs|notif|attention/iu.test(line)).slice(-5) })
+    await shot("c16-notification", { window: true })
+    // The toast slides in: pressed where it comes to rest, as a hand would, and again if the first press
+    // found it still moving. An info toast also hides itself after a while in a focused window (it is
+    // still in the notification list then, where a hand would find it), so the list is the fallback.
+    const findOpen = async () => (await page.evaluateHandle(() => [...document.querySelectorAll<HTMLElement>(".notification-toast .monaco-button, .notifications-center .monaco-button")].find((button) => button.textContent?.trim() === "Open" && button.getClientRects().length > 0) ?? null)).asElement() as ElementHandle | null
+    const pressed: string[] = []
+    let shown: boolean | undefined = false
+    for (let attempt = 0; attempt < 3 && !shown; attempt++) {
+      await sleep(800)
+      let open = await findOpen()
+      if (open) pressed.push("toast")
+      else {
+        await command("notifications.showList")
+        await sleep(600)
+        open = await findOpen()
+        pressed.push(open ? "notification list" : "no Open in sight")
+      }
+      if (open) {
+        const at = (await open.boundingBox())!
+        const x = at.x + at.width / 2
+        const y = at.y + at.height / 2
+        pressed.push(await page.evaluate((px, py) => {
+          const hit = document.elementFromPoint(px, py) as HTMLElement | null
+          return `hit ${hit?.tagName}.${String(hit?.className).slice(0, 40)} "${hit?.textContent?.trim().slice(0, 20)}" at ${Math.round(px)},${Math.round(py)} of ${innerWidth}x${innerHeight}`
+        }, x, y))
+        await clickHandle(open, "the notification's Open")
+        await sleep(300)
+        pressed.push(`after: ${await page.evaluate(() => document.querySelectorAll(".notification-toast").length)} toasts`)
+      }
+      shown = await waitFor("the thread in the sidebar", async () => ((await status()).sidebar.visible && (await drawerOpen())) || undefined, 8_000).catch(() => false)
+    }
+    notes.attentionOpen = { pressed, log: frizzLog().split("\n").filter((line) => /Told you|Opening/u.test(line)).slice(-3) }
+    expect("c16", "Open brings the sidebar back on that thread", shown === true, (await status()).sidebar)
+    await shot("c16-opened-thread-w300")
+  })
+
+  // ── c17: a restart and a window reload (LAST: it ends the agent's VS Code) ──
+  await run("c17", "a restart and a window reload keep what the page stored, and the eye", async () => {
     // A value in the framed page's own storage — where it keeps what the human set in it (its shortcuts,
     // drafts) — and the eye off, with a file in front so the bar (and its eye) is drawn.
     await openInEditor(files.sample)
@@ -1731,9 +2058,9 @@ try {
     const restarted = await pageUp()
     await inFront()
     const afterRestart = await inPage(() => ({ probe: localStorage.getItem("frizz-e2e-reload-probe"), keys: Object.keys(localStorage).sort() }))
-    expect("c13", "a restart: the page's own storage is still there", afterRestart.probe === probe, { before: keysBefore, after: afterRestart.keys })
+    expect("c17", "a restart: the page's own storage is still there", afterRestart.probe === probe, { before: keysBefore, after: afterRestart.keys })
     const eyeRestart = await waitFor("the eye", async () => (await eye()) ?? undefined, 20_000).catch(() => null)
-    expect("c13", "…and the eye is still off: it is the VS Code setting", eyeRestart === "false", { eye: eyeRestart })
+    expect("c17", "…and the eye is still off: it is the VS Code setting", eyeRestart === "false", { eye: eyeRestart })
 
     // A window reload, as a human does it: the palette's Developer: Reload Window, typed.
     await press("Control+Shift+KeyP")
@@ -1745,10 +2072,10 @@ try {
     await pageUp(restarted)
     await inFront()
     const afterReload = await inPage(() => ({ probe: localStorage.getItem("frizz-e2e-reload-probe"), keys: Object.keys(localStorage).sort() }))
-    expect("c13", "a window reload: the page's own storage is still there", afterReload.probe === probe, { before: keysBefore, after: afterReload.keys })
+    expect("c17", "a window reload: the page's own storage is still there", afterReload.probe === probe, { before: keysBefore, after: afterReload.keys })
     const eyeReload = await waitFor("the eye", async () => (await eye()) ?? undefined, 20_000).catch(() => null)
-    expect("c13", "…and the eye is still off", eyeReload === "false", { eye: eyeReload })
-    await shot("c13-after-reload-w300", { window: true })
+    expect("c17", "…and the eye is still off", eyeReload === "false", { eye: eyeReload })
+    await shot("c17-after-reload-w300", { window: true })
   })
 
   expect("all", "no page errors in the framed page", pageErrors.length === 0, pageErrors.slice(0, 10))

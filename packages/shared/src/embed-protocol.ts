@@ -201,7 +201,15 @@ export interface EmbedHostStateMessage {
   altK: boolean
 }
 
-export type EmbedHostMessage = EmbedThemeMessage | EmbedComposeMessage | EmbedNavigateMessage | EmbedEditorContextMessage | EmbedCommandMessage | EmbedHostStateMessage
+export type EmbedHostMessage =
+  | EmbedThemeMessage
+  | EmbedComposeMessage
+  | EmbedNavigateMessage
+  | EmbedEditorContextMessage
+  | EmbedCommandMessage
+  | EmbedEditorExtrasMessage
+  | EmbedContextPicksMessage
+  | EmbedHostStateMessage
 
 // ── page → host ────────────────────────────────────────────────────────────────────────────────────
 
@@ -271,8 +279,13 @@ export interface EmbedKeyMessage {
  */
 export interface EmbedAddContextMessage {
   type: "frizz:add-context"
-  /** "selection": the editor in front's selection. "file": `path`, as a whole-file reference. */
-  what: "selection" | "file"
+  /**
+   * "selection": the editor in front's selection. "file": `path`, as a whole-file reference. "problems":
+   * the file in front's errors and warnings, as an `@problems` chip. "terminal": the terminal's last
+   * command and its output, as an `@terminal` chip. (The last two only from a host whose
+   * `frizz:editor-extras` offered them.)
+   */
+  what: "selection" | "file" | "problems" | "terminal"
   path?: string
 }
 
@@ -334,3 +347,64 @@ export type EmbedPageMessage =
   | EmbedAddContextMessage
   | EmbedRouteMessage
   | EmbedReviewMessage
+  | EmbedPickContextMessage
+
+// ── more ways in: files by name or dropped, the file's problems, the terminal's last command ─────────
+//
+// Cursor and Claude Code's VS Code extension both let the human name a file with `@`, drag one in from
+// the explorer, and pull in the file's lint errors or the terminal's last output; the sidebar's prompt
+// boxes do the same (plans/vscode-extension.md § More ways in). The page has no file index of its own and
+// no access to the editor's diagnostics or terminal, so it asks the host for each — the host answers from
+// the workspace as VS Code sees it (files.exclude, search.exclude and .gitignore honoured), and nothing
+// here goes through the Frizz server.
+
+/**
+ * Files for the prompt box's `@` menu (`query`: what follows the `@`, possibly empty), or the resources
+ * the human dropped from VS Code's explorer resolved to files and folders on disk (`uris`, as the drag
+ * carried them: `file:` or the window's own `vscode-remote:` URIs). The host answers with
+ * `frizz:context-picks` under the same id — always, with no files when it has none to offer — so a page
+ * can tell an extension that does not know the question (no answer) from an empty one.
+ */
+export interface EmbedPickContextMessage {
+  type: "frizz:pick-context"
+  /** The page's own nonce, echoed in the answer. */
+  id: string
+  query?: string
+  uris?: string[]
+}
+
+export const EMBED_MAX_QUERY = 200
+export const EMBED_MAX_DROPPED = 50
+/** Files one `@` answer offers at most: the menu shows a handful, and the rest are a narrower query away. */
+export const EMBED_MAX_PICKS = 30
+
+/** A file (or, dropped, a folder) a pick resolved to. */
+export interface EmbedPickedFile extends EmbedEditorFile {
+  folder?: true
+}
+
+/** The answer to `frizz:pick-context`: best matches first. */
+export interface EmbedContextPicksMessage {
+  type: "frizz:context-picks"
+  id: string
+  files: EmbedPickedFile[]
+}
+
+/** The `path` of a compose item carrying the file in front's problems (embed-protocol EmbedComposeMessage): its chip reads `@problems`. */
+export const EMBED_PROBLEMS_PATH = "problems"
+/** Characters of a terminal command line the page is told, for the menu entry that offers it. */
+export const EMBED_MAX_COMMAND = 200
+
+/**
+ * What else the editor can put in the prompt, for the context bar's menu, beside the open files: the
+ * file in front's problems (with their counts) and the terminal's last command (its command line and
+ * how it exited, when the editor knows — VS Code 1.93 and later; on an older one, `{}` while a terminal
+ * is open). Absent means there is none to offer. Sent after `frizz:ready` and on every change, like
+ * `frizz:editor-context`; never the problems' text or the command's output, which cross only when the
+ * human adds them (`frizz:add-context` "problems" / "terminal").
+ */
+export interface EmbedEditorExtrasMessage {
+  type: "frizz:editor-extras"
+  problems?: { label: string; errors: number; warnings: number; infos: number }
+  terminal?: { command?: string; exitCode?: number }
+}

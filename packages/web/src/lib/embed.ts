@@ -3,14 +3,18 @@ import {
   EDITOR_MAX_PATH,
   EMBED_PARAM,
   EMBED_PROTOCOL_VERSION,
+  EMBED_MAX_COMMAND,
   EMBED_MAX_NOTE,
   EMBED_MAX_OPEN_FILES,
+  EMBED_MAX_PICKS,
   EMBED_MAX_SELECTION_TEXT,
   EMBED_THEME_PARAM,
   EMBED_VSCODE,
   type EmbedCommandMessage,
+  type EmbedEditorExtrasMessage,
   type EmbedEditorFile,
   type EmbedHostMessage,
+  type EmbedPickedFile,
   type EmbedKeyMessage,
   type EmbedPageMessage,
   type EmbedTheme,
@@ -235,6 +239,35 @@ export function parseHostMessage(data: unknown): EmbedHostMessage | null {
   if (data.type === "frizz:command") {
     const { command } = data
     return HOST_COMMANDS.has(command as EmbedCommandMessage["command"]) ? { type: "frizz:command", command: command as EmbedCommandMessage["command"] } : null
+  }
+  if (data.type === "frizz:context-picks") {
+    const { id, files } = data
+    if (!nonEmpty(id, 200) || !Array.isArray(files) || files.length > EMBED_MAX_PICKS) return null
+    const picked: EmbedPickedFile[] = []
+    for (const entry of files) {
+      const file = editorFile(entry)
+      if (!file || !isRecord(entry) || (entry.folder !== undefined && entry.folder !== true)) return null
+      picked.push(entry.folder ? { ...file, folder: true } : file)
+    }
+    return { type: "frizz:context-picks", id, files: picked }
+  }
+  if (data.type === "frizz:editor-extras") {
+    const { problems, terminal } = data
+    const out: EmbedEditorExtrasMessage = { type: "frizz:editor-extras" }
+    if (problems !== undefined) {
+      if (!isRecord(problems) || !nonEmpty(problems.label, EDITOR_MAX_PATH)) return null
+      const counts = [problems.errors, problems.warnings, problems.infos]
+      if (!counts.every((count) => Number.isSafeInteger(count) && (count as number) >= 0)) return null
+      out.problems = { label: problems.label, errors: problems.errors as number, warnings: problems.warnings as number, infos: problems.infos as number }
+    }
+    if (terminal !== undefined) {
+      if (!isRecord(terminal)) return null
+      const { command, exitCode } = terminal
+      if (command !== undefined && !nonEmpty(command, EMBED_MAX_COMMAND)) return null
+      if (exitCode !== undefined && !Number.isSafeInteger(exitCode)) return null
+      out.terminal = { ...(command !== undefined ? { command: command as string } : {}), ...(exitCode !== undefined ? { exitCode: exitCode as number } : {}) }
+    }
+    return out
   }
   return null
 }

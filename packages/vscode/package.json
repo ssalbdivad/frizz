@@ -79,6 +79,16 @@
         "category": "Frizz"
       },
       {
+        "command": "frizz.addProblems",
+        "title": "Add problems in this file to Frizz prompt",
+        "category": "Frizz"
+      },
+      {
+        "command": "frizz.addTerminalOutput",
+        "title": "Add last terminal command to Frizz prompt",
+        "category": "Frizz"
+      },
+      {
         "command": "frizz.askToFix",
         "title": "Ask Frizz to fix",
         "category": "Frizz"
@@ -171,6 +181,11 @@
         {
           "command": "frizz.addFileToPrompt",
           "group": "frizz@4"
+        },
+        {
+          "command": "frizz.addProblems",
+          "when": "config.frizz.useSidebar",
+          "group": "frizz@5"
         }
       ],
       "explorer/context": [
@@ -197,6 +212,11 @@
           "command": "frizz.addTerminalSelection",
           "when": "terminalTextSelected && config.frizz.useSidebar",
           "group": "frizz@1"
+        },
+        {
+          "command": "frizz.addTerminalOutput",
+          "when": "config.frizz.useSidebar",
+          "group": "frizz@2"
         }
       ],
       "view/title": [
@@ -248,6 +268,14 @@
         {
           "command": "frizz.addSelectionOrFile",
           "when": "false"
+        },
+        {
+          "command": "frizz.addProblems",
+          "when": "config.frizz.useSidebar"
+        },
+        {
+          "command": "frizz.addTerminalOutput",
+          "when": "config.frizz.useSidebar"
         }
       ]
     },
@@ -294,6 +322,11 @@
           "type": "boolean",
           "default": true,
           "markdownDescription": "Share what you have in front of you in this editor with Frizz: the file you are in and what you have selected, with its text, goes with every message you send from the Frizz sidebar, and Frizz's agents can read it — with your open tabs and the editor's errors and warnings — when they need it. So you can ask about \"this\" without pasting it. The eye on the sidebar's prompt box is this setting. Turn it off to keep the editor to yourself: only what you add to a prompt goes. Text from files that may hold secrets (`.env`, keys, credentials) is never sent on its own."
+        },
+        "frizz.notify": {
+          "type": "boolean",
+          "default": true,
+          "markdownDescription": "Show a notification when a thread in this window's Frizz project needs you — a question, a request to approve, a finished turn — while the Frizz sidebar is out of sight. Only the window you used last shows it."
         },
         "frizz.useSidebar": {
           "type": "boolean",

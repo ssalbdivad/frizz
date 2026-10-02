@@ -5699,7 +5699,7 @@ export type BoardMeta = z.infer<typeof BoardMeta>
 // ── The editor bridge's wire (types and rationale: ./editor-protocol.ts, plans/vscode-extension.md) ──
 // The server validates every frame an editor sends with these; each is pinned to its plain type below.
 const EditorKindSchema = z.enum(["vscode", "cursor", "windsurf", "other"])
-const EditorWindowSummarySchema = z.object({ app: z.string(), kind: EditorKindSchema, acceptsOpens: z.boolean(), reviews: z.literal(true).optional() }).strict()
+const EditorWindowSummarySchema = z.object({ app: z.string(), kind: EditorKindSchema, acceptsOpens: z.boolean(), reviews: z.literal(true).optional(), extensionVersion: z.string().optional() }).strict()
 const EditorPath = z.string().min(1).max(EDITOR_MAX_PATH)
 const EditorLine = z.number().int().min(1).max(10_000_000)
 export const EditorComposeInputSchema = z.object({
@@ -5767,6 +5767,7 @@ export const EditorClientMessageSchema = z.discriminatedUnion("t", [
   EditorSnapshotSchema,
   // Names this server does not know are kept, not refused: a newer extension may name more than it.
   z.object({ t: z.literal("features"), features: z.array(z.string().max(100)).max(32) }).strict(),
+  z.object({ t: z.literal("listen"), attention: z.boolean() }).strict(),
 ])
 // A thread's changes for the extension to show (`review`, editor-protocol.ts): the `reviewTarget` RPC's
 // answer, and the body of the `review` frame the server pushes.

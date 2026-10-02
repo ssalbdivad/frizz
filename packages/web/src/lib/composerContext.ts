@@ -15,7 +15,7 @@
 // dispatching thread's scratch directory — Zed, Copilot and Claude Code all key an inline mention
 // to a grouped tail this way).
 
-import { EMBED_TERMINAL_PATH } from "@frizz/shared"
+import { EMBED_PROBLEMS_PATH, EMBED_TERMINAL_PATH } from "@frizz/shared"
 import { joinComposerValue, splitComposerValue } from "./imagePaths.ts"
 import { basename, relativeTo } from "./paths.ts"
 
@@ -196,10 +196,12 @@ function lineLabel(item: { path?: string; startLine?: number; endLine?: number }
 
 /**
  * Where a staged chip came from, for its hover: `src/a.ts, lines 12-20` — the definition's own
- * parenthesis, so the hover and what the agent reads agree — or `Terminal` for a terminal selection.
+ * parenthesis, so the hover and what the agent reads agree — or `Terminal` for the terminal's text, `Problems`
+ * for the file's problems.
  */
 export function contextSourceLabel(item: { path: string; startLine?: number; endLine?: number }, projectDir?: string | null): string {
   if (isTerminalPath(item.path)) return "Terminal"
+  if (item.path === EMBED_PROBLEMS_PATH) return "Problems"
   return `${contextDisplayPath(item.path, projectDir)}${lineLabel(item)}`
 }
 

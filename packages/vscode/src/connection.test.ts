@@ -655,3 +655,74 @@ test("the backoff doubles from 1s to a 30s ceiling, jittered ±20%", () => {
   assert.equal(backoffDelay(0, 1_000, 30_000, () => 1), 1_200)
   assert.equal(backoffDelay(9, 1_000, 30_000, () => 1), 30_000, "jitter never pushes past the ceiling")
 })
+
+test("whether this window shows notifications goes only to a Frizz that takes it, again on every welcome; an attention reaches the host", async () => {
+  // A Frizz from before `listen` closes the socket on it, on every redial: it must never hear one.
+  const old = await new FakeFrizz().listen()
+  const oldHost = makeHost(old)
+  const oldConnection = new EditorConnection(oldHost, FAST)
+  try {
+    oldConnection.listen(true)
+    oldConnection.start()
+    await until("the welcome", () => oldConnection.status.kind === "connected")
+    oldConnection.listen(false)
+    oldConnection.listen(true)
+    await sleep(60)
+    assert.equal(old.of("listen").length, 0, "nothing an old Frizz would refuse")
+    assert.deepEqual([...oldConnection.features!], ["editor-state"])
+  } finally {
+    oldConnection.stop()
+    await old.close()
+  }
+
+  const frizz = await new FakeFrizz().listen()
+  frizz.features = ["editor-state", "sidebar", "attention"]
+  const host = makeHost(frizz)
+  const told: unknown[] = []
+  host.attention = (message) => void told.push(message)
+  const connection = new EditorConnection(host, FAST)
+  try {
+    connection.listen(true)
+    connection.start()
+    await until("listen, sent on the welcome", () => frizz.of("listen").length === 1)
+    assert.deepEqual(frizz.of("listen")[0], { t: "listen", attention: true })
+    connection.listen(true)
+    await sleep(40)
+    assert.equal(frizz.of("listen").length, 1, "unchanged, not sent again")
+    connection.listen(false)
+    await until("the change", () => frizz.of("listen").length === 2)
+    assert.equal(frizz.of("listen")[1]?.attention, false)
+    // A Frizz that restarted knows nothing: said again on the new welcome.
+    frizz.live.close(1001, "restarting")
+    await until("listen on the redial", () => frizz.of("listen").length === 3)
+    assert.equal(frizz.of("listen")[2]?.attention, false)
+    const attention = { t: "attention", projectId: "p1", thread: { id: "tidy", title: "tidy" }, needs: "question", body: "Which branch?" } as const
+    frizz.send(frizz.live, attention)
+    await until("the attention", () => told.length === 1)
+    assert.deepEqual(told[0], attention)
+  } finally {
+    connection.stop()
+    await frizz.close()
+  }
+})
+
+test("a Frizz that answers the editor socket with a 404 predates it; one that welcomes this window does not", async () => {
+  const old = await new FakeFrizz({ editorPath: false }).listen()
+  const host = makeHost(old)
+  const connection = new EditorConnection(host, FAST)
+  try {
+    connection.start()
+    await until("the refusal", () => connection.status.kind === "offline" && connection.predatesBridge)
+    assert.equal(connection.features, undefined, "no welcome, no features")
+  } finally {
+    connection.stop()
+    await old.close()
+  }
+  const { connection: fresh, done } = await connected()
+  try {
+    assert.equal(fresh.predatesBridge, false)
+    assert.ok(fresh.features?.has("editor-state"))
+  } finally {
+    await done()
+  }
+})

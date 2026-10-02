@@ -8,6 +8,7 @@ import { restoreContextItems, takeContextItems, useStagedContextSources, useStag
 import { useThreadComposerControls } from "../hooks/useThreadComposerControls.tsx"
 import { Composer } from "./Composer.tsx"
 import { EditorContextBar } from "./EditorContextBar.tsx"
+import { embedFileMentions } from "../lib/editorReach.ts"
 import { useMentionCandidates, useOwnMention } from "../hooks/useMentionCandidates.ts"
 import { LogoutConfirmModal, SignInModal } from "./SignInModal.tsx"
 import { draftKey, draftStore, useDraft, useProjectDir } from "../lib/drafts.ts"
@@ -223,6 +224,9 @@ export function ThreadComposerBox({
         slashSuggest={slashSuggest}
         mentionCandidates={mentions}
         ownMention={ownMention}
+        // In an editor's sidebar, `@` offers the editor's files too, and a file dragged in from its
+        // explorer lands as a reference (lib/editorReach.ts).
+        fileMentions={embedFileMentions(projectDir)}
         placeholder={answering?.slug === slug && answering.staged > 0 ? "Add a note to your answers…" : placeholder}
         // NOT `|| followUp.pending`. The send is already committed locally (draft cleared, bubble
         // appended, and in the queue the card has already begun dissolving), so gating the textarea on

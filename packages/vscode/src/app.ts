@@ -11,14 +11,17 @@ import { stat } from "node:fs/promises"
 import { homedir } from "node:os"
 import { basename, dirname, resolve } from "node:path"
 import type * as vscode from "vscode"
-import type { EditorComposeInput, EditorComposed, EditorOpen, EditorProject } from "@frizz/shared/editor-protocol"
-import { EMBED_TERMINAL_PATH, type EmbedAddContextMessage, type EmbedCommandMessage, type EmbedComposeMessage, type EmbedEditorContextMessage, type EmbedReviewMessage } from "@frizz/shared/embed-protocol"
+import { EDITOR_FEATURES, type EditorAttention, type EditorComposeInput, type EditorComposed, type EditorOpen, type EditorProject } from "@frizz/shared/editor-protocol"
+import { EMBED_PROBLEMS_PATH, EMBED_TERMINAL_PATH, type EmbedAddContextMessage, type EmbedCommandMessage, type EmbedComposeMessage, type EmbedEditorContextMessage, type EmbedEditorExtrasMessage, type EmbedReviewMessage } from "@frizz/shared/embed-protocol"
+import { AttentionGate, attentionText, manyText, type AttentionItem, type AttentionToast } from "./attention.ts"
+import { BUILD, buildLabel, builtAtLabel, installedBuild } from "./build-info.ts"
 import { EditorConnection, FocusRecency, type ConnectionStatus, type OpenResult } from "./connection.ts"
 import { registerContextFeed } from "./context-feed.ts"
 import { discoverFrizz, pageAddressNote, SOURCE_WORDS, type FoundFrizz } from "./discovery.ts"
 import { fixNote, fixTitle, lineSpan, terminalText, type Problem } from "./editor-context.ts"
 import { registerEditorStateFeed, SHARE_SETTING } from "./editor-state-feed.ts"
 import { registerEditorWatcher } from "./editor-watcher.ts"
+import { registerExtrasFeed } from "./extras-feed.ts"
 import { addRoute, composeInSidebar as composeVia, promptRoute } from "./embed.ts"
 import { composeInput, composeMessage, normalizeNewlines, refLabel, type FileRef, type Selected } from "./message.ts"
 import { projectForPath, workspaceProjects } from "./projects.ts"
@@ -27,6 +30,7 @@ import { describeRpcError, dispatchProfile, FrizzRpc, withRetry } from "./rpc.ts
 import { registerSidebar, type SidebarSnapshot } from "./sidebar.ts"
 import { notConnectedMessage, statusView } from "./status.ts"
 import { findThread, pickerThreads, threadHandleOf, threadItem, displayName, displayTitle, windowThread, windowThreadFirst, type PickerThread } from "./threads.ts"
+import { registerWorkspaceFiles } from "./workspace-files.ts"
 
 type Vscode = typeof vscode
 
@@ -45,6 +49,14 @@ export interface FrizzExtensionApi {
   editorContext(): EmbedEditorContextMessage | undefined
   /** The last thread's changes this window opened as a multi-file diff. */
   review(): ReviewSnapshot | undefined
+  /** The file's problems and the terminal's last command as the sidebar's page was last told them. */
+  editorExtras(): EmbedEditorExtrasMessage | undefined
+  /** This build's label (`0.1.0+1a2b3c4d`), as the hello, the log and the status bar's tooltip say it. */
+  build: string
+  /** Every needs-you notification this window showed, its words, oldest first. */
+  notifications(): string[]
+  /** A different build found installed under this window, which it offered to reload into. */
+  reloadOffered(): string | undefined
 }
 
 /** A file the command is about, with what was selected in it. */
@@ -63,6 +75,8 @@ interface CommandOptions {
 }
 
 const FLASH_MS = 1_500
+/** How often a window looks for a new build of the extension installed under it. */
+const INSTALL_POLL_MS = 4_000
 
 /** What Ask gives for a selection it cannot place; Send to thread says the same rather than dropping it. */
 const OPEN_A_FILE = "Open a file to ask Frizz about it."
@@ -84,7 +98,10 @@ export function activateFrizz(api: Vscode, context: vscode.ExtensionContext): Fr
   const log = api.window.createOutputChannel("Frizz", { log: true })
   context.subscriptions.push(log)
   const windowId = randomUUID()
-  const extensionVersion = String((context.extension.packageJSON as { version?: unknown }).version ?? "")
+  // This build's label — the version, the commit and whether its sources were dirty (build-info.ts). Run
+  // from source with no build record, the manifest's version, which is all there is to say.
+  const extensionVersion = BUILD.id === "source" ? String((context.extension.packageJSON as { version?: unknown }).version ?? "") : buildLabel(BUILD)
+  const builtAt = builtAtLabel(BUILD)
   let projects: EditorProject[] = []
   let status: ConnectionStatus = { kind: "connecting" }
 
@@ -102,6 +119,13 @@ export function activateFrizz(api: Vscode, context: vscode.ExtensionContext): Fr
     origin: () => connection.origin ?? found?.origin,
     projectSlug: () => workspaceProjects(folders(), projects)[0]?.slug,
     notFound: () => (status.kind === "offline" || status.kind === "incompatible" ? status.reason : undefined),
+    // A Frizz whose welcome names neither the sidebar nor the editor's picture (which came after the
+    // sidebar), or that answered the editor socket with a 404, serves a page from before the sidebar.
+    pageSupport: () => {
+      const features = connection.features
+      if (features) return features.has(EDITOR_FEATURES.sidebar) || features.has(EDITOR_FEATURES.editorState) ? "yes" : "no"
+      return connection.predatesBridge ? "no" : "unknown"
+    },
     openFile: (message) => openFromFrizz(message),
     openInBrowser: () => openFrizz(),
     reconnect: () => connection.reconnect(),
@@ -109,6 +133,7 @@ export function activateFrizz(api: Vscode, context: vscode.ExtensionContext): Fr
     hostState: () => ({ shareEditor: shared(), altK: !claudeCode }),
     setShareEditor: (on) => setShareEditor(on),
     review: (message) => reviewFromPage(message),
+    pickContext: (message) => workspaceFiles.pick(message),
     log: { info: (line) => log.info(line), warn: (line) => log.warn(line) },
   })
   const useSidebar = () => config().get<boolean>("useSidebar", true)
@@ -161,6 +186,12 @@ export function activateFrizz(api: Vscode, context: vscode.ExtensionContext): Fr
     projects: () => projects,
     shared,
   })
+  const extras = registerExtrasFeed(api, context, {
+    ready: () => sidebar.ready(),
+    onReady: (listener) => sidebar.onReady(listener),
+    post: (message) => sidebar.post(message),
+  })
+  const workspaceFiles = registerWorkspaceFiles(api, context, { projects: () => projects })
 
   // ── status bar ───────────────────────────────────────────────────────────────────────────────────
   const item = api.window.createStatusBarItem("frizz.status", api.StatusBarAlignment.Right, 100)
@@ -168,7 +199,7 @@ export function activateFrizz(api: Vscode, context: vscode.ExtensionContext): Fr
   context.subscriptions.push(item)
   let shown = statusView(status, [])
   const renderStatus = () => {
-    shown = statusView(status, workspaceProjects(folders(), projects))
+    shown = statusView(status, workspaceProjects(folders(), projects), extensionVersion)
     item.text = shown.text
     item.tooltip = shown.tooltip
     item.command = shown.command
@@ -254,6 +285,7 @@ export function activateFrizz(api: Vscode, context: vscode.ExtensionContext): Fr
       renderStatus()
       sidebar.refresh()
     },
+    attention: (message) => onAttention(message),
     log: { info: (line) => log.info(line), warn: (line) => log.warn(line), error: (line) => log.error(line) },
   })
   context.subscriptions.push({ dispose: () => connection.stop() })
@@ -395,8 +427,98 @@ export function activateFrizz(api: Vscode, context: vscode.ExtensionContext): Fr
         feed.refresh()
         sidebar.pushState()
       }
+      if (event.affectsConfiguration("frizz.notify")) connection.listen(notifies())
     }),
   )
+
+  // ── a thread needs you, and the sidebar is out of sight (attention.ts) ───────────────────────────
+  // Frizz picks ONE window for each — of those that listen and have the project open, the one used last —
+  // so this window says it listens only while `frizz.notify` is on: a window with it off never takes one
+  // another window would have shown.
+  const notifies = () => config().get<boolean>("notify", true)
+  const gate = new AttentionGate()
+  const shownNotifications: string[] = []
+  let dueTimer: NodeJS.Timeout | undefined
+  context.subscriptions.push({ dispose: () => clearTimeout(dueTimer) })
+
+  function onAttention(message: EditorAttention): void {
+    if (!notifies()) return
+    // The sidebar in sight shows the card already; what is held goes too, since it shows every one.
+    if (sidebar.visible()) {
+      gate.clear()
+      return
+    }
+    const project = projects.find((candidate) => candidate.id === message.projectId)
+    const mine = workspaceProjects(folders(), projects)
+    const item: AttentionItem = {
+      slug: message.thread.id,
+      ...(project ? { projectSlug: project.slug } : {}),
+      // Named only where it tells two apart: a window on one project knows which one it is.
+      ...(project && mine.length > 1 ? { projectName: project.name } : {}),
+      title: displayTitle(message.thread as Parameters<typeof displayTitle>[0]),
+      needs: message.needs,
+      ...(message.body ? { body: message.body } : {}),
+    }
+    const toast = gate.offer(item, Date.now())
+    if (toast) showAttention(toast)
+    scheduleDue()
+  }
+
+  function scheduleDue(): void {
+    clearTimeout(dueTimer)
+    const at = gate.dueAt()
+    if (at === undefined) return
+    dueTimer = setTimeout(() => {
+      if (sidebar.visible()) gate.clear()
+      const toast = gate.due(Date.now())
+      if (toast) showAttention(toast)
+      scheduleDue()
+    }, Math.max(0, at - Date.now()))
+  }
+
+  function showAttention(toast: AttentionToast): void {
+    const one = toast.items.length === 1 ? toast.items[0] : undefined
+    const text = one ? attentionText(one) : manyText(toast.items)
+    shownNotifications.push(text)
+    log.info(`Told you: ${text}`)
+    void api.window.showInformationMessage(text, "Open").then((choice) => {
+      if (choice !== "Open") return
+      log.info(`Opening ${one ? one.slug : "the queue"} from the notification.`)
+      void openAttention(one)
+    })
+  }
+
+  /** Open: the thread in the sidebar (the queue, for several), or with the sidebar off, in the browser. */
+  async function openAttention(item: AttentionItem | undefined): Promise<void> {
+    if (!useSidebar()) {
+      const origin = connection.origin ?? found?.origin
+      const project = item?.projectSlug ? projects.find((candidate) => candidate.slug === item.projectSlug) : undefined
+      if (origin) openUrl(item && project ? threadUrl(origin, project, item.slug) : projectUrl(origin, project ?? windowProject()))
+      return
+    }
+    await sidebar.reveal(false)
+    if (!(await sidebar.waitReady(SIDEBAR_READY_MS))) return
+    await sidebar.navigate(item?.projectSlug ? { thread: item.slug, project: item.projectSlug } : "queue")
+  }
+
+  // ── a new build installed under this window (build-info.ts) ──────────────────────────────────────
+  // A window keeps running the code it loaded. `nub run vscode:install` (or any install of the .vsix)
+  // puts a new build on disk, and until the window reloads it runs the old one — which is how a fix got
+  // "verified" in a window that never had it. So the window looks, every few seconds, at what is
+  // installed where it loaded from, and offers to reload once per new build.
+  let offered: { id: string; label: string } | undefined
+  const watchInstall = setInterval(() => {
+    const next = installedBuild(context.extensionPath, context.extension.id)
+    if (!next || next.id === offered?.id) return
+    const label = buildLabel(next)
+    offered = { id: next.id, label }
+    log.info(`A different build of the extension is installed: ${label}. Reload the window to run it; this one runs ${extensionVersion}.`)
+    void api.window.showInformationMessage(`Frizz's extension was updated to ${label}. Reload the window to use it.`, "Reload window").then((choice) => {
+      if (choice === "Reload window") void api.commands.executeCommand("workbench.action.reloadWindow")
+    })
+  }, INSTALL_POLL_MS)
+  watchInstall.unref?.()
+  context.subscriptions.push({ dispose: () => clearInterval(watchInstall) })
 
   // ── helpers the commands share ───────────────────────────────────────────────────────────────────
 
@@ -823,6 +945,35 @@ export function activateFrizz(api: Vscode, context: vscode.ExtensionContext): Fr
   }
 
   /**
+   * Add problems in this file — the palette, the editor's Frizz menu: the file in front's errors and
+   * warnings, each with its line, as one `@problems` chip (extras.ts problemsText). Sidebar only, like a
+   * terminal selection: the chip's text has no file to fall back to as a reference.
+   */
+  async function addProblems(): Promise<EditorComposed | undefined> {
+    const found = extras.problems()
+    if (!found.ok) {
+      void api.window.showInformationMessage(found.why)
+      return undefined
+    }
+    const project = windowProject()
+    return deliver([{ path: EMBED_PROBLEMS_PATH, text: found.text, ...(project ? { projectId: project.id } : {}) }], { sidebarOnly: true })
+  }
+
+  /**
+   * Add the terminal's last command — the palette, the terminal's menu: the command, its output (the end
+   * of it, when it is long) and how it exited, as one `@terminal` chip (extras.ts terminalCommandText).
+   */
+  async function addTerminalOutput(): Promise<EditorComposed | undefined> {
+    const found = await extras.terminal()
+    if (!found.ok) {
+      void api.window.showInformationMessage(found.why)
+      return undefined
+    }
+    const project = windowProject()
+    return deliver([{ path: EMBED_TERMINAL_PATH, text: found.text, ...(project ? { projectId: project.id } : {}) }], { sidebarOnly: true })
+  }
+
+  /**
    * The page's context bar asked for the editor's context (`frizz:add-context`): the selection of the file
    * in front, or a whole file, into the composer it shows. It came from the sidebar, so it goes back there
    * or nowhere; and it carries the text as the editor has it NOW — nothing when the selection or the file
@@ -830,7 +981,15 @@ export function activateFrizz(api: Vscode, context: vscode.ExtensionContext): Fr
    */
   async function addContextFromPage(message: EmbedAddContextMessage): Promise<string> {
     let item: EditorComposeInput
-    if (message.what === "selection") {
+    if (message.what === "problems" || message.what === "terminal") {
+      const found = message.what === "problems" ? extras.problems() : await extras.terminal()
+      if (!found.ok) {
+        void api.window.showInformationMessage(found.why)
+        return "nothing to add"
+      }
+      const project = windowProject()
+      item = { path: message.what === "problems" ? EMBED_PROBLEMS_PATH : EMBED_TERMINAL_PATH, text: found.text, ...(project ? { projectId: project.id } : {}) }
+    } else if (message.what === "selection") {
       // The editor the bar showed (the one in front, by the watcher's rule); a chip needs a file on disk.
       const editor = watcher.frontEditor()
       if (!editor || editor.document.uri.scheme !== "file" || editor.selection.isEmpty) return "nothing selected"
@@ -960,6 +1119,8 @@ export function activateFrizz(api: Vscode, context: vscode.ExtensionContext): Fr
     api.commands.registerCommand("frizz.addFileToPrompt", addFileToPrompt),
     api.commands.registerCommand("frizz.addSelectionOrFile", addSelectionOrFile),
     api.commands.registerCommand("frizz.addTerminalSelection", addTerminalSelection),
+    api.commands.registerCommand("frizz.addProblems", addProblems),
+    api.commands.registerCommand("frizz.addTerminalOutput", addTerminalOutput),
     api.commands.registerCommand(FIX_COMMAND, askToFix),
     api.commands.registerCommand("frizz.sidebar.newThread", () => sidebarCommand("new-thread")),
     api.commands.registerCommand("frizz.sidebar.queue", () => sidebarCommand("queue")),
@@ -996,7 +1157,8 @@ export function activateFrizz(api: Vscode, context: vscode.ExtensionContext): Fr
     }),
   )
 
-  log.info(`Frizz extension ${extensionVersion} in ${api.env.appName}, window ${windowId}.`)
+  log.info(`Frizz extension ${extensionVersion}${builtAt ? ` (built ${builtAt})` : ""} in ${api.env.appName} ${api.version}, window ${windowId}.`)
+  connection.listen(notifies())
   connection.start()
 
   return {
@@ -1009,5 +1171,9 @@ export function activateFrizz(api: Vscode, context: vscode.ExtensionContext): Fr
     sidebar: () => sidebar.snapshot(),
     editorContext: () => feed.last(),
     review: () => reviews.last(),
+    editorExtras: () => extras.last(),
+    build: extensionVersion,
+    notifications: () => [...shownNotifications],
+    reloadOffered: () => offered?.label,
   }
 }

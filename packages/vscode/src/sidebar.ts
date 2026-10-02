@@ -20,15 +20,18 @@ import type {
   EmbedComposeMessage,
   EmbedComposedMessage,
   EmbedEditorContextMessage,
+  EmbedEditorExtrasMessage,
   EmbedHostMessage,
   EmbedHostStateMessage,
   EmbedNavigateMessage,
   EmbedPageMessage,
   EmbedReviewMessage,
+  EmbedPickContextMessage,
+  EmbedPickedFile,
   EmbedRouteMessage,
 } from "@frizz/shared/embed-protocol"
 import { chordCommand, embedTheme, embedUrl, frameTarget, parsePageMessage } from "./embed.ts"
-import { frameDocument, messageDocument, nonce, type ViewAction } from "./sidebar-html.ts"
+import { frameDocument, HINT, HINT_OLD_FRIZZ, messageDocument, nonce, type ViewAction } from "./sidebar-html.ts"
 
 type Vscode = typeof vscode
 
@@ -52,6 +55,7 @@ export const SIDEBAR_VIEW_KEY = "frizz.sidebarView"
 const READY_HINT_MS = 20_000
 /** Status and project pushes arrive a frame apart after a connect; one render for the pair. */
 const REFRESH_DEBOUNCE_MS = 200
+const OLD_FRIZZ_LOG = "The Frizz this window reached is older than the sidebar: its page shows, but can't take the editor's selections or open files here. Update Frizz."
 const EVENTS_KEPT = 50
 
 export interface SidebarHost {
@@ -61,6 +65,12 @@ export interface SidebarHost {
   projectSlug(): string | undefined
   /** What to say when there is no Frizz to frame — the connection's own words, or undefined while it is still looking. */
   notFound(): string | undefined
+  /**
+   * Whether the Frizz at that origin serves a page that can live in the sidebar: "no" when its editor
+   * connection says it predates the sidebar, "unknown" while nothing has said. "no" shows the bar over the
+   * frame at once, saying to update Frizz, instead of waiting out READY_HINT_MS to say it is loading.
+   */
+  pageSupport(): "yes" | "no" | "unknown"
   openFile(message: EditorOpen): Promise<{ ok: boolean; error?: string }>
   openInBrowser(): void
   reconnect(): void
@@ -72,6 +82,8 @@ export interface SidebarHost {
   setShareEditor(on: boolean): Promise<string>
   /** The page asked for a thread's changes in this window (`frizz:review`); resolves to what came of it, for the record. */
   review(message: EmbedReviewMessage): Promise<string>
+  /** The page asked for files (`frizz:pick-context`): by name for its `@` menu, or dropped from the explorer. */
+  pickContext(message: EmbedPickContextMessage): Promise<EmbedPickedFile[]>
   log: { info(line: string): void; warn(line: string): void }
 }
 
@@ -82,6 +94,8 @@ export interface SidebarSnapshot {
   ready: boolean
   /** The "hasn't finished loading" bar is showing over the frame. */
   hinted: boolean
+  /** What that bar says. */
+  hint?: string
   /** The frame's address, after asExternalUri, when it shows the page. */
   url?: string
   /** The copy it shows instead of the page. */
@@ -100,6 +114,8 @@ export interface SidebarSnapshot {
 export interface Sidebar {
   /** The view has been opened in this window and not closed since. */
   opened(): boolean
+  /** The view is in sight: opened, and its container showing. */
+  visible(): boolean
   /** The page in the frame said `frizz:ready` and is still the page there. */
   ready(): boolean
   /** Re-read where Frizz is and this window's project, and re-frame only when either changed. */
@@ -117,7 +133,7 @@ export interface Sidebar {
   /** The page's address for what the view shows (its last `frizz:route`), while it is in sight; else undefined. */
   href(): string | undefined
   /** Post to the page if it is ready; false if it is not, or the post failed. */
-  post(message: EmbedEditorContextMessage | EmbedCommandMessage): Promise<boolean>
+  post(message: EmbedEditorContextMessage | EmbedCommandMessage | EmbedEditorExtrasMessage): Promise<boolean>
   /** The extension's state the page shows changed (sharing, the chords): tell a ready page. */
   pushState(): void
   /** Called with true when the page in the frame says it is ready, and false when that page is gone. */
@@ -138,6 +154,7 @@ export function registerSidebar(api: Vscode, context: vscode.ExtensionContext, h
   let message: string | undefined
   let ready = false
   let hinted = false
+  let hintText: string | undefined
   let renders = 0
   let readyTimer: NodeJS.Timeout | undefined
   let refreshTimer: NodeJS.Timeout | undefined
@@ -162,7 +179,7 @@ export function registerSidebar(api: Vscode, context: vscode.ExtensionContext, h
     for (const waiter of settled) waiter(value)
   }
 
-  const post = async (data: EmbedHostMessage | { view: "hint"; show: boolean }): Promise<boolean> => {
+  const post = async (data: EmbedHostMessage | { view: "hint"; show: boolean; text?: string }): Promise<boolean> => {
     if (!view || !frameUrl) return false
     try {
       return await view.webview.postMessage(data)
@@ -175,6 +192,7 @@ export function registerSidebar(api: Vscode, context: vscode.ExtensionContext, h
     const changed = next !== ready
     ready = next
     hinted = false
+    hintText = undefined
     clearTimeout(readyTimer)
     readyTimer = undefined
     if (!next) {
@@ -262,13 +280,29 @@ export function registerSidebar(api: Vscode, context: vscode.ExtensionContext, h
     message = undefined
     frameUrl = target.url
     frameOrigin = target.origin
-    view.webview.html = frameDocument({ nonce: nonce(), url: target.url, origin: target.origin })
+    // A Frizz known to predate the sidebar says so from the first paint: its page will never be ready.
+    const old = host.pageSupport() === "no"
+    if (old) {
+      host.log.warn(OLD_FRIZZ_LOG)
+      hinted = true
+      hintText = HINT_OLD_FRIZZ
+    }
+    view.webview.html = frameDocument({ nonce: nonce(), url: target.url, origin: target.origin, ...(old ? { hint: HINT_OLD_FRIZZ } : {}) })
     readyTimer = setTimeout(() => {
       host.log.warn(`The sidebar's page didn't say it was ready within ${READY_HINT_MS / 1000}s.`)
-      hinted = true
-      void post({ view: "hint", show: true })
+      showHint()
       settle(false)
     }, READY_HINT_MS)
+  }
+
+  /** The bar over a page that is not ready, in the words that fit what is known about the Frizz behind it. */
+  function showHint(): void {
+    const text = host.pageSupport() === "no" ? HINT_OLD_FRIZZ : HINT.text
+    if (hinted && text === hintText) return
+    if (text === HINT_OLD_FRIZZ) host.log.warn(OLD_FRIZZ_LOG)
+    hinted = true
+    hintText = text
+    void post({ view: "hint", show: true, text })
   }
 
   async function onPageMessage(page: EmbedPageMessage): Promise<void> {
@@ -325,6 +359,18 @@ export function registerSidebar(api: Vscode, context: vscode.ExtensionContext, h
       }
       case "frizz:review": {
         record(page.type, await host.review(page))
+        return
+      }
+      case "frizz:pick-context": {
+        // Answered always, with nothing when nothing matched or the ask failed: the page waits on this id.
+        let files: EmbedPickedFile[] = []
+        try {
+          files = await host.pickContext(page)
+        } catch (error) {
+          host.log.warn(`Listing the workspace's files failed: ${(error as Error).message}`)
+        }
+        await post({ type: "frizz:context-picks", id: page.id, files })
+        record(page.type, `${files.length} ${page.uris ? "dropped" : "found"}`)
         return
       }
     }
@@ -401,10 +447,16 @@ export function registerSidebar(api: Vscode, context: vscode.ExtensionContext, h
 
   return {
     opened: () => view !== undefined,
+    visible: () => view?.visible ?? false,
     ready: () => ready,
     refresh() {
       clearTimeout(refreshTimer)
-      refreshTimer = setTimeout(() => void render(false), REFRESH_DEBOUNCE_MS)
+      refreshTimer = setTimeout(() => {
+        void render(false)
+        // The connection may have just learned what the framed Frizz is (a welcome, a 404): a page that
+        // never got ready and now is known never to be says why, without waiting out the timer.
+        if (frameUrl && !ready && host.pageSupport() === "no") showHint()
+      }, REFRESH_DEBOUNCE_MS)
     },
     reload,
     setBadge(next) {
@@ -467,6 +519,7 @@ export function registerSidebar(api: Vscode, context: vscode.ExtensionContext, h
       visible: view?.visible ?? false,
       ready,
       hinted,
+      ...(hinted && hintText ? { hint: hintText } : {}),
       ...(frameUrl ? { url: frameUrl } : {}),
       ...(message ? { message } : {}),
       ...(view?.badge ? { badge: view.badge.value } : {}),

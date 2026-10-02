@@ -13,7 +13,10 @@ import {
   EditorClientMessageSchema,
   editorKindOf,
   queuedThread,
+  queueUrgency,
   workingThread,
+  type EditorAttentionNeeds,
+  type EditorAttentionThread,
   type EditorComposeItem,
   type EditorHello,
   type EditorKind,
@@ -45,6 +48,10 @@ import { isTrustedLocalWebSocketRequest, rejectWebSocketUpgrade } from "./local-
 // what their editor last showed, for the agents), the requests waiting on a window's answer, and the
 // selections an editor sent to the prompt box until a page claims one. Nothing survives a restart, and
 // nothing needs to — the extension reconnects and says it all again.
+//
+// And it tells ONE window when a thread needs the human (`attention`): it listens on every open
+// project's bus for the board's own needs-you edge while a window wants to hear it, and hands each one
+// to the window the human was in last of those that have the project open.
 
 export const EDITOR_MAX_WINDOWS = 32
 /**
@@ -83,6 +90,12 @@ export interface EditorBridgeDeps {
   listProjects: () => EditorProject[] | Promise<EditorProject[]>
   /** Publish on EVERY open project's bus: a page hears only its own project's. */
   publish: (event: ServerEvent) => void
+  /**
+   * Every OPEN project: the folder its agents run in (what a window "has open" is judged against), the
+   * bus its board publishes the needs-you edge on, and the board to read that thread from. Read on every
+   * projects poll while a window listens for attention; absent, no window is ever told.
+   */
+  openProjects?: () => readonly AttentionSource[]
   now?: () => number
   /** This server's `os.homedir()` / `process.platform` — what a window must share before it may take a file no folder of it holds. */
   home?: string
@@ -154,9 +167,19 @@ export interface EditorUnsavedFile {
   kind: EditorKind
 }
 
+/** One open project, as the needs-you notifications read it (EditorBridgeDeps.openProjects). */
+export interface AttentionSource {
+  id: string
+  dir: string
+  bus: { subscribe(listener: (event: ServerEvent) => void): () => void }
+  board: { snapshot(): Promise<{ threads: ThreadView[] }> }
+}
+
 interface EditorWindow {
   windowId: string
   app: string
+  /** The extension's build, as its hello said it. */
+  extensionVersion: string
   kind: EditorKind
   folders: string[]
   focused: boolean
@@ -169,6 +192,8 @@ interface EditorWindow {
   editor?: { snapshot: Omit<EditorSnapshot, "t">; at: number }
   /** What it said it can do beyond v1 (its `features` frame); empty until it says. */
   features: ReadonlySet<string>
+  /** It said it shows needs-you notifications (`listen`); false until it does. */
+  attention: boolean
 }
 
 /** How a request to a window ended: its answer, or "gone" for a timeout or a dropped socket. */
@@ -280,8 +305,8 @@ export function createEditorBridge(deps: EditorBridgeDeps): EditorBridge {
     const out: EditorWindowSummary[] = []
     for (const conn of connections) {
       if (!conn.window) continue
-      const { app, kind, acceptsOpens, features } = conn.window
-      out.push({ app, kind, acceptsOpens, ...(features.has(EDITOR_FEATURES.review) ? { reviews: true as const } : {}) })
+      const { app, kind, acceptsOpens, features, extensionVersion } = conn.window
+      out.push({ app, kind, acceptsOpens, ...(features.has(EDITOR_FEATURES.review) ? { reviews: true as const } : {}), ...(extensionVersion ? { extensionVersion } : {}) })
     }
     return out
   }
@@ -308,6 +333,8 @@ export function createEditorBridge(deps: EditorBridgeDeps): EditorBridge {
     projectsPoll = (async () => {
       do {
         projectsPollAgain = false
+        // A project opened or closed since the last tick changes which buses there are to hear.
+        watchAttention()
         if (closing || ![...connections].some((c) => c.window)) return
         let projects: EditorProject[]
         try {
@@ -366,6 +393,7 @@ export function createEditorBridge(deps: EditorBridgeDeps): EditorBridge {
     if (conn.window) {
       conn.window = undefined
       publishEditorsIfChanged()
+      watchAttention()
     }
     if (connections.size === 0) stopTimers()
   }
@@ -388,6 +416,7 @@ export function createEditorBridge(deps: EditorBridgeDeps): EditorBridge {
     conn.window = {
       windowId: msg.windowId,
       app: msg.app,
+      extensionVersion: msg.extensionVersion,
       kind: editorKindOf(msg.app),
       folders: msg.folders,
       focused: msg.focused,
@@ -396,8 +425,9 @@ export function createEditorBridge(deps: EditorBridgeDeps): EditorBridge {
       home: msg.home,
       platform: msg.platform,
       features: new Set(),
+      attention: false,
     }
-    send(conn, { t: "welcome", v: EDITOR_PROTOCOL_VERSION, bootId: deps.bootId(), features: [EDITOR_FEATURES.editorState, EDITOR_FEATURES.selectionWithheld, EDITOR_FEATURES.review] })
+    send(conn, { t: "welcome", v: EDITOR_PROTOCOL_VERSION, bootId: deps.bootId(), features: [EDITOR_FEATURES.editorState, EDITOR_FEATURES.selectionWithheld, EDITOR_FEATURES.review, EDITOR_FEATURES.sidebar, EDITOR_FEATURES.attention] })
     publishEditorsIfChanged()
     void pollProjects()
   }
@@ -447,6 +477,11 @@ export function createEditorBridge(deps: EditorBridgeDeps): EditorBridge {
     if (msg.t === "features") {
       window.features = new Set(msg.features)
       publishEditorsIfChanged()
+      return
+    }
+    if (msg.t === "listen") {
+      window.attention = msg.attention
+      watchAttention()
       return
     }
     if (msg.t === "editor") {
@@ -532,6 +567,62 @@ export function createEditorBridge(deps: EditorBridgeDeps): EditorBridge {
     return best
   }
 
+  // ── attention: one window told when a thread needs the human ────────────────────────────────────
+  //
+  // THE SIGNAL IS THE BOARD'S OWN: `notify` `needs-decision`, which board.ts notifyNeedsYou publishes on
+  // the edge of a thread entering the queue — a question, a request, a finished turn — deduped, primed at
+  // boot so a restart does not announce the whole queue, and quiet for a thread that comes back to the
+  // place it left. The page's desktop notifications fire on the same event, so a VS Code notification is
+  // never news the board would not call news. Computing an edge here from the projects poll would be a
+  // second notifier, and the two disagreeing is what shared queueUrgency was written to end.
+  //
+  // Buses are heard only while some window wants it: a subscription per open project, kept in step with
+  // the open projects on every projects poll (2s), and dropped when the last listening window goes.
+
+  const watching = new Map<string, { bus: AttentionSource["bus"]; stop: () => void }>()
+
+  function watchAttention(): void {
+    const wanted = closing || !deps.openProjects || ![...connections].some((c) => c.window?.attention) ? [] : deps.openProjects()
+    const keep = new Set<string>()
+    for (const source of wanted) {
+      keep.add(source.id)
+      const current = watching.get(source.id)
+      // The same bus is the same project still open; a project reopened (a moved checkout) has a new one.
+      if (current?.bus === source.bus) continue
+      current?.stop()
+      const stop = source.bus.subscribe((event) => {
+        if (event.type !== "notify" || event.kind !== "needs-decision") return
+        // After this task: the board publishes the edge from INSIDE its assembly, before the snapshot it
+        // is assembling becomes the one `snapshot()` answers, so a read now would still see the thread out
+        // of the queue.
+        setTimeout(() => void tellAttention(source, event.slug, event.body), 0)
+      })
+      watching.set(source.id, { bus: source.bus, stop })
+    }
+    for (const [id, entry] of watching) {
+      if (keep.has(id)) continue
+      entry.stop()
+      watching.delete(id)
+    }
+  }
+
+  async function tellAttention(source: AttentionSource, slug: string, body: string | undefined): Promise<void> {
+    let thread: ThreadView | undefined
+    try {
+      thread = (await source.board.snapshot()).threads.find((candidate) => candidate.id === slug)
+    } catch {
+      return // a board stopping: its project is closing, and nobody needs telling
+    }
+    // Answered in the moment since (another tab, a fast human): no longer news.
+    if (!thread || !queuedThread(thread) || closing) return
+    const realDir = realpathOrUndefined(source.dir)
+    if (!realDir) return
+    // Decided now, after the read: the window the human is in at the moment it is shown.
+    const target = mostRecent([...connections].filter((c) => c.window?.attention && holdsProject(c.window, source.dir, realDir)))
+    if (!target) return
+    send(target, { t: "attention", projectId: source.id, thread: attentionThread(thread), needs: attentionNeeds(thread), ...(body ? { body } : {}) })
+  }
+
   return {
     handleUpgrade(req, socket, head) {
       if ((req.url ?? "").split("?")[0] !== EDITOR_SOCKET_PATH) return false
@@ -582,6 +673,7 @@ export function createEditorBridge(deps: EditorBridgeDeps): EditorBridge {
       if (closePromise) return closePromise
       closing = true
       stopTimers()
+      watchAttention()
       for (const conn of connections) for (const settle of [...conn.pending.values()]) settle("gone")
       // Terminate rather than handshake, as the application socket does: the extension reconnects on
       // any close, and a polite close can keep a replaced server alive while a sleeping peer dawdles.
@@ -778,4 +870,36 @@ export async function listEditorProjects(
     out.push(project)
   }
   return out
+}
+
+/**
+ * What a queued thread needs from the human, most pressing first — read off the same reasons the queue
+ * calls urgent (shared queueUrgency), so the notification says what the card will: a terminal at a prompt,
+ * a request to approve, a question, a stop it cannot get past on its own, a usage limit; and with none of
+ * those, a turn that finished and is ready for the human to read.
+ */
+export function attentionNeeds(t: ThreadView): EditorAttentionNeeds {
+  const reasons = queueUrgency(t).split(" ")
+  const has = (...names: string[]) => reasons.some((reason) => names.includes(reason) || names.some((name) => name.endsWith(":") && reason.startsWith(name)))
+  if (has("terminal")) return "terminal"
+  if (has("interaction", "perm-prompt")) return "approval"
+  if (has("ask", "question", "q:")) return "question"
+  if (has("crashed", "provider-error")) return "stopped"
+  if (has("limit")) return "limit"
+  return "ready"
+}
+
+/** The fields the extension names a thread by (its port of groups.ts displayTitle), and nothing else. */
+export function attentionThread(t: ThreadView): EditorAttentionThread {
+  return {
+    id: t.id,
+    title: t.title,
+    ...(t.aiTitle !== undefined ? { aiTitle: t.aiTitle } : {}),
+    ...(t.titleAuto !== undefined ? { titleAuto: t.titleAuto } : {}),
+    ...(t.titleLocked !== undefined ? { titleLocked: t.titleLocked } : {}),
+    ...(t.titleNamed !== undefined ? { titleNamed: t.titleNamed } : {}),
+    ...(t.spawnedAt !== undefined ? { spawnedAt: t.spawnedAt } : {}),
+    ...(t.backend !== undefined ? { backend: t.backend } : {}),
+    ...(t.runtime !== undefined ? { runtime: t.runtime } : {}),
+  }
 }

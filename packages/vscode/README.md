@@ -43,6 +43,20 @@ in it. Works in VS Code, Cursor and Windsurf.
     send or to edit.
   - **Add to Frizz prompt** in the terminal's right-click menu — the selected terminal output, as an
     `@terminal` chip.
+  - **`@` in a sidebar prompt box** offers this workspace's files after the threads, the way quick open
+    lists them (what `.gitignore`, `files.exclude` and `search.exclude` leave out is left out). Enter
+    writes the file as a reference, `` `src/a.ts` ``. An `@` with nothing after it offers your open tabs.
+  - **Drag files from the explorer** onto a sidebar prompt box, holding `Shift` (VS Code lets a webview
+    take a drop only then) — each lands as the same reference, at the caret.
+  - **Add problems in this file** and **Add last terminal command**, behind the chevron on the prompt
+    box's context bar and in the palette (the second also in the terminal's right-click menu) — the
+    file's errors and warnings, each with its line, as an `@problems` chip; the command, the end of its
+    output and its exit code, as an `@terminal` chip. VS Code 1.93 and later tell Frizz each command as
+    it runs; on an older one, adding it borrows the clipboard for a moment, as the terminal's selection
+    entry does.
+- **When a thread needs you** and the sidebar is out of sight — a question, a request to approve, a
+  finished turn — a VS Code notification says so, in the window you used last, with **Open** to show the
+  thread in the sidebar. A burst of them waits and arrives as one. `frizz.notify` turns them off.
 - **Ask Frizz…** — select code (or right-click a file) and ask about it in the sidebar's new-thread
   box, which opens with the selection in it as the same chip the page's prompt box makes.
 - **Send to Frizz thread…** — pick one of the project's open threads, ones waiting on you first; it
@@ -100,7 +114,8 @@ command palette.
 - **No Frizz header, no browser notifications.** The title row's buttons stand in for the header, and
   it always reads "Frizz": VS Code re-cases a view's title, so thread and project names stay in the page,
   and it shows no view description in a sidebar of one view. Frizz's
-  desktop notifications cannot fire inside an editor, so the badge and the status bar carry the count.
+  desktop notifications cannot fire inside an editor: VS Code's own notification stands in for them while
+  the sidebar is out of sight, and the badge and the status bar carry the count.
 - **The theme is VS Code's**, light or dark, for as long as the sidebar shows; your Frizz theme setting
   is the browser's.
 
@@ -120,7 +135,11 @@ Server when you are in WSL, since the extension runs where your files are. Or bu
 | `frizz.serverUrl` | empty | Frizz's address, such as `http://127.0.0.1:9393`. Empty finds the Frizz running on this machine. |
 | `frizz.openFileLinks` | on | Open file links from Frizz in this window. Turn it off for a window that should never take them. |
 | `frizz.shareEditorState` | on | Share what this window shows with Frizz: the file in front and your selection, with its text, go with what you send from the sidebar, and Frizz's agents can read them — with your open tabs and the errors and warnings — when they need to. Off, nothing of the editor goes unless you add it. The eye on the sidebar's prompt box is this setting. |
+| `frizz.notify` | on | Show a notification when a thread in this window's project needs you while the sidebar is out of sight. Only the window you used last shows it. |
 | `frizz.useSidebar` | on | Everything you add from the editor, and Ask and Send, go to the sidebar. Off, selections and files go to Frizz in your browser, Ask and Send take your message in an input box and send it, and the quick fix and the terminal's entry are not offered. |
 
-**Frizz: Show log** shows how the extension found Frizz and every time the connection changed;
-**Frizz: Reconnect** looks for Frizz again at once.
+**Frizz: Show log** shows which build of the extension this window runs (`0.1.0+1a2b3c4d`, the commit it
+was built from; the status bar's tooltip says it too), how it found Frizz and every time the connection
+changed; **Frizz: Reconnect** looks for Frizz again at once. When a new build is installed under an open
+window, the window offers **Reload window** to use it. A Frizz older than the sidebar is said in the
+sidebar at once, with what to do.

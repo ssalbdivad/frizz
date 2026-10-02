@@ -1,7 +1,7 @@
 import { test } from "node:test"
 import assert from "node:assert/strict"
 import { runInNewContext } from "node:vm"
-import { contentSecurityPolicy, frameDocument, messageDocument } from "./sidebar-html.ts"
+import { contentSecurityPolicy, frameDocument, HINT, HINT_OLD_FRIZZ, messageDocument } from "./sidebar-html.ts"
 
 const FRIZZ = "http://127.0.0.1:9393"
 const URL_ = `${FRIZZ}/?embed=vscode&theme=dark&project=a%22b`
@@ -44,6 +44,7 @@ interface Relay {
   /** VS Code's host frame, which is NOT `window.parent` in a webview document. */
   hostFrame: object
   hint: { hidden: boolean }
+  hintText: { textContent: string }
   focused: number
   dispatch(event: { source: unknown; origin: string; data: unknown }): void
 }
@@ -55,6 +56,7 @@ function relay(html: string): Relay {
   const frameWindow = { postMessage: (data: unknown, targetOrigin: string) => toPage.push({ data, targetOrigin }) }
   const hostFrame = {}
   const hint = { hidden: true }
+  const hintText = { textContent: "" }
   const listeners: ((event: unknown) => void)[] = []
   const state = { focused: 0 }
   const frame = { contentWindow: frameWindow, focus: () => state.focused++ }
@@ -72,7 +74,7 @@ function relay(html: string): Relay {
     // A clone, as postMessage makes one — and out of the script's realm, so deepEqual compares values.
     acquireVsCodeApi: () => ({ postMessage: (message: unknown) => toHost.push(structuredClone(message)) }),
     window,
-    document: { getElementById: (id: string) => (id === "frizz" ? frame : id === "hint" ? hint : null), addEventListener() {}, body: {} },
+    document: { getElementById: (id: string) => (id === "frizz" ? frame : id === "hint" ? hint : id === "hint-text" ? hintText : null), addEventListener() {}, body: {} },
     navigator: { platform: "Linux x86_64" },
     Element: class {},
     setTimeout,
@@ -83,6 +85,7 @@ function relay(html: string): Relay {
     frameWindow,
     hostFrame,
     hint,
+    hintText,
     get focused() {
       return state.focused
     },
@@ -127,5 +130,16 @@ test("the relay posts the host's frizz: messages to the page at Frizz's origin o
   assert.equal(r.hint.hidden, false)
   r.dispatch({ source: r.hostFrame, origin: WEBVIEW, data: { view: "hint", show: false } })
   assert.equal(r.hint.hidden, true)
+  // A Frizz from before the sidebar: the bar says so, in the extension's words.
+  r.dispatch({ source: r.hostFrame, origin: WEBVIEW, data: { view: "hint", show: true, text: HINT_OLD_FRIZZ } })
+  assert.equal(r.hint.hidden, false)
+  assert.equal(r.hintText.textContent, HINT_OLD_FRIZZ)
   assert.equal(r.toPage.length, 2, "the view's own message never reaches the page")
+})
+
+test("the bar is drawn shut with the loading words, or open from the first paint with the words it is given", () => {
+  const plain = frameDocument({ nonce: "n", url: URL_, origin: FRIZZ })
+  assert.match(plain, new RegExp(`<div class="hint" id="hint" role="status" hidden><p id="hint-text">${HINT.text.replace(/'/gu, "&#39;")}</p>`, "u"))
+  const old = frameDocument({ nonce: "n", url: URL_, origin: FRIZZ, hint: HINT_OLD_FRIZZ })
+  assert.match(old, /<div class="hint" id="hint" role="status"><p id="hint-text">This Frizz is older than the sidebar\. Update Frizz to use it here, or open it in your browser\.<\/p>/u)
 })

@@ -20,7 +20,17 @@ export interface StatusView {
   ready: number
 }
 
-export function statusView(connection: ConnectionStatus, projects: readonly EditorProject[]): StatusView {
+/**
+ * The item for this connection and workspace. `build` is the extension's own label (build-info.ts), the
+ * tooltip's last line in every state — the one place in the window it can be read at a glance, which is
+ * what "is this window running the fix?" needs.
+ */
+export function statusView(connection: ConnectionStatus, projects: readonly EditorProject[], build?: string): StatusView {
+  const view = statusFor(connection, projects)
+  return build ? { ...view, tooltip: `${view.tooltip}\nFrizz extension ${build}` } : view
+}
+
+function statusFor(connection: ConnectionStatus, projects: readonly EditorProject[]): StatusView {
   switch (connection.kind) {
     case "connecting":
       return { text: "$(sync~spin) Frizz", tooltip: "Looking for Frizz…", command: "frizz.reconnect", ready: 0 }

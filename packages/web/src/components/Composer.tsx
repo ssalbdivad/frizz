@@ -1,6 +1,6 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react"
 import { ArrowUp, FileText, Loader2, Paperclip, Snail, X } from "lucide-react"
-import { ATTACHMENT_ACCEPT, ATTACHMENT_MAX_BYTES, isAllowedAttachmentName, type ThreadSkill } from "@frizz/shared"
+import { ATTACHMENT_ACCEPT, ATTACHMENT_MAX_BYTES, isAllowedAttachmentName, type EmbedPickedFile, type ThreadSkill } from "@frizz/shared"
 import { showToast } from "../store.ts"
 import { joinComposerValue, splitComposerValue } from "../lib/imagePaths.ts"
 import { splitProseByTokens } from "../lib/composerContext.ts"
@@ -12,7 +12,8 @@ import { RAIL_ACTION_OFFSET, RAIL_LAZY_ACTION_OFFSET, RAIL_LAZY_OFFSET, RAIL_LAZ
 import { apiBase } from "../lib/base-path.ts"
 import { detectPlatform } from "../lib/keybindings.ts"
 import { localImageUrl } from "../lib/markdownTargets.ts"
-import { basename } from "../lib/paths.ts"
+import { DROPPED_URI_TYPES, droppedUris, fileQueryAt, insertFileReference, insertReferencesAt, isVscodeDrag, type FileMentionSource } from "../lib/editorReach.ts"
+import { basename, dirnameLike } from "../lib/paths.ts"
 import { insertMention, matchMentions, mentionQueryAt, mentionSegments, resolveMention, splitMentionQuery, subAgentMentionCandidates, type MentionCandidate } from "../lib/threadMentions.ts"
 import { useSubAgentDirectory } from "../hooks/useSubAgentDirectory.ts"
 
@@ -66,6 +67,15 @@ const SKILL_SOURCE_LABEL: Record<NonNullable<ThreadSkill["source"]>, string> = {
 // Both typeahead menus' row inset: the textarea's 14px on the left, and 6px on the right because the
 // list's reserved 8px scrollbar gutter supplies the rest (see the skills menu's row).
 const MENU_ROW_INSET = "pl-3.5 pr-1.5"
+
+// The `@` menu with the editor's files in it (the `fileMentions` prop): one row per thread or file, in
+// one keyboard order. While files are offered the threads give way to a few, and the files to the most
+// the menu shows without scrolling far; a narrower query is a keystroke away.
+type MentionRow = { kind: "thread"; thread: MentionCandidate } | { kind: "file"; file: EmbedPickedFile }
+const THREADS_BESIDE_FILES = 4
+const FILE_ROWS = 12
+/** How long the menu waits after a keystroke before asking the editor for files. */
+const FILE_QUERY_DEBOUNCE_MS = 60
 
 // A staged context reference in the prose is the literal `@guide.md:3` token the ⌘I flow splices in
 // at the caret (lib/composerContext.ts) — the chip's own label, so the text reads as the chip. The
@@ -137,6 +147,7 @@ export function Composer({
   slashSuggest,
   mentionCandidates,
   ownMention,
+  fileMentions,
   onInterruptSubmit,
   onPushQueued,
   onSaveLazy,
@@ -194,6 +205,12 @@ export function Composer({
   // another thread (maintainer 2026-09-30: "@ mentioning the current thread should still autocomplete").
   // Absent on a box that writes into no thread (the dispatch box).
   ownMention?: MentionCandidate
+  // THE EDITOR'S FILES, in a prompt box in VS Code's sidebar (lib/editorReach.ts embedFileMentions): the
+  // `@` menu offers the workspace's files after the threads, ranked by the editor (its query runs over a
+  // path's characters, `@src/web/App`), and choosing one writes a whole-file reference, `` `src/a.ts` ``.
+  // Files dragged in from the editor's explorer land as the same references at the caret. Omitted (a
+  // browser tab), `@` offers threads alone and a drop is an attachment, as ever.
+  fileMentions?: FileMentionSource
   // INTERRUPT AND SEND — what the FORCED chord (⌘/Ctrl-Enter) does while the thread's worker is
   // mid-turn AND its runtime can be preempted; the caller owns that policy entirely. When it is not
   // set, the same chord is an ordinary send, so ⌘-Enter never goes dead (three Enter keys everywhere:
@@ -223,7 +240,9 @@ export function Composer({
   const taRef = useRef<HTMLTextAreaElement>(null)
   const contextRef = useRef<HTMLDivElement>(null)
   const fileRef = useRef<HTMLInputElement>(null)
-  const [dragging, setDragging] = useState(false)
+  // What a drag over the box would do: upload a file as an attachment, or (a drag from VS Code's own
+  // explorer, which carries resources rather than files) reference what it names.
+  const [dragging, setDragging] = useState<false | "attach" | "reference">(false)
   const [uploading, setUploading] = useState(false)
 
   // Attachment paths live INSIDE the draft `value` (trailing lines) so submit, draft persistence, and
@@ -320,6 +339,28 @@ export function Composer({
       onChange(joinComposerValue(latest.prose, [...latest.attachments.map((a) => a.path), ...paths]))
     }
     requestAnimationFrame(() => taRef.current?.focus({ preventScroll: true }))
+  }
+
+  // Files and folders dragged in from VS Code's explorer: the editor resolves what the drag named to paths
+  // on its side, and each lands as a whole-file reference at the caret (at the end when the box did not
+  // have it) — what `@` writes, so a dragged file and a typed one read the same to the agent.
+  async function takeDropped(uris: string[]) {
+    if (!fileMentions || !uris.length) return
+    const files = await fileMentions.resolve(uris)
+    if (!files?.length) {
+      showToast(files === null ? "Update the Frizz extension to drop files here." : "Only files and folders on disk can be added.")
+      return
+    }
+    const latest = splitComposerValue(valueRef.current)
+    const el = taRef.current
+    const at = el && document.activeElement === el ? Math.min(el.selectionStart, latest.prose.length) : latest.prose.length
+    const next = insertReferencesAt(latest.prose, at, files.map((file) => fileMentions.reference(file)))
+    onChange(joinComposerValue(next.prose, latest.attachments.map((a) => a.path)))
+    setCaret(next.caret)
+    requestAnimationFrame(() => {
+      taRef.current?.focus({ preventScroll: true })
+      taRef.current?.setSelectionRange(next.caret, next.caret)
+    })
   }
 
   // Auto-grow on every value change. A first layout pass
@@ -566,7 +607,32 @@ export function Composer({
     if (!dotted) return matchMentions(allMentions, mention.query)
     return mentionThread && subMentions?.slug === mentionThread.slug ? matchMentions(subMentions.candidates, dotted.rest) : []
   }, [mention?.start, mention?.query, allMentions, dismissedFor, prose, mentionThread?.slug, subMentions])
-  const mentionOpen = mentionMatches.length > 0
+  // FILES IN THE SAME MENU (`fileMentions`): the editor's answer for the query at the caret, asked a beat
+  // after the last keystroke and kept against the `@` it was asked for, so a new `@` elsewhere never
+  // shows the last one's files. Threads come first — `@` has always meant a thread here — but only a few
+  // of them while files are offered too, so the files are not scrolled out of sight.
+  const fileQuery = fileMentions && !suggestOpen ? fileQueryAt(prose, caret) : undefined
+  const [filePicks, setFilePicks] = useState<{ start: number; query: string; files: EmbedPickedFile[] } | null>(null)
+  useEffect(() => {
+    if (!fileMentions || !fileQuery) return
+    let live = true
+    const { start, query } = fileQuery
+    const timer = setTimeout(() => {
+      void fileMentions.search(query).then((files) => {
+        if (live) setFilePicks({ start, query, files: files ?? [] })
+      })
+    }, FILE_QUERY_DEBOUNCE_MS)
+    return () => {
+      live = false
+      clearTimeout(timer)
+    }
+  }, [fileMentions, fileQuery?.start, fileQuery?.query])
+  const fileMatches = fileQuery && filePicks?.start === fileQuery.start && dismissedFor !== prose ? filePicks.files.slice(0, FILE_ROWS) : []
+  const mentionRows: MentionRow[] = [
+    ...(fileMatches.length ? mentionMatches.slice(0, THREADS_BESIDE_FILES) : mentionMatches).map((thread) => ({ kind: "thread" as const, thread })),
+    ...fileMatches.map((file) => ({ kind: "file" as const, file })),
+  ]
+  const mentionOpen = mentionRows.length > 0
   // WHICH WAY THE MENUS OPEN. Up by default — a prompt box usually sits at the bottom of its surface —
   // but All projects puts its box at the TOP of the page, where a menu floated above opened off-screen
   // and hid most of its rows. So a menu opens below whenever the room above the box is less than the
@@ -584,11 +650,23 @@ export function Composer({
     setCaret(next.caret)
     requestAnimationFrame(() => taRef.current?.setSelectionRange(next.caret, next.caret))
   }
+  function acceptFile(file: EmbedPickedFile) {
+    if (!fileQuery || !fileMentions || caret === null) return
+    const next = insertFileReference(prose, fileQuery.start, caret, fileMentions.reference(file))
+    setProse(next.prose)
+    setCaret(next.caret)
+    requestAnimationFrame(() => taRef.current?.setSelectionRange(next.caret, next.caret))
+  }
   // The open menu's length and accept, whichever of the two menus it is — one keyboard contract for both.
-  const menuLength = suggestOpen ? suggestions.length : mentionMatches.length
+  const menuLength = suggestOpen ? suggestions.length : mentionRows.length
   const acceptHighlighted = () => {
-    if (suggestOpen) acceptSuggestion(suggestions[suggestSel] ?? suggestions[0]!)
-    else acceptMention(mentionMatches[suggestSel] ?? mentionMatches[0]!)
+    if (suggestOpen) {
+      acceptSuggestion(suggestions[suggestSel] ?? suggestions[0]!)
+      return
+    }
+    const row = mentionRows[suggestSel] ?? mentionRows[0]!
+    if (row.kind === "thread") acceptMention(row.thread)
+    else acceptFile(row.file)
   }
   function acceptSuggestion(item: { name: string }) {
     const next = `/${item.name} `
@@ -749,21 +827,33 @@ export function Composer({
         dragging ? "border-dashed border-accent" : "border-border"
       }`}
       onDragOver={(e) => {
+        // A drag from VS Code's explorer first: it may carry a text fallback too, which the textarea
+        // would otherwise take as typed text.
+        if (fileMentions && isVscodeDrag([...e.dataTransfer.types])) {
+          e.preventDefault()
+          e.dataTransfer.dropEffect = "copy"
+          setDragging("reference")
+          return
+        }
         if ([...e.dataTransfer.items].some((i) => i.kind === "file")) {
           e.preventDefault()
-          setDragging(true)
+          setDragging("attach")
         }
       }}
       onDragLeave={() => setDragging(false)}
       onDrop={(e) => {
         e.preventDefault()
         setDragging(false)
+        if (fileMentions && isVscodeDrag([...e.dataTransfer.types])) {
+          void takeDropped(droppedUris(DROPPED_URI_TYPES.map((type) => e.dataTransfer.getData(type))))
+          return
+        }
         void takeFiles(e.dataTransfer.files)
       }}
     >
       {dragging && (
         <div className="pointer-events-none absolute inset-0 z-10 flex items-center justify-center rounded-xl bg-bg/80 text-[12px] text-muted">
-          Drop file to attach
+          {dragging === "reference" ? "Drop to add to the prompt" : "Drop file to attach"}
         </div>
       )}
       {/* The skills menu, floated ABOVE the box (the composer usually lives at the bottom of its surface,
@@ -829,10 +919,32 @@ export function Composer({
           ref={suggestListRef}
           data-mention-menu
           role="listbox"
-          aria-label={dotted ? "Sub-agents" : "Threads"}
+          aria-label={fileMatches.length ? (mentionRows.length > fileMatches.length ? "Threads and files" : "Files") : dotted ? "Sub-agents" : "Threads"}
           className={`absolute ${menuBelow ? "top-full mt-1.5" : "bottom-full mb-1.5"} left-0 right-0 z-20 max-h-56 overflow-y-auto rounded-lg border border-border bg-bg py-1 shadow-lg`}
         >
-          {mentionMatches.map((m, i) => (
+          {mentionRows.map((row, i) => {
+            // A file's row: its name where a thread's handle stands — no `@`, since what lands is a path,
+            // not a mention — and its folder, dimmed, where a thread's status stands.
+            if (row.kind === "file") return (
+            <button
+              key={`file:${row.file.path}`}
+              type="button"
+              role="option"
+              aria-selected={i === suggestSel}
+              data-suggest-index={i}
+              data-mention-file={row.file.label}
+              title={row.file.label}
+              onMouseDown={(e) => e.preventDefault()}
+              onClick={() => acceptFile(row.file)}
+              onMouseEnter={() => setSuggestSel(i)}
+              className={`flex w-full items-baseline gap-2 ${MENU_ROW_INSET} py-1.5 text-left ${i === suggestSel ? "bg-panel-2" : ""}`}
+            >
+              <span className="shrink-0 text-[12px] font-medium text-fg">{basename(row.file.label)}{row.file.folder ? "/" : ""}</span>
+              {dirnameLike(row.file.label) && <span className="min-w-0 truncate text-[11px] text-muted">{dirnameLike(row.file.label)}</span>}
+            </button>
+            )
+            const m = row.thread
+            return (
             <button
               key={m.subAgentId ?? m.slug}
               type="button"
@@ -849,7 +961,8 @@ export function Composer({
               {m.done && <span className="petite-caps ml-auto shrink-0 text-[10px] text-muted-70">done</span>}
               {m.project && <span className={`${m.done ? "" : "ml-auto "}shrink-0 text-[11px] text-muted-70`}>{m.project.name}</span>}
             </button>
-          ))}
+            )
+          })}
         </div>
       )}
       {/* The textarea and its marker backdrop share one box: the wrapper is a plain block (no layout
@@ -892,8 +1005,8 @@ export function Composer({
             setProse(e.target.value)
             trackCaret(e.target)
           }}
-          onSelect={mentionCandidates ? (e) => trackCaret(e.currentTarget) : undefined}
-          onBlur={mentionCandidates ? () => setCaret(null) : undefined}
+          onSelect={mentionCandidates || fileMentions ? (e) => trackCaret(e.currentTarget) : undefined}
+          onBlur={mentionCandidates || fileMentions ? () => setCaret(null) : undefined}
           onKeyDown={onKeyDown}
           onPaste={(e) => {
             // Any file item claims the whole paste (preventDefault) — deliberately. An image paste

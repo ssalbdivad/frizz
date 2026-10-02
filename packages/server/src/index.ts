@@ -643,6 +643,8 @@ export async function startServer(opts: StartOptions = {}): Promise<StartedServe
     publish: (event) => {
       for (const open of tenants.active()) open.ctx.bus.publish(event)
     },
+    // Where a thread needing the human is heard, for the one window that shows it (editor-bridge.ts § attention).
+    openProjects: () => tenants.active().map(({ project: open, ctx: openCtx }) => ({ id: open.id, dir: workDirOf(open), bus: openCtx.bus, board: openCtx.board })),
   })
   /**
    * Take one project apart while the rest keep serving — the resource half of deleting a project.

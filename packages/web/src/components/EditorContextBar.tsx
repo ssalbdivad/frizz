@@ -2,9 +2,10 @@ import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react"
 import { ChevronDown, Eye, EyeOff, FileCode2 } from "lucide-react"
 import { embedded } from "../lib/embed.ts"
 import { barAdd, barHints, contextBarReading, editorAddChord, registerContextBar, requestEditorContext, setShareEditor, useEditorContext, type ContextBox, type EditorContextState } from "../lib/editorContext.ts"
+import { problemCountsLabel, useEditorExtras, type EditorExtrasState } from "../lib/editorReach.ts"
 import { detectPlatform } from "../lib/keybindings.ts"
 import { basename, dirnameLike } from "../lib/paths.ts"
-import { Menu, MenuContent, MenuItem, MenuTrigger } from "./ui/Menu.tsx"
+import { Menu, MenuContent, MenuItem, MenuSeparator, MenuTrigger } from "./ui/Menu.tsx"
 
 // THE CONTEXT BAR — the top strip inside a prompt box in an editor's sidebar (plans/vscode-extension.md
 // § The editor in the sidebar). It shows what the editor around the sidebar has in front, live from
@@ -40,13 +41,17 @@ export function EditorContextBar({ box }: { box: ContextBox }) {
 
 function Bar({ box }: { box: ContextBox }) {
   const { active, open, share: sending } = useEditorContext()
+  // The file's problems and the terminal's last command (lib/editorReach.ts), offered in the chevron's
+  // menu above the open files — so the chevron is there whenever either is, even with no file open.
+  const extras = useEditorExtras()
+  const more = open.length > 0 || Boolean(extras.problems || extras.terminal)
   const reading = contextBarReading(active)
   const chord = useMemo(() => editorAddChord(detectPlatform()), [])
   const hints = barHints({ sending, selection: reading?.kind === "selection", withheld: active?.withheld === true, chord })
   // Registered by its strip, so ⌘I typed in this box presses it (lib/editorContext.ts addEditorContextByKey).
   // ⌘L typed here is not the bar's: it goes back to the editor, as Cursor's does (lib/embedKeys.ts).
   const strip = useRef<HTMLDivElement>(null)
-  const drawn = Boolean(reading || open.length)
+  const drawn = Boolean(reading || more)
   useEffect(() => {
     if (!drawn || !strip.current) return
     return registerContextBar(strip.current, { key: box.key, projectDir: box.projectDir, surface: box.surface })
@@ -87,7 +92,7 @@ function Bar({ box }: { box: ContextBox }) {
             title={active?.untitled ? `${reading.where} isn't saved, so it can't be added here` : `Add ${reading.where}${reading.range} at the caret (${chord} in the editor)`}
             // 7px, not 6, on the right when the chevron follows: its glyph carries 0.88px of side
             // bearing, and the rule between them should sit centred in ink (6.88 | 6.88, sans).
-            className={`flex min-w-0 items-baseline gap-1 pl-1.5 transition-colors ${FOCUS} ${open.length ? "rounded-l-md pr-[7px]" : "rounded-md pr-1.5"} ${hover}`}
+            className={`flex min-w-0 items-baseline gap-1 pl-1.5 transition-colors ${FOCUS} ${more ? "rounded-l-md pr-[7px]" : "rounded-md pr-1.5"} ${hover}`}
           >
             {/* One glyph in both states: it is the same file either way, and the pill lighting up IS the
                 news that lines are selected. (Lucide's TextSelect was tried for the selection: at this
@@ -99,8 +104,8 @@ function Bar({ box }: { box: ContextBox }) {
             {reading.count && <span className={`shrink-0 ${lit ? "text-accent/70" : ""} ${struck}`}>{reading.count}</span>}
           </button>
         )}
-        {reading && open.length > 0 && <span aria-hidden className="my-1.5 w-px shrink-0 bg-current opacity-20" />}
-        {open.length > 0 && <OpenFiles box={box} open={open} labelled={!reading} hover={hover} />}
+        {reading && more && <span aria-hidden className="my-1.5 w-px shrink-0 bg-current opacity-20" />}
+        {more && <OpenFiles box={box} open={open} extras={extras} labelled={!reading} hover={hover} />}
       </div>
       {hints.length > 0 && <Hint variants={hints} />}
     </div>
@@ -138,31 +143,54 @@ function SendToggle({ sending }: { sending: boolean }) {
   )
 }
 
-/** The other files open in the editor, each one a whole-file chip. Labelled when it is all the bar has. */
-function OpenFiles({ box, open, labelled, hover }: { box: ContextBox; open: EditorContextState["open"]; labelled: boolean; hover: string }) {
-  const count = `${open.length} open ${open.length === 1 ? "file" : "files"}`
+/**
+ * The other files open in the editor, each one a whole-file chip — after the file's problems and the
+ * terminal's last command when the editor has them, each one chip (`@problems`, `@terminal`). Labelled
+ * when it is all the bar has.
+ */
+function OpenFiles({ box, open, extras, labelled, hover }: { box: ContextBox; open: EditorContextState["open"]; extras: EditorExtrasState; labelled: boolean; hover: string }) {
+  const count = open.length ? `${open.length} open ${open.length === 1 ? "file" : "files"}` : ""
+  const hasExtras = Boolean(extras.problems || extras.terminal)
+  const title = hasExtras ? `More to add${count ? ` (${count})` : ""}` : `Add an open file (${count})`
   return (
     <Menu>
       <MenuTrigger asChild>
         <button
           type="button"
           data-editor-open-files
-          aria-label={`Add an open file (${count})`}
-          title={`Add an open file (${count})`}
+          aria-label={title}
+          title={title}
           className={`flex shrink-0 items-baseline transition-colors ${FOCUS} ${labelled ? "gap-0.5 rounded-md px-1.5" : "rounded-r-md px-1"} ${hover} data-[state=open]:bg-panel-2 data-[state=open]:text-fg`}
         >
           {/* The chevron rides a text baseline like every glyph beside text. Alone in the split's right
               half it has no text of its own, and a baseline row then took its BOX bottom as the
               baseline — it rode 3px high; centred on the control instead it sat 0.5px low of the
               reading's cap band. A zero-width space gives it the reading's own baseline: 0.00px. */}
-          {labelled ? count : <span aria-hidden>{"\u200b"}</span>}
+          {labelled ? count || "More to add" : <span aria-hidden>{"\u200b"}</span>}
           <ChevronDown aria-hidden size="1em" strokeWidth={2.25} className={MARK} />
         </button>
       </MenuTrigger>
       {/* Kept 8px off the frame's edges: a sidebar is narrow enough that the menu usually has to shift. */}
       <MenuContent align="start" collisionPadding={8}>
         <div className="max-h-72 max-w-[min(26rem,calc(100vw-24px))] overflow-y-auto">
-          <div className="px-2.5 pb-1 pt-1 text-[11px] text-muted-55">Add an open file</div>
+          {extras.problems && (
+            <MenuItem onSelect={() => requestEditorContext(box, { what: "problems" })}>
+              <span data-editor-extra="problems" title={`Add the problems in ${extras.problems.label}`} className="flex min-w-0 items-baseline gap-1.5">
+                <span className="shrink-0">Add problems in this file</span>
+                <span className="min-w-0 truncate text-[11px] text-muted-55">{problemCountsLabel(extras.problems)}</span>
+              </span>
+            </MenuItem>
+          )}
+          {extras.terminal && (
+            <MenuItem onSelect={() => requestEditorContext(box, { what: "terminal" })}>
+              <span data-editor-extra="terminal" title={extras.terminal.command ? `Add ${extras.terminal.command} and its output` : "Add the last command and its output"} className="flex min-w-0 items-baseline gap-1.5">
+                <span className="shrink-0">Add last terminal command</span>
+                {extras.terminal.command && <span className="min-w-0 truncate text-[11px] text-muted-55">{extras.terminal.command}</span>}
+              </span>
+            </MenuItem>
+          )}
+          {hasExtras && open.length > 0 && <MenuSeparator />}
+          {open.length > 0 && <div className="px-2.5 pb-1 pt-1 text-[11px] text-muted-55">Add an open file</div>}
           {open.map((file) => (
             <MenuItem key={file.path} onSelect={() => requestEditorContext(box, { what: "file", path: file.path })}>
               <span data-editor-open-file={file.label} title={file.label} className="flex min-w-0 items-baseline gap-1.5">

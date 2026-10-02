@@ -19,7 +19,7 @@ import {
   type ServerEvent,
   type ThreadView,
 } from "@frizz/shared"
-import { createEditorBridge, EDITOR_MAX_WINDOWS, listEditorProjects, type EditorBridgeDeps } from "./editor-bridge.ts"
+import { attentionNeeds, createEditorBridge, EDITOR_MAX_WINDOWS, listEditorProjects, type EditorBridgeDeps } from "./editor-bridge.ts"
 import { HOME_WORKSPACE_ID } from "./home-workspace.ts"
 
 // The bridge against a REAL http server and REAL `ws` clients standing in for editor windows: the
@@ -255,8 +255,9 @@ test("a hello is answered with welcome then projects, and a projects change is r
   s.ws.send(JSON.stringify({ t: "hello", v: 1, windowId: "raw", app: "Cursor", extensionVersion: "1", folders: [], focused: false, acceptsOpens: true, home: HOME, platform: "linux" }))
   await until(() => got.length >= 2, "welcome and projects")
   assert.deepEqual(got.slice(0, 2), [
-    // `features`: what this server takes beyond v1, so a new extension sends the `editor` frame only here.
-    { t: "welcome", v: 1, bootId: "boot-1", features: ["editor-state", "editor-selection-withheld", "review"] },
+    // `features`: what this server takes beyond v1, so a new extension sends the `editor` frame only here,
+    // frames this server's page in its sidebar, and says whether it shows needs-you notifications.
+    { t: "welcome", v: 1, bootId: "boot-1", features: ["editor-state", "editor-selection-withheld", "review", "sidebar", "attention"] },
     { t: "projects", projects: [{ id: "p1", slug: "alpha", name: "Alpha", dir: "/work/alpha", ready: 1, working: 0 }] },
   ])
   // Unchanged: nothing more across several polls.
@@ -591,7 +592,8 @@ test("`editors` is published when a window comes, goes or changes what the page 
   const h = await harness(t)
   const editorsEvents = () => h.published.filter((e): e is Extract<ServerEvent, { type: "editors" }> => e.type === "editors").map((e) => e.windows)
   const a = await editor(h.port, { app: "Visual Studio Code - Insiders" })
-  assert.deepEqual(editorsEvents(), [[{ app: "Visual Studio Code - Insiders", kind: "vscode", acceptsOpens: true }]])
+  // The extension's build rides along, so the page (and anyone asking `editorWindows`) can say which one a window runs.
+  assert.deepEqual(editorsEvents(), [[{ app: "Visual Studio Code - Insiders", kind: "vscode", acceptsOpens: true, extensionVersion: "0.0.1" }]])
   const b = await editor(h.port, { app: "Windsurf" })
   assert.equal(editorsEvents().length, 2)
   b.state({ focused: true })
@@ -600,12 +602,97 @@ test("`editors` is published when a window comes, goes or changes what the page 
   b.state({ acceptsOpens: false })
   await until(() => editorsEvents().length === 3, "the acceptsOpens change")
   assert.deepEqual(h.bridge.windows(), [
-    { app: "Visual Studio Code - Insiders", kind: "vscode", acceptsOpens: true },
-    { app: "Windsurf", kind: "windsurf", acceptsOpens: false },
+    { app: "Visual Studio Code - Insiders", kind: "vscode", acceptsOpens: true, extensionVersion: "0.0.1" },
+    { app: "Windsurf", kind: "windsurf", acceptsOpens: false, extensionVersion: "0.0.1" },
   ])
   a.ws.close()
   await until(() => editorsEvents().length === 4, "the disconnect")
-  assert.deepEqual(editorsEvents().at(-1), [{ app: "Windsurf", kind: "windsurf", acceptsOpens: false }])
+  assert.deepEqual(editorsEvents().at(-1), [{ app: "Windsurf", kind: "windsurf", acceptsOpens: false, extensionVersion: "0.0.1" }])
+})
+
+/** A project's bus as the bridge hears it, counting its listeners so a test can see a subscription end. */
+function countingBus() {
+  const listeners = new Set<(event: ServerEvent) => void>()
+  return {
+    listeners,
+    subscribe(listener: (event: ServerEvent) => void) {
+      listeners.add(listener)
+      return () => listeners.delete(listener)
+    },
+    publish(event: ServerEvent) {
+      for (const listener of listeners) listener(event)
+    },
+  }
+}
+
+const queuedView = (id: string, extra: Partial<ThreadView> = {}) =>
+  ({ id, title: id, kind: "session", needsYou: true, state: "active", aiTitle: "Tidy the sample loop", titleNamed: true, ...extra }) as unknown as ThreadView
+
+test("a thread that needs the human is told to ONE window: of those listening that have its project open, the one used last", async (t) => {
+  const dirs = tree(t)
+  const bus = countingBus()
+  let threads: ThreadView[] = []
+  const h = await harness(t, { projectsPollMs: 20, openProjects: () => [{ id: "p1", dir: dirs.mono, bus, board: { snapshot: async () => ({ threads }) } }] })
+  const needsYou = (slug: string, body?: string) => bus.publish({ type: "notify", slug, kind: "needs-decision", title: slug, ...(body ? { body } : {}) })
+  const attentions = (win: Awaited<ReturnType<typeof editor>>) => win.frames.filter((m) => m.t === "attention")
+  const settle = () => new Promise((resolve) => setTimeout(resolve, 60))
+
+  // The project's folder, a package inside it (a window opened on a thread's worktree is the same case),
+  // and a window on something else entirely.
+  const whole = await editor(h.port, { folders: [dirs.mono] })
+  const inside = await editor(h.port, { folders: [dirs.pkg] })
+  const elsewhere = await editor(h.port, { folders: [dirs.other], focused: true })
+  await settle()
+  assert.equal(bus.listeners.size, 0, "nobody listens yet, so no bus is heard")
+
+  for (const win of [whole, inside, elsewhere]) win.send({ t: "listen", attention: true })
+  await until(() => bus.listeners.size === 1, "the open project's bus heard")
+  inside.state({ folders: [dirs.pkg], focused: true })
+  inside.state({ folders: [dirs.pkg], focused: false })
+  h.advance(10)
+  threads = [queuedView("tidy", { pendingQuestion: true })]
+  needsYou("tidy", "Which branch should I merge into?")
+  const told = await inside.next("attention")
+  assert.deepEqual(told, {
+    t: "attention",
+    projectId: "p1",
+    thread: { id: "tidy", title: "tidy", aiTitle: "Tidy the sample loop", titleNamed: true },
+    needs: "question",
+    body: "Which branch should I merge into?",
+  })
+  await settle()
+  assert.equal(attentions(whole).length + attentions(elsewhere).length, 0, "one window: the one used last of those with the project, never one without it")
+
+  // Answered before the board was read again: no longer news.
+  threads = [queuedView("tidy", { needsYou: false })]
+  needsYou("tidy")
+  // Not the needs-you edge: a turn ending is what the page announces separately, and the queue entry follows.
+  threads = [queuedView("other")]
+  bus.publish({ type: "notify", slug: "other", kind: "turn-done", title: "other" })
+  await settle()
+  assert.equal(attentions(inside).length, 0)
+
+  // The window used last stops listening (frizz.notify off): the next one with the project open is told.
+  inside.send({ t: "listen", attention: false })
+  await settle()
+  needsYou("other")
+  assert.equal((await whole.next("attention")).thread.id, "other")
+  assert.equal(attentions(elsewhere).length, 0)
+
+  // The last listener with the project gone: the bus is let go.
+  for (const win of [whole, inside, elsewhere]) win.ws.close()
+  await until(() => bus.listeners.size === 0, "the bus let go with the last listening window")
+})
+
+test("what a queued thread needs, most pressing first, from the queue's own urgency reasons", () => {
+  assert.equal(attentionNeeds(queuedView("a")), "ready", "a turn that finished")
+  assert.equal(attentionNeeds(queuedView("a", { pendingQuestion: true })), "question")
+  assert.equal(attentionNeeds(queuedView("a", { questions: [{ id: "q1" }] } as Partial<ThreadView>)), "question")
+  assert.equal(attentionNeeds(queuedView("a", { actionableInteraction: true, pendingQuestion: true })), "approval")
+  assert.equal(attentionNeeds(queuedView("a", { runtime: "perm-prompt" })), "approval")
+  assert.equal(attentionNeeds(queuedView("a", { terminals: [{ awaitingInput: true }], actionableInteraction: true } as Partial<ThreadView>)), "terminal")
+  assert.equal(attentionNeeds(queuedView("a", { crashed: true })), "stopped")
+  assert.equal(attentionNeeds(queuedView("a", { limitPause: {} } as Partial<ThreadView>)), "limit")
 })
 
 test("review: only a window that said it can, the one holding the checkout first, then the project, then the one used last", async (t) => {

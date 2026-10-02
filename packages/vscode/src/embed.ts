@@ -5,6 +5,8 @@
 
 import { isAbsolute } from "node:path"
 import {
+  EMBED_MAX_DROPPED,
+  EMBED_MAX_QUERY,
   EMBED_PARAM,
   EMBED_PROTOCOL_VERSION,
   EMBED_THEME_PARAM,
@@ -114,7 +116,7 @@ export function parsePageMessage(value: unknown, origin?: string): EmbedPageMess
     }
     case "frizz:add-context": {
       const { what, path } = value
-      if (what === "selection") return path === undefined ? { type: "frizz:add-context", what } : undefined
+      if (what === "selection" || what === "problems" || what === "terminal") return path === undefined ? { type: "frizz:add-context", what } : undefined
       if (what !== "file" || typeof path !== "string" || !path || path.length > MAX_FIELD || path.includes("\0")) return undefined
       if (!(isAbsolute(path) || /^[A-Za-z]:[\\/]/u.test(path))) return undefined
       return { type: "frizz:add-context", what, path }
@@ -135,6 +137,18 @@ export function parsePageMessage(value: unknown, origin?: string): EmbedPageMess
       if (typeof thread !== "string" || typeof project !== "string" || !SLUG.test(thread) || !SLUG.test(project)) return undefined
       if (title !== undefined && (typeof title !== "string" || title.length > MAX_TITLE)) return undefined
       return { type: "frizz:review", thread, project, ...(title ? { title } : {}) }
+    }
+    case "frizz:pick-context": {
+      // A search (`query`) or a drop (`uris`), never both: a drop names exactly what to add.
+      const { id, query, uris } = value
+      if (typeof id !== "string" || !id || id.length > 200) return undefined
+      if (query !== undefined) {
+        if (uris !== undefined || typeof query !== "string" || query.length > EMBED_MAX_QUERY) return undefined
+        return { type: "frizz:pick-context", id, query }
+      }
+      if (!Array.isArray(uris) || uris.length === 0 || uris.length > EMBED_MAX_DROPPED) return undefined
+      if (!uris.every((uri) => typeof uri === "string" && uri.length > 0 && uri.length <= MAX_FIELD && !uri.includes("\0"))) return undefined
+      return { type: "frizz:pick-context", id, uris: uris as string[] }
     }
   }
   return undefined

@@ -728,7 +728,10 @@ function EditorConnectedHint() {
   // The select's own order (Cursor, then VS Code), whichever window connected first.
   const names = (["cursor", "vscode"] as const).filter((kind) => connected.has(kind)).map((kind) => EDITOR_OPENER_LABEL[kind])
   if (names.length === 0) return null
-  return <span data-editor-connected className="text-[11px] text-muted-70">{names.join(" and ")} {names.length > 1 ? "are" : "is"} connected.</span>
+  // Which build of the extension each window runs, on hover: "is this window running the fix?" is
+  // answered here as well as in the editor's own status bar.
+  const builds = [...new Set(editorWindows.flatMap((window) => (window.extensionVersion ? [`${window.app}: Frizz extension ${window.extensionVersion}`] : [])))]
+  return <span data-editor-connected title={builds.length ? builds.join("\n") : undefined} className="text-[11px] text-muted-70">{names.join(" and ")} {names.length > 1 ? "are" : "is"} connected.</span>
 }
 
 // Quiet, small permission-state line under the notifications toggle. Everything is muted (the old

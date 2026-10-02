@@ -144,7 +144,7 @@ export async function seedSidebarStack(options: { stack: Stack; workspace: Stack
 /**
  * A thread working in its OWN git worktree of the workspace, at `.frizz/worktrees/<slug>` as Frizz's
  * worktree hook makes one — for the run whose window is opened ON that worktree (e2e-sidebar.ts
- * `--worktree`, check c10). No worker: the transcript's `cwd` is the worktree, and that is what the REAL
+ * `--worktree`, check c12). No worker: the transcript's `cwd` is the worktree, and that is what the REAL
  * tailer lifts into the thread's `checkout`, exactly as it does for a Claude worker that works there.
  * Resolves once the board says the thread works in that worktree, so the window opened next finds it.
  *

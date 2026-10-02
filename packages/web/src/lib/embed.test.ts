@@ -84,6 +84,13 @@ test("host messages are accepted in the contract's shapes only", () => {
   assert.deepEqual(parseHostMessage({ ...context, active: { ...file, cursorLine: 2, dirty: true } }), { ...context, active: { ...file, cursorLine: 2, dirty: true } })
   // The extension's own state: the one switch, and whose Alt+K it is.
   assert.deepEqual(parseHostMessage({ type: "frizz:host-state", shareEditor: false, altK: true, extra: 1 }), { type: "frizz:host-state", shareEditor: false, altK: true })
+  const picks = { type: "frizz:context-picks", id: "n1", files: [{ ...file, folder: true }, { path: "/repo/b.ts", label: "b.ts" }] }
+  assert.deepEqual(parseHostMessage({ ...picks, extra: 1 }), picks)
+  assert.deepEqual(parseHostMessage({ type: "frizz:context-picks", id: "n1", files: [] }), { type: "frizz:context-picks", id: "n1", files: [] })
+  const extras = { type: "frizz:editor-extras", problems: { label: "src/a.ts", errors: 2, warnings: 0, infos: 1 }, terminal: { command: "nub run test", exitCode: 1 } }
+  assert.deepEqual(parseHostMessage(extras), extras)
+  assert.deepEqual(parseHostMessage({ type: "frizz:editor-extras" }), { type: "frizz:editor-extras" })
+  assert.deepEqual(parseHostMessage({ type: "frizz:editor-extras", terminal: {} }), { type: "frizz:editor-extras", terminal: {} })
 
   const refused: unknown[] = [
     null,
@@ -124,6 +131,18 @@ test("host messages are accepted in the contract's shapes only", () => {
     { ...context, active: { ...file, withheld: true, selection: { startLine: 3, endLine: 9, chars: 4, text: "API_KEY=1" } } },
     { type: "frizz:host-state", shareEditor: "on", altK: true },
     { type: "frizz:host-state", shareEditor: true },
+    { ...picks, id: "" },
+    { ...picks, files: "a.ts" },
+    { ...picks, files: [{ path: "/repo/a.ts" }] },
+    { ...picks, files: [{ ...file, folder: false }] },
+    { ...picks, files: Array.from({ length: 31 }, () => file) },
+    { ...extras, problems: { ...extras.problems, errors: -1 } },
+    { ...extras, problems: { ...extras.problems, label: "" } },
+    { ...extras, problems: { label: "a.ts", errors: 1 } },
+    { ...extras, terminal: { command: "" } },
+    { ...extras, terminal: { command: "x".repeat(201) } },
+    { ...extras, terminal: { exitCode: 1.5 } },
+    { ...extras, terminal: "nub run test" },
   ]
   for (const message of refused) assert.equal(parseHostMessage(message), null, JSON.stringify(message)?.slice(0, 120))
 })
