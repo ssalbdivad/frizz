@@ -2878,7 +2878,9 @@ export function AgentBlock({
   return (
     <div className="frizz-bash">
       <ToolDisclosureHeader
-        className="frizz-bash-header"
+        // `@container`: the profile reading below gives way to the header's OWN width, not the viewport's —
+        // a 300px VS Code sidebar draws this header 243px wide, a phone's drawer 318px, the desktop's 662px.
+        className="frizz-bash-header @container"
         controls={bodyId}
         expanded={open}
         label={`${open ? "Collapse" : "Expand"} ${kind} dispatch: ${title}`}
@@ -2900,8 +2902,13 @@ export function AgentBlock({
             <>
               {profile && (
                 <span
+          //
+          // BELOW 18rem OF HEADER the profile and its `·` drop out and the runtime stays: at 243px (a 300px
+          // VS Code sidebar) `opus › high · 1h 15m` left the title 0px of its own and the title's text was
+          // drawn UNDER the reading, overlapping it by 9-19.7px. The runtime is what says the child ran
+          // and stopped; the profile is still in the sub-agent's drawer, one click away.
                   data-subagent-profile
-                  className="petite-caps frizz-tool-header-caps shrink-0 whitespace-nowrap text-[11.5px] leading-none text-muted-55"
+                  className="petite-caps frizz-tool-header-caps shrink-0 whitespace-nowrap text-[11.5px] leading-none text-muted-55 @max-[18rem]:hidden"
                   title={`Sub-agent profile: ${profile}`}
                 >
                   {profile}
@@ -2913,7 +2920,7 @@ export function AgentBlock({
                   row's flex gap while the reading's identical dot ("stopped · 41 min") is spaced by two
                   text spaces, and the two rhythms did not agree — measured 8.91/8.26px of ink against
                   the text one's 6.51/7.01. Trimmed, they read as one chain (6.9/6.3). */}
-              {profile && reading && <span aria-hidden className="petite-caps frizz-tool-header-caps -mx-[2px] shrink-0 text-[11.5px] leading-none text-muted-55">·</span>}
+              {profile && reading && <span aria-hidden className="petite-caps frizz-tool-header-caps -mx-[2px] shrink-0 text-[11.5px] leading-none text-muted-55 @max-[18rem]:hidden">·</span>}
               {reading && (
                 <ToolMetaReading
                   tone={reading.tone === "failed" ? "frizz-tool-failed" : "text-muted-55"}
@@ -2942,12 +2949,12 @@ export function AgentBlock({
             // The profile renders in the header now, so this tooltip is back to naming its own action.
             title={kind === "Workflow" ? "Open workflow agents" : "Open sub-agent transcript"}
             onClick={openDrawer}
-            className="min-w-[4rem] flex-1 truncate text-left text-[11.5px] text-muted outline-none hover:underline hover:text-fg/80 focus-visible:underline focus-visible:text-fg/80"
+            className="min-w-0 flex-1 truncate text-left text-[11.5px] text-muted outline-none hover:underline hover:text-fg/80 focus-visible:underline focus-visible:text-fg/80"
           >
             {title}
           </button>
         ) : (
-          <span className="min-w-[4rem] flex-1 truncate text-[11.5px] text-muted" title={title}>{title}</span>
+          <span className="min-w-0 flex-1 truncate text-[11.5px] text-muted" title={title}>{title}</span>
         )}
       </ToolDisclosureHeader>
       <div id={bodyId} hidden={!open}>
