@@ -4623,8 +4623,16 @@ test("tailer: the real shell probe is async — the verdict lands on the NEXT ti
     t.tick()
     // The read is what queues the probe — `shellIsGone` is reached through assembly, not through tick.
     const first = t.get("t")?.bgShells[0]?.state
-    // Let the batched probe run and land in the cache, then read it again.
-    await new Promise((r) => setTimeout(r, 2000))
+    // Wait for the batched probe to land, then read it again. It announces itself: a batch that came
+    // back with any verdict calls onChange, and nothing else in this harness changes after the tick.
+    // This used to be a fixed 2s sleep, which lost the race under the full suite's load — lsof walks
+    // every process (0.53s idle on the maintainer's WSL box, 2026-10-02) and it failed there with the
+    // verdict still in flight. The deadline sits past the probe's own 8s exec timeout, so a probe that
+    // never answers still fails here rather than hanging.
+    const changes = h.changes.n
+    const deadline = Date.now() + 10_000
+    while (h.changes.n === changes && Date.now() < deadline) await new Promise((r) => setTimeout(r, 25))
+    assert.notEqual(h.changes.n, changes, "the batched probe never reported a verdict")
     return { first, second: t.get("t")?.bgShells[0]?.state }
   }
 
