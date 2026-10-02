@@ -70,37 +70,26 @@ export type EmbedSurface = "sideBar" | "editor"
  * The theme colours the page takes, in VS Code's own names (`--vscode-<name>` on a webview document; the
  * theme colour id with its dots as dashes). What each one becomes on the page: packages/web/src/theme.css
  * § The editor's colours. Measured on a real VS Code 1.140 across ten built-in themes (2026-10-02): every
- * one of these is set by every dark and light theme but a handful (`sideBar-foreground`, `sideBar-border`,
- * `input-border`, `widget-border` are often unset), and the page derives what a theme leaves out.
+ * one of these is set by every dark and light theme but `sideBar-foreground` and `input-border` (often
+ * unset) and `contrastBorder` (high contrast only), and the page derives what a theme leaves out. Only
+ * what theme.css reads is here: every name is one more thing a parent can set.
  */
 export const EMBED_THEME_COLORS = [
   "sideBar-background",
   "sideBar-foreground",
   "editor-background",
-  "editor-foreground",
   "foreground",
   "descriptionForeground",
   "panel-border",
-  "sideBar-border",
   "contrastBorder",
-  "input-background",
   "input-border",
-  "input-placeholderForeground",
   "list-hoverBackground",
-  "list-activeSelectionBackground",
   "button-background",
   "button-foreground",
   "focusBorder",
   "textLink-foreground",
-  "textCodeBlock-background",
-  "menu-background",
-  "menu-border",
-  "badge-background",
-  "badge-foreground",
   "scrollbarSlider-background",
   "scrollbarSlider-hoverBackground",
-  "editor-selectionBackground",
-  "chat-requestBubbleBackground",
 ] as const
 
 export type EmbedThemeColor = (typeof EMBED_THEME_COLORS)[number]

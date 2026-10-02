@@ -218,7 +218,13 @@ What embedding needed, each found by the spike:
   not flip to the desktop page. A code-file link opens in the window that holds the sidebar
   (`frizz:open-file`), whatever External app says: the phone layout's "the desk is not here" gate is
   false in an editor, and so is the server's choice of window. The theme is VS Code's, for the session, never persisted (the frame's
-  storage is partitioned from the browser's anyway). Web links go out through `env.openExternal`, since
+  storage is partitioned from the browser's anyway) — its kind AND its colours (`frizz.matchEditorTheme`, on
+  by default; 2026-10-02, after a blue-black theme's #080d17 side bar framed Frizz's #0d0e10 as a foreign
+  panel). VS Code's API names only the kind, so the RELAY reads the colours off the `--vscode-*` properties
+  VS Code writes on its webview document, adds them to every `frizz:theme`, re-posts on a theme switch (a
+  MutationObserver), and puts the first on the frame's address as a fragment for the first paint; the page
+  takes an allowlisted set of plain colour values and theme.css § The editor's colours maps them onto its
+  tokens (surfaces derived from the theme's background, status colours kept). Web links go out through `env.openExternal`, since
   a webview cannot open a window. Browser notifications, which a frame cannot raise, are not attempted.
 - **Selections reach the sidebar directly.** A held item is claimed by whichever page has FOCUS, and a
   sidebar does not have it while the human works in the editor: the item waited, a browser tab could take

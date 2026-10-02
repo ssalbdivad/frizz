@@ -970,6 +970,11 @@ a[href] {
   border: 0;
   background: transparent;
 }
+/* In the editor's colours (theme.css § The editor's colours) a link is the theme's own link colour — what
+   VS Code draws its links in on the same surface — rather than its focus colour. */
+html[data-host-colors] :is(.md-body, .md-inline) :is(a, .local-file-action) {
+  color: var(--vscode-textLink-foreground, var(--color-accent));
+}
 /* The frame lib/markdown.ts mints around a local Markdown image. Its LOOK is entirely
    components/ImageFrame's — the same two class strings that component renders — so the only thing
    stated here is the `display` those classes don't carry, and it is needed only because the frame is a

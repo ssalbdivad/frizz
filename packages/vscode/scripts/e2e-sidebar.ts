@@ -13,7 +13,7 @@
 //   --dev    run the extension from the source tree (dist/ as scripts/build.ts makes it) instead of the
 //            packaged .vsix. The default is the .vsix, unpacked, because the maintainer's "the icon
 //            doesn't display" was a package with no icon in it: the source tree had it all along.
-//   --only   run only these checks (c1…c17); the boot, the seed and the view opening always run.
+//   --only   run only these checks (c1…c18); the boot, the seed and the view opening always run.
 //   --icon-before=<png>   an earlier top-dark activity-bar strip (1x enlarged 6x, as c1 writes it) to set
 //            beside this run's, for the eye.
 //   --worktree  open the window on a thread's git worktree (`.frizz/worktrees/<slug>` of the workspace)
@@ -70,6 +70,12 @@
 //   c17 a restart and a window reload (last: the test runner's VS Code ends with a reload, so the same
 //      profile is reopened by a VS Code of the harness's own): the framed page's localStorage survives
 //      both, and so does the eye, which is the VS Code setting
+//   c18 the editor's colours (frizz.matchEditorTheme): through Dark Modern, Light Modern, Tomorrow Night
+//      Blue, Solarized Dark, Abyss and both High Contrasts, the page follows live, its painted background
+//      is the side bar's pixel for pixel (sampled from the screenshot, beside the side bar's title row),
+//      and its text, secondary text and accent read; the setting off puts Frizz's palette back, on again
+//      the theme's. Shots of the side bar beside the editor: the queue, a thread with the reply box
+//      focused and a selection in the bar, the open-files menu. (Runs before c17, which ends the editor.)
 //
 // NEVER ON THE REAL DISPLAY. On Linux the run re-executes itself under `xvfb-run -a` with DISPLAY and
 // WAYLAND_DISPLAY removed (DISPLAY=:0 here is the maintainer's screen through WSLg). The editor gets its
@@ -2253,23 +2259,172 @@ try {
     await shot("c16-opened-thread-w300")
   })
 
-  // ── c18 PROBE (temporary): what VS Code puts on a webview document, per theme ──
-  await run("c18", "probe: the webview's theme variables", async () => {
-    const relay = () => tracedFrames().find((f) => f.name === "relay")!.frame
-    const dump: Record<string, unknown> = {}
-    for (const theme of ["Default Dark Modern", "Default Light Modern", "Tomorrow Night Blue", "Solarized Dark", "Solarized Light", "Abyss", "Default Dark+", "Monokai", "Default High Contrast", "Default High Contrast Light"]) {
-      await agent({ op: "config", section: "workbench", key: "colorTheme", value: theme })
-      await sleep(2_500)
-      dump[theme] = await relay().evaluate(() => {
-        const style = document.documentElement.style
-        const vars: Record<string, string> = {}
-        for (let i = 0; i < style.length; i++) { const name = style[i]!; if (name.startsWith("--vscode-")) vars[name] = style.getPropertyValue(name).trim() }
-        return { body: document.body.className, kind: document.body.dataset.vscodeThemeKind, html: document.documentElement.className, count: Object.keys(vars).length, vars }
+  // ── c18: the editor's colours ──
+  await run("c18", "the page wears the editor theme's colours, and Frizz's own with frizz.matchEditorTheme off", async () => {
+    // Where the page's background shows bare, in the WORKBENCH's pixels: a point whose element and every
+    // ancestor paint no background, in a 5x5 patch of one colour, in the frame's lower right (the list's
+    // empty tail). The page's (0,0) is the sidebar webview element's corner: VS Code's host document and
+    // the relay each frame the next full-bleed, and the relay's "hasn't loaded" bar is hidden.
+    const pagePixels = async (shot: Buffer) => {
+      const image = decodePng(shot)
+      const webview = await page.evaluate(() => {
+        const bar = document.querySelector(".part.sidebar")!.getBoundingClientRect()
+        const frames = [...document.querySelectorAll<HTMLElement>("iframe.webview")].map((f) => f.getBoundingClientRect()).filter((r) => r.width > 0 && r.left >= bar.left - 1 && r.right <= bar.right + 1)
+        const r = frames[0]
+        return r ? { x: r.left, y: r.top, w: r.width, h: r.height } : null
       })
+      if (!webview) throw new Error("no webview in the side bar")
+      const candidates = await inPage(() => {
+        const bare = (element: Element | null) => {
+          for (let e = element; e && e !== document.documentElement; e = e.parentElement) {
+            if (e === document.body) return true
+            const cs = getComputedStyle(e)
+            if (cs.backgroundColor !== "rgba(0, 0, 0, 0)" || cs.backgroundImage !== "none") return false
+          }
+          return true
+        }
+        const out: [number, number][] = []
+        for (let y = innerHeight - 8; y > innerHeight * 0.4 && out.length < 40; y -= 10) {
+          for (let x = innerWidth - 12; x > innerWidth * 0.5 && out.length < 40; x -= 10) if (bare(document.elementFromPoint(x, y))) out.push([x, y])
+        }
+        return out
+      })
+      const same = (a: number[], b: number[], tolerance = 1) => a.every((v, k) => Math.abs(v - b[k]!) <= tolerance)
+      for (const [x, y] of candidates) {
+        const [wx, wy] = [Math.round(webview.x + x), Math.round(webview.y + y)]
+        const centre = image.px(wx, wy)
+        let flat = true
+        for (let dx = -2; dx <= 2 && flat; dx++) for (let dy = -2; dy <= 2 && flat; dy++) flat = same(image.px(wx + dx, wy + dy), centre, 0)
+        if (flat) return { at: [wx, wy], rgb: centre }
+      }
+      return null
     }
-    writeFileSync(join(out, "c18-probe-vars.json"), JSON.stringify(dump, null, 2))
-    expect("c18", "probe wrote the variables", true)
-    await agent({ op: "config", section: "workbench", key: "colorTheme", value: "Default Dark Modern" })
+    // The side bar's own surface, beside the frame: its title row's left padding, before the label.
+    const sideBarPixel = async (shot: Buffer) => {
+      const title = await rectOf(".part.sidebar > .composite.title")
+      if (!title) throw new Error("no side bar title row")
+      const at = [title.x + 6, title.y + Math.round(title.height / 2)] as const
+      return { at, rgb: decodePng(shot).px(at[0], at[1]) }
+    }
+    // The page's own reading of its tokens, painted over its background in its own canvas: contrast ratios.
+    const legibility = async () => {
+      const painted = await inPage(() => {
+        const ctx = document.createElement("canvas").getContext("2d")!
+        const probe = document.createElement("div")
+        document.body.append(probe)
+        const paint = (token: string, under?: number[]) => {
+          probe.style.color = `var(--color-${token})`
+          ctx.clearRect(0, 0, 1, 1)
+          if (under) {
+            ctx.fillStyle = `rgb(${under.join(",")})`
+            ctx.fillRect(0, 0, 1, 1)
+          }
+          ctx.fillStyle = getComputedStyle(probe).color
+          ctx.fillRect(0, 0, 1, 1)
+          return [...ctx.getImageData(0, 0, 1, 1).data.slice(0, 3)]
+        }
+        const bg = paint("bg")
+        const out = { bg, fg: paint("fg", bg), muted: paint("muted", bg), faint: paint("faint", bg), accent: paint("accent", bg), panel2: paint("panel-2", bg), border: paint("border", bg) }
+        probe.remove()
+        return out
+      })
+      const lum = (c: number[]) => {
+        const [r, g, b] = c.map((v) => { const x = v / 255; return x <= 0.04045 ? x / 12.92 : ((x + 0.055) / 1.055) ** 2.4 })
+        return 0.2126 * r! + 0.7152 * g! + 0.0722 * b!
+      }
+      const ratio = (a: number[], b: number[]) => { const [hi, lo] = [lum(a), lum(b)].sort((x, y) => y - x); return Math.round(((hi! + 0.05) / (lo! + 0.05)) * 100) / 100 }
+      return { fg: ratio(painted.fg, painted.bg), muted: ratio(painted.muted, painted.bg), faint: ratio(painted.faint, painted.bg), accent: ratio(painted.accent, painted.bg), mutedOnPanel2: ratio(painted.muted, painted.panel2), border: ratio(painted.border, painted.bg), bg: painted.bg }
+    }
+    // The side bar with the editor beside it, at 1x, then the side bar at 2x.
+    const beside = async (name: string) => {
+      const bar = await rectOf(".part.activitybar")
+      const sidebar = await rectOf(".part.sidebar")
+      if (!bar || !sidebar) return
+      await page.mouse.move(sidebar.x + 2, sidebar.y + sidebar.height / 2)
+      await sleep(350)
+      await capture(join(out, `${version}-c18-${name}-beside.png`), { x: bar.x, y: sidebar.y - 36, width: sidebar.x + sidebar.width - bar.x + 420, height: Math.min(sidebar.height + 36, 760) }, 1)
+      await capture(join(out, `${version}-c18-${name}-w300.png`), sidebar, 2)
+    }
+    const hostColors = () => inPage(() => document.documentElement.dataset.hostColors ?? null)
+    const relayBackground = () => tracedFrames().find((f) => f.name === "relay")!.frame.evaluate(() => getComputedStyle(document.documentElement).getPropertyValue("--vscode-sideBar-background").trim())
+    const pageBackground = () => inPage(() => document.documentElement.style.getPropertyValue("--vscode-sideBar-background"))
+
+    await command("workbench.view.extension.frizz")
+    await waitFor("the Frizz view", async () => (await status()).sidebar.visible || undefined, 10_000)
+    await resetPage()
+    await openInEditor(files.a)
+    await openInEditor(files.sample)
+    expect("c18", "the page's address carries no theme fragment once it has read it", !(await inPage(() => location.hash)), await inPage(() => location.href))
+    const themes = [
+      { name: "Default Dark Modern", slug: "dark-modern", light: false, gallery: true },
+      { name: "Default Light Modern", slug: "light-modern", light: true, gallery: true },
+      { name: "Tomorrow Night Blue", slug: "tomorrow-night-blue", light: false, gallery: true },
+      { name: "Solarized Dark", slug: "solarized-dark", light: false, gallery: false },
+      { name: "Abyss", slug: "abyss", light: false, gallery: false },
+      { name: "Default High Contrast", slug: "hc-dark", light: false, gallery: true },
+      { name: "Default High Contrast Light", slug: "hc-light", light: true, gallery: false },
+    ]
+    const readings: Record<string, unknown> = {}
+    try {
+      for (const theme of themes) {
+        const at = Date.now()
+        await agent({ op: "config", section: "workbench", key: "colorTheme", value: theme.name })
+        // Followed when the page's own copy of the side bar's colour is the relay's, live, with no reload.
+        const followed = await until(async () => (await hostColors()) === "sideBar" && (await inPage(() => document.documentElement.dataset.theme)) === (theme.light ? "light" : "dark") && (await pageBackground()) === (await relayBackground()), 8_000)
+        const ms = Date.now() - at
+        await resetPage()
+        await sleep(500)
+        const shot = await capture("")
+        const pagePx = await pagePixels(shot)
+        const barPx = await sideBarPixel(shot)
+        const read = await legibility()
+        readings[theme.slug] = { ms, sideBarVar: await relayBackground(), page: pagePx, sideBar: barPx, contrast: read }
+        expect("c18", `${theme.name}: the page follows the theme live`, followed, { ms })
+        expect("c18", `${theme.name}: the page's background is the side bar's, pixel for pixel`, !!pagePx && pagePx.rgb.every((v, k) => Math.abs(v - barPx.rgb[k]!) <= 1), readings[theme.slug])
+        // Text at AA or better, the secondary text clearly below the primary, the accent readable as type.
+        expect("c18", `${theme.name}: the text reads (text ≥ 7:1, secondary 4.5:1 and below the text, accent ≥ 4.5:1)`, read.fg >= 7 && read.muted >= 4.5 && read.muted < read.fg && read.accent >= 4.5, read)
+        await beside(`${theme.slug}-queue`)
+        if (theme.gallery) {
+          await openThreadRow()
+          await openInEditor(files.sample)
+          await selectLines23()
+          await sleep(400)
+          await clickInPage('textarea[data-surface="chatComposer"]')
+          await sleep(300)
+          await beside(`${theme.slug}-thread-focused`)
+          await clickInComposer("chatComposer", "[data-editor-open-files]")
+          if (await until(async () => (await inPage(() => [...document.querySelectorAll("[data-editor-open-file]")].some((item) => item.getClientRects().length > 0))), 5_000)) {
+            await capture(join(out, `${version}-c18-${theme.slug}-menu-w300.png`), (await rectOf(".part.sidebar"))!, 2)
+            await press("Escape")
+          }
+          await resetPage()
+          await openInEditor(files.sample)
+        }
+      }
+      // frizz.matchEditorTheme off, in the theme the user asked about's family (blue-black): Frizz's own
+      // palette, its #0d0e10 canvas, against the theme's side bar; on again, the theme's.
+      await agent({ op: "config", section: "workbench", key: "colorTheme", value: "Abyss" })
+      await until(async () => (await pageBackground()) === (await relayBackground()), 8_000)
+      await agent({ op: "config", section: "frizz", key: "matchEditorTheme", value: false })
+      const off = await until(async () => (await hostColors()) === null, 8_000)
+      await sleep(400)
+      const offShot = await capture("")
+      const offPage = await pagePixels(offShot)
+      const offBar = await sideBarPixel(offShot)
+      expect("c18", "matchEditorTheme off: the page is back in Frizz's palette (#0d0e10), not the theme's", off && !!offPage && offPage.rgb.join() === "13,14,16" && offPage.rgb.join() !== offBar.rgb.join(), { page: offPage, sideBar: offBar })
+      await beside("abyss-setting-off-queue")
+      await agent({ op: "config", section: "frizz", key: "matchEditorTheme", value: true })
+      const on = await until(async () => (await hostColors()) === "sideBar", 8_000)
+      await sleep(400)
+      const onShot = await capture("")
+      const onPage = await pagePixels(onShot)
+      expect("c18", "…and on again, the theme's, without a reload", on && !!onPage && onPage.rgb.join() === (await sideBarPixel(onShot)).rgb.join() && (await status()).sidebar.ready, { page: onPage })
+    } finally {
+      notes.themeColours = readings
+      await agent({ op: "config", section: "frizz", key: "matchEditorTheme", value: null })
+      await agent({ op: "config", section: "workbench", key: "colorTheme", value: "Default Dark Modern" })
+      await until(async () => (await inPage(() => document.documentElement.dataset.theme)) === "dark", 8_000)
+    }
   })
 
   // ── c17: a restart and a window reload (LAST: it ends the agent's VS Code) ──
