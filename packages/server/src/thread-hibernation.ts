@@ -176,7 +176,9 @@ export function hibernationVerdict(
   // A send frizz has accepted but not yet watched land is text sitting in the DAEMON'S queue. Killing
   // the process throws it away, and the ledger row would go on claiming for an hour that the provider
   // holds it — the exact failure the dropped-input diagnostic exists to prevent, caused by frizz itself.
-  if (parseDeliveryLedger(row.delivery_ledger).some((d) => d.state === "pending" || d.state === "enqueued" || d.state === "unconfirmed")) {
+  // A write-ahead `sending` send is a delivery (often a cold resume) in progress right now. A `failed`
+  // one does NOT hold the daemon: its words are in the ledger, not the process.
+  if (parseDeliveryLedger(row.delivery_ledger).some((d) => d.state === "sending" || d.state === "pending" || d.state === "enqueued" || d.state === "unconfirmed")) {
     return { hibernate: false, blockedBy: "undelivered-input" }
   }
   const minDaemonAge = opts.minDaemonAgeMs ?? HIBERNATE_MIN_DAEMON_AGE_MS

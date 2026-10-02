@@ -38,7 +38,10 @@ import { ownedByThisPage } from "../lib/projectOwnership.ts"
 // cache is keyed by project too: two projects can each own a `fix-auth`. (The strip was left off that
 // card until 2026-09-28; maintainer: "being able to change model in the middle of a thread should be
 // possible anywhere".)
-export function useThreadComposerControls(slug: string, scopedThread?: ThreadView): { busy: boolean; footer: ReactNode; status: ReactNode } {
+//
+// ON A PHONE the strip is `phoneTools`: the model chip alone (it opens the phone's model sheet — the
+// ProfileGridSelector's own phone branch), with no permission picker. Permissions stay on the desktop.
+export function useThreadComposerControls(slug: string, scopedThread?: ThreadView): { busy: boolean; footer: ReactNode; phoneTools: ReactNode; status: ReactNode } {
   const snap = useSnapshot(store)
   const boardThread = snap.board?.threads.find((candidate) => candidate.id === slug)
   const thread = scopedThread ?? boardThread
@@ -82,7 +85,7 @@ export function useThreadComposerControls(slug: string, scopedThread?: ThreadVie
 
   // Legacy/rowless and foreign transcripts have no Frizz-owned runtime profile to mutate. Keep their
   // existing composer behavior, but never render a misleading disabled control.
-  if (!thread || thread.foreign || thread.kind !== "session") return { busy: localBusy, footer: null, status: null }
+  if (!thread || thread.foreign || thread.kind !== "session") return { busy: localBusy, footer: null, phoneTools: null, status: null }
 
   // The board's pending bit is authoritative across every mounted surface (queue + drawer + another
   // tab). A local React mutation alone cannot prevent a second composer from steering the pane during
@@ -168,6 +171,63 @@ export function useThreadComposerControls(slug: string, scopedThread?: ThreadVie
     })
   }
 
+  // The model control, shared by the desktop strip and the phone's tools: the grid selector for a
+  // Claude or Codex thread (a chip and a sheet on the phone — ProfileGridSelector branches itself),
+  // the agent's model dropdown for an ACP thread.
+  const profileControl = (
+    <>
+      {backend !== "acp" && (
+        <ProfileGridSelector
+          groups={profileGroups}
+          value={{ provider: backend, model, effort }}
+          pending={pendingModel || pendingEffort
+            ? { provider: backend, model: pendingModel, effort: pendingEffort }
+            : undefined}
+          onValueChange={({ model: nextModel, effort: nextEffort }) => changeProfile({ model: nextModel, effort: nextEffort })}
+          placeholder={profiles.isPending ? "Profile loading…" : "Profile unknown"}
+          ariaLabel="Thread model and effort"
+          menuAriaLabel={`Choose ${backend === "codex" ? "Codex" : "Claude Code"} model and effort`}
+          title={modelSelectable
+            ? thread.runtime === "exited"
+              ? "Saved per thread and applied when this conversation resumes"
+              : "Change this idle conversation's model and reasoning effort"
+            : "The current live backend profile is unavailable; controls fail closed"}
+          disabled={busy || !catalogLoaded || !modelSelectable || profiles.isError}
+          compact
+          side="top"
+          className="min-w-0 max-w-[min(72%,20rem)] px-1.5 py-0.5"
+          runningModelLabel={thread.runningModelLabel}
+          upgrade={thread.modelUpgrade && thread.runningModelLabel
+            ? {
+                latest: thread.modelUpgrade.label,
+                staged: thread.modelUpgrade.staged,
+                blockedReason: upgradeBlocked,
+                pending: upgrade.isPending,
+                onUpgrade: upgradeModel,
+              }
+            : undefined}
+        />
+      )}
+      {/* An ACP thread carries ONE control, the model inside its agent. The agent itself is not a
+          choice on a live thread — a session belongs to the process that opened it, exactly as a
+          thread never moves between Claude Code and Codex — so no pill names it as one (a disabled
+          agent pill stood here for a day and read as a switch; maintainer 2026-09-16: "that
+          shouldn't be possible"). The sidebar mark and the dropdown's tooltip say which agent. */}
+      {backend === "acp" && acpAgentId && (
+        <AcpModelSelect
+          agentId={acpAgentId}
+          agentLabel={acpAgentLabel ?? acpAgentId}
+          modelId={optimisticAcpModelId ?? acpModelId}
+          // The agent slug stays; only the tail changes. Effort is "" — an ACP thread has none.
+          onValueChange={(nextModelId) => changeProfile({ model: acpModelSlug(acpAgentId, nextModelId), effort: "" })}
+          disabled={busy}
+          side="top"
+          className="min-w-0 max-w-[min(72%,20rem)] px-1.5 py-0.5"
+        />
+      )}
+    </>
+  )
+
   return {
     busy,
     footer: (
@@ -180,55 +240,7 @@ export function useThreadComposerControls(slug: string, scopedThread?: ThreadVie
         // pair drift apart from each other.
         className="flex min-w-0 flex-1 flex-wrap items-center gap-x-1.5 gap-y-0.5"
       >
-        {backend !== "acp" && (
-          <ProfileGridSelector
-            groups={profileGroups}
-            value={{ provider: backend, model, effort }}
-            pending={pendingModel || pendingEffort
-              ? { provider: backend, model: pendingModel, effort: pendingEffort }
-              : undefined}
-            onValueChange={({ model: nextModel, effort: nextEffort }) => changeProfile({ model: nextModel, effort: nextEffort })}
-            placeholder={profiles.isPending ? "Profile loading…" : "Profile unknown"}
-            ariaLabel="Thread model and effort"
-            menuAriaLabel={`Choose ${backend === "codex" ? "Codex" : "Claude Code"} model and effort`}
-            title={modelSelectable
-              ? thread.runtime === "exited"
-                ? "Saved per thread and applied when this conversation resumes"
-                : "Change this idle conversation's model and reasoning effort"
-              : "The current live backend profile is unavailable; controls fail closed"}
-            disabled={busy || !catalogLoaded || !modelSelectable || profiles.isError}
-            compact
-            side="top"
-            className="min-w-0 max-w-[min(72%,20rem)] px-1.5 py-0.5"
-            runningModelLabel={thread.runningModelLabel}
-            upgrade={thread.modelUpgrade && thread.runningModelLabel
-              ? {
-                  latest: thread.modelUpgrade.label,
-                  staged: thread.modelUpgrade.staged,
-                  blockedReason: upgradeBlocked,
-                  pending: upgrade.isPending,
-                  onUpgrade: upgradeModel,
-                }
-              : undefined}
-          />
-        )}
-        {/* An ACP thread carries ONE control, the model inside its agent. The agent itself is not a
-            choice on a live thread — a session belongs to the process that opened it, exactly as a
-            thread never moves between Claude Code and Codex — so no pill names it as one (a disabled
-            agent pill stood here for a day and read as a switch; maintainer 2026-09-16: "that
-            shouldn't be possible"). The sidebar mark and the dropdown's tooltip say which agent. */}
-        {backend === "acp" && acpAgentId && (
-          <AcpModelSelect
-            agentId={acpAgentId}
-            agentLabel={acpAgentLabel ?? acpAgentId}
-            modelId={optimisticAcpModelId ?? acpModelId}
-            // The agent slug stays; only the tail changes. Effort is "" — an ACP thread has none.
-            onValueChange={(nextModelId) => changeProfile({ model: acpModelSlug(acpAgentId, nextModelId), effort: "" })}
-            disabled={busy}
-            side="top"
-            className="min-w-0 max-w-[min(72%,20rem)] px-1.5 py-0.5"
-          />
-        )}
+        {profileControl}
         {backend === "claude" && (
           <Select
             variant="readout"
@@ -261,6 +273,7 @@ export function useThreadComposerControls(slug: string, scopedThread?: ThreadVie
         )}
       </div>
     ),
+    phoneTools: profileControl,
     status: composerStatus ? (
           <div
             data-thread-control-error=""

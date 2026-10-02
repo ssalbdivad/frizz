@@ -1495,6 +1495,85 @@ test("followUp clears a stale `exited` stamp once the bridge has accepted the se
   h.storage.close()
 })
 
+// THE WRITE-AHEAD (delivery-ledger.ts). A ~4,000-character dictated steer was lost on 2026-09-30: the
+// cold resume threw, the ledger entry was written only AFTER a successful bridge call, and the browser's
+// draft — the only copy left — died with a Chrome restart. The server now holds the text before it
+// touches the transport, and a throw leaves it as a failed entry the operator can retry, edit or dismiss.
+test("a follow-up whose delivery throws keeps its full text on the server as a failed send", async () => {
+  const { h, slug } = restartHarness()
+  const dictated = "Please restructure the release notes so that each package gets its own section. ".repeat(50)
+  let ledgerAtCall: string | null | undefined
+  ;(h.ctx as { claudeBroker?: unknown }).claudeBroker = {
+    followUp: async () => {
+      ledgerAtCall = h.storage.getSession(slug)?.delivery_ledger
+      throw new Error("cold resume failed: the broker daemon exited during startup")
+    },
+  }
+  const error = await h.router.followUp
+    .handler({ input: { slug, sessionId: `sid-${slug}`, message: dictated, deliveryId: "d-dictated" } })
+    .then(() => null, (e: unknown) => e)
+  assert.ok(error instanceof Error, "the operator still hears that the send failed")
+  assert.equal((error as { deliveryKept?: unknown }).deliveryKept, true, "…and that the server kept the words")
+  assert.deepEqual(parseDeliveryLedger(ledgerAtCall).map((i) => [i.id, i.state]), [["d-dictated", "sending"]], "written BEFORE the transport was touched")
+  const [kept] = parseDeliveryLedger(h.storage.getSession(slug)?.delivery_ledger)
+  assert.equal(kept.state, "failed")
+  assert.equal(kept.text, dictated)
+  assert.equal(kept.error, "cold resume failed: the broker daemon exited during startup")
+  // Never retried on its own: a replay of the same id is answered without touching the transport.
+  let calls = 0
+  ;(h.ctx as { claudeBroker?: unknown }).claudeBroker = { followUp: async () => void calls++ }
+  await h.router.followUp.handler({ input: { slug, sessionId: `sid-${slug}`, message: dictated, deliveryId: "d-dictated" } })
+  assert.equal(calls, 0, "an ambiguous failure is never re-sent under its own id")
+  // The operator's Retry — a new id that supersedes it — delivers and replaces the failed entry.
+  await h.router.followUp.handler({ input: { slug, sessionId: `sid-${slug}`, message: dictated, deliveryId: "d-retry", supersedes: "d-dictated" } })
+  assert.equal(calls, 1)
+  assert.deepEqual(parseDeliveryLedger(h.storage.getSession(slug)?.delivery_ledger).map((i) => [i.id, i.state]), [["d-retry", "delivered"]])
+  h.storage.close()
+})
+
+test("a refusal BEFORE the write-ahead records nothing — the send never started", async () => {
+  const { h, slug } = restartHarness()
+  await assert.rejects(
+    h.router.followUp.handler({ input: { slug, sessionId: "sid-someone-else", message: "stale tab", deliveryId: "d-stale" } }),
+    (error: unknown) => (error as { deliveryKept?: unknown }).deliveryKept !== true,
+  )
+  assert.equal(h.storage.getSession(slug)?.delivery_ledger ?? null, null)
+  h.storage.close()
+})
+
+test("dismissFailedFollowUp removes a failed send and nothing else", async () => {
+  const { h, slug } = restartHarness()
+  ;(h.ctx as { claudeBroker?: unknown }).claudeBroker = { followUp: async () => { throw new Error("boom") } }
+  await assert.rejects(h.router.followUp.handler({ input: { slug, sessionId: `sid-${slug}`, message: "x", deliveryId: "d-1" } }))
+  assert.deepEqual(await h.router.dismissFailedFollowUp.handler({ input: { slug, deliveryId: "d-1" } }), { dismissed: true })
+  assert.deepEqual(await h.router.dismissFailedFollowUp.handler({ input: { slug, deliveryId: "d-1" } }), { dismissed: false })
+  assert.equal(h.storage.getSession(slug)?.delivery_ledger ?? null, null)
+  h.storage.close()
+})
+
+// Codex shared the gap: its ledger entry, too, was written only after `bridge.followUp` returned. The
+// write-ahead wraps every runtime branch, so a codex send that throws is kept exactly like a Claude one.
+test("a codex follow-up whose delivery throws is kept as a failed send too", async () => {
+  const h = harness()
+  const slug = "codex-kept"
+  h.storage.upsertSession(row(slug))
+  h.storage.setBackend(slug, "codex")
+  h.storage.setCodexRuntime(slug, "app-server")
+  ;(h.ctx as { codexAppServer?: unknown }).codexAppServer = {
+    binding: () => ({ state: "active", currentTurnId: null }),
+    turnLiveness: () => undefined,
+    resumeOwnedSession: async () => {},
+    followUp: async () => { throw new Error("turn/start timed out") },
+  }
+  const error = await h.router.followUp
+    .handler({ input: { slug, sessionId: `sid-${slug}`, message: "rebase and push", deliveryId: "d-codex" } })
+    .then(() => null, (e: unknown) => e)
+  assert.equal((error as { deliveryKept?: unknown }).deliveryKept, true)
+  const [kept] = parseDeliveryLedger(h.storage.getSession(slug)?.delivery_ledger)
+  assert.deepEqual([kept.state, kept.text, kept.error], ["failed", "rebase and push", "turn/start timed out"])
+  h.storage.close()
+})
+
 test("followUp leaves `exited` alone when the bridge refuses the send", async () => {
   const { h, slug } = restartHarness()
   h.storage.setExited(slug, true)

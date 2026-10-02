@@ -4,6 +4,8 @@ import { useSnapshot } from "valtio"
 import { store, markDrawerClosing, removeDrawerAfterExit } from "../../store.ts"
 import { registerDrawerClose } from "../../lib/overlays.ts"
 import { isToastPointer } from "../Toaster.tsx"
+import { useBackClosesLayer } from "../../lib/backDismiss.ts"
+import { useIsMobile } from "../../lib/mobile.ts"
 import {
   SHEET_CLOSE_MS,
   SHEET_PANEL_CLASS,
@@ -182,6 +184,10 @@ export function Sheet({
   const narrow = useNarrowDrawer()
   const holdsLock = useHoldsScrollLock(id)
   useOutsidePointerDismiss(id, panelRef, close, subagentParent)
+  // On the phone this layer takes a history entry of its own, so Back closes it and not the thread
+  // under it (lib/backDismiss). The desktop's history is untouched.
+  const closing = useSnapshot(store).drawers.find((drawer) => drawer.id === id)?.closing === true
+  useBackClosesLayer(useIsMobile(), closing, close)
   // The panel's own scroll lock while it is the top layer on a narrow screen — the lock the thread
   // sheet below hands over (see useHoldsScrollLock). Pinch-zoom stays allowed, as Radix's lock allows it.
   return (

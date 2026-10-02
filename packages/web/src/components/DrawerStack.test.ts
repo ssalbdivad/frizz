@@ -12,7 +12,7 @@ const read = (rel: string) => readFileSync(fileURLToPath(new URL(rel, import.met
 test("the queue shell and the standalone /full page both mount the drawer stack", () => {
   for (const shell of ["../App.tsx", "./StandaloneThreadPage.tsx"]) {
     const source = read(shell)
-    assert.match(source, /<DrawerStack\s*\/>/, `${shell} must mount <DrawerStack />`)
+    assert.match(source, /<DrawerStack\b[\s\S]*?\/>/, `${shell} must mount <DrawerStack />`)
     assert.match(source, /import \{ DrawerStack \}/, `${shell} must import DrawerStack`)
   }
 })
@@ -27,4 +27,11 @@ test("the overlay Escape chain lives in DrawerStack, not in the queue shell", ()
     assert.ok(stack.includes(guard), `DrawerStack must keep the ${guard} step of the overlay precedence chain`)
   }
   assert.ok(!read("../App.tsx").includes("closeSettingsAnimated"), "App must not run a second Escape chain")
+})
+
+// Escape on /full exits fullscreen once nothing above the page is left to close — the chain's last
+// step, which only /full supplies (the queue has nothing to leave). fullscreenEscape.e2e.test.ts drives it.
+test("only the /full page gives the Escape chain a way out of the page", () => {
+  assert.match(read("./StandaloneThreadPage.tsx"), /<DrawerStack onEscapeAtRest=\{\(\) => exitFullscreen\(slug\)\} \/>/)
+  assert.match(read("../App.tsx"), /<DrawerStack\s*\/>/)
 })

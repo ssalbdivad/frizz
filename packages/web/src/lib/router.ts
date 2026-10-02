@@ -209,6 +209,27 @@ export function noteRouterTransition(on: boolean): void {
   queueMicrotask(() => activeWriter?.())
 }
 
+/**
+ * Did this app push the history entry the page is on, in this session?
+ *
+ * react-router numbers the entries it writes (`idx` in history.state): the entry a document loaded on
+ * is 0, and every push counts up from there — including a push lib/router made when a thread opened.
+ * So a thread page on an entry above 0 has an entry BELOW it that is ours (the board it was opened
+ * from, or whatever the app showed before), and the platform's Back returns there. On 0 it arrived by
+ * a cold link — a bookmark, a notification, a pasted URL — and what sits below it, if anything, is some
+ * other site.
+ *
+ * The phone thread header's ← asks this to behave exactly like Back: pop when there is an entry of
+ * ours to pop to, and only otherwise fall back to replacing the thread's entry with the board (the
+ * desktop ×'s close). Replacing it always had left TWO board entries behind every ← — the board the
+ * thread was opened from, and the thread's entry rewritten to it — so the next Back did nothing.
+ * The same-URL entries lib/backDismiss pushes carry the router's state over, so they read the same.
+ */
+export function appPushedCurrentEntry(state: unknown = typeof history === "undefined" ? null : history.state): boolean {
+  const idx = state && typeof state === "object" ? (state as { idx?: unknown }).idx : undefined
+  return typeof idx === "number" && idx > 0
+}
+
 export function startRouter(navigate: (path: string, options: { replace: boolean }) => void): () => void {
   // Boot: adopt whatever the address bar says (deep link / reload restores the state).
   primeRoute()

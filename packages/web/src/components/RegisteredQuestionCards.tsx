@@ -39,6 +39,7 @@ import { ROOT_PATH, liveQuestionNodes, nodeAnswered, questionComplete, registere
 import { AnswersCard } from "./AnswersCard.tsx"
 import { QueueDismissContext } from "./ChatView.tsx"
 import { QuestionBlockCard, focusQuestionNode } from "./QuestionBlockCard.tsx"
+import { CompactQuestionList, usePhoneQuestions } from "./PhoneQuestionCards.tsx"
 
 function errorText(error: unknown): string {
   const message = error instanceof Error ? error.message : "The answer could not be sent."
@@ -416,8 +417,11 @@ export function RegisteredAnsweringProvider({ thread, scope, children }: { threa
  *  surface's shared state through context, or the one a stack hands it. */
 export function RegisteredQuestionCard({ q, answering: given }: { q: RegisteredQuestionView; answering?: RegisteredAnswering }) {
   const shared = useContext(RegisteredAnsweringContext)
+  const phone = usePhoneQuestions()
   const a = given ?? shared
   if (!a || !a.slug) return null
+  // On the phone thread page the card is a reading surface; the sheet answers it (PhoneQuestionCards).
+  if (phone) return <CompactQuestionList questions={[q]} />
   const nodes = liveQuestionNodes(q.spec, a.answersOf(q))
   const card = (node: (typeof nodes)[number]) => (
     <QuestionBlockCard
@@ -535,6 +539,7 @@ export function RegisteredQuestionStack({
     questions = [...kept, ...listed.filter((q) => !kept.some((k) => k.id === q.id))]
     drawn.current = questions
   }
+  const phone = usePhoneQuestions()
 
   // THE ANSWER, ALREADY SENT AND NOT YET IN THE WORKER'S HANDS. Answering stores the row; a wake hands
   // it over a moment later (deliberately — an answer given while the worker's process is down has to
@@ -553,6 +558,21 @@ export function RegisteredQuestionStack({
     return (
       <section data-answers-in-flight aria-label="Your answer, on its way to the worker" className={`flex min-w-0 flex-col items-end ${className}`}>
         <AnswersCard answers={inFlight} queued />
+      </section>
+    )
+  }
+
+  if (phone) {
+    return (
+      <section
+        data-registered-questions
+        aria-label={`${questions.length} question${questions.length === 1 ? "" : "s"} waiting for an answer`}
+        className={`flex min-w-0 flex-col gap-3 ${className}`}
+      >
+        <CompactQuestionList questions={questions} />
+        {/* The sheet closes on Send, so a refusal has to surface HERE, beside the questions it restored. */}
+        {a.error && <div role="alert" className="break-words text-[13px] leading-snug text-danger-soft">{a.error}</div>}
+        {a.sending && <div role="status" aria-live="polite" className="text-[13px] leading-snug text-muted">Sending…</div>}
       </section>
     )
   }

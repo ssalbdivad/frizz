@@ -1049,8 +1049,8 @@ done rather than idling inside it, and read the newest human message first when 
 
 // Backend-neutral: frizz injects the ONE unified `frizz` MCP server into BOTH claude and codex workers,
 // so the tool and its usage are identical. Kept as one shared section (not a per-kind record) — there
-// is nothing backend-specific to say about it. The two backends MOUNT it differently — claude via an
-// inline `--mcp-config` on the worker argv (dispatch.ts), codex via process-level `-c` overrides on
+// is nothing backend-specific to say about it. The two backends MOUNT it differently — claude via a
+// `--mcp-config` file named on the worker argv (dispatch.ts), codex via process-level `-c` overrides on
 // the app-server (backend/codex-mcp.ts) — and for a long time this comment described a codex half
 // that did not exist, so codex workers were told about a tool they did not have. If you change either
 // mounting, re-run `_live_codex_mcp_inject.mts` rather than trusting this paragraph.

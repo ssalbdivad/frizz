@@ -19,6 +19,13 @@ export function isRetryableRpcError(error: unknown): boolean {
   return (error as { retryableRpc?: unknown } | null)?.retryableRpc === true
 }
 
+// The server wrote this follow-up into its delivery ledger before the failure and still holds it — as a
+// failed bubble with Retry / Edit / Dismiss (`kept` in the envelope; server/src/router.ts
+// keepFailedFollowUp). The words are no longer only the browser's to lose.
+export function isKeptDeliveryError(error: unknown): boolean {
+  return (error as { deliveryKept?: unknown } | null)?.deliveryKept === true
+}
+
 function markRetryable(error: Error): Error {
   Object.defineProperty(error, "retryableRpc", { value: true, enumerable: false })
   return error
@@ -38,9 +45,9 @@ export function assertMutationAllowedDuringControlPlaneTransition(type: ProcType
 // non-whitespace character after JSON". Name that operational fix directly.
 export async function parseRpcResponse(res: Response, name: string): Promise<unknown> {
   const body = await res.text()
-  let json: { result?: unknown; error?: unknown; retryable?: unknown }
+  let json: { result?: unknown; error?: unknown; retryable?: unknown; kept?: unknown }
   try {
-    json = JSON.parse(body) as { result?: unknown; error?: unknown; retryable?: unknown }
+    json = JSON.parse(body) as { result?: unknown; error?: unknown; retryable?: unknown; kept?: unknown }
   } catch {
     if (res.status === 404 || res.status === 405) {
       throw new Error("Frizz server restart required — this control is newer than the running server")
@@ -57,6 +64,7 @@ export async function parseRpcResponse(res: Response, name: string): Promise<unk
   }
   if (!res.ok) {
     const error = new Error(typeof json.error === "string" ? json.error : `RPC ${name} failed`)
+    if (json.kept === true) Object.defineProperty(error, "deliveryKept", { value: true, enumerable: false })
     throw json.retryable === true ? markRetryable(error) : error
   }
   return json.result

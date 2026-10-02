@@ -115,6 +115,17 @@ export const CLAUDE_BROKER_CAPABILITY_RENAME = "rename-v1"
 // its deadline reporting "the session did not answer" instead of "this session is too old".
 export const CLAUDE_BROKER_CAPABILITY_LIST_SKILLS = "list-skills-v1"
 
+// An ACKNOWLEDGED input: the `input` frame carries a `requestId`, and the daemon answers it with an
+// `input-result` once the session has taken the message into its input queue (or with the error that
+// refused it). Before this the input frame was the one control action with NO reply, so a follow-up
+// "succeeded" the moment a frame was handed to the client — including a frame buffered for a socket
+// that never came back, which the client then dropped on its 30s give-up. That is how "GO!!" was
+// recorded as delivered on 2026-09-30 while no daemon ever received it. Gated like the others because
+// a daemon forked by an older build outlives the upgrade by hours and would never answer: the bridge
+// only waits for the reply when the record advertises this, and otherwise settles for the frame having
+// been WRITTEN to a connected socket, which still closes the never-connected hole.
+export const CLAUDE_BROKER_CAPABILITY_INPUT_ACK = "input-ack-v1"
+
 // One invocable skill, as the harness reports it. `name` is what `/name` invokes; `description` is the
 // skill's own frontmatter line, for the composer typeahead to render. `source` is where claude
 // resolved it from, normalized to the shared vocabulary — undefined when claude did not say, which the

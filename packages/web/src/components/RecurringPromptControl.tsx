@@ -35,7 +35,7 @@ import { TextareaCodeFences } from "./TextareaCodeFences.tsx"
 // icon for a target." It was — one ring, an oversized dot and a bare corner for an arrowhead — and beside
 // this one it reads as a record button with a stick through it. Reach for a real icon set (Tabler,
 // Phosphor, Remix and Bootstrap were all compared here at 12px) before drawing anything.
-function GoalMark({ size = 12, className = "" }: { size?: number; className?: string }) {
+export function GoalMark({ size = 12, className = "" }: { size?: number; className?: string }) {
   return (
     <svg
       width={size}
@@ -448,10 +448,15 @@ function triggerClauses(d: Pick<Draft, "stopHook" | "heartbeat" | "postCompactio
   ].filter((c): c is string => c !== null)
 }
 
-function PromptPanel({ thread, armed, close }: {
+// Exported for the phone's ⋯ sheet (MobileThreadActionsSheet), which shows this same panel full-width
+// in a bottom sheet instead of a popover over the footer. Same draft, same dismissal-is-the-save: the
+// sheet unmounting the panel is the dismissal. `heading` is false there because the sheet's own title
+// row already says "Goal".
+export function PromptPanel({ thread, armed, close, heading = true }: {
   thread: ThreadView
   armed: ThreadView["recurringPrompt"]
   close: () => void
+  heading?: boolean
 }) {
   // NO `busy` STATE. Under the old save-on-every-edit regime a busy flag put `disabled` on all four
   // switches for every write, and `disabled:opacity-45` is not transitioned, so each click dropped the
@@ -669,12 +674,16 @@ function PromptPanel({ thread, armed, close }: {
 
   return (
     <section data-recurring-panel>
-      <div className="mb-2 flex items-center gap-3">
-        <span className="font-medium">Goal</span>
-        {/* The loop's reading, the same phrase the footer shows beside the mark. */}
-        {panelReading && <span data-goal-loop-panel className="tabular-nums text-muted">{panelReading}</span>}
-        {lastLabel && <span className="ml-auto truncate text-muted-55">{lastLabel}</span>}
-      </div>
+      {heading ? (
+        <div className="mb-2 flex items-center gap-3">
+          <span className="font-medium">Goal</span>
+          {/* The loop's reading, the same phrase the footer shows beside the mark. */}
+          {panelReading && <span data-goal-loop-panel className="tabular-nums text-muted">{panelReading}</span>}
+          {lastLabel && <span className="ml-auto truncate text-muted-55">{lastLabel}</span>}
+        </div>
+      ) : lastLabel ? (
+        <div className="mb-2 truncate text-muted-55">{lastLabel}</div>
+      ) : null}
       {/* ALWAYS EDITABLE. It used to be `readOnly` until a master toggle was on, which made sense while
           that toggle was the feature's on switch. With the switch gone, gating the textarea on "some
           trigger is on" would mean an operator has to decide WHEN to send a prompt before they are

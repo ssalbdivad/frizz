@@ -46,7 +46,7 @@ import { CODEX_FIRST_FINAL_TITLE_TRANSPORT, CODEX_LEGACY_FIRST_FINAL_TITLE_TRANS
 import { projectAcpTranscript, readAcpTranscriptFile } from "./backend/acp-transcript.ts"
 import { discoverTranscriptDir, discoverTranscriptId, DISCOVERY_GRACE_MS } from "./discover.ts"
 import { isClaudeAuthErrorText, MONITOR_END_RE, parseSignalFence } from "./tailer.ts"
-import { redactCredentialStructure, redactCredentialSyntax } from "./credential-redaction.ts"
+import { ENCRYPTED_PAYLOAD, redactCredentialStructure, redactToolPayload } from "./credential-redaction.ts"
 import { hasEscapingBackgroundJob } from "../../../cc-worker/hooks/bash-background.mjs"
 import { frizzTempDir, isPromptAttachmentPath } from "./frizz-paths.ts"
 import { dispatchProfileCell } from "./subagent-profile.ts"
@@ -1429,29 +1429,8 @@ function userText(rec: Raw): string | null {
 const EDIT_CAP = 4000
 const TRUNC_MARKER = "\n… (truncated)"
 
-// Tool payloads can contain copied credentials (shell exports/output, file excerpts, MCP arguments)
-// or Codex collaboration's opaque encrypted `message` blobs. The transcript is a broad UI surface,
-// so redact common secret forms before any payload is retained or summarized. This is deliberately
-// presentation-only: the raw JSONL remains untouched.
-// What a redacted Fernet token becomes. Shared so codexPeerMessageCall can recognise an encrypted
-// inter-agent body by the marker this redactor mints, instead of keeping a rival copy of the pattern.
-const ENCRYPTED_PAYLOAD = "[encrypted payload]"
-
-function redactToolPayload(s: string): string {
-  return redactCredentialSyntax(s)
-    // Fernet payloads commonly end in base64 padding. A trailing word-boundary left that padding
-    // behind (`[encrypted payload]==`) and made the redaction visibly incomplete.
-    .replace(/gAAAA[A-Za-z0-9_-]{40,}={0,2}/g, ENCRYPTED_PAYLOAD)
-    .replace(/-----BEGIN [^-\r\n]*PRIVATE KEY-----[\s\S]*?-----END [^-\r\n]*PRIVATE KEY-----/gi, "[redacted private key]")
-    .replace(/\b(?:eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}|(?:AKIA|ASIA)[A-Z0-9]{16}|xox[baprs]-[A-Za-z0-9-]{16,}|sk_live_[A-Za-z0-9]{16,}|sk-(?:proj-)?[A-Za-z0-9_-]{16,}|github_pat_[A-Za-z0-9_]{16,}|gh[pousr]_[A-Za-z0-9_]{16,})\b/g, "[redacted]")
-    // Inputs are usually JSON, so the key's closing quote sits between the word and colon. Accept it
-    // here (and a quoted value) rather than protecting only shell-style `Authorization=...` forms.
-    .replace(/(\bAuthorization\b["']?\s*[:=]\s*)(?:"(?:Bearer\s+)?[^"]*"|'(?:Bearer\s+)?[^']*'|(?:Bearer\s+)?[^\s,;]+)/gi, "$1[redacted]")
-    .replace(
-      /(\b(?:[a-z][a-z0-9_]*(?:_api_key|_token|_secret|_password|_passwd)|api[_-]?key|access[_-]?token|auth[_-]?token|token|credential|secret|password|passwd|cookie)\b["']?\s*[:=]\s*)(?:"[^"]*"|'[^']*'|[^\s,;}\]]+)/gi,
-      "$1[redacted]",
-    )
-}
+// Tool payloads are redacted before any is retained or summarized — see redactToolPayload, which moved
+// to credential-redaction.ts so the tailer's board live line redacts with the same rules.
 
 // The line count of one side of an edit, on the RAW string — the capped transport copy undercounts.
 // "" is zero lines (a Write's old side, an empty new file), anything else counts its newlines + 1.

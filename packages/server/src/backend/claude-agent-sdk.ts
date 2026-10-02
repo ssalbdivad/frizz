@@ -13,6 +13,7 @@ import {
 } from "@frizz/claude-agent-sdk-runtime"
 import { claudeUltracodeSettings, resolveClaudeEffort } from "./claude-effort.ts"
 import { resolveClaudeLaunchModel } from "./claude-context-window.ts"
+import { writeMcpConfigFile } from "../session-files.ts"
 import {
   CLAUDE_AGENT_SDK_MAX_DIAGNOSTIC_BYTES,
   CLAUDE_AGENT_SDK_MAX_EVENT_TEXT_BYTES,
@@ -1013,8 +1014,13 @@ function startClaudeQuery(executablePath: string, options: ClaudeQueryStartOptio
       // empty allowlist is not the same as handing it none. The project's own `.mcp.json` servers arrive
       // INSIDE `mcpServers` — the broker daemon merges them (project-mcp-servers.ts) — because
       // `strictMcpConfig` stops the CLI discovering any MCP scope by itself.
+      // They reach the CLI as a FILE (`extraArgs`), never through the SDK's own `mcpServers` option: the
+      // SDK renders that one as inline `--mcp-config <json>` on the CLI's argv, and the config carries the
+      // operator's credentials — so every worker published its bearer tokens to `ps` (writeMcpConfigFile).
       ...(options.pluginDir ? { plugins: [{ type: "local" as const, path: options.pluginDir }] } : {}),
-      ...(options.mcpServers && Object.keys(options.mcpServers).length > 0 ? { mcpServers: options.mcpServers } : {}),
+      ...(options.mcpServers && Object.keys(options.mcpServers).length > 0
+        ? { extraArgs: { "mcp-config": writeMcpConfigFile(sessionId, options.mcpServers) } }
+        : {}),
       ...(options.strictMcpConfig ? { strictMcpConfig: true } : {}),
       ...(options.allowedTools?.length ? { allowedTools: options.allowedTools } : {}),
       ...(options.disallowedTools?.length ? { disallowedTools: [...options.disallowedTools] } : {}),

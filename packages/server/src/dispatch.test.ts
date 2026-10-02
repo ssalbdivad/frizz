@@ -1,13 +1,22 @@
 import { test } from "node:test"
 import assert from "node:assert/strict"
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs"
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, statSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
-import { join, dirname } from "node:path"
+import { join, dirname, isAbsolute } from "node:path"
 import { fileURLToPath, pathToFileURL } from "node:url"
 import { DISPATCH_TASK_BANNER_MARKER } from "@frizz/shared"
 import { buildClaudeCommand, loadWorkerPrompt, composePrompt, monitorScriptsDir, resolveWorkerPluginDir, scratchDirRelPath, scratchpadOrientation, workerPluginDir, workerScratchPath, frizzConfigBlock, workerDispatchPermission, WORKER_DISPATCH_PERMISSION } from "./dispatch.ts"
 import { parseTranscript } from "./transcript.ts"
 import { FRIZZ_MCP } from "./backend/types.ts"
+
+// The worker's MCP config, read from the owner-only FILE its argv names. Never inline JSON: the config
+// carries credentials, and an argv is readable through `ps` by every local process.
+function mcpConfigOf(argv: string[]) {
+  const path = argv[argv.indexOf("--mcp-config") + 1]
+  assert.ok(path && isAbsolute(path), `--mcp-config must name a file: ${path}`)
+  assert.equal(statSync(path).mode & 0o777, 0o600)
+  return JSON.parse(readFileSync(path, "utf8"))
+}
 
 // ---- Backend-aware worker contract (worker-contract-backend-aware) ----
 // loadWorkerPrompt(kind) delegates to buildWorkerPrompt in workerPrompt.ts (a single compiled-in TS
@@ -50,12 +59,10 @@ test("Claude dispatch mounts the unified frizz MCP server, alone, and pre-approv
     workerPrompt: "",
     frizzMcp: { scriptPath: "/abs/plugin/bin/frizz-mcp.mjs", stateDir: "/home/.frizz/projects/pid" },
   })
-  const cfgRaw = argv[argv.indexOf("--mcp-config") + 1]
-  assert.ok(cfgRaw, "argv must carry an inline --mcp-config")
-  const cfg = JSON.parse(cfgRaw)
+  const cfg = mcpConfigOf(argv)
   // `frizz` is the ONLY server frizz injects. A `chrome-devtools` mount rode every dispatch until
   // 2026-08-26; it cost ~6,400 prefix tokens of tool schema on a worker that mostly never opened a
-  // page, and a browser is the project's to bring — its `.mcp.json`, which rides this same inline config
+  // page, and a browser is the project's to bring — its `.mcp.json`, which rides this same config file
   // (next test but one); `claude mcp add --scope user` no longer reaches a worker at all.
   assert.ok(argv.includes("--strict-mcp-config"), "a worker discovers no MCP scope on its own")
   assert.deepEqual(Object.keys(cfg.mcpServers), [FRIZZ_MCP.name])
@@ -92,7 +99,7 @@ test("Claude dispatch stamps the singleton's lock path and the worker's OWN proj
       projectId: "b47f4055-4262-432a-af18-ded4cbfb3071",
     },
   })
-  const cfg = JSON.parse(argv[argv.indexOf("--mcp-config") + 1]!)
+  const cfg = mcpConfigOf(argv)
   // One process serves N projects and writes ONE lock (the launcher's), so a tenant's worker is told
   // where that lock is; and the RPC it POSTs is prefixed with its own project, because unprefixed
   // means the LAUNCHING project — the difference between spawning onto your board and onto someone
@@ -130,8 +137,8 @@ test("Claude dispatch mounts the project's approved servers under --strict-mcp-c
     },
   })
   assert.ok(argv.includes("--strict-mcp-config"))
-  const cfg = JSON.parse(argv[argv.indexOf("--mcp-config") + 1]!)
-  // The project's servers travel in the SAME inline config as the frizz mount — under strict mode that
+  const cfg = mcpConfigOf(argv)
+  // The project's servers travel in the SAME config file as the frizz mount — under strict mode that
   // config is the whole MCP surface — and a project cannot shadow `frizz` by naming a server after it.
   assert.deepEqual(Object.keys(cfg.mcpServers).sort(), ["Neon", "chrome-devtools", FRIZZ_MCP.name].sort())
   assert.deepEqual(cfg.mcpServers["chrome-devtools"], { command: "npx", args: ["-y", "chrome-devtools-mcp@1.7.0", "--headless"] })

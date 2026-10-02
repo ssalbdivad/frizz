@@ -43,6 +43,8 @@ import type {
   SpinoffResult,
   UnqueueFollowUpInput,
   UnqueueFollowUpResult,
+  DismissFailedFollowUpInput,
+  DismissFailedFollowUpResult,
   DeliverQueuedNowInput,
   DeliverQueuedNowResult,
   CompactThreadInput,
@@ -218,6 +220,8 @@ export interface Api {
   updateLazyPrompt(input: UpdateLazyPromptInput): Promise<void>
   startLazyThread(input: StartLazyThreadInput): Promise<{ slug: string; sessionId: string }>
   unqueueFollowUp(input: UnqueueFollowUpInput): Promise<UnqueueFollowUpResult>
+  // The × (and Edit) on a FAILED send's bubble — see DismissFailedFollowUpInput.
+  dismissFailedFollowUp(input: DismissFailedFollowUpInput): Promise<DismissFailedFollowUpResult>
   // The ↑ on a queued bubble: stop waiting and make the worker read what is already queued. No message
   // payload — see DeliverQueuedNowInput.
   deliverQueuedNow(input: DeliverQueuedNowInput): Promise<DeliverQueuedNowResult>
@@ -484,6 +488,7 @@ export const PROCEDURES = {
   updateLazyPrompt: "mutation",
   startLazyThread: "mutation",
   unqueueFollowUp: "mutation",
+  dismissFailedFollowUp: "mutation",
   deliverQueuedNow: "mutation",
   compactThread: "mutation",
   setThreadPermission: "mutation",

@@ -16,7 +16,16 @@ const RATE_LIMIT_RESERVE = 100
 //
 // The caps are per PR and deliberately generous: a red matrix on a big repo is 60+ contexts, and a
 // truncated rollup would silently drop a failing job.
-const ROLLUP_CAP = 100
+//
+// THE ROLLUP IS PAGED, NOT CAPPED (2026-10-01). 100 is GitHub's largest page, and it was a hard cap
+// until nubjs/nub#995 carried 138 contexts: the watch read the first 100, all green, announced "CI
+// PASSED" while `Windows embedded runtime and compile` was still running at position 120-odd, and
+// never saw it finish — so the thread parked on that job was never woken. A PR whose rollup has a next
+// page now has it fetched in a follow-up request (one per page, batched across PRs); one that cannot
+// be finished goes back WITHOUT a snapshot, so the scheduler's `gh` fallback, which reads every check,
+// answers instead of a verdict over a partial list.
+const ROLLUP_PAGE_SIZE = 100
+const ROLLUP_MAX_PAGES = 10
 const CHECK_SUITE_CAP = 50
 const LABEL_CAP = 30
 const REVIEW_REQUEST_CAP = 20
@@ -219,6 +228,34 @@ const strings = (nodes: unknown, pick: (n: Record<string, unknown>) => unknown):
     return typeof value === "string" && value ? [value] : []
   })
 
+/** One page of `statusCheckRollup.contexts` nodes, as rollup entries — shared by the batched query's
+ *  first page and every page fetched after it, so a paged-in entry is indistinguishable from the rest. */
+function rollupEntries(nodes: unknown): unknown[] {
+  return (Array.isArray(nodes) ? nodes : []).flatMap((node: unknown) => {
+    if (!node || typeof node !== "object") return []
+    const n = node as Record<string, any>
+    // The parent workflow's name, which `gh pr view` supplies as `workflowName` on every CheckRun and
+    // which `failedCheckNames` falls back to when a job has none of its own.
+    const workflowName = n.checkSuite?.workflowRun?.workflow?.name
+    return [typeof workflowName === "string" && workflowName ? { ...n, workflowName } : n]
+  })
+}
+
+/** Whether a `contexts` connection has a page after this one, and the cursor that asks for it. `more`
+ *  with no `after` is a page GitHub says exists but gave no way to request: the rollup is unfinishable. */
+function rollupNextPage(contexts: unknown): { more: boolean; after?: string } {
+  const info = (contexts as { pageInfo?: { hasNextPage?: unknown; endCursor?: unknown } } | undefined)?.pageInfo
+  if (info?.hasNextPage !== true) return { more: false }
+  return typeof info.endCursor === "string" && info.endCursor ? { more: true, after: info.endCursor } : { more: true }
+}
+
+// The fields every rollup page asks for. The batched query and the follow-up page query MUST select the
+// same shape, or the entries a page appends would read differently from the first hundred.
+const ROLLUP_NODE_FIELDS = `
+              __typename
+              ... on CheckRun { name status conclusion detailsUrl completedAt checkSuite { workflowRun { workflow { name } } } }
+              ... on StatusContext { context state targetUrl createdAt }`
+
 /** Pure shape normalizer for the status half, beside `parseGithubReviewActivities` and held to the same
  *  standard: a missing field degrades one reading, never the whole snapshot, and nothing is fabricated.
  *  `undefined` when the response carries no usable pull request — the caller then keeps its previous
@@ -230,21 +267,13 @@ export function parseGithubPrSnapshot(pr: unknown): GithubPrSnapshot | undefined
   // cannot say whether this PR is open, and a fabricated "OPEN with no checks" would arm a verdict.
   if (typeof p.state !== "string" || !p.state) return undefined
   const commit = Array.isArray(p.commits?.nodes) ? p.commits.nodes[0]?.commit : undefined
-  const contexts = commit?.statusCheckRollup?.contexts?.nodes
   return {
     state: p.state,
     mergedAt: typeof p.mergedAt === "string" ? p.mergedAt : null,
     ...(typeof p.mergeable === "string" ? { mergeable: p.mergeable } : {}),
     ...(typeof p.reviewDecision === "string" ? { reviewDecision: p.reviewDecision } : {}),
     ...(typeof commit?.oid === "string" && commit.oid ? { head: commit.oid as string } : {}),
-    rollup: (Array.isArray(contexts) ? contexts : []).flatMap((node: unknown) => {
-      if (!node || typeof node !== "object") return []
-      const n = node as Record<string, any>
-      // The parent workflow's name, which `gh pr view` supplies as `workflowName` on every CheckRun and
-      // which `failedCheckNames` falls back to when a job has none of its own.
-      const workflowName = n.checkSuite?.workflowRun?.workflow?.name
-      return [typeof workflowName === "string" && workflowName ? { ...n, workflowName } : n]
-    }),
+    rollup: rollupEntries(commit?.statusCheckRollup?.contexts?.nodes),
     checkSuites: (Array.isArray(commit?.checkSuites?.nodes) ? commit.checkSuites.nodes : [])
       .flatMap((node: unknown) => {
         if (!node || typeof node !== "object") return []
@@ -339,14 +368,50 @@ function buildQuery(refs: GithubReviewRef[]): { query: string; variables: Record
           reviewRequests(first: ${REVIEW_REQUEST_CAP}) { nodes { requestedReviewer { __typename ... on User { login } ... on Team { name } } } }
           commits(last: 1) { nodes { commit {
             oid
-            statusCheckRollup { contexts(first: ${ROLLUP_CAP}) { nodes {
-              __typename
-              ... on CheckRun { name status conclusion detailsUrl completedAt checkSuite { workflowRun { workflow { name } } } }
-              ... on StatusContext { context state targetUrl createdAt }
+            statusCheckRollup { contexts(first: ${ROLLUP_PAGE_SIZE}) { pageInfo { hasNextPage endCursor } nodes {${ROLLUP_NODE_FIELDS}
             } } }
             checkSuites(first: ${CHECK_SUITE_CAP}) { nodes { status conclusion workflowRun { workflow { name } } } }
           } } }
         }
+      }`)
+  })
+  return {
+    query: `query(${declarations.join(", ")}) {
+      ${fields.join("\n")}
+      rateLimit { cost remaining resetAt limit }
+    }`,
+    variables,
+  }
+}
+
+/** A PR whose rollup has another page to read: the head commit it belongs to, the cursor to resume
+ *  from, and the snapshot the page's entries are appended to. */
+interface RollupContinuation {
+  key: string
+  ref: GithubReviewRef
+  oid: string
+  after: string
+  snapshot: GithubPrSnapshot
+}
+
+// The follow-up page, addressed by the head COMMIT rather than the pull request: a push between the two
+// requests must not splice another commit's checks onto this one's first hundred.
+function buildRollupPageQuery(pages: RollupContinuation[]): { query: string; variables: Record<string, string> } {
+  const variables: Record<string, string> = {}
+  const declarations: string[] = []
+  const fields: string[] = []
+  pages.forEach((page, index) => {
+    declarations.push(`$owner${index}: String!`, `$repo${index}: String!`, `$oid${index}: GitObjectID!`, `$after${index}: String!`)
+    variables[`owner${index}`] = page.ref.owner
+    variables[`repo${index}`] = page.ref.repo
+    variables[`oid${index}`] = page.oid
+    variables[`after${index}`] = page.after
+    fields.push(`
+      page${index}: repository(owner: $owner${index}, name: $repo${index}) {
+        object(oid: $oid${index}) { ... on Commit {
+          statusCheckRollup { contexts(first: ${ROLLUP_PAGE_SIZE}, after: $after${index}) { pageInfo { hasNextPage endCursor } nodes {${ROLLUP_NODE_FIELDS}
+          } } }
+        } }
       }`)
   })
   return {
@@ -438,6 +503,69 @@ export function createGithubReviewFetcher(deps: GithubReviewFetcherDeps = {}): G
     if (sustainableCadence > 60_000) notBeforeMs = Math.max(notBeforeMs, current + sustainableCadence)
   }
 
+  const graphql = (authToken: string, query: string, variables: Record<string, string | number>, signal: AbortSignal) =>
+    request("https://api.github.com/graphql", {
+      method: "POST",
+      headers: {
+        accept: "application/vnd.github+json",
+        authorization: `Bearer ${authToken}`,
+        "content-type": "application/json",
+        "user-agent": "frizz-pr-watch",
+        "x-github-api-version": "2022-11-28",
+      },
+      body: JSON.stringify({ query, variables }),
+      signal,
+    })
+
+  // Read every remaining rollup page, appending to each snapshot in place; returns the PRs whose rollup
+  // could NOT be finished. Any failure here is that — a timeout, an HTTP error, a missing page, a page
+  // past the cap — and none of them is reported as an error: the PR's activity read fine, and its status
+  // still has a reader that sees every check, the scheduler's `gh` fallback. Reporting a verdict over the
+  // checks read so far is the one thing this must never do.
+  const fetchRollupPages = async (authToken: string, pages: RollupContinuation[]): Promise<RollupContinuation[]> => {
+    const unfinished: RollupContinuation[] = []
+    let open = pages
+    for (let page = 2; open.length > 0; page++) {
+      if (page > ROLLUP_MAX_PAGES) {
+        unfinished.push(...open)
+        break
+      }
+      const { query, variables } = buildRollupPageQuery(open)
+      const controller = new AbortController()
+      const timeout = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS)
+      timeout.unref?.()
+      let body: any
+      try {
+        const response = await graphql(authToken, query, variables, controller.signal)
+        body = response.ok ? parseJson(await response.text()) : undefined
+      } catch {
+        body = undefined
+      } finally {
+        clearTimeout(timeout)
+      }
+      if (!body || typeof body !== "object") {
+        unfinished.push(...open)
+        break
+      }
+      updateBudget(body?.data?.rateLimit)
+      const next: RollupContinuation[] = []
+      open.forEach((continuation, index) => {
+        const contexts = body?.data?.[`page${index}`]?.object?.statusCheckRollup?.contexts
+        if (!Array.isArray(contexts?.nodes)) {
+          unfinished.push(continuation)
+          return
+        }
+        continuation.snapshot.rollup.push(...rollupEntries(contexts.nodes))
+        const more = rollupNextPage(contexts)
+        if (!more.more) return
+        if (more.after) next.push({ ...continuation, after: more.after })
+        else unfinished.push(continuation)
+      })
+      open = next
+    }
+    return unfinished
+  }
+
   const fetchChunk = async (refs: GithubReviewRef[]): Promise<Map<string, GithubReviewFetchResult>> => {
     const results = new Map<string, GithubReviewFetchResult>()
     let authToken: string
@@ -456,18 +584,7 @@ export function createGithubReviewFetcher(deps: GithubReviewFetcherDeps = {}): G
     timeout.unref?.()
     let response: Response
     try {
-      response = await request("https://api.github.com/graphql", {
-        method: "POST",
-        headers: {
-          accept: "application/vnd.github+json",
-          authorization: `Bearer ${authToken}`,
-          "content-type": "application/json",
-          "user-agent": "frizz-pr-watch",
-          "x-github-api-version": "2022-11-28",
-        },
-        body: JSON.stringify({ query, variables }),
-        signal: controller.signal,
-      })
+      response = await graphql(authToken, query, variables, controller.signal)
     } catch (error) {
       const timedOut = controller.signal.aborted || (error as { name?: unknown })?.name === "AbortError"
       clearTimeout(timeout)
@@ -534,6 +651,7 @@ export function createGithubReviewFetcher(deps: GithubReviewFetcherDeps = {}): G
         rateLimitBlockedUntilMs = Math.max(rateLimitBlockedUntilMs, resetMs)
       }
     }
+    const continuations: RollupContinuation[] = []
     refs.forEach((ref, index) => {
       const repository = (body as any)?.data?.[`ref${index}`]
       if (ref.kind === "issue") {
@@ -576,8 +694,23 @@ export function createGithubReviewFetcher(deps: GithubReviewFetcherDeps = {}): G
       }
       const activity = parseGithubReviewActivities({ data: { repository: { pullRequest: pr } } })
       const snapshot = parseGithubPrSnapshot(pr)
+      const more = rollupNextPage((pr as any).commits?.nodes?.[0]?.commit?.statusCheckRollup?.contexts)
+      if (snapshot && more.more) {
+        if (more.after && snapshot.head) continuations.push({ key: refKey(ref), ref, oid: snapshot.head, after: more.after, snapshot })
+        else {
+          results.set(refKey(ref), { status: "ok", activity })
+          return
+        }
+      }
       results.set(refKey(ref), { status: "ok", activity, ...(snapshot ? { pr: snapshot } : {}) })
     })
+    if (continuations.length > 0) {
+      // A rollup that cannot be read to the end goes back with no snapshot at all, never a partial one.
+      for (const unfinished of await fetchRollupPages(authToken, continuations)) {
+        const result = results.get(unfinished.key)
+        if (result?.status === "ok") results.set(unfinished.key, { status: "ok", activity: result.activity })
+      }
+    }
     return results
   }
 

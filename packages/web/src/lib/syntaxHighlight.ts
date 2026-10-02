@@ -11,6 +11,7 @@ import sql from "highlight.js/lib/languages/sql"
 import typescript from "highlight.js/lib/languages/typescript"
 import xml from "highlight.js/lib/languages/xml"
 import yaml from "highlight.js/lib/languages/yaml"
+import { renderAnsi } from "./ansi.ts"
 
 // First-cut fenced-language set. Keep this explicit: importing highlight.js/lib/core plus only these
 // grammars avoids shipping the package's ~190-language default bundle. Aliases are normalized here
@@ -46,7 +47,9 @@ export const SUPPORTED_FENCE_LANGUAGES = Object.freeze({
 } as const)
 
 export type SupportedFenceLanguage = keyof typeof SUPPORTED_FENCE_LANGUAGES
-export type FenceLanguage = SupportedFenceLanguage | "plaintext"
+// `ansi` is a fence language without an hljs grammar: terminal output whose escape sequences are drawn
+// as colour (lib/ansi.ts). Fence-only — no file extension resolves to it.
+export type FenceLanguage = SupportedFenceLanguage | "ansi" | "plaintext"
 
 for (const [name, grammar] of Object.entries(GRAMMARS)) hljs.registerLanguage(name, grammar)
 
@@ -99,6 +102,7 @@ export function resolveFileLanguage(path?: string): FenceLanguage {
 export function resolveFenceLanguage(infoString?: string): FenceLanguage {
   const declared = (infoString ?? "").trim().split(/\s+/, 1)[0].toLowerCase()
   if (PLAINTEXT_ALIASES.has(declared)) return "plaintext"
+  if (declared === "ansi") return "ansi"
   return ALIAS_TO_LANGUAGE.get(declared) ?? "plaintext"
 }
 
@@ -137,11 +141,13 @@ export const COPY_CODE_LABEL = "Copy code"
 // into the <pre> they already own, so their layout, clamping and wrapping rules stay untouched.
 //
 // The output is safe to inject as-is: the input is PLAIN TEXT, so every character either comes back
-// escaped by hljs or by escapeHtml, and the only markup in the result is hljs's own token spans.
+// escaped by hljs or by escapeHtml, and the only markup in the result is hljs's own token spans (or,
+// for `ansi`, lib/ansi.ts's styled spans, whose only attributes are fixed classes and a hex colour).
 // That is why this needs no sanitizer pass, unlike the markdown pipeline (which has other HTML
 // sources and therefore sanitizes everything).
 export function highlightToHtml(text: string, language: FenceLanguage): string {
   if (language === "plaintext") return escapeHtml(text)
+  if (language === "ansi") return renderAnsi(text)
   try {
     return hljs.highlight(text, { language, ignoreIllegals: true }).value
   } catch {
