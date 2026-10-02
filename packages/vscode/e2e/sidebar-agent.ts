@@ -39,6 +39,10 @@ export interface AgentStatus {
   sidebar: ReturnType<FrizzExtensionApi["sidebar"]>
   editorContext: ReturnType<FrizzExtensionApi["editorContext"]>
   theme: number
+  /** The hint beside the selection as the extension draws it now (null for none). */
+  selectionHint: ReturnType<FrizzExtensionApi["selectionHint"]> | null
+  /** The threads open in editor tabs. */
+  threadTabs: ReturnType<FrizzExtensionApi["threadTabs"]>
 }
 
 /** A setting as `inspect` reads it: what each level sets, and what wins. */
@@ -76,6 +80,8 @@ async function perform(api: FrizzExtensionApi, op: AgentOp): Promise<unknown> {
         sidebar: api.sidebar(),
         editorContext: api.editorContext(),
         theme: vscode.window.activeColorTheme.kind,
+        selectionHint: api.selectionHint() ?? null,
+        threadTabs: api.threadTabs(),
       } satisfies AgentStatus
     case "command":
       return plain(await vscode.commands.executeCommand(op.id, ...(op.args ?? [])))

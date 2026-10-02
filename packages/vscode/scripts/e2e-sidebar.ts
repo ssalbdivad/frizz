@@ -67,6 +67,13 @@
 //   c16 a thread that enters the queue needing the human while the sidebar is out of sight (snoozed, then
 //      woken, through the REAL server's needs-you edge) is a VS Code notification, and its Open shows the
 //      thread in the sidebar
+//   c18 the selection hint: lines selected by keys get `Ctrl+L to add to Frizz` after their last line, in
+//      the editor's CodeLens colour, once the selection settles; gone when it empties, once Ctrl+L has
+//      added it, and with `frizz.selectionHint` off. A 6x crop of the line for the eye
+//   c19 a thread in an editor tab: the title row's ⋯ (while the sidebar shows a thread) opens it beside the
+//      code, on the thread at the editor's width, titled by the page; its reply box sends to the simulated
+//      worker with the editor block; Ctrl+L in the editor then lands in the tab (the Frizz used last), and
+//      Ctrl+L in the tab goes back to the code; asked again, the same tab
 //   c17 a restart and a window reload (last: the test runner's VS Code ends with a reload, so the same
 //      profile is reopened by a VS Code of the harness's own): the framed page's localStorage survives
 //      both, and so does the eye, which is the VS Code setting
@@ -302,7 +309,12 @@ let version = ""
 const pageErrors: string[] = []
 /** VS Code's keybinding dispatch log (workbench.action.toggleKeybindingsLog), while it is on. */
 
-const frizzFrame = (): Frame | undefined => page.frames().find((frame) => frame.url().startsWith(`${origin}/`))
+/**
+ * Frames of Frizz's page in a thread's editor tab (c19), never the sidebar's: the tab frames the same
+ * thread's address the sidebar's page shows by then, so only the frame object tells the two apart.
+ */
+const tabFrames = new Set<Frame>()
+const frizzFrame = (): Frame | undefined => page.frames().find((frame) => frame.url().startsWith(`${origin}/`) && !tabFrames.has(frame) && !frame.detached)
 const frame = () => waitFor("the Frizz frame in the sidebar", frizzFrame, 30_000)
 
 /** Evaluate in the Frizz page. */
@@ -2265,6 +2277,202 @@ try {
     notes.attentionOpen = { pressed, log: frizzLog().split("\n").filter((line) => /Told you|Opening/u.test(line)).slice(-3) }
     expect("c16", "Open brings the sidebar back on that thread", shown === true, (await status()).sidebar)
     await shot("c16-opened-thread-w300")
+  })
+
+  // ── c18: the selection hint ──
+  /** The hint as the editor DRAWS it: the decoration's ::after, its colour, its line, its box. */
+  const hintDrawn = () => inWorkbench(() => {
+    const span = [...document.querySelectorAll<HTMLElement>(".part.editor .view-lines span")].find((s) => getComputedStyle(s, "::after").content.includes("add to Frizz"))
+    if (!span) return null
+    const after = getComputedStyle(span, "::after")
+    const line = span.closest<HTMLElement>(".view-line")
+    // The theme's quiet annotation colour, resolved the way the browser resolves the decoration's.
+    const probe = document.createElement("span")
+    probe.style.color = "var(--vscode-editorCodeLens-foreground)"
+    document.querySelector(".part.editor")!.appendChild(probe)
+    const codeLens = getComputedStyle(probe).color
+    probe.remove()
+    const r = span.getBoundingClientRect()
+    const l = line?.getBoundingClientRect()
+    return {
+      content: after.content,
+      color: after.color,
+      codeLens,
+      fontStyle: after.fontStyle,
+      line: (line?.textContent ?? "").replace(/\u00a0|\u00b7/gu, " ").trimEnd(),
+      span: { x: r.x, y: r.y, width: r.width, height: r.height },
+      lineBox: l ? { x: l.x, y: l.y, width: l.width, height: l.height } : null,
+    }
+  })
+  await run("c18", "the selection hint beside a fresh selection", async () => {
+    await command("workbench.view.extension.frizz")
+    await waitFor("the Frizz view", async () => (await status()).sidebar.visible || undefined, 10_000)
+    await resetPage()
+    await openInEditor(files.sample)
+    await press("ArrowRight")
+    await waitFor("no hint before the selection", async () => (await hintDrawn()) === null || undefined, 3_000).catch(() => undefined)
+    const pressedAt = Date.now()
+    await selectLines23()
+    const drawn = await waitFor("the hint drawn", hintDrawn, 5_000).catch(() => null)
+    const latency = Date.now() - pressedAt
+    const told = (await status()).selectionHint
+    notes.selectionHint = { drawn, told, latency }
+    expect("c18", "lines 2-3 selected by keys: `Ctrl+L to add to Frizz` after line 3's text, once the selection settled", drawn?.content === '"Ctrl+L to add to Frizz"' && /for \(const x of xs\) \{$/u.test(drawn.line) && told?.line === 3 && latency >= 250, { drawn, told, latency })
+    expect("c18", "…in the editor's quiet CodeLens colour, not the code's", !!drawn && drawn.color === drawn.codeLens, drawn && { color: drawn.color, codeLens: drawn.codeLens })
+    if (drawn?.lineBox) {
+      // The line from its start to past the hint, 6x: the gap and the weight are judged by eye on this.
+      const right = drawn.span.x + drawn.span.width
+      await capture(join(out, `${version}-c18-selection-hint-6x.png`), { x: drawn.lineBox.x - 4, y: drawn.lineBox.y - 6, width: right - drawn.lineBox.x + 12, height: drawn.lineBox.height + 12 }, 6)
+      // The ink gap between where the selection ends (its highlight, which is what the eye reads as its
+      // edge) and the hint's first glyph, at 2x: anything unlike the editor's own background, column by
+      // column, the background sampled past the hint's end. The decoration's box starts where the line's
+      // text ends (its margin is inside it), so the scan goes left from there for the code's last ink and
+      // right for the hint's first.
+      const png = decodePng(await capture("", { x: drawn.lineBox.x, y: drawn.lineBox.y, width: right - drawn.lineBox.x + 4, height: drawn.lineBox.height }, 2))
+      const background = png.px(png.width - 2, Math.floor(png.height / 2))
+      const inked: boolean[] = []
+      for (let x = 0; x < png.width; x++) {
+        let ink = false
+        for (let y = 0; y < png.height && !ink; y++) {
+          const [r, g, b] = png.px(x, y)
+          ink = Math.abs(r - background[0]) + Math.abs(g - background[1]) + Math.abs(b - background[2]) > 60
+        }
+        inked.push(ink)
+      }
+      const hintStart = Math.round((drawn.span.x - drawn.lineBox.x) * 2)
+      let codeEnd = hintStart
+      while (codeEnd > 0 && !inked[codeEnd - 1]) codeEnd--
+      let hintInk = hintStart
+      while (hintInk < inked.length && !inked[hintInk]) hintInk++
+      notes.selectionHintInkGapPx = (hintInk - codeEnd) / 2
+    }
+    await shot("c18-selection-hint", { window: true })
+
+    await press("ArrowRight")
+    const gone = await waitFor("the hint gone", async () => ((await hintDrawn()) === null && (await status()).selectionHint === null) || undefined, 3_000).catch(() => false)
+    expect("c18", "the selection emptied: the hint is gone at once", gone === true, await hintDrawn())
+
+    // Ctrl+L adds it to the prompt box: the hint has done its job.
+    await clearBox("newComposer")
+    await openInEditor(files.sample)
+    await selectLines23()
+    await waitFor("the hint again", hintDrawn, 5_000).catch(() => null)
+    await press("Control+KeyL")
+    const added = await waitFor("the chip in the box", async () => ((await box("newComposer"))?.value.includes("@sample.ts:2-3") ? true : undefined), 8_000).catch(() => false)
+    const afterAdd = await waitFor("the hint gone after Ctrl+L", async () => ((await hintDrawn()) === null) || undefined, 3_000).catch(() => false)
+    expect("c18", "Ctrl+L adds the selection, and the hint goes with it", added === true && afterAdd === true, { box: await box("newComposer"), hint: await hintDrawn() })
+    await clearBox("newComposer")
+
+    // The setting off: a fresh selection gets none.
+    await agent({ op: "config", section: "frizz", key: "selectionHint", value: false })
+    try {
+      await openInEditor(files.sample)
+      await press("ArrowRight")
+      await selectLines23()
+      await sleep(900)
+      const off = await hintDrawn()
+      expect("c18", "frizz.selectionHint off: no hint", off === null && (await status()).selectionHint === null, off)
+    } finally {
+      await agent({ op: "config", section: "frizz", key: "selectionHint", value: null })
+    }
+  })
+
+  // ── c19: a thread in an editor tab ──
+  await run("c19", "a thread in an editor tab, from the title row's ⋯: on the thread, at the editor's width, and its reply box sends", async () => {
+    await command("workbench.view.extension.frizz")
+    await waitFor("the Frizz view", async () => (await status()).sidebar.visible || undefined, 10_000)
+    await resetPage()
+    await openThreadRow()
+    await waitFor("the sidebar on the thread", async () => (await status()).sidebar.view === "thread" || undefined, 8_000)
+    await clearBox("chatComposer")
+    const sidebarFrame = await frame()
+    await openInEditor(files.sample)
+
+    // The title row's ⋯, Open thread in editor tab — clicked, as a human does (c8 says why the hover first).
+    await clickInWorkbench('.part.sidebar .title-actions .action-label[aria-label*="More Actions"]')
+    const label = /Open thread in editor tab/u
+    const items = await waitFor("Open thread in editor tab in the ⋯ menu", async () => {
+      const found = await inWorkbench(() => [...document.querySelectorAll<HTMLElement>(".monaco-menu .action-item .action-label")].filter((l) => l.getClientRects().length > 0).map((l) => l.getAttribute("aria-label") ?? l.textContent ?? ""))
+      return found.some((item) => label.test(item)) ? found : undefined
+    }, 5_000).catch(() => null)
+    expect("c19", "the title row's ⋯ offers Open thread in editor tab while a thread shows, first", !!items && label.test(items[0] ?? ""), items)
+    if (items) {
+      const item = await page.evaluateHandle(() => [...document.querySelectorAll<HTMLElement>(".monaco-menu .action-item .action-label")].find((l) => /Open thread in editor tab/u.test(l.getAttribute("aria-label") ?? l.textContent ?? "")) ?? null)
+      const itemBox = await (item.asElement() as ElementHandle | null)?.boundingBox()
+      if (itemBox) {
+        await page.mouse.move(itemBox.x + itemBox.width / 2, itemBox.y + itemBox.height / 2, { steps: 4 })
+        await sleep(250)
+      }
+      await clickHandle(item.asElement() as ElementHandle | null, "Open thread in editor tab in the ⋯ menu")
+    } else {
+      await press("Escape")
+      await command("frizz.openThreadInTab")
+    }
+    type Tab = Awaited<ReturnType<typeof status>>["threadTabs"][number]
+    const tab = await waitFor("the tab's page ready", async () => (await status()).threadTabs.find((candidate: Tab) => candidate.ready), 60_000).catch(async () => (await status()).threadTabs[0])
+    const tabUrl = tab?.url ? new URL(tab.url) : undefined
+    expect("c19", "a tab opens beside the code, framing the thread's own address in embed mode", tab?.thread === seeded!.thread.slug && tab.project === workspace.slug && tabUrl?.pathname === `/all/${workspace.slug}/thread/${seeded!.thread.slug}` && tabUrl.searchParams.get("embed") === "vscode" && tab.viewColumn === 2, tab)
+    const tabFrame = await waitFor("the tab's Frizz frame", () => page.frames().find((candidate) => candidate !== sidebarFrame && !candidate.detached && candidate.url().startsWith(`${origin}/`)), 20_000)
+    tabFrames.add(tabFrame)
+    const inTab = <T>(fn: () => T) => tabFrame.evaluate(fn) as Promise<Awaited<T>>
+    const shownInTab = await waitFor("the thread's drawer in the tab", async () => {
+      const state = await inTab(() => {
+        const reply = [...document.querySelectorAll<HTMLTextAreaElement>('textarea[data-surface="chatComposer"]')].find((t) => t.getClientRects().length > 0)
+        return reply ? { width: innerWidth, title: document.querySelector("[role=dialog] h1, [role=dialog] h2")?.textContent ?? null, bar: !!document.querySelector("[data-editor-context-bar]") } : null
+      })
+      return state ?? undefined
+    }, 20_000).catch(() => null)
+    const sidebarWide = await inPage(() => innerWidth)
+    expect("c19", "…its page shows the thread, with its reply box and the editor's context bar, wider than the sidebar", !!shownInTab && shownInTab.bar && shownInTab.width > sidebarWide + 100, { tab: shownInTab, sidebar: sidebarWide })
+    const titled = await waitFor("the tab titled by its page", async () => {
+      const now = (await status()).threadTabs[0]
+      return now && now.title !== seeded!.thread.slug ? now.title : undefined
+    }, 8_000).catch(() => (status().then((s) => s.threadTabs[0]?.title)))
+    const tabLabel = await inWorkbench(() => [...document.querySelectorAll<HTMLElement>(".part.editor .tab")].map((t) => t.getAttribute("aria-label") ?? t.textContent ?? ""))
+    expect("c19", "…its editor tab reads the thread's title as the page names it, not re-cased", typeof titled === "string" && titled.length > 0 && tabLabel.some((text) => text.startsWith(titled)), { titled, tabLabel })
+    await capture(join(out, `${version}-c19-thread-tab-window.png`))
+
+    // Its reply box sends — to the thread's simulated worker, carrying the editor's block (the tab is fed).
+    const before = readFileSync(seeded!.inputs, "utf8").trim().split("\n").filter(Boolean).length
+    const reply = (await tabFrame.evaluateHandle(() => [...document.querySelectorAll<HTMLTextAreaElement>('textarea[data-surface="chatComposer"]')].find((t) => t.getClientRects().length > 0) ?? null)).asElement() as ElementHandle | null
+    await clickHandle(reply, "the tab's reply box")
+    await until(async () => await inTab(() => document.activeElement?.getAttribute("data-surface") === "chatComposer"), 3_000)
+    await page.keyboard.type("from the tab: what is this?")
+    await press("Enter")
+    const sent = await waitFor("the tab's message at the simulated worker", () => {
+      const lines = readFileSync(seeded!.inputs, "utf8").trim().split("\n").filter(Boolean)
+      return lines.length > before ? (JSON.parse(lines.at(-1)!) as { id: string; text: string }) : undefined
+    }, 20_000).catch(() => null)
+    const block = sent ? parseSentEditorContext(sent.text) : null
+    expect("c19", "…its reply box sends to the thread's worker, with the editor's block naming sample.ts", !!sent && sent.text.startsWith("from the tab: what is this?") && !!block && /sample\.ts/u.test(block.editor.display), { text: sent?.text.slice(0, 400), block })
+
+    // The tab was used last: Ctrl+L in the editor lands the selection in the TAB's reply box.
+    await openInEditor(files.sample)
+    await press("ArrowRight")
+    await selectLines23()
+    await press("Control+KeyL")
+    const chip = await waitFor("the chip in the tab", async () => {
+      const value = await inTab(() => [...document.querySelectorAll<HTMLTextAreaElement>('textarea[data-surface="chatComposer"]')].find((t) => t.getClientRects().length > 0)?.value ?? "")
+      return value.includes("@sample.ts:2-3") ? value : undefined
+    }, 8_000).catch(() => null)
+    const sidebarBox = await box("chatComposer")
+    expect("c19", "Ctrl+L in the editor puts the selection in the tab's reply box — the Frizz used last — not the sidebar's", !!chip && !sidebarBox?.value.includes("@sample.ts:2-3"), { tab: chip, sidebar: sidebarBox?.value })
+    // Ctrl+L in the tab: back to the code.
+    await press("Control+KeyL")
+    const back = await until(async () => (await workbenchFocus()).editor && (await editorState()).path === files.sample, 5_000)
+    expect("c19", "Ctrl+L pressed in the tab goes back to the code", back, await workbenchFocus())
+
+    // Asked again: the same tab, forward.
+    await command("frizz.openThreadInTab", { thread: seeded!.thread.slug, project: workspace.slug })
+    const again = await until(async () => {
+      const tabs = (await status()).threadTabs
+      return tabs.length === 1 && tabs[0]!.active
+    }, 5_000)
+    expect("c19", "asked again, the same tab comes forward: one tab per thread", again, (await status()).threadTabs)
+    await capture(join(out, `${version}-c19-thread-tab-chip-window.png`))
+    await command("workbench.action.closeAllEditors")
+    await until(async () => (await status()).threadTabs.length === 0, 5_000)
+    tabFrames.delete(tabFrame)
   })
 
   // ── c17: a restart and a window reload (LAST: it ends the agent's VS Code) ──
