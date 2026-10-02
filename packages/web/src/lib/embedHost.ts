@@ -4,6 +4,7 @@ import { boardOrTimeout, composeInto, holdsBoardOf, openNamedThread, threadIsThe
 import { isTerminalPath } from "./composerContext.ts"
 import { addEditorContextByChord, isEditorAddKey, setEditorContext, takePendingAdd } from "./editorContext.ts"
 import { runHostCommand } from "./embedCommand.ts"
+import { hostFocusGate } from "./hostFocusGate.ts"
 import { repostRoute } from "./embedRoute.ts"
 import { closeSettingsAnimated } from "./overlays.ts"
 import { EMBED_READY, embedded, hostKeyChord, parseHostMessage, postToHost } from "./embed.ts"
@@ -105,32 +106,35 @@ function frizzChord(event: KeyboardEvent): boolean {
 //
 // So while the page does not have focus, a programmatic `focus()` is dropped — unless the host just asked
 // for the page to take it (a compose with the caret, a title-row command, a navigation), when the relay
-// focuses the frame first (packages/vscode/src/sidebar-html.ts) and the page's own focus lands after.
-// This guards every focus thief, the one found and the ones not written yet; ThreadSheet's trap is off in
-// the sidebar too, for the cause.
+// focuses the frame first (packages/vscode/src/sidebar-html.ts) and the page's own focus lands after, and
+// only until the human leaves the page again (lib/hostFocusGate.ts, which says why that matters). This
+// guards every focus thief, the one found and the ones not written yet. The drawer's trap itself stays on
+// in the sidebar, where a thread is modal (ui/Sheet.tsx useNarrowDrawer); a CLOSING drawer lets go of it
+// (ThreadSheet.tsx).
 //
 // And the reverse: a frame that gets focus back (the human clicks the view's edge, VS Code re-focuses the
 // view after a title-row button) comes back with nothing focused — Chromium does not restore an iframe's
 // focused element the way it restores a window's. So the last element that had focus gets it again, unless
 // the human is pressing somewhere in the page, whose click decides.
 
-const HOST_FOCUS_MS = 1500
-let hostFocusUntil = 0
+const hostFocus = hostFocusGate()
 let lastFocused: HTMLElement | null = null
 let pointerAt = 0
 
 /** The host asked for the page to take the keyboard: a focus the page makes in the next moment is welcome. */
 function allowHostFocus(): void {
-  hostFocusUntil = Date.now() + HOST_FOCUS_MS
+  hostFocus.ask(Date.now(), typeof document !== "undefined" && document.hasFocus())
 }
 
 function guardFocus(): void {
   if (typeof HTMLElement === "undefined" || typeof document === "undefined") return
   const native = HTMLElement.prototype.focus
   HTMLElement.prototype.focus = function focus(this: HTMLElement, options?: FocusOptions) {
-    if (!document.hasFocus() && Date.now() > hostFocusUntil) return
+    if (!hostFocus.allows(Date.now(), document.hasFocus())) return
     native.call(this, options)
   }
+  window.addEventListener("focus", () => hostFocus.focused(Date.now()))
+  window.addEventListener("blur", () => hostFocus.blurred())
   document.addEventListener("focusin", (event) => {
     if (event.target instanceof HTMLElement && event.target !== document.body) lastFocused = event.target
   }, true)
