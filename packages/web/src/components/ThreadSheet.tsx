@@ -248,7 +248,10 @@ export function ThreadSheet({ id, slug, depth, widthDepth, initiallyOpen }: { id
             // `click`, so the drawer went as the link went out). ui/Sheet.tsx PORTALED_OVERLAY exempts the
             // same wrapper for the plain sheets. A menu or select opened from inside this sheet is a React
             // descendant, which Radix already counts as inside.
-            if (event.target instanceof Element && event.target.closest("[data-radix-popper-content-wrapper]")) {
+            // (4) The same for an overlay drawn above the whole drawer stack (Settings, `data-over-drawers`):
+            // a click in it, or on its scrim, belongs to it — with Settings open over this thread, every
+            // click in Settings closed the thread beneath it.
+            if (event.target instanceof Element && event.target.closest("[data-radix-popper-content-wrapper],[data-over-drawers]")) {
               event.preventDefault()
               return
             }

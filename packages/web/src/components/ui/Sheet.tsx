@@ -127,7 +127,9 @@ export function useSheetLayer(
 //   • a MODAL Radix layer pins `body{pointer-events:none}` for as long as it is up, which catches its
 //     BACKDROP as well as its content (the backdrop carries no role and no popper wrapper);
 //   • a non-modal popper (Popover, a hover card) leaves the body alone, so match its wrapper directly.
-const PORTALED_OVERLAY = "[data-radix-popper-content-wrapper],[role='menu'],[role='listbox'],[role='dialog']"
+//   • an overlay drawn ABOVE the whole drawer stack (Settings: `data-over-drawers`) owns its scrim as well as
+//     its panel — a click on it closes that overlay, never the sheet beneath.
+const PORTALED_OVERLAY = "[data-radix-popper-content-wrapper],[role='menu'],[role='listbox'],[role='dialog'],[data-over-drawers]"
 
 function overlayOwnsPointer(target: Element): boolean {
   return document.body.style.pointerEvents === "none" || target.closest(PORTALED_OVERLAY) !== null
@@ -259,6 +261,25 @@ function NarrowFocusLayer({ narrow, focus, children, ...slotProps }: { narrow: b
     >
       {children}
     </RadixDialog.Content>
+  )
+}
+
+/**
+ * The same focus layer for an overlay that is NOT a drawer-stack layer but paints above the whole stack —
+ * Settings (SettingsDrawer.tsx), opened over an open thread by ⌘, or an editor's title row. At every width,
+ * not only a narrow one: it must be the NEWEST Radix layer, or the thread's dialog below keeps the things
+ * Radix gives only the top layer — a narrow thread's focus trap pulled every focus out of Settings back
+ * into the thread, and at any width Radix handed Escape to the thread's dialog, which closed the thread
+ * and left Settings standing over the queue. `panelRef` is the element that becomes the layer.
+ */
+export function OverDrawersFocusLayer({ panelRef, children }: { panelRef: RefObject<HTMLElement | null>; children: ReactElement }): ReactElement {
+  const focus = useNarrowSheetFocus(panelRef)
+  return (
+    <RadixDialog.Root open modal={false}>
+      <NarrowFocusLayer narrow focus={focus}>
+        {children}
+      </NarrowFocusLayer>
+    </RadixDialog.Root>
   )
 }
 
