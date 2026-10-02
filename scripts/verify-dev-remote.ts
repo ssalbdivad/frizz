@@ -1,5 +1,5 @@
 // Can a phone reach a `nub run dev` board? Boots `src/dev.ts` on a spare port with throwaway Frizz
-// state (XDG_* pointed at a temp dir, so the real board, its saved setup and its sessions are never
+// state (HOME and XDG_* pointed at a temp dir, so the real board, its saved setup and its sessions are never
 // touched), sets remote access through the same loopback route Settings uses, then loads the board the
 // way a phone does: over HTTPS at the public name, through a TLS proxy that forwards to the board with
 // the public Host intact, in a headless browser that resolves the name to that proxy. Then restarts the
@@ -7,7 +7,7 @@
 //
 //   nub scripts/verify-dev-remote.ts [--keep]   (from a worktree: it boots Vite from this checkout)
 import { type ChildProcess, execFileSync, spawn } from "node:child_process";
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { connect } from "node:net";
 import { createServer as createHttpsServer } from "node:https";
 import { request } from "node:http";
@@ -19,8 +19,13 @@ const root = resolve(import.meta.dirname, "..");
 const PORT = 9471;
 const NAME = "board.frizz-verify.test";
 const state = mkdtempSync(join(tmpdir(), "frizz-dev-remote-"));
+mkdirSync(join(state, "home"));
+// HOME as well as XDG_*: Frizz still honours a legacy ~/.frizz, and a run that pointed only XDG_* at the
+// temp dir wrote its registry and ui.db into the real ~/.frizz, which the live board then adopted as
+// its install — every project's RPC 404ed until the files were moved out (2026-10-02).
 const env = {
   ...process.env,
+  HOME: join(state, "home"),
   XDG_DATA_HOME: join(state, "data"),
   XDG_STATE_HOME: join(state, "state"),
   XDG_CONFIG_HOME: join(state, "config"),
