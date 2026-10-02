@@ -108,12 +108,12 @@ export function ThreadComposerBox({
   const followUp = useEagerFollowUp(slug)
   const [signInFor, setSignInFor] = useState<AccountBackend | null>(null)
   const qc = useQueryClient()
-  const userCommands = useUserCommands().data?.commands
+  const userCommandsQuery = useUserCommands()
+  const userCommands = userCommandsQuery.data?.commands
   // The thread's harness skills and the operator's own user commands, as one menu (useUserCommands.ts).
   const slashSuggest = useMemo(
     () => () => Promise.all([fetchThreadSkills(slug), fetchUserCommands(qc, projectDir)]).then(([skills, commands]) => mergeSlashItems(skills, commands)),
-    // `userCommands` too: a command saved in Settings hands the box a new list, and the box re-asks.
-    [slug, qc, projectDir, userCommands],
+    [slug, qc, projectDir],
   )
   // `@` mentions offer every OTHER thread on the board — this one cannot usefully point at itself.
   const mentions = useMentionCandidates(slug)
@@ -236,6 +236,8 @@ export function ThreadComposerBox({
           onSubmit={() => send()}
           onInterruptSubmit={canInterrupt ? () => send(true) : undefined}
           slashSuggest={slashSuggest}
+          // A command saved in Settings refreshes the menu on the next `/`.
+          slashSuggestVersion={userCommandsQuery.dataUpdatedAt}
           // An external session keeps its own sentence (it says what sending does); otherwise the verb
           // is the thread's state: steering a turn in flight, or replying to one at rest.
           placeholder={thread?.foreign ? placeholder : turnRunning ? "Steer…" : "Reply…"}
@@ -274,6 +276,8 @@ export function ThreadComposerBox({
         onInterruptSubmit={canInterrupt ? () => send(true) : undefined}
         onPushQueued={canInterrupt ? pushQueued : undefined}
         slashSuggest={slashSuggest}
+          // A command saved in Settings refreshes the menu on the next `/`.
+          slashSuggestVersion={userCommandsQuery.dataUpdatedAt}
         mentionCandidates={mentions}
         ownMention={ownMention}
         placeholder={answering?.slug === slug && answering.staged > 0 ? "Add a note to your answers…" : placeholder}

@@ -5114,11 +5114,12 @@ export type SaveUserCommandInput = z.infer<typeof SaveUserCommandInput>
 export const DeleteUserCommandInput = z.object({ name: UserCommandName }).strict()
 export type DeleteUserCommandInput = z.infer<typeof DeleteUserCommandInput>
 
-// The text a user command is DELIVERED as. The prompt goes to the agent wrapped in a tag naming the
+// The text a user command is DELIVERED as. Not a `<frizz-…>` tag: that prefix marks Frizz's own
+// plumbing, which every transcript drops (NOISE_PREFIXES), and this is the human's message. The prompt goes to the agent wrapped in a tag naming the
 // command and what was typed after it, so any surface that reads the message back — the transcript, a
 // queued bubble, a retry — can show `/commit fix the tests` instead of the whole expanded prompt.
-const USER_COMMAND_OPEN = /^<frizz-command name="([^"]+)"(?: args="([^"]*)")?>\n/
-const USER_COMMAND_CLOSE = "\n</frizz-command>"
+const USER_COMMAND_OPEN = /^<slash-command name="([^"]+)"(?: args="([^"]*)")?>\n/
+const USER_COMMAND_CLOSE = "\n</slash-command>"
 const escapeAttr = (text: string) => text.replace(/&/g, "&amp;").replace(/"/g, "&quot;").replace(/</g, "&lt;").replace(/\n/g, "&#10;")
 const unescapeAttr = (text: string) => text.replace(/&#10;/g, "\n").replace(/&lt;/g, "<").replace(/&quot;/g, "\"").replace(/&amp;/g, "&")
 
@@ -5127,7 +5128,7 @@ const unescapeAttr = (text: string) => text.replace(/&#10;/g, "\n").replace(/&lt
 export function expandUserCommand(command: Pick<UserCommand, "name" | "body">, args: string): string {
   const body = command.body.trim()
   const prompt = body.includes("$ARGUMENTS") ? body.replaceAll("$ARGUMENTS", args) : args ? `${body}\n\nARGUMENTS: ${args}` : body
-  return `<frizz-command name="${escapeAttr(command.name)}"${args ? ` args="${escapeAttr(args)}"` : ""}>\n${prompt}${USER_COMMAND_CLOSE}`
+  return `<slash-command name="${escapeAttr(command.name)}"${args ? ` args="${escapeAttr(args)}"` : ""}>\n${prompt}${USER_COMMAND_CLOSE}`
 }
 
 /** A draft that INVOKES a user command — `/name` as its first token, the rest of the first line and

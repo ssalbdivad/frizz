@@ -163,6 +163,7 @@ export function Composer({
   leftAction,
   contextTokens,
   slashSuggest,
+  slashSuggestVersion,
   mentionCandidates,
   ownMention,
   onInterruptSubmit,
@@ -205,6 +206,10 @@ export function Composer({
   // renders and completes. Surfaces without a session to ask (the dispatch composer) omit it and the
   // whole affordance is inert.
   slashSuggest?: () => Promise<ThreadSkill[]>
+  // Changes when the list behind `slashSuggest` has (a user command saved in Settings): the box forgets
+  // the list it holds and asks again on the next `/`. A value, not the function's identity — a caller
+  // that hands over a fresh arrow every render must not refetch on every render.
+  slashSuggestVersion?: string | number
   // MENTION TYPEAHEAD. When set, an `@` at a word boundary with the caret inside its token opens a menu
   // of these threads' handles above the box; choosing one inserts `@handle ` as plain text. The caller
   // owns the list (lib/threadMentions.ts mentionCandidates — the project's threads minus the one being
@@ -412,10 +417,9 @@ export function Composer({
   // that failed, which must read as "no suggestions", never as an error the operator has to dismiss).
   // Read by the menu AND the tint, so a draft restored with `/frizz-stack` in it lights up too.
   const [skillItems, setSkillItems] = useState<ThreadSkill[] | null>(null)
-  // A new source is a new list (a user command saved in Settings): forget the old one, re-ask on demand.
-  const [skillsFrom, setSkillsFrom] = useState(() => slashSuggest)
-  if (skillsFrom !== slashSuggest) {
-    setSkillsFrom(() => slashSuggest)
+  const [skillsVersion, setSkillsVersion] = useState(slashSuggestVersion)
+  if (skillsVersion !== slashSuggestVersion) {
+    setSkillsVersion(slashSuggestVersion)
     setSkillItems(null)
   }
   const slashItems = useMemo(() => skillItems ?? [], [skillItems])

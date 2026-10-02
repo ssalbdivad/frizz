@@ -6,9 +6,9 @@ const commit = { name: "commit", body: "commit with a one-line message" }
 const fix = { name: "fix", body: "Fix this: $ARGUMENTS. Then run the tests." }
 
 test("$ARGUMENTS is replaced; without it, arguments ride on a line of their own", () => {
-  assert.equal(expandUserCommand(fix, "the flaky test"), '<frizz-command name="fix" args="the flaky test">\nFix this: the flaky test. Then run the tests.\n</frizz-command>')
-  assert.equal(expandUserCommand(commit, "say why"), '<frizz-command name="commit" args="say why">\ncommit with a one-line message\n\nARGUMENTS: say why\n</frizz-command>')
-  assert.equal(expandUserCommand(commit, ""), '<frizz-command name="commit">\ncommit with a one-line message\n</frizz-command>')
+  assert.equal(expandUserCommand(fix, "the flaky test"), '<slash-command name="fix" args="the flaky test">\nFix this: the flaky test. Then run the tests.\n</slash-command>')
+  assert.equal(expandUserCommand(commit, "say why"), '<slash-command name="commit" args="say why">\ncommit with a one-line message\n\nARGUMENTS: say why\n</slash-command>')
+  assert.equal(expandUserCommand(commit, ""), '<slash-command name="commit">\ncommit with a one-line message\n</slash-command>')
 })
 
 test("only a draft that OPENS with a known command is expanded", () => {
@@ -27,5 +27,5 @@ test("a delivered command reads back as exactly what was typed, whatever its arg
   // What a send appends after the wrapper (attached context, file paths) stays visible.
   assert.equal(userCommandDisplayText(`${expandUserCommand(commit, "")}\n\n/home/x/shot.png`), "/commit\n\n/home/x/shot.png")
   assert.equal(userCommandDisplayText("an ordinary message"), undefined)
-  assert.equal(userCommandDisplayText('<frizz-command name="x">\nno close'), undefined)
+  assert.equal(userCommandDisplayText('<slash-command name="x">\nno close'), undefined)
 })

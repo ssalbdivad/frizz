@@ -7,7 +7,7 @@ import { projectStateDir } from "./frizz-paths.ts"
 import { projectRetiredBackgroundOps, projectTranscriptPeerNames } from "./transcript.ts"
 import { relayMessage } from "./completion-relay.ts"
 import type { TranscriptMessage } from "@frizz/shared"
-import { DISPATCH_TASK_BANNER_MARKER, formatGithubWakeSteer, GITHUB_DISPATCH_UI_BOUNDARY, humanGapNote, isInjectedNoise, parseCrossSessionMessage, PARK_CORRECTION_NAMES_LEAD, PARK_CORRECTION_QUESTION_LEAD, PARK_CORRECTION_RETIRED_LEAD, parseRecurringPrompt, prWatchWakeMessage, restPromptMessage, wakeDeliveryToken, wakeTimeHeader, type GithubWakeSteer } from "@frizz/shared"
+import { DISPATCH_TASK_BANNER_MARKER, expandUserCommand, userCommandDisplayText, formatGithubWakeSteer, GITHUB_DISPATCH_UI_BOUNDARY, humanGapNote, isInjectedNoise, parseCrossSessionMessage, PARK_CORRECTION_NAMES_LEAD, PARK_CORRECTION_QUESTION_LEAD, PARK_CORRECTION_RETIRED_LEAD, parseRecurringPrompt, prWatchWakeMessage, restPromptMessage, wakeDeliveryToken, wakeTimeHeader, type GithubWakeSteer } from "@frizz/shared"
 import {
   coalescedQueuedKeys,
   createTranscriptFold,
@@ -3149,4 +3149,15 @@ test("readThreadTranscript + the paged reader: an ACP row renders the frizz-writ
     h.cleanup()
     rmSync(stateDir, { recursive: true, force: true })
   }
+})
+
+// A USER COMMAND is the human's message, delivered wrapped. Shape from a real broker session (claude
+// 2.1.285, 2026-10-02): its first spelling, `<frizz-command>`, matched the `<frizz-` plumbing prefix and
+// the bubble vanished from the transcript while the agent answered it.
+test("a user command's delivery renders as the human's bubble", () => {
+  const delivered = expandUserCommand({ name: "echo", body: "Reply with exactly: ECHO $ARGUMENTS" }, "hello world")
+  const msgs = parseTranscript([enqueueLine(delivered), userLine(delivered)].join("\n"))
+  const users = msgs.filter((m) => m.role === "user")
+  assert.deepEqual(users.map((m) => [m.text, m.queued]), [[delivered, false]])
+  assert.equal(userCommandDisplayText(users[0]!.text), "/echo hello world")
 })

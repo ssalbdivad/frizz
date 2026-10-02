@@ -28,9 +28,12 @@ export function SlashCommandsField() {
 
   const open = (command?: UserCommand) => {
     setError(null)
-    if (!command) setDraft({ name: "", description: "", body: "" })
-    else if (command.source === "frizz") setDraft({ name: command.name, description: command.description, body: command.body, previousName: command.name })
-    else setDraft({ name: command.name, description: command.description, body: command.body, copiedFrom: command })
+    if (!command) return setDraft({ name: "", description: "", body: "" })
+    // A file with no description is listed under its prompt's first line (user-commands.ts); the field
+    // starts empty then, or saving would write that line back as a description nobody wrote.
+    const description = command.description === command.body.split("\n").find((l) => l.trim())?.trim() ? "" : command.description
+    if (command.source === "frizz") setDraft({ name: command.name, description, body: command.body, previousName: command.name })
+    else setDraft({ name: command.name, description, body: command.body, copiedFrom: command })
   }
 
   async function save() {

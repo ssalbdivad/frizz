@@ -91,7 +91,8 @@ function PromptForm({
   const mentions = useMentionCandidates()
   // No session yet, so no harness to list skills: the `/` menu here is the operator's own user commands,
   // which Frizz expands itself (useUserCommands.ts) — `/commit` starts a thread on that prompt.
-  const userCommands = useUserCommands().data?.commands
+  const userCommandsQuery = useUserCommands()
+  const userCommands = userCommandsQuery.data?.commands
   const slashSuggest = useMemo(() => () => Promise.resolve(userCommandItems(userCommands ?? [])), [userCommands])
   const expandedPrompt = (text: string) => expandUserCommandDraft(text, userCommands ?? []) ?? text
   const boardDir = useProjectDir()
@@ -348,6 +349,7 @@ function PromptForm({
         placeholder="Describe the task…"
         mentionCandidates={mentions}
         slashSuggest={slashSuggest}
+        slashSuggestVersion={userCommandsQuery.dataUpdatedAt}
         minHeight={96}
         maxHeight={340}
         busy={dispatch.isPending || saveLazy.isPending || savingSettings}
