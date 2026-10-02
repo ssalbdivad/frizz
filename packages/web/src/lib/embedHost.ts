@@ -1,7 +1,6 @@
 import type { EmbedHostMessage } from "@frizz/shared"
-import { store } from "../store.ts"
-import { crossProjectHref } from "./base-path.ts"
-import { boardOrTimeout, composeInto, threadIsThere } from "./editorBridge.ts"
+import { closeImageViewer, pushDrawer, showToast, store } from "../store.ts"
+import { boardOrTimeout, composeInto, holdsBoardOf, openNamedThread, threadIsThere } from "./editorBridge.ts"
 import { isTerminalPath } from "./composerContext.ts"
 import { setEditorContext, takePendingAdd } from "./editorContext.ts"
 import { runHostCommand } from "./embedCommand.ts"
@@ -97,16 +96,22 @@ async function handle(message: EmbedHostMessage): Promise<void> {
   }
   if (message.type === "frizz:navigate") {
     // Whatever is over the page goes: the human asked to see a thread or a queue, not Settings — closed
-    // by its own close, which sends a change still in its debounce.
+    // by its own close, which sends a change still in its debounce. The picture viewer too, which sits
+    // over every drawer: left up, it covered the queue it was sent back to, and the thread it was sent to.
     if (store.showSettings && !closeSettingsAnimated()) store.showSettings = false
     store.showPalette = false
     store.showShortcuts = false
     store.showNewThread = false
+    closeImageViewer()
     const { to } = message
     if (to === "queue") spaNavigate(homeHref())
     else if ("thread" in to) {
-      // A thread its project lacks would reload the frame (threadIsThere); stay on what is showing.
-      if (await threadIsThere(to.thread, to.project)) spaNavigate(`${crossProjectHref(to.project)}/thread/${encodeURIComponent(to.thread)}`)
+      // Opened the way the page opens its own threads (openNamedThread). One its project lacks is not
+      // navigated to, which would reload the frame (threadIsThere): on this page's own board it opens
+      // the drawer that says so, as a link to it does; another project's is a toast.
+      if (await threadIsThere(to.thread, to.project)) openNamedThread(to.thread, to.project, "open")
+      else if (holdsBoardOf(to.project)) pushDrawer("thread", to.thread)
+      else showToast("That thread isn't in Frizz.")
     }
     else spaNavigate(projectViewHref(to.project))
     return
