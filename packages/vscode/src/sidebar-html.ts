@@ -163,9 +163,14 @@ export function frameDocument(input: { nonce: string; url: string; origin: strin
     if (data.focus === true || data.type === "frizz:command") frame.focus()
     frame.contentWindow.postMessage(data, FRIZZ)
   })
-  // Focus that lands on this document (the view revealed, a click on its edge) belongs to the page.
+  // Focus that lands on this document (the view revealed, a click on its edge) belongs to the page. Also
+  // when this document's focused element is ALREADY the frame: VS Code's webview host focuses this WINDOW
+  // (its active frame's contentWindow.focus()) as it settles a view's focus, and a focused window is the
+  // focused frame — the page under it loses the keyboard though nothing here moved. Focusing the frame
+  // element again would be a no-op (it is the active element), so the page's window is focused instead.
   window.addEventListener("focus", () => setTimeout(() => {
     if (document.activeElement === document.body) frame.focus()
+    else if (document.activeElement === frame) frame.contentWindow.focus()
   }))${CLICKS}
   vscode.postMessage({ view: "platform", mac: /Mac/.test(navigator.platform) })
 </script>

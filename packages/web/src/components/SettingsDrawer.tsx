@@ -21,6 +21,7 @@ import { SignOutThisDeviceRow } from "./SignOutThisDeviceRow.tsx"
 import { RemoteAccessField } from "./RemoteAccessField.tsx"
 import { QuotaMeters } from "./QuotaBar.tsx"
 import { SheetHeader } from "./ui/SheetHeader.tsx"
+import { OverDrawersFocusLayer } from "./ui/Sheet.tsx"
 import { Select } from "./ui/Select.tsx"
 import { SettingsField } from "./SettingsField.tsx"
 import { DeleteOldThreads, RETENTION_DAYS } from "./DeleteOldThreads.tsx"
@@ -53,6 +54,7 @@ export function SettingsDrawer() {
   // New thread dialog's tier (lib/overlaySurface.ts aboveDrawersZ), which also keeps toasts and its
   // own selects above it.
   const z = aboveDrawersZ(useSnapshot(store).drawers.length)
+  const panelRef = useRef<HTMLDivElement>(null)
   const [perm, setPerm] = useState<NotifPerm>(currentPerm())
   // The Home workspace's square, its picker row and its project list entry all show its folder, and they
   // read it from the project list — so the list is re-read once a moved folder has actually saved.
@@ -118,14 +120,27 @@ export function SettingsDrawer() {
     )
   }
 
+  // OVER AN OPEN THREAD the z above is only half of it: the thread's own dialog still held the page.
+  // Narrow — an editor's sidebar at any width, a browser below 800px — that dialog is modal, and its
+  // `body{pointer-events:none}` ran through this scrim, so Settings DREW on top and every click went
+  // through it to the thread underneath (real VS Code e2e, c9: the hit under Settings' first row was the
+  // thread's user bubble, 2 widths of 2); its focus trap pulled the keyboard back into the thread; and at
+  // any width Radix gave Escape to the thread's dialog, which closed the thread instead of Settings. So
+  // the scrim takes the pointer back (`pointer-events: auto`), `data-over-drawers` tells the drawers
+  // beneath that a click here is not theirs to dismiss on (ThreadSheet, ui/Sheet.tsx), and the panel is
+  // the newest Radix layer (OverDrawersFocusLayer), which pauses the thread's trap and takes Escape first.
   return (
     <div
+      data-over-drawers
       className={`${SHEET_SCRIM_CLASS} flex justify-end ${shown ? "opacity-100" : "opacity-0"}`}
-      style={{ zIndex: z }}
+      style={{ zIndex: z, pointerEvents: "auto" }}
       onMouseDown={(e) => e.target === e.currentTarget && close()}
     >
+      <OverDrawersFocusLayer panelRef={panelRef}>
       <div
-        className={`${SHEET_PANEL_CLASS} w-[560px] max-w-[94vw] ${shown ? "translate-x-0" : "translate-x-full"}`}
+        ref={panelRef}
+        aria-label="Settings"
+        className={`${SHEET_PANEL_CLASS} w-[560px] max-w-[94vw] outline-none ${shown ? "translate-x-0" : "translate-x-full"}`}
       >
         <SheetHeader title="Settings" actions={<SaveStatus state={saveState} />} onClose={close} />
 
@@ -237,6 +252,7 @@ export function SettingsDrawer() {
           )}
         </div>
       </div>
+      </OverDrawersFocusLayer>
     </div>
   )
 }

@@ -46,19 +46,24 @@ interface Relay {
   hint: { hidden: boolean }
   hintText: { textContent: string }
   focused: number
+  /** Times the PAGE's window was focused (`frame.contentWindow.focus()`). */
+  pageFocused: number
   dispatch(event: { source: unknown; origin: string; data: unknown }): void
+  /** The relay's window gains focus with `active` its focused element; the listener's timer has run when it resolves. */
+  windowFocus(active: "body" | "frame"): Promise<void>
 }
 
 function relay(html: string): Relay {
   const script = /<script nonce="[^"]+">([\s\S]*?)<\/script>/u.exec(html)![1]!
   const toHost: unknown[] = []
   const toPage: { data: unknown; targetOrigin: string }[] = []
-  const frameWindow = { postMessage: (data: unknown, targetOrigin: string) => toPage.push({ data, targetOrigin }) }
+  const frameWindow = { postMessage: (data: unknown, targetOrigin: string) => toPage.push({ data, targetOrigin }), focus: () => state.pageFocused++ }
   const hostFrame = {}
   const hint = { hidden: true }
   const hintText = { textContent: "" }
   const listeners: ((event: unknown) => void)[] = []
-  const state = { focused: 0 }
+  const focusListeners: (() => void)[] = []
+  const state = { focused: 0, pageFocused: 0 }
   const frame = { contentWindow: frameWindow, focus: () => state.focused++ }
   const window = {
     origin: WEBVIEW,
@@ -68,13 +73,15 @@ function relay(html: string): Relay {
     },
     addEventListener: (type: string, listener: (event: unknown) => void) => {
       if (type === "message") listeners.push(listener)
+      if (type === "focus") focusListeners.push(listener as () => void)
     },
   }
+  const document = { getElementById: (id: string) => (id === "frizz" ? frame : id === "hint" ? hint : id === "hint-text" ? hintText : null), addEventListener() {}, body: {}, activeElement: null as unknown }
   runInNewContext(script, {
     // A clone, as postMessage makes one — and out of the script's realm, so deepEqual compares values.
     acquireVsCodeApi: () => ({ postMessage: (message: unknown) => toHost.push(structuredClone(message)) }),
     window,
-    document: { getElementById: (id: string) => (id === "frizz" ? frame : id === "hint" ? hint : id === "hint-text" ? hintText : null), addEventListener() {}, body: {} },
+    document,
     navigator: { platform: "Linux x86_64" },
     Element: class {},
     setTimeout,
@@ -89,7 +96,15 @@ function relay(html: string): Relay {
     get focused() {
       return state.focused
     },
+    get pageFocused() {
+      return state.pageFocused
+    },
     dispatch: (event) => listeners.forEach((listener) => listener(event)),
+    async windowFocus(active) {
+      document.activeElement = active === "body" ? document.body : frame
+      focusListeners.forEach((listener) => listener())
+      await new Promise((resolve) => setTimeout(resolve, 5))
+    },
   }
 }
 
@@ -142,4 +157,16 @@ test("the bar is drawn shut with the loading words, or open from the first paint
   assert.match(plain, new RegExp(`<div class="hint" id="hint" role="status" hidden><p id="hint-text">${HINT.text.replace(/'/gu, "&#39;")}</p>`, "u"))
   const old = frameDocument({ nonce: "n", url: URL_, origin: FRIZZ, hint: HINT_OLD_FRIZZ })
   assert.match(old, /<div class="hint" id="hint" role="status"><p id="hint-text">This Frizz is older than the sidebar\. Update Frizz to use it here, or open it in your browser\.<\/p>/u)
+})
+
+test("focus landing on the relay goes on to the page — including when the frame is already its focused element", async () => {
+  const r = relay(frameDocument({ nonce: "n", url: URL_, origin: FRIZZ }))
+  await r.windowFocus("body")
+  assert.equal(r.focused, 1, "a view revealed, a click on its edge: the frame takes the focus")
+  // VS Code's webview host focuses this WINDOW while it settles a view's focus. The relay's focused element is
+  // still the frame, so nothing here moved — but the focused frame is now the relay's, and the page lost the
+  // keyboard a beat after its caret landed (real VS Code e2e, c2: New thread after Back to queue, 1 run in 3).
+  await r.windowFocus("frame")
+  assert.equal(r.pageFocused, 1, "the page's window is focused, the frame element being focused already")
+  assert.equal(r.focused, 1)
 })
