@@ -7,6 +7,7 @@ import {
   type RemoteAccessState,
   type RemoteChoice,
   type RemoteKind,
+  type RemoteSetupView,
   type RemoteSignInLink,
 } from "../api/remoteAccess.ts"
 import { SETTINGS_HELP } from "../lib/settingsHelp.ts"
@@ -18,7 +19,7 @@ import { Select } from "./ui/Select.tsx"
 // field at all — choosing who can reach the board needs presence on the machine.
 
 const KINDS: { value: RemoteKind; label: string }[] = [
-  { value: "off", label: "Off — this machine only" },
+  { value: "off", label: "Off" },
   { value: "private", label: "Private frizz.sh name" },
   { value: "frizz", label: "Custom frizz.sh name" },
   { value: "cloudflare", label: "Cloudflare Tunnel" },
@@ -27,6 +28,14 @@ const KINDS: { value: RemoteKind; label: string }[] = [
 ]
 
 const REMOTE_ACCESS_KEY = ["remoteAccess"] as const
+
+/** The setup in force, as the form's fields — so re-saving it, or changing one value, starts from what is there. */
+function fieldsOf(current: RemoteSetupView): Record<string, string> {
+  if (current.kind === "frizz") return { name: current.name ?? "" }
+  if (current.kind === "cloudflare") return { hostname: current.origin?.replace(/^https:\/\//, "") ?? "", tunnel: current.tunnel ?? "" }
+  if (current.kind === "tailscale" || current.kind === "other") return { origin: current.origin ?? "" }
+  return {}
+}
 
 const INPUT =
   "w-full rounded-md border border-border bg-bg px-2 py-1 font-mono text-[12px] text-fg outline-none placeholder:text-muted-50 focus-visible:ring-1 focus-visible:ring-focus-ink-60"
@@ -59,14 +68,17 @@ function RemoteAccessForm({ state }: { state: RemoteAccessState }) {
   const current = state.current
   const [kind, setKind] = useState<RemoteKind>(current.kind)
   const [link, setLink] = useState<RemoteSignInLink | null>(null)
-  const [fields, setFields] = useState<Record<string, string>>({})
-  useEffect(() => setKind(current.kind), [current.kind])
+  const [fields, setFields] = useState<Record<string, string>>(() => fieldsOf(current))
+  useEffect(() => {
+    setKind(current.kind)
+    setFields(fieldsOf(current))
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- re-seed only when the setup in force changes
+  }, [current.kind, current.origin, current.name, current.tunnel])
 
   const change = useMutation({
     mutationFn: (choice: RemoteChoice) => applyRemoteChoice(choice),
     onSuccess: (result) => {
       setLink(result.link)
-      setFields({})
       void queryClient.invalidateQueries({ queryKey: REMOTE_ACCESS_KEY })
     },
   })
@@ -99,6 +111,7 @@ function RemoteAccessForm({ state }: { state: RemoteAccessState }) {
         value={kind}
         onValueChange={(value) => {
           setKind(value as RemoteKind)
+          setFields(value === current.kind ? fieldsOf(current) : {})
           change.reset()
         }}
         options={KINDS}
