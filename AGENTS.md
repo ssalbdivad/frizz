@@ -216,6 +216,13 @@ JavaScript and TypeScript files with `nub <file>`, package scripts with `nub run
 CLIs with `nubx <tool>`, tests with `nub --test`, and installs with `nub install`. Nub transpiles
 TypeScript but does not typecheck it, so keep `tsc --noEmit` and project typecheck gates separate.
 
+# Always `.ts`, never `.mjs`
+
+Every new script, seed, verifier, harness or tool in this repo is a `.ts` file — never `.mjs`, `.js` or
+`.cjs`, even though most of `scripts/` is still `.mjs` and even when you copy one of those as a template
+(maintainer 2026-10-01: "always use .ts never .mjs"). `nub` runs `.ts` directly, so there is no build step
+to save. The existing `.mjs` files are legacy: run them as they are, but do not add to them by example.
+
 # Agent completion invariant
 
 Once spawned, an agent runs to its terminal return. Do not interrupt or cut off an active agent to
