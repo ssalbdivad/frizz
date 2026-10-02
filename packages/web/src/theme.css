@@ -606,3 +606,103 @@
     --terminal-cursor-accent: #f7f7f7;
   }
 }
+
+/* THE EDITOR'S COLOURS — the page framed by VS Code (html[data-embed]) wears the editor theme's own
+   colours rather than Frizz's palette, so the sidebar reads as part of the editor instead of a foreign
+   panel set into it (maintainer 2026-10-02: "match the theme as closely as possible"). The relay reads
+   them off its webview document and the page sets each on its root under VS Code's own name
+   (`--vscode-sideBar-background`; packages/shared embed-protocol.ts EMBED_THEME_COLORS, lib/theme.ts),
+   marking the root `data-host-colors="<surface>"`. `frizz.matchEditorTheme` off, or a browser tab: no
+   attribute, and none of this applies.
+
+   What is TAKEN from the theme: the surface (the side bar's background, or the editor's for an editor
+   tab), text, the secondary text, borders, the focus colour (Frizz's accent IS its focus motif — the
+   composer's ring, focused borders, the nav chevron), filled buttons, links, hover, scrollbars. What is
+   DERIVED, because themes rarely carry a usable step: the raised surfaces (panel, panel-2, elevated, the
+   inset well) are lifted from the surface by a fixed mix — most built-in themes paint their widgets in
+   the very colour of the side bar, and the user who asked runs one whose side bar and editor are the same
+   #080d17 — so Frizz's contrast steps survive any theme. What is KEPT: the semantic status colours (ready,
+   error, done, needs-you…), the syntax and terminal colours — they carry meaning, and a theme's own
+   reds and greens are tuned for code, not for a status dot on its side bar.
+
+   Every mix below is in oklab and against the surface, so an rgba() colour (many themes give their
+   secondary text at 70% alpha) still comes out opaque where it must. The percentages were measured, not
+   picked: the pass across ten built-in themes is in the commit that set them. */
+:root[data-embed][data-host-colors] {
+  --host-bg: var(--vscode-sideBar-background);
+  --frizz-bg: var(--host-bg);
+  --frizz-fg: var(--vscode-sideBar-foreground, var(--vscode-foreground));
+  --frizz-user-bubble-fg: var(--frizz-fg);
+  /* muted, faint and accent are computed where a contrast decides them (lib/hostPalette.ts); the mix after
+     each is what the first paint wears before that script has run, when no text is on screen yet. */
+  --frizz-muted: var(--host-muted, color-mix(in oklab, var(--vscode-descriptionForeground, var(--frizz-fg)) 90%, var(--frizz-bg)));
+  --frizz-faint: var(--host-faint, color-mix(in oklab, var(--frizz-muted) 70%, var(--frizz-bg)));
+  --frizz-provisional: color-mix(in oklab, var(--frizz-fg) 55%, var(--frizz-bg));
+  --frizz-edition: color-mix(in oklab, var(--frizz-muted) 75%, var(--frizz-bg));
+  --frizz-border: var(--vscode-panel-border, color-mix(in oklab, var(--frizz-fg) 14%, var(--frizz-bg)));
+  --frizz-border-strong: color-mix(in oklab, var(--frizz-border), var(--frizz-fg) 12%);
+  --frizz-control-border: var(--vscode-input-border, var(--frizz-border-strong));
+  --frizz-control-strong: var(--frizz-border-strong);
+  --frizz-question-border: var(--frizz-border-strong);
+  --frizz-accent: var(--host-accent, var(--vscode-focusBorder));
+  --frizz-accent-fill: var(--vscode-button-background, var(--frizz-accent));
+  --frizz-on-accent: var(--vscode-button-foreground, #ffffff);
+  --frizz-focus: color-mix(in oklab, var(--frizz-accent) 50%, transparent);
+  --input-focus: var(--frizz-accent);
+  --focus-ink-50: color-mix(in oklab, var(--frizz-fg) 50%, transparent);
+  --focus-ink-60: color-mix(in oklab, var(--frizz-fg) 60%, transparent);
+  --focus-accent-40: color-mix(in oklab, var(--frizz-accent) 40%, transparent);
+  --focus-accent-60: color-mix(in oklab, var(--frizz-accent) 60%, transparent);
+  --frizz-selection: color-mix(in oklab, var(--frizz-accent) 12%, transparent);
+  --frizz-selection-border: var(--frizz-accent);
+  --frizz-hover: var(--vscode-list-hoverBackground, color-mix(in oklab, var(--frizz-fg) 6%, transparent));
+  --hover-strong: color-mix(in oklab, var(--frizz-hover), var(--frizz-fg) 6%);
+  --frizz-scrollbar: var(--vscode-scrollbarSlider-background, var(--frizz-border-strong));
+  --frizz-scrollbar-hover: var(--vscode-scrollbarSlider-hoverBackground, var(--frizz-scrollbar));
+  --frizz-muted-5: color-mix(in oklab, var(--frizz-muted) 5%, transparent);
+  --frizz-muted-10: color-mix(in oklab, var(--frizz-muted) 10%, transparent);
+  --frizz-muted-15: color-mix(in oklab, var(--frizz-muted) 15%, transparent);
+  --frizz-muted-20: color-mix(in oklab, var(--frizz-muted) 20%, transparent);
+  --frizz-muted-25: color-mix(in oklab, var(--frizz-muted) 25%, transparent);
+  --frizz-muted-30: color-mix(in oklab, var(--frizz-muted) 30%, transparent);
+  --frizz-muted-35: color-mix(in oklab, var(--frizz-muted) 35%, transparent);
+  --frizz-muted-40: color-mix(in oklab, var(--frizz-muted) 40%, transparent);
+  --frizz-muted-45: color-mix(in oklab, var(--frizz-muted) 45%, transparent);
+  --frizz-muted-50: color-mix(in oklab, var(--frizz-muted) 50%, transparent);
+  --frizz-muted-55: color-mix(in oklab, var(--frizz-muted) 55%, transparent);
+  --frizz-muted-60: color-mix(in oklab, var(--frizz-muted) 60%, transparent);
+  --frizz-muted-65: color-mix(in oklab, var(--frizz-muted) 65%, transparent);
+  --frizz-muted-70: color-mix(in oklab, var(--frizz-muted) 70%, transparent);
+  --frizz-muted-75: color-mix(in oklab, var(--frizz-muted) 75%, transparent);
+  --frizz-muted-80: color-mix(in oklab, var(--frizz-muted) 80%, transparent);
+  --frizz-muted-85: color-mix(in oklab, var(--frizz-muted) 85%, transparent);
+  --frizz-muted-90: color-mix(in oklab, var(--frizz-muted) 90%, transparent);
+  --frizz-muted-95: color-mix(in oklab, var(--frizz-muted) 95%, transparent);
+}
+:root[data-embed][data-host-colors="editor"] {
+  --host-bg: var(--vscode-editor-background);
+}
+/* Raised surfaces: toward white in both, as Frizz's own are — a dark theme lifts a little, a light one
+   whitens (its panels are #fff over a #f7f7f7 page), and the inset well sinks. */
+:root[data-embed][data-host-colors][data-theme="dark"] {
+  --frizz-panel: color-mix(in oklab, var(--frizz-bg), #ffffff 3%);
+  --frizz-panel-2: color-mix(in oklab, var(--frizz-bg), #ffffff 5%);
+  --frizz-elevated: color-mix(in oklab, var(--frizz-bg), #ffffff 7%);
+  --frizz-inset: color-mix(in oklab, var(--frizz-bg), #000000 25%);
+  --frizz-user-bubble: color-mix(in oklab, var(--frizz-bg), #ffffff 9%);
+  --frizz-question: var(--frizz-panel-2);
+}
+:root[data-embed][data-host-colors][data-theme="light"] {
+  --frizz-panel: color-mix(in oklab, var(--frizz-bg), #ffffff 70%);
+  --frizz-panel-2: color-mix(in oklab, var(--frizz-bg), #ffffff 40%);
+  --frizz-elevated: color-mix(in oklab, var(--frizz-bg), #ffffff 80%);
+  --frizz-inset: color-mix(in oklab, var(--frizz-bg), #000000 2%);
+  --frizz-user-bubble: color-mix(in oklab, var(--frizz-bg), #000000 4%);
+  --frizz-question: var(--frizz-panel);
+}
+/* High contrast: the theme's border colour IS its structure (#6fc3df on black), drawn at full strength. */
+:root[data-embed][data-host-colors][data-host-contrast] {
+  --frizz-border: var(--vscode-contrastBorder, var(--vscode-panel-border));
+  --frizz-border-strong: var(--frizz-border);
+  --frizz-control-border: var(--frizz-border);
+}

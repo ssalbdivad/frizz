@@ -126,6 +126,20 @@ html[data-embed] .frizz-sheet-panel {
   max-width: 100vw !important;
   border-left: 0;
 }
+/* In the editor's colours (theme.css § The editor's colours) that full-width drawer IS the view, so it is
+   the side bar's own surface, not a raised panel over it: in Dark Modern the drawer drew #1d1d1d in a
+   #181818 side bar, a sheet set into the editor — what the colours are there to stop. Inside it, what
+   matched the panel (its header, its footer, the cards on it) matches the surface instead; panel-2 and
+   elevated keep their lift. */
+html[data-host-colors] .frizz-sheet-panel {
+  --color-panel: var(--color-bg);
+}
+/* …and a focus ring the browser draws on its own (`outline: auto`, a row that kept the keyboard) is in
+   the theme's focus colour, as VS Code draws its own, rather than the OS accent (orange under Linux's
+   Yaru, in a Light Modern side bar). */
+html[data-host-colors] :focus-visible {
+  outline-color: var(--vscode-focusBorder);
+}
 
 /* min-height (not height): the PAGE is the app's one scroll container — content taller than the
    viewport grows the document and the body scrolls.
@@ -969,6 +983,11 @@ a[href] {
   padding: 0;
   border: 0;
   background: transparent;
+}
+/* In the editor's colours (theme.css § The editor's colours) a link is the theme's own link colour — what
+   VS Code draws its links in on the same surface — rather than its focus colour. */
+html[data-host-colors] :is(.md-body, .md-inline) :is(a, .local-file-action) {
+  color: var(--vscode-textLink-foreground, var(--color-accent));
 }
 /* The frame lib/markdown.ts mints around a local Markdown image. Its LOOK is entirely
    components/ImageFrame's — the same two class strings that component renders — so the only thing
