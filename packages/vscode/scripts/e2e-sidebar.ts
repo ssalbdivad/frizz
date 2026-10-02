@@ -13,7 +13,7 @@
 //   --dev    run the extension from the source tree (dist/ as scripts/build.ts makes it) instead of the
 //            packaged .vsix. The default is the .vsix, unpacked, because the maintainer's "the icon
 //            doesn't display" was a package with no icon in it: the source tree had it all along.
-//   --only   run only these checks (c1…c9); the boot, the seed and the view opening always run.
+//   --only   run only these checks (c1…c12); the boot, the seed and the view opening always run.
 //   --icon-before=<png>   an earlier top-dark activity-bar strip (1x enlarged 6x, as c1 writes it) to set
 //            beside this run's, for the eye.
 //   FRIZZ_E2E_VSCODE=oldest|<version>   VS Code to run (default: stable). `oldest` is the manifest's floor.
@@ -30,16 +30,26 @@
 //   c4 Ctrl+L (Cursor's chord, the one the page names) in the editor: the sidebar revealed, the chip a pill
 //      in the front composer, the caret after it, typing after it; sent to a thread with a simulated
 //      worker, the context serialized and the transcript showing the chip; the context bar's click does the
-//      same; Alt+K with only a caret adds the whole file; Ctrl+L pressed in the reply box adds the selection
+//      same; Alt+K with only a caret adds the whole file; Ctrl+L pressed in the reply box goes back to the
+//      editor, and Ctrl+L in the editor with nothing selected reveals the sidebar with the caret in the box
 //   c5 "Ask Frizz to fix" on a real TypeScript error: chip + the problem as a note
 //   c6 a code-file link opens in the editor at its range; a web link goes to openExternal (a stub
 //      xdg-open, no browser); a Markdown link opens Frizz's reader
 //   c7 a VS Code theme switch re-themes the page live
 //   c8 keys with the frame focused: Ctrl+Shift+P is VS Code's palette, Ctrl+K Frizz's, `?` the shortcuts
-//      sheet with its Editor group (Ctrl+L first) and its VS Code group, the title row's ⋯ Keyboard
-//      shortcuts opening the same sheet, Ctrl+1 back to the editor
+//      sheet with its Editor group (Ctrl+L both ways first) and its VS Code group, the title row's ⋯
+//      Keyboard shortcuts opening the same sheet, Ctrl+1 back to the editor
 //   c9 the gallery: queue (dark, light), a thread with a selection and a chip, the open-files menu,
 //      Settings, the shortcuts sheet — at ~300px and ~450px
+//   c10 one switch: the bar's eye, clicked, turns `frizz.shareEditorState` off — the worker's real `editor`
+//      tool (frizz-mcp.mjs) then reads nothing and a send carries no block; the setting turned back on in
+//      VS Code turns the eye on, the tool reads the selection, a send quotes it, and the next send of the
+//      same selection names it instead of quoting it again
+//   c11 Claude Code: a stand-in extension with its id (anthropic.claude-code) and its Alt+K, installed
+//      live — Alt+K is then its (its binding answers, nothing reaches Frizz) and the `?` sheet drops the
+//      row; uninstalled, Alt+K is Frizz's again
+//   c12 a window reload (last: the agent inside VS Code restarts with it): the framed page's localStorage
+//      survives it, and so does the eye, which is the VS Code setting
 //
 // NEVER ON THE REAL DISPLAY. On Linux the run re-executes itself under `xvfb-run -a` with DISPLAY and
 // WAYLAND_DISPLAY removed (DISPLAY=:0 here is the maintainer's screen through WSLg). The editor gets its
@@ -57,13 +67,15 @@ import { dirname, join, resolve } from "node:path"
 import { fileURLToPath } from "node:url"
 import { downloadAndUnzipVSCode, runTests } from "@vscode/test-electron"
 import puppeteer, { type Browser, type CDPSession, type ElementHandle, type Frame, type Page } from "puppeteer"
-import { parseSentContext } from "../../web/src/lib/composerContext.ts"
-import type { AgentOp, AgentStatus, EditorState } from "../e2e/sidebar-agent.ts"
+import { parseSentContext, parseSentEditorContext } from "../../web/src/lib/composerContext.ts"
+import type { AgentOp, AgentStatus, EditorState, SettingState } from "../e2e/sidebar-agent.ts"
 import { decodePng, inkOf } from "../e2e/png.ts"
 import { SAMPLE, seedSidebarStack, type Seeded } from "../e2e/sidebar-seed.ts"
 import { bootStack, freePort, killAll, leftovers, stubbedPath, type Stack } from "../e2e/stack.ts"
+import { workerTool } from "../e2e/worker-tool.ts"
 
 const pkg = resolve(dirname(fileURLToPath(import.meta.url)), "..")
+const repo = resolve(pkg, "..", "..")
 
 
 if (process.platform === "linux" && process.env.FRIZZ_E2E_UNDER_XVFB !== "1") {
@@ -185,6 +197,11 @@ let agentSeq = 0
 const agentQueue: { seq: number; op: AgentOp }[] = []
 const agentAnswers = new Map<number, { resolve: (value: unknown) => void; reject: (error: Error) => void }>()
 let agentWaiting: { after: number; res: ServerResponse; timer: NodeJS.Timeout } | undefined
+/**
+ * The last op a RESTARTED agent must not run again. A window reload restarts the extension host, and with it
+ * the agent, which asks from the start (`after=0`); without a floor it would replay every op of the run.
+ */
+let agentFloor = 0
 let agentSeen: () => void = () => undefined
 const agentUp = new Promise<void>((resolve) => (agentSeen = resolve))
 
@@ -209,7 +226,7 @@ async function startAgentServer(): Promise<string> {
     if (req.method === "GET" && url.pathname === "/next") {
       agentSeen()
       if (agentWaiting) agentWaiting.res.writeHead(204).end()
-      agentWaiting = { after: Number(url.searchParams.get("after") ?? 0), res, timer: setTimeout(() => {
+      agentWaiting = { after: Math.max(Number(url.searchParams.get("after") ?? 0), agentFloor), res, timer: setTimeout(() => {
         if (agentWaiting?.res === res) agentWaiting = undefined
         res.writeHead(204).end()
       }, 20_000) }
@@ -1151,7 +1168,8 @@ try {
     expect("c4", "Alt+K with only a caret puts the whole file in the reply box as a pill, `@sample.ts`", /^@sample\.ts(?!:)/u.test(wholeFile?.value ?? "") && !!wholeFile?.pills.some((pill) => pill.token === "@sample.ts"), wholeFile)
     await clearBox("chatComposer")
 
-    // Ctrl+L PRESSED IN THE REPLY BOX, the chord the bar names: the editor's selection, into this box.
+    // CTRL+L BOTH WAYS, as Cursor's: pressed in the reply box it goes back to the editor — even with a
+    // selection standing there, it adds nothing (that is the editor's Ctrl+L, and the bar's click).
     await openInEditor(files.sample)
     await agent({ op: "select", selection: [1, 0, 2, -1] })
     await waitFor("the reply box's bar on the selection", async () => (await contextBar("chatComposer"))?.kind === "selection" || undefined, 5_000)
@@ -1159,13 +1177,29 @@ try {
     await until(async () => (await box("chatComposer"))?.active === true, 3_000)
     const keysBefore = (await status()).sidebar.events.filter((event) => event.type === "frizz:key").length
     await press("Control+KeyL")
-    const inBox = await waitFor("the chip from Ctrl+L in the box", async () => {
-      const state = await box("chatComposer")
-      return state?.value.includes("@sample.ts:2-3") ? state : undefined
-    }, 8_000).catch(async () => box("chatComposer"))
+    const backToEditor = await until(async () => (await workbenchFocus()).editor, 5_000)
+    await sleep(500)
     const forwarded = (await status()).sidebar.events.filter((event) => event.type === "frizz:key").slice(keysBefore)
-    expect("c4", "Ctrl+L pressed in the reply box adds the editor's selection there, and is not forwarded to VS Code", inBox?.value.startsWith("@sample.ts:2-3") === true && forwarded.length === 0, { box: inBox, forwarded })
-    await clearBox("chatComposer")
+    const leftBox = await box("chatComposer")
+    expect("c4", "Ctrl+L pressed in the reply box goes back to the editor, adding nothing", backToEditor && forwarded.some((event) => event.outcome === "workbench.action.focusActiveEditorGroup") && leftBox?.value === "", { focus: await workbenchFocus(), forwarded, box: leftBox?.value })
+
+    // …and in the editor with NOTHING selected, to the prompt box — revealing the sidebar when the Explorer
+    // has it — with the caret in the box and nothing added.
+    await agent({ op: "select", selection: [1, 2, 1, 2] })
+    await command("workbench.view.explorer")
+    await waitFor("the Frizz view hidden", async () => !(await status()).sidebar.visible || undefined, 10_000)
+    await openInEditor(files.sample)
+    await agent({ op: "select", selection: [1, 2, 1, 2] })
+    // The empty selection crosses to the renderer, where `editorHasSelection` is kept, on its own channel.
+    await sleep(800)
+    await press("Control+KeyL")
+    const toPrompt = await until(async () => {
+      const state = await box("chatComposer").catch(() => null)
+      return !!state?.active && state.frameFocused && (await workbenchFocus()).sidebar
+    }, 8_000)
+    const there = { box: await box("chatComposer").catch(() => null), focus: await workbenchFocus(), editor: await editorState(), visible: (await status()).sidebar.visible }
+    expect("c4", "Ctrl+L in the editor with nothing selected reveals the sidebar and puts the caret in the reply box, adding nothing", toPrompt && there.visible && there.box?.value === "" && there.editor.selection?.start[0] === 1 && there.editor.selection.start[1] === 2, there)
+    await shot("c4-ctrl-l-to-prompt-w300")
   })
 
   // ── c5: Ask Frizz to fix ──
@@ -1328,7 +1362,7 @@ try {
       host: document.querySelector<HTMLElement>("[data-shortcut-host]")?.innerText.replace(/\s+/gu, " ").slice(0, 400) ?? null,
     }))
     expect("c8", "? opens the shortcuts sheet, with its sidebar hints and its VS Code group", sheet && !!sheetState.note && sheetState.hints.length >= 3 && /VS Code/u.test(sheetState.host ?? "") && /Ctrl/u.test(sheetState.host ?? ""), sheetState)
-    expect("c8", "…led by the Editor group: Ctrl+L adds the selection, Alt+K the selection or the file", sheetState.editorFirst && JSON.stringify(sheetState.editor.map((row) => row.keys)) === JSON.stringify(["Ctrl+L", "Alt+K"]), sheetState.editor)
+    expect("c8", "…led by the Editor group: Ctrl+L adds the selection or with none goes to the prompt box, Alt+K the selection or the file", sheetState.editorFirst && JSON.stringify(sheetState.editor.map((row) => row.keys)) === JSON.stringify(["Ctrl+L", "Ctrl+L", "Alt+K"]) && /prompt box/u.test(sheetState.editor[1]?.label ?? ""), sheetState.editor)
     await shot("c8-shortcuts-w300")
     await press("Escape")
     await until(async () => !(await inPage(() => !!document.querySelector("[data-shortcut-list]"))), 3_000)
@@ -1469,6 +1503,150 @@ try {
     await gallery(`w${Math.round(await sidebarWidth())}`)
     await dragSidebarTo(450)
     await gallery(`w${Math.round(await sidebarWidth())}`)
+  })
+
+  // ── c10: one switch ──
+  /** The worker's `editor` tool, run for real (frizz-mcp.mjs, as a worker of this window's project runs it). */
+  const toolReads = () => workerTool({ node: process.execPath, mcp: join(repo, "cc-worker", "bin", "frizz-mcp.mjs"), serverLock: stack!.info.launcher.serverLock, projectId: workspace.id, home: stack!.info.home })
+  const sharing = () => agent<SettingState>({ op: "inspect", section: "frizz", key: "shareEditorState" })
+  const eye = () => inPage(() => [...document.querySelectorAll<HTMLElement>("[data-editor-context-toggle]")].find((toggle) => toggle.getClientRects().length > 0)?.getAttribute("aria-pressed") ?? null)
+  /** Type and send from the reply box; what reached the simulated worker. */
+  const sendFromReply = async (text: string) => {
+    const before = readFileSync(seeded!.inputs, "utf8").trim().split("\n").filter(Boolean).length
+    await clickInPage('textarea[data-surface="chatComposer"]')
+    await until(async () => (await box("chatComposer"))?.active === true, 3_000)
+    await typeInto("chatComposer", text)
+    await press("Enter")
+    return waitFor(`"${text}" at the simulated worker`, () => {
+      const lines = readFileSync(seeded!.inputs, "utf8").trim().split("\n").filter(Boolean)
+      return lines.length > before ? (JSON.parse(lines.at(-1)!) as { id: string; text: string }) : undefined
+    }, 20_000)
+  }
+  await run("c10", "one switch: the eye is frizz.shareEditorState, for the block a send carries and for the agents' tool", async () => {
+    await resetPage()
+    await openThreadRow()
+    await openInEditor(files.sample, [1, 0, 2, -1])
+    await waitFor("the reply box's bar on the selection", async () => (await contextBar("chatComposer"))?.kind === "selection" || undefined, 5_000)
+    const on = await waitFor("the tool reading lines 2-3", async () => {
+      const text = await toolReads()
+      return /lines 2-3 selected/u.test(text) ? text : undefined
+    }, 20_000).catch(toolReads)
+    expect("c10", "sharing on: the agents' tool reads the selection, lines 2-3 with their text", /lines 2-3 selected/u.test(on) && on.includes("let total = 0"), on.slice(0, 500))
+
+    // The eye, clicked off: the setting, the tool, the bar and the next send all follow.
+    await clickInComposer("chatComposer", "[data-editor-context-toggle]")
+    const off = await waitFor("the setting off", async () => {
+      const state = await sharing()
+      return state.value === false ? state : undefined
+    }, 8_000).catch(sharing)
+    expect("c10", "the eye, clicked off, turns frizz.shareEditorState off (the user's value, so every window)", off.value === false && off.globalValue === false, off)
+    const offText = await waitFor("the tool reading nothing", async () => {
+      const text = await toolReads()
+      return /turned off sharing/u.test(text) ? text : undefined
+    }, 10_000).catch(toolReads)
+    expect("c10", "…the agents' tool reads nothing, and says the human turned sharing off", /turned off sharing/u.test(offText) && !offText.includes("let total = 0"), offText.slice(0, 400))
+    expect("c10", "…the eye shows off", (await eye()) === "false", await contextBar("chatComposer"))
+    await shot("c10-eye-off-w300")
+    const unshared = await sendFromReply("what does this do?")
+    expect("c10", "…and a send carries no editor context", unshared.text.startsWith("what does this do?") && parseSentEditorContext(unshared.text) === null && !unshared.text.includes("let total = 0"), unshared.text.slice(0, 400))
+
+    // On again from VS Code's side (Settings, another window): the eye follows, and so does everything else.
+    await agent({ op: "config", section: "frizz", key: "shareEditorState", value: true })
+    expect("c10", "the setting turned on in VS Code turns the eye on", await until(async () => (await eye()) === "true", 8_000), await contextBar("chatComposer"))
+    const back = await waitFor("the tool reading lines 2-3 again", async () => {
+      const text = await toolReads()
+      return /lines 2-3 selected/u.test(text) ? text : undefined
+    }, 20_000).catch(toolReads)
+    expect("c10", "…the agents' tool reads the selection again", /lines 2-3 selected/u.test(back), back.slice(0, 300))
+    const shared = await sendFromReply("and now?")
+    const block = parseSentEditorContext(shared.text)
+    const lines23 = SAMPLE.split("\n").slice(1, 3).join("\n")
+    expect("c10", "…a send carries the block: lines 2-3 of sample.ts, quoted", block?.editor.kind === "selection" && block.editor.startLine === 2 && block.editor.endLine === 3 && block.editor.text === lines23 && block.body === "and now?", { text: shared.text.slice(0, 600), block })
+    // The same selection again: named, not quoted a second time (the agent has it, one message up). The
+    // page reads "one message up" from the thread's transcript, so the sent message must be in it first.
+    await until(async () => (await inPage(() => document.body.innerText.includes("and now?"))), 15_000)
+    await sleep(500)
+    const again = await sendFromReply("and again?")
+    const repeat = parseSentEditorContext(again.text)
+    expect("c10", "…and the same selection on the next send is named, not quoted again", repeat?.editor.kind === "selection" && repeat.editor.repeat === true && repeat.editor.startLine === 2 && !again.text.includes("let total = 0"), { text: again.text.slice(0, 600), repeat })
+    await agent({ op: "config", section: "frizz", key: "shareEditorState", value: null })
+  })
+
+  // ── c11: Claude Code's Alt+K ──
+  await run("c11", "with Claude Code's extension installed, Alt+K is its: Frizz steps aside, and takes it back when it goes", async () => {
+    // A stand-in with Claude Code's id and its chord, bound to Select All so whose Alt+K answered shows.
+    const stub = join(scratch, "claude-code-stub")
+    mkdirSync(stub, { recursive: true })
+    writeFileSync(join(stub, "package.json"), JSON.stringify({
+      name: "claude-code", publisher: "anthropic", version: "0.0.1", displayName: "Claude Code (e2e stand-in)",
+      description: "Claude Code's id and its Alt+K, for Frizz's end-to-end run.", engines: { vscode: "^1.90.0" },
+      contributes: { keybindings: [{ command: "editor.action.selectAll", key: "alt+k", mac: "alt+k", when: "editorTextFocus" }] },
+    }, null, 2))
+    const vsix = join(stub, "claude-code-stub.vsix")
+    const packed = spawnSync("nubx", ["-y", "-p", "@vscode/vsce@3.9.2", "vsce", "package", "--no-dependencies", "--allow-missing-repository", "--skip-license", "--out", vsix], { cwd: stub, stdio: "inherit" })
+    if (packed.status !== 0) throw new Error("packaging the Claude Code stand-in failed")
+    await resetPage()
+    await openThreadRow()
+    await clearBox("chatComposer")
+    await agent({ op: "install", vsix }, 120_000)
+    const installed = await until(async () => await agent<boolean>({ op: "extension", id: "anthropic.claude-code" }), 20_000)
+    expect("c11", "the stand-in with Claude Code's id installs live, with no reload", installed)
+    await sleep(1_000)
+    await openInEditor(files.sample, [3, 1, 3, 1])
+    await sleep(800)
+    await press("Alt+KeyK")
+    await sleep(1_500)
+    const theirs = { box: await box("chatComposer"), editor: await editorState() }
+    const lastLine = SAMPLE.split("\n").length - 1
+    expect("c11", "Alt+K adds nothing to Frizz's prompt box", !theirs.box?.value.includes("@sample.ts"), theirs.box)
+    expect("c11", "…it is Claude Code's: the stand-in's binding answered (Select All)", theirs.editor.selection?.start.join() === "0,0" && theirs.editor.selection.end[0] === lastLine, theirs.editor)
+    await focusPageBody()
+    await page.keyboard.type("?")
+    await until(async () => (await inPage(() => !!document.querySelector("[data-shortcut-list]"))), 5_000)
+    const rows = await inPage(() => [...document.querySelectorAll<HTMLElement>("[data-shortcut-editor] li")].map((row) => row.querySelector("[aria-label]")?.getAttribute("aria-label") ?? ""))
+    expect("c11", "…and the ? sheet no longer lists Alt+K", rows.length > 0 && !rows.includes("Alt+K"), rows)
+    await shot("c11-shortcuts-with-claude-code-w300")
+    await press("Escape")
+
+    await command("workbench.extensions.uninstallExtension", "anthropic.claude-code")
+    const gone = await until(async () => !(await agent<boolean>({ op: "extension", id: "anthropic.claude-code" })), 20_000)
+    expect("c11", "the stand-in uninstalls, live", gone)
+    if (!(await drawerOpen())) await openThreadRow()
+    await openInEditor(files.sample, [3, 1, 3, 1])
+    await sleep(800)
+    await press("Alt+KeyK")
+    const ours = await waitFor("the file's chip from Alt+K", async () => {
+      const state = await box("chatComposer")
+      return state?.value.includes("@sample.ts") ? state : undefined
+    }, 8_000).catch(async () => box("chatComposer"))
+    expect("c11", "…and Alt+K is Frizz's again: the whole file into the reply box", /^@sample\.ts(?!:)/u.test(ours?.value ?? ""), ours)
+    await clearBox("chatComposer")
+  })
+
+  // ── c12: a window reload (LAST: the agent inside VS Code restarts with it) ──
+  await run("c12", "a window reload keeps what the page stored and the eye", async () => {
+    // A value in the framed page's own storage — where it keeps what the human set in it — and the eye off.
+    const probe = `reload-probe-${Date.now()}`
+    await inPage((value) => localStorage.setItem("frizz-e2e-reload-probe", value), probe)
+    const keys = await inPage(() => Object.keys(localStorage).sort())
+    await agent({ op: "config", section: "frizz", key: "shareEditorState", value: false })
+    await until(async () => (await eye()) === "false", 8_000)
+    const before = frizzFrame()
+    agentFloor = agentSeq + 1
+    await agent({ op: "command", id: "workbench.action.reloadWindow" }, 5_000).catch(() => undefined)
+    const after = await waitFor("the page framed again after the reload", async () => {
+      const framedNow = frizzFrame()
+      if (!framedNow || framedNow === before || framedNow.detached) return undefined
+      return (await framedNow.evaluate(() => document.readyState === "complete" && !!document.querySelector("[data-sidebar-page]")).catch(() => false)) ? framedNow : undefined
+    }, 180_000)
+    notes.reloadedFrame = after.url()
+    const stored = await inPage(() => ({ probe: localStorage.getItem("frizz-e2e-reload-probe"), keys: Object.keys(localStorage).sort() }))
+    expect("c12", "the page's own storage survives a window reload", stored.probe === probe, { before: keys, after: stored.keys })
+    const eyeAfter = await waitFor("the eye after the reload", async () => (await eye()) ?? undefined, 20_000).catch(() => null)
+    expect("c12", "the eye is still off after the reload: it is the VS Code setting", eyeAfter === "false", { eye: eyeAfter, bar: await contextBar("newComposer").catch(() => null) })
+    await shot("c12-after-reload-w300", { window: true })
+    // The agent came back with the extension host: sharing back on, the run's state as it found it.
+    await agent({ op: "config", section: "frizz", key: "shareEditorState", value: null }, 60_000).catch((error: unknown) => (notes.reloadAgent = String(error)))
   })
 
   expect("all", "no page errors in the framed page", pageErrors.length === 0, pageErrors.slice(0, 10))

@@ -3,7 +3,7 @@
 //
 //   GET  /_frizz/health                      { ok, bootId }
 //   /_frizz/<projectId>/rpc/<proc>           dispatchPreferencesGet, dispatch, board, followUp
-//   WS   /_frizz/editor                      hello → welcome (naming "editor-state", as the real one does)
+//   WS   /_frizz/editor                      hello → welcome (naming every editor feature, as the real one does)
 //                                            + projects; compose → composed; results and editor frames recorded
 //   GET  /                                   a fake PAGE that speaks the sidebar's embed contract
 //                                            (embed-protocol.ts): says frizz:ready, answers frizz:compose
@@ -37,7 +37,7 @@ import { createServer, type IncomingMessage, type Server, type ServerResponse } 
 import type { AddressInfo } from "node:net"
 import { WebSocket, WebSocketServer } from "ws"
 import { EditorClientMessageSchema } from "@frizz/shared"
-import { EDITOR_CLOSE, type EditorClientMessage, type EditorProject, type EditorServerMessage } from "@frizz/shared/editor-protocol"
+import { EDITOR_CLOSE, EDITOR_FEATURES, type EditorClientMessage, type EditorProject, type EditorServerMessage } from "@frizz/shared/editor-protocol"
 import { EDITOR_MAX_FRAME_BYTES, EDITOR_MAX_PAYLOAD_BYTES } from "../../server/src/editor-bridge.ts"
 
 export const FAKE_THREAD = {
@@ -174,7 +174,7 @@ export class FakeFrizz {
       const frame = decoded as EditorClientMessage
       this.log.frames.push(frame)
       if (frame.t === "hello") {
-        this.#send(ws, { t: "welcome", v: 1, bootId: "fake-boot", features: ["editor-state"] })
+        this.#send(ws, { t: "welcome", v: 1, bootId: "fake-boot", features: Object.values(EDITOR_FEATURES) })
         this.#send(ws, { t: "projects", projects: this.projects })
       } else if (frame.t === "compose") {
         this.#send(ws, { t: "composed", id: frame.id, ok: true })

@@ -338,7 +338,7 @@ test("`editor` reads the window on this project as text, and says why when there
 
     // Each way of having nothing to show, with its reason and the move that is always open.
     const off = await call({ windows: [{ ...front, editor: { shared: false, reportedAgoMs: 0, active: null, open: [], diagnostics: [], problems: { errors: 0, warnings: 0 } } }], connected: 1 })
-    assert.match(off.text, /turned off sharing their editor with Frizz's agents \(the `frizz.shareEditorState` setting\)/)
+    assert.match(off.text, /turned off sharing their editor with Frizz \(the eye over the sidebar's prompt box, the `frizz.shareEditorState` setting\)/)
     const silent = await call({ windows: [{ ...front, editor: undefined }], connected: 1 })
     assert.match(silent.text, /has this project open, but it has not reported what it shows: its Frizz extension predates this/)
     const none = await call({ windows: [], connected: 0 })

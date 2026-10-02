@@ -3,13 +3,13 @@ import assert from "node:assert/strict"
 import { EDITOR_STATE_MAX_SELECTION_TEXT } from "@frizz/shared/editor-protocol"
 import { EMBED_MAX_SELECTION_TEXT } from "@frizz/shared/embed-protocol"
 import { editorContextMessage, pageActive, type Position } from "./editor-context.ts"
-import { editorFront, pickFront, secretFile, selectedText, type EditorLike } from "./editor-front.ts"
+import { editorFront, pickFront, secretFile, selectedText, type ReadableEditor } from "./editor-front.ts"
 import { buildEditorSnapshot } from "./editor-state.ts"
 
 const at = (line: number, character: number): Position => ({ line, character })
 
 /** A document as VS Code's TextDocument reads it, over a string: offsets, positions, ranges. */
-function editor(text: string, options: { scheme?: string; path?: string; dirty?: boolean; closed?: boolean; selections?: [Position, Position][]; visible?: [number, number] } = {}): EditorLike {
+function editor(text: string, options: { scheme?: string; path?: string; dirty?: boolean; closed?: boolean; selections?: [Position, Position][]; visible?: [number, number] } = {}): ReadableEditor<Position> {
   const lines = text.split("\n")
   const offsetAt = ({ line, character }: Position) => lines.slice(0, line).reduce((sum, each) => sum + each.length + 1, 0) + character
   const positionAt = (offset: number): Position => {
@@ -22,7 +22,15 @@ function editor(text: string, options: { scheme?: string; path?: string; dirty?:
   }
   const scheme = options.scheme ?? "file"
   const path = options.path ?? "/repo/src/a.ts"
-  const ranges = (options.selections ?? [[at(0, 0), at(0, 0)]]).map(([start, end]) => ({ start, end }))
+  // VS Code's document takes only its own Range objects (it checks `instanceof Range`): this one takes only
+  // ranges it made — the selection, or one the selection's `with` returned — so a literal fails here too.
+  const ours = new WeakSet<object>()
+  const range = (start: Position, end: Position) => {
+    const made = { start, end, with: (from: Position | undefined, to: Position) => range(from ?? start, to) }
+    ours.add(made)
+    return made
+  }
+  const ranges = (options.selections ?? [[at(0, 0), at(0, 0)]]).map(([start, end]) => range(start, end))
   const primary = ranges[0]!
   return {
     document: {
@@ -33,9 +41,12 @@ function editor(text: string, options: { scheme?: string; path?: string; dirty?:
       lineCount: lines.length,
       offsetAt,
       positionAt,
-      getText: (range) => (range ? text.slice(offsetAt(range.start), offsetAt(range.end)) : text),
+      getText: (range) => {
+        if (range && !ours.has(range)) throw new Error("Invalid argument")
+        return range ? text.slice(offsetAt(range.start), offsetAt(range.end)) : text
+      },
     },
-    selection: { ...primary, active: primary.end, isEmpty: offsetAt(primary.start) === offsetAt(primary.end) },
+    selection: Object.assign(primary, { active: primary.end, isEmpty: offsetAt(primary.start) === offsetAt(primary.end) }),
     selections: ranges,
     visibleRanges: options.visible ? [{ start: at(options.visible[0], 0), end: at(options.visible[1], 0) }] : [],
   }
@@ -88,7 +99,7 @@ test("the selected text is read only as far as a feed carries it, and never from
   const getText = big.document.getText
   big.document.getText = (range) => ((asked = range), getText(range))
   assert.equal(selectedText(big, editorFront(big), 10), "x".repeat(10))
-  assert.deepEqual(asked, { start: at(0, 0), end: at(0, 10) })
+  assert.deepEqual([(asked as { start: Position }).start, (asked as { end: Position }).end], [at(0, 0), at(0, 10)])
   const secret = editor("API_KEY=sk-live-123\n", { path: "/repo/.env.local", selections: [[at(0, 0), at(0, 19)]] })
   assert.equal(editorFront(secret).withheld, true)
   assert.equal(selectedText(secret, editorFront(secret), 1_000), undefined)

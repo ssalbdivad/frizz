@@ -1294,8 +1294,8 @@ function editorWindowReport(w) {
   }
   if (!e.shared) {
     return (
-      `${head} has this project open, but the human turned off sharing their editor with Frizz's agents ` +
-      `(the \`frizz.shareEditorState\` setting), so nothing of it is read. ${EDITOR_FALLBACK}`
+      `${head} has this project open, but the human turned off sharing their editor with Frizz ` +
+      `(the eye over the sidebar's prompt box, the \`frizz.shareEditorState\` setting), so nothing of it is read. ${EDITOR_FALLBACK}`
     )
   }
   // "Last changed", not "as of": the extension reports every change, so an old report is a quiet editor.

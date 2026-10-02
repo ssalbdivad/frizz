@@ -13,7 +13,6 @@
 // Ask just started.
 
 import assert from "node:assert/strict"
-import { spawn } from "node:child_process"
 import { realpathSync, writeFileSync } from "node:fs"
 import { join } from "node:path"
 import { isDeepStrictEqual } from "node:util"
@@ -23,6 +22,7 @@ import type { EmbedEditorContextMessage } from "@frizz/shared/embed-protocol"
 import { parseSentContext } from "../../web/src/lib/composerContext.ts"
 import type { FrizzExtensionApi } from "../src/app.ts"
 import { projectForPath } from "../src/projects.ts"
+import { workerTool } from "./worker-tool.ts"
 import { FrizzRpc } from "../src/rpc.ts"
 
 const mode = process.env.FRIZZ_E2E_MODE === "real" ? "real" : "fake"
@@ -97,9 +97,29 @@ const titleRow = () => workbench<{ heading: string; buttons: string[] }>(`(() =>
   }
 })()`)
 
+/**
+ * Where the keyboard is in the workbench. A webview view's iframe is not in the side bar's DOM — VS Code
+ * lays it over the view from a container of its own — so the sidebar is a webview iframe with a box.
+ */
+const focusIn = () => workbench<"editor" | "sidebar" | "elsewhere">(`(() => {
+  const active = document.activeElement
+  if (active?.closest(".part.editor")) return "editor"
+  const r = active?.getBoundingClientRect()
+  if (active?.tagName === "IFRAME" && active.classList.contains("webview") && r && r.width > 0) return "sidebar"
+  return "elsewhere"
+})()`)
+
 /** The extension's own manifest, as the editor loaded it. */
 const manifest = () => vscode.extensions.getExtension("ssalbdivad.frizz-vscode")!.packageJSON as {
   contributes: { keybindings: unknown[]; menus: Record<string, { command?: string; when?: string; group?: string }[]> }
+}
+
+/** A `.env` with a key in it: a file whose name says it holds secrets. */
+const SECRET = "sk-e2e-not-a-key"
+function envFile(): string {
+  const path = join(workspace, ".env")
+  writeFileSync(path, `API_KEY=${SECRET}\n`)
+  return path
 }
 
 /** A second file in the workspace for the steps that need more than one open. */
@@ -162,40 +182,8 @@ async function agentScene(): Promise<{ editor: vscode.TextEditor; other: string;
 const editorFrames = async () => (await fakeLog()).frames.filter((frame): frame is EditorSnapshot => frame.t === "editor")
 
 /** One `tools/call editor` on the REAL frizz-mcp.mjs, run as a worker of `projectId` would run it, finding the stack by its lock. */
-async function workerReadsEditor(projectId: string): Promise<string> {
-  const child = spawn(process.env.FRIZZ_E2E_NODE!, [process.env.FRIZZ_E2E_MCP!], {
-    stdio: ["pipe", "pipe", "ignore"],
-    env: { PATH: process.env.PATH ?? "", HOME: process.env.HOME ?? "", FRIZZ_PROJECT_ID: projectId, FRIZZ_SERVER_LOCK: process.env.FRIZZ_E2E_SERVER_LOCK! },
-  })
-  try {
-    let buffer = ""
-    const replies = new Map<number, (reply: { result?: { content: { text: string }[] } }) => void>()
-    child.stdout.setEncoding("utf8")
-    child.stdout.on("data", (chunk: string) => {
-      buffer += chunk
-      for (let nl = buffer.indexOf("\n"); nl >= 0; nl = buffer.indexOf("\n")) {
-        const line = buffer.slice(0, nl).trim()
-        buffer = buffer.slice(nl + 1)
-        if (!line) continue
-        const reply = JSON.parse(line) as { id: number; result?: { content: { text: string }[] } }
-        replies.get(reply.id)?.(reply)
-      }
-    })
-    const request = (id: number, method: string, params: unknown) => new Promise<{ result?: { content: { text: string }[] } }>((resolve, reject) => {
-      const timer = setTimeout(() => reject(new Error(`frizz-mcp did not answer ${method}`)), 20_000)
-      replies.set(id, (reply) => {
-        clearTimeout(timer)
-        resolve(reply)
-      })
-      child.stdin.write(JSON.stringify({ jsonrpc: "2.0", id, method, params }) + "\n")
-    })
-    await request(1, "initialize", { protocolVersion: "2025-06-18" })
-    const reply = await request(2, "tools/call", { name: "editor", arguments: {} })
-    return reply.result?.content[0]?.text ?? JSON.stringify(reply)
-  } finally {
-    child.kill()
-  }
-}
+const workerReadsEditor = (projectId: string) =>
+  workerTool({ node: process.env.FRIZZ_E2E_NODE!, mcp: process.env.FRIZZ_E2E_MCP!, serverLock: process.env.FRIZZ_E2E_SERVER_LOCK!, projectId })
 
 /** The thread the real-mode Ask step started, for Send to follow up when no FRIZZ_E2E_THREAD is named. */
 let askedThread: string | undefined
@@ -338,6 +326,14 @@ const steps: Step[] = [
         assert.deepEqual((await editorFrames()).at(-1), { t: "editor", shared: false, active: null, open: [], diagnostics: [], problems: { errors: 0, warnings: 0 } })
         await frizz.update("shareEditorState", undefined, vscode.ConfigurationTarget.Global)
         await until("sharing back on", async () => (await editorFrames()).at(-1)?.shared === true)
+
+        // A file whose name says it holds secrets: its lines go to the agents, its text never. (The page's
+        // half is the sidebar's context step below: no page is framed yet.)
+        const secret = await vscode.window.showTextDocument(await vscode.workspace.openTextDocument(envFile()), { preview: false })
+        secret.selection = new vscode.Selection(0, 0, 0, 24)
+        await until("the .env selection, withheld", async () => (await editorFrames()).at(-1)?.active?.selection?.withheld === true)
+        assert.deepEqual((await editorFrames()).at(-1)!.active!.selection, { startLine: 1, endLine: 1, withheld: true })
+        assert.ok(!JSON.stringify(await fakeLog()).includes(SECRET), "the key never reached the agents' frames")
         assert.deepEqual((await fakeLog()).refused, [], "every editor frame is one the server's own schema takes")
       } finally {
         problems.dispose()
@@ -611,17 +607,28 @@ const steps: Step[] = [
     },
   },
   {
-    name: "a chord the page forwards runs its VS Code command",
+    name: "a chord the page forwards runs its VS Code command; Ctrl+L there goes back to the editor",
     modes: ["fake"],
     async run({ api }) {
       assert.equal(api.sidebar().visible, true)
       const mac = process.platform === "darwin"
+      // The keys' own records, read by type: an earlier step's open can record its outcome after these.
+      const keys = () => api.sidebar().events.filter((event) => event.type === "frizz:key").map((event) => event.outcome)
+      let from = keys().length
       // Ctrl+Shift+E (⌘⇧E): the Explorer takes the side bar, so the Frizz view is no longer visible.
       await pagePosts({ type: "frizz:key", key: "E", code: "KeyE", ctrl: !mac, meta: mac, shift: true, alt: false })
       await until("the explorer shown", () => !api.sidebar().visible)
-      assert.deepEqual(api.sidebar().events.at(-1), { type: "frizz:key", outcome: "workbench.view.explorer" })
+      assert.deepEqual(keys().slice(from), ["workbench.view.explorer"])
       await vscode.commands.executeCommand("frizz.sidebar.focus")
       await until("the sidebar back", () => api.sidebar().visible)
+
+      // Ctrl+L (⌘L) in the page goes back to the editor — the other half of Ctrl+L with nothing selected.
+      await until("the sidebar focused", async () => (await focusIn()) === "sidebar")
+      from = keys().length
+      await pagePosts({ type: "frizz:key", key: "l", code: "KeyL", ctrl: !mac, meta: mac, shift: false, alt: false })
+      await until("the editor focused", async () => (await focusIn()) === "editor")
+      assert.deepEqual(keys().slice(from), ["workbench.action.focusActiveEditorGroup"])
+      assert.equal(api.sidebar().visible, true, "the sidebar stays in sight")
     },
   },
   {
@@ -663,7 +670,7 @@ const steps: Step[] = [
   },
   // ── the editor in the sidebar ───────────────────────────────────────────────────────────────────────
   {
-    name: "the page is told the editor's context: the file in front, its selection's lines, characters and text (or the caret's line), the other open files most recent first",
+    name: "the page is told the editor's context: the file in front, its selection's lines, characters and text (or the caret's line), unsaved or untitled, the other open files most recent first",
     modes: ["fake"],
     async run({ api, project }) {
       const a = workspaceFile("a.ts")
@@ -709,14 +716,52 @@ const steps: Step[] = [
         return last?.active?.path === sample && isDeepStrictEqual(last.open.map((entry) => entry.path), [a, b])
       })
 
-      // Nothing that is not a file on disk in front, and no diff: the bar names no file.
+      // An edit the human has not saved: the page is told, so the block can say the disk copy differs.
+      await editor.edit((edit) => edit.insert(new vscode.Position(0, 0), "// unsaved\n"))
+      await until("the sample, unsaved", async () => (await contexts()).at(-1)?.active?.dirty === true)
+      await vscode.commands.executeCommand("workbench.action.files.revert")
+      await until("the sample, saved again", async () => {
+        const last = (await contexts()).at(-1)?.active
+        return last?.path === sample && last.dirty === undefined
+      })
+
+      // Focus in the Output panel makes ITS editor VS Code's active text editor; the file the human was
+      // pointing at, still on screen, stays in front — no message blanks the bar.
+      const channel = vscode.window.createOutputChannel("frizz e2e")
+      try {
+        channel.appendLine("[info] built")
+        const settled = await received()
+        channel.show(false)
+        await until("the output pane in focus", () => vscode.window.activeTextEditor?.document.uri.scheme === "output")
+        await sleep(500)
+        assert.ok((await contexts(settled)).every((message) => message.active?.path === sample), "the sample stayed in front")
+        assert.deepEqual(api.editorContext()?.active?.path, sample)
+      } finally {
+        channel.dispose()
+        await vscode.commands.executeCommand("workbench.action.closePanel")
+      }
+
+      // A file whose name says it holds secrets: the page is told its lines, never its text.
+      const secret = await vscode.window.showTextDocument(await vscode.workspace.openTextDocument(envFile()), { viewColumn: vscode.ViewColumn.One, preview: false })
+      secret.selection = new vscode.Selection(0, 0, 0, 24)
+      await until("the page told the .env selection withheld", async () => (await contexts()).at(-1)?.active?.withheld === true)
+      assert.deepEqual((await contexts()).at(-1)!.active!.selection, { startLine: 1, endLine: 1, chars: 24 })
+      assert.ok(!JSON.stringify(await contexts()).includes(SECRET), "the key never reached the page")
+      await vscode.commands.executeCommand("workbench.action.closeActiveEditor")
+
+      // An untitled buffer is in front in its own right, named by its label, its caret's line told.
       await vscode.window.showTextDocument(await vscode.workspace.openTextDocument({ content: "a scratch buffer\n" }), vscode.ViewColumn.One)
-      await until("an untitled buffer is no file", async () => (await contexts()).at(-1)?.active === null)
+      await until("an untitled buffer in front", async () => (await contexts()).at(-1)?.active?.untitled === true)
+      const scratch = (await contexts()).at(-1)!.active!
+      assert.match(scratch.path, /^Untitled-\d+$/u)
+      // Opened with text, it is unsaved from the start.
+      assert.deepEqual(scratch, { path: scratch.path, label: scratch.path, cursorLine: 1, untitled: true, dirty: true })
       await vscode.commands.executeCommand("workbench.action.revertAndCloseActiveEditor")
       await vscode.window.showTextDocument(document, vscode.ViewColumn.One)
       await until("the sample back", async () => (await contexts()).at(-1)?.active?.path === sample)
+      // A diff: its working-tree side is the file in front (a git revision on the left never is).
       await vscode.commands.executeCommand("vscode.diff", vscode.Uri.file(a), vscode.Uri.file(b), "a.ts ↔ b.ts")
-      await until("a diff is no file", async () => (await contexts()).at(-1)?.active === null)
+      await until("a diff's modified side in front", async () => (await contexts()).at(-1)?.active?.path === b)
 
       // The text the page is told is the SELECTION's, never a file's: no message carried line 1 or line 7,
       // which no selection above took in.
@@ -788,14 +833,52 @@ const steps: Step[] = [
     },
   },
   {
-    name: "Ctrl+L (Cursor's) and Ctrl+I in the editor put the selection in the sidebar's prompt with the caret; with no selection both chords are VS Code's own",
+    name: "one switch: the page's eye is frizz.shareEditorState, and the agents' frame and the page's feed both follow it",
+    modes: ["fake"],
+    async run() {
+      const frizz = vscode.workspace.getConfiguration("frizz")
+      await openSample([1, 0, 2])
+      await until("the selection's text told", async () => (await contexts()).at(-1)?.active?.selection?.text !== undefined)
+      try {
+        // The eye, off: its `frizz:share-editor` writes the setting, and the agents' frame, the page's own
+        // feed (the lines without their text) and the eye (`frizz:host-state`) follow.
+        const from = await received()
+        await pagePosts({ type: "frizz:share-editor", on: false })
+        await until("the setting off", () => frizz.inspect<boolean>("shareEditorState")?.globalValue === false)
+        await until("the agents' frame off", async () => (await editorFrames()).at(-1)?.shared === false)
+        await until("the eye told", async () => (await pageReceived("frizz:host-state", from)).some((state) => state.shareEditor === false))
+        await until("the page told the lines alone", async () => {
+          const last = (await contexts(from)).at(-1)?.active?.selection
+          return last?.startLine === 2 && last.text === undefined
+        })
+        // On again from VS Code's side — the setting, as Settings or another window writes it: the eye follows.
+        const back = await received()
+        await frizz.update("shareEditorState", true, vscode.ConfigurationTarget.Global)
+        await until("the eye told it is on", async () => (await pageReceived("frizz:host-state", back)).some((state) => state.shareEditor === true))
+        await until("the agents' frame on", async () => (await editorFrames()).at(-1)?.shared === true)
+        await until("the page told the text again", async () => (await contexts(back)).at(-1)?.active?.selection?.text !== undefined)
+        // A workspace that sets its own value: the eye writes THERE, since a user-level write under it would change nothing.
+        await frizz.update("shareEditorState", true, vscode.ConfigurationTarget.Workspace)
+        await pagePosts({ type: "frizz:share-editor", on: false })
+        await until("the workspace's value off", () => frizz.inspect<boolean>("shareEditorState")?.workspaceValue === false)
+        assert.equal(frizz.inspect<boolean>("shareEditorState")?.globalValue, true, "the user's value untouched")
+        await until("the agents' frame off", async () => (await editorFrames()).at(-1)?.shared === false)
+      } finally {
+        await frizz.update("shareEditorState", undefined, vscode.ConfigurationTarget.Workspace)
+        await frizz.update("shareEditorState", undefined, vscode.ConfigurationTarget.Global)
+      }
+    },
+  },
+  {
+    name: "Ctrl+L (Cursor's) and Ctrl+I in the editor put the selection in the sidebar's prompt with the caret; with no selection Ctrl+L goes to the prompt box and Ctrl+I is VS Code's",
     modes: ["fake"],
     async run({ project }) {
       // Ctrl+L LAST: VS Code shows a command's last-contributed binding in its menus and the palette.
       assert.deepEqual(manifest().contributes.keybindings, [
         { command: "frizz.addToPrompt", key: "ctrl+i", mac: "cmd+i", when: "editorTextFocus && editorHasSelection" },
         { command: "frizz.addToPrompt", key: "ctrl+l", mac: "cmd+l", when: "editorTextFocus && editorHasSelection" },
-        { command: "frizz.addSelectionOrFile", key: "alt+k", mac: "alt+k", when: "editorTextFocus" },
+        { command: "frizz.focusPrompt", key: "ctrl+l", mac: "cmd+l", when: "editorTextFocus && !editorHasSelection && config.frizz.useSidebar" },
+        { command: "frizz.addSelectionOrFile", key: "alt+k", mac: "alt+k", when: "editorTextFocus && !frizz.claudeCodeInstalled" },
       ])
       const mod = process.platform === "darwin" ? "meta" : "ctrl"
       for (const chord of [`${mod}+l`, `${mod}+i`]) {
@@ -817,23 +900,45 @@ const steps: Step[] = [
         }, chord)
       }
 
-      // A caret, no selection: neither binding's `when` matches, so nothing reaches Frizz — and Ctrl+L is
-      // VS Code's own again, which selects the caret's line.
-      for (const chord of [`${mod}+l`, `${mod}+i`]) {
-        const caret = await openSample()
-        caret.selection = new vscode.Selection(5, 2, 5, 2)
-        // The selection crosses to the window's renderer, where `editorHasSelection` is kept, on its own
-        // channel; the key must not overtake it.
+      // A caret, no selection: nothing is added. Ctrl+L takes the human to the sidebar's prompt box (Cursor's
+      // "open the chat"), leaving the caret where it was; Ctrl+I stays VS Code's own.
+      // The selection crosses to the window's renderer, where `editorHasSelection` is kept, on its own
+      // channel; the key must not overtake it — hence the waits.
+      const caret = await openSample()
+      caret.selection = new vscode.Selection(5, 2, 5, 2)
+      await sleep(500)
+      let before = await received()
+      await press(`${mod}+l`)
+      await until("the page asked for its prompt box", async () => (await pageReceived("frizz:command", before)).some((message) => message.command === "prompt"), 15_000)
+      await until("the sidebar focused", async () => (await focusIn()) === "sidebar")
+      assert.deepEqual(await pageReceived("frizz:compose", before), [], "Ctrl+L with a caret adds nothing")
+      assert.deepEqual([caret.selection.active.line, caret.selection.active.character, caret.selection.isEmpty], [5, 2, true], "the caret untouched")
+
+      await openSample().then((editor) => (editor.selection = new vscode.Selection(5, 2, 5, 2)))
+      await sleep(500)
+      before = await received()
+      await press(`${mod}+i`)
+      await sleep(1_500)
+      assert.deepEqual(await pageReceived("frizz:compose", before), [], "Ctrl+I with a caret")
+      assert.deepEqual(await pageReceived("frizz:command", before), [], "Ctrl+I with a caret")
+      await press("escape")
+
+      // With the sidebar off, Ctrl+L with a caret is VS Code's again: it selects the caret's line.
+      const frizz = vscode.workspace.getConfiguration("frizz")
+      await frizz.update("useSidebar", false, vscode.ConfigurationTarget.Global)
+      try {
+        const line = await openSample()
+        line.selection = new vscode.Selection(5, 2, 5, 2)
         await sleep(500)
-        const before = await received()
-        await press(chord)
-        await sleep(1_500)
-        assert.deepEqual(await pageReceived("frizz:compose", before), [], chord)
-        if (chord.endsWith("+l")) {
-          const line = caret.selection
-          assert.deepEqual([line.start.line, line.start.character, line.end.line, line.end.character], [5, 0, 6, 0], "VS Code's Ctrl+L selected the line")
-        }
-        await press("escape")
+        before = await received()
+        await press(`${mod}+l`)
+        await until("VS Code's Ctrl+L selected the line", () => {
+          const { start, end } = line.selection
+          return isDeepStrictEqual([start.line, start.character, end.line, end.character], [5, 0, 6, 0])
+        })
+        assert.deepEqual(await pageReceived("frizz:command", before), [])
+      } finally {
+        await frizz.update("useSidebar", undefined, vscode.ConfigurationTarget.Global)
       }
     },
   },

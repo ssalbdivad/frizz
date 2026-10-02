@@ -32,9 +32,20 @@ export interface UriLike {
   path: string
 }
 
+/** A range as the document's own API made it — VS Code's `getText` refuses a plain `{ start, end }`. */
+export interface RangeLike {
+  start: Position
+  end: Position
+}
+
 /**
  * The part of a `vscode.TextEditor` the rules read — structural, so the extension hands in the real one and
  * a test a plain object. `selections[0]` is the primary selection, as VS Code keeps it.
+ *
+ * Every range handed BACK to the document comes from VS Code's own objects (`selection`, or
+ * `selection.with`), never a literal: its TextDocument checks `instanceof Range` and throws "Invalid
+ * argument" on anything else. Both feeds read the selection's text through `selectedText` and so both
+ * went blank in a real editor while every unit test passed; the test double now refuses a literal too.
  */
 export interface EditorLike {
   document: {
@@ -44,10 +55,9 @@ export interface EditorLike {
     isClosed: boolean
     lineCount: number
     offsetAt(position: Position): number
-    positionAt(offset: number): Position
-    getText(range?: { start: Position; end: Position }): string
+    getText(range?: RangeLike): string
   }
-  selection: { start: Position; end: Position; active: Position; isEmpty: boolean }
+  selection: RangeLike & { active: Position; isEmpty: boolean }
   selections: readonly { start: Position; end: Position }[]
   visibleRanges: readonly { start: Position; end: Position }[]
 }
@@ -165,9 +175,19 @@ export function editorFront(editor: EditorLike, excluded = false): EditorFront {
  * select-all on a large file is not copied whole on every caret move to be cut. Undefined when nothing is
  * selected or the text is withheld. Newlines as the document has them; each feed normalizes its own.
  */
-export function selectedText(editor: EditorLike, front: EditorFront, max: number): string | undefined {
+/**
+ * What reading the text takes beyond the rules: a position the document made (`positionAt`) handed to the
+ * selection's own `with`, so the range given back to `getText` is one VS Code made. Generic over the
+ * position type because VS Code's is a class the rules' plain `Position` is not.
+ */
+export type ReadableEditor<P extends Position> = EditorLike & {
+  document: { positionAt(offset: number): P }
+  selection: { with(start: undefined, end: P): RangeLike }
+}
+
+export function selectedText<P extends Position>(editor: ReadableEditor<P>, front: EditorFront, max: number): string | undefined {
   if (!front.selection || front.withheld) return undefined
-  const { start, end } = front.selection
-  if (front.selection.primaryChars <= max) return editor.document.getText({ start, end })
-  return editor.document.getText({ start, end: editor.document.positionAt(editor.document.offsetAt(start) + max) })
+  const { document, selection } = editor
+  if (front.selection.primaryChars <= max) return document.getText(selection)
+  return document.getText(selection.with(undefined, document.positionAt(document.offsetAt(selection.start) + max)))
 }
