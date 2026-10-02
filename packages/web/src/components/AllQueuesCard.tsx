@@ -507,6 +507,7 @@ export const AllQueuesCard = memo(function AllQueuesCard({
 
           <ThreadProjectScope projectId={project.id} projectDir={project.projectDir}>
             <footer className={`${BLOCK_RADIUS_INNER_BOTTOM} flex min-h-10 flex-wrap items-center justify-end gap-3 border-t border-border/70 bg-panel/95 px-3 py-2 text-[12px]`}>
+              {thread.queuedForReply && <MarkReadButton project={project} thread={thread} onRead={onLeave} onFailed={onReturn} />}
               <SnoozeButton thread={thread} projectName={project.name} onSnoozed={onLeave} onUndone={onUnsnoozed} eventItems={showsSubAgentWait(thread) && <SubAgentWaitSnoozeItems thread={thread} onSnoozed={onLeave} onUndone={onUnsnoozed} />} />
               <StateButton thread={thread} onArchived={onSent} onDismissCancel={onReturn} onCompleted={onLanded} command />
             </footer>
@@ -545,6 +546,37 @@ function sameCard(a: AllQueuesCardProps, b: AllQueuesCardProps): boolean {
  * The thread header's stall recovery (HeaderActions.tsx RetryButton): the same message through the same
  * follow-up, sent to the thread's own project. The thread goes back to work, so the card leaves.
  */
+/**
+ * THE WAY OUT FOR A REPLY THAT IS ALL THE CARD IS FOR (ThreadView.queuedForReply). The thread is parked on
+ * a wait it named and queues only because the human has not read its answer, and until this the one thing
+ * that cleared it was opening the drawer — the card showed the reply, an Awaiting fence and nothing to
+ * press. Recording it seen is the same write the drawer makes on open (threadSeen), so the park takes and
+ * the thread moves to Snoozed until its wait wakes it. Optimistic, like Mark as done: the card leaves on
+ * the click and comes back if the write fails.
+ */
+function MarkReadButton({ project, thread, onRead, onFailed }: { project: QueuesProject; thread: ThreadView; onRead: () => void; onFailed: () => void }) {
+  const [pending, setPending] = useState(false)
+  return (
+    <button
+      type="button"
+      data-mark-read
+      disabled={pending}
+      onClick={() => {
+        setPending(true)
+        onRead()
+        projectRpc(project.id).threadSeen({ slug: thread.id }).catch((error) => {
+          onFailed()
+          setPending(false)
+          showToast(`Couldn’t mark as read: ${(error as Error).message.slice(0, 80)}`)
+        })
+      }}
+      className="rounded-md border border-border-strong bg-panel-2/60 px-2.5 py-1 text-[12px] text-fg/80 hover:bg-panel-2 hover:text-fg disabled:opacity-60"
+    >
+      Mark as read
+    </button>
+  )
+}
+
 function RetryButton({ project, thread, onSent, onLanded, onFailed }: { project: QueuesProject; thread: ThreadView; onSent: () => void; onLanded: () => void; onFailed: () => void }) {
   const queryClient = useQueryClient()
   const retry = useMutation({

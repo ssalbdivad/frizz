@@ -394,7 +394,10 @@ export function queueLabelAt(t: Pick<ThreadView, "queuedAt" | "runtime" | "lastA
 // entered off a wait — its agent may last have spoken hours before it came to the human — so a queued
 // card says how long it has been READY, the name its band wears (7f840a59). A card for a thread that is
 // not queued (none on the queue surfaces today) keeps saying what its time is.
-export function queueLabelWord(t: Pick<ThreadView, "queuedAt">): string {
+export function queueLabelWord(t: Pick<ThreadView, "queuedAt" | "queuedForReply">): string {
+  // A park in the queue only for its unread reply says so: "Ready" over an Awaiting card read as a
+  // wait the human was somehow supposed to act on (board.ts queuedForReply).
+  if (t.queuedAt && t.queuedForReply) return "Replied"
   return t.queuedAt ? "Ready" : "Last active"
 }
 

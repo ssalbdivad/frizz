@@ -18,6 +18,8 @@ import test, { after, before } from "node:test"
 //        fresh one that still lists the thread does (maintainer 2026-09-30).
 //   5-6  a done the worker REGISTERED (`mcp__frizz__done`) draws its Done card on the queue card, and one
 //        both fenced and registered draws exactly one (B1, restored 2026-09-29).
+//   10   a park queued only for its unread reply reads "Replied", and Mark as read records it seen and
+//        takes the card out (maintainer 2026-10-01 on @expand-defaults).
 //   7-9  the terminal net: a frozen native ask and a bare permission prompt — two states the server queues a
 //        thread on without journaling an interaction — draw their card, the copy asks the CARD's project
 //        for the command, and the net stands down when an answerable interaction is journaled (B2).
@@ -270,4 +272,16 @@ test("the banner stands down when an answerable interaction is journaled", { ski
   // Give the handoff-gated slot its moment, then check it drew nothing.
   await sleep(300)
   assert.doesNotMatch(await page!.$eval(FIRST, (card) => card.textContent ?? ""), /Permission approval/)
+})
+
+test("a park queued only for its reply reads Replied, and Mark as read records it seen and takes the card out", { skip: !baseUrl, timeout: 60_000 }, async () => {
+  await open("case=replied")
+  const text = await page!.$eval(FIRST, (card) => card.textContent ?? "")
+  assert.match(text, /Replied/, "the header says why it is here")
+  assert.doesNotMatch(text, /Ready/)
+  await page!.$eval(`${FIRST} footer button[data-mark-read]`, (button) => (button as HTMLButtonElement).click())
+  await page!.waitForFunction((sel) => !document.querySelector(sel), { timeout: 2_000 }, FIRST)
+  const seen = (await rpcLog()).calls.filter((c) => /\/rpc\/threadSeen$/.test(c.path)).map((c) => c.path)
+  assert.deepEqual(seen, ["/_frizz/fixture-card/rpc/threadSeen"], "seen is recorded in the card's own project")
+  assert.deepEqual(errors, [])
 })

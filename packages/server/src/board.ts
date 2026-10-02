@@ -976,6 +976,22 @@ export function replyUnseen(
   return [row.seen_at, row.interacted_at].every((at) => !(Date.parse(at ?? "") > humanMs))
 }
 
+/** QUEUED ONLY TO BE READ: a park answered the human and they have not looked (replyUnseen). Asked the
+ *  exact way — the same derivation with the reply marked seen would leave the queue — so it holds only
+ *  when the reply is the SOLE reason, never beside a question, a done or a crash. The card names it and
+ *  offers "Mark as read"; before, it showed an Awaiting fence in the queue with nothing to act on, and
+ *  only opening the drawer cleared it (maintainer 2026-10-01 on @expand-defaults: "unclear what I am
+ *  supposed to be doing"). `needsYouFor` is the caller's deriveNeedsYou with every other input fixed. */
+export function queuedOnlyForReply(
+  row: SessionRow,
+  tele: SessionTelemetry | undefined,
+  nowMs: number,
+  needsYouFor: (row: SessionRow) => boolean,
+): boolean {
+  if (!replyUnseen(row, tele)) return false
+  return needsYouFor(row) && !needsYouFor({ ...row, seen_at: new Date(nowMs).toISOString() })
+}
+
 // The awaiting-background event-snooze is armed for the CURRENT rest iff the captured rested_at still
 // equals the row's rested_at. rested_at only advances when the top-level turn comes to a NEW rest, so
 // any advance — the exact event of a sub-agent/shell returning and the worker acting on it — auto-clears
@@ -2104,6 +2120,8 @@ function sessionThreadView(
   const waitingOnThread = !archived && runtime === "turn-idle" && currentQuestionCount === 0 && !interactionPresence.needsUser &&
     armedTimers.some((t) => isReplyWait(t.prompt) && Date.parse(t.fireAt) > nowMs)
   const needsYou = archived || waitingOnThread ? false : deriveNeedsYou(row, tele, runtime, interactionPresence.needsUser, nowMs, limitPause, true, deliveryProcessGone, github, registeredPrWatches, armedTimerIds, armedWatches, currentQuestionCount, answerInFlight, signoffNudgePending) || (quietSince !== undefined && !futureSnooze(row, nowMs))
+  const queuedForReply = needsYou && quietSince === undefined && queuedOnlyForReply(row, tele, nowMs, (r) =>
+    deriveNeedsYou(r, tele, runtime, interactionPresence.needsUser, nowMs, limitPause, true, deliveryProcessGone, github, registeredPrWatches, armedTimerIds, armedWatches, currentQuestionCount, answerInFlight, signoffNudgePending))
   const deliveryInFlight = !archived && deriveDeliveryInFlight(row, runtime, needsYou, deliveryProcessGone, answerInFlight || signoffNudgePending, nowMs)
   const awaitingBackground = archived ? false : deriveAwaitingBackground(row, tele, runtime, interactionPresence.needsUser, nowMs, limitPause, deliveryProcessGone, github, registeredPrWatches, armedTimerIds, armedWatches, currentQuestionCount)
   // A worker that exited with work still outstanding — a turn in flight, OR a sub-agent still reading
@@ -2217,6 +2235,7 @@ function sessionThreadView(
     // The recurring prompt — the same projection the worker's own `action: "get"` reads back.
     recurringPrompt: resolveRecurringPrompt(row),
     needsYou,
+    queuedForReply: queuedForReply || undefined,
     awaitingBackground,
     crashed,
     quietTurnSince: quietSince,
