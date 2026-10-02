@@ -307,6 +307,18 @@ async function runSupervisor(
       // silent on the terminal without its records being lost.
       ...logEnvironment(logger, options.debug ? "debug" : "info"),
       ...(options.debug ? { FRIZZ_DEBUG: "1" } : {}),
+      // --dev runs Vite from this checkout, and Vite's dependency cache must never be shared with
+      // another dev server rooted here (packages/web/vite.config.ts says why). Left at its default,
+      // a `frizz-dev --dev` beside the maintainer's `nub run dev` hashed its config differently and
+      // re-optimized node_modules/.vite under the live server, whose open tab then 404ed on every
+      // rewritten chunk (2026-10-01). So --dev keeps its own cache, and a sandbox one of its own.
+      // Relative to packages/web like the throwaway stacks' `.vite-scratch`, and inside node_modules
+      // on purpose: @vitejs/plugin-react skips any path containing node_modules, and a cache outside
+      // it (one under the sandbox's /tmp home was tried) gets its prebundled react-scan run through
+      // Fast Refresh, which throws "can't detect preamble" on every load.
+      ...(options.dev && !process.env.FRIZZ_VITE_CACHE_DIR
+        ? { FRIZZ_VITE_CACHE_DIR: sandbox ? "node_modules/.vite-sandbox" : "node_modules/.vite-frizz-dev" }
+        : {}),
     },
     target,
     launchOwner.token
