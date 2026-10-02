@@ -75,7 +75,11 @@ export async function actOnPage(api: Vscode, page: SharedPageMessage, host: Page
       return (await api.env.openExternal(api.Uri.parse(page.url, true))) ? "opened" : "declined"
     case "frizz:key": {
       const command = chordCommand(page, frame.mac())
-      if (command) await frame.runChord(command)
+      // Recorded as it is RUN, not once it has finished: a command's effect (the Explorer taking the side
+      // bar) lands before VS Code resolves the call, and whoever reads the record after seeing the effect
+      // must find it there — the sidebar recorded first until the handling moved here, and the e2e's
+      // forwarded-chord step read an empty record behind a shown Explorer when it did not.
+      if (command) frame.runChord(command).catch((error: unknown) => host.log.warn(`${command} failed: ${(error as Error).message}`))
       return command ?? "ignored"
     }
     case "frizz:add-context":

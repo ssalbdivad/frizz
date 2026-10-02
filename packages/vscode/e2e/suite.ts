@@ -1341,9 +1341,10 @@ const steps: Step[] = [
       await until("five doors", async () => (await pageReceived("frizz:command", from)).length === 5)
       assert.deepEqual((await pageReceived("frizz:command", from)).map((data) => data.command), ["jump", "new-thread", "queue", "settings", "shortcuts"])
       // Keyboard shortcuts is under the row's ⋯ (the page's status row does not draw its ⌨ in the sidebar),
-      // with the other overflow entries, and only while a page says where it is.
+      // with the other overflow entries, and only while a page says where it is. Open thread in editor tab
+      // leads it while a thread shows.
       const overflow = manifest().contributes.menus["view/title"]!.filter((item) => !item.group?.startsWith("navigation"))
-      assert.deepEqual(overflow.map((item) => item.command), ["frizz.sidebar.reload", "frizz.open", "frizz.sidebar.shortcuts"])
+      assert.deepEqual(overflow.map((item) => item.command), ["frizz.openThreadInTab", "frizz.sidebar.reload", "frizz.open", "frizz.sidebar.shortcuts"])
       assert.equal(overflow.at(-1)!.when, "view == frizz.sidebar && frizz.sidebarView")
 
       // The button itself, clicked with a mouse: the queue's row has New thread.
