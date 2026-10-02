@@ -4,7 +4,8 @@ import { spawnSync } from "node:child_process"
 import { mkdtempSync, rmSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
-import { captureLaunchEnvironment, inheritWorkerEnvironment, isFrizzInternalEnvKey, launchEnvironment } from "./worker-env.ts"
+import { CLAUDE_WORKER_ENV, claudeWorkerEnv } from "./types.ts"
+import { captureLaunchEnvironment, inheritWorkerEnvironment, isEditorAttachEnvKey, isFrizzInternalEnvKey, launchEnvironment } from "./worker-env.ts"
 
 // The rule is a PREFIX, not a list, and that is the point: the three allowlists this replaced drifted
 // apart precisely because each was hand-kept. A prefix cannot drift — a new FRIZZ_ variable is denied
@@ -58,6 +59,52 @@ test("inheritWorkerEnvironment copies everything but frizz's own, and drops unde
   mutable.B = "2"
   assert.deepEqual(snapshot, { A: "1" })
   assert.notEqual(snapshot as unknown, mutable as unknown)
+})
+
+// A Frizz launched from a terminal in VS Code (or Cursor, Windsurf) with Claude Code's extension installed
+// inherits that window's IDE server port; every background Claude worker would then attach to the human's
+// editor. The values below are what anthropic.claude-code 2.1.287 writes into a terminal and what the
+// 2.1.287 CLI reads to find an editor.
+test("the variables that point a worker at the human's editor are not inherited", () => {
+  const terminal: NodeJS.ProcessEnv = {
+    PATH: "/usr/bin",
+    CLAUDE_CODE_SSE_PORT: "33342",          // the extension's own IDE server, per terminal
+    ENABLE_IDE_INTEGRATION: "true",          // what older extension releases wrote beside it
+    FORCE_CODE_TERMINAL: "1",                // "you are in the editor's terminal"
+    CLAUDE_CODE_AUTO_CONNECT_IDE: "true",    // an operator's own opt-in, which a background worker must not take
+    CLAUDE_CODE_IDE_HOST_OVERRIDE: "10.0.0.2",
+    CLAUDE_CODE_IDE_SKIP_VALID_CHECK: "1",
+    CLAUDE_CODE_IDE_SKIP_AUTO_INSTALL: "1",  // only switches something off: kept
+    TERM_PROGRAM: "vscode",                  // kept: read for colour by many tools; nothing attaches through it
+    GIT_ASKPASS: "/vscode/askpass.sh",       // kept: how git authenticates through VS Code
+    VSCODE_GIT_IPC_HANDLE: "/tmp/vscode-git.sock",
+    CLAUDE_CODE_MAX_OUTPUT_TOKENS: "64000",  // a CLAUDE_CODE_ variable that is not about an editor: kept
+  }
+  assert.deepEqual(inheritWorkerEnvironment(terminal), {
+    PATH: "/usr/bin",
+    CLAUDE_CODE_IDE_SKIP_AUTO_INSTALL: "1",
+    TERM_PROGRAM: "vscode",
+    GIT_ASKPASS: "/vscode/askpass.sh",
+    VSCODE_GIT_IPC_HANDLE: "/tmp/vscode-git.sock",
+    CLAUDE_CODE_MAX_OUTPUT_TOKENS: "64000",
+  })
+  for (const key of ["CLAUDE_CODE_SSE_PORT", "ENABLE_IDE_INTEGRATION", "FORCE_CODE_TERMINAL", "CLAUDE_CODE_AUTO_CONNECT_IDE", "CLAUDE_CODE_IDE_HOST_OVERRIDE", "CLAUDE_CODE_IDE_SOMETHING_NEW"]) {
+    assert.equal(isEditorAttachEnvKey(key), true, `${key} must not be inherited`)
+  }
+  for (const key of ["CLAUDE_CODE_IDE_SKIP_AUTO_INSTALL", "TERM_PROGRAM", "CLAUDE_CODE_ENTRYPOINT", "SSE_PORT", "MY_CLAUDE_CODE_SSE_PORT"]) {
+    assert.equal(isEditorAttachEnvKey(key), false, `${key} must be inherited`)
+  }
+})
+
+// Stripping the address is not the whole guard: Claude Code also finds an editor through the lock files
+// its extension writes under ~/.claude/ide, and through `autoConnectIde` in its own settings. Its
+// auto-connect decision checks CLAUDE_CODE_AUTO_CONNECT_IDE === false FIRST, so every Claude worker
+// carries it — after the inherited environment, so an operator's `true` cannot win.
+test("every Claude worker is told never to connect to an editor, over whatever the shell said", () => {
+  assert.equal(CLAUDE_WORKER_ENV.CLAUDE_CODE_AUTO_CONNECT_IDE, "false")
+  const merged = { ...inheritWorkerEnvironment({ CLAUDE_CODE_AUTO_CONNECT_IDE: "true", CLAUDE_CODE_SSE_PORT: "33342" }), ...claudeWorkerEnv({}) }
+  assert.equal(merged.CLAUDE_CODE_AUTO_CONNECT_IDE, "false")
+  assert.equal("CLAUDE_CODE_SSE_PORT" in merged, false)
 })
 
 // The callers all merge their per-thread `workerEnv` ON TOP of this, which is what puts back the
