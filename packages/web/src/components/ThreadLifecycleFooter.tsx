@@ -63,8 +63,10 @@ export function ThreadLifecycleFooter({
       // two (lib/iconRhythm.ts has the measurements, and the strip this replaced drew 5.78px between
       // its two pills against 20.5px between its two icons on one uniform `gap-1.5`).
       // `@container`: the Goal's loop reading sizes itself to this strip rather than to the viewport
-      // (RecurringPromptControl), so it gives way before the lifecycle buttons wrap.
-      className={`@container ${sticky ? "z-20" : BLOCK_RADIUS_INNER_BOTTOM} flex min-h-10 shrink-0 flex-wrap items-center justify-end ${STRIP_INK_GAP} border-t border-border/70 bg-panel/95 px-3 pt-2 text-[12px] ${safeArea ? "pb-[max(0.5rem,env(safe-area-inset-bottom))]" : "pb-2"} backdrop-blur-sm`}
+      // (RecurringPromptControl), so it gives way before the lifecycle buttons wrap. NAMED `lifecycle`
+      // so SnoozeButton can shorten its label to this strip alone (its queue-card copy sits in no such
+      // container); an unnamed query, like the Goal's, still finds a named container.
+      className={`@container/lifecycle ${sticky ? "z-20" : BLOCK_RADIUS_INNER_BOTTOM} flex min-h-10 shrink-0 flex-wrap items-center justify-end ${STRIP_INK_GAP} border-t border-border/70 bg-panel/95 px-3 pt-2 text-[12px] ${safeArea ? "pb-[max(0.5rem,env(safe-area-inset-bottom))]" : "pb-2"} backdrop-blur-sm`}
     >
       {/* Bottom-LEFT cluster: the context reading, then the presence markers, held away from the
           lifecycle buttons by the one `mr-auto` on this group. The readings render nothing when they

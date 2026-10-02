@@ -168,7 +168,18 @@ export function SnoozeButton({
           className="flex items-center gap-1.5 rounded-l-md px-2.5 py-1 text-[12px] font-medium text-fg/75 outline-none transition-colors hover:bg-panel-2 hover:text-fg focus-visible:ring-1 focus-visible:ring-focus-ink-60 disabled:cursor-not-allowed disabled:opacity-45"
         >
           {busy && <Loader2 size={12} className="animate-spin" />}
-          {snoozedUntil ? "Wake now" : selectedAction}
+          {snoozedUntil ? "Wake now" : (
+            // A NARROW FOOTER SAYS "Snooze", and the button's title and aria-label keep the whole action.
+            // In a 300px VS Code sidebar (the footer's content box 276px) "Snooze until tomorrow ⌄" and
+            // "Mark as done" need ~347px, so Mark as done wrapped alone onto a second row and the footer
+            // took 83px for 44px of controls. Under 22rem of footer the label is the verb alone; the
+            // preset it applies is the remembered one, named in the tooltip and one ⌄ away. The container
+            // is ThreadLifecycleFooter's, by name, so a queue card's SnoozeButton is never shortened.
+            <>
+              <span className="@max-[22rem]/lifecycle:hidden">{selectedAction}</span>
+              <span className="hidden @max-[22rem]/lifecycle:inline">Snooze</span>
+            </>
+          )}
         </button>
         <span aria-hidden className="my-1 w-px bg-border" />
         <Menu open={menuOpen} onOpenChange={setMenuOpen}>
