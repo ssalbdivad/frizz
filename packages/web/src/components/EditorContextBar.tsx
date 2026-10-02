@@ -43,7 +43,8 @@ function Bar({ box }: { box: ContextBox }) {
   const reading = contextBarReading(active)
   const chord = useMemo(() => editorAddChord(detectPlatform()), [])
   const hints = barHints({ sending, selection: reading?.kind === "selection", withheld: active?.withheld === true, chord })
-  // Registered by its strip, so ⌘I or ⌘L typed in this box presses it (lib/editorContext.ts addEditorContextByKey).
+  // Registered by its strip, so ⌘I typed in this box presses it (lib/editorContext.ts addEditorContextByKey).
+  // ⌘L typed here is not the bar's: it goes back to the editor, as Cursor's does (lib/embedKeys.ts).
   const strip = useRef<HTMLDivElement>(null)
   const drawn = Boolean(reading || open.length)
   useEffect(() => {

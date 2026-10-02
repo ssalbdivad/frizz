@@ -107,14 +107,14 @@ test("the eye shows the extension's setting: the host's word wins over what the 
 
 test("the hint says what goes on its own and what the chord adds, and never teaches the step a question no longer needs", () => {
   const hints = (over: Partial<Parameters<typeof barHints>[0]>) => barHints({ sending: true, selection: false, withheld: false, chord: "Ctrl+L", ...over })
-  assert.deepEqual(hints({}), ["Selections go with your message · Ctrl+L puts one at the caret", "Ctrl+L puts a selection at the caret", "Ctrl+L: selection at caret"])
+  assert.deepEqual(hints({}), ["Selections go with your message · Ctrl+L puts one at the caret", "Ctrl+L puts a selection at the caret", "Select + Ctrl+L"])
   assert.deepEqual(hints({ selection: true }), ["Goes with your message · Ctrl+L puts it at the caret", "Goes with your message"])
   assert.deepEqual(hints({ selection: true, withheld: true }), ["Lines only: the file may hold secrets", "Lines only"])
   assert.deepEqual(hints({ sending: false, selection: true }), ["Not shared · Ctrl+L still adds it", "Not shared"])
   assert.deepEqual(hints({ sending: false }), ["Not shared with Frizz", "Not shared"])
   for (const state of [{}, { selection: true }, { sending: false }]) {
     for (const hint of hints(state)) {
-      assert.doesNotMatch(hint, /^Select\b/u, "not the old 'Select code and press'")
+      assert.doesNotMatch(hint, /^Select code\b/u, "not the old 'Select code and press'")
       assert.equal(hint[0], hint[0]!.toUpperCase(), "sentence case")
     }
   }

@@ -111,13 +111,19 @@ export function editorAddChord(platform: Platform): string {
  * a chip at the caret, to point at code in the middle of a sentence. With sharing off it says that nothing
  * goes on its own (the chord still adds, on purpose); with a file whose text stays home, that only its lines
  * go. Plain words, sentence case, no machinery.
+ *
+ * The SHORTEST rung is sized for the default sidebar: at 300px, beside the eye and `sample.ts ⌄`, the slot
+ * holds about 110px of 11px text — "Select + Ctrl+L" (15 characters) and nothing longer, so the run's c3
+ * read an empty hint until it was the last rung ("Ctrl+L: selection at caret" fits only beside a name as
+ * short as `a.ts`). The chord is the editor's; pressed in the page it goes back to the editor, and the
+ * reading's own tooltip says "in the editor" for the human who wonders.
  */
 export function barHints(state: { sending: boolean; selection: boolean; withheld: boolean; chord: string }): string[] {
   const { sending, selection, withheld, chord } = state
   if (!sending) return selection ? [`Not shared · ${chord} still adds it`, "Not shared"] : ["Not shared with Frizz", "Not shared"]
   if (selection && withheld) return ["Lines only: the file may hold secrets", "Lines only"]
   if (selection) return [`Goes with your message · ${chord} puts it at the caret`, "Goes with your message"]
-  return [`Selections go with your message · ${chord} puts one at the caret`, `${chord} puts a selection at the caret`, `${chord}: selection at caret`]
+  return [`Selections go with your message · ${chord} puts one at the caret`, `${chord} puts a selection at the caret`, `Select + ${chord}`]
 }
 
 // ── adding: a click on the bar, answered by the host's compose ────────────────────────────────────

@@ -310,6 +310,11 @@ state of ONE browser (lib/crossProject.ts says "per browser"), and the frame is 
 sheet says it for the keys, where it surprises ("Changes here stay in the sidebar"); sessionStorage lives
 only as long as the webview does.
 
+What the human sets there LASTS: the partition is kept on disk in the editor's profile, so a window reload
+and a restart both find it as it was (measured 2026-10-02, scripts/e2e-sidebar.ts c12: a value written
+into the frame's localStorage read back after a restart and after Developer: Reload Window). The one
+switch that must also reach the agents' tool is not kept there at all: the eye is `frizz.shareEditorState`.
+
 Code-file links in the sidebar open in VS Code even for a file OUTSIDE Frizz's trusted roots, on purpose.
 The roots gate the server's own opener, because that launches an application with the path (an editor, a
 shell's default handler); a VS Code tab is inert, the extension opens it in the window that holds the
@@ -392,7 +397,10 @@ selection between the block's 16 Ki and the tool's 32 Ki).
   wrote), project matching, message format (pinned to the page's `parseSentContext`) and compose size;
   its connection against an in-process server that judges every frame with the server's own
   `EditorClientMessageSchema` and frame ceilings; the sidebar's relay, CSP and routing (`embed.test.ts`,
-  `sidebar-html.test.ts`); the editor's context for the sidebar — the column-1 line rule, the selection's
+  `sidebar-html.test.ts`); the one reading of the editor in front both feeds share — the front rule (the
+  Output panel, a diff's sides, a closed editor), the flags, secret files by name, the text read only as
+  far as a feed carries it and only through VS Code's own ranges, and the page and the tool agreeing
+  (`editor-front.test.ts`); the editor's context for the sidebar — the column-1 line rule, the selection's
   characters, labels, open-file order, dedupe and cap, the fix note and titles, a terminal selection's
   bounds (`editor-context.test.ts`); the agents' picture of the editor — caps, order, the line rule, the
   fitting by encoded size with every result judged by the server's schema (`editor-state.test.ts`), the
@@ -413,18 +421,24 @@ selection between the block's 16 Ki and the tool's 32 Ki).
     position, a forwarded chord running its command, unknown messages doing nothing, a theme change, the
     fallbacks (a silent page, the setting off), and a re-frame when Frizz moves to another port. Then the
     editor in the sidebar: the `frizz:editor-context` payload (lines with the column-1 rule, characters
-    across selections, the other open files once each and most recent first, null for an untitled
-    buffer and a diff, no text anywhere), a drag as one message and an unchanged context as none, a
-    reloaded page told at once; `frizz:add-context` for the selection and a whole file, and nothing when
-    either is gone; Ctrl+L and Ctrl+I PRESSED with a selection landing a chip with the caret and pressed
-    with a caret landing nothing (Ctrl+L selecting the line instead), Alt+K landing the selection and,
+    across selections, the selection's text and no other, the other open files once each and most recent
+    first, unsaved changes, an untitled buffer in front in its own right, the Output panel in focus
+    keeping the file in front, a diff's working-tree side as the file, a `.env` selection told without
+    its text), a drag as one message and an unchanged context as none, a reloaded page told at once; one
+    switch — the page's eye writing `frizz.shareEditorState` (the workspace's value when it sets one) and
+    the agents' frame, the page's feed and the eye following it either way; `frizz:add-context` for the
+    selection and a whole file, and nothing when either is gone; Ctrl+L and Ctrl+I PRESSED with a
+    selection landing a chip with the caret, Ctrl+L with a caret going to the prompt box and adding
+    nothing (and selecting the line with `frizz.useSidebar` off), Ctrl+I with a caret staying VS Code's,
+    Ctrl+L forwarded from the page going back to the editor, Alt+K landing the selection and,
     with a caret, the whole file (trusted keys through the workbench's debugging port, `e2e/cdp.ts`); the quick fix
     offered for a diagnostic with its lines and `note`, two problems told apart, none with the setting
     off; a tab's and the explorer's files; a terminal selection as `@terminal` with the clipboard
     restored; `frizz:route` as the buttons the title row really shows and the badge's tooltip, with
     the row still reading Frizz; and every title-row command (Keyboard shortcuts in the ⋯), and a real click on one, reaching the page as `frizz:command`.
     And the agents' picture: a selection, a tab and a problem from a real diagnostic collection reaching
-    Frizz as the `editor` frame, an edit marking it dirty, and sharing off sending nothing else.
+    Frizz as the `editor` frame, an edit marking it dirty, sharing off sending nothing else, and a `.env`
+    selection sent as its lines, `withheld`, with the key in no frame.
     `FRIZZ_E2E_ONLY=<part of a step's name>` runs just those steps.
   - `FRIZZ_E2E_VSCODE=oldest nub packages/vscode/scripts/e2e.ts` — the same on the oldest VS Code the
     manifest's `engines.vscode` admits (1.90.0), where `focusWindow` does not exist.
@@ -438,3 +452,18 @@ selection between the block's 16 Ki and the tool's 32 Ki).
     (`code`, `cursor`, `xdg-open` …) is a stub on its PATH, and the run fails if one was spawned. The
     stack is stopped by its process group and anything still carrying its HOME is killed, pass or fail.
     Ask and Send start real agents, so they run only with `FRIZZ_E2E_DISPATCH=1` (which adds `--creds`).
+- The sidebar as the human uses it, `nub packages/vscode/scripts/e2e-sidebar.ts [--out=<dir>]` (also
+  under Xvfb, never the real display): the packaged `.vsix` in a real VS Code with its own extensions
+  directory, a disposable two-project Frizz, and the REAL page framed in the sidebar; keys and clicks are
+  trusted input on the workbench, and every check reads where it shows (the page's DOM, VS Code's title
+  row and editor, a simulated worker's socket). The header lists the checks; for editor context: c3 the
+  bar following the editor; c4 Ctrl+L into the reply box as a pill, sent with its context, and Ctrl+L
+  both ways (the reply box back to the editor; the editor with nothing selected revealing the sidebar
+  with the caret in the box); c8 the `?` sheet's Editor rows; c10 one switch — the eye, clicked, turning
+  the setting off, the worker's real `editor` tool then reading nothing and a send carrying no block, the
+  setting turned on in VS Code turning the eye on, a send quoting the selection and the next naming it;
+  c11 a stand-in extension with Claude Code's id and Alt+K installed live, Alt+K then its and the sheet
+  without the row, and Frizz's again once it is uninstalled; c12 a restart and then a window reload
+  (Developer: Reload Window, typed in the palette), both of which the framed page's own `localStorage`
+  and the eye survive. Under the test runner a reload ends the run (VS Code exits with its extension
+  host), so c12 reopens the same profile in a VS Code of the harness's own and reloads that.

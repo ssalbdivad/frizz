@@ -140,14 +140,20 @@ export async function run(): Promise<void> {
   const api = await extension.activate()
   console.log(`frizz e2e agent: ${vscode.env.appName} ${vscode.version}, asking ${control}`)
   let seq = 0
+  let misses = 0
   for (;;) {
     let next: { seq: number; op: AgentOp } | undefined
     try {
       const response = await fetch(`${control}/next?after=${seq}`)
+      misses = 0
       if (response.status === 204) continue
       next = (await response.json()) as { seq: number; op: AgentOp }
     } catch (error) {
-      // The harness went away: nothing more will be asked.
+      // A harness busy for a moment (a synchronous step) is not a harness gone: a few tries, a second apart.
+      if (++misses < 10) {
+        await new Promise((resolve) => setTimeout(resolve, 1_000))
+        continue
+      }
       console.log(`frizz e2e agent: the harness is gone (${(error as Error).message})`)
       return
     }

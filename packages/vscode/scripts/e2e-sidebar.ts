@@ -48,8 +48,9 @@
 //   c11 Claude Code: a stand-in extension with its id (anthropic.claude-code) and its Alt+K, installed
 //      live — Alt+K is then its (its binding answers, nothing reaches Frizz) and the `?` sheet drops the
 //      row; uninstalled, Alt+K is Frizz's again
-//   c12 a window reload (last: the agent inside VS Code restarts with it): the framed page's localStorage
-//      survives it, and so does the eye, which is the VS Code setting
+//   c12 a restart and a window reload (last: the test runner's VS Code ends with a reload, so the same
+//      profile is reopened by a VS Code of the harness's own): the framed page's localStorage survives
+//      both, and so does the eye, which is the VS Code setting
 //
 // NEVER ON THE REAL DISPLAY. On Linux the run re-executes itself under `xvfb-run -a` with DISPLAY and
 // WAYLAND_DISPLAY removed (DISPLAY=:0 here is the maintainer's screen through WSLg). The editor gets its
@@ -59,7 +60,7 @@
 // down by process group, exact pid, the sandbox HOME and the run's own user-data dir, pass or fail, and
 // the run fails if anything survives.
 
-import { execFileSync, spawnSync, type ChildProcess } from "node:child_process"
+import { execFileSync, spawn, spawnSync, type ChildProcess } from "node:child_process"
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs"
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http"
 import { homedir, tmpdir } from "node:os"
@@ -197,11 +198,6 @@ let agentSeq = 0
 const agentQueue: { seq: number; op: AgentOp }[] = []
 const agentAnswers = new Map<number, { resolve: (value: unknown) => void; reject: (error: Error) => void }>()
 let agentWaiting: { after: number; res: ServerResponse; timer: NodeJS.Timeout } | undefined
-/**
- * The last op a RESTARTED agent must not run again. A window reload restarts the extension host, and with it
- * the agent, which asks from the start (`after=0`); without a floor it would replay every op of the run.
- */
-let agentFloor = 0
 let agentSeen: () => void = () => undefined
 const agentUp = new Promise<void>((resolve) => (agentSeen = resolve))
 
@@ -226,7 +222,7 @@ async function startAgentServer(): Promise<string> {
     if (req.method === "GET" && url.pathname === "/next") {
       agentSeen()
       if (agentWaiting) agentWaiting.res.writeHead(204).end()
-      agentWaiting = { after: Math.max(Number(url.searchParams.get("after") ?? 0), agentFloor), res, timer: setTimeout(() => {
+      agentWaiting = { after: Number(url.searchParams.get("after") ?? 0), res, timer: setTimeout(() => {
         if (agentWaiting?.res === res) agentWaiting = undefined
         res.writeHead(204).end()
       }, 20_000) }
@@ -596,6 +592,22 @@ async function shot(name: string, options: { window?: boolean } = {}): Promise<v
   if (options.window) await capture(join(out, `${version}-${name}-window.png`))
 }
 
+// ── c11's stand-in ────────────────────────────────────────────────────────────────────────────────────
+
+/** A `.vsix` with Claude Code's id (anthropic.claude-code) and its Alt+K, bound to Select All so whose Alt+K answered shows. */
+const claudeCodeStandIn = join(scratch, "claude-code-stub", "claude-code-stub.vsix")
+function packClaudeCodeStandIn(): void {
+  const dir = dirname(claudeCodeStandIn)
+  mkdirSync(dir, { recursive: true })
+  writeFileSync(join(dir, "package.json"), JSON.stringify({
+    name: "claude-code", publisher: "anthropic", version: "0.0.1", displayName: "Claude Code (e2e stand-in)",
+    description: "Claude Code's id and its Alt+K, for Frizz's end-to-end run.", engines: { vscode: "^1.90.0" },
+    contributes: { keybindings: [{ command: "editor.action.selectAll", key: "alt+k", mac: "alt+k", when: "editorTextFocus" }] },
+  }, null, 2))
+  const packed = spawnSync("nubx", ["-y", "-p", "@vscode/vsce@3.9.2", "vsce", "package", "--no-dependencies", "--allow-missing-repository", "--skip-license", "--out", claudeCodeStandIn], { cwd: dir, stdio: "inherit" })
+  if (packed.status !== 0) throw new Error("packaging the Claude Code stand-in failed")
+}
+
 // ── the run ───────────────────────────────────────────────────────────────────────────────────────────
 
 let exitCode = 1
@@ -617,6 +629,9 @@ try {
   }
   const built = spawnSync("nub", ["scripts/build.ts", "--e2e"], { cwd: pkg, stdio: "inherit" })
   if (built.status !== 0) throw new Error("building the e2e bundle failed")
+  // c11's stand-in for Claude Code, packed NOW: a synchronous pack once the editor is up blocks this
+  // process's event loop, the agent inside VS Code cannot reach the harness for that long, and it quits.
+  if (wanted("c11")) packClaudeCodeStandIn()
   log(`extension under test: ${devMode ? "the source tree" : "the packaged .vsix"} at ${extensionPath}`)
 
   // ── the stack, seeded ──
@@ -1574,21 +1589,10 @@ try {
 
   // ── c11: Claude Code's Alt+K ──
   await run("c11", "with Claude Code's extension installed, Alt+K is its: Frizz steps aside, and takes it back when it goes", async () => {
-    // A stand-in with Claude Code's id and its chord, bound to Select All so whose Alt+K answered shows.
-    const stub = join(scratch, "claude-code-stub")
-    mkdirSync(stub, { recursive: true })
-    writeFileSync(join(stub, "package.json"), JSON.stringify({
-      name: "claude-code", publisher: "anthropic", version: "0.0.1", displayName: "Claude Code (e2e stand-in)",
-      description: "Claude Code's id and its Alt+K, for Frizz's end-to-end run.", engines: { vscode: "^1.90.0" },
-      contributes: { keybindings: [{ command: "editor.action.selectAll", key: "alt+k", mac: "alt+k", when: "editorTextFocus" }] },
-    }, null, 2))
-    const vsix = join(stub, "claude-code-stub.vsix")
-    const packed = spawnSync("nubx", ["-y", "-p", "@vscode/vsce@3.9.2", "vsce", "package", "--no-dependencies", "--allow-missing-repository", "--skip-license", "--out", vsix], { cwd: stub, stdio: "inherit" })
-    if (packed.status !== 0) throw new Error("packaging the Claude Code stand-in failed")
     await resetPage()
     await openThreadRow()
     await clearBox("chatComposer")
-    await agent({ op: "install", vsix }, 120_000)
+    await agent({ op: "install", vsix: claudeCodeStandIn }, 120_000)
     const installed = await until(async () => await agent<boolean>({ op: "extension", id: "anthropic.claude-code" }), 20_000)
     expect("c11", "the stand-in with Claude Code's id installs live, with no reload", installed)
     await sleep(1_000)
@@ -1598,7 +1602,7 @@ try {
     await sleep(1_500)
     const theirs = { box: await box("chatComposer"), editor: await editorState() }
     const lastLine = SAMPLE.split("\n").length - 1
-    expect("c11", "Alt+K adds nothing to Frizz's prompt box", !theirs.box?.value.includes("@sample.ts"), theirs.box)
+    expect("c11", "Alt+K adds nothing to Frizz's prompt box", !/sample\.ts/u.test(theirs.box?.value ?? ""), theirs.box)
     expect("c11", "…it is Claude Code's: the stand-in's binding answered (Select All)", theirs.editor.selection?.start.join() === "0,0" && theirs.editor.selection.end[0] === lastLine, theirs.editor)
     await focusPageBody()
     await page.keyboard.type("?")
@@ -1615,38 +1619,86 @@ try {
     await openInEditor(files.sample, [3, 1, 3, 1])
     await sleep(800)
     await press("Alt+KeyK")
-    const ours = await waitFor("the file's chip from Alt+K", async () => {
+    // A whole file with no text lands as a reference to it (lib/editorCompose.ts), `src/sample.ts`.
+    const ours = await waitFor("the file from Alt+K", async () => {
       const state = await box("chatComposer")
-      return state?.value.includes("@sample.ts") ? state : undefined
+      return /sample\.ts/u.test(state?.value ?? "") ? state : undefined
     }, 8_000).catch(async () => box("chatComposer"))
-    expect("c11", "…and Alt+K is Frizz's again: the whole file into the reply box", /^@sample\.ts(?!:)/u.test(ours?.value ?? ""), ours)
+    expect("c11", "…and Alt+K is Frizz's again: the whole file into the reply box", /sample\.ts(?!:)/u.test(ours?.value ?? ""), ours)
     await clearBox("chatComposer")
   })
 
-  // ── c12: a window reload (LAST: the agent inside VS Code restarts with it) ──
-  await run("c12", "a window reload keeps what the page stored and the eye", async () => {
-    // A value in the framed page's own storage — where it keeps what the human set in it — and the eye off.
+  // ── c12: a restart and a window reload (LAST: it ends the agent's VS Code) ──
+  await run("c12", "a restart and a window reload keep what the page stored, and the eye", async () => {
+    // A value in the framed page's own storage — where it keeps what the human set in it (its shortcuts,
+    // drafts) — and the eye off, with a file in front so the bar (and its eye) is drawn.
+    await openInEditor(files.sample)
     const probe = `reload-probe-${Date.now()}`
     await inPage((value) => localStorage.setItem("frizz-e2e-reload-probe", value), probe)
-    const keys = await inPage(() => Object.keys(localStorage).sort())
+    const keysBefore = await inPage(() => Object.keys(localStorage).sort())
     await agent({ op: "config", section: "frizz", key: "shareEditorState", value: false })
     await until(async () => (await eye()) === "false", 8_000)
-    const before = frizzFrame()
-    agentFloor = agentSeq + 1
-    await agent({ op: "command", id: "workbench.action.reloadWindow" }, 5_000).catch(() => undefined)
-    const after = await waitFor("the page framed again after the reload", async () => {
+    // Under the test runner a window reload ENDS the run: VS Code exits with its extension host (seen:
+    // "Test run failed with code 1" the moment Reload Window ran). So the agent is told it is done, that
+    // VS Code closes, and the same profile — user data, extensions, settings — is opened again by a VS Code
+    // of this harness's own, without the runner, where a reload is just a reload.
+    finishAgent?.()
+    await Promise.race([suite, sleep(60_000)])
+    await killAll(editors)
+    await browser?.disconnect().catch(() => undefined)
+    const port = await freePort()
+    spawn(vscodeExecutablePath, [
+      workspace.dir, `--user-data-dir=${userData}`, `--extensions-dir=${join(scratch, "extensions")}`, `--extensionDevelopmentPath=${extensionPath}`,
+      "--disable-extension=GitHub.copilot", "--disable-extension=GitHub.copilot-chat", "--password-store=basic", "--disable-gpu",
+      "--disable-telemetry", "--skip-welcome", "--skip-release-notes", "--no-sandbox", "--disable-gpu-sandbox", "--disable-updates",
+      "--disable-workspace-trust", `--remote-debugging-port=${port}`,
+    ], { stdio: "ignore", env: process.env })
+    browser = await waitFor("the relaunched VS Code's debugging port", () => puppeteer.connect({ browserURL: `http://127.0.0.1:${port}`, defaultViewport: null, protocolTimeout: 180_000 }), 60_000)
+    page = await waitFor("the relaunched workbench", async () => (await browser!.pages()).find((candidate) => /workbench(\.esm)?\.html/u.test(candidate.url())), 60_000)
+    cdp = await page.createCDPSession()
+    await cdp.send("Emulation.setFocusEmulationEnabled", { enabled: true })
+    page.on("pageerror", (error) => pageErrors.push(String(error)))
+    // The side bar comes back on Frizz's view when the workspace remembers it; else, its icon, clicked.
+    if (!(await until(async () => !!frizzFrame(), 30_000))) {
+      await waitFor("the Frizz item in the activity bar", () => page.$('.part.activitybar .action-label[aria-label^="Frizz"]'), 30_000)
+      await clickInWorkbench('.part.activitybar .action-label[aria-label^="Frizz"]')
+    }
+    const pageUp = async (not?: Frame) => waitFor("the page framed and drawn", async () => {
       const framedNow = frizzFrame()
-      if (!framedNow || framedNow === before || framedNow.detached) return undefined
-      return (await framedNow.evaluate(() => document.readyState === "complete" && !!document.querySelector("[data-sidebar-page]")).catch(() => false)) ? framedNow : undefined
-    }, 180_000)
-    notes.reloadedFrame = after.url()
-    const stored = await inPage(() => ({ probe: localStorage.getItem("frizz-e2e-reload-probe"), keys: Object.keys(localStorage).sort() }))
-    expect("c12", "the page's own storage survives a window reload", stored.probe === probe, { before: keys, after: stored.keys })
-    const eyeAfter = await waitFor("the eye after the reload", async () => (await eye()) ?? undefined, 20_000).catch(() => null)
-    expect("c12", "the eye is still off after the reload: it is the VS Code setting", eyeAfter === "false", { eye: eyeAfter, bar: await contextBar("newComposer").catch(() => null) })
+      if (!framedNow || framedNow === not || framedNow.detached) return undefined
+      return (await framedNow.evaluate(() => !!document.querySelector("[data-sidebar-page]")).catch(() => false)) ? framedNow : undefined
+    }, 120_000)
+    // No agent now: a file is opened as a human opens one, Quick Open typed — the eye is drawn only beside
+    // a reading of what is in front. (A restart reopens no editors here; a reload keeps them.)
+    const inFront = async () => {
+      if (await until(async () => (await eye()) !== null, 3_000)) return
+      await press("Control+KeyP")
+      await until(paletteOpen, 5_000)
+      await page.keyboard.type("sample.ts", { delay: 15 })
+      await sleep(800)
+      await press("Enter")
+    }
+    const restarted = await pageUp()
+    await inFront()
+    const afterRestart = await inPage(() => ({ probe: localStorage.getItem("frizz-e2e-reload-probe"), keys: Object.keys(localStorage).sort() }))
+    expect("c12", "a restart: the page's own storage is still there", afterRestart.probe === probe, { before: keysBefore, after: afterRestart.keys })
+    const eyeRestart = await waitFor("the eye", async () => (await eye()) ?? undefined, 20_000).catch(() => null)
+    expect("c12", "…and the eye is still off: it is the VS Code setting", eyeRestart === "false", { eye: eyeRestart })
+
+    // A window reload, as a human does it: the palette's Developer: Reload Window, typed.
+    await press("Control+Shift+KeyP")
+    await until(paletteOpen, 5_000)
+    await page.keyboard.type("Developer: Reload Window", { delay: 15 })
+    await sleep(800)
+    await press("Enter")
+    // Puppeteer keeps the workbench's page across a reload; the frame inside it is a new one.
+    await pageUp(restarted)
+    await inFront()
+    const afterReload = await inPage(() => ({ probe: localStorage.getItem("frizz-e2e-reload-probe"), keys: Object.keys(localStorage).sort() }))
+    expect("c12", "a window reload: the page's own storage is still there", afterReload.probe === probe, { before: keysBefore, after: afterReload.keys })
+    const eyeReload = await waitFor("the eye", async () => (await eye()) ?? undefined, 20_000).catch(() => null)
+    expect("c12", "…and the eye is still off", eyeReload === "false", { eye: eyeReload })
     await shot("c12-after-reload-w300", { window: true })
-    // The agent came back with the extension host: sharing back on, the run's state as it found it.
-    await agent({ op: "config", section: "frizz", key: "shareEditorState", value: null }, 60_000).catch((error: unknown) => (notes.reloadAgent = String(error)))
   })
 
   expect("all", "no page errors in the framed page", pageErrors.length === 0, pageErrors.slice(0, 10))
