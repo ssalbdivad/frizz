@@ -20,7 +20,10 @@
 //     otherwise write a line every 30s for days.
 //   - Nothing goes out that Frizz will refuse. A refused hello (4401) is refused again on every redial,
 //     forever, so the folders a window reports are fitted to Frizz's limits (`fitFolders`) rather than
-//     sent whole.
+//     sent whole, and the editor's picture is fitted to its byte ceiling (editor-state.ts).
+//   - Nothing goes out that Frizz does not know. The server closes the socket on a frame it has never
+//     heard of, so the `editor` frame — newer than v1 — goes only to a Frizz whose welcome names it
+//     (`features`). An older Frizz simply never hears it, and its agents cannot read the editor.
 //
 // Pure node (no `vscode` import): the host interface is how the window is reached, and the tests drive
 // this against a real `ws` server in-process.
@@ -29,6 +32,7 @@ import { randomUUID } from "node:crypto"
 import WebSocket from "ws"
 import {
   EDITOR_CLOSE,
+  EDITOR_FEATURES,
   EDITOR_MAX_FOLDERS,
   EDITOR_MAX_PATH,
   EDITOR_PROTOCOL_VERSION,
@@ -41,8 +45,10 @@ import {
   type EditorOpen,
   type EditorProject,
   type EditorServerMessage,
+  type EditorSnapshot,
   type EditorState,
 } from "@frizz/shared/editor-protocol"
+import { fitEditorSnapshot } from "./editor-state.ts"
 
 export type ConnectionStatus =
   | { kind: "connecting" }
@@ -67,6 +73,8 @@ export interface ConnectionHost {
   /** Everything the hello carries about this window, read at the moment it is sent. */
   hello(): Omit<EditorHello, "t" | "v">
   state(): Omit<EditorState, "t">
+  /** What the window's editor shows, for Frizz's agents (editor-state-feed.ts). Absent: this host reports none. */
+  editor?(): EditorSnapshot
   open(message: EditorOpen): Promise<OpenResult>
   focus(message: EditorFocus): Promise<OpenResult>
   projects(projects: EditorProject[]): void
@@ -195,6 +203,10 @@ export class EditorConnection {
   #helloState: string | undefined
   #lastLogged: string | undefined
   #foldersNote: string | undefined
+  /** What the Frizz this socket is connected to said it takes beyond v1 (`welcome.features`). */
+  #features = new Set<string>()
+  /** The last `editor` frame sent on this socket, so an unchanged picture is not sent again. */
+  #lastEditor: string | undefined
   readonly #composes = new Map<string, { resolve: (value: EditorComposed) => void; timer: NodeJS.Timeout }>()
 
   constructor(host: ConnectionHost, options: ConnectionOptions = {}) {
@@ -246,6 +258,23 @@ export class EditorConnection {
     if (this.#send({ t: "state", ...state })) this.#lastState = key
   }
 
+  /** Whether the Frizz this window is connected to takes the editor's picture (its welcome named it). */
+  get sharesEditor(): boolean {
+    return this.#welcomed && this.#features.has(EDITOR_FEATURES.editorState)
+  }
+
+  /**
+   * Tell Frizz what the editor shows now (`host.editor()`), fitted to its ceiling. Only to a Frizz that
+   * said it takes it; an unchanged picture is not resent.
+   */
+  sendEditor(): void {
+    if (!this.sharesEditor || !this.#host.editor) return
+    const snapshot = fitEditorSnapshot(this.#host.editor())
+    const key = JSON.stringify(snapshot)
+    if (key === this.#lastEditor) return
+    if (this.#send(snapshot)) this.#lastEditor = key
+  }
+
   /** Hand Frizz something for the page's prompt box; resolves with its `composed` answer. */
   compose(item: EditorComposeInput): Promise<EditorComposed> {
     const id = randomUUID()
@@ -294,6 +323,8 @@ export class EditorConnection {
     this.#socket = undefined
     this.#welcomed = false
     this.#lastState = undefined
+    this.#lastEditor = undefined
+    this.#features.clear()
     this.#failComposes("The connection to Frizz closed.")
     if (socket) {
       socket.removeAllListeners()
@@ -407,6 +438,8 @@ export class EditorConnection {
       const wasWelcomed = this.#welcomed
       this.#welcomed = false
       this.#lastState = undefined
+      this.#lastEditor = undefined
+      this.#features.clear()
       this.#failComposes("The connection to Frizz closed.")
       const closed = refusal && !wasWelcomed ? { reason: refusal, incompatible: false } : describeClose(code, buffer.toString())
       this.#logOnce(closed.incompatible ? "error" : "warn", `${closed.reason}${refusal && !wasWelcomed ? "" : ` [${code}]`}`)
@@ -424,10 +457,15 @@ export class EditorConnection {
         this.#attempt = 0
         this.#lastState = this.#helloState
         this.#lastLogged = undefined
-        this.#host.log.info(`Connected to Frizz at ${origin} (${detail})${restarted ? "; Frizz restarted since the last connection" : ""}.`)
+        this.#features = new Set(Array.isArray(message.features) ? message.features.filter((feature): feature is string => typeof feature === "string") : [])
+        this.#lastEditor = undefined
+        const blind = this.#host.editor && !this.#features.has(EDITOR_FEATURES.editorState) ? "; this Frizz is too old for its agents to read the editor, so update it" : ""
+        this.#host.log.info(`Connected to Frizz at ${origin} (${detail})${restarted ? "; Frizz restarted since the last connection" : ""}${blind}.`)
         this.#setStatus({ kind: "connected", origin, bootId: message.bootId })
-        // Anything that changed between the hello and the welcome.
+        // Anything that changed between the hello and the welcome, and the editor's picture: a Frizz that
+        // just (re)started knows nothing of it.
         this.sendState()
+        this.sendEditor()
         return
       }
       case "projects":

@@ -241,6 +241,11 @@
           "default": true,
           "description": "Open file links from Frizz in this window"
         },
+        "frizz.shareEditorState": {
+          "type": "boolean",
+          "default": true,
+          "markdownDescription": "Let Frizz's agents see what you have in front of you in this window when they need it: the file you are in, what you have selected and its text, your open tabs, and the editor's errors and warnings — so you can ask about \"this\" without pasting it. Turn it off to keep the editor to yourself."
+        },
         "frizz.useSidebar": {
           "type": "boolean",
           "default": true,

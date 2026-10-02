@@ -16,6 +16,7 @@ import { EditorConnection, FocusRecency, type ConnectionStatus, type OpenResult 
 import { activeFileEditor, registerContextFeed } from "./context-feed.ts"
 import { discoverFrizz, pageAddressNote, SOURCE_WORDS, type FoundFrizz } from "./discovery.ts"
 import { fixNote, fixTitle, lineSpan, terminalText, type Problem } from "./editor-context.ts"
+import { registerEditorStateFeed } from "./editor-state-feed.ts"
 import { addRoute, composeInSidebar as composeVia, promptRoute } from "./embed.ts"
 import { composeInput, composeMessage, normalizeNewlines, refLabel, type FileRef, type Selected } from "./message.ts"
 import { projectForPath, workspaceProjects } from "./projects.ts"
@@ -150,6 +151,11 @@ export function activateFrizz(api: Vscode, context: vscode.ExtensionContext): Fr
     }
   }
 
+  // What this window shows — file, selection, tabs, problems — for Frizz's agents to read
+  // (`mcp__frizz__editor`), sent on every change to a Frizz that takes it. `frizz.shareEditorState` off
+  // sends that it is off, and nothing else.
+  const editorState = registerEditorStateFeed(api, context, { send: () => connection.sendEditor() })
+
   let lastNotes: string | undefined
   /** The last discovery's answer: the origin a page opens on even when the editor connection was refused. */
   let found: FoundFrizz | undefined
@@ -170,6 +176,7 @@ export function activateFrizz(api: Vscode, context: vscode.ExtensionContext): Fr
       return { windowId, app: api.env.appName, extensionVersion, ...state, ...(ago === undefined ? {} : { focusedAgoMs: ago }), home: homedir(), platform: process.platform }
     },
     state: windowState,
+    editor: () => editorState.snapshot(),
     open: (message) => openFromFrizz(message),
     async focus() {
       return (await focusWindow()) ? { ok: true } : { ok: false, error: `${api.env.appName} can't bring its window to the front.` }

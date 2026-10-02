@@ -14,6 +14,12 @@ in it. Works in VS Code, Cursor and Windsurf.
 - **The sidebar sees your editor.** Over its prompt boxes it names the file in front and what you have
   selected (`sample.ts:12-20`, `26 lines`), live; a click adds it as a chip, and the other open files
   are one more click away. Only paths and line numbers reach the sidebar until you add something.
+- **Frizz's agents can see your editor.** Ask a thread about "this", "the selected code" or "the error"
+  without pasting anything: its agent can read what you have in front of you — the file you are in,
+  what you have selected and its text, your open tabs, and the editor's errors and warnings — from the
+  window that has the thread's project open. The extension keeps Frizz on this machine up to date with
+  it; an agent reads it only when it asks. Turn off `frizz.shareEditorState` to keep the editor to
+  yourself.
 - **Add to Frizz prompt** (`Ctrl+I`, `⌘I` on macOS, with text selected) — the selection becomes a chip
   in the prompt box the sidebar shows, with the caret after it so you can type straight on: the reply
   box of the thread you are in, else the new-thread box. The sidebar opens if this window never had it.
@@ -84,6 +90,7 @@ Server when you are in WSL, since the extension runs where your files are. Or bu
 | --- | --- | --- |
 | `frizz.serverUrl` | empty | Frizz's address, such as `http://127.0.0.1:9393`. Empty finds the Frizz running on this machine. |
 | `frizz.openFileLinks` | on | Open file links from Frizz in this window. Turn it off for a window that should never take them. |
+| `frizz.shareEditorState` | on | Let Frizz's agents read what this window shows when they need it: the file in front, your selection and its text, your open tabs, the errors and warnings. Off, they see nothing of it. |
 | `frizz.useSidebar` | on | Everything you add from the editor, and Ask and Send, go to the sidebar. Off, selections and files go to Frizz in your browser, Ask and Send take your message in an input box and send it, and the quick fix and the terminal's entry are not offered. |
 
 **Frizz: Show log** shows how the extension found Frizz and every time the connection changed;
