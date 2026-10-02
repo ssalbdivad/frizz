@@ -118,7 +118,7 @@ export interface LiveStatusDeps {
   /** The model. Absent ⇒ no working status is ever written. */
   complete?: ClaudeOneShot
   /** `forkAnchor` is the row's SessionRow.fork_anchor — a forked thread is read from its fork point. */
-  readMessages: (sessionId: string, forkAnchor?: string | null) => TranscriptMessage[]
+  readMessages: (sessionId: string, forkAnchor?: string | null) => TranscriptMessage[] | Promise<TranscriptMessage[]>
   onStatus: () => void
   onError?: (slug: string, error: unknown) => void
   now?: () => number
@@ -182,34 +182,36 @@ export function createLiveStatus(deps: LiveStatusDeps): LiveStatus {
       }
       if (st.inFlight || at < st.nextCheckAt) return
       st.nextCheckAt = at + intervalMs
-      const read = liveActivity(deps.readMessages(row.session_id, row.fork_anchor))
-      if (!read) return
-      const resumes = st.wroteThisTurn || (st.turnEndedAt !== undefined && st.turnStartedAt - st.turnEndedAt < RESUME_GAP_MS)
-      const current = resumes ? st.last : undefined
       const state = st
       state.inFlight = true
-      void complete(liveStatusRequest({ ...read, current: current?.status }))
-        .then((raw) => {
-          // The turn rested while the model thought: the rest writer owns the status now.
-          if (!state.turnOpen) return
-          const answer = parseLiveStatus(raw)
-          if (!answer) return
-          let next: { status: string; at: string }
-          if ("same" in answer) {
-            if (!current) return
-            next = current
-          } else {
-            next = answer.status === current?.status ? current : { status: answer.status, at: new Date(now()).toISOString() }
-          }
-          state.last = next
-          state.wroteThisTurn = true
-          // Keyed on the session it was read from. `next.at` restores a resumed task's clock after the
-          // rest writer replaced its text; storage keeps the old instant when the text is unchanged.
-          const stored = deps.storage.getSession(row.slug)
-          if (stored?.session_id !== row.session_id) return
-          if (stored.status === next.status && stored.status_at === next.at) return
-          if (deps.storage.setStatus(row.slug, row.session_id, next.status, next.at)) deps.onStatus()
-        })
+      void (async () => {
+        // Awaited: the context hands in readTranscriptYielding, so a cold fold of a large transcript
+        // yields the event loop instead of holding it for seconds (transcript.ts).
+        const read = liveActivity(await deps.readMessages(row.session_id, row.fork_anchor))
+        if (!read || !state.turnOpen) return
+        const resumes = state.wroteThisTurn || (state.turnEndedAt !== undefined && state.turnStartedAt - state.turnEndedAt < RESUME_GAP_MS)
+        const current = resumes ? state.last : undefined
+        const raw = await complete(liveStatusRequest({ ...read, current: current?.status }))
+        // The turn rested while the model thought: the rest writer owns the status now.
+        if (!state.turnOpen) return
+        const answer = parseLiveStatus(raw)
+        if (!answer) return
+        let next: { status: string; at: string }
+        if ("same" in answer) {
+          if (!current) return
+          next = current
+        } else {
+          next = answer.status === current?.status ? current : { status: answer.status, at: new Date(now()).toISOString() }
+        }
+        state.last = next
+        state.wroteThisTurn = true
+        // Keyed on the session it was read from. `next.at` restores a resumed task's clock after the
+        // rest writer replaced its text; storage keeps the old instant when the text is unchanged.
+        const stored = deps.storage.getSession(row.slug)
+        if (stored?.session_id !== row.session_id) return
+        if (stored.status === next.status && stored.status_at === next.at) return
+        if (deps.storage.setStatus(row.slug, row.session_id, next.status, next.at)) deps.onStatus()
+      })()
         .catch((error: unknown) => deps.onError?.(row.slug, error))
         .finally(() => { state.inFlight = false })
     },

@@ -294,3 +294,20 @@ test("crossProjectMentionCandidates: another project's recent done threads, afte
   ])
   assert.equal(matchMentions(cross, "standup")[0]?.slug, "h2")
 })
+
+// mentionCandidates is memoised per thread array and narrowed per caller (2026-10-01). The narrowed list
+// must be exactly what computing it for the board without that thread gives — above all at the done
+// bound, where an excluded done thread lets the next one in.
+test("mentionCandidates: the memoised list, narrowed by excludeSlug, is the list for the board without it", () => {
+  const many = Array.from({ length: 30 }, (_, i) => thread({
+    id: `t${i}`, title: `Thread number ${i}`, state: i % 3 === 0 ? "open" : "archived",
+    lastAssistantAt: new Date(Date.UTC(2026, 8, 1, 0, i)).toISOString(),
+  }))
+  for (const excluded of [undefined, ...many.map((t) => t.id)]) {
+    const expected = mentionCandidates([...many].filter((t) => t.id !== excluded))
+    assert.deepEqual(mentionCandidates(many, excluded), expected, `excluding ${excluded}`)
+    assert.ok(mentionCandidates(many, excluded).filter((c) => c.done).length <= 20)
+  }
+  // Repeat calls on one array return fresh arrays: a caller that pushes onto one cannot touch the next.
+  assert.notEqual(mentionCandidates(many), mentionCandidates(many))
+})

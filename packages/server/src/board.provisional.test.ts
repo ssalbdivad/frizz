@@ -146,7 +146,14 @@ test("NEGATIVE CONTROL: with no stand-in at all, the same unprimed row reads run
     before.start()
     before.stop()
     // The pre-fix board: no provisional reading, and a row whose durable rest is unknown.
-    f.storage.db.prepare("UPDATE session SET rested_at = NULL").run()
+    // Written from a second connection: the session cache only re-reads for a write it can see — a row
+    // change through this project's scope, or another connection's commit (data_version), from the next
+    // turn. A raw statement on the cache's own connection is neither, and no longer rides along on the
+    // snooze sweep's no-op UPDATE (project-scope.ts).
+    const other = createStorage(join(f.dir, "ui.db"), "p")
+    other.db.prepare("UPDATE session SET rested_at = NULL").run()
+    other.close()
+    await Promise.resolve()
     const bare = f.tailer({ cache: false })
     const board = createBoard(f.project, f.storage, new Bus(), { ...bare, provisional: undefined }, "control")
     const view = band(board.refresh().threads.find((t) => t.id === "parked"))

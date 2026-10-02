@@ -39,6 +39,30 @@ const DONE_CANDIDATES = 20
  *  `doneLimit` is the typeahead's bound; a surface that only RESOLVES what was already written (agent
  *  prose, lib/mentionAutolink.ts) lifts it, since an old thread named there is still that thread. */
 export function mentionCandidates(threads: readonly ThreadView[], excludeSlug?: string, doneLimit = DONE_CANDIDATES): MentionCandidate[] {
+  // MEMOISED per thread array, then narrowed per caller (2026-10-01). Every queue card's reply box asks
+  // for this list with its own `excludeSlug`, on every board change, so a page of N cards ran N full
+  // sorts of the board per delta. On a 9-project, 247-card mirror of a busy machine that was 2.0s of a
+  // 20s profile of the page — the largest single item. The list without exclusion, keeping ONE extra
+  // done candidate, is computed once per array (a board snapshot is a new array exactly when it
+  // changed); dropping the excluded thread from it and re-applying the done bound gives exactly the
+  // list a direct computation would: an excluded open thread leaves the done slice as it was, and an
+  // excluded done one is replaced by the next, which the extra candidate holds.
+  let byLimit = candidateCache.get(threads)
+  if (!byLimit) candidateCache.set(threads, (byLimit = new Map()))
+  let base = byLimit.get(doneLimit)
+  if (!base) byLimit.set(doneLimit, (base = computeMentionCandidates(threads, undefined, doneLimit + 1)))
+  const out: MentionCandidate[] = []
+  let done = 0
+  for (const candidate of base) {
+    if (candidate.slug === excludeSlug) continue
+    if (candidate.done && done++ >= doneLimit) continue
+    out.push(candidate)
+  }
+  return out
+}
+const candidateCache = new WeakMap<readonly ThreadView[], Map<number, MentionCandidate[]>>()
+
+function computeMentionCandidates(threads: readonly ThreadView[], excludeSlug: string | undefined, doneLimit: number): MentionCandidate[] {
   const open: MentionCandidate[] = []
   const done: MentionCandidate[] = []
   for (const t of orderByInteraction(threads)) {
@@ -76,7 +100,7 @@ export function crossProjectMentionCandidates(queues: readonly ProjectQueue[], h
   for (const queue of queues) {
     if (queue.projectSlug === home) continue
     const project = { slug: queue.projectSlug, name: queue.projectName }
-    for (const candidate of mentionCandidates([...queue.threads, ...(queue.recentDone ?? [])])) {
+    for (const candidate of queueCandidates(queue)) {
       const key = foldHandle(candidate.handle)
       if (seen.has(key)) continue
       seen.add(key)
@@ -84,6 +108,15 @@ export function crossProjectMentionCandidates(queues: readonly ProjectQueue[], h
     }
   }
   return [...open, ...done]
+}
+
+// A queue's own candidates, once per poll answer (react-query keeps a queue object's identity while its
+// data is unchanged) rather than once per reply box per render.
+const queueCandidateCache = new WeakMap<ProjectQueue, MentionCandidate[]>()
+function queueCandidates(queue: ProjectQueue): MentionCandidate[] {
+  let list = queueCandidateCache.get(queue)
+  if (!list) queueCandidateCache.set(queue, (list = mentionCandidates([...queue.threads, ...(queue.recentDone ?? [])])))
+  return list
 }
 
 // The characters a handle runs over, and what may sit right before its `@` — mirrors @frizz/shared
@@ -114,9 +147,17 @@ export function splitMentionQuery(query: string): { head: string; rest: string }
 /** Case, punctuation and a trailing plural folded away — the server's `foldThreadName` key, applied to
  *  a single token, so `@ShellBudget`, `@shell-budgets` and a legacy `@shellBudgets` all name one thread. */
 export function foldHandle(text: string): string {
-  const key = text.normalize("NFKD").replace(/\p{M}+/gu, "").toLowerCase().replace(/[^\p{L}\p{N}]+/gu, "")
-  return key.length > 3 && key.endsWith("s") && !key.endsWith("ss") ? key.slice(0, -1) : key
+  // Memoised: every reply box folds every other project's handles on each render (a normalize and two
+  // Unicode regexes apiece), and the set of handles on a page is small and slow to change.
+  const known = foldCache.get(text)
+  if (known !== undefined) return known
+  const raw = text.normalize("NFKD").replace(/\p{M}+/gu, "").toLowerCase().replace(/[^\p{L}\p{N}]+/gu, "")
+  const key = raw.length > 3 && raw.endsWith("s") && !raw.endsWith("ss") ? raw.slice(0, -1) : raw
+  if (foldCache.size >= 5_000) foldCache.clear()
+  foldCache.set(text, key)
+  return key
 }
+const foldCache = new Map<string, string>()
 
 /** Where each word of a handle starts (`shell-budgets` → 0, 6): for matching "bud" and for where a
  *  handle too long for its line may wrap (Sidebar.tsx TitleWithTrailers). A word starts after a `-`, a

@@ -65,7 +65,7 @@ export interface PeriodicStatusDeps {
   /** The thread's current NAME, handed to the writer only so the status does not repeat it. */
   nameOf?: (row: SessionRow) => string | undefined
   /** `forkAnchor` is the row's SessionRow.fork_anchor — a forked thread is read from its fork point. */
-  readMessages: (sessionId: string, forkAnchor?: string | null) => TranscriptMessage[]
+  readMessages: (sessionId: string, forkAnchor?: string | null) => TranscriptMessage[] | Promise<TranscriptMessage[]>
   onStatus: () => void
   onError?: (slug: string, error: unknown) => void
 }
@@ -87,25 +87,30 @@ export function createPeriodicStatus(deps: PeriodicStatusDeps): PeriodicStatus {
     onTurnDone(row, options) {
       // Broker Claude rows only: `readMessages` reads a Claude transcript.
       if (!deps.writeStatus || !isBrokerClaudeRow(row)) return
+      const writeStatus = deps.writeStatus
       const key = `${row.slug}\0${row.session_id}`
+      // In flight from the READ on, now that the read is awaited: a rest that lands meanwhile is dropped,
+      // exactly as one landing during the model call always was — the next rest reads past it.
       if (inFlight.has(key)) return
-      const messages = deps.readMessages(row.session_id, row.fork_anchor)
-      const ops = new Set(operatorMessages(messages))
-      const prev = readTo.get(key) ?? 0
-      const moved = messages.slice(prev).some((m) =>
-        ops.has(m) || (m.role === "assistant" && !m.kind && !m.boundary && m.text.trim() !== ""))
-      if (!moved && !options?.force) return
-      readTo.set(key, messages.length)
-      const conversation = recentConversation(messages)
-      if (!conversation) return
       inFlight.add(key)
-      void deps.writeStatus({ name: deps.nameOf?.(row), conversation })
-        .then((status) => {
-          if (!status) return
-          // Keyed on the session it was read from: a re-dispatch over the slug while the writer ran
-          // must not inherit the old session's status.
-          if (deps.storage.setStatus(row.slug, row.session_id, status)) deps.onStatus()
-        })
+      void (async () => {
+        // Awaited: the context hands in readTranscriptYielding, so a cold fold of a large transcript
+        // yields the event loop instead of holding it for seconds (transcript.ts).
+        const messages = await deps.readMessages(row.session_id, row.fork_anchor)
+        const ops = new Set(operatorMessages(messages))
+        const prev = readTo.get(key) ?? 0
+        const moved = messages.slice(prev).some((m) =>
+          ops.has(m) || (m.role === "assistant" && !m.kind && !m.boundary && m.text.trim() !== ""))
+        if (!moved && !options?.force) return
+        readTo.set(key, messages.length)
+        const conversation = recentConversation(messages)
+        if (!conversation) return
+        const status = await writeStatus({ name: deps.nameOf?.(row), conversation })
+        if (!status) return
+        // Keyed on the session it was read from: a re-dispatch over the slug while the writer ran
+        // must not inherit the old session's status.
+        if (deps.storage.setStatus(row.slug, row.session_id, status)) deps.onStatus()
+      })()
         .catch((error: unknown) => deps.onError?.(row.slug, error))
         .finally(() => inFlight.delete(key))
     },
