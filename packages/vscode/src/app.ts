@@ -744,12 +744,12 @@ export function activateFrizz(api: Vscode, context: vscode.ExtensionContext): Fr
 
   /** The sidebar's ⋯ Review changes (`frizz:review`): the thread its page names, in this window. */
   async function reviewFromPage(message: EmbedReviewMessage): Promise<string> {
-    const project = projects.find((candidate) => candidate.slug === message.project)
+    const project = projects.find((candidate) => candidate.slug === message.project) ?? projects.find((candidate) => candidate.id === message.project)
     if (!project) {
       void api.window.showErrorMessage(`Frizz has no project ${message.project}.`)
       return "unknown project"
     }
-    return reviewThread(project, message.thread)
+    return reviewThread(project, message.thread, message.title)
   }
 
   /**

@@ -77,6 +77,7 @@ test("every page message the contract names is taken, with only its own fields",
   assert.deepEqual(parsePageMessage({ type: "frizz:open-external", url: "mailto:someone@example.com?subject=Hi" }), { type: "frizz:open-external", url: "mailto:someone@example.com?subject=Hi" })
   // A review names a thread and its project — and nothing the page could point at a folder with.
   assert.deepEqual(parsePageMessage({ type: "frizz:review", thread: "tidy-the-loop", project: "acme-api", dir: "/etc" }), { type: "frizz:review", thread: "tidy-the-loop", project: "acme-api" })
+  assert.deepEqual(parsePageMessage({ type: "frizz:review", thread: "tidy", project: "acme-api", title: "Tidy the loop" }), { type: "frizz:review", thread: "tidy", project: "acme-api", title: "Tidy the loop" })
 })
 
 test("a route's address is kept only on the frame's own origin, and the route without it otherwise", () => {
@@ -136,6 +137,7 @@ test("anything else from the page is nothing: unknown types, wrong shapes, other
     { type: "frizz:review", thread: "tidy", project: "acme/api" },
     { type: "frizz:review", thread: "", project: "acme" },
     { type: "frizz:review", thread: 3, project: "acme" },
+    { type: "frizz:review", thread: "tidy", project: "acme", title: 3 },
   ]
   for (const message of refused) assert.equal(parsePageMessage(message), undefined, JSON.stringify(message))
   assert.equal(webUrl("http://"), undefined)

@@ -129,9 +129,10 @@ export function parsePageMessage(value: unknown, origin?: string): EmbedPageMess
     }
     case "frizz:review": {
       // Two names and nothing else: the extension asks Frizz what they mean (embed-protocol.ts).
-      const { thread, project } = value
+      const { thread, project, title } = value
       if (typeof thread !== "string" || typeof project !== "string" || !SLUG.test(thread) || !SLUG.test(project)) return undefined
-      return { type: "frizz:review", thread, project }
+      if (title !== undefined && (typeof title !== "string" || title.length > MAX_TITLE)) return undefined
+      return { type: "frizz:review", thread, project, ...(title ? { title } : {}) }
     }
   }
   return undefined

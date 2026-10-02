@@ -2,6 +2,11 @@ import { FileDiff, Folder } from "lucide-react"
 import { useEffect, useMemo, useRef } from "react"
 import { useQueryClient } from "@tanstack/react-query"
 import { useSnapshot } from "valtio"
+import { useThreadApi } from "../api/threadApi.tsx"
+import { displayName } from "../groups.ts"
+import { embedded } from "../lib/embed.ts"
+import { reviewChanges, reviewLabel } from "../lib/reviewChanges.ts"
+import { store } from "../store.ts"
 import { isDirectSubAgent, type EditedFile, type ThreadView } from "@frizz/shared"
 import { useBoard, useProjectDir, useTranscript } from "../hooks.ts"
 import { editedFileTree, flattenEditedFileTree } from "../lib/editedFileTree.ts"
@@ -185,6 +190,11 @@ export function FocusRail({ thread }: { thread: ThreadView }) {
   const issues = github.filter((w) => w.subject === "issue")
   const timers = (thread.watches ?? []).filter((w) => watching && w.kind === "timer" && w.state === "armed")
   const { railFilesCollapsed } = useSnapshot(prefs)
+  // The files' one verb: all of them as the editor's diff, where an editor that can show it is connected
+  // (lib/reviewChanges.ts). Its full label is the tooltip; the heading's own word is enough beside it.
+  const api = useThreadApi()
+  const { editorWindows } = useSnapshot(store)
+  const review = reviewLabel(editorWindows, embedded())
   // The card's order — most-alive first — then the files, which are not a wait at all. The files are
   // also the one group that FOLDS (maintainer 2026-09-03): a worker that touched 22 files fills the
   // rail with them, and the wait rows above are what the reader came for. The fold is a saved view
@@ -213,6 +223,21 @@ export function FocusRail({ thread }: { thread: ThreadView }) {
       count: files.length,
       collapsed: railFilesCollapsed,
       onToggle: () => (prefs.railFilesCollapsed = !prefs.railFilesCollapsed),
+      action: review && thread.kind === "session" && thread.foreign !== true
+        ? (
+            <button
+              type="button"
+              data-review-changes
+              title={review}
+              aria-label={review}
+              onMouseDown={(e) => e.stopPropagation()}
+              onClick={() => reviewChanges(api, thread.id, displayName(thread))}
+              className="rounded-sm text-[10.5px] uppercase tracking-wide text-muted-45 transition-colors hover:text-muted-80"
+            >
+              Review
+            </button>
+          )
+        : undefined,
     },
   ].filter((g) => g.rows.length > 0)
   return (
