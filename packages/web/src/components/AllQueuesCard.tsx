@@ -852,8 +852,13 @@ function ReplyBox({ project, thread, onSent, onLanded, onFailed }: { project: Qu
   const [logoutFor, setLogoutFor] = useState<AccountBackend | null>(null)
   const answering = useContext(RegisteredAnsweringContext)
   // `@` mentions of this card's project's threads — offered only when the page's board IS that project.
-  const mentions = useMentionCandidates(thread.id, project.slug)
-  const ownMention = useOwnMention(thread.id, project.slug)
+  // LIVE ONLY ONCE THE DRAFT HOLDS AN `@`, which is the only time the menu or a mention's link can draw:
+  // a live candidate list walks the whole board and so re-rendered every card on the page at every board
+  // delta and poll (hooks/useMentionCandidates.ts). The keystroke that types the `@` re-renders this box
+  // with them already in hand.
+  const mentionsLive = text.includes("@")
+  const mentions = useMentionCandidates(thread.id, project.slug, mentionsLive)
+  const ownMention = useOwnMention(thread.id, project.slug, mentionsLive)
   // The drawer's chips, on the drawer's draft: a selection staged in the thread's drawer (⌘I, or sent from
   // an editor) is the same staging here, and rides this box's send the same way (lib/stagedContext.ts).
   const contextTokens = useStagedContextTokens(key, text)

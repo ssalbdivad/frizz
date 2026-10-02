@@ -40,7 +40,11 @@ import { ownedByThisPage } from "../lib/projectOwnership.ts"
 // possible anywhere".)
 export function useThreadComposerControls(slug: string, scopedThread?: ThreadView): { busy: boolean; footer: ReactNode; status: ReactNode } {
   const snap = useSnapshot(store)
-  const boardThread = snap.board?.threads.find((candidate) => candidate.id === slug)
+  // The page's project is read either way: a valtio snapshot that reads nothing re-renders on every store
+  // change. The board's threads only without a scoped thread — reading them subscribed every queue card's
+  // strip to every board delta, when the card's thread comes from the poll and the board is not its own.
+  const pageProject = snap.board?.projectSlug
+  const boardThread = scopedThread ? undefined : snap.board?.threads.find((candidate) => candidate.id === slug)
   const thread = scopedThread ?? boardThread
   const api = useThreadApi()
   const projectId = useThreadProjectId()
@@ -51,7 +55,7 @@ export function useThreadComposerControls(slug: string, scopedThread?: ThreadVie
     // An unscoped control asks the PAGE's project, so only while the store's board is the page's: the
     // cross-project page's focus moves the moment a drawer closes, and the sheet still sliding out asked
     // the project it just left for a thread it does not have (a 500 per close).
-    enabled: Boolean(thread && !thread.foreign && thread.kind === "session" && (scopedThread || ownedByThisPage(snap.board?.projectSlug))),
+    enabled: Boolean(thread && !thread.foreign && thread.kind === "session" && (scopedThread || ownedByThisPage(pageProject))),
     staleTime: 5_000,
   })
   const profile = useMutation({
