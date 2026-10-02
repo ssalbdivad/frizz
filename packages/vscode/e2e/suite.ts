@@ -215,7 +215,12 @@ const reviewRepo = () => (fakeReviewRepo ??= seedReviewRepo(join(workspace, "rev
  */
 async function assertReviewInFront(api: FrizzExtensionApi, repo: ReviewRepo, title: string): Promise<void> {
   const label = `Changes in ${title}`
-  await until(`"${label}" in front`, () => vscode.window.tabGroups.activeTabGroup.activeTab?.label === label, 20_000)
+  const tabs = () => vscode.window.tabGroups.all.flatMap((group) => group.tabs.map((tab) => `${group.isActive ? "*" : ""}${tab.isActive ? ">" : ""}${tab.label} [${(tab.input as object | undefined)?.constructor?.name ?? typeof tab.input}]`))
+  // VS Code names the tab by the title, and later versions add the count: "Changes in x (5 files)".
+  const named = (tab: string | undefined) => tab === label || tab === `${label} (${repo.expected.length} files)`
+  await until(`"${label}" in front`, () => named(vscode.window.tabGroups.activeTabGroup.activeTab?.label), 20_000).catch((error: unknown) => {
+    throw new Error(`${(error as Error).message}; the tabs: ${JSON.stringify(tabs())}`)
+  })
   const shown = api.review()
   assert.ok(shown, "the extension handed the diff editor a review")
   const review: ReviewSnapshot = shown
@@ -245,8 +250,15 @@ async function assertReviewInFront(api: FrizzExtensionApi, repo: ReviewRepo, tit
   const Multi = (vscode as unknown as { TabInputTextMultiDiff?: new (...args: never[]) => { textDiffs: { original: vscode.Uri; modified: vscode.Uri }[] } }).TabInputTextMultiDiff
   const input = vscode.window.tabGroups.activeTabGroup.activeTab?.input
   if (Multi && input instanceof Multi) {
-    console.log(`  · the tab's own input lists ${input.textDiffs.length} diffs: ${input.textDiffs.map((diff) => `${diff.original?.scheme ?? "-"}→${diff.modified?.scheme ?? "-"}`).join(", ")}`)
-    assert.equal(input.textDiffs.length, repo.expected.length)
+    // The API lists only the entries with BOTH sides (a TabInputTextDiff needs two): here the modified
+    // and the renamed file. The added and deleted ones are in the editor all the same — its label counts
+    // them, and the drawn entries below show them.
+    const twoSided = repo.expected.filter((entry) => entry.basePath !== undefined && entry.status !== "deleted")
+    console.log(`  · the tab's own input lists the ${input.textDiffs.length} two-sided diffs: ${input.textDiffs.map((diff) => `${diff.original.scheme}→${diff.modified.scheme}`).join(", ")}`)
+    assert.deepEqual(
+      input.textDiffs.map((diff) => [diff.original.scheme, diff.modified.fsPath.slice(repo.worktree.length + 1)]),
+      twoSided.map((entry) => ["frizz-base", entry.path]),
+    )
   } else console.log(`  · this VS Code (${vscode.version}) does not expose a multi-diff tab's input; its label and the documents stand in`)
 }
 
@@ -259,9 +271,11 @@ async function assertReviewDrawn(repo: ReviewRepo, shot: string): Promise<void> 
   let entries: Entry[] = []
   await until("the loop's diff drawn on both sides", async () => {
     entries = await workbench<Entry[]>(`[...document.querySelectorAll(".multiDiffEntry")].map((entry) => ({
-      header: (entry.querySelector(".header")?.textContent ?? "").replace(/\s+/g, " ").trim(),
-      original: (entry.querySelector(".editor.original .view-lines")?.textContent ?? "").replace(/\u00a0/g, " "),
-      modified: (entry.querySelector(".editor.modified .view-lines")?.textContent ?? "").replace(/\u00a0/g, " "),
+      header: (entry.querySelector(".header")?.textContent ?? "").replace(/\\s+/g, " ").trim(),
+      // Every block of lines on each side: a narrow diff draws the REMOVED lines inside the file side, in a
+      // zone of their own before its real lines, so the first block alone is not the file.
+      original: [...entry.querySelectorAll(".editor.original .view-lines")].map((lines) => lines.textContent ?? "").join("\\n").replace(/\\u00a0/g, " "),
+      modified: [...entry.querySelectorAll(".editor.modified .view-lines")].map((lines) => lines.textContent ?? "").join("\\n").replace(/\\u00a0/g, " "),
     }))`)
     const loop = entries.find((entry) => entry.header.includes("loop.ts"))
     return !!loop && loop.original.includes("let total = 0") && loop.modified.includes("xs.reduce")
@@ -1217,7 +1231,7 @@ const steps: Step[] = [
       assert.equal(notRepo.ok, false)
       assert.match(notRepo.error ?? "", /isn't a git repository/)
       assert.equal(api.review(), shown, "neither opened anything")
-      assert.equal(vscode.window.tabGroups.activeTabGroup.activeTab?.label, "Changes in Fake thread")
+      assert.match(vscode.window.tabGroups.activeTabGroup.activeTab?.label ?? "", /^Changes in Fake thread( \(5 files\))?$/u)
     },
   },
   {
