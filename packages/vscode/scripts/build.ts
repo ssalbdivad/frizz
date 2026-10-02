@@ -4,7 +4,8 @@
 // an editor they always are. `vscode` is provided by the host at runtime.
 //
 //   nub scripts/build.ts          the extension
-//   nub scripts/build.ts --e2e    also the end-to-end suite (dist/e2e/suite.cjs), never packaged
+//   nub scripts/build.ts --e2e    also the end-to-end suite (dist/e2e/suite.cjs) and the real-page sidebar
+//                                 run's editor half (dist/e2e/sidebar-agent.cjs), never packaged
 
 import { copyFileSync, mkdirSync, rmSync } from "node:fs"
 import { dirname, join, resolve } from "node:path"
@@ -34,7 +35,8 @@ const built = ["extension.cjs", "icon.png"]
 
 if (process.argv.includes("--e2e")) {
   await build({ ...shared, entryPoints: ["e2e/suite.ts"], outfile: join(dist, "e2e", "suite.cjs") })
-  built.push("e2e/suite.cjs")
+  await build({ ...shared, entryPoints: ["e2e/sidebar-agent.ts"], outfile: join(dist, "e2e", "sidebar-agent.cjs") })
+  built.push("e2e/suite.cjs", "e2e/sidebar-agent.cjs")
 }
 
 console.log(`built packages/vscode/dist: ${built.join(", ")}`)
