@@ -680,14 +680,16 @@ test("artifact creation checks the snapshot's own worker-plugin closure, then ty
 
   calls.length = 0;
   failOn(2);
+  // The typecheck tries the checkout first and, when that fails, the snapshot itself (see the tests
+  // below); the closure check only ever runs on the snapshot.
   assert.deepEqual(calls.map((call) => call.args), [
     ["scripts/assert-worker-plugin-closure.mjs", calls[0]!.source],
     ["run", "typecheck"],
+    ["run", "typecheck"],
   ]);
-  for (const call of calls) {
-    assert.match(call.source, /\.source-snapshot-/);
-    assert.notEqual(call.source, source);
-  }
+  assert.match(calls[0]!.source, /\.source-snapshot-/);
+  assert.equal(calls[1]!.source, realpathSync(source));
+  assert.equal(calls[2]!.source, calls[0]!.source);
   assert.deepEqual(
     readdirSync(root).filter(
       (entry) =>
@@ -696,6 +698,63 @@ test("artifact creation checks the snapshot's own worker-plugin closure, then ty
     ),
     []
   );
+});
+
+/**
+ * The typecheck's cheap path. The snapshot's fresh path makes `tsc -b` there a cold check (555s of a
+ * 623s build); the checkout holds the same bytes plus warm build info. Its result counts ONLY while
+ * the checkout's fingerprint still equals the snapshot's — anything else falls back to the snapshot.
+ */
+function typecheckCalls(onCheckoutTypecheck: (checkout: string) => void): Array<{ args: string[]; source: string }> {
+  const root = mkdtempSync(join(tmpdir(), "frizz-artifacts-checkout-typecheck-"));
+  const source = realpathSync(resolve(import.meta.dirname, ".."));
+  const calls: Array<{ args: string[]; source: string }> = [];
+  try {
+    assert.throws(
+      () =>
+        buildFrizzArtifact(source, root, {
+          runCommand: (args, cwd) => {
+            calls.push({ args, source: cwd });
+            if (args[0] === "run" && args[1] === "typecheck" && cwd === source) onCheckoutTypecheck(cwd);
+            // Stop at the first step past the typecheck: the web build.
+            if (args.includes("@frizz/web")) throw new Error("build sentinel");
+          },
+        }),
+      /build sentinel/
+    );
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+  return calls.filter((call) => call.args[0] === "run" && call.args[1] === "typecheck");
+}
+
+test("a checkout typecheck over the snapshot's exact bytes stands in for the cold snapshot check", () => {
+  const checks = typecheckCalls(() => {});
+  assert.equal(checks.length, 1);
+  assert.doesNotMatch(checks[0]!.source, /\.source-snapshot-/);
+});
+
+test("a failed checkout typecheck falls back to typechecking the snapshot itself", () => {
+  const checks = typecheckCalls(() => {
+    throw new Error("checkout typecheck failed");
+  });
+  assert.equal(checks.length, 2);
+  assert.match(checks[1]!.source, /\.source-snapshot-/);
+});
+
+test("an edit to the checkout while its typecheck runs voids it", () => {
+  let probe: string | undefined;
+  try {
+    const checks = typecheckCalls((checkout) => {
+      // Untracked and uncommitted still counts: the fingerprint covers what the build would read.
+      probe = join(checkout, "src", `.typecheck-race-probe-${process.pid}.ts`);
+      writeFileSync(probe, "export const edited = true;\n");
+    });
+    assert.equal(checks.length, 2);
+    assert.match(checks[1]!.source, /\.source-snapshot-/);
+  } finally {
+    if (probe) rmSync(probe, { force: true });
+  }
 });
 
 async function availableLoopbackPort(): Promise<number> {
