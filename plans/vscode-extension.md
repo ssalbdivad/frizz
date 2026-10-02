@@ -231,6 +231,33 @@ must match the core app, with a hint wherever the sidebar differs; and no Frizz 
   where it happens.
 - **No Frizz header.** VS Code's title row is the header: the view's scope and its counts (`frizz:route`
   → `WebviewView.title`/`description`), and the header's doors as title-row buttons (`frizz:command`).
+  The count is the desktop's READY count — every card, a question included — so a tab and the sidebar
+  never disagree (`7 ready · 2 working`); a file's reader over a thread names the file and keeps Back. The
+  route also carries the page's own address (`href`, kept only on the frame's origin), so ⋯ Open in
+  browser opens what the sidebar shows — a thread as that thread — rather than the window's project.
+- **The column, scroll box and all.** The prompt box stays put and the list scrolls in its own box under it,
+  with the app's 7px inner scrollbar and the desktop's column-head spacing; a project dragged to the edge
+  scrolls it; the project cords are drawn. An empty view says the desktop's own sentence under the list.
+- **The thread keys with no drawer open.** In the sidebar the drawer is the card, so `r`, `d`, `s` … with
+  none open first OPEN the thread you're on (the row the marker holds, else the first queued one) and stop
+  there; `r` also puts the caret in its reply box. Nothing acts on a thread the human has not seen. `j`/`k`
+  step every queued row, pinned ones included, as the desktop's cards do. `e` with nothing queued shows the
+  project's folder in VS Code; a folder outside the window's folders opens in a window of its own.
+
+### What the sidebar keeps apart
+
+The frame's storage is PARTITIONED from the browser's: the same origin framed inside a `vscode-webview://`
+document gets its own localStorage, so everything Frizz keeps per browser starts at its defaults in the
+sidebar and stays there — the project folds, the open quiet bands, the prompt box's pick, the density, the
+queue's order, the keybindings and the snooze preset. That is by design rather than a gap: each is the
+state of ONE browser (lib/crossProject.ts says "per browser"), and the frame is another browser. The `?`
+sheet says it for the keys, where it surprises ("Changes here stay in the sidebar"); sessionStorage lives
+only as long as the webview does.
+
+Code-file links in the sidebar open in VS Code even for a file OUTSIDE Frizz's trusted roots, on purpose.
+The roots gate the server's own opener, because that launches an application with the path (an editor, a
+shell's default handler); a VS Code tab is inert, the extension opens it in the window that holds the
+sidebar, and the human clicked the link.
 
 ## Verification
 
