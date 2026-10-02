@@ -2262,7 +2262,7 @@ try {
   // ── c18: the editor's colours ──
   await run("c18", "the page wears the editor theme's colours, and Frizz's own with frizz.matchEditorTheme off", async () => {
     // Where the page's background shows bare, in the WORKBENCH's pixels: a point whose element and every
-    // ancestor paint no background, in a 5x5 patch of one colour, in the frame's lower right (the list's
+    // ancestor paint no background but the page's own, in a 5x5 patch of one colour, in the frame's lower right (the list's
     // empty tail). The page's (0,0) is the sidebar webview element's corner: VS Code's host document and
     // the relay each frame the next full-bleed, and the relay's "hasn't loaded" bar is hidden.
     const pagePixels = async (shot: Buffer) => {
@@ -2275,11 +2275,14 @@ try {
       })
       if (!webview) throw new Error("no webview in the side bar")
       const candidates = await inPage(() => {
+        // Bare: nothing between the point and the body paints anything but the page's own background
+        // (the list's containers paint `bg-bg` themselves, which is the colour under test, so they count).
+        const page = getComputedStyle(document.body).backgroundColor
         const bare = (element: Element | null) => {
           for (let e = element; e && e !== document.documentElement; e = e.parentElement) {
             if (e === document.body) return true
             const cs = getComputedStyle(e)
-            if (cs.backgroundColor !== "rgba(0, 0, 0, 0)" || cs.backgroundImage !== "none") return false
+            if ((cs.backgroundColor !== "rgba(0, 0, 0, 0)" && cs.backgroundColor !== page) || cs.backgroundImage !== "none") return false
           }
           return true
         }
