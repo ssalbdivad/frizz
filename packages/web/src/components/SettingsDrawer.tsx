@@ -279,8 +279,10 @@ function HomeFolderField({ value, onCommit }: { value: string; onCommit: (folder
         }`}
       />
       {/* Always a line tall, so the drawer does not jump as the reading comes and goes. The notification
-          field's hint type (PermHint), at the same 6px from its control. */}
-      <p className={`mt-1.5 min-h-[1.4em] truncate text-[11px] ${reading?.problem ? "text-danger" : "text-muted-70"}`}>
+          field's hint type (PermHint), at the same 6px from its control. It WRAPS where it does not fit, the
+          path breaking anywhere: the folder is the whole reading, and truncated in a 300px sidebar it was the
+          part cut ("…run in /tmp/frizz-a…"). */}
+      <p className={`mt-1.5 min-h-[1.4em] break-words text-[11px] ${reading?.problem ? "text-danger" : "text-muted-70"}`}>
         {reading ? reading.problem ?? `Threads started in Home run in ${reading.folder}` : ""}
       </p>
     </div>
