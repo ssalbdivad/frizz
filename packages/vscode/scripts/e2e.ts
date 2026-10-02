@@ -40,6 +40,7 @@ import { delimiter, dirname, join, resolve } from "node:path"
 import { fileURLToPath } from "node:url"
 import { downloadAndUnzipVSCode, runTests } from "@vscode/test-electron"
 import type { EditorProject } from "@frizz/shared/editor-protocol"
+import { Workbench } from "../e2e/cdp.ts"
 import { FakeFrizz } from "../e2e/fake-frizz.ts"
 import { watchPageClaim, type PageClaimResult } from "../e2e/page-claim.ts"
 
@@ -260,11 +261,14 @@ let pageBrowser: ChildProcess | undefined
 let sample: string | undefined
 let wroteSample = false
 let tornDown = false
+/** The editor's workbench over its debugging port, opened the first time the suite presses a key or reads the title row. */
+let workbench: Promise<Workbench> | undefined
 
 async function teardown(): Promise<void> {
   if (tornDown) return
   tornDown = true
   stopPage.abort()
+  if (workbench) (await workbench.catch(() => undefined))?.close()
   if (pageClaim) await Promise.race([pageClaim, new Promise((resolve) => setTimeout(resolve, 15_000))])
   // The handle, not a bare pid: a browser the watcher already closed has an exit code, so its pid —
   // possibly someone else's process by now — is never signalled.
@@ -348,6 +352,19 @@ try {
     }).catch((error: unknown): PageClaimResult => ({ ok: false, value: "", errors: [String(error)] }))
   }
 
+  // Keys and the title row go through the workbench's debugging port (e2e/cdp.ts): a keybinding is only
+  // proved by a key, and what the title row shows only by the title row. The port is a free one on
+  // loopback, and the editor it belongs to is this run's own, under Xvfb.
+  const debuggingPort = await freePort()
+  if (fake) {
+    const connect = () => (workbench ??= Workbench.connect(debuggingPort))
+    fake.workbench = {
+      press: async (chord) => (await connect()).press(chord),
+      evaluate: async (expression) => (await connect()).evaluate(expression),
+      click: async (selector) => (await connect()).click(selector),
+    }
+  }
+
   const vscodeExecutablePath = await downloadAndUnzipVSCode({ version: vscodeVersion(), cachePath: join(homedir(), ".cache", "frizz-vscode-e2e") })
   log(`${stack ? "stack" : mode} mode against ${origin}${stack ? ` (tenant ${stack.tenant.slug})` : ""}, VS Code ${vscodeExecutablePath}, DISPLAY=${process.env.DISPLAY ?? "(none)"}`)
   const suiteCode = await runTests({
@@ -362,6 +379,7 @@ try {
       "--password-store=basic",
       "--disable-gpu",
       "--disable-telemetry",
+      `--remote-debugging-port=${debuggingPort}`,
     ],
     extensionTestsEnv: {
       FRIZZ_E2E_MODE: mode,
@@ -372,6 +390,7 @@ try {
       FRIZZ_E2E_THREAD: process.env.FRIZZ_E2E_THREAD,
       FRIZZ_E2E_SET_OPENER: stack ? "1" : process.env.FRIZZ_E2E_SET_OPENER,
       FRIZZ_E2E_PAGE_CLAIMS: pageClaims ? "1" : undefined,
+      FRIZZ_E2E_ONLY: process.env.FRIZZ_E2E_ONLY,
     },
   }).catch((error: unknown) => {
     log(`the suite did not run: ${(error as Error).message}`)

@@ -198,20 +198,21 @@ export function chordCommand(key: KeyChord, mac: boolean): string | undefined {
 export interface SidebarReadiness {
   /** The `frizz.useSidebar` setting. */
   enabled: boolean
-  /** The view has been opened in this window (and not closed since). */
-  opened: boolean
-  /** Its page said `frizz:ready` and is still the page in the frame. */
-  ready: boolean
+  /** There is a Frizz for the sidebar to frame: connected, or found by discovery. */
+  frizz: boolean
 }
 
 /**
- * "Add to Frizz prompt": into the sidebar's composer when the human has the sidebar in this window and
- * its page is listening; otherwise the server holds the item for a page to claim, as before the sidebar.
- * A window that never opened the sidebar keeps the browser flow — the selection should not appear in a
- * place the human has never looked.
+ * "Add to Frizz prompt", and every other way a piece of the editor gets into a prompt (a file from a tab
+ * or the explorer, a problem's quick fix, a terminal selection): into the sidebar's front composer, with
+ * the view revealed — opened, the first time in a window — and the caret after the chip. The sidebar is
+ * where the human looks now (maintainer, 2026-10-01: a Cursor-style shortcut that inlines the highlighted
+ * code into the current prompt), so the first cut's rule — the browser until the sidebar had been opened
+ * in this window — is gone. Off, or with no Frizz to frame, the server holds the item for a browser page,
+ * as before the sidebar; a sidebar that never loads or refuses falls back to the same (app.ts).
  */
 export function addRoute(sidebar: SidebarReadiness): "sidebar" | "server" {
-  return sidebar.enabled && sidebar.opened && sidebar.ready ? "sidebar" : "server"
+  return sidebar.enabled && sidebar.frizz ? "sidebar" : "server"
 }
 
 /**

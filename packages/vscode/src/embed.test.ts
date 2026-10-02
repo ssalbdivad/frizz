@@ -147,11 +147,10 @@ test("a chord the allowlist does not name, or with one modifier more or less, ru
   for (const [key, mac] of none) assert.equal(chordCommand(key, mac), undefined, JSON.stringify({ key, mac }))
 })
 
-test("Add to Frizz prompt goes to the sidebar only when it is on, open in this window, and its page is ready", () => {
-  assert.equal(addRoute({ enabled: true, opened: true, ready: true }), "sidebar")
-  assert.equal(addRoute({ enabled: false, opened: true, ready: true }), "server", "the setting keeps the browser flow")
-  assert.equal(addRoute({ enabled: true, opened: false, ready: false }), "server", "a window that never opened the sidebar")
-  assert.equal(addRoute({ enabled: true, opened: true, ready: false }), "server", "a page still booting, or one that never says it is ready")
+test("Add to Frizz prompt goes to the sidebar whenever it is on and there is a Frizz to frame, opened or not", () => {
+  assert.equal(addRoute({ enabled: true, frizz: true }), "sidebar", "a window that never opened the sidebar opens it")
+  assert.equal(addRoute({ enabled: false, frizz: true }), "server", "the setting keeps the browser flow")
+  assert.equal(addRoute({ enabled: true, frizz: false }), "server", "no Frizz: the server path, which says why")
 })
 
 test("Ask and Send write in the sidebar unless it is off or the caller passed the text to send", () => {

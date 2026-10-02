@@ -2,16 +2,29 @@
 // discovered origin, `?embed=vscode&theme=…&project=…`, relayed to the extension by a script in the
 // webview document (sidebar-html.ts). The queue, the threads and the composers are the app's own, live
 // over its own socket; what this file adds is what a frame cannot do for itself — keys VS Code would
-// otherwise never see, files and links opened in the editor, VS Code's theme, the Ready badge, and the
-// editor commands' selections put straight into a composer. Design: plans/vscode-extension.md § The
-// sidebar; the wire: packages/shared/src/embed-protocol.ts; the pure rules: embed.ts.
+// otherwise never see, files and links opened in the editor, VS Code's theme, the Ready badge, the
+// editor commands' selections put straight into a composer, and the HEADER: the page draws none in the
+// sidebar, so VS Code's own title row above the frame carries where the page is (`frizz:route` → the
+// view's title and description, and the `frizz.sidebarView` context key its buttons show by) and the
+// header's doors (`frizz:command`). Design: plans/vscode-extension.md § The sidebar; the wire:
+// packages/shared/src/embed-protocol.ts; the pure rules: embed.ts.
 //
 // Only `import type` from vscode, like app.ts.
 
 import { randomUUID } from "node:crypto"
 import type * as vscode from "vscode"
 import type { EditorOpen } from "@frizz/shared/editor-protocol"
-import type { EmbedComposeMessage, EmbedComposedMessage, EmbedHostMessage, EmbedNavigateMessage, EmbedPageMessage } from "@frizz/shared/embed-protocol"
+import type {
+  EmbedAddContextMessage,
+  EmbedCommandMessage,
+  EmbedComposeMessage,
+  EmbedComposedMessage,
+  EmbedEditorContextMessage,
+  EmbedHostMessage,
+  EmbedNavigateMessage,
+  EmbedPageMessage,
+  EmbedRouteMessage,
+} from "@frizz/shared/embed-protocol"
 import { chordCommand, embedTheme, embedUrl, frameTarget, parsePageMessage } from "./embed.ts"
 import { frameDocument, messageDocument, nonce, type ViewAction } from "./sidebar-html.ts"
 
@@ -20,6 +33,12 @@ type Vscode = typeof vscode
 export const SIDEBAR_VIEW = "frizz.sidebar"
 /** The command VS Code generates for every view: reveal it, open it if it never was, and focus it. */
 export const SIDEBAR_FOCUS = `${SIDEBAR_VIEW}.focus`
+/**
+ * The context key the title row's buttons show by: the page's view ("queue", "thread", "settings",
+ * "other"), or "" while no page has said where it is — a loading or missing page, whose buttons could
+ * do nothing.
+ */
+export const SIDEBAR_VIEW_KEY = "frizz.sidebarView"
 
 /**
  * How long a page gets to say `frizz:ready` before the view offers Reload. A local Frizz boots its page
@@ -41,6 +60,8 @@ export interface SidebarHost {
   openFile(message: EditorOpen): Promise<{ ok: boolean; error?: string }>
   openInBrowser(): void
   reconnect(): void
+  /** The page asked for the editor's context in its composer (`frizz:add-context`); resolves to what came of it, for the record. */
+  addContext(message: EmbedAddContextMessage): Promise<string>
   log: { info(line: string): void; warn(line: string): void }
 }
 
@@ -56,6 +77,11 @@ export interface SidebarSnapshot {
   /** The copy it shows instead of the page. */
   message?: string
   badge?: number
+  /** VS Code's title row: the view's title (absent: the view's own name, "Frizz") and description. */
+  title?: string
+  description?: string
+  /** What `frizz.sidebarView` was set to, "" for none. */
+  view: string
   /** Page messages as handled: the type, and what came of it (a command run, "ignored", "opened", "missing"…). */
   events: { type: string; outcome: string }[]
 }
@@ -77,6 +103,10 @@ export interface Sidebar {
   /** Post a compose to the page and wait for its answer; undefined when it was not ready or did not answer within `ms`. */
   compose(input: Omit<EmbedComposeMessage, "type" | "id">, ms: number): Promise<EmbedComposedMessage | undefined>
   navigate(to: EmbedNavigateMessage["to"]): Promise<boolean>
+  /** Post to the page if it is ready; false if it is not, or the post failed. */
+  post(message: EmbedEditorContextMessage | EmbedCommandMessage): Promise<boolean>
+  /** Called with true when the page in the frame says it is ready, and false when that page is gone. */
+  onReady(listener: (ready: boolean) => void): void
   snapshot(): SidebarSnapshot
 }
 
@@ -97,6 +127,9 @@ export function registerSidebar(api: Vscode, context: vscode.ExtensionContext, h
   const events: SidebarSnapshot["events"] = []
   const pending = new Map<string, (answer: EmbedComposedMessage | undefined) => void>()
   let waiters: ((ready: boolean) => void)[] = []
+  const readyListeners: ((ready: boolean) => void)[] = []
+  /** The value `frizz.sidebarView` has, so it is set only on a change. */
+  let routeView = ""
 
   const theme = () => embedTheme(api.window.activeColorTheme.kind)
   const record = (type: string, outcome: string) => {
@@ -119,6 +152,7 @@ export function registerSidebar(api: Vscode, context: vscode.ExtensionContext, h
   }
 
   function setReady(next: boolean): void {
+    const changed = next !== ready
     ready = next
     hinted = false
     clearTimeout(readyTimer)
@@ -129,7 +163,26 @@ export function registerSidebar(api: Vscode, context: vscode.ExtensionContext, h
         pending.delete(id)
         resolve(undefined)
       }
+      // The page that said where it was is gone; the title row stops claiming it.
+      applyRoute(undefined)
     }
+    if (changed) for (const listener of readyListeners) listener(next)
+  }
+
+  /**
+   * VS Code's title row, from the page's `frizz:route`: the scope or the thread's title (an empty one
+   * leaves the view's own name, "Frizz"), the counts as the description, and the context key the buttons
+   * show by. Undefined resets all three, for a page that is gone or not yet ready.
+   */
+  function applyRoute(route: EmbedRouteMessage | undefined): void {
+    if (view) {
+      view.title = route?.title || undefined
+      view.description = route?.description || undefined
+    }
+    const next = route?.view ?? ""
+    if (next === routeView) return
+    routeView = next
+    void api.commands.executeCommand("setContext", SIDEBAR_VIEW_KEY, next)
   }
 
   function showMessage(text: string, actions: readonly ViewAction[]): void {
@@ -223,6 +276,15 @@ export function registerSidebar(api: Vscode, context: vscode.ExtensionContext, h
         const command = chordCommand(page, mac)
         record(page.type, command ?? "ignored")
         if (command) await api.commands.executeCommand(command)
+        return
+      }
+      case "frizz:add-context": {
+        record(page.type, await host.addContext(page))
+        return
+      }
+      case "frizz:route": {
+        applyRoute(page)
+        record(page.type, page.view)
         return
       }
     }
@@ -349,6 +411,12 @@ export function registerSidebar(api: Vscode, context: vscode.ExtensionContext, h
     async navigate(to) {
       return ready && (await post({ type: "frizz:navigate", to }))
     },
+    async post(message) {
+      return ready && (await post(message))
+    },
+    onReady(listener) {
+      readyListeners.push(listener)
+    },
     snapshot: () => ({
       opened: view !== undefined,
       visible: view?.visible ?? false,
@@ -357,6 +425,9 @@ export function registerSidebar(api: Vscode, context: vscode.ExtensionContext, h
       ...(frameUrl ? { url: frameUrl } : {}),
       ...(message ? { message } : {}),
       ...(view?.badge ? { badge: view.badge.value } : {}),
+      ...(view?.title ? { title: view.title } : {}),
+      ...(view?.description ? { description: view.description } : {}),
+      view: routeView,
       events: [...events],
     }),
   }

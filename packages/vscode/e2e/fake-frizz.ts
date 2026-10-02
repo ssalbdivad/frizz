@@ -17,6 +17,11 @@
 //   POST /__e2e/drop                         close the editor socket (1001), as a restart would
 //   POST /__e2e/page-post {message}          have the page post `message` to its parent (the sidebar)
 //   POST /__e2e/page-answer {answer}         how the page answers a compose: "ok", "refuse" or "silent"
+//   POST /__e2e/press     {chord}            press a key chord in the editor's window as a keyboard does
+//                                            (the harness's Workbench, over the Chrome DevTools Protocol)
+//   POST /__e2e/workbench {expression}       evaluate an expression in the workbench page — what the
+//                                            title row shows
+//   POST /__e2e/click     {selector}         click an element of the workbench with a real mouse
 //
 // and two the fake page itself calls: POST /__e2e/page-event (what it received, recorded in `page`) and
 // GET /__e2e/page-next (the messages it was told to post).
@@ -90,7 +95,16 @@ const FAKE_PAGE = `<!doctype html>
 </script>
 </body></html>`
 
+/** The editor's window as the harness reaches it (e2e/cdp.ts), for the controls a suite inside it cannot do itself. */
+export interface WorkbenchControl {
+  press(chord: string): Promise<void>
+  evaluate(expression: string): Promise<unknown>
+  click(selector: string): Promise<boolean>
+}
+
 export class FakeFrizz {
+  /** Set by the harness once the editor is launched with a debugging port. */
+  workbench: WorkbenchControl | undefined
   readonly log: FakeLog = { frames: [], refused: [], rpc: [], origins: [], page: { loads: [], received: [] } }
   #pageOutbox: unknown[] = []
   #pageAnswer: "ok" | "refuse" | "silent" = "ok"
@@ -203,6 +217,21 @@ export class FakeFrizz {
         case "/__e2e/page-answer":
           this.#pageAnswer = input.answer
           return json(200, { ok: true })
+        case "/__e2e/press":
+        case "/__e2e/click":
+        case "/__e2e/workbench": {
+          if (!this.workbench) return json(409, { error: "no workbench: the harness launched the editor without a debugging port" })
+          try {
+            if (url.pathname === "/__e2e/press") {
+              await this.workbench.press(String(input.chord))
+              return json(200, { ok: true })
+            }
+            if (url.pathname === "/__e2e/click") return json(200, { clicked: await this.workbench.click(String(input.selector)) })
+            return json(200, { value: await this.workbench.evaluate(String(input.expression)) })
+          } catch (error) {
+            return json(500, { error: (error as Error).message })
+          }
+        }
         case "/__e2e/page-event":
           this.log.page.received.push(input)
           return json(200, { answer: this.#pageAnswer })

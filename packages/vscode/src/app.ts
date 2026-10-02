@@ -11,9 +11,11 @@ import { homedir } from "node:os"
 import { basename, dirname } from "node:path"
 import type * as vscode from "vscode"
 import type { EditorComposeInput, EditorComposed, EditorOpen, EditorProject } from "@frizz/shared/editor-protocol"
-import type { EmbedComposeMessage } from "@frizz/shared/embed-protocol"
+import { EMBED_TERMINAL_PATH, type EmbedAddContextMessage, type EmbedCommandMessage, type EmbedComposeMessage, type EmbedEditorContextMessage } from "@frizz/shared/embed-protocol"
 import { EditorConnection, FocusRecency, type ConnectionStatus, type OpenResult } from "./connection.ts"
+import { activeFileEditor, registerContextFeed } from "./context-feed.ts"
 import { discoverFrizz, pageAddressNote, SOURCE_WORDS, type FoundFrizz } from "./discovery.ts"
+import { fixNote, fixTitle, lineSpan, terminalText, type Problem } from "./editor-context.ts"
 import { addRoute, composeInSidebar as composeVia, promptRoute } from "./embed.ts"
 import { composeInput, composeMessage, normalizeNewlines, refLabel, type FileRef, type Selected } from "./message.ts"
 import { projectForPath, workspaceProjects } from "./projects.ts"
@@ -35,6 +37,8 @@ export interface FrizzExtensionApi {
   projects(): EditorProject[]
   /** What the Frizz sidebar shows and what its page asked of it. */
   sidebar(): SidebarSnapshot
+  /** The editor's context as the sidebar's page was last told it. */
+  editorContext(): EmbedEditorContextMessage | undefined
 }
 
 /** A file the command is about, with what was selected in it. */
@@ -65,6 +69,11 @@ const OPEN_A_FILE = "Open a file to ask Frizz about it."
 const SIDEBAR_READY_MS = 15_000
 const SIDEBAR_COMPOSE_MS = 5_000
 
+/** The quick fix's command: it carries the problem it was offered for, so it is never in the palette. */
+const FIX_COMMAND = "frizz.askToFix"
+/** Quick fixes offered per request, at most: one per problem under the caret, and a line of them is noise. */
+const MAX_FIXES = 5
+
 export function activateFrizz(api: Vscode, context: vscode.ExtensionContext): FrizzExtensionApi {
   const log = api.window.createOutputChannel("Frizz", { log: true })
   context.subscriptions.push(log)
@@ -90,9 +99,16 @@ export function activateFrizz(api: Vscode, context: vscode.ExtensionContext): Fr
     openFile: (message) => openFromFrizz(message),
     openInBrowser: () => openFrizz(),
     reconnect: () => connection.reconnect(),
+    addContext: (message) => addContextFromPage(message),
     log: { info: (line) => log.info(line), warn: (line) => log.warn(line) },
   })
   const useSidebar = () => config().get<boolean>("useSidebar", true)
+  const feed = registerContextFeed(api, context, {
+    ready: () => sidebar.ready(),
+    onReady: (listener) => sidebar.onReady(listener),
+    post: (message) => sidebar.post(message),
+    projects: () => projects,
+  })
 
   // ── status bar ───────────────────────────────────────────────────────────────────────────────────
   const item = api.window.createStatusBarItem("frizz.status", api.StatusBarAlignment.Right, 100)
@@ -162,6 +178,7 @@ export function activateFrizz(api: Vscode, context: vscode.ExtensionContext): Fr
       projects = next
       renderStatus()
       sidebar.refresh()
+      feed.refresh()
     },
     status(next) {
       status = next
@@ -292,9 +309,9 @@ export function activateFrizz(api: Vscode, context: vscode.ExtensionContext): Fr
       if (document.uri.scheme !== "file") return undefined
       const selection = fromEditor.selection
       if (selection.isEmpty) return { path: document.uri.fsPath, uri: document.uri, cursorLine: selection.active.line + 1 }
-      const startLine = selection.start.line + 1
-      // A selection that ends at column 0 of a line (a whole-line drag, shift+down) does not include it.
-      const endLine = selection.end.character === 0 && selection.end.line > selection.start.line ? selection.end.line : selection.end.line + 1
+      // A selection that ends at column 0 of a line (a whole-line drag, shift+down) does not include it —
+      // the same count the sidebar's context bar shows for it (editor-context.ts).
+      const { startLine, endLine } = lineSpan(selection.start, selection.end)
       return { path: document.uri.fsPath, uri: document.uri, selection: { text: normalizeNewlines(document.getText(selection)), startLine, endLine } }
     }
     if (uri && uri.scheme === "file") return { path: uri.fsPath, uri }
@@ -330,11 +347,15 @@ export function activateFrizz(api: Vscode, context: vscode.ExtensionContext): Fr
   const threadUrl = (origin: string, project: EditorProject, slug: string) =>
     `${origin}/all/${encodeURIComponent(project.slug)}/thread/${encodeURIComponent(slug)}`
 
+  /** Why the last compose into the sidebar did not land, for a command with nowhere else to send it. */
+  let sidebarWhy = ""
+
   /** A selection into the sidebar's page (embed.ts composeInSidebar), as the server path's answer; undefined to fall back. */
   async function composeInSidebar(input: Omit<EmbedComposeMessage, "type" | "id">, preserveFocus: boolean): Promise<EditorComposed | undefined> {
     const result = await composeVia(sidebar, input, { preserveFocus, readyMs: SIDEBAR_READY_MS, composeMs: SIDEBAR_COMPOSE_MS })
     if (result.ok) return { t: "composed", id: result.id, ok: true }
     log.warn(result.why)
+    sidebarWhy = result.why
     return undefined
   }
 
@@ -489,38 +510,182 @@ export function activateFrizz(api: Vscode, context: vscode.ExtensionContext): Fr
     }
   }
 
-  async function addToPrompt(...args: unknown[]): Promise<EditorComposed | undefined> {
+  /**
+   * Put items into the prompt box the human looks at — the one way in for Add to Frizz prompt, a file, a
+   * problem's quick fix and a terminal selection. With the sidebar (embed.ts addRoute): its FRONT composer
+   * (the reply box of the thread it shows, else its new-thread box), the view revealed — opened, the first
+   * time in a window — and the caret after the last chip, with `note` written after it. Otherwise, and for
+   * whatever the sidebar did not take (it never loaded, or refused), Frizz holds each item for a browser
+   * page to claim, the path from before the sidebar, so a selection is never simply lost — unless the item
+   * means nothing outside the sidebar (`sidebarOnly`: a terminal selection). The note rides the sidebar
+   * only; a held item has no place for one.
+   */
+  async function deliver(items: readonly EditorComposeInput[], options: { note?: string; sidebarOnly?: boolean } = {}): Promise<EditorComposed | undefined> {
+    let left = items
+    const frizz = (connection.origin ?? found?.origin) !== undefined
+    if (addRoute({ enabled: useSidebar(), frizz }) === "sidebar") {
+      let composed: EditorComposed | undefined
+      while (left.length) {
+        const [item, ...rest] = left
+        const note = rest.length === 0 && options.note ? { note: options.note } : {}
+        const next = await composeInSidebar({ item: { ...item!, app: api.env.appName }, target: "front", focus: true, ...note }, false)
+        if (!next) break
+        composed = next
+        left = rest
+      }
+      if (!left.length && composed) {
+        api.window.setStatusBarMessage("Added to Frizz's prompt box", 4_000)
+        return composed
+      }
+      if (!options.sidebarOnly) log.info("Handing it to Frizz for its page instead.")
+    }
+    if (options.sidebarOnly) {
+      if (!useSidebar()) void api.window.showInformationMessage("Turn on the Frizz sidebar (frizz.useSidebar) to add this to Frizz's prompt box.")
+      else if (!frizz) showNotConnected()
+      else void api.window.showErrorMessage(sidebarWhy || "The Frizz sidebar couldn't take it.")
+      return undefined
+    }
     const origin = requireOrigin()
     if (!origin) return undefined
+    let composed: EditorComposed | undefined
+    for (const item of left) {
+      composed = await connection.compose(item)
+      if (!composed.ok) {
+        log.warn(`Adding to the prompt box failed: ${composed.error ?? "no reason given"}`)
+        void api.window.showErrorMessage(`Couldn't add to Frizz's prompt box: ${composed.error ?? "Frizz refused it."}`)
+        return composed
+      }
+    }
+    api.window.setStatusBarMessage("Added to Frizz's prompt box", 4_000)
+    const project = left[0]?.projectId ? projects.find((candidate) => candidate.id === left[0]!.projectId) : undefined
+    void api.window.showInformationMessage("Added to Frizz's prompt box.", "Open Frizz").then((choice) => {
+      if (choice) openUrl(projectUrl(origin, project ?? windowProject()))
+    })
+    return composed
+  }
+
+  /** A compose item for a place in a file, with the project it belongs to and that project's spelling of its path. */
+  function itemFor(target: { path: string; selection?: Selected; cursorLine?: number }): EditorComposeInput {
+    const match = projectForPath(target.path, projects)
+    return composeInput({ ...target, path: match?.path ?? target.path, projectId: match?.project.id })
+  }
+
+  /** Add to Frizz prompt — Ctrl+I / ⌘I with a selection, the editor's Frizz menu, the palette: the selection, else the caret's line. */
+  async function addToPrompt(...args: unknown[]): Promise<EditorComposed | undefined> {
     const { uri } = splitArgs(args)
     const target = targetOf(uri)
     if (!target) {
       void api.window.showInformationMessage("Open a file to add it to Frizz's prompt box.")
       return undefined
     }
-    const match = projectForPath(target.path, projects)
-    const item: EditorComposeInput = composeInput({ ...target, path: match?.path ?? target.path, projectId: match?.project.id })
-    if (addRoute({ enabled: useSidebar(), opened: sidebar.opened(), ready: sidebar.ready() }) === "sidebar") {
-      // Into the composer the sidebar shows, the view brought into sight and the caret left in the
-      // editor, so the next selection can follow.
-      const composed = await composeInSidebar({ item: { ...item, app: api.env.appName }, target: "front", focus: false }, true)
-      if (composed) {
-        api.window.setStatusBarMessage("Added to Frizz's prompt box", 4_000)
-        return composed
+    return deliver([itemFor(target)])
+  }
+
+  /**
+   * Add file to Frizz prompt — an editor tab's menu, the explorer (every file selected there), the palette
+   * (the file in front): a reference to each whole file. Folders are left out; a prompt names files.
+   */
+  async function addFileToPrompt(...args: unknown[]): Promise<EditorComposed | undefined> {
+    const many = args.find((arg): arg is vscode.Uri[] => Array.isArray(arg) && arg.length > 0 && arg.every((each) => each instanceof api.Uri))
+    const one = args.find((arg): arg is vscode.Uri => arg instanceof api.Uri) ?? api.window.activeTextEditor?.document.uri
+    const items: EditorComposeInput[] = []
+    for (const uri of many ?? (one ? [one] : [])) {
+      if (uri.scheme !== "file") continue
+      try {
+        if (!(await stat(uri.fsPath)).isFile()) continue
+      } catch {
+        continue
       }
-      log.info("Handing it to Frizz for its page instead.")
+      items.push(itemFor({ path: uri.fsPath }))
     }
-    const composed = await connection.compose(item)
-    if (composed.ok) {
-      api.window.setStatusBarMessage("Added to Frizz's prompt box", 4_000)
-      void api.window.showInformationMessage("Added to Frizz's prompt box.", "Open Frizz").then((choice) => {
-        if (choice) openUrl(projectUrl(origin, match?.project ?? windowProject()))
-      })
+    if (!items.length) {
+      void api.window.showInformationMessage("Pick a file on disk to add it to Frizz's prompt box.")
+      return undefined
+    }
+    return deliver(items)
+  }
+
+  /**
+   * Ask Frizz to fix — the quick fix on a problem: the problem's lines with their text, and the problem
+   * itself written after the chip (`Fix: Cannot find name 'foo'. ts(2304)`), so the box reads as a request
+   * the human can send as it is.
+   */
+  async function askToFix(uri: unknown, range: unknown, problem: unknown): Promise<EditorComposed | undefined> {
+    if (!(uri instanceof api.Uri) || !(range instanceof api.Range) || !problem || typeof problem !== "object") return undefined
+    const document = await api.workspace.openTextDocument(uri)
+    const { startLine, endLine } = lineSpan(range.start, range.end)
+    const last = Math.min(endLine, document.lineCount) - 1
+    const text = normalizeNewlines(document.getText(new api.Range(startLine - 1, 0, last, document.lineAt(last).text.length)))
+    return deliver([itemFor({ path: uri.fsPath, selection: { text, startLine, endLine: last + 1 } })], { note: fixNote(problem as Problem) })
+  }
+
+  /**
+   * The terminal's selection, read without keeping the human's clipboard: VS Code has no stable API for
+   * it (`Terminal.selection` is a proposal only Copilot may use), so the terminal's own Copy runs between
+   * a unique marker and the clipboard's previous text, which is put back whatever happens. The marker
+   * still there afterwards means nothing was copied. Lost on the way: a clipboard holding something other
+   * than text (an image) comes back empty, and a clipboard history records the selection.
+   */
+  async function readTerminalSelection(): Promise<string | undefined> {
+    const before = await api.env.clipboard.readText()
+    const marker = `frizz-terminal-${randomUUID()}`
+    await api.env.clipboard.writeText(marker)
+    try {
+      await api.commands.executeCommand("workbench.action.terminal.copySelection")
+      const copied = await api.env.clipboard.readText()
+      return copied === marker ? undefined : copied
+    } finally {
+      await api.env.clipboard.writeText(before)
+    }
+  }
+
+  /** Add to Frizz prompt from the terminal's menu: its selection as an `@terminal` chip. Sidebar only; see deliver. */
+  async function addTerminalSelection(): Promise<EditorComposed | undefined> {
+    const checked = terminalText((await readTerminalSelection()) ?? "")
+    if (!checked.ok) {
+      void api.window.showInformationMessage(checked.why)
+      return undefined
+    }
+    const project = windowProject()
+    return deliver([{ path: EMBED_TERMINAL_PATH, text: checked.text, ...(project ? { projectId: project.id } : {}) }], { sidebarOnly: true })
+  }
+
+  /**
+   * The page's context bar asked for the editor's context (`frizz:add-context`): the selection of the file
+   * in front, or a whole file, into the composer it shows. It came from the sidebar, so it goes back there
+   * or nowhere; and it carries the text as the editor has it NOW — nothing when the selection or the file
+   * is gone by the time the click arrives.
+   */
+  async function addContextFromPage(message: EmbedAddContextMessage): Promise<string> {
+    let item: EditorComposeInput
+    if (message.what === "selection") {
+      const editor = activeFileEditor(api)
+      if (!editor || editor.selection.isEmpty) return "nothing selected"
+      const target = targetOf(editor.document.uri)
+      if (!target?.selection) return "nothing selected"
+      item = itemFor(target)
     } else {
-      log.warn(`Adding to the prompt box failed: ${composed.error ?? "no reason given"}`)
-      void api.window.showErrorMessage(`Couldn't add to Frizz's prompt box: ${composed.error ?? "Frizz refused it."}`)
+      try {
+        if (!(await stat(message.path!)).isFile()) return "missing"
+      } catch {
+        return "missing"
+      }
+      item = itemFor({ path: message.path! })
     }
-    return composed
+    const composed = await composeInSidebar({ item: { ...item, app: api.env.appName }, target: "front", focus: true }, false)
+    return composed ? "composed" : "not taken"
+  }
+
+  /**
+   * A title-row button, or the same command from the palette: the view brought into sight (opened, the
+   * first time) and focused, then the door posted to its page — New thread puts the caret in the box,
+   * Jump opens the page's own ⌘K palette.
+   */
+  async function sidebarCommand(command: EmbedCommandMessage["command"]): Promise<boolean> {
+    await sidebar.reveal(false)
+    if ((await sidebar.waitReady(SIDEBAR_READY_MS)) && (await sidebar.post({ type: "frizz:command", command }))) return true
+    log.warn(`The sidebar's page isn't ready, so ${command} did nothing.`)
+    return false
   }
 
   function openFrizz(): void {
@@ -535,6 +700,30 @@ export function activateFrizz(api: Vscode, context: vscode.ExtensionContext): Fr
     api.commands.registerCommand("frizz.ask", ask),
     api.commands.registerCommand("frizz.sendToThread", sendToThread),
     api.commands.registerCommand("frizz.addToPrompt", addToPrompt),
+    api.commands.registerCommand("frizz.addFileToPrompt", addFileToPrompt),
+    api.commands.registerCommand("frizz.addTerminalSelection", addTerminalSelection),
+    api.commands.registerCommand(FIX_COMMAND, askToFix),
+    api.commands.registerCommand("frizz.sidebar.newThread", () => sidebarCommand("new-thread")),
+    api.commands.registerCommand("frizz.sidebar.queue", () => sidebarCommand("queue")),
+    api.commands.registerCommand("frizz.sidebar.jump", () => sidebarCommand("jump")),
+    api.commands.registerCommand("frizz.sidebar.settings", () => sidebarCommand("settings")),
+    // "Ask Frizz to fix" on any problem in a file on disk, in every language. Offered only with the sidebar
+    // on: without it the problem's message has nowhere to go, and a bare chip is Add to Frizz prompt.
+    api.languages.registerCodeActionsProvider({ scheme: "file" }, {
+      provideCodeActions(document, _range, codeContext) {
+        if (!codeContext.diagnostics.length || !useSidebar()) return []
+        if (codeContext.only && !codeContext.only.intersects(api.CodeActionKind.QuickFix)) return []
+        const problems = codeContext.diagnostics.slice(0, MAX_FIXES)
+        return problems.map((diagnostic) => {
+          const code = typeof diagnostic.code === "object" ? diagnostic.code.value : diagnostic.code
+          const problem: Problem = { message: diagnostic.message, ...(diagnostic.source ? { source: diagnostic.source } : {}), ...(code === undefined ? {} : { code }) }
+          const action = new api.CodeAction(fixTitle(problem, problems.length > 1), api.CodeActionKind.QuickFix)
+          action.diagnostics = [diagnostic]
+          action.command = { command: FIX_COMMAND, title: action.title, arguments: [document.uri, diagnostic.range, problem] }
+          return action
+        })
+      },
+    }, { providedCodeActionKinds: [api.CodeActionKind.QuickFix] }),
     api.commands.registerCommand("frizz.open", openFrizz),
     api.commands.registerCommand("frizz.showLog", () => log.show()),
     api.commands.registerCommand("frizz.sidebar.reload", () => sidebar.reload()),
@@ -555,5 +744,6 @@ export function activateFrizz(api: Vscode, context: vscode.ExtensionContext): Fr
     discovered: () => found,
     projects: () => projects,
     sidebar: () => sidebar.snapshot(),
+    editorContext: () => feed.last(),
   }
 }

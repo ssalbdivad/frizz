@@ -239,19 +239,34 @@ must match the core app, with a hint wherever the sidebar differs; and no Frizz 
   (its address-record verdict run beside `readStableServerOwner` over files the server's own writer
   wrote), project matching, message format (pinned to the page's `parseSentContext`) and compose size;
   its connection against an in-process server that judges every frame with the server's own
-  `EditorClientMessageSchema` and frame ceilings. `nub --test packages/vscode/src/*.test.ts`.
+  `EditorClientMessageSchema` and frame ceilings; the sidebar's relay, CSP and routing (`embed.test.ts`,
+  `sidebar-html.test.ts`); the editor's context for the sidebar — the column-1 line rule, the selection's
+  characters, labels, open-file order, dedupe and cap, the fix note and titles, a terminal selection's
+  bounds (`editor-context.test.ts`); and what the `.vsix` carries — every file the manifest names admitted
+  by `.vscodeignore`, the activity-bar mark's pen at 1/16 of its box (`package-contents.test.ts`).
+  `nub --test packages/vscode/src/*.test.ts`.
 - End to end, `packages/vscode/scripts/e2e.ts` downloads a real VS Code (`@vscode/test-electron`) and
   runs it under Xvfb with the extension, never on the real display:
   - `nub packages/vscode/scripts/e2e.ts` — FAKE mode, against an in-process fake Frizz (which also
     judges frames with the server's schema): opens at a line and a range, focus answering whether the
     window came to the front, a folder answering ok, the status bar's count, Ask, Send to thread (and its refusal of an untitled selection), Add to
     Frizz prompt, the open-links setting, and a dropped connection coming back. Then the sidebar,
-    framing the fake's own page, which speaks the embed contract: the embed params on the frame, the
-    badge, Add (target front, focus false), Ask (new) and Send (the thread) landing in the page instead of
-    the server, a file the page links opening at its position, a forwarded chord running its command,
-    unknown messages doing nothing, a theme change, the fallbacks (a silent page, the setting off), and a
-    re-frame when Frizz moves to another port. The relay, the CSP and the routing are unit tests
-    (`embed.test.ts`, `sidebar-html.test.ts`).
+    framing the fake's own page, which speaks the embed contract: Add opening it in a window that never
+    had it, the embed params on the frame, the badge, Add (target front, focus true), Ask (new) and Send
+    (the thread) landing in the page instead of the server, a file the page links opening at its
+    position, a forwarded chord running its command, unknown messages doing nothing, a theme change, the
+    fallbacks (a silent page, the setting off), and a re-frame when Frizz moves to another port. Then the
+    editor in the sidebar: the `frizz:editor-context` payload (lines with the column-1 rule, characters
+    across selections, the other open files once each and most recent first, null for an untitled
+    buffer and a diff, no text anywhere), a drag as one message and an unchanged context as none, a
+    reloaded page told at once; `frizz:add-context` for the selection and a whole file, and nothing when
+    either is gone; Ctrl+I PRESSED with a selection landing a chip with the caret and pressed with a caret
+    landing nothing (trusted keys through the workbench's debugging port, `e2e/cdp.ts`); the quick fix
+    offered for a diagnostic with its lines and `note`, two problems told apart, none with the setting
+    off; a tab's and the explorer's files; a terminal selection as `@terminal` with the clipboard
+    restored; `frizz:route` as the view's title, description and the buttons the title row really
+    shows; and every title-row command, and a real click on one, reaching the page as `frizz:command`.
+    `FRIZZ_E2E_ONLY=<part of a step's name>` runs just those steps.
   - `FRIZZ_E2E_VSCODE=oldest nub packages/vscode/scripts/e2e.ts` — the same on the oldest VS Code the
     manifest's `engines.vscode` admits (1.90.0), where `focusWindow` does not exist.
   - `nub packages/vscode/scripts/e2e.ts --stack` — boots a disposable two-project Frizz itself
