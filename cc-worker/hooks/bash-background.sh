@@ -58,8 +58,13 @@
 # every shell measured: `${x#*'"tool_input":'}` with the marker 60KB in took 4.7s in dash and 12s in
 # bash, and an earlier per-`&` loop took 21s on a 9.6KB command holding 2,400 of them. A `case` match
 # stays bounded: 64KB inputs built to make it backtrack (runs of `a && `, `2>&1 `, `worktree_`) are
-# decided in 21-80ms under dash, bash and busybox, a real-shaped 62KB one in 27-50ms. What stays slow is `read`, a byte per syscall
-# on a pipe: the largest real input (90KB, so over the cap) spends 50-75ms being read before node gets it.
+# decided in 21-80ms under dash, bash and busybox, a real-shaped 62KB one in 27-50ms.
+# What stays slow is `read`: a byte per syscall on a pipe, and it runs BEFORE the 64KB cap is checked.
+# That costs ~0.4ms per KB under dash here and ~4ms per KB under Git Bash on this box's Windows side
+# (node.exe spawning sh.exe, loadavg ~10, 2026-10-02; a review at loadavg 30-40 saw ~13ms per KB). So
+# the corpus p99 (6.5KB) reads in ~2ms / ~25ms, and the largest real input (90KB, over the cap, so it
+# goes to node anyway) in ~40ms / 0.4-1.2s. 127 of 127,064 real inputs exceed 20KB. Accepted: POSIX
+# `read` cannot stop inside a line, and a `head -c` fork to bound it would charge every call for the rare one.
 # packages/server/src/bash-background-prefilter.test.ts checks every one of these against node on real
 # transcript inputs and on adversarial ones; scripts/bash-prefilter-corpus.ts re-derives its fixture.
 #
@@ -71,7 +76,8 @@
 # CRLF checkout breaks the trap line itself (`EXIT\r` is no signal) before the next line's syntax error
 # exits 2. Hence `||` in hooks.json rather than the first draft's `exec sh …; node …`, which blocked EVERY
 # Bash call in both cases: any failure exit here — a missing file, a missing `sh` (127), CRLF — reaches
-# node with the stdin still unread. The pre-filter itself only ever exits 0 or with node's own status.
+# node with the stdin still unread. Once this file runs, it exits 0 even when the node it handed off to
+# fails (see the trap): a non-zero exit there would start the `||` node too, on drained stdin.
 # (.gitattributes pins this file to LF so the CRLF case stays a slow path, not the Windows default.)
 #
 # WINDOWS, as read out of Claude Code 2.1.287's binary (2026-10-02): a shell-form hook runs as
@@ -90,7 +96,13 @@
 # test feeds them (it runs whichever of them a box has), as does Git Bash on the Windows replay above:
 # no arrays, no `${var//}`, no `[[`, no subprocess. macOS's /bin/sh (bash 3.2) was never run.
 
-trap 'trap - EXIT; if [ -n "${prefilter_read:-}" ]; then printf %s "$prefilter_input" | node "$prefilter_dir/bash-background.mjs" "$@"; else node "$prefilter_dir/bash-background.mjs" "$@"; fi; exit $?' EXIT
+# Once node has answered (or failed to), end with status 0 either way. Node itself only ever exits 0
+# (`emit`), so a non-zero status is a crash, a signal or a missing node, and every one of those allowed
+# the call before this file existed too (only 2 blocks). Passing it on would trip hooks.json's `||`,
+# which would start a SECOND node on the stdin this file already drained, and that one answers `{}`,
+# exit 0: the failure silently swallowed at the cost of another node start. So it goes to stderr. Spelled
+# out here and at the end rather than as a function, so the trap depends on nothing defined after it.
+trap 'trap - EXIT; if [ -n "${prefilter_read:-}" ]; then printf %s "$prefilter_input" | node "$prefilter_dir/bash-background.mjs" "$@"; else node "$prefilter_dir/bash-background.mjs" "$@"; fi; prefilter_status=$?; [ $prefilter_status -eq 0 ] || printf "bash-background.sh: node exited %s; the call is allowed\n" $prefilter_status >&2; exit 0' EXIT
 
 case $0 in
   */*) prefilter_dir=${0%/*} ;;
@@ -151,4 +163,6 @@ if prefilter_skippable "$@"; then
 fi
 trap - EXIT
 printf %s "$prefilter_input" | node "$prefilter_dir/bash-background.mjs" "$@"
-exit $?
+prefilter_status=$?
+[ $prefilter_status -eq 0 ] || printf 'bash-background.sh: node exited %s; the call is allowed\n' $prefilter_status >&2
+exit 0

@@ -426,3 +426,30 @@ test("FAIL OPEN: with the pre-filter file or `sh` missing, or the file CRLF, the
     }
   }
 })
+
+// Once the pre-filter has read stdin, a non-zero exit from it would also start hooks.json's `||` node,
+// on stdin that is already drained: that second node answers `{}`, exit 0, swallowing the first one's
+// failure at the cost of another node start. So after any hand-off the pre-filter exits 0 itself and
+// reports node's status on stderr — both from its ordinary hand-off and from its EXIT trap.
+test("a node that fails after the hand-off is started once, reported on stderr, and never blocks", { skip }, () => {
+  const bin = tempDir("frizz-prefilter-failnode-")
+  const count = join(bin, "calls")
+  writeFileSync(join(bin, "node"), `#!/bin/sh\necho call >> '${count}'\ncat > /dev/null\necho 'node crashed' >&2\nexit 1\n`)
+  chmodSync(join(bin, "node"), 0o755)
+  const broken = tempDir("frizz-prefilter-failnode-trap-")
+  mkdirSync(join(broken, "hooks"))
+  for (const file of ["bash-background.mjs", "worktree.mjs"]) copyFileSync(join(hooks, file), join(broken, "hooks", file))
+  const source = readFileSync(PREFILTER, "utf8")
+  writeFileSync(join(broken, "hooks", "bash-background.sh"), source.replace("prefilter_skippable() {\n", "prefilter_skippable() {\n  if then\n"))
+  for (const [name, root] of [["the ordinary hand-off", dirname(hooks)], ["the EXIT trap's hand-off", broken]] as const) {
+    rmSync(count, { force: true })
+    const run = spawnSync("/bin/sh", ["-c", hookCommand()], {
+      input: call({ command: "server &" }),
+      encoding: "utf8",
+      env: { ...process.env, ...WORKER, PATH: `${bin}${delimiter}${process.env.PATH}`, CLAUDE_PLUGIN_ROOT: root },
+    })
+    assert.equal(run.status, 0, `${name}: ${run.stderr}`)
+    assert.equal(readFileSync(count, "utf8"), "call\n", `${name}: node must start exactly once`)
+    assert.match(run.stderr, /node crashed[\s\S]*bash-background\.sh: node exited 1; the call is allowed/, name)
+  }
+})
