@@ -110,7 +110,7 @@ export function ChildOpRow({
   // timestamp (caught reading back this row's own first screenshot, 2026-09-04). Absent ⇒ the column's
   // grey, which is what every other row still takes.
   counterTone?: "danger"
-  // A BACKGROUND SHELL'S REMAINING RUNTIME BUDGET ("45m left", "over budget" — lib/shellBudget.ts), its own
+  // A BACKGROUND SHELL'S REMAINING RUNTIME BUDGET ("times out in 45m", "past timeout" — lib/shellBudget.ts), its own
   // reading between the counter and the duration rather than joined into the counter's string: the two
   // take different tones (an overrun is danger, a line count never is), and one string can carry only one.
   // Absent ⇒ the row renders exactly as before, which is every shell launched without a budget.

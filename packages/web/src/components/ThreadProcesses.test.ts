@@ -272,7 +272,7 @@ test("the agent's row reads its line count and budget; yours reads its state onc
   const agent = processes({ bgShells: [shell({ budgetEndsAt: at("45"), startedAt: started })] })[0]!
   const html = row(agent, { lines: 142 })
   assert.match(html, /data-child-op-counter[^>]*>142 lines</)
-  assert.match(html, /data-child-op-budget[^>]*>15m left</)
+  assert.match(html, /data-child-op-budget[^>]*>times out in 15m</)
   assert.match(html, />12m</, "and its age, in the house grammar")
   const prompt = row(processes({ terminals: [term({ awaitingInput: true, startedAt: started })] })[0]!)
   assert.match(prompt, /text-attention">waiting for input</)
@@ -338,7 +338,7 @@ test("the rail's terminal rows read the strip's order, and its folder hint", () 
   const status = (html: string) => /data-wait-status[^>]*>([\s\S]*?)<\/span><svg/.exec(html)?.[1]?.replace(/<[^>]+>/g, "") ?? html
   const rail = renderToStaticMarkup(createElement(BgShellRow, { shell: agent.shell!, slug: "t", now: Date.now(), hint }))
   assert.match(rail, /data-process-checkout="root"/)
-  assert.equal(status(rail), "15m left · 12m")
+  assert.equal(status(rail), "times out in 15m · 12m")
   const yours = renderToStaticMarkup(createElement(TermWaitRow, { terminal: term({ startedAt: started }), slug: "t", now: Date.now(), hint }))
   assert.match(yours, /data-process-checkout="root"/)
   assert.equal(status(yours), "12m")

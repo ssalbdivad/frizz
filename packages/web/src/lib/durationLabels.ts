@@ -121,7 +121,7 @@ export function compactElapsedSince(startedAt: string | undefined, nowMs = Date.
 // ticks every 30s, so the reading keeps minutes and says `<1m` before the first one: in seconds it was a
 // lie at that cadence. A row born between two ticks started AFTER the clock's last reading, so its elapsed
 // was negative and it showed no age at all for up to 30s; the next tick then printed `24s` and held it,
-// frozen, for another 30. `<1m` is the budget reading's own spelling (`<1m left`, lib/shellBudget.ts).
+// frozen, for another 30. `<1m` is the budget reading's own spelling (`times out in <1m`, lib/shellBudget.ts).
 export function liveAgeSince(startedAt: string | undefined, nowMs: number): string {
   if (!startedAt) return ""
   const started = Date.parse(startedAt)
