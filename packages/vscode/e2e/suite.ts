@@ -14,7 +14,8 @@
 
 import assert from "node:assert/strict"
 import { spawn } from "node:child_process"
-import { realpathSync, writeFileSync } from "node:fs"
+import { mkdtempSync, realpathSync, writeFileSync } from "node:fs"
+import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { isDeepStrictEqual } from "node:util"
 import * as vscode from "vscode"
@@ -23,7 +24,10 @@ import type { EmbedEditorContextMessage } from "@frizz/shared/embed-protocol"
 import { parseSentContext } from "../../web/src/lib/composerContext.ts"
 import type { FrizzExtensionApi } from "../src/app.ts"
 import { projectForPath } from "../src/projects.ts"
+import type { ReviewSnapshot } from "../src/review-view.ts"
 import { FrizzRpc } from "../src/rpc.ts"
+import { seedReviewRepo, type ReviewRepo } from "./review-repo.ts"
+import type { SeededReview } from "./review-seed.ts"
 
 const mode = process.env.FRIZZ_E2E_MODE === "real" ? "real" : "fake"
 const workspace = realpathSync(process.env.FRIZZ_E2E_WORKSPACE ?? "")
@@ -196,6 +200,80 @@ async function workerReadsEditor(projectId: string): Promise<string> {
     child.kill()
   }
 }
+
+// ── Review changes ────────────────────────────────────────────────────────────────────────────────────
+
+/** The worktree the fake-mode review steps show, built once (e2e/review-repo.ts) inside the workspace. */
+let fakeReviewRepo: ReviewRepo | undefined
+const reviewRepo = () => (fakeReviewRepo ??= seedReviewRepo(join(workspace, "review-repo")))
+
+/**
+ * The review in front is the repository's whole branch — every file in git's order, each side what it must
+ * be — read three ways: the tab VS Code shows (its label, and its diffs where the API exposes a multi-diff
+ * tab's input), what the extension handed `vscode.changes`, and each side's text as the editor loads it
+ * (the base side through the extension's `frizz-base:` provider, the file side from disk).
+ */
+async function assertReviewInFront(api: FrizzExtensionApi, repo: ReviewRepo, title: string): Promise<void> {
+  const label = `Changes in ${title}`
+  await until(`"${label}" in front`, () => vscode.window.tabGroups.activeTabGroup.activeTab?.label === label, 20_000)
+  const shown = api.review()
+  assert.ok(shown, "the extension handed the diff editor a review")
+  const review: ReviewSnapshot = shown
+  assert.equal(review.title, label)
+  const relative = (uri: string) => vscode.Uri.parse(uri).fsPath.slice(repo.worktree.length + 1)
+  assert.deepEqual(review.resources.map((resource) => relative(resource.label)), repo.expected.map((entry) => entry.path), "every change, in git's order; nothing ignored, binary or main's")
+  for (const [i, entry] of repo.expected.entries()) {
+    const resource = review.resources[i]!
+    const text = repo.text[entry.path]!
+    if (entry.status === "deleted") assert.equal(resource.modified, undefined, `${entry.path} has no file side`)
+    else {
+      const file = vscode.Uri.parse(resource.modified!)
+      assert.equal(file.scheme, "file", `${entry.path}'s right side is the real file, to edit in place`)
+      assert.equal((await vscode.workspace.openTextDocument(file)).getText(), text.now, `${entry.path} as it is on disk`)
+    }
+    if (entry.basePath === undefined) assert.equal(resource.original, undefined, `${entry.path} is new: no base side`)
+    else {
+      const base = vscode.Uri.parse(resource.original!)
+      assert.equal(base.scheme, "frizz-base")
+      assert.equal(base.fsPath, join(repo.worktree, ...entry.basePath.split("/")), `${entry.path}'s base side is named for where it was`)
+      assert.equal((await vscode.workspace.openTextDocument(base)).getText(), text.base, `${entry.path} as the base had it`)
+    }
+  }
+  assert.deepEqual(review.checkouts.map(({ top, base }) => ({ top, base })), [{ top: repo.worktree, base: repo.base }], "the base is where the branch started, not main's tip")
+  assert.deepEqual(review.checkouts[0]!.binary, [join(repo.worktree, "logo.png")])
+  // The tab itself, where this VS Code exposes a multi-diff tab's input to extensions.
+  const Multi = (vscode as unknown as { TabInputTextMultiDiff?: new (...args: never[]) => { textDiffs: { original: vscode.Uri; modified: vscode.Uri }[] } }).TabInputTextMultiDiff
+  const input = vscode.window.tabGroups.activeTabGroup.activeTab?.input
+  if (Multi && input instanceof Multi) {
+    console.log(`  · the tab's own input lists ${input.textDiffs.length} diffs: ${input.textDiffs.map((diff) => `${diff.original?.scheme ?? "-"}→${diff.modified?.scheme ?? "-"}`).join(", ")}`)
+    assert.equal(input.textDiffs.length, repo.expected.length)
+  } else console.log(`  · this VS Code (${vscode.version}) does not expose a multi-diff tab's input; its label and the documents stand in`)
+}
+
+/**
+ * What the multi-diff editor DRAWS (fake mode, over the workbench's debugging port): an entry per file, and
+ * for the loop, the removed line on the base side and the added one on the file side.
+ */
+async function assertReviewDrawn(repo: ReviewRepo, shot: string): Promise<void> {
+  type Entry = { header: string; original: string; modified: string }
+  let entries: Entry[] = []
+  await until("the loop's diff drawn on both sides", async () => {
+    entries = await workbench<Entry[]>(`[...document.querySelectorAll(".multiDiffEntry")].map((entry) => ({
+      header: (entry.querySelector(".header")?.textContent ?? "").replace(/\s+/g, " ").trim(),
+      original: (entry.querySelector(".editor.original .view-lines")?.textContent ?? "").replace(/\u00a0/g, " "),
+      modified: (entry.querySelector(".editor.modified .view-lines")?.textContent ?? "").replace(/\u00a0/g, " "),
+    }))`)
+    const loop = entries.find((entry) => entry.header.includes("loop.ts"))
+    return !!loop && loop.original.includes("let total = 0") && loop.modified.includes("xs.reduce")
+  }, 20_000).catch((error: unknown) => {
+    throw new Error(`${(error as Error).message}; the editor drew ${JSON.stringify(entries)}`)
+  })
+  for (const { path } of repo.expected.slice(0, 3)) assert.ok(entries.some((entry) => entry.header.includes(path.split("/").pop()!)), `an entry for ${path}: ${JSON.stringify(entries.map((entry) => entry.header))}`)
+  await fake("/__e2e/shot", { path: shot })
+  console.log(`  · ${entries.length} entries drawn; the window is in ${shot}`)
+}
+
+const reviewShot = (name: string) => join(process.env.FRIZZ_E2E_SHOTS || workspace, `${vscode.version}-${name}.png`)
 
 /** The thread the real-mode Ask step started, for Send to follow up when no FRIZZ_E2E_THREAD is named. */
 let askedThread: string | undefined
@@ -1080,6 +1158,86 @@ const steps: Step[] = [
       } finally {
         await frizz.update("useSidebar", undefined, vscode.ConfigurationTarget.Global)
       }
+    },
+  },
+  {
+    name: "review: Frizz's push (a browser's Review changes) opens a worktree's branch as one multi-file diff and says this window can",
+    modes: ["fake"],
+    async run({ api }) {
+      const repo = reviewRepo()
+      // The window told this Frizz it can review — only because its welcome named the feature.
+      const features = (await fakeLog()).frames.filter((frame) => frame.t === "features")
+      assert.deepEqual(features.at(-1), { t: "features", features: ["review"] })
+      await vscode.commands.executeCommand("workbench.action.closeAllEditors")
+      const result = await fake<{ t: string; ok: boolean; error?: string }>("/__e2e/review", { title: "Tidy the loop", checkouts: [{ dir: repo.worktree, scope: "branch", files: repo.edited }] })
+      assert.deepEqual({ ok: result.ok, error: result.error }, { ok: true, error: undefined })
+      await assertReviewInFront(api, repo, "Tidy the loop")
+      await assertReviewDrawn(repo, reviewShot("review-pushed"))
+    },
+  },
+  {
+    name: "review: the sidebar's page names a thread (frizz:review), and the extension asks Frizz what it changed",
+    modes: ["fake"],
+    async run({ api, project }) {
+      const repo = reviewRepo()
+      await fake("/__e2e/review-target", { target: { title: "Fake thread", checkouts: [{ dir: repo.worktree, scope: "branch", files: [] }] } })
+      await vscode.commands.executeCommand("workbench.action.closeAllEditors")
+      const asked = (await fakeLog()).rpc.length
+      const events = api.sidebar().events.length
+      await pagePosts({ type: "frizz:review", thread: "fake-thread", project: project.slug, title: "Tidy the loop from the sidebar" })
+      await until("the review opened", () => api.sidebar().events.slice(events).some((event) => event.type === "frizz:review"), 20_000)
+      assert.deepEqual(api.sidebar().events.slice(events).filter((event) => event.type === "frizz:review"), [{ type: "frizz:review", outcome: "opened" }])
+      assert.deepEqual((await fakeLog()).rpc.slice(asked).filter((call) => call.procedure === "reviewTarget").map((call) => ({ projectId: call.projectId, input: call.input })), [
+        { projectId: project.id, input: { slug: "fake-thread", title: "Tidy the loop from the sidebar" } },
+      ], "the page named the thread, Frizz named the folder")
+      await assertReviewInFront(api, repo, "Tidy the loop from the sidebar")
+      // A page message naming a folder instead of a thread is not a review.
+      const before = api.sidebar().events.length
+      await pagePosts({ type: "frizz:review", thread: "../../etc", project: project.slug })
+      await until("the refusal recorded", () => api.sidebar().events.length > before)
+      assert.equal(api.sidebar().events.at(-1)?.outcome, "ignored")
+    },
+  },
+  {
+    name: "review: from the palette by thread; nothing to compare is said, not opened",
+    modes: ["fake"],
+    async run({ api }) {
+      const repo = reviewRepo()
+      await fake("/__e2e/review-target", { target: { title: "Fake thread", checkouts: [{ dir: repo.worktree, scope: "branch", files: [] }] } })
+      await vscode.commands.executeCommand("workbench.action.closeAllEditors")
+      assert.equal(await vscode.commands.executeCommand("frizz.reviewThread", { thread: "fake-thread" }), "opened")
+      await assertReviewInFront(api, repo, "Fake thread")
+
+      // The project folder's review is the thread's own files' UNCOMMITTED changes: loop.ts is committed there.
+      const shown = api.review()
+      const clean = await fake<{ ok: boolean; error?: string }>("/__e2e/review", { title: "Clean", checkouts: [{ dir: repo.dir, scope: "files", files: [join(repo.dir, "src", "loop.ts")] }] })
+      assert.deepEqual({ ok: clean.ok, error: clean.error }, { ok: false, error: "The files this thread edited have no uncommitted changes." })
+      const plain = realpathSync(mkdtempSync(join(tmpdir(), "frizz-e2e-not-a-repo-")))
+      const notRepo = await fake<{ ok: boolean; error?: string }>("/__e2e/review", { title: "Plain", checkouts: [{ dir: plain, scope: "branch", files: [] }] })
+      assert.equal(notRepo.ok, false)
+      assert.match(notRepo.error ?? "", /isn't a git repository/)
+      assert.equal(api.review(), shown, "neither opened anything")
+      assert.equal(vscode.window.tabGroups.activeTabGroup.activeTab?.label, "Changes in Fake thread")
+    },
+  },
+  {
+    name: "review: a thread that worked in a worktree — Frizz reads its edits there, and Review changes opens them here",
+    modes: ["real"],
+    async run({ api, project, rpc }) {
+      const raw = process.env.FRIZZ_E2E_REVIEW
+      if (!raw) return skip("needs the stack's seeded thread (scripts/e2e.ts --stack)")
+      const seeded = JSON.parse(raw) as SeededReview
+      // The server's own reading: the worktree is the checkout, its scope the whole branch, and the files
+      // the agent wrote there are the edited files — before 11f327a0 the rail read every one as ignored.
+      const target = await rpc.query(project.id, "reviewTarget", { slug: seeded.slug })
+      assert.deepEqual(target.checkouts.map(({ dir, scope }) => ({ dir, scope })), [{ dir: seeded.repo.worktree, scope: "branch" }], JSON.stringify(target))
+      assert.deepEqual(target.checkouts[0]!.files, seeded.repo.edited, "the worktree's edits, newest first")
+      const windows = await rpc.query(project.id, "editorWindows")
+      assert.ok(windows.windows.some((window) => window.reviews && window.app === vscode.env.appName), `this window says it can review: ${JSON.stringify(windows)}`)
+      await vscode.commands.executeCommand("workbench.action.closeAllEditors")
+      // What a browser tab's ⋯ Review changes calls.
+      assert.deepEqual(await rpc.mutation(project.id, "reviewInEditor", { slug: seeded.slug, title: seeded.title }), { ok: true })
+      await assertReviewInFront(api, seeded.repo, seeded.title)
     },
   },
   {
