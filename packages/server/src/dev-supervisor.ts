@@ -1,4 +1,4 @@
-import { fork, type ChildProcess } from "node:child_process"
+import { fork, spawn, type ChildProcess } from "node:child_process"
 import { randomUUID } from "node:crypto"
 import { existsSync, mkdirSync, readFileSync } from "node:fs"
 import { createServer as createNetServer } from "node:net"
@@ -181,6 +181,19 @@ export interface DevSupervisorOptions {
   watchSubscribe?: (root: string, callback: SubscribeCallback, options: WatchOptions) => Promise<AsyncSubscription>
   /** Test seam. Production uses process.execve so the launcher keeps its pid, cwd and stdio. */
   reexec?: (request: { executable: string; argv: string[]; env: Record<string, string> }) => void
+  /**
+   * What follows the runtime's own flags when a launcher edit re-execs the parent: the entry script and
+   * its arguments. Defaults to this process's own (`process.argv.slice(1)`), which is right for an entry
+   * that needs nothing more — `dev.ts`. The `frizz-dev` launcher must pass its own: its internal re-entry
+   * requires the `--port` it allocated, which no operator ever typed (see devLauncherReexecArgs).
+   */
+  reexecArgs?: string[]
+  /**
+   * Prove the edited launcher source loads BEFORE this generation tears itself down for it. Resolves
+   * null when it does, or the reason it does not. Defaults to importing dev-supervisor.ts in a fresh
+   * process (probeLauncherSource). A failure keeps the current board serving — see reexecLauncher.
+   */
+  validateLauncher?: () => Promise<string | null>
   log?: (line: string) => void
   error?: (line: string) => void
   /** Lifecycle beats for the foreground launcher's terminal. See SupervisorActivity. */
@@ -463,6 +476,77 @@ export function devReexecEnv(env: NodeJS.ProcessEnv): Record<string, string> {
   return next
 }
 
+/**
+ * This runtime's own flags, for a process that runs a DIFFERENT script on the same runtime. Under
+ * `node -e`, execArgv carries the inline code itself (and `--input-type` with it), which would run
+ * instead of the script named after it.
+ */
+export function runtimeExecArgv(execArgv: readonly string[] = process.execArgv): string[] {
+  const kept: string[] = []
+  for (let index = 0; index < execArgv.length; index++) {
+    const arg = execArgv[index]!
+    if (["-e", "--eval", "-p", "--print", "--input-type"].includes(arg)) {
+      index++
+      continue
+    }
+    if (/^--(?:eval|print|input-type)=/.test(arg)) continue
+    kept.push(arg)
+  }
+  return kept
+}
+
+/** How long a launcher source probe may take before the edit is treated as not loading. */
+export const LAUNCHER_PROBE_TIMEOUT_MS = 60_000
+
+/**
+ * Run `args` on this runtime (with its own flags) in a throwaway process and report whether it exits
+ * cleanly: null on exit 0, otherwise the tail of its stderr. Used to prove launcher source loads
+ * before the parent execs into it. Async on purpose — the parent is still serving the board.
+ */
+export function probeLauncherSource(options: {
+  args: string[]
+  env: NodeJS.ProcessEnv
+  cwd?: string
+  timeoutMs?: number
+}): Promise<string | null> {
+  return new Promise((resolveProbe) => {
+    let stderr = ""
+    let settled = false
+    const settle = (problem: string | null) => {
+      if (settled) return
+      settled = true
+      clearTimeout(timer)
+      resolveProbe(problem)
+    }
+    const child = spawn(process.execPath, [...runtimeExecArgv(), ...options.args], {
+      cwd: options.cwd,
+      env: options.env,
+      stdio: ["ignore", "ignore", "pipe"],
+      windowsHide: true,
+    })
+    const timeoutMs = options.timeoutMs ?? LAUNCHER_PROBE_TIMEOUT_MS
+    const timer = setTimeout(() => {
+      child.kill("SIGKILL")
+      settle(`it did not finish loading within ${timeoutMs}ms`)
+    }, timeoutMs)
+    timer.unref()
+    child.stderr?.setEncoding("utf8")
+    child.stderr?.on("data", (chunk: string) => { stderr = (stderr + chunk).slice(-4000) })
+    child.once("error", (error) => settle(error.message))
+    child.once("exit", (code, signal) => {
+      if (code === 0) return settle(null)
+      // Node prints the error after its stack's source excerpt, so the line naming the error is the
+      // reason; nub's transpiler ends that line with a colon and puts the diagnostic on the next one.
+      const lines = stderr.split("\n").map((line) => line.trim()).filter(Boolean)
+      const at = lines.findIndex((line) => /^(?:[A-Z]\w*)?Error\b/.test(line))
+      const detail = at === -1
+        ? lines.slice(-3).join(" | ")
+        : lines[at]!.endsWith(":") && lines[at + 1] ? `${lines[at]} ${lines[at + 1]}` : lines[at]!
+      settle(`${signal ? `killed by ${signal}` : `exit ${code}`}${detail ? ` — ${detail}` : ""}`)
+    })
+  })
+}
+
 type ReadyMessage = { type: "frizz-ready"; pid: number; processStart: string; port: number; bootId: string }
 function readyMessage(value: unknown): value is ReadyMessage {
   if (!value || typeof value !== "object") return false
@@ -518,6 +602,8 @@ class Supervisor implements DevSupervisor {
   private readonly childArgs: string[]
   private readonly watchSubscribe: NonNullable<DevSupervisorOptions["watchSubscribe"]>
   private readonly reexec: DevSupervisorOptions["reexec"]
+  private readonly reexecArgs: string[]
+  private readonly validateLauncher: () => Promise<string | null>
   private readonly supervisorLock: string | null
   private readonly statusPublisherToken = randomUUID()
   private readonly processGeneration = currentProcessGeneration()
@@ -585,6 +671,11 @@ class Supervisor implements DevSupervisor {
     this.reexec = opts.reexec ?? (process.platform !== "win32" && typeof process.execve === "function"
       ? (request) => process.execve!(request.executable, request.argv, request.env)
       : undefined)
+    this.reexecArgs = opts.reexecArgs ?? process.argv.slice(1)
+    this.validateLauncher = opts.validateLauncher ?? (() => probeLauncherSource({
+      args: ["--input-type=module", "-e", `await import(${JSON.stringify(import.meta.url)})`],
+      env: devReexecEnv(this.parentEnv),
+    }))
     if (opts.stateDir && resolve(opts.stateDir) !== opts.launchTarget.stateDir) {
       throw new Error("dev supervisor state directory does not match its owned project")
     }
@@ -785,6 +876,12 @@ class Supervisor implements DevSupervisor {
       this.restartRunning = false
       completeRestart()
       if (this.restartCompletion === completion) this.restartCompletion = null
+      // An edit that landed while the launcher was being probed found restartRunning set and only
+      // raised restartAgain; the loop above had already exited, so nothing would ever act on it.
+      if (this.restartAgain && !this.closed) {
+        this.restartAgain = false
+        this.requestRestart("source changed while the launcher was checked")
+      }
     }
   }
 
@@ -1295,6 +1392,24 @@ class Supervisor implements DevSupervisor {
       this.writeStatus("degraded", message)
       return
     }
+    // The child that just booted proves the RUNTIME graph; the launcher's own source is a different
+    // graph it never loads. Exec into a launcher that cannot load and the board is gone for good: the
+    // parent IS the board, and nothing is left to watch for the corrective edit. Agents edit `src/`
+    // mid-flight all day, so a half-written file here is routine, not exotic. Probe it in a throwaway
+    // process first, and on failure keep serving exactly as a broken child does.
+    let problem: string | null
+    try {
+      problem = await this.validateLauncher()
+    } catch (error) {
+      problem = error instanceof Error ? error.message : String(error)
+    }
+    if (this.closed) return
+    if (problem) {
+      const message = `launcher source does not load, so this board keeps running the previous one: ${problem}; watching for a corrective edit`
+      this.errorLine(`[frizz] dev ${message}`)
+      this.writeStatus("failed", message)
+      return
+    }
     this.logLine(`[frizz] dev launcher validated; reloading in place (pid ${process.pid})`)
     this.closed = true
     if (this.debounce) clearTimeout(this.debounce)
@@ -1306,7 +1421,13 @@ class Supervisor implements DevSupervisor {
     // the tokenized owner remains authoritative while the new executable validates and republishes.
     this.writeStatus("restarting", "launcher validated; reloading parent in place", null)
     try {
-      this.reexec({ executable: process.execPath, argv: process.argv, env: devReexecEnv(this.parentEnv) })
+      // execArgv too: process.argv omits the runtime's own flags (nub passes several, e.g.
+      // --experimental-vm-modules), so re-execing argv alone ran the successor on a different runtime.
+      this.reexec({
+        executable: process.execPath,
+        argv: [process.execPath, ...runtimeExecArgv(), ...this.reexecArgs],
+        env: devReexecEnv(this.parentEnv),
+      })
     } catch (error) {
       this.errorLine(`[frizz] dev launcher re-exec failed: ${error instanceof Error ? error.message : error}`)
     }
@@ -1314,6 +1435,8 @@ class Supervisor implements DevSupervisor {
     // shutdown path; otherwise this live but watcherless PID would strand the project indefinitely.
     this.removeStatus()
     this.errorLine("[frizz] dev launcher re-exec returned unexpectedly; restart Frizz once")
+    // `closed` is already set, so close() would return without reaching the listener.
+    await this.publicProxy.close().catch(() => undefined)
     this.resolveStopRequested()
   }
 

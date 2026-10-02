@@ -44,6 +44,7 @@ import {
   probeFrizz,
   JOIN_PROBE_TIMEOUT_MS,
   HEALTH_PROBE_TIMEOUT_MS,
+  devLauncherReexecArgs,
   durableReexecArgs,
   readPreferredPort,
   waitForWorkspace,
@@ -2433,6 +2434,19 @@ test("boardAddress: a bare origin gains a slash, `/` or an offer does not", () =
 
 test("an update re-execs with the port alone; how the board is reached lives in the saved setup", () => {
   assert.deepEqual(durableReexecArgs({ entry: "/opt/frizz/src/index.js", port: 9393 }), ["/opt/frizz/src/index.js", "--port", "9393"]);
+});
+
+test("a --dev launcher re-execs into a launch its internal re-entry accepts: --dev with the allocated port", () => {
+  // The operator typed `frizz-dev --dev`. Re-execing that argv reached a re-entry that refuses to start
+  // without --port, and every edit to the launcher's own source ended the board.
+  const args = devLauncherReexecArgs({ entry: "/repo/src/index.ts", port: 9494, debug: false });
+  assert.equal(args[0], "/repo/src/index.ts");
+  const parsed = parseCliArgs(args.slice(1));
+  assert.equal(parsed.port, 9494);
+  assert.equal(parsed.dev, true);
+  assert.equal(parsed.debug, false);
+  assert.equal(parsed.sandbox, false, "a re-exec adopts its sandbox through the environment, never mints another");
+  assert.equal(parseCliArgs(devLauncherReexecArgs({ entry: "/e", port: 1, debug: true }).slice(1)).debug, true);
 });
 
 test("--sessions and --sign-out are parsed, in both the spaced and the = spelling", () => {

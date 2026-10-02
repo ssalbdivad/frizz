@@ -21,6 +21,8 @@ import {
   devCrashRetryDelay,
   devReexecEnv,
   isDevServerSource,
+  probeLauncherSource,
+  runtimeExecArgv,
   startDevSupervisor,
   type DevBoot,
   type DevSupervisor,
@@ -1494,6 +1496,108 @@ test("private SDK runtime changes recycle only disposable children and recover w
     launchOwner?.release()
     await stopFixtureWorker(worker)
     assert.equal(supervisor ? unsubscribed : true, true)
+    rmSync(workspace, { recursive: true, force: true })
+  }
+})
+
+test("runtimeExecArgv keeps the runtime's flags and drops an inline script", () => {
+  assert.deepEqual(
+    runtimeExecArgv(["--enable-source-maps", "--input-type=module", "-e", "console.log(1)", "--experimental-vm-modules", "--eval=x", "-p", "y"]),
+    ["--enable-source-maps", "--experimental-vm-modules"],
+  )
+})
+
+test("probeLauncherSource: clean load is null; a syntax error or a hang names why", { timeout: 20_000 }, async () => {
+  const dir = mkdtempSync(join(tmpdir(), "frizz-launcher-probe-"))
+  try {
+    const good = join(dir, "good.ts")
+    const broken = join(dir, "broken.ts")
+    const hung = join(dir, "hung.ts")
+    writeFileSync(good, "export const ok: number = 1\n")
+    writeFileSync(broken, "export const half = (\n")
+    writeFileSync(hung, "setInterval(() => {}, 1000)\n")
+    assert.equal(await probeLauncherSource({ args: [good], env: process.env }), null)
+    // Node says SyntaxError; nub's transpiler says "Transpile error" — either way the reason is named.
+    assert.match((await probeLauncherSource({ args: [broken], env: process.env })) ?? "", /^exit 1 — .*(?:SyntaxError|Transpile error)/)
+    assert.match((await probeLauncherSource({ args: [hung], env: process.env, timeoutMs: 300 })) ?? "", /did not finish loading within 300ms/)
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+test("a launcher edit re-execs only into source that loads, with the launcher's own argv", { timeout: 25_000 }, async () => {
+  const workspace = mkdtempSync(join(tmpdir(), "frizz-dev-launcher-reexec-"))
+  const stateDir = join(workspace, ".state")
+  const launcherSource = join(workspace, "src", "index.ts")
+  const childEntry = join(workspace, "fixture-control-plane.mjs")
+  const supervisorLock = join(stateDir, "dev-supervisor.lock")
+  mkdirSync(join(workspace, "src"), { recursive: true })
+  mkdirSync(stateDir, { recursive: true })
+  writeFileSync(launcherSource, "export {}\n")
+  writeFileSync(childEntry, `
+    import {
+      projectLaunchOwnerTokenFromEnvironment,
+      projectLaunchTargetFromEnvironment,
+      registerProjectLaunchDelegate,
+    } from ${JSON.stringify(projectLaunchUrl)}
+    const delegate = registerProjectLaunchDelegate(projectLaunchTargetFromEnvironment(process.env), projectLaunchOwnerTokenFromEnvironment(process.env))
+    process.send?.({ type: "frizz-ready", pid: delegate.pid, processStart: delegate.processStart, port: Number(process.env.FRIZZ_DEV_PORT), bootId: \`fixture-\${process.pid}\` })
+    const stop = () => { delegate.release(); process.exit(0) }
+    process.once("SIGTERM", stop)
+    process.once("disconnect", stop)
+    setInterval(() => {}, 1000)
+  `)
+  let notify: Parameters<NonNullable<DevSupervisorOptions["watchSubscribe"]>>[1] | undefined
+  const reexecs: Parameters<NonNullable<DevSupervisorOptions["reexec"]>>[0][] = []
+  const verdicts: (string | null)[] = ["SyntaxError: Unexpected end of input", null]
+  let probes = 0
+  const launchTarget = { projectId: randomUUID(), projectDir: workspace, stateDir }
+  const launchOwner = acquireProjectLaunchOwner(launchTarget, "supervisor")
+  let supervisor: DevSupervisor | undefined
+  try {
+    supervisor = await startDevSupervisor({
+      port: await freeSupervisorPort(),
+      cwd: workspace,
+      stateDir,
+      launchTarget,
+      launchOwnerToken: launchOwner.token,
+      watchRoots: [workspace],
+      debounceMs: 1,
+      childEntry,
+      watchSubscribe: async (_root, callback) => {
+        notify = callback
+        return { unsubscribe: async () => {} }
+      },
+      reexecArgs: ["/repo/src/index.ts", "--dev", "--port", "9494"],
+      validateLauncher: async () => { probes++; return verdicts.shift() ?? null },
+      reexec: (request) => { reexecs.push(request) },
+      log: () => {},
+      error: () => {},
+    })
+    const first = await supervisor.firstBoot
+
+    // A half-written launcher must not take the board with it: the fresh child keeps serving, and the
+    // failure is visible as status rather than as a dead terminal.
+    notify!(null, [{ path: launcherSource, type: "update" }])
+    const failed = await eventually(() => {
+      const status = readSupervisorStatus(supervisorLock)
+      return status?.state === "failed" && /launcher source does not load/.test(status.message) ? status : undefined
+    }, "a refused launcher reload")
+    assert.match(failed.message, /SyntaxError/)
+    assert.equal(reexecs.length, 0)
+    const serving = supervisor.currentBoot()
+    assert.ok(serving && serving.pid !== first.pid && processIsAlive(serving.pid), "the board keeps serving a live child")
+
+    // The corrective edit re-execs, with the runtime's own flags and the launcher's argv — not this
+    // process's argv, which is what stranded `frizz-dev --dev` without its --port.
+    notify!(null, [{ path: launcherSource, type: "update" }])
+    await eventually(() => reexecs.length === 1 ? true : undefined, "the launcher re-exec")
+    assert.equal(probes, 2)
+    assert.deepEqual(reexecs[0]!.argv, [process.execPath, ...runtimeExecArgv(), "/repo/src/index.ts", "--dev", "--port", "9494"])
+    assert.equal(reexecs[0]!.env.FRIZZ_DEV_REEXEC, "1")
+  } finally {
+    await supervisor?.close()
+    launchOwner.release()
     rmSync(workspace, { recursive: true, force: true })
   }
 })
