@@ -1,4 +1,6 @@
 import {
+  EMBED_COLOR_VALUE,
+  EMBED_THEME_COLORS,
   EDITOR_COMPOSE_MAX_TEXT,
   EDITOR_MAX_PATH,
   EMBED_PARAM,
@@ -17,7 +19,9 @@ import {
   type EmbedPickedFile,
   type EmbedKeyMessage,
   type EmbedPageMessage,
+  type EmbedSurface,
   type EmbedTheme,
+  type EmbedThemeColors,
 } from "@frizz/shared"
 
 // THE PAGE INSIDE AN EDITOR'S SIDEBAR — embed mode's state and its wire (packages/shared/src/
@@ -44,10 +48,37 @@ export interface EmbedState {
   host: typeof EMBED_VSCODE
   /** The host's theme kind, overriding the stored preference for this session only. */
   theme?: EmbedTheme
+  /** The host theme's colours, which the page wears instead of its own palette (lib/theme.ts). */
+  palette?: HostPalette
+}
+
+/** The editor's colours as the page holds them: `frizz:theme`'s `colors`, `surface` and `contrast`, checked. */
+export interface HostPalette {
+  colors: EmbedThemeColors
+  surface?: EmbedSurface
+  contrast?: true
 }
 
 function parseTheme(value: unknown): EmbedTheme | undefined {
   return value === "light" || value === "dark" ? value : undefined
+}
+
+/**
+ * The colours a parent sent, kept only where the contract allows: a key `EMBED_THEME_COLORS` names, with
+ * a plain colour value (`EMBED_COLOR_VALUE`). Anything else is dropped one entry at a time rather than
+ * failing the message, so a newer extension's extra key costs nothing. Undefined when there is no map, or
+ * no background among it — a palette with no surface colour has nothing to paint the page with.
+ */
+export function parsePalette(value: unknown): HostPalette | undefined {
+  if (!isRecord(value) || !isRecord(value.colors)) return undefined
+  const colors: EmbedThemeColors = {}
+  for (const name of EMBED_THEME_COLORS) {
+    const color = value.colors[name]
+    if (typeof color === "string" && color.length <= 64 && EMBED_COLOR_VALUE.test(color)) colors[name] = color
+  }
+  const surface = value.surface === "editor" ? "editor" : value.surface === "sideBar" ? "sideBar" : undefined
+  if (!colors[surface === "editor" ? "editor-background" : "sideBar-background"]) return undefined
+  return { colors, ...(surface ? { surface } : {}), ...(value.contrast === true ? { contrast: true as const } : {}) }
 }
 
 /**
@@ -56,20 +87,21 @@ function parseTheme(value: unknown): EmbedTheme | undefined {
  * (a re-created webview frames the page afresh with VS Code's theme of that moment). Pure, for its test.
  */
 export function readEmbedState(search: string, stored: string | null): EmbedState | null {
-  const params = new URLSearchParams(search)
-  if (params.get(EMBED_PARAM) === EMBED_VSCODE) {
-    const theme = parseTheme(params.get(EMBED_THEME_PARAM))
-    return theme ? { host: EMBED_VSCODE, theme } : { host: EMBED_VSCODE }
-  }
-  if (!stored) return null
+  let record: Record<string, unknown> | null = null
   try {
-    const parsed: unknown = JSON.parse(stored)
-    if (!parsed || typeof parsed !== "object" || (parsed as { host?: unknown }).host !== EMBED_VSCODE) return null
-    const theme = parseTheme((parsed as { theme?: unknown }).theme)
-    return theme ? { host: EMBED_VSCODE, theme } : { host: EMBED_VSCODE }
-  } catch {
-    return null
-  }
+    const parsed: unknown = stored ? JSON.parse(stored) : null
+    if (isRecord(parsed) && parsed.host === EMBED_VSCODE) record = parsed
+  } catch {}
+  // The editor's colours come from the record whichever way the mode was found: the pre-paint guard
+  // (index.html) writes the ones the address's fragment carried there before this runs, and a frame's
+  // record belongs to that frame alone (a new webview is a new frame, with a session of its own).
+  const palette = record ? parsePalette(record.palette) : undefined
+  const params = new URLSearchParams(search)
+  let theme: EmbedTheme | undefined
+  if (params.get(EMBED_PARAM) === EMBED_VSCODE) theme = parseTheme(params.get(EMBED_THEME_PARAM))
+  else if (record) theme = parseTheme(record.theme)
+  else return null
+  return { host: EMBED_VSCODE, ...(theme ? { theme } : {}), ...(palette ? { palette } : {}) }
 }
 
 let state: EmbedState | null | undefined
@@ -98,11 +130,16 @@ export function embedTheme(): EmbedTheme | undefined {
   return load()?.theme
 }
 
+/** The host theme's colours for this session, while the host sends them. */
+export function embedPalette(): HostPalette | undefined {
+  return load()?.palette
+}
+
 /** A `frizz:theme` from the host: kept for a reload of this frame, never in localStorage. */
-export function rememberEmbedTheme(theme: EmbedTheme): void {
+export function rememberEmbedTheme(theme: EmbedTheme, palette?: HostPalette): void {
   const current = load()
   if (!current) return
-  state = { ...current, theme }
+  state = { host: current.host, theme, ...(palette ? { palette } : {}) }
   save(state)
 }
 
@@ -151,7 +188,9 @@ export function parseHostMessage(data: unknown): EmbedHostMessage | null {
   if (!isRecord(data)) return null
   if (data.type === "frizz:theme") {
     const theme = parseTheme(data.theme)
-    return theme ? { type: "frizz:theme", theme } : null
+    if (!theme) return null
+    const palette = parsePalette(data)
+    return palette ? { type: "frizz:theme", theme, ...palette } : { type: "frizz:theme", theme }
   }
   if (data.type === "frizz:navigate") {
     const to = data.to

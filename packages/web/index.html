@@ -29,6 +29,8 @@
       html, body { background: #0d0e10; }
       html[data-theme="light"], html[data-theme="light"] body { background: #f7f7f7; }
       @media (prefers-color-scheme: light) { html:not([data-theme]), html:not([data-theme]) body { background: #f7f7f7; } }
+      html[data-host-colors="sideBar"], html[data-host-colors="sideBar"] body { background: var(--vscode-sideBar-background); }
+      html[data-host-colors="editor"], html[data-host-colors="editor"] body { background: var(--vscode-editor-background); }
     </style>
     <!-- …and in an editor's sidebar the EDITOR's theme wins (src/lib/embed.ts, which this mirrors: the
          `embed`/`theme` query on the frame's first address, else the frame's `frizz.embed` session
@@ -40,13 +42,38 @@
       try { frizzSystemDark = typeof matchMedia === "function" && matchMedia("(prefers-color-scheme: dark)").matches } catch {}
       let frizzEmbed = null
       try {
+        const record = JSON.parse(sessionStorage.getItem("frizz.embed") || "null")
         const query = new URLSearchParams(location.search)
-        if (query.get("embed") === "vscode") frizzEmbed = { host: "vscode", theme: query.get("theme") }
-        else frizzEmbed = JSON.parse(sessionStorage.getItem("frizz.embed") || "null")
+        if (query.get("embed") === "vscode") frizzEmbed = { host: "vscode", theme: query.get("theme"), palette: record && record.host === "vscode" ? record.palette : undefined }
+        else frizzEmbed = record
       } catch {}
       if (frizzEmbed && frizzEmbed.host === "vscode") {
         document.documentElement.dataset.embed = "vscode"
         if (frizzEmbed.theme === "dark" || frizzEmbed.theme === "light") frizzThemePreference = frizzEmbed.theme
+        // The editor's COLOURS (src/lib/embed.ts parsePalette, which this mirrors — the names and the value
+        // pattern are packages/shared embed-protocol.ts's, and embed.test.ts holds the two in step). The
+        // relay puts its first theme message on the frame's address as a fragment, so the very first paint
+        // wears them; it is written to the session record, where embed.ts takes it over, and dropped from
+        // the address. A reload of the frame then finds the latest in the record.
+        try {
+          const hash = location.hash || ""
+          if (hash.startsWith("#frizz-theme=")) {
+            const sent = JSON.parse(decodeURIComponent(hash.slice("#frizz-theme=".length)))
+            frizzEmbed.palette = sent && typeof sent === "object" && sent.colors ? { colors: sent.colors, surface: sent.surface, contrast: sent.contrast } : undefined
+            sessionStorage.setItem("frizz.embed", JSON.stringify(frizzEmbed))
+            history.replaceState(history.state, "", location.pathname + location.search)
+          }
+        } catch {}
+        const palette = frizzEmbed.palette
+        const colors = palette && typeof palette === "object" ? palette.colors : null
+        const surface = palette && palette.surface === "editor" ? "editor" : "sideBar"
+        const color = /^(?:#(?:[0-9a-fA-F]{3,4}|[0-9a-fA-F]{6}|[0-9a-fA-F]{8})|rgba?\(\s*[0-9.]+%?\s*[,\s]\s*[0-9.]+%?\s*[,\s]\s*[0-9.]+%?\s*(?:[,/]\s*[0-9.]+%?\s*)?\))$/u
+        const ok = (value) => typeof value === "string" && value.length <= 64 && color.test(value)
+        if (colors && typeof colors === "object" && ok(colors[surface + "-background"])) {
+          for (const name of ["sideBar-background", "sideBar-foreground", "editor-background", "editor-foreground", "foreground", "descriptionForeground", "panel-border", "sideBar-border", "contrastBorder", "input-background", "input-border", "input-placeholderForeground", "list-hoverBackground", "list-activeSelectionBackground", "button-background", "button-foreground", "focusBorder", "textLink-foreground", "textCodeBlock-background", "menu-background", "menu-border", "badge-background", "badge-foreground", "scrollbarSlider-background", "scrollbarSlider-hoverBackground", "editor-selectionBackground", "chat-requestBubbleBackground"]) if (ok(colors[name])) document.documentElement.style.setProperty("--vscode-" + name, colors[name])
+          document.documentElement.dataset.hostColors = surface
+          if (palette.contrast === true) document.documentElement.dataset.hostContrast = ""
+        }
       }
       const frizzTheme = frizzThemePreference === "dark" || frizzThemePreference === "light" ? frizzThemePreference : frizzSystemDark ? "dark" : "light"
       document.documentElement.dataset.theme = frizzTheme

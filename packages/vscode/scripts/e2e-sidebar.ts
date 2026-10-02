@@ -2253,6 +2253,25 @@ try {
     await shot("c16-opened-thread-w300")
   })
 
+  // ── c18 PROBE (temporary): what VS Code puts on a webview document, per theme ──
+  await run("c18", "probe: the webview's theme variables", async () => {
+    const relay = () => tracedFrames().find((f) => f.name === "relay")!.frame
+    const dump: Record<string, unknown> = {}
+    for (const theme of ["Default Dark Modern", "Default Light Modern", "Tomorrow Night Blue", "Solarized Dark", "Solarized Light", "Abyss", "Default Dark+", "Monokai", "Default High Contrast", "Default High Contrast Light"]) {
+      await agent({ op: "config", section: "workbench", key: "colorTheme", value: theme })
+      await sleep(2_500)
+      dump[theme] = await relay().evaluate(() => {
+        const style = document.documentElement.style
+        const vars: Record<string, string> = {}
+        for (let i = 0; i < style.length; i++) { const name = style[i]!; if (name.startsWith("--vscode-")) vars[name] = style.getPropertyValue(name).trim() }
+        return { body: document.body.className, kind: document.body.dataset.vscodeThemeKind, html: document.documentElement.className, count: Object.keys(vars).length, vars }
+      })
+    }
+    writeFileSync(join(out, "c18-probe-vars.json"), JSON.stringify(dump, null, 2))
+    expect("c18", "probe wrote the variables", true)
+    await agent({ op: "config", section: "workbench", key: "colorTheme", value: "Default Dark Modern" })
+  })
+
   // ── c17: a restart and a window reload (LAST: it ends the agent's VS Code) ──
   await run("c17", "a restart and a window reload keep what the page stored, and the eye", async () => {
     // A value in the framed page's own storage — where it keeps what the human set in it (its shortcuts,

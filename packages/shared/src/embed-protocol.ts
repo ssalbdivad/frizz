@@ -36,11 +36,90 @@ export type EmbedTheme = "light" | "dark"
 
 // ── host → page ────────────────────────────────────────────────────────────────────────────────────
 
-/** VS Code's theme changed. The page applies it for this session only and never persists it. */
+/**
+ * VS Code's theme changed. The page applies it for this session only and never persists it.
+ *
+ * `colors`: the theme's own colours, so the page can wear them instead of Frizz's palette (the page reads
+ * as part of the editor rather than a foreign panel set into it). Read by the RELAY, not the extension —
+ * VS Code's API names only the theme's kind; its colours exist as the `--vscode-*` custom properties VS
+ * Code writes on every webview document, and the relay (packages/vscode/src/sidebar-html.ts) reads them
+ * there, keyed by the names below without the `--vscode-` prefix. Absent while `frizz.matchEditorTheme` is
+ * off, and from an extension or a relay that predates it: the page then wears Frizz's own palette.
+ *
+ * A HOSTILE PARENT is the threat this shape is bounded against: the page takes only the keys
+ * `EMBED_THEME_COLORS` names, each only when its value is a plain hex or `rgb()`/`rgba()` colour
+ * (`EMBED_COLOR_VALUE`), and sets each as a custom property on its own root — never a selector, never a
+ * `url()`, never a declaration of its own.
+ *
+ * `surface`: which of VS Code's surfaces the frame sits on — the side bar's view ("sideBar"), or an editor
+ * tab ("editor") — whose background the page's background takes. Absent means the side bar.
+ *
+ * `contrast`: a high-contrast theme (dark or light). The page draws its borders at full strength then.
+ */
 export interface EmbedThemeMessage {
   type: "frizz:theme"
   theme: EmbedTheme
+  colors?: EmbedThemeColors
+  surface?: EmbedSurface
+  contrast?: true
 }
+
+export type EmbedSurface = "sideBar" | "editor"
+
+/**
+ * The theme colours the page takes, in VS Code's own names (`--vscode-<name>` on a webview document; the
+ * theme colour id with its dots as dashes). What each one becomes on the page: packages/web/src/theme.css
+ * § The editor's colours. Measured on a real VS Code 1.140 across ten built-in themes (2026-10-02): every
+ * one of these is set by every dark and light theme but a handful (`sideBar-foreground`, `sideBar-border`,
+ * `input-border`, `widget-border` are often unset), and the page derives what a theme leaves out.
+ */
+export const EMBED_THEME_COLORS = [
+  "sideBar-background",
+  "sideBar-foreground",
+  "editor-background",
+  "editor-foreground",
+  "foreground",
+  "descriptionForeground",
+  "panel-border",
+  "sideBar-border",
+  "contrastBorder",
+  "input-background",
+  "input-border",
+  "input-placeholderForeground",
+  "list-hoverBackground",
+  "list-activeSelectionBackground",
+  "button-background",
+  "button-foreground",
+  "focusBorder",
+  "textLink-foreground",
+  "textCodeBlock-background",
+  "menu-background",
+  "menu-border",
+  "badge-background",
+  "badge-foreground",
+  "scrollbarSlider-background",
+  "scrollbarSlider-hoverBackground",
+  "editor-selectionBackground",
+  "chat-requestBubbleBackground",
+] as const
+
+export type EmbedThemeColor = (typeof EMBED_THEME_COLORS)[number]
+export type EmbedThemeColors = Partial<Record<EmbedThemeColor, string>>
+
+/**
+ * A colour value the page accepts: `#rgb`, `#rgba`, `#rrggbb`, `#rrggbbaa`, or `rgb(…)`/`rgba(…)` of
+ * numbers — what VS Code writes (it serializes every theme colour as one or the other). Nothing that could
+ * close a declaration, name a function, or reach the network.
+ */
+export const EMBED_COLOR_VALUE = /^(?:#(?:[0-9a-fA-F]{3,4}|[0-9a-fA-F]{6}|[0-9a-fA-F]{8})|rgba?\(\s*[0-9.]+%?\s*[,\s]\s*[0-9.]+%?\s*[,\s]\s*[0-9.]+%?\s*(?:[,/]\s*[0-9.]+%?\s*)?\))$/u
+
+/**
+ * The fragment the relay puts on the frame's first address — `#frizz-theme=<JSON of the theme message>` —
+ * so the page's first paint already wears the editor's colours (packages/web/index.html's pre-paint guard
+ * reads it, and drops it from the address). A message cannot do that: the page listens only once its
+ * script has run, a second or more after its first paint.
+ */
+export const EMBED_THEME_FRAGMENT = "frizz-theme="
 
 /**
  * Put a selection in a composer, as the ⌘I context chip the browser's "Add to Frizz prompt" path inserts
