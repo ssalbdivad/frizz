@@ -45,7 +45,9 @@ export interface ContextFeed {
 export function activeFileEditor(api: Vscode): vscode.TextEditor | undefined {
   const editor = api.window.activeTextEditor
   if (!editor || editor.document.uri.scheme !== "file") return undefined
-  const group = api.window.tabGroups.all.find((candidate) => candidate.viewColumn === editor.viewColumn)
+  // Its group, by column. A diff's sides are EMBEDDED editors, which VS Code 1.90 gives no column at all
+  // (1.140 gives them their group's): with none, the group in front is the one it is in.
+  const group = editor.viewColumn === undefined ? api.window.tabGroups.activeTabGroup : api.window.tabGroups.all.find((candidate) => candidate.viewColumn === editor.viewColumn)
   if (group?.activeTab?.input instanceof api.TabInputTextDiff) return undefined
   return editor
 }

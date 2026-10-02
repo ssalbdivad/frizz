@@ -390,6 +390,7 @@ try {
       FRIZZ_E2E_THREAD: process.env.FRIZZ_E2E_THREAD,
       FRIZZ_E2E_SET_OPENER: stack ? "1" : process.env.FRIZZ_E2E_SET_OPENER,
       FRIZZ_E2E_PAGE_CLAIMS: pageClaims ? "1" : undefined,
+      FRIZZ_E2E_ONLY: process.env.FRIZZ_E2E_ONLY,
     },
   }).catch((error: unknown) => {
     log(`the suite did not run: ${(error as Error).message}`)

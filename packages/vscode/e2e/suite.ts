@@ -615,11 +615,16 @@ const steps: Step[] = [
       const b = join(workspace, "src", "b.ts")
       const editor = await openSample([1, 0, 3])
       await until("the selection told", async () => (await contexts()).at(-1)?.active?.selection?.endLine === 4)
+      // What came of each add-context, as the sidebar recorded it (after the page answered the compose).
+      const added = () => api.sidebar().events.filter((event) => event.type === "frizz:add-context").map((event) => event.outcome)
+      const first = added().length
       const from = await received()
       await pagePosts({ type: "frizz:add-context", what: "selection" })
       await pagePosts({ type: "frizz:add-context", what: "file", path: b })
       await until("two composes", async () => (await pageReceived("frizz:compose", from)).length === 2)
       const [selection, file] = (await pageReceived("frizz:compose", from)).map(({ id: _, ...rest }) => rest)
+      await until("both recorded", () => added().length >= first + 2)
+      assert.deepEqual(added().slice(first), ["composed", "composed"])
       assert.deepEqual(selection, {
         type: "frizz:compose",
         item: { projectId: project.id, path: sample, text: sampleLines(editor.document, 2, 4), startLine: 2, endLine: 4, app: vscode.env.appName },
@@ -629,12 +634,13 @@ const steps: Step[] = [
       assert.deepEqual(file, { type: "frizz:compose", item: { projectId: project.id, path: b, app: vscode.env.appName }, target: "front", focus: true })
 
       editor.selection = new vscode.Selection(2, 1, 2, 1)
-      const events = api.sidebar().events.length
+      await sleep(300)
       const before = await received()
+      const outcomes = added().length
       await pagePosts({ type: "frizz:add-context", what: "selection" })
       await pagePosts({ type: "frizz:add-context", what: "file", path: join(workspace, "src", "gone.ts") })
-      await until("both answered", () => api.sidebar().events.length >= events + 2)
-      assert.deepEqual(api.sidebar().events.slice(events).map((event) => event.outcome), ["nothing selected", "missing"])
+      await until("both answered", () => added().length >= outcomes + 2)
+      assert.deepEqual(added().slice(outcomes), ["nothing selected", "missing"])
       assert.deepEqual(await pageReceived("frizz:compose", before), [])
     },
   },
@@ -648,8 +654,11 @@ const steps: Step[] = [
       await sleep(500)
       const from = await received()
       await press(chord)
-      await until("the chip in the page", async () => (await pageReceived("frizz:compose", from)).length === 1, 15_000)
-      const [compose] = await pageReceived("frizz:compose", from)
+      await until("the chip in the page", async () => (await pageReceived("frizz:compose", from)).length > 0, 15_000)
+      await sleep(300)
+      const composes = await pageReceived("frizz:compose", from)
+      assert.equal(composes.length, 1, "one press, one chip")
+      const [compose] = composes
       assert.deepEqual({ ...compose, id: undefined }, {
         type: "frizz:compose",
         id: undefined,
@@ -928,8 +937,16 @@ export async function run(): Promise<void> {
 
   const failures: string[] = []
   try {
+    // FRIZZ_E2E_ONLY=<part of a step's name> runs just those steps; the sidebar steps lean on a sidebar the
+    // earlier ones opened, so it is opened for them first.
+    const only = process.env.FRIZZ_E2E_ONLY
+    if (only && mode === "fake") {
+      await vscode.commands.executeCommand("frizz.sidebar.focus")
+      await until("the sidebar's page ready", () => api.sidebar().ready, 30_000)
+    }
     for (const step of steps) {
       if (!step.modes.includes(mode)) continue
+      if (only && !step.name.includes(only)) continue
       try {
         await step.run({ api, project, rpc })
         console.log(`  ✔ ${step.name}`)
