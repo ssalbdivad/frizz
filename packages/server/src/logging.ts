@@ -327,6 +327,33 @@ export function ambientLogger(): Logger {
   return ambient
 }
 
+/**
+ * The logger a top-level Frizz entry point installs once it knows its project: ADOPT the run file a
+ * parent named in the environment (a re-exec'd supervisor, a forked child), or OWN a fresh one beside
+ * the project's state. Installed as the ambient logger, with the `--debug` terminal mirror attached.
+ *
+ * Every entry point needs exactly this, and one that skips it logs NOWHERE: `ambientLogger()` invents
+ * no file for a process nobody configured (that is what keeps unit tests off the operator's disk), so
+ * the records simply fall on the floor. `packages/server/src/dev.ts` — what `nub run dev` ran until
+ * 2026-10-01 — never called it, so the maintainer's own dev board left no log behind (on 2026-10-01
+ * the newest file in its logs dir was from 2026-09-23) and every supervisor and server record it
+ * emitted was dropped. Taking the decision here keeps the entry points from re-deriving it, and gives it a test.
+ */
+export function openRunLogger(
+  stateDir: string,
+  options: { env?: NodeJS.ProcessEnv; debug?: boolean } = {},
+): Logger {
+  const env = options.env ?? process.env
+  const inherited = env[LOG_FILE_ENV]?.trim()
+  const logger = setAmbientLogger(
+    inherited
+      ? createLogger({ file: inherited, owner: false })
+      : createLogger({ file: runLogPath(stateDir, new Date(), process.pid, homedir(), env) }),
+  )
+  attachTerminalMirror(logger, options.debug ?? env.FRIZZ_DEBUG === "1")
+  return logger
+}
+
 /** Environment additions that make a forked child log into this run's file. */
 export function logEnvironment(logger: Logger, level: LogLevel = "debug"): NodeJS.ProcessEnv {
   return logger.file ? { [LOG_FILE_ENV]: logger.file, [LOG_LEVEL_ENV]: level } : {}

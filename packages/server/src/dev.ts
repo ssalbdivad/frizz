@@ -1,6 +1,7 @@
 // Dev entry: a durable source watcher supervising a disposable API + Vite control-plane child.
 // Run with `nub packages/server/src/dev.ts` from ui/. Worker daemons remain independent.
 import { DEFAULT_PORT } from "@frizz/shared"
+import { logEnvironment, openRunLogger } from "./logging.ts"
 import { projectFromLaunchTarget, projectLaunchTarget, resolveProject } from "./project.ts"
 import {
   acquireProjectLaunchOwner,
@@ -22,11 +23,27 @@ if (process.env.FRIZZ_DEV_CHILD === "1") {
   const inheritedTarget = projectLaunchTargetFromEnvironment(process.env)
   const inheritedToken = projectLaunchOwnerTokenFromEnvironment(process.env)
   const project = inheritedTarget && inheritedToken ? projectFromLaunchTarget(inheritedTarget) : resolveProject()
+  // The run log, opened as soon as the project (and so its state dir) is known. This entry used to
+  // install no logger at all, so every supervisor and control-plane record went nowhere — the child
+  // adopts the file through FRIZZ_LOG_FILE in launchEnv, the same mechanism the launchers use
+  // (logging.ts `openRunLogger`).
+  const debug = process.env.FRIZZ_DEBUG === "1"
+  const logger = openRunLogger(project.stateDir, { debug })
   const target = projectLaunchTarget(project)
-  const launchOwner = inheritedToken
-    ? adoptProjectLaunchOwner(target, inheritedToken, "supervisor")
-    : acquireProjectLaunchOwner(target, "supervisor")
-  const launchEnv = projectLaunchEnvironment(process.env, target, launchOwner.token)
+  let launchOwner: ReturnType<typeof acquireProjectLaunchOwner>
+  try {
+    launchOwner = inheritedToken
+      ? adoptProjectLaunchOwner(target, inheritedToken, "supervisor")
+      : acquireProjectLaunchOwner(target, "supervisor")
+  } catch (error) {
+    logger.error("launcher", `could not take the project launch lock: ${error instanceof Error ? error.message : error}`)
+    throw error
+  }
+  const launchEnv = {
+    ...projectLaunchEnvironment(process.env, target, launchOwner.token),
+    ...logEnvironment(logger, debug ? "debug" : "info"),
+  }
+  logger.info("launcher", `dev supervisor starting for ${project.dir}`)
   const { createSupervisorShutdownHandler, startDevSupervisor } = await import("./dev-supervisor.ts")
 
   let supervisor: Awaited<ReturnType<typeof startDevSupervisor>>
@@ -53,12 +70,14 @@ if (process.env.FRIZZ_DEV_CHILD === "1") {
     })
     boot = await supervisor.firstBoot
   } catch (error) {
+    logger.error("launcher", `startup failed: ${error instanceof Error ? error.stack ?? error.message : error}`)
     launchOwner.release()
     throw error
   }
   // Say where the board is once it answers. Without this line the last thing in the terminal was
-  // Vite's "bundling dependencies…", so a server that had been ready for minutes looked hung.
-  console.log(`[frizz] ready at http://127.0.0.1:${boot.port}/`)
+  // Vite's "bundling dependencies…", so a server that had been ready for minutes looked hung. The log
+  // path rides along because this terminal shows almost nothing else; the file has the whole feed.
+  console.log(`[frizz] ready at http://127.0.0.1:${boot.port}/${logger.file ? ` — log: ${logger.file}` : ""}`)
 
   const stop = createSupervisorShutdownHandler({
     close: () => supervisor.close(),
