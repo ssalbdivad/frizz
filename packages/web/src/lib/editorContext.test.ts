@@ -1,7 +1,8 @@
 import assert from "node:assert/strict"
 import { test } from "node:test"
-import { ADD_CONTEXT_WINDOW_MS, contextBarReading, editorAddChord, editorContext, pendingBox, requestEditorContext, setEditorContext, takePendingAdd, type ContextBox } from "./editorContext.ts"
-import { contextChipLabel } from "./composerContext.ts"
+import { ADD_CONTEXT_WINDOW_MS, contextBarReading, editorAddChord, editorContext, outgoingMessage, outgoingMessageWith, pendingBox, requestEditorContext, setEditorContext, takePendingAdd, type ContextBox } from "./editorContext.ts"
+import { contextChipLabel, parseSentContext, parseSentEditorContext, type ComposerContextItem } from "./composerContext.ts"
+import { splitComposerValue } from "./imagePaths.ts"
 
 const file = { path: "/work/alpha/src/lib/r2-private.ts", label: "src/lib/r2-private.ts" }
 
@@ -52,4 +53,43 @@ test("the box is claimed once: a later compose goes where its own target says", 
   requestEditorContext(box, { what: "file", path: "/w/a.ts" })
   assert.equal(takePendingAdd(), box)
   assert.equal(takePendingAdd(), null)
+})
+
+// ── the send ───────────────────────────────────────────────────────────────────────────────────────
+
+const chip: ComposerContextItem = { id: 1, token: "@r2-private.ts:91-116", path: file.path, text: "const sig = sign(key, body)", startLine: 91, endLine: 116 }
+
+test("a send carries the selection after the human's words and chips, before the attachments", () => {
+  const active = { ...file, selection: { startLine: 91, endLine: 92, chars: 40, text: "const sig = sign(key, body)\nreturn sig" } }
+  const sent = outgoingMessageWith("why does this throw?\n/tmp/a.png", [], "/work/alpha", active)
+  const { prose, attachments } = splitComposerValue(sent)
+  assert.deepEqual(attachments, [{ path: "/tmp/a.png", kind: "image" }])
+  const parsed = parseSentEditorContext(prose)
+  assert.equal(parsed?.body, "why does this throw?")
+  assert.deepEqual(parsed?.editor, { kind: "selection", display: "src/lib/r2-private.ts", startLine: 91, endLine: 92, text: "const sig = sign(key, body)\nreturn sig" })
+  // No editor in front: the chips' message, exactly.
+  assert.equal(outgoingMessageWith("plain words", [], "/work/alpha", null), "plain words")
+})
+
+test("a chip on the selection already says it; a chip whose token was deleted does not", () => {
+  const active = { ...file, selection: { startLine: 91, endLine: 116, chars: 30, text: "const sig = sign(key, body)" } }
+  const covered = outgoingMessageWith("@r2-private.ts:91-116 is this right?", [chip], "/work/alpha", active)
+  assert.equal(parseSentEditorContext(covered), null, "no editor block beside the chip that carries it")
+  assert.deepEqual(parseSentContext(covered)?.items.map((item) => item.token), ["@r2-private.ts:91-116"])
+  // The token was backspaced out of the prose: that chip does not serialize, so the editor block goes.
+  const uncovered = outgoingMessageWith("is this right?", [chip], "/work/alpha", active)
+  assert.equal(parseSentEditorContext(uncovered)?.editor.kind, "selection")
+  assert.equal(parseSentContext(parseSentEditorContext(uncovered)!.body), null)
+})
+
+test("with nothing selected the send names the file and the caret's line, no file content", () => {
+  const sent = outgoingMessageWith("what is this file for?", [], "/work/alpha", { ...file, cursorLine: 40 })
+  assert.equal(sent.endsWith("\n\nOpen in the editor: src/lib/r2-private.ts (cursor on line 40)"), true, sent)
+})
+
+test("outside an editor's sidebar nothing is attached, whatever the editor state says", () => {
+  // Under plain node the page is not embedded, which is the browser tab's case: the chips alone go.
+  setEditorContext({ type: "frizz:editor-context", active: { ...file, selection: { startLine: 1, endLine: 1, chars: 1, text: "x" } }, open: [] })
+  assert.equal(outgoingMessage("hello", [], "/work/alpha", true), "hello")
+  setEditorContext({ type: "frizz:editor-context", active: null, open: [] })
 })

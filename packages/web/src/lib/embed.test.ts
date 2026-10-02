@@ -69,6 +69,14 @@ test("host messages are accepted in the contract's shapes only", () => {
   assert.deepEqual(parseHostMessage(context), context)
   assert.deepEqual(parseHostMessage({ ...context, active: { ...file, extra: 1 } }), { ...context, active: file })
   assert.deepEqual(parseHostMessage({ type: "frizz:editor-context", active: null, open: [] }), { type: "frizz:editor-context", active: null, open: [] })
+  // The selection's text, which a sidebar send carries, up to the feed's ceiling; the caret's line beside no selection.
+  const withText = { ...context, active: { ...file, selection: { startLine: 3, endLine: 9, chars: 120, text: "const a = 1\nconst b = 2" } } }
+  assert.deepEqual(parseHostMessage(withText), withText)
+  const atCeiling = { ...context, active: { ...file, selection: { startLine: 3, endLine: 9, chars: 16 * 1024, text: "x".repeat(16 * 1024) } } }
+  assert.deepEqual(parseHostMessage(atCeiling), atCeiling)
+  assert.deepEqual(parseHostMessage({ ...context, active: { ...file, cursorLine: 40 } }), { ...context, active: { ...file, cursorLine: 40 } })
+  // A caret line beside a selection is not the contract's, and is dropped (the selection's lines say where).
+  assert.deepEqual(parseHostMessage({ ...context, active: { ...file, cursorLine: 40, selection: context.active.selection } }), context)
   for (const command of ["new-thread", "queue", "jump", "settings"]) assert.deepEqual(parseHostMessage({ type: "frizz:command", command }), { type: "frizz:command", command })
 
   const refused: unknown[] = [
@@ -98,6 +106,10 @@ test("host messages are accepted in the contract's shapes only", () => {
     { ...context, active: { ...file, selection: { startLine: 9, endLine: 3, chars: 1 } } },
     { ...context, active: { ...file, selection: { startLine: 3, endLine: 9, chars: 0 } } },
     { ...context, active: { ...file, selection: { startLine: 3, chars: 4 } } },
+    { ...context, active: { ...file, selection: { startLine: 3, endLine: 9, chars: 4, text: 7 } } },
+    { ...context, active: { ...file, selection: { startLine: 3, endLine: 9, chars: 4, text: "x".repeat(16 * 1024 + 1) } } },
+    { ...context, active: { ...file, cursorLine: 0 } },
+    { ...context, active: { ...file, cursorLine: "40" } },
     { type: "frizz:command", command: "close" },
     { type: "frizz:command" },
   ]

@@ -1,13 +1,13 @@
 // THE EDITOR, AS THE SIDEBAR SEES IT — the pure half of what the extension tells the Frizz sidebar about
-// the editor around it (`frizz:editor-context`: the file in front, its selection, the other open files) and
-// of the ways a piece of the editor gets into the sidebar's prompt (a problem's quick fix, a terminal
-// selection). No `vscode` here, so every rule is a unit test under plain node (editor-context.test.ts);
-// context-feed.ts and app.ts are the glue. Design: plans/vscode-extension.md § The editor in the sidebar;
-// the wire: packages/shared/src/embed-protocol.ts.
+// the editor around it (`frizz:editor-context`: the file in front, its selection with the selection's text
+// or else the caret's line, the other open files) and of the ways a piece of the editor gets into the
+// sidebar's prompt (a problem's quick fix, a terminal selection). No `vscode` here, so every rule is a
+// unit test under plain node (editor-context.test.ts); context-feed.ts and app.ts are the glue. Design:
+// plans/vscode-extension.md § The editor in the sidebar; the wire: packages/shared/src/embed-protocol.ts.
 
 import { basename, isAbsolute } from "node:path"
 import { EDITOR_MAX_PATH } from "@frizz/shared/editor-protocol"
-import { EMBED_MAX_NOTE, EMBED_MAX_OPEN_FILES, type EmbedEditorContextMessage, type EmbedEditorFile, type EmbedEditorSelection } from "@frizz/shared/embed-protocol"
+import { EMBED_MAX_NOTE, EMBED_MAX_OPEN_FILES, EMBED_MAX_SELECTION_TEXT, type EmbedEditorContextMessage, type EmbedEditorFile, type EmbedEditorSelection } from "@frizz/shared/embed-protocol"
 import { composable, normalizeNewlines } from "./message.ts"
 
 /** A position as VS Code holds one: 0-based line and character. */
@@ -28,17 +28,23 @@ export function lineSpan(start: Position, end: Position): { startLine: number; e
 }
 
 /**
- * What the context bar says is selected: the PRIMARY selection's lines — the one a chip would carry — and
- * the characters selected across every selection (multi-cursor counts each). Undefined when the primary
- * selection is empty: a caret is not a selection, and the bar then names the file alone. `chars` is the
- * editor's own count (offset of the end less offset of the start), never the text: the text crosses only
- * when the human adds it.
+ * What the context bar says is selected, and what a send from the sidebar carries: the PRIMARY selection's
+ * lines — the one a chip would carry — and its text, and the characters selected across every selection
+ * (multi-cursor counts each). Undefined when the primary selection is empty: a caret is not a selection,
+ * and the bar then names the file alone. `chars` is the editor's own count (offset of the end less offset
+ * of the start).
+ *
+ * `read` gives the primary selection's text, and is asked only when the primary's own count is within
+ * EMBED_MAX_SELECTION_TEXT — a select-all on a large file is never read on every caret move just to be
+ * thrown away. Newlines are normalized to `\n` (the page's quote splits on it); a CRLF file can therefore
+ * come in under the ceiling after its count did not, and goes as its lines alone, which is the safe side.
  */
-export function editorSelection(selections: readonly { start: Position; end: Position; chars: number }[]): EmbedEditorSelection | undefined {
+export function editorSelection(selections: readonly { start: Position; end: Position; chars: number }[], read?: () => string): EmbedEditorSelection | undefined {
   const primary = selections[0]
   if (!primary || primary.chars <= 0) return undefined
   const chars = selections.reduce((sum, selection) => sum + Math.max(0, selection.chars), 0)
-  return { ...lineSpan(primary.start, primary.end), chars }
+  const text = read && primary.chars <= EMBED_MAX_SELECTION_TEXT ? normalizeNewlines(read()) : undefined
+  return { ...lineSpan(primary.start, primary.end), chars, ...(text !== undefined && text.length <= EMBED_MAX_SELECTION_TEXT ? { text } : {}) }
 }
 
 /**
@@ -99,12 +105,20 @@ export function openFiles(tabs: readonly string[], active: string | undefined, r
   return recency.sort(unique).slice(0, EMBED_MAX_OPEN_FILES)
 }
 
-/** The message, with every file in the contract's shape: a label clipped to the ceiling, a projectId only when one matched. */
-export function editorContextMessage(active: (EmbedEditorFile & { selection?: EmbedEditorSelection }) | null, open: readonly EmbedEditorFile[]): EmbedEditorContextMessage {
+/**
+ * The message, with every file in the contract's shape: a label clipped to the ceiling, a projectId only
+ * when one matched, the selection's own fields and no others (its text only within the ceiling), and the
+ * caret's line only where nothing is selected.
+ */
+export function editorContextMessage(active: EmbedEditorContextMessage["active"], open: readonly EmbedEditorFile[]): EmbedEditorContextMessage {
   const file = ({ path, label, projectId }: EmbedEditorFile): EmbedEditorFile => ({ path, label: label.slice(0, EDITOR_MAX_PATH), ...(projectId ? { projectId } : {}) })
+  const selection = ({ startLine, endLine, chars, text }: EmbedEditorSelection): EmbedEditorSelection =>
+    ({ startLine, endLine, chars, ...(text !== undefined && text.length <= EMBED_MAX_SELECTION_TEXT ? { text } : {}) })
+  const where = (entry: NonNullable<EmbedEditorContextMessage["active"]>) =>
+    entry.selection ? { selection: selection(entry.selection) } : entry.cursorLine !== undefined && entry.cursorLine >= 1 ? { cursorLine: entry.cursorLine } : {}
   return {
     type: "frizz:editor-context",
-    active: active && sendable(active.path) ? { ...file(active), ...(active.selection ? { selection: active.selection } : {}) } : null,
+    active: active && sendable(active.path) ? { ...file(active), ...where(active) } : null,
     open: open.filter((entry) => sendable(entry.path)).slice(0, EMBED_MAX_OPEN_FILES).map(file),
   }
 }

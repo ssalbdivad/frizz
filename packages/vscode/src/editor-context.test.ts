@@ -1,7 +1,7 @@
 import { test } from "node:test"
 import assert from "node:assert/strict"
 import { EDITOR_MAX_PATH } from "@frizz/shared/editor-protocol"
-import { EMBED_MAX_NOTE, EMBED_MAX_OPEN_FILES } from "@frizz/shared/embed-protocol"
+import { EMBED_MAX_NOTE, EMBED_MAX_OPEN_FILES, EMBED_MAX_SELECTION_TEXT } from "@frizz/shared/embed-protocol"
 import { editorContextMessage, editorSelection, fileLabel, fixNote, fixTitle, lineSpan, openFiles, Recency, terminalText } from "./editor-context.ts"
 import { QUOTE_MAX_LINES } from "./message.ts"
 
@@ -28,6 +28,21 @@ test("the bar's selection is the primary selection's lines and every selection's
   })
   // A secondary selection alone does not make one: the chip would carry the empty primary.
   assert.equal(editorSelection([{ start: at(5, 2), end: at(5, 2), chars: 0 }, { start: at(0, 0), end: at(0, 3), chars: 3 }]), undefined)
+})
+
+test("the selection carries the primary's text, newlines as \\n, and none past the feed's ceiling — unread", () => {
+  const one = [{ start: at(1, 0), end: at(3, 0), chars: 24 }]
+  assert.deepEqual(editorSelection(one, () => "  let total = 0\r\n  for\r\n"), { startLine: 2, endLine: 3, chars: 24, text: "  let total = 0\n  for\n" })
+  // Multi-cursor: the primary's text only, whatever the others hold.
+  assert.deepEqual(editorSelection([{ start: at(5, 2), end: at(5, 9), chars: 7 }, { start: at(0, 0), end: at(0, 3), chars: 3 }], () => "primary"), { startLine: 6, endLine: 6, chars: 10, text: "primary" })
+  // At the ceiling it is read and carried; one character past it the editor is not even asked.
+  const atCeiling = [{ start: at(0, 0), end: at(400, 0), chars: EMBED_MAX_SELECTION_TEXT }]
+  assert.equal(editorSelection(atCeiling, () => "x".repeat(EMBED_MAX_SELECTION_TEXT))?.text?.length, EMBED_MAX_SELECTION_TEXT)
+  const past = [{ start: at(0, 0), end: at(400, 0), chars: EMBED_MAX_SELECTION_TEXT + 1 }]
+  assert.deepEqual(editorSelection(past, () => assert.fail("a selection past the ceiling is read")), { startLine: 1, endLine: 400, chars: EMBED_MAX_SELECTION_TEXT + 1 })
+  // The secondary selections' characters do not count against it: the primary's text is what goes.
+  const many = [{ start: at(0, 0), end: at(0, 5), chars: 5 }, { start: at(1, 0), end: at(900, 0), chars: EMBED_MAX_SELECTION_TEXT * 3 }]
+  assert.equal(editorSelection(many, () => "first")?.text, "first")
 })
 
 test("a file's label is its workspace-relative path, else its name, never empty", () => {
@@ -65,7 +80,7 @@ test("recency forgets past its limit and moves a file to the front each time it 
   assert.deepEqual(recency.sort(["/a", "/c", "/b"]), ["/b", "/c", "/a"])
 })
 
-test("the message carries paths, labels, projects and lines, in the contract's shape, and never text", () => {
+test("the message carries paths, labels, projects and lines, in the contract's shape, and no field it does not name", () => {
   const message = editorContextMessage(
     { path: "/r/src/a.ts", label: "src/a.ts", projectId: "p1", selection: { startLine: 2, endLine: 4, chars: 30 } },
     [{ path: "/r/b.ts", label: "b.ts" }, { path: "/r/c.ts", label: "c.ts", projectId: "" }],
@@ -77,9 +92,22 @@ test("the message carries paths, labels, projects and lines, in the contract's s
   })
   assert.deepEqual(editorContextMessage(null, []), { type: "frizz:editor-context", active: null, open: [] })
   assert.deepEqual(editorContextMessage({ path: "", label: "x" }, []).active, null)
-  // Extra fields a caller had on hand do not ride along.
+  // Extra fields a caller had on hand do not ride along — on the file, or on its selection.
   const leaky = editorContextMessage({ path: "/r/a.ts", label: "a.ts", text: "secret" } as never, [])
   assert.equal(JSON.stringify(leaky).includes("secret"), false)
+  const leakySelection = editorContextMessage({ path: "/r/a.ts", label: "a.ts", selection: { startLine: 1, endLine: 1, chars: 2, extra: "secret" } } as never, [])
+  assert.deepEqual(leakySelection.active, { path: "/r/a.ts", label: "a.ts", selection: { startLine: 1, endLine: 1, chars: 2 } })
+})
+
+test("the message carries the selection's text within the ceiling, and the caret's line only with nothing selected", () => {
+  const selection = { startLine: 2, endLine: 3, chars: 9, text: "let a = 1" }
+  assert.deepEqual(editorContextMessage({ path: "/r/a.ts", label: "a.ts", selection }, []).active, { path: "/r/a.ts", label: "a.ts", selection })
+  const huge = { startLine: 1, endLine: 900, chars: EMBED_MAX_SELECTION_TEXT + 1, text: "x".repeat(EMBED_MAX_SELECTION_TEXT + 1) }
+  assert.deepEqual(editorContextMessage({ path: "/r/a.ts", label: "a.ts", selection: huge }, []).active?.selection, { startLine: 1, endLine: 900, chars: EMBED_MAX_SELECTION_TEXT + 1 })
+  assert.deepEqual(editorContextMessage({ path: "/r/a.ts", label: "a.ts", cursorLine: 40 }, []).active, { path: "/r/a.ts", label: "a.ts", cursorLine: 40 })
+  // Beside a selection the caret's line is not sent: the selection's lines say where the human is.
+  assert.deepEqual(editorContextMessage({ path: "/r/a.ts", label: "a.ts", cursorLine: 40, selection }, []).active, { path: "/r/a.ts", label: "a.ts", selection })
+  assert.deepEqual(editorContextMessage({ path: "/r/a.ts", label: "a.ts", cursorLine: 0 }, []).active, { path: "/r/a.ts", label: "a.ts" })
 })
 
 test("the fix note reads as the Problems panel spells the problem, one line, bounded", () => {

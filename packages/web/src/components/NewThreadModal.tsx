@@ -18,7 +18,8 @@ import { dispatchProfileGroups } from "../lib/dispatchPreferences.ts"
 import { useDispatchProfile, useDraftDispatchPick } from "../hooks/useDispatchProfile.ts"
 import { handleDialogEscape } from "../lib/selectOverlay.ts"
 import { draftKey, draftStore, useDraft, useProjectDir } from "../lib/drafts.ts"
-import { buildMessageWithContext, type ComposerContextItem } from "../lib/composerContext.ts"
+import type { ComposerContextItem } from "../lib/composerContext.ts"
+import { outgoingMessage } from "../lib/editorContext.ts"
 import { restoreContextItems, stagedItems, takeContextItems, useStagedContextSources, useStagedContextTokens } from "../lib/stagedContext.ts"
 import { projectSlug } from "../lib/base-path.ts"
 import { parseAccountAlias } from "../lib/signIn.ts"
@@ -189,7 +190,9 @@ function PromptForm({
   function submitLazy() {
     if (!prompt.trim() || !resolved || savingSettings || parseAccountAlias(prompt)) return
     const input: CreateLazyThreadInput = {
-      prompt: buildMessageWithContext(prompt, [...stagedItems(promptKey)], projectDir).trim(),
+      // The chips, and in an editor's sidebar what the editor has in front as the note is written down —
+      // the lazy thread starts on its note as it stands (lib/editorContext.ts outgoingMessage).
+      prompt: outgoingMessage(prompt, stagedItems(promptKey), projectDir, true).trim(),
       // The pick rides along: it is what the lazy thread starts on when it is launched, unless changed then.
       model: resolved.model,
       backend: resolved.backend,
@@ -245,7 +248,10 @@ function PromptForm({
       return
     }
     const input: DispatchInput = {
-      prompt: buildMessageWithContext(prompt, [...stagedItems(promptKey)], projectDir).trim(),
+      // The chips, and in an editor's sidebar what the editor has in front at THIS Enter
+      // (lib/editorContext.ts outgoingMessage). Built here, once: a dispatch the sign-in gate holds runs
+      // with this input after the sign-in, so it carries what the human saw when they pressed Enter.
+      prompt: outgoingMessage(prompt, stagedItems(promptKey), projectDir, true).trim(),
       // No permissionMode: the server stamps every created worker itself (workerDispatchPermission —
       // the non-interactive floor, raised to bypass only when Settings asks). Dispatch offers no
       // per-thread permission choice; the "Permissions" control behind the Claude Code gear in the model

@@ -1,13 +1,17 @@
 // THE EDITOR'S LIVE CONTEXT, FED TO THE SIDEBAR — `frizz:editor-context` (packages/shared/src/
-// embed-protocol.ts): the text editor in front and its selection, and the other files open in tabs, posted
-// to the sidebar's page whenever it is ready and they change, so its context bar can say what an add would
-// carry before the human adds it. Paths and line numbers only; the text crosses on `frizz:add-context`
-// (app.ts). The rules — lines, labels, order, the cap — are pure, in editor-context.ts; this is the glue.
+// embed-protocol.ts): the text editor in front, its selection with the primary selection's text (or the
+// caret's line, with nothing selected), and the other files open in tabs, posted to the sidebar's page
+// whenever it is ready and they change. The page's context bar shows it, and a message sent from the
+// sidebar carries the selection, or the file and line, unless the human turned that off (the bar's eye;
+// packages/web/src/lib/editorContext.ts outgoingMessage). The text is in the feed rather than fetched at
+// send so Enter sends at once. The rules — lines, labels, order, the caps — are pure, in
+// editor-context.ts; this is the glue.
 //
 // When it sends: once the moment the page says it is ready (a reloaded page knows nothing), and again on
-// a change of the active editor, its selection or the tab set, after DEBOUNCE_MS of quiet — a drag across
-// forty lines is one message, not forty. A payload identical to the last one sent is not sent again, and
-// nothing is sent while no page is ready.
+// a change of the active editor, its selection or caret line, the selected text itself (an edit under a
+// held selection: the agent working on that file) or the tab set, after DEBOUNCE_MS of quiet — a drag
+// across forty lines is one message, not forty. A payload identical to the last one sent is not sent
+// again — typing on one line changes nothing the feed says — and nothing is sent while no page is ready.
 //
 // Only `import type` from vscode, like app.ts.
 
@@ -85,8 +89,12 @@ export function registerContextFeed(api: Vscode, context: vscode.ExtensionContex
     let active: Parameters<typeof editorContextMessage>[0] = null
     if (editor) {
       const document = editor.document
-      const selection = editorSelection(editor.selections.map((each) => ({ start: each.start, end: each.end, chars: document.offsetAt(each.end) - document.offsetAt(each.start) })))
-      active = { ...describe(activePath!), ...(selection ? { selection } : {}) }
+      const primary = editor.selection
+      const selection = editorSelection(
+        editor.selections.map((each) => ({ start: each.start, end: each.end, chars: document.offsetAt(each.end) - document.offsetAt(each.start) })),
+        () => document.getText(primary),
+      )
+      active = { ...describe(activePath!), ...(selection ? { selection } : { cursorLine: primary.active.line + 1 }) }
     }
     return editorContextMessage(active, openFiles(tabPaths(), activePath, recency).map(describe))
   }
@@ -131,6 +139,13 @@ export function registerContextFeed(api: Vscode, context: vscode.ExtensionContex
     }),
     api.window.onDidChangeTextEditorSelection((event) => {
       if (event.textEditor === api.window.activeTextEditor) schedule()
+    }),
+    // The selected text changed under a selection the human is holding — an agent editing that very file,
+    // a format on save — with no selection event to say so. Without a selection there is no text in the
+    // feed to go stale, and typing would only rebuild the same message.
+    api.workspace.onDidChangeTextDocument((event) => {
+      const editor = api.window.activeTextEditor
+      if (editor && event.document === editor.document && !editor.selection.isEmpty) schedule()
     }),
     api.window.tabGroups.onDidChangeTabs(() => schedule()),
     api.window.tabGroups.onDidChangeTabGroups(() => schedule()),

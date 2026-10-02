@@ -1,17 +1,24 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react"
-import { ChevronDown, FileCode2 } from "lucide-react"
+import { ChevronDown, Eye, EyeOff, FileCode2 } from "lucide-react"
+import { useSnapshot } from "valtio"
 import { embedded } from "../lib/embed.ts"
 import { barAdd, contextBarReading, editorAddChord, registerContextBar, requestEditorContext, useEditorContext, type ContextBox, type EditorContextState } from "../lib/editorContext.ts"
 import { detectPlatform } from "../lib/keybindings.ts"
 import { basename, dirnameLike } from "../lib/paths.ts"
+import { prefs } from "../lib/prefs.ts"
 import { Menu, MenuContent, MenuItem, MenuTrigger } from "./ui/Menu.tsx"
 
 // THE CONTEXT BAR — the top strip inside a prompt box in an editor's sidebar (plans/vscode-extension.md
 // § The editor in the sidebar). It shows what the editor around the sidebar has in front, live from
 // `frizz:editor-context` (lib/editorContext.ts): the file, and when code is selected, its range and size.
-// A click adds that as a chip in THIS box; the other open files are behind the control's chevron. It
-// shows paths and line numbers only, and adds nothing on its own: a chip in the box is the only way
-// context rides a message, exactly as in the browser.
+//
+// IT SAYS WHAT THE NEXT SEND CARRIES. A message sent from this box takes the selection with it — or, with
+// nothing selected, the file's name and the caret's line — as Claude Code's VS Code extension and Cursor
+// do (lib/editorContext.ts outgoingMessage), so the reading here is not a suggestion but the attachment
+// itself. The EYE before it turns that off and on (prefs.sendEditorContext, kept by the sidebar's frame):
+// off, the reading is struck through and dimmed, so whether the code is going is legible without hovering
+// anything. A click on the reading still adds it as a chip in THIS box, for the human who wants it placed
+// in their sentence; the other open files are behind the control's chevron.
 //
 // The prior art the maintainer pointed at, in this app's own vocabulary: Claude Code's VS Code extension
 // names the selection under its prompt ("26 lines selected"), Copilot Chat offers the current file as a
@@ -34,6 +41,7 @@ export function EditorContextBar({ box }: { box: ContextBox }) {
 
 function Bar({ box }: { box: ContextBox }) {
   const { active, open } = useEditorContext()
+  const sending = useSnapshot(prefs).sendEditorContext
   const reading = contextBarReading(active)
   const chord = useMemo(() => editorAddChord(detectPlatform()), [])
   // Registered by its strip, so ⌘I typed in this box presses it (lib/editorContext.ts addEditorContextByKey).
@@ -50,13 +58,19 @@ function Bar({ box }: { box: ContextBox }) {
     if (what) requestEditorContext(box, what)
   }
   // `inset-ring`, never `ring-inset`: that one is also a COLOUR utility here (theme.css --color-inset)
-  // and paints every edge in it (Composer's CONTEXT_PILL has the measurement).
-  const tone = selection
+  // and paints every edge in it (Composer's CONTEXT_PILL has the measurement). Not sending, the reading
+  // takes the quiet outline whatever is selected: the accent says "this goes with your message", and it
+  // does not.
+  const lit = selection && sending
+  const tone = lit
     ? "bg-accent/12 text-accent inset-ring-accent/35"
-    : "text-muted inset-ring-border"
-  const hover = selection ? "hover:bg-accent/12" : "hover:bg-panel-2 hover:text-fg"
+    : sending ? "text-muted inset-ring-border" : "text-muted-55 inset-ring-border"
+  const hover = lit ? "hover:bg-accent/12" : "hover:bg-panel-2 hover:text-fg"
+  // Struck through, not hidden: the human still sees what is in front, and that it is staying behind.
+  const struck = sending ? "" : "line-through decoration-from-font"
   return (
-    <div ref={strip} data-editor-context-bar className="flex items-center gap-2 px-1.5 pt-1.5">
+    <div ref={strip} data-editor-context-bar data-editor-context-sending={reading ? String(sending) : undefined} className="flex items-center gap-2 px-1.5 pt-1.5">
+      {reading && <SendToggle sending={sending} selection={selection} />}
       <div data-editor-context-control className={`flex h-6 min-w-0 items-stretch rounded-md text-[11.5px] leading-6 inset-ring transition-colors ${tone} ${reading ? "max-w-full" : ""}`}>
         {reading && (
           <button
@@ -79,9 +93,9 @@ function Bar({ box }: { box: ContextBox }) {
                 size its dashed box reads as a smudge.) */}
             <FileCode2 aria-hidden size="1em" strokeWidth={2.25} className={MARK} />
             {/* The name truncates and the range does not: `very-long-na…:1204-1288` still says which lines. */}
-            <span className="min-w-0 truncate">{reading.name}</span>
-            {reading.range && <span className="-ml-1 shrink-0">{reading.range}</span>}
-            {reading.count && <span className="shrink-0 text-accent/70">{reading.count}</span>}
+            <span className={`min-w-0 truncate ${struck}`}>{reading.name}</span>
+            {reading.range && <span className={`-ml-1 shrink-0 ${struck}`}>{reading.range}</span>}
+            {reading.count && <span className={`shrink-0 ${lit ? "text-accent/70" : ""} ${struck}`}>{reading.count}</span>}
           </button>
         )}
         {reading && open.length > 0 && <span aria-hidden className="my-1.5 w-px shrink-0 bg-current opacity-20" />}
@@ -89,6 +103,37 @@ function Bar({ box }: { box: ContextBox }) {
       </div>
       {!selection && <Hint chord={chord} />}
     </div>
+  )
+}
+
+/**
+ * The eye: whether a send from this box carries what the editor has in front. Every box with a bar shares
+ * the one setting — it is a habit of how the human works beside this editor, not a choice per message, as
+ * Claude Code's toggle is — and it lasts across reloads of the sidebar. Its glyph shows the state (open:
+ * going; struck: staying behind); its tooltip says what a click will do.
+ */
+function SendToggle({ sending, selection }: { sending: boolean; selection: boolean }) {
+  const what = selection ? "the selected lines" : "the open file's name"
+  const title = sending ? `Don't send ${what} with your message` : "Send the editor selection with your message"
+  return (
+    <button
+      type="button"
+      data-editor-context-toggle
+      aria-pressed={sending}
+      aria-label="Send the editor selection with your message"
+      title={title}
+      // Keep the caret in the box: the human is mid-sentence, deciding what goes with it.
+      onMouseDown={(e) => e.preventDefault()}
+      onClick={() => {
+        prefs.sendEditorContext = !sending
+      }}
+      // A baseline row with a zero-width space, like the chevron's half of the control: the glyph then
+      // rides the reading's own baseline and sits on its cap band (MARK), rather than centred in a box.
+      className={`flex h-6 shrink-0 items-baseline rounded-md px-1 text-[11.5px] leading-6 transition-colors ${FOCUS} hover:bg-panel-2 hover:text-fg ${sending ? "text-muted" : "text-muted-55"}`}
+    >
+      <span aria-hidden>{"\u200b"}</span>
+      {sending ? <Eye aria-hidden size="1.1em" strokeWidth={2} className={MARK} /> : <EyeOff aria-hidden size="1.1em" strokeWidth={2} className={MARK} />}
+    </button>
   )
 }
 

@@ -533,7 +533,7 @@ const steps: Step[] = [
   },
   // ── the editor in the sidebar ───────────────────────────────────────────────────────────────────────
   {
-    name: "the page is told the editor's context: the file in front, its selection's lines and characters, the other open files most recent first, never the text",
+    name: "the page is told the editor's context: the file in front, its selection's lines, characters and text (or the caret's line), the other open files most recent first",
     modes: ["fake"],
     async run({ api, project }) {
       const a = workspaceFile("a.ts")
@@ -548,16 +548,28 @@ const steps: Step[] = [
       const document = editor.document
       const chars = document.offsetAt(new vscode.Position(3, 0)) - document.offsetAt(new vscode.Position(1, 0))
       const file = (path: string, label: string) => ({ path, label, projectId: project.id })
-      const want = { type: "frizz:editor-context", active: { ...file(sample, "src/sample.ts"), selection: { startLine: 2, endLine: 3, chars } }, open: [file(b, "src/b.ts"), file(a, "src/a.ts")] }
+      // The text a send from the sidebar would quote: lines 2-3 as the editor has them, with their newline.
+      const text = document.getText(new vscode.Range(1, 0, 3, 0)).replace(/\r\n?/gu, "\n")
+      assert.ok(text.includes("let total = 0") && text.includes("for (const x of xs)"), text)
+      const want = { type: "frizz:editor-context", active: { ...file(sample, "src/sample.ts"), selection: { startLine: 2, endLine: 3, chars, text } }, open: [file(b, "src/b.ts"), file(a, "src/a.ts")] }
       await until("lines 2-3 of the sample in front, with b.ts and a.ts open", async () => isDeepStrictEqual((await contexts()).at(-1), want)).catch(async (error: unknown) => {
         assert.deepEqual((await contexts()).at(-1), want)
         throw error
       })
       assert.deepEqual(api.editorContext(), want)
 
-      // Multi-cursor: the primary selection's lines, every selection's characters.
+      // Multi-cursor: the primary selection's lines and text, every selection's characters.
       editor.selections = [new vscode.Selection(4, 2, 4, 7), new vscode.Selection(0, 0, 0, 6)]
-      await until("line 5, 11 characters", async () => isDeepStrictEqual((await contexts()).at(-1)?.active?.selection, { startLine: 5, endLine: 5, chars: 11 }))
+      await until("line 5, 11 characters", async () => isDeepStrictEqual((await contexts()).at(-1)?.active?.selection, { startLine: 5, endLine: 5, chars: 11, text: "} // " }))
+
+      // A caret: no selection, and the caret's line instead — then a line further down is a new message.
+      editor.selection = new vscode.Selection(5, 3, 5, 3)
+      await until("the caret on line 6", async () => {
+        const last = (await contexts()).at(-1)?.active
+        return last?.cursorLine === 6 && last.selection === undefined
+      })
+      editor.selection = new vscode.Selection(2, 0, 2, 0)
+      await until("the caret on line 3", async () => (await contexts()).at(-1)?.active?.cursorLine === 3)
 
       // a.ts in a second group too: still listed once, and first, being the most recent.
       await vscode.window.showTextDocument(await vscode.workspace.openTextDocument(a), { viewColumn: vscode.ViewColumn.Two, preview: false })
@@ -576,9 +588,10 @@ const steps: Step[] = [
       await vscode.commands.executeCommand("vscode.diff", vscode.Uri.file(a), vscode.Uri.file(b), "a.ts ↔ b.ts")
       await until("a diff is no file", async () => (await contexts()).at(-1)?.active === null)
 
-      // Every message the page was told: paths and lines, never a line of the code.
+      // The text the page is told is the SELECTION's, never a file's: no message carried line 1 or line 7,
+      // which no selection above took in.
       const told = JSON.stringify(await contexts())
-      assert.ok(!told.includes("total") && !told.includes("export"), "no selected text reached the page")
+      assert.ok(!told.includes("export function sample") && !told.includes("return total"), "no unselected text reached the page")
       await vscode.commands.executeCommand("workbench.action.closeAllEditors")
     },
   },
