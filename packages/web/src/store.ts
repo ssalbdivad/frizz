@@ -25,6 +25,13 @@ import type { RestartAttempt } from "./api/restart.ts"
 export const QUEUE_CARD_VIEWPORT_TOP = 40
 
 export type ConnectionState = "connecting" | "open" | "closed"
+/** A cross-project thread open in flight — see `store.pendingOpen`. */
+export interface PendingOpen {
+  projectSlug: string
+  projectName: string
+  slug: string
+  title: string
+}
 export interface SocketPayloadFallback {
   actualBytes: number
   maxBytes: number
@@ -115,6 +122,12 @@ export const store = proxy({
   // The router parks the slug here and App resolves it the first render the board is authoritative
   // (see resolveRoutedThread). Parked slugs keep the address bar on /thread/<slug> meanwhile.
   routeThreadSlug: null as string | null,
+  // Another project's thread, clicked open from the queue and not yet drawn: its drawer cannot exist until
+  // the page has rebound to that project and its board has landed, which on a loaded machine took seconds
+  // (2026-10-01: ~5s on WSL for "Show earlier messages"). PendingThreadSheet draws the drawer's frame for
+  // it at once, and resolveRoutedThread hands over to the real drawer, already open, in the same commit.
+  // Deliberately NOT reset by resetProjectState: it is set on the way OUT of one project, for the next.
+  pendingOpen: null as PendingOpen | null,
   // The slug whose BOARD surface (thread drawer or queue card) is currently wearing
   // `view-transition-name: thread-chat`, so the /full page's thread column has somewhere to morph
   // back into when the fullscreen page is left for the board (browser Back, or the collapse icon).
@@ -303,11 +316,15 @@ export function resolveRoutedThread(): void {
   // drawer anyway opened an empty sheet over the page that said nothing and offered nothing.
   // The `/full` page already knows how to recover: <MissingThread> asks `threadLocate` which project
   // owns the slug and relocates there. Hand it over rather than growing a second copy of that.
+  // The frame PendingThreadSheet has been showing for this thread gives way to the real drawer in this
+  // same store write, so the real one must paint already open (`routed`) rather than slide in a second time.
+  const pending = store.pendingOpen?.slug === slug && store.pendingOpen.projectSlug === store.board.projectSlug
+  if (pending || route.kind === "missing") store.pendingOpen = null
   if (route.kind === "missing") {
     if (typeof location !== "undefined") location.replace(standaloneThreadHref(slug))
     return
   }
-  pushDrawer("thread", slug, { routed: !openedInPlace() })
+  pushDrawer("thread", slug, { routed: pending || !openedInPlace() })
 }
 
 // Navigation state for a thread opened IN PLACE by a click on the page — the cross-project page opening

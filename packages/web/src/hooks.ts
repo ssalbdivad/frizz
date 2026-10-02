@@ -1,9 +1,10 @@
 import { useEffect, useMemo, useRef, useState } from "react"
 import { useSnapshot } from "valtio"
 import { useQuery, useQueryClient, type QueryClient } from "@tanstack/react-query"
-import type { BackgroundShellOutputResult, BoardSnapshot, InteractionRecord, ThreadView, TranscriptMessage } from "@frizz/shared"
+import type { BackgroundShellOutputResult, BoardSnapshot, InteractionRecord, ThreadView, TranscriptMessage, TranscriptPage } from "@frizz/shared"
 import { store, threadBySlug } from "./store.ts"
-import { rpc } from "./api/rpc.ts"
+import { projectRpc, rpc } from "./api/rpc.ts"
+import { projectQueryKeyHash } from "./lib/queryKeyScope.ts"
 import { useThreadApi } from "./api/threadApi.tsx"
 import { retryTranscriptSocket, subscribeFile, subscribeTranscript, unsubscribeFile, unsubscribeTranscript } from "./api/socket.ts"
 import { mergeOptimistic, preserveMessageIdentity, isTranscriptStale, newestRenderedAt } from "./lib/transcript-sync.ts"
@@ -176,6 +177,35 @@ export function latestConfirmation(dataUpdatedAt: number | undefined, newestRend
   return new Date(at).toISOString()
 }
 
+// A fetched page folded into what the cache already holds — the one transform every read of
+// ["transcript", slug] goes through, so a prefetch lands exactly what the hook would have.
+function transcriptQueryData(prev: TranscriptData | undefined, res: TranscriptPage): TranscriptData {
+  const reconciled = reconcileLatestPage(prev as PaginatedTranscriptData | undefined, res)
+  return {
+    ...reconciled,
+    // preserveMessageIdentity: unchanged messages keep their previous object so memoized rows
+    // bail out of re-render — a refetch repaints only what actually changed.
+    messages: preserveMessageIdentity(
+      prev?.messages,
+      mergeOptimistic(prev?.messages, reconciled.messages as ChatMessage[]),
+    ),
+  }
+}
+
+/**
+ * Start reading ANOTHER project's thread before the page has moved to that project, so its drawer finds
+ * the transcript cached instead of asking for it once it mounts — the round trip then runs alongside the
+ * page's rebind rather than after it. The entry is written under that project's cache scope by name
+ * (queryKeyScope.ts hashes by the page's project, which at the click is still the one being left).
+ */
+export function prefetchProjectTranscript(qc: QueryClient, project: { id: string; slug: string }, slug: string): void {
+  void qc.prefetchQuery({
+    queryKey: ["transcript", slug],
+    queryKeyHashFn: (key) => projectQueryKeyHash(project.slug, key),
+    queryFn: async () => transcriptQueryData(undefined, await projectRpc(project.id).threadTranscript({ slug })),
+  })
+}
+
 export function useTranscript(slug: string, opts: { poll: boolean }) {
   const qc = useQueryClient()
   const snap = useSnapshot(store)
@@ -192,17 +222,7 @@ export function useTranscript(slug: string, opts: { poll: boolean }) {
     // Preserve optimistic sends across a poll refetch too (not just the socket push) — see mergeOptimistic.
     queryFn: async () => {
       const res = await rpc.threadTranscript({ slug })
-      const prev = qc.getQueryData<TranscriptData>(["transcript", slug])
-      const reconciled = reconcileLatestPage(prev as PaginatedTranscriptData | undefined, res)
-      return {
-        ...reconciled,
-        // preserveMessageIdentity: unchanged messages keep their previous object so memoized rows
-        // bail out of re-render — a refetch repaints only what actually changed.
-        messages: preserveMessageIdentity(
-          prev?.messages,
-          mergeOptimistic(prev?.messages, reconciled.messages as ChatMessage[]),
-        ),
-      }
+      return transcriptQueryData(qc.getQueryData<TranscriptData>(["transcript", slug]), res)
     },
     // A typed per-subscription transport rejection (logical overflow or aggregate read budget) never
     // interval-polls: keep the last complete copy visible and let the banner offer explicit one-shot

@@ -24,6 +24,7 @@ import { useLocation, useNavigate } from "react-router"
 import { questionsOwed, type AccountBackend, type ThreadView } from "@frizz/shared"
 import { projectApiBase, projectRpc } from "../api/rpc.ts"
 import { ThreadProjectScope } from "../api/threadApi.tsx"
+import { prefetchProjectTranscript } from "../hooks.ts"
 import { ThreadMenu, ThreadTerminalButton } from "./ThreadMenu.tsx"
 import { displayTitle, offersRetry, queueLabelAt, queueLabelWord } from "../groups.ts"
 import { useMentionCandidates, useOwnMention } from "../hooks/useMentionCandidates.ts"
@@ -154,11 +155,20 @@ export function crossProjectThreadHref(project: Pick<QueuesProject, "slug">, slu
  * project list opens one (`openThread`: the drawer animates in and the store writes the URL). Any other thread moves
  * the focus there by URL, which rebinds the page project and opens the drawer once its board lands
  * (routes.tsx CrossProjectPage → store.resolveRoutedThread).
+ *
+ * THAT DRAWER IS SECONDS AWAY, SO ITS FRAME IS NOT. The rebind re-renders the whole page for the new
+ * project and the drawer cannot exist until that project's board has landed: measured 2026-10-01 on a
+ * loaded WSL box, a click on "Show earlier messages" drew nothing for 4–6s, then the transcript 3s after
+ * that. So the click first puts the drawer's frame on screen (store.pendingOpen → PendingThreadSheet) and
+ * starts reading the transcript through the thread's own project, and only navigates once the frame has
+ * painted — the rebind's render would otherwise hold the frame's first paint hostage too. The real drawer
+ * takes the frame's place, already open, with the transcript waiting in the cache.
  */
-export function useOpenThreadInPlace(): (project: Pick<QueuesProject, "slug">, slug: string) => void {
+export function useOpenThreadInPlace(): (project: Pick<QueuesProject, "slug" | "id" | "name">, slug: string, title?: string) => void {
   const navigate = useNavigate()
+  const qc = useQueryClient()
   return useCallback(
-    (project, slug) => {
+    (project, slug, title) => {
       // The focus AS OF THE CLICK, read off the address bar — never the one this component last rendered
       // with. react-router renders a location change as a transition, and under load the page it leads to
       // took up to 1.8s to commit, so for that long the page on screen was the one BEFORE it, clickable,
@@ -167,10 +177,21 @@ export function useOpenThreadInPlace(): (project: Pick<QueuesProject, "slug">, s
       // address writer refused to name a board the page no longer owned, the rebind swept the drawer away,
       // and the click did nothing. The address has moved on the moment the router has, so it cannot lag.
       const focus = projectSlug()
-      if (project.slug === focus && store.board?.projectSlug === focus) openThread(slug)
-      else navigate(crossProjectThreadHref(project, slug), { state: IN_PLACE_OPEN_STATE })
+      if (project.slug === focus && store.board?.projectSlug === focus) {
+        openThread(slug)
+        return
+      }
+      const pending = { projectSlug: project.slug, projectName: project.name, slug, title: title ?? slug }
+      store.pendingOpen = pending
+      prefetchProjectTranscript(qc, project, slug)
+      // rAF runs before the frame's paint and a timeout queued from it after, so the navigation's render
+      // starts once the frame is on screen. An open closed or replaced in between never navigates.
+      requestAnimationFrame(() => window.setTimeout(() => {
+        if (store.pendingOpen?.slug !== pending.slug || store.pendingOpen.projectSlug !== pending.projectSlug) return
+        navigate(crossProjectThreadHref(project, slug), { state: IN_PLACE_OPEN_STATE })
+      }, 0))
     },
-    [navigate],
+    [navigate, qc],
   )
 }
 
@@ -289,14 +310,14 @@ export const AllQueuesCard = memo(function AllQueuesCard({
   // that project's); otherwise the thread's drawer carries it.
   const openProcess = (process: ThreadProcess) => {
     const here = focusedProject(project.slug)
-    openInPlace(project, thread.id)
+    openInPlace(project, thread.id, displayTitle(thread))
     if (here) openProcessDrawer(thread.id, process)
   }
 
   const openHere = (event: ReactMouseEvent<HTMLAnchorElement>) => {
     if (!isPlainLeftClick(event)) return
     event.preventDefault()
-    openInPlace(project, thread.id)
+    openInPlace(project, thread.id, displayTitle(thread))
   }
 
   return (
@@ -344,7 +365,7 @@ export const AllQueuesCard = memo(function AllQueuesCard({
                   lead={<span aria-hidden>·</span>}
                   resolve={(slug) => queueThread(project, slug)}
                   href={(slug) => crossProjectThreadHref(project, slug)}
-                  onOpen={(slug) => openInPlace(project, slug)}
+                  onOpen={(slug) => { const t = queueThread(project, slug); openInPlace(project, slug, t ? displayTitle(t) : undefined) }}
                 />
                 {/* What the thread is doing NOW, beside the name that stays put (ThreadStatusLine). */}
                 <ThreadStatusLine thread={thread} lead={<span aria-hidden>·</span>} />
@@ -430,7 +451,7 @@ export const AllQueuesCard = memo(function AllQueuesCard({
               ))}
               {/* A parent resting on its sub-agents states the batch in place of its fence (AwaitingSubAgentsCard). */}
               {parts?.fences.map((fence, index) => fence.kind === "awaiting" && drawsSubAgentWait
-                ? <AwaitingSubAgentsCard key={index} project={project} thread={thread} body={fence.body} openThread={() => openInPlace(project, thread.id)} onSnoozed={onLeave} onUndone={onUnsnoozed} />
+                ? <AwaitingSubAgentsCard key={index} project={project} thread={thread} body={fence.body} openThread={() => openInPlace(project, thread.id, displayTitle(thread))} onSnoozed={onLeave} onUndone={onUnsnoozed} />
                 : <FenceBody key={index} kind={fence.kind} body={fence.body} />)}
               {/* A DONE THE WORKER REGISTERED (`mcp__frizz__done`) rather than fenced — the sign-off the worker
                   contract now asks for first — is in no message, so the handoff text above carries no fence
@@ -494,7 +515,7 @@ export const AllQueuesCard = memo(function AllQueuesCard({
               thread={thread}
               api={api}
               agents={!drawsSubAgentWait}
-              onOpenThread={() => openInPlace(project, thread.id)}
+              onOpenThread={() => openInPlace(project, thread.id, displayTitle(thread))}
               after={cardProcesses(thread, Date.now()).length > 0 ? (
                 <div data-queue-processes={thread.id} className="min-w-0">
                   <ThreadProcessStrip thread={thread} surface="card" onOpen={openProcess} />
@@ -623,6 +644,7 @@ function RetryButton({ project, thread, onSent, onLanded, onFailed }: { project:
  */
 function ProjectLinkScope({ project, children }: { project: QueuesProject; children: ReactNode }) {
   const navigate = useNavigate()
+  const openInPlace = useOpenThreadInPlace()
   const { pathname } = useLocation()
   const onClickCapture = (event: ReactMouseEvent<HTMLDivElement>) => {
     if (event.button !== 0) return
@@ -656,6 +678,16 @@ function ProjectLinkScope({ project, children }: { project: QueuesProject; child
     // thread's /full, and the way out of that page looks its origin up by its own slug.
     const full = inner.match(/^\/thread\/([^/?#]+)\/full\/?$/)
     if (full) rememberFullscreenOrigin(decodeURIComponent(full[1]!), pathname)
+    // A thread of this card's own project — the card's "Show earlier messages" and title among them, which
+    // this capture reaches before their own handlers — opens through the one in-place verb, so its drawer's
+    // frame is up at the click rather than seconds later (useOpenThreadInPlace).
+    const thread = inner.match(/^\/thread\/([^/?#]+)\/?$/)
+    if (thread && linked === project.slug) {
+      const slug = decodeURIComponent(thread[1]!)
+      const t = queueThread(project, slug)
+      openInPlace(project, slug, t ? displayTitle(t) : undefined)
+      return
+    }
     navigate(inner.startsWith("/thread/") ? `${crossProjectHref(linked)}${inner}` : href)
   }
   return <div className="contents" onClickCapture={onClickCapture}>{children}</div>

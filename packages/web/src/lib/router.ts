@@ -37,6 +37,9 @@ function decodeSegment(segment: string): string | null {
 
 export function applyPath(path: string): void {
   const thread = path.match(/^\/thread\/([^/]+)$/)
+  // An address that is not the pending open's thread (Back, another thread) abandons that open.
+  const pendingSlug = store.pendingOpen?.slug
+  if (pendingSlug !== undefined && (!thread || decodeSegment(thread[1]) !== pendingSlug)) store.pendingOpen = null
   if (thread) {
     const slug = decodeSegment(thread[1])
     if (slug === null) {
