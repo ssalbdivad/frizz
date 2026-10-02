@@ -24,6 +24,12 @@
 //       real agent. FRIZZ_E2E_PAGE_CLAIMS=1 leaves the prompt-box insert for a real page open on that
 //       Frizz to claim, instead of taking it itself.
 //
+//   nub packages/vscode/scripts/e2e.ts --sidebar [--out=<dir>] [--dev] [--only=c1,c4]
+//       SIDEBAR mode: hands the run to scripts/e2e-sidebar.ts — the extension as its .vsix ships, the REAL
+//       Frizz page framed in the sidebar of a real VS Code, over a disposable two-project Frizz with a
+//       simulated worker, every seam crossed with trusted mouse and keyboard input, and screenshots of
+//       each state. Its header lists the checks and its flags.
+//
 // FRIZZ_E2E_KEEP=1 keeps the scratch folder (editor logs, the page's screenshot) even when the run passes.
 //
 // NEVER ON THE REAL DISPLAY. On Linux the run re-executes itself under `xvfb-run -a` with DISPLAY and
@@ -45,6 +51,12 @@ import { watchPageClaim, type PageClaimResult } from "../e2e/page-claim.ts"
 import { bootStack, freePort, type StackProject } from "../e2e/stack.ts"
 
 const pkg = resolve(dirname(fileURLToPath(import.meta.url)), "..")
+
+if (process.argv.includes("--sidebar")) {
+  const args = process.argv.slice(2).filter((arg) => arg !== "--sidebar")
+  const child = spawnSync("nub", [join(dirname(fileURLToPath(import.meta.url)), "e2e-sidebar.ts"), ...args], { stdio: "inherit" })
+  process.exit(child.status ?? 1)
+}
 
 if (process.platform === "linux" && process.env.FRIZZ_E2E_UNDER_XVFB !== "1") {
   const env: NodeJS.ProcessEnv = { ...process.env, FRIZZ_E2E_UNDER_XVFB: "1" }
