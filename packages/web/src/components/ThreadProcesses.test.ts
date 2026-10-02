@@ -297,7 +297,7 @@ test("the queue card draws the same strip under its reply box, and only the prom
   assert.match(card, /<TerminalPromptPane thread=\{thread\} onOpen=\{openProcess\} \/>/)
   assert.doesNotMatch(card, /QueueShellStrip|ThreadTerminalsStrip/, "no second strip for either owner")
   // A row opens the drawer only where the drawer stack is the card's own project's.
-  assert.match(card, /const openProcess = \(process: ThreadProcess\) => \{\s+const here = focusedProject\(project\.slug\)\s+openInPlace\(project, thread\.id\)\s+if \(here\) openProcessDrawer\(thread\.id, process\)/)
+  assert.match(card, /const openProcess = \(process: ThreadProcess\) => \{\s+const here = focusedProject\(project\.slug\)\s+openInPlace\(project, thread\.id, displayTitle\(thread\)\)\s+if \(here\) openProcessDrawer\(thread\.id, process\)/)
   assert.match(card, /<ThreadProcessStrip[^>]*onOpen=\{openProcess\}/)
   // The meta line carries the checkout token between the time and the status, as the drawer header does.
   const meta = card.slice(card.indexOf("<LastActive"), card.indexOf("<ThreadStatusLine"))

@@ -42,6 +42,12 @@ function devRenderScanScript(): Plugin {
 export default defineConfig({
   plugins: [react(), tailwindcss(), devRenderScanScript()],
   build: { outDir: "dist", emptyOutDir: true },
+  // react-scan reaches the page only through devRenderScanScript's injected <script>, which the
+  // dependency scanner never sees. Left to be discovered on the first page load, it re-bundled every
+  // dependency mid-load ("optimized dependencies changed. reloading") and the tab's in-flight imports
+  // 404ed on the chunk hashes that run had just deleted — "The file does not exist … in the optimize
+  // deps directory", on every cold cache (2026-10-01). Declared, it is bundled with the rest at boot.
+  optimizeDeps: { include: ["react-scan"] },
   // The dependency cache is per SERVER, never shared with a throwaway one. Every dev Vite rooted here
   // defaults to node_modules/.vite, and a disposable stack booted beside the maintainer's `npm run dev`
   // hashes its config differently, re-optimizes, and rewrites that directory under the live server. The

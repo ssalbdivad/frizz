@@ -1,7 +1,7 @@
 import assert from "node:assert/strict"
 import test from "node:test"
 import { QueryClient } from "@tanstack/react-query"
-import { projectScopedQueryKeyHash } from "./queryKeyScope.ts"
+import { projectQueryKeyHash, projectScopedQueryKeyHash } from "./queryKeyScope.ts"
 
 // These drive a REAL QueryClient rather than comparing hash strings, because the thing under test is
 // not the function — it is whether react-query's cache actually treats two projects' entries as
@@ -117,4 +117,19 @@ test("a save's machine settings reach every project's cached settings, and nothi
   assert.equal(alpha?.permissionMode, "auto", "a project's own setting is left where it was")
   const beta = withPathname("/all/beta/thread/x", () => qc.getQueryData<typeof base>(["settingsGet"]))
   assert.equal(beta?.permissionMode, "bypassPermissions", "the saving project's own entry is the save")
+})
+
+test("an entry written for a project by name is the one that project's page reads", async () => {
+  // hooks.ts prefetchProjectTranscript writes another project's transcript at the click, while the page is
+  // still bound to the project being left; the drawer reads it once the page has moved.
+  const qc = client()
+  await withPathname("/all/frizz", () =>
+    qc.prefetchQuery({ queryKey: ["transcript", "fix-auth"], queryKeyHashFn: (key) => projectQueryKeyHash("home", key), queryFn: () => ({ messages: ["prefetched"] }) }))
+  withPathname("/all/home/thread/fix-auth", () => {
+    assert.deepEqual(qc.getQueryData(["transcript", "fix-auth"]), { messages: ["prefetched"] })
+  })
+  withPathname("/all/frizz/thread/fix-auth", () => {
+    assert.equal(qc.getQueryData(["transcript", "fix-auth"]), undefined, "and only that project's page")
+  })
+  assert.equal(projectQueryKeyHash("home", ["projectsQueues"]), projectQueryKeyHash("frizz", ["projectsQueues"]), "machine-wide keys stay shared")
 })

@@ -33,6 +33,7 @@ import { existsSync, readFileSync, unlinkSync, writeFileSync } from "node:fs"
 import { dirname } from "node:path"
 import { StringDecoder } from "node:string_decoder"
 import { sweepStaleSockets } from "./stale-socket-sweep.ts"
+import { daemonBirthMarker } from "./daemon-identity.ts"
 
 interface DaemonConfig {
   threadSlug: string
@@ -260,6 +261,7 @@ function main(): void {
     toChild(message)
   }
 
+  const birthMarker = daemonBirthMarker()
   const writeRecord = (): void => {
     writeFileSync(config.recordPath, JSON.stringify({
       threadSlug: config.threadSlug,
@@ -269,6 +271,8 @@ function main(): void {
       childPid: child.pid,
       socketPath: config.socketPath,
       createdAt: new Date().toISOString(),
+      // So a host can tell this daemon from a stranger that later got its pid (daemon-identity.ts).
+      ...(birthMarker ? { processStart: birthMarker } : {}),
     }))
   }
 

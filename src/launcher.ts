@@ -322,6 +322,17 @@ export function prepareSandbox(env: NodeJS.ProcessEnv = process.env, realHome: s
   // real `$XDG_DATA_HOME/frizz`, and the cleanup on exit only removes the throwaway home (raised on
   // PR #43, 2026-09-23). A sandbox is a home that has never run Frizz, so it gets the platform defaults.
   for (const name of SANDBOX_DROPPED_XDG_ROOTS) delete env[name];
+  // The pinned Claude Code and Codex are a CACHE, not state: immutable, one directory per version,
+  // and guarded against a concurrent sweep by live-process leases (runtime-lease.ts), which is exactly
+  // how two real launches on one machine already share them. A sandbox that provisions its own lands
+  // them under the throwaway home and deletes them on exit, so EVERY sandbox launch downloaded both —
+  // 31s of claude and 11s of codex, 42s of the server's 44s start in the 623s sandbox launch logged
+  // 2026-10-01. Point it at the operator's copies, resolved under THEIR roots (XDG included), as
+  // scripts/adhoc-stack.mjs already does. An explicit FRIZZ_RUNTIMES / FRIZZ_RUNTIMES_DIR still wins:
+  // that is how a run that must exercise provisioning itself asks for it.
+  if (!inherited.FRIZZ_RUNTIMES && !inherited.FRIZZ_RUNTIMES_DIR) {
+    env.FRIZZ_RUNTIMES_DIR = join(frizzPaths({ home: realHome, env: inherited }).cache, "runtimes");
+  }
   // AFTER the scrub, so the sandbox end of every link is resolved the way the sandbox itself will
   // resolve it later. Sharing first and scrubbing second put the identity link at the XDG-resolved
   // path and then made the sandbox look under its own home: a link nothing read, and a throwaway key

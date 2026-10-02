@@ -8,6 +8,7 @@ function resetStore(): void {
   store.drawers = []
   store.routeThreadSlug = null
   store.board = null
+  store.pendingOpen = null
 }
 
 // A board carrying exactly the fields the routing decision reads.
@@ -43,6 +44,62 @@ test("a parked route for a QUEUED thread opens its drawer — a card on the page
   resolveRoutedThread()
   assert.equal(store.drawers.length, 1)
   assert.equal(store.drawers[0]?.slug, "queued-thread")
+})
+
+// A cross-project open from the queue: the click puts the drawer's FRAME up (store.pendingOpen) and moves
+// the address with `inPlace` navigation state, which on its own makes the drawer slide in.
+function withInPlaceHistory(body: () => void): void {
+  const previous = Object.getOwnPropertyDescriptor(globalThis, "history")
+  Object.defineProperty(globalThis, "history", { configurable: true, writable: true, value: { state: { usr: { inPlace: true } } } })
+  try {
+    body()
+  } finally {
+    if (previous) Object.defineProperty(globalThis, "history", previous)
+    else Reflect.deleteProperty(globalThis, "history")
+  }
+}
+
+test("an in-place open whose frame is already up paints its drawer open and retires the frame", () => {
+  withInPlaceHistory(() => {
+    // Negative control: an in-place open with NO frame up slides its drawer in, as it always has.
+    resetStore()
+    primeRoute("/thread/other")
+    store.board = { projectSlug: "home", threads: [{ id: "other", needsYou: false }] } as unknown as BoardSnapshot
+    resolveRoutedThread()
+    assert.equal(store.drawers[0]?.routed, false)
+
+    resetStore()
+    store.pendingOpen = { projectSlug: "home", projectName: "Home", slug: "wsl-cleanup", title: "WSL cleanup" }
+    primeRoute("/thread/wsl-cleanup")
+    assert.equal(store.pendingOpen?.slug, "wsl-cleanup", "its own address keeps the frame up")
+    store.board = { projectSlug: "home", threads: [{ id: "wsl-cleanup", needsYou: true }] } as unknown as BoardSnapshot
+    resolveRoutedThread()
+    // `routed`: the drawer takes the frame's place already open — a second slide-in would replay the open.
+    assert.deepEqual(store.drawers.map(({ slug, routed }) => ({ slug, routed })), [{ slug: "wsl-cleanup", routed: true }])
+    assert.equal(store.pendingOpen, null)
+  })
+})
+
+test("a frame for one project's thread is not taken by another project's same-named thread", () => {
+  withInPlaceHistory(() => {
+    resetStore()
+    store.pendingOpen = { projectSlug: "home", projectName: "Home", slug: "fix-auth", title: "Fix auth" }
+    primeRoute("/thread/fix-auth")
+    store.board = { projectSlug: "frizz", threads: [{ id: "fix-auth", needsYou: false }] } as unknown as BoardSnapshot
+    resolveRoutedThread()
+    assert.equal(store.drawers[0]?.routed, false)
+    assert.equal(store.pendingOpen?.projectSlug, "home")
+  })
+})
+
+test("an address other than the pending thread abandons its frame", () => {
+  resetStore()
+  store.pendingOpen = { projectSlug: "home", projectName: "Home", slug: "wsl-cleanup", title: "WSL cleanup" }
+  primeRoute("/thread/another")
+  assert.equal(store.pendingOpen, null, "another thread")
+  store.pendingOpen = { projectSlug: "home", projectName: "Home", slug: "wsl-cleanup", title: "WSL cleanup" }
+  primeRoute("/")
+  assert.equal(store.pendingOpen, null, "Back to the page")
 })
 
 test("resolveRoutedThread is inert without a board or a parked slug", () => {

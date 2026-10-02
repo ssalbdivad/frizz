@@ -22,6 +22,7 @@ import { dirname } from "node:path"
 import { StringDecoder } from "node:string_decoder"
 import { sweepStaleSockets } from "./stale-socket-sweep.ts"
 import { leaseRuntime } from "../runtime-lease.ts"
+import { daemonBirthMarker } from "./daemon-identity.ts"
 
 interface DaemonConfig {
   projectId: string
@@ -274,6 +275,7 @@ function main(): void {
 
   // The record is the daemon's readiness signal, published only once the socket is actually accepting
   // and the handshake is cached — so a client that finds a record can always be served immediately.
+  const birthMarker = daemonBirthMarker()
   const writeRecord = (): void => {
     writeFileSync(config.recordPath, JSON.stringify({
       projectId: config.projectId,
@@ -283,6 +285,8 @@ function main(): void {
       socketPath: config.socketPath,
       createdAt: new Date().toISOString(),
       ...(config.authAccountId ? { authAccountId: config.authAccountId } : {}),
+      // So a host can tell this daemon from a stranger that later got its pid (daemon-identity.ts).
+      ...(birthMarker ? { processStart: birthMarker } : {}),
     }))
   }
 

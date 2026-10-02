@@ -3411,6 +3411,10 @@ export const ThreadView = z.object({
   // thread reads `needsYou: false` meanwhile, but no hold stands any more — so nothing may read a park
   // into it (groups.isSnoozed), and its page keeps its handoff card.
   queueSettling: z.boolean().optional(),
+  // True while the ONLY thing queuing this thread is a reply to the human they have not read: it is
+  // parked on a wait it named, and once they have seen the reply it leaves the queue on its own. The
+  // card says so and offers "Mark as read" (board.ts queuedForReply).
+  queuedForReply: z.boolean().optional(),
   // True only for the crash/stall branch (pane exited while the transcript still says in-flight).
   // Once every ordinary rest also queues, runtime=exited + needsYou is no longer enough for clients
   // to distinguish a failed worker from a clean completed process.

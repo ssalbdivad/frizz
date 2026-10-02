@@ -972,6 +972,35 @@ export function publishFrizzArtifactStaging(
   return readFrizzArtifact(digest, root, { workerPluginClosure: false });
 }
 
+/**
+ * Prove the snapshot's exact bytes typecheck, as cheaply as the proof allows.
+ *
+ * The snapshot sits at a fresh path every build, so `tsc -b` there can never reuse a .tsbuildinfo:
+ * it is a cold check of all ten projects, and it was 555s of a 623s Update & Restart build measured
+ * on 2026-10-01. The checkout holds the SAME bytes (the capture refused to finish otherwise) and its
+ * own incremental build info, so the typecheck runs there first and counts only if the checkout's
+ * fingerprint still equals the snapshot's afterwards — every file the fingerprint covers, including
+ * uncommitted edits, so an edit made while it ran voids it. `.tsbuildinfo` and `dist` are outside the
+ * fingerprint, which is what lets tsc write them without voiding its own result.
+ *
+ * Anything short of that proof — the checkout failed (possibly on an edit made after the capture),
+ * or moved — falls back to the cold check of the snapshot itself, which stays the authority.
+ */
+function typecheckCapturedSource(
+  snapshot: FrizzSourceSnapshot,
+  runCommand: (args: string[], source: string) => void
+): void {
+  try {
+    if (relevantSourceFingerprint(snapshot.originalSourceDir) === snapshot.sourceFingerprint) {
+      runCommand(["run", "typecheck"], snapshot.originalSourceDir);
+      if (relevantSourceFingerprint(snapshot.originalSourceDir) === snapshot.sourceFingerprint) return;
+    }
+  } catch {
+    // Not proof of anything about the snapshot; the cold check below decides.
+  }
+  runCommand(["run", "typecheck"], snapshot.sourceDir);
+}
+
 export function buildFrizzArtifact(
   sourceDir: string,
   root = defaultArtifactRoot(),
@@ -994,7 +1023,7 @@ export function buildFrizzArtifact(
     // snapshot — not the mutable checkout before capture — so an intermediate edit with a missing
     // import can never become a valid immutable artifact and fail later as a browser global.
     options.onProgress?.("Type-checking captured Frizz source");
-    runCommand(["run", "typecheck"], source);
+    typecheckCapturedSource(snapshot, runCommand);
     options.onProgress?.("Building immutable artifact: web UI");
     runCommand(["run", "--filter", "@frizz/web", "build"], source);
     const webSource = join(source, "packages", "web", "dist");

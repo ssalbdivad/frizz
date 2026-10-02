@@ -98,14 +98,18 @@ export function spanUntil(at: string | undefined, nowMs = Date.now()): string | 
  * cannot answer "when exactly did this come out". An absolute reading also never needs to tick, so it
  * does not join `useNowMs`.
  */
+const STAMP_DATE = new Intl.DateTimeFormat([], { month: "short", day: "numeric" })
+const STAMP_DATE_YEAR = new Intl.DateTimeFormat([], { year: "numeric", month: "short", day: "numeric" })
+const STAMP_TIME = new Intl.DateTimeFormat([], { hour: "numeric", minute: "2-digit" })
+
 export function messageStamp(at: string | undefined, now: Date = new Date()): string | null {
   const ms = at ? Date.parse(at) : NaN
   if (!Number.isFinite(ms)) return null
   const when = new Date(ms)
-  const date = when.toLocaleDateString([], when.getFullYear() === now.getFullYear()
-    ? { month: "short", day: "numeric" }
-    : { year: "numeric", month: "short", day: "numeric" })
-  return `${date}, ${when.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })}`
+  // Formatters built once: `toLocaleDateString(…, options)` builds a fresh Intl.DateTimeFormat on every
+  // call, twice per message per render — 237ms of one drawer opening's main thread (2026-10-01 profile).
+  const date = (when.getFullYear() === now.getFullYear() ? STAMP_DATE : STAMP_DATE_YEAR).format(when)
+  return `${date}, ${STAMP_TIME.format(when)}`
 }
 
 /**

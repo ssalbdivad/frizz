@@ -50,13 +50,63 @@ export function defaultBrowserOpenCommand(
   throw new Error(`Opening the default browser is not supported on ${platform}`)
 }
 
+/**
+ * How long a URL handler may keep running before its silence counts as acceptance. `open` and
+ * `rundll32` return at once; `xdg-open` returns at once when a browser is already up, but when it has
+ * to START one it can run that browser in the FOREGROUND and not return until the browser quits.
+ */
+export const URL_HANDLER_ACCEPT_MS = 1_500
+
+/**
+ * Run the OS URL handler and settle as soon as its answer is known, WITHOUT waiting for it to exit
+ * and without ever killing it: resolve on exit 0, or once it has run for `acceptAfterMs` (it has
+ * handed the URL to a foreground browser); reject on a spawn failure or a nonzero exit inside that
+ * window (no handler registered, `xdg-open` exits 3/4).
+ *
+ * This was `execFile(…, { timeout: 10_000 })`. On the maintainer's WSL box, where `xdg-open` starts
+ * snap Firefox in the foreground, every launch that had to start the browser held the launcher for
+ * exactly ten seconds, then SIGTERMed `xdg-open` and reported "could not open the default browser" —
+ * while Firefox was already on screen. The rejection's message carried the opener's piped stderr,
+ * so the run log also took a dozen lines of snapd mount-namespace and GTK portal warnings each time
+ * (2026-09-23 logs: `started` at 13:34:00.147, the false failure at 13:34:10.151). stdio is ignored
+ * now: a browser that outlives us must not hold a pipe we would later close under it (a write to a
+ * closed pipe is SIGPIPE), and the opener's chatter is not ours to log.
+ */
+export function runUrlHandler(
+  command: string,
+  args: string[],
+  options: { acceptAfterMs?: number; spawn?: typeof spawn } = {},
+): Promise<string> {
+  const acceptAfterMs = options.acceptAfterMs ?? URL_HANDLER_ACCEPT_MS
+  return new Promise((resolve, reject) => {
+    let settled = false
+    let timer: ReturnType<typeof setTimeout> | undefined
+    const settle = (error?: Error) => {
+      if (settled) return
+      settled = true
+      if (timer) clearTimeout(timer)
+      // Never keep the launcher alive for a browser it merely asked to start.
+      child.unref()
+      if (error) reject(error)
+      else resolve("")
+    }
+    const child = (options.spawn ?? spawn)(command, args, { detached: true, stdio: "ignore", windowsHide: true })
+    child.once("error", (error) => settle(error))
+    child.once("exit", (code, signal) => {
+      if (code === 0) settle()
+      else settle(new Error(`${command} ${signal ? `was killed by ${signal}` : `exited with code ${code}`}`))
+    })
+    timer = setTimeout(() => settle(), acceptAfterMs)
+  })
+}
+
 /** Ask the OS default URL handler to open Frizz, and await acceptance of that request. */
 export async function launchBrowserTab(
   rawUrl: string,
   options: BrowserTabLaunchOptions = {},
 ): Promise<void> {
   const platform = options.platform ?? process.platform
-  const runCommand = options.runCommand ?? execFileP
+  const runCommand = options.runCommand ?? runUrlHandler
   const launch = defaultBrowserOpenCommand(rawUrl, platform)
   await runCommand(launch.command, launch.args)
 }

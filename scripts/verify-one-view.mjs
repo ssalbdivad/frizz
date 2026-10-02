@@ -226,7 +226,9 @@ try {
   // ── a project's row folds it; its counts open the rest ─────────────────────────────────────────────
   const rowsOf = (id) => page.$$eval(`[data-xq-rail-project="${id}"] [data-sidebar-item]`, (rows) => rows.length)
   await step("a project's row folds away everything under it, and only in the list", async () => {
-    const busy = await page.$$eval("[data-xq-rail-project]", (groups) => groups.find((g) => g.querySelector("[data-sidebar-item]"))?.getAttribute("data-xq-rail-project"))
+    // One with work in flight: a project with nothing Ready or Working — at most its pins — opens the rest
+    // instead of folding (ProjectList.tsx ProjectRow).
+    const busy = await page.$$eval("[data-xq-rail-project]", (groups) => groups.find((g) => g.querySelector('[data-xq-band="ready"], [data-xq-band="working"]'))?.getAttribute("data-xq-rail-project"))
     if (!busy) throw new Error("no project lists any rows to fold")
     const before = await rowsOf(busy)
     const cards = await page.$$eval("[data-xq-card]", (c) => c.length)

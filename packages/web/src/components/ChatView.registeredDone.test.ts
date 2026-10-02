@@ -29,8 +29,10 @@ test("the card is the last rung of the one ladder, after the resting card", () =
     /if \(showsRestingCard\(thread\)\) return "resting"\n\s*if \(registeredDone\) return "registered-done"\n\s*if \(restedCard\) return "rested"\n\s*return null/,
     "the resting card, then the registered done, then the residual rung, then nothing",
   )
-  // …and each of those rungs draws its own card, in the one renderer both paths call.
-  assert.match(chat, /case "registered-done":\n\s*return <FenceCard fenceKind="done" body=\{thread!\.lastFence!\.body\} hints=\{\[\]\} \/>/)
+  // …and each of those rungs draws its own card, in the one renderer both paths call. The done card's
+  // body goes through registeredDoneBody, which drops the ledger once the human has written past it
+  // (292eb6f3) — a raw `lastFence.body` here would redraw the full summary under every follow-up answer.
+  assert.match(chat, /case "registered-done":\n\s*return <FenceCard fenceKind="done" body=\{registeredDoneBody\(thread!\.lastFence!\)\} hints=\{\[\]\} \/>/)
   assert.match(chat, /case "rested":\n\s*return <RestedCard thread=\{thread!\} \/>/)
 })
 

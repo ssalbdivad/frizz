@@ -631,6 +631,16 @@ a[href] {
     transform: translateY(0) scale(1);
   }
 }
+/* PendingThreadSheet's slide-in: the drawer family's 200ms translate, as an animation so it starts on the
+   frame's first paint without a second render (see that component). */
+@keyframes frizz-sheet-in {
+  from {
+    transform: translateX(100%);
+  }
+  to {
+    transform: translateX(0);
+  }
+}
 @keyframes overlay-in {
   from {
     opacity: 0;

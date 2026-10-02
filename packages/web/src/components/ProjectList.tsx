@@ -51,7 +51,7 @@ import { useSnapshot } from "valtio"
 import type { BoardSnapshot, ProjectCard, ThreadView } from "@frizz/shared"
 import { rpc } from "../api/rpc.ts"
 import { ThreadProjectScope } from "../api/threadApi.tsx"
-import { externalThreads, isPinned, queued, sectionThreads } from "../groups.ts"
+import { displayTitle, externalThreads, isPinned, queued, sectionThreads } from "../groups.ts"
 import { useBoard } from "../hooks.ts"
 import { threadKey, type QueuesProject } from "../lib/allQueues.ts"
 import { projectSlug } from "../lib/base-path.ts"
@@ -703,12 +703,13 @@ function useRowScope(project: QueuesProject, page: boolean, onQueuedRow: (key: s
   const openInPlace = useOpenThreadInPlace()
   const slug = project.slug
   const id = project.id
+  const name = project.name
   const open = useCallback(
     (t: ThreadView) => {
       if (queued(t) && onQueuedRow(threadKey(id, t.id)) !== null) return
-      openInPlace({ slug }, t.id)
+      openInPlace({ slug, id, name }, t.id, displayTitle(t))
     },
-    [id, slug, onQueuedRow, openInPlace],
+    [id, slug, name, onQueuedRow, openInPlace],
   )
   return useMemo(() => ({ open, page }), [open, page])
 }
@@ -1022,9 +1023,13 @@ function MoreRow({
   const more = closed.reduce((sum, band) => sum + quietCount(quiet, band), 0) + unpaged
   const less = opened.length > 0
   if (more === 0 && !less) return null
-  const action = "flex h-[19px] items-center gap-1 rounded px-1 -mx-1 outline-none transition-colors hover:bg-hover-strong hover:text-fg/80 focus-visible:ring-1 focus-visible:ring-focus-ink-60"
+  // The chevron paints 5.5 of its 11 box px, so its box starts 2px left of the titles' column (pl-42, not
+  // 44) to put its INK on the titles' ink, and sits 1px from its words for a ~4px ink gap; gap-1 drew 7px.
+  // Vertically it sits on its words' cap band the way the row's counts do (QuietToggles): box-centred, it
+  // read 1px low (sans, 11px). Both chevrons' ink is symmetric in the box, so the box centre is the ink's.
+  const action = "flex h-[19px] items-baseline gap-px rounded px-1 -mx-1 outline-none transition-colors hover:bg-hover-strong hover:text-fg/80 focus-visible:ring-1 focus-visible:ring-focus-ink-60"
   return (
-    <div data-xq-more={project.id} className="flex items-center gap-3 py-0.5 pl-[44px] pr-1.5 text-[11px] leading-[19px] text-muted-55">
+    <div data-xq-more={project.id} className="flex items-center gap-3 py-0.5 pl-[42px] pr-1.5 text-[11px] leading-[19px] text-muted-55">
       {more > 0 && (
         <button
           type="button"
@@ -1037,7 +1042,9 @@ function MoreRow({
             else onMore()
           }}
         >
-          <ChevronDown aria-hidden size={11} />
+          <span aria-hidden className="flex self-baseline translate-y-[calc(5.5px_-_0.5cap)]">
+            <ChevronDown size={11} />
+          </span>
           <span className="tabular-nums">{more} more</span>
         </button>
       )}
@@ -1052,7 +1059,9 @@ function MoreRow({
             onLess()
           }}
         >
-          <ChevronUp aria-hidden size={11} />
+          <span aria-hidden className="flex self-baseline translate-y-[calc(5.5px_-_0.5cap)]">
+            <ChevronUp size={11} />
+          </span>
           Show less
         </button>
       )}

@@ -7,9 +7,10 @@ import { accessSync, constants as fsConstants, mkdirSync, readFileSync, readdirS
 import { basename, delimiter, dirname, isAbsolute, join } from "node:path"
 import { resolveDetachedDaemonEntry } from "../detached-daemons.ts"
 import type { BrokerRecord, ClaudeBrokerConfig } from "./claude-agent-broker.ts"
-import { claudeBrokerDiagnosticLogPath, describeClaudeBrokerExit, readClaudeBrokerExit } from "./claude-broker-diagnostics.ts"
+import { claudeBrokerDiagnosticLogPath, describeClaudeBrokerExit, readClaudeBrokerExit, recordClaudeBrokerTermination, type ClaudeBrokerTerminationCause } from "./claude-broker-diagnostics.ts"
 import { endDaemonTree, type EndDaemonTreeDeps } from "./daemon-tree.ts"
 import { frizzIpcPath } from "./ipc-path.ts"
+import { recordedDaemonIsLive } from "./daemon-identity.ts"
 import type { WorkerMcpServers } from "./project-mcp-servers.ts"
 import { launchEnvironment } from "./worker-env.ts"
 
@@ -141,6 +142,10 @@ export function liveBrokerRecordListed(recordPath: string): BrokerRecord | null 
  *   - `hibernate`     — the thread has rested past the idle threshold and its memory was reclaimed.
  *                       See thread-hibernation.ts. */
 export type BrokerRetirementReason = "retire" | "fresh-process" | "hibernate"
+const RETIREMENT_REASONS: readonly string[] = ["retire", "fresh-process", "hibernate"] satisfies BrokerRetirementReason[]
+function isRetirement(cause: ClaudeBrokerTerminationCause | undefined): cause is BrokerRetirementReason {
+  return cause !== undefined && RETIREMENT_REASONS.includes(cause)
+}
 
 /** The breadcrumb one intentional teardown leaves for the cold resume that follows it. */
 export interface BrokerRetirementMark {
@@ -220,7 +225,9 @@ function rememberBrokerIdentity(recordPath: string, record: BrokerRecord): void 
 /** A record whose daemon is still alive; prunes a stale record as a side effect. */
 export function liveBrokerRecord(recordPath: string): BrokerRecord | null {
   const record = readBrokerRecord(recordPath)
-  if (record && pidAlive(record.daemonPid)) return record
+  // The pid AND its birth (daemon-identity.ts): after a reboot a stale record's pid can belong to a
+  // stranger, which `killBroker` would SIGTERM on Stop and the hibernation sweep would retire.
+  if (record && recordedDaemonIsLive(record.daemonPid, record.processStart, pidAlive)) return record
   if (record) { rememberBrokerIdentity(recordPath, record); try { unlinkSync(recordPath) } catch {} }
   return null
 }
@@ -317,7 +324,10 @@ export function forkBroker(options: ForkBrokerOptions): Promise<BrokerRecord> {
     }
     const poll = () => {
       const record = readBrokerRecord(recordPath)
-      if (record && pidAlive(record.daemonPid)) return settle(() => resolve(record))
+      // THIS fork's record, by generation. Any other record at this path is a predecessor's — dead, or
+      // a stranger on a reused pid — and resolving on it would hand the bridge a daemon that is not the
+      // one just spawned (adoptOrForkBroker prunes first, but this function is exported on its own).
+      if (record && record.generation === generation && pidAlive(record.daemonPid)) return settle(() => resolve(record))
       if (Date.now() > deadline) {
         // A daemon that died AND wrote its exit record is named here too: the deadline path is what
         // an operator sees when the exit event was missed (a frizz restart between fork and death).
@@ -365,24 +375,32 @@ export async function adoptOrForkBroker(options: ForkBrokerOptions): Promise<{ r
 /** Best-effort terminate: SIGTERM the daemon and drop its record. Detach (client.close) is NOT this.
  *  Returns whether a live daemon record was present (i.e. there was something to stop).
  *
- *  `retireReason` says this teardown is one frizz CHOSE while keeping the conversation, and leaves the
- *  mark that stops the cold resume behind it being reported to the operator as a crash. Omit it for a
- *  teardown that ends the session itself (a stop, a completion, a replaced session): there is no later
- *  resume to explain, and no death to suppress — and any mark an EARLIER retirement left is void, so
- *  this clears it rather than leaving a promise of a resume that is never coming. The mark is written
- *  BEFORE the signal so a frizz that dies mid-teardown still leaves the truth on disk.
+ *  `cause` is why, and it is written into the daemon's diagnostics log BEFORE the signal (see
+ *  ClaudeBrokerTerminationRecord): the daemon's own breadcrumb can only ever say `signal-SIGTERM`.
+ *
+ *  A RETIREMENT cause (`retire` / `fresh-process` / `hibernate`) says this teardown is one frizz CHOSE
+ *  while keeping the conversation, and also leaves the mark that stops the cold resume behind it being
+ *  reported to the operator as a crash. Any other cause ends the session itself (a stop, a completion,
+ *  a replaced session): there is no later resume to explain, and no death to suppress — and any mark an
+ *  EARLIER retirement left is void, so this clears it rather than leaving a promise of a resume that is
+ *  never coming. The mark is written BEFORE the signal so a frizz that dies mid-teardown still leaves
+ *  the truth on disk.
  *
  *  The signal goes through endDaemonTree (daemon-tree.ts): SIGTERM on POSIX, where the daemon's own
  *  handler and the SDK's exit cleanup end `claude` under it, and `taskkill /T /F` on Windows, where a
  *  signal is TerminateProcess of the daemon ALONE and `claude.exe` kept running its turn — tools
  *  executing, files changing — behind a card that read stopped (Windows audit 2026-09-11, finding 5).
  *  `deps` is the seam a test routes through. */
-export function killBroker(stateDir: string, sessionId: string, retireReason?: BrokerRetirementReason, deps: EndDaemonTreeDeps = {}): boolean {
+export function killBroker(stateDir: string, sessionId: string, cause?: ClaudeBrokerTerminationCause, deps: EndDaemonTreeDeps = {}): boolean {
   const recordPath = claudeBrokerRecordPath(stateDir, sessionId)
   const record = liveBrokerRecord(recordPath)
-  if (retireReason) { if (record) markBrokerRetired(stateDir, sessionId, retireReason, record.generation) }
+  if (isRetirement(cause)) { if (record) markBrokerRetired(stateDir, sessionId, cause, record.generation) }
   else takeBrokerRetirement(stateDir, sessionId)
-  if (record) { rememberBrokerIdentity(recordPath, record); endDaemonTree(record.daemonPid, "SIGTERM", deps) }
+  if (record) {
+    recordClaudeBrokerTermination(claudeBrokerDiagnosticLogPath(stateDir, sessionId), { daemonPid: record.daemonPid, generation: record.generation }, cause ?? "unspecified")
+    rememberBrokerIdentity(recordPath, record)
+    endDaemonTree(record.daemonPid, "SIGTERM", deps)
+  }
   try { unlinkSync(recordPath) } catch {}
   return record !== null
 }

@@ -4,7 +4,7 @@ import { lstatSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, w
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { questionAnswerMessage, questionsCancelledWakeMessage, type InteractionRequest } from "@frizz/shared"
-import { ANSWER_IN_FLIGHT_EXCUSAL_MS, SIGNOFF_NUDGE_EXCUSAL_MS, DELIVERY_IN_FLIGHT_SPIN_MS, answerAwaitingDelivery, deriveDeliveryInFlight, answersInFlight, appServerTurnStalled, createBoard, deriveAwaitingBackground, deriveNeedsYou, degradeIfAwaitingAnswer, degradeIfNoTranscript, fenceWatchViews, hasDeclaredWait, hasParkedTimerWatch, hasRegisteredBackgroundPark, isBoardRelevantFrizzPath, registeredDoneFence, replyUnseen, resolveLimitPause, returnedSubAgentsView, resolveSessionPermission, resolveSessionProfile, resolveSessionTitle, stampShellBudgets, type RegisteredWatch, QUIET_TURN_MS, quietTurnSince } from "./board.ts"
+import { ANSWER_IN_FLIGHT_EXCUSAL_MS, SIGNOFF_NUDGE_EXCUSAL_MS, DELIVERY_IN_FLIGHT_SPIN_MS, answerAwaitingDelivery, deriveDeliveryInFlight, answersInFlight, appServerTurnStalled, createBoard, deriveAwaitingBackground, deriveNeedsYou, degradeIfAwaitingAnswer, degradeIfNoTranscript, fenceWatchViews, hasDeclaredWait, hasParkedTimerWatch, hasRegisteredBackgroundPark, isBoardRelevantFrizzPath, registeredDoneFence, queuedOnlyForReply, replyUnseen, resolveLimitPause, returnedSubAgentsView, resolveSessionPermission, resolveSessionProfile, resolveSessionTitle, stampShellBudgets, type RegisteredWatch, QUIET_TURN_MS, quietTurnSince } from "./board.ts"
 import { Bus } from "./bus.ts"
 import { SETTLE_MS } from "./queue-clock.ts"
 import { createStorage, type ThreadQuestionRow } from "./storage.ts"
@@ -2830,6 +2830,13 @@ test("deriveNeedsYou: a park that answers the human queues until they have seen 
   const childPark = park({ subAgents: [running], lastFence: { kind: "awaiting", body: "", hints: [{ kind: "agent", value: "toolu_c" }, { kind: "for", value: "1h" }] } })
   assert.equal(needs(row({ rested_at: ANSWERED }), childPark), false, "a running sub-agent still parks it")
   assert.equal(replyUnseen(row(), park()), true)
+  // The card's "Replied" + Mark as read: only while the unread reply is the whole reason it queues.
+  const only = (r: SessionRow, t: SessionTelemetry) => queuedOnlyForReply(r, t, now, (x) => needs(x, t))
+  assert.equal(only(row({ rested_at: ANSWERED }), park()), true, "parked, queued for the reply alone")
+  assert.equal(only(row({ rested_at: ANSWERED, seen_at: ANSWERED }), park()), false, "seen: not queued at all")
+  const bare = park({ lastFence: undefined })
+  assert.equal(needs(row({ rested_at: ANSWERED }), bare), true, "a bare rest queues…")
+  assert.equal(only(row({ rested_at: ANSWERED }), bare), false, "…and reading it would not clear it, so it is not a reply-only card")
 })
 
 test("a done that stood through a prose reply is marked spoken-past, so its ledger is not redrawn in full", () => {
