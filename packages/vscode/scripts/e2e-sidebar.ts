@@ -285,8 +285,19 @@ async function clickHandle(handle: ElementHandle | null, what: string): Promise<
   await handle.evaluate((element) => (element as Element).scrollIntoView({ block: "nearest" }))
   const box = await handle.boundingBox()
   if (!box) throw new Error(`${what}: not visible`)
-  await page.mouse.click(box.x + box.width / 2, box.y + box.height / 2)
+  const x = box.x + box.width / 2
+  const y = box.y + box.height / 2
+  // What the WORKBENCH has under the point, for a click that never arrives where it was aimed: the webview's
+  // iframe when it is in place, and what holds the workbench's focus as the click goes in.
+  const under = await page.evaluate((px, py) => {
+    const el = document.elementFromPoint(px, py) as HTMLElement | null
+    return { hit: el ? `${el.tagName.toLowerCase()}.${String(el.className).slice(0, 50)}` : null, pointerEvents: el ? getComputedStyle(el).pointerEvents : null, active: `${document.activeElement?.tagName.toLowerCase()}.${String((document.activeElement as HTMLElement | null)?.className ?? "").slice(0, 40)}` }
+  }, x, y).catch(() => null)
+  clicks.push({ at: Date.now(), what, x: Math.round(x), y: Math.round(y), ...under })
+  if (clicks.length > 12) clicks.shift()
+  await page.mouse.click(x, y)
 }
+const clicks: Record<string, unknown>[] = []
 
 async function clickInPage(selector: string, what = selector): Promise<void> {
   const handles = await (await frame()).$$(selector)
@@ -388,6 +399,34 @@ const contextBar = (surface: "chatComposer" | "newComposer") =>
   }, surface)
 
 const drawerOpen = async () => (await box("chatComposer")) !== null
+
+/** The page's viewport and each enclosing document's: where a frame's layout and its box disagree. */
+async function frameGeometry() {
+  const out: Record<string, unknown> = {}
+  for (const { name, frame } of tracedFrames()) {
+    out[name] = await frame.evaluate(() => {
+      const child = document.querySelector("iframe")
+      const r = child?.getBoundingClientRect()
+      return {
+        inner: [innerWidth, innerHeight],
+        client: [document.documentElement.clientWidth, document.documentElement.scrollWidth],
+        scroll: [scrollX, document.documentElement.scrollLeft, document.body?.scrollLeft ?? 0],
+        visual: visualViewport ? [Math.round(visualViewport.offsetLeft), Math.round(visualViewport.width), visualViewport.scale] : null,
+        child: r ? [Math.round(r.x), Math.round(r.y), Math.round(r.width), Math.round(r.height)] : null,
+      }
+    }).catch((error) => String(error).slice(0, 80))
+  }
+  out.workbench = await page.evaluate(() => [...document.querySelectorAll<HTMLElement>("iframe.webview")].map((f) => { const r = f.getBoundingClientRect(); return [Math.round(r.x), Math.round(r.y), Math.round(r.width), Math.round(r.height), f.parentElement?.style.cssText.slice(0, 160)] }))
+  return out
+}
+
+/** Every drawer layer in the page's DOM: its id, where it is drawn, and its state. */
+const drawerLayers = () =>
+  inPage(() => [...document.querySelectorAll<HTMLElement>("[data-drawer-layer]")].map((el) => {
+    const r = el.getBoundingClientRect()
+    const style = getComputedStyle(el)
+    return { id: el.dataset.drawerLayer, x: Math.round(r.x), width: Math.round(r.width), state: el.dataset.state ?? null, shown: /translate-x-0/u.test(el.className), transform: style.transform, translate: style.translate, animations: el.getAnimations().map((a) => ({ kind: a.constructor.name, property: (a as CSSTransition).transitionProperty ?? null, playState: a.playState, currentTime: a.currentTime, pending: a.pending, startTime: a.startTime, timeline: document.timeline.currentTime })), visibility: document.visibilityState }
+  }))
 
 /** VS Code's title row over the sidebar: what it reads and the buttons it shows. */
 const titleRow = () =>
@@ -1130,8 +1169,11 @@ try {
     await sleep(2_000)
     await shot("c4-transcript-chip-w300")
     // The chip unfolds its quote, as in the browser.
+    notes.layersBeforeChip = await drawerLayers()
+    notes.geometryBeforeChip = await frameGeometry()
     await clickTextInPage("button[aria-expanded]", "sample.ts:2-3")
     const unfolded = await until(async () => (await inPage(() => document.body.innerText.includes("lines 2-3"))), 3_000)
+    if (!unfolded) notes.chipClick = { clicks: [...clicks], focus: await workbenchFocus(), layers: await drawerLayers(), chips: await inPage(() => [...document.querySelectorAll<HTMLElement>("button[aria-expanded]")].filter((b) => /sample\.ts:2-3/u.test(b.textContent ?? "")).map((b) => { const r = b.getBoundingClientRect(); return { x: Math.round(r.x), y: Math.round(r.y), layer: b.closest<HTMLElement>("[data-drawer-layer]")?.dataset.drawerLayer ?? null } })) }
     expect("c4", "the transcript's chip unfolds the lines it carried", unfolded)
     await shot("c4-transcript-chip-open-w300")
 
@@ -1153,7 +1195,7 @@ try {
     expect("c4", "clicking the context bar puts the same chip in the box", viaBar?.value.startsWith("@sample.ts:2-3") === true && !!viaBar.pills.some((pill) => pill.token === "@sample.ts:2-3"), viaBar)
     expect("c4", "…and leaves the caret after it, in the box", !!barCaret.box?.active && barCaret.box.frameFocused && barCaret.box.caret >= "@sample.ts:2-3".length, barCaret)
     if (!barCaret.box?.active) {
-      notes.barClickFocus = { after: barCaret, trace: await focusTraceSince(barAt) }
+      notes.barClickFocus = { after: barCaret, trace: await focusTraceSince(barAt), clicks: [...clicks] }
       // The human clicks into the box to go on.
       await clickInPage('textarea[data-surface="chatComposer"]')
       await press("End")
