@@ -166,9 +166,9 @@ export function Composer({
   // the caller owns the "is a follow-up actually queued behind a running turn" check, so with nothing
   // queued it returns false and the keypress keeps its default.
   onPushQueued?: () => boolean
-  // SAVE AS A LAZY THREAD — the new-thread box only (plans/lazy-threads.md). ⌘/Ctrl-Shift-Enter, and the quiet
-  // "add as lazy thread" hint in the footer while there is a draft, write the prompt down as a thread with no
-  // agent behind it instead of starting one.
+  // SAVE AS A LAZY THREAD — the new-thread box only (plans/lazy-threads.md). ⌘/Ctrl-Shift-Enter writes the prompt
+  // down as a thread with no agent behind it instead of starting one. It has no visible hint (removed
+  // 2026-10-01 at the maintainer's request); the chord is the only way in from the box.
   onSaveLazy?: () => void
   // WHICH PROJECT AN ATTACHMENT IS UPLOADED TO, when it is not the page's. Omitted, `apiBase()` — the
   // page project, which in a drawer or on /full is the thread's own. The cross-project page's queue
@@ -539,7 +539,6 @@ export function Composer({
 
   const hasContent = value.trim().length > 0
   const interruptChord = useMemo(() => (detectPlatform() === "mac" ? "⌘⏎" : "Ctrl+Enter"), [])
-  const lazyChord = useMemo(() => (detectPlatform() === "mac" ? "⌘⇧⏎" : "Ctrl+Shift+Enter"), [])
   // ONE rail slot. Reserving it must track what is actually rendered — the padding/offset classes below
   // key off `railAction`, and a truthy element that renders null would carve out an empty hole (the bug
   // GithubTrigger's `useGithubTriggerVisible` exists to prevent). Its only filler now is `leftAction`
@@ -879,22 +878,6 @@ export function Composer({
             <span data-composer-interrupt-hint className="ml-auto shrink-0 whitespace-nowrap text-[11px] text-muted-70">
               {interruptChord} to interrupt
             </span>
-          )}
-          {/* The lazy thread chord's visible trace, in the same slot and the same quiet type as the interrupt
-              hint (the two never share a box: one is the new-thread composer's, the other a running
-              thread's). It is a button as well as a hint, so the act is reachable without the chord. */}
-          {onSaveLazy && hasContent && !busy && (
-            <button
-              type="button"
-              data-composer-lazy-hint
-              onMouseDown={(e) => e.preventDefault()}
-              onClick={onSaveLazy}
-              disabled={uploading}
-              title="Save this as a lazy thread without starting an agent"
-              className="ml-auto shrink-0 whitespace-nowrap rounded text-[11px] text-muted-70 transition-colors hover:text-fg disabled:opacity-50"
-            >
-              {lazyChord} add as lazy thread
-            </button>
           )}
         </div>
       )}
