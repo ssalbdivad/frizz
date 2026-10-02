@@ -295,6 +295,68 @@ test("the editor's picture goes only to a Frizz whose welcome names it: on conne
   }
 })
 
+test("a window says it can show a thread's changes only to a Frizz that asks, and answers a review with its result", async () => {
+  // A Frizz from before the feature: its welcome does not name it, so the frame it would refuse never goes.
+  const old = await new FakeFrizz().listen()
+  const oldHost = makeHost(old)
+  oldHost.review = async () => ({ ok: true })
+  const oldConnection = new EditorConnection(oldHost, FAST)
+  try {
+    oldConnection.start()
+    await until("the welcome", () => oldConnection.status.kind === "connected")
+    await sleep(60)
+    assert.equal(old.of("features").length, 0)
+  } finally {
+    oldConnection.stop()
+    await old.close()
+  }
+
+  const frizz = await new FakeFrizz().listen()
+  frizz.features = ["editor-state", "review"]
+  const host = makeHost(frizz)
+  const asked: unknown[] = []
+  host.review = async (message) => {
+    asked.push(message)
+    return message.title === "refuse" ? { ok: false, error: "Nothing has changed in tidy yet." } : { ok: true }
+  }
+  const connection = new EditorConnection(host, FAST)
+  try {
+    connection.start()
+    await until("the features frame", () => frizz.of("features").length === 1)
+    assert.deepEqual(frizz.of("features")[0], { t: "features", features: ["review"] })
+    const target = { title: "Tidy", checkouts: [{ dir: "/home/me/repo/.frizz/worktrees/tidy", scope: "branch" as const, files: [] }] }
+    frizz.send(frizz.live, { t: "review", id: "r1", ...target })
+    await until("the result", () => frizz.of("result").length === 1)
+    assert.deepEqual(asked, [{ t: "review", id: "r1", ...target }])
+    assert.deepEqual(frizz.of("result")[0], { t: "result", id: "r1", ok: true })
+    frizz.send(frizz.live, { t: "review", id: "r2", ...target, title: "refuse" })
+    await until("the refusal", () => frizz.of("result").length === 2)
+    assert.deepEqual(frizz.of("result")[1], { t: "result", id: "r2", ok: false, error: "Nothing has changed in tidy yet." })
+    // A restarted Frizz is told again.
+    frizz.live.close(1001, "restarting")
+    await until("the features frame on the redial", () => frizz.of("features").length === 2)
+  } finally {
+    connection.stop()
+    await frizz.close()
+  }
+
+  // A host that cannot review never says it can, and answers a review it was sent anyway with why not.
+  const plain = await new FakeFrizz().listen()
+  plain.features = ["editor-state", "review"]
+  const plainConnection = new EditorConnection(makeHost(plain), FAST)
+  try {
+    plainConnection.start()
+    await until("the welcome", () => plainConnection.status.kind === "connected")
+    plain.send(plain.live, { t: "review", id: "r3", title: "x", checkouts: [] })
+    await until("the result", () => plain.of("result").length === 1)
+    assert.equal(plain.of("features").length, 0)
+    assert.equal(plain.of("result")[0]?.ok, false)
+  } finally {
+    plainConnection.stop()
+    await plain.close()
+  }
+})
+
 test("a picture past Frizz's ceiling is fitted before it is sent, never refused", async () => {
   const { frizz, host, connection, done } = await connected()
   try {

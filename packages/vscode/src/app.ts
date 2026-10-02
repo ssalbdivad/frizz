@@ -11,7 +11,7 @@ import { homedir } from "node:os"
 import { basename, dirname } from "node:path"
 import type * as vscode from "vscode"
 import type { EditorComposeInput, EditorComposed, EditorOpen, EditorProject } from "@frizz/shared/editor-protocol"
-import { EMBED_TERMINAL_PATH, type EmbedAddContextMessage, type EmbedCommandMessage, type EmbedComposeMessage, type EmbedEditorContextMessage } from "@frizz/shared/embed-protocol"
+import { EMBED_TERMINAL_PATH, type EmbedAddContextMessage, type EmbedCommandMessage, type EmbedComposeMessage, type EmbedEditorContextMessage, type EmbedReviewMessage } from "@frizz/shared/embed-protocol"
 import { EditorConnection, FocusRecency, type ConnectionStatus, type OpenResult } from "./connection.ts"
 import { activeFileEditor, registerContextFeed } from "./context-feed.ts"
 import { discoverFrizz, pageAddressNote, SOURCE_WORDS, type FoundFrizz } from "./discovery.ts"
@@ -20,10 +20,11 @@ import { registerEditorStateFeed } from "./editor-state-feed.ts"
 import { addRoute, composeInSidebar as composeVia, promptRoute } from "./embed.ts"
 import { composeInput, composeMessage, normalizeNewlines, refLabel, type FileRef, type Selected } from "./message.ts"
 import { projectForPath, workspaceProjects } from "./projects.ts"
+import { registerReviews, type ReviewSnapshot } from "./review-view.ts"
 import { describeRpcError, dispatchProfile, FrizzRpc, withRetry } from "./rpc.ts"
 import { registerSidebar, type SidebarSnapshot } from "./sidebar.ts"
 import { notConnectedMessage, statusView } from "./status.ts"
-import { findThread, pickerThreads, threadHandleOf, threadItem, displayTitle, type PickerThread } from "./threads.ts"
+import { findThread, pickerThreads, threadHandleOf, threadItem, displayName, displayTitle, type PickerThread } from "./threads.ts"
 
 type Vscode = typeof vscode
 
@@ -40,6 +41,8 @@ export interface FrizzExtensionApi {
   sidebar(): SidebarSnapshot
   /** The editor's context as the sidebar's page was last told it. */
   editorContext(): EmbedEditorContextMessage | undefined
+  /** The last thread's changes this window opened as a multi-file diff. */
+  review(): ReviewSnapshot | undefined
 }
 
 /** A file the command is about, with what was selected in it. */
@@ -101,6 +104,7 @@ export function activateFrizz(api: Vscode, context: vscode.ExtensionContext): Fr
     openInBrowser: () => openFrizz(),
     reconnect: () => connection.reconnect(),
     addContext: (message) => addContextFromPage(message),
+    review: (message) => reviewFromPage(message),
     log: { info: (line) => log.info(line), warn: (line) => log.warn(line) },
   })
   const useSidebar = () => config().get<boolean>("useSidebar", true)
@@ -156,6 +160,10 @@ export function activateFrizz(api: Vscode, context: vscode.ExtensionContext): Fr
   // sends that it is off, and nothing else.
   const editorState = registerEditorStateFeed(api, context, { send: () => connection.sendEditor() })
 
+  // A thread's changes as a multi-file diff (review-view.ts): pushed by Frizz when the human asks from a
+  // browser tab (the window then comes to the front), asked for by the sidebar's page, or picked here.
+  const reviews = registerReviews(api, context, { info: (line) => log.info(line), warn: (line) => log.warn(line) })
+
   let lastNotes: string | undefined
   /** The last discovery's answer: the origin a page opens on even when the editor connection was refused. */
   let found: FoundFrizz | undefined
@@ -180,6 +188,12 @@ export function activateFrizz(api: Vscode, context: vscode.ExtensionContext): Fr
     open: (message) => openFromFrizz(message),
     async focus() {
       return (await focusWindow()) ? { ok: true } : { ok: false, error: `${api.env.appName} can't bring its window to the front.` }
+    },
+    async review(message) {
+      const result = await reviews.open(message)
+      // The ask came from a browser: the diff is no use behind it. Best-effort, as after an open.
+      if (result.ok) await focusWindow()
+      return result
     },
     projects(next) {
       projects = next
@@ -706,6 +720,82 @@ export function activateFrizz(api: Vscode, context: vscode.ExtensionContext): Fr
   }
 
   /**
+   * A thread's changes, by name: Frizz says which checkouts it wrote in (`reviewTarget`), this window opens
+   * them. What went wrong is said here — the human is in the editor — and returned for the record.
+   */
+  async function reviewThread(project: EditorProject, slug: string, title?: string): Promise<string> {
+    const origin = connection.origin ?? found?.origin
+    if (!origin) {
+      showNotConnected()
+      return "not connected"
+    }
+    let target
+    try {
+      target = await new FrizzRpc(origin).query(project.id, "reviewTarget", { slug, ...(title ? { title } : {}) })
+    } catch (error) {
+      log.warn(`Reading ${slug}'s changes failed: ${(error as Error).message}`)
+      void api.window.showErrorMessage(`Couldn't review the changes: ${describeRpcError(error)}`)
+      return "refused"
+    }
+    const result = await reviews.open(target)
+    if (!result.ok) void api.window.showInformationMessage(result.error ?? "There are no changes to review.")
+    return result.ok ? "opened" : `nothing: ${result.error ?? ""}`
+  }
+
+  /** The sidebar's ⋯ Review changes (`frizz:review`): the thread its page names, in this window. */
+  async function reviewFromPage(message: EmbedReviewMessage): Promise<string> {
+    const project = projects.find((candidate) => candidate.slug === message.project)
+    if (!project) {
+      void api.window.showErrorMessage(`Frizz has no project ${message.project}.`)
+      return "unknown project"
+    }
+    return reviewThread(project, message.thread)
+  }
+
+  /**
+   * Review a thread's changes… — from the palette: one of this window's project's threads, picked, or the
+   * one a caller names (`{ thread }`, a keybinding or a test).
+   */
+  async function reviewCommand(...args: unknown[]): Promise<string | undefined> {
+    const origin = requireOrigin()
+    if (!origin) return undefined
+    const { options } = splitArgs(args)
+    const project = windowProject()
+    if (!project) {
+      void api.window.showInformationMessage("Open a folder that's a Frizz project to review its threads' changes.")
+      return undefined
+    }
+    let threads: PickerThread[]
+    try {
+      threads = pickerThreads((await new FrizzRpc(origin).query(project.id, "board")).threads)
+    } catch (error) {
+      void api.window.showErrorMessage(describeRpcError(error))
+      return undefined
+    }
+    let thread: PickerThread | undefined
+    if (typeof options.thread === "string") {
+      thread = findThread(threads, options.thread)
+      if (!thread) {
+        void api.window.showErrorMessage(`No open thread named ${options.thread} in ${project.name}.`)
+        return undefined
+      }
+    } else {
+      if (!threads.length) {
+        void api.window.showInformationMessage(`${project.name} has no open threads.`)
+        return undefined
+      }
+      thread = (await api.window.showQuickPick(threads.map((candidate) => ({ ...threadItem(candidate), thread: candidate })), {
+        title: "Review a thread's changes",
+        placeHolder: `Pick a thread in ${project.name}`,
+        matchOnDescription: true,
+        matchOnDetail: true,
+      }))?.thread
+    }
+    if (!thread) return undefined
+    return reviewThread(project, thread.id, displayName(thread))
+  }
+
+  /**
    * A title-row button (or its ⋯ menu), or the same command from the palette: the view brought into sight
    * (opened, the first time) and focused, then the door posted to its page — New thread puts the caret in
    * the box, Jump opens the page's own ⌘K palette, Keyboard shortcuts the page's `?` sheet.
@@ -760,6 +850,7 @@ export function activateFrizz(api: Vscode, context: vscode.ExtensionContext): Fr
         })
       },
     }, { providedCodeActionKinds: [api.CodeActionKind.QuickFix] }),
+    api.commands.registerCommand("frizz.reviewThread", reviewCommand),
     api.commands.registerCommand("frizz.open", openFrizz),
     api.commands.registerCommand("frizz.showLog", () => log.show()),
     api.commands.registerCommand("frizz.sidebar.reload", () => sidebar.reload()),
@@ -781,5 +872,6 @@ export function activateFrizz(api: Vscode, context: vscode.ExtensionContext): Fr
     projects: () => projects,
     sidebar: () => sidebar.snapshot(),
     editorContext: () => feed.last(),
+    review: () => reviews.last(),
   }
 }
