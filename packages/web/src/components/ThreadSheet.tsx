@@ -176,9 +176,18 @@ export function ThreadSheet({ id, slug, depth, widthDepth, initiallyOpen }: { id
     return () => registerDrawerFocus(id, null)
   }, [id])
 
+  // A CLOSING layer lets go of the keyboard and the page. Radix ties a modal dialog's focus trap and its
+  // `body{pointer-events:none}` to `open`, and this layer stays mounted for the ~210ms of its slide-out —
+  // so with `open` held true the trap outlived the close: New thread pressed right after Back to queue (VS
+  // Code's title row over an editor's sidebar, where every drawer is modal) focused the page's prompt box,
+  // the departing thread's trap pulled focus straight back to its ✕, the ✕ unmounted with the layer, and
+  // focus fell to <body> — the caret lost 3 runs of 3 (scripts/e2e-sidebar.ts c2). `open` follows the
+  // store's closing flag instead, and `forceMount` on the Portal keeps the Overlay and the Content mounted
+  // through the exit exactly as before; a rapid re-open clears the flag and re-arms the trap.
+  const closing = drawerSnap.drawers.find((drawer) => drawer.id === id)?.closing === true
   return (
-    <RadixDialog.Root modal={narrow} open onOpenChange={(open) => { if (!open) close() }}>
-      <RadixDialog.Portal>
+    <RadixDialog.Root modal={narrow} open={!closing} onOpenChange={(open) => { if (!open) close() }}>
+      <RadixDialog.Portal forceMount>
         {/* The modal Overlay is what carries Radix's scroll lock, so a thread covered by another layer
             renders the same scrim WITHOUT it and lets the layer on top hold the lock (useHoldsScrollLock).
             The Content stays modal either way: toggling `modal` would remount the whole transcript. */}
