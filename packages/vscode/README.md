@@ -11,7 +11,7 @@ in it. Works in VS Code, Cursor and Windsurf.
   elsewhere, **Jump to a thread** (the app's ⌘K) and **Settings**. **Reload sidebar**, **Open in
   browser** and **Keyboard shortcuts** (the app's `?`) are under its `…`. Each is in the command palette
   too, and brings the sidebar back if it was hidden. The badge's tooltip reads the counts
-  (`1 needs you · 3 ready`).
+  (`1 needs you · 3 ready`). While a thread shows, the `…` also holds **Open thread in editor tab**.
 - **What you select goes with your message.** Over the sidebar's prompt boxes a bar names the file in
   front and what you have selected (`sample.ts:12-20`, `26 lines`), live, and whatever it names goes with
   the next message you send from that box: the selection with its text, or with nothing selected the
@@ -34,7 +34,14 @@ in it. Works in VS Code, Cursor and Windsurf.
   reply box of the thread you are in, else the new-thread box. With nothing selected, it takes you to that
   prompt box. Pressed in the sidebar, it takes you back to the editor. `Ctrl+I` / `⌘I` with text selected
   adds it too. The sidebar opens if this window never had it. **Add to Frizz prompt** in the editor's
-  right-click menu or the palette, without a selection, adds the line your caret is on.
+  right-click menu or the palette, without a selection, adds the line your caret is on. A selection you
+  make shows `Ctrl+L to add to Frizz` at its end, faintly, once you let go — not in a diff, not for a
+  select-all, and not in Cursor or Windsurf, which show their own. `frizz.selectionHint` turns it off.
+- **A thread in an editor tab.** **Open thread in editor tab** (the sidebar's `…` while a thread shows, or
+  the palette) opens the thread beside your code at the editor's width — the same page, its reply box,
+  links and context bar. One tab per thread: asking again brings it forward. It comes back after a window
+  reload. While it is the Frizz you used last, `Ctrl+L` in the editor adds to its reply box instead of the
+  sidebar's, and `Ctrl+L` in the tab takes you back to the code.
 - **`Alt+K`** (`⌥K` on macOS — Claude Code's chord) — the selection as a chip, or with nothing selected,
   the whole file. Not when Claude Code's own extension is installed: it uses the same chord, so Frizz
   leaves it to Claude Code there.
@@ -88,10 +95,10 @@ command palette.
 
 | where | keys | does |
 | --- | --- | --- |
-| the editor, with text selected | `Ctrl+L` / `⌘L`, or `Ctrl+I` / `⌘I` | Add to Frizz prompt, caret in the sidebar |
-| the editor, nothing selected | `Ctrl+L` / `⌘L` | to the sidebar's prompt box |
+| the editor, with text selected | `Ctrl+L` / `⌘L`, or `Ctrl+I` / `⌘I` | Add to Frizz prompt, caret in the sidebar (or the thread's tab you used last) |
+| the editor, nothing selected | `Ctrl+L` / `⌘L` | to the sidebar's prompt box (or the thread's tab you used last) |
 | the editor, without Claude Code's extension | `Alt+K` / `⌥K` | the selection, or with none the whole file, into the prompt |
-| the sidebar | `Ctrl+L` / `⌘L` | back to the editor |
+| the sidebar, or a thread's tab | `Ctrl+L` / `⌘L` | back to the editor |
 | the sidebar's prompt box | `Ctrl+I` / `⌘I` | the editor's selection (or its file) into this box |
 | the sidebar | every shortcut the app's `?` sheet lists | what it does in the app |
 | the sidebar | `Ctrl+Shift+P`, `Ctrl+P`, `Ctrl+B`, `Ctrl+J`, ``Ctrl+` ``, `Ctrl+1`, `Ctrl+Shift+E/F/G/D/X` (`⌘` on macOS) | VS Code's own: palette, quick open, side bar, panel, terminal, back to the editor, the built-in views |
@@ -143,7 +150,8 @@ Server when you are in WSL, since the extension runs where your files are. Or bu
 | `frizz.serverUrl` | empty | Frizz's address, such as `http://127.0.0.1:9393`. Empty finds the Frizz running on this machine. |
 | `frizz.openFileLinks` | on | Open file links from Frizz in this window. Turn it off for a window that should never take them. |
 | `frizz.shareEditorState` | on | Share what this window shows with Frizz: the file in front and your selection, with its text, go with what you send from the sidebar, and Frizz's agents can read them — with your open tabs and the errors and warnings — when they need to. Off, nothing of the editor goes unless you add it. The eye on the sidebar's prompt box is this setting. |
-| `frizz.matchEditorTheme` | on | Show the sidebar in your color theme's colors. Off, it shows Frizz's own, still light or dark as VS Code is. |
+| `frizz.selectionHint` | on | Show `Ctrl+L to add to Frizz` (`⌘L` on macOS) at the end of what you select, while Frizz is running. Not in diffs, and not for a select-all. |
+| `frizz.matchEditorTheme` | on | Show the sidebar, and a thread in an editor tab, in your color theme's colors. Off, it shows Frizz's own, still light or dark as VS Code is. |
 | `frizz.notify` | on | Show a notification when a thread in this window's project needs you while the sidebar is out of sight. Only the window you used last shows it. |
 | `frizz.useSidebar` | on | Everything you add from the editor, and Ask and Send, go to the sidebar. Off, selections and files go to Frizz in your browser, Ask and Send take your message in an input box and send it, and the quick fix and the terminal's entry are not offered. |
 

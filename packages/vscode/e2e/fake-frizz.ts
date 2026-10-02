@@ -19,7 +19,10 @@
 //   POST /__e2e/review-target {target}       what `reviewTarget` answers (the sidebar's Review changes)
 //   POST /__e2e/projects  {projects}         push a `projects` frame
 //   POST /__e2e/drop                         close the editor socket (1001), as a restart would
-//   POST /__e2e/page-post {message}          have the page post `message` to its parent (the sidebar)
+//   POST /__e2e/page-post {message, page?}   have the page post `message` to its parent (the sidebar), or
+//                                            the page at path `page` (a thread's editor tab, framing
+//                                            `/all/<project>/thread/<slug>`); every received entry says
+//                                            which page heard it
 //   POST /__e2e/page-answer {answer}         how the page answers a compose: "ok", "refuse" or "silent"
 //   POST /__e2e/press     {chord}            press a key chord in the editor's window as a keyboard does
 //                                            (the harness's Workbench, over the Chrome DevTools Protocol)
@@ -70,7 +73,7 @@ export interface FakeLog {
   rpc: { projectId: string; procedure: string; input: unknown }[]
   origins: (string | undefined)[]
   /** The fake page: every load of it (the request's path and query), and every message it received from its parent. */
-  page: { loads: string[]; received: { origin: string; data: unknown }[] }
+  page: { loads: string[]; received: { origin: string; data: unknown; page?: string }[] }
 }
 
 /**
@@ -83,7 +86,7 @@ const FAKE_PAGE = `<!doctype html>
 <html><head><meta charset="utf-8"><title>Fake Frizz</title></head>
 <body><p>Fake Frizz page</p>
 <script>
-  const event = (body) => fetch("/__e2e/page-event", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) }).then((r) => r.json())
+  const event = (body) => fetch("/__e2e/page-event", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ ...body, page: location.pathname }) }).then((r) => r.json())
   window.addEventListener("message", async (message) => {
     if (message.source !== window.parent) return
     const data = message.data
@@ -96,7 +99,7 @@ const FAKE_PAGE = `<!doctype html>
   ;(async () => {
     for (;;) {
       try {
-        const { messages } = await (await fetch("/__e2e/page-next")).json()
+        const { messages } = await (await fetch("/__e2e/page-next?page=" + encodeURIComponent(location.pathname))).json()
         for (const message of messages) parent.postMessage(message, "*")
       } catch {}
       await new Promise((resolve) => setTimeout(resolve, 100))
@@ -118,7 +121,7 @@ export class FakeFrizz {
   /** Set by the harness once the editor is launched with a debugging port. */
   workbench: WorkbenchControl | undefined
   readonly log: FakeLog = { frames: [], refused: [], rpc: [], origins: [], page: { loads: [], received: [] } }
-  #pageOutbox: unknown[] = []
+  #pageOutbox: { message: unknown; page: string }[] = []
   #pageAnswer: "ok" | "refuse" | "silent" = "ok"
   #reviewTarget: EditorReviewTarget = { title: "Fake thread", checkouts: [] }
   #features: string[] = Object.values(EDITOR_FEATURES)
@@ -227,7 +230,7 @@ export class FakeFrizz {
           for (const ws of [...this.#sockets]) ws.close(1001, "restarting")
           return json(200, { ok: true })
         case "/__e2e/page-post":
-          this.#pageOutbox.push(input.message)
+          this.#pageOutbox.push({ message: input.message, page: typeof input.page === "string" ? input.page : "/" })
           return json(200, { ok: true })
         case "/__e2e/page-answer":
           this.#pageAnswer = input.answer
@@ -269,8 +272,9 @@ export class FakeFrizz {
           this.log.page.received.push(input)
           return json(200, { answer: this.#pageAnswer })
         case "/__e2e/page-next": {
-          const messages = this.#pageOutbox
-          this.#pageOutbox = []
+          const page = url.searchParams.get("page") ?? "/"
+          const messages = this.#pageOutbox.filter((entry) => entry.page === page).map((entry) => entry.message)
+          this.#pageOutbox = this.#pageOutbox.filter((entry) => entry.page !== page)
           return json(200, { messages })
         }
         case "/__e2e/open":
@@ -288,7 +292,8 @@ export class FakeFrizz {
       return json(404, { error: "unknown control" })
     }
 
-    if (request.method === "GET" && url.pathname === "/") {
+    // The page at `/` (the sidebar's) and at a thread's own address (a thread's editor tab frames it).
+    if (request.method === "GET" && (url.pathname === "/" || url.pathname.startsWith("/all/"))) {
       this.log.page.loads.push(`${url.pathname}${url.search}`)
       response.setHeader("content-type", "text/html; charset=utf-8")
       response.end(this.#pageReady ? FAKE_PAGE : FAKE_PAGE.replace("<body>", '<body data-mute="1">'))

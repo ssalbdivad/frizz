@@ -22,10 +22,13 @@ import { fixNote, fixTitle, lineSpan, terminalText, type Problem } from "./edito
 import { registerEditorStateFeed, SHARE_SETTING } from "./editor-state-feed.ts"
 import { registerEditorWatcher } from "./editor-watcher.ts"
 import { registerExtrasFeed } from "./extras-feed.ts"
-import { addRoute, composeInSidebar as composeVia, promptRoute } from "./embed.ts"
+import { addRoute, composeInSidebar as composeVia, promptRoute, threadOfHref } from "./embed.ts"
 import { composeInput, composeMessage, normalizeNewlines, refLabel, type FileRef, type Selected } from "./message.ts"
 import { projectForPath, workspaceProjects } from "./projects.ts"
 import { registerReviews, type ReviewSnapshot } from "./review-view.ts"
+import { registerSelectionHint, type SelectionHintShown } from "./selection-hint.ts"
+import type { PageComposer } from "./framed-page.ts"
+import { registerThreadPanels, type ThreadPanelSnapshot, type ThreadTab } from "./thread-panel.ts"
 import { describeRpcError, dispatchProfile, FrizzRpc, withRetry } from "./rpc.ts"
 import { registerSidebar, type SidebarSnapshot } from "./sidebar.ts"
 import { notConnectedMessage, statusView } from "./status.ts"
@@ -57,6 +60,10 @@ export interface FrizzExtensionApi {
   notifications(): string[]
   /** A different build found installed under this window, which it offered to reload into. */
   reloadOffered(): string | undefined
+  /** The hint beside the selection (`Ctrl+L to add to Frizz`), as it is drawn now; undefined when none is. */
+  selectionHint(): SelectionHintShown | undefined
+  /** Every thread open in an editor tab, as it is now. */
+  threadTabs(): ThreadPanelSnapshot[]
 }
 
 /** A file the command is about, with what was selected in it. */
@@ -129,13 +136,55 @@ export function activateFrizz(api: Vscode, context: vscode.ExtensionContext): Fr
     openFile: (message) => openFromFrizz(message),
     openInBrowser: () => openFrizz(),
     reconnect: () => connection.reconnect(),
-    addContext: (message) => addContextFromPage(message),
+    addContext: (message, into) => addContextFromPage(message, into),
     hostState: () => ({ shareEditor: shared(), altK: !claudeCode }),
     setShareEditor: (on) => setShareEditor(on),
     review: (message) => reviewFromPage(message),
     pickContext: (message) => workspaceFiles.pick(message),
     log: { info: (line) => log.info(line), warn: (line) => log.warn(line) },
   })
+  // A thread in an editor tab (thread-panel.ts): the same page on one thread, answering the page the way
+  // the sidebar does, for a conversation that wants the editor's width.
+  const panels = registerThreadPanels(api, context, {
+    origin: () => connection.origin ?? found?.origin,
+    openFile: (message) => openFromFrizz(message),
+    addContext: (message, into) => addContextFromPage(message, into),
+    hostState: () => ({ shareEditor: shared(), altK: !claudeCode }),
+    setShareEditor: (on) => setShareEditor(on),
+    review: (message) => reviewFromPage(message),
+    pickContext: (message) => workspaceFiles.pick(message),
+    backToEditor: () => backToEditor(),
+    openInBrowser: (url) => openUrl(url),
+    log: { info: (line) => log.info(line), warn: (line) => log.warn(line) },
+  })
+
+  // WHICH FRIZZ THE HUMAN USED LAST — the sidebar or a thread's tab, by which one's page last took the
+  // keyboard (the relay says so). The editor's Ctrl+L (and every add, and Ctrl+L with nothing selected)
+  // goes to that one's prompt box while it is on screen: a human reading a thread in a tab beside the code
+  // means that thread's reply box, not a sidebar that may be hidden. Ask and Send keep the sidebar — they
+  // name their own box (the new-thread box, a picked thread).
+  let lastFrame: "sidebar" | ThreadTab | undefined
+  sidebar.onFocus(() => (lastFrame = "sidebar"))
+  panels.onFocus((tab) => (lastFrame = tab))
+  /** The tab the editor's adds go to, when one does: the Frizz used last, still on screen. */
+  const frontTab = (): ThreadTab | undefined => (lastFrame && lastFrame !== "sidebar" && lastFrame.visible() ? lastFrame : undefined)
+
+  /**
+   * Every framed page the editor's feeds go to — the sidebar and each thread's tab — as one target: ready
+   * while any page is, told "not ready" only when none is, posting to each ready one.
+   */
+  const pages = {
+    ready: () => sidebar.ready() || panels.anyReady(),
+    onReady(listener: (ready: boolean) => void) {
+      const relay = (ready: boolean) => (ready ? listener(true) : !pages.ready() && listener(false))
+      sidebar.onReady(relay)
+      panels.onReady(relay)
+    },
+    async post(message: Parameters<typeof sidebar.post>[0]): Promise<boolean> {
+      const [inSidebar, inTabs] = await Promise.all([sidebar.post(message), panels.post(message)])
+      return inSidebar || inTabs
+    },
+  }
   const useSidebar = () => config().get<boolean>("useSidebar", true)
   // Whether the human shares the editor with Frizz — THE switch: the page's feed carries the selection's
   // text and a send attaches the block only while it is on, and the agents' frame says only `shared: false`
@@ -176,22 +225,26 @@ export function activateFrizz(api: Vscode, context: vscode.ExtensionContext): Fr
     log.info(next ? "Claude Code's extension is installed: Alt+K is its, not Frizz's." : "Claude Code's extension is gone: Alt+K adds to Frizz's prompt again.")
     applyClaudeCode()
     sidebar.pushState()
+    panels.pushState()
   }))
   // One observer of the window's editors, which both feeds read (editor-front.ts says why there is one).
   const watcher = registerEditorWatcher(api, context)
   const feed = registerContextFeed(api, context, watcher, {
-    ready: () => sidebar.ready(),
-    onReady: (listener) => sidebar.onReady(listener),
-    post: (message) => sidebar.post(message),
+    ready: pages.ready,
+    onReady: (listener) => pages.onReady(listener),
+    post: (message) => pages.post(message),
     projects: () => projects,
     shared,
   })
   const extras = registerExtrasFeed(api, context, {
-    ready: () => sidebar.ready(),
-    onReady: (listener) => sidebar.onReady(listener),
-    post: (message) => sidebar.post(message),
+    ready: pages.ready,
+    onReady: (listener) => pages.onReady(listener),
+    post: (message) => pages.post(message),
   })
   const workspaceFiles = registerWorkspaceFiles(api, context, { projects: () => projects })
+  // Cursor's "⌘L to chat" beside a fresh selection, for Frizz's chord (selection-hint.ts says when, where
+  // and why not). Only while connected: the chord says Frizz isn't running otherwise.
+  const hint = registerSelectionHint(api, context, { connected: () => status.kind === "connected", mac: () => sidebar.mac() })
 
   // ── status bar ───────────────────────────────────────────────────────────────────────────────────
   const item = api.window.createStatusBarItem("frizz.status", api.StatusBarAlignment.Right, 100)
@@ -277,6 +330,7 @@ export function activateFrizz(api: Vscode, context: vscode.ExtensionContext): Fr
       projects = next
       renderStatus()
       sidebar.refresh()
+      panels.refresh()
       feed.refresh()
       if (sidebar.ready() && !windowThreadCheck) windowThreadCheck = openWindowThread()
     },
@@ -284,6 +338,8 @@ export function activateFrizz(api: Vscode, context: vscode.ExtensionContext): Fr
       status = next
       renderStatus()
       sidebar.refresh()
+      panels.refresh()
+      hint.refresh()
     },
     attention: (message) => onAttention(message),
     log: { info: (line) => log.info(line), warn: (line) => log.warn(line), error: (line) => log.error(line) },
@@ -426,6 +482,7 @@ export function activateFrizz(api: Vscode, context: vscode.ExtensionContext): Fr
         editorState.sharingChanged()
         feed.refresh()
         sidebar.pushState()
+        panels.pushState()
       }
       if (event.affectsConfiguration("frizz.notify")) connection.listen(notifies())
     }),
@@ -637,11 +694,89 @@ export function activateFrizz(api: Vscode, context: vscode.ExtensionContext): Fr
     return undefined
   }
 
+  /** A selection into a thread's tab, revealed and focused, as composeInSidebar puts one into the sidebar. */
+  async function composeInTab(tab: ThreadTab, input: Omit<EmbedComposeMessage, "type" | "id">): Promise<EditorComposed | undefined> {
+    const result = await composeVia(tab, input, { preserveFocus: false, readyMs: SIDEBAR_READY_MS, composeMs: SIDEBAR_COMPOSE_MS })
+    if (result.ok) return { t: "composed", id: result.id, ok: true }
+    log.warn(result.why.replace("The Frizz sidebar", "The thread's tab"))
+    sidebarWhy = result.why
+    return undefined
+  }
+
+  /**
+   * Ctrl+L / ⌘L pressed in a thread's tab: back to the code. The text editor the human was last in — the
+   * one in front by the watcher's rule, which with a tab focused is the last file editor still on screen —
+   * else the first one on screen; with none, the group beside the tab.
+   */
+  async function backToEditor(): Promise<void> {
+    const editor = watcher.frontEditor() ?? api.window.visibleTextEditors[0]
+    if (editor) await api.window.showTextDocument(editor.document, { viewColumn: editor.viewColumn, preserveFocus: false })
+    else await api.commands.executeCommand("workbench.action.focusPreviousGroup")
+  }
+
+  /**
+   * Open thread in editor tab — the sidebar's title row (its ⋯, while a thread shows) or the palette: the
+   * thread the sidebar shows, when it is in sight and shows one; else one of this window's project's
+   * threads, picked (or named by a caller, `{ thread, project? }`).
+   */
+  async function openThreadInTab(...args: unknown[]): Promise<ThreadPanelSnapshot | undefined> {
+    const origin = connection.origin ?? found?.origin
+    if (!origin) {
+      showNotConnected()
+      return undefined
+    }
+    const { options } = splitArgs(args)
+    const named = options as CommandOptions & { project?: string }
+    let target: { thread: string; project: string; title?: string } | undefined
+    if (typeof named.thread === "string") {
+      const project = typeof named.project === "string" ? named.project : windowProject()?.slug
+      if (!project) {
+        void api.window.showInformationMessage("Open a folder that's a Frizz project to open its threads here.")
+        return undefined
+      }
+      target = { thread: named.thread, project }
+    } else {
+      const shown = sidebar.visible() && sidebar.snapshot().view === "thread" ? threadOfHref(sidebar.snapshot().href) : undefined
+      if (shown) target = shown
+      else {
+        const project = windowProject()
+        if (!project) {
+          void api.window.showInformationMessage("Open a folder that's a Frizz project to open its threads here.")
+          return undefined
+        }
+        let threads: PickerThread[]
+        try {
+          const open = pickerThreads((await new FrizzRpc(origin).query(project.id, "board")).threads)
+          // A window on a thread's worktree offers that thread first (threads.ts windowThread).
+          threads = windowThreadFirst(open, windowThread(open, folders(), sameFolder))
+        } catch (error) {
+          void api.window.showErrorMessage(describeRpcError(error))
+          return undefined
+        }
+        if (!threads.length) {
+          void api.window.showInformationMessage(`${project.name} has no open threads.`)
+          return undefined
+        }
+        const picked = (await api.window.showQuickPick(threads.map((candidate) => ({ ...threadItem(candidate), thread: candidate })), {
+          title: "Open a thread in an editor tab",
+          placeHolder: `Pick a thread in ${project.name}`,
+          matchOnDescription: true,
+          matchOnDetail: true,
+        }))?.thread
+        if (!picked) return undefined
+        target = { thread: picked.id, project: project.slug, title: displayName(picked) }
+      }
+    }
+    await panels.open(target)
+    return panels.snapshot().find((tab) => tab.thread === target.thread && tab.project === target.project)
+  }
+
   // ── commands ─────────────────────────────────────────────────────────────────────────────────────
 
   async function ask(...args: unknown[]): Promise<{ slug: string } | { composed: EditorComposed } | undefined> {
     const origin = requireOrigin()
     if (!origin) return undefined
+    hint.added()
     const { uri, options } = splitArgs(args)
     const target = targetOf(uri)
     if (!target) {
@@ -692,6 +827,7 @@ export function activateFrizz(api: Vscode, context: vscode.ExtensionContext): Fr
   async function sendToThread(...args: unknown[]): Promise<{ slug: string; deliveryId?: string; composed?: EditorComposed } | undefined> {
     const origin = requireOrigin()
     if (!origin) return undefined
+    hint.added()
     const { uri, options } = splitArgs(args)
     const target = targetOf(uri)
     if (!target && unplaceableSelection(uri)) {
@@ -805,10 +941,13 @@ export function activateFrizz(api: Vscode, context: vscode.ExtensionContext): Fr
     const frizz = (connection.origin ?? found?.origin) !== undefined
     if (addRoute({ enabled: useSidebar(), frizz }) === "sidebar") {
       let composed: EditorComposed | undefined
+      // The thread's tab when that is the Frizz used last and it is on screen (frontTab), else the sidebar.
+      const tab = frontTab()
       while (left.length) {
         const [item, ...rest] = left
         const note = rest.length === 0 && options.note ? { note: options.note } : {}
-        const next = await composeInSidebar({ item: { ...item!, app: api.env.appName }, target: "front", focus: true, ...note }, false)
+        const input = { item: { ...item!, app: api.env.appName }, target: "front" as const, focus: true, ...note }
+        const next = tab ? await composeInTab(tab, input) : await composeInSidebar(input, false)
         if (!next) break
         composed = next
         left = rest
@@ -856,6 +995,7 @@ export function activateFrizz(api: Vscode, context: vscode.ExtensionContext): Fr
    */
   async function addToPrompt(...args: unknown[]): Promise<EditorComposed | undefined> {
     const { uri } = splitArgs(args)
+    hint.added()
     const target = targetOf(uri)
     if (!target) {
       void api.window.showInformationMessage("Open a file to add it to Frizz's prompt box.")
@@ -979,7 +1119,7 @@ export function activateFrizz(api: Vscode, context: vscode.ExtensionContext): Fr
    * or nowhere; and it carries the text as the editor has it NOW — nothing when the selection or the file
    * is gone by the time the click arrives.
    */
-  async function addContextFromPage(message: EmbedAddContextMessage): Promise<string> {
+  async function addContextFromPage(message: EmbedAddContextMessage, into?: PageComposer): Promise<string> {
     let item: EditorComposeInput
     if (message.what === "problems" || message.what === "terminal") {
       const found = message.what === "problems" ? extras.problems() : await extras.terminal()
@@ -995,6 +1135,7 @@ export function activateFrizz(api: Vscode, context: vscode.ExtensionContext): Fr
       if (!editor || editor.document.uri.scheme !== "file" || editor.selection.isEmpty) return "nothing selected"
       const target = targetOf(editor.document.uri, editor)
       if (!target?.selection) return "nothing selected"
+      hint.added()
       item = itemFor(target)
     } else {
       try {
@@ -1004,10 +1145,16 @@ export function activateFrizz(api: Vscode, context: vscode.ExtensionContext): Fr
       }
       item = itemFor({ path: message.path! })
     }
+    const input = { item: { ...item, app: api.env.appName }, target: "front" as const, focus: true }
+    // A thread's tab asked: the chip goes back to its own page, which is in sight and focused already.
+    if (into) {
+      const answer = await into(input, SIDEBAR_COMPOSE_MS)
+      return answer?.ok ? "composed" : "not taken"
+    }
     // `preserveFocus`: the human clicked the bar, so the view is in sight and focused already; revealing it
     // again re-focused the view after the page had put the caret in its box, and the caret was lost
     // (scripts/e2e-sidebar.ts, 1 run in 3).
-    const composed = await composeInSidebar({ item: { ...item, app: api.env.appName }, target: "front", focus: true }, true)
+    const composed = await composeInSidebar(input, true)
     return composed ? "composed" : "not taken"
   }
 
@@ -1099,6 +1246,16 @@ export function activateFrizz(api: Vscode, context: vscode.ExtensionContext): Fr
     return false
   }
 
+  /** Ctrl+L with nothing selected: the prompt box of the Frizz used last (frontTab), else the sidebar's. */
+  async function focusPrompt(): Promise<boolean> {
+    const tab = frontTab()
+    if (!tab) return sidebarCommand("prompt")
+    await tab.reveal(false)
+    if ((await tab.waitReady(SIDEBAR_READY_MS)) && (await tab.post({ type: "frizz:command", command: "prompt" }))) return true
+    log.warn("The thread's tab isn't ready, so going to its prompt box did nothing.")
+    return false
+  }
+
   function openFrizz(): void {
     // The page needs no editor connection: a Frizz that answered discovery but refused the socket (an
     // older Frizz, a version mismatch) still serves its page.
@@ -1127,9 +1284,11 @@ export function activateFrizz(api: Vscode, context: vscode.ExtensionContext): Fr
     api.commands.registerCommand("frizz.sidebar.jump", () => sidebarCommand("jump")),
     api.commands.registerCommand("frizz.sidebar.settings", () => sidebarCommand("settings")),
     api.commands.registerCommand("frizz.sidebar.shortcuts", () => sidebarCommand("shortcuts")),
-    // Ctrl+L / ⌘L in the editor with nothing selected: Cursor's chord to its chat, here the sidebar's prompt
-    // box — revealed and focused, the caret at the end of what it holds. Ctrl+L there comes back (embed.ts).
-    api.commands.registerCommand("frizz.focusPrompt", () => sidebarCommand("prompt")),
+    // Ctrl+L / ⌘L in the editor with nothing selected: Cursor's chord to its chat, here the prompt box of the
+    // Frizz used last — a thread's tab on screen, else the sidebar — revealed and focused, the caret at the
+    // end of what it holds. Ctrl+L there comes back (embed.ts, thread-panel.ts).
+    api.commands.registerCommand("frizz.focusPrompt", () => focusPrompt()),
+    api.commands.registerCommand("frizz.openThreadInTab", openThreadInTab),
     // "Ask Frizz to fix" on any problem in a file on disk, in every language. Offered only with the sidebar
     // on: without it the problem's message has nowhere to go, and a bare chip is Add to Frizz prompt.
     api.languages.registerCodeActionsProvider({ scheme: "file" }, {
@@ -1175,5 +1334,7 @@ export function activateFrizz(api: Vscode, context: vscode.ExtensionContext): Fr
     build: extensionVersion,
     notifications: () => [...shownNotifications],
     reloadOffered: () => offered?.label,
+    selectionHint: () => hint.shown(),
+    threadTabs: () => panels.snapshot(),
   }
 }

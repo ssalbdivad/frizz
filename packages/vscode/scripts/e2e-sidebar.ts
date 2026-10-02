@@ -73,6 +73,13 @@
 //      and its text, secondary text and accent read; the setting off puts Frizz's palette back, on again
 //      the theme's. Shots of the side bar beside the editor: the queue, a thread with the reply box
 //      focused and a selection in the bar, the open-files menu. (Runs before c17, which ends the editor.)
+//   c19 the selection hint: lines selected by keys get `Ctrl+L to add to Frizz` after their last line, in
+//      the colour of VS Code's own inline blame, once the selection settles; gone when it empties, once Ctrl+L has
+//      added it, and with `frizz.selectionHint` off. A 6x crop of the line for the eye
+//   c20 a thread in an editor tab: the title row's ⋯ (while the sidebar shows a thread) opens it beside the
+//      code, on the thread at the editor's width, titled by the page; its reply box sends to the simulated
+//      worker with the editor block; Ctrl+L in the editor then lands in the tab (the Frizz used last), and
+//      Ctrl+L in the tab goes back to the code; asked again, the same tab
 //   c21 the bar's × (pointed at, the reading's glyph): this selection left out of a send while the eye
 //      stays on and the agents' tool still reads it; a new selection goes again and is quoted
 //   c22 an image on the OS clipboard (xclip under the run's Xvfb, fetched with apt if missing), Ctrl+V in
@@ -108,6 +115,7 @@ import { decodePng, inkOf } from "../e2e/png.ts"
 import { SAMPLE, seedSidebarStack, seedWorktreeThread, type Seeded } from "../e2e/sidebar-seed.ts"
 import { bootStack, freePort, killAll, leftovers, stubbedPath, type Stack } from "../e2e/stack.ts"
 import { workerTool } from "../e2e/worker-tool.ts"
+import { hasShellExecutions } from "../src/extras-feed.ts"
 import { FrizzRpc } from "../src/rpc.ts"
 
 const pkg = resolve(dirname(fileURLToPath(import.meta.url)), "..")
@@ -316,7 +324,12 @@ let version = ""
 const pageErrors: string[] = []
 /** VS Code's keybinding dispatch log (workbench.action.toggleKeybindingsLog), while it is on. */
 
-const frizzFrame = (): Frame | undefined => page.frames().find((frame) => frame.url().startsWith(`${origin}/`))
+/**
+ * Frames of Frizz's page in a thread's editor tab (c20), never the sidebar's: the tab frames the same
+ * thread's address the sidebar's page shows by then, so only the frame object tells the two apart.
+ */
+const tabFrames = new Set<Frame>()
+const frizzFrame = (): Frame | undefined => page.frames().find((frame) => frame.url().startsWith(`${origin}/`) && !tabFrames.has(frame) && !frame.detached)
 const frame = () => waitFor("the Frizz frame in the sidebar", frizzFrame, 30_000)
 
 /** Evaluate in the Frizz page. */
@@ -1241,6 +1254,23 @@ try {
     if (!closed) await resetPage()
   })
 
+  // The side bar's width, read and set by dragging its sash with the mouse (c3 and c9).
+  const sidebarWidth = async () => (await rectOf(".part.sidebar"))?.width ?? 0
+  const dragSidebarTo = async (width: number) => {
+    const sash = await inWorkbench(() => {
+      const part = document.querySelector(".part.sidebar")!.getBoundingClientRect()
+      const sashes = [...document.querySelectorAll<HTMLElement>(".monaco-sash.vertical")].map((s) => s.getBoundingClientRect()).filter((r) => r.height > 100 && Math.abs(r.left + r.width / 2 - part.right) < 6)
+      const r = sashes[0]
+      return r ? { x: r.left + r.width / 2, y: r.top + r.height / 2 } : { x: part.right, y: part.top + part.height / 2 }
+    })
+    const delta = width - (await sidebarWidth())
+    await page.mouse.move(sash.x, sash.y)
+    await page.mouse.down()
+    for (let step = 1; step <= 10; step++) await page.mouse.move(sash.x + (delta * step) / 10, sash.y)
+    await page.mouse.up()
+    await sleep(800)
+  }
+
   // ── c3: the editor's context in the page ──
   /**
    * Lines 2-3 of sample.ts selected by keys and the add chord (Ctrl+L, the one the page names) pressed the
@@ -1261,6 +1291,12 @@ try {
     return 0
   }
   await run("c3", "the context bar follows the editor", async () => {
+    // At ~300px, the width the shots are named for, on every VS Code: 1.90's default side bar is 255px,
+    // where the bar's hint has no variant short enough beside the file chip and the page drops it by
+    // design (EditorContextBar.tsx Hint fits the longest that fits) — the check then failed on the floor
+    // for the width, not for the bar. The width it found is in the notes.
+    notes.c3SidebarWidthBefore = await sidebarWidth()
+    if (Math.abs((await sidebarWidth()) - 300) > 12) await dragSidebarTo(300)
     await command("workbench.action.closeAllEditors")
     await agent({ op: "open", path: files.a })
     await agent({ op: "open", path: files.b })
@@ -1674,21 +1710,6 @@ try {
   })
 
   // ── c9: the gallery, at ~300px and ~450px ──
-  const sidebarWidth = async () => (await rectOf(".part.sidebar"))?.width ?? 0
-  const dragSidebarTo = async (width: number) => {
-    const sash = await inWorkbench(() => {
-      const part = document.querySelector(".part.sidebar")!.getBoundingClientRect()
-      const sashes = [...document.querySelectorAll<HTMLElement>(".monaco-sash.vertical")].map((s) => s.getBoundingClientRect()).filter((r) => r.height > 100 && Math.abs(r.left + r.width / 2 - part.right) < 6)
-      const r = sashes[0]
-      return r ? { x: r.left + r.width / 2, y: r.top + r.height / 2 } : { x: part.right, y: part.top + part.height / 2 }
-    })
-    const delta = width - (await sidebarWidth())
-    await page.mouse.move(sash.x, sash.y)
-    await page.mouse.down()
-    for (let step = 1; step <= 10; step++) await page.mouse.move(sash.x + (delta * step) / 10, sash.y)
-    await page.mouse.up()
-    await sleep(800)
-  }
   const gallery = async (tag: string) => {
     await command("workbench.view.extension.frizz")
     await waitFor("the Frizz view", async () => (await status()).sidebar.visible || undefined, 10_000)
@@ -2165,7 +2186,12 @@ try {
     const problemsRow = await extra("problems")
     const terminalRow = await extra("terminal")
     expect("c15", "the menu offers the file's problems with their counts", shown && /^Add problems in this file 1 error$/u.test(problemsRow ?? ""), problemsRow)
-    expect("c15", "…and the terminal's last command, by its line", /^Add last terminal command echo frizz-from-the-terminal$/u.test(terminalRow ?? ""), { terminalRow, ran })
+    // VS Code tells extensions each command line only from 1.93 (shell integration's executions). Before
+    // that the menu offers the last command without naming it, and adding it borrows the terminal's own
+    // Copy Last Command (extras-feed.ts) — the floor's graceful path, checked as that, not failed as the
+    // other.
+    if (hasShellExecutions(version)) expect("c15", "…and the terminal's last command, by its line", /^Add last terminal command echo frizz-from-the-terminal$/u.test(terminalRow ?? ""), { terminalRow, ran })
+    else expect("c15", `…and the terminal's last command, unnamed: VS Code ${version} tells extensions no command line before 1.93`, terminalRow === "Add last terminal command" && ran.exitCode === "not reported before 1.93", { terminalRow, ran })
     await shot("c15-bar-menu-extras-w300")
     const extraGaps = (await rowGaps("[data-editor-extra], [data-editor-open-file]")) as { row: string; gap: number }[]
     notes.barMenuGaps = extraGaps
@@ -2440,6 +2466,240 @@ try {
     }
   })
 
+  // ── c19: the selection hint ──
+  /** The hint as the editor DRAWS it: the decoration's ::after, its colour, its line, its box. */
+  const hintDrawn = () => inWorkbench(() => {
+    const span = [...document.querySelectorAll<HTMLElement>(".part.editor .view-lines span")].find((s) => getComputedStyle(s, "::after").content.includes("add to Frizz"))
+    if (!span) return null
+    const after = getComputedStyle(span, "::after")
+    const line = span.closest<HTMLElement>(".view-line")
+    // The colour VS Code's own end-of-line annotation (inline blame) is drawn in, resolved the way the
+    // browser resolves the decoration's.
+    const probe = document.createElement("span")
+    probe.style.color = "var(--vscode-editorInlayHint-foreground)"
+    document.querySelector(".part.editor")!.appendChild(probe)
+    const annotation = getComputedStyle(probe).color
+    probe.remove()
+    const r = span.getBoundingClientRect()
+    const l = line?.getBoundingClientRect()
+    return {
+      content: after.content,
+      color: after.color,
+      annotation,
+      fontStyle: after.fontStyle,
+      line: (line?.textContent ?? "").replace(/\u00a0|\u00b7/gu, " ").trimEnd(),
+      span: { x: r.x, y: r.y, width: r.width, height: r.height },
+      lineBox: l ? { x: l.x, y: l.y, width: l.width, height: l.height } : null,
+    }
+  })
+  await run("c19", "the selection hint beside a fresh selection", async () => {
+    await command("workbench.view.extension.frizz")
+    await waitFor("the Frizz view", async () => (await status()).sidebar.visible || undefined, 10_000)
+    await resetPage()
+    await openInEditor(files.sample)
+    await press("ArrowRight")
+    await waitFor("no hint before the selection", async () => (await hintDrawn()) === null || undefined, 3_000).catch(() => undefined)
+    const pressedAt = Date.now()
+    await selectLines23()
+    const drawn = await waitFor("the hint drawn", hintDrawn, 5_000).catch(() => null)
+    const latency = Date.now() - pressedAt
+    const told = (await status()).selectionHint
+    notes.selectionHint = { drawn, told, latency }
+    expect("c19", "lines 2-3 selected by keys: `Ctrl+L to add to Frizz` after line 3's text, once the selection settled", drawn?.content === '"Ctrl+L to add to Frizz"' && /for \(const x of xs\) \{$/u.test(drawn.line) && told?.line === 3 && latency >= 250, { drawn, told, latency })
+    expect("c19", "…in the colour VS Code draws its own inline blame in, not the code's", !!drawn && drawn.color === drawn.annotation, drawn && { color: drawn.color, annotation: drawn.annotation })
+    if (drawn?.lineBox) {
+      // The line from its start to past the hint, 6x: the gap and the weight are judged by eye on this.
+      const right = drawn.span.x + drawn.span.width
+      await capture(join(out, `${version}-c19-selection-hint-6x.png`), { x: drawn.lineBox.x - 4, y: drawn.lineBox.y - 6, width: right - drawn.lineBox.x + 12, height: drawn.lineBox.height + 12 }, 6)
+      // The ink gap between where the selection ends (its highlight and the caret, which are what the eye
+      // reads as its edge) and the hint's first glyph, at 2x: anything unlike the editor's own background,
+      // column by column, the background sampled past the hint's end. Walked from the RIGHT: over the
+      // hint's words (whose spaces are one character, ~17 columns at 2x) to the first run of background
+      // wider than any of them, which is the margin. (Walked from the decoration's left edge, the caret
+      // standing there read as the hint's first ink and the gap as 0.)
+      const png = decodePng(await capture("", { x: drawn.lineBox.x, y: drawn.lineBox.y, width: right - drawn.lineBox.x + 4, height: drawn.lineBox.height }, 2))
+      const background = png.px(png.width - 2, Math.floor(png.height / 2))
+      const inked: boolean[] = []
+      for (let x = 0; x < png.width; x++) {
+        let ink = false
+        for (let y = 0; y < png.height && !ink; y++) {
+          const [r, g, b] = png.px(x, y)
+          ink = Math.abs(r - background[0]) + Math.abs(g - background[1]) + Math.abs(b - background[2]) > 60
+        }
+        inked.push(ink)
+      }
+      let x = inked.length - 1
+      while (x > 0 && !inked[x]) x--
+      let hintInk = x
+      for (let run = 0; x > 0; x--) {
+        if (inked[x]) {
+          hintInk = x
+          run = 0
+        } else if (++run > 40) break
+      }
+      let codeEnd = x
+      while (codeEnd > 0 && !inked[codeEnd]) codeEnd--
+      notes.selectionHintInkGapPx = (hintInk - codeEnd - 1) / 2
+    }
+    await shot("c19-selection-hint", { window: true })
+
+    await press("ArrowRight")
+    const gone = await waitFor("the hint gone", async () => ((await hintDrawn()) === null && (await status()).selectionHint === null) || undefined, 3_000).catch(() => false)
+    expect("c19", "the selection emptied: the hint is gone at once", gone === true, await hintDrawn())
+
+    // Ctrl+L adds it to the prompt box: the hint has done its job.
+    await clearBox("newComposer")
+    await openInEditor(files.sample)
+    await selectLines23()
+    await waitFor("the hint again", hintDrawn, 5_000).catch(() => null)
+    await press("Control+KeyL")
+    const added = await waitFor("the chip in the box", async () => ((await box("newComposer"))?.value.includes("@sample.ts:2-3") ? true : undefined), 8_000).catch(() => false)
+    const afterAdd = await waitFor("the hint gone after Ctrl+L", async () => ((await hintDrawn()) === null) || undefined, 3_000).catch(() => false)
+    expect("c19", "Ctrl+L adds the selection, and the hint goes with it", added === true && afterAdd === true, { box: await box("newComposer"), hint: await hintDrawn() })
+    await clearBox("newComposer")
+
+    // The setting off: a fresh selection gets none.
+    await agent({ op: "config", section: "frizz", key: "selectionHint", value: false })
+    try {
+      await openInEditor(files.sample)
+      await press("ArrowRight")
+      await selectLines23()
+      await sleep(900)
+      const off = await hintDrawn()
+      expect("c19", "frizz.selectionHint off: no hint", off === null && (await status()).selectionHint === null, off)
+    } finally {
+      await agent({ op: "config", section: "frizz", key: "selectionHint", value: null })
+    }
+  })
+
+  // ── c20: a thread in an editor tab ──
+  await run("c20", "a thread in an editor tab, from the title row's ⋯: on the thread, at the editor's width, and its reply box sends", async () => {
+    await command("workbench.view.extension.frizz")
+    await waitFor("the Frizz view", async () => (await status()).sidebar.visible || undefined, 10_000)
+    await resetPage()
+    await openThreadRow()
+    await waitFor("the sidebar on the thread", async () => (await status()).sidebar.view === "thread" || undefined, 8_000)
+    await clearBox("chatComposer")
+    const sidebarFrame = await frame()
+    await openInEditor(files.sample)
+
+    // The title row's ⋯, Open thread in editor tab — clicked, as a human does (c8 says why the hover first).
+    await clickInWorkbench('.part.sidebar .title-actions .action-label[aria-label*="More Actions"]')
+    const label = /Open thread in editor tab/u
+    const items = await waitFor("Open thread in editor tab in the ⋯ menu", async () => {
+      const found = await inWorkbench(() => [...document.querySelectorAll<HTMLElement>(".monaco-menu .action-item .action-label")].filter((l) => l.getClientRects().length > 0).map((l) => l.getAttribute("aria-label") ?? l.textContent ?? ""))
+      return found.some((item) => label.test(item)) ? found : undefined
+    }, 5_000).catch(() => null)
+    expect("c20", "the title row's ⋯ offers Open thread in editor tab while a thread shows, first", !!items && label.test(items[0] ?? ""), items)
+    if (items) {
+      const item = await page.evaluateHandle(() => [...document.querySelectorAll<HTMLElement>(".monaco-menu .action-item .action-label")].find((l) => /Open thread in editor tab/u.test(l.getAttribute("aria-label") ?? l.textContent ?? "")) ?? null)
+      const itemBox = await (item.asElement() as ElementHandle | null)?.boundingBox()
+      if (itemBox) {
+        await page.mouse.move(itemBox.x + itemBox.width / 2, itemBox.y + itemBox.height / 2, { steps: 4 })
+        await sleep(250)
+      }
+      await clickHandle(item.asElement() as ElementHandle | null, "Open thread in editor tab in the ⋯ menu")
+    } else {
+      await press("Escape")
+      await command("frizz.openThreadInTab")
+    }
+    type Tab = Awaited<ReturnType<typeof status>>["threadTabs"][number]
+    const tab = await waitFor("the tab's page ready", async () => (await status()).threadTabs.find((candidate: Tab) => candidate.ready), 60_000).catch(async () => (await status()).threadTabs[0])
+    const tabUrl = tab?.url ? new URL(tab.url) : undefined
+    expect("c20", "a tab opens beside the code, framing the thread's own address in embed mode", tab?.thread === seeded!.thread.slug && tab.project === workspace.slug && tabUrl?.pathname === `/all/${workspace.slug}/thread/${seeded!.thread.slug}` && tabUrl.searchParams.get("embed") === "vscode" && tab.viewColumn === 2, tab)
+    const tabFrame = await waitFor("the tab's Frizz frame", () => page.frames().find((candidate) => candidate !== sidebarFrame && !candidate.detached && candidate.url().startsWith(`${origin}/`)), 20_000)
+    tabFrames.add(tabFrame)
+    const inTab = <T>(fn: () => T) => tabFrame.evaluate(fn) as Promise<Awaited<T>>
+    const shownInTab = await waitFor("the thread's drawer in the tab", async () => {
+      const state = await inTab(() => {
+        const reply = [...document.querySelectorAll<HTMLTextAreaElement>('textarea[data-surface="chatComposer"]')].find((t) => t.getClientRects().length > 0)
+        return reply ? { width: innerWidth, title: document.querySelector("[role=dialog] h1, [role=dialog] h2")?.textContent ?? null, bar: !!document.querySelector("[data-editor-context-bar]") } : null
+      })
+      return state ?? undefined
+    }, 20_000).catch(() => null)
+    const sidebarWide = await inPage(() => innerWidth)
+    // In the editor's colours on the EDITOR's surface (thread-panel.ts): the page marks its root so, and
+    // its background — the full-width drawer's, which in those colours is the surface — is the editor's.
+    const tabColours = await inTab(() => {
+      const probe = document.createElement("div")
+      probe.style.color = "var(--vscode-editor-background)"
+      document.body.append(probe)
+      const editor = getComputedStyle(probe).color
+      probe.remove()
+      const drawer = document.querySelector<HTMLElement>(".frizz-sheet-panel")
+      return { hostColors: document.documentElement.dataset.hostColors ?? null, editor, drawer: drawer ? getComputedStyle(drawer).backgroundColor : null, body: getComputedStyle(document.body).backgroundColor }
+    })
+    expect("c20", "…in the editor's colours, on the editor's surface: its drawer is the editor's background", tabColours.hostColors === "editor" && !!tabColours.editor && tabColours.drawer === tabColours.editor, tabColours)
+    // The tab's own webview in the workbench: the visible one in the editor part (the sidebar's is in the
+    // side bar). Its page fills it — the editor's width, whatever the side bar was left at by an earlier
+    // check (c9 leaves it ~450px, so "wider than the sidebar" is no measure of anything).
+    const tabWebview = await inWorkbench(() => {
+      const part = document.querySelector(".part.editor")!.getBoundingClientRect()
+      const r = [...document.querySelectorAll<HTMLElement>("iframe.webview")].map((f) => f.getBoundingClientRect()).find((b) => b.width > 0 && b.left >= part.left - 1 && b.right <= part.right + 1)
+      return r ? { width: r.width, part: part.width } : null
+    })
+    // Whether the tab's page shares the sidebar's storage (drafts, the page's own settings): both frames
+    // sit under the same workbench, which is what a partition is keyed by. Recorded, not judged.
+    const probeKey = `frizz-e2e-tab-probe-${Date.now()}`
+    await inPage((key: string) => localStorage.setItem(key, "from the sidebar"), probeKey)
+    notes.tabSharesSidebarStorage = await tabFrame.evaluate((key: string) => localStorage.getItem(key), probeKey)
+    await inPage((key: string) => localStorage.removeItem(key), probeKey)
+    expect("c20", "…its page shows the thread, with its reply box and the editor's context bar, filling its editor group", !!shownInTab && shownInTab.bar && !!tabWebview && Math.abs(shownInTab.width - tabWebview.width) <= 2 && tabWebview.width >= tabWebview.part / 2 - 8, { tab: shownInTab, webview: tabWebview, sidebar: sidebarWide })
+    const titled = await waitFor("the tab titled by its page", async () => {
+      const now = (await status()).threadTabs[0]
+      return now && now.title !== seeded!.thread.slug ? now.title : undefined
+    }, 8_000).catch(() => (status().then((s) => s.threadTabs[0]?.title)))
+    const tabLabel = await inWorkbench(() => [...document.querySelectorAll<HTMLElement>(".part.editor .tab")].map((t) => t.getAttribute("aria-label") ?? t.textContent ?? ""))
+    expect("c20", "…its editor tab reads the thread's title as the page names it, not re-cased", typeof titled === "string" && titled.length > 0 && tabLabel.some((text) => text.startsWith(titled)), { titled, tabLabel })
+    await capture(join(out, `${version}-c20-thread-tab-window.png`))
+
+    // Its reply box sends — to the thread's simulated worker, carrying the editor's block (the tab is fed).
+    const before = readFileSync(seeded!.inputs, "utf8").trim().split("\n").filter(Boolean).length
+    const reply = (await tabFrame.evaluateHandle(() => [...document.querySelectorAll<HTMLTextAreaElement>('textarea[data-surface="chatComposer"]')].find((t) => t.getClientRects().length > 0) ?? null)).asElement() as ElementHandle | null
+    await clickHandle(reply, "the tab's reply box")
+    await until(async () => await inTab(() => document.activeElement?.getAttribute("data-surface") === "chatComposer"), 3_000)
+    await page.keyboard.type("from the tab: what is this?")
+    await press("Enter")
+    const sent = await waitFor("the tab's message at the simulated worker", () => {
+      const lines = readFileSync(seeded!.inputs, "utf8").trim().split("\n").filter(Boolean)
+      return lines.length > before ? (JSON.parse(lines.at(-1)!) as { id: string; text: string }) : undefined
+    }, 20_000).catch(() => null)
+    const block = sent ? parseSentEditorContext(sent.text) : null
+    expect("c20", "…its reply box sends to the thread's worker, with the editor's block naming sample.ts", !!sent && sent.text.startsWith("from the tab: what is this?") && !!block && /sample\.ts/u.test(block.editor.display), { text: sent?.text.slice(0, 400), block })
+
+    // The tab was used last: Ctrl+L in the editor lands the selection in the TAB's reply box. Back to the
+    // code where it is, column 1: opening it in the ACTIVE group — the tab's, after the click into its reply
+    // box — would put sample.ts over the tab, and a tab out of sight is rightly not where Ctrl+L goes.
+    await agent({ op: "open", path: files.sample, column: 1 })
+    await waitFor("sample.ts in column 1 with the editor focused", async () => ((await workbenchFocus()).editor && (await editorState()).path === files.sample) || undefined, 5_000).catch(() => undefined)
+    expect("c20", "…and the tab is still on screen beside it", (await status()).threadTabs[0]?.visible === true, (await status()).threadTabs)
+    await press("ArrowRight")
+    await selectLines23()
+    await press("Control+KeyL")
+    const chip = await waitFor("the chip in the tab", async () => {
+      const value = await inTab(() => [...document.querySelectorAll<HTMLTextAreaElement>('textarea[data-surface="chatComposer"]')].find((t) => t.getClientRects().length > 0)?.value ?? "")
+      return value.includes("@sample.ts:2-3") ? value : undefined
+    }, 8_000).catch(() => null)
+    const sidebarBox = await box("chatComposer")
+    expect("c20", "Ctrl+L in the editor puts the selection in the tab's reply box — the Frizz used last — not the sidebar's", !!chip && !sidebarBox?.value.includes("@sample.ts:2-3"), { tab: chip, sidebar: sidebarBox?.value })
+    // Ctrl+L in the tab: back to the code.
+    await press("Control+KeyL")
+    const back = await until(async () => (await workbenchFocus()).editor && (await editorState()).path === files.sample, 5_000)
+    expect("c20", "Ctrl+L pressed in the tab goes back to the code", back, await workbenchFocus())
+
+    // Asked again: the same tab, forward.
+    await command("frizz.openThreadInTab", { thread: seeded!.thread.slug, project: workspace.slug })
+    const again = await until(async () => {
+      const tabs = (await status()).threadTabs
+      return tabs.length === 1 && tabs[0]!.active
+    }, 5_000)
+    expect("c20", "asked again, the same tab comes forward: one tab per thread", again, (await status()).threadTabs)
+    await capture(join(out, `${version}-c20-thread-tab-chip-window.png`))
+    await command("workbench.action.closeAllEditors")
+    await until(async () => (await status()).threadTabs.length === 0, 5_000)
+    tabFrames.delete(tabFrame)
+  })
+
   // ── c21: the bar's ×, one selection left out with the eye still on ──
   /** The bar's leave-out control on a box: its state, and which glyph it shows now. */
   const leaveOutState = (surface: "chatComposer" | "newComposer") =>
@@ -2597,7 +2857,13 @@ try {
       return { before, plain, shift }
     })
     notes.osDropRouting = blocked
-    expect("c23", "VS Code takes an OS drag from the sidebar unless Shift is held: plain, the webview's pointer events go off; Shift, back on", blocked.plain === "none" && blocked.shift === "auto", blocked)
+    // The floor's monitor is older: 1.90.0's (read in its workbench.desktop.main.js) turns the webviews'
+    // pointer events off only for a DRAG_START in the window — a tab or a file dragged inside VS Code —
+    // and has no DRAG/DRAG_OVER handler and no Shift rule, so a drag from the OS reaches the sidebar
+    // plain. 1.140.0's adds both. Releases between the two are not measured; they get 1.140's claim.
+    const [, minor = 0] = version.split(".").map((part) => Number.parseInt(part, 10))
+    if (minor < 91) expect("c23", `VS Code ${version} leaves an OS drag to the sidebar, Shift or not: its drag monitor knows only drags started in the window`, blocked.plain === "auto" && blocked.shift === "auto", blocked)
+    else expect("c23", "VS Code takes an OS drag from the sidebar unless Shift is held: plain, the webview's pointer events go off; Shift, back on", blocked.plain === "none" && blocked.shift === "auto", blocked)
     // The page's half: the drop itself, trusted, carrying the file from disk, on the page's own frame.
     const sessionOf = (f: Frame) => (f as unknown as { client: CDPSession }).client
     const frameSession = sessionOf(await frame())

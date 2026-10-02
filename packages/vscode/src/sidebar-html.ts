@@ -20,7 +20,8 @@
 //    Frizz's origin, so if the frame were ever somewhere else the browser drops it instead of handing it
 //    selected code.
 //  - the view's own traffic never reaches the page: `{ view: … }` from this document (its buttons, its
-//    platform) and `{ view: "hint" }` from the extension, which shows or hides the "hasn't loaded" bar.
+//    platform, `focused` when it takes the keyboard) and `{ view: "hint" }` from the extension, which
+//    shows or hides the "hasn't loaded" bar.
 // The envelope keeps the two apart, so nothing the page posts can pass for a click on Reload.
 //
 // THE EDITOR'S COLOURS. VS Code's API tells the extension only the theme's KIND; the colours themselves
@@ -41,9 +42,13 @@ export function nonce(): string {
   return randomBytes(18).toString("base64url")
 }
 
-/** A value as a JavaScript literal inside an inline `<script>`: JSON, with `<` escaped so no `</script>` can close it. */
-function script(value: unknown): string {
-  return JSON.stringify(value).replace(/</gu, "\\u003c")
+/**
+ * A value as a JavaScript literal inside an inline `<script>`: JSON, with `<` escaped so no `</script>`
+ * (or `<!--`) can close or bend the element, and U+2028/U+2029, which JSON allows in a string and an older
+ * engine's JavaScript grammar does not, escaped too.
+ */
+export function scriptJson(value: unknown): string {
+  return JSON.stringify(value).replace(/</gu, "\\u003c").replace(/\u2028/gu, "\\u2028").replace(/\u2029/gu, "\\u2029")
 }
 
 export function escapeHtml(value: string): string {
@@ -136,7 +141,9 @@ export const HINT_OLD_FRIZZ = "This Frizz is older than the sidebar. Update Friz
 /**
  * The iframe of Frizz at `url` (whose origin is `origin`), and the relay. `hint`: the bar's words, shown
  * from the first paint — for a Frizz already known to predate the sidebar, rather than a message posted
- * at a document whose relay may not be listening yet.
+ * at a document whose relay may not be listening yet. `state`: kept with VS Code's webview state
+ * (`setState`), which is what a thread's editor tab is restored from after a window reload
+ * (thread-panel.ts); JSON, and only names — never anything the page showed.
  */
 export function frameDocument(input: {
   nonce: string
@@ -147,6 +154,8 @@ export function frameDocument(input: {
   match?: boolean
   /** The surface this view sits on, whose background the page takes: the side bar's (default) or an editor tab's. */
   surface?: EmbedSurface
+  /** Kept as the webview's state (`setState`), for a thread's tab restored after a reload: names only. */
+  state?: Record<string, string>
 }): string {
   const { url, origin } = input
   if (!safeOrigin(origin) || new URL(url).origin !== origin) throw new Error(`refusing to frame ${url} as ${origin}`)
@@ -163,13 +172,14 @@ export function frameDocument(input: {
 <iframe id="frizz" title="Frizz" allow="clipboard-read; clipboard-write; local-network-access"></iframe>
 </div>
 <script nonce="${input.nonce}">
-  const vscode = acquireVsCodeApi()
-  const FRIZZ = ${script(origin)}
+  const vscode = acquireVsCodeApi()${input.state ? `
+  vscode.setState(${scriptJson(input.state)})` : ""}
+  const FRIZZ = ${scriptJson(origin)}
   const frame = document.getElementById("frizz")
   const hint = document.getElementById("hint")
   const hintText = document.getElementById("hint-text")
-  const COLORS = ${script(EMBED_THEME_COLORS)}
-  const SURFACE = ${script(input.surface ?? "sideBar")}
+  const COLORS = ${scriptJson(EMBED_THEME_COLORS)}
+  const SURFACE = ${scriptJson(input.surface ?? "sideBar")}
   let match = ${input.match === false ? "false" : "true"}
   let posted = ""
   // The theme as VS Code has drawn this document: its kind from the body's class (vscode-light,
@@ -204,7 +214,7 @@ export function frameDocument(input: {
   restyled.observe(document.documentElement, { attributes: true, attributeFilter: ["style", "class"] })
   restyled.observe(document.body, { attributes: true, attributeFilter: ["class"] })
   posted = JSON.stringify(themeMessage(undefined))
-  frame.src = ${script(url)} + (match ? ${script(`#${EMBED_THEME_FRAGMENT}`)} + encodeURIComponent(posted) : "")
+  frame.src = ${scriptJson(url)} + (match ? ${scriptJson(`#${EMBED_THEME_FRAGMENT}`)} + encodeURIComponent(posted) : "")
   window.addEventListener("message", (event) => {
     const data = event.data
     if (event.source === frame.contentWindow) {
@@ -239,10 +249,16 @@ export function frameDocument(input: {
   // (its active frame's contentWindow.focus()) as it settles a view's focus, and a focused window is the
   // focused frame — the page under it loses the keyboard though nothing here moved. Focusing the frame
   // element again would be a no-op (it is the active element), so the page's window is focused instead.
-  window.addEventListener("focus", () => setTimeout(() => {
-    if (document.activeElement === document.body) frame.focus()
-    else if (document.activeElement === frame) frame.contentWindow.focus()
-  }))${CLICKS}
+  //
+  // And the extension hears of it: which Frizz the human used last — the sidebar or a thread's tab — is
+  // where Ctrl+L in the editor takes the selection (app.ts frontFrame).
+  window.addEventListener("focus", () => {
+    vscode.postMessage({ view: "focused" })
+    setTimeout(() => {
+      if (document.activeElement === document.body) frame.focus()
+      else if (document.activeElement === frame) frame.contentWindow.focus()
+    })
+  })${CLICKS}
   vscode.postMessage({ view: "platform", mac: /Mac/.test(navigator.platform) })
 </script>
 </body>
