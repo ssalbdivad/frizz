@@ -9,7 +9,7 @@
 // The project defaults to the frizz repo itself (a gh-authed repo, an empty board under the temp HOME).
 //
 // Usage:
-//   nub scripts/adhoc-stack.mjs [--port=4930] [--project=/abs/dir] [--claude-bin=/abs/bin] [--wakers] [--reaper] [--prime] [--keep] [--home=/abs] [--seed]
+//   nub scripts/adhoc-stack.mjs [--port=4930] [--project=/abs/dir] [--claude-bin=/abs/bin] [--wakers] [--reaper] [--prime] [--keep] [--home=/abs] [--seed] [--dist]
 //
 // It prints ONE json line to stdout: {"url","port","home","project"} once /health is green,
 // then stays up until SIGINT/SIGTERM, deleting the temp HOME on exit (unless --keep). Run it with Bash
@@ -113,7 +113,10 @@ process.on("uncaughtException", (e) => { console.error("[adhoc-stack] uncaught",
 
 const { startServer } = await import("../packages/server/src/index.ts")
 try {
-  const started = await startServer({ dev: true, port, installSignalHandlers: false, claudeBin })
+  // --dist serves the BUILT client (packages/web/dist — run `vite build` in packages/web first) instead of
+  // Vite's dev middleware. Anything judged by load time — first paint, time to interactive — must use it:
+  // in dev every module is transformed on request, which measures Vite, not Frizz.
+  const started = await startServer({ dev: !flag("dist"), port, installSignalHandlers: false, claudeBin })
   close = () => started.close()
   // Confirm the API is actually serving before announcing — a race here would hand CDP a dead port.
   for (let i = 0; i < 100; i++) {
