@@ -598,7 +598,7 @@ export function createClaudeAgentBrokerBridge(deps: ClaudeBrokerBridgeDeps): Cla
     async spawnDispatch(input) {
       // A new dispatch replaces any prior session on the slug.
       const prior = sessions.get(input.threadSlug)
-      if (prior) { prior.client.close(); killBroker(deps.stateDir, prior.sessionId); sessions.delete(input.threadSlug) }
+      if (prior) { prior.client.close(); killBroker(deps.stateDir, prior.sessionId, "dispatch-replaced"); sessions.delete(input.threadSlug) }
       // VALIDATED BEFORE THE SOCKET, for the reason spelled out on followUp below: a frame the daemon
       // refuses is discarded there with nobody to tell, and for a DISPATCH that means a worker that
       // boots, receives no task at all, and sits idle looking frozen from birth.
@@ -870,7 +870,7 @@ export function createClaudeAgentBrokerBridge(deps: ClaudeBrokerBridgeDeps): Cla
       // leak it. The return value reports only whether we held a live binding to tear down first.
       const s = current(threadSlug, sessionId)
       if (s) { s.client.close(); sessions.delete(threadSlug) }
-      killBroker(deps.stateDir, sessionId)
+      killBroker(deps.stateDir, sessionId, reason)
       // Terminalize the JOURNAL, not just this process's memory of it. When the caller is the lifecycle
       // subscriber, storage.ts has already cancelled these and this is a no-op (an already-terminal
       // record is not returned). When it is router.stopThreadRuntime — Stop, or "Mark as done" — it is

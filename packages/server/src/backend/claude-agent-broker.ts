@@ -27,6 +27,7 @@ import { fileURLToPath } from "node:url"
 import { createClaudeQueryFactory } from "./claude-agent-sdk.ts"
 import { inheritWorkerEnvironment } from "./worker-env.ts"
 import { leaseRuntime } from "../runtime-lease.ts"
+import { daemonBirthMarker } from "./daemon-identity.ts"
 import { projectMcpServers, workerMcpServers, type WorkerMcpServers } from "./project-mcp-servers.ts"
 import { WORKER_DISALLOWED_TOOLS, claudeCompactionWindowOf } from "./types.ts"
 import { createClaudeBrokerDiagnosticWriter, createClaudeBrokerExitWriter, type ClaudeBrokerExitReason } from "./claude-broker-diagnostics.ts"
@@ -94,6 +95,13 @@ export interface BrokerRecord {
    *  to give the board a denominator the session genuinely runs under. Absent ⇒ nothing was set, or the
    *  daemon predates this field. */
   compactionWindow?: number
+  /** This daemon's process BIRTH marker (process-generation.ts, `linux:<boot id>:<start ticks>`), so a
+   *  reader can tell this daemon from an unrelated process that later got the same pid. A pid alone is
+   *  not an identity: a reboot (8 broker daemons in the 2026-09-23..10-01 corpus died to one, leaving
+   *  their records behind) restarts the pid counter, and the next boot hands those low pids to whatever
+   *  starts first. Linux only, where it costs one /proc read; absent elsewhere, and absent ⇒ the reader
+   *  falls back to "the pid is alive", exactly the pre-marker behaviour. */
+  processStart?: string
 }
 
 // What THIS daemon build understands, stamped into its record so the bridge can tell an old surviving
@@ -269,7 +277,6 @@ export function runClaudeBroker(config: ClaudeBrokerConfig): RunningBroker {
     })
   }
 
-  // The session ending (claude exits) tears the daemon down — there is nothing left to hold.
   // The session ending (claude exits) tears the daemon down — there is nothing left to hold. But an
   // error out of the ITERATOR is a different thing entirely and used to be conflated with it: any
   // failure mapping one event to frizz's typed shape landed in this `.catch` and killed the daemon,
@@ -504,7 +511,8 @@ export function runClaudeBroker(config: ClaudeBrokerConfig): RunningBroker {
   server.listen(config.socketPath, () => {
     published = true
     if (config.recordPath) {
-      const record: BrokerRecord = { daemonPid: process.pid, socketPath: config.socketPath, sessionId: config.sessionId, generation, createdAt: new Date().toISOString(), capabilities: BROKER_CAPABILITIES, compactionWindow: claudeCompactionWindowOf(config.workerEnv) }
+      const processStart = daemonBirthMarker() // see daemon-identity.ts
+      const record: BrokerRecord = { daemonPid: process.pid, socketPath: config.socketPath, sessionId: config.sessionId, generation, createdAt: new Date().toISOString(), capabilities: BROKER_CAPABILITIES, compactionWindow: claudeCompactionWindowOf(config.workerEnv), ...(processStart ? { processStart } : {}) }
       try { writeFileSync(config.recordPath, JSON.stringify(record), { mode: 0o600 }) } catch {}
     }
     armIdle()

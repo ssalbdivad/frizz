@@ -90,7 +90,7 @@ function fixedPsGeneration(pid: number): ProcessGenerationObservation | null {
  * the same answer — so it loses on both availability and speed.
  *
  * A quarter-second is affordable here because nothing per-request observes a generation: `observe()`
- * runs once per process at module load for `defaultSelf`, then only on lock acquisition, launcher
+ * runs once per process, on the first `current()`, for `defaultSelf`, then only on lock acquisition, launcher
  * status reads and the deadline-bounded delegate/guard polls. `processAlive` short-circuits ahead of
  * it, so the ordinary stale lock — owner simply gone — never pays for PowerShell at all; only a lock
  * whose PID is still in use does, which is precisely the case this file exists to adjudicate.
@@ -151,18 +151,26 @@ function observeDefault(pid: number): ProcessGenerationObservation {
   return { confidence: "unavailable" }
 }
 
-const defaultSelf = (() => {
+// LAZY, and memoized so the value (above all an `opaque:` fallback) is stable for the process's life.
+// It was an eager IIFE, which made IMPORTING this module cost an observation: harmless on Linux (one
+// /proc read) but a PowerShell spawn on Windows — and the Claude broker daemon imports this module
+// only to stamp its own birth onto its record, which on Linux reads /proc directly and never needs
+// `current()`. Eager, every daemon start on Windows would have paid ~0.3s for a value nothing asked for.
+let defaultSelfMemo: ProcessGeneration | undefined
+function defaultSelf(): ProcessGeneration {
+  if (defaultSelfMemo) return defaultSelfMemo
   const observed = observeDefault(process.pid)
-  return {
+  defaultSelfMemo = {
     pid: process.pid,
     processStart: observed.processStart ?? `opaque:${randomUUID()}`,
   }
-})()
+  return defaultSelfMemo
+}
 
 const SYNC_WAIT = new Int32Array(new SharedArrayBuffer(4))
 
 export const defaultProcessPlatformAdapter: ProcessPlatformAdapter = {
-  current: () => defaultSelf,
+  current: defaultSelf,
   observe: observeDefault,
   isAlive: processAlive,
   now: () => Date.now(),

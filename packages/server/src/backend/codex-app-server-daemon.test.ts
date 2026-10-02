@@ -27,6 +27,7 @@ import {
 } from "./codex-app-server.ts"
 import { codexAppServerArgv } from "./codex-mcp.ts"
 import { captureLogRecords } from "../logging.ts"
+import { processStartTime } from "../process-generation.ts"
 
 // How a scripted fake gets to BE `codex` for these tests, on every platform.
 //
@@ -163,6 +164,8 @@ test("codex daemon: the app-server survives a client detaching, and the next cli
     const record = liveDaemonRecord(h.stateDir, PROJECT)
     assert.ok(record, "the daemon published a record")
     assert.equal(record!.authAccountId, "account-one", "the record pins the account loaded at process start")
+    // Its birth, so a stranger on a reused pid after a reboot is not taken for it (daemon-identity.ts).
+    if (process.platform === "linux") assert.equal(record!.processStart, processStartTime(record!.daemonPid))
     assert.equal(first.authAccountId, "account-one")
     const childPid = record!.childPid
 

@@ -4,6 +4,7 @@ import { tmpdir } from "node:os"
 import { delimiter, join } from "node:path"
 import { test } from "node:test"
 import { claudeBrokerRecordPath, forkBroker, killBroker, resolveClaudeExecutableAbsolute } from "./claude-broker-host.ts"
+import { claudeBrokerDiagnosticLogPath } from "./claude-broker-diagnostics.ts"
 import { captureLaunchEnvironment } from "./worker-env.ts"
 
 // The npm `.cmd` stub, verbatim from a real `npm i -g @anthropic-ai/claude-code` on Windows Server
@@ -247,4 +248,38 @@ test("killBroker: win32 routes through taskkill /T /F and drops the record; posi
   assert.equal(killBroker(dir, sessionId, undefined, { ...deps, platform: "win32" }), false)
   assert.equal(spawns.length, 1)
   assert.equal(kills.length, 1)
+})
+
+// --- killBroker: the teardown names its cause in the daemon's log, on every platform -------------------
+//
+// All 277 exits in the 2026-09-23..10-01 corpus read `signal-SIGTERM`, and on win32 a `taskkill /F` runs
+// no handler, so a requested teardown there left no line at all. The sender's record is the only
+// attribution that survives both.
+test("killBroker: writes the cause and the daemon's generation before it signals, even where the daemon cannot", (t) => {
+  const dir = mkdtempSync(join(tmpdir(), "frizz-kill-cause-"))
+  t.after(() => rmSync(dir, { recursive: true, force: true }))
+  const sessionId = "11111111-2222-4333-8444-555555555555"
+  const recordPath = claudeBrokerRecordPath(dir, sessionId)
+  mkdirSync(join(recordPath, ".."), { recursive: true })
+  const log = () => readFileSync(claudeBrokerDiagnosticLogPath(dir, sessionId), "utf8").split("\n").filter(Boolean).map((l) => JSON.parse(l))
+  const order: string[] = []
+  const deps = {
+    platform: "win32" as const,
+    kill: () => {},
+    spawnSync: () => { order.push(`signal after ${log().length} record(s)`); return { status: 0 } },
+  }
+  const publish = (generation: string) => writeFileSync(recordPath, JSON.stringify({ daemonPid: process.pid, socketPath: join(dir, "s"), sessionId, generation, createdAt: new Date().toISOString() }))
+
+  publish("g1")
+  assert.equal(killBroker(dir, sessionId, "session-deleted", deps), true)
+  publish("g2")
+  assert.equal(killBroker(dir, sessionId, undefined, deps), true)
+  // Nothing live, nothing to attribute: no record is written for a daemon that is not there.
+  assert.equal(killBroker(dir, sessionId, "hibernate", deps), false)
+
+  assert.deepEqual(log().map((r) => [r.generation, r.daemonPid, r.terminate.cause, r.terminate.requestedBy]), [
+    ["g1", process.pid, "session-deleted", process.pid],
+    ["g2", process.pid, "unspecified", process.pid],
+  ])
+  assert.deepEqual(order, ["signal after 1 record(s)", "signal after 2 record(s)"], "each record lands before its signal")
 })
