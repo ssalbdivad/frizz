@@ -94,14 +94,19 @@ function runPrefilter(stdin: string, opts: { env?: Record<string, string>; shell
 
 const nodeAnswer = (stdin: string, env: Record<string, string> = WORKER) => JSON.stringify(bashHookResponse(stdin, ["node", NODE_HOOK], env))
 
-type Verdict = { skipped: number; handedOff: number; neededNode: number; violations: string[] }
-async function check(stdins: string[], opts: Parameters<typeof runPrefilter>[1] = {}, concurrency = 12): Promise<Verdict> {
-  const verdict: Verdict = { skipped: 0, handedOff: 0, neededNode: 0, violations: [] }
+// `outputs[i]` is what the pre-filter printed for `stdins[i]`, so one pass also yields the decisions to
+// compare across shells. `untilSkipWrong` stops at the first wrong skip: the mutant control needs one.
+type Verdict = { skipped: number; handedOff: number; neededNode: number; violations: string[]; outputs: string[] }
+async function check(stdins: string[], opts: Parameters<typeof runPrefilter>[1] = {}, concurrency = 12, untilSkipWrong = false): Promise<Verdict> {
+  const verdict: Verdict = { skipped: 0, handedOff: 0, neededNode: 0, violations: [], outputs: [] }
   let next = 0
+  let stop = false
   const worker = async () => {
-    while (next < stdins.length) {
-      const stdin = stdins[next++]
+    while (next < stdins.length && !stop) {
+      const i = next++
+      const stdin = stdins[i]
       const run = await runPrefilter(stdin, opts)
+      verdict.outputs[i] = run.stdout
       const answer = nodeAnswer(stdin, opts.env ?? WORKER)
       if (answer !== "{}") verdict.neededNode++
       if (run.status !== 0) verdict.violations.push(`exit ${run.status} (${run.stderr.trim()}): ${stdin}`)
@@ -111,7 +116,10 @@ async function check(stdins: string[], opts: Parameters<typeof runPrefilter>[1] 
       } else {
         verdict.skipped++
         if (run.stdout !== "{}") verdict.violations.push(`skip printed ${JSON.stringify(run.stdout)}: ${stdin}`)
-        else if (answer !== "{}") verdict.violations.push(`SKIPPED A CALL NODE ACTS ON (${answer.slice(0, 120)}): ${stdin}`)
+        else if (answer !== "{}") {
+          verdict.violations.push(`SKIPPED A CALL NODE ACTS ON (${answer.slice(0, 120)}): ${stdin}`)
+          stop ||= untilSkipWrong
+        }
       }
     }
   }
@@ -286,12 +294,11 @@ const SHELLS = [["dash"], ["bash"], ["bash", "--posix"], ["busybox", "sh"]].filt
 test("every POSIX shell available here takes the same decisions", { skip }, async (t) => {
   t.diagnostic(`shells: ${SHELLS.map((s) => s.join(" ")).join(", ")}`)
   const sample = [...ADVERSARIAL, ...MUST_SKIP, ...loadCorpus(join(here, "bash-background-prefilter.corpus.jsonl")).slice(0, 300)]
-  const decisions = async (shell: string[]) => Promise.all(sample.map(async (stdin) => (await runPrefilter(stdin, { shell })).stdout))
-  const reference = await decisions(["sh"])
+  const reference = (await check(sample, { shell: ["sh"] })).outputs
   for (const shell of SHELLS) {
     const verdict = await check(sample, { shell })
     assert.deepEqual(verdict.violations, [], shell.join(" "))
-    assert.deepEqual(await decisions(shell), reference, shell.join(" "))
+    assert.deepEqual(verdict.outputs, reference, shell.join(" "))
   }
 })
 
@@ -340,7 +347,7 @@ test("NEGATIVE CONTROL: the pre-filter with any one check removed skips a call n
     assert.ok(source.includes(from), `mutation for ${name} no longer applies`)
     const script = join(dir, "bash-background.sh")
     writeFileSync(script, source.replace(from, to))
-    const verdict = await check(ADVERSARIAL, { script })
+    const verdict = await check(ADVERSARIAL, { script }, 12, true)
     const argsSkipped = name === "refusing other arguments" && (await runPrefilter(argsCase, { script, args: ["--frizz-thread"], env: {} })).stdout === "{}"
     assert.ok(verdict.violations.some((v) => v.startsWith("SKIPPED")) || argsSkipped, `removing ${name} went unnoticed`)
   }
