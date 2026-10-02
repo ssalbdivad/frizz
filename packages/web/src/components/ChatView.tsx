@@ -608,7 +608,9 @@ function ChatView({ slug, virtualized }: { slug: string; virtualized: boolean })
       <div
         ref={setJumpOverlay}
         data-transcript-overlay
-        className="pointer-events-none absolute inset-x-0 bottom-0 z-20 flex justify-end p-4 [&>*]:pointer-events-auto"
+        // `@container/jump`: the layer spans the viewport's width (inset-x-0), so "Jump to latest" can size
+        // itself to the drawer it floats in (JumpToLatest).
+        className="@container/jump pointer-events-none absolute inset-x-0 bottom-0 z-20 flex justify-end p-4 [&>*]:pointer-events-auto"
       />
       </div>
       {/* This entire footer is deliberately non-scrolling: transcript history alone overflows. */}
@@ -1580,6 +1582,12 @@ function VirtualizedThreadTranscript({
 // scrolling column. (It used to render inside the virtualized content and chase the viewport by
 // recomputing a content-space `top` every render — which meant it drifted with the content on every
 // scroll and snapped back a frame later.)
+//
+// IN A NARROW DRAWER IT IS THE ARROW ALONE, a 28px round ↓ (the words become its accessible name and
+// tooltip). The pill is ~120px; in a 300px VS Code sidebar's transcript that is half the row, and it came up
+// exactly when an answer card grew under the human's own click — a pick opening follow-ups, "Grant for
+// session" opening its confirmation — so it sat on "Confirm grant for session" and the follow-up rows.
+// Keyed on the drawer's width (the overlay is a size container), so the desktop drawer keeps the pill.
 function JumpToLatest({ overlay, hidden, onJump }: { overlay: HTMLElement | null; hidden: boolean; onJump: () => void }) {
   if (!overlay || hidden) return null
   return createPortal(
@@ -1587,10 +1595,11 @@ function JumpToLatest({ overlay, hidden, onJump }: { overlay: HTMLElement | null
       type="button"
       data-jump-to-latest
       onClick={onJump}
-      className="flex items-center gap-1.5 rounded-full border border-border-strong bg-elevated px-3 py-1.5 text-[11px] font-medium text-fg shadow-lg shadow-shadow-ink/30 hover:bg-panel-2"
+      title="Jump to latest"
+      className="flex items-center gap-1.5 rounded-full border border-border-strong bg-elevated px-3 py-1.5 text-[11px] font-medium text-fg shadow-lg shadow-shadow-ink/30 hover:bg-panel-2 @max-[25.5rem]/jump:size-7 @max-[25.5rem]/jump:justify-center @max-[25.5rem]/jump:p-0"
     >
-      <ArrowDown size={12} />
-      Jump to latest
+      <ArrowDown size={12} className="shrink-0 @max-[25.5rem]/jump:size-3.5" />
+      <span className="@max-[25.5rem]/jump:sr-only">Jump to latest</span>
     </button>,
     overlay,
   )

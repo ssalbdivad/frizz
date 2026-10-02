@@ -489,19 +489,23 @@ function Chip({
           {(selected || settledPick) && <Check size={10} strokeWidth={3} />}
         </span>
       )}
-      <div className="min-w-0 flex-1">
+      <div className="@container/option min-w-0 flex-1">
         {/* The label LINE is its own block (and the button's accessible name — the body is detail, not
             name). The "Recommended" badge FLOATS to the top-right so the option text flows around it
             and reclaims the full width on the lines below — instead of a flex sibling that permanently
             narrows the text column. The badge must precede the label in source order for the float to
-            take effect. */}
-        <div id={labelId}>
+            take effect.
+            UNDER 12.5rem OF LABEL COLUMN (this div is a size container) the badge drops BELOW the label
+            instead: there its ~95px took half the first line, and "B. 30 days" read "B. 30 / days" in a
+            300px VS Code sidebar's follow-up. The label div turns into a column and the badge sorts last;
+            any wider column, the desktop's included, keeps the float. */}
+        <div id={labelId} className="@max-[12.5rem]/option:flex @max-[12.5rem]/option:flex-col @max-[12.5rem]/option:items-start @max-[12.5rem]/option:gap-1">
           {recommended && (
             // Keep the pill inside the first answer line, not taller than it. In system sans,
             // leading-none gives a 13.5px pill; its border/text centers are within 0.2px of the
             // answer's cap band at desktop and phone widths (verify-control-chrome.mjs).
             // The float still lets wrapped answers reclaim the full width below it.
-            <span className="pointer-events-none float-right ml-2 mt-px rounded-full border border-border-strong px-1.5 py-px text-[9.5px] leading-none uppercase tracking-wide text-muted">
+            <span className="pointer-events-none float-right ml-2 mt-px rounded-full border border-border-strong px-1.5 py-px text-[9.5px] leading-none uppercase tracking-wide text-muted @max-[12.5rem]/option:order-last @max-[12.5rem]/option:float-none @max-[12.5rem]/option:ml-0 @max-[12.5rem]/option:mt-0">
               Recommended
             </span>
           )}
