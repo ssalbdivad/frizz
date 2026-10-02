@@ -6,10 +6,10 @@ import { isRemoteSession } from "../api/signOut.ts"
 import { supervisorStatusQueryOptions } from "../api/supervisorStatus.ts"
 import { getFrizzSupervisorStatus } from "../api/restart.ts"
 import { publishMachineSettings } from "../hooks/useSettingsAutosave.tsx"
-import { showToast, store, topThreadSlug } from "../store.ts"
+import { closeImageViewer, openThread, pushDrawer, showToast, store, topThreadSlug } from "../store.ts"
 import { crossProjectHref, innerPath, projectSlug } from "./base-path.ts"
 import { rememberCrossProjectFocus } from "./crossProject.ts"
-import { draftStore } from "./drafts.ts"
+import { draftKey, draftStore } from "./drafts.ts"
 import { embedded } from "./embed.ts"
 import { composeEdit, composeProjectsOf, composeTarget, type ComposeMove, type ComposeProject } from "./editorCompose.ts"
 import type { ContextBox } from "./editorContext.ts"
@@ -240,6 +240,8 @@ export function drainCompose(): Promise<void> {
 
 const THREAD_BOX = 'textarea[data-surface="chatComposer"]'
 const NEW_THREAD_BOX = 'textarea[data-surface="newComposer"]'
+// The New thread dialog's box: it shares the page box's draft, so only the dialog tells the two apart.
+const DIALOG_NEW_THREAD_BOX = '[role="dialog"]:not([data-drawer-layer]) textarea[data-surface="newComposer"]'
 
 async function insertComposeItem(item: EditorComposeItem): Promise<void> {
   const outcome = await composeInto(item, { target: "front", focus: true })
@@ -290,10 +292,24 @@ export async function composeInto(item: EditorComposeInput, request: ComposeRequ
       if (!(await threadIsThere(named.thread, named.project))) return { ok: false, reason: "That thread isn't in Frizz." }
       store.showSettings = false
       store.phoneNewThread = null
-      spaNavigate(`${crossProjectHref(named.project)}/thread/${encodeURIComponent(named.thread)}`)
+      // The thread's drawer is about to be what the human sees, so nothing may sit over it.
+      store.showNewThread = false
+      closeImageViewer()
+      openNamedThread(named.thread, named.project, "chat")
       await until(shown, 5_000)
-      if (!shown()) return { ok: false, reason: "That thread isn't in Frizz." }
+      // The thread is there — the server just said so — so a drawer that did not come up is the page's
+      // failure to open it, and must not read as the thread being gone.
+      if (!shown()) return { ok: false, reason: "Couldn't open that thread." }
     }
+  }
+  // THE NEW THREAD DIALOG IS IN FRONT when it is up, whatever drawer it was opened over: "front" is the
+  // box the human is looking at, and the drawer's reply box is behind the dialog's scrim. It was read off
+  // the drawer alone until the sweep (2026-10-01), so an editor's ⌘I with the dialog up went into the
+  // reply box behind it and the dialog's box stayed empty. Its box is the page board's new-thread draft
+  // (NewThreadModal DispatchForm, given no other folder); the drawer stays where it is, under the dialog.
+  if (request.target === "front" && store.showNewThread && store.board) {
+    const box: ContextBox = { key: draftKey.dispatch(store.board.projectDir), projectDir: store.board.projectDir, surface: "newComposer" }
+    return composeIntoBox(item, box, request, DIALOG_NEW_THREAD_BOX)
   }
   const thread = request.target === "new" ? undefined : threadInFront()
   const board = store.board ? { projectDir: store.board.projectDir, projectSlug: store.board.projectSlug } : undefined
@@ -309,6 +325,13 @@ export async function composeInto(item: EditorComposeInput, request: ComposeRequ
     projects: projects ?? [],
   })
   if (target.kind === "refused") return { ok: false, reason: target.reason }
+  // A LAZY THREAD's box is its note (LazyThreadBox), held by the server, with no draft and no chips: a chip
+  // written to its follow-up draft was answered "added", never appeared, and turned up in the reply box
+  // once the thread had started (sweep 2026-10-01). So it is refused, saying what to do instead.
+  // (Putting the chip into the note itself needs staged context that survives startLazyThread.)
+  if (target.kind === "thread" && store.board?.threads.some((candidate) => candidate.id === target.slug && candidate.lazyPrompt !== undefined)) {
+    return { ok: false, reason: "Start the thread to add code to it." }
+  }
   const edit = composeEdit({ value: draftStore.get(target.key), staged: stagedItems(target.key), item, projectDir: target.projectDir, note: request.note })
   // The draft first, then the chip: a mounted box sweeps any staged item whose token its draft lacks.
   draftStore.set(target.key, edit.value)
@@ -332,19 +355,46 @@ export async function composeInto(item: EditorComposeInput, request: ComposeRequ
  * human just clicked in it. Its draft and chips are keyed as the box keys them, so if it has gone in the
  * moment since (a drawer closed), the chip waits in its draft like any other.
  */
-async function composeIntoBox(item: EditorComposeInput, box: ContextBox, request: ComposeRequest): Promise<ComposeOutcome> {
+async function composeIntoBox(item: EditorComposeInput, box: ContextBox, request: ComposeRequest, selector = `textarea[data-surface="${box.surface}"]`): Promise<ComposeOutcome> {
   const edit = composeEdit({ value: draftStore.get(box.key), staged: stagedItems(box.key), item, projectDir: box.projectDir, note: request.note })
   draftStore.set(box.key, edit.value)
   if (edit.stage) addContextItem(box.key, edit.stage)
-  await placeCaret(`textarea[data-surface="${box.surface}"]`, splitComposerValue(edit.value).prose, edit.caret, request.focus)
+  await placeCaret(selector, splitComposerValue(edit.value).prose, edit.caret, request.focus)
   return { ok: true }
 }
 
 /**
- * Does `project` have a thread `slug`? Asked before navigating to one an editor named: a drawer address
- * for a thread its project lacks is not an empty drawer but a DOCUMENT load (store.ts
- * resolveRoutedThread hands it to the /full page's locator), which in a sidebar would reload the frame
- * and drop the answer the extension is waiting for. A server that cannot say is taken at its word.
+ * Open a thread an editor named, the way the page opens its own: STORE-FIRST for a thread of the board
+ * this page holds — the drawer pushed, and the address written after it, as a row or a thread link does
+ * (lib/thread-links.ts) — and by its address for another project's, whose board the page has to switch
+ * to first. `surface` is what opens: "open" is a row's click (a session-less thread opens its document,
+ * store.ts openThread); "chat" is the thread's own drawer, which is where its reply box is.
+ *
+ * By address alone, a thread of the page's own project often opened nothing: closed a moment before, its
+ * drawer address was the one the router had just written, and the router took the host's navigation for
+ * its own earlier write coming back (lib/router.ts `stale`) — 19 of 38 navigations at a load average of
+ * 40-80, 0 of 16 when they alternated between two threads (sweep 2026-10-01). On /full the page holds no
+ * drawer stack of its own to push onto, so the address goes there too.
+ */
+export function openNamedThread(slug: string, project: string, surface: "open" | "chat"): void {
+  if (!holdsBoardOf(project)) {
+    spaNavigate(`${crossProjectHref(project)}/thread/${encodeURIComponent(slug)}`)
+    return
+  }
+  if (surface === "open") openThread(slug)
+  else pushDrawer("thread", slug)
+}
+
+/** Whether this page shows `project`'s board with a drawer stack of its own — the page, not /full. */
+export function holdsBoardOf(project: string): boolean {
+  return projectSlug() === project && store.board?.projectSlug === project && parseStandaloneThreadPath(innerPath()) === null
+}
+
+/**
+ * Does `project` have a thread `slug`? Asked before opening one an editor named: a drawer address for a
+ * thread its project lacks is not an empty drawer but a DOCUMENT load (store.ts resolveRoutedThread
+ * hands it to the /full page's locator), which in a sidebar would reload the frame and drop the answer
+ * the extension is waiting for. A server that cannot say is taken at its word.
  */
 export async function threadIsThere(slug: string, project: string): Promise<boolean> {
   if (store.board?.projectSlug === project && store.board.threads.some((thread) => thread.id === slug)) return true

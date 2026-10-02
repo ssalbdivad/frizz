@@ -116,3 +116,51 @@ export function takePendingAdd(now = Date.now()): ContextBox | null {
   pending = null
   return box
 }
+
+/** What a press of the bar adds, from what the editor has in front: its selection, else the whole file. */
+export function barAdd(active: EditorContextState["active"]): { what: "selection" } | { what: "file"; path: string } | null {
+  if (!active) return null
+  return active.selection ? { what: "selection" } : { what: "file", path: active.path }
+}
+
+// ── ⌘I in the sidebar: the bar's press, from the keyboard ─────────────────────────────────────────
+
+// The bars on screen, each by its strip (EditorContextBar.tsx registers it), so a key can find the bar of
+// the box it was typed in. The strip sits in its composer's own box (Composer `header`), so the composer
+// is the strip's parent.
+const bars = new Map<HTMLElement, ContextBox>()
+
+export function registerContextBar(strip: HTMLElement, box: ContextBox): () => void {
+  bars.set(strip, box)
+  return () => {
+    if (bars.get(strip) === box) bars.delete(strip)
+  }
+}
+
+/**
+ * ⌘I / Ctrl+I IN THE SIDEBAR does what the editor's ⌘I does — puts the code in front into the prompt — so
+ * one chord means one thing on both sides of the frame, as in Cursor (plans/vscode-extension.md § The
+ * editor in the sidebar). Typed in a prompt box that shows a context bar it is a press of that bar: the
+ * selection, else the file in front, as a chip in THAT box. With no drawer up, and the caret in no such
+ * box, it goes into the page's new-thread box (the New thread dialog's, while that is up). Anywhere else —
+ * a thread open and the caret outside its reply box — it is not this key's, and Thread details keeps it
+ * (App.tsx), as in the browser.
+ *
+ * "added" when a request went to the editor; "nothing" when the key was this one's but the editor has no
+ * file in front to add; null when it is not this key's.
+ */
+export function addEditorContextByKey(focused: Element | null, drawerOpen: boolean, dialogOpen: boolean): "added" | "nothing" | null {
+  const typedIn = focused instanceof HTMLTextAreaElement ? [...bars].find(([strip]) => strip.parentElement?.contains(focused)) : undefined
+  let box = typedIn?.[1]
+  if (!box) {
+    if (drawerOpen && !dialogOpen) return null
+    const inDialog = (strip: HTMLElement) => strip.closest('[role="dialog"]:not([data-drawer-layer])') !== null
+    box = [...bars].find(([strip, candidate]) => candidate.surface === "newComposer" && inDialog(strip) === dialogOpen)?.[1]
+    // No bar on the box: the editor has nothing open to offer it (the bar draws nothing then).
+    if (!box) return "nothing"
+  }
+  const what = barAdd(editorContext.active)
+  if (!what) return "nothing"
+  requestEditorContext(box, what)
+  return "added"
+}

@@ -24,9 +24,10 @@ import { SheetHeader } from "./ui/SheetHeader.tsx"
 //     again. Only offered when fitting actually shrank it.
 //   · ←/→ step through the pictures rendered beside it — the same card, drawer or page (the store's
 //     `imageViewer.paths`), so a worker's before/after shots compare in place.
-//   · "Open" is the way out to the OS's own viewer, as a click on a picture used to be. It closes this
-//     first: its answer can be a toast (a copied path, an opener that failed), and toasts sit below
-//     every modal layer.
+//   · "Open" is the way out to the OS's own viewer, as a click on a picture used to be — in an editor's
+//     sidebar, to that editor's window, which previews pictures itself (FileReaderDrawer OpenAction). It
+//     closes this first: its answer can be a toast (a copied path, an opener that failed), and toasts sit
+//     below every modal layer.
 //
 // OVER the page, not instead of it: the page stays in view under the app's own scrim, the one its
 // dialogs and drawers dim with (here at full strength, since the picture is the only thing in focus),

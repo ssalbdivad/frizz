@@ -1,7 +1,11 @@
 import type { EmbedCommandMessage } from "@frizz/shared"
-import { closeDrawersById, store } from "../store.ts"
+import { closeDrawersById, closeImageViewer, store } from "../store.ts"
+import { innerPath } from "./base-path.ts"
 import { openDispatch } from "./newThreadDoor.ts"
 import { closeSettingsAnimated } from "./overlays.ts"
+import { homeHref } from "./pageView.ts"
+import { spaNavigate } from "./router.ts"
+import { parseStandaloneThreadPath } from "./standaloneThreadRoute.ts"
 
 // THE TITLE ROW'S BUTTONS — VS Code's own row above the sidebar's frame carries what a Frizz header would
 // (plans/vscode-extension.md § The editor in the sidebar), and each button arrives here as a
@@ -15,10 +19,18 @@ import { closeSettingsAnimated } from "./overlays.ts"
 //   settings    ⌘,: Settings.
 //
 // A button is pressed in VS Code, not in the frame, so whatever transient layer the page had up (the
-// palette, the shortcuts sheet, a dialog) goes first, as a click outside it would have closed it.
+// palette, the shortcuts sheet, the picture viewer, a dialog) goes first, as a click outside it would
+// have closed it.
+//
+// ON A THREAD'S /full PAGE the frame has no page under it to go back to: its route is outside the page's,
+// with no drawers to close and no prompt box. A frame lands there from a routed address naming a thread
+// that has since gone (store.ts resolveRoutedThread) and from that page's locator, and its title row
+// offers Back to queue like any thread's — which did nothing (sweep 2026-10-01). There Back goes home, as
+// a navigate to the queue does, and New thread goes home and then opens the door.
 
 export function runHostCommand(command: EmbedCommandMessage["command"]): void {
   store.showShortcuts = false
+  closeImageViewer()
   if (command === "jump") {
     store.showPalette = true
     return
@@ -31,10 +43,30 @@ export function runHostCommand(command: EmbedCommandMessage["command"]): void {
   // The rest are about the page under Settings, so Settings goes too — by its own close, which sends a
   // change still waiting in its debounce rather than dropping it with the drawer.
   if (store.showSettings && !closeSettingsAnimated()) store.showSettings = false
+  const fullPage = parseStandaloneThreadPath(innerPath()) !== null
   if (command === "queue") {
     store.showNewThread = false
-    closeDrawersById(store.drawers.map((drawer) => drawer.id))
+    if (fullPage) spaNavigate(homeHref())
+    else closeDrawersById(store.drawers.map((drawer) => drawer.id))
     return
   }
-  openDispatch()
+  if (!fullPage) {
+    openDispatch()
+    return
+  }
+  spaNavigate(homeHref())
+  void untilPagePromptBox().then(openDispatch)
+}
+
+/** The page's own prompt box, once the page is up after leaving /full — or 3s, after which the door opens the dialog. */
+function untilPagePromptBox(): Promise<void> {
+  const deadline = Date.now() + 3_000
+  return new Promise((resolve) => {
+    const check = () => {
+      const box = [...document.querySelectorAll("[data-dispatch-form]")].some((form) => !form.closest('[role="dialog"]'))
+      if (box || Date.now() > deadline) resolve()
+      else window.setTimeout(check, 30)
+    }
+    check()
+  })
 }
