@@ -13,8 +13,9 @@
 // one-off (it is the maintainer's private history); the fixture is a bounded, secret-screened sample
 // restricted by default to this repo's own transcripts, and is what
 // packages/server/src/bash-background-prefilter.test.ts replays on every run.
+import { execFileSync } from "node:child_process"
 import { createReadStream, readdirSync, statSync, writeFileSync } from "node:fs"
-import { homedir } from "node:os"
+import { homedir, userInfo } from "node:os"
 import { join } from "node:path"
 import { createInterface } from "node:readline"
 
@@ -88,6 +89,31 @@ console.error(`${files} transcripts, ${toolUses} Bash calls, ${entries.length} d
 const line = (e: Entry) => JSON.stringify(e)
 if (out) writeFileSync(out, entries.map(line).join("\n") + "\n")
 
+// The fixture is checked in, so it carries no one's identity: the home directory (in every cwd, and
+// spelled `-home-<user>` in ~/.claude/projects paths), the git author name, and every email address
+// are replaced. In the decoded strings, never the JSON text: there an email right after a `\n` escape
+// would swallow its `n` and leave a `\u`. None of them can change a decision, since the pre-filter
+// reads only `&`, `worktree`, `\u` and the key names (the test re-proves the property on the result
+// anyway). The first fixture went in without this and held the maintainer's commit email.
+const identity = (() => {
+  const home = homedir()
+  const user = userInfo().username
+  let author = ""
+  try {
+    author = execFileSync("git", ["config", "user.name"], { encoding: "utf8" }).trim()
+  } catch {}
+  return (text: string) => {
+    let clean = text.split(home).join("/home/u").split(`-home-${user}`).join("-home-u")
+    if (author) clean = clean.split(author).join("A U Thor")
+    return clean.replace(/[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}/g, "user@example.com")
+  }
+})()
+const scrub = (value: unknown): unknown =>
+  typeof value === "string" ? identity(value)
+  : Array.isArray(value) ? value.map(scrub)
+  : value && typeof value === "object" ? Object.fromEntries(Object.entries(value).map(([k, v]) => [identity(k), scrub(v)]))
+  : value
+
 if (fixture) {
   // Never check in anything that looks like a credential, and keep the file reviewable.
   const SECRET = /gh[pousr]_[A-Za-z0-9]{20,}|github_pat_|sk-[A-Za-z0-9-]{20,}|xox[abpr]-|AKIA[0-9A-Z]{16}|Bearer\s+[A-Za-z0-9._-]{20,}|-----BEGIN|(?:token|secret|password|api[_-]?key)\s*[=:]\s*\S{8,}|[A-Za-z0-9]{40,}/i
@@ -102,6 +128,6 @@ if (fixture) {
   // Over-sample the inputs that exercise a check, so every branch of the pre-filter is hit by real text.
   const interesting = (e: Entry) => /&|"timeout"|run_in_background|worktree|\\u/.test(JSON.stringify(e))
   const picked = [...shuffled.filter(interesting).slice(0, 700), ...shuffled.filter((e) => !interesting(e)).slice(0, 300)]
-  writeFileSync(fixture, picked.map(line).join("\n") + "\n")
+  writeFileSync(fixture, picked.map((e) => line(scrub(e) as Entry)).join("\n") + "\n")
   console.error(`fixture: ${picked.length} of ${eligible.length} eligible (${entries.length - eligible.length} over 2KB or secret-shaped)`)
 }
