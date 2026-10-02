@@ -1,5 +1,5 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react"
-import { ArrowUp, FileText, ListPlus, Loader2, Paperclip, X } from "lucide-react"
+import { ArrowUp, FileText, Loader2, Paperclip, Snail, X } from "lucide-react"
 import { ATTACHMENT_ACCEPT, ATTACHMENT_MAX_BYTES, isAllowedAttachmentName, type ThreadSkill } from "@frizz/shared"
 import { showToast } from "../store.ts"
 import { joinComposerValue, splitComposerValue } from "../lib/imagePaths.ts"
@@ -167,7 +167,7 @@ export function Composer({
   // queued it returns false and the keypress keeps its default.
   onPushQueued?: () => boolean
   // SAVE AS A LAZY THREAD — the new-thread box only (plans/lazy-threads.md). ⌘/Ctrl-Shift-Enter, or the
-  // list-plus glyph beside Send, writes the prompt down as a thread with no agent behind it instead of
+  // snail glyph beside Send, writes the prompt down as a thread with no agent behind it instead of
   // starting one. (A footer text hint did this job until 2026-10-01; the maintainer wanted it gone.)
   onSaveLazy?: () => void
   // WHICH PROJECT AN ATTACHMENT IS UPLOADED TO, when it is not the page's. Omitted, `apiBase()` — the
@@ -932,7 +932,7 @@ export function Composer({
           aria-label="Add as lazy thread"
           className={`icon-hover-outline absolute bottom-2 ${RAIL_LAZY_OFFSET} flex h-7 w-7 items-center justify-center rounded-lg text-muted transition-[color,background-color] enabled:hover:bg-panel-2/70 enabled:hover:text-fg disabled:opacity-50`}
         >
-          <ListPlus size={15} strokeWidth={2} />
+          <Snail size={15} strokeWidth={2} />
         </button>
       )}
       <button
