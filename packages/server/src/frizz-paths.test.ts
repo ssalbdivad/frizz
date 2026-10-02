@@ -13,6 +13,8 @@ test("an existing ~/.frizz keeps every root, on every platform, whatever XDG say
   const base = mkdtempSync(join(tmpdir(), "frizz-paths-legacy-"))
   try {
     mkdirSync(legacyFrizzRoot(base))
+    // What makes it an install: every launch writes one (and see the debris case below).
+    writeFileSync(join(legacyFrizzRoot(base), "registry.json"), "{}")
     for (const platform of ["darwin", "linux", "win32"] as const) {
       const paths = frizzPaths({
         home: base,
@@ -84,6 +86,30 @@ test("a ~/.frizz with no registry never takes over an install whose platform roo
     // A ~/.frizz with a registry of its own is a real install, and it keeps winning.
     writeFileSync(join(legacyFrizzRoot(base), "registry.json"), "{}")
     assert.equal(frizzPaths(linux).legacy, true)
+  } finally {
+    rmSync(base, { recursive: true, force: true })
+  }
+})
+
+// 2026-10-02: a harness isolated a test board with XDG_* pointed at a fresh temp dir. `~/.frizz` held
+// only agent scratch debris, the legacy rule handed the harness that real directory anyway, and the
+// registry it wrote there flipped the LIVE board onto it.
+test("a ~/.frizz with no registry never outranks an XDG_DATA_HOME somebody set", () => {
+  const base = mkdtempSync(join(tmpdir(), "frizz-paths-explicit-"))
+  try {
+    const isolated = join(base, "isolated-xdg")
+    const env = { XDG_DATA_HOME: join(isolated, "data"), XDG_STATE_HOME: join(isolated, "state"), XDG_CACHE_HOME: join(isolated, "cache") }
+    mkdirSync(join(legacyFrizzRoot(base), "scratch", "thread-1"), { recursive: true })
+    mkdirSync(join(legacyFrizzRoot(base), "projects", "p1"), { recursive: true })
+    const paths = frizzPaths({ home: base, platform: "linux", env })
+    assert.equal(paths.legacy, false)
+    assert.equal(paths.data, join(isolated, "data", "frizz"))
+    assert.equal(paths.cache, join(isolated, "cache", "frizz"))
+    // Unset, the same debris is still honored on a machine with no other install — that rule is unchanged.
+    assert.equal(frizzPaths({ home: base, platform: "linux", env: {} }).legacy, true)
+    // And a ~/.frizz with a registry is an install, which keeps winning over a set XDG variable.
+    writeFileSync(join(legacyFrizzRoot(base), "registry.json"), "{}")
+    assert.equal(frizzPaths({ home: base, platform: "linux", env }).legacy, true)
   } finally {
     rmSync(base, { recursive: true, force: true })
   }
