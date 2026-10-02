@@ -39,7 +39,8 @@
 //      sheet with its Editor group (Ctrl+L first) and its VS Code group, the title row's ⋯ Keyboard
 //      shortcuts opening the same sheet, Ctrl+1 back to the editor
 //   c9 the gallery: queue (dark, light), a thread with a selection and a chip, the open-files menu,
-//      Settings, the shortcuts sheet — at ~300px and ~450px
+//      Settings, the shortcuts sheet — at ~300px and ~450px; Settings over a thread on top, with the
+//      keyboard, its own Escape and its own clicks
 //
 // NEVER ON THE REAL DISPLAY. On Linux the run re-executes itself under `xvfb-run -a` with DISPLAY and
 // WAYLAND_DISPLAY removed (DISPLAY=:0 here is the maintainer's screen through WSLg). The editor gets its
@@ -323,10 +324,19 @@ async function clickInWorkbench(selector: string): Promise<void> {
     const title = await rectOf(".part.sidebar .composite.title")
     if (title) {
       await page.mouse.move(title.x + 12, title.y + title.height / 2)
-      await until(async () => !!(await (await page.$(selector))?.boundingBox()), 2_000)
+      await until(async () => !!(await visibleIn(selector)), 2_000)
     }
   }
-  await clickHandle(await page.$(selector), selector)
+  // The first VISIBLE match: VS Code re-renders a view's toolbar when its context keys change (the page's
+  // view going from a thread to the queue swaps Back to queue for New thread), and for a beat the old
+  // toolbar's hidden copy of a button can come first in the DOM — the click then found "not visible".
+  await clickHandle((await visibleIn(selector)) ?? (await page.$(selector)), selector)
+}
+
+/** The first match of `selector` in the workbench that has a box. */
+async function visibleIn(selector: string): Promise<ElementHandle | null> {
+  for (const handle of await page.$$(selector)) if (await handle.boundingBox()) return handle
+  return null
 }
 
 /** A chord as a keyboard presses it: `Control+Shift+KeyP`. */
@@ -466,6 +476,13 @@ function traceInstaller() {
   document.addEventListener("focusin", (event) => push("focusin", event.target), true)
   document.addEventListener("focusout", (event) => push("focusout", event.target), true)
   window.addEventListener("focus", () => push("window-focus", null))
+  // The messages each document receives — VS Code's host channel or Frizz's type (not the context feed,
+  // which is every selection): a focus that arrives with no focus() in the page came with one of these.
+  window.addEventListener("message", (event) => {
+    const data = event.data as { channel?: unknown; type?: unknown; focus?: unknown } | null
+    const name = typeof data?.channel === "string" ? data.channel : typeof data?.type === "string" ? data.type : null
+    if (name && name !== "frizz:editor-context") trace.push({ at: Date.now(), kind: `message ${name}${data?.focus === true ? " focus" : ""}`, active: describe(document.activeElement), hasFocus: document.hasFocus() })
+  }, true)
   window.addEventListener("blur", () => push("window-blur", null))
   const focus = HTMLElement.prototype.focus
   HTMLElement.prototype.focus = function (this: HTMLElement, ...args: Parameters<HTMLElement["focus"]>) {
@@ -500,6 +517,12 @@ async function installFocusTrace(): Promise<void> {
     if (w.__focusTrace) return
     const trace: unknown[] = (w.__focusTrace = [])
     let last = ""
+    // Who in the workbench focuses a webview's iframe, with the stack that did it.
+    const nativeFocus = HTMLElement.prototype.focus
+    HTMLElement.prototype.focus = function (this: HTMLElement, ...args: Parameters<HTMLElement["focus"]>) {
+      if (this.tagName === "IFRAME" || this.closest?.(".webview")) trace.push({ at: Date.now(), where: `focus() ${this.tagName}.${String(this.className).slice(0, 30)}`, stack: (new Error().stack ?? "").split("\n").slice(2, 14).map((l) => l.trim().replace(/vscode-file:\/\/vscode-app\/[^ ]*\/out\//u, "")).join(" | ") })
+      return nativeFocus.apply(this, args)
+    }
     setInterval(() => {
       const active = document.activeElement
       const where = !active ? "none" : active.closest(".editor-group-container .monaco-editor") ? "editor" : active.closest(".part.sidebar") ? "sidebar" : active.tagName === "IFRAME" ? `iframe(${(active as HTMLElement).className}${(active as HTMLElement).getBoundingClientRect().width > 0 ? "" : ", no box"})` : `${active.tagName.toLowerCase()}.${(active as HTMLElement).className.toString().slice(0, 40)}`
@@ -1053,6 +1076,7 @@ try {
     await openThreadRow()
     await command("workbench.view.explorer")
     await waitFor("the Frizz view hidden", async () => !(await status()).sidebar.visible || undefined, 10_000)
+    await installFocusTrace()
     const editorAt = Date.now()
     await openInEditor(files.sample)
     await selectLines23()
@@ -1139,16 +1163,21 @@ try {
     expect("c4", "…and typing lands after it", (await box("chatComposer"))?.value.trimEnd().endsWith("x") === true, (await box("chatComposer"))?.value)
     await clearBox("chatComposer")
 
-    // Alt+K, Claude Code's chord, with only a caret in the editor: the whole file, `@sample.ts`.
+    // Alt+K, Claude Code's chord, with only a caret in the editor: the whole file.
+    const altKAt = Date.now()
     await openInEditor(files.sample)
     await agent({ op: "select", selection: [1, 2, 1, 2] })
     await sleep(500)
     await press("Alt+KeyK")
-    const wholeFile = await waitFor("the file's chip from Alt+K", async () => {
+    // A whole file goes in as a REFERENCE, `src/sample.ts` in code quotes — the item carries no text (the
+    // extension's own suite pins that: e2e/suite.ts "Alt+K … the whole file"), and the page writes a text-less
+    // item as a reference to it (lib/editorCompose.ts composeEdit), as Add file to Frizz prompt always has.
+    const wholeFile = await waitFor("the file's reference from Alt+K", async () => {
       const state = await box("chatComposer")
-      return state?.value.includes("@sample.ts") ? state : undefined
+      return state?.value.includes("`src/sample.ts`") ? state : undefined
     }, 8_000).catch(async () => box("chatComposer"))
-    expect("c4", "Alt+K with only a caret puts the whole file in the reply box as a pill, `@sample.ts`", /^@sample\.ts(?!:)/u.test(wholeFile?.value ?? "") && !!wholeFile?.pills.some((pill) => pill.token === "@sample.ts"), wholeFile)
+    if (!wholeFile?.value.startsWith("`src/sample.ts`")) notes.altKFocus = await focusTraceSince(altKAt)
+    expect("c4", "Alt+K with only a caret puts the whole file in the reply box, as a reference: `src/sample.ts`", wholeFile?.value.startsWith("`src/sample.ts`") === true, wholeFile)
     await clearBox("chatComposer")
 
     // Ctrl+L PRESSED IN THE REPLY BOX, the chord the bar names: the editor's selection, into this box.
@@ -1334,13 +1363,21 @@ try {
     await until(async () => !(await inPage(() => !!document.querySelector("[data-shortcut-list]"))), 3_000)
 
     // The same sheet from VS Code's title row: its ⋯, Keyboard shortcuts — clicked, as a human does.
-    await clickInWorkbench('.part.sidebar .title-actions .action-label[aria-label^="More Actions"]')
+    // "Views and More Actions..." on 1.140 (a container with one view), "More Actions..." in a view's own header.
+    await clickInWorkbench('.part.sidebar .title-actions .action-label[aria-label*="More Actions"]')
     const menuItem = await waitFor("Keyboard shortcuts in the ⋯ menu", async () => {
       const items = await inWorkbench(() => [...document.querySelectorAll<HTMLElement>(".monaco-menu .action-item .action-label")].filter((label) => label.getClientRects().length > 0).map((label) => label.getAttribute("aria-label") ?? label.textContent ?? ""))
       return items.some((label) => /Keyboard shortcuts/u.test(label)) ? items : undefined
     }, 5_000).catch(() => null)
     if (menuItem) {
       const item = await page.evaluateHandle(() => [...document.querySelectorAll<HTMLElement>(".monaco-menu .action-item .action-label")].find((label) => /Keyboard shortcuts/u.test(label.getAttribute("aria-label") ?? label.textContent ?? "")) ?? null)
+      // The pointer rests on the item first, as a hand does: VS Code's menu ignored a click that arrived
+      // with no hover before it (the menu stayed up and nothing ran).
+      const itemBox = await (item.asElement() as ElementHandle | null)?.boundingBox()
+      if (itemBox) {
+        await page.mouse.move(itemBox.x + itemBox.width / 2, itemBox.y + itemBox.height / 2, { steps: 4 })
+        await sleep(250)
+      }
       await clickHandle(item.asElement() as ElementHandle | null, "Keyboard shortcuts in the ⋯ menu")
     } else {
       // A native context menu (no DOM to click): the same command the item runs.
@@ -1451,8 +1488,31 @@ try {
     })
     expect("c9", `${tag}: Settings, opened from the title row over a thread, is drawn on top of the thread`, onTop.onTop, { ...onTop, titleRow: (await titleRow()).text })
     await shot(`c9-settings-${tag}`)
+    // …and the keyboard is Settings', not the thread's under it: Escape closes Settings alone, and the thread
+    // stays (the thread's dialog held both the trap and Radix's Escape, which closed the thread instead).
+    const settingsKeys = await inPage(() => ({ hasFocus: document.hasFocus(), inSettings: !!document.activeElement?.closest("[data-over-drawers]") }))
+    const escapeAt = Date.now()
     await press("Escape")
-    if (!(await until(async () => !(await inPage(() => !!document.querySelector('[data-settings-editor="appearance"]'))), 5_000))) await resetPage()
+    const settingsGone = await until(async () => !(await inPage(() => !!document.querySelector('[data-settings-editor="appearance"]'))), 5_000)
+    await sleep(400)
+    const threadStays = await drawerOpen()
+    expect("c9", `${tag}: over a thread, the keyboard is in Settings, and Escape closes Settings and leaves the thread`, settingsKeys.inSettings && settingsGone && threadStays, { settingsKeys, settingsGone, threadStays, ...(settingsGone ? {} : { trace: await focusTraceSince(escapeAt - 2_000) }) })
+    if (!settingsGone) await resetPage()
+    // …and the pointer: a click in Settings is Settings' (the thread's outside-click took it, and closed the
+    // thread under Settings). On its title, text, so the click changes nothing but where the pointer went.
+    // What the keyboard does after the click is not asserted: VS Code's webview host settles a click's focus
+    // on its own schedule, and that dance is not this check's.
+    if (settingsGone && threadStays) {
+      await clickInWorkbench('.part.sidebar .title-actions .action-label[aria-label="Settings"]')
+      await until(async () => (await inPage(() => !!document.querySelector('[data-settings-editor="appearance"]'))), 8_000)
+      await sleep(600)
+      const title = (await (await frame()).evaluateHandle(() => [...document.querySelectorAll("[data-over-drawers] *")].find((el) => el.children.length === 0 && el.textContent?.trim() === "Settings" && el.getClientRects().length > 0) ?? null)).asElement() as ElementHandle | null
+      await clickHandle(title, "Settings' title")
+      await sleep(600)
+      const afterClick = { settings: await inPage(() => !!document.querySelector('[data-settings-editor="appearance"]')), thread: await drawerOpen() }
+      expect("c9", `${tag}: over a thread, a click in Settings leaves Settings and the thread both open`, afterClick.settings && afterClick.thread, afterClick)
+      await resetPage()
+    }
     if (await drawerOpen()) await clickInWorkbench('.part.sidebar .title-actions .action-label[aria-label="Back to queue"]')
     await until(async () => !(await drawerOpen()), 5_000)
     await focusPageBody()
