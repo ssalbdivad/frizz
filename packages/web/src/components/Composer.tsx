@@ -190,6 +190,7 @@ export function Composer({
   busy,
   footer,
   header,
+  aside,
   leftAction,
   contextTokens,
   contextSources,
@@ -226,6 +227,10 @@ export function Composer({
   // (EditorContextBar), which names what the editor has in front and adds it as a chip. Whatever it
   // renders owns its own inset, so a header that renders nothing costs the box nothing.
   header?: React.ReactNode
+  // Rendered at the RIGHT END of the footer strip, before the send rail: a browser tab's line naming what
+  // the editor beside it has in front (EditorLine). It owns its own `ml-auto`; a box with no footer has
+  // nowhere to put it and drops it.
+  aside?: React.ReactNode
   // STAGED CONTEXT — the `@` tokens the ⌘I flow has staged on this thread. Drives the backdrop pill
   // behind each staged token in the prose (an unstaged `@thing` the user happened to type stays
   // plain text) and the atomic Backspace that deletes a whole token. The pill IS the chip: there is
@@ -1373,11 +1378,14 @@ export function Composer({
       {footer && (
         <div className={`flex min-w-0 flex-wrap items-center gap-1 pl-1.5 pb-1.5 ${railReserve}`}>
           {footer}
+          {aside}
           {/* The forced chord's one visible trace: only while a draft exists AND the turn it would cut
               short is running (`onInterruptSubmit` is set exactly then), so an idle box stays quiet.
               Right-justified against the rail; the readouts before it are `flex-1`. */}
           {onInterruptSubmit && hasContent && !busy && (
-            <span data-composer-interrupt-hint className="ml-auto max-w-full shrink-0 truncate text-[11px] text-muted-70">
+            // After an editor line (`aside`, which takes the free space itself) it sits beside it: two auto
+            // margins would split the free space and float the line in the middle of the strip.
+            <span data-composer-interrupt-hint className="ml-auto max-w-full shrink-0 truncate text-[11px] text-muted-70 [[data-editor-line]~&]:ml-1">
               {interruptChord} to interrupt
             </span>
           )}

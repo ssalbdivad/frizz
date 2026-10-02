@@ -8,6 +8,7 @@ import { restoreContextItems, takeContextItems, useStagedContextSources, useStag
 import { useThreadComposerControls } from "../hooks/useThreadComposerControls.tsx"
 import { Composer } from "./Composer.tsx"
 import { EditorContextBar } from "./EditorContextBar.tsx"
+import { EditorLine } from "./EditorLine.tsx"
 import { embedFileMentions } from "../lib/editorReach.ts"
 import { useMentionCandidates, useOwnMention } from "../hooks/useMentionCandidates.ts"
 import { LogoutConfirmModal, SignInModal } from "./SignInModal.tsx"
@@ -284,6 +285,8 @@ export function ThreadComposerBox({
         // drawer's box only: the queue card's copy of it is one of many on a page, and a bar on each
         // would be noise.
         header={surface === "chatComposer" ? <EditorContextBar box={{ key, projectDir, surface }} /> : undefined}
+        // In a browser tab, the same box's quiet line naming what the editor beside it has in front.
+        aside={surface === "chatComposer" ? <EditorLine box={{ key, projectDir, surface }} /> : undefined}
         id={id}
         surface={surface}
         value={message}

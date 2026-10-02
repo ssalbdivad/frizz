@@ -4,7 +4,7 @@ import { store, setBoard, applyDelta, openThread } from "../store.ts"
 import { noteServerBootId } from "./boot.ts"
 import { crossProjectHref, projectSlug } from "../lib/base-path.ts"
 import { spaNavigate } from "../lib/router.ts"
-import { composePending, setEditorWindows } from "../lib/editorBridge.ts"
+import { composePending, editorFrontChanged, setEditorWindows } from "../lib/editorBridge.ts"
 import { embedded } from "../lib/embed.ts"
 
 // The transport-agnostic board/notify handler — the stage-1 delta/seq/boot state machine, extracted so
@@ -68,13 +68,16 @@ export class BoardStream {
       case "interactions-invalidated":
         this.interactionsInvalidated(event)
         break
-      // The editor bridge's two machine-wide events, published on every open project's bus so this page
+      // The editor bridge's machine-wide events, published on every open project's bus so this page
       // hears them whichever project it is bound to (lib/editorBridge.ts).
       case "editors":
         setEditorWindows(event.windows)
         break
       case "compose-pending":
         composePending()
+        break
+      case "editor-front":
+        editorFrontChanged()
         break
     }
   }

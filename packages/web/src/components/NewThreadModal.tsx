@@ -7,6 +7,7 @@ import { useSnapshot } from "valtio"
 import { showToast, store } from "../store.ts"
 import { Composer } from "./Composer.tsx"
 import { EditorContextBar } from "./EditorContextBar.tsx"
+import { EditorLine } from "./EditorLine.tsx"
 import { embedFileMentions } from "../lib/editorReach.ts"
 import { useMentionCandidates } from "../hooks/useMentionCandidates.ts"
 import { userCommandItems, useUserCommands } from "../hooks/useUserCommands.ts"
@@ -364,6 +365,7 @@ function PromptForm({
         contextTokens={contextTokens}
         contextSources={contextSources}
         header={<EditorContextBar box={{ key: promptKey, projectDir, surface: "newComposer" }} />}
+        aside={<EditorLine box={{ key: promptKey, projectDir, surface: "newComposer" }} />}
         placeholder="Describe the task…"
         mentionCandidates={mentions}
         fileMentions={embedFileMentions(projectDir)}
