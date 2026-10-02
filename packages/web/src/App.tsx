@@ -3,6 +3,8 @@ import { useLocation, useNavigate } from "react-router"
 import { useSnapshot } from "valtio"
 import { useQuery } from "@tanstack/react-query"
 import { closeGithubPicker, store, seedBoard, pushDrawer, resolveRoutedThread, topDrawer, topThreadSlug, showToast } from "./store.ts"
+import { embedded } from "./lib/embed.ts"
+import { addEditorContextByKey } from "./lib/editorContext.ts"
 import { openDispatch } from "./lib/newThreadDoor.ts"
 import { useBoard } from "./hooks.ts"
 import { closeDrawerAnimated } from "./lib/overlays.ts"
@@ -227,6 +229,14 @@ export function App() {
     store.showPalette = !store.showPalette
   })
   useShortcut("app.details", () => {
+    // In an editor's sidebar ⌘I is first the editor's chord — the code in front into the prompt box it was
+    // typed in, or with no thread open into the new-thread box — and Thread details only where it is not
+    // that (lib/editorContext.ts addEditorContextByKey). Consumed either way, so it never leaves the page.
+    if (embedded()) {
+      const added = addEditorContextByKey(document.activeElement, store.drawers.some((drawer) => !drawer.closing), store.showNewThread)
+      if (added === "nothing") showToast("Open a file in the editor to add it.")
+      if (added) return
+    }
     // The frizz document for the topmost open thread (stacks another layer / pops its own).
     const top = topDrawer()
     const target = topThreadSlug()
@@ -234,7 +244,8 @@ export function App() {
       if (!closeDrawerAnimated(top.id)) store.drawers.pop()
       return
     }
-    if (!target) return false
+    // Nothing to show. In a browser the key goes on unclaimed; in a sidebar it stays in the page.
+    if (!target) return embedded() ? undefined : false
     pushDrawer("doc", target)
   })
   // ⌘, OPENS settings and leaves closing to Esc, the way it brings a Mac app's preferences forward

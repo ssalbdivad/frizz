@@ -1,7 +1,7 @@
-import { useLayoutEffect, useMemo, useRef, useState } from "react"
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react"
 import { ChevronDown, FileCode2 } from "lucide-react"
 import { embedded } from "../lib/embed.ts"
-import { contextBarReading, editorAddChord, requestEditorContext, useEditorContext, type ContextBox, type EditorContextState } from "../lib/editorContext.ts"
+import { barAdd, contextBarReading, editorAddChord, registerContextBar, requestEditorContext, useEditorContext, type ContextBox, type EditorContextState } from "../lib/editorContext.ts"
 import { detectPlatform } from "../lib/keybindings.ts"
 import { basename, dirnameLike } from "../lib/paths.ts"
 import { Menu, MenuContent, MenuItem, MenuTrigger } from "./ui/Menu.tsx"
@@ -36,10 +36,18 @@ function Bar({ box }: { box: ContextBox }) {
   const { active, open } = useEditorContext()
   const reading = contextBarReading(active)
   const chord = useMemo(() => editorAddChord(detectPlatform()), [])
-  if (!reading && open.length === 0) return null
+  // Registered by its strip, so ⌘I typed in this box presses it (lib/editorContext.ts addEditorContextByKey).
+  const strip = useRef<HTMLDivElement>(null)
+  const drawn = Boolean(reading || open.length)
+  useEffect(() => {
+    if (!drawn || !strip.current) return
+    return registerContextBar(strip.current, { key: box.key, projectDir: box.projectDir, surface: box.surface })
+  }, [drawn, box.key, box.projectDir, box.surface])
+  if (!drawn) return null
   const selection = reading?.kind === "selection"
   const add = () => {
-    if (active) requestEditorContext(box, selection ? { what: "selection" } : { what: "file", path: active.path })
+    const what = barAdd(active)
+    if (what) requestEditorContext(box, what)
   }
   // `inset-ring`, never `ring-inset`: that one is also a COLOUR utility here (theme.css --color-inset)
   // and paints every edge in it (Composer's CONTEXT_PILL has the measurement).
@@ -48,7 +56,7 @@ function Bar({ box }: { box: ContextBox }) {
     : "text-muted inset-ring-border"
   const hover = selection ? "hover:bg-accent/12" : "hover:bg-panel-2 hover:text-fg"
   return (
-    <div data-editor-context-bar className="flex items-center gap-2 px-1.5 pt-1.5">
+    <div ref={strip} data-editor-context-bar className="flex items-center gap-2 px-1.5 pt-1.5">
       <div data-editor-context-control className={`flex h-6 min-w-0 items-stretch rounded-md text-[11.5px] leading-6 inset-ring transition-colors ${tone} ${reading ? "max-w-full" : ""}`}>
         {reading && (
           <button
@@ -60,12 +68,11 @@ function Bar({ box }: { box: ContextBox }) {
             // The readings are separate spans spaced by the row's gap, so the text alone would read
             // "r2-private.ts:91-11626 lines" to a screen reader.
             aria-label={`Add ${reading.name}${reading.range}${reading.count ? `, ${reading.count},` : ""} to the prompt`}
-            title={selection
-              ? `Add ${reading.where}${reading.range} to the prompt — or press ${chord} in the editor`
-              : `Add ${reading.where} to the prompt — or select code and press ${chord} in the editor`}
+            // ⌘I does this from the box as well as from the editor (App.tsx app.details).
+            title={`Add ${reading.where}${reading.range} to the prompt (${chord})`}
             // 7px, not 6, on the right when the chevron follows: its glyph carries 0.88px of side
             // bearing, and the rule between them should sit centred in ink (6.88 | 6.88, sans).
-            className={`flex min-w-0 items-baseline gap-1 pl-1.5 transition-colors ${open.length ? "rounded-l-md pr-[7px]" : "rounded-md pr-1.5"} ${hover}`}
+            className={`flex min-w-0 items-baseline gap-1 pl-1.5 transition-colors ${FOCUS} ${open.length ? "rounded-l-md pr-[7px]" : "rounded-md pr-1.5"} ${hover}`}
           >
             {/* One glyph in both states: it is the same file either way, and the pill lighting up IS the
                 news that lines are selected. (Lucide's TextSelect was tried for the selection: at this
@@ -96,7 +103,7 @@ function OpenFiles({ box, open, labelled, hover }: { box: ContextBox; open: Edit
           data-editor-open-files
           aria-label={`Add an open file (${count})`}
           title={`Add an open file (${count})`}
-          className={`flex shrink-0 items-baseline transition-colors ${labelled ? "gap-0.5 rounded-md px-1.5" : "rounded-r-md px-1"} ${hover} data-[state=open]:bg-panel-2 data-[state=open]:text-fg`}
+          className={`flex shrink-0 items-baseline transition-colors ${FOCUS} ${labelled ? "gap-0.5 rounded-md px-1.5" : "rounded-r-md px-1"} ${hover} data-[state=open]:bg-panel-2 data-[state=open]:text-fg`}
         >
           {/* The chevron rides a text baseline like every glyph beside text. Alone in the split's right
               half it has no text of its own, and a baseline row then took its BOX bottom as the
@@ -161,6 +168,11 @@ function Hint({ chord }: { chord: string }) {
     </span>
   )
 }
+
+// The app's 1px focus ring, drawn inside each half so it follows that half's corners. Without it Tab drew
+// the browser's own outline, a thick double ring (sweep 2026-10-01). `inset-ring`, never `ring-inset`
+// (the tone above says why).
+const FOCUS = "outline-none focus-visible:inset-ring-1 focus-visible:inset-ring-focus-ink-60"
 
 // A 1em glyph on the text's cap band (CLAUDE.md § optical spacing): baseline-aligned in a baseline row,
 // lifted by half its box less half the font's own cap height — so it sits right in either font, at any
