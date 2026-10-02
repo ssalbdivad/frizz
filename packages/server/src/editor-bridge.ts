@@ -18,6 +18,7 @@ import {
   type EditorHello,
   type EditorKind,
   type EditorProject,
+  type EditorReviewTarget,
   type EditorServerMessage,
   type EditorSnapshot,
   type EditorStateResult,
@@ -65,6 +66,12 @@ export const EDITOR_MAX_FRAME_BYTES = 64 * 1024
 export const EDITOR_HEARTBEAT_MS = 15_000
 export const EDITOR_PROJECTS_POLL_MS = 2_000
 export const EDITOR_REQUEST_TIMEOUT_MS = 5_000
+/**
+ * A review asks git several questions per checkout before it answers (packages/vscode review.ts): the
+ * base, the changed files, which are binary. Each is milliseconds, but a cold repository on a busy disk
+ * is not, and an answer late is a review the human sees anyway — a false "did not answer" is worse.
+ */
+export const EDITOR_REVIEW_TIMEOUT_MS = 20_000
 export const EDITOR_HELLO_TIMEOUT_MS = 10_000
 export const EDITOR_COMPOSE_TTL_MS = 10 * 60_000
 export const EDITOR_COMPOSE_MAX_ITEMS = 20
@@ -81,6 +88,7 @@ export interface EditorBridgeDeps {
   home?: string
   platform?: string
   requestTimeoutMs?: number
+  reviewTimeoutMs?: number
   heartbeatMs?: number
   projectsPollMs?: number
   helloTimeoutMs?: number
@@ -108,6 +116,14 @@ export interface EditorBridge {
    * own CLI spawned on the folder raises the window that has it open.
    */
   focusFolder(dir: string, kinds: readonly EditorKind[]): Promise<boolean>
+  /**
+   * Show a thread's changes (`review`) in the window that should: one that can and takes things from
+   * Frizz, whose workspace folder holds a checkout of the review — the deepest, the first checkout first —
+   * or the project folder; else the window the human was in last that shares this server's filesystem.
+   * True: it opened them. False: no window can, or it did not answer. THROWS with the window's own words
+   * when it answered that it could not (nothing to review, not a repository).
+   */
+  review(target: EditorReviewTarget, projectDir: string): Promise<boolean>
   /** Claim a held compose item: that one, or with no id the oldest. Null when there is none (or it expired). */
   takeCompose(id?: string): EditorComposeItem | null
   /**
@@ -133,6 +149,8 @@ interface EditorWindow {
   platform: string
   /** Its latest `editor` frame and when it arrived; absent until the extension sends one. */
   editor?: { snapshot: Omit<EditorSnapshot, "t">; at: number }
+  /** What it said it can do beyond v1 (its `features` frame); empty until it says. */
+  features: ReadonlySet<string>
 }
 
 /** How a request to a window ended: its answer, or "gone" for a timeout or a dropped socket. */
@@ -189,6 +207,7 @@ export function createEditorBridge(deps: EditorBridgeDeps): EditorBridge {
   const home = deps.home ?? homedir()
   const platform = deps.platform ?? process.platform
   const requestTimeoutMs = deps.requestTimeoutMs ?? EDITOR_REQUEST_TIMEOUT_MS
+  const reviewTimeoutMs = deps.reviewTimeoutMs ?? EDITOR_REVIEW_TIMEOUT_MS
   const heartbeatMs = deps.heartbeatMs ?? EDITOR_HEARTBEAT_MS
   const projectsPollMs = deps.projectsPollMs ?? EDITOR_PROJECTS_POLL_MS
   const helloTimeoutMs = deps.helloTimeoutMs ?? EDITOR_HELLO_TIMEOUT_MS
@@ -242,7 +261,9 @@ export function createEditorBridge(deps: EditorBridgeDeps): EditorBridge {
   function summaries(): EditorWindowSummary[] {
     const out: EditorWindowSummary[] = []
     for (const conn of connections) {
-      if (conn.window) out.push({ app: conn.window.app, kind: conn.window.kind, acceptsOpens: conn.window.acceptsOpens })
+      if (!conn.window) continue
+      const { app, kind, acceptsOpens, features } = conn.window
+      out.push({ app, kind, acceptsOpens, ...(features.has(EDITOR_FEATURES.review) ? { reviews: true as const } : {}) })
     }
     return out
   }
@@ -356,8 +377,9 @@ export function createEditorBridge(deps: EditorBridgeDeps): EditorBridge {
       acceptsOpens: msg.acceptsOpens,
       home: msg.home,
       platform: msg.platform,
+      features: new Set(),
     }
-    send(conn, { t: "welcome", v: EDITOR_PROTOCOL_VERSION, bootId: deps.bootId(), features: [EDITOR_FEATURES.editorState] })
+    send(conn, { t: "welcome", v: EDITOR_PROTOCOL_VERSION, bootId: deps.bootId(), features: [EDITOR_FEATURES.editorState, EDITOR_FEATURES.review] })
     publishEditorsIfChanged()
     void pollProjects()
   }
@@ -404,6 +426,11 @@ export function createEditorBridge(deps: EditorBridgeDeps): EditorBridge {
       conn.pending.get(msg.id)?.(msg.ok ? { ok: true } : { ok: false, error: msg.error })
       return
     }
+    if (msg.t === "features") {
+      window.features = new Set(msg.features)
+      publishEditorsIfChanged()
+      return
+    }
     if (msg.t === "editor") {
       // Kept whole, replacing the last: the extension sends the entire picture on every change, so there
       // is nothing to merge, and a window that turned sharing off sends `shared: false` with nothing else.
@@ -443,18 +470,22 @@ export function createEditorBridge(deps: EditorBridgeDeps): EditorBridge {
     startTimers()
   }
 
-  /** Send `open`/`focus` and wait for the window's `result`. */
-  function request(conn: Connection, frame: { t: "open"; path: string } & Partial<FilePosition> | { t: "focus"; path: string }): Promise<boolean> {
+  /** Send `open`/`focus`/`review` and wait for the window's `result`. */
+  function request(
+    conn: Connection,
+    frame: { t: "open"; path: string } & Partial<FilePosition> | { t: "focus"; path: string } | { t: "review" } & EditorReviewTarget,
+    timeoutMs = requestTimeoutMs,
+  ): Promise<boolean> {
     const id = randomUUID()
     const app = conn.window!.app
     return new Promise<boolean>((resolve, reject) => {
-      const timer = setTimeout(() => settle("gone"), requestTimeoutMs)
+      const timer = setTimeout(() => settle("gone"), timeoutMs)
       function settle(outcome: Outcome): void {
         clearTimeout(timer)
         conn.pending.delete(id)
         if (outcome === "gone") resolve(false)
         else if (outcome.ok) resolve(true)
-        else reject(new Error(outcome.error || `${app} could not open ${basename(frame.path)}`))
+        else reject(new Error(outcome.error || (frame.t === "review" ? `${app} could not show the changes` : `${app} could not open ${basename(frame.path)}`)))
       }
       conn.pending.set(id, settle)
       if (!send(conn, { ...frame, id } as EditorServerMessage)) settle("gone")
@@ -603,6 +634,31 @@ export function createEditorBridge(deps: EditorBridgeDeps): EditorBridge {
       const conn = mostRecent(matches.map((m) => m.conn))
       if (!conn) return false
       return request(conn, { t: "focus", path: matches.find((m) => m.conn === conn)!.folder }).catch(() => false)
+    },
+
+    async review(target, projectDir) {
+      if (closing) return false
+      const candidates = [...connections].filter((c) => c.window && c.window.acceptsOpens && c.window.features.has(EDITOR_FEATURES.review))
+      // The checkouts first, in the review's order, then the project: a window on the thread's worktree
+      // beats one on the whole project, and either beats a window on something else.
+      const dirs = [...target.checkouts.map((checkout) => checkout.dir), projectDir]
+      let best: { conn: Connection; rank: number; depth: number } | undefined
+      for (const [rank, dir] of dirs.entries()) {
+        const real = realpathOrUndefined(dir)
+        if (!real) continue
+        for (const conn of candidates) {
+          for (const folder of conn.window!.folders) {
+            const realFolder = realpathOrUndefined(folder)
+            if (!realFolder || !isUnder(real, folder)) continue
+            const depth = realFolder.length
+            const better = !best || rank < best.rank || (rank === best.rank && (depth > best.depth || (depth === best.depth && moreRecentlyFocused(conn, best.conn))))
+            if (better) best = { conn, rank, depth }
+          }
+        }
+      }
+      const conn = best?.conn ?? mostRecent(candidates.filter((c) => c.window!.home === home && c.window!.platform === platform))
+      if (!conn) return false
+      return request(conn, { t: "review", title: target.title, checkouts: target.checkouts }, reviewTimeoutMs)
     },
 
     editorState(dir) {

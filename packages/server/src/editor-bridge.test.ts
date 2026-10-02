@@ -39,6 +39,7 @@ async function harness(t: TestContext, overrides: Partial<EditorBridgeDeps> = {}
     home: HOME,
     platform: "linux",
     requestTimeoutMs: 400,
+    reviewTimeoutMs: 600,
     ...overrides,
   })
   const server = createServer()
@@ -73,7 +74,7 @@ async function editor(port: number, hello: Partial<EditorHello> = {}, answer: An
   ws.on("message", (raw) => {
     const msg = JSON.parse(raw.toString()) as EditorServerMessage
     frames.push(msg)
-    if (msg.t === "open" || msg.t === "focus") {
+    if (msg.t === "open" || msg.t === "focus" || msg.t === "review") {
       requests.push(msg)
       if (answer === "ok") ws.send(JSON.stringify({ t: "result", id: msg.id, ok: true }))
       else if (answer === "fail") ws.send(JSON.stringify({ t: "result", id: msg.id, ok: false, error: "Could not open a.ts: it is a binary file" }))
@@ -255,7 +256,7 @@ test("a hello is answered with welcome then projects, and a projects change is r
   await until(() => got.length >= 2, "welcome and projects")
   assert.deepEqual(got.slice(0, 2), [
     // `features`: what this server takes beyond v1, so a new extension sends the `editor` frame only here.
-    { t: "welcome", v: 1, bootId: "boot-1", features: ["editor-state"] },
+    { t: "welcome", v: 1, bootId: "boot-1", features: ["editor-state", "review"] },
     { t: "projects", projects: [{ id: "p1", slug: "alpha", name: "Alpha", dir: "/work/alpha", ready: 1, working: 0 }] },
   ])
   // Unchanged: nothing more across several polls.
@@ -545,6 +546,72 @@ test("`editors` is published when a window comes, goes or changes what the page 
   a.ws.close()
   await until(() => editorsEvents().length === 4, "the disconnect")
   assert.deepEqual(editorsEvents().at(-1), [{ app: "Windsurf", kind: "windsurf", acceptsOpens: false }])
+})
+
+test("review: only a window that said it can, the one holding the checkout first, then the project, then the one used last", async (t) => {
+  const h = await harness(t)
+  const dirs = tree(t)
+  const target = (dir: string) => ({ title: "Tidy the loop", checkouts: [{ dir, scope: "branch" as const, files: [join(dir, "a.ts")] }] })
+  const reviews = (window: { requests: EditorServerMessage[] }) => window.requests.filter((r) => r.t === "review")
+
+  // An extension from before the feature never says it can: nothing is sent to it, and the page is not
+  // offered the action (`reviews` absent from the summary).
+  const old = await editor(h.port, { folders: [dirs.pkg], focused: true })
+  assert.equal(await h.bridge.review(target(dirs.pkg), dirs.mono), false)
+  assert.equal(reviews(old).length, 0)
+  assert.deepEqual(h.bridge.windows(), [{ app: "Visual Studio Code", kind: "vscode", acceptsOpens: true }])
+
+  const monoWin = await editor(h.port, { folders: [dirs.mono], focused: true })
+  monoWin.send({ t: "features", features: ["review", "something-newer"] })
+  const pkgWin = await editor(h.port, { folders: [dirs.other, dirs.pkg] })
+  pkgWin.send({ t: "features", features: ["review"] })
+  await until(() => h.bridge.windows().filter((w) => w.reviews).length === 2, "both windows saying they can review")
+  assert.ok(h.published.some((e) => e.type === "editors" && e.windows.some((w) => w.reviews)), "the page hears it")
+
+  // The window holding the checkout — the deepest folder, focused or not — gets the whole target.
+  assert.equal(await h.bridge.review(target(dirs.pkg), dirs.mono), true)
+  assert.deepEqual(reviews(pkgWin).map((r) => ({ ...r, id: undefined })), [{ t: "review", id: undefined, ...target(dirs.pkg) }])
+  assert.equal(reviews(monoWin).length, 0)
+  assert.equal(reviews(old).length, 0)
+
+  // No window holds the checkout: the one holding the project.
+  const elsewhere = join(dirs.root, "elsewhere")
+  mkdirSync(elsewhere)
+  assert.equal(await h.bridge.review(target(elsewhere), dirs.mono), true)
+  assert.equal(reviews(monoWin).length, 1)
+
+  // Neither: the window used last on this machine; a window that turned opens off never.
+  assert.equal(await h.bridge.review(target(elsewhere), elsewhere), true)
+  assert.equal(reviews(monoWin).length, 2, "focused now")
+  monoWin.state({ acceptsOpens: false })
+  await until(() => h.bridge.windows().some((w) => !w.acceptsOpens), "opens off")
+  assert.equal(await h.bridge.review(target(dirs.mono), dirs.mono), true)
+  assert.equal(reviews(monoWin).length, 2)
+  assert.equal(reviews(pkgWin).length, 2, "the only window left that takes things from Frizz")
+})
+
+test("review: a window that says it could not is the error, in its own words; silence is false", async (t) => {
+  const h = await harness(t)
+  const dirs = tree(t)
+  const failing = await editor(h.port, { folders: [dirs.mono] }, "fail")
+  failing.send({ t: "features", features: ["review"] })
+  await until(() => h.bridge.windows().some((w) => w.reviews), "the feature")
+  await assert.rejects(h.bridge.review({ title: "x", checkouts: [{ dir: dirs.mono, scope: "files", files: [dirs.inMono] }] }, dirs.mono), /binary file/)
+  failing.ws.close()
+  await until(() => h.bridge.windows().length === 0, "the window gone")
+  const silent = await editor(h.port, { folders: [dirs.mono] }, "silent")
+  silent.send({ t: "features", features: ["review"] })
+  await until(() => h.bridge.windows().some((w) => w.reviews), "the feature")
+  const started = Date.now()
+  assert.equal(await h.bridge.review({ title: "x", checkouts: [] }, dirs.mono), false)
+  assert.ok(Date.now() - started >= 600, "a review waits longer than an open for its answer")
+})
+
+test("a features frame from a window that is not the schema's closes it like any other bad frame", async (t) => {
+  const h = await harness(t)
+  const window = await editor(h.port)
+  window.send({ t: "features", features: "review" })
+  assert.equal((await window.closed).code, EDITOR_CLOSE.invalidMessage)
 })
 
 test("a window that reconnects supersedes its old socket, and a dead peer is reaped by protocol pings", async (t) => {
