@@ -21,6 +21,8 @@ import { useDevFrizzBuild } from "../lib/devBuild.ts"
 import { restartWorker } from "../lib/restartWorker.ts"
 import { closeDrawersById, showToast, store } from "../store.ts"
 import { runExternalOpen } from "../lib/externalOpen.ts"
+import { embedded } from "../lib/embed.ts"
+import { openInHostEditor } from "../lib/local-file-links.ts"
 import { offersReloadPlugins, offersRestartWorker, reloadThreadPlugins } from "../lib/workerMaintenance.ts"
 
 // openFullscreen, the one navigation into a thread's /full page, shared by the ⤢ door (ExpandThreadLink.tsx)
@@ -94,8 +96,21 @@ export function ThreadTerminalButton({ slug }: { slug: string }) {
 }
 
 /** Open the thread's working folder in the External app (or `$EDITOR`) — the step `t` then `code .` took.
- *  The server resolves the folder, the same one a terminal on the thread starts in. */
+ *  The server resolves the folder, the same one a terminal on the thread starts in.
+ *
+ *  IN AN EDITOR'S SIDEBAR the editor is the one the human is sitting in, so the folder goes there, as a
+ *  code-file link does (lib/local-file-links.ts openInHostEditor): the extension reveals it in this
+ *  window's Explorer. Through the External app it opened a file manager or another window, or — with
+ *  System default, or Copy path and no $EDITOR — said "Set External app to an editor in Settings" to a
+ *  human already in one (sweep 2026-10-01). */
 function openInEditor(api: Api, slug: string): void {
+  if (embedded()) {
+    api.threadWorkingDir({ slug }).then(
+      ({ dir }) => openInHostEditor(dir),
+      (cause: unknown) => showToast("Couldn't find this thread's folder", { detail: (cause instanceof Error ? cause.message : String(cause)).slice(0, 100) }),
+    )
+    return
+  }
   void runExternalOpen(
     `editor:${slug}`,
     "Opening in editor…",

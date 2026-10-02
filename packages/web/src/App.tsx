@@ -3,8 +3,9 @@ import { useLocation, useNavigate } from "react-router"
 import { useSnapshot } from "valtio"
 import { useQuery } from "@tanstack/react-query"
 import { closeGithubPicker, store, seedBoard, pushDrawer, resolveRoutedThread, topDrawer, topThreadSlug, showToast } from "./store.ts"
-import { embedded } from "./lib/embed.ts"
+import { embedded, hostTerminalHint } from "./lib/embed.ts"
 import { addEditorContextByKey } from "./lib/editorContext.ts"
+import { detectPlatform } from "./lib/keybindings.ts"
 import { openDispatch } from "./lib/newThreadDoor.ts"
 import { useBoard } from "./hooks.ts"
 import { closeDrawerAnimated } from "./lib/overlays.ts"
@@ -40,12 +41,16 @@ import {
 import { formatCompactElapsed } from "./lib/durationLabels.ts"
 
 // The not-signed-in hint fires at most once per page load. A module-scoped flag (not React state)
-// keeps it from re-firing across re-renders, effect re-runs, or a StrictMode double-invoke.
+// keeps it from re-firing across re-renders, effect re-runs, or a StrictMode double-invoke. In an
+// editor's sidebar it says where a terminal is: VS Code's, one chord away (lib/embed.ts).
 let signInHintShown = false
 function maybeShowSignInHint() {
   if (signInHintShown) return
   signInHintShown = true
-  showToast("Sign in to the GitHub CLI (`gh auth login`) to dispatch from issues/PRs.", { duration: 6000 })
+  showToast("Sign in to the GitHub CLI (`gh auth login`) to dispatch from issues/PRs.", {
+    duration: 6000,
+    ...(embedded() ? { detail: hostTerminalHint(detectPlatform() === "mac") } : {}),
+  })
 }
 
 /**

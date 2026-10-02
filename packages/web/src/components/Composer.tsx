@@ -962,7 +962,7 @@ export function Composer({
         onClick={onSubmit}
         // `uploading` mirrors the Enter gate above: sending mid-upload dropped the pending attachment.
         disabled={!hasContent || busy || uploading}
-        title="Send (Enter · ⌘⏎ sends now)"
+        title={`Send (Enter · ${interruptChord} sends now)`}
         aria-label="Send"
         className={`icon-hover-outline absolute bottom-2 ${RAIL_SEND_OFFSET} flex h-7 w-7 items-center justify-center rounded-lg transition-all ${
           // Primary actions use neutral contrast; the accent marks focus.
@@ -977,11 +977,6 @@ export function Composer({
   )
 }
 
-// One attached file as a compact square tile. An image renders a /local-image thumbnail (object-cover,
-// the same gated route the transcript uses); a document renders a bordered tile with a file glyph and
-// its extension. A broken image (route 4xx / missing file) falls back to the document tile so a stale
-// path is never a blank square. The × removes just this path from the draft. `title` carries the full
-// path so the raw location is still one hover away.
 // The `@thread.` menu's data: the named thread's sub-agent directory, handed up as candidates. A
 // component rather than a hook in Composer because it is MOUNTED ONLY while a dotted query names a
 // thread — Composer also renders on fixture pages with no query client, and a hook would need one there.
@@ -996,6 +991,17 @@ function SubAgentMentionSource({ slug, onCandidates }: { slug: string; onCandida
   return null
 }
 
+// One attached file as a compact square tile. An image renders a /local-image thumbnail (object-cover,
+// the same gated route the transcript uses); a document renders a bordered tile with a file glyph and
+// its extension. A broken image (route 4xx / missing file) falls back to the document tile so a stale
+// path is never a blank square. The × removes just this path from the draft. Its name is the file's as
+// it was dropped: the server stores each upload as `<ms>-<8 hex>-<name>` (app.ts /attach) so two of the
+// same name never collide, and that stamp named the tile until the sweep (2026-10-01) — the draft still
+// carries the full path.
+function attachmentDisplayName(path: string): string {
+  return basename(path).replace(/^\d{10,}-[0-9a-f]{8}-/u, "")
+}
+
 function AttachmentChip({
   attachment,
   disabled,
@@ -1006,7 +1012,7 @@ function AttachmentChip({
   onRemove: () => void
 }) {
   const [broken, setBroken] = useState(false)
-  const base = basename(attachment.path)
+  const base = attachmentDisplayName(attachment.path)
   const ext = (base.includes(".") ? base.split(".").pop()! : "").toUpperCase()
   const asImage = attachment.kind === "image" && !broken
   return (

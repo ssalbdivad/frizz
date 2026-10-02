@@ -113,6 +113,15 @@ export function postToHost(message: EmbedPageMessage): void {
 
 export const EMBED_READY: EmbedPageMessage = { type: "frizz:ready", v: EMBED_PROTOCOL_VERSION }
 
+/**
+ * Where to run a command the page asks the human to run "in a terminal" (sign-in, `gh auth login`): in
+ * the sidebar, VS Code's own, one chord away — forwarded by the page (embedKeys.ts HOST_CHORDS). Ctrl on
+ * a Mac too, as VS Code binds it.
+ */
+export function hostTerminalHint(mac: boolean): string {
+  return `${mac ? "⌃`" : "Ctrl+`"} opens VS Code's terminal.`
+}
+
 // ── host → page: each shape checked against the contract, anything else dropped ─────────────────────
 
 function isRecord(value: unknown): value is Record<string, unknown> {
