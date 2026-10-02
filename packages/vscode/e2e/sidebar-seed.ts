@@ -147,8 +147,12 @@ export async function seedSidebarStack(options: { stack: Stack; workspace: Stack
  * `--worktree`, check c10). No worker: the transcript's `cwd` is the worktree, and that is what the REAL
  * tailer lifts into the thread's `checkout`, exactly as it does for a Claude worker that works there.
  * Resolves once the board says the thread works in that worktree, so the window opened next finds it.
+ *
+ * Its handoff links a file by its path IN THE WORKTREE that only the main checkout has (`onlyMain`, written
+ * after the worktree was made and never committed) — the shape of a link after Done removed the worktree
+ * the work was merged from, without having to remove it under the open window.
  */
-export async function seedWorktreeThread(options: { stack: Stack; workspace: StackProject; log(line: string): void }): Promise<SeededThread & { dir: string }> {
+export async function seedWorktreeThread(options: { stack: Stack; workspace: StackProject; log(line: string): void }): Promise<SeededThread & { dir: string; onlyMain: { linked: string; main: string } }> {
   const { stack, workspace, log } = options
   const { home } = stack.info
   const thread: SeededThread & { dir: string } = {
@@ -157,13 +161,16 @@ export async function seedWorktreeThread(options: { stack: Stack; workspace: Sta
   }
   const git = (...args: string[]) => execFileSync("git", ["-c", "user.name=frizz e2e", "-c", "user.email=e2e@frizz.invalid", "-C", workspace.dir, ...args], { stdio: "ignore" })
   git("worktree", "add", "-q", thread.dir, "-b", thread.slug)
+  const onlyMain = { linked: join(thread.dir, "src", "only-main.ts"), main: join(workspace.dir, "src", "only-main.ts") }
+  mkdirSync(join(workspace.dir, "src"), { recursive: true })
+  writeFileSync(onlyMain.main, "// Only the main checkout has this file.\nexport const merged = true\n")
   const transcripts = join(home, ".claude", "projects", workspace.dir.replace(/[/.]/gu, "-"))
   mkdirSync(transcripts, { recursive: true })
   thread.jsonl = join(transcripts, `${thread.sessionId}.jsonl`)
   const at = (minutes: number) => new Date(Date.now() - minutes * 60_000).toISOString()
   const records = [
     { type: "user", sessionId: thread.sessionId, cwd: thread.dir, timestamp: at(30), message: { role: "user", content: [{ type: "text", text: `TASK:\n${thread.title}` }] } },
-    { type: "assistant", sessionId: thread.sessionId, cwd: thread.dir, timestamp: at(20), message: { role: "assistant", id: "m-polish", stop_reason: "end_turn", content: [{ type: "text", text: "The pricing page is polished in this worktree." }], usage: { input_tokens: 2, output_tokens: 12 } } },
+    { type: "assistant", sessionId: thread.sessionId, cwd: thread.dir, timestamp: at(20), message: { role: "assistant", id: "m-polish", stop_reason: "end_turn", content: [{ type: "text", text: `The pricing page is polished in this worktree; the flag is in [only-main.ts](${onlyMain.linked}#L2).` }], usage: { input_tokens: 2, output_tokens: 12 } } },
   ]
   writeFileSync(thread.jsonl, `${records.map((record) => JSON.stringify(record)).join("\n")}\n`)
   execFileSync("sqlite3", ["-cmd", ".timeout 10000", join(home, ".frizz", "ui.db"),
@@ -178,5 +185,5 @@ export async function seedWorktreeThread(options: { stack: Stack; workspace: Sta
     await new Promise((resolve) => setTimeout(resolve, 500))
   }
   log(`seeded ${workspace.slug}/${thread.slug}, working in its worktree ${thread.dir}`)
-  return thread
+  return { ...thread, onlyMain }
 }

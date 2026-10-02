@@ -1507,6 +1507,18 @@ try {
     const said = frizzLog().split("\n").find((line) => line.includes(`worktree of thread ${worktreeThread.slug}`))
     expect("c10", "the extension says why it opened there", !!said, said?.trim())
     await shot("c10-worktree-window-thread", { window: true })
+    // A link the thread wrote into its worktree, to a file only the main checkout has (as every link is
+    // once Done removed the worktree): clicked in the sidebar, the extension finds it missing, asks Frizz
+    // (settleLocalPath) and opens the main checkout's copy at the linked line — not "doesn't exist".
+    const { linked, main } = worktreeThread.onlyMain
+    await clickTextInPage("[data-local-path]", "only-main.ts")
+    const opened = await waitFor("the main checkout's copy in the editor", async () => {
+      const now = await editorState()
+      return now.path === main && now.selection?.start[0] === 1 ? now : undefined
+    }, 15_000).catch(async () => editorState())
+    const settledLine = frizzLog().split("\n").find((line) => line.includes(`${linked} is gone`))
+    expect("c10", "a link into the worktree to a file it doesn't have opens the main checkout's copy, at its line", opened.path === main && opened.selection?.start[0] === 1, { linked, opened, log: settledLine?.trim() })
+    await shot("c10-settled-link", { window: true })
   })
 
   expect("all", "no page errors in the framed page", pageErrors.length === 0, pageErrors.slice(0, 10))
